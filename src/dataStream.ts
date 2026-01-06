@@ -1,0 +1,1115 @@
+/**
+ * MOQT Data Stream
+ * draft-ietf-moq-transport-15 Section 10
+ *
+ * Data streams carry Objects via Subgroups or Datagrams
+ */
+
+import { decodeVarint, encodeVarint } from "./varint";
+import { ObjectStatus } from "./message/types";
+
+/**
+ * Subgroup Header Type (Section 10.4.2)
+ *
+ * Type values 0x10-0x1D (Priority Present = Yes)
+ * Type values 0x30-0x3D (Priority Present = No)
+ *
+ * Table 6 from draft-ietf-moq-transport-15:
+ * | Type | Subgroup ID Field | Subgroup ID Value | Extensions | End of Group | Priority |
+ * |------|-------------------|-------------------|------------|--------------|----------|
+ * | 0x10 | No                | 0                 | No         | No           | Yes      |
+ * | 0x11 | No                | 0                 | Yes        | No           | Yes      |
+ * | 0x12 | No                | First Object ID   | No         | No           | Yes      |
+ * | 0x13 | No                | First Object ID   | Yes        | No           | Yes      |
+ * | 0x14 | Yes               | N/A               | No         | No           | Yes      |
+ * | 0x15 | Yes               | N/A               | Yes        | No           | Yes      |
+ * | 0x18 | No                | 0                 | No         | Yes          | Yes      |
+ * | 0x19 | No                | 0                 | Yes        | Yes          | Yes      |
+ * | 0x1A | No                | First Object ID   | No         | Yes          | Yes      |
+ * | 0x1B | No                | First Object ID   | Yes        | Yes          | Yes      |
+ * | 0x1C | Yes               | N/A               | No         | Yes          | Yes      |
+ * | 0x1D | Yes               | N/A               | Yes        | Yes          | Yes      |
+ * | 0x30 | No                | 0                 | No         | No           | No       |
+ * | 0x31 | No                | 0                 | Yes        | No           | No       |
+ * | 0x32 | No                | First Object ID   | No         | No           | No       |
+ * | 0x33 | No                | First Object ID   | Yes        | No           | No       |
+ * | 0x34 | Yes               | N/A               | No         | No           | No       |
+ * | 0x35 | Yes               | N/A               | Yes        | No           | No       |
+ * | 0x38 | No                | 0                 | No         | Yes          | No       |
+ * | 0x39 | No                | 0                 | Yes        | Yes          | No       |
+ * | 0x3A | No                | First Object ID   | No         | Yes          | No       |
+ * | 0x3B | No                | First Object ID   | Yes        | Yes          | No       |
+ * | 0x3C | Yes               | N/A               | No         | Yes          | No       |
+ * | 0x3D | Yes               | N/A               | Yes        | Yes          | No       |
+ */
+export const SubgroupHeaderType = {
+  // Priority Present = Yes, Contains End of Group = No
+  // Subgroup ID = 0, No Extensions
+  BASE: 0x10,
+  // Subgroup ID = 0, Extensions Present
+  BASE_EXT: 0x11,
+  // Subgroup ID = First Object ID, No Extensions
+  FIRST_OBJ: 0x12,
+  // Subgroup ID = First Object ID, Extensions Present
+  FIRST_OBJ_EXT: 0x13,
+  // Subgroup ID Field Present, No Extensions
+  EXPLICIT: 0x14,
+  // Subgroup ID Field Present, Extensions Present
+  EXPLICIT_EXT: 0x15,
+
+  // Priority Present = Yes, Contains End of Group = Yes
+  // Subgroup ID = 0, No Extensions
+  BASE_END_GROUP: 0x18,
+  // Subgroup ID = 0, Extensions Present
+  BASE_EXT_END_GROUP: 0x19,
+  // Subgroup ID = First Object ID, No Extensions
+  FIRST_OBJ_END_GROUP: 0x1a,
+  // Subgroup ID = First Object ID, Extensions Present
+  FIRST_OBJ_EXT_END_GROUP: 0x1b,
+  // Subgroup ID Field Present, No Extensions
+  EXPLICIT_END_GROUP: 0x1c,
+  // Subgroup ID Field Present, Extensions Present
+  EXPLICIT_EXT_END_GROUP: 0x1d,
+
+  // Priority Present = No, Contains End of Group = No
+  // Subgroup ID = 0, No Extensions
+  BASE_NO_PRIORITY: 0x30,
+  // Subgroup ID = 0, Extensions Present
+  BASE_EXT_NO_PRIORITY: 0x31,
+  // Subgroup ID = First Object ID, No Extensions
+  FIRST_OBJ_NO_PRIORITY: 0x32,
+  // Subgroup ID = First Object ID, Extensions Present
+  FIRST_OBJ_EXT_NO_PRIORITY: 0x33,
+  // Subgroup ID Field Present, No Extensions
+  EXPLICIT_NO_PRIORITY: 0x34,
+  // Subgroup ID Field Present, Extensions Present
+  EXPLICIT_EXT_NO_PRIORITY: 0x35,
+
+  // Priority Present = No, Contains End of Group = Yes
+  // Subgroup ID = 0, No Extensions
+  BASE_END_GROUP_NO_PRIORITY: 0x38,
+  // Subgroup ID = 0, Extensions Present
+  BASE_EXT_END_GROUP_NO_PRIORITY: 0x39,
+  // Subgroup ID = First Object ID, No Extensions
+  FIRST_OBJ_END_GROUP_NO_PRIORITY: 0x3a,
+  // Subgroup ID = First Object ID, Extensions Present
+  FIRST_OBJ_EXT_END_GROUP_NO_PRIORITY: 0x3b,
+  // Subgroup ID Field Present, No Extensions
+  EXPLICIT_END_GROUP_NO_PRIORITY: 0x3c,
+  // Subgroup ID Field Present, Extensions Present
+  EXPLICIT_EXT_END_GROUP_NO_PRIORITY: 0x3d,
+} as const;
+
+/**
+ * Object in a Subgroup
+ */
+export interface MoqtObject {
+  groupId: bigint;
+  subgroupId?: bigint;
+  objectId: bigint;
+  publisherPriority?: number;
+  status: ObjectStatus;
+  extensions?: Uint8Array;
+  payload: Uint8Array;
+}
+
+/**
+ * Subgroup Header
+ */
+export interface SubgroupHeader {
+  type: number;
+  trackAlias: bigint;
+  groupId: bigint;
+  subgroupId?: bigint;
+  publisherPriority?: number;
+}
+
+/**
+ * Check if subgroup header type has explicit Subgroup ID field
+ * draft-ietf-moq-transport-15 Section 10.4.2 Table 6
+ */
+function hasSubgroupIdField(headerType: number): boolean {
+  const lowNibble = headerType & 0x0f;
+  return lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d;
+}
+
+/**
+ * Check if subgroup header type has Priority Present
+ * draft-ietf-moq-transport-15 Section 10.4.2 Table 6
+ *
+ * Types 0x10-0x1D have Priority Present = Yes
+ * Types 0x30-0x3D have Priority Present = No
+ */
+function hasPriorityPresent(headerType: number): boolean {
+  return headerType >= 0x10 && headerType <= 0x1d;
+}
+
+/**
+ * Check if subgroup header type contains End of Group
+ * draft-ietf-moq-transport-15 Section 10.4.2 Table 6
+ *
+ * Types with bit 3 set (0x08) contain End of Group:
+ * 0x18-0x1D (Priority Present) and 0x38-0x3D (No Priority)
+ */
+export function hasContainsEndOfGroup(headerType: number): boolean {
+  const lowNibble = headerType & 0x0f;
+  return lowNibble >= 0x08 && lowNibble <= 0x0d;
+}
+
+/**
+ * Encode a Subgroup Header
+ * draft-ietf-moq-transport-15 Section 10.4.2 Figure 27
+ */
+export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  parts.push(encodeVarint(header.type));
+  parts.push(encodeVarint(header.trackAlias));
+  parts.push(encodeVarint(header.groupId));
+
+  // Subgroup ID field (only for types with explicit Subgroup ID)
+  if (hasSubgroupIdField(header.type) && header.subgroupId !== undefined) {
+    parts.push(encodeVarint(header.subgroupId));
+  }
+
+  // Publisher Priority (8 bits) - only for types with Priority Present
+  if (hasPriorityPresent(header.type) && header.publisherPriority !== undefined) {
+    parts.push(new Uint8Array([header.publisherPriority]));
+  }
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * Decode a Subgroup Header
+ */
+export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHeader, number] {
+  let totalConsumed = 0;
+
+  const [type, typeConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += typeConsumed;
+
+  const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += trackAliasConsumed;
+
+  const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += groupIdConsumed;
+
+  let subgroupId: bigint | undefined;
+  const typeNum = Number(type);
+
+  // Subgroup ID field present check based on type
+  // draft-ietf-moq-transport-15 Section 10.4.2 Table 6:
+  // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D: Subgroup ID Field Present
+  // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39: Subgroup ID = 0
+  // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B: Subgroup ID = First Object ID (no field)
+  const lowNibble = typeNum & 0x0f;
+  if (lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d) {
+    // Explicit Subgroup ID field present
+    const [sid, sidConsumed] = decodeVarint(data, offset + totalConsumed);
+    subgroupId = sid;
+    totalConsumed += sidConsumed;
+  } else if (lowNibble === 0x00 || lowNibble === 0x01 || lowNibble === 0x08 || lowNibble === 0x09) {
+    // Subgroup ID = 0
+    subgroupId = 0n;
+  }
+  // For types 0x02, 0x03, 0x0A, 0x0B: Subgroup ID = First Object ID (will be set when first object is read)
+
+  // Publisher Priority (8 bits)
+  // draft-ietf-moq-transport-15 Section 10.4.2 Table 6
+  let publisherPriority: number | undefined;
+  if (hasPriorityPresent(typeNum)) {
+    publisherPriority = data[offset + totalConsumed];
+    totalConsumed += 1;
+  }
+
+  return [
+    {
+      type: typeNum,
+      trackAlias,
+      groupId,
+      subgroupId,
+      publisherPriority,
+    },
+    totalConsumed,
+  ];
+}
+
+/**
+ * Check if a subgroup header type has Extensions Present
+ * draft-ietf-moq-transport-15 Section 10.4.2 Table 6:
+ * Types with bit 0 set (odd types) have Extensions Present
+ */
+export function hasExtensionsPresent(headerType: number): boolean {
+  return (headerType & 0x01) === 0x01;
+}
+
+/**
+ * Encode Object fields for Subgroup stream
+ * draft-ietf-moq-transport-15 Section 10.4.2 Figure 28:
+ * {
+ *   Object ID Delta (i),
+ *   [Extensions (..),]          <-- Only if header type has Extensions Present
+ *   Object Payload Length (i),
+ *   [Object Status (i),]        <-- Only if payload length is 0
+ *   [Object Payload (..),]
+ * }
+ *
+ * @param objectIdDelta - Object ID delta from previous object (or absolute ID for first object)
+ * @param payloadLength - Length of payload
+ * @param headerType - Subgroup header type to determine if extensions are present
+ * @param status - Object status (only encoded if payload length is 0)
+ * @param extensions - Extensions data (only encoded if header type has Extensions Present)
+ */
+export function encodeObjectFields(
+  objectIdDelta: bigint,
+  payloadLength: bigint,
+  headerType: number,
+  status: ObjectStatus = ObjectStatus.NORMAL,
+  extensions?: Uint8Array,
+): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  // Object ID Delta
+  parts.push(encodeVarint(objectIdDelta));
+
+  // Extensions (only if header type has Extensions Present)
+  if (hasExtensionsPresent(headerType)) {
+    const extLen = extensions?.length ?? 0;
+
+    // draft-ietf-moq-transport-15 Section 10.2.1.2:
+    // Non-Normal status objects must not have extension headers
+    if (status !== ObjectStatus.NORMAL && extLen > 0) {
+      throw new Error("Protocol violation: extension headers on non-Normal status object");
+    }
+
+    parts.push(encodeVarint(extLen));
+    if (extensions && extensions.length > 0) {
+      parts.push(extensions);
+    }
+  }
+
+  // Payload length
+  parts.push(encodeVarint(payloadLength));
+
+  // Status (only if payload length is 0)
+  // draft-ietf-moq-transport-15 Section 10.2.1.1:
+  // "Zero-length objects explicitly encode the Normal status."
+  if (payloadLength === 0n) {
+    parts.push(encodeVarint(status));
+  }
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * Decoded Object fields
+ */
+export interface DecodedObjectFields {
+  objectIdDelta: bigint;
+  extensionsLength: number;
+  extensions: Uint8Array;
+  status: ObjectStatus;
+  payloadLength: bigint;
+}
+
+/**
+ * Decode Object fields from Subgroup stream
+ * draft-ietf-moq-transport-15 Section 10.4.2 Figure 28
+ *
+ * @param data - Data buffer
+ * @param headerType - Subgroup header type to determine if extensions are present
+ * @param offset - Starting offset in buffer
+ */
+export function decodeObjectFields(
+  data: Uint8Array,
+  headerType: number,
+  offset = 0,
+): [DecodedObjectFields, number] {
+  let totalConsumed = 0;
+
+  // Object ID Delta
+  const [objectIdDelta, objectIdConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += objectIdConsumed;
+
+  // Extensions (only if header type has Extensions Present)
+  let extensionsLength = 0;
+  let extensions = new Uint8Array(0);
+  if (hasExtensionsPresent(headerType)) {
+    const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
+    extensionsLength = Number(extLen);
+    totalConsumed += extLenConsumed;
+
+    extensions = data.slice(offset + totalConsumed, offset + totalConsumed + extensionsLength);
+    totalConsumed += extensionsLength;
+  }
+
+  // Payload length
+  const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += payloadLenConsumed;
+
+  // Status (only present if payload length is 0)
+  // draft-ietf-moq-transport-15 Section 10.2.1.1:
+  // "Zero-length objects explicitly encode the Normal status."
+  let status: ObjectStatus = ObjectStatus.NORMAL;
+  if (payloadLength === 0n) {
+    const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
+    status = Number(statusVal) as ObjectStatus;
+    totalConsumed += statusConsumed;
+
+    // draft-ietf-moq-transport-15 Section 10.2.1.2:
+    // "Any Object with status Normal can have extension headers.
+    // If an endpoint receives extension headers on Objects with status
+    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
+    if (status !== ObjectStatus.NORMAL && extensionsLength > 0) {
+      throw new Error("Protocol violation: extension headers on non-Normal status object");
+    }
+  }
+
+  return [
+    {
+      objectIdDelta,
+      extensionsLength,
+      extensions,
+      status,
+      payloadLength,
+    },
+    totalConsumed,
+  ];
+}
+
+/**
+ * Create a simple MoqtObject with payload
+ */
+export function createObject(
+  groupId: bigint,
+  objectId: bigint,
+  payload: Uint8Array,
+  options?: {
+    subgroupId?: bigint;
+    publisherPriority?: number;
+  },
+): MoqtObject {
+  return {
+    groupId,
+    objectId,
+    subgroupId: options?.subgroupId,
+    publisherPriority: options?.publisherPriority,
+    status: ObjectStatus.NORMAL,
+    payload,
+  };
+}
+
+/**
+ * Object Datagram Type (Section 10.3.1)
+ *
+ * Table 5 from draft-ietf-moq-transport-15:
+ * | Type | End Of Group | Extensions | Object ID | Priority | Status/Payload |
+ * |------|--------------|------------|-----------|----------|----------------|
+ * | 0x00 | No           | No         | Yes       | Yes      | Payload        |
+ * | 0x01 | No           | Yes        | Yes       | Yes      | Payload        |
+ * | 0x02 | Yes          | No         | Yes       | Yes      | Payload        |
+ * | 0x03 | Yes          | Yes        | Yes       | Yes      | Payload        |
+ * | 0x04 | No           | No         | No        | Yes      | Payload        |
+ * | 0x05 | No           | Yes        | No        | Yes      | Payload        |
+ * | 0x06 | Yes          | No         | No        | Yes      | Payload        |
+ * | 0x07 | Yes          | Yes        | No        | Yes      | Payload        |
+ * | 0x08 | No           | No         | Yes       | No       | Payload        |
+ * | 0x09 | No           | Yes        | Yes       | No       | Payload        |
+ * | 0x0A | Yes          | No         | Yes       | No       | Payload        |
+ * | 0x0B | Yes          | Yes        | Yes       | No       | Payload        |
+ * | 0x0C | No           | No         | No        | No       | Payload        |
+ * | 0x0D | No           | Yes        | No        | No       | Payload        |
+ * | 0x0E | Yes          | No         | No        | No       | Payload        |
+ * | 0x0F | Yes          | Yes        | No        | No       | Payload        |
+ * | 0x20 | No           | No         | Yes       | Yes      | Status         |
+ * | 0x21 | No           | Yes        | Yes       | Yes      | Status         |
+ * | 0x24 | No           | No         | No        | Yes      | Status         |
+ * | 0x25 | No           | Yes        | No        | Yes      | Status         |
+ * | 0x28 | No           | No         | Yes       | No       | Status         |
+ * | 0x29 | No           | Yes        | Yes       | No       | Status         |
+ * | 0x2C | No           | No         | Yes       | No       | Status         |
+ * | 0x2D | No           | Yes        | Yes       | No       | Status         |
+ */
+export const DatagramType = {
+  // Payload types with Object ID, Priority Present
+  PAYLOAD_OBJ: 0x00,
+  PAYLOAD_OBJ_EXT: 0x01,
+  PAYLOAD_OBJ_END_GROUP: 0x02,
+  PAYLOAD_OBJ_EXT_END_GROUP: 0x03,
+
+  // Payload types without Object ID (Object ID = 0), Priority Present
+  PAYLOAD_NO_OBJ: 0x04,
+  PAYLOAD_NO_OBJ_EXT: 0x05,
+  PAYLOAD_NO_OBJ_END_GROUP: 0x06,
+  PAYLOAD_NO_OBJ_EXT_END_GROUP: 0x07,
+
+  // Payload types with Object ID, No Priority
+  PAYLOAD_OBJ_NO_PRI: 0x08,
+  PAYLOAD_OBJ_EXT_NO_PRI: 0x09,
+  PAYLOAD_OBJ_END_GROUP_NO_PRI: 0x0a,
+  PAYLOAD_OBJ_EXT_END_GROUP_NO_PRI: 0x0b,
+
+  // Payload types without Object ID, No Priority
+  PAYLOAD_NO_OBJ_NO_PRI: 0x0c,
+  PAYLOAD_NO_OBJ_EXT_NO_PRI: 0x0d,
+  PAYLOAD_NO_OBJ_END_GROUP_NO_PRI: 0x0e,
+  PAYLOAD_NO_OBJ_EXT_END_GROUP_NO_PRI: 0x0f,
+
+  // Status types with Object ID, Priority Present
+  STATUS_OBJ: 0x20,
+  STATUS_OBJ_EXT: 0x21,
+
+  // Status types without Object ID, Priority Present
+  STATUS_NO_OBJ: 0x24,
+  STATUS_NO_OBJ_EXT: 0x25,
+
+  // Status types with Object ID, No Priority (0x28-0x29)
+  STATUS_OBJ_NO_PRI: 0x28,
+  STATUS_OBJ_EXT_NO_PRI: 0x29,
+
+  // Status types with Object ID, No Priority (0x2C-0x2D)
+  // draft-15 Table 5: 0x2C/0x2D は Object ID = Yes
+  STATUS_OBJ_NO_PRI_2: 0x2c,
+  STATUS_OBJ_EXT_NO_PRI_2: 0x2d,
+} as const;
+
+export type DatagramType = (typeof DatagramType)[keyof typeof DatagramType];
+
+/**
+ * Object Datagram
+ */
+export interface ObjectDatagram {
+  type: number;
+  trackAlias: bigint;
+  groupId: bigint;
+  objectId: bigint;
+  publisherPriority: number;
+  extensions?: Uint8Array;
+  status?: ObjectStatus;
+  payload?: Uint8Array;
+}
+
+/**
+ * Check if datagram type has Object ID field
+ *
+ * draft-ietf-moq-transport-15 Section 10.3.1 Table 5:
+ * - Payload types (0x00-0x0F): bit 2 (0x04) = 0 なら Object ID あり
+ * - Status types (0x20-0x2D): 0x24, 0x25 のみ Object ID なし、他は Object ID あり
+ */
+function datagramHasObjectId(type: number): boolean {
+  // Status types
+  if (type >= 0x20) {
+    // 0x24, 0x25 のみ Object ID なし
+    return type !== 0x24 && type !== 0x25;
+  }
+  // Payload types: bit 2 (0x04) = 0 なら Object ID あり
+  return (type & 0x04) === 0;
+}
+
+/**
+ * Check if datagram type has Extensions field
+ */
+function datagramHasExtensions(type: number): boolean {
+  return (type & 0x01) === 1;
+}
+
+/**
+ * Check if datagram type is status type (no payload)
+ */
+function datagramIsStatusType(type: number): boolean {
+  return type >= 0x20;
+}
+
+/**
+ * Check if datagram type has Priority Present
+ *
+ * draft-ietf-moq-transport-15 Section 10.3.1 Table 5:
+ * Types 0x00-0x07 and 0x20-0x25 have Priority Present = Yes
+ * Types 0x08-0x0F and 0x28-0x2D have Priority Present = No
+ */
+function datagramHasPriority(type: number): boolean {
+  // Types 0x00-0x07 have Priority
+  if (type <= 0x07) {
+    return true;
+  }
+  // Types 0x08-0x0F don't have Priority
+  if (type >= 0x08 && type <= 0x0f) {
+    return false;
+  }
+  // Types 0x20-0x25 have Priority
+  if (type >= 0x20 && type <= 0x25) {
+    return true;
+  }
+  // Types 0x28-0x2D don't have Priority
+  return false;
+}
+
+/**
+ * Encode an Object Datagram
+ * draft-ietf-moq-transport-15 Section 10.3.1
+ */
+export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  parts.push(encodeVarint(datagram.type));
+  parts.push(encodeVarint(datagram.trackAlias));
+  parts.push(encodeVarint(datagram.groupId));
+
+  if (datagramHasObjectId(datagram.type)) {
+    parts.push(encodeVarint(datagram.objectId));
+  }
+
+  // Priority Present check (types 0x08-0x0F and 0x28-0x2D don't have Priority)
+  if (datagramHasPriority(datagram.type)) {
+    parts.push(new Uint8Array([datagram.publisherPriority]));
+  }
+
+  if (datagramHasExtensions(datagram.type)) {
+    const extLen = datagram.extensions?.length ?? 0;
+
+    // draft-ietf-moq-transport-15 Section 10.2.1.2:
+    // Non-Normal status objects must not have extension headers
+    if (
+      datagramIsStatusType(datagram.type) &&
+      datagram.status !== ObjectStatus.NORMAL &&
+      extLen > 0
+    ) {
+      throw new Error("Protocol violation: extension headers on non-Normal status object");
+    }
+
+    parts.push(encodeVarint(extLen));
+    if (datagram.extensions && datagram.extensions.length > 0) {
+      parts.push(datagram.extensions);
+    }
+  }
+
+  if (datagramIsStatusType(datagram.type)) {
+    parts.push(encodeVarint(datagram.status ?? ObjectStatus.NORMAL));
+  } else if (datagram.payload) {
+    parts.push(datagram.payload);
+  }
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * Decode an Object Datagram
+ * draft-ietf-moq-transport-15 Section 10.3.1
+ */
+export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
+  let totalConsumed = 0;
+
+  const [type, typeConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += typeConsumed;
+
+  const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += trackAliasConsumed;
+
+  const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += groupIdConsumed;
+
+  const typeNum = Number(type);
+  let objectId = 0n;
+  if (datagramHasObjectId(typeNum)) {
+    const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
+    objectId = oid;
+    totalConsumed += oidConsumed;
+  }
+
+  // Priority Present check (types 0x08-0x0F and 0x28-0x2D don't have Priority)
+  let publisherPriority = 0;
+  if (datagramHasPriority(typeNum)) {
+    publisherPriority = data[offset + totalConsumed];
+    totalConsumed += 1;
+  }
+
+  let extensions: Uint8Array | undefined;
+  let extensionsLength = 0;
+  if (datagramHasExtensions(typeNum)) {
+    const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
+    extensionsLength = Number(extLen);
+    totalConsumed += extLenConsumed;
+
+    if (extensionsLength > 0) {
+      extensions = data.slice(offset + totalConsumed, offset + totalConsumed + extensionsLength);
+      totalConsumed += extensionsLength;
+    }
+  }
+
+  let status: ObjectStatus | undefined;
+  let payload: Uint8Array | undefined;
+
+  if (datagramIsStatusType(typeNum)) {
+    const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
+    status = Number(statusVal) as ObjectStatus;
+    totalConsumed += statusConsumed;
+
+    // draft-ietf-moq-transport-15 Section 10.2.1.2:
+    // "Any Object with status Normal can have extension headers.
+    // If an endpoint receives extension headers on Objects with status
+    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
+    if (status !== ObjectStatus.NORMAL && extensionsLength > 0) {
+      throw new Error("Protocol violation: extension headers on non-Normal status object");
+    }
+  } else {
+    payload = data.slice(offset + totalConsumed);
+    totalConsumed = data.length - offset;
+  }
+
+  return [
+    {
+      type: typeNum,
+      trackAlias,
+      groupId,
+      objectId,
+      publisherPriority,
+      extensions,
+      status,
+      payload,
+    },
+    totalConsumed,
+  ];
+}
+
+/**
+ * Fetch Header (Section 10.4.4)
+ *
+ * FETCH_HEADER {
+ *   Type (i) = 0x05,
+ *   Request ID (i),
+ * }
+ */
+export const FetchHeaderType = 0x05;
+
+export interface FetchHeader {
+  type: typeof FetchHeaderType;
+  requestId: bigint;
+}
+
+/**
+ * Encode a Fetch Header
+ *
+ * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
+ * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ */
+export function encodeFetchHeader(header: FetchHeader): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  parts.push(encodeVarint(header.type));
+  parts.push(encodeVarint(header.requestId));
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * Decode a Fetch Header
+ */
+export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, number] {
+  let totalConsumed = 0;
+
+  const [type, typeConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += typeConsumed;
+
+  if (Number(type) !== FetchHeaderType) {
+    throw new Error(`Invalid Fetch Header type: ${type}, expected ${FetchHeaderType}`);
+  }
+
+  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += requestIdConsumed;
+
+  return [
+    {
+      type: FetchHeaderType,
+      requestId,
+    },
+    totalConsumed,
+  ];
+}
+
+/**
+ * Serialization Flags for Fetch Object (Section 10.4.4)
+ *
+ * Table 7: Subgroup ID encoding (bits 0-1)
+ * | Bitmask (flags & 0x03) | Meaning |
+ * | 0x00 | Subgroup ID is zero |
+ * | 0x01 | Subgroup ID is prior Object's Subgroup ID |
+ * | 0x02 | Subgroup ID is prior Object's Subgroup ID + 1 |
+ * | 0x03 | Subgroup ID field is present |
+ *
+ * Table 8: Additional flags
+ * | Bitmask | Condition if set |
+ * | 0x04 | Object ID field is present (else prior + 1) |
+ * | 0x08 | Group ID field is present (else prior Group ID) |
+ * | 0x10 | Priority field is present (else prior Priority) |
+ * | 0x20 | Extensions field is present |
+ * | 0x40 | PROTOCOL_VIOLATION |
+ * | 0x80 | PROTOCOL_VIOLATION |
+ */
+export const FetchSerializationFlags = {
+  // Subgroup ID encoding
+  SUBGROUP_ZERO: 0x00,
+  SUBGROUP_SAME: 0x01,
+  SUBGROUP_PLUS_ONE: 0x02,
+  SUBGROUP_PRESENT: 0x03,
+  SUBGROUP_MASK: 0x03,
+
+  // Additional flags
+  OBJECT_ID_PRESENT: 0x04,
+  GROUP_ID_PRESENT: 0x08,
+  PRIORITY_PRESENT: 0x10,
+  EXTENSIONS_PRESENT: 0x20,
+} as const;
+
+/**
+ * Fetch Object Fields (Figure 30 in Section 10.4.4)
+ */
+export interface FetchObjectFields {
+  serializationFlags: number;
+  groupId?: bigint;
+  subgroupId?: bigint;
+  objectId?: bigint;
+  publisherPriority?: number;
+  extensions?: Uint8Array;
+  payloadLength: bigint;
+  status?: ObjectStatus;
+  payload?: Uint8Array;
+}
+
+/**
+ * Decoded Fetch Object with resolved values
+ */
+export interface DecodedFetchObject {
+  groupId: bigint;
+  subgroupId: bigint;
+  objectId: bigint;
+  publisherPriority: number;
+  extensions?: Uint8Array;
+  status: ObjectStatus;
+  payloadLength: bigint;
+}
+
+/**
+ * Context for decoding Fetch Objects (tracks prior object's values)
+ */
+export interface FetchObjectContext {
+  groupId: bigint;
+  subgroupId: bigint;
+  objectId: bigint;
+  publisherPriority: number;
+}
+
+/**
+ * Encode Fetch Object Fields
+ * draft-ietf-moq-transport-15 Section 10.4.4 Figure 30
+ *
+ * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
+ * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ */
+export function encodeFetchObjectFields(
+  fields: FetchObjectFields,
+  includePayload = false,
+): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  // Serialization Flags (8 bits)
+  parts.push(new Uint8Array([fields.serializationFlags]));
+
+  // Group ID (if flag 0x08 is set)
+  if (fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) {
+    if (fields.groupId === undefined) {
+      throw new Error("Group ID required when GROUP_ID_PRESENT flag is set");
+    }
+    parts.push(encodeVarint(fields.groupId));
+  }
+
+  // Subgroup ID (if flags & 0x03 == 0x03)
+  if (
+    (fields.serializationFlags & FetchSerializationFlags.SUBGROUP_MASK) ===
+    FetchSerializationFlags.SUBGROUP_PRESENT
+  ) {
+    if (fields.subgroupId === undefined) {
+      throw new Error("Subgroup ID required when SUBGROUP_PRESENT is set");
+    }
+    parts.push(encodeVarint(fields.subgroupId));
+  }
+
+  // Object ID (if flag 0x04 is set)
+  if (fields.serializationFlags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
+    if (fields.objectId === undefined) {
+      throw new Error("Object ID required when OBJECT_ID_PRESENT flag is set");
+    }
+    parts.push(encodeVarint(fields.objectId));
+  }
+
+  // Publisher Priority (if flag 0x10 is set)
+  if (fields.serializationFlags & FetchSerializationFlags.PRIORITY_PRESENT) {
+    if (fields.publisherPriority === undefined) {
+      throw new Error("Publisher Priority required when PRIORITY_PRESENT flag is set");
+    }
+    parts.push(new Uint8Array([fields.publisherPriority]));
+  }
+
+  // Extensions (if flag 0x20 is set)
+  if (fields.serializationFlags & FetchSerializationFlags.EXTENSIONS_PRESENT) {
+    const extLen = fields.extensions?.length ?? 0;
+    parts.push(encodeVarint(extLen));
+    if (fields.extensions && fields.extensions.length > 0) {
+      parts.push(fields.extensions);
+    }
+  }
+
+  // Object Payload Length
+  parts.push(encodeVarint(fields.payloadLength));
+
+  // Object Status (only if payload length is 0)
+  if (fields.payloadLength === 0n) {
+    parts.push(encodeVarint(fields.status ?? ObjectStatus.NORMAL));
+  }
+
+  // Object Payload (optional, included when specified)
+  if (includePayload && fields.payload && fields.payloadLength > 0n) {
+    parts.push(fields.payload);
+  }
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * Decode Fetch Object Fields
+ * draft-ietf-moq-transport-15 Section 10.4.4 Figure 30
+ *
+ * @param data - Data buffer
+ * @param context - Context with prior object's values (required after first object)
+ * @param offset - Starting offset in buffer
+ * @param isFirst - Whether this is the first object (no prior context allowed)
+ */
+export function decodeFetchObjectFields(
+  data: Uint8Array,
+  context: FetchObjectContext | null,
+  offset = 0,
+  isFirst = false,
+): [DecodedFetchObject, number, FetchObjectContext] {
+  let totalConsumed = 0;
+
+  // Serialization Flags (8 bits)
+  const flags = data[offset + totalConsumed];
+  totalConsumed += 1;
+
+  // Protocol violation check for reserved bits
+  if (flags & 0xc0) {
+    throw new Error(
+      "Protocol violation: reserved bits 0x40 or 0x80 are set in Serialization Flags",
+    );
+  }
+
+  // Group ID
+  let groupId: bigint;
+  if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
+    const [gid, gidConsumed] = decodeVarint(data, offset + totalConsumed);
+    groupId = gid;
+    totalConsumed += gidConsumed;
+  } else {
+    if (isFirst || context === null) {
+      throw new Error("Protocol violation: First object must have GROUP_ID_PRESENT flag set");
+    }
+    groupId = context.groupId;
+  }
+
+  // Subgroup ID
+  let subgroupId: bigint;
+  const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
+  switch (subgroupEncoding) {
+    case FetchSerializationFlags.SUBGROUP_ZERO:
+      subgroupId = 0n;
+      break;
+    case FetchSerializationFlags.SUBGROUP_SAME:
+      if (isFirst || context === null) {
+        throw new Error("Protocol violation: First object cannot use SUBGROUP_SAME");
+      }
+      subgroupId = context.subgroupId;
+      break;
+    case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
+      if (isFirst || context === null) {
+        throw new Error("Protocol violation: First object cannot use SUBGROUP_PLUS_ONE");
+      }
+      subgroupId = context.subgroupId + 1n;
+      break;
+    case FetchSerializationFlags.SUBGROUP_PRESENT: {
+      const [sid, sidConsumed] = decodeVarint(data, offset + totalConsumed);
+      subgroupId = sid;
+      totalConsumed += sidConsumed;
+      break;
+    }
+    default:
+      throw new Error(`Invalid subgroup encoding: ${subgroupEncoding}`);
+  }
+
+  // Object ID
+  let objectId: bigint;
+  if (flags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
+    const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
+    objectId = oid;
+    totalConsumed += oidConsumed;
+  } else {
+    if (isFirst || context === null) {
+      throw new Error("Protocol violation: First object must have OBJECT_ID_PRESENT flag set");
+    }
+    objectId = context.objectId + 1n;
+  }
+
+  // Publisher Priority
+  let publisherPriority: number;
+  if (flags & FetchSerializationFlags.PRIORITY_PRESENT) {
+    publisherPriority = data[offset + totalConsumed];
+    totalConsumed += 1;
+  } else {
+    if (isFirst || context === null) {
+      throw new Error("Protocol violation: First object must have PRIORITY_PRESENT flag set");
+    }
+    publisherPriority = context.publisherPriority;
+  }
+
+  // Extensions
+  let extensions: Uint8Array | undefined;
+  if (flags & FetchSerializationFlags.EXTENSIONS_PRESENT) {
+    const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
+    totalConsumed += extLenConsumed;
+
+    if (extLen > 0) {
+      extensions = data.slice(offset + totalConsumed, offset + totalConsumed + Number(extLen));
+      totalConsumed += Number(extLen);
+    }
+  }
+
+  // Object Payload Length
+  const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += payloadLenConsumed;
+
+  // Object Status (only if payload length is 0)
+  let status: ObjectStatus = ObjectStatus.NORMAL;
+  if (payloadLength === 0n) {
+    const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
+    status = Number(statusVal) as ObjectStatus;
+    totalConsumed += statusConsumed;
+  }
+
+  // Update context for next object
+  const newContext: FetchObjectContext = {
+    groupId,
+    subgroupId,
+    objectId,
+    publisherPriority,
+  };
+
+  return [
+    {
+      groupId,
+      subgroupId,
+      objectId,
+      publisherPriority,
+      extensions,
+      status,
+      payloadLength,
+    },
+    totalConsumed,
+    newContext,
+  ];
+}
+
+/**
+ * Create serialization flags for first Fetch object
+ * First object must have all fields present
+ */
+export function createFirstFetchObjectFlags(hasExtensions = false): number {
+  let flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  if (hasExtensions) {
+    flags |= FetchSerializationFlags.EXTENSIONS_PRESENT;
+  }
+
+  return flags;
+}
+
+/**
+ * Create serialization flags based on delta from prior object
+ */
+export function createFetchObjectFlags(
+  current: { groupId: bigint; subgroupId: bigint; objectId: bigint; publisherPriority: number },
+  prior: FetchObjectContext,
+  hasExtensions = false,
+): number {
+  let flags = 0;
+
+  // Group ID
+  if (current.groupId !== prior.groupId) {
+    flags |= FetchSerializationFlags.GROUP_ID_PRESENT;
+  }
+
+  // Subgroup ID
+  if (current.subgroupId === 0n) {
+    flags |= FetchSerializationFlags.SUBGROUP_ZERO;
+  } else if (current.subgroupId === prior.subgroupId) {
+    flags |= FetchSerializationFlags.SUBGROUP_SAME;
+  } else if (current.subgroupId === prior.subgroupId + 1n) {
+    flags |= FetchSerializationFlags.SUBGROUP_PLUS_ONE;
+  } else {
+    flags |= FetchSerializationFlags.SUBGROUP_PRESENT;
+  }
+
+  // Object ID
+  if (current.objectId !== prior.objectId + 1n) {
+    flags |= FetchSerializationFlags.OBJECT_ID_PRESENT;
+  }
+
+  // Publisher Priority
+  if (current.publisherPriority !== prior.publisherPriority) {
+    flags |= FetchSerializationFlags.PRIORITY_PRESENT;
+  }
+
+  // Extensions
+  if (hasExtensions) {
+    flags |= FetchSerializationFlags.EXTENSIONS_PRESENT;
+  }
+
+  return flags;
+}

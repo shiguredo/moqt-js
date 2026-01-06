@@ -1,0 +1,22 @@
+{
+  "name": "moqt-devtools",
+  "version": "2025.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@preact/signals": "2.5.1",
+    "moqt-js": "workspace:*",
+    "preact": "10.28.1",
+    "preact-iso": "2.11.1"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "2.10.2",
+    "@tailwindcss/vite": "4.1.18",
+    "tailwindcss": "4.1.18"
+  }
+}

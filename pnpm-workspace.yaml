@@ -1,0 +1,6 @@
+packages:
+  - devtools
+  - examples
+
+onlyBuiltDependencies:
+  - esbuild
