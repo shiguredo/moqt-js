@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] rolldown-vite から vite に戻す
+  - rolldown でオプショナルチェーン (`?.`) が minification 時に消えるバグがあったため
+  - @voluntas
+
 ## 2025.2.0
 
 **リリース日**: 2026-01-06
