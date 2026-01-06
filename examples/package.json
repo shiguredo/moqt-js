@@ -1,0 +1,14 @@
+{
+  "name": "moqt-js-examples",
+  "version": "2025.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "moqt-js": "workspace:*"
+  }
+}

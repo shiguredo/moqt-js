@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // クラスフィールドの初期化に Object.defineProperty を使用
+    "useDefineForClassFields": true,
+    // .ts 拡張子付きインポートを許可（Vite で必要）
+    "allowImportingTsExtensions": true,
+    // JSX トランスフォーム設定（Preact 用）
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
+  },
+  "include": ["src"]
+}
