@@ -1,0 +1,98 @@
+name: npm-publish
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - run: pnpm --version
+      - run: pnpm install
+      - run: pnpm run build
+      - run: pnpm run lint
+      - run: pnpm run typecheck
+      - uses: actions/upload-artifact@v6
+        with:
+          name: moqt-js-dist
+          path: dist/
+
+  npm-publish-canary:
+    runs-on: ubuntu-slim
+    needs: [build]
+    permissions:
+      contents: read
+      id-token: write
+    if: ${{ contains(github.ref, 'canary') }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: moqt-js-dist
+          path: dist/
+
+      # pnpm publish は CI では正常に動作しない
+      # https://github.com/pnpm/pnpm/issues/4937
+      - run: npm install -g npm@latest
+      - run: npm publish --no-git-checks --tag canary
+
+  npm-publish:
+    runs-on: ubuntu-slim
+    needs: [build]
+    permissions:
+      contents: read
+      id-token: write
+    if: ${{ !contains(github.ref, 'canary') }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: moqt-js-dist
+          path: dist/
+
+      # pnpm publish は CI では正常に動作しない
+      # https://github.com/pnpm/pnpm/issues/4937
+      - run: npm install -g npm@latest
+      - run: npm publish --no-git-checks
+
+  slack_notify_failed:
+    needs: [npm-publish-canary, npm-publish]
+    runs-on: ubuntu-24.04
+    if: failure()
+    steps:
+      - name: Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_CHANNEL: moqt-js
+          SLACK_COLOR: danger
+          SLACK_TITLE: Failed
+          SLACK_ICON_EMOJI: ":japanese_ogre:"
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}

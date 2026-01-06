@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>moqt-js High-Level API Example</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+        background: #f5f5f5;
+        color: #333;
+      }
+      h1 {
+        text-align: center;
+        margin-bottom: 20px;
+      }
+      .config {
+        background: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+        margin-bottom: 20px;
+      }
+      .config label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      .config input,
+      .config select {
+        width: 100%;
+        padding: 8px;
+        margin-bottom: 15px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fff;
+        color: #333;
+      }
+      .device-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 15px;
+      }
+      .device-row > div {
+        min-width: 0;
+      }
+      .container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+      .panel {
+        background: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+      }
+      .panel h2 {
+        margin-top: 0;
+        margin-bottom: 15px;
+        font-size: 1.2em;
+      }
+      video {
+        width: 100%;
+        background: #000;
+        border-radius: 4px;
+        aspect-ratio: 16 / 9;
+      }
+      button {
+        width: 100%;
+        padding: 12px;
+        margin-top: 10px;
+        border: none;
+        border-radius: 4px;
+        font-size: 1em;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .btn-primary {
+        background: #0066cc;
+        color: #fff;
+      }
+      .btn-primary:hover:not(:disabled) {
+        background: #0055aa;
+      }
+      .btn-danger {
+        background: #cc3333;
+        color: #fff;
+      }
+      .btn-danger:hover:not(:disabled) {
+        background: #aa2222;
+      }
+      .status {
+        margin-top: 10px;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 0.9em;
+        text-align: center;
+        color: #fff;
+      }
+      .status.created {
+        background: #888;
+      }
+      .status.connecting {
+        background: #cc9900;
+      }
+      .status.running,
+      .status.publishing,
+      .status.active {
+        background: #339933;
+      }
+      .status.closed,
+      .status.stopped {
+        background: #993333;
+      }
+      .log {
+        margin-top: 15px;
+        padding: 10px;
+        background: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 0.85em;
+        max-height: 150px;
+        overflow-y: auto;
+      }
+      .log-entry {
+        margin-bottom: 5px;
+        padding: 2px 0;
+        border-bottom: 1px solid #eee;
+      }
+      .log-entry:last-child {
+        border-bottom: none;
+      }
+      .log-time {
+        color: #888;
+        margin-right: 8px;
+      }
+      .log-pub {
+        color: #0066cc;
+      }
+      .log-sub {
+        color: #339933;
+      }
+      .log-error {
+        color: #cc3333;
+      }
+      .stats {
+        margin-top: 10px;
+        padding: 12px;
+        background: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 0.9em;
+      }
+      .stats-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+      .stats-row:last-child {
+        margin-bottom: 0;
+      }
+      .stats-label {
+        color: #666;
+      }
+      .stats-value {
+        color: #339933;
+        font-weight: bold;
+      }
+      .btn-copy {
+        background: #666;
+        color: #fff;
+        margin-top: 10px;
+      }
+      .btn-copy:hover:not(:disabled) {
+        background: #555;
+      }
+      .btn-copy.copied {
+        background: #339933;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      style="
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+      "
+    >
+      <h1 style="margin: 0">moqt-js High-Level API Example</h1>
+      <div style="display: flex; gap: 10px">
+        <button id="copyUrl" class="btn-copy" style="width: auto; padding: 8px 16px; margin: 0">
+          Copy URL
+        </button>
+        <button id="copyAllInfo" class="btn-copy" style="width: auto; padding: 8px 16px; margin: 0">
+          Copy for LLM
+        </button>
+      </div>
+    </div>
+
+    <div class="config">
+      <h3 style="margin-top: 0; margin-bottom: 15px">Connection</h3>
+      <label for="url">MOQT Relay URL</label>
+      <input type="text" id="url" value="https://localhost:4433/moqt" />
+      <label for="certHash">Server Certificate Hash (optional)</label>
+      <input
+        type="text"
+        id="certHash"
+        placeholder="Base64 encoded SHA-256 hash"
+        autocomplete="off"
+      />
+
+      <div class="device-row">
+        <div>
+          <label for="audioInput">Audio Input</label>
+          <select id="audioInput"></select>
+        </div>
+        <div>
+          <label for="audioOutput">Audio Output</label>
+          <select id="audioOutput"></select>
+        </div>
+        <div>
+          <label for="videoInput">Video Input</label>
+          <select id="videoInput"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="container" style="margin-bottom: 20px">
+      <div class="config" style="margin-bottom: 0">
+        <h3 style="margin-top: 0; margin-bottom: 15px">Publisher Settings</h3>
+        <div class="device-row">
+          <div>
+            <label for="pubAudioCodec">Audio Codec</label>
+            <select id="pubAudioCodec">
+              <option value="opus" selected>Opus</option>
+              <option value="aac">AAC</option>
+            </select>
+          </div>
+          <div>
+            <label for="pubAudioBitrate">Audio Bitrate (kbps)</label>
+            <input type="number" id="pubAudioBitrate" value="128" min="32" max="512" />
+          </div>
+          <div></div>
+        </div>
+
+        <div class="device-row">
+          <div>
+            <label for="pubVideoCodec">Video Codec</label>
+            <select id="pubVideoCodec">
+              <option value="vp8" selected>VP8</option>
+              <option value="vp9">VP9</option>
+              <option value="h264">H.264</option>
+              <option value="h265">H.265</option>
+              <option value="av1">AV1</option>
+            </select>
+          </div>
+          <div>
+            <label for="pubVideoBitrate">Video Bitrate (kbps)</label>
+            <input type="number" id="pubVideoBitrate" value="2000" min="100" max="10000" />
+          </div>
+          <div>
+            <label for="pubVideoFramerate">Framerate</label>
+            <input type="number" id="pubVideoFramerate" value="30" min="1" max="60" />
+          </div>
+        </div>
+
+        <div class="device-row">
+          <div>
+            <label for="pubVideoWidth">Width</label>
+            <input type="number" id="pubVideoWidth" value="1280" min="320" max="3840" />
+          </div>
+          <div>
+            <label for="pubVideoHeight">Height</label>
+            <input type="number" id="pubVideoHeight" value="720" min="240" max="2160" />
+          </div>
+          <div>
+            <label for="pubKeyframeInterval">Keyframe Interval</label>
+            <input type="number" id="pubKeyframeInterval" value="60" min="1" max="300" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="panel">
+        <h2>Publisher</h2>
+        <video id="localVideo" autoplay muted playsinline></video>
+        <button id="startPublish" class="btn-primary">Start Publishing</button>
+        <button id="stopPublish" class="btn-danger" disabled>Stop Publishing</button>
+        <div id="pubStatus" class="status created">created</div>
+        <div id="pubStats" class="stats">
+          <div class="stats-row">
+            <span class="stats-label">Audio frames:</span
+            ><span id="pubAudioFrames" class="stats-value">-</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Audio bytes:</span
+            ><span id="pubAudioBytes" class="stats-value">-</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Video frames:</span
+            ><span id="pubVideoFrames" class="stats-value">-</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Video bytes:</span
+            ><span id="pubVideoBytes" class="stats-value">-</span>
+          </div>
+        </div>
+        <div
+          id="pubCatalog"
+          class="catalog"
+          style="
+            margin-top: 10px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.85em;
+            max-height: 120px;
+            overflow-y: auto;
+            display: none;
+          "
+        >
+          <div style="font-weight: bold; margin-bottom: 5px; color: #666">Catalog</div>
+          <pre
+            id="pubCatalogContent"
+            style="margin: 0; white-space: pre-wrap; word-break: break-all"
+          ></pre>
+        </div>
+        <div id="pubLog" class="log"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Subscriber</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+        <button id="startSubscribe" class="btn-primary">Start Subscribing</button>
+        <button id="stopSubscribe" class="btn-danger" disabled>Stop Subscribing</button>
+        <div id="subStatus" class="status created">created</div>
+        <div id="subStats" class="stats">
+          <div class="stats-row">
+            <span class="stats-label">Audio frames:</span
+            ><span id="subAudioFrames" class="stats-value">-</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Audio bytes:</span
+            ><span id="subAudioBytes" class="stats-value">-</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Video frames:</span
+            ><span id="subVideoFrames" class="stats-value">-</span>
+          </div>
+          <div class="stats-row">
+            <span class="stats-label">Video bytes:</span
+            ><span id="subVideoBytes" class="stats-value">-</span>
+          </div>
+        </div>
+        <div
+          id="subCatalog"
+          class="catalog"
+          style="
+            margin-top: 10px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.85em;
+            max-height: 120px;
+            overflow-y: auto;
+            display: none;
+          "
+        >
+          <div style="font-weight: bold; margin-bottom: 5px; color: #666">Catalog</div>
+          <pre
+            id="subCatalogContent"
+            style="margin: 0; white-space: pre-wrap; word-break: break-all"
+          ></pre>
+        </div>
+        <div id="subLog" class="log"></div>
+      </div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
