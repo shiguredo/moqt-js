@@ -40,7 +40,6 @@
     "e2e-test-edge": "pnpm build && playwright test --project='Microsoft Edge*'",
     "e2e-test-webkit": "pnpm build && playwright test --project='WebKit'"
   },
-  "dependencies": {},
   "devDependencies": {
     "@playwright/test": "1.57.0",
     "@types/node": "25.0.3",
@@ -50,7 +49,7 @@
     "oxlint": "1.38.0",
     "oxlint-tsgolint": "0.10.1",
     "typescript": "5.9.3",
-    "vite": "7.3.0",
+    "vite": "7.3.1",
     "vitest": "4.0.16"
   }
 }
