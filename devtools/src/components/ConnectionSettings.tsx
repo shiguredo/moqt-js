@@ -219,10 +219,12 @@ export function ConnectionSettings() {
         <div>
           <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
             Namespace
+            <span class="text-xs text-slate-400 ml-1">(「/」で tuple に分割)</span>
           </label>
           <input
             type="text"
             id="namespace"
+            placeholder="例: room/123 → [room, 123]"
             value={settings.namespace.value}
             onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
             disabled={settings.settingsDisabled.value}

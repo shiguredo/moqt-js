@@ -15,6 +15,11 @@
   - rolldown でオプショナルチェーン (`?.`) が minification 時に消えるバグがあったため
   - @voluntas
 
+### misc
+
+- [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
+  - @voluntas
+
 ## 2025.2.0
 
 **リリース日**: 2026-01-06
