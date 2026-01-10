@@ -11,6 +11,8 @@
 
 ## develop
 
+- [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
+  - @voluntas
 - [CHANGE] rolldown-vite から vite に戻す
   - rolldown でオプショナルチェーン (`?.`) が minification 時に消えるバグがあったため
   - @voluntas
