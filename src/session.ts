@@ -1475,8 +1475,14 @@ export class SessionImpl implements Session {
     // 新しい Group または最初のオブジェクト → 新しいストリームを開く
     if (!streamState || streamState.groupId !== groupId) {
       // 前のストリームを FIN で閉じる
+      // 先に Map から削除して、他の sendObject が同じストリームを閉じようとするのを防ぐ
       if (streamState) {
-        await streamState.writer.close();
+        this.publisherStreams.delete(trackAlias);
+        try {
+          await streamState.writer.close();
+        } catch {
+          // 既に閉じられている場合は無視
+        }
       }
 
       // 新しいストリームを開く
