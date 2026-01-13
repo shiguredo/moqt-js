@@ -10,29 +10,29 @@ moqt-js を draft-ietf-moq-transport-15 から draft-ietf-moq-transport-16 に�
 
 ### 優先度: 高 (ワイヤフォーマット変更)
 
-- [ ] パラメータのデルタエンコーディング対応
+- [x] パラメータのデルタエンコーディング対応
   - https://github.com/moq-wg/moq-transport/pull/1315
   - 影響: `parameter.ts`, 全メッセージの encode/decode
   - 他の全変更の基盤となるため最初に対応が必要
 
-- [ ] REQUEST_ERROR に Retry Interval 追加
+- [x] REQUEST_ERROR に Retry Interval 追加
   - https://github.com/moq-wg/moq-transport/pull/1339
   - 影響: `session.ts`, `error.ts`
 
-- [ ] SUBSCRIBE_UPDATE を REQUEST_UPDATE に変更
+- [x] SUBSCRIBE_UPDATE を REQUEST_UPDATE に変更
   - https://github.com/moq-wg/moq-transport/pull/1332
   - 影響: `types.ts`, `subscribe.ts`, `session.ts`
   - 更新対象を拡張 (SUBSCRIBE 以外も更新可能に)
 
-- [ ] PUBLISH_NAMESPACE_DONE/CANCEL に Request ID 追加
+- [x] PUBLISH_NAMESPACE_DONE/CANCEL に Request ID 追加
   - https://github.com/moq-wg/moq-transport/pull/1329
   - 影響: `namespace.ts`
 
-- [ ] PUBLISH, SUBSCRIBE_OK, FETCH_OK に Extension Headers 追加
+- [x] PUBLISH, SUBSCRIBE_OK, FETCH_OK に Extension Headers 追加
   - https://github.com/moq-wg/moq-transport/pull/1374
   - 影響: `publish.ts`, `subscribe.ts`, `fetch.ts`
 
-- [ ] Object Status の処理方法変更
+- [x] Object Status の処理方法変更
   - https://github.com/moq-wg/moq-transport/pull/1342
   - 影響: `types.ts`, `dataStream.ts`
   - 欠落オブジェクトの扱いを変更
