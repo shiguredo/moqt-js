@@ -21,6 +21,7 @@ import {
   PublishDoneStatusCode,
   ObjectStatus,
   createTrackNamespace,
+  encodeTrackName,
   trackNamespaceToStrings,
   decodeFetchOkPayload,
   decodeGoawayPayload,
@@ -707,6 +708,18 @@ export class SessionImpl implements Session {
     }
   >();
 
+  // TODO: Closed Subgroup Tracking
+  // draft-ietf-moq-transport-16:
+  // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
+  // https://github.com/moq-wg/moq-transport/pull/1396
+  //
+  // 現在の実装では 1 Group = 1 Subgroup = 1 Stream モデルを採用しているため、
+  // グループが終了すると自然と新しいストリームを作成する。
+  // 完全な実装には以下が必要:
+  // 1. WebTransport の STOP_SENDING シグナル検出
+  // 2. 閉じた Subgroup (trackAlias, groupId, subgroupId) の追跡
+  // 3. sendObject 時に閉じた Subgroup への送信を拒否
+
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
   private statsObjectsReceivedViaSubscribe = 0;
@@ -820,9 +833,8 @@ export class SessionImpl implements Session {
 
     const trackAlias = this.nextTrackAlias++;
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
     // Create publisher implementation
     const impl = new PublisherImpl(
@@ -1000,9 +1012,8 @@ export class SessionImpl implements Session {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n; // Client uses even IDs
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
     // Create subscriber implementation
     // Note: trackAlias will be set when SUBSCRIBE_OK is received
@@ -1143,9 +1154,8 @@ export class SessionImpl implements Session {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
     // Fetcher 実装を作成
     const impl = new FetcherImpl(
@@ -1213,9 +1223,8 @@ export class SessionImpl implements Session {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
     // REQUEST_OK を待つ Promise
     const promise = new Promise<TrackStatusResult>((resolve, reject) => {

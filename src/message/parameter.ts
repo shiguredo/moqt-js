@@ -18,6 +18,17 @@ import { decodeVarint, encodeVarint } from "../varint";
 import type { Location } from "./types";
 
 /**
+ * Track Namespace / Full Track Name の最大サイズ（バイト）
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace と Full Track Name は最大 4,096 バイト。
+ * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ */
+export const MAX_TRACK_NAMESPACE_SIZE = 4096;
+export const MAX_TRACK_NAME_SIZE = 4096;
+
+/**
  * MOQT Parameter
  *
  * 偶数タイプ: varint 値として解釈
@@ -105,8 +116,23 @@ export interface TrackNamespace {
 
 /**
  * Track Namespace をエンコードする
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
+  // 先にサイズをチェック
+  let dataSize = 0;
+  for (const element of namespace.tuple) {
+    dataSize += element.length;
+  }
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
+  }
+
   const parts: Uint8Array[] = [encodeVarint(namespace.tuple.length)];
 
   for (const element of namespace.tuple) {
@@ -127,12 +153,18 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 
 /**
  * Track Namespace をデコードする
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ *
  * @returns [namespace, consumed bytes]
  */
 export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamespace, number] {
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
   const elements: Uint8Array[] = [];
+  let dataSize = 0;
 
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -140,6 +172,13 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
     elements.push(element);
     totalConsumed += Number(elemLen);
+    dataSize += Number(elemLen);
+  }
+
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
   }
 
   return [{ tuple: elements }, totalConsumed];
@@ -147,12 +186,26 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
 
 /**
  * string[] から TrackNamespace を作成
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
-  return {
-    tuple: parts.map((p) => encoder.encode(p)),
-  };
+  const tuple = parts.map((p) => encoder.encode(p));
+
+  let dataSize = 0;
+  for (const element of tuple) {
+    dataSize += element.length;
+  }
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
+  }
+
+  return { tuple };
 }
 
 /**
@@ -161,6 +214,39 @@ export function createTrackNamespace(parts: string[]): TrackNamespace {
 export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
   const decoder = new TextDecoder();
   return namespace.tuple.map((t) => decoder.decode(t));
+}
+
+/**
+ * Track Name をエンコードする（サイズ検証付き）
+ *
+ * draft-ietf-moq-transport-16:
+ * Full Track Name は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ */
+export function encodeTrackName(trackName: string): Uint8Array {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(trackName);
+
+  if (bytes.length > MAX_TRACK_NAME_SIZE) {
+    throw new Error(`track name exceeds maximum size: ${bytes.length} > ${MAX_TRACK_NAME_SIZE}`);
+  }
+
+  return bytes;
+}
+
+/**
+ * Track Name のサイズを検証する
+ *
+ * draft-ietf-moq-transport-16:
+ * Full Track Name は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ */
+export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
+  if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
+    throw new Error(
+      `track name exceeds maximum size: ${trackNameBytes.length} > ${MAX_TRACK_NAME_SIZE}`,
+    );
+  }
 }
 
 /**

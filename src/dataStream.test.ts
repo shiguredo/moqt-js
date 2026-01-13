@@ -25,6 +25,7 @@ import {
   createFetchObjectFlags,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
+import { encodeVarint } from "./varint";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -896,4 +897,85 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 
   assert.isOk(flags & FetchSerializationFlags.GROUP_ID_PRESENT);
   assert.isOk(flags & FetchSerializationFlags.OBJECT_ID_PRESENT);
+});
+
+/**
+ * 同一 Subgroup の Priority 一貫性検証テスト
+ * draft-ietf-moq-transport-16:
+ * 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
+ * https://github.com/moq-wg/moq-transport/pull/1317
+ */
+test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", () => {
+  // 最初のオブジェクト
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 同じ Subgroup で異なる Priority を持つオブジェクト
+  // SUBGROUP_SAME + OBJECT_ID_PRESENT + PRIORITY_PRESENT を設定
+  const secondFlags =
+    FetchSerializationFlags.SUBGROUP_SAME |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const objectIdBytes = encodeVarint(1n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const secondEncoded = new Uint8Array(1 + objectIdBytes.length + 1 + payloadLengthBytes.length);
+  secondEncoded[0] = secondFlags;
+  let offset = 1;
+  secondEncoded.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  secondEncoded[offset] = 200; // 異なる Priority
+  offset += 1;
+  secondEncoded.set(payloadLengthBytes, offset);
+
+  assert.throws(
+    () => decodeFetchObjectFields(secondEncoded, firstContext, 0, false),
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", () => {
+  // 最初のオブジェクト
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 異なる Subgroup で異なる Priority
+  // GROUP_ID省略 + SUBGROUP_PLUS_ONE + OBJECT_ID_PRESENT + PRIORITY_PRESENT
+  const secondFlags =
+    FetchSerializationFlags.SUBGROUP_PLUS_ONE |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const secondEncoded = new Uint8Array(1 + objectIdBytes.length + 1 + payloadLengthBytes.length);
+  secondEncoded[0] = secondFlags;
+  let offset = 1;
+  secondEncoded.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  secondEncoded[offset] = 200; // 異なる Priority
+  offset += 1;
+  secondEncoded.set(payloadLengthBytes, offset);
+
+  const [decoded] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+
+  // subgroupId = context.subgroupId + 1 = 1 + 1 = 2
+  assert.equal(decoded.subgroupId, 2n);
+  assert.equal(decoded.publisherPriority, 200);
 });

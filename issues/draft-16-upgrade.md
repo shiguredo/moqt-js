@@ -81,46 +81,55 @@ moqt-js を draft-ietf-moq-transport-15 から draft-ietf-moq-transport-16 に�
 
 ### 優先度: 低 (動作明確化・マイナー変更)
 
-- [ ] NAMESPACE_DONE 前に NAMESPACE を要求
+- [x] NAMESPACE_DONE 前に NAMESPACE を要求
   - https://github.com/moq-wg/moq-transport/pull/1392
   - 影響: `session.ts`
+  - 状態: API 設計で既に強制されている（done() は publishNamespace() からのみ呼び出せる）
 
-- [ ] PUBLISH は PUBLISH_NAMESPACE を暗示しない
+- [x] PUBLISH は PUBLISH_NAMESPACE を暗示しない
   - https://github.com/moq-wg/moq-transport/pull/1364
   - 影響: `session.ts`
+  - 状態: publish() と publishNamespace() は既に独立した操作
 
-- [ ] Datagram と Subgroup の明確化
+- [x] Datagram と Subgroup の明確化
   - https://github.com/moq-wg/moq-transport/pull/1382
   - 影響: `dataStream.ts`
+  - 状態: ドキュメント変更のみ、混在は既にサポート
 
-- [ ] 未知の拡張の処理明確化
+- [x] 未知の拡張の処理明確化
   - https://github.com/moq-wg/moq-transport/pull/1395
   - 影響: `extensions.ts`
+  - 状態: リレー向けの変更、クライアントには影響なし
 
 - [ ] Subgroup 再オープン禁止
   - https://github.com/moq-wg/moq-transport/pull/1396
   - 影響: `session.ts`
   - delivery timeout または STOP_SENDING 後
+  - TODO: 閉じた Subgroup の追跡・再利用禁止の実装
 
-- [ ] 同一 Subgroup の複数 Priority 検出
+- [x] 同一 Subgroup の複数 Priority 検出
   - https://github.com/moq-wg/moq-transport/pull/1317
-  - 影響: `dataStream.ts`, `session.ts`
+  - 影響: `dataStream.ts`
+  - FETCH オブジェクトの同一 Subgroup 内で異なる Priority を検出した場合に MALFORMED_TRACK エラー
 
-- [ ] Datagram の Delivery Timeout 明確化
+- [x] Datagram の Delivery Timeout 明確化
   - https://github.com/moq-wg/moq-transport/pull/1406
   - 影響: `dataStream.ts`
+  - 状態: ドキュメント変更のみ、タイムアウトはサーバー側で処理
 
-- [ ] GOAWAY 送信後のリクエスト送信明確化
+- [x] GOAWAY 送信後のリクエスト送信明確化
   - https://github.com/moq-wg/moq-transport/pull/1398
   - 影響: `session.ts`
+  - 状態: receivedGoaway チェックで既に実装済み
 
-- [ ] 重複サブスクリプション処理
+- [x] 重複サブスクリプション処理
   - https://github.com/moq-wg/moq-transport/pull/1341
-  - 影響: `session.ts`
+  - 影響: `error.ts`
+  - DUPLICATE_SUBSCRIPTION (0x31) を RequestErrorCode に追加
 
-- [ ] Track Name/Namespace エッジケース対応
+- [x] Track Name/Namespace エッジケース対応
   - https://github.com/moq-wg/moq-transport/pull/1399
-  - 影響: `parameter.ts`
+  - 影響: `parameter.ts`, `session.ts`
 
 ### Editorial (コード変更最小限)
 

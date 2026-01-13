@@ -24,6 +24,8 @@ export {
   type Parameter,
   type SubscriptionFilter,
   type TrackNamespace,
+  MAX_TRACK_NAME_SIZE,
+  MAX_TRACK_NAMESPACE_SIZE,
   createTrackNamespace,
   decodeLocation,
   decodeParameter,
@@ -36,10 +38,12 @@ export {
   encodeParameters,
   encodeSubscriptionFilter,
   encodeSubscriptionFilterParameter,
+  encodeTrackName,
   encodeTrackNamespace,
   getParameterLocationValue,
   getParameterVarintValue,
   trackNamespaceToStrings,
+  validateTrackNameSize,
 } from "./parameter";
 
 // Setup Messages

@@ -34,6 +34,11 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
 
 /**
  * REQUEST_ERROR Codes (Section 9.8)
+ *
+ * draft-ietf-moq-transport-16:
+ * DUPLICATE_SUBSCRIPTION (0x31) を追加。
+ * 重複サブスクリプションは Session Error ではなく Request Error として処理する。
+ * https://github.com/moq-wg/moq-transport/pull/1341
  */
 export const RequestErrorCode = {
   INTERNAL_ERROR: 0x0,
@@ -47,6 +52,7 @@ export const RequestErrorCode = {
   MALFORMED_TRACK: 0x12,
   UNINTERESTED: 0x20,
   PREFIX_OVERLAP: 0x30,
+  DUPLICATE_SUBSCRIPTION: 0x31,
   INVALID_JOINING_REQUEST_ID: 0x32,
   UNKNOWN_STATUS_IN_RANGE: 0x33,
 } as const;

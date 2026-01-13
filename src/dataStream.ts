@@ -1003,6 +1003,19 @@ export function decodeFetchObjectFields(
   if (flags & FetchSerializationFlags.PRIORITY_PRESENT) {
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
+
+    // draft-ietf-moq-transport-16:
+    // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
+    // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
+    // https://github.com/moq-wg/moq-transport/pull/1317
+    if (context !== null && subgroupId === context.subgroupId) {
+      if (publisherPriority !== context.publisherPriority) {
+        throw new Error(
+          `malformed track: different priorities in same subgroup ` +
+            `(subgroup=${subgroupId}, expected=${context.publisherPriority}, actual=${publisherPriority})`,
+        );
+      }
+    }
   } else {
     if (isFirst || context === null) {
       throw new Error("Protocol violation: First object must have PRIORITY_PRESENT flag set");
