@@ -1,9 +1,14 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-15 Section 9.13-9.15
+ * draft-ietf-moq-transport-16 Section 9.13-9.15
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import {
+  type ExtensionHeader,
+  decodeExtensionHeaders,
+  encodeExtensionHeaders,
+} from "../extensions";
 import {
   type Parameter,
   type TrackNamespace,
@@ -16,7 +21,10 @@ import { MessageType } from "./types";
 
 /**
  * PUBLISH メッセージ (Section 9.13)
- * draft-15 で track_alias の位置が track_name の後に変更
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
@@ -25,6 +33,7 @@ export interface Publish {
   trackName: Uint8Array;
   trackAlias: bigint;
   parameters: Parameter[];
+  trackExtensions: ExtensionHeader[];
 }
 
 /**
@@ -50,6 +59,21 @@ export interface PublishDone {
 
 /**
  * Publish のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-16 Section 9.13:
+ * PUBLISH Message {
+ *   Type (i) = 0xB,
+ *   Length (16),
+ *   Request ID (i),
+ *   Track Namespace (..),
+ *   Track Name Length (i),
+ *   Track Name (..),
+ *   Track Alias (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...,
+ *   Track Extensions Length (i),
+ *   Track Extensions (..)
+ * }
  */
 export function encodePublishPayload(msg: Publish): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -63,6 +87,11 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   for (const param of msg.parameters) {
     parts.push(encodeParameter(param));
   }
+
+  // Track Extensions
+  const extensionsData = encodeExtensionHeaders(msg.trackExtensions);
+  parts.push(encodeVarint(extensionsData.length));
+  parts.push(extensionsData);
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -107,6 +136,16 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
     totalConsumed += paramConsumed;
   }
 
+  // Track Extensions
+  const [extensionsLen, extensionsLenConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += extensionsLenConsumed;
+
+  const extensionsData = data.slice(
+    offset + totalConsumed,
+    offset + totalConsumed + Number(extensionsLen),
+  );
+  const trackExtensions = decodeExtensionHeaders(extensionsData);
+
   return {
     type: MessageType.PUBLISH,
     requestId,
@@ -114,6 +153,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
     trackName,
     trackAlias,
     parameters,
+    trackExtensions,
   };
 }
 

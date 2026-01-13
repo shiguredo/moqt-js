@@ -323,9 +323,13 @@ test("createObject: 空ペイロードで作成", () => {
   assert.equal(obj.status, ObjectStatus.NORMAL);
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
+ * https://github.com/moq-wg/moq-transport/pull/1342
+ */
 test("ObjectStatus: すべてのステータス値が定義されている", () => {
   assert.equal(ObjectStatus.NORMAL, 0x0);
-  assert.equal(ObjectStatus.OBJECT_DOES_NOT_EXIST, 0x1);
   assert.equal(ObjectStatus.END_OF_GROUP, 0x3);
   assert.equal(ObjectStatus.END_OF_TRACK, 0x4);
 });
@@ -577,7 +581,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       groupId: 10n,
       objectId: 15n,
       publisherPriority: 0,
-      status: ObjectStatus.OBJECT_DOES_NOT_EXIST,
+      status: ObjectStatus.END_OF_TRACK,
     },
   },
   {

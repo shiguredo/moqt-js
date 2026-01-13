@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages
- * draft-ietf-moq-transport-15 Section 9.4-9.8
+ * draft-ietf-moq-transport-16 Section 9.4-9.8
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -56,11 +56,17 @@ export interface RequestOk {
  *
  * リクエスト（SUBSCRIBE, FETCH, PUBLISH, SUBSCRIBE_NAMESPACE,
  * PUBLISH_NAMESPACE, TRACK_STATUS）への失敗応答。
+ *
+ * draft-ietf-moq-transport-16:
+ * Retry Interval: 再試行までに待つべきミリ秒 + 1
+ * - 0: 再試行すべきではない
+ * - 1 以上: 再試行可能（1 は即座の再試行を許可）
  */
 export interface RequestError {
   type: typeof MessageType.REQUEST_ERROR;
   requestId: bigint;
   errorCode: bigint;
+  retryInterval: bigint;
   reasonPhrase: string;
 }
 
@@ -194,12 +200,13 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-15 Section 9.8:
+ * draft-ietf-moq-transport-16 Section 9.8:
  * REQUEST_ERROR Message {
  *   Type (i) = 0x5,
  *   Length (16),
  *   Request ID (i),
  *   Error Code (i),
+ *   Retry Interval (i),
  *   Error Reason (Reason Phrase),
  * }
  */
@@ -210,6 +217,7 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
   const parts: Uint8Array[] = [];
   parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.errorCode));
+  parts.push(encodeVarint(msg.retryInterval));
   parts.push(encodeVarint(reasonBytes.length));
   parts.push(reasonBytes);
 
@@ -233,6 +241,9 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
   const [errorCode, errorCodeSize] = decodeVarint(data, offset);
   offset += errorCodeSize;
 
+  const [retryInterval, retryIntervalSize] = decodeVarint(data, offset);
+  offset += retryIntervalSize;
+
   const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
   offset += reasonLenSize;
 
@@ -243,6 +254,7 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
     type: MessageType.REQUEST_ERROR,
     requestId,
     errorCode,
+    retryInterval,
     reasonPhrase,
   };
 }

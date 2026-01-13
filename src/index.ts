@@ -2,7 +2,7 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-15
+ * draft-ietf-moq-transport-16
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
@@ -32,7 +32,7 @@ export type {
 // Re-export message types
 export type { SubscriptionFilter, Location, Parameter } from "./message";
 export type { Publisher, SendObjectParams, SendDatagramParams } from "./publisher";
-export type { Subscriber, SubscribeUpdateOptions } from "./subscriber";
+export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
 
 // Re-export error types
@@ -77,9 +77,10 @@ export {
 // Codec types
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
 
-// Re-export MOQT Extensions (draft-ietf-moq-transport-15 Section 11)
+// Re-export MOQT Extensions (draft-ietf-moq-transport-16 Section 11)
 export {
   MOQTExtensionHeaderId,
+  TrackExtensionHeaderId,
   type ExtensionHeader,
   type PriorGroupIdGap,
   type PriorObjectIdGap,

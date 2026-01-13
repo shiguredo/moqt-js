@@ -1,6 +1,14 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-15 Section 9.16-9.18
+ * draft-ietf-moq-transport-16 Section 9.16-9.18
+ *
+ * draft-ietf-moq-transport-16:
+ * FETCH レスポンスで不明な範囲を許可する。
+ * Publisher がまだシリアライズしていないオブジェクトの範囲を
+ * "unknown range" として返すことができる。
+ * https://github.com/moq-wg/moq-transport/pull/1331
+ *
+ * TODO: Unknown Range Metadata Type の実装
  */
 
 import type { MoqtObject } from "./dataStream";

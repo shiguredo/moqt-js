@@ -1,6 +1,6 @@
 /**
  * MOQT Extension Headers Unit Tests
- * draft-ietf-moq-transport-15 Section 11
+ * draft-ietf-moq-transport-16 Section 11
  */
 
 import { test, assert } from "vitest";
@@ -10,8 +10,7 @@ import {
   encodeImmutableExtensions,
   decodeImmutableExtensions,
   parseExtensionHeaders,
-  encodePriorGroupIdGap,
-  encodePriorObjectIdGap,
+  MOQTExtensionHeaderId,
   type ExtensionHeader,
 } from "./extensions";
 
@@ -44,18 +43,22 @@ test("encodeExtensionHeader: 奇数 ID で data がない場合はエラー", ()
   assert.throws(() => encodeExtensionHeader(header), /requires data/);
 });
 
-test("encodeExtensionHeaders: 複数の拡張をエンコードして結合", () => {
+/**
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、ID は前の ID からの差分としてエンコードされる。
+ */
+test("encodeExtensionHeaders: 複数の拡張を delta encoding でエンコードして結合", () => {
   const headers: ExtensionHeader[] = [
     { id: 0x02n, value: 42n },
     { id: 0x03n, data: new Uint8Array([0xff]) },
   ];
   const encoded = encodeExtensionHeaders(headers);
 
-  // 0x02, 42, 0x03, 1, 0xff
+  // delta encoding: delta(0x02)=0x02, value=42, delta(0x03-0x02)=0x01, length=1, data=0xff
   assert.equal(encoded.length, 5);
   assert.equal(encoded[0], 0x02);
   assert.equal(encoded[1], 42);
-  assert.equal(encoded[2], 0x03);
+  assert.equal(encoded[2], 0x01);
   assert.equal(encoded[3], 1);
   assert.equal(encoded[4], 0xff);
 });
@@ -210,20 +213,25 @@ test("parseExtensionHeaders: Immutable Extensions を正しくパース", () => 
   assert.deepEqual(parsed.immutableExtensions?.extensions[1].data, new Uint8Array([0x01, 0x02]));
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、複数の拡張は encodeExtensionHeaders でエンコードする。
+ */
 test("parseExtensionHeaders: Immutable Extensions と他の拡張の組み合わせ", () => {
-  // Prior Group ID Gap + Immutable Extensions + Prior Object ID Gap
-  const groupGap = encodePriorGroupIdGap({ gap: 3n });
-  const immutable = encodeImmutableExtensions({
-    extensions: [{ id: 0x10n, value: 999n }],
-  });
-  const objectGap = encodePriorObjectIdGap({ gap: 5n });
+  // Immutable Extensions の内部データ
+  const innerExtensions = encodeExtensionHeaders([{ id: 0x10n, value: 999n }]);
 
-  const combined = new Uint8Array(groupGap.length + immutable.length + objectGap.length);
-  combined.set(groupGap, 0);
-  combined.set(immutable, groupGap.length);
-  combined.set(objectGap, groupGap.length + immutable.length);
+  // Prior Group ID Gap (0x3c) + Immutable Extensions (0x0b) + Prior Object ID Gap (0x3e)
+  // encodeExtensionHeaders は ID の昇順でソートするため、
+  // 順序は IMMUTABLE_EXTENSIONS (0x0b), PRIOR_GROUP_ID_GAP (0x3c), PRIOR_OBJECT_ID_GAP (0x3e)
+  const headers: ExtensionHeader[] = [
+    { id: MOQTExtensionHeaderId.PRIOR_GROUP_ID_GAP, value: 3n },
+    { id: MOQTExtensionHeaderId.IMMUTABLE_EXTENSIONS, data: innerExtensions },
+    { id: MOQTExtensionHeaderId.PRIOR_OBJECT_ID_GAP, value: 5n },
+  ];
 
-  const parsed = parseExtensionHeaders(combined);
+  const encoded = encodeExtensionHeaders(headers);
+  const parsed = parseExtensionHeaders(encoded);
 
   assert.equal(parsed.priorGroupIdGap?.gap, 3n);
   assert.equal(parsed.priorObjectIdGap?.gap, 5n);
@@ -245,22 +253,27 @@ test("parseExtensionHeaders: Immutable Extensions が unknownExtensions に含�
   assert.isDefined(parsed.immutableExtensions);
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、複数の拡張は encodeExtensionHeaders でエンコードする。
+ */
 test("parseExtensionHeaders: 全ての MOQT Core Extensions を正しくパース", () => {
-  const groupGap = encodePriorGroupIdGap({ gap: 10n });
-  const objectGap = encodePriorObjectIdGap({ gap: 20n });
-  const immutable = encodeImmutableExtensions({
-    extensions: [
-      { id: 0x100n, value: 500n },
-      { id: 0x101n, data: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) },
-    ],
-  });
+  // Immutable Extensions の内部データ
+  const innerExtensions = encodeExtensionHeaders([
+    { id: 0x100n, value: 500n },
+    { id: 0x101n, data: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) },
+  ]);
 
-  const combined = new Uint8Array(groupGap.length + objectGap.length + immutable.length);
-  combined.set(groupGap, 0);
-  combined.set(objectGap, groupGap.length);
-  combined.set(immutable, groupGap.length + objectGap.length);
+  // encodeExtensionHeaders は ID の昇順でソートする
+  // IMMUTABLE_EXTENSIONS (0x0b) < PRIOR_GROUP_ID_GAP (0x3c) < PRIOR_OBJECT_ID_GAP (0x3e)
+  const headers: ExtensionHeader[] = [
+    { id: MOQTExtensionHeaderId.PRIOR_GROUP_ID_GAP, value: 10n },
+    { id: MOQTExtensionHeaderId.PRIOR_OBJECT_ID_GAP, value: 20n },
+    { id: MOQTExtensionHeaderId.IMMUTABLE_EXTENSIONS, data: innerExtensions },
+  ];
 
-  const parsed = parseExtensionHeaders(combined);
+  const encoded = encodeExtensionHeaders(headers);
+  const parsed = parseExtensionHeaders(encoded);
 
   // Prior Group ID Gap
   assert.equal(parsed.priorGroupIdGap?.gap, 10n);

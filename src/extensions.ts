@@ -1,9 +1,12 @@
 /**
  * MOQT Extension Headers
- * draft-ietf-moq-transport-15 Section 11
+ * draft-ietf-moq-transport-16 Section 11
  *
  * Object Extension Headers として定義されている拡張。
  * LOC (draft-ietf-moq-loc) とは別の、MOQT 本体で定義された拡張。
+ *
+ * draft-ietf-moq-transport-16:
+ * Extension Headers は Key-Value-Pair 形式を使用し、delta encoding を適用する。
  */
 
 import { encodeVarint, decodeVarint } from "./varint";
@@ -30,6 +33,53 @@ export const MOQTExtensionHeaderId = {
    * 現在の Object より前のスキップされた Object 数
    */
   PRIOR_OBJECT_ID_GAP: 0x3en,
+} as const;
+
+/**
+ * MOQT Track Extension Header ID
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Properties を Extensions に移動。
+ * これらは end-to-end で送信され、Relay が転送する。
+ * https://github.com/moq-wg/moq-transport/pull/1390
+ *
+ * PUBLISH, SUBSCRIBE_OK, FETCH_OK の Track Extensions で使用。
+ *
+ * ID が偶数の場合: varint value
+ * ID が奇数の場合: length (varint) + bytes
+ */
+export const TrackExtensionHeaderId = {
+  /**
+   * Delivery Timeout (Section 9.2.1.2)
+   * オブジェクトの配信タイムアウト（ミリ秒）
+   *
+   * draft-ietf-moq-transport-16:
+   * Message Parameter から Track Extension に移動。
+   */
+  DELIVERY_TIMEOUT: 0x02n,
+  /**
+   * Max Cache Duration (Section 9.2.1.3)
+   * オブジェクトの最大キャッシュ期間（ミリ秒）
+   */
+  MAX_CACHE_DURATION: 0x04n,
+  /**
+   * Publisher Priority (Section 9.2.1.4)
+   * Publisher が設定する優先度（0-255）
+   */
+  PUBLISHER_PRIORITY: 0x0en,
+  /**
+   * Publisher Group Order Preference (Section 9.2.1.6)
+   *
+   * draft-ietf-moq-transport-16:
+   * GROUP_ORDER パラメータから分割された Publisher 向けの設定。
+   * https://github.com/moq-wg/moq-transport/pull/1390
+   */
+  PUBLISHER_GROUP_ORDER_PREFERENCE: 0x22n,
+  /**
+   * Dynamic Groups (Section 9.2.1.11)
+   * トラックが動的グループ作成をサポートするかどうか
+   */
+  DYNAMIC_GROUPS: 0x30n,
 } as const;
 
 /**
@@ -180,10 +230,68 @@ export function encodeExtensionHeader(header: ExtensionHeader): Uint8Array {
 }
 
 /**
+ * 単一の Extension Header を delta encoding でエンコードする
+ *
+ * draft-ietf-moq-transport-16:
+ * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
+ * or from 0 if there is no previous Type value.
+ *
+ * @param header - エンコードする拡張ヘッダー
+ * @param previousId - 前の拡張ヘッダーの ID（最初の場合は 0n）
+ * @returns エンコードされたバイト列
+ */
+function encodeExtensionHeaderWithDelta(header: ExtensionHeader, previousId: bigint): Uint8Array {
+  const deltaId = header.id - previousId;
+  if (deltaId < 0n) {
+    throw new Error(
+      `delta ID must be non-negative: current ID=${header.id}, previous ID=${previousId}`,
+    );
+  }
+
+  const deltaBytes = encodeVarint(deltaId);
+
+  if (header.id % 2n === 0n) {
+    // 偶数 ID: varint value 形式
+    if (header.value === undefined) {
+      throw new Error(`even extension ID ${header.id} requires a value`);
+    }
+    const valueBytes = encodeVarint(header.value);
+    const result = new Uint8Array(deltaBytes.length + valueBytes.length);
+    result.set(deltaBytes, 0);
+    result.set(valueBytes, deltaBytes.length);
+    return result;
+  }
+
+  // 奇数 ID: length + bytes 形式
+  if (header.data === undefined) {
+    throw new Error(`odd extension ID ${header.id} requires data`);
+  }
+  const lengthBytes = encodeVarint(BigInt(header.data.length));
+  const result = new Uint8Array(deltaBytes.length + lengthBytes.length + header.data.length);
+  result.set(deltaBytes, 0);
+  result.set(lengthBytes, deltaBytes.length);
+  result.set(header.data, deltaBytes.length + lengthBytes.length);
+  return result;
+}
+
+/**
  * 複数の Extension Header をエンコードして結合する
+ *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、拡張ヘッダーは ID の昇順でソートしてからエンコードする。
  */
 export function encodeExtensionHeaders(headers: ExtensionHeader[]): Uint8Array {
-  const parts = headers.map(encodeExtensionHeader);
+  // delta encoding のために ID の昇順でソート
+  const sortedHeaders = [...headers].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  const parts: Uint8Array[] = [];
+  let previousId = 0n;
+
+  for (const header of sortedHeaders) {
+    parts.push(encodeExtensionHeaderWithDelta(header, previousId));
+    previousId = header.id;
+  }
+
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
@@ -197,13 +305,17 @@ export function encodeExtensionHeaders(headers: ExtensionHeader[]): Uint8Array {
 /**
  * Immutable Extensions をエンコードする
  *
- * draft-ietf-moq-transport-15 Section 11:
+ * draft-ietf-moq-transport-16 Section 11:
  * ID (0x0B) は奇数なので length + bytes 形式
  *
  * 内部には複数の Key-Value-Pair (Extension Header) をネストできる。
+ * 内部の拡張も delta encoding を使用する。
+ *
+ * 注意: この関数は単独で使用する場合に ID を絶対値としてエンコードする。
+ * encodeExtensionHeaders 内で使用する場合は delta encoding が適用される。
  */
 export function encodeImmutableExtensions(immutable: ImmutableExtensions): Uint8Array {
-  // 内部の拡張を全てエンコードして結合
+  // 内部の拡張を全てエンコードして結合（delta encoding 使用）
   const innerBytes = encodeExtensionHeaders(immutable.extensions);
 
   // ID + length + innerBytes
@@ -220,6 +332,9 @@ export function encodeImmutableExtensions(immutable: ImmutableExtensions): Uint8
 /**
  * Immutable Extensions をデコードする
  *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用して内部の拡張をデコードする。
+ *
  * @param data - ID を含む完全な Immutable Extensions データ
  */
 export function decodeImmutableExtensions(data: Uint8Array): ImmutableExtensions {
@@ -229,24 +344,27 @@ export function decodeImmutableExtensions(data: Uint8Array): ImmutableExtensions
 
   const extensions: ExtensionHeader[] = [];
   let offset = 0;
+  let previousId = 0n;
 
   while (offset < innerData.length) {
-    const [extId, extIdLen] = decodeVarint(innerData.subarray(offset));
+    const [deltaId, deltaIdLen] = decodeVarint(innerData.subarray(offset));
+    const extId = previousId + deltaId;
+    previousId = extId;
 
     if (extId % 2n === 0n) {
       // 偶数 ID: varint value 形式
-      const [value, valueLen] = decodeVarint(innerData.subarray(offset + extIdLen));
+      const [value, valueLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
       extensions.push({ id: extId, value });
-      offset += extIdLen + valueLen;
+      offset += deltaIdLen + valueLen;
     } else {
       // 奇数 ID: length + bytes 形式
-      const [extLength, extLengthLen] = decodeVarint(innerData.subarray(offset + extIdLen));
+      const [extLength, extLengthLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
       const extData = innerData.slice(
-        offset + extIdLen + extLengthLen,
-        offset + extIdLen + extLengthLen + Number(extLength),
+        offset + deltaIdLen + extLengthLen,
+        offset + deltaIdLen + extLengthLen + Number(extLength),
       );
       extensions.push({ id: extId, data: extData });
-      offset += extIdLen + extLengthLen + Number(extLength);
+      offset += deltaIdLen + extLengthLen + Number(extLength);
     }
   }
 
@@ -259,74 +377,86 @@ export function decodeImmutableExtensions(data: Uint8Array): ImmutableExtensions
  * 複数の拡張が含まれるデータから、MOQT Core Extensions を抽出する。
  * 未知の拡張はスキップされるが、unknownExtensions に保持される。
  *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用して ID をデコードする。
+ *
  * @param data - Extensions データ（複数の拡張を含む可能性あり）
  */
 export function parseExtensionHeaders(data: Uint8Array): ParsedExtensionHeaders {
   const result: ParsedExtensionHeaders = {};
   const unknownExtensions: Array<{ id: bigint; data: Uint8Array }> = [];
   let offset = 0;
+  let previousId = 0n;
 
   while (offset < data.length) {
-    const [id, idLen] = decodeVarint(data.subarray(offset));
-    const startOffset = offset;
+    const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
+    const id = previousId + deltaId;
+    previousId = id;
 
     if (id === MOQTExtensionHeaderId.PRIOR_GROUP_ID_GAP) {
-      const [gap, gapLen] = decodeVarint(data.subarray(offset + idLen));
+      const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       result.priorGroupIdGap = { gap };
-      offset += idLen + gapLen;
+      offset += deltaIdLen + gapLen;
     } else if (id === MOQTExtensionHeaderId.PRIOR_OBJECT_ID_GAP) {
-      const [gap, gapLen] = decodeVarint(data.subarray(offset + idLen));
+      const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       result.priorObjectIdGap = { gap };
-      offset += idLen + gapLen;
+      offset += deltaIdLen + gapLen;
     } else if (id === MOQTExtensionHeaderId.IMMUTABLE_EXTENSIONS) {
       // Immutable Extensions は奇数 ID なので length + bytes 形式
-      const [length, lengthLen] = decodeVarint(data.subarray(offset + idLen));
+      const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       const innerData = data.subarray(
-        offset + idLen + lengthLen,
-        offset + idLen + lengthLen + Number(length),
+        offset + deltaIdLen + lengthLen,
+        offset + deltaIdLen + lengthLen + Number(length),
       );
 
-      // 内部の拡張をパース
+      // 内部の拡張をパース（delta encoding を使用）
       const extensions: ExtensionHeader[] = [];
       let innerOffset = 0;
+      let innerPreviousId = 0n;
       while (innerOffset < innerData.length) {
-        const [extId, extIdLen] = decodeVarint(innerData.subarray(innerOffset));
+        const [innerDeltaId, innerDeltaIdLen] = decodeVarint(innerData.subarray(innerOffset));
+        const extId = innerPreviousId + innerDeltaId;
+        innerPreviousId = extId;
 
         if (extId % 2n === 0n) {
           // 偶数 ID: varint value 形式
-          const [value, valueLen] = decodeVarint(innerData.subarray(innerOffset + extIdLen));
+          const [value, valueLen] = decodeVarint(innerData.subarray(innerOffset + innerDeltaIdLen));
           extensions.push({ id: extId, value });
-          innerOffset += extIdLen + valueLen;
+          innerOffset += innerDeltaIdLen + valueLen;
         } else {
           // 奇数 ID: length + bytes 形式
           const [extLength, extLengthLen] = decodeVarint(
-            innerData.subarray(innerOffset + extIdLen),
+            innerData.subarray(innerOffset + innerDeltaIdLen),
           );
           const extData = innerData.slice(
-            innerOffset + extIdLen + extLengthLen,
-            innerOffset + extIdLen + extLengthLen + Number(extLength),
+            innerOffset + innerDeltaIdLen + extLengthLen,
+            innerOffset + innerDeltaIdLen + extLengthLen + Number(extLength),
           );
           extensions.push({ id: extId, data: extData });
-          innerOffset += extIdLen + extLengthLen + Number(extLength);
+          innerOffset += innerDeltaIdLen + extLengthLen + Number(extLength);
         }
       }
 
       result.immutableExtensions = { extensions };
-      offset += idLen + lengthLen + Number(length);
+      offset += deltaIdLen + lengthLen + Number(length);
     } else {
       // 未知の拡張
       if (id % 2n === 1n) {
         // 奇数 ID: length + bytes 形式
-        const [length, lengthLen] = decodeVarint(data.subarray(offset + idLen));
-        const extData = data.slice(startOffset, offset + idLen + lengthLen + Number(length));
+        const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        // 注意: unknownExtensions にはデコード後の ID と生データを保持
+        const extData = data.slice(
+          offset + deltaIdLen + lengthLen,
+          offset + deltaIdLen + lengthLen + Number(length),
+        );
         unknownExtensions.push({ id, data: extData });
-        offset += idLen + lengthLen + Number(length);
+        offset += deltaIdLen + lengthLen + Number(length);
       } else {
         // 偶数 ID: varint value 形式
-        const [_value, valueLen] = decodeVarint(data.subarray(offset + idLen));
-        const extData = data.slice(startOffset, offset + idLen + valueLen);
+        const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        const extData = encodeVarint(value);
         unknownExtensions.push({ id, data: extData });
-        offset += idLen + valueLen;
+        offset += deltaIdLen + valueLen;
       }
     }
   }
@@ -336,6 +466,45 @@ export function parseExtensionHeaders(data: Uint8Array): ParsedExtensionHeaders 
   }
 
   return result;
+}
+
+/**
+ * Extension Headers をデコードする
+ *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用して ID をデコードする。
+ *
+ * @param data - Extensions データ（複数の拡張を含む可能性あり）
+ * @returns デコードされた ExtensionHeader の配列
+ */
+export function decodeExtensionHeaders(data: Uint8Array): ExtensionHeader[] {
+  const extensions: ExtensionHeader[] = [];
+  let offset = 0;
+  let previousId = 0n;
+
+  while (offset < data.length) {
+    const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
+    const id = previousId + deltaId;
+    previousId = id;
+
+    if (id % 2n === 0n) {
+      // 偶数 ID: varint value 形式
+      const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      extensions.push({ id, value });
+      offset += deltaIdLen + valueLen;
+    } else {
+      // 奇数 ID: length + bytes 形式
+      const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const extData = data.slice(
+        offset + deltaIdLen + lengthLen,
+        offset + deltaIdLen + lengthLen + Number(length),
+      );
+      extensions.push({ id, data: extData });
+      offset += deltaIdLen + lengthLen + Number(length);
+    }
+  }
+
+  return extensions;
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages
- * draft-ietf-moq-transport-15 Section 9.3
+ * draft-ietf-moq-transport-16 Section 9.3
  */
 
 import { encodeVarint } from "../varint";
@@ -8,7 +8,7 @@ import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import {
   type Parameter,
   decodeParameters,
-  encodeParameter,
+  encodeParameters,
   getParameterVarintValue,
 } from "./parameter";
 import { MessageType, SetupParameterType } from "./types";
@@ -95,42 +95,26 @@ export function createServerSetup(options?: { maxRequestId?: bigint }): ServerSe
 
 /**
  * ClientSetup のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
  */
 export function encodeClientSetupPayload(msg: ClientSetup): Uint8Array {
-  const countBytes = encodeVarint(msg.parameters.length);
-  const paramBytes = msg.parameters.map(encodeParameter);
-
-  const totalLength = countBytes.length + paramBytes.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  result.set(countBytes, 0);
-
-  let offset = countBytes.length;
-  for (const pb of paramBytes) {
-    result.set(pb, offset);
-    offset += pb.length;
-  }
-
-  return result;
+  // delta encoding のために type の昇順でソート
+  const sortedParams = [...msg.parameters].sort((a, b) => a.type - b.type);
+  return encodeParameters(sortedParams);
 }
 
 /**
  * ServerSetup のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
  */
 export function encodeServerSetupPayload(msg: ServerSetup): Uint8Array {
-  const countBytes = encodeVarint(msg.parameters.length);
-  const paramBytes = msg.parameters.map(encodeParameter);
-
-  const totalLength = countBytes.length + paramBytes.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  result.set(countBytes, 0);
-
-  let offset = countBytes.length;
-  for (const pb of paramBytes) {
-    result.set(pb, offset);
-    offset += pb.length;
-  }
-
-  return result;
+  // delta encoding のために type の昇順でソート
+  const sortedParams = [...msg.parameters].sort((a, b) => a.type - b.type);
+  return encodeParameters(sortedParams);
 }
 
 /**

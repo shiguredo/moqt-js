@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.9-9.11
+ * draft-ietf-moq-transport-16 Section 9.13-9.15
  */
 
 import { test, assert } from "vitest";
@@ -16,6 +16,7 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
+import type { ExtensionHeader } from "../extensions";
 
 const evenParameterArb = fc
   .record({
@@ -33,6 +34,34 @@ const parameterArb: fc.Arbitrary<Parameter> = fc.oneof(evenParameterArb, oddPara
 
 const parametersArb = fc.array(parameterArb, { minLength: 0, maxLength: 3 });
 
+/**
+ * Track Extensions arbitrary
+ *
+ * draft-ietf-moq-transport-16:
+ * PUBLISH, SUBSCRIBE_OK, FETCH_OK に Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
+ */
+const evenExtensionArb = fc
+  .record({
+    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n),
+    value: fc.bigInt({ min: 0n, max: 1000000n }),
+  })
+  .map(({ id, value }) => ({ id, value }));
+
+const oddExtensionArb = fc
+  .record({
+    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n + 1n),
+    data: fc.uint8Array({ minLength: 0, maxLength: 20 }),
+  })
+  .map(({ id, data }) => ({ id, data }));
+
+const extensionHeaderArb: fc.Arbitrary<ExtensionHeader> = fc.oneof(
+  evenExtensionArb,
+  oddExtensionArb,
+);
+
+const trackExtensionsArb = fc.array(extensionHeaderArb, { minLength: 0, maxLength: 3 });
+
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 1,
   maxLength: 5,
@@ -42,6 +71,11 @@ const trackNameArb = fc
   .string({ minLength: 1, maxLength: 50 })
   .map((s) => new TextEncoder().encode(s));
 
+/**
+ * draft-ietf-moq-transport-16:
+ * PUBLISH に Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
+ */
 test("Publish のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
@@ -50,7 +84,8 @@ test("Publish のエンコード・デコードがラウンドトリップする
       trackNameArb,
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      (requestId, namespaceParts, trackName, trackAlias, parameters) => {
+      trackExtensionsArb,
+      (requestId, namespaceParts, trackName, trackAlias, parameters, trackExtensions) => {
         const original = {
           type: MessageType.PUBLISH as typeof MessageType.PUBLISH,
           requestId,
@@ -58,6 +93,7 @@ test("Publish のエンコード・デコードがラウンドトリップする
           trackName,
           trackAlias,
           parameters,
+          trackExtensions,
         };
 
         const encoded = encodePublishPayload(original);
@@ -72,6 +108,20 @@ test("Publish のエンコード・デコードがラウンドトリップする
         for (let i = 0; i < parameters.length; i++) {
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
+        }
+        // Track Extensions はソートされるため、ソート後の値を比較
+        const sortedOriginal = [...trackExtensions].sort((a, b) =>
+          a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+        );
+        assert.equal(decoded.trackExtensions.length, trackExtensions.length);
+        for (let i = 0; i < sortedOriginal.length; i++) {
+          assert.equal(decoded.trackExtensions[i].id, sortedOriginal[i].id);
+          if (sortedOriginal[i].value !== undefined) {
+            assert.equal(decoded.trackExtensions[i].value, sortedOriginal[i].value);
+          }
+          if (sortedOriginal[i].data !== undefined) {
+            assert.deepEqual(decoded.trackExtensions[i].data, sortedOriginal[i].data);
+          }
         }
       },
     ),

@@ -1,6 +1,6 @@
 /**
  * MOQT Session
- * draft-ietf-moq-transport-15 Section 3
+ * draft-ietf-moq-transport-16 Section 3
  */
 
 import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
@@ -42,7 +42,7 @@ import {
   encodePublishPayload,
   encodeSubscribeNamespacePayload,
   encodeSubscribePayload,
-  encodeSubscribeUpdatePayload,
+  encodeRequestUpdatePayload,
   encodeTrackStatusPayload,
   encodeUnsubscribeNamespacePayload,
   encodeUnsubscribePayload,
@@ -64,9 +64,10 @@ import {
   type SendObjectParams,
   type SendDatagramParams,
 } from "./publisher";
-import { type Subscriber, type SubscribeUpdateOptions, SubscriberImpl } from "./subscriber";
+import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
 import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "./dataStream";
+import { TrackExtensionHeaderId, type ExtensionHeader } from "./extensions";
 
 /**
  * Session state
@@ -139,9 +140,9 @@ export interface PublishCallbacks {
   error?: (error: Error) => void;
   /**
    * Forward State が変更された時のコールバック
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-16 Section 9.2.1.10
    *
-   * PUBLISH_OK または SUBSCRIBE_UPDATE で Forward State が変更された時に呼ばれる。
+   * PUBLISH_OK または REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
    * - true (1): Subscriber がいる（オブジェクトを送信すべき）
    * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
    */
@@ -648,9 +649,9 @@ export class SessionImpl implements Session {
       objectCallback: (object: MoqtObject) => void;
     }
   >();
-  private pendingSubscribeUpdate = new Map<
+  private pendingRequestUpdate = new Map<
     bigint,
-    { resolve: () => void; reject: (err: Error) => void; subscriptionRequestId: bigint }
+    { resolve: () => void; reject: (err: Error) => void; existingRequestId: bigint }
   >();
   private pendingFetch = new Map<
     bigint,
@@ -855,51 +856,10 @@ export class SessionImpl implements Session {
       this.pendingPublish.set(requestId, { resolve, reject, impl });
     });
 
-    // Build parameters
+    // Build parameters (Message Parameters - single hop scope)
     const parameters: Parameter[] = [];
-    if (options?.maxCacheDuration !== undefined) {
-      // MAX_CACHE_DURATION (0x04) - varint parameter (偶数 ID)
-      // draft-ietf-moq-transport-15 Section 9.2.1.3
-      parameters.push({
-        type: VersionSpecificParameterType.MAX_CACHE_DURATION,
-        value: encodeVarint(options.maxCacheDuration),
-      });
-    }
 
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-15 Section 9.2.1.2
-    if (options?.deliveryTimeout !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.DELIVERY_TIMEOUT,
-        value: encodeVarint(options.deliveryTimeout),
-      });
-    }
-
-    // PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-15 Section 9.2.1.4
-    if (options?.publisherPriority !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.PUBLISHER_PRIORITY,
-        value: encodeVarint(options.publisherPriority),
-      });
-    }
-
-    // GROUP_ORDER (0x22) - draft-ietf-moq-transport-15 Section 9.2.1.6
-    if (options?.groupOrder !== undefined) {
-      const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
-      parameters.push({
-        type: VersionSpecificParameterType.GROUP_ORDER,
-        value: encodeVarint(groupOrderValue),
-      });
-    }
-
-    // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-15 Section 9.2.1.11
-    if (options?.dynamicGroups === true) {
-      parameters.push({
-        type: VersionSpecificParameterType.DYNAMIC_GROUPS,
-        value: encodeVarint(1),
-      });
-    }
-
-    // EXPIRES (0x08) - draft-ietf-moq-transport-15 Section 9.2.1.8
+    // EXPIRES (0x08) - draft-ietf-moq-transport-16 Section 9.2.1.8
     if (options?.expires !== undefined) {
       parameters.push({
         type: VersionSpecificParameterType.EXPIRES,
@@ -907,12 +867,65 @@ export class SessionImpl implements Session {
       });
     }
 
-    // FORWARD (0x10) - draft-ietf-moq-transport-15 Section 9.2.1.10
+    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.1.10
     // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
     if (options?.forward === false) {
       parameters.push({
         type: VersionSpecificParameterType.FORWARD,
         value: encodeVarint(0n),
+      });
+    }
+
+    // Build track extensions (Track Extensions - end-to-end scope)
+    // draft-ietf-moq-transport-16: Track Properties を Extensions に移動
+    // https://github.com/moq-wg/moq-transport/pull/1390
+    const trackExtensions: ExtensionHeader[] = [];
+
+    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-16 Section 9.2.1.2
+    // draft-ietf-moq-transport-16: DELIVERY_TIMEOUT=0 is not allowed
+    // https://github.com/moq-wg/moq-transport/pull/1330
+    if (options?.deliveryTimeout !== undefined) {
+      if (options.deliveryTimeout === 0n) {
+        throw new Error("DELIVERY_TIMEOUT=0 is not allowed");
+      }
+      trackExtensions.push({
+        id: TrackExtensionHeaderId.DELIVERY_TIMEOUT,
+        value: options.deliveryTimeout,
+      });
+    }
+
+    // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-16 Section 9.2.1.3
+    if (options?.maxCacheDuration !== undefined) {
+      trackExtensions.push({
+        id: TrackExtensionHeaderId.MAX_CACHE_DURATION,
+        value: options.maxCacheDuration,
+      });
+    }
+
+    // PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-16 Section 9.2.1.4
+    if (options?.publisherPriority !== undefined) {
+      trackExtensions.push({
+        id: TrackExtensionHeaderId.PUBLISHER_PRIORITY,
+        value: BigInt(options.publisherPriority),
+      });
+    }
+
+    // PUBLISHER_GROUP_ORDER_PREFERENCE (0x22) - draft-ietf-moq-transport-16 Section 9.2.1.6
+    // draft-ietf-moq-transport-16: GROUP_ORDER から Publisher 向けの設定が分離
+    // https://github.com/moq-wg/moq-transport/pull/1390
+    if (options?.groupOrder !== undefined) {
+      const groupOrderValue = options.groupOrder === "Ascending" ? 0x01n : 0x02n;
+      trackExtensions.push({
+        id: TrackExtensionHeaderId.PUBLISHER_GROUP_ORDER_PREFERENCE,
+        value: groupOrderValue,
+      });
+    }
+
+    // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-16 Section 9.2.1.11
+    if (options?.dynamicGroups === true) {
+      trackExtensions.push({
+        id: TrackExtensionHeaderId.DYNAMIC_GROUPS,
+        value: 1n,
       });
     }
 
@@ -924,6 +937,7 @@ export class SessionImpl implements Session {
       trackName: trackNameBytes,
       trackAlias,
       parameters,
+      trackExtensions,
     };
 
     const payload = encodePublishPayload(publishMsg as Parameters<typeof encodePublishPayload>[0]);
@@ -1009,8 +1023,8 @@ export class SessionImpl implements Session {
     };
 
     // Set up update callback
-    impl.onUpdate = async (updateOptions: SubscribeUpdateOptions) => {
-      await this.sendSubscribeUpdate(impl, updateOptions);
+    impl.onUpdate = async (updateOptions: RequestUpdateOptions) => {
+      await this.sendRequestUpdate(impl, updateOptions);
     };
 
     // Create promise for SUBSCRIBE_OK
@@ -1032,15 +1046,20 @@ export class SessionImpl implements Session {
       parameters.push(encodeSubscriptionFilterParameter(options.filter));
     }
 
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-15 Section 9.2.1.2
+    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-16 Section 9.2.1.2
+    // draft-ietf-moq-transport-16: DELIVERY_TIMEOUT=0 is not allowed
+    // https://github.com/moq-wg/moq-transport/pull/1330
     if (options?.deliveryTimeout !== undefined) {
+      if (options.deliveryTimeout === 0n) {
+        throw new Error("DELIVERY_TIMEOUT=0 is not allowed");
+      }
       parameters.push({
         type: VersionSpecificParameterType.DELIVERY_TIMEOUT,
         value: encodeVarint(options.deliveryTimeout),
       });
     }
 
-    // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-15 Section 9.2.1.5
+    // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-16 Section 9.2.1.5
     if (options?.subscriberPriority !== undefined) {
       parameters.push({
         type: VersionSpecificParameterType.SUBSCRIBER_PRIORITY,
@@ -1225,8 +1244,16 @@ export class SessionImpl implements Session {
   /**
    * Namespace をサブスクライブする（トラック発見用）
    *
-   * draft-ietf-moq-transport-15 Section 9.23:
+   * draft-ietf-moq-transport-16 Section 9.23:
    * SUBSCRIBE_NAMESPACE requests matching published namespaces.
+   *
+   * draft-ietf-moq-transport-16:
+   * SUBSCRIBE_NAMESPACE は専用の双方向ストリームに配置される。
+   * Control Stream ではなく、独自のストリームで送信する。
+   * https://github.com/moq-wg/moq-transport/pull/1344
+   *
+   * TODO: 専用の双方向ストリームで SUBSCRIBE_NAMESPACE を送信するように実装を更新する。
+   * 現在は Control Stream で送信している（draft-15 互換）。
    */
   async subscribeNamespace(
     namespacePrefix: string[],
@@ -1751,31 +1778,31 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * SUBSCRIBE_UPDATE を送信する
+   * REQUEST_UPDATE を送信する
    *
-   * draft-ietf-moq-transport-15 Section 9.11:
-   * SUBSCRIBE_UPDATE Message {
+   * draft-ietf-moq-transport-16 Section 9.11:
+   * REQUEST_UPDATE Message {
    *   Type (i) = 0x2,
    *   Length (16),
    *   Request ID (i),
-   *   Subscription Request ID (i),
+   *   Existing Request ID (i),
    *   Number of Parameters (i),
    *   Parameters (..) ...
    * }
    */
-  private async sendSubscribeUpdate(
+  private async sendRequestUpdate(
     subscriber: SubscriberImpl,
-    options: SubscribeUpdateOptions,
+    options: RequestUpdateOptions,
   ): Promise<void> {
     const updateRequestId = this.nextRequestId;
     this.nextRequestId += 2n;
 
-    const subscriptionRequestId = subscriber.getRequestId();
+    const existingRequestId = subscriber.getRequestId();
 
     // パラメータを構築
     const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
-    // FORWARD (0x10) - draft-ietf-moq-transport-15 Section 9.2.1.10
+    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.1.10
     // forward が明示的に指定された場合のみ送信（undefined の場合は変更しない）
     if (options.forward !== undefined) {
       parameters.push({
@@ -1784,28 +1811,28 @@ export class SessionImpl implements Session {
       });
     }
 
-    const subscribeUpdateMsg = {
-      type: MessageType.SUBSCRIBE_UPDATE,
+    const requestUpdateMsg = {
+      type: MessageType.REQUEST_UPDATE,
       requestId: updateRequestId,
-      subscriptionRequestId,
+      existingRequestId,
       parameters,
     };
 
-    const payload = encodeSubscribeUpdatePayload(
-      subscribeUpdateMsg as Parameters<typeof encodeSubscribeUpdatePayload>[0],
+    const payload = encodeRequestUpdatePayload(
+      requestUpdateMsg as Parameters<typeof encodeRequestUpdatePayload>[0],
     );
 
     const promise = new Promise<void>((resolve, reject) => {
-      this.pendingSubscribeUpdate.set(updateRequestId, {
+      this.pendingRequestUpdate.set(updateRequestId, {
         resolve,
         reject,
-        subscriptionRequestId,
+        existingRequestId,
       });
     });
 
-    await this.sendControlMessage(MessageType.SUBSCRIBE_UPDATE, payload, {
+    await this.sendControlMessage(MessageType.REQUEST_UPDATE, payload, {
       requestId: updateRequestId.toString(),
-      subscriptionRequestId: subscriptionRequestId.toString(),
+      existingRequestId: existingRequestId.toString(),
     });
 
     return promise;
@@ -1994,12 +2021,12 @@ export class SessionImpl implements Session {
   /**
    * Handle REQUEST_ERROR message
    *
-   * draft-ietf-moq-transport-15 Section 9.8:
+   * draft-ietf-moq-transport-16 Section 9.8:
    * REQUEST_ERROR is sent in response to any request
    * (SUBSCRIBE, FETCH, PUBLISH, SUBSCRIBE_NAMESPACE, PUBLISH_NAMESPACE, TRACK_STATUS)
    */
   private handleRequestError(payload: Uint8Array): Record<string, unknown> {
-    const { requestId, errorCode, reason } = this.decodeRequestError(payload);
+    const { requestId, errorCode, retryInterval, reason } = this.decodeRequestError(payload);
 
     const error = new RequestError(
       reason || `Request failed with code ${errorCode}`,
@@ -2018,9 +2045,9 @@ export class SessionImpl implements Session {
       pendingSub.reject(error);
     }
 
-    const pendingUpdate = this.pendingSubscribeUpdate.get(requestId);
+    const pendingUpdate = this.pendingRequestUpdate.get(requestId);
     if (pendingUpdate) {
-      this.pendingSubscribeUpdate.delete(requestId);
+      this.pendingRequestUpdate.delete(requestId);
       pendingUpdate.reject(error);
     }
 
@@ -2051,6 +2078,7 @@ export class SessionImpl implements Session {
     return {
       requestId: requestId.toString(),
       errorCode,
+      retryInterval: retryInterval.toString(),
       reason,
     };
   }
@@ -2058,17 +2086,17 @@ export class SessionImpl implements Session {
   /**
    * Handle REQUEST_OK message
    *
-   * draft-ietf-moq-transport-15 Section 9.7:
-   * REQUEST_OK is sent in response to SUBSCRIBE_UPDATE,
+   * draft-ietf-moq-transport-16 Section 9.7:
+   * REQUEST_OK is sent in response to REQUEST_UPDATE,
    * TRACK_STATUS, SUBSCRIBE_NAMESPACE and PUBLISH_NAMESPACE requests.
    */
   private handleRequestOk(payload: Uint8Array): Record<string, unknown> {
     const msg = decodeRequestOkPayload(payload);
 
-    // SUBSCRIBE_UPDATE の応答
-    const pendingUpdate = this.pendingSubscribeUpdate.get(msg.requestId);
+    // REQUEST_UPDATE の応答
+    const pendingUpdate = this.pendingRequestUpdate.get(msg.requestId);
     if (pendingUpdate) {
-      this.pendingSubscribeUpdate.delete(msg.requestId);
+      this.pendingRequestUpdate.delete(msg.requestId);
       pendingUpdate.resolve();
     }
 
@@ -2401,6 +2429,7 @@ export class SessionImpl implements Session {
 
     const publishNamespaceDoneMsg = {
       type: MessageType.PUBLISH_NAMESPACE_DONE,
+      requestId,
       trackNamespace,
     };
 
@@ -2415,18 +2444,24 @@ export class SessionImpl implements Session {
   /**
    * Decode REQUEST_ERROR payload
    *
-   * draft-ietf-moq-transport-15 Section 9.8:
+   * draft-ietf-moq-transport-16 Section 9.8:
    * REQUEST_ERROR Message {
    *   Type (i) = 0x5,
    *   Length (16),
    *   Request ID (i),
    *   Error Code (i),
+   *   Retry Interval (i),
    *   Error Reason (Reason Phrase),
    * }
+   *
+   * Retry Interval: 再試行までに待つべきミリ秒 + 1
+   * - 0: 再試行すべきではない
+   * - 1 以上: 再試行可能（1 は即座の再試行を許可）
    */
   private decodeRequestError(payload: Uint8Array): {
     requestId: bigint;
     errorCode: number;
+    retryInterval: bigint;
     reason: string;
   } {
     let offset = 0;
@@ -2439,6 +2474,10 @@ export class SessionImpl implements Session {
     const [errorCode, errorCodeLen] = decodeVarint(payload, offset);
     offset += errorCodeLen;
 
+    // Retry Interval (varint)
+    const [retryInterval, retryIntervalLen] = decodeVarint(payload, offset);
+    offset += retryIntervalLen;
+
     // Reason Phrase Length (varint)
     const [reasonLen, reasonLenLen] = decodeVarint(payload, offset);
     offset += reasonLenLen;
@@ -2447,7 +2486,7 @@ export class SessionImpl implements Session {
     const decoder = new TextDecoder();
     const reason = decoder.decode(payload.slice(offset, offset + Number(reasonLen)));
 
-    return { requestId, errorCode: Number(errorCode), reason };
+    return { requestId, errorCode: Number(errorCode), retryInterval, reason };
   }
 
   private startIncomingStreamLoop(): void {

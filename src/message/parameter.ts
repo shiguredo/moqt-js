@@ -1,6 +1,17 @@
 /**
  * MOQT Parameter encoding/decoding
- * draft-ietf-moq-transport-15 Section 9.2
+ * draft-ietf-moq-transport-16 Section 9.2
+ *
+ * https://datatracker.ietf.org/doc/draft-ietf-moq-transport/
+ *
+ * Key-Value-Pair {
+ *   Delta Type (i),
+ *   [Length (i),]
+ *   Value (..)
+ * }
+ *
+ * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
+ * or from 0 if there is no previous Type value.
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -175,11 +186,94 @@ export function decodeLocation(data: Uint8Array, offset = 0): [Location, number]
 }
 
 /**
+ * 単一のパラメータを delta encoding でエンコードする
+ *
+ * draft-ietf-moq-transport-16 Section 9.2:
+ * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
+ * or from 0 if there is no previous Type value.
+ *
+ * @param param - エンコードするパラメータ
+ * @param previousType - 前のパラメータの Type 値（最初のパラメータの場合は 0）
+ * @returns エンコードされたバイト列
+ */
+function encodeKeyValuePair(param: Parameter, previousType: number): Uint8Array {
+  const deltaType = param.type - previousType;
+  if (deltaType < 0) {
+    throw new Error(
+      `delta type must be non-negative: current type=${param.type}, previous type=${previousType}`,
+    );
+  }
+
+  const deltaBytes = encodeVarint(deltaType);
+
+  if (param.type % 2 === 1) {
+    // 奇数型: Length プレフィックス付き
+    const lengthBytes = encodeVarint(param.value.length);
+    const result = new Uint8Array(deltaBytes.length + lengthBytes.length + param.value.length);
+    result.set(deltaBytes, 0);
+    result.set(lengthBytes, deltaBytes.length);
+    result.set(param.value, deltaBytes.length + lengthBytes.length);
+    return result;
+  }
+
+  // 偶数型: 値のみ
+  const result = new Uint8Array(deltaBytes.length + param.value.length);
+  result.set(deltaBytes, 0);
+  result.set(param.value, deltaBytes.length);
+  return result;
+}
+
+/**
+ * 単一のパラメータを delta encoding でデコードする
+ *
+ * @param data - デコードするデータ
+ * @param offset - 開始オフセット
+ * @param previousType - 前のパラメータの Type 値（最初のパラメータの場合は 0）
+ * @returns [parameter, consumed bytes]
+ */
+function decodeKeyValuePair(
+  data: Uint8Array,
+  offset: number,
+  previousType: number,
+): [Parameter, number] {
+  const [deltaType, deltaConsumed] = decodeVarint(data, offset);
+  const paramType = previousType + Number(deltaType);
+  let totalConsumed = deltaConsumed;
+
+  let value: Uint8Array;
+
+  if (paramType % 2 === 1) {
+    // 奇数型: Length プレフィックス付き
+    const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
+    totalConsumed += lengthConsumed;
+    value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
+    totalConsumed += Number(length);
+  } else {
+    // 偶数型: varint 値
+    const [val, valConsumed] = decodeVarint(data, offset + totalConsumed);
+    value = encodeVarint(val);
+    totalConsumed += valConsumed;
+  }
+
+  return [{ type: paramType, value }, totalConsumed];
+}
+
+/**
  * パラメータリストをエンコードする
+ *
+ * draft-ietf-moq-transport-16 Section 9.2:
+ * delta encoding を使用して Type を効率的にエンコードする。
+ * パラメータは Type の昇順でなければならない。
  */
 export function encodeParameters(params: Parameter[]): Uint8Array {
   const countBytes = encodeVarint(params.length);
-  const paramBytes = params.map(encodeParameter);
+  const paramBytes: Uint8Array[] = [];
+  let previousType = 0;
+
+  for (const param of params) {
+    paramBytes.push(encodeKeyValuePair(param, previousType));
+    previousType = param.type;
+  }
 
   const totalLength = countBytes.length + paramBytes.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -196,17 +290,23 @@ export function encodeParameters(params: Parameter[]): Uint8Array {
 
 /**
  * パラメータリストをデコードする
+ *
+ * draft-ietf-moq-transport-16 Section 9.2:
+ * delta encoding を使用して Type をデコードする。
+ *
  * @returns [parameters, consumed bytes]
  */
 export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], number] {
   const [numParams, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
   const parameters: Parameter[] = [];
+  let previousType = 0;
 
   for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
+    const [param, paramConsumed] = decodeKeyValuePair(data, offset + totalConsumed, previousType);
     parameters.push(param);
     totalConsumed += paramConsumed;
+    previousType = param.type;
   }
 
   return [parameters, totalConsumed];

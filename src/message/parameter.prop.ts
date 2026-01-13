@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9
+ * draft-ietf-moq-transport-16 Section 9.2
  */
 
 import { test, assert } from "vitest";
@@ -111,16 +111,31 @@ const oddParameterArb = fc.record({
 
 const parameterArb = fc.oneof(evenParameterArb, oddParameterArb);
 
+/**
+ * Parameters リストのエンコード・デコードがラウンドトリップする
+ *
+ * draft-ietf-moq-transport-16:
+ * delta encoding を使用するため、type は昇順である必要がある。
+ * テストでは生成されたパラメータを type でソートしてから使用する。
+ */
 test("Parameters リストのエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(fc.array(parameterArb, { minLength: 0, maxLength: 5 }), (params) => {
-      const encoded = encodeParameters(params);
+      // delta encoding では type は昇順である必要があるため、ソートする
+      const sortedParams = [...params].sort((a, b) => a.type - b.type);
+
+      // 重複する type を除去する（delta encoding では各 type は一意である必要がある）
+      const uniqueParams = sortedParams.filter(
+        (param, index) => index === 0 || param.type !== sortedParams[index - 1].type,
+      );
+
+      const encoded = encodeParameters(uniqueParams);
       const [decoded, consumed] = decodeParameters(encoded);
 
-      assert.equal(decoded.length, params.length);
-      for (let i = 0; i < params.length; i++) {
-        assert.equal(decoded[i].type, params[i].type);
-        assert.deepEqual(decoded[i].value, params[i].value);
+      assert.equal(decoded.length, uniqueParams.length);
+      for (let i = 0; i < uniqueParams.length; i++) {
+        assert.equal(decoded[i].type, uniqueParams[i].type);
+        assert.deepEqual(decoded[i].value, uniqueParams[i].value);
       }
       assert.equal(consumed, encoded.length);
     }),

@@ -1,9 +1,14 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-15 Section 9.16-9.18
+ * draft-ietf-moq-transport-16 Section 9.16-9.18
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import {
+  type ExtensionHeader,
+  decodeExtensionHeaders,
+  encodeExtensionHeaders,
+} from "../extensions";
 import {
   type Parameter,
   type TrackNamespace,
@@ -59,6 +64,10 @@ export interface Fetch {
 
 /**
  * FETCH_OK メッセージ (Section 9.17)
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
  */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
@@ -66,6 +75,7 @@ export interface FetchOk {
   endOfTrack: boolean;
   endLocation: Location;
   parameters: Parameter[];
+  trackExtensions: ExtensionHeader[];
 }
 
 /**
@@ -192,6 +202,20 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ *
+ * draft-ietf-moq-transport-16 Section 9.17:
+ * FETCH_OK Message {
+ *   Type (i) = 0x5,
+ *   Length (16),
+ *   Request ID (i),
+ *   End of Track (1),
+ *   End Group (i),
+ *   End Object (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...,
+ *   Track Extensions Length (i),
+ *   Track Extensions (..)
+ * }
  */
 export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -203,6 +227,11 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   for (const param of msg.parameters) {
     parts.push(encodeParameter(param));
   }
+
+  // Track Extensions
+  const extensionsData = encodeExtensionHeaders(msg.trackExtensions);
+  parts.push(encodeVarint(extensionsData.length));
+  parts.push(extensionsData);
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -239,12 +268,23 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
     totalConsumed += paramSize;
   }
 
+  // Track Extensions
+  const [extensionsLen, extensionsLenSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += extensionsLenSize;
+
+  const extensionsData = data.slice(
+    offset + totalConsumed,
+    offset + totalConsumed + Number(extensionsLen),
+  );
+  const trackExtensions = decodeExtensionHeaders(extensionsData);
+
   return {
     type: MessageType.FETCH_OK,
     requestId,
     endOfTrack,
     endLocation,
     parameters,
+    trackExtensions,
   };
 }
 

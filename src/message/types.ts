@@ -1,6 +1,6 @@
 /**
  * MOQT Message Types
- * draft-ietf-moq-transport-15 Section 9
+ * draft-ietf-moq-transport-16 Section 9
  */
 
 /**
@@ -19,11 +19,11 @@ export const MessageType = {
   // Request/Response
   REQUEST_OK: 0x07,
   REQUEST_ERROR: 0x05,
+  REQUEST_UPDATE: 0x02,
 
   // Subscribe
   SUBSCRIBE: 0x03,
   SUBSCRIBE_OK: 0x04,
-  SUBSCRIBE_UPDATE: 0x02,
   UNSUBSCRIBE: 0x0a,
 
   // Publish
@@ -63,25 +63,58 @@ export const SetupParameterType = {
 export type SetupParameterType = (typeof SetupParameterType)[keyof typeof SetupParameterType];
 
 /**
- * Version Specific Parameter Types (Section 9.2.1)
+ * Message Parameter Types (Section 9.2.1)
+ *
+ * draft-ietf-moq-transport-16:
+ * - Message Parameters は単一ホップにスコープされる
+ * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
+ * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY,
+ *   PUBLISHER_GROUP_ORDER_PREFERENCE, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
+ *   Track Extensions に移動
+ * https://github.com/moq-wg/moq-transport/pull/1390
+ *
+ * 注意: SUBSCRIBE では DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
+ * Message Parameter として使用される（Subscriber の希望値）。
  */
-export const VersionSpecificParameterType = {
-  AUTHORIZATION_TOKEN: 0x03,
+export const MessageParameterType = {
+  /**
+   * DELIVERY_TIMEOUT (Section 9.2.1.2)
+   *
+   * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
+   * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Extension として使用。
+   */
   DELIVERY_TIMEOUT: 0x02,
-  MAX_CACHE_DURATION: 0x04,
+  AUTHORIZATION_TOKEN: 0x03,
   EXPIRES: 0x08,
   LARGEST_OBJECT: 0x09,
-  PUBLISHER_PRIORITY: 0x0e,
   FORWARD: 0x10,
   SUBSCRIBER_PRIORITY: 0x20,
   SUBSCRIPTION_FILTER: 0x21,
+  /**
+   * GROUP_ORDER (Section 9.2.1.6)
+   *
+   * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
+   * Publisher の GROUP_ORDER_PREFERENCE は Track Extension として使用。
+   * https://github.com/moq-wg/moq-transport/pull/1390
+   */
   GROUP_ORDER: 0x22,
-  DYNAMIC_GROUPS: 0x30,
   NEW_GROUP_REQUEST: 0x32,
 } as const;
 
-export type VersionSpecificParameterType =
-  (typeof VersionSpecificParameterType)[keyof typeof VersionSpecificParameterType];
+export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
+
+/**
+ * @deprecated VersionSpecificParameterType は MessageParameterType に名称変更された
+ *
+ * draft-ietf-moq-transport-16:
+ * - "Version Specific Parameters" を "Message Parameters" にリネーム
+ * - Track Properties は Track Extensions に移動
+ * https://github.com/moq-wg/moq-transport/pull/1411
+ * https://github.com/moq-wg/moq-transport/pull/1390
+ */
+export const VersionSpecificParameterType = MessageParameterType;
+
+export type VersionSpecificParameterType = MessageParameterType;
 
 /**
  * Group Order (Section 9.2.1.10)
@@ -108,17 +141,20 @@ export type FilterType = (typeof FilterType)[keyof typeof FilterType];
 /**
  * Object Status (Section 10.2.1.1)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-16:
  * - 0x0: Normal object
- * - 0x1: Object Does Not Exist
- * - 0x3: End of Group
- * - 0x4: End of Track
+ * - 0x3: End of Group (EOG)
+ *   Indicates that no objects with the specified Group ID and the Object ID
+ *   that is greater than or equal to the one specified exist.
+ * - 0x4: End of Track (EOT)
+ *   Indicates that no objects with the location that is equal to or greater
+ *   than the one specified exist.
  *
- * Note: 0x2 is not defined in the spec.
+ * Note: 0x1 (Object Does Not Exist) was removed in draft-16.
+ * https://github.com/moq-wg/moq-transport/pull/1342
  */
 export const ObjectStatus = {
   NORMAL: 0x0,
-  OBJECT_DOES_NOT_EXIST: 0x1,
   END_OF_GROUP: 0x3,
   END_OF_TRACK: 0x4,
 } as const;

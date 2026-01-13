@@ -54,9 +54,14 @@ export interface Publisher {
   sendObject(params: SendObjectParams): void;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
+   *
+   * draft-ietf-moq-transport-16:
+   * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
+   * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
+   * https://github.com/moq-wg/moq-transport/pull/1350
    */
   sendDatagram(params: SendDatagramParams): void;
   done(): Promise<void>;

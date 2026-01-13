@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.20-9.24
+ * draft-ietf-moq-transport-16 Section 9.20-9.24
  */
 
 import { test, assert } from "vitest";
@@ -47,6 +47,18 @@ const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }),
   maxLength: 5,
 });
 
+/**
+ * SUBSCRIBE_NAMESPACE 用のネームスペース arbitrary
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
+ * https://github.com/moq-wg/moq-transport/pull/1393
+ */
+const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
+  minLength: 0,
+  maxLength: 5,
+});
+
 test("PublishNamespace のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
@@ -77,32 +89,50 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
   );
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * PUBLISH_NAMESPACE_DONE に Request ID が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1329
+ */
 test("PublishNamespaceDone のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(namespaceStringsArb, (namespaceParts) => {
-      const original: PublishNamespaceDone = {
-        type: MessageType.PUBLISH_NAMESPACE_DONE,
-        trackNamespace: createTrackNamespace(namespaceParts),
-      };
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespaceStringsArb,
+      (requestId, namespaceParts) => {
+        const original: PublishNamespaceDone = {
+          type: MessageType.PUBLISH_NAMESPACE_DONE,
+          requestId,
+          trackNamespace: createTrackNamespace(namespaceParts),
+        };
 
-      const encoded = encodePublishNamespaceDonePayload(original);
-      const decoded = decodePublishNamespaceDonePayload(encoded);
+        const encoded = encodePublishNamespaceDonePayload(original);
+        const decoded = decodePublishNamespaceDonePayload(encoded);
 
-      assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE_DONE);
-      assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
-    }),
+        assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE_DONE);
+        assert.equal(decoded.requestId, requestId);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
+      },
+    ),
   );
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * PUBLISH_NAMESPACE_CANCEL に Request ID が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1329
+ */
 test("PublishNamespaceCancel のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       fc.bigInt({ min: 0n, max: 1000n }),
       fc.string({ minLength: 0, maxLength: 100 }),
-      (namespaceParts, errorCode, reasonPhrase) => {
+      (requestId, namespaceParts, errorCode, reasonPhrase) => {
         const original: PublishNamespaceCancel = {
           type: MessageType.PUBLISH_NAMESPACE_CANCEL,
+          requestId,
           trackNamespace: createTrackNamespace(namespaceParts),
           errorCode,
           reasonPhrase,
@@ -112,6 +142,7 @@ test("PublishNamespaceCancel のエンコード・デコードがラウンドト
         const decoded = decodePublishNamespaceCancelPayload(encoded);
 
         assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE_CANCEL);
+        assert.equal(decoded.requestId, requestId);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.equal(decoded.errorCode, errorCode);
         assert.equal(decoded.reasonPhrase, reasonPhrase);
@@ -120,11 +151,16 @@ test("PublishNamespaceCancel のエンコード・デコードがラウンドト
   );
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * SUBSCRIBE_NAMESPACE では空のネームスペース（ワイルドカード）も許可される。
+ * https://github.com/moq-wg/moq-transport/pull/1393
+ */
 test("SubscribeNamespace のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      namespaceStringsArb,
+      namespacePrefixStringsArb,
       parametersArb,
       (requestId, namespaceParts, parameters) => {
         const original: SubscribeNamespace = {

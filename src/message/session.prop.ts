@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.2-9.6
+ * draft-ietf-moq-transport-16 Section 9.2-9.6
  */
 
 import { test, assert } from "vitest";
@@ -116,17 +116,25 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
   );
 });
 
+/**
+ * draft-ietf-moq-transport-16 Section 9.8:
+ * Retry Interval: 再試行までに待つべきミリ秒 + 1
+ * - 0: 再試行すべきではない
+ * - 1 以上: 再試行可能（1 は即座の再試行を許可）
+ */
 test("RequestError のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
       fc.string({ minLength: 0, maxLength: 200 }),
-      (requestId, errorCode, reasonPhrase) => {
+      (requestId, errorCode, retryInterval, reasonPhrase) => {
         const original: RequestError = {
           type: MessageType.REQUEST_ERROR,
           requestId,
           errorCode,
+          retryInterval,
           reasonPhrase,
         };
 
@@ -136,6 +144,7 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
         assert.equal(decoded.type, MessageType.REQUEST_ERROR);
         assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.errorCode, errorCode);
+        assert.equal(decoded.retryInterval, retryInterval);
         assert.equal(decoded.reasonPhrase, reasonPhrase);
       },
     ),

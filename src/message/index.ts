@@ -1,6 +1,6 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-15 Section 9
+ * draft-ietf-moq-transport-16 Section 9
  */
 
 // Types
@@ -8,6 +8,7 @@ export {
   FilterType,
   GroupOrder,
   type Location,
+  MessageParameterType,
   MessageType,
   ObjectStatus,
   PublishDoneStatusCode,
@@ -62,15 +63,15 @@ export {
 export {
   type Subscribe,
   type SubscribeOk,
-  type SubscribeUpdate,
+  type RequestUpdate,
   type Unsubscribe,
   decodeSubscribeOkPayload,
   decodeSubscribePayload,
-  decodeSubscribeUpdatePayload,
+  decodeRequestUpdatePayload,
   decodeUnsubscribePayload,
   encodeSubscribeOkPayload,
   encodeSubscribePayload,
-  encodeSubscribeUpdatePayload,
+  encodeRequestUpdatePayload,
   encodeUnsubscribePayload,
 } from "./subscribe";
 

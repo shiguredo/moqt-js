@@ -1,8 +1,13 @@
 /**
  * MOQT Data Stream
- * draft-ietf-moq-transport-15 Section 10
+ * draft-ietf-moq-transport-16 Section 10
  *
- * Data streams carry Objects via Subgroups or Datagrams
+ * Data streams carry Objects via Subgroups or Datagrams.
+ *
+ * draft-ietf-moq-transport-16:
+ * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
+ * Publisher は同じトラックのオブジェクトを Datagram と Stream の両方で送信できる。
+ * https://github.com/moq-wg/moq-transport/pull/1350
  */
 
 import { decodeVarint, encodeVarint } from "./varint";

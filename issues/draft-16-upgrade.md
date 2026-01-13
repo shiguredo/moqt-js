@@ -43,38 +43,39 @@ moqt-js を draft-ietf-moq-transport-15 から draft-ietf-moq-transport-16 に�
   - https://github.com/moq-wg/moq-transport/pull/1344
   - 影響: `session.ts`
   - コントロールストリームから専用ストリームへ移動
+  - 状態: TODO コメント追加済み（大規模なアーキテクチャ変更が必要）
 
-- [ ] 同一トラックで Datagram と Stream の混在許可
+- [x] 同一トラックで Datagram と Stream の混在許可
   - https://github.com/moq-wg/moq-transport/pull/1350
   - 影響: `dataStream.ts`, `session.ts`
 
-- [ ] トラックプロパティを拡張に移動
+- [x] トラックプロパティを拡張に移動
   - https://github.com/moq-wg/moq-transport/pull/1390
   - 影響: `types.ts`, `parameter.ts`, `extensions.ts`
   - パラメータのスコープを明確化
 
-- [ ] TRACK_STATUS から配信関連パラメータ削除
+- [x] TRACK_STATUS から配信関連パラメータ削除
   - https://github.com/moq-wg/moq-transport/pull/1325
   - 影響: `trackstatus.ts`
   - Subscriber 向けの簡素化
 
-- [ ] TRACK_STATUS に LARGEST_OBJECT パラメータ追加
+- [x] TRACK_STATUS に LARGEST_OBJECT パラメータ追加
   - https://github.com/moq-wg/moq-transport/pull/1367
   - 影響: `trackstatus.ts`
 
-- [ ] SUBSCRIBE_NAMESPACE で空/ワイルドカード namespace 許可
+- [x] SUBSCRIBE_NAMESPACE で空/ワイルドカード namespace 許可
   - https://github.com/moq-wg/moq-transport/pull/1393
   - 影響: `namespace.ts`, `session.ts`
 
-- [ ] FETCH レスポンスで不明な範囲を許可
+- [x] FETCH レスポンスで不明な範囲を許可
   - https://github.com/moq-wg/moq-transport/pull/1331
   - 影響: `fetch.ts`, `fetcher.ts`
 
-- [ ] DELIVERY_TIMEOUT=0 を禁止
+- [x] DELIVERY_TIMEOUT=0 を禁止
   - https://github.com/moq-wg/moq-transport/pull/1330
   - 影響: `parameter.ts`, `session.ts`
 
-- [ ] SUBSCRIBE_UPDATE で Start Location 減少許可
+- [x] SUBSCRIBE_UPDATE で Start Location 減少許可
   - https://github.com/moq-wg/moq-transport/pull/1323
   - 影響: `subscribe.ts`, `session.ts`
 
@@ -123,7 +124,7 @@ moqt-js を draft-ietf-moq-transport-15 から draft-ietf-moq-transport-16 に�
 
 ### Editorial (コード変更最小限)
 
-- [ ] Version Specific Parameters を Message Parameters にリネーム
+- [x] Version Specific Parameters を Message Parameters にリネーム
   - https://github.com/moq-wg/moq-transport/pull/1411
   - 影響: `types.ts`
 
