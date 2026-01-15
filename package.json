@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.57.0",
-    "@types/node": "25.0.7",
+    "@types/node": "25.0.8",
     "@vitest/coverage-v8": "4.0.17",
     "fast-check": "4.5.3",
     "oxfmt": "0.24.0",
