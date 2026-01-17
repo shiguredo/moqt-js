@@ -10,6 +10,7 @@ export {
   type Location,
   MessageParameterType,
   MessageType,
+  NamespaceSubscribeMode,
   ObjectStatus,
   PublishDoneStatusCode,
   SetupParameterType,
@@ -136,19 +137,22 @@ export {
 
 // Namespace Messages
 export {
+  type Namespace,
+  type NamespaceDone,
   type PublishNamespace,
   type PublishNamespaceCancel,
   type PublishNamespaceDone,
   type SubscribeNamespace,
-  type UnsubscribeNamespace,
+  decodeNamespaceDonePayload,
+  decodeNamespacePayload,
   decodePublishNamespaceCancelPayload,
   decodePublishNamespaceDonePayload,
   decodePublishNamespacePayload,
   decodeSubscribeNamespacePayload,
-  decodeUnsubscribeNamespacePayload,
+  encodeNamespaceDonePayload,
+  encodeNamespacePayload,
   encodePublishNamespaceCancelPayload,
   encodePublishNamespaceDonePayload,
   encodePublishNamespacePayload,
   encodeSubscribeNamespacePayload,
-  encodeUnsubscribeNamespacePayload,
 } from "./namespace";

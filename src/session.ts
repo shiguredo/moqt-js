@@ -20,16 +20,20 @@ import {
   MessageType,
   PublishDoneStatusCode,
   ObjectStatus,
+  NamespaceSubscribeMode,
   createTrackNamespace,
   encodeTrackName,
   trackNamespaceToStrings,
   decodeFetchOkPayload,
   decodeGoawayPayload,
   decodeMaxRequestIdPayload,
+  decodeNamespaceDonePayload,
+  decodeNamespacePayload,
   decodePublishDonePayload,
   decodePublishNamespaceCancelPayload,
   decodePublishNamespacePayload,
   decodePublishOkPayload,
+  decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeRequestsBlockedPayload,
   decodeServerSetupPayload,
@@ -45,7 +49,6 @@ import {
   encodeSubscribePayload,
   encodeRequestUpdatePayload,
   encodeTrackStatusPayload,
-  encodeUnsubscribeNamespacePayload,
   encodeUnsubscribePayload,
   createClientSetup,
   getMessageTypeName,
@@ -426,12 +429,31 @@ export interface NamespaceAnnouncement {
 
 /**
  * Namespace サブスクリプションのコールバック
+ *
+ * draft-ietf-moq-transport-16 Section 6.1:
+ * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE/NAMESPACE_DONE または PUBLISH が送信される。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-6.1
  */
 export interface NamespaceSubscriptionCallbacks {
   /**
-   * PUBLISH_NAMESPACE を受信したときに呼ばれる
+   * NAMESPACE を受信したときに呼ばれる
+   * draft-ietf-moq-transport-16 Section 9.21
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
-  announce: (announcement: NamespaceAnnouncement) => void;
+  onNamespace?: (namespaceSuffix: string[]) => void;
+  /**
+   * NAMESPACE_DONE を受信したときに呼ばれる
+   * draft-ietf-moq-transport-16 Section 9.23
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
+   */
+  onNamespaceDone?: (namespaceSuffix: string[]) => void;
+  /**
+   * PUBLISH_NAMESPACE を受信したときに呼ばれる（Control Stream 経由）
+   * draft-ietf-moq-transport-16 Section 9.20
+   */
+  announce?: (announcement: NamespaceAnnouncement) => void;
   /**
    * エラー時のコールバック
    */
@@ -569,11 +591,19 @@ export interface Session {
   trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult>;
   /**
    * Namespace をサブスクライブする（トラック発見用）
-   * draft-ietf-moq-transport-16 Section 9.23
+   *
+   * draft-ietf-moq-transport-16 Section 9.25:
+   * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-9.25
+   *
+   * @param namespacePrefix - Track Namespace Prefix
+   * @param callbacks - コールバック関数
+   * @param subscribeOptions - Subscribe Options（デフォルト: BOTH）
    */
   subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
+    subscribeOptions?: NamespaceSubscribeMode,
   ): Promise<NamespaceSubscription>;
   /**
    * Namespace を公開する（トラック発見用）
@@ -662,20 +692,22 @@ export class SessionImpl implements Session {
     bigint,
     { resolve: (result: TrackStatusResult) => void; reject: (err: Error) => void }
   >();
-  private pendingNamespaceSubscribe = new Map<
-    bigint,
-    {
-      resolve: (subscription: NamespaceSubscription) => void;
-      reject: (err: Error) => void;
-      callbacks: NamespaceSubscriptionCallbacks;
-    }
-  >();
+  /**
+   * SUBSCRIBE_NAMESPACE の状態管理
+   *
+   * draft-ietf-moq-transport-16 Section 6.1:
+   * SUBSCRIBE_NAMESPACE は専用の双方向ストリームで送受信される。
+   */
   private namespaceSubscriptions = new Map<
     bigint,
     {
       callbacks: NamespaceSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
+      stream?: WebTransportBidirectionalStream;
+      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
+      controlReader?: ControlStreamReader;
+      writer?: WritableStreamDefaultWriter<Uint8Array>;
     }
   >();
   private pendingNamespacePublish = new Map<
@@ -1253,28 +1285,27 @@ export class SessionImpl implements Session {
   /**
    * Namespace をサブスクライブする（トラック発見用）
    *
-   * draft-ietf-moq-transport-16 Section 9.23:
-   * SUBSCRIBE_NAMESPACE requests matching published namespaces.
+   * draft-ietf-moq-transport-16 Section 9.25:
+   * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
+   * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-9.25
    *
-   * draft-ietf-moq-transport-16:
-   * SUBSCRIBE_NAMESPACE は専用の双方向ストリームに配置される。
-   * Control Stream ではなく、独自のストリームで送信する。
-   * https://github.com/moq-wg/moq-transport/pull/1344
-   *
-   * TODO: 専用の双方向ストリームで SUBSCRIBE_NAMESPACE を送信するように実装を更新する。
-   * 現在は Control Stream で送信している（draft-15 互換）。
+   * draft-ietf-moq-transport-16 Section 6.1:
+   * キャンセルは FIN または RESET_STREAM で行う。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-6.1
    */
   async subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
+    subscribeOptions: NamespaceSubscribeMode = NamespaceSubscribeMode.BOTH,
   ): Promise<NamespaceSubscription> {
     if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
+      throw new Error("session is closed");
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
     if (this.receivedGoaway) {
-      throw new Error("Cannot subscribe namespace after receiving GOAWAY");
+      throw new Error("cannot subscribe namespace after receiving GOAWAY");
     }
 
     const requestId = this.nextRequestId;
@@ -1282,26 +1313,175 @@ export class SessionImpl implements Session {
 
     const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
-    // REQUEST_OK を待つ Promise
-    const promise = new Promise<NamespaceSubscription>((resolve, reject) => {
-      this.pendingNamespaceSubscribe.set(requestId, { resolve, reject, callbacks });
-    });
+    // 専用の双方向ストリームを作成
+    const stream = await this.transport.createBidirectionalStream();
+    const streamReader = stream.readable.getReader();
+    const controlReader = new ControlStreamReader();
+    const writer = stream.writable.getWriter();
 
-    // SUBSCRIBE_NAMESPACE メッセージを送信
+    // SUBSCRIBE_NAMESPACE メッセージを構築
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
       trackNamespacePrefix,
-      parameters: [],
+      subscribeOptions,
+      parameters: [] as [],
     };
 
+    // メッセージをエンコードして送信
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    await this.sendControlMessage(MessageType.SUBSCRIBE_NAMESPACE, payload, {
-      requestId: requestId.toString(),
-      trackNamespacePrefix: namespacePrefix,
+    const typeAndLength = new Uint8Array([
+      ...encodeVarint(MessageType.SUBSCRIBE_NAMESPACE),
+      ...encodeVarint(payload.length),
+    ]);
+
+    // デバッグコールバック
+    this.callbacks.debug?.({
+      direction: "send",
+      type: MessageType.SUBSCRIBE_NAMESPACE,
+      typeName: getMessageTypeName(MessageType.SUBSCRIBE_NAMESPACE),
+      payload,
+      decoded: {
+        requestId: requestId.toString(),
+        trackNamespacePrefix: namespacePrefix,
+        subscribeOptions,
+      },
+      timestamp: Date.now(),
     });
 
-    return promise;
+    await writer.write(new Uint8Array([...typeAndLength, ...payload]));
+
+    // REQUEST_OK/REQUEST_ERROR を待つ Promise
+    return new Promise<NamespaceSubscription>((resolve, reject) => {
+      // 状態を登録
+      this.namespaceSubscriptions.set(requestId, {
+        callbacks,
+        state: "active",
+        namespacePrefix,
+        stream,
+        streamReader,
+        controlReader,
+        writer,
+      });
+
+      // 専用ストリームの受信ループを開始
+      void this.startNamespaceStreamLoop(requestId, resolve, reject);
+    });
+  }
+
+  /**
+   * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
+   *
+   * draft-ietf-moq-transport-16 Section 6.1:
+   * REQUEST_OK/REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE を処理する。
+   */
+  private async startNamespaceStreamLoop(
+    requestId: bigint,
+    resolve: (subscription: NamespaceSubscription) => void,
+    reject: (err: Error) => void,
+  ): Promise<void> {
+    const subscription = this.namespaceSubscriptions.get(requestId);
+    if (!subscription || !subscription.streamReader || !subscription.controlReader) {
+      reject(new Error("namespace subscription not found"));
+      return;
+    }
+
+    const { streamReader, controlReader, callbacks } = subscription;
+    let resolved = false;
+
+    try {
+      while (subscription.state === "active") {
+        const { value, done } = await streamReader.read();
+        if (done) {
+          // ストリームが閉じられた
+          break;
+        }
+
+        const messages = controlReader.feed(value);
+        for (const msg of messages) {
+          const messageType = msg.type;
+          const messagePayload = msg.payload;
+
+          // デバッグコールバック
+          this.callbacks.debug?.({
+            direction: "recv",
+            type: messageType,
+            typeName: getMessageTypeName(messageType),
+            payload: messagePayload,
+            timestamp: Date.now(),
+          });
+
+          switch (messageType) {
+            case MessageType.REQUEST_OK: {
+              const decodedMsg = decodeRequestOkPayload(messagePayload);
+              if (decodedMsg.requestId !== requestId) {
+                const error = new Error(
+                  `request id mismatch: expected ${requestId}, got ${decodedMsg.requestId}`,
+                );
+                reject(error);
+                return;
+              }
+              // サブスクリプション成功
+              resolved = true;
+              const namespaceSubscription = this.createNamespaceSubscription(requestId);
+              resolve(namespaceSubscription);
+              break;
+            }
+
+            case MessageType.REQUEST_ERROR: {
+              const decodedMsg = decodeRequestErrorPayload(messagePayload);
+              if (decodedMsg.requestId !== requestId) {
+                const error = new Error(
+                  `request id mismatch: expected ${requestId}, got ${decodedMsg.requestId}`,
+                );
+                reject(error);
+                return;
+              }
+              // サブスクリプション失敗
+              const error = new RequestError(
+                decodedMsg.reasonPhrase,
+                Number(decodedMsg.errorCode) as RequestErrorCode,
+              );
+              subscription.state = "closed";
+              callbacks.error?.(error);
+              reject(error);
+              return;
+            }
+
+            case MessageType.NAMESPACE: {
+              const decodedMsg = decodeNamespacePayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              callbacks.onNamespace?.(suffixStrings);
+              break;
+            }
+
+            case MessageType.NAMESPACE_DONE: {
+              const decodedMsg = decodeNamespaceDonePayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              callbacks.onNamespaceDone?.(suffixStrings);
+              break;
+            }
+
+            default:
+              // 未知のメッセージタイプは無視
+              break;
+          }
+        }
+      }
+    } catch (error) {
+      if (subscription.state === "active") {
+        subscription.state = "closed";
+        callbacks.error?.(error instanceof Error ? error : new Error(String(error)));
+        if (!resolved) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    } finally {
+      // クリーンアップ
+      subscription.state = "closed";
+      streamReader.releaseLock();
+      this.namespaceSubscriptions.delete(requestId);
+    }
   }
 
   /**
@@ -2072,12 +2252,6 @@ export class SessionImpl implements Session {
       pendingStatusReq.reject(error);
     }
 
-    const pendingNamespaceReq = this.pendingNamespaceSubscribe.get(requestId);
-    if (pendingNamespaceReq) {
-      this.pendingNamespaceSubscribe.delete(requestId);
-      pendingNamespaceReq.reject(error);
-    }
-
     const pendingNamespacePubReq = this.pendingNamespacePublish.get(requestId);
     if (pendingNamespacePubReq) {
       this.pendingNamespacePublish.delete(requestId);
@@ -2114,24 +2288,6 @@ export class SessionImpl implements Session {
     if (pendingStatus) {
       this.pendingTrackStatus.delete(msg.requestId);
       pendingStatus.resolve({ parameters: msg.parameters });
-    }
-
-    // SUBSCRIBE_NAMESPACE の応答
-    const pendingNamespace = this.pendingNamespaceSubscribe.get(msg.requestId);
-    if (pendingNamespace) {
-      this.pendingNamespaceSubscribe.delete(msg.requestId);
-
-      // アクティブなサブスクリプションとして登録
-      this.namespaceSubscriptions.set(msg.requestId, {
-        callbacks: pendingNamespace.callbacks,
-        state: "active",
-        namespacePrefix: [],
-      });
-
-      // NamespaceSubscription を作成
-      const subscription = this.createNamespaceSubscription(msg.requestId);
-
-      pendingNamespace.resolve(subscription);
     }
 
     // PUBLISH_NAMESPACE の応答
@@ -2282,7 +2438,7 @@ export class SessionImpl implements Session {
         namespace: namespaceStrings,
         parameters: msg.parameters,
       };
-      subscription.callbacks.announce(announcement);
+      subscription.callbacks.announce?.(announcement);
     }
 
     return {
@@ -2343,7 +2499,7 @@ export class SessionImpl implements Session {
     };
 
     const unsubscribe = async (): Promise<void> => {
-      await this.sendUnsubscribeNamespace(requestId);
+      await this.closeNamespaceSubscription(requestId);
     };
 
     return {
@@ -2355,11 +2511,14 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * UNSUBSCRIBE_NAMESPACE を送信する
+   * Namespace サブスクリプションを閉じる
    *
-   * draft-ietf-moq-transport-16 Section 9.24
+   * draft-ietf-moq-transport-16 Section 6.1:
+   * A SUBSCRIBE_NAMESPACE can be cancelled by closing the stream with
+   * either a FIN or RESET_STREAM.
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-6.1
    */
-  private async sendUnsubscribeNamespace(requestId: bigint): Promise<void> {
+  private async closeNamespaceSubscription(requestId: bigint): Promise<void> {
     const subscription = this.namespaceSubscriptions.get(requestId);
     if (!subscription || subscription.state === "closed") {
       return;
@@ -2367,17 +2526,14 @@ export class SessionImpl implements Session {
 
     subscription.state = "closed";
 
-    const unsubscribeMsg = {
-      type: MessageType.UNSUBSCRIBE_NAMESPACE,
-      requestId,
-    };
-
-    const payload = encodeUnsubscribeNamespacePayload(
-      unsubscribeMsg as Parameters<typeof encodeUnsubscribeNamespacePayload>[0],
-    );
-    await this.sendControlMessage(MessageType.UNSUBSCRIBE_NAMESPACE, payload, {
-      requestId: requestId.toString(),
-    });
+    // ストリームを閉じる（FIN を送信）
+    try {
+      if (subscription.writer) {
+        await subscription.writer.close();
+      }
+    } catch {
+      // ストリームが既に閉じられている場合は無視
+    }
 
     this.namespaceSubscriptions.delete(requestId);
   }

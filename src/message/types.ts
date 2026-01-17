@@ -41,10 +41,11 @@ export const MessageType = {
 
   // Namespace
   PUBLISH_NAMESPACE: 0x06,
+  NAMESPACE: 0x08,
   PUBLISH_NAMESPACE_DONE: 0x09,
+  NAMESPACE_DONE: 0x0e,
   PUBLISH_NAMESPACE_CANCEL: 0x0c,
   SUBSCRIBE_NAMESPACE: 0x11,
-  UNSUBSCRIBE_NAMESPACE: 0x14,
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
@@ -189,6 +190,32 @@ export const PublishDoneStatusCode = {
 
 export type PublishDoneStatusCode =
   (typeof PublishDoneStatusCode)[keyof typeof PublishDoneStatusCode];
+
+/**
+ * Namespace Subscribe Mode (Section 9.25)
+ *
+ * draft-ietf-moq-transport-16:
+ * SUBSCRIBE_NAMESPACE の Subscribe Options フィールドで使用される。
+ * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) のいずれかを指定する。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-9.25
+ */
+export const NamespaceSubscribeMode = {
+  /**
+   * PUBLISH のみを要求する
+   */
+  PUBLISH: 0x00,
+  /**
+   * NAMESPACE のみを要求する
+   */
+  NAMESPACE: 0x01,
+  /**
+   * PUBLISH と NAMESPACE の両方を要求する
+   */
+  BOTH: 0x02,
+} as const;
+
+export type NamespaceSubscribeMode =
+  (typeof NamespaceSubscribeMode)[keyof typeof NamespaceSubscribeMode];
 
 /**
  * Location (Group ID, Object ID)
