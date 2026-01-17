@@ -28,12 +28,17 @@
   - DELIVERY_TIMEOUT=0 を禁止
   - REQUEST_UPDATE で Start Location 減少許可
   - 同一トラックで Datagram と Stream の混在許可
+  - 未対応: SUBSCRIBE_NAMESPACE の専用ストリーム対応
+  - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
+  - 未対応: Subgroup 再オープン禁止
   - @voluntas
 - [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
   - @voluntas
 
 ### misc
 
+- [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
+  - @voluntas
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
   - @voluntas
 
