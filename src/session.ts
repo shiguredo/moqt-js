@@ -103,7 +103,7 @@ export interface ConnectCallbacks {
   debug?: (message: DebugMessage) => void;
   /**
    * GOAWAY 受信時のコールバック
-   * draft-ietf-moq-transport-15 Section 9.4
+   * draft-ietf-moq-transport-16 Section 9.4
    * @param newSessionUri - 新しいセッション URI（セッションマイグレーション用）
    */
   goaway?: (newSessionUri: string) => void;
@@ -141,7 +141,7 @@ export interface PublishCallbacks {
   error?: (error: Error) => void;
   /**
    * Forward State が変更された時のコールバック
-   * draft-ietf-moq-transport-16 Section 9.2.1.10
+   * draft-ietf-moq-transport-16 Section 9.2.2.8
    *
    * PUBLISH_OK または REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
    * - true (1): Subscriber がいる（オブジェクトを送信すべき）
@@ -156,7 +156,7 @@ export interface PublishCallbacks {
 export interface PublishOptions {
   /**
    * キャッシュの最大保持時間（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.3
+   * draft-ietf-moq-transport-16 Section 11.1.1
    *
    * Relay がオブジェクトをキャッシュして良い最大時間を指定する。
    * 0 を指定するとキャッシュを無効にする。
@@ -165,7 +165,7 @@ export interface PublishOptions {
 
   /**
    * Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.2
+   * draft-ietf-moq-transport-16 Section 9.2.2.2
    *
    * オブジェクトを受信してから配信を試みる最大時間。
    * Publisher と Subscriber の両方が指定した場合、小さい方の値が使用される。
@@ -175,7 +175,7 @@ export interface PublishOptions {
 
   /**
    * Publisher Priority（0-255）
-   * draft-ietf-moq-transport-15 Section 9.2.1.4
+   * draft-ietf-moq-transport-16 Section 11.1.1.1
    *
    * パブリッシュの優先度。小さい値ほど高優先度。
    * 指定しない場合は 128（デフォルト）
@@ -184,7 +184,7 @@ export interface PublishOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-15 Section 9.2.1.6
+   * draft-ietf-moq-transport-16 Section 9.2.2.4
    *
    * グループの配信順序。
    * - "Ascending": 古いグループから順に配信
@@ -194,7 +194,7 @@ export interface PublishOptions {
 
   /**
    * Dynamic Groups サポートの通知
-   * draft-ietf-moq-transport-15 Section 9.2.1.11
+   * draft-ietf-moq-transport-16 Section 11.1.1.3
    *
    * true を設定すると、Subscriber が NEW_GROUP_REQUEST パラメータで
    * 新しいグループの生成を要求できることを通知する。
@@ -203,7 +203,7 @@ export interface PublishOptions {
 
   /**
    * Expires（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.8
+   * draft-ietf-moq-transport-16 Section 9.2.2.6
    *
    * パブリッシュが自動終了するまでの時間（ミリ秒）。
    * 0 または未指定の場合は期限なし。
@@ -212,7 +212,7 @@ export interface PublishOptions {
 
   /**
    * Forward State
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-16 Section 9.2.2.8
    *
    * オブジェクトの転送状態を指定する。
    * - true (1): オブジェクトを転送する（デフォルト）
@@ -231,7 +231,7 @@ export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
   /**
    * Datagram で受信したオブジェクトのコールバック
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    */
@@ -242,7 +242,7 @@ export interface SubscribeCallbacks {
 
 /**
  * Joining Fetch オプション
- * draft-ietf-moq-transport-15 Section 9.16.2
+ * draft-ietf-moq-transport-16 Section 9.16.2
  *
  * 重要な制約:
  * 1. Joining Fetch は Filter Type が LargestObject のサブスクリプションでのみ使用可能。
@@ -298,7 +298,7 @@ export interface JoiningFetchOptions {
 export interface SubscribeOptions {
   /**
    * Subscription Filter
-   * draft-ietf-moq-transport-15 Section 5.1.2, Section 9.2.1.7
+   * draft-ietf-moq-transport-16 Section 5.1.2, Section 9.2.2.5
    *
    * どのオブジェクトを受信するかを指定するフィルタ。
    * - NextGroupStart: 次のグループから開始
@@ -312,7 +312,7 @@ export interface SubscribeOptions {
 
   /**
    * Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.2
+   * draft-ietf-moq-transport-16 Section 9.2.2.2
    *
    * オブジェクトを受信してから配信を試みる最大時間。
    * Publisher と Subscriber の両方が指定した場合、小さい方の値が使用される。
@@ -322,7 +322,7 @@ export interface SubscribeOptions {
 
   /**
    * Subscriber Priority（0-255）
-   * draft-ietf-moq-transport-15 Section 9.2.1.5
+   * draft-ietf-moq-transport-16 Section 9.2.2.3
    *
    * サブスクリプションの優先度。小さい値ほど高優先度。
    * 指定しない場合は 128（デフォルト）
@@ -331,7 +331,7 @@ export interface SubscribeOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-15 Section 9.2.1.6
+   * draft-ietf-moq-transport-16 Section 9.2.2.4
    *
    * グループの配信順序の希望。
    * - "Ascending": 古いグループから順に配信
@@ -343,7 +343,7 @@ export interface SubscribeOptions {
 
   /**
    * 新しいグループ（キーフレーム）を要求する
-   * draft-ietf-moq-transport-15 Section 9.2.1.12
+   * draft-ietf-moq-transport-16 Section 9.2.2.9
    *
    * 0 を指定すると、Publisher は新しい Group を開始する
    * Publisher が DYNAMIC_GROUPS をサポートしていない場合は無視される
@@ -352,7 +352,7 @@ export interface SubscribeOptions {
 
   /**
    * Joining Fetch オプション
-   * draft-ietf-moq-transport-15 Section 9.16.2
+   * draft-ietf-moq-transport-16 Section 9.16.2
    *
    * SUBSCRIBE と同時に過去のデータを取得する。
    * Relay がキャッシュを持っていれば、過去のグループを取得できる。
@@ -364,7 +364,7 @@ export interface SubscribeOptions {
 
   /**
    * Forward State
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-16 Section 9.2.2.8
    *
    * オブジェクトの転送状態を指定する。
    * - true (1): オブジェクトを転送する（デフォルト）
@@ -400,7 +400,7 @@ export interface FetchOptions {
 
 /**
  * TRACK_STATUS の結果
- * draft-ietf-moq-transport-15 Section 9.19
+ * draft-ietf-moq-transport-16 Section 9.19
  */
 export interface TrackStatusResult {
   /**
@@ -411,7 +411,7 @@ export interface TrackStatusResult {
 
 /**
  * Namespace 公開通知
- * draft-ietf-moq-transport-15 Section 9.20
+ * draft-ietf-moq-transport-16 Section 9.20
  */
 export interface NamespaceAnnouncement {
   /**
@@ -451,12 +451,12 @@ export interface NamespaceSubscription {
 
 /**
  * Namespace 公開のコールバック
- * draft-ietf-moq-transport-15 Section 9.20-9.22
+ * draft-ietf-moq-transport-16 Section 9.20-9.22
  */
 export interface NamespacePublicationCallbacks {
   /**
    * PUBLISH_NAMESPACE_CANCEL を受信したときに呼ばれる
-   * draft-ietf-moq-transport-15 Section 9.22
+   * draft-ietf-moq-transport-16 Section 9.22
    */
   cancelled?: (errorCode: bigint, reasonPhrase: string) => void;
   /**
@@ -467,7 +467,7 @@ export interface NamespacePublicationCallbacks {
 
 /**
  * Namespace 公開
- * draft-ietf-moq-transport-15 Section 9.20-9.21
+ * draft-ietf-moq-transport-16 Section 9.20-9.21
  */
 export interface NamespacePublication {
   readonly state: "active" | "cancelled" | "closed";
@@ -477,7 +477,7 @@ export interface NamespacePublication {
   readonly namespace: string[];
   /**
    * 公開を終了する（PUBLISH_NAMESPACE_DONE を送信）
-   * draft-ietf-moq-transport-15 Section 9.21
+   * draft-ietf-moq-transport-16 Section 9.21
    */
   done(): Promise<void>;
 }
@@ -537,7 +537,7 @@ export interface Session {
   readonly state: SessionState;
   /**
    * GOAWAY を受信したかどうか
-   * draft-ietf-moq-transport-15 Section 9.4
+   * draft-ietf-moq-transport-16 Section 9.4
    */
   readonly goawayReceived: boolean;
   publish(
@@ -554,7 +554,7 @@ export interface Session {
   ): Promise<Subscriber>;
   /**
    * 過去のデータを取得する
-   * draft-ietf-moq-transport-15 Section 9.16
+   * draft-ietf-moq-transport-16 Section 9.16
    */
   fetch(
     namespace: string[],
@@ -564,12 +564,12 @@ export interface Session {
   ): Promise<Fetcher>;
   /**
    * トラックの状態を問い合わせる
-   * draft-ietf-moq-transport-15 Section 9.19
+   * draft-ietf-moq-transport-16 Section 9.19
    */
   trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult>;
   /**
    * Namespace をサブスクライブする（トラック発見用）
-   * draft-ietf-moq-transport-15 Section 9.23
+   * draft-ietf-moq-transport-16 Section 9.23
    */
   subscribeNamespace(
     namespacePrefix: string[],
@@ -577,7 +577,7 @@ export interface Session {
   ): Promise<NamespaceSubscription>;
   /**
    * Namespace を公開する（トラック発見用）
-   * draft-ietf-moq-transport-15 Section 9.20
+   * draft-ietf-moq-transport-16 Section 9.20
    *
    * Publisher が Track Namespace 内にトラックがあることを通知する。
    * Subscriber は SUBSCRIBE_NAMESPACE でこの通知を受け取れる。
@@ -588,7 +588,7 @@ export interface Session {
   ): Promise<NamespacePublication>;
   /**
    * GOAWAY を送信してセッション終了を通知する
-   * draft-ietf-moq-transport-15 Section 9.4
+   * draft-ietf-moq-transport-16 Section 9.4
    * @param newSessionUri - 新しいセッション URI（オプション）
    */
   goaway(newSessionUri?: string): Promise<void>;
@@ -697,7 +697,7 @@ export class SessionImpl implements Session {
   >();
 
   // Publisher ごとのストリーム状態
-  // draft-ietf-moq-transport-15 Section 2.2:
+  // draft-ietf-moq-transport-16 Section 2.2:
   // "Objects in a subgroup ... are sent on a single stream whenever possible."
   private publisherStreams = new Map<
     bigint,
@@ -823,7 +823,7 @@ export class SessionImpl implements Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-15 Section 9.4
+    // draft-ietf-moq-transport-16 Section 9.4
     if (this.receivedGoaway) {
       throw new Error("Cannot publish after receiving GOAWAY");
     }
@@ -871,7 +871,7 @@ export class SessionImpl implements Session {
     // Build parameters (Message Parameters - single hop scope)
     const parameters: Parameter[] = [];
 
-    // EXPIRES (0x08) - draft-ietf-moq-transport-16 Section 9.2.1.8
+    // EXPIRES (0x08) - draft-ietf-moq-transport-16 Section 9.2.2.6
     if (options?.expires !== undefined) {
       parameters.push({
         type: VersionSpecificParameterType.EXPIRES,
@@ -879,7 +879,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.1.10
+    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.2.8
     // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
     if (options?.forward === false) {
       parameters.push({
@@ -893,7 +893,7 @@ export class SessionImpl implements Session {
     // https://github.com/moq-wg/moq-transport/pull/1390
     const trackExtensions: ExtensionHeader[] = [];
 
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-16 Section 9.2.1.2
+    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-16 Section 9.2.2.2
     // draft-ietf-moq-transport-16: DELIVERY_TIMEOUT=0 is not allowed
     // https://github.com/moq-wg/moq-transport/pull/1330
     if (options?.deliveryTimeout !== undefined) {
@@ -906,7 +906,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-16 Section 9.2.1.3
+    // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-16 Section 11.1.1
     if (options?.maxCacheDuration !== undefined) {
       trackExtensions.push({
         id: TrackExtensionHeaderId.MAX_CACHE_DURATION,
@@ -914,7 +914,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-16 Section 9.2.1.4
+    // PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-16 Section 11.1.1.1
     if (options?.publisherPriority !== undefined) {
       trackExtensions.push({
         id: TrackExtensionHeaderId.PUBLISHER_PRIORITY,
@@ -922,7 +922,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // PUBLISHER_GROUP_ORDER_PREFERENCE (0x22) - draft-ietf-moq-transport-16 Section 9.2.1.6
+    // PUBLISHER_GROUP_ORDER_PREFERENCE (0x22) - draft-ietf-moq-transport-16 Section 9.2.2.4
     // draft-ietf-moq-transport-16: GROUP_ORDER から Publisher 向けの設定が分離
     // https://github.com/moq-wg/moq-transport/pull/1390
     if (options?.groupOrder !== undefined) {
@@ -933,7 +933,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-16 Section 9.2.1.11
+    // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-16 Section 11.1.1.3
     if (options?.dynamicGroups === true) {
       trackExtensions.push({
         id: TrackExtensionHeaderId.DYNAMIC_GROUPS,
@@ -972,7 +972,7 @@ export class SessionImpl implements Session {
   /**
    * Subscribe to a track
    *
-   * draft-ietf-moq-transport-15 Section 9.9:
+   * draft-ietf-moq-transport-16 Section 9.9:
    * SUBSCRIBE does not include Track Alias.
    * Track Alias is returned by the publisher in SUBSCRIBE_OK (Section 9.10).
    */
@@ -987,13 +987,13 @@ export class SessionImpl implements Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-15 Section 9.4
+    // draft-ietf-moq-transport-16 Section 9.4
     if (this.receivedGoaway) {
       throw new Error("Cannot subscribe after receiving GOAWAY");
     }
 
     // Joining Fetch は Filter Type が LargestObject の場合のみ許可
-    // draft-ietf-moq-transport-15 Section 9.16.2:
+    // draft-ietf-moq-transport-16 Section 9.16.2:
     // "A Joining Fetch is only permitted when the associated Subscribe has
     //  the Filter Type Largest Object; any other value results in closing
     //  the session with a PROTOCOL_VIOLATION."
@@ -1052,12 +1052,12 @@ export class SessionImpl implements Session {
     // Build parameters
     const parameters: Parameter[] = [];
 
-    // SUBSCRIPTION_FILTER (0x21) - draft-ietf-moq-transport-15 Section 9.2.1.7
+    // SUBSCRIPTION_FILTER (0x21) - draft-ietf-moq-transport-16 Section 9.2.2.5
     if (options?.filter !== undefined) {
       parameters.push(encodeSubscriptionFilterParameter(options.filter));
     }
 
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-16 Section 9.2.1.2
+    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-16 Section 9.2.2.2
     // draft-ietf-moq-transport-16: DELIVERY_TIMEOUT=0 is not allowed
     // https://github.com/moq-wg/moq-transport/pull/1330
     if (options?.deliveryTimeout !== undefined) {
@@ -1070,7 +1070,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-16 Section 9.2.1.5
+    // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-16 Section 9.2.2.3
     if (options?.subscriberPriority !== undefined) {
       parameters.push({
         type: VersionSpecificParameterType.SUBSCRIBER_PRIORITY,
@@ -1078,7 +1078,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // GROUP_ORDER (0x22) - draft-ietf-moq-transport-15 Section 9.2.1.6
+    // GROUP_ORDER (0x22) - draft-ietf-moq-transport-16 Section 9.2.2.4
     if (options?.groupOrder !== undefined) {
       const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
       parameters.push({
@@ -1095,7 +1095,7 @@ export class SessionImpl implements Session {
       });
     }
 
-    // FORWARD (0x10) - draft-ietf-moq-transport-15 Section 9.2.1.10
+    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.2.8
     // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
     if (options?.forward === false) {
       parameters.push({
@@ -1133,7 +1133,7 @@ export class SessionImpl implements Session {
   /**
    * 過去のデータを取得する（Standalone Fetch）
    *
-   * draft-ietf-moq-transport-15 Section 9.16:
+   * draft-ietf-moq-transport-16 Section 9.16:
    * FETCH requests a range of Objects from a track.
    */
   async fetch(
@@ -1206,7 +1206,7 @@ export class SessionImpl implements Session {
   /**
    * トラックの状態を問い合わせる
    *
-   * draft-ietf-moq-transport-15 Section 9.19:
+   * draft-ietf-moq-transport-16 Section 9.19:
    * TRACK_STATUS requests information about a track without subscribing.
    * The response is REQUEST_OK with the same parameters as SUBSCRIBE_OK.
    */
@@ -1307,7 +1307,7 @@ export class SessionImpl implements Session {
   /**
    * Namespace を公開する（トラック発見用）
    *
-   * draft-ietf-moq-transport-15 Section 9.20:
+   * draft-ietf-moq-transport-16 Section 9.20:
    * PUBLISH_NAMESPACE notifies that a Track Namespace has tracks available.
    */
   async publishNamespace(
@@ -1353,7 +1353,7 @@ export class SessionImpl implements Session {
   /**
    * GOAWAY を送信してセッション終了を通知する
    *
-   * draft-ietf-moq-transport-15 Section 9.4:
+   * draft-ietf-moq-transport-16 Section 9.4:
    * An endpoint sends a GOAWAY message to inform the peer it intends to
    * close the session soon.
    */
@@ -1495,7 +1495,7 @@ export class SessionImpl implements Session {
 
   /**
    * Send an object on a subgroup stream
-   * draft-ietf-moq-transport-15 Section 2.2:
+   * draft-ietf-moq-transport-16 Section 2.2:
    * "Objects in a subgroup ... are sent on a single stream whenever possible."
    *
    * 同じ Group 内のオブジェクトは同じストリームで送信する
@@ -1527,7 +1527,7 @@ export class SessionImpl implements Session {
       const writer = stream.getWriter();
 
       // Subgroup Header を書き込む
-      // draft-ietf-moq-transport-15 Section 10.4.2
+      // draft-ietf-moq-transport-16 Section 10.4.2
       const hasExtensions = params.extensions !== undefined && params.extensions.length > 0;
       const headerType = hasExtensions ? SubgroupHeaderType.BASE_EXT : SubgroupHeaderType.BASE;
       const header = encodeSubgroupHeader({
@@ -1544,14 +1544,14 @@ export class SessionImpl implements Session {
     }
 
     // Object ID Delta を計算
-    // draft-ietf-moq-transport-15 Section 10.4.2:
+    // draft-ietf-moq-transport-16 Section 10.4.2:
     // "The Object ID Delta + 1 is added to the previous Object ID ...
     //  The Object ID is the Object ID Delta if it's the first Object"
     const objectIdDelta =
       streamState.previousObjectId < 0n ? objectId : objectId - streamState.previousObjectId - 1n;
 
     // Object fields を構築
-    // draft-ietf-moq-transport-15 Section 10.4.2 Figure 28
+    // draft-ietf-moq-transport-16 Section 10.4.2 Figure 29
     const hasExtensions = params.extensions !== undefined && params.extensions.length > 0;
     const objectIdDeltaBytes = encodeVarint(objectIdDelta);
     const payloadLenBytes = encodeVarint(params.payload.length);
@@ -1604,7 +1604,7 @@ export class SessionImpl implements Session {
 
   /**
    * Send a datagram
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
     const hasExtensions = params.extensions !== undefined && params.extensions.length > 0;
@@ -1655,7 +1655,7 @@ export class SessionImpl implements Session {
     const requestId = publisher.getRequestId();
 
     // Encode PUBLISH_DONE payload
-    // draft-ietf-moq-transport-15 Section 9.15
+    // draft-ietf-moq-transport-16 Section 9.15
     const parts: Uint8Array[] = [];
     parts.push(encodeVarint(requestId));
     parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
@@ -1701,7 +1701,7 @@ export class SessionImpl implements Session {
   /**
    * FETCH_CANCEL を送信する
    *
-   * draft-ietf-moq-transport-15 Section 9.18
+   * draft-ietf-moq-transport-16 Section 9.18
    */
   private async sendFetchCancel(fetcher: FetcherImpl): Promise<void> {
     const requestId = fetcher.getRequestId();
@@ -1724,7 +1724,7 @@ export class SessionImpl implements Session {
   /**
    * Joining FETCH を送信する
    *
-   * draft-ietf-moq-transport-15 Section 9.16.2:
+   * draft-ietf-moq-transport-16 Section 9.16.2:
    * Joining Fetch は SUBSCRIBE と関連付けられた FETCH で、
    * ライブデータを受信しながら過去のデータを取得する。
    */
@@ -1811,7 +1811,7 @@ export class SessionImpl implements Session {
     // パラメータを構築
     const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
-    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.1.10
+    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.2.8
     // forward が明示的に指定された場合のみ送信（undefined の場合は変更しない）
     if (options.forward !== undefined) {
       parameters.push({
@@ -1919,7 +1919,7 @@ export class SessionImpl implements Session {
   /**
    * Handle SUBSCRIBE_OK message
    *
-   * draft-ietf-moq-transport-15 Section 9.10:
+   * draft-ietf-moq-transport-16 Section 9.10:
    * Track Alias is provided by the publisher in SUBSCRIBE_OK.
    */
   private handleSubscribeOk(payload: Uint8Array): Record<string, unknown> {
@@ -1959,7 +1959,7 @@ export class SessionImpl implements Session {
       }
 
       // Joining Fetch が指定されている場合は送信
-      // draft-ietf-moq-transport-15 Section 9.16.2:
+      // draft-ietf-moq-transport-16 Section 9.16.2:
       // "If no Objects have been published for the track, and the SUBSCRIBE_OK
       //  did not include a LARGEST_OBJECT parameter, the publisher MUST respond
       //  with a REQUEST_ERROR with error code INVALID_RANGE."
@@ -1989,7 +1989,7 @@ export class SessionImpl implements Session {
       this.publishers.set(msg.requestId, pending.impl);
 
       // FORWARD パラメータを処理
-      // draft-ietf-moq-transport-15 Section 9.2.1.10
+      // draft-ietf-moq-transport-16 Section 9.2.2.8
       // デフォルトは 1 (forward) だが、0 が指定された場合は forwardState を false にする
       let forwardState = true;
       for (const param of msg.parameters) {
@@ -2161,7 +2161,7 @@ export class SessionImpl implements Session {
   /**
    * Handle GOAWAY message
    *
-   * draft-ietf-moq-transport-15 Section 9.4:
+   * draft-ietf-moq-transport-16 Section 9.4:
    * Upon receiving a GOAWAY, an endpoint SHOULD NOT initiate new requests
    * to the peer including SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
    * SUBSCRIBE_NAMESPACE and TRACK_STATUS.
@@ -2193,7 +2193,7 @@ export class SessionImpl implements Session {
   /**
    * Handle MAX_REQUEST_ID message
    *
-   * draft-ietf-moq-transport-15 Section 9.5:
+   * draft-ietf-moq-transport-16 Section 9.5:
    * The Maximum Request ID MUST only increase within a session, and
    * receipt of a MAX_REQUEST_ID message with an equal or smaller Request
    * ID value is a PROTOCOL_VIOLATION.
@@ -2223,7 +2223,7 @@ export class SessionImpl implements Session {
   /**
    * Handle REQUESTS_BLOCKED message
    *
-   * draft-ietf-moq-transport-15 Section 9.6:
+   * draft-ietf-moq-transport-16 Section 9.6:
    * The REQUESTS_BLOCKED message is sent when an endpoint would like to
    * send a new request, but cannot because the Request ID would exceed
    * the Maximum Request ID value sent by the peer.
@@ -2242,7 +2242,7 @@ export class SessionImpl implements Session {
   /**
    * Handle FETCH_OK message
    *
-   * draft-ietf-moq-transport-15 Section 9.17:
+   * draft-ietf-moq-transport-16 Section 9.17:
    * FETCH_OK is sent in response to a successful FETCH.
    */
   private handleFetchOk(payload: Uint8Array): Record<string, unknown> {
@@ -2267,7 +2267,7 @@ export class SessionImpl implements Session {
   /**
    * Handle PUBLISH_NAMESPACE message
    *
-   * draft-ietf-moq-transport-15 Section 9.20:
+   * draft-ietf-moq-transport-16 Section 9.20:
    * PUBLISH_NAMESPACE notifies that a Track Namespace has tracks available.
    */
   private handlePublishNamespace(payload: Uint8Array): Record<string, unknown> {
@@ -2295,7 +2295,7 @@ export class SessionImpl implements Session {
   /**
    * Handle PUBLISH_NAMESPACE_CANCEL message
    *
-   * draft-ietf-moq-transport-15 Section 9.22:
+   * draft-ietf-moq-transport-16 Section 9.22:
    * A subscriber sends PUBLISH_NAMESPACE_CANCEL to revoke acceptance
    * of a PUBLISH_NAMESPACE.
    */
@@ -2357,7 +2357,7 @@ export class SessionImpl implements Session {
   /**
    * UNSUBSCRIBE_NAMESPACE を送信する
    *
-   * draft-ietf-moq-transport-15 Section 9.24
+   * draft-ietf-moq-transport-16 Section 9.24
    */
   private async sendUnsubscribeNamespace(requestId: bigint): Promise<void> {
     const subscription = this.namespaceSubscriptions.get(requestId);
@@ -2414,7 +2414,7 @@ export class SessionImpl implements Session {
   /**
    * PUBLISH_NAMESPACE_DONE を送信する
    *
-   * draft-ietf-moq-transport-15 Section 9.21:
+   * draft-ietf-moq-transport-16 Section 9.21:
    * PUBLISH_NAMESPACE_DONE withdraws a previous PUBLISH_NAMESPACE.
    */
   private async sendPublishNamespaceDone(requestId: bigint): Promise<void> {
@@ -2424,7 +2424,7 @@ export class SessionImpl implements Session {
     }
 
     // PUBLISH_NAMESPACE_CANCEL を受信していたら PUBLISH_NAMESPACE_DONE を送信しない
-    // draft-ietf-moq-transport-15 Section 6.2:
+    // draft-ietf-moq-transport-16 Section 6.2:
     // "After receiving a PUBLISH_NAMESPACE_CANCEL, the publisher does not
     //  send PUBLISH_NAMESPACE_DONE."
     if (publication.state === "cancelled") {
@@ -2532,7 +2532,7 @@ export class SessionImpl implements Session {
 
   /**
    * Start datagram receiving loop
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    */
   private startDatagramLoop(): void {
     void (async () => {
@@ -2569,7 +2569,7 @@ export class SessionImpl implements Session {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    */
   private handleIncomingDatagram(data: Uint8Array): void {
     try {
@@ -2610,7 +2610,7 @@ export class SessionImpl implements Session {
 
   /**
    * Handle incoming unidirectional data stream
-   * draft-ietf-moq-transport-15 Section 10.4
+   * draft-ietf-moq-transport-16 Section 10.4
    *
    * ストリーミング処理: データが到着するたびにオブジェクトをパースして即座に配信する
    */

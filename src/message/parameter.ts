@@ -100,7 +100,7 @@ export function getParameterVarintValue(param: Parameter): bigint {
  * パラメータから Location 値を取得
  *
  * LARGEST_OBJECT (0x09) パラメータなど、Location を含むパラメータ用
- * draft-ietf-moq-transport-15 Section 9.2.1.9
+ * draft-ietf-moq-transport-16 Section 9.2.2.7
  */
 export function getParameterLocationValue(param: Parameter): Location {
   const [location] = decodeLocation(param.value, 0);
@@ -399,9 +399,9 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
 }
 
 /**
- * Subscription Filter (Section 5.1.2, Section 9.2.1.7)
+ * Subscription Filter (Section 5.1.2, Section 9.2.2.5)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-16:
  * Subscription Filter {
  *   Filter Type (i),
  *   [Start Location (Location),]
@@ -426,7 +426,7 @@ const FILTER_TYPE = {
 
 /**
  * Subscription Filter をエンコードする
- * draft-ietf-moq-transport-15 Section 9.2.1.7
+ * draft-ietf-moq-transport-16 Section 9.2.2.5
  */
 export function encodeSubscriptionFilter(filter: SubscriptionFilter): Uint8Array {
   const parts: Uint8Array[] = [];

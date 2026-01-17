@@ -28,7 +28,7 @@ export interface Fetcher {
   readonly endLocation: Location;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-15 Section 9.18
+   * draft-ietf-moq-transport-16 Section 9.18
    */
   cancel(): Promise<void>;
 }
@@ -135,7 +135,7 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * Fetch をキャンセル
-   * draft-ietf-moq-transport-15 Section 9.18
+   * draft-ietf-moq-transport-16 Section 9.18
    */
   async cancel(): Promise<void> {
     if (this.fetcherState === "closed") {

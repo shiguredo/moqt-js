@@ -1,60 +1,87 @@
 # moqt-js TODO
 
-RFC draft-ietf-moq-transport-15、draft-ietf-moq-loc-01、draft-ietf-moq-msf-latest 準拠の実装計画。
+RFC draft-ietf-moq-transport-16、draft-ietf-moq-loc-01、draft-ietf-moq-msf-latest 準拠の実装計画。
 
-## MOQT (draft-ietf-moq-transport-15)
+## MOQT (draft-ietf-moq-transport-16)
 
 ### 完了済み
 
+#### メッセージ
+
 - [x] CLIENT_SETUP / SERVER_SETUP
 - [x] SUBSCRIBE / SUBSCRIBE_OK / UNSUBSCRIBE
-- [x] SUBSCRIBE_UPDATE 送信
+- [x] REQUEST_UPDATE 送信 (旧 SUBSCRIBE_UPDATE)
 - [x] PUBLISH / PUBLISH_OK / PUBLISH_DONE
-- [x] REQUEST_OK / REQUEST_ERROR
+- [x] REQUEST_OK / REQUEST_ERROR (Retry Interval 対応)
+- [x] GOAWAY 送受信
+- [x] MAX_REQUEST_ID 受信
+- [x] REQUESTS_BLOCKED 受信
+- [x] FETCH / FETCH_OK
+- [x] TRACK_STATUS
+- [x] PUBLISH_NAMESPACE / PUBLISH_NAMESPACE_CANCEL
+
+#### データストリーム
+
 - [x] Subgroup Header (全 24 タイプ)
 - [x] Object Fields (Extensions/Status 対応)
 - [x] Object Datagram (encode/decode)
 - [x] Fetch Header/Object (encode/decode)
 - [x] Datagram 送受信 (Session, Publisher, Subscriber)
-- [x] Namespace (encode/decode, subscribeNamespace, publishNamespace)
-- [x] Joining Fetch (Standalone, Relative, Absolute)
-- [x] FORWARD パラメータ (encode/decode, PUBLISH_OK での受信処理)
+- [x] 同一トラックで Datagram と Stream の混在
 
-### セッション制御
+#### draft-16 対応済み
 
-- [x] GOAWAY 送受信 (Section 9.4)
-- [x] MAX_REQUEST_ID 受信 (Section 9.5)
-  - [ ] MAX_REQUEST_ID 送信メソッド
-- [x] REQUESTS_BLOCKED 受信 (Section 9.6)
-  - [ ] REQUESTS_BLOCKED 送信メソッド
-  - [ ] 受信時に MAX_REQUEST_ID を送信するロジック
+ワイヤフォーマット変更:
 
-### FETCH ワークフロー
+- [x] パラメータのデルタエンコーディング (Section 9.2)
+  - Type 値を差分としてエンコード（例: Type 0x02, 0x04 → Delta 2, 2）
+  - パラメータは Type の昇順でなければならない
+- [x] REQUEST_ERROR に Retry Interval 追加
+- [x] PUBLISH_NAMESPACE_DONE/CANCEL に Request ID 追加
+- [x] PUBLISH, SUBSCRIBE_OK, FETCH_OK に Extension Headers 追加
+- [x] Object Status の処理方法変更
 
-- [x] Session.fetch() メソッド
-- [x] Joining Fetch (Section 9.16.2)
-- [x] Fetcher インターフェース
+機能変更:
 
-### TRACK_STATUS
+- [x] SUBSCRIBE_UPDATE を REQUEST_UPDATE に変更 (Section 9.11)
+- [x] TRACK_STATUS から配信関連パラメータ削除
+- [x] TRACK_STATUS に LARGEST_OBJECT パラメータ追加
+- [x] SUBSCRIBE_NAMESPACE で空/ワイルドカード namespace 許可
+- [x] FETCH レスポンスで不明な範囲を許可
+- [x] DELIVERY_TIMEOUT=0 を禁止
+- [x] REQUEST_UPDATE で Start Location 減少許可
 
-- [x] encodeTrackStatusPayload / decodeTrackStatusPayload
-- [x] Session.trackStatus() メソッド
+draft-16 未対応:
 
-### Namespace ワークフロー
+- [ ] SUBSCRIBE_NAMESPACE を専用の双方向ストリームで送受信 (Section 6.1)
+- [ ] Subgroup 再オープン禁止
+
+### 未実装
+
+#### SUBSCRIBE_NAMESPACE (機能未完成)
+
+API は存在するが、実際にはトラック発見が動作しない。
 
 - [x] Session.subscribeNamespace() メソッド
 - [x] Session.publishNamespace() メソッド
-- [x] PUBLISH_NAMESPACE 受信処理（アナウンス受信）
-- [x] PUBLISH_NAMESPACE_CANCEL 受信処理
-- [ ] PUBLISH_NAMESPACE_DONE 受信処理（Publisher が終了したときの通知）
+- [x] SUBSCRIBE_NAMESPACE 送信
+- [x] REQUEST_OK/REQUEST_ERROR 受信
+- [ ] NAMESPACE 受信処理
+- [ ] NAMESPACE_DONE 受信処理
+- [ ] PUBLISH_NAMESPACE_DONE 受信処理
 
-### Datagram 対応
+#### セッション制御
 
-- [x] Session でのインライン Datagram 送信
-- [x] Datagram 受信ループ
-- [x] Publisher.sendDatagram() / Subscriber での Datagram 受信
+- [ ] MAX_REQUEST_ID 送信メソッド
+- [ ] REQUESTS_BLOCKED 送信メソッド
+- [ ] REQUESTS_BLOCKED 受信時に MAX_REQUEST_ID を送信するロジック
 
-### Version Specific Parameters (Section 9.2.1)
+#### REQUEST_UPDATE 受信
+
+- [ ] Publisher が Relay から REQUEST_UPDATE を受信したときの処理
+- [ ] FORWARD パラメータ変更時の forwardState 更新
+
+### Message Parameters (Section 9.2.2)
 
 完全実装（encode + receive 処理）:
 
@@ -74,14 +101,14 @@ RFC draft-ietf-moq-transport-15、draft-ietf-moq-loc-01、draft-ietf-moq-msf-lat
 Publisher 側での受信処理が必要:
 
 - [x] DYNAMIC_GROUPS (0x30) - encode のみ
-  - [ ] Publisher が SUBSCRIBE_UPDATE で NEW_GROUP_REQUEST を受信する処理
+  - [ ] Publisher が REQUEST_UPDATE で NEW_GROUP_REQUEST を受信する処理
 - [x] NEW_GROUP_REQUEST (0x32) - encode のみ
   - [ ] Publisher が受信して新グループを生成する処理
 
 未実装:
 
-- [ ] AUTHORIZATION_TOKEN (0x03) - Section 9.2.1.1
-  - [ ] Token 構造の encode/decode (Figure 4)
+- [ ] AUTHORIZATION_TOKEN (0x03) - Section 9.2.2.1
+  - [ ] Token 構造の encode/decode
   - [ ] Alias Type (DELETE, REGISTER, USE_ALIAS, USE_VALUE)
   - [ ] Token Alias の管理
   - [ ] エラー処理 (DUPLICATE_AUTH_TOKEN_ALIAS, UNKNOWN_AUTH_TOKEN_ALIAS, MALFORMED_AUTH_TOKEN, EXPIRED_AUTH_TOKEN)
@@ -90,12 +117,6 @@ Publisher 側での受信処理が必要:
 
 - [ ] MAX_AUTH_TOKEN_CACHE_SIZE (0x04) - Section 9.3.1.4
 - [x] MOQT_IMPLEMENTATION (0x07) - Section 9.3.1.6
-
-### 未実装
-
-- [ ] SUBSCRIBE_UPDATE 受信ハンドリング (Section 9.11)
-  - [ ] Publisher が Relay から SUBSCRIBE_UPDATE を受信したときの処理
-  - [ ] FORWARD パラメータ変更時の forwardState 更新
 
 ### Extension Headers (Section 11)
 

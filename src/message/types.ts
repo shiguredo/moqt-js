@@ -164,7 +164,7 @@ export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
 /**
  * PUBLISH_DONE Status Codes (Section 9.15)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-16:
  * - 0x0: INTERNAL_ERROR - An implementation specific or generic error occurred.
  * - 0x1: UNAUTHORIZED - The subscriber is no longer authorized to subscribe to the given track.
  * - 0x2: TRACK_ENDED - The track is no longer being published.

@@ -1,10 +1,10 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-15 Section 13.3
+ * draft-ietf-moq-transport-16 Section 13.4
  */
 
 /**
- * Session Termination Error Codes (Section 3.4)
+ * Session Termination Error Codes (Section 13.4.1)
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
@@ -33,7 +33,7 @@ export const SessionErrorCode = {
 export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErrorCode];
 
 /**
- * REQUEST_ERROR Codes (Section 9.8)
+ * REQUEST_ERROR Codes (Section 13.4.2)
  *
  * draft-ietf-moq-transport-16:
  * DUPLICATE_SUBSCRIPTION (0x31) を追加。
@@ -60,7 +60,7 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * PUBLISH_DONE Codes (Section 9.15)
+ * PUBLISH_DONE Codes (Section 13.4.3)
  */
 export const PublishDoneCode = {
   INTERNAL_ERROR: 0x0,
@@ -77,7 +77,7 @@ export const PublishDoneCode = {
 export type PublishDoneCode = (typeof PublishDoneCode)[keyof typeof PublishDoneCode];
 
 /**
- * Data Stream Reset Error Codes (Section 10.4.3)
+ * Data Stream Reset Error Codes (Section 13.4.4)
  */
 export const DataStreamErrorCode = {
   INTERNAL_ERROR: 0x0,

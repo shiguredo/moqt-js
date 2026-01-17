@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages Unit Tests
- * draft-ietf-moq-transport-15 Section 9.1
+ * draft-ietf-moq-transport-16 Section 9.1
  */
 
 import { test, assert } from "vitest";

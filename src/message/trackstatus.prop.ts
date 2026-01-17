@@ -1,6 +1,6 @@
 /**
  * MOQT TrackStatus Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.19
+ * draft-ietf-moq-transport-16 Section 9.19
  */
 
 import { test, assert } from "vitest";

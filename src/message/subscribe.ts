@@ -22,7 +22,7 @@ import { MessageType } from "./types";
 /**
  * SUBSCRIBE メッセージ (Section 9.9)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-16:
  * SUBSCRIBE does NOT include Track Alias.
  * Track Alias is returned by the publisher in SUBSCRIBE_OK.
  */
@@ -74,7 +74,7 @@ export interface Unsubscribe {
 /**
  * Subscribe のペイロードをエンコード
  *
- * draft-ietf-moq-transport-15 Section 9.9:
+ * draft-ietf-moq-transport-16 Section 9.9:
  * SUBSCRIBE Message {
  *   Type (i) = 0x3,
  *   Length (16),
