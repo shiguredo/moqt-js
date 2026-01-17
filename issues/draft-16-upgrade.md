@@ -39,11 +39,17 @@ moqt-js を draft-ietf-moq-transport-15 から draft-ietf-moq-transport-16 に�
 
 ### 優先度: 中 (機能変更)
 
-- [ ] SUBSCRIBE_NAMESPACE をストリームに配置
+- [ ] SUBSCRIBE_NAMESPACE の完全実装
   - https://github.com/moq-wg/moq-transport/pull/1344
   - 影響: `session.ts`
-  - コントロールストリームから専用ストリームへ移動
-  - 状態: TODO コメント追加済み（大規模なアーキテクチャ変更が必要）
+  - 状態: **機能未完成**（API は存在するが動作しない）
+    - `subscribeNamespace()` メソッド: 定義済み
+    - SUBSCRIBE_NAMESPACE 送信: 実装済み
+    - REQUEST_OK 受信: 実装済み
+    - NAMESPACE 受信: **未実装**
+    - NAMESPACE_DONE 受信: **未実装**
+    - 使用箇所: なし（devtools、examples で未使用）
+  - draft-16 対応: コントロールストリームから専用ストリームへ移動
 
 - [x] 同一トラックで Datagram と Stream の混在許可
   - https://github.com/moq-wg/moq-transport/pull/1350
@@ -162,7 +168,108 @@ moqt-js を draft-ietf-moq-transport-15 から draft-ietf-moq-transport-16 に�
 5. その他の変更
 6. Editorial
 
+## 詳細: SUBSCRIBE_NAMESPACE の完全実装
+
+### 概要
+
+SUBSCRIBE_NAMESPACE は現在 **機能未完成** の状態。API は存在するが、実際にはトラック発見が動作しない。
+
+- PR: https://github.com/moq-wg/moq-transport/pull/1344
+- 仕様: draft-ietf-moq-transport-16 Section 6.1, 9.25
+
+### 現在の実装状況
+
+| 項目                            | 状態                                   |
+| ------------------------------- | -------------------------------------- |
+| `subscribeNamespace()` メソッド | API として定義済み                     |
+| SUBSCRIBE_NAMESPACE 送信        | 実装済み（コントロールストリーム経由） |
+| REQUEST_OK/REQUEST_ERROR 受信   | 実装済み                               |
+| **NAMESPACE 受信**              | **未実装**                             |
+| **NAMESPACE_DONE 受信**         | **未実装**                             |
+| 使用箇所                        | なし（devtools、examples で未使用）    |
+
+`session.ts` のコントロールメッセージ処理で NAMESPACE メッセージの case が存在しない:
+
+```typescript
+// session.ts の handleControlMessage() で処理されているメッセージ:
+// - SUBSCRIBE_OK, PUBLISH_OK, PUBLISH_DONE
+// - REQUEST_ERROR, REQUEST_OK
+// - GOAWAY, MAX_REQUEST_ID, REQUESTS_BLOCKED
+// - FETCH_OK
+// - PUBLISH_NAMESPACE, PUBLISH_NAMESPACE_CANCEL
+//
+// NAMESPACE, NAMESPACE_DONE は処理されていない
+```
+
+### draft-16 での変更
+
+draft-16 では SUBSCRIBE_NAMESPACE の送受信方法が変更された:
+
+| 項目           | draft-15                         | draft-16                              |
+| -------------- | -------------------------------- | ------------------------------------- |
+| 送信先         | コントロールストリーム           | 専用の双方向ストリーム                |
+| レスポンス     | コントロールストリーム           | 同じ双方向ストリームのレスポンス側    |
+| NAMESPACE 受信 | コントロールストリーム           | 同じ双方向ストリーム                  |
+| キャンセル     | UNSUBSCRIBE_NAMESPACE メッセージ | ストリームを閉じる (FIN/RESET_STREAM) |
+
+### 仕様からの引用
+
+> The subscriber sends SUBSCRIBE_NAMESPACE on a new bidirectional stream and the publisher MUST send a single REQUEST_OK or REQUEST_ERROR as the first message on the bidirectional stream in response to a SUBSCRIBE_NAMESPACE.
+
+> A SUBSCRIBE_NAMESPACE can be cancelled by closing the stream with either a FIN or RESET_STREAM.
+
+### 実装タスク
+
+#### Phase 1: 基本機能の完成（draft-15 互換）
+
+1. **NAMESPACE 受信処理の実装**
+   - `handleControlMessage()` に NAMESPACE の case を追加
+   - `NamespaceSubscriptionCallbacks.onNamespace()` を呼び出す
+
+2. **NAMESPACE_DONE 受信処理の実装**
+   - `handleControlMessage()` に NAMESPACE_DONE の case を追加
+   - `NamespaceSubscriptionCallbacks.onNamespaceDone()` を呼び出す
+
+#### Phase 2: draft-16 対応
+
+1. **subscribeNamespace() の変更**
+   - `transport.createBidirectionalStream()` で新しい双方向ストリームを開く
+   - そのストリームで SUBSCRIBE_NAMESPACE メッセージを送信
+   - ストリームのレスポンス側で REQUEST_OK/REQUEST_ERROR を受信
+
+2. **専用ストリームでの NAMESPACE/NAMESPACE_DONE 受信**
+   - コントロールストリームではなく専用ストリームで受信
+   - ストリームごとの受信ループを実装
+
+3. **キャンセル処理の変更**
+   - UNSUBSCRIBE_NAMESPACE メッセージの送信を削除
+   - ストリームを閉じることでキャンセルを通知
+
+4. **ストリーム管理**
+   - 各 SUBSCRIBE_NAMESPACE に対応するストリームを追跡
+   - ストリームが閉じられた場合のクリーンアップ処理
+
+### アーキテクチャ上の課題
+
+1. **双方向ストリームの受信ループ**
+   - 現在、双方向ストリームはコントロールストリームのみを想定
+   - SUBSCRIBE_NAMESPACE 用のストリーム受信ループを追加する必要がある
+
+2. **メッセージルーティング**
+   - ストリームの最初のメッセージでルーティングを決定
+   - CLIENT_SETUP で始まるストリーム → コントロールストリーム
+   - SUBSCRIBE_NAMESPACE で始まるストリーム → Namespace ストリーム
+
+3. **サーバー側の考慮**
+   - moqt-js はクライアント専用だが、リレーサーバーとして動作する場合は
+     SUBSCRIBE_NAMESPACE を受信する側の実装も必要
+
+### 影響範囲
+
+- `session.ts`: subscribeNamespace() メソッド、ストリーム管理、NAMESPACE 受信処理
+- `message/namespace.ts`: NAMESPACE/NAMESPACE_DONE のエンコード/デコード（既存）
+
 ## 参考
 
 - refs/moq/draft-ietf-moq-transport-15.txt (現在の実装)
-- draft-16 の RFC ドキュメントを refs/moq/ に追加する必要あり
+- refs/moq/draft-ietf-moq-transport-16.txt (draft-16 仕様)
