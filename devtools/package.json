@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@preact/signals": "2.5.1",
+    "@preact/signals": "2.6.0",
     "moqt-js": "workspace:*",
     "preact": "10.28.2",
     "preact-iso": "2.11.1"
