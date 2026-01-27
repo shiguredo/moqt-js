@@ -1,8 +1,77 @@
 import { signal } from "@preact/signals";
 import * as settings from "../signals/connectionSettings";
 
+const showMoqtHelp = signal(false);
 const showMsfHelp = signal(false);
 const showLocHelp = signal(false);
+
+function MoqtHelpModal() {
+  if (!showMoqtHelp.value) return null;
+
+  return (
+    <div
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={() => (showMoqtHelp.value = false)}
+    >
+      <div
+        class="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-slate-700">MOQT (Media over QUIC Transport)</h3>
+          <button
+            onClick={() => (showMoqtHelp.value = false)}
+            class="text-slate-400 hover:text-slate-600"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-4 text-sm text-slate-600">
+          <div>
+            <p>
+              QUIC 上でメディアをリアルタイム配信するためのプロトコルです。
+              低遅延かつ信頼性の高いメディアストリーミングを実現します。
+            </p>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">主要概念</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>Client - サーバーに接続してメディアを送受信</li>
+              <li>Server - クライアント間のメディア中継</li>
+              <li>SUBSCRIBE - トラックの購読リクエスト</li>
+              <li>ANNOUNCE - トラックの公開通知</li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">データ構造</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>Track - メディアストリームの単位</li>
+              <li>Group - 関連オブジェクトの集合</li>
+              <li>Object - 最小のデータ単位</li>
+            </ul>
+          </div>
+          <div class="pt-2 border-t border-slate-200">
+            <a
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-blue-600 hover:text-blue-800 hover:underline"
+            >
+              draft-ietf-moq-transport
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function MsfHelpModal() {
   if (!showMsfHelp.value) return null;
@@ -58,7 +127,7 @@ function MsfHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://github.com/moq-wg/msf"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
@@ -118,7 +187,7 @@ function LocHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://github.com/moq-wg/loc"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
@@ -137,6 +206,7 @@ export function ConnectionSettings() {
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
       <MsfHelpModal />
       <LocHelpModal />
+      <MoqtHelpModal />
       <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -181,6 +251,20 @@ export function ConnectionSettings() {
               />
             </svg>
             LOC
+          </button>
+          <button
+            onClick={() => (showMoqtHelp.value = true)}
+            class="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            MOQT
           </button>
         </div>
       </h2>
