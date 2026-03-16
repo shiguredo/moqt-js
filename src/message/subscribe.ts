@@ -1,9 +1,10 @@
 /**
  * MOQT Subscribe Messages
- * draft-ietf-moq-transport-15 Section 9.9-9.12
+ * draft-ietf-moq-transport-17 Section 9.9-9.12
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   type Parameter,
   type TrackNamespace,
@@ -17,13 +18,16 @@ import { MessageType } from "./types";
 /**
  * SUBSCRIBE メッセージ (Section 9.9)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-16:
  * SUBSCRIBE does NOT include Track Alias.
  * Track Alias is returned by the publisher in SUBSCRIBE_OK.
  */
 export interface Subscribe {
   type: typeof MessageType.SUBSCRIBE;
   requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   parameters: Parameter[];
@@ -31,21 +35,30 @@ export interface Subscribe {
 
 /**
  * SUBSCRIBE_OK メッセージ (Section 9.10)
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
  */
 export interface SubscribeOk {
   type: typeof MessageType.SUBSCRIBE_OK;
   requestId: bigint;
   trackAlias: bigint;
   parameters: Parameter[];
+  trackProperties: Property[];
 }
 
 /**
- * SUBSCRIBE_UPDATE メッセージ (Section 9.11)
+ * REQUEST_UPDATE メッセージ (Section 9.11)
+ *
+ * draft-ietf-moq-transport-16:
+ * 既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
+ * パラメータを後から変更するために使用する。
  */
-export interface SubscribeUpdate {
-  type: typeof MessageType.SUBSCRIBE_UPDATE;
+export interface RequestUpdate {
+  type: typeof MessageType.REQUEST_UPDATE;
   requestId: bigint;
-  subscriptionRequestId: bigint;
+  existingRequestId: bigint;
   parameters: Parameter[];
 }
 
@@ -60,11 +73,12 @@ export interface Unsubscribe {
 /**
  * Subscribe のペイロードをエンコード
  *
- * draft-ietf-moq-transport-15 Section 9.9:
+ * draft-ietf-moq-transport-17 Section 9.9:
  * SUBSCRIBE Message {
  *   Type (i) = 0x3,
  *   Length (16),
  *   Request ID (i),
+ *   Required Request ID Delta (i),
  *   Track Namespace (..),
  *   Track Name Length (i),
  *   Track Name (..),
@@ -76,6 +90,7 @@ export function encodeSubscribePayload(msg: Subscribe): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
@@ -106,6 +121,12 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
+  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaConsumed;
+
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -127,6 +148,7 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   return {
     type: MessageType.SUBSCRIBE,
     requestId,
+    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     parameters,
@@ -139,6 +161,19 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  */
+/**
+ * draft-ietf-moq-transport-16 Section 9.10:
+ * SUBSCRIBE_OK Message {
+ *   Type (i) = 0x4,
+ *   Length (16),
+ *   Request ID (i),
+ *   Track Alias (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...,
+ *   Track Extensions Length (i),
+ *   Track Extensions (..)
+ * }
+ */
 export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
@@ -148,6 +183,11 @@ export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   for (const param of msg.parameters) {
     parts.push(encodeParameter(param));
   }
+
+  // Track Extensions
+  const propertiesData = encodeProperties(msg.trackProperties);
+  parts.push(encodeVarint(propertiesData.length));
+  parts.push(propertiesData);
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -181,22 +221,43 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
     totalConsumed += paramConsumed;
   }
 
+  // Track Extensions
+  const [propertiesLen, propertiesLenConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += propertiesLenConsumed;
+
+  const propertiesData = data.slice(
+    offset + totalConsumed,
+    offset + totalConsumed + Number(propertiesLen),
+  );
+  const trackProperties = decodeProperties(propertiesData);
+
   return {
     type: MessageType.SUBSCRIBE_OK,
     requestId,
     trackAlias,
     parameters,
+    trackProperties,
   };
 }
 
 /**
- * SubscribeUpdate のペイロードをエンコード
+ * RequestUpdate のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-16 Section 9.11:
+ * REQUEST_UPDATE Message {
+ *   Type (i) = 0x2,
+ *   Length (16),
+ *   Request ID (i),
+ *   Existing Request ID (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...
+ * }
  */
-export function encodeSubscribeUpdatePayload(msg: SubscribeUpdate): Uint8Array {
+export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.subscriptionRequestId));
+  parts.push(encodeVarint(msg.existingRequestId));
   parts.push(encodeVarint(msg.parameters.length));
   for (const param of msg.parameters) {
     parts.push(encodeParameter(param));
@@ -213,21 +274,21 @@ export function encodeSubscribeUpdatePayload(msg: SubscribeUpdate): Uint8Array {
 }
 
 /**
- * SubscribeUpdate のペイロードをデコード
+ * RequestUpdate のペイロードをデコード
  *
  * リレーサーバーおよび Publisher 実装用。
  * moqt-js はクライアント専用のため、現在ランタイムでは使用しない。
- * TODO: Publisher として SUBSCRIBE_UPDATE を受信する処理の実装。
+ * TODO: Publisher として REQUEST_UPDATE を受信する処理の実装。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  */
-export function decodeSubscribeUpdatePayload(data: Uint8Array, offset = 0): SubscribeUpdate {
+export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): RequestUpdate {
   let totalConsumed = 0;
 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [subscriptionRequestId, subReqIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += subReqIdConsumed;
+  const [existingRequestId, existingReqIdConsumed] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += existingReqIdConsumed;
 
   const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += numParamsConsumed;
@@ -240,9 +301,9 @@ export function decodeSubscribeUpdatePayload(data: Uint8Array, offset = 0): Subs
   }
 
   return {
-    type: MessageType.SUBSCRIBE_UPDATE,
+    type: MessageType.REQUEST_UPDATE,
     requestId,
-    subscriptionRequestId,
+    existingRequestId,
     parameters,
   };
 }

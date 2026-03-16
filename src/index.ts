@@ -2,7 +2,7 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-15
+ * draft-ietf-moq-transport-16
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
@@ -32,11 +32,14 @@ export type {
 // Re-export message types
 export type { SubscriptionFilter, Location, Parameter } from "./message";
 export type { Publisher, SendObjectParams, SendDatagramParams } from "./publisher";
-export type { Subscriber, SubscribeUpdateOptions } from "./subscriber";
+export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
 
 // Re-export error types
 export { MoqtError, SessionError, RequestError, SessionErrorCode, RequestErrorCode } from "./error";
+
+// Re-export GREASE (draft-ietf-moq-transport-17 Section 13)
+export { isGreaseValue, generateGreaseValue } from "./grease";
 
 // Re-export LOC (draft-ietf-moq-loc)
 export * as LOC from "./loc";
@@ -77,26 +80,28 @@ export {
 // Codec types
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
 
-// Re-export MOQT Extensions (draft-ietf-moq-transport-15 Section 11)
+// Re-export MOQT Extensions (draft-ietf-moq-transport-16 Section 11)
 export {
-  MOQTExtensionHeaderId,
-  type ExtensionHeader,
+  MOQTPropertyId,
+  TrackPropertyId,
+  PropertyTypeRange,
+  type Property,
   type PriorGroupIdGap,
   type PriorObjectIdGap,
-  type ImmutableExtensions,
-  type ParsedExtensionHeaders,
-  encodeExtensionHeader,
-  encodeExtensionHeaders,
+  type ImmutableProperties,
+  type ParsedProperties,
+  encodeProperty,
+  encodeProperties,
   encodePriorGroupIdGap,
   decodePriorGroupIdGap,
   encodePriorObjectIdGap,
   decodePriorObjectIdGap,
-  encodeImmutableExtensions,
-  decodeImmutableExtensions,
-  parseExtensionHeaders,
+  encodeImmutableProperties,
+  decodeImmutableProperties,
+  parseProperties,
   calculateSkippedGroups,
   calculateSkippedObjects,
-} from "./extensions";
+} from "./properties";
 
 // Re-export Data Stream types and functions
 export {
@@ -106,7 +111,7 @@ export {
   encodeSubgroupHeader,
   decodeSubgroupHeader,
   hasContainsEndOfGroup,
-  hasExtensionsPresent,
+  hasPropertiesPresent,
   // Object Fields
   type DecodedObjectFields,
   encodeObjectFields,
@@ -126,6 +131,7 @@ export {
   decodeFetchHeader,
   // Fetch Object Fields
   FetchSerializationFlags,
+  type EndOfRangeType,
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,
@@ -185,7 +191,7 @@ export async function connect(
   // Create session
   const session = new SessionImpl(transport, callbacks ?? {});
 
-  // Initialize MOQT session (CLIENT_SETUP / SERVER_SETUP exchange)
+  // MOQT セッションを初期化する (SETUP メッセージの交換)
   await session.initialize();
 
   return session;

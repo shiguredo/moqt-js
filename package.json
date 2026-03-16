@@ -25,31 +25,28 @@
     }
   },
   "scripts": {
-    "dev": "vite devtools",
-    "dev:examples": "vite examples",
-    "build": "vite build && tsc -p tsconfig.build.json",
-    "build:devtools": "vite build devtools",
-    "build:examples": "vite build examples",
-    "fmt": "oxfmt --write .",
-    "lint": "oxlint --type-aware",
+    "dev": "vp dev devtools",
+    "dev:examples": "vp dev examples",
+    "build": "vp build && tsc -p tsconfig.build.json",
+    "build:devtools": "vp build devtools",
+    "build:examples": "vp build examples",
+    "fmt": "vp fmt --write .",
+    "lint": "vp lint --type-aware",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "e2e-test": "pnpm build && playwright test --project='chromium'",
-    "e2e-test-chrome": "pnpm build && playwright test --project='Google Chrome*'",
-    "e2e-test-edge": "pnpm build && playwright test --project='Microsoft Edge*'",
-    "e2e-test-webkit": "pnpm build && playwright test --project='WebKit'"
+    "test": "vp test",
+    "test:cov": "vp test --coverage",
+    "test:watch": "vp test --watch",
+    "e2e-test": "vp run build && playwright test --project='chromium'",
+    "e2e-test-chrome": "vp run build && playwright test --project='Google Chrome*'",
+    "e2e-test-edge": "vp run build && playwright test --project='Microsoft Edge*'",
+    "e2e-test-webkit": "vp run build && playwright test --project='WebKit'"
   },
   "devDependencies": {
-    "@playwright/test": "1.57.0",
-    "@types/node": "25.0.7",
-    "@vitest/coverage-v8": "4.0.17",
-    "fast-check": "4.5.3",
-    "oxfmt": "0.24.0",
-    "oxlint": "1.39.0",
-    "oxlint-tsgolint": "0.11.0",
+    "@playwright/test": "1.58.2",
+    "@types/node": "25.5.0",
+    "fast-check": "4.6.0",
     "typescript": "5.9.3",
-    "vite": "7.3.1",
-    "vitest": "4.0.17"
-  }
+    "vite-plus": "0.1.11"
+  },
+  "packageManager": "pnpm@10.32.1"
 }

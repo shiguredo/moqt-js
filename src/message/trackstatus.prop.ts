@@ -1,6 +1,6 @@
 /**
  * MOQT TrackStatus Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.19
+ * draft-ietf-moq-transport-16 Section 9.19
  */
 
 import { test, assert } from "vitest";
@@ -14,8 +14,13 @@ import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from ".
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 
+/**
+ * draft-ietf-moq-transport-17 Section 2.3:
+ * ゼロ要素 (空) のネームスペースを許可する。
+ * https://github.com/moq-wg/moq-transport/pull/1472
+ */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
-  minLength: 1,
+  minLength: 0,
   maxLength: 5,
 });
 

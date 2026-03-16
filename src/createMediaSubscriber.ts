@@ -353,10 +353,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
           onEnd: () => {
             // FETCH 完了
           },
-          onError: (error: Error) => {
+          onError: (_error: Error) => {
             // LARGEST_OBJECT がない場合など
             // リアルタイム配信を待つ（object コールバックで受信）
-            console.warn("Catalog joiningFetch error:", error.message);
           },
         } as JoiningFetchOptions,
       },
@@ -594,14 +593,14 @@ class MediaSubscriberImpl implements MediaSubscriber {
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
 
     this.audioStats.framesReceived++;
-    this.audioStats.bytesReceived += obj.payload.length + (obj.extensions?.length ?? 0);
+    this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
 
     // LOC から情報を取得
     let timestamp = 0;
-    if (obj.extensions && obj.extensions.length > 0) {
-      const headerExtensions = LOC.decodeAudioHeaderExtensions(obj.extensions);
-      if (headerExtensions.captureTimestamp !== undefined) {
-        timestamp = Number(headerExtensions.captureTimestamp);
+    if (obj.properties && obj.properties.length > 0) {
+      const locProperties = LOC.decodeAudioProperties(obj.properties);
+      if (locProperties.timestamp !== undefined) {
+        timestamp = Number(locProperties.timestamp);
       }
     }
 
@@ -615,18 +614,18 @@ class MediaSubscriberImpl implements MediaSubscriber {
     // LOC から情報を取得
     let isKeyFrame = false;
     let timestamp = 0;
-    if (obj.extensions && obj.extensions.length > 0) {
-      const headerExtensions = LOC.decodeVideoHeaderExtensions(obj.extensions);
-      if (headerExtensions.captureTimestamp !== undefined) {
-        timestamp = Number(headerExtensions.captureTimestamp);
+    if (obj.properties && obj.properties.length > 0) {
+      const locProperties = LOC.decodeVideoProperties(obj.properties);
+      if (locProperties.timestamp !== undefined) {
+        timestamp = Number(locProperties.timestamp);
       }
-      if (headerExtensions.frameMarking) {
-        isKeyFrame = headerExtensions.frameMarking.isIndependent;
+      if (locProperties.frameMarking) {
+        isKeyFrame = locProperties.frameMarking.isIndependent;
       }
     }
 
     this.videoStats.framesReceived++;
-    this.videoStats.bytesReceived += obj.payload.length + (obj.extensions?.length ?? 0);
+    this.videoStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
     if (isKeyFrame) {
       this.videoStats.keyFramesReceived++;
     }
