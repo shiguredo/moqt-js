@@ -9,6 +9,9 @@
 - 一時的な修正はしないこと
 - 変数名を省略しないこと
 - 何か変更をする場合はテストを先に修正すること
+- コメントは全て日本語
+- ログメッセージは全て英語
+- エラーメッセージは全て英語
 
 ## RFC
 
@@ -60,17 +63,52 @@
 
 ## ビルド
 
-- `pnpm build` で moqt-js をビルドすること
-- `pnpm run build:devtools` で devtools をビルドすること
+- `vp run build` で moqt-js をビルドすること（vite build + tsc）
+- `vp run build:devtools` で devtools をビルドすること
+
+## issues について
+
+- 番号が大きい issues から順番に対応すること
+- `{seqnum}-{category}-{short-description}.md` という命名規則を守ること
+  - seqnum は `issues/SEQUENCE` ファイルの値を使うこと（9999 を超えたら 5 桁にする）
+  - issue を新規作成したら `issues/SEQUENCE` の値を +1 して更新すること
+  - 例: `0001-bug-fix-parse-error.md`
+  - 例: `0002-fmt-enhance-support-for-joins.md`
+- 仕様的に対応が難しい場合は issues/pending/ へ移動すること
+- 1 issue 完了ごとに 1 コミットすること
+
+### issue が実は解決してなかった場合
+
+- reopen の理由を issue に書いて issues/closed から issues/ に移動すること (git mv を使うこと)
+
+### バグが見つかった場合
+
+- issues/ 以下にバグを markdown 形式で登録すること
+- バグは再現手順を明確にすること
+- できる限りの情報を
+
+### バグを修正した場合
+
+- issues/ 以下のバグを修正した場合は、修正内容を markdown 形式で記載すること
+- issues/closed に移動すること (git mv を使うこと)
+- issues/closed に移動するときは issue ファイルに「## 解決方法」セクションを追記し、何をどう修正したかを明記すること
+
+### 設計判断が必要な issue の場合
+
+- 外部依存の追加や設計判断が必要で保留中の issue は `issues/pending/` に置くこと
+- issues/pending に移動するときは issue ファイルに pending にした理由を明記すること
+- pending の issue は修正せずそのまま残す（close しない）
+- **独自機能の追加が必要な issue は `issues/pending/` に移動すること**
+  - 独自は設計判断であり、実装前にユーザーの承認が必要
 
 ## pre-commit
 
 コミット前には必ず以下を実行すること。
 
-- `pnpm run test` でテストをすること
-- `pnpm run fmt` でコードをフォーマットすること
-- `pnpm run lint` でコードの静的解析を行うこと
-- `pnpm run typecheck` で型チェックを行うこと
+- `vp test` でテストをすること
+- `vp fmt` でコードをフォーマットすること
+- `vp lint` でコードの静的解析を行うこと
+- `vp run typecheck` で型チェックを行うこと
 - `package.json` の `dependencies` が `{}` でも削除しないこと
 
 ## テスト

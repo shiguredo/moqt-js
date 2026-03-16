@@ -4,19 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview"
   },
   "dependencies": {
-    "@preact/signals": "2.5.1",
+    "@preact/signals": "2.8.2",
     "moqt-js": "workspace:*",
-    "preact": "10.28.2",
+    "preact": "10.29.0",
     "preact-iso": "2.11.1"
   },
   "devDependencies": {
-    "@preact/preset-vite": "2.10.2",
-    "@tailwindcss/vite": "4.1.18",
-    "tailwindcss": "4.1.18"
+    "@preact/preset-vite": "2.10.4",
+    "@tailwindcss/vite": "4.2.1",
+    "tailwindcss": "4.2.1"
   }
 }

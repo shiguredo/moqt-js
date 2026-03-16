@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.12-9.15
+ * draft-ietf-moq-transport-17 Section 9.9-9.12
  */
 
 import { test, assert } from "vitest";
@@ -10,14 +10,15 @@ import {
   decodeSubscribePayload,
   encodeSubscribeOkPayload,
   decodeSubscribeOkPayload,
-  encodeSubscribeUpdatePayload,
-  decodeSubscribeUpdatePayload,
+  encodeRequestUpdatePayload,
+  decodeRequestUpdatePayload,
   encodeUnsubscribePayload,
   decodeUnsubscribePayload,
 } from "./subscribe";
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
+import type { Property } from "../properties";
 
 const evenParameterArb = fc
   .record({
@@ -35,8 +36,38 @@ const parameterArb: fc.Arbitrary<Parameter> = fc.oneof(evenParameterArb, oddPara
 
 const parametersArb = fc.array(parameterArb, { minLength: 0, maxLength: 3 });
 
+/**
+ * Track Extensions arbitrary
+ *
+ * draft-ietf-moq-transport-16:
+ * SUBSCRIBE_OK に Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
+ */
+const evenPropertyArb = fc
+  .record({
+    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n),
+    value: fc.bigInt({ min: 0n, max: 1000000n }),
+  })
+  .map(({ id, value }) => ({ id, value }));
+
+const oddPropertyArb = fc
+  .record({
+    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n + 1n),
+    data: fc.uint8Array({ minLength: 0, maxLength: 20 }),
+  })
+  .map(({ id, data }) => ({ id, data }));
+
+const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
+
+const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
+
+/**
+ * draft-ietf-moq-transport-17 Section 2.3:
+ * ゼロ要素 (空) のネームスペースを許可する。
+ * https://github.com/moq-wg/moq-transport/pull/1472
+ */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
-  minLength: 1,
+  minLength: 0,
   maxLength: 5,
 });
 
@@ -48,13 +79,15 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       trackNameArb,
       parametersArb,
-      (requestId, namespaceParts, trackName, parameters) => {
+      (requestId, requiredRequestIdDelta, namespaceParts, trackName, parameters) => {
         const original = {
           type: MessageType.SUBSCRIBE as typeof MessageType.SUBSCRIBE,
           requestId,
+          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           trackName,
           parameters,
@@ -65,6 +98,7 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 
         assert.equal(decoded.type, MessageType.SUBSCRIBE);
         assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.deepEqual(decoded.trackName, trackName);
         assert.equal(decoded.parameters.length, parameters.length);
@@ -77,18 +111,25 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
   );
 });
 
+/**
+ * draft-ietf-moq-transport-16:
+ * SUBSCRIBE_OK に Track Extensions が追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1374
+ */
 test("SubscribeOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      (requestId, trackAlias, parameters) => {
+      trackPropertiesArb,
+      (requestId, trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.SUBSCRIBE_OK as typeof MessageType.SUBSCRIBE_OK,
           requestId,
           trackAlias,
           parameters,
+          trackProperties,
         };
 
         const encoded = encodeSubscribeOkPayload(original);
@@ -102,31 +143,50 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
+        // Track Extensions はソートされるため、ソート後の値を比較
+        const sortedOriginal = [...trackProperties].sort((a, b) =>
+          a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+        );
+        assert.equal(decoded.trackProperties.length, trackProperties.length);
+        for (let i = 0; i < sortedOriginal.length; i++) {
+          assert.equal(decoded.trackProperties[i].id, sortedOriginal[i].id);
+          if (sortedOriginal[i].value !== undefined) {
+            assert.equal(decoded.trackProperties[i].value, sortedOriginal[i].value);
+          }
+          if (sortedOriginal[i].data !== undefined) {
+            assert.deepEqual(decoded.trackProperties[i].data, sortedOriginal[i].data);
+          }
+        }
       },
     ),
   );
 });
 
-test("SubscribeUpdate のエンコード・デコードがラウンドトリップする", () => {
+/**
+ * draft-ietf-moq-transport-16:
+ * REQUEST_UPDATE は既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
+ * パラメータを後から変更するために使用する。
+ */
+test("RequestUpdate のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      (requestId, subscriptionRequestId, parameters) => {
+      (requestId, existingRequestId, parameters) => {
         const original = {
-          type: MessageType.SUBSCRIBE_UPDATE as typeof MessageType.SUBSCRIBE_UPDATE,
+          type: MessageType.REQUEST_UPDATE as typeof MessageType.REQUEST_UPDATE,
           requestId,
-          subscriptionRequestId,
+          existingRequestId,
           parameters,
         };
 
-        const encoded = encodeSubscribeUpdatePayload(original);
-        const decoded = decodeSubscribeUpdatePayload(encoded);
+        const encoded = encodeRequestUpdatePayload(original);
+        const decoded = decodeRequestUpdatePayload(encoded);
 
-        assert.equal(decoded.type, MessageType.SUBSCRIBE_UPDATE);
+        assert.equal(decoded.type, MessageType.REQUEST_UPDATE);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.subscriptionRequestId, subscriptionRequestId);
+        assert.equal(decoded.existingRequestId, existingRequestId);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
           assert.equal(decoded.parameters[i].type, parameters[i].type);

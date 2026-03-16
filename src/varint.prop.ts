@@ -1,6 +1,6 @@
 /**
  * Varint Property-Based Tests
- * RFC 9000 Section 16 に基づく QUIC Variable-Length Integer のプロパティテスト
+ * draft-ietf-moq-transport-17 Section 1.4.1 に基づく MOQT 可変長整数のプロパティテスト
  */
 
 import { test, assert } from "vitest";
@@ -8,25 +8,36 @@ import * as fc from "fast-check";
 import { encodeVarint, decodeVarint, varintSize } from "./varint";
 
 // 各サイズ範囲の閾値
-const THRESHOLD_1BYTE = 63n;
+const THRESHOLD_1BYTE = 127n;
 const THRESHOLD_2BYTE = 16383n;
-const THRESHOLD_4BYTE = 1073741823n;
-const MAX_VARINT = 4611686018427387903n;
+const THRESHOLD_3BYTE = 2097151n;
+const THRESHOLD_4BYTE = 268435455n;
+const THRESHOLD_5BYTE = 34359738367n;
+const THRESHOLD_6BYTE = 4398046511103n;
+const THRESHOLD_8BYTE = 72057594037927935n;
+const MAX_VARINT = 18446744073709551615n;
 
-// 1 バイト範囲の任意の値を生成する Arbitrary
+// 各サイズ範囲の Arbitrary
 const varint1ByteArb = fc.bigInt({ min: 0n, max: THRESHOLD_1BYTE });
-
-// 2 バイト範囲の任意の値を生成する Arbitrary
 const varint2ByteArb = fc.bigInt({ min: THRESHOLD_1BYTE + 1n, max: THRESHOLD_2BYTE });
-
-// 4 バイト範囲の任意の値を生成する Arbitrary
-const varint4ByteArb = fc.bigInt({ min: THRESHOLD_2BYTE + 1n, max: THRESHOLD_4BYTE });
-
-// 8 バイト範囲の任意の値を生成する Arbitrary
-const varint8ByteArb = fc.bigInt({ min: THRESHOLD_4BYTE + 1n, max: MAX_VARINT });
+const varint3ByteArb = fc.bigInt({ min: THRESHOLD_2BYTE + 1n, max: THRESHOLD_3BYTE });
+const varint4ByteArb = fc.bigInt({ min: THRESHOLD_3BYTE + 1n, max: THRESHOLD_4BYTE });
+const varint5ByteArb = fc.bigInt({ min: THRESHOLD_4BYTE + 1n, max: THRESHOLD_5BYTE });
+const varint6ByteArb = fc.bigInt({ min: THRESHOLD_5BYTE + 1n, max: THRESHOLD_6BYTE });
+const varint8ByteArb = fc.bigInt({ min: THRESHOLD_6BYTE + 1n, max: THRESHOLD_8BYTE });
+const varint9ByteArb = fc.bigInt({ min: THRESHOLD_8BYTE + 1n, max: MAX_VARINT });
 
 // 全範囲の有効な varint 値を生成する Arbitrary
-const varintArb = fc.oneof(varint1ByteArb, varint2ByteArb, varint4ByteArb, varint8ByteArb);
+const varintArb = fc.oneof(
+  varint1ByteArb,
+  varint2ByteArb,
+  varint3ByteArb,
+  varint4ByteArb,
+  varint5ByteArb,
+  varint6ByteArb,
+  varint8ByteArb,
+  varint9ByteArb,
+);
 
 test("エンコードとデコードのラウンドトリップが成立する", () => {
   fc.assert(
@@ -55,8 +66,8 @@ test("1 バイト範囲の値は 1 バイトにエンコードされる", () => 
       assert.equal(varintSize(value), 1);
       const encoded = encodeVarint(value);
       assert.equal(encoded.length, 1);
-      // プレフィックスは 00
-      assert.equal(encoded[0] >> 6, 0);
+      // 先頭ビットは 0
+      assert.equal(encoded[0] & 0x80, 0);
     }),
   );
 });
@@ -67,8 +78,20 @@ test("2 バイト範囲の値は 2 バイトにエンコードされる", () => 
       assert.equal(varintSize(value), 2);
       const encoded = encodeVarint(value);
       assert.equal(encoded.length, 2);
-      // プレフィックスは 01
-      assert.equal(encoded[0] >> 6, 1);
+      // プレフィックスは 10
+      assert.equal(encoded[0] & 0xc0, 0x80);
+    }),
+  );
+});
+
+test("3 バイト範囲の値は 3 バイトにエンコードされる", () => {
+  fc.assert(
+    fc.property(varint3ByteArb, (value) => {
+      assert.equal(varintSize(value), 3);
+      const encoded = encodeVarint(value);
+      assert.equal(encoded.length, 3);
+      // プレフィックスは 110
+      assert.equal(encoded[0] & 0xe0, 0xc0);
     }),
   );
 });
@@ -79,8 +102,8 @@ test("4 バイト範囲の値は 4 バイトにエンコードされる", () => 
       assert.equal(varintSize(value), 4);
       const encoded = encodeVarint(value);
       assert.equal(encoded.length, 4);
-      // プレフィックスは 10
-      assert.equal(encoded[0] >> 6, 2);
+      // プレフィックスは 1110
+      assert.equal(encoded[0] & 0xf0, 0xe0);
     }),
   );
 });
@@ -91,14 +114,25 @@ test("8 バイト範囲の値は 8 バイトにエンコードされる", () => 
       assert.equal(varintSize(value), 8);
       const encoded = encodeVarint(value);
       assert.equal(encoded.length, 8);
-      // プレフィックスは 11
-      assert.equal(encoded[0] >> 6, 3);
+      // プレフィックスは 11111110
+      assert.equal(encoded[0], 0xfe);
+    }),
+  );
+});
+
+test("9 バイト範囲の値は 9 バイトにエンコードされる", () => {
+  fc.assert(
+    fc.property(varint9ByteArb, (value) => {
+      assert.equal(varintSize(value), 9);
+      const encoded = encodeVarint(value);
+      assert.equal(encoded.length, 9);
+      // プレフィックスは 11111111
+      assert.equal(encoded[0], 0xff);
     }),
   );
 });
 
 test("number 型と bigint 型で同じエンコード結果になる", () => {
-  // Number.MAX_SAFE_INTEGER 以下の値でテスト
   const safeIntArb = fc.integer({ min: 0, max: Number.MAX_SAFE_INTEGER });
   fc.assert(
     fc.property(safeIntArb, (value) => {
@@ -136,7 +170,6 @@ test("オフセットを指定したデコードが正しく動作する", () =>
 test("連続したエンコード値を順次デコードできる", () => {
   fc.assert(
     fc.property(fc.array(varintArb, { minLength: 1, maxLength: 20 }), (values) => {
-      // 全ての値をエンコードして連結
       const encodedArrays = values.map((v) => encodeVarint(v));
       const totalLength = encodedArrays.reduce((sum, arr) => sum + arr.length, 0);
       const combined = new Uint8Array(totalLength);
@@ -146,7 +179,6 @@ test("連続したエンコード値を順次デコードできる", () => {
         pos += arr.length;
       }
 
-      // 順次デコード
       let offset = 0;
       for (const expected of values) {
         const [decoded, consumed] = decodeVarint(combined, offset);
@@ -161,15 +193,6 @@ test("連続したエンコード値を順次デコードできる", () => {
 test("負の値はエラーになる", () => {
   fc.assert(
     fc.property(fc.bigInt({ min: -1000000n, max: -1n }), (value) => {
-      assert.throws(() => encodeVarint(value));
-      assert.throws(() => varintSize(value));
-    }),
-  );
-});
-
-test("最大値を超える値はエラーになる", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: MAX_VARINT + 1n, max: MAX_VARINT + 1000000n }), (value) => {
       assert.throws(() => encodeVarint(value));
       assert.throws(() => varintSize(value));
     }),

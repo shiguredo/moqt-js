@@ -742,7 +742,7 @@ export function DebugPanel() {
                     </button>
                   </div>
                   {/* データ（展開時のみ表示） */}
-                  {(log.data || log.payload) && isExpanded && (
+                  {(log.data ?? log.payload) && isExpanded && (
                     <div class="mx-2 mb-2">
                       {/* タブ */}
                       {log.payload && (

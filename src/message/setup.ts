@@ -1,156 +1,81 @@
 /**
  * MOQT Setup Messages
- * draft-ietf-moq-transport-15 Section 9.3
+ * draft-ietf-moq-transport-17 Section 9.4
+ *
+ * draft-ietf-moq-transport-17 Section 9.4:
+ * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
+ * https://github.com/moq-wg/moq-transport/pull/1510
  */
 
-import { encodeVarint } from "../varint";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
-import {
-  type Parameter,
-  decodeParameters,
-  encodeParameter,
-  getParameterVarintValue,
-} from "./parameter";
-import { MessageType, SetupParameterType } from "./types";
+import { type Parameter, decodeParameters, encodeParameters } from "./parameter";
+import { MessageType, SetupOptionType } from "./types";
 
 /**
- * CLIENT_SETUP メッセージ
+ * SETUP メッセージ
+ *
+ * draft-ietf-moq-transport-17 Section 9.4:
+ * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
+ * https://github.com/moq-wg/moq-transport/pull/1510
  */
-export interface ClientSetup {
-  type: typeof MessageType.CLIENT_SETUP;
+export interface Setup {
+  type: typeof MessageType.SETUP;
   parameters: Parameter[];
 }
 
 /**
- * SERVER_SETUP メッセージ
+ * Setup を作成
  */
-export interface ServerSetup {
-  type: typeof MessageType.SERVER_SETUP;
-  parameters: Parameter[];
-}
-
-/**
- * ClientSetup を作成
- */
-export function createClientSetup(options?: {
-  path?: string;
-  maxRequestId?: bigint;
-  authority?: string;
-}): ClientSetup {
+export function createSetup(options?: { path?: string; authority?: string }): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
 
   if (options?.path) {
     parameters.push({
-      type: SetupParameterType.PATH,
+      type: SetupOptionType.PATH,
       value: encoder.encode(options.path),
-    });
-  }
-
-  if (options?.maxRequestId !== undefined) {
-    parameters.push({
-      type: SetupParameterType.MAX_REQUEST_ID,
-      value: encodeVarint(options.maxRequestId),
     });
   }
 
   if (options?.authority) {
     parameters.push({
-      type: SetupParameterType.AUTHORITY,
+      type: SetupOptionType.AUTHORITY,
       value: encoder.encode(options.authority),
     });
   }
 
-  // MOQT_IMPLEMENTATION (0x07) - Section 9.3.1.6
+  // MOQT_IMPLEMENTATION (0x07) - Section 9.4.1.4
   // 実装名とバージョンを送信
   parameters.push({
-    type: SetupParameterType.MOQT_IMPLEMENTATION,
+    type: SetupOptionType.MOQT_IMPLEMENTATION,
     value: encoder.encode(MOQT_IMPLEMENTATION_VALUE),
   });
 
   return {
-    type: MessageType.CLIENT_SETUP,
+    type: MessageType.SETUP,
     parameters,
   };
 }
 
 /**
- * ServerSetup を作成
+ * Setup のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17:
+ * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
  */
-export function createServerSetup(options?: { maxRequestId?: bigint }): ServerSetup {
-  const parameters: Parameter[] = [];
-
-  if (options?.maxRequestId !== undefined) {
-    parameters.push({
-      type: SetupParameterType.MAX_REQUEST_ID,
-      value: encodeVarint(options.maxRequestId),
-    });
-  }
-
-  return {
-    type: MessageType.SERVER_SETUP,
-    parameters,
-  };
+export function encodeSetupPayload(msg: Setup): Uint8Array {
+  // delta encoding のために type の昇順でソート
+  const sortedParams = [...msg.parameters].sort((a, b) => a.type - b.type);
+  return encodeParameters(sortedParams);
 }
 
 /**
- * ClientSetup のペイロードをエンコード
+ * Setup のペイロードをデコード
  */
-export function encodeClientSetupPayload(msg: ClientSetup): Uint8Array {
-  const countBytes = encodeVarint(msg.parameters.length);
-  const paramBytes = msg.parameters.map(encodeParameter);
-
-  const totalLength = countBytes.length + paramBytes.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  result.set(countBytes, 0);
-
-  let offset = countBytes.length;
-  for (const pb of paramBytes) {
-    result.set(pb, offset);
-    offset += pb.length;
-  }
-
-  return result;
-}
-
-/**
- * ServerSetup のペイロードをエンコード
- */
-export function encodeServerSetupPayload(msg: ServerSetup): Uint8Array {
-  const countBytes = encodeVarint(msg.parameters.length);
-  const paramBytes = msg.parameters.map(encodeParameter);
-
-  const totalLength = countBytes.length + paramBytes.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  result.set(countBytes, 0);
-
-  let offset = countBytes.length;
-  for (const pb of paramBytes) {
-    result.set(pb, offset);
-    offset += pb.length;
-  }
-
-  return result;
-}
-
-/**
- * ClientSetup のペイロードをデコード
- */
-export function decodeClientSetupPayload(data: Uint8Array, offset = 0): ClientSetup {
+export function decodeSetupPayload(data: Uint8Array, offset = 0): Setup {
   const [parameters] = decodeParameters(data, offset);
   return {
-    type: MessageType.CLIENT_SETUP,
-    parameters,
-  };
-}
-
-/**
- * ServerSetup のペイロードをデコード
- */
-export function decodeServerSetupPayload(data: Uint8Array, offset = 0): ServerSetup {
-  const [parameters] = decodeParameters(data, offset);
-  return {
-    type: MessageType.SERVER_SETUP,
+    type: MessageType.SETUP,
     parameters,
   };
 }
@@ -158,36 +83,24 @@ export function decodeServerSetupPayload(data: Uint8Array, offset = 0): ServerSe
 /**
  * Setup メッセージからパラメータを取得
  */
-export function getSetupParameter(
-  msg: ClientSetup | ServerSetup,
-  paramType: number,
-): Parameter | undefined {
+export function getSetupParameter(msg: Setup, paramType: number): Parameter | undefined {
   return msg.parameters.find((p) => p.type === paramType);
 }
 
 /**
  * Setup メッセージから PATH を取得
  */
-export function getSetupPath(msg: ClientSetup): string | undefined {
-  const param = getSetupParameter(msg, SetupParameterType.PATH);
+export function getSetupPath(msg: Setup): string | undefined {
+  const param = getSetupParameter(msg, SetupOptionType.PATH);
   if (!param) return undefined;
   return new TextDecoder().decode(param.value);
 }
 
 /**
- * Setup メッセージから MAX_REQUEST_ID を取得
- */
-export function getSetupMaxRequestId(msg: ClientSetup | ServerSetup): bigint | undefined {
-  const param = getSetupParameter(msg, SetupParameterType.MAX_REQUEST_ID);
-  if (!param) return undefined;
-  return getParameterVarintValue(param);
-}
-
-/**
  * Setup メッセージから AUTHORITY を取得
  */
-export function getSetupAuthority(msg: ClientSetup): string | undefined {
-  const param = getSetupParameter(msg, SetupParameterType.AUTHORITY);
+export function getSetupAuthority(msg: Setup): string | undefined {
+  const param = getSetupParameter(msg, SetupOptionType.AUTHORITY);
   if (!param) return undefined;
   return new TextDecoder().decode(param.value);
 }
@@ -195,8 +108,8 @@ export function getSetupAuthority(msg: ClientSetup): string | undefined {
 /**
  * Setup メッセージから MOQT_IMPLEMENTATION を取得
  */
-export function getSetupMoqtImplementation(msg: ClientSetup | ServerSetup): string | undefined {
-  const param = getSetupParameter(msg, SetupParameterType.MOQT_IMPLEMENTATION);
+export function getSetupMoqtImplementation(msg: Setup): string | undefined {
+  const param = getSetupParameter(msg, SetupOptionType.MOQT_IMPLEMENTATION);
   if (!param) return undefined;
   return new TextDecoder().decode(param.value);
 }

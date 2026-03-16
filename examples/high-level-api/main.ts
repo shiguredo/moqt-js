@@ -137,9 +137,7 @@ function updateStats(): void {
 
 // 統計情報の定期更新を開始
 function startStatsUpdate(): void {
-  if (statsIntervalId === null) {
-    statsIntervalId = window.setInterval(updateStats, 500);
-  }
+  statsIntervalId ??= window.setInterval(updateStats, 500);
 }
 
 // 統計情報の定期更新を停止

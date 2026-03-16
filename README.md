@@ -34,7 +34,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - 高レベル API (WebCodecs / MediaStream 対応)
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport)
-  - `draft-07` と `draft-15` 対応
+  - `draft-07` と `draft-17` 対応
 - Low Overhead Container 対応
   - [Media over QUIC - Low Overhead Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc)
 - MOQT Streaming Format (MSF) 対応
@@ -46,24 +46,25 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Media over QUIC Transport
 
-[draft-ietf-moq-transport-15](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-15) の機能実装状況です。
+[draft-ietf-moq-transport-17](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-17) の機能実装状況です。
 
 #### Publisher
 
 - PUBLISH メッセージ
 - PUBLISH_OK メッセージ
 - PUBLISH_DONE メッセージ
+- PUBLISH_BLOCKED メッセージ
 - Object Stream 送信 (Subgroup Header)
 - Object Datagram 送信
 - Publisher Priority
-- DELIVERY_TIMEOUT パラメータ
-- MAX_CACHE_DURATION パラメータ
+- DELIVERY_TIMEOUT プロパティ
+- MAX_CACHE_DURATION プロパティ
 
 #### Subscriber
 
 - SUBSCRIBE メッセージ
 - SUBSCRIBE_OK メッセージ
-- SUBSCRIBE_UPDATE メッセージ
+- REQUEST_UPDATE メッセージ
 - UNSUBSCRIBE メッセージ
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
@@ -71,7 +72,6 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FETCH メッセージ (Joining Relative)
 - FETCH メッセージ (Joining Absolute)
 - FETCH_OK メッセージ
-- FETCH_CANCEL メッセージ
 - Subscription Filter (Largest Object)
 - Subscription Filter (Next Group Start)
 - Subscription Filter (AbsoluteStart)
@@ -79,20 +79,20 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Subscriber Priority
 - Group Order (Ascending / Descending)
 - DELIVERY_TIMEOUT パラメータ
+- RENDEZVOUS_TIMEOUT パラメータ
 
 #### コントロールメッセージ
 
-- CLIENT_SETUP / SERVER_SETUP
+- SETUP
 - GOAWAY
-- MAX_REQUEST_ID
-- REQUESTS_BLOCKED
 - REQUEST_OK
 - REQUEST_ERROR
 - PUBLISH_NAMESPACE
+- NAMESPACE
 - PUBLISH_NAMESPACE_DONE
+- NAMESPACE_DONE
 - PUBLISH_NAMESPACE_CANCEL
 - SUBSCRIBE_NAMESPACE
-- UNSUBSCRIBE_NAMESPACE
 - TRACK_STATUS
 
 #### データストリーム
@@ -101,16 +101,18 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Fetch Header
 - Object Datagram
 - Object Status (Normal / End of Group / End of Track)
-- Object Extensions
-- Extension Headers (Prior Group ID Gap / Prior Object ID Gap / Immutable Extensions)
+- Object Properties
+- Properties (Prior Group ID Gap / Prior Object ID Gap / Immutable Properties)
+- GREASE
 
 ### Low Overhead Container
 
-[draft-ietf-moq-loc-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-01) の機能実装状況です。
+[draft-ietf-moq-loc-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-02) の機能実装状況です。
 
-#### LOC Header Extensions
+#### LOC Properties
 
-- Capture Timestamp
+- Timestamp
+- Timescale
 - Video Config
 - Video Frame Marking
 - Audio Level

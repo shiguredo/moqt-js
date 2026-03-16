@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vite-plus";
 import { resolve } from "node:path";
 import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vite-plus";
 import { resolve } from "node:path";
 import packageJson from "./package.json";
 
@@ -13,6 +13,13 @@ export default defineConfig({
       entry: resolve(__dirname, "src/index.ts"),
       formats: ["es"],
       fileName: "index",
+    },
+  },
+  test: {
+    include: ["src/**/*.{test,prop}.ts"],
+    coverage: {
+      provider: "v8",
+      exclude: ["src/message/debug.ts"],
     },
   },
 });

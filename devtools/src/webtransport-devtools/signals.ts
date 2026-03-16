@@ -122,8 +122,8 @@ export async function connect(): Promise<void> {
       .then(() => {
         disconnect();
       })
-      .catch((err) => {
-        connectionError.value = err.message;
+      .catch((err: unknown) => {
+        connectionError.value = (err as Error).message;
         disconnect();
       });
   } catch (err) {

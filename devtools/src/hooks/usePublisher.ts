@@ -189,9 +189,9 @@ export function usePublisher() {
     // H.264/H.265 は Annex B 形式で出力されるため、description は不要
     const payload = chunk.data;
 
-    // LOC Header Extensions をエンコード
-    const extensions = LOC.encodeVideoHeaderExtensions({
-      captureTimestamp: BigInt(chunk.timestamp),
+    // LOC Properties をエンコード
+    const extensions = LOC.encodeVideoProperties({
+      timestamp: BigInt(chunk.timestamp),
       frameMarking: {
         isIndependent: chunk.type === "key",
         isDiscardable: chunk.type !== "key",

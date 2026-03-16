@@ -1,29 +1,28 @@
 /**
  * MOQT Message Types
- * draft-ietf-moq-transport-15 Section 9
+ * draft-ietf-moq-transport-17 Section 9
  */
 
 /**
  * Message Types (Section 9)
  */
 export const MessageType = {
-  // Setup
-  CLIENT_SETUP: 0x20,
-  SERVER_SETUP: 0x21,
+  // draft-ietf-moq-transport-17 Section 9.4:
+  // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
+  // https://github.com/moq-wg/moq-transport/pull/1510
+  SETUP: 0x2f00,
 
   // Session
   GOAWAY: 0x10,
-  MAX_REQUEST_ID: 0x15,
-  REQUESTS_BLOCKED: 0x1a,
 
   // Request/Response
   REQUEST_OK: 0x07,
   REQUEST_ERROR: 0x05,
+  REQUEST_UPDATE: 0x02,
 
   // Subscribe
   SUBSCRIBE: 0x03,
   SUBSCRIBE_OK: 0x04,
-  SUBSCRIBE_UPDATE: 0x02,
   UNSUBSCRIBE: 0x0a,
 
   // Publish
@@ -34,54 +33,109 @@ export const MessageType = {
   // Fetch
   FETCH: 0x16,
   FETCH_OK: 0x18,
-  FETCH_CANCEL: 0x17,
 
   // Track Status
   TRACK_STATUS: 0x0d,
 
   // Namespace
   PUBLISH_NAMESPACE: 0x06,
+  NAMESPACE: 0x08,
   PUBLISH_NAMESPACE_DONE: 0x09,
+  NAMESPACE_DONE: 0x0e,
+  /**
+   * PUBLISH_BLOCKED (Section 9.21)
+   *
+   * draft-ietf-moq-transport-17:
+   * Publisher が新しい Request ID を割り当てられない場合に送信する。
+   * SUBSCRIBE_NAMESPACE のフロー制御の一環。
+   * https://github.com/moq-wg/moq-transport/pull/1452
+   */
+  PUBLISH_BLOCKED: 0x0f,
   PUBLISH_NAMESPACE_CANCEL: 0x0c,
   SUBSCRIBE_NAMESPACE: 0x11,
-  UNSUBSCRIBE_NAMESPACE: 0x14,
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
 /**
- * Setup Parameter Types (Section 9.3.1)
+ * Setup Option Types (Section 9.4.1)
+ *
+ * draft-ietf-moq-transport-17:
+ * "Setup Parameters" を "Setup Options" にリネーム。
+ * https://github.com/moq-wg/moq-transport/pull/1461
  */
-export const SetupParameterType = {
+export const SetupOptionType = {
   PATH: 0x01,
-  MAX_REQUEST_ID: 0x02,
   MAX_AUTH_TOKEN_CACHE_SIZE: 0x04,
   AUTHORITY: 0x05,
   MOQT_IMPLEMENTATION: 0x07,
 } as const;
 
-export type SetupParameterType = (typeof SetupParameterType)[keyof typeof SetupParameterType];
+export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionType];
 
 /**
- * Version Specific Parameter Types (Section 9.2.1)
+ * Message Parameter Types (Section 9.2.1)
+ *
+ * draft-ietf-moq-transport-16:
+ * - Message Parameters は単一ホップにスコープされる
+ * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
+ * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY,
+ *   PUBLISHER_GROUP_ORDER_PREFERENCE, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
+ *   Track Extensions に移動
+ * https://github.com/moq-wg/moq-transport/pull/1390
+ *
+ * 注意: SUBSCRIBE では DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
+ * Message Parameter として使用される（Subscriber の希望値）。
  */
-export const VersionSpecificParameterType = {
-  AUTHORIZATION_TOKEN: 0x03,
+export const MessageParameterType = {
+  /**
+   * DELIVERY_TIMEOUT (Section 9.2.1.2)
+   *
+   * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
+   * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Extension として使用。
+   */
   DELIVERY_TIMEOUT: 0x02,
-  MAX_CACHE_DURATION: 0x04,
+  AUTHORIZATION_TOKEN: 0x03,
+  /**
+   * RENDEZVOUS_TIMEOUT (Section 9.3.4)
+   *
+   * draft-ietf-moq-transport-17:
+   * SUBSCRIBE メッセージで使用。
+   * リレーが Publisher を待つ時間（ミリ秒）。
+   * 0 は即時応答を要求。不在の場合のデフォルト値は 0。
+   * https://github.com/moq-wg/moq-transport/pull/1447
+   */
+  RENDEZVOUS_TIMEOUT: 0x04,
   EXPIRES: 0x08,
   LARGEST_OBJECT: 0x09,
-  PUBLISHER_PRIORITY: 0x0e,
   FORWARD: 0x10,
   SUBSCRIBER_PRIORITY: 0x20,
   SUBSCRIPTION_FILTER: 0x21,
+  /**
+   * GROUP_ORDER (Section 9.2.1.6)
+   *
+   * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
+   * Publisher の GROUP_ORDER_PREFERENCE は Track Extension として使用。
+   * https://github.com/moq-wg/moq-transport/pull/1390
+   */
   GROUP_ORDER: 0x22,
-  DYNAMIC_GROUPS: 0x30,
   NEW_GROUP_REQUEST: 0x32,
 } as const;
 
-export type VersionSpecificParameterType =
-  (typeof VersionSpecificParameterType)[keyof typeof VersionSpecificParameterType];
+export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
+
+/**
+ * @deprecated VersionSpecificParameterType は MessageParameterType に名称変更された
+ *
+ * draft-ietf-moq-transport-16:
+ * - "Version Specific Parameters" を "Message Parameters" にリネーム
+ * - Track Properties は Track Extensions に移動
+ * https://github.com/moq-wg/moq-transport/pull/1411
+ * https://github.com/moq-wg/moq-transport/pull/1390
+ */
+export const VersionSpecificParameterType = MessageParameterType;
+
+export type VersionSpecificParameterType = MessageParameterType;
 
 /**
  * Group Order (Section 9.2.1.10)
@@ -108,17 +162,20 @@ export type FilterType = (typeof FilterType)[keyof typeof FilterType];
 /**
  * Object Status (Section 10.2.1.1)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-16:
  * - 0x0: Normal object
- * - 0x1: Object Does Not Exist
- * - 0x3: End of Group
- * - 0x4: End of Track
+ * - 0x3: End of Group (EOG)
+ *   Indicates that no objects with the specified Group ID and the Object ID
+ *   that is greater than or equal to the one specified exist.
+ * - 0x4: End of Track (EOT)
+ *   Indicates that no objects with the location that is equal to or greater
+ *   than the one specified exist.
  *
- * Note: 0x2 is not defined in the spec.
+ * Note: 0x1 (Object Does Not Exist) was removed in draft-16.
+ * https://github.com/moq-wg/moq-transport/pull/1342
  */
 export const ObjectStatus = {
   NORMAL: 0x0,
-  OBJECT_DOES_NOT_EXIST: 0x1,
   END_OF_GROUP: 0x3,
   END_OF_TRACK: 0x4,
 } as const;
@@ -126,18 +183,19 @@ export const ObjectStatus = {
 export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
 
 /**
- * PUBLISH_DONE Status Codes (Section 9.15)
+ * PUBLISH_DONE Status Codes (Section 9.13)
  *
- * draft-ietf-moq-transport-15:
- * - 0x0: INTERNAL_ERROR - An implementation specific or generic error occurred.
- * - 0x1: UNAUTHORIZED - The subscriber is no longer authorized to subscribe to the given track.
- * - 0x2: TRACK_ENDED - The track is no longer being published.
- * - 0x3: SUBSCRIPTION_ENDED - The publisher reached the end of a subscription filter range.
- * - 0x4: GOING_AWAY - The subscriber or publisher issued a GOAWAY message.
- * - 0x5: EXPIRED - The publisher reached the timeout specified in SUBSCRIBE_OK.
- * - 0x6: TOO_FAR_BEHIND - The publisher's queue of objects exceeds its limit.
- * - 0x7: MALFORMED_TRACK - A relay publisher detected the track was malformed.
- * - 0x8: UPDATE_FAILED - SUBSCRIBE_UPDATE failed on this subscription.
+ * draft-ietf-moq-transport-17:
+ * - 0x0: INTERNAL_ERROR
+ * - 0x1: UNAUTHORIZED
+ * - 0x2: TRACK_ENDED
+ * - 0x3: SUBSCRIPTION_ENDED
+ * - 0x4: GOING_AWAY
+ * - 0x5: EXPIRED
+ * - 0x6: TOO_FAR_BEHIND
+ * - 0x8: UPDATE_FAILED
+ * - 0x9: EXCESSIVE_LOAD
+ * - 0x12: MALFORMED_TRACK
  */
 export const PublishDoneStatusCode = {
   INTERNAL_ERROR: 0x0,
@@ -147,12 +205,39 @@ export const PublishDoneStatusCode = {
   GOING_AWAY: 0x4,
   EXPIRED: 0x5,
   TOO_FAR_BEHIND: 0x6,
-  MALFORMED_TRACK: 0x7,
   UPDATE_FAILED: 0x8,
+  EXCESSIVE_LOAD: 0x9,
+  MALFORMED_TRACK: 0x12,
 } as const;
 
 export type PublishDoneStatusCode =
   (typeof PublishDoneStatusCode)[keyof typeof PublishDoneStatusCode];
+
+/**
+ * Namespace Subscribe Mode (Section 9.25)
+ *
+ * draft-ietf-moq-transport-16:
+ * SUBSCRIBE_NAMESPACE の Subscribe Options フィールドで使用される。
+ * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) のいずれかを指定する。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-9.25
+ */
+export const NamespaceSubscribeMode = {
+  /**
+   * PUBLISH のみを要求する
+   */
+  PUBLISH: 0x00,
+  /**
+   * NAMESPACE のみを要求する
+   */
+  NAMESPACE: 0x01,
+  /**
+   * PUBLISH と NAMESPACE の両方を要求する
+   */
+  BOTH: 0x02,
+} as const;
+
+export type NamespaceSubscribeMode =
+  (typeof NamespaceSubscribeMode)[keyof typeof NamespaceSubscribeMode];
 
 /**
  * Location (Group ID, Object ID)

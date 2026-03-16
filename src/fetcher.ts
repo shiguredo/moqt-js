@@ -1,6 +1,14 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-15 Section 9.16-9.18
+ * draft-ietf-moq-transport-16 Section 9.16-9.18
+ *
+ * draft-ietf-moq-transport-16:
+ * FETCH レスポンスで不明な範囲を許可する。
+ * Publisher がまだシリアライズしていないオブジェクトの範囲を
+ * "unknown range" として返すことができる。
+ * https://github.com/moq-wg/moq-transport/pull/1331
+ *
+ * TODO: Unknown Range Metadata Type の実装
  */
 
 import type { MoqtObject } from "./dataStream";
@@ -20,7 +28,7 @@ export interface Fetcher {
   readonly endLocation: Location;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-15 Section 9.18
+   * draft-ietf-moq-transport-16 Section 9.18
    */
   cancel(): Promise<void>;
 }
@@ -38,9 +46,6 @@ export class FetcherImpl implements Fetcher {
   private readonly requestId: bigint;
   private fetchEndOfTrack = false;
   private fetchEndLocation: Location = { group: 0n, object: 0n };
-
-  // Session が使用する内部コールバック
-  onCancel?: () => Promise<void>;
 
   constructor(
     namespace: string[],
@@ -127,15 +132,13 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * Fetch をキャンセル
-   * draft-ietf-moq-transport-15 Section 9.18
+   *
+   * draft-ietf-moq-transport-17: FETCH_CANCEL は削除された。
+   * キャンセルはストリームを閉じることで行う。
    */
   async cancel(): Promise<void> {
     if (this.fetcherState === "closed") {
       return;
-    }
-
-    if (this.onCancel) {
-      await this.onCancel();
     }
 
     this.fetcherState = "closed";

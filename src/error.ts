@@ -1,10 +1,14 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-15 Section 13.3
+ * draft-ietf-moq-transport-17 Section 14.5
  */
 
 /**
- * Session Termination Error Codes (Section 3.4)
+ * Session Termination Error Codes (Section 3.5)
+ *
+ * draft-ietf-moq-transport-17:
+ * - TOO_MANY_REQUESTS を INVALID_REQUIRED_REQUEST_ID に変更
+ * https://github.com/moq-wg/moq-transport/pull/1434
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
@@ -14,7 +18,7 @@ export const SessionErrorCode = {
   INVALID_REQUEST_ID: 0x4,
   DUPLICATE_TRACK_ALIAS: 0x5,
   KEY_VALUE_FORMATTING_ERROR: 0x6,
-  TOO_MANY_REQUESTS: 0x7,
+  INVALID_REQUIRED_REQUEST_ID: 0x7,
   INVALID_PATH: 0x8,
   MALFORMED_PATH: 0x9,
   GOAWAY_TIMEOUT: 0x10,
@@ -33,7 +37,14 @@ export const SessionErrorCode = {
 export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErrorCode];
 
 /**
- * REQUEST_ERROR Codes (Section 9.8)
+ * REQUEST_ERROR Codes (Section 9.7)
+ *
+ * draft-ietf-moq-transport-17:
+ * - GOING_AWAY (0x6) を追加 (#1434)
+ * - EXCESSIVE_LOAD (0x9) を追加 (#1479)
+ * - DUPLICATE_SUBSCRIPTION を 0x19 に変更
+ * - NAMESPACE_TOO_LARGE (0x31) を追加 (#1496)
+ * - UNKNOWN_STATUS_IN_RANGE を削除
  */
 export const RequestErrorCode = {
   INTERNAL_ERROR: 0x0,
@@ -42,19 +53,26 @@ export const RequestErrorCode = {
   NOT_SUPPORTED: 0x3,
   MALFORMED_AUTH_TOKEN: 0x4,
   EXPIRED_AUTH_TOKEN: 0x5,
+  GOING_AWAY: 0x6,
+  EXCESSIVE_LOAD: 0x9,
   DOES_NOT_EXIST: 0x10,
   INVALID_RANGE: 0x11,
   MALFORMED_TRACK: 0x12,
+  DUPLICATE_SUBSCRIPTION: 0x19,
   UNINTERESTED: 0x20,
   PREFIX_OVERLAP: 0x30,
+  NAMESPACE_TOO_LARGE: 0x31,
   INVALID_JOINING_REQUEST_ID: 0x32,
-  UNKNOWN_STATUS_IN_RANGE: 0x33,
 } as const;
 
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * PUBLISH_DONE Codes (Section 9.15)
+ * PUBLISH_DONE Codes (Section 9.13)
+ *
+ * draft-ietf-moq-transport-17:
+ * - MALFORMED_TRACK を 0x12 に変更
+ * - EXCESSIVE_LOAD (0x9) を追加 (#1479)
  */
 export const PublishDoneCode = {
   INTERNAL_ERROR: 0x0,
@@ -64,20 +82,31 @@ export const PublishDoneCode = {
   GOING_AWAY: 0x4,
   EXPIRED: 0x5,
   TOO_FAR_BEHIND: 0x6,
-  MALFORMED_TRACK: 0x7,
   UPDATE_FAILED: 0x8,
+  EXCESSIVE_LOAD: 0x9,
+  MALFORMED_TRACK: 0x12,
 } as const;
 
 export type PublishDoneCode = (typeof PublishDoneCode)[keyof typeof PublishDoneCode];
 
 /**
  * Data Stream Reset Error Codes (Section 10.4.3)
+ *
+ * draft-ietf-moq-transport-17:
+ * - UNKNOWN_OBJECT_STATUS (0x4) を追加
+ * - TOO_FAR_BEHIND (0x5) を追加 (#1445)
+ * - EXCESSIVE_LOAD (0x9) を追加 (#1479)
+ * - MALFORMED_TRACK (0x12) を追加
  */
 export const DataStreamErrorCode = {
   INTERNAL_ERROR: 0x0,
   CANCELLED: 0x1,
   DELIVERY_TIMEOUT: 0x2,
   SESSION_CLOSED: 0x3,
+  UNKNOWN_OBJECT_STATUS: 0x4,
+  TOO_FAR_BEHIND: 0x5,
+  EXCESSIVE_LOAD: 0x9,
+  MALFORMED_TRACK: 0x12,
 } as const;
 
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];

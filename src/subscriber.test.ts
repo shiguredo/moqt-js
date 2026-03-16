@@ -1,6 +1,6 @@
 /**
  * Subscriber Unit Tests
- * draft-ietf-moq-transport-15 Section 5.1
+ * draft-ietf-moq-transport-16 Section 5.1
  */
 
 import { test, assert } from "vitest";

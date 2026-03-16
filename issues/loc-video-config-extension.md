@@ -9,7 +9,7 @@ LOC は H.264/H.265 で 2 つのビットストリーム形式をサポートし
 
 現在の devtools 実装は annexB 形式のみをサポートしている。
 
-## LOC 仕様 (draft-ietf-moq-loc-01)
+## LOC 仕様 (draft-ietf-moq-loc-02)
 
 ### Section 2.1 Video Payload Format
 
@@ -30,8 +30,8 @@ canonical 形式をサポートする場合:
 LOC Header Extension の Video Config (ID: 13) で description を送信する。
 
 ```typescript
-const extensions = LOC.encodeVideoHeaderExtensions({
-  captureTimestamp: BigInt(chunk.timestamp),
+const extensions = LOC.encodeVideoProperties({
+  timestamp: BigInt(chunk.timestamp),
   frameMarking: { ... },
   config: encoderMetadata.decoderConfig.description,  // 追加
 });
@@ -42,9 +42,9 @@ const extensions = LOC.encodeVideoHeaderExtensions({
 Video Config Extension をパースして decoderConfig.description に設定する。
 
 ```typescript
-const headerExtensions = LOC.decodeVideoHeaderExtensions(obj.extensions);
-if (headerExtensions.config) {
-  decoderConfig.description = headerExtensions.config;
+const locProperties = LOC.decodeVideoProperties(obj.extensions);
+if (locProperties.config) {
+  decoderConfig.description = locProperties.config;
 }
 ```
 
@@ -63,10 +63,10 @@ MSF Catalog の `initData` フィールド (Base64 エンコード) も使用可
 ## 現状
 
 - devtools は annexB 形式のみ対応
-- LOC.encodeVideoHeaderExtensions / decodeVideoHeaderExtensions に config フィールドは未実装
+- LOC.encodeVideoProperties / decodeVideoHeaderExtensions に config フィールドは未実装
 - MSF Catalog の initData フィールドは未使用
 
 ## 参考
 
-- refs/moq/draft-ietf-moq-loc-01.txt
+- refs/moq/draft-ietf-moq-loc-02.txt
 - refs/moq/draft-ietf-moq-msf.md

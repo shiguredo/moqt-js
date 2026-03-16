@@ -118,16 +118,16 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         sub.updateSubscriber(subscriberId, {
           objectsWithExtensions: currentInstance.objectsWithExtensions + 1,
         });
-        const headerExtensions = LOC.decodeVideoHeaderExtensions(obj.extensions);
+        const locProperties = LOC.decodeVideoProperties(obj.extensions);
 
         // Capture Timestamp から timestamp を取得
-        if (headerExtensions.captureTimestamp !== undefined) {
-          timestamp = Number(headerExtensions.captureTimestamp);
+        if (locProperties.timestamp !== undefined) {
+          timestamp = Number(locProperties.timestamp);
         }
 
         // Frame Marking から keyframe 判定
-        if (headerExtensions.frameMarking) {
-          isKeyFrame = headerExtensions.frameMarking.isIndependent;
+        if (locProperties.frameMarking) {
+          isKeyFrame = locProperties.frameMarking.isIndependent;
         }
       }
 
@@ -442,9 +442,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             let timestamp = 0;
             let isKeyFrame = false;
             if (obj.extensions && obj.extensions.length > 0) {
-              const ext = LOC.decodeVideoHeaderExtensions(obj.extensions);
-              if (ext.captureTimestamp !== undefined) {
-                timestamp = Number(ext.captureTimestamp);
+              const ext = LOC.decodeVideoProperties(obj.extensions);
+              if (ext.timestamp !== undefined) {
+                timestamp = Number(ext.timestamp);
               }
               if (ext.frameMarking) {
                 isKeyFrame = ext.frameMarking.isIndependent;
@@ -522,9 +522,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             let lastTimestamp = instance.joiningFetchLastTimestamp;
             for (const obj of objectsToProcess) {
               if (obj.extensions && obj.extensions.length > 0) {
-                const ext = LOC.decodeVideoHeaderExtensions(obj.extensions);
-                if (ext.captureTimestamp !== undefined) {
-                  lastTimestamp = Number(ext.captureTimestamp);
+                const ext = LOC.decodeVideoProperties(obj.extensions);
+                if (ext.timestamp !== undefined) {
+                  lastTimestamp = Number(ext.timestamp);
                 }
               }
             }

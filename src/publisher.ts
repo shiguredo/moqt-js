@@ -1,6 +1,6 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-15 Section 5.2
+ * draft-ietf-moq-transport-16 Section 5.2
  */
 
 /**
@@ -15,19 +15,19 @@ export interface SendObjectParams {
   groupId: number;
   objectId: number;
   payload: Uint8Array;
-  extensions?: Uint8Array;
+  properties?: Uint8Array;
   priority?: number;
 }
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-15 Section 10.3
+ * draft-ietf-moq-transport-16 Section 10.3
  */
 export interface SendDatagramParams {
   groupId: number;
   objectId: number;
   payload: Uint8Array;
-  extensions?: Uint8Array;
+  properties?: Uint8Array;
   priority?: number;
   /**
    * このオブジェクトがグループの最後かどうか
@@ -42,21 +42,26 @@ export interface Publisher {
   readonly state: PublisherState;
   /**
    * Forward State
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-16 Section 9.2.2.8
    *
    * PUBLISH_OK で受信した forwardState を返す。
    * - true (1): オブジェクトを転送する（Subscriber がいる）
    * - false (0): オブジェクトを転送しない（Subscriber がいない）
    *
-   * SUBSCRIBE_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
+   * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
    */
   readonly forwardState: boolean;
   sendObject(params: SendObjectParams): void;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
+   *
+   * draft-ietf-moq-transport-16:
+   * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
+   * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
+   * https://github.com/moq-wg/moq-transport/pull/1350
    */
   sendDatagram(params: SendDatagramParams): void;
   done(): Promise<void>;
@@ -135,7 +140,7 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Send a datagram on this track
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-16 Section 10.3
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
@@ -156,9 +161,9 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Internal: Set forward state (called by session)
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-16 Section 9.2.2.8
    *
-   * PUBLISH_OK または SUBSCRIBE_UPDATE で受信した FORWARD パラメータを反映する。
+   * PUBLISH_OK または REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
    * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。
    */
   setForwardState(forward: boolean): void {

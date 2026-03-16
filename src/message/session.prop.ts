@@ -1,26 +1,20 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.2-9.6
+ * draft-ietf-moq-transport-17 Section 9.5-9.7
  */
 
 import { test, assert } from "vitest";
 import * as fc from "fast-check";
 import {
   type Goaway,
-  type MaxRequestId,
   type RequestError,
   type RequestOk,
-  type RequestsBlocked,
   decodeGoawayPayload,
-  decodeMaxRequestIdPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
-  decodeRequestsBlockedPayload,
   encodeGoawayPayload,
-  encodeMaxRequestIdPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
-  encodeRequestsBlockedPayload,
 } from "./session";
 import { type Parameter } from "./parameter";
 import { MessageType } from "./types";
@@ -42,63 +36,44 @@ const parameterArb: fc.Arbitrary<Parameter> = fc.oneof(evenParameterArb, oddPara
 
 const parametersArb = fc.array(parameterArb, { minLength: 0, maxLength: 3 });
 
+/**
+ * draft-ietf-moq-transport-17 Section 9.5:
+ * GOAWAY に Timeout フィールドが追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1497
+ */
 test("Goaway のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(fc.string({ minLength: 0, maxLength: 200 }), (newSessionUri) => {
-      const original: Goaway = {
-        type: MessageType.GOAWAY,
-        newSessionUri,
-      };
+    fc.property(
+      fc.string({ minLength: 0, maxLength: 200 }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      (newSessionUri, timeout) => {
+        const original: Goaway = {
+          type: MessageType.GOAWAY,
+          newSessionUri,
+          timeout,
+        };
 
-      const encoded = encodeGoawayPayload(original);
-      const decoded = decodeGoawayPayload(encoded);
+        const encoded = encodeGoawayPayload(original);
+        const decoded = decodeGoawayPayload(encoded);
 
-      assert.equal(decoded.type, MessageType.GOAWAY);
-      assert.equal(decoded.newSessionUri, newSessionUri);
-    }),
+        assert.equal(decoded.type, MessageType.GOAWAY);
+        assert.equal(decoded.newSessionUri, newSessionUri);
+        assert.equal(decoded.timeout, timeout);
+      },
+    ),
   );
 });
 
-test("MaxRequestId のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 0xffffffffn }), (maxRequestId) => {
-      const original: MaxRequestId = {
-        type: MessageType.MAX_REQUEST_ID,
-        maxRequestId,
-      };
-
-      const encoded = encodeMaxRequestIdPayload(original);
-      const decoded = decodeMaxRequestIdPayload(encoded);
-
-      assert.equal(decoded.type, MessageType.MAX_REQUEST_ID);
-      assert.equal(decoded.maxRequestId, maxRequestId);
-    }),
-  );
-});
-
-test("RequestsBlocked のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), (maximumRequestId) => {
-      const original: RequestsBlocked = {
-        type: MessageType.REQUESTS_BLOCKED,
-        maximumRequestId,
-      };
-
-      const encoded = encodeRequestsBlockedPayload(original);
-      const decoded = decodeRequestsBlockedPayload(encoded);
-
-      assert.equal(decoded.type, MessageType.REQUESTS_BLOCKED);
-      assert.equal(decoded.maximumRequestId, maximumRequestId);
-    }),
-  );
-});
-
+/**
+ * draft-ietf-moq-transport-17 Section 9.6:
+ * REQUEST_OK から Request ID が削除された。
+ * https://github.com/moq-wg/moq-transport/pull/1499
+ */
 test("RequestOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), parametersArb, (requestId, parameters) => {
+    fc.property(parametersArb, (parameters) => {
       const original: RequestOk = {
         type: MessageType.REQUEST_OK,
-        requestId,
         parameters,
       };
 
@@ -106,7 +81,6 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
       const decoded = decodeRequestOkPayload(encoded);
 
       assert.equal(decoded.type, MessageType.REQUEST_OK);
-      assert.equal(decoded.requestId, requestId);
       assert.equal(decoded.parameters.length, parameters.length);
       for (let i = 0; i < parameters.length; i++) {
         assert.equal(decoded.parameters[i].type, parameters[i].type);
@@ -116,17 +90,26 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
   );
 });
 
+/**
+ * draft-ietf-moq-transport-17 Section 9.7:
+ * REQUEST_ERROR から Request ID が削除された。
+ * https://github.com/moq-wg/moq-transport/pull/1499
+ *
+ * Retry Interval: 再試行までに待つべきミリ秒 + 1
+ * - 0: 再試行すべきではない
+ * - 1 以上: 再試行可能（1 は即座の再試行を許可）
+ */
 test("RequestError のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
       fc.string({ minLength: 0, maxLength: 200 }),
-      (requestId, errorCode, reasonPhrase) => {
+      (errorCode, retryInterval, reasonPhrase) => {
         const original: RequestError = {
           type: MessageType.REQUEST_ERROR,
-          requestId,
           errorCode,
+          retryInterval,
           reasonPhrase,
         };
 
@@ -134,8 +117,8 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
         const decoded = decodeRequestErrorPayload(encoded);
 
         assert.equal(decoded.type, MessageType.REQUEST_ERROR);
-        assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.errorCode, errorCode);
+        assert.equal(decoded.retryInterval, retryInterval);
         assert.equal(decoded.reasonPhrase, reasonPhrase);
       },
     ),

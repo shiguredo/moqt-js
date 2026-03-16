@@ -530,9 +530,9 @@ class MediaPublisherImpl implements MediaPublisher {
   }): void {
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
-    // LOC Header Extensions をエンコード
-    const extensions = LOC.encodeAudioHeaderExtensions({
-      captureTimestamp: BigInt(chunk.timestamp),
+    // LOC Properties をエンコード
+    const properties = LOC.encodeAudioProperties({
+      timestamp: BigInt(chunk.timestamp),
     });
 
     // オーディオは一定間隔で新しいグループを開始（約1秒ごと）
@@ -544,14 +544,14 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const payload = chunk.data;
     this.audioStats.framesSent++;
-    this.audioStats.bytesSent += payload.length + extensions.length;
+    this.audioStats.bytesSent += payload.length + properties.length;
     this.audioStats.currentGroupId = this.audioGroupId;
 
     this.audioPublisher.sendObject({
       groupId: this.audioGroupId,
       objectId: this.audioObjectId++,
       payload,
-      extensions,
+      properties,
       priority: PRIORITY_AUDIO,
     });
   }
@@ -572,9 +572,9 @@ class MediaPublisherImpl implements MediaPublisher {
       this.videoStats.keyFramesSent++;
     }
 
-    // LOC Header Extensions をエンコード
-    const extensions = LOC.encodeVideoHeaderExtensions({
-      captureTimestamp: BigInt(chunk.timestamp),
+    // LOC Properties をエンコード
+    const properties = LOC.encodeVideoProperties({
+      timestamp: BigInt(chunk.timestamp),
       frameMarking: {
         isIndependent: chunk.type === "key",
         isDiscardable: chunk.type !== "key",
@@ -586,14 +586,14 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const payload = chunk.data;
     this.videoStats.framesSent++;
-    this.videoStats.bytesSent += payload.length + extensions.length;
+    this.videoStats.bytesSent += payload.length + properties.length;
     this.videoStats.currentGroupId = this.videoGroupId;
 
     this.videoPublisher.sendObject({
       groupId: this.videoGroupId,
       objectId: this.videoObjectId++,
       payload,
-      extensions,
+      properties,
       priority: chunk.type === "key" ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     });
   }
