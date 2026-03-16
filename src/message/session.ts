@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages
- * draft-ietf-moq-transport-15 Section 9.4-9.8
+ * draft-ietf-moq-transport-17 Section 9.5-9.7
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -8,64 +8,84 @@ import { type Parameter, decodeParameter, encodeParameter } from "./parameter";
 import { MessageType } from "./types";
 
 /**
- * GOAWAY メッセージ (Section 9.4)
+ * GOAWAY メッセージ (Section 9.5)
  *
+ * draft-ietf-moq-transport-17:
  * セッションを終了する意図を通知する。
  * サーバーはセッションマイグレーション用のオプショナル URI を含めることができる。
+ * Timeout フィールドが追加された。
+ * https://github.com/moq-wg/moq-transport/pull/1497
+ *
+ * GOAWAY Message {
+ *   Type (vi64) = 0x10,
+ *   Length (16),
+ *   New Session URI Length (vi64),
+ *   New Session URI (..),
+ *   Timeout (vi64),
+ * }
  */
 export interface Goaway {
   type: typeof MessageType.GOAWAY;
   newSessionUri: string;
+  /**
+   * Graceful shutdown のタイムアウト（ミリ秒）
+   * 0 の場合は即時切断を意味する
+   */
+  timeout: bigint;
 }
 
 /**
- * MAX_REQUEST_ID メッセージ (Section 9.5)
+ * REQUEST_OK メッセージ (Section 9.6)
  *
- * ピアが送信できるリクエスト数を増加させる。
- */
-export interface MaxRequestId {
-  type: typeof MessageType.MAX_REQUEST_ID;
-  maxRequestId: bigint;
-}
-
-/**
- * REQUESTS_BLOCKED メッセージ (Section 9.6)
+ * draft-ietf-moq-transport-17:
+ * リクエストへの成功応答。双方向ストリーム上で送信されるため、
+ * ストリーム自体がリクエストを特定し、Request ID は不要。
+ * https://github.com/moq-wg/moq-transport/pull/1499
  *
- * リクエスト ID が MAX_REQUEST_ID を超えるため、
- * 新しいリクエストを送信できないことを通知する。
- */
-export interface RequestsBlocked {
-  type: typeof MessageType.REQUESTS_BLOCKED;
-  maximumRequestId: bigint;
-}
-
-/**
- * REQUEST_OK メッセージ (Section 9.7)
- *
- * SUBSCRIBE_UPDATE, TRACK_STATUS, SUBSCRIBE_NAMESPACE,
- * PUBLISH_NAMESPACE リクエストへの成功応答。
+ * REQUEST_OK Message {
+ *   Type (vi64) = 0x4,
+ *   Length (16),
+ *   Number of Parameters (vi64),
+ *   Parameters (..),
+ * }
  */
 export interface RequestOk {
   type: typeof MessageType.REQUEST_OK;
-  requestId: bigint;
   parameters: Parameter[];
 }
 
 /**
- * REQUEST_ERROR メッセージ (Section 9.8)
+ * REQUEST_ERROR メッセージ (Section 9.7)
  *
- * リクエスト（SUBSCRIBE, FETCH, PUBLISH, SUBSCRIBE_NAMESPACE,
- * PUBLISH_NAMESPACE, TRACK_STATUS）への失敗応答。
+ * draft-ietf-moq-transport-17:
+ * リクエストへの失敗応答。双方向ストリーム上で送信されるため、
+ * ストリーム自体がリクエストを特定し、Request ID は不要。
+ * https://github.com/moq-wg/moq-transport/pull/1499
+ *
+ * REQUEST_ERROR Message {
+ *   Type (vi64) = 0x5,
+ *   Length (16),
+ *   Error Code (vi64),
+ *   Retry Interval (vi64),
+ *   Error Reason (Reason Phrase),
+ * }
+ *
+ * Retry Interval: 再試行までに待つべきミリ秒 + 1
+ * - 0: 再試行すべきではない
+ * - 1 以上: 再試行可能（1 は即座の再試行を許可）
  */
 export interface RequestError {
   type: typeof MessageType.REQUEST_ERROR;
-  requestId: bigint;
   errorCode: bigint;
+  retryInterval: bigint;
   reasonPhrase: string;
 }
 
 /**
  * Goaway のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.5:
+ * New Session URI Length + New Session URI + Timeout
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   const uriBytes = new TextEncoder().encode(msg.newSessionUri);
@@ -73,6 +93,7 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
 
   parts.push(encodeVarint(uriBytes.length));
   parts.push(uriBytes);
+  parts.push(encodeVarint(msg.timeout));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -93,53 +114,23 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 
   const uriBytes = data.slice(offset, offset + Number(uriLength));
   const newSessionUri = new TextDecoder().decode(uriBytes);
+  offset += Number(uriLength);
+
+  const [timeout] = decodeVarint(data, offset);
 
   return {
     type: MessageType.GOAWAY,
     newSessionUri,
-  };
-}
-
-/**
- * MaxRequestId のペイロードをエンコード
- */
-export function encodeMaxRequestIdPayload(msg: MaxRequestId): Uint8Array {
-  return encodeVarint(msg.maxRequestId);
-}
-
-/**
- * MaxRequestId のペイロードをデコード
- */
-export function decodeMaxRequestIdPayload(data: Uint8Array, offset = 0): MaxRequestId {
-  const [maxRequestId] = decodeVarint(data, offset);
-
-  return {
-    type: MessageType.MAX_REQUEST_ID,
-    maxRequestId,
-  };
-}
-
-/**
- * RequestsBlocked のペイロードをエンコード
- */
-export function encodeRequestsBlockedPayload(msg: RequestsBlocked): Uint8Array {
-  return encodeVarint(msg.maximumRequestId);
-}
-
-/**
- * RequestsBlocked のペイロードをデコード
- */
-export function decodeRequestsBlockedPayload(data: Uint8Array, offset = 0): RequestsBlocked {
-  const [maximumRequestId] = decodeVarint(data, offset);
-
-  return {
-    type: MessageType.REQUESTS_BLOCKED,
-    maximumRequestId,
+    timeout,
   };
 }
 
 /**
  * RequestOk のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.6:
+ * Number of Parameters + Parameters
+ * https://github.com/moq-wg/moq-transport/pull/1499
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -147,7 +138,6 @@ export function decodeRequestsBlockedPayload(data: Uint8Array, offset = 0): Requ
 export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.parameters.length));
 
   for (const param of msg.parameters) {
@@ -166,11 +156,12 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
 
 /**
  * RequestOk のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.6:
+ * Number of Parameters + Parameters
+ * https://github.com/moq-wg/moq-transport/pull/1499
  */
 export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
-  const [requestId, requestIdSize] = decodeVarint(data, offset);
-  offset += requestIdSize;
-
   const [numParams, numParamsSize] = decodeVarint(data, offset);
   offset += numParamsSize;
 
@@ -183,7 +174,6 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
 
   return {
     type: MessageType.REQUEST_OK,
-    requestId,
     parameters,
   };
 }
@@ -191,25 +181,20 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
 /**
  * RequestError のペイロードをエンコード
  *
+ * draft-ietf-moq-transport-17 Section 9.7:
+ * Error Code + Retry Interval + Error Reason
+ * https://github.com/moq-wg/moq-transport/pull/1499
+ *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- *
- * draft-ietf-moq-transport-15 Section 9.8:
- * REQUEST_ERROR Message {
- *   Type (i) = 0x5,
- *   Length (16),
- *   Request ID (i),
- *   Error Code (i),
- *   Error Reason (Reason Phrase),
- * }
  */
 export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
   const encoder = new TextEncoder();
   const reasonBytes = encoder.encode(msg.reasonPhrase);
 
   const parts: Uint8Array[] = [];
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.errorCode));
+  parts.push(encodeVarint(msg.retryInterval));
   parts.push(encodeVarint(reasonBytes.length));
   parts.push(reasonBytes);
 
@@ -225,13 +210,17 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
 
 /**
  * RequestError のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.7:
+ * Error Code + Retry Interval + Error Reason
+ * https://github.com/moq-wg/moq-transport/pull/1499
  */
 export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): RequestError {
-  const [requestId, requestIdSize] = decodeVarint(data, offset);
-  offset += requestIdSize;
-
   const [errorCode, errorCodeSize] = decodeVarint(data, offset);
   offset += errorCodeSize;
+
+  const [retryInterval, retryIntervalSize] = decodeVarint(data, offset);
+  offset += retryIntervalSize;
 
   const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
   offset += reasonLenSize;
@@ -241,8 +230,8 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
 
   return {
     type: MessageType.REQUEST_ERROR,
-    requestId,
     errorCode,
+    retryInterval,
     reasonPhrase,
   };
 }

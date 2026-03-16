@@ -1,15 +1,35 @@
 /**
- * QUIC Variable-Length Integer エンコーディング
- * RFC 9000 Section 16 に基づく実装
+ * MOQT 可変長整数エンコーディング
+ * draft-ietf-moq-transport-17 Section 1.4.1
+ *
+ * Leading 1-bits の数でエンコード長を決定する。
+ * 最初の 0 ビットの後の残りビットと後続バイトが値を表す。
+ *
+ * | Leading Bits | Length | Usable Bits | Range                      |
+ * |--------------|--------|-------------|----------------------------|
+ * | 0            | 1      | 7           | 0-127                      |
+ * | 10           | 2      | 14          | 0-16383                    |
+ * | 110          | 3      | 21          | 0-2097151                  |
+ * | 1110         | 4      | 28          | 0-268435455                |
+ * | 11110        | 5      | 35          | 0-34359738367              |
+ * | 111110       | 6      | 42          | 0-4398046511103            |
+ * | 11111110     | 8      | 56          | 0-72057594037927935        |
+ * | 11111111     | 9      | 64          | 0-18446744073709551615     |
+ *
+ * 注意: 11111100 は無効なコードポイント。
+ *
+ * https://github.com/moq-wg/moq-transport/pull/1016
  */
 
-// 最大値: 2^62 - 1
-const MAX_VARINT = 4611686018427387903n;
-
-// エンコードの閾値
-const THRESHOLD_1BYTE = 63n;
+// 各長さの最大値
+const THRESHOLD_1BYTE = 127n;
 const THRESHOLD_2BYTE = 16383n;
-const THRESHOLD_4BYTE = 1073741823n;
+const THRESHOLD_3BYTE = 2097151n;
+const THRESHOLD_4BYTE = 268435455n;
+const THRESHOLD_5BYTE = 34359738367n;
+const THRESHOLD_6BYTE = 4398046511103n;
+const THRESHOLD_8BYTE = 72057594037927935n;
+// 9 byte: 全 64 ビット
 
 /**
  * varint のエンコードに必要なバイト数を返す
@@ -19,25 +39,27 @@ export function varintSize(value: number | bigint): number {
   if (v < 0n) {
     throw new Error(`negative value not allowed: ${value}`);
   }
-  if (v > MAX_VARINT) {
-    throw new Error(`value exceeds maximum (2^62-1): ${value}`);
-  }
   if (v <= THRESHOLD_1BYTE) return 1;
   if (v <= THRESHOLD_2BYTE) return 2;
+  if (v <= THRESHOLD_3BYTE) return 3;
   if (v <= THRESHOLD_4BYTE) return 4;
-  return 8;
+  if (v <= THRESHOLD_5BYTE) return 5;
+  if (v <= THRESHOLD_6BYTE) return 6;
+  if (v <= THRESHOLD_8BYTE) return 8;
+  return 9;
 }
 
 /**
- * 整数を QUIC varint 形式にエンコードする
+ * 整数を MOQT varint 形式にエンコードする
+ *
+ * draft-ietf-moq-transport-17 Section 1.4.1:
+ * Leading 1-bits の数で長さを示し、最初の 0 ビット後の残りビットと
+ * 後続バイトに値をネットワークバイトオーダーでエンコードする。
  */
 export function encodeVarint(value: number | bigint): Uint8Array {
   const v = BigInt(value);
   if (v < 0n) {
     throw new Error(`negative value not allowed: ${value}`);
-  }
-  if (v > MAX_VARINT) {
-    throw new Error(`value exceeds maximum (2^62-1): ${value}`);
   }
 
   const size = varintSize(v);
@@ -45,45 +67,78 @@ export function encodeVarint(value: number | bigint): Uint8Array {
 
   switch (size) {
     case 1:
-      // 6 bits, prefix 00
+      // 0xxxxxxx (7 usable bits)
       result[0] = Number(v);
       break;
-    case 2: {
-      // 14 bits, prefix 01
-      const val = Number(v) | 0x4000;
-      result[0] = (val >> 8) & 0xff;
-      result[1] = val & 0xff;
+    case 2:
+      // 10xxxxxx xxxxxxxx (14 usable bits)
+      result[0] = 0x80 | Number((v >> 8n) & 0x3fn);
+      result[1] = Number(v & 0xffn);
       break;
-    }
-    case 4: {
-      // 30 bits, prefix 10
-      const val = Number(v) | 0x80000000;
-      result[0] = (val >> 24) & 0xff;
-      result[1] = (val >> 16) & 0xff;
-      result[2] = (val >> 8) & 0xff;
-      result[3] = val & 0xff;
+    case 3:
+      // 110xxxxx xxxxxxxx xxxxxxxx (21 usable bits)
+      result[0] = 0xc0 | Number((v >> 16n) & 0x1fn);
+      result[1] = Number((v >> 8n) & 0xffn);
+      result[2] = Number(v & 0xffn);
       break;
-    }
-    case 8: {
-      // 62 bits, prefix 11
-      const val = v | 0xc000000000000000n;
-      result[0] = Number((val >> 56n) & 0xffn);
-      result[1] = Number((val >> 48n) & 0xffn);
-      result[2] = Number((val >> 40n) & 0xffn);
-      result[3] = Number((val >> 32n) & 0xffn);
-      result[4] = Number((val >> 24n) & 0xffn);
-      result[5] = Number((val >> 16n) & 0xffn);
-      result[6] = Number((val >> 8n) & 0xffn);
-      result[7] = Number(val & 0xffn);
+    case 4:
+      // 1110xxxx xxxxxxxx xxxxxxxx xxxxxxxx (28 usable bits)
+      result[0] = 0xe0 | Number((v >> 24n) & 0x0fn);
+      result[1] = Number((v >> 16n) & 0xffn);
+      result[2] = Number((v >> 8n) & 0xffn);
+      result[3] = Number(v & 0xffn);
       break;
-    }
+    case 5:
+      // 11110xxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx (35 usable bits)
+      result[0] = 0xf0 | Number((v >> 32n) & 0x07n);
+      result[1] = Number((v >> 24n) & 0xffn);
+      result[2] = Number((v >> 16n) & 0xffn);
+      result[3] = Number((v >> 8n) & 0xffn);
+      result[4] = Number(v & 0xffn);
+      break;
+    case 6:
+      // 111110xx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx (42 usable bits)
+      result[0] = 0xf8 | Number((v >> 40n) & 0x03n);
+      result[1] = Number((v >> 32n) & 0xffn);
+      result[2] = Number((v >> 24n) & 0xffn);
+      result[3] = Number((v >> 16n) & 0xffn);
+      result[4] = Number((v >> 8n) & 0xffn);
+      result[5] = Number(v & 0xffn);
+      break;
+    case 8:
+      // 11111110 xxxxxxxx * 7 (56 usable bits)
+      result[0] = 0xfe;
+      result[1] = Number((v >> 48n) & 0xffn);
+      result[2] = Number((v >> 40n) & 0xffn);
+      result[3] = Number((v >> 32n) & 0xffn);
+      result[4] = Number((v >> 24n) & 0xffn);
+      result[5] = Number((v >> 16n) & 0xffn);
+      result[6] = Number((v >> 8n) & 0xffn);
+      result[7] = Number(v & 0xffn);
+      break;
+    case 9:
+      // 11111111 xxxxxxxx * 8 (64 usable bits)
+      result[0] = 0xff;
+      result[1] = Number((v >> 56n) & 0xffn);
+      result[2] = Number((v >> 48n) & 0xffn);
+      result[3] = Number((v >> 40n) & 0xffn);
+      result[4] = Number((v >> 32n) & 0xffn);
+      result[5] = Number((v >> 24n) & 0xffn);
+      result[6] = Number((v >> 16n) & 0xffn);
+      result[7] = Number((v >> 8n) & 0xffn);
+      result[8] = Number(v & 0xffn);
+      break;
   }
 
   return result;
 }
 
 /**
- * QUIC varint 形式からデコードする
+ * MOQT varint 形式からデコードする
+ *
+ * draft-ietf-moq-transport-17 Section 1.4.1:
+ * Leading 1-bits の数から長さを決定し、値をデコードする。
+ *
  * @returns [デコードされた値, 消費したバイト数]
  */
 export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
@@ -93,45 +148,62 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
   }
 
   const firstByte = data[offset];
-  const prefix = firstByte >> 6;
 
-  switch (prefix) {
-    case 0: {
-      // 1 byte
-      return [BigInt(firstByte & 0x3f), 1];
-    }
-    case 1: {
-      // 2 bytes
-      if (available < 2) {
-        throw new Error(`insufficient data: need 2 bytes, got ${available}`);
-      }
-      const value = ((firstByte & 0x3f) << 8) | data[offset + 1];
-      return [BigInt(value), 2];
-    }
-    case 2: {
-      // 4 bytes
-      if (available < 4) {
-        throw new Error(`insufficient data: need 4 bytes, got ${available}`);
-      }
-      const value =
-        ((firstByte & 0x3f) << 24) |
-        (data[offset + 1] << 16) |
-        (data[offset + 2] << 8) |
-        data[offset + 3];
-      return [BigInt(value >>> 0), 4];
-    }
-    case 3: {
-      // 8 bytes
-      if (available < 8) {
-        throw new Error(`insufficient data: need 8 bytes, got ${available}`);
-      }
-      let value = BigInt(firstByte & 0x3f);
-      for (let i = 1; i < 8; i++) {
-        value = (value << 8n) | BigInt(data[offset + i]);
-      }
-      return [value, 8];
-    }
-    default:
-      throw new Error(`invalid varint prefix: 0x${prefix.toString(16)}`);
+  // Leading 1-bits の数を数えてエンコード長を決定
+  let length: number;
+  let usableBitsInFirstByte: number;
+
+  if ((firstByte & 0x80) === 0) {
+    // 0xxxxxxx: 1 byte
+    length = 1;
+    usableBitsInFirstByte = 7;
+  } else if ((firstByte & 0xc0) === 0x80) {
+    // 10xxxxxx: 2 bytes
+    length = 2;
+    usableBitsInFirstByte = 6;
+  } else if ((firstByte & 0xe0) === 0xc0) {
+    // 110xxxxx: 3 bytes
+    length = 3;
+    usableBitsInFirstByte = 5;
+  } else if ((firstByte & 0xf0) === 0xe0) {
+    // 1110xxxx: 4 bytes
+    length = 4;
+    usableBitsInFirstByte = 4;
+  } else if ((firstByte & 0xf8) === 0xf0) {
+    // 11110xxx: 5 bytes
+    length = 5;
+    usableBitsInFirstByte = 3;
+  } else if ((firstByte & 0xfc) === 0xf8) {
+    // 111110xx: 6 bytes
+    length = 6;
+    usableBitsInFirstByte = 2;
+  } else if (firstByte === 0xfc) {
+    // 11111100: 無効なコードポイント
+    throw new Error("invalid varint code point: 0xFC");
+  } else if (firstByte === 0xfd) {
+    // 11111101: 無効なコードポイント
+    throw new Error("invalid varint code point: 0xFD");
+  } else if (firstByte === 0xfe) {
+    // 11111110: 8 bytes
+    length = 8;
+    usableBitsInFirstByte = 0;
+  } else {
+    // 11111111: 9 bytes
+    length = 9;
+    usableBitsInFirstByte = 0;
   }
+
+  if (available < length) {
+    throw new Error(`insufficient data: need ${length} bytes, got ${available}`);
+  }
+
+  // 値のデコード
+  const mask = (1 << usableBitsInFirstByte) - 1;
+  let value = BigInt(firstByte & mask);
+
+  for (let i = 1; i < length; i++) {
+    value = (value << 8n) | BigInt(data[offset + i]);
+  }
+
+  return [value, length];
 }
