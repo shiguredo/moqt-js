@@ -1,6 +1,6 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-15 Section 9
+ * draft-ietf-moq-transport-17 Section 9
  */
 
 // Types
@@ -8,10 +8,12 @@ export {
   FilterType,
   GroupOrder,
   type Location,
+  MessageParameterType,
   MessageType,
+  NamespaceSubscribeMode,
   ObjectStatus,
   PublishDoneStatusCode,
-  SetupParameterType,
+  SetupOptionType,
   VersionSpecificParameterType,
 } from "./types";
 
@@ -23,6 +25,8 @@ export {
   type Parameter,
   type SubscriptionFilter,
   type TrackNamespace,
+  MAX_TRACK_NAME_SIZE,
+  MAX_TRACK_NAMESPACE_SIZE,
   createTrackNamespace,
   decodeLocation,
   decodeParameter,
@@ -35,24 +39,21 @@ export {
   encodeParameters,
   encodeSubscriptionFilter,
   encodeSubscriptionFilterParameter,
+  encodeTrackName,
   encodeTrackNamespace,
   getParameterLocationValue,
   getParameterVarintValue,
   trackNamespaceToStrings,
+  validateTrackNameSize,
 } from "./parameter";
 
 // Setup Messages
 export {
-  type ClientSetup,
-  type ServerSetup,
-  createClientSetup,
-  createServerSetup,
-  decodeClientSetupPayload,
-  decodeServerSetupPayload,
-  encodeClientSetupPayload,
-  encodeServerSetupPayload,
+  type Setup,
+  createSetup,
+  decodeSetupPayload,
+  encodeSetupPayload,
   getSetupAuthority,
-  getSetupMaxRequestId,
   getSetupMoqtImplementation,
   getSetupParameter,
   getSetupPath,
@@ -62,15 +63,15 @@ export {
 export {
   type Subscribe,
   type SubscribeOk,
-  type SubscribeUpdate,
+  type RequestUpdate,
   type Unsubscribe,
   decodeSubscribeOkPayload,
   decodeSubscribePayload,
-  decodeSubscribeUpdatePayload,
+  decodeRequestUpdatePayload,
   decodeUnsubscribePayload,
   encodeSubscribeOkPayload,
   encodeSubscribePayload,
-  encodeSubscribeUpdatePayload,
+  encodeRequestUpdatePayload,
   encodeUnsubscribePayload,
 } from "./subscribe";
 
@@ -90,34 +91,25 @@ export {
 // Session Messages
 export {
   type Goaway,
-  type MaxRequestId,
   type RequestError,
   type RequestOk,
-  type RequestsBlocked,
   decodeGoawayPayload,
-  decodeMaxRequestIdPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
-  decodeRequestsBlockedPayload,
   encodeGoawayPayload,
-  encodeMaxRequestIdPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
-  encodeRequestsBlockedPayload,
 } from "./session";
 
 // Fetch Messages
 export {
   type Fetch,
-  type FetchCancel,
   type FetchOk,
   type JoiningFetch,
   type StandaloneFetch,
   FetchType,
-  decodeFetchCancelPayload,
   decodeFetchOkPayload,
   decodeFetchPayload,
-  encodeFetchCancelPayload,
   encodeFetchOkPayload,
   encodeFetchPayload,
 } from "./fetch";
@@ -131,19 +123,25 @@ export {
 
 // Namespace Messages
 export {
+  type Namespace,
+  type NamespaceDone,
   type PublishNamespace,
+  type PublishBlocked,
   type PublishNamespaceCancel,
   type PublishNamespaceDone,
   type SubscribeNamespace,
-  type UnsubscribeNamespace,
+  decodeNamespaceDonePayload,
+  decodeNamespacePayload,
+  decodePublishBlockedPayload,
   decodePublishNamespaceCancelPayload,
   decodePublishNamespaceDonePayload,
   decodePublishNamespacePayload,
   decodeSubscribeNamespacePayload,
-  decodeUnsubscribeNamespacePayload,
+  encodeNamespaceDonePayload,
+  encodeNamespacePayload,
+  encodePublishBlockedPayload,
   encodePublishNamespaceCancelPayload,
   encodePublishNamespaceDonePayload,
   encodePublishNamespacePayload,
   encodeSubscribeNamespacePayload,
-  encodeUnsubscribeNamespacePayload,
 } from "./namespace";

@@ -1,10 +1,33 @@
 /**
  * MOQT Parameter encoding/decoding
- * draft-ietf-moq-transport-15 Section 9.2
+ * draft-ietf-moq-transport-17 Section 9.3
+ *
+ * https://datatracker.ietf.org/doc/draft-ietf-moq-transport/
+ *
+ * Message Parameter {
+ *   Type Delta (vi64),
+ *   Value (..)
+ * }
+ *
+ * Type Delta は前のパラメータの Type との差分。
+ * 偶数型: varint 値
+ * 奇数型: Length プレフィックス付きバイト列
+ * https://github.com/moq-wg/moq-transport/pull/1462
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
 import type { Location } from "./types";
+
+/**
+ * Track Namespace / Full Track Name の最大サイズ（バイト）
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace と Full Track Name は最大 4,096 バイト。
+ * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ */
+export const MAX_TRACK_NAMESPACE_SIZE = 4096;
+export const MAX_TRACK_NAME_SIZE = 4096;
 
 /**
  * MOQT Parameter
@@ -78,7 +101,7 @@ export function getParameterVarintValue(param: Parameter): bigint {
  * パラメータから Location 値を取得
  *
  * LARGEST_OBJECT (0x09) パラメータなど、Location を含むパラメータ用
- * draft-ietf-moq-transport-15 Section 9.2.1.9
+ * draft-ietf-moq-transport-16 Section 9.2.2.7
  */
 export function getParameterLocationValue(param: Parameter): Location {
   const [location] = decodeLocation(param.value, 0);
@@ -94,8 +117,23 @@ export interface TrackNamespace {
 
 /**
  * Track Namespace をエンコードする
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
+  // 先にサイズをチェック
+  let dataSize = 0;
+  for (const element of namespace.tuple) {
+    dataSize += element.length;
+  }
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
+  }
+
   const parts: Uint8Array[] = [encodeVarint(namespace.tuple.length)];
 
   for (const element of namespace.tuple) {
@@ -116,12 +154,18 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 
 /**
  * Track Namespace をデコードする
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ *
  * @returns [namespace, consumed bytes]
  */
 export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamespace, number] {
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
   const elements: Uint8Array[] = [];
+  let dataSize = 0;
 
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -129,6 +173,13 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
     elements.push(element);
     totalConsumed += Number(elemLen);
+    dataSize += Number(elemLen);
+  }
+
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
   }
 
   return [{ tuple: elements }, totalConsumed];
@@ -136,12 +187,26 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
 
 /**
  * string[] から TrackNamespace を作成
+ *
+ * draft-ietf-moq-transport-16:
+ * Track Namespace は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
-  return {
-    tuple: parts.map((p) => encoder.encode(p)),
-  };
+  const tuple = parts.map((p) => encoder.encode(p));
+
+  let dataSize = 0;
+  for (const element of tuple) {
+    dataSize += element.length;
+  }
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
+  }
+
+  return { tuple };
 }
 
 /**
@@ -150,6 +215,39 @@ export function createTrackNamespace(parts: string[]): TrackNamespace {
 export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
   const decoder = new TextDecoder();
   return namespace.tuple.map((t) => decoder.decode(t));
+}
+
+/**
+ * Track Name をエンコードする（サイズ検証付き）
+ *
+ * draft-ietf-moq-transport-16:
+ * Full Track Name は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ */
+export function encodeTrackName(trackName: string): Uint8Array {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(trackName);
+
+  if (bytes.length > MAX_TRACK_NAME_SIZE) {
+    throw new Error(`track name exceeds maximum size: ${bytes.length} > ${MAX_TRACK_NAME_SIZE}`);
+  }
+
+  return bytes;
+}
+
+/**
+ * Track Name のサイズを検証する
+ *
+ * draft-ietf-moq-transport-16:
+ * Full Track Name は最大 4,096 バイト。
+ * https://github.com/moq-wg/moq-transport/pull/1399
+ */
+export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
+  if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
+    throw new Error(
+      `track name exceeds maximum size: ${trackNameBytes.length} > ${MAX_TRACK_NAME_SIZE}`,
+    );
+  }
 }
 
 /**
@@ -175,11 +273,94 @@ export function decodeLocation(data: Uint8Array, offset = 0): [Location, number]
 }
 
 /**
+ * 単一のパラメータを delta encoding でエンコードする
+ *
+ * draft-ietf-moq-transport-16 Section 9.2:
+ * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
+ * or from 0 if there is no previous Type value.
+ *
+ * @param param - エンコードするパラメータ
+ * @param previousType - 前のパラメータの Type 値（最初のパラメータの場合は 0）
+ * @returns エンコードされたバイト列
+ */
+function encodeKeyValuePair(param: Parameter, previousType: number): Uint8Array {
+  const deltaType = param.type - previousType;
+  if (deltaType < 0) {
+    throw new Error(
+      `delta type must be non-negative: current type=${param.type}, previous type=${previousType}`,
+    );
+  }
+
+  const deltaBytes = encodeVarint(deltaType);
+
+  if (param.type % 2 === 1) {
+    // 奇数型: Length プレフィックス付き
+    const lengthBytes = encodeVarint(param.value.length);
+    const result = new Uint8Array(deltaBytes.length + lengthBytes.length + param.value.length);
+    result.set(deltaBytes, 0);
+    result.set(lengthBytes, deltaBytes.length);
+    result.set(param.value, deltaBytes.length + lengthBytes.length);
+    return result;
+  }
+
+  // 偶数型: 値のみ
+  const result = new Uint8Array(deltaBytes.length + param.value.length);
+  result.set(deltaBytes, 0);
+  result.set(param.value, deltaBytes.length);
+  return result;
+}
+
+/**
+ * 単一のパラメータを delta encoding でデコードする
+ *
+ * @param data - デコードするデータ
+ * @param offset - 開始オフセット
+ * @param previousType - 前のパラメータの Type 値（最初のパラメータの場合は 0）
+ * @returns [parameter, consumed bytes]
+ */
+function decodeKeyValuePair(
+  data: Uint8Array,
+  offset: number,
+  previousType: number,
+): [Parameter, number] {
+  const [deltaType, deltaConsumed] = decodeVarint(data, offset);
+  const paramType = previousType + Number(deltaType);
+  let totalConsumed = deltaConsumed;
+
+  let value: Uint8Array;
+
+  if (paramType % 2 === 1) {
+    // 奇数型: Length プレフィックス付き
+    const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
+    totalConsumed += lengthConsumed;
+    value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
+    totalConsumed += Number(length);
+  } else {
+    // 偶数型: varint 値
+    const [val, valConsumed] = decodeVarint(data, offset + totalConsumed);
+    value = encodeVarint(val);
+    totalConsumed += valConsumed;
+  }
+
+  return [{ type: paramType, value }, totalConsumed];
+}
+
+/**
  * パラメータリストをエンコードする
+ *
+ * draft-ietf-moq-transport-16 Section 9.2:
+ * delta encoding を使用して Type を効率的にエンコードする。
+ * パラメータは Type の昇順でなければならない。
  */
 export function encodeParameters(params: Parameter[]): Uint8Array {
   const countBytes = encodeVarint(params.length);
-  const paramBytes = params.map(encodeParameter);
+  const paramBytes: Uint8Array[] = [];
+  let previousType = 0;
+
+  for (const param of params) {
+    paramBytes.push(encodeKeyValuePair(param, previousType));
+    previousType = param.type;
+  }
 
   const totalLength = countBytes.length + paramBytes.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -196,37 +377,47 @@ export function encodeParameters(params: Parameter[]): Uint8Array {
 
 /**
  * パラメータリストをデコードする
+ *
+ * draft-ietf-moq-transport-16 Section 9.2:
+ * delta encoding を使用して Type をデコードする。
+ *
  * @returns [parameters, consumed bytes]
  */
 export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], number] {
   const [numParams, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
   const parameters: Parameter[] = [];
+  let previousType = 0;
 
   for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
+    const [param, paramConsumed] = decodeKeyValuePair(data, offset + totalConsumed, previousType);
     parameters.push(param);
     totalConsumed += paramConsumed;
+    previousType = param.type;
   }
 
   return [parameters, totalConsumed];
 }
 
 /**
- * Subscription Filter (Section 5.1.2, Section 9.2.1.7)
+ * Subscription Filter (Section 5.1.2, Section 9.3.7)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-17:
  * Subscription Filter {
- *   Filter Type (i),
+ *   Filter Type (vi64),
  *   [Start Location (Location),]
- *   [End Group (i),]
+ *   [End Group Delta (vi64),]
  * }
+ *
+ * End Group Delta は Start Location の Group ID からの差分。
+ * 0 の場合は Start Location の Group の残りが対象。
+ * https://github.com/moq-wg/moq-transport/pull/1470
  */
 export type SubscriptionFilter =
   | { type: "NextGroupStart" }
   | { type: "LargestObject" }
   | { type: "AbsoluteStart"; startLocation: Location }
-  | { type: "AbsoluteRange"; startLocation: Location; endGroup: bigint };
+  | { type: "AbsoluteRange"; startLocation: Location; endGroupDelta: bigint };
 
 /**
  * Filter Type 定数
@@ -240,7 +431,7 @@ const FILTER_TYPE = {
 
 /**
  * Subscription Filter をエンコードする
- * draft-ietf-moq-transport-15 Section 9.2.1.7
+ * draft-ietf-moq-transport-17 Section 9.3.7
  */
 export function encodeSubscriptionFilter(filter: SubscriptionFilter): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -259,7 +450,7 @@ export function encodeSubscriptionFilter(filter: SubscriptionFilter): Uint8Array
     case "AbsoluteRange":
       parts.push(encodeVarint(FILTER_TYPE.ABSOLUTE_RANGE));
       parts.push(encodeLocation(filter.startLocation));
-      parts.push(encodeVarint(filter.endGroup));
+      parts.push(encodeVarint(filter.endGroupDelta));
       break;
   }
 
@@ -300,9 +491,9 @@ export function decodeSubscriptionFilter(
     case FILTER_TYPE.ABSOLUTE_RANGE: {
       const [startLocation, locationConsumed] = decodeLocation(data, offset + totalConsumed);
       totalConsumed += locationConsumed;
-      const [endGroup, endGroupConsumed] = decodeVarint(data, offset + totalConsumed);
-      totalConsumed += endGroupConsumed;
-      return [{ type: "AbsoluteRange", startLocation, endGroup }, totalConsumed];
+      const [endGroupDelta, endGroupDeltaConsumed] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += endGroupDeltaConsumed;
+      return [{ type: "AbsoluteRange", startLocation, endGroupDelta }, totalConsumed];
     }
 
     default:

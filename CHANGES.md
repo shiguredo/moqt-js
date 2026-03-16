@@ -11,14 +11,34 @@
 
 ## develop
 
-- [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
-  - @voluntas
 - [CHANGE] rolldown-vite から vite に戻す
   - rolldown でオプショナルチェーン (`?.`) が minification 時に消えるバグがあったため
+  - @voluntas
+- [CHANGE] draft-ietf-moq-transport-16 に対応する
+  - パラメータのデルタエンコーディング対応
+  - SUBSCRIBE_UPDATE を REQUEST_UPDATE に変更
+  - REQUEST_ERROR に Retry Interval 追加
+  - PUBLISH_NAMESPACE_DONE/CANCEL に Request ID 追加
+  - PUBLISH, SUBSCRIBE_OK, FETCH_OK に Extension Headers 追加
+  - Object Status の処理方法変更
+  - TRACK_STATUS から配信関連パラメータ削除
+  - TRACK_STATUS に LARGEST_OBJECT パラメータ追加
+  - SUBSCRIBE_NAMESPACE で空/ワイルドカード namespace 許可
+  - FETCH レスポンスで不明な範囲を許可
+  - DELIVERY_TIMEOUT=0 を禁止
+  - REQUEST_UPDATE で Start Location 減少許可
+  - 同一トラックで Datagram と Stream の混在許可
+  - 未対応: SUBSCRIBE_NAMESPACE の専用ストリーム対応
+  - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
+  - 未対応: Subgroup 再オープン禁止
+  - @voluntas
+- [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
   - @voluntas
 
 ### misc
 
+- [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
+  - @voluntas
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
   - @voluntas
 
