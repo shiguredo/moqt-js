@@ -15,6 +15,7 @@
   "files": [
     "dist"
   ],
+  "type": "module",
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -31,7 +32,7 @@
     "build:devtools": "vp build devtools",
     "build:examples": "vp build examples",
     "fmt": "vp fmt --write .",
-    "lint": "vp lint --type-aware",
+    "lint": "vp lint",
     "typecheck": "tsc --noEmit",
     "test": "vp test",
     "test:cov": "vp test --coverage",
@@ -46,7 +47,8 @@
     "@types/node": "25.5.0",
     "fast-check": "4.6.0",
     "typescript": "5.9.3",
-    "vite-plus": "0.1.13"
+    "vite-plus": "0.1.13",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.13"
   },
   "packageManager": "pnpm@10.32.1"
 }

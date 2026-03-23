@@ -24,6 +24,7 @@ export function getEncoderConfig(
         avc: { format: "annexb" },
       };
     case "h265":
+      // hevc プロパティは Chrome 独自拡張で TypeScript の型定義に含まれない
       return {
         codec: "hvc1.1.6.L93.B0",
         width,
@@ -31,7 +32,7 @@ export function getEncoderConfig(
         bitrate,
         framerate,
         hevc: { format: "annexb" },
-      };
+      } as VideoEncoderConfig;
     default:
       return { codec: "vp8", width, height, bitrate, framerate };
   }

@@ -212,7 +212,7 @@ function updateStatus(target: "pub" | "sub", status: string): void {
 }
 
 // 証明書ハッシュの取得
-function getCertificateHashes(): Uint8Array[] | undefined {
+function getCertificateHashes(): ArrayBuffer[] | undefined {
   const hash = certHashInput.value.trim();
   if (!hash) return undefined;
 
@@ -222,7 +222,7 @@ function getCertificateHashes(): Uint8Array[] | undefined {
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return [bytes];
+    return [bytes.buffer as ArrayBuffer];
   } catch {
     log("pub", "invalid certificate hash format", true);
     return undefined;
@@ -272,31 +272,36 @@ async function startPublishing(): Promise<void> {
       `video: ${videoCodec} ${videoBitrate / 1000}kbps ${videoWidth}x${videoHeight}@${videoFramerate}fps`,
     );
 
-    publisher = await createMediaPublisher(url, {
-      namespace: ["example"],
-      audio: {
-        trackName: "audio",
-        codec: audioCodec,
-        bitrate: audioBitrate,
+    publisher = await createMediaPublisher(
+      url,
+      {
+        namespace: ["example"],
+        audio: {
+          trackName: "audio",
+          codec: audioCodec,
+          bitrate: audioBitrate,
+        },
+        video: {
+          trackName: "video",
+          codec: videoCodec,
+          width: videoWidth,
+          height: videoHeight,
+          bitrate: videoBitrate,
+          framerate: videoFramerate,
+          keyframeInterval: keyframeInterval,
+        },
+        serverCertificateHashes: certHashes,
       },
-      video: {
-        trackName: "video",
-        codec: videoCodec,
-        width: videoWidth,
-        height: videoHeight,
-        bitrate: videoBitrate,
-        framerate: videoFramerate,
-        keyframeInterval: keyframeInterval,
+      {
+        onStateChange: (state) => {
+          log("pub", `state: ${state}`);
+          updateStatus("pub", state);
+        },
+        onError: (error) => {
+          log("pub", `error: ${error.message}`, true);
+        },
       },
-      serverCertificateHashes: certHashes,
-      onStateChange: (state) => {
-        log("pub", `state: ${state}`);
-        updateStatus("pub", state);
-      },
-      onError: (error) => {
-        log("pub", `error: ${error.message}`, true);
-      },
-    });
+    );
 
     log("pub", "starting publisher...");
     await publisher.start(localStream);
@@ -355,28 +360,33 @@ async function startSubscribing(): Promise<void> {
 
     log("sub", `connecting to ${url}...`);
 
-    subscriber = await createMediaSubscriber(url, {
-      namespace: ["example"],
-      audio: {
-        trackName: "audio",
+    subscriber = await createMediaSubscriber(
+      url,
+      {
+        namespace: ["example"],
+        audio: {
+          trackName: "audio",
+        },
+        video: {
+          trackName: "video",
+        },
+        serverCertificateHashes: certHashes,
       },
-      video: {
-        trackName: "video",
+      {
+        onStateChange: (state) => {
+          log("sub", `state: ${state}`);
+          updateStatus("sub", state);
+        },
+        onCatalog: (catalog) => {
+          log("sub", `catalog received: ${catalog.tracks.length} tracks`);
+          subCatalogDiv.style.display = "block";
+          subCatalogContent.textContent = formatCatalog(catalog);
+        },
+        onError: (error) => {
+          log("sub", `error: ${error.message}`, true);
+        },
       },
-      serverCertificateHashes: certHashes,
-      onStateChange: (state) => {
-        log("sub", `state: ${state}`);
-        updateStatus("sub", state);
-      },
-      onCatalog: (catalog) => {
-        log("sub", `catalog received: ${catalog.tracks.length} tracks`);
-        subCatalogDiv.style.display = "block";
-        subCatalogContent.textContent = formatCatalog(catalog);
-      },
-      onError: (error) => {
-        log("sub", `error: ${error.message}`, true);
-      },
-    });
+    );
 
     log("sub", "starting subscriber...");
     await subscriber.start();

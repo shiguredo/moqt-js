@@ -210,7 +210,7 @@ export function usePublisher() {
       groupId: pub.pubCurrentGroup.value,
       objectId: pub.pubCurrentObjectId.value++,
       payload,
-      extensions,
+      properties: extensions,
       priority: chunk.type === "key" ? 255 : 128,
     });
 
@@ -308,8 +308,8 @@ export function usePublisher() {
       ]);
       const catalogPayload = encodeCatalog(createdCatalog);
       catalogPublisherInstance.sendObject({
-        groupId: 0n,
-        objectId: 0n,
+        groupId: 0,
+        objectId: 0,
         payload: catalogPayload,
       });
       pub.catalog.value = createdCatalog;
@@ -475,8 +475,8 @@ export function usePublisher() {
         const completeCatalog = createCompleteCatalog();
         const completeCatalogPayload = encodeCatalog(completeCatalog);
         pub.catalogPublisher.value.sendObject({
-          groupId: 1n,
-          objectId: 0n,
+          groupId: 1,
+          objectId: 0,
           payload: completeCatalogPayload,
         });
         addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, complete)`, {

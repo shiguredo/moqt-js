@@ -1,25 +1,25 @@
 // エンコーダー用 DedicatedWorker
 
-interface InitMessage {
+interface EncoderInitMessage {
   type: "init";
   config: VideoEncoderConfig;
 }
 
-interface EncodeMessage {
+interface EncoderEncodeMessage {
   type: "encode";
   frame: VideoFrame;
   keyFrame: boolean;
 }
 
-interface CloseMessage {
+interface EncoderCloseMessage {
   type: "close";
 }
 
-type WorkerMessage = InitMessage | EncodeMessage | CloseMessage;
+type EncoderWorkerMessage = EncoderInitMessage | EncoderEncodeMessage | EncoderCloseMessage;
 
 let encoder: VideoEncoder | null = null;
 
-self.onmessage = (e: MessageEvent<WorkerMessage>) => {
+self.onmessage = (e: MessageEvent<EncoderWorkerMessage>) => {
   const message = e.data;
 
   switch (message.type) {
@@ -41,11 +41,14 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
             if (desc instanceof ArrayBuffer) {
               description = desc.slice(0);
             } else if (ArrayBuffer.isView(desc)) {
-              description = desc.buffer.slice(desc.byteOffset, desc.byteOffset + desc.byteLength);
+              description = desc.buffer.slice(
+                desc.byteOffset,
+                desc.byteOffset + desc.byteLength,
+              ) as ArrayBuffer;
             }
           }
 
-          const transferList: Transferable[] = [data.buffer];
+          const transferList: Transferable[] = [data.buffer as ArrayBuffer];
           if (description) {
             transferList.push(description);
           }
@@ -59,7 +62,7 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
               duration: chunk.duration,
               description,
             },
-            transferList,
+            { transfer: transferList },
           );
         },
         error: (error: DOMException) => {
