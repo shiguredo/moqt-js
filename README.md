@@ -282,14 +282,14 @@ Chrome 最新版で `--enable-features=EnableWebTransportDraft07` フラグを�
 ## ビルド
 
 ```bash
-pnpm install
-pnpm build
+vp install
+vp run build
 ```
 
 ## テスト
 
 ```bash
-pnpm test
+vp test
 ```
 
 ## サンプル
@@ -297,7 +297,7 @@ pnpm test
 [examples/](examples/) ディレクトリにサンプルコードがあります。
 
 ```bash
-pnpm dev:examples
+vp run dev:examples
 ```
 
 ### high-level-api
@@ -309,8 +309,8 @@ pnpm dev:examples
 [devtools/](devtools/) ディレクトリに開発ツールがあります。
 
 ```bash
-pnpm build
-pnpm run dev
+vp run build
+vp dev
 ```
 
 ### 使用技術
@@ -319,10 +319,8 @@ pnpm run dev
 - [@preact/signals](https://github.com/preactjs/signals) - 状態管理
 - [preact-iso](https://github.com/preactjs/preact-iso) - ルーティング
 - [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) - CSS フレームワーク
-- [Vite](https://github.com/vitejs/vite) - ビルドツール
+- [Vite+](https://github.com/voidzero-dev/vite-plus) - 統合ツールチェーン (Vite / Vitest / Oxlint / Oxfmt)
 - [TypeScript](https://github.com/microsoft/TypeScript) - 言語
-- [Oxc](https://github.com/oxc-project/oxc) - リンター / フォーマッター
-- [Vitest](https://github.com/vitest-dev/vitest) - テストフレームワーク
 - [fast-check](https://github.com/dubzzz/fast-check) - プロパティベーステスト
 
 ### moqt-devtools
