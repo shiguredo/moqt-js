@@ -37,8 +37,10 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - `draft-07` と `draft-17` 対応
 - Low Overhead Container 対応
   - [Media over QUIC - Low Overhead Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc)
+  - `draft-02` 対応
 - MOQT Streaming Format (MSF) 対応
-  - [MOQT Streaming Format](https://github.com/moq-wg/msf)
+  - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf)
+  - `draft-00` 対応
   - Catalog (トラックメタデータ)
 - 外部依存なし
 
@@ -119,7 +121,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### MOQT Streaming Format
 
-[draft-ietf-moq-msf](https://github.com/moq-wg/msf) の機能実装状況です。
+[draft-ietf-moq-msf-00](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf) の機能実装状況です。
 
 #### Catalog
 
@@ -325,7 +327,7 @@ pnpm run dev
 
 ### moqt-devtools
 
-moqt-js を利用した MOQT の動作確認ツールです。
+moqt-js を利用した MOQT の動作確認ツールです。オンライン版は https://moqt-devtools.shiguredo.app/ から利用できます。
 
 - Publisher / Subscriber 両方の動作確認
 - 複数 Subscriber の同時接続
