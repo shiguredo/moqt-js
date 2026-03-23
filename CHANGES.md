@@ -48,6 +48,14 @@
   - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
   - 未対応: Subgroup 再オープン禁止
   - @voluntas
+- [CHANGE] draft-ietf-moq-msf-00 に対応する
+  - removeTracks の型を string[] から RemoveTrack[] ({name, namespace?}) に変更
+  - CatalogDelta 型を新設し delta update が version/tracks を含まないようにする
+  - cloneTracks で depends[0] ではなく parentName を使用する
+  - EventTimelineEntry.data の型を Record<string, unknown> から unknown に変更
+  - decodeCatalog を decodeCatalogMessage にリネーム
+  - encodeCatalogDelta を追加
+  - @voluntas
 - [CHANGE] draft-ietf-moq-loc-02 に対応する
   - LOC Header Extensions を LOC Properties にリネーム
   - Timestamp / Timescale プロパティを追加
