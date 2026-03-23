@@ -31,7 +31,7 @@ export function App() {
               rel="noopener noreferrer"
               class="hover:text-slate-600 underline"
             >
-              draft-ietf-webtrans-http3-14
+              draft-ietf-webtrans-http3-15
             </a>
             {" / "}
             <a
