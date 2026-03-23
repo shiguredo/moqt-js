@@ -11,7 +11,7 @@ import type { MoqtObject } from "./dataStream";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
-  decodeCatalog,
+  decodeCatalogMessage,
   getAudioTracks,
   getVideoTracks,
   type Catalog,
@@ -576,7 +576,12 @@ class MediaSubscriberImpl implements MediaSubscriber {
    */
   private handleCatalogObject(obj: MoqtObject): void {
     try {
-      this.receivedCatalog = decodeCatalog(obj.payload);
+      // フルカタログのみ処理する (delta update は現在未対応)
+      const message = decodeCatalogMessage(obj.payload);
+      if (!("version" in message)) {
+        return;
+      }
+      this.receivedCatalog = message;
       this.callbacks.onCatalog?.(this.receivedCatalog);
 
       // Catalog を受信したら Promise を解決
