@@ -19,7 +19,7 @@ export default defineConfig({
     ignorePatterns: ["dist/**", "devtools/dist/**"],
   },
   lint: {
-    ignorePatterns: ["dist/**", "devtools/dist/**", "devtools/main.ts"],
+    ignorePatterns: ["dist/**", "devtools/**", "examples/**"],
     options: {
       typeAware: true,
       typeCheck: true,
