@@ -1,6 +1,6 @@
 # moqt-js TODO
 
-RFC draft-ietf-moq-transport-17、draft-ietf-moq-loc-02、draft-ietf-moq-msf-latest 準拠の実装計画。
+RFC draft-ietf-moq-transport-17、draft-ietf-moq-loc-02、draft-ietf-moq-msf-00 準拠の実装計画。
 
 ## MOQT (draft-ietf-moq-transport-17)
 
@@ -162,7 +162,7 @@ encode/decode のみ（高レベル API で未使用）:
 - [x] `VideoHeaderExtensions` → `VideoProperties` に変更
 - [x] `AudioHeaderExtensions` → `AudioProperties` に変更
 
-## MSF (draft-ietf-moq-msf-latest)
+## MSF (draft-ietf-moq-msf-00)
 
 ### 完了済み
 
