@@ -1,11 +1,11 @@
 // デコーダー用 DedicatedWorker
 
-interface InitMessage {
+interface DecoderInitMessage {
   type: "init";
   config: VideoDecoderConfig;
 }
 
-interface DecodeMessage {
+interface DecoderDecodeMessage {
   type: "decode";
   data: ArrayBuffer;
   chunkType: "key" | "delta";
@@ -13,21 +13,25 @@ interface DecodeMessage {
   duration: number;
 }
 
-interface CloseMessage {
+interface DecoderCloseMessage {
   type: "close";
 }
 
-interface ResetKeyframeWaitMessage {
+interface DecoderResetKeyframeWaitMessage {
   type: "resetKeyframeWait";
 }
 
-type WorkerMessage = InitMessage | DecodeMessage | CloseMessage | ResetKeyframeWaitMessage;
+type DecoderWorkerMessage =
+  | DecoderInitMessage
+  | DecoderDecodeMessage
+  | DecoderCloseMessage
+  | DecoderResetKeyframeWaitMessage;
 
 let decoder: VideoDecoder | null = null;
 // configure() 後、最初のキーフレームを受信するまでデルタフレームをスキップ
 let needsKeyframe = true;
 
-self.onmessage = (e: MessageEvent<WorkerMessage>) => {
+self.onmessage = (e: MessageEvent<DecoderWorkerMessage>) => {
   const message = e.data;
 
   switch (message.type) {
@@ -51,7 +55,7 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
               type: "decoded",
               frame,
             },
-            [frame],
+            { transfer: [frame as unknown as Transferable] },
           );
         },
         error: (error: DOMException) => {

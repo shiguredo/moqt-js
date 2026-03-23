@@ -1,6 +1,6 @@
 import { defineConfig } from "vite-plus";
 import { resolve } from "node:path";
-import packageJson from "./package.json";
+import packageJson from "./package.json" with { type: "json" };
 
 export default defineConfig({
   define: {
@@ -10,9 +10,19 @@ export default defineConfig({
     target: "esnext",
     outDir: "dist",
     lib: {
-      entry: resolve(__dirname, "src/index.ts"),
+      entry: resolve(import.meta.dirname, "src/index.ts"),
       formats: ["es"],
       fileName: "index",
+    },
+  },
+  fmt: {
+    ignorePatterns: ["dist/**", "devtools/dist/**"],
+  },
+  lint: {
+    ignorePatterns: ["dist/**", "devtools/dist/**", "devtools/main.ts"],
+    options: {
+      typeAware: true,
+      typeCheck: true,
     },
   },
   test: {

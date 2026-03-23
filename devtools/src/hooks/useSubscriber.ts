@@ -101,7 +101,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
     sub.updateSubscriber(subscriberId, {
       objectsReceived: instance.objectsReceived + 1,
-      bytesReceived: instance.bytesReceived + obj.payload.length + (obj.extensions?.length ?? 0),
+      bytesReceived: instance.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
       currentGroup: Number(obj.groupId),
       currentSubGroup: Number(obj.subgroupId ?? 0n),
       decoderState: decoderInstance.state,
@@ -114,11 +114,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       let currentInstance = sub.getSubscriber(subscriberId);
       if (!currentInstance) return;
 
-      if (obj.extensions && obj.extensions.length > 0) {
+      if (obj.properties && obj.properties.length > 0) {
         sub.updateSubscriber(subscriberId, {
           objectsWithExtensions: currentInstance.objectsWithExtensions + 1,
         });
-        const locProperties = LOC.decodeVideoProperties(obj.extensions);
+        const locProperties = LOC.decodeVideoProperties(obj.properties);
 
         // Capture Timestamp から timestamp を取得
         if (locProperties.timestamp !== undefined) {
@@ -368,6 +368,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       });
 
       // デコーダを設定: Catalog から取得
+      if (!videoTrackFromCatalog.codec) {
+        throw new Error("video track codec is not specified in catalog");
+      }
       const decoderConfig: VideoDecoderConfig = {
         codec: videoTrackFromCatalog.codec,
         codedWidth: videoTrackFromCatalog.width,
@@ -441,8 +444,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // LOC から timestamp と keyframe 情報を取得
             let timestamp = 0;
             let isKeyFrame = false;
-            if (obj.extensions && obj.extensions.length > 0) {
-              const ext = LOC.decodeVideoProperties(obj.extensions);
+            if (obj.properties && obj.properties.length > 0) {
+              const ext = LOC.decodeVideoProperties(obj.properties);
               if (ext.timestamp !== undefined) {
                 timestamp = Number(ext.timestamp);
               }
@@ -465,7 +468,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 ...currentStats,
                 objectsReceived: currentStats.objectsReceived + 1,
                 bytesReceived:
-                  currentStats.bytesReceived + obj.payload.length + (obj.extensions?.length ?? 0),
+                  currentStats.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
               },
             });
 
@@ -521,8 +524,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // バッファ内の最後の timestamp を取得
             let lastTimestamp = instance.joiningFetchLastTimestamp;
             for (const obj of objectsToProcess) {
-              if (obj.extensions && obj.extensions.length > 0) {
-                const ext = LOC.decodeVideoProperties(obj.extensions);
+              if (obj.properties && obj.properties.length > 0) {
+                const ext = LOC.decodeVideoProperties(obj.properties);
                 if (ext.timestamp !== undefined) {
                   lastTimestamp = Number(ext.timestamp);
                 }

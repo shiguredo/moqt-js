@@ -5,30 +5,16 @@
 [[repos]]
 repo = "local"
 hooks = [
-  {
-    id = "vp-check",
-    name = "vp check",
-    entry = """bash -c 'export PATH="$HOME/.vite-plus/bin:$PATH" && vp check --fix'""",
-    language = "system",
-    types_or = [
-      "ts",
-      "tsx",
-      "javascript",
-      "jsx",
-      "css",
-      "json"
-    ],
-    pass_filenames = false
-  },
-  {
-    id = "vp-test",
-    name = "vp test",
-    entry = """bash -c 'export PATH="$HOME/.vite-plus/bin:$PATH" && vp test run'""",
-    language = "system",
-    types_or = [
-      "ts",
-      "tsx"
-    ],
-    pass_filenames = false
-  }
+  { id = "vp-check", name = "vp check", entry = """bash -c 'export PATH="$HOME/.vite-plus/bin:$PATH" && vp check --fix'""", language = "system", types_or = [
+    "ts",
+    "tsx",
+    "javascript",
+    "jsx",
+    "css",
+    "json",
+  ], pass_filenames = false },
+  { id = "vp-test", name = "vp test", entry = """bash -c 'export PATH="$HOME/.vite-plus/bin:$PATH" && vp test run'""", language = "system", types_or = [
+    "ts",
+    "tsx",
+  ], pass_filenames = false },
 ]

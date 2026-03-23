@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "25"
           cache: true
-      - run: vp lint --type-aware
+      - run: vp lint
 
   build:
     runs-on: ubuntu-slim
