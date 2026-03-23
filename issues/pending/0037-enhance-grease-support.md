@@ -24,15 +24,15 @@ draft-ietf-moq-transport-17 Section 13 で定義されている GREASE (Generate
 
 ### GREASE が適用されるレジストリ
 
-| レジストリ | RFC セクション | 用途 |
-|---|---|---|
-| Setup Options | Section 9.4.1 | SETUP メッセージのオプション |
-| Properties | Section 14.4 | Track / Object Properties |
-| Session Termination Error Codes | Section 14.5.1 | セッション終了エラー |
-| REQUEST_ERROR Codes | Section 14.5.2 | リクエストエラー |
-| PUBLISH_DONE Codes | Section 14.5.3 | PUBLISH_DONE ステータス |
-| Data Stream Reset Error Codes | Section 14.5.4 | データストリームリセット |
-| MOQT Auth Token Type | - | 認証トークン種別 |
+| レジストリ                      | RFC セクション | 用途                         |
+| ------------------------------- | -------------- | ---------------------------- |
+| Setup Options                   | Section 9.4.1  | SETUP メッセージのオプション |
+| Properties                      | Section 14.4   | Track / Object Properties    |
+| Session Termination Error Codes | Section 14.5.1 | セッション終了エラー         |
+| REQUEST_ERROR Codes             | Section 14.5.2 | リクエストエラー             |
+| PUBLISH_DONE Codes              | Section 14.5.3 | PUBLISH_DONE ステータス      |
+| Data Stream Reset Error Codes   | Section 14.5.4 | データストリームリセット     |
+| MOQT Auth Token Type            | -              | 認証トークン種別             |
 
 ### RFC の要件レベル
 
