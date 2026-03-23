@@ -8,9 +8,12 @@ import {
   CATALOG_TRACK_NAME,
   type Catalog,
   type CatalogTrack,
+  type CatalogDelta,
   type MediaTimelineEntry,
   type EventTimelineEntry,
-  decodeCatalog,
+  decodeCatalogMessage,
+  encodeCatalog,
+  encodeCatalogDelta,
   encodeMediaTimeline,
   decodeMediaTimeline,
   encodeEventTimeline,
@@ -31,25 +34,87 @@ import {
 } from "./msf";
 
 // =============================================================================
-// Catalog エラーケース
+// Catalog エンコード/デコード
 // =============================================================================
+
+test("Catalog: フルカタログのエンコード/デコード", () => {
+  const catalog: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+  };
+  const encoded = encodeCatalog(catalog);
+  const decoded = decodeCatalogMessage(encoded);
+  assert.deepStrictEqual(decoded, catalog);
+});
 
 test("Catalog: 不正な version はエラー", () => {
   const invalidCatalog = { version: 2, tracks: [] };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 test("Catalog: tracks が配列でない場合はエラー", () => {
   const invalidCatalog = { version: 1, tracks: "not an array" };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 test("Catalog: トラックに必須フィールドがない場合はエラー", () => {
   const invalidCatalog = { version: 1, tracks: [{ name: "test" }] };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
+});
+
+// =============================================================================
+// CatalogDelta エンコード/デコード
+// =============================================================================
+
+test("CatalogDelta: addTracks のエンコード/デコード", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  const decoded = decodeCatalogMessage(encoded);
+  assert.deepStrictEqual(decoded, delta);
+});
+
+test("CatalogDelta: removeTracks のエンコード/デコード", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    removeTracks: [{ name: "video" }, { name: "slides" }],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  const decoded = decodeCatalogMessage(encoded);
+  assert.deepStrictEqual(decoded, delta);
+});
+
+test("CatalogDelta: removeTracks に namespace を含める", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    removeTracks: [{ name: "video", namespace: "example.com/room1" }],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  const decoded = decodeCatalogMessage(encoded) as CatalogDelta;
+  assert.strictEqual(decoded.removeTracks?.[0].namespace, "example.com/room1");
+});
+
+test("CatalogDelta: version を含む場合はエラー", () => {
+  const invalid = { deltaUpdate: true, version: 1, addTracks: [] };
+  const encoded = new TextEncoder().encode(JSON.stringify(invalid));
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog delta format/);
+});
+
+test("CatalogDelta: tracks を含む場合はエラー", () => {
+  const invalid = { deltaUpdate: true, tracks: [], addTracks: [] };
+  const encoded = new TextEncoder().encode(JSON.stringify(invalid));
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog delta format/);
+});
+
+test("CatalogDelta: addTracks/removeTracks/cloneTracks がない場合はエラー", () => {
+  const invalid = { deltaUpdate: true, generatedAt: 123 };
+  const encoded = new TextEncoder().encode(JSON.stringify(invalid));
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog delta format/);
 });
 
 // =============================================================================
@@ -92,6 +157,34 @@ test("Event Timeline: 不正な形式はエラー", () => {
 test("Event Timeline: data がない場合はエラー", () => {
   const invalidData = new TextEncoder().encode('[{"t": 123}]');
   assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline entry/);
+});
+
+test("Event Timeline: data が配列の場合も正常にデコードする", () => {
+  // RFC Section 8.4.2: "data": [47.1812, 8.4592]
+  const entries: EventTimelineEntry[] = [
+    { l: [0n, 0n], data: [47.1812, 8.4592] },
+    { l: [1n, 0n], data: [47.1662, 8.5155] },
+  ];
+  const encoded = encodeEventTimeline(entries);
+  const decoded = decodeEventTimeline(encoded);
+
+  assert.strictEqual(decoded.length, 2);
+  assert.deepStrictEqual(decoded[0].data, [47.1812, 8.4592]);
+  assert.deepStrictEqual(decoded[1].data, [47.1662, 8.5155]);
+});
+
+test("Event Timeline: data が文字列の場合も正常にデコードする", () => {
+  const entries: EventTimelineEntry[] = [{ t: 123, data: "hello" }];
+  const encoded = encodeEventTimeline(entries);
+  const decoded = decodeEventTimeline(encoded);
+  assert.strictEqual(decoded[0].data, "hello");
+});
+
+test("Event Timeline: data が数値の場合も正常にデコードする", () => {
+  const entries: EventTimelineEntry[] = [{ t: 123, data: 42 }];
+  const encoded = encodeEventTimeline(entries);
+  const decoded = decodeEventTimeline(encoded);
+  assert.strictEqual(decoded[0].data, 42);
 });
 
 // =============================================================================
@@ -203,48 +296,13 @@ test("CATALOG_TRACK_NAME: 定数が正しい", () => {
 // Catalog 差分更新
 // =============================================================================
 
-test("applyCatalogDelta: deltaUpdate が false の場合はそのまま置き換え", () => {
-  const current: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "old", packaging: "loc", isLive: true }],
-  };
-
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "new", packaging: "loc", isLive: true }],
-    deltaUpdate: false,
-  };
-
-  const result = applyCatalogDelta(current, delta);
-  assert.strictEqual(result.tracks.length, 1);
-  assert.strictEqual(result.tracks[0].name, "new");
-});
-
-test("applyCatalogDelta: deltaUpdate が undefined の場合はそのまま置き換え", () => {
-  const current: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "old", packaging: "loc", isLive: true }],
-  };
-
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "new", packaging: "loc", isLive: true }],
-  };
-
-  const result = applyCatalogDelta(current, delta);
-  assert.strictEqual(result.tracks.length, 1);
-  assert.strictEqual(result.tracks[0].name, "new");
-});
-
 test("applyCatalogDelta: addTracks でトラックを追加", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
     addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
   };
@@ -264,11 +322,9 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["audio"],
+    removeTracks: [{ name: "audio" }],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -276,36 +332,62 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
   assert.strictEqual(result.tracks[0].name, "video");
 });
 
-test("applyCatalogDelta: cloneTracks でトラックを複製", () => {
+test("applyCatalogDelta: removeTracks で namespace を考慮して削除", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [
-      { name: "video", packaging: "loc", isLive: true, codec: "av1", width: 1920, height: 1080 },
+      { name: "video", packaging: "loc", isLive: true, namespace: "room1" },
+      { name: "video", packaging: "loc", isLive: true, namespace: "room2" },
     ],
   };
 
-  const delta: Catalog = {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    removeTracks: [{ name: "video", namespace: "room1" }],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual(result.tracks.length, 1);
+  assert.strictEqual(result.tracks[0].namespace, "room2");
+});
+
+test("applyCatalogDelta: cloneTracks で parentName を使用して複製", () => {
+  const current: Catalog = {
     version: MSF_VERSION,
-    tracks: [],
+    tracks: [
+      {
+        name: "video-1080",
+        packaging: "loc",
+        isLive: true,
+        codec: "av1",
+        width: 1920,
+        height: 1080,
+      },
+    ],
+  };
+
+  // RFC Section 5.3.4: parentName でベーストラックを指定
+  const delta: CatalogDelta = {
     deltaUpdate: true,
     cloneTracks: [
       {
-        name: "video-sd",
+        name: "video-720",
         packaging: "loc",
         isLive: true,
-        depends: ["video"],
-        width: 640,
-        height: 480,
+        parentName: "video-1080",
+        width: 1280,
+        height: 720,
+        bitrate: 600000,
       },
     ],
   };
 
   const result = applyCatalogDelta(current, delta);
   assert.strictEqual(result.tracks.length, 2);
-  assert.strictEqual(result.tracks[1].name, "video-sd");
+  assert.strictEqual(result.tracks[1].name, "video-720");
   assert.strictEqual(result.tracks[1].codec, "av1");
-  assert.strictEqual(result.tracks[1].width, 640);
-  assert.strictEqual(result.tracks[1].height, 480);
+  assert.strictEqual(result.tracks[1].width, 1280);
+  assert.strictEqual(result.tracks[1].height, 720);
 });
 
 test("applyCatalogDelta: 複合操作 (remove + add)", () => {
@@ -317,11 +399,9 @@ test("applyCatalogDelta: 複合操作 (remove + add)", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["video-hd"],
+    removeTracks: [{ name: "video-hd" }],
     addTracks: [{ name: "video-sd", packaging: "loc", isLive: true }],
   };
 
@@ -330,6 +410,23 @@ test("applyCatalogDelta: 複合操作 (remove + add)", () => {
   assert.isTrue(result.tracks.some((t) => t.name === "audio"));
   assert.isTrue(result.tracks.some((t) => t.name === "video-sd"));
   assert.isFalse(result.tracks.some((t) => t.name === "video-hd"));
+});
+
+test("applyCatalogDelta: generatedAt を引き継ぐ", () => {
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+    generatedAt: 100,
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 200,
+    addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual(result.generatedAt, 200);
 });
 
 // =============================================================================

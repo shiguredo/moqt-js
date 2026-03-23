@@ -9,10 +9,11 @@ import {
   CATALOG_TRACK_NAME,
   type Catalog,
   type CatalogTrack,
+  type CatalogDelta,
   type MediaTimelineEntry,
   type EventTimelineEntry,
   encodeCatalog,
-  decodeCatalog,
+  decodeCatalogMessage,
   encodeMediaTimeline,
   decodeMediaTimeline,
   encodeEventTimeline,
@@ -85,7 +86,6 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc.record({
 const catalogArb: fc.Arbitrary<Catalog> = fc.record({
   version: fc.constant(MSF_VERSION as typeof MSF_VERSION),
   tracks: fc.array(catalogTrackArb, { minLength: 1, maxLength: 10 }),
-  deltaUpdate: fc.option(fc.boolean(), { nil: undefined }),
   generatedAt: fc.option(fc.nat({ max: Date.now() + 86400000 }), { nil: undefined }),
   isComplete: fc.option(fc.boolean(), { nil: undefined }),
 });
@@ -111,12 +111,17 @@ const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.record({
   t: fc.option(fc.nat({ max: Date.now() + 86400000 }), { nil: undefined }),
   l: fc.option(fc.tuple(bigUintArb, bigUintArb), { nil: undefined }),
   m: fc.option(fc.nat({ max: 86400000 }), { nil: undefined }),
-  data: fc.object({
-    key: fc.string({ maxLength: 16 }),
-    values: [fc.string(), fc.nat(), fc.boolean()],
-    maxDepth: 1,
-    maxKeys: 5,
-  }) as fc.Arbitrary<Record<string, unknown>>,
+  data: fc.oneof(
+    fc.object({
+      key: fc.string({ maxLength: 16 }),
+      values: [fc.string(), fc.nat(), fc.boolean()],
+      maxDepth: 1,
+      maxKeys: 5,
+    }),
+    fc.array(fc.oneof(fc.nat(), fc.string(), fc.boolean()), { maxLength: 5 }),
+    fc.string(),
+    fc.nat(),
+  ) as fc.Arbitrary<unknown>,
 });
 
 // =============================================================================
@@ -127,7 +132,7 @@ test("Catalog: エンコード/デコードのラウンドトリップ", () => {
   fc.assert(
     fc.property(catalogArb, (catalog) => {
       const encoded = encodeCatalog(catalog);
-      const decoded = decodeCatalog(encoded);
+      const decoded = decodeCatalogMessage(encoded);
 
       // JSON は undefined を保持しないため、同じ JSON 文字列になることを確認
       assert.strictEqual(JSON.stringify(decoded), JSON.stringify(catalog));
@@ -149,7 +154,7 @@ test("Catalog: version は常に MSF_VERSION", () => {
   fc.assert(
     fc.property(catalogArb, (catalog) => {
       const encoded = encodeCatalog(catalog);
-      const decoded = decodeCatalog(encoded);
+      const decoded = decodeCatalogMessage(encoded) as Catalog;
       assert.strictEqual(decoded.version, MSF_VERSION);
     }),
   );
@@ -158,19 +163,19 @@ test("Catalog: version は常に MSF_VERSION", () => {
 test("Catalog: 不正な version はエラー", () => {
   const invalidCatalog = { version: 2, tracks: [] };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 test("Catalog: tracks が配列でない場合はエラー", () => {
   const invalidCatalog = { version: 1, tracks: "not an array" };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 test("Catalog: トラックに必須フィールドがない場合はエラー", () => {
   const invalidCatalog = { version: 1, tracks: [{ name: "test" }] };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 // =============================================================================
@@ -378,48 +383,13 @@ test("CATALOG_TRACK_NAME: 定数が正しい", () => {
 // Catalog 差分更新テスト
 // =============================================================================
 
-test("applyCatalogDelta: deltaUpdate が false の場合はそのまま置き換え", () => {
-  const current: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "old", packaging: "loc", isLive: true }],
-  };
-
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "new", packaging: "loc", isLive: true }],
-    deltaUpdate: false,
-  };
-
-  const result = applyCatalogDelta(current, delta);
-  assert.strictEqual(result.tracks.length, 1);
-  assert.strictEqual(result.tracks[0].name, "new");
-});
-
-test("applyCatalogDelta: deltaUpdate が undefined の場合はそのまま置き換え", () => {
-  const current: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "old", packaging: "loc", isLive: true }],
-  };
-
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "new", packaging: "loc", isLive: true }],
-  };
-
-  const result = applyCatalogDelta(current, delta);
-  assert.strictEqual(result.tracks.length, 1);
-  assert.strictEqual(result.tracks[0].name, "new");
-});
-
 test("applyCatalogDelta: addTracks でトラックを追加", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
     addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
   };
@@ -439,11 +409,9 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["audio"],
+    removeTracks: [{ name: "audio" }],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -451,7 +419,7 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
   assert.strictEqual(result.tracks[0].name, "video");
 });
 
-test("applyCatalogDelta: cloneTracks でトラックを複製", () => {
+test("applyCatalogDelta: cloneTracks で parentName を使用して複製", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [
@@ -459,16 +427,14 @@ test("applyCatalogDelta: cloneTracks でトラックを複製", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
     cloneTracks: [
       {
         name: "video-sd",
         packaging: "loc",
         isLive: true,
-        depends: ["video"],
+        parentName: "video",
         width: 640,
         height: 480,
       },
@@ -492,11 +458,9 @@ test("applyCatalogDelta: 複合操作 (remove + add)", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["video-hd"],
+    removeTracks: [{ name: "video-hd" }],
     addTracks: [{ name: "video-sd", packaging: "loc", isLive: true }],
   };
 
@@ -665,7 +629,7 @@ test("仕様書例: Time-aligned Audio/Video Tracks with single quality", () => 
   }`;
 
   const data = new TextEncoder().encode(catalogJson);
-  const catalog = decodeCatalog(data);
+  const catalog = decodeCatalogMessage(data) as Catalog;
 
   assert.strictEqual(catalog.version, MSF_VERSION);
   assert.strictEqual(catalog.tracks.length, 2);
@@ -743,7 +707,7 @@ test("仕様書例: Simulcast video tracks - 3 alternate qualities", () => {
   }`;
 
   const data = new TextEncoder().encode(catalogJson);
-  const catalog = decodeCatalog(data);
+  const catalog = decodeCatalogMessage(data) as Catalog;
 
   assert.strictEqual(catalog.version, MSF_VERSION);
   assert.strictEqual(catalog.tracks.length, 4);
@@ -844,7 +808,7 @@ test("仕様書例: SVC video tracks with dependencies", () => {
   }`;
 
   const data = new TextEncoder().encode(catalogJson);
-  const catalog = decodeCatalog(data);
+  const catalog = decodeCatalogMessage(data) as Catalog;
 
   assert.strictEqual(catalog.version, MSF_VERSION);
   assert.strictEqual(catalog.tracks.length, 5);
@@ -860,36 +824,36 @@ test("仕様書例: SVC video tracks with dependencies", () => {
 });
 
 test("仕様書例: Delta update - adding tracks", () => {
-  // refs/moq/draft-ietf-moq-msf.md Section 5.2.4
-  const deltaJson = `{
-    "deltaUpdate": true,
-    "generatedAt": 1746104606044,
-    "addTracks": [
+  // draft-ietf-moq-msf-00 Section 5.3.4
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1746104606044,
+    addTracks: [
       {
-        "name": "slides",
-        "isLive": true,
-        "packaging": "loc",
-        "role": "video",
-        "codec": "av01.0.08M.10.0.110.09",
-        "width": 1920,
-        "height": 1080,
-        "framerate": 15,
-        "bitrate": 750000,
-        "renderGroup": 1
-      }
+        name: "slides",
+        isLive: true,
+        packaging: "loc",
+        role: "video",
+        codec: "av01.0.08M.10.0.110.09",
+        width: 1920,
+        height: 1080,
+        framerate: 15,
+        bitrate: 750000,
+        renderGroup: 1,
+      },
     ],
-    "cloneTracks": [
+    cloneTracks: [
       {
-        "name": "video-720",
-        "packaging": "loc",
-        "isLive": true,
-        "depends": ["video-1080"],
-        "width":1280,
-        "height":720,
-        "bitrate":600000
-      }
-    ]
-  }`;
+        name: "video-720",
+        packaging: "loc",
+        isLive: true,
+        parentName: "video-1080",
+        width: 1280,
+        height: 720,
+        bitrate: 600000,
+      },
+    ],
+  };
 
   // 現在の Catalog
   const current: Catalog = {
@@ -907,13 +871,6 @@ test("仕様書例: Delta update - adding tracks", () => {
     ],
   };
 
-  const deltaData = new TextEncoder().encode(deltaJson);
-  const delta = JSON.parse(new TextDecoder().decode(deltaData)) as Catalog;
-
-  // deltaUpdate には version がないので手動で追加して applyCatalogDelta を呼ぶ
-  delta.version = MSF_VERSION;
-  delta.tracks = [];
-
   const result = applyCatalogDelta(current, delta);
 
   // addTracks で slides が追加されている
@@ -930,12 +887,12 @@ test("仕様書例: Delta update - adding tracks", () => {
 });
 
 test("仕様書例: Delta update - removing tracks", () => {
-  // refs/moq/draft-ietf-moq-msf.md Section 5.2.5
-  const deltaJson = `{
-    "deltaUpdate": true,
-    "generatedAt": 1746104606044,
-    "removeTracks": ["video", "slides"]
-  }`;
+  // draft-ietf-moq-msf-00 Section 5.3.5
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1746104606044,
+    removeTracks: [{ name: "video" }, { name: "slides" }],
+  };
 
   const current: Catalog = {
     version: MSF_VERSION,
@@ -945,11 +902,6 @@ test("仕様書例: Delta update - removing tracks", () => {
       { name: "slides", packaging: "loc", isLive: true },
     ],
   };
-
-  const deltaData = new TextEncoder().encode(deltaJson);
-  const delta = JSON.parse(new TextDecoder().decode(deltaData)) as Catalog;
-  delta.version = MSF_VERSION;
-  delta.tracks = [];
 
   const result = applyCatalogDelta(current, delta);
 
@@ -993,7 +945,7 @@ test("仕様書例: VOD Audio/Video Tracks", () => {
   }`;
 
   const data = new TextEncoder().encode(catalogJson);
-  const catalog = decodeCatalog(data);
+  const catalog = decodeCatalogMessage(data) as Catalog;
 
   assert.strictEqual(catalog.version, MSF_VERSION);
   assert.strictEqual(catalog.tracks.length, 2);
@@ -1018,11 +970,9 @@ test("Delta Updates: 操作の順序 (removeTracks → addTracks → cloneTracks
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["video"],
+    removeTracks: [{ name: "video" }],
     addTracks: [{ name: "video", packaging: "loc", isLive: true, bitrate: 2000000 }],
   };
 
