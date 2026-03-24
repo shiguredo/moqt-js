@@ -313,19 +313,28 @@ vp run build
 vp dev
 ```
 
+### オンライン版
+
+<https://moqt-devtools.shiguredo.app/> から利用できます。
+
 ### 使用技術
 
-- [Preact](https://github.com/preactjs/preact) - UI フレームワーク
-- [@preact/signals](https://github.com/preactjs/signals) - 状態管理
-- [preact-iso](https://github.com/preactjs/preact-iso) - ルーティング
-- [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) - CSS フレームワーク
-- [Vite+](https://github.com/voidzero-dev/vite-plus) - 統合ツールチェーン (Vite / Vitest / Oxlint / Oxfmt)
-- [TypeScript](https://github.com/microsoft/TypeScript) - 言語
-- [fast-check](https://github.com/dubzzz/fast-check) - プロパティベーステスト
+- [TypeScript](https://github.com/microsoft/TypeScript)
+- [Preact](https://github.com/preactjs/preact)
+  - [@preact/signals](https://github.com/preactjs/signals)
+  - [preact-iso](https://github.com/preactjs/preact-iso)
+- [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss)
+- [Vite+](https://github.com/voidzero-dev/vite-plus)
+  - [Vite](https://github.com/vitejs/vite)
+  - [Rolldown](https://github.com/rolldown/rolldown)
+  - [Vitest](https://github.com/vitest-dev/vitest)
+  - [Oxc](https://github.com/oxc-project/oxc)
+- [Playwright](https://github.com/microsoft/playwright)
+- [fast-check](https://github.com/dubzzz/fast-check)
 
 ### moqt-devtools
 
-moqt-js を利用した MOQT の動作確認ツールです。オンライン版は https://moqt-devtools.shiguredo.app/ から利用できます。
+moqt-js を利用した MOQT の動作確認ツールです。
 
 - Publisher / Subscriber 両方の動作確認
 - 複数 Subscriber の同時接続
