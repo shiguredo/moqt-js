@@ -46,7 +46,6 @@ import {
   encodeSubscribePayload,
   encodeRequestUpdatePayload,
   encodeTrackStatusPayload,
-  encodeUnsubscribePayload,
   createSetup,
   getMessageTypeName,
   getParameterLocationValue,
@@ -675,6 +674,11 @@ export class SessionImpl implements Session {
     bigint,
     Array<{ header: import("./dataStream").SubgroupHeader; data: Uint8Array }>
   >();
+
+  // Subscriber 登録待ちの Promise を管理
+  // SUBSCRIBE_OK より先にデータストリームが到着した場合、
+  // ストリーム全体をバッファリングするのではなく subscriber の登録を待つ
+  private subscriberReadyCallbacks = new Map<bigint, Array<() => void>>();
 
   // リクエストごとの双方向ストリーム管理
   // draft-ietf-moq-transport-17 Section 3.3:
@@ -2060,20 +2064,25 @@ export class SessionImpl implements Session {
     this.publishers.delete(requestId);
   }
 
+  /**
+   * draft-ietf-moq-transport-17 Section 3.3.1:
+   * subscription のキャンセルは双方向ストリームの close で行う。
+   * UNSUBSCRIBE メッセージは draft-17 で廃止された。
+   */
   private async sendUnsubscribe(subscriber: SubscriberImpl): Promise<void> {
     const requestId = subscriber.getRequestId();
 
-    const unsubscribeMsg = {
-      type: MessageType.UNSUBSCRIBE,
-      requestId,
-    };
-
-    const payload = encodeUnsubscribePayload(
-      unsubscribeMsg as Parameters<typeof encodeUnsubscribePayload>[0],
-    );
-    await this.sendControlMessage(MessageType.UNSUBSCRIBE, payload, {
-      requestId: requestId.toString(),
-    });
+    // 双方向ストリームを close してリクエストをキャンセル
+    const streamInfo = this.requestStreams.get(requestId);
+    if (streamInfo) {
+      try {
+        streamInfo.writer.releaseLock();
+        await streamInfo.stream.writable.close();
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+      this.requestStreams.delete(requestId);
+    }
 
     this.subscribers.delete(requestId);
     this.subscribersByAlias.delete(subscriber.getTrackAlias());
@@ -2327,6 +2336,15 @@ export class SessionImpl implements Session {
               pendingStream.header,
               pendingStream.data,
             );
+          }
+        }
+
+        // Subscriber 登録待ちのストリームに通知
+        const readyCallbacks = this.subscriberReadyCallbacks.get(decoded.trackAlias);
+        if (readyCallbacks) {
+          this.subscriberReadyCallbacks.delete(decoded.trackAlias);
+          for (const callback of readyCallbacks) {
+            callback();
           }
         }
 
@@ -2993,6 +3011,36 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * Subscriber の登録を待つ
+   *
+   * SUBSCRIBE_OK より先にデータストリームが到着した場合に使用。
+   * subscriberReadyCallbacks とポーリングの両方で待機し、
+   * レースコンディションを防ぐ。
+   */
+  private waitForSubscriber(trackAlias: bigint): Promise<SubscriberImpl | null> {
+    return new Promise<SubscriberImpl | null>((resolve) => {
+      // 既に登録されている場合は即座に返す
+      const existing = this.subscribersByAlias.get(trackAlias);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+
+      // コールバックを登録
+      const callbacks = this.subscriberReadyCallbacks.get(trackAlias) ?? [];
+      callbacks.push(() => {
+        resolve(this.subscribersByAlias.get(trackAlias) ?? null);
+      });
+      this.subscriberReadyCallbacks.set(trackAlias, callbacks);
+
+      // タイムアウト: 5 秒以内に登録されなければ null
+      setTimeout(() => {
+        resolve(this.subscribersByAlias.get(trackAlias) ?? null);
+      }, 5000);
+    });
+  }
+
+  /**
    * Handle incoming unidirectional data stream
    * draft-ietf-moq-transport-16 Section 10.4
    *
@@ -3070,31 +3118,13 @@ export class SessionImpl implements Session {
               // Subscriber を検索
               subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
               if (!subscriber) {
-                // Subscriber がまだ登録されていない場合、ストリームをバッファリング
+                // Subscriber がまだ登録されていない場合、登録を待つ
                 // QUIC ではストリーム間の順序が保証されないため、
                 // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
-                const chunks: Uint8Array[] = [buffer];
-                let streamDone = done;
-                while (!streamDone) {
-                  const result = await reader.read();
-                  streamDone = result.done;
-                  if (result.value) {
-                    chunks.push(result.value);
-                  }
+                subscriber = await this.waitForSubscriber(header.trackAlias);
+                if (!subscriber) {
+                  break;
                 }
-                // 全データを結合
-                const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-                const fullData = new Uint8Array(totalLength);
-                let dataOffset = 0;
-                for (const chunk of chunks) {
-                  fullData.set(chunk, dataOffset);
-                  dataOffset += chunk.length;
-                }
-                // バッファに保存
-                const pending = this.pendingSubgroupStreams.get(header.trackAlias) ?? [];
-                pending.push({ header, data: fullData });
-                this.pendingSubgroupStreams.set(header.trackAlias, pending);
-                break;
               }
             }
           } catch {

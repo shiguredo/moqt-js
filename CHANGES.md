@@ -48,6 +48,7 @@
   - 制御ストリームの先頭にストリームタイプ 0x2F00 を書き込むようにする (Section 3.4)
   - Setup Options のカウントプレフィックスを削除する (Section 9.4)
   - PUBLISH/SUBSCRIBE_OK/FETCH_OK の Track Properties から length プレフィックスを削除する
+  - UNSUBSCRIBE メッセージを廃止し双方向ストリームの close でキャンセルする (Section 3.3.1)
   - 未対応: SUBSCRIBE_NAMESPACE の専用ストリーム対応
   - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
   - 未対応: Subgroup 再オープン禁止
@@ -65,6 +66,11 @@
   - Timestamp / Timescale プロパティを追加
   - @voluntas
 - [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
+  - @voluntas
+- [FIX] SUBSCRIBE_OK より先に Subgroup ストリームが到着した場合のレースコンディションを修正する
+  - ストリーム全読みでライブストリームがブロックする問題を subscriber 登録待ちに変更
+  - @voluntas
+- [FIX] LARGEST_OBJECT がない場合に Joining Fetch のバッファリングモードが解除されない問題を修正する
   - @voluntas
 
 ### misc
