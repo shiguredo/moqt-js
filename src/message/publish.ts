@@ -71,8 +71,7 @@ export interface PublishDone {
  *   Track Alias (i),
  *   Number of Parameters (i),
  *   Parameters (..) ...,
- *   Track Extensions Length (i),
- *   Track Extensions (..)
+ *   Track Properties (..)
  * }
  */
 export function encodePublishPayload(msg: Publish): Uint8Array {
@@ -89,10 +88,10 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
     parts.push(encodeParameter(param));
   }
 
-  // Track Extensions
-  const propertiesData = encodeProperties(msg.trackProperties);
-  parts.push(encodeVarint(propertiesData.length));
-  parts.push(propertiesData);
+  // draft-ietf-moq-transport-17 Section 9.11:
+  // Track Properties は length プレフィックスなしでシリアライズされる。
+  // Message の Length フィールドで終端が決まる。
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -143,14 +142,9 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
     totalConsumed += paramConsumed;
   }
 
-  // Track Extensions
-  const [propertiesLen, propertiesLenConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += propertiesLenConsumed;
-
-  const propertiesData = data.slice(
-    offset + totalConsumed,
-    offset + totalConsumed + Number(propertiesLen),
-  );
+  // draft-ietf-moq-transport-17 Section 9.11:
+  // Track Properties は残りバイトすべて
+  const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
 
   return {

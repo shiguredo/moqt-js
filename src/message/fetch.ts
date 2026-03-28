@@ -212,8 +212,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  *   End Object (i),
  *   Number of Parameters (i),
  *   Parameters (..) ...,
- *   Track Extensions Length (i),
- *   Track Extensions (..)
+ *   Track Properties (..)
  * }
  */
 export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
@@ -227,10 +226,9 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
     parts.push(encodeParameter(param));
   }
 
-  // Track Extensions
-  const propertiesData = encodeProperties(msg.trackProperties);
-  parts.push(encodeVarint(propertiesData.length));
-  parts.push(propertiesData);
+  // draft-ietf-moq-transport-17 Section 9.15:
+  // Track Properties は length プレフィックスなしでシリアライズされる。
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -267,14 +265,9 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
     totalConsumed += paramSize;
   }
 
-  // Track Extensions
-  const [propertiesLen, propertiesLenSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += propertiesLenSize;
-
-  const propertiesData = data.slice(
-    offset + totalConsumed,
-    offset + totalConsumed + Number(propertiesLen),
-  );
+  // draft-ietf-moq-transport-17 Section 9.15:
+  // Track Properties は残りバイトすべて
+  const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
 
   return {

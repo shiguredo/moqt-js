@@ -8,7 +8,7 @@
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
-import { type Parameter, decodeParameters, encodeParameters } from "./parameter";
+import { type Parameter, decodeKeyValuePairs, encodeKeyValuePairs } from "./parameter";
 import { MessageType, SetupOptionType } from "./types";
 
 /**
@@ -60,20 +60,26 @@ export function createSetup(options?: { path?: string; authority?: string }): Se
 /**
  * Setup のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-17 Section 9.4:
+ * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
+ * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
  */
 export function encodeSetupPayload(msg: Setup): Uint8Array {
   // delta encoding のために type の昇順でソート
   const sortedParams = [...msg.parameters].sort((a, b) => a.type - b.type);
-  return encodeParameters(sortedParams);
+  return encodeKeyValuePairs(sortedParams);
 }
 
 /**
  * Setup のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.4:
+ * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
+ * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  */
 export function decodeSetupPayload(data: Uint8Array, offset = 0): Setup {
-  const [parameters] = decodeParameters(data, offset);
+  const [parameters] = decodeKeyValuePairs(data, offset);
   return {
     type: MessageType.SETUP,
     parameters,

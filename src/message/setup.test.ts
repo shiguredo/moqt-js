@@ -4,9 +4,17 @@
  */
 
 import { test, assert } from "vitest";
-import { createSetup, getSetupPath, getSetupAuthority, getSetupMoqtImplementation } from "./setup";
+import {
+  createSetup,
+  encodeSetupPayload,
+  decodeSetupPayload,
+  getSetupPath,
+  getSetupAuthority,
+  getSetupMoqtImplementation,
+} from "./setup";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { decodeVarint } from "../varint";
 
 // MOQT_IMPLEMENTATION は常に追加される
 test("Setup: パラメータなしで作成", () => {
@@ -56,4 +64,30 @@ test("Setup: 存在しないパラメータは undefined", () => {
   assert.isUndefined(getSetupAuthority(setup));
   // MOQT_IMPLEMENTATION は存在する
   assert.isDefined(getSetupMoqtImplementation(setup));
+});
+
+// draft-ietf-moq-transport-17 Section 9.4:
+// Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
+// カウントプレフィックスを持たない。Length フィールドで終端が決まる。
+test("Setup: エンコード結果にカウントプレフィックスがない", () => {
+  const setup = createSetup();
+  const encoded = encodeSetupPayload(setup);
+
+  // 先頭バイトをデコードしてカウント値ではないことを確認する。
+  // カウントプレフィックスがある場合、先頭は varint(1) = 0x01 になる。
+  // カウントプレフィックスがない場合、先頭は Delta Type (最初の Setup Option の Type) になる。
+  // MOQT_IMPLEMENTATION の Type は 0x07 なので、Delta Type = 0x07。
+  const [firstVarint] = decodeVarint(encoded, 0);
+  assert.equal(Number(firstVarint), SetupOptionType.MOQT_IMPLEMENTATION);
+});
+
+test("Setup: エンコード・デコード roundtrip", () => {
+  const setup = createSetup({ path: "/moqt", authority: "example.com" });
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+
+  assert.equal(decoded.type, MessageType.SETUP);
+  assert.equal(getSetupPath(decoded), "/moqt");
+  assert.equal(getSetupAuthority(decoded), "example.com");
+  assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
 });
