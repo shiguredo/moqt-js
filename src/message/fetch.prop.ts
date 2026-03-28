@@ -195,15 +195,13 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
 test("FetchOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
       fc.boolean(),
       locationArb,
       parametersArb,
       trackPropertiesArb,
-      (requestId, endOfTrack, endLocation, parameters, trackProperties) => {
+      (endOfTrack, endLocation, parameters, trackProperties) => {
         const original: FetchOk = {
           type: MessageType.FETCH_OK,
-          requestId,
           endOfTrack,
           endLocation,
           parameters,
@@ -214,7 +212,6 @@ test("FetchOk のエンコード・デコードがラウンドトリップする
         const decoded = decodeFetchOkPayload(encoded);
 
         assert.equal(decoded.type, MessageType.FETCH_OK);
-        assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.endOfTrack, endOfTrack);
         assert.equal(decoded.endLocation.group, endLocation.group);
         assert.equal(decoded.endLocation.object, endLocation.object);

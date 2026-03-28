@@ -40,9 +40,12 @@ export interface Subscribe {
  * Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */
+/**
+ * draft-ietf-moq-transport-17 Section 9.9:
+ * 双方向ストリーム上で送信されるため Request ID は不要。
+ */
 export interface SubscribeOk {
   type: typeof MessageType.SUBSCRIBE_OK;
-  requestId: bigint;
   trackAlias: bigint;
   parameters: Parameter[];
   trackProperties: Property[];
@@ -176,7 +179,6 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
 export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeVarint(msg.parameters.length));
   for (const param of msg.parameters) {
@@ -203,9 +205,6 @@ export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
 export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): SubscribeOk {
   let totalConsumed = 0;
 
-  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdConsumed;
-
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
@@ -226,7 +225,6 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
 
   return {
     type: MessageType.SUBSCRIBE_OK,
-    requestId,
     trackAlias,
     parameters,
     trackProperties,

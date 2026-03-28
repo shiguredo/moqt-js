@@ -36,11 +36,13 @@ export interface Publish {
 }
 
 /**
- * PUBLISH_OK メッセージ (Section 9.14)
+ * PUBLISH_OK メッセージ (Section 9.12)
+ *
+ * draft-ietf-moq-transport-17:
+ * 双方向ストリーム上で送信されるため Request ID は不要。
  */
 export interface PublishOk {
   type: typeof MessageType.PUBLISH_OK;
-  requestId: bigint;
   parameters: Parameter[];
 }
 
@@ -168,7 +170,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
 export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.parameters.length));
   for (const param of msg.parameters) {
     parts.push(encodeParameter(param));
@@ -186,12 +187,12 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
 
 /**
  * PublishOk のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.12:
+ * 双方向ストリーム上で送信されるため Request ID は含まない。
  */
 export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
   let totalConsumed = 0;
-
-  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdConsumed;
 
   const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += numParamsConsumed;
@@ -205,7 +206,6 @@ export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk 
 
   return {
     type: MessageType.PUBLISH_OK,
-    requestId,
     parameters,
   };
 }

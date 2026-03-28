@@ -120,13 +120,11 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
       trackPropertiesArb,
-      (requestId, trackAlias, parameters, trackProperties) => {
+      (trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.SUBSCRIBE_OK as typeof MessageType.SUBSCRIBE_OK,
-          requestId,
           trackAlias,
           parameters,
           trackProperties,
@@ -136,7 +134,6 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
         const decoded = decodeSubscribeOkPayload(encoded);
 
         assert.equal(decoded.type, MessageType.SUBSCRIBE_OK);
-        assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.trackAlias, trackAlias);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {

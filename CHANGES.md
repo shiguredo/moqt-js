@@ -44,6 +44,7 @@
   - FETCH レスポンスで不明な範囲を許可
   - REQUEST_UPDATE で Start Location 減少許可
   - 同一トラックで Datagram と Stream の混在許可
+  - PUBLISH_OK/SUBSCRIBE_OK/FETCH_OK から Request ID フィールドを削除する
   - 制御ストリームの先頭にストリームタイプ 0x2F00 を書き込むようにする (Section 3.4)
   - Setup Options のカウントプレフィックスを削除する (Section 9.4)
   - PUBLISH/SUBSCRIBE_OK/FETCH_OK の Track Properties から length プレフィックスを削除する
