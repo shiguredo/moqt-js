@@ -143,10 +143,9 @@ test("Publish のエンコード・デコードがラウンドトリップする
 
 test("PublishOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), parametersArb, (requestId, parameters) => {
+    fc.property(parametersArb, (parameters) => {
       const original = {
         type: MessageType.PUBLISH_OK as typeof MessageType.PUBLISH_OK,
-        requestId,
         parameters,
       };
 
@@ -154,7 +153,6 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
       const decoded = decodePublishOkPayload(encoded);
 
       assert.equal(decoded.type, MessageType.PUBLISH_OK);
-      assert.equal(decoded.requestId, requestId);
       assert.equal(decoded.parameters.length, parameters.length);
       for (let i = 0; i < parameters.length; i++) {
         assert.equal(decoded.parameters[i].type, parameters[i].type);

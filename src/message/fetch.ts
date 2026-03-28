@@ -68,9 +68,12 @@ export interface Fetch {
  * Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */
+/**
+ * draft-ietf-moq-transport-17 Section 9.15:
+ * 双方向ストリーム上で送信されるため Request ID は不要。
+ */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
-  requestId: bigint;
   endOfTrack: boolean;
   endLocation: Location;
   parameters: Parameter[];
@@ -218,7 +221,6 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
 export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
   parts.push(new Uint8Array([msg.endOfTrack ? 1 : 0]));
   parts.push(encodeLocation(msg.endLocation));
   parts.push(encodeVarint(msg.parameters.length));
@@ -246,9 +248,6 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
 export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   let totalConsumed = 0;
 
-  const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdSize;
-
   const endOfTrack = data[offset + totalConsumed] === 1;
   totalConsumed += 1;
 
@@ -272,7 +271,6 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
 
   return {
     type: MessageType.FETCH_OK,
-    requestId,
     endOfTrack,
     endLocation,
     parameters,
