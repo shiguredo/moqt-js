@@ -346,9 +346,64 @@ function decodeKeyValuePair(
 }
 
 /**
+ * Key-Value-Pairs をカウントプレフィックスなしでエンコードする
+ *
+ * draft-ietf-moq-transport-17 Section 9.4:
+ * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
+ * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
+ *
+ * パラメータは Type の昇順でなければならない。
+ */
+export function encodeKeyValuePairs(params: Parameter[]): Uint8Array {
+  const paramBytes: Uint8Array[] = [];
+  let previousType = 0;
+
+  for (const param of params) {
+    paramBytes.push(encodeKeyValuePair(param, previousType));
+    previousType = param.type;
+  }
+
+  const totalLength = paramBytes.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+
+  let offset = 0;
+  for (const pb of paramBytes) {
+    result.set(pb, offset);
+    offset += pb.length;
+  }
+
+  return result;
+}
+
+/**
+ * Key-Value-Pairs をカウントプレフィックスなしでデコードする
+ *
+ * draft-ietf-moq-transport-17 Section 9.4:
+ * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
+ * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
+ *
+ * @returns [parameters, consumed bytes]
+ */
+export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[], number] {
+  const parameters: Parameter[] = [];
+  let totalConsumed = 0;
+  let previousType = 0;
+
+  while (offset + totalConsumed < data.length) {
+    const [param, paramConsumed] = decodeKeyValuePair(data, offset + totalConsumed, previousType);
+    parameters.push(param);
+    totalConsumed += paramConsumed;
+    previousType = param.type;
+  }
+
+  return [parameters, totalConsumed];
+}
+
+/**
  * パラメータリストをエンコードする
  *
- * draft-ietf-moq-transport-16 Section 9.2:
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * Message Parameters はカウントプレフィックス付きでエンコードする。
  * delta encoding を使用して Type を効率的にエンコードする。
  * パラメータは Type の昇順でなければならない。
  */
@@ -378,7 +433,8 @@ export function encodeParameters(params: Parameter[]): Uint8Array {
 /**
  * パラメータリストをデコードする
  *
- * draft-ietf-moq-transport-16 Section 9.2:
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * Message Parameters はカウントプレフィックス付きでデコードする。
  * delta encoding を使用して Type をデコードする。
  *
  * @returns [parameters, consumed bytes]

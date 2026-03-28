@@ -826,6 +826,12 @@ export class SessionImpl implements Session {
     // 送信用単方向ストリームを開く
     this.controlSendStream = await this.transport.createUnidirectionalStream();
 
+    // draft-ietf-moq-transport-17 Section 3.4:
+    // All unidirectional MOQT streams start with a variable-length integer
+    // indicating the type of the stream.
+    // 制御ストリームのストリームタイプは 0x2F00 (Table 3)
+    const streamTypeBytes = encodeVarint(MessageType.SETUP);
+
     // Send SETUP
     const setup = createSetup();
     const setupPayload = encodeSetupPayload(setup);
@@ -834,6 +840,7 @@ export class SessionImpl implements Session {
     this.emitDebug("send", MessageType.SETUP, setupPayload, {});
 
     const writer = this.controlSendStream.getWriter();
+    await writer.write(streamTypeBytes);
     await writer.write(setupMessage);
     writer.releaseLock();
 
@@ -851,7 +858,9 @@ export class SessionImpl implements Session {
 
     this.controlReceiveStream = incomingStream;
 
-    // Read SETUP
+    // draft-ietf-moq-transport-17 Section 3.4:
+    // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
+    // 制御ストリームのストリームタイプ 0x2F00 を読み取って検証する。
     const reader = incomingStream.getReader();
     const { value, done } = await reader.read();
     reader.releaseLock();
@@ -860,7 +869,31 @@ export class SessionImpl implements Session {
       throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
     }
 
-    const messages = this.controlReader.feed(value);
+    // ストリームタイプを読み取る
+    const [streamType, streamTypeConsumed] = decodeVarint(value, 0);
+    if (Number(streamType) !== MessageType.SETUP) {
+      throw new SessionError(
+        `expected control stream type 0x2F00, got 0x${streamType.toString(16)}`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+
+    // ストリームタイプ以降のデータを ControlStreamReader に供給
+    const remaining = value.slice(streamTypeConsumed);
+    let messages = remaining.length > 0 ? this.controlReader.feed(remaining) : [];
+
+    // SETUP メッセージがまだ届いていない場合は追加で読み取る
+    if (messages.length === 0) {
+      const setupReader = incomingStream.getReader();
+      const { value: setupValue, done: setupDone } = await setupReader.read();
+      setupReader.releaseLock();
+
+      if (setupDone || !setupValue) {
+        throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
+      }
+      messages = this.controlReader.feed(setupValue);
+    }
+
     if (messages.length === 0) {
       throw new SessionError("No SETUP received", SessionErrorCode.PROTOCOL_VIOLATION);
     }
