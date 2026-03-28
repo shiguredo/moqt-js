@@ -1,7 +1,7 @@
 import {
   connect,
   LOC,
-  decodeCatalog,
+  decodeCatalogMessage,
   getVideoTracks,
   CATALOG_TRACK_NAME,
   type MoqtObject,
@@ -118,6 +118,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         sub.updateSubscriber(subscriberId, {
           objectsWithExtensions: currentInstance.objectsWithExtensions + 1,
         });
+
         const locProperties = LOC.decodeVideoProperties(obj.properties);
 
         // Capture Timestamp から timestamp を取得
@@ -259,7 +260,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           // Catalog オブジェクトを処理する共通関数
           const processCatalogObject = (obj: MoqtObject, source: string) => {
             try {
-              const catalog = decodeCatalog(obj.payload);
+              const catalog = decodeCatalogMessage(obj.payload);
               addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
                 source,
                 catalog,
@@ -630,6 +631,14 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       );
       // SUBSCRIBE_OK から largestLocation を取得
       const largestLocation = subscriberInstance.largestLocation;
+
+      // SUBSCRIBE_OK に LARGEST_OBJECT がない場合は Joining FETCH が送信されない
+      // この場合はバッファリングモードを解除してライブオブジェクトを直接処理する
+      if (joiningFetchEnabled && largestLocation === null) {
+        sub.updateSubscriber(subscriberId, {
+          joiningFetchInProgress: false,
+        });
+      }
 
       sub.updateSubscriber(subscriberId, {
         subscriber: subscriberInstance,
