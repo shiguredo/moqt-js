@@ -256,9 +256,12 @@ export function usePublisher() {
       const session = await connect(
         settings.url.value,
         {
-          close: () => {
+          close: (closeInfo) => {
+            console.log(
+              `Publisher: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
+            );
             pub.pubStatus.value = "disconnected";
-            pub.pubStatusMessage.value = "Disconnected";
+            pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             cleanupPublisher();
           },
           error: (error) => {

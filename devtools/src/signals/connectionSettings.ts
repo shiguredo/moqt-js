@@ -3,7 +3,7 @@ import type { CameraDevice, CodecType, VideoSourceType } from "../types";
 import { isDebugPanelOpen } from "./debug";
 
 // Connection settings
-export const url = signal("https://localhost:4433/moqt");
+export const url = signal("https://127.0.0.1:4443/moqt");
 export const namespace = signal("room/123");
 export const trackName = signal("video");
 export const codec = signal<CodecType>("vp8");

@@ -154,7 +154,7 @@ export {
  *
  * const session = await connect(
  *   "https://example.com/moqt",
- *   { close: () => console.log("disconnected"), error: (e) => console.error(e) }
+ *   { close: (info) => console.log(`disconnected: closeCode=${info.closeCode}, reason=${info.reason}`), error: (e) => console.error(e) }
  * )
  *
  * // Publish

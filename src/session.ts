@@ -96,7 +96,7 @@ export interface DebugMessage {
  * Connect callbacks
  */
 export interface ConnectCallbacks {
-  close?: () => void;
+  close?: (closeInfo: WebTransportCloseInfo) => void;
   error?: (error: Error) => void;
   /** Debug callback for logging MOQT protocol messages */
   debug?: (message: DebugMessage) => void;
@@ -792,6 +792,15 @@ export class SessionImpl implements Session {
   constructor(transport: WebTransport, callbacks: ConnectCallbacks) {
     this.transport = transport;
     this.callbacks = callbacks;
+
+    // WebTransport の切断を監視し、close 理由をコールバックに渡す
+    this.transport.closed
+      .then((closeInfo) => {
+        this.callbacks.close?.(closeInfo);
+      })
+      .catch((error) => {
+        this.callbacks.close?.({ closeCode: 0, reason: String(error) });
+      });
   }
 
   get state(): SessionState {
@@ -1712,11 +1721,7 @@ export class SessionImpl implements Session {
     // リクエスト双方向ストリームをクリーンアップ
     this.requestStreams.clear();
 
-    // Close WebTransport
-    // closed Promise のエラーを無視（サーバー側からクローズされた場合など）
-    this.transport.closed.catch(() => {});
-
-    this.callbacks.close?.();
+    // close コールバックはコンストラクタの transport.closed 監視で呼ばれる
   }
 
   // Private methods
