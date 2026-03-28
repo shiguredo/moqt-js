@@ -215,10 +215,13 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       const session = await connect(
         settings.url.value,
         {
-          close: () => {
+          close: (closeInfo) => {
+            console.log(
+              `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
+            );
             sub.updateSubscriber(subscriberId, {
               status: "disconnected",
-              statusMessage: "Disconnected",
+              statusMessage: `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
             });
             cleanupSubscriber();
           },

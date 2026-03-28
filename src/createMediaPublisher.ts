@@ -263,7 +263,7 @@ class MediaPublisherImpl implements MediaPublisher {
 
   private async connectToServer(): Promise<void> {
     const connectCallbacks: ConnectCallbacks = {
-      close: () => {
+      close: (_closeInfo) => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
