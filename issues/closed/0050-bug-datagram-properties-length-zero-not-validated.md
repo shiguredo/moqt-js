@@ -22,3 +22,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 10.3.1:
 ## 期待される動作
 
 PROPERTIES ビットが有効で Properties Length が 0 の場合、エラーを返すべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+decodeObjectDatagram() で PROPERTIES ビット有効時に Properties Length = 0 の場合にエラーをスローするようにした。

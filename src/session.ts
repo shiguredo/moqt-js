@@ -708,7 +708,12 @@ export class SessionImpl implements Session {
   >();
   private pendingFetch = new Map<
     bigint,
-    { resolve: (fetcher: Fetcher) => void; reject: (err: Error) => void; impl: FetcherImpl }
+    {
+      resolve: (fetcher: Fetcher) => void;
+      reject: (err: Error) => void;
+      impl: FetcherImpl;
+      startLocation?: Location;
+    }
   >();
   private pendingTrackStatus = new Map<
     bigint,
@@ -1312,7 +1317,12 @@ export class SessionImpl implements Session {
 
     // FETCH_OK を待つ Promise
     const promise = new Promise<Fetcher>((resolve, reject) => {
-      this.pendingFetch.set(requestId, { resolve, reject, impl });
+      this.pendingFetch.set(requestId, {
+        resolve,
+        reject,
+        impl,
+        startLocation: options.startLocation,
+      });
     });
 
     // FETCH メッセージを双方向ストリームで送信（Standalone Fetch）
@@ -2445,6 +2455,29 @@ export class SessionImpl implements Session {
 
       if (msg.type === MessageType.FETCH_OK) {
         const decoded = decodeFetchOkPayload(msg.payload);
+
+        // draft-ietf-moq-transport-17 Section 9.15:
+        // "If End Location is smaller than the Start Location in the
+        //  corresponding FETCH the receiver MUST close the session with
+        //  a PROTOCOL_VIOLATION."
+        if (pending.startLocation) {
+          const endLoc = decoded.endLocation;
+          const startLoc = pending.startLocation;
+          if (
+            endLoc.group < startLoc.group ||
+            (endLoc.group === startLoc.group && endLoc.object < startLoc.object)
+          ) {
+            const error = new SessionError(
+              `FETCH_OK end location (${endLoc.group}:${endLoc.object}) is smaller than start location (${startLoc.group}:${startLoc.object})`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            );
+            this.pendingFetch.delete(requestId);
+            this.callbacks.error?.(error);
+            pending.reject(error);
+            return;
+          }
+        }
+
         this.pendingFetch.delete(requestId);
         pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation);
         this.fetchers.set(requestId, pending.impl);
@@ -3090,7 +3123,9 @@ export class SessionImpl implements Session {
             // 先頭のタイプを確認
             const [streamType] = decodeVarint(buffer, 0);
 
-            if (Number(streamType) === FetchHeaderType) {
+            const streamTypeNum = Number(streamType);
+
+            if (streamTypeNum === FetchHeaderType) {
               // Fetch Data Stream
               isFetchStream = true;
               const [header, consumed] = decodeFetchHeader(buffer);
@@ -3107,7 +3142,10 @@ export class SessionImpl implements Session {
                 // Fetcher が見つからない場合は終了
                 break;
               }
-            } else {
+            } else if (
+              (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
+              (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
+            ) {
               // Subgroup ストリーム
               isFetchStream = false;
               const [header, consumed] = decodeSubgroupHeader(buffer);
@@ -3129,6 +3167,16 @@ export class SessionImpl implements Session {
                   break;
                 }
               }
+            } else {
+              // draft-ietf-moq-transport-17 Section 3.2:
+              // "An endpoint that receives an unknown stream type MUST close the session."
+              this.callbacks.error?.(
+                new SessionError(
+                  `unknown unidirectional stream type: 0x${streamTypeNum.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              break;
             }
           } catch {
             // ヘッダーのパースに失敗した場合、データが不足している可能性
