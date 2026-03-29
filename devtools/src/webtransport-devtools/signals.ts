@@ -1,8 +1,31 @@
 import { signal, computed } from "@preact/signals";
 
+// クエリパラメータからの初期値読み込み
+function getInitialParams(): { url: string; certificateHash: string } {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    url: params.get("url") || "https://127.0.0.1:4443/wt",
+    certificateHash: params.get("certificateHash") || "",
+  };
+}
+
+const initialParams = getInitialParams();
+
 // Connection settings
-export const url = signal("https://localhost:4433/wt");
-export const certificateHash = signal("");
+export const url = signal(initialParams.url);
+export const certificateHash = signal(initialParams.certificateHash);
+
+/**
+ * 現在の設定からクエリ文字列を構築する
+ */
+export function buildQueryString(): string {
+  const params = new URLSearchParams();
+  params.set("url", url.value);
+  if (certificateHash.value) {
+    params.set("certificateHash", certificateHash.value);
+  }
+  return params.toString();
+}
 
 // Connection state
 export const transport = signal<WebTransport | null>(null);
