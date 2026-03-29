@@ -52,16 +52,19 @@ export interface SubscribeOk {
 }
 
 /**
- * REQUEST_UPDATE メッセージ (Section 9.11)
+ * REQUEST_UPDATE メッセージ (Section 9.10)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * 既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
+ * 更新対象のリクエストは同じ bidi stream で特定される。
  */
 export interface RequestUpdate {
   type: typeof MessageType.REQUEST_UPDATE;
   requestId: bigint;
-  existingRequestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   parameters: Parameter[];
 }
 
@@ -218,9 +221,9 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
  * REQUEST_UPDATE Message {
  *   Type (i) = 0x2,
  *   Length (16),
- *   Request ID (i),
- *   Existing Request ID (i),
- *   Number of Parameters (i),
+ *   Request ID (vi64),
+ *   Required Request ID Delta (vi64),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
  */
@@ -228,7 +231,7 @@ export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.existingRequestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
@@ -255,8 +258,11 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [existingRequestId, existingReqIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += existingReqIdConsumed;
+  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaConsumed;
 
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
@@ -264,7 +270,7 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
   return {
     type: MessageType.REQUEST_UPDATE,
     requestId,
-    existingRequestId,
+    requiredRequestIdDelta,
     parameters,
   };
 }

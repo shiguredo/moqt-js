@@ -47,12 +47,13 @@ export interface PublishOk {
 }
 
 /**
- * PUBLISH_DONE メッセージ (Section 9.15)
- * draft-15 で stream_count フィールドが追加
+ * PUBLISH_DONE メッセージ (Section 9.13)
+ *
+ * draft-ietf-moq-transport-17:
+ * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
   type: typeof MessageType.PUBLISH_DONE;
-  requestId: bigint;
   statusCode: bigint;
   streamCount: bigint;
   reasonPhrase: string;
@@ -201,7 +202,6 @@ export function encodePublishDonePayload(msg: PublishDone): Uint8Array {
   const reasonBytes = encoder.encode(msg.reasonPhrase);
 
   const parts: Uint8Array[] = [];
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.statusCode));
   parts.push(encodeVarint(msg.streamCount));
   parts.push(encodeVarint(reasonBytes.length));
@@ -223,9 +223,6 @@ export function encodePublishDonePayload(msg: PublishDone): Uint8Array {
 export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishDone {
   let totalConsumed = 0;
 
-  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdConsumed;
-
   const [statusCode, statusCodeConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += statusCodeConsumed;
 
@@ -243,7 +240,6 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
 
   return {
     type: MessageType.PUBLISH_DONE,
-    requestId,
     statusCode,
     streamCount,
     reasonPhrase,

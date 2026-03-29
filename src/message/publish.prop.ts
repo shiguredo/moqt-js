@@ -202,17 +202,19 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
   );
 });
 
+/**
+ * draft-ietf-moq-transport-17 Section 9.13:
+ * PUBLISH_DONE は双方向ストリーム上で送信されるため Request ID フィールドはない。
+ */
 test("PublishDone のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 100n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.string({ minLength: 0, maxLength: 100 }),
-      (requestId, statusCode, streamCount, reasonPhrase) => {
+      (statusCode, streamCount, reasonPhrase) => {
         const original = {
           type: MessageType.PUBLISH_DONE as typeof MessageType.PUBLISH_DONE,
-          requestId,
           statusCode,
           streamCount,
           reasonPhrase,
@@ -222,7 +224,6 @@ test("PublishDone のエンコード・デコードがラウンドトリップ�
         const decoded = decodePublishDonePayload(encoded);
 
         assert.equal(decoded.type, MessageType.PUBLISH_DONE);
-        assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.statusCode, statusCode);
         assert.equal(decoded.streamCount, streamCount);
         assert.equal(decoded.reasonPhrase, reasonPhrase);
