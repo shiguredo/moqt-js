@@ -54,11 +54,11 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 - PUBLISH メッセージ
 - PUBLISH_OK メッセージ
-- PUBLISH_DONE メッセージ
-- PUBLISH_BLOCKED メッセージ
+- PUBLISH_DONE メッセージ (Stream Count 対応)
 - Object Stream 送信 (Subgroup Header)
 - Object Datagram 送信
 - Publisher Priority
+- Forward State
 - DELIVERY_TIMEOUT プロパティ
 - MAX_CACHE_DURATION プロパティ
 
@@ -86,14 +86,12 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 #### コントロールメッセージ
 
 - SETUP
-- GOAWAY
+- GOAWAY (Timeout 対応)
 - REQUEST_OK
 - REQUEST_ERROR
 - PUBLISH_NAMESPACE
 - NAMESPACE
-- PUBLISH_NAMESPACE_DONE
 - NAMESPACE_DONE
-- PUBLISH_NAMESPACE_CANCEL
 - SUBSCRIBE_NAMESPACE
 - TRACK_STATUS
 
@@ -347,7 +345,9 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
 - 統計情報の表示 (エンコード/デコードフレーム数、送受信バイト数など)
 - カタログ情報の表示
+- Forward State の表示
 - Joining Fetch 対応
+- キーフレームリクエスト (NEW_GROUP_REQUEST)
 - 設定を URL クエリパラメータで共有
 
 ### webcodecs-devtools
