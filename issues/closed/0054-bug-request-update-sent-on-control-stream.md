@@ -24,3 +24,7 @@ draft-ietf-moq-transport-17 Section 9.10 REQUEST_UPDATE:
 ## 修正方針
 
 SUBSCRIBE / PUBLISH のリクエストに使用した双方向ストリームを保持し、REQUEST_UPDATE をそのストリーム上で送信するように変更する。
+
+## 解決方法
+
+`sendRequestUpdate()` メソッドで `sendControlMessage()` の代わりに `requestStreams` から対象リクエストの双方向ストリームを取得し、そのストリーム上に REQUEST_UPDATE メッセージを書き込むように変更した。

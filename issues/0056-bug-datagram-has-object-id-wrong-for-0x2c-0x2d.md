@@ -31,7 +31,7 @@ ZERO_OBJECT_ID ビットについて:
 ```typescript
 function datagramHasObjectId(type: number): boolean {
   if (type >= 0x20) {
-    return type !== 0x24 && type !== 0x25;  // 0x2C, 0x2D が漏れている
+    return type !== 0x24 && type !== 0x25; // 0x2C, 0x2D が漏れている
   }
   return (type & 0x04) === 0;
 }

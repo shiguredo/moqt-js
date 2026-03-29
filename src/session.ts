@@ -2199,13 +2199,14 @@ export class SessionImpl implements Session {
   /**
    * REQUEST_UPDATE を送信する
    *
-   * draft-ietf-moq-transport-16 Section 9.11:
+   * draft-ietf-moq-transport-17 Section 9.10:
+   * REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する。
+   *
    * REQUEST_UPDATE Message {
    *   Type (i) = 0x2,
    *   Length (16),
    *   Request ID (i),
-   *   Existing Request ID (i),
-   *   Number of Parameters (i),
+   *   Required Request ID Delta (i),
    *   Parameters (..) ...
    * }
    */
@@ -2244,6 +2245,13 @@ export class SessionImpl implements Session {
       requestUpdateMsg as Parameters<typeof encodeRequestUpdatePayload>[0],
     );
 
+    // draft-ietf-moq-transport-17 Section 9.10:
+    // REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する
+    const streamInfo = this.requestStreams.get(targetRequestId);
+    if (!streamInfo) {
+      throw new Error(`request stream not found for request ID ${targetRequestId}`);
+    }
+
     const promise = new Promise<void>((resolve, reject) => {
       this.pendingRequestUpdate.set(updateRequestId, {
         resolve,
@@ -2252,10 +2260,16 @@ export class SessionImpl implements Session {
       });
     });
 
-    await this.sendControlMessage(MessageType.REQUEST_UPDATE, payload, {
+    if (!this.controlWriter) {
+      throw new Error("Control writer not initialized");
+    }
+    const message = this.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
+    this.statsControlMessagesSent++;
+    this.emitDebug("send", MessageType.REQUEST_UPDATE, payload, {
       requestId: updateRequestId.toString(),
       targetRequestId: targetRequestId.toString(),
     });
+    await streamInfo.writer.write(message);
 
     return promise;
   }
