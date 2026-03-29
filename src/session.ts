@@ -3296,12 +3296,14 @@ export class SessionImpl implements Session {
         currentContext = newContext;
         currentIsFirst = false;
 
+        // draft-ietf-moq-transport-17 Section 10.2.1.1:
+        // Fetch Object には Object Status が存在しないため NORMAL として扱う
         const object: MoqtObject = {
           groupId: fields.groupId,
           subgroupId: fields.subgroupId,
           objectId: fields.objectId,
           publisherPriority: fields.publisherPriority,
-          status: fields.status,
+          status: ObjectStatus.NORMAL,
           properties:
             fields.properties && fields.properties.length > 0 ? fields.properties : undefined,
           payload,
