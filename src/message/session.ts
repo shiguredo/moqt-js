@@ -4,7 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
-import { type Parameter, decodeParameter, encodeParameter } from "./parameter";
+import { type Parameter, decodeParameters, encodeParameters } from "./parameter";
 import { MessageType } from "./types";
 
 /**
@@ -138,11 +138,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.parameters.length));
-
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -162,15 +158,7 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
  * https://github.com/moq-wg/moq-transport/pull/1499
  */
 export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
-  const [numParams, numParamsSize] = decodeVarint(data, offset);
-  offset += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < numParams; i++) {
-    const [param, paramSize] = decodeParameter(data, offset);
-    parameters.push(param);
-    offset += paramSize;
-  }
+  const [parameters] = decodeParameters(data, offset);
 
   return {
     type: MessageType.REQUEST_OK,

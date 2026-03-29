@@ -8,9 +8,9 @@ import { decodeVarint, encodeVarint } from "../varint";
 import {
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType, type NamespaceSubscribeMode } from "./types";
@@ -145,10 +145,7 @@ export function encodePublishNamespacePayload(msg: PublishNamespace): Uint8Array
 
   parts.push(encodeVarint(msg.requestId));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -172,15 +169,8 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
   const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.PUBLISH_NAMESPACE,
@@ -361,10 +351,7 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
   parts.push(encodeVarint(msg.requestId));
   parts.push(encodeTrackNamespace(msg.trackNamespacePrefix));
   parts.push(encodeVarint(msg.subscribeOptions));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -391,15 +378,8 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   const [subscribeOptions, subscribeOptionsSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += subscribeOptionsSize;
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.SUBSCRIBE_NAMESPACE,

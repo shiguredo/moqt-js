@@ -36,12 +36,12 @@ test("無効なフィルタタイプでエラー", () => {
  * or from 0 if there is no previous Type value.
  */
 test("Parameters の delta encoding が正しくエンコードされる", () => {
-  // type が [2, 4, 10] のパラメータリスト
-  // delta type は [2, 2, 6] になるはず
+  // type が [0x02, 0x04, 0x08] のパラメータリスト (全て varint 型)
+  // delta type は [2, 2, 4] になるはず
   const params = [
-    { type: 2, value: encodeVarint(100n) },
-    { type: 4, value: encodeVarint(200n) },
-    { type: 10, value: encodeVarint(300n) },
+    { type: 0x02, value: encodeVarint(100n) },
+    { type: 0x04, value: encodeVarint(200n) },
+    { type: 0x08, value: encodeVarint(300n) },
   ];
 
   const encoded = encodeParameters(params);
@@ -50,32 +50,35 @@ test("Parameters の delta encoding が正しくエンコードされる", () =>
   // 先頭バイトは count = 3
   assert.equal(encoded[0], 3);
 
-  // 最初のパラメータ: delta = 2 (0 から 2)
+  // 最初のパラメータ: delta = 2 (0 から 0x02)
   // delta = 2, value = 100
   assert.equal(encoded[1], 2);
 
-  // 2番目のパラメータ: delta = 2 (2 から 4)
-  // value = 100 は 1 バイト (0x64) なので、次のパラメータは index 3 から
-  // delta = 2, value = 200
-  // 3番目のパラメータ: delta = 6 (4 から 10)
   // 詳細なバイト位置は varint エンコーディングに依存するので、
   // ラウンドトリップで検証
   const [decoded, consumed] = decodeParameters(encoded);
   assert.equal(decoded.length, 3);
-  assert.equal(decoded[0].type, 2);
-  assert.equal(decoded[1].type, 4);
-  assert.equal(decoded[2].type, 10);
+  assert.equal(decoded[0].type, 0x02);
+  assert.equal(decoded[1].type, 0x04);
+  assert.equal(decoded[2].type, 0x08);
   assert.equal(consumed, encoded.length);
 });
 
-test("Parameters の delta encoding で type が昇順でない場合にエラー", () => {
-  // type が降順の場合、delta が負になるためエラー
+test("Parameters の delta encoding で type が昇順でない場合もソートされる", () => {
+  // encodeParameters は内部でソートするため、降順でもエラーにならない
   const params = [
-    { type: 10, value: encodeVarint(100n) },
-    { type: 4, value: encodeVarint(200n) },
+    { type: 0x08, value: encodeVarint(100n) },
+    { type: 0x02, value: encodeVarint(200n) },
   ];
 
-  assert.throws(() => encodeParameters(params), /delta type must be non-negative/);
+  const encoded = encodeParameters(params);
+  const [decoded, consumed] = decodeParameters(encoded);
+
+  // ソートされて type 昇順になる
+  assert.equal(decoded.length, 2);
+  assert.equal(decoded[0].type, 0x02);
+  assert.equal(decoded[1].type, 0x08);
+  assert.equal(consumed, encoded.length);
 });
 
 test("空の Parameters リストのエンコード・デコード", () => {

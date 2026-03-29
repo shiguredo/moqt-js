@@ -400,20 +400,169 @@ export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[],
 }
 
 /**
- * パラメータリストをエンコードする
+ * Message Parameter の Value エンコーディング種別
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * Value のエンコーディングはパラメータ定義ごとに異なる。
+ * - uint8: 1 バイトの符号なし整数
+ * - varint: 可変長整数
+ * - location: 2 つの連続した varint (Group, Object)
+ * - length-prefixed: varint 長 + バイト列
+ */
+type MessageParameterValueEncoding = "uint8" | "varint" | "location" | "length-prefixed";
+
+/**
+ * パラメータ型ごとの Value エンコーディング定義
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * Message Parameters は Key-Value-Pair (Figure 2) とは異なり、
+ * 各パラメータ型が独自の Value エンコーディングを定義する。
+ */
+const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEncoding> = {
+  // DELIVERY_TIMEOUT (Section 9.3.3)
+  0x02: "varint",
+  // AUTHORIZATION_TOKEN (Section 9.3.2)
+  0x03: "length-prefixed",
+  // RENDEZVOUS_TIMEOUT (Section 9.3.4)
+  0x04: "varint",
+  // EXPIRES (Section 9.3.8)
+  0x08: "varint",
+  // LARGEST_OBJECT (Section 9.3.9)
+  0x09: "location",
+  // FORWARD (Section 9.3.10)
+  0x10: "uint8",
+  // SUBSCRIBER_PRIORITY (Section 9.3.5)
+  0x20: "uint8",
+  // SUBSCRIPTION_FILTER (Section 9.3.7)
+  0x21: "length-prefixed",
+  // GROUP_ORDER (Section 9.3.6)
+  0x22: "uint8",
+  // NEW_GROUP_REQUEST (Section 9.3.11)
+  0x32: "varint",
+};
+
+/**
+ * パラメータ型から Value エンコーディングを取得する
+ *
+ * 未知のパラメータ型の場合は PROTOCOL_VIOLATION だが、
+ * ここでは length-prefixed をフォールバックとして使用する。
+ */
+function getMessageParameterValueEncoding(paramType: number): MessageParameterValueEncoding {
+  return MESSAGE_PARAMETER_VALUE_ENCODING[paramType] ?? "length-prefixed";
+}
+
+/**
+ * 単一の Message Parameter をエンコードする (delta encoding)
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * Message Parameter {
+ *   Type Delta (vi64),
+ *   Value (..)
+ * }
+ */
+function encodeMessageParameter(param: Parameter, previousType: number): Uint8Array {
+  const deltaType = param.type - previousType;
+  if (deltaType < 0) {
+    throw new Error(
+      `parameters must be in ascending order: current type=${param.type}, previous type=${previousType}`,
+    );
+  }
+
+  const deltaBytes = encodeVarint(deltaType);
+  const encoding = getMessageParameterValueEncoding(param.type);
+
+  if (encoding === "length-prefixed") {
+    const lengthBytes = encodeVarint(param.value.length);
+    const result = new Uint8Array(deltaBytes.length + lengthBytes.length + param.value.length);
+    result.set(deltaBytes, 0);
+    result.set(lengthBytes, deltaBytes.length);
+    result.set(param.value, deltaBytes.length + lengthBytes.length);
+    return result;
+  }
+
+  // uint8, varint, location: Value をそのまま書き込む
+  const result = new Uint8Array(deltaBytes.length + param.value.length);
+  result.set(deltaBytes, 0);
+  result.set(param.value, deltaBytes.length);
+  return result;
+}
+
+/**
+ * 単一の Message Parameter をデコードする (delta encoding)
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * Message Parameter {
+ *   Type Delta (vi64),
+ *   Value (..)
+ * }
+ */
+function decodeMessageParameter(
+  data: Uint8Array,
+  offset: number,
+  previousType: number,
+): [Parameter, number] {
+  const [deltaType, deltaConsumed] = decodeVarint(data, offset);
+  const paramType = previousType + Number(deltaType);
+  let totalConsumed = deltaConsumed;
+
+  const encoding = getMessageParameterValueEncoding(paramType);
+  let value: Uint8Array;
+
+  switch (encoding) {
+    case "uint8": {
+      value = data.slice(offset + totalConsumed, offset + totalConsumed + 1);
+      totalConsumed += 1;
+      break;
+    }
+    case "varint": {
+      const [val, valConsumed] = decodeVarint(data, offset + totalConsumed);
+      value = encodeVarint(val);
+      totalConsumed += valConsumed;
+      break;
+    }
+    case "location": {
+      // Location: 2 つの連続した varint (Group, Object)
+      const [group, groupConsumed] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += groupConsumed;
+      const [obj, objConsumed] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += objConsumed;
+      const groupBytes = encodeVarint(group);
+      const objBytes = encodeVarint(obj);
+      value = new Uint8Array(groupBytes.length + objBytes.length);
+      value.set(groupBytes, 0);
+      value.set(objBytes, groupBytes.length);
+      break;
+    }
+    case "length-prefixed": {
+      const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += lengthConsumed;
+      value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
+      totalConsumed += Number(length);
+      break;
+    }
+  }
+
+  return [{ type: paramType, value }, totalConsumed];
+}
+
+/**
+ * Message Parameter リストをエンコードする
  *
  * draft-ietf-moq-transport-17 Section 9.3:
  * Message Parameters はカウントプレフィックス付きでエンコードする。
  * delta encoding を使用して Type を効率的にエンコードする。
- * パラメータは Type の昇順でなければならない。
+ * パラメータは Type の昇順でソートされる。
  */
 export function encodeParameters(params: Parameter[]): Uint8Array {
-  const countBytes = encodeVarint(params.length);
+  // Type 昇順でソート
+  const sorted = [...params].sort((a, b) => a.type - b.type);
+
+  const countBytes = encodeVarint(sorted.length);
   const paramBytes: Uint8Array[] = [];
   let previousType = 0;
 
-  for (const param of params) {
-    paramBytes.push(encodeKeyValuePair(param, previousType));
+  for (const param of sorted) {
+    paramBytes.push(encodeMessageParameter(param, previousType));
     previousType = param.type;
   }
 
@@ -431,11 +580,12 @@ export function encodeParameters(params: Parameter[]): Uint8Array {
 }
 
 /**
- * パラメータリストをデコードする
+ * Message Parameter リストをデコードする
  *
  * draft-ietf-moq-transport-17 Section 9.3:
  * Message Parameters はカウントプレフィックス付きでデコードする。
  * delta encoding を使用して Type をデコードする。
+ * Value のエンコーディングはパラメータ型ごとに異なる。
  *
  * @returns [parameters, consumed bytes]
  */
@@ -446,7 +596,11 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   let previousType = 0;
 
   for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeKeyValuePair(data, offset + totalConsumed, previousType);
+    const [param, paramConsumed] = decodeMessageParameter(
+      data,
+      offset + totalConsumed,
+      previousType,
+    );
     parameters.push(param);
     totalConsumed += paramConsumed;
     previousType = param.type;
