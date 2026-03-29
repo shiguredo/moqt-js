@@ -80,6 +80,10 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
+  // draft-ietf-moq-transport-17 Section 9.13:
+  // PUBLISH_DONE の Stream Count 用カウンター
+  private dataStreamCount = 0n;
+
   // Internal callbacks for session to use
   onSendObject?: (params: SendObjectParams) => void;
   onSendDatagram?: (params: SendDatagramParams) => void;
@@ -123,6 +127,14 @@ export class PublisherImpl implements Publisher {
 
   getTrackAlias(): bigint {
     return this.trackAlias;
+  }
+
+  incrementDataStreamCount(): void {
+    this.dataStreamCount++;
+  }
+
+  getDataStreamCount(): bigint {
+    return this.dataStreamCount;
   }
 
   /**
