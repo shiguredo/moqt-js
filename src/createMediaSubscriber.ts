@@ -228,7 +228,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
       await this.videoSubscriber.update({
         parameters: [
           {
-            type: 0x0c, // NEW_GROUP_REQUEST
+            // draft-ietf-moq-transport-17 Section 9.3.11
+            // NEW_GROUP_REQUEST = 0x32
+            type: 0x32,
             value: new Uint8Array([0x01]),
           },
         ],

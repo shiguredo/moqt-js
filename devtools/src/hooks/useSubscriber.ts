@@ -740,13 +740,13 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
 
     try {
-      // NEW_GROUP_REQUEST パラメータを含む SUBSCRIBE_UPDATE を送信
-      // draft-ietf-moq-transport-15 Section 9.2.1.12
-      // VersionSpecificParameterType.NEW_GROUP_REQUEST = 0x0C
+      // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
+      // draft-ietf-moq-transport-17 Section 9.3.11
+      // NEW_GROUP_REQUEST = 0x32
       await instance.subscriber.update({
         parameters: [
           {
-            type: 0x0c,
+            type: 0x32,
             value: new Uint8Array([0x01]),
           },
         ],
