@@ -19,21 +19,61 @@ import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 import type { Property } from "../properties";
 
-const evenParameterArb = fc
+/**
+ * Message Parameter の arbitrary
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * 各パラメータ型が独自の Value エンコーディングを定義する。
+ */
+const varintParameterArb = fc
   .record({
-    type: fc.integer({ min: 0, max: 100 }).map((n) => n * 2),
+    type: fc.constantFrom(0x02, 0x04, 0x08, 0x32),
     varintValue: fc.bigInt({ min: 0n, max: 1000000n }),
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-const oddParameterArb = fc.record({
-  type: fc.integer({ min: 0, max: 100 }).map((n) => n * 2 + 1),
-  value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
-});
+const uint8ParameterArb = fc
+  .record({
+    type: fc.constantFrom(0x10, 0x20, 0x22),
+    byteValue: fc.integer({ min: 0, max: 255 }),
+  })
+  .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) }));
 
-const parameterArb: fc.Arbitrary<Parameter> = fc.oneof(evenParameterArb, oddParameterArb);
+const locationParameterArb = fc
+  .record({
+    group: fc.bigInt({ min: 0n, max: 1000000n }),
+    object: fc.bigInt({ min: 0n, max: 1000000n }),
+  })
+  .map(({ group, object }) => {
+    const groupBytes = encodeVarint(group);
+    const objectBytes = encodeVarint(object);
+    const value = new Uint8Array(groupBytes.length + objectBytes.length);
+    value.set(groupBytes, 0);
+    value.set(objectBytes, groupBytes.length);
+    return { type: 0x09, value };
+  });
 
-const parametersArb = fc.array(parameterArb, { minLength: 0, maxLength: 3 });
+const lengthPrefixedParameterArb = fc
+  .record({
+    type: fc.constantFrom(0x03, 0x21),
+    value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
+  })
+  .map(({ type, value }) => ({ type, value }));
+
+const messageParameterArb: fc.Arbitrary<Parameter> = fc.oneof(
+  varintParameterArb,
+  uint8ParameterArb,
+  locationParameterArb,
+  lengthPrefixedParameterArb,
+);
+
+// delta encoding では type は昇順かつ一意である必要がある
+const parametersArb = fc
+  .array(messageParameterArb, { minLength: 0, maxLength: 3 })
+  .map((params) => {
+    const sorted = [...params].sort((a, b) => a.type - b.type);
+    return sorted.filter((param, index) => index === 0 || param.type !== sorted[index - 1].type);
+  });
 
 /**
  * Track Extensions arbitrary

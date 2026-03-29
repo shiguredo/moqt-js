@@ -17,9 +17,9 @@ import { decodeVarint, encodeVarint } from "../varint";
 import {
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
@@ -55,10 +55,7 @@ export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -87,15 +84,8 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.TRACK_STATUS,

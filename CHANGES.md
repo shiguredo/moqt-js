@@ -49,6 +49,7 @@
   - Setup Options のカウントプレフィックスを削除する (Section 9.4)
   - PUBLISH/SUBSCRIBE_OK/FETCH_OK の Track Properties から length プレフィックスを削除する
   - UNSUBSCRIBE メッセージを廃止し双方向ストリームの close でキャンセルする (Section 3.3.1)
+  - Message Parameter のエンコーディングをパラメータ型ごとの定義に準拠させる (Section 9.3)
   - 未対応: SUBSCRIBE_NAMESPACE の専用ストリーム対応
   - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
   - 未対応: Subgroup 再オープン禁止

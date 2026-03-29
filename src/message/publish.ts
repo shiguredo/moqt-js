@@ -8,9 +8,9 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
 import {
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
@@ -85,10 +85,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
   parts.push(encodeVarint(msg.trackAlias));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   // draft-ietf-moq-transport-17 Section 9.11:
   // Track Properties は length プレフィックスなしでシリアライズされる。
@@ -134,15 +131,8 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   // draft-ietf-moq-transport-17 Section 9.11:
   // Track Properties は残りバイトすべて
@@ -170,10 +160,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
 export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -194,15 +181,8 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
 export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
   let totalConsumed = 0;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.PUBLISH_OK,

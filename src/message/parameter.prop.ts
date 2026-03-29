@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Property-Based Tests
- * draft-ietf-moq-transport-16 Section 9.2
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 
 import { test, assert } from "vitest";
@@ -97,45 +97,88 @@ test("Location のエンコード・デコードがラウンドトリップす�
   );
 });
 
-const evenParameterArb = fc
+/**
+ * Message Parameter の arbitrary
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * 各パラメータ型が独自の Value エンコーディングを定義する。
+ * - varint: 0x02, 0x04, 0x08, 0x32
+ * - uint8: 0x10, 0x20, 0x22
+ * - location: 0x09
+ * - length-prefixed: 0x03, 0x21
+ */
+const varintParameterArb = fc
   .record({
-    type: fc.integer({ min: 0, max: 100 }).map((n) => n * 2),
+    type: fc.constantFrom(0x02, 0x04, 0x08, 0x32),
     varintValue: fc.bigInt({ min: 0n, max: 1000000n }),
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-const oddParameterArb = fc.record({
-  type: fc.integer({ min: 0, max: 100 }).map((n) => n * 2 + 1),
-  value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
-});
+const uint8ParameterArb = fc
+  .record({
+    type: fc.constantFrom(0x10, 0x20, 0x22),
+    byteValue: fc.integer({ min: 0, max: 255 }),
+  })
+  .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) }));
 
-const parameterArb = fc.oneof(evenParameterArb, oddParameterArb);
+const locationParameterArb = fc
+  .record({
+    group: fc.bigInt({ min: 0n, max: 1000000n }),
+    object: fc.bigInt({ min: 0n, max: 1000000n }),
+  })
+  .map(({ group, object }) => {
+    const groupBytes = encodeVarint(group);
+    const objectBytes = encodeVarint(object);
+    const value = new Uint8Array(groupBytes.length + objectBytes.length);
+    value.set(groupBytes, 0);
+    value.set(objectBytes, groupBytes.length);
+    return { type: 0x09, value };
+  });
+
+const lengthPrefixedParameterArb = fc
+  .record({
+    type: fc.constantFrom(0x03, 0x21),
+    value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
+  })
+  .map(({ type, value }) => ({ type, value }));
+
+const messageParameterArb = fc.oneof(
+  varintParameterArb,
+  uint8ParameterArb,
+  locationParameterArb,
+  lengthPrefixedParameterArb,
+);
+
+/**
+ * Message Parameters リストの arbitrary
+ *
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * パラメータは Type の昇順でソートされ、各 Type は一意である必要がある。
+ */
+const parametersArb = fc
+  .array(messageParameterArb, { minLength: 0, maxLength: 3 })
+  .map((params) => {
+    const sorted = [...params].sort((a, b) => a.type - b.type);
+    return sorted.filter((param, index) => index === 0 || param.type !== sorted[index - 1].type);
+  });
 
 /**
  * Parameters リストのエンコード・デコードがラウンドトリップする
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17 Section 9.3:
  * delta encoding を使用するため、type は昇順である必要がある。
  * テストでは生成されたパラメータを type でソートしてから使用する。
  */
 test("Parameters リストのエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(fc.array(parameterArb, { minLength: 0, maxLength: 5 }), (params) => {
-      // delta encoding では type は昇順である必要があるため、ソートする
-      const sortedParams = [...params].sort((a, b) => a.type - b.type);
-
-      // 重複する type を除去する（delta encoding では各 type は一意である必要がある）
-      const uniqueParams = sortedParams.filter(
-        (param, index) => index === 0 || param.type !== sortedParams[index - 1].type,
-      );
-
-      const encoded = encodeParameters(uniqueParams);
+    fc.property(parametersArb, (params) => {
+      const encoded = encodeParameters(params);
       const [decoded, consumed] = decodeParameters(encoded);
 
-      assert.equal(decoded.length, uniqueParams.length);
-      for (let i = 0; i < uniqueParams.length; i++) {
-        assert.equal(decoded[i].type, uniqueParams[i].type);
-        assert.deepEqual(decoded[i].value, uniqueParams[i].value);
+      assert.equal(decoded.length, params.length);
+      for (let i = 0; i < params.length; i++) {
+        assert.equal(decoded[i].type, params[i].type);
+        assert.deepEqual(decoded[i].value, params[i].value);
       }
       assert.equal(consumed, encoded.length);
     }),

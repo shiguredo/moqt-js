@@ -9,10 +9,10 @@ import {
   type Parameter,
   type TrackNamespace,
   decodeLocation,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
   encodeLocation,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { type Location, MessageType } from "./types";
@@ -101,10 +101,7 @@ export function encodeFetchPayload(msg: Fetch): Uint8Array {
     parts.push(encodeVarint(msg.joining.joiningStart));
   }
 
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -178,15 +175,8 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
     };
   }
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < numParams; i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.FETCH,
@@ -223,10 +213,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
 
   parts.push(new Uint8Array([msg.endOfTrack ? 1 : 0]));
   parts.push(encodeLocation(msg.endLocation));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   // draft-ietf-moq-transport-17 Section 9.15:
   // Track Properties は length プレフィックスなしでシリアライズされる。
@@ -254,15 +241,8 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
   totalConsumed += endLocationSize;
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < numParams; i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   // draft-ietf-moq-transport-17 Section 9.15:
   // Track Properties は残りバイトすべて

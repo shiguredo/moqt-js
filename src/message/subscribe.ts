@@ -8,9 +8,9 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
 import {
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
@@ -97,10 +97,7 @@ export function encodeSubscribePayload(msg: Subscribe): Uint8Array {
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -138,15 +135,8 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += paramsConsumed;
 
   return {
     type: MessageType.SUBSCRIBE,
@@ -180,10 +170,7 @@ export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.trackAlias));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   // draft-ietf-moq-transport-17 Section 9.9:
   // Track Properties は length プレフィックスなしでシリアライズされる。
@@ -208,15 +195,8 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += paramsConsumed;
 
   // draft-ietf-moq-transport-17 Section 9.9:
   // Track Properties は残りバイトすべて
@@ -249,10 +229,7 @@ export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
 
   parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.existingRequestId));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -281,15 +258,8 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
   const [existingRequestId, existingReqIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += existingReqIdConsumed;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += paramsConsumed;
 
   return {
     type: MessageType.REQUEST_UPDATE,
