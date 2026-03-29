@@ -1929,6 +1929,7 @@ export class SessionImpl implements Session {
       // 新しいストリームを開く
       const stream = await this.transport.createUnidirectionalStream();
       this.statsUnidirectionalStreamsOpened++;
+      publisher.incrementDataStreamCount();
       const writer = stream.getWriter();
 
       // Subgroup Header を書き込む
@@ -2065,9 +2066,12 @@ export class SessionImpl implements Session {
     const requestId = publisher.getRequestId();
 
     // PUBLISH_DONE ペイロードをエンコード
+    // draft-ietf-moq-transport-17 Section 9.13:
+    // Stream Count は実際に開いたデータストリーム数を設定する
+    const streamCount = publisher.getDataStreamCount();
     const parts: Uint8Array[] = [];
     parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
-    parts.push(encodeVarint(0)); // Stream count
+    parts.push(encodeVarint(streamCount));
     parts.push(encodeVarint(0)); // Reason phrase length
 
     const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
@@ -2087,7 +2091,7 @@ export class SessionImpl implements Session {
       this.emitDebug("send", MessageType.PUBLISH_DONE, payload, {
         requestId: requestId.toString(),
         statusCode: PublishDoneStatusCode.TRACK_ENDED,
-        streamCount: "0",
+        streamCount: streamCount.toString(),
       });
       try {
         await streamInfo.writer.write(message);
