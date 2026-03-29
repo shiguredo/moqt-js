@@ -32,3 +32,11 @@ PUBLISH_DONE Message {
 ## 修正方針
 
 Publisher がサブスクリプションごとに開いたデータストリーム数をカウントし、PUBLISH_DONE 送信時にその値を使用する。正確なカウントが困難な場合は RFC に従い `2^62 - 1` を設定する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+- `PublisherImpl` に `dataStreamCount` カウンターと `incrementDataStreamCount()` / `getDataStreamCount()` メソッドを追加した
+- `sendObject()` で新しい単方向ストリームを開くたびにカウンターをインクリメントするようにした
+- `sendPublishDone()` で実際のストリーム数を PUBLISH_DONE の Stream Count フィールドに設定するようにした

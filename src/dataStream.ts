@@ -4,7 +4,7 @@
  *
  * Data streams carry Objects via Subgroups or Datagrams.
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
  * Publisher は同じトラックのオブジェクトを Datagram と Stream の両方で送信できる。
  * https://github.com/moq-wg/moq-transport/pull/1350
@@ -36,7 +36,7 @@ function validateObjectStatus(status: number): void {
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
  *
- * Table 6 from draft-ietf-moq-transport-16:
+ * Table 6 from draft-ietf-moq-transport-17:
  * | Type | Subgroup ID Field | Subgroup ID Value | Extensions | End of Group | Priority |
  * |------|-------------------|-------------------|------------|--------------|----------|
  * | 0x10 | No                | 0                 | No         | No           | Yes      |
@@ -148,7 +148,7 @@ export interface SubgroupHeader {
 
 /**
  * Check if subgroup header type has explicit Subgroup ID field
- * draft-ietf-moq-transport-16 Section 10.4.2 Table 6
+ * draft-ietf-moq-transport-17 Section 10.4.2 Table 6
  */
 function hasSubgroupIdField(headerType: number): boolean {
   const lowNibble = headerType & 0x0f;
@@ -157,7 +157,7 @@ function hasSubgroupIdField(headerType: number): boolean {
 
 /**
  * Check if subgroup header type has Priority Present
- * draft-ietf-moq-transport-16 Section 10.4.2 Table 6
+ * draft-ietf-moq-transport-17 Section 10.4.2 Table 6
  *
  * Types 0x10-0x1D have Priority Present = Yes
  * Types 0x30-0x3D have Priority Present = No
@@ -168,7 +168,7 @@ function hasPriorityPresent(headerType: number): boolean {
 
 /**
  * Check if subgroup header type contains End of Group
- * draft-ietf-moq-transport-16 Section 10.4.2 Table 6
+ * draft-ietf-moq-transport-17 Section 10.4.2 Table 6
  *
  * Types with bit 3 set (0x08) contain End of Group:
  * 0x18-0x1D (Priority Present) and 0x38-0x3D (No Priority)
@@ -180,7 +180,7 @@ export function hasContainsEndOfGroup(headerType: number): boolean {
 
 /**
  * Encode a Subgroup Header
- * draft-ietf-moq-transport-16 Section 10.4.2 Figure 28
+ * draft-ietf-moq-transport-17 Section 10.4.2 Figure 28
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -261,7 +261,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // For types 0x02, 0x03, 0x0A, 0x0B: Subgroup ID = First Object ID (will be set when first object is read)
 
   // Publisher Priority (8 bits)
-  // draft-ietf-moq-transport-16 Section 10.4.2 Table 6
+  // draft-ietf-moq-transport-17 Section 10.4.2 Table 6
   let publisherPriority: number | undefined;
   if (hasPriorityPresent(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
@@ -282,7 +282,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
 /**
  * Check if a subgroup header type has Extensions Present
- * draft-ietf-moq-transport-16 Section 10.4.2 Table 6:
+ * draft-ietf-moq-transport-17 Section 10.4.2 Table 6:
  * Types with bit 0 set (odd types) have Extensions Present
  */
 export function hasPropertiesPresent(headerType: number): boolean {
@@ -291,7 +291,7 @@ export function hasPropertiesPresent(headerType: number): boolean {
 
 /**
  * Encode Object fields for Subgroup stream
- * draft-ietf-moq-transport-16 Section 10.4.2 Figure 29:
+ * draft-ietf-moq-transport-17 Section 10.4.2 Figure 29:
  * {
  *   Object ID Delta (i),
  *   [Extensions (..),]          <-- Only if header type has Extensions Present
@@ -322,7 +322,7 @@ export function encodeObjectFields(
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-16 Section 10.2.1.2:
+    // draft-ietf-moq-transport-17 Section 10.2.1.2:
     // Non-Normal status objects must not have extension headers
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
       throw new Error("Protocol violation: extension headers on non-Normal status object");
@@ -338,7 +338,7 @@ export function encodeObjectFields(
   parts.push(encodeVarint(payloadLength));
 
   // Status (only if payload length is 0)
-  // draft-ietf-moq-transport-16 Section 10.2.1.1:
+  // draft-ietf-moq-transport-17 Section 10.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   if (payloadLength === 0n) {
     parts.push(encodeVarint(status));
@@ -367,7 +367,7 @@ export interface DecodedObjectFields {
 
 /**
  * Decode Object fields from Subgroup stream
- * draft-ietf-moq-transport-16 Section 10.4.2 Figure 29
+ * draft-ietf-moq-transport-17 Section 10.4.2 Figure 29
  *
  * @param data - Data buffer
  * @param headerType - Subgroup header type to determine if properties are present
@@ -401,7 +401,7 @@ export function decodeObjectFields(
   totalConsumed += payloadLenConsumed;
 
   // Status (only present if payload length is 0)
-  // draft-ietf-moq-transport-16 Section 10.2.1.1:
+  // draft-ietf-moq-transport-17 Section 10.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   let status: ObjectStatus = ObjectStatus.NORMAL;
   if (payloadLength === 0n) {
@@ -456,7 +456,7 @@ export function createObject(
 /**
  * Object Datagram Type (Section 10.3.1)
  *
- * Table 5 from draft-ietf-moq-transport-16:
+ * Table 5 from draft-ietf-moq-transport-17:
  * | Type | End Of Group | Extensions | Object ID | Priority | Status/Payload |
  * |------|--------------|------------|-----------|----------|----------------|
  * | 0x00 | No           | No         | Yes       | Yes      | Payload        |
@@ -576,7 +576,7 @@ function datagramIsStatusType(type: number): boolean {
 /**
  * Check if datagram type has Priority Present
  *
- * draft-ietf-moq-transport-16 Section 10.3.1 Table 5:
+ * draft-ietf-moq-transport-17 Section 10.3.1 Table 5:
  * Types 0x00-0x07 and 0x20-0x25 have Priority Present = Yes
  * Types 0x08-0x0F and 0x28-0x2D have Priority Present = No
  */
@@ -599,7 +599,7 @@ function datagramHasPriority(type: number): boolean {
 
 /**
  * Encode an Object Datagram
- * draft-ietf-moq-transport-16 Section 10.3.1
+ * draft-ietf-moq-transport-17 Section 10.3.1
  */
 export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -620,7 +620,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   if (datagramHasExtensions(datagram.type)) {
     const extLen = datagram.properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-16 Section 10.2.1.2:
+    // draft-ietf-moq-transport-17 Section 10.2.1.2:
     // Non-Normal status objects must not have extension headers
     if (
       datagramIsStatusType(datagram.type) &&
@@ -654,7 +654,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
 /**
  * Decode an Object Datagram
- * draft-ietf-moq-transport-16 Section 10.3.1
+ * draft-ietf-moq-transport-17 Section 10.3.1
  */
 export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
   let totalConsumed = 0;
@@ -936,7 +936,7 @@ export interface FetchObjectContext {
 
 /**
  * Encode Fetch Object Fields
- * draft-ietf-moq-transport-16 Section 10.4.4 Figure 31
+ * draft-ietf-moq-transport-17 Section 10.4.4 Figure 31
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -1167,7 +1167,7 @@ export function decodeFetchObjectFields(
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
 
-    // draft-ietf-moq-transport-16:
+    // draft-ietf-moq-transport-17:
     // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
     // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
     // https://github.com/moq-wg/moq-transport/pull/1317

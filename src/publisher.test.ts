@@ -1,6 +1,6 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-16 Section 5.2
+ * draft-ietf-moq-transport-17 Section 5.2
  */
 
 import { test, assert } from "vitest";

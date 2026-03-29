@@ -24,3 +24,9 @@ draft-ietf-moq-transport-15
 ## 修正方針
 
 draft-ietf-moq-transport-17 へリンクとテキストを更新する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+`devtools/src/App.tsx` のフッターのリンク URL とテキストを draft-15 から draft-17 に更新した。

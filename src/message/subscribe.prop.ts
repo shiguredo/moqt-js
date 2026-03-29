@@ -77,7 +77,7 @@ const parametersArb = fc
 /**
  * Track Extensions arbitrary
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * SUBSCRIBE_OK に Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */
@@ -150,7 +150,7 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * SUBSCRIBE_OK に Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */

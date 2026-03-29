@@ -18,7 +18,7 @@ import { MessageType } from "./types";
 /**
  * SUBSCRIBE メッセージ (Section 9.9)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * SUBSCRIBE does NOT include Track Alias.
  * Track Alias is returned by the publisher in SUBSCRIBE_OK.
  */
@@ -36,7 +36,7 @@ export interface Subscribe {
 /**
  * SUBSCRIBE_OK メッセージ (Section 9.10)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */
@@ -208,7 +208,7 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
 /**
  * RequestUpdate のペイロードをエンコード
  *
- * draft-ietf-moq-transport-16 Section 9.11:
+ * draft-ietf-moq-transport-17 Section 9.11:
  * REQUEST_UPDATE Message {
  *   Type (i) = 0x2,
  *   Length (16),

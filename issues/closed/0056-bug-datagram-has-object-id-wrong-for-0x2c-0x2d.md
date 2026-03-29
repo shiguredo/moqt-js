@@ -43,3 +43,12 @@ function datagramHasObjectId(type: number): boolean {
 
 - 行 484-485: コメントテーブルの Object ID カラムが 0x2C/0x2D で `Yes` になっているが `No` が正しい
 - 行 524-527: DatagramType 定数名 `STATUS_OBJ_NO_PRI_2` / `STATUS_OBJ_EXT_NO_PRI_2` を `STATUS_NO_OBJ_NO_PRI` / `STATUS_NO_OBJ_EXT_NO_PRI` に修正する
+
+## 解決方法
+
+Completed: 2026-03-29
+
+- `datagramHasObjectId()` を全タイプで `(type & 0x04) === 0` を使うように統一した
+- コメントテーブルの 0x2C/0x2D の Object ID カラムを `No` に修正した
+- DatagramType 定数名を `STATUS_NO_OBJ_NO_PRI` / `STATUS_NO_OBJ_EXT_NO_PRI` に修正した
+- 0x2C/0x2D タイプの roundtrip テストを追加した

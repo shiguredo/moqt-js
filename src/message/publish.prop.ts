@@ -77,7 +77,7 @@ const parametersArb = fc
 /**
  * Track Extensions arbitrary
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * PUBLISH, SUBSCRIBE_OK, FETCH_OK に Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */
@@ -114,7 +114,7 @@ const trackNameArb = fc
   .map((s) => new TextEncoder().encode(s));
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * PUBLISH に Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */

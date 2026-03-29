@@ -1,6 +1,6 @@
 /**
  * MOQT Extension Headers Unit Tests
- * draft-ietf-moq-transport-16 Section 11
+ * draft-ietf-moq-transport-17 Section 11
  */
 
 import { test, assert } from "vitest";
@@ -44,7 +44,7 @@ test("encodeProperty: 奇数 ID で data がない場合はエラー", () => {
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、ID は前の ID からの差分としてエンコードされる。
  */
 test("encodeProperties: 複数の拡張を delta encoding でエンコードして結合", () => {
@@ -214,7 +214,7 @@ test("parseProperties: Immutable Extensions を正しくパース", () => {
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: Immutable Extensions と他の拡張の組み合わせ", () => {
@@ -254,7 +254,7 @@ test("parseProperties: Immutable Extensions が unknownProperties に含まれ�
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: 全ての MOQT Core Extensions を正しくパース", () => {

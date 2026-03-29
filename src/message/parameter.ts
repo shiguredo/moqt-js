@@ -21,7 +21,7 @@ import type { Location } from "./types";
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
  * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
  * https://github.com/moq-wg/moq-transport/pull/1399
@@ -119,7 +119,7 @@ export function getParameterVarintValue(param: Parameter): bigint {
  * パラメータから Location 値を取得
  *
  * LARGEST_OBJECT (0x09) パラメータなど、Location を含むパラメータ用
- * draft-ietf-moq-transport-16 Section 9.2.2.7
+ * draft-ietf-moq-transport-17 Section 9.2.2.7
  */
 export function getParameterLocationValue(param: Parameter): Location {
   const [location] = decodeLocation(param.value, 0);
@@ -164,7 +164,7 @@ export interface TrackNamespace {
 /**
  * Track Namespace をエンコードする
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Namespace は最大 4,096 バイト。
  * https://github.com/moq-wg/moq-transport/pull/1399
  */
@@ -201,7 +201,7 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 /**
  * Track Namespace をデコードする
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Namespace は最大 4,096 バイト。
  * https://github.com/moq-wg/moq-transport/pull/1399
  *
@@ -243,7 +243,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
 /**
  * string[] から TrackNamespace を作成
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Namespace は最大 4,096 バイト。
  * https://github.com/moq-wg/moq-transport/pull/1399
  */
@@ -275,7 +275,7 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
 /**
  * Track Name をエンコードする（サイズ検証付き）
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Full Track Name は最大 4,096 バイト。
  * https://github.com/moq-wg/moq-transport/pull/1399
  */
@@ -293,7 +293,7 @@ export function encodeTrackName(trackName: string): Uint8Array {
 /**
  * Track Name のサイズを検証する
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Full Track Name は最大 4,096 バイト。
  * https://github.com/moq-wg/moq-transport/pull/1399
  */
@@ -330,7 +330,7 @@ export function decodeLocation(data: Uint8Array, offset = 0): [Location, number]
 /**
  * 単一のパラメータを delta encoding でエンコードする
  *
- * draft-ietf-moq-transport-16 Section 9.2:
+ * draft-ietf-moq-transport-17 Section 9.2:
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *

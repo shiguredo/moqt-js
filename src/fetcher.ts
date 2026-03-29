@@ -1,8 +1,8 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-16 Section 9.16-9.18
+ * draft-ietf-moq-transport-17 Section 9.16-9.18
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
  * "unknown range" として返すことができる。
@@ -28,7 +28,7 @@ export interface Fetcher {
   readonly endLocation: Location;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-16 Section 9.18
+   * draft-ietf-moq-transport-17 Section 9.18
    */
   cancel(): Promise<void>;
 }

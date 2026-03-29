@@ -73,7 +73,7 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
 /**
  * Message Parameter Types (Section 9.2.1)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
  * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY,
@@ -124,7 +124,7 @@ export type MessageParameterType = (typeof MessageParameterType)[keyof typeof Me
 /**
  * @deprecated VersionSpecificParameterType は MessageParameterType に名称変更された
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * - "Version Specific Parameters" を "Message Parameters" にリネーム
  * - Track Properties は Track Extensions に移動
  * https://github.com/moq-wg/moq-transport/pull/1411
@@ -159,7 +159,7 @@ export type FilterType = (typeof FilterType)[keyof typeof FilterType];
 /**
  * Object Status (Section 10.2.1.1)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * - 0x0: Normal object
  * - 0x3: End of Group (EOG)
  *   Indicates that no objects with the specified Group ID and the Object ID
@@ -213,10 +213,10 @@ export type PublishDoneStatusCode =
 /**
  * Namespace Subscribe Mode (Section 9.25)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * SUBSCRIBE_NAMESPACE の Subscribe Options フィールドで使用される。
  * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) のいずれかを指定する。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-16.html#section-9.25
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.25
  */
 export const NamespaceSubscribeMode = {
   /**

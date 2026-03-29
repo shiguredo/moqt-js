@@ -39,3 +39,9 @@ STATUS_OBJ_EXT_NO_PRI_2: 0x2d,
 - `STATUS_OBJ_EXT_NO_PRI_2` → `STATUS_NO_OBJ_EXT_NO_PRI`
 
 注: issue 0056 の datagramHasObjectId 修正とあわせて対応する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+issue 0056 の修正と合わせて対応した。
