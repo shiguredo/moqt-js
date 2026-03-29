@@ -45,6 +45,7 @@ nw_connection_send(m_connection.get(), data,
 - `close()` が `isComplete: true` で呼ばれるとフラッシュがトリガーされる
 
 参考:
+
 - https://github.com/WebKit/WebKit/blob/main/Source/WebKit/NetworkProcess/webtransport/cocoa/NetworkTransportStreamCocoa.mm
 - https://developer.apple.com/documentation/network/nwconnection/send(content:contentcontext:iscomplete:completion:)-5ecuz
 - https://developer.apple.com/forums/thread/689059
