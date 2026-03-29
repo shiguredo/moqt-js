@@ -654,6 +654,7 @@ export class SessionImpl implements Session {
   // GOAWAY 状態
   private receivedGoaway = false;
   private sentGoaway = false;
+  private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Active publishers, subscribers and fetchers
   private publishers = new Map<bigint, PublisherImpl>();
@@ -1704,6 +1705,20 @@ export class SessionImpl implements Session {
       newSessionUri: newSessionUri ?? "",
       timeout: goawayTimeout.toString(),
     });
+
+    // draft-ietf-moq-transport-17 Section 3.6:
+    // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
+    // the indicated timeout if there are still open subscriptions or
+    // fetches on a connection."
+    if (goawayTimeout > 0n) {
+      this.goawayTimeoutId = setTimeout(() => {
+        if (this.sessionState === "connected") {
+          this.closeWithError(
+            new SessionError("GOAWAY timeout expired", SessionErrorCode.GOAWAY_TIMEOUT),
+          );
+        }
+      }, Number(goawayTimeout));
+    }
   }
 
   /**
@@ -1748,6 +1763,12 @@ export class SessionImpl implements Session {
     }
 
     this.sessionState = "closed";
+
+    // GOAWAY タイムアウトタイマーをクリア
+    if (this.goawayTimeoutId !== null) {
+      clearTimeout(this.goawayTimeoutId);
+      this.goawayTimeoutId = null;
+    }
 
     // Close all publishers, subscribers and fetchers
     // Note: We use markClosed() instead of handleEnd() because session close

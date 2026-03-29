@@ -30,3 +30,11 @@ draft-ietf-moq-transport-17 Section 3.5 Termination:
 ## 修正方針
 
 GOAWAY 送信後にタイマーを設定し、タイムアウト経過時に未クローズのサブスクリプション/Fetch が存在すれば `GOAWAY_TIMEOUT` でセッションを閉じる。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+- `SessionImpl` に `goawayTimeoutId` フィールドを追加した
+- `goaway()` メソッドで timeout > 0 の場合に `setTimeout` でタイマーを設定し、タイムアウト経過時にセッションが接続中であれば `GOAWAY_TIMEOUT` で `closeWithError` を呼ぶようにした
+- `close()` メソッドでタイマーをクリアするようにした

@@ -27,3 +27,12 @@ Forward State はサブスクリプションの重要な状態であり、Publis
 ## 修正方針
 
 Publisher パネルに Forward State の現在値を表示し、状態変化時にリアルタイムで更新する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+- `devtools/src/signals/publisher.ts` に `forwardState` シグナルを追加した
+- `usePublisher.ts` で `onForwardStateChange` コールバックを設定し、PUBLISH_OK 受信時の初期値と状態変化を追跡するようにした
+- `PublisherPanel.tsx` に Forward State の表示 UI を追加した (0/1 と forwarding/not forwarding の表示)
+- `cleanupPublisher()` で `forwardState` を null にリセットするようにした
