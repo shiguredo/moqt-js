@@ -12,7 +12,7 @@ Model: Claude Opus 4.6
 refs/moq/draft-ietf-moq-transport-17.txt Section 9.3 (line 2665-2669):
 
 > All Message Parameters MUST be defined in the negotiated version of
-> MOQT or negotiated via Setup Options.  An endpoint that receives an
+> MOQT or negotiated via Setup Options. An endpoint that receives an
 > unknown Message Parameter MUST close the session with
 > PROTOCOL_VIOLATION.
 

@@ -12,8 +12,8 @@ REQUEST_ERROR, PUBLISH_DONE の Reason Phrase の長さが最大 1,024 バイト
 refs/moq/draft-ietf-moq-transport-17.txt Section 1.4.4 (line 657-661):
 
 > Reason Phrase Length: A variable-length integer specifying the
-> length of the reason phrase in bytes.  The reason phrase length
-> has a maximum value of 1024 bytes.  If an endpoint receives a
+> length of the reason phrase in bytes. The reason phrase length
+> has a maximum value of 1024 bytes. If an endpoint receives a
 > length exceeding the maximum, it MUST close the session with a
 > PROTOCOL_VIOLATION
 

@@ -2060,12 +2060,23 @@ export class SessionImpl implements Session {
       offset += part.length;
     }
 
-    // TODO: 本来は PUBLISH の bidi stream 上で送信すべき
-    await this.sendControlMessage(MessageType.PUBLISH_DONE, payload, {
-      requestId: requestId.toString(),
-      statusCode: PublishDoneStatusCode.TRACK_ENDED,
-      streamCount: "0",
-    });
+    // draft-ietf-moq-transport-17 Section 9.13:
+    // PUBLISH_DONE は subscription の bidi stream 上で送信する
+    const streamInfo = this.requestStreams.get(requestId);
+    if (streamInfo) {
+      const message = this.controlWriter!.encode(MessageType.PUBLISH_DONE, payload);
+      this.statsControlMessagesSent++;
+      this.emitDebug("send", MessageType.PUBLISH_DONE, payload, {
+        requestId: requestId.toString(),
+        statusCode: PublishDoneStatusCode.TRACK_ENDED,
+        streamCount: "0",
+      });
+      try {
+        await streamInfo.writer.write(message);
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+    }
 
     this.publishers.delete(requestId);
   }

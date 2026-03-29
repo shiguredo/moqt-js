@@ -12,7 +12,7 @@ Model: Claude Opus 4.6
 refs/moq/draft-ietf-moq-transport-17.txt Section 10.4.2 (line 4803-4809):
 
 > Type values with SUBGROUP_ID_MODE set to 0b11: 0x16, 0x17, 0x1E,
-> 0x1F, 0x36, 0x37, 0x3E, 0x3F.  This mode is reserved for future
+> 0x1F, 0x36, 0x37, 0x3E, 0x3F. This mode is reserved for future
 > use.
 >
 > Type values that do not match the form 0b00X1XXXX (i.e., Type

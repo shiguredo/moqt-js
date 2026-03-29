@@ -12,7 +12,7 @@ Model: Claude Opus 4.6
 refs/moq/draft-ietf-moq-transport-17.txt Section 9.9 (line 3545-3550):
 
 > The same Track Alias MUST NOT be used by a publisher to refer to two
-> different Tracks simultaneously in the same session.  If a subscriber
+> different Tracks simultaneously in the same session. If a subscriber
 > receives a SUBSCRIBE_OK that uses the same Track Alias as a different
 > track with an Established subscription, it MUST close the session with
 > error DUPLICATE_TRACK_ALIAS.
