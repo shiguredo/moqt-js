@@ -22,7 +22,7 @@ export const keyframeInterval = signal(3600);
 
 // Publish settings
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
-// draft-ietf-moq-transport-15 Section 9.2.1.3
+// draft-ietf-moq-transport-17 Section 9.2.1.3
 // デフォルト: 600000ms (10分)
 export const maxCacheDuration = signal(600000);
 

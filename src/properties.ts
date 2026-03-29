@@ -1,11 +1,11 @@
 /**
  * MOQT Extension Headers
- * draft-ietf-moq-transport-16 Section 11
+ * draft-ietf-moq-transport-17 Section 11
  *
  * Object Extension Headers として定義されている拡張。
  * LOC (draft-ietf-moq-loc) とは別の、MOQT 本体で定義された拡張。
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Extension Headers は Key-Value-Pair 形式を使用し、delta encoding を適用する。
  */
 
@@ -38,7 +38,7 @@ export const MOQTPropertyId = {
 /**
  * MOQT Track Extension Header ID
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Properties を Extensions に移動。
  * これらは end-to-end で送信され、Relay が転送する。
  * https://github.com/moq-wg/moq-transport/pull/1390
@@ -53,7 +53,7 @@ export const TrackPropertyId = {
    * Delivery Timeout (Section 11.1)
    * オブジェクトの配信タイムアウト（ミリ秒）
    *
-   * draft-ietf-moq-transport-16:
+   * draft-ietf-moq-transport-17:
    * Message Parameter から Track Extension に移動。
    */
   DELIVERY_TIMEOUT: 0x02n,
@@ -70,7 +70,7 @@ export const TrackPropertyId = {
   /**
    * Publisher Group Order Preference (Section 11.1.1.2)
    *
-   * draft-ietf-moq-transport-16:
+   * draft-ietf-moq-transport-17:
    * GROUP_ORDER パラメータから分割された Publisher 向けの設定。
    * https://github.com/moq-wg/moq-transport/pull/1390
    */
@@ -105,7 +105,7 @@ export const PropertyTypeRange = {
 /**
  * Prior Group ID Gap
  *
- * draft-ietf-moq-transport-16 Section 11.3:
+ * draft-ietf-moq-transport-17 Section 11.3:
  * 現在の Group より前の、存在しない Group の数を示す。
  *
  * 例: Group 10 で gap = 2 の場合、Group 8 と 9 は存在しない。
@@ -117,7 +117,7 @@ export interface PriorGroupIdGap {
 /**
  * Prior Object ID Gap
  *
- * draft-ietf-moq-transport-16 Section 11.4:
+ * draft-ietf-moq-transport-17 Section 11.4:
  * 現在の Object より前の、存在しない Object の数を示す。
  *
  * 例: Object 10 で gap = 2 の場合、Object 8 と 9 は存在しない。
@@ -141,7 +141,7 @@ export interface Property {
 /**
  * Immutable Extensions
  *
- * draft-ietf-moq-transport-16 Section 11.2:
+ * draft-ietf-moq-transport-17 Section 11.2:
  * Relay が変更・削除できない拡張のコンテナ。
  * 内部に Key-Value-Pair をネストできる。
  *
@@ -167,7 +167,7 @@ export interface ParsedProperties {
 /**
  * Prior Group ID Gap をエンコードする
  *
- * draft-ietf-moq-transport-16 Section 11.3:
+ * draft-ietf-moq-transport-17 Section 11.3:
  * ID (0x3C) は偶数なので varint value 形式
  */
 export function encodePriorGroupIdGap(gap: PriorGroupIdGap): Uint8Array {
@@ -193,7 +193,7 @@ export function decodePriorGroupIdGap(data: Uint8Array): PriorGroupIdGap {
 /**
  * Prior Object ID Gap をエンコードする
  *
- * draft-ietf-moq-transport-16 Section 11.4:
+ * draft-ietf-moq-transport-17 Section 11.4:
  * ID (0x3E) は偶数なので varint value 形式
  */
 export function encodePriorObjectIdGap(gap: PriorObjectIdGap): Uint8Array {
@@ -252,7 +252,7 @@ export function encodeProperty(header: Property): Uint8Array {
 /**
  * 単一の Extension Header を delta encoding でエンコードする
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *
@@ -297,7 +297,7 @@ function encodePropertyWithDelta(header: Property, previousId: bigint): Uint8Arr
 /**
  * 複数の Extension Header をエンコードして結合する
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、拡張ヘッダーは ID の昇順でソートしてからエンコードする。
  */
 export function encodeProperties(headers: Property[]): Uint8Array {
@@ -325,7 +325,7 @@ export function encodeProperties(headers: Property[]): Uint8Array {
 /**
  * Immutable Extensions をエンコードする
  *
- * draft-ietf-moq-transport-16 Section 11:
+ * draft-ietf-moq-transport-17 Section 11:
  * ID (0x0B) は奇数なので length + bytes 形式
  *
  * 内部には複数の Key-Value-Pair (Extension Header) をネストできる。
@@ -352,7 +352,7 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
 /**
  * Immutable Extensions をデコードする
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用して内部の拡張をデコードする。
  *
  * @param data - ID を含む完全な Immutable Extensions データ
@@ -397,7 +397,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
  * 複数の拡張が含まれるデータから、MOQT Core Extensions を抽出する。
  * 未知の拡張はスキップされるが、unknownProperties に保持される。
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用して ID をデコードする。
  *
  * @param data - Extensions データ（複数の拡張を含む可能性あり）
@@ -491,7 +491,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
 /**
  * Extension Headers をデコードする
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用して ID をデコードする。
  *
  * @param data - Extensions データ（複数の拡張を含む可能性あり）

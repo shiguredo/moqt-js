@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Unit Tests
- * draft-ietf-moq-transport-16 Section 9.2
+ * draft-ietf-moq-transport-17 Section 9.2
  */
 
 import { test, assert } from "vitest";
@@ -31,7 +31,7 @@ test("無効なフィルタタイプでエラー", () => {
 
 /**
  * delta encoding のテスト
- * draft-ietf-moq-transport-16 Section 9.2:
+ * draft-ietf-moq-transport-17 Section 9.2:
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  */
@@ -92,7 +92,7 @@ test("空の Parameters リストのエンコード・デコード", () => {
 
 /**
  * Track Namespace / Full Track Name のサイズ制限テスト
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
  * https://github.com/moq-wg/moq-transport/pull/1399
  */

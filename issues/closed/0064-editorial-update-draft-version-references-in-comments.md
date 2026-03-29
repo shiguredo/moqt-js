@@ -27,3 +27,9 @@ draft-15 → draft-17 で変更されたセクション番号の例:
 ## 修正方針
 
 プロジェクト全体で `draft-ietf-moq-transport-15` と `draft-ietf-moq-transport-16` を検索し、該当する Section 番号も含めて draft-17 の正しいセクション番号に更新する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+`src/` 以下の 26 ファイル (183 箇所) と `devtools/src/` の 1 箇所で `draft-ietf-moq-transport-15` / `draft-ietf-moq-transport-16` を全て `draft-ietf-moq-transport-17` に一括置換した。

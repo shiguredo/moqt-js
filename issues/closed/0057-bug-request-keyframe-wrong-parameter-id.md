@@ -47,3 +47,10 @@ draft-ietf-moq-transport-17 Section 14.3 Table 11 Message Parameters:
 ## 修正方針
 
 ハードコードされた `0x0c` を `MessageParameterType.NEW_GROUP_REQUEST` (0x32) に修正する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+- `devtools/src/hooks/useSubscriber.ts` と `src/createMediaSubscriber.ts` でハードコードされた `0x0c` を `0x32` に修正した
+- コメントの draft-15 参照を draft-17 Section 9.3.11 に更新した

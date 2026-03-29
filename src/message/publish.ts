@@ -19,7 +19,7 @@ import { MessageType } from "./types";
 /**
  * PUBLISH メッセージ (Section 9.13)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */

@@ -6,7 +6,7 @@
  * トラックの状態を問い合わせるために使用し、実際にサブスクライブはしない。
  * 応答は REQUEST_OK（SUBSCRIBE_OK と同じパラメータを含む）。
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * - Subscriber は DELIVERY_TIMEOUT, PUBLISHER_PRIORITY を送信しない
  *   https://github.com/moq-wg/moq-transport/pull/1325
  * - REQUEST_OK レスポンスに LARGEST_OBJECT パラメータを含めることが可能
@@ -30,7 +30,7 @@ import { MessageType } from "./types";
  * SUBSCRIBE と同じフォーマットだが、トラックの状態照会用。
  * サブスクリプション状態を作成せず、オブジェクトも送信しない。
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Subscriber からの TRACK_STATUS には DELIVERY_TIMEOUT, PUBLISHER_PRIORITY を
  * 含めてはならない（これらは Publisher からの REQUEST_OK レスポンスにのみ含まれる）。
  */
@@ -48,7 +48,7 @@ export interface TrackStatus {
 /**
  * TrackStatus のペイロードをエンコード
  *
- * draft-ietf-moq-transport-16 Section 9.19:
+ * draft-ietf-moq-transport-17 Section 9.19:
  * TRACK_STATUS message format is identical to the SUBSCRIBE message.
  */
 export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {

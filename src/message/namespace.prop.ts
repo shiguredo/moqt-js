@@ -92,7 +92,7 @@ const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }),
 /**
  * SUBSCRIBE_NAMESPACE 用のネームスペース arbitrary
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
  * https://github.com/moq-wg/moq-transport/pull/1393
  */
@@ -104,7 +104,7 @@ const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 
 /**
  * NAMESPACE/NAMESPACE_DONE 用の Track Namespace Suffix arbitrary
  *
- * draft-ietf-moq-transport-16 Section 9.21:
+ * draft-ietf-moq-transport-17 Section 9.21:
  * Track Namespace Suffix は Track Namespace Prefix を除いた残りの部分。
  * 空も許容される。
  */
@@ -116,7 +116,7 @@ const namespaceSuffixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 
 /**
  * NamespaceSubscribeMode の arbitrary
  *
- * draft-ietf-moq-transport-16 Section 9.25:
+ * draft-ietf-moq-transport-17 Section 9.25:
  * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02)
  */
 const namespaceSubscribeModeArb: fc.Arbitrary<NamespaceSubscribeMode> = fc.constantFrom(

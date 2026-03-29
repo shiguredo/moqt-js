@@ -33,3 +33,18 @@ draft-ietf-moq-transport-17 Section 3.5 Termination:
 ## 修正方針
 
 SessionError 発生時に `callbacks.error` の呼び出しに加えて、WebTransport セッションの `close()` を適切なエラーコードで呼び出す。共通のエラーハンドリング関数を作成して一貫性を確保する。
+
+## 解決方法
+
+Completed: 2026-03-29
+
+- `closeWithError(error: SessionError)` ヘルパーメソッドを追加し、`callbacks.error` 通知 + `close()` + `transport.close()` を一括で行うようにした
+- 以下の箇所を `closeWithError` に統一した:
+  - 制御ストリーム close 検出時 (PROTOCOL_VIOLATION)
+  - 未知の namespace stream メッセージタイプ (PROTOCOL_VIOLATION)
+  - DUPLICATE_TRACK_ALIAS エラー
+  - FETCH_OK の end location バリデーション (PROTOCOL_VIOLATION)
+  - 未知の request stream メッセージタイプ (PROTOCOL_VIOLATION)
+  - 未知の control メッセージタイプ (PROTOCOL_VIOLATION)
+  - 複数回の GOAWAY 受信 (PROTOCOL_VIOLATION)
+  - 未知の単方向ストリームタイプ (PROTOCOL_VIOLATION)

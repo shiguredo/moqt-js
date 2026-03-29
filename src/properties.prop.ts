@@ -1,6 +1,6 @@
 /**
  * MOQT Extension Headers Property-Based Tests
- * draft-ietf-moq-transport-16 Section 11
+ * draft-ietf-moq-transport-17 Section 11
  */
 
 import { test, assert } from "vitest";
@@ -56,7 +56,7 @@ test("Prior Object ID Gap のエンコード・デコードがラウンドトリ
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、encodeProperties でエンコードする。
  */
 test("parseProperties は既知・未知の任意の組み合わせをパースできる", () => {
@@ -249,7 +249,7 @@ test("encodeProperty のラウンドトリップ: 奇数 ID", () => {
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、extensions の ID は一意である必要がある。
  * encodeImmutableProperties は内部で encodeProperties を使用して ID の昇順でソートする。
  */
@@ -290,7 +290,7 @@ test("Immutable Extensions のエンコード・デコードがラウンドト�
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  * Immutable Extensions の内部拡張も ID の昇順でソートされる。
  */

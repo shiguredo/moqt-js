@@ -64,7 +64,7 @@ export interface Fetch {
 /**
  * FETCH_OK メッセージ (Section 9.17)
  *
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17:
  * Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */

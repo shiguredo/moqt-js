@@ -2,7 +2,7 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-16
+ * draft-ietf-moq-transport-17
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
@@ -80,7 +80,7 @@ export {
 // Codec types
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
 
-// Re-export MOQT Extensions (draft-ietf-moq-transport-16 Section 11)
+// Re-export MOQT Extensions (draft-ietf-moq-transport-17 Section 11)
 export {
   MOQTPropertyId,
   TrackPropertyId,
