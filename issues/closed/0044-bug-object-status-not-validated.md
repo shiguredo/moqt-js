@@ -22,3 +22,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 10.2.1.1 (line 4541-4543):
 ## 期待される動作
 
 Object Status が 0x0, 0x3, 0x4 以外の場合、エラーを返すべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+validateObjectStatus() 関数を dataStream.ts に追加し、Object Status デコード後に 0x0/0x3/0x4 以外の値でエラーをスローするようにした。Subgroup/Datagram/Fetch の全 3 箇所に適用。

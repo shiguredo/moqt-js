@@ -4,7 +4,12 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
-import { type Parameter, decodeParameters, encodeParameters } from "./parameter";
+import {
+  MAX_REASON_PHRASE_LENGTH,
+  type Parameter,
+  decodeParameters,
+  encodeParameters,
+} from "./parameter";
 import { MessageType } from "./types";
 
 /**
@@ -112,6 +117,14 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
   offset += uriLengthSize;
 
+  // draft-ietf-moq-transport-17 Section 9.5:
+  // "The maximum length of the New Session URI is 8,192 bytes.
+  //  If an endpoint receives a length exceeding the maximum,
+  //  it MUST close the session with a PROTOCOL_VIOLATION."
+  if (Number(uriLength) > 8192) {
+    throw new Error(`GOAWAY URI length exceeds maximum: ${uriLength} > 8192`);
+  }
+
   const uriBytes = data.slice(offset, offset + Number(uriLength));
   const newSessionUri = new TextDecoder().decode(uriBytes);
   offset += Number(uriLength);
@@ -212,6 +225,14 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
 
   const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
   offset += reasonLenSize;
+
+  // draft-ietf-moq-transport-17 Section 1.4.4:
+  // Reason Phrase の最大長は 1,024 バイト
+  if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
+    throw new Error(
+      `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
+    );
+  }
 
   const decoder = new TextDecoder();
   const reasonPhrase = decoder.decode(data.slice(offset, offset + Number(reasonLen)));

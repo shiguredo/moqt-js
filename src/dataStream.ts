@@ -14,6 +14,23 @@ import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
 
 /**
+ * Object Status の値を検証する
+ *
+ * draft-ietf-moq-transport-17 Section 10.2.1.1:
+ * "Any other value SHOULD be treated as a protocol error and the session
+ *  SHOULD be closed with a PROTOCOL_VIOLATION."
+ */
+function validateObjectStatus(status: number): void {
+  if (
+    status !== ObjectStatus.NORMAL &&
+    status !== ObjectStatus.END_OF_GROUP &&
+    status !== ObjectStatus.END_OF_TRACK
+  ) {
+    throw new Error(`invalid object status: 0x${status.toString(16)}, expected 0x0, 0x3, or 0x4`);
+  }
+}
+
+/**
  * Subgroup Header Type (Section 10.4.2)
  *
  * Type values 0x10-0x1D (Priority Present = Yes)
@@ -210,8 +227,24 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   let subgroupId: bigint | undefined;
   const typeNum = Number(type);
 
+  // draft-ietf-moq-transport-17 Section 10.4.2:
+  // 不正なタイプ値を検証する
+  // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約済み
+  // 0b00X1XXXX の形式でないタイプ値は不正
+  const subgroupIdMode = (typeNum & 0x06) >> 1;
+  if (subgroupIdMode === 0x03) {
+    throw new Error(
+      `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
+    );
+  }
+  if ((typeNum & 0x10) === 0) {
+    throw new Error(
+      `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b00X1XXXX`,
+    );
+  }
+
   // Subgroup ID field present check based on type
-  // draft-ietf-moq-transport-16 Section 10.4.2 Table 6:
+  // draft-ietf-moq-transport-17 Section 10.4.2 Table 6:
   // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D: Subgroup ID Field Present
   // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39: Subgroup ID = 0
   // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B: Subgroup ID = First Object ID (no field)
@@ -374,9 +407,10 @@ export function decodeObjectFields(
   if (payloadLength === 0n) {
     const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
     status = Number(statusVal) as ObjectStatus;
+    validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-16 Section 10.2.1.2:
+    // draft-ietf-moq-transport-17 Section 10.2.1.2:
     // "Any Object with status Normal can have extension headers.
     // If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
@@ -669,9 +703,10 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   if (datagramIsStatusType(typeNum)) {
     const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
     status = Number(statusVal) as ObjectStatus;
+    validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-16 Section 10.2.1.2:
+    // draft-ietf-moq-transport-17 Section 10.2.1.2:
     // "Any Object with status Normal can have extension headers.
     // If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
@@ -1151,6 +1186,7 @@ export function decodeFetchObjectFields(
   if (payloadLength === 0n) {
     const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
     status = Number(statusVal) as ObjectStatus;
+    validateObjectStatus(status);
     totalConsumed += statusConsumed;
   }
 
