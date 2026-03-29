@@ -596,6 +596,34 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       payload: new Uint8Array([0xaa]),
     },
   },
+  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
+  // Object ID フィールドなし (Object ID = 1)、Priority フィールドなし
+  {
+    name: "STATUS_NO_OBJ_NO_PRI (0x2C)",
+    datagram: {
+      type: DatagramType.STATUS_NO_OBJ_NO_PRI,
+      trackAlias: 3n,
+      groupId: 7n,
+      objectId: 1n,
+      publisherPriority: 0,
+      status: ObjectStatus.END_OF_TRACK,
+    },
+  },
+  // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
+  // NORMAL status + Properties 付き
+  {
+    name: "STATUS_NO_OBJ_EXT_NO_PRI (0x2D)",
+    datagram: {
+      type: DatagramType.STATUS_NO_OBJ_EXT_NO_PRI,
+      trackAlias: 4n,
+      groupId: 8n,
+      objectId: 1n,
+      publisherPriority: 0,
+      status: ObjectStatus.NORMAL,
+      properties: new Uint8Array([0x01, 0x02]),
+    },
+  },
 ];
 
 for (const tc of objectDatagramTestCases) {
