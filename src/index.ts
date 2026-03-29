@@ -80,6 +80,13 @@ export {
 // Codec types
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
 
+// VideoFrame ソース (MediaStreamTrackProcessor フォールバック)
+export {
+  createVideoFrameSource,
+  isMediaStreamTrackProcessorAvailable,
+  type VideoFrameSource,
+} from "./frameSource";
+
 // Re-export MOQT Extensions (draft-ietf-moq-transport-17 Section 11)
 export {
   MOQTPropertyId,
