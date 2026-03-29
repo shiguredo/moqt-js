@@ -22,3 +22,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 9.15:
 ## 期待される動作
 
 FETCH_OK の End Location が FETCH の Start Location より小さい場合、PROTOCOL_VIOLATION でセッションを閉じるべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+readFetchResponse() で FETCH_OK の End Location が FETCH の Start Location より小さい場合に PROTOCOL_VIOLATION でセッションを閉じるようにした。pendingFetch に startLocation を保持するようにした。

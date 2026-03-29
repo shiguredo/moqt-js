@@ -21,3 +21,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 3.2:
 ## 期待される動作
 
 受信したストリームタイプが FetchHeaderType (0x05) でも有効な Subgroup Header タイプ (0x10-0x1F, 0x30-0x3F) でもない場合、セッションを閉じるべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+handleIncomingStream() でストリームタイプが FetchHeaderType (0x05) でも有効な Subgroup Header (0x10-0x1F, 0x30-0x3F) でもない場合に PROTOCOL_VIOLATION でセッションを閉じるようにした。

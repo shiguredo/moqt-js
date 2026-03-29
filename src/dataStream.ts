@@ -663,13 +663,29 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   const [type, typeConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += typeConsumed;
 
+  const typeNum = Number(type);
+
+  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // 不正なタイプ値を検証する
+  // 0b00X0XXXX の形式でないタイプ値は不正
+  if ((typeNum & 0x10) !== 0 || typeNum > 0x2f) {
+    throw new Error(
+      `invalid datagram type: 0x${typeNum.toString(16)}, does not match form 0b00X0XXXX`,
+    );
+  }
+  // STATUS (0x20) と END_OF_GROUP (0x02) の両方が設定されたタイプ値は不正
+  if ((typeNum & 0x20) !== 0 && (typeNum & 0x02) !== 0) {
+    throw new Error(
+      `invalid datagram type: 0x${typeNum.toString(16)}, STATUS and END_OF_GROUP bits are both set`,
+    );
+  }
+
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
   const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += groupIdConsumed;
 
-  const typeNum = Number(type);
   let objectId = 0n;
   if (datagramHasObjectId(typeNum)) {
     const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -691,10 +707,16 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
 
-    if (propertiesLength > 0) {
-      properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
-      totalConsumed += propertiesLength;
+    // draft-ietf-moq-transport-17 Section 10.3.1:
+    // "If an endpoint receives a datagram with the PROPERTIES bit set and
+    //  an Properties Length of 0, it MUST close the session with a
+    //  PROTOCOL_VIOLATION."
+    if (propertiesLength === 0) {
+      throw new Error("datagram has PROPERTIES bit set but Properties Length is 0");
     }
+
+    properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
+    totalConsumed += propertiesLength;
   }
 
   let status: ObjectStatus | undefined;

@@ -17,3 +17,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 10.2.1.1:
 ## 期待される動作
 
 非 Normal Status のオブジェクトにペイロードがある場合、エラーを返すべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+既存実装で Object Status は payload length = 0 の場合にのみデコードされるため、非 Normal Status のオブジェクトに空でないペイロードが存在することは構造的に不可能。追加の検証は不要。
