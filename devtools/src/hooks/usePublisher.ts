@@ -373,12 +373,18 @@ export function usePublisher() {
             pub.pubStatus.value = "error";
             pub.pubStatusMessage.value = `Publish error: ${error.message}`;
           },
+          // draft-ietf-moq-transport-17 Section 5.1:
+          // Forward State の変化を追跡する
+          onForwardStateChange: (forward) => {
+            pub.forwardState.value = forward;
+          },
         },
         {
           maxCacheDuration: BigInt(maxCacheDurationValue),
         },
       );
       console.log("startPublishing: PUBLISH_OK received");
+      pub.forwardState.value = publisherInstance.forwardState;
       pub.publisher.value = publisherInstance;
 
       pub.pubStatus.value = "connected";
@@ -537,6 +543,7 @@ export function usePublisher() {
     pub.catalogPublisher.value = null;
     pub.catalog.value = null;
     pub.pubCodec.value = "";
+    pub.forwardState.value = null;
 
     // Enable settings if no subscriber is active
     if (!sub.hasActiveSubscriber.value) {
