@@ -2037,9 +2037,18 @@ export class SessionImpl implements Session {
       // 先に Map から削除して二重クローズを防止
       this.publisherStreams.delete(trackAlias);
       try {
-        await streamState.writer.close();
+        // Safari の WebTransport では WritableStreamDefaultWriter.close() が
+        // resolve しないことが確認されている。
+        // タイムアウトを設けて FIN 送信の完了を待つが、
+        // タイムアウトした場合はストリームを放棄して処理を続行する。
+        await Promise.race([
+          streamState.writer.close(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("writer.close() timed out")), 5000),
+          ),
+        ]);
       } catch {
-        // 既にクローズされている場合は無視
+        // タイムアウトまたは既にクローズされている場合は無視
       }
     }
   }
