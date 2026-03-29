@@ -1,4 +1,5 @@
 import { signal, computed } from "@preact/signals";
+import { createVideoFrameSource } from "moqt-js";
 import { createDummyVideoStream, type DummyVideoGenerator } from "./utils/dummyVideo";
 
 // デバイス情報
@@ -551,8 +552,8 @@ export async function startCapture(): Promise<void> {
     // フレームをキャプチャしてエンコード
     const track = stream.getVideoTracks()[0];
     if (track) {
-      const processor = new MediaStreamTrackProcessor({ track });
-      const reader = processor.readable.getReader();
+      const videoFrameSource = createVideoFrameSource(track);
+      const reader = videoFrameSource.readable.getReader();
 
       const processFrame = async () => {
         if (!isCapturing.value) {
