@@ -47,8 +47,8 @@
     "@types/node": "25.5.0",
     "fast-check": "4.6.0",
     "typescript": "6.0.2",
-    "vite-plus": "0.1.13",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.13"
+    "vite-plus": "0.1.14",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.14"
   },
   "packageManager": "pnpm@10.32.1"
 }
