@@ -50,6 +50,11 @@
   - PUBLISH/SUBSCRIBE_OK/FETCH_OK の Track Properties から length プレフィックスを削除する
   - UNSUBSCRIBE メッセージを廃止し双方向ストリームの close でキャンセルする (Section 3.3.1)
   - Message Parameter のエンコーディングをパラメータ型ごとの定義に準拠させる (Section 9.3)
+  - PUBLISH_DONE から Request ID フィールドを削除する (Section 9.13)
+  - REQUEST_UPDATE の existingRequestId を requiredRequestIdDelta に変更する (Section 9.10)
+  - TRACK_STATUS に Required Request ID Delta フィールドを追加する (Section 9.16)
+  - PUBLISH_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.17)
+  - SUBSCRIBE_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.20)
   - 未対応: SUBSCRIBE_NAMESPACE の専用ストリーム対応
   - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
   - 未対応: Subgroup 再オープン禁止

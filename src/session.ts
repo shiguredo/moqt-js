@@ -710,7 +710,7 @@ export class SessionImpl implements Session {
   >();
   private pendingRequestUpdate = new Map<
     bigint,
-    { resolve: () => void; reject: (err: Error) => void; existingRequestId: bigint }
+    { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
   >();
   private pendingFetch = new Map<
     bigint,
@@ -1391,6 +1391,9 @@ export class SessionImpl implements Session {
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters: [],
@@ -1455,6 +1458,9 @@ export class SessionImpl implements Session {
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       subscribeOptions,
       parameters: [] as [],
@@ -1641,6 +1647,9 @@ export class SessionImpl implements Session {
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespace,
       parameters: [],
     };
@@ -2036,13 +2045,16 @@ export class SessionImpl implements Session {
     });
   }
 
+  /**
+   * draft-ietf-moq-transport-17 Section 9.13:
+   * PUBLISH_DONE は双方向ストリーム上で送信される。
+   * Request ID フィールドはない（bidi stream で特定可能）。
+   */
   private async sendPublishDone(publisher: PublisherImpl): Promise<void> {
     const requestId = publisher.getRequestId();
 
-    // Encode PUBLISH_DONE payload
-    // draft-ietf-moq-transport-16 Section 9.15
+    // PUBLISH_DONE ペイロードをエンコード
     const parts: Uint8Array[] = [];
-    parts.push(encodeVarint(requestId));
     parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
     parts.push(encodeVarint(0)); // Stream count
     parts.push(encodeVarint(0)); // Reason phrase length
@@ -2055,6 +2067,7 @@ export class SessionImpl implements Session {
       offset += part.length;
     }
 
+    // TODO: 本来は PUBLISH の bidi stream 上で送信すべき
     await this.sendControlMessage(MessageType.PUBLISH_DONE, payload, {
       requestId: requestId.toString(),
       statusCode: PublishDoneStatusCode.TRACK_ENDED,
@@ -2180,12 +2193,13 @@ export class SessionImpl implements Session {
     const updateRequestId = this.nextRequestId;
     this.nextRequestId += 2n;
 
-    const existingRequestId = subscriber.getRequestId();
+    // 更新対象のリクエスト ID（bidi stream で特定するための内部管理用）
+    const targetRequestId = subscriber.getRequestId();
 
     // パラメータを構築
     const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
-    // FORWARD (0x10) - draft-ietf-moq-transport-16 Section 9.2.2.8
+    // FORWARD (0x10) - draft-ietf-moq-transport-17 Section 9.3.10
     // forward が明示的に指定された場合のみ送信（undefined の場合は変更しない）
     if (options.forward !== undefined) {
       parameters.push({
@@ -2197,7 +2211,9 @@ export class SessionImpl implements Session {
     const requestUpdateMsg = {
       type: MessageType.REQUEST_UPDATE,
       requestId: updateRequestId,
-      existingRequestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       parameters,
     };
 
@@ -2209,13 +2225,13 @@ export class SessionImpl implements Session {
       this.pendingRequestUpdate.set(updateRequestId, {
         resolve,
         reject,
-        existingRequestId,
+        targetRequestId,
       });
     });
 
     await this.sendControlMessage(MessageType.REQUEST_UPDATE, payload, {
       requestId: updateRequestId.toString(),
-      existingRequestId: existingRequestId.toString(),
+      targetRequestId: targetRequestId.toString(),
     });
 
     return promise;
@@ -2496,7 +2512,7 @@ export class SessionImpl implements Session {
 
           switch (msg.type) {
             case MessageType.PUBLISH_DONE: {
-              this.handlePublishDone(msg.payload);
+              this.handlePublishDone(msg.payload, requestId);
               break;
             }
             case MessageType.REQUEST_OK: {
@@ -2513,7 +2529,7 @@ export class SessionImpl implements Session {
               );
               // 保留中の REQUEST_UPDATE にエラーを通知
               for (const [updateId, pendingUpdate] of this.pendingRequestUpdate) {
-                if (pendingUpdate.existingRequestId === requestId) {
+                if (pendingUpdate.targetRequestId === requestId) {
                   this.pendingRequestUpdate.delete(updateId);
                   pendingUpdate.reject(error);
                   break;
@@ -2601,18 +2617,25 @@ export class SessionImpl implements Session {
     this.emitDebug("recv", type, payload, decoded);
   }
 
-  private handlePublishDone(payload: Uint8Array): Record<string, unknown> {
+  /**
+   * draft-ietf-moq-transport-17 Section 9.13:
+   * PUBLISH_DONE は双方向ストリーム上で送信される。
+   * Request ID はペイロードに含まれず、ストリームのコンテキストから取得する。
+   */
+  private handlePublishDone(payload: Uint8Array, requestId?: bigint): Record<string, unknown> {
     const msg = decodePublishDonePayload(payload);
-    const subscriber = this.subscribers.get(msg.requestId);
 
-    if (subscriber) {
-      subscriber.handleEnd();
-      this.subscribers.delete(msg.requestId);
-      this.subscribersByAlias.delete(subscriber.getTrackAlias());
+    if (requestId !== undefined) {
+      const subscriber = this.subscribers.get(requestId);
+      if (subscriber) {
+        subscriber.handleEnd();
+        this.subscribers.delete(requestId);
+        this.subscribersByAlias.delete(subscriber.getTrackAlias());
+      }
     }
 
     return {
-      requestId: msg.requestId.toString(),
+      requestId: requestId?.toString() ?? "unknown",
       statusCode: msg.statusCode,
       streamCount: msg.streamCount.toString(),
       reasonPhrase: msg.reasonPhrase,

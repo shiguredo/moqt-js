@@ -135,12 +135,14 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       parametersArb,
-      (requestId, namespaceParts, parameters) => {
+      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
         const original: PublishNamespace = {
           type: MessageType.PUBLISH_NAMESPACE,
           requestId,
+          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -150,6 +152,7 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 
         assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE);
         assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
@@ -272,13 +275,15 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
       namespaceSubscribeModeArb,
       parametersArb,
-      (requestId, namespaceParts, subscribeOptions, parameters) => {
+      (requestId, requiredRequestIdDelta, namespaceParts, subscribeOptions, parameters) => {
         const original: SubscribeNamespace = {
           type: MessageType.SUBSCRIBE_NAMESPACE,
           requestId,
+          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           subscribeOptions,
           parameters,
@@ -289,6 +294,7 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
 
         assert.equal(decoded.type, MessageType.SUBSCRIBE_NAMESPACE);
         assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
         assert.equal(decoded.subscribeOptions, subscribeOptions);
         assert.equal(decoded.parameters.length, parameters.length);

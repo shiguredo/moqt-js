@@ -200,9 +200,10 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-16:
+ * draft-ietf-moq-transport-17 Section 9.10:
  * REQUEST_UPDATE は既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
+ * 更新対象のリクエストは同じ bidi stream で特定される。
  */
 test("RequestUpdate のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -210,11 +211,11 @@ test("RequestUpdate のエンコード・デコードがラウンドトリップ
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      (requestId, existingRequestId, parameters) => {
+      (requestId, requiredRequestIdDelta, parameters) => {
         const original = {
           type: MessageType.REQUEST_UPDATE as typeof MessageType.REQUEST_UPDATE,
           requestId,
-          existingRequestId,
+          requiredRequestIdDelta,
           parameters,
         };
 
@@ -223,7 +224,7 @@ test("RequestUpdate のエンコード・デコードがラウンドトリップ
 
         assert.equal(decoded.type, MessageType.REQUEST_UPDATE);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.existingRequestId, existingRequestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
           assert.equal(decoded.parameters[i].type, parameters[i].type);
