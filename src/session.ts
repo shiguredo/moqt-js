@@ -1599,7 +1599,7 @@ export class SessionImpl implements Session {
             default:
               // draft-ietf-moq-transport-17 Section 9:
               // "An endpoint that receives an unknown message type MUST close the session."
-              this.callbacks.error?.(
+              this.closeWithError(
                 new SessionError(
                   `unknown namespace stream message type: 0x${messageType.toString(16)}`,
                   SessionErrorCode.PROTOCOL_VIOLATION,
@@ -1782,6 +1782,21 @@ export class SessionImpl implements Session {
   }
 
   // Private methods
+
+  /**
+   * セッションエラーを通知してセッションを閉じる
+   *
+   * draft-ietf-moq-transport-17 Section 3.5:
+   * プロトコル違反等のエラーが発生した場合、セッションを閉じる必要がある。
+   */
+  private closeWithError(error: SessionError): void {
+    this.callbacks.error?.(error);
+    void this.close();
+    this.transport.close({
+      closeCode: error.code,
+      reason: error.message,
+    });
+  }
 
   private emitDebug(
     direction: "send" | "recv",
@@ -2384,8 +2399,8 @@ export class SessionImpl implements Session {
             `duplicate track alias: ${decoded.trackAlias}`,
             SessionErrorCode.DUPLICATE_TRACK_ALIAS,
           );
-          this.callbacks.error?.(error);
           pending.reject(error);
+          this.closeWithError(error);
           return;
         }
 
@@ -2490,8 +2505,8 @@ export class SessionImpl implements Session {
               SessionErrorCode.PROTOCOL_VIOLATION,
             );
             this.pendingFetch.delete(requestId);
-            this.callbacks.error?.(error);
             pending.reject(error);
+            this.closeWithError(error);
             return;
           }
         }
@@ -2621,7 +2636,7 @@ export class SessionImpl implements Session {
             default:
               // draft-ietf-moq-transport-17 Section 9:
               // "An endpoint that receives an unknown message type MUST close the session."
-              this.callbacks.error?.(
+              this.closeWithError(
                 new SessionError(
                   `unknown request stream message type: 0x${msg.type.toString(16)}`,
                   SessionErrorCode.PROTOCOL_VIOLATION,
@@ -2654,16 +2669,12 @@ export class SessionImpl implements Session {
             // during the session's lifetime. Doing so results in the session being
             // closed as a PROTOCOL_VIOLATION."
             if (this.sessionState === "connected") {
-              const error = new SessionError(
-                "control stream closed unexpectedly",
-                SessionErrorCode.PROTOCOL_VIOLATION,
+              this.closeWithError(
+                new SessionError(
+                  "control stream closed unexpectedly",
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
               );
-              this.callbacks.error?.(error);
-              void this.close();
-              this.transport.close({
-                closeCode: SessionErrorCode.PROTOCOL_VIOLATION,
-                reason: "control stream closed unexpectedly",
-              });
             }
             break;
           }
@@ -2717,7 +2728,7 @@ export class SessionImpl implements Session {
       default:
         // draft-ietf-moq-transport-17 Section 9:
         // "An endpoint that receives an unknown message type MUST close the session."
-        this.callbacks.error?.(
+        this.closeWithError(
           new SessionError(
             `unknown control message type: 0x${type.toString(16)}`,
             SessionErrorCode.PROTOCOL_VIOLATION,
@@ -2830,8 +2841,8 @@ export class SessionImpl implements Session {
   private handleGoaway(payload: Uint8Array): Record<string, unknown> {
     // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
     if (this.receivedGoaway) {
-      this.callbacks.error?.(
-        new SessionError("Received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
+      this.closeWithError(
+        new SessionError("received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
       );
       return { error: "Multiple GOAWAY messages received" };
     }
@@ -3206,7 +3217,7 @@ export class SessionImpl implements Session {
             } else {
               // draft-ietf-moq-transport-17 Section 3.2:
               // "An endpoint that receives an unknown stream type MUST close the session."
-              this.callbacks.error?.(
+              this.closeWithError(
                 new SessionError(
                   `unknown unidirectional stream type: 0x${streamTypeNum.toString(16)}`,
                   SessionErrorCode.PROTOCOL_VIOLATION,
