@@ -35,6 +35,11 @@ import type {
   VideoPublishOptions,
   VideoStats,
 } from "./codec/types";
+import {
+  createVideoFrameSource,
+  isMediaStreamTrackProcessorAvailable,
+  type VideoFrameSource,
+} from "./frameSource";
 
 // デフォルト設定
 const DEFAULT_AUDIO_TRACK_NAME = "audio";
@@ -63,7 +68,7 @@ class MediaPublisherImpl implements MediaPublisher {
   // MediaStream 関連
   private mediaStream: MediaStream | null = null;
   private audioTrackProcessor: MediaStreamTrackProcessor<AudioData> | null = null;
-  private videoTrackProcessor: MediaStreamTrackProcessor<VideoFrame> | null = null;
+  private videoFrameSource: VideoFrameSource | null = null;
   private audioFrameReader: ReadableStreamDefaultReader<AudioData> | null = null;
   private videoFrameReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
 
@@ -228,6 +233,10 @@ class MediaPublisherImpl implements MediaPublisher {
 
     // フレームリーダーをキャンセル
     await this.cancelFrameReaders();
+
+    // VideoFrameSource を解放する
+    this.videoFrameSource?.close();
+    this.videoFrameSource = null;
 
     // エンコーダーを閉じる
     this.audioEncoder?.close();
@@ -434,6 +443,11 @@ class MediaPublisherImpl implements MediaPublisher {
           audioOptions.channels ?? DEFAULT_AUDIO_CHANNELS,
         );
 
+        if (!isMediaStreamTrackProcessorAvailable()) {
+          throw new Error(
+            "MediaStreamTrackProcessor is required for audio publishing but is not available in this browser",
+          );
+        }
         this.audioTrackProcessor = new MediaStreamTrackProcessor({ track: audioTrack });
         this.audioFrameReader = this.audioTrackProcessor.readable.getReader();
       }
@@ -461,8 +475,8 @@ class MediaPublisherImpl implements MediaPublisher {
           framerate,
         );
 
-        this.videoTrackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
-        this.videoFrameReader = this.videoTrackProcessor.readable.getReader();
+        this.videoFrameSource = createVideoFrameSource(videoTrack);
+        this.videoFrameReader = this.videoFrameSource.readable.getReader();
       }
     }
   }

@@ -5,6 +5,7 @@ import {
   createCatalog,
   encodeCatalog,
   createCompleteCatalog,
+  createVideoFrameSource,
   type DebugMessage,
   type CertificateHash,
 } from "moqt-js";
@@ -390,11 +391,6 @@ export function usePublisher() {
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = `Publishing to ${namespaceArray.join("/")}/${trackNameValue}`;
 
-      // Check MediaStreamTrackProcessor availability
-      if (typeof MediaStreamTrackProcessor === "undefined") {
-        throw new Error("MediaStreamTrackProcessor is not supported in this browser");
-      }
-
       // Create encoder config and check support
       const encoderConfig = getEncoderConfig(
         codecValue,
@@ -441,9 +437,11 @@ export function usePublisher() {
       // Show codec badge
       pub.pubCodec.value = `${codecValue.toUpperCase()} ${actualWidth}x${actualHeight}`;
 
-      // Process video frames using MediaStreamTrackProcessor
-      const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
-      pub.frameReader.value = trackProcessor.readable.getReader();
+      // VideoFrame ソースを作成する
+      // MediaStreamTrackProcessor が利用可能な場合はそれを使い、
+      // 利用できない場合は requestVideoFrameCallback でフォールバックする
+      const videoFrameSource = createVideoFrameSource(videoTrack);
+      pub.frameReader.value = videoFrameSource.readable.getReader();
       console.log("Frame reader created");
 
       // Reset stats
