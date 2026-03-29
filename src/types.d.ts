@@ -54,3 +54,34 @@ declare class MediaStreamTrackGenerator<T extends VideoFrame | AudioData> extend
   constructor(init: MediaStreamTrackGeneratorInit);
   readonly writable: WritableStream<T>;
 }
+
+/**
+ * HTMLVideoElement.requestVideoFrameCallback の型定義
+ *
+ * MediaStreamTrackProcessor が利用できないブラウザ (Safari) で
+ * VideoFrame を取得するためのフォールバックとして使用する。
+ *
+ * https://wicg.github.io/video-rvfc/#dom-htmlvideoelement-requestvideoframecallback
+ */
+interface HTMLVideoElement {
+  requestVideoFrameCallback(callback: VideoFrameRequestCallback): number;
+  cancelVideoFrameCallback(handle: number): void;
+}
+
+type VideoFrameRequestCallback = (
+  now: DOMHighResTimeStamp,
+  metadata: VideoFrameCallbackMetadata,
+) => void;
+
+interface VideoFrameCallbackMetadata {
+  presentationTime: DOMHighResTimeStamp;
+  expectedDisplayTime: DOMHighResTimeStamp;
+  width: number;
+  height: number;
+  mediaTime: number;
+  presentedFrames: number;
+  processingDuration?: number;
+  captureTime?: DOMHighResTimeStamp;
+  receiveTime?: DOMHighResTimeStamp;
+  rtpTimestamp?: number;
+}
