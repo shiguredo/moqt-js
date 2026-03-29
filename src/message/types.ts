@@ -23,7 +23,6 @@ export const MessageType = {
   // Subscribe
   SUBSCRIBE: 0x03,
   SUBSCRIBE_OK: 0x04,
-  UNSUBSCRIBE: 0x0a,
 
   // Publish
   PUBLISH: 0x1d,
@@ -40,7 +39,6 @@ export const MessageType = {
   // Namespace
   PUBLISH_NAMESPACE: 0x06,
   NAMESPACE: 0x08,
-  PUBLISH_NAMESPACE_DONE: 0x09,
   NAMESPACE_DONE: 0x0e,
   /**
    * PUBLISH_BLOCKED (Section 9.21)
@@ -51,7 +49,6 @@ export const MessageType = {
    * https://github.com/moq-wg/moq-transport/pull/1452
    */
   PUBLISH_BLOCKED: 0x0f,
-  PUBLISH_NAMESPACE_CANCEL: 0x0c,
   SUBSCRIBE_NAMESPACE: 0x11,
 } as const;
 

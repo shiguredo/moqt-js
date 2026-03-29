@@ -195,14 +195,12 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-16 Section 9.17:
+ * draft-ietf-moq-transport-17 Section 9.15:
  * FETCH_OK Message {
- *   Type (i) = 0x5,
+ *   Type (i) = 0x18,
  *   Length (16),
- *   Request ID (i),
- *   End of Track (1),
- *   End Group (i),
- *   End Object (i),
+ *   End of Track (8),
+ *   End Location (Location),
  *   Number of Parameters (i),
  *   Parameters (..) ...,
  *   Track Properties (..)

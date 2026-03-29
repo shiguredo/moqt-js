@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.9-9.12
+ * draft-ietf-moq-transport-17 Section 9.8-9.10
  */
 
 import { test, assert } from "vitest";
@@ -12,8 +12,6 @@ import {
   decodeSubscribeOkPayload,
   encodeRequestUpdatePayload,
   decodeRequestUpdatePayload,
-  encodeUnsubscribePayload,
-  decodeUnsubscribePayload,
 } from "./subscribe";
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
@@ -232,22 +230,5 @@ test("RequestUpdate のエンコード・デコードがラウンドトリップ
         }
       },
     ),
-  );
-});
-
-test("Unsubscribe のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), (requestId) => {
-      const original = {
-        type: MessageType.UNSUBSCRIBE as typeof MessageType.UNSUBSCRIBE,
-        requestId,
-      };
-
-      const encoded = encodeUnsubscribePayload(original);
-      const decoded = decodeUnsubscribePayload(encoded);
-
-      assert.equal(decoded.type, MessageType.UNSUBSCRIBE);
-      assert.equal(decoded.requestId, requestId);
-    }),
   );
 });

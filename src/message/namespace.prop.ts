@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-16 Section 9.20-9.25
+ * draft-ietf-moq-transport-17 Section 9.17-9.21
  */
 
 import { test, assert } from "vitest";
@@ -9,19 +9,13 @@ import {
   type Namespace,
   type NamespaceDone,
   type PublishNamespace,
-  type PublishNamespaceCancel,
-  type PublishNamespaceDone,
   type SubscribeNamespace,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
-  decodePublishNamespaceCancelPayload,
-  decodePublishNamespaceDonePayload,
   decodePublishNamespacePayload,
   decodeSubscribeNamespacePayload,
   encodeNamespaceDonePayload,
   encodeNamespacePayload,
-  encodePublishNamespaceCancelPayload,
-  encodePublishNamespaceDonePayload,
   encodePublishNamespacePayload,
   encodeSubscribeNamespacePayload,
 } from "./namespace";
@@ -165,7 +159,7 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 });
 
 /**
- * draft-ietf-moq-transport-16 Section 9.21:
+ * draft-ietf-moq-transport-17 Section 9.18:
  * NAMESPACE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */
@@ -187,29 +181,7 @@ test("Namespace のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-16 Section 9.22:
- * PUBLISH_NAMESPACE_DONE に Request ID が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1329
- */
-test("PublishNamespaceDone のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), (requestId) => {
-      const original: PublishNamespaceDone = {
-        type: MessageType.PUBLISH_NAMESPACE_DONE,
-        requestId,
-      };
-
-      const encoded = encodePublishNamespaceDonePayload(original);
-      const decoded = decodePublishNamespaceDonePayload(encoded);
-
-      assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE_DONE);
-      assert.equal(decoded.requestId, requestId);
-    }),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-16 Section 9.23:
+ * draft-ietf-moq-transport-17 Section 9.19:
  * NAMESPACE_DONE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */
@@ -231,41 +203,7 @@ test("NamespaceDone のエンコード・デコードがラウンドトリップ
 });
 
 /**
- * draft-ietf-moq-transport-16 Section 9.24:
- * PUBLISH_NAMESPACE_CANCEL に Request ID が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1329
- */
-test("PublishNamespaceCancel のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      namespaceStringsArb,
-      fc.bigInt({ min: 0n, max: 1000n }),
-      fc.string({ minLength: 0, maxLength: 100 }),
-      (requestId, namespaceParts, errorCode, reasonPhrase) => {
-        const original: PublishNamespaceCancel = {
-          type: MessageType.PUBLISH_NAMESPACE_CANCEL,
-          requestId,
-          trackNamespace: createTrackNamespace(namespaceParts),
-          errorCode,
-          reasonPhrase,
-        };
-
-        const encoded = encodePublishNamespaceCancelPayload(original);
-        const decoded = decodePublishNamespaceCancelPayload(encoded);
-
-        assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE_CANCEL);
-        assert.equal(decoded.requestId, requestId);
-        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
-        assert.equal(decoded.errorCode, errorCode);
-        assert.equal(decoded.reasonPhrase, reasonPhrase);
-      },
-    ),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-16 Section 9.25:
+ * draft-ietf-moq-transport-17 Section 9.20:
  * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
  * Subscribe Options フィールドで PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) を指定できる。
  * 空のネームスペース（ワイルドカード）も許可される。

@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages
- * draft-ietf-moq-transport-17 Section 9.9-9.12
+ * draft-ietf-moq-transport-17 Section 9.8-9.10
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -66,14 +66,6 @@ export interface RequestUpdate {
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   parameters: Parameter[];
-}
-
-/**
- * UNSUBSCRIBE メッセージ (Section 9.12)
- */
-export interface Unsubscribe {
-  type: typeof MessageType.UNSUBSCRIBE;
-  requestId: bigint;
 }
 
 /**
@@ -158,11 +150,10 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  */
 /**
- * draft-ietf-moq-transport-16 Section 9.10:
+ * draft-ietf-moq-transport-17 Section 9.9:
  * SUBSCRIBE_OK Message {
  *   Type (i) = 0x4,
  *   Length (16),
- *   Request ID (i),
  *   Track Alias (i),
  *   Number of Parameters (i),
  *   Parameters (..) ...,
@@ -272,26 +263,5 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
     requestId,
     requiredRequestIdDelta,
     parameters,
-  };
-}
-
-/**
- * Unsubscribe のペイロードをエンコード
- */
-export function encodeUnsubscribePayload(msg: Unsubscribe): Uint8Array {
-  return encodeVarint(msg.requestId);
-}
-
-/**
- * Unsubscribe のペイロードをデコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function decodeUnsubscribePayload(data: Uint8Array, offset = 0): Unsubscribe {
-  const [requestId] = decodeVarint(data, offset);
-  return {
-    type: MessageType.UNSUBSCRIBE,
-    requestId,
   };
 }
