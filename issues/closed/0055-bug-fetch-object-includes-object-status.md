@@ -23,3 +23,10 @@ Fetch Object Fields (Figure 27) にも Object Status フィールドは含まれ
 ## 修正方針
 
 Fetch Object のエンコード/デコードから Object Status フィールドの処理を削除する。
+
+## 解決方法
+
+- `FetchObjectFields` インターフェースと `DecodedFetchObject` インターフェースから `status` フィールドを削除した
+- `encodeFetchObjectFields()` から Object Status のエンコード処理を削除した
+- `decodeFetchObjectFields()` から Object Status のデコード処理を削除した
+- Fetch 経由で受信したオブジェクトを `MoqtObject` に変換する際は `ObjectStatus.NORMAL` を設定するようにした

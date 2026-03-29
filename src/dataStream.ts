@@ -883,6 +883,9 @@ export const FetchSerializationFlags = {
 /**
  * Fetch Object Fields (Figure 31 in Section 10.4.4)
  */
+// draft-ietf-moq-transport-17 Section 10.2.1.1:
+// "The Object Status is a field that is only present in objects that are
+// delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 export interface FetchObjectFields {
   serializationFlags: number;
   groupId?: bigint;
@@ -891,7 +894,6 @@ export interface FetchObjectFields {
   publisherPriority?: number;
   properties?: Uint8Array;
   payloadLength: bigint;
-  status?: ObjectStatus;
   payload?: Uint8Array;
 }
 
@@ -912,7 +914,6 @@ export interface DecodedFetchObject {
   objectId: bigint;
   publisherPriority: number;
   properties?: Uint8Array;
-  status: ObjectStatus;
   payloadLength: bigint;
   /**
    * End of Range indicator (Section 10.4.4.2)
@@ -1020,10 +1021,10 @@ export function encodeFetchObjectFields(
   // Object Payload Length
   parts.push(encodeVarint(fields.payloadLength));
 
-  // Object Status (only if payload length is 0)
-  if (fields.payloadLength === 0n) {
-    parts.push(encodeVarint(fields.status ?? ObjectStatus.NORMAL));
-  }
+  // draft-ietf-moq-transport-17 Section 10.2.1.1:
+  // "The Object Status is a field that is only present in objects that are
+  // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
+  // Fetch Object には Object Status を含めない
 
   // Object Payload (optional, included when specified)
   if (includePayload && fields.payload && fields.payloadLength > 0n) {
@@ -1098,7 +1099,6 @@ export function decodeFetchObjectFields(
         subgroupId: context?.subgroupId ?? 0n,
         objectId,
         publisherPriority: context?.publisherPriority ?? 0,
-        status: ObjectStatus.NORMAL,
         payloadLength,
         endOfRange,
       },
@@ -1203,14 +1203,10 @@ export function decodeFetchObjectFields(
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
 
-  // Object Status (only if payload length is 0)
-  let status: ObjectStatus = ObjectStatus.NORMAL;
-  if (payloadLength === 0n) {
-    const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
-    status = Number(statusVal) as ObjectStatus;
-    validateObjectStatus(status);
-    totalConsumed += statusConsumed;
-  }
+  // draft-ietf-moq-transport-17 Section 10.2.1.1:
+  // "The Object Status is a field that is only present in objects that are
+  // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
+  // Fetch Object には Object Status は存在しない
 
   // Update context for next object
   const newContext: FetchObjectContext = {
@@ -1227,7 +1223,6 @@ export function decodeFetchObjectFields(
       objectId,
       publisherPriority,
       properties,
-      status,
       payloadLength,
     },
     totalConsumed,

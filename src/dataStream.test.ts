@@ -715,7 +715,10 @@ test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
   assert.equal(encoded[5], 50);
 });
 
-test("FetchObjectFields: status 付き (payload length = 0) をエンコード", () => {
+// draft-ietf-moq-transport-17 Section 10.2.1.1:
+// "The Object Status is a field that is only present in objects that are
+// delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
+test("FetchObjectFields: payload length = 0 でも Object Status を含めない", () => {
   const flags = createFirstFetchObjectFlags(false);
   const fields: FetchObjectFields = {
     serializationFlags: flags,
@@ -724,13 +727,17 @@ test("FetchObjectFields: status 付き (payload length = 0) をエンコード",
     objectId: 0n,
     publisherPriority: 100,
     payloadLength: 0n,
-    status: ObjectStatus.END_OF_GROUP,
   };
 
   const encoded = encodeFetchObjectFields(fields);
+  // Payload Length (0) の後に Object Status は含まれない
   const lastByte = encoded[encoded.length - 1];
+  assert.equal(lastByte, 0);
 
-  assert.equal(lastByte, ObjectStatus.END_OF_GROUP);
+  const [decoded] = decodeFetchObjectFields(encoded, null, 0, true);
+  assert.equal(decoded.payloadLength, 0n);
+  // DecodedFetchObject には status フィールドが存在しないことを確認
+  assert.equal("status" in decoded, false);
 });
 
 test("FetchObjectFields: 最初のオブジェクトをデコード", () => {
