@@ -11,36 +11,8 @@
 
 ## develop
 
-- [FIX] REQUEST_UPDATE をリクエストと同じ双方向ストリームで送信する (Section 9.10)
-  - 制御ストリームではなくリクエストの bidi stream 上で送信するように修正
-  - @voluntas
-- [FIX] Fetch Object から Object Status フィールドを削除する (Section 10.2.1.1)
-  - draft-17 では Fetch 経由のオブジェクトには Object Status は存在しない
-  - @voluntas
-- [FIX] datagramHasObjectId が 0x2C/0x2D の ZERO_OBJECT_ID ビットを誤判定する問題を修正する
-  - 全タイプで `(type & 0x04) === 0` を使うように統一
-  - DatagramType 定数名 STATUS_OBJ_NO_PRI_2/STATUS_OBJ_EXT_NO_PRI_2 を STATUS_NO_OBJ_NO_PRI/STATUS_NO_OBJ_EXT_NO_PRI に修正
-  - @voluntas
-- [FIX] requestKeyframe の NEW_GROUP_REQUEST パラメータ ID を 0x32 に修正する (Section 9.3.11)
-  - devtools と createMediaSubscriber で誤って 0x0c が使われていた
-  - @voluntas
-- [FIX] 制御ストリーム close 時に PROTOCOL_VIOLATION でセッションを終了する (Section 3.3)
-  - @voluntas
-- [FIX] SessionError 発生時に closeWithError でセッションを閉じるようにする (Section 3.5)
-  - エラー通知だけでなく WebTransport セッションも閉じるように修正
-  - @voluntas
-- [FIX] PUBLISH_DONE の Stream Count に実際のストリーム数を設定する (Section 9.13)
-  - ハードコードの 0 から Publisher ごとのストリームカウントに変更
-  - @voluntas
-- [ADD] GOAWAY 送信後のタイムアウト処理を実装する (Section 3.6)
-  - タイムアウト経過時に GOAWAY_TIMEOUT でセッションを閉じる
-  - @voluntas
-- [ADD] devtools の Publisher パネルに Forward State を表示する (Section 5.1)
-  - @voluntas
 - [CHANGE] rolldown-vite から vite に戻す
   - rolldown でオプショナルチェーン (`?.`) が minification 時に消えるバグがあったため
-  - @voluntas
-- [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
   - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
@@ -99,6 +71,32 @@
   - LOC Header Extensions を LOC Properties にリネーム
   - Timestamp / Timescale プロパティを追加
   - @voluntas
+- [ADD] GOAWAY 送信後のタイムアウト処理を実装する (Section 3.6)
+  - タイムアウト経過時に GOAWAY_TIMEOUT でセッションを閉じる
+  - @voluntas
+- [ADD] devtools の Publisher パネルに Forward State を表示する (Section 5.1)
+  - @voluntas
+- [FIX] REQUEST_UPDATE をリクエストと同じ双方向ストリームで送信する (Section 9.10)
+  - 制御ストリームではなくリクエストの bidi stream 上で送信するように修正
+  - @voluntas
+- [FIX] Fetch Object から Object Status フィールドを削除する (Section 10.2.1.1)
+  - draft-17 では Fetch 経由のオブジェクトには Object Status は存在しない
+  - @voluntas
+- [FIX] datagramHasObjectId が 0x2C/0x2D の ZERO_OBJECT_ID ビットを誤判定する問題を修正する
+  - 全タイプで `(type & 0x04) === 0` を使うように統一
+  - DatagramType 定数名 STATUS_OBJ_NO_PRI_2/STATUS_OBJ_EXT_NO_PRI_2 を STATUS_NO_OBJ_NO_PRI/STATUS_NO_OBJ_EXT_NO_PRI に修正
+  - @voluntas
+- [FIX] requestKeyframe の NEW_GROUP_REQUEST パラメータ ID を 0x32 に修正する (Section 9.3.11)
+  - devtools と createMediaSubscriber で誤って 0x0c が使われていた
+  - @voluntas
+- [FIX] 制御ストリーム close 時に PROTOCOL_VIOLATION でセッションを終了する (Section 3.3)
+  - @voluntas
+- [FIX] PUBLISH_DONE の Stream Count に実際のストリーム数を設定する (Section 9.13)
+  - ハードコードの 0 から Publisher ごとのストリームカウントに変更
+  - @voluntas
+- [FIX] SessionError 発生時に closeWithError でセッションを閉じるようにする (Section 3.5)
+  - エラー通知だけでなく WebTransport セッションも閉じるように修正
+  - @voluntas
 - [FIX] sendObject の並行呼び出し時にストリームの二重 close() が発生する問題を修正する
   - @voluntas
 - [FIX] SUBSCRIBE_OK より先に Subgroup ストリームが到着した場合のレースコンディションを修正する
@@ -109,11 +107,11 @@
 
 ### misc
 
-- [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
-  - @voluntas
 - [UPDATE] Vite から Vite+ に切り替える
   - @voluntas
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
+  - @voluntas
+- [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
   - @voluntas
 
 ## 2025.2.0
