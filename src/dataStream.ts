@@ -481,8 +481,8 @@ export function createObject(
  * | 0x25 | No           | Yes        | No        | Yes      | Status         |
  * | 0x28 | No           | No         | Yes       | No       | Status         |
  * | 0x29 | No           | Yes        | Yes       | No       | Status         |
- * | 0x2C | No           | No         | Yes       | No       | Status         |
- * | 0x2D | No           | Yes        | Yes       | No       | Status         |
+ * | 0x2C | No           | No         | No        | No       | Status         |
+ * | 0x2D | No           | Yes        | No        | No       | Status         |
  */
 export const DatagramType = {
   // Payload types with Object ID, Priority Present
@@ -521,10 +521,12 @@ export const DatagramType = {
   STATUS_OBJ_NO_PRI: 0x28,
   STATUS_OBJ_EXT_NO_PRI: 0x29,
 
-  // Status types with Object ID, No Priority (0x2C-0x2D)
-  // draft-15 Table 5: 0x2C/0x2D は Object ID = Yes
-  STATUS_OBJ_NO_PRI_2: 0x2c,
-  STATUS_OBJ_EXT_NO_PRI_2: 0x2d,
+  // Status types without Object ID (Object ID = 1), No Priority (0x2C-0x2D)
+  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
+  // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
+  STATUS_NO_OBJ_NO_PRI: 0x2c,
+  STATUS_NO_OBJ_EXT_NO_PRI: 0x2d,
 } as const;
 
 export type DatagramType = (typeof DatagramType)[keyof typeof DatagramType];
@@ -544,19 +546,16 @@ export interface ObjectDatagram {
 }
 
 /**
- * Check if datagram type has Object ID field
+ * Object ID フィールドの有無を判定する
  *
- * draft-ietf-moq-transport-16 Section 10.3.1 Table 5:
- * - Payload types (0x00-0x0F): bit 2 (0x04) = 0 なら Object ID あり
- * - Status types (0x20-0x2D): 0x24, 0x25 のみ Object ID なし、他は Object ID あり
+ * draft-ietf-moq-transport-17 Section 10.3.1:
+ * "The ZERO_OBJECT_ID bit (0x04) indicates when the Object ID field is present.
+ * When set to 1, the Object ID field is omitted and the Object ID is 1.
+ * When set to 0, the Object ID field is present."
+ *
+ * ZERO_OBJECT_ID ビット (0x04) は全タイプに一律に適用される
  */
 function datagramHasObjectId(type: number): boolean {
-  // Status types
-  if (type >= 0x20) {
-    // 0x24, 0x25 のみ Object ID なし
-    return type !== 0x24 && type !== 0x25;
-  }
-  // Payload types: bit 2 (0x04) = 0 なら Object ID あり
   return (type & 0x04) === 0;
 }
 
