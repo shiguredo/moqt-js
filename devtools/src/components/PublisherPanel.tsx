@@ -80,6 +80,16 @@ export function PublisherPanel() {
         {/* Status Message */}
         <div class={getStatusClasses()}>{pub.pubStatusMessage}</div>
 
+        {/* Forward State */}
+        {pub.forwardState.value !== null && (
+          <div class="mb-4 px-4 py-2 rounded-lg text-sm bg-slate-100 text-slate-600">
+            Forward State:{" "}
+            <span class={pub.forwardState.value ? "text-green-700 font-medium" : "text-slate-500"}>
+              {pub.forwardState.value ? "1 (forwarding)" : "0 (not forwarding)"}
+            </span>
+          </div>
+        )}
+
         {/* Buttons */}
         <div class="flex gap-3 mb-4">
           <button
