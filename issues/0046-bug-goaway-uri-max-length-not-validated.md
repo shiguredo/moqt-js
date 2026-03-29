@@ -11,7 +11,7 @@ Model: Claude Opus 4.6
 
 refs/moq/draft-ietf-moq-transport-17.txt Section 9.5 (line 3314-3316):
 
-> The maximum length of the New Session URI is 8,192 bytes.  If an
+> The maximum length of the New Session URI is 8,192 bytes. If an
 > endpoint receives a length exceeding the maximum, it MUST close the
 > session with a PROTOCOL_VIOLATION.
 

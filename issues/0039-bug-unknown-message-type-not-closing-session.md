@@ -12,7 +12,7 @@ Model: Claude Opus 4.6
 refs/moq/draft-ietf-moq-transport-17.txt Section 9 (line 2562-2568):
 
 > An endpoint that receives an unknown message type MUST close the
-> session.  Control messages have a length to make parsing easier, but
+> session. Control messages have a length to make parsing easier, but
 > no control messages are intended to be ignored.
 
 ## 該当箇所

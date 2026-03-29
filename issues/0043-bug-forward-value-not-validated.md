@@ -11,7 +11,7 @@ Model: Claude Opus 4.6
 
 refs/moq/draft-ietf-moq-transport-17.txt Section 9.3.10 (line 3054-3060):
 
-> The allowed values are 0 (don't forward) or 1 (forward).  If an
+> The allowed values are 0 (don't forward) or 1 (forward). If an
 > endpoint receives a value outside this range, it MUST close the
 > session with PROTOCOL_VIOLATION.
 

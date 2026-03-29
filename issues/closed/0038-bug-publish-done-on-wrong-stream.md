@@ -25,3 +25,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 9.13 (line 3724-3732):
 ## 期待される動作
 
 PUBLISH_DONE はサブスクリプションの双方向ストリーム上で送信されるべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+`sendPublishDone()` を `sendControlMessage()` (制御ストリーム) から `requestStreams` の双方向ストリームへの書き込みに変更した。

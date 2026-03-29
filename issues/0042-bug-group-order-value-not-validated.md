@@ -11,7 +11,7 @@ Model: Claude Opus 4.6
 
 refs/moq/draft-ietf-moq-transport-17.txt Section 9.3.6 (line 2987-2995):
 
-> The allowed values are Ascending (0x1) or Descending (0x2).  If an
+> The allowed values are Ascending (0x1) or Descending (0x2). If an
 > endpoint receives a value outside this range, it MUST close the
 > session with PROTOCOL_VIOLATION.
 

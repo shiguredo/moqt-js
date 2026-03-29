@@ -12,7 +12,7 @@ Model: Claude Opus 4.6
 refs/moq/draft-ietf-moq-transport-17.txt Section 10.2.1.1 (line 4541-4543):
 
 > Any other value SHOULD be treated as a protocol error and the session
-> SHOULD be closed with a PROTOCOL_VIOLATION (Section 3.5).  Any object
+> SHOULD be closed with a PROTOCOL_VIOLATION (Section 3.5). Any object
 > with a status code other than zero MUST have an empty payload.
 
 ## 該当箇所
