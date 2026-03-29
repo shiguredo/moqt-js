@@ -43,7 +43,7 @@ export interface Goaway {
  * https://github.com/moq-wg/moq-transport/pull/1499
  *
  * REQUEST_OK Message {
- *   Type (vi64) = 0x4,
+ *   Type (vi64) = 0x7,
  *   Length (16),
  *   Number of Parameters (vi64),
  *   Parameters (..),

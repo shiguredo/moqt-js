@@ -49,6 +49,8 @@
   - Setup Options のカウントプレフィックスを削除する (Section 9.4)
   - PUBLISH/SUBSCRIBE_OK/FETCH_OK の Track Properties から length プレフィックスを削除する
   - UNSUBSCRIBE メッセージを廃止し双方向ストリームの close でキャンセルする (Section 3.3.1)
+  - PUBLISH_NAMESPACE_DONE メッセージを廃止する (draft-17 Table 4)
+  - PUBLISH_NAMESPACE_CANCEL メッセージを廃止する (draft-17 Table 4)
   - Message Parameter のエンコーディングをパラメータ型ごとの定義に準拠させる (Section 9.3)
   - PUBLISH_DONE から Request ID フィールドを削除する (Section 9.13)
   - REQUEST_UPDATE の existingRequestId を requiredRequestIdDelta に変更する (Section 9.10)

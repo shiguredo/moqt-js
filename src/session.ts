@@ -29,7 +29,6 @@ import {
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishDonePayload,
-  decodePublishNamespaceCancelPayload,
   decodePublishNamespacePayload,
   decodePublishOkPayload,
   decodeRequestErrorPayload,
@@ -39,7 +38,6 @@ import {
   encodeSetupPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
-  encodePublishNamespaceDonePayload,
   encodePublishNamespacePayload,
   encodePublishPayload,
   encodeSubscribeNamespacePayload,
@@ -478,14 +476,9 @@ export interface NamespaceSubscription {
 
 /**
  * Namespace 公開のコールバック
- * draft-ietf-moq-transport-16 Section 9.20-9.22
+ * draft-ietf-moq-transport-17 Section 9.17
  */
 export interface NamespacePublicationCallbacks {
-  /**
-   * PUBLISH_NAMESPACE_CANCEL を受信したときに呼ばれる
-   * draft-ietf-moq-transport-16 Section 9.22
-   */
-  cancelled?: (errorCode: bigint, reasonPhrase: string) => void;
   /**
    * エラー時のコールバック
    */
@@ -494,17 +487,17 @@ export interface NamespacePublicationCallbacks {
 
 /**
  * Namespace 公開
- * draft-ietf-moq-transport-16 Section 9.20-9.21
+ * draft-ietf-moq-transport-17 Section 9.17
  */
 export interface NamespacePublication {
-  readonly state: "active" | "cancelled" | "closed";
+  readonly state: "active" | "closed";
   /**
    * 公開している Namespace
    */
   readonly namespace: string[];
   /**
-   * 公開を終了する（PUBLISH_NAMESPACE_DONE を送信）
-   * draft-ietf-moq-transport-16 Section 9.21
+   * 公開を終了する
+   * draft-ietf-moq-transport-17: ストリームの close で終了を通知する。
    */
   done(): Promise<void>;
 }
@@ -751,7 +744,7 @@ export class SessionImpl implements Session {
     bigint,
     {
       callbacks?: NamespacePublicationCallbacks;
-      state: "active" | "cancelled" | "closed";
+      state: "active" | "closed";
       namespace: string[];
     }
   >();
@@ -1154,9 +1147,9 @@ export class SessionImpl implements Session {
       callbacks.error,
     );
 
-    // Set up unsubscribe callback
+    // サブスクリプションキャンセルのコールバック
     impl.onUnsubscribe = async () => {
-      await this.sendUnsubscribe(impl);
+      await this.cancelSubscription(impl);
     };
 
     // Set up update callback
@@ -2078,11 +2071,12 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * サブスクリプションをキャンセルする
+   *
    * draft-ietf-moq-transport-17 Section 3.3.1:
    * subscription のキャンセルは双方向ストリームの close で行う。
-   * UNSUBSCRIBE メッセージは draft-17 で廃止された。
    */
-  private async sendUnsubscribe(subscriber: SubscriberImpl): Promise<void> {
+  private async cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
     const requestId = subscriber.getRequestId();
 
     // 双方向ストリームを close してリクエストをキャンセル
@@ -2583,8 +2577,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-17 Section 3.3:
    * リクエスト/レスポンス (SUBSCRIBE_OK, PUBLISH_OK, FETCH_OK, REQUEST_OK,
    * REQUEST_ERROR) は双方向ストリームに移動した。
-   * 制御ストリームに残るのは GOAWAY, PUBLISH_DONE,
-   * PUBLISH_NAMESPACE, PUBLISH_NAMESPACE_CANCEL 等。
+   * 制御ストリームに残るのは GOAWAY, PUBLISH_DONE, PUBLISH_NAMESPACE 等。
    * https://github.com/moq-wg/moq-transport/pull/1389
    */
   private handleControlMessage(type: number, payload: Uint8Array): void {
@@ -2608,9 +2601,6 @@ export class SessionImpl implements Session {
         break;
       case MessageType.PUBLISH_NAMESPACE:
         decoded = this.handlePublishNamespace(payload);
-        break;
-      case MessageType.PUBLISH_NAMESPACE_CANCEL:
-        decoded = this.handlePublishNamespaceCancel(payload);
         break;
     }
 
@@ -2766,47 +2756,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Handle PUBLISH_NAMESPACE_CANCEL message
-   *
-   * draft-ietf-moq-transport-16 Section 9.22:
-   * A subscriber sends PUBLISH_NAMESPACE_CANCEL to revoke acceptance
-   * of a PUBLISH_NAMESPACE.
-   */
-  private handlePublishNamespaceCancel(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodePublishNamespaceCancelPayload(payload);
-    const namespaceStrings = trackNamespaceToStrings(msg.trackNamespace);
-
-    // Track Namespace で対応する NamespacePublication を検索
-    for (const publication of this.namespacePublications.values()) {
-      if (
-        publication.state === "active" &&
-        this.namespaceMatches(publication.namespace, namespaceStrings)
-      ) {
-        publication.state = "cancelled";
-        publication.callbacks?.cancelled?.(msg.errorCode, msg.reasonPhrase);
-        break;
-      }
-    }
-
-    return {
-      trackNamespace: namespaceStrings,
-      errorCode: msg.errorCode.toString(),
-      reasonPhrase: msg.reasonPhrase,
-    };
-  }
-
-  /**
-   * 名前空間が一致するかどうかを確認する
-   */
-  private namespaceMatches(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] !== b[i]) return false;
-    }
-    return true;
-  }
-
-  /**
    * NamespaceSubscription オブジェクトを作成する
    */
   private createNamespaceSubscription(requestId: bigint): NamespaceSubscription {
@@ -2859,7 +2808,7 @@ export class SessionImpl implements Session {
    * NamespacePublication オブジェクトを作成する
    */
   private createNamespacePublication(requestId: bigint): NamespacePublication {
-    const getState = (): "active" | "cancelled" | "closed" => {
+    const getState = (): "active" | "closed" => {
       const pub = this.namespacePublications.get(requestId);
       return pub?.state ?? "closed";
     };
@@ -2870,7 +2819,7 @@ export class SessionImpl implements Session {
     };
 
     const done = async (): Promise<void> => {
-      await this.sendPublishNamespaceDone(requestId);
+      await this.closeNamespacePublication(requestId);
     };
 
     return {
@@ -2885,41 +2834,19 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * PUBLISH_NAMESPACE_DONE を送信する
+   * Namespace 公開を終了する
    *
-   * draft-ietf-moq-transport-16 Section 9.21:
-   * PUBLISH_NAMESPACE_DONE withdraws a previous PUBLISH_NAMESPACE.
+   * draft-ietf-moq-transport-17:
+   * PUBLISH_NAMESPACE_DONE メッセージは廃止された。
+   * Namespace 公開の終了は内部状態のクリーンアップのみで行う。
    */
-  private async sendPublishNamespaceDone(requestId: bigint): Promise<void> {
+  private async closeNamespacePublication(requestId: bigint): Promise<void> {
     const publication = this.namespacePublications.get(requestId);
     if (!publication || publication.state === "closed") {
       return;
     }
 
-    // PUBLISH_NAMESPACE_CANCEL を受信していたら PUBLISH_NAMESPACE_DONE を送信しない
-    // draft-ietf-moq-transport-16 Section 6.2:
-    // "After receiving a PUBLISH_NAMESPACE_CANCEL, the publisher does not
-    //  send PUBLISH_NAMESPACE_DONE."
-    if (publication.state === "cancelled") {
-      this.namespacePublications.delete(requestId);
-      return;
-    }
-
     publication.state = "closed";
-
-    const trackNamespace = createTrackNamespace(publication.namespace);
-
-    const publishNamespaceDoneMsg = {
-      type: MessageType.PUBLISH_NAMESPACE_DONE,
-      requestId,
-      trackNamespace,
-    };
-
-    const payload = encodePublishNamespaceDonePayload(publishNamespaceDoneMsg);
-    await this.sendControlMessage(MessageType.PUBLISH_NAMESPACE_DONE, payload, {
-      trackNamespace: publication.namespace,
-    });
-
     this.namespacePublications.delete(requestId);
   }
 

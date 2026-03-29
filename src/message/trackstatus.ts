@@ -1,6 +1,6 @@
 /**
  * MOQT Track Status Message
- * draft-ietf-moq-transport-16 Section 9.19
+ * draft-ietf-moq-transport-17 Section 9.16
  *
  * TRACK_STATUS のメッセージフォーマットは SUBSCRIBE と同一。
  * トラックの状態を問い合わせるために使用し、実際にサブスクライブはしない。

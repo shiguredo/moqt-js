@@ -62,9 +62,9 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.13:
+ * draft-ietf-moq-transport-17 Section 9.11:
  * PUBLISH Message {
- *   Type (i) = 0xB,
+ *   Type (i) = 0x1D,
  *   Length (16),
  *   Request ID (i),
  *   Required Request ID Delta (i),
