@@ -26,3 +26,11 @@ draft-ietf-moq-transport-17 Section 5.1 Subscriptions:
 ## 修正方針
 
 `incomingBidirectionalStreams` を監視し、受信した双方向ストリームの最初のメッセージタイプに基づいて適切なハンドラにディスパッチする。サーバーからの SUBSCRIBE / PUBLISH 等に対応するコールバックを SessionCallbacks に追加する。
+
+## pending 理由
+
+この変更はクライアント専用設計からの大幅な変更を伴う。サーバーからの SUBSCRIBE に対して Publisher として応答する、サーバーからの PUBLISH に対して Subscriber として応答する等、全フローの追加が必要であり、設計判断を要する。以下の検討事項がある:
+
+- SessionCallbacks にサーバーからのリクエストに対応するコールバック (onSubscribe, onPublish 等) を追加する必要がある
+- サーバーからのリクエストの Request ID は奇数 (LSB=1) であるため、ID 管理の修正も必要
+- 現状のユースケース (ブラウザクライアント) ではサーバーからのリクエスト受信は稀であり、優先度は低い
