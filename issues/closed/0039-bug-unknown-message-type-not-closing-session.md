@@ -23,3 +23,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 9 (line 2562-2568):
 ## 期待される動作
 
 未知のメッセージ型を受信した場合、セッションを閉じるべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+handleControlMessage(), readRequestStreamMessages(), startNamespaceStreamLoop() の switch に default ケースを追加し、未知のメッセージ型で PROTOCOL_VIOLATION エラーを発生させるようにした。

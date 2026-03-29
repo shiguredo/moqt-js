@@ -48,6 +48,7 @@ import {
   getMessageTypeName,
   getParameterLocationValue,
   encodeSubscriptionFilterParameter,
+  validateForwardValue,
   FetchType,
   VersionSpecificParameterType,
   type Location,
@@ -1586,8 +1587,15 @@ export class SessionImpl implements Session {
             }
 
             default:
-              // 未知のメッセージタイプは無視
-              break;
+              // draft-ietf-moq-transport-17 Section 9:
+              // "An endpoint that receives an unknown message type MUST close the session."
+              this.callbacks.error?.(
+                new SessionError(
+                  `unknown namespace stream message type: 0x${messageType.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
           }
         }
       }
@@ -2272,8 +2280,9 @@ export class SessionImpl implements Session {
         let forwardState = true;
         for (const param of decoded.parameters) {
           if (param.type === VersionSpecificParameterType.FORWARD) {
-            const [value] = decodeVarint(param.value, 0);
-            forwardState = value !== 0n;
+            const forwardValue = param.value[0];
+            validateForwardValue(forwardValue);
+            forwardState = forwardValue !== 0;
             break;
           }
         }
@@ -2336,6 +2345,22 @@ export class SessionImpl implements Session {
         }
 
         this.pendingSubscribe.delete(requestId);
+
+        // draft-ietf-moq-transport-17 Section 9.9:
+        // "If a subscriber receives a SUBSCRIBE_OK that uses the same Track Alias
+        //  as a different track with an Established subscription, it MUST close
+        //  the session with error DUPLICATE_TRACK_ALIAS."
+        const existingSubscriber = this.subscribersByAlias.get(decoded.trackAlias);
+        if (existingSubscriber && existingSubscriber !== pending.impl) {
+          const error = new SessionError(
+            `duplicate track alias: ${decoded.trackAlias}`,
+            SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+          );
+          this.callbacks.error?.(error);
+          pending.reject(error);
+          return;
+        }
+
         // Track Alias を設定
         pending.impl.setTrackAlias(decoded.trackAlias);
 
@@ -2543,8 +2568,15 @@ export class SessionImpl implements Session {
               break;
             }
             default:
-              // 未知のメッセージタイプは無視
-              break;
+              // draft-ietf-moq-transport-17 Section 9:
+              // "An endpoint that receives an unknown message type MUST close the session."
+              this.callbacks.error?.(
+                new SessionError(
+                  `unknown request stream message type: 0x${msg.type.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
           }
         }
       }
@@ -2613,6 +2645,16 @@ export class SessionImpl implements Session {
       case MessageType.PUBLISH_NAMESPACE:
         decoded = this.handlePublishNamespace(payload);
         break;
+      default:
+        // draft-ietf-moq-transport-17 Section 9:
+        // "An endpoint that receives an unknown message type MUST close the session."
+        this.callbacks.error?.(
+          new SessionError(
+            `unknown control message type: 0x${type.toString(16)}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return;
     }
 
     this.emitDebug("recv", type, payload, decoded);

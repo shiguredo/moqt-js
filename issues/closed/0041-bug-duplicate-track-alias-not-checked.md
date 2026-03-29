@@ -24,3 +24,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 9.9 (line 3545-3550):
 ## 期待される動作
 
 SUBSCRIBE_OK 受信時に既存の subscribersByAlias に同じ Track Alias が別のトラックで登録済みの場合、DUPLICATE_TRACK_ALIAS でセッションを閉じるべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+readSubscribeResponse() で subscribersByAlias.set() 前に既存の Track Alias との重複チェックを追加し、重複時は DUPLICATE_TRACK_ALIAS でセッションを閉じるようにした。

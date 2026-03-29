@@ -23,3 +23,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 9.5 (line 3314-3316):
 ## 期待される動作
 
 GOAWAY メッセージの URI 長が 8,192 バイトを超える場合、PROTOCOL_VIOLATION でセッションを閉じるべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+decodeGoawayPayload() に URI 長 > 8,192 バイトの検証を追加した。

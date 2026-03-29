@@ -6,6 +6,7 @@
 import { decodeVarint, encodeVarint } from "../varint";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
+  MAX_REASON_PHRASE_LENGTH,
   type Parameter,
   type TrackNamespace,
   decodeParameters,
@@ -231,6 +232,14 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
 
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
+
+  // draft-ietf-moq-transport-17 Section 1.4.4:
+  // Reason Phrase の最大長は 1,024 バイト
+  if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
+    throw new Error(
+      `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
+    );
+  }
 
   const reasonBytes = data.slice(
     offset + totalConsumed,

@@ -28,6 +28,24 @@ import type { Location } from "./types";
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
+/**
+ * Track Namespace の最大フィールド数
+ *
+ * draft-ietf-moq-transport-17 Section 9.20:
+ * "receives a Track Namespace Prefix consisting of greater than
+ *  32 Track Namespace Fields, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ */
+export const MAX_TRACK_NAMESPACE_FIELDS = 32;
+/**
+ * Reason Phrase の最大長 (バイト)
+ *
+ * draft-ietf-moq-transport-17 Section 1.4.4:
+ * "The reason phrase length has a maximum value of 1024 bytes.
+ *  If an endpoint receives a length exceeding the maximum,
+ *  it MUST close the session with a PROTOCOL_VIOLATION"
+ */
+export const MAX_REASON_PHRASE_LENGTH = 1024;
 
 /**
  * MOQT Parameter
@@ -109,6 +127,34 @@ export function getParameterLocationValue(param: Parameter): Location {
 }
 
 /**
+ * GROUP_ORDER パラメータの値を検証する
+ *
+ * draft-ietf-moq-transport-17 Section 9.3.6:
+ * "The allowed values are Ascending (0x1) or Descending (0x2).
+ *  If an endpoint receives a value outside this range, it MUST close
+ *  the session with PROTOCOL_VIOLATION."
+ */
+export function validateGroupOrderValue(value: number): void {
+  if (value !== 0x01 && value !== 0x02) {
+    throw new Error(`invalid GROUP_ORDER value: 0x${value.toString(16)}, expected 0x1 or 0x2`);
+  }
+}
+
+/**
+ * FORWARD パラメータの値を検証する
+ *
+ * draft-ietf-moq-transport-17 Section 9.3.10:
+ * "The allowed values are 0 (don't forward) or 1 (forward).
+ *  If an endpoint receives a value outside this range, it MUST close
+ *  the session with PROTOCOL_VIOLATION."
+ */
+export function validateForwardValue(value: number): void {
+  if (value !== 0 && value !== 1) {
+    throw new Error(`invalid FORWARD value: ${value}, expected 0 or 1`);
+  }
+}
+
+/**
  * Track Namespace (Section 2.4.1)
  */
 export interface TrackNamespace {
@@ -164,6 +210,15 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamespace, number] {
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
+
+  // draft-ietf-moq-transport-17 Section 9.20:
+  // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
+  if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
+    throw new Error(
+      `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+    );
+  }
+
   const elements: Uint8Array[] = [];
   let dataSize = 0;
 
@@ -444,11 +499,18 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
 /**
  * パラメータ型から Value エンコーディングを取得する
  *
- * 未知のパラメータ型の場合は PROTOCOL_VIOLATION だが、
- * ここでは length-prefixed をフォールバックとして使用する。
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * "An endpoint that receives an unknown Message Parameter MUST close
+ *  the session with PROTOCOL_VIOLATION."
+ *
+ * 未知のパラメータ型の場合はエラーをスローする。
  */
 function getMessageParameterValueEncoding(paramType: number): MessageParameterValueEncoding {
-  return MESSAGE_PARAMETER_VALUE_ENCODING[paramType] ?? "length-prefixed";
+  const encoding = MESSAGE_PARAMETER_VALUE_ENCODING[paramType];
+  if (encoding === undefined) {
+    throw new Error(`unknown message parameter type: 0x${paramType.toString(16)}`);
+  }
+  return encoding;
 }
 
 /**

@@ -25,7 +25,9 @@ export {
   type Parameter,
   type SubscriptionFilter,
   type TrackNamespace,
+  MAX_REASON_PHRASE_LENGTH,
   MAX_TRACK_NAME_SIZE,
+  MAX_TRACK_NAMESPACE_FIELDS,
   MAX_TRACK_NAMESPACE_SIZE,
   createTrackNamespace,
   decodeLocation,
@@ -45,6 +47,8 @@ export {
   encodeTrackNamespace,
   getParameterLocationValue,
   getParameterVarintValue,
+  validateForwardValue,
+  validateGroupOrderValue,
   trackNamespaceToStrings,
   validateTrackNameSize,
 } from "./parameter";

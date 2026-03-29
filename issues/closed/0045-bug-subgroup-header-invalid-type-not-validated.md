@@ -26,3 +26,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 10.4.2 (line 4803-4809):
 ## 期待される動作
 
 不正なタイプ値を受信した場合、エラーを返すべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+decodeSubgroupHeader() に SUBGROUP_ID_MODE = 0b11 と 0b00X1XXXX 形式でないタイプ値の検証を追加した。

@@ -25,3 +25,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 1.4.4 (line 657-661):
 ## 期待される動作
 
 Reason Phrase の長さが 1,024 バイトを超える場合、エラーを返すべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+MAX_REASON_PHRASE_LENGTH = 1024 定数を追加し、decodeRequestErrorPayload() と decodePublishDonePayload() で Reason Phrase 長 > 1,024 バイトの検証を追加した。

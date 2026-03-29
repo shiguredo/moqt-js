@@ -22,3 +22,9 @@ refs/moq/draft-ietf-moq-transport-17.txt Section 9.20 (line 4322-4324):
 ## 期待される動作
 
 Track Namespace のフィールド数が 32 を超える場合、エラーを返すべき。
+
+Completed: 2026-03-29
+
+## 解決方法
+
+MAX_TRACK_NAMESPACE_FIELDS = 32 定数を追加し、decodeTrackNamespace() でフィールド数 > 32 の検証を追加した。
