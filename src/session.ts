@@ -2644,7 +2644,25 @@ export class SessionImpl implements Session {
       try {
         while (this.sessionState === "connected") {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            // draft-ietf-moq-transport-17 Section 3.3:
+            // "A control stream MUST NOT be closed at the underlying transport layer
+            // during the session's lifetime. Doing so results in the session being
+            // closed as a PROTOCOL_VIOLATION."
+            if (this.sessionState === "connected") {
+              const error = new SessionError(
+                "control stream closed unexpectedly",
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              );
+              this.callbacks.error?.(error);
+              void this.close();
+              this.transport.close({
+                closeCode: SessionErrorCode.PROTOCOL_VIOLATION,
+                reason: "control stream closed unexpectedly",
+              });
+            }
+            break;
+          }
 
           const messages = this.controlReader.feed(value);
           for (const msg of messages) {
