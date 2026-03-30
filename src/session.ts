@@ -1119,12 +1119,23 @@ export class SessionImpl implements Session {
     }
 
     // Joining Fetch は Filter Type が LargestObject の場合のみ許可
-    // draft-ietf-moq-transport-17 Section 9.16.2:
+    // draft-ietf-moq-transport-17 Section 9.14.2:
     // "A Joining Fetch is only permitted when the associated Subscribe has
     //  the Filter Type Largest Object; any other value results in closing
     //  the session with a PROTOCOL_VIOLATION."
     // joiningFetch が有効な場合、自動的に LargestObject フィルターを設定する
     if (options?.joiningFetch) {
+      // draft-ietf-moq-transport-17 Section 9.14.2:
+      // "A Joining Fetch is only permitted when the associated subscription
+      //  has Forward State 1; otherwise the publisher MUST close the session
+      //  with a PROTOCOL_VIOLATION."
+      if (options.forward === false) {
+        throw new Error(
+          "Joining Fetch requires Forward State 1. " +
+            "Remove options.forward or set options.forward = true",
+        );
+      }
+
       if (options.filter === undefined) {
         options = { ...options, filter: { type: "LargestObject" } };
       } else if (options.filter.type !== "LargestObject") {
@@ -1313,8 +1324,11 @@ export class SessionImpl implements Session {
       callbacks.error,
     );
 
-    // draft-ietf-moq-transport-17: FETCH_CANCEL は削除された。
+    // draft-ietf-moq-transport-17 Section 5.2:
     // キャンセルはストリームを閉じることで行う。
+    impl.onCancel = async () => {
+      await this.cancelFetch(impl);
+    };
 
     // FETCH_OK を待つ Promise
     const promise = new Promise<Fetcher>((resolve, reject) => {
@@ -2174,6 +2188,30 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * Fetch をキャンセルする
+   *
+   * draft-ietf-moq-transport-17 Section 5.2:
+   * "It MUST send STOP_SENDING for the bidi request stream."
+   */
+  private async cancelFetch(fetcher: FetcherImpl): Promise<void> {
+    const requestId = fetcher.getRequestId();
+
+    // 双方向ストリームを close してリクエストをキャンセル
+    const streamInfo = this.requestStreams.get(requestId);
+    if (streamInfo) {
+      try {
+        streamInfo.writer.releaseLock();
+        await streamInfo.stream.writable.close();
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+      this.requestStreams.delete(requestId);
+    }
+
+    this.fetchers.delete(requestId);
+  }
+
+  /**
    * Joining FETCH を送信する
    *
    * draft-ietf-moq-transport-17 Section 9.16.2:
@@ -2184,6 +2222,7 @@ export class SessionImpl implements Session {
     subscribeRequestId: bigint,
     options: JoiningFetchOptions,
     defaultObjectCallback: (object: MoqtObject) => void,
+    largestLocation: Location,
   ): Promise<void> {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
@@ -2198,8 +2237,20 @@ export class SessionImpl implements Session {
       options.onError,
     );
 
-    // draft-ietf-moq-transport-17: FETCH_CANCEL は削除された。
+    // draft-ietf-moq-transport-17 Section 5.2:
     // キャンセルはストリームを閉じることで行う。
+    impl.onCancel = async () => {
+      await this.cancelFetch(impl);
+    };
+
+    // draft-ietf-moq-transport-17 Section 9.14.2.1:
+    // Relative: Start Location = {Joining Location.Group - Joining Start, 0}
+    // Absolute: Start Location = {Joining Start, 0}
+    // SUBSCRIBE_OK の LARGEST_OBJECT を Joining Location として推定する
+    const estimatedStartLocation: Location =
+      options.type === "relative"
+        ? { group: largestLocation.group - options.start, object: 0n }
+        : { group: options.start, object: 0n };
 
     // FETCH_OK を待つ Promise（Joining Fetch の場合は背景で処理）
     this.pendingFetch.set(requestId, {
@@ -2210,6 +2261,7 @@ export class SessionImpl implements Session {
         options.onError?.(err);
       },
       impl,
+      startLocation: estimatedStartLocation,
     });
 
     // Joining FETCH メッセージを双方向ストリームで送信
@@ -2442,6 +2494,11 @@ export class SessionImpl implements Session {
           pending.impl.setLargestLocation(largestLocation);
         }
 
+        // Track Properties を設定
+        if (decoded.trackProperties.length > 0) {
+          pending.impl.setTrackProperties(decoded.trackProperties);
+        }
+
         this.subscribers.set(requestId, pending.impl);
         this.subscribersByAlias.set(decoded.trackAlias, pending.impl);
 
@@ -2468,8 +2525,20 @@ export class SessionImpl implements Session {
         }
 
         // Joining Fetch が指定されている場合は送信
-        if (pending.joiningFetch && largestLocation) {
-          void this.sendJoiningFetch(requestId, pending.joiningFetch, pending.objectCallback);
+        if (pending.joiningFetch) {
+          if (largestLocation) {
+            void this.sendJoiningFetch(
+              requestId,
+              pending.joiningFetch,
+              pending.objectCallback,
+              largestLocation,
+            );
+          } else {
+            // draft-ietf-moq-transport-17 Section 9.14.2:
+            // まだオブジェクトが発行されていない場合、Joining Fetch は送信しない。
+            // onEnd を呼んでスキップされたことを通知する。
+            pending.joiningFetch.onEnd?.();
+          }
         }
 
         pending.resolve(pending.impl);
@@ -2542,7 +2611,11 @@ export class SessionImpl implements Session {
         }
 
         this.pendingFetch.delete(requestId);
-        pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation);
+        pending.impl.setFetchOkInfo(
+          decoded.endOfTrack,
+          decoded.endLocation,
+          decoded.trackProperties,
+        );
         this.fetchers.set(requestId, pending.impl);
         pending.resolve(pending.impl);
 
@@ -2643,7 +2716,10 @@ export class SessionImpl implements Session {
             }
             case MessageType.REQUEST_OK: {
               // REQUEST_UPDATE への応答
-              this.handleRequestOk(msg.payload);
+              // draft-ietf-moq-transport-17 Section 9.10.1:
+              // REQUEST_OK には LARGEST_OBJECT パラメータが含まれる可能性がある。
+              // Subscriber の largestLocation を更新する。
+              this.handleRequestUpdateOk(msg.payload, requestId);
               break;
             }
             case MessageType.REQUEST_ERROR: {
@@ -2781,7 +2857,7 @@ export class SessionImpl implements Session {
     if (requestId !== undefined) {
       const subscriber = this.subscribers.get(requestId);
       if (subscriber) {
-        subscriber.handleEnd();
+        subscriber.handleEnd(msg.statusCode, msg.reasonPhrase);
         this.subscribers.delete(requestId);
         this.subscribersByAlias.delete(subscriber.getTrackAlias());
       }
@@ -2822,6 +2898,39 @@ export class SessionImpl implements Session {
       retryInterval: decoded.retryInterval.toString(),
       reason: decoded.reasonPhrase,
     };
+  }
+
+  /**
+   * 双方向ストリーム上の REQUEST_UPDATE への REQUEST_OK を処理する
+   *
+   * draft-ietf-moq-transport-17 Section 9.10.1:
+   * REQUEST_OK には LARGEST_OBJECT パラメータが含まれる可能性がある。
+   * Subscriber の largestLocation を更新する。
+   */
+  private handleRequestUpdateOk(payload: Uint8Array, streamRequestId: bigint): void {
+    const msg = decodeRequestOkPayload(payload);
+
+    // LARGEST_OBJECT パラメータを探す
+    for (const param of msg.parameters) {
+      if (param.type === VersionSpecificParameterType.LARGEST_OBJECT) {
+        const location = getParameterLocationValue(param);
+        // 対応する Subscriber の largestLocation を更新
+        const subscriber = this.subscribers.get(streamRequestId);
+        if (subscriber) {
+          subscriber.setLargestLocation(location);
+        }
+        break;
+      }
+    }
+
+    // 保留中の REQUEST_UPDATE を resolve する
+    for (const [updateId, pendingUpdate] of this.pendingRequestUpdate) {
+      if (pendingUpdate.targetRequestId === streamRequestId) {
+        this.pendingRequestUpdate.delete(updateId);
+        pendingUpdate.resolve();
+        break;
+      }
+    }
   }
 
   /**

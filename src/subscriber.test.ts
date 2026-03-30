@@ -7,6 +7,7 @@ import { test, assert } from "vitest";
 import { SubscriberImpl } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import { ObjectStatus } from "./message/types";
+import type { Property } from "./properties";
 
 function createObject(groupId: bigint, objectId: bigint): MoqtObject {
   return {
@@ -98,4 +99,90 @@ test("update は closed 状態ではエラーになる", async () => {
   } catch (e) {
     assert.match((e as Error).message, /closed/i);
   }
+});
+
+// draft-ietf-moq-transport-17 Section 9.13:
+// PUBLISH_DONE の statusCode が 0x0 (TRACK_ENDED) 以外の場合、errorCallback を呼ぶ
+test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
+  let endCalled = false;
+  let errorMessage = "";
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    (error: Error) => {
+      errorMessage = error.message;
+    },
+  );
+
+  // UPDATE_FAILED (0x8) でエラー通知
+  subscriber.handleEnd(0x8n, "update failed");
+  assert.isTrue(endCalled);
+  assert.include(errorMessage, "0x8");
+  assert.include(errorMessage, "update failed");
+  assert.equal(subscriber.state, "closed");
+});
+
+// draft-ietf-moq-transport-17 Section 9.13:
+// PUBLISH_DONE の statusCode が 0x0 (TRACK_ENDED) の場合、errorCallback を呼ばない
+test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
+  let endCalled = false;
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    () => {
+      errorCalled = true;
+    },
+  );
+
+  subscriber.handleEnd(0x0n, "");
+  assert.isTrue(endCalled);
+  assert.isFalse(errorCalled);
+});
+
+// draft-ietf-moq-transport-17 Section 9.9:
+// SUBSCRIBE_OK の Track Properties が Subscriber に設定される
+test("setTrackProperties で Track Properties が設定される", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  assert.equal(subscriber.trackProperties.length, 0);
+
+  const properties: Property[] = [
+    { id: 0x02n, value: 5000n },
+    { id: 0x04n, value: 10000n },
+  ];
+  subscriber.setTrackProperties(properties);
+
+  assert.equal(subscriber.trackProperties.length, 2);
+  assert.equal(subscriber.trackProperties[0].id, 0x02n);
+  assert.equal(subscriber.trackProperties[1].id, 0x04n);
+});
+
+// draft-ietf-moq-transport-17 Section 9.2.1.9:
+// setLargestLocation で largestLocation が更新される
+test("setLargestLocation で largestLocation が更新される", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  assert.isNull(subscriber.largestLocation);
+
+  subscriber.setLargestLocation({ group: 5n, object: 3n });
+  assert.deepEqual(subscriber.largestLocation, { group: 5n, object: 3n });
+
+  // REQUEST_OK からの更新
+  subscriber.setLargestLocation({ group: 10n, object: 7n });
+  assert.deepEqual(subscriber.largestLocation, { group: 10n, object: 7n });
 });

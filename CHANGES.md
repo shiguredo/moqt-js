@@ -73,6 +73,30 @@
   - @voluntas
 - [ADD] devtools の Publisher パネルに Forward State を表示する (Section 5.1)
   - @voluntas
+- [ADD] Subscriber / Fetcher に trackProperties プロパティを追加する (Section 9.9, 9.15)
+  - SUBSCRIBE_OK / FETCH_OK で受信した Track Properties にアプリケーションからアクセスできるようにする
+  - @voluntas
+- [FIX] REQUEST_UPDATE の応答 (REQUEST_OK) が resolve されない問題を修正する (Section 9.10)
+  - handleRequestOk が PUBLISH_NAMESPACE の応答しか処理しておらず Promise が永久にハングしていた
+  - @voluntas
+- [FIX] REQUEST_OK の LARGEST_OBJECT パラメータが処理されない問題を修正する (Section 9.10.1)
+  - REQUEST_UPDATE 成功時に Subscriber の largestLocation が更新されないため Joining Location の追従ができなかった
+  - @voluntas
+- [FIX] Joining Fetch と forward:false の組み合わせでバリデーションが欠落している問題を修正する (Section 9.14.2)
+  - Forward State 1 が必要な Joining Fetch を forward:false で送信するとサーバーが PROTOCOL_VIOLATION で切断する
+  - @voluntas
+- [FIX] Joining Fetch がスキップされた場合に通知がない問題を修正する (Section 9.14.2)
+  - LARGEST_OBJECT がなく Joining Fetch を送信しなかった場合に onEnd を呼んで通知する
+  - @voluntas
+- [FIX] Fetcher.cancel() がストリームを閉じない問題を修正する (Section 5.2)
+  - 内部状態のみ更新して bidi request stream の close が行われていなかった
+  - @voluntas
+- [FIX] Joining Fetch の FETCH_OK endLocation 検証が無効になっている問題を修正する (Section 9.15)
+  - startLocation が pendingFetch に保存されないため検証が常にスキップされていた
+  - @voluntas
+- [FIX] PUBLISH_DONE のエラー statusCode が Subscriber に伝搬されない問題を修正する (Section 9.13)
+  - UPDATE_FAILED 等のエラーコードを errorCallback で通知するようにする
+  - @voluntas
 - [FIX] REQUEST_UPDATE をリクエストと同じ双方向ストリームで送信する (Section 9.10)
   - 制御ストリームではなくリクエストの bidi stream 上で送信するように修正
   - @voluntas

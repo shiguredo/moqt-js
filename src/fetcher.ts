@@ -13,6 +13,7 @@
 
 import type { MoqtObject } from "./dataStream";
 import type { Location } from "./message/types";
+import type { Property } from "./properties";
 
 /**
  * Fetcher state
@@ -27,8 +28,13 @@ export interface Fetcher {
   readonly endOfTrack: boolean;
   readonly endLocation: Location;
   /**
+   * FETCH_OK で受信した Track Properties
+   * draft-ietf-moq-transport-17 Section 9.15
+   */
+  readonly trackProperties: ReadonlyArray<Property>;
+  /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-17 Section 9.18
+   * draft-ietf-moq-transport-17 Section 5.2
    */
   cancel(): Promise<void>;
 }
@@ -46,6 +52,10 @@ export class FetcherImpl implements Fetcher {
   private readonly requestId: bigint;
   private fetchEndOfTrack = false;
   private fetchEndLocation: Location = { group: 0n, object: 0n };
+  private fetchTrackProperties: Property[] = [];
+
+  // Session がストリームクローズ処理を差し込むためのコールバック
+  onCancel?: () => Promise<void>;
 
   constructor(
     namespace: string[],
@@ -83,6 +93,10 @@ export class FetcherImpl implements Fetcher {
     return this.fetchEndLocation;
   }
 
+  get trackProperties(): ReadonlyArray<Property> {
+    return this.fetchTrackProperties;
+  }
+
   getRequestId(): bigint {
     return this.requestId;
   }
@@ -90,9 +104,10 @@ export class FetcherImpl implements Fetcher {
   /**
    * FETCH_OK から情報を設定
    */
-  setFetchOkInfo(endOfTrack: boolean, endLocation: Location): void {
+  setFetchOkInfo(endOfTrack: boolean, endLocation: Location, trackProperties: Property[]): void {
     this.fetchEndOfTrack = endOfTrack;
     this.fetchEndLocation = endLocation;
+    this.fetchTrackProperties = trackProperties;
   }
 
   /**
@@ -133,12 +148,17 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch をキャンセル
    *
-   * draft-ietf-moq-transport-17: FETCH_CANCEL は削除された。
-   * キャンセルはストリームを閉じることで行う。
+   * draft-ietf-moq-transport-17 Section 5.2:
+   * "It MUST send STOP_SENDING for the bidi request stream."
+   * FETCH_CANCEL は削除された。キャンセルはストリームを閉じることで行う。
    */
   async cancel(): Promise<void> {
     if (this.fetcherState === "closed") {
       return;
+    }
+
+    if (this.onCancel) {
+      await this.onCancel();
     }
 
     this.fetcherState = "closed";
