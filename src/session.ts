@@ -1970,7 +1970,12 @@ export class SessionImpl implements Session {
   private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
     const trackAlias = publisher.getTrackAlias();
     const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
-    const currentPromise = previousPromise.then(() => this.sendObjectInternal(publisher, params));
+    // 前の Promise のエラーをキャッチしてチェーンが止まらないようにする。
+    // エラーが伝播すると後続の全ての .then() がスキップされ、
+    // 新しいオブジェクトが送信されなくなる。
+    const currentPromise = previousPromise
+      .catch(() => {})
+      .then(() => this.sendObjectInternal(publisher, params));
     this.publisherSendQueues.set(trackAlias, currentPromise);
     return currentPromise;
   }
@@ -2075,9 +2080,9 @@ export class SessionImpl implements Session {
    */
   private closePublisherStream(trackAlias: bigint): Promise<void> {
     const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
-    const currentPromise = previousPromise.then(() =>
-      this.closePublisherStreamInternal(trackAlias),
-    );
+    const currentPromise = previousPromise
+      .catch(() => {})
+      .then(() => this.closePublisherStreamInternal(trackAlias));
     this.publisherSendQueues.set(trackAlias, currentPromise);
     return currentPromise;
   }
