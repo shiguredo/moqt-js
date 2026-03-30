@@ -368,10 +368,15 @@ WebTransport API の動作確認ツールです。moqt-js とは独立してい�
 
 - WebTransport 接続 / 切断
 - 自己署名証明書のハッシュ指定
+- WebTransport の接続状態とプロパティの表示
+  - ready / closed / draining の Promise 状態
+  - reliability / congestionControl / supportsReliableOnly
+  - protocol / responseHeaders
 - 双方向ストリームの作成と送受信
 - 送信専用単方向ストリームの作成と送信
 - 受信専用単方向ストリームの受信
 - Datagram の送受信
+- 設定を URL クエリパラメータで共有
 
 ## ライセンス
 
