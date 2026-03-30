@@ -768,6 +768,12 @@ export class SessionImpl implements Session {
     }
   >();
 
+  // Publisher ごとの送信キュー
+  // sendObject は async だが fire-and-forget で呼ばれるため、
+  // 同一トラック内で並行実行されるとストリームの二重作成が発生する。
+  // Promise チェーンでトラック単位のシリアライズを行う。
+  private publisherSendQueues = new Map<bigint, Promise<void>>();
+
   // TODO: Closed Subgroup Tracking
   // draft-ietf-moq-transport-17:
   // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
@@ -1955,8 +1961,24 @@ export class SessionImpl implements Session {
    *
    * 同じ Group 内のオブジェクトは同じストリームで送信する
    * 新しい Group が来たら前のストリームを閉じて新規作成する
+   *
+   * sendObject は async だが fire-and-forget で呼ばれるため、
+   * トラック単位で Promise チェーンによるシリアライズを行う。
+   * これにより createUnidirectionalStream() の await 中に
+   * 次の呼び出しが割り込んでストリームを二重作成する問題を防ぐ。
    */
-  private async sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
+  private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
+    const trackAlias = publisher.getTrackAlias();
+    const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
+    const currentPromise = previousPromise.then(() => this.sendObjectInternal(publisher, params));
+    this.publisherSendQueues.set(trackAlias, currentPromise);
+    return currentPromise;
+  }
+
+  private async sendObjectInternal(
+    publisher: PublisherImpl,
+    params: SendObjectParams,
+  ): Promise<void> {
     const trackAlias = publisher.getTrackAlias();
     const groupId = BigInt(params.groupId);
     const objectId = BigInt(params.objectId);
@@ -1984,13 +2006,18 @@ export class SessionImpl implements Session {
 
       // Subgroup Header を書き込む
       // draft-ietf-moq-transport-17 Section 10.4.2
+      // draft-ietf-moq-transport-17 Section 2.2:
+      // "Objects from the same Subgroup MUST NOT be sent on different streams"
+      // FirstObjectId モードを使用して、各ストリームの最初の Object ID を
+      // Subgroup ID として自動的に一意にする
       const hasProperties = params.properties !== undefined && params.properties.length > 0;
-      const headerType = hasProperties ? SubgroupHeaderType.BASE_EXT : SubgroupHeaderType.BASE;
+      const headerType = hasProperties
+        ? SubgroupHeaderType.FIRST_OBJ_EXT
+        : SubgroupHeaderType.FIRST_OBJ;
       const header = encodeSubgroupHeader({
         type: headerType,
         trackAlias,
         groupId,
-        subgroupId: 0n,
         publisherPriority: params.priority ?? 128,
       });
       await writer.write(header);
@@ -2044,8 +2071,18 @@ export class SessionImpl implements Session {
 
   /**
    * Publisher のストリームを閉じる
+   * 送信キューに入れて、進行中の sendObject が完了してから閉じる
    */
-  private async closePublisherStream(trackAlias: bigint): Promise<void> {
+  private closePublisherStream(trackAlias: bigint): Promise<void> {
+    const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
+    const currentPromise = previousPromise.then(() =>
+      this.closePublisherStreamInternal(trackAlias),
+    );
+    this.publisherSendQueues.set(trackAlias, currentPromise);
+    return currentPromise;
+  }
+
+  private async closePublisherStreamInternal(trackAlias: bigint): Promise<void> {
     const streamState = this.publisherStreams.get(trackAlias);
     if (streamState) {
       // 先に Map から削除して二重クローズを防止
@@ -3508,6 +3545,10 @@ export class SessionImpl implements Session {
   ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
     let offset = 0;
     let currentPreviousObjectId = previousObjectId;
+    // draft-ietf-moq-transport-17 Section 10.4.2:
+    // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
+    // Subgroup ID として使用する
+    let resolvedSubgroupId = header.subgroupId;
 
     while (offset < buffer.length) {
       try {
@@ -3533,13 +3574,18 @@ export class SessionImpl implements Session {
         }
         currentPreviousObjectId = objectId;
 
+        // FirstObjectId モードの場合、最初のオブジェクトの ID を Subgroup ID に設定
+        if (resolvedSubgroupId === undefined) {
+          resolvedSubgroupId = objectId;
+        }
+
         // ペイロードを抽出
         const payload = buffer.slice(offset, offset + payloadLength);
         offset += payloadLength;
 
         const object: MoqtObject = {
           groupId: header.groupId,
-          subgroupId: header.subgroupId,
+          subgroupId: resolvedSubgroupId,
           objectId,
           publisherPriority: header.publisherPriority,
           status: fields.status,
@@ -3575,6 +3621,10 @@ export class SessionImpl implements Session {
   ): void {
     let previousObjectId = -1n;
     let buffer = data;
+    // draft-ietf-moq-transport-17 Section 10.4.2:
+    // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
+    // Subgroup ID として使用する
+    let resolvedSubgroupId = header.subgroupId;
 
     while (buffer.length > 0) {
       try {
@@ -3597,13 +3647,18 @@ export class SessionImpl implements Session {
         }
         previousObjectId = objectId;
 
+        // FirstObjectId モードの場合、最初のオブジェクトの ID を Subgroup ID に設定
+        if (resolvedSubgroupId === undefined) {
+          resolvedSubgroupId = objectId;
+        }
+
         // ペイロードを抽出
         const payload = buffer.slice(fieldsConsumed, fieldsConsumed + payloadLength);
         buffer = buffer.slice(totalNeeded);
 
         const object: MoqtObject = {
           groupId: header.groupId,
-          subgroupId: header.subgroupId,
+          subgroupId: resolvedSubgroupId,
           objectId,
           publisherPriority: header.publisherPriority,
           status: fields.status,

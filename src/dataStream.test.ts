@@ -142,6 +142,24 @@ const subgroupHeaderTestCases = [
     },
   },
   {
+    name: "FIRST_OBJ タイプ",
+    header: {
+      type: SubgroupHeaderType.FIRST_OBJ,
+      trackAlias: 10n,
+      groupId: 20n,
+      publisherPriority: 100,
+    },
+  },
+  {
+    name: "FIRST_OBJ_EXT タイプ",
+    header: {
+      type: SubgroupHeaderType.FIRST_OBJ_EXT,
+      trackAlias: 10n,
+      groupId: 20n,
+      publisherPriority: 100,
+    },
+  },
+  {
     name: "EXPLICIT タイプ with subgroupId",
     header: {
       type: SubgroupHeaderType.EXPLICIT,
@@ -177,6 +195,27 @@ for (const tc of subgroupHeaderTestCases) {
     assert.equal(consumed, encoded.length);
   });
 }
+
+test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が undefined になる", () => {
+  // draft-ietf-moq-transport-17 Section 10.4.2:
+  // Subgroup ID = First Object ID の場合、ヘッダーに Subgroup ID フィールドはなく、
+  // 最初のオブジェクトの Object ID が Subgroup ID として使われる
+  const header = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 10n,
+    groupId: 20n,
+    publisherPriority: 100,
+  };
+  const encoded = encodeSubgroupHeader(header);
+  const [decoded, consumed] = decodeSubgroupHeader(encoded);
+
+  assert.equal(decoded.type, SubgroupHeaderType.FIRST_OBJ);
+  assert.equal(decoded.trackAlias, 10n);
+  assert.equal(decoded.groupId, 20n);
+  assert.isUndefined(decoded.subgroupId);
+  assert.equal(decoded.publisherPriority, 100);
+  assert.equal(consumed, encoded.length);
+});
 
 test("hasPropertiesPresent: 偶数タイプは Extensions Present = No", () => {
   assert.equal(hasPropertiesPresent(0x10), false);
