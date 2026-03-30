@@ -104,6 +104,78 @@ export function ConnectionPanel() {
           </button>
           <span class={`text-sm ${getStatusClass()}`}>{getStatusText()}</span>
         </div>
+        {store.connectionStatus.value !== "disconnected" && (
+          <div class="mt-3 p-3 bg-slate-50 rounded-lg text-xs font-mono text-slate-600 space-y-1">
+            <div>
+              <span class="text-slate-400">connectionStatus: </span>
+              <span class="font-semibold">{store.connectionStatus.value}</span>
+            </div>
+            <div>
+              <span class="text-slate-400">ready: </span>
+              <span
+                class={
+                  store.wtReadyState.value === "resolved"
+                    ? "text-green-600 font-semibold"
+                    : store.wtReadyState.value.startsWith("rejected")
+                      ? "text-red-600 font-semibold"
+                      : "text-yellow-600 font-semibold"
+                }
+              >
+                {store.wtReadyState.value}
+              </span>
+            </div>
+            <div>
+              <span class="text-slate-400">closed: </span>
+              <span
+                class={store.wtClosedState.value === "pending" ? "text-slate-500" : "font-semibold"}
+              >
+                {store.wtClosedState.value}
+              </span>
+            </div>
+            <div>
+              <span class="text-slate-400">draining: </span>
+              <span
+                class={
+                  store.wtDrainingState.value === "pending" ? "text-slate-500" : "font-semibold"
+                }
+              >
+                {store.wtDrainingState.value}
+              </span>
+            </div>
+            {store.wtReliability.value && (
+              <div>
+                <span class="text-slate-400">reliability: </span>
+                <span class="font-semibold">{store.wtReliability.value}</span>
+              </div>
+            )}
+            {store.wtCongestionControl.value && (
+              <div>
+                <span class="text-slate-400">congestionControl: </span>
+                <span class="font-semibold">{store.wtCongestionControl.value}</span>
+              </div>
+            )}
+            {store.wtSupportsReliableOnly.value && (
+              <div>
+                <span class="text-slate-400">supportsReliableOnly: </span>
+                <span class="font-semibold">{store.wtSupportsReliableOnly.value}</span>
+              </div>
+            )}
+            {store.wtProtocol.value !== "" && (
+              <div>
+                <span class="text-slate-400">protocol: </span>
+                <span class="font-semibold">{store.wtProtocol.value || "(empty)"}</span>
+              </div>
+            )}
+            {store.wtResponseHeaders.value && (
+              <div>
+                <span class="text-slate-400">responseHeaders: </span>
+                <span class="font-semibold whitespace-pre-wrap">
+                  {store.wtResponseHeaders.value}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
