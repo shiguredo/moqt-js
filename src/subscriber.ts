@@ -6,6 +6,7 @@
 import type { Parameter } from "./message/parameter";
 import type { Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
+import type { Property } from "./properties";
 
 /**
  * Subscriber state
@@ -51,6 +52,13 @@ export interface Subscriber {
    */
   readonly largestLocation: Location | null;
   /**
+   * SUBSCRIBE_OK で受信した Track Properties
+   * draft-ietf-moq-transport-17 Section 9.9:
+   * DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY,
+   * PUBLISHER_GROUP_ORDER_PREFERENCE, DYNAMIC_GROUPS 等。
+   */
+  readonly trackProperties: ReadonlyArray<Property>;
+  /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
    * draft-ietf-moq-transport-17 Section 9.11
    */
@@ -72,6 +80,7 @@ export class SubscriberImpl implements Subscriber {
   private readonly requestId: bigint;
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
+  private subscriberTrackProperties: Property[] = [];
 
   // Internal callbacks for session to use
   onUnsubscribe?: () => Promise<void>;
@@ -105,6 +114,10 @@ export class SubscriberImpl implements Subscriber {
     return this.subscriberLargestLocation;
   }
 
+  get trackProperties(): ReadonlyArray<Property> {
+    return this.subscriberTrackProperties;
+  }
+
   get namespace(): string[] {
     return this.subscriberNamespace;
   }
@@ -127,6 +140,14 @@ export class SubscriberImpl implements Subscriber {
    */
   setLargestLocation(location: Location): void {
     this.subscriberLargestLocation = location;
+  }
+
+  /**
+   * SUBSCRIBE_OK から Track Properties を設定
+   * draft-ietf-moq-transport-17 Section 9.9
+   */
+  setTrackProperties(properties: Property[]): void {
+    this.subscriberTrackProperties = properties;
   }
 
   /**
@@ -183,12 +204,27 @@ export class SubscriberImpl implements Subscriber {
    *
    * draft-ietf-moq-transport-17 Section 5.1:
    * "the publisher terminates a subscription using PUBLISH_DONE"
+   *
+   * draft-ietf-moq-transport-17 Section 9.13:
+   * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
+   * errorCallback で通知する。
    */
-  handleEnd(): void {
+  handleEnd(statusCode?: bigint, reasonPhrase?: string): void {
     if (this.subscriberState === "closed") {
       return;
     }
     this.subscriberState = "closed";
+
+    // draft-ietf-moq-transport-17 Section 9.13:
+    // Status Code 0x0 (TRACK_ENDED) は正常終了。それ以外はエラー。
+    if (statusCode !== undefined && statusCode !== 0x0n) {
+      this.errorCallback?.(
+        new Error(
+          `PUBLISH_DONE with status 0x${statusCode.toString(16)}${reasonPhrase ? `: ${reasonPhrase}` : ""}`,
+        ),
+      );
+    }
+
     this.endCallback?.();
   }
 
