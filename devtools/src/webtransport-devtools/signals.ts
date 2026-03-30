@@ -34,6 +34,18 @@ export const connectionStatus = signal<"disconnected" | "connecting" | "connecte
 );
 export const connectionError = signal("");
 
+// WebTransport Promise 状態
+export const wtReadyState = signal<string>("pending");
+export const wtClosedState = signal<string>("pending");
+export const wtDrainingState = signal<string>("pending");
+
+// WebTransport プロパティ
+export const wtReliability = signal<string>("");
+export const wtCongestionControl = signal<string>("");
+export const wtSupportsReliableOnly = signal<string>("");
+export const wtProtocol = signal<string>("");
+export const wtResponseHeaders = signal<string>("");
+
 // Message type
 export interface StreamMessage {
   direction: "send" | "recv";
@@ -129,26 +141,74 @@ export async function connect(): Promise<void> {
     }
 
     const wt = new WebTransport(url.value, options);
+
+    wtReadyState.value = "pending";
+    wtClosedState.value = "pending";
+    wtDrainingState.value = "pending";
+
+    wt.ready
+      .then(() => {
+        wtReadyState.value = "resolved";
+      })
+      .catch((err: unknown) => {
+        wtReadyState.value = `rejected: ${(err as Error).message}`;
+      });
+
+    wt.closed
+      .then(() => {
+        wtClosedState.value = "resolved";
+        disconnect();
+      })
+      .catch((err: unknown) => {
+        wtClosedState.value = `rejected: ${(err as Error).message}`;
+        connectionError.value = (err as Error).message;
+        disconnect();
+      });
+
+    // TypeScript の型定義が最新仕様に追従していないため any 経由でアクセスする
+    // biome-ignore lint/suspicious/noExplicitAny: WebTransport API の型定義が不完全
+    const wtAny = wt as any;
+
+    if (wtAny.draining) {
+      (wtAny.draining as Promise<undefined>)
+        .then(() => {
+          wtDrainingState.value = "resolved";
+        })
+        .catch((err: unknown) => {
+          wtDrainingState.value = `rejected: ${(err as Error).message}`;
+        });
+    } else {
+      wtDrainingState.value = "N/A";
+    }
+
     await wt.ready;
 
     transport.value = wt;
     connectionStatus.value = "connected";
+
+    // セッション確立後のプロパティを取得する
+    wtReliability.value = String(wtAny.reliability ?? "N/A");
+    wtCongestionControl.value = String(wtAny.congestionControl ?? "N/A");
+    wtSupportsReliableOnly.value = String(wtAny.supportsReliableOnly ?? "N/A");
+    wtProtocol.value = String(wtAny.protocol ?? "");
+    const responseHeaders = wtAny.responseHeaders as Headers | null | undefined;
+    if (responseHeaders) {
+      const entries: string[] = [];
+      responseHeaders.forEach((value: string, key: string) => {
+        entries.push(`${key}: ${value}`);
+      });
+      wtResponseHeaders.value = entries.join("\n");
+    } else if (responseHeaders === null) {
+      wtResponseHeaders.value = "null";
+    } else {
+      wtResponseHeaders.value = "N/A";
+    }
 
     // Start receiving datagrams
     void receiveDatagrams(wt);
 
     // Start receiving incoming unidirectional streams
     void receiveIncomingStreams(wt);
-
-    // Handle close
-    wt.closed
-      .then(() => {
-        disconnect();
-      })
-      .catch((err: unknown) => {
-        connectionError.value = (err as Error).message;
-        disconnect();
-      });
   } catch (err) {
     connectionStatus.value = "error";
     connectionError.value = (err as Error).message;
@@ -178,6 +238,14 @@ export function disconnect(): void {
   uniRecvStreamCounter = 0;
 
   connectionStatus.value = "disconnected";
+  wtReadyState.value = "pending";
+  wtClosedState.value = "pending";
+  wtDrainingState.value = "pending";
+  wtReliability.value = "";
+  wtCongestionControl.value = "";
+  wtSupportsReliableOnly.value = "";
+  wtProtocol.value = "";
+  wtResponseHeaders.value = "";
 }
 
 /**
