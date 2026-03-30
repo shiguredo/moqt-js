@@ -265,17 +265,14 @@ await subscriber.unsubscribe();
 
 ## 動作環境
 
-Chrome 最新版で `--enable-features=EnableWebTransportDraft07` フラグを有効にした状態でのみ動作確認しています。
+以下のブラウザで動作確認済みです。
+
+- Google Chrome 最新版
+- Microsoft Edge 最新版
+- Mozilla Firefox 最新版
 
 > [!NOTE]
-> Chrome は現時点で WebTransport draft-02 が実装されています。
-> moqt-js は draft-07 を必要とするため、上記のフラグが必須です。
-
-### macOS での実行例
-
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --enable-features=EnableWebTransportDraft07
-```
+> Apple Safari 26.4 での動作確認を行っています。
 
 ## ビルド
 
