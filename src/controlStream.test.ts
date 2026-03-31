@@ -1,4 +1,4 @@
-import { test, assert, beforeEach } from "vitest";
+import { test, assert, beforeEach } from "vite-plus/test";
 import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
 import { MessageType } from "./message/types";
 

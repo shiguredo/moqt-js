@@ -1,4 +1,4 @@
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import { isMediaStreamTrackProcessorAvailable } from "./frameSource";
 
 // Node.js 環境では MediaStreamTrackProcessor が存在しないため false を返す

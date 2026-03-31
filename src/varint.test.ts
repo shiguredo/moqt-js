@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 1.4.1
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import { encodeVarint, decodeVarint, varintSize } from "./varint";
 
 // 1 バイト (0xxxxxxx): 0-127

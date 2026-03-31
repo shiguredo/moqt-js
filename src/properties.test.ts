@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 11
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
   encodeProperty,
   encodeProperties,

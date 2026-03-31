@@ -3,7 +3,7 @@
  * draft-ietf-moq-loc-02 に基づくプロパティテスト
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
   encodeTimestamp,

@@ -1,4 +1,4 @@
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
   SubgroupHeaderType,
   encodeSubgroupHeader,

@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 9.4
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
   createSetup,
   encodeSetupPayload,

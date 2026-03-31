@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 5.1
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import { ObjectStatus } from "./message/types";

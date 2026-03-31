@@ -2,7 +2,7 @@
  * MSF (MOQT Streaming Format) の PBT テスト
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
   MSF_VERSION,
