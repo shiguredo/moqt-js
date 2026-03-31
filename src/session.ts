@@ -675,6 +675,13 @@ export class SessionImpl implements Session {
   // ストリーム全体をバッファリングするのではなく subscriber の登録を待つ
   private subscriberReadyCallbacks = new Map<bigint, Array<() => void>>();
 
+  // Fetcher 登録待ちの Promise を管理
+  // draft-ietf-moq-transport-17 Section 9.15:
+  // "A publisher MAY send Objects in response to a FETCH before the
+  //  FETCH_OK message is sent."
+  // FETCH_OK より先にデータストリームが到着する可能性がある
+  private fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
+
   // リクエストごとの双方向ストリーム管理
   // draft-ietf-moq-transport-17 Section 3.3:
   // リクエストは双方向ストリーム上で送受信される。
@@ -1712,12 +1719,19 @@ export class SessionImpl implements Session {
       throw new Error("GOAWAY already sent");
     }
 
+    // draft-ietf-moq-transport-17 Section 9.5:
+    // "When sent by a client, the New Session URI MUST be zero length."
+    // moqt-js はクライアント実装のため、newSessionUri は常に空文字列
+    if (newSessionUri !== undefined && newSessionUri !== "") {
+      throw new Error("client MUST send GOAWAY with empty New Session URI");
+    }
+
     this.sentGoaway = true;
 
     const goawayTimeout = timeout ?? 0n;
     const payload = encodeGoawayPayload({
       type: MessageType.GOAWAY,
-      newSessionUri: newSessionUri ?? "",
+      newSessionUri: "",
       timeout: goawayTimeout,
     });
 
@@ -1803,6 +1817,47 @@ export class SessionImpl implements Session {
     for (const fetcher of this.fetchers.values()) {
       fetcher.markClosed();
     }
+
+    // Pending リクエストの Promise を reject する
+    const sessionClosedError = new Error("session closed");
+    for (const [, pending] of this.pendingPublish) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingPublish.clear();
+    for (const [, pending] of this.pendingSubscribe) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingSubscribe.clear();
+    for (const [, pending] of this.pendingFetch) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingFetch.clear();
+    for (const [, pending] of this.pendingRequestUpdate) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingRequestUpdate.clear();
+    for (const [, pending] of this.pendingTrackStatus) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingTrackStatus.clear();
+    for (const [, pending] of this.pendingNamespacePublish) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingNamespacePublish.clear();
+
+    // Fetcher/Subscriber の登録待ちコールバックを解放
+    for (const callbacks of this.subscriberReadyCallbacks.values()) {
+      for (const cb of callbacks) {
+        cb();
+      }
+    }
+    this.subscriberReadyCallbacks.clear();
+    for (const callbacks of this.fetcherReadyCallbacks.values()) {
+      for (const cb of callbacks) {
+        cb();
+      }
+    }
+    this.fetcherReadyCallbacks.clear();
 
     // Close all namespace subscriptions
     for (const subscription of this.namespaceSubscriptions.values()) {
@@ -2015,12 +2070,15 @@ export class SessionImpl implements Session {
       // "Objects from the same Subgroup MUST NOT be sent on different streams"
       // FirstObjectId モードを使用して、各ストリームの最初の Object ID を
       // Subgroup ID として自動的に一意にする
-      const hasProperties = params.properties !== undefined && params.properties.length > 0;
-      const headerType = hasProperties
-        ? SubgroupHeaderType.FIRST_OBJ_EXT
-        : SubgroupHeaderType.FIRST_OBJ;
+      //
+      // PROPERTIES ビット (0x01):
+      // "When set to 1, the Object Properties structure is present in all Objects.
+      //  When set to 0, the field is never present."
+      // Properties の有無はストリーム開始時に全オブジェクトについて決められないため、
+      // 常に FIRST_OBJ_EXT (Properties あり) を使用し、
+      // properties がないオブジェクトには Properties Length = 0 を送信する。
       const header = encodeSubgroupHeader({
-        type: headerType,
+        type: SubgroupHeaderType.FIRST_OBJ_EXT,
         trackAlias,
         groupId,
         publisherPriority: params.priority ?? 128,
@@ -2040,15 +2098,19 @@ export class SessionImpl implements Session {
 
     // Object fields を構築
     // draft-ietf-moq-transport-17 Section 10.4.2 Figure 29
+    // Subgroup Header の PROPERTIES ビットを常に 1 に設定しているため、
+    // 全オブジェクトに Properties フィールドを含める必要がある。
+    // Properties がないオブジェクトには Properties Length = 0 を送信する。
     const hasProperties = params.properties !== undefined && params.properties.length > 0;
     const objectIdDeltaBytes = encodeVarint(objectIdDelta);
     const payloadLenBytes = encodeVarint(params.payload.length);
     const propertiesDataLength = hasProperties ? params.properties!.length : 0;
-    const propertiesLengthBytes = hasProperties ? encodeVarint(propertiesDataLength) : null;
+    const propertiesLengthBytes = encodeVarint(propertiesDataLength);
 
     const totalLength =
       objectIdDeltaBytes.length +
-      (propertiesLengthBytes ? propertiesLengthBytes.length + propertiesDataLength : 0) +
+      propertiesLengthBytes.length +
+      propertiesDataLength +
       payloadLenBytes.length +
       params.payload.length;
     const data = new Uint8Array(totalLength);
@@ -2057,9 +2119,12 @@ export class SessionImpl implements Session {
     data.set(objectIdDeltaBytes, offset);
     offset += objectIdDeltaBytes.length;
 
-    if (hasProperties && propertiesLengthBytes) {
-      data.set(propertiesLengthBytes, offset);
-      offset += propertiesLengthBytes.length;
+    // Properties Length (常に送信)
+    data.set(propertiesLengthBytes, offset);
+    offset += propertiesLengthBytes.length;
+
+    // Properties Data (存在する場合のみ)
+    if (hasProperties) {
       data.set(params.properties!, offset);
       offset += propertiesDataLength;
     }
@@ -2661,6 +2726,15 @@ export class SessionImpl implements Session {
         this.fetchers.set(requestId, pending.impl);
         pending.resolve(pending.impl);
 
+        // FETCH_OK より先にデータストリームが到着して待機中の場合、通知する
+        const fetcherCallbacks = this.fetcherReadyCallbacks.get(requestId);
+        if (fetcherCallbacks) {
+          for (const cb of fetcherCallbacks) {
+            cb();
+          }
+          this.fetcherReadyCallbacks.delete(requestId);
+        }
+
         // FETCH_OK 後のストリームは不要（データは別の単方向ストリームで届く）
       } else if (msg.type === MessageType.REQUEST_ERROR) {
         const decoded = decodeRequestErrorPayload(msg.payload);
@@ -2857,8 +2931,16 @@ export class SessionImpl implements Session {
 
     switch (type) {
       case MessageType.PUBLISH_DONE:
-        decoded = this.handlePublishDone(payload);
-        break;
+        // draft-ietf-moq-transport-17 Section 9.13:
+        // PUBLISH_DONE は双方向ストリーム上でのみ送信される。
+        // 制御ストリーム上で受信した場合は仕様違反。
+        this.closeWithError(
+          new SessionError(
+            "received PUBLISH_DONE on control stream, expected on bidirectional stream",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return;
       case MessageType.REQUEST_OK:
         // PUBLISH_NAMESPACE への応答（制御ストリーム上で受信）
         decoded = this.handleRequestOk(payload);
@@ -3034,6 +3116,22 @@ export class SessionImpl implements Session {
 
     // GOAWAY コールバックを呼び出す
     this.callbacks.goaway?.(msg.newSessionUri);
+
+    // draft-ietf-moq-transport-17 Section 3.6:
+    // サーバーが指定した timeout 内にセッションを閉じなければ、
+    // サーバーが GOAWAY_TIMEOUT でセッションを切断する。
+    // クライアント側でもタイムアウトを設定し、期限内にグレースフルシャットダウンを試みる。
+    if (msg.timeout > 0n) {
+      this.goawayTimeoutId = setTimeout(() => {
+        if (this.sessionState === "connected") {
+          void this.close();
+          this.transport.close({
+            closeCode: SessionErrorCode.NO_ERROR,
+            reason: "graceful shutdown after receiving GOAWAY",
+          });
+        }
+      }, Number(msg.timeout));
+    }
 
     return {
       newSessionUri: msg.newSessionUri,
@@ -3247,18 +3345,21 @@ export class SessionImpl implements Session {
         return;
       }
 
-      // Datagram コールバックがあれば呼び出す
+      const object: MoqtObject = {
+        groupId: datagram.groupId,
+        subgroupId: undefined,
+        objectId: datagram.objectId,
+        publisherPriority: datagram.publisherPriority,
+        status: datagram.status ?? ObjectStatus.NORMAL,
+        properties: datagram.properties,
+        payload: datagram.payload ?? new Uint8Array(0),
+      };
+
+      // Datagram コールバックがあればそちらを使用、なければ通常の object コールバックにフォールバック
       if (subscriber.hasDatagramCallback()) {
-        const object: MoqtObject = {
-          groupId: datagram.groupId,
-          subgroupId: undefined,
-          objectId: datagram.objectId,
-          publisherPriority: datagram.publisherPriority,
-          status: datagram.status ?? ObjectStatus.NORMAL,
-          properties: datagram.properties,
-          payload: datagram.payload ?? new Uint8Array(0),
-        };
         subscriber.handleDatagram(object);
+      } else {
+        subscriber.handleObject(object);
       }
     } catch (err) {
       this.callbacks.debug?.({
@@ -3290,17 +3391,64 @@ export class SessionImpl implements Session {
         return;
       }
 
+      let resolved = false;
+
+      const doResolve = () => {
+        if (resolved) return;
+        resolved = true;
+        // コールバックリストをクリーンアップ
+        this.subscriberReadyCallbacks.delete(trackAlias);
+        resolve(this.subscribersByAlias.get(trackAlias) ?? null);
+      };
+
       // コールバックを登録
       const callbacks = this.subscriberReadyCallbacks.get(trackAlias) ?? [];
-      callbacks.push(() => {
-        resolve(this.subscribersByAlias.get(trackAlias) ?? null);
-      });
+      callbacks.push(doResolve);
       this.subscriberReadyCallbacks.set(trackAlias, callbacks);
 
       // タイムアウト: 5 秒以内に登録されなければ null
-      setTimeout(() => {
-        resolve(this.subscribersByAlias.get(trackAlias) ?? null);
-      }, 5000);
+      setTimeout(doResolve, 5000);
+    });
+  }
+
+  /**
+   * Fetcher の登録を待つ
+   *
+   * draft-ietf-moq-transport-17 Section 9.15:
+   * "A publisher MAY send Objects in response to a FETCH before the
+   *  FETCH_OK message is sent."
+   * FETCH_OK より先にデータストリームが到着した場合に使用。
+   */
+  private waitForFetcher(requestId: bigint): Promise<FetcherImpl | null> {
+    return new Promise<FetcherImpl | null>((resolve) => {
+      // 既に登録されている場合は即座に返す
+      const existing = this.fetchers.get(requestId);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+
+      // pendingFetch に存在しない場合は不明なリクエスト
+      if (!this.pendingFetch.has(requestId)) {
+        resolve(null);
+        return;
+      }
+
+      let resolved = false;
+
+      const doResolve = () => {
+        if (resolved) return;
+        resolved = true;
+        resolve(this.fetchers.get(requestId) ?? null);
+      };
+
+      // コールバックを登録
+      const callbacks = this.fetcherReadyCallbacks.get(requestId) ?? [];
+      callbacks.push(doResolve);
+      this.fetcherReadyCallbacks.set(requestId, callbacks);
+
+      // タイムアウト: 5 秒以内に FETCH_OK が来なければ null
+      setTimeout(doResolve, 5000);
     });
   }
 
@@ -3365,10 +3513,14 @@ export class SessionImpl implements Session {
               this.statsFetchHeadersReceived++;
 
               // Fetcher を検索
+              // draft-ietf-moq-transport-17 Section 9.15:
+              // FETCH_OK より先にデータストリームが到着する可能性がある
               fetcher = this.fetchers.get(header.requestId) ?? null;
               if (!fetcher) {
-                // Fetcher が見つからない場合は終了
-                break;
+                fetcher = await this.waitForFetcher(header.requestId);
+                if (!fetcher) {
+                  break;
+                }
               }
             } else if (
               (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
