@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 1.4.1 に基づく MOQT 可変長整数のプロパティテスト
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { encodeVarint, decodeVarint, varintSize } from "./varint";
 

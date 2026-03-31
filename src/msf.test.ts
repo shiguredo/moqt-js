@@ -2,7 +2,7 @@
  * MSF (MOQT Streaming Format) の単体テスト
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
   MSF_VERSION,
   CATALOG_TRACK_NAME,

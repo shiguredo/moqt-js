@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 9.16-9.17
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
   type Fetch,
