@@ -11,24 +11,6 @@
 
 ## develop
 
-- [FIX] FETCH データストリームが FETCH_OK より先に到着した場合にデータが消失する問題を修正する
-  - draft-ietf-moq-transport-17 Section 9.15 に準拠し waitForFetcher を実装する
-  - @voluntas
-- [FIX] 制御ストリーム上で PUBLISH_DONE を受信した場合に PROTOCOL_VIOLATION でセッションを閉じるようにする
-  - draft-ietf-moq-transport-17 Section 9.13 に準拠する
-  - @voluntas
-- [FIX] GOAWAY 送信時にクライアントが空でない New Session URI を設定できる問題を修正する
-  - draft-ietf-moq-transport-17 Section 9.5 に準拠する
-  - @voluntas
-- [FIX] GOAWAY 受信時にサーバー指定の Timeout 内でグレースフルシャットダウンを行うようにする
-  - draft-ietf-moq-transport-17 Section 3.6 に準拠する
-  - @voluntas
-- [FIX] セッションクローズ時に pending な Promise が reject されず永遠に待機し続ける問題を修正する
-  - @voluntas
-- [FIX] Datagram 受信時に datagramCallback がない場合に objectCallback にフォールバックするようにする
-  - @voluntas
-- [FIX] waitForSubscriber のタイムアウト後に二重 resolve とコールバックリークが発生する問題を修正する
-  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更
@@ -142,6 +124,24 @@
   - ストリーム全読みでライブストリームがブロックする問題を subscriber 登録待ちに変更
   - @voluntas
 - [FIX] LARGEST_OBJECT がない場合に Joining Fetch のバッファリングモードが解除されない問題を修正する
+  - @voluntas
+- [FIX] FETCH データストリームが FETCH_OK より先に到着した場合にデータが消失する問題を修正する
+  - draft-ietf-moq-transport-17 Section 9.15 に準拠し waitForFetcher を実装する
+  - @voluntas
+- [FIX] 制御ストリーム上で PUBLISH_DONE を受信した場合に PROTOCOL_VIOLATION でセッションを閉じるようにする
+  - draft-ietf-moq-transport-17 Section 9.13 に準拠する
+  - @voluntas
+- [FIX] GOAWAY 送信時にクライアントが空でない New Session URI を設定できる問題を修正する
+  - draft-ietf-moq-transport-17 Section 9.5 に準拠する
+  - @voluntas
+- [FIX] GOAWAY 受信時にサーバー指定の Timeout 内でグレースフルシャットダウンを行うようにする
+  - draft-ietf-moq-transport-17 Section 3.6 に準拠する
+  - @voluntas
+- [FIX] セッションクローズ時に pending な Promise が reject されず永遠に待機し続ける問題を修正する
+  - @voluntas
+- [FIX] Datagram 受信時に datagramCallback がない場合に objectCallback にフォールバックするようにする
+  - @voluntas
+- [FIX] waitForSubscriber のタイムアウト後に二重 resolve とコールバックリークが発生する問題を修正する
   - @voluntas
 
 ### misc
