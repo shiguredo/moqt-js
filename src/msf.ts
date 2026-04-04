@@ -22,6 +22,13 @@ export type PackagingType = "loc" | "mediatimeline" | "eventtimeline";
 /** トラックの役割 (Section 5.1.14, Table 4, 拡張可能) */
 export type TrackRole = string;
 
+export interface TimelineEncodingOptions {
+  gzip?: boolean;
+}
+
+const GZIP_MAGIC_BYTE_1 = 0x1f;
+const GZIP_MAGIC_BYTE_2 = 0x8b;
+
 // =============================================================================
 // Catalog 型定義
 // =============================================================================
@@ -462,7 +469,10 @@ function isCatalogTrack(obj: unknown): obj is CatalogTrack {
  *
  * bigint は JSON.stringify で扱えないため、number に変換する
  */
-export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
+export async function encodeMediaTimeline(
+  entries: MediaTimelineEntry[],
+  options: TimelineEncodingOptions = {},
+): Promise<Uint8Array> {
   // bigint を number に変換
   const serializable = entries.map(([mediaPts, [groupId, objectId], wallclock]) => [
     mediaPts,
@@ -471,14 +481,21 @@ export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
   ]);
 
   const json = JSON.stringify(serializable);
-  return new TextEncoder().encode(json);
+  const encoded = new TextEncoder().encode(json);
+
+  if (!options.gzip) {
+    return encoded;
+  }
+
+  return await compressWithGzip(encoded);
 }
 
 /**
  * JSON バイト列を Media Timeline にデコードする (Section 7.1)
  */
-export function decodeMediaTimeline(data: Uint8Array): MediaTimelineEntry[] {
-  const json = new TextDecoder().decode(data);
+export async function decodeMediaTimeline(data: Uint8Array): Promise<MediaTimelineEntry[]> {
+  const decodedData = isGzipCompressed(data) ? await decompressWithGzip(data) : data;
+  const json = new TextDecoder().decode(decodedData);
   const parsed = JSON.parse(json) as unknown;
 
   if (!Array.isArray(parsed)) {
@@ -532,7 +549,10 @@ function isMediaTimelineEntry(entry: unknown): boolean {
 /**
  * Event Timeline を JSON 文字列にエンコードする (Section 8.1)
  */
-export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
+export async function encodeEventTimeline(
+  entries: EventTimelineEntry[],
+  options: TimelineEncodingOptions = {},
+): Promise<Uint8Array> {
   // bigint を number に変換
   const serializable = entries.map((entry) => {
     const result: Record<string, unknown> = { data: entry.data };
@@ -551,14 +571,21 @@ export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
   });
 
   const json = JSON.stringify(serializable);
-  return new TextEncoder().encode(json);
+  const encoded = new TextEncoder().encode(json);
+
+  if (!options.gzip) {
+    return encoded;
+  }
+
+  return await compressWithGzip(encoded);
 }
 
 /**
  * JSON バイト列を Event Timeline にデコードする (Section 8.1)
  */
-export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
-  const json = new TextDecoder().decode(data);
+export async function decodeEventTimeline(data: Uint8Array): Promise<EventTimelineEntry[]> {
+  const decodedData = isGzipCompressed(data) ? await decompressWithGzip(data) : data;
+  const json = new TextDecoder().decode(decodedData);
   const parsed = JSON.parse(json) as unknown;
 
   if (!Array.isArray(parsed)) {
@@ -647,6 +674,37 @@ function isEventTimelineEntry(entry: unknown): boolean {
   }
 
   return true;
+}
+
+function isGzipCompressed(data: Uint8Array): boolean {
+  return data.length >= 2 && data[0] === GZIP_MAGIC_BYTE_1 && data[1] === GZIP_MAGIC_BYTE_2;
+}
+
+async function compressWithGzip(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof CompressionStream === "undefined") {
+    throw new Error("gzip compression is not supported in this runtime");
+  }
+
+  return await readCompressedStream(data, new CompressionStream("gzip"));
+}
+
+async function decompressWithGzip(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("gzip decompression is not supported in this runtime");
+  }
+
+  return await readCompressedStream(data, new DecompressionStream("gzip"));
+}
+
+async function readCompressedStream(
+  data: Uint8Array,
+  compressionStream: CompressionStream | DecompressionStream,
+): Promise<Uint8Array> {
+  const inputBuffer = new ArrayBuffer(data.byteLength);
+  new Uint8Array(inputBuffer).set(data);
+  const stream = new Blob([inputBuffer]).stream().pipeThrough(compressionStream);
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
 }
 
 // =============================================================================

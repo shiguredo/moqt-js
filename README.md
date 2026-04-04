@@ -143,8 +143,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 #### Timeline
 
-- Media Timeline
-- Event Timeline
+- Media Timeline (gzip 圧縮対応)
+- Event Timeline (gzip 圧縮対応)
 
 ## インストール
 

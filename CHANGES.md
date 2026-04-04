@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
+  - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
+  - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加
+  - @voluntas
 - [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
   - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
   - @voluntas

@@ -44,6 +44,18 @@ function encodeDeltaRaw(obj: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(obj));
 }
 
+async function assertRejectsWithMessage(
+  factory: () => Promise<unknown>,
+  messagePattern: RegExp,
+): Promise<void> {
+  try {
+    await factory();
+    assert.fail("expected promise to reject");
+  } catch (error) {
+    assert.match((error as Error).message, messagePattern);
+  }
+}
+
 // =============================================================================
 // Catalog エンコード/デコード
 // =============================================================================
@@ -195,82 +207,126 @@ test("CatalogDelta: 複数操作の宣言順をデコードで保持する", () 
 // Media Timeline
 // =============================================================================
 
-test("Media Timeline: 空配列のエンコード/デコード", () => {
+test("Media Timeline: 空配列のエンコード/デコード", async () => {
   const entries: MediaTimelineEntry[] = [];
-  const encoded = encodeMediaTimeline(entries);
-  const decoded = decodeMediaTimeline(encoded);
+  const encoded = await encodeMediaTimeline(entries);
+  const decoded = await decodeMediaTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正な形式はエラー", () => {
-  const invalidData = new TextEncoder().encode('{"not": "an array"}');
-  assert.throws(() => decodeMediaTimeline(invalidData), /invalid media timeline format/);
+test("Media Timeline: gzip のエンコード/デコード", async () => {
+  const entries: MediaTimelineEntry[] = [
+    [0, [0n, 0n], 1759924158381],
+    [2002, [1n, 0n], 1759924160383],
+  ];
+  const encoded = await encodeMediaTimeline(entries, { gzip: true });
+  const decoded = await decodeMediaTimeline(encoded);
+
+  assert.strictEqual(encoded[0], 0x1f);
+  assert.strictEqual(encoded[1], 0x8b);
+  assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正なエントリ形式はエラー", () => {
+test("Media Timeline: 不正な形式はエラー", async () => {
+  const invalidData = new TextEncoder().encode('{"not": "an array"}');
+  await assertRejectsWithMessage(
+    () => decodeMediaTimeline(invalidData),
+    /invalid media timeline format/,
+  );
+});
+
+test("Media Timeline: 不正なエントリ形式はエラー", async () => {
   const invalidData = new TextEncoder().encode("[[1, 2, 3]]");
-  assert.throws(() => decodeMediaTimeline(invalidData), /invalid media timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeMediaTimeline(invalidData),
+    /invalid media timeline entry/,
+  );
 });
 
 // =============================================================================
 // Event Timeline
 // =============================================================================
 
-test("Event Timeline: 空配列のエンコード/デコード", () => {
+test("Event Timeline: 空配列のエンコード/デコード", async () => {
   const entries: EventTimelineEntry[] = [];
-  const encoded = encodeEventTimeline(entries);
-  const decoded = decodeEventTimeline(encoded);
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: 不正な形式はエラー", () => {
-  const invalidData = new TextEncoder().encode('{"not": "an array"}');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline format/);
+test("Event Timeline: gzip のエンコード/デコード", async () => {
+  const entries: EventTimelineEntry[] = [
+    { l: [0n, 0n], data: [47.1812, 8.4592] },
+    { l: [1n, 0n], data: [47.1662, 8.5155] },
+  ];
+  const encoded = await encodeEventTimeline(entries, { gzip: true });
+  const decoded = await decodeEventTimeline(encoded);
+
+  assert.strictEqual(encoded[0], 0x1f);
+  assert.strictEqual(encoded[1], 0x8b);
+  assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: data がない場合はエラー", () => {
+test("Event Timeline: 不正な形式はエラー", async () => {
+  const invalidData = new TextEncoder().encode('{"not": "an array"}');
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline format/,
+  );
+});
+
+test("Event Timeline: data がない場合はエラー", async () => {
   // draft-ietf-moq-msf-00 §8.1: data は必須
   const invalidData = new TextEncoder().encode('[{"t": 123}]');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
 });
 
-test("Event Timeline: インデックスが 1 つもない場合はエラー", () => {
+test("Event Timeline: インデックスが 1 つもない場合はエラー", async () => {
   // draft-ietf-moq-msf-00 §8.1: t/l/m のいずれか 1 つが必須
   const invalidData = new TextEncoder().encode('[{"data": "event"}]');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
 });
 
-test("Event Timeline: インデックスが複数ある場合はエラー", () => {
+test("Event Timeline: インデックスが複数ある場合はエラー", async () => {
   // draft-ietf-moq-msf-00 §8.1: 同一レコード内で複数のインデックスは禁止
   const invalidData = new TextEncoder().encode('[{"t": 123, "m": 456, "data": "event"}]');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
 });
 
-test("Event Timeline: data が配列の場合も正常にデコードする", () => {
+test("Event Timeline: data が配列の場合も正常にデコードする", async () => {
   // RFC Section 8.4.2: "data": [47.1812, 8.4592]
   const entries: EventTimelineEntry[] = [
     { l: [0n, 0n], data: [47.1812, 8.4592] },
     { l: [1n, 0n], data: [47.1662, 8.5155] },
   ];
-  const encoded = encodeEventTimeline(entries);
-  const decoded = decodeEventTimeline(encoded);
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
 
   assert.strictEqual(decoded.length, 2);
   assert.deepStrictEqual(decoded[0].data, [47.1812, 8.4592]);
   assert.deepStrictEqual(decoded[1].data, [47.1662, 8.5155]);
 });
 
-test("Event Timeline: data が文字列の場合も正常にデコードする", () => {
+test("Event Timeline: data が文字列の場合も正常にデコードする", async () => {
   const entries: EventTimelineEntry[] = [{ t: 123, data: "hello" }];
-  const encoded = encodeEventTimeline(entries);
-  const decoded = decodeEventTimeline(encoded);
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
   assert.strictEqual(decoded[0].data, "hello");
 });
 
-test("Event Timeline: data が数値の場合も正常にデコードする", () => {
+test("Event Timeline: data が数値の場合も正常にデコードする", async () => {
   const entries: EventTimelineEntry[] = [{ t: 123, data: 42 }];
-  const encoded = encodeEventTimeline(entries);
-  const decoded = decodeEventTimeline(encoded);
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
   assert.strictEqual(decoded[0].data, 42);
 });
 
