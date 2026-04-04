@@ -404,7 +404,7 @@ function decodeKeyValuePair(
 /**
  * Key-Value-Pairs をカウントプレフィックスなしでエンコードする
  *
- * draft-ietf-moq-transport-17 Section 9.4:
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  *
@@ -434,7 +434,7 @@ export function encodeKeyValuePairs(params: Parameter[]): Uint8Array {
 /**
  * Key-Value-Pairs をカウントプレフィックスなしでデコードする
  *
- * draft-ietf-moq-transport-17 Section 9.4:
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  *

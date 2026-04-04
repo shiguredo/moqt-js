@@ -13,6 +13,7 @@ export {
   NamespaceSubscribeMode,
   ObjectStatus,
   PublishDoneStatusCode,
+  isPublishDoneErrorStatus,
   SetupOptionType,
   VersionSpecificParameterType,
 } from "./types";

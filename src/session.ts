@@ -230,7 +230,7 @@ export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
   /**
    * Datagram で受信したオブジェクトのコールバック
-   * draft-ietf-moq-transport-17 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    */
@@ -2178,7 +2178,7 @@ export class SessionImpl implements Session {
 
   /**
    * Send a datagram
-   * draft-ietf-moq-transport-17 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
     const hasProperties = params.properties !== undefined && params.properties.length > 0;
@@ -3298,7 +3298,7 @@ export class SessionImpl implements Session {
 
   /**
    * Start datagram receiving loop
-   * draft-ietf-moq-transport-17 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   private startDatagramLoop(): void {
     void (async () => {
@@ -3335,7 +3335,7 @@ export class SessionImpl implements Session {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-17 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   private handleIncomingDatagram(data: Uint8Array): void {
     try {

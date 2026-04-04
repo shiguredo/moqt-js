@@ -1,10 +1,11 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-17 Section 14.5
+ * draft-ietf-moq-transport-17 Section 14.5 (Error Codes)
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-14.5
  */
 
 /**
- * Session Termination Error Codes (Section 3.5)
+ * Session Termination Error Codes (Section 3.5 Termination)
  *
  * draft-ietf-moq-transport-17:
  * - TOO_MANY_REQUESTS を INVALID_REQUIRED_REQUEST_ID に変更
@@ -37,7 +38,7 @@ export const SessionErrorCode = {
 export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErrorCode];
 
 /**
- * REQUEST_ERROR Codes (Section 9.7)
+ * REQUEST_ERROR Codes (Section 9.7 REQUEST_ERROR)
  *
  * draft-ietf-moq-transport-17:
  * - GOING_AWAY (0x6) を追加 (#1434)
@@ -68,7 +69,7 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * PUBLISH_DONE Codes (Section 9.13)
+ * PUBLISH_DONE Codes (Section 9.13 PUBLISH_DONE)
  *
  * draft-ietf-moq-transport-17:
  * - MALFORMED_TRACK を 0x12 に変更

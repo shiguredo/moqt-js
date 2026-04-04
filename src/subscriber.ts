@@ -4,7 +4,7 @@
  */
 
 import type { Parameter } from "./message/parameter";
-import type { Location } from "./message/types";
+import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
 
@@ -216,8 +216,8 @@ export class SubscriberImpl implements Subscriber {
     this.subscriberState = "closed";
 
     // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
-    // Status Code 0x0 (TRACK_ENDED) は正常終了。それ以外はエラー。
-    if (statusCode !== undefined && statusCode !== 0x0n) {
+    // INTERNAL_ERROR (0x0) 等はエラー。TRACK_ENDED (0x2) 等はエラーとみなさない。
+    if (statusCode !== undefined && isPublishDoneErrorStatus(statusCode)) {
       this.errorCallback?.(
         new Error(
           `PUBLISH_DONE with status 0x${statusCode.toString(16)}${reasonPhrase ? `: ${reasonPhrase}` : ""}`,
