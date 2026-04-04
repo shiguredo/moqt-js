@@ -189,43 +189,61 @@ test("Catalog: トラックに必須フィールドがない場合はエラー",
 // Media Timeline テスト
 // =============================================================================
 
-test("Media Timeline: エンコード/デコードのラウンドトリップ", () => {
-  fc.assert(
-    fc.property(fc.array(mediaTimelineEntryArb, { maxLength: 100 }), (entries) => {
-      const encoded = encodeMediaTimeline(entries);
-      const decoded = decodeMediaTimeline(encoded);
+async function assertRejectsWithMessage(
+  factory: () => Promise<unknown>,
+  messagePattern: RegExp,
+): Promise<void> {
+  try {
+    await factory();
+    assert.fail("expected promise to reject");
+  } catch (error) {
+    assert.match((error as Error).message, messagePattern);
+  }
+}
+
+test("Media Timeline: エンコード/デコードのラウンドトリップ", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(mediaTimelineEntryArb, { maxLength: 100 }), async (entries) => {
+      const encoded = await encodeMediaTimeline(entries);
+      const decoded = await decodeMediaTimeline(encoded);
       assert.deepStrictEqual(decoded, entries);
     }),
   );
 });
 
-test("Media Timeline: 空配列のエンコード/デコード", () => {
+test("Media Timeline: 空配列のエンコード/デコード", async () => {
   const entries: MediaTimelineEntry[] = [];
-  const encoded = encodeMediaTimeline(entries);
-  const decoded = decodeMediaTimeline(encoded);
+  const encoded = await encodeMediaTimeline(entries);
+  const decoded = await decodeMediaTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正な形式はエラー", () => {
+test("Media Timeline: 不正な形式はエラー", async () => {
   // 有効な JSON だが配列ではない
   const invalidData = new TextEncoder().encode('{"not": "an array"}');
-  assert.throws(() => decodeMediaTimeline(invalidData), /invalid media timeline format/);
+  await assertRejectsWithMessage(
+    () => decodeMediaTimeline(invalidData),
+    /invalid media timeline format/,
+  );
 });
 
-test("Media Timeline: 不正なエントリ形式はエラー", () => {
+test("Media Timeline: 不正なエントリ形式はエラー", async () => {
   const invalidData = new TextEncoder().encode("[[1, 2, 3]]");
-  assert.throws(() => decodeMediaTimeline(invalidData), /invalid media timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeMediaTimeline(invalidData),
+    /invalid media timeline entry/,
+  );
 });
 
 // =============================================================================
 // Event Timeline テスト
 // =============================================================================
 
-test("Event Timeline: エンコード/デコードのラウンドトリップ", () => {
-  fc.assert(
-    fc.property(fc.array(eventTimelineEntryArb, { maxLength: 100 }), (entries) => {
-      const encoded = encodeEventTimeline(entries);
-      const decoded = decodeEventTimeline(encoded);
+test("Event Timeline: エンコード/デコードのラウンドトリップ", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(eventTimelineEntryArb, { maxLength: 100 }), async (entries) => {
+      const encoded = await encodeEventTimeline(entries);
+      const decoded = await decodeEventTimeline(encoded);
 
       // 各エントリを比較
       assert.strictEqual(decoded.length, entries.length);
@@ -257,22 +275,28 @@ test("Event Timeline: エンコード/デコードのラウンドトリップ", 
   );
 });
 
-test("Event Timeline: 空配列のエンコード/デコード", () => {
+test("Event Timeline: 空配列のエンコード/デコード", async () => {
   const entries: EventTimelineEntry[] = [];
-  const encoded = encodeEventTimeline(entries);
-  const decoded = decodeEventTimeline(encoded);
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: 不正な形式はエラー", () => {
+test("Event Timeline: 不正な形式はエラー", async () => {
   // 有効な JSON だが配列ではない
   const invalidData = new TextEncoder().encode('{"not": "an array"}');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline format/);
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline format/,
+  );
 });
 
-test("Event Timeline: data がない場合はエラー", () => {
+test("Event Timeline: data がない場合はエラー", async () => {
   const invalidData = new TextEncoder().encode('[{"t": 123}]');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
 });
 
 // =============================================================================
@@ -1015,15 +1039,15 @@ test("Delta Updates: 操作の順序 (removeTracks → addTracks)", () => {
 // Event Timeline の制約テスト
 // =============================================================================
 
-test("Event Timeline: t, l, m のインデックス参照を持つエントリ", () => {
+test("Event Timeline: t, l, m のインデックス参照を持つエントリ", async () => {
   // 壁時計時間でインデックス
   const entriesWithT: EventTimelineEntry[] = [
     { t: 1756885678361, data: { status: "in_progress" } },
     { t: 1756885981542, data: { status: "completed" } },
   ];
 
-  const encodedT = encodeEventTimeline(entriesWithT);
-  const decodedT = decodeEventTimeline(encodedT);
+  const encodedT = await encodeEventTimeline(entriesWithT);
+  const decodedT = await decodeEventTimeline(encodedT);
 
   assert.strictEqual(decodedT.length, 2);
   assert.strictEqual(decodedT[0].t, 1756885678361);
@@ -1036,8 +1060,8 @@ test("Event Timeline: t, l, m のインデックス参照を持つエントリ",
     { l: [1n, 0n], data: { coords: [47.1662, 8.5155] } },
   ];
 
-  const encodedL = encodeEventTimeline(entriesWithL);
-  const decodedL = decodeEventTimeline(encodedL);
+  const encodedL = await encodeEventTimeline(entriesWithL);
+  const decodedL = await decodeEventTimeline(encodedL);
 
   assert.strictEqual(decodedL.length, 2);
   assert.deepStrictEqual(decodedL[0].l, [0n, 0n]);
@@ -1050,8 +1074,8 @@ test("Event Timeline: t, l, m のインデックス参照を持つエントリ",
     { m: 5000, data: { marker: "chapter1" } },
   ];
 
-  const encodedM = encodeEventTimeline(entriesWithM);
-  const decodedM = decodeEventTimeline(encodedM);
+  const encodedM = await encodeEventTimeline(entriesWithM);
+  const decodedM = await decodeEventTimeline(encodedM);
 
   assert.strictEqual(decodedM.length, 2);
   assert.strictEqual(decodedM[0].m, 0);
@@ -1059,7 +1083,7 @@ test("Event Timeline: t, l, m のインデックス参照を持つエントリ",
   assert.isUndefined(decodedM[0].l);
 });
 
-test("Media Timeline: 仕様書例のエントリ形式を検証", () => {
+test("Media Timeline: 仕様書例のエントリ形式を検証", async () => {
   // 仕様書の例
   const timelineJson = `[
     [0, [0,0], 1759924158381],
@@ -1070,7 +1094,7 @@ test("Media Timeline: 仕様書例のエントリ形式を検証", () => {
   ]`;
 
   const data = new TextEncoder().encode(timelineJson);
-  const entries = decodeMediaTimeline(data);
+  const entries = await decodeMediaTimeline(data);
 
   assert.strictEqual(entries.length, 5);
 
