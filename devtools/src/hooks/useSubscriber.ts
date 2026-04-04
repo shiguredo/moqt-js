@@ -249,7 +249,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       let actualTrackName = settings.trackName.value;
 
       try {
-        // draft-15 に準拠した Catalog 購読:
+        // draft-ietf-moq-transport-17 に準拠した Catalog 購読:
         // 1. SUBSCRIBE_OK に LARGEST_OBJECT がある場合 → Joining FETCH で過去の Catalog を取得
         // 2. SUBSCRIBE_OK に LARGEST_OBJECT がない場合 → リアルタイムで Catalog が配信されるのを待つ
         //
@@ -299,7 +299,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 },
               },
               {
-                // draft-15: LargestObject フィルターで SUBSCRIBE
+                // draft-ietf-moq-transport-17: LargestObject フィルターで SUBSCRIBE
                 // joiningFetch を使用して、LARGEST_OBJECT がある場合は FETCH で取得
                 // LARGEST_OBJECT がない場合は Joining FETCH は送信されず、リアルタイム配信を待つ
                 joiningFetch: {
