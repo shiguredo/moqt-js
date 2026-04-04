@@ -1,13 +1,13 @@
 /**
  * MOQT Message Types
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-17 Section 9 (Control Messages)
  */
 
 /**
- * Message Types (Section 9)
+ * Message Types (Section 9 Control Messages)
  */
 export const MessageType = {
-  // draft-ietf-moq-transport-17 Section 9.4:
+  // draft-ietf-moq-transport-17 Section 9.4 (SETUP):
   // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
   // https://github.com/moq-wg/moq-transport/pull/1510
   SETUP: 0x2f00,
@@ -41,7 +41,7 @@ export const MessageType = {
   NAMESPACE: 0x08,
   NAMESPACE_DONE: 0x0e,
   /**
-   * PUBLISH_BLOCKED (Section 9.21)
+   * PUBLISH_BLOCKED (Section 9.21 PUBLISH_BLOCKED)
    *
    * draft-ietf-moq-transport-17:
    * Publisher が新しい Request ID を割り当てられない場合に送信する。
@@ -55,7 +55,7 @@ export const MessageType = {
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
 /**
- * Setup Option Types (Section 9.4.1)
+ * Setup Option Types (Section 9.4.1 Setup Options)
  *
  * draft-ietf-moq-transport-17:
  * "Setup Parameters" を "Setup Options" にリネーム。
@@ -71,7 +71,7 @@ export const SetupOptionType = {
 export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionType];
 
 /**
- * Message Parameter Types (Section 9.2.1)
+ * Message Parameter Types (Section 9.3 Message Parameters)
  *
  * draft-ietf-moq-transport-17:
  * - Message Parameters は単一ホップにスコープされる
@@ -86,15 +86,18 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  */
 export const MessageParameterType = {
   /**
-   * DELIVERY_TIMEOUT (Section 9.2.1.2)
+   * DELIVERY_TIMEOUT (Section 9.3.3 DELIVERY TIMEOUT Parameter)
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Extension として使用。
    */
   DELIVERY_TIMEOUT: 0x02,
+  /**
+   * AUTHORIZATION TOKEN (Section 9.3.2 AUTHORIZATION TOKEN Parameter)
+   */
   AUTHORIZATION_TOKEN: 0x03,
   /**
-   * RENDEZVOUS_TIMEOUT (Section 9.3.4)
+   * RENDEZVOUS_TIMEOUT (Section 9.3.4 RENDEZVOUS TIMEOUT Parameter)
    *
    * draft-ietf-moq-transport-17:
    * SUBSCRIBE メッセージで使用。
@@ -103,19 +106,37 @@ export const MessageParameterType = {
    * https://github.com/moq-wg/moq-transport/pull/1447
    */
   RENDEZVOUS_TIMEOUT: 0x04,
+  /**
+   * EXPIRES (Section 9.3.8 EXPIRES Parameter)
+   */
   EXPIRES: 0x08,
+  /**
+   * LARGEST_OBJECT (Section 9.3.9 LARGEST OBJECT Parameter)
+   */
   LARGEST_OBJECT: 0x09,
+  /**
+   * FORWARD (Section 9.3.10 FORWARD Parameter)
+   */
   FORWARD: 0x10,
+  /**
+   * SUBSCRIBER_PRIORITY (Section 9.3.5 SUBSCRIBER PRIORITY Parameter)
+   */
   SUBSCRIBER_PRIORITY: 0x20,
+  /**
+   * SUBSCRIPTION_FILTER (Section 9.3.7 SUBSCRIPTION FILTER Parameter)
+   */
   SUBSCRIPTION_FILTER: 0x21,
   /**
-   * GROUP_ORDER (Section 9.2.1.6)
+   * GROUP_ORDER (Section 9.3.6 GROUP ORDER Parameter)
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * Publisher の GROUP_ORDER_PREFERENCE は Track Extension として使用。
    * https://github.com/moq-wg/moq-transport/pull/1390
    */
   GROUP_ORDER: 0x22,
+  /**
+   * NEW_GROUP_REQUEST (Section 9.3.11 NEW GROUP REQUEST Parameter)
+   */
   NEW_GROUP_REQUEST: 0x32,
 } as const;
 
@@ -135,7 +156,7 @@ export const VersionSpecificParameterType = MessageParameterType;
 export type VersionSpecificParameterType = MessageParameterType;
 
 /**
- * Group Order (Section 9.2.1.10)
+ * Group Order (Section 9.3.6 GROUP ORDER Parameter)
  */
 export const GroupOrder = {
   ASCENDING: 0x01,
@@ -145,7 +166,7 @@ export const GroupOrder = {
 export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
 
 /**
- * Subscription Filter Types (Section 5.1.2)
+ * Subscription Filter Types (Section 5.1.2 Subscription Filters)
  */
 export const FilterType = {
   NEXT_GROUP_START: 0x01,
@@ -157,7 +178,7 @@ export const FilterType = {
 export type FilterType = (typeof FilterType)[keyof typeof FilterType];
 
 /**
- * Object Status (Section 10.2.1.1)
+ * Object Status (Section 10.2.1.1 Object Status)
  *
  * draft-ietf-moq-transport-17:
  * - 0x0: Normal object
@@ -180,7 +201,7 @@ export const ObjectStatus = {
 export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
 
 /**
- * PUBLISH_DONE Status Codes (Section 9.13)
+ * PUBLISH_DONE Status Codes (Section 9.13 PUBLISH_DONE)
  *
  * draft-ietf-moq-transport-17:
  * - 0x0: INTERNAL_ERROR
@@ -211,12 +232,12 @@ export type PublishDoneStatusCode =
   (typeof PublishDoneStatusCode)[keyof typeof PublishDoneStatusCode];
 
 /**
- * Namespace Subscribe Mode (Section 9.25)
+ * Namespace Subscribe Mode (Section 9.20 SUBSCRIBE_NAMESPACE, Subscribe Options)
  *
  * draft-ietf-moq-transport-17:
  * SUBSCRIBE_NAMESPACE の Subscribe Options フィールドで使用される。
  * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) のいずれかを指定する。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.25
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
  */
 export const NamespaceSubscribeMode = {
   /**

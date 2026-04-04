@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter encoding/decoding
- * draft-ietf-moq-transport-17 Section 9.3
+ * draft-ietf-moq-transport-17 Section 9.3 (Message Parameter)
  *
  * https://datatracker.ietf.org/doc/draft-ietf-moq-transport/
  *
@@ -31,7 +31,7 @@ export const MAX_TRACK_NAME_SIZE = 4096;
 /**
  * Track Namespace の最大フィールド数
  *
- * draft-ietf-moq-transport-17 Section 9.20:
+ * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
  * "receives a Track Namespace Prefix consisting of greater than
  *  32 Track Namespace Fields, it MUST close the session with a
  *  PROTOCOL_VIOLATION."
@@ -119,7 +119,7 @@ export function getParameterVarintValue(param: Parameter): bigint {
  * パラメータから Location 値を取得
  *
  * LARGEST_OBJECT (0x09) パラメータなど、Location を含むパラメータ用
- * draft-ietf-moq-transport-17 Section 9.2.2.7
+ * draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST OBJECT Parameter)
  */
 export function getParameterLocationValue(param: Parameter): Location {
   const [location] = decodeLocation(param.value, 0);
@@ -211,7 +211,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
 
-  // draft-ietf-moq-transport-17 Section 9.20:
+  // draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
   // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
   if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
     throw new Error(
@@ -330,7 +330,8 @@ export function decodeLocation(data: Uint8Array, offset = 0): [Location, number]
 /**
  * 単一のパラメータを delta encoding でエンコードする
  *
- * draft-ietf-moq-transport-17 Section 9.2:
+ * draft-ietf-moq-transport-17 Section 1.4.3 (Key-Value-Pair Structure):
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-1.4.3
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *

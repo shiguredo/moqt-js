@@ -1,8 +1,8 @@
 /**
  * MOQT Setup Messages
- * draft-ietf-moq-transport-17 Section 9.4
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP)
  *
- * draft-ietf-moq-transport-17 Section 9.4:
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
  * https://github.com/moq-wg/moq-transport/pull/1510
  */
@@ -14,7 +14,7 @@ import { MessageType, SetupOptionType } from "./types";
 /**
  * SETUP メッセージ
  *
- * draft-ietf-moq-transport-17 Section 9.4:
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
  * https://github.com/moq-wg/moq-transport/pull/1510
  */
@@ -44,7 +44,7 @@ export function createSetup(options?: { path?: string; authority?: string }): Se
     });
   }
 
-  // MOQT_IMPLEMENTATION (0x07) - Section 9.4.1.4
+  // MOQT_IMPLEMENTATION (0x07) - Section 9.4.1.5 (MOQT IMPLEMENTATION)
   // 実装名とバージョンを送信
   parameters.push({
     type: SetupOptionType.MOQT_IMPLEMENTATION,
@@ -60,7 +60,7 @@ export function createSetup(options?: { path?: string; authority?: string }): Se
 /**
  * Setup のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.4:
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
@@ -74,7 +74,7 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
 /**
  * Setup のペイロードをデコード
  *
- * draft-ietf-moq-transport-17 Section 9.4:
+ * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  */

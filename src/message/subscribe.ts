@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages
- * draft-ietf-moq-transport-17 Section 9.8-9.10
+ * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE) — 9.9 (SUBSCRIBE_OK) — 9.10 (REQUEST_UPDATE)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -16,7 +16,7 @@ import {
 import { MessageType } from "./types";
 
 /**
- * SUBSCRIBE メッセージ (Section 9.9)
+ * SUBSCRIBE メッセージ (Section 9.8 SUBSCRIBE)
  *
  * draft-ietf-moq-transport-17:
  * SUBSCRIBE does NOT include Track Alias.
@@ -25,7 +25,7 @@ import { MessageType } from "./types";
 export interface Subscribe {
   type: typeof MessageType.SUBSCRIBE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
@@ -34,15 +34,12 @@ export interface Subscribe {
 }
 
 /**
- * SUBSCRIBE_OK メッセージ (Section 9.10)
+ * SUBSCRIBE_OK メッセージ (Section 9.9 SUBSCRIBE_OK)
  *
  * draft-ietf-moq-transport-17:
- * Track Extensions が追加された。
+ * - 双方向ストリーム上で送信されるため Request ID は不要。
+ * - Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
- */
-/**
- * draft-ietf-moq-transport-17 Section 9.9:
- * 双方向ストリーム上で送信されるため Request ID は不要。
  */
 export interface SubscribeOk {
   type: typeof MessageType.SUBSCRIBE_OK;
@@ -52,7 +49,7 @@ export interface SubscribeOk {
 }
 
 /**
- * REQUEST_UPDATE メッセージ (Section 9.10)
+ * REQUEST_UPDATE メッセージ (Section 9.10 REQUEST_UPDATE)
  *
  * draft-ietf-moq-transport-17:
  * 既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
@@ -62,7 +59,7 @@ export interface SubscribeOk {
 export interface RequestUpdate {
   type: typeof MessageType.REQUEST_UPDATE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   parameters: Parameter[];
@@ -71,7 +68,7 @@ export interface RequestUpdate {
 /**
  * Subscribe のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.9:
+ * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
  * SUBSCRIBE Message {
  *   Type (i) = 0x3,
  *   Length (16),
@@ -148,9 +145,8 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-/**
- * draft-ietf-moq-transport-17 Section 9.9:
+ *
+ * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
  * SUBSCRIBE_OK Message {
  *   Type (i) = 0x4,
  *   Length (16),
@@ -166,7 +162,7 @@ export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-17 Section 9.9:
+  // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -192,7 +188,7 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
 
-  // draft-ietf-moq-transport-17 Section 9.9:
+  // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
@@ -208,7 +204,7 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
 /**
  * RequestUpdate のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.11:
+ * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE):
  * REQUEST_UPDATE Message {
  *   Type (i) = 0x2,
  *   Length (16),

@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.17-9.21
+ * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE) — 9.21 (PUBLISH_BLOCKED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -26,7 +26,7 @@ import { encodeVarint } from "../varint";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.3:
+ * draft-ietf-moq-transport-17 Section 9.3 (Message Parameter):
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc

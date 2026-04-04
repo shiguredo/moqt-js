@@ -1,6 +1,6 @@
 /**
  * MOQT TrackStatus Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.19
+ * draft-ietf-moq-transport-17 Section 9.16
  */
 
 import { test, assert } from "vite-plus/test";

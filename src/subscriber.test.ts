@@ -1,6 +1,6 @@
 /**
  * Subscriber Unit Tests
- * draft-ietf-moq-transport-17 Section 5.1
+ * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -101,7 +101,7 @@ test("update は closed 状態ではエラーになる", async () => {
   }
 });
 
-// draft-ietf-moq-transport-17 Section 9.13:
+// draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
 // PUBLISH_DONE の statusCode が 0x0 (TRACK_ENDED) 以外の場合、errorCallback を呼ぶ
 test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -129,7 +129,7 @@ test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", (
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-17 Section 9.13:
+// draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
 // PUBLISH_DONE の statusCode が 0x0 (TRACK_ENDED) の場合、errorCallback を呼ばない
 test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
   let endCalled = false;
@@ -154,7 +154,7 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
   assert.isFalse(errorCalled);
 });
 
-// draft-ietf-moq-transport-17 Section 9.9:
+// draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
 // SUBSCRIBE_OK の Track Properties が Subscriber に設定される
 test("setTrackProperties で Track Properties が設定される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -172,7 +172,7 @@ test("setTrackProperties で Track Properties が設定される", () => {
   assert.equal(subscriber.trackProperties[1].id, 0x04n);
 });
 
-// draft-ietf-moq-transport-17 Section 9.2.1.9:
+// draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST OBJECT Parameter):
 // setLargestLocation で largestLocation が更新される
 test("setLargestLocation で largestLocation が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});

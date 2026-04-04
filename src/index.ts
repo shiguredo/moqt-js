@@ -38,7 +38,7 @@ export type { Fetcher } from "./fetcher";
 // Re-export error types
 export { MoqtError, SessionError, RequestError, SessionErrorCode, RequestErrorCode } from "./error";
 
-// Re-export GREASE (draft-ietf-moq-transport-17 Section 13)
+// Re-export GREASE (draft-ietf-moq-transport-17 Section 13 (Grease))
 export { isGreaseValue, generateGreaseValue } from "./grease";
 
 // Re-export LOC (draft-ietf-moq-loc)
@@ -87,7 +87,7 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
-// Re-export MOQT Extensions (draft-ietf-moq-transport-17 Section 11)
+// Re-export MOQT Extensions (draft-ietf-moq-transport-17 Section 11 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,

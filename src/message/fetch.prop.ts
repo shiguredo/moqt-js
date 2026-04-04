@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.16-9.17
+ * draft-ietf-moq-transport-17 Section 9.14-9.15
  */
 
 import { test, assert } from "vite-plus/test";

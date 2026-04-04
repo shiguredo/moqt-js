@@ -1,6 +1,6 @@
 /**
  * MOQT Track Status Message
- * draft-ietf-moq-transport-17 Section 9.16
+ * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
  *
  * TRACK_STATUS のメッセージフォーマットは SUBSCRIBE と同一。
  * トラックの状態を問い合わせるために使用し、実際にサブスクライブはしない。
@@ -25,7 +25,7 @@ import {
 import { MessageType } from "./types";
 
 /**
- * TRACK_STATUS メッセージ (Section 9.19)
+ * TRACK_STATUS メッセージ (Section 9.16 TRACK_STATUS)
  *
  * SUBSCRIBE と同じフォーマットだが、トラックの状態照会用。
  * サブスクリプション状態を作成せず、オブジェクトも送信しない。
@@ -37,7 +37,7 @@ import { MessageType } from "./types";
 export interface TrackStatus {
   type: typeof MessageType.TRACK_STATUS;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
@@ -48,7 +48,7 @@ export interface TrackStatus {
 /**
  * TrackStatus のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.19:
+ * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
  * TRACK_STATUS message format is identical to the SUBSCRIBE message.
  */
 export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {

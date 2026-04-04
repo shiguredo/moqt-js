@@ -1,6 +1,6 @@
 /**
  * GREASE (Generate Random Extensions And Sustain Extensibility)
- * draft-ietf-moq-transport-17 Section 13
+ * draft-ietf-moq-transport-17 Section 13 (Grease)
  *
  * 未知の値を正しくハンドリングすることを保証するために、
  * 各レジストリに GREASE 用の予約値が定義されている。

@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Unit Tests
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-17 Section 9.3 (Message Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -31,7 +31,8 @@ test("無効なフィルタタイプでエラー", () => {
 
 /**
  * delta encoding のテスト
- * draft-ietf-moq-transport-17 Section 9.2:
+ * draft-ietf-moq-transport-17 Section 1.4.3 (Key-Value-Pair Structure):
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-1.4.3
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  */
