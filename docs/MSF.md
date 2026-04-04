@@ -165,7 +165,7 @@ Catalog は JSON 形式の MOQT トラックで、配信可能なトラックの
 
 ### フォーマット
 
-JSON 配列。各要素は `[mediaPts, [groupId, objectId], wallclock]` の形式。
+JSON 配列。各要素は `[mediaPts, [groupId, objectId], wallclock]` の形式。`draft-ietf-moq-msf-00` Section 7.1 に従い、ドキュメント全体を gzip 圧縮してよい。
 
 ```json
 [
@@ -186,13 +186,19 @@ JSON 配列。各要素は `[mediaPts, [groupId, objectId], wallclock]` の形�
 }
 ```
 
+### moqt-js API
+
+- `await encodeMediaTimeline(entries)` で非圧縮 JSON を生成する
+- `await encodeMediaTimeline(entries, { gzip: true })` で gzip 圧縮 JSON を生成する
+- `await decodeMediaTimeline(data)` は gzip マジック (`0x1F 0x8B`) を検出すると自動で展開する
+
 ## Event Timeline トラック
 
 任意のイベントメタデータをブロードキャストに関連付ける。スポーツのスコア、GPS 座標、アクティブスピーカー通知など。
 
 ### フォーマット
 
-JSON 配列。各要素にはインデックス参照 (`t`: 壁時計時間, `l`: Location, `m`: Media PTS) と `data` オブジェクトを含む。
+JSON 配列。各要素にはインデックス参照 (`t`: 壁時計時間, `l`: Location, `m`: Media PTS) と `data` オブジェクトを含む。`draft-ietf-moq-msf-00` Section 8.1 に従い、ドキュメント全体を gzip 圧縮してよい。
 
 ```json
 [
@@ -206,6 +212,12 @@ JSON 配列。各要素にはインデックス参照 (`t`: 壁時計時間, `l`
   }
 ]
 ```
+
+### moqt-js API
+
+- `await encodeEventTimeline(entries)` で非圧縮 JSON を生成する
+- `await encodeEventTimeline(entries, { gzip: true })` で gzip 圧縮 JSON を生成する
+- `await decodeEventTimeline(data)` は gzip マジック (`0x1F 0x8B`) を検出すると自動で展開する
 
 ## メディア伝送
 
