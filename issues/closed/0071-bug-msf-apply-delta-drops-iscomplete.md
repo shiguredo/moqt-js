@@ -1,6 +1,7 @@
 # applyCatalogDelta の戻りが isComplete を引き継がない
 
 Created: 2026-04-04
+Completed: 2026-04-04
 Model: Composer 2 Fast
 
 ## なぜこの対応が必要か
@@ -17,3 +18,15 @@ Model: Composer 2 Fast
 ## 優先度
 
 確認済み一覧の 4 位（issue 候補 D）。
+
+## 解決方法
+
+`applyCatalogDelta` の戻り値構築部分で `current.isComplete` を引き継ぐよう変更した。
+
+```typescript
+if (current.isComplete !== undefined) {
+  result.isComplete = current.isComplete;
+}
+```
+
+`isComplete` が `undefined` の場合は引き継がないため、未設定の状態が正しく伝播する。

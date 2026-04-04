@@ -1,6 +1,7 @@
 # cloneTracks で parentName 欠如や親不明を黙って無視する
 
 Created: 2026-04-04
+Completed: 2026-04-04
 Model: Composer 2 Fast
 
 ## なぜこの対応が必要か
@@ -9,13 +10,13 @@ Model: Composer 2 Fast
 
 ### 論点 A（仕様に直結）
 
-[draft-ietf-moq-msf-00 §5.1.5](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-00#section-5.1.5) では、`cloneTracks` の各トラックオブジェクトに **Parent Name（§5.1.36）が必須** とある（*Each track object MUST include a Parent Name*）。
+[draft-ietf-moq-msf-00 §5.1.5](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-00#section-5.1.5) では、`cloneTracks` の各トラックオブジェクトに **Parent Name（§5.1.36）が必須** とある（_Each track object MUST include a Parent Name_）。
 
 `parentName` が欠けたオブジェクトを **検証せずに通す** のは、この MUST に対するギャップとして整理できる。
 
 ### 論点 B（仕様本文だけでは断定しにくい／設計判断）
 
-`parentName` はあるが **その名前のトラックが現在の `tracks` に存在しない**場合に、エラーにすべきか、黙ってスキップか、別の結果型にするかは、§5.1.5 の一文だけでは **必ずエラー**とは読み取れない。§5.2 の *"successfully applied"* の解釈も複数ありうる。
+`parentName` はあるが **その名前のトラックが現在の `tracks` に存在しない**場合に、エラーにすべきか、黙ってスキップか、別の結果型にするかは、§5.1.5 の一文だけでは **必ずエラー**とは読み取れない。§5.2 の _"successfully applied"_ の解釈も複数ありうる。
 
 ここは **実装方針・設計判断**として明示し、受け入れ条件に書くこと。論点 A と同列の「仕様違反」として束ねない。
 
@@ -35,3 +36,25 @@ Model: Composer 2 Fast
 
 - 論点 A: `parentName` 欠如を **型・実行時検証のどちらで弾くか** を決める。
 - 論点 B: 親不明時の挙動を **エラー / Result / ログのみ** などから選び、本文または PR に記載する。
+
+## 解決方法
+
+### 論点 A の対応
+
+`applyCatalogDelta` 内の clone 処理で `parentName` が欠如している場合にエラーをスローするよう変更した。
+
+```typescript
+if (!cloneTrack.parentName) {
+  throw new Error(`clone track missing parentName: name="${cloneTrack.name}"`);
+}
+```
+
+### 論点 B の対応
+
+親トラックが存在しない場合もエラーをスローする方針を選択した。デルタ適用の整合性を保つため、曖昧な状態で処理を続行するより明示的なエラーが適切と判断した。
+
+```typescript
+if (!baseTrack) {
+  throw new Error(`clone track parent not found: parentName="${cloneTrack.parentName}"`);
+}
+```

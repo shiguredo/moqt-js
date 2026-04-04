@@ -11,6 +11,22 @@
 
 ## develop
 
+- [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
+  - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
+  - @voluntas
+- [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
+  - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
+  - @voluntas
+- [FIX] Event Timeline デコードが §8.1 のインデックス必須を検証していない問題を修正する (#0069)
+  - `t`/`l`/`m` がちょうど 1 つであることを検証するようにする
+  - @voluntas
+- [FIX] cloneTracks で parentName 欠如や親不明を黙って無視する問題を修正する (#0070)
+  - `parentName` が欠如している場合にエラーをスローするようにする
+  - 親トラックが存在しない場合にエラーをスローするようにする
+  - @voluntas
+- [FIX] applyCatalogDelta の戻りが isComplete を引き継がない問題を修正する (#0071)
+  - draft-ietf-moq-msf-00 §5.1.7 の「isComplete は削除禁止」に準拠する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更

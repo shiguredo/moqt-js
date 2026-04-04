@@ -105,24 +105,31 @@ const mediaTimelineEntryArb: fc.Arbitrary<MediaTimelineEntry> = fc.tuple(
 );
 
 /**
- * Event Timeline エントリの Arbitrary
+ * Event Timeline エントリのイベントデータ Arbitrary
  */
-const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.record({
-  t: fc.option(fc.nat({ max: Date.now() + 86400000 }), { nil: undefined }),
-  l: fc.option(fc.tuple(bigUintArb, bigUintArb), { nil: undefined }),
-  m: fc.option(fc.nat({ max: 86400000 }), { nil: undefined }),
-  data: fc.oneof(
-    fc.object({
-      key: fc.string({ maxLength: 16 }),
-      values: [fc.string(), fc.nat(), fc.boolean()],
-      maxDepth: 1,
-      maxKeys: 5,
-    }),
-    fc.array(fc.oneof(fc.nat(), fc.string(), fc.boolean()), { maxLength: 5 }),
-    fc.string(),
-    fc.nat(),
-  ) as fc.Arbitrary<unknown>,
-});
+const eventDataArb: fc.Arbitrary<unknown> = fc.oneof(
+  fc.object({
+    key: fc.string({ maxLength: 16 }),
+    values: [fc.string(), fc.nat(), fc.boolean()],
+    maxDepth: 1,
+    maxKeys: 5,
+  }),
+  fc.array(fc.oneof(fc.nat(), fc.string(), fc.boolean()), { maxLength: 5 }),
+  fc.string(),
+  fc.nat(),
+) as fc.Arbitrary<unknown>;
+
+/**
+ * Event Timeline エントリの Arbitrary
+ *
+ * draft-ietf-moq-msf-00 §8.1: t/l/m のいずれかちょうど 1 つが必須。
+ * 3 種類のインデックス形式を均等に生成する。
+ */
+const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.oneof(
+  fc.record({ t: fc.nat({ max: Date.now() + 86400000 }), data: eventDataArb }),
+  fc.record({ l: fc.tuple(bigUintArb, bigUintArb), data: eventDataArb }),
+  fc.record({ m: fc.nat({ max: 86400000 }), data: eventDataArb }),
+);
 
 // =============================================================================
 // Catalog テスト
@@ -391,7 +398,7 @@ test("applyCatalogDelta: addTracks でトラックを追加", () => {
 
   const delta: CatalogDelta = {
     deltaUpdate: true,
-    addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -411,7 +418,7 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
 
   const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: [{ name: "audio" }],
+    operations: [{ type: "remove", tracks: [{ name: "audio" }] }],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -429,14 +436,19 @@ test("applyCatalogDelta: cloneTracks で parentName を使用して複製", () =
 
   const delta: CatalogDelta = {
     deltaUpdate: true,
-    cloneTracks: [
+    operations: [
       {
-        name: "video-sd",
-        packaging: "loc",
-        isLive: true,
-        parentName: "video",
-        width: 640,
-        height: 480,
+        type: "clone",
+        tracks: [
+          {
+            name: "video-sd",
+            packaging: "loc",
+            isLive: true,
+            parentName: "video",
+            width: 640,
+            height: 480,
+          },
+        ],
       },
     ],
   };
@@ -449,7 +461,7 @@ test("applyCatalogDelta: cloneTracks で parentName を使用して複製", () =
   assert.strictEqual(result.tracks[1].height, 480);
 });
 
-test("applyCatalogDelta: 複合操作 (remove + add)", () => {
+test("applyCatalogDelta: 複合操作 (remove → add)", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [
@@ -460,8 +472,10 @@ test("applyCatalogDelta: 複合操作 (remove + add)", () => {
 
   const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: [{ name: "video-hd" }],
-    addTracks: [{ name: "video-sd", packaging: "loc", isLive: true }],
+    operations: [
+      { type: "remove", tracks: [{ name: "video-hd" }] },
+      { type: "add", tracks: [{ name: "video-sd", packaging: "loc", isLive: true }] },
+    ],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -828,29 +842,37 @@ test("仕様書例: Delta update - adding tracks", () => {
   const delta: CatalogDelta = {
     deltaUpdate: true,
     generatedAt: 1746104606044,
-    addTracks: [
+    operations: [
       {
-        name: "slides",
-        isLive: true,
-        packaging: "loc",
-        role: "video",
-        codec: "av01.0.08M.10.0.110.09",
-        width: 1920,
-        height: 1080,
-        framerate: 15,
-        bitrate: 750000,
-        renderGroup: 1,
+        type: "add",
+        tracks: [
+          {
+            name: "slides",
+            isLive: true,
+            packaging: "loc",
+            role: "video",
+            codec: "av01.0.08M.10.0.110.09",
+            width: 1920,
+            height: 1080,
+            framerate: 15,
+            bitrate: 750000,
+            renderGroup: 1,
+          },
+        ],
       },
-    ],
-    cloneTracks: [
       {
-        name: "video-720",
-        packaging: "loc",
-        isLive: true,
-        parentName: "video-1080",
-        width: 1280,
-        height: 720,
-        bitrate: 600000,
+        type: "clone",
+        tracks: [
+          {
+            name: "video-720",
+            packaging: "loc",
+            isLive: true,
+            parentName: "video-1080",
+            width: 1280,
+            height: 720,
+            bitrate: 600000,
+          },
+        ],
       },
     ],
   };
@@ -891,7 +913,7 @@ test("仕様書例: Delta update - removing tracks", () => {
   const delta: CatalogDelta = {
     deltaUpdate: true,
     generatedAt: 1746104606044,
-    removeTracks: [{ name: "video" }, { name: "slides" }],
+    operations: [{ type: "remove", tracks: [{ name: "video" }, { name: "slides" }] }],
   };
 
   const current: Catalog = {
@@ -960,8 +982,8 @@ test("仕様書例: VOD Audio/Video Tracks", () => {
   assert.isUndefined(catalog.generatedAt);
 });
 
-test("Delta Updates: 操作の順序 (removeTracks → addTracks → cloneTracks)", () => {
-  // 同名のトラックを削除してから追加する場合
+test("Delta Updates: 操作の順序 (removeTracks → addTracks)", () => {
+  // draft-ietf-moq-msf-00 §5.2: 同名のトラックを削除してから追加する場合
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [
@@ -972,8 +994,13 @@ test("Delta Updates: 操作の順序 (removeTracks → addTracks → cloneTracks
 
   const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: [{ name: "video" }],
-    addTracks: [{ name: "video", packaging: "loc", isLive: true, bitrate: 2000000 }],
+    operations: [
+      { type: "remove", tracks: [{ name: "video" }] },
+      {
+        type: "add",
+        tracks: [{ name: "video", packaging: "loc", isLive: true, bitrate: 2000000 }],
+      },
+    ],
   };
 
   const result = applyCatalogDelta(current, delta);

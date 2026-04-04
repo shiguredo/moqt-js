@@ -149,23 +149,29 @@ export interface Catalog {
 }
 
 /**
+ * 差分更新カタログの操作 (Section 5.2)
+ *
+ * The Add, Delete and Clone operations are applied sequentially
+ * in the order they are declared in the document.
+ */
+export type CatalogDeltaOperation =
+  | { type: "add"; tracks: CatalogTrack[] }
+  | { type: "remove"; tracks: RemoveTrack[] }
+  | { type: "clone"; tracks: CatalogTrack[] };
+
+/**
  * 差分更新カタログ (Section 5.2)
  *
  * Delta update は version と tracks を含んではならない (MUST NOT)。
- * addTracks, removeTracks, cloneTracks のうち少なくとも 1 つが必須。
+ * operations に少なくとも 1 つの操作が必須。
+ * 操作は JSON ドキュメント内の宣言順に逐次適用される。
  */
 export interface CatalogDelta {
   /** 差分更新フラグ (必須, Section 5.1.2) */
   deltaUpdate: true;
 
-  /** 追加するトラック (Section 5.1.3) */
-  addTracks?: CatalogTrack[];
-
-  /** 削除するトラック (Section 5.1.4) */
-  removeTracks?: RemoveTrack[];
-
-  /** 複製するトラック (Section 5.1.5) */
-  cloneTracks?: CatalogTrack[];
+  /** 操作リスト (宣言順, Section 5.2) */
+  operations: CatalogDeltaOperation[];
 
   /** 生成時刻 (Unix ms, Section 5.1.6) */
   generatedAt?: number;
@@ -231,10 +237,35 @@ export function encodeCatalog(catalog: Catalog): Uint8Array {
 }
 
 /**
- * 差分更新カタログを JSON 文字列にエンコードする
+ * 差分更新カタログを JSON 文字列にエンコードする (Section 5.2)
+ *
+ * operations の宣言順を JSON キー順として出力する。
  */
 export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
-  const json = JSON.stringify(delta);
+  const obj: Record<string, unknown> = { deltaUpdate: true };
+
+  // JSON オブジェクトのキーは重複できないため、同一タイプの操作は 1 回のみ許可する
+  const seen = new Set<string>();
+  for (const operation of delta.operations) {
+    if (seen.has(operation.type)) {
+      throw new Error(`duplicate operation type: "${operation.type}"`);
+    }
+    seen.add(operation.type);
+
+    if (operation.type === "add") {
+      obj["addTracks"] = operation.tracks;
+    } else if (operation.type === "remove") {
+      obj["removeTracks"] = operation.tracks;
+    } else if (operation.type === "clone") {
+      obj["cloneTracks"] = operation.tracks;
+    }
+  }
+
+  if (delta.generatedAt !== undefined) {
+    obj["generatedAt"] = delta.generatedAt;
+  }
+
+  const json = JSON.stringify(obj);
   return new TextEncoder().encode(json);
 }
 
@@ -243,6 +274,9 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
  *
  * deltaUpdate: true の場合は CatalogDelta として、
  * そうでない場合はフルカタログ (Catalog) としてデコードする。
+ *
+ * CatalogDelta のデコードでは JSON オブジェクトのキー宣言順を operations 配列として保持する。
+ * これにより §5.2 の「宣言順に逐次適用」を正確に再現できる。
  */
 export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
   const json = new TextDecoder().decode(data);
@@ -256,10 +290,11 @@ export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
 
   // deltaUpdate: true の場合は差分更新
   if (obj["deltaUpdate"] === true) {
-    if (!isCatalogDelta(obj)) {
+    const delta = decodeCatalogDelta(obj);
+    if (delta === null) {
       throw new Error("invalid catalog delta format");
     }
-    return obj as unknown as CatalogDelta;
+    return delta;
   }
 
   // それ以外はフルカタログ
@@ -268,6 +303,80 @@ export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
   }
 
   return obj as unknown as Catalog;
+}
+
+/**
+ * オブジェクトを CatalogDelta にデコードする (Section 5.2)
+ *
+ * JSON キーの宣言順を操作順として operations 配列に変換する。
+ * V8 をはじめ現代の JS エンジンは非整数キーの挿入順を保持するため、
+ * Object.keys() の順序が JSON の宣言順と一致する。
+ */
+function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta | null {
+  // deltaUpdate: true は必須
+  if (obj["deltaUpdate"] !== true) {
+    return null;
+  }
+
+  // version と tracks を含んではならない (MUST NOT)
+  if ("version" in obj || "tracks" in obj) {
+    return null;
+  }
+
+  // addTracks, removeTracks, cloneTracks のうち少なくとも 1 つが必須
+  const hasAddTracks = Array.isArray(obj["addTracks"]);
+  const hasRemoveTracks = Array.isArray(obj["removeTracks"]);
+  const hasCloneTracks = Array.isArray(obj["cloneTracks"]);
+
+  if (!hasAddTracks && !hasRemoveTracks && !hasCloneTracks) {
+    return null;
+  }
+
+  // 各操作内のトラックを検証する
+  if (hasAddTracks) {
+    for (const track of obj["addTracks"] as unknown[]) {
+      if (!isCatalogTrack(track)) {
+        return null;
+      }
+    }
+  }
+  if (hasRemoveTracks) {
+    for (const track of obj["removeTracks"] as unknown[]) {
+      if (!isRemoveTrack(track)) {
+        return null;
+      }
+    }
+  }
+  if (hasCloneTracks) {
+    for (const track of obj["cloneTracks"] as unknown[]) {
+      if (!isCatalogTrack(track)) {
+        return null;
+      }
+    }
+  }
+
+  // JSON キー宣言順で操作リストを構築する
+  const operations: CatalogDeltaOperation[] = [];
+  for (const key of Object.keys(obj)) {
+    if (key === "addTracks" && hasAddTracks) {
+      operations.push({ type: "add", tracks: obj["addTracks"] as CatalogTrack[] });
+    } else if (key === "removeTracks" && hasRemoveTracks) {
+      operations.push({ type: "remove", tracks: obj["removeTracks"] as RemoveTrack[] });
+    } else if (key === "cloneTracks" && hasCloneTracks) {
+      operations.push({ type: "clone", tracks: obj["cloneTracks"] as CatalogTrack[] });
+    }
+  }
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations,
+  };
+
+  if (typeof obj["generatedAt"] === "number") {
+    delta.generatedAt = obj["generatedAt"];
+  }
+
+  return delta;
 }
 
 /**
@@ -296,25 +405,20 @@ function isCatalog(obj: Record<string, unknown>): boolean {
 }
 
 /**
- * オブジェクトが差分更新カタログかどうかを検証する (Section 5.2)
+ * オブジェクトが RemoveTrack かどうかを検証する (Section 5.1.4)
+ *
+ * Each track object MUST include a Track Name field,
+ * MAY include a Track Namespace field and MUST NOT hold any other fields.
  */
-function isCatalogDelta(obj: Record<string, unknown>): boolean {
-  // deltaUpdate: true は必須
-  if (obj["deltaUpdate"] !== true) {
+function isRemoveTrack(obj: unknown): obj is RemoveTrack {
+  if (typeof obj !== "object" || obj === null) {
     return false;
   }
 
-  // version と tracks を含んではならない (MUST NOT)
-  if ("version" in obj || "tracks" in obj) {
-    return false;
-  }
+  const track = obj as Record<string, unknown>;
 
-  // addTracks, removeTracks, cloneTracks のうち少なくとも 1 つが必須
-  const hasAddTracks = Array.isArray(obj["addTracks"]);
-  const hasRemoveTracks = Array.isArray(obj["removeTracks"]);
-  const hasCloneTracks = Array.isArray(obj["cloneTracks"]);
-
-  if (!hasAddTracks && !hasRemoveTracks && !hasCloneTracks) {
+  // name は必須
+  if (typeof track["name"] !== "string") {
     return false;
   }
 
@@ -494,7 +598,11 @@ export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
  * オブジェクトが Event Timeline エントリかどうかを検証する (Section 8.1)
  *
  * data は必須 (任意の JSON 値)。
- * t, l, m はインデックス参照で、少なくとも 1 つが必要。
+ * t (壁時計), l (Location), m (メディア PTS) はインデックス参照で、
+ * ちょうど 1 つのみが必須。同一レコード内で複数のインデックスは禁止。
+ *
+ * Each record MUST contain exactly one of the following index references:
+ * a wall clock time, a Location, or a Media PTS.
  */
 function isEventTimelineEntry(entry: unknown): boolean {
   if (typeof entry !== "object" || entry === null) {
@@ -508,13 +616,13 @@ function isEventTimelineEntry(entry: unknown): boolean {
     return false;
   }
 
-  // t はオプションだが、存在する場合は number
+  // t は存在する場合は number
   const t = obj["t"];
   if (t !== undefined && typeof t !== "number") {
     return false;
   }
 
-  // l はオプションだが、存在する場合は [number, number]
+  // l は存在する場合は [number, number]
   const l = obj["l"];
   if (l !== undefined) {
     if (!Array.isArray(l) || l.length !== 2) {
@@ -525,9 +633,16 @@ function isEventTimelineEntry(entry: unknown): boolean {
     }
   }
 
-  // m はオプションだが、存在する場合は number
+  // m は存在する場合は number
   const m = obj["m"];
   if (m !== undefined && typeof m !== "number") {
+    return false;
+  }
+
+  // ちょうど 1 つのインデックスが必須 (Section 8.1)
+  const indexCount =
+    (t !== undefined ? 1 : 0) + (l !== undefined ? 1 : 0) + (m !== undefined ? 1 : 0);
+  if (indexCount !== 1) {
     return false;
   }
 
@@ -607,52 +722,63 @@ export function createCompleteCatalog(): Catalog {
  *
  * The Add, Delete and Clone operations are applied sequentially
  * in the order they are declared in the document.
+ *
+ * isComplete は一度設定したら削除禁止 (MUST NOT) のため引き継ぐ (Section 5.1.7)。
  */
 export function applyCatalogDelta(current: Catalog, delta: CatalogDelta): Catalog {
   let tracks = [...current.tracks];
 
-  // removeTracks: 指定されたトラックを name (+namespace) で削除 (Section 5.1.4)
-  if (delta.removeTracks && delta.removeTracks.length > 0) {
-    for (const removeTrack of delta.removeTracks) {
-      tracks = tracks.filter((track) => {
-        if (track.name !== removeTrack.name) {
-          return true;
+  // 操作を宣言順に逐次適用する (Section 5.2)
+  for (const operation of delta.operations) {
+    if (operation.type === "remove") {
+      // 指定されたトラックを name (+namespace) で削除 (Section 5.1.4)
+      for (const removeTrack of operation.tracks) {
+        tracks = tracks.filter((track) => {
+          if (track.name !== removeTrack.name) {
+            return true;
+          }
+          // namespace が指定されている場合はそれも一致する必要がある
+          if (removeTrack.namespace !== undefined) {
+            return track.namespace !== removeTrack.namespace;
+          }
+          return false;
+        });
+      }
+    } else if (operation.type === "add") {
+      // 新しいトラックを追加 (Section 5.1.3)
+      tracks = [...tracks, ...operation.tracks];
+    } else if (operation.type === "clone") {
+      // parentName で指定された既存トラックを複製して追加 (Section 5.1.5, 5.1.36)
+      for (const cloneTrack of operation.tracks) {
+        // parentName は必須 (Section 5.1.5: Each track object MUST include a Parent Name field)
+        if (!cloneTrack.parentName) {
+          throw new Error(`clone track missing parentName: name="${cloneTrack.name}"`);
         }
-        // namespace が指定されている場合はそれも一致する必要がある
-        if (removeTrack.namespace !== undefined) {
-          return track.namespace !== removeTrack.namespace;
-        }
-        return false;
-      });
-    }
-  }
-
-  // addTracks: 新しいトラックを追加 (Section 5.1.3)
-  if (delta.addTracks && delta.addTracks.length > 0) {
-    tracks = [...tracks, ...delta.addTracks];
-  }
-
-  // cloneTracks: parentName で指定された既存トラックを複製して追加 (Section 5.1.5, 5.1.36)
-  if (delta.cloneTracks && delta.cloneTracks.length > 0) {
-    for (const cloneTrack of delta.cloneTracks) {
-      if (cloneTrack.parentName) {
         const baseTrack = tracks.find((t) => t.name === cloneTrack.parentName);
-        if (baseTrack) {
-          // ベーストラックをコピーして cloneTrack のプロパティで上書き
-          // parentName はクローン後のトラックからは削除する
-          const { parentName: _, ...cloneProps } = cloneTrack;
-          const cloned: CatalogTrack = { ...baseTrack, ...cloneProps };
-          tracks.push(cloned);
+        if (!baseTrack) {
+          throw new Error(`clone track parent not found: parentName="${cloneTrack.parentName}"`);
         }
+        // ベーストラックをコピーして cloneTrack のプロパティで上書き
+        // parentName はクローン後のトラックからは削除する
+        const { parentName: _, ...cloneProps } = cloneTrack;
+        const cloned: CatalogTrack = { ...baseTrack, ...cloneProps };
+        tracks.push(cloned);
       }
     }
   }
 
-  return {
+  const result: Catalog = {
     version: MSF_VERSION,
     tracks,
     generatedAt: delta.generatedAt ?? current.generatedAt,
   };
+
+  // isComplete は一度設定したら削除禁止 (MUST NOT) のため引き継ぐ (Section 5.1.7)
+  if (current.isComplete !== undefined) {
+    result.isComplete = current.isComplete;
+  }
+
+  return result;
 }
 
 // =============================================================================

@@ -1,6 +1,7 @@
 # MSF カタログ差分の適用順が仕様と一致しない
 
 Created: 2026-04-04
+Completed: 2026-04-04
 Model: Composer 2 Fast
 
 ## なぜこの対応が必要か
@@ -34,3 +35,13 @@ Model: Composer 2 Fast
 ## 優先度
 
 確認済み一覧の 1 位（issue 候補 A）。
+
+## 解決方法
+
+`CatalogDelta` 型の `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し、`operations: CatalogDeltaOperation[]` に変更した。
+
+`CatalogDeltaOperation` はタグ付き union (`{ type: "add" | "remove" | "clone"; tracks: ... }`) で、操作の全順序を単一の配列として保持する。
+
+デコーダー (`decodeCatalogDelta`) では `Object.keys()` を使って JSON キーの宣言順に `operations` 配列を構築し、エンコーダー (`encodeCatalogDelta`) では `operations` の順序で JSON キーを出力する。
+
+`applyCatalogDelta` は `delta.operations` を先頭から順に適用するよう変更した。
