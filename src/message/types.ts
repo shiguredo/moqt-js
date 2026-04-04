@@ -232,6 +232,29 @@ export type PublishDoneStatusCode =
   (typeof PublishDoneStatusCode)[keyof typeof PublishDoneStatusCode];
 
 /**
+ * PUBLISH_DONE の Status Code がエラー（アプリに Error として通知すべき）かどうか
+ *
+ * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+ * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x6), UPDATE_FAILED (0x8),
+ * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
+ * TRACK_ENDED (0x2) 等はエラーとみなさない。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.13
+ */
+export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
+  switch (statusCode) {
+    case 0x0n:
+    case 0x1n:
+    case 0x6n:
+    case 0x8n:
+    case 0x9n:
+    case 0x12n:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
  * Namespace Subscribe Mode (Section 9.20 SUBSCRIBE_NAMESPACE, Subscribe Options)
  *
  * draft-ietf-moq-transport-17:

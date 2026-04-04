@@ -19,17 +19,17 @@ import { encodeVarint, decodeVarint } from "./varint";
  */
 export const MOQTPropertyId = {
   /**
-   * Immutable Extensions (Section 11.2)
+   * Immutable Properties (Section 11.6 Immutable Properties)
    * Relay が変更・削除できない拡張のコンテナ
    */
   IMMUTABLE_EXTENSIONS: 0x0bn,
   /**
-   * Prior Group ID Gap (Section 11.3)
+   * Prior Group ID Gap (Section 11.7 Prior Group ID Gap)
    * 現在の Group より前のスキップされた Group 数
    */
   PRIOR_GROUP_ID_GAP: 0x3cn,
   /**
-   * Prior Object ID Gap (Section 11.4)
+   * Prior Object ID Gap (Section 11.8 Prior Object ID Gap)
    * 現在の Object より前のスキップされた Object 数
    */
   PRIOR_OBJECT_ID_GAP: 0x3en,
@@ -105,7 +105,7 @@ export const PropertyTypeRange = {
 /**
  * Prior Group ID Gap
  *
- * draft-ietf-moq-transport-17 Section 11.3:
+ * draft-ietf-moq-transport-17 Section 11.7 (Prior Group ID Gap):
  * 現在の Group より前の、存在しない Group の数を示す。
  *
  * 例: Group 10 で gap = 2 の場合、Group 8 と 9 は存在しない。
@@ -117,7 +117,7 @@ export interface PriorGroupIdGap {
 /**
  * Prior Object ID Gap
  *
- * draft-ietf-moq-transport-17 Section 11.4:
+ * draft-ietf-moq-transport-17 Section 11.8 (Prior Object ID Gap):
  * 現在の Object より前の、存在しない Object の数を示す。
  *
  * 例: Object 10 で gap = 2 の場合、Object 8 と 9 は存在しない。
@@ -141,7 +141,7 @@ export interface Property {
 /**
  * Immutable Extensions
  *
- * draft-ietf-moq-transport-17 Section 11.2:
+ * draft-ietf-moq-transport-17 Section 11.6 (Immutable Properties):
  * Relay が変更・削除できない拡張のコンテナ。
  * 内部に Key-Value-Pair をネストできる。
  *
@@ -167,7 +167,7 @@ export interface ParsedProperties {
 /**
  * Prior Group ID Gap をエンコードする
  *
- * draft-ietf-moq-transport-17 Section 11.3:
+ * draft-ietf-moq-transport-17 Section 11.7 (Prior Group ID Gap):
  * ID (0x3C) は偶数なので varint value 形式
  */
 export function encodePriorGroupIdGap(gap: PriorGroupIdGap): Uint8Array {
@@ -193,7 +193,7 @@ export function decodePriorGroupIdGap(data: Uint8Array): PriorGroupIdGap {
 /**
  * Prior Object ID Gap をエンコードする
  *
- * draft-ietf-moq-transport-17 Section 11.4:
+ * draft-ietf-moq-transport-17 Section 11.8 (Prior Object ID Gap):
  * ID (0x3E) は偶数なので varint value 形式
  */
 export function encodePriorObjectIdGap(gap: PriorObjectIdGap): Uint8Array {
@@ -325,7 +325,7 @@ export function encodeProperties(headers: Property[]): Uint8Array {
 /**
  * Immutable Extensions をエンコードする
  *
- * draft-ietf-moq-transport-17 Section 11 (MOQT Properties):
+ * draft-ietf-moq-transport-17 Section 11.6 (Immutable Properties):
  * ID (0x0B) は奇数なので length + bytes 形式
  *
  * 内部には複数の Key-Value-Pair (Extension Header) をネストできる。

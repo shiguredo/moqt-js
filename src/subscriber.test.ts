@@ -102,7 +102,7 @@ test("update は closed 状態ではエラーになる", async () => {
 });
 
 // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
-// PUBLISH_DONE の statusCode が 0x0 (TRACK_ENDED) 以外の場合、errorCallback を呼ぶ
+// UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
 test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
   let errorMessage = "";
@@ -130,7 +130,7 @@ test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", (
 });
 
 // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
-// PUBLISH_DONE の statusCode が 0x0 (TRACK_ENDED) の場合、errorCallback を呼ばない
+// TRACK_ENDED (0x2) は正常終了。errorCallback は呼ばない
 test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
   let endCalled = false;
   let errorCalled = false;
@@ -149,9 +149,35 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
     },
   );
 
-  subscriber.handleEnd(0x0n, "");
+  subscriber.handleEnd(0x2n, "");
   assert.isTrue(endCalled);
   assert.isFalse(errorCalled);
+});
+
+// draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+// INTERNAL_ERROR (0x0) はエラー。errorCallback を呼ぶ
+test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
+  let endCalled = false;
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    () => {
+      errorCalled = true;
+    },
+  );
+
+  subscriber.handleEnd(0x0n, "internal");
+  assert.isTrue(endCalled);
+  assert.isTrue(errorCalled);
+  assert.equal(subscriber.state, "closed");
 });
 
 // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
