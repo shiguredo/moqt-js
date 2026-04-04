@@ -1,6 +1,6 @@
 /**
  * MOQT Extension Headers
- * draft-ietf-moq-transport-17 Section 11
+ * draft-ietf-moq-transport-17 Section 11 (MOQT Properties)
  *
  * Object Extension Headers として定義されている拡張。
  * LOC (draft-ietf-moq-loc) とは別の、MOQT 本体で定義された拡張。
@@ -50,7 +50,7 @@ export const MOQTPropertyId = {
  */
 export const TrackPropertyId = {
   /**
-   * Delivery Timeout (Section 11.1)
+   * Delivery Timeout (Section 11.1 DELIVERY TIMEOUT)
    * オブジェクトの配信タイムアウト（ミリ秒）
    *
    * draft-ietf-moq-transport-17:
@@ -58,17 +58,17 @@ export const TrackPropertyId = {
    */
   DELIVERY_TIMEOUT: 0x02n,
   /**
-   * Max Cache Duration (Section 11.1.1)
+   * Max Cache Duration (Section 11.2)
    * オブジェクトの最大キャッシュ期間（ミリ秒）
    */
   MAX_CACHE_DURATION: 0x04n,
   /**
-   * Publisher Priority (Section 11.1.1.1)
+   * Publisher Priority (Section 11.3)
    * Publisher が設定する優先度（0-255）
    */
   PUBLISHER_PRIORITY: 0x0en,
   /**
-   * Publisher Group Order Preference (Section 11.1.1.2)
+   * Publisher Group Order Preference (Section 11.4)
    *
    * draft-ietf-moq-transport-17:
    * GROUP_ORDER パラメータから分割された Publisher 向けの設定。
@@ -76,7 +76,7 @@ export const TrackPropertyId = {
    */
   PUBLISHER_GROUP_ORDER_PREFERENCE: 0x22n,
   /**
-   * Dynamic Groups (Section 11.1.1.3)
+   * Dynamic Groups (Section 11.5)
    * トラックが動的グループ作成をサポートするかどうか
    */
   DYNAMIC_GROUPS: 0x30n,
@@ -325,7 +325,7 @@ export function encodeProperties(headers: Property[]): Uint8Array {
 /**
  * Immutable Extensions をエンコードする
  *
- * draft-ietf-moq-transport-17 Section 11:
+ * draft-ietf-moq-transport-17 Section 11 (MOQT Properties):
  * ID (0x0B) は奇数なので length + bytes 形式
  *
  * 内部には複数の Key-Value-Pair (Extension Header) をネストできる。

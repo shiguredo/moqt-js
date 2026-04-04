@@ -1,6 +1,6 @@
 /**
  * MOQT Extension Headers Property-Based Tests
- * draft-ietf-moq-transport-17 Section 11
+ * draft-ietf-moq-transport-17 Section 11 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";

@@ -10,30 +10,30 @@
 import { encodeVarint, decodeVarint } from "./varint";
 
 /**
- * LOC Property ID (draft-ietf-moq-loc-02 Section 2.3)
+ * LOC Property ID (draft-ietf-moq-loc-02 Section 2.3 LOC Properties)
  *
  * ID が偶数の場合: varint value
  * ID が奇数の場合: length (varint) + bytes
  */
 export const LOCPropertyId = {
   /**
-   * Timestamp (draft-ietf-moq-loc-02 Section 2.3.1.1)
+   * Timestamp (draft-ietf-moq-loc-02 Section 2.3.1.1 Timestamp)
    * Timescale がない場合は Unix epoch からのマイクロ秒 (varint)
    * Timescale がある場合はメディア時間 (varint)
    */
   TIMESTAMP: 0x06n,
   /**
-   * Timescale (draft-ietf-moq-loc-02 Section 2.3.1.2)
+   * Timescale (draft-ietf-moq-loc-02 Section 2.3.1.2 Timescale)
    * 1 秒あたりの Timestamp 単位数 (varint)
    */
   TIMESCALE: 0x08n,
   /**
-   * Video Frame Marking (draft-ietf-moq-loc-02 Section 2.3.2.1)
+   * Video Frame Marking (draft-ietf-moq-loc-02 Section 2.3.2.2 Video Frame Marking)
    * RFC9626 準拠のフレームマーキング (varint)
    */
   VIDEO_FRAME_MARKING: 4n,
   /**
-   * Audio Level (draft-ietf-moq-loc-02 Section 2.3.3.1)
+   * Audio Level (draft-ietf-moq-loc-02 Section 2.3.3.1 Audio Level)
    * RFC6464 準拠のオーディオレベル (varint)
    *
    * 注意: AUDIO_LEVEL の ID は 6 (= 0x06) であり、TIMESTAMP (0x06) と衝突している。
@@ -42,7 +42,7 @@ export const LOCPropertyId = {
    */
   AUDIO_LEVEL: 6n,
   /**
-   * Config (draft-ietf-moq-loc-02 Section 2.3.2.2)
+   * Config (draft-ietf-moq-loc-02 Section 2.3.2.1 Video Config)
    * VideoDecoderConfig の description (length + bytes)
    */
   CONFIG: 13n,

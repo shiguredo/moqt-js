@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-17 Section 9.16-9.17
+ * draft-ietf-moq-transport-17 Section 9.14 (FETCH) — 9.15 (FETCH_OK)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -18,7 +18,7 @@ import {
 import { type Location, MessageType } from "./types";
 
 /**
- * Fetch Type (Section 9.16)
+ * Fetch Type (Section 9.14 FETCH)
  */
 export const FetchType = {
   STANDALONE: 0x01,
@@ -29,7 +29,7 @@ export const FetchType = {
 export type FetchType = (typeof FetchType)[keyof typeof FetchType];
 
 /**
- * Standalone Fetch structure (Section 9.16.1)
+ * Standalone Fetch structure (Section 9.14.1 Standalone Fetch)
  */
 export interface StandaloneFetch {
   trackNamespace: TrackNamespace;
@@ -39,7 +39,7 @@ export interface StandaloneFetch {
 }
 
 /**
- * Joining Fetch structure (Section 9.16.2)
+ * Joining Fetch structure (Section 9.14.2 Joining Fetches)
  */
 export interface JoiningFetch {
   joiningRequestId: bigint;
@@ -47,12 +47,12 @@ export interface JoiningFetch {
 }
 
 /**
- * FETCH メッセージ (Section 9.16)
+ * FETCH メッセージ (Section 9.14 FETCH)
  */
 export interface Fetch {
   type: typeof MessageType.FETCH;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   fetchType: FetchType;
@@ -62,15 +62,12 @@ export interface Fetch {
 }
 
 /**
- * FETCH_OK メッセージ (Section 9.17)
+ * FETCH_OK メッセージ (Section 9.15 FETCH_OK)
  *
  * draft-ietf-moq-transport-17:
- * Track Extensions が追加された。
+ * - 双方向ストリーム上で送信されるため Request ID は不要。
+ * - Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
- */
-/**
- * draft-ietf-moq-transport-17 Section 9.15:
- * 双方向ストリーム上で送信されるため Request ID は不要。
  */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
@@ -195,7 +192,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-17 Section 9.15:
+ * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
  * FETCH_OK Message {
  *   Type (i) = 0x18,
  *   Length (16),
@@ -213,7 +210,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   parts.push(encodeLocation(msg.endLocation));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-17 Section 9.15:
+  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -242,7 +239,7 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-17 Section 9.15:
+  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);

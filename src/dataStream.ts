@@ -1,6 +1,6 @@
 /**
  * MOQT Data Stream
- * draft-ietf-moq-transport-17 Section 10
+ * draft-ietf-moq-transport-17 Section 10 (Data Streams and Datagrams)
  *
  * Data streams carry Objects via Subgroups or Datagrams.
  *

@@ -1,6 +1,6 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-17 Section 9 (Control Messages)
  */
 
 // Types
