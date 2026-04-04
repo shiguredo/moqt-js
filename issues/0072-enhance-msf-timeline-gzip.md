@@ -1,7 +1,7 @@
 # MSF の Media / Event Timeline で GZIP 圧縮を扱えるようにする
 
 Created: 2026-04-04
-Model: GPT-5.2
+Model: Composer 2 Fast
 
 ## 概要
 
