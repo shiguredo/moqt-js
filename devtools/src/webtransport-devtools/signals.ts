@@ -46,6 +46,26 @@ export const wtSupportsReliableOnly = signal<string>("");
 export const wtProtocol = signal<string>("");
 export const wtResponseHeaders = signal<string>("");
 
+// WebTransport API 対応状況
+export interface ApiSupport {
+  datagrams: string;
+  datagramsReadable: string;
+  datagramsWritable: string;
+  datagramsCreateWritable: string;
+  incomingBidirectionalStreams: string;
+  incomingUnidirectionalStreams: string;
+  createBidirectionalStream: string;
+  createUnidirectionalStream: string;
+  closed: string;
+  ready: string;
+  draining: string;
+  reliability: string;
+  congestionControl: string;
+  protocol: string;
+  getStats: string;
+}
+export const wtApiSupport = signal<ApiSupport | null>(null);
+
 // Message type
 export interface StreamMessage {
   direction: "send" | "recv";
@@ -204,8 +224,39 @@ export async function connect(): Promise<void> {
       wtResponseHeaders.value = "N/A";
     }
 
-    // Start receiving datagrams
-    void receiveDatagrams(wt);
+    // API 対応状況を検出する
+    // biome-ignore lint/suspicious/noExplicitAny: WebTransport API の型定義が不完全
+    const wtCheck = wt as any;
+    const checkProp = (obj: unknown, prop: string): string => {
+      if (obj == null) return "N/A (parent is null)";
+      // biome-ignore lint/suspicious/noExplicitAny: 動的プロパティチェック
+      const val = (obj as any)[prop];
+      if (val === undefined) return "undefined";
+      if (val === null) return "null";
+      return typeof val;
+    };
+    wtApiSupport.value = {
+      datagrams: checkProp(wt, "datagrams"),
+      datagramsReadable: checkProp(wtCheck.datagrams, "readable"),
+      datagramsWritable: checkProp(wtCheck.datagrams, "writable"),
+      datagramsCreateWritable: checkProp(wtCheck.datagrams, "createWritable"),
+      incomingBidirectionalStreams: checkProp(wt, "incomingBidirectionalStreams"),
+      incomingUnidirectionalStreams: checkProp(wt, "incomingUnidirectionalStreams"),
+      createBidirectionalStream: checkProp(wt, "createBidirectionalStream"),
+      createUnidirectionalStream: checkProp(wt, "createUnidirectionalStream"),
+      closed: checkProp(wt, "closed"),
+      ready: checkProp(wt, "ready"),
+      draining: checkProp(wtCheck, "draining"),
+      reliability: checkProp(wtCheck, "reliability"),
+      congestionControl: checkProp(wtCheck, "congestionControl"),
+      protocol: checkProp(wtCheck, "protocol"),
+      getStats: checkProp(wt, "getStats"),
+    };
+
+    // Start receiving datagrams (datagrams が存在する場合のみ)
+    if (wtCheck.datagrams?.readable) {
+      void receiveDatagrams(wt);
+    }
 
     // Start receiving incoming unidirectional streams
     void receiveIncomingStreams(wt);
@@ -246,6 +297,7 @@ export function disconnect(): void {
   wtSupportsReliableOnly.value = "";
   wtProtocol.value = "";
   wtResponseHeaders.value = "";
+  wtApiSupport.value = null;
 }
 
 /**
@@ -603,7 +655,19 @@ export async function sendDatagram(message: string): Promise<void> {
   const data = encoder.encode(message);
 
   try {
-    const writer = wt.datagrams.writable.getWriter();
+    // biome-ignore lint/suspicious/noExplicitAny: WebTransport API の仕様差異を吸収する
+    const datagrams = wt.datagrams as any;
+    // 最新仕様: createWritable() メソッド (Safari 26.4)
+    // 旧仕様: writable プロパティ (Chrome)
+    const writable =
+      typeof datagrams.createWritable === "function"
+        ? datagrams.createWritable()
+        : datagrams.writable;
+    if (!writable) {
+      console.error("Failed to send datagram: no writable available");
+      return;
+    }
+    const writer = writable.getWriter();
     await writer.write(data);
     writer.releaseLock();
 

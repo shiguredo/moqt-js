@@ -174,6 +174,25 @@ export function ConnectionPanel() {
                 </span>
               </div>
             )}
+            {store.wtApiSupport.value && (
+              <div class="mt-2 pt-2 border-t border-slate-200">
+                <div class="text-slate-400 mb-1">API Support:</div>
+                {Object.entries(store.wtApiSupport.value).map(([key, value]) => (
+                  <div key={key} class="pl-2">
+                    <span class="text-slate-400">{key}: </span>
+                    <span
+                      class={
+                        value === "undefined" || value === "null" || value.startsWith("N/A")
+                          ? "text-red-500 font-semibold"
+                          : "text-green-600 font-semibold"
+                      }
+                    >
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
