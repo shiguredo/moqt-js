@@ -185,6 +185,15 @@ export function App() {
               >
                 draft-ietf-moq-transport-17
               </a>
+              {" / "}
+              <a
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-15"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="hover:text-slate-600 underline"
+              >
+                draft-ietf-webtrans-http3-15
+              </a>
             </p>
             <p class="mt-1">株式会社時雨堂 Copyright © 2026 Shiguredo Inc. All rights reserved.</p>
           </footer>
