@@ -37,6 +37,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CF_PAGES_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          packageManager: npm
           command: pages deploy devtools/dist --project-name=shiguredo-moqt-devtools
 
   slack-notify:
