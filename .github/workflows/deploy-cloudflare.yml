@@ -17,24 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: pnpm をセットアップする
-        uses: pnpm/action-setup@v4
-
-      - name: Node.js をセットアップする
-        uses: actions/setup-node@v6
+      - uses: voidzero-dev/setup-vp@v1
         with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: '22'
 
       - name: 依存をインストールする
-        run: pnpm install --frozen-lockfile
+        run: vp install --frozen-lockfile
 
       - name: ライブラリをビルドする
-        run: pnpm run build
+        run: vp run build
 
       - name: DevTools をビルドする
-        run: pnpm run build:devtools
+        run: vp run build:devtools
 
       - name: Cloudflare Pages にデプロイする
         uses: cloudflare/wrangler-action@v3
