@@ -33,12 +33,10 @@ jobs:
         run: vp run build:devtools
 
       - name: Cloudflare Pages にデプロイする
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CF_PAGES_TOKEN }}
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          packageManager: npm
-          command: pages deploy devtools/dist --project-name=shiguredo-moqt-devtools
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PAGES_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: pnpm dlx wrangler@latest pages deploy devtools/dist --project-name=shiguredo-moqt-devtools
 
   slack-notify:
     needs: build-and-deploy
