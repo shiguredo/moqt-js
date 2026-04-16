@@ -166,6 +166,8 @@
 
 ### misc
 
+- [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
+  - @voluntas
 - [UPDATE] Vite から Vite+ に切り替える
   - @voluntas
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
