@@ -47,23 +47,11 @@ export const wtProtocol = signal<string>("");
 export const wtResponseHeaders = signal<string>("");
 
 // WebTransport API 対応状況
-export interface ApiSupport {
-  datagrams: string;
-  datagramsReadable: string;
-  datagramsWritable: string;
-  datagramsCreateWritable: string;
-  incomingBidirectionalStreams: string;
-  incomingUnidirectionalStreams: string;
-  createBidirectionalStream: string;
-  createUnidirectionalStream: string;
-  closed: string;
-  ready: string;
-  draining: string;
-  reliability: string;
-  congestionControl: string;
-  protocol: string;
-  getStats: string;
+export interface ApiSupportNode {
+  value: string;
+  children?: Record<string, ApiSupportNode>;
 }
+export type ApiSupport = Record<string, ApiSupportNode>;
 export const wtApiSupport = signal<ApiSupport | null>(null);
 
 // Message type
@@ -227,30 +215,50 @@ export async function connect(): Promise<void> {
     // API 対応状況を検出する
     // biome-ignore lint/suspicious/noExplicitAny: WebTransport API の型定義が不完全
     const wtCheck = wt as any;
-    const checkProp = (obj: unknown, prop: string): string => {
-      if (obj == null) return "N/A (parent is null)";
-      // biome-ignore lint/suspicious/noExplicitAny: 動的プロパティチェック
-      const val = (obj as any)[prop];
+    // 値を人間が読める表記に整形する
+    const inspect = (val: unknown): string => {
       if (val === undefined) return "undefined";
       if (val === null) return "null";
-      return typeof val;
+      const valueType = typeof val;
+      if (valueType === "string") return `"${val as string}"`;
+      if (valueType === "object") {
+        const constructorName = (val as object).constructor?.name;
+        return constructorName ?? "object";
+      }
+      return valueType;
+    };
+    // 親オブジェクトから単一プロパティを取り出すノードを作る
+    const makeLeaf = (parent: unknown, prop: string): ApiSupportNode => {
+      if (parent == null) return { value: "N/A (parent is null)" };
+      return { value: inspect((parent as Record<string, unknown>)[prop]) };
+    };
+    // object 型なら指定した子プロパティを再帰的に展開する
+    const makeNode = (parent: unknown, prop: string, childProps?: string[]): ApiSupportNode => {
+      if (parent == null) return { value: "N/A (parent is null)" };
+      const val = (parent as Record<string, unknown>)[prop];
+      const node: ApiSupportNode = { value: inspect(val) };
+      if (childProps && val !== null && typeof val === "object") {
+        const children: Record<string, ApiSupportNode> = {};
+        for (const childProp of childProps) {
+          children[childProp] = makeLeaf(val, childProp);
+        }
+        node.children = children;
+      }
+      return node;
     };
     wtApiSupport.value = {
-      datagrams: checkProp(wt, "datagrams"),
-      datagramsReadable: checkProp(wtCheck.datagrams, "readable"),
-      datagramsWritable: checkProp(wtCheck.datagrams, "writable"),
-      datagramsCreateWritable: checkProp(wtCheck.datagrams, "createWritable"),
-      incomingBidirectionalStreams: checkProp(wt, "incomingBidirectionalStreams"),
-      incomingUnidirectionalStreams: checkProp(wt, "incomingUnidirectionalStreams"),
-      createBidirectionalStream: checkProp(wt, "createBidirectionalStream"),
-      createUnidirectionalStream: checkProp(wt, "createUnidirectionalStream"),
-      closed: checkProp(wt, "closed"),
-      ready: checkProp(wt, "ready"),
-      draining: checkProp(wtCheck, "draining"),
-      reliability: checkProp(wtCheck, "reliability"),
-      congestionControl: checkProp(wtCheck, "congestionControl"),
-      protocol: checkProp(wtCheck, "protocol"),
-      getStats: checkProp(wt, "getStats"),
+      datagrams: makeNode(wt, "datagrams", ["readable", "writable", "createWritable"]),
+      incomingBidirectionalStreams: makeNode(wt, "incomingBidirectionalStreams"),
+      incomingUnidirectionalStreams: makeNode(wt, "incomingUnidirectionalStreams"),
+      createBidirectionalStream: makeNode(wt, "createBidirectionalStream"),
+      createUnidirectionalStream: makeNode(wt, "createUnidirectionalStream"),
+      closed: makeNode(wt, "closed"),
+      ready: makeNode(wt, "ready"),
+      draining: makeNode(wtCheck, "draining"),
+      reliability: makeNode(wtCheck, "reliability"),
+      congestionControl: makeNode(wtCheck, "congestionControl"),
+      protocol: makeNode(wtCheck, "protocol"),
+      getStats: makeNode(wt, "getStats"),
     };
 
     // Start receiving datagrams (datagrams が存在する場合のみ)

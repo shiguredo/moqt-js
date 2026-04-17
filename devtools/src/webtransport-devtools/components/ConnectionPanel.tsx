@@ -1,5 +1,39 @@
 import * as store from "../signals";
+import type { ApiSupportNode } from "../signals";
 import { SettingsIcon } from "./Icons";
+
+/**
+ * API Support の値に応じた色クラスを返す
+ */
+function apiSupportValueClass(value: string): string {
+  if (value === "undefined" || value === "null" || value.startsWith("N/A")) {
+    return "text-red-500 font-semibold";
+  }
+  return "text-green-600 font-semibold";
+}
+
+/**
+ * API Support のノードを再帰的にインデント表示する
+ */
+function ApiSupportTree({
+  nodes,
+  level,
+}: {
+  nodes: Record<string, ApiSupportNode>;
+  level: number;
+}) {
+  return (
+    <>
+      {Object.entries(nodes).map(([key, node]) => (
+        <div key={key} style={{ paddingLeft: `${(level + 1) * 0.5}rem` }}>
+          <span class="text-slate-400">{key}: </span>
+          <span class={apiSupportValueClass(node.value)}>{node.value}</span>
+          {node.children && <ApiSupportTree nodes={node.children} level={level + 1} />}
+        </div>
+      ))}
+    </>
+  );
+}
 
 /**
  * 接続設定パネル
@@ -177,20 +211,7 @@ export function ConnectionPanel() {
             {store.wtApiSupport.value && (
               <div class="mt-2 pt-2 border-t border-slate-200">
                 <div class="text-slate-400 mb-1">API Support:</div>
-                {Object.entries(store.wtApiSupport.value).map(([key, value]) => (
-                  <div key={key} class="pl-2">
-                    <span class="text-slate-400">{key}: </span>
-                    <span
-                      class={
-                        value === "undefined" || value === "null" || value.startsWith("N/A")
-                          ? "text-red-500 font-semibold"
-                          : "text-green-600 font-semibold"
-                      }
-                    >
-                      {value}
-                    </span>
-                  </div>
-                ))}
+                <ApiSupportTree nodes={store.wtApiSupport.value} level={0} />
               </div>
             )}
           </div>
