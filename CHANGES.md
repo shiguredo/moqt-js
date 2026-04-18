@@ -22,6 +22,13 @@
   - `SessionImpl` の `nextRequestId` フィールドを `SessionProtocol` に委譲する
   - Request ID の parity / 重複 / Required Request ID Delta の検証を PBT で担保する
   - @voluntas
+- [ADD] sans-I/O な SessionProtocol に SUBSCRIBE / PUBLISH の送受信を実装する (#0073)
+  - `src/session/subscription.ts` に SubscriptionEntry 生成と索引キー生成のヘルパーを追加する
+  - `SessionProtocol` に `sendSubscribe` / `sendPublish` / `handleStreamMessage` を追加する
+  - SUBSCRIBE_OK / PUBLISH_OK / REQUEST_ERROR で SubscriptionEntry の状態を遷移させる
+  - `SessionImpl.subscribe()` / `publish()` で SessionProtocol にも送信を記録する
+  - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する

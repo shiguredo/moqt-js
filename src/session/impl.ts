@@ -53,6 +53,8 @@ import {
   VersionSpecificParameterType,
   type Location,
   type Parameter,
+  type Publish,
+  type Subscribe,
   type SubscriptionFilter,
 } from "../message";
 import { decodeVarint, encodeVarint } from "../varint";
@@ -1099,7 +1101,7 @@ export class SessionImpl implements Session {
     // "The publisher sends PUBLISH as the first message on a new
     //  bidirectional stream to initiate a subscription for a Track."
     // https://github.com/moq-wg/moq-transport/pull/1389
-    const publishMsg = {
+    const publishMsg: Publish = {
       type: MessageType.PUBLISH,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -1112,7 +1114,12 @@ export class SessionImpl implements Session {
       trackProperties,
     };
 
-    const payload = encodePublishPayload(publishMsg as Parameters<typeof encodePublishPayload>[0]);
+    // sans-I/O SessionProtocol に PUBLISH 送信を記録する
+    // Phase 9 でイベント駆動に完全移行するまで、sendRequest イベントは drain する
+    this.protocol!.sendPublish(publishMsg);
+    this.protocol!.nextEvent();
+
+    const payload = encodePublishPayload(publishMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.PUBLISH, payload, {
       requestId: requestId.toString(),
       trackNamespace: namespace,
@@ -1287,7 +1294,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
     // SUBSCRIBE は新しい双方向ストリームで送信される。
     // https://github.com/moq-wg/moq-transport/pull/1389
-    const subscribeMsg = {
+    const subscribeMsg: Subscribe = {
       type: MessageType.SUBSCRIBE,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -1298,9 +1305,12 @@ export class SessionImpl implements Session {
       parameters,
     };
 
-    const payload = encodeSubscribePayload(
-      subscribeMsg as Parameters<typeof encodeSubscribePayload>[0],
-    );
+    // sans-I/O SessionProtocol に SUBSCRIBE 送信を記録する
+    // Phase 9 でイベント駆動に完全移行するまで、sendRequest イベントは drain する
+    this.protocol!.sendSubscribe(subscribeMsg);
+    this.protocol!.nextEvent();
+
+    const payload = encodeSubscribePayload(subscribeMsg);
     const streamInfo = await this.sendRequestOnBidiStream(
       requestId,
       MessageType.SUBSCRIBE,

@@ -14,10 +14,19 @@
  */
 
 import { SessionError, SessionErrorCode } from "../error";
-import { MessageType, type Setup } from "../message";
+import {
+  MessageType,
+  type Publish,
+  type PublishOk,
+  type RequestError,
+  type Setup,
+  type Subscribe,
+  type SubscribeOk,
+} from "../message";
 import type { ControlMessage } from "../message/control";
 import { RequestIdGenerator, RequestIdTracker } from "./requestId";
-import type { Role, SessionEvent, SessionState, Transport } from "./types";
+import { createSubscriptionEntry, extractForwardState, subscriptionKey } from "./subscription";
+import type { Role, SessionEvent, SessionState, SubscriptionEntry, Transport } from "./types";
 
 /**
  * MOQT Session プロトコル状態機械
@@ -31,6 +40,10 @@ export class SessionProtocol {
   private readonly _events: SessionEvent[];
   private readonly _requestIdGen: RequestIdGenerator;
   private readonly _peerRequestIds: RequestIdTracker;
+  private readonly _subscriptions: Map<bigint, SubscriptionEntry> = new Map();
+  private readonly _subscriptionsByTrack: Map<string, bigint> = new Map();
+  private readonly _myPublisherAliases: Map<bigint, bigint> = new Map();
+  private readonly _peerPublisherAliases: Map<bigint, bigint> = new Map();
 
   private constructor(role: Role, transport: Transport, setup: Setup) {
     this._role = role;
@@ -187,6 +200,236 @@ export class SessionProtocol {
       return false;
     }
     return true;
+  }
+
+  /**
+   * SUBSCRIBE を送信する (自側が subscriber)
+   * draft-ietf-moq-transport-17 Section 5.1, 9.8 (SUBSCRIBE)
+   *
+   * - pendingSubscriber 状態の SubscriptionEntry を登録する
+   * - sendRequest イベントを積む
+   * - 同じ track namespace / name / role の重複は PROTOCOL_VIOLATION で throw する
+   */
+  sendSubscribe(subscribe: Subscribe): void {
+    this.requireEstablished();
+    const key = subscriptionKey(subscribe.trackNamespace, subscribe.trackName, "subscriber");
+    if (this._subscriptionsByTrack.has(key)) {
+      throw new SessionError(
+        "duplicate local subscription in subscriber role",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    const entry = createSubscriptionEntry({
+      requestId: subscribe.requestId,
+      initiator: "subscriber",
+      myRole: "subscriber",
+      trackNamespace: subscribe.trackNamespace,
+      trackName: subscribe.trackName,
+      trackAlias: null,
+      forwardState: extractForwardState(subscribe.parameters),
+    });
+    this._subscriptions.set(subscribe.requestId, entry);
+    this._subscriptionsByTrack.set(key, subscribe.requestId);
+    this._events.push({
+      type: "sendRequest",
+      requestId: subscribe.requestId,
+      message: subscribe,
+    });
+  }
+
+  /**
+   * PUBLISH を送信する (自側が publisher)
+   * draft-ietf-moq-transport-17 Section 5.1, 9.11 (PUBLISH)
+   *
+   * - pendingPublisher 状態の SubscriptionEntry を登録する
+   * - sendRequest イベントを積む
+   * - 同じ Track Alias の二重採番は DUPLICATE_TRACK_ALIAS で throw する
+   * - 同じ track の重複は PROTOCOL_VIOLATION で throw する
+   */
+  sendPublish(publish: Publish): void {
+    this.requireEstablished();
+    if (this._myPublisherAliases.has(publish.trackAlias)) {
+      throw new SessionError(
+        "local publisher reused track alias",
+        SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+      );
+    }
+    const key = subscriptionKey(publish.trackNamespace, publish.trackName, "publisher");
+    if (this._subscriptionsByTrack.has(key)) {
+      throw new SessionError(
+        "duplicate local subscription in publisher role",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    const entry = createSubscriptionEntry({
+      requestId: publish.requestId,
+      initiator: "publisher",
+      myRole: "publisher",
+      trackNamespace: publish.trackNamespace,
+      trackName: publish.trackName,
+      trackAlias: publish.trackAlias,
+      forwardState: extractForwardState(publish.parameters),
+    });
+    this._subscriptions.set(publish.requestId, entry);
+    this._subscriptionsByTrack.set(key, publish.requestId);
+    this._myPublisherAliases.set(publish.trackAlias, publish.requestId);
+    this._events.push({
+      type: "sendRequest",
+      requestId: publish.requestId,
+      message: publish,
+    });
+  }
+
+  /**
+   * 既存 bidi request stream 上の応答メッセージを処理する
+   * draft-ietf-moq-transport-17 Section 9.7, 9.10, 9.12 ほか
+   *
+   * Phase 4a では SUBSCRIBE_OK / PUBLISH_OK / REQUEST_ERROR のみ対応する。
+   * 他のメッセージ (FETCH_OK / REQUEST_OK / NAMESPACE 等) は後続 Phase で追加する。
+   */
+  handleStreamMessage(requestId: bigint, msg: ControlMessage): void {
+    if (this._state !== "established") {
+      this.fail(
+        new SessionError(
+          "response received before session established",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    switch (msg.type) {
+      case MessageType.SUBSCRIBE_OK:
+        this.handlePeerSubscribeOk(requestId, msg);
+        return;
+      case MessageType.PUBLISH_OK:
+        this.handlePeerPublishOk(requestId, msg);
+        return;
+      case MessageType.REQUEST_ERROR:
+        this.handlePeerRequestError(requestId, msg);
+        return;
+      default:
+        this.fail(
+          new SessionError(
+            "unsupported stream message in current phase",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+    }
+  }
+
+  /** 指定 Request ID の SubscriptionEntry を取得する */
+  subscription(requestId: bigint): SubscriptionEntry | undefined {
+    return this._subscriptions.get(requestId);
+  }
+
+  /** すべての SubscriptionEntry をイテレートする */
+  subscriptions(): IterableIterator<SubscriptionEntry> {
+    return this._subscriptions.values();
+  }
+
+  /**
+   * Terminated 状態の subscription を忘れる
+   * draft-ietf-moq-transport-17 Section 5.1.1
+   *
+   * Terminated 以外の状態では何もせず undefined を返す。
+   */
+  forgetSubscription(requestId: bigint): SubscriptionEntry | undefined {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined || entry.state !== "terminated") {
+      return undefined;
+    }
+    this._subscriptions.delete(requestId);
+    const key = subscriptionKey(entry.trackNamespace, entry.trackName, entry.myRole);
+    this._subscriptionsByTrack.delete(key);
+    if (entry.trackAlias !== null) {
+      if (entry.myRole === "publisher") {
+        this._myPublisherAliases.delete(entry.trackAlias);
+      } else {
+        this._peerPublisherAliases.delete(entry.trackAlias);
+      }
+    }
+    return entry;
+  }
+
+  private requireEstablished(): void {
+    if (this._state !== "established") {
+      throw new SessionError(
+        "operation requires session in established state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+  }
+
+  private handlePeerSubscribeOk(requestId: bigint, ok: SubscribeOk): void {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      this.fail(
+        new SessionError(
+          "SUBSCRIBE_OK received for unknown request id",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    if (entry.state !== "pendingSubscriber") {
+      this.fail(
+        new SessionError(
+          "SUBSCRIBE_OK received in invalid subscription state",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    if (this._peerPublisherAliases.has(ok.trackAlias)) {
+      this.fail(
+        new SessionError(
+          "peer publisher reused track alias",
+          SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+        ),
+      );
+      return;
+    }
+    entry.trackAlias = ok.trackAlias;
+    entry.state = "established";
+    this._peerPublisherAliases.set(ok.trackAlias, requestId);
+  }
+
+  private handlePeerPublishOk(requestId: bigint, _ok: PublishOk): void {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      this.fail(
+        new SessionError(
+          "PUBLISH_OK received for unknown request id",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    if (entry.state !== "pendingPublisher") {
+      this.fail(
+        new SessionError(
+          "PUBLISH_OK received in invalid subscription state",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    entry.state = "established";
+  }
+
+  private handlePeerRequestError(requestId: bigint, _err: RequestError): void {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      // Phase 4a では Subscription 種別のみ対応。他の種別は Phase 5 以降で追加する。
+      this.fail(
+        new SessionError(
+          "REQUEST_ERROR received for unknown request id",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    entry.state = "terminated";
   }
 
   private fail(error: SessionError): void {
