@@ -16,6 +16,7 @@
 import { SessionError, SessionErrorCode } from "../error";
 import { MessageType, type Setup } from "../message";
 import type { ControlMessage } from "../message/control";
+import { RequestIdGenerator, RequestIdTracker } from "./requestId";
 import type { Role, SessionEvent, SessionState, Transport } from "./types";
 
 /**
@@ -28,6 +29,8 @@ export class SessionProtocol {
   private readonly _localSetup: Setup;
   private _peerSetup: Setup | null;
   private readonly _events: SessionEvent[];
+  private readonly _requestIdGen: RequestIdGenerator;
+  private readonly _peerRequestIds: RequestIdTracker;
 
   private constructor(role: Role, transport: Transport, setup: Setup) {
     this._role = role;
@@ -36,6 +39,8 @@ export class SessionProtocol {
     this._localSetup = setup;
     this._peerSetup = null;
     this._events = [{ type: "sendControl", message: setup }];
+    this._requestIdGen = new RequestIdGenerator(role);
+    this._peerRequestIds = new RequestIdTracker(role === "client" ? "server" : "client");
   }
 
   /**
@@ -136,6 +141,52 @@ export class SessionProtocol {
     this._peerSetup = setup;
     this._state = "established";
     this._events.push({ type: "established" });
+  }
+
+  /**
+   * 自側の次の Request ID を発行する
+   * draft-ietf-moq-transport-17 Section 9.1 (Request ID)
+   *
+   * "established" 状態でのみ呼び出し可能。それ以外で呼ぶと SessionError を throw する。
+   */
+  nextLocalRequestId(): bigint {
+    if (this._state !== "established") {
+      throw new SessionError(
+        "nextLocalRequestId called before session established",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    return this._requestIdGen.nextId();
+  }
+
+  /**
+   * 受信した Request ID と Required Request ID Delta を検証する
+   * draft-ietf-moq-transport-17 Section 9.1, 9.2
+   *
+   * 検証失敗時は closeSession イベントを積み、false を返す。
+   * 成功時は内部テーブルに記録し、true を返す。
+   */
+  validatePeerRequest(requestId: bigint, requiredDelta: bigint): boolean {
+    if (this._state !== "established") {
+      this.fail(
+        new SessionError(
+          "peer request received before session established",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return false;
+    }
+    const parityErr = this._peerRequestIds.accept(requestId);
+    if (parityErr !== null) {
+      this.fail(parityErr);
+      return false;
+    }
+    const deltaErr = RequestIdTracker.validateRequiredDelta(requestId, requiredDelta);
+    if (deltaErr !== null) {
+      this.fail(deltaErr);
+      return false;
+    }
+    return true;
   }
 
   private fail(error: SessionError): void {

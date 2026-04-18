@@ -650,7 +650,6 @@ export class SessionImpl implements Session {
   private controlWriter?: ControlStreamWriter;
 
   // Request ID management
-  private nextRequestId = 0n;
   private nextTrackAlias = 0n;
 
   // GOAWAY 状態
@@ -983,8 +982,7 @@ export class SessionImpl implements Session {
       throw new Error("Cannot publish after receiving GOAWAY");
     }
 
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n; // Client uses even IDs
+    const requestId = this.protocol!.nextLocalRequestId();
 
     const trackAlias = this.nextTrackAlias++;
 
@@ -1185,8 +1183,7 @@ export class SessionImpl implements Session {
       }
     }
 
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n; // Client uses even IDs
+    const requestId = this.protocol!.nextLocalRequestId();
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
@@ -1347,8 +1344,7 @@ export class SessionImpl implements Session {
       throw new Error("Cannot fetch after receiving GOAWAY");
     }
 
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    const requestId = this.protocol!.nextLocalRequestId();
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
@@ -1431,8 +1427,7 @@ export class SessionImpl implements Session {
       throw new Error("Cannot query track status after receiving GOAWAY");
     }
 
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    const requestId = this.protocol!.nextLocalRequestId();
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
@@ -1501,8 +1496,7 @@ export class SessionImpl implements Session {
       throw new Error("cannot subscribe namespace after receiving GOAWAY");
     }
 
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    const requestId = this.protocol!.nextLocalRequestId();
 
     const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
@@ -1698,8 +1692,7 @@ export class SessionImpl implements Session {
       throw new Error("Cannot publish namespace after receiving GOAWAY");
     }
 
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    const requestId = this.protocol!.nextLocalRequestId();
 
     const trackNamespace = createTrackNamespace(namespace);
 
@@ -2357,8 +2350,7 @@ export class SessionImpl implements Session {
     defaultObjectCallback: (object: MoqtObject) => void,
     largestLocation: Location,
   ): Promise<void> {
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    const requestId = this.protocol!.nextLocalRequestId();
 
     // Fetcher 実装を作成
     const impl = new FetcherImpl(
@@ -2448,8 +2440,7 @@ export class SessionImpl implements Session {
     subscriber: SubscriberImpl,
     options: RequestUpdateOptions,
   ): Promise<void> {
-    const updateRequestId = this.nextRequestId;
-    this.nextRequestId += 2n;
+    const updateRequestId = this.protocol!.nextLocalRequestId();
 
     // 更新対象のリクエスト ID（bidi stream で特定するための内部管理用）
     const targetRequestId = subscriber.getRequestId();

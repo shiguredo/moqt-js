@@ -16,6 +16,12 @@
   - `SessionImpl.initialize()` の SETUP 送受信を `SessionProtocol` に委譲する
   - `src/session/protocol.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [ADD] sans-I/O な SessionProtocol に Request ID 採番と検証を実装する (#0073)
+  - `src/session/requestId.ts` に `RequestIdGenerator` と `RequestIdTracker` を追加する
+  - `SessionProtocol` に `nextLocalRequestId` と `validatePeerRequest` を追加する
+  - `SessionImpl` の `nextRequestId` フィールドを `SessionProtocol` に委譲する
+  - Request ID の parity / 重複 / Required Request ID Delta の検証を PBT で担保する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
