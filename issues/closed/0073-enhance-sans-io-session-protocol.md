@@ -89,3 +89,36 @@ Model: Claude Opus 4.7
 | R1  | 同期イベント駆動と既存非同期フローの順序逆転                        | Phase ごとに既存テスト緑を厳守               |
 | R2  | Phase 7 で message 層拡張に伴いテスト期待値が変わる                 | テスト先行で修正、CHANGES に `[CHANGE]` 明記 |
 | R3  | Phase 3 の Request ID 検証追加で既存リレー相手の e2e が壊れる可能性 | PBT で精査、壊れたら別 issue で対応          |
+
+Completed: 2026-04-19
+
+## 解決方法
+
+全 10 コミット (Phase 0 〜 Phase 9) で sans-I/O な `SessionProtocol` を新設した。
+各 Phase で `vp check` / `vp run typecheck` / `vp run test` / `vp run build` がすべて緑を維持。
+最終的に 32 test ファイル / 418 件の単体テスト + PBT がすべてパスする状態で完了した。
+
+### 実装した成果物
+
+- `src/session/protocol.ts`: `SessionProtocol` クラス本体 (sans-I/O な MOQT セッション状態機械)
+- `src/session/types.ts`: Role / Transport / SessionState / SessionEvent / 各種エンティティ型
+- `src/session/requestId.ts`: `RequestIdGenerator` / `RequestIdTracker`
+- `src/session/subscription.ts`: Subscription のヘルパー関数
+- `src/session/fetch.ts`: Fetch のヘルパー関数
+- `src/session/namespace.ts`: Namespace / TrackStatus のヘルパー関数
+- `src/session/authTokenCache.ts`: AuthTokenCache クラス
+- `src/session/*.prop.ts`: 各モジュールの fast-check ベースの PBT
+- `src/message/control.ts`: `ControlMessage` discriminated union
+- `src/session/index.ts`: 公開 API の re-export
+- `src/session/impl.ts`: I/O ラッパー層 (旧 `src/session.ts` を移動)
+
+### 破壊的変更
+
+- `SessionState` の値域を `"connected" | "closed"` から `"setup" | "established" | "closing" | "closed"` の 4 値に変更した。本プロジェクト内で外部から参照している箇所は 0 件だったため安全。
+- `src/controlStream.ts` の `ControlMessage` 型を `RawControlMessage` に改名した (外部 export なし)。
+
+### 残課題 (別 issue で扱う)
+
+- `SessionImpl` の `pendingSubscribe` / `pendingPublish` / `pendingFetch` 等の Promise 管理と、`SessionProtocol` が持つ `SubscriptionEntry` / `FetchEntry` 等のエンティティ管理の完全統合 (現状は二層管理)。
+- `AUTHORIZATION_TOKEN` パラメータの内容 (REGISTER / USE_ALIAS / USE_VALUE / DELETE) をデコードするパーサーの追加。現状は `AuthTokenCache` の API のみ用意しており、SETUP 内のトークン消費ロジックは未実装。
+- Rust 側の実装との相互運用テスト (クロス実装 PBT) の追加。
