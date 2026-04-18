@@ -15,6 +15,8 @@
 
 import { SessionError, SessionErrorCode } from "../error";
 import {
+  type Fetch,
+  type FetchOk,
   MessageType,
   type Publish,
   type PublishDone,
@@ -27,8 +29,16 @@ import {
 } from "../message";
 import type { ControlMessage } from "../message/control";
 import { RequestIdGenerator, RequestIdTracker } from "./requestId";
+import { createFetchEntry } from "./fetch";
 import { createSubscriptionEntry, extractForwardState, subscriptionKey } from "./subscription";
-import type { Role, SessionEvent, SessionState, SubscriptionEntry, Transport } from "./types";
+import type {
+  FetchEntry,
+  Role,
+  SessionEvent,
+  SessionState,
+  SubscriptionEntry,
+  Transport,
+} from "./types";
 
 /**
  * MOQT Session プロトコル状態機械
@@ -46,6 +56,7 @@ export class SessionProtocol {
   private readonly _subscriptionsByTrack: Map<string, bigint> = new Map();
   private readonly _myPublisherAliases: Map<bigint, bigint> = new Map();
   private readonly _peerPublisherAliases: Map<bigint, bigint> = new Map();
+  private readonly _fetches: Map<bigint, FetchEntry> = new Map();
 
   private constructor(role: Role, transport: Transport, setup: Setup) {
     this._role = role;
@@ -315,6 +326,9 @@ export class SessionProtocol {
       case MessageType.PUBLISH_DONE:
         this.handlePeerPublishDone(requestId, msg);
         return;
+      case MessageType.FETCH_OK:
+        this.handlePeerFetchOk(requestId, msg);
+        return;
       default:
         this.fail(
           new SessionError(
@@ -517,18 +531,91 @@ export class SessionProtocol {
   }
 
   private handlePeerRequestError(requestId: bigint, _err: RequestError): void {
-    const entry = this._subscriptions.get(requestId);
+    const subscription = this._subscriptions.get(requestId);
+    if (subscription !== undefined) {
+      subscription.state = "terminated";
+      return;
+    }
+    const fetch = this._fetches.get(requestId);
+    if (fetch !== undefined) {
+      fetch.state = "terminated";
+      return;
+    }
+    // Phase 6 以降で Namespace 系 / TrackStatus 種別を追加する
+    this.fail(
+      new SessionError(
+        "REQUEST_ERROR received for unknown request id",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+  }
+
+  /**
+   * FETCH を送信する (自側が subscriber)
+   * draft-ietf-moq-transport-17 Section 9.14 (FETCH)
+   *
+   * pending 状態の FetchEntry を登録し、sendRequest イベントを積む。
+   */
+  sendFetch(fetch: Fetch): void {
+    this.requireEstablished();
+    if (this._fetches.has(fetch.requestId)) {
+      throw new SessionError("duplicate request id for FETCH", SessionErrorCode.PROTOCOL_VIOLATION);
+    }
+    const entry = createFetchEntry(fetch, "subscriber");
+    this._fetches.set(fetch.requestId, entry);
+    this._events.push({
+      type: "sendRequest",
+      requestId: fetch.requestId,
+      message: fetch,
+    });
+  }
+
+  /** 指定 Request ID の FetchEntry を取得する */
+  fetch(requestId: bigint): FetchEntry | undefined {
+    return this._fetches.get(requestId);
+  }
+
+  /** すべての FetchEntry をイテレートする */
+  fetches(): IterableIterator<FetchEntry> {
+    return this._fetches.values();
+  }
+
+  /**
+   * Terminated 状態の fetch を忘れる
+   * Terminated 以外の状態では何もせず undefined を返す。
+   */
+  forgetFetch(requestId: bigint): FetchEntry | undefined {
+    const entry = this._fetches.get(requestId);
+    if (entry === undefined || entry.state !== "terminated") {
+      return undefined;
+    }
+    this._fetches.delete(requestId);
+    return entry;
+  }
+
+  private handlePeerFetchOk(requestId: bigint, ok: FetchOk): void {
+    const entry = this._fetches.get(requestId);
     if (entry === undefined) {
-      // Phase 4a では Subscription 種別のみ対応。他の種別は Phase 5 以降で追加する。
       this.fail(
         new SessionError(
-          "REQUEST_ERROR received for unknown request id",
+          "FETCH_OK received for unknown request id",
           SessionErrorCode.PROTOCOL_VIOLATION,
         ),
       );
       return;
     }
-    entry.state = "terminated";
+    if (entry.state !== "pending") {
+      this.fail(
+        new SessionError(
+          "FETCH_OK received in invalid fetch state",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    entry.state = "established";
+    entry.endLocation = ok.endLocation;
+    entry.endOfTrack = ok.endOfTrack;
   }
 
   private fail(error: SessionError): void {

@@ -35,6 +35,13 @@
   - peer REQUEST_UPDATE 受信で `requestUpdateReceived`、peer PUBLISH_DONE 受信で `publishDoneReceived` イベントを積む
   - PUBLISH_DONE の送受信で SubscriptionEntry を `terminated` に遷移させる
   - @voluntas
+- [ADD] sans-I/O な SessionProtocol に FETCH の送受信を実装する (#0073)
+  - `src/session/fetch.ts` に FetchEntry 生成ヘルパーを追加する
+  - `SessionProtocol` に `sendFetch` / `fetch` / `fetches` / `forgetFetch` を追加する
+  - FETCH_OK / REQUEST_ERROR で FetchEntry の状態を遷移させる
+  - `SessionImpl.fetch()` で SessionProtocol にも送信を記録する
+  - `src/session/fetch.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する

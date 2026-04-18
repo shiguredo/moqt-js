@@ -52,6 +52,7 @@ import {
   FetchType,
   VersionSpecificParameterType,
   type Location,
+  type Fetch,
   type Parameter,
   type Publish,
   type Subscribe,
@@ -1389,7 +1390,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-17 Section 9.14 (FETCH):
     // FETCH は新しい双方向ストリームで送信される。
     // https://github.com/moq-wg/moq-transport/pull/1389
-    const fetchMsg = {
+    const fetchMsg: Fetch = {
       type: MessageType.FETCH,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -1404,6 +1405,11 @@ export class SessionImpl implements Session {
       },
       parameters: [],
     };
+
+    // sans-I/O SessionProtocol に FETCH 送信を記録する
+    // Phase 9 でイベント駆動に完全移行するまで、sendRequest イベントは drain する
+    this.protocol!.sendFetch(fetchMsg);
+    this.protocol!.nextEvent();
 
     const payload = encodeFetchPayload(fetchMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
