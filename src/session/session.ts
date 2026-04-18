@@ -72,7 +72,7 @@ import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../s
 import { type Fetcher, FetcherImpl } from "../fetcher";
 import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "../dataStream";
 import { TrackPropertyId, type Property } from "../properties";
-import { SessionProtocol } from "./protocol";
+import { SessionMachine } from "./machine";
 import type { SessionState } from "./types";
 
 /**
@@ -559,89 +559,18 @@ export interface SessionStatistics {
   controlMessagesReceived: number;
 }
 
-export interface Session {
-  readonly state: SessionState;
-  /**
-   * GOAWAY を受信したかどうか
-   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
-   */
-  readonly goawayReceived: boolean;
-  publish(
-    namespace: string[],
-    trackName: string,
-    callbacks?: PublishCallbacks,
-    options?: PublishOptions,
-  ): Promise<Publisher>;
-  subscribe(
-    namespace: string[],
-    trackName: string,
-    callbacks: SubscribeCallbacks,
-    options?: SubscribeOptions,
-  ): Promise<Subscriber>;
-  /**
-   * 過去のデータを取得する
-   * draft-ietf-moq-transport-17 Section 9.14 (FETCH)
-   */
-  fetch(
-    namespace: string[],
-    trackName: string,
-    options: FetchOptions,
-    callbacks: FetchCallbacks,
-  ): Promise<Fetcher>;
-  /**
-   * トラックの状態を問い合わせる
-   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
-   */
-  trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult>;
-  /**
-   * Namespace をサブスクライブする（トラック発見用）
-   *
-   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
-   * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
-   *
-   * @param namespacePrefix - Track Namespace Prefix
-   * @param callbacks - コールバック関数
-   * @param subscribeOptions - Subscribe Options（デフォルト: BOTH）
-   */
-  subscribeNamespace(
-    namespacePrefix: string[],
-    callbacks: NamespaceSubscriptionCallbacks,
-    subscribeOptions?: NamespaceSubscribeMode,
-  ): Promise<NamespaceSubscription>;
-  /**
-   * Namespace を公開する（トラック発見用）
-   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
-   *
-   * Publisher が Track Namespace 内にトラックがあることを通知する。
-   * Subscriber は SUBSCRIBE_NAMESPACE でこの通知を受け取れる。
-   */
-  publishNamespace(
-    namespace: string[],
-    callbacks?: NamespacePublicationCallbacks,
-  ): Promise<NamespacePublication>;
-  /**
-   * GOAWAY を送信してセッション終了を通知する
-   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
-   * @param newSessionUri - 新しいセッション URI（オプション）
-   * @param timeout - Graceful shutdown のタイムアウト（ミリ秒、オプション）
-   */
-  goaway(newSessionUri?: string, timeout?: bigint): Promise<void>;
-  close(): Promise<void>;
-  /**
-   * セッションレベルの統計情報を取得する
-   */
-  getStatistics(): SessionStatistics;
-}
-
 /**
- * Internal Session implementation
+ * MOQT Session
+ * draft-ietf-moq-transport-17 Section 3 (Sessions)
+ *
+ * WebTransport 上で MOQT プロトコルを通信する Session の実装。
+ * 通常は `connect()` 経由で生成する。
  */
-export class SessionImpl implements Session {
+export class Session {
   private sessionState: SessionState = "established";
   // sans-I/O な MOQT Session プロトコル状態機械。
   // initialize() で createClient して SETUP ハンドシェイクに使う。
-  private protocol?: SessionProtocol;
+  private protocol?: SessionMachine;
   private readonly transport: WebTransport;
   private readonly callbacks: ConnectCallbacks;
   /**
@@ -856,8 +785,8 @@ export class SessionImpl implements Session {
     // 制御ストリームのストリームタイプは 0x2F00 (Table 3)
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
-    // sans-I/O な SessionProtocol に SETUP 送信を委譲する
-    this.protocol = SessionProtocol.createClient("webTransport", createSetup());
+    // sans-I/O な SessionMachine に SETUP 送信を委譲する
+    this.protocol = SessionMachine.createClient("webTransport", createSetup());
     const sendCtrlEvent = this.protocol.nextEvent();
     if (sendCtrlEvent === undefined || sendCtrlEvent.type !== "sendControl") {
       throw new SessionError(
@@ -949,7 +878,7 @@ export class SessionImpl implements Session {
 
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
 
-    // sans-I/O な SessionProtocol に peer SETUP を処理させて established に遷移する
+    // sans-I/O な SessionMachine に peer SETUP を処理させて established に遷移する
     this.protocol.handleControl(peerSetup);
     const establishedEvent = this.protocol.nextEvent();
     if (establishedEvent === undefined || establishedEvent.type !== "established") {
@@ -1118,7 +1047,7 @@ export class SessionImpl implements Session {
       trackProperties,
     };
 
-    // sans-I/O SessionProtocol に PUBLISH 送信を記録する
+    // sans-I/O SessionMachine に PUBLISH 送信を記録する
     // Phase 9 でイベント駆動に完全移行するまで、sendRequest イベントは drain する
     this.protocol!.sendPublish(publishMsg);
     this.protocol!.nextEvent();
@@ -1309,7 +1238,7 @@ export class SessionImpl implements Session {
       parameters,
     };
 
-    // sans-I/O SessionProtocol に SUBSCRIBE 送信を記録する
+    // sans-I/O SessionMachine に SUBSCRIBE 送信を記録する
     // Phase 9 でイベント駆動に完全移行するまで、sendRequest イベントは drain する
     this.protocol!.sendSubscribe(subscribeMsg);
     this.protocol!.nextEvent();
@@ -1409,7 +1338,7 @@ export class SessionImpl implements Session {
       parameters: [],
     };
 
-    // sans-I/O SessionProtocol に FETCH 送信を記録する
+    // sans-I/O SessionMachine に FETCH 送信を記録する
     // Phase 9 でイベント駆動に完全移行するまで、sendRequest イベントは drain する
     this.protocol!.sendFetch(fetchMsg);
     this.protocol!.nextEvent();
@@ -1471,7 +1400,7 @@ export class SessionImpl implements Session {
       parameters: [],
     };
 
-    // sans-I/O SessionProtocol に TRACK_STATUS 送信を記録する
+    // sans-I/O SessionMachine に TRACK_STATUS 送信を記録する
     this.protocol!.sendTrackStatus(trackStatusMsg);
     this.protocol!.nextEvent();
 
@@ -1541,7 +1470,7 @@ export class SessionImpl implements Session {
       parameters: [],
     };
 
-    // sans-I/O SessionProtocol に SUBSCRIBE_NAMESPACE 送信を記録する
+    // sans-I/O SessionMachine に SUBSCRIBE_NAMESPACE 送信を記録する
     this.protocol!.sendSubscribeNamespace(subscribeNamespaceMsg);
     this.protocol!.nextEvent();
 
@@ -1739,7 +1668,7 @@ export class SessionImpl implements Session {
       parameters: [],
     };
 
-    // sans-I/O SessionProtocol に PUBLISH_NAMESPACE 送信を記録する
+    // sans-I/O SessionMachine に PUBLISH_NAMESPACE 送信を記録する
     this.protocol!.sendPublishNamespace(publishNamespaceMsg);
     this.protocol!.nextEvent();
 

@@ -235,6 +235,12 @@
   - src/message/control.ts を新設し ControlMessage discriminated union を追加する
   - src/controlStream.ts の ControlMessage を RawControlMessage に改名する
   - @voluntas
+- [UPDATE] sans-I/O な Session 実装の内部命名を整理する (#0074)
+  - `interface Session` と `class SessionImpl` を `class Session` に統合して Rust 寄りの `Impl` サフィックスを排除する
+  - `SessionProtocol` class を `SessionMachine` に改名して `Session` プレフィックスに統一する
+  - `src/session/impl.ts` を `src/session/session.ts` にリネームする
+  - `src/session/protocol.ts` を `src/session/machine.ts` にリネームする
+  - @voluntas
 
 ## 2026.1.0
 

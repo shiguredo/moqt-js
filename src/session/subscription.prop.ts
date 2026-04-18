@@ -1,5 +1,5 @@
 /**
- * SessionProtocol Subscription Property-Based Tests
+ * SessionMachine Subscription Property-Based Tests
  * draft-ietf-moq-transport-17 Section 5.1, 9.8-9.11
  */
 
@@ -19,10 +19,10 @@ import {
   type Subscribe,
   type SubscribeOk,
 } from "../message";
-import { SessionProtocol } from "./protocol";
+import { SessionMachine } from "./machine";
 
-function established(): SessionProtocol {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+function established(): SessionMachine {
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent(); // sendControl(SETUP)
   p.handleControl(createSetup()); // peer SETUP
   p.nextEvent(); // established
@@ -227,7 +227,7 @@ test("Track Alias の二重採番は DUPLICATE_TRACK_ALIAS で throw する", ()
 });
 
 test("established 前の sendSubscribe は PROTOCOL_VIOLATION", () => {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent(); // sendControl(SETUP)
   // peer SETUP 未受信のため state は "setup"
   assert.throws(() => {

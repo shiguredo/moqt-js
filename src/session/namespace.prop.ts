@@ -1,5 +1,5 @@
 /**
- * SessionProtocol Namespace / TrackStatus Property-Based Tests
+ * SessionMachine Namespace / TrackStatus Property-Based Tests
  * draft-ietf-moq-transport-17 Section 6, 9.16-9.21
  */
 
@@ -20,10 +20,10 @@ import {
   type SubscribeNamespace,
   type TrackStatus,
 } from "../message";
-import { SessionProtocol } from "./protocol";
+import { SessionMachine } from "./machine";
 
-function established(): SessionProtocol {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+function established(): SessionMachine {
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();

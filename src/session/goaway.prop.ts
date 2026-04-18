@@ -1,15 +1,15 @@
 /**
- * SessionProtocol GOAWAY / tick Property-Based Tests
+ * SessionMachine GOAWAY / tick Property-Based Tests
  * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
  */
 
 import { assert, test } from "vite-plus/test";
 import { SessionErrorCode } from "../error";
 import { createSetup, type Goaway, MessageType } from "../message";
-import { SessionProtocol } from "./protocol";
+import { SessionMachine } from "./machine";
 
-function established(): SessionProtocol {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+function established(): SessionMachine {
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();
@@ -52,7 +52,7 @@ test("Client の sendGoaway で non-zero URI は PROTOCOL_VIOLATION", () => {
 });
 
 test("8192 バイト超過の URI は sendGoaway で PROTOCOL_VIOLATION", () => {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();

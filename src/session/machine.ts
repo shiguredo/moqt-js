@@ -65,7 +65,7 @@ import {
 /**
  * MOQT Session プロトコル状態機械
  */
-export class SessionProtocol {
+export class SessionMachine {
   private readonly _role: Role;
   private readonly _transport: Transport;
   private _state: SessionState;
@@ -108,8 +108,8 @@ export class SessionProtocol {
    *
    * 作成時点で自側 SETUP の sendControl イベントを積み、"setup" 状態にする。
    */
-  static createClient(transport: Transport, setup: Setup): SessionProtocol {
-    return new SessionProtocol("client", transport, setup);
+  static createClient(transport: Transport, setup: Setup): SessionMachine {
+    return new SessionMachine("client", transport, setup);
   }
 
   /** 現在のセッション状態 */

@@ -1,5 +1,5 @@
 /**
- * SessionProtocol Fetch Property-Based Tests
+ * SessionMachine Fetch Property-Based Tests
  * draft-ietf-moq-transport-17 Section 5.2, 9.14, 9.15
  */
 
@@ -17,10 +17,10 @@ import {
   MessageType,
   type RequestError,
 } from "../message";
-import { SessionProtocol } from "./protocol";
+import { SessionMachine } from "./machine";
 
-function established(): SessionProtocol {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+function established(): SessionMachine {
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();
@@ -166,7 +166,7 @@ test("forgetFetch は terminated のみ除去する", () => {
 });
 
 test("established 前の sendFetch は PROTOCOL_VIOLATION", () => {
-  const p = SessionProtocol.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   assert.throws(() => {
     p.sendFetch(buildStandaloneFetch(0n, { group: 0n, object: 0n }, { group: 1n, object: 0n }));

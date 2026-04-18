@@ -19,12 +19,11 @@ export type {
   NamespaceSubscriptionCallbacks,
   PublishCallbacks,
   PublishOptions,
-  Session,
   SessionStatistics,
   SubscribeCallbacks,
   SubscribeOptions,
   TrackStatusResult,
-} from "./impl";
+} from "./session";
 
 export type { SessionState } from "./types";
-export { SessionImpl } from "./impl";
+export { Session } from "./session";
