@@ -19,9 +19,11 @@ import {
   type FetchOk,
   getParameterVarintValue,
   type Goaway,
+  MessageParameterType,
   MessageType,
   type Namespace,
   type NamespaceDone,
+  type Parameter,
   type Publish,
   type PublishBlocked,
   type PublishDone,
@@ -37,6 +39,7 @@ import {
   type SubscribeOk,
   type TrackStatus,
 } from "../message";
+import { type AuthToken, decodeAuthToken } from "../message/authToken";
 import type { ControlMessage } from "../message/control";
 import { RequestIdGenerator, RequestIdTracker } from "./requestId";
 import { AuthTokenCache } from "./authTokenCache";
@@ -382,6 +385,7 @@ export class SessionMachine {
    */
   sendSubscribe(subscribe: Subscribe): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(subscribe.parameters);
     const key = subscriptionKey(subscribe.trackNamespace, subscribe.trackName, "subscriber");
     if (this._subscriptionsByTrack.has(key)) {
       throw new SessionError(
@@ -418,6 +422,7 @@ export class SessionMachine {
    */
   sendPublish(publish: Publish): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(publish.parameters);
     if (this._myPublisherAliases.has(publish.trackAlias)) {
       throw new SessionError(
         "local publisher reused track alias",
@@ -618,6 +623,7 @@ export class SessionMachine {
    */
   sendRequestUpdate(targetRequestId: bigint, update: RequestUpdate): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(update.parameters);
     if (!this._subscriptions.has(targetRequestId)) {
       throw new SessionError(
         "no subscription for REQUEST_UPDATE",
@@ -741,6 +747,7 @@ export class SessionMachine {
    */
   sendPublishNamespace(msg: PublishNamespace): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(msg.parameters);
     if (this._namespacePublications.has(msg.requestId)) {
       throw new SessionError(
         "duplicate request id for PUBLISH_NAMESPACE",
@@ -768,6 +775,7 @@ export class SessionMachine {
    */
   sendSubscribeNamespace(msg: SubscribeNamespace): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(msg.parameters);
     if (this._namespaceSubscriptions.has(msg.requestId)) {
       throw new SessionError(
         "duplicate request id for SUBSCRIBE_NAMESPACE",
@@ -796,6 +804,7 @@ export class SessionMachine {
    */
   sendTrackStatus(msg: TrackStatus): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(msg.parameters);
     if (this._trackStatusRequests.has(msg.requestId)) {
       throw new SessionError(
         "duplicate request id for TRACK_STATUS",
@@ -919,6 +928,7 @@ export class SessionMachine {
    */
   sendFetch(fetch: Fetch): void {
     this.requireEstablished();
+    this.processOutgoingAuthTokens(fetch.parameters);
     if (this._fetches.has(fetch.requestId)) {
       throw new SessionError("duplicate request id for FETCH", SessionErrorCode.PROTOCOL_VIOLATION);
     }
@@ -979,12 +989,91 @@ export class SessionMachine {
     entry.endOfTrack = ok.endOfTrack;
   }
 
+  /**
+   * 自側が送信するメッセージに含まれる AUTHORIZATION_TOKEN を処理する
+   * draft-ietf-moq-transport-17 Section 9.3.2
+   *
+   * REGISTER は `_localAuthTokenCache` に登録し、DELETE は除去する。
+   * USE_ALIAS / USE_VALUE はキャッシュを変えない。
+   *
+   * 失敗時はいずれも SessionError を throw する。
+   *
+   * - デコード失敗 → KEY_VALUE_FORMATTING_ERROR
+   * - 重複 alias → DUPLICATE_AUTH_TOKEN_ALIAS
+   * - cache 超過 → AUTH_TOKEN_CACHE_OVERFLOW
+   */
+  processOutgoingAuthTokens(parameters: readonly Parameter[]): void {
+    for (const token of iterateAuthTokens(parameters)) {
+      applyAuthTokenToCache(token, this._localAuthTokenCache);
+    }
+  }
+
+  /**
+   * 相手から受け取ったメッセージに含まれる AUTHORIZATION_TOKEN を処理する
+   * draft-ietf-moq-transport-17 Section 9.3.2
+   *
+   * REGISTER は `_peerAuthTokenCache` に登録し、DELETE は除去する。
+   * 失敗時は `closeSession` イベントを積み throw しない。
+   */
+  processIncomingAuthTokens(parameters: readonly Parameter[]): void {
+    try {
+      for (const token of iterateAuthTokens(parameters)) {
+        applyAuthTokenToCache(token, this._peerAuthTokenCache);
+      }
+    } catch (e) {
+      if (e instanceof SessionError) {
+        this.fail(e);
+        return;
+      }
+      throw e;
+    }
+  }
+
   private fail(error: SessionError): void {
     if (this._state === "closing" || this._state === "closed") {
       return;
     }
     this._state = "closing";
     this._events.push({ type: "closeSession", error });
+  }
+}
+
+/**
+ * Parameters から AUTHORIZATION_TOKEN (type 0x03) のみを取り出し
+ * Token 構造をデコードして yield する
+ */
+function* iterateAuthTokens(parameters: readonly Parameter[]): Iterable<AuthToken> {
+  for (const param of parameters) {
+    if (param.type !== MessageParameterType.AUTHORIZATION_TOKEN) continue;
+    yield decodeAuthToken(param.value);
+  }
+}
+
+/**
+ * Token を対応する AuthTokenCache に反映する
+ *
+ * - REGISTER: tryRegister (duplicate は AuthTokenCache が throw、overflow は false)
+ * - DELETE: delete (未登録は no-op)
+ * - USE_ALIAS / USE_VALUE: キャッシュは触らない
+ */
+function applyAuthTokenToCache(token: AuthToken, cache: AuthTokenCache): void {
+  switch (token.kind) {
+    case "register": {
+      const ok = cache.tryRegister(token.alias, token.tokenType, token.tokenValue);
+      if (!ok) {
+        throw new SessionError(
+          "AUTHORIZATION_TOKEN cache overflow",
+          SessionErrorCode.AUTH_TOKEN_CACHE_OVERFLOW,
+        );
+      }
+      return;
+    }
+    case "delete":
+      cache.delete(token.alias);
+      return;
+    case "useAlias":
+    case "useValue":
+      return;
   }
 }
 

@@ -68,6 +68,13 @@
   - `encodeAuthToken` / `decodeAuthToken` を追加し、デコード失敗時は `KEY_VALUE_FORMATTING_ERROR` で throw する
   - `src/message/authToken.test.ts` と `src/message/authToken.prop.ts` に単体テストと PBT を追加する
   - @voluntas
+- [ADD] SessionMachine に AUTHORIZATION_TOKEN パラメータ処理を配線する (#0076)
+  - `processOutgoingAuthTokens` / `processIncomingAuthTokens` を公開メソッドとして追加する
+  - `sendSubscribe` / `sendPublish` / `sendRequestUpdate` / `sendPublishNamespace` / `sendSubscribeNamespace` / `sendTrackStatus` / `sendFetch` で送信前に `processOutgoingAuthTokens` を呼ぶ
+  - REGISTER の重複は `DUPLICATE_AUTH_TOKEN_ALIAS`、キャッシュ超過は `AUTH_TOKEN_CACHE_OVERFLOW` を返す
+  - 受信側は `fail()` 経由で `closeSession` イベントを積む
+  - `src/session/authTokenWiring.prop.ts` に配線側の PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
