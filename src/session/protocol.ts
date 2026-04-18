@@ -17,6 +17,7 @@ import { SessionError, SessionErrorCode } from "../error";
 import {
   type Fetch,
   type FetchOk,
+  getParameterVarintValue,
   MessageType,
   type Namespace,
   type NamespaceDone,
@@ -29,6 +30,7 @@ import {
   type RequestOk,
   type RequestUpdate,
   type Setup,
+  SetupOptionType,
   type Subscribe,
   type SubscribeNamespace,
   type SubscribeOk,
@@ -36,6 +38,7 @@ import {
 } from "../message";
 import type { ControlMessage } from "../message/control";
 import { RequestIdGenerator, RequestIdTracker } from "./requestId";
+import { AuthTokenCache } from "./authTokenCache";
 import { createFetchEntry } from "./fetch";
 import {
   createNamespacePublicationEntry,
@@ -76,6 +79,8 @@ export class SessionProtocol {
   private readonly _namespacePublications: Map<bigint, NamespacePublicationEntry> = new Map();
   private readonly _namespaceSubscriptions: Map<bigint, NamespaceSubscriptionEntry> = new Map();
   private readonly _trackStatusRequests: Map<bigint, TrackStatusEntry> = new Map();
+  private _localAuthTokenCache: AuthTokenCache;
+  private _peerAuthTokenCache: AuthTokenCache = new AuthTokenCache(0n);
 
   private constructor(role: Role, transport: Transport, setup: Setup) {
     this._role = role;
@@ -86,6 +91,7 @@ export class SessionProtocol {
     this._events = [{ type: "sendControl", message: setup }];
     this._requestIdGen = new RequestIdGenerator(role);
     this._peerRequestIds = new RequestIdTracker(role === "client" ? "server" : "client");
+    this._localAuthTokenCache = new AuthTokenCache(readMaxAuthTokenCacheSize(setup));
   }
 
   /**
@@ -184,8 +190,19 @@ export class SessionProtocol {
       return;
     }
     this._peerSetup = setup;
+    this._peerAuthTokenCache = new AuthTokenCache(readMaxAuthTokenCacheSize(setup));
     this._state = "established";
     this._events.push({ type: "established" });
+  }
+
+  /** 自側 AuthTokenCache (相手がトラッキングすべきエントリ) */
+  get localAuthTokenCache(): AuthTokenCache {
+    return this._localAuthTokenCache;
+  }
+
+  /** 相手側 AuthTokenCache (自側がトラッキングすべきエントリ) */
+  get peerAuthTokenCache(): AuthTokenCache {
+    return this._peerAuthTokenCache;
   }
 
   /**
@@ -848,4 +865,16 @@ export class SessionProtocol {
     this._state = "closing";
     this._events.push({ type: "closeSession", error });
   }
+}
+
+/**
+ * Setup パラメータから MAX_AUTH_TOKEN_CACHE_SIZE を読み取る
+ * draft-ietf-moq-transport-17 Section 9.4.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE)
+ *
+ * 省略時は 0 (cache 無効)。
+ */
+function readMaxAuthTokenCacheSize(setup: Setup): bigint {
+  const param = setup.parameters.find((p) => p.type === SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE);
+  if (param === undefined) return 0n;
+  return getParameterVarintValue(param);
 }
