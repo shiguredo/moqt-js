@@ -42,6 +42,14 @@
   - `SessionImpl.fetch()` で SessionProtocol にも送信を記録する
   - `src/session/fetch.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [ADD] sans-I/O な SessionProtocol に Namespace 系と TRACK_STATUS を実装する (#0073)
+  - `src/session/namespace.ts` に NamespacePublicationEntry / NamespaceSubscriptionEntry / TrackStatusEntry 生成ヘルパーを追加する
+  - `SessionProtocol` に `sendPublishNamespace` / `sendSubscribeNamespace` / `sendTrackStatus` を追加する
+  - `handleStreamMessage` に NAMESPACE / NAMESPACE_DONE / PUBLISH_BLOCKED / REQUEST_OK 分岐を追加する
+  - REQUEST_OK / REQUEST_ERROR を Namespace 系と TRACK_STATUS へ dispatch する
+  - `SessionImpl.publishNamespace()` / `subscribeNamespace()` / `trackStatus()` で SessionProtocol にも送信を記録する
+  - `src/session/namespace.prop.ts` に PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する

@@ -55,8 +55,11 @@ import {
   type Fetch,
   type Parameter,
   type Publish,
+  type PublishNamespace,
   type Subscribe,
+  type SubscribeNamespace,
   type SubscriptionFilter,
+  type TrackStatus,
 } from "../message";
 import { decodeVarint, encodeVarint } from "../varint";
 import {
@@ -1457,7 +1460,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
     // TRACK_STATUS は新しい双方向ストリームで送信される。
     // https://github.com/moq-wg/moq-transport/pull/1389
-    const trackStatusMsg = {
+    const trackStatusMsg: TrackStatus = {
       type: MessageType.TRACK_STATUS,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -1467,6 +1470,10 @@ export class SessionImpl implements Session {
       trackName: trackNameBytes,
       parameters: [],
     };
+
+    // sans-I/O SessionProtocol に TRACK_STATUS 送信を記録する
+    this.protocol!.sendTrackStatus(trackStatusMsg);
+    this.protocol!.nextEvent();
 
     const payload = encodeTrackStatusPayload(trackStatusMsg);
     const streamInfo = await this.sendRequestOnBidiStream(
@@ -1523,7 +1530,7 @@ export class SessionImpl implements Session {
     const writer = stream.writable.getWriter();
 
     // SUBSCRIBE_NAMESPACE メッセージを構築
-    const subscribeNamespaceMsg = {
+    const subscribeNamespaceMsg: SubscribeNamespace = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -1531,8 +1538,12 @@ export class SessionImpl implements Session {
       requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       subscribeOptions,
-      parameters: [] as [],
+      parameters: [],
     };
+
+    // sans-I/O SessionProtocol に SUBSCRIBE_NAMESPACE 送信を記録する
+    this.protocol!.sendSubscribeNamespace(subscribeNamespaceMsg);
+    this.protocol!.nextEvent();
 
     // メッセージをエンコードして送信
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
@@ -1718,7 +1729,7 @@ export class SessionImpl implements Session {
     });
 
     // PUBLISH_NAMESPACE メッセージを送信
-    const publishNamespaceMsg = {
+    const publishNamespaceMsg: PublishNamespace = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -1727,6 +1738,10 @@ export class SessionImpl implements Session {
       trackNamespace,
       parameters: [],
     };
+
+    // sans-I/O SessionProtocol に PUBLISH_NAMESPACE 送信を記録する
+    this.protocol!.sendPublishNamespace(publishNamespaceMsg);
+    this.protocol!.nextEvent();
 
     const payload = encodePublishNamespacePayload(publishNamespaceMsg);
     await this.sendControlMessage(MessageType.PUBLISH_NAMESPACE, payload, {
