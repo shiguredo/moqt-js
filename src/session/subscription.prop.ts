@@ -12,8 +12,10 @@ import {
   encodeTrackName,
   MessageType,
   type Publish,
+  type PublishDone,
   type PublishOk,
   type RequestError,
+  type RequestUpdate,
   type Subscribe,
   type SubscribeOk,
 } from "../message";
@@ -231,4 +233,125 @@ test("established 前の sendSubscribe は PROTOCOL_VIOLATION", () => {
   assert.throws(() => {
     p.sendSubscribe(buildSubscribe(0n));
   });
+});
+
+test("sendRequestUpdate が sendOnStream イベントを積む", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  const updateId = p.nextLocalRequestId();
+  const update: RequestUpdate = {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: updateId,
+    requiredRequestIdDelta: 0n,
+    parameters: [],
+  };
+  p.sendRequestUpdate(requestId, update);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+  if (event.type === "sendOnStream") {
+    assert.equal(event.requestId, requestId);
+    assert.strictEqual(event.message, update);
+  }
+});
+
+test("存在しない subscription への sendRequestUpdate は PROTOCOL_VIOLATION", () => {
+  const p = established();
+  const update: RequestUpdate = {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 10n,
+    requiredRequestIdDelta: 0n,
+    parameters: [],
+  };
+  assert.throws(() => {
+    p.sendRequestUpdate(9999n, update);
+  });
+});
+
+test("peer からの REQUEST_UPDATE は requestUpdateReceived イベントを出す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  const updateId = p.nextLocalRequestId();
+  const update: RequestUpdate = {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: updateId,
+    requiredRequestIdDelta: 0n,
+    parameters: [],
+  };
+  p.handleStreamMessage(requestId, update);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "requestUpdateReceived");
+  if (event.type === "requestUpdateReceived") {
+    assert.equal(event.requestId, updateId);
+  }
+});
+
+test("sendPublishDone が subscription を terminated にする", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  const done: PublishDone = {
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0n,
+    streamCount: 0n,
+    reasonPhrase: "",
+  };
+  p.sendPublishDone(requestId, done);
+  const entry = p.subscription(requestId);
+  assert.ok(entry);
+  assert.equal(entry.state, "terminated");
+  const event = p.nextEvent();
+  assert.equal(event?.type, "sendOnStream");
+});
+
+test("subscriber 側からの sendPublishDone は PROTOCOL_VIOLATION", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  const done: PublishDone = {
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0n,
+    streamCount: 0n,
+    reasonPhrase: "",
+  };
+  assert.throws(() => {
+    p.sendPublishDone(requestId, done);
+  });
+});
+
+test("PUBLISH_DONE を受信すると terminated に遷移し publishDoneReceived を出す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 42n,
+    parameters: [],
+    trackProperties: [],
+  });
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 3n,
+    streamCount: 7n,
+    reasonPhrase: "bye",
+  });
+  const entry = p.subscription(requestId);
+  assert.ok(entry);
+  assert.equal(entry.state, "terminated");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "publishDoneReceived");
+  if (event.type === "publishDoneReceived") {
+    assert.equal(event.statusCode, 3n);
+    assert.equal(event.streamCount, 7n);
+    assert.equal(event.reasonPhrase, "bye");
+  }
 });

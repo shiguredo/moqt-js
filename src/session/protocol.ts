@@ -17,8 +17,10 @@ import { SessionError, SessionErrorCode } from "../error";
 import {
   MessageType,
   type Publish,
+  type PublishDone,
   type PublishOk,
   type RequestError,
+  type RequestUpdate,
   type Setup,
   type Subscribe,
   type SubscribeOk,
@@ -307,6 +309,12 @@ export class SessionProtocol {
       case MessageType.REQUEST_ERROR:
         this.handlePeerRequestError(requestId, msg);
         return;
+      case MessageType.REQUEST_UPDATE:
+        this.handlePeerRequestUpdate(requestId, msg);
+        return;
+      case MessageType.PUBLISH_DONE:
+        this.handlePeerPublishDone(requestId, msg);
+        return;
       default:
         this.fail(
           new SessionError(
@@ -415,6 +423,97 @@ export class SessionProtocol {
       return;
     }
     entry.state = "established";
+  }
+
+  /**
+   * REQUEST_UPDATE を送信する
+   * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE)
+   *
+   * 既存 bidi request stream (targetRequestId) 上に REQUEST_UPDATE を流す。
+   * REQUEST_UPDATE 自体は独自の request_id を持ち、peer からの REQUEST_OK /
+   * REQUEST_ERROR で応答される。
+   */
+  sendRequestUpdate(targetRequestId: bigint, update: RequestUpdate): void {
+    this.requireEstablished();
+    if (!this._subscriptions.has(targetRequestId)) {
+      throw new SessionError(
+        "no subscription for REQUEST_UPDATE",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this._events.push({
+      type: "sendOnStream",
+      requestId: targetRequestId,
+      message: update,
+    });
+  }
+
+  /**
+   * PUBLISH_DONE を送信する (自側が publisher)
+   * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE)
+   *
+   * subscription を terminated に遷移させ、既存 bidi request stream (requestId) に
+   * PUBLISH_DONE を流す。publisher 側以外から呼ぶと PROTOCOL_VIOLATION を throw する。
+   */
+  sendPublishDone(requestId: bigint, publishDone: PublishDone): void {
+    this.requireEstablished();
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no subscription for PUBLISH_DONE",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.myRole !== "publisher") {
+      throw new SessionError(
+        "PUBLISH_DONE can be sent only by publisher side",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    entry.state = "terminated";
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: publishDone,
+    });
+  }
+
+  private handlePeerRequestUpdate(targetRequestId: bigint, update: RequestUpdate): void {
+    if (!this._subscriptions.has(targetRequestId)) {
+      this.fail(
+        new SessionError(
+          "REQUEST_UPDATE received for unknown subscription",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    this._events.push({
+      type: "requestUpdateReceived",
+      requestId: update.requestId,
+      parameters: update.parameters,
+    });
+  }
+
+  private handlePeerPublishDone(requestId: bigint, done: PublishDone): void {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      this.fail(
+        new SessionError(
+          "PUBLISH_DONE received for unknown request id",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    entry.state = "terminated";
+    this._events.push({
+      type: "publishDoneReceived",
+      requestId,
+      statusCode: done.statusCode,
+      streamCount: done.streamCount,
+      reasonPhrase: done.reasonPhrase,
+    });
   }
 
   private handlePeerRequestError(requestId: bigint, _err: RequestError): void {

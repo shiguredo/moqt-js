@@ -29,6 +29,12 @@
   - `SessionImpl.subscribe()` / `publish()` で SessionProtocol にも送信を記録する
   - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [ADD] sans-I/O な SessionProtocol に REQUEST_UPDATE と PUBLISH_DONE を実装する (#0073)
+  - `SessionProtocol` に `sendRequestUpdate` / `sendPublishDone` を追加する
+  - `handleStreamMessage` に REQUEST_UPDATE / PUBLISH_DONE 分岐を追加する
+  - peer REQUEST_UPDATE 受信で `requestUpdateReceived`、peer PUBLISH_DONE 受信で `publishDoneReceived` イベントを積む
+  - PUBLISH_DONE の送受信で SubscriptionEntry を `terminated` に遷移させる
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
