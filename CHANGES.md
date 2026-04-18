@@ -63,6 +63,11 @@
   - peer GOAWAY 受信で `goawayReceived` イベントを積む
   - `src/session/goaway.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [ADD] AUTHORIZATION_TOKEN の Token 構造 (Alias Type / Token Alias / Token Type / Token Value) の encode/decode を追加する (#0075)
+  - `src/message/authToken.ts` に `AuthTokenAliasType` enum と `AuthToken` discriminated union を追加する
+  - `encodeAuthToken` / `decodeAuthToken` を追加し、デコード失敗時は `KEY_VALUE_FORMATTING_ERROR` で throw する
+  - `src/message/authToken.test.ts` と `src/message/authToken.prop.ts` に単体テストと PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
