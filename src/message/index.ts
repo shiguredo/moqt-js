@@ -143,3 +143,6 @@ export {
   encodePublishNamespacePayload,
   encodeSubscribeNamespacePayload,
 } from "./namespace";
+
+// Control Message Union
+export type { ControlMessage } from "./control";

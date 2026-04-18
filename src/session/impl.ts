@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 3 (Sessions)
  */
 
-import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
+import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import {
   encodeSubgroupHeader,
   SubgroupHeaderType,
@@ -13,9 +13,9 @@ import {
   decodeObjectDatagram,
   DatagramType,
   type MoqtObject,
-} from "./dataStream";
-export type { MoqtObject } from "./dataStream";
-import { RequestError, type RequestErrorCode, SessionError, SessionErrorCode } from "./error";
+} from "../dataStream";
+export type { MoqtObject } from "../dataStream";
+import { RequestError, type RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
   MessageType,
   PublishDoneStatusCode,
@@ -54,18 +54,18 @@ import {
   type Location,
   type Parameter,
   type SubscriptionFilter,
-} from "./message";
-import { decodeVarint, encodeVarint } from "./varint";
+} from "../message";
+import { decodeVarint, encodeVarint } from "../varint";
 import {
   type Publisher,
   PublisherImpl,
   type SendObjectParams,
   type SendDatagramParams,
-} from "./publisher";
-import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
-import { type Fetcher, FetcherImpl } from "./fetcher";
-import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "./dataStream";
-import { TrackPropertyId, type Property } from "./properties";
+} from "../publisher";
+import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
+import { type Fetcher, FetcherImpl } from "../fetcher";
+import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "../dataStream";
+import { TrackPropertyId, type Property } from "../properties";
 
 /**
  * Session state
@@ -669,7 +669,7 @@ export class SessionImpl implements Session {
   // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
   private pendingSubgroupStreams = new Map<
     bigint,
-    Array<{ header: import("./dataStream").SubgroupHeader; data: Uint8Array }>
+    Array<{ header: import("../dataStream").SubgroupHeader; data: Uint8Array }>
   >();
 
   // Subscriber 登録待ちの Promise を管理
@@ -1993,7 +1993,7 @@ export class SessionImpl implements Session {
   private async readResponseFromBidiStream(
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
-  ): Promise<import("./controlStream").ControlMessage> {
+  ): Promise<import("../controlStream").RawControlMessage> {
     const reader = stream.readable.getReader();
     try {
       while (true) {
@@ -3473,14 +3473,14 @@ export class SessionImpl implements Session {
     let isFetchStream = false;
 
     // Subgroup ストリーム用の状態
-    let subgroupHeader: import("./dataStream").SubgroupHeader | null = null;
+    let subgroupHeader: import("../dataStream").SubgroupHeader | null = null;
     let subscriber: SubscriberImpl | null = null;
     let previousObjectId = -1n;
 
     // Fetch ストリーム用の状態
-    let fetchHeader: import("./dataStream").FetchHeader | null = null;
+    let fetchHeader: import("../dataStream").FetchHeader | null = null;
     let fetcher: FetcherImpl | null = null;
-    let fetchContext: import("./dataStream").FetchObjectContext | null = null;
+    let fetchContext: import("../dataStream").FetchObjectContext | null = null;
     let isFirstFetchObject = true;
 
     try {
@@ -3629,7 +3629,7 @@ export class SessionImpl implements Session {
   private processFetchObjects(
     buffer: Uint8Array,
     fetcher: FetcherImpl,
-    context: import("./dataStream").FetchObjectContext | null,
+    context: import("../dataStream").FetchObjectContext | null,
     isFirst: boolean,
   ): Uint8Array {
     let offset = 0;
@@ -3699,7 +3699,7 @@ export class SessionImpl implements Session {
   private processSubgroupObjects(
     buffer: Uint8Array,
     subscriber: SubscriberImpl,
-    header: import("./dataStream").SubgroupHeader,
+    header: import("../dataStream").SubgroupHeader,
     previousObjectId: bigint,
   ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
     let offset = 0;
@@ -3775,7 +3775,7 @@ export class SessionImpl implements Session {
    */
   private processPendingSubgroupStream(
     subscriber: SubscriberImpl,
-    header: import("./dataStream").SubgroupHeader,
+    header: import("../dataStream").SubgroupHeader,
     data: Uint8Array,
   ): void {
     let previousObjectId = -1n;

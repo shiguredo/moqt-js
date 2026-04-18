@@ -174,6 +174,11 @@
   - @voluntas
 - [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
   - @voluntas
+- [UPDATE] src/session.ts を src/session/impl.ts に移動し sans-I/O Session プロトコル層の土台を用意する (#0073)
+  - src/session/index.ts を新設して公開 API を re-export するようにする
+  - src/message/control.ts を新設し ControlMessage discriminated union を追加する
+  - src/controlStream.ts の ControlMessage を RawControlMessage に改名する
+  - @voluntas
 
 ## 2026.1.0
 
