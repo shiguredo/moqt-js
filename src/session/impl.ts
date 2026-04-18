@@ -66,11 +66,7 @@ import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../s
 import { type Fetcher, FetcherImpl } from "../fetcher";
 import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "../dataStream";
 import { TrackPropertyId, type Property } from "../properties";
-
-/**
- * Session state
- */
-export type SessionState = "connected" | "closed";
+import type { SessionState } from "./types";
 
 /**
  * Debug message for logging MOQT protocol messages
@@ -635,7 +631,7 @@ export interface Session {
  * Internal Session implementation
  */
 export class SessionImpl implements Session {
-  private sessionState: SessionState = "connected";
+  private sessionState: SessionState = "established";
   private readonly transport: WebTransport;
   private readonly callbacks: ConnectCallbacks;
   /**
@@ -1748,7 +1744,7 @@ export class SessionImpl implements Session {
     // fetches on a connection."
     if (goawayTimeout > 0n) {
       this.goawayTimeoutId = setTimeout(() => {
-        if (this.sessionState === "connected") {
+        if (this.sessionState === "established") {
           this.closeWithError(
             new SessionError("GOAWAY timeout expired", SessionErrorCode.GOAWAY_TIMEOUT),
           );
@@ -2819,7 +2815,7 @@ export class SessionImpl implements Session {
   ): Promise<void> {
     const reader = stream.readable.getReader();
     try {
-      while (this.sessionState === "connected") {
+      while (this.sessionState === "established") {
         const { value, done } = await reader.read();
         if (done) break;
 
@@ -2885,14 +2881,14 @@ export class SessionImpl implements Session {
       const reader = this.controlReceiveStream.getReader();
 
       try {
-        while (this.sessionState === "connected") {
+        while (this.sessionState === "established") {
           const { value, done } = await reader.read();
           if (done) {
             // draft-ietf-moq-transport-17 Section 3.3:
             // "A control stream MUST NOT be closed at the underlying transport layer
             // during the session's lifetime. Doing so results in the session being
             // closed as a PROTOCOL_VIOLATION."
-            if (this.sessionState === "connected") {
+            if (this.sessionState === "established") {
               this.closeWithError(
                 new SessionError(
                   "control stream closed unexpectedly",
@@ -2909,7 +2905,7 @@ export class SessionImpl implements Session {
           }
         }
       } catch (err) {
-        if (this.sessionState === "connected") {
+        if (this.sessionState === "established") {
           this.callbacks.error?.(err as Error);
         }
       } finally {
@@ -3125,7 +3121,7 @@ export class SessionImpl implements Session {
     // クライアント側でもタイムアウトを設定し、期限内にグレースフルシャットダウンを試みる。
     if (msg.timeout > 0n) {
       this.goawayTimeoutId = setTimeout(() => {
-        if (this.sessionState === "connected") {
+        if (this.sessionState === "established") {
           void this.close();
           this.transport.close({
             closeCode: SessionErrorCode.NO_ERROR,
@@ -3269,7 +3265,7 @@ export class SessionImpl implements Session {
       const reader = this.transport.incomingUnidirectionalStreams.getReader();
 
       try {
-        while (this.sessionState === "connected") {
+        while (this.sessionState === "established") {
           const { value: stream, done } = await reader.read();
           if (done) break;
 
@@ -3287,7 +3283,7 @@ export class SessionImpl implements Session {
           },
           timestamp: Date.now(),
         });
-        if (this.sessionState === "connected") {
+        if (this.sessionState === "established") {
           this.callbacks.error?.(err as Error);
         }
       } finally {
@@ -3305,7 +3301,7 @@ export class SessionImpl implements Session {
       const reader = this.transport.datagrams.readable.getReader();
 
       try {
-        while (this.sessionState === "connected") {
+        while (this.sessionState === "established") {
           const { value, done } = await reader.read();
           if (done) break;
 
@@ -3324,7 +3320,7 @@ export class SessionImpl implements Session {
           },
           timestamp: Date.now(),
         });
-        if (this.sessionState === "connected") {
+        if (this.sessionState === "established") {
           this.callbacks.error?.(err as Error);
         }
       } finally {

@@ -20,11 +20,11 @@ export type {
   PublishCallbacks,
   PublishOptions,
   Session,
-  SessionState,
   SessionStatistics,
   SubscribeCallbacks,
   SubscribeOptions,
   TrackStatusResult,
 } from "./impl";
 
+export type { SessionState } from "./types";
 export { SessionImpl } from "./impl";

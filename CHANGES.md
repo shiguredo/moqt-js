@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
+  - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
+  - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
+  - @voluntas
 - [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
   - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
   - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加
