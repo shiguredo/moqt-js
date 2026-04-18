@@ -18,6 +18,7 @@ import {
   type Fetch,
   type FetchOk,
   getParameterVarintValue,
+  type Goaway,
   MessageType,
   type Namespace,
   type NamespaceDone,
@@ -47,16 +48,18 @@ import {
   namespaceSubscribeOptionsFromMode,
 } from "./namespace";
 import { createSubscriptionEntry, extractForwardState, subscriptionKey } from "./subscription";
-import type {
-  FetchEntry,
-  NamespacePublicationEntry,
-  NamespaceSubscriptionEntry,
-  Role,
-  SessionEvent,
-  SessionState,
-  SubscriptionEntry,
-  Transport,
-  TrackStatusEntry,
+import {
+  MAX_NEW_SESSION_URI_LENGTH,
+  type FetchEntry,
+  type NamespacePublicationEntry,
+  type NamespaceSubscriptionEntry,
+  type PeerGoawayInfo,
+  type Role,
+  type SessionEvent,
+  type SessionState,
+  type SubscriptionEntry,
+  type Transport,
+  type TrackStatusEntry,
 } from "./types";
 
 /**
@@ -81,6 +84,11 @@ export class SessionProtocol {
   private readonly _trackStatusRequests: Map<bigint, TrackStatusEntry> = new Map();
   private _localAuthTokenCache: AuthTokenCache;
   private _peerAuthTokenCache: AuthTokenCache = new AuthTokenCache(0n);
+  private _localGoawaySent = false;
+  private _peerGoaway: PeerGoawayInfo | null = null;
+  private _lastTickMs: number | null = null;
+  private _localGoawayDeadlineMs: number | null = null;
+  private _localGoawayPendingTimeoutMs: number | null = null;
 
   private constructor(role: Role, transport: Transport, setup: Setup) {
     this._role = role;
@@ -159,6 +167,10 @@ export class SessionProtocol {
       this.handlePeerSetup(msg);
       return;
     }
+    if (msg.type === MessageType.GOAWAY) {
+      this.handlePeerGoaway(msg);
+      return;
+    }
     this.fail(
       new SessionError("unsupported control stream message", SessionErrorCode.PROTOCOL_VIOLATION),
     );
@@ -166,12 +178,121 @@ export class SessionProtocol {
 
   /**
    * 外部時計からの時刻更新を受け取る (sans-I/O)
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
    *
    * sans-I/O 制約のため session はタイマーを持たず、外部時計だけが時刻源となる。
-   * Phase 2 時点では何も行わない。Phase 8 で GOAWAY deadline 判定を実装する。
+   * 呼び出し側は単調増加ミリ秒時刻を渡し、GOAWAY deadline 超過時に
+   * SESSION_GOAWAY_TIMEOUT の closeSession イベントを積む。
    */
-  // biome-ignore lint/suspicious/noEmptyBlockStatements: Phase 8 で実装する
-  tick(_nowMs: number): void {}
+  tick(nowMs: number): void {
+    this._lastTickMs = nowMs;
+    if (this._localGoawayDeadlineMs === null && this._localGoawayPendingTimeoutMs !== null) {
+      this._localGoawayDeadlineMs = nowMs + this._localGoawayPendingTimeoutMs;
+      this._localGoawayPendingTimeoutMs = null;
+    }
+    if (this._state === "closing" || this._state === "closed") {
+      return;
+    }
+    if (this._localGoawayDeadlineMs !== null && nowMs >= this._localGoawayDeadlineMs) {
+      this.fail(new SessionError("goaway timeout expired", SessionErrorCode.GOAWAY_TIMEOUT));
+    }
+  }
+
+  /**
+   * GOAWAY を送信する
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
+   *
+   * - `Role::Client` は `new_session_uri` を空にする必要がある
+   * - `new_session_uri` は UTF-8 換算で 8192 バイト以下
+   * - 各エンドポイントから 1 回のみ
+   */
+  sendGoaway(goaway: Goaway): void {
+    this.requireEstablished();
+    if (this._localGoawaySent) {
+      throw new SessionError("GOAWAY already sent", SessionErrorCode.PROTOCOL_VIOLATION);
+    }
+    const uriBytes = new TextEncoder().encode(goaway.newSessionUri);
+    if (uriBytes.byteLength > MAX_NEW_SESSION_URI_LENGTH) {
+      throw new SessionError(
+        "new_session_uri exceeds 8192 bytes",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (this._role === "client" && uriBytes.byteLength > 0) {
+      throw new SessionError(
+        "client MUST send zero-length new_session_uri",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this._events.push({ type: "sendControl", message: goaway });
+    this._localGoawaySent = true;
+    // draft §9.5 L3321-3326: timeout==0 は specific timeout なし
+    if (goaway.timeout > 0n) {
+      const timeoutMs = Number(goaway.timeout);
+      if (this._lastTickMs !== null) {
+        this._localGoawayDeadlineMs = this._lastTickMs + timeoutMs;
+      } else {
+        // tick 未経験。最初の tick で deadline を確定する
+        this._localGoawayPendingTimeoutMs = timeoutMs;
+      }
+    }
+  }
+
+  /** 自側 GOAWAY 送信済みか */
+  get localGoawaySent(): boolean {
+    return this._localGoawaySent;
+  }
+
+  /** peer から受信した GOAWAY 情報 */
+  get peerGoaway(): PeerGoawayInfo | null {
+    return this._peerGoaway;
+  }
+
+  /** 最後に tick で受け取った時刻 (ms、診断用) */
+  get lastTickMs(): number | null {
+    return this._lastTickMs;
+  }
+
+  /** 自側 GOAWAY の絶対 deadline (ms、未送信 / timeout=0 / tick 未実施では null) */
+  get localGoawayDeadlineMs(): number | null {
+    return this._localGoawayDeadlineMs;
+  }
+
+  private handlePeerGoaway(goaway: Goaway): void {
+    if (this._peerGoaway !== null) {
+      this.fail(new SessionError("duplicate GOAWAY received", SessionErrorCode.PROTOCOL_VIOLATION));
+      return;
+    }
+    const uriBytes = new TextEncoder().encode(goaway.newSessionUri);
+    if (uriBytes.byteLength > MAX_NEW_SESSION_URI_LENGTH) {
+      this.fail(
+        new SessionError(
+          "received GOAWAY new_session_uri exceeds 8192 bytes",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    // draft §9.5: server (自側) は client (peer) からの non-zero URI を拒否
+    if (this._role === "server" && uriBytes.byteLength > 0) {
+      this.fail(
+        new SessionError(
+          "client sent non-zero new_session_uri",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+    this._peerGoaway = {
+      newSessionUri: uriBytes,
+      timeout: goaway.timeout,
+    };
+    this._events.push({
+      type: "goawayReceived",
+      newSessionUri: uriBytes,
+      timeout: goaway.timeout,
+    });
+  }
 
   /**
    * セッションを明示的にクローズする

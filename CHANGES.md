@@ -56,6 +56,13 @@
   - SETUP の MAX_AUTH_TOKEN_CACHE_SIZE から maxSize を確定する
   - `src/session/authTokenCache.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [ADD] sans-I/O な SessionProtocol に GOAWAY と tick 駆動を実装する (#0073)
+  - `SessionProtocol` に `sendGoaway` / `tick` / `handlePeerGoaway` を追加する
+  - `tick(nowMs)` で GOAWAY deadline を判定し SESSION_GOAWAY_TIMEOUT で `closeSession` する
+  - sendGoaway 時に URI 長と Client role の制約を検証する
+  - peer GOAWAY 受信で `goawayReceived` イベントを積む
+  - `src/session/goaway.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
