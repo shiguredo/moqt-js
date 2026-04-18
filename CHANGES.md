@@ -11,6 +11,11 @@
 
 ## develop
 
+- [ADD] sans-I/O な SessionProtocol に SETUP ハンドシェイクを実装する (#0073)
+  - `src/session/protocol.ts` に `SessionProtocol` class を追加する
+  - `SessionImpl.initialize()` の SETUP 送受信を `SessionProtocol` に委譲する
+  - `src/session/protocol.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する

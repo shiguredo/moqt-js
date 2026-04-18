@@ -66,6 +66,7 @@ import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../s
 import { type Fetcher, FetcherImpl } from "../fetcher";
 import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "../dataStream";
 import { TrackPropertyId, type Property } from "../properties";
+import { SessionProtocol } from "./protocol";
 import type { SessionState } from "./types";
 
 /**
@@ -632,6 +633,9 @@ export interface Session {
  */
 export class SessionImpl implements Session {
   private sessionState: SessionState = "established";
+  // sans-I/O な MOQT Session プロトコル状態機械。
+  // initialize() で createClient して SETUP ハンドシェイクに使う。
+  private protocol?: SessionProtocol;
   private readonly transport: WebTransport;
   private readonly callbacks: ConnectCallbacks;
   /**
@@ -847,8 +851,22 @@ export class SessionImpl implements Session {
     // 制御ストリームのストリームタイプは 0x2F00 (Table 3)
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
-    // Send SETUP
-    const setup = createSetup();
+    // sans-I/O な SessionProtocol に SETUP 送信を委譲する
+    this.protocol = SessionProtocol.createClient("webTransport", createSetup());
+    const sendCtrlEvent = this.protocol.nextEvent();
+    if (sendCtrlEvent === undefined || sendCtrlEvent.type !== "sendControl") {
+      throw new SessionError(
+        "session protocol did not emit sendControl after createClient",
+        SessionErrorCode.INTERNAL_ERROR,
+      );
+    }
+    const setup = sendCtrlEvent.message;
+    if (setup.type !== MessageType.SETUP) {
+      throw new SessionError(
+        "session protocol emitted non-SETUP message on control stream",
+        SessionErrorCode.INTERNAL_ERROR,
+      );
+    }
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);
 
@@ -921,10 +939,20 @@ export class SessionImpl implements Session {
       );
     }
 
-    // SETUP をデコードしてバリデーションする
-    decodeSetupPayload(msg.payload);
+    // SETUP をデコードしてプロトコル層に渡す
+    const peerSetup = decodeSetupPayload(msg.payload);
 
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
+
+    // sans-I/O な SessionProtocol に peer SETUP を処理させて established に遷移する
+    this.protocol.handleControl(peerSetup);
+    const establishedEvent = this.protocol.nextEvent();
+    if (establishedEvent === undefined || establishedEvent.type !== "established") {
+      throw new SessionError(
+        "session protocol failed to reach established state",
+        SessionErrorCode.INTERNAL_ERROR,
+      );
+    }
 
     // Start reading control messages in background
     this.startControlMessageLoop();
