@@ -1,6 +1,7 @@
 # Subscriber の audio 再生を AudioContext.currentTime ベースでスケジュールする
 
 Created: 2026-04-19
+Completed: 2026-04-19
 Model: Opus 4.7
 
 ## 概要
@@ -70,3 +71,12 @@ CLAUDE.md に従い「変更前にテストを先に修正する」。
 - `vp run build` (vite build + tsc) が通ること。
 - `vitest run` で既存 + 新規テストがすべて通ること。
 - e2e 動作確認 (examples 起動による実音声再生) は今回は対象外。
+
+## 解決方法
+
+- `src/createMediaSubscriber.ts` に純粋関数 `computeAudioPlaybackSchedule` と型 `AudioPlaybackScheduleInput` / `AudioPlaybackScheduleOutput` を追加した。
+- 定数 `DEFAULT_AUDIO_JITTER_BUFFER_SEC = 0.06` と `DEFAULT_AUDIO_MAX_DRIFT_SEC = 0.5` を追加した。
+- `MediaSubscriberImpl` に `audioNextPlaybackTime: number | null` を追加し、`handleAudioDecodedData` で `computeAudioPlaybackSchedule` の結果を使って `source.start(startAt)` を呼ぶように変更した。
+- `close()` で `audioNextPlaybackTime` を null にリセットするようにした。
+- `src/createMediaSubscriber.test.ts` で初回 / 連続 / 遅延 / 過剰先行 / 境界ケースの単体テストを追加した。
+- `src/createMediaSubscriber.prop.ts` で `startAt >= currentTime`、resynced 時の開始時刻、resynced=false 時の nextPlaybackTime 更新、drift 上限を fast-check で検証した。

@@ -11,6 +11,11 @@
 
 ## develop
 
+- [UPDATE] Subscriber の audio 再生を AudioContext.currentTime ベースでスケジュールする (#0084)
+  - `src/createMediaSubscriber.ts` の `handleAudioDecodedData` を純粋関数 `computeAudioPlaybackSchedule` に基づくスケジュール再生に変更する
+  - デフォルト値 `DEFAULT_AUDIO_JITTER_BUFFER_SEC = 0.06` / `DEFAULT_AUDIO_MAX_DRIFT_SEC = 0.5` を導入する
+  - `src/createMediaSubscriber.test.ts` と `src/createMediaSubscriber.prop.ts` を新設する
+  - @voluntas
 - [ADD] sans-I/O な SessionProtocol に SETUP ハンドシェイクを実装する (#0073)
   - `src/session/protocol.ts` に `SessionProtocol` class を追加する
   - `SessionImpl.initialize()` の SETUP 送受信を `SessionProtocol` に委譲する
