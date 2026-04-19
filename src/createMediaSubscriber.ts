@@ -39,6 +39,77 @@ const DEFAULT_AUDIO_TRACK_NAME = "audio";
 const DEFAULT_VIDEO_TRACK_NAME = "video";
 const CATALOG_RECEIVE_TIMEOUT = 5000;
 
+// audio 再生のジッタバッファ (秒)
+// Web Audio 一般の値を踏まえて 60 ms を既定とする
+const DEFAULT_AUDIO_JITTER_BUFFER_SEC = 0.06;
+
+// audio 再生がリアルタイムから乖離した場合の再同期しきい値 (秒)
+// 過剰遅延検出用の上限クランプ
+const DEFAULT_AUDIO_MAX_DRIFT_SEC = 0.5;
+
+/**
+ * audio 再生スケジュール計算の入力
+ */
+export interface AudioPlaybackScheduleInput {
+  // AudioContext.currentTime 相当の現在時刻 (秒)
+  currentTime: number;
+  // 直前までにスケジュール済みの再生終了時刻 (秒)。初回は null
+  nextPlaybackTime: number | null;
+  // 今回スケジュールするフレームの再生長 (秒)
+  frameDurationSec: number;
+  // 初回 / 再同期時に先読みするジッタバッファ (秒)
+  jitterBufferSec: number;
+  // この値を超えて先行 / 遅延した場合に再同期する (秒)
+  maxDriftSec: number;
+}
+
+/**
+ * audio 再生スケジュール計算の出力
+ */
+export interface AudioPlaybackScheduleOutput {
+  // 次フレームを AudioBufferSourceNode.start() に渡す開始時刻 (秒)
+  startAt: number;
+  // 次呼び出しで使う nextPlaybackTime (秒)
+  nextPlaybackTime: number;
+  // 再同期が発生したかどうか
+  resynced: boolean;
+}
+
+/**
+ * 連続再生用の audio スケジュールを計算する
+ *
+ * Web Audio API の AudioBufferSourceNode.start(when) は AudioContext.currentTime と
+ * 同じ時間軸上の絶対時刻を受け取る。連続再生のためには直前にスケジュール済みの終了時刻を
+ * 保持し、次フレームをその時刻以降にスケジュールする必要がある。
+ *
+ * - 初回 / 遅延発生 / 過剰先行時は currentTime + jitterBufferSec から再同期する
+ * - 正常系では nextPlaybackTime をそのまま開始時刻とし、末尾を frameDurationSec 進める
+ */
+export function computeAudioPlaybackSchedule(
+  input: AudioPlaybackScheduleInput,
+): AudioPlaybackScheduleOutput {
+  const { currentTime, nextPlaybackTime, frameDurationSec, jitterBufferSec, maxDriftSec } = input;
+  const resyncStart = currentTime + jitterBufferSec;
+
+  if (
+    nextPlaybackTime === null ||
+    nextPlaybackTime < currentTime ||
+    nextPlaybackTime - currentTime > maxDriftSec
+  ) {
+    return {
+      startAt: resyncStart,
+      nextPlaybackTime: resyncStart + frameDurationSec,
+      resynced: true,
+    };
+  }
+
+  return {
+    startAt: nextPlaybackTime,
+    nextPlaybackTime: nextPlaybackTime + frameDurationSec,
+    resynced: false,
+  };
+}
+
 /**
  * WebCodecs 形式の codec 文字列から AudioCodecType に変換する
  */
@@ -113,6 +184,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
   // デコーダー設定状態
   private audioDecoderConfigured = false;
   private videoDecoderConfigured = false;
+
+  // audio 再生スケジュール (AudioContext.currentTime 基準の秒)
+  private audioNextPlaybackTime: number | null = null;
 
   // 統計情報
   private audioStats: AudioReceiverStats = {
@@ -266,6 +340,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
     if (this.audioContext) {
       await this.audioContext.close();
     }
+    this.audioNextPlaybackTime = null;
 
     // セッションを閉じる
     if (this.session) {
@@ -666,11 +741,21 @@ class MediaSubscriberImpl implements MediaSubscriber {
       audioBuffer.copyToChannel(channelData, channel);
     }
 
-    // AudioBufferSourceNode で再生
+    // AudioContext.currentTime ベースでスケジュールし、フレーム間のギャップや重なりを防ぐ
+    const frameDurationSec = numberOfFrames / sampleRate;
+    const schedule = computeAudioPlaybackSchedule({
+      currentTime: this.audioContext.currentTime,
+      nextPlaybackTime: this.audioNextPlaybackTime,
+      frameDurationSec,
+      jitterBufferSec: DEFAULT_AUDIO_JITTER_BUFFER_SEC,
+      maxDriftSec: DEFAULT_AUDIO_MAX_DRIFT_SEC,
+    });
+    this.audioNextPlaybackTime = schedule.nextPlaybackTime;
+
     const source = this.audioContext.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(this.audioDestination);
-    source.start();
+    source.start(schedule.startAt);
 
     audioData.close();
   }
