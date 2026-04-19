@@ -1,6 +1,7 @@
 # Publisher の audio group 切替を timestamp ベースに変更する
 
 Created: 2026-04-19
+Completed: 2026-04-19
 Model: Opus 4.7
 
 ## 概要
@@ -50,3 +51,12 @@ CLAUDE.md に従い「変更前にテストを先に修正する」。
 - `vp run build` (vite build + tsc) が通ること。
 - `vitest run` で既存 + 新規テストがすべて通ること。
 - e2e 動作確認は今回は対象外。
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` に純粋関数 `computeAudioGroupTransition` と型 `AudioGroupTransitionInput` / `AudioGroupTransitionOutput` を追加した。
+- 定数 `AUDIO_GROUP_DURATION_US = 1_000_000n` を追加した。
+- `MediaPublisherImpl` の `audioFrameCount` を撤去し、`audioGroupStartTimestamp: bigint | null` を追加した。
+- `handleAudioEncodedChunk` で `computeAudioGroupTransition` の結果を使って `groupId` / `objectId` / `groupStartTimestamp` を更新するようにした。
+- `src/createMediaPublisher.test.ts` で初回 / 継続 / 超過 / 後退 / 境界ケースの単体テストを追加した。
+- `src/createMediaPublisher.prop.ts` で groupId 単調非減少、継続時 / 切替時の不変条件を fast-check で検証した。

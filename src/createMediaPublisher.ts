@@ -50,6 +50,77 @@ const PRIORITY_AUDIO = 192;
 const PRIORITY_VIDEO_KEY = 255;
 const PRIORITY_VIDEO_DELTA = 128;
 
+// audio group の期間 (μs)。encoded chunk の timestamp も μs 単位
+const AUDIO_GROUP_DURATION_US = 1_000_000n;
+
+/**
+ * audio group 切替判定の入力
+ */
+export interface AudioGroupTransitionInput {
+  // 現在の groupId
+  groupId: number;
+  // 今回の呼び出しで使う候補 objectId
+  objectId: number;
+  // 現在の group の開始 timestamp (μs)。初回は null
+  groupStartTimestamp: bigint | null;
+  // 今回のチャンクの timestamp (μs)
+  chunkTimestamp: bigint;
+  // group の期間 (μs)
+  groupDurationUs: bigint;
+}
+
+/**
+ * audio group 切替判定の出力
+ */
+export interface AudioGroupTransitionOutput {
+  // このチャンクを送出する groupId
+  groupId: number;
+  // このチャンクを送出する objectId
+  objectIdToUse: number;
+  // 次回呼び出しで使う objectId
+  nextObjectId: number;
+  // 次回呼び出しで使う groupStartTimestamp
+  groupStartTimestamp: bigint;
+  // 今回 group が切り替わったかどうか
+  groupChanged: boolean;
+}
+
+/**
+ * audio の group 切替を timestamp ベースで判定する
+ *
+ * 初回、group 期間を超過、または timestamp 後退時は新 group を開始する。
+ * それ以外は同じ group 内で objectId だけを進める。
+ */
+export function computeAudioGroupTransition(
+  input: AudioGroupTransitionInput,
+): AudioGroupTransitionOutput {
+  const { groupId, objectId, groupStartTimestamp, chunkTimestamp, groupDurationUs } = input;
+
+  const startNewGroup =
+    groupStartTimestamp === null ||
+    chunkTimestamp < groupStartTimestamp ||
+    chunkTimestamp - groupStartTimestamp > groupDurationUs;
+
+  if (startNewGroup) {
+    const nextGroupId = groupStartTimestamp === null ? groupId : groupId + 1;
+    return {
+      groupId: nextGroupId,
+      objectIdToUse: 0,
+      nextObjectId: 1,
+      groupStartTimestamp: chunkTimestamp,
+      groupChanged: true,
+    };
+  }
+
+  return {
+    groupId,
+    objectIdToUse: objectId,
+    nextObjectId: objectId + 1,
+    groupStartTimestamp,
+    groupChanged: false,
+  };
+}
+
 /**
  * MediaPublisher の実装クラス
  */
@@ -92,9 +163,9 @@ class MediaPublisherImpl implements MediaPublisher {
   // グループ/オブジェクト管理
   private audioGroupId = 0;
   private audioObjectId = 0;
+  private audioGroupStartTimestamp: bigint | null = null;
   private videoGroupId = 0;
   private videoObjectId = 0;
-  private audioFrameCount = 0;
   private videoFrameCount = 0;
 
   // キーフレーム間隔
@@ -544,17 +615,24 @@ class MediaPublisherImpl implements MediaPublisher {
   }): void {
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
+    const chunkTimestamp = BigInt(chunk.timestamp);
+
     // LOC Properties をエンコード
     const properties = LOC.encodeAudioProperties({
-      timestamp: BigInt(chunk.timestamp),
+      timestamp: chunkTimestamp,
     });
 
-    // オーディオは一定間隔で新しいグループを開始（約1秒ごと）
-    this.audioFrameCount++;
-    if (this.audioFrameCount % 50 === 0) {
-      this.audioGroupId++;
-      this.audioObjectId = 0;
-    }
+    // timestamp ベースで group を切り替える (codec/sampleRate に依存しない)
+    const transition = computeAudioGroupTransition({
+      groupId: this.audioGroupId,
+      objectId: this.audioObjectId,
+      groupStartTimestamp: this.audioGroupStartTimestamp,
+      chunkTimestamp,
+      groupDurationUs: AUDIO_GROUP_DURATION_US,
+    });
+    this.audioGroupId = transition.groupId;
+    this.audioObjectId = transition.nextObjectId;
+    this.audioGroupStartTimestamp = transition.groupStartTimestamp;
 
     const payload = chunk.data;
     this.audioStats.framesSent++;
@@ -563,7 +641,7 @@ class MediaPublisherImpl implements MediaPublisher {
 
     this.audioPublisher.sendObject({
       groupId: this.audioGroupId,
-      objectId: this.audioObjectId++,
+      objectId: transition.objectIdToUse,
       payload,
       properties,
       priority: PRIORITY_AUDIO,

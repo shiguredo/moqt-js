@@ -11,6 +11,12 @@
 
 ## develop
 
+- [UPDATE] Publisher の audio group 切替を timestamp ベースに変更する (#0085)
+  - `src/createMediaPublisher.ts` に純粋関数 `computeAudioGroupTransition` を追加する
+  - 定数 `AUDIO_GROUP_DURATION_US = 1_000_000n` (1 秒) を導入する
+  - `audioFrameCount % 50` による frame 数固定判定を撤去し、`audioGroupStartTimestamp` による timestamp 差分判定に置き換える
+  - `src/createMediaPublisher.test.ts` と `src/createMediaPublisher.prop.ts` を新設する
+  - @voluntas
 - [UPDATE] Subscriber の audio 再生を AudioContext.currentTime ベースでスケジュールする (#0084)
   - `src/createMediaSubscriber.ts` の `handleAudioDecodedData` を純粋関数 `computeAudioPlaybackSchedule` に基づくスケジュール再生に変更する
   - デフォルト値 `DEFAULT_AUDIO_JITTER_BUFFER_SEC = 0.06` / `DEFAULT_AUDIO_MAX_DRIFT_SEC = 0.5` を導入する
