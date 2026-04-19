@@ -5,20 +5,41 @@
 [[repos]]
 repo = "local"
 hooks = [
-  { id = "vp-check", name = "vp check", entry = "vp check --fix", language = "system", types_or = [
-    "ts",
-    "tsx",
-    "javascript",
-    "jsx",
-    "css",
-    "json",
-  ], pass_filenames = false },
-  { id = "vp-typecheck", name = "vp typecheck", entry = "vp run typecheck", language = "system", types_or = [
-    "ts",
-    "tsx",
-  ], pass_filenames = false },
-  { id = "vp-test", name = "vp test", entry = "vp test run", language = "system", types_or = [
-    "ts",
-    "tsx",
-  ], pass_filenames = false },
+  {
+    id = "vp-check",
+    name = "vp check",
+    entry = "vp check --fix",
+    language = "system",
+    types_or = [
+      "ts",
+      "tsx",
+      "javascript",
+      "jsx",
+      "css",
+      "json",
+    ],
+    pass_filenames = false
+  },
+  {
+    id = "vp-typecheck",
+    name = "vp typecheck",
+    entry = "vp run typecheck",
+    language = "system",
+    types_or = [
+      "ts",
+      "tsx",
+    ],
+    pass_filenames = false
+  },
+  {
+    id = "vp-test",
+    name = "vp test",
+    entry = "vp test run",
+    language = "system",
+    types_or = [
+      "ts",
+      "tsx",
+    ],
+    pass_filenames = false
+  },
 ]

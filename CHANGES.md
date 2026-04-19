@@ -11,6 +11,127 @@
 
 ## develop
 
+- [ADD] sans-I/O な SessionProtocol に SETUP ハンドシェイクを実装する (#0073)
+  - `src/session/protocol.ts` に `SessionProtocol` class を追加する
+  - `SessionImpl.initialize()` の SETUP 送受信を `SessionProtocol` に委譲する
+  - `src/session/protocol.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に Request ID 採番と検証を実装する (#0073)
+  - `src/session/requestId.ts` に `RequestIdGenerator` と `RequestIdTracker` を追加する
+  - `SessionProtocol` に `nextLocalRequestId` と `validatePeerRequest` を追加する
+  - `SessionImpl` の `nextRequestId` フィールドを `SessionProtocol` に委譲する
+  - Request ID の parity / 重複 / Required Request ID Delta の検証を PBT で担保する
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に SUBSCRIBE / PUBLISH の送受信を実装する (#0073)
+  - `src/session/subscription.ts` に SubscriptionEntry 生成と索引キー生成のヘルパーを追加する
+  - `SessionProtocol` に `sendSubscribe` / `sendPublish` / `handleStreamMessage` を追加する
+  - SUBSCRIBE_OK / PUBLISH_OK / REQUEST_ERROR で SubscriptionEntry の状態を遷移させる
+  - `SessionImpl.subscribe()` / `publish()` で SessionProtocol にも送信を記録する
+  - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に REQUEST_UPDATE と PUBLISH_DONE を実装する (#0073)
+  - `SessionProtocol` に `sendRequestUpdate` / `sendPublishDone` を追加する
+  - `handleStreamMessage` に REQUEST_UPDATE / PUBLISH_DONE 分岐を追加する
+  - peer REQUEST_UPDATE 受信で `requestUpdateReceived`、peer PUBLISH_DONE 受信で `publishDoneReceived` イベントを積む
+  - PUBLISH_DONE の送受信で SubscriptionEntry を `terminated` に遷移させる
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に FETCH の送受信を実装する (#0073)
+  - `src/session/fetch.ts` に FetchEntry 生成ヘルパーを追加する
+  - `SessionProtocol` に `sendFetch` / `fetch` / `fetches` / `forgetFetch` を追加する
+  - FETCH_OK / REQUEST_ERROR で FetchEntry の状態を遷移させる
+  - `SessionImpl.fetch()` で SessionProtocol にも送信を記録する
+  - `src/session/fetch.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に Namespace 系と TRACK_STATUS を実装する (#0073)
+  - `src/session/namespace.ts` に NamespacePublicationEntry / NamespaceSubscriptionEntry / TrackStatusEntry 生成ヘルパーを追加する
+  - `SessionProtocol` に `sendPublishNamespace` / `sendSubscribeNamespace` / `sendTrackStatus` を追加する
+  - `handleStreamMessage` に NAMESPACE / NAMESPACE_DONE / PUBLISH_BLOCKED / REQUEST_OK 分岐を追加する
+  - REQUEST_OK / REQUEST_ERROR を Namespace 系と TRACK_STATUS へ dispatch する
+  - `SessionImpl.publishNamespace()` / `subscribeNamespace()` / `trackStatus()` で SessionProtocol にも送信を記録する
+  - `src/session/namespace.prop.ts` に PBT を追加する
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に AuthTokenCache を実装する (#0073)
+  - `src/session/authTokenCache.ts` に AuthTokenCache class を追加する
+  - `SessionProtocol` に local / peer の AuthTokenCache を持たせる
+  - SETUP の MAX_AUTH_TOKEN_CACHE_SIZE から maxSize を確定する
+  - `src/session/authTokenCache.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [ADD] sans-I/O な SessionProtocol に GOAWAY と tick 駆動を実装する (#0073)
+  - `SessionProtocol` に `sendGoaway` / `tick` / `handlePeerGoaway` を追加する
+  - `tick(nowMs)` で GOAWAY deadline を判定し SESSION_GOAWAY_TIMEOUT で `closeSession` する
+  - sendGoaway 時に URI 長と Client role の制約を検証する
+  - peer GOAWAY 受信で `goawayReceived` イベントを積む
+  - `src/session/goaway.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [ADD] AUTHORIZATION_TOKEN の Token 構造 (Alias Type / Token Alias / Token Type / Token Value) の encode/decode を追加する (#0075)
+  - `src/message/authToken.ts` に `AuthTokenAliasType` enum と `AuthToken` discriminated union を追加する
+  - `encodeAuthToken` / `decodeAuthToken` を追加し、デコード失敗時は `KEY_VALUE_FORMATTING_ERROR` で throw する
+  - `src/message/authToken.test.ts` と `src/message/authToken.prop.ts` に単体テストと PBT を追加する
+  - @voluntas
+- [ADD] SessionMachine に AUTHORIZATION_TOKEN パラメータ処理を配線する (#0076)
+  - `processOutgoingAuthTokens` / `processIncomingAuthTokens` を公開メソッドとして追加する
+  - `sendSubscribe` / `sendPublish` / `sendRequestUpdate` / `sendPublishNamespace` / `sendSubscribeNamespace` / `sendTrackStatus` / `sendFetch` で送信前に `processOutgoingAuthTokens` を呼ぶ
+  - REGISTER の重複は `DUPLICATE_AUTH_TOKEN_ALIAS`、キャッシュ超過は `AUTH_TOKEN_CACHE_OVERFLOW` を返す
+  - 受信側は `fail()` 経由で `closeSession` イベントを積む
+  - `src/session/authTokenWiring.prop.ts` に配線側の PBT を追加する
+  - @voluntas
+- [ADD] Session の受信経路を SessionMachine に統合する (#0077)
+  - `forwardStreamMessageToMachine` / `drainMachineEvents` を追加し、受信メッセージを SessionMachine に流し込む
+  - SUBSCRIBE_OK / PUBLISH_OK / FETCH_OK / REQUEST_OK / REQUEST_ERROR / NAMESPACE / NAMESPACE_DONE / PUBLISH_DONE / GOAWAY の受信で SessionMachine の状態遷移が反映されるようにする
+  - `sendRequestUpdate` / `sendPublishDone` / `sendGoaway` で SessionMachine にも通知する
+  - DUPLICATE_TRACK_ALIAS 等の検証を SessionMachine 側に集約し、Session 側の重複ロジックを削減する
+  - @voluntas
+- [ADD] peer-initiated SUBSCRIBE / PUBLISH の受信経路を実装する (#0080)
+  - `SessionMachine` に `handlePeerSubscribe` / `handlePeerPublish` を追加し、Request ID parity / Required Delta / track 重複 / Track Alias 重複を検証する
+  - `SessionEvent` に `peerSubscribeReceived` / `peerPublishReceived` を追加する
+  - `Session` に `transport.incomingBidirectionalStreams` を監視するループを追加し、先頭メッセージを `SUBSCRIBE` / `PUBLISH` で振り分けて SessionMachine に feed する
+  - `ConnectCallbacks` に `peerSubscribe` / `peerPublish` コールバックと `PeerSubscribeRequest` / `PeerPublishRequest` 型を追加する
+  - `src/session/peerRequest.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [ADD] peer-initiated FETCH / TRACK_STATUS の受信経路を実装する (#0080)
+  - `SessionMachine` に `handlePeerFetch` / `handlePeerTrackStatus` を追加し、`FetchEntry` / `TrackStatusEntry` を `myRole="publisher"` で登録する
+  - `SessionEvent` に `peerFetchReceived` / `peerTrackStatusReceived` を追加する
+  - `Session` の peer bidi 受信ディスパッチに `FETCH` / `TRACK_STATUS` ケースを追加する
+  - `ConnectCallbacks` に `peerFetch` / `peerTrackStatus` コールバックと `PeerFetchRequest` / `PeerTrackStatusRequest` 型を追加する
+  - `src/session/peerRequest.prop.ts` に FETCH / TRACK_STATUS 用の PBT を追加する
+  - @voluntas
+- [ADD] peer-initiated SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の受信経路を実装する (#0080)
+  - `SessionMachine` に `handlePeerSubscribeNamespace` / `handlePeerPublishNamespace` を追加する
+  - SUBSCRIBE_NAMESPACE は `NamespaceSubscriptionEntry` を `myRole="publisher"`、PUBLISH_NAMESPACE は `NamespacePublicationEntry` を `myRole="subscriber"` で登録する
+  - `SessionEvent` に `peerSubscribeNamespaceReceived` / `peerPublishNamespaceReceived` を追加する
+  - `Session` の peer bidi 受信ディスパッチに `SUBSCRIBE_NAMESPACE` / `PUBLISH_NAMESPACE` ケースを追加する
+  - `ConnectCallbacks` に `peerSubscribeNamespace` / `peerPublishNamespace` コールバックと `PeerSubscribeNamespaceRequest` / `PeerPublishNamespaceRequest` 型を追加する
+  - `src/session/peerRequest.prop.ts` に SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE 用の PBT を追加する
+  - @voluntas
+- [ADD] peer-initiated bidi stream の継続メッセージ読み取りを実装する (#0080)
+  - `Session` に `readPeerInitiatedStreamMessages` を追加し、peer-initiated bidi stream の先頭メッセージ受理後に REQUEST_UPDATE / PUBLISH_DONE を読み続ける
+  - 未対応の follow-up メッセージは `PROTOCOL_VIOLATION` でセッションを閉じる
+  - ストリーム終了時に `peerInitiatedStreams` からエントリを削除する
+  - peerRequest.prop.ts に peer-initiated SUBSCRIBE 後の REQUEST_UPDATE、peer-initiated PUBLISH 後の PUBLISH_DONE のテストを追加する
+  - @voluntas
+- [ADD] peer-initiated request への応答 API を実装する (#0080)
+  - `SessionMachine` に `acceptPeerSubscribe` / `acceptPeerPublish` / `acceptPeerFetch` / `acceptPeerTrackStatus` / `acceptPeerSubscribeNamespace` / `acceptPeerPublishNamespace` を追加する
+  - `SessionMachine` に統一インターフェースの `rejectPeerRequest` を追加する (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の全対象)
+  - accept 時は対応する OK メッセージを `sendOnStream` イベントで積み、エントリを `established` / `completed` に遷移させる
+  - SUBSCRIBE accept 時は自側 publisher 空間 `_myPublisherAliases` に `trackAlias` を登録し、重複は `DUPLICATE_TRACK_ALIAS` で throw する
+  - `Session` に `acceptPeerSubscribe` / `acceptPeerPublish` / `acceptPeerFetch` / `acceptPeerTrackStatus` / `acceptPeerSubscribeNamespace` / `acceptPeerPublishNamespace` / `rejectPeerRequest` を追加する
+  - `Session.acceptPeerSubscribe` は `trackAlias` 省略時に自動採番する
+  - `peerRequest.prop.ts` に accept/reject の状態遷移・イベント発火・重複検知を検証する PBT を追加する
+  - @voluntas
+- [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
+  - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
+  - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する
+  - peer GOAWAY 受信時のグレースフルシャットダウンは引き続き Session 側の `peerGoawayTimeoutId` で管理する
+  - @voluntas
+- [CHANGE] Session の GOAWAY フラグを SessionMachine に寄せる (#0079)
+  - `Session.sentGoaway` / `Session.receivedGoaway` フィールドを削除する
+  - 参照を `this.protocol?.localGoawaySent` / `this.protocol?.peerGoaway` に置換する
+  - 複数回 GOAWAY 受信時の PROTOCOL_VIOLATION 判定を SessionMachine に一元化する
+  - @voluntas
+- [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
+  - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
+  - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
+  - @voluntas
 - [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
   - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
   - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加
@@ -173,6 +294,17 @@
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
   - @voluntas
 - [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
+  - @voluntas
+- [UPDATE] src/session.ts を src/session/impl.ts に移動し sans-I/O Session プロトコル層の土台を用意する (#0073)
+  - src/session/index.ts を新設して公開 API を re-export するようにする
+  - src/message/control.ts を新設し ControlMessage discriminated union を追加する
+  - src/controlStream.ts の ControlMessage を RawControlMessage に改名する
+  - @voluntas
+- [UPDATE] sans-I/O な Session 実装の内部命名を整理する (#0074)
+  - `interface Session` と `class SessionImpl` を `class Session` に統合して Rust 寄りの `Impl` サフィックスを排除する
+  - `SessionProtocol` class を `SessionMachine` に改名して `Session` プレフィックスに統一する
+  - `src/session/impl.ts` を `src/session/session.ts` にリネームする
+  - `src/session/protocol.ts` を `src/session/machine.ts` にリネームする
   - @voluntas
 
 ## 2026.1.0

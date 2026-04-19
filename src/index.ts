@@ -5,7 +5,7 @@
  * draft-ietf-moq-transport-17
  */
 
-import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
+import { Session, type ConnectCallbacks, type ConnectOptions } from "./session";
 
 // Re-export public types
 export type {
@@ -196,7 +196,7 @@ export async function connect(
   await transport.ready;
 
   // Create session
-  const session = new SessionImpl(transport, callbacks ?? {});
+  const session = new Session(transport, callbacks ?? {});
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   await session.initialize();
