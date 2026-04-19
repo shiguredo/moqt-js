@@ -300,6 +300,13 @@
   - `setForwardState` は forwardState 変化通知のための change detection のみを担う shim に変える
   - `src/publisher.test.ts` / `src/publisher.prop.ts` のテストを view ベースに書き換える
   - @voluntas
+- [ADD] SessionMachine が PUBLISH_OK / REQUEST_UPDATE の FORWARD を SubscriptionEntry に反映する (#0081)
+  - `src/session/subscription.ts` に `extractForwardStateIfPresent` を追加する
+  - `handlePeerPublishOk` / `handlePeerRequestUpdate` で FORWARD パラメータが明示されている場合のみ `entry.forwardState` を更新する
+  - `SessionEvent` の `requestUpdateReceived` に `targetRequestId` を追加する
+  - Session の PUBLISH_OK 処理から FORWARD の重複パースを撤去し、`publicationView` から値を読む
+  - peer REQUEST_UPDATE 受信時に Publisher の `setForwardState` を呼ぶ経路を追加する (以前は FORWARD 変化が Publisher に伝播しなかった)
+  - @voluntas
 
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas

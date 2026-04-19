@@ -2290,12 +2290,23 @@ export class Session {
           this.closeWithError(event.error);
           break;
         case "goawayReceived":
-        case "requestUpdateReceived":
         case "publishDoneReceived":
         case "namespaceReceived":
         case "namespaceDoneReceived":
         case "publishBlockedReceived":
           break;
+        case "requestUpdateReceived": {
+          // #0081: peer REQUEST_UPDATE が自側 Publisher の FORWARD を更新した場合、
+          // SessionMachine は entry.forwardState を先に反映しているので、view を読んで
+          // Publisher 側 change-detection を起動する。publisher が存在しない (subscriber
+          // 側の subscription など) 場合は何もしない。
+          const publisher = this.publishers.get(event.targetRequestId);
+          if (publisher !== undefined) {
+            const view = this.protocol?.publicationView(event.targetRequestId);
+            publisher.setForwardState(view?.forwardState ?? true);
+          }
+          break;
+        }
         case "peerSubscribeReceived":
           this.callbacks.peerSubscribe?.({
             requestId: event.requestId,
@@ -2959,22 +2970,22 @@ export class Session {
 
       if (msg.type === MessageType.PUBLISH_OK) {
         const decoded = decodePublishOkPayload(msg.payload);
+        // FORWARD パラメータの値域は SessionMachine 側での解釈前に spec 上の 0/1 制約を検査する。
+        // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+        for (const param of decoded.parameters) {
+          if (param.type === VersionSpecificParameterType.FORWARD) {
+            validateForwardValue(param.value[0]);
+            break;
+          }
+        }
         if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingPublish.delete(requestId);
         this.publishers.set(requestId, pending.impl);
 
-        // FORWARD パラメータを処理
-        // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
-        let forwardState = true;
-        for (const param of decoded.parameters) {
-          if (param.type === VersionSpecificParameterType.FORWARD) {
-            const forwardValue = param.value[0];
-            validateForwardValue(forwardValue);
-            forwardState = forwardValue !== 0;
-            break;
-          }
-        }
-        pending.impl.setForwardState(forwardState);
+        // #0081: FORWARD は SessionMachine が SubscriptionEntry に反映済み、
+        // view 経由で Publisher に通知する
+        const view = this.protocol!.publicationView(requestId);
+        pending.impl.setForwardState(view?.forwardState ?? true);
         pending.resolve(pending.impl);
 
         // PUBLISH_OK 後の継続メッセージ (PUBLISH_DONE 等) を読み取る

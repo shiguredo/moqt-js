@@ -18,7 +18,9 @@ import {
   type RequestUpdate,
   type Subscribe,
   type SubscribeOk,
+  VersionSpecificParameterType,
 } from "../message";
+import { encodeVarint } from "../varint";
 import { SessionMachine } from "./machine";
 
 function established(): SessionMachine {
@@ -288,6 +290,7 @@ test("peer からの REQUEST_UPDATE は requestUpdateReceived イベントを出
   assert.equal(event.type, "requestUpdateReceived");
   if (event.type === "requestUpdateReceived") {
     assert.equal(event.requestId, updateId);
+    assert.equal(event.targetRequestId, requestId);
   }
 });
 
@@ -409,6 +412,124 @@ test("publicationView は subscriber role の subscription には undefined を�
 test("publicationView は存在しない requestId に undefined を返す", () => {
   const p = established();
   assert.equal(p.publicationView(999n), undefined);
+});
+
+test("PUBLISH_OK の FORWARD=0 が publicationView.forwardState に反映される", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  const ok: PublishOk = {
+    type: MessageType.PUBLISH_OK,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(0n),
+      },
+    ],
+  };
+  p.handleStreamMessage(requestId, ok);
+  const view = p.publicationView(requestId);
+  assert.ok(view);
+  assert.equal(view.forwardState, false);
+});
+
+test("PUBLISH_OK で FORWARD 省略時は publicationView.forwardState を維持する", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  // sendPublish 時に FORWARD=0 を明示
+  const publish: Publish = {
+    type: MessageType.PUBLISH,
+    requestId,
+    requiredRequestIdDelta: 0n,
+    trackNamespace: createTrackNamespace(["a"]),
+    trackName: encodeTrackName("x"),
+    trackAlias: 1n,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(0n),
+      },
+    ],
+    trackProperties: [],
+  };
+  p.sendPublish(publish);
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [],
+  });
+  const view = p.publicationView(requestId);
+  assert.ok(view);
+  assert.equal(view.forwardState, false);
+});
+
+test("peer REQUEST_UPDATE の FORWARD=0 が publicationView.forwardState に反映される", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [],
+  });
+  // 初期 forwardState は true (FORWARD 省略なのでデフォルト)
+  assert.equal(p.publicationView(requestId)?.forwardState, true);
+  const updateId = p.nextLocalRequestId();
+  const update: RequestUpdate = {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: updateId,
+    requiredRequestIdDelta: 0n,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(0n),
+      },
+    ],
+  };
+  p.handleStreamMessage(requestId, update);
+  const view = p.publicationView(requestId);
+  assert.ok(view);
+  assert.equal(view.forwardState, false);
+});
+
+test("peer REQUEST_UPDATE で FORWARD 省略時は forwardState を維持する", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  // FORWARD=0 で PUBLISH 送信
+  const publish: Publish = {
+    type: MessageType.PUBLISH,
+    requestId,
+    requiredRequestIdDelta: 0n,
+    trackNamespace: createTrackNamespace(["a"]),
+    trackName: encodeTrackName("x"),
+    trackAlias: 1n,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(0n),
+      },
+    ],
+    trackProperties: [],
+  };
+  p.sendPublish(publish);
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [],
+  });
+  assert.equal(p.publicationView(requestId)?.forwardState, false);
+  // FORWARD なしの REQUEST_UPDATE
+  const updateId = p.nextLocalRequestId();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: updateId,
+    requiredRequestIdDelta: 0n,
+    parameters: [],
+  });
+  const view = p.publicationView(requestId);
+  assert.ok(view);
+  assert.equal(view.forwardState, false);
 });
 
 test("publicationView は sendPublishDone 後に state=closed を返す", () => {

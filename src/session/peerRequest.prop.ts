@@ -609,6 +609,7 @@ test("peer-initiated SUBSCRIBE 後の REQUEST_UPDATE は requestUpdateReceived �
   assert.equal(event.type, "requestUpdateReceived");
   if (event.type === "requestUpdateReceived") {
     assert.equal(event.requestId, 3n);
+    assert.equal(event.targetRequestId, 1n);
   }
 });
 

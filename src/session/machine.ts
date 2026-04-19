@@ -51,7 +51,12 @@ import {
   createTrackStatusEntry,
   namespaceSubscribeOptionsFromMode,
 } from "./namespace";
-import { createSubscriptionEntry, extractForwardState, subscriptionKey } from "./subscription";
+import {
+  createSubscriptionEntry,
+  extractForwardState,
+  extractForwardStateIfPresent,
+  subscriptionKey,
+} from "./subscription";
 import {
   MAX_NEW_SESSION_URI_LENGTH,
   type FetchEntry,
@@ -1199,7 +1204,7 @@ export class SessionMachine {
     this._peerPublisherAliases.set(ok.trackAlias, requestId);
   }
 
-  private handlePeerPublishOk(requestId: bigint, _ok: PublishOk): void {
+  private handlePeerPublishOk(requestId: bigint, ok: PublishOk): void {
     const entry = this._subscriptions.get(requestId);
     if (entry === undefined) {
       this.fail(
@@ -1220,6 +1225,12 @@ export class SessionMachine {
       return;
     }
     entry.state = "established";
+    // PUBLISH_OK の FORWARD パラメータが明示されていれば反映する。
+    // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+    const forward = extractForwardStateIfPresent(ok.parameters);
+    if (forward !== undefined) {
+      entry.forwardState = forward;
+    }
   }
 
   /**
@@ -1277,7 +1288,8 @@ export class SessionMachine {
   }
 
   private handlePeerRequestUpdate(targetRequestId: bigint, update: RequestUpdate): void {
-    if (!this._subscriptions.has(targetRequestId)) {
+    const entry = this._subscriptions.get(targetRequestId);
+    if (entry === undefined) {
       this.fail(
         new SessionError(
           "REQUEST_UPDATE received for unknown subscription",
@@ -1286,9 +1298,17 @@ export class SessionMachine {
       );
       return;
     }
+    // REQUEST_UPDATE の FORWARD パラメータが明示されていれば反映する。
+    // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+    // FORWARD が省略されている場合は既存の forwardState を維持する。
+    const forward = extractForwardStateIfPresent(update.parameters);
+    if (forward !== undefined) {
+      entry.forwardState = forward;
+    }
     this._events.push({
       type: "requestUpdateReceived",
       requestId: update.requestId,
+      targetRequestId,
       parameters: update.parameters,
     });
   }

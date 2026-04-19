@@ -268,7 +268,10 @@ export type SessionEvent =
   | { type: "closeSession"; error: SessionError }
   | {
       type: "requestUpdateReceived";
+      /** REQUEST_UPDATE 自体の request id */
       requestId: bigint;
+      /** 対象 subscription の request id */
+      targetRequestId: bigint;
       parameters: Parameter[];
     }
   | {
