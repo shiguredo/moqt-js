@@ -1,6 +1,7 @@
 # audio 向けの codec config / LOC audio properties のテストを整備する
 
 Created: 2026-04-19
+Completed: 2026-04-19
 Model: Opus 4.7
 
 ## 概要
@@ -39,3 +40,11 @@ CLAUDE.md の方針に従い、モック / スタブは利用しない。この�
 - `vp run build` (vite build + tsc) が通ること。
 - `vitest run` で既存 + 新規テストがすべて通ること。
 - e2e 動作確認は今回は対象外。
+
+## 解決方法
+
+- `src/codec/config.test.ts` を新設し、audio / video の encoder / decoder config ヘルパーを codec 種別ごとに検証するケースを追加した。
+- `src/loc.prop.ts` に `AudioProperties` の Arbitrary と以下のテストを追加した。
+  - 空の `AudioProperties` が空バイト列にエンコードされること
+  - `audioLevel` を除く `AudioProperties` (`timestamp` / `timescale`) の encode/decode ラウンドトリップ
+  - `audioLevel` 単独の `AudioProperties` が decode 時に TIMESTAMP として誤認される仕様バグ (issues/0036) の挙動を固定化する回帰テスト
