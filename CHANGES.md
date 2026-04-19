@@ -75,6 +75,12 @@
   - 受信側は `fail()` 経由で `closeSession` イベントを積む
   - `src/session/authTokenWiring.prop.ts` に配線側の PBT を追加する
   - @voluntas
+- [ADD] Session の受信経路を SessionMachine に統合する (#0077)
+  - `forwardStreamMessageToMachine` / `drainMachineEvents` を追加し、受信メッセージを SessionMachine に流し込む
+  - SUBSCRIBE_OK / PUBLISH_OK / FETCH_OK / REQUEST_OK / REQUEST_ERROR / NAMESPACE / NAMESPACE_DONE / PUBLISH_DONE / GOAWAY の受信で SessionMachine の状態遷移が反映されるようにする
+  - `sendRequestUpdate` / `sendPublishDone` / `sendGoaway` で SessionMachine にも通知する
+  - DUPLICATE_TRACK_ALIAS 等の検証を SessionMachine 側に集約し、Session 側の重複ロジックを削減する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する

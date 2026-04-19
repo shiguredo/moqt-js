@@ -1562,7 +1562,8 @@ export class Session {
               // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
               // https://github.com/moq-wg/moq-transport/pull/1499
-              decodeRequestOkPayload(messagePayload);
+              const decodedOk = decodeRequestOkPayload(messagePayload);
+              if (!this.forwardStreamMessageToMachine(requestId, decodedOk)) return;
               // サブスクリプション成功
               resolved = true;
               const namespaceSubscription = this.createNamespaceSubscription(requestId);
@@ -1575,6 +1576,7 @@ export class Session {
               // Request ID はストリームが特定するため不要
               // https://github.com/moq-wg/moq-transport/pull/1499
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
+              if (!this.forwardStreamMessageToMachine(requestId, decodedMsg)) return;
               // サブスクリプション失敗
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
@@ -1588,6 +1590,7 @@ export class Session {
 
             case MessageType.NAMESPACE: {
               const decodedMsg = decodeNamespacePayload(messagePayload);
+              if (!this.forwardStreamMessageToMachine(requestId, decodedMsg)) return;
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
               callbacks.onNamespace?.(suffixStrings);
               break;
@@ -1595,6 +1598,7 @@ export class Session {
 
             case MessageType.NAMESPACE_DONE: {
               const decodedMsg = decodeNamespaceDonePayload(messagePayload);
+              if (!this.forwardStreamMessageToMachine(requestId, decodedMsg)) return;
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
               callbacks.onNamespaceDone?.(suffixStrings);
               break;
@@ -1708,6 +1712,14 @@ export class Session {
     this.sentGoaway = true;
 
     const goawayTimeout = timeout ?? 0n;
+    // SessionMachine に GOAWAY 送信を記録し、localGoawaySent / localGoawayPendingTimeout を更新する
+    this.protocol?.sendGoaway({
+      type: MessageType.GOAWAY,
+      newSessionUri: "",
+      timeout: goawayTimeout,
+    });
+    this.drainMachineEvents();
+
     const payload = encodeGoawayPayload({
       type: MessageType.GOAWAY,
       newSessionUri: "",
@@ -1871,6 +1883,62 @@ export class Session {
       closeCode: error.code,
       reason: error.message,
     });
+  }
+
+  /**
+   * 受信メッセージを SessionMachine に流し、状態機械を更新する
+   * draft-ietf-moq-transport-17 Section 3 (Sessions)
+   *
+   * handleStreamMessage でプロトコル違反が検出された場合は
+   * closeSession イベントが積まれるため、次の drainMachineEvents で
+   * Session も閉じる。
+   *
+   * @returns SessionMachine が closeSession を積まなかった場合 true
+   */
+  private forwardStreamMessageToMachine(
+    requestId: bigint,
+    msg: Parameters<SessionMachine["handleStreamMessage"]>[1],
+  ): boolean {
+    if (!this.protocol) return true;
+    this.protocol.handleStreamMessage(requestId, msg);
+    return this.drainMachineEvents();
+  }
+
+  /**
+   * SessionMachine のイベントキューを消化する
+   *
+   * closeSession / notification 系のイベントを Session の動作に翻訳する。
+   * sendControl / sendRequest / sendOnStream は既に I/O 層で処理済みなので
+   * ここでは破棄する。
+   *
+   * @returns closeSession を受け取っていない場合 true
+   */
+  private drainMachineEvents(): boolean {
+    if (!this.protocol) return true;
+    let alive = true;
+    while (true) {
+      const event = this.protocol.nextEvent();
+      if (event === undefined) break;
+      switch (event.type) {
+        case "sendControl":
+        case "sendRequest":
+        case "sendOnStream":
+        case "established":
+          break;
+        case "closeSession":
+          alive = false;
+          this.closeWithError(event.error);
+          break;
+        case "goawayReceived":
+        case "requestUpdateReceived":
+        case "publishDoneReceived":
+        case "namespaceReceived":
+        case "namespaceDoneReceived":
+        case "publishBlockedReceived":
+          break;
+      }
+    }
+    return alive;
   }
 
   private emitDebug(
@@ -2214,6 +2282,16 @@ export class Session {
     // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
     // Stream Count は実際に開いたデータストリーム数を設定する
     const streamCount = publisher.getDataStreamCount();
+    // SessionMachine の SubscriptionEntry を terminated に遷移させ、
+    // sendOnStream イベントを drain する。
+    this.protocol?.sendPublishDone(requestId, {
+      type: MessageType.PUBLISH_DONE,
+      statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
+      streamCount,
+      reasonPhrase: "",
+    });
+    this.drainMachineEvents();
+
     const parts: Uint8Array[] = [];
     parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
     parts.push(encodeVarint(streamCount));
@@ -2426,6 +2504,10 @@ export class Session {
       parameters,
     };
 
+    // SessionMachine に REQUEST_UPDATE 送信を記録する
+    this.protocol?.sendRequestUpdate(targetRequestId, requestUpdateMsg);
+    this.drainMachineEvents();
+
     const payload = encodeRequestUpdatePayload(
       requestUpdateMsg as Parameters<typeof encodeRequestUpdatePayload>[0],
     );
@@ -2481,6 +2563,7 @@ export class Session {
 
       if (msg.type === MessageType.PUBLISH_OK) {
         const decoded = decodePublishOkPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingPublish.delete(requestId);
         this.publishers.set(requestId, pending.impl);
 
@@ -2499,10 +2582,10 @@ export class Session {
         pending.resolve(pending.impl);
 
         // PUBLISH_OK 後の継続メッセージ (PUBLISH_DONE 等) を読み取る
-        // TODO: 双方向ストリームで継続メッセージを処理する
         void this.readRequestStreamMessages(requestId, stream, controlReader);
       } else if (msg.type === MessageType.REQUEST_ERROR) {
         const decoded = decodeRequestErrorPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingPublish.delete(requestId);
         this.requestStreams.delete(requestId);
         const error = new RequestError(
@@ -2543,6 +2626,17 @@ export class Session {
 
       if (msg.type === MessageType.SUBSCRIBE_OK) {
         const decoded = decodeSubscribeOkPayload(msg.payload);
+        // SessionMachine 側で DUPLICATE_TRACK_ALIAS / 不明 request id 等が検出されると
+        // closeSession が積まれる。検出された場合は ここで pending を reject して抜ける。
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) {
+          pending.reject(
+            new SessionError(
+              `duplicate track alias: ${decoded.trackAlias}`,
+              SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+            ),
+          );
+          return;
+        }
 
         // LARGEST_OBJECT パラメータを探す
         let largestLocation: Location | undefined;
@@ -2554,21 +2648,6 @@ export class Session {
         }
 
         this.pendingSubscribe.delete(requestId);
-
-        // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
-        // "If a subscriber receives a SUBSCRIBE_OK that uses the same Track Alias
-        //  as a different track with an Established subscription, it MUST close
-        //  the session with error DUPLICATE_TRACK_ALIAS."
-        const existingSubscriber = this.subscribersByAlias.get(decoded.trackAlias);
-        if (existingSubscriber && existingSubscriber !== pending.impl) {
-          const error = new SessionError(
-            `duplicate track alias: ${decoded.trackAlias}`,
-            SessionErrorCode.DUPLICATE_TRACK_ALIAS,
-          );
-          pending.reject(error);
-          this.closeWithError(error);
-          return;
-        }
 
         // Track Alias を設定
         pending.impl.setTrackAlias(decoded.trackAlias);
@@ -2631,6 +2710,7 @@ export class Session {
         void this.readRequestStreamMessages(requestId, stream, controlReader);
       } else if (msg.type === MessageType.REQUEST_ERROR) {
         const decoded = decodeRequestErrorPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingSubscribe.delete(requestId);
         this.requestStreams.delete(requestId);
         const error = new RequestError(
@@ -2671,6 +2751,16 @@ export class Session {
 
       if (msg.type === MessageType.FETCH_OK) {
         const decoded = decodeFetchOkPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) {
+          this.pendingFetch.delete(requestId);
+          pending.reject(
+            new SessionError(
+              "FETCH_OK rejected by protocol state machine",
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+          return;
+        }
 
         // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
         // "If End Location is smaller than the Start Location in the
@@ -2715,6 +2805,7 @@ export class Session {
         // FETCH_OK 後のストリームは不要（データは別の単方向ストリームで届く）
       } else if (msg.type === MessageType.REQUEST_ERROR) {
         const decoded = decodeRequestErrorPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingFetch.delete(requestId);
         this.requestStreams.delete(requestId);
         const error = new RequestError(
@@ -2755,11 +2846,13 @@ export class Session {
 
       if (msg.type === MessageType.REQUEST_OK) {
         const decoded = decodeRequestOkPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingTrackStatus.delete(requestId);
         this.requestStreams.delete(requestId);
         pending.resolve({ parameters: decoded.parameters });
       } else if (msg.type === MessageType.REQUEST_ERROR) {
         const decoded = decodeRequestErrorPayload(msg.payload);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         this.pendingTrackStatus.delete(requestId);
         this.requestStreams.delete(requestId);
         const error = new RequestError(
@@ -2812,12 +2905,15 @@ export class Session {
               // draft-ietf-moq-transport-17 Section 9.10.1 (Updating Subscriptions):
               // REQUEST_OK には LARGEST_OBJECT パラメータが含まれる可能性がある。
               // Subscriber の largestLocation を更新する。
+              const decodedOk = decodeRequestOkPayload(msg.payload);
+              if (!this.forwardStreamMessageToMachine(requestId, decodedOk)) return;
               this.handleRequestUpdateOk(msg.payload, requestId);
               break;
             }
             case MessageType.REQUEST_ERROR: {
               // REQUEST_UPDATE への応答 (エラー)
               const decoded = decodeRequestErrorPayload(msg.payload);
+              if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
               const error = new RequestError(
                 decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
                 Number(decoded.errorCode) as RequestErrorCode,
@@ -2956,6 +3052,16 @@ export class Session {
     const msg = decodePublishDonePayload(payload);
 
     if (requestId !== undefined) {
+      // SessionMachine の SubscriptionEntry を terminated に遷移させ、
+      // publishDoneReceived イベントを積ませる。
+      if (!this.forwardStreamMessageToMachine(requestId, msg)) {
+        return {
+          requestId: requestId.toString(),
+          statusCode: msg.statusCode,
+          streamCount: msg.streamCount.toString(),
+          reasonPhrase: msg.reasonPhrase,
+        };
+      }
       const subscriber = this.subscribers.get(requestId);
       if (subscriber) {
         subscriber.handleEnd(msg.statusCode, msg.reasonPhrase);
@@ -2989,7 +3095,17 @@ export class Session {
     );
 
     // PUBLISH_NAMESPACE の応答
+    // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
+    // 制御ストリームで受信する REQUEST_ERROR は PUBLISH_NAMESPACE への応答のみ。
+    // pending の requestId を SessionMachine に対して流し、状態遷移させる。
     for (const [requestId, pendingNamespacePubReq] of this.pendingNamespacePublish) {
+      if (!this.forwardStreamMessageToMachine(requestId, decoded)) {
+        return {
+          errorCode: Number(decoded.errorCode),
+          retryInterval: decoded.retryInterval.toString(),
+          reason: decoded.reasonPhrase,
+        };
+      }
       this.pendingNamespacePublish.delete(requestId);
       pendingNamespacePubReq.reject(error);
     }
@@ -3046,7 +3162,13 @@ export class Session {
     const msg = decodeRequestOkPayload(payload);
 
     // PUBLISH_NAMESPACE の応答
+    // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
+    // 制御ストリーム上の REQUEST_OK は PUBLISH_NAMESPACE への応答のみ。
+    // pending の requestId を SessionMachine に対して流し、状態遷移させる。
     for (const [requestId, pendingNamespacePub] of this.pendingNamespacePublish) {
+      if (!this.forwardStreamMessageToMachine(requestId, msg)) {
+        return { parametersCount: msg.parameters.length };
+      }
       this.pendingNamespacePublish.delete(requestId);
 
       // アクティブな公開として登録
@@ -3090,6 +3212,17 @@ export class Session {
     this.receivedGoaway = true;
 
     const msg = decodeGoawayPayload(payload);
+
+    // SessionMachine に GOAWAY を流し、peerGoaway 状態と goawayReceived イベントを更新する
+    if (this.protocol) {
+      this.protocol.handleControl(msg);
+      if (!this.drainMachineEvents()) {
+        return {
+          newSessionUri: msg.newSessionUri,
+          timeout: msg.timeout.toString(),
+        };
+      }
+    }
 
     // GOAWAY コールバックを呼び出す
     this.callbacks.goaway?.(msg.newSessionUri);
