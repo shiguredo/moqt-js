@@ -10,7 +10,7 @@ import { decodeVarint, encodeVarint } from "./varint";
 /**
  * Control Message
  */
-export interface ControlMessage {
+export interface RawControlMessage {
   type: number;
   payload: Uint8Array;
 }
@@ -27,7 +27,7 @@ export class ControlStreamReader {
    * データを供給してメッセージを取り出す
    * @returns 完全なメッセージの配列
    */
-  feed(data: Uint8Array, fin = false): ControlMessage[] {
+  feed(data: Uint8Array, fin = false): RawControlMessage[] {
     // バッファに追加
     const newBuffer = new Uint8Array(this.buffer.length + data.length);
     newBuffer.set(this.buffer, 0);
@@ -62,8 +62,8 @@ export class ControlStreamReader {
     return this.finReceived;
   }
 
-  private processMessages(): ControlMessage[] {
-    const messages: ControlMessage[] = [];
+  private processMessages(): RawControlMessage[] {
+    const messages: RawControlMessage[] = [];
 
     while (true) {
       // 最低 3 バイト必要 (Type 1 バイト + Length 2 バイトの最小)
@@ -139,9 +139,9 @@ export class ControlStreamWriter {
   }
 
   /**
-   * ControlMessage をエンコード
+   * RawControlMessage をエンコード
    */
-  encodeMessage(msg: ControlMessage): Uint8Array {
+  encodeMessage(msg: RawControlMessage): Uint8Array {
     return this.encode(msg.type, msg.payload);
   }
 }
