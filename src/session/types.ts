@@ -6,7 +6,7 @@
  */
 
 import type { SessionError } from "../error";
-import type { Location, Parameter, TrackNamespace } from "../message";
+import type { Location, Parameter, Publish, Subscribe, TrackNamespace } from "../message";
 import type { ControlMessage } from "../message/control";
 
 /**
@@ -267,4 +267,14 @@ export type SessionEvent =
       type: "goawayReceived";
       newSessionUri: Uint8Array;
       timeout: bigint;
+    }
+  | {
+      type: "peerSubscribeReceived";
+      requestId: bigint;
+      message: Subscribe;
+    }
+  | {
+      type: "peerPublishReceived";
+      requestId: bigint;
+      message: Publish;
     };

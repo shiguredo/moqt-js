@@ -81,6 +81,13 @@
   - `sendRequestUpdate` / `sendPublishDone` / `sendGoaway` で SessionMachine にも通知する
   - DUPLICATE_TRACK_ALIAS 等の検証を SessionMachine 側に集約し、Session 側の重複ロジックを削減する
   - @voluntas
+- [ADD] peer-initiated SUBSCRIBE / PUBLISH の受信経路を実装する (#0080)
+  - `SessionMachine` に `handlePeerSubscribe` / `handlePeerPublish` を追加し、Request ID parity / Required Delta / track 重複 / Track Alias 重複を検証する
+  - `SessionEvent` に `peerSubscribeReceived` / `peerPublishReceived` を追加する
+  - `Session` に `transport.incomingBidirectionalStreams` を監視するループを追加し、先頭メッセージを `SUBSCRIBE` / `PUBLISH` で振り分けて SessionMachine に feed する
+  - `ConnectCallbacks` に `peerSubscribe` / `peerPublish` コールバックと `PeerSubscribeRequest` / `PeerPublishRequest` 型を追加する
+  - `src/session/peerRequest.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
 - [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
   - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
   - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する

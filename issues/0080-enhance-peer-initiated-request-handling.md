@@ -31,15 +31,15 @@ peer から開始された双方向ストリームで届く request 系メッセ
 
 draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
 
-| MessageType | セクション | 用途 |
-|---|---|---|
-| SUBSCRIBE (0x03) | §9.4 | peer が subscribe を開始 |
-| PUBLISH (0x1D) | §9.8 | peer が publish を開始 |
-| FETCH (0x16) | §9.12 | peer が fetch を開始 |
-| TRACK_STATUS (0x0D) | §9.14 | peer が track の状態を問い合わせ |
-| SUBSCRIBE_NAMESPACE (0x11) | §9.18 | peer が namespace 購読を開始 |
-| PUBLISH_NAMESPACE (0x1E) | §9.16 | peer が namespace announce を開始 |
-| REQUEST_UPDATE (0x02) | §9.6 | peer が既存 subscription の window を更新 |
+| MessageType                | セクション | 用途                                      |
+| -------------------------- | ---------- | ----------------------------------------- |
+| SUBSCRIBE (0x03)           | §9.4       | peer が subscribe を開始                  |
+| PUBLISH (0x1D)             | §9.8       | peer が publish を開始                    |
+| FETCH (0x16)               | §9.12      | peer が fetch を開始                      |
+| TRACK_STATUS (0x0D)        | §9.14      | peer が track の状態を問い合わせ          |
+| SUBSCRIBE_NAMESPACE (0x11) | §9.18      | peer が namespace 購読を開始              |
+| PUBLISH_NAMESPACE (0x1E)   | §9.16      | peer が namespace announce を開始         |
+| REQUEST_UPDATE (0x02)      | §9.6       | peer が既存 subscription の window を更新 |
 
 ### 段階的な進め方
 
@@ -47,7 +47,7 @@ draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
 2. Phase 2: peer-initiated FETCH / TRACK_STATUS
 3. Phase 3: peer-initiated SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE
 4. Phase 4: REQUEST_UPDATE の受信処理
-5. Phase 5: 応答経路 (respond* API) の仕上げと Playwright / examples での動作確認
+5. Phase 5: 応答経路 (respond\* API) の仕上げと Playwright / examples での動作確認
 
 各 Phase を 1 コミット、typecheck / test / build 緑を維持する。
 
@@ -61,11 +61,33 @@ draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
 
 ## リスク
 
-| ID | リスク | 緩和 |
-|---|---|---|
-| R1 | User API の設計が既存 callbacks と一貫しない | 実装前に API 草案を issue に追記してレビューする |
-| R2 | Decoder のエッジケース不足で peer から来た malformed request でセッションが落ちる | 各メッセージ decoder に対して fast-check ベースの PBT を追加する |
-| R3 | REQUEST_UPDATE の window 更新処理が既存 subscription state を破壊する | SessionMachine 側の `handlePeerRequestUpdate` 経由で状態変更し、Session 側の独自遷移は書かない |
+| ID  | リスク                                                                            | 緩和                                                                                           |
+| --- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| R1  | User API の設計が既存 callbacks と一貫しない                                      | 実装前に API 草案を issue に追記してレビューする                                               |
+| R2  | Decoder のエッジケース不足で peer から来た malformed request でセッションが落ちる | 各メッセージ decoder に対して fast-check ベースの PBT を追加する                               |
+| R3  | REQUEST_UPDATE の window 更新処理が既存 subscription state を破壊する             | SessionMachine 側の `handlePeerRequestUpdate` 経由で状態変更し、Session 側の独自遷移は書かない |
+
+## 進捗
+
+### Phase 1 完了 (2026-04-19)
+
+- `SessionMachine` に `handlePeerSubscribe` / `handlePeerPublish` を追加した
+  - `validatePeerRequest` / `processIncomingAuthTokens` / track 重複 / Track Alias 重複を検証する
+  - peer SUBSCRIBE は `initiator="subscriber", myRole="publisher"`、peer PUBLISH は `initiator="publisher", myRole="subscriber"` として `SubscriptionEntry` を登録する
+  - Track Alias は自側 SUBSCRIBE_OK で確定する peer publisher 空間 (`_peerPublisherAliases`) を共有する
+- `SessionEvent` に `peerSubscribeReceived` / `peerPublishReceived` を追加した
+- `Session` に `startIncomingRequestStreamLoop` / `handleIncomingRequestStream` を追加し、`transport.incomingBidirectionalStreams` から peer が開いた bidi stream を受け付けて先頭メッセージを `MessageType` で振り分ける
+  - Phase 1 スコープ外の MessageType は `PROTOCOL_VIOLATION` でセッションを閉じる
+  - peer-initiated bidi stream は `peerInitiatedStreams` Map に保持し、Phase 5 で追加する respond API で同ストリームに SUBSCRIBE_OK / PUBLISH_OK を書き戻す予定
+- `ConnectCallbacks` に `peerSubscribe` / `peerPublish` と `PeerSubscribeRequest` / `PeerPublishRequest` 型を追加した
+- `src/session/peerRequest.prop.ts` に fast-check ベースの PBT を追加した
+
+残課題 (Phase 2 以降):
+
+- Phase 2: peer-initiated FETCH / TRACK_STATUS
+- Phase 3: peer-initiated SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE
+- Phase 4: peer-initiated REQUEST_UPDATE と peer-initiated bidi stream 上の後続メッセージの読み取りループ
+- Phase 5: 応答経路 (`respondSubscribe` / `respondPublish` 等) の実装と examples / Playwright での動作確認
 
 ## 参考
 

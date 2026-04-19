@@ -28,12 +28,14 @@ import {
   decodeGoawayPayload,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
+  decodePublishPayload,
   decodePublishDonePayload,
   decodePublishNamespacePayload,
   decodePublishOkPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeSetupPayload,
+  decodeSubscribePayload,
   decodeSubscribeOkPayload,
   encodeSetupPayload,
   encodeFetchPayload,
@@ -94,6 +96,28 @@ export interface DebugMessage {
 }
 
 /**
+ * peer が開いた双方向ストリームで受信した SUBSCRIBE の情報
+ * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE)
+ *
+ * 受理 / 拒否 / SUBSCRIBE_OK 送出を行う respond API は後続 Phase で追加する。
+ */
+export interface PeerSubscribeRequest {
+  requestId: bigint;
+  message: Subscribe;
+}
+
+/**
+ * peer が開いた双方向ストリームで受信した PUBLISH の情報
+ * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH)
+ *
+ * 受理 / 拒否 / PUBLISH_OK 送出を行う respond API は後続 Phase で追加する。
+ */
+export interface PeerPublishRequest {
+  requestId: bigint;
+  message: Publish;
+}
+
+/**
  * Connect callbacks
  */
 export interface ConnectCallbacks {
@@ -107,6 +131,20 @@ export interface ConnectCallbacks {
    * @param newSessionUri - 新しいセッション URI（セッションマイグレーション用）
    */
   goaway?: (newSessionUri: string) => void;
+  /**
+   * peer が新規 bidi stream で開始した SUBSCRIBE の受信コールバック
+   * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE)
+   *
+   * Phase 1 では通知のみ。受理応答の respond API は後続 Phase で追加する。
+   */
+  peerSubscribe?: (request: PeerSubscribeRequest) => void;
+  /**
+   * peer が新規 bidi stream で開始した PUBLISH の受信コールバック
+   * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH)
+   *
+   * Phase 1 では通知のみ。受理応答の respond API は後続 Phase で追加する。
+   */
+  peerPublish?: (request: PeerPublishRequest) => void;
 }
 
 /**
@@ -637,6 +675,19 @@ export class Session {
     }
   >();
 
+  // peer が新規に開いた双方向ストリーム (peer-initiated request)
+  // draft-ietf-moq-transport-17 Section 3.3, 9.8, 9.11
+  //
+  // Phase 1 ではストリームと ControlStreamReader のみ保持する。
+  // 後続 Phase で respond API から同ストリームへ SUBSCRIBE_OK / PUBLISH_OK を書く。
+  private peerInitiatedStreams = new Map<
+    bigint,
+    {
+      stream: WebTransportBidirectionalStream;
+      controlReader: ControlStreamReader;
+    }
+  >();
+
   // Pending requests
   private pendingPublish = new Map<
     bigint,
@@ -908,6 +959,10 @@ export class Session {
 
     // Start accepting incoming data streams
     this.startIncomingStreamLoop();
+
+    // Start accepting peer-initiated bidirectional request streams
+    // draft-ietf-moq-transport-17 Section 3.3, 9.8 (SUBSCRIBE), 9.11 (PUBLISH)
+    this.startIncomingRequestStreamLoop();
 
     // Start receiving datagrams
     this.startDatagramLoop();
@@ -1949,6 +2004,18 @@ export class Session {
         case "namespaceReceived":
         case "namespaceDoneReceived":
         case "publishBlockedReceived":
+          break;
+        case "peerSubscribeReceived":
+          this.callbacks.peerSubscribe?.({
+            requestId: event.requestId,
+            message: event.message,
+          });
+          break;
+        case "peerPublishReceived":
+          this.callbacks.peerPublish?.({
+            requestId: event.requestId,
+            message: event.message,
+          });
           break;
       }
     }
@@ -3408,6 +3475,135 @@ export class Session {
         reader.releaseLock();
       }
     })();
+  }
+
+  /**
+   * peer が開いた双方向ストリームを受け付けるループ
+   * draft-ietf-moq-transport-17 Section 3.3, 9.8 (SUBSCRIBE), 9.11 (PUBLISH)
+   *
+   * 各ストリームは独立に handleIncomingRequestStream に渡して先頭メッセージを
+   * デコードし SessionMachine に feed する。
+   */
+  private startIncomingRequestStreamLoop(): void {
+    void (async () => {
+      const reader = this.transport.incomingBidirectionalStreams.getReader();
+
+      try {
+        while (this.sessionState === "established") {
+          const { value: stream, done } = await reader.read();
+          if (done) break;
+
+          void this.handleIncomingRequestStream(stream);
+        }
+      } catch (err) {
+        this.callbacks.debug?.({
+          direction: "recv",
+          type: 0,
+          typeName: "REQUEST_STREAM_LOOP_ERROR",
+          payload: new Uint8Array(0),
+          decoded: {
+            error: err instanceof Error ? err.message : String(err),
+          },
+          timestamp: Date.now(),
+        });
+        if (this.sessionState === "established") {
+          this.callbacks.error?.(err as Error);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    })();
+  }
+
+  /**
+   * peer が開いた bidi stream の先頭メッセージを処理する
+   * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE), 9.11 (PUBLISH)
+   *
+   * Phase 1 では SUBSCRIBE / PUBLISH のみ対応する。
+   * それ以外の request 系メッセージは後続 Phase で段階的に追加するまで
+   * PROTOCOL_VIOLATION としてセッションを閉じる。
+   */
+  private async handleIncomingRequestStream(
+    stream: WebTransportBidirectionalStream,
+  ): Promise<void> {
+    if (!this.protocol) return;
+
+    const controlReader = new ControlStreamReader();
+    const streamReader = stream.readable.getReader();
+    let rawMessage: import("../controlStream").RawControlMessage | null = null;
+    try {
+      while (rawMessage === null) {
+        const { value, done } = await streamReader.read();
+        if (done) return;
+        if (value) {
+          const messages = controlReader.feed(value);
+          if (messages.length > 0) {
+            rawMessage = messages[0];
+          }
+        }
+      }
+    } catch (err) {
+      this.callbacks.debug?.({
+        direction: "recv",
+        type: 0,
+        typeName: "REQUEST_STREAM_READ_ERROR",
+        payload: new Uint8Array(0),
+        decoded: {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        timestamp: Date.now(),
+      });
+      return;
+    } finally {
+      streamReader.releaseLock();
+    }
+
+    this.statsControlMessagesReceived++;
+
+    switch (rawMessage.type) {
+      case MessageType.SUBSCRIBE: {
+        const subscribe = decodeSubscribePayload(rawMessage.payload);
+        this.emitDebug("recv", MessageType.SUBSCRIBE, rawMessage.payload, {
+          requestId: subscribe.requestId.toString(),
+        });
+        this.peerInitiatedStreams.set(subscribe.requestId, {
+          stream,
+          controlReader,
+        });
+        const accepted = this.protocol.handlePeerSubscribe(subscribe);
+        if (!accepted) {
+          this.peerInitiatedStreams.delete(subscribe.requestId);
+        }
+        this.drainMachineEvents();
+        return;
+      }
+      case MessageType.PUBLISH: {
+        const publish = decodePublishPayload(rawMessage.payload);
+        this.emitDebug("recv", MessageType.PUBLISH, rawMessage.payload, {
+          requestId: publish.requestId.toString(),
+          trackAlias: publish.trackAlias.toString(),
+        });
+        this.peerInitiatedStreams.set(publish.requestId, {
+          stream,
+          controlReader,
+        });
+        const accepted = this.protocol.handlePeerPublish(publish);
+        if (!accepted) {
+          this.peerInitiatedStreams.delete(publish.requestId);
+        }
+        this.drainMachineEvents();
+        return;
+      }
+      default:
+        // Phase 1 では SUBSCRIBE / PUBLISH 以外の peer-initiated request は未対応。
+        // 後続 Phase で FETCH / TRACK_STATUS / NAMESPACE 系 / REQUEST_UPDATE を追加する。
+        this.closeWithError(
+          new SessionError(
+            `peer-initiated bidi stream with unsupported message type ${rawMessage.type}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+    }
   }
 
   /**

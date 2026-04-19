@@ -456,6 +456,116 @@ export class SessionMachine {
   }
 
   /**
+   * peer が新規 bidi stream で送信してきた SUBSCRIBE を受信する
+   * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE)
+   *
+   * - peer は subscriber、自側は publisher として登録する
+   * - Request ID の parity と Required Delta を検証する
+   * - AUTHORIZATION_TOKEN パラメータをキャッシュに反映する
+   * - 同一 track を publisher role で二重受理した場合は PROTOCOL_VIOLATION でクローズ
+   * - 成功時は peerSubscribeReceived イベントを積む
+   *
+   * 検証で失敗した場合は closeSession イベントを積み、false を返す。
+   */
+  handlePeerSubscribe(subscribe: Subscribe): boolean {
+    if (!this.validatePeerRequest(subscribe.requestId, subscribe.requiredRequestIdDelta)) {
+      return false;
+    }
+    const key = subscriptionKey(subscribe.trackNamespace, subscribe.trackName, "publisher");
+    if (this._subscriptionsByTrack.has(key)) {
+      this.fail(
+        new SessionError(
+          "duplicate peer subscription in publisher role",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return false;
+    }
+    this.processIncomingAuthTokens(subscribe.parameters);
+    if (this._state !== "established") {
+      return false;
+    }
+    const entry = createSubscriptionEntry({
+      requestId: subscribe.requestId,
+      initiator: "subscriber",
+      myRole: "publisher",
+      trackNamespace: subscribe.trackNamespace,
+      trackName: subscribe.trackName,
+      trackAlias: null,
+      forwardState: extractForwardState(subscribe.parameters),
+    });
+    this._subscriptions.set(subscribe.requestId, entry);
+    this._subscriptionsByTrack.set(key, subscribe.requestId);
+    this._events.push({
+      type: "peerSubscribeReceived",
+      requestId: subscribe.requestId,
+      message: subscribe,
+    });
+    return true;
+  }
+
+  /**
+   * peer が新規 bidi stream で送信してきた PUBLISH を受信する
+   * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH)
+   *
+   * - peer は publisher、自側は subscriber として登録する
+   * - Request ID の parity と Required Delta を検証する
+   * - AUTHORIZATION_TOKEN パラメータをキャッシュに反映する
+   * - 同一 track を subscriber role で二重受理した場合は PROTOCOL_VIOLATION でクローズ
+   * - Track Alias が peer publisher 空間で重複していたら DUPLICATE_TRACK_ALIAS でクローズ
+   *   (SUBSCRIBE_OK 経由で確定した peer publisher の Track Alias と同じ空間を共有する)
+   * - 成功時は peerPublishReceived イベントを積む
+   *
+   * 検証で失敗した場合は closeSession イベントを積み、false を返す。
+   */
+  handlePeerPublish(publish: Publish): boolean {
+    if (!this.validatePeerRequest(publish.requestId, publish.requiredRequestIdDelta)) {
+      return false;
+    }
+    if (this._peerPublisherAliases.has(publish.trackAlias)) {
+      this.fail(
+        new SessionError(
+          "peer publisher reused track alias",
+          SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+        ),
+      );
+      return false;
+    }
+    const key = subscriptionKey(publish.trackNamespace, publish.trackName, "subscriber");
+    if (this._subscriptionsByTrack.has(key)) {
+      this.fail(
+        new SessionError(
+          "duplicate peer subscription in subscriber role",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return false;
+    }
+    this.processIncomingAuthTokens(publish.parameters);
+    if (this._state !== "established") {
+      return false;
+    }
+    const entry = createSubscriptionEntry({
+      requestId: publish.requestId,
+      initiator: "publisher",
+      myRole: "subscriber",
+      trackNamespace: publish.trackNamespace,
+      trackName: publish.trackName,
+      trackAlias: publish.trackAlias,
+      forwardState: extractForwardState(publish.parameters),
+    });
+    this._subscriptions.set(publish.requestId, entry);
+    this._subscriptionsByTrack.set(key, publish.requestId);
+    this._peerPublisherAliases.set(publish.trackAlias, publish.requestId);
+    this._events.push({
+      type: "peerPublishReceived",
+      requestId: publish.requestId,
+      message: publish,
+    });
+    return true;
+  }
+
+  /**
    * 既存 bidi request stream 上の応答メッセージを処理する
    * draft-ietf-moq-transport-17 Section 9.7, 9.10, 9.12 ほか
    *
