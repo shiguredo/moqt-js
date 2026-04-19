@@ -287,6 +287,34 @@
 
 ### misc
 
+- [ADD] SessionMachine に Publisher facade 向けの `publicationView` を追加する (#0081)
+  - `src/session/types.ts` に `PublicationView` 型を追加する
+  - `src/session/machine.ts` に `publicationView(requestId)` を追加する
+  - publisher role の SubscriptionEntry を boolean forwardState / active|closed state へ射影する
+  - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [CHANGE] Publisher を SessionMachine の publicationView から state を derive する facade に置き換える (#0081)
+  - `src/publisher.ts` から `publisherState` / `publisherForwardState` の二重管理を撤去する
+  - `PublisherImpl` コンストラクタに `PublicationViewAccessor` を追加する
+  - `state` / `forwardState` getter は SessionMachine の SubscriptionEntry を都度参照する
+  - `setForwardState` は forwardState 変化通知のための change detection のみを担う shim に変える
+  - `src/publisher.test.ts` / `src/publisher.prop.ts` のテストを view ベースに書き換える
+  - @voluntas
+- [ADD] SessionMachine が PUBLISH_OK / REQUEST_UPDATE の FORWARD を SubscriptionEntry に反映する (#0081)
+  - `src/session/subscription.ts` に `extractForwardStateIfPresent` を追加する
+  - `handlePeerPublishOk` / `handlePeerRequestUpdate` で FORWARD パラメータが明示されている場合のみ `entry.forwardState` を更新する
+  - `SessionEvent` の `requestUpdateReceived` に `targetRequestId` を追加する
+  - Session の PUBLISH_OK 処理から FORWARD の重複パースを撤去し、`publicationView` から値を読む
+  - peer REQUEST_UPDATE 受信時に Publisher の `setForwardState` を呼ぶ経路を追加する (以前は FORWARD 変化が Publisher に伝播しなかった)
+  - @voluntas
+- [CHANGE] Publisher から local state を完全撤去し SessionMachine を唯一の真実源にする (#0081)
+  - `SessionEvent` に `publicationForwardStateChanged` を追加し、SessionMachine 側で change detection を行う
+  - `PublisherImpl` から `setForwardState` / `markClosed` / `closedOverride` / `lastNotifiedForwardState` を撤去する
+  - `notifyForwardStateChanged(forward)` を追加し、session は SessionMachine のイベント駆動で callback を起動する
+  - `SessionMachine.publicationView` はセッションが closing/closed の場合も state を "closed" にする
+  - session close ループから Publisher への `markClosed` 呼び出しを撤去する
+  - @voluntas
+
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas
 - [UPDATE] Vite から Vite+ に切り替える

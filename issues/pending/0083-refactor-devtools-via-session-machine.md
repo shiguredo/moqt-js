@@ -55,11 +55,11 @@ Model: Claude Opus 4.7
 
 ## リスク
 
-| ID  | リスク                                                                            | 緩和                                                                                               |
-| --- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| R1  | Session の observable API 設計が粗いと SessionMachine 内部実装が外に漏れる        | API 草案を issue で合意してから実装、公開するのは subset に限定する                                |
-| R2  | devtools が e2e テスト (Playwright) しか持たないため event-driven 化でリグレッション | Playwright シナリオで publisher / subscriber 接続 → GOAWAY の画面遷移を緑に保つ                    |
-| R3  | SessionMachine 側に足りないイベント (例: forwardState 変化) が発覚して設計変更    | 足りなければ本 issue 内で SessionMachine に event を追加する (CLAUDE.md: 後方互換性は考慮しない)   |
+| ID  | リスク                                                                               | 緩和                                                                                             |
+| --- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| R1  | Session の observable API 設計が粗いと SessionMachine 内部実装が外に漏れる           | API 草案を issue で合意してから実装、公開するのは subset に限定する                              |
+| R2  | devtools が e2e テスト (Playwright) しか持たないため event-driven 化でリグレッション | Playwright シナリオで publisher / subscriber 接続 → GOAWAY の画面遷移を緑に保つ                  |
+| R3  | SessionMachine 側に足りないイベント (例: forwardState 変化) が発覚して設計変更       | 足りなければ本 issue 内で SessionMachine に event を追加する (CLAUDE.md: 後方互換性は考慮しない) |
 
 ## 段階的な進め方
 

@@ -25,6 +25,20 @@ export function extractForwardState(parameters: Parameter[]): 0 | 1 {
 }
 
 /**
+ * FORWARD パラメータが存在する場合のみ Forward State を抽出する
+ * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+ *
+ * REQUEST_UPDATE / PUBLISH_OK で「FORWARD が明示された場合のみ更新する」ために使う。
+ * 省略時は undefined を返す (呼び出し側で「変更なし」として扱う)。
+ */
+export function extractForwardStateIfPresent(parameters: Parameter[]): 0 | 1 | undefined {
+  const param = parameters.find((p) => p.type === VersionSpecificParameterType.FORWARD);
+  if (param === undefined) return undefined;
+  const value = getParameterVarintValue(param);
+  return value === 0n ? 0 : 1;
+}
+
+/**
  * subscriptions_by_track の Map キーを生成する
  *
  * TrackNamespace の各要素と TrackName を hex 化して連結する。

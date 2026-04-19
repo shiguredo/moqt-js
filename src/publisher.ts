@@ -1,7 +1,13 @@
 /**
  * MOQT Publisher
  * draft-ietf-moq-transport-17 Section 5.2 (Fetch State Management)
+ *
+ * #0081 で Publisher は SessionMachine の publicationView を源泉とする facade になった。
+ * state / forwardState は SessionMachine 側の SubscriptionEntry から都度 derive され、
+ * Publisher 自身は状態 (state, forwardState, closed flag 等) を一切持たない。
  */
+
+import type { PublicationView } from "./session/types";
 
 /**
  * Publisher state
@@ -68,11 +74,18 @@ export interface Publisher {
 }
 
 /**
+ * SessionMachine から publisher role の view を取り出すアクセサ
+ *
+ * Publisher は自身の requestId に紐付く PublicationView を都度取り出して状態を確認する。
+ * view が存在しない（forgetSubscription 済み、session closed 等）場合は undefined を返す。
+ */
+export type PublicationViewAccessor = () => PublicationView | undefined;
+
+/**
  * Internal Publisher implementation
  */
 export class PublisherImpl implements Publisher {
-  private publisherState: PublisherState = "active";
-  private publisherForwardState = true;
+  private readonly viewAccessor: PublicationViewAccessor;
   private readonly publisherNamespace: string[];
   private readonly publisherTrackName: string;
   private readonly errorCallback?: (error: Error) => void;
@@ -94,6 +107,7 @@ export class PublisherImpl implements Publisher {
     trackName: string,
     requestId: bigint,
     trackAlias: bigint,
+    viewAccessor: PublicationViewAccessor,
     onError?: (error: Error) => void,
     onForwardStateChange?: (forward: boolean) => void,
   ) {
@@ -101,16 +115,19 @@ export class PublisherImpl implements Publisher {
     this.publisherTrackName = trackName;
     this.requestId = requestId;
     this.trackAlias = trackAlias;
+    this.viewAccessor = viewAccessor;
     this.errorCallback = onError;
     this.forwardStateChangeCallback = onForwardStateChange;
   }
 
   get state(): PublisherState {
-    return this.publisherState;
+    const view = this.viewAccessor();
+    return view === undefined ? "closed" : view.state;
   }
 
   get forwardState(): boolean {
-    return this.publisherForwardState;
+    const view = this.viewAccessor();
+    return view === undefined ? false : view.forwardState;
   }
 
   get namespace(): string[] {
@@ -141,7 +158,7 @@ export class PublisherImpl implements Publisher {
    * Send an object on this track
    */
   sendObject(params: SendObjectParams): void {
-    if (this.publisherState === "closed") {
+    if (this.state === "closed") {
       throw new Error("Publisher is closed");
     }
 
@@ -155,7 +172,7 @@ export class PublisherImpl implements Publisher {
    * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   sendDatagram(params: SendDatagramParams): void {
-    if (this.publisherState === "closed") {
+    if (this.state === "closed") {
       throw new Error("Publisher is closed");
     }
 
@@ -172,39 +189,31 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * Internal: Set forward state (called by session)
+   * Internal: FORWARD パラメータ変化の通知
    * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
-   * PUBLISH_OK または REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
-   * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。
+   * SessionMachine が `publicationForwardStateChanged` イベントを発火した際に session
+   * 経由で呼ばれる。このメソッドは単に外部 callback を起動するだけで、change detection
+   * は SessionMachine 側が責務を持つ。
    */
-  setForwardState(forward: boolean): void {
-    const previousState = this.publisherForwardState;
-    this.publisherForwardState = forward;
-    if (previousState !== forward) {
-      this.forwardStateChangeCallback?.(forward);
-    }
+  notifyForwardStateChanged(forward: boolean): void {
+    this.forwardStateChangeCallback?.(forward);
   }
 
   /**
    * Signal that publishing is done
+   *
+   * onDoneInternal が session 経由で sendPublishDone を呼び、SessionMachine の
+   * SubscriptionEntry を terminated に遷移させる。その結果 view 経由で state が
+   * "closed" に遷移する。
    */
   async done(): Promise<void> {
-    if (this.publisherState === "closed") {
+    if (this.state === "closed") {
       return;
     }
 
     if (this.onDoneInternal) {
       await this.onDoneInternal();
     }
-
-    this.publisherState = "closed";
-  }
-
-  /**
-   * Internal: mark as closed (called by session)
-   */
-  markClosed(): void {
-    this.publisherState = "closed";
   }
 }

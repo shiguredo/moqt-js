@@ -1076,11 +1076,14 @@ export class Session {
     const trackNameBytes = encodeTrackName(trackName);
 
     // Create publisher implementation
+    // #0081: Publisher は SessionMachine の publicationView を参照する facade に変わった
+    const machine = this.protocol!;
     const impl = new PublisherImpl(
       namespace,
       trackName,
       requestId,
       trackAlias,
+      () => machine.publicationView(requestId),
       callbacks?.error,
       callbacks?.onForwardStateChange,
     );
@@ -1945,13 +1948,14 @@ export class Session {
       this.peerGoawayTimeoutId = null;
     }
 
-    // Close all publishers, subscribers and fetchers
+    // Close all subscribers and fetchers
     // Note: We use markClosed() instead of handleEnd() because session close
     // is session-level termination (Section 3.4), not track-level PUBLISH_DONE.
     // The end callback is only for PUBLISH_DONE.
-    for (const pub of this.publishers.values()) {
-      pub.markClosed();
-    }
+    //
+    // #0081: Publisher は SessionMachine の state を参照する facade に変更されたため
+    // ここで明示的に closed を伝播する必要はない (SessionMachine が closing/closed に
+    // 遷移すれば publicationView が state="closed" を返す)。
     for (const sub of this.subscribers.values()) {
       sub.markClosed();
     }
@@ -2287,12 +2291,24 @@ export class Session {
           this.closeWithError(event.error);
           break;
         case "goawayReceived":
-        case "requestUpdateReceived":
         case "publishDoneReceived":
         case "namespaceReceived":
         case "namespaceDoneReceived":
         case "publishBlockedReceived":
           break;
+        case "requestUpdateReceived":
+          // FORWARD 変化は SessionMachine が別イベント `publicationForwardStateChanged`
+          // として積むため、ここでは何もしない。
+          break;
+        case "publicationForwardStateChanged": {
+          // #0081: Publisher の FORWARD 変化通知。SessionMachine が change detection を
+          // 行った結果、前回値と異なるときにのみ発火する。
+          const publisher = this.publishers.get(event.requestId);
+          if (publisher !== undefined) {
+            publisher.notifyForwardStateChanged(event.forwardState);
+          }
+          break;
+        }
         case "peerSubscribeReceived":
           this.callbacks.peerSubscribe?.({
             requestId: event.requestId,
@@ -2956,22 +2972,20 @@ export class Session {
 
       if (msg.type === MessageType.PUBLISH_OK) {
         const decoded = decodePublishOkPayload(msg.payload);
-        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
-        this.pendingPublish.delete(requestId);
-        this.publishers.set(requestId, pending.impl);
-
-        // FORWARD パラメータを処理
+        // FORWARD パラメータの値域は SessionMachine 側での解釈前に spec 上の 0/1 制約を検査する。
         // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
-        let forwardState = true;
         for (const param of decoded.parameters) {
           if (param.type === VersionSpecificParameterType.FORWARD) {
-            const forwardValue = param.value[0];
-            validateForwardValue(forwardValue);
-            forwardState = forwardValue !== 0;
+            validateForwardValue(param.value[0]);
             break;
           }
         }
-        pending.impl.setForwardState(forwardState);
+        // #0081: Publisher を registry に先に登録してから SessionMachine に渡す。
+        // publicationForwardStateChanged イベントが drainMachineEvents 内で処理される際に
+        // this.publishers から Publisher を取り出せるようにするため。
+        this.pendingPublish.delete(requestId);
+        this.publishers.set(requestId, pending.impl);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         pending.resolve(pending.impl);
 
         // PUBLISH_OK 後の継続メッセージ (PUBLISH_DONE 等) を読み取る
