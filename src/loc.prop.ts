@@ -14,10 +14,13 @@ import {
   decodeVideoFrameMarking,
   encodeAudioLevel,
   decodeAudioLevel,
+  encodeAudioProperties,
+  decodeAudioProperties,
   encodeConfig,
   decodeConfig,
   encodeVideoProperties,
   decodeVideoProperties,
+  type AudioProperties,
   type VideoFrameMarking,
   type VideoProperties,
 } from "./loc";
@@ -147,10 +150,65 @@ test("VideoProperties の encode/decode ラウンドトリップが成立する"
   );
 });
 
-// AudioProperties のラウンドトリップテストは除外
+// AudioProperties のラウンドトリップは audioLevel を含まない場合のみ成立する
 // 理由: AUDIO_LEVEL (ID: 6 = 0x06) と TIMESTAMP (ID: 0x06) の ID が衝突しているため、
 // デコードループで ID 0x06 は常に TIMESTAMP として処理される。
 // draft-ietf-moq-loc-02 の仕様上のバグであり、IANA による ID 再割り当てが必要。
+// issues/0036-bug-loc-audio-level-timestamp-id-conflict.md
+
+// AudioProperties (audioLevel を除く) 用の Arbitrary
+const audioPropertiesWithoutLevelArb: fc.Arbitrary<AudioProperties> = fc.record(
+  {
+    timestamp: fc.option(timestampArb, { nil: undefined }),
+    timescale: fc.option(timescaleArb, { nil: undefined }),
+  },
+  { requiredKeys: [] },
+);
+
+test("空の AudioProperties は空のバイト列にエンコードされる", () => {
+  const encoded = encodeAudioProperties({});
+  assert.equal(encoded.length, 0);
+  const decoded = decodeAudioProperties(encoded);
+  assert.isUndefined(decoded.timestamp);
+  assert.isUndefined(decoded.timescale);
+  assert.isUndefined(decoded.audioLevel);
+});
+
+test("audioLevel を含まない AudioProperties の encode/decode ラウンドトリップが成立する", () => {
+  fc.assert(
+    fc.property(audioPropertiesWithoutLevelArb, (properties) => {
+      const encoded = encodeAudioProperties(properties);
+      const decoded = decodeAudioProperties(encoded);
+
+      if (properties.timestamp !== undefined) {
+        assert.equal(decoded.timestamp, properties.timestamp);
+      } else {
+        assert.isUndefined(decoded.timestamp);
+      }
+
+      if (properties.timescale !== undefined) {
+        assert.equal(decoded.timescale, properties.timescale);
+      } else {
+        assert.isUndefined(decoded.timescale);
+      }
+
+      assert.isUndefined(decoded.audioLevel);
+    }),
+  );
+});
+
+// draft-ietf-moq-loc-02 の仕様バグの挙動を固定化する回帰テスト
+// AUDIO_LEVEL (ID=6) と TIMESTAMP (ID=0x06) は同一 ID のため、
+// decodeAudioProperties は audioLevel のバイト列を TIMESTAMP として読む
+test("audioLevel 単独の AudioProperties は decode で TIMESTAMP として誤認される (仕様バグ #0036)", () => {
+  const encoded = encodeAudioProperties({
+    audioLevel: { level: 50, voiceActivity: true },
+  });
+  const decoded = decodeAudioProperties(encoded);
+  // audioLevel としてではなく timestamp として読まれる
+  assert.isUndefined(decoded.audioLevel);
+  assert.isDefined(decoded.timestamp);
+});
 
 test("空の VideoProperties は空のバイト列にエンコードされる", () => {
   const properties: VideoProperties = {};

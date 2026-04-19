@@ -298,6 +298,10 @@
 
 ### misc
 
+- [UPDATE] audio 向けの codec config / LOC audio properties のテストを整備する (#0086)
+  - `src/codec/config.test.ts` を新設し `getAudioEncoderConfig` / `getAudioDecoderConfig` / `getVideoEncoderConfig` / `getVideoDecoderConfig` の単体テストを追加する
+  - `src/loc.prop.ts` に `AudioProperties` (audioLevel を除く) のラウンドトリップと、`audioLevel` を含む場合に TIMESTAMP として誤認される仕様バグの回帰テストを追加する
+  - @voluntas
 - [ADD] SessionMachine に Publisher facade 向けの `publicationView` を追加する (#0081)
   - `src/session/types.ts` に `PublicationView` 型を追加する
   - `src/session/machine.ts` に `publicationView(requestId)` を追加する
