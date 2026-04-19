@@ -4,7 +4,9 @@
  */
 
 import {
+  getParameterLocationValue,
   getParameterVarintValue,
+  type Location,
   type Parameter,
   type TrackNamespace,
   VersionSpecificParameterType,
@@ -36,6 +38,19 @@ export function extractForwardStateIfPresent(parameters: Parameter[]): 0 | 1 | u
   if (param === undefined) return undefined;
   const value = getParameterVarintValue(param);
   return value === 0n ? 0 : 1;
+}
+
+/**
+ * LARGEST_OBJECT パラメータが存在する場合のみ Location を抽出する
+ * draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST_OBJECT Parameter)
+ *
+ * SUBSCRIBE_OK / REQUEST_OK の LARGEST_OBJECT から Subscriber view を更新するために使う。
+ * 省略時は undefined を返す (呼び出し側で「変更なし」として扱う)。
+ */
+export function extractLargestLocationIfPresent(parameters: Parameter[]): Location | undefined {
+  const param = parameters.find((p) => p.type === VersionSpecificParameterType.LARGEST_OBJECT);
+  if (param === undefined) return undefined;
+  return getParameterLocationValue(param);
 }
 
 /**
@@ -84,5 +99,6 @@ export function createSubscriptionEntry(params: {
     state: params.initiator === "subscriber" ? "pendingSubscriber" : "pendingPublisher",
     forwardState: params.forwardState,
     largestLocation: null,
+    trackProperties: [],
   };
 }

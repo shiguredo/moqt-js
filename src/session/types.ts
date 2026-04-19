@@ -18,6 +18,7 @@ import type {
   TrackStatus,
 } from "../message";
 import type { ControlMessage } from "../message/control";
+import type { Property } from "../properties";
 
 /**
  * エンドポイントの役割
@@ -101,6 +102,13 @@ export interface SubscriptionEntry {
    * SUBSCRIBE_OK / PUBLISH / REQUEST_OK の LARGEST_OBJECT から保存する
    */
   largestLocation: Location | null;
+  /**
+   * Track Properties
+   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK), Section 11 (MOQT Properties)
+   * SUBSCRIBE_OK の trackProperties フィールドから保存する。
+   * subscriber role の Subscriber facade が view 経由で参照する。
+   */
+  trackProperties: Property[];
 }
 
 /**
@@ -122,6 +130,29 @@ export interface PublicationView {
   state: "active" | "closed";
   isEstablished: boolean;
   forwardState: boolean;
+}
+
+/**
+ * Subscriber 向け read-only view
+ * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions), 9.9 (SUBSCRIBE_OK)
+ *
+ * SessionMachine が subscriber role (myRole === "subscriber") の SubscriptionEntry を
+ * Subscriber facade 用に射影する型。SessionMachine が単一の source of truth になる。
+ * - state: "terminated" を "closed" に、その他を "active" に射影
+ * - isEstablished: state === "established" (SUBSCRIBE_OK 受信済み)
+ * - trackAlias: SUBSCRIBE_OK で確定する Track Alias (未確定なら null)
+ * - largestLocation: SUBSCRIBE_OK / REQUEST_OK の LARGEST_OBJECT 反映
+ * - trackProperties: SUBSCRIBE_OK の Track Properties 反映
+ */
+export interface SubscriptionView {
+  requestId: bigint;
+  trackNamespace: TrackNamespace;
+  trackName: Uint8Array;
+  trackAlias: bigint | null;
+  state: "active" | "closed";
+  isEstablished: boolean;
+  largestLocation: Location | null;
+  trackProperties: ReadonlyArray<Property>;
 }
 
 // ─── Fetch 状態管理 ─────────────────────────────────────

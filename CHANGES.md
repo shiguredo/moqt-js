@@ -314,6 +314,15 @@
   - `SessionMachine.publicationView` はセッションが closing/closed の場合も state を "closed" にする
   - session close ループから Publisher への `markClosed` 呼び出しを撤去する
   - @voluntas
+- [ADD] SessionMachine に Subscriber facade 向けの `subscriptionView` を追加する (#0082)
+  - `src/session/types.ts` に `SubscriptionView` 型を追加する
+  - `SubscriptionEntry` に `trackProperties` を追加する
+  - `src/session/machine.ts` に `subscriptionView(requestId)` を追加する
+  - `handlePeerSubscribeOk` が SUBSCRIBE_OK の LARGEST_OBJECT / Track Properties を entry に反映するようにする
+  - `applyRequestUpdateOk` を追加し、REQUEST_UPDATE の REQUEST_OK 応答の LARGEST_OBJECT を subscription に反映できるようにする
+  - `src/session/subscription.ts` に `extractLargestLocationIfPresent` を追加する
+  - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
 
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas
