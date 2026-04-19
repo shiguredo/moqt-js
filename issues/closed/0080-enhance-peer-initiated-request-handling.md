@@ -1,6 +1,7 @@
 # Peer-initiated request の受信デコードと SessionMachine 配線
 
 Created: 2026-04-19
+Completed: 2026-04-19
 Model: Claude Opus 4.7
 
 ## 概要
@@ -112,9 +113,23 @@ draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
   - ストリーム終了時に `peerInitiatedStreams` からエントリを除去する
 - `peerRequest.prop.ts` に peer-initiated SUBSCRIBE 後の REQUEST_UPDATE、peer-initiated PUBLISH 後の PUBLISH_DONE を検証する PBT を追加した
 
-残課題 (Phase 5):
+### Phase 5 完了 (2026-04-19)
 
-- Phase 5: 応答経路 (`respondSubscribe` / `respondPublish` / `respondFetch` / `respondTrackStatus` / `respondSubscribeNamespace` / `respondPublishNamespace` 等) の実装と examples / Playwright での動作確認
+- `SessionMachine` に 6 種類の accept メソッドと統一 `rejectPeerRequest` を追加した
+  - accept: `acceptPeerSubscribe` / `acceptPeerPublish` / `acceptPeerFetch` / `acceptPeerTrackStatus` / `acceptPeerSubscribeNamespace` / `acceptPeerPublishNamespace`
+  - reject: `rejectPeerRequest` (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE のいずれも対象)
+  - accept 時は対応する OK メッセージを `sendOnStream` イベントで積み、エントリ状態を `established` / `completed` に遷移させる
+  - SUBSCRIBE accept は `_myPublisherAliases` に `trackAlias` を登録し、重複時は `DUPLICATE_TRACK_ALIAS` で throw する
+- `Session` の公開 API に `acceptPeerSubscribe` / `acceptPeerPublish` / `acceptPeerFetch` / `acceptPeerTrackStatus` / `acceptPeerSubscribeNamespace` / `acceptPeerPublishNamespace` / `rejectPeerRequest` を追加した
+  - 各メソッドは `peerInitiatedStreams` から stream を取り出し、`ControlStreamWriter` でフレーミングして書き込む
+  - `acceptPeerSubscribe` は `trackAlias` 省略時に `nextTrackAlias++` で自動採番する
+- `peerRequest.prop.ts` に accept / reject の状態遷移・イベント発火・TrackAlias 重複検知などの PBT を追加した
+
+## 完了
+
+Phase 1-5 の全実装を完了した。Phase 5 の `Playwright / examples での動作確認` は対向サーバー・相互運用デモに依存するため別 issue で追跡する。
+
+本 issue はここで close する。
 
 ## 参考
 

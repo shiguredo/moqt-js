@@ -634,3 +634,153 @@ test("peer-initiated PUBLISH 後の PUBLISH_DONE は subscription を terminated
     assert.equal(event.reasonPhrase, "bye");
   }
 });
+
+test("acceptPeerSubscribe が SUBSCRIBE_OK を sendOnStream で送出し established にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerSubscribe(buildPeerSubscribe(1n)), true);
+  p.nextEvent(); // peerSubscribeReceived
+  p.acceptPeerSubscribe(1n, 42n);
+  const entry = p.subscription(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  assert.equal(entry.trackAlias, 42n);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+  if (event.type === "sendOnStream") {
+    assert.equal(event.requestId, 1n);
+    assert.equal(event.message.type, MessageType.SUBSCRIBE_OK);
+  }
+});
+
+test("acceptPeerSubscribe の TrackAlias 重複は DUPLICATE_TRACK_ALIAS で throw する", () => {
+  const p = established();
+  assert.equal(p.handlePeerSubscribe(buildPeerSubscribe(1n, ["a"], "x")), true);
+  p.nextEvent();
+  p.acceptPeerSubscribe(1n, 7n);
+  p.nextEvent(); // sendOnStream
+  // 2 件目の peer SUBSCRIBE に同じ TrackAlias で accept
+  assert.equal(p.handlePeerSubscribe(buildPeerSubscribe(3n, ["b"], "y")), true);
+  p.nextEvent();
+  assert.throws(() => {
+    p.acceptPeerSubscribe(3n, 7n);
+  });
+});
+
+test("acceptPeerPublish が PUBLISH_OK を sendOnStream で送出する", () => {
+  const p = established();
+  assert.equal(p.handlePeerPublish(buildPeerPublish(1n, 9n)), true);
+  p.nextEvent();
+  p.acceptPeerPublish(1n);
+  const entry = p.subscription(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+  if (event.type === "sendOnStream") {
+    assert.equal(event.message.type, MessageType.PUBLISH_OK);
+  }
+});
+
+test("acceptPeerFetch が FETCH_OK を sendOnStream で送出し established にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(1n)), true);
+  p.nextEvent();
+  p.acceptPeerFetch(1n, false, { group: 5n, object: 0n });
+  const entry = p.fetch(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  assert.equal(entry.endOfTrack, false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+  if (event.type === "sendOnStream") {
+    assert.equal(event.message.type, MessageType.FETCH_OK);
+  }
+});
+
+test("acceptPeerTrackStatus が REQUEST_OK を sendOnStream で送出し completed にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerTrackStatus(buildPeerTrackStatus(1n)), true);
+  p.nextEvent();
+  p.acceptPeerTrackStatus(1n);
+  const entry = p.trackStatusRequest(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "completed");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+  if (event.type === "sendOnStream") {
+    assert.equal(event.message.type, MessageType.REQUEST_OK);
+  }
+});
+
+test("acceptPeerSubscribeNamespace が REQUEST_OK を sendOnStream で送出し established にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerSubscribeNamespace(buildPeerSubscribeNamespace(1n)), true);
+  p.nextEvent();
+  p.acceptPeerSubscribeNamespace(1n);
+  const entry = p.namespaceSubscription(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+});
+
+test("acceptPeerPublishNamespace が REQUEST_OK を sendOnStream で送出し established にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerPublishNamespace(buildPeerPublishNamespace(1n)), true);
+  p.nextEvent();
+  p.acceptPeerPublishNamespace(1n);
+  const entry = p.namespacePublication(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+});
+
+test("rejectPeerRequest は対応するエントリを terminated にし REQUEST_ERROR を出す", () => {
+  const p = established();
+  assert.equal(p.handlePeerSubscribe(buildPeerSubscribe(1n)), true);
+  p.nextEvent();
+  p.rejectPeerRequest(1n, 500n, 0n, "rejected");
+  const entry = p.subscription(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "terminated");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "sendOnStream");
+  if (event.type === "sendOnStream") {
+    assert.equal(event.message.type, MessageType.REQUEST_ERROR);
+  }
+});
+
+test("rejectPeerRequest は peer FETCH を terminated にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(1n)), true);
+  p.nextEvent();
+  p.rejectPeerRequest(1n, 500n, 0n, "err");
+  const entry = p.fetch(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "terminated");
+});
+
+test("rejectPeerRequest は peer TRACK_STATUS を failed にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerTrackStatus(buildPeerTrackStatus(1n)), true);
+  p.nextEvent();
+  p.rejectPeerRequest(1n, 500n, 0n, "err");
+  const entry = p.trackStatusRequest(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "failed");
+});
+
+test("未知の requestId への rejectPeerRequest は throw する", () => {
+  const p = established();
+  assert.throws(() => {
+    p.rejectPeerRequest(999n, 500n, 0n, "unknown");
+  });
+});

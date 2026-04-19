@@ -41,6 +41,7 @@ import {
 } from "../message";
 import { type AuthToken, decodeAuthToken } from "../message/authToken";
 import type { ControlMessage } from "../message/control";
+import type { Property } from "../properties";
 import { RequestIdGenerator, RequestIdTracker } from "./requestId";
 import { AuthTokenCache } from "./authTokenCache";
 import { createFetchEntry } from "./fetch";
@@ -696,6 +697,346 @@ export class SessionMachine {
       message: msg,
     });
     return true;
+  }
+
+  /**
+   * peer SUBSCRIBE を受理して SUBSCRIBE_OK を送信する
+   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK)
+   *
+   * - SubscriptionEntry (peer-initiated, myRole="publisher") を established に遷移させる
+   * - 自側 publisher 空間に trackAlias を登録する
+   * - AUTHORIZATION_TOKEN を local キャッシュに反映する
+   * - sendOnStream イベントに SUBSCRIBE_OK を積む
+   *
+   * 状態違反 / TrackAlias 重複 / session 非 established 時は SessionError を throw する。
+   */
+  acceptPeerSubscribe(
+    requestId: bigint,
+    trackAlias: bigint,
+    parameters: Parameter[] = [],
+    trackProperties: Property[] = [],
+  ): void {
+    this.requireEstablished();
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no peer subscription for acceptPeerSubscribe",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.initiator !== "subscriber" || entry.myRole !== "publisher") {
+      throw new SessionError(
+        "acceptPeerSubscribe called for non peer-initiated subscription",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.state !== "pendingSubscriber") {
+      throw new SessionError(
+        "acceptPeerSubscribe called in invalid subscription state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (this._myPublisherAliases.has(trackAlias)) {
+      throw new SessionError(
+        "local publisher reused track alias",
+        SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+      );
+    }
+    this.processOutgoingAuthTokens(parameters);
+    entry.trackAlias = trackAlias;
+    entry.state = "established";
+    this._myPublisherAliases.set(trackAlias, requestId);
+    const ok: SubscribeOk = {
+      type: MessageType.SUBSCRIBE_OK,
+      trackAlias,
+      parameters,
+      trackProperties,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: ok,
+    });
+  }
+
+  /**
+   * peer PUBLISH を受理して PUBLISH_OK を送信する
+   * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK)
+   */
+  acceptPeerPublish(requestId: bigint, parameters: Parameter[] = []): void {
+    this.requireEstablished();
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no peer subscription for acceptPeerPublish",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.initiator !== "publisher" || entry.myRole !== "subscriber") {
+      throw new SessionError(
+        "acceptPeerPublish called for non peer-initiated publication",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.state !== "pendingPublisher") {
+      throw new SessionError(
+        "acceptPeerPublish called in invalid subscription state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this.processOutgoingAuthTokens(parameters);
+    entry.state = "established";
+    const ok: PublishOk = {
+      type: MessageType.PUBLISH_OK,
+      parameters,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: ok,
+    });
+  }
+
+  /**
+   * peer FETCH を受理して FETCH_OK を送信する
+   * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK)
+   */
+  acceptPeerFetch(
+    requestId: bigint,
+    endOfTrack: boolean,
+    endLocation: import("../message").Location,
+    parameters: Parameter[] = [],
+    trackProperties: Property[] = [],
+  ): void {
+    this.requireEstablished();
+    const entry = this._fetches.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no peer fetch for acceptPeerFetch",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.myRole !== "publisher") {
+      throw new SessionError(
+        "acceptPeerFetch called for non peer-initiated fetch",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.state !== "pending") {
+      throw new SessionError(
+        "acceptPeerFetch called in invalid fetch state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this.processOutgoingAuthTokens(parameters);
+    entry.state = "established";
+    entry.endLocation = endLocation;
+    entry.endOfTrack = endOfTrack;
+    const ok: FetchOk = {
+      type: MessageType.FETCH_OK,
+      endOfTrack,
+      endLocation,
+      parameters,
+      trackProperties,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: ok,
+    });
+  }
+
+  /**
+   * peer TRACK_STATUS に REQUEST_OK で応答する
+   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS), 9.6 (REQUEST_OK)
+   */
+  acceptPeerTrackStatus(requestId: bigint, parameters: Parameter[] = []): void {
+    this.requireEstablished();
+    const entry = this._trackStatusRequests.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no peer track status request for acceptPeerTrackStatus",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.myRole !== "publisher") {
+      throw new SessionError(
+        "acceptPeerTrackStatus called for non peer-initiated track status",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.state !== "pending") {
+      throw new SessionError(
+        "acceptPeerTrackStatus called in invalid track status state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this.processOutgoingAuthTokens(parameters);
+    entry.state = "completed";
+    const ok: RequestOk = {
+      type: MessageType.REQUEST_OK,
+      parameters,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: ok,
+    });
+  }
+
+  /**
+   * peer SUBSCRIBE_NAMESPACE を受理して REQUEST_OK で応答する
+   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE), 9.6 (REQUEST_OK)
+   */
+  acceptPeerSubscribeNamespace(requestId: bigint, parameters: Parameter[] = []): void {
+    this.requireEstablished();
+    const entry = this._namespaceSubscriptions.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no peer namespace subscription for acceptPeerSubscribeNamespace",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.myRole !== "publisher") {
+      throw new SessionError(
+        "acceptPeerSubscribeNamespace called for non peer-initiated namespace subscription",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.state !== "pending") {
+      throw new SessionError(
+        "acceptPeerSubscribeNamespace called in invalid state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this.processOutgoingAuthTokens(parameters);
+    entry.state = "established";
+    const ok: RequestOk = {
+      type: MessageType.REQUEST_OK,
+      parameters,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: ok,
+    });
+  }
+
+  /**
+   * peer PUBLISH_NAMESPACE を受理して REQUEST_OK で応答する
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE), 9.6 (REQUEST_OK)
+   */
+  acceptPeerPublishNamespace(requestId: bigint, parameters: Parameter[] = []): void {
+    this.requireEstablished();
+    const entry = this._namespacePublications.get(requestId);
+    if (entry === undefined) {
+      throw new SessionError(
+        "no peer namespace publication for acceptPeerPublishNamespace",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.myRole !== "subscriber") {
+      throw new SessionError(
+        "acceptPeerPublishNamespace called for non peer-initiated namespace publication",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    if (entry.state !== "pending") {
+      throw new SessionError(
+        "acceptPeerPublishNamespace called in invalid state",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    this.processOutgoingAuthTokens(parameters);
+    entry.state = "established";
+    const ok: RequestOk = {
+      type: MessageType.REQUEST_OK,
+      parameters,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: ok,
+    });
+  }
+
+  /**
+   * peer-initiated request を REQUEST_ERROR で拒否する
+   * draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR)
+   *
+   * SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE /
+   * PUBLISH_NAMESPACE のいずれでも利用できる。該当する peer-initiated エントリを
+   * terminated (TrackStatus は failed) に遷移させ、sendOnStream に REQUEST_ERROR を積む。
+   */
+  rejectPeerRequest(
+    requestId: bigint,
+    errorCode: bigint,
+    retryInterval: bigint,
+    reasonPhrase: string,
+  ): void {
+    this.requireEstablished();
+    const subscription = this._subscriptions.get(requestId);
+    if (subscription !== undefined) {
+      if (subscription.state !== "pendingSubscriber" && subscription.state !== "pendingPublisher") {
+        throw new SessionError(
+          "rejectPeerRequest called in invalid subscription state",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+      subscription.state = "terminated";
+    } else if (this._fetches.get(requestId) !== undefined) {
+      const fetch = this._fetches.get(requestId);
+      if (fetch && fetch.myRole !== "publisher") {
+        throw new SessionError(
+          "rejectPeerRequest called for non peer-initiated fetch",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+      if (fetch) fetch.state = "terminated";
+    } else if (this._trackStatusRequests.get(requestId) !== undefined) {
+      const ts = this._trackStatusRequests.get(requestId);
+      if (ts && ts.myRole !== "publisher") {
+        throw new SessionError(
+          "rejectPeerRequest called for non peer-initiated track status",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+      if (ts) ts.state = "failed";
+    } else if (this._namespaceSubscriptions.get(requestId) !== undefined) {
+      const ns = this._namespaceSubscriptions.get(requestId);
+      if (ns && ns.myRole !== "publisher") {
+        throw new SessionError(
+          "rejectPeerRequest called for non peer-initiated namespace subscription",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+      if (ns) ns.state = "terminated";
+    } else if (this._namespacePublications.get(requestId) !== undefined) {
+      const np = this._namespacePublications.get(requestId);
+      if (np && np.myRole !== "subscriber") {
+        throw new SessionError(
+          "rejectPeerRequest called for non peer-initiated namespace publication",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+      if (np) np.state = "terminated";
+    } else {
+      throw new SessionError(
+        "no peer-initiated request for rejectPeerRequest",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+    const err: RequestError = {
+      type: MessageType.REQUEST_ERROR,
+      errorCode,
+      retryInterval,
+      reasonPhrase,
+    };
+    this._events.push({
+      type: "sendOnStream",
+      requestId,
+      message: err,
+    });
   }
 
   /**

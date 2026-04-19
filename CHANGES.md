@@ -109,6 +109,15 @@
   - ストリーム終了時に `peerInitiatedStreams` からエントリを削除する
   - peerRequest.prop.ts に peer-initiated SUBSCRIBE 後の REQUEST_UPDATE、peer-initiated PUBLISH 後の PUBLISH_DONE のテストを追加する
   - @voluntas
+- [ADD] peer-initiated request への応答 API を実装する (#0080)
+  - `SessionMachine` に `acceptPeerSubscribe` / `acceptPeerPublish` / `acceptPeerFetch` / `acceptPeerTrackStatus` / `acceptPeerSubscribeNamespace` / `acceptPeerPublishNamespace` を追加する
+  - `SessionMachine` に統一インターフェースの `rejectPeerRequest` を追加する (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の全対象)
+  - accept 時は対応する OK メッセージを `sendOnStream` イベントで積み、エントリを `established` / `completed` に遷移させる
+  - SUBSCRIBE accept 時は自側 publisher 空間 `_myPublisherAliases` に `trackAlias` を登録し、重複は `DUPLICATE_TRACK_ALIAS` で throw する
+  - `Session` に `acceptPeerSubscribe` / `acceptPeerPublish` / `acceptPeerFetch` / `acceptPeerTrackStatus` / `acceptPeerSubscribeNamespace` / `acceptPeerPublishNamespace` / `rejectPeerRequest` を追加する
+  - `Session.acceptPeerSubscribe` は `trackAlias` 省略時に自動採番する
+  - `peerRequest.prop.ts` に accept/reject の状態遷移・イベント発火・重複検知を検証する PBT を追加する
+  - @voluntas
 - [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
   - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
   - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する

@@ -42,11 +42,16 @@ import {
   decodeSubscribeOkPayload,
   decodeTrackStatusPayload,
   encodeSetupPayload,
+  encodeFetchOkPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
   encodePublishNamespacePayload,
+  encodePublishOkPayload,
   encodePublishPayload,
+  encodeRequestErrorPayload,
+  encodeRequestOkPayload,
   encodeSubscribeNamespacePayload,
+  encodeSubscribeOkPayload,
   encodeSubscribePayload,
   encodeRequestUpdatePayload,
   encodeTrackStatusPayload,
@@ -2011,6 +2016,213 @@ export class Session {
     this.requestStreams.clear();
 
     // close コールバックはコンストラクタの transport.closed 監視で呼ばれる
+  }
+
+  // ─── peer-initiated request への応答 API ──────────────
+  // draft-ietf-moq-transport-17 Section 3.3, 9.7 (REQUEST_ERROR)
+  //
+  // peer が開いた bidi stream 上に SUBSCRIBE_OK / PUBLISH_OK / FETCH_OK /
+  // REQUEST_OK / REQUEST_ERROR を書き戻す。
+
+  /**
+   * peer SUBSCRIBE を受理して SUBSCRIBE_OK を返す
+   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK)
+   *
+   * @param trackAlias 省略時は Session が自動採番する
+   */
+  async acceptPeerSubscribe(
+    requestId: bigint,
+    options?: {
+      trackAlias?: bigint;
+      parameters?: Parameter[];
+      trackProperties?: Property[];
+    },
+  ): Promise<void> {
+    const trackAlias = options?.trackAlias ?? this.nextTrackAlias++;
+    const parameters = options?.parameters ?? [];
+    const trackProperties = options?.trackProperties ?? [];
+    this.protocol!.acceptPeerSubscribe(requestId, trackAlias, parameters, trackProperties);
+    this.drainMachineEvents();
+    const payload = encodeSubscribeOkPayload({
+      type: MessageType.SUBSCRIBE_OK,
+      trackAlias,
+      parameters,
+      trackProperties,
+    });
+    await this.writeOnPeerInitiatedStream(requestId, MessageType.SUBSCRIBE_OK, payload, {
+      requestId: requestId.toString(),
+      trackAlias: trackAlias.toString(),
+    });
+  }
+
+  /**
+   * peer PUBLISH を受理して PUBLISH_OK を返す
+   * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK)
+   */
+  async acceptPeerPublish(
+    requestId: bigint,
+    options?: { parameters?: Parameter[] },
+  ): Promise<void> {
+    const parameters = options?.parameters ?? [];
+    this.protocol!.acceptPeerPublish(requestId, parameters);
+    this.drainMachineEvents();
+    const payload = encodePublishOkPayload({
+      type: MessageType.PUBLISH_OK,
+      parameters,
+    });
+    await this.writeOnPeerInitiatedStream(requestId, MessageType.PUBLISH_OK, payload, {
+      requestId: requestId.toString(),
+    });
+  }
+
+  /**
+   * peer FETCH を受理して FETCH_OK を返す
+   * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK)
+   */
+  async acceptPeerFetch(
+    requestId: bigint,
+    options: {
+      endOfTrack: boolean;
+      endLocation: Location;
+      parameters?: Parameter[];
+      trackProperties?: Property[];
+    },
+  ): Promise<void> {
+    const parameters = options.parameters ?? [];
+    const trackProperties = options.trackProperties ?? [];
+    this.protocol!.acceptPeerFetch(
+      requestId,
+      options.endOfTrack,
+      options.endLocation,
+      parameters,
+      trackProperties,
+    );
+    this.drainMachineEvents();
+    const payload = encodeFetchOkPayload({
+      type: MessageType.FETCH_OK,
+      endOfTrack: options.endOfTrack,
+      endLocation: options.endLocation,
+      parameters,
+      trackProperties,
+    });
+    await this.writeOnPeerInitiatedStream(requestId, MessageType.FETCH_OK, payload, {
+      requestId: requestId.toString(),
+    });
+  }
+
+  /**
+   * peer TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE に REQUEST_OK で応答する
+   * draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK)
+   */
+  async acceptPeerTrackStatus(
+    requestId: bigint,
+    options?: { parameters?: Parameter[] },
+  ): Promise<void> {
+    const parameters = options?.parameters ?? [];
+    this.protocol!.acceptPeerTrackStatus(requestId, parameters);
+    this.drainMachineEvents();
+    await this.sendRequestOkOnPeerInitiatedStream(requestId, parameters);
+  }
+
+  /** peer SUBSCRIBE_NAMESPACE を受理して REQUEST_OK を返す */
+  async acceptPeerSubscribeNamespace(
+    requestId: bigint,
+    options?: { parameters?: Parameter[] },
+  ): Promise<void> {
+    const parameters = options?.parameters ?? [];
+    this.protocol!.acceptPeerSubscribeNamespace(requestId, parameters);
+    this.drainMachineEvents();
+    await this.sendRequestOkOnPeerInitiatedStream(requestId, parameters);
+  }
+
+  /** peer PUBLISH_NAMESPACE を受理して REQUEST_OK を返す */
+  async acceptPeerPublishNamespace(
+    requestId: bigint,
+    options?: { parameters?: Parameter[] },
+  ): Promise<void> {
+    const parameters = options?.parameters ?? [];
+    this.protocol!.acceptPeerPublishNamespace(requestId, parameters);
+    this.drainMachineEvents();
+    await this.sendRequestOkOnPeerInitiatedStream(requestId, parameters);
+  }
+
+  /**
+   * peer-initiated request を REQUEST_ERROR で拒否する
+   * draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR)
+   *
+   * SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE /
+   * PUBLISH_NAMESPACE のいずれに対しても利用できる。
+   */
+  async rejectPeerRequest(
+    requestId: bigint,
+    error: {
+      errorCode: RequestErrorCode | bigint;
+      retryInterval?: bigint;
+      reasonPhrase?: string;
+    },
+  ): Promise<void> {
+    const errorCode =
+      typeof error.errorCode === "bigint" ? error.errorCode : BigInt(error.errorCode);
+    const retryInterval = error.retryInterval ?? 0n;
+    const reasonPhrase = error.reasonPhrase ?? "";
+    this.protocol!.rejectPeerRequest(requestId, errorCode, retryInterval, reasonPhrase);
+    this.drainMachineEvents();
+    const payload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode,
+      retryInterval,
+      reasonPhrase,
+    });
+    await this.writeOnPeerInitiatedStream(requestId, MessageType.REQUEST_ERROR, payload, {
+      requestId: requestId.toString(),
+      errorCode: errorCode.toString(),
+    });
+  }
+
+  /**
+   * TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE 共通の REQUEST_OK 送出
+   */
+  private async sendRequestOkOnPeerInitiatedStream(
+    requestId: bigint,
+    parameters: Parameter[],
+  ): Promise<void> {
+    const payload = encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters,
+    });
+    await this.writeOnPeerInitiatedStream(requestId, MessageType.REQUEST_OK, payload, {
+      requestId: requestId.toString(),
+    });
+  }
+
+  /**
+   * peer が開いた bidi stream に制御メッセージを書き込む
+   *
+   * peerInitiatedStreams から対応ストリームを取り、ControlStreamWriter で
+   * フレーミングして送信する。
+   */
+  private async writeOnPeerInitiatedStream(
+    requestId: bigint,
+    type: number,
+    payload: Uint8Array,
+    decoded?: Record<string, unknown>,
+  ): Promise<void> {
+    const streamInfo = this.peerInitiatedStreams.get(requestId);
+    if (!streamInfo) {
+      throw new Error(`no peer-initiated stream for request id ${requestId}`);
+    }
+    if (!this.controlWriter) {
+      throw new Error("Control writer not initialized");
+    }
+    const message = this.controlWriter.encode(type, payload);
+    this.statsControlMessagesSent++;
+    this.emitDebug("send", type, payload, decoded);
+    const writer = streamInfo.stream.writable.getWriter();
+    try {
+      await writer.write(message);
+    } finally {
+      writer.releaseLock();
+    }
   }
 
   // Private methods
