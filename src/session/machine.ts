@@ -55,6 +55,7 @@ import {
   createSubscriptionEntry,
   extractForwardState,
   extractForwardStateIfPresent,
+  extractLargestLocationIfPresent,
   subscriptionKey,
 } from "./subscription";
 import {
@@ -68,6 +69,7 @@ import {
   type SessionEvent,
   type SessionState,
   type SubscriptionEntry,
+  type SubscriptionView,
   type Transport,
   type TrackStatusEntry,
 } from "./types";
@@ -1114,6 +1116,35 @@ export class SessionMachine {
   }
 
   /**
+   * subscriber role (myRole === "subscriber") の SubscriptionEntry を read-only view として返す
+   * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions), 9.9 (SUBSCRIBE_OK)
+   *
+   * Subscriber facade が自側状態を射影するための API。#0082 で導入。
+   * - publisher role の subscription には undefined を返す
+   * - 存在しない requestId には undefined を返す
+   * - セッション全体が closing / closed の場合、entry の state に関わらず "closed" を返す
+   */
+  subscriptionView(requestId: bigint): SubscriptionView | undefined {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined || entry.myRole !== "subscriber") {
+      return undefined;
+    }
+    const sessionClosed = this._state === "closing" || this._state === "closed";
+    const state: "active" | "closed" =
+      sessionClosed || entry.state === "terminated" ? "closed" : "active";
+    return {
+      requestId: entry.requestId,
+      trackNamespace: entry.trackNamespace,
+      trackName: entry.trackName,
+      trackAlias: entry.trackAlias,
+      state,
+      isEstablished: entry.state === "established" && !sessionClosed,
+      largestLocation: entry.largestLocation,
+      trackProperties: entry.trackProperties,
+    };
+  }
+
+  /**
    * publisher role (myRole === "publisher") の SubscriptionEntry を read-only view として返す
    * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
    *
@@ -1206,6 +1237,13 @@ export class SessionMachine {
     entry.trackAlias = ok.trackAlias;
     entry.state = "established";
     this._peerPublisherAliases.set(ok.trackAlias, requestId);
+    // SUBSCRIBE_OK の LARGEST_OBJECT と Track Properties を SubscriptionView 向けに保存する。
+    // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK)
+    const largest = extractLargestLocationIfPresent(ok.parameters);
+    if (largest !== undefined) {
+      entry.largestLocation = largest;
+    }
+    entry.trackProperties = ok.trackProperties;
   }
 
   private handlePeerPublishOk(requestId: bigint, ok: PublishOk): void {
@@ -1538,7 +1576,7 @@ export class SessionMachine {
     });
   }
 
-  private handlePeerRequestOk(requestId: bigint, _ok: RequestOk): void {
+  private handlePeerRequestOk(requestId: bigint, ok: RequestOk): void {
     const pub = this._namespacePublications.get(requestId);
     if (pub !== undefined) {
       if (pub.state === "pending") {
@@ -1560,10 +1598,32 @@ export class SessionMachine {
       }
       return;
     }
-    // REQUEST_UPDATE の応答に対しても REQUEST_OK が来るが、subscription 種別は
-    // REQUEST_OK を受け取らない (SUBSCRIBE_OK / PUBLISH_OK がある)。REQUEST_UPDATE は
-    // 別の request_id を持つので subscription Map には無い。Phase 4b では管理していない
-    // ため、ここでは no-op として扱う (仕様違反ではない)。
+    // REQUEST_UPDATE の応答として届く REQUEST_OK。request_id は REQUEST_UPDATE 自身のもの。
+    // 対象 subscription は別 Map にはないため、この関数では LARGEST_OBJECT を
+    // subscription に反映できない。I/O 層が streamRequestId から subscription を解決
+    // した後に `applyRequestUpdateOk(targetRequestId, ok)` を呼ぶ経路を別途公開する。
+    //
+    // 参照: `applyRequestUpdateOk`
+    void ok;
+  }
+
+  /**
+   * REQUEST_UPDATE の REQUEST_OK 応答を subscription に反映する
+   * draft-ietf-moq-transport-17 Section 9.10.1 (Updating Subscriptions)
+   *
+   * REQUEST_OK の request_id は REQUEST_UPDATE 自身のものなので、対象 subscription は
+   * I/O 層 (Session) がストリーム上で解決した requestId を渡す必要がある。
+   * この API は LARGEST_OBJECT を subscription.largestLocation に反映する。
+   */
+  applyRequestUpdateOk(targetRequestId: bigint, ok: RequestOk): void {
+    const entry = this._subscriptions.get(targetRequestId);
+    if (entry === undefined) {
+      return;
+    }
+    const largest = extractLargestLocationIfPresent(ok.parameters);
+    if (largest !== undefined) {
+      entry.largestLocation = largest;
+    }
   }
 
   /**

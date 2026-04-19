@@ -314,6 +314,24 @@
   - `SessionMachine.publicationView` はセッションが closing/closed の場合も state を "closed" にする
   - session close ループから Publisher への `markClosed` 呼び出しを撤去する
   - @voluntas
+- [ADD] SessionMachine に Subscriber facade 向けの `subscriptionView` を追加する (#0082)
+  - `src/session/types.ts` に `SubscriptionView` 型を追加する
+  - `SubscriptionEntry` に `trackProperties` を追加する
+  - `src/session/machine.ts` に `subscriptionView(requestId)` を追加する
+  - `handlePeerSubscribeOk` が SUBSCRIBE_OK の LARGEST_OBJECT / Track Properties を entry に反映するようにする
+  - `applyRequestUpdateOk` を追加し、REQUEST_UPDATE の REQUEST_OK 応答の LARGEST_OBJECT を subscription に反映できるようにする
+  - `src/session/subscription.ts` に `extractLargestLocationIfPresent` を追加する
+  - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+- [CHANGE] Subscriber を SessionMachine の subscriptionView を源泉とする facade に置き換える (#0082)
+  - `src/subscriber.ts` から `subscriberState` / `subscriberLargestLocation` / `subscriberTrackProperties` / `trackAlias` の local state を撤去する
+  - `SubscriberImpl` コンストラクタに `SubscriptionViewAccessor` を追加する (`trackAlias` 引数を削除)
+  - `state` / `largestLocation` / `trackProperties` / `getTrackAlias` getter は SessionMachine の SubscriptionEntry を都度参照する
+  - `setTrackAlias` / `setLargestLocation` / `setTrackProperties` / `markClosed` を撤去する
+  - `handleEnd` を `notifyEnded` にリネームし state 変更責務を SessionMachine に寄せる
+  - session は `handleRequestUpdateOk` で `applyRequestUpdateOk` を使い、SUBSCRIBE_OK 時の setter 呼び出しを撤去する
+  - `src/subscriber.test.ts` / `src/subscriber.prop.ts` を view ベースに書き換える
+  - @voluntas
 
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas

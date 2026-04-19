@@ -57,7 +57,6 @@ import {
   encodeTrackStatusPayload,
   createSetup,
   getMessageTypeName,
-  getParameterLocationValue,
   encodeSubscriptionFilterParameter,
   validateForwardValue,
   FetchType,
@@ -1283,12 +1282,14 @@ export class Session {
     const trackNameBytes = encodeTrackName(trackName);
 
     // Create subscriber implementation
-    // Note: trackAlias will be set when SUBSCRIBE_OK is received
+    // #0082: trackAlias / largestLocation / trackProperties は SessionMachine の
+    // subscriptionView 経由で取り出すため、Subscriber 側に placeholder を持たない。
+    const machine = this.protocol!;
     const impl = new SubscriberImpl(
       namespace,
       trackName,
       requestId,
-      0n, // Placeholder, will be updated from SUBSCRIBE_OK
+      () => machine.subscriptionView(requestId),
       callbacks.object,
       callbacks.datagram,
       callbacks.end,
@@ -1948,17 +1949,14 @@ export class Session {
       this.peerGoawayTimeoutId = null;
     }
 
-    // Close all subscribers and fetchers
+    // Close all fetchers
     // Note: We use markClosed() instead of handleEnd() because session close
     // is session-level termination (Section 3.4), not track-level PUBLISH_DONE.
     // The end callback is only for PUBLISH_DONE.
     //
-    // #0081: Publisher は SessionMachine の state を参照する facade に変更されたため
-    // ここで明示的に closed を伝播する必要はない (SessionMachine が closing/closed に
-    // 遷移すれば publicationView が state="closed" を返す)。
-    for (const sub of this.subscribers.values()) {
-      sub.markClosed();
-    }
+    // #0081 / #0082: Publisher / Subscriber は SessionMachine の state を参照する facade に
+    // 変更されたため、ここで明示的に closed を伝播する必要はない (SessionMachine が
+    // closing / closed に遷移すれば view が state="closed" を返す)。
     for (const fetcher of this.fetchers.values()) {
       fetcher.markClosed();
     }
@@ -3045,29 +3043,13 @@ export class Session {
           return;
         }
 
-        // LARGEST_OBJECT パラメータを探す
-        let largestLocation: Location | undefined;
-        for (const param of decoded.parameters) {
-          if (param.type === VersionSpecificParameterType.LARGEST_OBJECT) {
-            largestLocation = getParameterLocationValue(param);
-            break;
-          }
-        }
+        // #0082: trackAlias / largestLocation / trackProperties は SessionMachine が
+        // SubscribeOk から entry に反映済み。Subscriber は subscriptionView 経由で参照する。
+        // Joining Fetch が largestLocation を必要とするため、ここで view から読む。
+        const view = this.protocol!.subscriptionView(requestId);
+        const largestLocation: Location | undefined = view?.largestLocation ?? undefined;
 
         this.pendingSubscribe.delete(requestId);
-
-        // Track Alias を設定
-        pending.impl.setTrackAlias(decoded.trackAlias);
-
-        // LARGEST_OBJECT を設定
-        if (largestLocation) {
-          pending.impl.setLargestLocation(largestLocation);
-        }
-
-        // Track Properties を設定
-        if (decoded.trackProperties.length > 0) {
-          pending.impl.setTrackProperties(decoded.trackProperties);
-        }
 
         this.subscribers.set(requestId, pending.impl);
         this.subscribersByAlias.set(decoded.trackAlias, pending.impl);
@@ -3471,9 +3453,12 @@ export class Session {
       }
       const subscriber = this.subscribers.get(requestId);
       if (subscriber) {
-        subscriber.handleEnd(msg.statusCode, msg.reasonPhrase);
+        // #0082: state 遷移は SessionMachine が担当。notifyEnded は callback 起動のみ。
+        subscriber.notifyEnded(msg.statusCode, msg.reasonPhrase);
         this.subscribers.delete(requestId);
-        this.subscribersByAlias.delete(subscriber.getTrackAlias());
+        if (subscriber.hasTrackAlias()) {
+          this.subscribersByAlias.delete(subscriber.getTrackAlias());
+        }
       }
     }
 
@@ -3534,18 +3519,9 @@ export class Session {
   private handleRequestUpdateOk(payload: Uint8Array, streamRequestId: bigint): void {
     const msg = decodeRequestOkPayload(payload);
 
-    // LARGEST_OBJECT パラメータを探す
-    for (const param of msg.parameters) {
-      if (param.type === VersionSpecificParameterType.LARGEST_OBJECT) {
-        const location = getParameterLocationValue(param);
-        // 対応する Subscriber の largestLocation を更新
-        const subscriber = this.subscribers.get(streamRequestId);
-        if (subscriber) {
-          subscriber.setLargestLocation(location);
-        }
-        break;
-      }
-    }
+    // #0082: LARGEST_OBJECT の反映は SessionMachine.applyRequestUpdateOk に委譲する。
+    // Subscriber は subscriptionView 経由で最新の largestLocation を参照する。
+    this.protocol?.applyRequestUpdateOk(streamRequestId, msg);
 
     // 保留中の REQUEST_UPDATE を resolve する
     for (const [updateId, pendingUpdate] of this.pendingRequestUpdate) {

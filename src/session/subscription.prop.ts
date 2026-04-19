@@ -509,6 +509,145 @@ test("peer REQUEST_UPDATE の FORWARD 変化で publicationForwardStateChanged �
   assert.equal(e2.type, "requestUpdateReceived");
 });
 
+// ─── SubscriptionView ────────────────────────────────────────
+// #0082: Subscriber facade が自側状態を SessionMachine から射影するための
+// read-only view。subscriber role の SubscriptionEntry のみを expose する。
+
+test("subscriptionView は sendSubscribe 直後の subscriber role subscription を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  const view = p.subscriptionView(requestId);
+  assert.ok(view);
+  assert.equal(view.requestId, requestId);
+  assert.equal(view.trackAlias, null);
+  assert.equal(view.state, "active");
+  assert.equal(view.isEstablished, false);
+  assert.equal(view.largestLocation, null);
+  assert.deepEqual(view.trackProperties, []);
+});
+
+test("subscriptionView は SUBSCRIBE_OK 受信後に isEstablished / trackAlias / trackProperties を埋める", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  const trackProperties = [{ id: 0x02n, value: 1500n }];
+  p.handleStreamMessage(requestId, {
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 42n,
+    parameters: [],
+    trackProperties,
+  });
+  const view = p.subscriptionView(requestId);
+  assert.ok(view);
+  assert.equal(view.isEstablished, true);
+  assert.equal(view.trackAlias, 42n);
+  assert.deepEqual(view.trackProperties, trackProperties);
+});
+
+test("subscriptionView は SUBSCRIBE_OK の LARGEST_OBJECT を反映する", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  const location = { group: 7n, object: 3n };
+  const encoded = new Uint8Array([
+    ...encodeVarint(location.group),
+    ...encodeVarint(location.object),
+  ]);
+  p.handleStreamMessage(requestId, {
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.LARGEST_OBJECT,
+        value: encoded,
+      },
+    ],
+    trackProperties: [],
+  });
+  const view = p.subscriptionView(requestId);
+  assert.ok(view);
+  assert.ok(view.largestLocation);
+  assert.equal(view.largestLocation.group, 7n);
+  assert.equal(view.largestLocation.object, 3n);
+});
+
+test("subscriptionView は publisher role には undefined を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  assert.equal(p.subscriptionView(requestId), undefined);
+  // publicationView では取得可能
+  assert.ok(p.publicationView(requestId));
+});
+
+test("subscriptionView は PUBLISH_DONE 受信後に state=closed を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0n,
+    streamCount: 0n,
+    reasonPhrase: "",
+  });
+  const view = p.subscriptionView(requestId);
+  assert.ok(view);
+  assert.equal(view.state, "closed");
+});
+
+test("subscriptionView は session が closing に遷移すると state=closed を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  p.close(SessionErrorCode.NO_ERROR, "bye");
+  const view = p.subscriptionView(requestId);
+  assert.ok(view);
+  assert.equal(view.state, "closed");
+});
+
+test("applyRequestUpdateOk が subscription.largestLocation を更新する", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  const location = { group: 10n, object: 20n };
+  const encoded = new Uint8Array([
+    ...encodeVarint(location.group),
+    ...encodeVarint(location.object),
+  ]);
+  p.applyRequestUpdateOk(requestId, {
+    type: MessageType.REQUEST_OK,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.LARGEST_OBJECT,
+        value: encoded,
+      },
+    ],
+  });
+  const view = p.subscriptionView(requestId);
+  assert.ok(view);
+  assert.ok(view.largestLocation);
+  assert.equal(view.largestLocation.group, 10n);
+  assert.equal(view.largestLocation.object, 20n);
+});
+
 test("publicationView は session が closing に遷移すると state=closed を返す", () => {
   const p = established();
   const requestId = p.nextLocalRequestId();

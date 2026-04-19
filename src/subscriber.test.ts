@@ -3,11 +3,56 @@
  * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
  */
 
-import { test, assert } from "vite-plus/test";
-import { SubscriberImpl } from "./subscriber";
+import { assert, test } from "vite-plus/test";
 import type { MoqtObject } from "./dataStream";
-import { ObjectStatus } from "./message/types";
+import { createTrackNamespace, encodeTrackName } from "./message";
+import { type Location, ObjectStatus } from "./message/types";
 import type { Property } from "./properties";
+import { SubscriberImpl, type SubscriptionViewAccessor } from "./subscriber";
+import type { SubscriptionView } from "./session/types";
+
+interface MockView {
+  state: "active" | "closed";
+  isEstablished: boolean;
+  trackAlias: bigint | null;
+  largestLocation: Location | null;
+  trackProperties: Property[];
+}
+
+function makeView(mock: MockView): SubscriptionView {
+  return {
+    requestId: 0n,
+    trackNamespace: createTrackNamespace(["namespace"]),
+    trackName: encodeTrackName("track"),
+    trackAlias: mock.trackAlias,
+    state: mock.state,
+    isEstablished: mock.isEstablished,
+    largestLocation: mock.largestLocation,
+    trackProperties: mock.trackProperties,
+  };
+}
+
+function createSubscriber(
+  mock: MockView,
+  options: {
+    onObject?: (object: MoqtObject) => void;
+    onDatagram?: (object: MoqtObject) => void;
+    onEnd?: () => void;
+    onError?: (error: Error) => void;
+  } = {},
+): SubscriberImpl {
+  const viewAccessor: SubscriptionViewAccessor = () => makeView(mock);
+  return new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    viewAccessor,
+    options.onObject ?? (() => {}),
+    options.onDatagram,
+    options.onEnd,
+    options.onError,
+  );
+}
 
 function createObject(groupId: bigint, objectId: bigint): MoqtObject {
   return {
@@ -18,80 +63,89 @@ function createObject(groupId: bigint, objectId: bigint): MoqtObject {
   };
 }
 
-test("closed 状態では handleObject は配信しない", () => {
+test("view が closed を返すと handleObject は配信しない", () => {
+  const mock: MockView = {
+    state: "closed",
+    isEstablished: false,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   const delivered: MoqtObject[] = [];
-  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
-    delivered.push(obj),
-  );
+  const subscriber = createSubscriber(mock, { onObject: (obj) => delivered.push(obj) });
 
-  subscriber.markClosed();
   subscriber.handleObject(createObject(0n, 0n));
   subscriber.handleObject(createObject(0n, 1n));
 
   assert.equal(delivered.length, 0);
 });
 
-test("closed 状態では handleDatagram は配信しない", () => {
+test("view が closed を返すと handleDatagram は配信しない", () => {
+  const mock: MockView = {
+    state: "closed",
+    isEstablished: false,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   const delivered: MoqtObject[] = [];
-  const subscriber = new SubscriberImpl(
-    ["namespace"],
-    "track",
-    0n,
-    0n,
-    () => {},
-    (obj) => delivered.push(obj),
-  );
+  const subscriber = createSubscriber(mock, { onDatagram: (obj) => delivered.push(obj) });
 
-  subscriber.markClosed();
   subscriber.handleDatagram(createObject(0n, 0n));
 
   assert.equal(delivered.length, 0);
 });
 
-test("handleEnd は endCallback を呼んで closed にする", () => {
+test("notifyEnded は endCallback を呼ぶ", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   let endCalled = false;
-  const subscriber = new SubscriberImpl(
-    ["namespace"],
-    "track",
-    0n,
-    0n,
-    () => {},
-    undefined,
-    () => {
+  const subscriber = createSubscriber(mock, {
+    onEnd: () => {
       endCalled = true;
     },
-  );
+  });
 
   assert.equal(subscriber.state, "active");
-  subscriber.handleEnd();
+  subscriber.notifyEnded();
   assert.isTrue(endCalled);
-  assert.equal(subscriber.state, "closed");
 });
 
-test("handleEnd は closed 状態では endCallback を呼ばない", () => {
+test("notifyEnded は冪等 (2 回呼んでも callback は 1 回)", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   let endCallCount = 0;
-  const subscriber = new SubscriberImpl(
-    ["namespace"],
-    "track",
-    0n,
-    0n,
-    () => {},
-    undefined,
-    () => {
+  const subscriber = createSubscriber(mock, {
+    onEnd: () => {
       endCallCount++;
     },
-  );
+  });
 
-  subscriber.handleEnd();
-  subscriber.handleEnd();
+  subscriber.notifyEnded();
+  subscriber.notifyEnded();
 
   assert.equal(endCallCount, 1);
 });
 
-test("update は closed 状態ではエラーになる", async () => {
-  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
-
-  subscriber.markClosed();
+test("update は view が closed のときエラーになる", async () => {
+  const mock: MockView = {
+    state: "closed",
+    isEstablished: false,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
+  const subscriber = createSubscriber(mock);
 
   try {
     await subscriber.update();
@@ -103,95 +157,98 @@ test("update は closed 状態ではエラーになる", async () => {
 
 // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
 // UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
-test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
+test("notifyEnded は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   let endCalled = false;
   let errorMessage = "";
-  const subscriber = new SubscriberImpl(
-    ["namespace"],
-    "track",
-    0n,
-    0n,
-    () => {},
-    undefined,
-    () => {
+  const subscriber = createSubscriber(mock, {
+    onEnd: () => {
       endCalled = true;
     },
-    (error: Error) => {
+    onError: (error) => {
       errorMessage = error.message;
     },
-  );
+  });
 
-  // UPDATE_FAILED (0x8) でエラー通知
-  subscriber.handleEnd(0x8n, "update failed");
+  subscriber.notifyEnded(0x8n, "update failed");
   assert.isTrue(endCalled);
   assert.include(errorMessage, "0x8");
   assert.include(errorMessage, "update failed");
-  assert.equal(subscriber.state, "closed");
 });
 
 // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
 // TRACK_ENDED (0x2) は正常終了。errorCallback は呼ばない
-test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
+test("notifyEnded は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   let endCalled = false;
   let errorCalled = false;
-  const subscriber = new SubscriberImpl(
-    ["namespace"],
-    "track",
-    0n,
-    0n,
-    () => {},
-    undefined,
-    () => {
+  const subscriber = createSubscriber(mock, {
+    onEnd: () => {
       endCalled = true;
     },
-    () => {
+    onError: () => {
       errorCalled = true;
     },
-  );
+  });
 
-  subscriber.handleEnd(0x2n, "");
+  subscriber.notifyEnded(0x2n, "");
   assert.isTrue(endCalled);
   assert.isFalse(errorCalled);
 });
 
 // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
 // INTERNAL_ERROR (0x0) はエラー。errorCallback を呼ぶ
-test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
+test("notifyEnded は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: [],
+  };
   let endCalled = false;
   let errorCalled = false;
-  const subscriber = new SubscriberImpl(
-    ["namespace"],
-    "track",
-    0n,
-    0n,
-    () => {},
-    undefined,
-    () => {
+  const subscriber = createSubscriber(mock, {
+    onEnd: () => {
       endCalled = true;
     },
-    () => {
+    onError: () => {
       errorCalled = true;
     },
-  );
+  });
 
-  subscriber.handleEnd(0x0n, "internal");
+  subscriber.notifyEnded(0x0n, "internal");
   assert.isTrue(endCalled);
   assert.isTrue(errorCalled);
-  assert.equal(subscriber.state, "closed");
 });
 
 // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
-// SUBSCRIBE_OK の Track Properties が Subscriber に設定される
-test("setTrackProperties で Track Properties が設定される", () => {
-  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
-
-  assert.equal(subscriber.trackProperties.length, 0);
-
+// view.trackProperties が Subscriber に反映される
+test("view の trackProperties が Subscriber から取得できる", () => {
   const properties: Property[] = [
     { id: 0x02n, value: 5000n },
     { id: 0x04n, value: 10000n },
   ];
-  subscriber.setTrackProperties(properties);
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: null,
+    trackProperties: properties,
+  };
+  const subscriber = createSubscriber(mock);
 
   assert.equal(subscriber.trackProperties.length, 2);
   assert.equal(subscriber.trackProperties[0].id, 0x02n);
@@ -199,16 +256,42 @@ test("setTrackProperties で Track Properties が設定される", () => {
 });
 
 // draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST OBJECT Parameter):
-// setLargestLocation で largestLocation が更新される
-test("setLargestLocation で largestLocation が更新される", () => {
-  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+// view.largestLocation が Subscriber から取得できる
+test("view の largestLocation が Subscriber から取得できる", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: true,
+    trackAlias: 0n,
+    largestLocation: { group: 5n, object: 3n },
+    trackProperties: [],
+  };
+  const subscriber = createSubscriber(mock);
 
-  assert.isNull(subscriber.largestLocation);
-
-  subscriber.setLargestLocation({ group: 5n, object: 3n });
   assert.deepEqual(subscriber.largestLocation, { group: 5n, object: 3n });
-
-  // REQUEST_OK からの更新
-  subscriber.setLargestLocation({ group: 10n, object: 7n });
+  // view の更新が即座に反映される
+  mock.largestLocation = { group: 10n, object: 7n };
   assert.deepEqual(subscriber.largestLocation, { group: 10n, object: 7n });
+});
+
+test("view が undefined を返すと state=closed, trackProperties=[], largestLocation=null", () => {
+  const viewAccessor: SubscriptionViewAccessor = () => undefined;
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, viewAccessor, () => {});
+  assert.equal(subscriber.state, "closed");
+  assert.equal(subscriber.largestLocation, null);
+  assert.equal(subscriber.trackProperties.length, 0);
+});
+
+test("hasTrackAlias は view.trackAlias の有無を返す", () => {
+  const mock: MockView = {
+    state: "active",
+    isEstablished: false,
+    trackAlias: null,
+    largestLocation: null,
+    trackProperties: [],
+  };
+  const subscriber = createSubscriber(mock);
+  assert.isFalse(subscriber.hasTrackAlias());
+  mock.trackAlias = 7n;
+  assert.isTrue(subscriber.hasTrackAlias());
+  assert.equal(subscriber.getTrackAlias(), 7n);
 });
