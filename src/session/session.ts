@@ -588,11 +588,11 @@ export class Session {
   private nextTrackAlias = 0n;
 
   // GOAWAY 状態
-  private receivedGoaway = false;
-  private sentGoaway = false;
+  // draft-ietf-moq-transport-17 Section 3.6 (GOAWAY):
+  // sentGoaway / receivedGoaway は SessionMachine の
+  // localGoawaySent / peerGoaway を source of truth とする。
   // SessionMachine の tick を定期的に駆動する interval
-  // draft-ietf-moq-transport-17 Section 3.6 (GOAWAY) の自側タイムアウト判定は
-  // SessionMachine 側の localGoawayDeadlineMs に一元化されている。
+  // 自側タイムアウト判定は SessionMachine 側の localGoawayDeadlineMs に一元化されている。
   private tickIntervalId: ReturnType<typeof setInterval> | null = null;
   // peer から受け取った GOAWAY に対するグレースフルシャットダウン用タイマー
   // (こちらは SessionMachine では管理しない / peer 側のポリシーを先回りで実行する)
@@ -767,7 +767,7 @@ export class Session {
   }
 
   get goawayReceived(): boolean {
-    return this.receivedGoaway;
+    return this.protocol?.peerGoaway != null;
   }
 
   /**
@@ -928,7 +928,7 @@ export class Session {
 
     // GOAWAY 受信後は新規リクエストを拒否
     // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
-    if (this.receivedGoaway) {
+    if (this.goawayReceived) {
       throw new Error("Cannot publish after receiving GOAWAY");
     }
 
@@ -1106,7 +1106,7 @@ export class Session {
 
     // GOAWAY 受信後は新規リクエストを拒否
     // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
-    if (this.receivedGoaway) {
+    if (this.goawayReceived) {
       throw new Error("Cannot subscribe after receiving GOAWAY");
     }
 
@@ -1298,7 +1298,7 @@ export class Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
+    if (this.goawayReceived) {
       throw new Error("Cannot fetch after receiving GOAWAY");
     }
 
@@ -1386,7 +1386,7 @@ export class Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
+    if (this.goawayReceived) {
       throw new Error("Cannot query track status after receiving GOAWAY");
     }
 
@@ -1459,7 +1459,7 @@ export class Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
+    if (this.goawayReceived) {
       throw new Error("cannot subscribe namespace after receiving GOAWAY");
     }
 
@@ -1663,7 +1663,7 @@ export class Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
+    if (this.goawayReceived) {
       throw new Error("Cannot publish namespace after receiving GOAWAY");
     }
 
@@ -1713,7 +1713,9 @@ export class Session {
     }
 
     // 複数回の GOAWAY 送信は許可しない
-    if (this.sentGoaway) {
+    // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY):
+    // SessionMachine の localGoawaySent を source of truth とする。
+    if (this.protocol?.localGoawaySent === true) {
       throw new Error("GOAWAY already sent");
     }
 
@@ -1723,8 +1725,6 @@ export class Session {
     if (newSessionUri !== undefined && newSessionUri !== "") {
       throw new Error("client MUST send GOAWAY with empty New Session URI");
     }
-
-    this.sentGoaway = true;
 
     const goawayTimeout = timeout ?? 0n;
     // SessionMachine に GOAWAY 送信を記録し、localGoawaySent / localGoawayPendingTimeout を更新する
@@ -3215,19 +3215,11 @@ export class Session {
    * if it receives multiple GOAWAY messages.
    */
   private handleGoaway(payload: Uint8Array): Record<string, unknown> {
-    // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
-    if (this.receivedGoaway) {
-      this.closeWithError(
-        new SessionError("received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
-      );
-      return { error: "Multiple GOAWAY messages received" };
-    }
-
-    this.receivedGoaway = true;
-
     const msg = decodeGoawayPayload(payload);
 
-    // SessionMachine に GOAWAY を流し、peerGoaway 状態と goawayReceived イベントを更新する
+    // SessionMachine に GOAWAY を流す。
+    // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY):
+    // 複数回受信は PROTOCOL_VIOLATION で SessionMachine が closeSession を積む。
     if (this.protocol) {
       this.protocol.handleControl(msg);
       if (!this.drainMachineEvents()) {

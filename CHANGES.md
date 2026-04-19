@@ -86,6 +86,11 @@
   - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する
   - peer GOAWAY 受信時のグレースフルシャットダウンは引き続き Session 側の `peerGoawayTimeoutId` で管理する
   - @voluntas
+- [CHANGE] Session の GOAWAY フラグを SessionMachine に寄せる (#0079)
+  - `Session.sentGoaway` / `Session.receivedGoaway` フィールドを削除する
+  - 参照を `this.protocol?.localGoawaySent` / `this.protocol?.peerGoaway` に置換する
+  - 複数回 GOAWAY 受信時の PROTOCOL_VIOLATION 判定を SessionMachine に一元化する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
