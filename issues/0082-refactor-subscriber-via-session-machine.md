@@ -41,11 +41,11 @@ Model: Claude Opus 4.7
 
 ## リスク
 
-| ID  | リスク                                                                    | 緩和                                                                                |
-| --- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| R1  | Subscriber の状態取得が object 受信毎のホットパスで SessionMachine を叩く | view lookup は O(1) Map、イベント購読はキャッシュする                               |
-| R2  | SUBSCRIBE_DONE / PUBLISH_DONE 受信時の cleanup 順序が変わりリークが発生   | SessionMachine の `subscriptionTerminated` イベントに終了ロジックを集約する         |
-| R3  | 既存テスト (property test 含む) が `setTrackProperties` 等を直接呼ぶ      | テストを SessionMachine feed → Subscriber view assert に先に書き換える              |
+| ID  | リスク                                                                    | 緩和                                                                        |
+| --- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| R1  | Subscriber の状態取得が object 受信毎のホットパスで SessionMachine を叩く | view lookup は O(1) Map、イベント購読はキャッシュする                       |
+| R2  | SUBSCRIBE_DONE / PUBLISH_DONE 受信時の cleanup 順序が変わりリークが発生   | SessionMachine の `subscriptionTerminated` イベントに終了ロジックを集約する |
+| R3  | 既存テスト (property test 含む) が `setTrackProperties` 等を直接呼ぶ      | テストを SessionMachine feed → Subscriber view assert に先に書き換える      |
 
 ## 段階的な進め方
 

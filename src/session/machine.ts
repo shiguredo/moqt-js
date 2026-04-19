@@ -58,6 +58,7 @@ import {
   type NamespacePublicationEntry,
   type NamespaceSubscriptionEntry,
   type PeerGoawayInfo,
+  type PublicationView,
   type Role,
   type SessionEvent,
   type SessionState,
@@ -1105,6 +1106,30 @@ export class SessionMachine {
   /** すべての SubscriptionEntry をイテレートする */
   subscriptions(): IterableIterator<SubscriptionEntry> {
     return this._subscriptions.values();
+  }
+
+  /**
+   * publisher role (myRole === "publisher") の SubscriptionEntry を read-only view として返す
+   * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
+   *
+   * Publisher facade が自側状態を射影するための API。#0081 Phase 1 で導入。
+   * - subscriber role の subscription には undefined を返す
+   * - 存在しない requestId には undefined を返す
+   */
+  publicationView(requestId: bigint): PublicationView | undefined {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined || entry.myRole !== "publisher") {
+      return undefined;
+    }
+    return {
+      requestId: entry.requestId,
+      trackNamespace: entry.trackNamespace,
+      trackName: entry.trackName,
+      trackAlias: entry.trackAlias,
+      state: entry.state === "terminated" ? "closed" : "active",
+      isEstablished: entry.state === "established",
+      forwardState: entry.forwardState === 1,
+    };
   }
 
   /**

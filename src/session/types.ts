@@ -103,6 +103,27 @@ export interface SubscriptionEntry {
   largestLocation: Location | null;
 }
 
+/**
+ * Publisher 向け read-only view
+ * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
+ *
+ * SessionMachine が publisher role (myRole === "publisher") の SubscriptionEntry を
+ * Publisher facade 用に射影する型。Publisher 自身に local state を持たせず、
+ * SessionMachine が単一の source of truth になるための経路。
+ * - state: "terminated" を "closed" に、その他を "active" に射影
+ * - isEstablished: state === "established" (PUBLISH_OK 受信済み)
+ * - forwardState: FORWARD パラメータを boolean に射影
+ */
+export interface PublicationView {
+  requestId: bigint;
+  trackNamespace: TrackNamespace;
+  trackName: Uint8Array;
+  trackAlias: bigint | null;
+  state: "active" | "closed";
+  isEstablished: boolean;
+  forwardState: boolean;
+}
+
 // ─── Fetch 状態管理 ─────────────────────────────────────
 // draft-ietf-moq-transport-17 Section 5.2, 9.14, 9.15
 

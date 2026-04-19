@@ -41,11 +41,11 @@ Model: Claude Opus 4.7
 
 ## リスク
 
-| ID  | リスク                                                                      | 緩和                                                                                        |
-| --- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| ID  | リスク                                                                      | 緩和                                                                                       |
+| --- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | R1  | Publisher の状態取得がホットパス (`sendObject` 毎) で SessionMachine を叩く | 射影は `getPublication(requestId)` の O(1) Map lookup に留め、イベント購読はキャッシュする |
-| R2  | 既存テストが `Publisher.setForwardState()` を直接呼ぶため書き換えが必要     | SessionMachine を feed → Publisher view を assert する形に test を先に書き換える            |
-| R3  | SessionMachine 側の API 追加で責務が肥大化する                              | 追加する API は view (read-only) に限定し、状態変更系は追加しない                           |
+| R2  | 既存テストが `Publisher.setForwardState()` を直接呼ぶため書き換えが必要     | SessionMachine を feed → Publisher view を assert する形に test を先に書き換える           |
+| R3  | SessionMachine 側の API 追加で責務が肥大化する                              | 追加する API は view (read-only) に限定し、状態変更系は追加しない                          |
 
 ## 段階的な進め方
 

@@ -355,3 +355,79 @@ test("PUBLISH_DONE を受信すると terminated に遷移し publishDoneReceive
     assert.equal(event.reasonPhrase, "bye");
   }
 });
+
+// ─── PublicationView ─────────────────────────────────────────
+// #0081 Phase 1: Publisher facade が自側状態を SessionMachine から射影するための
+// read-only view。publisher role の SubscriptionEntry のみを expose する。
+
+test("publicationView は sendPublish 直後の publisher role subscription を返す", () => {
+  fc.assert(
+    fc.property(fc.bigInt({ min: 0n, max: 1_000_000n }), (trackAlias) => {
+      const p = established();
+      const requestId = p.nextLocalRequestId();
+      p.sendPublish(buildPublish(requestId, trackAlias));
+      const view = p.publicationView(requestId);
+      assert.ok(view);
+      assert.equal(view.requestId, requestId);
+      assert.equal(view.trackAlias, trackAlias);
+      assert.equal(view.state, "active");
+      assert.equal(view.isEstablished, false);
+      assert.equal(view.forwardState, true);
+    }),
+  );
+});
+
+test("publicationView は PUBLISH_OK 受信後に isEstablished=true になる", () => {
+  fc.assert(
+    fc.property(fc.bigInt({ min: 0n, max: 1_000_000n }), (trackAlias) => {
+      const p = established();
+      const requestId = p.nextLocalRequestId();
+      p.sendPublish(buildPublish(requestId, trackAlias));
+      p.nextEvent();
+      const ok: PublishOk = {
+        type: MessageType.PUBLISH_OK,
+        parameters: [],
+      };
+      p.handleStreamMessage(requestId, ok);
+      const view = p.publicationView(requestId);
+      assert.ok(view);
+      assert.equal(view.state, "active");
+      assert.equal(view.isEstablished, true);
+    }),
+  );
+});
+
+test("publicationView は subscriber role の subscription には undefined を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendSubscribe(buildSubscribe(requestId));
+  assert.equal(p.publicationView(requestId), undefined);
+  // generic な subscription() では取得できる
+  assert.ok(p.subscription(requestId));
+});
+
+test("publicationView は存在しない requestId に undefined を返す", () => {
+  const p = established();
+  assert.equal(p.publicationView(999n), undefined);
+});
+
+test("publicationView は sendPublishDone 後に state=closed を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [],
+  });
+  p.sendPublishDone(requestId, {
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0n,
+    streamCount: 0n,
+    reasonPhrase: "",
+  });
+  const view = p.publicationView(requestId);
+  assert.ok(view);
+  assert.equal(view.state, "closed");
+  assert.equal(view.isEstablished, false);
+});

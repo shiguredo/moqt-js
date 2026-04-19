@@ -287,6 +287,13 @@
 
 ### misc
 
+- [ADD] SessionMachine に Publisher facade 向けの `publicationView` を追加する (#0081)
+  - `src/session/types.ts` に `PublicationView` 型を追加する
+  - `src/session/machine.ts` に `publicationView(requestId)` を追加する
+  - publisher role の SubscriptionEntry を boolean forwardState / active|closed state へ射影する
+  - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
+  - @voluntas
+
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas
 - [UPDATE] Vite から Vite+ に切り替える
