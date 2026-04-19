@@ -103,6 +103,12 @@
   - `ConnectCallbacks` に `peerSubscribeNamespace` / `peerPublishNamespace` コールバックと `PeerSubscribeNamespaceRequest` / `PeerPublishNamespaceRequest` 型を追加する
   - `src/session/peerRequest.prop.ts` に SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE 用の PBT を追加する
   - @voluntas
+- [ADD] peer-initiated bidi stream の継続メッセージ読み取りを実装する (#0080)
+  - `Session` に `readPeerInitiatedStreamMessages` を追加し、peer-initiated bidi stream の先頭メッセージ受理後に REQUEST_UPDATE / PUBLISH_DONE を読み続ける
+  - 未対応の follow-up メッセージは `PROTOCOL_VIOLATION` でセッションを閉じる
+  - ストリーム終了時に `peerInitiatedStreams` からエントリを削除する
+  - peerRequest.prop.ts に peer-initiated SUBSCRIBE 後の REQUEST_UPDATE、peer-initiated PUBLISH 後の PUBLISH_DONE のテストを追加する
+  - @voluntas
 - [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
   - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
   - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する

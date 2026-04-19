@@ -103,10 +103,18 @@ draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
 - `ConnectCallbacks` に `peerSubscribeNamespace` / `peerPublishNamespace` と対応する Request 型を追加した
 - `src/session/peerRequest.prop.ts` に Phase 3 用の PBT を追加した
 
-残課題 (Phase 4 以降):
+### Phase 4 完了 (2026-04-19)
 
-- Phase 4: peer-initiated REQUEST_UPDATE と peer-initiated bidi stream 上の後続メッセージの読み取りループ
-- Phase 5: 応答経路 (`respondSubscribe` / `respondPublish` 等) の実装と examples / Playwright での動作確認
+- `Session.readPeerInitiatedStreamMessages` を追加し、peer-initiated bidi stream の先頭メッセージ受理後に continuously 読み取るようにした
+  - `REQUEST_UPDATE` / `PUBLISH_DONE` を `forwardStreamMessageToMachine` 経由で SessionMachine に流す
+  - SessionMachine 側は既存の `handlePeerRequestUpdate` / `handlePeerPublishDone` で処理し、`requestUpdateReceived` / `publishDoneReceived` イベントを出す
+  - スコープ外の follow-up メッセージは `PROTOCOL_VIOLATION` でセッションを閉じる
+  - ストリーム終了時に `peerInitiatedStreams` からエントリを除去する
+- `peerRequest.prop.ts` に peer-initiated SUBSCRIBE 後の REQUEST_UPDATE、peer-initiated PUBLISH 後の PUBLISH_DONE を検証する PBT を追加した
+
+残課題 (Phase 5):
+
+- Phase 5: 応答経路 (`respondSubscribe` / `respondPublish` / `respondFetch` / `respondTrackStatus` / `respondSubscribeNamespace` / `respondPublishNamespace` 等) の実装と examples / Playwright での動作確認
 
 ## 参考
 

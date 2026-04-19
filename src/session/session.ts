@@ -36,6 +36,7 @@ import {
   decodePublishOkPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
+  decodeRequestUpdatePayload,
   decodeSetupPayload,
   decodeSubscribePayload,
   decodeSubscribeOkPayload,
@@ -3674,6 +3675,9 @@ export class Session {
           this.peerInitiatedStreams.delete(subscribe.requestId);
         }
         this.drainMachineEvents();
+        if (accepted) {
+          void this.readPeerInitiatedStreamMessages(subscribe.requestId, stream, controlReader);
+        }
         return;
       }
       case MessageType.PUBLISH: {
@@ -3691,6 +3695,9 @@ export class Session {
           this.peerInitiatedStreams.delete(publish.requestId);
         }
         this.drainMachineEvents();
+        if (accepted) {
+          void this.readPeerInitiatedStreamMessages(publish.requestId, stream, controlReader);
+        }
         return;
       }
       case MessageType.FETCH: {
@@ -3708,6 +3715,9 @@ export class Session {
           this.peerInitiatedStreams.delete(fetch.requestId);
         }
         this.drainMachineEvents();
+        if (accepted) {
+          void this.readPeerInitiatedStreamMessages(fetch.requestId, stream, controlReader);
+        }
         return;
       }
       case MessageType.TRACK_STATUS: {
@@ -3724,6 +3734,9 @@ export class Session {
           this.peerInitiatedStreams.delete(trackStatus.requestId);
         }
         this.drainMachineEvents();
+        if (accepted) {
+          void this.readPeerInitiatedStreamMessages(trackStatus.requestId, stream, controlReader);
+        }
         return;
       }
       case MessageType.SUBSCRIBE_NAMESPACE: {
@@ -3740,6 +3753,13 @@ export class Session {
           this.peerInitiatedStreams.delete(subscribeNamespace.requestId);
         }
         this.drainMachineEvents();
+        if (accepted) {
+          void this.readPeerInitiatedStreamMessages(
+            subscribeNamespace.requestId,
+            stream,
+            controlReader,
+          );
+        }
         return;
       }
       case MessageType.PUBLISH_NAMESPACE: {
@@ -3756,17 +3776,83 @@ export class Session {
           this.peerInitiatedStreams.delete(publishNamespace.requestId);
         }
         this.drainMachineEvents();
+        if (accepted) {
+          void this.readPeerInitiatedStreamMessages(
+            publishNamespace.requestId,
+            stream,
+            controlReader,
+          );
+        }
         return;
       }
       default:
-        // Phase 3 時点では SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE のみ対応。
-        // 後続 Phase で REQUEST_UPDATE を追加する。
+        // Phase 4 時点では SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE のみ対応。
         this.closeWithError(
           new SessionError(
             `peer-initiated bidi stream with unsupported message type ${rawMessage.type}`,
             SessionErrorCode.PROTOCOL_VIOLATION,
           ),
         );
+    }
+  }
+
+  /**
+   * peer-initiated bidi stream 上の継続メッセージを読み取る
+   * draft-ietf-moq-transport-17 Section 5.1, 9.6 (REQUEST_UPDATE), 9.13 (PUBLISH_DONE)
+   *
+   * 初回メッセージ (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS /
+   * SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE) を受理した後、同じストリームで
+   * peer が送ってくる REQUEST_UPDATE / PUBLISH_DONE 等を SessionMachine に流す。
+   *
+   * forwardStreamMessageToMachine は SessionMachine.handleStreamMessage を呼ぶ。
+   * 未対応のメッセージ種別は SessionMachine 側で PROTOCOL_VIOLATION となり
+   * closeSession イベントが積まれる。
+   */
+  private async readPeerInitiatedStreamMessages(
+    requestId: bigint,
+    stream: WebTransportBidirectionalStream,
+    controlReader: ControlStreamReader,
+  ): Promise<void> {
+    const reader = stream.readable.getReader();
+    try {
+      while (this.sessionState === "established") {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        const messages = controlReader.feed(value);
+        for (const msg of messages) {
+          this.statsControlMessagesReceived++;
+          this.emitDebug("recv", msg.type, msg.payload, {
+            requestId: requestId.toString(),
+          });
+          switch (msg.type) {
+            case MessageType.REQUEST_UPDATE: {
+              const decoded = decodeRequestUpdatePayload(msg.payload);
+              if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
+              break;
+            }
+            case MessageType.PUBLISH_DONE: {
+              const decoded = decodePublishDonePayload(msg.payload);
+              if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
+              break;
+            }
+            default:
+              // Phase 4 スコープ外の peer follow-up メッセージは仕様違反扱い。
+              this.closeWithError(
+                new SessionError(
+                  `unsupported peer-initiated follow-up message type 0x${msg.type.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+          }
+        }
+      }
+    } catch {
+      // ストリームが閉じられた場合は無視する
+    } finally {
+      reader.releaseLock();
+      this.peerInitiatedStreams.delete(requestId);
     }
   }
 

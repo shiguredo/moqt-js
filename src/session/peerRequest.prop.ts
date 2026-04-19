@@ -15,7 +15,9 @@ import {
   MessageType,
   NamespaceSubscribeMode,
   type Publish,
+  type PublishDone,
   type PublishNamespace,
+  type RequestUpdate,
   type Subscribe,
   type SubscribeNamespace,
   type TrackStatus,
@@ -586,5 +588,49 @@ test("SETUP 前の handlePeerPublishNamespace は PROTOCOL_VIOLATION でクロ�
   assert.equal(event.type, "closeSession");
   if (event.type === "closeSession") {
     assert.equal(event.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+test("peer-initiated SUBSCRIBE 後の REQUEST_UPDATE は requestUpdateReceived を出す", () => {
+  const p = established();
+  // peer SUBSCRIBE を受理
+  assert.equal(p.handlePeerSubscribe(buildPeerSubscribe(1n)), true);
+  p.nextEvent(); // peerSubscribeReceived
+  // peer からの REQUEST_UPDATE (同じ stream = 同じ requestId 1)
+  const update: RequestUpdate = {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 3n,
+    requiredRequestIdDelta: 0n,
+    parameters: [],
+  };
+  p.handleStreamMessage(1n, update);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "requestUpdateReceived");
+  if (event.type === "requestUpdateReceived") {
+    assert.equal(event.requestId, 3n);
+  }
+});
+
+test("peer-initiated PUBLISH 後の PUBLISH_DONE は subscription を terminated にする", () => {
+  const p = established();
+  assert.equal(p.handlePeerPublish(buildPeerPublish(1n, 5n)), true);
+  p.nextEvent(); // peerPublishReceived
+  const done: PublishDone = {
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0n,
+    streamCount: 3n,
+    reasonPhrase: "bye",
+  };
+  p.handleStreamMessage(1n, done);
+  const entry = p.subscription(1n);
+  assert.ok(entry);
+  assert.equal(entry.state, "terminated");
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "publishDoneReceived");
+  if (event.type === "publishDoneReceived") {
+    assert.equal(event.requestId, 1n);
+    assert.equal(event.reasonPhrase, "bye");
   }
 });
