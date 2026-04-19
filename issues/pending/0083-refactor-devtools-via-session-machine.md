@@ -3,6 +3,20 @@
 Created: 2026-04-19
 Model: Claude Opus 4.7
 
+## pending 理由
+
+2026-04-19 時点で pending 送りとする。
+
+事前調査の結果、devtools の polling ループの大半は WebCodecs の `encoder.state` / `decoder.state` が対象であり、これは MOQT / SessionMachine の守備範囲外である。MOQT 由来で polling している箇所は `publisher.state === "active"` / `subscriber.state === "active"` の送信前ガード程度で、これは既存の `onForwardStateChange` / `onEnd` / `close` / `goaway` コールバックで概ね代替可能な水準である。
+
+一方で本 issue は moqt-js 本体に `Session.onStateChange` や `Session.events` といった新規 observable API を追加する想定であり、追加コストに対して devtools 側の実際の削減量が見合わない。devtools のリグレッション検知も現状 Playwright e2e のみで網が粗い。
+
+そのため、以下のいずれかのトリガが発生するまでは本 issue を保留する。
+
+- devtools を「MOQT プロトコル観測ツール」として強化する要件が明確になったとき (SessionMachine の state transition や peer-initiated request を可視化したい、など)
+- moqt-js の他の利用者から observable API の要望が上がったとき
+- devtools 側で polling 起因の不具合・パフォーマンス問題が具体化したとき
+
 ## 概要
 
 `devtools/` は現在 Session 内部の低レイヤー API を直接触って状態を観測している。具体的には `pub.publisher.value.state !== "active"` や `instance.subscriber.state === "active"` のような polling ループと、`decoderConfigured` / `joiningFetchInProgress` / `sentGoaway` 的な ad-hoc フラグでライフサイクルを手管理している。
