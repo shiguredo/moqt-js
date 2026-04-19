@@ -1,6 +1,7 @@
 # Publisher を SessionMachine 駆動に置き換える
 
 Created: 2026-04-19
+Completed: 2026-04-19
 Model: Claude Opus 4.7
 
 ## 概要
@@ -55,6 +56,38 @@ Model: Claude Opus 4.7
 4. Phase 4: CHANGES.md 更新、typecheck / test / build 緑を確認する
 
 各 Phase を 1 コミットとする。
+
+## 解決方法
+
+### Phase 1: SessionMachine に `publicationView` を追加
+
+- `src/session/types.ts` に `PublicationView` 型を追加した
+- `src/session/machine.ts` に `publicationView(requestId)` を追加した
+  - `myRole === "publisher"` の `SubscriptionEntry` のみを返す
+  - `entry.state === "terminated"` → `state: "closed"`、それ以外は `state: "active"`
+  - `entry.forwardState === 1` を boolean に射影する
+- `src/session/subscription.prop.ts` に PBT を追加した
+
+### Phase 2: Publisher を view 参照型に書き換え
+
+- `PublisherImpl` コンストラクタに `PublicationViewAccessor` を追加した
+- `state` / `forwardState` getter は view を都度呼び出して derive するようにした
+- `src/publisher.test.ts` / `src/publisher.prop.ts` を view ベースに書き換えた
+
+### Phase 3: SessionMachine が FORWARD パラメータを反映する
+
+- `src/session/subscription.ts` に `extractForwardStateIfPresent` を追加した
+- `handlePeerPublishOk` / `handlePeerRequestUpdate` で FORWARD が明示されている場合のみ `entry.forwardState` を更新するようにした
+- `SessionEvent.requestUpdateReceived` に `targetRequestId` を追加し、session が対象 subscription を特定できるようにした
+- Session の PUBLISH_OK 処理から FORWARD の重複パースを撤去した
+
+### Phase 4: Publisher から local state を完全撤去
+
+- `SessionEvent` に `publicationForwardStateChanged` を追加し、SessionMachine 側で change detection を行うようにした
+- `PublisherImpl` から `setForwardState` / `markClosed` / `closedOverride` / `lastNotifiedForwardState` を撤去し、`notifyForwardStateChanged(forward)` に統合した
+- `SessionMachine.publicationView` は session が `closing` / `closed` の場合も `state: "closed"` を返すようにした
+- session close ループから Publisher への `markClosed` 呼び出しを撤去した
+- 494 tests all green、typecheck / build 緑
 
 ## 参考
 
