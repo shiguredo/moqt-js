@@ -590,7 +590,13 @@ export class Session {
   // GOAWAY 状態
   private receivedGoaway = false;
   private sentGoaway = false;
-  private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // SessionMachine の tick を定期的に駆動する interval
+  // draft-ietf-moq-transport-17 Section 3.6 (GOAWAY) の自側タイムアウト判定は
+  // SessionMachine 側の localGoawayDeadlineMs に一元化されている。
+  private tickIntervalId: ReturnType<typeof setInterval> | null = null;
+  // peer から受け取った GOAWAY に対するグレースフルシャットダウン用タイマー
+  // (こちらは SessionMachine では管理しない / peer 側のポリシーを先回りで実行する)
+  private peerGoawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Active publishers, subscribers and fetchers
   private publishers = new Map<bigint, PublisherImpl>();
@@ -887,6 +893,15 @@ export class Session {
         SessionErrorCode.INTERNAL_ERROR,
       );
     }
+
+    // SessionMachine の tick を定期起動する。
+    // draft-ietf-moq-transport-17 Section 3.6 (GOAWAY) のタイムアウト判定は
+    // SessionMachine.tick(nowMs) に委ねる。
+    this.tickIntervalId = setInterval(() => {
+      if (this.sessionState !== "established") return;
+      this.protocol?.tick(Date.now());
+      this.drainMachineEvents();
+    }, 250);
 
     // Start reading control messages in background
     this.startControlMessageLoop();
@@ -1735,15 +1750,8 @@ export class Session {
     // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
     // the indicated timeout if there are still open subscriptions or
     // fetches on a connection."
-    if (goawayTimeout > 0n) {
-      this.goawayTimeoutId = setTimeout(() => {
-        if (this.sessionState === "established") {
-          this.closeWithError(
-            new SessionError("GOAWAY timeout expired", SessionErrorCode.GOAWAY_TIMEOUT),
-          );
-        }
-      }, Number(goawayTimeout));
-    }
+    // タイムアウト判定は SessionMachine.tick で自動的に行われ、
+    // 期限超過時に closeSession(GOAWAY_TIMEOUT) が積まれる。
   }
 
   /**
@@ -1789,10 +1797,16 @@ export class Session {
 
     this.sessionState = "closed";
 
-    // GOAWAY タイムアウトタイマーをクリア
-    if (this.goawayTimeoutId !== null) {
-      clearTimeout(this.goawayTimeoutId);
-      this.goawayTimeoutId = null;
+    // SessionMachine の tick 駆動 interval をクリア
+    if (this.tickIntervalId !== null) {
+      clearInterval(this.tickIntervalId);
+      this.tickIntervalId = null;
+    }
+
+    // peer GOAWAY 受信時のグレースフルシャットダウンタイマーをクリア
+    if (this.peerGoawayTimeoutId !== null) {
+      clearTimeout(this.peerGoawayTimeoutId);
+      this.peerGoawayTimeoutId = null;
     }
 
     // Close all publishers, subscribers and fetchers
@@ -3232,7 +3246,7 @@ export class Session {
     // サーバーが GOAWAY_TIMEOUT でセッションを切断する。
     // クライアント側でもタイムアウトを設定し、期限内にグレースフルシャットダウンを試みる。
     if (msg.timeout > 0n) {
-      this.goawayTimeoutId = setTimeout(() => {
+      this.peerGoawayTimeoutId = setTimeout(() => {
         if (this.sessionState === "established") {
           void this.close();
           this.transport.close({

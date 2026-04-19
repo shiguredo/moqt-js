@@ -81,6 +81,11 @@
   - `sendRequestUpdate` / `sendPublishDone` / `sendGoaway` で SessionMachine にも通知する
   - DUPLICATE_TRACK_ALIAS 等の検証を SessionMachine 側に集約し、Session 側の重複ロジックを削減する
   - @voluntas
+- [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
+  - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
+  - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する
+  - peer GOAWAY 受信時のグレースフルシャットダウンは引き続き Session 側の `peerGoawayTimeoutId` で管理する
+  - @voluntas
 - [CHANGE] Session の state 値を 4 状態化して sans-I/O Session プロトコル層の型定義を追加する (#0073)
   - `"connected"`/`"closed"` の 2 状態を `"setup"`/`"established"`/`"closing"`/`"closed"` の 4 状態に変更する
   - `src/session/types.ts` に Role / Transport / SessionState / SessionEvent / 各エンティティ型を追加する
