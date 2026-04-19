@@ -3,23 +3,56 @@
  * draft-ietf-moq-transport-17 Section 5.2
  */
 
-import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { PublisherImpl } from "./publisher";
+import { assert, test } from "vite-plus/test";
+import { createTrackNamespace, encodeTrackName } from "./message";
+import { PublisherImpl, type PublicationViewAccessor } from "./publisher";
+import type { PublicationView } from "./session/types";
 
-test("setForwardState は状態が変化した場合のみコールバックを呼ぶ", () => {
+interface MockView {
+  state: "active" | "closed";
+  forwardState: boolean;
+}
+
+function makePublisher(
+  mock: MockView,
+  onForwardStateChange?: (forward: boolean) => void,
+): PublisherImpl {
+  const viewAccessor: PublicationViewAccessor = (): PublicationView => ({
+    requestId: 0n,
+    trackNamespace: createTrackNamespace(["namespace"]),
+    trackName: encodeTrackName("track"),
+    trackAlias: 0n,
+    state: mock.state,
+    isEstablished: true,
+    forwardState: mock.forwardState,
+  });
+  return new PublisherImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    viewAccessor,
+    undefined,
+    onForwardStateChange,
+  );
+}
+
+test("setForwardState は forwardState が変化した場合のみコールバックを呼ぶ", () => {
   fc.assert(
     fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 50 }), (states) => {
+      const mock: MockView = { state: "active", forwardState: true };
       const callbackCalls: boolean[] = [];
-      const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, undefined, (forward) => {
+      const publisher = makePublisher(mock, (forward) => {
         callbackCalls.push(forward);
       });
 
-      // 初期状態は true
+      // 初期状態は MOQT spec のデフォルト (true) と揃える
       let previousState = true;
       let expectedCallCount = 0;
 
       for (const state of states) {
+        mock.forwardState = state;
         publisher.setForwardState(state);
         if (state !== previousState) {
           expectedCallCount++;
@@ -53,11 +86,13 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
     }),
     fc.constant({ type: "markClosed" as const }),
     fc.constant({ type: "done" as const }),
+    fc.constant({ type: "viewTerminate" as const }),
   );
 
   fc.assert(
     fc.property(fc.array(operationArb, { minLength: 1, maxLength: 30 }), (operations) => {
-      const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+      const mock: MockView = { state: "active", forwardState: true };
+      const publisher = makePublisher(mock);
       let closedAt = -1;
       let sendErrorCount = 0;
 
@@ -88,9 +123,12 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
           publisher.markClosed();
           if (closedAt === -1) closedAt = i;
         } else if (op.type === "done") {
-          // done は非同期なのでここでは呼ばない
+          // done は markClosed 相当 (非同期だがここでは同期的に扱う)
           if (closedAt === -1) closedAt = i;
           publisher.markClosed();
+        } else if (op.type === "viewTerminate") {
+          mock.state = "closed";
+          if (closedAt === -1) closedAt = i;
         }
       }
 

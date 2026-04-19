@@ -293,6 +293,13 @@
   - publisher role の SubscriptionEntry を boolean forwardState / active|closed state へ射影する
   - `src/session/subscription.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [CHANGE] Publisher を SessionMachine の publicationView から state を derive する facade に置き換える (#0081)
+  - `src/publisher.ts` から `publisherState` / `publisherForwardState` の二重管理を撤去する
+  - `PublisherImpl` コンストラクタに `PublicationViewAccessor` を追加する
+  - `state` / `forwardState` getter は SessionMachine の SubscriptionEntry を都度参照する
+  - `setForwardState` は forwardState 変化通知のための change detection のみを担う shim に変える
+  - `src/publisher.test.ts` / `src/publisher.prop.ts` のテストを view ベースに書き換える
+  - @voluntas
 
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas

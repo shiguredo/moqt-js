@@ -1076,11 +1076,14 @@ export class Session {
     const trackNameBytes = encodeTrackName(trackName);
 
     // Create publisher implementation
+    // #0081: Publisher は SessionMachine の publicationView を参照する facade に変わった
+    const machine = this.protocol!;
     const impl = new PublisherImpl(
       namespace,
       trackName,
       requestId,
       trackAlias,
+      () => machine.publicationView(requestId),
       callbacks?.error,
       callbacks?.onForwardStateChange,
     );
