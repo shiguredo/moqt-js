@@ -566,6 +566,72 @@ export class SessionMachine {
   }
 
   /**
+   * peer が新規 bidi stream で送信してきた FETCH を受信する
+   * draft-ietf-moq-transport-17 Section 9.14 (FETCH)
+   *
+   * - peer は subscriber、自側は publisher として登録する
+   * - Request ID の parity と Required Delta を検証する
+   * - AUTHORIZATION_TOKEN パラメータをキャッシュに反映する
+   * - 成功時は peerFetchReceived イベントを積む
+   *
+   * 検証で失敗した場合は closeSession イベントを積み、false を返す。
+   *
+   * 注意: Joining FETCH の joiningRequestId 先 subscription の存在検証は
+   * respond API (Phase 5) で行う。ここでは FetchEntry の登録までにとどめる。
+   */
+  handlePeerFetch(fetch: Fetch): boolean {
+    if (!this.validatePeerRequest(fetch.requestId, fetch.requiredRequestIdDelta)) {
+      return false;
+    }
+    this.processIncomingAuthTokens(fetch.parameters);
+    if (this._state !== "established") {
+      return false;
+    }
+    const entry = createFetchEntry(fetch, "publisher");
+    this._fetches.set(fetch.requestId, entry);
+    this._events.push({
+      type: "peerFetchReceived",
+      requestId: fetch.requestId,
+      message: fetch,
+    });
+    return true;
+  }
+
+  /**
+   * peer が新規 bidi stream で送信してきた TRACK_STATUS を受信する
+   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
+   *
+   * - peer は subscriber、自側は publisher として登録する
+   * - Request ID の parity と Required Delta を検証する
+   * - AUTHORIZATION_TOKEN パラメータをキャッシュに反映する
+   * - 成功時は peerTrackStatusReceived イベントを積む
+   *
+   * 検証で失敗した場合は closeSession イベントを積み、false を返す。
+   */
+  handlePeerTrackStatus(trackStatus: TrackStatus): boolean {
+    if (!this.validatePeerRequest(trackStatus.requestId, trackStatus.requiredRequestIdDelta)) {
+      return false;
+    }
+    this.processIncomingAuthTokens(trackStatus.parameters);
+    if (this._state !== "established") {
+      return false;
+    }
+    const entry = createTrackStatusEntry({
+      requestId: trackStatus.requestId,
+      myRole: "publisher",
+      trackNamespace: trackStatus.trackNamespace,
+      trackName: trackStatus.trackName,
+    });
+    this._trackStatusRequests.set(trackStatus.requestId, entry);
+    this._events.push({
+      type: "peerTrackStatusReceived",
+      requestId: trackStatus.requestId,
+      message: trackStatus,
+    });
+    return true;
+  }
+
+  /**
    * 既存 bidi request stream 上の応答メッセージを処理する
    * draft-ietf-moq-transport-17 Section 9.7, 9.10, 9.12 ほか
    *

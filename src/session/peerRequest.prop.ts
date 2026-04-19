@@ -10,9 +10,12 @@ import {
   createSetup,
   createTrackNamespace,
   encodeTrackName,
+  type Fetch,
+  FetchType,
   MessageType,
   type Publish,
   type Subscribe,
+  type TrackStatus,
 } from "../message";
 import { SessionMachine } from "./machine";
 
@@ -252,6 +255,197 @@ test("SETUP 前の handlePeerPublish は PROTOCOL_VIOLATION でクローズ", ()
   const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerPublish(buildPeerPublish(1n, 1n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+function buildPeerStandaloneFetch(
+  requestId: bigint,
+  ns = ["a"],
+  name = "x",
+  requiredDelta: bigint = 0n,
+): Fetch {
+  return {
+    type: MessageType.FETCH,
+    requestId,
+    requiredRequestIdDelta: requiredDelta,
+    fetchType: FetchType.STANDALONE,
+    standalone: {
+      trackNamespace: createTrackNamespace(ns),
+      trackName: encodeTrackName(name),
+      startLocation: { group: 0n, object: 0n },
+      endLocation: { group: 10n, object: 0n },
+    },
+    parameters: [],
+  };
+}
+
+function buildPeerJoiningFetch(
+  requestId: bigint,
+  joiningRequestId: bigint,
+  requiredDelta: bigint = 0n,
+): Fetch {
+  return {
+    type: MessageType.FETCH,
+    requestId,
+    requiredRequestIdDelta: requiredDelta,
+    fetchType: FetchType.RELATIVE_JOINING,
+    joining: {
+      joiningRequestId,
+      joiningStart: 0n,
+    },
+    parameters: [],
+  };
+}
+
+function buildPeerTrackStatus(
+  requestId: bigint,
+  ns = ["a"],
+  name = "x",
+  requiredDelta: bigint = 0n,
+): TrackStatus {
+  return {
+    type: MessageType.TRACK_STATUS,
+    requestId,
+    requiredRequestIdDelta: requiredDelta,
+    trackNamespace: createTrackNamespace(ns),
+    trackName: encodeTrackName(name),
+    parameters: [],
+  };
+}
+
+test("handlePeerFetch (standalone) が FetchEntry を publisher role で登録し peerFetchReceived を出す", () => {
+  fc.assert(
+    fc.property(peerRequestIdArb, namespaceArb, nameArb, (requestId, ns, name) => {
+      const p = established();
+      const fetch: Fetch = {
+        type: MessageType.FETCH,
+        requestId,
+        requiredRequestIdDelta: 0n,
+        fetchType: FetchType.STANDALONE,
+        standalone: {
+          trackNamespace: ns,
+          trackName: name,
+          startLocation: { group: 0n, object: 0n },
+          endLocation: { group: 5n, object: 0n },
+        },
+        parameters: [],
+      };
+      assert.equal(p.handlePeerFetch(fetch), true);
+      const entry = p.fetch(requestId);
+      assert.ok(entry);
+      assert.equal(entry.state, "pending");
+      assert.equal(entry.myRole, "publisher");
+      assert.equal(entry.kind, "standalone");
+      const event = p.nextEvent();
+      assert.ok(event);
+      assert.equal(event.type, "peerFetchReceived");
+      if (event.type === "peerFetchReceived") {
+        assert.equal(event.requestId, requestId);
+        assert.strictEqual(event.message, fetch);
+      }
+    }),
+  );
+});
+
+test("handlePeerFetch (joining) が joining 情報付きで登録される", () => {
+  const p = established();
+  const fetch = buildPeerJoiningFetch(1n, 3n);
+  assert.equal(p.handlePeerFetch(fetch), true);
+  const entry = p.fetch(1n);
+  assert.ok(entry);
+  assert.equal(entry.kind, "relativeJoining");
+  assert.ok(entry.joining);
+  assert.equal(entry.joining.joiningRequestId, 3n);
+  assert.equal(entry.joining.joiningStart, 0n);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "peerFetchReceived");
+});
+
+test("peer FETCH の偶数 Request ID は INVALID_REQUEST_ID でクローズ", () => {
+  const p = established();
+  assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(2n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+  }
+});
+
+test("peer FETCH の Request ID 重複は INVALID_REQUEST_ID でクローズ", () => {
+  const p = established();
+  assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(1n)), true);
+  p.nextEvent();
+  assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(1n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+  }
+});
+
+test("SETUP 前の handlePeerFetch は PROTOCOL_VIOLATION でクローズ", () => {
+  const p = SessionMachine.createClient("webTransport", createSetup());
+  p.nextEvent();
+  assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(1n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+test("handlePeerTrackStatus が TrackStatusEntry を publisher role で登録し peerTrackStatusReceived を出す", () => {
+  fc.assert(
+    fc.property(peerRequestIdArb, namespaceArb, nameArb, (requestId, ns, name) => {
+      const p = established();
+      const trackStatus: TrackStatus = {
+        type: MessageType.TRACK_STATUS,
+        requestId,
+        requiredRequestIdDelta: 0n,
+        trackNamespace: ns,
+        trackName: name,
+        parameters: [],
+      };
+      assert.equal(p.handlePeerTrackStatus(trackStatus), true);
+      const entry = p.trackStatusRequest(requestId);
+      assert.ok(entry);
+      assert.equal(entry.state, "pending");
+      assert.equal(entry.myRole, "publisher");
+      const event = p.nextEvent();
+      assert.ok(event);
+      assert.equal(event.type, "peerTrackStatusReceived");
+      if (event.type === "peerTrackStatusReceived") {
+        assert.equal(event.requestId, requestId);
+        assert.strictEqual(event.message, trackStatus);
+      }
+    }),
+  );
+});
+
+test("peer TRACK_STATUS の偶数 Request ID は INVALID_REQUEST_ID でクローズ", () => {
+  const p = established();
+  assert.equal(p.handlePeerTrackStatus(buildPeerTrackStatus(2n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+  }
+});
+
+test("SETUP 前の handlePeerTrackStatus は PROTOCOL_VIOLATION でクローズ", () => {
+  const p = SessionMachine.createClient("webTransport", createSetup());
+  p.nextEvent();
+  assert.equal(p.handlePeerTrackStatus(buildPeerTrackStatus(1n)), false);
   const event = p.nextEvent();
   assert.ok(event);
   assert.equal(event.type, "closeSession");

@@ -82,9 +82,19 @@ draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
 - `ConnectCallbacks` に `peerSubscribe` / `peerPublish` と `PeerSubscribeRequest` / `PeerPublishRequest` 型を追加した
 - `src/session/peerRequest.prop.ts` に fast-check ベースの PBT を追加した
 
-残課題 (Phase 2 以降):
+### Phase 2 完了 (2026-04-19)
 
-- Phase 2: peer-initiated FETCH / TRACK_STATUS
+- `SessionMachine` に `handlePeerFetch` / `handlePeerTrackStatus` を追加した
+  - `FetchEntry` は `createFetchEntry(msg, "publisher")` で登録し、Joining FETCH の `joiningRequestId` 先の存在検証は respond API (Phase 5) に回す
+  - `TrackStatusEntry` は `createTrackStatusEntry({ myRole: "publisher", ... })` で登録する
+  - Request ID 重複は `validatePeerRequest` が `_peerRequestIds` で横断的に検出するため、Map 単位の重複チェックは省略する
+- `SessionEvent` に `peerFetchReceived` / `peerTrackStatusReceived` を追加した
+- `Session.handleIncomingRequestStream` の switch に `FETCH` / `TRACK_STATUS` ケースを追加した
+- `ConnectCallbacks` に `peerFetch` / `peerTrackStatus` と `PeerFetchRequest` / `PeerTrackStatusRequest` 型を追加した
+- `src/session/peerRequest.prop.ts` に Phase 2 用の PBT を追加した
+
+残課題 (Phase 3 以降):
+
 - Phase 3: peer-initiated SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE
 - Phase 4: peer-initiated REQUEST_UPDATE と peer-initiated bidi stream 上の後続メッセージの読み取りループ
 - Phase 5: 応答経路 (`respondSubscribe` / `respondPublish` 等) の実装と examples / Playwright での動作確認

@@ -88,6 +88,13 @@
   - `ConnectCallbacks` に `peerSubscribe` / `peerPublish` コールバックと `PeerSubscribeRequest` / `PeerPublishRequest` 型を追加する
   - `src/session/peerRequest.prop.ts` に fast-check ベースの PBT を追加する
   - @voluntas
+- [ADD] peer-initiated FETCH / TRACK_STATUS の受信経路を実装する (#0080)
+  - `SessionMachine` に `handlePeerFetch` / `handlePeerTrackStatus` を追加し、`FetchEntry` / `TrackStatusEntry` を `myRole="publisher"` で登録する
+  - `SessionEvent` に `peerFetchReceived` / `peerTrackStatusReceived` を追加する
+  - `Session` の peer bidi 受信ディスパッチに `FETCH` / `TRACK_STATUS` ケースを追加する
+  - `ConnectCallbacks` に `peerFetch` / `peerTrackStatus` コールバックと `PeerFetchRequest` / `PeerTrackStatusRequest` 型を追加する
+  - `src/session/peerRequest.prop.ts` に FETCH / TRACK_STATUS 用の PBT を追加する
+  - @voluntas
 - [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
   - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
   - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する

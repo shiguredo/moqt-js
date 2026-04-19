@@ -24,6 +24,7 @@ import {
   createTrackNamespace,
   encodeTrackName,
   trackNamespaceToStrings,
+  decodeFetchPayload,
   decodeFetchOkPayload,
   decodeGoawayPayload,
   decodeNamespaceDonePayload,
@@ -37,6 +38,7 @@ import {
   decodeSetupPayload,
   decodeSubscribePayload,
   decodeSubscribeOkPayload,
+  decodeTrackStatusPayload,
   encodeSetupPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
@@ -118,6 +120,28 @@ export interface PeerPublishRequest {
 }
 
 /**
+ * peer が開いた双方向ストリームで受信した FETCH の情報
+ * draft-ietf-moq-transport-17 Section 9.14 (FETCH)
+ *
+ * 受理 / 拒否 / FETCH_OK 送出を行う respond API は後続 Phase で追加する。
+ */
+export interface PeerFetchRequest {
+  requestId: bigint;
+  message: Fetch;
+}
+
+/**
+ * peer が開いた双方向ストリームで受信した TRACK_STATUS の情報
+ * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
+ *
+ * 受理 / 拒否 / REQUEST_OK 送出を行う respond API は後続 Phase で追加する。
+ */
+export interface PeerTrackStatusRequest {
+  requestId: bigint;
+  message: TrackStatus;
+}
+
+/**
  * Connect callbacks
  */
 export interface ConnectCallbacks {
@@ -145,6 +169,20 @@ export interface ConnectCallbacks {
    * Phase 1 では通知のみ。受理応答の respond API は後続 Phase で追加する。
    */
   peerPublish?: (request: PeerPublishRequest) => void;
+  /**
+   * peer が新規 bidi stream で開始した FETCH の受信コールバック
+   * draft-ietf-moq-transport-17 Section 9.14 (FETCH)
+   *
+   * Phase 2 では通知のみ。受理応答の respond API は後続 Phase で追加する。
+   */
+  peerFetch?: (request: PeerFetchRequest) => void;
+  /**
+   * peer が新規 bidi stream で開始した TRACK_STATUS の受信コールバック
+   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
+   *
+   * Phase 2 では通知のみ。受理応答の respond API は後続 Phase で追加する。
+   */
+  peerTrackStatus?: (request: PeerTrackStatusRequest) => void;
 }
 
 /**
@@ -2017,6 +2055,18 @@ export class Session {
             message: event.message,
           });
           break;
+        case "peerFetchReceived":
+          this.callbacks.peerFetch?.({
+            requestId: event.requestId,
+            message: event.message,
+          });
+          break;
+        case "peerTrackStatusReceived":
+          this.callbacks.peerTrackStatus?.({
+            requestId: event.requestId,
+            message: event.message,
+          });
+          break;
       }
     }
     return alive;
@@ -3594,9 +3644,42 @@ export class Session {
         this.drainMachineEvents();
         return;
       }
+      case MessageType.FETCH: {
+        const fetch = decodeFetchPayload(rawMessage.payload);
+        this.emitDebug("recv", MessageType.FETCH, rawMessage.payload, {
+          requestId: fetch.requestId.toString(),
+          fetchType: fetch.fetchType,
+        });
+        this.peerInitiatedStreams.set(fetch.requestId, {
+          stream,
+          controlReader,
+        });
+        const accepted = this.protocol.handlePeerFetch(fetch);
+        if (!accepted) {
+          this.peerInitiatedStreams.delete(fetch.requestId);
+        }
+        this.drainMachineEvents();
+        return;
+      }
+      case MessageType.TRACK_STATUS: {
+        const trackStatus = decodeTrackStatusPayload(rawMessage.payload);
+        this.emitDebug("recv", MessageType.TRACK_STATUS, rawMessage.payload, {
+          requestId: trackStatus.requestId.toString(),
+        });
+        this.peerInitiatedStreams.set(trackStatus.requestId, {
+          stream,
+          controlReader,
+        });
+        const accepted = this.protocol.handlePeerTrackStatus(trackStatus);
+        if (!accepted) {
+          this.peerInitiatedStreams.delete(trackStatus.requestId);
+        }
+        this.drainMachineEvents();
+        return;
+      }
       default:
-        // Phase 1 では SUBSCRIBE / PUBLISH 以外の peer-initiated request は未対応。
-        // 後続 Phase で FETCH / TRACK_STATUS / NAMESPACE 系 / REQUEST_UPDATE を追加する。
+        // Phase 2 時点では SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS のみ対応。
+        // 後続 Phase で SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE / REQUEST_UPDATE を追加する。
         this.closeWithError(
           new SessionError(
             `peer-initiated bidi stream with unsupported message type ${rawMessage.type}`,

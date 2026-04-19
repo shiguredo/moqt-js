@@ -6,7 +6,15 @@
  */
 
 import type { SessionError } from "../error";
-import type { Location, Parameter, Publish, Subscribe, TrackNamespace } from "../message";
+import type {
+  Fetch,
+  Location,
+  Parameter,
+  Publish,
+  Subscribe,
+  TrackNamespace,
+  TrackStatus,
+} from "../message";
 import type { ControlMessage } from "../message/control";
 
 /**
@@ -277,4 +285,14 @@ export type SessionEvent =
       type: "peerPublishReceived";
       requestId: bigint;
       message: Publish;
+    }
+  | {
+      type: "peerFetchReceived";
+      requestId: bigint;
+      message: Fetch;
+    }
+  | {
+      type: "peerTrackStatusReceived";
+      requestId: bigint;
+      message: TrackStatus;
     };
