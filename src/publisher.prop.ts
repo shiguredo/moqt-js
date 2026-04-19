@@ -3,61 +3,82 @@
  * draft-ietf-moq-transport-17 Section 5.2
  */
 
-import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { PublisherImpl } from "./publisher";
+import { assert, test } from "vite-plus/test";
+import { createTrackNamespace, encodeTrackName } from "./message";
+import { PublisherImpl, type PublicationViewAccessor } from "./publisher";
+import type { PublicationView } from "./session/types";
 
-test("setForwardState は状態が変化した場合のみコールバックを呼ぶ", () => {
+interface MockView {
+  state: "active" | "closed";
+  forwardState: boolean;
+}
+
+function makePublisher(
+  mock: MockView,
+  onForwardStateChange?: (forward: boolean) => void,
+): PublisherImpl {
+  const viewAccessor: PublicationViewAccessor = (): PublicationView => ({
+    requestId: 0n,
+    trackNamespace: createTrackNamespace(["namespace"]),
+    trackName: encodeTrackName("track"),
+    trackAlias: 0n,
+    state: mock.state,
+    isEstablished: true,
+    forwardState: mock.forwardState,
+  });
+  return new PublisherImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    viewAccessor,
+    undefined,
+    onForwardStateChange,
+  );
+}
+
+test("notifyForwardStateChanged は受け取った値をそのまま callback に渡す", () => {
   fc.assert(
-    fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 50 }), (states) => {
+    fc.property(fc.array(fc.boolean(), { minLength: 0, maxLength: 50 }), (notifications) => {
+      const mock: MockView = { state: "active", forwardState: true };
       const callbackCalls: boolean[] = [];
-      const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, undefined, (forward) => {
+      const publisher = makePublisher(mock, (forward) => {
         callbackCalls.push(forward);
       });
 
-      // 初期状態は true
-      let previousState = true;
-      let expectedCallCount = 0;
-
-      for (const state of states) {
-        publisher.setForwardState(state);
-        if (state !== previousState) {
-          expectedCallCount++;
-        }
-        previousState = state;
+      for (const forward of notifications) {
+        publisher.notifyForwardStateChanged(forward);
       }
 
-      // 不変条件: 状態が変化した回数とコールバック呼び出し回数が一致
-      assert.equal(callbackCalls.length, expectedCallCount);
-
-      // 不変条件: コールバックの引数は状態変化後の値
-      let checkState = true;
-      let callIndex = 0;
-      for (const state of states) {
-        if (state !== checkState) {
-          assert.equal(callbackCalls[callIndex], state);
-          callIndex++;
-        }
-        checkState = state;
+      // SessionMachine 側で change detection 済みの前提なので、呼び出された回数と値が
+      // そのまま callback に伝わる
+      assert.equal(callbackCalls.length, notifications.length);
+      for (let i = 0; i < notifications.length; i++) {
+        assert.equal(callbackCalls[i], notifications[i]);
       }
     }),
   );
 });
 
-test("任意の操作列に対して状態遷移が一貫している", () => {
+test("任意の操作列に対して state 遷移が view に整合する", () => {
   const operationArb = fc.oneof(
     fc.record({
       type: fc.constant("sendObject" as const),
       groupId: fc.integer({ min: 0, max: 100 }),
       objectId: fc.integer({ min: 0, max: 100 }),
     }),
-    fc.constant({ type: "markClosed" as const }),
     fc.constant({ type: "done" as const }),
+    fc.constant({ type: "viewTerminate" as const }),
   );
 
   fc.assert(
     fc.property(fc.array(operationArb, { minLength: 1, maxLength: 30 }), (operations) => {
-      const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+      const mock: MockView = { state: "active", forwardState: true };
+      const publisher = makePublisher(mock);
+      publisher.onDoneInternal = async () => {
+        mock.state = "closed";
+      };
       let closedAt = -1;
       let sendErrorCount = 0;
 
@@ -84,13 +105,15 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
               payload: new Uint8Array([1, 2, 3]),
             });
           }
-        } else if (op.type === "markClosed") {
-          publisher.markClosed();
-          if (closedAt === -1) closedAt = i;
         } else if (op.type === "done") {
-          // done は非同期なのでここでは呼ばない
+          // done は view を closed に遷移させる
+          if (closedAt === -1) {
+            closedAt = i;
+            mock.state = "closed";
+          }
+        } else if (op.type === "viewTerminate") {
+          mock.state = "closed";
           if (closedAt === -1) closedAt = i;
-          publisher.markClosed();
         }
       }
 

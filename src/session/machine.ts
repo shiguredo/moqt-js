@@ -51,13 +51,19 @@ import {
   createTrackStatusEntry,
   namespaceSubscribeOptionsFromMode,
 } from "./namespace";
-import { createSubscriptionEntry, extractForwardState, subscriptionKey } from "./subscription";
+import {
+  createSubscriptionEntry,
+  extractForwardState,
+  extractForwardStateIfPresent,
+  subscriptionKey,
+} from "./subscription";
 import {
   MAX_NEW_SESSION_URI_LENGTH,
   type FetchEntry,
   type NamespacePublicationEntry,
   type NamespaceSubscriptionEntry,
   type PeerGoawayInfo,
+  type PublicationView,
   type Role,
   type SessionEvent,
   type SessionState,
@@ -1108,6 +1114,34 @@ export class SessionMachine {
   }
 
   /**
+   * publisher role (myRole === "publisher") の SubscriptionEntry を read-only view として返す
+   * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
+   *
+   * Publisher facade が自側状態を射影するための API。#0081 Phase 1 で導入。
+   * - subscriber role の subscription には undefined を返す
+   * - 存在しない requestId には undefined を返す
+   * - セッション全体が closing / closed の場合、entry の state に関わらず "closed" を返す
+   */
+  publicationView(requestId: bigint): PublicationView | undefined {
+    const entry = this._subscriptions.get(requestId);
+    if (entry === undefined || entry.myRole !== "publisher") {
+      return undefined;
+    }
+    const sessionClosed = this._state === "closing" || this._state === "closed";
+    const state: "active" | "closed" =
+      sessionClosed || entry.state === "terminated" ? "closed" : "active";
+    return {
+      requestId: entry.requestId,
+      trackNamespace: entry.trackNamespace,
+      trackName: entry.trackName,
+      trackAlias: entry.trackAlias,
+      state,
+      isEstablished: entry.state === "established" && !sessionClosed,
+      forwardState: entry.forwardState === 1,
+    };
+  }
+
+  /**
    * Terminated 状態の subscription を忘れる
    * draft-ietf-moq-transport-17 Section 5.1.1
    *
@@ -1174,7 +1208,7 @@ export class SessionMachine {
     this._peerPublisherAliases.set(ok.trackAlias, requestId);
   }
 
-  private handlePeerPublishOk(requestId: bigint, _ok: PublishOk): void {
+  private handlePeerPublishOk(requestId: bigint, ok: PublishOk): void {
     const entry = this._subscriptions.get(requestId);
     if (entry === undefined) {
       this.fail(
@@ -1195,6 +1229,17 @@ export class SessionMachine {
       return;
     }
     entry.state = "established";
+    // PUBLISH_OK の FORWARD パラメータが明示されていれば反映する。
+    // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+    const forward = extractForwardStateIfPresent(ok.parameters);
+    if (forward !== undefined && forward !== entry.forwardState) {
+      entry.forwardState = forward;
+      this._events.push({
+        type: "publicationForwardStateChanged",
+        requestId,
+        forwardState: forward === 1,
+      });
+    }
   }
 
   /**
@@ -1252,7 +1297,8 @@ export class SessionMachine {
   }
 
   private handlePeerRequestUpdate(targetRequestId: bigint, update: RequestUpdate): void {
-    if (!this._subscriptions.has(targetRequestId)) {
+    const entry = this._subscriptions.get(targetRequestId);
+    if (entry === undefined) {
       this.fail(
         new SessionError(
           "REQUEST_UPDATE received for unknown subscription",
@@ -1261,9 +1307,25 @@ export class SessionMachine {
       );
       return;
     }
+    // REQUEST_UPDATE の FORWARD パラメータが明示されていれば反映する。
+    // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+    // FORWARD が省略されている場合は既存の forwardState を維持する。
+    const forward = extractForwardStateIfPresent(update.parameters);
+    if (forward !== undefined && forward !== entry.forwardState) {
+      entry.forwardState = forward;
+      // publisher role の場合のみ forwardState 変化通知を積む
+      if (entry.myRole === "publisher") {
+        this._events.push({
+          type: "publicationForwardStateChanged",
+          requestId: targetRequestId,
+          forwardState: forward === 1,
+        });
+      }
+    }
     this._events.push({
       type: "requestUpdateReceived",
       requestId: update.requestId,
+      targetRequestId,
       parameters: update.parameters,
     });
   }
