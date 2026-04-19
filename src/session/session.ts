@@ -32,6 +32,7 @@ import {
   decodePublishPayload,
   decodePublishDonePayload,
   decodePublishNamespacePayload,
+  decodeSubscribeNamespacePayload,
   decodePublishOkPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
@@ -142,6 +143,28 @@ export interface PeerTrackStatusRequest {
 }
 
 /**
+ * peer が開いた双方向ストリームで受信した SUBSCRIBE_NAMESPACE の情報
+ * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE)
+ *
+ * 受理 / 拒否 / REQUEST_OK 送出を行う respond API は後続 Phase で追加する。
+ */
+export interface PeerSubscribeNamespaceRequest {
+  requestId: bigint;
+  message: SubscribeNamespace;
+}
+
+/**
+ * peer が開いた双方向ストリームで受信した PUBLISH_NAMESPACE の情報
+ * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
+ *
+ * 受理 / 拒否 / REQUEST_OK 送出を行う respond API は後続 Phase で追加する。
+ */
+export interface PeerPublishNamespaceRequest {
+  requestId: bigint;
+  message: PublishNamespace;
+}
+
+/**
  * Connect callbacks
  */
 export interface ConnectCallbacks {
@@ -183,6 +206,20 @@ export interface ConnectCallbacks {
    * Phase 2 では通知のみ。受理応答の respond API は後続 Phase で追加する。
    */
   peerTrackStatus?: (request: PeerTrackStatusRequest) => void;
+  /**
+   * peer が新規 bidi stream で開始した SUBSCRIBE_NAMESPACE の受信コールバック
+   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE)
+   *
+   * Phase 3 では通知のみ。受理応答の respond API は後続 Phase で追加する。
+   */
+  peerSubscribeNamespace?: (request: PeerSubscribeNamespaceRequest) => void;
+  /**
+   * peer が新規 bidi stream で開始した PUBLISH_NAMESPACE の受信コールバック
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
+   *
+   * Phase 3 では通知のみ。受理応答の respond API は後続 Phase で追加する。
+   */
+  peerPublishNamespace?: (request: PeerPublishNamespaceRequest) => void;
 }
 
 /**
@@ -2067,6 +2104,18 @@ export class Session {
             message: event.message,
           });
           break;
+        case "peerSubscribeNamespaceReceived":
+          this.callbacks.peerSubscribeNamespace?.({
+            requestId: event.requestId,
+            message: event.message,
+          });
+          break;
+        case "peerPublishNamespaceReceived":
+          this.callbacks.peerPublishNamespace?.({
+            requestId: event.requestId,
+            message: event.message,
+          });
+          break;
       }
     }
     return alive;
@@ -3677,9 +3726,41 @@ export class Session {
         this.drainMachineEvents();
         return;
       }
+      case MessageType.SUBSCRIBE_NAMESPACE: {
+        const subscribeNamespace = decodeSubscribeNamespacePayload(rawMessage.payload);
+        this.emitDebug("recv", MessageType.SUBSCRIBE_NAMESPACE, rawMessage.payload, {
+          requestId: subscribeNamespace.requestId.toString(),
+        });
+        this.peerInitiatedStreams.set(subscribeNamespace.requestId, {
+          stream,
+          controlReader,
+        });
+        const accepted = this.protocol.handlePeerSubscribeNamespace(subscribeNamespace);
+        if (!accepted) {
+          this.peerInitiatedStreams.delete(subscribeNamespace.requestId);
+        }
+        this.drainMachineEvents();
+        return;
+      }
+      case MessageType.PUBLISH_NAMESPACE: {
+        const publishNamespace = decodePublishNamespacePayload(rawMessage.payload);
+        this.emitDebug("recv", MessageType.PUBLISH_NAMESPACE, rawMessage.payload, {
+          requestId: publishNamespace.requestId.toString(),
+        });
+        this.peerInitiatedStreams.set(publishNamespace.requestId, {
+          stream,
+          controlReader,
+        });
+        const accepted = this.protocol.handlePeerPublishNamespace(publishNamespace);
+        if (!accepted) {
+          this.peerInitiatedStreams.delete(publishNamespace.requestId);
+        }
+        this.drainMachineEvents();
+        return;
+      }
       default:
-        // Phase 2 時点では SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS のみ対応。
-        // 後続 Phase で SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE / REQUEST_UPDATE を追加する。
+        // Phase 3 時点では SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE のみ対応。
+        // 後続 Phase で REQUEST_UPDATE を追加する。
         this.closeWithError(
           new SessionError(
             `peer-initiated bidi stream with unsupported message type ${rawMessage.type}`,

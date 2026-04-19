@@ -95,6 +95,14 @@
   - `ConnectCallbacks` に `peerFetch` / `peerTrackStatus` コールバックと `PeerFetchRequest` / `PeerTrackStatusRequest` 型を追加する
   - `src/session/peerRequest.prop.ts` に FETCH / TRACK_STATUS 用の PBT を追加する
   - @voluntas
+- [ADD] peer-initiated SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の受信経路を実装する (#0080)
+  - `SessionMachine` に `handlePeerSubscribeNamespace` / `handlePeerPublishNamespace` を追加する
+  - SUBSCRIBE_NAMESPACE は `NamespaceSubscriptionEntry` を `myRole="publisher"`、PUBLISH_NAMESPACE は `NamespacePublicationEntry` を `myRole="subscriber"` で登録する
+  - `SessionEvent` に `peerSubscribeNamespaceReceived` / `peerPublishNamespaceReceived` を追加する
+  - `Session` の peer bidi 受信ディスパッチに `SUBSCRIBE_NAMESPACE` / `PUBLISH_NAMESPACE` ケースを追加する
+  - `ConnectCallbacks` に `peerSubscribeNamespace` / `peerPublishNamespace` コールバックと `PeerSubscribeNamespaceRequest` / `PeerPublishNamespaceRequest` 型を追加する
+  - `src/session/peerRequest.prop.ts` に SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE 用の PBT を追加する
+  - @voluntas
 - [CHANGE] 自側 GOAWAY のタイムアウト判定を SessionMachine の tick 駆動に移行する (#0078)
   - established 遷移時に 250ms 間隔の `setInterval(tick)` を起動する
   - 自側 `goaway()` での `setTimeout` を削除し、SessionMachine の `localGoawayDeadlineMs` 判定に一元化する

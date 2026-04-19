@@ -13,8 +13,11 @@ import {
   type Fetch,
   FetchType,
   MessageType,
+  NamespaceSubscribeMode,
   type Publish,
+  type PublishNamespace,
   type Subscribe,
+  type SubscribeNamespace,
   type TrackStatus,
 } from "../message";
 import { SessionMachine } from "./machine";
@@ -446,6 +449,138 @@ test("SETUP 前の handlePeerTrackStatus は PROTOCOL_VIOLATION でクローズ"
   const p = SessionMachine.createClient("webTransport", createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerTrackStatus(buildPeerTrackStatus(1n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+function buildPeerSubscribeNamespace(
+  requestId: bigint,
+  prefix = ["a"],
+  mode: NamespaceSubscribeMode = NamespaceSubscribeMode.BOTH,
+  requiredDelta: bigint = 0n,
+): SubscribeNamespace {
+  return {
+    type: MessageType.SUBSCRIBE_NAMESPACE,
+    requestId,
+    requiredRequestIdDelta: requiredDelta,
+    trackNamespacePrefix: createTrackNamespace(prefix),
+    subscribeOptions: mode,
+    parameters: [],
+  };
+}
+
+function buildPeerPublishNamespace(
+  requestId: bigint,
+  ns = ["a"],
+  requiredDelta: bigint = 0n,
+): PublishNamespace {
+  return {
+    type: MessageType.PUBLISH_NAMESPACE,
+    requestId,
+    requiredRequestIdDelta: requiredDelta,
+    trackNamespace: createTrackNamespace(ns),
+    parameters: [],
+  };
+}
+
+test("handlePeerSubscribeNamespace が NamespaceSubscriptionEntry を publisher role で登録する", () => {
+  fc.assert(
+    fc.property(peerRequestIdArb, namespaceArb, (requestId, prefix) => {
+      const p = established();
+      const msg: SubscribeNamespace = {
+        type: MessageType.SUBSCRIBE_NAMESPACE,
+        requestId,
+        requiredRequestIdDelta: 0n,
+        trackNamespacePrefix: prefix,
+        subscribeOptions: NamespaceSubscribeMode.BOTH,
+        parameters: [],
+      };
+      assert.equal(p.handlePeerSubscribeNamespace(msg), true);
+      const entry = p.namespaceSubscription(requestId);
+      assert.ok(entry);
+      assert.equal(entry.state, "pending");
+      assert.equal(entry.myRole, "publisher");
+      assert.equal(entry.options, "both");
+      const event = p.nextEvent();
+      assert.ok(event);
+      assert.equal(event.type, "peerSubscribeNamespaceReceived");
+      if (event.type === "peerSubscribeNamespaceReceived") {
+        assert.equal(event.requestId, requestId);
+        assert.strictEqual(event.message, msg);
+      }
+    }),
+  );
+});
+
+test("handlePeerPublishNamespace が NamespacePublicationEntry を subscriber role で登録する", () => {
+  fc.assert(
+    fc.property(peerRequestIdArb, namespaceArb, (requestId, ns) => {
+      const p = established();
+      const msg: PublishNamespace = {
+        type: MessageType.PUBLISH_NAMESPACE,
+        requestId,
+        requiredRequestIdDelta: 0n,
+        trackNamespace: ns,
+        parameters: [],
+      };
+      assert.equal(p.handlePeerPublishNamespace(msg), true);
+      const entry = p.namespacePublication(requestId);
+      assert.ok(entry);
+      assert.equal(entry.state, "pending");
+      assert.equal(entry.myRole, "subscriber");
+      const event = p.nextEvent();
+      assert.ok(event);
+      assert.equal(event.type, "peerPublishNamespaceReceived");
+      if (event.type === "peerPublishNamespaceReceived") {
+        assert.equal(event.requestId, requestId);
+        assert.strictEqual(event.message, msg);
+      }
+    }),
+  );
+});
+
+test("peer SUBSCRIBE_NAMESPACE の偶数 Request ID は INVALID_REQUEST_ID でクローズ", () => {
+  const p = established();
+  assert.equal(p.handlePeerSubscribeNamespace(buildPeerSubscribeNamespace(2n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+  }
+});
+
+test("peer PUBLISH_NAMESPACE の偶数 Request ID は INVALID_REQUEST_ID でクローズ", () => {
+  const p = established();
+  assert.equal(p.handlePeerPublishNamespace(buildPeerPublishNamespace(2n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+  }
+});
+
+test("SETUP 前の handlePeerSubscribeNamespace は PROTOCOL_VIOLATION でクローズ", () => {
+  const p = SessionMachine.createClient("webTransport", createSetup());
+  p.nextEvent();
+  assert.equal(p.handlePeerSubscribeNamespace(buildPeerSubscribeNamespace(1n)), false);
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "closeSession");
+  if (event.type === "closeSession") {
+    assert.equal(event.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+test("SETUP 前の handlePeerPublishNamespace は PROTOCOL_VIOLATION でクローズ", () => {
+  const p = SessionMachine.createClient("webTransport", createSetup());
+  p.nextEvent();
+  assert.equal(p.handlePeerPublishNamespace(buildPeerPublishNamespace(1n)), false);
   const event = p.nextEvent();
   assert.ok(event);
   assert.equal(event.type, "closeSession");

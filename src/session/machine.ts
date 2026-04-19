@@ -632,6 +632,73 @@ export class SessionMachine {
   }
 
   /**
+   * peer が新規 bidi stream で送信してきた SUBSCRIBE_NAMESPACE を受信する
+   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE)
+   *
+   * - peer は subscriber、自側は publisher として登録する
+   * - Request ID の parity と Required Delta を検証する
+   * - AUTHORIZATION_TOKEN パラメータをキャッシュに反映する
+   * - 成功時は peerSubscribeNamespaceReceived イベントを積む
+   *
+   * 検証で失敗した場合は closeSession イベントを積み、false を返す。
+   */
+  handlePeerSubscribeNamespace(msg: SubscribeNamespace): boolean {
+    if (!this.validatePeerRequest(msg.requestId, msg.requiredRequestIdDelta)) {
+      return false;
+    }
+    this.processIncomingAuthTokens(msg.parameters);
+    if (this._state !== "established") {
+      return false;
+    }
+    const entry = createNamespaceSubscriptionEntry({
+      requestId: msg.requestId,
+      myRole: "publisher",
+      prefix: msg.trackNamespacePrefix,
+      options: namespaceSubscribeOptionsFromMode(msg.subscribeOptions),
+    });
+    this._namespaceSubscriptions.set(msg.requestId, entry);
+    this._events.push({
+      type: "peerSubscribeNamespaceReceived",
+      requestId: msg.requestId,
+      message: msg,
+    });
+    return true;
+  }
+
+  /**
+   * peer が新規 bidi stream で送信してきた PUBLISH_NAMESPACE を受信する
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
+   *
+   * - peer は publisher、自側は subscriber として登録する
+   * - Request ID の parity と Required Delta を検証する
+   * - AUTHORIZATION_TOKEN パラメータをキャッシュに反映する
+   * - 成功時は peerPublishNamespaceReceived イベントを積む
+   *
+   * 検証で失敗した場合は closeSession イベントを積み、false を返す。
+   */
+  handlePeerPublishNamespace(msg: PublishNamespace): boolean {
+    if (!this.validatePeerRequest(msg.requestId, msg.requiredRequestIdDelta)) {
+      return false;
+    }
+    this.processIncomingAuthTokens(msg.parameters);
+    if (this._state !== "established") {
+      return false;
+    }
+    const entry = createNamespacePublicationEntry({
+      requestId: msg.requestId,
+      myRole: "subscriber",
+      trackNamespace: msg.trackNamespace,
+    });
+    this._namespacePublications.set(msg.requestId, entry);
+    this._events.push({
+      type: "peerPublishNamespaceReceived",
+      requestId: msg.requestId,
+      message: msg,
+    });
+    return true;
+  }
+
+  /**
    * 既存 bidi request stream 上の応答メッセージを処理する
    * draft-ietf-moq-transport-17 Section 9.7, 9.10, 9.12 ほか
    *

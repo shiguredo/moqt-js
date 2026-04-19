@@ -11,7 +11,9 @@ import type {
   Location,
   Parameter,
   Publish,
+  PublishNamespace,
   Subscribe,
+  SubscribeNamespace,
   TrackNamespace,
   TrackStatus,
 } from "../message";
@@ -295,4 +297,14 @@ export type SessionEvent =
       type: "peerTrackStatusReceived";
       requestId: bigint;
       message: TrackStatus;
+    }
+  | {
+      type: "peerSubscribeNamespaceReceived";
+      requestId: bigint;
+      message: SubscribeNamespace;
+    }
+  | {
+      type: "peerPublishNamespaceReceived";
+      requestId: bigint;
+      message: PublishNamespace;
     };

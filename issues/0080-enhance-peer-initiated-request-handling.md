@@ -93,9 +93,18 @@ draft-ietf-moq-transport-17 の §9.4 以降に定義された以下 7 種類。
 - `ConnectCallbacks` に `peerFetch` / `peerTrackStatus` と `PeerFetchRequest` / `PeerTrackStatusRequest` 型を追加した
 - `src/session/peerRequest.prop.ts` に Phase 2 用の PBT を追加した
 
-残課題 (Phase 3 以降):
+### Phase 3 完了 (2026-04-19)
 
-- Phase 3: peer-initiated SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE
+- `SessionMachine` に `handlePeerSubscribeNamespace` / `handlePeerPublishNamespace` を追加した
+  - SUBSCRIBE_NAMESPACE は `NamespaceSubscriptionEntry` を `myRole="publisher"` で登録する
+  - PUBLISH_NAMESPACE は `NamespacePublicationEntry` を `myRole="subscriber"` で登録する
+- `SessionEvent` に `peerSubscribeNamespaceReceived` / `peerPublishNamespaceReceived` を追加した
+- `Session.handleIncomingRequestStream` に `SUBSCRIBE_NAMESPACE` / `PUBLISH_NAMESPACE` 分岐を追加した
+- `ConnectCallbacks` に `peerSubscribeNamespace` / `peerPublishNamespace` と対応する Request 型を追加した
+- `src/session/peerRequest.prop.ts` に Phase 3 用の PBT を追加した
+
+残課題 (Phase 4 以降):
+
 - Phase 4: peer-initiated REQUEST_UPDATE と peer-initiated bidi stream 上の後続メッセージの読み取りループ
 - Phase 5: 応答経路 (`respondSubscribe` / `respondPublish` 等) の実装と examples / Playwright での動作確認
 
