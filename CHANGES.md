@@ -307,6 +307,13 @@
   - Session の PUBLISH_OK 処理から FORWARD の重複パースを撤去し、`publicationView` から値を読む
   - peer REQUEST_UPDATE 受信時に Publisher の `setForwardState` を呼ぶ経路を追加する (以前は FORWARD 変化が Publisher に伝播しなかった)
   - @voluntas
+- [CHANGE] Publisher から local state を完全撤去し SessionMachine を唯一の真実源にする (#0081)
+  - `SessionEvent` に `publicationForwardStateChanged` を追加し、SessionMachine 側で change detection を行う
+  - `PublisherImpl` から `setForwardState` / `markClosed` / `closedOverride` / `lastNotifiedForwardState` を撤去する
+  - `notifyForwardStateChanged(forward)` を追加し、session は SessionMachine のイベント駆動で callback を起動する
+  - `SessionMachine.publicationView` はセッションが closing/closed の場合も state を "closed" にする
+  - session close ループから Publisher への `markClosed` 呼び出しを撤去する
+  - @voluntas
 
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas

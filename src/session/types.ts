@@ -275,6 +275,19 @@ export type SessionEvent =
       parameters: Parameter[];
     }
   | {
+      /**
+       * publisher role subscription の FORWARD 状態が変化した
+       * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+       *
+       * PUBLISH_OK / REQUEST_UPDATE の FORWARD パラメータ反映により
+       * `SubscriptionEntry.forwardState` が前の値から変わった場合にのみ発火する。
+       * 値が同じなら発火しない。
+       */
+      type: "publicationForwardStateChanged";
+      requestId: bigint;
+      forwardState: boolean;
+    }
+  | {
       type: "publishDoneReceived";
       requestId: bigint;
       statusCode: bigint;

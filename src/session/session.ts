@@ -1948,13 +1948,14 @@ export class Session {
       this.peerGoawayTimeoutId = null;
     }
 
-    // Close all publishers, subscribers and fetchers
+    // Close all subscribers and fetchers
     // Note: We use markClosed() instead of handleEnd() because session close
     // is session-level termination (Section 3.4), not track-level PUBLISH_DONE.
     // The end callback is only for PUBLISH_DONE.
-    for (const pub of this.publishers.values()) {
-      pub.markClosed();
-    }
+    //
+    // #0081: Publisher は SessionMachine の state を参照する facade に変更されたため
+    // ここで明示的に closed を伝播する必要はない (SessionMachine が closing/closed に
+    // 遷移すれば publicationView が state="closed" を返す)。
     for (const sub of this.subscribers.values()) {
       sub.markClosed();
     }
@@ -2295,15 +2296,16 @@ export class Session {
         case "namespaceDoneReceived":
         case "publishBlockedReceived":
           break;
-        case "requestUpdateReceived": {
-          // #0081: peer REQUEST_UPDATE が自側 Publisher の FORWARD を更新した場合、
-          // SessionMachine は entry.forwardState を先に反映しているので、view を読んで
-          // Publisher 側 change-detection を起動する。publisher が存在しない (subscriber
-          // 側の subscription など) 場合は何もしない。
-          const publisher = this.publishers.get(event.targetRequestId);
+        case "requestUpdateReceived":
+          // FORWARD 変化は SessionMachine が別イベント `publicationForwardStateChanged`
+          // として積むため、ここでは何もしない。
+          break;
+        case "publicationForwardStateChanged": {
+          // #0081: Publisher の FORWARD 変化通知。SessionMachine が change detection を
+          // 行った結果、前回値と異なるときにのみ発火する。
+          const publisher = this.publishers.get(event.requestId);
           if (publisher !== undefined) {
-            const view = this.protocol?.publicationView(event.targetRequestId);
-            publisher.setForwardState(view?.forwardState ?? true);
+            publisher.notifyForwardStateChanged(event.forwardState);
           }
           break;
         }
@@ -2978,14 +2980,12 @@ export class Session {
             break;
           }
         }
-        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
+        // #0081: Publisher を registry に先に登録してから SessionMachine に渡す。
+        // publicationForwardStateChanged イベントが drainMachineEvents 内で処理される際に
+        // this.publishers から Publisher を取り出せるようにするため。
         this.pendingPublish.delete(requestId);
         this.publishers.set(requestId, pending.impl);
-
-        // #0081: FORWARD は SessionMachine が SubscriptionEntry に反映済み、
-        // view 経由で Publisher に通知する
-        const view = this.protocol!.publicationView(requestId);
-        pending.impl.setForwardState(view?.forwardState ?? true);
+        if (!this.forwardStreamMessageToMachine(requestId, decoded)) return;
         pending.resolve(pending.impl);
 
         // PUBLISH_OK 後の継続メッセージ (PUBLISH_DONE 等) を読み取る

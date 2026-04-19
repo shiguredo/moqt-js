@@ -1120,19 +1120,23 @@ export class SessionMachine {
    * Publisher facade が自側状態を射影するための API。#0081 Phase 1 で導入。
    * - subscriber role の subscription には undefined を返す
    * - 存在しない requestId には undefined を返す
+   * - セッション全体が closing / closed の場合、entry の state に関わらず "closed" を返す
    */
   publicationView(requestId: bigint): PublicationView | undefined {
     const entry = this._subscriptions.get(requestId);
     if (entry === undefined || entry.myRole !== "publisher") {
       return undefined;
     }
+    const sessionClosed = this._state === "closing" || this._state === "closed";
+    const state: "active" | "closed" =
+      sessionClosed || entry.state === "terminated" ? "closed" : "active";
     return {
       requestId: entry.requestId,
       trackNamespace: entry.trackNamespace,
       trackName: entry.trackName,
       trackAlias: entry.trackAlias,
-      state: entry.state === "terminated" ? "closed" : "active",
-      isEstablished: entry.state === "established",
+      state,
+      isEstablished: entry.state === "established" && !sessionClosed,
       forwardState: entry.forwardState === 1,
     };
   }
@@ -1228,8 +1232,13 @@ export class SessionMachine {
     // PUBLISH_OK の FORWARD パラメータが明示されていれば反映する。
     // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
     const forward = extractForwardStateIfPresent(ok.parameters);
-    if (forward !== undefined) {
+    if (forward !== undefined && forward !== entry.forwardState) {
       entry.forwardState = forward;
+      this._events.push({
+        type: "publicationForwardStateChanged",
+        requestId,
+        forwardState: forward === 1,
+      });
     }
   }
 
@@ -1302,8 +1311,16 @@ export class SessionMachine {
     // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
     // FORWARD が省略されている場合は既存の forwardState を維持する。
     const forward = extractForwardStateIfPresent(update.parameters);
-    if (forward !== undefined) {
+    if (forward !== undefined && forward !== entry.forwardState) {
       entry.forwardState = forward;
+      // publisher role の場合のみ forwardState 変化通知を積む
+      if (entry.myRole === "publisher") {
+        this._events.push({
+          type: "publicationForwardStateChanged",
+          requestId: targetRequestId,
+          forwardState: forward === 1,
+        });
+      }
     }
     this._events.push({
       type: "requestUpdateReceived",

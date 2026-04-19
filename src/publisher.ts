@@ -2,9 +2,9 @@
  * MOQT Publisher
  * draft-ietf-moq-transport-17 Section 5.2 (Fetch State Management)
  *
- * #0081 で Publisher は SessionMachine の publicationView を源泉とする facade に変更した。
+ * #0081 で Publisher は SessionMachine の publicationView を源泉とする facade になった。
  * state / forwardState は SessionMachine 側の SubscriptionEntry から都度 derive され、
- * Publisher 自身は change detection 用のキャッシュ以外の状態を持たない。
+ * Publisher 自身は状態 (state, forwardState, closed flag 等) を一切持たない。
  */
 
 import type { PublicationView } from "./session/types";
@@ -93,15 +93,6 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
-  // session close 時に外側から強制 close するためのオーバーライド。
-  // #0081 Phase 3 で SessionMachine 側の entry terminate に寄せる予定。
-  private closedOverride = false;
-
-  // FORWARD 変化通知用キャッシュ。SessionMachine の SubscriptionEntry が
-  // 単一の source of truth で、このフィールドは「前回 callback を起動した値」を覚える
-  // ためだけに保持する。初期値は MOQT spec 上の FORWARD デフォルト (true) に合わせる。
-  private lastNotifiedForwardState = true;
-
   // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
@@ -127,16 +118,9 @@ export class PublisherImpl implements Publisher {
     this.viewAccessor = viewAccessor;
     this.errorCallback = onError;
     this.forwardStateChangeCallback = onForwardStateChange;
-    const initial = viewAccessor();
-    if (initial !== undefined) {
-      this.lastNotifiedForwardState = initial.forwardState;
-    }
   }
 
   get state(): PublisherState {
-    if (this.closedOverride) {
-      return "closed";
-    }
     const view = this.viewAccessor();
     return view === undefined ? "closed" : view.state;
   }
@@ -205,23 +189,23 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * Internal: Set forward state (called by session)
+   * Internal: FORWARD パラメータ変化の通知
    * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
-   * #0081 以降は SessionMachine の SubscriptionEntry が authoritative な forwardState を持つ。
-   * このメソッドは session が PUBLISH_OK / REQUEST_UPDATE を処理し SubscriptionEntry を
-   * 更新した後に呼び出され、callback の change detection を実施する役割のみを担う。
-   * 引数 forward は現在の SubscriptionEntry の forwardState と一致する前提。
+   * SessionMachine が `publicationForwardStateChanged` イベントを発火した際に session
+   * 経由で呼ばれる。このメソッドは単に外部 callback を起動するだけで、change detection
+   * は SessionMachine 側が責務を持つ。
    */
-  setForwardState(forward: boolean): void {
-    if (this.lastNotifiedForwardState !== forward) {
-      this.lastNotifiedForwardState = forward;
-      this.forwardStateChangeCallback?.(forward);
-    }
+  notifyForwardStateChanged(forward: boolean): void {
+    this.forwardStateChangeCallback?.(forward);
   }
 
   /**
    * Signal that publishing is done
+   *
+   * onDoneInternal が session 経由で sendPublishDone を呼び、SessionMachine の
+   * SubscriptionEntry を terminated に遷移させる。その結果 view 経由で state が
+   * "closed" に遷移する。
    */
   async done(): Promise<void> {
     if (this.state === "closed") {
@@ -231,20 +215,5 @@ export class PublisherImpl implements Publisher {
     if (this.onDoneInternal) {
       await this.onDoneInternal();
     }
-
-    // onDoneInternal 内で sendPublishDone が呼ばれ SubscriptionEntry が terminated
-    // になるため、view 経由で state が "closed" に遷移する想定。
-    // 念のためオーバーライドも立てる (既存コード互換、#0081 Phase 3 で整理予定)。
-    this.closedOverride = true;
-  }
-
-  /**
-   * Internal: mark as closed (called by session)
-   *
-   * session 全体の close / GOAWAY タイムアウト時に外側から呼ばれる。
-   * SessionMachine の entry は terminate しないケースでも Publisher を closed として扱う。
-   */
-  markClosed(): void {
-    this.closedOverride = true;
   }
 }

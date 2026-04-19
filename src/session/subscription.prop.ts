@@ -434,6 +434,94 @@ test("PUBLISH_OK の FORWARD=0 が publicationView.forwardState に反映され�
   assert.equal(view.forwardState, false);
 });
 
+test("PUBLISH_OK の FORWARD 変化で publicationForwardStateChanged が積まれる", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(0n),
+      },
+    ],
+  });
+  const event = p.nextEvent();
+  assert.ok(event);
+  assert.equal(event.type, "publicationForwardStateChanged");
+  if (event.type === "publicationForwardStateChanged") {
+    assert.equal(event.requestId, requestId);
+    assert.equal(event.forwardState, false);
+  }
+});
+
+test("PUBLISH_OK で FORWARD が変化しない場合は publicationForwardStateChanged が積まれない", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  // PUBLISH で FORWARD 省略 (デフォルト 1) → PUBLISH_OK で FORWARD=1 (同値)
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(1n),
+      },
+    ],
+  });
+  assert.equal(p.nextEvent(), undefined);
+});
+
+test("peer REQUEST_UPDATE の FORWARD 変化で publicationForwardStateChanged が積まれる", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.PUBLISH_OK,
+    parameters: [],
+  });
+  const updateId = p.nextLocalRequestId();
+  p.handleStreamMessage(requestId, {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: updateId,
+    requiredRequestIdDelta: 0n,
+    parameters: [
+      {
+        type: VersionSpecificParameterType.FORWARD,
+        value: encodeVarint(0n),
+      },
+    ],
+  });
+  // forwardStateChanged と requestUpdateReceived の順に積まれる
+  const e1 = p.nextEvent();
+  assert.ok(e1);
+  assert.equal(e1.type, "publicationForwardStateChanged");
+  if (e1.type === "publicationForwardStateChanged") {
+    assert.equal(e1.requestId, requestId);
+    assert.equal(e1.forwardState, false);
+  }
+  const e2 = p.nextEvent();
+  assert.ok(e2);
+  assert.equal(e2.type, "requestUpdateReceived");
+});
+
+test("publicationView は session が closing に遷移すると state=closed を返す", () => {
+  const p = established();
+  const requestId = p.nextLocalRequestId();
+  p.sendPublish(buildPublish(requestId, 1n));
+  p.nextEvent();
+  assert.equal(p.publicationView(requestId)?.state, "active");
+  p.close(SessionErrorCode.NO_ERROR, "bye");
+  const view = p.publicationView(requestId);
+  assert.ok(view);
+  assert.equal(view.state, "closed");
+  assert.equal(view.isEstablished, false);
+});
+
 test("PUBLISH_OK で FORWARD 省略時は publicationView.forwardState を維持する", () => {
   const p = established();
   const requestId = p.nextLocalRequestId();
