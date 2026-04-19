@@ -1,6 +1,7 @@
 # Subscriber を SessionMachine 駆動に置き換える
 
 Created: 2026-04-19
+Completed: 2026-04-19
 Model: Claude Opus 4.7
 
 ## 概要
@@ -60,6 +61,32 @@ Model: Claude Opus 4.7
 
 - #0081 の成果物 (Publisher を SessionMachine 駆動にする過程で確立する view API パターン) を踏襲する
 - #0081 が close されてから本 issue に着手する
+
+## 解決方法
+
+### Phase 1: SessionMachine に `subscriptionView` を追加
+
+- `src/session/types.ts` に `SubscriptionView` 型を追加した
+- `SubscriptionEntry` に `trackProperties` フィールドを追加した (SUBSCRIBE_OK の Track Properties を保持)
+- `src/session/machine.ts` に `subscriptionView(requestId)` を追加した
+  - `myRole === "subscriber"` の `SubscriptionEntry` のみを返す
+  - session が `closing` / `closed` の場合も `state: "closed"` を返す
+- `handlePeerSubscribeOk` が SUBSCRIBE_OK の LARGEST_OBJECT / trackProperties を entry に反映するよう拡張した
+- `applyRequestUpdateOk(targetRequestId, ok)` を追加し、REQUEST_UPDATE の REQUEST_OK 応答の LARGEST_OBJECT を subscription に反映できるようにした
+- `src/session/subscription.ts` に `extractLargestLocationIfPresent` を追加した
+- `src/session/subscription.prop.ts` に PBT を追加した
+
+### Phase 2: Subscriber を view facade に書き換え
+
+- `SubscriberImpl` コンストラクタに `SubscriptionViewAccessor` を追加し、`trackAlias` 引数を撤去した
+- `state` / `largestLocation` / `trackProperties` / `getTrackAlias` getter は view を都度呼び出して derive する
+- `setTrackAlias` / `setLargestLocation` / `setTrackProperties` / `markClosed` を撤去した
+- `handleEnd` を `notifyEnded` にリネームし state 変更責務を SessionMachine に寄せた
+- `hasTrackAlias()` を追加し trackAlias 未確定時でも安全に分岐できるようにした
+- session の SUBSCRIBE_OK 処理から setter 呼び出しを撤去し、`handleRequestUpdateOk` は `applyRequestUpdateOk` を使うようにした
+- session close ループから Subscriber への `markClosed` 呼び出しを撤去した
+- `src/subscriber.test.ts` / `src/subscriber.prop.ts` を view ベースに書き換えた
+- 503 tests all green、typecheck / build 緑
 
 ## 参考
 

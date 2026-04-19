@@ -1,12 +1,17 @@
 /**
  * MOQT Subscriber
  * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
+ *
+ * #0082 で Subscriber は SessionMachine の subscriptionView を源泉とする facade になった。
+ * state / largestLocation / trackProperties / trackAlias は SessionMachine 側の
+ * SubscriptionEntry から都度 derive され、Subscriber 自身は状態を持たない。
  */
 
+import type { MoqtObject } from "./dataStream";
 import type { Parameter } from "./message/parameter";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
-import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
+import type { SubscriptionView } from "./session/types";
 
 /**
  * Subscriber state
@@ -67,10 +72,18 @@ export interface Subscriber {
 }
 
 /**
+ * SessionMachine から subscriber role の view を取り出すアクセサ
+ *
+ * Subscriber は自身の requestId に紐付く SubscriptionView を都度取り出して状態を確認する。
+ * view が存在しない（forgetSubscription 済み、session closed 等）場合は undefined を返す。
+ */
+export type SubscriptionViewAccessor = () => SubscriptionView | undefined;
+
+/**
  * Internal Subscriber implementation
  */
 export class SubscriberImpl implements Subscriber {
-  private subscriberState: SubscriberState = "active";
+  private readonly viewAccessor: SubscriptionViewAccessor;
   private readonly subscriberNamespace: string[];
   private readonly subscriberTrackName: string;
   private readonly objectCallback: (object: MoqtObject) => void;
@@ -78,19 +91,20 @@ export class SubscriberImpl implements Subscriber {
   private readonly endCallback?: () => void;
   private readonly errorCallback?: (error: Error) => void;
   private readonly requestId: bigint;
-  private trackAlias: bigint;
-  private subscriberLargestLocation: Location | null = null;
-  private subscriberTrackProperties: Property[] = [];
 
   // Internal callbacks for session to use
   onUnsubscribe?: () => Promise<void>;
   onUpdate?: (options: RequestUpdateOptions) => Promise<void>;
 
+  // endCallback の冪等性を保つためのフラグ (session close → subsequent notifyEnded で
+  // 二重発火を避ける)
+  private endCallbackFired = false;
+
   constructor(
     namespace: string[],
     trackName: string,
     requestId: bigint,
-    trackAlias: bigint,
+    viewAccessor: SubscriptionViewAccessor,
     onObject: (object: MoqtObject) => void,
     onDatagram?: (object: MoqtObject) => void,
     onEnd?: () => void,
@@ -99,7 +113,7 @@ export class SubscriberImpl implements Subscriber {
     this.subscriberNamespace = namespace;
     this.subscriberTrackName = trackName;
     this.requestId = requestId;
-    this.trackAlias = trackAlias;
+    this.viewAccessor = viewAccessor;
     this.objectCallback = onObject;
     this.datagramCallback = onDatagram;
     this.endCallback = onEnd;
@@ -107,15 +121,18 @@ export class SubscriberImpl implements Subscriber {
   }
 
   get state(): SubscriberState {
-    return this.subscriberState;
+    const view = this.viewAccessor();
+    return view === undefined ? "closed" : view.state;
   }
 
   get largestLocation(): Location | null {
-    return this.subscriberLargestLocation;
+    const view = this.viewAccessor();
+    return view === undefined ? null : view.largestLocation;
   }
 
   get trackProperties(): ReadonlyArray<Property> {
-    return this.subscriberTrackProperties;
+    const view = this.viewAccessor();
+    return view === undefined ? [] : view.trackProperties;
   }
 
   get namespace(): string[] {
@@ -131,33 +148,19 @@ export class SubscriberImpl implements Subscriber {
   }
 
   getTrackAlias(): bigint {
-    return this.trackAlias;
+    const view = this.viewAccessor();
+    if (view === undefined || view.trackAlias === null) {
+      throw new Error("track alias not yet assigned for subscriber");
+    }
+    return view.trackAlias;
   }
 
   /**
-   * SUBSCRIBE_OK から LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST OBJECT Parameter)
+   * Track Alias が確定しているかどうか
    */
-  setLargestLocation(location: Location): void {
-    this.subscriberLargestLocation = location;
-  }
-
-  /**
-   * SUBSCRIBE_OK から Track Properties を設定
-   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK)
-   */
-  setTrackProperties(properties: Property[]): void {
-    this.subscriberTrackProperties = properties;
-  }
-
-  /**
-   * Set track alias (called when SUBSCRIBE_OK is received)
-   *
-   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
-   * Track Alias is returned by the publisher in SUBSCRIBE_OK.
-   */
-  setTrackAlias(alias: bigint): void {
-    this.trackAlias = alias;
+  hasTrackAlias(): boolean {
+    const view = this.viewAccessor();
+    return view !== undefined && view.trackAlias !== null;
   }
 
   /**
@@ -170,7 +173,7 @@ export class SubscriberImpl implements Subscriber {
    * Group 間の順序はキーフレーム単位なので、順序保証は不要。
    */
   handleObject(object: MoqtObject): void {
-    if (this.subscriberState === "closed") {
+    if (this.state === "closed") {
       return;
     }
     this.objectCallback(object);
@@ -186,7 +189,7 @@ export class SubscriberImpl implements Subscriber {
    * https://github.com/moq-wg/moq-transport/pull/1350
    */
   handleDatagram(object: MoqtObject): void {
-    if (this.subscriberState === "closed") {
+    if (this.state === "closed") {
       return;
     }
     this.datagramCallback?.(object);
@@ -200,7 +203,7 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * Handle track end (from PUBLISH_DONE)
+   * Notify that the track ended (from PUBLISH_DONE)
    *
    * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions):
    * "the publisher terminates a subscription using PUBLISH_DONE"
@@ -208,12 +211,15 @@ export class SubscriberImpl implements Subscriber {
    * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
    * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
    * errorCallback で通知する。
+   *
+   * state 遷移は SessionMachine が担当する (SubscriptionEntry が terminated になる)。
+   * このメソッドは callback の起動だけを担う。
    */
-  handleEnd(statusCode?: bigint, reasonPhrase?: string): void {
-    if (this.subscriberState === "closed") {
+  notifyEnded(statusCode?: bigint, reasonPhrase?: string): void {
+    if (this.endCallbackFired) {
       return;
     }
-    this.subscriberState = "closed";
+    this.endCallbackFired = true;
 
     // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
     // INTERNAL_ERROR (0x0) 等はエラー。TRACK_ENDED (0x2) 等はエラーとみなさない。
@@ -236,27 +242,13 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * Mark as closed (called by session on session close)
-   *
-   * draft-ietf-moq-transport-17 Section 3.4:
-   * "The Transport Session can be terminated at any point."
-   *
-   * Note: endCallback is NOT called here because session close is
-   * session-level termination, not track-level PUBLISH_DONE.
-   * Session close is notified via ConnectCallbacks.close instead.
-   */
-  markClosed(): void {
-    this.subscriberState = "closed";
-  }
-
-  /**
    * サブスクリプションを更新する
    *
    * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE):
    * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
    */
   async update(options?: RequestUpdateOptions): Promise<void> {
-    if (this.subscriberState === "closed") {
+    if (this.state === "closed") {
       throw new Error("Subscriber is closed");
     }
 
@@ -276,14 +268,12 @@ export class SubscriberImpl implements Subscriber {
    * (publisher-initiated termination).
    */
   async unsubscribe(): Promise<void> {
-    if (this.subscriberState === "closed") {
+    if (this.state === "closed") {
       return;
     }
 
     if (this.onUnsubscribe) {
       await this.onUnsubscribe();
     }
-
-    this.subscriberState = "closed";
   }
 }
