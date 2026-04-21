@@ -9,14 +9,20 @@ wt-devtools (devtools の WebTransport DevTools) に、接続前に実行でき�
 
 ## 根拠
 
-### 既存の「API Support」表示との責務分離
+### 静的チェックは接続チェックと別物
 
-現状 `devtools/src/webtransport-devtools/signals.ts:249-262` で構築している `wtApiSupport` ツリー (ConnectionPanel 下部に表示) は、**接続後**に `WebTransport` インスタンスから値を読み取っている。このツリーには 2 種類の情報が混在している。
+既存の `devtools/src/webtransport-devtools/signals.ts:249-262` で構築している `wtApiSupport` ツリー (ConnectionPanel 下部に表示) は、**接続後**に `WebTransport` インスタンスから値を読み取る「接続チェック」である。これはセッションが実際に確立した状態でアクセサが生きているか、ネゴシエート値 (reliability / protocol / draining 等) がどうなっているかを確認するためにあり、削除・変更しない。
 
-- 静的な API 存在確認 (例: `createBidirectionalStream` が関数か)
-- セッションごとにネゴシエートされる実値 (例: `reliability`、`protocol`、`responseHeaders`、`congestionControl`、`draining`)
+今回追加するのは**接続前の静的チェック**で、責務も評価対象も異なる。
 
-静的な API 存在確認はブラウザ実装に依存するだけで、接続の成否やサーバー側の動作と独立している。サーバーへ接続する前に「そもそもこのブラウザで動くのか」を確認できれば、証明書ハッシュの不一致やサーバー側の問題と、ブラウザ側の API 未実装とを切り分けやすくなる。
+| 観点 | 静的チェック (新規) | 接続チェック (既存) |
+| --- | --- | --- |
+| 評価タイミング | ページロード時に 1 回 | `await wt.ready` 後 |
+| 評価対象 | `WebTransport.prototype` 等のグローバル / プロトタイプ | `wt` インスタンス |
+| 依存 | ブラウザ実装のみ | ブラウザ + サーバー + ネゴシエーション結果 |
+| 目的 | 「このブラウザで動くか」の事前判定 | 「このセッションで何が効いているか」の確認 |
+
+両方を併置することで、接続失敗時に「ブラウザ未対応」「証明書ハッシュ不一致」「サーバー側問題」「ネゴシエーション結果」を切り分けやすくなる。
 
 ### DevTools の役割との整合
 
@@ -29,14 +35,14 @@ wt-devtools は WebTransport API の各機能 (bidi / uni / datagram / getStats 
 ## 該当箇所
 
 - `devtools/src/webtransport-devtools/signals.ts`
-  - `wtApiSupport` を接続前の静的チェック専用に再定義するか、別シグナルを追加する
-  - 接続後パネルに残す項目 (reliability / congestionControl / protocol / responseHeaders / draining Promise 状態) は現状どおり残す
-- `devtools/src/webtransport-devtools/components/ConnectionPanel.tsx`
-  - 接続後ブロックから API 存在チェック相当の表示 (`createBidirectionalStream` / `createUnidirectionalStream` / `incomingBidirectionalStreams` / `incomingUnidirectionalStreams` / `datagrams` / `closed` / `ready` / `getStats` など) を除去する
+  - 静的チェック結果を保持するシグナル (仮称 `wtStaticApiSupport`) を新設する
+  - 既存の `wtApiSupport` (接続チェック) は変更しない
 - `devtools/src/webtransport-devtools/components/` に新規コンポーネントを追加
-  - 仮称 `ApiSupportPanel.tsx`
+  - 仮称 `StaticApiSupportPanel.tsx`
 - `devtools/src/webtransport-devtools/App.tsx`
-  - `ConnectionPanel` の上に `ApiSupportPanel` を配置する
+  - `ConnectionPanel` の上に `StaticApiSupportPanel` を配置する
+- `devtools/src/webtransport-devtools/components/ConnectionPanel.tsx`
+  - 変更なし (既存の接続チェック表示はそのまま)
 
 ## 修正方針
 
@@ -83,11 +89,9 @@ wt-devtools は WebTransport API の各機能 (bidi / uni / datagram / getStats 
 - 各項目は「API 名」と「対応状況」の 2 列 (対応/未対応はテキストまたは ASCII 記号で表現。絵文字は CLAUDE.md の方針により利用しない)
 - 既存の `apiSupportValueClass` の配色ルールを踏襲し、未対応は赤、対応は緑
 
-### 既存「API Support」表示の扱い
+### 既存「接続チェック (API Support)」表示の扱い
 
-接続後パネル (`ConnectionPanel.tsx:211-216`) の `wtApiSupport` ツリー表示は削除する。代わりに接続後パネルは以下のランタイム値のみを表示する (既に個別表示している `wtReliability` / `wtCongestionControl` / `wtSupportsReliableOnly` / `wtProtocol` / `wtResponseHeaders` / `wtDrainingState` は現状維持)。
-
-`signals.ts` の `wtApiSupport` シグナルと関連する構築ロジックは削除するか、静的チェック用に再利用する。
+既存の接続チェック (`ConnectionPanel.tsx:211-216` の `wtApiSupport` ツリー) は**変更しない**。静的チェックとは責務が異なるため併置する。
 
 ## 検証
 
