@@ -23,9 +23,6 @@ export type {
   FetchCallbacks,
   FetchOptions,
   TrackStatusResult,
-  NamespaceAnnouncement,
-  NamespaceSubscriptionCallbacks,
-  NamespaceSubscription,
   MoqtObject,
 } from "./session";
 

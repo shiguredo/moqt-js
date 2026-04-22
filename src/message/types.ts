@@ -255,32 +255,6 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
 }
 
 /**
- * Namespace Subscribe Mode (Section 9.20 SUBSCRIBE_NAMESPACE, Subscribe Options)
- *
- * draft-ietf-moq-transport-17:
- * SUBSCRIBE_NAMESPACE の Subscribe Options フィールドで使用される。
- * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) のいずれかを指定する。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
- */
-export const NamespaceSubscribeMode = {
-  /**
-   * PUBLISH のみを要求する
-   */
-  PUBLISH: 0x00,
-  /**
-   * NAMESPACE のみを要求する
-   */
-  NAMESPACE: 0x01,
-  /**
-   * PUBLISH と NAMESPACE の両方を要求する
-   */
-  BOTH: 0x02,
-} as const;
-
-export type NamespaceSubscribeMode =
-  (typeof NamespaceSubscribeMode)[keyof typeof NamespaceSubscribeMode];
-
-/**
  * Location (Group ID, Object ID)
  */
 export interface Location {

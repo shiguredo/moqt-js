@@ -184,45 +184,8 @@ export interface FetchEntry {
   endOfTrack: boolean;
 }
 
-// ─── Namespace 系 / TRACK_STATUS 状態管理 ───────────────
-// draft-ietf-moq-transport-17 Section 6, 9.16-9.21
-
-/**
- * PUBLISH_NAMESPACE の状態
- * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
- */
-export type NamespacePublicationState = "pending" | "established" | "terminated";
-
-export interface NamespacePublicationEntry {
-  requestId: bigint;
-  myRole: TrackRole;
-  trackNamespace: TrackNamespace;
-  state: NamespacePublicationState;
-}
-
-/**
- * SUBSCRIBE_NAMESPACE の状態
- * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE)
- */
-export type NamespaceSubscriptionState = "pending" | "established" | "terminated";
-
-/**
- * SUBSCRIBE_NAMESPACE の Subscribe Options
- * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE)
- *
- * - publishOnly:   0x00 PUBLISH のみ
- * - namespaceOnly: 0x01 NAMESPACE のみ
- * - both:          0x02 両方
- */
-export type NamespaceSubscribeOptions = "publishOnly" | "namespaceOnly" | "both";
-
-export interface NamespaceSubscriptionEntry {
-  requestId: bigint;
-  myRole: TrackRole;
-  prefix: TrackNamespace;
-  options: NamespaceSubscribeOptions;
-  state: NamespaceSubscriptionState;
-}
+// ─── TRACK_STATUS 状態管理 ──────────────────────────────
+// draft-ietf-moq-transport-17 Section 9.16
 
 /**
  * TRACK_STATUS の状態
@@ -302,22 +265,6 @@ export type SessionEvent =
       statusCode: bigint;
       streamCount: bigint;
       reasonPhrase: string;
-    }
-  | {
-      type: "namespaceReceived";
-      requestId: bigint;
-      suffix: TrackNamespace;
-    }
-  | {
-      type: "namespaceDoneReceived";
-      requestId: bigint;
-      suffix: TrackNamespace;
-    }
-  | {
-      type: "publishBlockedReceived";
-      requestId: bigint;
-      suffix: TrackNamespace;
-      trackName: Uint8Array;
     }
   | {
       type: "goawayReceived";

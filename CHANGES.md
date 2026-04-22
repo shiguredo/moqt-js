@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] Namespace announce/discovery API (publishNamespace / subscribeNamespace) を削除する (#0093)
+  - `Session.publishNamespace` / `subscribeNamespace` 公開 API と関連型 `NamespaceAnnouncement` / `NamespaceSubscription` / `NamespaceSubscriptionCallbacks` / `NamespacePublicationCallbacks` / `NamespacePublication` を削除する
+  - `SessionMachine.sendPublishNamespace` / `sendSubscribeNamespace` / `handlePeerNamespace` / `handlePeerNamespaceDone` / `handlePeerPublishBlocked` / `handlePeerRequestOk` を削除する
+  - `src/message/namespace.ts` と `src/session/namespace.ts` を削除する
+  - `SessionEvent` の `namespaceReceived` / `namespaceDoneReceived` / `publishBlockedReceived` を削除する
+  - @voluntas
 - [CHANGE] peer-initiated request (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE) の受信機構を削除する (#0092)
   - `Session.acceptPeer*` / `rejectPeerRequest` 公開 API と `ConnectCallbacks.peer*` コールバックを削除する
   - `SessionMachine.handlePeer*` / `acceptPeer*` / `rejectPeerRequest` / `validatePeerRequest` を削除する

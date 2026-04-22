@@ -21,13 +21,9 @@ import {
   type Goaway,
   MessageParameterType,
   MessageType,
-  type Namespace,
-  type NamespaceDone,
   type Parameter,
   type Publish,
-  type PublishBlocked,
   type PublishDone,
-  type PublishNamespace,
   type PublishOk,
   type RequestError,
   type RequestOk,
@@ -35,7 +31,6 @@ import {
   type Setup,
   SetupOptionType,
   type Subscribe,
-  type SubscribeNamespace,
   type SubscribeOk,
   type TrackStatus,
 } from "../message";
@@ -44,12 +39,6 @@ import type { ControlMessage } from "../message/control";
 import { RequestIdGenerator } from "./requestId";
 import { AuthTokenCache } from "./authTokenCache";
 import { createFetchEntry } from "./fetch";
-import {
-  createNamespacePublicationEntry,
-  createNamespaceSubscriptionEntry,
-  createTrackStatusEntry,
-  namespaceSubscribeOptionsFromMode,
-} from "./namespace";
 import {
   createSubscriptionEntry,
   extractForwardState,
@@ -60,8 +49,6 @@ import {
 import {
   MAX_NEW_SESSION_URI_LENGTH,
   type FetchEntry,
-  type NamespacePublicationEntry,
-  type NamespaceSubscriptionEntry,
   type PeerGoawayInfo,
   type PublicationView,
   type SessionEvent,
@@ -85,8 +72,6 @@ export class SessionMachine {
   private readonly _myPublisherAliases: Map<bigint, bigint> = new Map();
   private readonly _peerPublisherAliases: Map<bigint, bigint> = new Map();
   private readonly _fetches: Map<bigint, FetchEntry> = new Map();
-  private readonly _namespacePublications: Map<bigint, NamespacePublicationEntry> = new Map();
-  private readonly _namespaceSubscriptions: Map<bigint, NamespaceSubscriptionEntry> = new Map();
   private readonly _trackStatusRequests: Map<bigint, TrackStatusEntry> = new Map();
   private _localAuthTokenCache: AuthTokenCache;
   private _peerAuthTokenCache: AuthTokenCache = new AuthTokenCache(0n);
@@ -441,15 +426,6 @@ export class SessionMachine {
       case MessageType.FETCH_OK:
         this.handlePeerFetchOk(requestId, msg);
         return;
-      case MessageType.NAMESPACE:
-        this.handlePeerNamespace(requestId, msg);
-        return;
-      case MessageType.NAMESPACE_DONE:
-        this.handlePeerNamespaceDone(requestId, msg);
-        return;
-      case MessageType.PUBLISH_BLOCKED:
-        this.handlePeerPublishBlocked(requestId, msg);
-        return;
       case MessageType.REQUEST_OK:
         this.handlePeerRequestOk(requestId, msg);
         return;
@@ -758,16 +734,6 @@ export class SessionMachine {
       fetch.state = "terminated";
       return;
     }
-    const pub = this._namespacePublications.get(requestId);
-    if (pub !== undefined) {
-      pub.state = "terminated";
-      return;
-    }
-    const sub = this._namespaceSubscriptions.get(requestId);
-    if (sub !== undefined) {
-      sub.state = "terminated";
-      return;
-    }
     const ts = this._trackStatusRequests.get(requestId);
     if (ts !== undefined) {
       ts.state = "failed";
@@ -779,63 +745,6 @@ export class SessionMachine {
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
     );
-  }
-
-  /**
-   * PUBLISH_NAMESPACE を送信する (自側が publisher)
-   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
-   *
-   * pending 状態の NamespacePublicationEntry を登録し、sendRequest イベントを積む。
-   */
-  sendPublishNamespace(msg: PublishNamespace): void {
-    this.requireEstablished();
-    this.processOutgoingAuthTokens(msg.parameters);
-    if (this._namespacePublications.has(msg.requestId)) {
-      throw new SessionError(
-        "duplicate request id for PUBLISH_NAMESPACE",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      );
-    }
-    const entry = createNamespacePublicationEntry({
-      requestId: msg.requestId,
-      myRole: "publisher",
-      trackNamespace: msg.trackNamespace,
-    });
-    this._namespacePublications.set(msg.requestId, entry);
-    this._events.push({
-      type: "sendRequest",
-      requestId: msg.requestId,
-      message: msg,
-    });
-  }
-
-  /**
-   * SUBSCRIBE_NAMESPACE を送信する (自側が subscriber)
-   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE)
-   *
-   * pending 状態の NamespaceSubscriptionEntry を登録し、sendRequest イベントを積む。
-   */
-  sendSubscribeNamespace(msg: SubscribeNamespace): void {
-    this.requireEstablished();
-    this.processOutgoingAuthTokens(msg.parameters);
-    if (this._namespaceSubscriptions.has(msg.requestId)) {
-      throw new SessionError(
-        "duplicate request id for SUBSCRIBE_NAMESPACE",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      );
-    }
-    const entry = createNamespaceSubscriptionEntry({
-      requestId: msg.requestId,
-      myRole: "subscriber",
-      prefix: msg.trackNamespacePrefix,
-      options: namespaceSubscribeOptionsFromMode(msg.subscribeOptions),
-    });
-    this._namespaceSubscriptions.set(msg.requestId, entry);
-    this._events.push({
-      type: "sendRequest",
-      requestId: msg.requestId,
-      message: msg,
-    });
   }
 
   /**
@@ -853,12 +762,13 @@ export class SessionMachine {
         SessionErrorCode.PROTOCOL_VIOLATION,
       );
     }
-    const entry = createTrackStatusEntry({
+    const entry: TrackStatusEntry = {
       requestId: msg.requestId,
       myRole: "subscriber",
       trackNamespace: msg.trackNamespace,
       trackName: msg.trackName,
-    });
+      state: "pending",
+    };
     this._trackStatusRequests.set(msg.requestId, entry);
     this._events.push({
       type: "sendRequest",
@@ -867,88 +777,12 @@ export class SessionMachine {
     });
   }
 
-  /** 指定 Request ID の NamespacePublicationEntry を取得する */
-  namespacePublication(requestId: bigint): NamespacePublicationEntry | undefined {
-    return this._namespacePublications.get(requestId);
-  }
-
-  /** 指定 Request ID の NamespaceSubscriptionEntry を取得する */
-  namespaceSubscription(requestId: bigint): NamespaceSubscriptionEntry | undefined {
-    return this._namespaceSubscriptions.get(requestId);
-  }
-
   /** 指定 Request ID の TrackStatusEntry を取得する */
   trackStatusRequest(requestId: bigint): TrackStatusEntry | undefined {
     return this._trackStatusRequests.get(requestId);
   }
 
-  private handlePeerNamespace(requestId: bigint, msg: Namespace): void {
-    if (!this._namespaceSubscriptions.has(requestId)) {
-      this.fail(
-        new SessionError(
-          "NAMESPACE received for unknown namespace subscription",
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
-      return;
-    }
-    this._events.push({
-      type: "namespaceReceived",
-      requestId,
-      suffix: msg.trackNamespaceSuffix,
-    });
-  }
-
-  private handlePeerNamespaceDone(requestId: bigint, msg: NamespaceDone): void {
-    if (!this._namespaceSubscriptions.has(requestId)) {
-      this.fail(
-        new SessionError(
-          "NAMESPACE_DONE received for unknown namespace subscription",
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
-      return;
-    }
-    this._events.push({
-      type: "namespaceDoneReceived",
-      requestId,
-      suffix: msg.trackNamespaceSuffix,
-    });
-  }
-
-  private handlePeerPublishBlocked(requestId: bigint, msg: PublishBlocked): void {
-    if (!this._namespaceSubscriptions.has(requestId)) {
-      this.fail(
-        new SessionError(
-          "PUBLISH_BLOCKED received for unknown namespace subscription",
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
-      return;
-    }
-    this._events.push({
-      type: "publishBlockedReceived",
-      requestId,
-      suffix: msg.trackNamespaceSuffix,
-      trackName: msg.trackName,
-    });
-  }
-
   private handlePeerRequestOk(requestId: bigint, ok: RequestOk): void {
-    const pub = this._namespacePublications.get(requestId);
-    if (pub !== undefined) {
-      if (pub.state === "pending") {
-        pub.state = "established";
-      }
-      return;
-    }
-    const sub = this._namespaceSubscriptions.get(requestId);
-    if (sub !== undefined) {
-      if (sub.state === "pending") {
-        sub.state = "established";
-      }
-      return;
-    }
     const ts = this._trackStatusRequests.get(requestId);
     if (ts !== undefined) {
       if (ts.state === "pending") {

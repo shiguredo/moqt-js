@@ -10,7 +10,6 @@ export {
   type Location,
   MessageParameterType,
   MessageType,
-  NamespaceSubscribeMode,
   ObjectStatus,
   PublishDoneStatusCode,
   isPublishDoneErrorStatus,
@@ -119,25 +118,6 @@ export {
   decodeTrackStatusPayload,
   encodeTrackStatusPayload,
 } from "./trackstatus";
-
-// Namespace Messages
-export {
-  type Namespace,
-  type NamespaceDone,
-  type PublishNamespace,
-  type PublishBlocked,
-  type SubscribeNamespace,
-  decodeNamespaceDonePayload,
-  decodeNamespacePayload,
-  decodePublishBlockedPayload,
-  decodePublishNamespacePayload,
-  decodeSubscribeNamespacePayload,
-  encodeNamespaceDonePayload,
-  encodeNamespacePayload,
-  encodePublishBlockedPayload,
-  encodePublishNamespacePayload,
-  encodeSubscribeNamespacePayload,
-} from "./namespace";
 
 // Control Message Union
 export type { ControlMessage } from "./control";
