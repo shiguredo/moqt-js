@@ -24,7 +24,7 @@ import { encodeVarint } from "../varint";
 import { SessionMachine } from "./machine";
 
 function established(): SessionMachine {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent(); // sendControl(SETUP)
   p.handleControl(createSetup()); // peer SETUP
   p.nextEvent(); // established
@@ -229,7 +229,7 @@ test("Track Alias の二重採番は DUPLICATE_TRACK_ALIAS で throw する", ()
 });
 
 test("established 前の sendSubscribe は PROTOCOL_VIOLATION", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent(); // sendControl(SETUP)
   // peer SETUP 未受信のため state は "setup"
   assert.throws(() => {

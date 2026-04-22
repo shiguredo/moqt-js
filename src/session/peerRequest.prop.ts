@@ -27,7 +27,7 @@ import { SessionMachine } from "./machine";
 // client として established まで進める。peer は server なので
 // peer が採番する Request ID は奇数 (1, 3, 5, ...) となる。
 function established(): SessionMachine {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent(); // sendControl(SETUP)
   p.handleControl(createSetup()); // peer SETUP
   p.nextEvent(); // established
@@ -244,7 +244,7 @@ test("peer PUBLISH の Track Alias は自側 SUBSCRIBE_OK と空間を共有す�
 });
 
 test("SETUP 前の handlePeerSubscribe は PROTOCOL_VIOLATION でクローズ", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent(); // sendControl(SETUP)
   // peer SETUP 未受信、state は "setup"
   assert.equal(p.handlePeerSubscribe(buildPeerSubscribe(1n)), false);
@@ -257,7 +257,7 @@ test("SETUP 前の handlePeerSubscribe は PROTOCOL_VIOLATION でクローズ", 
 });
 
 test("SETUP 前の handlePeerPublish は PROTOCOL_VIOLATION でクローズ", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerPublish(buildPeerPublish(1n, 1n)), false);
   const event = p.nextEvent();
@@ -397,7 +397,7 @@ test("peer FETCH の Request ID 重複は INVALID_REQUEST_ID でクローズ", (
 });
 
 test("SETUP 前の handlePeerFetch は PROTOCOL_VIOLATION でクローズ", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerFetch(buildPeerStandaloneFetch(1n)), false);
   const event = p.nextEvent();
@@ -448,7 +448,7 @@ test("peer TRACK_STATUS の偶数 Request ID は INVALID_REQUEST_ID でクロー
 });
 
 test("SETUP 前の handlePeerTrackStatus は PROTOCOL_VIOLATION でクローズ", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerTrackStatus(buildPeerTrackStatus(1n)), false);
   const event = p.nextEvent();
@@ -568,7 +568,7 @@ test("peer PUBLISH_NAMESPACE の偶数 Request ID は INVALID_REQUEST_ID でク�
 });
 
 test("SETUP 前の handlePeerSubscribeNamespace は PROTOCOL_VIOLATION でクローズ", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerSubscribeNamespace(buildPeerSubscribeNamespace(1n)), false);
   const event = p.nextEvent();
@@ -580,7 +580,7 @@ test("SETUP 前の handlePeerSubscribeNamespace は PROTOCOL_VIOLATION でクロ
 });
 
 test("SETUP 前の handlePeerPublishNamespace は PROTOCOL_VIOLATION でクローズ", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   assert.equal(p.handlePeerPublishNamespace(buildPeerPublishNamespace(1n)), false);
   const event = p.nextEvent();

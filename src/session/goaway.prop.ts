@@ -9,7 +9,7 @@ import { createSetup, type Goaway, MessageType } from "../message";
 import { SessionMachine } from "./machine";
 
 function established(): SessionMachine {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();
@@ -52,7 +52,7 @@ test("Client の sendGoaway で non-zero URI は PROTOCOL_VIOLATION", () => {
 });
 
 test("8192 バイト超過の URI は sendGoaway で PROTOCOL_VIOLATION", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();

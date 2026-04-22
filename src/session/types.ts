@@ -21,12 +21,6 @@ import type { ControlMessage } from "../message/control";
 import type { Property } from "../properties";
 
 /**
- * 下位トランスポート種別
- * draft-ietf-moq-transport-17 Section 3.1 (Endpoints)
- */
-export type Transport = "quic" | "webTransport";
-
-/**
  * セッション状態
  * draft-ietf-moq-transport-17 Section 3.3 (Session Establishment)
  *

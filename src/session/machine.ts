@@ -69,7 +69,6 @@ import {
   type SessionState,
   type SubscriptionEntry,
   type SubscriptionView,
-  type Transport,
   type TrackStatusEntry,
 } from "./types";
 
@@ -77,7 +76,6 @@ import {
  * MOQT Session プロトコル状態機械
  */
 export class SessionMachine {
-  private readonly _transport: Transport;
   private _state: SessionState;
   private readonly _localSetup: Setup;
   private _peerSetup: Setup | null;
@@ -100,8 +98,7 @@ export class SessionMachine {
   private _localGoawayDeadlineMs: number | null = null;
   private _localGoawayPendingTimeoutMs: number | null = null;
 
-  private constructor(transport: Transport, setup: Setup) {
-    this._transport = transport;
+  private constructor(setup: Setup) {
     this._state = "setup";
     this._localSetup = setup;
     this._peerSetup = null;
@@ -117,18 +114,13 @@ export class SessionMachine {
    *
    * 作成時点で自側 SETUP の sendControl イベントを積み、"setup" 状態にする。
    */
-  static createClient(transport: Transport, setup: Setup): SessionMachine {
-    return new SessionMachine(transport, setup);
+  static createClient(setup: Setup): SessionMachine {
+    return new SessionMachine(setup);
   }
 
   /** 現在のセッション状態 */
   get state(): SessionState {
     return this._state;
-  }
-
-  /** 下位トランスポート種別 */
-  get transport(): Transport {
-    return this._transport;
   }
 
   /** 自側 SETUP (診断用、改変禁止) */

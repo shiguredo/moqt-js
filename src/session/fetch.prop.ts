@@ -20,7 +20,7 @@ import {
 import { SessionMachine } from "./machine";
 
 function established(): SessionMachine {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();
@@ -166,7 +166,7 @@ test("forgetFetch は terminated のみ除去する", () => {
 });
 
 test("established 前の sendFetch は PROTOCOL_VIOLATION", () => {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   assert.throws(() => {
     p.sendFetch(buildStandaloneFetch(0n, { group: 0n, object: 0n }, { group: 1n, object: 0n }));

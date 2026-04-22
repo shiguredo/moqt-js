@@ -43,7 +43,7 @@ function setupWithCacheSize(size: bigint) {
 function establishedWithCacheSize(cacheSize = 1024n): SessionMachine {
   const local = setupWithCacheSize(cacheSize);
   const peer = setupWithCacheSize(cacheSize);
-  const p = SessionMachine.createClient("webTransport", local);
+  const p = SessionMachine.createClient(local);
   p.nextEvent();
   p.handleControl(peer);
   p.nextEvent();

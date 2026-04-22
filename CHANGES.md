@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] SessionMachine から `Transport` 型と `_transport` フィールドを削除し webTransport 固定にする (#0091)
+  - `src/session/types.ts` から `Transport` 型を削除する
+  - `SessionMachine.createClient` のシグネチャを `(setup)` に変更する
+  - `_transport` フィールドと `transport` getter を削除する
+  - 全 `*.prop.ts` の `createClient` 呼び出しから `"webTransport"` リテラルを除去する
+  - @voluntas
 - [CHANGE] SessionMachine から `Role` 型と `_role` フィールドを削除し client 固定にする (#0090)
   - `src/session/types.ts` から `Role` 型を削除する
   - `RequestIdGenerator` / `RequestIdTracker` のコンストラクタから role 引数を削除する

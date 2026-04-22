@@ -13,15 +13,11 @@ import { SessionMachine } from "./machine";
 // Setup arbitrary (Phase 2 時点では中身の違いは本質的ではないのでデフォルト値で十分)
 const setupArb: fc.Arbitrary<Setup> = fc.constant(createSetup());
 
-// Transport arbitrary (WebTransport のみ)
-const transportArb = fc.constant("webTransport" as const);
-
 test("createClient 直後は setup 状態になる", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, (transport, setup) => {
-      const p = SessionMachine.createClient(transport, setup);
+    fc.property(setupArb, (setup) => {
+      const p = SessionMachine.createClient(setup);
       assert.equal(p.state, "setup");
-      assert.equal(p.transport, transport);
       assert.strictEqual(p.localSetup, setup);
       assert.equal(p.peerSetup, null);
     }),
@@ -30,8 +26,8 @@ test("createClient 直後は setup 状態になる", () => {
 
 test("createClient 直後は sendControl(SETUP) イベントが 1 件だけ積まれる", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, (transport, setup) => {
-      const p = SessionMachine.createClient(transport, setup);
+    fc.property(setupArb, (setup) => {
+      const p = SessionMachine.createClient(setup);
       const first = p.nextEvent();
       assert.ok(first !== undefined);
       assert.equal(first.type, "sendControl");
@@ -46,8 +42,8 @@ test("createClient 直後は sendControl(SETUP) イベントが 1 件だけ積�
 
 test("peer SETUP を受信すると established 状態に遷移する", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, setupArb, (transport, localSetup, peerSetup) => {
-      const p = SessionMachine.createClient(transport, localSetup);
+    fc.property(setupArb, setupArb, (localSetup, peerSetup) => {
+      const p = SessionMachine.createClient(localSetup);
       // 自側 SETUP イベントを消費
       p.nextEvent();
       // peer SETUP を受信
@@ -63,8 +59,8 @@ test("peer SETUP を受信すると established 状態に遷移する", () => {
 
 test("重複した peer SETUP を受信すると closeSession イベントが出る", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, setupArb, (transport, localSetup, peerSetup) => {
-      const p = SessionMachine.createClient(transport, localSetup);
+    fc.property(setupArb, setupArb, (localSetup, peerSetup) => {
+      const p = SessionMachine.createClient(localSetup);
       p.nextEvent();
       p.handleControl(peerSetup);
       p.nextEvent(); // established
@@ -85,8 +81,8 @@ test("重複した peer SETUP を受信すると closeSession イベントが出
 
 test("制御ストリームに SETUP 以外を流すと closeSession が出る", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, (transport, setup) => {
-      const p = SessionMachine.createClient(transport, setup);
+    fc.property(setupArb, (setup) => {
+      const p = SessionMachine.createClient(setup);
       p.nextEvent();
       p.handleControl(setup);
       p.nextEvent(); // established
@@ -106,7 +102,6 @@ test("制御ストリームに SETUP 以外を流すと closeSession が出る",
 test("close を呼ぶと closing に遷移し closeSession イベントが出る", () => {
   fc.assert(
     fc.property(
-      transportArb,
       setupArb,
       fc.constantFrom(
         SessionErrorCode.NO_ERROR,
@@ -114,8 +109,8 @@ test("close を呼ぶと closing に遷移し closeSession イベントが出る
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
       fc.string({ minLength: 0, maxLength: 64 }),
-      (transport, setup, code, reason) => {
-        const p = SessionMachine.createClient(transport, setup);
+      (setup, code, reason) => {
+        const p = SessionMachine.createClient(setup);
         p.close(code, reason);
         assert.equal(p.state, "closing");
         // sendControl(SETUP) → closeSession の順
@@ -137,8 +132,8 @@ test("close を呼ぶと closing に遷移し closeSession イベントが出る
 
 test("closed 状態では handleControl が no-op になる", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, (transport, setup) => {
-      const p = SessionMachine.createClient(transport, setup);
+    fc.property(setupArb, (setup) => {
+      const p = SessionMachine.createClient(setup);
       p.close(SessionErrorCode.NO_ERROR, "bye");
       while (p.nextEvent() !== undefined) {
         // drain
@@ -154,8 +149,8 @@ test("closed 状態では handleControl が no-op になる", () => {
 
 test("2 回目の close 呼び出しは no-op", () => {
   fc.assert(
-    fc.property(transportArb, setupArb, (transport, setup) => {
-      const p = SessionMachine.createClient(transport, setup);
+    fc.property(setupArb, (setup) => {
+      const p = SessionMachine.createClient(setup);
       p.close(SessionErrorCode.NO_ERROR, "bye");
       // 2 回目の close は closing 状態なので何も起きない
       p.close(SessionErrorCode.INTERNAL_ERROR, "again");

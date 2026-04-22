@@ -23,7 +23,7 @@ import {
 import { SessionMachine } from "./machine";
 
 function established(): SessionMachine {
-  const p = SessionMachine.createClient("webTransport", createSetup());
+  const p = SessionMachine.createClient(createSetup());
   p.nextEvent();
   p.handleControl(createSetup());
   p.nextEvent();

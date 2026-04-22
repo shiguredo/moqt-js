@@ -923,7 +923,7 @@ export class Session {
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
     // sans-I/O な SessionMachine に SETUP 送信を委譲する
-    this.protocol = SessionMachine.createClient("webTransport", createSetup());
+    this.protocol = SessionMachine.createClient(createSetup());
     const sendCtrlEvent = this.protocol.nextEvent();
     if (sendCtrlEvent === undefined || sendCtrlEvent.type !== "sendControl") {
       throw new SessionError(
