@@ -21,11 +21,11 @@ draft-ietf-webtrans-http2 ( https://datatracker.ietf.org/doc/draft-ietf-webtrans
 
 このため `reliability` の値は実質「どちらの WebTransport ドラフトで接続しているか」の指標となる。
 
-| reliability 値         | WebTransport ドラフト          | 表示   |
-| ---------------------- | ------------------------------ | ------ |
-| `"reliable-only"`      | draft-ietf-webtrans-http2      | HTTP/2 |
-| `"supports-unreliable"` | draft-ietf-webtrans-http3      | HTTP/3 |
-| `"pending"`            | 未確立                         | --     |
+| reliability 値          | WebTransport ドラフト     | 表示   |
+| ----------------------- | ------------------------- | ------ |
+| `"reliable-only"`       | draft-ietf-webtrans-http2 | HTTP/2 |
+| `"supports-unreliable"` | draft-ietf-webtrans-http3 | HTTP/3 |
+| `"pending"`             | 未確立                    | --     |
 
 ### MOQT DevTools で HTTP バージョンを見えるようにしたい動機
 
