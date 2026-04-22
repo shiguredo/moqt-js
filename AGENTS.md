@@ -110,27 +110,18 @@
 - 変更内容の説明は日本語で書くこと
 - リリース時は `## develop` を `## バージョン` に変更し、`**リリース日**: YYYY-MM-DD` を記載すること
 
-## テスト
+## moqt-js
+
+- moqt-js は MOQT PUblisher/Subscriber のみの対応で Server/Relay のコードを含まないこと
+- 仕様は refs/ 以下に RFC ドキュメントがあるのでそれを確認すること
+
+### テスト
 
 - Vitest の Chai API である test / assert を利用すること
 - Jest API は利用しないこと
   - it / describe / expect は利用しないこと
 - モックやスタブは利用しないこと
 
-### fast-check
+#### fast-check
 
 - `*.prop.ts` というファイル名にすること
-
-## GitHub Actions の URL
-
-- まずは gh コマンドで確認すること
-
-## DevTools
-
-MCP で Chrome DevTools を利用する場合は WebTransport Draft-07 を有効にするには `--enable-features=EnableWebTransportDraft07` を付与して起動すること。
-
-また必ず MOQT リレーサーバー証明書のハッシュを要求すること。
-
-## RFC
-
-- 仕様がわからなくなったら refs/ 以下に RFC ドキュメントがあるのでそれを確認し準拠すること
