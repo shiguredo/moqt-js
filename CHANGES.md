@@ -191,6 +191,10 @@
 - [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
   - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
   - @voluntas
+- [FIX] Joining Fetch が SessionMachine に登録されず FETCH_OK 受信で PROTOCOL_VIOLATION になる問題を修正する (#0097)
+  - `Session.sendJoiningFetch` に `this.protocol.sendFetch(fetchMsg)` と `this.protocol.nextEvent()` を追加し、他の送信経路と同じく SessionMachine に FETCH 送信を記録するようにする
+  - `src/session/fetch.prop.ts` に `sendFetch(RELATIVE_JOINING)` / `sendFetch(ABSOLUTE_JOINING)` 後の FETCH_OK が `established` に遷移し `closeSession` イベントを積まないことを検証するテストを追加する
+  - @voluntas
 - [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
   - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
   - @voluntas

@@ -48,12 +48,16 @@ function buildStandaloneFetch(requestId: bigint, start: Location, end: Location)
   };
 }
 
-function buildJoiningFetch(requestId: bigint, joiningRequestId: bigint): Fetch {
+function buildJoiningFetch(
+  requestId: bigint,
+  joiningRequestId: bigint,
+  fetchType: FetchType = FetchType.RELATIVE_JOINING,
+): Fetch {
   return {
     type: MessageType.FETCH,
     requestId,
     requiredRequestIdDelta: 0n,
-    fetchType: FetchType.RELATIVE_JOINING,
+    fetchType,
     joining: {
       joiningRequestId,
       joiningStart: 0n,
@@ -185,6 +189,52 @@ test("重複 requestId の sendFetch は PROTOCOL_VIOLATION で throw", () => {
       buildStandaloneFetch(requestId, { group: 0n, object: 0n }, { group: 2n, object: 0n }),
     );
   });
+});
+
+// issue 0097: Session.sendJoiningFetch が SessionMachine に送信登録を行わないと
+// FETCH_OK 受信時に unknown request id と判定されてセッションが PROTOCOL_VIOLATION で閉じる。
+// 登録済みの joining FETCH に対しては FETCH_OK を受信しても closeSession が積まれず
+// established に遷移することを検証する。
+test("sendFetch(RELATIVE_JOINING) 後の FETCH_OK は established に遷移し closeSession を積まない", () => {
+  const p = established();
+  const subscribeRequestId = p.nextLocalRequestId();
+  const fetchRequestId = p.nextLocalRequestId();
+  p.sendFetch(buildJoiningFetch(fetchRequestId, subscribeRequestId, FetchType.RELATIVE_JOINING));
+  const sendEvent = p.nextEvent();
+  assert.equal(sendEvent?.type, "sendRequest");
+  const ok: FetchOk = {
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 10n, object: 5n },
+    parameters: [],
+    trackProperties: [],
+  };
+  p.handleStreamMessage(fetchRequestId, ok);
+  const entry = p.fetch(fetchRequestId);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  assert.equal(p.nextEvent(), undefined);
+});
+
+test("sendFetch(ABSOLUTE_JOINING) 後の FETCH_OK は established に遷移し closeSession を積まない", () => {
+  const p = established();
+  const subscribeRequestId = p.nextLocalRequestId();
+  const fetchRequestId = p.nextLocalRequestId();
+  p.sendFetch(buildJoiningFetch(fetchRequestId, subscribeRequestId, FetchType.ABSOLUTE_JOINING));
+  const sendEvent = p.nextEvent();
+  assert.equal(sendEvent?.type, "sendRequest");
+  const ok: FetchOk = {
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 0n, object: 3n },
+    parameters: [],
+    trackProperties: [],
+  };
+  p.handleStreamMessage(fetchRequestId, ok);
+  const entry = p.fetch(fetchRequestId);
+  assert.ok(entry);
+  assert.equal(entry.state, "established");
+  assert.equal(p.nextEvent(), undefined);
 });
 
 test("未登録 request_id への FETCH_OK は closeSession イベントを積む", () => {

@@ -2069,7 +2069,7 @@ export class Session {
     const fetchType =
       options.type === "relative" ? FetchType.RELATIVE_JOINING : FetchType.ABSOLUTE_JOINING;
 
-    const fetchMsg = {
+    const fetchMsg: Fetch = {
       type: MessageType.FETCH,
       requestId,
       // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
@@ -2082,6 +2082,11 @@ export class Session {
       },
       parameters: [],
     };
+
+    // sans-I/O SessionMachine に FETCH 送信を記録する
+    // 記録しないと FETCH_OK 受信時に unknown request id と判定されセッションが PROTOCOL_VIOLATION で閉じる
+    this.protocol!.sendFetch(fetchMsg);
+    this.protocol!.nextEvent();
 
     const payload = encodeFetchPayload(fetchMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
