@@ -11,6 +11,12 @@
 
 ## develop
 
+- [ADD] wt-devtools に WebTransport API の静的対応状況チェックを追加する (#0087)
+  - `devtools/src/webtransport-devtools/signals.ts` に `wtStaticApiSupport` シグナルを追加する
+  - `devtools/src/webtransport-devtools/components/StaticApiSupportPanel.tsx` を新設する
+  - Connection Settings の上にパネルを配置し、ページロード時に `WebTransport.prototype` 等を評価する
+  - 既存の接続チェック (`wtApiSupport` ツリー) とは責務を分離し、併置する
+  - @voluntas
 - [UPDATE] Publisher の audio group 切替を timestamp ベースに変更する (#0085)
   - `src/createMediaPublisher.ts` に純粋関数 `computeAudioGroupTransition` を追加する
   - 定数 `AUDIO_GROUP_DURATION_US = 1_000_000n` (1 秒) を導入する
