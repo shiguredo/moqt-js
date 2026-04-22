@@ -238,6 +238,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         connectOptions,
       );
       sub.updateSubscriber(subscriberId, { session });
+      settings.reliability.value = session.reliability;
 
       sub.updateSubscriber(subscriberId, {
         status: "connected",
