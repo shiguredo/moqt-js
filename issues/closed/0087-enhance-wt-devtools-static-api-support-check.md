@@ -1,7 +1,19 @@
 # wt-devtools に WebTransport API の静的対応状況チェックを追加する
 
 Created: 2026-04-22
+Completed: 2026-04-22
 Model: Opus 4.7
+
+## 解決方法
+
+issue 起票後に別作業で実装済みであることを確認した。
+
+- `devtools/src/webtransport-devtools/signals.ts` に `wtStaticApiSupport` signal と `detectStaticApiSupport` を実装
+- `devtools/src/webtransport-devtools/components/StaticApiSupportPanel.tsx` を新設
+- `devtools/src/webtransport-devtools/App.tsx` で `ConnectionPanel` の上に `StaticApiSupportPanel` を配置
+- CHANGES.md にも `[ADD] wt-devtools に WebTransport API の静的対応状況チェックを追加する (#0087)` が記録済み
+
+そのため追加のコード変更なしで本 issue をクローズする。
 
 ## 概要
 
