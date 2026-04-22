@@ -1,6 +1,7 @@
 # peer-initiated request 受信機構を削除
 
 Created: 2026-04-22
+Completed: 2026-04-22
 Model: Claude Opus 4.7
 
 ## 概要

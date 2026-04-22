@@ -4,12 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
-import {
-  MAX_REASON_PHRASE_LENGTH,
-  type Parameter,
-  decodeParameters,
-  encodeParameters,
-} from "./parameter";
+import { MAX_REASON_PHRASE_LENGTH, type Parameter, decodeParameters } from "./parameter";
 import { MessageType } from "./types";
 
 /**
@@ -139,31 +134,6 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 }
 
 /**
- * RequestOk のペイロードをエンコード
- *
- * draft-ietf-moq-transport-17 Section 9.6:
- * Number of Parameters + Parameters
- * https://github.com/moq-wg/moq-transport/pull/1499
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(encodeParameters(msg.parameters));
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
-}
-
-/**
  * RequestOk のペイロードをデコード
  *
  * draft-ietf-moq-transport-17 Section 9.6:
@@ -177,36 +147,6 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
     type: MessageType.REQUEST_OK,
     parameters,
   };
-}
-
-/**
- * RequestError のペイロードをエンコード
- *
- * draft-ietf-moq-transport-17 Section 9.7:
- * Error Code + Retry Interval + Error Reason
- * https://github.com/moq-wg/moq-transport/pull/1499
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
-  const encoder = new TextEncoder();
-  const reasonBytes = encoder.encode(msg.reasonPhrase);
-
-  const parts: Uint8Array[] = [];
-  parts.push(encodeVarint(msg.errorCode));
-  parts.push(encodeVarint(msg.retryInterval));
-  parts.push(encodeVarint(reasonBytes.length));
-  parts.push(reasonBytes);
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
 }
 
 /**

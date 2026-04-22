@@ -4,7 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
-import { type Property, decodeProperties, encodeProperties } from "../properties";
+import { type Property, decodeProperties } from "../properties";
 import {
   type Parameter,
   type TrackNamespace,
@@ -184,44 +184,6 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
     joining,
     parameters,
   };
-}
-
-/**
- * FetchOk のペイロードをエンコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- *
- * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
- * FETCH_OK Message {
- *   Type (i) = 0x18,
- *   Length (16),
- *   End of Track (8),
- *   End Location (Location),
- *   Number of Parameters (i),
- *   Parameters (..) ...,
- *   Track Properties (..)
- * }
- */
-export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(new Uint8Array([msg.endOfTrack ? 1 : 0]));
-  parts.push(encodeLocation(msg.endLocation));
-  parts.push(encodeParameters(msg.parameters));
-
-  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
-  // Track Properties は length プレフィックスなしでシリアライズされる。
-  parts.push(encodeProperties(msg.trackProperties));
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
 }
 
 /**

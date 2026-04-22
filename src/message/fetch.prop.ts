@@ -5,19 +5,10 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import {
-  type Fetch,
-  type FetchOk,
-  FetchType,
-  decodeFetchOkPayload,
-  decodeFetchPayload,
-  encodeFetchOkPayload,
-  encodeFetchPayload,
-} from "./fetch";
+import { type Fetch, FetchType, decodeFetchPayload, encodeFetchPayload } from "./fetch";
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import type { Property } from "../properties";
 
 /**
  * Message Parameter の arbitrary
@@ -74,31 +65,6 @@ const parametersArb = fc
     const sorted = [...params].sort((a, b) => a.type - b.type);
     return sorted.filter((param, index) => index === 0 || param.type !== sorted[index - 1].type);
   });
-
-/**
- * Track Extensions arbitrary
- *
- * draft-ietf-moq-transport-17:
- * FETCH_OK に Track Extensions が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1374
- */
-const evenPropertyArb = fc
-  .record({
-    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n),
-    value: fc.bigInt({ min: 0n, max: 1000000n }),
-  })
-  .map(({ id, value }) => ({ id, value }));
-
-const oddPropertyArb = fc
-  .record({
-    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n + 1n),
-    data: fc.uint8Array({ minLength: 0, maxLength: 20 }),
-  })
-  .map(({ id, data }) => ({ id, data }));
-
-const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
-
-const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
 
 /**
  * draft-ietf-moq-transport-17 Section 2.3:
@@ -221,58 +187,6 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
         for (let i = 0; i < parameters.length; i++) {
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
-        }
-      },
-    ),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-17:
- * FETCH_OK に Track Extensions が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1374
- */
-test("FetchOk のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.boolean(),
-      locationArb,
-      parametersArb,
-      trackPropertiesArb,
-      (endOfTrack, endLocation, parameters, trackProperties) => {
-        const original: FetchOk = {
-          type: MessageType.FETCH_OK,
-          endOfTrack,
-          endLocation,
-          parameters,
-          trackProperties,
-        };
-
-        const encoded = encodeFetchOkPayload(original);
-        const decoded = decodeFetchOkPayload(encoded);
-
-        assert.equal(decoded.type, MessageType.FETCH_OK);
-        assert.equal(decoded.endOfTrack, endOfTrack);
-        assert.equal(decoded.endLocation.group, endLocation.group);
-        assert.equal(decoded.endLocation.object, endLocation.object);
-        assert.equal(decoded.parameters.length, parameters.length);
-        for (let i = 0; i < parameters.length; i++) {
-          assert.equal(decoded.parameters[i].type, parameters[i].type);
-          assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
-        }
-        // Track Extensions はソートされるため、ソート後の値を比較
-        const sortedOriginal = [...trackProperties].sort((a, b) =>
-          a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-        );
-        assert.equal(decoded.trackProperties.length, trackProperties.length);
-        for (let i = 0; i < sortedOriginal.length; i++) {
-          assert.equal(decoded.trackProperties[i].id, sortedOriginal[i].id);
-          if (sortedOriginal[i].value !== undefined) {
-            assert.equal(decoded.trackProperties[i].value, sortedOriginal[i].value);
-          }
-          if (sortedOriginal[i].data !== undefined) {
-            assert.deepEqual(decoded.trackProperties[i].data, sortedOriginal[i].data);
-          }
         }
       },
     ),

@@ -11,6 +11,15 @@
 
 ## develop
 
+- [CHANGE] peer-initiated request (SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE) の受信機構を削除する (#0092)
+  - `Session.acceptPeer*` / `rejectPeerRequest` 公開 API と `ConnectCallbacks.peer*` コールバックを削除する
+  - `SessionMachine.handlePeer*` / `acceptPeer*` / `rejectPeerRequest` / `validatePeerRequest` を削除する
+  - `encodeSubscribeOkPayload` / `encodePublishOkPayload` / `encodeFetchOkPayload` / `encodeRequestOkPayload` / `encodeRequestErrorPayload` を削除する
+  - `peerInitiatedStreams` / `writeOnPeerInitiatedStream` / `sendRequestOkOnPeerInitiatedStream` の内部実装を削除する
+  - `handleIncomingBidirectionalStream` は peer-initiated bidi stream 受信時に PROTOCOL_VIOLATION で切断する動作に変更する
+  - `SessionEvent` の `peer*Received` バリアントを削除する
+  - `src/session/peerRequest.prop.ts` と各 message の responder encode PBT を削除する
+  - @voluntas
 - [CHANGE] SessionMachine から `Transport` 型と `_transport` フィールドを削除し webTransport 固定にする (#0091)
   - `src/session/types.ts` から `Transport` 型を削除する
   - `SessionMachine.createClient` のシグネチャを `(setup)` に変更する

@@ -6,17 +6,7 @@
  */
 
 import type { SessionError } from "../error";
-import type {
-  Fetch,
-  Location,
-  Parameter,
-  Publish,
-  PublishNamespace,
-  Subscribe,
-  SubscribeNamespace,
-  TrackNamespace,
-  TrackStatus,
-} from "../message";
+import type { Location, Parameter, TrackNamespace } from "../message";
 import type { ControlMessage } from "../message/control";
 import type { Property } from "../properties";
 
@@ -333,34 +323,4 @@ export type SessionEvent =
       type: "goawayReceived";
       newSessionUri: Uint8Array;
       timeout: bigint;
-    }
-  | {
-      type: "peerSubscribeReceived";
-      requestId: bigint;
-      message: Subscribe;
-    }
-  | {
-      type: "peerPublishReceived";
-      requestId: bigint;
-      message: Publish;
-    }
-  | {
-      type: "peerFetchReceived";
-      requestId: bigint;
-      message: Fetch;
-    }
-  | {
-      type: "peerTrackStatusReceived";
-      requestId: bigint;
-      message: TrackStatus;
-    }
-  | {
-      type: "peerSubscribeNamespaceReceived";
-      requestId: bigint;
-      message: SubscribeNamespace;
-    }
-  | {
-      type: "peerPublishNamespaceReceived";
-      requestId: bigint;
-      message: PublishNamespace;
     };

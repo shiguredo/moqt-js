@@ -74,7 +74,6 @@ export {
   decodeSubscribeOkPayload,
   decodeSubscribePayload,
   decodeRequestUpdatePayload,
-  encodeSubscribeOkPayload,
   encodeSubscribePayload,
   encodeRequestUpdatePayload,
 } from "./subscribe";
@@ -88,7 +87,6 @@ export {
   decodePublishOkPayload,
   decodePublishPayload,
   encodePublishDonePayload,
-  encodePublishOkPayload,
   encodePublishPayload,
 } from "./publish";
 
@@ -101,8 +99,6 @@ export {
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
-  encodeRequestErrorPayload,
-  encodeRequestOkPayload,
 } from "./session";
 
 // Fetch Messages
@@ -114,7 +110,6 @@ export {
   FetchType,
   decodeFetchOkPayload,
   decodeFetchPayload,
-  encodeFetchOkPayload,
   encodeFetchPayload,
 } from "./fetch";
 

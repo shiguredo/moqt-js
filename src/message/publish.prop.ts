@@ -8,8 +8,6 @@ import * as fc from "fast-check";
 import {
   encodePublishPayload,
   decodePublishPayload,
-  encodePublishOkPayload,
-  decodePublishOkPayload,
   encodePublishDonePayload,
   decodePublishDonePayload,
 } from "./publish";
@@ -178,27 +176,6 @@ test("Publish のエンコード・デコードがラウンドトリップする
         }
       },
     ),
-  );
-});
-
-test("PublishOk のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(parametersArb, (parameters) => {
-      const original = {
-        type: MessageType.PUBLISH_OK as typeof MessageType.PUBLISH_OK,
-        parameters,
-      };
-
-      const encoded = encodePublishOkPayload(original);
-      const decoded = decodePublishOkPayload(encoded);
-
-      assert.equal(decoded.type, MessageType.PUBLISH_OK);
-      assert.equal(decoded.parameters.length, parameters.length);
-      for (let i = 0; i < parameters.length; i++) {
-        assert.equal(decoded.parameters[i].type, parameters[i].type);
-        assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
-      }
-    }),
   );
 });
 

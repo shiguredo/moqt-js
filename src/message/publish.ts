@@ -154,27 +154,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
 }
 
 /**
- * PublishOk のペイロードをエンコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(encodeParameters(msg.parameters));
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
-}
-
-/**
  * PublishOk のペイロードをデコード
  *
  * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK):
