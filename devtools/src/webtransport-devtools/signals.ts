@@ -1,4 +1,5 @@
 import { signal, computed } from "@preact/signals";
+import { toHttpVersionLabel } from "moqt-js";
 
 // クエリパラメータからの初期値読み込み
 function getInitialParams(): { url: string; certificateHash: string } {
@@ -45,6 +46,9 @@ export const wtCongestionControl = signal<string>("");
 export const wtSupportsReliableOnly = signal<string>("");
 export const wtProtocol = signal<string>("");
 export const wtResponseHeaders = signal<string>("");
+
+// wtReliability から派生する HTTP バージョンラベル
+export const wtHttpVersion = computed(() => toHttpVersionLabel(wtReliability.value));
 
 // WebTransport API 対応状況
 export interface ApiSupportNode {

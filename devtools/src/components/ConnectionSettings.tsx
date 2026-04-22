@@ -201,6 +201,28 @@ function LocHelpModal() {
   );
 }
 
+/**
+ * 現在の WebTransport.reliability を HTTP バージョンバッジとして表示する。
+ * draft-ietf-webtrans-http2 / draft-ietf-webtrans-http3 の判別に利用する。
+ */
+function HttpVersionBadge() {
+  const label = settings.toHttpVersionLabel(settings.reliability.value);
+  const color =
+    label === "HTTP/3"
+      ? "bg-green-100 text-green-700"
+      : label === "HTTP/2"
+        ? "bg-blue-100 text-blue-700"
+        : "bg-slate-100 text-slate-500";
+  return (
+    <span
+      class={`px-2 py-0.5 text-xs font-medium rounded-full ${color}`}
+      title={`WebTransport.reliability: ${settings.reliability.value}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export function ConnectionSettings() {
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
@@ -224,6 +246,7 @@ export function ConnectionSettings() {
         </svg>
         Connection Settings
         <div class="ml-auto flex items-center gap-2">
+          <HttpVersionBadge />
           <button
             onClick={() => (showMsfHelp.value = true)}
             class="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 transition-colors flex items-center gap-1"

@@ -1,6 +1,7 @@
 # moqt-devtools に HTTP/2 / HTTP/3 の接続判別表示を追加する
 
 Created: 2026-04-22
+Completed: 2026-04-22
 Model: Opus 4.7
 
 ## 概要

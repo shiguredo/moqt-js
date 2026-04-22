@@ -11,6 +11,14 @@
 
 ## develop
 
+- [ADD] moqt-devtools / wt-devtools に HTTP/2 / HTTP/3 の接続判別表示を追加する (#0088)
+  - `Session.reliability` getter を追加する
+  - `src/httpVersion.ts` に純粋関数 `toHttpVersionLabel` と `HttpVersionLabel` 型を追加する
+  - `src/index.ts` から `toHttpVersionLabel` / `HttpVersionLabel` を公開する
+  - `devtools/src/signals/connectionSettings.ts` に `reliability` signal を追加し、接続成功時に `session.reliability` を反映する
+  - `devtools/src/components/ConnectionSettings.tsx` と `devtools/src/webtransport-devtools/components/ConnectionPanel.tsx` に HTTP Version バッジを追加する
+  - `src/httpVersion.test.ts` に単体テストを追加する
+  - @voluntas
 - [ADD] wt-devtools に WebTransport API の静的対応状況チェックを追加する (#0087)
   - `devtools/src/webtransport-devtools/signals.ts` に `wtStaticApiSupport` シグナルを追加する
   - `devtools/src/webtransport-devtools/components/StaticApiSupportPanel.tsx` を新設する

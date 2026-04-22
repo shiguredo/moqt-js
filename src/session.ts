@@ -826,6 +826,22 @@ export class SessionImpl implements Session {
     return this.sessionState;
   }
 
+  /**
+   * 下位 WebTransport の `reliability` をそのまま返す
+   * W3C WebTransport spec: https://www.w3.org/TR/webtransport/#dom-webtransport-reliability
+   *
+   * - "pending": セッション未確立
+   * - "reliable-only": HTTP/2 系 (datagram 不可)
+   * - "supports-unreliable": HTTP/3 系 (datagram 可)
+   *
+   * draft-ietf-webtrans-http2 と draft-ietf-webtrans-http3 のどちらで接続しているか
+   * を判別する指標として利用する。
+   */
+  get reliability(): string {
+    const wt = this.transport as unknown as { reliability?: string };
+    return wt.reliability ?? "pending";
+  }
+
   get goawayReceived(): boolean {
     return this.receivedGoaway;
   }

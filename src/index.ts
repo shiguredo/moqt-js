@@ -28,6 +28,7 @@ export type {
   NamespaceSubscription,
   MoqtObject,
 } from "./session";
+export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
 // Re-export message types
 export type { SubscriptionFilter, Location, Parameter } from "./message";
