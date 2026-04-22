@@ -36,7 +36,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PAGES_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-        run: vp dlx wrangler@latest pages deploy devtools/dist --project-name=shiguredo-moqt-devtools
+        run: |
+          commit_message="$(git log -1 --pretty=%s)"
+          vp dlx wrangler@latest pages deploy devtools/dist \
+            --project-name=shiguredo-moqt-devtools \
+            --commit-message="${commit_message}"
 
   slack-notify:
     needs: build-and-deploy
