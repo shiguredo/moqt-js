@@ -47,7 +47,9 @@ jobs:
       matrix:
         # WebCodecs Audio 型 (AudioDecoder 等) は TypeScript 5.7 の lib.dom.d.ts で追加
         typescript:
+          # - "@typescript/native-preview@beta"
           - "next"
+          - "6.0"
           - "5.9"
           - "5.8"
           - "5.7"
@@ -68,7 +70,7 @@ jobs:
       - run: vp run typecheck
 
   slack-notify:
-    needs: [lint, build, typecheck]
+    needs: [ lint, build, typecheck ]
     if: always()
     runs-on: ubuntu-slim
     timeout-minutes: 5
