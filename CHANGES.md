@@ -11,6 +11,12 @@
 
 ## develop
 
+- [ADD] wt-devtools に WebTransport API の静的対応状況チェックを追加する (#0087)
+  - `devtools/src/webtransport-devtools/signals.ts` に `wtStaticApiSupport` シグナルを追加する
+  - `devtools/src/webtransport-devtools/components/StaticApiSupportPanel.tsx` を新設する
+  - Connection Settings の上にパネルを配置し、ページロード時に `WebTransport.prototype` 等を評価する
+  - 既存の接続チェック (`wtApiSupport` ツリー) とは責務を分離し、併置する
+  - @voluntas
 - [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
   - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
   - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加

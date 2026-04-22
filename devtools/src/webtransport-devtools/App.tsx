@@ -1,6 +1,7 @@
 import { signal } from "@preact/signals";
 import {
   ConnectionPanel,
+  StaticApiSupportPanel,
   BidiStreamPanel,
   UniSendStreamPanel,
   UniRecvStreamPanel,
@@ -57,6 +58,7 @@ export function App() {
 
       <div class="container mx-auto px-4 py-8 max-w-6xl">
         <h1 class="text-2xl font-bold text-slate-800 mb-6">WebTransport DevTools</h1>
+        <StaticApiSupportPanel />
         <ConnectionPanel />
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <BidiStreamPanel />
@@ -81,6 +83,16 @@ export function App() {
             </a>
             {" / "}
             <a
+              href="https://datatracker.ietf.org/doc/draft-ietf-webtrans-http2/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="hover:text-slate-600 underline"
+            >
+              draft-ietf-webtrans-http2-14
+            </a>
+          </p>
+          <p class="mt-1">
+            <a
               href="https://www.w3.org/TR/webtransport/"
               target="_blank"
               rel="noopener noreferrer"
@@ -88,8 +100,17 @@ export function App() {
             >
               W3C WebTransport
             </a>
+            {" / "}
+            <a
+              href="https://developer.mozilla.org/en-US/docs/Web/API/WebTransport_API"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="hover:text-slate-600 underline"
+            >
+              MDN WebTransport API
+            </a>
           </p>
-          <p class="mt-1">株式会社時雨堂 Copyright © 2025 Shiguredo Inc. All rights reserved.</p>
+          <p class="mt-1">株式会社時雨堂 Copyright © 2026 Shiguredo Inc. All rights reserved.</p>
         </footer>
       </div>
     </div>
