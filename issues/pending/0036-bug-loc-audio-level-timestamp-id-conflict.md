@@ -1,5 +1,11 @@
 # LOC draft-ietf-moq-loc-02 の AUDIO_LEVEL と TIMESTAMP の ID 衝突
 
+## Pending の理由
+
+本 issue は draft-ietf-moq-loc-02 の仕様上のバグであり、moqt-js 側のコード変更では解決できない外部依存である。
+解決には draft-ietf-moq-loc の次リビジョンで AUDIO_LEVEL に衝突しない ID が割り当てられ、IANA により正式登録されることが必要である。
+現状の暫定対応（TIMESTAMP 0x06 を優先、Audio Level はデコードループから除外）は既にコードへ反映済みであり、仕様側の更新後にコードを追従させる。
+
 ## 概要
 
 draft-ietf-moq-loc-02 において、TIMESTAMP (Section 2.3.1.1) と AUDIO_LEVEL (Section 2.3.3.1) の Property ID が衝突している。
