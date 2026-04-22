@@ -21,12 +21,6 @@ import type { ControlMessage } from "../message/control";
 import type { Property } from "../properties";
 
 /**
- * エンドポイントの役割
- * draft-ietf-moq-transport-17 Section 3.1 (Endpoints)
- */
-export type Role = "client" | "server";
-
-/**
  * 下位トランスポート種別
  * draft-ietf-moq-transport-17 Section 3.1 (Endpoints)
  */

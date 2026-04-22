@@ -87,7 +87,7 @@ moqt-js は以下のサブセットに限定する:
    - `encodeSubscribeOkPayload` (peer SUBSCRIBE への返答用)
    - `encodePublishOkPayload` (peer PUBLISH への返答用)
    - `encodeFetchOkPayload` (peer FETCH への返答用)
-   - `encodeRequestOkPayload` (peer TRACK_STATUS / *_NAMESPACE への返答用)
+   - `encodeRequestOkPayload` (peer TRACK_STATUS / \*\_NAMESPACE への返答用)
    - `encodeRequestErrorPayload` (peer-request 拒否用)
    - 自側 request の応答受信用 decoder (`decodeSubscribeOkPayload` 等) は残す
      (自分が送った SUBSCRIBE / PUBLISH / FETCH への応答受信に必要)

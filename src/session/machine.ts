@@ -65,7 +65,6 @@ import {
   type NamespaceSubscriptionEntry,
   type PeerGoawayInfo,
   type PublicationView,
-  type Role,
   type SessionEvent,
   type SessionState,
   type SubscriptionEntry,
@@ -78,7 +77,6 @@ import {
  * MOQT Session プロトコル状態機械
  */
 export class SessionMachine {
-  private readonly _role: Role;
   private readonly _transport: Transport;
   private _state: SessionState;
   private readonly _localSetup: Setup;
@@ -102,15 +100,14 @@ export class SessionMachine {
   private _localGoawayDeadlineMs: number | null = null;
   private _localGoawayPendingTimeoutMs: number | null = null;
 
-  private constructor(role: Role, transport: Transport, setup: Setup) {
-    this._role = role;
+  private constructor(transport: Transport, setup: Setup) {
     this._transport = transport;
     this._state = "setup";
     this._localSetup = setup;
     this._peerSetup = null;
     this._events = [{ type: "sendControl", message: setup }];
-    this._requestIdGen = new RequestIdGenerator(role);
-    this._peerRequestIds = new RequestIdTracker(role === "client" ? "server" : "client");
+    this._requestIdGen = new RequestIdGenerator();
+    this._peerRequestIds = new RequestIdTracker();
     this._localAuthTokenCache = new AuthTokenCache(readMaxAuthTokenCacheSize(setup));
   }
 
@@ -121,17 +118,12 @@ export class SessionMachine {
    * 作成時点で自側 SETUP の sendControl イベントを積み、"setup" 状態にする。
    */
   static createClient(transport: Transport, setup: Setup): SessionMachine {
-    return new SessionMachine("client", transport, setup);
+    return new SessionMachine(transport, setup);
   }
 
   /** 現在のセッション状態 */
   get state(): SessionState {
     return this._state;
-  }
-
-  /** エンドポイントの役割 */
-  get role(): Role {
-    return this._role;
   }
 
   /** 下位トランスポート種別 */
@@ -214,7 +206,7 @@ export class SessionMachine {
    * GOAWAY を送信する
    * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
    *
-   * - `Role::Client` は `new_session_uri` を空にする必要がある
+   * - moqt-js は client 専用なので `new_session_uri` は常に空
    * - `new_session_uri` は UTF-8 換算で 8192 バイト以下
    * - 各エンドポイントから 1 回のみ
    */
@@ -230,7 +222,7 @@ export class SessionMachine {
         SessionErrorCode.PROTOCOL_VIOLATION,
       );
     }
-    if (this._role === "client" && uriBytes.byteLength > 0) {
+    if (uriBytes.byteLength > 0) {
       throw new SessionError(
         "client MUST send zero-length new_session_uri",
         SessionErrorCode.PROTOCOL_VIOLATION,
@@ -280,16 +272,6 @@ export class SessionMachine {
       this.fail(
         new SessionError(
           "received GOAWAY new_session_uri exceeds 8192 bytes",
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
-      return;
-    }
-    // draft §9.5: server (自側) は client (peer) からの non-zero URI を拒否
-    if (this._role === "server" && uriBytes.byteLength > 0) {
-      this.fail(
-        new SessionError(
-          "client sent non-zero new_session_uri",
           SessionErrorCode.PROTOCOL_VIOLATION,
         ),
       );

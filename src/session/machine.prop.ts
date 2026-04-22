@@ -21,7 +21,6 @@ test("createClient 直後は setup 状態になる", () => {
     fc.property(transportArb, setupArb, (transport, setup) => {
       const p = SessionMachine.createClient(transport, setup);
       assert.equal(p.state, "setup");
-      assert.equal(p.role, "client");
       assert.equal(p.transport, transport);
       assert.strictEqual(p.localSetup, setup);
       assert.equal(p.peerSetup, null);

@@ -4,22 +4,15 @@
  */
 
 import { SessionError, SessionErrorCode } from "../error";
-import type { Role } from "./types";
 
 /**
  * Request ID 採番器 (自側)
  * draft-ietf-moq-transport-17 Section 9.1
  *
- * - Client は偶数 (0, 2, 4, ...) を採番
- * - Server は奇数 (1, 3, 5, ...) を採番
- * - 各エンドポイントは +2 ずつインクリメント
+ * moqt-js は client 専用なので偶数 (0, 2, 4, ...) を +2 ずつ採番する。
  */
 export class RequestIdGenerator {
-  private _next: bigint;
-
-  constructor(role: Role) {
-    this._next = role === "client" ? 0n : 1n;
-  }
+  private _next: bigint = 0n;
 
   /**
    * 次の Request ID を発行する
@@ -41,17 +34,14 @@ export class RequestIdGenerator {
  * 相手側の Request ID 追跡器
  * draft-ietf-moq-transport-17 Section 9.1
  *
- * - parity が送信者の role と合わない → INVALID_REQUEST_ID
+ * moqt-js は client 専用で、peer は server。
+ * server は奇数採番なので parity は常に 1 を期待する。
+ *
+ * - parity が奇数でない → INVALID_REQUEST_ID
  * - 重複した Request ID → INVALID_REQUEST_ID
  */
 export class RequestIdTracker {
-  private readonly _peerRole: Role;
-  private readonly _seen: Set<bigint>;
-
-  constructor(peerRole: Role) {
-    this._peerRole = peerRole;
-    this._seen = new Set();
-  }
+  private readonly _seen: Set<bigint> = new Set();
 
   /**
    * 受信した Request ID を検証・記録する
@@ -61,8 +51,7 @@ export class RequestIdTracker {
    * 成功時は null を返し、内部に記録する。
    */
   accept(id: bigint): SessionError | null {
-    const expectedParity = this._peerRole === "client" ? 0n : 1n;
-    if (id % 2n !== expectedParity) {
+    if (id % 2n !== 1n) {
       return new SessionError(
         "request id has wrong parity for sender",
         SessionErrorCode.INVALID_REQUEST_ID,
@@ -100,10 +89,5 @@ export class RequestIdTracker {
   /** 受信済み Request ID の数 (診断用) */
   get seenCount(): number {
     return this._seen.size;
-  }
-
-  /** 相手側の役割 */
-  get peerRole(): Role {
-    return this._peerRole;
   }
 }

@@ -7,14 +7,11 @@ import * as fc from "fast-check";
 import { assert, test } from "vite-plus/test";
 import { SessionErrorCode } from "../error";
 import { RequestIdGenerator, RequestIdTracker } from "./requestId";
-import type { Role } from "./types";
 
-const roleArb: fc.Arbitrary<Role> = fc.constantFrom("client", "server");
-
-test("RequestIdGenerator(client) は 0 から始まる偶数列を返す", () => {
+test("RequestIdGenerator は 0 から始まる偶数列を返す", () => {
   fc.assert(
     fc.property(fc.integer({ min: 0, max: 100 }), (count) => {
-      const gen = new RequestIdGenerator("client");
+      const gen = new RequestIdGenerator();
       for (let i = 0; i < count; i++) {
         const id = gen.nextId();
         assert.equal(id, BigInt(i * 2));
@@ -23,22 +20,10 @@ test("RequestIdGenerator(client) は 0 から始まる偶数列を返す", () =>
   );
 });
 
-test("RequestIdGenerator(server) は 1 から始まる奇数列を返す", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 0, max: 100 }), (count) => {
-      const gen = new RequestIdGenerator("server");
-      for (let i = 0; i < count; i++) {
-        const id = gen.nextId();
-        assert.equal(id, BigInt(i * 2 + 1));
-      }
-    }),
-  );
-});
-
 test("peek は次回 nextId() の値と一致する", () => {
   fc.assert(
-    fc.property(roleArb, fc.integer({ min: 0, max: 100 }), (role, count) => {
-      const gen = new RequestIdGenerator(role);
+    fc.property(fc.integer({ min: 0, max: 100 }), (count) => {
+      const gen = new RequestIdGenerator();
       for (let i = 0; i < count; i++) {
         gen.nextId();
       }
@@ -49,18 +34,14 @@ test("peek は次回 nextId() の値と一致する", () => {
   );
 });
 
-test("peer の role に合致する parity の Request ID は accept される", () => {
+test("奇数 parity の Request ID は accept される", () => {
   fc.assert(
     fc.property(
-      roleArb,
       fc.array(fc.bigInt({ min: 0n, max: 1_000_000n }), { minLength: 0, maxLength: 50 }),
-      (peerRole, rawIds) => {
-        const tracker = new RequestIdTracker(peerRole);
-        const expectedParity = peerRole === "client" ? 0n : 1n;
-        // rawIds を parity に合わせて正規化し、重複除去
-        const ids = Array.from(
-          new Set(rawIds.map((v) => (v % 2n === expectedParity ? v : v + 1n))),
-        );
+      (rawIds) => {
+        const tracker = new RequestIdTracker();
+        // 奇数 parity (peer = server) に正規化し、重複除去
+        const ids = Array.from(new Set(rawIds.map((v) => (v % 2n === 1n ? v : v + 1n))));
         for (const id of ids) {
           const err = tracker.accept(id);
           assert.equal(err, null);
@@ -71,13 +52,13 @@ test("peer の role に合致する parity の Request ID は accept される",
   );
 });
 
-test("parity が一致しない Request ID は INVALID_REQUEST_ID で拒否される", () => {
+test("偶数 parity の Request ID は INVALID_REQUEST_ID で拒否される", () => {
   fc.assert(
-    fc.property(roleArb, fc.bigInt({ min: 0n, max: 1_000_000n }), (peerRole, id) => {
-      const wrongParity = peerRole === "client" ? 1n : 0n;
-      const wrongId = (id / 2n) * 2n + wrongParity;
-      const tracker = new RequestIdTracker(peerRole);
-      const err = tracker.accept(wrongId);
+    fc.property(fc.bigInt({ min: 0n, max: 1_000_000n }), (id) => {
+      // 偶数に正規化
+      const evenId = (id / 2n) * 2n;
+      const tracker = new RequestIdTracker();
+      const err = tracker.accept(evenId);
       assert.notEqual(err, null);
       assert.equal(err?.code, SessionErrorCode.INVALID_REQUEST_ID);
     }),
@@ -86,10 +67,10 @@ test("parity が一致しない Request ID は INVALID_REQUEST_ID で拒否さ�
 
 test("重複する Request ID は INVALID_REQUEST_ID で拒否される", () => {
   fc.assert(
-    fc.property(roleArb, fc.bigInt({ min: 0n, max: 1_000_000n }), (peerRole, id) => {
-      const parity = peerRole === "client" ? 0n : 1n;
-      const validId = (id / 2n) * 2n + parity;
-      const tracker = new RequestIdTracker(peerRole);
+    fc.property(fc.bigInt({ min: 0n, max: 1_000_000n }), (id) => {
+      // 奇数 (peer = server) に正規化
+      const validId = (id / 2n) * 2n + 1n;
+      const tracker = new RequestIdTracker();
       assert.equal(tracker.accept(validId), null);
       const second = tracker.accept(validId);
       assert.notEqual(second, null);

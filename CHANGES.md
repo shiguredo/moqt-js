@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] SessionMachine から `Role` 型と `_role` フィールドを削除し client 固定にする (#0090)
+  - `src/session/types.ts` から `Role` 型を削除する
+  - `RequestIdGenerator` / `RequestIdTracker` のコンストラクタから role 引数を削除する
+  - `SessionMachine` のコンストラクタから role 引数、`_role` フィールド、`role` getter を削除する
+  - GOAWAY 受信時の `_role === "server"` 分岐を削除し、GOAWAY 送信時の empty URI ガードを無条件実施に変更する
+  - @voluntas
 - [ADD] wt-devtools に WebTransport API の静的対応状況チェックを追加する (#0087)
   - `devtools/src/webtransport-devtools/signals.ts` に `wtStaticApiSupport` シグナルを追加する
   - `devtools/src/webtransport-devtools/components/StaticApiSupportPanel.tsx` を新設する
