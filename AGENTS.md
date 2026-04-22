@@ -100,7 +100,9 @@
 
 ## moqt-js
 
-- moqt-js は MOQT PUblisher/Subscriber のみの対応で Server/Relay のコードを含まないこと
+- クライアントとしてのみ動作
+- ブラウザでのみ動作
+- MOQT Publisher/Subscriber としてのみ動作
 - 仕様は refs/ 以下に RFC ドキュメントがあるのでそれを確認すること
 - 後方互換性は考慮しないこと
 - 一時的な修正はしないこと
