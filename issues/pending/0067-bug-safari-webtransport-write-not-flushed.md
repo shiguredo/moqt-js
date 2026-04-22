@@ -3,6 +3,12 @@
 Created: 2026-03-29
 Model: Opus 4.6
 
+## Pending の理由
+
+本 issue は WebKit (Safari) の WebTransport 実装、具体的には Apple の Network Framework (`nw_connection_send`) の挙動に起因する外部バグである。
+moqt-js 側ではワークアラウンド (closePublisherStream に 5 秒タイムアウト、エンコーダー停止順序の調整) を既に実装済みで、さらなる改善には WebKit 側の修正が必要となる。
+「対策案 1: write の合体」は推測レベルの緩和策であり、確実に解決する保証がないため、WebKit の修正を待つ方針として pending に移す。
+
 ## 概要
 
 Safari 26.4 の WebTransport で `createUnidirectionalStream()` から取得した `WritableStreamDefaultWriter` に対して `write()` を呼ぶと、Promise は resolve するが実際にはデータが QUIC ストリームに送信されない。
