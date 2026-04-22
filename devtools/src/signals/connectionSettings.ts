@@ -1,6 +1,9 @@
 import { signal } from "@preact/signals";
+import { toHttpVersionLabel } from "moqt-js";
 import type { CameraDevice, CodecType, VideoSourceType } from "../types";
 import { isDebugPanelOpen } from "./debug";
+
+export { toHttpVersionLabel };
 
 // Connection settings
 export const url = signal("https://127.0.0.1:4443/moqt");
@@ -38,6 +41,10 @@ export const useDedicatedWorker = signal(true);
 
 // Settings disabled state
 export const settingsDisabled = signal(false);
+
+// 現在のセッションの WebTransport.reliability。初期値は "pending"。
+// 接続確立時に Session.reliability を反映する。
+export const reliability = signal<string>("pending");
 
 /**
  * カメラデバイス一覧を取得する

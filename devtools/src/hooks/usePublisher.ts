@@ -276,6 +276,7 @@ export function usePublisher() {
       );
       console.log("startPublishing: connected");
       pub.pubSession.value = session;
+      settings.reliability.value = session.reliability;
 
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = "Connected, publishing catalog...";

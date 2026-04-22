@@ -22,3 +22,4 @@ export type {
 
 export type { SessionState } from "./types";
 export { Session } from "./session";
+export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";

@@ -24,7 +24,9 @@ export type {
   FetchOptions,
   TrackStatusResult,
   MoqtObject,
+  HttpVersionLabel,
 } from "./session";
+export { toHttpVersionLabel } from "./session";
 
 // Re-export message types
 export type { SubscriptionFilter, Location, Parameter } from "./message";

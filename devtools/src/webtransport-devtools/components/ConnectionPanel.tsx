@@ -13,6 +13,20 @@ function apiSupportValueClass(value: string): string {
 }
 
 /**
+ * HTTP バージョンバッジ
+ * draft-ietf-webtrans-http2 / draft-ietf-webtrans-http3 の判別表示
+ */
+function HttpVersionBadge({ label }: { label: "HTTP/2" | "HTTP/3" | "--" }) {
+  const color =
+    label === "HTTP/3"
+      ? "bg-green-100 text-green-700"
+      : label === "HTTP/2"
+        ? "bg-blue-100 text-blue-700"
+        : "bg-slate-100 text-slate-500";
+  return <span class={`px-2 py-0.5 text-xs font-medium rounded-full ${color}`}>{label}</span>;
+}
+
+/**
  * API Support のノードを再帰的にインデント表示する
  */
 function ApiSupportTree({
@@ -177,9 +191,10 @@ export function ConnectionPanel() {
               </span>
             </div>
             {store.wtReliability.value && (
-              <div>
+              <div class="flex items-center gap-2">
                 <span class="text-slate-400">reliability: </span>
                 <span class="font-semibold">{store.wtReliability.value}</span>
+                <HttpVersionBadge label={store.wtHttpVersion.value} />
               </div>
             )}
             {store.wtCongestionControl.value && (
