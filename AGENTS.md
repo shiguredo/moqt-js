@@ -51,6 +51,8 @@
   - 例: `0002-fmt-enhance-support-for-joins.md`
 - 仕様的に対応が難しい場合は issues/pending/ へ移動すること
 - issue を作成したらコミットすること
+  - 複数 issue をまとめてコミットしてよい
+- issue をコミットするときはコミットメッセージに issue の番号とタイトルを記載すること
 - 1 issue 完了ごとに 1 コミットすること
 - Issue の作成日はファイルのタイトルの後に `Created: YYYY-MM-DD` として記載すること
 - Issue の完了日はファイルのタイトルの後に `Completed: YYYY-MM-DD` として記載すること
