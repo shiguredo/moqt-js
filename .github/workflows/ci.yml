@@ -70,7 +70,7 @@ jobs:
       - run: vp run typecheck
 
   slack-notify:
-    needs: [ lint, build, typecheck ]
+    needs: [lint, build, typecheck]
     if: always()
     runs-on: ubuntu-slim
     timeout-minutes: 5
