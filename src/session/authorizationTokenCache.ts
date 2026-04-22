@@ -23,7 +23,7 @@ interface CacheEntry {
   tokenValue: Uint8Array;
 }
 
-export class AuthTokenCache {
+export class AuthorizationTokenCache {
   private readonly _entries: Map<bigint, CacheEntry> = new Map();
   private _totalSize: bigint = 0n;
   private readonly _maxSize: bigint;

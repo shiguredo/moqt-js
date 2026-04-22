@@ -7,6 +7,7 @@ import {
   type MoqtObject,
   type DebugMessage,
   type CertificateHash,
+  type AuthorizationToken,
   type JoiningFetchOptions,
   type CatalogTrack,
 } from "moqt-js";
@@ -202,7 +203,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
 
       // Build connect options
-      const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+      const connectOptions: {
+        serverCertificateHashes?: CertificateHash[];
+        authorizationToken?: AuthorizationToken;
+      } = {};
       if (settings.certificateHash.value) {
         connectOptions.serverCertificateHashes = [
           {
@@ -210,6 +214,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             value: settings.base64ToArrayBuffer(settings.certificateHash.value),
           },
         ];
+      }
+      const authorizationToken = settings.buildAuthorizationToken();
+      if (authorizationToken !== undefined) {
+        connectOptions.authorizationToken = authorizationToken;
       }
 
       // Connect to MOQT server

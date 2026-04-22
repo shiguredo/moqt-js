@@ -30,6 +30,18 @@ export { toHttpVersionLabel } from "./session";
 
 // Re-export message types
 export type { SubscriptionFilter, Location, Parameter } from "./message";
+
+// Re-export AUTHORIZATION_TOKEN (draft-ietf-moq-transport-17 Section 9.3.2, 9.4.1.4)
+export {
+  type AuthorizationToken,
+  type AuthorizationTokenDelete,
+  type AuthorizationTokenRegister,
+  type AuthorizationTokenUseAlias,
+  type AuthorizationTokenUseValue,
+  AuthorizationTokenAliasType,
+  encodeAuthorizationToken,
+  decodeAuthorizationToken,
+} from "./message";
 export type { Publisher, SendObjectParams, SendDatagramParams } from "./publisher";
 export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
@@ -195,7 +207,9 @@ export async function connect(
   await transport.ready;
 
   // Create session
-  const session = new Session(transport, callbacks ?? {});
+  const session = new Session(transport, callbacks ?? {}, {
+    authorizationToken: options?.authorizationToken,
+  });
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   await session.initialize();

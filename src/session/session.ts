@@ -50,6 +50,7 @@ import {
   type Subscribe,
   type SubscriptionFilter,
   type TrackStatus,
+  type AuthorizationToken,
 } from "../message";
 import { decodeVarint, encodeVarint } from "../varint";
 import {
@@ -119,6 +120,15 @@ export interface ConnectOptions {
    * Note: Certificate validity period must be 14 days or less
    */
   serverCertificateHashes?: CertificateHash[];
+
+  /**
+   * AUTHORIZATION TOKEN Setup Option として送出する Token
+   * draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN)
+   *
+   * SETUP では DELETE (0x0) と USE_ALIAS (0x2) は仕様上禁止されているため
+   * (Section 9.3.2)、`kind` は `"register"` または `"useValue"` のみ指定可能。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -616,9 +626,20 @@ export class Session {
   private statsControlMessagesSent = 0;
   private statsControlMessagesReceived = 0;
 
-  constructor(transport: WebTransport, callbacks: ConnectCallbacks) {
+  /**
+   * SETUP Option として送出する AUTHORIZATION TOKEN (Section 9.4.1.4)
+   * initialize() で createSetup に渡す。
+   */
+  private readonly authorizationToken?: AuthorizationToken;
+
+  constructor(
+    transport: WebTransport,
+    callbacks: ConnectCallbacks,
+    options?: { authorizationToken?: AuthorizationToken },
+  ) {
     this.transport = transport;
     this.callbacks = callbacks;
+    this.authorizationToken = options?.authorizationToken;
 
     // WebTransport の切断を監視し、close 理由をコールバックに渡す
     this.transport.closed
@@ -676,7 +697,9 @@ export class Session {
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
     // sans-I/O な SessionMachine に SETUP 送信を委譲する
-    this.protocol = SessionMachine.createClient(createSetup());
+    this.protocol = SessionMachine.createClient(
+      createSetup({ authorizationToken: this.authorizationToken }),
+    );
     const sendCtrlEvent = this.protocol.nextEvent();
     if (sendCtrlEvent === undefined || sendCtrlEvent.type !== "sendControl") {
       throw new SessionError(

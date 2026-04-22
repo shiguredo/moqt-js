@@ -11,6 +11,23 @@
 
 ## develop
 
+- [ADD] moqt-devtools に Authorization Token 入力欄を追加する (#0099)
+  - `devtools/src/signals/connectionSettings.ts` に `authorizationTokenAliasType` / `authorizationTokenAlias` / `authorizationTokenType` / `authorizationTokenValue` signal を追加する
+  - `buildAuthorizationToken()` を追加し、入力値から `AuthorizationToken` を構築する
+  - `devtools/src/components/ConnectionSettings.tsx` に Authorization Token セクションを追加する
+  - `devtools/src/hooks/usePublisher.ts` / `useSubscriber.ts` から `connect()` に `authorizationToken` を渡す
+  - `buildQueryString()` / `initFromUrl()` を拡張してクエリパラメータ対応する
+  - @voluntas
+- [ADD] `ConnectOptions.authorizationToken` を追加し SETUP Option として送出する (#0098)
+  - `src/message/authToken.ts` を `src/message/authorizationToken.ts` にリネームし、`AuthToken` 系の型・関数を `AuthorizationToken` プレフィックスに揃える
+  - `src/session/authTokenCache.ts` を `src/session/authorizationTokenCache.ts` にリネームし `AuthorizationTokenCache` にする
+  - `SessionMachine` の `localAuthTokenCache` / `peerAuthTokenCache` / `processOutgoingAuthTokens` / `processIncomingAuthTokens` をフルネームにリネームする
+  - `SetupOptionType.AUTHORIZATION_TOKEN = 0x03` を追加する (draft-ietf-moq-transport-17 §9.4.1.4)
+  - `createSetup()` に `authorizationToken` オプションを追加する
+  - `Session` コンストラクタに `authorizationToken` を渡せるようにする
+  - `src/index.ts` から `AuthorizationToken` / `AuthorizationTokenAliasType` / `encodeAuthorizationToken` / `decodeAuthorizationToken` を公開する
+  - `src/message/setup.test.ts` に SETUP Option AUTHORIZATION_TOKEN の単体テストを追加する
+  - @voluntas
 - [ADD] moqt-devtools / wt-devtools に HTTP/2 / HTTP/3 の接続判別表示を追加する (#0088)
   - `Session.reliability` getter を追加する
   - `src/session/httpVersion.ts` に純粋関数 `toHttpVersionLabel` と `HttpVersionLabel` 型を追加する

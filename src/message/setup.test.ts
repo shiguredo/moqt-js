@@ -11,10 +11,12 @@ import {
   getSetupPath,
   getSetupAuthority,
   getSetupMoqtImplementation,
+  getSetupParameter,
 } from "./setup";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import { decodeVarint } from "../varint";
+import { AuthorizationTokenAliasType, decodeAuthorizationToken } from "./authorizationToken";
 
 // MOQT_IMPLEMENTATION は常に追加される
 test("Setup: パラメータなしで作成", () => {
@@ -90,4 +92,59 @@ test("Setup: エンコード・デコード roundtrip", () => {
   assert.equal(getSetupPath(decoded), "/moqt");
   assert.equal(getSetupAuthority(decoded), "example.com");
   assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
+});
+
+// draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+test("Setup: USE_VALUE の AUTHORIZATION_TOKEN を付けて作成", () => {
+  const tokenValue = new TextEncoder().encode("opaque-token");
+  const setup = createSetup({
+    authorizationToken: { kind: "useValue", tokenType: 0n, tokenValue },
+  });
+  const param = getSetupParameter(setup, SetupOptionType.AUTHORIZATION_TOKEN);
+  assert.isDefined(param);
+  if (!param) return;
+  const token = decodeAuthorizationToken(param.value);
+  assert.equal(token.kind, "useValue");
+  if (token.kind === "useValue") {
+    assert.equal(token.tokenType, 0n);
+    assert.deepEqual(Array.from(token.tokenValue), Array.from(tokenValue));
+  }
+});
+
+// draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+test("Setup: REGISTER の AUTHORIZATION_TOKEN を付けて作成", () => {
+  const tokenValue = new TextEncoder().encode("reg-token");
+  const setup = createSetup({
+    authorizationToken: { kind: "register", alias: 1n, tokenType: 2n, tokenValue },
+  });
+  const param = getSetupParameter(setup, SetupOptionType.AUTHORIZATION_TOKEN);
+  assert.isDefined(param);
+  if (!param) return;
+  const token = decodeAuthorizationToken(param.value);
+  assert.equal(token.kind, "register");
+  if (token.kind === "register") {
+    assert.equal(token.alias, 1n);
+    assert.equal(token.tokenType, 2n);
+    assert.deepEqual(Array.from(token.tokenValue), Array.from(tokenValue));
+  }
+});
+
+test("Setup: AUTHORIZATION_TOKEN の encode/decode roundtrip", () => {
+  const tokenValue = new TextEncoder().encode("abc");
+  const setup = createSetup({
+    authorizationToken: { kind: "useValue", tokenType: 5n, tokenValue },
+  });
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+  const param = getSetupParameter(decoded, SetupOptionType.AUTHORIZATION_TOKEN);
+  assert.isDefined(param);
+  if (!param) return;
+  const token = decodeAuthorizationToken(param.value);
+  assert.equal(token.kind, "useValue");
+  if (token.kind === "useValue") {
+    assert.equal(token.tokenType, 5n);
+    assert.deepEqual(Array.from(token.tokenValue), Array.from(tokenValue));
+  }
+  // Alias Type バイトは Token Value の冒頭に正しく入る
+  assert.equal(Number(decodeVarint(param.value, 0)[0]), AuthorizationTokenAliasType.USE_VALUE);
 });

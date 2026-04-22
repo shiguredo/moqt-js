@@ -5,24 +5,28 @@
 
 import * as fc from "fast-check";
 import { assert, test } from "vite-plus/test";
-import { type AuthToken, decodeAuthToken, encodeAuthToken } from "./authToken";
+import {
+  type AuthorizationToken,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./authorizationToken";
 
 const aliasArb = fc.bigInt({ min: 0n, max: 2n ** 62n - 1n });
 const tokenTypeArb = fc.bigInt({ min: 0n, max: 2n ** 62n - 1n });
 const tokenValueArb = fc.uint8Array({ maxLength: 256 });
 
-const tokenArb: fc.Arbitrary<AuthToken> = fc.oneof(
-  aliasArb.map((alias): AuthToken => ({ kind: "delete", alias })),
+const tokenArb: fc.Arbitrary<AuthorizationToken> = fc.oneof(
+  aliasArb.map((alias): AuthorizationToken => ({ kind: "delete", alias })),
   fc
     .record({ alias: aliasArb, tokenType: tokenTypeArb, tokenValue: tokenValueArb })
-    .map((r): AuthToken => ({ kind: "register", ...r })),
-  aliasArb.map((alias): AuthToken => ({ kind: "useAlias", alias })),
+    .map((r): AuthorizationToken => ({ kind: "register", ...r })),
+  aliasArb.map((alias): AuthorizationToken => ({ kind: "useAlias", alias })),
   fc
     .record({ tokenType: tokenTypeArb, tokenValue: tokenValueArb })
-    .map((r): AuthToken => ({ kind: "useValue", ...r })),
+    .map((r): AuthorizationToken => ({ kind: "useValue", ...r })),
 );
 
-function equalToken(a: AuthToken, b: AuthToken): boolean {
+function equalToken(a: AuthorizationToken, b: AuthorizationToken): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "delete":
@@ -53,20 +57,25 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-test("AuthToken の encode/decode round-trip", () => {
+test("AuthorizationToken の encode/decode round-trip", () => {
   fc.assert(
     fc.property(tokenArb, (token) => {
-      const decoded = decodeAuthToken(encodeAuthToken(token));
+      const decoded = decodeAuthorizationToken(encodeAuthorizationToken(token));
       assert.ok(equalToken(token, decoded));
     }),
   );
 });
 
-test("decodeAuthToken は入力の Uint8Array を共有しない", () => {
+test("decodeAuthorizationToken は入力の Uint8Array を共有しない", () => {
   fc.assert(
     fc.property(aliasArb, tokenTypeArb, tokenValueArb, (alias, tokenType, value) => {
-      const encoded = encodeAuthToken({ kind: "register", alias, tokenType, tokenValue: value });
-      const decoded = decodeAuthToken(encoded);
+      const encoded = encodeAuthorizationToken({
+        kind: "register",
+        alias,
+        tokenType,
+        tokenValue: value,
+      });
+      const decoded = decodeAuthorizationToken(encoded);
       assert.equal(decoded.kind, "register");
       if (decoded.kind === "register") {
         // encoded バッファを汚しても decoded.tokenValue が変わらないこと

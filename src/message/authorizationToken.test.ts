@@ -6,10 +6,15 @@
 import { assert, test } from "vite-plus/test";
 import { SessionError, SessionErrorCode } from "../error";
 import { encodeVarint } from "../varint";
-import { type AuthToken, AuthTokenAliasType, decodeAuthToken, encodeAuthToken } from "./authToken";
+import {
+  type AuthorizationToken,
+  AuthorizationTokenAliasType,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./authorizationToken";
 
-function roundtrip(token: AuthToken): AuthToken {
-  return decodeAuthToken(encodeAuthToken(token));
+function roundtrip(token: AuthorizationToken): AuthorizationToken {
+  return decodeAuthorizationToken(encodeAuthorizationToken(token));
 }
 
 test("DELETE の round-trip で alias が保持される", () => {
@@ -77,7 +82,7 @@ test("USE_VALUE の tokenValue は空でもよい", () => {
 test("未知の Alias Type は KEY_VALUE_FORMATTING_ERROR で throw する", () => {
   const data = encodeVarint(0x42);
   try {
-    decodeAuthToken(data);
+    decodeAuthorizationToken(data);
     assert.fail("should throw");
   } catch (e) {
     assert.ok(e instanceof SessionError);
@@ -87,24 +92,24 @@ test("未知の Alias Type は KEY_VALUE_FORMATTING_ERROR で throw する", () 
 
 test("DELETE / USE_ALIAS の末尾に余剰バイトがあると KEY_VALUE_FORMATTING_ERROR", () => {
   const deleteWithTail = new Uint8Array([
-    ...encodeVarint(AuthTokenAliasType.DELETE),
+    ...encodeVarint(AuthorizationTokenAliasType.DELETE),
     ...encodeVarint(1n),
     0xff,
   ]);
-  assert.throws(() => decodeAuthToken(deleteWithTail));
+  assert.throws(() => decodeAuthorizationToken(deleteWithTail));
 
   const useAliasWithTail = new Uint8Array([
-    ...encodeVarint(AuthTokenAliasType.USE_ALIAS),
+    ...encodeVarint(AuthorizationTokenAliasType.USE_ALIAS),
     ...encodeVarint(1n),
     0xff,
   ]);
-  assert.throws(() => decodeAuthToken(useAliasWithTail));
+  assert.throws(() => decodeAuthorizationToken(useAliasWithTail));
 });
 
 test("alias の途中で切れていたら KEY_VALUE_FORMATTING_ERROR", () => {
-  const truncated = new Uint8Array(encodeVarint(AuthTokenAliasType.REGISTER));
+  const truncated = new Uint8Array(encodeVarint(AuthorizationTokenAliasType.REGISTER));
   try {
-    decodeAuthToken(truncated);
+    decodeAuthorizationToken(truncated);
     assert.fail("should throw");
   } catch (e) {
     assert.ok(e instanceof SessionError);
@@ -113,23 +118,29 @@ test("alias の途中で切れていたら KEY_VALUE_FORMATTING_ERROR", () => {
 });
 
 test("空の Value を渡すと alias type のデコードで失敗する", () => {
-  assert.throws(() => decodeAuthToken(new Uint8Array()));
+  assert.throws(() => decodeAuthorizationToken(new Uint8Array()));
 });
 
-test("encodeAuthToken は先頭バイトに Alias Type を書き込む", () => {
-  assert.equal(encodeAuthToken({ kind: "delete", alias: 0n })[0], AuthTokenAliasType.DELETE);
+test("encodeAuthorizationToken は先頭バイトに Alias Type を書き込む", () => {
   assert.equal(
-    encodeAuthToken({
+    encodeAuthorizationToken({ kind: "delete", alias: 0n })[0],
+    AuthorizationTokenAliasType.DELETE,
+  );
+  assert.equal(
+    encodeAuthorizationToken({
       kind: "register",
       alias: 0n,
       tokenType: 0n,
       tokenValue: new Uint8Array(),
     })[0],
-    AuthTokenAliasType.REGISTER,
+    AuthorizationTokenAliasType.REGISTER,
   );
-  assert.equal(encodeAuthToken({ kind: "useAlias", alias: 0n })[0], AuthTokenAliasType.USE_ALIAS);
   assert.equal(
-    encodeAuthToken({ kind: "useValue", tokenType: 0n, tokenValue: new Uint8Array() })[0],
-    AuthTokenAliasType.USE_VALUE,
+    encodeAuthorizationToken({ kind: "useAlias", alias: 0n })[0],
+    AuthorizationTokenAliasType.USE_ALIAS,
+  );
+  assert.equal(
+    encodeAuthorizationToken({ kind: "useValue", tokenType: 0n, tokenValue: new Uint8Array() })[0],
+    AuthorizationTokenAliasType.USE_VALUE,
   );
 });

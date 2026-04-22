@@ -34,10 +34,10 @@ import {
   type SubscribeOk,
   type TrackStatus,
 } from "../message";
-import { type AuthToken, decodeAuthToken } from "../message/authToken";
+import { type AuthorizationToken, decodeAuthorizationToken } from "../message/authorizationToken";
 import type { ControlMessage } from "../message/control";
 import { RequestIdGenerator } from "./requestId";
-import { AuthTokenCache } from "./authTokenCache";
+import { AuthorizationTokenCache } from "./authorizationTokenCache";
 import { createFetchEntry } from "./fetch";
 import {
   createSubscriptionEntry,
@@ -73,8 +73,8 @@ export class SessionMachine {
   private readonly _peerPublisherAliases: Map<bigint, bigint> = new Map();
   private readonly _fetches: Map<bigint, FetchEntry> = new Map();
   private readonly _trackStatusRequests: Map<bigint, TrackStatusEntry> = new Map();
-  private _localAuthTokenCache: AuthTokenCache;
-  private _peerAuthTokenCache: AuthTokenCache = new AuthTokenCache(0n);
+  private _localAuthorizationTokenCache: AuthorizationTokenCache;
+  private _peerAuthorizationTokenCache: AuthorizationTokenCache = new AuthorizationTokenCache(0n);
   private _localGoawaySent = false;
   private _peerGoaway: PeerGoawayInfo | null = null;
   private _lastTickMs: number | null = null;
@@ -87,7 +87,9 @@ export class SessionMachine {
     this._peerSetup = null;
     this._events = [{ type: "sendControl", message: setup }];
     this._requestIdGen = new RequestIdGenerator();
-    this._localAuthTokenCache = new AuthTokenCache(readMaxAuthTokenCacheSize(setup));
+    this._localAuthorizationTokenCache = new AuthorizationTokenCache(
+      readMaxAuthorizationTokenCacheSize(setup),
+    );
   }
 
   /**
@@ -279,19 +281,21 @@ export class SessionMachine {
       return;
     }
     this._peerSetup = setup;
-    this._peerAuthTokenCache = new AuthTokenCache(readMaxAuthTokenCacheSize(setup));
+    this._peerAuthorizationTokenCache = new AuthorizationTokenCache(
+      readMaxAuthorizationTokenCacheSize(setup),
+    );
     this._state = "established";
     this._events.push({ type: "established" });
   }
 
-  /** 自側 AuthTokenCache (相手がトラッキングすべきエントリ) */
-  get localAuthTokenCache(): AuthTokenCache {
-    return this._localAuthTokenCache;
+  /** 自側 AuthorizationTokenCache (相手がトラッキングすべきエントリ) */
+  get localAuthorizationTokenCache(): AuthorizationTokenCache {
+    return this._localAuthorizationTokenCache;
   }
 
-  /** 相手側 AuthTokenCache (自側がトラッキングすべきエントリ) */
-  get peerAuthTokenCache(): AuthTokenCache {
-    return this._peerAuthTokenCache;
+  /** 相手側 AuthorizationTokenCache (自側がトラッキングすべきエントリ) */
+  get peerAuthorizationTokenCache(): AuthorizationTokenCache {
+    return this._peerAuthorizationTokenCache;
   }
 
   /**
@@ -320,7 +324,7 @@ export class SessionMachine {
    */
   sendSubscribe(subscribe: Subscribe): void {
     this.requireEstablished();
-    this.processOutgoingAuthTokens(subscribe.parameters);
+    this.processOutgoingAuthorizationTokens(subscribe.parameters);
     const key = subscriptionKey(subscribe.trackNamespace, subscribe.trackName, "subscriber");
     if (this._subscriptionsByTrack.has(key)) {
       throw new SessionError(
@@ -357,7 +361,7 @@ export class SessionMachine {
    */
   sendPublish(publish: Publish): void {
     this.requireEstablished();
-    this.processOutgoingAuthTokens(publish.parameters);
+    this.processOutgoingAuthorizationTokens(publish.parameters);
     if (this._myPublisherAliases.has(publish.trackAlias)) {
       throw new SessionError(
         "local publisher reused track alias",
@@ -624,7 +628,7 @@ export class SessionMachine {
    */
   sendRequestUpdate(targetRequestId: bigint, update: RequestUpdate): void {
     this.requireEstablished();
-    this.processOutgoingAuthTokens(update.parameters);
+    this.processOutgoingAuthorizationTokens(update.parameters);
     if (!this._subscriptions.has(targetRequestId)) {
       throw new SessionError(
         "no subscription for REQUEST_UPDATE",
@@ -755,7 +759,7 @@ export class SessionMachine {
    */
   sendTrackStatus(msg: TrackStatus): void {
     this.requireEstablished();
-    this.processOutgoingAuthTokens(msg.parameters);
+    this.processOutgoingAuthorizationTokens(msg.parameters);
     if (this._trackStatusRequests.has(msg.requestId)) {
       throw new SessionError(
         "duplicate request id for TRACK_STATUS",
@@ -826,7 +830,7 @@ export class SessionMachine {
    */
   sendFetch(fetch: Fetch): void {
     this.requireEstablished();
-    this.processOutgoingAuthTokens(fetch.parameters);
+    this.processOutgoingAuthorizationTokens(fetch.parameters);
     if (this._fetches.has(fetch.requestId)) {
       throw new SessionError("duplicate request id for FETCH", SessionErrorCode.PROTOCOL_VIOLATION);
     }
@@ -891,7 +895,7 @@ export class SessionMachine {
    * 自側が送信するメッセージに含まれる AUTHORIZATION_TOKEN を処理する
    * draft-ietf-moq-transport-17 Section 9.3.2
    *
-   * REGISTER は `_localAuthTokenCache` に登録し、DELETE は除去する。
+   * REGISTER は `_localAuthorizationTokenCache` に登録し、DELETE は除去する。
    * USE_ALIAS / USE_VALUE はキャッシュを変えない。
    *
    * 失敗時はいずれも SessionError を throw する。
@@ -900,9 +904,9 @@ export class SessionMachine {
    * - 重複 alias → DUPLICATE_AUTH_TOKEN_ALIAS
    * - cache 超過 → AUTH_TOKEN_CACHE_OVERFLOW
    */
-  processOutgoingAuthTokens(parameters: readonly Parameter[]): void {
-    for (const token of iterateAuthTokens(parameters)) {
-      applyAuthTokenToCache(token, this._localAuthTokenCache);
+  processOutgoingAuthorizationTokens(parameters: readonly Parameter[]): void {
+    for (const token of iterateAuthorizationTokens(parameters)) {
+      applyAuthorizationTokenToCache(token, this._localAuthorizationTokenCache);
     }
   }
 
@@ -910,13 +914,13 @@ export class SessionMachine {
    * 相手から受け取ったメッセージに含まれる AUTHORIZATION_TOKEN を処理する
    * draft-ietf-moq-transport-17 Section 9.3.2
    *
-   * REGISTER は `_peerAuthTokenCache` に登録し、DELETE は除去する。
+   * REGISTER は `_peerAuthorizationTokenCache` に登録し、DELETE は除去する。
    * 失敗時は `closeSession` イベントを積み throw しない。
    */
-  processIncomingAuthTokens(parameters: readonly Parameter[]): void {
+  processIncomingAuthorizationTokens(parameters: readonly Parameter[]): void {
     try {
-      for (const token of iterateAuthTokens(parameters)) {
-        applyAuthTokenToCache(token, this._peerAuthTokenCache);
+      for (const token of iterateAuthorizationTokens(parameters)) {
+        applyAuthorizationTokenToCache(token, this._peerAuthorizationTokenCache);
       }
     } catch (e) {
       if (e instanceof SessionError) {
@@ -940,21 +944,26 @@ export class SessionMachine {
  * Parameters から AUTHORIZATION_TOKEN (type 0x03) のみを取り出し
  * Token 構造をデコードして yield する
  */
-function* iterateAuthTokens(parameters: readonly Parameter[]): Iterable<AuthToken> {
+function* iterateAuthorizationTokens(
+  parameters: readonly Parameter[],
+): Iterable<AuthorizationToken> {
   for (const param of parameters) {
     if (param.type !== MessageParameterType.AUTHORIZATION_TOKEN) continue;
-    yield decodeAuthToken(param.value);
+    yield decodeAuthorizationToken(param.value);
   }
 }
 
 /**
- * Token を対応する AuthTokenCache に反映する
+ * Token を対応する AuthorizationTokenCache に反映する
  *
- * - REGISTER: tryRegister (duplicate は AuthTokenCache が throw、overflow は false)
+ * - REGISTER: tryRegister (duplicate は AuthorizationTokenCache が throw、overflow は false)
  * - DELETE: delete (未登録は no-op)
  * - USE_ALIAS / USE_VALUE: キャッシュは触らない
  */
-function applyAuthTokenToCache(token: AuthToken, cache: AuthTokenCache): void {
+function applyAuthorizationTokenToCache(
+  token: AuthorizationToken,
+  cache: AuthorizationTokenCache,
+): void {
   switch (token.kind) {
     case "register": {
       const ok = cache.tryRegister(token.alias, token.tokenType, token.tokenValue);
@@ -981,7 +990,7 @@ function applyAuthTokenToCache(token: AuthToken, cache: AuthTokenCache): void {
  *
  * 省略時は 0 (cache 無効)。
  */
-function readMaxAuthTokenCacheSize(setup: Setup): bigint {
+function readMaxAuthorizationTokenCacheSize(setup: Setup): bigint {
   const param = setup.parameters.find((p) => p.type === SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE);
   if (param === undefined) return 0n;
   return getParameterVarintValue(param);

@@ -6,8 +6,8 @@
 import { assert, test } from "vite-plus/test";
 import { SessionError, SessionErrorCode } from "../error";
 import {
-  type AuthToken,
-  encodeAuthToken,
+  type AuthorizationToken,
+  encodeAuthorizationToken,
   MessageParameterType,
   MessageType,
   type Parameter,
@@ -21,10 +21,10 @@ import {
 import { encodeVarint } from "../varint";
 import { SessionMachine } from "./machine";
 
-function authTokenParameter(token: AuthToken): Parameter {
+function authorizationTokenParameter(token: AuthorizationToken): Parameter {
   return {
     type: MessageParameterType.AUTHORIZATION_TOKEN,
-    value: encodeAuthToken(token),
+    value: encodeAuthorizationToken(token),
   };
 }
 
@@ -65,12 +65,12 @@ function buildSubscribe(
   };
 }
 
-test("sendSubscribe の REGISTER が _localAuthTokenCache に登録される", () => {
+test("sendSubscribe の REGISTER が _localAuthorizationTokenCache に登録される", () => {
   const p = establishedWithCacheSize();
   const requestId = p.nextLocalRequestId();
   p.sendSubscribe(
     buildSubscribe(requestId, [
-      authTokenParameter({
+      authorizationTokenParameter({
         kind: "register",
         alias: 1n,
         tokenType: 7n,
@@ -78,17 +78,17 @@ test("sendSubscribe の REGISTER が _localAuthTokenCache に登録される", (
       }),
     ]),
   );
-  const resolved = p.localAuthTokenCache.resolve(1n);
+  const resolved = p.localAuthorizationTokenCache.resolve(1n);
   assert.ok(resolved);
   assert.equal(resolved.tokenType, 7n);
 });
 
-test("sendSubscribe の DELETE で _localAuthTokenCache から除去される", () => {
+test("sendSubscribe の DELETE で _localAuthorizationTokenCache から除去される", () => {
   const p = establishedWithCacheSize();
   const register = p.nextLocalRequestId();
   p.sendSubscribe(
     buildSubscribe(register, [
-      authTokenParameter({
+      authorizationTokenParameter({
         kind: "register",
         alias: 2n,
         tokenType: 1n,
@@ -96,11 +96,13 @@ test("sendSubscribe の DELETE で _localAuthTokenCache から除去される", 
       }),
     ]),
   );
-  assert.ok(p.localAuthTokenCache.resolve(2n));
+  assert.ok(p.localAuthorizationTokenCache.resolve(2n));
 
   const remove = p.nextLocalRequestId();
-  p.sendSubscribe(buildSubscribe(remove, [authTokenParameter({ kind: "delete", alias: 2n })]));
-  assert.equal(p.localAuthTokenCache.resolve(2n), undefined);
+  p.sendSubscribe(
+    buildSubscribe(remove, [authorizationTokenParameter({ kind: "delete", alias: 2n })]),
+  );
+  assert.equal(p.localAuthorizationTokenCache.resolve(2n), undefined);
 });
 
 test("sendSubscribe の重複 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS で throw", () => {
@@ -108,7 +110,7 @@ test("sendSubscribe の重複 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS で throw"
   const r1 = p.nextLocalRequestId();
   p.sendSubscribe(
     buildSubscribe(r1, [
-      authTokenParameter({
+      authorizationTokenParameter({
         kind: "register",
         alias: 5n,
         tokenType: 0n,
@@ -122,7 +124,7 @@ test("sendSubscribe の重複 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS で throw"
   try {
     p.sendSubscribe(
       buildSubscribe(r2, [
-        authTokenParameter({
+        authorizationTokenParameter({
           kind: "register",
           alias: 5n,
           tokenType: 0n,
@@ -145,7 +147,7 @@ test("sendSubscribe のキャッシュ超過は AUTH_TOKEN_CACHE_OVERFLOW で th
   try {
     p.sendSubscribe(
       buildSubscribe(r, [
-        authTokenParameter({
+        authorizationTokenParameter({
           kind: "register",
           alias: 1n,
           tokenType: 0n,
@@ -181,24 +183,24 @@ test("sendSubscribe の malformed Token は KEY_VALUE_FORMATTING_ERROR で throw
   assert.equal((caught as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
 });
 
-test("processIncomingAuthTokens の REGISTER で _peerAuthTokenCache に登録される", () => {
+test("processIncomingAuthorizationTokens の REGISTER で _peerAuthorizationTokenCache に登録される", () => {
   const p = establishedWithCacheSize();
-  p.processIncomingAuthTokens([
-    authTokenParameter({
+  p.processIncomingAuthorizationTokens([
+    authorizationTokenParameter({
       kind: "register",
       alias: 10n,
       tokenType: 3n,
       tokenValue: new Uint8Array([0xab]),
     }),
   ]);
-  const resolved = p.peerAuthTokenCache.resolve(10n);
+  const resolved = p.peerAuthorizationTokenCache.resolve(10n);
   assert.ok(resolved);
   assert.equal(resolved.tokenType, 3n);
 });
 
-test("processIncomingAuthTokens の malformed Token で closeSession を積む", () => {
+test("processIncomingAuthorizationTokens の malformed Token で closeSession を積む", () => {
   const p = establishedWithCacheSize();
-  p.processIncomingAuthTokens([
+  p.processIncomingAuthorizationTokens([
     { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array(encodeVarint(0x99)) },
   ]);
   assert.equal(p.state, "closing");
@@ -210,18 +212,18 @@ test("processIncomingAuthTokens の malformed Token で closeSession を積む",
   }
 });
 
-test("processIncomingAuthTokens の重複 REGISTER で closeSession を積む", () => {
+test("processIncomingAuthorizationTokens の重複 REGISTER で closeSession を積む", () => {
   const p = establishedWithCacheSize();
-  p.processIncomingAuthTokens([
-    authTokenParameter({
+  p.processIncomingAuthorizationTokens([
+    authorizationTokenParameter({
       kind: "register",
       alias: 4n,
       tokenType: 0n,
       tokenValue: new Uint8Array(),
     }),
   ]);
-  p.processIncomingAuthTokens([
-    authTokenParameter({
+  p.processIncomingAuthorizationTokens([
+    authorizationTokenParameter({
       kind: "register",
       alias: 4n,
       tokenType: 0n,
@@ -229,7 +231,7 @@ test("processIncomingAuthTokens の重複 REGISTER で closeSession を積む", 
     }),
   ]);
   assert.equal(p.state, "closing");
-  // 2 つ目の processIncomingAuthTokens で積まれた closeSession を取り出す
+  // 2 つ目の processIncomingAuthorizationTokens で積まれた closeSession を取り出す
   const ev1 = p.nextEvent();
   assert.ok(ev1);
   assert.equal(ev1.type, "closeSession");
@@ -240,33 +242,37 @@ test("processIncomingAuthTokens の重複 REGISTER で closeSession を積む", 
 
 test("USE_ALIAS / USE_VALUE はキャッシュを変えない", () => {
   const p = establishedWithCacheSize();
-  const before = p.localAuthTokenCache.totalSize;
-  p.processOutgoingAuthTokens([
-    authTokenParameter({ kind: "useAlias", alias: 1n }),
-    authTokenParameter({
+  const before = p.localAuthorizationTokenCache.totalSize;
+  p.processOutgoingAuthorizationTokens([
+    authorizationTokenParameter({ kind: "useAlias", alias: 1n }),
+    authorizationTokenParameter({
       kind: "useValue",
       tokenType: 0n,
       tokenValue: new Uint8Array([1, 2]),
     }),
   ]);
-  assert.equal(p.localAuthTokenCache.totalSize, before);
+  assert.equal(p.localAuthorizationTokenCache.totalSize, before);
 
-  const beforePeer = p.peerAuthTokenCache.totalSize;
-  p.processIncomingAuthTokens([
-    authTokenParameter({ kind: "useAlias", alias: 1n }),
-    authTokenParameter({
+  const beforePeer = p.peerAuthorizationTokenCache.totalSize;
+  p.processIncomingAuthorizationTokens([
+    authorizationTokenParameter({ kind: "useAlias", alias: 1n }),
+    authorizationTokenParameter({
       kind: "useValue",
       tokenType: 0n,
       tokenValue: new Uint8Array([1, 2]),
     }),
   ]);
-  assert.equal(p.peerAuthTokenCache.totalSize, beforePeer);
+  assert.equal(p.peerAuthorizationTokenCache.totalSize, beforePeer);
 });
 
 test("DELETE で未登録 alias は no-op (throw しない)", () => {
   const p = establishedWithCacheSize();
-  p.processOutgoingAuthTokens([authTokenParameter({ kind: "delete", alias: 99n })]);
-  p.processIncomingAuthTokens([authTokenParameter({ kind: "delete", alias: 99n })]);
+  p.processOutgoingAuthorizationTokens([
+    authorizationTokenParameter({ kind: "delete", alias: 99n }),
+  ]);
+  p.processIncomingAuthorizationTokens([
+    authorizationTokenParameter({ kind: "delete", alias: 99n }),
+  ]);
   // 何も起きない。encodeParameter を呼んでもエラーにならない
-  encodeParameter(authTokenParameter({ kind: "delete", alias: 99n }));
+  encodeParameter(authorizationTokenParameter({ kind: "delete", alias: 99n }));
 });

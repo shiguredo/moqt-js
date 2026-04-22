@@ -8,6 +8,7 @@
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { type AuthorizationToken, encodeAuthorizationToken } from "./authorizationToken";
 import { type Parameter, decodeKeyValuePairs, encodeKeyValuePairs } from "./parameter";
 import { MessageType, SetupOptionType } from "./types";
 
@@ -25,8 +26,17 @@ export interface Setup {
 
 /**
  * Setup を作成
+ *
+ * @param options.authorizationToken
+ *   draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+ *   SETUP では DELETE (0x0) と USE_ALIAS (0x2) は仕様上禁止 (Section 9.3.2)。
+ *   呼び出し側で REGISTER または USE_VALUE のみを渡すこと。
  */
-export function createSetup(options?: { path?: string; authority?: string }): Setup {
+export function createSetup(options?: {
+  path?: string;
+  authority?: string;
+  authorizationToken?: AuthorizationToken;
+}): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
 
@@ -34,6 +44,14 @@ export function createSetup(options?: { path?: string; authority?: string }): Se
     parameters.push({
       type: SetupOptionType.PATH,
       value: encoder.encode(options.path),
+    });
+  }
+
+  // AUTHORIZATION_TOKEN (0x03) - Section 9.4.1.4 (AUTHORIZATION TOKEN)
+  if (options?.authorizationToken) {
+    parameters.push({
+      type: SetupOptionType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(options.authorizationToken),
     });
   }
 

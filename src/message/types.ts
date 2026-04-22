@@ -63,6 +63,17 @@ export type MessageType = (typeof MessageType)[keyof typeof MessageType];
  */
 export const SetupOptionType = {
   PATH: 0x01,
+  /**
+   * AUTHORIZATION_TOKEN (Section 9.4.1.4 AUTHORIZATION TOKEN)
+   *
+   * draft-ietf-moq-transport-17 Section 9.4.1.4:
+   * "The AUTHORIZATION TOKEN Setup Option (Option Type 0x03) is
+   *  functionally equivalent to the AUTHORIZATION TOKEN message parameter,
+   *  but uses the Setup Option namespace."
+   *
+   * SETUP では DELETE (0x0) と USE_ALIAS (0x2) は禁止 (Section 9.3.2)。
+   */
+  AUTHORIZATION_TOKEN: 0x03,
   MAX_AUTH_TOKEN_CACHE_SIZE: 0x04,
   AUTHORITY: 0x05,
   MOQT_IMPLEMENTATION: 0x07,

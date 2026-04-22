@@ -1,9 +1,18 @@
 import { signal } from "@preact/signals";
-import { toHttpVersionLabel } from "moqt-js";
+import { type AuthorizationToken, toHttpVersionLabel } from "moqt-js";
 import type { CameraDevice, CodecType, VideoSourceType } from "../types";
 import { isDebugPanelOpen } from "./debug";
 
 export { toHttpVersionLabel };
+
+/**
+ * Authorization Token Alias Type
+ * draft-ietf-moq-transport-17 Section 9.3.2
+ *
+ * SETUP では DELETE (0x0) と USE_ALIAS (0x2) は仕様上禁止されているため、
+ * DevTools では "useValue" と "register" のみを扱う。
+ */
+export type AuthorizationTokenAliasTypeValue = "useValue" | "register";
 
 // Connection settings
 export const url = signal("https://127.0.0.1:4443/moqt");
@@ -13,6 +22,45 @@ export const codec = signal<CodecType>("vp8");
 
 // Certificate hash for self-signed certificates (base64 encoded SHA-256 hash)
 export const certificateHash = signal("");
+
+// Authorization Token (draft-ietf-moq-transport-17 Section 9.4.1.4)
+// Token Value はテキスト入力を UTF-8 で bytes 化する。空文字の場合は SETUP に含めない。
+export const authorizationTokenAliasType = signal<AuthorizationTokenAliasTypeValue>("useValue");
+export const authorizationTokenAlias = signal<string>("0");
+export const authorizationTokenType = signal<string>("0");
+export const authorizationTokenValue = signal<string>("");
+
+/**
+ * 現在の入力から AuthorizationToken を構築する
+ *
+ * - Token Value が空の場合は undefined を返す (SETUP に含めない)
+ * - Token Type / Token Alias がパース不能な場合も undefined を返す
+ */
+export function buildAuthorizationToken(): AuthorizationToken | undefined {
+  const value = authorizationTokenValue.value;
+  if (value.length === 0) {
+    return undefined;
+  }
+  let tokenType: bigint;
+  try {
+    tokenType = BigInt(authorizationTokenType.value || "0");
+    if (tokenType < 0n) return undefined;
+  } catch {
+    return undefined;
+  }
+  const tokenValue = new TextEncoder().encode(value);
+  if (authorizationTokenAliasType.value === "useValue") {
+    return { kind: "useValue", tokenType, tokenValue };
+  }
+  let alias: bigint;
+  try {
+    alias = BigInt(authorizationTokenAlias.value || "0");
+    if (alias < 0n) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { kind: "register", alias, tokenType, tokenValue };
+}
 
 // Video settings
 export const videoSource = signal<VideoSourceType>("dummy");
@@ -135,6 +183,15 @@ export function buildQueryString(): string {
     params.set("maxCacheDuration", String(maxCacheDuration.value));
   }
 
+  if (authorizationTokenValue.value) {
+    params.set("authorizationTokenAliasType", authorizationTokenAliasType.value);
+    if (authorizationTokenAliasType.value === "register") {
+      params.set("authorizationTokenAlias", authorizationTokenAlias.value);
+    }
+    params.set("authorizationTokenType", authorizationTokenType.value);
+    params.set("authorizationTokenValue", authorizationTokenValue.value);
+  }
+
   if (isDebugPanelOpen.value) {
     params.set("debug", "1");
   }
@@ -218,6 +275,29 @@ export function initFromUrl(): void {
     if (!Number.isNaN(parsed) && parsed >= 0) {
       maxCacheDuration.value = parsed;
     }
+  }
+
+  const authorizationTokenAliasTypeParam = params.get("authorizationTokenAliasType");
+  if (
+    authorizationTokenAliasTypeParam === "useValue" ||
+    authorizationTokenAliasTypeParam === "register"
+  ) {
+    authorizationTokenAliasType.value = authorizationTokenAliasTypeParam;
+  }
+
+  const authorizationTokenAliasParam = params.get("authorizationTokenAlias");
+  if (authorizationTokenAliasParam !== null) {
+    authorizationTokenAlias.value = authorizationTokenAliasParam;
+  }
+
+  const authorizationTokenTypeParam = params.get("authorizationTokenType");
+  if (authorizationTokenTypeParam !== null) {
+    authorizationTokenType.value = authorizationTokenTypeParam;
+  }
+
+  const authorizationTokenValueParam = params.get("authorizationTokenValue");
+  if (authorizationTokenValueParam !== null) {
+    authorizationTokenValue.value = authorizationTokenValueParam;
   }
 
   const debugParam = params.get("debug");
