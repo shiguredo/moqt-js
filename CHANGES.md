@@ -193,6 +193,8 @@
   - @voluntas
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
   - @voluntas
+- [ADD] 低レベル API の実装ドキュメントを `docs/LOW_LEVEL_API.md` に追加する
+  - @voluntas
 - [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
   - @voluntas
 
