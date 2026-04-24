@@ -51,6 +51,7 @@ import {
   validateForwardValue,
   FetchType,
   VersionSpecificParameterType,
+  type AuthorizationToken,
   type Location,
   type Parameter,
   type SubscriptionFilter,
@@ -126,6 +127,15 @@ export interface ConnectOptions {
    * Note: Certificate validity period must be 14 days or less
    */
   serverCertificateHashes?: CertificateHash[];
+
+  /**
+   * Authorization Token to send as SETUP Option (Option Type 0x03)
+   * draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+   *
+   * SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.3.2)。
+   * REGISTER (0x1) または USE_VALUE (0x3) のみ指定できる。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -848,8 +858,15 @@ export class SessionImpl implements Session {
 
   /**
    * Initialize the session (called after WebTransport connect)
+   *
+   * options に authorizationToken を指定すると、SETUP Option (0x03) として
+   * draft-ietf-moq-transport-17 Section 9.4.1.4 に従い認証トークンを送出する。
    */
-  async initialize(): Promise<void> {
+  async initialize(options?: {
+    path?: string;
+    authority?: string;
+    authorizationToken?: AuthorizationToken;
+  }): Promise<void> {
     // draft-ietf-moq-transport-17 Section 4 (Modularity):
     // 制御ストリームは単方向ストリームのペアに変更された。
     // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
@@ -868,7 +885,11 @@ export class SessionImpl implements Session {
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
     // Send SETUP
-    const setup = createSetup();
+    const setup = createSetup({
+      path: options?.path,
+      authority: options?.authority,
+      authorizationToken: options?.authorizationToken,
+    });
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);
 

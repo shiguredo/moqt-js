@@ -11,6 +11,13 @@
 
 ## develop
 
+- [ADD] `ConnectOptions` に `authorizationToken` を追加し SETUP Option (0x03) として送出する (#0098)
+  - `src/message/authorizationToken.ts` を新設し `AuthorizationToken` / `AuthorizationTokenAliasType` / `encodeAuthorizationToken` / `decodeAuthorizationToken` を実装する
+  - decode 失敗時は `KEY_VALUE_FORMATTING_ERROR` の `SessionError` を throw する
+  - `SetupOptionType.AUTHORIZATION_TOKEN = 0x03` を追加し `createSetup()` に `authorizationToken` オプションを追加する
+  - SETUP で禁止されている Alias Type `DELETE` / `USE_ALIAS` を `createSetup()` で拒否する
+  - `src/index.ts` から `AuthorizationToken` / `AuthorizationTokenAliasType` / `encodeAuthorizationToken` / `decodeAuthorizationToken` を公開する
+  - @voluntas
 - [ADD] moqt-devtools / wt-devtools に HTTP/2 / HTTP/3 の接続判別表示を追加する (#0088)
   - `Session.reliability` getter を追加する
   - `src/httpVersion.ts` に純粋関数 `toHttpVersionLabel` と `HttpVersionLabel` 型を追加する

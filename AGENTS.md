@@ -43,6 +43,7 @@
 
 ## issues について
 
+- `0000-template` を参考にすること
 - 番号が小さい issues から順番に対応すること
 - `{seqnum}-{category}-{short-description}.md` という命名規則を守ること
   - seqnum は `issues/SEQUENCE` ファイルの値を使うこと（9999 を超えたら 5 桁にする）
@@ -53,12 +54,21 @@
 - issue を作成したらコミットすること
   - 複数 issue をまとめてコミットしてよい
 - issue をコミットするときはコミットメッセージに issue の番号とタイトルを記載すること
+  - `issues: {seq} {title}
 - 1 issue 完了ごとに 1 コミットすること
 - Issue の作成日はファイルのタイトルの後に `Created: YYYY-MM-DD` として記載すること
 - Issue の完了日はファイルのタイトルの後に `Completed: YYYY-MM-DD` として記載すること
 - Issue を作成した LLM の Model と Version をファイルのタイトルの後に `Model: <model-name> <version>` として記載すること
-  - Opus 4.6 や GPT-5.4 など
+  - Opus 4.7 や GPT-5.4 など
 - Issue はなぜこの対応が必要なのかの根拠を明確にすること
+
+### git ブランチの命名規則
+
+- Git Flow を使うこと
+- バグ修正は prefix を `feature/fix-` でブランチを切って対応すること
+- 機能追加は prefix を `feature/add-` でブランチを切って対応すること
+- 後方互換のない変更は prefix を `feature/change-` でブランチを切って対応すること
+- ブランチ名に issue の番号を含めないこと
 
 ### issue が実は解決してなかった場合
 
