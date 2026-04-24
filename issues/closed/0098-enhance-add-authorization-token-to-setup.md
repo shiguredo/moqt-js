@@ -1,6 +1,7 @@
 # ConnectOptions に authorizationToken を追加し SETUP Option として送出する
 
 Created: 2026-04-22
+Completed: 2026-04-24
 Model: Claude Opus 4.7
 
 ## 概要
@@ -62,4 +63,16 @@ draft-ietf-moq-transport-17 §9.4.1.4 (AUTHORIZATION TOKEN Setup Option) に従�
 - `src/message/index.ts`
 - `src/message/setup.ts`
 - `src/message/setup.test.ts`
+- `src/message/types.ts`
 - `src/session.ts`
+
+## 解決方法
+
+- `src/message/authorizationToken.ts` を新設し `AuthorizationTokenAliasType` と `AuthorizationToken` discriminated union を定義した。`encodeAuthorizationToken` / `decodeAuthorizationToken` を実装し、decode 失敗時は `SessionError` with `KEY_VALUE_FORMATTING_ERROR` を throw する。SETUP 送出用に Alias Type を検証する `assertAuthorizationTokenForSetup` も提供する。
+- `src/message/authorizationToken.test.ts` に USE_VALUE / REGISTER / USE_ALIAS / DELETE の roundtrip と、不正データ / 空データで `KEY_VALUE_FORMATTING_ERROR` になることを確認するテストを追加した。
+- `src/message/authorizationToken.prop.ts` に fast-check ベースの roundtrip PBT を追加した。
+- `src/message/types.ts` の `SetupOptionType` に `AUTHORIZATION_TOKEN = 0x03` を追加した。
+- `src/message/setup.ts` の `createSetup()` に `authorizationToken?: AuthorizationToken` オプションを追加。指定時は `assertAuthorizationTokenForSetup` で DELETE / USE_ALIAS を拒否してから encode 結果を `AUTHORIZATION_TOKEN` Setup Option の value として parameters に積む。`getSetupAuthorizationTokens()` を追加した。
+- `src/message/setup.test.ts` に USE_VALUE / REGISTER の SETUP roundtrip と DELETE / USE_ALIAS 拒否のテスト、および `SetupOptionType.AUTHORIZATION_TOKEN = 0x03` の確認テストを追加した。
+- `src/session.ts` の `ConnectOptions` に `authorizationToken?: AuthorizationToken` を追加し、`SessionImpl.initialize()` が options として受け取って `createSetup()` に伝搬するようにした。
+- `src/index.ts` の `connect()` から `options?.authorizationToken` を `session.initialize()` に渡し、`AuthorizationToken` / `AuthorizationTokenAliasType` / `encodeAuthorizationToken` / `decodeAuthorizationToken` を公開した。

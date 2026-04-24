@@ -8,6 +8,12 @@
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import {
+  type AuthorizationToken,
+  assertAuthorizationTokenForSetup,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./authorizationToken";
 import { type Parameter, decodeKeyValuePairs, encodeKeyValuePairs } from "./parameter";
 import { MessageType, SetupOptionType } from "./types";
 
@@ -25,8 +31,16 @@ export interface Setup {
 
 /**
  * Setup を作成
+ *
+ * authorizationToken を指定すると Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+ * として Option Type 0x03 に積む。Section 9.3.2 より SETUP では Alias Type
+ * DELETE / USE_ALIAS は禁止されているため、事前に検証する。
  */
-export function createSetup(options?: { path?: string; authority?: string }): Setup {
+export function createSetup(options?: {
+  path?: string;
+  authority?: string;
+  authorizationToken?: AuthorizationToken;
+}): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
 
@@ -34,6 +48,14 @@ export function createSetup(options?: { path?: string; authority?: string }): Se
     parameters.push({
       type: SetupOptionType.PATH,
       value: encoder.encode(options.path),
+    });
+  }
+
+  if (options?.authorizationToken) {
+    assertAuthorizationTokenForSetup(options.authorizationToken);
+    parameters.push({
+      type: SetupOptionType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(options.authorizationToken),
     });
   }
 
@@ -118,4 +140,17 @@ export function getSetupMoqtImplementation(msg: Setup): string | undefined {
   const param = getSetupParameter(msg, SetupOptionType.MOQT_IMPLEMENTATION);
   if (!param) return undefined;
   return new TextDecoder().decode(param.value);
+}
+
+/**
+ * Setup メッセージから AUTHORIZATION_TOKEN を取得する
+ * draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN)
+ *
+ * Setup Option の値は Section 9.3.2 の Token 構造。
+ * 複数の Authorization Token を一つの SETUP に載せられるため、配列で返す。
+ */
+export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
+  return msg.parameters
+    .filter((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN)
+    .map((p) => decodeAuthorizationToken(p.value));
 }

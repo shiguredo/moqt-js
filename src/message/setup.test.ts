@@ -10,8 +10,10 @@ import {
   decodeSetupPayload,
   getSetupPath,
   getSetupAuthority,
+  getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
 } from "./setup";
+import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import { decodeVarint } from "../varint";
@@ -90,4 +92,88 @@ test("Setup: エンコード・デコード roundtrip", () => {
   assert.equal(getSetupPath(decoded), "/moqt");
   assert.equal(getSetupAuthority(decoded), "example.com");
   assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
+});
+
+// draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+test("Setup: AUTHORIZATION_TOKEN (USE_VALUE) 付きで roundtrip", () => {
+  const tokenValue = new TextEncoder().encode("jwt-payload");
+  const setup = createSetup({
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 0n,
+      tokenValue,
+    },
+  });
+
+  // parameters には AUTHORIZATION_TOKEN と MOQT_IMPLEMENTATION が含まれる
+  assert.equal(setup.parameters.length, 2);
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN));
+
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+
+  const tokens = getSetupAuthorizationTokens(decoded);
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].aliasType, AuthorizationTokenAliasType.USE_VALUE);
+  if (tokens[0].aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    assert.equal(tokens[0].tokenType, 0n);
+    assert.deepEqual(Array.from(tokens[0].tokenValue), Array.from(tokenValue));
+  }
+});
+
+test("Setup: AUTHORIZATION_TOKEN (REGISTER) 付きで roundtrip", () => {
+  const tokenValue = new TextEncoder().encode("register-value");
+  const setup = createSetup({
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias: 5n,
+      tokenType: 1n,
+      tokenValue,
+    },
+  });
+
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+
+  const tokens = getSetupAuthorizationTokens(decoded);
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].aliasType, AuthorizationTokenAliasType.REGISTER);
+  if (tokens[0].aliasType === AuthorizationTokenAliasType.REGISTER) {
+    assert.equal(tokens[0].tokenAlias, 5n);
+    assert.equal(tokens[0].tokenType, 1n);
+    assert.deepEqual(Array.from(tokens[0].tokenValue), Array.from(tokenValue));
+  }
+});
+
+// draft-ietf-moq-transport-17 Section 9.3.2:
+// "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
+//  it MUST close the session with a PROTOCOL_VIOLATION."
+test("Setup: SETUP で DELETE の Authorization Token を指定すると throw", () => {
+  assert.throws(
+    () =>
+      createSetup({
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.DELETE,
+          tokenAlias: 1n,
+        },
+      }),
+    "not allowed in SETUP",
+  );
+});
+
+test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると throw", () => {
+  assert.throws(
+    () =>
+      createSetup({
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 1n,
+        },
+      }),
+    "not allowed in SETUP",
+  );
+});
+
+test("Setup: AUTHORIZATION_TOKEN の Setup Option Type は 0x03", () => {
+  assert.equal(SetupOptionType.AUTHORIZATION_TOKEN, 0x03);
 });

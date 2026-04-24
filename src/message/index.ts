@@ -61,10 +61,24 @@ export {
   decodeSetupPayload,
   encodeSetupPayload,
   getSetupAuthority,
+  getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
   getSetupParameter,
   getSetupPath,
 } from "./setup";
+
+// Authorization Token (Section 9.3.2)
+export {
+  type AuthorizationToken,
+  type AuthorizationTokenDelete,
+  type AuthorizationTokenRegister,
+  type AuthorizationTokenUseAlias,
+  type AuthorizationTokenUseValue,
+  AuthorizationTokenAliasType,
+  assertAuthorizationTokenForSetup,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./authorizationToken";
 
 // Subscribe Messages
 export {
