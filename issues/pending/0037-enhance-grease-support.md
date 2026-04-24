@@ -95,3 +95,21 @@ GREASE はインターオペラビリティの確保が目的であるため、�
 ## pending 理由
 
 GREASE は RFC では SHOULD レベルの推奨であり、送信頻度や対象の設計判断が必要。また、相手側の実装が GREASE を正しく処理できない場合の接続性リスクがあるため、実装タイミングと範囲の判断が必要。
+
+## 調査結果
+
+**送信側 GREASE は未実装のまま**
+
+- `src/grease.ts` には `isGreaseValue()` と `generateGreaseValue()` があるが、これは値判定と値生成の helper に留まっている。
+- `generateGreaseValue()` の現在の API は `generateGreaseValue(n: number)` であり、issue 本文にある「乱数で都度生成する helper」とは実装形が異なる。
+- 利用箇所を確認すると、`generateGreaseValue()` / `isGreaseValue()` はランタイムの送信パスから参照されていない。
+- `src/message/setup.ts` の `createSetup()` は `PATH` / `AUTHORIZATION_TOKEN` / `AUTHORITY` / `MOQT_IMPLEMENTATION` しか積んでおらず、GREASE Setup Option を追加しない。
+- `src/session.ts` の `publish()` は concrete な `TrackPropertyId` だけを組み立てており、GREASE Track Property を挿入しない。
+- `src/session.ts` の `sendObjectInternal()` / `sendDatagram()` も、呼び出し元から渡された `properties` をそのまま送るだけで、自動 GREASE 注入はしない。
+- 以上から、現状は「helper はあるが送信への配線がない」状態であり、issue の本体は未解決である。
+
+## 今どうするべきか
+
+- 当面は `issues/pending/` のまま維持するのが妥当である。
+- もし着手するなら、まずは影響範囲が最も限定的な `SETUP` Option への opt-in な GREASE 送信から始めるべきである。
+- `Object Properties` や `Track Properties` への GREASE 注入は、相互接続確認と性能影響の見積もりを別途行った上で後続 issue に分けるべきである。

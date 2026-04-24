@@ -34,3 +34,20 @@ draft-ietf-moq-transport-17 Section 5.1 Subscriptions:
 - SessionCallbacks にサーバーからのリクエストに対応するコールバック (onSubscribe, onPublish 等) を追加する必要がある
 - サーバーからのリクエストの Request ID は奇数 (LSB=1) であるため、ID 管理の修正も必要
 - 現状のユースケース (ブラウザクライアント) ではサーバーからのリクエスト受信は稀であり、優先度は低い
+
+## 調査結果
+
+**現行アーキテクチャでは未対応かつ scope 外寄り**
+
+- `README.md` では `moqt-js` を「ブラウザ向けの MOQT クライアントライブラリ」として位置付けており、現在のプロダクトスコープはクライアント専用である。
+- `src/session.ts` の `initialize()` はクライアントとして送信用単方向制御ストリームを開き、受信側ではサーバーからの `incomingUnidirectionalStreams` を 1 本受けて制御ストリームにし、その後も単方向ストリームと datagram だけを監視する。
+- `src/session.ts` 全体を確認しても `incomingBidirectionalStreams` を監視するループは存在しない。双方向ストリームは `sendRequestOnBidiStream()` でクライアント側から開く用途に限定されている。
+- `src/session.ts` の `nextRequestId` は `0n` から始まり `+2n` で増加しており、クライアント発の偶数 Request ID だけを前提にしている。サーバー発の奇数 Request ID を受ける設計にはなっていない。
+- `src/message/publish.ts` / `src/message/subscribe.ts` / `src/message/fetch.ts` にはサーバー側 codec があるが、コメントでも「クライアント専用のためランタイムでは使用しない」と明記されている。
+- 以上から、この issue は単純な受信ループ追加ではなく、クライアント専用アーキテクチャを広げる設計変更になる。
+
+## 今どうするべきか
+
+- 現在のスコープでは、この issue は「未実装の機能」というより「現行方針の対象外」に近い。
+- そのため、いま直ちに実装へ進めるのではなく、クライアント専用方針が変わるまで `issues/pending/` のまま維持するのが妥当である。
+- もし将来対応するなら、1 つの issue で扱わず、`incomingBidirectionalStreams` の受信ループ、サーバー起点リクエスト用 API、奇数 Request ID の管理、各リクエスト種別ごとのフロー実装に分割して進めるべきである。
