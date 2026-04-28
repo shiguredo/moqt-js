@@ -15,15 +15,14 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
       - uses: pnpm/action-setup@v5
-      - run: pnpm --version
-      - run: pnpm install
-      - run: pnpm run build
-      - run: pnpm run lint
-      - run: pnpm run typecheck
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version: "20"
+          cache: true
+      - run: vp run build
+      - run: vp lint
+      - run: vp run typecheck
       - uses: actions/upload-artifact@v7
         with:
           name: moqt-js-dist
