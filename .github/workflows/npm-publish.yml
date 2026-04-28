@@ -18,7 +18,7 @@ jobs:
       - uses: pnpm/action-setup@v5
       - uses: voidzero-dev/setup-vp@v1
         with:
-          node-version: "20"
+          node-version: "lts"
           cache: true
       - run: vp run build
       - run: vp lint
