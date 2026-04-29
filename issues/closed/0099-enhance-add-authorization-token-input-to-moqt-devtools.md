@@ -1,6 +1,7 @@
 # moqt-devtools に Authorization Token 入力欄を追加する
 
 Created: 2026-04-22
+Completed: 2026-04-29
 Model: Claude Opus 4.7
 
 ## 概要
@@ -51,3 +52,15 @@ Connection Settings に Authorization Token セクションを追加:
 ## 依存
 
 - issue 0098 (ConnectOptions.authorizationToken の API 追加)
+
+## 解決方法
+
+- `devtools/src/signals/connectionSettings.ts` に以下の signal と helper を追加:
+  - `authorizationTokenAliasType: signal<"useValue" | "register">("useValue")`
+  - `authorizationTokenAlias: signal<string>("0")`
+  - `authorizationTokenType: signal<string>("0")`
+  - `authorizationTokenValue: signal<string>("")`
+  - `buildAuthorizationToken()`: 設定値から `AuthorizationToken | undefined` を組み立てる純粋関数。Token Value が空、または Token Alias / Token Type が不正な 10 進文字列の場合は `undefined` を返す。
+- `devtools/src/components/ConnectionSettings.tsx` の WebCodecs Settings の下に Authorization Token セクションを追加。Alias Type が `register` の場合のみ Token Alias 入力を表示する。
+- `buildQueryString` / `initFromUrl` に `authorizationTokenAliasType` / `authorizationTokenAlias` / `authorizationTokenType` / `authorizationTokenValue` を追加した。Token Value が空の場合はクエリ文字列に含めない。
+- `devtools/src/hooks/usePublisher.ts` / `useSubscriber.ts` の `connectOptions` に `authorizationToken?: AuthorizationToken` を加え、`buildAuthorizationToken()` の戻り値を注入するようにした。

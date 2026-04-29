@@ -6,6 +6,7 @@ import {
   encodeCatalog,
   createCompleteCatalog,
   createVideoFrameSource,
+  type AuthorizationToken,
   type DebugMessage,
   type CertificateHash,
 } from "moqt-js";
@@ -242,7 +243,10 @@ export function usePublisher() {
       });
 
       // Build connect options
-      const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+      const connectOptions: {
+        serverCertificateHashes?: CertificateHash[];
+        authorizationToken?: AuthorizationToken;
+      } = {};
       if (settings.certificateHash.value) {
         connectOptions.serverCertificateHashes = [
           {
@@ -250,6 +254,10 @@ export function usePublisher() {
             value: settings.base64ToArrayBuffer(settings.certificateHash.value),
           },
         ];
+      }
+      const authToken = settings.buildAuthorizationToken();
+      if (authToken) {
+        connectOptions.authorizationToken = authToken;
       }
 
       // Connect to MOQT server

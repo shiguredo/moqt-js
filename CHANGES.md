@@ -11,6 +11,13 @@
 
 ## develop
 
+- [ADD] moqt-devtools に Authorization Token 入力欄を追加する (#0099)
+  - Connection Settings に Alias Type / Token Alias / Token Type / Token Value の入力フィールドを追加し、`buildAuthorizationToken()` で `ConnectOptions.authorizationToken` を組み立てる
+  - Alias Type は `USE_VALUE` / `REGISTER` のみ許可 (SETUP では DELETE / USE_ALIAS は仕様上禁止)
+  - Token Value は UTF-8 テキスト入力で受け取り、空の場合は SETUP Option を送出しない
+  - クエリパラメータ `authorizationTokenAliasType` / `authorizationTokenAlias` / `authorizationTokenType` / `authorizationTokenValue` を `buildQueryString` / `initFromUrl` でハンドリングする
+  - `usePublisher` / `useSubscriber` で `connect()` の \`ConnectOptions\` に注入する
+  - @voluntas
 - [ADD] `ConnectOptions` に `authorizationToken` を追加し SETUP Option (0x03) として送出する (#0098)
   - `src/message/authorizationToken.ts` を新設し `AuthorizationToken` / `AuthorizationTokenAliasType` / `encodeAuthorizationToken` / `decodeAuthorizationToken` を実装する
   - decode 失敗時は `KEY_VALUE_FORMATTING_ERROR` の `SessionError` を throw する
