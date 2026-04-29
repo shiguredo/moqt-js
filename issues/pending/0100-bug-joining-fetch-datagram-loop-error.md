@@ -52,3 +52,7 @@ Joining Fetch を有効にして Subscribe すると、SUBSCRIBE_OK 受信直後
 **次のアクション**
 
 - リレー側のログを確認して、FETCH 受信時に何が起きているか調査する
+
+## pending 理由
+
+調査の結果、リレー側 (Joining FETCH 未実装、または FETCH 処理でのプロトコルエラー) の問題と判断された。moqt-js 側の FETCH エンコーディングはテストで仕様準拠が確認済み。リレー側での Joining FETCH 対応または原因調査の結果を待つ必要があるため pending とする。
