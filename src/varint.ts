@@ -1,3 +1,5 @@
+import { IncompleteDataError, ProtocolViolationError } from "./error";
+
 /**
  * MOQT 可変長整数エンコーディング
  * draft-ietf-moq-transport-17 Section 1.4.1
@@ -144,7 +146,7 @@ export function encodeVarint(value: number | bigint): Uint8Array {
 export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
   const available = data.length - offset;
   if (available < 1) {
-    throw new Error(`insufficient data: need 1 byte, got ${available}`);
+    throw new IncompleteDataError(`insufficient data: need 1 byte, got ${available}`);
   }
 
   const firstByte = data[offset];
@@ -179,10 +181,10 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
     usableBitsInFirstByte = 2;
   } else if (firstByte === 0xfc) {
     // 11111100: 無効なコードポイント
-    throw new Error("invalid varint code point: 0xFC");
+    throw new ProtocolViolationError("invalid varint code point: 0xFC");
   } else if (firstByte === 0xfd) {
     // 11111101: 無効なコードポイント
-    throw new Error("invalid varint code point: 0xFD");
+    throw new ProtocolViolationError("invalid varint code point: 0xFD");
   } else if (firstByte === 0xfe) {
     // 11111110: 8 bytes
     length = 8;
@@ -194,7 +196,7 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
   }
 
   if (available < length) {
-    throw new Error(`insufficient data: need ${length} bytes, got ${available}`);
+    throw new IncompleteDataError(`insufficient data: need ${length} bytes, got ${available}`);
   }
 
   // 値のデコード
