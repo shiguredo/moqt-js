@@ -29,7 +29,6 @@ import {
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishDonePayload,
-  decodePublishNamespacePayload,
   decodePublishOkPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
@@ -429,21 +428,6 @@ export interface TrackStatusResult {
 }
 
 /**
- * Namespace 公開通知
- * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
- */
-export interface NamespaceAnnouncement {
-  /**
-   * 公開されたトラックの Namespace
-   */
-  namespace: string[];
-  /**
-   * パラメータ
-   */
-  parameters: Parameter[];
-}
-
-/**
  * Namespace サブスクリプションのコールバック
  *
  * draft-ietf-moq-transport-17 Section 6.1:
@@ -465,11 +449,6 @@ export interface NamespaceSubscriptionCallbacks {
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
   onNamespaceDone?: (namespaceSuffix: string[]) => void;
-  /**
-   * PUBLISH_NAMESPACE を受信したときに呼ばれる（Control Stream 経由）
-   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
-   */
-  announce?: (announcement: NamespaceAnnouncement) => void;
   /**
    * エラー時のコールバック
    */
@@ -757,21 +736,24 @@ export class SessionImpl implements Session {
       writer?: WritableStreamDefaultWriter<Uint8Array>;
     }
   >();
-  private pendingNamespacePublish = new Map<
-    bigint,
-    {
-      resolve: (publication: NamespacePublication) => void;
-      reject: (err: Error) => void;
-      callbacks?: NamespacePublicationCallbacks;
-      namespace: string[];
-    }
-  >();
+  /**
+   * PUBLISH_NAMESPACE の状態管理
+   *
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+   * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.17
+   */
   private namespacePublications = new Map<
     bigint,
     {
       callbacks?: NamespacePublicationCallbacks;
-      state: "active" | "closed";
+      state: "pending" | "active" | "closed";
       namespace: string[];
+      stream: WebTransportBidirectionalStream;
+      streamReader: ReadableStreamDefaultReader<Uint8Array>;
+      controlReader: ControlStreamReader;
+      writer: WritableStreamDefaultWriter<Uint8Array>;
     }
   >();
 
@@ -1697,20 +1679,26 @@ export class SessionImpl implements Session {
   /**
    * Namespace を公開する（トラック発見用）
    *
-   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
-   * PUBLISH_NAMESPACE notifies that a Track Namespace has tracks available.
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+   * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.17
+   *
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * 公開のキャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
   async publishNamespace(
     namespace: string[],
     callbacks?: NamespacePublicationCallbacks,
   ): Promise<NamespacePublication> {
     if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
+      throw new Error("session is closed");
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
     if (this.receivedGoaway) {
-      throw new Error("Cannot publish namespace after receiving GOAWAY");
+      throw new Error("cannot publish namespace after receiving GOAWAY");
     }
 
     const requestId = this.nextRequestId;
@@ -1718,12 +1706,13 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
 
-    // REQUEST_OK を待つ Promise
-    const promise = new Promise<NamespacePublication>((resolve, reject) => {
-      this.pendingNamespacePublish.set(requestId, { resolve, reject, callbacks, namespace });
-    });
+    // 専用の双方向ストリームを作成
+    const stream = await this.transport.createBidirectionalStream();
+    const streamReader = stream.readable.getReader();
+    const controlReader = new ControlStreamReader();
+    const writer = stream.writable.getWriter();
 
-    // PUBLISH_NAMESPACE メッセージを送信
+    // PUBLISH_NAMESPACE メッセージを構築
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
@@ -1734,13 +1723,162 @@ export class SessionImpl implements Session {
       parameters: [],
     };
 
+    // メッセージをエンコードして送信
+    // draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // ControlStreamWriter に委譲する。
+    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.17
     const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-    await this.sendControlMessage(MessageType.PUBLISH_NAMESPACE, payload, {
-      requestId: requestId.toString(),
-      trackNamespace: namespace,
+    const controlWriter = new ControlStreamWriter();
+    const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
+
+    // デバッグコールバック
+    this.callbacks.debug?.({
+      direction: "send",
+      type: MessageType.PUBLISH_NAMESPACE,
+      typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
+      payload,
+      decoded: {
+        requestId: requestId.toString(),
+        trackNamespace: namespace,
+      },
+      timestamp: Date.now(),
     });
 
-    return promise;
+    await writer.write(framed);
+
+    // REQUEST_OK / REQUEST_ERROR を待つ Promise
+    return new Promise<NamespacePublication>((resolve, reject) => {
+      // 状態を登録
+      this.namespacePublications.set(requestId, {
+        callbacks,
+        state: "pending",
+        namespace,
+        stream,
+        streamReader,
+        controlReader,
+        writer,
+      });
+
+      // 専用ストリームの受信ループを開始
+      void this.startNamespacePublicationStreamLoop(requestId, resolve, reject);
+    });
+  }
+
+  /**
+   * PUBLISH_NAMESPACE 専用ストリームの受信ループ
+   *
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
+   * それ以外のメッセージを受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+   */
+  private async startNamespacePublicationStreamLoop(
+    requestId: bigint,
+    resolve: (publication: NamespacePublication) => void,
+    reject: (err: Error) => void,
+  ): Promise<void> {
+    const publication = this.namespacePublications.get(requestId);
+    if (!publication) {
+      reject(new Error("namespace publication not found"));
+      return;
+    }
+
+    const { streamReader, controlReader, callbacks } = publication;
+    let resolved = false;
+
+    try {
+      while (publication.state !== "closed") {
+        const { value, done } = await streamReader.read();
+        if (done) {
+          // ストリームが peer により閉じられた
+          break;
+        }
+
+        const messages = controlReader.feed(value);
+        for (const msg of messages) {
+          const messageType = msg.type;
+          const messagePayload = msg.payload;
+
+          // デバッグコールバック
+          this.callbacks.debug?.({
+            direction: "recv",
+            type: messageType,
+            typeName: getMessageTypeName(messageType),
+            payload: messagePayload,
+            timestamp: Date.now(),
+          });
+
+          switch (messageType) {
+            case MessageType.REQUEST_OK: {
+              // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
+              // Request ID はストリームが特定するため不要
+              // https://github.com/moq-wg/moq-transport/pull/1499
+              decodeRequestOkPayload(messagePayload);
+              if (resolved) {
+                // 二重応答は仕様違反
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              publication.state = "active";
+              resolved = true;
+              resolve(this.createNamespacePublication(requestId));
+              break;
+            }
+
+            case MessageType.REQUEST_ERROR: {
+              // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
+              // Request ID はストリームが特定するため不要
+              // https://github.com/moq-wg/moq-transport/pull/1499
+              const decodedMsg = decodeRequestErrorPayload(messagePayload);
+              const error = new RequestError(
+                decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
+                Number(decodedMsg.errorCode) as RequestErrorCode,
+              );
+              publication.state = "closed";
+              callbacks?.error?.(error);
+              if (!resolved) {
+                reject(error);
+              }
+              return;
+            }
+
+            default:
+              // draft-ietf-moq-transport-17 Section 9 (Control Messages):
+              // "An endpoint that receives an unknown message type MUST close the session."
+              this.closeWithError(
+                new SessionError(
+                  `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+          }
+        }
+      }
+    } catch (error) {
+      if (publication.state !== "closed") {
+        publication.state = "closed";
+        const wrapped = error instanceof Error ? error : new Error(String(error));
+        callbacks?.error?.(wrapped);
+        if (!resolved) {
+          reject(wrapped);
+        }
+      }
+    } finally {
+      // クリーンアップ
+      publication.state = "closed";
+      try {
+        streamReader.releaseLock();
+      } catch {
+        // 既に解放済みの場合は無視
+      }
+      this.namespacePublications.delete(requestId);
+    }
   }
 
   /**
@@ -1881,10 +2019,6 @@ export class SessionImpl implements Session {
       pending.reject(sessionClosedError);
     }
     this.pendingTrackStatus.clear();
-    for (const [, pending] of this.pendingNamespacePublish) {
-      pending.reject(sessionClosedError);
-    }
-    this.pendingNamespacePublish.clear();
 
     // Fetcher/Subscriber の登録待ちコールバックを解放
     for (const callbacks of this.subscriberReadyCallbacks.values()) {
@@ -2963,8 +3097,12 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-17 Section 3.3:
    * リクエスト/レスポンス (SUBSCRIBE_OK, PUBLISH_OK, FETCH_OK, REQUEST_OK,
    * REQUEST_ERROR) は双方向ストリームに移動した。
-   * 制御ストリームに残るのは GOAWAY, PUBLISH_DONE, PUBLISH_NAMESPACE 等。
+   * 制御ストリームに残るのは GOAWAY のみ。
    * https://github.com/moq-wg/moq-transport/pull/1389
+   *
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+   * 制御ストリーム上で受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
    */
   private handleControlMessage(type: number, payload: Uint8Array): void {
     this.statsControlMessagesReceived++;
@@ -2982,19 +3120,8 @@ export class SessionImpl implements Session {
           ),
         );
         return;
-      case MessageType.REQUEST_OK:
-        // PUBLISH_NAMESPACE への応答（制御ストリーム上で受信）
-        decoded = this.handleRequestOk(payload);
-        break;
-      case MessageType.REQUEST_ERROR:
-        // PUBLISH_NAMESPACE への応答（制御ストリーム上で受信）
-        decoded = this.handleControlStreamRequestError(payload);
-        break;
       case MessageType.GOAWAY:
         decoded = this.handleGoaway(payload);
-        break;
-      case MessageType.PUBLISH_NAMESPACE:
-        decoded = this.handlePublishNamespace(payload);
         break;
       default:
         // draft-ietf-moq-transport-17 Section 9 (Control Messages):
@@ -3037,35 +3164,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 制御ストリーム上の REQUEST_ERROR を処理する
-   *
-   * draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
-   * REQUEST_ERROR は通常、双方向ストリーム上で送信される。
-   * 制御ストリームで受信する場合は PUBLISH_NAMESPACE への応答のみ。
-   * https://github.com/moq-wg/moq-transport/pull/1499
-   */
-  private handleControlStreamRequestError(payload: Uint8Array): Record<string, unknown> {
-    const decoded = decodeRequestErrorPayload(payload);
-
-    const error = new RequestError(
-      decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-      Number(decoded.errorCode) as RequestErrorCode,
-    );
-
-    // PUBLISH_NAMESPACE の応答
-    for (const [requestId, pendingNamespacePubReq] of this.pendingNamespacePublish) {
-      this.pendingNamespacePublish.delete(requestId);
-      pendingNamespacePubReq.reject(error);
-    }
-
-    return {
-      errorCode: Number(decoded.errorCode),
-      retryInterval: decoded.retryInterval.toString(),
-      reason: decoded.reasonPhrase,
-    };
-  }
-
-  /**
    * 双方向ストリーム上の REQUEST_UPDATE への REQUEST_OK を処理する
    *
    * draft-ietf-moq-transport-17 Section 9.10.1 (Updating Subscriptions):
@@ -3096,39 +3194,6 @@ export class SessionImpl implements Session {
         break;
       }
     }
-  }
-
-  /**
-   * 制御ストリーム上の REQUEST_OK を処理する
-   *
-   * draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
-   * REQUEST_OK は通常、双方向ストリーム上で送信される。
-   * 制御ストリームで受信する場合は PUBLISH_NAMESPACE への応答のみ。
-   * https://github.com/moq-wg/moq-transport/pull/1499
-   */
-  private handleRequestOk(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodeRequestOkPayload(payload);
-
-    // PUBLISH_NAMESPACE の応答
-    for (const [requestId, pendingNamespacePub] of this.pendingNamespacePublish) {
-      this.pendingNamespacePublish.delete(requestId);
-
-      // アクティブな公開として登録
-      this.namespacePublications.set(requestId, {
-        callbacks: pendingNamespacePub.callbacks,
-        state: "active",
-        namespace: pendingNamespacePub.namespace,
-      });
-
-      // NamespacePublication を作成
-      const publication = this.createNamespacePublication(requestId);
-
-      pendingNamespacePub.resolve(publication);
-    }
-
-    return {
-      parametersCount: msg.parameters.length,
-    };
   }
 
   /**
@@ -3177,34 +3242,6 @@ export class SessionImpl implements Session {
     return {
       newSessionUri: msg.newSessionUri,
       timeout: msg.timeout.toString(),
-    };
-  }
-
-  /**
-   * Handle PUBLISH_NAMESPACE message
-   *
-   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
-   * PUBLISH_NAMESPACE notifies that a Track Namespace has tracks available.
-   */
-  private handlePublishNamespace(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodePublishNamespacePayload(payload);
-    const namespaceStrings = trackNamespaceToStrings(msg.trackNamespace);
-
-    // Request ID で対応する NamespaceSubscription を検索
-    const subscription = this.namespaceSubscriptions.get(msg.requestId);
-    if (subscription && subscription.state === "active") {
-      // コールバックを呼び出す
-      const announcement: NamespaceAnnouncement = {
-        namespace: namespaceStrings,
-        parameters: msg.parameters,
-      };
-      subscription.callbacks.announce?.(announcement);
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-      trackNamespace: namespaceStrings,
-      parametersCount: msg.parameters.length,
     };
   }
 
@@ -3261,9 +3298,11 @@ export class SessionImpl implements Session {
    * NamespacePublication オブジェクトを作成する
    */
   private createNamespacePublication(requestId: bigint): NamespacePublication {
+    // 内部状態の "pending" は REQUEST_OK 受信前のみで、外部に公開する前に "active" になる
     const getState = (): "active" | "closed" => {
       const pub = this.namespacePublications.get(requestId);
-      return pub?.state ?? "closed";
+      if (!pub) return "closed";
+      return pub.state === "active" ? "active" : "closed";
     };
 
     const getNamespace = (): string[] => {
@@ -3289,9 +3328,10 @@ export class SessionImpl implements Session {
   /**
    * Namespace 公開を終了する
    *
-   * draft-ietf-moq-transport-17:
-   * PUBLISH_NAMESPACE_DONE メッセージは廃止された。
-   * Namespace 公開の終了は内部状態のクリーンアップのみで行う。
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、
+   * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
   private async closeNamespacePublication(requestId: bigint): Promise<void> {
     const publication = this.namespacePublications.get(requestId);
@@ -3300,6 +3340,14 @@ export class SessionImpl implements Session {
     }
 
     publication.state = "closed";
+
+    // ストリームを閉じる（FIN を送信）
+    try {
+      await publication.writer.close();
+    } catch {
+      // ストリームが既に閉じられている場合は無視
+    }
+
     this.namespacePublications.delete(requestId);
   }
 

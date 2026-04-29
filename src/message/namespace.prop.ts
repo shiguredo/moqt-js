@@ -160,6 +160,49 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 });
 
 /**
+ * draft-ietf-moq-transport-17 Section 9.17:
+ * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+ * フレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
+ * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で
+ * 正しくパースできることを検証する。
+ */
+test("PublishNamespace のフレーミングが ControlStreamReader で復元できる", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespaceStringsArb,
+      parametersArb,
+      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+        const original: PublishNamespace = {
+          type: MessageType.PUBLISH_NAMESPACE,
+          requestId,
+          requiredRequestIdDelta,
+          trackNamespace: createTrackNamespace(namespaceParts),
+          parameters,
+        };
+
+        const payload = encodePublishNamespacePayload(original);
+        const writer = new ControlStreamWriter();
+        const framed = writer.encode(MessageType.PUBLISH_NAMESPACE, payload);
+
+        const reader = new ControlStreamReader();
+        const messages = reader.feed(framed);
+
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].type, MessageType.PUBLISH_NAMESPACE);
+        assert.deepEqual(messages[0].payload, payload);
+
+        const decoded = decodePublishNamespacePayload(messages[0].payload);
+        assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-17 Section 9.18:
  * NAMESPACE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
