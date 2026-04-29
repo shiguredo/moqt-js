@@ -1,6 +1,7 @@
 # wt-devtools に WebTransport API の静的対応状況チェックを追加する
 
 Created: 2026-04-22
+Completed: 2026-04-22
 Model: Opus 4.7
 
 ## 概要
@@ -101,3 +102,12 @@ wt-devtools は WebTransport API の各機能 (bidi / uni / datagram / getStats 
 - Chrome (WebTransport 対応) で、接続前にサマリが「全て対応」を示すこと
 - Firefox など WebTransport 未実装環境で「未対応」表示になること (手元で確認できる範囲で確認)
 - Safari (26.x 以降で createWritable がある環境) と Chrome (writable プロパティの旧仕様) でサマリに差異が出ないが、詳細表示では `createWritable` と `writable` の対応状況が別々に見えること
+
+## 解決方法
+
+PR #9 (commit b7307c0) で実装済み。
+
+- `devtools/src/webtransport-devtools/signals.ts` に `wtStaticApiSupport` シグナル (`StaticApiGroup[]`) と純粋関数 `detectStaticApiSupport()` を追加し、ページロード時に `WebTransport.prototype` 等を 1 回評価する。
+- `devtools/src/webtransport-devtools/components/StaticApiSupportPanel.tsx` を新設し、Connection Settings の上に配置 (`App.tsx`)。サマリは「全て対応」「一部未対応 (N 項目)」「WebTransport 未対応」の 3 状態、詳細は機能カテゴリ (Core / Streams / Datagrams / Stats / Session Info) でグループ化して表示する。
+- 既存の接続チェック (`wtApiSupport` ツリー) は変更しない。
+- 本 issue ファイル自体の closed への移動が抜けていたため、ここで closed/ に移動する。
