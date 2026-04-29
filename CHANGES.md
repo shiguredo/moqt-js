@@ -77,6 +77,10 @@
   - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
   - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
   - @voluntas
+- [FIX] `waitForSubscriber` / `waitForFetcher` のタイムアウトでストリームが cancel されない問題を修正する (#0111)
+  - `handleIncomingStream` で `waitForSubscriber()` / `waitForFetcher()` が null を返した場合に `reader.cancel()` を呼んで peer に STOP_SENDING を送るようにする
+  - 不明な subscriber / fetcher 向けのデータストリームが silent に消費され続けるのを防ぐ
+  - @voluntas
 - [FIX] Joining Fetch 送信エラーで pendingFetch エントリがリークする問題を修正する (#0110)
   - `sendJoiningFetch()` の bidi ストリーム作成 / 書き込みで例外が発生した場合に `pendingFetch` から該当エントリを削除し、`options.onError?.()` を呼ぶようにする
   - 呼び出し元での fire-and-forget による Promise rejection の取りこぼしを防止する
