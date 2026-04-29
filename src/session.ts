@@ -3687,6 +3687,10 @@ export class SessionImpl implements Session {
               if (!fetcher) {
                 fetcher = await this.waitForFetcher(header.requestId);
                 if (!fetcher) {
+                  // タイムアウトで Fetcher が登録されなかった場合は、
+                  // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
+                  // draft-ietf-moq-transport-17 Section 5.3 に倣ってストリームを reset する。
+                  void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
                   break;
                 }
               }
@@ -3726,6 +3730,10 @@ export class SessionImpl implements Session {
                 // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
                 subscriber = await this.waitForSubscriber(header.trackAlias);
                 if (!subscriber) {
+                  // タイムアウトで Subscriber が登録されなかった場合は、
+                  // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
+                  // draft-ietf-moq-transport-17 Section 5.3 に倣ってストリームを reset する。
+                  void reader.cancel(`unknown subscriber: trackAlias=${header.trackAlias}`);
                   break;
                 }
               }

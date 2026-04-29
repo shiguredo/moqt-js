@@ -1,6 +1,7 @@
 # waitForSubscriber / waitForFetcher のタイムアウトでストリームが cancel されない
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -118,3 +119,10 @@ WebTransport stream の cancel は実機依存のため単体テストは困難�
 ## 補足
 
 レビュー指摘 #M3 を受けて起票。本 issue は `waitForSubscriber` / `waitForFetcher` のタイムアウト後処理に絞る。タイムアウト値の妥当性、WebTransport stream の reset プロトコル詳細は別途検討する。
+
+## 解決方法
+
+- `Session.handleIncomingStream` (`src/session.ts`) で `waitForFetcher()` / `waitForSubscriber()` が null を返した場合に `void reader.cancel(reason)` を呼んで peer に STOP_SENDING を送ってから break するように変更した。reason には `unknown fetcher: requestId=...` / `unknown subscriber: trackAlias=...` を渡す。
+- `cancel()` の Promise は `void` で破棄しているため、reader の `releaseLock()` が cancel 完了より先に走る可能性があるが、`finally` 内の `releaseLock()` はそのままでも動作する (cancel が release を待つ責務はない)。
+- `waitForSubscriber` / `waitForFetcher` 自体には変更を加えていない。タイムアウト値 5 秒の妥当性は本 issue のスコープ外。
+- WebTransport 依存のため自動テストはなし。実機検証で SUBSCRIBE_OK が遅延した場合に stream が cancel されること、`SessionStatistics.subscriberStreamsActive` が 0 に戻ることを確認する。
