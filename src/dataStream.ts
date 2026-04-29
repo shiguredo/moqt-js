@@ -12,6 +12,7 @@
 
 import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
+import { ProtocolViolationError } from "./error";
 
 /**
  * Object Status の値を検証する
@@ -26,7 +27,9 @@ function validateObjectStatus(status: number): void {
     status !== ObjectStatus.END_OF_GROUP &&
     status !== ObjectStatus.END_OF_TRACK
   ) {
-    throw new Error(`invalid object status: 0x${status.toString(16)}, expected 0x0, 0x3, or 0x4`);
+    throw new ProtocolViolationError(
+      `invalid object status: 0x${status.toString(16)}, expected 0x0, 0x3, or 0x4`,
+    );
   }
 }
 
@@ -233,12 +236,12 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // 0b00X1XXXX の形式でないタイプ値は不正
   const subgroupIdMode = (typeNum & 0x06) >> 1;
   if (subgroupIdMode === 0x03) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
     );
   }
   if ((typeNum & 0x10) === 0) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b00X1XXXX`,
     );
   }
@@ -415,7 +418,7 @@ export function decodeObjectFields(
     // If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new Error("Protocol violation: extension headers on non-Normal status object");
+      throw new ProtocolViolationError("extension headers on non-Normal status object");
     }
   }
 
@@ -668,13 +671,13 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   // 不正なタイプ値を検証する
   // 0b00X0XXXX の形式でないタイプ値は不正
   if ((typeNum & 0x10) !== 0 || typeNum > 0x2f) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `invalid datagram type: 0x${typeNum.toString(16)}, does not match form 0b00X0XXXX`,
     );
   }
   // STATUS (0x20) と END_OF_GROUP (0x02) の両方が設定されたタイプ値は不正
   if ((typeNum & 0x20) !== 0 && (typeNum & 0x02) !== 0) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `invalid datagram type: 0x${typeNum.toString(16)}, STATUS and END_OF_GROUP bits are both set`,
     );
   }
@@ -711,7 +714,9 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     //  an Properties Length of 0, it MUST close the session with a
     //  PROTOCOL_VIOLATION."
     if (propertiesLength === 0) {
-      throw new Error("datagram has PROPERTIES bit set but Properties Length is 0");
+      throw new ProtocolViolationError(
+        "datagram has PROPERTIES bit set but Properties Length is 0",
+      );
     }
 
     properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
@@ -732,7 +737,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     // If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new Error("Protocol violation: extension headers on non-Normal status object");
+      throw new ProtocolViolationError("extension headers on non-Normal status object");
     }
   } else {
     payload = data.slice(offset + totalConsumed);
@@ -801,7 +806,9 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
   totalConsumed += typeConsumed;
 
   if (Number(type) !== FetchHeaderType) {
-    throw new Error(`Invalid Fetch Header type: ${type}, expected ${FetchHeaderType}`);
+    throw new ProtocolViolationError(
+      `invalid fetch header type: ${type}, expected ${FetchHeaderType}`,
+    );
   }
 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -1114,7 +1121,7 @@ export function decodeFetchObjectFields(
     totalConsumed += gidConsumed;
   } else {
     if (isFirst || context === null) {
-      throw new Error("Protocol violation: First object must have GROUP_ID_PRESENT flag set");
+      throw new ProtocolViolationError("first object must have GROUP_ID_PRESENT flag set");
     }
     groupId = context.groupId;
   }
@@ -1128,13 +1135,13 @@ export function decodeFetchObjectFields(
       break;
     case FetchSerializationFlags.SUBGROUP_SAME:
       if (isFirst || context === null) {
-        throw new Error("Protocol violation: First object cannot use SUBGROUP_SAME");
+        throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
       }
       subgroupId = context.subgroupId;
       break;
     case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
       if (isFirst || context === null) {
-        throw new Error("Protocol violation: First object cannot use SUBGROUP_PLUS_ONE");
+        throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
       }
       subgroupId = context.subgroupId + 1n;
       break;
@@ -1145,7 +1152,7 @@ export function decodeFetchObjectFields(
       break;
     }
     default:
-      throw new Error(`Invalid subgroup encoding: ${subgroupEncoding}`);
+      throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
   }
 
   // Object ID
@@ -1156,7 +1163,7 @@ export function decodeFetchObjectFields(
     totalConsumed += oidConsumed;
   } else {
     if (isFirst || context === null) {
-      throw new Error("Protocol violation: First object must have OBJECT_ID_PRESENT flag set");
+      throw new ProtocolViolationError("first object must have OBJECT_ID_PRESENT flag set");
     }
     objectId = context.objectId + 1n;
   }
@@ -1173,7 +1180,7 @@ export function decodeFetchObjectFields(
     // https://github.com/moq-wg/moq-transport/pull/1317
     if (context !== null && subgroupId === context.subgroupId) {
       if (publisherPriority !== context.publisherPriority) {
-        throw new Error(
+        throw new ProtocolViolationError(
           `malformed track: different priorities in same subgroup ` +
             `(subgroup=${subgroupId}, expected=${context.publisherPriority}, actual=${publisherPriority})`,
         );
@@ -1181,7 +1188,7 @@ export function decodeFetchObjectFields(
     }
   } else {
     if (isFirst || context === null) {
-      throw new Error("Protocol violation: First object must have PRIORITY_PRESENT flag set");
+      throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
     }
     publisherPriority = context.publisherPriority;
   }

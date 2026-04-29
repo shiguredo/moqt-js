@@ -77,6 +77,13 @@
   - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
   - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
   - @voluntas
+- [FIX] データストリーム decode の例外がデータ不足とプロトコル違反を区別できない問題を修正する (#0109)
+  - `IncompleteDataError` (バッファ不足) と `ProtocolViolationError` (仕様違反) を `src/error.ts` に新設する
+  - `varint.ts` のデータ不足例外を `IncompleteDataError`、不正コードポイント例外を `ProtocolViolationError` に変更する
+  - `dataStream.ts` の decode 関数群 (`validateObjectStatus` / `decodeSubgroupHeader` / `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchHeader` / `decodeFetchObjectFields`) で投げる仕様違反例外を `ProtocolViolationError` に統一する
+  - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
+  - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更

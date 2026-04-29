@@ -15,7 +15,14 @@ import {
   type MoqtObject,
 } from "./dataStream";
 export type { MoqtObject } from "./dataStream";
-import { RequestError, type RequestErrorCode, SessionError, SessionErrorCode } from "./error";
+import {
+  IncompleteDataError,
+  ProtocolViolationError,
+  RequestError,
+  type RequestErrorCode,
+  SessionError,
+  SessionErrorCode,
+} from "./error";
 import {
   MessageType,
   PublishDoneStatusCode,
@@ -3520,6 +3527,10 @@ export class SessionImpl implements Session {
         },
         timestamp: Date.now(),
       });
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+      if (err instanceof ProtocolViolationError) {
+        this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      }
     }
   }
 
@@ -3720,11 +3731,27 @@ export class SessionImpl implements Session {
               );
               break;
             }
-          } catch {
-            // ヘッダーのパースに失敗した場合、データが不足している可能性
-            // 次のチャンクを待つ
-            if (done) break;
-            continue;
+          } catch (err) {
+            if (err instanceof IncompleteDataError) {
+              // データ不足: 次のチャンクを待つ
+              if (done) break;
+              continue;
+            }
+            if (err instanceof ProtocolViolationError) {
+              // 仕様違反: PROTOCOL_VIOLATION でセッションを閉じる
+              this.closeWithError(
+                new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION),
+              );
+              break;
+            }
+            // 予期しないエラー: INTERNAL_ERROR でセッションを閉じる
+            this.closeWithError(
+              new SessionError(
+                err instanceof Error ? err.message : String(err),
+                SessionErrorCode.INTERNAL_ERROR,
+              ),
+            );
+            break;
           }
         }
 
@@ -3776,6 +3803,10 @@ export class SessionImpl implements Session {
         },
         timestamp: Date.now(),
       });
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+      if (err instanceof ProtocolViolationError) {
+        this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      }
     } finally {
       this.statsSubscriberStreamsActive--;
       reader.releaseLock();
@@ -3842,9 +3873,13 @@ export class SessionImpl implements Session {
         this.statsBytesReceivedViaFetch += payload.byteLength;
 
         fetcher.handleObject(object);
-      } catch {
-        // パースに失敗 - データが不足している可能性
-        break;
+      } catch (err) {
+        if (err instanceof IncompleteDataError) {
+          // データ不足 - 次のチャンクを待つ
+          break;
+        }
+        // ProtocolViolationError と予期しないエラーは上位で扱う
+        throw err;
       }
     }
 
@@ -3917,9 +3952,13 @@ export class SessionImpl implements Session {
         this.statsBytesReceivedViaSubscribe += payload.byteLength;
 
         subscriber.handleObject(object);
-      } catch {
-        // パースに失敗 - データが不足している可能性
-        break;
+      } catch (err) {
+        if (err instanceof IncompleteDataError) {
+          // データ不足 - 次のチャンクを待つ
+          break;
+        }
+        // ProtocolViolationError と予期しないエラーは上位で扱う
+        throw err;
       }
     }
 
@@ -3990,9 +4029,23 @@ export class SessionImpl implements Session {
         this.statsBytesReceivedViaSubscribe += payload.byteLength;
 
         subscriber.handleObject(object);
-      } catch {
-        // パースに失敗
-        break;
+      } catch (err) {
+        if (err instanceof IncompleteDataError) {
+          // データ不足 - 次回 (SUBSCRIBE_OK 以降のストリーム本処理) で消化される
+          break;
+        }
+        if (err instanceof ProtocolViolationError) {
+          this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+          return;
+        }
+        // 予期しないエラー
+        this.closeWithError(
+          new SessionError(
+            err instanceof Error ? err.message : String(err),
+            SessionErrorCode.INTERNAL_ERROR,
+          ),
+        );
+        return;
       }
     }
   }
