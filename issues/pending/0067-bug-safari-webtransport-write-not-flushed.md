@@ -72,3 +72,7 @@ Apple の Network Framework の挙動が WebTransport の仕様と乖離して�
 
 - `closePublisherStream()` に 5 秒のタイムアウトを設けて `writer.close()` のハングを回避している
 - `stopPublishing()` でフレームリーダーとエンコーダーを `done()` の前に停止するようにした
+
+## pending 理由
+
+WebKit (Apple の Network Framework) 側のバグであり、moqt-js 側で根本対応はできない。案 1 (subgroup header と object data を 1 回の write にまとめる) は moqt-js 内で対応可能だが、Publisher のストリーム送出経路全体に影響する大きな改修となるため、WebKit / Bugzilla への報告と修正を待つ方針とする。WebKit 側の動向次第で対応方針を再検討する。

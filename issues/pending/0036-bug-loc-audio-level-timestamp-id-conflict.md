@@ -45,3 +45,7 @@ Audio Level の "ID: 6 (IANA, please assign)" は仮の値であり、IANA に�
 - refs/moq/draft-ietf-moq-loc-02.txt Section 2.3.1.1 (Timestamp)
 - refs/moq/draft-ietf-moq-loc-02.txt Section 2.3.3.1 (Audio Level)
 - refs/moq/draft-ietf-moq-loc-02.txt Section 6.1 (IANA Table)
+
+## pending 理由
+
+draft-ietf-moq-loc-02 の仕様バグ。AUDIO_LEVEL に対する IANA からの正式な ID 割り当てを待つ必要があり、moqt-js 側では対応できない。次のリビジョンで衝突しない ID が割り当てられた後に対応する。
