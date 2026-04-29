@@ -4,6 +4,7 @@ import {
   decodeCatalogMessage,
   getVideoTracks,
   CATALOG_TRACK_NAME,
+  type AuthorizationToken,
   type MoqtObject,
   type DebugMessage,
   type CertificateHash,
@@ -202,7 +203,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
 
       // Build connect options
-      const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+      const connectOptions: {
+        serverCertificateHashes?: CertificateHash[];
+        authorizationToken?: AuthorizationToken;
+      } = {};
       if (settings.certificateHash.value) {
         connectOptions.serverCertificateHashes = [
           {
@@ -210,6 +214,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             value: settings.base64ToArrayBuffer(settings.certificateHash.value),
           },
         ];
+      }
+      const authToken = settings.buildAuthorizationToken();
+      if (authToken) {
+        connectOptions.authorizationToken = authToken;
       }
 
       // Connect to MOQT server
