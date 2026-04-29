@@ -11,6 +11,11 @@
 
 ## develop
 
+- [ADD] LOC Video Config Extension 経由で canonical (avc1/hvc1) 形式の description を送受する (#0101)
+  - moqt-devtools の publisher で WebCodecs から得た `EncodedVideoChunk.description` を `LOC.encodeVideoProperties({ config })` に渡し、Video Config Extension (ID: 13) として送出する
+  - moqt-devtools の subscriber で MSF Catalog の `initData` (Base64) を `VideoDecoderConfig.description` に展開し、canonical 形式のデコーダを構成可能にする
+  - annexB 形式 (description が無い) の場合は従来通り Video Config Extension を送らない
+  - @voluntas
 - [ADD] moqt-devtools に Authorization Token 入力欄を追加する (#0099)
   - Connection Settings に Alias Type / Token Alias / Token Type / Token Value の入力フィールドを追加し、`buildAuthorizationToken()` で `ConnectOptions.authorizationToken` を組み立てる
   - Alias Type は `USE_VALUE` / `REGISTER` のみ許可 (SETUP では DELETE / USE_ALIAS は仕様上禁止)

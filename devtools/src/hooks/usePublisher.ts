@@ -188,7 +188,9 @@ export function usePublisher() {
     }
 
     // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
-    // H.264/H.265 は Annex B 形式で出力されるため、description は不要
+    // annexB 形式の場合は description 不要、canonical (avc1/hvc1) の場合は
+    // description を Video Config Extension (ID: 13) で送る
+    // draft-ietf-moq-loc-02 §2.3.2.1
     const payload = chunk.data;
 
     // LOC Properties をエンコード
@@ -201,6 +203,9 @@ export function usePublisher() {
         temporalLayerId: 0,
         spatialLayerId: 0,
       },
+      // canonical 形式 (avc1 / hvc1) のときに WebCodecs から得られる description を載せる。
+      // annexB 形式の場合は WebCodecs が description を提供しないので何も送らない。
+      config: chunk.description,
     });
 
     pub.objectsWithExtensions.value++;

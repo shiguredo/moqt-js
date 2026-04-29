@@ -389,6 +389,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         codedWidth: videoTrackFromCatalog.width,
         codedHeight: videoTrackFromCatalog.height,
       };
+      // canonical 形式 (avc1 / hvc1) で必要な VideoDecoderConfig.description を
+      // MSF Catalog の initData (Base64) から取得する
+      // draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1
+      if (videoTrackFromCatalog.initData) {
+        decoderConfig.description = settings.base64ToArrayBuffer(videoTrackFromCatalog.initData);
+      }
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
       console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 
