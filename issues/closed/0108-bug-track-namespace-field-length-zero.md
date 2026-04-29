@@ -1,6 +1,7 @@
 # decodeTrackNamespace が Field Length=0 で PROTOCOL_VIOLATION を発生させていない
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -55,3 +56,11 @@ for (let i = 0; i < Number(numElements); i++) {
 ## 補足
 
 レビュー指摘 #M4 を受けて起票。仕様違反 (MUST 要件) であるため bug カテゴリで起票する。
+
+## 解決方法
+
+- `src/message/parameter.ts` の `decodeTrackNamespace()` のループ内で `elemLen === 0n` を検出した場合に `Error("track namespace field length is zero")` をスローするようにした。
+- 対称性のため `createTrackNamespace()` でも空文字列要素を拒否するようにした。
+- `src/message/parameter.test.ts` に長さ 0 フィールド単体ケースと、複数フィールド中の 1 つが長さ 0 のケースを追加した。
+- `src/message/parameter.prop.ts` のラウンドトリップ property test の文字列生成器を `minLength: 1` に変更し、空文字列で fast-check が失敗しないようにした。
+- 専用の `ProtocolViolationError` 化は #0109 のスコープ。本 issue では既存の `Error` を投げる方針に留めた。`handleControlMessage` 等で例外が捕捉される経路の整理は #0109 で対応する。

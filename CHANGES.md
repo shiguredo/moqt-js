@@ -71,6 +71,12 @@
   - `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` / `controlSendStream` の writer / reader を `close()` 時に閉じることで QUIC ストリームの FIN / RESET_STREAM を送出する
   - `close(closeCode?, reason?)` を引数化し、`closeWithError` から共通化する
   - @voluntas
+- [FIX] `decodeTrackNamespace` が Field Length=0 のフィールドを silently 受理する問題を修正する (#0108)
+  - draft-ietf-moq-transport-17 §2.3 の "Each Track Namespace Field Value MUST contain at least one byte." に準拠する
+  - `decodeTrackNamespace` で長さ 0 のフィールドを検出した場合にエラーをスローする
+  - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
+  - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更
