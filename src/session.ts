@@ -3776,11 +3776,19 @@ export class SessionImpl implements Session {
         if (headerParsed) {
           if (isFetchStream && fetcher && fetchHeader) {
             // Fetch オブジェクトをストリーミング処理
-            buffer = this.processFetchObjects(buffer, fetcher, fetchContext, isFirstFetchObject);
-            // 状態を更新 (最初のオブジェクトが処理されたかどうか)
-            if (buffer !== null) {
-              isFirstFetchObject = false;
-            }
+            // draft-ietf-moq-transport-17 Section 10.4.3:
+            // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
+            // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
+            // context と isFirst を caller 側で永続化する必要がある
+            const fetchResult = this.processFetchObjects(
+              buffer,
+              fetcher,
+              fetchContext,
+              isFirstFetchObject,
+            );
+            buffer = fetchResult.remainingBuffer;
+            fetchContext = fetchResult.context;
+            isFirstFetchObject = fetchResult.isFirst;
           } else if (!isFetchStream && subscriber && subgroupHeader) {
             // Subgroup オブジェクトをストリーミング処理
             const result = this.processSubgroupObjects(
@@ -3839,7 +3847,11 @@ export class SessionImpl implements Session {
     fetcher: FetcherImpl,
     context: import("./dataStream").FetchObjectContext | null,
     isFirst: boolean,
-  ): Uint8Array {
+  ): {
+    remainingBuffer: Uint8Array;
+    context: import("./dataStream").FetchObjectContext | null;
+    isFirst: boolean;
+  } {
     let offset = 0;
     let currentContext = context;
     let currentIsFirst = isFirst;
@@ -3900,8 +3912,12 @@ export class SessionImpl implements Session {
       }
     }
 
-    // 残りのバッファを返す
-    return buffer.slice(offset);
+    // 残りのバッファと永続化すべき状態を返す
+    return {
+      remainingBuffer: buffer.slice(offset),
+      context: currentContext,
+      isFirst: currentIsFirst,
+    };
   }
 
   /**
