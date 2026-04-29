@@ -225,6 +225,14 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
+    // draft-ietf-moq-transport-17 Section 2.3:
+    // "Each Track Namespace Field Value MUST contain at least one byte.
+    //  If an endpoint receives a Track Namespace Field with a Track
+    //  Namespace Field Length of 0, it MUST close the session with a
+    //  PROTOCOL_VIOLATION."
+    if (elemLen === 0n) {
+      throw new Error("track namespace field length is zero");
+    }
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
     elements.push(element);
     totalConsumed += Number(elemLen);
@@ -251,8 +259,13 @@ export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
 
+  // draft-ietf-moq-transport-17 Section 2.3:
+  // "Each Track Namespace Field Value MUST contain at least one byte."
   let dataSize = 0;
   for (const element of tuple) {
+    if (element.length === 0) {
+      throw new Error("track namespace field length is zero");
+    }
     dataSize += element.length;
   }
   if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {

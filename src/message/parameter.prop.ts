@@ -63,9 +63,12 @@ test("奇数タイプの Parameter のエンコード・デコードがラウン
 });
 
 test("TrackNamespace のエンコード・デコードがラウンドトリップする", () => {
+  // draft-ietf-moq-transport-17 §2.3:
+  // "Each Track Namespace Field Value MUST contain at least one byte."
+  // 各フィールドは 1 バイト以上必要なため minLength: 1 とする
   fc.assert(
     fc.property(
-      fc.array(fc.string({ minLength: 0, maxLength: 30 }), { minLength: 0, maxLength: 10 }),
+      fc.array(fc.string({ minLength: 1, maxLength: 30 }), { minLength: 0, maxLength: 10 }),
       (parts) => {
         const ns = createTrackNamespace(parts);
         const encoded = encodeTrackNamespace(ns);
