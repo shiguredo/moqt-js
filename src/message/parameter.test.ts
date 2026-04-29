@@ -144,6 +144,42 @@ test("decodeTrackNamespace で制限を超えるとエラー", () => {
   assert.throws(() => decodeTrackNamespace(encoded), /track namespace exceeds maximum size/);
 });
 
+test("decodeTrackNamespace で Field Length=0 のフィールドはエラー", () => {
+  // draft-ietf-moq-transport-17 §2.3:
+  // "Each Track Namespace Field Value MUST contain at least one byte."
+  // 要素数 1、長さ 0 のデータを作成
+  const countBytes = encodeVarint(1n);
+  const lengthBytes = encodeVarint(0n);
+
+  const encoded = new Uint8Array(countBytes.length + lengthBytes.length);
+  encoded.set(countBytes, 0);
+  encoded.set(lengthBytes, countBytes.length);
+
+  assert.throws(() => decodeTrackNamespace(encoded), /track namespace field length is zero/);
+});
+
+test("decodeTrackNamespace で複数フィールドの 1 つでも長さ 0 ならエラー", () => {
+  // 要素数 2、最初のフィールドは "a"、2 つ目が長さ 0
+  const countBytes = encodeVarint(2n);
+  const firstLenBytes = encodeVarint(1n);
+  const firstDataBytes = new Uint8Array([0x61]); // "a"
+  const secondLenBytes = encodeVarint(0n);
+
+  const totalLength =
+    countBytes.length + firstLenBytes.length + firstDataBytes.length + secondLenBytes.length;
+  const encoded = new Uint8Array(totalLength);
+  let pos = 0;
+  encoded.set(countBytes, pos);
+  pos += countBytes.length;
+  encoded.set(firstLenBytes, pos);
+  pos += firstLenBytes.length;
+  encoded.set(firstDataBytes, pos);
+  pos += firstDataBytes.length;
+  encoded.set(secondLenBytes, pos);
+
+  assert.throws(() => decodeTrackNamespace(encoded), /track namespace field length is zero/);
+});
+
 test("encodeTrackName で制限を超えるとエラー", () => {
   const largeName = "a".repeat(5000);
   assert.throws(() => encodeTrackName(largeName), /track name exceeds maximum size/);
