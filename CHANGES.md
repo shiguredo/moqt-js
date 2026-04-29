@@ -99,6 +99,11 @@
   - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
   - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
   - @voluntas
+- [FIX] FETCH ストリームの decode context が複数チャンクで永続化されず誤って `ProtocolViolationError` を投げる問題を修正する (#0113)
+  - `processFetchObjects` の戻り値に `context` と `isFirst` を含めて caller の `handleIncomingStream` で永続化するようにする
+  - 機能していなかった `if (buffer !== null)` ガードを削除する
+  - 複数チャンクにまたがる FETCH レスポンス (joining fetch でのキャッシュ取得等) で誤って "first object must have GROUP_ID_PRESENT flag set" エラーが発生して subscriber が異常終了するのを防ぐ
+  - @voluntas
 - [FIX] `waitForSubscriber` / `waitForFetcher` のタイムアウトでストリームが cancel されない問題を修正する (#0111)
   - `handleIncomingStream` で `waitForSubscriber()` / `waitForFetcher()` が null を返した場合に `reader.cancel()` を呼んで peer に STOP_SENDING を送るようにする
   - 不明な subscriber / fetcher 向けのデータストリームが silent に消費され続けるのを防ぐ
