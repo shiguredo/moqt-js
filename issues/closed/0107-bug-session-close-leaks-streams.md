@@ -1,6 +1,7 @@
 # Session.close() が WebTransport を閉じずストリームをリークする
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -110,3 +111,11 @@ WebTransport は実環境依存のため単体テストは難しい。以下の�
 ## 補足
 
 レビュー指摘 #C1 / #C2 / #C3 を受けて起票。三者は「Session.close() のクリーンアップ漏れ」という同一責務に属するため 1 件にまとめる。
+
+## 解決方法
+
+- `Session.close()` (`src/session.ts`) の末尾で `transport.close({ closeCode, reason })` を呼んで WebTransport セッションを閉じるようにした。`close(closeCode?: number, reason?: string)` を引数化し、デフォルトは `SessionErrorCode.NO_ERROR` / 空文字列。
+- `closeWithError()` を `void this.close(error.code, error.message)` 経由で実装し、正常終了 / エラー終了の両方で同じクリーンアップ経路を通るようにした。
+- `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` の各エントリの `writer` を `writer.close()` で閉じ、`namespaceSubscriptions` / `namespacePublications` の `streamReader` を `cancel()` するヘルパー (`closeWriterSafely` / `cancelReaderSafely`) を `close()` 内に追加。既に閉じている等の例外は無視する。
+- `controlSendStream` (`WritableStream<Uint8Array>`) を `close()` で閉じるようにした。SETUP 送信時に writer は releaseLock 済みなので、underlying stream の `close()` を呼ぶ。
+- WebTransport 依存のため自動テストはなし。実機検証で `session.closed` Promise が即座に resolve することを確認する。

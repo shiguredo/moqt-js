@@ -66,6 +66,11 @@
   - draft-ietf-moq-transport-17 §10.4.2 に従い、SUBGROUP_ID_MODE = 0b11 のタイプ値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信した場合は PROTOCOL_VIOLATION でセッションを閉じるようにする
   - `src/dataStream.test.ts` に予約値および 0b00X1XXXX 形式に合わない不正タイプ値のデコードエラー検証を追加する
   - @voluntas
+- [FIX] `Session.close()` が WebTransport を閉じずストリームをリークする問題を修正する (#0107)
+  - draft-ietf-moq-transport-17 §3.5 に従い、ユーザー起点の `close()` でも WebTransport セッションを閉じて peer に終了を通知するようにする
+  - `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` / `controlSendStream` の writer / reader を `close()` 時に閉じることで QUIC ストリームの FIN / RESET_STREAM を送出する
+  - `close(closeCode?, reason?)` を引数化し、`closeWithError` から共通化する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更

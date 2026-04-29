@@ -1969,8 +1969,15 @@ export class SessionImpl implements Session {
 
   /**
    * Close the session
+   *
+   * draft-ietf-moq-transport-17 Section 3.5:
+   * "When WebTransport is used, the session is closed using the
+   *  CLOSE_WEBTRANSPORT_SESSION capsule."
+   * 正常終了時もユーザー起点で WebTransport を閉じる必要がある。
+   * 保持している双方向 / 単方向ストリームの writer を閉じてから transport を閉じることで、
+   * QUIC ストリームの FIN 送信とセッション終了通知を行う。
    */
-  async close(): Promise<void> {
+  async close(closeCode: number = SessionErrorCode.NO_ERROR, reason = ""): Promise<void> {
     if (this.sessionState === "closed") {
       return;
     }
@@ -2034,20 +2041,76 @@ export class SessionImpl implements Session {
     }
     this.fetcherReadyCallbacks.clear();
 
-    // Close all namespace subscriptions
+    // 保持している双方向 / 単方向ストリームの writer / reader を閉じる。
+    // peer 側に FIN / RESET_STREAM を送って受信ループを解除させる。
+    // 既に閉じている等の理由で例外が出ても無視する。
+    const closeWriterSafely = async (
+      writer: WritableStreamDefaultWriter<Uint8Array>,
+    ): Promise<void> => {
+      try {
+        await writer.close();
+      } catch {
+        // ストリームが既に閉じている / abort されている場合は無視
+      }
+    };
+    const cancelReaderSafely = async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+    ): Promise<void> => {
+      try {
+        await reader.cancel();
+      } catch {
+        // 既に解放されている場合は無視
+      }
+    };
+
+    // SUBSCRIBE_NAMESPACE 用の双方向ストリーム
     for (const subscription of this.namespaceSubscriptions.values()) {
       subscription.state = "closed";
+      if (subscription.writer) {
+        void closeWriterSafely(subscription.writer);
+      }
+      if (subscription.streamReader) {
+        void cancelReaderSafely(subscription.streamReader);
+      }
     }
     this.namespaceSubscriptions.clear();
 
-    // Close all namespace publications
+    // PUBLISH_NAMESPACE 用の双方向ストリーム
     for (const publication of this.namespacePublications.values()) {
       publication.state = "closed";
+      void closeWriterSafely(publication.writer);
+      void cancelReaderSafely(publication.streamReader);
     }
     this.namespacePublications.clear();
 
-    // リクエスト双方向ストリームをクリーンアップ
+    // SUBSCRIBE / PUBLISH / FETCH 等のリクエスト用双方向ストリーム
+    for (const entry of this.requestStreams.values()) {
+      void closeWriterSafely(entry.writer);
+    }
     this.requestStreams.clear();
+
+    // Publisher 用の単方向ストリーム (Subgroup ストリーム)
+    for (const entry of this.publisherStreams.values()) {
+      void closeWriterSafely(entry.writer);
+    }
+    this.publisherStreams.clear();
+
+    // 制御用送信ストリーム (単方向) を閉じる。
+    // writer は SETUP 送信時に releaseLock しているため、ここでは underlying stream を閉じる。
+    if (this.controlSendStream) {
+      try {
+        await this.controlSendStream.close();
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+    }
+
+    // WebTransport セッションを閉じて peer に終了を通知する
+    try {
+      this.transport.close({ closeCode, reason });
+    } catch {
+      // 既に閉じている場合は無視
+    }
 
     // close コールバックはコンストラクタの transport.closed 監視で呼ばれる
   }
@@ -2062,11 +2125,7 @@ export class SessionImpl implements Session {
    */
   private closeWithError(error: SessionError): void {
     this.callbacks.error?.(error);
-    void this.close();
-    this.transport.close({
-      closeCode: error.code,
-      reason: error.message,
-    });
+    void this.close(error.code, error.message);
   }
 
   private emitDebug(
