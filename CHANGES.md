@@ -11,6 +11,11 @@
 
 ## develop
 
+- [ADD] `Session.getStatistics()` でセッションレベルの統計情報を公開する (#0102)
+  - `SessionStatistics` インターフェースを `src/session.ts` に追加し、オブジェクト受信数 / バイト数 / バッファ状態 / アクティブな Publisher / Subscriber / Fetcher 数 / WebTransport ストリーム統計 / Control Message 統計を返す
+  - SUBSCRIBE 経由の統計は `subscribers` 単位ではなく session 単位で集計するため、コールバックを介さない受信状態を観測可能にする
+  - `src/index.ts` から `SessionStatistics` を公開する
+  - @voluntas
 - [ADD] LOC Video Config Extension 経由で canonical (avc1/hvc1) 形式の description を送受する (#0101)
   - moqt-devtools の publisher で WebCodecs から得た `EncodedVideoChunk.description` を `LOC.encodeVideoProperties({ config })` に渡し、Video Config Extension (ID: 13) として送出する
   - moqt-devtools の subscriber で MSF Catalog の `initData` (Base64) を `VideoDecoderConfig.description` に展開し、canonical 形式のデコーダを構成可能にする

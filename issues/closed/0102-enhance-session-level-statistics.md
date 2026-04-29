@@ -1,5 +1,9 @@
 # session.ts レベルでの統計情報の公開
 
+Created: 2026-04-22
+Completed: 2026-04-29
+Model: Opus 4.7
+
 ## 概要
 
 現在の統計情報は devtools の `useSubscriber.ts` でコールバック経由でカウントしているが、session.ts レベルでの受信統計やバッファ状態を公開することで、より正確なデバッグ・監視が可能になる。
@@ -73,3 +77,14 @@ interface SubscriberStatistics {
 - `src/session.ts` - 統計情報の収集・公開
 - `src/subscriber.ts` - Subscriber 固有の統計
 - `src/reorderBuffer.ts` - リオーダリングバッファの統計
+
+## 解決方法
+
+`src/session.ts` に以下を実装済み (本 issue 起票より前のコミット時点で完了)。
+
+- `SessionStatistics` インターフェース: オブジェクト受信数 / バイト数 / `pendingSubgroupStreams` の件数とバイト数 / アクティブな Publisher / Subscriber / Fetcher 数 / WebTransport 単方向ストリーム統計 (open / received / active / opened cumulative) / Subgroup ヘッダーカウント / Fetch ヘッダーカウント / Control Message 送受信カウント を保持。
+- `Session.getStatistics(): SessionStatistics`: 内部の `stats*` カウンターと Map サイズから上記情報をスナップショットして返す純粋なゲッター。
+- `src/index.ts` から `SessionStatistics` 型を公開済み。
+- 受信ループ (`processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` 等) でカウンター (`statsObjectsReceivedViaFetch` / `statsObjectsReceivedViaSubscribe` / `statsBytesReceived*`) を更新済み。
+
+issue 起票時点では devtools 側の `useSubscriber` 経由のカウンターしか公開されていないとされていたが、本体側に既に実装が入っていたため追加作業は不要で、CHANGES.md エントリと issue クローズのみ実施する。
