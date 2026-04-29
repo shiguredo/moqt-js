@@ -11,6 +11,11 @@
 
 ## develop
 
+- [ADD] 高レベル API (`MediaPublisher` / `MediaSubscriber`) に `authorizationToken` オプションを追加する (#0112)
+  - `MediaPublisherOptions` / `MediaSubscriberOptions` に `authorizationToken?: AuthorizationToken` を追加する
+  - `createMediaPublisher` / `createMediaSubscriber` の内部 `connect()` 呼び出しに値を伝搬する
+  - 低レベル API (`ConnectOptions.authorizationToken`, #0098) を高レベル API からも利用可能にする
+  - @voluntas
 - [ADD] `Session.getStatistics()` でセッションレベルの統計情報を公開する (#0102)
   - `SessionStatistics` インターフェースを `src/session.ts` に追加し、オブジェクト受信数 / バイト数 / バッファ状態 / アクティブな Publisher / Subscriber / Fetcher 数 / WebTransport ストリーム統計 / Control Message 統計を返す
   - SUBSCRIBE 経由の統計は `subscribers` 単位ではなく session 単位で集計するため、コールバックを介さない受信状態を観測可能にする
