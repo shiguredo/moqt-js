@@ -578,6 +578,84 @@ export function ConnectionSettings() {
           </label>
         </div>
       </div>
+
+      {/* Authorization Token Settings */}
+      {/* draft-ietf-moq-transport-17 §9.4.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+      <div class="mt-4 pt-4 border-t border-slate-200">
+        <h3 class="text-sm font-medium text-slate-600 mb-3">
+          Authorization Token
+          <span class="ml-2 text-xs text-slate-400">SETUP Option (0x03)</span>
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div>
+            <label for="authorizationTokenAliasType" class="block text-xs text-slate-500 mb-1">
+              Alias Type
+            </label>
+            <select
+              id="authorizationTokenAliasType"
+              value={settings.authorizationTokenAliasType.value}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                if (v === "useValue" || v === "register") {
+                  settings.authorizationTokenAliasType.value = v;
+                }
+              }}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              <option value="useValue">USE_VALUE (0x3)</option>
+              <option value="register">REGISTER (0x1)</option>
+            </select>
+          </div>
+          {settings.authorizationTokenAliasType.value === "register" && (
+            <div>
+              <label for="authorizationTokenAlias" class="block text-xs text-slate-500 mb-1">
+                Token Alias
+              </label>
+              <input
+                type="text"
+                id="authorizationTokenAlias"
+                value={settings.authorizationTokenAlias.value}
+                onInput={(e) => (settings.authorizationTokenAlias.value = e.currentTarget.value)}
+                disabled={settings.settingsDisabled.value}
+                placeholder="0"
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+              />
+            </div>
+          )}
+          <div>
+            <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
+              Token Type
+              <span class="ml-1 text-slate-400">(0 = out-of-band)</span>
+            </label>
+            <input
+              type="text"
+              id="authorizationTokenType"
+              value={settings.authorizationTokenType.value}
+              onInput={(e) => (settings.authorizationTokenType.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              placeholder="0"
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div class="lg:col-span-2">
+            <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
+              Token Value
+              <span class="ml-1 text-slate-400">(空の場合は送出しない)</span>
+            </label>
+            <input
+              type="text"
+              id="authorizationTokenValue"
+              autocomplete="off"
+              value={settings.authorizationTokenValue.value}
+              onInput={(e) => (settings.authorizationTokenValue.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              placeholder="任意のトークン文字列 (UTF-8)"
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
