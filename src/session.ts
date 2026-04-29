@@ -1538,11 +1538,13 @@ export class SessionImpl implements Session {
     };
 
     // メッセージをエンコードして送信
+    // draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // ControlStreamWriter に委譲する。
+    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    const typeAndLength = new Uint8Array([
-      ...encodeVarint(MessageType.SUBSCRIBE_NAMESPACE),
-      ...encodeVarint(payload.length),
-    ]);
+    const controlWriter = new ControlStreamWriter();
+    const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
 
     // デバッグコールバック
     this.callbacks.debug?.({
@@ -1558,7 +1560,7 @@ export class SessionImpl implements Session {
       timestamp: Date.now(),
     });
 
-    await writer.write(new Uint8Array([...typeAndLength, ...payload]));
+    await writer.write(framed);
 
     // REQUEST_OK/REQUEST_ERROR を待つ Promise
     return new Promise<NamespaceSubscription>((resolve, reject) => {

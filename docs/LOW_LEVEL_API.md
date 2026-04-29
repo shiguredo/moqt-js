@@ -46,79 +46,79 @@ const session = await connect(url, callbacks?, options?)
 
 #### `ConnectCallbacks`
 
-| 名前 | 説明 |
-| ---- | ---- |
-| `close` | `WebTransport.closed` の結果を受け取る |
-| `error` | セッションレベルのエラーを受け取る |
-| `debug` | 送受信した MOQT メッセージの raw 情報を受け取る |
-| `goaway` | `GOAWAY` 受信時に新しい Session URI を受け取る |
+| 名前     | 説明                                            |
+| -------- | ----------------------------------------------- |
+| `close`  | `WebTransport.closed` の結果を受け取る          |
+| `error`  | セッションレベルのエラーを受け取る              |
+| `debug`  | 送受信した MOQT メッセージの raw 情報を受け取る |
+| `goaway` | `GOAWAY` 受信時に新しい Session URI を受け取る  |
 
 #### `ConnectOptions`
 
-| 名前 | 説明 |
-| ---- | ---- |
+| 名前                      | 説明                                                             |
+| ------------------------- | ---------------------------------------------------------------- |
 | `serverCertificateHashes` | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes` |
-| `authorizationToken` | `SETUP` Option `0x03` として送る認証トークン |
+| `authorizationToken`      | `SETUP` Option `0x03` として送る認証トークン                     |
 
 ### `Session`
 
-| API | 役割 |
-| --- | --- |
-| `state` | `"connected"` / `"closed"` |
-| `goawayReceived` | peer から `GOAWAY` を受信済みかどうか |
-| `publish(namespace, trackName, callbacks?, options?)` | 新しい双方向ストリームで `PUBLISH` を送る |
-| `subscribe(namespace, trackName, callbacks, options?)` | 新しい双方向ストリームで `SUBSCRIBE` を送る |
-| `fetch(namespace, trackName, options, callbacks)` | 新しい双方向ストリームで `FETCH` を送る |
-| `trackStatus(namespace, trackName)` | `TRACK_STATUS` を送り `REQUEST_OK` を待つ |
-| `subscribeNamespace(namespacePrefix, callbacks, mode?)` | 専用双方向ストリームで Namespace 発見を行う |
-| `publishNamespace(namespace, callbacks?)` | 制御ストリームで `PUBLISH_NAMESPACE` を送る |
-| `goaway(newSessionUri?, timeout?)` | 制御ストリームで `GOAWAY` を送る |
-| `close()` | セッション内部状態と保留中 Promise をクリーンアップする |
-| `getStatistics()` | セッション統計を取得する |
+| API                                                     | 役割                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| `state`                                                 | `"connected"` / `"closed"`                              |
+| `goawayReceived`                                        | peer から `GOAWAY` を受信済みかどうか                   |
+| `publish(namespace, trackName, callbacks?, options?)`   | 新しい双方向ストリームで `PUBLISH` を送る               |
+| `subscribe(namespace, trackName, callbacks, options?)`  | 新しい双方向ストリームで `SUBSCRIBE` を送る             |
+| `fetch(namespace, trackName, options, callbacks)`       | 新しい双方向ストリームで `FETCH` を送る                 |
+| `trackStatus(namespace, trackName)`                     | `TRACK_STATUS` を送り `REQUEST_OK` を待つ               |
+| `subscribeNamespace(namespacePrefix, callbacks, mode?)` | 専用双方向ストリームで Namespace 発見を行う             |
+| `publishNamespace(namespace, callbacks?)`               | 制御ストリームで `PUBLISH_NAMESPACE` を送る             |
+| `goaway(newSessionUri?, timeout?)`                      | 制御ストリームで `GOAWAY` を送る                        |
+| `close()`                                               | セッション内部状態と保留中 Promise をクリーンアップする |
+| `getStatistics()`                                       | セッション統計を取得する                                |
 
 ### `Publisher`
 
-| プロパティ / メソッド | 説明 |
-| --------------------- | ---- |
-| `state` | `"active"` / `"closed"` |
-| `forwardState` | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態 |
-| `sendObject(params)` | Subgroup stream に Object を送る |
-| `sendDatagram(params)` | Datagram として Object を送る |
-| `done()` | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る |
+| プロパティ / メソッド  | 説明                                                        |
+| ---------------------- | ----------------------------------------------------------- |
+| `state`                | `"active"` / `"closed"`                                     |
+| `forwardState`         | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態 |
+| `sendObject(params)`   | Subgroup stream に Object を送る                            |
+| `sendDatagram(params)` | Datagram として Object を送る                               |
+| `done()`               | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る        |
 
 `sendObject()` / `sendDatagram()` の送信パラメータは `number` ベースだが、受信した `MoqtObject` は `bigint` ベースで返る。
 
 ### `Subscriber`
 
-| プロパティ / メソッド | 説明 |
-| --------------------- | ---- |
-| `state` | `"active"` / `"closed"` |
-| `largestLocation` | `SUBSCRIBE_OK` または `REQUEST_OK` で更新される `LARGEST_OBJECT` |
-| `trackProperties` | `SUBSCRIBE_OK` で受信した Track Properties |
-| `update(options?)` | 同じ双方向ストリームで `REQUEST_UPDATE` を送る |
-| `unsubscribe()` | 双方向ストリームを close して購読を終了する |
+| プロパティ / メソッド | 説明                                                             |
+| --------------------- | ---------------------------------------------------------------- |
+| `state`               | `"active"` / `"closed"`                                          |
+| `largestLocation`     | `SUBSCRIBE_OK` または `REQUEST_OK` で更新される `LARGEST_OBJECT` |
+| `trackProperties`     | `SUBSCRIBE_OK` で受信した Track Properties                       |
+| `update(options?)`    | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                   |
+| `unsubscribe()`       | 双方向ストリームを close して購読を終了する                      |
 
 ### `Fetcher`
 
-| プロパティ / メソッド | 説明 |
-| --------------------- | ---- |
-| `state` | `"active"` / `"closed"` |
-| `endOfTrack` | `FETCH_OK` の `End of Track` |
-| `endLocation` | `FETCH_OK` の終了位置 |
-| `trackProperties` | `FETCH_OK` で受信した Track Properties |
-| `cancel()` | 双方向ストリームを close して Fetch を中断する |
+| プロパティ / メソッド | 説明                                           |
+| --------------------- | ---------------------------------------------- |
+| `state`               | `"active"` / `"closed"`                        |
+| `endOfTrack`          | `FETCH_OK` の `End of Track`                   |
+| `endLocation`         | `FETCH_OK` の終了位置                          |
+| `trackProperties`     | `FETCH_OK` で受信した Track Properties         |
+| `cancel()`            | 双方向ストリームを close して Fetch を中断する |
 
 ### `MoqtObject`
 
 ```typescript
 interface MoqtObject {
-  groupId: bigint
-  subgroupId?: bigint
-  objectId: bigint
-  publisherPriority?: number
-  status: ObjectStatus
-  properties?: Uint8Array
-  payload: Uint8Array
+  groupId: bigint;
+  subgroupId?: bigint;
+  objectId: bigint;
+  publisherPriority?: number;
+  status: ObjectStatus;
+  properties?: Uint8Array;
+  payload: Uint8Array;
 }
 ```
 
@@ -129,16 +129,16 @@ interface MoqtObject {
 
 ## モジュール分割
 
-| ファイル | 役割 |
-| -------- | ---- |
-| `src/index.ts` | 公開 API の export と `connect()` の入口 |
-| `src/session.ts` | WebTransport / 制御ストリーム / request stream / data stream を束ねる中心実装 |
-| `src/publisher.ts` | `Publisher` の状態と callback hook |
-| `src/subscriber.ts` | `Subscriber` の状態、`largestLocation`、Track Properties の保持 |
-| `src/fetcher.ts` | `Fetcher` の状態、`endLocation`、Track Properties の保持 |
-| `src/controlStream.ts` | `Type (varint) + Length (16-bit) + Payload` のフレーミング |
-| `src/dataStream.ts` | Subgroup Header、Fetch Header、Object Datagram の encode / decode |
-| `src/message/*` | `SETUP` / `PUBLISH` / `SUBSCRIBE` / `FETCH` など各メッセージの payload codec |
+| ファイル               | 役割                                                                          |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| `src/index.ts`         | 公開 API の export と `connect()` の入口                                      |
+| `src/session.ts`       | WebTransport / 制御ストリーム / request stream / data stream を束ねる中心実装 |
+| `src/publisher.ts`     | `Publisher` の状態と callback hook                                            |
+| `src/subscriber.ts`    | `Subscriber` の状態、`largestLocation`、Track Properties の保持               |
+| `src/fetcher.ts`       | `Fetcher` の状態、`endLocation`、Track Properties の保持                      |
+| `src/controlStream.ts` | `Type (varint) + Length (16-bit) + Payload` のフレーミング                    |
+| `src/dataStream.ts`    | Subgroup Header、Fetch Header、Object Datagram の encode / decode             |
+| `src/message/*`        | `SETUP` / `PUBLISH` / `SUBSCRIBE` / `FETCH` など各メッセージの payload codec  |
 
 `PublisherImpl` / `SubscriberImpl` / `FetcherImpl` は薄い状態オブジェクトで、実際のネットワーク I/O はすべて `SessionImpl` が担当する。各ハンドルは `SessionImpl` に callback hook を差し込まれて動く。
 
