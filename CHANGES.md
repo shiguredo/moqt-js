@@ -39,6 +39,10 @@
 - [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
   - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
   - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE の Length フィールドが可変長整数でエンコードされている問題を修正する (#0104)
+  - draft-ietf-moq-transport-17 §9.20 の Length (16-bit big-endian) に準拠させる
+  - 手動フレーミングをやめ `ControlStreamWriter.encode()` に委譲する
+  - @voluntas
 - [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
   - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
   - @voluntas
