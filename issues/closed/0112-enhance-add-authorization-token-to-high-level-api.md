@@ -1,6 +1,7 @@
 # 高レベル API (MediaPublisher / MediaSubscriber) に authorizationToken オプションを追加する
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -48,4 +49,11 @@ Model: Opus 4.7
 - `src/codec/types.ts`
 - `src/createMediaPublisher.ts`
 - `src/createMediaSubscriber.ts`
-- 既存テストファイル (新規テスト追加のみ)
+
+## 解決方法
+
+- `src/codec/types.ts` の `MediaPublisherOptions` / `MediaSubscriberOptions` に `authorizationToken?: AuthorizationToken` を追加した。型は inline import (`import("../message").AuthorizationToken`) で `Catalog` (`import("../msf").Catalog`) と同じ流儀に揃えた。session.ts は AuthorizationToken を message から import しているだけで再エクスポートしていないため、message から直接 inline import している。
+- `src/createMediaPublisher.ts` / `src/createMediaSubscriber.ts` の `connectToServer()` で、ローカルに作っていた `connectOptions` の型を `ConnectOptions` (session から import) に揃えた。`this.options.authorizationToken` が存在する場合のみ `connectOptions.authorizationToken` に代入して `connect()` に渡す。`CertificateHash` の直接 import は不要になったため削除した。
+- 高レベル API は元から単体テストファイルが存在せず (WebTransport モック禁止のため)、低レベル `Session` 側は issue 0098 でテスト済み。今回はパススルーの伝搬のみのため新規単体テストは追加せず、E2E (Playwright) で実動作を実証する方針 (issue 0113 で対応予定)。
+- `vp run typecheck` / `vp lint` / `vp test` (394 tests) / `vp run build` がすべて通ることを確認した。
+- `CHANGES.md` の `## develop` に `[ADD]` エントリを追加した。

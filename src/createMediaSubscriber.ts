@@ -5,7 +5,7 @@
  */
 
 import { connect } from "./index";
-import type { CertificateHash, ConnectCallbacks, Session, JoiningFetchOptions } from "./session";
+import type { ConnectCallbacks, ConnectOptions, Session, JoiningFetchOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import * as LOC from "./loc";
@@ -302,12 +302,15 @@ class MediaSubscriberImpl implements MediaSubscriber {
       },
     };
 
-    const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+    const connectOptions: ConnectOptions = {};
     if (this.options.serverCertificateHashes && this.options.serverCertificateHashes.length > 0) {
       connectOptions.serverCertificateHashes = this.options.serverCertificateHashes.map((hash) => ({
         algorithm: "sha-256" as const,
         value: hash,
       }));
+    }
+    if (this.options.authorizationToken) {
+      connectOptions.authorizationToken = this.options.authorizationToken;
     }
 
     this.session = await connect(this.url, connectCallbacks, connectOptions);
