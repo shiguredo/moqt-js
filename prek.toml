@@ -2,23 +2,68 @@
 # See https://prek.j178.dev for more information.
 #:schema https://www.schemastore.org/prek.json
 
+default_install_hook_types = ["pre-commit"]
+
+# 一般的なファイル整形・検査 (prek 組み込み, オフライン動作)
+[[repos]]
+repo = "builtin"
+
+[[repos.hooks]]
+id = "trailing-whitespace"
+exclude = "^refs/"
+
+[[repos.hooks]]
+id = "end-of-file-fixer"
+exclude = "^refs/"
+
+[[repos.hooks]]
+id = "mixed-line-ending"
+exclude = "^refs/"
+
+[[repos.hooks]]
+id = "check-merge-conflict"
+
+[[repos.hooks]]
+id = "check-added-large-files"
+
+[[repos.hooks]]
+id = "detect-private-key"
+
+[[repos.hooks]]
+id = "check-yaml"
+
+[[repos.hooks]]
+id = "check-toml"
+
+[[repos.hooks]]
+id = "check-json"
+# tsconfig.json などはコメント付き JSONC のため除外
+exclude = "(^|/)tsconfig.*\\.json$"
+
+# プロジェクト固有のチェック (vite-plus 経由)
 [[repos]]
 repo = "local"
-hooks = [
-  { id = "vp-check", name = "vp check", entry = "vp check --fix", language = "system", types_or = [
-    "ts",
-    "tsx",
-    "javascript",
-    "jsx",
-    "css",
-    "json",
-  ], pass_filenames = false },
-  { id = "vp-typecheck", name = "vp typecheck", entry = "vp run typecheck", language = "system", types_or = [
-    "ts",
-    "tsx",
-  ], pass_filenames = false },
-  { id = "vp-test", name = "vp test", entry = "vp test run", language = "system", types_or = [
-    "ts",
-    "tsx",
-  ], pass_filenames = false },
-]
+
+[[repos.hooks]]
+id = "vp-check"
+name = "vp check"
+entry = "vp check --fix"
+language = "system"
+types_or = ["ts", "tsx", "javascript", "jsx", "css", "json"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "vp-typecheck"
+name = "vp typecheck"
+entry = "vp run typecheck"
+language = "system"
+types_or = ["ts", "tsx"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "vp-test"
+name = "vp test"
+entry = "vp test run"
+language = "system"
+types_or = ["ts", "tsx"]
+pass_filenames = false
