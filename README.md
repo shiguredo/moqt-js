@@ -34,7 +34,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - 高レベル API (WebCodecs / MediaStream 対応)
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport)
-  - `draft-07` と `draft-17` 対応
+  - `draft-17` 対応
 - Low Overhead Container 対応
   - [Media over QUIC - Low Overhead Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc)
   - `draft-02` 対応
