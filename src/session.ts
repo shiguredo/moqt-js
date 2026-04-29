@@ -2633,16 +2633,25 @@ export class SessionImpl implements Session {
       parameters: [],
     };
 
-    const payload = encodeFetchPayload(fetchMsg);
-    const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
-      requestId: requestId.toString(),
-      fetchType: options.type,
-      joiningRequestId: subscribeRequestId.toString(),
-      joiningStart: options.start.toString(),
-    });
+    // sendJoiningFetch は呼び出し元で fire-and-forget されるため、bidi stream 作成や
+    // 書き込みで例外が出ても表面化しない。pendingFetch エントリのリークと onError 通知漏れを
+    // 防ぐため body 全体を try/catch で囲み、catch で pendingFetch から削除して onError を呼ぶ。
+    try {
+      const payload = encodeFetchPayload(fetchMsg);
+      const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
+        requestId: requestId.toString(),
+        fetchType: options.type,
+        joiningRequestId: subscribeRequestId.toString(),
+        joiningStart: options.start.toString(),
+      });
 
-    // 双方向ストリームからレスポンスを読み取る
-    void this.readFetchResponse(requestId, streamInfo.stream, streamInfo.controlReader);
+      // 双方向ストリームからレスポンスを読み取る
+      void this.readFetchResponse(requestId, streamInfo.stream, streamInfo.controlReader);
+    } catch (err) {
+      this.pendingFetch.delete(requestId);
+      const error = err instanceof Error ? err : new Error(String(err));
+      options.onError?.(error);
+    }
   }
 
   /**
