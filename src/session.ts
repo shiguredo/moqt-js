@@ -3615,6 +3615,20 @@ export class SessionImpl implements Session {
               (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
               (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
             ) {
+              // draft-ietf-moq-transport-17 Section 10.4.2:
+              // SUBGROUP_ID_MODE = 0b11 のタイプ値
+              // (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約値であり、
+              // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じなければならない
+              if ((streamTypeNum & 0x06) === 0x06) {
+                this.closeWithError(
+                  new SessionError(
+                    `reserved subgroup header type: 0x${streamTypeNum.toString(16)}`,
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                break;
+              }
+
               // Subgroup ストリーム
               isFetchStream = false;
               const [header, consumed] = decodeSubgroupHeader(buffer);
