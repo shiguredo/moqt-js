@@ -1,6 +1,7 @@
 # FETCH ストリームの decode context が複数チャンクで永続化されない
 
 Created: 2026-04-30
+Completed: 2026-04-30
 Model: Opus 4.7
 
 ## 概要
@@ -71,12 +72,7 @@ private processFetchObjects(
 ### 比較: `processSubgroupObjects` (`src/session.ts:3811-3833`)
 
 ```typescript
-const result = this.processSubgroupObjects(
-  buffer,
-  subscriber,
-  subgroupHeader,
-  previousObjectId,
-);
+const result = this.processSubgroupObjects(buffer, subscriber, subgroupHeader, previousObjectId);
 buffer = result.remainingBuffer;
 previousObjectId = result.previousObjectId;
 ```
@@ -109,3 +105,10 @@ previousObjectId = result.previousObjectId;
 ## 関連 issue
 
 - #0109 (`closed`): decode 例外を `IncompleteDataError` / `ProtocolViolationError` で分類した変更。本バグは 0109 で顕在化したが、根本原因は別。0109 自体の修正は仕様準拠で正しい。
+
+## 解決方法
+
+- `src/session.ts` の `processFetchObjects` の戻り値型を `Uint8Array` から `{ remainingBuffer: Uint8Array; context: FetchObjectContext | null; isFirst: boolean }` に変更し、内部で更新する `currentContext` / `currentIsFirst` を caller に返すようにした。`processSubgroupObjects` の `{ remainingBuffer, previousObjectId }` パターンと対称的な設計。
+- caller の `handleIncomingStream` (`src/session.ts:3776` 周辺) で戻り値からクロージャ変数 `fetchContext` / `isFirstFetchObject` に書き戻すようにした。機能していなかった `if (buffer !== null)` ガードは削除した。
+- ストリーム終了処理 (`src/session.ts:3811` 付近) は戻り値を破棄するだけのため、シグネチャ変更後も無修正で型が通る。
+- WebTransport 依存のため自動単体テストは追加せず、`vp run test` (全 394 テスト pass) と既存 e2e (`tests/e2e/pubsub.spec.ts` の `subscribe with joining fetch retrieves cached objects`) でリグレッション確認とする。
