@@ -122,6 +122,25 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
   assert.equal(consumed, 4);
 });
 
+// draft-ietf-moq-transport-17 Section 10.4.2:
+// SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
+// セッションを閉じなければならない
+for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
+  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は decode でエラー`, () => {
+    const data = new Uint8Array([reservedType, 0x01, 0x02, 0x80]);
+    assert.throws(() => decodeSubgroupHeader(data), /SUBGROUP_ID_MODE 0b11 is reserved/);
+  });
+}
+
+// draft-ietf-moq-transport-17 Section 10.4.2:
+// 0b00X1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
+for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
+  test(`SubgroupHeader: 不正タイプ 0x${invalidType.toString(16)} は decode でエラー`, () => {
+    const data = new Uint8Array([invalidType, 0x01, 0x02, 0x80]);
+    assert.throws(() => decodeSubgroupHeader(data), /does not match form 0b00X1XXXX/);
+  });
+}
+
 const subgroupHeaderTestCases = [
   {
     name: "BASE タイプ",
