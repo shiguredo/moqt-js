@@ -1,6 +1,7 @@
 # PUBLISH_NAMESPACE が制御ストリームで送受信されている
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -49,3 +50,13 @@ CHANGES.md `## develop` に「未対応: SUBSCRIBE_NAMESPACE の専用ストリ�
 ## 補足
 
 レビュー指摘 #34 を受けて起票。PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は draft-17 で廃止済みのため、対応スコープは PUBLISH_NAMESPACE 単体と関連 REQUEST_OK / REQUEST_ERROR のみ。
+
+## 解決方法
+
+- `Session.publishNamespace()` (`src/session.ts`) を `subscribeNamespace()` と同じ構造に揃え、専用の双方向ストリームを `transport.createBidirectionalStream()` で開いて `ControlStreamWriter.encode()` で PUBLISH_NAMESPACE をフレーミングして送信するように変更した。
+- `startNamespacePublicationStreamLoop()` を新設し、応答ストリームから REQUEST_OK / REQUEST_ERROR を読み取って Promise を resolve / reject するようにした。未知メッセージや二重応答は PROTOCOL_VIOLATION でセッションを閉じる。
+- `handleControlMessage` から PUBLISH_NAMESPACE / REQUEST_OK / REQUEST_ERROR の case を取り除き、`handlePublishNamespace` / `handleRequestOk` / `handleControlStreamRequestError` を削除した。これにより制御ストリーム上でこれらを受信した場合は default 分岐で PROTOCOL_VIOLATION となる。
+- `pendingNamespacePublish` Map を廃止し、`namespacePublications` の各エントリに双方向ストリームのライフサイクル (`stream` / `streamReader` / `controlReader` / `writer` / `state` に "pending" を追加) を保持するようにした。
+- `closeNamespacePublication()` でストリームを `writer.close()` (FIN) で閉じるように変更した。
+- 受信経路の廃止に伴い、未使用となった `NamespaceAnnouncement` 型と `NamespaceSubscriptionCallbacks.announce` コールバックを削除し、`src/index.ts` の re-export からも除外した。
+- `src/message/namespace.prop.ts` に PUBLISH_NAMESPACE のフレーミング (`Type + 16-bit Length + Payload`) を `ControlStreamReader` で復元できる round-trip property test を追加した。

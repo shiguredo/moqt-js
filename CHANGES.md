@@ -43,6 +43,12 @@
   - draft-ietf-moq-transport-17 §9.20 の Length (16-bit big-endian) に準拠させる
   - 手動フレーミングをやめ `ControlStreamWriter.encode()` に委譲する
   - @voluntas
+- [CHANGE] PUBLISH_NAMESPACE を専用の双方向ストリームで送受信するようにする (#0105)
+  - draft-ietf-moq-transport-17 §9.17 に従い、`Session.publishNamespace()` を新しい双方向ストリームの先頭メッセージとして送信し、同じストリーム上で REQUEST_OK / REQUEST_ERROR を受信する
+  - 制御ストリームの `handleControlMessage` から PUBLISH_NAMESPACE / 関連 REQUEST_OK / REQUEST_ERROR を取り除き、未知メッセージとして PROTOCOL_VIOLATION でセッションを閉じるようにする
+  - `NamespaceSubscriptionCallbacks.announce` と `NamespaceAnnouncement` 型を削除する（受信経路廃止に伴い未使用化）
+  - `NamespacePublication.done()` は専用ストリームを FIN で閉じることで終了を通知する
+  - @voluntas
 - [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
   - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
   - @voluntas
