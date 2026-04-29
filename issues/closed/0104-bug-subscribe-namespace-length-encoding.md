@@ -1,6 +1,7 @@
 # SUBSCRIBE_NAMESPACE の Length フィールドが可変長整数でエンコードされている
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -57,3 +58,9 @@ const typeAndLength = new Uint8Array([
 ## テスト追加方針
 
 session.ts の送信バイト列を `ControlStreamReader` に流し込んで Type / Length / Payload が正しく復元できることを検証する round-trip テストを追加する。
+
+## 解決方法
+
+`src/session.ts` の `subscribeNamespace()` で行っていた手動フレーミング (`encodeVarint(MessageType.SUBSCRIBE_NAMESPACE) + encodeVarint(payload.length)`) を `ControlStreamWriter.encode()` の呼び出しに置き換えた。Control Message のフレーミングは仕様で統一されているため、SUBSCRIBE_NAMESPACE 専用の別実装を持たず、共通のフレーミング処理に委譲することで Length が常に 16-bit big-endian でエンコードされるようになった。
+
+`src/message/namespace.prop.ts` に「SubscribeNamespace のフレーミングが ControlStreamReader で復元できる」property test を追加し、フレーミング層で round-trip が保証されることを検証している。

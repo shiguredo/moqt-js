@@ -22,6 +22,7 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType, NamespaceSubscribeMode } from "./types";
 import { encodeVarint } from "../varint";
+import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 
 /**
  * Message Parameter の arbitrary
@@ -240,6 +241,51 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-17 Section 9.20:
+ * SUBSCRIBE_NAMESPACE Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
+ * Length が可変長整数でエンコードされていると受信側で misparse されるため、
+ * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で正しくパースできることを検証する。
+ */
+test("SubscribeNamespace のフレーミングが ControlStreamReader で復元できる", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      namespaceSubscribeModeArb,
+      parametersArb,
+      (requestId, requiredRequestIdDelta, namespaceParts, subscribeOptions, parameters) => {
+        const original: SubscribeNamespace = {
+          type: MessageType.SUBSCRIBE_NAMESPACE,
+          requestId,
+          requiredRequestIdDelta,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          subscribeOptions,
+          parameters,
+        };
+
+        const payload = encodeSubscribeNamespacePayload(original);
+        const writer = new ControlStreamWriter();
+        const framed = writer.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
+
+        const reader = new ControlStreamReader();
+        const messages = reader.feed(framed);
+
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].type, MessageType.SUBSCRIBE_NAMESPACE);
+        assert.deepEqual(messages[0].payload, payload);
+
+        const decoded = decodeSubscribeNamespacePayload(messages[0].payload);
+        assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
+        assert.equal(decoded.subscribeOptions, subscribeOptions);
       },
     ),
   );
