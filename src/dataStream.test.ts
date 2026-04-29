@@ -26,6 +26,7 @@ import {
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import { encodeVarint } from "./varint";
+import { IncompleteDataError, ProtocolViolationError } from "./error";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -126,11 +127,24 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
 // SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
 // セッションを閉じなければならない
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
-  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は decode でエラー`, () => {
+  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は ProtocolViolationError`, () => {
     const data = new Uint8Array([reservedType, 0x01, 0x02, 0x80]);
+    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
     assert.throws(() => decodeSubgroupHeader(data), /SUBGROUP_ID_MODE 0b11 is reserved/);
   });
 }
+
+test("SubgroupHeader: バッファ不足は IncompleteDataError", () => {
+  // 空のバッファを decode に渡すとデータ不足
+  const data = new Uint8Array(0);
+  assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
+});
+
+test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () => {
+  // type のみで他のフィールドが揃っていない
+  const data = new Uint8Array([0x10]);
+  assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
+});
 
 // draft-ietf-moq-transport-17 Section 10.4.2:
 // 0b00X1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
@@ -740,7 +754,7 @@ test("FetchHeader: 基本的な FetchHeader をデコード", () => {
 test("FetchHeader: 無効な type でエラー", () => {
   const data = new Uint8Array([0x10, 0x01]);
 
-  assert.throws(() => decodeFetchHeader(data), "Invalid Fetch Header type");
+  assert.throws(() => decodeFetchHeader(data), "invalid fetch header type");
 });
 
 const requestIds = [0n, 1n, 100n, 1000n, 10000n];
@@ -875,7 +889,7 @@ test("FetchObjectFields: 最初のオブジェクトで prior 参照使用はエ
 
   assert.throws(
     () => decodeFetchObjectFields(data, null, 0, true),
-    "Protocol violation: First object must have GROUP_ID_PRESENT flag set",
+    "first object must have GROUP_ID_PRESENT flag set",
   );
 });
 
@@ -888,7 +902,7 @@ test("FetchObjectFields: 最初のオブジェクトで GROUP_ID_PRESENT なし�
 
   assert.throws(
     () => decodeFetchObjectFields(data, null, 0, true),
-    "Protocol violation: First object must have GROUP_ID_PRESENT flag set",
+    "first object must have GROUP_ID_PRESENT flag set",
   );
 });
 

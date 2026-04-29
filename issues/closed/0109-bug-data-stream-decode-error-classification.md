@@ -1,6 +1,7 @@
 # データストリーム decode の例外がデータ不足とプロトコル違反を区別できない
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -94,3 +95,18 @@ draft-ietf-moq-transport-17 Section 10.2.1.1 等でも、Object Status の予約
 ## 補足
 
 レビュー指摘 #H1 / #H2 を受けて起票。両者は「decode 関数の例外型分離」という同一責務に属するため 1 件にまとめる。エラー型の追加は新規クラスを `error.ts` に増やすことで対応する想定だが、`Error` のサブクラスを `dataStream.ts` 内部に閉じる選択肢もあり、設計判断は実装時に再検討する。
+
+## 解決方法
+
+- `src/error.ts` に `IncompleteDataError` と `ProtocolViolationError` を新設し、`Error` のサブクラスとして export した。`MoqtError` 派生 (`SessionError` / `RequestError`) との混乱を避けるため、これらは error code を持たない単純な Error サブクラスとした。
+- `src/varint.ts` の `decodeVarint` で「insufficient data」を `IncompleteDataError`、「invalid varint code point」を `ProtocolViolationError` に置き換えた。
+- `src/dataStream.ts` の decode 系関数 (`validateObjectStatus` / `decodeSubgroupHeader` / `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchHeader` / `decodeFetchObjectFields`) で投げる仕様違反例外を `ProtocolViolationError` に置き換えた。エンコード側のバリデーション (`encodeObjectFields` / `encodeObjectDatagram` / `encodeFetchObjectFields` 等) は自分のコードに対する protection なので `Error` のままとした。
+- `src/session.ts` の受信ループを以下のように分岐させた:
+  - `handleIncomingStream` のヘッダーパース catch: `IncompleteDataError` → 次のチャンク待ち、`ProtocolViolationError` → `closeWithError(PROTOCOL_VIOLATION)`、その他 → `closeWithError(INTERNAL_ERROR)`
+  - `handleIncomingStream` 全体の catch: `ProtocolViolationError` を検出したら `closeWithError(PROTOCOL_VIOLATION)`
+  - `processFetchObjects` / `processSubgroupObjects` の catch: `IncompleteDataError` で break、それ以外は throw して上位の catch に伝播
+  - `processPendingSubgroupStream` の catch: `IncompleteDataError` で break、`ProtocolViolationError` / その他で `closeWithError`
+  - `handleIncomingDatagram` の catch: `ProtocolViolationError` を検出したら `closeWithError(PROTOCOL_VIOLATION)`
+- メッセージは CLAUDE.md 方針に従い小文字始まり / ピリオド無しに揃え、既存テストの期待値も更新した (例: "Protocol violation: First object must have..." → "first object must have...")。
+- `src/dataStream.test.ts` / `src/varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を `assert.throws(fn, Class)` で検証するテストを追加した。
+- `src/message/parameter.ts` の例外型分類は本 issue のスコープ外として、引き続き `Error` のままとした。

@@ -144,3 +144,32 @@ export class RequestError extends MoqtError {
     this.name = "RequestError";
   }
 }
+
+/**
+ * decode 関数がバッファ不足を検出したときに投げるエラー
+ *
+ * draft-ietf-moq-transport-17 のデータストリーム / 制御メッセージ decode は、
+ * バッファに必要なバイト数が揃っていない時点で例外を投げる。
+ * 受信ループはこのエラーを受けて次のチャンクを待つ。
+ */
+export class IncompleteDataError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IncompleteDataError";
+  }
+}
+
+/**
+ * プロトコル違反 (仕様で定められた値・形式に違反した受信データ) を検出したときに投げるエラー
+ *
+ * draft-ietf-moq-transport-17 で MUST 要件として定められた受信データの妥当性検証
+ * (ストリームヘッダーの予約値、Object Status の不正値、Properties Length の不整合等) で
+ * 違反を検出した場合に投げる。受信ループはこのエラーを受けて
+ * PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+export class ProtocolViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProtocolViolationError";
+  }
+}

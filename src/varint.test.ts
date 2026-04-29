@@ -5,6 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { encodeVarint, decodeVarint, varintSize } from "./varint";
+import { IncompleteDataError, ProtocolViolationError } from "./error";
 
 // 1 バイト (0xxxxxxx): 0-127
 test("encodeVarint: 0 をエンコード", () => {
@@ -120,16 +121,17 @@ test("decodeVarint: 最大値をデコード (9 バイト)", () => {
   assert.equal(consumed, 9);
 });
 
-test("decodeVarint: データ不足でエラー", () => {
-  assert.throws(() => decodeVarint(new Uint8Array([0x80])));
+test("decodeVarint: データ不足は IncompleteDataError", () => {
+  assert.throws(() => decodeVarint(new Uint8Array(0)), IncompleteDataError);
+  assert.throws(() => decodeVarint(new Uint8Array([0x80])), IncompleteDataError);
 });
 
-test("decodeVarint: 無効なコードポイント 0xFC でエラー", () => {
-  assert.throws(() => decodeVarint(new Uint8Array([0xfc])));
+test("decodeVarint: 無効なコードポイント 0xFC は ProtocolViolationError", () => {
+  assert.throws(() => decodeVarint(new Uint8Array([0xfc])), ProtocolViolationError);
 });
 
-test("decodeVarint: 無効なコードポイント 0xFD でエラー", () => {
-  assert.throws(() => decodeVarint(new Uint8Array([0xfd])));
+test("decodeVarint: 無効なコードポイント 0xFD は ProtocolViolationError", () => {
+  assert.throws(() => decodeVarint(new Uint8Array([0xfd])), ProtocolViolationError);
 });
 
 // varintSize テスト
