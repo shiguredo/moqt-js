@@ -77,6 +77,10 @@
   - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
   - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
   - @voluntas
+- [FIX] Joining Fetch 送信エラーで pendingFetch エントリがリークする問題を修正する (#0110)
+  - `sendJoiningFetch()` の bidi ストリーム作成 / 書き込みで例外が発生した場合に `pendingFetch` から該当エントリを削除し、`options.onError?.()` を呼ぶようにする
+  - 呼び出し元での fire-and-forget による Promise rejection の取りこぼしを防止する
+  - @voluntas
 - [FIX] データストリーム decode の例外がデータ不足とプロトコル違反を区別できない問題を修正する (#0109)
   - `IncompleteDataError` (バッファ不足) と `ProtocolViolationError` (仕様違反) を `src/error.ts` に新設する
   - `varint.ts` のデータ不足例外を `IncompleteDataError`、不正コードポイント例外を `ProtocolViolationError` に変更する

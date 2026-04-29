@@ -1,6 +1,7 @@
 # Joining Fetch 送信エラーで pendingFetch エントリがリークする
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -128,3 +129,9 @@ void this.sendJoiningFetch(...).catch((err) => {
 ## 補足
 
 レビュー指摘 #M1 を受けて起票。同種のリーク (`void this.xxx(...)` の fire-and-forget) が他の箇所にもないか調査する余地はあるが、本 issue では Joining Fetch のみを扱う。
+
+## 解決方法
+
+- `Session.sendJoiningFetch()` (`src/session.ts`) で `encodeFetchPayload` / `sendRequestOnBidiStream` / `readFetchResponse` を try/catch で囲み、catch 内で `pendingFetch.delete(requestId)` と `options.onError?.(error)` を呼ぶようにした (issue 中の方針 A)。
+- これにより bidi ストリーム作成失敗時等にも `pendingFetch` がリークせず、`onError` が確実に呼ばれるようになる。
+- WebTransport 依存のため自動テストはなし。実機検証 (リレー停止状態で Joining Fetch を発火) で `pendingFetch` サイズが残らないこと、`onError` が呼ばれることを確認する。
