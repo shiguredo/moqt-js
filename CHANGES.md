@@ -62,6 +62,10 @@
 - [FIX] applyCatalogDelta の戻りが isComplete を引き継がない問題を修正する (#0071)
   - draft-ietf-moq-msf-00 §5.1.7 の「isComplete は削除禁止」に準拠する
   - @voluntas
+- [FIX] Subgroup Header の予約値で PROTOCOL_VIOLATION を発生させる (#0106)
+  - draft-ietf-moq-transport-17 §10.4.2 に従い、SUBGROUP_ID_MODE = 0b11 のタイプ値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信した場合は PROTOCOL_VIOLATION でセッションを閉じるようにする
+  - `src/dataStream.test.ts` に予約値および 0b00X1XXXX 形式に合わない不正タイプ値のデコードエラー検証を追加する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更

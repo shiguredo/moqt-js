@@ -69,7 +69,7 @@ fetcher = this.fetchers.get(header.requestId) ?? null;
 if (!fetcher) {
   fetcher = await this.waitForFetcher(header.requestId);
   if (!fetcher) {
-    break;  // ← reader.cancel() しないまま break
+    break; // ← reader.cancel() しないまま break
   }
 }
 // ...
@@ -77,7 +77,7 @@ subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
 if (!subscriber) {
   subscriber = await this.waitForSubscriber(header.trackAlias);
   if (!subscriber) {
-    break;  // ← reader.cancel() しないまま break
+    break; // ← reader.cancel() しないまま break
   }
 }
 ```

@@ -1,6 +1,7 @@
 # Subgroup Header の予約値で PROTOCOL_VIOLATION を発生させていない
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -62,3 +63,9 @@ draft-ietf-moq-transport-17 Section 3.4 では未知のストリーム種別に�
 ## 補足
 
 レビュー指摘 #35 と #38 を受けて起票。両者は「Subgroup ヘッダーの種別判定とエラー伝播」という同一責務に属するため 1 件にまとめる。
+
+## 解決方法
+
+- `src/session.ts` の `handleIncomingStream` で、ストリームタイプが Subgroup の範囲 (0x10..0x1F または 0x30..0x3F) に含まれる場合に、SUBGROUP_ID_MODE = 0b11 を表すビットパターン (`(streamTypeNum & 0x06) === 0x06`) を事前検証し、予約値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信したら `closeWithError(PROTOCOL_VIOLATION)` でセッションを閉じるようにした。
+- `src/dataStream.test.ts` に `decodeSubgroupHeader` が予約値で `SUBGROUP_ID_MODE 0b11 is reserved` を、bit 4 が立っていない値で `does not match form 0b00X1XXXX` を投げることを検証するテストを追加した。
+- decode 関数の例外分類 (データ不足とプロトコル違反の区別) は #0109 で対応する。
