@@ -56,3 +56,9 @@ Joining Fetch を有効にして Subscribe すると、SUBSCRIBE_OK 受信直後
 ## pending 理由
 
 調査の結果、リレー側 (Joining FETCH 未実装、または FETCH 処理でのプロトコルエラー) の問題と判断された。moqt-js 側の FETCH エンコーディングはテストで仕様準拠が確認済み。リレー側での Joining FETCH 対応または原因調査の結果を待つ必要があるため pending とする。
+
+## 状況確認 (2026-04-29)
+
+- `src/message/fetch.ts:23-29` で `FetchType.STANDALONE = 0x01` / `RELATIVE_JOINING = 0x02` / `ABSOLUTE_JOINING = 0x03` を定義。draft-ietf-moq-transport-17 Section 9.16.2 に準拠した値のまま。
+- `src/message/fetch.ts:90-170` のエンコード / デコード経路でも Joining 系の `joiningRequestId` / `joiningStart` を扱えており、クライアント側実装に欠落はない。
+- リレー側の Joining FETCH 対応状況に関する追加情報は得られていないため、現時点では引き続きリレー側の対応待ちで pending 維持。

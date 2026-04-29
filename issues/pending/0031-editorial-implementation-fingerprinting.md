@@ -44,3 +44,9 @@ MOQT_IMPLEMENTATION の送信をオプション化する独自機能の追加が
 - 現状の実装ではこの issue は未解決のままである。
 - ただし単純に送信を止めるのではなく、`ConnectOptions` か `createSetup()` のどちらで opt-out / override を持たせるかを先に決めるべきである。
 - プライバシー要件が明確になるまでは `issues/pending/` のまま維持し、設計判断が固まってから着手するのが妥当である。
+
+## 状況確認 (2026-04-29)
+
+- `src/message/setup.ts:69-74` を再確認。`createSetup()` は依然として `MOQT_IMPLEMENTATION` を無条件で push しており、opt-out / override の分岐は追加されていない。
+- `src/version.ts:13` の `MOQT_IMPLEMENTATION_VALUE = \`moqt-js/${version}\`` も変更なし。送信値は実装名 + バージョンそのまま。
+- 設計判断 (どこで opt-out させるか) も未決定のまま。pending 維持で変更なし。
