@@ -51,3 +51,10 @@ draft-ietf-moq-transport-17 Section 5.1 Subscriptions:
 - 現在のスコープでは、この issue は「未実装の機能」というより「現行方針の対象外」に近い。
 - そのため、いま直ちに実装へ進めるのではなく、クライアント専用方針が変わるまで `issues/pending/` のまま維持するのが妥当である。
 - もし将来対応するなら、1 つの issue で扱わず、`incomingBidirectionalStreams` の受信ループ、サーバー起点リクエスト用 API、奇数 Request ID の管理、各リクエスト種別ごとのフロー実装に分割して進めるべきである。
+
+## 状況確認 (2026-04-29)
+
+- `src/session.ts` を再確認。`incomingBidirectionalStreams` の `getReader()` 呼び出しは依然として存在せず、双方向ストリームはクライアント発のみ (`sendRequestOnBidiStream()` 経路)。
+- `nextRequestId` は `0n` 始点で `+= 2n` のまま (`src/session.ts:649, 988-989, 1190-1191, 1352-1353, ...`)。クライアント発偶数 ID 前提も変わっていない。
+- `incomingUnidirectionalStreams` は `src/session.ts:893` と `src/session.ts:3431` で監視しているが、これは制御ストリーム + Object 用単方向ストリームのみ。
+- クライアント専用方針も `README.md` レベルで変わっていないため、引き続き「対象外」扱いで pending 維持。

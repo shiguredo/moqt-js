@@ -113,3 +113,10 @@ GREASE は RFC では SHOULD レベルの推奨であり、送信頻度や対象
 - 当面は `issues/pending/` のまま維持するのが妥当である。
 - もし着手するなら、まずは影響範囲が最も限定的な `SETUP` Option への opt-in な GREASE 送信から始めるべきである。
 - `Object Properties` や `Track Properties` への GREASE 注入は、相互接続確認と性能影響の見積もりを別途行った上で後続 issue に分けるべきである。
+
+## 状況確認 (2026-04-29)
+
+- `src/grease.ts:37-54` を再確認。`isGreaseValue()` / `generateGreaseValue(n: number)` は前回調査時の API のまま。
+- `src/message/setup.ts:39-80` の `createSetup()` は依然として `PATH` / `AUTHORIZATION_TOKEN` / `AUTHORITY` / `MOQT_IMPLEMENTATION` のみを追加。GREASE Setup Option を入れる経路はなし。
+- `src/session.ts` 内のオブジェクト送信パス (`sendObjectInternal()` / `sendDatagram()`) からも `grease.ts` の参照は出ておらず、自動 GREASE 注入は未配線のまま。
+- 送信側 GREASE は引き続き未実装。pending 維持で変更なし。

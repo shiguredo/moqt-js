@@ -76,3 +76,10 @@ Apple の Network Framework の挙動が WebTransport の仕様と乖離して�
 ## pending 理由
 
 WebKit (Apple の Network Framework) 側のバグであり、moqt-js 側で根本対応はできない。案 1 (subgroup header と object data を 1 回の write にまとめる) は moqt-js 内で対応可能だが、Publisher のストリーム送出経路全体に影響する大きな改修となるため、WebKit / Bugzilla への報告と修正を待つ方針とする。WebKit 側の動向次第で対応方針を再検討する。
+
+## 状況確認 (2026-04-29)
+
+- `src/session.ts:2396-2416` の `closePublisherStreamInternal()` で 5 秒タイムアウト workaround は維持。コメントも Safari の `WritableStreamDefaultWriter.close()` が resolve しない件をそのまま記載している。
+- WebKit 側の修正情報は確認できず、根本原因 (Apple Network Framework の `nw_connection_send` バッファリング) も継続中の想定。
+- 案 1 (write の合体) は未実装。Publisher の送出経路改修は未着手。
+- WebKit / Bugzilla 側の動きを待つ pending 方針は変更なし。

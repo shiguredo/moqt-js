@@ -49,3 +49,9 @@ Audio Level の "ID: 6 (IANA, please assign)" は仮の値であり、IANA に�
 ## pending 理由
 
 draft-ietf-moq-loc-02 の仕様バグ。AUDIO_LEVEL に対する IANA からの正式な ID 割り当てを待つ必要があり、moqt-js 側では対応できない。次のリビジョンで衝突しない ID が割り当てられた後に対応する。
+
+## 状況確認 (2026-04-29)
+
+- `refs/moq/` 配下の LOC ドラフトは依然として `draft-ietf-moq-loc-02.txt` のみ。`-03` 以降は未取得。
+- `src/loc.ts:24-43` で `TIMESTAMP: 0x06n` と `AUDIO_LEVEL: 6n` が共存する暫定状態を維持。デコードループ (`src/loc.ts:284-373`) も TIMESTAMP / TIMESCALE のみ処理し、AUDIO_LEVEL は ID `0x06` での突き合わせ対象外という方針のまま。
+- 仕様側 (IANA への AUDIO_LEVEL ID 割り当て、または LOC ドラフト改訂) に動きがない以上、moqt-js 側で取れるアクションはなく、pending 維持で変更なし。
