@@ -1,6 +1,7 @@
 # Playwright による WebTransport 接続 E2E テストを追加する
 
 Created: 2026-04-29
+Completed: 2026-04-29
 Model: Opus 4.7
 
 ## 概要
@@ -74,3 +75,22 @@ Model: Opus 4.7
 
 - ユーザーが言及した `microsoft/playwright-cli` は archived。現在は `@playwright/test` に CLI 機能が統合されているため、本 issue は `@playwright/test` を前提とする。
 - WebTransport の Firefox / WebKit サポートは未提供のため、Chromium 以外は対象外とする。
+
+## 解決方法
+
+ローカルで通るところまでを本コミットで実装。CI ワークフロー (`.github/workflows/e2e.yml`) は別 issue で扱う。
+
+- `pnpm-workspace.yaml` の `packages` に `tests/e2e` を追加し、独立 Vite アプリ (`moqt-js-e2e`) として workspace に組み込んだ。
+- `tests/e2e/{package.json,tsconfig.json,vite.config.ts,index.html,main.ts,connect.spec.ts}` を新設した。
+  - `vite.config.ts` は port 5180 (`strictPort: true`) で `examples` と同じく `moqt-js` を `../../src/index.ts` へ alias。
+  - `main.ts` は `window.__moqtE2E.connectSession()` を露出するだけで、`getUserMedia` も `MediaPublisher.start()` も使わない。`connect()` を直接叩いて `Session.state` を読み、`session.close()` で後始末する。Authorization Token は USE_VALUE 形式 (UTF-8 encode) で渡す。
+  - `connect.spec.ts` は `TEST_MOQT_HTTPS_URI` 未設定時に `test.skip`、`TEST_MOQT_AUTH_TOKEN` 未設定時にトークン経路の spec のみ skip する。
+- `playwright.config.ts` をリポジトリ直下に新設した。
+  - `process.loadEnvFile` (Node 20.12+) で `.env` を直接読み込み、dotenv パッケージへの依存は持たない。
+  - `webServer.command` は `pnpm --filter moqt-js-e2e dev`、`url` は `http://localhost:5180`。Vite は `localhost` (IPv6 経由) で listen するため `127.0.0.1` ではなく `localhost` を指定する。
+  - Chromium 1 プロジェクト構成。`timeout: 10_000` で CLAUDE.md のデバッグ timeout 制約に揃えた。
+- `.env.example` を新設して `TEST_MOQT_HTTPS_URI` / `TEST_MOQT_AUTH_TOKEN` のテンプレを置き、`.gitignore` に `.env*` (`!.env.example` で example のみ許可) / `playwright-report/` / `test-results/` を追加した。
+- `tests/e2e/vite.config.ts` の `define` で `__MOQT_JS_VERSION__` を埋め込む (ルート vite.config.ts と同じ扱い)。これが無いと `src/version.ts` の評価で `ReferenceError` になり module 全体の評価が失敗していた。
+- `vp run typecheck` / `vp lint` / `vp test` (394 tests) が通ることを確認。`pnpm run e2e-test` は環境変数未設定時に 2 件 `skipped` で正常終了し、`.env` を設定した実環境では 2 件 (token なし接続 + token あり接続) すべて通ることを確認した。
+- 高レベル API の `connectMediaPublisher` / `createMediaSubscriber` は内部で Catalog 待ちや MediaStream を要求するため、「接続確立まで」のスコープを保つために低レベル `connect()` を直接使う設計にした。
+- ユーザー指摘により Playwright で `getUserMedia` を扱う際の落とし穴を回避するため、本基盤ではメディア取得を一切行わない。

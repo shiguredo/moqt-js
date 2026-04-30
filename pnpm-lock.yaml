@@ -59,6 +59,12 @@ importers:
         specifier: workspace:*
         version: link:..
 
+  tests/e2e:
+    dependencies:
+      moqt-js:
+        specifier: workspace:*
+        version: link:../..
+
 packages:
 
   '@babel/code-frame@7.29.0':
