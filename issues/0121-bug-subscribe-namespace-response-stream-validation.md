@@ -5,7 +5,7 @@ Model: Opus 4.7
 
 ## 概要
 
-`SubscribeNamespace` のレスポンス受信処理 (`src/session.ts:1614-1670` 付近) は draft-17 §6.1 / §9.20 で規定された複数の MUST / SHOULD 検証を満たしていない。具体的には以下の 4 点。
+`SubscribeNamespace` のレスポンス受信処理 (`src/session.ts:1601-1654` 付近) は draft-17 §6.1 / §9.20 で規定された複数の MUST / SHOULD 検証を満たしていない。具体的には以下の 4 点。
 
 1. 最初のフレームが REQUEST_OK / REQUEST_ERROR でないときの PROTOCOL_VIOLATION (MUST)
 2. NAMESPACE_DONE が対応 NAMESPACE より前に届いたときの PROTOCOL_VIOLATION (MUST)
@@ -28,12 +28,12 @@ draft-ietf-moq-transport-17 §9.20 SUBSCRIBE_NAMESPACE (line 4332-4384):
 
 ## 該当箇所
 
-- `src/session.ts:1614-1670` 付近 — `readNamespaceSubscriptionResponse` 相当の switch
-  - `case MessageType.NAMESPACE` (`1650 周辺`): `resolved` 状態に関係なく `onNamespace` を呼ぶ → 順序検証が欠落
-  - `case MessageType.NAMESPACE_DONE` (`1656 周辺`): 受信済 suffix の追跡なし、ただ `onNamespaceDone` を呼ぶだけ → before-NAMESPACE 検証が欠落
-  - `case MessageType.REQUEST_OK` (`1620 周辺`): `resolved` 既設定の二度目を素通しして `resolve()` を再実行 → 重複検出なし
-  - `case MessageType.REQUEST_ERROR` (`1635 周辺`): `resolved` フラグを見ずに reject 経路に入る → REQUEST_OK 後の REQUEST_ERROR / 二度目の REQUEST_ERROR を検出しない
-  - `default` (`1660 周辺`): PUBLISH_BLOCKED (0x0F) も unknown 扱いで PROTOCOL_VIOLATION クローズ
+- `src/session.ts:1601-1654` 付近 — `readNamespaceSubscriptionResponse` 相当の switch
+  - `case MessageType.NAMESPACE` (`1630 周辺`): `resolved` 状態に関係なく `onNamespace` を呼ぶ → 順序検証が欠落
+  - `case MessageType.NAMESPACE_DONE` (`1637 周辺`): 受信済 suffix の追跡なし、ただ `onNamespaceDone` を呼ぶだけ → before-NAMESPACE 検証が欠落
+  - `case MessageType.REQUEST_OK` (`1602 周辺`): `resolved` 既設定の二度目を素通しして `resolve()` を再実行 → 重複検出なし
+  - `case MessageType.REQUEST_ERROR` (`1614 周辺`): `resolved` フラグを見ずに reject 経路に入る → REQUEST_OK 後の REQUEST_ERROR / 二度目の REQUEST_ERROR を検出しない
+  - `default` (`1644 周辺`): PUBLISH_BLOCKED (0x0F) も unknown 扱いで PROTOCOL_VIOLATION クローズ
 
 ## 期待される動作
 

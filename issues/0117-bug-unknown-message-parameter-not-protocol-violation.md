@@ -21,8 +21,8 @@ draft-ietf-moq-transport-17 Section 9.3 Message Parameters (line 2664-2669):
 
 ## 該当箇所
 
-- `src/message/parameter.ts:522-528` `getMessageParameterValueEncoding()` — `throw new Error(...)`
-- 呼び出し元 `decodeMessageParameter` (`src/message/parameter.ts:548 / 584`) も `Error` を素通しする
+- `src/message/parameter.ts:538-544` `getMessageParameterValueEncoding()` — `throw new Error(...)`
+- 呼び出し元 `decodeMessageParameter` (`src/message/parameter.ts:600`) も `Error` を素通しする
 - `src/session.ts` の制御メッセージループに `error instanceof Error && message === "unknown message parameter type"` を `PROTOCOL_VIOLATION` に昇格する分岐がない (要確認)
 
 ## 期待される動作
