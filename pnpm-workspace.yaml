@@ -3,6 +3,7 @@ minimumReleaseAge: 2880
 packages:
   - devtools
   - examples
+  - tests/e2e
 
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@latest

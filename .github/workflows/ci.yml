@@ -69,8 +69,23 @@ jobs:
       - run: vp install --no-frozen-lockfile
       - run: vp run typecheck
 
+  e2e:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version: "25"
+          cache: true
+      - run: vp install
+      - run: vp exec playwright install --with-deps chromium
+      - run: vp run e2e-test
+        env:
+          TEST_MOQT_HTTPS_URI: ${{ secrets.TEST_MOQT_HTTPS_URI }}
+          TEST_MOQT_AUTH_TOKEN: ${{ secrets.TEST_MOQT_AUTH_TOKEN }}
+
   slack-notify:
-    needs: [lint, build, typecheck]
+    needs: [lint, build, typecheck, e2e]
     if: always()
     runs-on: ubuntu-slim
     timeout-minutes: 5

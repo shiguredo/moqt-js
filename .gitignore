@@ -36,3 +36,11 @@ coverage/
 # Agents
 .claude/
 .codex/
+
+# Environment
+.env*
+!.env.example
+
+# Playwright
+playwright-report/
+test-results/
