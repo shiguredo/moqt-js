@@ -57,8 +57,6 @@ export interface SubscriberInstance {
   // Joining Fetch 中のライブオブジェクトバッファ
   joiningFetchInProgress: boolean;
   liveObjectBuffer: MoqtObject[];
-  // Joining Fetch の最後のフレームの timestamp（この値以上から描画開始）
-  joiningFetchLastTimestamp: number;
   // Joining Fetch の最後のオブジェクトの location（重複除去用）
   joiningFetchLastLocation: { group: bigint; object: bigint } | null;
 }
@@ -97,7 +95,6 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     largestLocation: null,
     joiningFetchInProgress: false,
     liveObjectBuffer: [],
-    joiningFetchLastTimestamp: 0,
     joiningFetchLastLocation: null,
   };
 }
