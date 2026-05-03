@@ -133,6 +133,10 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [FIX] `decodeFetchPayload` を switch 化し Fetch Type が 0x1/0x2/0x3 以外なら `ProtocolViolationError` を throw するようにする (#0118)
+  - draft-ietf-moq-transport-17 §9.14 の "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close the session with a PROTOCOL_VIOLATION." に準拠する
+  - moqt-js は Subscriber 専用クライアントで FETCH を受信しないためランタイム経路には影響しないが、PBT (`src/message/fetch.prop.ts`) にラウンドトリップ強化として不正値で `ProtocolViolationError` が throw されることを検証するテストを追加する
+  - @voluntas
 - [FIX] 未知 Message Parameter 受信時に PROTOCOL_VIOLATION でセッションを閉じるように修正する (#0117)
   - `getMessageParameterValueEncoding()` の `throw new Error(...)` を `ProtocolViolationError` に変更する
   - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
