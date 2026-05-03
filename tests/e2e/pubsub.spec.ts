@@ -5,8 +5,14 @@ const HTTPS_URI = process.env["TEST_MOQT_HTTPS_URI"];
 const AUTH_TOKEN = process.env["TEST_MOQT_AUTH_TOKEN"];
 
 const PUBSUB_DURATION_MS = 5000;
-// Subscriber が先行で subscribe を開始してから Publisher を起動する遅延
-const PUBLISHER_START_DELAY_MS = 200;
+// Publisher が catalog を publish してから Subscriber を起動するまでの遅延
+// createMediaSubscriber.start() は内部で catalog を 5 秒で待つので、
+// Subscriber が先に start すると Publisher の encoder 初期化と catalog publish が
+// 5 秒以内に間に合わない relay 構成で flaky になる。
+// Publisher を先に起動して joiningFetch 経由で Subscriber が catalog を取得する流れにする。
+const SUBSCRIBER_START_DELAY_MS = 500;
+// Subscriber 起動までの待ち時間ぶん Publisher 側を多く走らせる必要がある
+const PUBLISHER_DURATION_MS = PUBSUB_DURATION_MS + SUBSCRIBER_START_DELAY_MS;
 
 test.describe("MOQT Canvas pub/sub", () => {
   test.skip(!HTTPS_URI, "TEST_MOQT_HTTPS_URI is not set");
@@ -27,9 +33,9 @@ test.describe("MOQT Canvas pub/sub", () => {
 
       await Promise.all([waitForE2EReady(publisherPage), waitForE2EReady(subscriberPage)]);
 
-      const subscriberPromise = subscriberPage.evaluate(
+      const publisherPromise = publisherPage.evaluate(
         ({ url, token, ns, durationMs }) =>
-          window.__moqtE2E.subscribeCanvas({
+          window.__moqtE2E.publishCanvas({
             url,
             authorizationTokenValue: token,
             namespace: ns,
@@ -39,16 +45,16 @@ test.describe("MOQT Canvas pub/sub", () => {
           url: HTTPS_URI as string,
           token: AUTH_TOKEN as string,
           ns: namespace,
-          durationMs: PUBSUB_DURATION_MS,
+          durationMs: PUBLISHER_DURATION_MS,
         },
       );
 
-      // Subscriber を先に立ち上げてから Publisher を始動する
-      await new Promise<void>((resolve) => setTimeout(resolve, PUBLISHER_START_DELAY_MS));
+      // Publisher が catalog を publish するまで待つ
+      await new Promise<void>((resolve) => setTimeout(resolve, SUBSCRIBER_START_DELAY_MS));
 
-      const publisherPromise = publisherPage.evaluate(
+      const subscriberPromise = subscriberPage.evaluate(
         ({ url, token, ns, durationMs }) =>
-          window.__moqtE2E.publishCanvas({
+          window.__moqtE2E.subscribeCanvas({
             url,
             authorizationTokenValue: token,
             namespace: ns,

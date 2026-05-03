@@ -12,7 +12,7 @@
 ## develop
 
 - [ADD] Canvas ダミー映像で relay 経由 pub/sub の E2E テストを追加する (#0115)
-  - `tests/e2e/pubsub.spec.ts` を新設し、2 つの BrowserContext (Publisher 用 / Subscriber 用) で同一 namespace に同時 pub/sub させる
+  - `tests/e2e/pubsub.spec.ts` を新設し、2 つの BrowserContext (Publisher 用 / Subscriber 用) で同一 namespace に Publisher 起動 → 500 ms 後 Subscriber 起動の順で pub/sub させる
   - `tests/e2e/main.ts` に `publishCanvas` / `subscribeCanvas` を追加し、320x240 Canvas を `captureStream(30)` で MediaStream 化して `createMediaPublisher` / `createMediaSubscriber` (VP8) で送受する
   - `tests/e2e/helpers.ts` を新設し `waitForE2EReady()` を共通化する。`connect.spec.ts` を helpers 経由に変更する
   - `playwright.config.ts` の `timeout` を `10_000` から `30_000` に引き上げる

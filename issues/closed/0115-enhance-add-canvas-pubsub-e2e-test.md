@@ -77,7 +77,7 @@ issue 本文の方針通りに実装した。
 - `tests/e2e/pubsub.spec.ts` を新設した
   - `browser.newContext()` で Publisher 用 / Subscriber 用の 2 つの context を立ち上げる
   - namespace は `["e2e", crypto.randomUUID()]` でユニーク化
-  - Subscriber を起動 → 200 ms 後に Publisher を起動 → `Promise.all` で待つ
+  - **issue 本文の「Subscriber 先行 → 200 ms 後 Publisher」とは順序を逆転**: Publisher 起動 → 500 ms 後 Subscriber 起動 → `Promise.all` で待つ。`createMediaSubscriber.subscribeCatalog()` の内部タイムアウトが 5 秒で、Subscriber 先行だと Publisher 側の encoder 初期化と Catalog publish が CI 環境で 5 秒以内に届かず timeout して flaky になったため。Subscriber は `joiningFetch` で過去 publish された Catalog を取得するので後から start でも問題なく受信できる
   - `errors === []` / `publisher.finalState === "publishing"` / `subscriber.finalState === "active"` / `hasVideoTrack === true` を assert
 - `playwright.config.ts` の `timeout` を `10_000` から `30_000` に引き上げた
 - 環境変数 (`TEST_MOQT_HTTPS_URI` / `TEST_MOQT_AUTH_TOKEN`) 未設定時は `test.skip` で素通りする
