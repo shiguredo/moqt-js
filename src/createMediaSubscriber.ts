@@ -312,6 +312,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
     if (this.options.authorizationToken) {
       connectOptions.authorizationToken = this.options.authorizationToken;
     }
+    if (this.options.pendingSubgroup) {
+      connectOptions.pendingSubgroup = this.options.pendingSubgroup;
+    }
 
     this.session = await connect(this.url, connectCallbacks, connectOptions);
   }

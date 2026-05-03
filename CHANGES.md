@@ -131,15 +131,22 @@
   - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
   - 制御メッセージループで `ProtocolViolationError` を catch して `PROTOCOL_VIOLATION` でセッションを閉じる
   - @voluntas
+- [FIX] `pendingSubgroupStreams` の buffer 配線を実装する (#0125)
+  - draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief period to handle reordering with the control message that establishes the Track Alias" に準拠する buffer を実装する
+  - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
+  - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
+  - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
+  - 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) にも `pendingSubgroup` を追加し `connect()` に伝搬する
+  - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
+  - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
+  - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する
+  - `subscriberReadyCallbacks` 関連を削除する
+  - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
+  - @voluntas
 - [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
   - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
   - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
   - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
-  - @voluntas
-- [CHANGE] `SessionStatistics` から `pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を削除する (#0125)
-  - `pendingSubgroupStreams` Map と `processPendingSubgroupStream` 関数を削除しデッドコードを整理する
-  - 未確立 Track Alias の Subgroup ストリームは `waitForSubscriber` のタイムアウトで `cancel()` される (abandon オンリー)
-  - devtools の `DebugPanel.tsx` から `Pending Subgroup Streams` / `Pending Subgroup Bytes` の表示を削除する
   - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
