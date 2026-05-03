@@ -54,6 +54,7 @@ RFC §9.14 (FETCH) より:
 このMUSTは「FETCHメッセージを受信するエンドポイント（＝サーバー/パブリッシャー）」に適用される。moqt-jsはWebTransport専用クライアントであり、FETCHメッセージを**送信する側（Subscriber）**であって**受信する側（Publisher）**ではない。
 
 実装面でも:
+
 - `decodeFetchPayload` は `src/message/fetch.ts` で定義されているが、制御メッセージループ（`src/session.ts`）からは呼び出されていない
 - 実際の使用箇所はPBTテスト（`src/message/fetch.prop.ts`）のラウンドトリップ検証のみ
 - `src/message/fetch.ts` のコメントにも「リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。PBT でのラウンドトリップテストで使用。」と明記されている

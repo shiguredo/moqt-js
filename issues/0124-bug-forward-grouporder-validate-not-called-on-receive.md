@@ -29,7 +29,9 @@ draft-ietf-moq-transport-17 §9.3.6 GROUP ORDER Parameter (line 2985-2998):
 ## 該当箇所
 
 ### FORWARD の検証漏れ
+
 仕様上 FORWARD パラメータが現れうる場所:
+
 - SUBSCRIBE
 - PUBLISH
 - SUBSCRIBE_NAMESPACE
@@ -39,6 +41,7 @@ draft-ietf-moq-transport-17 §9.3.6 GROUP ORDER Parameter (line 2985-2998):
 `session.ts` の SUBSCRIBE 受信は実装スコープ外 (クライアント専用) だが、SUBSCRIBE_NAMESPACE で Publisher 側から FORWARD が含まれた PUBLISH を受信する経路では未検証。
 
 ### GROUP_ORDER の検証漏れ
+
 - `validateGroupOrderValue` の grep 結果は定義行のみ
 - GROUP_ORDER パラメータ (Message Parameter, 0x22) はクライアントが受信する SUBSCRIBE_OK / FETCH_OK / REQUEST_OK 等にも現れうるが、いずれも値検証なし
 - Track Property の DEFAULT_PUBLISHER_GROUP_ORDER (Property 0x22) も検証なし — これは別 issue 0119 でカバー予定

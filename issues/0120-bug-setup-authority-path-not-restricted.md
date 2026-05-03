@@ -22,20 +22,24 @@ draft-ietf-moq-transport-17 §9.4.1.2 PATH (line 3179-3187):
 ## 該当箇所
 
 ### 送信側
+
 - `src/session.ts:854-895` (`initialize()`) — `options.path` / `options.authority` を無条件で `createSetup` に渡す
 - `src/message/setup.ts:62-67` 付近 — `createSetup({path, authority})` がそのまま AUTHORITY (0x05) / PATH (0x01) Setup Option を積む
 - 公開 API 上、利用者が `authority` / `path` を渡せてしまう
 
 ### 受信側
+
 - `src/session.ts` の SETUP 受信処理 (`decodeSetupPayload` の戻り値処理) — 受信した Setup Options に AUTHORITY / PATH が含まれているかを検査していない
 
 ## 期待される動作
 
 ### 送信側
+
 - moqt-js は WebTransport 専用クライアントであるため、`initialize()` の `options` から `path` / `authority` を削除するか、渡された場合に `Error` で即拒否する
 - `createSetup` レベルでも WebTransport 用のフラグを受け取り、AUTHORITY / PATH が指定されたら throw する
 
 ### 受信側
+
 - SETUP 受信時に AUTHORITY (0x05) または PATH (0x01) を検出したら以下で閉じる:
   - AUTHORITY → `closeWithError(SessionErrorCode.INVALID_AUTHORITY)`
   - PATH → `closeWithError(SessionErrorCode.INVALID_PATH)`

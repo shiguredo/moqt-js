@@ -18,8 +18,8 @@ draft-ietf-moq-transport-17 §11.6 Immutable Properties (line 5394-5455):
 
 > A Track is considered malformed (see Section 2.4.2) if any of the following conditions are detected:
 >
-> *  An Object contains an Immutable Properties property that contains another Immutable Properties key.
-> *  A Key-Value-Pair cannot be parsed.
+> - An Object contains an Immutable Properties property that contains another Immutable Properties key.
+> - A Key-Value-Pair cannot be parsed.
 
 > An Object MUST NOT contain more than one instance of this property.
 
@@ -27,7 +27,7 @@ draft-ietf-moq-transport-17 §11.7 Prior Group ID Gap (line 5457-5504):
 
 > A Track is considered malformed (see Section 2.4.2) if any of the following conditions are detected:
 >
-> *  An Object contains more than one instance of Prior Group ID Gap.
+> - An Object contains more than one instance of Prior Group ID Gap.
 
 > An Object MUST NOT contain more than one instance of this property.
 
