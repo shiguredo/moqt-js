@@ -18,11 +18,17 @@ import {
   calculateSkippedGroups,
   calculateSkippedObjects,
   MOQTPropertyId,
+  TrackPropertyId,
   type Property,
 } from "./properties";
 
 /**
  * 既知の拡張 ID を除外した未知の ID を生成する Arbitrary
+ *
+ * draft-ietf-moq-transport-17 §11 で MUST レベルの値域制約がある Track Property
+ * (PUBLISHER_PRIORITY / PUBLISHER_GROUP_ORDER_PREFERENCE / DYNAMIC_GROUPS) も
+ * 除外する (任意 value だと validateTrackPropertyValue で ProtocolViolationError
+ * になり、ラウンドトリップが成立しないため)。
  */
 const unknownExtensionIdArb = fc
   .bigInt({ min: 0n, max: 0xffn })
@@ -30,7 +36,10 @@ const unknownExtensionIdArb = fc
     (id) =>
       id !== MOQTPropertyId.PRIOR_GROUP_ID_GAP &&
       id !== MOQTPropertyId.PRIOR_OBJECT_ID_GAP &&
-      id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS,
+      id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS &&
+      id !== TrackPropertyId.PUBLISHER_PRIORITY &&
+      id !== TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE &&
+      id !== TrackPropertyId.DYNAMIC_GROUPS,
   );
 
 test("Prior Group ID Gap のエンコード・デコードがラウンドトリップする", () => {
@@ -201,10 +210,21 @@ test("calculateSkippedObjects は gap 個の連続した ID を返す", () => {
 
 /**
  * 偶数 ID の Property を生成する Arbitrary
+ *
+ * 値域制約のある Track Property は除外する (validateTrackPropertyValue で
+ * ProtocolViolationError になりラウンドトリップが成立しないため)。
  */
 const evenPropertyArb = fc
   .record({
-    id: fc.bigInt({ min: 0n, max: 0xfen }).filter((id) => id % 2n === 0n),
+    id: fc
+      .bigInt({ min: 0n, max: 0xfen })
+      .filter(
+        (id) =>
+          id % 2n === 0n &&
+          id !== TrackPropertyId.PUBLISHER_PRIORITY &&
+          id !== TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE &&
+          id !== TrackPropertyId.DYNAMIC_GROUPS,
+      ),
     value: fc.bigInt({ min: 0n, max: 100000n }),
   })
   .map(({ id, value }) => ({ id, value }) as Property);

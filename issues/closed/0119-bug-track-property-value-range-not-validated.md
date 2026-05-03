@@ -1,6 +1,7 @@
 # Track Property の値域が MUST レベルで検証されていない
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -42,3 +43,12 @@ draft-ietf-moq-transport-17:
 ## 優先度
 
 重要。MUST 違反であり、不正な peer のプロパティで状態が壊れる。
+
+## 解決方法
+
+- `src/properties.ts` に `validateTrackPropertyValue(id, value)` を新設し、`PUBLISHER_PRIORITY` / `PUBLISHER_GROUP_ORDER_PREFERENCE` / `DYNAMIC_GROUPS` の値域を検証する。違反時は `ProtocolViolationError` を throw する
+- `decodeProperties` / `parseProperties` (generic な「未知の拡張」経路) / `decodeImmutableProperties` / `parseProperties` 内の Immutable Extensions 内部処理の **すべての偶数 ID 経路** で `validateTrackPropertyValue` を呼び出す
+- `validateGroupOrderValue` (Message Parameter 用) の再利用は行わず、Track Property 用に独立して実装した (Message Parameter 側は `Error` を throw する別ロジックで、Track Property の値域も Group Order Preference 含めて 1 つの validator にまとめた方が見通しが良いため)
+- `src/properties.test.ts` に以下のテストを追加: `validateTrackPropertyValue` の単体テスト (3 Property × 許容値 / 不正値) / `decodeProperties` / `parseProperties` / `decodeImmutableProperties` の不正値で `ProtocolViolationError` が throw される検証
+- 影響を受ける PBT (`properties.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) で Track Property ID (`PUBLISHER_PRIORITY` / `PUBLISHER_GROUP_ORDER_PREFERENCE` / `DYNAMIC_GROUPS`) を arbitrary の id 集合から除外し、ラウンドトリップ生成時に validate が必ず通るようにした
+- `encodeProperties` 側は触っていない (Subscriber が自分で生成した Track Property を encode する際には `Property` 型のまま使い、API として値域の事前チェックを強制すべきかは別 issue とする)
