@@ -515,12 +515,6 @@ export interface SessionStatistics {
   /** SUBSCRIBE 経由で受信したバイト数 */
   bytesReceivedViaSubscribe: number;
 
-  // バッファ状態
-  /** SUBSCRIBE_OK 前に到着した Subgroup ストリーム数 */
-  pendingSubgroupStreamsCount: number;
-  /** SUBSCRIBE_OK 前に到着した Subgroup ストリームのバイト数 */
-  pendingSubgroupStreamsBytes: number;
-
   // ストリーム状態
   /** アクティブな Publisher 数 */
   activePublishers: number;
@@ -659,14 +653,6 @@ export class SessionImpl implements Session {
   private subscribers = new Map<bigint, SubscriberImpl>();
   private subscribersByAlias = new Map<bigint, SubscriberImpl>();
   private fetchers = new Map<bigint, FetcherImpl>();
-
-  // Subscriber 登録前に到着した Subgroup ストリームをバッファリング
-  // QUIC ではストリーム間の順序が保証されないため、
-  // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
-  private pendingSubgroupStreams = new Map<
-    bigint,
-    Array<{ header: import("./dataStream").SubgroupHeader; data: Uint8Array }>
-  >();
 
   // Subscriber 登録待ちの Promise を管理
   // SUBSCRIBE_OK より先にデータストリームが到着した場合、
@@ -1945,21 +1931,11 @@ export class SessionImpl implements Session {
    * セッションレベルの統計情報を取得する
    */
   getStatistics(): SessionStatistics {
-    // pendingSubgroupStreams のバイト数を計算
-    let pendingSubgroupStreamsBytes = 0;
-    for (const streams of this.pendingSubgroupStreams.values()) {
-      for (const stream of streams) {
-        pendingSubgroupStreamsBytes += stream.data.byteLength;
-      }
-    }
-
     return {
       objectsReceivedViaFetch: this.statsObjectsReceivedViaFetch,
       objectsReceivedViaSubscribe: this.statsObjectsReceivedViaSubscribe,
       bytesReceivedViaFetch: this.statsBytesReceivedViaFetch,
       bytesReceivedViaSubscribe: this.statsBytesReceivedViaSubscribe,
-      pendingSubgroupStreamsCount: this.pendingSubgroupStreams.size,
-      pendingSubgroupStreamsBytes,
       activePublishers: this.publishers.size,
       activeSubscribers: this.subscribers.size,
       activeFetchers: this.fetchers.size,
@@ -2858,19 +2834,6 @@ export class SessionImpl implements Session {
 
         this.subscribers.set(requestId, pending.impl);
         this.subscribersByAlias.set(decoded.trackAlias, pending.impl);
-
-        // バッファリングされた Subgroup ストリームを処理
-        const pendingStreams = this.pendingSubgroupStreams.get(decoded.trackAlias);
-        if (pendingStreams && pendingStreams.length > 0) {
-          this.pendingSubgroupStreams.delete(decoded.trackAlias);
-          for (const pendingStream of pendingStreams) {
-            this.processPendingSubgroupStream(
-              pending.impl,
-              pendingStream.header,
-              pendingStream.data,
-            );
-          }
-        }
 
         // Subscriber 登録待ちのストリームに通知
         const readyCallbacks = this.subscriberReadyCallbacks.get(decoded.trackAlias);
@@ -3999,87 +3962,5 @@ export class SessionImpl implements Session {
       remainingBuffer: buffer.slice(offset),
       previousObjectId: currentPreviousObjectId,
     };
-  }
-
-  /**
-   * バッファリングされた Subgroup ストリームを処理
-   * SUBSCRIBE_OK より先にデータストリームが到着した場合に使用
-   */
-  private processPendingSubgroupStream(
-    subscriber: SubscriberImpl,
-    header: import("./dataStream").SubgroupHeader,
-    data: Uint8Array,
-  ): void {
-    let previousObjectId = -1n;
-    let buffer = data;
-    // draft-ietf-moq-transport-17 Section 10.4.2:
-    // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
-    // Subgroup ID として使用する
-    let resolvedSubgroupId = header.subgroupId;
-
-    while (buffer.length > 0) {
-      try {
-        const [fields, fieldsConsumed] = decodeObjectFields(buffer, header.type, 0);
-
-        const payloadLength = Number(fields.payloadLength);
-        const totalNeeded = fieldsConsumed + payloadLength;
-
-        if (totalNeeded > buffer.length) {
-          // ペイロードが不完全
-          break;
-        }
-
-        // Object ID を計算
-        let objectId: bigint;
-        if (previousObjectId < 0n) {
-          objectId = fields.objectIdDelta;
-        } else {
-          objectId = previousObjectId + fields.objectIdDelta + 1n;
-        }
-        previousObjectId = objectId;
-
-        // FirstObjectId モードの場合、最初のオブジェクトの ID を Subgroup ID に設定
-        if (resolvedSubgroupId === undefined) {
-          resolvedSubgroupId = objectId;
-        }
-
-        // ペイロードを抽出
-        const payload = buffer.slice(fieldsConsumed, fieldsConsumed + payloadLength);
-        buffer = buffer.slice(totalNeeded);
-
-        const object: MoqtObject = {
-          groupId: header.groupId,
-          subgroupId: resolvedSubgroupId,
-          objectId,
-          publisherPriority: header.publisherPriority,
-          status: fields.status,
-          properties: fields.properties.length > 0 ? fields.properties : undefined,
-          payload,
-        };
-
-        // 統計カウンターを更新
-        this.statsObjectsReceivedViaSubscribe++;
-        this.statsBytesReceivedViaSubscribe += payload.byteLength;
-
-        subscriber.handleObject(object);
-      } catch (err) {
-        if (err instanceof IncompleteDataError) {
-          // データ不足 - 次回 (SUBSCRIBE_OK 以降のストリーム本処理) で消化される
-          break;
-        }
-        if (err instanceof ProtocolViolationError) {
-          this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
-          return;
-        }
-        // 予期しないエラー
-        this.closeWithError(
-          new SessionError(
-            err instanceof Error ? err.message : String(err),
-            SessionErrorCode.INTERNAL_ERROR,
-          ),
-        );
-        return;
-      }
-    }
   }
 }

@@ -323,8 +323,6 @@ function generateSubscriberStatsText(subscriberId: string): string {
     lines.push(`Objects Received Via Subscribe: ${stats.objectsReceivedViaSubscribe}`);
     lines.push(`Bytes Received Via Fetch: ${formatBytes(stats.bytesReceivedViaFetch)}`);
     lines.push(`Bytes Received Via Subscribe: ${formatBytes(stats.bytesReceivedViaSubscribe)}`);
-    lines.push(`Pending Subgroup Streams: ${stats.pendingSubgroupStreamsCount}`);
-    lines.push(`Pending Subgroup Bytes: ${formatBytes(stats.pendingSubgroupStreamsBytes)}`);
     lines.push(`Active Subscribers: ${stats.activeSubscribers}`);
     lines.push(`Active Fetchers: ${stats.activeFetchers}`);
     lines.push(`--- Control Stream ---`);
