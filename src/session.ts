@@ -35,6 +35,7 @@ import {
   decodeGoawayPayload,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
+  decodePublishBlockedPayload,
   decodePublishDonePayload,
   decodePublishOkPayload,
   decodeRequestErrorPayload,
@@ -478,6 +479,17 @@ export interface NamespaceSubscriptionCallbacks {
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
   onNamespaceDone?: (namespaceSuffix: string[]) => void;
+  /**
+   * PUBLISH_BLOCKED を受信したときに呼ばれる
+   * draft-ietf-moq-transport-17 Section 6.1 / Section 9.21 (PUBLISH_BLOCKED):
+   * "If a Subscription cannot be created because there is no available Request ID,
+   *  the Publisher sends a PUBLISH_BLOCKED message on the response stream to
+   *  indicate the Full Track Name of the Subscription that could not be established."
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
+   * @param trackName - 確立できなかった Subscription の Track Name
+   */
+  onPublishBlocked?: (namespaceSuffix: string[], trackName: string) => void;
   /**
    * エラー時のコールバック
    */
@@ -1625,6 +1637,10 @@ export class SessionImpl implements Session {
 
     const { streamReader, controlReader, callbacks } = subscription;
     let resolved = false;
+    // NAMESPACE 受信済 suffix を追跡し、NAMESPACE_DONE が先行で来たら PROTOCOL_VIOLATION で閉じる
+    // draft-ietf-moq-transport-17 §9.20 (line 4332-4384)
+    const seenNamespaceSuffixes = new Set<string>();
+    const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
 
     try {
       while (subscription.state === "active") {
@@ -1648,8 +1664,38 @@ export class SessionImpl implements Session {
             timestamp: Date.now(),
           });
 
+          // draft-ietf-moq-transport-17 §6.1 / §9.20:
+          // "If the subscriber receives any frame other than a REQUEST_OK or a
+          //  REQUEST_ERROR as the first frame on the response half of the stream,
+          //  then it MUST close the session with a PROTOCOL_VIOLATION."
+          if (
+            !resolved &&
+            messageType !== MessageType.REQUEST_OK &&
+            messageType !== MessageType.REQUEST_ERROR
+          ) {
+            this.closeWithError(
+              new SessionError(
+                `expected REQUEST_OK or REQUEST_ERROR as first message on namespace stream, got 0x${messageType.toString(16)}`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+            return;
+          }
+
           switch (messageType) {
             case MessageType.REQUEST_OK: {
+              if (resolved) {
+                // draft-ietf-moq-transport-17 §6.1:
+                // "The subscriber SHOULD close the session with a protocol error
+                //  if it detects receiving more than one."
+                this.closeWithError(
+                  new SessionError(
+                    "received second REQUEST_OK on namespace stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
               // https://github.com/moq-wg/moq-transport/pull/1499
@@ -1662,6 +1708,16 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.REQUEST_ERROR: {
+              if (resolved) {
+                // draft-ietf-moq-transport-17 §6.1: REQUEST_OK の後に REQUEST_ERROR は来ない
+                this.closeWithError(
+                  new SessionError(
+                    "received REQUEST_ERROR after REQUEST_OK on namespace stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
               // Request ID はストリームが特定するため不要
               // https://github.com/moq-wg/moq-transport/pull/1499
@@ -1680,6 +1736,7 @@ export class SessionImpl implements Session {
             case MessageType.NAMESPACE: {
               const decodedMsg = decodeNamespacePayload(messagePayload);
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              seenNamespaceSuffixes.add(namespaceSuffixKey(suffixStrings));
               callbacks.onNamespace?.(suffixStrings);
               break;
             }
@@ -1687,7 +1744,31 @@ export class SessionImpl implements Session {
             case MessageType.NAMESPACE_DONE: {
               const decodedMsg = decodeNamespaceDonePayload(messagePayload);
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              // draft-ietf-moq-transport-17 §9.20:
+              // "The publisher MUST NOT send NAMESPACE_DONE for a namespace suffix before
+              //  the corresponding NAMESPACE. If a subscriber receives a NAMESPACE_DONE
+              //  before the corresponding NAMESPACE, it MUST close the session with a
+              //  'PROTOCOL_VIOLATION'."
+              if (!seenNamespaceSuffixes.has(namespaceSuffixKey(suffixStrings))) {
+                this.closeWithError(
+                  new SessionError(
+                    `received NAMESPACE_DONE before corresponding NAMESPACE: suffix=${JSON.stringify(suffixStrings)}`,
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               callbacks.onNamespaceDone?.(suffixStrings);
+              break;
+            }
+
+            case MessageType.PUBLISH_BLOCKED: {
+              // draft-ietf-moq-transport-17 §6.1 / §9.21 (PUBLISH_BLOCKED):
+              // Subscription を作成できない場合に Publisher が送出する正規メッセージ
+              const decodedMsg = decodePublishBlockedPayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              const trackName = new TextDecoder().decode(decodedMsg.trackName);
+              callbacks.onPublishBlocked?.(suffixStrings, trackName);
               break;
             }
 
