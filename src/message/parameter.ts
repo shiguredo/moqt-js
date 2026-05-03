@@ -137,7 +137,9 @@ export function getParameterLocationValue(param: Parameter): Location {
  */
 export function validateGroupOrderValue(value: number): void {
   if (value !== 0x01 && value !== 0x02) {
-    throw new Error(`invalid GROUP_ORDER value: 0x${value.toString(16)}, expected 0x1 or 0x2`);
+    throw new ProtocolViolationError(
+      `invalid GROUP_ORDER value: 0x${value.toString(16)}, expected 0x1 or 0x2`,
+    );
   }
 }
 
@@ -151,7 +153,7 @@ export function validateGroupOrderValue(value: number): void {
  */
 export function validateForwardValue(value: number): void {
   if (value !== 0 && value !== 1) {
-    throw new Error(`invalid FORWARD value: ${value}, expected 0 or 1`);
+    throw new ProtocolViolationError(`invalid FORWARD value: ${value}, expected 0 or 1`);
   }
 }
 
@@ -590,6 +592,13 @@ function decodeMessageParameter(
     case "uint8": {
       value = data.slice(offset + totalConsumed, offset + totalConsumed + 1);
       totalConsumed += 1;
+      // draft-ietf-moq-transport-17 §9.3.6 / §9.3.10:
+      // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
+      if (paramType === 0x10) {
+        validateForwardValue(value[0]);
+      } else if (paramType === 0x22) {
+        validateGroupOrderValue(value[0]);
+      }
       break;
     }
     case "varint": {

@@ -133,6 +133,12 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [FIX] FORWARD / GROUP_ORDER パラメータの値域 MUST 検証を全受信経路で行う (#0124)
+  - draft-ietf-moq-transport-17 §9.3.6 / §9.3.10 に従い、0 / 1 (FORWARD) / 0x1 / 0x2 (GROUP_ORDER) 以外を `ProtocolViolationError` で拒否する
+  - `decodeMessageParameter` の `uint8` 経路に値域 validate を組み込み、SUBSCRIBE / PUBLISH / SUBSCRIBE_NAMESPACE / REQUEST_UPDATE / PUBLISH_OK / SUBSCRIBE_OK / FETCH 等のすべての受信経路で自動的に検証されるようにする
+  - `validateForwardValue` / `validateGroupOrderValue` の throw 型を `Error` から `ProtocolViolationError` に変更する
+  - PBT (`namespace.prop.ts` / `parameter.prop.ts` / `session.prop.ts` / `trackstatus.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) の `uint8ParameterArb` を type ごとに値域を絞る形に更新する
+  - @voluntas
 - [CHANGE] Track Property 識別子を draft-17 §14.4 の正式名称に揃える (#0123)
   - `MOQTPropertyId.IMMUTABLE_EXTENSIONS` → `MOQTPropertyId.IMMUTABLE_PROPERTIES`
   - `TrackPropertyId.PUBLISHER_PRIORITY` → `TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY`

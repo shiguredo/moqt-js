@@ -33,12 +33,21 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-const uint8ParameterArb = fc
-  .record({
-    type: fc.constantFrom(0x10, 0x20, 0x22),
-    byteValue: fc.integer({ min: 0, max: 255 }),
-  })
-  .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) }));
+// draft-ietf-moq-transport-17 §9.3.6 / §9.3.10: 値域制約に従う arbitrary
+//   - FORWARD (0x10): 0 / 1
+//   - SUBSCRIBER_PRIORITY (0x20): 0-255
+//   - GROUP_ORDER (0x22): 0x1 / 0x2
+const uint8ParameterArb = fc.oneof(
+  fc
+    .record({ type: fc.constant(0x10), byteValue: fc.constantFrom(0, 1) })
+    .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) })),
+  fc
+    .record({ type: fc.constant(0x20), byteValue: fc.integer({ min: 0, max: 255 }) })
+    .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) })),
+  fc
+    .record({ type: fc.constant(0x22), byteValue: fc.constantFrom(1, 2) })
+    .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) })),
+);
 
 const locationParameterArb = fc
   .record({
