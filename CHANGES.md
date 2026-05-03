@@ -131,6 +131,11 @@
   - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
   - 制御メッセージループで `ProtocolViolationError` を catch して `PROTOCOL_VIOLATION` でセッションを閉じる
   - @voluntas
+- [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
+  - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
+  - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
+  - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更

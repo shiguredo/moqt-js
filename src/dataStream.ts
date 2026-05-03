@@ -613,6 +613,8 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
   if (datagramHasObjectId(datagram.type)) {
     parts.push(encodeVarint(datagram.objectId));
+  } else if (datagram.objectId !== 1n) {
+    throw new Error(`objectId must be 1 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
   }
 
   // Priority Present check (types 0x08-0x0F and 0x28-0x2D don't have Priority)
@@ -688,7 +690,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += groupIdConsumed;
 
-  let objectId = 0n;
+  let objectId = 1n;
   if (datagramHasObjectId(typeNum)) {
     const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
     objectId = oid;
