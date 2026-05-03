@@ -1,6 +1,7 @@
 # FETCH の Fetch Type が未知値で PROTOCOL_VIOLATION 化されない
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -62,3 +63,14 @@ RFC §9.14 (FETCH) より:
 したがって、このMUST違反の修正はクライアントのスコープ外であり、PBTでの検証強化のみを実施すればよい。
 
 本 issue は `issues/pending/` へ移動することを提案する。
+
+## 解決方法
+
+「クライアント不要」の判定は維持しつつ、PBT のラウンドトリップ強化と `decodeFetchPayload` の switch 化のみ実施した上で close する判断に倒した (`issues/pending/` は設計判断待ちを置く場所であり、判定確定済みの本 issue は当てはまらない)。
+
+- `src/message/fetch.ts` の `decodeFetchPayload` を `if (... === STANDALONE) {} else { joining }` の二分岐から `switch` 文に置き換え、`default` ケースで `ProtocolViolationError("unknown fetch type: 0x..., expected 0x1, 0x2, or 0x3")` を throw する
+- `src/error.ts` の `ProtocolViolationError` を import する
+- Joining (`RELATIVE_JOINING` / `ABSOLUTE_JOINING`) は `case` を fall-through で 1 ブロックにまとめ、`Fetch.fetchType` フィールドで Relative / Absolute を識別子レベルで区別する (現状の `JoiningFetch` 構造体には区別は不要)
+- `encodeFetchPayload` 側は変更なし (TypeScript の `FetchType` 型で 0x1/0x2/0x3 のみ許容、不正値が来ても decode 段階で throw されるため後段に到達しない)
+- `src/message/fetch.prop.ts` に PBT を追加: `requestId` / `requiredRequestIdDelta` を varint encode した後に 0x1/0x2/0x3 以外の Fetch Type varint を続けた最小ペイロードを `decodeFetchPayload` に渡し、`ProtocolViolationError` が throw されることを検証する
+- moqt-js は Subscriber 専用クライアントで FETCH を受信しないためランタイム経路には影響しないが、PBT 強化と decode の安全性向上は実施できた

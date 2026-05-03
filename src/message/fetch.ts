@@ -4,6 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   type Parameter,
@@ -134,42 +135,56 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   let standalone: StandaloneFetch | undefined;
   let joining: JoiningFetch | undefined;
 
-  if (Number(fetchType) === FetchType.STANDALONE) {
-    const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
-    totalConsumed += namespaceSize;
+  // draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+  // "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
+  //  the session with a PROTOCOL_VIOLATION."
+  const fetchTypeValue = Number(fetchType);
+  switch (fetchTypeValue) {
+    case FetchType.STANDALONE: {
+      const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+      totalConsumed += namespaceSize;
 
-    const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += trackNameLenSize;
+      const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += trackNameLenSize;
 
-    const trackName = data.slice(
-      offset + totalConsumed,
-      offset + totalConsumed + Number(trackNameLen),
-    );
-    totalConsumed += Number(trackNameLen);
+      const trackName = data.slice(
+        offset + totalConsumed,
+        offset + totalConsumed + Number(trackNameLen),
+      );
+      totalConsumed += Number(trackNameLen);
 
-    const [startLocation, startLocationSize] = decodeLocation(data, offset + totalConsumed);
-    totalConsumed += startLocationSize;
+      const [startLocation, startLocationSize] = decodeLocation(data, offset + totalConsumed);
+      totalConsumed += startLocationSize;
 
-    const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
-    totalConsumed += endLocationSize;
+      const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
+      totalConsumed += endLocationSize;
 
-    standalone = {
-      trackNamespace,
-      trackName,
-      startLocation,
-      endLocation,
-    };
-  } else {
-    const [joiningRequestId, joiningRequestIdSize] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += joiningRequestIdSize;
+      standalone = {
+        trackNamespace,
+        trackName,
+        startLocation,
+        endLocation,
+      };
+      break;
+    }
+    case FetchType.RELATIVE_JOINING:
+    case FetchType.ABSOLUTE_JOINING: {
+      const [joiningRequestId, joiningRequestIdSize] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += joiningRequestIdSize;
 
-    const [joiningStart, joiningStartSize] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += joiningStartSize;
+      const [joiningStart, joiningStartSize] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += joiningStartSize;
 
-    joining = {
-      joiningRequestId,
-      joiningStart,
-    };
+      joining = {
+        joiningRequestId,
+        joiningStart,
+      };
+      break;
+    }
+    default:
+      throw new ProtocolViolationError(
+        `unknown fetch type: 0x${fetchTypeValue.toString(16)}, expected 0x1, 0x2, or 0x3`,
+      );
   }
 
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);

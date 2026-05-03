@@ -17,6 +17,7 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
 import type { Property } from "../properties";
 
 /**
@@ -222,6 +223,36 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+ * "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
+ *  the session with a PROTOCOL_VIOLATION."
+ * decode 段階で ProtocolViolationError が投げられることを保証する。
+ */
+test("Fetch Type が 0x1/0x2/0x3 以外なら decodeFetchPayload は ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      // 0x0 と 0x4 以上の不正値を混ぜる (0x1/0x2/0x3 だけ除外)
+      fc.bigInt({ min: 0n, max: 1024n }).filter((n) => n !== 1n && n !== 2n && n !== 3n),
+      (requestId, requiredRequestIdDelta, invalidFetchType) => {
+        const requestIdBytes = encodeVarint(requestId);
+        const requiredRequestIdDeltaBytes = encodeVarint(requiredRequestIdDelta);
+        const fetchTypeBytes = encodeVarint(invalidFetchType);
+        const payload = new Uint8Array(
+          requestIdBytes.length + requiredRequestIdDeltaBytes.length + fetchTypeBytes.length,
+        );
+        payload.set(requestIdBytes, 0);
+        payload.set(requiredRequestIdDeltaBytes, requestIdBytes.length);
+        payload.set(fetchTypeBytes, requestIdBytes.length + requiredRequestIdDeltaBytes.length);
+
+        assert.throws(() => decodeFetchPayload(payload), ProtocolViolationError);
       },
     ),
   );
