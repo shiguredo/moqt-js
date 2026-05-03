@@ -16,7 +16,7 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import type { Property } from "../properties";
+import { type Property, TrackPropertyId } from "../properties";
 
 /**
  * Message Parameter の arbitrary
@@ -81,9 +81,19 @@ const parametersArb = fc
  * PUBLISH, SUBSCRIBE_OK, FETCH_OK に Track Extensions が追加された。
  * https://github.com/moq-wg/moq-transport/pull/1374
  */
+// 値域制約のある Track Property は除外する (validateTrackPropertyValue で
+// ProtocolViolationError になりラウンドトリップが成立しないため)
 const evenPropertyArb = fc
   .record({
-    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n),
+    id: fc
+      .bigInt({ min: 0n, max: 100n })
+      .map((n) => n * 2n)
+      .filter(
+        (id) =>
+          id !== TrackPropertyId.PUBLISHER_PRIORITY &&
+          id !== TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE &&
+          id !== TrackPropertyId.DYNAMIC_GROUPS,
+      ),
     value: fc.bigInt({ min: 0n, max: 1000000n }),
   })
   .map(({ id, value }) => ({ id, value }));

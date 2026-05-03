@@ -133,6 +133,15 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [FIX] Track Property の値域を MUST レベルで検証する (#0119)
+  - draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5 で MUST 指定されている値域チェックを実装する
+    - `PUBLISHER_PRIORITY` (0x0E): 0-255 の範囲外は `ProtocolViolationError`
+    - `PUBLISHER_GROUP_ORDER_PREFERENCE` (0x22): 0x1 / 0x2 以外は `ProtocolViolationError`
+    - `DYNAMIC_GROUPS` (0x30): 0 / 1 以外は `ProtocolViolationError`
+  - `src/properties.ts` に `validateTrackPropertyValue` を新設し、`decodeProperties` / `parseProperties` / `decodeImmutableProperties` の偶数 ID 経路で呼び出す
+  - `properties.test.ts` に validator 単体と decode 経路を含むテストを追加する
+  - 影響を受ける PBT (`properties.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) で Track Property の ID を arbitrary から除外する (任意 value だとラウンドトリップで validate に弾かれるため)
+  - @voluntas
 - [FIX] `decodeFetchPayload` を switch 化し Fetch Type が 0x1/0x2/0x3 以外なら `ProtocolViolationError` を throw するようにする (#0118)
   - draft-ietf-moq-transport-17 §9.14 の "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close the session with a PROTOCOL_VIOLATION." に準拠する
   - moqt-js は Subscriber 専用クライアントで FETCH を受信しないためランタイム経路には影響しないが、PBT (`src/message/fetch.prop.ts`) にラウンドトリップ強化として不正値で `ProtocolViolationError` が throw されることを検証するテストを追加する
