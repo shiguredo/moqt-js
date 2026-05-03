@@ -10,7 +10,7 @@
  */
 
 import { encodeVarint, decodeVarint } from "./varint";
-import { ProtocolViolationError } from "./error";
+import { MalformedTrackError, ProtocolViolationError } from "./error";
 
 /**
  * MOQT Extension Header ID (Section 11)
@@ -405,6 +405,15 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     const extId = previousId + deltaId;
     previousId = extId;
 
+    // draft-ietf-moq-transport-17 §11.6:
+    // "An Object contains an Immutable Properties property that contains another
+    //  Immutable Properties key." → Track is malformed
+    if (extId === MOQTPropertyId.IMMUTABLE_EXTENSIONS) {
+      throw new MalformedTrackError(
+        "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+      );
+    }
+
     if (extId % 2n === 0n) {
       // 偶数 ID: varint value 形式
       const [value, valueLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
@@ -449,14 +458,34 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
     previousId = id;
 
     if (id === MOQTPropertyId.PRIOR_GROUP_ID_GAP) {
+      // draft-ietf-moq-transport-17 §11.7:
+      // "An Object MUST NOT contain more than one instance of this property."
+      if (result.priorGroupIdGap !== undefined) {
+        throw new MalformedTrackError(
+          "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
+        );
+      }
       const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       result.priorGroupIdGap = { gap };
       offset += deltaIdLen + gapLen;
     } else if (id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP) {
+      // draft-ietf-moq-transport-17 §11.8: 同上
+      if (result.priorObjectIdGap !== undefined) {
+        throw new MalformedTrackError(
+          "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
+        );
+      }
       const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       result.priorObjectIdGap = { gap };
       offset += deltaIdLen + gapLen;
     } else if (id === MOQTPropertyId.IMMUTABLE_EXTENSIONS) {
+      // draft-ietf-moq-transport-17 §11.6:
+      // "An Object MUST NOT contain more than one instance of this property."
+      if (result.immutableProperties !== undefined) {
+        throw new MalformedTrackError(
+          "Object contains more than one instance of IMMUTABLE_PROPERTIES",
+        );
+      }
       // Immutable Extensions は奇数 ID なので length + bytes 形式
       const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       const innerData = data.subarray(
@@ -472,6 +501,15 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         const [innerDeltaId, innerDeltaIdLen] = decodeVarint(innerData.subarray(innerOffset));
         const extId = innerPreviousId + innerDeltaId;
         innerPreviousId = extId;
+
+        // draft-ietf-moq-transport-17 §11.6:
+        // "An Object contains an Immutable Properties property that contains another
+        //  Immutable Properties key." → Track is malformed
+        if (extId === MOQTPropertyId.IMMUTABLE_EXTENSIONS) {
+          throw new MalformedTrackError(
+            "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+          );
+        }
 
         if (extId % 2n === 0n) {
           // 偶数 ID: varint value 形式
