@@ -1,6 +1,7 @@
 # SETUP の AUTHORITY / PATH オプションが WebTransport クライアントで送信制限されていない
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -57,3 +58,29 @@ draft-ietf-moq-transport-17 §9.4.1.2 PATH (line 3179-3187):
 ## 優先度
 
 重要。WebTransport 専用クライアントが MUST NOT のオプションを送出すると、仕様準拠サーバから `INVALID_AUTHORITY` / `INVALID_PATH` でセッション切断される。受信側検証なしは敵対的サーバへの脆弱性。
+
+## 解決方法
+
+AUTHORITY / PATH のみを対象として、送受信両側で MUST 規定に従うようにする。AUTHORIZATION_TOKEN 関連は別 issue として切り出す前提を維持する。
+
+### 送信側
+
+- `src/message/setup.ts` の `createSetup` の options から `path` / `authority` を削除し、引数として受け取らないようにする (型レベルで送信不可を強制する)
+- `src/session.ts` の `initialize()` の options 型からも `path` / `authority` を削除する
+- 上記により API として送信できなくなる
+
+### 受信側
+
+- `src/session.ts` の SETUP 受信処理で `decodeSetupPayload` の戻り値を変数に保持し、`getSetupAuthority` / `getSetupPath` で AUTHORITY / PATH を検出する
+- 検出時は `SessionError` を throw する (上位の `initialize` の呼び出し元が catch して `closeWithError(SessionErrorCode.INVALID_AUTHORITY)` / `closeWithError(SessionErrorCode.INVALID_PATH)` で閉じる経路を持つ)
+- エラーコード (`SessionErrorCode.INVALID_AUTHORITY` = 0x19, `INVALID_PATH` = 0x8) は `src/error.ts` に既に定義済みのため新設は不要
+- `getSetupAuthority` / `getSetupPath` の getter は受信側検証で使うため残す (送信側の API は削除しても getter は維持)
+
+### テスト
+
+- `setup.test.ts`: 「path パラメータ付きで作成」「authority パラメータ付きで作成」「すべてのパラメータ付きで作成」を、createSetup から PATH / AUTHORITY が出てこないことを保証するテストに置き換え。「エンコード・デコード roundtrip」も MOQT_IMPLEMENTATION のみで成立するように修正
+- `setup.prop.ts`: PATH / AUTHORITY 文字列を任意生成する PBT を、AuthorizationToken の有無にかかわらず PATH / AUTHORITY が決して含まれないことを多数検証する PBT に置き換え
+
+### スコープ外
+
+`MAX_AUTH_TOKEN_CACHE_SIZE` / `AUTHORIZATION_TOKEN` の SETUP 受信側検証 (Alias Type の DELETE / USE_ALIAS 受信時の扱い、REGISTER がキャッシュサイズを超えた場合の扱い) は別 issue として独立して扱う。

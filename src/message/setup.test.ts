@@ -28,36 +28,16 @@ test("Setup: パラメータなしで作成", () => {
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-test("Setup: path パラメータ付きで作成", () => {
-  const setup = createSetup({ path: "/moqt" });
-  assert.equal(setup.type, MessageType.SETUP);
-  // PATH + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 2);
-  assert.equal(setup.parameters[0].type, SetupOptionType.PATH);
-  assert.equal(getSetupPath(setup), "/moqt");
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
-});
-
-test("Setup: authority パラメータ付きで作成", () => {
-  const setup = createSetup({ authority: "example.com" });
-  assert.equal(setup.type, MessageType.SETUP);
-  // AUTHORITY + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 2);
-  assert.equal(setup.parameters[0].type, SetupOptionType.AUTHORITY);
-  assert.equal(getSetupAuthority(setup), "example.com");
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
-});
-
-test("Setup: すべてのパラメータ付きで作成", () => {
-  const setup = createSetup({
-    path: "/moqt",
-    authority: "example.com",
-  });
-  // PATH + AUTHORITY + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 3);
-  assert.equal(getSetupPath(setup), "/moqt");
-  assert.equal(getSetupAuthority(setup), "example.com");
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
+// draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+// AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
+// moqt-js は WebTransport 専用クライアントのため createSetup には PATH / AUTHORITY を
+// 受け付ける引数を持たない (送信不可) ことを確認する。
+test("Setup: createSetup は PATH / AUTHORITY を含まない", () => {
+  const setup = createSetup();
+  assert.isUndefined(getSetupPath(setup));
+  assert.isUndefined(getSetupAuthority(setup));
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.PATH));
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORITY));
 });
 
 test("Setup: 存在しないパラメータは undefined", () => {
@@ -83,14 +63,14 @@ test("Setup: エンコード結果にカウントプレフィックスがない"
   assert.equal(Number(firstVarint), SetupOptionType.MOQT_IMPLEMENTATION);
 });
 
-test("Setup: エンコード・デコード roundtrip", () => {
-  const setup = createSetup({ path: "/moqt", authority: "example.com" });
+test("Setup: エンコード・デコード roundtrip (MOQT_IMPLEMENTATION のみ)", () => {
+  const setup = createSetup();
   const encoded = encodeSetupPayload(setup);
   const decoded = decodeSetupPayload(encoded);
 
   assert.equal(decoded.type, MessageType.SETUP);
-  assert.equal(getSetupPath(decoded), "/moqt");
-  assert.equal(getSetupAuthority(decoded), "example.com");
+  assert.isUndefined(getSetupPath(decoded));
+  assert.isUndefined(getSetupAuthority(decoded));
   assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
 });
 
