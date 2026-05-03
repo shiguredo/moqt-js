@@ -136,6 +136,7 @@
   - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
   - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
   - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
+  - 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) にも `pendingSubgroup` を追加し `connect()` に伝搬する
   - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
   - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
   - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する

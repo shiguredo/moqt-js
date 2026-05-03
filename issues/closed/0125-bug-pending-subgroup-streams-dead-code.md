@@ -65,6 +65,7 @@ draft-ietf-moq-transport-17 §10.4.2 の buffer 経路を実装した。
   - `close()` で `pendingSubgroupBuffer.notifyAll("session-close")` を呼び全 entry を解放する
   - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値 (`streamCount` / `totalBytes`) で復活させる
 - `src/index.ts` から `connect()` の `options.pendingSubgroup` を `SessionImpl` に伝搬し、`PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を public API として export する
+- 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) に `pendingSubgroup` フィールドを追加し、`createMediaPublisher` / `createMediaSubscriber` から `connect()` の `ConnectOptions.pendingSubgroup` に伝搬する
 - `src/pendingSubgroupBuffer.test.ts` を新設し 15 ケースで `PendingSubgroupBuffer` の振る舞い (add/append/remove/notifyAlias/notifyAll/timeout/overflow/idempotent notify、デフォルト値の検証、Partial オプションのマージ) を検証した
 - `devtools/src/components/DebugPanel.tsx` の "Pending Subgroup Streams" / "Pending Subgroup Bytes" 表示はそのまま機能する
 
