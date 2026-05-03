@@ -1,6 +1,7 @@
 # renderFrame の Joining FETCH timestamp ゲートが描画フレームを落とす
 
 Created: 2026-05-03
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -37,3 +38,15 @@ timestamp ベースの描画ゲートを撤去する。Joining FETCH 区間と S
 ## 優先度
 
 高。ライブ再生開始時の数フレームから数十フレームが描画されない可能性があり、視覚的な再生開始の遅延として観測される。LOC timestamp の単調性が崩れた瞬間にキーフレームを落として黒画面になる回帰リスクもある。
+
+## 解決方法
+
+`devtools/src/hooks/useSubscriber.ts` から timestamp ベースの描画抑制を撤去した。
+
+- `renderFrame` (`useSubscriber.ts:43-91`) の `joiningFetchLastTimestamp > 0` ゲートを削除し、デコード結果はそのまま canvas へ描画するように変更した。draft-ietf-moq-transport-17 §9.14.2.1 を引いたコメントを残した。
+- Joining FETCH の `onObject` から `joiningFetchLastTimestamp: timestamp` の更新を削除した。
+- Joining FETCH の `onEnd` から `objectsToProcess` を走査する `lastTimestamp` 計算と `joiningFetchLastTimestamp` の更新を削除した。
+- Joining FETCH の `onError` から `joiningFetchLastTimestamp: 0` のリセットを削除した。
+- `devtools/src/signals/subscriber.ts` の `SubscriberInstance` から `joiningFetchLastTimestamp: number` フィールドと `createSubscriberInstance` の初期化を削除した。
+
+`joiningFetchLastLocation` (重複除去用) は引き続き保持される。`vp run typecheck` / `vp run lint` / `vp run test` / `vp run build` / `vp run build:devtools` で全て成功することを確認した。

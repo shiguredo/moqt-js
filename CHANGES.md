@@ -197,6 +197,11 @@
   - `subscriberReadyCallbacks` 関連を削除する
   - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
   - @voluntas
+- [FIX] devtools subscriber の Joining FETCH 完了後に timestamp ベースで描画フレームを破棄しないようにする (#0127)
+  - `devtools/src/hooks/useSubscriber.ts` の `renderFrame` から `joiningFetchLastTimestamp` ゲートを撤去する
+  - `joiningFetchLastTimestamp` の更新箇所 (Joining FETCH onObject / onEnd / onError) と `SubscriberInstance` のフィールド宣言を削除する
+  - draft-ietf-moq-transport-17 §9.14.2.1 で FETCH と SUBSCRIBE が contiguous かつ non-overlapping に揃えられる責務は publisher 側にあり、subscriber 側で timestamp ベースの描画抑制を行う必要はないため
+  - @voluntas
 - [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
   - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
   - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する

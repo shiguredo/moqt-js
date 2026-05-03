@@ -47,17 +47,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       return;
     }
 
-    // Joining Fetch の最後のフレームに達するまで描画しない
-    if (instance.joiningFetchLastTimestamp > 0) {
-      if (frame.timestamp < instance.joiningFetchLastTimestamp) {
-        frame.close();
-        return;
-      }
-      // 最後のフレームに達した → 描画開始、フラグをリセット
-      sub.updateSubscriber(subscriberId, {
-        joiningFetchLastTimestamp: 0,
-      });
-    }
+    // draft-ietf-moq-transport-17 §9.14.2.1
+    // Joining FETCH と SUBSCRIBE の範囲は publisher 側で contiguous かつ
+    // non-overlapping に揃えられるため、subscriber 側は timestamp ベースで
+    // 描画を抑制する必要がない。デコード結果は順次そのまま描画する。
 
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -460,14 +453,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               bufferedLiveObjects: 0,
             };
 
-            // LOC から timestamp と keyframe 情報を取得
-            let timestamp = 0;
+            // LOC から keyframe 情報を取得（ログ用）
             let isKeyFrame = false;
             if (obj.properties && obj.properties.length > 0) {
               const ext = LOC.decodeVideoProperties(obj.properties);
-              if (ext.timestamp !== undefined) {
-                timestamp = Number(ext.timestamp);
-              }
               if (ext.frameMarking) {
                 isKeyFrame = ext.frameMarking.isIndependent;
               }
@@ -481,7 +470,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             }
 
             sub.updateSubscriber(subscriberId, {
-              joiningFetchLastTimestamp: timestamp,
               joiningFetchLastLocation: { group: obj.groupId, object: obj.objectId },
               joiningFetchStats: {
                 ...currentStats,
@@ -540,20 +528,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               `[${subscriberId}] Joining Fetch: completed, processing ${objectsToProcess.length} buffered live objects`,
             );
 
-            // バッファ内の最後の timestamp を取得
-            let lastTimestamp = instance.joiningFetchLastTimestamp;
-            for (const obj of objectsToProcess) {
-              if (obj.properties && obj.properties.length > 0) {
-                const ext = LOC.decodeVideoProperties(obj.properties);
-                if (ext.timestamp !== undefined) {
-                  lastTimestamp = Number(ext.timestamp);
-                }
-              }
-            }
-
             // 統計を更新
             sub.updateSubscriber(subscriberId, {
-              joiningFetchLastTimestamp: lastTimestamp,
               joiningFetchLastLocation: null,
               joiningFetchStats: {
                 ...currentStats,
@@ -600,7 +576,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 joiningFetchInProgress: false,
                 liveObjectBuffer: [],
                 joiningFetchLastLocation: null,
-                joiningFetchLastTimestamp: 0,
               });
             }
           },
