@@ -11,6 +11,13 @@
 
 ## develop
 
+- [ADD] Canvas ダミー映像で relay 経由 pub/sub の E2E テストを追加する (#0115)
+  - `tests/e2e/pubsub.spec.ts` を新設し、2 つの BrowserContext (Publisher 用 / Subscriber 用) で同一 namespace に Publisher 起動 → 500 ms 後 Subscriber 起動の順で pub/sub させる
+  - `tests/e2e/main.ts` に `publishCanvas` / `subscribeCanvas` を追加し、320x240 Canvas を `captureStream(30)` で MediaStream 化して `createMediaPublisher` / `createMediaSubscriber` (VP8) で送受する
+  - `tests/e2e/helpers.ts` を新設し `waitForE2EReady()` を共通化する。`connect.spec.ts` を helpers 経由に変更する
+  - `playwright.config.ts` の `timeout` を `10_000` から `30_000` に引き上げる
+  - 5 秒間 pub/sub を継続して `onError` が一度も呼ばれず `state` が遷移していないことを成功条件にする
+  - @voluntas
 - [ADD] Playwright による WebTransport 接続 E2E テストを追加する (#0114)
   - `playwright.config.ts` を新設し Chromium 1 プロジェクト構成にする
   - `tests/e2e/` に独立 Vite アプリを置き `connect()` で MOQT セッション確立まで検証する
