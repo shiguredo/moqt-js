@@ -133,6 +133,13 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [FIX] IMMUTABLE_PROPERTIES の再帰禁止と Object 当たり 1 回の MUST 違反を `MalformedTrackError` で検出する (#0122)
+  - draft-ietf-moq-transport-17 §11.6 の "An Object contains an Immutable Properties property that contains another Immutable Properties key." と "An Object MUST NOT contain more than one instance of this property." を実装する
+  - §11.7 PRIOR_GROUP_ID_GAP / §11.8 PRIOR_OBJECT_ID_GAP の「Object 当たり 1 つだけ」MUST も検証する
+  - `src/error.ts` に `MalformedTrackError` を新設する (`DataStreamErrorCode.MALFORMED_TRACK = 0x12` に対応)
+  - `parseProperties` / `decodeImmutableProperties` で違反検出時に `MalformedTrackError` を throw する
+  - `properties.test.ts` に該当テストを追加し、PBT の `oddPropertyArb` から `IMMUTABLE_EXTENSIONS` を除外する
+  - @voluntas
 - [FIX] SUBSCRIBE_NAMESPACE 応答ストリームで MUST / SHOULD 検証を追加する (#0121)
   - draft-ietf-moq-transport-17 §6.1 / §9.20 / §9.21 の規定に従う
   - REQUEST_OK / REQUEST_ERROR を最初のフレームとして MUST 期待 (それ以外は `PROTOCOL_VIOLATION`)
