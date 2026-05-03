@@ -173,3 +173,18 @@ export class ProtocolViolationError extends Error {
     this.name = "ProtocolViolationError";
   }
 }
+
+/**
+ * Malformed Track を検出したときに投げるエラー
+ *
+ * draft-ietf-moq-transport-17 §2.4.2 / §11.6 / §11.7 / §11.8:
+ * Object 内で MUST 規定 (IMMUTABLE_PROPERTIES の再帰禁止、各 Property の Object 当たり
+ * 1 つだけ等) が違反された場合、Track は malformed として扱われる。データストリーム
+ * 単位で `RESET_STREAM_AT(MALFORMED_TRACK)` で打ち切る上位ハンドリングへ伝搬する。
+ */
+export class MalformedTrackError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedTrackError";
+  }
+}

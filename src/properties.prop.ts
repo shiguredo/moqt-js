@@ -231,10 +231,15 @@ const evenPropertyArb = fc
 
 /**
  * 奇数 ID の Property を生成する Arbitrary
+ *
+ * IMMUTABLE_PROPERTIES (0x0B, 奇数) は内部に同 ID を入れると malformed-track 扱いに
+ * なるためテスト対象から除外する (#0122)。
  */
 const oddPropertyArb = fc
   .record({
-    id: fc.bigInt({ min: 1n, max: 0xffn }).filter((id) => id % 2n === 1n),
+    id: fc
+      .bigInt({ min: 1n, max: 0xffn })
+      .filter((id) => id % 2n === 1n && id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS),
     data: fc.uint8Array({ minLength: 0, maxLength: 50 }),
   })
   .map(({ id, data }) => ({ id, data }) as Property);

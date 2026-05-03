@@ -1,6 +1,7 @@
 # IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止 malformed-track 検出が未実装
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -51,3 +52,19 @@ draft-ietf-moq-transport-17 §11.8 Prior Object ID Gap (line 5506-):
 ## 優先度
 
 重要。MUST 違反を検出しない。malformed-track はリレーや再ストリーミングを跨いだトラックの整合性確認に直結するため、Subscriber が壊れたデータを上位 API に流す可能性がある。
+
+## 解決方法
+
+- `src/error.ts` に `MalformedTrackError` クラスを新設した (`DataStreamErrorCode.MALFORMED_TRACK = 0x12` に対応)
+- `src/properties.ts` の `decodeImmutableProperties`: 内部 KVP 解析ループで `extId === MOQTPropertyId.IMMUTABLE_EXTENSIONS` を検出したら `MalformedTrackError` を throw する
+- `src/properties.ts` の `parseProperties`:
+  - `result.priorGroupIdGap !== undefined` で 2 回目の `PRIOR_GROUP_ID_GAP` を検出したら `MalformedTrackError` を throw する
+  - `result.priorObjectIdGap !== undefined` で 2 回目の `PRIOR_OBJECT_ID_GAP` を検出したら `MalformedTrackError` を throw する
+  - `result.immutableProperties !== undefined` で 2 回目の `IMMUTABLE_PROPERTIES` を検出したら `MalformedTrackError` を throw する
+  - 内部 KVP 解析ループで `extId === MOQTPropertyId.IMMUTABLE_EXTENSIONS` を検出したら `MalformedTrackError` を throw する
+- `src/properties.test.ts` にテストを追加した: 内部に IMMUTABLE_PROPERTIES を含むケース / 同 Object に IMMUTABLE_PROPERTIES が 2 回 / PRIOR_GROUP_ID_GAP が 2 回 / PRIOR_OBJECT_ID_GAP が 2 回。delta encoding で 2 回目を deltaId=0n でエンコードした手動の Uint8Array で検証する
+- `src/properties.prop.ts` の `oddPropertyArb` から `MOQTPropertyId.IMMUTABLE_EXTENSIONS` を除外し、PBT で再帰 violation が発生しないようにした
+
+### 上位ハンドリング
+
+`MalformedTrackError` の上位伝搬 (RESET_STREAM_AT(MALFORMED_TRACK) でデータストリームをリセット) は本 issue 範囲外。`parseProperties` の呼び出し元 (現状は test のみ) からランタイム経路で実際にこれが投げられる接続点 (Object Extension の解析が runtime で必要となる際) で別途扱う。

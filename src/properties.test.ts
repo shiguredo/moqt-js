@@ -16,7 +16,7 @@ import {
   TrackPropertyId,
   type Property,
 } from "./properties";
-import { ProtocolViolationError } from "./error";
+import { MalformedTrackError, ProtocolViolationError } from "./error";
 
 test("encodeProperty: 偶数 ID は varint value 形式でエンコード", () => {
   const header: Property = { id: 0x02n, value: 42n };
@@ -373,4 +373,44 @@ test("decodeImmutableProperties: 内部に不正な Track Property を含むと 
     extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 2n }],
   });
   assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
+});
+
+// draft-ietf-moq-transport-17 §11.6 / §11.7 / §11.8 (#0122)
+// IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止と PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP の
+// 「Object 当たり 1 つだけ」MUST を検証する
+test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと MalformedTrackError", () => {
+  // 外側 IMMUTABLE_PROPERTIES の内部に IMMUTABLE_PROPERTIES (id=0x0B, 奇数) を入れる
+  const innerImmutable = encodeImmutableProperties({ extensions: [] });
+  // outer の data 部にそのまま innerImmutable を埋め込む
+  const outer: Property = { id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerImmutable };
+  const encoded = encodeProperty(outer);
+  assert.throws(() => decodeImmutableProperties(encoded), MalformedTrackError);
+});
+
+test("parseProperties: Object 内に IMMUTABLE_PROPERTIES を含む IMMUTABLE_PROPERTIES があると MalformedTrackError", () => {
+  // 外側 IMMUTABLE_PROPERTIES の内部に IMMUTABLE_PROPERTIES を入れる
+  const innerImmutable = encodeImmutableProperties({ extensions: [] });
+  const outer: Property = { id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerImmutable };
+  const encoded = encodeProperty(outer);
+  assert.throws(() => parseProperties(encoded), MalformedTrackError);
+});
+
+test("parseProperties: Object 内に IMMUTABLE_PROPERTIES が 2 回現れると MalformedTrackError", () => {
+  // delta encoding で同一 ID を 2 回出す (1 回目: deltaId=0x0B, 2 回目: deltaId=0x00)
+  // 各 IMMUTABLE_PROPERTIES は length=0 の空内容
+  // [0x0b, 0x00, 0x00, 0x00] = (deltaId=0x0B, length=0), (deltaId=0x00, length=0)
+  const encoded = new Uint8Array([0x0b, 0x00, 0x00, 0x00]);
+  assert.throws(() => parseProperties(encoded), MalformedTrackError);
+});
+
+test("parseProperties: Object 内に PRIOR_GROUP_ID_GAP が 2 回現れると MalformedTrackError", () => {
+  // [0x3c, 0x01, 0x00, 0x02] = (deltaId=0x3c, value=1), (deltaId=0x00, value=2)
+  const encoded = new Uint8Array([0x3c, 0x01, 0x00, 0x02]);
+  assert.throws(() => parseProperties(encoded), MalformedTrackError);
+});
+
+test("parseProperties: Object 内に PRIOR_OBJECT_ID_GAP が 2 回現れると MalformedTrackError", () => {
+  // [0x3e, 0x01, 0x00, 0x02] = (deltaId=0x3e, value=1), (deltaId=0x00, value=2)
+  const encoded = new Uint8Array([0x3e, 0x01, 0x00, 0x02]);
+  assert.throws(() => parseProperties(encoded), MalformedTrackError);
 });
