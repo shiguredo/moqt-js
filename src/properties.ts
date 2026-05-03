@@ -23,7 +23,7 @@ export const MOQTPropertyId = {
    * Immutable Properties (Section 11.6 Immutable Properties)
    * Relay が変更・削除できない拡張のコンテナ
    */
-  IMMUTABLE_EXTENSIONS: 0x0bn,
+  IMMUTABLE_PROPERTIES: 0x0bn,
   /**
    * Prior Group ID Gap (Section 11.7 Prior Group ID Gap)
    * 現在の Group より前のスキップされた Group 数
@@ -67,7 +67,7 @@ export const TrackPropertyId = {
    * Publisher Priority (Section 11.3)
    * Publisher が設定する優先度（0-255）
    */
-  PUBLISHER_PRIORITY: 0x0en,
+  DEFAULT_PUBLISHER_PRIORITY: 0x0en,
   /**
    * Publisher Group Order Preference (Section 11.4)
    *
@@ -75,7 +75,7 @@ export const TrackPropertyId = {
    * GROUP_ORDER パラメータから分割された Publisher 向けの設定。
    * https://github.com/moq-wg/moq-transport/pull/1390
    */
-  PUBLISHER_GROUP_ORDER_PREFERENCE: 0x22n,
+  DEFAULT_PUBLISHER_GROUP_ORDER: 0x22n,
   /**
    * Dynamic Groups (Section 11.5)
    * トラックが動的グループ作成をサポートするかどうか
@@ -102,18 +102,18 @@ export const TrackPropertyId = {
  * draft-ietf-moq-transport-17 §11 で MUST レベルの値域制約がある Track Property を検証する。
  * 不正値は ProtocolViolationError を throw する (上位ループで PROTOCOL_VIOLATION でセッションを閉じる)。
  *
- * - §11.3 DEFAULT_PUBLISHER_PRIORITY (0x0E): "The value is from 0 to 255 ... Priorities above 255 are invalid."
+ * - §11.3 DEFAULT_DEFAULT_PUBLISHER_PRIORITY (0x0E): "The value is from 0 to 255 ... Priorities above 255 are invalid."
  * - §11.4 DEFAULT_PUBLISHER_GROUP_ORDER (0x22): "The allowed values are Ascending (0x1) or Descending (0x2). If an endpoint receives a value outside this range, it MUST close the session with PROTOCOL_VIOLATION."
  * - §11.5 DYNAMIC_GROUPS (0x30): "The allowed values are 0 or 1. ... If an endpoint receives a value larger than 1, it MUST close the session with PROTOCOL_VIOLATION."
  */
 export function validateTrackPropertyValue(id: bigint, value: bigint): void {
-  if (id === TrackPropertyId.PUBLISHER_PRIORITY) {
+  if (id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY) {
     if (value < 0n || value > 255n) {
       throw new ProtocolViolationError(`invalid publisher priority: ${value}, expected 0-255`);
     }
     return;
   }
-  if (id === TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE) {
+  if (id === TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER) {
     if (value !== 1n && value !== 2n) {
       throw new ProtocolViolationError(
         `invalid publisher group order preference: 0x${value.toString(16)}, expected 0x1 or 0x2`,
@@ -373,7 +373,7 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
   const innerBytes = encodeProperties(immutable.extensions);
 
   // ID + length + innerBytes
-  const idBytes = encodeVarint(MOQTPropertyId.IMMUTABLE_EXTENSIONS);
+  const idBytes = encodeVarint(MOQTPropertyId.IMMUTABLE_PROPERTIES);
   const lengthBytes = encodeVarint(BigInt(innerBytes.length));
 
   const result = new Uint8Array(idBytes.length + lengthBytes.length + innerBytes.length);
@@ -408,7 +408,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     // draft-ietf-moq-transport-17 §11.6:
     // "An Object contains an Immutable Properties property that contains another
     //  Immutable Properties key." → Track is malformed
-    if (extId === MOQTPropertyId.IMMUTABLE_EXTENSIONS) {
+    if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       throw new MalformedTrackError(
         "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
       );
@@ -478,7 +478,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
       result.priorObjectIdGap = { gap };
       offset += deltaIdLen + gapLen;
-    } else if (id === MOQTPropertyId.IMMUTABLE_EXTENSIONS) {
+    } else if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       // draft-ietf-moq-transport-17 §11.6:
       // "An Object MUST NOT contain more than one instance of this property."
       if (result.immutableProperties !== undefined) {
@@ -505,7 +505,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         // draft-ietf-moq-transport-17 §11.6:
         // "An Object contains an Immutable Properties property that contains another
         //  Immutable Properties key." → Track is malformed
-        if (extId === MOQTPropertyId.IMMUTABLE_EXTENSIONS) {
+        if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
           throw new MalformedTrackError(
             "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
           );

@@ -133,6 +133,12 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [CHANGE] Track Property 識別子を draft-17 §14.4 の正式名称に揃える (#0123)
+  - `MOQTPropertyId.IMMUTABLE_EXTENSIONS` → `MOQTPropertyId.IMMUTABLE_PROPERTIES`
+  - `TrackPropertyId.PUBLISHER_PRIORITY` → `TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY`
+  - `TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE` → `TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER`
+  - 参照箇所 (`src/session.ts` / `src/subscriber.ts` / `src/message/types.ts` / `src/message/trackstatus.ts` 等) も連動して改名する
+  - @voluntas
 - [FIX] IMMUTABLE_PROPERTIES の再帰禁止と Object 当たり 1 回の MUST 違反を `MalformedTrackError` で検出する (#0122)
   - draft-ietf-moq-transport-17 §11.6 の "An Object contains an Immutable Properties property that contains another Immutable Properties key." と "An Object MUST NOT contain more than one instance of this property." を実装する
   - §11.7 PRIOR_GROUP_ID_GAP / §11.8 PRIOR_OBJECT_ID_GAP の「Object 当たり 1 つだけ」MUST も検証する

@@ -84,8 +84,8 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  * draft-ietf-moq-transport-17:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
- * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, PUBLISHER_PRIORITY,
- *   PUBLISHER_GROUP_ORDER_PREFERENCE, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
+ * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
+ *   DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
  *   Track Extensions に移動
  * https://github.com/moq-wg/moq-transport/pull/1390
  *
