@@ -41,6 +41,8 @@ import {
   decodeRequestOkPayload,
   decodeSetupPayload,
   decodeSubscribeOkPayload,
+  getSetupAuthority,
+  getSetupPath,
   encodeSetupPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
@@ -872,11 +874,7 @@ export class SessionImpl implements Session {
    * options に authorizationToken を指定すると、SETUP Option (0x03) として
    * draft-ietf-moq-transport-17 Section 9.4.1.4 に従い認証トークンを送出する。
    */
-  async initialize(options?: {
-    path?: string;
-    authority?: string;
-    authorizationToken?: AuthorizationToken;
-  }): Promise<void> {
+  async initialize(options?: { authorizationToken?: AuthorizationToken }): Promise<void> {
     // draft-ietf-moq-transport-17 Section 4 (Modularity):
     // 制御ストリームは単方向ストリームのペアに変更された。
     // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
@@ -895,9 +893,10 @@ export class SessionImpl implements Session {
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
     // Send SETUP
+    // draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+    // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
+    // moqt-js は WebTransport 専用クライアントのため `createSetup` には渡さない。
     const setup = createSetup({
-      path: options?.path,
-      authority: options?.authority,
       authorizationToken: options?.authorizationToken,
     });
     const setupPayload = encodeSetupPayload(setup);
@@ -973,7 +972,24 @@ export class SessionImpl implements Session {
     }
 
     // SETUP をデコードしてバリデーションする
-    decodeSetupPayload(msg.payload);
+    const decodedSetup = decodeSetupPayload(msg.payload);
+
+    // draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+    // AUTHORITY (0x05) / PATH (0x01) は server から送信されてはならない。
+    // また WebTransport 使用時には MUST NOT 送信されるため、moqt-js は受信したら
+    // INVALID_AUTHORITY / INVALID_PATH でセッションを閉じなければならない。
+    if (getSetupAuthority(decodedSetup) !== undefined) {
+      throw new SessionError(
+        "received AUTHORITY in SETUP from server (forbidden under WebTransport)",
+        SessionErrorCode.INVALID_AUTHORITY,
+      );
+    }
+    if (getSetupPath(decodedSetup) !== undefined) {
+      throw new SessionError(
+        "received PATH in SETUP from server (forbidden under WebTransport)",
+        SessionErrorCode.INVALID_PATH,
+      );
+    }
 
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
 

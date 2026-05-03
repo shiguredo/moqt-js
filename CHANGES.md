@@ -133,6 +133,13 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [CHANGE] SETUP の AUTHORITY / PATH を送信不可にし、受信時は INVALID_AUTHORITY / INVALID_PATH で閉じる (#0120)
+  - draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2: WebTransport 使用時は AUTHORITY (0x05) / PATH (0x01) を MUST NOT 送信
+  - `createSetup()` の options から `path` / `authority` を削除する (送信不可)
+  - `Session#initialize()` の options から `path` / `authority` を削除する
+  - SETUP 受信時に AUTHORITY / PATH を検出したら `INVALID_AUTHORITY` / `INVALID_PATH` でセッションを閉じる
+  - `setup.test.ts` / `setup.prop.ts` を新方針に追従させる (PBT は PATH / AUTHORITY が決して含まれないことを fast-check で多数検証)
+  - @voluntas
 - [FIX] Track Property の値域を MUST レベルで検証する (#0119)
   - draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5 で MUST 指定されている値域チェックを実装する
     - `PUBLISHER_PRIORITY` (0x0E): 0-255 の範囲外は `ProtocolViolationError`

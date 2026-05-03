@@ -32,37 +32,23 @@ export interface Setup {
 /**
  * Setup を作成
  *
+ * draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+ * AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
+ * moqt-js は WebTransport 専用クライアントのため、これらは作成手段を持たない。
+ *
  * authorizationToken を指定すると Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
  * として Option Type 0x03 に積む。Section 9.3.2 より SETUP では Alias Type
  * DELETE / USE_ALIAS は禁止されているため、事前に検証する。
  */
-export function createSetup(options?: {
-  path?: string;
-  authority?: string;
-  authorizationToken?: AuthorizationToken;
-}): Setup {
+export function createSetup(options?: { authorizationToken?: AuthorizationToken }): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
-
-  if (options?.path) {
-    parameters.push({
-      type: SetupOptionType.PATH,
-      value: encoder.encode(options.path),
-    });
-  }
 
   if (options?.authorizationToken) {
     assertAuthorizationTokenForSetup(options.authorizationToken);
     parameters.push({
       type: SetupOptionType.AUTHORIZATION_TOKEN,
       value: encodeAuthorizationToken(options.authorizationToken),
-    });
-  }
-
-  if (options?.authority) {
-    parameters.push({
-      type: SetupOptionType.AUTHORITY,
-      value: encoder.encode(options.authority),
     });
   }
 
