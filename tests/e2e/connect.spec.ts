@@ -1,14 +1,8 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import { waitForE2EReady } from "./helpers";
 
 const HTTPS_URI = process.env["TEST_MOQT_HTTPS_URI"];
 const AUTH_TOKEN = process.env["TEST_MOQT_AUTH_TOKEN"];
-
-// page.goto の load 完了と module script の評価完了は別タイミングなので
-// window.__moqtE2E が定義されるまで明示的に待つ
-async function waitForE2EReady(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.waitForFunction(() => Boolean(window.__moqtE2E));
-}
 
 // MOQT Session 接続成立まで (SETUP メッセージ交換完了) を検証する
 // draft-ietf-moq-transport-17 Section 9.4.1 (SETUP Message)

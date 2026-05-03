@@ -12,11 +12,11 @@ if (existsSync(envFile)) {
 }
 
 // WebTransport は Chromium 系のみ対応
-// CLAUDE.md のデバッグ timeout 制約に揃えて 10 秒
+// pubsub.spec.ts は Catalog 受信 + 5 秒の pub/sub + 後片付けで 10 秒では収まらないため 30 秒に引き上げる
 export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: /.*\.spec\.ts$/,
-  timeout: 10_000,
+  timeout: 30_000,
   fullyParallel: false,
   workers: 1,
   reporter: "list",
