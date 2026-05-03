@@ -1,6 +1,7 @@
 # validateForwardValue / validateGroupOrderValue が受信経路で呼ばれていない
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -55,3 +56,19 @@ draft-ietf-moq-transport-17 §9.3.6 GROUP ORDER Parameter (line 2985-2998):
 ## 優先度
 
 重要。MUST 違反を検出しない。送受信どちらの方向でも 0/1 以外の不正値を黙って受け入れてしまうため、相互運用試験で容易に MUST 違反として検出される。
+
+## 解決方法
+
+期待される動作の選択肢のうち、`decodeMessageParameter` の uint8 ブランチに type ごとの validate を差し込む形で実装した。これにより全ての受信経路 (SUBSCRIBE / PUBLISH / SUBSCRIBE_NAMESPACE / REQUEST_UPDATE / PUBLISH_OK / SUBSCRIBE_OK / FETCH 等) で自動的に検証が行われる。
+
+- `src/message/parameter.ts` の `validateForwardValue` / `validateGroupOrderValue` の throw 型を `Error` から `ProtocolViolationError` に変更する (上位制御メッセージループの既存 `ProtocolViolationError` catch 経路で `closeWithError(SessionErrorCode.PROTOCOL_VIOLATION)` に翻訳される)
+- `src/message/parameter.ts` の `decodeMessageParameter` の `case "uint8"` ブロックで `paramType === 0x10` (FORWARD) なら `validateForwardValue(value[0])`、`paramType === 0x22` (GROUP_ORDER) なら `validateGroupOrderValue(value[0])` を呼ぶ
+- `session.ts` 既存の PUBLISH_OK ハンドラ (`l.2766` 付近) の `validateForwardValue` 呼び出しは decodeMessageParameter で先に検証されるため重複だが防御的にそのまま残す
+- 7 つの PBT (`namespace.prop.ts` / `parameter.prop.ts` / `session.prop.ts` / `trackstatus.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) の `uint8ParameterArb` を type ごとに値域を絞る形に更新する:
+  - FORWARD (0x10): `fc.constantFrom(0, 1)`
+  - SUBSCRIBER_PRIORITY (0x20): `fc.integer({ min: 0, max: 255 })`
+  - GROUP_ORDER (0x22): `fc.constantFrom(1, 2)`
+
+### スコープ外
+
+Track Property の DEFAULT_PUBLISHER_GROUP_ORDER (Property 0x22) の値域検証は #0119 で `validateTrackPropertyValue` として既にカバー済み。
