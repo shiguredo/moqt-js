@@ -15,6 +15,7 @@
  * https://github.com/moq-wg/moq-transport/pull/1462
  */
 
+import { ProtocolViolationError } from "../error";
 import { decodeVarint, encodeVarint } from "../varint";
 import type { Location } from "./types";
 
@@ -516,13 +517,14 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
  * draft-ietf-moq-transport-17 Section 9.3:
  * "An endpoint that receives an unknown Message Parameter MUST close
  *  the session with PROTOCOL_VIOLATION."
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.3
  *
  * 未知のパラメータ型の場合はエラーをスローする。
  */
 function getMessageParameterValueEncoding(paramType: number): MessageParameterValueEncoding {
   const encoding = MESSAGE_PARAMETER_VALUE_ENCODING[paramType];
   if (encoding === undefined) {
-    throw new Error(`unknown message parameter type: 0x${paramType.toString(16)}`);
+    throw new ProtocolViolationError(`unknown message parameter type: 0x${paramType.toString(16)}`);
   }
   return encoding;
 }
@@ -670,6 +672,7 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   let totalConsumed = consumed;
   const parameters: Parameter[] = [];
   let previousType = 0;
+  const seenTypes = new Set<number>();
 
   for (let i = 0; i < Number(numParams); i++) {
     const [param, paramConsumed] = decodeMessageParameter(
@@ -677,6 +680,18 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
       offset + totalConsumed,
       previousType,
     );
+
+    // draft-ietf-moq-transport-17 Section 9.3:
+    // "Receivers SHOULD check that there are no unexpected duplicate parameters
+    //  and close the session with PROTOCOL_VIOLATION if found."
+    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.3
+    if (seenTypes.has(param.type)) {
+      throw new ProtocolViolationError(
+        `duplicate message parameter type: 0x${param.type.toString(16)}`,
+      );
+    }
+    seenTypes.add(param.type);
+
     parameters.push(param);
     totalConsumed += paramConsumed;
     previousType = param.type;

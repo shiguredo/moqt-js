@@ -201,3 +201,57 @@ test("validateTrackNameSize で制限内なら成功", () => {
   // エラーが投げられなければ成功
   validateTrackNameSize(normalBytes);
 });
+
+/**
+ * 未知 Message Parameter 受信時の PROTOCOL_VIOLATION テスト
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * "An endpoint that receives an unknown Message Parameter MUST close
+ *  the session with PROTOCOL_VIOLATION."
+ */
+test("未知のパラメータタイプで ProtocolViolationError", () => {
+  // type = 0xFE (未知), value = 0x01 (varint)
+  const countBytes = encodeVarint(1n);
+  const deltaTypeBytes = encodeVarint(0xfen);
+  const valueBytes = encodeVarint(1n);
+  const data = new Uint8Array(countBytes.length + deltaTypeBytes.length + valueBytes.length);
+  data.set(countBytes, 0);
+  data.set(deltaTypeBytes, countBytes.length);
+  data.set(valueBytes, countBytes.length + deltaTypeBytes.length);
+
+  assert.throws(() => decodeParameters(data), /unknown message parameter type/);
+});
+
+/**
+ * 重複 Message Parameter 検出の SHOULD テスト
+ * draft-ietf-moq-transport-17 Section 9.3:
+ * "Receivers SHOULD check that there are no unexpected duplicate parameters
+ *  and close the session with PROTOCOL_VIOLATION if found."
+ */
+test("重複パラメータで ProtocolViolationError", () => {
+  // type = 0x02 を 2 回含むデータ
+  const countBytes = encodeVarint(2n);
+  const firstDeltaBytes = encodeVarint(0x02n);
+  const firstValueBytes = encodeVarint(100n);
+  const secondDeltaBytes = encodeVarint(0x00n); // delta = 0 (前回と同じ type)
+  const secondValueBytes = encodeVarint(200n);
+
+  const data = new Uint8Array(
+    countBytes.length +
+      firstDeltaBytes.length +
+      firstValueBytes.length +
+      secondDeltaBytes.length +
+      secondValueBytes.length,
+  );
+  let pos = 0;
+  data.set(countBytes, pos);
+  pos += countBytes.length;
+  data.set(firstDeltaBytes, pos);
+  pos += firstDeltaBytes.length;
+  data.set(firstValueBytes, pos);
+  pos += firstValueBytes.length;
+  data.set(secondDeltaBytes, pos);
+  pos += secondDeltaBytes.length;
+  data.set(secondValueBytes, pos);
+
+  assert.throws(() => decodeParameters(data), /duplicate message parameter type/);
+});

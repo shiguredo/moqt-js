@@ -1,6 +1,7 @@
 # 未知 Message Parameter 受信時に PROTOCOL_VIOLATION でセッションを閉じていない
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -38,3 +39,10 @@ draft-ietf-moq-transport-17 Section 9.3 Message Parameters (line 2664-2669):
 ## 優先度
 
 重大。Future-extension の grease 値や draft-18 で追加されたパラメータが届いた際、現状はセッションが意図しない種類のエラーで切断される (もしくは握り潰される) ため、相互運用試験で MUST 違反として検出される。
+
+## 解決方法
+
+- `src/message/parameter.ts` の `getMessageParameterValueEncoding()` で `throw new Error(...)` を `throw new ProtocolViolationError(...)` に変更した
+- `src/message/parameter.ts` の `decodeParameters()` で重複パラメータの検出を追加した (SHOULD)
+- `ProtocolViolationError` は制御メッセージループで catch して `SessionErrorCode.PROTOCOL_VIOLATION` でセッションを閉じる経路が既に存在するため、追加のハンドリングは不要
+- テストを `src/message/parameter.test.ts` に 2 件追加した
