@@ -105,6 +105,10 @@ export interface MediaPublisherOptions {
   // draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.3.2)
   authorizationToken?: import("../message").AuthorizationToken;
+  // Pending Subgroup Stream の buffer 設定 (低レベル API の ConnectOptions.pendingSubgroup)
+  // draft-ietf-moq-transport-17 §10.4.2
+  // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
+  pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
 }
 
 // MediaPublisher コールバック
@@ -126,6 +130,10 @@ export interface MediaSubscriberOptions {
   // draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.3.2)
   authorizationToken?: import("../message").AuthorizationToken;
+  // Pending Subgroup Stream の buffer 設定 (低レベル API の ConnectOptions.pendingSubgroup)
+  // draft-ietf-moq-transport-17 §10.4.2
+  // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
+  pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
 }
 
 // MediaSubscriber コールバック

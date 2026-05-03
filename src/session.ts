@@ -73,6 +73,7 @@ import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./su
 import { type Fetcher, FetcherImpl } from "./fetcher";
 import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "./dataStream";
 import { TrackPropertyId, type Property } from "./properties";
+import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 
 /**
  * Session state
@@ -142,6 +143,25 @@ export interface ConnectOptions {
    * REGISTER (0x1) または USE_VALUE (0x3) のみ指定できる。
    */
   authorizationToken?: AuthorizationToken;
+
+  /**
+   * Pending Subgroup Stream の buffer 設定
+   * draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief
+   * period to handle reordering with the control message that establishes the Track
+   * Alias" を実現する buffer の上限を制御する。
+   *
+   * 指定しなかった field は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` の値が使われる。
+   */
+  pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+}
+
+/**
+ * SessionImpl のコンストラクタが受け取るオプション
+ * `connect()` から `ConnectOptions` の該当フィールドが渡される
+ */
+export interface SessionImplOptions {
+  /** ConnectOptions.pendingSubgroup と同じ */
+  pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
 }
 
 /**
@@ -515,6 +535,12 @@ export interface SessionStatistics {
   /** SUBSCRIBE 経由で受信したバイト数 */
   bytesReceivedViaSubscribe: number;
 
+  // バッファ状態
+  /** SUBSCRIBE_OK 前に到着した Subgroup ストリーム数 */
+  pendingSubgroupStreamsCount: number;
+  /** SUBSCRIBE_OK 前に到着した Subgroup ストリームのバイト数 */
+  pendingSubgroupStreamsBytes: number;
+
   // ストリーム状態
   /** アクティブな Publisher 数 */
   activePublishers: number;
@@ -654,10 +680,14 @@ export class SessionImpl implements Session {
   private subscribersByAlias = new Map<bigint, SubscriberImpl>();
   private fetchers = new Map<bigint, FetcherImpl>();
 
-  // Subscriber 登録待ちの Promise を管理
-  // SUBSCRIBE_OK より先にデータストリームが到着した場合、
-  // ストリーム全体をバッファリングするのではなく subscriber の登録を待つ
-  private subscriberReadyCallbacks = new Map<bigint, Array<() => void>>();
+  // Subscriber 登録前に到着した Subgroup ストリームをバッファリング
+  // draft-ietf-moq-transport-17 §10.4.2:
+  // "MAY ... choose to buffer it for a brief period to handle reordering with the
+  //  control message that establishes the Track Alias."
+  // QUIC ではストリーム間の順序が保証されないため、SUBSCRIBE_OK より先にデータストリームが
+  // 到着する可能性があり、それを buffer して reordering を吸収する
+  // 上限・タイムアウトは ConnectOptions.pendingSubgroup でユーザーから指定可能
+  private readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
 
   // Fetcher 登録待ちの Promise を管理
   // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
@@ -793,9 +823,14 @@ export class SessionImpl implements Session {
   private statsControlMessagesSent = 0;
   private statsControlMessagesReceived = 0;
 
-  constructor(transport: WebTransport, callbacks: ConnectCallbacks) {
+  constructor(
+    transport: WebTransport,
+    callbacks: ConnectCallbacks,
+    options: SessionImplOptions = {},
+  ) {
     this.transport = transport;
     this.callbacks = callbacks;
+    this.pendingSubgroupBuffer = new PendingSubgroupBuffer(options.pendingSubgroup);
 
     // WebTransport の切断を監視し、close 理由をコールバックに渡す
     this.transport.closed
@@ -1936,6 +1971,8 @@ export class SessionImpl implements Session {
       objectsReceivedViaSubscribe: this.statsObjectsReceivedViaSubscribe,
       bytesReceivedViaFetch: this.statsBytesReceivedViaFetch,
       bytesReceivedViaSubscribe: this.statsBytesReceivedViaSubscribe,
+      pendingSubgroupStreamsCount: this.pendingSubgroupBuffer.streamCount,
+      pendingSubgroupStreamsBytes: this.pendingSubgroupBuffer.totalBytes,
       activePublishers: this.publishers.size,
       activeSubscribers: this.subscribers.size,
       activeFetchers: this.fetchers.size,
@@ -2010,13 +2047,11 @@ export class SessionImpl implements Session {
     }
     this.pendingTrackStatus.clear();
 
-    // Fetcher/Subscriber の登録待ちコールバックを解放
-    for (const callbacks of this.subscriberReadyCallbacks.values()) {
-      for (const cb of callbacks) {
-        cb();
-      }
-    }
-    this.subscriberReadyCallbacks.clear();
+    // Pending Subgroup ストリームの buffer を解放
+    // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
+    this.pendingSubgroupBuffer.notifyAll("session-close");
+
+    // Fetcher の登録待ちコールバックを解放
     for (const callbacks of this.fetcherReadyCallbacks.values()) {
       for (const cb of callbacks) {
         cb();
@@ -2835,14 +2870,11 @@ export class SessionImpl implements Session {
         this.subscribers.set(requestId, pending.impl);
         this.subscribersByAlias.set(decoded.trackAlias, pending.impl);
 
-        // Subscriber 登録待ちのストリームに通知
-        const readyCallbacks = this.subscriberReadyCallbacks.get(decoded.trackAlias);
-        if (readyCallbacks) {
-          this.subscriberReadyCallbacks.delete(decoded.trackAlias);
-          for (const callback of readyCallbacks) {
-            callback();
-          }
-        }
+        // Subscriber 登録前に到着していた Subgroup ストリームの所有者 (handleIncomingStream)
+        // に通知する。実際の Map からの削除と buffer の flush は所有者が担当する。
+        // draft-ietf-moq-transport-17 §10.4.2 の "buffer it for a brief period to handle
+        // reordering" の合流ポイント。
+        this.pendingSubgroupBuffer.notifyAlias(decoded.trackAlias, "subscriber");
 
         // Joining Fetch が指定されている場合は送信
         if (pending.joiningFetch) {
@@ -3507,42 +3539,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Subscriber の登録を待つ
-   *
-   * SUBSCRIBE_OK より先にデータストリームが到着した場合に使用。
-   * subscriberReadyCallbacks とポーリングの両方で待機し、
-   * レースコンディションを防ぐ。
-   */
-  private waitForSubscriber(trackAlias: bigint): Promise<SubscriberImpl | null> {
-    return new Promise<SubscriberImpl | null>((resolve) => {
-      // 既に登録されている場合は即座に返す
-      const existing = this.subscribersByAlias.get(trackAlias);
-      if (existing) {
-        resolve(existing);
-        return;
-      }
-
-      let resolved = false;
-
-      const doResolve = () => {
-        if (resolved) return;
-        resolved = true;
-        // コールバックリストをクリーンアップ
-        this.subscriberReadyCallbacks.delete(trackAlias);
-        resolve(this.subscribersByAlias.get(trackAlias) ?? null);
-      };
-
-      // コールバックを登録
-      const callbacks = this.subscriberReadyCallbacks.get(trackAlias) ?? [];
-      callbacks.push(doResolve);
-      this.subscriberReadyCallbacks.set(trackAlias, callbacks);
-
-      // タイムアウト: 5 秒以内に登録されなければ null
-      setTimeout(doResolve, 5000);
-    });
-  }
-
-  /**
    * Fetcher の登録を待つ
    *
    * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
@@ -3679,27 +3675,18 @@ export class SessionImpl implements Session {
               isFetchStream = false;
               const [header, consumed] = decodeSubgroupHeader(buffer);
               subgroupHeader = header;
-              buffer = buffer.slice(consumed);
+              const initialPayloadBuffer = buffer.slice(consumed);
+              buffer = new Uint8Array(0);
               headerParsed = true;
 
               // 統計カウンターを更新
               this.statsSubgroupHeadersReceived++;
 
-              // Subscriber を検索
-              subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
-              if (!subscriber) {
-                // Subscriber がまだ登録されていない場合、登録を待つ
-                // QUIC ではストリーム間の順序が保証されないため、
-                // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
-                subscriber = await this.waitForSubscriber(header.trackAlias);
-                if (!subscriber) {
-                  // タイムアウトで Subscriber が登録されなかった場合は、
-                  // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
-                  // draft-ietf-moq-transport-17 Section 5.3 に倣ってストリームを reset する。
-                  void reader.cancel(`unknown subscriber: trackAlias=${header.trackAlias}`);
-                  break;
-                }
-              }
+              // Subgroup ストリーム本体は専用ハンドラに委譲する
+              // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
+              // draft-ietf-moq-transport-17 §10.4.2 の buffer 経路はこのハンドラ内に集約
+              await this.handleSubgroupStream(reader, header, initialPayloadBuffer);
+              return;
             } else {
               // draft-ietf-moq-transport-17 Section 3.2:
               // "An endpoint that receives an unknown stream type MUST close the session."
@@ -3962,5 +3949,163 @@ export class SessionImpl implements Session {
       remainingBuffer: buffer.slice(offset),
       previousObjectId: currentPreviousObjectId,
     };
+  }
+
+  /**
+   * Subgroup ストリームを処理する
+   *
+   * draft-ietf-moq-transport-17 §10.4.2:
+   * "If an endpoint receives a subgroup with an unknown Track Alias, it MAY abandon
+   *  the stream, or choose to buffer it for a brief period to handle reordering with
+   *  the control message that establishes the Track Alias."
+   *
+   * subscriber が登録済みであれば即座に通常 mode で読み出す。
+   * 未登録なら pending mode に入り、Promise.race で chunk 受信と subscriber 通知を並走させる。
+   * subscriber 登録後は累積 chunks を flush して通常 mode に合流する。
+   * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
+   */
+  private async handleSubgroupStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    header: import("./dataStream").SubgroupHeader,
+    initialBuffer: Uint8Array,
+  ): Promise<void> {
+    let buffer = initialBuffer;
+    let previousObjectId = -1n;
+    let subscriber: SubscriberImpl | null = this.subscribersByAlias.get(header.trackAlias) ?? null;
+
+    // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
+    // ReadableStreamDefaultReader.read() は中断不能なため、Promise.race で別経路が
+    // 勝ったときに pendingRead を破棄せず保持し、subscriber mode の最初の read として消費する
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+
+    if (subscriber === null) {
+      const entry = this.pendingSubgroupBuffer.add(header.trackAlias, header);
+      let entryRemoved = false;
+
+      try {
+        // ヘッダパース直後に余っていた payload を pending entry に移し、ローカル buffer は空にする
+        // subscriber mode 復帰時に entry.chunks の concat 結果で buffer を作り直す
+        if (initialBuffer.byteLength > 0) {
+          this.pendingSubgroupBuffer.appendChunk(entry, initialBuffer);
+          buffer = new Uint8Array(0);
+        }
+
+        while (subscriber === null) {
+          if (pendingRead === null) {
+            pendingRead = reader.read();
+          }
+          const event = await Promise.race([
+            pendingRead.then((result) => ({ kind: "chunk" as const, result })),
+            entry.notified.then((reason) => ({ kind: "notify" as const, reason })),
+          ]);
+
+          if (event.kind === "chunk") {
+            pendingRead = null;
+            const chunk = event.result.value;
+            if (chunk && chunk.byteLength > 0) {
+              this.pendingSubgroupBuffer.appendChunk(entry, chunk);
+            }
+            if (event.result.done) {
+              entry.notify("end-of-stream");
+            }
+            continue;
+          }
+
+          // event.kind === "notify"
+          if (event.reason === "subscriber") {
+            subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
+            if (subscriber === null) {
+              // 通知発火と subscribers 解放が race した稀なケース: abandon
+              this.pendingSubgroupBuffer.remove(entry);
+              entryRemoved = true;
+              await this.cancelStreamQuiet(
+                reader,
+                `inconsistent subscriber state: trackAlias=${header.trackAlias}`,
+              );
+              return;
+            }
+            // pending chunks を 1 本に concat して buffer に格納し subscriber mode へ遷移する
+            buffer = this.concatChunks(entry.chunks);
+            this.pendingSubgroupBuffer.remove(entry);
+            entryRemoved = true;
+            break;
+          }
+
+          // abandon (timeout / overflow-per-stream / overflow-per-session / session-close / end-of-stream)
+          this.pendingSubgroupBuffer.remove(entry);
+          entryRemoved = true;
+          await this.cancelStreamQuiet(
+            reader,
+            `pending subgroup ${event.reason}: trackAlias=${header.trackAlias}`,
+          );
+          return;
+        }
+      } finally {
+        if (!entryRemoved) {
+          // 例外脱出時の救済 cleanup (二重 remove は no-op で安全)
+          this.pendingSubgroupBuffer.remove(entry);
+        }
+      }
+    }
+
+    // subscriber mode: 通常の Subgroup ストリーム処理ループ
+    // pendingRead が pending mode から持ち越されている場合はそれを最初の read として消費する
+    while (true) {
+      let result: ReadableStreamReadResult<Uint8Array>;
+      if (pendingRead !== null) {
+        result = await pendingRead;
+        pendingRead = null;
+      } else {
+        result = await reader.read();
+      }
+
+      if (result.value && result.value.byteLength > 0) {
+        const next = new Uint8Array(buffer.byteLength + result.value.byteLength);
+        next.set(buffer);
+        next.set(result.value, buffer.byteLength);
+        buffer = next;
+      }
+
+      const processResult = this.processSubgroupObjects(
+        buffer,
+        subscriber,
+        header,
+        previousObjectId,
+      );
+      buffer = processResult.remainingBuffer;
+      previousObjectId = processResult.previousObjectId;
+
+      if (result.done) break;
+    }
+  }
+
+  /**
+   * Uint8Array チャンク列を 1 本の Uint8Array に連結する
+   */
+  private concatChunks(chunks: Uint8Array[]): Uint8Array {
+    let total = 0;
+    for (const chunk of chunks) total += chunk.byteLength;
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return result;
+  }
+
+  /**
+   * reader.cancel が稀に throw するケースに備えて静かに cancel する
+   * 既に閉じられたストリームに対する cancel は no-op として吸収される
+   */
+  private async cancelStreamQuiet(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await reader.cancel(reason);
+    } catch {
+      // ignore
+    }
   }
 }
