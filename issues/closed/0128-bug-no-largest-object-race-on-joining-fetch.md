@@ -1,6 +1,7 @@
 # LARGEST_OBJECT なしの SUBSCRIBE_OK 経路で joiningFetchInProgress 解除が二重化しレースする
 
 Created: 2026-05-03
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -52,3 +53,12 @@ draft-ietf-moq-transport-17 §9.14.2 の Joining Fetch は、関連 SUBSCRIBE �
 ## 優先度
 
 中。LARGEST_OBJECT なしのケース自体が draft-17 では想定外 (INVALID_RANGE が正規) のため発生確率は低いが、Publisher 実装の不整合で発生し得る。発生時はキーフレームロスト → デコードエラー連鎖 → 再生不能となるためユーザー影響は大きい。
+
+## 解決方法
+
+`devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` 解除を撤去した。
+
+- LARGEST_OBJECT あり: `sendJoiningFetch` の完了で `onEnd` が呼ばれ、ドレインループ末尾 (`useSubscriber.ts:562` 付近) でフラグを下ろす。
+- LARGEST_OBJECT なし: `src/session.ts:2989` で `onEnd` が同期呼び出しされ、ドレインループが空または既到着分のバッファを処理してから同じ位置でフラグを下ろす。
+
+これにより `joiningFetchInProgress` の遷移点が単一になり、ドレインループ実行中に到着するライブオブジェクトが直接 `handleObject` 経路へ漏れる race を排除した。撤去箇所のコメントで draft-17 挙動と単一遷移点の意図を明示した。`vp run typecheck` / `vp run lint` / `vp run test` / `vp run build` / `vp run build:devtools` で全て成功することを確認した。

@@ -197,6 +197,12 @@
   - `subscriberReadyCallbacks` 関連を削除する
   - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
   - @voluntas
+- [FIX] devtools subscriber の Joining FETCH `joiningFetchInProgress` 解除をドレインループ末尾に一本化する (#0128)
+  - `devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` を撤去する
+  - 解除点を Joining FETCH の `onEnd` ドレインループ末尾と `onError` のリセット 2 箇所に統一する
+  - LARGEST_OBJECT なし応答でも `src/session.ts` 側で `onEnd` が同期呼び出しされ、ドレインループ経由で正しい順序でフラグが下りるようにする
+  - ドレインループ実行中に到着するライブオブジェクトが直接 `handleObject` 経路へ漏れて順序が壊れる race を排除する
+  - @voluntas
 - [FIX] devtools subscriber の Joining FETCH 完了後に timestamp ベースで描画フレームを破棄しないようにする (#0127)
   - `devtools/src/hooks/useSubscriber.ts` の `renderFrame` から `joiningFetchLastTimestamp` ゲートを撤去する
   - `joiningFetchLastTimestamp` の更新箇所 (Joining FETCH onObject / onEnd / onError) と `SubscriberInstance` のフィールド宣言を削除する
