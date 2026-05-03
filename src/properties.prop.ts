@@ -26,7 +26,7 @@ import {
  * 既知の拡張 ID を除外した未知の ID を生成する Arbitrary
  *
  * draft-ietf-moq-transport-17 §11 で MUST レベルの値域制約がある Track Property
- * (PUBLISHER_PRIORITY / PUBLISHER_GROUP_ORDER_PREFERENCE / DYNAMIC_GROUPS) も
+ * (DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER / DYNAMIC_GROUPS) も
  * 除外する (任意 value だと validateTrackPropertyValue で ProtocolViolationError
  * になり、ラウンドトリップが成立しないため)。
  */
@@ -36,9 +36,9 @@ const unknownExtensionIdArb = fc
     (id) =>
       id !== MOQTPropertyId.PRIOR_GROUP_ID_GAP &&
       id !== MOQTPropertyId.PRIOR_OBJECT_ID_GAP &&
-      id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS &&
-      id !== TrackPropertyId.PUBLISHER_PRIORITY &&
-      id !== TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE &&
+      id !== MOQTPropertyId.IMMUTABLE_PROPERTIES &&
+      id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+      id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
       id !== TrackPropertyId.DYNAMIC_GROUPS,
   );
 
@@ -125,7 +125,7 @@ test("parseProperties は既知・未知の任意の組み合わせをパース�
           (h) =>
             h.id !== MOQTPropertyId.PRIOR_GROUP_ID_GAP &&
             h.id !== MOQTPropertyId.PRIOR_OBJECT_ID_GAP &&
-            h.id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS,
+            h.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES,
         ).length;
         const actualUnknownCount = parsed.unknownProperties?.length ?? 0;
         assert.equal(actualUnknownCount, expectedUnknownCount);
@@ -138,7 +138,7 @@ test("parseProperties は既知・未知の任意の組み合わせをパース�
                 (h) =>
                   h.id !== MOQTPropertyId.PRIOR_GROUP_ID_GAP &&
                   h.id !== MOQTPropertyId.PRIOR_OBJECT_ID_GAP &&
-                  h.id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS,
+                  h.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES,
               )
               .map((e) => e.id),
           );
@@ -221,8 +221,8 @@ const evenPropertyArb = fc
       .filter(
         (id) =>
           id % 2n === 0n &&
-          id !== TrackPropertyId.PUBLISHER_PRIORITY &&
-          id !== TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE &&
+          id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+          id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
           id !== TrackPropertyId.DYNAMIC_GROUPS,
       ),
     value: fc.bigInt({ min: 0n, max: 100000n }),
@@ -239,7 +239,7 @@ const oddPropertyArb = fc
   .record({
     id: fc
       .bigInt({ min: 1n, max: 0xffn })
-      .filter((id) => id % 2n === 1n && id !== MOQTPropertyId.IMMUTABLE_EXTENSIONS),
+      .filter((id) => id % 2n === 1n && id !== MOQTPropertyId.IMMUTABLE_PROPERTIES),
     data: fc.uint8Array({ minLength: 0, maxLength: 50 }),
   })
   .map(({ id, data }) => ({ id, data }) as Property);
@@ -341,7 +341,7 @@ test("parseProperties は Immutable Extensions を正しく抽出する", () => 
           );
           // Immutable Extensions の内部データをエンコード
           const innerEncoded = encodeProperties(uniqueImmutableExts);
-          headers.push({ id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerEncoded });
+          headers.push({ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innerEncoded });
         }
 
         // encodeProperties は delta encoding を使用して ID の昇順でソートする

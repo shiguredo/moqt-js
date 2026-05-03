@@ -227,10 +227,10 @@ test("parseProperties: Immutable Extensions と他の拡張の組み合わせ", 
 
   // Prior Group ID Gap (0x3c) + Immutable Extensions (0x0b) + Prior Object ID Gap (0x3e)
   // encodeProperties は ID の昇順でソートするため、
-  // 順序は IMMUTABLE_EXTENSIONS (0x0b), PRIOR_GROUP_ID_GAP (0x3c), PRIOR_OBJECT_ID_GAP (0x3e)
+  // 順序は IMMUTABLE_PROPERTIES (0x0b), PRIOR_GROUP_ID_GAP (0x3c), PRIOR_OBJECT_ID_GAP (0x3e)
   const headers: Property[] = [
     { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 3n },
-    { id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerExtensions },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innerExtensions },
     { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 5n },
   ];
 
@@ -269,11 +269,11 @@ test("parseProperties: 全ての MOQT Core Extensions を正しくパース", ()
   ]);
 
   // encodeProperties は ID の昇順でソートする
-  // IMMUTABLE_EXTENSIONS (0x0b) < PRIOR_GROUP_ID_GAP (0x3c) < PRIOR_OBJECT_ID_GAP (0x3e)
+  // IMMUTABLE_PROPERTIES (0x0b) < PRIOR_GROUP_ID_GAP (0x3c) < PRIOR_OBJECT_ID_GAP (0x3e)
   const headers: Property[] = [
     { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 10n },
     { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 20n },
-    { id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerExtensions },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innerExtensions },
   ];
 
   const encoded = encodeProperties(headers);
@@ -302,31 +302,31 @@ test("parseProperties: 全ての MOQT Core Extensions を正しくパース", ()
 
 // draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5
 // Track Property の値域が MUST レベルで検証されない不具合の修正 (#0119)
-test("validateTrackPropertyValue: PUBLISHER_PRIORITY は 0-255 を許容する", () => {
-  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 0n);
-  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 255n);
+test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY は 0-255 を許容する", () => {
+  validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 0n);
+  validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 255n);
 });
 
-test("validateTrackPropertyValue: PUBLISHER_PRIORITY が 256 以上で ProtocolViolationError", () => {
+test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY が 256 以上で ProtocolViolationError", () => {
   assert.throws(
-    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 256n),
+    () => validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 256n),
     ProtocolViolationError,
   );
   assert.throws(
-    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 1000n),
+    () => validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 1000n),
     ProtocolViolationError,
   );
 });
 
-test("validateTrackPropertyValue: PUBLISHER_GROUP_ORDER_PREFERENCE は 0x1 / 0x2 のみ許容する", () => {
-  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 1n);
-  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 2n);
+test("validateTrackPropertyValue: DEFAULT_PUBLISHER_GROUP_ORDER は 0x1 / 0x2 のみ許容する", () => {
+  validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, 1n);
+  validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, 2n);
   assert.throws(
-    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 0n),
+    () => validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, 0n),
     ProtocolViolationError,
   );
   assert.throws(
-    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 3n),
+    () => validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, 3n),
     ProtocolViolationError,
   );
 });
@@ -344,16 +344,14 @@ test("validateTrackPropertyValue: DYNAMIC_GROUPS は 0 / 1 のみ許容する", 
   );
 });
 
-test("decodeProperties: 不正な PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
+test("decodeProperties: 不正な DEFAULT_PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
   // ID=0x0E (delta from 0), value=300 (varint): 300 は 256 を超えるため不正
-  const data = encodeProperties([{ id: TrackPropertyId.PUBLISHER_PRIORITY, value: 300n }]);
+  const data = encodeProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 300n }]);
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
-test("decodeProperties: 不正な PUBLISHER_GROUP_ORDER_PREFERENCE を含むデータで ProtocolViolationError", () => {
-  const data = encodeProperties([
-    { id: TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, value: 0n },
-  ]);
+test("decodeProperties: 不正な DEFAULT_PUBLISHER_GROUP_ORDER を含むデータで ProtocolViolationError", () => {
+  const data = encodeProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0n }]);
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
@@ -362,8 +360,8 @@ test("decodeProperties: 不正な DYNAMIC_GROUPS を含むデータで ProtocolV
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
-test("parseProperties: 不正な PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
-  const data = encodeProperties([{ id: TrackPropertyId.PUBLISHER_PRIORITY, value: 256n }]);
+test("parseProperties: 不正な DEFAULT_PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
+  const data = encodeProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 256n }]);
   assert.throws(() => parseProperties(data), ProtocolViolationError);
 });
 
@@ -382,7 +380,7 @@ test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと Mal
   // 外側 IMMUTABLE_PROPERTIES の内部に IMMUTABLE_PROPERTIES (id=0x0B, 奇数) を入れる
   const innerImmutable = encodeImmutableProperties({ extensions: [] });
   // outer の data 部にそのまま innerImmutable を埋め込む
-  const outer: Property = { id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerImmutable };
+  const outer: Property = { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innerImmutable };
   const encoded = encodeProperty(outer);
   assert.throws(() => decodeImmutableProperties(encoded), MalformedTrackError);
 });
@@ -390,7 +388,7 @@ test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと Mal
 test("parseProperties: Object 内に IMMUTABLE_PROPERTIES を含む IMMUTABLE_PROPERTIES があると MalformedTrackError", () => {
   // 外側 IMMUTABLE_PROPERTIES の内部に IMMUTABLE_PROPERTIES を入れる
   const innerImmutable = encodeImmutableProperties({ extensions: [] });
-  const outer: Property = { id: MOQTPropertyId.IMMUTABLE_EXTENSIONS, data: innerImmutable };
+  const outer: Property = { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innerImmutable };
   const encoded = encodeProperty(outer);
   assert.throws(() => parseProperties(encoded), MalformedTrackError);
 });

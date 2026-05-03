@@ -90,8 +90,8 @@ const evenPropertyArb = fc
       .map((n) => n * 2n)
       .filter(
         (id) =>
-          id !== TrackPropertyId.PUBLISHER_PRIORITY &&
-          id !== TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE &&
+          id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+          id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
           id !== TrackPropertyId.DYNAMIC_GROUPS,
       ),
     value: fc.bigInt({ min: 0n, max: 1000000n }),
