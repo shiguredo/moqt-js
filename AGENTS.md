@@ -31,16 +31,6 @@
 - コミットメッセージは命令形で書くこと
 - コミットメッセージは〜するという形で書くこと
 
-## デバッグについて
-
-- かならず timeout を指定する事
-- timeout は最大でも 10 秒以内に収めること
-
-## ビルド
-
-- `vp run build` で moqt-js をビルドすること（vite build + tsc）
-- `vp run build:devtools` で devtools をビルドすること
-
 ## issues について
 
 - `0000-template` を参考にすること
@@ -130,6 +120,16 @@
   - 具体的な情報を含めること
   - 期待値と実際の値を示すこと
   - 技術的だが簡潔にすること
+
+### ビルド
+
+- `vp run build` で moqt-js をビルドすること（vite build + tsc）
+- `vp run build:devtools` で devtools をビルドすること
+
+### デバッグについて
+
+- かならず timeout を指定する事
+- timeout は最大でも 10 秒以内に収めること
 
 ### テスト
 
