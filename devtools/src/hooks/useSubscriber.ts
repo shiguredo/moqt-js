@@ -18,6 +18,21 @@ import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import type { RefObject } from "preact";
 
+// 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
+// draft-ietf-moq-transport-17 §10.3 では Subgroup ストリーム間の配送順は保証されないため、
+// バッファドレイン時に明示的にソートする必要がある。
+function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
+  return objects.sort((a, b) => {
+    if (a.groupId !== b.groupId) {
+      return a.groupId < b.groupId ? -1 : 1;
+    }
+    if (a.objectId !== b.objectId) {
+      return a.objectId < b.objectId ? -1 : 1;
+    }
+    return 0;
+  });
+}
+
 function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
   const logMessage = `[${subscriberId}] [${direction}] ${message.typeName}`;
@@ -494,8 +509,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             };
 
             // ライブバッファをコピーしてクリア
-            // stream 内では順番が保証されるのでソート不要
-            const bufferedObjects = [...instance.liveObjectBuffer];
+            // draft-ietf-moq-transport-17 §10.3 / §10.4 では Subgroup ストリームと
+            // OBJECT_DATAGRAM が並行配送されるため、到着順 ≠ (groupId, objectId) 順
+            // となる可能性がある。デコーダへ流す前に (groupId, objectId) 昇順へ
+            // 並べ替える。
+            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer]);
             sub.updateSubscriber(subscriberId, {
               liveObjectBuffer: [],
             });
@@ -545,9 +563,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               }
 
               // 処理中に追加されたオブジェクトがあれば処理
+              // 追加分も複数 Subgroup から並行受信し得るため (groupId, objectId) で再ソートする
               let inst = sub.getSubscriber(subscriberId);
               while (inst && inst.liveObjectBuffer.length > 0) {
-                const remainingObjects = [...inst.liveObjectBuffer];
+                const remainingObjects = sortByGroupObject([...inst.liveObjectBuffer]);
                 sub.updateSubscriber(subscriberId, {
                   liveObjectBuffer: [],
                 });
@@ -599,7 +618,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               return;
             }
 
-            // 順次処理: Promise チェーンでオブジェクトを順番にデコード
+            // 順次処理: Promise チェーンで到着順にデコードする
+            // 制限事項: 複数 Subgroup ストリームを同一 Track で並行使用する Publisher と
+            // 接続した場合、到着順 ≠ (groupId, objectId) 順となるが現状はリオーダー
+            // バッファを持たない。devtools Publisher は単一 Subgroup のみ送出するため
+            // 当面この経路で実害は出ない。複数 Subgroup 対応は別 issue で扱う。
             liveObjectProcessingChain = liveObjectProcessingChain.then(() => handleObject(obj));
           },
           end: () => {

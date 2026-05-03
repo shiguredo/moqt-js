@@ -1,6 +1,7 @@
 # liveObjectBuffer が複数 Subgroup ストリームの到着順を保証していない
 
 Created: 2026-05-03
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -56,3 +57,14 @@ draft-ietf-moq-transport-17 §10.3 (l.4475-4485):
 ## 優先度
 
 中。devtools の Publisher と Subscriber を組み合わせた検証では発生しないが、複数 Subgroup を使う相手 (例えば SVC の解像度 / レイヤごとの Subgroup 分け) と接続した瞬間に再生が壊れる。draft-17 準拠の汎用 Subscriber を名乗る上では必須の対応だが、現時点で MOQT 互換実装の検証相手が限られるため対応は (1) ベースで段階的に進める。
+
+## 解決方法
+
+`devtools/src/hooks/useSubscriber.ts` の Joining FETCH バッファドレインに `(groupId, objectId)` 昇順のソートを追加した。直接処理経路は範囲外として将来対応とする。
+
+- `sortByGroupObject(objects: MoqtObject[]): MoqtObject[]` をモジュールスコープに追加し、bigint 比較で `(groupId, objectId)` 昇順に in-place ソートする。
+- `onEnd` の `bufferedObjects = [...instance.liveObjectBuffer]` を `sortByGroupObject([...instance.liveObjectBuffer])` に変更し、誤コメント「stream 内では順番が保証されるのでソート不要」を draft-17 §10.3 / §10.4 に基づく実状コメントへ書き換えた。
+- ドレインループ末尾の追加分処理 (`while (inst.liveObjectBuffer.length > 0)`) も `sortByGroupObject(...)` を経由させるようにした。
+- 直接処理経路 (`liveObjectProcessingChain`) は到着順そのままで、複数 Subgroup を並行使用する相手では再生が壊れる旨をコメントに追記した。devtools Publisher は単一 Subgroup のみ送出するため当面実害は出ない。リオーダーバッファを持たせる対応は別 issue で扱う。
+
+`vp run typecheck` / `vp run lint` / `vp run test` / `vp run build` / `vp run build:devtools` で全て成功することを確認した。

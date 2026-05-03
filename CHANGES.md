@@ -197,6 +197,11 @@
   - `subscriberReadyCallbacks` 関連を削除する
   - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
   - @voluntas
+- [FIX] devtools subscriber の Joining FETCH ドレインで複数 Subgroup ストリームの到着順を `(groupId, objectId)` 昇順へ並べ替える (#0129)
+  - `devtools/src/hooks/useSubscriber.ts` に `sortByGroupObject` ヘルパーを追加し、`onEnd` のバッファドレインと追加分処理に適用する
+  - 「stream 内では順番が保証されるのでソート不要」の誤コメントを draft-ietf-moq-transport-17 §10.3 / §10.4 に基づく実状コメントへ書き換える
+  - 直接処理経路 (`liveObjectProcessingChain`) は到着順のままで、複数 Subgroup 並行受信時の制限事項をコメントで明示する (リオーダーバッファ対応は将来 issue)
+  - @voluntas
 - [FIX] devtools subscriber の Joining FETCH `joiningFetchInProgress` 解除をドレインループ末尾に一本化する (#0128)
   - `devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` を撤去する
   - 解除点を Joining FETCH の `onEnd` ドレインループ末尾と `onError` のリセット 2 箇所に統一する
