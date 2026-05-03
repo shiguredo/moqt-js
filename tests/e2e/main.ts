@@ -135,15 +135,18 @@ window.__moqtE2E = {
       },
     );
 
+    let finalState = publisher.state;
     try {
       await publisher.start(stream);
       await new Promise<void>((resolve) => window.setTimeout(resolve, durationMs));
+      // close 前の state を成功条件として保存する
+      finalState = publisher.state;
     } finally {
       dispose();
       await publisher.close();
     }
 
-    return { finalState: publisher.state, errors };
+    return { finalState, errors };
   },
 
   async subscribeCanvas({ url, authorizationTokenValue, namespace, durationMs }) {
