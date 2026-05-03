@@ -1,6 +1,7 @@
 # Canvas ダミー映像で relay 経由 pub/sub の E2E テストを追加する
 
 Created: 2026-04-30
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -62,3 +63,21 @@ issue 0114 では `connect()` の SETUP 完了までを検証した。実 relay 
 
 - 新規: `tests/e2e/helpers.ts`、`tests/e2e/pubsub.spec.ts`
 - 変更: `tests/e2e/main.ts`、`tests/e2e/connect.spec.ts`、`playwright.config.ts`、`CHANGES.md`
+
+## 解決方法
+
+issue 本文の方針通りに実装した。
+
+- `tests/e2e/helpers.ts` を新設し `waitForE2EReady(page)` を `connect.spec.ts` から切り出した
+- `tests/e2e/connect.spec.ts` は helpers 経由 (`waitForE2EReady` を import) に変更した
+- `tests/e2e/main.ts` に以下を追加した
+  - `createCanvasStream()`: 320x240 Canvas を `setInterval` で塗り続け `captureStream(30)` で MediaStream を生成するヘルパ。`dispose()` で interval 停止と track stop を行う
+  - `publishCanvas({ url, authorizationTokenValue, namespace, durationMs })`: VP8 で `createMediaPublisher` を起動し `durationMs` 経過後 `publisher.close()`。`{ finalState, errors }` を返す
+  - `subscribeCanvas({ url, authorizationTokenValue, namespace, durationMs })`: `createMediaSubscriber` を起動し `durationMs` 経過後 `subscriber.close()`。`{ finalState, errors, hasVideoTrack }` を返す
+- `tests/e2e/pubsub.spec.ts` を新設した
+  - `browser.newContext()` で Publisher 用 / Subscriber 用の 2 つの context を立ち上げる
+  - namespace は `["e2e", crypto.randomUUID()]` でユニーク化
+  - Subscriber を起動 → 200 ms 後に Publisher を起動 → `Promise.all` で待つ
+  - `errors === []` / `publisher.finalState === "publishing"` / `subscriber.finalState === "active"` / `hasVideoTrack === true` を assert
+- `playwright.config.ts` の `timeout` を `10_000` から `30_000` に引き上げた
+- 環境変数 (`TEST_MOQT_HTTPS_URI` / `TEST_MOQT_AUTH_TOKEN`) 未設定時は `test.skip` で素通りする
