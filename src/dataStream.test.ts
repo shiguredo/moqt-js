@@ -543,7 +543,7 @@ test("ObjectDatagram: PAYLOAD_NO_OBJ タイプ (0x04) をエンコード", () =>
     type: DatagramType.PAYLOAD_NO_OBJ,
     trackAlias: 1n,
     groupId: 2n,
-    objectId: 0n,
+    objectId: 1n,
     publisherPriority: 100,
     payload: new Uint8Array([0x11, 0x22]),
   };
@@ -641,7 +641,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       type: DatagramType.PAYLOAD_NO_OBJ,
       trackAlias: 10n,
       groupId: 20n,
-      objectId: 0n,
+      objectId: 1n,
       publisherPriority: 255,
       payload: new Uint8Array([0xff]),
     },
