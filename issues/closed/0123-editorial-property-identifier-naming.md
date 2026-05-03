@@ -1,6 +1,7 @@
 # Track Property 識別子の名称が draft-17 §14.4 と乖離
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -41,3 +42,21 @@ draft-ietf-moq-transport-17 §14.4 Properties レジストリ表 (line 5800-5818
 ## 優先度
 
 軽微。動作には影響しないが、利用者がコードと仕様を行き来する際の認知負荷が上がる。後方互換は不要 (CLAUDE.md 方針) なので一括改名で良い。
+
+## 解決方法
+
+3 つの識別子を仕様の正式名称 (draft-ietf-moq-transport-17 §14.4) に一括改名した。
+
+- `MOQTPropertyId.IMMUTABLE_EXTENSIONS` → `MOQTPropertyId.IMMUTABLE_PROPERTIES`
+- `TrackPropertyId.PUBLISHER_PRIORITY` → `TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY`
+- `TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE` → `TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER`
+
+`src/` 配下の以下のファイルを連動して改名した:
+
+- `src/properties.ts` (定義)
+- `src/properties.test.ts` / `src/properties.prop.ts`
+- `src/session.ts` / `src/subscriber.ts`
+- `src/message/types.ts` / `src/message/trackstatus.ts`
+- `src/message/publish.prop.ts` / `src/message/subscribe.prop.ts` / `src/message/fetch.prop.ts`
+
+コメント内に出てくる旧名称も同時に置換した。`encodeImmutableProperties` / `decodeImmutableProperties` / `ImmutableProperties` interface は元から仕様用語と整合していたため改名不要。`devtools/dist/` の build artifact は対象外 (再ビルドで反映される)。

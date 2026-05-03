@@ -1120,21 +1120,21 @@ export class SessionImpl implements Session {
       });
     }
 
-    // PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-17 Section 11.3 (DEFAULT PUBLISHER PRIORITY)
+    // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-17 Section 11.3 (DEFAULT PUBLISHER PRIORITY)
     if (options?.publisherPriority !== undefined) {
       trackProperties.push({
-        id: TrackPropertyId.PUBLISHER_PRIORITY,
+        id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY,
         value: BigInt(options.publisherPriority),
       });
     }
 
-    // PUBLISHER_GROUP_ORDER_PREFERENCE (0x22) - draft-ietf-moq-transport-17 Section 11.4 (DEFAULT PUBLISHER GROUP ORDER)
+    // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-17 Section 11.4 (DEFAULT PUBLISHER GROUP ORDER)
     // draft-ietf-moq-transport-17: GROUP_ORDER から Publisher 向けの設定が分離
     // https://github.com/moq-wg/moq-transport/pull/1390
     if (options?.groupOrder !== undefined) {
       const groupOrderValue = options.groupOrder === "Ascending" ? 0x01n : 0x02n;
       trackProperties.push({
-        id: TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE,
+        id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
         value: groupOrderValue,
       });
     }
@@ -1173,7 +1173,7 @@ export class SessionImpl implements Session {
       trackAlias: trackAlias.toString(),
       MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
       DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-      PUBLISHER_PRIORITY: options?.publisherPriority,
+      DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
       GROUP_ORDER: options?.groupOrder,
       DYNAMIC_GROUPS: options?.dynamicGroups,
       EXPIRES: options?.expires?.toString(),
