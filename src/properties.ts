@@ -10,6 +10,7 @@
  */
 
 import { encodeVarint, decodeVarint } from "./varint";
+import { ProtocolViolationError } from "./error";
 
 /**
  * MOQT Extension Header ID (Section 11)
@@ -95,6 +96,39 @@ export const TrackPropertyId = {
  * 同じコードポイントに異なるセマンティクスが存在する可能性がある。
  * https://github.com/moq-wg/moq-transport/pull/1473
  */
+/**
+ * Track Property の値域を検証する
+ *
+ * draft-ietf-moq-transport-17 §11 で MUST レベルの値域制約がある Track Property を検証する。
+ * 不正値は ProtocolViolationError を throw する (上位ループで PROTOCOL_VIOLATION でセッションを閉じる)。
+ *
+ * - §11.3 DEFAULT_PUBLISHER_PRIORITY (0x0E): "The value is from 0 to 255 ... Priorities above 255 are invalid."
+ * - §11.4 DEFAULT_PUBLISHER_GROUP_ORDER (0x22): "The allowed values are Ascending (0x1) or Descending (0x2). If an endpoint receives a value outside this range, it MUST close the session with PROTOCOL_VIOLATION."
+ * - §11.5 DYNAMIC_GROUPS (0x30): "The allowed values are 0 or 1. ... If an endpoint receives a value larger than 1, it MUST close the session with PROTOCOL_VIOLATION."
+ */
+export function validateTrackPropertyValue(id: bigint, value: bigint): void {
+  if (id === TrackPropertyId.PUBLISHER_PRIORITY) {
+    if (value < 0n || value > 255n) {
+      throw new ProtocolViolationError(`invalid publisher priority: ${value}, expected 0-255`);
+    }
+    return;
+  }
+  if (id === TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE) {
+    if (value !== 1n && value !== 2n) {
+      throw new ProtocolViolationError(
+        `invalid publisher group order preference: 0x${value.toString(16)}, expected 0x1 or 0x2`,
+      );
+    }
+    return;
+  }
+  if (id === TrackPropertyId.DYNAMIC_GROUPS) {
+    if (value !== 0n && value !== 1n) {
+      throw new ProtocolViolationError(`invalid dynamic groups: ${value}, expected 0 or 1`);
+    }
+    return;
+  }
+}
+
 export const PropertyTypeRange = {
   /** アプリケーション固有の Property Type 範囲の開始 */
   APPLICATION_START: 0x3800n,
@@ -374,6 +408,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     if (extId % 2n === 0n) {
       // 偶数 ID: varint value 形式
       const [value, valueLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
+      validateTrackPropertyValue(extId, value);
       extensions.push({ id: extId, value });
       offset += deltaIdLen + valueLen;
     } else {
@@ -441,6 +476,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         if (extId % 2n === 0n) {
           // 偶数 ID: varint value 形式
           const [value, valueLen] = decodeVarint(innerData.subarray(innerOffset + innerDeltaIdLen));
+          validateTrackPropertyValue(extId, value);
           extensions.push({ id: extId, value });
           innerOffset += innerDeltaIdLen + valueLen;
         } else {
@@ -474,6 +510,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       } else {
         // 偶数 ID: varint value 形式
         const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        validateTrackPropertyValue(id, value);
         const extData = encodeVarint(value);
         unknownProperties.push({ id, data: extData });
         offset += deltaIdLen + valueLen;
@@ -510,6 +547,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
     if (id % 2n === 0n) {
       // 偶数 ID: varint value 形式
       const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      validateTrackPropertyValue(id, value);
       extensions.push({ id, value });
       offset += deltaIdLen + valueLen;
     } else {

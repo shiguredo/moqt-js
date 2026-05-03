@@ -9,10 +9,14 @@ import {
   encodeProperties,
   encodeImmutableProperties,
   decodeImmutableProperties,
+  decodeProperties,
   parseProperties,
+  validateTrackPropertyValue,
   MOQTPropertyId,
+  TrackPropertyId,
   type Property,
 } from "./properties";
+import { ProtocolViolationError } from "./error";
 
 test("encodeProperty: 偶数 ID は varint value 形式でエンコード", () => {
   const header: Property = { id: 0x02n, value: 42n };
@@ -294,4 +298,79 @@ test("parseProperties: 全ての MOQT Core Extensions を正しくパース", ()
 
   // Unknown Extensions は空
   assert.isUndefined(parsed.unknownProperties);
+});
+
+// draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5
+// Track Property の値域が MUST レベルで検証されない不具合の修正 (#0119)
+test("validateTrackPropertyValue: PUBLISHER_PRIORITY は 0-255 を許容する", () => {
+  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 0n);
+  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 255n);
+});
+
+test("validateTrackPropertyValue: PUBLISHER_PRIORITY が 256 以上で ProtocolViolationError", () => {
+  assert.throws(
+    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 256n),
+    ProtocolViolationError,
+  );
+  assert.throws(
+    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_PRIORITY, 1000n),
+    ProtocolViolationError,
+  );
+});
+
+test("validateTrackPropertyValue: PUBLISHER_GROUP_ORDER_PREFERENCE は 0x1 / 0x2 のみ許容する", () => {
+  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 1n);
+  validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 2n);
+  assert.throws(
+    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 0n),
+    ProtocolViolationError,
+  );
+  assert.throws(
+    () => validateTrackPropertyValue(TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, 3n),
+    ProtocolViolationError,
+  );
+});
+
+test("validateTrackPropertyValue: DYNAMIC_GROUPS は 0 / 1 のみ許容する", () => {
+  validateTrackPropertyValue(TrackPropertyId.DYNAMIC_GROUPS, 0n);
+  validateTrackPropertyValue(TrackPropertyId.DYNAMIC_GROUPS, 1n);
+  assert.throws(
+    () => validateTrackPropertyValue(TrackPropertyId.DYNAMIC_GROUPS, 2n),
+    ProtocolViolationError,
+  );
+  assert.throws(
+    () => validateTrackPropertyValue(TrackPropertyId.DYNAMIC_GROUPS, 99n),
+    ProtocolViolationError,
+  );
+});
+
+test("decodeProperties: 不正な PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
+  // ID=0x0E (delta from 0), value=300 (varint): 300 は 256 を超えるため不正
+  const data = encodeProperties([{ id: TrackPropertyId.PUBLISHER_PRIORITY, value: 300n }]);
+  assert.throws(() => decodeProperties(data), ProtocolViolationError);
+});
+
+test("decodeProperties: 不正な PUBLISHER_GROUP_ORDER_PREFERENCE を含むデータで ProtocolViolationError", () => {
+  const data = encodeProperties([
+    { id: TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE, value: 0n },
+  ]);
+  assert.throws(() => decodeProperties(data), ProtocolViolationError);
+});
+
+test("decodeProperties: 不正な DYNAMIC_GROUPS を含むデータで ProtocolViolationError", () => {
+  const data = encodeProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 2n }]);
+  assert.throws(() => decodeProperties(data), ProtocolViolationError);
+});
+
+test("parseProperties: 不正な PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
+  const data = encodeProperties([{ id: TrackPropertyId.PUBLISHER_PRIORITY, value: 256n }]);
+  assert.throws(() => parseProperties(data), ProtocolViolationError);
+});
+
+test("decodeImmutableProperties: 内部に不正な Track Property を含むと ProtocolViolationError", () => {
+  // Immutable Extensions の内部に DYNAMIC_GROUPS=2 (不正) をネスト
+  const immutable = encodeImmutableProperties({
+    extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 2n }],
+  });
+  assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
 });
