@@ -133,6 +133,14 @@
   - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
   - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE 応答ストリームで MUST / SHOULD 検証を追加する (#0121)
+  - draft-ietf-moq-transport-17 §6.1 / §9.20 / §9.21 の規定に従う
+  - REQUEST_OK / REQUEST_ERROR を最初のフレームとして MUST 期待 (それ以外は `PROTOCOL_VIOLATION`)
+  - REQUEST_OK / REQUEST_ERROR の重複受信は `PROTOCOL_VIOLATION` (SHOULD 準拠)
+  - NAMESPACE_DONE が対応 NAMESPACE より先に来たら `PROTOCOL_VIOLATION` (受信済 suffix を Set で追跡)
+  - PUBLISH_BLOCKED (0x0F) を `default` で誤って `PROTOCOL_VIOLATION` する不具合を修正、`callbacks.onPublishBlocked?.(suffix, trackName)` で正規受信する
+  - `NamespaceSubscriptionCallbacks` に `onPublishBlocked` を追加する
+  - @voluntas
 - [CHANGE] SETUP の AUTHORITY / PATH を送信不可にし、受信時は INVALID_AUTHORITY / INVALID_PATH で閉じる (#0120)
   - draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2: WebTransport 使用時は AUTHORITY (0x05) / PATH (0x01) を MUST NOT 送信
   - `createSetup()` の options から `path` / `authority` を削除する (送信不可)

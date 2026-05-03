@@ -1,6 +1,7 @@
 # SUBSCRIBE_NAMESPACE 応答ストリームの仕様 MUST/SHOULD 検証が複数欠落
 
 Created: 2026-05-02
+Completed: 2026-05-03
 Model: Opus 4.7
 
 ## 概要
@@ -45,3 +46,14 @@ draft-ietf-moq-transport-17 §9.20 SUBSCRIBE_NAMESPACE (line 4332-4384):
 ## 優先度
 
 重大。仕様準拠サーバが PUBLISH_BLOCKED を送ってきただけでセッションが PROTOCOL_VIOLATION 切断される（互換性破壊）。NAMESPACE 順序検証の欠落は敵対的サーバへの脆弱性。
+
+## 解決方法
+
+`src/session.ts` の `startNamespaceStreamLoop` を §6.1 / §9.20 / §9.21 に準拠する形に書き直した。
+
+- **(1) 最初のフレーム検証 (MUST)**: switch の前段で `if (!resolved && messageType !== REQUEST_OK && messageType !== REQUEST_ERROR)` をチェックし、`PROTOCOL_VIOLATION` で閉じる
+- **(2) NAMESPACE_DONE 順序検証 (MUST)**: NAMESPACE 受信時に `seenNamespaceSuffixes: Set<string>` (key は `JSON.stringify(suffixStrings)`) に suffix を追加する。NAMESPACE_DONE 受信時に Set に存在しない suffix は `PROTOCOL_VIOLATION` で閉じる
+- **(3) PUBLISH_BLOCKED 受信処理**: `case MessageType.PUBLISH_BLOCKED` を追加し、`decodePublishBlockedPayload` で suffix と trackName を取り出して `callbacks.onPublishBlocked?.(suffix, trackName)` を呼ぶ。`NamespaceSubscriptionCallbacks` に `onPublishBlocked` を追加する
+- **(4) REQUEST_OK / REQUEST_ERROR の重複検出 (SHOULD)**: 各 case の冒頭で `if (resolved)` をチェックし、`PROTOCOL_VIOLATION` で閉じる (REQUEST_OK の二度目、REQUEST_OK 後の REQUEST_ERROR の両方を検出)
+
+`PUBLISH_BLOCKED` のメッセージ型 (`MessageType.PUBLISH_BLOCKED = 0x0f`) と `decodePublishBlockedPayload` は既存実装を再利用 (`src/message/namespace.ts:283-327`)。
