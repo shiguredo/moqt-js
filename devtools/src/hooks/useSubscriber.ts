@@ -620,15 +620,13 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         subscribeOptions,
       );
       // SUBSCRIBE_OK から largestLocation を取得
+      // joiningFetchInProgress の解除は Joining FETCH の onEnd / onError 内で
+      // ドレインループ完了と同期して行う。ここで早期解除すると、ドレインループ
+      // 実行中に到着したライブオブジェクトが直接 handleObject 経路へ流れて
+      // 順序が破綻するため、解除箇所はドレイン側に一本化する。
+      // LARGEST_OBJECT なしの場合も session.ts 側で onEnd が同期呼び出しされ、
+      // ドレインループ末尾で joiningFetchInProgress: false に遷移する。
       const largestLocation = subscriberInstance.largestLocation;
-
-      // SUBSCRIBE_OK に LARGEST_OBJECT がない場合は Joining FETCH が送信されない
-      // この場合はバッファリングモードを解除してライブオブジェクトを直接処理する
-      if (joiningFetchEnabled && largestLocation === null) {
-        sub.updateSubscriber(subscriberId, {
-          joiningFetchInProgress: false,
-        });
-      }
 
       sub.updateSubscriber(subscriberId, {
         subscriber: subscriberInstance,
