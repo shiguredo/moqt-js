@@ -131,6 +131,17 @@
   - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
   - 制御メッセージループで `ProtocolViolationError` を catch して `PROTOCOL_VIOLATION` でセッションを閉じる
   - @voluntas
+- [FIX] `pendingSubgroupStreams` の buffer 配線を実装する (#0125)
+  - draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief period to handle reordering with the control message that establishes the Track Alias" に準拠する buffer を実装する
+  - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
+  - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
+  - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
+  - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
+  - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
+  - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する
+  - `subscriberReadyCallbacks` 関連を削除する
+  - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
+  - @voluntas
 - [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
   - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
   - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する

@@ -29,6 +29,12 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
+// Re-export Pending Subgroup Buffer options (draft-ietf-moq-transport-17 §10.4.2)
+export {
+  type PendingSubgroupBufferOptions,
+  DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
+} from "./pendingSubgroupBuffer";
+
 // Re-export message types
 export type { SubscriptionFilter, Location, Parameter } from "./message";
 
@@ -208,7 +214,9 @@ export async function connect(
   await transport.ready;
 
   // Create session
-  const session = new SessionImpl(transport, callbacks ?? {});
+  const session = new SessionImpl(transport, callbacks ?? {}, {
+    pendingSubgroup: options?.pendingSubgroup,
+  });
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
