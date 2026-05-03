@@ -7,10 +7,10 @@ Model: Opus 4.7
 
 `src/properties.ts` で定義している Property 識別子のうち 3 つが、draft-17 §14.4 の正式名称と一致しない。
 
-| 値 | 仕様 §14.4 | 実装 (`src/properties.ts`) |
-|---|---|---|
-| 0x0B | IMMUTABLE_PROPERTIES | `MOQTPropertyId.IMMUTABLE_EXTENSIONS` |
-| 0x0E | DEFAULT_PUBLISHER_PRIORITY | `TrackPropertyId.PUBLISHER_PRIORITY` |
+| 値   | 仕様 §14.4                    | 実装 (`src/properties.ts`)                         |
+| ---- | ----------------------------- | -------------------------------------------------- |
+| 0x0B | IMMUTABLE_PROPERTIES          | `MOQTPropertyId.IMMUTABLE_EXTENSIONS`              |
+| 0x0E | DEFAULT_PUBLISHER_PRIORITY    | `TrackPropertyId.PUBLISHER_PRIORITY`               |
 | 0x22 | DEFAULT_PUBLISHER_GROUP_ORDER | `TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE` |
 
 ワイヤフォーマット (値) は一致しているが、コード上の識別子が古い (おそらく draft-15 以前の) 名称のまま。同じファイル内で `ImmutableProperties` 型名や `decodeImmutableProperties` 関数名は仕様用語に準拠しているため、定数名だけが浮いている。
