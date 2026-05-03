@@ -11,6 +11,13 @@
 
 ## develop
 
+- [ADD] Playwright による WebTransport 接続 E2E テストを追加する (#0114)
+  - `playwright.config.ts` を新設し Chromium 1 プロジェクト構成にする
+  - `tests/e2e/` に独立 Vite アプリを置き `connect()` で MOQT セッション確立まで検証する
+  - `.env` / `.env.example` で `TEST_MOQT_HTTPS_URI` / `TEST_MOQT_AUTH_TOKEN` を受け取る (`.env*` は `.gitignore` で除外、`.env.example` のみコミット)
+  - `pnpm-workspace.yaml` に `tests/e2e` を追加する
+  - 環境変数未設定時は spec が `test.skip` で素通りする
+  - @voluntas
 - [ADD] 高レベル API (`MediaPublisher` / `MediaSubscriber`) に `authorizationToken` オプションを追加する (#0112)
   - `MediaPublisherOptions` / `MediaSubscriberOptions` に `authorizationToken?: AuthorizationToken` を追加する
   - `createMediaPublisher` / `createMediaSubscriber` の内部 `connect()` 呼び出しに値を伝搬する
