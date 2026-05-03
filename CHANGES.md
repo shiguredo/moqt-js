@@ -136,6 +136,11 @@
   - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
   - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
   - @voluntas
+- [CHANGE] `SessionStatistics` から `pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を削除する (#0125)
+  - `pendingSubgroupStreams` Map と `processPendingSubgroupStream` 関数を削除しデッドコードを整理する
+  - 未確立 Track Alias の Subgroup ストリームは `waitForSubscriber` のタイムアウトで `cancel()` される (abandon オンリー)
+  - devtools の `DebugPanel.tsx` から `Pending Subgroup Streams` / `Pending Subgroup Bytes` の表示を削除する
+  - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
   - 制御ストリームを双方向から単方向ペアに変更
