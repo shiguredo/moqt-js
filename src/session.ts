@@ -2382,7 +2382,10 @@ export class SessionImpl implements Session {
     // 新しいオブジェクトが送信されなくなる。
     const currentPromise = previousPromise
       .catch(() => {})
-      .then(() => this.sendObjectInternal(publisher, params));
+      .then(() => this.sendObjectInternal(publisher, params))
+      .catch((err: unknown) => {
+        publisher.handleError(err instanceof Error ? err : new Error(String(err)));
+      });
     this.publisherSendQueues.set(trackAlias, currentPromise);
     return currentPromise;
   }
@@ -2570,9 +2573,14 @@ export class SessionImpl implements Session {
 
     // WebTransport datagram として送信
     const writer = this.transport.datagrams.writable.getWriter();
-    void writer.write(datagram).finally(() => {
-      writer.releaseLock();
-    });
+    writer
+      .write(datagram)
+      .finally(() => {
+        writer.releaseLock();
+      })
+      .catch((err: unknown) => {
+        publisher.handleError(err instanceof Error ? err : new Error(String(err)));
+      });
   }
 
   /**
