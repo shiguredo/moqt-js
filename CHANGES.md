@@ -68,6 +68,14 @@
   - Connection Settings の上にパネルを配置し、ページロード時に `WebTransport.prototype` 等を評価する
   - 既存の接続チェック (`wtApiSupport` ツリー) とは責務を分離し、併置する
   - @voluntas
+- [ADD] GOAWAY 送信後のタイムアウト処理を実装する (Section 3.6)
+  - タイムアウト経過時に GOAWAY_TIMEOUT でセッションを閉じる
+  - @voluntas
+- [ADD] devtools の Publisher パネルに Forward State を表示する (Section 5.1)
+  - @voluntas
+- [ADD] Subscriber / Fetcher に trackProperties プロパティを追加する (Section 9.9, 9.15)
+  - SUBSCRIBE_OK / FETCH_OK で受信した Track Properties にアプリケーションからアクセスできるようにする
+  - @voluntas
 - [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
   - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
   - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加
@@ -75,69 +83,11 @@
 - [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
   - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
   - @voluntas
-- [FIX] SUBSCRIBE_NAMESPACE の Length フィールドが可変長整数でエンコードされている問題を修正する (#0104)
-  - draft-ietf-moq-transport-17 §9.20 の Length (16-bit big-endian) に準拠させる
-  - 手動フレーミングをやめ `ControlStreamWriter.encode()` に委譲する
-  - @voluntas
 - [CHANGE] PUBLISH_NAMESPACE を専用の双方向ストリームで送受信するようにする (#0105)
   - draft-ietf-moq-transport-17 §9.17 に従い、`Session.publishNamespace()` を新しい双方向ストリームの先頭メッセージとして送信し、同じストリーム上で REQUEST_OK / REQUEST_ERROR を受信する
   - 制御ストリームの `handleControlMessage` から PUBLISH_NAMESPACE / 関連 REQUEST_OK / REQUEST_ERROR を取り除き、未知メッセージとして PROTOCOL_VIOLATION でセッションを閉じるようにする
   - `NamespaceSubscriptionCallbacks.announce` と `NamespaceAnnouncement` 型を削除する（受信経路廃止に伴い未使用化）
   - `NamespacePublication.done()` は専用ストリームを FIN で閉じることで終了を通知する
-  - @voluntas
-- [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
-  - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
-  - @voluntas
-- [FIX] Event Timeline デコードが §8.1 のインデックス必須を検証していない問題を修正する (#0069)
-  - `t`/`l`/`m` がちょうど 1 つであることを検証するようにする
-  - @voluntas
-- [FIX] cloneTracks で parentName 欠如や親不明を黙って無視する問題を修正する (#0070)
-  - `parentName` が欠如している場合にエラーをスローするようにする
-  - 親トラックが存在しない場合にエラーをスローするようにする
-  - @voluntas
-- [FIX] applyCatalogDelta の戻りが isComplete を引き継がない問題を修正する (#0071)
-  - draft-ietf-moq-msf-00 §5.1.7 の「isComplete は削除禁止」に準拠する
-  - @voluntas
-- [FIX] Subgroup Header の予約値で PROTOCOL_VIOLATION を発生させる (#0106)
-  - draft-ietf-moq-transport-17 §10.4.2 に従い、SUBGROUP_ID_MODE = 0b11 のタイプ値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信した場合は PROTOCOL_VIOLATION でセッションを閉じるようにする
-  - `src/dataStream.test.ts` に予約値および 0b00X1XXXX 形式に合わない不正タイプ値のデコードエラー検証を追加する
-  - @voluntas
-- [FIX] `Session.close()` が WebTransport を閉じずストリームをリークする問題を修正する (#0107)
-  - draft-ietf-moq-transport-17 §3.5 に従い、ユーザー起点の `close()` でも WebTransport セッションを閉じて peer に終了を通知するようにする
-  - `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` / `controlSendStream` の writer / reader を `close()` 時に閉じることで QUIC ストリームの FIN / RESET_STREAM を送出する
-  - `close(closeCode?, reason?)` を引数化し、`closeWithError` から共通化する
-  - @voluntas
-- [FIX] `decodeTrackNamespace` が Field Length=0 のフィールドを silently 受理する問題を修正する (#0108)
-  - draft-ietf-moq-transport-17 §2.3 の "Each Track Namespace Field Value MUST contain at least one byte." に準拠する
-  - `decodeTrackNamespace` で長さ 0 のフィールドを検出した場合にエラーをスローする
-  - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
-  - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
-  - @voluntas
-- [FIX] FETCH ストリームの decode context が複数チャンクで永続化されず誤って `ProtocolViolationError` を投げる問題を修正する (#0113)
-  - `processFetchObjects` の戻り値に `context` と `isFirst` を含めて caller の `handleIncomingStream` で永続化するようにする
-  - 機能していなかった `if (buffer !== null)` ガードを削除する
-  - 複数チャンクにまたがる FETCH レスポンス (joining fetch でのキャッシュ取得等) で誤って "first object must have GROUP_ID_PRESENT flag set" エラーが発生して subscriber が異常終了するのを防ぐ
-  - @voluntas
-- [FIX] `waitForSubscriber` / `waitForFetcher` のタイムアウトでストリームが cancel されない問題を修正する (#0111)
-  - `handleIncomingStream` で `waitForSubscriber()` / `waitForFetcher()` が null を返した場合に `reader.cancel()` を呼んで peer に STOP_SENDING を送るようにする
-  - 不明な subscriber / fetcher 向けのデータストリームが silent に消費され続けるのを防ぐ
-  - @voluntas
-- [FIX] Joining Fetch 送信エラーで pendingFetch エントリがリークする問題を修正する (#0110)
-  - `sendJoiningFetch()` の bidi ストリーム作成 / 書き込みで例外が発生した場合に `pendingFetch` から該当エントリを削除し、`options.onError?.()` を呼ぶようにする
-  - 呼び出し元での fire-and-forget による Promise rejection の取りこぼしを防止する
-  - @voluntas
-- [FIX] データストリーム decode の例外がデータ不足とプロトコル違反を区別できない問題を修正する (#0109)
-  - `IncompleteDataError` (バッファ不足) と `ProtocolViolationError` (仕様違反) を `src/error.ts` に新設する
-  - `varint.ts` のデータ不足例外を `IncompleteDataError`、不正コードポイント例外を `ProtocolViolationError` に変更する
-  - `dataStream.ts` の decode 関数群 (`validateObjectStatus` / `decodeSubgroupHeader` / `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchHeader` / `decodeFetchObjectFields`) で投げる仕様違反例外を `ProtocolViolationError` に統一する
-  - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
-  - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
-  - @voluntas
-- [FIX] FORWARD / GROUP_ORDER パラメータの値域 MUST 検証を全受信経路で行う (#0124)
-  - draft-ietf-moq-transport-17 §9.3.6 / §9.3.10 に従い、0 / 1 (FORWARD) / 0x1 / 0x2 (GROUP_ORDER) 以外を `ProtocolViolationError` で拒否する
-  - `decodeMessageParameter` の `uint8` 経路に値域 validate を組み込み、SUBSCRIBE / PUBLISH / SUBSCRIBE_NAMESPACE / REQUEST_UPDATE / PUBLISH_OK / SUBSCRIBE_OK / FETCH 等のすべての受信経路で自動的に検証されるようにする
-  - `validateForwardValue` / `validateGroupOrderValue` の throw 型を `Error` から `ProtocolViolationError` に変更する
-  - PBT (`namespace.prop.ts` / `parameter.prop.ts` / `session.prop.ts` / `trackstatus.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) の `uint8ParameterArb` を type ごとに値域を絞る形に更新する
   - @voluntas
 - [CHANGE] Track Property 識別子を draft-17 §14.4 の正式名称に揃える (#0123)
   - `MOQTPropertyId.IMMUTABLE_EXTENSIONS` → `MOQTPropertyId.IMMUTABLE_PROPERTIES`
@@ -145,78 +95,12 @@
   - `TrackPropertyId.PUBLISHER_GROUP_ORDER_PREFERENCE` → `TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER`
   - 参照箇所 (`src/session.ts` / `src/subscriber.ts` / `src/message/types.ts` / `src/message/trackstatus.ts` 等) も連動して改名する
   - @voluntas
-- [FIX] IMMUTABLE_PROPERTIES の再帰禁止と Object 当たり 1 回の MUST 違反を `MalformedTrackError` で検出する (#0122)
-  - draft-ietf-moq-transport-17 §11.6 の "An Object contains an Immutable Properties property that contains another Immutable Properties key." と "An Object MUST NOT contain more than one instance of this property." を実装する
-  - §11.7 PRIOR_GROUP_ID_GAP / §11.8 PRIOR_OBJECT_ID_GAP の「Object 当たり 1 つだけ」MUST も検証する
-  - `src/error.ts` に `MalformedTrackError` を新設する (`DataStreamErrorCode.MALFORMED_TRACK = 0x12` に対応)
-  - `parseProperties` / `decodeImmutableProperties` で違反検出時に `MalformedTrackError` を throw する
-  - `properties.test.ts` に該当テストを追加し、PBT の `oddPropertyArb` から `IMMUTABLE_EXTENSIONS` を除外する
-  - @voluntas
-- [FIX] SUBSCRIBE_NAMESPACE 応答ストリームで MUST / SHOULD 検証を追加する (#0121)
-  - draft-ietf-moq-transport-17 §6.1 / §9.20 / §9.21 の規定に従う
-  - REQUEST_OK / REQUEST_ERROR を最初のフレームとして MUST 期待 (それ以外は `PROTOCOL_VIOLATION`)
-  - REQUEST_OK / REQUEST_ERROR の重複受信は `PROTOCOL_VIOLATION` (SHOULD 準拠)
-  - NAMESPACE_DONE が対応 NAMESPACE より先に来たら `PROTOCOL_VIOLATION` (受信済 suffix を Set で追跡)
-  - PUBLISH_BLOCKED (0x0F) を `default` で誤って `PROTOCOL_VIOLATION` する不具合を修正、`callbacks.onPublishBlocked?.(suffix, trackName)` で正規受信する
-  - `NamespaceSubscriptionCallbacks` に `onPublishBlocked` を追加する
-  - @voluntas
 - [CHANGE] SETUP の AUTHORITY / PATH を送信不可にし、受信時は INVALID_AUTHORITY / INVALID_PATH で閉じる (#0120)
   - draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2: WebTransport 使用時は AUTHORITY (0x05) / PATH (0x01) を MUST NOT 送信
   - `createSetup()` の options から `path` / `authority` を削除する (送信不可)
   - `Session#initialize()` の options から `path` / `authority` を削除する
   - SETUP 受信時に AUTHORITY / PATH を検出したら `INVALID_AUTHORITY` / `INVALID_PATH` でセッションを閉じる
   - `setup.test.ts` / `setup.prop.ts` を新方針に追従させる (PBT は PATH / AUTHORITY が決して含まれないことを fast-check で多数検証)
-  - @voluntas
-- [FIX] Track Property の値域を MUST レベルで検証する (#0119)
-  - draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5 で MUST 指定されている値域チェックを実装する
-    - `PUBLISHER_PRIORITY` (0x0E): 0-255 の範囲外は `ProtocolViolationError`
-    - `PUBLISHER_GROUP_ORDER_PREFERENCE` (0x22): 0x1 / 0x2 以外は `ProtocolViolationError`
-    - `DYNAMIC_GROUPS` (0x30): 0 / 1 以外は `ProtocolViolationError`
-  - `src/properties.ts` に `validateTrackPropertyValue` を新設し、`decodeProperties` / `parseProperties` / `decodeImmutableProperties` の偶数 ID 経路で呼び出す
-  - `properties.test.ts` に validator 単体と decode 経路を含むテストを追加する
-  - 影響を受ける PBT (`properties.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) で Track Property の ID を arbitrary から除外する (任意 value だとラウンドトリップで validate に弾かれるため)
-  - @voluntas
-- [FIX] `decodeFetchPayload` を switch 化し Fetch Type が 0x1/0x2/0x3 以外なら `ProtocolViolationError` を throw するようにする (#0118)
-  - draft-ietf-moq-transport-17 §9.14 の "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close the session with a PROTOCOL_VIOLATION." に準拠する
-  - moqt-js は Subscriber 専用クライアントで FETCH を受信しないためランタイム経路には影響しないが、PBT (`src/message/fetch.prop.ts`) にラウンドトリップ強化として不正値で `ProtocolViolationError` が throw されることを検証するテストを追加する
-  - @voluntas
-- [FIX] 未知 Message Parameter 受信時に PROTOCOL_VIOLATION でセッションを閉じるように修正する (#0117)
-  - `getMessageParameterValueEncoding()` の `throw new Error(...)` を `ProtocolViolationError` に変更する
-  - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
-  - 制御メッセージループで `ProtocolViolationError` を catch して `PROTOCOL_VIOLATION` でセッションを閉じる
-  - @voluntas
-- [FIX] `pendingSubgroupStreams` の buffer 配線を実装する (#0125)
-  - draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief period to handle reordering with the control message that establishes the Track Alias" に準拠する buffer を実装する
-  - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
-  - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
-  - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
-  - 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) にも `pendingSubgroup` を追加し `connect()` に伝搬する
-  - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
-  - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
-  - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する
-  - `subscriberReadyCallbacks` 関連を削除する
-  - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
-  - @voluntas
-- [FIX] devtools subscriber の Joining FETCH ドレインで複数 Subgroup ストリームの到着順を `(groupId, objectId)` 昇順へ並べ替える (#0129)
-  - `devtools/src/hooks/useSubscriber.ts` に `sortByGroupObject` ヘルパーを追加し、`onEnd` のバッファドレインと追加分処理に適用する
-  - 「stream 内では順番が保証されるのでソート不要」の誤コメントを draft-ietf-moq-transport-17 §10.3 / §10.4 に基づく実状コメントへ書き換える
-  - 直接処理経路 (`liveObjectProcessingChain`) は到着順のままで、複数 Subgroup 並行受信時の制限事項をコメントで明示する (リオーダーバッファ対応は将来 issue)
-  - @voluntas
-- [FIX] devtools subscriber の Joining FETCH `joiningFetchInProgress` 解除をドレインループ末尾に一本化する (#0128)
-  - `devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` を撤去する
-  - 解除点を Joining FETCH の `onEnd` ドレインループ末尾と `onError` のリセット 2 箇所に統一する
-  - LARGEST_OBJECT なし応答でも `src/session.ts` 側で `onEnd` が同期呼び出しされ、ドレインループ経由で正しい順序でフラグが下りるようにする
-  - ドレインループ実行中に到着するライブオブジェクトが直接 `handleObject` 経路へ漏れて順序が壊れる race を排除する
-  - @voluntas
-- [FIX] devtools subscriber の Joining FETCH 完了後に timestamp ベースで描画フレームを破棄しないようにする (#0127)
-  - `devtools/src/hooks/useSubscriber.ts` の `renderFrame` から `joiningFetchLastTimestamp` ゲートを撤去する
-  - `joiningFetchLastTimestamp` の更新箇所 (Joining FETCH onObject / onEnd / onError) と `SubscriberInstance` のフィールド宣言を削除する
-  - draft-ietf-moq-transport-17 §9.14.2.1 で FETCH と SUBSCRIBE が contiguous かつ non-overlapping に揃えられる責務は publisher 側にあり、subscriber 側で timestamp ベースの描画抑制を行う必要はないため
-  - @voluntas
-- [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
-  - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
-  - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
-  - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
   - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
@@ -275,13 +159,129 @@
   - LOC Header Extensions を LOC Properties にリネーム
   - Timestamp / Timescale プロパティを追加
   - @voluntas
-- [ADD] GOAWAY 送信後のタイムアウト処理を実装する (Section 3.6)
-  - タイムアウト経過時に GOAWAY_TIMEOUT でセッションを閉じる
+- [FIX] SUBSCRIBE_NAMESPACE の Length フィールドが可変長整数でエンコードされている問題を修正する (#0104)
+  - draft-ietf-moq-transport-17 §9.20 の Length (16-bit big-endian) に準拠させる
+  - 手動フレーミングをやめ `ControlStreamWriter.encode()` に委譲する
   - @voluntas
-- [ADD] devtools の Publisher パネルに Forward State を表示する (Section 5.1)
+- [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
+  - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
   - @voluntas
-- [ADD] Subscriber / Fetcher に trackProperties プロパティを追加する (Section 9.9, 9.15)
-  - SUBSCRIBE_OK / FETCH_OK で受信した Track Properties にアプリケーションからアクセスできるようにする
+- [FIX] Event Timeline デコードが §8.1 のインデックス必須を検証していない問題を修正する (#0069)
+  - `t`/`l`/`m` がちょうど 1 つであることを検証するようにする
+  - @voluntas
+- [FIX] cloneTracks で parentName 欠如や親不明を黙って無視する問題を修正する (#0070)
+  - `parentName` が欠如している場合にエラーをスローするようにする
+  - 親トラックが存在しない場合にエラーをスローするようにする
+  - @voluntas
+- [FIX] applyCatalogDelta の戻りが isComplete を引き継がない問題を修正する (#0071)
+  - draft-ietf-moq-msf-00 §5.1.7 の「isComplete は削除禁止」に準拠する
+  - @voluntas
+- [FIX] Subgroup Header の予約値で PROTOCOL_VIOLATION を発生させる (#0106)
+  - draft-ietf-moq-transport-17 §10.4.2 に従い、SUBGROUP_ID_MODE = 0b11 のタイプ値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信した場合は PROTOCOL_VIOLATION でセッションを閉じるようにする
+  - `src/dataStream.test.ts` に予約値および 0b00X1XXXX 形式に合わない不正タイプ値のデコードエラー検証を追加する
+  - @voluntas
+- [FIX] `Session.close()` が WebTransport を閉じずストリームをリークする問題を修正する (#0107)
+  - draft-ietf-moq-transport-17 §3.5 に従い、ユーザー起点の `close()` でも WebTransport セッションを閉じて peer に終了を通知するようにする
+  - `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` / `controlSendStream` の writer / reader を `close()` 時に閉じることで QUIC ストリームの FIN / RESET_STREAM を送出する
+  - `close(closeCode?, reason?)` を引数化し、`closeWithError` から共通化する
+  - @voluntas
+- [FIX] `decodeTrackNamespace` が Field Length=0 のフィールドを silently 受理する問題を修正する (#0108)
+  - draft-ietf-moq-transport-17 §2.3 の "Each Track Namespace Field Value MUST contain at least one byte." に準拠する
+  - `decodeTrackNamespace` で長さ 0 のフィールドを検出した場合にエラーをスローする
+  - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
+  - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
+  - @voluntas
+- [FIX] FETCH ストリームの decode context が複数チャンクで永続化されず誤って `ProtocolViolationError` を投げる問題を修正する (#0113)
+  - `processFetchObjects` の戻り値に `context` と `isFirst` を含めて caller の `handleIncomingStream` で永続化するようにする
+  - 機能していなかった `if (buffer !== null)` ガードを削除する
+  - 複数チャンクにまたがる FETCH レスポンス (joining fetch でのキャッシュ取得等) で誤って "first object must have GROUP_ID_PRESENT flag set" エラーが発生して subscriber が異常終了するのを防ぐ
+  - @voluntas
+- [FIX] `waitForSubscriber` / `waitForFetcher` のタイムアウトでストリームが cancel されない問題を修正する (#0111)
+  - `handleIncomingStream` で `waitForSubscriber()` / `waitForFetcher()` が null を返した場合に `reader.cancel()` を呼んで peer に STOP_SENDING を送るようにする
+  - 不明な subscriber / fetcher 向けのデータストリームが silent に消費され続けるのを防ぐ
+  - @voluntas
+- [FIX] Joining Fetch 送信エラーで pendingFetch エントリがリークする問題を修正する (#0110)
+  - `sendJoiningFetch()` の bidi ストリーム作成 / 書き込みで例外が発生した場合に `pendingFetch` から該当エントリを削除し、`options.onError?.()` を呼ぶようにする
+  - 呼び出し元での fire-and-forget による Promise rejection の取りこぼしを防止する
+  - @voluntas
+- [FIX] データストリーム decode の例外がデータ不足とプロトコル違反を区別できない問題を修正する (#0109)
+  - `IncompleteDataError` (バッファ不足) と `ProtocolViolationError` (仕様違反) を `src/error.ts` に新設する
+  - `varint.ts` のデータ不足例外を `IncompleteDataError`、不正コードポイント例外を `ProtocolViolationError` に変更する
+  - `dataStream.ts` の decode 関数群 (`validateObjectStatus` / `decodeSubgroupHeader` / `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchHeader` / `decodeFetchObjectFields`) で投げる仕様違反例外を `ProtocolViolationError` に統一する
+  - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
+  - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
+  - @voluntas
+- [FIX] FORWARD / GROUP_ORDER パラメータの値域 MUST 検証を全受信経路で行う (#0124)
+  - draft-ietf-moq-transport-17 §9.3.6 / §9.3.10 に従い、0 / 1 (FORWARD) / 0x1 / 0x2 (GROUP_ORDER) 以外を `ProtocolViolationError` で拒否する
+  - `decodeMessageParameter` の `uint8` 経路に値域 validate を組み込み、SUBSCRIBE / PUBLISH / SUBSCRIBE_NAMESPACE / REQUEST_UPDATE / PUBLISH_OK / SUBSCRIBE_OK / FETCH 等のすべての受信経路で自動的に検証されるようにする
+  - `validateForwardValue` / `validateGroupOrderValue` の throw 型を `Error` から `ProtocolViolationError` に変更する
+  - PBT (`namespace.prop.ts` / `parameter.prop.ts` / `session.prop.ts` / `trackstatus.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) の `uint8ParameterArb` を type ごとに値域を絞る形に更新する
+  - @voluntas
+- [FIX] IMMUTABLE_PROPERTIES の再帰禁止と Object 当たり 1 回の MUST 違反を `MalformedTrackError` で検出する (#0122)
+  - draft-ietf-moq-transport-17 §11.6 の "An Object contains an Immutable Properties property that contains another Immutable Properties key." と "An Object MUST NOT contain more than one instance of this property." を実装する
+  - §11.7 PRIOR_GROUP_ID_GAP / §11.8 PRIOR_OBJECT_ID_GAP の「Object 当たり 1 つだけ」MUST も検証する
+  - `src/error.ts` に `MalformedTrackError` を新設する (`DataStreamErrorCode.MALFORMED_TRACK = 0x12` に対応)
+  - `parseProperties` / `decodeImmutableProperties` で違反検出時に `MalformedTrackError` を throw する
+  - `properties.test.ts` に該当テストを追加し、PBT の `oddPropertyArb` から `IMMUTABLE_EXTENSIONS` を除外する
+  - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE 応答ストリームで MUST / SHOULD 検証を追加する (#0121)
+  - draft-ietf-moq-transport-17 §6.1 / §9.20 / §9.21 の規定に従う
+  - REQUEST_OK / REQUEST_ERROR を最初のフレームとして MUST 期待 (それ以外は `PROTOCOL_VIOLATION`)
+  - REQUEST_OK / REQUEST_ERROR の重複受信は `PROTOCOL_VIOLATION` (SHOULD 準拠)
+  - NAMESPACE_DONE が対応 NAMESPACE より先に来たら `PROTOCOL_VIOLATION` (受信済 suffix を Set で追跡)
+  - PUBLISH_BLOCKED (0x0F) を `default` で誤って `PROTOCOL_VIOLATION` する不具合を修正、`callbacks.onPublishBlocked?.(suffix, trackName)` で正規受信する
+  - `NamespaceSubscriptionCallbacks` に `onPublishBlocked` を追加する
+  - @voluntas
+- [FIX] Track Property の値域を MUST レベルで検証する (#0119)
+  - draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5 で MUST 指定されている値域チェックを実装する
+    - `PUBLISHER_PRIORITY` (0x0E): 0-255 の範囲外は `ProtocolViolationError`
+    - `PUBLISHER_GROUP_ORDER_PREFERENCE` (0x22): 0x1 / 0x2 以外は `ProtocolViolationError`
+    - `DYNAMIC_GROUPS` (0x30): 0 / 1 以外は `ProtocolViolationError`
+  - `src/properties.ts` に `validateTrackPropertyValue` を新設し、`decodeProperties` / `parseProperties` / `decodeImmutableProperties` の偶数 ID 経路で呼び出す
+  - `properties.test.ts` に validator 単体と decode 経路を含むテストを追加する
+  - 影響を受ける PBT (`properties.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts`) で Track Property の ID を arbitrary から除外する (任意 value だとラウンドトリップで validate に弾かれるため)
+  - @voluntas
+- [FIX] `decodeFetchPayload` を switch 化し Fetch Type が 0x1/0x2/0x3 以外なら `ProtocolViolationError` を throw するようにする (#0118)
+  - draft-ietf-moq-transport-17 §9.14 の "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close the session with a PROTOCOL_VIOLATION." に準拠する
+  - moqt-js は Subscriber 専用クライアントで FETCH を受信しないためランタイム経路には影響しないが、PBT (`src/message/fetch.prop.ts`) にラウンドトリップ強化として不正値で `ProtocolViolationError` が throw されることを検証するテストを追加する
+  - @voluntas
+- [FIX] 未知 Message Parameter 受信時に PROTOCOL_VIOLATION でセッションを閉じるように修正する (#0117)
+  - `getMessageParameterValueEncoding()` の `throw new Error(...)` を `ProtocolViolationError` に変更する
+  - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
+  - 制御メッセージループで `ProtocolViolationError` を catch して `PROTOCOL_VIOLATION` でセッションを閉じる
+  - @voluntas
+- [FIX] `pendingSubgroupStreams` の buffer 配線を実装する (#0125)
+  - draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief period to handle reordering with the control message that establishes the Track Alias" に準拠する buffer を実装する
+  - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
+  - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
+  - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
+  - 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) にも `pendingSubgroup` を追加し `connect()` に伝搬する
+  - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
+  - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
+  - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する
+  - `subscriberReadyCallbacks` 関連を削除する
+  - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
+  - @voluntas
+- [FIX] devtools subscriber の Joining FETCH ドレインで複数 Subgroup ストリームの到着順を `(groupId, objectId)` 昇順へ並べ替える (#0129)
+  - `devtools/src/hooks/useSubscriber.ts` に `sortByGroupObject` ヘルパーを追加し、`onEnd` のバッファドレインと追加分処理に適用する
+  - 「stream 内では順番が保証されるのでソート不要」の誤コメントを draft-ietf-moq-transport-17 §10.3 / §10.4 に基づく実状コメントへ書き換える
+  - 直接処理経路 (`liveObjectProcessingChain`) は到着順のままで、複数 Subgroup 並行受信時の制限事項をコメントで明示する (リオーダーバッファ対応は将来 issue)
+  - @voluntas
+- [FIX] devtools subscriber の Joining FETCH `joiningFetchInProgress` 解除をドレインループ末尾に一本化する (#0128)
+  - `devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` を撤去する
+  - 解除点を Joining FETCH の `onEnd` ドレインループ末尾と `onError` のリセット 2 箇所に統一する
+  - LARGEST_OBJECT なし応答でも `src/session.ts` 側で `onEnd` が同期呼び出しされ、ドレインループ経由で正しい順序でフラグが下りるようにする
+  - ドレインループ実行中に到着するライブオブジェクトが直接 `handleObject` 経路へ漏れて順序が壊れる race を排除する
+  - @voluntas
+- [FIX] devtools subscriber の Joining FETCH 完了後に timestamp ベースで描画フレームを破棄しないようにする (#0127)
+  - `devtools/src/hooks/useSubscriber.ts` の `renderFrame` から `joiningFetchLastTimestamp` ゲートを撤去する
+  - `joiningFetchLastTimestamp` の更新箇所 (Joining FETCH onObject / onEnd / onError) と `SubscriberInstance` のフィールド宣言を削除する
+  - draft-ietf-moq-transport-17 §9.14.2.1 で FETCH と SUBSCRIBE が contiguous かつ non-overlapping に揃えられる責務は publisher 側にあり、subscriber 側で timestamp ベースの描画抑制を行う必要はないため
+  - @voluntas
+- [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
+  - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
+  - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
+  - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
   - @voluntas
 - [FIX] REQUEST_UPDATE の応答 (REQUEST_OK) が resolve されない問題を修正する (Section 9.10)
   - handleRequestOk が PUBLISH_NAMESPACE の応答しか処理しておらず Promise が永久にハングしていた
@@ -349,6 +349,11 @@
 - [FIX] Datagram 受信時に datagramCallback がない場合に objectCallback にフォールバックするようにする
   - @voluntas
 - [FIX] waitForSubscriber のタイムアウト後に二重 resolve とコールバックリークが発生する問題を修正する
+  - @voluntas
+- [FIX] Message Parameter の uint8 値と malformed track 処理を修正する
+  - SUBSCRIBER_PRIORITY / GROUP_ORDER / FORWARD を varint ではなく uint8 として送信する
+  - Subgroup ストリーム処理で `MalformedTrackError` を握り潰さず MALFORMED_TRACK として受信ストリームを cancel する
+  - `handleIncomingStream()` の到達不能な Subgroup 分岐を削除する
   - @voluntas
 
 ### misc

@@ -158,6 +158,23 @@ export function validateForwardValue(value: number): void {
 }
 
 /**
+ * uint8 型の Message Parameter Value をエンコードする
+ *
+ * draft-ietf-moq-transport-17 Section 9.3.5 / 9.3.6 / 9.3.10:
+ * SUBSCRIBER_PRIORITY / GROUP_ORDER / FORWARD は varint ではなく uint8。
+ */
+export function encodeUint8ParameterValue(
+  value: number | bigint,
+  parameterName: string,
+): Uint8Array {
+  const numericValue = typeof value === "bigint" ? Number(value) : value;
+  if (!Number.isInteger(numericValue) || numericValue < 0 || numericValue > 0xff) {
+    throw new Error(`invalid ${parameterName} value: ${numericValue}, expected 0..255`);
+  }
+  return new Uint8Array([numericValue]);
+}
+
+/**
  * Track Namespace (Section 2.4.1)
  */
 export interface TrackNamespace {
