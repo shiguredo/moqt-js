@@ -11,6 +11,7 @@ import {
   decodeTrackNamespace,
   encodeParameters,
   decodeParameters,
+  encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
   validateTrackNameSize,
@@ -89,6 +90,25 @@ test("空の Parameters リストのエンコード・デコード", () => {
 
   assert.equal(decoded.length, 0);
   assert.equal(consumed, encoded.length);
+});
+
+test("uint8 Message Parameter Value を 1 バイトでエンコードする", () => {
+  const params = [
+    { type: 0x10, value: encodeUint8ParameterValue(1, "FORWARD") },
+    { type: 0x20, value: encodeUint8ParameterValue(255, "SUBSCRIBER_PRIORITY") },
+    { type: 0x22, value: encodeUint8ParameterValue(2, "GROUP_ORDER") },
+  ];
+
+  const encoded = encodeParameters(params);
+
+  assert.deepEqual([...encoded], [3, 0x10, 1, 0x10, 255, 0x02, 2]);
+});
+
+test("uint8 Message Parameter Value は範囲外を拒否する", () => {
+  assert.throws(
+    () => encodeUint8ParameterValue(256, "SUBSCRIBER_PRIORITY"),
+    /invalid SUBSCRIBER_PRIORITY value: 256, expected 0\.\.255/,
+  );
 });
 
 /**

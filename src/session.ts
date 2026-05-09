@@ -16,7 +16,9 @@ import {
 } from "./dataStream";
 export type { MoqtObject } from "./dataStream";
 import {
+  DataStreamErrorCode,
   IncompleteDataError,
+  MalformedTrackError,
   ProtocolViolationError,
   RequestError,
   type RequestErrorCode,
@@ -57,6 +59,7 @@ import {
   getMessageTypeName,
   getParameterLocationValue,
   encodeSubscriptionFilterParameter,
+  encodeUint8ParameterValue,
   validateForwardValue,
   FetchType,
   VersionSpecificParameterType,
@@ -1090,7 +1093,7 @@ export class SessionImpl implements Session {
     if (options?.forward === false) {
       parameters.push({
         type: VersionSpecificParameterType.FORWARD,
-        value: encodeVarint(0n),
+        value: encodeUint8ParameterValue(0, "FORWARD"),
       });
     }
 
@@ -1298,7 +1301,7 @@ export class SessionImpl implements Session {
     if (options?.subscriberPriority !== undefined) {
       parameters.push({
         type: VersionSpecificParameterType.SUBSCRIBER_PRIORITY,
-        value: encodeVarint(options.subscriberPriority),
+        value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
       });
     }
 
@@ -1307,7 +1310,7 @@ export class SessionImpl implements Session {
       const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
       parameters.push({
         type: VersionSpecificParameterType.GROUP_ORDER,
-        value: encodeVarint(groupOrderValue),
+        value: encodeUint8ParameterValue(groupOrderValue, "GROUP_ORDER"),
       });
     }
 
@@ -1333,7 +1336,7 @@ export class SessionImpl implements Session {
     if (options?.forward === false) {
       parameters.push({
         type: VersionSpecificParameterType.FORWARD,
-        value: encodeVarint(0n),
+        value: encodeUint8ParameterValue(0, "FORWARD"),
       });
     }
 
@@ -2794,7 +2797,7 @@ export class SessionImpl implements Session {
     if (options.forward !== undefined) {
       parameters.push({
         type: VersionSpecificParameterType.FORWARD,
-        value: encodeVarint(options.forward ? 1n : 0n),
+        value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
       });
     }
 
@@ -3694,11 +3697,6 @@ export class SessionImpl implements Session {
     let headerParsed = false;
     let isFetchStream = false;
 
-    // Subgroup ストリーム用の状態
-    let subgroupHeader: import("./dataStream").SubgroupHeader | null = null;
-    let subscriber: SubscriberImpl | null = null;
-    let previousObjectId = -1n;
-
     // Fetch ストリーム用の状態
     let fetchHeader: import("./dataStream").FetchHeader | null = null;
     let fetcher: FetcherImpl | null = null;
@@ -3771,7 +3769,6 @@ export class SessionImpl implements Session {
               // Subgroup ストリーム
               isFetchStream = false;
               const [header, consumed] = decodeSubgroupHeader(buffer);
-              subgroupHeader = header;
               const initialPayloadBuffer = buffer.slice(consumed);
               buffer = new Uint8Array(0);
               headerParsed = true;
@@ -3836,16 +3833,6 @@ export class SessionImpl implements Session {
             buffer = fetchResult.remainingBuffer;
             fetchContext = fetchResult.context;
             isFirstFetchObject = fetchResult.isFirst;
-          } else if (!isFetchStream && subscriber && subgroupHeader) {
-            // Subgroup オブジェクトをストリーミング処理
-            const result = this.processSubgroupObjects(
-              buffer,
-              subscriber,
-              subgroupHeader,
-              previousObjectId,
-            );
-            buffer = result.remainingBuffer;
-            previousObjectId = result.previousObjectId;
           }
         }
 
@@ -3878,6 +3865,11 @@ export class SessionImpl implements Session {
       // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
       if (err instanceof ProtocolViolationError) {
         this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      } else if (err instanceof MalformedTrackError) {
+        await this.cancelStreamQuiet(
+          reader,
+          `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${err.message}`,
+        );
       }
     } finally {
       this.statsSubscriberStreamsActive--;
