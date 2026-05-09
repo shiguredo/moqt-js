@@ -44,6 +44,7 @@ export {
   encodeParameters,
   encodeSubscriptionFilter,
   encodeSubscriptionFilterParameter,
+  encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
   getParameterLocationValue,
