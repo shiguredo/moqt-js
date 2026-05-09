@@ -62,7 +62,7 @@ import {
   encodeUint8ParameterValue,
   validateForwardValue,
   FetchType,
-  VersionSpecificParameterType,
+  MessageParameterType,
   type AuthorizationToken,
   type Location,
   type Parameter,
@@ -1083,7 +1083,7 @@ export class SessionImpl implements Session {
     // EXPIRES (0x08) - draft-ietf-moq-transport-17 Section 9.3.8 (EXPIRES Parameter)
     if (options?.expires !== undefined) {
       parameters.push({
-        type: VersionSpecificParameterType.EXPIRES,
+        type: MessageParameterType.EXPIRES,
         value: encodeVarint(options.expires),
       });
     }
@@ -1092,7 +1092,7 @@ export class SessionImpl implements Session {
     // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
     if (options?.forward === false) {
       parameters.push({
-        type: VersionSpecificParameterType.FORWARD,
+        type: MessageParameterType.FORWARD,
         value: encodeUint8ParameterValue(0, "FORWARD"),
       });
     }
@@ -1292,7 +1292,7 @@ export class SessionImpl implements Session {
     // https://github.com/moq-wg/moq-transport/pull/1450
     if (options?.deliveryTimeout !== undefined) {
       parameters.push({
-        type: VersionSpecificParameterType.DELIVERY_TIMEOUT,
+        type: MessageParameterType.DELIVERY_TIMEOUT,
         value: encodeVarint(options.deliveryTimeout),
       });
     }
@@ -1300,7 +1300,7 @@ export class SessionImpl implements Session {
     // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-17 Section 9.3.5 (SUBSCRIBER PRIORITY Parameter)
     if (options?.subscriberPriority !== undefined) {
       parameters.push({
-        type: VersionSpecificParameterType.SUBSCRIBER_PRIORITY,
+        type: MessageParameterType.SUBSCRIBER_PRIORITY,
         value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
       });
     }
@@ -1309,7 +1309,7 @@ export class SessionImpl implements Session {
     if (options?.groupOrder !== undefined) {
       const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
       parameters.push({
-        type: VersionSpecificParameterType.GROUP_ORDER,
+        type: MessageParameterType.GROUP_ORDER,
         value: encodeUint8ParameterValue(groupOrderValue, "GROUP_ORDER"),
       });
     }
@@ -1317,7 +1317,7 @@ export class SessionImpl implements Session {
     if (options?.newGroupRequest !== undefined) {
       // NEW_GROUP_REQUEST (0x32) - varint parameter
       parameters.push({
-        type: VersionSpecificParameterType.NEW_GROUP_REQUEST,
+        type: MessageParameterType.NEW_GROUP_REQUEST,
         value: encodeVarint(options.newGroupRequest),
       });
     }
@@ -1326,7 +1326,7 @@ export class SessionImpl implements Session {
     // https://github.com/moq-wg/moq-transport/pull/1447
     if (options?.rendezvousTimeout !== undefined) {
       parameters.push({
-        type: VersionSpecificParameterType.RENDEZVOUS_TIMEOUT,
+        type: MessageParameterType.RENDEZVOUS_TIMEOUT,
         value: encodeVarint(options.rendezvousTimeout),
       });
     }
@@ -1335,7 +1335,7 @@ export class SessionImpl implements Session {
     // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
     if (options?.forward === false) {
       parameters.push({
-        type: VersionSpecificParameterType.FORWARD,
+        type: MessageParameterType.FORWARD,
         value: encodeUint8ParameterValue(0, "FORWARD"),
       });
     }
@@ -2796,7 +2796,7 @@ export class SessionImpl implements Session {
     // forward が明示的に指定された場合のみ送信（undefined の場合は変更しない）
     if (options.forward !== undefined) {
       parameters.push({
-        type: VersionSpecificParameterType.FORWARD,
+        type: MessageParameterType.FORWARD,
         value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
       });
     }
@@ -2872,7 +2872,7 @@ export class SessionImpl implements Session {
         // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
         let forwardState = true;
         for (const param of decoded.parameters) {
-          if (param.type === VersionSpecificParameterType.FORWARD) {
+          if (param.type === MessageParameterType.FORWARD) {
             const forwardValue = param.value[0];
             validateForwardValue(forwardValue);
             forwardState = forwardValue !== 0;
@@ -2931,7 +2931,7 @@ export class SessionImpl implements Session {
         // LARGEST_OBJECT パラメータを探す
         let largestLocation: Location | undefined;
         for (const param of decoded.parameters) {
-          if (param.type === VersionSpecificParameterType.LARGEST_OBJECT) {
+          if (param.type === MessageParameterType.LARGEST_OBJECT) {
             largestLocation = getParameterLocationValue(param);
             break;
           }
@@ -3345,7 +3345,7 @@ export class SessionImpl implements Session {
 
     // LARGEST_OBJECT パラメータを探す
     for (const param of msg.parameters) {
-      if (param.type === VersionSpecificParameterType.LARGEST_OBJECT) {
+      if (param.type === MessageParameterType.LARGEST_OBJECT) {
         const location = getParameterLocationValue(param);
         // 対応する Subscriber の largestLocation を更新
         const subscriber = this.subscribers.get(streamRequestId);

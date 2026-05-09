@@ -15,7 +15,6 @@ export {
   PublishDoneStatusCode,
   isPublishDoneErrorStatus,
   SetupOptionType,
-  VersionSpecificParameterType,
 } from "./types";
 
 // Debug
