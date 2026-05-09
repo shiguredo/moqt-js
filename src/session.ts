@@ -1077,78 +1077,8 @@ export class SessionImpl implements Session {
       this.pendingPublish.set(requestId, { resolve, reject, impl });
     });
 
-    // Build parameters (Message Parameters - single hop scope)
-    const parameters: Parameter[] = [];
-
-    // EXPIRES (0x08) - draft-ietf-moq-transport-17 Section 9.3.8 (EXPIRES Parameter)
-    if (options?.expires !== undefined) {
-      parameters.push({
-        type: MessageParameterType.EXPIRES,
-        value: encodeVarint(options.expires),
-      });
-    }
-
-    // FORWARD (0x10) - draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
-    // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-    if (options?.forward === false) {
-      parameters.push({
-        type: MessageParameterType.FORWARD,
-        value: encodeUint8ParameterValue(0, "FORWARD"),
-      });
-    }
-
-    // Build track extensions (Track Extensions - end-to-end scope)
-    // draft-ietf-moq-transport-17: Track Properties を Extensions に移動
-    // https://github.com/moq-wg/moq-transport/pull/1390
-    const trackProperties: Property[] = [];
-
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-17 Section 11.1 (DELIVERY TIMEOUT)
-    // Track Property としての DELIVERY_TIMEOUT。
-    // 値が 0 の場合はタイムアウトなしを意味する。
-    // Subscriber が DELIVERY_TIMEOUT パラメータも指定した場合、
-    // 両方の非ゼロ値の最小値が使用される。
-    // https://github.com/moq-wg/moq-transport/pull/1450
-    if (options?.deliveryTimeout !== undefined) {
-      trackProperties.push({
-        id: TrackPropertyId.DELIVERY_TIMEOUT,
-        value: options.deliveryTimeout,
-      });
-    }
-
-    // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-17 Section 11.2 (MAX CACHE DURATION)
-    if (options?.maxCacheDuration !== undefined) {
-      trackProperties.push({
-        id: TrackPropertyId.MAX_CACHE_DURATION,
-        value: options.maxCacheDuration,
-      });
-    }
-
-    // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-17 Section 11.3 (DEFAULT PUBLISHER PRIORITY)
-    if (options?.publisherPriority !== undefined) {
-      trackProperties.push({
-        id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY,
-        value: BigInt(options.publisherPriority),
-      });
-    }
-
-    // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-17 Section 11.4 (DEFAULT PUBLISHER GROUP ORDER)
-    // draft-ietf-moq-transport-17: GROUP_ORDER から Publisher 向けの設定が分離
-    // https://github.com/moq-wg/moq-transport/pull/1390
-    if (options?.groupOrder !== undefined) {
-      const groupOrderValue = options.groupOrder === "Ascending" ? 0x01n : 0x02n;
-      trackProperties.push({
-        id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
-        value: groupOrderValue,
-      });
-    }
-
-    // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-17 Section 11.5 (DYNAMIC GROUPS)
-    if (options?.dynamicGroups === true) {
-      trackProperties.push({
-        id: TrackPropertyId.DYNAMIC_GROUPS,
-        value: 1n,
-      });
-    }
+    const parameters = buildPublishParameters(options);
+    const trackProperties = buildPublishTrackProperties(options);
 
     // PUBLISH メッセージを双方向ストリームで送信
     // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
@@ -1279,66 +1209,7 @@ export class SessionImpl implements Session {
       });
     });
 
-    // Build parameters
-    const parameters: Parameter[] = [];
-
-    // SUBSCRIPTION_FILTER (0x21) - draft-ietf-moq-transport-17 Section 9.3.7 (SUBSCRIPTION FILTER Parameter)
-    if (options?.filter !== undefined) {
-      parameters.push(encodeSubscriptionFilterParameter(options.filter));
-    }
-
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-17 Section 9.3.3 (DELIVERY TIMEOUT Parameter)
-    // 値が 0 の場合はタイムアウトなしを意味する。
-    // https://github.com/moq-wg/moq-transport/pull/1450
-    if (options?.deliveryTimeout !== undefined) {
-      parameters.push({
-        type: MessageParameterType.DELIVERY_TIMEOUT,
-        value: encodeVarint(options.deliveryTimeout),
-      });
-    }
-
-    // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-17 Section 9.3.5 (SUBSCRIBER PRIORITY Parameter)
-    if (options?.subscriberPriority !== undefined) {
-      parameters.push({
-        type: MessageParameterType.SUBSCRIBER_PRIORITY,
-        value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
-      });
-    }
-
-    // GROUP_ORDER (0x22) - draft-ietf-moq-transport-17 Section 9.3.6 (GROUP ORDER Parameter)
-    if (options?.groupOrder !== undefined) {
-      const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
-      parameters.push({
-        type: MessageParameterType.GROUP_ORDER,
-        value: encodeUint8ParameterValue(groupOrderValue, "GROUP_ORDER"),
-      });
-    }
-
-    if (options?.newGroupRequest !== undefined) {
-      // NEW_GROUP_REQUEST (0x32) - varint parameter
-      parameters.push({
-        type: MessageParameterType.NEW_GROUP_REQUEST,
-        value: encodeVarint(options.newGroupRequest),
-      });
-    }
-
-    // RENDEZVOUS_TIMEOUT (0x04) - draft-ietf-moq-transport-17 Section 9.3.4 (RENDEZVOUS TIMEOUT Parameter)
-    // https://github.com/moq-wg/moq-transport/pull/1447
-    if (options?.rendezvousTimeout !== undefined) {
-      parameters.push({
-        type: MessageParameterType.RENDEZVOUS_TIMEOUT,
-        value: encodeVarint(options.rendezvousTimeout),
-      });
-    }
-
-    // FORWARD (0x10) - draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
-    // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-    if (options?.forward === false) {
-      parameters.push({
-        type: MessageParameterType.FORWARD,
-        value: encodeUint8ParameterValue(0, "FORWARD"),
-      });
-    }
+    const parameters = buildSubscribeParameters(options);
 
     // SUBSCRIBE メッセージを双方向ストリームで送信
     // draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
@@ -2448,8 +2319,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-17 Section 10.4.2:
     // "The Object ID Delta + 1 is added to the previous Object ID ...
     //  The Object ID is the Object ID Delta if it's the first Object"
-    const objectIdDelta =
-      streamState.previousObjectId < 0n ? objectId : objectId - streamState.previousObjectId - 1n;
+    const objectIdDelta = calculateObjectIdDelta(streamState.previousObjectId, objectId);
 
     // Object fields を構築
     // draft-ietf-moq-transport-17 Section 10.4.2 Figure 29
@@ -2876,17 +2746,7 @@ export class SessionImpl implements Session {
         this.pendingPublish.delete(requestId);
         this.publishers.set(requestId, pending.impl);
 
-        // FORWARD パラメータを処理
-        // draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
-        let forwardState = true;
-        for (const param of decoded.parameters) {
-          if (param.type === MessageParameterType.FORWARD) {
-            const forwardValue = param.value[0];
-            validateForwardValue(forwardValue);
-            forwardState = forwardValue !== 0;
-            break;
-          }
-        }
+        const forwardState = extractForwardState(decoded.parameters);
         pending.impl.setForwardState(forwardState);
         pending.resolve(pending.impl);
 
@@ -2936,14 +2796,7 @@ export class SessionImpl implements Session {
       if (msg.type === MessageType.SUBSCRIBE_OK) {
         const decoded = decodeSubscribeOkPayload(msg.payload);
 
-        // LARGEST_OBJECT パラメータを探す
-        let largestLocation: Location | undefined;
-        for (const param of decoded.parameters) {
-          if (param.type === MessageParameterType.LARGEST_OBJECT) {
-            largestLocation = getParameterLocationValue(param);
-            break;
-          }
-        }
+        const largestLocation = extractLargestLocation(decoded.parameters);
 
         this.pendingSubscribe.delete(requestId);
 
@@ -3055,14 +2908,9 @@ export class SessionImpl implements Session {
         if (pending.startLocation) {
           const endLoc = decoded.endLocation;
           const startLoc = pending.startLocation;
-          if (
-            endLoc.group < startLoc.group ||
-            (endLoc.group === startLoc.group && endLoc.object < startLoc.object)
-          ) {
-            const error = new SessionError(
-              `FETCH_OK end location (${endLoc.group}:${endLoc.object}) is smaller than start location (${startLoc.group}:${startLoc.object})`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
-            );
+          const errorMessage = validateFetchOkEndLocation(startLoc, endLoc);
+          if (errorMessage !== undefined) {
+            const error = new SessionError(errorMessage, SessionErrorCode.PROTOCOL_VIOLATION);
             this.pendingFetch.delete(requestId);
             pending.reject(error);
             this.closeWithError(error);

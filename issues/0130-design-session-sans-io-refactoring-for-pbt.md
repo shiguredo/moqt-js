@@ -23,15 +23,15 @@ Phase 1 は動作変更を一切伴わない純粋リファクタリングであ
 
 全置き換えで動作変更は発生しない。inline コードと各純粋関数のロジックは完全同一である。置き換え後は各メソッド内の該当コードブロックを削除し、純粋関数呼び出しの代入に置き換える。
 
-| メソッド | 置き換え前（inline コード範囲） | 置き換え後 |
-|----------|-------------------------------|-----------|
-| `publish()` の Message Parameters | `session.ts:1081-1098` | `const parameters = buildPublishParameters(options)` |
-| `publish()` の Track Properties | `session.ts:1100-1151` | `const trackProperties = buildPublishTrackProperties(options)` |
-| `subscribe()` の Message Parameters | `session.ts:1282-1341` | `const parameters = buildSubscribeParameters(options)` |
-| `readSubscribeResponse()` の LARGEST_OBJECT 抽出 | `session.ts:2939-2946` | `const largestLocation = extractLargestLocation(decoded.parameters)` |
-| `readPublishResponse()` の FORWARD 抽出 | `session.ts:2881-2888` | `const forwardState = extractForwardState(decoded.parameters)`（配下の `pending.impl.setForwardState(forwardState)` は維持）。`extractForwardState` が内部で `validateForwardValue` 経由で `ProtocolViolationError` を throw した場合、既存の try/catch 節 (`session.ts:2910`) が捕捉し inline コードと同一の reject 処理を行うため動作変更はない |
-| `readFetchResponse()` の End Location 検証 | `session.ts:3055-3071` | `const errorMessage = validateFetchOkEndLocation(startLoc, endLoc)` を呼び出す。`pending.startLocation` が `undefined` の場合は呼び出しをスキップする（実装コードでは `if (pending.startLocation)` の truthy check）。戻り値が文字列の場合は `SessionError(PROTOCOL_VIOLATION)` を生成し、`pendingFetch.delete(requestId)` + `pending.reject(error)` + `closeWithError(error)` の既存処理を維持する |
-| `sendObjectInternal()` の Object ID Delta 計算 | `session.ts:2451-2452` | `const objectIdDelta = calculateObjectIdDelta(streamState.previousObjectId, objectId)` |
+| メソッド                                         | 置き換え前（inline コード範囲） | 置き換え後                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publish()` の Message Parameters                | `session.ts:1081-1098`          | `const parameters = buildPublishParameters(options)`                                                                                                                                                                                                                                                                                                                                                |
+| `publish()` の Track Properties                  | `session.ts:1100-1151`          | `const trackProperties = buildPublishTrackProperties(options)`                                                                                                                                                                                                                                                                                                                                      |
+| `subscribe()` の Message Parameters              | `session.ts:1282-1341`          | `const parameters = buildSubscribeParameters(options)`                                                                                                                                                                                                                                                                                                                                              |
+| `readSubscribeResponse()` の LARGEST_OBJECT 抽出 | `session.ts:2939-2946`          | `const largestLocation = extractLargestLocation(decoded.parameters)`                                                                                                                                                                                                                                                                                                                                |
+| `readPublishResponse()` の FORWARD 抽出          | `session.ts:2881-2888`          | `const forwardState = extractForwardState(decoded.parameters)`（配下の `pending.impl.setForwardState(forwardState)` は維持）。`extractForwardState` が内部で `validateForwardValue` 経由で `ProtocolViolationError` を throw した場合、既存の try/catch 節 (`session.ts:2910`) が捕捉し inline コードと同一の reject 処理を行うため動作変更はない                                                   |
+| `readFetchResponse()` の End Location 検証       | `session.ts:3055-3071`          | `const errorMessage = validateFetchOkEndLocation(startLoc, endLoc)` を呼び出す。`pending.startLocation` が `undefined` の場合は呼び出しをスキップする（実装コードでは `if (pending.startLocation)` の truthy check）。戻り値が文字列の場合は `SessionError(PROTOCOL_VIOLATION)` を生成し、`pendingFetch.delete(requestId)` + `pending.reject(error)` + `closeWithError(error)` の既存処理を維持する |
+| `sendObjectInternal()` の Object ID Delta 計算   | `session.ts:2451-2452`          | `const objectIdDelta = calculateObjectIdDelta(streamState.previousObjectId, objectId)`                                                                                                                                                                                                                                                                                                              |
 
 `handleIncomingStream()` のストリーム種別判定は置き換えない。予約型 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) の PROTOCOL_VIOLATION 送出責務が呼び出し側にあり、`classifyIncomingStreamType` はあくまで「実装側」の判別のみを返すため、`handleIncomingStream` 内の予約型チェックと組み合わせた既存構造を維持する。
 
@@ -66,9 +66,9 @@ PBT 1, 2 では `encodeParameters`（`src/message/parameter.ts`） / `decodePara
 - `Location` の raw arbitrary（`SubscriptionFilter` や `validateFetchOkEndLocation` で使用）:
   ```typescript
   const locationArb = fc.record({
-    group: fc.bigInt({min: 0n, max: 1000000n}),
-    object: fc.bigInt({min: 0n, max: 1000000n}),
-  })
+    group: fc.bigInt({ min: 0n, max: 1000000n }),
+    object: fc.bigInt({ min: 0n, max: 1000000n }),
+  });
   ```
 - `Location` の encoded arbitrary（`LARGEST_OBJECT` Parameter value の構築で使用）: `locationArb.map((loc) => encodeLocation(loc))` で VLS エンコードする。`encodeLocation` は `src/message/parameter.ts` の export。既存の `src/message/session.prop.ts` の `locationParameterArb` を参考にする
 - `Parameter[]` の任意構築（PBT 3/4 で使用）:
@@ -91,15 +91,17 @@ const subscriptionFilterArb = fc.oneof(
   fc.constant({ type: "NextGroupStart" as const }),
   fc.constant({ type: "LargestObject" as const }),
   locationArb.map((startLocation) => ({ type: "AbsoluteStart" as const, startLocation })),
-  fc.record({
-    startLocation: locationArb,
-    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
-  }).map(({ startLocation, endGroupDelta }) => ({
-    type: "AbsoluteRange" as const,
-    startLocation,
-    endGroupDelta,
-  })),
-)
+  fc
+    .record({
+      startLocation: locationArb,
+      endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+    })
+    .map(({ startLocation, endGroupDelta }) => ({
+      type: "AbsoluteRange" as const,
+      startLocation,
+      endGroupDelta,
+    })),
+);
 ```
 
 ### PBT 1: `buildPublishParameters` + `buildPublishTrackProperties`
