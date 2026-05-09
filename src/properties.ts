@@ -129,13 +129,6 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
   }
 }
 
-export const PropertyTypeRange = {
-  /** アプリケーション固有の Property Type 範囲の開始 */
-  APPLICATION_START: 0x3800n,
-  /** アプリケーション固有の Property Type 範囲の終了 */
-  APPLICATION_END: 0x3fffn,
-} as const;
-
 /**
  * Prior Group ID Gap
  *

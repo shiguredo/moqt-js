@@ -11,6 +11,10 @@
 
 ## develop
 
+- [UPDATE] `error.ts` と `grease.ts` の単体テストを追加する
+  - エラー型が name / message / code を保持することを検証する
+  - GREASE 値の生成・判定・負数拒否を検証する
+  - @voluntas
 - [ADD] Canvas ダミー映像で relay 経由 pub/sub の E2E テストを追加する (#0115)
   - `tests/e2e/pubsub.spec.ts` を新設し、2 つの BrowserContext (Publisher 用 / Subscriber 用) で同一 namespace に Publisher 起動 → 500 ms 後 Subscriber 起動の順で pub/sub させる
   - `tests/e2e/main.ts` に `publishCanvas` / `subscribeCanvas` を追加し、320x240 Canvas を `captureStream(30)` で MediaStream 化して `createMediaPublisher` / `createMediaSubscriber` (VP8) で送受する
@@ -75,6 +79,11 @@
   - @voluntas
 - [ADD] Subscriber / Fetcher に trackProperties プロパティを追加する (Section 9.9, 9.15)
   - SUBSCRIBE_OK / FETCH_OK で受信した Track Properties にアプリケーションからアクセスできるようにする
+  - @voluntas
+- [CHANGE] 未使用の公開 export を削除する
+  - `VersionSpecificParameterType` を削除し `MessageParameterType` に統一する
+  - GREASE ヘルパーとテスト専用の Property / Fetch 系ヘルパーを root export から削除する
+  - 未使用の `PropertyTypeRange` を削除する
   - @voluntas
 - [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
   - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
