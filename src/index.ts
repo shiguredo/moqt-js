@@ -56,9 +56,6 @@ export type { Fetcher } from "./fetcher";
 // Re-export error types
 export { MoqtError, SessionError, RequestError, SessionErrorCode, RequestErrorCode } from "./error";
 
-// Re-export GREASE (draft-ietf-moq-transport-17 Section 13 (Grease))
-export { isGreaseValue, generateGreaseValue } from "./grease";
-
 // Re-export LOC (draft-ietf-moq-loc)
 export * as LOC from "./loc";
 
@@ -109,23 +106,12 @@ export {
 export {
   MOQTPropertyId,
   TrackPropertyId,
-  PropertyTypeRange,
   type Property,
   type PriorGroupIdGap,
   type PriorObjectIdGap,
   type ImmutableProperties,
   type ParsedProperties,
-  encodeProperty,
   encodeProperties,
-  encodePriorGroupIdGap,
-  decodePriorGroupIdGap,
-  encodePriorObjectIdGap,
-  decodePriorObjectIdGap,
-  encodeImmutableProperties,
-  decodeImmutableProperties,
-  parseProperties,
-  calculateSkippedGroups,
-  calculateSkippedObjects,
 } from "./properties";
 
 // Re-export Data Stream types and functions
@@ -152,7 +138,6 @@ export {
   // Fetch Header
   FetchHeaderType,
   type FetchHeader,
-  encodeFetchHeader,
   decodeFetchHeader,
   // Fetch Object Fields
   FetchSerializationFlags,
@@ -160,10 +145,7 @@ export {
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,
-  encodeFetchObjectFields,
   decodeFetchObjectFields,
-  createFirstFetchObjectFlags,
-  createFetchObjectFlags,
 } from "./dataStream";
 
 /**

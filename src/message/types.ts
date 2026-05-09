@@ -151,19 +151,6 @@ export const MessageParameterType = {
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
 
 /**
- * @deprecated VersionSpecificParameterType は MessageParameterType に名称変更された
- *
- * draft-ietf-moq-transport-17:
- * - "Version Specific Parameters" を "Message Parameters" にリネーム
- * - Track Properties は Track Extensions に移動
- * https://github.com/moq-wg/moq-transport/pull/1411
- * https://github.com/moq-wg/moq-transport/pull/1390
- */
-export const VersionSpecificParameterType = MessageParameterType;
-
-export type VersionSpecificParameterType = MessageParameterType;
-
-/**
  * Group Order (Section 9.3.6 GROUP ORDER Parameter)
  */
 export const GroupOrder = {
