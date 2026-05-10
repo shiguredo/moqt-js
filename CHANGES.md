@@ -21,7 +21,7 @@
 
 ### misc
 
-- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139, #0140, #0141, #0142)
+- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139, #0140, #0141, #0142, #0143)
   - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
   - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
   - `useSubscriber` の `liveObjectProcessingChain` を `useRef` に変更し、レンダリング間で安定参照になるようにする
@@ -32,6 +32,7 @@
   - `DebugPanel` の `maxLogs` signal を定数 `MAX_LOGS` に変更する
   - `addSubscriber` の ID をモジュールスコープ・カウンタから `crypto.randomUUID().slice(0, 8)` ベースに変更する
   - `DebugPanel` のログ描画を `[...logs.value].reverse()` から逆方向ループに変更し、毎レンダリングの O(n) コピーを排除する
+  - `App.tsx` の `copyButtonText` をモジュールスコープ signal から `App` コンポーネント内の `useSignal` に移動する
   - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
