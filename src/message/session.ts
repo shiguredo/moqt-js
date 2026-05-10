@@ -11,6 +11,7 @@ import {
   encodeParameters,
 } from "./parameter";
 import { MessageType } from "./types";
+import { ProtocolViolationError } from "../error";
 
 /**
  * GOAWAY メッセージ (Section 9.5)
@@ -122,7 +123,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   //  If an endpoint receives a length exceeding the maximum,
   //  it MUST close the session with a PROTOCOL_VIOLATION."
   if (Number(uriLength) > 8192) {
-    throw new Error(`GOAWAY URI length exceeds maximum: ${uriLength} > 8192`);
+    throw new ProtocolViolationError(`GOAWAY URI length exceeds maximum: ${uriLength} > 8192`);
   }
 
   const uriBytes = data.slice(offset, offset + Number(uriLength));

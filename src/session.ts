@@ -10,6 +10,7 @@ import {
   decodeSubgroupHeader,
   encodeObjectDatagram,
   decodeObjectDatagram,
+  encodeObjectFields,
   DatagramType,
   type MoqtObject,
 } from "./dataStream";
@@ -2317,37 +2318,18 @@ export class SessionImpl implements Session {
     // Subgroup Header の PROPERTIES ビットを常に 1 に設定しているため、
     // 全オブジェクトに Properties フィールドを含める必要がある。
     // Properties がないオブジェクトには Properties Length = 0 を送信する。
-    const hasProperties = params.properties !== undefined && params.properties.length > 0;
-    const objectIdDeltaBytes = encodeVarint(objectIdDelta);
-    const payloadLenBytes = encodeVarint(params.payload.length);
-    const propertiesDataLength = hasProperties ? params.properties!.length : 0;
-    const propertiesLengthBytes = encodeVarint(propertiesDataLength);
-
-    const totalLength =
-      objectIdDeltaBytes.length +
-      propertiesLengthBytes.length +
-      propertiesDataLength +
-      payloadLenBytes.length +
-      params.payload.length;
-    const data = new Uint8Array(totalLength);
-    let offset = 0;
-
-    data.set(objectIdDeltaBytes, offset);
-    offset += objectIdDeltaBytes.length;
-
-    // Properties Length (常に送信)
-    data.set(propertiesLengthBytes, offset);
-    offset += propertiesLengthBytes.length;
-
-    // Properties Data (存在する場合のみ)
-    if (hasProperties) {
-      data.set(params.properties!, offset);
-      offset += propertiesDataLength;
-    }
-
-    data.set(payloadLenBytes, offset);
-    offset += payloadLenBytes.length;
-    data.set(params.payload, offset);
+    //
+    // encodeObjectFields を使用して、Object ID Delta / Properties / Payload Length /
+    // Object Status（ペイロード長 0 の場合）を正しくエンコードする。
+    // draft-ietf-moq-transport-17 §10.2.1.1:
+    // 「Zero-length objects explicitly encode the Normal status.」
+    const data = encodeObjectFields(
+      objectIdDelta,
+      BigInt(params.payload.length),
+      SubgroupHeaderType.FIRST_OBJ_EXT,
+      ObjectStatus.NORMAL,
+      params.properties,
+    );
 
     await streamState.writer.write(data);
 

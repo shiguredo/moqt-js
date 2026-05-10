@@ -19,6 +19,29 @@ import { encodeVarint } from "../varint";
 import { TrackPropertyId, type Property } from "../properties";
 
 // ============================================================================
+// 値域検証ヘルパー
+// ============================================================================
+
+/**
+ * 値が 0 以上であることを検証する
+ * draft-ietf-moq-transport-17 §9.3.3, §9.3.4, §9.3.8, §9.3.11, §11.1, §11.2
+ */
+function validateNonNegative(value: bigint, name: string): void {
+  if (value < 0n) {
+    throw new Error(`${name} must not be negative: ${value}`);
+  }
+}
+
+/**
+ * DEFAULT PUBLISHER PRIORITY の値域 (0-255) を検証する
+ * draft-ietf-moq-transport-17 §11.3:
+ * 「The value is from 0 to 255 and lower numbers get higher priority.
+ *  Priorities above 255 are invalid.」
+ */
+const DEFAULT_PUBLISHER_PRIORITY_MIN = 0;
+const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
+
+// ============================================================================
 // PUBLISH 用
 // ============================================================================
 
@@ -32,6 +55,7 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
 
   // EXPIRES (0x08) - draft-ietf-moq-transport-17 Section 9.3.8 (EXPIRES Parameter)
   if (options?.expires !== undefined) {
+    validateNonNegative(options.expires, "EXPIRES");
     parameters.push({
       type: MessageParameterType.EXPIRES,
       value: encodeVarint(options.expires),
@@ -60,6 +84,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
 
   // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-17 Section 11.1 (DELIVERY TIMEOUT)
   if (options?.deliveryTimeout !== undefined) {
+    validateNonNegative(options.deliveryTimeout, "DELIVERY_TIMEOUT");
     trackProperties.push({
       id: TrackPropertyId.DELIVERY_TIMEOUT,
       value: options.deliveryTimeout,
@@ -68,6 +93,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
 
   // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-17 Section 11.2 (MAX CACHE DURATION)
   if (options?.maxCacheDuration !== undefined) {
+    validateNonNegative(options.maxCacheDuration, "MAX_CACHE_DURATION");
     trackProperties.push({
       id: TrackPropertyId.MAX_CACHE_DURATION,
       value: options.maxCacheDuration,
@@ -76,6 +102,14 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
 
   // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-17 Section 11.3 (DEFAULT PUBLISHER PRIORITY)
   if (options?.publisherPriority !== undefined) {
+    if (
+      options.publisherPriority < DEFAULT_PUBLISHER_PRIORITY_MIN ||
+      options.publisherPriority > DEFAULT_PUBLISHER_PRIORITY_MAX
+    ) {
+      throw new Error(
+        `DEFAULT_PUBLISHER_PRIORITY must be in range ${DEFAULT_PUBLISHER_PRIORITY_MIN}-${DEFAULT_PUBLISHER_PRIORITY_MAX}: ${options.publisherPriority}`,
+      );
+    }
     trackProperties.push({
       id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY,
       value: BigInt(options.publisherPriority),
@@ -84,6 +118,11 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
 
   // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-17 Section 11.4 (DEFAULT PUBLISHER GROUP ORDER)
   if (options?.groupOrder !== undefined) {
+    if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
+      throw new Error(
+        `DEFAULT_PUBLISHER_GROUP_ORDER must be "Ascending" or "Descending": ${options.groupOrder as string}`,
+      );
+    }
     const groupOrderValue = options.groupOrder === "Ascending" ? 0x01n : 0x02n;
     trackProperties.push({
       id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
@@ -121,6 +160,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
 
   // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-17 Section 9.3.3
   if (options?.deliveryTimeout !== undefined) {
+    validateNonNegative(options.deliveryTimeout, "DELIVERY_TIMEOUT");
     parameters.push({
       type: MessageParameterType.DELIVERY_TIMEOUT,
       value: encodeVarint(options.deliveryTimeout),
@@ -137,6 +177,11 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
 
   // GROUP_ORDER (0x22) - draft-ietf-moq-transport-17 Section 9.3.6 (uint8)
   if (options?.groupOrder !== undefined) {
+    if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
+      throw new Error(
+        `GROUP_ORDER must be "Ascending" or "Descending": ${options.groupOrder as string}`,
+      );
+    }
     const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
     parameters.push({
       type: MessageParameterType.GROUP_ORDER,
@@ -146,6 +191,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
 
   // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-17 Section 9.3.11 (varint)
   if (options?.newGroupRequest !== undefined) {
+    validateNonNegative(options.newGroupRequest, "NEW_GROUP_REQUEST");
     parameters.push({
       type: MessageParameterType.NEW_GROUP_REQUEST,
       value: encodeVarint(options.newGroupRequest),
@@ -154,6 +200,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
 
   // RENDEZVOUS_TIMEOUT (0x04) - draft-ietf-moq-transport-17 Section 9.3.4
   if (options?.rendezvousTimeout !== undefined) {
+    validateNonNegative(options.rendezvousTimeout, "RENDEZVOUS_TIMEOUT");
     parameters.push({
       type: MessageParameterType.RENDEZVOUS_TIMEOUT,
       value: encodeVarint(options.rendezvousTimeout),

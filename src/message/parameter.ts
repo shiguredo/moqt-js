@@ -47,6 +47,15 @@ export const MAX_TRACK_NAMESPACE_FIELDS = 32;
  *  it MUST close the session with a PROTOCOL_VIOLATION"
  */
 export const MAX_REASON_PHRASE_LENGTH = 1024;
+/**
+ * Key-Value-Pair の Value 最大長（バイト）
+ *
+ * draft-ietf-moq-transport-17 §1.4.3:
+ * 「The maximum length of a value is 2^16-1 bytes. If an endpoint receives
+ *  a length larger than the maximum, it MUST close the session with a
+ *  PROTOCOL_VIOLATION.」
+ */
+export const MAX_KVP_VALUE_LENGTH = 65535;
 
 /**
  * MOQT Parameter
@@ -96,6 +105,11 @@ export function decodeParameter(data: Uint8Array, offset = 0): [Parameter, numbe
     // 奇数型: Length プレフィックス付き
     const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lengthConsumed;
+    if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+      throw new ProtocolViolationError(
+        `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+      );
+    }
     value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
     totalConsumed += Number(length);
   } else {
@@ -234,7 +248,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   // draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
   // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
   if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
     );
   }
@@ -251,7 +265,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
     //  Namespace Field Length of 0, it MUST close the session with a
     //  PROTOCOL_VIOLATION."
     if (elemLen === 0n) {
-      throw new Error("track namespace field length is zero");
+      throw new ProtocolViolationError("track namespace field length is zero");
     }
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
     elements.push(element);
@@ -260,7 +274,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   }
 
   if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
     );
   }
@@ -422,6 +436,11 @@ function decodeKeyValuePair(
     // 奇数型: Length プレフィックス付き
     const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lengthConsumed;
+    if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+      throw new ProtocolViolationError(
+        `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+      );
+    }
     value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
     totalConsumed += Number(length);
   } else {
@@ -640,6 +659,11 @@ function decodeMessageParameter(
     case "length-prefixed": {
       const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += lengthConsumed;
+      if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+        throw new ProtocolViolationError(
+          `message parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+        );
+      }
       value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
       totalConsumed += Number(length);
       break;

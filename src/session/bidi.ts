@@ -22,6 +22,7 @@ import {
   decodePublishOkPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
+  decodeRequestUpdatePayload,
   decodeSubscribeOkPayload,
   getParameterLocationValue,
   type Location,
@@ -451,6 +452,20 @@ export async function bidiReadRequestStreamMessages(
             }
             break;
           }
+          case MessageType.REQUEST_UPDATE: {
+            // draft-ietf-moq-transport-17 §9.10:
+            // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
+            //  subscription established with PUBLISH.」
+            // クライアントが Publisher の場合、サーバー (Subscriber 役) が
+            // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
+            const decoded = decodeRequestUpdatePayload(msg.payload);
+            const publisher = session.publishers.get(requestId);
+            if (publisher) {
+              const forwardState = extractForwardState(decoded.parameters);
+              publisher.setForwardState(forwardState);
+            }
+            break;
+          }
           default:
             session.closeWithError(
               new SessionError(
@@ -625,8 +640,12 @@ export async function bidiCancelSubscription(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      streamInfo.writer.releaseLock();
-      await streamInfo.stream.writable.close();
+      // draft-ietf-moq-transport-17 §5.1:
+      // 「The subscriber terminates a subscription ... by sending STOP_SENDING.」
+      // WebTransport では readable.cancel() が STOP_SENDING 相当。
+      // 両方向をリセットして subscription 解除を通知する。
+      await streamInfo.stream.readable.cancel("subscription cancelled");
+      void streamInfo.writer.abort("subscription cancelled");
     } catch {
       // ストリームが既に閉じている場合は無視
     }
@@ -650,8 +669,12 @@ export async function bidiCancelFetch(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      streamInfo.writer.releaseLock();
-      await streamInfo.stream.writable.close();
+      // draft-ietf-moq-transport-17 §5.2:
+      // 「It MUST send STOP_SENDING for the bidi request stream.」
+      // WebTransport では readable.cancel() が STOP_SENDING 相当。
+      // 両方向をリセットして fetch 解除を通知する。
+      await streamInfo.stream.readable.cancel("fetch cancelled");
+      void streamInfo.writer.abort("fetch cancelled");
     } catch {
       // ストリームが既に閉じている場合は無視
     }

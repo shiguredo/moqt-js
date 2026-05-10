@@ -1115,6 +1115,18 @@ export function decodeFetchObjectFields(
     ];
   }
 
+  // draft-ietf-moq-transport-17 §10.4.4 Table 6:
+  // 「When less than 128, the bits represent flags described below.
+  //  The following additional values are defined: 0x8C (End of Non-Existent Range),
+  //  0x10C (End of Unknown Range). Any other value is a PROTOCOL_VIOLATION.」
+  // 0x8C / 0x10C は上の End of Range チェックで処理済み。
+  // それ以外の 128 以上の値は不正。
+  if (flags >= 128) {
+    throw new ProtocolViolationError(
+      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, or 0x10C`,
+    );
+  }
+
   // Group ID
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
