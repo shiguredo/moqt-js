@@ -1068,9 +1068,7 @@ export class SessionImpl implements Session {
     );
 
     // Set up send callback
-    impl.onSendObject = (params: SendObjectParams) => {
-      void this.sendObject(impl, params);
-    };
+    impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
 
     // Set up datagram send callback
     impl.onSendDatagram = (params: SendDatagramParams) => {
