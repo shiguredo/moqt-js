@@ -81,6 +81,7 @@ import {
   concatChunks,
   cancelStreamQuiet,
 } from "./session/stream";
+import { isSessionClosedError } from "./session/errors";
 
 /**
  * Session state
@@ -851,11 +852,21 @@ export class SessionImpl implements Session {
     this.pendingSubgroupBuffer = new PendingSubgroupBuffer(options.pendingSubgroup);
 
     // WebTransport の切断を監視し、close 理由をコールバックに渡す
+    // draft-ietf-moq-transport-17 Section 3.5:
+    // peer 起点でセッションが閉じた場合、各ストリームの read は reject するが
+    // これは正常な終了通知である。read loop の catch 側で正しくスキップできるよう
+    // callbacks.close を呼ぶ前に sessionState を遷移させておく。
     this.transport.closed
       .then((closeInfo) => {
+        if (this.sessionState !== "closed") {
+          this.sessionState = "closed";
+        }
         this.callbacks.close?.(closeInfo);
       })
       .catch((error) => {
+        if (this.sessionState !== "closed") {
+          this.sessionState = "closed";
+        }
         this.callbacks.close?.({ closeCode: 0, reason: String(error) });
       });
   }
@@ -1663,9 +1674,16 @@ export class SessionImpl implements Session {
     } catch (error) {
       if (subscription.state === "active") {
         subscription.state = "closed";
-        callbacks.error?.(error instanceof Error ? error : new Error(String(error)));
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        // draft-ietf-moq-transport-17 Section 3.5:
+        // WebTransport セッション終了起源の read 中断は subscription の error には
+        // 流さない (session-level の close で通知される)。
+        // ただし subscribe Promise が未解決ならユーザーが await しているので reject する必要がある。
+        if (!isSessionClosedError(normalizedError)) {
+          callbacks.error?.(normalizedError);
+        }
         if (!resolved) {
-          reject(error instanceof Error ? error : new Error(String(error)));
+          reject(normalizedError);
         }
       }
     } finally {
@@ -2116,6 +2134,26 @@ export class SessionImpl implements Session {
   private closeWithError(error: SessionError): void {
     this.callbacks.error?.(error);
     void this.close(error.code, error.message);
+  }
+
+  /**
+   * read loop で発生したエラーを必要なときだけ callbacks.error に通知する
+   *
+   * draft-ietf-moq-transport-17 Section 3.5:
+   * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
+   * reject するが、これは正常な終了通知であり onError には流さない。
+   * sessionState がすでに connected でない、または error が WebTransport セッション
+   * 終了起源の場合はスキップし、それ以外のみ通知する。
+   */
+  private notifyErrorIfActive(error: Error): void {
+    if (this.sessionState !== "connected") {
+      return;
+    }
+    if (isSessionClosedError(error)) {
+      this.sessionState = "closed";
+      return;
+    }
+    this.callbacks.error?.(error);
   }
 
   private emitDebug(
@@ -2611,9 +2649,7 @@ export class SessionImpl implements Session {
           }
         }
       } catch (err) {
-        if (this.sessionState === "connected") {
-          this.callbacks.error?.(err as Error);
-        }
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
       } finally {
         reader.releaseLock();
       }
@@ -2845,9 +2881,7 @@ export class SessionImpl implements Session {
           },
           timestamp: Date.now(),
         });
-        if (this.sessionState === "connected") {
-          this.callbacks.error?.(err as Error);
-        }
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
       } finally {
         reader.releaseLock();
       }
@@ -2882,9 +2916,7 @@ export class SessionImpl implements Session {
           },
           timestamp: Date.now(),
         });
-        if (this.sessionState === "connected") {
-          this.callbacks.error?.(err as Error);
-        }
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
       } finally {
         reader.releaseLock();
       }
