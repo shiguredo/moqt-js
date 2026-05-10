@@ -659,61 +659,28 @@ export function DebugPanel() {
           </div>
         ) : (
           <div class="space-y-1">
-            {[...logs.value].reverse().map((log, reverseIndex) => {
-              const originalIndex = logs.value.length - 1 - reverseIndex;
-              const nextLog =
-                originalIndex < logs.value.length - 1 ? logs.value[originalIndex + 1] : null;
-              const previousTimestamp = nextLog ? nextLog.timestamp : null;
-              const isExpanded = expandedRows.has(originalIndex);
-              return (
-                <div
-                  key={originalIndex}
-                  class={`rounded cursor-pointer transition-colors hover:ring-2 hover:ring-slate-300 ${getLevelColor(log.level)}`}
-                  onClick={() => toggleRow(originalIndex)}
-                >
-                  <div class="flex gap-2 p-2 items-center">
-                    {/* 展開アイコン */}
-                    {log.data && (
-                      <svg
-                        class={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M9 5l7 7-7 7"
-                        />
-                      </svg>
-                    )}
-                    {!log.data && <div class="w-4" />}
-                    {/* タイムスタンプ列 */}
-                    <div class="flex flex-col text-xs whitespace-nowrap min-w-[140px]">
-                      <span class="text-slate-600 font-medium">
-                        {formatAbsoluteTime(log.timestamp)}
-                      </span>
-                      <div class="flex gap-2 text-slate-400">
-                        <span>{formatElapsedTime(log.timestamp)}</span>
-                        {previousTimestamp !== null && (
-                          <span class="text-slate-300">
-                            {formatDeltaTime(log.timestamp, previousTimestamp)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {/* メッセージ */}
-                    <span class="flex-1 break-all">{log.message}</span>
-                    {/* コピーボタン */}
-                    <button
-                      onClick={(event) => copyToClipboard(log, originalIndex, event)}
-                      class="p-1 hover:bg-white/50 rounded transition-colors"
-                      title="Copy to clipboard"
-                    >
-                      {copiedIndex === originalIndex ? (
+            {(() => {
+              // 最新のログを上に表示するため逆方向ループで描画する。
+              // 配列の reverse コピーを避けて O(n) 割り当てを削減する。
+              const elements = [];
+              const logsArray = logs.value;
+              for (let i = logsArray.length - 1; i >= 0; i--) {
+                const log = logsArray[i];
+                const originalIndex = i;
+                const nextLog = i < logsArray.length - 1 ? logsArray[i + 1] : null;
+                const previousTimestamp = nextLog ? nextLog.timestamp : null;
+                const isExpanded = expandedRows.has(originalIndex);
+                elements.push(
+                  <div
+                    key={originalIndex}
+                    class={`rounded cursor-pointer transition-colors hover:ring-2 hover:ring-slate-300 ${getLevelColor(log.level)}`}
+                    onClick={() => toggleRow(originalIndex)}
+                  >
+                    <div class="flex gap-2 p-2 items-center">
+                      {/* 展開アイコン */}
+                      {log.data && (
                         <svg
-                          class="w-4 h-4 text-green-600"
+                          class={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -722,71 +689,111 @@ export function DebugPanel() {
                             stroke-linecap="round"
                             stroke-linejoin="round"
                             stroke-width="2"
-                            d="M5 13l4 4L19 7"
-                          />
-                        </svg>
-                      ) : (
-                        <svg
-                          class="w-4 h-4 text-slate-400 hover:text-slate-600"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                            d="M9 5l7 7-7 7"
                           />
                         </svg>
                       )}
-                    </button>
-                  </div>
-                  {/* データ（展開時のみ表示） */}
-                  {(log.data ?? log.payload) && isExpanded && (
-                    <div class="mx-2 mb-2">
-                      {/* タブ */}
-                      {log.payload && (
-                        <div class="flex gap-1 mb-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setViewMode(originalIndex, "data");
-                            }}
-                            class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                              getViewMode(originalIndex) === "data"
-                                ? "bg-white/70 text-slate-700 font-medium"
-                                : "bg-white/30 text-slate-500 hover:bg-white/50"
-                            }`}
-                          >
-                            Data
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setViewMode(originalIndex, "binary");
-                            }}
-                            class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                              getViewMode(originalIndex) === "binary"
-                                ? "bg-white/70 text-slate-700 font-medium"
-                                : "bg-white/30 text-slate-500 hover:bg-white/50"
-                            }`}
-                          >
-                            Binary ({log.payload.length} bytes)
-                          </button>
+                      {!log.data && <div class="w-4" />}
+                      {/* タイムスタンプ列 */}
+                      <div class="flex flex-col text-xs whitespace-nowrap min-w-[140px]">
+                        <span class="text-slate-600 font-medium">
+                          {formatAbsoluteTime(log.timestamp)}
+                        </span>
+                        <div class="flex gap-2 text-slate-400">
+                          <span>{formatElapsedTime(log.timestamp)}</span>
+                          {previousTimestamp !== null && (
+                            <span class="text-slate-300">
+                              {formatDeltaTime(log.timestamp, previousTimestamp)}
+                            </span>
+                          )}
                         </div>
-                      )}
-                      {/* コンテンツ */}
-                      <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
-                        {getViewMode(originalIndex) === "binary" && log.payload
-                          ? formatHexDump(log.payload)
-                          : formatMessageData(log.data)}
-                      </pre>
+                      </div>
+                      {/* メッセージ */}
+                      <span class="flex-1 break-all">{log.message}</span>
+                      {/* コピーボタン */}
+                      <button
+                        onClick={(event) => copyToClipboard(log, originalIndex, event)}
+                        class="p-1 hover:bg-white/50 rounded transition-colors"
+                        title="Copy to clipboard"
+                      >
+                        {copiedIndex === originalIndex ? (
+                          <svg
+                            class="w-4 h-4 text-green-600"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            class="w-4 h-4 text-slate-400 hover:text-slate-600"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                            />
+                          </svg>
+                        )}
+                      </button>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                    {/* データ（展開時のみ表示） */}
+                    {(log.data ?? log.payload) && isExpanded && (
+                      <div class="mx-2 mb-2">
+                        {/* タブ */}
+                        {log.payload && (
+                          <div class="flex gap-1 mb-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewMode(originalIndex, "data");
+                              }}
+                              class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
+                                getViewMode(originalIndex) === "data"
+                                  ? "bg-white/70 text-slate-700 font-medium"
+                                  : "bg-white/30 text-slate-500 hover:bg-white/50"
+                              }`}
+                            >
+                              Data
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewMode(originalIndex, "binary");
+                              }}
+                              class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
+                                getViewMode(originalIndex) === "binary"
+                                  ? "bg-white/70 text-slate-700 font-medium"
+                                  : "bg-white/30 text-slate-500 hover:bg-white/50"
+                              }`}
+                            >
+                              Binary ({log.payload.length} bytes)
+                            </button>
+                          </div>
+                        )}
+                        {/* コンテンツ */}
+                        <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
+                          {getViewMode(originalIndex) === "binary" && log.payload
+                            ? formatHexDump(log.payload)
+                            : formatMessageData(log.data)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>,
+                );
+              }
+              return elements;
+            })()}
           </div>
         )}
       </div>
