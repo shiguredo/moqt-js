@@ -16,6 +16,7 @@ import { DecoderWrapper } from "../utils/DecoderWrapper";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
+import { useRef } from "preact/hooks";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
@@ -53,7 +54,8 @@ function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
 
 export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCanvasElement>) {
   // ライブオブジェクトの順次処理用 Promise チェーン
-  let liveObjectProcessingChain = Promise.resolve();
+  // useRef でレンダリング間で安定した参照を保持する
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -547,7 +549,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // 接続した場合、到着順 ≠ (groupId, objectId) 順となるが現状はリオーダー
             // バッファを持たない。devtools Publisher は単一 Subgroup のみ送出するため
             // 当面この経路で実害は出ない。複数 Subgroup 対応は別 issue で扱う。
-            liveObjectProcessingChain = liveObjectProcessingChain.then(() => handleObject(obj));
+            chainRef.current = chainRef.current.then(() => handleObject(obj));
           },
           end: () => {
             instance.status.value = "disconnected";
@@ -649,6 +651,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     instance.decoder.value = null;
     instance.decoderConfigured.value = false;
     instance.codec.value = "";
+
+    // Subscriber 再起動時に古い Promise チェーンを引き継がないようリセットする
+    chainRef.current = Promise.resolve();
 
     // Enable settings if no other subscriber/publisher is active
     if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {

@@ -21,9 +21,10 @@
 
 ### misc
 
-- [CHANGE] devtools の Preact + signals 利用を改善する (#0134)
+- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135)
   - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
   - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
+  - `useSubscriber` の `liveObjectProcessingChain` を `useRef` に変更し、レンダリング間で安定参照になるようにする
   - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
