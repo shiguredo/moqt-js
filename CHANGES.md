@@ -11,6 +11,13 @@
 
 ## develop
 
+- [FIX] WebTransport セッション終了起源の read エラーを `onError` に通知しないようにする (#0131)
+  - `SessionImpl` コンストラクタの `transport.closed` ハンドラで `callbacks.close` を呼ぶ前に `sessionState` を `"closed"` に遷移させる
+  - read loop の catch を補助メソッド `notifyErrorIfActive` に集約し、`sessionState !== "connected"` または `WebTransportError` の `source === "session"` (フォールバックでメッセージ判定) の場合は通知をスキップする
+  - `startControlMessageLoop` / `startIncomingStreamLoop` / `startDatagramLoop` / `startNamespaceStreamLoop` の 4 箇所を新ヘルパーに置き換える
+  - `isSessionClosedError` を `src/session/errors.ts` に純関数として切り出し、単体テストを追加する
+  - `tests/e2e/pubsub.spec.ts` の flaky (subscriber 側 `errors` に `"The session is closed."` が混入) を解消する
+  - @voluntas
 - [UPDATE] `error.ts` と `grease.ts` の単体テストを追加する
   - エラー型が name / message / code を保持することを検証する
   - GREASE 値の生成・判定・負数拒否を検証する
