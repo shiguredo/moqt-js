@@ -115,15 +115,16 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
 export const subscriberInstances = signal<Map<string, SubscriberInstance>>(new Map());
 
 /**
- * 次の Subscriber ID
- */
-let nextSubscriberId = 1;
-
-/**
  * 新しい Subscriber を追加する
+ *
+ * UUID v4 の先頭 8 文字を使った短縮 ID を生成する。devtools 内部識別子としての衝突
+ * リスクは十分に低い。HMR でモジュールが再評価された際にカウンタを引き継いで歯抜け
+ * 番号が発生する問題を回避する目的。
+ * `crypto.randomUUID()` は WebTransport の Secure Context 要件 (HTTPS / localhost)
+ * の範囲で常に利用可能なためフォールバックは設けない。
  */
 export function addSubscriber(): string {
-  const id = `subscriber-${nextSubscriberId++}`;
+  const id = `subscriber-${crypto.randomUUID().slice(0, 8)}`;
   const instance = createSubscriberInstance(id);
   const newMap = new Map(subscriberInstances.value);
   newMap.set(id, instance);
