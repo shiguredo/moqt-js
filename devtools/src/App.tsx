@@ -1,4 +1,4 @@
-import { signal, effect } from "@preact/signals";
+import { signal } from "@preact/signals";
 import { version } from "moqt-js";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { PublisherPanel } from "./components/PublisherPanel";
@@ -9,13 +9,6 @@ import { buildQueryString } from "./signals/connectionSettings";
 import * as sub from "./signals/subscriber";
 
 const copyButtonText = signal("Copy URL");
-
-// 初期化: 最初の Subscriber を作成
-effect(() => {
-  if (sub.subscriberIds.value.length === 0) {
-    sub.addSubscriber();
-  }
-});
 
 function copyUrlToClipboard(): void {
   const queryString = buildQueryString();
