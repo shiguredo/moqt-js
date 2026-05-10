@@ -16,7 +16,7 @@ interface LogEntry {
 
 // グローバルログストア
 export const logs = signal<LogEntry[]>([]);
-export const maxLogs = signal(1000);
+const MAX_LOGS = 1000;
 export const autoScroll = signal(true);
 
 // RFC 形式のフィールド名マッピング
@@ -181,7 +181,7 @@ export function addLog(
     payload,
   };
 
-  logs.value = [...logs.value, entry].slice(-maxLogs.value);
+  logs.value = [...logs.value, entry].slice(-MAX_LOGS);
 }
 
 // 絶対時刻をフォーマット（HH:MM:SS.mmm）
