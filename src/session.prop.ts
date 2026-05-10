@@ -337,7 +337,7 @@ test("validateFetchOkEndLocation: End < Start の場合はエラー文字列を�
       ({ startLocation, endLocation }) => {
         const result = validateFetchOkEndLocation(startLocation, endLocation);
         assert.isString(result);
-        assert.isTrue((result as string).length > 0);
+        assert.isTrue(result!.length > 0);
       },
     ),
   );

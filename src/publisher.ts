@@ -51,7 +51,16 @@ export interface Publisher {
    * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
    */
   readonly forwardState: boolean;
-  sendObject(params: SendObjectParams): void;
+  /**
+   * Subgroup ストリームでオブジェクトを送信する
+   *
+   * 戻り値は object が WebTransport stream に書き込まれて完了した時点で resolve する Promise。
+   * Catalog のように「relay に届いてキャッシュされてから後続 subscriber が参照する」必要がある
+   * オブジェクトは await することで、書き込み完了後に return できる。
+   * リアルタイムの音声・映像フレームのように落としても良い (もしくは後続のオブジェクトで上書きされる)
+   * ものは fire-and-forget で良いので、戻り値を `void` で破棄して構わない。
+   */
+  sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
    * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
@@ -85,7 +94,7 @@ export class PublisherImpl implements Publisher {
   private dataStreamCount = 0n;
 
   // Internal callbacks for session to use
-  onSendObject?: (params: SendObjectParams) => void;
+  onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: () => Promise<void>;
 
@@ -139,15 +148,20 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Send an object on this track
+   *
+   * 戻り値は object が WebTransport stream に書き込み完了した時点で resolve する Promise。
+   * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
+   * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
    */
-  sendObject(params: SendObjectParams): void {
+  sendObject(params: SendObjectParams): Promise<void> {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
 
     if (this.onSendObject) {
-      this.onSendObject(params);
+      return this.onSendObject(params);
     }
+    return Promise.resolve();
   }
 
   /**
