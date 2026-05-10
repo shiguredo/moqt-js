@@ -386,6 +386,11 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
 export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties {
   const [_id, idLen] = decodeVarint(data);
   const [length, lengthLen] = decodeVarint(data.subarray(idLen));
+  if (Number(length) > 65535) {
+    throw new ProtocolViolationError(
+      `immutable properties value length exceeds maximum: ${length} > 65535`,
+    );
+  }
   const innerData = data.subarray(idLen + lengthLen, idLen + lengthLen + Number(length));
 
   const extensions: Property[] = [];
@@ -480,6 +485,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       }
       // Immutable Extensions は奇数 ID なので length + bytes 形式
       const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      if (Number(length) > 65535) {
+        throw new ProtocolViolationError(
+          `properties value length exceeds maximum: ${length} > 65535`,
+        );
+      }
       const innerData = data.subarray(
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
@@ -583,6 +593,11 @@ export function decodeProperties(data: Uint8Array): Property[] {
     } else {
       // 奇数 ID: length + bytes 形式
       const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      if (Number(length) > 65535) {
+        throw new ProtocolViolationError(
+          `properties value length exceeds maximum: ${length} > 65535`,
+        );
+      }
       const extData = data.slice(
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
