@@ -1,4 +1,5 @@
-import { useRef, useEffect } from "preact/hooks";
+import { useRef } from "preact/hooks";
+import { useSignalEffect } from "@preact/signals";
 import { usePublisher } from "../hooks/usePublisher";
 import { formatBytes, formatBitrate } from "../utils/codec";
 import * as pub from "../signals/publisher";
@@ -14,14 +15,14 @@ export function PublisherPanel() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { togglePreview, startPublishing, stopPublishing } = usePublisher();
 
-  // Update video element when mediaStream changes
-  useEffect(() => {
+  // mediaStream の変化に追従して video 要素の srcObject を更新する
+  useSignalEffect(() => {
     if (videoRef.current && pub.mediaStream.value) {
       videoRef.current.srcObject = pub.mediaStream.value;
     } else if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-  }, [pub.mediaStream.value]);
+  });
 
   const getStatusClasses = () => {
     const base = "mb-4 px-4 py-2 rounded-lg text-sm";
