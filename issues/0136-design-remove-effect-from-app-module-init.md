@@ -28,6 +28,7 @@ effect(() => {
 1. `App.tsx` の 13-18 行目の `effect(...)` ブロックを削除する。
 2. `App.tsx` の 1 行目 `import { signal, effect } from "@preact/signals"` から `effect` を削除し `import { signal } from "@preact/signals"` に変更する (`signal` は `copyButtonText` で使用しているため残す)。
 3. `devtools/src/main.tsx` の `initTestApi()` の後、`render()` の前に以下を追加する:
+
    ```typescript
    import * as sub from "./signals/subscriber";
 
@@ -36,6 +37,7 @@ effect(() => {
      sub.addSubscriber();
    }
    ```
+
 4. `App.tsx` の `import * as sub from "./signals/subscriber"` は残す (他の箇所で使用しているため)。
 
 ## 影響範囲

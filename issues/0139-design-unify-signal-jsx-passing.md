@@ -33,16 +33,16 @@ devtools 全体で、JSX 内で signal を表示する書き方が混在して�
 
 ## 現状の混在状況
 
-| ファイル | signal そのまま | `.value` で読む | 混在度 | 修正要否 |
-|---|---|---|---|---|
-| `App.tsx` | 1 箇所 (`copyButtonText`) | 3 箇所 | 低 | `.value` に統一 |
-| `PublisherPanel.tsx` | 10 箇所 | 11 箇所 | **深刻** | `.value` に統一 |
-| `SubscriberPanel.tsx` | 0 箇所 | 1 箇所 (JSX 外) | なし | 修正不要 |
-| `DebugPanel.tsx` | 0 箇所 | 7+ 箇所 | なし | 修正不要 |
-| `ConnectionSettings.tsx` | 0 箇所 | 26+ 箇所 | なし | 修正不要 |
-| `webcodecs-devtools/` | 0 箇所 | 全箇所 | なし | 修正不要 |
-| `webtransport-devtools/App.tsx` | 1 箇所 (`copyButtonText`) | 0 箇所 | 低 | `.value` に統一 |
-| `webtransport-devtools/` 他 | 0 箇所 | 全箇所 | なし | 修正不要 |
+| ファイル                        | signal そのまま           | `.value` で読む | 混在度   | 修正要否        |
+| ------------------------------- | ------------------------- | --------------- | -------- | --------------- |
+| `App.tsx`                       | 1 箇所 (`copyButtonText`) | 3 箇所          | 低       | `.value` に統一 |
+| `PublisherPanel.tsx`            | 10 箇所                   | 11 箇所         | **深刻** | `.value` に統一 |
+| `SubscriberPanel.tsx`           | 0 箇所                    | 1 箇所 (JSX 外) | なし     | 修正不要        |
+| `DebugPanel.tsx`                | 0 箇所                    | 7+ 箇所         | なし     | 修正不要        |
+| `ConnectionSettings.tsx`        | 0 箇所                    | 26+ 箇所        | なし     | 修正不要        |
+| `webcodecs-devtools/`           | 0 箇所                    | 全箇所          | なし     | 修正不要        |
+| `webtransport-devtools/App.tsx` | 1 箇所 (`copyButtonText`) | 0 箇所          | 低       | `.value` に統一 |
+| `webtransport-devtools/` 他     | 0 箇所                    | 全箇所          | なし     | 修正不要        |
 
 ## 影響範囲
 

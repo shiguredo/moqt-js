@@ -287,35 +287,38 @@ function generateSubscriberStatsText(subscriberId: string): string {
   }
   const lines = [
     `=== Subscriber Statistics (${subscriberId}) ===`,
-    `Status: ${instance.status}`,
-    `Codec: ${instance.codec}`,
-    `Decoder State: ${instance.decoderState}`,
-    `Decoder Configured: ${instance.decoderConfigured}`,
-    `Objects Received: ${instance.objectsReceived}`,
-    `Objects With Extensions: ${instance.objectsWithExtensions}`,
-    `Bytes Received: ${formatBytes(instance.bytesReceived)}`,
-    `Current Group: ${instance.currentGroup}`,
-    `Chunks Created: ${instance.chunksCreated}`,
-    `Chunks Decoded: ${instance.chunksDecoded}`,
-    `Chunks Skipped: ${instance.chunksSkipped}`,
-    `Frames Decoded: ${instance.framesDecoded}`,
-    `Keyframes Decoded: ${instance.keyFramesDecoded}`,
-    `Decode Errors: ${instance.decodeErrors}`,
+    `Status: ${instance.status.value}`,
+    `Codec: ${instance.codec.value}`,
+    `Decoder State: ${instance.decoderState.value}`,
+    `Decoder Configured: ${instance.decoderConfigured.value}`,
+    `Objects Received: ${instance.objectsReceived.value}`,
+    `Objects With Extensions: ${instance.objectsWithExtensions.value}`,
+    `Bytes Received: ${formatBytes(instance.bytesReceived.value)}`,
+    `Current Group: ${instance.currentGroup.value}`,
+    `Chunks Created: ${instance.chunksCreated.value}`,
+    `Chunks Decoded: ${instance.chunksDecoded.value}`,
+    `Chunks Skipped: ${instance.chunksSkipped.value}`,
+    `Frames Decoded: ${instance.framesDecoded.value}`,
+    `Keyframes Decoded: ${instance.keyFramesDecoded.value}`,
+    `Decode Errors: ${instance.decodeErrors.value}`,
   ];
   // Joining Fetch 情報
-  if (instance.largestLocation) {
-    lines.push(`Largest Group: ${instance.largestLocation.group}`);
-    lines.push(`Largest Object: ${instance.largestLocation.object}`);
+  const largestLocation = instance.largestLocation.value;
+  if (largestLocation) {
+    lines.push(`Largest Group: ${largestLocation.group}`);
+    lines.push(`Largest Object: ${largestLocation.object}`);
   }
-  if (instance.joiningFetchStats) {
-    lines.push(`Joining Fetch Objects: ${instance.joiningFetchStats.objectsReceived}`);
-    lines.push(`Joining Fetch Bytes: ${formatBytes(instance.joiningFetchStats.bytesReceived)}`);
-    lines.push(`Joining Fetch Completed: ${instance.joiningFetchStats.completed}`);
-    lines.push(`Joining Fetch Buffered Live: ${instance.joiningFetchStats.bufferedLiveObjects}`);
+  const joiningFetchStats = instance.joiningFetchStats.value;
+  if (joiningFetchStats) {
+    lines.push(`Joining Fetch Objects: ${joiningFetchStats.objectsReceived}`);
+    lines.push(`Joining Fetch Bytes: ${formatBytes(joiningFetchStats.bytesReceived)}`);
+    lines.push(`Joining Fetch Completed: ${joiningFetchStats.completed}`);
+    lines.push(`Joining Fetch Buffered Live: ${joiningFetchStats.bufferedLiveObjects}`);
   }
   // セッション統計情報
-  if (instance.session) {
-    const stats = instance.session.getStatistics();
+  const session = instance.session.value;
+  if (session) {
+    const stats = session.getStatistics();
     lines.push(`--- Session Statistics ---`);
     lines.push(`Subgroup Headers Received: ${stats.subgroupHeadersReceived}`);
     lines.push(`Fetch Headers Received: ${stats.fetchHeadersReceived}`);
@@ -334,8 +337,9 @@ function generateSubscriberStatsText(subscriberId: string): string {
     lines.push(`Unidirectional Streams Received: ${stats.unidirectionalStreamsReceived}`);
   }
   // Catalog 情報
-  if (instance.catalog) {
-    lines.push(`Catalog: ${JSON.stringify(instance.catalog, null, 2)}`);
+  const catalog = instance.catalog.value;
+  if (catalog) {
+    lines.push(`Catalog: ${JSON.stringify(catalog, null, 2)}`);
   }
   return lines.join("\n");
 }

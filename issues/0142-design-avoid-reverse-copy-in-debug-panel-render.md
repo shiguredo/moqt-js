@@ -17,21 +17,19 @@ Model: Opus 4.7
 逆方向ループ案を採用する:
 
 ```tsx
-{(() => {
-  const elements = [];
-  for (let i = logs.value.length - 1; i >= 0; i--) {
-    const log = logs.value[i];
-    const nextLog = i < logs.value.length - 1 ? logs.value[i + 1] : null;
-    const previousTimestamp = nextLog ? nextLog.timestamp : null;
-    const isExpanded = expandedRows.has(i);
-    elements.push(
-      <div key={i} /* ... */ >
-        {/* i をそのまま originalIndex として使用 */}
-      </div>
-    );
-  }
-  return elements;
-})()}
+{
+  (() => {
+    const elements = [];
+    for (let i = logs.value.length - 1; i >= 0; i--) {
+      const log = logs.value[i];
+      const nextLog = i < logs.value.length - 1 ? logs.value[i + 1] : null;
+      const previousTimestamp = nextLog ? nextLog.timestamp : null;
+      const isExpanded = expandedRows.has(i);
+      elements.push(<div key={i} /* ... */>{/* i をそのまま originalIndex として使用 */}</div>);
+    }
+    return elements;
+  })();
+}
 ```
 
 - 配列のコピー・反転が不要になる。

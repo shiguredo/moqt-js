@@ -91,42 +91,33 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     ctx.drawImage(frame, 0, 0);
     frame.close();
 
-    if (instance) {
-      sub.updateSubscriber(subscriberId, {
-        framesDecoded: instance.framesDecoded + 1,
-      });
-    }
+    instance.framesDecoded.value = instance.framesDecoded.value + 1;
   };
 
   const handleObject = async (obj: MoqtObject): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
-    const decoderInstance = instance.decoder;
+    const decoderInstance = instance.decoder.value;
     if (!decoderInstance) {
       console.warn(`[${subscriberId}] handleObject: decoder is null`);
       return;
     }
 
-    sub.updateSubscriber(subscriberId, {
-      objectsReceived: instance.objectsReceived + 1,
-      bytesReceived: instance.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
-      currentGroup: Number(obj.groupId),
-      currentSubGroup: Number(obj.subgroupId ?? 0n),
-      decoderState: decoderInstance.state,
-    });
+    instance.objectsReceived.value = instance.objectsReceived.value + 1;
+    instance.bytesReceived.value =
+      instance.bytesReceived.value + obj.payload.length + (obj.properties?.length ?? 0);
+    instance.currentGroup.value = Number(obj.groupId);
+    instance.currentSubGroup.value = Number(obj.subgroupId ?? 0n);
+    instance.decoderState.value = decoderInstance.state;
 
     try {
       // LOC spec 準拠: extensions からメタデータを取得
       let isKeyFrame = false;
       let timestamp = 0;
-      let currentInstance = sub.getSubscriber(subscriberId);
-      if (!currentInstance) return;
 
       if (obj.properties && obj.properties.length > 0) {
-        sub.updateSubscriber(subscriberId, {
-          objectsWithExtensions: currentInstance.objectsWithExtensions + 1,
-        });
+        instance.objectsWithExtensions.value = instance.objectsWithExtensions.value + 1;
 
         const locProperties = LOC.decodeVideoProperties(obj.properties);
 
@@ -148,25 +139,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         data: obj.payload,
       });
 
-      currentInstance = sub.getSubscriber(subscriberId);
-      if (!currentInstance) return;
-      sub.updateSubscriber(subscriberId, {
-        chunksCreated: currentInstance.chunksCreated + 1,
-      });
+      instance.chunksCreated.value = instance.chunksCreated.value + 1;
 
       // デコーダが設定されていない場合はスキップ
-      if (!currentInstance.decoderConfigured) {
-        sub.updateSubscriber(subscriberId, {
-          chunksSkipped: currentInstance.chunksSkipped + 1,
-        });
+      if (!instance.decoderConfigured.value) {
+        instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
         return;
       }
 
       // Count keyframes
       if (isKeyFrame) {
-        sub.updateSubscriber(subscriberId, {
-          keyFramesDecoded: currentInstance.keyFramesDecoded + 1,
-        });
+        instance.keyFramesDecoded.value = instance.keyFramesDecoded.value + 1;
       }
 
       // Check decoder state before decoding
@@ -175,37 +158,26 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           `[${subscriberId}] handleObject: decoder not in configured state:`,
           decoderInstance.state,
         );
-        sub.updateSubscriber(subscriberId, {
-          decoderState: decoderInstance.state,
-          chunksSkipped: currentInstance.chunksSkipped + 1,
-        });
+        instance.decoderState.value = decoderInstance.state;
+        instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
         return;
       }
 
       decoderInstance.decode(chunk);
-      currentInstance = sub.getSubscriber(subscriberId);
-      if (currentInstance) {
-        sub.updateSubscriber(subscriberId, {
-          chunksDecoded: currentInstance.chunksDecoded + 1,
-        });
-      }
+      instance.chunksDecoded.value = instance.chunksDecoded.value + 1;
     } catch (error) {
       console.error(`[${subscriberId}] handleObject: failed to decode object:`, error);
-      const currentInstance = sub.getSubscriber(subscriberId);
-      if (currentInstance) {
-        sub.updateSubscriber(subscriberId, {
-          decodeErrors: currentInstance.decodeErrors + 1,
-        });
-      }
+      instance.decodeErrors.value = instance.decodeErrors.value + 1;
     }
   };
 
   const startSubscribing = async (): Promise<void> => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) return;
+
     try {
-      sub.updateSubscriber(subscriberId, {
-        status: "disconnected",
-        statusMessage: "Connecting...",
-      });
+      instance.status.value = "disconnected";
+      instance.statusMessage.value = "Connecting...";
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
@@ -236,30 +208,24 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             console.log(
               `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
             );
-            sub.updateSubscriber(subscriberId, {
-              status: "disconnected",
-              statusMessage: `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
-            });
+            instance.status.value = "disconnected";
+            instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             cleanupSubscriber();
           },
           error: (error) => {
-            sub.updateSubscriber(subscriberId, {
-              status: "error",
-              statusMessage: `Error: ${error.message}`,
-            });
+            instance.status.value = "error";
+            instance.statusMessage.value = `Error: ${error.message}`;
             cleanupSubscriber();
           },
           debug: (msg) => handleDebugMessage(subscriberId, msg),
         },
         connectOptions,
       );
-      sub.updateSubscriber(subscriberId, { session });
+      instance.session.value = session;
       settings.reliability.value = session.reliability;
 
-      sub.updateSubscriber(subscriberId, {
-        status: "connected",
-        statusMessage: "Connected, subscribing to catalog...",
-      });
+      instance.status.value = "connected";
+      instance.statusMessage.value = "Connected, subscribing to catalog...";
 
       // Catalog を購読してコーデック情報を取得
       let videoTrackFromCatalog: CatalogTrack | undefined;
@@ -283,7 +249,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 catalog,
               });
               console.log(`[${subscriberId}] Catalog received (${source}):`, catalog);
-              sub.updateSubscriber(subscriberId, { catalog });
+              instance.catalog.value = catalog;
 
               const videoTracks = getVideoTracks(catalog);
               if (videoTracks.length > 0) {
@@ -335,9 +301,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               },
             )
             .then((catalogSubscriberInstance) => {
-              sub.updateSubscriber(subscriberId, {
-                catalogSubscriber: catalogSubscriberInstance,
-              });
+              instance.catalogSubscriber.value = catalogSubscriberInstance;
             })
             .catch(reject);
         });
@@ -362,10 +326,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         throw new Error(`failed to get catalog: ${(error as Error).message}`);
       }
 
-      sub.updateSubscriber(subscriberId, {
-        status: "connected",
-        statusMessage: "Setting up decoder...",
-      });
+      instance.status.value = "connected";
+      instance.statusMessage.value = "Setting up decoder...";
 
       // Create decoder wrapper
       const useWorker = settings.useDedicatedWorker.value;
@@ -376,12 +338,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
         error: (error) => {
           console.error(`[${subscriberId}] Decoder error:`, error);
-          const instance = sub.getSubscriber(subscriberId);
-          if (instance) {
-            sub.updateSubscriber(subscriberId, {
-              decodeErrors: instance.decodeErrors + 1,
-            });
-          }
+          instance.decodeErrors.value = instance.decodeErrors.value + 1;
           // デコーダーをリセットして次のキーフレームを待つ
           console.log(`[${subscriberId}] Resetting decoder, waiting for next keyframe...`);
           void decoderInstance.reset();
@@ -408,38 +365,33 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
       await decoderInstance.configure(decoderConfig);
 
-      sub.updateSubscriber(subscriberId, {
-        decoder: decoderInstance,
-        decoderConfigured: true,
-        decoderState: decoderInstance.state,
-        codec: codecDisplay,
-      });
+      instance.decoder.value = decoderInstance;
+      instance.decoderConfigured.value = true;
+      instance.decoderState.value = decoderInstance.state;
+      instance.codec.value = codecDisplay;
 
       // Subscriber オプションを構築
-      const currentInstance = sub.getSubscriber(subscriberId);
-      const joiningFetchEnabled = currentInstance?.joiningFetchEnabled ?? false;
-      const newGroupRequestEnabled = currentInstance?.newGroupRequestEnabled ?? false;
+      const joiningFetchEnabled = instance.joiningFetchEnabled.value;
+      const newGroupRequestEnabled = instance.newGroupRequestEnabled.value;
 
-      sub.updateSubscriber(subscriberId, {
-        status: "connected",
-        statusMessage: "Subscribing...",
-        // Reset stats
-        framesDecoded: 0,
-        keyFramesDecoded: 0,
-        objectsReceived: 0,
-        currentGroup: 0,
-        currentSubGroup: 0,
-        bytesReceived: 0,
-        objectsWithExtensions: 0,
-        chunksCreated: 0,
-        chunksDecoded: 0,
-        chunksSkipped: 0,
-        decodeErrors: 0,
-        joiningFetchStats: null,
-        largestLocation: null,
-        joiningFetchInProgress: joiningFetchEnabled,
-        liveObjectBuffer: [],
-      });
+      instance.status.value = "connected";
+      instance.statusMessage.value = "Subscribing...";
+      // Reset stats
+      instance.framesDecoded.value = 0;
+      instance.keyFramesDecoded.value = 0;
+      instance.objectsReceived.value = 0;
+      instance.currentGroup.value = 0;
+      instance.currentSubGroup.value = 0;
+      instance.bytesReceived.value = 0;
+      instance.objectsWithExtensions.value = 0;
+      instance.chunksCreated.value = 0;
+      instance.chunksDecoded.value = 0;
+      instance.chunksSkipped.value = 0;
+      instance.decodeErrors.value = 0;
+      instance.joiningFetchStats.value = null;
+      instance.largestLocation.value = null;
+      instance.joiningFetchInProgress.value = joiningFetchEnabled;
+      instance.liveObjectBuffer.value = [];
 
       // Create subscriber
       const subscribeOptions: {
@@ -458,10 +410,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           type: "relative",
           start: 0n,
           onObject: (obj: MoqtObject) => {
-            const instance = sub.getSubscriber(subscriberId);
-            if (!instance) return;
-
-            const currentStats = instance.joiningFetchStats ?? {
+            const currentStats = instance.joiningFetchStats.value ?? {
               objectsReceived: 0,
               bytesReceived: 0,
               completed: false,
@@ -484,24 +433,19 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               );
             }
 
-            sub.updateSubscriber(subscriberId, {
-              joiningFetchLastLocation: { group: obj.groupId, object: obj.objectId },
-              joiningFetchStats: {
-                ...currentStats,
-                objectsReceived: currentStats.objectsReceived + 1,
-                bytesReceived:
-                  currentStats.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
-              },
-            });
+            instance.joiningFetchLastLocation.value = { group: obj.groupId, object: obj.objectId };
+            instance.joiningFetchStats.value = {
+              ...currentStats,
+              objectsReceived: currentStats.objectsReceived + 1,
+              bytesReceived:
+                currentStats.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
+            };
 
             // Joining Fetch から受信したオブジェクトは即座にデコード
             void handleObject(obj);
           },
           onEnd: () => {
-            const instance = sub.getSubscriber(subscriberId);
-            if (!instance) return;
-
-            const currentStats = instance.joiningFetchStats ?? {
+            const currentStats = instance.joiningFetchStats.value ?? {
               objectsReceived: 0,
               bytesReceived: 0,
               completed: false,
@@ -513,13 +457,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // OBJECT_DATAGRAM が並行配送されるため、到着順 ≠ (groupId, objectId) 順
             // となる可能性がある。デコーダへ流す前に (groupId, objectId) 昇順へ
             // 並べ替える。
-            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer]);
-            sub.updateSubscriber(subscriberId, {
-              liveObjectBuffer: [],
-            });
+            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
+            instance.liveObjectBuffer.value = [];
 
             // Joining Fetch で既に配信済みのオブジェクトをスキップ（重複除去）
-            const lastFetch = instance.joiningFetchLastLocation;
+            const lastFetch = instance.joiningFetchLastLocation.value;
             let objectsToProcess = bufferedObjects;
             if (lastFetch && bufferedObjects.length > 0) {
               const originalLength = bufferedObjects.length;
@@ -547,14 +489,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             );
 
             // 統計を更新
-            sub.updateSubscriber(subscriberId, {
-              joiningFetchLastLocation: null,
-              joiningFetchStats: {
-                ...currentStats,
-                completed: true,
-                bufferedLiveObjects: objectsToProcess.length,
-              },
-            });
+            instance.joiningFetchLastLocation.value = null;
+            instance.joiningFetchStats.value = {
+              ...currentStats,
+              completed: true,
+              bufferedLiveObjects: objectsToProcess.length,
+            };
 
             // バッファを順次デコード
             void (async () => {
@@ -564,39 +504,29 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
               // 処理中に追加されたオブジェクトがあれば処理
               // 追加分も複数 Subgroup から並行受信し得るため (groupId, objectId) で再ソートする
-              let inst = sub.getSubscriber(subscriberId);
-              while (inst && inst.liveObjectBuffer.length > 0) {
-                const remainingObjects = sortByGroupObject([...inst.liveObjectBuffer]);
-                sub.updateSubscriber(subscriberId, {
-                  liveObjectBuffer: [],
-                });
+              while (instance.liveObjectBuffer.value.length > 0) {
+                const remainingObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
+                instance.liveObjectBuffer.value = [];
                 for (const obj of remainingObjects) {
                   await handleObject(obj);
                 }
-                inst = sub.getSubscriber(subscriberId);
               }
 
               // 全てのバッファ処理が完了してから joiningFetchInProgress を false に
-              sub.updateSubscriber(subscriberId, {
-                joiningFetchInProgress: false,
-              });
+              instance.joiningFetchInProgress.value = false;
             })();
           },
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);
             // エラー時もバッファをクリアしてフラグをリセット
-            const instance = sub.getSubscriber(subscriberId);
-            if (instance) {
-              // デコーダーをキーフレーム待ち状態にリセット
-              if (instance.decoder) {
-                instance.decoder.resetKeyframeWait();
-              }
-              sub.updateSubscriber(subscriberId, {
-                joiningFetchInProgress: false,
-                liveObjectBuffer: [],
-                joiningFetchLastLocation: null,
-              });
+            // デコーダーをキーフレーム待ち状態にリセット
+            const decoderInstance = instance.decoder.value;
+            if (decoderInstance) {
+              decoderInstance.resetKeyframeWait();
             }
+            instance.joiningFetchInProgress.value = false;
+            instance.liveObjectBuffer.value = [];
+            instance.joiningFetchLastLocation.value = null;
           },
         };
       }
@@ -606,15 +536,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            const instance = sub.getSubscriber(subscriberId);
-            if (!instance) return;
-
             // Joining Fetch 中はライブオブジェクトをバッファ
-            if (instance.joiningFetchInProgress) {
-              const newBuffer = [...instance.liveObjectBuffer, obj];
-              sub.updateSubscriber(subscriberId, {
-                liveObjectBuffer: newBuffer,
-              });
+            if (instance.joiningFetchInProgress.value) {
+              instance.liveObjectBuffer.value = [...instance.liveObjectBuffer.value, obj];
               return;
             }
 
@@ -626,18 +550,14 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             liveObjectProcessingChain = liveObjectProcessingChain.then(() => handleObject(obj));
           },
           end: () => {
-            sub.updateSubscriber(subscriberId, {
-              status: "disconnected",
-              statusMessage: "Stream ended",
-            });
+            instance.status.value = "disconnected";
+            instance.statusMessage.value = "Stream ended";
             cleanupSubscriber();
           },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
-            sub.updateSubscriber(subscriberId, {
-              status: "error",
-              statusMessage: `Subscribe error: ${error.message}`,
-            });
+            instance.status.value = "error";
+            instance.statusMessage.value = `Subscribe error: ${error.message}`;
           },
         },
         subscribeOptions,
@@ -651,18 +571,14 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       // ドレインループ末尾で joiningFetchInProgress: false に遷移する。
       const largestLocation = subscriberInstance.largestLocation;
 
-      sub.updateSubscriber(subscriberId, {
-        subscriber: subscriberInstance,
-        status: "connected",
-        statusMessage: `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`,
-        largestLocation: largestLocation ?? null,
-      });
+      instance.subscriber.value = subscriberInstance;
+      instance.status.value = "connected";
+      instance.statusMessage.value = `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`;
+      instance.largestLocation.value = largestLocation ?? null;
     } catch (error) {
       console.error(`[${subscriberId}] Connection error:`, error);
-      sub.updateSubscriber(subscriberId, {
-        status: "error",
-        statusMessage: `Failed: ${(error as Error).message}`,
-      });
+      instance.status.value = "error";
+      instance.statusMessage.value = `Failed: ${(error as Error).message}`;
       cleanupSubscriber();
       // settingsDisabled は他の subscriber がアクティブかどうかで判断
       if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
@@ -674,26 +590,23 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
   const stopSubscribing = async (): Promise<void> => {
     // 二重実行防止
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance || instance.isStopping) {
+    if (!instance || instance.isStopping.value) {
       return;
     }
-    sub.updateSubscriber(subscriberId, {
-      isStopping: true,
-      status: "disconnected",
-      statusMessage: "Disconnecting...",
-    });
+    instance.isStopping.value = true;
+    instance.status.value = "disconnected";
+    instance.statusMessage.value = "Disconnecting...";
 
     try {
-      if (instance.subscriber && instance.subscriber.state === "active") {
-        await instance.subscriber.unsubscribe();
+      const subscriberInstance = instance.subscriber.value;
+      if (subscriberInstance && subscriberInstance.state === "active") {
+        await subscriberInstance.unsubscribe();
       }
     } finally {
       cleanupSubscriber();
-      sub.updateSubscriber(subscriberId, {
-        isStopping: false,
-        status: "disconnected",
-        statusMessage: "Ready to subscribe",
-      });
+      instance.isStopping.value = false;
+      instance.status.value = "disconnected";
+      instance.statusMessage.value = "Ready to subscribe";
     }
   };
 
@@ -702,9 +615,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     if (!instance) return;
 
     // Close decoder
-    if (instance.decoder) {
+    const decoderInstance = instance.decoder.value;
+    if (decoderInstance) {
       try {
-        instance.decoder.close();
+        decoderInstance.close();
       } catch {
         // Ignore
       }
@@ -721,21 +635,20 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
 
     // Close session
-    if (instance.session) {
-      instance.session.close().catch(() => {
+    const sessionInstance = instance.session.value;
+    if (sessionInstance) {
+      sessionInstance.close().catch(() => {
         // 既にクローズされている場合は無視
       });
     }
 
-    sub.updateSubscriber(subscriberId, {
-      session: null,
-      subscriber: null,
-      catalogSubscriber: null,
-      catalog: null,
-      decoder: null,
-      decoderConfigured: false,
-      codec: "",
-    });
+    instance.session.value = null;
+    instance.subscriber.value = null;
+    instance.catalogSubscriber.value = null;
+    instance.catalog.value = null;
+    instance.decoder.value = null;
+    instance.decoderConfigured.value = false;
+    instance.codec.value = "";
 
     // Enable settings if no other subscriber/publisher is active
     if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
@@ -745,7 +658,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
   const requestKeyframe = async (): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance?.subscriber || instance.subscriber.state !== "active") {
+    const subscriberInstance = instance?.subscriber.value;
+    if (!subscriberInstance || subscriberInstance.state !== "active") {
       console.warn(`[${subscriberId}] requestKeyframe: subscriber not active`);
       return;
     }
@@ -754,7 +668,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
       // draft-ietf-moq-transport-17 Section 9.3.11
       // NEW_GROUP_REQUEST = 0x32
-      await instance.subscriber.update({
+      await subscriberInstance.update({
         parameters: [
           {
             type: 0x32,

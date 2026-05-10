@@ -1,4 +1,4 @@
-import { signal, computed } from "@preact/signals";
+import { signal, computed, type Signal } from "@preact/signals";
 import type { Session, Subscriber, MoqtObject, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -18,47 +18,54 @@ export interface JoiningFetchStats {
 
 /**
  * 個々の Subscriber インスタンスの状態
+ *
+ * 各フィールドは Signal で保持し、フィールド単位で購読/更新する。
+ * Map の subscriberInstances は要素追加/削除のみで再生成し、
+ * フィールド更新では再生成しない (個別 Signal が再描画を駆動する)。
  */
 export interface SubscriberInstance {
+  // 不変フィールド (signal 不要)
   id: string;
-  session: Session | null;
-  subscriber: Subscriber | null;
-  catalogSubscriber: Subscriber | null;
-  catalog: Catalog | null;
-  decoder: DecoderWrapper | null;
-  decoderConfigured: boolean;
-  status: StatusType;
-  statusMessage: string;
-  codec: string;
-  // 停止処理中フラグ（二重実行防止）
-  isStopping: boolean;
+  // 参照フィールド (publisher と揃えるため signal 化)
+  session: Signal<Session | null>;
+  subscriber: Signal<Subscriber | null>;
+  catalogSubscriber: Signal<Subscriber | null>;
+  catalog: Signal<Catalog | null>;
+  decoder: Signal<DecoderWrapper | null>;
+  // 状態フィールド
+  decoderConfigured: Signal<boolean>;
+  status: Signal<StatusType>;
+  statusMessage: Signal<string>;
+  codec: Signal<string>;
+  // 停止処理中フラグ (二重実行防止)
+  isStopping: Signal<boolean>;
   // Joining Fetch 設定
-  joiningFetchEnabled: boolean;
-  // NEW_GROUP_REQUEST 設定（初回接続時に新しいグループを要求）
-  newGroupRequestEnabled: boolean;
+  joiningFetchEnabled: Signal<boolean>;
+  // NEW_GROUP_REQUEST 設定 (初回接続時に新しいグループを要求)
+  newGroupRequestEnabled: Signal<boolean>;
   // 統計
-  framesDecoded: number;
-  keyFramesDecoded: number;
-  objectsReceived: number;
-  currentGroup: number;
-  currentSubGroup: number;
-  bytesReceived: number;
+  framesDecoded: Signal<number>;
+  keyFramesDecoded: Signal<number>;
+  objectsReceived: Signal<number>;
+  currentGroup: Signal<number>;
+  currentSubGroup: Signal<number>;
+  bytesReceived: Signal<number>;
   // デコードパイプライン統計
-  objectsWithExtensions: number;
-  chunksCreated: number;
-  chunksDecoded: number;
-  chunksSkipped: number;
-  decodeErrors: number;
-  decoderState: string;
+  objectsWithExtensions: Signal<number>;
+  chunksCreated: Signal<number>;
+  chunksDecoded: Signal<number>;
+  chunksSkipped: Signal<number>;
+  decodeErrors: Signal<number>;
+  decoderState: Signal<string>;
   // Joining Fetch 統計
-  joiningFetchStats: JoiningFetchStats | null;
+  joiningFetchStats: Signal<JoiningFetchStats | null>;
   // largestLocation
-  largestLocation: { group: bigint; object: bigint } | null;
+  largestLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Joining Fetch 中のライブオブジェクトバッファ
-  joiningFetchInProgress: boolean;
-  liveObjectBuffer: MoqtObject[];
-  // Joining Fetch の最後のオブジェクトの location（重複除去用）
-  joiningFetchLastLocation: { group: bigint; object: bigint } | null;
+  joiningFetchInProgress: Signal<boolean>;
+  liveObjectBuffer: Signal<MoqtObject[]>;
+  // Joining Fetch の最後のオブジェクトの location (重複除去用)
+  joiningFetchLastLocation: Signal<{ group: bigint; object: bigint } | null>;
 }
 
 /**
@@ -67,40 +74,43 @@ export interface SubscriberInstance {
 export function createSubscriberInstance(id: string): SubscriberInstance {
   return {
     id,
-    session: null,
-    subscriber: null,
-    catalogSubscriber: null,
-    catalog: null,
-    decoder: null,
-    decoderConfigured: false,
-    status: "disconnected",
-    statusMessage: "Ready to subscribe",
-    codec: "",
-    isStopping: false,
-    joiningFetchEnabled: true,
-    newGroupRequestEnabled: false,
-    framesDecoded: 0,
-    keyFramesDecoded: 0,
-    objectsReceived: 0,
-    currentGroup: 0,
-    currentSubGroup: 0,
-    bytesReceived: 0,
-    objectsWithExtensions: 0,
-    chunksCreated: 0,
-    chunksDecoded: 0,
-    chunksSkipped: 0,
-    decodeErrors: 0,
-    decoderState: "unconfigured",
-    joiningFetchStats: null,
-    largestLocation: null,
-    joiningFetchInProgress: false,
-    liveObjectBuffer: [],
-    joiningFetchLastLocation: null,
+    session: signal<Session | null>(null),
+    subscriber: signal<Subscriber | null>(null),
+    catalogSubscriber: signal<Subscriber | null>(null),
+    catalog: signal<Catalog | null>(null),
+    decoder: signal<DecoderWrapper | null>(null),
+    decoderConfigured: signal(false),
+    status: signal<StatusType>("disconnected"),
+    statusMessage: signal("Ready to subscribe"),
+    codec: signal(""),
+    isStopping: signal(false),
+    joiningFetchEnabled: signal(true),
+    newGroupRequestEnabled: signal(false),
+    framesDecoded: signal(0),
+    keyFramesDecoded: signal(0),
+    objectsReceived: signal(0),
+    currentGroup: signal(0),
+    currentSubGroup: signal(0),
+    bytesReceived: signal(0),
+    objectsWithExtensions: signal(0),
+    chunksCreated: signal(0),
+    chunksDecoded: signal(0),
+    chunksSkipped: signal(0),
+    decodeErrors: signal(0),
+    decoderState: signal("unconfigured"),
+    joiningFetchStats: signal<JoiningFetchStats | null>(null),
+    largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
+    joiningFetchInProgress: signal(false),
+    liveObjectBuffer: signal<MoqtObject[]>([]),
+    joiningFetchLastLocation: signal<{ group: bigint; object: bigint } | null>(null),
   };
 }
 
 /**
  * 全ての Subscriber インスタンスを管理する Map
+ *
+ * Map は要素追加/削除のみで再生成する。インスタンス内のフィールド更新では再生成しない
+ * (フィールド単位の Signal で再描画を駆動する)。
  */
 export const subscriberInstances = signal<Map<string, SubscriberInstance>>(new Map());
 
@@ -131,18 +141,6 @@ export function removeSubscriber(id: string): void {
 }
 
 /**
- * Subscriber インスタンスを更新する
- */
-export function updateSubscriber(id: string, updates: Partial<SubscriberInstance>): void {
-  const instance = subscriberInstances.value.get(id);
-  if (!instance) return;
-
-  const newMap = new Map(subscriberInstances.value);
-  newMap.set(id, { ...instance, ...updates });
-  subscriberInstances.value = newMap;
-}
-
-/**
  * Subscriber インスタンスを取得する
  */
 export function getSubscriber(id: string): SubscriberInstance | undefined {
@@ -161,7 +159,7 @@ export const subscriberIds = computed(() => {
  */
 export const hasActiveSubscriber = computed(() => {
   for (const instance of subscriberInstances.value.values()) {
-    if (instance.subscriber !== null) {
+    if (instance.subscriber.value !== null) {
       return true;
     }
   }
