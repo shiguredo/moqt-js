@@ -1,6 +1,7 @@
 # session.ts の inline ロジックを純粋関数呼び出しに置き換え PBT を追加する
 
 Created: 2026-05-09
+Completed: 2026-05-10
 Model: DeepSeek v4-pro
 
 ## 概要
@@ -179,3 +180,24 @@ const subscriptionFilterArb = fc.oneof(
 - session.ts のさらなるクラス分割
 - パフォーマンス最適化
 - PUBLISH / SUBSCRIBE メッセージ全体の envelope（Track Namespace, Track Name, Track Alias を含むペイロード）のラウンドトリップ検証
+
+## 解決方法
+
+Phase 1:
+
+- `publish()` の inline Message Parameters 構築を `buildPublishParameters(options)` 呼び出しに置き換え
+- `publish()` の inline Track Properties 構築を `buildPublishTrackProperties(options)` 呼び出しに置き換え
+- `subscribe()` の inline Message Parameters 構築を `buildSubscribeParameters(options)` 呼び出しに置き換え
+- `readSubscribeResponse()` の inline LARGEST_OBJECT 抽出を `extractLargestLocation(decoded.parameters)` 呼び出しに置き換え
+- `readPublishResponse()` の inline FORWARD 抽出を `extractForwardState(decoded.parameters)` 呼び出しに置き換え
+- `readFetchResponse()` の inline End Location 検証を `validateFetchOkEndLocation(startLoc, endLoc)` 呼び出しに置き換え
+- `sendObjectInternal()` の inline Object ID Delta 計算を `calculateObjectIdDelta(previousObjectId, objectId)` 呼び出しに置き換え
+
+Phase 2:
+
+- `src/session.prop.ts` を新規作成し PBT 1〜7 を実装
+
+変更ファイル:
+
+- `src/session.ts`: 7 箇所の inline ロジックを純粋関数呼び出しに置き換え
+- `src/session.prop.ts`: 新規作成、8 関数の PBT を実装
