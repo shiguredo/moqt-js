@@ -11,6 +11,15 @@
 
 ## develop
 
+### misc
+
+- `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
+  - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
+  - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
+  - 顕在化した実 violation 24 件を `src/codec/index.ts` / `src/frameSource.ts` / `src/msf.ts` / `src/properties.ts` / `src/session.prop.ts` / `src/session.ts` / `src/session/stream.ts` / `src/session/errors.test.ts` / `src/pendingSubgroupBuffer.test.ts` / `playwright.config.ts` で修正する
+  - 最終的に lint 0 warnings / 0 errors (443 rules / 82 files) になる
+  - @voluntas
+
 - [FIX] WebTransport セッション終了起源の read エラーを `onError` に通知しないようにする (#0131)
   - `SessionImpl` コンストラクタの `transport.closed` ハンドラで `callbacks.close` を呼ぶ前に `sessionState` を `"closed"` に遷移させる
   - read loop の catch を補助メソッド `notifyErrorIfActive` に集約し、`sessionState !== "connected"` または `WebTransportError` の `source === "session"` (フォールバックでメッセージ判定) の場合は通知をスキップする

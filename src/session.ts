@@ -863,7 +863,7 @@ export class SessionImpl implements Session {
         }
         this.callbacks.close?.(closeInfo);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (this.sessionState !== "closed") {
           this.sessionState = "closed";
         }
@@ -2382,9 +2382,9 @@ export class SessionImpl implements Session {
         // タイムアウトした場合はストリームを放棄して処理を続行する。
         await Promise.race([
           streamState.writer.close(),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error("writer.close() timed out")), 5000),
-          ),
+          new Promise<void>((_, reject) => {
+            setTimeout(() => reject(new Error("writer.close() timed out")), 5000);
+          }),
         ]);
       } catch {
         // タイムアウトまたは既にクローズされている場合は無視
@@ -3294,9 +3294,7 @@ export class SessionImpl implements Session {
         }
 
         while (subscriber === null) {
-          if (pendingRead === null) {
-            pendingRead = reader.read();
-          }
+          pendingRead ??= reader.read();
           const event = await Promise.race([
             pendingRead.then((result) => ({ kind: "chunk" as const, result })),
             entry.notified.then((reason) => ({ kind: "notify" as const, reason })),
