@@ -21,13 +21,14 @@
 
 ### misc
 
-- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138)
+- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139)
   - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
   - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
   - `useSubscriber` の `liveObjectProcessingChain` を `useRef` に変更し、レンダリング間で安定参照になるようにする
   - `App.tsx` モジュールトップレベルの `effect()` を削除し、`main.tsx` で初期 Subscriber を生成するよう移動する
   - `PublisherPanel` の `useEffect(deps)` を `useSignalEffect` に置き換える
   - `DebugPanel` のオートスクロール処理 (`useEffect` 内の `effect`) を `useSignalEffect` に置き換える
+  - `App.tsx` / `PublisherPanel.tsx` / `webtransport-devtools/App.tsx` の JSX で signal を直接渡している箇所を `.value` 経由に統一する
   - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する

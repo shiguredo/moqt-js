@@ -79,7 +79,7 @@ export function PublisherPanel() {
 
       <div class="p-5">
         {/* Status Message */}
-        <div class={getStatusClasses()}>{pub.pubStatusMessage}</div>
+        <div class={getStatusClasses()}>{pub.pubStatusMessage.value}</div>
 
         {/* Forward State */}
         {pub.forwardState.value !== null && (
@@ -154,7 +154,7 @@ export function PublisherPanel() {
           </div>
           {pub.pubCodec.value && (
             <div class="absolute top-2 right-2 px-2 py-1 bg-green-500/80 rounded text-xs text-white font-medium">
-              {pub.pubCodec}
+              {pub.pubCodec.value}
             </div>
           )}
         </div>
@@ -201,19 +201,19 @@ export function PublisherPanel() {
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">framesEncoded</div>
-              <div class="text-xl font-bold text-green-600">{pub.framesEncoded}</div>
+              <div class="text-xl font-bold text-green-600">{pub.framesEncoded.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">chunksEncoded</div>
-              <div class="text-xl font-bold text-green-600">{pub.chunksEncoded}</div>
+              <div class="text-xl font-bold text-green-600">{pub.chunksEncoded.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">keyFrames</div>
-              <div class="text-xl font-bold text-green-600">{pub.keyFramesEncoded}</div>
+              <div class="text-xl font-bold text-green-600">{pub.keyFramesEncoded.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">encodeErrors</div>
-              <div class="text-xl font-bold text-red-600">{pub.encodeErrors}</div>
+              <div class="text-xl font-bold text-red-600">{pub.encodeErrors.value}</div>
             </div>
           </div>
 
@@ -223,11 +223,11 @@ export function PublisherPanel() {
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">objects</div>
-              <div class="text-xl font-bold text-green-600">{pub.objectsSent}</div>
+              <div class="text-xl font-bold text-green-600">{pub.objectsSent.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">withExtensions</div>
-              <div class="text-xl font-bold text-green-600">{pub.objectsWithExtensions}</div>
+              <div class="text-xl font-bold text-green-600">{pub.objectsWithExtensions.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">bytes</div>
@@ -239,11 +239,11 @@ export function PublisherPanel() {
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
               <div class="text-xs text-slate-500">currentGroup</div>
-              <div class="text-xl font-bold text-green-600">{pub.pubCurrentGroup}</div>
+              <div class="text-xl font-bold text-green-600">{pub.pubCurrentGroup.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">encoderState</div>
-              <div class="text-sm font-bold text-slate-600">{pub.encoderState}</div>
+              <div class="text-sm font-bold text-slate-600">{pub.encoderState.value}</div>
             </div>
           </div>
 
