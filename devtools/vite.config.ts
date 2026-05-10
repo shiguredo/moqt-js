@@ -17,6 +17,10 @@ export default defineConfig({
       "moqt-js": resolve(__dirname, "../src/index.ts"),
     },
   },
+  optimizeDeps: {
+    // alias でソースを直接参照するため、依存スキャンから除外
+    exclude: ["moqt-js"],
+  },
   build: {
     outDir: "dist",
     rollupOptions: {
