@@ -378,6 +378,15 @@
 - [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
   - @voluntas
 
+### misc
+
+- [UPDATE] `session.ts` の inline ロジックを純粋関数呼び出しに置き換える
+  - `publish()` / `subscribe()` のパラメータ構築 / Track Properties 構築、`readPublishResponse()` の FORWARD 抽出、`readSubscribeResponse()` の LARGEST_OBJECT 抽出、`readFetchResponse()` の End Location 検証、`sendObjectInternal()` の Object ID Delta 計算の 7 箇所を、既存の純粋関数呼び出しに置き換える
+  - @voluntas
+- [ADD] `session.ts` の純粋関数 8 個に対する PBT を追加する
+  - `src/session.prop.ts` に `buildPublishParameters` / `buildPublishTrackProperties` / `buildSubscribeParameters` / `extractLargestLocation` / `extractForwardState` / `validateFetchOkEndLocation` / `classifyIncomingStreamType` / `calculateObjectIdDelta` のプロパティベーステストを実装する
+  - @voluntas
+
 ## 2026.1.0
 
 **リリース日**: 2026-01-06
