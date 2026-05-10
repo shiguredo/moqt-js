@@ -487,7 +487,7 @@ export async function encodeMediaTimeline(
     return encoded;
   }
 
-  return await compressWithGzip(encoded);
+  return compressWithGzip(encoded);
 }
 
 /**
@@ -577,7 +577,7 @@ export async function encodeEventTimeline(
     return encoded;
   }
 
-  return await compressWithGzip(encoded);
+  return compressWithGzip(encoded);
 }
 
 /**
@@ -685,7 +685,7 @@ async function compressWithGzip(data: Uint8Array): Promise<Uint8Array> {
     throw new Error("gzip compression is not supported in this runtime");
   }
 
-  return await readCompressedStream(data, new CompressionStream("gzip"));
+  return readCompressedStream(data, new CompressionStream("gzip"));
 }
 
 async function decompressWithGzip(data: Uint8Array): Promise<Uint8Array> {
@@ -693,7 +693,7 @@ async function decompressWithGzip(data: Uint8Array): Promise<Uint8Array> {
     throw new Error("gzip decompression is not supported in this runtime");
   }
 
-  return await readCompressedStream(data, new DecompressionStream("gzip"));
+  return readCompressedStream(data, new DecompressionStream("gzip"));
 }
 
 async function readCompressedStream(

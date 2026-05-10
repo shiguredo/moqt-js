@@ -77,7 +77,7 @@ function createVideoFrameSourceWithCallback(videoTrack: MediaStreamTrack): Video
 
   const readable = new ReadableStream<VideoFrame>({
     start(controller): void {
-      video.play().catch((error) => {
+      video.play().catch((error: unknown) => {
         controller.error(error);
       });
 

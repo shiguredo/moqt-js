@@ -125,7 +125,6 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
     if (value !== 0n && value !== 1n) {
       throw new ProtocolViolationError(`invalid dynamic groups: ${value}, expected 0 or 1`);
     }
-    return;
   }
 }
 

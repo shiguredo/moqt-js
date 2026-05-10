@@ -68,7 +68,7 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
           if (closedAt !== -1) {
             // 不変条件: closed 後の sendObject は必ずエラー
             try {
-              publisher.sendObject({
+              void publisher.sendObject({
                 groupId: op.groupId,
                 objectId: op.objectId,
                 payload: new Uint8Array([1, 2, 3]),
@@ -78,7 +78,7 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
               sendErrorCount++;
             }
           } else {
-            publisher.sendObject({
+            void publisher.sendObject({
               groupId: op.groupId,
               objectId: op.objectId,
               payload: new Uint8Array([1, 2, 3]),

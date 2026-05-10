@@ -127,7 +127,9 @@ test("notifyAlias で該当 trackAlias の entry のみ通知される", async (
   // entryB は未通知 (Promise.race でタイムアウトを使って確認)
   const winner = await Promise.race([
     entryB.notified.then((r) => ({ done: true as const, reason: r })),
-    new Promise<{ done: false }>((resolve) => setTimeout(() => resolve({ done: false }), 30)),
+    new Promise<{ done: false }>((resolve) => {
+      setTimeout(() => resolve({ done: false }), 30);
+    }),
   ]);
   assert.isFalse(winner.done);
 });

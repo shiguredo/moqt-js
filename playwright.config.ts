@@ -1,12 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 import { existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 // Node 20.12+ の組み込み API で .env を読み込む
 // dotenv パッケージへの依存を避ける
-const here = dirname(fileURLToPath(import.meta.url));
-const envFile = resolve(here, ".env");
+const envFile = resolve(import.meta.dirname, ".env");
 if (existsSync(envFile)) {
   process.loadEnvFile(envFile);
 }

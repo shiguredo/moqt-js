@@ -358,7 +358,12 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const payload = encodeCatalog(catalog);
 
-    this.catalogPublisher.sendObject({
+    // Catalog object が WebTransport stream に書き込み完了するまで await する。
+    // draft-ietf-moq-transport-17 §9.14.2: Joining Fetch は object が publish されていなければ
+    // INVALID_RANGE で REQUEST_ERROR を返す MUST。fire-and-forget だと publisher.start() の
+    // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
+    // 書き込み完了してから return する。
+    await this.catalogPublisher.sendObject({
       groupId: 0,
       objectId: 0,
       payload,
@@ -567,7 +572,8 @@ class MediaPublisherImpl implements MediaPublisher {
     this.audioStats.bytesSent += payload.length + properties.length;
     this.audioStats.currentGroupId = this.audioGroupId;
 
-    this.audioPublisher.sendObject({
+    // 音声フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
+    void this.audioPublisher.sendObject({
       groupId: this.audioGroupId,
       objectId: this.audioObjectId++,
       payload,
@@ -609,7 +615,8 @@ class MediaPublisherImpl implements MediaPublisher {
     this.videoStats.bytesSent += payload.length + properties.length;
     this.videoStats.currentGroupId = this.videoGroupId;
 
-    this.videoPublisher.sendObject({
+    // 映像フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
+    void this.videoPublisher.sendObject({
       groupId: this.videoGroupId,
       objectId: this.videoObjectId++,
       payload,

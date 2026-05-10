@@ -17,7 +17,9 @@ test("isSessionClosedError: 関係ないメッセージのエラーは false", (
 });
 
 test("isSessionClosedError: 空メッセージのエラーは false", () => {
-  const error = new Error("");
+  // 空メッセージの Error が message.includes 経路で false になることを検証する
+  const error = new Error("placeholder");
+  error.message = "";
   assert.isFalse(isSessionClosedError(error));
 });
 
@@ -28,7 +30,7 @@ test("isSessionClosedError: WebTransportError 互換オブジェクト (source: 
     source: string;
     constructor(message: string, source: string) {
       super(message);
-      this.name = "WebTransportError";
+      this.name = "FakeWebTransportError";
       this.source = source;
     }
   }
@@ -47,7 +49,7 @@ test("isSessionClosedError: WebTransportError 互換オブジェクト (source: 
     source: string;
     constructor(message: string, source: string) {
       super(message);
-      this.name = "WebTransportError";
+      this.name = "FakeWebTransportError";
       this.source = source;
     }
   }

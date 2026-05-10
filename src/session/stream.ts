@@ -131,9 +131,7 @@ export function processSubgroupObjects(
       }
       currentPreviousObjectId = objectId;
 
-      if (resolvedSubgroupId === undefined) {
-        resolvedSubgroupId = objectId;
-      }
+      resolvedSubgroupId ??= objectId;
 
       const payload = buffer.slice(offset, offset + payloadLength);
       offset += payloadLength;
