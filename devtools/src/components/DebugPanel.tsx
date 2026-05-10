@@ -1,4 +1,4 @@
-import { signal, effect } from "@preact/signals";
+import { signal, useSignalEffect } from "@preact/signals";
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { isDebugPanelOpen, closeDebugPanel } from "../signals/debug";
 import * as settings from "../signals/connectionSettings";
@@ -489,16 +489,13 @@ export function DebugPanel() {
     setTimeout(() => setCopiedButton(null), 1500);
   }, []);
 
-  // オートスクロール（新しいログが上なので scrollTop = 0）
-  useEffect(() => {
-    const cleanup = effect(() => {
-      const logsLength = logs.value.length;
-      if (logsLength > 0 && autoScroll.value && logContainerRef.current) {
-        logContainerRef.current.scrollTop = 0;
-      }
-    });
-    return cleanup;
-  }, []);
+  // オートスクロール (新しいログが上なので scrollTop = 0)
+  useSignalEffect(() => {
+    const logsLength = logs.value.length;
+    if (logsLength > 0 && autoScroll.value && logContainerRef.current) {
+      logContainerRef.current.scrollTop = 0;
+    }
+  });
 
   // ESC キーでパネルを閉じる
   useEffect(() => {
