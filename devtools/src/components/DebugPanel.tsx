@@ -676,8 +676,6 @@ export function DebugPanel() {
         ) : (
           <div class="space-y-1">
             {(() => {
-              // 最新のログを上に表示するため逆方向ループで描画する。
-              // 配列の reverse コピーを避けて O(n) 割り当てを削減する。
               const elements = [];
               const logsArray = logs.value;
               for (let i = logsArray.length - 1; i >= 0; i--) {

@@ -1,6 +1,7 @@
 # `DebugPanel.tsx` の過剰コメントを削除する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -34,3 +35,8 @@ Model: Opus 4.7
 
 - `DebugPanel.tsx` の 662-664 行目の 2 行のコメントが削除されている
 - `vp run build:devtools` が成功する
+
+## 解決方法
+
+- `devtools/src/components/DebugPanel.tsx` のログ描画ループ直前の 2 行のコメントを削除した。
+- `CHANGES.md` の `### misc` セクションに `[UPDATE]` エントリを追加した。

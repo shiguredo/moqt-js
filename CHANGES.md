@@ -36,6 +36,9 @@
   - `Section 9.3.11` を `§9.3.11` に統一する
   - `draft-ietf-moq-loc-02 §2.1` を `§2.1.2` に具体化する
   - @voluntas
+- [UPDATE] `DebugPanel.tsx` の過剰コメントを削除する (#0151)
+  - 自明なループ説明と Premature Optimization を正当化するコメントを削除する
+  - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
   - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
