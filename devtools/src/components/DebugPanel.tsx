@@ -1,5 +1,6 @@
 import { signal, useSignalEffect, batch } from "@preact/signals";
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { isDebugPanelOpen, closeDebugPanel } from "../signals/debug";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
@@ -446,8 +447,9 @@ export function DebugPanel() {
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [viewModes, setViewModes] = useState<Map<number, ViewMode>>(new Map());
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [copiedButton, setCopiedButton] = useState<string | null>(null);
+  // 行コピーとボタンコピーは同時に「Copied!」表示しうるため hook を分離する。
+  const rowFeedback = useCopyFeedback();
+  const buttonFeedback = useCopyFeedback();
 
   const getViewMode = (index: number): ViewMode => viewModes.get(index) ?? "data";
   const setViewMode = (index: number, mode: ViewMode) => {
@@ -477,63 +479,45 @@ export function DebugPanel() {
     }
   };
 
-  const copyToClipboard = useCallback(async (log: LogEntry, index: number, event: MouseEvent) => {
-    event.stopPropagation();
-    const timestamp = formatAbsoluteTime(log.timestamp);
-    const parts: string[] = [`${timestamp} ${log.message}`];
+  const copyToClipboard = useCallback(
+    async (log: LogEntry, index: number, event: MouseEvent) => {
+      event.stopPropagation();
+      const timestamp = formatAbsoluteTime(log.timestamp);
+      const parts: string[] = [`${timestamp} ${log.message}`];
 
-    if (log.data) {
-      parts.push(formatMessageData(log.data));
-    }
+      if (log.data) {
+        parts.push(formatMessageData(log.data));
+      }
 
-    if (log.payload && log.payload.length > 0) {
-      parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
-    }
+      if (log.payload && log.payload.length > 0) {
+        parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
+      }
 
-    try {
-      await navigator.clipboard.writeText(parts.join(" "));
-      setCopiedIndex(index);
-      setTimeout(() => setCopiedIndex(null), 1500);
-    } catch (error) {
-      console.error("failed to write to clipboard:", error);
-    }
-  }, []);
+      await rowFeedback.copy(parts.join(" "), String(index));
+    },
+    [rowFeedback],
+  );
 
   // 一括コピー: 全ログ
   const copyAllLogs = useCallback(async () => {
-    const text = generateFullLogText();
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedButton("all");
-      setTimeout(() => setCopiedButton(null), 1500);
-    } catch (error) {
-      console.error("failed to write to clipboard:", error);
-    }
-  }, []);
+    await buttonFeedback.copy(generateFullLogText(), "all");
+  }, [buttonFeedback]);
 
   // 一括コピー: Publisher ログ
   const copyPublisherLogs = useCallback(async () => {
-    const text = generateFullLogText("[publisher]");
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedButton("publisher");
-      setTimeout(() => setCopiedButton(null), 1500);
-    } catch (error) {
-      console.error("failed to write to clipboard:", error);
-    }
-  }, []);
+    await buttonFeedback.copy(generateFullLogText("[publisher]"), "publisher");
+  }, [buttonFeedback]);
 
   // 一括コピー: Subscriber ログ
-  const copySubscriberLogs = useCallback(async (subscriberId: string) => {
-    const text = generateFullLogText(`[${subscriberId}]`, subscriberId);
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedButton(subscriberId);
-      setTimeout(() => setCopiedButton(null), 1500);
-    } catch (error) {
-      console.error("failed to write to clipboard:", error);
-    }
-  }, []);
+  const copySubscriberLogs = useCallback(
+    async (subscriberId: string) => {
+      await buttonFeedback.copy(
+        generateFullLogText(`[${subscriberId}]`, subscriberId),
+        subscriberId,
+      );
+    },
+    [buttonFeedback],
+  );
 
   // 新しいログ追加時にトップへオートスクロール。
   // logSequence の変化でのみ発火し、autoScroll トグル単体では発火しない。
@@ -671,34 +655,34 @@ export function DebugPanel() {
         <button
           onClick={copyAllLogs}
           class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-            copiedButton === "all"
+            buttonFeedback.feedback.value === "all"
               ? "bg-green-500 text-white"
               : "bg-slate-200 hover:bg-slate-300 text-slate-700"
           }`}
         >
-          {copiedButton === "all" ? "Copied!" : "All"}
+          {buttonFeedback.feedback.value === "all" ? "Copied!" : "All"}
         </button>
         <button
           onClick={copyPublisherLogs}
           class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-            copiedButton === "publisher"
+            buttonFeedback.feedback.value === "publisher"
               ? "bg-green-500 text-white"
               : "bg-slate-200 hover:bg-slate-300 text-slate-700"
           }`}
         >
-          {copiedButton === "publisher" ? "Copied!" : "Publisher"}
+          {buttonFeedback.feedback.value === "publisher" ? "Copied!" : "Publisher"}
         </button>
         {subscriberIds.value.map((id) => (
           <button
             key={id}
             onClick={() => copySubscriberLogs(id)}
             class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-              copiedButton === id
+              buttonFeedback.feedback.value === id
                 ? "bg-green-500 text-white"
                 : "bg-slate-200 hover:bg-slate-300 text-slate-700"
             }`}
           >
-            {copiedButton === id ? "Copied!" : id}
+            {buttonFeedback.feedback.value === id ? "Copied!" : id}
           </button>
         ))}
       </div>
@@ -769,7 +753,7 @@ export function DebugPanel() {
                         class="p-1 hover:bg-white/50 rounded transition-colors"
                         title="Copy to clipboard"
                       >
-                        {copiedIndex === originalIndex ? (
+                        {rowFeedback.feedback.value === String(originalIndex) ? (
                           <svg
                             class="w-4 h-4 text-green-600"
                             fill="none"

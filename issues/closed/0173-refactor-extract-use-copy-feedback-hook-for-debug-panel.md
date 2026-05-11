@@ -1,6 +1,7 @@
 # DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

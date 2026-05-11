@@ -55,6 +55,11 @@
   - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
   - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
   - @voluntas
+- [UPDATE] DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合し、setTimeout のリーク (#0170) を解消する (#0173)
+  - 行コピー用とボタンコピー用の hook を分離し、同時にハイライト状態を持てるようにする
+  - 連続クリック時の早消えとアンマウント後の signal 書き込みを `useRef` + `useEffect` cleanup で防ぐ
+  - 失敗時は #0149 の方針に従い feedback を変更せず `console.error` のみ
+  - @voluntas
 - [UPDATE] Copy URL ボタンのロジックを `useCopyUrlButton` hook に抽出し、アンマウント時と再コピー時の `setTimeout` を解放する (#0172)
   - `devtools/src/App.tsx` / `devtools/src/webtransport-devtools/App.tsx` の重複ロジックを共通 hook に統合する
   - 連続クリック時の早消えと、アンマウント後の signal 書き込みリークを解消する

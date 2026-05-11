@@ -1,7 +1,15 @@
 # DebugPanel の copy フィードバック `setTimeout` をアンマウント時と再コピー時に解放する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
+
+## 解決方法
+
+#0173 の `useCopyFeedback` hook 化によりタイマー解放と再コピー時の旧 timer
+clearTimeout が完全に内包されたため close する。`useCopyFeedback` 内部で
+`useRef<ReturnType<typeof setTimeout>>()` による timer ID 管理と
+`useEffect` cleanup での `clearTimeout` が実装されている。
 
 ## 概要
 
