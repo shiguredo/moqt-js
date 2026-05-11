@@ -60,6 +60,9 @@
   - `useSubscriber.ts` で `useRef<MoqtObject[]>([])` を導入し、`object:` コールバックの追記を `push` (O(1)) に置き換える
   - `onEnd` / `onError` の `batch()` 外で ref をクリアする
   - @voluntas
+- [FIX] devtools の `addSubscriber` で短縮 ID 衝突時に旧 `SubscriberInstance` が上書きされて WebTransport セッションと VideoDecoder がリークする経路を塞ぐ (#0169)
+  - `signals/subscriber.ts` に `generateUniqueSubscriberId` を純粋関数として追加し、`addSubscriber` から利用する
+  - @voluntas
 - [UPDATE] devtools の `SubscriberPanel` が `subscriberInstances` Map 全体を購読していたのを、対象 ID 用の派生 signal だけを購読するように変更する (#0165)
   - `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と `subscriberInstanceSignalCache` を追加する
   - `SubscriberPanel.tsx` で `useMemo` を使い対象 ID 用の `ReadonlySignal` を購読する

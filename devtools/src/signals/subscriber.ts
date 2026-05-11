@@ -119,11 +119,41 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
 export const subscriberInstances = signal<Map<string, SubscriberInstance>>(new Map());
 
 /**
+ * 衝突しない subscriber ID を生成する純粋関数。
+ *
+ * `generator` で短縮 ID 候補を生成し、`existingIds` と衝突したら再試行する。
+ * `crypto.randomUUID` を直接置き換えるのではなく `generator` 引数として渡す
+ * 設計にすることで、テストでは決定論的なクロージャを渡せる。
+ *
+ * @param existingIds 既存 ID の集合
+ * @param generator 短縮 ID 候補を返す関数 (prefix 付きの完成 ID を返す)
+ */
+export function generateUniqueSubscriberId(
+  existingIds: ReadonlySet<string>,
+  generator: () => string,
+): string {
+  let candidate = generator();
+  while (existingIds.has(candidate)) {
+    candidate = generator();
+  }
+  return candidate;
+}
+
+// 本番用の短縮 ID 生成関数 (UUID v4 の先頭 8 文字)。
+// HMR 時のカウンタ問題を回避するため crypto.randomUUID ベース。
+function defaultSubscriberIdGenerator(): string {
+  return `subscriber-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+/**
  * 新しい Subscriber を追加する。
- * UUID v4 の先頭 8 文字で短縮 ID を生成する (HMR 時のカウンタ問題回避)。
+ * 短縮 ID の衝突 (32 bit 空間) が発生した場合に旧 instance が静かに上書きされて
+ * WebTransport セッションと VideoDecoder がリークするのを防ぐため、
+ * `generateUniqueSubscriberId` で既存 ID との衝突を回避する。
  */
 export function addSubscriber(): string {
-  const id = `subscriber-${crypto.randomUUID().slice(0, 8)}`;
+  const existingIds = new Set(subscriberInstances.value.keys());
+  const id = generateUniqueSubscriberId(existingIds, defaultSubscriberIdGenerator);
   const instance = createSubscriberInstance(id);
   const newMap = new Map(subscriberInstances.value);
   newMap.set(id, instance);

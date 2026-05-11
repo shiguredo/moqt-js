@@ -6,6 +6,7 @@ import {
   getSubscriber,
   getSubscriberInstanceSignal,
   createSubscriberInstance,
+  generateUniqueSubscriberId,
   subscriberInstances,
   subscriberInstanceSignalCache,
   subscriberIds,
@@ -197,6 +198,45 @@ test("removeSubscriber clears the cached signal entry for the removed id", () =>
   assert.equal(subscriberInstanceSignalCache.has(id), true);
   removeSubscriber(id);
   assert.equal(subscriberInstanceSignalCache.has(id), false);
+});
+
+test("generateUniqueSubscriberId returns first candidate when no collision", () => {
+  const candidates = ["subscriber-aaaaaaaa"];
+  const result = generateUniqueSubscriberId(new Set(), () => {
+    const next = candidates.shift();
+    if (next === undefined) {
+      throw new Error("generator called more than provided");
+    }
+    return next;
+  });
+  assert.equal(result, "subscriber-aaaaaaaa");
+});
+
+test("generateUniqueSubscriberId retries when first candidate collides", () => {
+  const candidates = ["subscriber-aaaaaaaa", "subscriber-bbbbbbbb"];
+  const result = generateUniqueSubscriberId(new Set(["subscriber-aaaaaaaa"]), () => {
+    const next = candidates.shift();
+    if (next === undefined) {
+      throw new Error("generator called more than provided");
+    }
+    return next;
+  });
+  assert.equal(result, "subscriber-bbbbbbbb");
+});
+
+test("generateUniqueSubscriberId retries through multiple collisions", () => {
+  const candidates = ["subscriber-aaaaaaaa", "subscriber-bbbbbbbb", "subscriber-cccccccc"];
+  const result = generateUniqueSubscriberId(
+    new Set(["subscriber-aaaaaaaa", "subscriber-bbbbbbbb"]),
+    () => {
+      const next = candidates.shift();
+      if (next === undefined) {
+        throw new Error("generator called more than provided");
+      }
+      return next;
+    },
+  );
+  assert.equal(result, "subscriber-cccccccc");
 });
 
 test("hasActiveSubscriber notifies effect subscribers on change", () => {
