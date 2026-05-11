@@ -1,6 +1,7 @@
 # `DebugPanel.tsx` の clipboard 操作にエラーハンドリングを追加する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -40,3 +41,8 @@ Model: Opus 4.7
 
 - 4 箇所の clipboard 操作すべてに try/catch が追加されている
 - `vp run build:devtools` が成功する
+
+## 解決方法
+
+- `devtools/src/components/DebugPanel.tsx` の `copyToClipboard` / `copyAllLogs` / `copyPublisherLogs` / `copySubscriberLogs` の 4 箇所を try/catch で囲み、`console.error` でログ出力するようにした。失敗時はコピー成功フィードバックの状態は変更しない。
+- `CHANGES.md` の `### misc` セクションに `[FIX]` エントリを追加した。

@@ -460,33 +460,49 @@ export function DebugPanel() {
       parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
     }
 
-    await navigator.clipboard.writeText(parts.join(" "));
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 1500);
+    try {
+      await navigator.clipboard.writeText(parts.join(" "));
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 1500);
+    } catch (error) {
+      console.error("failed to write to clipboard:", error);
+    }
   }, []);
 
   // 一括コピー: 全ログ
   const copyAllLogs = useCallback(async () => {
     const text = generateFullLogText();
-    await navigator.clipboard.writeText(text);
-    setCopiedButton("all");
-    setTimeout(() => setCopiedButton(null), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedButton("all");
+      setTimeout(() => setCopiedButton(null), 1500);
+    } catch (error) {
+      console.error("failed to write to clipboard:", error);
+    }
   }, []);
 
   // 一括コピー: Publisher ログ
   const copyPublisherLogs = useCallback(async () => {
     const text = generateFullLogText("[publisher]");
-    await navigator.clipboard.writeText(text);
-    setCopiedButton("publisher");
-    setTimeout(() => setCopiedButton(null), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedButton("publisher");
+      setTimeout(() => setCopiedButton(null), 1500);
+    } catch (error) {
+      console.error("failed to write to clipboard:", error);
+    }
   }, []);
 
   // 一括コピー: Subscriber ログ
   const copySubscriberLogs = useCallback(async (subscriberId: string) => {
     const text = generateFullLogText(`[${subscriberId}]`, subscriberId);
-    await navigator.clipboard.writeText(text);
-    setCopiedButton(subscriberId);
-    setTimeout(() => setCopiedButton(null), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedButton(subscriberId);
+      setTimeout(() => setCopiedButton(null), 1500);
+    } catch (error) {
+      console.error("failed to write to clipboard:", error);
+    }
   }, []);
 
   // オートスクロール (新しいログが上なので scrollTop = 0)

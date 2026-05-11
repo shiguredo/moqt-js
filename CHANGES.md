@@ -58,6 +58,10 @@
 - [FIX] `useSubscriber.ts` の `sortByGroupObject` を非破壊的にする (#0147)
   - `Array.prototype.sort()` の in-place 動作で signal の `.value` 配列を破壊する潜在的バグを防ぐためコピー後にソートする
   - @voluntas
+- [FIX] `DebugPanel` の clipboard 操作に try/catch を追加する (#0149)
+  - 4 箇所の `navigator.clipboard.writeText()` 呼び出しを try/catch で囲み、権限拒否等の reject 時に `unhandledrejection` が発生しないようにする
+  - 失敗時は `console.error` のみ出力し、コピー成功フィードバックの状態は変更しない
+  - @voluntas
 
 ###
 
