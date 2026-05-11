@@ -23,7 +23,7 @@ import type { RefObject } from "preact";
 // 保証されない (個々のストリームは in-order だがストリーム間は publisher 側で
 // out of order に送出されうる) ため、バッファドレイン時に明示的にソートする必要がある。
 // テストで参照するため export している。
-export function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
+export function toSortedByGroupObject(objects: MoqtObject[]): MoqtObject[] {
   // 引数配列を破壊しないようコピーしてからソートする。
   // signal の .value 配列が直接渡された場合に Preact の変更検知を壊さないため。
   return [...objects].sort((a, b) => {
@@ -336,7 +336,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<CatalogTrack>((_, reject) => {
           timeoutId = setTimeout(() => {
-            reject(new Error(`catalog subscription timeout (${catalogTimeout}ms)`));
+            reject(new Error(`catalog subscription did not complete within ${catalogTimeout}ms`));
           }, catalogTimeout);
         });
 
@@ -458,7 +458,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               bufferedLiveObjects: 0,
             };
 
-            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
+            const bufferedObjects = toSortedByGroupObject([...instance.liveObjectBuffer.value]);
 
             // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
             const lastFetch = instance.joiningFetchLastLocation.value;
@@ -493,7 +493,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // 永久に放置される」race window を解消する。立て下げ後の object: は
             // chainRef 経路へ直接流れるため、Promise チェーンで順序保証される。
             for (const bufferedObj of objectsToProcess) {
-              chainRef.current = chainRef.current.then(() => handleObject(bufferedObj));
+              chainRef.current = chainRef.current
+                .then(() => handleObject(bufferedObj))
+                .catch(() => {});
             }
 
             batch(() => {
@@ -513,9 +515,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // 独立して継続する。ライブバッファに溜まったオブジェクトを破棄せず、
             // onEnd と同じ手順でドレインしてからフラグを下げる。バッファ内に
             // keyframe が含まれていれば自然にデコードが再開する。
-            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
+            const bufferedObjects = toSortedByGroupObject([...instance.liveObjectBuffer.value]);
             for (const bufferedObj of bufferedObjects) {
-              chainRef.current = chainRef.current.then(() => handleObject(bufferedObj));
+              chainRef.current = chainRef.current
+                .then(() => handleObject(bufferedObj))
+                .catch(() => {});
             }
             batch(() => {
               instance.liveObjectBuffer.value = [];
@@ -541,7 +545,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // 複数 Subgroup ストリームを並行使用する Publisher との接続では
             // (groupId, objectId) 順の保証がないが、現状はリオーダーバッファを持たない。
             // TODO: 複数 Subgroup 対応は別 issue で扱う。
-            chainRef.current = chainRef.current.then(() => handleObject(obj));
+            chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
           },
           end: () => {
             instance.status.value = "disconnected";
@@ -677,10 +681,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
   };
 
-  // コンポーネントアンマウント時の安全策。
-  // handleRemoveSubscriber が removeSubscriber を先に呼ぶため通常は instance が
-  // undefined になり no-op だが、将来の予期しないアンマウント経路 (ホットリロード
-  // 等) に備えて補助的にリソースをクリーンアップする。
+  // アンマウント時のリソース解放 (HMR 等の想定外経路向けの補助)
   useEffect(() => {
     return () => {
       cleanupSubscriber();
