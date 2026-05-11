@@ -662,20 +662,31 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
 
     // Close session
+    // WebTransport 実装が close イベントを同期的に dispatch すると、close
+    // コールバック経由で cleanupSubscriber が再入する。再入時に sessionInstance
+    // が null になっているよう、close() より先に session.value をリセットする。
     const sessionInstance = instance.session.value;
+    instance.session.value = null;
     if (sessionInstance) {
       sessionInstance.close().catch(() => {
         // 既にクローズされている場合は無視
       });
     }
 
-    instance.session.value = null;
     instance.subscriber.value = null;
     instance.catalogSubscriber.value = null;
     instance.catalog.value = null;
     instance.decoder.value = null;
     instance.decoderConfigured.value = false;
     instance.codec.value = "";
+
+    // joining fetch 関連の状態をリセットして stopSubscribing 単独呼び出し後の
+    // 論理的な状態不整合を防ぐ。
+    instance.joiningFetchInProgress.value = false;
+    instance.joiningFetchLastLocation.value = null;
+    instance.liveObjectBuffer.value = [];
+    instance.joiningFetchStats.value = null;
+    instance.largestLocation.value = null;
 
     // Subscriber 再起動時に古い Promise チェーンを引き継がないようリセットする
     chainRef.current = Promise.resolve();

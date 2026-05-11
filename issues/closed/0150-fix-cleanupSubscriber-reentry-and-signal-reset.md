@@ -1,6 +1,7 @@
 # `cleanupSubscriber` の再入安全性を改善し joining fetch 信号をリセットする
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -46,3 +47,10 @@ Model: Opus 4.7
 - joining fetch 関連の 5 つの信号がリセットされている
 - `vp run build:devtools` が成功する
 - `vp test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `cleanupSubscriber` を以下のように修正した。
+  - `instance.session.value = null` を `sessionInstance.close()` の前に移動した。
+  - `joiningFetchInProgress` / `joiningFetchLastLocation` / `liveObjectBuffer` / `joiningFetchStats` / `largestLocation` を明示的にリセットするコードを追加した。
+- `CHANGES.md` の `### misc` セクションに `[FIX]` エントリを追加した。

@@ -62,6 +62,10 @@
   - 4 箇所の `navigator.clipboard.writeText()` 呼び出しを try/catch で囲み、権限拒否等の reject 時に `unhandledrejection` が発生しないようにする
   - 失敗時は `console.error` のみ出力し、コピー成功フィードバックの状態は変更しない
   - @voluntas
+- [FIX] `cleanupSubscriber` の再入安全性を改善し joining fetch 関連の信号をリセットする (#0150)
+  - `instance.session.value = null` を `sessionInstance.close()` より先に実行し、close イベントの同期 dispatch による再入で sessionInstance が再クローズされる経路を塞ぐ
+  - `joiningFetchInProgress` / `joiningFetchLastLocation` / `liveObjectBuffer` / `joiningFetchStats` / `largestLocation` をクリアし、`stopSubscribing` 単独呼び出し後の状態不整合を防ぐ
+  - @voluntas
 
 ###
 
