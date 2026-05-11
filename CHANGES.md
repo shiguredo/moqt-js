@@ -76,6 +76,9 @@
   - モジュールスコープ signal を `useSignal` に移動して HMR 時の状態残留を防ぐ
   - `App.tsx` の 2 箇所で `isDebugPanelOpen.value` を `debugPanelOpen` に統一する
   - @voluntas
+- [FIX] `useSubscriber.ts` の catalog 購読タイムアウトに `clearTimeout` を追加する (#0154)
+  - `Promise.race` で catalog 取得が先に成功した場合でもタイマーが解放されるように `try / finally` で `clearTimeout` する
+  - @voluntas
 
 ###
 

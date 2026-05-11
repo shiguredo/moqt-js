@@ -1,6 +1,7 @@
 # `useSubscriber.ts` の catalog 購読タイムアウトに `clearTimeout` を追加する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -52,3 +53,8 @@ clearTimeout(timeoutId);
 - `Promise.race` の後に `clearTimeout(timeoutId)` が呼ばれている
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の Catalog 購読タイムアウト処理を修正した。`timeoutId` を Promise コンストラクタ外で宣言し `setTimeout` の戻り値を代入、`Promise.race` を `try / finally` で囲んで成功・失敗いずれの場合も `clearTimeout(timeoutId)` を呼ぶようにした。
+- `CHANGES.md` の `### misc` セクションに `[FIX]` エントリを追加した。

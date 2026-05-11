@@ -321,13 +321,20 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
         // Catalog 取得をタイムアウト付きで待機
         const catalogTimeout = settings.catalogSubscriptionTimeout.value;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<CatalogTrack>((_, reject) => {
-          setTimeout(() => {
+          timeoutId = setTimeout(() => {
             reject(new Error(`catalog subscription timeout (${catalogTimeout}ms)`));
           }, catalogTimeout);
         });
 
-        videoTrackFromCatalog = await Promise.race([catalogPromise, timeoutPromise]);
+        try {
+          videoTrackFromCatalog = await Promise.race([catalogPromise, timeoutPromise]);
+        } finally {
+          // catalog 取得成功時もタイマーを解放する。タイムアウト発火後の
+          // clearTimeout は無害。
+          clearTimeout(timeoutId);
+        }
 
         if (!videoTrackFromCatalog) {
           throw new Error("no video track in catalog");
