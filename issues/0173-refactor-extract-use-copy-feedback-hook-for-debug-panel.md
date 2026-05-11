@@ -28,9 +28,10 @@ try {
 
 ## 関連 issue との関係
 
-- issue #0170 (`fix-debug-panel-copy-settimeout-cleanup`): 本 issue の hook 内で timer ref + cleanup を実装することで吸収する。本 issue を先に完了させ、#0170 を close する (close 時に「#0173 に吸収」と理由を明記して `issues/closed/` へ移動する)。
-- issue #0172 (`refactor-extract-use-copy-url-button-hook`): `App.tsx` の URL コピー用に独立した hook `useCopyUrlButton` を作る issue。本 issue で導入する `useCopyFeedback` は marker key ベースの汎用 API、#0172 の `useCopyUrlButton` は `buttonText` 文字列を切り替える専用 API で、UI 表現が異なる。両者は独立に存続させ、内部実装を共有しない (#0172 の表現は `"Copy URL" → "Copied!"` の単純トグル、本 hook は marker key による同時複数ボタンの選択ハイライト)。本 issue は #0172 の進捗とは独立に実装可能。
-- issue #0149 (closed): 失敗時はフィードバック表示せず `console.error` のみという方針を確定済み。本 issue でもこの方針を踏襲し、「Failed」フィードバックの追加は行わない。
+- issue #0167 (DebugPanel ログバッファ刷新): 同じ `DebugPanel.tsx` を改修する。0167 が JSX の描画ループ / `logs.value` → `logBuffer` 置換 / `void logSequence.value;` 追加など広範に変更するため、**0167 → 0173 の順** で実装する。0173 着手時には 0167 マージ後の DebugPanel.tsx を起点として 4 つの copy 関数のみを書き換える
+- issue #0170 (`fix-debug-panel-copy-settimeout-cleanup`): 本 issue の hook 内で timer ref + cleanup を実装することで吸収する。**本 issue マージコミット内で `git mv` により `issues/0170-...md` を `issues/closed/` へ移動し、「## 解決方法」セクションに「#0173 の `useCopyFeedback` hook 化により内包」を追記する**。コミットメッセージは `issues: 0173 DebugPanel の copy ハンドラを useCopyFeedback hook に統合し 0170 を吸収する` のように 0170 番号にも言及する
+- issue #0172 (`refactor-extract-use-copy-url-button-hook`): `App.tsx` の URL コピー用に独立した hook `useCopyUrlButton` を作る issue。本 issue で導入する `useCopyFeedback` は marker key ベースの汎用 API、#0172 の `useCopyUrlButton` は `buttonText` 文字列を切り替える専用 API で、UI 表現が異なる。両者は独立に存続させ、内部実装を共有しない
+- issue #0149 (closed): 失敗時はフィードバック表示せず `console.error` のみという方針を確定済み。本 issue でもこの方針を踏襲する
 
 ## 修正方針
 
@@ -55,13 +56,14 @@ export function useCopyFeedback(durationMs?: number): UseCopyFeedbackResult;
 内部実装の要点:
 
 - `const marker = useSignal<string | null>(null);` でフィードバック状態を保持
-- `const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);`
+- `const timerRef = useRef<ReturnType<typeof setTimeout>>();` で timeout ID を保持する (0172 と同じイディオム。`Preact.useRef<T>()` は `T | undefined` を返すため `| undefined` 型注釈と初期値 `undefined` 引数は不要)
 - `copy` 内で `clearTimeout(timerRef.current)` してから `setTimeout` を発火させ、ID を `timerRef.current` に代入
 - `useEffect(() => () => clearTimeout(timerRef.current), [])` で unmount 時に解放
 - `durationMs` の既定値は `1500` (現状の固定値)
-- 失敗時は `console.error("failed to write to clipboard:", error)` のみで `marker` は変更しない (issue #0149 の方針を継承)
-- `feedback` は `@preact/signals` の `ReadonlySignal<string | null>` 型として返す。実装では `useSignal` の戻り値 `Signal` をそのまま `ReadonlySignal` として型付け代入することで呼び出し側からの直接書き換えを型レベルで禁止する (`useComputed` でのラップは過剰なので使わない)
-- `copy` 関数は `useCallback` で stable 化し、戻り値オブジェクト全体も `useMemo` (もしくは `useCallback` のみで `feedback` 自体は signal なので毎回新規生成しない構造) で安定化させ、呼び出し側の `useCallback` 依存配列に `rowFeedback` / `buttonFeedback` を含めても再生成が発生しないようにする
+- 失敗時は `console.error("failed to write to clipboard:", error)` のみで `marker` は変更しない (#0149 の方針継承、既存メッセージを踏襲)
+- `feedback` の型は `Signal<string | null>` のまま返す。`ReadonlySignal` への型キャストは `@preact/signals` の型互換性に依存しすぎるため採用しない。呼び出し側に「`copy()` を経由して書き換える」運用ルールを徹底することで読み取り専用の意図を担保する
+- `copy` 関数は `useCallback` で stable 化する。理由: `DebugPanel.tsx` の 4 関数 (`copyToClipboard` / `copyAllLogs` / `copyPublisherLogs` / `copySubscriberLogs`) が現状 `useCallback` で stable 化されており、それらの依存配列に `rowFeedback.copy` / `buttonFeedback.copy` を入れる際に毎レンダ再生成だと 4 関数が毎回作り直されるため。0172 (`useCopyUrlButton`) は `App.tsx` の `onClick` 直渡しのため `useCallback` 不要とした方針との非対称は、DebugPanel 側の既存 `useCallback` 採用に揃える判断による
+- 依存配列: `copyToClipboard` は `[rowFeedback]` (もしくは `[rowFeedback.copy]`)、`copyAllLogs` / `copyPublisherLogs` / `copySubscriberLogs` は `[buttonFeedback]` (もしくは `[buttonFeedback.copy]`) を指定する
 
 ### 2. `DebugPanel.tsx` の改修
 
@@ -77,11 +79,11 @@ export function useCopyFeedback(durationMs?: number): UseCopyFeedbackResult;
   - `copyAllLogs`: `buttonFeedback.copy(generateFullLogText(), "all")`
   - `copyPublisherLogs`: `buttonFeedback.copy(generateFullLogText("[publisher]"), "publisher")`
   - `copySubscriberLogs`: `buttonFeedback.copy(generateFullLogText(\`[${subscriberId}]\`, subscriberId), subscriberId)`
-- JSX 側の比較を置き換え:
+- JSX 側の比較を置き換え (各比較は class 指定箇所と表示テキスト箇所の 2 箇所ずつに出現するため、すべての出現箇所を網羅して置換する):
   - `copiedIndex === originalIndex` → `rowFeedback.feedback.value === String(originalIndex)`
-  - `copiedButton === "all"` → `buttonFeedback.feedback.value === "all"`
-  - `copiedButton === "publisher"` → `buttonFeedback.feedback.value === "publisher"`
-  - `copiedButton === id` → `buttonFeedback.feedback.value === id`
+  - `copiedButton === "all"` → `buttonFeedback.feedback.value === "all"` (634, 639 行目相当の 2 箇所)
+  - `copiedButton === "publisher"` → `buttonFeedback.feedback.value === "publisher"` (644, 649 行目相当の 2 箇所)
+  - `copiedButton === id` → `buttonFeedback.feedback.value === id` (656, 661 行目相当の 2 箇所)
 - インポートから不要になった `useState` を整理する (他の用途で残るなら削除しない)
 
 ### 3. issue #0170 のクローズ
@@ -100,10 +102,10 @@ export function useCopyFeedback(durationMs?: number): UseCopyFeedbackResult;
 
 - `vp run test` で全テストがパスすること
 - `vp run build:devtools` でビルドが通ること
-- `useCopyFeedback` の単体テスト (`useCopyFeedback.test.ts`) を Vitest の Chai API (`test` / `assert`) で追加する。CLAUDE.md の「モックやスタブは利用しない」方針に従い、`navigator.clipboard` をモックせず以下のみ検証する:
+- `useCopyFeedback` の単体テスト (`useCopyFeedback.test.ts`) を Vitest の Chai API (`test` / `assert`) で追加する。CLAUDE.md の「モック / スタブは利用しない」方針に従い、`navigator.clipboard` をモックせず以下のみ検証する:
   - 初期状態で `feedback.value === null`
-  - `copy(...)` を呼んで失敗する環境 (jsdom には `navigator.clipboard` が無いか権限拒否されるため自然に reject される) で、戻り値が `false` を返し、`feedback.value` が `null` のままであること
-  - hook の戻り値オブジェクトの `copy` / `feedback` 参照が同一インスタンス間で安定していること (再レンダリング後も同じ参照、これは Preact testing-library を使わず `@preact/signals` の振る舞いで検証する。検証手段が複雑になる場合はこの項目は省略可)
+  - `copy(...)` を呼んで失敗する環境で戻り値が `false` を返し、`feedback.value` が `null` のままであること。テスト冒頭で `assert(navigator.clipboard === undefined, "test environment must lack navigator.clipboard for this case");` のガードを置き、jsdom 設定変更で `navigator.clipboard` が polyfill された場合はテストを skip するのではなく明示的に fail させる
+- hook の戻り値の stable 化検証は Preact 用 `renderHook` が未導入のため本 issue では実施しない。stable 化は `DebugPanel.tsx` の `useCallback` 依存配列が `[rowFeedback]` / `[buttonFeedback]` のみで TypeScript の型推論が通り、ESLint `react-hooks/exhaustive-deps` が警告を出さないことで間接担保する
 - 手動確認:
   - コピー後 1.5 秒以内に DebugPanel を閉じても Preact 警告が出ないこと
   - 連続コピーで古いタイマーが新しい状態を上書きしないこと
@@ -111,9 +113,16 @@ export function useCopyFeedback(durationMs?: number): UseCopyFeedbackResult;
 
 ## CHANGES.md 記載方針
 
-- `## develop` セクション配下の `### misc` サブセクションに `[CHANGE]` で「DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合する」を追加する
-- 担当者行 (`  - @voluntas` 等) は実装時の担当者で記載する
-- issue #0170 を吸収するため、本 issue マージ後は #0170 の CHANGES エントリは追加しない (内包される)。なお内包する旨を本 issue のエントリ本文に明示する必要はない (CHANGES.md は変更内容のみ記載する規約のため)
+`### misc` サブセクションに `[UPDATE]` で記載する (devtools 内部 hook 抽出、moqt-js 公開 API 影響なし。CLAUDE.md で `[CHANGE]` は「後方互換のない変更」と定義されており、本 issue は該当しないため `[UPDATE]`)。0172 と方針を揃える。
+
+エントリ例:
+
+```
+- [UPDATE] DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合し、setTimeout のリーク (#0170) を解消する (#0173)
+  - @voluntas
+```
+
+#0170 は本 issue のコミット内で `git mv` により closed/ へ移動するため、別エントリは追加しない。
 
 ## 完了条件
 

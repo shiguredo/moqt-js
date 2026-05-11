@@ -149,8 +149,19 @@ Model: Opus 4.7
    - 描画ループ (671, 679-680 行目) の `logs.value` → `logBuffer`
    - 件数表示 (601 行目): `Logs: {logs.value.length}` → `Logs: {logCount.value}`
    - 空判定 (671 行目): `logs.value.length === 0` → `logCount.value === 0`
-   - これらは関数コンポーネント `DebugPanel` 内で `logCount.value` を JSX で読むため、`logCount` 変化で再レンダリングがトリガされ、再レンダリング時に `logBuffer` を直接読めば最新値が得られる (JavaScript はシングルスレッドのため render 中の `logBuffer` は確定状態)
-   - モジュールスコープ関数 (`generateLogsText` 等) はコンポーネントの render context から呼ばれるため、呼び出し時点のスナップショットを `logBuffer` から読めばよい
+
+7. **`logCount` は MAX_LOGS で頭打ちになるため、それ単独では MAX_LOGS 到達後の再レンダリングがトリガされない**。`logSequence` を `DebugPanel` 関数本体の冒頭で `void logSequence.value;` の形で読むダミー参照を入れ、追加イベントごとの再レンダリングを保証する。これによって `firstTimestamp` (shift で先頭が変わる) も追加イベントごとに再計算される。
+
+   ```tsx
+   export function DebugPanel({ ... }: DebugPanelProps) {
+     // ログ追加イベント (MAX_LOGS 到達後も含む) で再レンダリングをトリガするため、
+     // logSequence を購読する。値自体は使わない。
+     void logSequence.value;
+     // ...
+   }
+   ```
+
+   モジュールスコープ関数 (`generateLogsText` 等) は `DebugPanel` の render context から呼ばれるため、render 内で `logBuffer` のスナップショットを読めば最新状態が得られる。
 
 ### `App.tsx` の変更
 
@@ -201,13 +212,27 @@ Model: Opus 4.7
    dispose();
    ```
 
-`logBuffer` をテストから参照する手段として、`getLogBuffer(): readonly LogEntry[]` を export する (配列本体を直接 export しない)。アプリ側からも書き換えできなくする目的で、モジュール内部の `logBuffer` は非 export、`addLog` / `clearLogs` のみが書き換える。
+`logBuffer` をテストから参照する手段として、`getLogBuffer(): readonly LogEntry[]` を export する。`readonly LogEntry[]` 型は TypeScript の型レベル限定の不変性宣言で、ランタイム書き換えは防げないが、呼び出し側に書き換えを意図させない指針として機能する。モジュール内部の `logBuffer` は非 export、`addLog` / `clearLogs` のみが書き換える。
 
 ```ts
 export function getLogBuffer(): readonly LogEntry[] {
   return logBuffer;
 }
 ```
+
+テスト間で signal / `logBuffer` の状態がリセットされないため、テストファイル冒頭で `beforeEach` を以下のように設定する:
+
+```ts
+import { beforeEach } from "vitest";
+beforeEach(() => {
+  // clearLogs() 相当の処理で全 signal / buffer を初期化する
+  // clearLogs は logSequence を +1 するため、テスト内の sequence 比較は
+  // 各テスト先頭で `logSequence.peek()` を取得した基準値からの差分で行う
+  // (累積カウンタの絶対値はテスト順序依存にしない)
+});
+```
+
+具体的な reset 手段としては、テスト用に `__resetLogStateForTest()` を export して `logBuffer.length = 0; logCount.value = 0; logSequence.value = 0;` を実行する関数を用意するか、Vitest の `vi.resetModules()` でモジュール再読み込みを行う。後者はモック扱いになるため、前者を採用する。
 
 ### 手動確認
 
@@ -222,7 +247,8 @@ export function getLogBuffer(): readonly LogEntry[] {
 文面例:
 
 ```
-- [UPDATE] DebugPanel のログ蓄積を `Array.push` + シーケンス signal 分離に変更し、autoScroll effect を `autoScroll.peek()` で参照することで `autoScroll` トグル単体での再発火を抑制する
+- [UPDATE] DebugPanel のログ蓄積を破壊的配列操作 (`push` / `shift`) + シーケンス signal 分離に変更し、autoScroll effect を `autoScroll.peek()` で参照することで `autoScroll` トグル単体での再発火を抑制する (#0167)
+  - @voluntas
 ```
 
 ## 完了条件
@@ -231,7 +257,8 @@ export function getLogBuffer(): readonly LogEntry[] {
 - `logBuffer` は signal ではないプレーン配列、`logCount` / `logSequence` が signal で公開されている
 - `useSignalEffect` のオートスクロールが `logSequence` 変化単独で発火し、`autoScroll` トグル単体では発火しない
 - MAX_LOGS 到達後も新規ログ追加でオートスクロールが発火する (`logSequence` がモノトニック増加するため)
+- `DebugPanel` 関数本体冒頭で `void logSequence.value;` のダミー参照が入っており、MAX_LOGS 到達後も追加ごとに再レンダリングがトリガされる
 - `App.tsx` の `logs.value.length` 参照が `logCount.value` に置き換わっている
-- 新規単体テスト 4 件が追加されパスしている
+- 新規単体テスト 4 件が追加されパスし、`beforeEach` の reset により独立性が確保されている
 - `vp run test` が成功する
 - `vp run build:devtools` が成功する

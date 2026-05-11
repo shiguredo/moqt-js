@@ -27,12 +27,12 @@ subscriberInstances.value = newMap;
 
 - 32 bit 空間 (`16 ** 8` ≈ 4.29 × 10^9)
 - 誕生日問題で 50% 衝突に必要な個数: √(2N ln 2) ≈ 77,163 個
-- 現実的な devtools セッションでの subscriber 個数は数個から数百個オーダーで、
-  100 個生成時の衝突確率は約 1.16 × 10^-6
-- 平常運用での衝突は実質ゼロだが、HMR + 自動再生成のループや、テスト・
-  開発時の連続生成シナリオでは、確率が低くても発生時に静かに上書きされる
-  挙動は致命的 (Remove ボタンや close 経路を経由しない instance 入れ替えに
-  なるため、リソース解放の責務が宙に浮く)
+- 現実的な devtools セッションでの subscriber 個数は数個から数百個オーダーで、100 個生成時の衝突確率は約 1.16 × 10^-6
+- 平常運用での衝突は実質ゼロだが、静かに上書きされる挙動が **発生時に致命的** (Remove ボタンや close 経路を経由しない instance 入れ替えになるためリソース解放の責務が宙に浮く)
+
+### Premature Optimization との関係
+
+CLAUDE.md「Premature Optimization is the Root of All Evil」とは異なり、本 issue は性能最適化ではなく **発生確率は極小だが発生時の影響が致命的なバグの防御** である。リーク経路を残したまま将来の HMR / 連続生成パターン変更で衝突確率が上がるよりも、純関数 1 個と数行の置換で恒久的に潰す方が合理的と判断する。
 
 ### 上書き発生時の影響
 
@@ -73,8 +73,6 @@ issue #0165 (`SubscriberPanel` 局所購読化) は `getSubscriberInstanceSignal
   キャッシュ無ければ作成する設計)
 
 であり、#0165 の動作上の問題にはならない。両 issue は **独立に成立** する。
-本 issue 完了後、#0165 着手時に同 ID 再選の可能性に関する一文を念のため
-#0165 のキャッシュ管理コメントに追記する余地がある (本 issue の作業外)。
 
 ## 修正方針
 
@@ -115,16 +113,9 @@ function defaultSubscriberIdGenerator(): string {
 
 設計上のポイント:
 
-- `existingIds: ReadonlySet<string>` を引数に取る。`Map<string, unknown>` の
-  ような型でも `has` は使えるが、`Set<string>` に限定することで「ID の集合」
-  という意味が型に乗り、テスト時に Map を組み立てる手間も省ける。`new
-  Set(map.keys())` の構築コストは subscriber 個数 (devtools 上は数十まで) の
-  オーダーで無視できる
-- `generator` は prefix 込みの完成 ID を返す。prefix を関数の外で結合する設計
-  にすると、テスト時にも prefix を意識する必要が生じるため生成側に責務を集約する
-- ループ上限は設けない。32 bit 空間で `subscriberInstances.size` が全埋め
-  される事態は現実的に発生せず、上限を入れると fail 経路の設計判断が増える
-  (Premature Optimization is the root of all evil)
+- `existingIds: ReadonlySet<string>` を引数に取り、`has(string)` で衝突判定する。`ReadonlyMap<string, unknown>` でも `has` は使えるが、Set の方が型シグネチャから意図 (ID の集合) が読みやすい。生成コスト (`new Set(map.keys())`) は subscriber 個数 (数十) オーダーで無視できる
+- `generator` は prefix 込みの完成 ID を返す。prefix 変更時の修正箇所を `defaultSubscriberIdGenerator` 1 箇所に閉じ込め、`generateUniqueSubscriberId` を prefix 非依存に保つ
+- ループ上限は設けない。32 bit 空間で `subscriberInstances.size` が全埋めされる事態は現実的に発生せず、production で無限ループする経路は無い。テスト誤用 (`generator` が常に同じ値を返す等) で無限ループが発生した場合は Vitest の `testTimeout` で失敗するため、明示的な上限ガードは追加しない
 
 ### 2. `addSubscriber` を `generateUniqueSubscriberId` 利用に書き換える
 
@@ -158,17 +149,6 @@ export function addSubscriber(): string {
 `new Set(subscriberInstances.value.keys())` のコストは `subscriberInstances`
 のサイズに比例するが、devtools で subscriber 個数は数十オーダー、`addSubscriber`
 呼び出しは UI 操作頻度 (人手操作 + HMR) のため許容範囲。
-
-### 3. 代替案として検討して採用しない案
-
-- 案 A: UUID v4 全長 (36 文字) をそのまま使う
-  - 採用しない理由: #0141 で意図的に 8 文字短縮を採用しており、`DebugPanel`
-    のコピーボタンラベル等の UI 表示性を優先している。32 bit 衝突対策のために
-    UI 表示性を犠牲にする必要はない (衝突検出ループで両立できる)
-- 案 B: `addSubscriber` 内に do-while を直書きする
-  - 採用しない理由: `crypto.randomUUID` をスタブできないため、衝突検出
-    ロジックを直書きすると単体テストでカバーできない。純粋関数として抽出し
-    `generator` を依存注入するのが唯一の現実的なテスト戦略
 
 ## 影響範囲
 
@@ -229,28 +209,32 @@ test("generateUniqueSubscriberId retries when first candidate collides", () => {
 
 ### 既存テストへの影響
 
-`addSubscriber generates unique ids` (`subscriber.test.ts:52`) は `addSubscriber`
-の戻り値の一意性を確認しているのみで、衝突検出ロジックの追加によって挙動は
-変わらない。修正不要。
+既存テストへの影響なし (本 issue は新規テストの追加のみで、既存テストの挙動は維持される)。
 
 ### コマンド
 
-- `vp run test` で全テストがパスすること (新規 3 テスト + 既存 9 テスト)
-- `vp run build:devtools` がエラーなく完了すること
+- `vp run test` で全テストパス
+- `vp run build:devtools` でビルド成功
 
 ## CHANGES.md 記載方針
 
-- `### misc` サブセクションに `[FIX]` で記載する
-- エントリ例:
+種別選定:
+
+- `[FIX]`: 実際に発生して観測されたバグの修正。本 issue は潜在的欠陥への防御で、観測実例はない。狭義の FIX には該当しない
+- `[UPDATE]`: 下位互換のある改善。本 issue は `addSubscriber` の戻り値の公開 API 形状は変えず、内部の衝突回避ロジックを足すだけ。下位互換あり
+- `[ADD]`: 下位互換のある追加。本 issue は `generateUniqueSubscriberId` を新規 export するが、主目的はバグ予防であり、新規 API 追加は副作用
+
+選択: **`[FIX]`** を採用する。理由は (1) 0141 で導入された短縮 ID 設計の欠陥 (衝突時の静かな上書き) を塞ぐ修正で、リソースリークの予防対応は実害発生前であっても FIX に分類する運用が CHANGES.md `### misc` で既に確立している (#0147 / #0149 / #0150 / #0152 / #0154 / #0155 / #0156)。(2) `[ADD]` は新規 API export の副次的な事実で、ユーザー (devtools 利用者) にとっての変更の本質は「衝突時にリークしなくなる」点であり FIX 的セマンティクスが優位。
+
+`### misc` サブセクションに `[FIX]` で記載する。
+
+エントリ例:
 
 ```
-- [FIX] devtools の `addSubscriber` で短縮 ID 衝突時にリトライするようにする (#0169)
+- [FIX] devtools の `addSubscriber` で短縮 ID 衝突時に旧 `SubscriberInstance` が上書きされて WebTransport セッションと VideoDecoder がリークする経路を塞ぐ (#0169)
   - `signals/subscriber.ts` に `generateUniqueSubscriberId` を純粋関数として追加し、`addSubscriber` から利用する
-  - 8 桁短縮 ID (32 bit 空間) の衝突発生時に旧 `SubscriberInstance` が上書きされて WebTransport セッションと VideoDecoder がリークする経路を塞ぐ
   - @voluntas
 ```
-
-develop には #0141 で既に `[CHANGE] addSubscriber の ID をモジュールスコープ・カウンタから crypto.randomUUID().slice(0, 8) ベースに変更する` エントリが存在する。本 issue はその同じ修正対象に対する `[FIX]` であり、別エントリとして追加する。
 
 ## 完了条件
 

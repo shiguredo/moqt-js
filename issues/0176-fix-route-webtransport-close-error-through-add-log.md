@@ -23,7 +23,7 @@ DebugPanel は「MOQT 内部の挙動と接続イベントをユーザーに可�
 - Track ライブ購読の `Subscriber error` / `Connection error` / `requestKeyframe` 周りの `console.*`
 - `usePublisher.ts` 内のデコーダ・エンコーダ・stream 取得など接続イベント以外の `console.*`
 
-これらを一括で addLog 化すると「DebugPanel に同じ情報が二重に出る」「ホットパスでログが爆発する」「issue 粒度が大きくなりすぎて差分レビューが破綻する」ため、本 issue は **接続ライフサイクル (`connect` の `close` / `error`) と Catalog 取得フェーズに限定**する。残りは別 issue で個別に判断する。
+これらを一括で addLog 化すると「DebugPanel に同じ情報が二重に出る」「ホットパスでログが爆発する」「issue 粒度が大きくなりすぎて差分レビューが破綻する」ため、本 issue は **接続ライフサイクル (`connect` の `close` / `error`) と Catalog 取得フェーズに限定**する。残り (`renderFrame` / `handleObject` ホットパス、Decoder 系、Joining Fetch 系、ライブ購読 (`Subscriber error` / `Connection error`)、`requestKeyframe`、Publisher 起動シーケンス、Publisher Catalog / Track publish 系) は本 issue 完了時に SEQUENCE から番号を払い出してそれぞれ後続 issue を起票する。後続 issue を起票しないと console 散乱が永久に残るため、必ず起票する。
 
 ## 根拠
 
@@ -34,7 +34,7 @@ DebugPanel は「MOQT 内部の挙動と接続イベントをユーザーに可�
 ```ts
 close: (closeInfo) => {
   console.log(
-    `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
+    `Subscriber: webtransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
   );
   instance.status.value = "disconnected";
   instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
@@ -52,7 +52,7 @@ error: (error) => {
 ```ts
 close: (closeInfo) => {
   console.log(
-    `Publisher: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
+    `Publisher: webtransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
   );
   pub.pubStatus.value = "disconnected";
   pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
@@ -130,7 +130,7 @@ error: (error) => {
 1. `close` コールバック (232-238 行目): `console.log(...)` を削除し、ハンドラ先頭で
 
    ```ts
-   addLog("warn", `[${subscriberId}] WebTransport closed`, {
+   addLog("warn", `[${subscriberId}] webtransport closed`, {
      closeCode: closeInfo.closeCode,
      reason: closeInfo.reason,
    });
@@ -141,24 +141,25 @@ error: (error) => {
 2. `error` コールバック (239-243 行目): 現状 `console.*` は無いが、エラー情報が DebugPanel に出ないのが本 issue の主課題なので
 
    ```ts
-   addLog("error", `[${subscriberId}] WebTransport error`, {
-     message: error.message,
+   addLog("error", `[${subscriberId}] webtransport error`, {
+     name: error.name ?? "Error",
+     message: error.message ?? String(error),
    });
    ```
 
-   を先頭に追加する。`error.message` 以外のプロパティ (`name`, `stack`) は含めない (`stack` をログに残すと payload と同様に文字列がメモリに長期保持されるが、サイズは無視できるため許容)。
+   を先頭に追加する。`name` は `WebTransportError` / `DOMException` の判別に必要。`stack` は長文字列のためログには含めない。`error` が `null` / `undefined` の防御は `error.message ?? String(error)` で行う。
 
 3. Catalog 経路の console を addLog に置換:
    - `:276` `console.log(`[${subscriberId}] Catalog received (${source}):`, catalog)` を **削除** する (`:272` の `addLog` と完全重複)
    - `:283` `console.warn(`[${subscriberId}] No video tracks in catalog`)` →
      `addLog("warn", `[${subscriberId}] no video tracks in catalog`);`
    - `:287` `console.error(`[${subscriberId}] Failed to decode catalog:`, error)` →
-     `addLog("error", `[${subscriberId}] failed to decode catalog`, { message: (error as Error).message });`
+     `addLog("error", `[${subscriberId}] failed to decode catalog`, { message: error instanceof Error ? error.message : String(error) });`
      `reject(error)` は維持
    - `:302` `console.log(`[${subscriberId}] Catalog stream ended`)` →
      `addLog("info", `[${subscriberId}] catalog stream ended`);`
    - `:305` `console.error(`[${subscriberId}] Catalog subscribe error:`, error)` →
-     `addLog("error", `[${subscriberId}] catalog subscribe error`, { message: error.message });`
+     `addLog("error", `[${subscriberId}] catalog subscribe error`, { message: error instanceof Error ? error.message : String(error) });`
      `reject(error)` は維持
    - `:355` `console.log(`[${subscriberId}] Using codec from catalog:`, videoTrackFromCatalog.codec)` →
      `addLog("info", `[${subscriberId}] using codec from catalog`, { codec: videoTrackFromCatalog.codec });`
@@ -170,7 +171,7 @@ error: (error) => {
 1. `close` コールバック (273-280 行目): `console.log(...)` を削除し、
 
    ```ts
-   addLog("warn", `[publisher] WebTransport closed`, {
+   addLog("warn", `[publisher] webtransport closed`, {
      closeCode: closeInfo.closeCode,
      reason: closeInfo.reason,
    });
@@ -181,25 +182,27 @@ error: (error) => {
 2. `error` コールバック (281-285 行目):
 
    ```ts
-   addLog("error", `[publisher] WebTransport error`, {
-     message: error.message,
+   addLog("error", `[publisher] webtransport error`, {
+     name: error.name ?? "Error",
+     message: error.message ?? String(error),
    });
    ```
 
-   を先頭に追加する。
+   を先頭に追加する。`name` は `WebTransportError` / `DOMException` の判別用、`null` / `undefined` 防御は `String(error)` フォールバック。`[publisher]` プレフィックスを使うのは Publisher が単一インスタンス (`pub.publisher.value` が単一 signal) のため。
 
 3. Publisher 側の Catalog 系 (`:303` Catalog publisher error など) は本 issue では触らない。Publisher の Catalog エラー導線は subscriber 側と非対称な処理が絡むため、別 issue で `[publisher]` プレフィックス込みで整理する。
 
 ### 共通
 
-- `addLog` の data 引数に渡す `closeInfo.reason` は API 上 `string` だが任意長になるため、巨大文字列が来てもログ全体を破壊しないよう **そのまま渡す** (DebugPanel 側で hex dump はしない)。MAX_LOGS で頭打ちされるため長期メモリリスクなし。
-- WebTransport の `close` コールバックは「実装が同期 dispatch する」既知挙動 (`cleanupSubscriber` の再入対策コメント参照, useSubscriber.ts:626-630)。`addLog` 自体は副作用が無く再入安全なので順序問題は生じない。
+- `addLog` の data 引数に渡す `closeInfo.reason` は API 上 `string` だが任意長。`reason.slice(0, 1024)` で 1024 文字に切ってから渡す。DebugPanel の UI 描画が長大文字列で重くなるリスクを避ける
+- WebTransport の `close` コールバックは「実装が同期 dispatch する」既知挙動 (`cleanupSubscriber` の再入対策コメント参照, useSubscriber.ts:626-630)。`addLog` の副作用は signal への単純書き込みのみで `cleanupSubscriber` からの再入経路で順序問題は生じない
 
 ## 関連 issue
 
-- `issues/closed/0149-fix-clipboard-error-handling-debug-panel.md` (DebugPanel 側 clipboard try/catch。本 issue とは独立で、addLog 側の経路に影響しない)
-- `issues/0167-perf-debug-panel-log-buffer-and-autoscroll.md` (`addLog` の内部実装をプレーン配列 + シーケンス signal に作り直す予定。本 issue は **`addLog` の呼び出し側のみ** を変更するため、0167 のマージ順に依存しない: 呼び出しシグネチャは維持される)
-- `issues/0175-fix-handle-debug-message-copy-payload-for-log-retention.md` (`handleDebugMessage` の payload コピー。本 issue は payload を `addLog` に渡さないため独立)
+- `issues/0163-fix-stop-subscribing-cleanup-reentry-race.md` (close / end / error コールバック先頭に `shouldApplyStatusUpdate` ガードを差し込む)。**本 issue の `addLog` 呼び出しは `shouldApplyStatusUpdate` ガードの「外」 (= コールバック先頭)** に置く。stop 主導の終端でも外因の終端でも DebugPanel にイベント記録を残すのが本 issue の目的のため、ガードで抑止すると目的に反する。ガードは `status` / `statusMessage` 書き換えと `cleanupSubscriber` (0171 適用後は `teardownSubscriber`) の挙動にのみ影響し、`addLog` は影響を受けない。先後どちらでも実装可能だが、両方適用後の最終形を「`addLog` をガード外、`status` 書き換えと `cleanupSubscriber` をガード内」と明示する
+- `issues/closed/0149-fix-clipboard-error-handling-debug-panel.md` (DebugPanel 側 clipboard try/catch。本 issue とは独立)
+- `issues/0167-perf-debug-panel-log-buffer-and-autoscroll.md` (`addLog` の内部実装をプレーン配列 + シーケンス signal に作り直す予定)。本 issue は **`addLog` の呼び出し側のみ** を変更するため、0167 のマージ順に依存しない。本 issue では `addLog(level, message, data)` の **3 引数形** で呼び出し、`payload` (第 4 引数) は渡さない
+- `issues/0175-fix-handle-debug-message-copy-payload-for-log-retention.md` (`handleDebugMessage` の payload コピー)。本 issue は `payload` を渡さないため独立
 
 ## 影響範囲
 
@@ -210,22 +213,20 @@ error: (error) => {
 
 CLAUDE.md「Vitest の Chai API である test / assert を利用」「モックやスタブは利用しない」に従う。WebTransport の `close` / `error` を実環境で再現するテストは現実的でないため、**単体テスト + 手動確認** で押さえる。
 
-### 単体テスト (新規)
+### 自動テスト
 
-WebTransport の `connect` を実行せずに addLog 呼び出しだけ検証する都合上、現在のコードは `connect` の中にクロージャがあって直接呼べない。本 issue ではテスト用のテストヘルパは追加しない方針とし、以下の手動確認をもって完了とする。
-
-**理由**: クロージャを抽出して export 関数化するリファクタは別 issue の範疇 (ハンドラ抽出は単体テスト容易性のための変更で、本 issue の目的「ログ経路の一元化」とスコープが異なる)。テスト容易性を求める場合は別 issue 化する。
+本 issue では自動テストを追加しない。`connect` の `close` / `error` コールバックはクロージャ内に閉じており直接呼び出せず、export 関数化リファクタは本 issue の目的「ログ経路の一元化」とスコープが異なる。テスト容易性を求める場合は別 issue で扱う。
 
 ### 手動確認
 
 1. devtools をビルド (`vp run build:devtools`) して `pnpm dev` で起動する
 2. Subscriber:
-   - 存在しないサーバ URL を指定して接続 → DebugPanel に `WebTransport error` または `failed to get catalog` 系のエラーが流れること
-   - 正常接続後にサーバを停止 → DebugPanel に `[<subscriberId>] WebTransport closed` が level=warn で流れること
+   - 存在しないサーバ URL を指定して接続 → DebugPanel に `webtransport error` または `failed to get catalog` 系のエラーが流れること
+   - 正常接続後にサーバを停止 → DebugPanel に `[<subscriberId>] webtransport closed` が level=warn で流れること
    - Catalog Subscribe フェーズで意図的に namespace を間違える → `[<subscriberId>] catalog subscribe error` が流れること
 3. Publisher:
-   - 正常接続後にサーバを停止 → DebugPanel に `[publisher] WebTransport closed` が level=warn で流れること
-   - 接続不能サーバへ向けて publish → `[publisher] WebTransport error` が流れること
+   - 正常接続後にサーバを停止 → DebugPanel に `[publisher] webtransport closed` が level=warn で流れること
+   - 接続不能サーバへ向けて publish → `[publisher] webtransport error` が流れること
 4. 既存ログとの重複が無いこと (`Catalog received` が DebugPanel に二重表示されないこと)
 
 ### 自動テスト
@@ -247,7 +248,10 @@ WebTransport の `connect` を実行せずに addLog 呼び出しだけ検証す
 
 - `useSubscriber.ts` の `connect` の `close` / `error` コールバックが `addLog` を呼ぶ
 - `usePublisher.ts` の `connect` の `close` / `error` コールバックが `addLog` を呼ぶ
-- `useSubscriber.ts` 内の Catalog 経路 6 箇所 (`:276` 削除、`:283` / `:287` / `:302` / `:305` / `:355` を addLog 化) が完了している
+- `useSubscriber.ts` 内の Catalog 経路 (`:276` の `console.log` 削除 1 箇所 + `:283` / `:287` / `:302` / `:305` / `:355` の addLog 化 5 箇所、合計 6 箇所) が完了している
+- 本 issue の `addLog` 呼び出しは `shouldApplyStatusUpdate` ガード (0163) の **外** (= コールバック先頭) に置く
+- `addLog` は `(level, message, data)` の 3 引数形で呼び、`payload` (第 4 引数) は渡さない
+- 本 issue 完了時に、対象外と分類した console 群を扱う後続 issue を SEQUENCE から番号払い出して起票する
 - `useSubscriber.ts` / `usePublisher.ts` 内で本 issue 対象外と分類した `console.*` は **変更しない**
 - DebugPanel に重複ログ (`Catalog received` が 2 件) が出ないこと (手動確認)
 - `vp run test` が成功する

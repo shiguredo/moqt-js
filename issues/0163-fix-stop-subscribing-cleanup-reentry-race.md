@@ -7,15 +7,15 @@ Model: Opus 4.7
 
 `stopSubscribing` の `await subscriberInstance.unsubscribe()` を待っている間に WebTransport の close コールバックが非同期で発火すると、`status.value` / `statusMessage.value` の最終値が呼び出し順に依存して非決定的になる。
 
-issue #0150 で `cleanupSubscriber` 自体は冪等化済み (`session.value = null` を `sessionInstance.close()` の前に立てる修正)。そのため session / decoder の二重 close は発生しない。残課題は **`status` / `statusMessage` の最終値の決定性** のみ。
+issue #0150 で `cleanupSubscriber` 自体は冪等化済み (`session.value = null` を `sessionInstance.close()` の前に立てる修正)。残課題は **`status` / `statusMessage` の最終値の決定性** のみ。
 
 ## レースシナリオ
 
-`useSubscriber.ts` の現在の実装で発生する順序は以下のいずれか。
+`useSubscriber.ts` 現実装で発生する順序例は以下のいずれか。
 
 1. `stopSubscribing` 開始: `status = "disconnected"`, `statusMessage = "Disconnecting..."`, `isStopping = true` (l.587-589)
 2. `await subscriberInstance.unsubscribe()` (l.594) で await
-3. await 中に WebTransport が閉じ、connect 時に渡した close コールバック (l.231-238) が発火:
+3. await 中に WebTransport が閉じ、`connect` 時に渡した close コールバック (l.231-238) が発火:
    - `status = "disconnected"`
    - `statusMessage = "Disconnected: closeCode=..., reason=..."`
    - `cleanupSubscriber()` を呼ぶ
@@ -26,96 +26,136 @@ issue #0150 で `cleanupSubscriber` 自体は冪等化済み (`session.value = n
    - `status = "disconnected"`
    - `statusMessage = "Ready to subscribe"`
 
-最終的に `statusMessage` は `"Ready to subscribe"` になる。逆に close が `await unsubscribe()` 解決後・finally 完了後に発火した場合は `"Disconnected: closeCode=..., reason=..."` で終わる。同じ「stop ボタン押下 → 同時にサーバ切断」操作でも実行ごとに表示が変わる。
-
-なお `instance.isStopping` は `stopSubscribing` の二重実行防止 (l.584) と `startSubscribing` の入口ガード (l.217) にしか使われておらず、close コールバック内では参照されないため、レースの解消には寄与しない。
+最終的に `statusMessage` は `"Ready to subscribe"`。close が `await unsubscribe()` 解決後・finally 完了後に発火した場合は `"Disconnected: ..."` で終わる。同じ「stop ボタン押下 → 同時にサーバ切断」操作でも実行ごとに表示が変わる。
 
 ## 根拠
 
-- `useSubscriber.ts` l.231-238 (connect の close コールバック): `status` / `statusMessage` を直接書き換えてから `cleanupSubscriber()` を呼ぶ
+- `useSubscriber.ts` l.231-238 (`connect` の close コールバック): `status` / `statusMessage` を直接書き換えてから `cleanupSubscriber()` を呼ぶ
+- `useSubscriber.ts` l.239-243 (`connect` の error コールバック): `status = "error"` / `statusMessage = "Error: ..."` を書き換えてから `cleanupSubscriber()` を呼ぶ
+- `useSubscriber.ts` l.550-554 (subscriber の end コールバック): `status = "disconnected"` / `statusMessage = "Stream ended"` を書き換えてから `cleanupSubscriber()` を呼ぶ
+- `useSubscriber.ts` l.555-559 (subscriber の error コールバック): `status = "error"` / `statusMessage = "Subscribe error: ..."` を書き換えるのみ。**現状 `cleanupSubscriber()` を呼ばない**
 - `useSubscriber.ts` l.581-602 (`stopSubscribing`): `await unsubscribe()` の前後と `finally` で `status` / `statusMessage` を書き換える
-- `useSubscriber.ts` l.604-657 (`cleanupSubscriber`): `status` / `statusMessage` には触れない (リソース解放と signal リセットのみ)
-- issue #0150 (closed) で `session.value = null` の前倒し済み。`cleanupSubscriber` の冪等性は確保済み
+- `useSubscriber.ts` l.604-657 (`cleanupSubscriber`): `status` / `statusMessage` には触れない
 
 ## 修正方針
 
-`status` / `statusMessage` の更新責務を一本化する。close コールバック側か `stopSubscribing` 側のどちらか一方を「権威」とする必要がある。
+`status` / `statusMessage` の更新責務を一本化する。close / end / error の各コールバックは「stop 主導中の発火」または「`cleanupSubscriber` 通過後の遅延発火」では `status` / `statusMessage` を書き換えない。
 
-採用方針: **2 段ガードを併用する。**
+### ガードの根拠 (2 段の必要性)
 
-- **ガード A (`isStopping`):** stop 主導中に発火するコールバックを抑止する
-- **ガード B (`session.value === null`):** `cleanupSubscriber` 通過後に WebTransport から遅延発火する close コールバックを抑止する
+判定式は `!instance.isStopping.value && instance.session.value !== null` の単純 AND だが、`isStopping` のみ / `session.value === null` のみのどちらか単独ではカバーできないケースがある。
 
-ガード A は「stop 開始 〜 finally 完了」までを覆い、ガード B は「`cleanupSubscriber` で `session.value = null` が立った時点 〜 次の `startSubscribing` で再代入されるまで」を覆う。両者は重なり合うが目的が異なるので両方必要。
+| シナリオ | `isStopping` 単独 | `session === null` 単独 | 両方 (AND) |
+| --- | --- | --- | --- |
+| `stopSubscribing` 進行中 (`isStopping=true`)、`unsubscribe()` await 中で `cleanupSubscriber` 未実行 | 抑止可能 | session 非 null のため抑止不可 | 抑止可能 |
+| `stopSubscribing` finally 完了後 (`isStopping=false` に戻る)、close コールバックが遅延発火 | `isStopping=false` のため抑止不可 | 抑止可能 (`cleanupSubscriber` で null 化済み) | 抑止可能 |
+| 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error) | 抑止しない (期待挙動) | 抑止しない (期待挙動) | 抑止しない (期待挙動) |
 
-具体的に必要な変更は 2 点。
+`isStopping` 単独 / `session === null` 単独はそれぞれ別の取りこぼしがあるため、両方の AND が必要。
 
-(a) `connect()` に渡す close コールバック (l.231-238) と Subscriber の end / error コールバック (l.550-559) の各々で、冒頭に以下のガードを置く:
+### 既知の世代問題
+
+`session.value === null` ガードは「現在の世代」と「前の世代」を区別しない。stop → start を素早く繰り返した場合、前世代の `stopSubscribing` 由来の遅延 close コールバックが次の start で代入された新世代 session を見て `session !== null` と判定し、抑止が効かないケースが理論上残る。
+
+前世代の close コールバックが書き換える対象は世代非依存の `instance.status` / `instance.statusMessage` signal で、まさに本 issue の対象。`session.value === null` ガードでは前世代由来の遅延発火を新世代 session 代入後に区別できないため、UI 連打速度に依存して書き換えが漏れる。
+
+恒久対応は issue #0161 の `AbortController` 化で、ローカル `signal` 参照経由で世代を分離する。0161 適用後はガード B (`session === null`) の世代問題は原理的に発生しない。本 issue は 0161 完成までの暫定対処として AND ガードを入れ、0161 と組み合わせれば世代問題も解消する。
+
+### 0161 との統合ルール
+
+0161 適用後は close / end / error コールバックから `cleanupSubscriber` (→ `teardownSubscriber`) 経由で `abort()` が走る設計のため、本 issue のガードで「ガード成立時はコールバック本体を early return」してしまうと `abort()` も走らなくなり進行中の `startSubscribing` が中断されない。
+
+統合時のルール:
+
+- 0161 単独適用の場合 (現状の本 issue 修正なし): 各コールバックは現状どおり `cleanupSubscriber()` を呼ぶ → `abort()` が走る
+- 本 issue 単独適用の場合 (0161 なし): ガード成立時は early return し、`status` / `statusMessage` の書き換えと `cleanupSubscriber()` 呼び出しを両方スキップする (現状コードでは error コールバックは元々 `cleanupSubscriber` を呼ばないので影響なし、close / end コールバックは「stop 主導なら finally が cleanup を呼ぶ」「遅延発火なら既に cleanup 済み」で十分)
+- 両方適用後: ガード成立時は `status` / `statusMessage` の書き換えのみスキップし、`abort()` 経路は維持する。具体的には「ガードによる early return ではなく、`status` / `statusMessage` の書き換え部のみを if ブロックで囲む」形に変える
+
+### 具体的な変更
+
+以下は **0161 適用後の最終形** を前提とする (本 issue 単独適用なら early return 形式でも構わないが、両方適用後は abort 経路を維持するため if ブロックで囲む)。
+
+`useSubscriber` フック直下 (`startSubscribing` 定義より前、`renderFrame` / `handleObject` と同階層) に以下のヘルパーをクロージャとして定義する (export しない)。
 
 ```ts
-if (instance.isStopping.value || instance.session.value === null) {
-  // stopSubscribing 主導 (isStopping) または cleanupSubscriber 通過後の遅延発火
-  // (session === null) なので status / statusMessage は確定済み。再書き換えしない。
-  return;
-}
+const shouldApplyStatusUpdate = (): boolean => {
+  return !instance.isStopping.value && instance.session.value !== null;
+};
 ```
 
-`cleanupSubscriber` を呼ぶ責務もこのガード内では持たない (stop 主導なら finally が呼ぶ。遅延発火なら既に呼ばれ済み)。
+各コールバックの先頭で `if (shouldApplyStatusUpdate()) { ... status/statusMessage を書く ... }` のように書き換える。`cleanupSubscriber()` 呼び出し (close / end コールバックに存在) は条件外に出して常に実行する (0161 適用後の `abort()` 経路を維持するため、また現状の cleanup タイミング保証を変えないため)。
 
-(b) `cleanupSubscriber` 内では `status` / `statusMessage` には引き続き触れない (現状維持)。`stopSubscribing` の `isStopping = false` への戻しタイミング (finally 末尾) も現状維持。
+対象コールバック:
 
-`stopSubscribing` 側の `status` / `statusMessage` 更新は変更不要。`finally` 句の `"Ready to subscribe"` が常に最終文言として確定する。
+- `useSubscriber.ts` l.231-238 (`connect` の close): `status = "disconnected"` / `statusMessage = "Disconnected: ..."` を if 内に
+- `useSubscriber.ts` l.239-243 (`connect` の error): `status = "error"` / `statusMessage = "Error: ..."` を if 内に
+- `useSubscriber.ts` l.550-554 (subscriber の end): `status = "disconnected"` / `statusMessage = "Stream ended"` を if 内に
+- `useSubscriber.ts` l.555-559 (subscriber の error): `status = "error"` / `statusMessage = "Subscribe error: ..."` を if 内に。`cleanupSubscriber()` は現状呼ばれていないので追加もしない
 
-非 stop 主導 (サーバ切断 / Stream ended / Subscribe error) のときは従来どおりコールバック側で `status` / `statusMessage` を更新し `cleanupSubscriber` を呼ぶ。
+Catalog 購読側のコールバック (`useSubscriber.ts` l.301-307) は `status` / `statusMessage` を書き換えないため対象外。
 
-選択基準: 「stop 主導 = ユーザー意図あり = `"Ready to subscribe"` で再購読待ち」「非 stop 主導 = 外因 = 詳細な終端理由を表示」という UX 上の意味付けを優先する。`cleanupSubscriber` 内に「クリーンアップ済みフラグ」を入れる代替案 (issue 旧版) は、`status` / `statusMessage` の更新そのものは `cleanupSubscriber` の外側で行われるため解決にならず却下。`cleanupSubscriber` に `status` / `statusMessage` の更新責務を集約する代替案 (close 由来 / stop 由来の区別を放棄する) は UX を損なうため却下。
+非 stop 主導 (サーバ切断 / Stream ended / Subscribe error) のときはガード成立せず if 内処理が実行され、`cleanupSubscriber` も従来どおり呼ばれる。
+
+選択基準: 「stop 主導 = ユーザー意図あり = `"Ready to subscribe"` で再購読待ち」「非 stop 主導 = 外因 = 詳細な終端理由を表示」という UX 上の意味付けを優先する。
+
+### Publisher 側正常終了との切り分け
+
+end コールバックの「Stream ended」は MOQT のフロー終了 (Publisher 側 SUBSCRIBE_DONE 等の正常終了) を意味し、必ずしも stop と直接対応しない。stop と Publisher 側終了がほぼ同時に起きた場合、本修正では Publisher 側終了の表示は `"Ready to subscribe"` で塗りつぶされる。stop 押下中はユーザー意図 (再購読待ち) を優先する UX 判断であり、Publisher 側終了の区別は本 issue では行わない。
 
 ## 関連 issue との順序
 
 - issue #0150 (closed): `cleanupSubscriber` のリソース二重解放は解消済み。本 issue はその上位レイヤの状態表示レース
-- issue #0161 (AbortController 化): `startSubscribing` の中断シグナルを整理する。`stopSubscribing` のレースとは独立。先後どちらでも実装可能
-- issue #0162 (リソース close を `removeSubscriber` に集約): `cleanupSubscriber` の close 部分の置き場所が変わる。本 issue で触る部位 (close / end / error コールバック内の status 更新) とは直交
-- issue #0171 (`cleanupSubscriber` リネーム / 責務分割): リネーム後も本修正の対象 (close / end / error コールバック側の `isStopping` ガード) は同じ位置に残る。先後どちらでも実装可能だが、0171 を先に終えると衝突なく適用しやすい
+- issue #0161 (AbortController): 上記「0161 との統合ルール」参照。先後どちらでも実装可能だが、両方適用時は「ガードによる early return ではなく、書き換え部のみ if で囲む」形に揃える
+- issue #0162 (リソース close を `removeSubscriber` に集約): 本 issue で触る部位 (コールバック内の status 更新) とは直交
+- issue #0171 (`cleanupSubscriber` リネーム / 責務分割): リネーム後も本修正の対象 (コールバック内の if ガード) は同じ位置に残る。先後どちらでも実装可能
 
 ## 影響範囲
 
 - `devtools/src/hooks/useSubscriber.ts`
   - `connect()` に渡す close コールバック (l.231-238)
+  - `connect()` に渡す error コールバック (l.239-243)
   - `session.subscribe()` に渡す end コールバック (l.550-554)
   - `session.subscribe()` に渡す error コールバック (l.555-559)
+  - クロージャ内ヘルパー `shouldApplyStatusUpdate` の追加
 
 ## テスト戦略
 
-CLAUDE.md 規約によりモック / スタブは使えない。現状 `useSubscriber.ts` のコールバックはフック内クロージャで外から呼べないため、まず以下のロジック抽出を行う:
-
-- close / end / error コールバックの「`status` / `statusMessage` 更新と `cleanupSubscriber` 呼び出し可否」を判定する純粋関数 `shouldApplyTerminalUpdate(instance: SubscriberInstance): boolean` を `useSubscriber.ts` から export する
-  - 実装は `return !instance.isStopping.value && instance.session.value !== null;` の 1 行
-- 各コールバックの先頭で `if (!shouldApplyTerminalUpdate(instance)) return;` を呼ぶ
-
-`devtools/src/hooks/useSubscriber.test.ts` に以下を追加:
-
-- `createSubscriberInstance("test-id")` で実 `SubscriberInstance` を作成
-- `isStopping = true` / `session.value = null` の組み合わせ 4 通りについて `shouldApplyTerminalUpdate` の真偽を assert する真理値表テスト (`false`, `false`, `false`, `true`)
-
-これにより副作用関数 (コールバック本体) を抽出せずに、判定ロジックだけを純粋関数として隔離・検証できる。コールバック側は単純な `if` ガードのみなので、目視レビューと手動確認で十分。
+`useSubscriber.ts` のコールバックはフック内クロージャで外から呼べないため、本 issue では自動テストを追加しない。`shouldApplyStatusUpdate` の判定は `!isStopping && session !== null` の 1 行で、export してテストする利益が乏しい。
 
 手動確認:
 
 - Stop ボタン押下と同時にサーバ側を切断するシナリオを 5 回繰り返し、最終 `statusMessage` が常に `"Ready to subscribe"` で確定すること
 - 通常のサーバ切断 (stop ボタン未押下) では従来どおり `"Disconnected: closeCode=..., reason=..."` が表示されること
-- Stream ended / Subscribe error 経路についても、stop 押下中は元の文言が抑止され、stop 未押下時は表示されること
-
-`vp run test` で全テストがパスすること。
+- 通常の connect エラー (stop 未押下) では `"Error: ..."` が表示されること
+- Stream ended (Publisher 側正常終了、stop 未押下) では `"Stream ended"` が表示されること
+- Subscribe error (stop 未押下) では `"Subscribe error: ..."` が表示されること
+- Stop 押下中の close / end / error 発火では上記の詳細メッセージが `"Ready to subscribe"` で塗りつぶされること
+- `vp run test` で全テストパス
+- `vp run build:devtools` でビルド成功
 
 ## CHANGES.md 記載方針
 
-- `## develop` 直下に `[FIX]` で記載する (devtools の表示挙動を確定的にする修正)
+`## develop` 直下に `[FIX]` で記載する (devtools の表示挙動を確定的にする修正、ユーザー可視)。
+
+エントリ例:
+
+```
+- [FIX] devtools の `stopSubscribing` と close/end/error コールバックの最終 `statusMessage` レースを解消する (#0163)
+  - @voluntas
+```
+
+## ブランチ命名
+
+`feature/fix-` を使う。
 
 ## 完了条件
 
-- `shouldApplyTerminalUpdate(instance)` が `useSubscriber.ts` から export されている
-- close / end / error コールバック先頭で `if (!shouldApplyTerminalUpdate(instance)) return;` が呼ばれている
+- `useSubscriber.ts` 内に `shouldApplyStatusUpdate` クロージャヘルパーが定義されている
+- close / connect error / subscriber end / subscriber error の各コールバックで `status` / `statusMessage` の書き換えが `if (shouldApplyStatusUpdate())` 内に置かれている
+- `cleanupSubscriber()` を元々呼んでいたコールバック (connect close / connect error / subscriber end) では、`cleanupSubscriber()` 呼び出しを if 条件外に置く (0161 適用後の abort 経路を維持)
+- subscriber error コールバックは現状 `cleanupSubscriber()` を呼んでいないため、本 issue でも追加しない
 - `stopSubscribing` 主導の終端時、最終 `statusMessage` が常に `"Ready to subscribe"` で確定する
-- 非 stop 主導の終端時、従来の詳細メッセージ (`"Disconnected: ..."` / `"Stream ended"` / `"Subscribe error: ..."`) が保持される
-- `shouldApplyTerminalUpdate` の真理値表テスト (4 通り) がパスする
-- `vp run test` の全テストがパスする
+- 非 stop 主導の終端時、従来の詳細メッセージ (`"Disconnected: ..."` / `"Error: ..."` / `"Stream ended"` / `"Subscribe error: ..."`) が保持される
+- 手動確認シナリオ (上記 6 項目) が通過する
+- `vp run test` で全テストパス
+- `vp run build:devtools` でビルド成功

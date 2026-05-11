@@ -32,12 +32,11 @@ Model: Opus 4.7
   も購読し直す。レンダー結果は同じでも、Preact の VDOM diff と signal の
   購読再構築のコストが N (= subscriber 数) 倍で発生する。
 
-### 何が「再描画」か
+### 本 issue の効果範囲
 
-「全 panel が DOM から作り直される」ことではなく、上記の通り「`App` 経由で
-全 `SubscriberPanel` の関数本体が走り直され、その内部で参照する全 signal の
-購読が張り直される」ことを指す。複数 subscriber を運用するときに、片方の
-追加/削除がもう片方の VDOM diff を強制するのは無駄である。
+本 issue で削減できるのは「対象 ID の `SubscriberPanel` が `subscriberInstances` Map 全体を購読するコスト」のみ。`App` は `subscriberIds.value` を購読しており、`Array.from(keys())` が毎回新配列を返すため Map 参照差し替え時に必ず再描画される。その結果として全 `SubscriberPanel` の関数本体は再実行される (Preact reconciler の基本挙動)。
+
+本 issue が削減するのは関数本体実行時の「Map signal への購読登録」コストおよび「`instance` 参照が同じならば派生 signal が下流通知を起こさないことによる effect / computed の不要な再評価」である。`SubscriberPanel` 関数本体の実行回数そのものは別途 `subscriberIds` の安定化が必要であり、本 issue のスコープ外。
 
 ### なぜ `subscriberInstances` Map 全体購読を `SubscriberPanel` 内に残してはいけないか
 
@@ -87,10 +86,9 @@ export function getSubscriberInstanceSignal(
   Subscriber を追加/削除しても **対象 ID の instance 参照は変わらない** ため、
   下流 (= `SubscriberPanel`) は通知を受けない。これが本 issue の核となる
   振る舞いである。
-- キャッシュは `removeSubscriber` 内でも削除し、メモリリークを避ける。同 ID
-  が再生成されることはない (ID は `crypto.randomUUID()` の先頭 8 文字、
-  `signals/subscriber.ts:123`) ため、削除済み ID の signal が誤って再利用
-  されるリスクはない。
+- キャッシュは `removeSubscriber` 内でも削除し、メモリリークを避ける。同 ID 再生成は ID 空間 (32 bit = `crypto.randomUUID()` 先頭 8 文字) と運用上の subscriber 数 (数十程度) から実用上無視できる。
+- `removeSubscriber` 内の処理順序は **「Map 差し替え → キャッシュエントリ削除」** とする。Map 差し替え時点で cached `computed` が `undefined` への変化通知を発火させ、購読者 (`SubscriberPanel`) が `instance === undefined` を観測して `return null` で離脱する。その後でキャッシュエントリを削除する。逆順 (キャッシュ削除を先) では undefined 通知の発火経路が壊れるため不可。
+- 0162 (`removeSubscriber` に decoder / session の close 集約) と組み合わせた最終形は「decoder.close → session.close → Map 差し替え → キャッシュエントリ削除」の順となる。0162 が先に実装される前提で、本 issue では `removeSubscriber` の末尾に `subscriberInstanceSignalCache.delete(id)` を追加する。
 
 ### `App.tsx` 側の処理
 
@@ -98,10 +96,7 @@ export function getSubscriberInstanceSignal(
 される。これは「追加/削除 UI のために必要な再描画」なので残してよい。
 変更するのは **子 `SubscriberPanel` 内部で起きていた無駄購読** のみ。
 
-`subscriberIds` を `Array.from(keys())` のまま返すと毎回新しい配列で
-通知が必ず走るため、将来的に「keys が同じなら通知しない」改善 (例:
-`computed` 内で前回配列との浅い等値判定を行う) を別 issue (#0166 候補) で
-検討する余地があるが、本 issue のスコープ外とする。
+`subscriberIds` を `Array.from(keys())` のまま返すと毎回新しい配列で通知が必ず走るため、`App` の再描画と全 `SubscriberPanel` の関数本体再実行は本 issue では除去できない。「keys が同じなら通知しない」改善は本 issue 完了後に別 issue として SEQUENCE から番号を払い出して起票する。
 
 ### `SubscriberPanel.tsx` の変更
 
@@ -128,54 +123,18 @@ export function SubscriberPanel({ subscriberId, ... }: SubscriberPanelProps) {
 `SubscriberPanel` のレンダー購読 (= Preact の `@preact/signals` 統合) に
 登録される。
 
-### 既存ヘルパ `getSubscriber(id)` の扱い
+## 関連 issue との順序
 
-`signals/subscriber.ts:143` の `getSubscriber(id)` は同期取得用 (テストや
-副作用処理から呼ぶ用途) として残す。`computed` を返す本 issue のヘルパとは
-責務が異なる。
-
-## 検討した代替案
-
-### 案 B: `SubscriberPanel` 内で `useComputed` を使う
-
-```typescript
-const instance = useComputed(() => subscriberInstances.value.get(subscriberId)).value;
-```
-
-- `useComputed` は内部で `useMemo` + `computed` を作る。Map 参照差し替えでも
-  `computed` 出力が同一なら下流通知しないため、効果は案 A と等価。
-- 採用しない理由: 「ID から instance signal を引き当てる」関心は
-  `signals/subscriber.ts` の責務であり、コンポーネント側に式を直書きすると
-  他の利用者 (例: 将来 `SubscriberSummary` のような別コンポーネント) が
-  同じ式を重複実装することになる。ヘルパ化して 1 箇所に集約する案 A を採る。
-
-### 案 C: `subscriberInstances` を `Map<id, Signal<SubscriberInstance>>` に変える
-
-- instance 参照を最初から signal で包むことで、Map 自体は要素追加/削除でしか
-  signal にしない構造。
-- 採用しない理由: 現行の `SubscriberInstance` は内部フィールドが既に signal
-  化されており (issue #0134 の成果)、外側にもう 1 段 signal を被せる必然性が
-  ない。追加コストに対して得るものが少ない。
-
-## issue #0164 との関係
-
-- #0164 は `SubscriberInstance` のフィールド構造 (view / runtime / ref) を
-  再設計する issue で、Map から instance を引き当てる経路自体は変えない。
-- 本 issue が変えるのは「Map → 特定 ID の instance を引き当てる際の購読粒度」
-  のみで、`SubscriberInstance` の中身は触らない。
-- 順序: 本 issue を先に行うと、#0164 が view と runtime を分割した後でも
-  「ID → view を引き当てる」ヘルパ名を `getSubscriberViewSignal(id)` に
-  改名するだけで済む。#0164 を先に行うと本 issue で扱う対象 (instance) が
-  view に変わるが、本質的な購読構造は同じ。**先後どちらでも独立に実装可能** で
-  あり、本 issue を先に着手する。
+- 0162 (`removeSubscriber` に decoder / session の close 集約): 0162 → 0165 の順を前提とし、本 issue で `removeSubscriber` の末尾にキャッシュエントリ削除を追加する
+- 0164 (`SubscriberInstance` の Signal 粒度再設計): 本 issue と独立。`SubscriberInstance` の中身を触らないため先後どちらでも可
+- 0171 (`cleanupSubscriber` リネーム): 本 issue が触る `signals/subscriber.ts:removeSubscriber` / `SubscriberPanel.tsx` とは別ファイルのため独立
 
 ## 影響範囲
 
 - `devtools/src/signals/subscriber.ts`
   - `getSubscriberInstanceSignal(id)` を新規追加
-  - `subscriberInstanceSignalCache` を新規追加
-  - `removeSubscriber` でキャッシュエントリを削除
-  - `clearSubscriberInstanceSignalCache()` をテスト用に export
+  - `subscriberInstanceSignalCache` を新規追加 (テスト観測用に export)
+  - `removeSubscriber` の末尾でキャッシュエントリを削除 (Map 差し替えの「後」)
 - `devtools/src/components/SubscriberPanel.tsx`
   - `sub.subscriberInstances.value.get(subscriberId)` をヘルパ呼び出しに置換
   - `useMemo` を追加
@@ -191,15 +150,9 @@ const instance = useComputed(() => subscriberInstances.value.get(subscriberId)).
 
 既存の `beforeEach` (`subscriberInstances.value = new Map()`) では本 issue
 で導入する `subscriberInstanceSignalCache` がクリアされないため、テストの
-独立性を担保する手段を 1 つ選んで `signals/subscriber.ts` に実装する:
-
-- 案 i: `subscriberInstanceSignalCache` を `export` する (テスト専用に
-  `cache.clear()` を呼べるようにする)
-- 案 ii: `clearSubscriberInstanceSignalCache(): void` をテストヘルパ用に
-  `export` する
-
-実装シンプルさで案 ii を推奨する。`beforeEach` で
-`clearSubscriberInstanceSignalCache()` を呼ぶ。
+独立性を担保するため `subscriberInstanceSignalCache` を `export` し、
+`beforeEach` で `subscriberInstanceSignalCache.clear()` を呼ぶ。export は
+テスト観測用途で許容する (production コードからは呼ばない)。
 
 1. `getSubscriberInstanceSignal(id)` が返す signal は、同 ID で呼び出すと
    同じインスタンスを返す (キャッシュが効く) ことを確認する。
@@ -209,23 +162,13 @@ const instance = useComputed(() => subscriberInstances.value.get(subscriberId)).
    対する購読者は通知を受けないことを同様に確認する。
 4. `removeSubscriber(id)` で対象 ID 自身を削除した場合、購読者が `undefined`
    への変化通知を受けることを確認する。
-5. `removeSubscriber(id)` 後に同 ID で `getSubscriberInstanceSignal(id)` を
-   呼んだ場合に、新しい (前回とは別の) signal インスタンスが返ることを
-   確認する。これによりキャッシュエントリが削除されたことを間接的に検証
-   する。実運用では同 ID が再生成されないが、テスト用途として `addSubscriber`
-   ではなく `subscriberInstances.value` を直接書き換えて削除済み ID と
-   同じ ID を再投入する手順で確認してよい (`subscriber.test.ts` の既存
-   `beforeEach` で `subscriberInstances.value = new Map()` を使っており、
-   直接書き換えは既に許容されている)。
+5. `removeSubscriber(id)` 後に `subscriberInstanceSignalCache.has(id) === false` を確認する。テスト用に `subscriberInstanceSignalCache` を export してキャッシュ状態を直接観測する (production コードでは `signal` モジュール内クローズに留めるが、テスト時の観測ヘルパとして export を許容)
 
 加えて以下を実施する。
 
 - `vp run test` で全テストがパスすること
 - `vp run build:devtools` がエラーなく完了すること
-- 手動: subscriber を 2 つ追加し、片方を `addSubscriber` / `removeSubscriber`
-  で増減させたときに、もう片方の `SubscriberPanel` の関数本体が再実行され
-  ないことを Preact DevTools の Profiler または `console.log` を一時挿入して
-  確認する
+- 手動: subscriber を 2 つ追加し、片方を `addSubscriber` / `removeSubscriber` で増減させたときに、もう片方の `SubscriberPanel` の `instanceSignal.value` 観察 effect が再評価されないことを Preact DevTools の Profiler で確認する (`SubscriberPanel` 関数本体は `App` 再描画により再実行されるが、これは本 issue のスコープ外)
 
 ## CHANGES.md 記載方針
 
@@ -236,8 +179,7 @@ const instance = useComputed(() => subscriberInstances.value.get(subscriberId)).
 
 - `SubscriberPanel` 内に `sub.subscriberInstances.value` への直接アクセスが
   存在しない
-- `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と
-  `clearSubscriberInstanceSignalCache()` が追加されている
-- `removeSubscriber` でキャッシュエントリが破棄される
+- `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と `subscriberInstanceSignalCache` (export) が追加されている
+- `removeSubscriber` の末尾 (Map 差し替えの後) でキャッシュエントリが削除される。0162 完了後の `removeSubscriber` は「decoder.close → session.close → Map 差し替え → キャッシュ削除」の順になる
 - 上記テスト戦略の単体テストが追加され、`vp run test` が全てパスする
 - `vp run build:devtools` が成功する

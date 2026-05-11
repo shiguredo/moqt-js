@@ -14,67 +14,78 @@ instance.liveObjectBuffer.value = [...instance.liveObjectBuffer.value, obj];
 
 スプレッドで Signal 値を毎回再生成しているため、Joining Fetch 中に到着する N オブジェクトに対し合計 Σ_{i=1..N} i = N(N+1)/2 のコピーが発生し、計算量は O(N²)。例えば 1000 オブジェクト溜まれば 500,500 要素分のコピー。`liveObjectBuffer` は UI 描画に使われておらず Signal にする必要がない。`useRef<MoqtObject[]>([])` に置き換えれば `push` で O(1) 追記でき、合計 O(N) になる。
 
-なお `onEnd` / `onError` でのドレインも `[...instance.liveObjectBuffer.value]` で 1 回 O(N) のコピーを行うが、これは破壊的ソートを避けるための意図的なコピーであり置き換え後も `[...ref.current]` または `ref.current.splice(0)` で同等に残る (本 issue の改善対象は object コールバック側 O(N²) → O(N))。
-
 ## 根拠
 
-- `useSubscriber.ts:540` の `instance.liveObjectBuffer.value = [...instance.liveObjectBuffer.value, obj]` が hot path で繰り返し呼ばれる
+- `useSubscriber.ts:540` の `instance.liveObjectBuffer.value = [...instance.liveObjectBuffer.value, obj]` が hot path で繰り返し呼ばれ O(N²) コピー
 - `liveObjectBuffer` の `.value` 読み取り箇所は全て `useSubscriber.ts` 内 (object コールバック / `onEnd` / `onError` / `cleanupSubscriber` / `resetSubscriberStats`) に閉じている
-- `devtools/src/components/SubscriberPanel.tsx` / `devtools/src/components/DebugPanel.tsx` / `devtools/src/testApi.ts` から `liveObjectBuffer` への参照は無し (grep 確認済み)
+- `SubscriberPanel.tsx` / `DebugPanel.tsx` / `testApi.ts` から `liveObjectBuffer` への参照は無し (grep 確認済み)
 - 既に同フックには `chainRef = useRef<Promise<void>>(Promise.resolve())` という同パターンの前例があり、コールバック群はクロージャ経由で安全に参照できる
 - Signal 化により得られる reactive 通知は本フィールドでは無価値 (購読者ゼロ)
+
+## 関連 issue との順序
+
+- 0164 (`SubscriberInstance` Signal 粒度再設計): 0164 は本 issue を **必ず先行マージする** 前提でスコープを縮小済み (0164 本文「0166 完了まで pending」)。本 issue → 0164 の順で実装する
+- 0171 (`cleanupSubscriber` リネーム / 分割): 0171 で `cleanupSubscriber` が `teardownSubscriber` / `closeSubscriberResources` / `resetSubscriberState` に分割される。`liveObjectBuffer.value = []` (現コード l.646) は 0171 後は `resetSubscriberState` 内に移る。本 issue → 0171 の順を推奨。0171 が後に入る場合は、本 issue で導入する `liveObjectBufferRef` を `resetSubscriberState` のクロージャから参照する形に書き換える追記が 0171 で必要
 
 ## 修正方針
 
 1. `devtools/src/signals/subscriber.ts:SubscriberInstance` から `liveObjectBuffer: Signal<MoqtObject[]>` を削除する
 2. `createSubscriberInstance` から `liveObjectBuffer: signal<MoqtObject[]>([])` を削除する
-3. 削除後に `MoqtObject` 型 import が他で参照されていなければ import からも除去する
+3. 削除後 `MoqtObject` 型 import は `subscriber.ts` 内に他の参照が残らないため import から除去する
 4. `useSubscriber` フック冒頭 (既存の `chainRef` 直下) に `const liveObjectBufferRef = useRef<MoqtObject[]>([])` を追加する
-5. `useSubscriber.ts:540` の代入を `liveObjectBufferRef.current.push(obj)` に置き換える
-6. `useSubscriber.ts:461` / `:518` の `toSortedByGroupObject([...instance.liveObjectBuffer.value])` を `toSortedByGroupObject([...liveObjectBufferRef.current])` に置き換える (スプレッドコピーは破壊的ソート回避のため残す)
+5. `useSubscriber.ts:540` の代入を `liveObjectBufferRef.current.push(obj)` に置き換える (O(1))
+6. `useSubscriber.ts:461` / `:518` の `toSortedByGroupObject([...instance.liveObjectBuffer.value])` を `toSortedByGroupObject(liveObjectBufferRef.current)` に置き換える。`toSortedByGroupObject` 自体が内部で `[...objects].sort(...)` でコピーするため、呼び出し側スプレッドは冗長で削除する
 7. `useSubscriber.ts:502` / `:525` / `:646` の `instance.liveObjectBuffer.value = []` を `liveObjectBufferRef.current = []` に置き換える
-8. `useSubscriber.ts:83` (`resetSubscriberStats` 内の `instance.liveObjectBuffer.value = []`) も同様に置き換える。`resetSubscriberStats` は `instance` のみを引数に取るため、`liveObjectBufferRef` を第 3 引数として渡すか、初期化責務を `useSubscriber` 側へ移すかを実装時に選択する
-9. `onEnd` / `onError` の `batch(() => { ... })` から `instance.liveObjectBuffer.value = []` を取り出し、batch の外で `liveObjectBufferRef.current = []` する (Signal ではないため batch 不要)
-10. `joiningFetchInProgress` は object コールバックでのバッファ判定に使われ続けるため Signal のまま残す (本 issue の対象外)
-
-## 0164 との関係
-
-issue 0164 (`SubscriberInstance` の Signal 粒度再設計) は `liveObjectBuffer` を ref 化対象として明示的に列挙している (#0164 根拠セクション)。両 issue は対象フィールドが重なる。
-
-- **0164 を先行**: 本 issue は 0164 の作業に完全に吸収される (重複作業)
-- **0166 を先行**: ピンポイント修正で性能改善を独立 PR として取り込める。0164 はその後 `isStopping` / `joiningFetchLastLocation` / `decoderConfigured` / `decoderState` のみを残す
-- **依存**: 双方独立に着手可能だが、後着手側は前着手側の変更を取り込んだ上で残差を実装する
-
-推奨は **0166 を先行**。理由は範囲が狭く性能改善効果が明確で、0164 の設計議論を待たずにマージ可能なため。0164 が先行マージされた場合、本 issue は完了済みとして close する。
+8. `useSubscriber.ts:83` (`resetSubscriberStats` 内の `instance.liveObjectBuffer.value = []`) は **`resetSubscriberStats` から削除し、呼び出し側 (`startSubscribing` 内の `resetSubscriberStats(...)` 呼び出し直後) に `liveObjectBufferRef.current = []` を直接書く**。`resetSubscriberStats` のシグネチャに ref を追加せず、責務を `useSubscriber` 側に移す方針で 0164 の resetSubscriberStats シグネチャ整理と素直に積み上がる
+9. `onEnd` / `onError` の `batch(() => { ... })` 内の `instance.liveObjectBuffer.value = []` を batch の **外** に出し `liveObjectBufferRef.current = []` で実行する。順序は **batch の直後 (= batch 内の残り Signal 代入が完了した後) に ref リセット** を行う形に統一する。本 issue 時点では batch 内に `joiningFetchInProgress` / `joiningFetchLastLocation` / `joiningFetchStats` 等の Signal 代入が残るため batch ブロック自体は維持する (0164 適用後に batch ブロックは再評価)
+10. `joiningFetchInProgress` は本 issue の対象外として Signal のまま残す (ref 化は 0164 の責務)
 
 ## 影響範囲
 
-- `devtools/src/signals/subscriber.ts` (フィールド削除、`MoqtObject` import の整理)
-- `devtools/src/hooks/useSubscriber.ts` (5 箇所の書き込み / 2 箇所の読み取り / `resetSubscriberStats` のシグネチャ調整)
-- `devtools/src/signals/subscriber.test.ts` (line 39 の `liveObjectBuffer` 検証を削除)
-
-`SubscriberPanel.tsx` / `DebugPanel.tsx` / `testApi.ts` は無変更。
+- `devtools/src/signals/subscriber.ts`: `liveObjectBuffer` フィールド削除、`MoqtObject` import 削除
+- `devtools/src/hooks/useSubscriber.ts`: `useRef<MoqtObject[]>([])` 追加、書き込み 5 箇所 (l.83 / 502 / 525 / 540 / 646) / 読み取り 3 箇所 (l.461 / 518 / 540 RHS) の置換、`resetSubscriberStats` から `liveObjectBuffer` 行を削除し呼び出し側に移動、`onEnd` / `onError` の batch ブロック外で ref リセット
+- `devtools/src/signals/subscriber.test.ts`: `assert.deepEqual(instance.liveObjectBuffer.value, [])` (l.39) を削除
+- `SubscriberPanel.tsx` / `DebugPanel.tsx` / `testApi.ts`: 無変更
 
 ## テスト戦略
 
-- `vp run test` で全テストがパスすること
-- `signals/subscriber.test.ts` の `createSubscriberInstance initializes signals with expected defaults` から `assert.deepEqual(instance.liveObjectBuffer.value, []);` を削除する
-- 新規ユニットテストは追加しない (ref はフックローカルで `createSubscriberInstance` の検証対象外。フックの統合テストは既存のスコープ外)
-- 手動確認:
-  - Joining Fetch 有効状態で接続し、ストリームが先行している配信に対して開始する
-  - Joining Fetch 完了直後 / 失敗時の両系統でデコードが再開すること
-  - 接続→停止→再接続を繰り返してバッファに残骸が引き継がれないこと
+- `vp run test` で全テストパス
+- `signals/subscriber.test.ts` の `createSubscriberInstance initializes signals with expected defaults` から `assert.deepEqual(instance.liveObjectBuffer.value, []);` (l.39) を削除する
+- 新規ユニットテストは追加しない (ref はフックローカルで `createSubscriberInstance` の検証対象外)
+
+手動確認 (タイムアウト 10 秒以内):
+
+- Joining Fetch 有効状態で接続し、Publisher が先行している配信に対して Subscribe 開始
+- Joining Fetch 完了直後にライブバッファのドレインが行われ、デコードが再開すること
+- Joining Fetch `onError` 発火時もライブバッファのドレインが行われ、デコードが再開すること
+- 接続 → 停止 → 再接続を 3 回繰り返し、`liveObjectBufferRef` に前回の残骸が引き継がれないこと
+- Chrome DevTools の Performance タブで、Joining Fetch 中の object コールバック処理で Long Task (50ms 超) が発生しないこと (大量バッファ時の O(N²) 計算が解消されたことを間接確認)
+- `vp run build:devtools` でビルド成功
 
 ## CHANGES.md 記載方針
 
-- `### misc` サブセクションに `[UPDATE]` で記載する (devtools 内部実装の性能改善)
-- 例: `- [UPDATE] devtools: Joining Fetch 中のライブオブジェクトバッファを Signal から useRef へ変更し、追記コストを O(N²) から O(N) に改善する`
+`### misc` サブセクションに `[UPDATE]` で記載する (devtools 内部実装の性能改善)。
+
+エントリ例:
+
+```
+- [UPDATE] devtools の Joining Fetch 中ライブオブジェクトバッファを Signal から useRef へ変更し、追記コストを O(N²) から O(N) に改善する (#0166)
+  - @voluntas
+```
+
+## ブランチ命名
+
+`feature/change-` を使う (devtools 内部 API のフィールド削除を含むため)。
 
 ## 完了条件
 
 - `SubscriberInstance` から `liveObjectBuffer` フィールドが削除されている
+- `subscriber.ts` の `MoqtObject` import が削除されている
 - `useSubscriber` フック内 `useRef<MoqtObject[]>` で同等の機能が実現されている
 - `object:` コールバック内の追記が `push` (O(1)) になっている
-- `onEnd` / `onError` / `cleanupSubscriber` / `resetSubscriberStats` のクリアが ref 経由に置き換わっている
-- `vp run test` が全てパスする
-- 手動確認で Joining Fetch のドレイン挙動が従来と同一
+- `onEnd` / `onError` / `cleanupSubscriber` の `liveObjectBuffer` クリアが ref 経由 (batch 外) に置き換わっている
+- `resetSubscriberStats` から `liveObjectBuffer` 行が削除され、呼び出し側 (`startSubscribing` 内) に `liveObjectBufferRef.current = []` が移動している
+- `signals/subscriber.test.ts` から該当アサーション (l.39) が削除されている
+- `vp run test` で全テストパス
+- `vp run build:devtools` でビルド成功
+- 手動確認シナリオ (上記 5 項目) が通過する

@@ -5,7 +5,7 @@ Model: Opus 4.7
 
 ## 概要
 
-devtools の `useSubscriber.ts:requestKeyframe` と `src/createMediaSubscriber.ts:requestKeyframe` は、Subscriber の `update()` (REQUEST_UPDATE 送信) に NEW_GROUP_REQUEST Parameter (Type 0x32) を無条件で付与している。これは `draft-ietf-moq-transport-17 §9.3.11` の MUST NOT に違反する可能性がある:
+devtools の `useSubscriber.ts:requestKeyframe` と `src/createMediaSubscriber.ts:requestKeyframe` は、Subscriber の `update()` (REQUEST_UPDATE 送信) に NEW_GROUP_REQUEST Parameter (Type 0x32) を無条件で付与している。これは `draft-ietf-moq-transport-17 §9.3.11` の MUST NOT に違反する:
 
 > A subscriber MUST NOT send this parameter in PUBLISH_OK or REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS Property with value 1.
 
@@ -32,6 +32,7 @@ SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれていない 
 
 - MUST NOT 対象は `PUBLISH_OK` と `REQUEST_UPDATE` のみ
 - `SUBSCRIBE` での送信は MAY (foreknowledge 不要、サポート外なら publisher が無視)
+- value の意味は「largest Group ID + 1」または「0 (情報なし)」。本 issue では現状の `value=1` (= largest Group ID 0 を観測したという意味) をそのまま維持する。value の意味論を変更する作業はスコープ外
 
 ### draft-ietf-moq-transport-17 §11.5 (DYNAMIC GROUPS)
 
@@ -46,10 +47,11 @@ SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれていない 
 
 ポイント:
 
-- DYNAMIC_GROUPS は Track Property (Property Type 0x30)
+- DYNAMIC_GROUPS は Track Property (Property Type 0x30、偶数 ID = varint value 形式)
 - 省略時のデフォルト値は 0 (= NEW_GROUP_REQUEST 不可)
+- 値域は 0/1 のみ。`src/properties.ts:124-128` の `validateTrackPropertyValue` で受信時に PROTOCOL_VIOLATION 検証済みなので、複数値や範囲外を心配する必要はない
 
-### draft-ietf-moq-transport-17 §11.6 (Immutable Properties, 抜粋)
+### draft-ietf-moq-transport-17 §11.6 (Immutable Properties)
 
 > Unless specified by a particular Property specification, Properties
 > MAY appear either in the mutable extension list or inside Immutable
@@ -57,7 +59,10 @@ SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれていない 
 > MUST search both the mutable properties and the contents of Immutable
 > Extensions.
 
-ポイント: DYNAMIC_GROUPS の検索時は mutable と Immutable Properties (Type 0xB) の両方を見る必要がある。
+ポイント:
+
+- DYNAMIC_GROUPS は mutable 側 / Immutable Properties (Property Type 0x0B) 配下のいずれにも出現しうる
+- 検索は両方を MUST で行う必要がある
 
 ## 現状の実装
 
@@ -86,7 +91,7 @@ async requestKeyframe(): Promise<void> {
 }
 ```
 
-DYNAMIC_GROUPS の確認なしで REQUEST_UPDATE を送る → §9.3.11 違反。
+DYNAMIC_GROUPS の確認なしで REQUEST_UPDATE を送る → §9.3.11 違反。コメント中の `SUBSCRIBE_UPDATE` という用語は draft-17 では `REQUEST_UPDATE` に改名されているため本 issue でついでに修正する。
 
 ### devtools 側 (`devtools/src/hooks/useSubscriber.ts:659-682`)
 
@@ -94,9 +99,6 @@ DYNAMIC_GROUPS の確認なしで REQUEST_UPDATE を送る → §9.3.11 違反�
 const requestKeyframe = async (): Promise<void> => {
   ...
   try {
-    // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-    // draft-ietf-moq-transport-17 §9.3.11
-    // NEW_GROUP_REQUEST = 0x32
     await subscriberInstance.update({
       parameters: [
         {
@@ -113,66 +115,77 @@ const requestKeyframe = async (): Promise<void> => {
 
 同様の問題。
 
-### SUBSCRIBE 経路 (devtools `useSubscriber.ts:408-411`)
+### SUBSCRIBE 経路 (devtools `useSubscriber.ts:408-411`) は修正対象外
 
-```ts
-// NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
-if (newGroupRequestEnabled) {
-  subscribeOptions.newGroupRequest = 0n;
-}
-```
-
-これは SUBSCRIBE 送信なので §9.3.11 の MUST NOT 対象外。**修正不要**。
+`subscribeOptions.newGroupRequest = 0n` は §9.3.11 で明示的に許可されているため触らない。当該箇所のコメントに「§9.3.11 により SUBSCRIBE では MAY (foreknowledge 不要)」と明記する。
 
 ## DYNAMIC_GROUPS の取得経路
 
-DYNAMIC_GROUPS は MSF Catalog のフィールドではなく、**MOQT Track Property** として SUBSCRIBE_OK で運ばれる。`src/properties.ts:83` で `TrackPropertyId.DYNAMIC_GROUPS = 0x30n` が定義済み。
+DYNAMIC_GROUPS は MSF Catalog のフィールドではなく、**MOQT Track Property** として SUBSCRIBE_OK で運ばれる。
 
-moqt-js 側では既に `Subscriber.trackProperties` が SUBSCRIBE_OK の Track Properties を露出している (`src/subscriber.ts:54-60, 117-119`):
+- `TrackPropertyId.DYNAMIC_GROUPS = 0x30n` (`src/properties.ts:83`)
+- `MOQTPropertyId.IMMUTABLE_PROPERTIES = 0x0bn` (`src/properties.ts:26`)
+- `Subscriber.trackProperties: ReadonlyArray<Property>` (`src/subscriber.ts`) が SUBSCRIBE_OK の Track Properties を露出
+- `decodeProperties` (`src/properties.ts:567-596`) は **フラットにデコード** する。Immutable Properties エントリは odd ID 0x0Bn として `{ id: 0x0Bn, data: ... }` の単一エントリとして格納される。内部は `decodeImmutableProperties` (`src/properties.ts:386`) で展開する必要がある
 
-```ts
-/**
- * SUBSCRIBE_OK で受信した Track Properties
- * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
- * DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
- * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
- */
-readonly trackProperties: ReadonlyArray<Property>;
-```
-
-`Property` 型は `src/properties.ts:161-165`:
+`Property` 型 (`src/properties.ts`):
 
 ```ts
 export interface Property {
   id: bigint;
-  value?: bigint;
-  data?: Uint8Array;
+  value?: bigint;  // 偶数 ID は varint value (DYNAMIC_GROUPS はここ)
+  data?: Uint8Array;  // 奇数 ID は length + bytes (Immutable Properties はここ)
 }
 ```
 
-DYNAMIC_GROUPS (Property Type 0x30) は偶数 ID = varint value 形式なので `value` フィールドに格納される (`data` ではない)。
-
-すなわち、**moqt-js 側 API 追加は不要**。`subscriberInstance.trackProperties` から `id === TrackPropertyId.DYNAMIC_GROUPS` のエントリを検索し、`value === 1n` を確認するだけでよい。
-
-`TrackPropertyId` は `src/index.ts:108` から既に export 済み。
+moqt-js 側 API 追加は不要 (`subscriberInstance.trackProperties` で取得可能)。新規 export は `supportsDynamicGroups` ヘルパ関数のみ。
 
 ## 修正方針
 
-### 1. moqt-js 側 (`src/createMediaSubscriber.ts:requestKeyframe`)
-
-`videoSubscriber.trackProperties` から DYNAMIC_GROUPS Property を検索し、値が `1n` でない場合は早期 return する (またはエラーを throw する)。
-
-実装案:
+### 1. `supportsDynamicGroups` 純関数を `src/properties.ts` に追加
 
 ```ts
-import { TrackPropertyId } from "./properties";
+import { decodeImmutableProperties } from "./properties";
 
-function supportsDynamicGroups(subscriber: Subscriber): boolean {
-  const property = subscriber.trackProperties.find(
-    (p) => p.id === TrackPropertyId.DYNAMIC_GROUPS,
-  );
-  return property?.value === 1n;
+/**
+ * Track Properties に DYNAMIC_GROUPS=1 が含まれているかを判定する。
+ *
+ * draft-ietf-moq-transport-17 §11.6: "When looking for the value of a property,
+ * processors MUST search both the mutable properties and the contents of Immutable
+ * Extensions."
+ *
+ * mutable list と Immutable Properties (Type 0x0B) 配下の両方を検索する。
+ * DYNAMIC_GROUPS の値域は §11.5 により 0 / 1 のみで、受信時に validateTrackPropertyValue
+ * が PROTOCOL_VIOLATION 検証済みのため、複数値や範囲外は考慮不要。
+ *
+ * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ */
+export function supportsDynamicGroups(properties: ReadonlyArray<Property>): boolean {
+  for (const property of properties) {
+    if (property.id === TrackPropertyId.DYNAMIC_GROUPS && property.value === 1n) {
+      return true;
+    }
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      const immutable = decodeImmutableProperties(property.data);
+      for (const inner of immutable.extensions) {
+        if (inner.id === TrackPropertyId.DYNAMIC_GROUPS && inner.value === 1n) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
+```
+
+`src/index.ts` から export する。
+
+### 2. moqt-js 側 (`src/createMediaSubscriber.ts:requestKeyframe`)
+
+DYNAMIC_GROUPS=1 でない場合は **throw** する (silent 化すると原因不明のキーフレーム不到来を生むため)。現行の「videoSubscriber 不在/非 active で no-op return」というセマンティクスは維持する (state 系は silent return、Property 系は throw、と原則を統一)。
+
+```ts
+import { supportsDynamicGroups } from "./properties";
 
 async requestKeyframe(): Promise<void> {
   if (this.currentState !== "active") {
@@ -185,12 +198,12 @@ async requestKeyframe(): Promise<void> {
   // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
   //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
   //  Property with value 1."
-  if (!supportsDynamicGroups(this.videoSubscriber)) {
+  if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
     throw new Error(
       "cannot request keyframe: track did not include DYNAMIC_GROUPS property with value 1",
     );
   }
-
+  // REQUEST_UPDATE を送信 (draft-17 における REQUEST_UPDATE。古いコメントの SUBSCRIBE_UPDATE は誤記)
   await this.videoSubscriber.update({
     parameters: [
       { type: 0x32, value: new Uint8Array([0x01]) },
@@ -200,78 +213,103 @@ async requestKeyframe(): Promise<void> {
 }
 ```
 
-挙動の選択 (要決定): 違反時に「早期 return」か「throw」か。本 issue では一切妥協しない方針として **throw** を採用する。理由: silent な no-op は呼び出し側で原因不明のキーフレーム不到来を生む。
+### 3. devtools 側 (`devtools/src/hooks/useSubscriber.ts:requestKeyframe`)
 
-### 2. devtools 側 (`devtools/src/hooks/useSubscriber.ts:requestKeyframe`)
+devtools は UI 経由で呼ばれる前提で、UI ボタンを disable することで違反送信は起きない設計とする。万一ボタン状態が古い場合の保険として、関数冒頭でガードし `console.warn` (現行スタイル維持) で警告して早期 return する。`addLog` への置き換えは本 issue のスコープ外。
 
-同じガードを実装し、違反時は `addLog("warn", ...)` で警告して早期 return する (devtools の他 `requestKeyframe` 経路は throw を上に伝播させていないため、UI 上の警告に統一する)。
+```ts
+import { supportsDynamicGroups } from "moqt-js";
 
-加えて、`SubscriberPanel.tsx` の Keyframe 要求ボタンを DYNAMIC_GROUPS が 1 でない場合は disable する。
+const requestKeyframe = async (): Promise<void> => {
+  const instance = sub.getSubscriber(subscriberId);
+  const subscriberInstance = instance?.subscriber.value;
+  if (!subscriberInstance || subscriberInstance.state !== "active") {
+    console.warn(`[${subscriberId}] requestKeyframe: subscriber not active`);
+    return;
+  }
+  if (!supportsDynamicGroups(subscriberInstance.trackProperties)) {
+    console.warn(
+      `[${subscriberId}] requestKeyframe: track did not include DYNAMIC_GROUPS=1, skipped`,
+    );
+    return;
+  }
+  try {
+    await subscriberInstance.update({
+      parameters: [{ type: 0x32, value: new Uint8Array([0x01]) }],
+    });
+  } catch (error) {
+    console.error(`[${subscriberId}] requestKeyframe: failed`, error);
+  }
+};
+```
 
-`SubscriberInstance` (`devtools/src/signals/subscriber.ts`) に `supportsDynamicGroups: Signal<boolean>` を追加する。`Subscriber.trackProperties` は SUBSCRIBE_OK 受信時に確定し、その後は変化しないため、`startSubscribing` 内で `session.subscribe()` の解決後 (= SUBSCRIBE_OK 受信後) に値を一度書き込めばよい。Catalog から `videoTrack.name` で得た主 SUBSCRIBE の `subscriberInstance.trackProperties` のみを見る (Catalog 自体の SUBSCRIBE_OK の Track Properties ではない点に注意)。
+### 4. devtools UI ボタンの disable 連動
 
-`subscriberInstance.subscriber` が Signal なので、`SubscriberInstance.subscriber.value?.trackProperties` を読む computed signal でも代替可能。実装側で simpler な方を選ぶ。
+`SubscriberInstance` (`devtools/src/signals/subscriber.ts`) に `dynamicGroupsSupported: Signal<boolean>` を追加する (命名は publisher 由来であることを示すため `supports` ではなく `Supported` で末尾形容詞)。`Subscriber.trackProperties` は SUBSCRIBE_OK 受信時に 1 回確定するが Signal ではないため、computed では reactive 追跡できない。
 
-### 3. SUBSCRIBE 経路は触らない
+代わりに `startSubscribing` 内の `session.subscribe(...)` 解決後 (= SUBSCRIBE_OK 受信後) に `instance.dynamicGroupsSupported.value = supportsDynamicGroups(subscriberInstance.trackProperties);` を 1 回書き込む。
 
-`subscribeOptions.newGroupRequest = 0n` は §9.3.11 で明示的に許可されているため、現状のままで仕様準拠。コメントに「SUBSCRIBE では §9.3.11 により MAY (foreknowledge 不要)」と明記する。
+`SubscriberPanel.tsx` の Keyframe 要求ボタンは `disabled={!instance.dynamicGroupsSupported.value || ...既存条件}` で連動させる。
+
+### 5. SUBSCRIBE 経路の更新内容
+
+`devtools/src/hooks/useSubscriber.ts:408-411` のコメントに「§9.3.11 により SUBSCRIBE では MAY (foreknowledge 不要)」と追記するのみ。挙動は変更しない。
 
 ## 影響範囲
 
-- `src/createMediaSubscriber.ts:requestKeyframe` (バグ修正本体)
-- `src/properties.ts` または `src/subscriber.ts` に `supportsDynamicGroups(properties)` 純関数を追加し index.ts から export
-- `devtools/src/hooks/useSubscriber.ts:requestKeyframe` (バグ修正本体)
-- `devtools/src/signals/subscriber.ts` (`supportsDynamicGroups` computed signal を追加)
-- `devtools/src/components/SubscriberPanel.tsx` (Keyframe 要求ボタンの disabled 制御)
-
-`Subscriber` インターフェース自体の変更はなし (`Subscriber.trackProperties` は既存)。新規 export は `supportsDynamicGroups` ヘルパ関数のみ。
+- `src/properties.ts`: `supportsDynamicGroups` 関数の追加
+- `src/index.ts`: `supportsDynamicGroups` の export 追加
+- `src/createMediaSubscriber.ts:requestKeyframe`: DYNAMIC_GROUPS ガード追加、`SUBSCRIBE_UPDATE` コメント修正
+- `devtools/src/hooks/useSubscriber.ts:requestKeyframe`: DYNAMIC_GROUPS ガード追加、SUBSCRIBE 経路コメント追記
+- `devtools/src/signals/subscriber.ts`: `dynamicGroupsSupported: Signal<boolean>` 追加
+- `devtools/src/components/SubscriberPanel.tsx`: Keyframe 要求ボタンの `disabled` に `!dynamicGroupsSupported.value` を加算
 
 ## テスト戦略
 
-CLAUDE.md の方針 (Vitest Chai API / it/describe/expect 禁止 / モック禁止) に従う。
+CLAUDE.md の方針 (Vitest Chai API / モック禁止) に従い、純関数 `supportsDynamicGroups` の単体テストで仕様準拠を担保する。`requestKeyframe` 本体は MOQT サーバが必要で書けないため自動テスト対象外、手動確認でカバーする。
 
-### 1. moqt-js 側
+### 単体テスト (`src/properties.test.ts` の拡張)
 
-`supportsDynamicGroups(properties: ReadonlyArray<Property>): boolean` を `src/properties.ts` (または `src/subscriber.ts`) に export し、純関数として単体テスト可能にする。シグネチャは `Subscriber` インスタンスではなく `trackProperties` 配列を直接受け取る形にして、テスト時にモック相当の Subscriber オブジェクトを作る必要を排除する。
-
-呼び出し側 (`createMediaSubscriber.requestKeyframe`) では:
-
-```ts
-if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
-  throw new Error("...");
-}
-```
-
-テスト (`src/properties.test.ts` または新規 `src/dynamicGroups.test.ts`):
-
-- DYNAMIC_GROUPS=1 を含む配列で `true`
-- DYNAMIC_GROUPS=0 を含む配列で `false`
+- DYNAMIC_GROUPS=1 が mutable 側に含まれる配列で `true`
+- DYNAMIC_GROUPS=0 が mutable 側に含まれる配列で `false`
 - DYNAMIC_GROUPS が存在しない配列で `false`
-- DYNAMIC_GROUPS が複数含まれる場合の挙動を明示 (最後の値を採用するか、最初の値を採用するかを決め、テストで固定する。仕様上は §11.5 で「If omitted, the value is 0」のみ規定。本実装では最初に見つけた値を採用する方針を提案)
-- Immutable Properties (Property Type 0xB) 経由でネストされた DYNAMIC_GROUPS をどう扱うか: §11.6 で「Properties MAY appear either in the mutable extension list or inside Immutable Properties. When looking for the value of a property, processors MUST search both the mutable properties and the contents of Immutable Extensions.」 → **両方を検索する必要がある**。`Subscriber.trackProperties` が Immutable Properties をどう保持しているかを `src/session.ts` の SUBSCRIBE_OK 処理で確認のうえ、`supportsDynamicGroups` は mutable と immutable の両方を検索する実装にする。
+- DYNAMIC_GROUPS=1 が Immutable Properties (id=0x0Bn) の data 内にエンコードされた配列で `true` (`encodeImmutableProperties` を使ってエンコードしたバイト列を `decodeProperties` でデコードした結果を渡す)
+- DYNAMIC_GROUPS=0 が Immutable Properties 内にエンコードされた配列で `false`
+- mutable 側 DYNAMIC_GROUPS=0、Immutable 側 DYNAMIC_GROUPS=1 が混在した場合に `true` (どちらかが 1 なら true)
 
-### 2. devtools 側 (`devtools/src/hooks/useSubscriber.test.ts`)
+### 手動確認
 
-- `supportsDynamicGroups` computed signal が `subscriberInstance.trackProperties` の DYNAMIC_GROUPS=1 で `true` になること
-- DYNAMIC_GROUPS が無い / 0 の場合は `false` になり、`requestKeyframe` 呼び出しが REQUEST_UPDATE を送出しないこと (送出有無は addLog の引数で確認する)
+- moqt-js: テスト用 MOQT サーバが DYNAMIC_GROUPS=1 を返す Track で `requestKeyframe()` 呼び出し → REQUEST_UPDATE 送出を WebTransport の trace で確認
+- moqt-js: DYNAMIC_GROUPS が無い Track で `requestKeyframe()` 呼び出し → throw されること
+- devtools: DYNAMIC_GROUPS=1 の Track 接続時に Keyframe ボタンが有効、非対応 Track では無効になること
+- `vp run test` で全テストパス
+- `vp run build` / `vp run build:devtools` でビルド成功
 
 ## CHANGES.md 記載方針
 
-`## develop` 直下に以下を追記する (UPDATE → ADD → CHANGE → FIX の順を守り、`[FIX]` セクションへ):
+`## develop` 直下 `[FIX]` セクション (UPDATE → ADD → CHANGE → FIX 順):
 
 ```
-- [FIX] `createMediaSubscriber.requestKeyframe` と devtools の `useSubscriber.requestKeyframe` で、Track Properties に DYNAMIC_GROUPS=1 が含まれていない場合に REQUEST_UPDATE の NEW_GROUP_REQUEST 送信を抑止するという修正をする
+- [FIX] `createMediaSubscriber.requestKeyframe` と devtools の `useSubscriber.requestKeyframe` で Track Properties に DYNAMIC_GROUPS=1 が含まれていない場合に REQUEST_UPDATE の NEW_GROUP_REQUEST 送信を抑止する (#0168)
   - draft-ietf-moq-transport-17 §9.3.11 の MUST NOT 準拠
   - @voluntas
 ```
 
+## ブランチ命名
+
+`feature/fix-` を使う。
+
 ## 完了条件
 
-- `src/createMediaSubscriber.ts:requestKeyframe` が DYNAMIC_GROUPS=1 の Track でのみ REQUEST_UPDATE/NEW_GROUP_REQUEST を送出する
-- `devtools/src/hooks/useSubscriber.ts:requestKeyframe` が DYNAMIC_GROUPS=1 の Track でのみ REQUEST_UPDATE/NEW_GROUP_REQUEST を送出する
+- `src/properties.ts` に `supportsDynamicGroups(properties: ReadonlyArray<Property>): boolean` が追加され、`src/index.ts` から export されている
+- `supportsDynamicGroups` は mutable list と Immutable Properties (id=0x0Bn) の両方を検索する
+- `src/createMediaSubscriber.ts:requestKeyframe` が DYNAMIC_GROUPS=1 の Track でのみ REQUEST_UPDATE/NEW_GROUP_REQUEST を送出する。違反時は Error を throw する
+- `devtools/src/hooks/useSubscriber.ts:requestKeyframe` が DYNAMIC_GROUPS=1 の Track でのみ REQUEST_UPDATE/NEW_GROUP_REQUEST を送出する。違反時は `console.warn` で警告し早期 return する
 - devtools UI で DYNAMIC_GROUPS が 1 でない場合に Keyframe 要求ボタンが disabled になる
-- SUBSCRIBE 経路 (`subscribeOptions.newGroupRequest`) には変更を加えない (§9.3.11 で MAY のため)
+- `SubscriberInstance` に `dynamicGroupsSupported: Signal<boolean>` が追加され、`startSubscribing` で SUBSCRIBE_OK 後に書き込まれる
+- SUBSCRIBE 経路 (`subscribeOptions.newGroupRequest`) は変更しない (§9.3.11 で MAY のため、コメント追記のみ)
 - 該当コードコメントに `draft-ietf-moq-transport-17 §9.3.11` の MUST NOT 文を英語のまま引用する
-- `vp run build` と `vp run build:devtools` が成功する
-- 追加した単体テスト含め全テストが通過する
+- `createMediaSubscriber.ts` 内の `SUBSCRIBE_UPDATE` コメントが `REQUEST_UPDATE` に修正されている
+- `supportsDynamicGroups` の単体テスト (上記 6 件) が追加されパスする
+- `vp run build` / `vp run build:devtools` / `vp run test` が成功する
 - CHANGES.md に `[FIX]` エントリを追記する

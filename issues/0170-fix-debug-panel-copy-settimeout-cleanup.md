@@ -5,59 +5,45 @@ Model: Opus 4.7
 
 ## 概要
 
-`devtools/src/components/DebugPanel.tsx` の 4 つの copy ハンドラ (`copyToClipboard` / `copyAllLogs` / `copyPublisherLogs` / `copySubscriberLogs`) は `setTimeout(() => setCopiedX(null), 1500)` を呼ぶが、戻り値の timeout ID を保持していない。このため以下の問題が起きる。
+`devtools/src/components/DebugPanel.tsx` の 4 つの copy ハンドラ (`copyToClipboard` (l.449) / `copyAllLogs` (l.472) / `copyPublisherLogs` (l.484) / `copySubscriberLogs` (l.496)) は `setTimeout(() => setCopiedX(null), 1500)` を呼ぶが、戻り値の timeout ID を保持していない。このため以下の問題が起きる。
 
 1. ユーザーが「Copied!」表示中 (1.5 秒以内) に再度別のコピー操作を行うと、古い timer が後勝ちで `setCopiedIndex(null)` / `setCopiedButton(null)` を呼び、新しい「Copied!」が想定より早く消える
 2. パネルをアンマウント (`closeDebugPanel()` / ESC) した後にも最大 1.5 秒分の timer が残り、アンマウント済みコンポーネント上で `setCopiedX(null)` が走る
 
-なお Preact 10 はアンマウント後の setState で警告を出さないため (React のような `Can't perform a state update on an unmounted component` 警告は存在しない)、本 issue の主目的は「警告抑止」ではなく「再コピー時のフィードバック早消えの解消」とそれに付随する「アンマウント後の不要なタイマーの除去」である。
+Preact 10.29.1 はアンマウント後の `setState` で警告を出さない (React のような `Can't perform a state update on an unmounted component` 警告は存在しない) ため、本 issue の主目的は「警告抑止」ではなく **「再コピー時のフィードバック早消えの解消」** とそれに付随する「アンマウント後の不要タイマー除去」である。
 
-## 根拠
+## 0173 で吸収するため本 issue は単独実装しない
 
-- `DebugPanel.tsx` の以下 4 関数で `setTimeout` の戻り値が破棄されている:
-  - `copyToClipboard` 内 `setTimeout(() => setCopiedIndex(null), 1500)`
-  - `copyAllLogs` 内 `setTimeout(() => setCopiedButton(null), 1500)`
-  - `copyPublisherLogs` 内 `setTimeout(() => setCopiedButton(null), 1500)`
-  - `copySubscriberLogs` 内 `setTimeout(() => setCopiedButton(null), 1500)`
-- 同様の setTimeout リークが `App.tsx` / `webtransport-devtools/App.tsx` の `copyUrlToClipboard` にも存在するが、それらは issue #0172 の `useCopyUrlButton` 抽出側で扱うため本 issue のスコープ外
-- フィードバック state は `copiedIndex` (行コピー用) と `copiedButton` (一括コピー用) の 2 つで、両者は同時に「Copied!」を表示し得るため timer も 2 系統必要
+issue #0173 は本 issue の 4 関数を `useCopyFeedback` hook に統合し、その内部でタイマー管理と失敗フィードバックを扱う上位リファクタリングである。0173 の hook 実装にはタイマー解放と再コピー時の古い timer クリアが含まれており、本 issue が指摘する両問題を完全に内包する。
 
-## issue #0173 との順序関係
+**実装方針**: 0173 を先行実装する。本 issue は 0173 完了時点で `issues/closed/` に移し、解決方法に「#0173 の `useCopyFeedback` hook 内でタイマー解放と再コピー時のクリアを実装したため吸収」と明記する。
 
-issue #0173 は本 issue の 4 関数を `useCopyFeedback` hook に統合し、その内部でタイマー管理と失敗フィードバックを扱う上位リファクタリングである。両 issue を別個に実装すると本 issue の修正が #0173 で書き直されて無駄になる。
+本 issue を独立した PR として実装する積極的な理由は無い (0173 と書き換え範囲が完全に重複するため、ここで書く useRef / useEffect cleanup は 0173 の hook 内に丸ごと移植されるだけで作業が無駄になる)。
 
-**実装順序**:
+## 0173 への要件として持ち越す内容
 
-1. 本 issue は #0173 が先に着手・完了する場合、`useCopyFeedback` 内部にタイマー解放を含めることで吸収できる。その場合は本 issue を `issues/closed/` に移し、解決方法に「#0173 で吸収」と明記する
-2. #0173 より先に本 issue が着手される場合は、本 issue で `DebugPanel.tsx` 内に直接 useRef + cleanup を実装し、#0173 はそのコードを hook に移植する
+0173 の `useCopyFeedback` 実装で以下を必ず満たすこと。0173 の issue 本文にもこの要件を反映する。
 
-## 修正方針 (#0173 より先に着手する場合)
+- 行コピー用 timer とボタンコピー用 timer は別系統で管理する (両者は同時に「Copied!」表示しうる。`copiedIndex` と `copiedButton` の 2 state を 2 hook 呼び出しで分離する 0173 の方針と一致)
+- 各 copy 関数呼び出し時に「古い timer を `clearTimeout` してから新規 `setTimeout` を予約する」順序とする
+- hook 自体の `useEffect(() => () => clearTimeout(...), [])` でアンマウント時に timer を解放する
+- timer ID の型は `number | undefined` (ブラウザのみ動作のため。`ReturnType<typeof setTimeout>` は Node.js 型定義混入時の保険イディオムで、本プロジェクト規約「ブラウザでのみ動作」では `number` で十分)
 
-1. `DebugPanel` コンポーネント内に 2 つの ref を追加する。`copiedIndex` 用と `copiedButton` 用で別 state のため timer も別:
-   - `const copiedIndexTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);`
-   - `const copiedButtonTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);`
-2. 各 `setTimeout` 呼び出し前に対応する ref を `clearTimeout(ref.current)` でクリアし、新タイマーを `ref.current = setTimeout(() => setCopiedX(null), 1500)` で代入する
-3. 既存の ESC ハンドラ useEffect とは別に専用の `useEffect(() => () => { clearTimeout(copiedIndexTimerRef.current); clearTimeout(copiedButtonTimerRef.current); }, [])` を追加し、アンマウント時に両方解放する
+## 関連 issue
 
-## 影響範囲
-
-- `devtools/src/components/DebugPanel.tsx` のみ
-
-## テスト戦略
-
-- `vp run test` で全テストがパスすること
-- `vp run build:devtools` でビルドが通ること
-- 手動確認:
-  - 行コピー直後 (1.5 秒以内) に別の行をコピーし、新しい「Copied!」が 1.5 秒間表示され続けることを確認する
-  - 一括コピー (All / Publisher / Subscriber) も同様に連打して早消えしないことを確認する
+- 0172 (`useCopyUrlButton`): `App.tsx` / `webtransport-devtools/App.tsx` の `copyUrlToClipboard` も同種の setTimeout リークを持つが、それは 0172 のスコープ。本 issue とは別範囲
+- 0173 (`useCopyFeedback`): 本 issue を吸収する上位 issue
+- 0167 (DebugPanel ログバッファ刷新): 同じ `DebugPanel.tsx` を改修する。0167 → 0173 (本 issue 吸収) → close 0170 の順を推奨
 
 ## CHANGES.md 記載方針
 
-- `### misc` サブセクションに `[FIX]` で記載する
-- #0173 で吸収した場合は本 issue 用のエントリは追加せず、#0173 のエントリに「タイマーリーク解消も含む」と明記する
+本 issue 単独のエントリは追加しない。0173 のエントリで「タイマー解放と再コピー時クリア (旧 #0170 のスコープ) を含む」と明記する。
 
 ## 完了条件
 
-- 4 箇所すべてで setTimeout ID が保持され、再コピー時に古いタイマーがクリアされる
-- アンマウント時の cleanup で両方の timer が解放される
-- 全テストパス
+- 0173 の `useCopyFeedback` 実装が上記「0173 への要件として持ち越す内容」をすべて満たす
+- 0173 のテスト戦略および手動確認に以下が含まれる:
+  - 行コピー直後 (1.5 秒以内) に別の行をコピーし、新しい「Copied!」が 1.5 秒間表示され続けることを確認する
+  - 一括コピー (All / Publisher / Subscriber) も同様に連打して早消えしないことを確認する
+  - Copy 直後 (1.5 秒以内) に ESC / closeDebugPanel でパネルを閉じ、コンソールに `setCopiedX(null)` のエラーや警告が出ないこと、再度パネルを開いたとき初期状態に戻ること
+- 0173 マージ完了時点で本 issue を `issues/closed/` に移し、解決方法を明記してコミットする

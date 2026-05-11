@@ -7,7 +7,7 @@ Model: Opus 4.7
 
 `devtools/src/components/DebugPanel.tsx` には formatter が 6 個存在するが、5 個はモジュールスコープのトップレベル関数として定義されている一方で、`formatElapsedTime` / `formatDeltaTime` の 2 個だけが `DebugPanel` コンポーネント内に定義され、`firstTimestamp` をクロージャ経由で参照している。同じ責務を持つヘルパーがスコープを跨いで分裂しており、可読性とテスタビリティを下げている。
 
-この issue では、コンポーネントスコープに居る 2 個の formatter を「モジュールスコープへ移動 + 引数化」して pure function 化し、6 個全てを 1 つの専用モジュールに集約する。
+この issue では、コンポーネントスコープに居る 2 個の formatter を「モジュールスコープへ移動 + 引数化」して pure function 化し、`formatBytes` を除く 5 個を `devtools/src/utils/logFormatters.ts` に集約する。`formatBytes` は `devtools/src/utils/codec.ts` に同名で出力仕様の異なる関数が存在する重複問題があり、本 issue では扱わない (後述「スコープ外」参照)。
 
 ## 根拠
 
@@ -16,9 +16,8 @@ Model: Opus 4.7
   - `DebugPanel.tsx:547-552` `formatElapsedTime` (コンポーネントスコープ、`firstTimestamp` をクロージャ参照)
   - `DebugPanel.tsx:555-561` `formatDeltaTime` (コンポーネントスコープ、外部状態に依存していない)
 - `formatDeltaTime` は外部状態に依存しておらず、現状コンポーネント内に置く正当性がない
-- `formatElapsedTime` も `firstTimestamp` を引数で受け取れば純粋関数化可能 (`firstTimestamp` 自体は `logs.value[0].timestamp` から `DebugPanel` 内で導出されるだけで、ヘルパー側で signal を読む必要はない)
+- `formatElapsedTime` も `firstTimestamp` を引数で受け取れば純粋関数化可能 (`firstTimestamp` 自体は `DebugPanel` 内で導出されるだけで、ヘルパー側で signal を読む必要はない)
 - 現状 formatter のユニットテストが存在せず、境界値 (空配列、0 バイト、改行を含む文字、非 ASCII、`previousTimestamp === null` 等) を検証する手段がない
-- 隣接モジュール `devtools/src/utils/codec.ts` に既に `formatBytes` / `formatBitrate` がエクスポートされているのに、`DebugPanel.tsx:232-240` で別実装の `formatBytes` が宣言されている (重複コード)。ただし両者は出力フォーマットが異なるため、安易な置き換えは不可。本 issue のスコープ整理に合わせて方針を明示する。
 
 ## 抽出対象 (全数列挙)
 
@@ -29,7 +28,7 @@ Model: Opus 4.7
 | 1 | `formatMessageData(data, indent)` | 48-128 | モジュール | なし (純粋) | 新モジュールへ移動 |
 | 2 | `formatHexDump(data)` | 131-167 | モジュール | なし (純粋) | 新モジュールへ移動 |
 | 3 | `formatAbsoluteTime(timestamp)` | 187-194 | モジュール | なし (純粋) | 新モジュールへ移動 |
-| 4 | `formatBytes(bytes)` | 232-240 | モジュール | なし (純粋) | 新モジュールへ移動 (※後述) |
+| 4 | `formatBytes(bytes)` | 232-240 | モジュール | なし (純粋) | **本 issue では移動しない** (※後述「スコープ外」参照) |
 | 5 | `formatElapsedTime(timestamp)` | 547-552 | コンポーネント | `firstTimestamp` (クロージャ) | 引数化して新モジュールへ移動 |
 | 6 | `formatDeltaTime(currentTimestamp, previousTimestamp)` | 555-561 | コンポーネント | なし (純粋) | そのまま新モジュールへ移動 |
 
@@ -37,37 +36,38 @@ Model: Opus 4.7
 
 `generateSettingsText` / `generatePublisherStatsText` / `generateSubscriberStatsText` / `generateLogsText` / `generateFullLogText` は signal を直接参照しており純粋関数化できないため、本 issue のスコープ外とする (別 issue で検討)。
 
-### `formatBytes` の重複に関する方針
+## 関連 issue との順序
 
-`devtools/src/utils/codec.ts:67-71` に既に `formatBytes` が存在するが、出力フォーマットが異なる:
-
-- `utils/codec.ts`: `1023 B` / `1.0 KB` / `1.5 MB` (`toFixed(1)`)
-- `DebugPanel.tsx`: `1023 bytes` / `1.5 KB` / `1.50 MB` (KB は `toFixed(1)`、MB は `toFixed(2)`、< 1024 は `bytes` サフィックス)
-
-LLM へのコピー用途で `DebugPanel` 側の表記 (`bytes` / `MB` の `toFixed(2)`) を意図的に採用している可能性があるため、本 issue では出力仕様は変えず、`DebugPanel` 用の `formatBytes` を新モジュールに移して名前で区別する (例: 関数名はそのまま `formatBytes` とし、エクスポート元モジュールが異なることで識別する)。`utils/codec.ts` 側との統合は別 issue で検討する。
+- 0167 (DebugPanel ログバッファ刷新): 同じ `DebugPanel.tsx` を改修する。**0167 → 0174 の順** で実装する。0167 マージ後の `DebugPanel.tsx` では `firstTimestamp` の導出元が `logs.value[0].timestamp` から `logBuffer[0].timestamp` に変わるため、本 issue では 0167 マージ後の式を起点に `firstTimestamp` を `formatElapsedTime` 引数として渡す
+- 0173 (`useCopyFeedback`): 同じ `DebugPanel.tsx` を改修するが触る箇所 (4 つの copy 関数) は本 issue と直交。0167 → 0173 → 0174 もしくは 0167 → 0174 → 0173 のいずれでも可
 
 ## 修正方針
 
-1. 新規ファイル `devtools/src/components/debugPanelFormatters.ts` を作成し、以下を移動する
+1. 新規ファイル `devtools/src/utils/logFormatters.ts` を作成し、以下を移動する (`utils/` 配下を選ぶ理由は、これらが JSX を含まず純粋関数のため。`utils/codec.ts` と並ぶ位置付け)
    - 定数: `RFC_FIELD_NAMES`
-   - 内部ヘルパー: `isParameter`
-   - formatter: `formatMessageData` / `formatHexDump` / `formatAbsoluteTime` / `formatBytes` / `formatElapsedTime` / `formatDeltaTime`
+   - 内部ヘルパー: `isParameter` (MOQT Parameters の判定。`draft-ietf-moq-transport-17` Parameter 概念への参照コメントをこの機会に追加する)
+   - formatter: `formatMessageData` / `formatHexDump` / `formatAbsoluteTime` / `formatElapsedTime` / `formatDeltaTime` (`formatBytes` は除く)
 2. `formatElapsedTime` のシグネチャを `(timestamp: number, firstTimestamp: number) => string` に変更する
-   - 呼び出し側 (`DebugPanel.tsx:716`) を `formatElapsedTime(log.timestamp, firstTimestamp)` に修正する
-   - `firstTimestamp` の導出 (`logs.value.length > 0 ? logs.value[0].timestamp : 0`) は `DebugPanel` 内に残す
+   - 呼び出し側 (`DebugPanel.tsx:713-716` 相当) を `formatElapsedTime(log.timestamp, firstTimestamp)` に修正する
+   - `firstTimestamp` の導出 (0167 マージ後は `logBuffer.length > 0 ? logBuffer[0].timestamp : 0`) は `DebugPanel` 内に残す
 3. `formatDeltaTime` のシグネチャは現状維持 (`(currentTimestamp: number, previousTimestamp: number | null) => string`)
 4. `DebugPanel.tsx` 側はインポートに置き換え、コンポーネント内の関数定義 (547-561) を削除する
-5. 既存の `generateLogsText` / `copyToClipboard` 等の呼び出し箇所 (`354` / `358` / `362` / `451` / `455` / `459` / `713` / `800` / `801`) は新モジュールからのインポートで動作するよう調整する
-6. テストファイル `devtools/src/components/debugPanelFormatters.test.ts` を新規作成する
-7. CLAUDE.md ルール「変更時はテストを先に修正する」に従い、テストを先に記述してから移動を行う
+5. 既存の `generateLogsText` / `copyToClipboard` 等の呼び出し箇所は新モジュールからのインポートで動作するよう調整する
+6. `formatBytes` は `DebugPanel.tsx` 内モジュールスコープに残す (本 issue では移動しない)
+7. テストファイル `devtools/src/utils/logFormatters.test.ts` を新規作成する
+8. CLAUDE.md「何か変更をする場合はテストを先に修正すること」の規約に従い、テストを先に記述してから移動を行う
+
+## 出力フォーマットの維持
+
+本 issue は pure 化とモジュール抽出のみを行い、各 formatter の **出力フォーマットは一切変更しない**。`formatBytes` の `1024.0 KB` のような退化ケース (1MB 直前) も既存挙動を固定する。
 
 ## 影響範囲
 
-- `devtools/src/components/DebugPanel.tsx` (formatter 定義の削除、インポート追加、`formatElapsedTime` 呼び出しの引数追加)
-- `devtools/src/components/debugPanelFormatters.ts` (新規)
-- `devtools/src/components/debugPanelFormatters.test.ts` (新規)
+- `devtools/src/components/DebugPanel.tsx` (5 個の formatter 定義の削除、インポート追加、`formatElapsedTime` 呼び出しの引数追加)
+- `devtools/src/utils/logFormatters.ts` (新規)
+- `devtools/src/utils/logFormatters.test.ts` (新規)
 
-`DebugPanel.tsx` の外から formatter は参照されていない (grep 済) ため、外部 API への影響はない。
+`DebugPanel.tsx` の外から formatter は参照されていない (grep 済) ため、外部 API への影響はない。`formatBytes` は `DebugPanel.tsx` 内に残し本 issue のスコープ外とする。
 
 ## テスト戦略
 
@@ -79,24 +79,19 @@ CLAUDE.md の規約 (Vitest の Chai API、`test` / `assert` のみ、モック�
   - 0 (epoch) と任意のミリ秒の整形結果が `HH:MM:SS.mmm` 形式
   - ミリ秒のゼロ埋め (例: `1ms` → `.001`)
   - 注意: タイムゾーン依存の値となるため、固定値ではなく `Date(timestamp).getHours()` 等から組み立てた期待値と比較する
-- `formatElapsedTime`
+- `formatElapsedTime` (呼び出し側は `firstTimestamp <= timestamp` を保証するため負の elapsed はテスト対象外。コード上にもこの前提をコメントで明示する)
   - `timestamp === firstTimestamp` のとき `+0.000`
   - 1001ms 差で `+1.001`
   - 59999ms 差で `+59.999`
-- `formatDeltaTime`
+- `formatDeltaTime` (呼び出し側は昇順 timestamp を保証するため負の delta はテスト対象外。コードコメントに明示する)
   - `previousTimestamp === null` のとき空文字
   - 0ms 差で `(+0ms)`
   - 12345ms 差で `(+12345ms)`
-- `formatBytes`
-  - `0` → `0 bytes`
-  - `1023` → `1023 bytes`
-  - `1024` → `1.0 KB`
-  - `1048575` → `1024.0 KB` (現在の実装通り、KB は 1MB 直前まで利用)
-  - `1048576` → `1.00 MB`
-- `formatHexDump`
-  - 空 `Uint8Array` で空文字 (現在の実装の挙動と一致)
+- `formatHexDump` (呼ばれる経路は描画側 (800 行目相当) のみ。`generateLogsText` / `copyToClipboard` 経路は `payload.length > 0` でガード済み)
+  - 空 `Uint8Array` で空文字
   - 1 バイトのデータ (オフセット、padding、ASCII 部の確認)
   - 16 バイト境界 / 17 バイト (改行発生)
+  - 32 バイト / 33 バイト (改行 2 回・3 行目発生、ループ定常状態の確認)
   - 非印字バイト (0x00, 0x1f, 0x7f, 0x80, 0xff) が ASCII 部で `.` に置換される
 - `formatMessageData`
   - `null` / `undefined` → 空文字
@@ -128,15 +123,16 @@ CLAUDE.md の規約 (Vitest の Chai API、`test` / `assert` のみ、モック�
 
 ## 完了条件
 
-- `devtools/src/components/debugPanelFormatters.ts` が新規追加されており、上記 6 個の formatter と `RFC_FIELD_NAMES` / `isParameter` を含む
-- `DebugPanel.tsx` 内に formatter 定義が残っていない (コンポーネントスコープの `formatElapsedTime` / `formatDeltaTime` も削除済み)
+- `devtools/src/utils/logFormatters.ts` が新規追加されており、5 個の formatter (`formatMessageData` / `formatHexDump` / `formatAbsoluteTime` / `formatElapsedTime` / `formatDeltaTime`) と `RFC_FIELD_NAMES` / `isParameter` を含む
+- `DebugPanel.tsx` 内にコンポーネントスコープの `formatElapsedTime` / `formatDeltaTime` 定義が残っていない
 - `formatElapsedTime` が `(timestamp: number, firstTimestamp: number) => string` の純粋関数として動作する
-- `debugPanelFormatters.test.ts` が追加されており、上記の境界値テストを全て含む
+- `logFormatters.test.ts` が追加されており、上記の境界値テストを全て含む
+- `formatBytes` は `DebugPanel.tsx` 内に残されている (移動しない)
 - `vp run test` / `vp run build:devtools` / `vp run lint` が全て成功する
 - `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` エントリが追加されている
 
 ## スコープ外 (本 issue では扱わない)
 
-- `utils/codec.ts:formatBytes` との重複統合 (出力仕様が異なるため別 issue で検討)
+- `utils/codec.ts:formatBytes` と `DebugPanel.tsx:formatBytes` の重複統合: 両者は出力仕様が異なる (`utils/codec.ts` は `1.5 MB` / `1.0 KB` / `1023 B`、`DebugPanel.tsx` は `1.50 MB` / `1.5 KB` / `1023 bytes`)。本 issue で `formatBytes` を `utils/logFormatters.ts` に移すと `utils/codec.ts` と同名関数が並び IDE auto-import の事故源になるため、本 issue では移動しない。重複統合は別 issue で検討する
 - `generateSettingsText` / `generatePublisherStatsText` / `generateSubscriberStatsText` / `generateLogsText` / `generateFullLogText` の pure function 化 (signal を直接参照しており別アプローチが必要)
 - `DebugPanel` 自体の構造リファクタ
