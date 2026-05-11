@@ -125,13 +125,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       return;
     }
 
-    // Resize canvas if needed
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
       canvas.width = frame.displayWidth;
       canvas.height = frame.displayHeight;
     }
 
-    // Draw frame to canvas
     ctx.drawImage(frame, 0, 0);
     frame.close();
 
@@ -190,12 +188,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         return;
       }
 
-      // Count keyframes
       if (isKeyFrame) {
         instance.keyFramesDecoded.value = instance.keyFramesDecoded.value + 1;
       }
 
-      // Check decoder state before decoding
       if (decoderInstance.state !== "configured") {
         console.warn(
           `[${subscriberId}] handleObject: decoder not in configured state:`,
@@ -228,7 +224,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
       const connectOptions = settings.buildConnectOptions();
 
-      // Connect to MOQT server
+      // MOQT サーバへ接続する
       const session = await connect(
         settings.url.value,
         {
@@ -368,7 +364,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
       instance.statusMessage.value = "Setting up decoder...";
 
-      // Create decoder wrapper
+      // デコーダラッパーを生成する
       const useWorker = settings.useDedicatedWorker.value;
 
       const decoderInstance = new DecoderWrapper(useWorker, {
@@ -403,7 +399,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance, joiningFetchEnabled);
 
-      // Create subscriber
+      // Subscriber オプションを構築する
       const subscribeOptions: {
         newGroupRequest?: bigint;
         joiningFetch?: JoiningFetchOptions;
@@ -605,27 +601,24 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
-    // Close decoder
     const decoderInstance = instance.decoder.value;
     if (decoderInstance) {
       try {
         decoderInstance.close();
       } catch {
-        // Ignore
+        // 既にクローズ済みなら無視
       }
     }
 
-    // Clear canvas
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext("2d");
       if (ctx) {
-        ctx.fillStyle = "#1e293b"; // slate-800
+        ctx.fillStyle = "#1e293b";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
     }
 
-    // Close session
     // WebTransport 実装が close イベントを同期的に dispatch すると、close
     // コールバック経由で cleanupSubscriber が再入する。再入時に sessionInstance
     // が null になっているよう、close() より先に session.value をリセットする。
@@ -653,7 +646,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     // Subscriber 再起動時に古い Promise チェーンを引き継がないようリセットする
     chainRef.current = Promise.resolve();
 
-    // Enable settings if no other subscriber/publisher is active
+    // 他にアクティブな Subscriber / Publisher がなければ設定 UI を再有効化する
     if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
       settings.settingsDisabled.value = false;
     }

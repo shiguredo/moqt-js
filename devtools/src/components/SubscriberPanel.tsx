@@ -27,18 +27,17 @@ export function SubscriberPanel({
     canvasRef,
   );
 
-  // Initialize canvas background
+  // canvas の背景を slate-800 で初期化する
   useEffect(() => {
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) {
-        ctx.fillStyle = "#1e293b"; // slate-800
+        ctx.fillStyle = "#1e293b";
         ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     }
   }, []);
 
-  // Get instance from store
   const instance = sub.subscriberInstances.value.get(subscriberId);
   if (!instance) {
     return null;
