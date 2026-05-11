@@ -20,7 +20,7 @@ import { useRef, useEffect } from "preact/hooks";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
-// draft-ietf-moq-transport-17 §10.3 では Subgroup ストリーム間の配送順は保証されないため、
+// draft-ietf-moq-transport-17 §10.4.2 では Subgroup ストリーム間の配送順は保証されないため、
 // バッファドレイン時に明示的にソートする必要がある。
 function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
   return objects.sort((a, b) => {
@@ -358,7 +358,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       };
       // canonical 形式 (avc1 / hvc1) で必要な VideoDecoderConfig.description を
       // MSF Catalog の initData (Base64) から取得する
-      // draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1
+      // draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1.2
       if (videoTrackFromCatalog.initData) {
         decoderConfig.description = settings.base64ToArrayBuffer(videoTrackFromCatalog.initData);
       }
@@ -422,9 +422,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // LOC から keyframe 情報を取得（ログ用）
             let isKeyFrame = false;
             if (obj.properties && obj.properties.length > 0) {
-              const ext = LOC.decodeVideoProperties(obj.properties);
-              if (ext.frameMarking) {
-                isKeyFrame = ext.frameMarking.isIndependent;
+              const locProperties = LOC.decodeVideoProperties(obj.properties);
+              if (locProperties.frameMarking) {
+                isKeyFrame = locProperties.frameMarking.isIndependent;
               }
             }
 
@@ -671,7 +671,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-17 Section 9.3.11
+      // draft-ietf-moq-transport-17 §9.3.11
       // NEW_GROUP_REQUEST = 0x32
       await subscriberInstance.update({
         parameters: [

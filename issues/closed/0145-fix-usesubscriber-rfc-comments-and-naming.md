@@ -1,6 +1,7 @@
 # `useSubscriber.ts` の RFC 節番号誤り・変数名省略・節参照記法不統一を修正する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -43,3 +44,11 @@ Model: Opus 4.7
 - 4 箇所の修正がすべて適用されている（`ext` のリネームは `ext.frameMarking` / `ext.frameMarking.isIndependent` の 2 箇所も含めて変更されている）
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts:23` の `§10.3` を `§10.4.2` に修正した。
+- `devtools/src/hooks/useSubscriber.ts:425-427` の `ext` を `locProperties` に統一した。
+- `devtools/src/hooks/useSubscriber.ts:361` の `draft-ietf-moq-loc-02 §2.1` を `§2.1.2` に具体化した。
+- `devtools/src/hooks/useSubscriber.ts:674` の `Section 9.3.11` を `§9.3.11` に修正した。
+- `CHANGES.md` の `### misc` セクションに `[UPDATE]` エントリを追加した。

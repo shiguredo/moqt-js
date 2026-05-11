@@ -25,6 +25,12 @@
 
 ### misc
 
+- [UPDATE] `useSubscriber.ts` の RFC 節番号誤り・変数名省略・節参照記法不統一を修正する (#0145)
+  - `§10.3` を `§10.4.2` に修正する (Subgroup ストリームは §10.4.2 で定義)
+  - `ext` を `locProperties` にリネームし、変数名を省略しない方針を徹底する
+  - `Section 9.3.11` を `§9.3.11` に統一する
+  - `draft-ietf-moq-loc-02 §2.1` を `§2.1.2` に具体化する
+  - @voluntas
 - [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139, #0140, #0141, #0142, #0143)
   - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
   - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
