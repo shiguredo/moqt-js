@@ -96,14 +96,12 @@ function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
     Object.assign(data, message.decoded);
   }
 
-  // payload が存在する場合は渡す
   const payload = message.payload.length > 0 ? message.payload : undefined;
   addLog("info", logMessage, data, payload);
 }
 
 export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCanvasElement>) {
-  // ライブオブジェクトの順次処理用 Promise チェーン
-  // useRef でレンダリング間で安定した参照を保持する
+  // ライブオブジェクトの順次処理用 Promise チェーン (レンダリング間で安定参照)
   const chainRef = useRef<Promise<void>>(Promise.resolve());
 
   const renderFrame = (frame: VideoFrame): void => {
@@ -112,11 +110,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       frame.close();
       return;
     }
-
-    // draft-ietf-moq-transport-17 §9.14.2.1
-    // Joining FETCH と SUBSCRIBE の範囲は publisher 側で contiguous かつ
-    // non-overlapping に揃えられるため、subscriber 側は timestamp ベースで
-    // 描画を抑制する必要がない。デコード結果は順次そのまま描画する。
 
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -192,7 +185,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
       instance.chunksCreated.value = instance.chunksCreated.value + 1;
 
-      // デコーダが設定されていない場合はスキップ
       if (!instance.decoderConfigured.value) {
         instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
         return;
@@ -470,10 +462,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               bufferedLiveObjects: 0,
             };
 
-            // ライブバッファを (groupId, objectId) 昇順へ並べ替える。
-            // draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリームと
-            // OBJECT_DATAGRAM の配送順が保証されないため、到着順 ≠ (groupId, objectId) 順
-            // となる可能性がある。
             const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
 
             // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
@@ -553,11 +541,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               return;
             }
 
-            // 順次処理: Promise チェーンで到着順にデコードする
-            // 制限事項: 複数 Subgroup ストリームを同一 Track で並行使用する Publisher と
-            // 接続した場合、到着順 ≠ (groupId, objectId) 順となるが現状はリオーダー
-            // バッファを持たない。devtools Publisher は単一 Subgroup のみ送出するため
-            // 当面この経路で実害は出ない。複数 Subgroup 対応は別 issue で扱う。
+            // Promise チェーンで到着順にデコードする。
+            // 複数 Subgroup ストリームを並行使用する Publisher との接続では
+            // (groupId, objectId) 順の保証がないが、現状はリオーダーバッファを持たない。
+            // TODO: 複数 Subgroup 対応は別 issue で扱う。
             chainRef.current = chainRef.current.then(() => handleObject(obj));
           },
           end: () => {
@@ -573,13 +560,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
         subscribeOptions,
       );
-      // SUBSCRIBE_OK から largestLocation を取得
-      // joiningFetchInProgress の解除は Joining FETCH の onEnd / onError 内で
-      // ドレインループ完了と同期して行う。ここで早期解除すると、ドレインループ
-      // 実行中に到着したライブオブジェクトが直接 handleObject 経路へ流れて
-      // 順序が破綻するため、解除箇所はドレイン側に一本化する。
-      // LARGEST_OBJECT なしの場合も session.ts 側で onEnd が同期呼び出しされ、
-      // ドレインループ末尾で joiningFetchInProgress: false に遷移する。
       const largestLocation = subscriberInstance.largestLocation;
 
       instance.subscriber.value = subscriberInstance;
@@ -664,8 +644,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     instance.decoderConfigured.value = false;
     instance.codec.value = "";
 
-    // joining fetch 関連の状態をリセットして stopSubscribing 単独呼び出し後の
-    // 論理的な状態不整合を防ぐ。
     instance.joiningFetchInProgress.value = false;
     instance.joiningFetchLastLocation.value = null;
     instance.liveObjectBuffer.value = [];

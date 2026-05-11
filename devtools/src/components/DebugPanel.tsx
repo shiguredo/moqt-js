@@ -14,7 +14,6 @@ interface LogEntry {
   payload?: Uint8Array;
 }
 
-// グローバルログストア
 export const logs = signal<LogEntry[]>([]);
 const MAX_LOGS = 1000;
 export const autoScroll = signal(true);
@@ -505,7 +504,7 @@ export function DebugPanel() {
     }
   }, []);
 
-  // オートスクロール (新しいログが上なので scrollTop = 0)
+  // 新しいログ追加時にトップへオートスクロール
   useSignalEffect(() => {
     const logsLength = logs.value.length;
     if (logsLength > 0 && autoScroll.value && logContainerRef.current) {

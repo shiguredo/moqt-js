@@ -16,7 +16,6 @@ export function App() {
     const queryString = buildQueryString();
     const fullUrl = `${window.location.origin}${window.location.pathname}?${queryString}`;
 
-    // ブラウザの URL を更新
     window.history.replaceState(null, "", `?${queryString}`);
 
     navigator.clipboard.writeText(fullUrl).then(

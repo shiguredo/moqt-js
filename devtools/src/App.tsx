@@ -13,18 +13,16 @@ function handleAddSubscriber(): void {
 }
 
 function handleRemoveSubscriber(id: string): void {
-  // SubscriberPanel がアンマウントされる前に WebTransport セッションと
-  // VideoDecoder を fire-and-forget でクローズし、リソースリークを防ぐ。
-  // signals/subscriber.ts の removeSubscriber は Map からの削除のみを担当する。
+  // Map から外す前に decoder と session を fire-and-forget で閉じる。
   const instance = sub.getSubscriber(id);
   if (instance) {
     try {
       instance.decoder.value?.close();
     } catch {
-      // 既にクローズされている場合は無視
+      // 既にクローズ済みなら無視
     }
     instance.session.value?.close().catch(() => {
-      // 既にクローズされている場合は無視
+      // 既にクローズ済みなら無視
     });
   }
   sub.removeSubscriber(id);
@@ -39,7 +37,6 @@ export function App() {
     const queryString = buildQueryString();
     const fullUrl = `${window.location.origin}${window.location.pathname}?${queryString}`;
 
-    // ブラウザの URL を更新
     window.history.replaceState(null, "", `?${queryString}`);
 
     navigator.clipboard.writeText(fullUrl).then(

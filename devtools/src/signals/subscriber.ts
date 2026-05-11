@@ -17,19 +17,17 @@ export interface JoiningFetchStats {
 }
 
 /**
- * 個々の Subscriber インスタンスの状態
+ * 個々の Subscriber インスタンスの状態。
  *
  * 各フィールドは Signal で保持し、フィールド単位で購読/更新する。
- * Map の subscriberInstances は要素追加/削除のみで再生成し、
- * フィールド更新では再生成しない (個別 Signal が再描画を駆動する)。
+ * `subscriberInstances` Map は要素追加/削除のみで再生成し、フィールド更新では
+ * 再生成しない (個別 Signal が再描画を駆動する)。
+ * `hasActiveSubscriber` computed は `instance.subscriber.value` を追跡するため
+ * Signal 化が必須。
  */
 export interface SubscriberInstance {
-  // 不変フィールド (signal 不要)
+  // props として親から渡される識別子。再描画駆動には使わないため signal 不要。
   id: string;
-  // Signal 化してフィールド単位で購読/更新できるようにする。
-  // subscriberInstances Map の再生成を回避し、個別 Signal が再描画を駆動する。
-  // hasActiveSubscriber computed は instance.subscriber.value を追跡するため
-  // Signal 化が必須。
   session: Signal<Session | null>;
   subscriber: Signal<Subscriber | null>;
   catalogSubscriber: Signal<Subscriber | null>;
@@ -118,13 +116,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
 export const subscriberInstances = signal<Map<string, SubscriberInstance>>(new Map());
 
 /**
- * 新しい Subscriber を追加する
- *
- * UUID v4 の先頭 8 文字を使った短縮 ID を生成する。devtools 内部識別子としての衝突
- * リスクは十分に低い。HMR でモジュールが再評価された際にカウンタを引き継いで歯抜け
- * 番号が発生する問題を回避する目的。
- * `crypto.randomUUID()` は WebTransport の Secure Context 要件 (HTTPS / localhost)
- * の範囲で常に利用可能なためフォールバックは設けない。
+ * 新しい Subscriber を追加する。
+ * UUID v4 の先頭 8 文字で短縮 ID を生成する (HMR 時のカウンタ問題回避)。
  */
 export function addSubscriber(): string {
   const id = `subscriber-${crypto.randomUUID().slice(0, 8)}`;
