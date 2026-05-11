@@ -3,6 +3,23 @@
 Created: 2026-05-11
 Model: Opus 4.7
 
+## pending 理由 (2026-05-12)
+
+issue #0164 マージにより `joiningFetchInProgress` は `SubscriberInstance` から
+削除され、`useSubscriber` フックローカルの `useRef<boolean>` に降格した。これに
+より本 issue の修正対象 (Signal の reactive 通知が SUBSCRIBE_OK 前に立っている
+ことの違和感) は実体ごと消滅した。
+
+加えて issue #0171 で導入された `resetSubscriberState` 内で
+`joiningFetchInProgressRef.current = false` が確実に走るため、`subscribe(...)`
+reject 時の catch 経路 (`teardownSubscriber()` 呼び出し) でも ref は false に
+戻る。本 issue が懸念した「立て位置のずれ」によるバグ経路は形成されない。
+
+設計クリンナップとしても、フックローカル ref への代入順序は本ファイルの
+ローカルな同期セクション内に閉じており、Signal 時代のような外部観測者に対する
+意味論ずれは存在しない。当面 pending として残し、別の信号が現れたら
+再評価する。
+
 ## 概要
 
 `devtools/src/hooks/useSubscriber.ts` の `startSubscribing` 内で `instance.joiningFetchInProgress.value = joiningFetchEnabled` を `session.subscribe(...)` 呼び出しの **前** に立てている (`resetSubscriberStats` 内、L82)。本来 Joining Fetch は SUBSCRIBE_OK 受信後に moqt-js 内部で送信される処理であり、SUBSCRIBE_OK 前の Catalog 取得や `DecoderWrapper.configure` の await 中も `joiningFetchInProgress` が `true` になっているのは意味論的にずれている。
