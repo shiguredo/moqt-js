@@ -31,6 +31,12 @@
   - `Section 9.3.11` を `§9.3.11` に統一する
   - `draft-ietf-moq-loc-02 §2.1` を `§2.1.2` に具体化する
   - @voluntas
+- [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
+  - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
+  - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
+  - 顕在化した実 violation 24 件を `src/codec/index.ts` / `src/frameSource.ts` / `src/msf.ts` / `src/properties.ts` / `src/session.prop.ts` / `src/session.ts` / `src/session/stream.ts` / `src/session/errors.test.ts` / `src/pendingSubgroupBuffer.test.ts` / `playwright.config.ts` で修正する
+  - 最終的に lint 0 warnings / 0 errors (443 rules / 82 files) になる
+  - @voluntas
 - [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139, #0140, #0141, #0142, #0143)
   - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
   - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
@@ -43,12 +49,6 @@
   - `addSubscriber` の ID をモジュールスコープ・カウンタから `crypto.randomUUID().slice(0, 8)` ベースに変更する
   - `DebugPanel` のログ描画を `[...logs.value].reverse()` から逆方向ループに変更し、毎レンダリングの O(n) コピーを排除する
   - `App.tsx` の `copyButtonText` をモジュールスコープ signal から `App` コンポーネント内の `useSignal` に移動する
-  - @voluntas
-- [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
-  - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
-  - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
-  - 顕在化した実 violation 24 件を `src/codec/index.ts` / `src/frameSource.ts` / `src/msf.ts` / `src/properties.ts` / `src/session.prop.ts` / `src/session.ts` / `src/session/stream.ts` / `src/session/errors.test.ts` / `src/pendingSubgroupBuffer.test.ts` / `playwright.config.ts` で修正する
-  - 最終的に lint 0 warnings / 0 errors (443 rules / 82 files) になる
   - @voluntas
 
 ###

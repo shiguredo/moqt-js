@@ -1,6 +1,7 @@
 # `CHANGES.md` の `### misc` エントリ順序を修正する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -32,3 +33,7 @@ Model: Opus 4.7
 ## 完了条件
 
 - `### misc` 内で `[UPDATE]` → `[ADD]` → `[CHANGE]` → `[FIX]` の順になっている（該当エントリが UPDATE → CHANGE の順になっている）
+
+## 解決方法
+
+- `CHANGES.md` の `### misc` で `[UPDATE] .oxlintrc.jsonc ...` (#0132) を `[CHANGE] devtools の Preact + signals 利用を改善する` (#0134 等) より前に移動した。
