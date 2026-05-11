@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "preact/hooks";
+import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { formatBytes, formatBitrate } from "../utils/codec";
 import * as sub from "../signals/subscriber";
@@ -38,7 +38,13 @@ export function SubscriberPanel({
     }
   }, []);
 
-  const instance = sub.subscriberInstances.value.get(subscriberId);
+  // subscriberInstances Map 全体ではなく、対象 ID 用の派生 signal だけを購読する。
+  // ID が変わらない限り同じ ReadonlySignal を使い続ける。
+  const instanceSignal = useMemo(
+    () => sub.getSubscriberInstanceSignal(subscriberId),
+    [subscriberId],
+  );
+  const instance = instanceSignal.value;
   if (!instance) {
     return null;
   }

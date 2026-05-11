@@ -4,8 +4,10 @@ import {
   addSubscriber,
   removeSubscriber,
   getSubscriber,
+  getSubscriberInstanceSignal,
   createSubscriberInstance,
   subscriberInstances,
+  subscriberInstanceSignalCache,
   subscriberIds,
   hasActiveSubscriber,
 } from "./subscriber";
@@ -13,6 +15,7 @@ import {
 // テスト間の独立性を保つためのリセットヘルパー。
 function resetSubscribers(): void {
   subscriberInstances.value = new Map();
+  subscriberInstanceSignalCache.clear();
 }
 
 test("createSubscriberInstance returns an instance with the given id", () => {
@@ -122,6 +125,79 @@ test("hasActiveSubscriber tracks instance.subscriber.value updates", () => {
   // null に戻すと false。
   instance.subscriber.value = null;
   assert.equal(hasActiveSubscriber.value, false);
+});
+
+test("getSubscriberInstanceSignal returns the same signal for the same id (cached)", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  const signalA = getSubscriberInstanceSignal(id);
+  const signalB = getSubscriberInstanceSignal(id);
+  assert.strictEqual(signalA, signalB);
+});
+
+test("getSubscriberInstanceSignal does not notify subscribers when other ids are added", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  const instanceSignal = getSubscriberInstanceSignal(id);
+  let notifyCount = 0;
+  const dispose = effect(() => {
+    instanceSignal.value;
+    notifyCount += 1;
+  });
+  try {
+    const initialCount = notifyCount;
+    addSubscriber();
+    addSubscriber();
+    assert.equal(notifyCount, initialCount);
+  } finally {
+    dispose();
+  }
+});
+
+test("getSubscriberInstanceSignal does not notify subscribers when other ids are removed", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  const otherId = addSubscriber();
+  const instanceSignal = getSubscriberInstanceSignal(id);
+  let notifyCount = 0;
+  const dispose = effect(() => {
+    instanceSignal.value;
+    notifyCount += 1;
+  });
+  try {
+    const initialCount = notifyCount;
+    removeSubscriber(otherId);
+    assert.equal(notifyCount, initialCount);
+  } finally {
+    dispose();
+  }
+});
+
+test("getSubscriberInstanceSignal notifies subscribers when its own id is removed", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  const instanceSignal = getSubscriberInstanceSignal(id);
+  let lastValue: unknown = "<unset>";
+  const dispose = effect(() => {
+    lastValue = instanceSignal.value;
+  });
+  try {
+    assert.ok(lastValue !== undefined);
+    removeSubscriber(id);
+    assert.equal(lastValue, undefined);
+  } finally {
+    dispose();
+  }
+});
+
+test("removeSubscriber clears the cached signal entry for the removed id", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  // キャッシュエントリを生成する。
+  getSubscriberInstanceSignal(id);
+  assert.equal(subscriberInstanceSignalCache.has(id), true);
+  removeSubscriber(id);
+  assert.equal(subscriberInstanceSignalCache.has(id), false);
 });
 
 test("hasActiveSubscriber notifies effect subscribers on change", () => {

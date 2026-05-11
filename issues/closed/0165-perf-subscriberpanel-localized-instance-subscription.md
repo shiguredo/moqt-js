@@ -1,6 +1,7 @@
 # `SubscriberPanel` の `subscriberInstances` Map 全体購読を局所化する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

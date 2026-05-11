@@ -1,4 +1,4 @@
-import { signal, computed, type Signal } from "@preact/signals";
+import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
 import type { Session, Subscriber, MoqtObject, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -153,6 +153,9 @@ export function removeSubscriber(id: string): void {
   const newMap = new Map(subscriberInstances.value);
   newMap.delete(id);
   subscriberInstances.value = newMap;
+  // Map 差し替えで cached `computed` が undefined への変化通知を発火させた後に
+  // キャッシュエントリを削除する。逆順では undefined 通知が壊れる。
+  subscriberInstanceSignalCache.delete(id);
 }
 
 /**
@@ -160,6 +163,39 @@ export function removeSubscriber(id: string): void {
  */
 export function getSubscriber(id: string): SubscriberInstance | undefined {
   return subscriberInstances.value.get(id);
+}
+
+/**
+ * ID ごとの派生 `ReadonlySignal` キャッシュ。
+ *
+ * `subscriberInstances` Map 全体を購読せず、対象 ID の `SubscriberInstance`
+ * 参照変化だけを通知する派生 signal を提供するためのキャッシュ。
+ * テスト用にキャッシュ状態を観測できるよう export している。
+ */
+export const subscriberInstanceSignalCache = new Map<
+  string,
+  ReadonlySignal<SubscriberInstance | undefined>
+>();
+
+/**
+ * 特定 ID 用の派生 `ReadonlySignal` を返す。
+ *
+ * `computed` の参照等値比較により、対象 ID の instance 参照が変わらない限り
+ * 下流購読者には通知されない。Subscriber の追加・削除で Map 参照が
+ * 差し替わっても、対象 ID 自身の instance が変化していなければ
+ * `SubscriberPanel` の再評価は発生しない。
+ *
+ * https://github.com/preactjs/signals
+ */
+export function getSubscriberInstanceSignal(
+  id: string,
+): ReadonlySignal<SubscriberInstance | undefined> {
+  let cached = subscriberInstanceSignalCache.get(id);
+  if (cached === undefined) {
+    cached = computed(() => subscriberInstances.value.get(id));
+    subscriberInstanceSignalCache.set(id, cached);
+  }
+  return cached;
 }
 
 /**

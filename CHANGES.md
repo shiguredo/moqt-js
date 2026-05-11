@@ -44,6 +44,11 @@
 
 ### misc
 
+- [UPDATE] devtools の `SubscriberPanel` が `subscriberInstances` Map 全体を購読していたのを、対象 ID 用の派生 signal だけを購読するように変更する (#0165)
+  - `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と `subscriberInstanceSignalCache` を追加する
+  - `SubscriberPanel.tsx` で `useMemo` を使い対象 ID 用の `ReadonlySignal` を購読する
+  - `removeSubscriber` 末尾で対応するキャッシュエントリを削除する (Map 差し替えの後)
+  - @voluntas
 - [UPDATE] devtools の `removeSubscriber` に decoder / session の fire-and-forget close を集約する (#0162)
   - `signals/subscriber.ts:removeSubscriber` を「Map 削除 + 当該 instance の外部リソース close」に拡張する
   - `App.tsx:handleRemoveSubscriber` ラッパーを削除し、`onRemove` を `() => sub.removeSubscriber(id)` に統一する
