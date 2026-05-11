@@ -91,8 +91,8 @@
   - `joiningFetchInProgress` / `joiningFetchLastLocation` / `liveObjectBuffer` / `joiningFetchStats` / `largestLocation` をクリアし、`stopSubscribing` 単独呼び出し後の状態不整合を防ぐ
   - @voluntas
 - [FIX] `webtransport-devtools/App.tsx` の `copyButtonText` を `useSignal` 化し、`App.tsx` で抽出済みの `debugPanelOpen` を使うようにする (#0152)
-  - モジュールスコープ signal を `useSignal` に移動して HMR 時の状態残留を防ぐ
-  - `App.tsx` の 2 箇所で `isDebugPanelOpen.value` を `debugPanelOpen` に統一する
+  - `webtransport-devtools/App.tsx`: モジュールスコープ signal を `useSignal` に移動して HMR 時の状態残留を防ぐ
+  - `App.tsx`: 既存のローカル変数 `debugPanelOpen` を Debug ボタンとログ件数バッジでも使い、`isDebugPanelOpen.value` の重複参照を 2 箇所統一する
   - @voluntas
 - [FIX] `useSubscriber.ts` の catalog 購読タイムアウトに `clearTimeout` を追加する (#0154)
   - `Promise.race` で catalog 取得が先に成功した場合でもタイマーが解放されるように `try / finally` で `clearTimeout` する
