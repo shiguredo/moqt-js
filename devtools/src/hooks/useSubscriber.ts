@@ -23,7 +23,9 @@ import type { RefObject } from "preact";
 // draft-ietf-moq-transport-17 §10.4.2 では Subgroup ストリーム間の配送順は保証されないため、
 // バッファドレイン時に明示的にソートする必要がある。
 function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
-  return objects.sort((a, b) => {
+  // 引数配列を破壊しないようコピーしてからソートする。
+  // signal の .value 配列が直接渡された場合に Preact の変更検知を壊さないため。
+  return [...objects].sort((a, b) => {
     if (a.groupId !== b.groupId) {
       return a.groupId < b.groupId ? -1 : 1;
     }

@@ -50,6 +50,9 @@
   - `DebugPanel` のログ描画を `[...logs.value].reverse()` から逆方向ループに変更し、毎レンダリングの O(n) コピーを排除する
   - `App.tsx` の `copyButtonText` をモジュールスコープ signal から `App` コンポーネント内の `useSignal` に移動する
   - @voluntas
+- [FIX] `useSubscriber.ts` の `sortByGroupObject` を非破壊的にする (#0147)
+  - `Array.prototype.sort()` の in-place 動作で signal の `.value` 配列を破壊する潜在的バグを防ぐためコピー後にソートする
+  - @voluntas
 
 ###
 

@@ -1,6 +1,7 @@
 # `sortByGroupObject` を非破壊的に動作するよう修正する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -36,3 +37,8 @@ Model: Opus 4.7
 - `sortByGroupObject` 内でスプレッド構文によるコピーが行われている
 - `vp run build:devtools` が成功する
 - `vp test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `sortByGroupObject` 内で `[...objects].sort(...)` に変更し、引数配列を破壊しないようにした。
+- `CHANGES.md` の `### misc` セクションに `[FIX]` エントリを追加した。
