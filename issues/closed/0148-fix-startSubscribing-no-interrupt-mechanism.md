@@ -1,6 +1,7 @@
 # `startSubscribing` に中断機構とフラグチェックを追加し status 遷移を修正する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -61,3 +62,10 @@ Model: Opus 4.7
 - status 遷移が 229 行目と 331 行目の 2 箇所で修正されている
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `startSubscribing` 冒頭に `instance.isStopping.value` チェックを追加した。
+- 3 つの await ポイント (`connect`, `Promise.race(catalogPromise/timeoutPromise)`, `decoderInstance.configure`) の後に `if (instance.session.value === null) return;` を追加した。decoder.configure 後の中断時には `decoderInstance.close()` を fire-and-forget で呼ぶ。
+- Catalog 購読中の誤った `status="connected"` 設定 (229 行目相当) を削除し、デコーダセットアップ前の `status="connected"` 設定 (331 行目相当) も削除した。`status` は subscribe 完了時の 1 箇所でのみ `connected` に遷移する。
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した。

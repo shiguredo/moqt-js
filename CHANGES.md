@@ -22,6 +22,11 @@
   - `App.tsx` の `handleRemoveSubscriber` で `sub.removeSubscriber(id)` を呼ぶ前に decoder.close() と session.close() を fire-and-forget で実行する
   - `useSubscriber` に `useEffect` cleanup を追加し、予期しないアンマウント経路でも `cleanupSubscriber` が呼ばれるようにする
   - @voluntas
+- [FIX] `startSubscribing` に中断機構を追加し status 遷移を修正する (#0148)
+  - 冒頭で `isStopping` をチェックして二重実行を防ぐ
+  - 各 `await` の後に `instance.session.value === null` をチェックし、close コールバックで cleanup された場合に処理を中断する
+  - Catalog 購読中・デコーダセットアップ中の誤った `status="connected"` 遷移を削除し、実際に subscribe 完了するまで `connected` 状態にならないようにする
+  - @voluntas
 
 ### misc
 

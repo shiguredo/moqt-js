@@ -178,6 +178,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
   const startSubscribing = async (): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
+    // 停止処理中のときは新規開始しない (二重実行防止)
+    if (instance.isStopping.value) return;
 
     try {
       instance.status.value = "disconnected";
@@ -228,7 +230,14 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance.session.value = session;
       settings.reliability.value = session.reliability;
 
-      instance.status.value = "connected";
+      // connect の await 中に close コールバック → cleanupSubscriber が発火した
+      // 痕跡をチェックする (現状この経路に至るには次の await 以降が必要だが、
+      // 中断機構の入口として防御的に確認する)。
+      if (instance.session.value === null) return;
+
+      // status は subscribe 完了時 (576 行目相当) に "connected" へ遷移する。
+      // ここで "connected" にしてしまうと、Catalog 購読中の最大 5 秒間に誤った
+      // 状態が UI に表示される。
       instance.statusMessage.value = "Connected, subscribing to catalog...";
 
       // Catalog を購読してコーデック情報を取得
@@ -330,7 +339,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         throw new Error(`failed to get catalog: ${(error as Error).message}`);
       }
 
-      instance.status.value = "connected";
+      // Catalog 取得の await 中に close コールバック → cleanupSubscriber で
+      // session.value が null 化された場合は以降の処理をスキップする。
+      if (instance.session.value === null) return;
+
       instance.statusMessage.value = "Setting up decoder...";
 
       // Create decoder wrapper
@@ -368,6 +380,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 
       await decoderInstance.configure(decoderConfig);
+
+      // decoder.configure の await 中に close コールバック → cleanupSubscriber で
+      // session.value が null 化された場合は以降の処理をスキップする。
+      if (instance.session.value === null) {
+        try {
+          decoderInstance.close();
+        } catch {
+          // 既にクローズされている場合は無視
+        }
+        return;
+      }
 
       instance.decoder.value = decoderInstance;
       instance.decoderConfigured.value = true;
