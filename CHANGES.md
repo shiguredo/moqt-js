@@ -50,6 +50,11 @@
 
 ### misc
 
+- [CHANGE] devtools の `cleanupSubscriber` を `teardownSubscriber` にリネームし `closeSubscriberResources` / `resetSubscriberState` に分割する (#0171)
+  - リネームと責務分離で「リソース close」「signal リセット」「UI ガード再有効化」の境界を明確にする
+  - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
+  - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
+  - @voluntas
 - [UPDATE] DebugPanel のログ蓄積を破壊的配列操作 + シーケンス signal 分離に変更し、autoScroll トグル単体の effect 再発火を抑制する (#0167)
   - `logs` Signal を廃止し、プレーン配列 `logBuffer` + `logCount` / `logSequence` の 2 signal 構成に変更する
   - `addLog` を `push` + `shift` の O(1) 操作に置き換え、スプレッド + slice によるフルコピー × 2 を解消する

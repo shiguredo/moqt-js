@@ -83,6 +83,102 @@ function resetSubscriberStats(
   instance.joiningFetchInProgress.value = joiningFetchEnabled;
 }
 
+/**
+ * `SubscriberInstance` が保持する外部リソース (`decoder` / `session`) を fire-and-forget で
+ * close し、canvas を初期色で塗り潰す。
+ *
+ * WebTransport が close コールバックを同期 dispatch する実装で teardownSubscriber が
+ * 再入する可能性があるため、`session.value = null` を `sessionInstance.close()` より
+ * 先に立てる順序を維持する (#0150)。
+ *
+ * canvas 塗り潰しは decoder の停止と一体で行うことで「停止した decoder の最終フレームが
+ * 残る」表示不整合を避けるため本関数内に置く。
+ */
+export function closeSubscriberResources(
+  instance: sub.SubscriberInstance,
+  canvas: HTMLCanvasElement | null,
+): void {
+  const decoderInstance = instance.decoder.value;
+  if (decoderInstance) {
+    try {
+      decoderInstance.close();
+    } catch {
+      // 既にクローズ済みなら無視
+    }
+  }
+
+  if (canvas) {
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  // 再入時に sessionInstance が null になっているよう close() より先に立てる。
+  const sessionInstance = instance.session.value;
+  instance.session.value = null;
+  if (sessionInstance) {
+    sessionInstance.close().catch(() => {
+      // 既にクローズされている場合は無視
+    });
+  }
+}
+
+/**
+ * `SubscriberInstance` の状態 signal 群を初期値にリセットし、フックローカル参照
+ * (`chainRef` / 必要に応じて ref 群) を巻き戻す。
+ *
+ * `status` / `statusMessage` / `isStopping` は触らない (#0163 の責務境界に従う)。
+ * `settingsDisabled` は `subscriber.value = null` の反映後に `hasActiveSubscriber`
+ * computed で再計算されるため、本関数の末尾で再有効化判定を行う。
+ *
+ * 将来の ref 化に備えて引数を受け取り、未適用フィールドは `null` を渡す
+ * (0164 適用後に joiningFetch 系 ref が埋まる)。
+ */
+export function resetSubscriberState(
+  instance: sub.SubscriberInstance,
+  chainRef: { current: Promise<void> },
+  liveObjectBufferRef: { current: MoqtObject[] } | null,
+  joiningFetchInProgressRef: { current: boolean } | null,
+  joiningFetchLastLocationRef: { current: { group: bigint; object: bigint } | null } | null,
+  isOtherPublisherActive: () => boolean,
+): void {
+  instance.subscriber.value = null;
+  instance.catalogSubscriber.value = null;
+  instance.catalog.value = null;
+  instance.decoder.value = null;
+  instance.decoderConfigured.value = false;
+  instance.codec.value = "";
+  instance.dynamicGroupsSupported.value = false;
+
+  instance.joiningFetchStats.value = null;
+  instance.largestLocation.value = null;
+
+  // 0164 適用前は signal、適用後は ref 化される 2 フィールド。
+  if (joiningFetchInProgressRef) {
+    joiningFetchInProgressRef.current = false;
+  } else {
+    instance.joiningFetchInProgress.value = false;
+  }
+  if (joiningFetchLastLocationRef) {
+    joiningFetchLastLocationRef.current = null;
+  } else {
+    instance.joiningFetchLastLocation.value = null;
+  }
+
+  // 0166 で ref 化済みのフィールド。
+  if (liveObjectBufferRef) {
+    liveObjectBufferRef.current = [];
+  }
+
+  chainRef.current = Promise.resolve();
+
+  if (!sub.hasActiveSubscriber.value && !isOtherPublisherActive()) {
+    settings.settingsDisabled.value = false;
+  }
+}
+
 // AbortController ベースの中断検知ヘルパー。
 // signal.aborted が立っていれば cleanup を呼んでから true を返す。
 // cleanup が例外を投げても判定結果は失われないよう握り潰す
@@ -230,7 +326,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
   };
 
-  // stopSubscribing 進行中 (isStopping=true) または cleanupSubscriber 通過後
+  // stopSubscribing 進行中 (isStopping=true) または teardownSubscriber 通過後
   // (session.value === null) の close / end / error コールバック発火では、
   // status / statusMessage を上書きしないと判定する。
   // 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error) では
@@ -249,7 +345,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
     // 古い controller が残っていれば abort してから新規生成する。
     // isStopping は二重実行防止、AbortController は中断シグナルで責務が異なるため両方残す。
-    // ローカル signal 経由で参照し、cleanupSubscriber が abortControllerRef.current = null
+    // ローカル signal 経由で参照し、teardownSubscriber が abortControllerRef.current = null
     // した後も abort 状態を判定できるようにする。
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -274,26 +370,26 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
             );
             // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
-            // cleanupSubscriber は abort 経路を維持するため常に呼ぶ。
+            // teardownSubscriber は abort 経路を維持するため常に呼ぶ。
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "disconnected";
               instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             }
-            cleanupSubscriber();
+            teardownSubscriber();
           },
           error: (error) => {
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "error";
               instance.statusMessage.value = `Error: ${error.message}`;
             }
-            cleanupSubscriber();
+            teardownSubscriber();
           },
           debug: (msg) => handleDebugMessage(subscriberId, msg),
         },
         connectOptions,
       );
       // connect 解決前の close 発火は session 自体が未存在のため、ここでの cleanup は
-      // await 中に他経路 (stopSubscribing / アンマウント) で cleanupSubscriber が呼ばれた場合に限る。
+      // await 中に他経路 (stopSubscribing / アンマウント) で teardownSubscriber が呼ばれた場合に限る。
       // 中断元から見えない (instance.session.value 未代入) ので、ローカル session の close は
       // startSubscribing 側の責務。
       if (
@@ -636,7 +732,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               instance.status.value = "disconnected";
               instance.statusMessage.value = "Stream ended";
             }
-            cleanupSubscriber();
+            teardownSubscriber();
           },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
@@ -673,17 +769,15 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance.statusMessage.value = `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`;
       instance.largestLocation.value = largestLocation ?? null;
     } catch (error) {
-      // 中断時は cleanupSubscriber が status / statusMessage / settingsDisabled を確定済み。
+      // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。
       // 通常エラーの上書きを避けるため、catch 句先頭で abort を判定して早期 return する。
       if (signal.aborted) return;
       console.error(`[${subscriberId}] Connection error:`, error);
       instance.status.value = "error";
       instance.statusMessage.value = `Failed: ${(error as Error).message}`;
-      cleanupSubscriber();
-      // settingsDisabled は他の subscriber がアクティブかどうかで判断
-      if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
-        settings.settingsDisabled.value = false;
-      }
+      // teardownSubscriber 内の resetSubscriberState が settingsDisabled 再有効化判定を含むため
+      // 重複した再有効化処理は不要。
+      teardownSubscriber();
     }
   };
 
@@ -695,7 +789,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
     instance.isStopping.value = true;
     // 進行中の startSubscribing を unsubscribe() 完了を待たずに中断する。
-    // controller の null 化は cleanupSubscriber 側で行う。
+    // controller の null 化は teardownSubscriber 側で行う。
     abortControllerRef.current?.abort();
     instance.status.value = "disconnected";
     instance.statusMessage.value = "Disconnecting...";
@@ -706,14 +800,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         await subscriberInstance.unsubscribe();
       }
     } finally {
-      cleanupSubscriber();
+      teardownSubscriber();
       instance.isStopping.value = false;
       instance.status.value = "disconnected";
       instance.statusMessage.value = "Ready to subscribe";
     }
   };
 
-  const cleanupSubscriber = (): void => {
+  // 外部接続を含むランタイム状態を全て巻き戻し、再 startSubscribing 可能な初期状態に戻す。
+  // close 系 (closeSubscriberResources) と signal リセット系 (resetSubscriberState) を
+  // 順に呼ぶ orchestrator。SubscriberInstance を Map から削除しない (= 同じ id で再 setup 可能)。
+  const teardownSubscriber = (): void => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
@@ -721,56 +818,16 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
 
-    const decoderInstance = instance.decoder.value;
-    if (decoderInstance) {
-      try {
-        decoderInstance.close();
-      } catch {
-        // 既にクローズ済みなら無視
-      }
-    }
-
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.fillStyle = "#1e293b";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-    }
-
-    // WebTransport 実装が close イベントを同期的に dispatch すると、close
-    // コールバック経由で cleanupSubscriber が再入する。再入時に sessionInstance
-    // が null になっているよう、close() より先に session.value をリセットする。
-    const sessionInstance = instance.session.value;
-    instance.session.value = null;
-    if (sessionInstance) {
-      sessionInstance.close().catch(() => {
-        // 既にクローズされている場合は無視
-      });
-    }
-
-    instance.subscriber.value = null;
-    instance.catalogSubscriber.value = null;
-    instance.catalog.value = null;
-    instance.decoder.value = null;
-    instance.decoderConfigured.value = false;
-    instance.codec.value = "";
-    instance.dynamicGroupsSupported.value = false;
-
-    instance.joiningFetchInProgress.value = false;
-    instance.joiningFetchLastLocation.value = null;
-    liveObjectBufferRef.current = [];
-    instance.joiningFetchStats.value = null;
-    instance.largestLocation.value = null;
-
-    // Subscriber 再起動時に古い Promise チェーンを引き継がないようリセットする
-    chainRef.current = Promise.resolve();
-
-    // 他にアクティブな Subscriber / Publisher がなければ設定 UI を再有効化する
-    if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
-      settings.settingsDisabled.value = false;
-    }
+    closeSubscriberResources(instance, canvasRef.current);
+    resetSubscriberState(
+      instance,
+      chainRef,
+      liveObjectBufferRef,
+      // 0164 で ref 化されるまでは null を渡し、signal 経由でリセットする。
+      null,
+      null,
+      () => pub.pubSession.value !== null,
+    );
   };
 
   const requestKeyframe = async (): Promise<void> => {
@@ -814,7 +871,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
   // アンマウント時のリソース解放 (HMR 等の想定外経路向けの補助)
   useEffect(() => {
     return () => {
-      cleanupSubscriber();
+      teardownSubscriber();
     };
   }, []);
 
