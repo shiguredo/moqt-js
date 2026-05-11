@@ -370,9 +370,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         settings.url.value,
         {
           close: (closeInfo) => {
-            console.log(
-              `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
-            );
+            // shouldApplyStatusUpdate のガード外で addLog を呼び、stop 主導時にも
+            // DebugPanel にイベントを残す。reason は 1024 文字に切って UI 描画負荷を抑える。
+            addLog("warn", `[${subscriberId}] webtransport closed`, {
+              closeCode: closeInfo.closeCode,
+              reason: closeInfo.reason.slice(0, 1024),
+            });
             // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
             // teardownSubscriber は abort 経路を維持するため常に呼ぶ。
             if (shouldApplyStatusUpdate()) {
@@ -382,6 +385,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             teardownSubscriber();
           },
           error: (error) => {
+            addLog("error", `[${subscriberId}] webtransport error`, {
+              name: error.name ?? "Error",
+              message: error.message ?? String(error),
+            });
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "error";
               instance.statusMessage.value = `Error: ${error.message}`;
@@ -427,22 +434,24 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           const processCatalogObject = (obj: MoqtObject, source: string) => {
             try {
               const catalog = decodeCatalogMessage(obj.payload);
+              // RECV OBJECT 自体は addLog 経由で残るのでここで重複ログは出さない。
               addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
                 source,
                 catalog,
               });
-              console.log(`[${subscriberId}] Catalog received (${source}):`, catalog);
               instance.catalog.value = catalog;
 
               const videoTracks = getVideoTracks(catalog);
               if (videoTracks.length > 0) {
                 resolve(videoTracks[0]);
               } else {
-                console.warn(`[${subscriberId}] No video tracks in catalog`);
+                addLog("warn", `[${subscriberId}] no video tracks in catalog`);
                 resolve(undefined);
               }
             } catch (error) {
-              console.error(`[${subscriberId}] Failed to decode catalog:`, error);
+              addLog("error", `[${subscriberId}] failed to decode catalog`, {
+                message: error instanceof Error ? error.message : String(error),
+              });
               reject(error);
             }
           };
@@ -457,10 +466,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                   processCatalogObject(obj, "subscribe");
                 },
                 end: () => {
-                  console.log(`[${subscriberId}] Catalog stream ended`);
+                  addLog("info", `[${subscriberId}] catalog stream ended`);
                 },
                 error: (error) => {
-                  console.error(`[${subscriberId}] Catalog subscribe error:`, error);
+                  addLog("error", `[${subscriberId}] catalog subscribe error`, {
+                    message: error instanceof Error ? error.message : String(error),
+                  });
                   reject(error);
                 },
               },
@@ -517,7 +528,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           throw new Error("no video track in catalog");
         }
 
-        console.log(`[${subscriberId}] Using codec from catalog:`, videoTrackFromCatalog.codec);
+        addLog("info", `[${subscriberId}] using codec from catalog`, {
+          codec: videoTrackFromCatalog.codec,
+        });
         actualTrackName = videoTrackFromCatalog.name;
       } catch (error) {
         throw new Error(`failed to get catalog: ${(error as Error).message}`);

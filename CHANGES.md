@@ -55,6 +55,11 @@
   - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
   - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
   - @voluntas
+- [UPDATE] devtools の `useSubscriber` / `usePublisher` で WebTransport `close` / `error` と Catalog ライフサイクルを `addLog` 経由で DebugPanel に出力する (#0176)
+  - `console.log` / `console.warn` / `console.error` で DevTools コンソールにしか出ていなかった接続終端と Catalog 受信フローを DebugPanel に集約する
+  - close は level=warn、error は level=error、Catalog 進行は level=info / warn / error で振り分ける
+  - `addLog` 呼び出しは `shouldApplyStatusUpdate` ガード外に置き、stop 主導の終端でも DebugPanel にイベントを残す
+  - @voluntas
 - [UPDATE] devtools の `handleDebugMessage` で `DebugMessage.payload` をコピーしてからログに保存する (#0175)
   - `new Uint8Array(message.payload)` で独立した ArrayBuffer に複製してから `addLog` に渡す
   - moqt-js 側内部実装の最適化 (slice → subarray など) が将来入っても devtools 側のログ保持が破綻しないよう防御する

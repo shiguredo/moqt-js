@@ -1,6 +1,7 @@
 # WebTransport `close` / `error` と Catalog ライフサイクルログを `addLog` 経由で DebugPanel に流す
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

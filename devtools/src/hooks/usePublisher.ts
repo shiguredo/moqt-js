@@ -272,14 +272,19 @@ export function usePublisher() {
         settings.url.value,
         {
           close: (closeInfo) => {
-            console.log(
-              `Publisher: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
-            );
+            addLog("warn", `[publisher] webtransport closed`, {
+              closeCode: closeInfo.closeCode,
+              reason: closeInfo.reason.slice(0, 1024),
+            });
             pub.pubStatus.value = "disconnected";
             pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             cleanupPublisher();
           },
           error: (error) => {
+            addLog("error", `[publisher] webtransport error`, {
+              name: error.name ?? "Error",
+              message: error.message ?? String(error),
+            });
             pub.pubStatus.value = "error";
             pub.pubStatusMessage.value = `Error: ${error.message}`;
             cleanupPublisher();
