@@ -55,6 +55,11 @@
   - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
   - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
   - @voluntas
+- [UPDATE] `DebugPanel` の formatter 群を `utils/logFormatters.ts` に分離し pure function 化する (#0174)
+  - コンポーネント内に分散していた `formatElapsedTime` / `formatDeltaTime` を引数化してモジュールスコープへ移動する
+  - `formatMessageData` / `formatHexDump` / `formatAbsoluteTime` も同モジュールに集約し、`RFC_FIELD_NAMES` / `isParameter` を共有する
+  - `formatBytes` は重複問題があるため本 issue では移動しない
+  - @voluntas
 - [UPDATE] DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合し、setTimeout のリーク (#0170) を解消する (#0173)
   - 行コピー用とボタンコピー用の hook を分離し、同時にハイライト状態を持てるようにする
   - 連続クリック時の早消えとアンマウント後の signal 書き込みを `useRef` + `useEffect` cleanup で防ぐ

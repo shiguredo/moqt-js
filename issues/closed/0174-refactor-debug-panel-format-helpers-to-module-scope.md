@@ -1,6 +1,7 @@
 # `DebugPanel` の formatter 群をモジュールスコープに整理し pure function 化する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

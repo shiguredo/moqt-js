@@ -1,6 +1,13 @@
 import { signal, useSignalEffect, batch } from "@preact/signals";
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
+import {
+  formatAbsoluteTime,
+  formatDeltaTime,
+  formatElapsedTime,
+  formatHexDump,
+  formatMessageData,
+} from "../utils/logFormatters";
 import { isDebugPanelOpen, closeDebugPanel } from "../signals/debug";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
@@ -38,154 +45,6 @@ export function __resetLogStateForTest(): void {
   logSequence.value = 0;
 }
 
-// RFC 形式のフィールド名マッピング
-const RFC_FIELD_NAMES: Record<string, string> = {
-  requestId: "Request ID",
-  trackAlias: "Track Alias",
-  trackNamespace: "Track Namespace",
-  trackName: "Track Name",
-  filterType: "Filter Type",
-  errorCode: "Error Code",
-  reason: "Reason",
-  statusCode: "Status Code",
-  streamCount: "Stream Count",
-  maxRequestId: "Max Request ID",
-  fetchType: "Fetch Type",
-  joiningRequestId: "Joining Request ID",
-  joiningStart: "Joining Start",
-  startLocation: "Start Location",
-  endLocation: "End Location",
-  trackNamespacePrefix: "Track Namespace Prefix",
-  subscriptionRequestId: "Subscription Request ID",
-};
-
-// パラメーターかどうかを判定
-function isParameter(key: string): boolean {
-  return key === key.toUpperCase() && key.includes("_");
-}
-
-// RFC 仕様書風のフォーマット
-function formatMessageData(data: unknown, indent = 0): string {
-  if (data === null || data === undefined) {
-    return "";
-  }
-
-  const spaces = "  ".repeat(indent);
-
-  if (typeof data === "string") {
-    return data;
-  }
-
-  if (typeof data === "number" || typeof data === "boolean" || typeof data === "bigint") {
-    return String(data);
-  }
-
-  if (typeof data === "symbol" || typeof data === "function") {
-    return String(data);
-  }
-
-  if (Array.isArray(data)) {
-    if (data.length === 0) {
-      return "[]";
-    }
-    // 配列の中にオブジェクトがある場合は JSON.stringify で表示
-    const hasObjects = data.some((item) => typeof item === "object" && item !== null);
-    if (hasObjects) {
-      return JSON.stringify(data, null, 2);
-    }
-    return `[${data.join(", ")}]`;
-  }
-
-  const entries = Object.entries(data as Record<string, unknown>);
-  if (entries.length === 0) {
-    return "";
-  }
-
-  // フィールドとパラメーターを分離
-  const fields: [string, unknown][] = [];
-  const parameters: [string, unknown][] = [];
-
-  for (const [key, value] of entries) {
-    if (value === undefined) {
-      continue;
-    }
-    if (isParameter(key)) {
-      parameters.push([key, value]);
-    } else {
-      fields.push([key, value]);
-    }
-  }
-
-  const lines: string[] = [];
-
-  // フィールドを表示
-  for (const [key, value] of fields) {
-    const displayName = RFC_FIELD_NAMES[key] ?? key;
-    // catalog フィールドは JSON として表示
-    if (key === "catalog" && typeof value === "object" && value !== null) {
-      const jsonStr = JSON.stringify(value, null, 2);
-      const indentedJson = jsonStr
-        .split("\n")
-        .map((line, i) => (i === 0 ? line : `${spaces}  ${line}`))
-        .join("\n");
-      lines.push(`${spaces}  ${displayName}: ${indentedJson}`);
-    } else {
-      const formattedValue = formatMessageData(value, indent + 1);
-      lines.push(`${spaces}  ${displayName}: ${formattedValue}`);
-    }
-  }
-
-  // パラメーターを表示
-  if (parameters.length > 0) {
-    lines.push(`${spaces}  Parameters:`);
-    for (const [key, value] of parameters) {
-      const formattedValue = formatMessageData(value, indent + 2);
-      lines.push(`${spaces}    ${key}: ${formattedValue}`);
-    }
-  }
-
-  return `{\n${lines.join("\n")}\n${spaces}}`;
-}
-
-// バイナリデータを hex dump 形式でフォーマット
-function formatHexDump(data: Uint8Array): string {
-  const lines: string[] = [];
-  const bytesPerLine = 16;
-
-  for (let offset = 0; offset < data.length; offset += bytesPerLine) {
-    const chunk = data.slice(offset, offset + bytesPerLine);
-
-    // オフセット (4桁の16進数)
-    const offsetStr = offset.toString(16).padStart(4, "0");
-
-    // 16進数部分
-    const hexParts: string[] = [];
-    for (let i = 0; i < bytesPerLine; i++) {
-      if (i < chunk.length) {
-        hexParts.push(chunk[i].toString(16).padStart(2, "0"));
-      } else {
-        hexParts.push("  ");
-      }
-    }
-    const hexStr = hexParts.slice(0, 8).join(" ") + "  " + hexParts.slice(8).join(" ");
-
-    // ASCII 部分
-    let asciiStr = "";
-    for (let i = 0; i < chunk.length; i++) {
-      const byte = chunk[i];
-      if (byte >= 0x20 && byte <= 0x7e) {
-        asciiStr += String.fromCharCode(byte);
-      } else {
-        asciiStr += ".";
-      }
-    }
-
-    lines.push(`${offsetStr}  ${hexStr}  |${asciiStr}|`);
-  }
-
-  return lines.join("\n");
-}
-
 export function addLog(
   level: LogEntry["level"],
   message: string,
@@ -211,16 +70,6 @@ export function addLog(
     logCount.value = logBuffer.length;
     logSequence.value = logSequence.value + 1;
   });
-}
-
-// 絶対時刻をフォーマット（HH:MM:SS.mmm）
-function formatAbsoluteTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  const hours = date.getHours().toString().padStart(2, "0");
-  const minutes = date.getMinutes().toString().padStart(2, "0");
-  const seconds = date.getSeconds().toString().padStart(2, "0");
-  const milliseconds = date.getMilliseconds().toString().padStart(3, "0");
-  return `${hours}:${minutes}:${seconds}.${milliseconds}`;
 }
 
 // 接続設定をテキストとして生成
@@ -567,23 +416,6 @@ export function DebugPanel() {
   // 最初のログのタイムスタンプ
   const firstTimestamp = logBuffer.length > 0 ? logBuffer[0].timestamp : 0;
 
-  // 経過時間をフォーマット（秒.ミリ秒）
-  const formatElapsedTime = (timestamp: number): string => {
-    const elapsed = timestamp - firstTimestamp;
-    const seconds = Math.floor(elapsed / 1000);
-    const milliseconds = elapsed % 1000;
-    return `+${seconds}.${milliseconds.toString().padStart(3, "0")}`;
-  };
-
-  // 差分時間をフォーマット（ミリ秒）
-  const formatDeltaTime = (currentTimestamp: number, previousTimestamp: number | null): string => {
-    if (previousTimestamp === null) {
-      return "";
-    }
-    const delta = currentTimestamp - previousTimestamp;
-    return `(+${delta}ms)`;
-  };
-
   if (!isDebugPanelOpen.value) {
     return null;
   }
@@ -737,7 +569,7 @@ export function DebugPanel() {
                           {formatAbsoluteTime(log.timestamp)}
                         </span>
                         <div class="flex gap-2 text-slate-400">
-                          <span>{formatElapsedTime(log.timestamp)}</span>
+                          <span>{formatElapsedTime(log.timestamp, firstTimestamp)}</span>
                           {previousTimestamp !== null && (
                             <span class="text-slate-300">
                               {formatDeltaTime(log.timestamp, previousTimestamp)}
