@@ -34,7 +34,10 @@ Model: Opus 4.7
 const initialBuffered = sortByGroupObject([...instance.liveObjectBuffer.value]);
 instance.liveObjectBuffer.value = [];
 // 重複除去
-const objectsToProcess = applyJoiningFetchDedupe(initialBuffered, instance.joiningFetchLastLocation.value);
+const objectsToProcess = applyJoiningFetchDedupe(
+  initialBuffered,
+  instance.joiningFetchLastLocation.value,
+);
 
 // joiningFetchInProgress を先に立て下げる。これ以降に到着したオブジェクトは
 // object: コールバック側で chainRef 経由でデコードされる。

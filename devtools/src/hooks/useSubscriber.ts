@@ -20,8 +20,9 @@ import { useRef, useEffect } from "preact/hooks";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
-// draft-ietf-moq-transport-17 §10.4.2 では Subgroup ストリーム間の配送順は保証されないため、
-// バッファドレイン時に明示的にソートする必要がある。
+// draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリーム間の配送順は
+// 保証されない (個々のストリームは in-order だがストリーム間は publisher 側で
+// out of order に送出されうる) ため、バッファドレイン時に明示的にソートする必要がある。
 function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
   // 引数配列を破壊しないようコピーしてからソートする。
   // signal の .value 配列が直接渡された場合に Preact の変更検知を壊さないため。
@@ -486,9 +487,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               bufferedLiveObjects: 0,
             };
 
-            // ライブバッファをコピーしてクリア
-            // draft-ietf-moq-transport-17 §10.3 / §10.4 では Subgroup ストリームと
-            // OBJECT_DATAGRAM が並行配送されるため、到着順 ≠ (groupId, objectId) 順
+            // ライブバッファをコピーしてクリア。
+            // draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリームと
+            // OBJECT_DATAGRAM の配送順が保証されないため、到着順 ≠ (groupId, objectId) 順
             // となる可能性がある。デコーダへ流す前に (groupId, objectId) 昇順へ
             // 並べ替える。
             const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);

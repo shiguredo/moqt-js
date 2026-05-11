@@ -1,6 +1,7 @@
 # `useSubscriber.ts` の Subgroup 配送順に関する RFC 節参照を `§2.2` に修正する
 
 Created: 2026-05-11
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -44,3 +45,8 @@ Model: Opus 4.7
 - `CHANGES.md` に訂正エントリが追加されている
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の 2 箇所 (sortByGroupObject 上 / Joining Fetch onEnd 内 sort コメント) を `§2.2 (Subgroups)` 参照に修正し、配送順非保証の規範根拠を明確にした。
+- `CHANGES.md` の `### misc` セクションに `[FIX]` エントリを追加した。

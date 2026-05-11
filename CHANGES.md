@@ -82,6 +82,10 @@
 - [FIX] `joiningFetch.onError` で decoder の `state !== "closed"` ガードを追加する (#0155)
   - `cleanupSubscriber` が先に decoder を close 済みの場合に `resetKeyframeWait()` が呼ばれて意図しない副作用が起きる経路を塞ぐ
   - @voluntas
+- [FIX] `useSubscriber.ts` の Subgroup 配送順に関する RFC 節参照を `§2.2 (Subgroups)` に修正する (#0156)
+  - `§10.4.2` および `§10.3 / §10.4` は SUBGROUP_HEADER / Datagram / Stream の定義節であり、配送順非保証の規範は `§2.2 (Subgroups)` にある
+  - #0145 で `§10.3` を `§10.4.2` に修正した結果、定義節への誤った参照が確定していたのを訂正する
+  - @voluntas
 
 ###
 
