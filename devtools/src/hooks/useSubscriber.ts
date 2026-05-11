@@ -4,10 +4,8 @@ import {
   decodeCatalogMessage,
   getVideoTracks,
   CATALOG_TRACK_NAME,
-  type AuthorizationToken,
   type MoqtObject,
   type DebugMessage,
-  type CertificateHash,
   type JoiningFetchOptions,
   type CatalogTrack,
 } from "moqt-js";
@@ -36,6 +34,52 @@ function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
     }
     return 0;
   });
+}
+
+/**
+ * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
+ * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の initData (Base64)
+ * から復元する。
+ * draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1.2
+ */
+function buildVideoDecoderConfig(videoTrack: CatalogTrack): VideoDecoderConfig {
+  if (!videoTrack.codec) {
+    throw new Error("video track codec is not specified in catalog");
+  }
+  const decoderConfig: VideoDecoderConfig = {
+    codec: videoTrack.codec,
+    codedWidth: videoTrack.width,
+    codedHeight: videoTrack.height,
+  };
+  if (videoTrack.initData) {
+    decoderConfig.description = settings.base64ToArrayBuffer(videoTrack.initData);
+  }
+  return decoderConfig;
+}
+
+/**
+ * Subscriber インスタンスの統計フィールドを初期値へリセットする。
+ * `startSubscribing` 開始時に Joining Fetch / decode カウンタや位置情報をクリアする。
+ */
+function resetSubscriberStats(
+  instance: sub.SubscriberInstance,
+  joiningFetchEnabled: boolean,
+): void {
+  instance.framesDecoded.value = 0;
+  instance.keyFramesDecoded.value = 0;
+  instance.objectsReceived.value = 0;
+  instance.currentGroup.value = 0;
+  instance.currentSubGroup.value = 0;
+  instance.bytesReceived.value = 0;
+  instance.objectsWithExtensions.value = 0;
+  instance.chunksCreated.value = 0;
+  instance.chunksDecoded.value = 0;
+  instance.chunksSkipped.value = 0;
+  instance.decodeErrors.value = 0;
+  instance.joiningFetchStats.value = null;
+  instance.largestLocation.value = null;
+  instance.joiningFetchInProgress.value = joiningFetchEnabled;
+  instance.liveObjectBuffer.value = [];
 }
 
 function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
@@ -189,24 +233,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
-
-      // Build connect options
-      const connectOptions: {
-        serverCertificateHashes?: CertificateHash[];
-        authorizationToken?: AuthorizationToken;
-      } = {};
-      if (settings.certificateHash.value) {
-        connectOptions.serverCertificateHashes = [
-          {
-            algorithm: "sha-256",
-            value: settings.base64ToArrayBuffer(settings.certificateHash.value),
-          },
-        ];
-      }
-      const authToken = settings.buildAuthorizationToken();
-      if (authToken) {
-        connectOptions.authorizationToken = authToken;
-      }
+      const connectOptions = settings.buildConnectOptions();
 
       // Connect to MOQT server
       const session = await connect(
@@ -370,21 +397,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
       });
 
-      // デコーダを設定: Catalog から取得
-      if (!videoTrackFromCatalog.codec) {
-        throw new Error("video track codec is not specified in catalog");
-      }
-      const decoderConfig: VideoDecoderConfig = {
-        codec: videoTrackFromCatalog.codec,
-        codedWidth: videoTrackFromCatalog.width,
-        codedHeight: videoTrackFromCatalog.height,
-      };
-      // canonical 形式 (avc1 / hvc1) で必要な VideoDecoderConfig.description を
-      // MSF Catalog の initData (Base64) から取得する
-      // draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1.2
-      if (videoTrackFromCatalog.initData) {
-        decoderConfig.description = settings.base64ToArrayBuffer(videoTrackFromCatalog.initData);
-      }
+      // デコーダを Catalog から取得した videoTrack で設定する
+      const decoderConfig = buildVideoDecoderConfig(videoTrackFromCatalog);
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
       console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 
@@ -406,28 +420,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance.decoderState.value = decoderInstance.state;
       instance.codec.value = codecDisplay;
 
-      // Subscriber オプションを構築
       const joiningFetchEnabled = instance.joiningFetchEnabled.value;
       const newGroupRequestEnabled = instance.newGroupRequestEnabled.value;
 
       instance.status.value = "connected";
       instance.statusMessage.value = "Subscribing...";
-      // Reset stats
-      instance.framesDecoded.value = 0;
-      instance.keyFramesDecoded.value = 0;
-      instance.objectsReceived.value = 0;
-      instance.currentGroup.value = 0;
-      instance.currentSubGroup.value = 0;
-      instance.bytesReceived.value = 0;
-      instance.objectsWithExtensions.value = 0;
-      instance.chunksCreated.value = 0;
-      instance.chunksDecoded.value = 0;
-      instance.chunksSkipped.value = 0;
-      instance.decodeErrors.value = 0;
-      instance.joiningFetchStats.value = null;
-      instance.largestLocation.value = null;
-      instance.joiningFetchInProgress.value = joiningFetchEnabled;
-      instance.liveObjectBuffer.value = [];
+      resetSubscriberStats(instance, joiningFetchEnabled);
 
       // Create subscriber
       const subscribeOptions: {

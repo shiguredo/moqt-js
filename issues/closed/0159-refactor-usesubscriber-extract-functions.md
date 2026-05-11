@@ -1,6 +1,7 @@
 # `useSubscriber.ts` を関数抽出して責務を分割する
 
 Created: 2026-05-11
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -61,3 +62,13 @@ Model: Opus 4.7
 - 上記 5 関数のうち最低 3 つが抽出されている
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/signals/connectionSettings.ts` に `buildConnectOptions(): { serverCertificateHashes?; authorizationToken? }` を追加し、`useSubscriber.ts` 内の重複していた `connect()` オプション組み立て手続き (15 行) を 1 行の関数呼び出しに置き換えた。
+- `devtools/src/hooks/useSubscriber.ts` のモジュールスコープに以下を追加した:
+  - `buildVideoDecoderConfig(videoTrack): VideoDecoderConfig` — Catalog から `VideoDecoderConfig` を組み立てる pure 関数。`codec` 未指定時のチェックも内包。
+  - `resetSubscriberStats(instance, joiningFetchEnabled): void` — `startSubscribing` 内の統計 / Joining Fetch 状態リセット手続きを集約。
+- `startSubscribing` 本体から上記 3 関数を呼び出す形に書き換え、import から `AuthorizationToken` / `CertificateHash` を削除した。
+- `CHANGES.md` の `### misc` セクションに `[CHANGE]` エントリを追加した。
+- `subscribeCatalog` / `buildJoiningFetchOptions` の抽出はクロージャ依存 (`chainRef`, `handleObject`, `addLog`) が大きく今回のスコープ外とし、別 issue で扱う。

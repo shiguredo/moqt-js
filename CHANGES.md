@@ -50,6 +50,11 @@
 - [UPDATE] `signals/subscriber.ts` の参照フィールドコメントを修正する (#0153)
   - Signal 化の本質的理由 (Map 再生成回避と `hasActiveSubscriber` computed の追跡要件) を明記する
   - @voluntas
+- [CHANGE] `useSubscriber.ts` の責務を関数抽出で分割する (#0159)
+  - `buildConnectOptions` を `signals/connectionSettings.ts` へ抽出する
+  - `buildVideoDecoderConfig` (Catalog → `VideoDecoderConfig` 変換) と `resetSubscriberStats` (統計フィールド初期化) を `useSubscriber.ts` のモジュールスコープへ抽出する
+  - `startSubscribing` 本体から重複した手続きを除去し責務を分離する
+  - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
   - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
