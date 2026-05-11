@@ -26,6 +26,10 @@
   - ドレイン投入 (`chainRef` への順次予約) と `joiningFetchInProgress` 立て下げを同一 `batch()` 内でアトミックに実行し、ドレイン中にバッファへ積まれたオブジェクトが永久に放置される race window を排除する
   - 立て下げ後のライブオブジェクトは `object:` コールバックから `chainRef` 経由でデコードされ、Promise チェーンで順序保証される
   - @voluntas
+- [FIX] Joining Fetch `onError` 時にライブバッファを破棄せず処理する (#0158)
+  - Joining Fetch (過去取得) は SUBSCRIBE 経由のライブ配信と独立したストリームのため、Joining Fetch の失敗でライブバッファを捨てるのは過剰だった
+  - `onEnd` と同じ手順でバッファを `chainRef` 経由のドレインに通し、`decoderInstance.resetKeyframeWait()` の強制リセットも削除して、バッファ内 keyframe で自然にデコードが再開するようにする
+  - @voluntas
 - [FIX] `startSubscribing` に中断機構を追加し status 遷移を修正する (#0148)
   - 冒頭で `isStopping` をチェックして二重実行を防ぐ
   - 各 `await` の後に `instance.session.value === null` をチェックし、close コールバックで cleanup された場合に処理を中断する

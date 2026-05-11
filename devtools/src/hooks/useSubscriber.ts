@@ -543,15 +543,19 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           },
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);
-            // エラー時もバッファをクリアしてフラグをリセット
-            // デコーダーをキーフレーム待ち状態にリセット (close 済みの場合はスキップ)
-            const decoderInstance = instance.decoder.value;
-            if (decoderInstance && decoderInstance.state !== "closed") {
-              decoderInstance.resetKeyframeWait();
+            // Joining Fetch (過去取得) が失敗しても SUBSCRIBE 経由のライブ配信は
+            // 独立して継続する。ライブバッファに溜まったオブジェクトを破棄せず、
+            // onEnd と同じ手順でドレインしてからフラグを下げる。バッファ内に
+            // keyframe が含まれていれば自然にデコードが再開する。
+            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
+            for (const bufferedObj of bufferedObjects) {
+              chainRef.current = chainRef.current.then(() => handleObject(bufferedObj));
             }
-            instance.joiningFetchInProgress.value = false;
-            instance.liveObjectBuffer.value = [];
-            instance.joiningFetchLastLocation.value = null;
+            batch(() => {
+              instance.liveObjectBuffer.value = [];
+              instance.joiningFetchInProgress.value = false;
+              instance.joiningFetchLastLocation.value = null;
+            });
           },
         };
       }

@@ -1,6 +1,7 @@
 # `joiningFetch.onError` 時にライブバッファを破棄せず処理する
 
 Created: 2026-05-11
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -70,3 +71,12 @@ onError: (error: Error) => {
 - `joiningFetch.onError` でライブバッファを破棄せず処理する
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `joiningFetch.onError` を以下のように修正した:
+  - `liveObjectBuffer.value = []` で破棄していたバッファを `sortByGroupObject` でソートし、`chainRef.current.then(...)` 経由でドレインに通すよう変更した。
+  - `decoderInstance.resetKeyframeWait()` の強制リセットを削除した。バッファ内に keyframe があれば自然にデコードが再開するため、二重リセットを避ける狙い。
+  - `liveObjectBuffer.value` / `joiningFetchInProgress.value` / `joiningFetchLastLocation.value` の更新は `batch()` でアトミックに実行する (onEnd と同じパターン)。
+- `CHANGES.md` の `## develop` 直下に `[FIX]` エントリを追加した。
+- なお issue #0155 で追加した `decoder.state !== "closed"` ガードは本修正で `resetKeyframeWait()` 呼び出し自体が削除されたため不要になった。
