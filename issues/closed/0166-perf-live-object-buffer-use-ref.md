@@ -1,6 +1,7 @@
 # `liveObjectBuffer` を Signal から `useRef` ベースに置き換える
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

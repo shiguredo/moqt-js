@@ -80,7 +80,6 @@ function resetSubscriberStats(
   instance.joiningFetchStats.value = null;
   instance.largestLocation.value = null;
   instance.joiningFetchInProgress.value = joiningFetchEnabled;
-  instance.liveObjectBuffer.value = [];
 }
 
 // AbortController ベースの中断検知ヘルパー。
@@ -121,6 +120,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Joining Fetch 中のライブオブジェクトバッファ (UI 描画不要なため Signal ではなく ref で持つ)
+  const liveObjectBufferRef = useRef<MoqtObject[]>([]);
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -472,6 +473,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance.status.value = "connected";
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance, joiningFetchEnabled);
+      // ref のクリアは Signal カウンタリセットとは責務が異なるためフック側で実行する。
+      liveObjectBufferRef.current = [];
 
       // Subscriber オプションを構築する
       const subscribeOptions: {
@@ -532,7 +535,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               bufferedLiveObjects: 0,
             };
 
-            const bufferedObjects = toSortedByGroupObject([...instance.liveObjectBuffer.value]);
+            // toSortedByGroupObject 内部で [...objects].sort(...) するため、ここでのスプレッドは省略する。
+            const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
 
             // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
             const lastFetch = instance.joiningFetchLastLocation.value;
@@ -573,7 +577,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             }
 
             batch(() => {
-              instance.liveObjectBuffer.value = [];
               instance.joiningFetchInProgress.value = false;
               instance.joiningFetchLastLocation.value = null;
               instance.joiningFetchStats.value = {
@@ -582,6 +585,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 bufferedLiveObjects: objectsToProcess.length,
               };
             });
+            // ref クリアは batch の外で実行する。batch 完了後に行うことでフラグ立て下げ後の
+            // object: コールバック (chainRef 経路) と buffer リセットの順序を維持する。
+            liveObjectBufferRef.current = [];
           },
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);
@@ -589,17 +595,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // 独立して継続する。ライブバッファに溜まったオブジェクトを破棄せず、
             // onEnd と同じ手順でドレインしてからフラグを下げる。バッファ内に
             // keyframe が含まれていれば自然にデコードが再開する。
-            const bufferedObjects = toSortedByGroupObject([...instance.liveObjectBuffer.value]);
+            const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
             for (const bufferedObj of bufferedObjects) {
               chainRef.current = chainRef.current
                 .then(() => handleObject(bufferedObj))
                 .catch(() => {});
             }
             batch(() => {
-              instance.liveObjectBuffer.value = [];
               instance.joiningFetchInProgress.value = false;
               instance.joiningFetchLastLocation.value = null;
             });
+            liveObjectBufferRef.current = [];
           },
         };
       }
@@ -609,9 +615,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // Joining Fetch 中はライブオブジェクトをバッファ
+            // Joining Fetch 中はライブオブジェクトをバッファ。push で O(1) 追記する。
             if (instance.joiningFetchInProgress.value) {
-              instance.liveObjectBuffer.value = [...instance.liveObjectBuffer.value, obj];
+              liveObjectBufferRef.current.push(obj);
               return;
             }
 
@@ -743,7 +749,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
     instance.joiningFetchInProgress.value = false;
     instance.joiningFetchLastLocation.value = null;
-    instance.liveObjectBuffer.value = [];
+    liveObjectBufferRef.current = [];
     instance.joiningFetchStats.value = null;
     instance.largestLocation.value = null;
 

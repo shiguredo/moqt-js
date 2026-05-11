@@ -44,6 +44,11 @@
 
 ### misc
 
+- [UPDATE] devtools の Joining Fetch 中ライブオブジェクトバッファを Signal から useRef へ変更し、追記コストを O(N^2) から O(N) に改善する (#0166)
+  - `SubscriberInstance` から `liveObjectBuffer` フィールドを削除する
+  - `useSubscriber.ts` で `useRef<MoqtObject[]>([])` を導入し、`object:` コールバックの追記を `push` (O(1)) に置き換える
+  - `onEnd` / `onError` の `batch()` 外で ref をクリアする
+  - @voluntas
 - [UPDATE] devtools の `SubscriberPanel` が `subscriberInstances` Map 全体を購読していたのを、対象 ID 用の派生 signal だけを購読するように変更する (#0165)
   - `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と `subscriberInstanceSignalCache` を追加する
   - `SubscriberPanel.tsx` で `useMemo` を使い対象 ID 用の `ReadonlySignal` を購読する

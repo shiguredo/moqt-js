@@ -39,7 +39,6 @@ test("createSubscriberInstance initializes signals with expected defaults", () =
   assert.equal(instance.framesDecoded.value, 0);
   assert.equal(instance.objectsReceived.value, 0);
   assert.equal(instance.joiningFetchInProgress.value, false);
-  assert.deepEqual(instance.liveObjectBuffer.value, []);
   assert.equal(instance.joiningFetchLastLocation.value, null);
 });
 

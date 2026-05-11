@@ -1,5 +1,5 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
-import type { Session, Subscriber, MoqtObject, Catalog } from "moqt-js";
+import type { Session, Subscriber, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
 
@@ -64,7 +64,6 @@ export interface SubscriberInstance {
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Joining Fetch 中のライブオブジェクトバッファ
   joiningFetchInProgress: Signal<boolean>;
-  liveObjectBuffer: Signal<MoqtObject[]>;
   // Joining Fetch の最後のオブジェクトの location (重複除去用)
   joiningFetchLastLocation: Signal<{ group: bigint; object: bigint } | null>;
 }
@@ -102,7 +101,6 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     joiningFetchStats: signal<JoiningFetchStats | null>(null),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
     joiningFetchInProgress: signal(false),
-    liveObjectBuffer: signal<MoqtObject[]>([]),
     joiningFetchLastLocation: signal<{ group: bigint; object: bigint } | null>(null),
   };
 }
