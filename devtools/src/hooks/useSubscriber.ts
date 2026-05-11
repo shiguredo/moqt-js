@@ -22,7 +22,8 @@ import type { RefObject } from "preact";
 // draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリーム間の配送順は
 // 保証されない (個々のストリームは in-order だがストリーム間は publisher 側で
 // out of order に送出されうる) ため、バッファドレイン時に明示的にソートする必要がある。
-function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
+// テストで参照するため export している。
+export function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
   // 引数配列を破壊しないようコピーしてからソートする。
   // signal の .value 配列が直接渡された場合に Preact の変更検知を壊さないため。
   return [...objects].sort((a, b) => {

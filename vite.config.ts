@@ -997,7 +997,7 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ["src/**/*.{test,prop}.ts"],
+    include: ["src/**/*.{test,prop}.ts", "devtools/src/**/*.{test,prop}.ts"],
     coverage: {
       provider: "v8",
       exclude: ["src/message/debug.ts"],

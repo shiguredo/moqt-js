@@ -1,6 +1,7 @@
 # devtools 向け Vitest 受け入れ態勢を整備し純粋関数の単体テストを追加する
 
 Created: 2026-05-11
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -75,3 +76,21 @@ Model: Opus 4.7
 - `sortByGroupObject` の test が追加されている (最低 5 件以上)
 - `signals/subscriber.ts` の test が追加されている (最低 5 件以上)
 - `vp run test` が全件パスする
+
+## 解決方法
+
+- `vite.config.ts` の `test.include` に `devtools/src/**/*.{test,prop}.ts` を追加した。
+- `devtools/src/hooks/useSubscriber.ts` の `sortByGroupObject` を export し、`devtools/src/hooks/useSubscriber.test.ts` に 8 件の単体テストを追加した:
+  - 非破壊性 (戻り値が別オブジェクト、入力配列が変化しない)
+  - groupId 昇順 / objectId 昇順 / (groupId, objectId) 二段ソート
+  - 空配列 / 単一要素 / 等価キー / BigInt 境界値
+- `devtools/src/signals/subscriber.test.ts` に 9 件の単体テストを追加した:
+  - `createSubscriberInstance` の id 設定と signal 初期値
+  - `addSubscriber` の Map 新規参照差し替えと unique id 生成
+  - `removeSubscriber` の Map 削除と存在しない id への安全性
+  - `subscriberIds` computed が追加 / 削除に追従すること
+  - `hasActiveSubscriber` computed が `instance.subscriber.value` の null / non-null 切り替えに同期して true / false を返すこと
+  - `effect()` 経由で `hasActiveSubscriber` の変化が通知されること
+- `vp run test` 結果: 35 test files / 473 tests passed (devtools 配下に 17 件追加)。
+
+なお `subscribeCatalog` / `joiningFetch.onError` / `cleanupSubscriber` 再入安全性のテストは関数抽出と偽 Session の整備を伴うため、別 issue で扱う。

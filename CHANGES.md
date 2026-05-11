@@ -55,6 +55,11 @@
   - `buildVideoDecoderConfig` (Catalog → `VideoDecoderConfig` 変換) と `resetSubscriberStats` (統計フィールド初期化) を `useSubscriber.ts` のモジュールスコープへ抽出する
   - `startSubscribing` 本体から重複した手続きを除去し責務を分離する
   - @voluntas
+- [ADD] devtools 向け Vitest 受け入れ態勢を整備し純粋関数・signal ロジックの単体テストを追加する (#0160)
+  - `vite.config.ts` の `test.include` に `devtools/src/**/*.{test,prop}.ts` を追加する
+  - `sortByGroupObject` を export し非破壊性・順序付け・境界値の単体テスト (8 件) を追加する
+  - `signals/subscriber.ts` の `createSubscriberInstance` / `addSubscriber` / `removeSubscriber` / `subscriberIds` / `hasActiveSubscriber` の単体テスト (9 件) を追加する
+  - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
   - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
