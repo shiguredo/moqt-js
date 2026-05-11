@@ -12,22 +12,6 @@ function handleAddSubscriber(): void {
   sub.addSubscriber();
 }
 
-function handleRemoveSubscriber(id: string): void {
-  // Map から外す前に decoder と session を fire-and-forget で閉じる。
-  const instance = sub.getSubscriber(id);
-  if (instance) {
-    try {
-      instance.decoder.value?.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-    instance.session.value?.close().catch(() => {
-      // 既にクローズ済みなら無視
-    });
-  }
-  sub.removeSubscriber(id);
-}
-
 export function App() {
   const subscriberIdList = sub.subscriberIds.value;
   const debugPanelOpen = isDebugPanelOpen.value;
@@ -143,7 +127,7 @@ export function App() {
                 key={id}
                 subscriberId={id}
                 canRemove={subscriberIdList.length > 1}
-                onRemove={() => handleRemoveSubscriber(id)}
+                onRemove={() => sub.removeSubscriber(id)}
               />
             ))}
           </div>

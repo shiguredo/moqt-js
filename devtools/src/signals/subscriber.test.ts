@@ -77,6 +77,26 @@ test("removeSubscriber on missing id is a safe no-op", () => {
   assert.equal(subscriberInstances.value.size, 0);
 });
 
+test("removeSubscriber does not throw when decoder / session are null", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  const instance = getSubscriber(id);
+  assert.ok(instance);
+  // decoder / session が null のまま remove しても例外を投げず Map から消える。
+  assert.equal(instance.decoder.value, null);
+  assert.equal(instance.session.value, null);
+  removeSubscriber(id);
+  assert.equal(subscriberInstances.value.has(id), false);
+});
+
+test("removeSubscriber preserves Map size when id does not exist", () => {
+  resetSubscribers();
+  const id = addSubscriber();
+  removeSubscriber("nonexistent");
+  assert.equal(subscriberInstances.value.size, 1);
+  assert.equal(subscriberInstances.value.has(id), true);
+});
+
 test("subscriberIds reflects added and removed subscribers", () => {
   resetSubscribers();
   assert.deepEqual(subscriberIds.value, []);

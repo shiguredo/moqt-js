@@ -38,6 +38,11 @@
 
 ### misc
 
+- [UPDATE] devtools の `removeSubscriber` に decoder / session の fire-and-forget close を集約する (#0162)
+  - `signals/subscriber.ts:removeSubscriber` を「Map 削除 + 当該 instance の外部リソース close」に拡張する
+  - `App.tsx:handleRemoveSubscriber` ラッパーを削除し、`onRemove` を `() => sub.removeSubscriber(id)` に統一する
+  - `Session.close` / `DecoderWrapper.close` の冪等性で `cleanupSubscriber` 経由との二重 close を吸収する
+  - @voluntas
 - [UPDATE] devtools の `useSubscriber` の `startSubscribing` 中断検知を `AbortController` ベースに統一する (#0161)
   - `useSubscriber` フックに `abortControllerRef` を導入し、`startSubscribing` 各 `await` 直後で `signal.aborted` を確認する設計に置き換える
   - `cleanupSubscriber` / `stopSubscribing` 冒頭で `abortControllerRef.current?.abort()` を呼び、進行中の `startSubscribing` を `unsubscribe()` 完了を待たずに中断する

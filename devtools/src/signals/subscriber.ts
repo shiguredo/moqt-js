@@ -129,9 +129,27 @@ export function addSubscriber(): string {
 }
 
 /**
- * Subscriber を削除する
+ * Subscriber を削除する。
+ *
+ * Map 削除契機での外部リソース close 責務を集約する。
+ * `useSubscriber.ts:cleanupSubscriber` と順序を揃えて decoder → session の順で
+ * fire-and-forget close する。close 完了は待たない。
+ *
+ * `Session.close` / `DecoderWrapper.close` は冪等で二重実行は no-op のため、
+ * `cleanupSubscriber` 経由の close と二重発火しても実害はない。
  */
 export function removeSubscriber(id: string): void {
+  const instance = getSubscriber(id);
+  if (instance) {
+    try {
+      instance.decoder.value?.close();
+    } catch {
+      // 既にクローズ済みなら無視
+    }
+    instance.session.value?.close().catch(() => {
+      // 既にクローズ済みなら無視
+    });
+  }
   const newMap = new Map(subscriberInstances.value);
   newMap.delete(id);
   subscriberInstances.value = newMap;
