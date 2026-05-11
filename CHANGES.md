@@ -50,6 +50,11 @@
 
 ### misc
 
+- [UPDATE] devtools の `SubscriberInstance` から UI / 外部参照されない 2 フィールド (`joiningFetchInProgress` / `joiningFetchLastLocation`) を Signal からフックローカル `useRef` へ移動する (#0164)
+  - `useSubscriber` フック内で `useRef<boolean>` / `useRef<{ group; object } | null>` として保持する
+  - `resetSubscriberStats` の `joiningFetchEnabled` 引数を削除し、ref の初期化を呼び出し側へ移す
+  - `resetSubscriberState` のシグネチャを Non-nullable な ref 引数に確定する
+  - @voluntas
 - [CHANGE] devtools の `cleanupSubscriber` を `teardownSubscriber` にリネームし `closeSubscriberResources` / `resetSubscriberState` に分割する (#0171)
   - リネームと責務分離で「リソース close」「signal リセット」「UI ガード再有効化」の境界を明確にする
   - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする

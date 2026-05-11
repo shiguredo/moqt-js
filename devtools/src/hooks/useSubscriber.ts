@@ -63,10 +63,7 @@ function buildVideoDecoderConfig(videoTrack: CatalogTrack): VideoDecoderConfig {
  * Subscriber インスタンスの統計フィールドを初期値へリセットする。
  * `startSubscribing` 開始時に Joining Fetch / decode カウンタや位置情報をクリアする。
  */
-function resetSubscriberStats(
-  instance: sub.SubscriberInstance,
-  joiningFetchEnabled: boolean,
-): void {
+function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.framesDecoded.value = 0;
   instance.keyFramesDecoded.value = 0;
   instance.objectsReceived.value = 0;
@@ -80,7 +77,6 @@ function resetSubscriberStats(
   instance.decodeErrors.value = 0;
   instance.joiningFetchStats.value = null;
   instance.largestLocation.value = null;
-  instance.joiningFetchInProgress.value = joiningFetchEnabled;
 }
 
 /**
@@ -139,9 +135,9 @@ export function closeSubscriberResources(
 export function resetSubscriberState(
   instance: sub.SubscriberInstance,
   chainRef: { current: Promise<void> },
-  liveObjectBufferRef: { current: MoqtObject[] } | null,
-  joiningFetchInProgressRef: { current: boolean } | null,
-  joiningFetchLastLocationRef: { current: { group: bigint; object: bigint } | null } | null,
+  liveObjectBufferRef: { current: MoqtObject[] },
+  joiningFetchInProgressRef: { current: boolean },
+  joiningFetchLastLocationRef: { current: { group: bigint; object: bigint } | null },
   isOtherPublisherActive: () => boolean,
 ): void {
   instance.subscriber.value = null;
@@ -155,22 +151,9 @@ export function resetSubscriberState(
   instance.joiningFetchStats.value = null;
   instance.largestLocation.value = null;
 
-  // 0164 適用前は signal、適用後は ref 化される 2 フィールド。
-  if (joiningFetchInProgressRef) {
-    joiningFetchInProgressRef.current = false;
-  } else {
-    instance.joiningFetchInProgress.value = false;
-  }
-  if (joiningFetchLastLocationRef) {
-    joiningFetchLastLocationRef.current = null;
-  } else {
-    instance.joiningFetchLastLocation.value = null;
-  }
-
-  // 0166 で ref 化済みのフィールド。
-  if (liveObjectBufferRef) {
-    liveObjectBufferRef.current = [];
-  }
+  joiningFetchInProgressRef.current = false;
+  joiningFetchLastLocationRef.current = null;
+  liveObjectBufferRef.current = [];
 
   chainRef.current = Promise.resolve();
 
@@ -223,6 +206,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
   const abortControllerRef = useRef<AbortController | null>(null);
   // Joining Fetch 中のライブオブジェクトバッファ (UI 描画不要なため Signal ではなく ref で持つ)
   const liveObjectBufferRef = useRef<MoqtObject[]>([]);
+  // Joining Fetch 中フラグ (UI / 外部参照なしのためフックローカル ref で持つ)
+  const joiningFetchInProgressRef = useRef<boolean>(false);
+  // Joining Fetch の最後の location (重複除去用、フックローカル ref で持つ)
+  const joiningFetchLastLocationRef = useRef<{ group: bigint; object: bigint } | null>(null);
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -586,9 +573,11 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
       instance.status.value = "connected";
       instance.statusMessage.value = "Subscribing...";
-      resetSubscriberStats(instance, joiningFetchEnabled);
+      resetSubscriberStats(instance);
       // ref のクリアは Signal カウンタリセットとは責務が異なるためフック側で実行する。
       liveObjectBufferRef.current = [];
+      joiningFetchInProgressRef.current = joiningFetchEnabled;
+      joiningFetchLastLocationRef.current = null;
 
       // Subscriber オプションを構築する
       const subscribeOptions: {
@@ -633,7 +622,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               );
             }
 
-            instance.joiningFetchLastLocation.value = { group: obj.groupId, object: obj.objectId };
+            joiningFetchLastLocationRef.current = { group: obj.groupId, object: obj.objectId };
             instance.joiningFetchStats.value = {
               ...currentStats,
               objectsReceived: currentStats.objectsReceived + 1,
@@ -656,7 +645,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
 
             // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
-            const lastFetch = instance.joiningFetchLastLocation.value;
+            const lastFetch = joiningFetchLastLocationRef.current;
             let objectsToProcess = bufferedObjects;
             if (lastFetch && bufferedObjects.length > 0) {
               const originalLength = bufferedObjects.length;
@@ -693,18 +682,18 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 .catch(() => {});
             }
 
-            batch(() => {
-              instance.joiningFetchInProgress.value = false;
-              instance.joiningFetchLastLocation.value = null;
-              instance.joiningFetchStats.value = {
-                ...currentStats,
-                completed: true,
-                bufferedLiveObjects: objectsToProcess.length,
-              };
-            });
-            // ref クリアは batch の外で実行する。batch 完了後に行うことでフラグ立て下げ後の
-            // object: コールバック (chainRef 経路) と buffer リセットの順序を維持する。
+            // ref のフラグ立て下げと buffer クリアは Signal 統計更新の前に行い、
+            // ドレイン投入と同じ同期セクション内で完了させる。
+            // 0164 適用後は joiningFetchInProgress / joiningFetchLastLocation が ref で
+            // batch の意味は無いため、joiningFetchStats のみ単純代入する。
+            joiningFetchInProgressRef.current = false;
+            joiningFetchLastLocationRef.current = null;
             liveObjectBufferRef.current = [];
+            instance.joiningFetchStats.value = {
+              ...currentStats,
+              completed: true,
+              bufferedLiveObjects: objectsToProcess.length,
+            };
           },
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);
@@ -718,10 +707,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 .then(() => handleObject(bufferedObj))
                 .catch(() => {});
             }
-            batch(() => {
-              instance.joiningFetchInProgress.value = false;
-              instance.joiningFetchLastLocation.value = null;
-            });
+            joiningFetchInProgressRef.current = false;
+            joiningFetchLastLocationRef.current = null;
             liveObjectBufferRef.current = [];
           },
         };
@@ -733,7 +720,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         {
           object: (obj: MoqtObject) => {
             // Joining Fetch 中はライブオブジェクトをバッファ。push で O(1) 追記する。
-            if (instance.joiningFetchInProgress.value) {
+            if (joiningFetchInProgressRef.current) {
               liveObjectBufferRef.current.push(obj);
               return;
             }
@@ -840,9 +827,8 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance,
       chainRef,
       liveObjectBufferRef,
-      // 0164 で ref 化されるまでは null を渡し、signal 経由でリセットする。
-      null,
-      null,
+      joiningFetchInProgressRef,
+      joiningFetchLastLocationRef,
       () => pub.pubSession.value !== null,
     );
   };

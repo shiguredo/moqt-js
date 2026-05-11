@@ -62,10 +62,6 @@ export interface SubscriberInstance {
   joiningFetchStats: Signal<JoiningFetchStats | null>;
   // largestLocation
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
-  // Joining Fetch 中のライブオブジェクトバッファ
-  joiningFetchInProgress: Signal<boolean>;
-  // Joining Fetch の最後のオブジェクトの location (重複除去用)
-  joiningFetchLastLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Track Properties に DYNAMIC_GROUPS=1 が含まれているかどうか。
   // draft-ietf-moq-transport-17 §9.3.11 により、true のときのみ
   // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信できる。
@@ -104,8 +100,6 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decoderState: signal("unconfigured"),
     joiningFetchStats: signal<JoiningFetchStats | null>(null),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
-    joiningFetchInProgress: signal(false),
-    joiningFetchLastLocation: signal<{ group: bigint; object: bigint } | null>(null),
     dynamicGroupsSupported: signal(false),
   };
 }

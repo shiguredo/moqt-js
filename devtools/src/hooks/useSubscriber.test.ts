@@ -174,14 +174,23 @@ test("resetSubscriberState resets every state signal to initial value", () => {
     bufferedLiveObjects: 0,
   };
   instance.largestLocation.value = { group: 1n, object: 1n };
-  instance.joiningFetchInProgress.value = true;
-  instance.joiningFetchLastLocation.value = { group: 1n, object: 1n };
 
   const chainRef = { current: Promise.resolve().then(() => {}) };
   const previousChain = chainRef.current;
   const liveBufferRef = { current: [{} as MoqtObject] };
+  const joiningInProgressRef = { current: true };
+  const joiningLastLocationRef = {
+    current: { group: 1n, object: 1n } as { group: bigint; object: bigint } | null,
+  };
 
-  resetSubscriberState(instance, chainRef, liveBufferRef, null, null, () => false);
+  resetSubscriberState(
+    instance,
+    chainRef,
+    liveBufferRef,
+    joiningInProgressRef,
+    joiningLastLocationRef,
+    () => false,
+  );
 
   assert.equal(instance.subscriber.value, null);
   assert.equal(instance.catalogSubscriber.value, null);
@@ -192,11 +201,21 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   assert.equal(instance.dynamicGroupsSupported.value, false);
   assert.equal(instance.joiningFetchStats.value, null);
   assert.equal(instance.largestLocation.value, null);
-  assert.equal(instance.joiningFetchInProgress.value, false);
-  assert.equal(instance.joiningFetchLastLocation.value, null);
+  assert.equal(joiningInProgressRef.current, false);
+  assert.equal(joiningLastLocationRef.current, null);
   assert.deepEqual(liveBufferRef.current, []);
   assert.notStrictEqual(chainRef.current, previousChain);
 });
+
+function emptyJoiningRefs() {
+  return {
+    liveBufferRef: { current: [] as MoqtObject[] },
+    joiningInProgressRef: { current: false },
+    joiningLastLocationRef: {
+      current: null as { group: bigint; object: bigint } | null,
+    },
+  };
+}
 
 test("resetSubscriberState does not touch status / statusMessage / isStopping", () => {
   resetTestEnvironment();
@@ -205,7 +224,15 @@ test("resetSubscriberState does not touch status / statusMessage / isStopping", 
   instance.statusMessage.value = "Subscribed to foo/bar";
   instance.isStopping.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(instance, chainRef, null, null, null, () => false);
+  const refs = emptyJoiningRefs();
+  resetSubscriberState(
+    instance,
+    chainRef,
+    refs.liveBufferRef,
+    refs.joiningInProgressRef,
+    refs.joiningLastLocationRef,
+    () => false,
+  );
   assert.equal(instance.status.value, "connected");
   assert.equal(instance.statusMessage.value, "Subscribed to foo/bar");
   assert.equal(instance.isStopping.value, true);
@@ -216,7 +243,15 @@ test("resetSubscriberState re-enables settingsDisabled when no active subscriber
   const instance = createSubscriberInstance("reset-state-3");
   settingsDisabled.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(instance, chainRef, null, null, null, () => false);
+  const refs = emptyJoiningRefs();
+  resetSubscriberState(
+    instance,
+    chainRef,
+    refs.liveBufferRef,
+    refs.joiningInProgressRef,
+    refs.joiningLastLocationRef,
+    () => false,
+  );
   assert.equal(settingsDisabled.value, false);
 });
 
@@ -225,6 +260,14 @@ test("resetSubscriberState keeps settingsDisabled when other publisher is active
   const instance = createSubscriberInstance("reset-state-4");
   settingsDisabled.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(instance, chainRef, null, null, null, () => true);
+  const refs = emptyJoiningRefs();
+  resetSubscriberState(
+    instance,
+    chainRef,
+    refs.liveBufferRef,
+    refs.joiningInProgressRef,
+    refs.joiningLastLocationRef,
+    () => true,
+  );
   assert.equal(settingsDisabled.value, true);
 });

@@ -39,8 +39,6 @@ test("createSubscriberInstance initializes signals with expected defaults", () =
   assert.equal(instance.newGroupRequestEnabled.value, false);
   assert.equal(instance.framesDecoded.value, 0);
   assert.equal(instance.objectsReceived.value, 0);
-  assert.equal(instance.joiningFetchInProgress.value, false);
-  assert.equal(instance.joiningFetchLastLocation.value, null);
 });
 
 test("addSubscriber inserts a new instance with a fresh Map reference", () => {
