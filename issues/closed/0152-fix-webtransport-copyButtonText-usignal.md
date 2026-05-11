@@ -1,6 +1,7 @@
 # `webtransport-devtools/App.tsx` の `copyButtonText` を `useSignal` 化し `App.tsx` の変数使用を統一する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -42,3 +43,9 @@ Model: Opus 4.7
 - `webtransport-devtools/App.tsx` の `copyButtonText` が `useSignal` 化されている
 - `App.tsx` の 78,94 行目が `debugPanelOpen` を使用している
 - `vp run build:devtools` が成功する
+
+## 解決方法
+
+- `devtools/src/webtransport-devtools/App.tsx` をモジュールスコープ `signal` から `App` コンポーネント内の `useSignal` に移動し、`copyUrlToClipboard` もコンポーネント内のクロージャに変更した。
+- `devtools/src/App.tsx` の Debug ボタンクラスとログ件数バッジ条件で `isDebugPanelOpen.value` を `debugPanelOpen` に統一した。
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した。

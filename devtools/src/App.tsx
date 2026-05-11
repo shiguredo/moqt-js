@@ -89,9 +89,7 @@ export function App() {
           <button
             onClick={toggleDebugPanel}
             class={`p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 ${
-              isDebugPanelOpen.value
-                ? "bg-slate-600 hover:bg-slate-700"
-                : "bg-blue-500 hover:bg-blue-600"
+              debugPanelOpen ? "bg-slate-600 hover:bg-slate-700" : "bg-blue-500 hover:bg-blue-600"
             } text-white font-medium`}
             title="Debug Logs"
           >
@@ -105,7 +103,7 @@ export function App() {
             </svg>
             <span>Debug</span>
             {/* ログ件数バッジ */}
-            {logs.value.length > 0 && !isDebugPanelOpen.value && (
+            {logs.value.length > 0 && !debugPanelOpen && (
               <span class="bg-red-500 text-white text-xs font-bold rounded-full min-w-[24px] h-6 flex items-center justify-center px-1.5">
                 {logs.value.length > 99 ? "99+" : logs.value.length}
               </span>

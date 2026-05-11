@@ -69,6 +69,10 @@
   - `instance.session.value = null` を `sessionInstance.close()` より先に実行し、close イベントの同期 dispatch による再入で sessionInstance が再クローズされる経路を塞ぐ
   - `joiningFetchInProgress` / `joiningFetchLastLocation` / `liveObjectBuffer` / `joiningFetchStats` / `largestLocation` をクリアし、`stopSubscribing` 単独呼び出し後の状態不整合を防ぐ
   - @voluntas
+- [FIX] `webtransport-devtools/App.tsx` の `copyButtonText` を `useSignal` 化し、`App.tsx` で抽出済みの `debugPanelOpen` を使うようにする (#0152)
+  - モジュールスコープ signal を `useSignal` に移動して HMR 時の状態残留を防ぐ
+  - `App.tsx` の 2 箇所で `isDebugPanelOpen.value` を `debugPanelOpen` に統一する
+  - @voluntas
 
 ###
 
