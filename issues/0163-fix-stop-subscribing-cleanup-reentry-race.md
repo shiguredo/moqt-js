@@ -45,11 +45,11 @@ issue #0150 で `cleanupSubscriber` 自体は冪等化済み (`session.value = n
 
 判定式は `!instance.isStopping.value && instance.session.value !== null` の単純 AND だが、`isStopping` のみ / `session.value === null` のみのどちらか単独ではカバーできないケースがある。
 
-| シナリオ | `isStopping` 単独 | `session === null` 単独 | 両方 (AND) |
-| --- | --- | --- | --- |
-| `stopSubscribing` 進行中 (`isStopping=true`)、`unsubscribe()` await 中で `cleanupSubscriber` 未実行 | 抑止可能 | session 非 null のため抑止不可 | 抑止可能 |
-| `stopSubscribing` finally 完了後 (`isStopping=false` に戻る)、close コールバックが遅延発火 | `isStopping=false` のため抑止不可 | 抑止可能 (`cleanupSubscriber` で null 化済み) | 抑止可能 |
-| 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error) | 抑止しない (期待挙動) | 抑止しない (期待挙動) | 抑止しない (期待挙動) |
+| シナリオ                                                                                            | `isStopping` 単独                 | `session === null` 単独                       | 両方 (AND)            |
+| --------------------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------- | --------------------- |
+| `stopSubscribing` 進行中 (`isStopping=true`)、`unsubscribe()` await 中で `cleanupSubscriber` 未実行 | 抑止可能                          | session 非 null のため抑止不可                | 抑止可能              |
+| `stopSubscribing` finally 完了後 (`isStopping=false` に戻る)、close コールバックが遅延発火          | `isStopping=false` のため抑止不可 | 抑止可能 (`cleanupSubscriber` で null 化済み) | 抑止可能              |
+| 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error)                                    | 抑止しない (期待挙動)             | 抑止しない (期待挙動)                         | 抑止しない (期待挙動) |
 
 `isStopping` 単独 / `session === null` 単独はそれぞれ別の取りこぼしがあるため、両方の AND が必要。
 

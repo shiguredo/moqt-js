@@ -38,6 +38,12 @@
 
 ### misc
 
+- [UPDATE] devtools の `useSubscriber` の `startSubscribing` 中断検知を `AbortController` ベースに統一する (#0161)
+  - `useSubscriber` フックに `abortControllerRef` を導入し、`startSubscribing` 各 `await` 直後で `signal.aborted` を確認する設計に置き換える
+  - `cleanupSubscriber` / `stopSubscribing` 冒頭で `abortControllerRef.current?.abort()` を呼び、進行中の `startSubscribing` を `unsubscribe()` 完了を待たずに中断する
+  - 中断検知ヘルパー `checkAborted` を export して単体テストを追加する
+  - Catalog の `.then` 内側で abort 判定を行い、遅延代入による `catalogSubscriber.value` 上書きレースを潰す
+  - @voluntas
 - [UPDATE] `useSubscriber.ts` の RFC 節番号誤り・変数名省略・節参照記法不統一を修正する (#0145)
   - `§10.3` を `§10.4.2` に修正する (Subgroup ストリームは §10.4.2 で定義)
   - `ext` を `locProperties` にリネームし、変数名を省略しない方針を徹底する

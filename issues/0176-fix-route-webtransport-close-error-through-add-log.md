@@ -81,47 +81,47 @@ error: (error) => {
 
 `useSubscriber.ts`:
 
-| 行 | コンテキスト | level | 本 issue 対象 | 備考 |
-| ---- | ----------- | ----- | ------------- | ---- |
-| 116  | `renderFrame`: canvas null | warn | 非対象 | フレーム描画ホットパス。別 issue |
-| 123  | `renderFrame`: 2d context 取得失敗 | warn | 非対象 | 同上 |
-| 145  | `handleObject`: decoder null | warn | 非対象 | OBJECT per-object ホットパス。別 issue |
-| 196  | `handleObject`: decoder not configured | warn | 非対象 | 同上 |
-| 208  | `handleObject`: decode 失敗 | error | 非対象 | 同上 (`decodeErrors` で別途カウント) |
-| 232  | `connect` の `close` cb | log → warn | **対象 (A)** | |
-| 239- | `connect` の `error` cb (現在 console 呼び出しなし、statusMessage 更新のみ) | (なし) | **対象 (A)** | `addLog("error", ...)` を新規追加 |
-| 272  | `addLog("info", "[<id>] [RECV] OBJECT (<CATALOG_TRACK_NAME>)", ...)` | (既に addLog) | 参照のみ | `:276` と重複しているので `:276` を削除 |
-| 276  | `Catalog received (...)` | log | **対象 (C)** | `:272` と重複。削除する |
-| 283  | `No video tracks in catalog` | warn | **対象 (C)** | addLog 化 |
-| 287  | `Failed to decode catalog` | error | **対象 (C)** | addLog 化 (`reject(error)` は維持) |
-| 302  | `Catalog stream ended` | log | **対象 (C)** | addLog 化 (level=info) |
-| 305  | `Catalog subscribe error` | error | **対象 (C)** | addLog 化 (`reject(error)` は維持) |
-| 355  | `Using codec from catalog` | log | **対象 (C)** | addLog 化 (level=info)。Catalog 完了通知 |
-| 375  | Decoder error | error | 非対象 | 別 issue (デコーダ系)。`decodeErrors` 増分は維持 |
-| 378  | Resetting decoder | log | 非対象 | 同上 |
-| 386  | Decoder configured | log | 非対象 | 同上 |
-| 437  | Joining Fetch: started | log | 非対象 | 別 issue (Joining Fetch 系) |
-| 479  | Joining Fetch: skipped N | log | 非対象 | 同上 |
-| 485  | Joining Fetch: completed | log | 非対象 | 同上 |
-| 513  | `joiningFetch: error` | error | 非対象 | 同上 |
-| 556  | `Subscriber error` (track の error cb) | error | 非対象 | 別 issue (ライブ購読系) |
-| 570  | `Connection error` (`startSubscribing` catch) | error | 非対象 | 別 issue。`statusMessage` で UI には出る |
-| 663  | `requestKeyframe`: not active | warn | 非対象 | 別 issue |
-| 680  | `requestKeyframe`: failed | error | 非対象 | 同上 |
+| 行   | コンテキスト                                                                | level         | 本 issue 対象 | 備考                                             |
+| ---- | --------------------------------------------------------------------------- | ------------- | ------------- | ------------------------------------------------ |
+| 116  | `renderFrame`: canvas null                                                  | warn          | 非対象        | フレーム描画ホットパス。別 issue                 |
+| 123  | `renderFrame`: 2d context 取得失敗                                          | warn          | 非対象        | 同上                                             |
+| 145  | `handleObject`: decoder null                                                | warn          | 非対象        | OBJECT per-object ホットパス。別 issue           |
+| 196  | `handleObject`: decoder not configured                                      | warn          | 非対象        | 同上                                             |
+| 208  | `handleObject`: decode 失敗                                                 | error         | 非対象        | 同上 (`decodeErrors` で別途カウント)             |
+| 232  | `connect` の `close` cb                                                     | log → warn    | **対象 (A)**  |                                                  |
+| 239- | `connect` の `error` cb (現在 console 呼び出しなし、statusMessage 更新のみ) | (なし)        | **対象 (A)**  | `addLog("error", ...)` を新規追加                |
+| 272  | `addLog("info", "[<id>] [RECV] OBJECT (<CATALOG_TRACK_NAME>)", ...)`        | (既に addLog) | 参照のみ      | `:276` と重複しているので `:276` を削除          |
+| 276  | `Catalog received (...)`                                                    | log           | **対象 (C)**  | `:272` と重複。削除する                          |
+| 283  | `No video tracks in catalog`                                                | warn          | **対象 (C)**  | addLog 化                                        |
+| 287  | `Failed to decode catalog`                                                  | error         | **対象 (C)**  | addLog 化 (`reject(error)` は維持)               |
+| 302  | `Catalog stream ended`                                                      | log           | **対象 (C)**  | addLog 化 (level=info)                           |
+| 305  | `Catalog subscribe error`                                                   | error         | **対象 (C)**  | addLog 化 (`reject(error)` は維持)               |
+| 355  | `Using codec from catalog`                                                  | log           | **対象 (C)**  | addLog 化 (level=info)。Catalog 完了通知         |
+| 375  | Decoder error                                                               | error         | 非対象        | 別 issue (デコーダ系)。`decodeErrors` 増分は維持 |
+| 378  | Resetting decoder                                                           | log           | 非対象        | 同上                                             |
+| 386  | Decoder configured                                                          | log           | 非対象        | 同上                                             |
+| 437  | Joining Fetch: started                                                      | log           | 非対象        | 別 issue (Joining Fetch 系)                      |
+| 479  | Joining Fetch: skipped N                                                    | log           | 非対象        | 同上                                             |
+| 485  | Joining Fetch: completed                                                    | log           | 非対象        | 同上                                             |
+| 513  | `joiningFetch: error`                                                       | error         | 非対象        | 同上                                             |
+| 556  | `Subscriber error` (track の error cb)                                      | error         | 非対象        | 別 issue (ライブ購読系)                          |
+| 570  | `Connection error` (`startSubscribing` catch)                               | error         | 非対象        | 別 issue。`statusMessage` で UI には出る         |
+| 663  | `requestKeyframe`: not active                                               | warn          | 非対象        | 別 issue                                         |
+| 680  | `requestKeyframe`: failed                                                   | error         | 非対象        | 同上                                             |
 
 `usePublisher.ts`:
 
-| 行 | コンテキスト | level | 本 issue 対象 | 備考 |
-| ---- | ----------- | ----- | ------------- | ---- |
-| 118  | `startPreview` catch | error | 非対象 | 別 issue (Preview 系) |
-| 147 / 151 / 152 / 158 / 170 / 172 / 173 | `processFrames` 周り | log/error | 非対象 | エンコードホットパス。別 issue |
-| 229 / 243 / 269 / 290 / 345 / 352 / 354 / 368 / 376 / 381 / 401 / 421 / 425 / 449 / 459 | `startPublishing` 進捗 log | log | 非対象 | 別 issue (Publisher 起動シーケンス) |
-| 274  | `connect` の `close` cb | log → warn | **対象 (B)** | |
-| 281- | `connect` の `error` cb | (なし) | **対象 (B)** | `addLog("error", ...)` を新規追加 |
-| 303  | Catalog publisher error | error | 非対象 | 別 issue (Publisher publish 系) |
-| 387  | Track publisher error | error | 非対象 | 同上 |
-| 432  | Encoder error | error | 非対象 | 同上 (エンコーダ系) |
-| 475  | `startPublishing` catch | error | 非対象 | 同上 |
+| 行                                                                                      | コンテキスト               | level      | 本 issue 対象 | 備考                                |
+| --------------------------------------------------------------------------------------- | -------------------------- | ---------- | ------------- | ----------------------------------- |
+| 118                                                                                     | `startPreview` catch       | error      | 非対象        | 別 issue (Preview 系)               |
+| 147 / 151 / 152 / 158 / 170 / 172 / 173                                                 | `processFrames` 周り       | log/error  | 非対象        | エンコードホットパス。別 issue      |
+| 229 / 243 / 269 / 290 / 345 / 352 / 354 / 368 / 376 / 381 / 401 / 421 / 425 / 449 / 459 | `startPublishing` 進捗 log | log        | 非対象        | 別 issue (Publisher 起動シーケンス) |
+| 274                                                                                     | `connect` の `close` cb    | log → warn | **対象 (B)**  |                                     |
+| 281-                                                                                    | `connect` の `error` cb    | (なし)     | **対象 (B)**  | `addLog("error", ...)` を新規追加   |
+| 303                                                                                     | Catalog publisher error    | error      | 非対象        | 別 issue (Publisher publish 系)     |
+| 387                                                                                     | Track publisher error      | error      | 非対象        | 同上                                |
+| 432                                                                                     | Encoder error              | error      | 非対象        | 同上 (エンコーダ系)                 |
+| 475                                                                                     | `startPublishing` catch    | error      | 非対象        | 同上                                |
 
 ## 修正方針
 

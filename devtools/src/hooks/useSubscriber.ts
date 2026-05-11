@@ -83,6 +83,22 @@ function resetSubscriberStats(
   instance.liveObjectBuffer.value = [];
 }
 
+// AbortController ベースの中断検知ヘルパー。
+// signal.aborted が立っていれば cleanup を呼んでから true を返す。
+// cleanup が例外を投げても判定結果は失われないよう握り潰す
+// (中断時の後始末は fire-and-forget)。
+export function checkAborted(signal: AbortSignal, cleanup: () => void): boolean {
+  if (signal.aborted) {
+    try {
+      cleanup();
+    } catch {
+      // 中断時の後始末で発生した例外は無視する
+    }
+    return true;
+  }
+  return false;
+}
+
 function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
   const logMessage = `[${subscriberId}] [${direction}] ${message.typeName}`;
@@ -103,6 +119,8 @@ function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
 export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCanvasElement>) {
   // ライブオブジェクトの順次処理用 Promise チェーン (レンダリング間で安定参照)
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -216,6 +234,16 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     // 停止処理中のときは新規開始しない (二重実行防止)
     if (instance.isStopping.value) return;
 
+    // 古い controller が残っていれば abort してから新規生成する。
+    // isStopping は二重実行防止、AbortController は中断シグナルで責務が異なるため両方残す。
+    // ローカル signal 経由で参照し、cleanupSubscriber が abortControllerRef.current = null
+    // した後も abort 状態を判定できるようにする。
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
     try {
       instance.status.value = "disconnected";
       instance.statusMessage.value = "Connecting...";
@@ -245,6 +273,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
         connectOptions,
       );
+      // connect 解決前の close 発火は session 自体が未存在のため、ここでの cleanup は
+      // await 中に他経路 (stopSubscribing / アンマウント) で cleanupSubscriber が呼ばれた場合に限る。
+      // 中断元から見えない (instance.session.value 未代入) ので、ローカル session の close は
+      // startSubscribing 側の責務。
+      if (
+        checkAborted(signal, () => {
+          session.close().catch(() => {});
+        })
+      ) {
+        return;
+      }
       instance.session.value = session;
       settings.reliability.value = session.reliability;
 
@@ -326,6 +365,13 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               },
             )
             .then((catalogSubscriberInstance) => {
+              // startSubscribing 側で signal.aborted を見て return した後に
+              // マイクロタスクで .then が回り catalogSubscriber.value が再代入される
+              // レースを .then 側で潰す。
+              if (signal.aborted) {
+                void catalogSubscriberInstance.unsubscribe().catch(() => {});
+                return;
+              }
               instance.catalogSubscriber.value = catalogSubscriberInstance;
             })
             .catch(reject);
@@ -358,9 +404,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         throw new Error(`failed to get catalog: ${(error as Error).message}`);
       }
 
-      // Catalog 取得の await 中に close コールバック → cleanupSubscriber で
-      // session.value が null 化された場合は以降の処理をスキップする。
-      if (instance.session.value === null) return;
+      // Catalog 取得経路は finally で clearTimeout 済みのため追加 cleanup は不要。
+      // .then 内側で catalogSubscriber の遅延代入レースは解消済み。
+      if (checkAborted(signal, () => {})) return;
 
       instance.statusMessage.value = "Setting up decoder...";
 
@@ -386,6 +432,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 
       await decoderInstance.configure(decoderConfig);
+
+      // configure await 中に中断された場合、ローカル decoderInstance は instance に未代入のため
+      // 中断元から見えない。startSubscribing 側で close する。
+      // DecoderWrapper.close は同期メソッドで state !== "closed" ガード付き、例外を投げない。
+      if (
+        checkAborted(signal, () => {
+          decoderInstance.close();
+        })
+      ) {
+        return;
+      }
 
       instance.decoder.value = decoderInstance;
       instance.decoderConfigured.value = true;
@@ -560,6 +617,18 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
         subscribeOptions,
       );
+
+      // subscribe await 中に中断された場合、ローカル subscriberInstance は instance に未代入のため
+      // 中断元から見えない。fire-and-forget で unsubscribe する。
+      // unsubscribe は state === "closed" でも例外を投げず early return する。
+      if (
+        checkAborted(signal, () => {
+          void subscriberInstance.unsubscribe().catch(() => {});
+        })
+      ) {
+        return;
+      }
+
       const largestLocation = subscriberInstance.largestLocation;
 
       instance.subscriber.value = subscriberInstance;
@@ -567,6 +636,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       instance.statusMessage.value = `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`;
       instance.largestLocation.value = largestLocation ?? null;
     } catch (error) {
+      // 中断時は cleanupSubscriber が status / statusMessage / settingsDisabled を確定済み。
+      // 通常エラーの上書きを避けるため、catch 句先頭で abort を判定して早期 return する。
+      if (signal.aborted) return;
       console.error(`[${subscriberId}] Connection error:`, error);
       instance.status.value = "error";
       instance.statusMessage.value = `Failed: ${(error as Error).message}`;
@@ -585,6 +657,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       return;
     }
     instance.isStopping.value = true;
+    // 進行中の startSubscribing を unsubscribe() 完了を待たずに中断する。
+    // controller の null 化は cleanupSubscriber 側で行う。
+    abortControllerRef.current?.abort();
     instance.status.value = "disconnected";
     instance.statusMessage.value = "Disconnecting...";
 
@@ -604,6 +679,10 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
   const cleanupSubscriber = (): void => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
+
+    // 進行中の startSubscribing を中断する。AbortController.abort は冪等で例外を投げない。
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
 
     const decoderInstance = instance.decoder.value;
     if (decoderInstance) {

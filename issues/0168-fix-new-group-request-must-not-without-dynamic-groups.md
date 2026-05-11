@@ -19,13 +19,13 @@ SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれていない 
 
 > The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint.
 > It MAY appear in PUBLISH_OK, SUBSCRIBE or REQUEST_UPDATE for a
-> subscription.  It represents the largest Group ID in the Track known
-> by the subscriber, plus 1.  A value of 0 indicates that the
-> subscriber has no Group information for the Track.  A subscriber MUST
+> subscription. It represents the largest Group ID in the Track known
+> by the subscriber, plus 1. A value of 0 indicates that the
+> subscriber has no Group information for the Track. A subscriber MUST
 > NOT send this parameter in PUBLISH_OK or REQUEST_UPDATE if the Track
-> did not include the DYNAMIC_GROUPS Property with value 1.  A
+> did not include the DYNAMIC_GROUPS Property with value 1. A
 > subscriber MAY include this parameter in SUBSCRIBE without
-> foreknowledge of support.  If the original publisher does not support
+> foreknowledge of support. If the original publisher does not support
 > dynamic Groups, it ignores the parameter in that case.
 
 ポイント:
@@ -36,11 +36,11 @@ SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれていない 
 
 ### draft-ietf-moq-transport-17 §11.5 (DYNAMIC GROUPS)
 
-> DYNAMIC_GROUPS (Property Type 0x30) is a Track Property.  The allowed
-> values are 0 or 1.  When the value is 1, it indicates that the
+> DYNAMIC_GROUPS (Property Type 0x30) is a Track Property. The allowed
+> values are 0 or 1. When the value is 1, it indicates that the
 > subscriber can request the Original Publisher to start a new Group by
 > including the NEW_GROUP_REQUEST parameter in PUBLISH_OK or
-> REQUEST_UPDATE for this Track.  If an endpoint receives a value
+> REQUEST_UPDATE for this Track. If an endpoint receives a value
 > larger than 1, it MUST close the session with PROTOCOL_VIOLATION.
 >
 > If omitted, the value is 0.
@@ -55,7 +55,7 @@ SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれていない 
 
 > Unless specified by a particular Property specification, Properties
 > MAY appear either in the mutable extension list or inside Immutable
-> Properties.  When looking for the value of a property, processors
+> Properties. When looking for the value of a property, processors
 > MUST search both the mutable properties and the contents of Immutable
 > Extensions.
 
@@ -133,8 +133,8 @@ DYNAMIC_GROUPS は MSF Catalog のフィールドではなく、**MOQT Track Pro
 ```ts
 export interface Property {
   id: bigint;
-  value?: bigint;  // 偶数 ID は varint value (DYNAMIC_GROUPS はここ)
-  data?: Uint8Array;  // 奇数 ID は length + bytes (Immutable Properties はここ)
+  value?: bigint; // 偶数 ID は varint value (DYNAMIC_GROUPS はここ)
+  data?: Uint8Array; // 奇数 ID は length + bytes (Immutable Properties はここ)
 }
 ```
 

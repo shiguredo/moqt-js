@@ -30,11 +30,15 @@ window.history.replaceState(null, "", `?${queryString}`);
 navigator.clipboard.writeText(fullUrl).then(
   () => {
     copyButtonText.value = "Copied!";
-    setTimeout(() => { copyButtonText.value = "Copy URL"; }, 2000);
+    setTimeout(() => {
+      copyButtonText.value = "Copy URL";
+    }, 2000);
   },
   () => {
     copyButtonText.value = "Failed";
-    setTimeout(() => { copyButtonText.value = "Copy URL"; }, 2000);
+    setTimeout(() => {
+      copyButtonText.value = "Copy URL";
+    }, 2000);
   },
 );
 ```

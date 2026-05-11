@@ -1,6 +1,7 @@
 # `startSubscribing` に `AbortController` ベースの中断機構を導入する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要
@@ -81,12 +82,12 @@ export function checkAborted(signal: AbortSignal, cleanup: () => void): boolean 
 
 各 `await` 直後に `if (checkAborted(signal, () => { /* 後始末 */ })) return;` の形で挿入する。**`instance.*.value` への代入 (例: `instance.session.value = session`、`instance.decoder.value = decoderInstance`) は必ず `checkAborted` 呼び出しの「後」に置く**。`checkAborted` が呼ばれる時点でこれらの代入は未実行であることを実装側で保証する。
 
-| `await` ポイント | `checkAborted` の cleanup で実行する処理 |
-| --- | --- |
-| `await connect(...)` 直後 | `session.close().catch(() => {})` を fire-and-forget。中断シナリオは「await 中に他経路 (`stopSubscribing` / アンマウント) で `cleanupSubscriber` が呼ばれた」場合に限られる。close コールバックは session 取得後に登録済みなので、connect 解決前の close 発火は session 自体がまだ存在せず該当しない。中断元から `instance.session.value` は見えない (未代入) ため、ローカル `session` の close は `startSubscribing` 側の責務 |
-| Catalog 取得の `await Promise.race([catalogPromise, timeoutPromise])` 直後 | cleanup 無し (`return` のみ)。`session.subscribe(...).then(...)` の遅延代入レースは「方針 6」で `.then` 内側に abort 判定を入れて解消する。`finally { clearTimeout(timeoutId); }` は既存ロジックで実行済み |
-| `await decoderInstance.configure(...)` 直後 | `decoderInstance.close()` を呼ぶ。`DecoderWrapper.close` (`devtools/src/utils/DecoderWrapper.ts:179-192`) は同期メソッドで `state !== "closed"` ガード付き、例外を投げない設計のため try/catch は不要 |
-| `await session.subscribe(...)` 直後 | `void subscriberInstance.unsubscribe().catch(() => {})` を fire-and-forget で呼ぶ。`unsubscribe` (`devtools/src/signals/subscriber.ts`) は `state === "closed"` でも例外を投げず early return するため state ガードは不要 |
+| `await` ポイント                                                           | `checkAborted` の cleanup で実行する処理                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `await connect(...)` 直後                                                  | `session.close().catch(() => {})` を fire-and-forget。中断シナリオは「await 中に他経路 (`stopSubscribing` / アンマウント) で `cleanupSubscriber` が呼ばれた」場合に限られる。close コールバックは session 取得後に登録済みなので、connect 解決前の close 発火は session 自体がまだ存在せず該当しない。中断元から `instance.session.value` は見えない (未代入) ため、ローカル `session` の close は `startSubscribing` 側の責務 |
+| Catalog 取得の `await Promise.race([catalogPromise, timeoutPromise])` 直後 | cleanup 無し (`return` のみ)。`session.subscribe(...).then(...)` の遅延代入レースは「方針 6」で `.then` 内側に abort 判定を入れて解消する。`finally { clearTimeout(timeoutId); }` は既存ロジックで実行済み                                                                                                                                                                                                                     |
+| `await decoderInstance.configure(...)` 直後                                | `decoderInstance.close()` を呼ぶ。`DecoderWrapper.close` (`devtools/src/utils/DecoderWrapper.ts:179-192`) は同期メソッドで `state !== "closed"` ガード付き、例外を投げない設計のため try/catch は不要                                                                                                                                                                                                                          |
+| `await session.subscribe(...)` 直後                                        | `void subscriberInstance.unsubscribe().catch(() => {})` を fire-and-forget で呼ぶ。`unsubscribe` (`devtools/src/signals/subscriber.ts`) は `state === "closed"` でも例外を投げず early return するため state ガードは不要                                                                                                                                                                                                      |
 
 既存の `if (instance.session.value === null) return;` (Catalog 取得直後) は撤去し、上記表の `checkAborted` チェックに置き換える。
 

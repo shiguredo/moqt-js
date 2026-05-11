@@ -12,7 +12,7 @@ Model: Opus 4.7
 instance.liveObjectBuffer.value = [...instance.liveObjectBuffer.value, obj];
 ```
 
-スプレッドで Signal 値を毎回再生成しているため、Joining Fetch 中に到着する N オブジェクトに対し合計 Σ_{i=1..N} i = N(N+1)/2 のコピーが発生し、計算量は O(N²)。例えば 1000 オブジェクト溜まれば 500,500 要素分のコピー。`liveObjectBuffer` は UI 描画に使われておらず Signal にする必要がない。`useRef<MoqtObject[]>([])` に置き換えれば `push` で O(1) 追記でき、合計 O(N) になる。
+スプレッドで Signal 値を毎回再生成しているため、Joining Fetch 中に到着する N オブジェクトに対し合計 Σ\_{i=1..N} i = N(N+1)/2 のコピーが発生し、計算量は O(N²)。例えば 1000 オブジェクト溜まれば 500,500 要素分のコピー。`liveObjectBuffer` は UI 描画に使われておらず Signal にする必要がない。`useRef<MoqtObject[]>([])` に置き換えれば `push` で O(1) 追記でき、合計 O(N) になる。
 
 ## 根拠
 

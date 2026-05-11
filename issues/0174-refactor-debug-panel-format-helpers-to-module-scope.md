@@ -23,14 +23,14 @@ Model: Opus 4.7
 
 `devtools/src/components/DebugPanel.tsx` 内の formatter を全て洗い出した結果は以下の通り。本 issue で扱う対象 / 対象外を明示する。
 
-| # | 関数名 | 行 | 現在のスコープ | 外部依存 | 本 issue の扱い |
-|---|---|---|---|---|---|
-| 1 | `formatMessageData(data, indent)` | 48-128 | モジュール | なし (純粋) | 新モジュールへ移動 |
-| 2 | `formatHexDump(data)` | 131-167 | モジュール | なし (純粋) | 新モジュールへ移動 |
-| 3 | `formatAbsoluteTime(timestamp)` | 187-194 | モジュール | なし (純粋) | 新モジュールへ移動 |
-| 4 | `formatBytes(bytes)` | 232-240 | モジュール | なし (純粋) | **本 issue では移動しない** (※後述「スコープ外」参照) |
-| 5 | `formatElapsedTime(timestamp)` | 547-552 | コンポーネント | `firstTimestamp` (クロージャ) | 引数化して新モジュールへ移動 |
-| 6 | `formatDeltaTime(currentTimestamp, previousTimestamp)` | 555-561 | コンポーネント | なし (純粋) | そのまま新モジュールへ移動 |
+| #   | 関数名                                                 | 行      | 現在のスコープ | 外部依存                      | 本 issue の扱い                                       |
+| --- | ------------------------------------------------------ | ------- | -------------- | ----------------------------- | ----------------------------------------------------- |
+| 1   | `formatMessageData(data, indent)`                      | 48-128  | モジュール     | なし (純粋)                   | 新モジュールへ移動                                    |
+| 2   | `formatHexDump(data)`                                  | 131-167 | モジュール     | なし (純粋)                   | 新モジュールへ移動                                    |
+| 3   | `formatAbsoluteTime(timestamp)`                        | 187-194 | モジュール     | なし (純粋)                   | 新モジュールへ移動                                    |
+| 4   | `formatBytes(bytes)`                                   | 232-240 | モジュール     | なし (純粋)                   | **本 issue では移動しない** (※後述「スコープ外」参照) |
+| 5   | `formatElapsedTime(timestamp)`                         | 547-552 | コンポーネント | `firstTimestamp` (クロージャ) | 引数化して新モジュールへ移動                          |
+| 6   | `formatDeltaTime(currentTimestamp, previousTimestamp)` | 555-561 | コンポーネント | なし (純粋)                   | そのまま新モジュールへ移動                            |
 
 `isParameter(key)` (`DebugPanel.tsx:43-45`) は `formatMessageData` の内部ヘルパーで formatter ではないが、`formatMessageData` から呼ばれるため一緒に移動する。同様に定数 `RFC_FIELD_NAMES` (`DebugPanel.tsx:22-40`) も移動する。
 

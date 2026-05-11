@@ -38,8 +38,7 @@ devtools 側の現状は寿命契約に依存しているため、防御的に�
 // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
 // new Uint8Array(typedArray) は新規 ArrayBuffer を確保した独立コピーを返す
 // (TC39 ECMA-262 `%TypedArray%(typedArray)` 抽象操作)。
-const payload =
-  message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
+const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
 addLog("info", logMessage, data, payload);
 ```
 

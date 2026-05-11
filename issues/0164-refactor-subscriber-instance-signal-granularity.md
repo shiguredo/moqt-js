@@ -57,11 +57,11 @@ Model: Opus 4.7
 
 `SubscriberInstance` の全 30 フィールドのうち、本 issue で扱いを変えるものを示す。Signal 維持の 27 フィールド (`id` 含む) は記載省略。
 
-| フィールド | 型 (現状) | UI 読み | フック外参照 | 本 issue 後の扱い |
-| --- | --- | --- | --- | --- |
-| `joiningFetchInProgress` | `Signal<boolean>` | なし | なし | **ref へ移動** |
-| `joiningFetchLastLocation` | `Signal<{ group; object } \| null>` | なし | なし | **ref へ移動** |
-| `liveObjectBuffer` | `Signal<MoqtObject[]>` | なし | なし | **0166 で ref 化** (本 issue の対象外、0166 先行マージ前提) |
+| フィールド                 | 型 (現状)                           | UI 読み | フック外参照 | 本 issue 後の扱い                                           |
+| -------------------------- | ----------------------------------- | ------- | ------------ | ----------------------------------------------------------- |
+| `joiningFetchInProgress`   | `Signal<boolean>`                   | なし    | なし         | **ref へ移動**                                              |
+| `joiningFetchLastLocation` | `Signal<{ group; object } \| null>` | なし    | なし         | **ref へ移動**                                              |
+| `liveObjectBuffer`         | `Signal<MoqtObject[]>`              | なし    | なし         | **0166 で ref 化** (本 issue の対象外、0166 先行マージ前提) |
 
 `catalogSubscriber` / `decoder` は UI 読みは無いが、フック外参照のため Signal 維持。
 

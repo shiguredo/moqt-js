@@ -1,6 +1,6 @@
 import { test, assert } from "vite-plus/test";
 import type { MoqtObject } from "moqt-js";
-import { toSortedByGroupObject } from "./useSubscriber";
+import { checkAborted, toSortedByGroupObject } from "./useSubscriber";
 
 function makeObject(groupId: bigint, objectId: bigint): MoqtObject {
   return {
@@ -86,4 +86,34 @@ test("toSortedByGroupObject handles BigInt boundary values", () => {
   const result = toSortedByGroupObject([large, small]);
   assert.equal(result[0].groupId, 0n);
   assert.equal(result[1].groupId, 2n ** 62n);
+});
+
+test("checkAborted returns false and does not run cleanup when not aborted", () => {
+  const controller = new AbortController();
+  let cleanupCalls = 0;
+  const result = checkAborted(controller.signal, () => {
+    cleanupCalls += 1;
+  });
+  assert.equal(result, false);
+  assert.equal(cleanupCalls, 0);
+});
+
+test("checkAborted returns true and runs cleanup once when aborted", () => {
+  const controller = new AbortController();
+  controller.abort();
+  let cleanupCalls = 0;
+  const result = checkAborted(controller.signal, () => {
+    cleanupCalls += 1;
+  });
+  assert.equal(result, true);
+  assert.equal(cleanupCalls, 1);
+});
+
+test("checkAborted swallows exceptions from cleanup but still returns true", () => {
+  const controller = new AbortController();
+  controller.abort();
+  const result = checkAborted(controller.signal, () => {
+    throw new Error("cleanup error");
+  });
+  assert.equal(result, true);
 });

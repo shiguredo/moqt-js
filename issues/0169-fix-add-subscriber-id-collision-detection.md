@@ -191,16 +191,13 @@ export function addSubscriber(): string {
 ```typescript
 test("generateUniqueSubscriberId retries when first candidate collides", () => {
   const candidates = ["subscriber-aaaaaaaa", "subscriber-bbbbbbbb"];
-  const result = generateUniqueSubscriberId(
-    new Set(["subscriber-aaaaaaaa"]),
-    () => {
-      const next = candidates.shift();
-      if (next === undefined) {
-        throw new Error("generator called more than provided");
-      }
-      return next;
-    },
-  );
+  const result = generateUniqueSubscriberId(new Set(["subscriber-aaaaaaaa"]), () => {
+    const next = candidates.shift();
+    if (next === undefined) {
+      throw new Error("generator called more than provided");
+    }
+    return next;
+  });
   assert.equal(result, "subscriber-bbbbbbbb");
 });
 ```

@@ -25,7 +25,7 @@ Model: Opus 4.7
   呼び出しごとに別の配列インスタンスを返すため、Map 参照が差し替わるたびに
   毎回必ず下流通知が走る。
 - 通知を受けた `App` が再描画されると、`subscriberIdList.map((id) =>
-  <SubscriberPanel key={id} subscriberId={id} ... />)` の各子 element が
+<SubscriberPanel key={id} subscriberId={id} ... />)` の各子 element が
   生成され、`key={id}` が一致する既存子は再マウントせず関数本体を再実行する。
 - 再実行された `SubscriberPanel` は `sub.subscriberInstances.value.get(id)` を
   評価して Map signal を購読し直し、続けて取得した `instance` の各 `.value`

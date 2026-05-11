@@ -156,7 +156,7 @@ const teardownSubscriber = (): void => {
   resetSubscriberState(
     instance,
     chainRef,
-    liveObjectBufferRef,      // 0166 適用後はフックローカル ref、未適用なら null
+    liveObjectBufferRef, // 0166 適用後はフックローカル ref、未適用なら null
     joiningFetchInProgressRef, // 0164 適用後はフックローカル ref、未適用なら null
     joiningFetchLastLocationRef,
   );
@@ -184,14 +184,14 @@ abortControllerRef.current = null;
 
 `cleanupSubscriber()` 呼び出し 6 箇所をすべて `teardownSubscriber()` に置換する。シグネチャは変えないため呼び出し側の他の変更は不要。
 
-| 行番号 | 文脈 | 置換後 |
-| --- | --- | --- |
-| l.237 | `connect` の close コールバック | `teardownSubscriber()` |
-| l.242 | `connect` の error コールバック | `teardownSubscriber()` |
-| l.553 | `session.subscribe` の end コールバック | `teardownSubscriber()` |
-| l.573 | `startSubscribing` の catch 句 | `teardownSubscriber()` |
-| l.597 | `stopSubscribing` の finally 句 | `teardownSubscriber()` |
-| l.687 | `useEffect` cleanup | `teardownSubscriber()` |
+| 行番号 | 文脈                                    | 置換後                 |
+| ------ | --------------------------------------- | ---------------------- |
+| l.237  | `connect` の close コールバック         | `teardownSubscriber()` |
+| l.242  | `connect` の error コールバック         | `teardownSubscriber()` |
+| l.553  | `session.subscribe` の end コールバック | `teardownSubscriber()` |
+| l.573  | `startSubscribing` の catch 句          | `teardownSubscriber()` |
+| l.597  | `stopSubscribing` の finally 句         | `teardownSubscriber()` |
+| l.687  | `useEffect` cleanup                     | `teardownSubscriber()` |
 
 `startSubscribing` の catch 句 (l.573) の直後にある `settingsDisabled` 再有効化 (l.574-577) は `resetSubscriberState` 内に同等処理が含まれるため **削除する**。
 
