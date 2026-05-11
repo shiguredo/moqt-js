@@ -36,6 +36,12 @@
   - Catalog 購読中・デコーダセットアップ中の誤った `status="connected"` 遷移を削除し、実際に subscribe 完了するまで `connected` 状態にならないようにする
   - @voluntas
 
+- [FIX] devtools の `stopSubscribing` と close/end/error コールバックの最終 `statusMessage` レースを解消する (#0163)
+  - `useSubscriber.ts` に `shouldApplyStatusUpdate` ヘルパーを追加し、`isStopping` 進行中または `session === null` の状態では close / end / error コールバックが `status` / `statusMessage` を書き換えないようにする
+  - `cleanupSubscriber()` 呼び出しはガード外に置き、`AbortController` ベースの abort 経路を維持する
+  - stop 主導の終端時は最終メッセージが常に `Ready to subscribe` で確定する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] devtools の `removeSubscriber` に decoder / session の fire-and-forget close を集約する (#0162)

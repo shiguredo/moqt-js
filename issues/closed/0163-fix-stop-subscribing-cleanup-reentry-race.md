@@ -1,6 +1,7 @@
 # `stopSubscribing` と close コールバックの最終 `statusMessage` レースを解消する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

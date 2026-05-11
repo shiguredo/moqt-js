@@ -228,6 +228,17 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     }
   };
 
+  // stopSubscribing 進行中 (isStopping=true) または cleanupSubscriber 通過後
+  // (session.value === null) の close / end / error コールバック発火では、
+  // status / statusMessage を上書きしないと判定する。
+  // 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error) では
+  // ガード成立せず詳細メッセージが表示される。
+  const shouldApplyStatusUpdate = (): boolean => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) return false;
+    return !instance.isStopping.value && instance.session.value !== null;
+  };
+
   const startSubscribing = async (): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
@@ -260,13 +271,19 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             console.log(
               `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
             );
-            instance.status.value = "disconnected";
-            instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
+            // cleanupSubscriber は abort 経路を維持するため常に呼ぶ。
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "disconnected";
+              instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            }
             cleanupSubscriber();
           },
           error: (error) => {
-            instance.status.value = "error";
-            instance.statusMessage.value = `Error: ${error.message}`;
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "error";
+              instance.statusMessage.value = `Error: ${error.message}`;
+            }
             cleanupSubscriber();
           },
           debug: (msg) => handleDebugMessage(subscriberId, msg),
@@ -605,14 +622,18 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
           },
           end: () => {
-            instance.status.value = "disconnected";
-            instance.statusMessage.value = "Stream ended";
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "disconnected";
+              instance.statusMessage.value = "Stream ended";
+            }
             cleanupSubscriber();
           },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
-            instance.status.value = "error";
-            instance.statusMessage.value = `Subscribe error: ${error.message}`;
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "error";
+              instance.statusMessage.value = `Subscribe error: ${error.message}`;
+            }
           },
         },
         subscribeOptions,
