@@ -79,6 +79,9 @@
 - [FIX] `useSubscriber.ts` の catalog 購読タイムアウトに `clearTimeout` を追加する (#0154)
   - `Promise.race` で catalog 取得が先に成功した場合でもタイマーが解放されるように `try / finally` で `clearTimeout` する
   - @voluntas
+- [FIX] `joiningFetch.onError` で decoder の `state !== "closed"` ガードを追加する (#0155)
+  - `cleanupSubscriber` が先に decoder を close 済みの場合に `resetKeyframeWait()` が呼ばれて意図しない副作用が起きる経路を塞ぐ
+  - @voluntas
 
 ###
 

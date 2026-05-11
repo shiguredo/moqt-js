@@ -1,6 +1,7 @@
 # `joiningFetch.onError` で decoder の生存確認を追加する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -44,3 +45,8 @@ if (decoderInstance) {
 - `joiningFetch.onError` で `decoderInstance.state !== "closed"` のガードが追加されている
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `joiningFetch.onError` で `if (decoderInstance && decoderInstance.state !== "closed")` のガードを追加し、close 済みの decoder に対する `resetKeyframeWait()` 呼び出しを回避するようにした。
+- `CHANGES.md` の `### misc` セクションに `[FIX]` エントリを追加した。

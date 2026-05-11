@@ -553,9 +553,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);
             // エラー時もバッファをクリアしてフラグをリセット
-            // デコーダーをキーフレーム待ち状態にリセット
+            // デコーダーをキーフレーム待ち状態にリセット (close 済みの場合はスキップ)
             const decoderInstance = instance.decoder.value;
-            if (decoderInstance) {
+            if (decoderInstance && decoderInstance.state !== "closed") {
               decoderInstance.resetKeyframeWait();
             }
             instance.joiningFetchInProgress.value = false;
