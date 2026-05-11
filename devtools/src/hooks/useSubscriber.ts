@@ -4,6 +4,7 @@ import {
   decodeCatalogMessage,
   getVideoTracks,
   CATALOG_TRACK_NAME,
+  supportsDynamicGroups,
   type MoqtObject,
   type DebugMessage,
   type JoiningFetchOptions,
@@ -483,6 +484,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       } = {};
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
+      // draft-ietf-moq-transport-17 §9.3.11: SUBSCRIBE では MAY (foreknowledge 不要、
+      // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
+      // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
         subscribeOptions.newGroupRequest = 0n;
       }
@@ -659,6 +663,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       const largestLocation = subscriberInstance.largestLocation;
 
       instance.subscriber.value = subscriberInstance;
+      // SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれているかを
+      // 1 回だけ確定させる。trackProperties は signal ではないため computed では
+      // 追跡できず、ここで書き込んで UI ボタンの disable と連動させる。
+      instance.dynamicGroupsSupported.value = supportsDynamicGroups(
+        subscriberInstance.trackProperties,
+      );
       instance.status.value = "connected";
       instance.statusMessage.value = `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`;
       instance.largestLocation.value = largestLocation ?? null;
@@ -746,6 +756,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     instance.decoder.value = null;
     instance.decoderConfigured.value = false;
     instance.codec.value = "";
+    instance.dynamicGroupsSupported.value = false;
 
     instance.joiningFetchInProgress.value = false;
     instance.joiningFetchLastLocation.value = null;
@@ -767,6 +778,19 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     const subscriberInstance = instance?.subscriber.value;
     if (!subscriberInstance || subscriberInstance.state !== "active") {
       console.warn(`[${subscriberId}] requestKeyframe: subscriber not active`);
+      return;
+    }
+
+    // draft-ietf-moq-transport-17 §9.3.11:
+    // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
+    //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
+    //  Property with value 1."
+    // UI ボタンは disable 済みのため通常は通らないが、状態の古いボタン押下に
+    // 対する保険として早期 return する。
+    if (!supportsDynamicGroups(subscriberInstance.trackProperties)) {
+      console.warn(
+        `[${subscriberId}] requestKeyframe: track did not include DYNAMIC_GROUPS=1, skipped`,
+      );
       return;
     }
 

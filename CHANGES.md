@@ -36,6 +36,12 @@
   - Catalog 購読中・デコーダセットアップ中の誤った `status="connected"` 遷移を削除し、実際に subscribe 完了するまで `connected` 状態にならないようにする
   - @voluntas
 
+- [FIX] `createMediaSubscriber.requestKeyframe` と devtools の `useSubscriber.requestKeyframe` で Track Properties に DYNAMIC_GROUPS=1 が含まれていない場合に REQUEST_UPDATE の NEW_GROUP_REQUEST 送信を抑止する (#0168)
+  - draft-ietf-moq-transport-17 §9.3.11 の MUST NOT 準拠
+  - `src/properties.ts` に `supportsDynamicGroups(properties)` を追加し、mutable list と Immutable Properties (Type 0x0B) の両方を検索する
+  - moqt-js 側は条件未充足時に Error を throw する
+  - devtools 側は `console.warn` で警告して早期 return し、`SubscriberInstance.dynamicGroupsSupported` と連動して Keyframe ボタンを disable する
+  - @voluntas
 - [FIX] devtools の `stopSubscribing` と close/end/error コールバックの最終 `statusMessage` レースを解消する (#0163)
   - `useSubscriber.ts` に `shouldApplyStatusUpdate` ヘルパーを追加し、`isStopping` 進行中または `session === null` の状態では close / end / error コールバックが `status` / `statusMessage` を書き換えないようにする
   - `cleanupSubscriber()` 呼び出しはガード外に置き、`AbortController` ベースの abort 経路を維持する

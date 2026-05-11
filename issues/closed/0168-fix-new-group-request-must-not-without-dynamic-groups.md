@@ -1,6 +1,7 @@
 # REQUEST_UPDATE で NEW_GROUP_REQUEST を送る前に DYNAMIC_GROUPS Property を確認する
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
 ## 概要

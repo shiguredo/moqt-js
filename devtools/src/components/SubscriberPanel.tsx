@@ -266,9 +266,13 @@ export function SubscriberPanel({
             </div>
             <button
               onClick={() => void requestKeyframe()}
-              disabled={!isSubscribing}
+              disabled={!isSubscribing || !instance.dynamicGroupsSupported.value}
               class="bg-purple-500 hover:bg-purple-600 disabled:bg-slate-200 disabled:cursor-not-allowed text-white rounded-lg p-3 border border-purple-600 disabled:border-slate-300 transition-colors flex flex-col items-center justify-center gap-1"
-              title="NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
+              title={
+                instance.dynamicGroupsSupported.value
+                  ? "NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
+                  : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-17 §9.3.11)"
+              }
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
