@@ -55,6 +55,10 @@
   - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
   - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
   - @voluntas
+- [UPDATE] Copy URL ボタンのロジックを `useCopyUrlButton` hook に抽出し、アンマウント時と再コピー時の `setTimeout` を解放する (#0172)
+  - `devtools/src/App.tsx` / `devtools/src/webtransport-devtools/App.tsx` の重複ロジックを共通 hook に統合する
+  - 連続クリック時の早消えと、アンマウント後の signal 書き込みリークを解消する
+  - @voluntas
 - [UPDATE] DebugPanel のログ蓄積を破壊的配列操作 + シーケンス signal 分離に変更し、autoScroll トグル単体の effect 再発火を抑制する (#0167)
   - `logs` Signal を廃止し、プレーン配列 `logBuffer` + `logCount` / `logSequence` の 2 signal 構成に変更する
   - `addLog` を `push` + `shift` の O(1) 操作に置き換え、スプレッド + slice によるフルコピー × 2 を解消する

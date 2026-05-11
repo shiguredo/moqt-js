@@ -1,4 +1,3 @@
-import { useSignal } from "@preact/signals";
 import {
   ConnectionPanel,
   StaticApiSupportPanel,
@@ -8,31 +7,11 @@ import {
   DatagramPanel,
 } from "./components";
 import { buildQueryString } from "./signals";
+import { useCopyUrlButton } from "../hooks/useCopyUrlButton";
 
 export function App() {
-  const copyButtonText = useSignal("Copy URL");
-
-  const copyUrlToClipboard = (): void => {
-    const queryString = buildQueryString();
-    const fullUrl = `${window.location.origin}${window.location.pathname}?${queryString}`;
-
-    window.history.replaceState(null, "", `?${queryString}`);
-
-    navigator.clipboard.writeText(fullUrl).then(
-      () => {
-        copyButtonText.value = "Copied!";
-        setTimeout(() => {
-          copyButtonText.value = "Copy URL";
-        }, 2000);
-      },
-      () => {
-        copyButtonText.value = "Failed";
-        setTimeout(() => {
-          copyButtonText.value = "Copy URL";
-        }, 2000);
-      },
-    );
-  };
+  const { buttonText: copyButtonText, copy: copyUrlToClipboard } =
+    useCopyUrlButton(buildQueryString);
 
   return (
     <div class="min-h-screen bg-slate-100">

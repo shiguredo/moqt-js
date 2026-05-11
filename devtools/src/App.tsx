@@ -1,4 +1,3 @@
-import { useSignal } from "@preact/signals";
 import { version } from "moqt-js";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { PublisherPanel } from "./components/PublisherPanel";
@@ -6,6 +5,7 @@ import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel, logCount } from "./components/DebugPanel";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildQueryString } from "./signals/connectionSettings";
+import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
 
 function handleAddSubscriber(): void {
@@ -15,29 +15,8 @@ function handleAddSubscriber(): void {
 export function App() {
   const subscriberIdList = sub.subscriberIds.value;
   const debugPanelOpen = isDebugPanelOpen.value;
-  const copyButtonText = useSignal("Copy URL");
-
-  const copyUrlToClipboard = (): void => {
-    const queryString = buildQueryString();
-    const fullUrl = `${window.location.origin}${window.location.pathname}?${queryString}`;
-
-    window.history.replaceState(null, "", `?${queryString}`);
-
-    navigator.clipboard.writeText(fullUrl).then(
-      () => {
-        copyButtonText.value = "Copied!";
-        setTimeout(() => {
-          copyButtonText.value = "Copy URL";
-        }, 2000);
-      },
-      () => {
-        copyButtonText.value = "Failed";
-        setTimeout(() => {
-          copyButtonText.value = "Copy URL";
-        }, 2000);
-      },
-    );
-  };
+  const { buttonText: copyButtonText, copy: copyUrlToClipboard } =
+    useCopyUrlButton(buildQueryString);
 
   return (
     <div class="flex min-h-screen">
