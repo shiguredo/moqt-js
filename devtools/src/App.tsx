@@ -13,6 +13,20 @@ function handleAddSubscriber(): void {
 }
 
 function handleRemoveSubscriber(id: string): void {
+  // SubscriberPanel がアンマウントされる前に WebTransport セッションと
+  // VideoDecoder を fire-and-forget でクローズし、リソースリークを防ぐ。
+  // signals/subscriber.ts の removeSubscriber は Map からの削除のみを担当する。
+  const instance = sub.getSubscriber(id);
+  if (instance) {
+    try {
+      instance.decoder.value?.close();
+    } catch {
+      // 既にクローズされている場合は無視
+    }
+    instance.session.value?.close().catch(() => {
+      // 既にクローズされている場合は無視
+    });
+  }
   sub.removeSubscriber(id);
 }
 

@@ -18,6 +18,10 @@
   - 音声・映像フレームの `sendObject` 呼び出しは fire-and-forget のため `void` 演算子で戻り値を明示的に破棄する
   - `tests/e2e/pubsub.spec.ts` の flaky (`Error: catalog receive timeout`) を解消する
   - @voluntas
+- [FIX] devtools の `handleRemoveSubscriber` で WebTransport セッションと VideoDecoder をクローズしてリソースリークを解消する (#0144)
+  - `App.tsx` の `handleRemoveSubscriber` で `sub.removeSubscriber(id)` を呼ぶ前に decoder.close() と session.close() を fire-and-forget で実行する
+  - `useSubscriber` に `useEffect` cleanup を追加し、予期しないアンマウント経路でも `cleanupSubscriber` が呼ばれるようにする
+  - @voluntas
 
 ### misc
 

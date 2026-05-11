@@ -16,7 +16,7 @@ import { DecoderWrapper } from "../utils/DecoderWrapper";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
-import { useRef } from "preact/hooks";
+import { useRef, useEffect } from "preact/hooks";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
@@ -685,6 +685,16 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       console.error(`[${subscriberId}] requestKeyframe: failed`, error);
     }
   };
+
+  // コンポーネントアンマウント時の安全策。
+  // handleRemoveSubscriber が removeSubscriber を先に呼ぶため通常は instance が
+  // undefined になり no-op だが、将来の予期しないアンマウント経路 (ホットリロード
+  // 等) に備えて補助的にリソースをクリーンアップする。
+  useEffect(() => {
+    return () => {
+      cleanupSubscriber();
+    };
+  }, []);
 
   return {
     startSubscribing,

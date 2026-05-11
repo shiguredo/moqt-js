@@ -1,6 +1,7 @@
 # `removeSubscriber` 時のリソースリークを修正する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -26,8 +27,14 @@ Model: Opus 4.7
 function handleRemoveSubscriber(id: string): void {
   const instance = sub.getSubscriber(id);
   if (instance) {
-    try { instance.decoder.value?.close(); } catch { /* ignore */ }
-    instance.session.value?.close()?.catch(() => { /* 既にクローズされている場合は無視 */ });
+    try {
+      instance.decoder.value?.close();
+    } catch {
+      /* ignore */
+    }
+    instance.session.value?.close()?.catch(() => {
+      /* 既にクローズされている場合は無視 */
+    });
   }
   sub.removeSubscriber(id);
 }
@@ -86,3 +93,9 @@ useEffect(() => {
 - `useSubscriber` に `useEffect` cleanup が追加されている
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/App.tsx` の `handleRemoveSubscriber` を変更し、`sub.removeSubscriber(id)` の前に `instance.decoder.value?.close()` と `instance.session.value?.close()` を fire-and-forget で呼ぶようにした。`decoder.close()` は同期例外を握りつぶし、`session.close()` の Promise は `.catch(() => {})` で無視する。
+- `devtools/src/hooks/useSubscriber.ts` に `useEffect` を追加し、コンポーネントアンマウント時に `cleanupSubscriber()` を呼ぶ補助的な安全策を仕込んだ。
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した。
