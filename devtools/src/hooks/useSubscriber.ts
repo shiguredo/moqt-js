@@ -195,7 +195,7 @@ export function checkAborted(signal: AbortSignal, cleanup: () => void): boolean 
   return false;
 }
 
-function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
+export function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
   const logMessage = `[${subscriberId}] [${direction}] ${message.typeName}`;
 
@@ -208,7 +208,11 @@ function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
     Object.assign(data, message.decoded);
   }
 
-  const payload = message.payload.length > 0 ? message.payload : undefined;
+  // moqt-js の DebugMessage.payload はライフタイム契約が JSDoc 上明文化されて
+  // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
+  // new Uint8Array(typedArray) は新規 ArrayBuffer を確保した独立コピーを返す
+  // (TC39 ECMA-262 %TypedArray%(typedArray) 抽象操作)。
+  const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
   addLog("info", logMessage, data, payload);
 }
 

@@ -18,7 +18,7 @@ import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
 
-function handleDebugMessage(message: DebugMessage): void {
+export function handleDebugMessage(message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
   const logMessage = `[publisher] [${direction}] ${message.typeName}`;
 
@@ -31,8 +31,9 @@ function handleDebugMessage(message: DebugMessage): void {
     Object.assign(data, message.decoded);
   }
 
-  // payload が存在する場合は渡す
-  const payload = message.payload.length > 0 ? message.payload : undefined;
+  // moqt-js の DebugMessage.payload はライフタイム契約が JSDoc 上明文化されて
+  // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
+  const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
   addLog("info", logMessage, data, payload);
 }
 

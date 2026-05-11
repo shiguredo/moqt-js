@@ -55,6 +55,12 @@
   - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
   - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
   - @voluntas
+- [UPDATE] devtools の `handleDebugMessage` で `DebugMessage.payload` をコピーしてからログに保存する (#0175)
+  - `new Uint8Array(message.payload)` で独立した ArrayBuffer に複製してから `addLog` に渡す
+  - moqt-js 側内部実装の最適化 (slice → subarray など) が将来入っても devtools 側のログ保持が破綻しないよう防御する
+  - @voluntas
+- [UPDATE] `DebugMessage.payload` の寿命契約 (independent / MAY retain / MUST NOT mutate) を JSDoc に明記する (#0175)
+  - @voluntas
 - [UPDATE] `DebugPanel` の formatter 群を `utils/logFormatters.ts` に分離し pure function 化する (#0174)
   - コンポーネント内に分散していた `formatElapsedTime` / `formatDeltaTime` を引数化してモジュールスコープへ移動する
   - `formatMessageData` / `formatHexDump` / `formatAbsoluteTime` も同モジュールに集約し、`RFC_FIELD_NAMES` / `isParameter` を共有する
