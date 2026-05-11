@@ -39,6 +39,9 @@
 - [UPDATE] `DebugPanel.tsx` の過剰コメントを削除する (#0151)
   - 自明なループ説明と Premature Optimization を正当化するコメントを削除する
   - @voluntas
+- [UPDATE] `signals/subscriber.ts` の参照フィールドコメントを修正する (#0153)
+  - Signal 化の本質的理由 (Map 再生成回避と `hasActiveSubscriber` computed の追跡要件) を明記する
+  - @voluntas
 - [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
   - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
   - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする

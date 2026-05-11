@@ -1,6 +1,7 @@
 # `signals/subscriber.ts:29` のコメントを修正する
 
 Created: 2026-05-10
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -40,3 +41,8 @@ Model: Opus 4.7
 
 - `subscriber.ts:29` のコメントが設計意図を正しく反映している
 - `vp run build:devtools` が成功する
+
+## 解決方法
+
+- `devtools/src/signals/subscriber.ts` の参照フィールド上のコメントを修正方針通りに書き換えた。
+- `CHANGES.md` の `### misc` セクションに `[UPDATE]` エントリを追加した。

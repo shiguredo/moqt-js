@@ -26,7 +26,10 @@ export interface JoiningFetchStats {
 export interface SubscriberInstance {
   // 不変フィールド (signal 不要)
   id: string;
-  // 参照フィールド (publisher と揃えるため signal 化)
+  // Signal 化してフィールド単位で購読/更新できるようにする。
+  // subscriberInstances Map の再生成を回避し、個別 Signal が再描画を駆動する。
+  // hasActiveSubscriber computed は instance.subscriber.value を追跡するため
+  // Signal 化が必須。
   session: Signal<Session | null>;
   subscriber: Signal<Subscriber | null>;
   catalogSubscriber: Signal<Subscriber | null>;
