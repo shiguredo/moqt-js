@@ -1,4 +1,4 @@
-import { signal, useSignalEffect } from "@preact/signals";
+import { signal, useSignalEffect, batch } from "@preact/signals";
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { isDebugPanelOpen, closeDebugPanel } from "../signals/debug";
 import * as settings from "../signals/connectionSettings";
@@ -14,9 +14,28 @@ interface LogEntry {
   payload?: Uint8Array;
 }
 
-export const logs = signal<LogEntry[]>([]);
+// 配列本体は破壊的に操作するため signal にしない。テスト用に getter を export する。
+const logBuffer: LogEntry[] = [];
 const MAX_LOGS = 1000;
+// 追加イベントの累積カウンタ。MAX_LOGS 到達後も増え続け、autoScroll effect /
+// 描画再評価のトリガになる。
+export const logSequence = signal(0);
+// 現在の件数表示用 signal。logSequence と一緒に更新する。
+export const logCount = signal(0);
 export const autoScroll = signal(true);
+
+// テスト用に logBuffer のスナップショットを返す。
+// readonly は型レベルの不変性宣言で、呼び出し側に書き換えを意図させない。
+export function getLogBuffer(): readonly LogEntry[] {
+  return logBuffer;
+}
+
+// テスト用に logBuffer / logCount / logSequence を初期状態へ戻す。
+export function __resetLogStateForTest(): void {
+  logBuffer.length = 0;
+  logCount.value = 0;
+  logSequence.value = 0;
+}
 
 // RFC 形式のフィールド名マッピング
 const RFC_FIELD_NAMES: Record<string, string> = {
@@ -180,7 +199,17 @@ export function addLog(
     payload,
   };
 
-  logs.value = [...logs.value, entry].slice(-MAX_LOGS);
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOGS) {
+    // MAX_LOGS 到達後は shift 1 回で先頭を捨てる。
+    // 旧実装の [...array, entry].slice(-MAX_LOGS) のフルコピー × 2 を 1 回に削減。
+    logBuffer.shift();
+  }
+  // 2 つの signal を同時更新するため batch で effect の二重発火を防ぐ。
+  batch(() => {
+    logCount.value = logBuffer.length;
+    logSequence.value = logSequence.value + 1;
+  });
 }
 
 // 絶対時刻をフォーマット（HH:MM:SS.mmm）
@@ -345,9 +374,7 @@ function generateSubscriberStatsText(subscriberId: string): string {
 
 // ログをフィルタリングしてテキストとして生成
 function generateLogsText(filter?: string): string {
-  const filteredLogs = filter
-    ? logs.value.filter((log) => log.message.includes(filter))
-    : logs.value;
+  const filteredLogs = filter ? logBuffer.filter((log) => log.message.includes(filter)) : logBuffer;
 
   return filteredLogs
     .map((log) => {
@@ -412,6 +439,10 @@ function generateFullLogText(filter?: string, subscriberId?: string): string {
 type ViewMode = "data" | "binary";
 
 export function DebugPanel() {
+  // ログ追加イベント (MAX_LOGS 到達後も含む) で再レンダリングをトリガするため、
+  // logSequence を購読する。値自体は使わない。
+  void logSequence.value;
+
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [viewModes, setViewModes] = useState<Map<number, ViewMode>>(new Map());
@@ -441,7 +472,7 @@ export function DebugPanel() {
     if (isAllExpanded) {
       setExpandedRows(new Set());
     } else {
-      const allIndices = new Set(logs.value.map((_, i) => i).filter((i) => logs.value[i].data));
+      const allIndices = new Set(logBuffer.map((_, i) => i).filter((i) => logBuffer[i].data));
       setExpandedRows(allIndices);
     }
   };
@@ -504,10 +535,14 @@ export function DebugPanel() {
     }
   }, []);
 
-  // 新しいログ追加時にトップへオートスクロール
+  // 新しいログ追加時にトップへオートスクロール。
+  // logSequence の変化でのみ発火し、autoScroll トグル単体では発火しない。
   useSignalEffect(() => {
-    const logsLength = logs.value.length;
-    if (logsLength > 0 && autoScroll.value && logContainerRef.current) {
+    const sequence = logSequence.value;
+    if (sequence === 0) return;
+    if (!autoScroll.peek()) return;
+    if (logBuffer.length === 0) return;
+    if (logContainerRef.current) {
       logContainerRef.current.scrollTop = 0;
     }
   });
@@ -524,7 +559,12 @@ export function DebugPanel() {
   }, []);
 
   const clearLogs = () => {
-    logs.value = [];
+    logBuffer.length = 0;
+    batch(() => {
+      logCount.value = 0;
+      // clear イベントを effect 側へ伝播させるため bump する。
+      logSequence.value = logSequence.value + 1;
+    });
   };
 
   const getLevelColor = (level: LogEntry["level"]) => {
@@ -541,7 +581,7 @@ export function DebugPanel() {
   };
 
   // 最初のログのタイムスタンプ
-  const firstTimestamp = logs.value.length > 0 ? logs.value[0].timestamp : 0;
+  const firstTimestamp = logBuffer.length > 0 ? logBuffer[0].timestamp : 0;
 
   // 経過時間をフォーマット（秒.ミリ秒）
   const formatElapsedTime = (timestamp: number): string => {
@@ -598,7 +638,7 @@ export function DebugPanel() {
       {/* コントロール */}
       <div class="flex items-center justify-between p-3 border-b border-slate-100">
         <div class="flex items-center gap-4 text-sm text-slate-600">
-          <span>Logs: {logs.value.length}</span>
+          <span>Logs: {logCount.value}</span>
         </div>
         <div class="flex items-center gap-3">
           <label class="flex items-center gap-2 text-sm text-slate-600">
@@ -668,7 +708,7 @@ export function DebugPanel() {
         ref={logContainerRef}
         class="h-[calc(100vh-190px)] overflow-y-auto p-4 font-mono text-sm"
       >
-        {logs.value.length === 0 ? (
+        {logCount.value === 0 ? (
           <div class="flex items-center justify-center h-full text-slate-400">
             No logs yet. MOQT operations will appear here.
           </div>
@@ -676,7 +716,7 @@ export function DebugPanel() {
           <div class="space-y-1">
             {(() => {
               const elements = [];
-              const logsArray = logs.value;
+              const logsArray = logBuffer;
               for (let i = logsArray.length - 1; i >= 0; i--) {
                 const log = logsArray[i];
                 const originalIndex = i;

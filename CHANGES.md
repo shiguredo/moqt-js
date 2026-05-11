@@ -44,6 +44,11 @@
 
 ### misc
 
+- [UPDATE] DebugPanel のログ蓄積を破壊的配列操作 + シーケンス signal 分離に変更し、autoScroll トグル単体の effect 再発火を抑制する (#0167)
+  - `logs` Signal を廃止し、プレーン配列 `logBuffer` + `logCount` / `logSequence` の 2 signal 構成に変更する
+  - `addLog` を `push` + `shift` の O(1) 操作に置き換え、スプレッド + slice によるフルコピー × 2 を解消する
+  - autoScroll effect を `logSequence` 変化単独で発火させ、`autoScroll.peek()` で参照することで toggle 単体での再発火を抑制する
+  - @voluntas
 - [UPDATE] devtools の Joining Fetch 中ライブオブジェクトバッファを Signal から useRef へ変更し、追記コストを O(N^2) から O(N) に改善する (#0166)
   - `SubscriberInstance` から `liveObjectBuffer` フィールドを削除する
   - `useSubscriber.ts` で `useRef<MoqtObject[]>([])` を導入し、`object:` コールバックの追記を `push` (O(1)) に置き換える

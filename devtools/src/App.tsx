@@ -3,7 +3,7 @@ import { version } from "moqt-js";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
-import { DebugPanel, logs } from "./components/DebugPanel";
+import { DebugPanel, logCount } from "./components/DebugPanel";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildQueryString } from "./signals/connectionSettings";
 import * as sub from "./signals/subscriber";
@@ -84,9 +84,9 @@ export function App() {
             </svg>
             <span>Debug</span>
             {/* ログ件数バッジ */}
-            {logs.value.length > 0 && !debugPanelOpen && (
+            {logCount.value > 0 && !debugPanelOpen && (
               <span class="bg-red-500 text-white text-xs font-bold rounded-full min-w-[24px] h-6 flex items-center justify-center px-1.5">
-                {logs.value.length > 99 ? "99+" : logs.value.length}
+                {logCount.value > 99 ? "99+" : logCount.value}
               </span>
             )}
           </button>
