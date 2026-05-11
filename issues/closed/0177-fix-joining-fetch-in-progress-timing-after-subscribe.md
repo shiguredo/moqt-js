@@ -1,24 +1,30 @@
 # `joiningFetchInProgress` の立て位置を見直す (subscribe 完了後への単純な移動は不可)
 
 Created: 2026-05-11
+Completed: 2026-05-12
 Model: Opus 4.7
 
-## pending 理由 (2026-05-12)
+## 解決方法
 
-issue #0164 マージにより `joiningFetchInProgress` は `SubscriberInstance` から
-削除され、`useSubscriber` フックローカルの `useRef<boolean>` に降格した。これに
-より本 issue の修正対象 (Signal の reactive 通知が SUBSCRIBE_OK 前に立っている
-ことの違和感) は実体ごと消滅した。
+issue #0164 / #0171 のマージにより本 issue の修正対象が実体ごと消滅したため
+close する。
 
-加えて issue #0171 で導入された `resetSubscriberState` 内で
-`joiningFetchInProgressRef.current = false` が確実に走るため、`subscribe(...)`
-reject 時の catch 経路 (`teardownSubscriber()` 呼び出し) でも ref は false に
-戻る。本 issue が懸念した「立て位置のずれ」によるバグ経路は形成されない。
+- #0164 で `joiningFetchInProgress` は `SubscriberInstance` の Signal から
+  `useSubscriber` フックローカルの `useRef<boolean>` に降格した。これにより
+  本 issue が問題視していた「Signal の reactive 通知が SUBSCRIBE_OK 前に
+  立っていることの意味論的ずれ」は外部観測者から見えなくなり、修正対象
+  そのものが無くなった
+- #0171 で導入された `resetSubscriberState` 内で
+  `joiningFetchInProgressRef.current = false` が確実に走るため、
+  `subscribe(...)` reject 時の catch 経路 (`teardownSubscriber()` 呼び出し)
+  でも ref は false に戻る。本 issue が懸念した「立て位置のずれ」によるバグ
+  経路は形成されない
+- フックローカル ref への代入順序は `useSubscriber.ts` のローカルな同期
+  セクション内に閉じており、Signal 時代のような外部観測者に対する意味論
+  ずれは存在しない
 
-設計クリンナップとしても、フックローカル ref への代入順序は本ファイルの
-ローカルな同期セクション内に閉じており、Signal 時代のような外部観測者に対する
-意味論ずれは存在しない。当面 pending として残し、別の信号が現れたら
-再評価する。
+将来 `joiningFetchInProgress` を再度 signal 化するなど状況が変わった場合は
+別 issue を新規に起票する。
 
 ## 概要
 
