@@ -17,6 +17,7 @@ import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import { useRef, useEffect } from "preact/hooks";
+import { batch } from "@preact/signals";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
@@ -487,25 +488,21 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               bufferedLiveObjects: 0,
             };
 
-            // ライブバッファをコピーしてクリア。
+            // ライブバッファを (groupId, objectId) 昇順へ並べ替える。
             // draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリームと
             // OBJECT_DATAGRAM の配送順が保証されないため、到着順 ≠ (groupId, objectId) 順
-            // となる可能性がある。デコーダへ流す前に (groupId, objectId) 昇順へ
-            // 並べ替える。
+            // となる可能性がある。
             const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
-            instance.liveObjectBuffer.value = [];
 
-            // Joining Fetch で既に配信済みのオブジェクトをスキップ（重複除去）
+            // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
             const lastFetch = instance.joiningFetchLastLocation.value;
             let objectsToProcess = bufferedObjects;
             if (lastFetch && bufferedObjects.length > 0) {
               const originalLength = bufferedObjects.length;
               objectsToProcess = bufferedObjects.filter((obj) => {
-                // 同じグループで lastFetch 以下のオブジェクトはスキップ
                 if (obj.groupId === lastFetch.group && obj.objectId <= lastFetch.object) {
                   return false;
                 }
-                // 古いグループのオブジェクトもスキップ
                 if (obj.groupId < lastFetch.group) {
                   return false;
                 }
@@ -523,33 +520,26 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               `[${subscriberId}] Joining Fetch: completed, processing ${objectsToProcess.length} buffered live objects`,
             );
 
-            // 統計を更新
-            instance.joiningFetchLastLocation.value = null;
-            instance.joiningFetchStats.value = {
-              ...currentStats,
-              completed: true,
-              bufferedLiveObjects: objectsToProcess.length,
-            };
+            // chainRef にバッファ済みオブジェクトのデコードを順次予約してから、
+            // joiningFetchInProgress / liveObjectBuffer / stats を同一 batch で更新する。
+            // ドレイン投入とフラグ立て下げを同期セクションでまとめることで、
+            // 「ドレイン中に object: コールバックが割り込んでバッファに積まれたまま
+            // 永久に放置される」race window を解消する。立て下げ後の object: は
+            // chainRef 経路へ直接流れるため、Promise チェーンで順序保証される。
+            for (const bufferedObj of objectsToProcess) {
+              chainRef.current = chainRef.current.then(() => handleObject(bufferedObj));
+            }
 
-            // バッファを順次デコード
-            void (async () => {
-              for (const bufferedObj of objectsToProcess) {
-                await handleObject(bufferedObj);
-              }
-
-              // 処理中に追加されたオブジェクトがあれば処理
-              // 追加分も複数 Subgroup から並行受信し得るため (groupId, objectId) で再ソートする
-              while (instance.liveObjectBuffer.value.length > 0) {
-                const remainingObjects = sortByGroupObject([...instance.liveObjectBuffer.value]);
-                instance.liveObjectBuffer.value = [];
-                for (const obj of remainingObjects) {
-                  await handleObject(obj);
-                }
-              }
-
-              // 全てのバッファ処理が完了してから joiningFetchInProgress を false に
+            batch(() => {
+              instance.liveObjectBuffer.value = [];
               instance.joiningFetchInProgress.value = false;
-            })();
+              instance.joiningFetchLastLocation.value = null;
+              instance.joiningFetchStats.value = {
+                ...currentStats,
+                completed: true,
+                bufferedLiveObjects: objectsToProcess.length,
+              };
+            });
           },
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);

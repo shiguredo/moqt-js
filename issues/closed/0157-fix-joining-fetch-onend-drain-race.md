@@ -1,6 +1,7 @@
 # Joining Fetch `onEnd` ドレインループと `object:` コールバック間の race を解消する
 
 Created: 2026-05-11
+Completed: 2026-05-11
 Model: Opus 4.7
 
 ## 概要
@@ -81,3 +82,11 @@ void (async () => {
 - ドレインループ後にバッファに残った要素が chainRef 経由で正しく処理される
 - `vp run build:devtools` が成功する
 - `vp run test` が全テストパスする
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の Joining Fetch `onEnd` を以下のように修正した:
+  - ドレイン処理 (`for (const bufferedObj of objectsToProcess) { ... handleObject(bufferedObj) }`) を `chainRef.current.then(...)` 経由で順次予約する形に変更した。`while (liveObjectBuffer.length > 0)` 再評価ループを廃止。
+  - `liveObjectBuffer.value = []` / `joiningFetchInProgress.value = false` / `joiningFetchLastLocation.value = null` / `joiningFetchStats.value` 更新を `@preact/signals` の `batch()` 内で同期実行する。これにより立て下げと残物処理が同一同期セクションで完了し、race window が消失する。
+  - 立て下げ後のライブオブジェクトは `object:` コールバックが `joiningFetchInProgress.value === false` を読んで `chainRef.current.then(...)` 経路へ直接流すため、Promise チェーンで順序保証される。
+- `CHANGES.md` の `## develop` 直下に `[FIX]` エントリを追加した。

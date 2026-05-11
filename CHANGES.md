@@ -22,6 +22,10 @@
   - `App.tsx` の `handleRemoveSubscriber` で `sub.removeSubscriber(id)` を呼ぶ前に decoder.close() と session.close() を fire-and-forget で実行する
   - `useSubscriber` に `useEffect` cleanup を追加し、予期しないアンマウント経路でも `cleanupSubscriber` が呼ばれるようにする
   - @voluntas
+- [FIX] Joining Fetch `onEnd` ドレインループと `object:` コールバック間の race を解消する (#0157)
+  - ドレイン投入 (`chainRef` への順次予約) と `joiningFetchInProgress` 立て下げを同一 `batch()` 内でアトミックに実行し、ドレイン中にバッファへ積まれたオブジェクトが永久に放置される race window を排除する
+  - 立て下げ後のライブオブジェクトは `object:` コールバックから `chainRef` 経由でデコードされ、Promise チェーンで順序保証される
+  - @voluntas
 - [FIX] `startSubscribing` に中断機構を追加し status 遷移を修正する (#0148)
   - 冒頭で `isStopping` をチェックして二重実行を防ぐ
   - 各 `await` の後に `instance.session.value === null` をチェックし、close コールバックで cleanup された場合に処理を中断する
