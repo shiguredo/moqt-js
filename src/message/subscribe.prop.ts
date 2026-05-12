@@ -88,7 +88,7 @@ const parametersArb = fc
  *
  * draft-ietf-moq-transport-17:
  * SUBSCRIBE_OK に Track Extensions が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1374
+ * draft-ietf-moq-transport-17 Section 9
  */
 // 値域制約のある Track Property は除外する (validateTrackPropertyValue で
 // ProtocolViolationError になりラウンドトリップが成立しないため)
@@ -121,7 +121,7 @@ const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 })
 /**
  * draft-ietf-moq-transport-17 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * https://github.com/moq-wg/moq-transport/pull/1472
+ * draft-ietf-moq-transport-17 Section 9
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -171,7 +171,7 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 /**
  * draft-ietf-moq-transport-17:
  * SUBSCRIBE_OK に Track Extensions が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1374
+ * draft-ietf-moq-transport-17 Section 9
  */
 test("SubscribeOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(

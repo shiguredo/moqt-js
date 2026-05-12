@@ -16,7 +16,7 @@
  * - PUBLISH_DONE Codes (Section 14.5.3)
  * - Data Stream Reset Error Codes (Section 14.5.4)
  *
- * https://github.com/moq-wg/moq-transport/pull/1460
+ * draft-ietf-moq-transport-17 Section 9.7
  */
 
 /**

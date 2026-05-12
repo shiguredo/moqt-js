@@ -278,7 +278,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
  *   Track Name (..),
  * }
  *
- * https://github.com/moq-wg/moq-transport/pull/1452
+ * draft-ietf-moq-transport-17 Section 9.21
  */
 export interface PublishBlocked {
   type: typeof MessageType.PUBLISH_BLOCKED;

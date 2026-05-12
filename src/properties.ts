@@ -42,7 +42,7 @@ export const MOQTPropertyId = {
  * draft-ietf-moq-transport-17:
  * Track Properties を Extensions に移動。
  * これらは end-to-end で送信され、Relay が転送する。
- * https://github.com/moq-wg/moq-transport/pull/1390
+ * draft-ietf-moq-transport-17 Section 11
  *
  * PUBLISH, SUBSCRIBE_OK, FETCH_OK の Track Extensions で使用。
  *
@@ -73,7 +73,7 @@ export const TrackPropertyId = {
    *
    * draft-ietf-moq-transport-17:
    * GROUP_ORDER パラメータから分割された Publisher 向けの設定。
-   * https://github.com/moq-wg/moq-transport/pull/1390
+   * draft-ietf-moq-transport-17 Section 11
    */
   DEFAULT_PUBLISHER_GROUP_ORDER: 0x22n,
   /**
@@ -94,7 +94,7 @@ export const TrackPropertyId = {
  * アプリケーション固有の範囲は IANA に登録する必要がない。
  * 異なるソースからのトラックを消費するアプリケーションでは
  * 同じコードポイントに異なるセマンティクスが存在する可能性がある。
- * https://github.com/moq-wg/moq-transport/pull/1473
+ * draft-ietf-moq-transport-17 Section 11
  */
 /**
  * Track Property の値域を検証する

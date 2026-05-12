@@ -92,7 +92,7 @@ const parametersArb = fc
 /**
  * draft-ietf-moq-transport-17 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * https://github.com/moq-wg/moq-transport/pull/1472
+ * draft-ietf-moq-transport-17 Section 9
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -104,7 +104,7 @@ const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }),
  *
  * draft-ietf-moq-transport-17:
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
- * https://github.com/moq-wg/moq-transport/pull/1393
+ * draft-ietf-moq-transport-17 Section 9.18
  */
 const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -260,7 +260,7 @@ test("NamespaceDone のエンコード・デコードがラウンドトリップ
  * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
  * Subscribe Options フィールドで PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) を指定できる。
  * 空のネームスペース（ワイルドカード）も許可される。
- * https://github.com/moq-wg/moq-transport/pull/1393
+ * draft-ietf-moq-transport-17 Section 9.18
  */
 test("SubscribeNamespace のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(

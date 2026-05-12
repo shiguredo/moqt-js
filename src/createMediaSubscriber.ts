@@ -353,7 +353,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       }, CATALOG_RECEIVE_TIMEOUT);
     });
 
-    // Catalog Subscriber
+    // Catalog サブスクライバー
     // joiningFetch で過去に publish された Catalog を FETCH で取得
     this.catalogSubscriber = await this.session.subscribe(
       namespace,
@@ -441,7 +441,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
   private async setupDecoders(): Promise<void> {
     const useWorker = this.options.useWorker ?? true;
 
-    // Audio Decoder
+    // 音声デコーダー
     if (this.audioTrackInfo) {
       this.audioDecoder = new AudioDecoderWrapper(useWorker, {
         output: (data) => this.handleAudioDecodedData(data),
@@ -467,7 +467,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       this.audioDecoderConfigured = true;
     }
 
-    // Video Decoder
+    // 映像デコーダー
     if (this.videoTrackInfo) {
       this.videoDecoder = new VideoDecoderWrapper(useWorker, {
         output: (data) => this.handleVideoDecodedData(data),
@@ -507,7 +507,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
     const namespace = this.options.namespace;
     const joiningFetchEnabled = this.options.joiningFetch ?? false;
 
-    // Audio Subscriber
+    // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
       this.audioSubscriber = await this.session.subscribe(namespace, trackName, {
@@ -519,7 +519,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       });
     }
 
-    // Video Subscriber
+    // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
       const subscribeOptions: {

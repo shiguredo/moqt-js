@@ -7,7 +7,7 @@
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 
-// Re-export public types
+// 公開型の再エクスポート
 export type {
   Session,
   SessionStatistics,
@@ -29,16 +29,16 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Re-export Pending Subgroup Buffer options (draft-ietf-moq-transport-17 §10.4.2)
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-17 §10.4.2)
 export {
   type PendingSubgroupBufferOptions,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
 } from "./pendingSubgroupBuffer";
 
-// Re-export message types
+// メッセージ型の再エクスポート
 export type { SubscriptionFilter, Location, Parameter } from "./message";
 
-// Re-export Authorization Token (draft-ietf-moq-transport-17 Section 9.3.2)
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-17 Section 9.3.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,
@@ -53,19 +53,19 @@ export type { Publisher, SendObjectParams, SendDatagramParams } from "./publishe
 export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
 
-// Re-export error types
+// エラー型の再エクスポート
 export { MoqtError, SessionError, RequestError, SessionErrorCode, RequestErrorCode } from "./error";
 
-// Re-export LOC (draft-ietf-moq-loc)
+// LOC の再エクスポート (draft-ietf-moq-loc)
 export * as LOC from "./loc";
 
-// Re-export MSF (draft-ietf-moq-msf)
+// MSF の再エクスポート (draft-ietf-moq-msf)
 export * from "./msf";
 
-// Version
+// バージョン
 export { version, MOQT_IMPLEMENTATION_VALUE } from "./version";
 
-// High-level MediaStream API
+// 高レベル MediaStream API
 export {
   createMediaPublisher,
   type MediaPublisher,
@@ -92,7 +92,7 @@ export {
   type VideoSubscribeOptions,
 } from "./createMediaSubscriber";
 
-// Codec types
+// コーデック型
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
 
 // VideoFrame ソース (MediaStreamTrackProcessor フォールバック)
@@ -102,7 +102,7 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
-// Re-export MOQT Extensions (draft-ietf-moq-transport-17 Section 11 (MOQT Properties))
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-17 Section 11 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,
@@ -115,7 +115,7 @@ export {
   supportsDynamicGroups,
 } from "./properties";
 
-// Re-export Data Stream types and functions
+// Data Stream の型と関数の再エクスポート
 export {
   // Subgroup Header
   SubgroupHeaderType,

@@ -12,7 +12,7 @@
  * Type Delta は前のパラメータの Type との差分。
  * 偶数型: varint 値
  * 奇数型: Length プレフィックス付きバイト列
- * https://github.com/moq-wg/moq-transport/pull/1462
+ * draft-ietf-moq-transport-17 Section 9.3.1
  */
 
 import { ProtocolViolationError } from "../error";
@@ -25,7 +25,7 @@ import type { Location } from "./types";
  * draft-ietf-moq-transport-17:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
  * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
@@ -200,7 +200,7 @@ export interface TrackNamespace {
  *
  * draft-ietf-moq-transport-17:
  * Track Namespace は最大 4,096 バイト。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
   // 先にサイズをチェック
@@ -237,7 +237,7 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
  *
  * draft-ietf-moq-transport-17:
  * Track Namespace は最大 4,096 バイト。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  *
  * @returns [namespace, consumed bytes]
  */
@@ -287,7 +287,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
  *
  * draft-ietf-moq-transport-17:
  * Track Namespace は最大 4,096 バイト。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
@@ -324,7 +324,7 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
  *
  * draft-ietf-moq-transport-17:
  * Full Track Name は最大 4,096 バイト。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 export function encodeTrackName(trackName: string): Uint8Array {
   const encoder = new TextEncoder();
@@ -342,7 +342,7 @@ export function encodeTrackName(trackName: string): Uint8Array {
  *
  * draft-ietf-moq-transport-17:
  * Full Track Name は最大 4,096 バイト。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
   if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
@@ -762,7 +762,7 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
  *
  * End Group Delta は Start Location の Group ID からの差分。
  * 0 の場合は Start Location の Group の残りが対象。
- * https://github.com/moq-wg/moq-transport/pull/1470
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 export type SubscriptionFilter =
   | { type: "NextGroupStart" }

@@ -20,7 +20,7 @@ import { ProtocolViolationError } from "../error";
  * セッションを終了する意図を通知する。
  * サーバーはセッションマイグレーション用のオプショナル URI を含めることができる。
  * Timeout フィールドが追加された。
- * https://github.com/moq-wg/moq-transport/pull/1497
+ * draft-ietf-moq-transport-17 Section 9.5
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -46,7 +46,7 @@ export interface Goaway {
  * draft-ietf-moq-transport-17:
  * リクエストへの成功応答。双方向ストリーム上で送信されるため、
  * ストリーム自体がリクエストを特定し、Request ID は不要。
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  *
  * REQUEST_OK Message {
  *   Type (vi64) = 0x7,
@@ -66,7 +66,7 @@ export interface RequestOk {
  * draft-ietf-moq-transport-17:
  * リクエストへの失敗応答。双方向ストリーム上で送信されるため、
  * ストリーム自体がリクエストを特定し、Request ID は不要。
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  *
  * REQUEST_ERROR Message {
  *   Type (vi64) = 0x5,
@@ -144,7 +144,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
  *
  * draft-ietf-moq-transport-17 Section 9.6:
  * Number of Parameters + Parameters
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -169,7 +169,7 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
  *
  * draft-ietf-moq-transport-17 Section 9.6:
  * Number of Parameters + Parameters
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  */
 export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
   const [parameters] = decodeParameters(data, offset);
@@ -185,7 +185,7 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
  *
  * draft-ietf-moq-transport-17 Section 9.7:
  * Error Code + Retry Interval + Error Reason
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -215,7 +215,7 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
  *
  * draft-ietf-moq-transport-17 Section 9.7:
  * Error Code + Retry Interval + Error Reason
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  */
 export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): RequestError {
   const [errorCode, errorCodeSize] = decodeVarint(data, offset);

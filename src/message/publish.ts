@@ -21,7 +21,7 @@ import { MessageType } from "./types";
  *
  * draft-ietf-moq-transport-17:
  * Track Extensions が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1374
+ * draft-ietf-moq-transport-17 Section 9
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;

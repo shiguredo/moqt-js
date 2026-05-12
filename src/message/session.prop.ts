@@ -88,7 +88,7 @@ const parametersArb = fc
 /**
  * draft-ietf-moq-transport-17 Section 9.5:
  * GOAWAY に Timeout フィールドが追加された。
- * https://github.com/moq-wg/moq-transport/pull/1497
+ * draft-ietf-moq-transport-17 Section 9.5
  */
 test("Goaway のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -116,7 +116,7 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 /**
  * draft-ietf-moq-transport-17 Section 9.6:
  * REQUEST_OK から Request ID が削除された。
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -142,7 +142,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 /**
  * draft-ietf-moq-transport-17 Section 9.7:
  * REQUEST_ERROR から Request ID が削除された。
- * https://github.com/moq-wg/moq-transport/pull/1499
+ * draft-ietf-moq-transport-17 Section 9.2
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない

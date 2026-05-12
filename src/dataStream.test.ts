@@ -399,7 +399,7 @@ test("createObject: 空ペイロードで作成", () => {
 /**
  * draft-ietf-moq-transport-17:
  * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
- * https://github.com/moq-wg/moq-transport/pull/1342
+ * draft-ietf-moq-transport-17 Section 10.2.1.1
  */
 test("ObjectStatus: すべてのステータス値が定義されている", () => {
   assert.equal(ObjectStatus.NORMAL, 0x0);
@@ -1016,7 +1016,7 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
  * 同一 Subgroup の Priority 一貫性検証テスト
  * draft-ietf-moq-transport-17:
  * 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
- * https://github.com/moq-wg/moq-transport/pull/1317
+ * draft-ietf-moq-transport-17 Section 10.4.4
  */
 test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", () => {
   // 最初のオブジェクト

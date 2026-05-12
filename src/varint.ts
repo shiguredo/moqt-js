@@ -20,7 +20,7 @@ import { IncompleteDataError, ProtocolViolationError } from "./error";
  *
  * 注意: 11111100 は無効なコードポイント。
  *
- * https://github.com/moq-wg/moq-transport/pull/1016
+ * draft-ietf-moq-transport-17 Section 3.2
  */
 
 // 各長さの最大値

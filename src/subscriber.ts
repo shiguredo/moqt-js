@@ -19,7 +19,7 @@ export type SubscriberState = "active" | "closed";
  *
  * draft-ietf-moq-transport-17:
  * Start Location は任意の値に減少可能（以前は増加のみ許可されていた）。
- * https://github.com/moq-wg/moq-transport/pull/1323
+ * draft-ietf-moq-transport-17 Section 9.10
  */
 export interface RequestUpdateOptions {
   /**
@@ -82,7 +82,7 @@ export class SubscriberImpl implements Subscriber {
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
 
-  // Internal callbacks for session to use
+  // セッションが利用する内部コールバック
   onUnsubscribe?: () => Promise<void>;
   onUpdate?: (options: RequestUpdateOptions) => Promise<void>;
 
@@ -183,7 +183,7 @@ export class SubscriberImpl implements Subscriber {
    * draft-ietf-moq-transport-17:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
-   * https://github.com/moq-wg/moq-transport/pull/1350
+   * draft-ietf-moq-transport-17 Section 10
    */
   handleDatagram(object: MoqtObject): void {
     if (this.subscriberState === "closed") {

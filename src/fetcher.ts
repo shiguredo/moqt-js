@@ -6,7 +6,7 @@
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
  * "unknown range" として返すことができる。
- * https://github.com/moq-wg/moq-transport/pull/1331
+ * draft-ietf-moq-transport-17 Section 9.14
  *
  * TODO: Unknown Range Metadata Type の実装
  */
