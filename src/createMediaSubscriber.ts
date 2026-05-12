@@ -5,6 +5,7 @@
  */
 
 import { connect } from "./index";
+import { supportsDynamicGroups } from "./properties";
 import type { ConnectCallbacks, ConnectOptions, Session, JoiningFetchOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
@@ -223,22 +224,33 @@ class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // SUBSCRIBE_UPDATE で NEW_GROUP_REQUEST を送信
-    if (this.videoSubscriber && this.videoSubscriber.state === "active") {
-      await this.videoSubscriber.update({
-        parameters: [
-          {
-            // draft-ietf-moq-transport-17 Section 9.3.11
-            // NEW_GROUP_REQUEST = 0x32
-            type: 0x32,
-            value: new Uint8Array([0x01]),
-          },
-        ],
-      });
-
-      // デコーダーをキーフレーム待ち状態にリセット
-      this.videoDecoder?.resetKeyframeWait();
+    if (!this.videoSubscriber || this.videoSubscriber.state !== "active") {
+      return;
     }
+
+    // draft-ietf-moq-transport-17 §9.3.11:
+    // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
+    //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
+    //  Property with value 1."
+    if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
+      throw new Error(
+        "cannot request keyframe: track did not include DYNAMIC_GROUPS property with value 1",
+      );
+    }
+
+    // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
+    // draft-ietf-moq-transport-17 §9.3.11 (NEW_GROUP_REQUEST = 0x32)
+    await this.videoSubscriber.update({
+      parameters: [
+        {
+          type: 0x32,
+          value: new Uint8Array([0x01]),
+        },
+      ],
+    });
+
+    // デコーダーをキーフレーム待ち状態にリセット
+    this.videoDecoder?.resetKeyframeWait();
   }
 
   /**

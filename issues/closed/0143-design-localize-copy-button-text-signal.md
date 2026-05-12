@@ -1,6 +1,7 @@
 # `App.tsx` の `copyButtonText` を `useSignal` でローカル signal に変更する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -42,3 +43,11 @@ Model: Opus 4.7
 - `copyButtonText` が `App` コンポーネント内の `useSignal` で定義されている
 - `copyUrlToClipboard` が `App` コンポーネント内に移動されている
 - `vp run build` が成功する
+
+## 解決方法
+
+- `App.tsx` の import を `signal` 削除 + `useSignal` 追加に置き換えた (0136 で `effect` は既に削除済みのため、`@preact/signals` から取り込むのは `useSignal` のみとなる)
+- モジュールスコープの `const copyButtonText = signal(...)` を `App` コンポーネント内の `useSignal("Copy URL")` に移した
+- `copyUrlToClipboard` を `App` コンポーネント内の関数に移し、`copyButtonText` のクロージャに依存させた
+- `handleAddSubscriber` / `handleRemoveSubscriber` はモジュールスコープに残した
+- `vp run build:devtools` が通ることを確認した

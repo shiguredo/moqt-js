@@ -1,5 +1,10 @@
 import { signal } from "@preact/signals";
-import { type AuthorizationToken, AuthorizationTokenAliasType, toHttpVersionLabel } from "moqt-js";
+import {
+  type AuthorizationToken,
+  AuthorizationTokenAliasType,
+  type CertificateHash,
+  toHttpVersionLabel,
+} from "moqt-js";
 import type { CameraDevice, CodecType, VideoSourceType } from "../types";
 import { isDebugPanelOpen } from "./debug";
 
@@ -146,6 +151,33 @@ export async function fetchCameraDevices(): Promise<void> {
     console.error("Failed to fetch camera devices:", error);
     cameraDevices.value = [];
   }
+}
+
+/**
+ * `connect()` に渡すオプション群を現在の設定から構築する。
+ * certificateHash と authorizationToken は未設定なら省略する。
+ */
+export function buildConnectOptions(): {
+  serverCertificateHashes?: CertificateHash[];
+  authorizationToken?: AuthorizationToken;
+} {
+  const connectOptions: {
+    serverCertificateHashes?: CertificateHash[];
+    authorizationToken?: AuthorizationToken;
+  } = {};
+  if (certificateHash.value) {
+    connectOptions.serverCertificateHashes = [
+      {
+        algorithm: "sha-256",
+        value: base64ToArrayBuffer(certificateHash.value),
+      },
+    ];
+  }
+  const authToken = buildAuthorizationToken();
+  if (authToken) {
+    connectOptions.authorizationToken = authToken;
+  }
+  return connectOptions;
 }
 
 /**

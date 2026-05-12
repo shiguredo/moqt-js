@@ -1,6 +1,7 @@
 # `App.tsx` モジュールトップレベルの `effect()` を初期化処理に置き換える
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -28,6 +29,7 @@ effect(() => {
 1. `App.tsx` の 13-18 行目の `effect(...)` ブロックを削除する。
 2. `App.tsx` の 1 行目 `import { signal, effect } from "@preact/signals"` から `effect` を削除し `import { signal } from "@preact/signals"` に変更する (`signal` は `copyButtonText` で使用しているため残す)。
 3. `devtools/src/main.tsx` の `initTestApi()` の後、`render()` の前に以下を追加する:
+
    ```typescript
    import * as sub from "./signals/subscriber";
 
@@ -36,6 +38,7 @@ effect(() => {
      sub.addSubscriber();
    }
    ```
+
 4. `App.tsx` の `import * as sub from "./signals/subscriber"` は残す (他の箇所で使用しているため)。
 
 ## 影響範囲
@@ -58,3 +61,9 @@ effect(() => {
 - `App.tsx` の import から `effect` が削除されている
 - `main.tsx` に初期化コードが追加されている
 - `vp run build` が成功する
+
+## 解決方法
+
+- `devtools/src/App.tsx` から `effect(...)` ブロックを削除し、`@preact/signals` の import を `signal` のみに絞った
+- `devtools/src/main.tsx` で `initTestApi()` の後 `render()` の前に `sub.subscriberIds.value.length === 0` ガード付きで `sub.addSubscriber()` を実行する初期化コードを追加した
+- `vp run build:devtools` が通ることを確認した

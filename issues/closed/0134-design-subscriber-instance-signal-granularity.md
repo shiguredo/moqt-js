@@ -1,6 +1,7 @@
 # `subscriberInstances` の Map 全置換更新を粒度の細かい signal に変更する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -106,3 +107,13 @@ interface SubscriberInstanceSignals {
 - `testApi.ts` の `getSubscribers` / `getSubscriber` が `.value` 経由で値を取得している
 - `subscriberIds` / `hasActiveSubscriber` computed が引き続き動作する
 - テストが全てパスする
+
+## 解決方法
+
+- `SubscriberInstance` を全フィールド `Signal` 化したオブジェクトに変更した
+  - 仕様で「signal 不要 (参照管理)」とされていた `session` / `subscriber` / `catalogSubscriber` / `catalog` / `decoder` も `Signal` 化した
+    - `hasActiveSubscriber` computed が `instance.subscriber` を参照しており、Signal 化しないと参照変化を追跡できないため
+    - `publisher.ts` 側も全フィールド signal で運用しており、設計の一貫性を取るため
+- `updateSubscriber` を削除し、各フィールドの `.value` 直接代入に置き換えた
+- `useSubscriber` / `SubscriberPanel` / `DebugPanel` (`generateSubscriberStatsText`) / `testApi` の参照箇所を `.value` 経由に書き換えた
+- `vp run build` / `vp run build:devtools` / `vp test` (456 passed) が通ることを確認した

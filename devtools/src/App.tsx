@@ -1,56 +1,22 @@
-import { signal, effect } from "@preact/signals";
 import { version } from "moqt-js";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
-import { DebugPanel, logs } from "./components/DebugPanel";
+import { DebugPanel, logCount } from "./components/DebugPanel";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildQueryString } from "./signals/connectionSettings";
+import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
 import * as sub from "./signals/subscriber";
-
-const copyButtonText = signal("Copy URL");
-
-// 初期化: 最初の Subscriber を作成
-effect(() => {
-  if (sub.subscriberIds.value.length === 0) {
-    sub.addSubscriber();
-  }
-});
-
-function copyUrlToClipboard(): void {
-  const queryString = buildQueryString();
-  const fullUrl = `${window.location.origin}${window.location.pathname}?${queryString}`;
-
-  // ブラウザの URL を更新
-  window.history.replaceState(null, "", `?${queryString}`);
-
-  navigator.clipboard.writeText(fullUrl).then(
-    () => {
-      copyButtonText.value = "Copied!";
-      setTimeout(() => {
-        copyButtonText.value = "Copy URL";
-      }, 2000);
-    },
-    () => {
-      copyButtonText.value = "Failed";
-      setTimeout(() => {
-        copyButtonText.value = "Copy URL";
-      }, 2000);
-    },
-  );
-}
 
 function handleAddSubscriber(): void {
   sub.addSubscriber();
 }
 
-function handleRemoveSubscriber(id: string): void {
-  sub.removeSubscriber(id);
-}
-
 export function App() {
   const subscriberIdList = sub.subscriberIds.value;
   const debugPanelOpen = isDebugPanelOpen.value;
+  const { buttonText: copyButtonText, copy: copyUrlToClipboard } =
+    useCopyUrlButton(buildQueryString);
 
   return (
     <div class="flex min-h-screen">
@@ -76,16 +42,14 @@ export function App() {
                 d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
               />
             </svg>
-            <span>{copyButtonText}</span>
+            <span>{copyButtonText.value}</span>
           </button>
 
           {/* Debug ボタン */}
           <button
             onClick={toggleDebugPanel}
             class={`p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 ${
-              isDebugPanelOpen.value
-                ? "bg-slate-600 hover:bg-slate-700"
-                : "bg-blue-500 hover:bg-blue-600"
+              debugPanelOpen ? "bg-slate-600 hover:bg-slate-700" : "bg-blue-500 hover:bg-blue-600"
             } text-white font-medium`}
             title="Debug Logs"
           >
@@ -99,9 +63,9 @@ export function App() {
             </svg>
             <span>Debug</span>
             {/* ログ件数バッジ */}
-            {logs.value.length > 0 && !isDebugPanelOpen.value && (
+            {logCount.value > 0 && !debugPanelOpen && (
               <span class="bg-red-500 text-white text-xs font-bold rounded-full min-w-[24px] h-6 flex items-center justify-center px-1.5">
-                {logs.value.length > 99 ? "99+" : logs.value.length}
+                {logCount.value > 99 ? "99+" : logCount.value}
               </span>
             )}
           </button>
@@ -142,7 +106,7 @@ export function App() {
                 key={id}
                 subscriberId={id}
                 canRemove={subscriberIdList.length > 1}
-                onRemove={() => handleRemoveSubscriber(id)}
+                onRemove={() => sub.removeSubscriber(id)}
               />
             ))}
           </div>

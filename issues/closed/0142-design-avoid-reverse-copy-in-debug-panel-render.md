@@ -1,6 +1,7 @@
 # `DebugPanel` の `[...logs.value].reverse()` による全コピーを排除する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -17,21 +18,19 @@ Model: Opus 4.7
 逆方向ループ案を採用する:
 
 ```tsx
-{(() => {
-  const elements = [];
-  for (let i = logs.value.length - 1; i >= 0; i--) {
-    const log = logs.value[i];
-    const nextLog = i < logs.value.length - 1 ? logs.value[i + 1] : null;
-    const previousTimestamp = nextLog ? nextLog.timestamp : null;
-    const isExpanded = expandedRows.has(i);
-    elements.push(
-      <div key={i} /* ... */ >
-        {/* i をそのまま originalIndex として使用 */}
-      </div>
-    );
-  }
-  return elements;
-})()}
+{
+  (() => {
+    const elements = [];
+    for (let i = logs.value.length - 1; i >= 0; i--) {
+      const log = logs.value[i];
+      const nextLog = i < logs.value.length - 1 ? logs.value[i + 1] : null;
+      const previousTimestamp = nextLog ? nextLog.timestamp : null;
+      const isExpanded = expandedRows.has(i);
+      elements.push(<div key={i} /* ... */>{/* i をそのまま originalIndex として使用 */}</div>);
+    }
+    return elements;
+  })();
+}
 ```
 
 - 配列のコピー・反転が不要になる。
@@ -65,3 +64,9 @@ Model: Opus 4.7
 - `[...logs.value].reverse()` が除去されている
 - 逆方向ループで同等の表示が得られている
 - `vp run build` が成功する
+
+## 解決方法
+
+- `DebugPanel.tsx` のログ描画を `[...logs.value].reverse().map(...)` から逆方向 `for` ループ + `elements.push(...)` に置き換えた
+- `originalIndex` は `i` をそのまま使うようにし、`expandedRows` / `viewModes` / `key` のインデックスは従来と同じ意味を保った
+- `vp run build:devtools` が通ることを確認した

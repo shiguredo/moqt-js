@@ -1,5 +1,13 @@
-import { signal, effect } from "@preact/signals";
+import { signal, useSignalEffect, batch } from "@preact/signals";
 import { useEffect, useRef, useState, useCallback } from "preact/hooks";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
+import {
+  formatAbsoluteTime,
+  formatDeltaTime,
+  formatElapsedTime,
+  formatHexDump,
+  formatMessageData,
+} from "../utils/logFormatters";
 import { isDebugPanelOpen, closeDebugPanel } from "../signals/debug";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
@@ -14,157 +22,27 @@ interface LogEntry {
   payload?: Uint8Array;
 }
 
-// グローバルログストア
-export const logs = signal<LogEntry[]>([]);
-export const maxLogs = signal(1000);
+// 配列本体は破壊的に操作するため signal にしない。テスト用に getter を export する。
+const logBuffer: LogEntry[] = [];
+const MAX_LOGS = 1000;
+// 追加イベントの累積カウンタ。MAX_LOGS 到達後も増え続け、autoScroll effect /
+// 描画再評価のトリガになる。
+export const logSequence = signal(0);
+// 現在の件数表示用 signal。logSequence と一緒に更新する。
+export const logCount = signal(0);
 export const autoScroll = signal(true);
 
-// RFC 形式のフィールド名マッピング
-const RFC_FIELD_NAMES: Record<string, string> = {
-  requestId: "Request ID",
-  trackAlias: "Track Alias",
-  trackNamespace: "Track Namespace",
-  trackName: "Track Name",
-  filterType: "Filter Type",
-  errorCode: "Error Code",
-  reason: "Reason",
-  statusCode: "Status Code",
-  streamCount: "Stream Count",
-  maxRequestId: "Max Request ID",
-  fetchType: "Fetch Type",
-  joiningRequestId: "Joining Request ID",
-  joiningStart: "Joining Start",
-  startLocation: "Start Location",
-  endLocation: "End Location",
-  trackNamespacePrefix: "Track Namespace Prefix",
-  subscriptionRequestId: "Subscription Request ID",
-};
-
-// パラメーターかどうかを判定
-function isParameter(key: string): boolean {
-  return key === key.toUpperCase() && key.includes("_");
+// テスト用に logBuffer のスナップショットを返す。
+// readonly は型レベルの不変性宣言で、呼び出し側に書き換えを意図させない。
+export function getLogBuffer(): readonly LogEntry[] {
+  return logBuffer;
 }
 
-// RFC 仕様書風のフォーマット
-function formatMessageData(data: unknown, indent = 0): string {
-  if (data === null || data === undefined) {
-    return "";
-  }
-
-  const spaces = "  ".repeat(indent);
-
-  if (typeof data === "string") {
-    return data;
-  }
-
-  if (typeof data === "number" || typeof data === "boolean" || typeof data === "bigint") {
-    return String(data);
-  }
-
-  if (typeof data === "symbol" || typeof data === "function") {
-    return String(data);
-  }
-
-  if (Array.isArray(data)) {
-    if (data.length === 0) {
-      return "[]";
-    }
-    // 配列の中にオブジェクトがある場合は JSON.stringify で表示
-    const hasObjects = data.some((item) => typeof item === "object" && item !== null);
-    if (hasObjects) {
-      return JSON.stringify(data, null, 2);
-    }
-    return `[${data.join(", ")}]`;
-  }
-
-  const entries = Object.entries(data as Record<string, unknown>);
-  if (entries.length === 0) {
-    return "";
-  }
-
-  // フィールドとパラメーターを分離
-  const fields: [string, unknown][] = [];
-  const parameters: [string, unknown][] = [];
-
-  for (const [key, value] of entries) {
-    if (value === undefined) {
-      continue;
-    }
-    if (isParameter(key)) {
-      parameters.push([key, value]);
-    } else {
-      fields.push([key, value]);
-    }
-  }
-
-  const lines: string[] = [];
-
-  // フィールドを表示
-  for (const [key, value] of fields) {
-    const displayName = RFC_FIELD_NAMES[key] ?? key;
-    // catalog フィールドは JSON として表示
-    if (key === "catalog" && typeof value === "object" && value !== null) {
-      const jsonStr = JSON.stringify(value, null, 2);
-      const indentedJson = jsonStr
-        .split("\n")
-        .map((line, i) => (i === 0 ? line : `${spaces}  ${line}`))
-        .join("\n");
-      lines.push(`${spaces}  ${displayName}: ${indentedJson}`);
-    } else {
-      const formattedValue = formatMessageData(value, indent + 1);
-      lines.push(`${spaces}  ${displayName}: ${formattedValue}`);
-    }
-  }
-
-  // パラメーターを表示
-  if (parameters.length > 0) {
-    lines.push(`${spaces}  Parameters:`);
-    for (const [key, value] of parameters) {
-      const formattedValue = formatMessageData(value, indent + 2);
-      lines.push(`${spaces}    ${key}: ${formattedValue}`);
-    }
-  }
-
-  return `{\n${lines.join("\n")}\n${spaces}}`;
-}
-
-// バイナリデータを hex dump 形式でフォーマット
-function formatHexDump(data: Uint8Array): string {
-  const lines: string[] = [];
-  const bytesPerLine = 16;
-
-  for (let offset = 0; offset < data.length; offset += bytesPerLine) {
-    const chunk = data.slice(offset, offset + bytesPerLine);
-
-    // オフセット (4桁の16進数)
-    const offsetStr = offset.toString(16).padStart(4, "0");
-
-    // 16進数部分
-    const hexParts: string[] = [];
-    for (let i = 0; i < bytesPerLine; i++) {
-      if (i < chunk.length) {
-        hexParts.push(chunk[i].toString(16).padStart(2, "0"));
-      } else {
-        hexParts.push("  ");
-      }
-    }
-    const hexStr = hexParts.slice(0, 8).join(" ") + "  " + hexParts.slice(8).join(" ");
-
-    // ASCII 部分
-    let asciiStr = "";
-    for (let i = 0; i < chunk.length; i++) {
-      const byte = chunk[i];
-      if (byte >= 0x20 && byte <= 0x7e) {
-        asciiStr += String.fromCharCode(byte);
-      } else {
-        asciiStr += ".";
-      }
-    }
-
-    lines.push(`${offsetStr}  ${hexStr}  |${asciiStr}|`);
-  }
-
-  return lines.join("\n");
+// テスト用に logBuffer / logCount / logSequence を初期状態へ戻す。
+export function __resetLogStateForTest(): void {
+  logBuffer.length = 0;
+  logCount.value = 0;
+  logSequence.value = 0;
 }
 
 export function addLog(
@@ -181,17 +59,17 @@ export function addLog(
     payload,
   };
 
-  logs.value = [...logs.value, entry].slice(-maxLogs.value);
-}
-
-// 絶対時刻をフォーマット（HH:MM:SS.mmm）
-function formatAbsoluteTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  const hours = date.getHours().toString().padStart(2, "0");
-  const minutes = date.getMinutes().toString().padStart(2, "0");
-  const seconds = date.getSeconds().toString().padStart(2, "0");
-  const milliseconds = date.getMilliseconds().toString().padStart(3, "0");
-  return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOGS) {
+    // MAX_LOGS 到達後は shift 1 回で先頭を捨てる。
+    // 旧実装の [...array, entry].slice(-MAX_LOGS) のフルコピー × 2 を 1 回に削減。
+    logBuffer.shift();
+  }
+  // 2 つの signal を同時更新するため batch で effect の二重発火を防ぐ。
+  batch(() => {
+    logCount.value = logBuffer.length;
+    logSequence.value = logSequence.value + 1;
+  });
 }
 
 // 接続設定をテキストとして生成
@@ -287,35 +165,38 @@ function generateSubscriberStatsText(subscriberId: string): string {
   }
   const lines = [
     `=== Subscriber Statistics (${subscriberId}) ===`,
-    `Status: ${instance.status}`,
-    `Codec: ${instance.codec}`,
-    `Decoder State: ${instance.decoderState}`,
-    `Decoder Configured: ${instance.decoderConfigured}`,
-    `Objects Received: ${instance.objectsReceived}`,
-    `Objects With Extensions: ${instance.objectsWithExtensions}`,
-    `Bytes Received: ${formatBytes(instance.bytesReceived)}`,
-    `Current Group: ${instance.currentGroup}`,
-    `Chunks Created: ${instance.chunksCreated}`,
-    `Chunks Decoded: ${instance.chunksDecoded}`,
-    `Chunks Skipped: ${instance.chunksSkipped}`,
-    `Frames Decoded: ${instance.framesDecoded}`,
-    `Keyframes Decoded: ${instance.keyFramesDecoded}`,
-    `Decode Errors: ${instance.decodeErrors}`,
+    `Status: ${instance.status.value}`,
+    `Codec: ${instance.codec.value}`,
+    `Decoder State: ${instance.decoderState.value}`,
+    `Decoder Configured: ${instance.decoderConfigured.value}`,
+    `Objects Received: ${instance.objectsReceived.value}`,
+    `Objects With Extensions: ${instance.objectsWithExtensions.value}`,
+    `Bytes Received: ${formatBytes(instance.bytesReceived.value)}`,
+    `Current Group: ${instance.currentGroup.value}`,
+    `Chunks Created: ${instance.chunksCreated.value}`,
+    `Chunks Decoded: ${instance.chunksDecoded.value}`,
+    `Chunks Skipped: ${instance.chunksSkipped.value}`,
+    `Frames Decoded: ${instance.framesDecoded.value}`,
+    `Keyframes Decoded: ${instance.keyFramesDecoded.value}`,
+    `Decode Errors: ${instance.decodeErrors.value}`,
   ];
   // Joining Fetch 情報
-  if (instance.largestLocation) {
-    lines.push(`Largest Group: ${instance.largestLocation.group}`);
-    lines.push(`Largest Object: ${instance.largestLocation.object}`);
+  const largestLocation = instance.largestLocation.value;
+  if (largestLocation) {
+    lines.push(`Largest Group: ${largestLocation.group}`);
+    lines.push(`Largest Object: ${largestLocation.object}`);
   }
-  if (instance.joiningFetchStats) {
-    lines.push(`Joining Fetch Objects: ${instance.joiningFetchStats.objectsReceived}`);
-    lines.push(`Joining Fetch Bytes: ${formatBytes(instance.joiningFetchStats.bytesReceived)}`);
-    lines.push(`Joining Fetch Completed: ${instance.joiningFetchStats.completed}`);
-    lines.push(`Joining Fetch Buffered Live: ${instance.joiningFetchStats.bufferedLiveObjects}`);
+  const joiningFetchStats = instance.joiningFetchStats.value;
+  if (joiningFetchStats) {
+    lines.push(`Joining Fetch Objects: ${joiningFetchStats.objectsReceived}`);
+    lines.push(`Joining Fetch Bytes: ${formatBytes(joiningFetchStats.bytesReceived)}`);
+    lines.push(`Joining Fetch Completed: ${joiningFetchStats.completed}`);
+    lines.push(`Joining Fetch Buffered Live: ${joiningFetchStats.bufferedLiveObjects}`);
   }
   // セッション統計情報
-  if (instance.session) {
-    const stats = instance.session.getStatistics();
+  const session = instance.session.value;
+  if (session) {
+    const stats = session.getStatistics();
     lines.push(`--- Session Statistics ---`);
     lines.push(`Subgroup Headers Received: ${stats.subgroupHeadersReceived}`);
     lines.push(`Fetch Headers Received: ${stats.fetchHeadersReceived}`);
@@ -334,17 +215,16 @@ function generateSubscriberStatsText(subscriberId: string): string {
     lines.push(`Unidirectional Streams Received: ${stats.unidirectionalStreamsReceived}`);
   }
   // Catalog 情報
-  if (instance.catalog) {
-    lines.push(`Catalog: ${JSON.stringify(instance.catalog, null, 2)}`);
+  const catalog = instance.catalog.value;
+  if (catalog) {
+    lines.push(`Catalog: ${JSON.stringify(catalog, null, 2)}`);
   }
   return lines.join("\n");
 }
 
 // ログをフィルタリングしてテキストとして生成
 function generateLogsText(filter?: string): string {
-  const filteredLogs = filter
-    ? logs.value.filter((log) => log.message.includes(filter))
-    : logs.value;
+  const filteredLogs = filter ? logBuffer.filter((log) => log.message.includes(filter)) : logBuffer;
 
   return filteredLogs
     .map((log) => {
@@ -409,11 +289,16 @@ function generateFullLogText(filter?: string, subscriberId?: string): string {
 type ViewMode = "data" | "binary";
 
 export function DebugPanel() {
+  // ログ追加イベント (MAX_LOGS 到達後も含む) で再レンダリングをトリガするため、
+  // logSequence を購読する。値自体は使わない。
+  void logSequence.value;
+
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [viewModes, setViewModes] = useState<Map<number, ViewMode>>(new Map());
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [copiedButton, setCopiedButton] = useState<string | null>(null);
+  // 行コピーとボタンコピーは同時に「Copied!」表示しうるため hook を分離する。
+  const rowFeedback = useCopyFeedback();
+  const buttonFeedback = useCopyFeedback();
 
   const getViewMode = (index: number): ViewMode => viewModes.get(index) ?? "data";
   const setViewMode = (index: number, mode: ViewMode) => {
@@ -438,63 +323,62 @@ export function DebugPanel() {
     if (isAllExpanded) {
       setExpandedRows(new Set());
     } else {
-      const allIndices = new Set(logs.value.map((_, i) => i).filter((i) => logs.value[i].data));
+      const allIndices = new Set(logBuffer.map((_, i) => i).filter((i) => logBuffer[i].data));
       setExpandedRows(allIndices);
     }
   };
 
-  const copyToClipboard = useCallback(async (log: LogEntry, index: number, event: MouseEvent) => {
-    event.stopPropagation();
-    const timestamp = formatAbsoluteTime(log.timestamp);
-    const parts: string[] = [`${timestamp} ${log.message}`];
+  const copyToClipboard = useCallback(
+    async (log: LogEntry, index: number, event: MouseEvent) => {
+      event.stopPropagation();
+      const timestamp = formatAbsoluteTime(log.timestamp);
+      const parts: string[] = [`${timestamp} ${log.message}`];
 
-    if (log.data) {
-      parts.push(formatMessageData(log.data));
-    }
+      if (log.data) {
+        parts.push(formatMessageData(log.data));
+      }
 
-    if (log.payload && log.payload.length > 0) {
-      parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
-    }
+      if (log.payload && log.payload.length > 0) {
+        parts.push(`Binary (${log.payload.length} bytes):\n${formatHexDump(log.payload)}`);
+      }
 
-    await navigator.clipboard.writeText(parts.join(" "));
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 1500);
-  }, []);
+      await rowFeedback.copy(parts.join(" "), String(index));
+    },
+    [rowFeedback],
+  );
 
   // 一括コピー: 全ログ
   const copyAllLogs = useCallback(async () => {
-    const text = generateFullLogText();
-    await navigator.clipboard.writeText(text);
-    setCopiedButton("all");
-    setTimeout(() => setCopiedButton(null), 1500);
-  }, []);
+    await buttonFeedback.copy(generateFullLogText(), "all");
+  }, [buttonFeedback]);
 
   // 一括コピー: Publisher ログ
   const copyPublisherLogs = useCallback(async () => {
-    const text = generateFullLogText("[publisher]");
-    await navigator.clipboard.writeText(text);
-    setCopiedButton("publisher");
-    setTimeout(() => setCopiedButton(null), 1500);
-  }, []);
+    await buttonFeedback.copy(generateFullLogText("[publisher]"), "publisher");
+  }, [buttonFeedback]);
 
   // 一括コピー: Subscriber ログ
-  const copySubscriberLogs = useCallback(async (subscriberId: string) => {
-    const text = generateFullLogText(`[${subscriberId}]`, subscriberId);
-    await navigator.clipboard.writeText(text);
-    setCopiedButton(subscriberId);
-    setTimeout(() => setCopiedButton(null), 1500);
-  }, []);
+  const copySubscriberLogs = useCallback(
+    async (subscriberId: string) => {
+      await buttonFeedback.copy(
+        generateFullLogText(`[${subscriberId}]`, subscriberId),
+        subscriberId,
+      );
+    },
+    [buttonFeedback],
+  );
 
-  // オートスクロール（新しいログが上なので scrollTop = 0）
-  useEffect(() => {
-    const cleanup = effect(() => {
-      const logsLength = logs.value.length;
-      if (logsLength > 0 && autoScroll.value && logContainerRef.current) {
-        logContainerRef.current.scrollTop = 0;
-      }
-    });
-    return cleanup;
-  }, []);
+  // 新しいログ追加時にトップへオートスクロール。
+  // logSequence の変化でのみ発火し、autoScroll トグル単体では発火しない。
+  useSignalEffect(() => {
+    const sequence = logSequence.value;
+    if (sequence === 0) return;
+    if (!autoScroll.peek()) return;
+    if (logBuffer.length === 0) return;
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = 0;
+    }
+  });
 
   // ESC キーでパネルを閉じる
   useEffect(() => {
@@ -508,7 +392,12 @@ export function DebugPanel() {
   }, []);
 
   const clearLogs = () => {
-    logs.value = [];
+    logBuffer.length = 0;
+    batch(() => {
+      logCount.value = 0;
+      // clear イベントを effect 側へ伝播させるため bump する。
+      logSequence.value = logSequence.value + 1;
+    });
   };
 
   const getLevelColor = (level: LogEntry["level"]) => {
@@ -525,24 +414,7 @@ export function DebugPanel() {
   };
 
   // 最初のログのタイムスタンプ
-  const firstTimestamp = logs.value.length > 0 ? logs.value[0].timestamp : 0;
-
-  // 経過時間をフォーマット（秒.ミリ秒）
-  const formatElapsedTime = (timestamp: number): string => {
-    const elapsed = timestamp - firstTimestamp;
-    const seconds = Math.floor(elapsed / 1000);
-    const milliseconds = elapsed % 1000;
-    return `+${seconds}.${milliseconds.toString().padStart(3, "0")}`;
-  };
-
-  // 差分時間をフォーマット（ミリ秒）
-  const formatDeltaTime = (currentTimestamp: number, previousTimestamp: number | null): string => {
-    if (previousTimestamp === null) {
-      return "";
-    }
-    const delta = currentTimestamp - previousTimestamp;
-    return `(+${delta}ms)`;
-  };
+  const firstTimestamp = logBuffer.length > 0 ? logBuffer[0].timestamp : 0;
 
   if (!isDebugPanelOpen.value) {
     return null;
@@ -582,7 +454,7 @@ export function DebugPanel() {
       {/* コントロール */}
       <div class="flex items-center justify-between p-3 border-b border-slate-100">
         <div class="flex items-center gap-4 text-sm text-slate-600">
-          <span>Logs: {logs.value.length}</span>
+          <span>Logs: {logCount.value}</span>
         </div>
         <div class="flex items-center gap-3">
           <label class="flex items-center gap-2 text-sm text-slate-600">
@@ -615,34 +487,34 @@ export function DebugPanel() {
         <button
           onClick={copyAllLogs}
           class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-            copiedButton === "all"
+            buttonFeedback.feedback.value === "all"
               ? "bg-green-500 text-white"
               : "bg-slate-200 hover:bg-slate-300 text-slate-700"
           }`}
         >
-          {copiedButton === "all" ? "Copied!" : "All"}
+          {buttonFeedback.feedback.value === "all" ? "Copied!" : "All"}
         </button>
         <button
           onClick={copyPublisherLogs}
           class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-            copiedButton === "publisher"
+            buttonFeedback.feedback.value === "publisher"
               ? "bg-green-500 text-white"
               : "bg-slate-200 hover:bg-slate-300 text-slate-700"
           }`}
         >
-          {copiedButton === "publisher" ? "Copied!" : "Publisher"}
+          {buttonFeedback.feedback.value === "publisher" ? "Copied!" : "Publisher"}
         </button>
         {subscriberIds.value.map((id) => (
           <button
             key={id}
             onClick={() => copySubscriberLogs(id)}
             class={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-              copiedButton === id
+              buttonFeedback.feedback.value === id
                 ? "bg-green-500 text-white"
                 : "bg-slate-200 hover:bg-slate-300 text-slate-700"
             }`}
           >
-            {copiedButton === id ? "Copied!" : id}
+            {buttonFeedback.feedback.value === id ? "Copied!" : id}
           </button>
         ))}
       </div>
@@ -652,67 +524,32 @@ export function DebugPanel() {
         ref={logContainerRef}
         class="h-[calc(100vh-190px)] overflow-y-auto p-4 font-mono text-sm"
       >
-        {logs.value.length === 0 ? (
+        {logCount.value === 0 ? (
           <div class="flex items-center justify-center h-full text-slate-400">
             No logs yet. MOQT operations will appear here.
           </div>
         ) : (
           <div class="space-y-1">
-            {[...logs.value].reverse().map((log, reverseIndex) => {
-              const originalIndex = logs.value.length - 1 - reverseIndex;
-              const nextLog =
-                originalIndex < logs.value.length - 1 ? logs.value[originalIndex + 1] : null;
-              const previousTimestamp = nextLog ? nextLog.timestamp : null;
-              const isExpanded = expandedRows.has(originalIndex);
-              return (
-                <div
-                  key={originalIndex}
-                  class={`rounded cursor-pointer transition-colors hover:ring-2 hover:ring-slate-300 ${getLevelColor(log.level)}`}
-                  onClick={() => toggleRow(originalIndex)}
-                >
-                  <div class="flex gap-2 p-2 items-center">
-                    {/* 展開アイコン */}
-                    {log.data && (
-                      <svg
-                        class={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M9 5l7 7-7 7"
-                        />
-                      </svg>
-                    )}
-                    {!log.data && <div class="w-4" />}
-                    {/* タイムスタンプ列 */}
-                    <div class="flex flex-col text-xs whitespace-nowrap min-w-[140px]">
-                      <span class="text-slate-600 font-medium">
-                        {formatAbsoluteTime(log.timestamp)}
-                      </span>
-                      <div class="flex gap-2 text-slate-400">
-                        <span>{formatElapsedTime(log.timestamp)}</span>
-                        {previousTimestamp !== null && (
-                          <span class="text-slate-300">
-                            {formatDeltaTime(log.timestamp, previousTimestamp)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {/* メッセージ */}
-                    <span class="flex-1 break-all">{log.message}</span>
-                    {/* コピーボタン */}
-                    <button
-                      onClick={(event) => copyToClipboard(log, originalIndex, event)}
-                      class="p-1 hover:bg-white/50 rounded transition-colors"
-                      title="Copy to clipboard"
-                    >
-                      {copiedIndex === originalIndex ? (
+            {(() => {
+              const elements = [];
+              const logsArray = logBuffer;
+              for (let i = logsArray.length - 1; i >= 0; i--) {
+                const log = logsArray[i];
+                const originalIndex = i;
+                const nextLog = i < logsArray.length - 1 ? logsArray[i + 1] : null;
+                const previousTimestamp = nextLog ? nextLog.timestamp : null;
+                const isExpanded = expandedRows.has(originalIndex);
+                elements.push(
+                  <div
+                    key={originalIndex}
+                    class={`rounded cursor-pointer transition-colors hover:ring-2 hover:ring-slate-300 ${getLevelColor(log.level)}`}
+                    onClick={() => toggleRow(originalIndex)}
+                  >
+                    <div class="flex gap-2 p-2 items-center">
+                      {/* 展開アイコン */}
+                      {log.data && (
                         <svg
-                          class="w-4 h-4 text-green-600"
+                          class={`w-4 h-4 text-slate-400 transition-transform ${isExpanded ? "rotate-90" : ""}`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
@@ -721,71 +558,111 @@ export function DebugPanel() {
                             stroke-linecap="round"
                             stroke-linejoin="round"
                             stroke-width="2"
-                            d="M5 13l4 4L19 7"
-                          />
-                        </svg>
-                      ) : (
-                        <svg
-                          class="w-4 h-4 text-slate-400 hover:text-slate-600"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                            d="M9 5l7 7-7 7"
                           />
                         </svg>
                       )}
-                    </button>
-                  </div>
-                  {/* データ（展開時のみ表示） */}
-                  {(log.data ?? log.payload) && isExpanded && (
-                    <div class="mx-2 mb-2">
-                      {/* タブ */}
-                      {log.payload && (
-                        <div class="flex gap-1 mb-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setViewMode(originalIndex, "data");
-                            }}
-                            class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                              getViewMode(originalIndex) === "data"
-                                ? "bg-white/70 text-slate-700 font-medium"
-                                : "bg-white/30 text-slate-500 hover:bg-white/50"
-                            }`}
-                          >
-                            Data
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setViewMode(originalIndex, "binary");
-                            }}
-                            class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
-                              getViewMode(originalIndex) === "binary"
-                                ? "bg-white/70 text-slate-700 font-medium"
-                                : "bg-white/30 text-slate-500 hover:bg-white/50"
-                            }`}
-                          >
-                            Binary ({log.payload.length} bytes)
-                          </button>
+                      {!log.data && <div class="w-4" />}
+                      {/* タイムスタンプ列 */}
+                      <div class="flex flex-col text-xs whitespace-nowrap min-w-[140px]">
+                        <span class="text-slate-600 font-medium">
+                          {formatAbsoluteTime(log.timestamp)}
+                        </span>
+                        <div class="flex gap-2 text-slate-400">
+                          <span>{formatElapsedTime(log.timestamp, firstTimestamp)}</span>
+                          {previousTimestamp !== null && (
+                            <span class="text-slate-300">
+                              {formatDeltaTime(log.timestamp, previousTimestamp)}
+                            </span>
+                          )}
                         </div>
-                      )}
-                      {/* コンテンツ */}
-                      <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
-                        {getViewMode(originalIndex) === "binary" && log.payload
-                          ? formatHexDump(log.payload)
-                          : formatMessageData(log.data)}
-                      </pre>
+                      </div>
+                      {/* メッセージ */}
+                      <span class="flex-1 break-all">{log.message}</span>
+                      {/* コピーボタン */}
+                      <button
+                        onClick={(event) => copyToClipboard(log, originalIndex, event)}
+                        class="p-1 hover:bg-white/50 rounded transition-colors"
+                        title="Copy to clipboard"
+                      >
+                        {rowFeedback.feedback.value === String(originalIndex) ? (
+                          <svg
+                            class="w-4 h-4 text-green-600"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            class="w-4 h-4 text-slate-400 hover:text-slate-600"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              stroke-width="2"
+                              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                            />
+                          </svg>
+                        )}
+                      </button>
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                    {/* データ（展開時のみ表示） */}
+                    {(log.data ?? log.payload) && isExpanded && (
+                      <div class="mx-2 mb-2">
+                        {/* タブ */}
+                        {log.payload && (
+                          <div class="flex gap-1 mb-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewMode(originalIndex, "data");
+                              }}
+                              class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
+                                getViewMode(originalIndex) === "data"
+                                  ? "bg-white/70 text-slate-700 font-medium"
+                                  : "bg-white/30 text-slate-500 hover:bg-white/50"
+                              }`}
+                            >
+                              Data
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewMode(originalIndex, "binary");
+                              }}
+                              class={`px-2 py-0.5 text-xs rounded-t transition-colors ${
+                                getViewMode(originalIndex) === "binary"
+                                  ? "bg-white/70 text-slate-700 font-medium"
+                                  : "bg-white/30 text-slate-500 hover:bg-white/50"
+                              }`}
+                            >
+                              Binary ({log.payload.length} bytes)
+                            </button>
+                          </div>
+                        )}
+                        {/* コンテンツ */}
+                        <pre class="text-xs p-3 bg-white/70 rounded overflow-auto max-h-96">
+                          {getViewMode(originalIndex) === "binary" && log.payload
+                            ? formatHexDump(log.payload)
+                            : formatMessageData(log.data)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>,
+                );
+              }
+              return elements;
+            })()}
           </div>
         )}
       </div>

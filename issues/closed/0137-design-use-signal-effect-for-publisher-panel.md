@@ -1,6 +1,7 @@
 # `PublisherPanel` の `useEffect` deps を `useSignalEffect` に変更する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -56,3 +57,9 @@ useEffect(() => {
 - `useEffect` の import が削除されている
 - `vp run build` が成功する
 - Publisher の video プレビューが正常に動作する
+
+## 解決方法
+
+- `PublisherPanel.tsx` の import を `useEffect` 削除 + `useSignalEffect` 追加に置き換えた
+- `useEffect(..., [pub.mediaStream.value])` を `useSignalEffect(...)` に変更し、deps 配列を削除した
+- `vp run build:devtools` が通ることを確認した

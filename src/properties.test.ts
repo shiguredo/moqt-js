@@ -11,6 +11,7 @@ import {
   decodeImmutableProperties,
   decodeProperties,
   parseProperties,
+  supportsDynamicGroups,
   validateTrackPropertyValue,
   MOQTPropertyId,
   TrackPropertyId,
@@ -411,4 +412,51 @@ test("parseProperties: Object 内に PRIOR_OBJECT_ID_GAP が 2 回現れると M
   // [0x3e, 0x01, 0x00, 0x02] = (deltaId=0x3e, value=1), (deltaId=0x00, value=2)
   const encoded = new Uint8Array([0x3e, 0x01, 0x00, 0x02]);
   assert.throws(() => parseProperties(encoded), MalformedTrackError);
+});
+
+// draft-ietf-moq-transport-17 §9.3.11 / §11.5
+test("supportsDynamicGroups: DYNAMIC_GROUPS=1 が mutable 側にあれば true", () => {
+  const properties: Property[] = [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }];
+  assert.equal(supportsDynamicGroups(properties), true);
+});
+
+test("supportsDynamicGroups: DYNAMIC_GROUPS=0 が mutable 側にあれば false", () => {
+  const properties: Property[] = [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 0n }];
+  assert.equal(supportsDynamicGroups(properties), false);
+});
+
+test("supportsDynamicGroups: DYNAMIC_GROUPS が存在しなければ false", () => {
+  const properties: Property[] = [{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 128n }];
+  assert.equal(supportsDynamicGroups(properties), false);
+});
+
+test("supportsDynamicGroups: Immutable Properties 内 DYNAMIC_GROUPS=1 で true", () => {
+  // Immutable Properties に DYNAMIC_GROUPS=1 を 1 件入れてエンコードする。
+  // encodeImmutableProperties は ID + length + body を返すため、ID 部を除いた
+  // body 部のみが Property.data として decode 側に渡される想定。
+  // supportsDynamicGroups は decodeImmutableProperties に Property.data をそのまま渡す。
+  const encoded = encodeImmutableProperties({
+    extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
+  });
+  const properties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded }];
+  assert.equal(supportsDynamicGroups(properties), true);
+});
+
+test("supportsDynamicGroups: Immutable Properties 内 DYNAMIC_GROUPS=0 で false", () => {
+  const encoded = encodeImmutableProperties({
+    extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 0n }],
+  });
+  const properties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded }];
+  assert.equal(supportsDynamicGroups(properties), false);
+});
+
+test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
+  const encoded = encodeImmutableProperties({
+    extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
+  });
+  const properties: Property[] = [
+    { id: TrackPropertyId.DYNAMIC_GROUPS, value: 0n },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded },
+  ];
+  assert.equal(supportsDynamicGroups(properties), true);
 });
