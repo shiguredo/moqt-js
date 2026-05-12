@@ -1,4 +1,3 @@
-import { signal } from "@preact/signals";
 import {
   ConnectionPanel,
   StaticApiSupportPanel,
@@ -8,33 +7,12 @@ import {
   DatagramPanel,
 } from "./components";
 import { buildQueryString } from "./signals";
-
-const copyButtonText = signal("Copy URL");
-
-function copyUrlToClipboard(): void {
-  const queryString = buildQueryString();
-  const fullUrl = `${window.location.origin}${window.location.pathname}?${queryString}`;
-
-  // ブラウザの URL を更新
-  window.history.replaceState(null, "", `?${queryString}`);
-
-  navigator.clipboard.writeText(fullUrl).then(
-    () => {
-      copyButtonText.value = "Copied!";
-      setTimeout(() => {
-        copyButtonText.value = "Copy URL";
-      }, 2000);
-    },
-    () => {
-      copyButtonText.value = "Failed";
-      setTimeout(() => {
-        copyButtonText.value = "Copy URL";
-      }, 2000);
-    },
-  );
-}
+import { useCopyUrlButton } from "../hooks/useCopyUrlButton";
 
 export function App() {
+  const { buttonText: copyButtonText, copy: copyUrlToClipboard } =
+    useCopyUrlButton(buildQueryString);
+
   return (
     <div class="min-h-screen bg-slate-100">
       {/* 右上固定の Copy URL ボタン */}
@@ -52,7 +30,7 @@ export function App() {
               d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
             />
           </svg>
-          <span>{copyButtonText}</span>
+          <span>{copyButtonText.value}</span>
         </button>
       </div>
 

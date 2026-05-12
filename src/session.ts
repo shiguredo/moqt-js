@@ -99,7 +99,14 @@ export interface DebugMessage {
   type: number;
   /** Message type name (e.g., "SETUP", "SUBSCRIBE") */
   typeName: string;
-  /** Raw payload bytes */
+  /**
+   * Raw payload bytes.
+   *
+   * The Uint8Array is independent of moqt-js internal buffers and the receiver
+   * MAY retain it beyond the callback. The receiver MUST NOT mutate it because
+   * the same instance may be referenced by moqt-js internals after the callback
+   * returns (e.g. for retransmission or further encoding).
+   */
   payload: Uint8Array;
   /** Decoded message content (when available) */
   decoded?: Record<string, unknown>;

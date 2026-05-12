@@ -1,6 +1,7 @@
 # `liveObjectProcessingChain` を `useRef` で安定参照にする
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -46,3 +47,11 @@ Model: Opus 4.7
 - 626 行目が `chainRef.current` 経由に変更されている
 - `cleanupSubscriber` に `chainRef.current = Promise.resolve()` が追加されている
 - テストが全てパスする
+
+## 解決方法
+
+- `useSubscriber.ts` に `import { useRef } from "preact/hooks"` を追加した
+- 関数スコープの `let liveObjectProcessingChain = Promise.resolve()` を `const chainRef = useRef<Promise<void>>(Promise.resolve())` に置き換えた
+- ライブオブジェクト到着時の代入を `chainRef.current = chainRef.current.then(...)` に変更した
+- `cleanupSubscriber` の末尾で `chainRef.current = Promise.resolve()` を実行し、Subscriber 再起動時に古い Promise チェーンを引き継がないようにした
+- `vp run build` / `vp run build:devtools` が通ることを確認した

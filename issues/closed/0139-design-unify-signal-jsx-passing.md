@@ -1,6 +1,7 @@
 # JSX への signal 渡し方 (`signal` vs `signal.value`) を統一する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -67,3 +68,10 @@ devtools 全体で、JSX 内で signal を表示する書き方が混在して�
 
 - 全対象ファイルで signal をそのまま JSX に渡している箇所が 0 になる
 - `vp run build:devtools` が成功する
+
+## 解決方法
+
+- `App.tsx` の `{copyButtonText}` を `{copyButtonText.value}` に変更した
+- `PublisherPanel.tsx` で signal を直接渡している 10 箇所 (`pubStatusMessage` / `pubCodec` / `framesEncoded` / `chunksEncoded` / `keyFramesEncoded` / `encodeErrors` / `objectsSent` / `objectsWithExtensions` / `pubCurrentGroup` / `encoderState`) を `.value` 経由に統一した
+- `webtransport-devtools/App.tsx` の `{copyButtonText}` を `{copyButtonText.value}` に変更した
+- `vp run build:devtools` が通ることを確認した

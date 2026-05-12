@@ -1,6 +1,7 @@
 # `nextSubscriberId` カウンタを `crypto.randomUUID()` ベースの ID 生成に変更する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -45,3 +46,9 @@ Model: Opus 4.7
 - `nextSubscriberId` カウンタが削除されている
 - `addSubscriber` が UUID ベースの ID を生成する
 - `vp run build` が成功する
+
+## 解決方法
+
+- `subscriber.ts` から `let nextSubscriberId = 1` を削除した
+- `addSubscriber` の ID 生成を `subscriber-${crypto.randomUUID().slice(0, 8)}` に変更した
+- `vp run build:devtools` が通ることを確認した
