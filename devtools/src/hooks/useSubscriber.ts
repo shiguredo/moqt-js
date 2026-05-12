@@ -4,10 +4,9 @@ import {
   decodeCatalogMessage,
   getVideoTracks,
   CATALOG_TRACK_NAME,
-  type AuthorizationToken,
+  supportsDynamicGroups,
   type MoqtObject,
   type DebugMessage,
-  type CertificateHash,
   type JoiningFetchOptions,
   type CatalogTrack,
 } from "moqt-js";
@@ -16,13 +15,19 @@ import { DecoderWrapper } from "../utils/DecoderWrapper";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
+import { useRef, useEffect } from "preact/hooks";
+import { batch } from "@preact/signals";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
-// draft-ietf-moq-transport-17 §10.3 では Subgroup ストリーム間の配送順は保証されないため、
-// バッファドレイン時に明示的にソートする必要がある。
-function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
-  return objects.sort((a, b) => {
+// draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリーム間の配送順は
+// 保証されない (個々のストリームは in-order だがストリーム間は publisher 側で
+// out of order に送出されうる) ため、バッファドレイン時に明示的にソートする必要がある。
+// テストで参照するため export している。
+export function toSortedByGroupObject(objects: MoqtObject[]): MoqtObject[] {
+  // 引数配列を破壊しないようコピーしてからソートする。
+  // signal の .value 配列が直接渡された場合に Preact の変更検知を壊さないため。
+  return [...objects].sort((a, b) => {
     if (a.groupId !== b.groupId) {
       return a.groupId < b.groupId ? -1 : 1;
     }
@@ -33,7 +38,147 @@ function sortByGroupObject(objects: MoqtObject[]): MoqtObject[] {
   });
 }
 
-function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
+/**
+ * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
+ * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の initData (Base64)
+ * から復元する。
+ * draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1.2
+ */
+function buildVideoDecoderConfig(videoTrack: CatalogTrack): VideoDecoderConfig {
+  if (!videoTrack.codec) {
+    throw new Error("video track codec is not specified in catalog");
+  }
+  const decoderConfig: VideoDecoderConfig = {
+    codec: videoTrack.codec,
+    codedWidth: videoTrack.width,
+    codedHeight: videoTrack.height,
+  };
+  if (videoTrack.initData) {
+    decoderConfig.description = settings.base64ToArrayBuffer(videoTrack.initData);
+  }
+  return decoderConfig;
+}
+
+/**
+ * Subscriber インスタンスの統計フィールドを初期値へリセットする。
+ * `startSubscribing` 開始時に Joining Fetch / decode カウンタや位置情報をクリアする。
+ */
+function resetSubscriberStats(instance: sub.SubscriberInstance): void {
+  instance.framesDecoded.value = 0;
+  instance.keyFramesDecoded.value = 0;
+  instance.objectsReceived.value = 0;
+  instance.currentGroup.value = 0;
+  instance.currentSubGroup.value = 0;
+  instance.bytesReceived.value = 0;
+  instance.objectsWithExtensions.value = 0;
+  instance.chunksCreated.value = 0;
+  instance.chunksDecoded.value = 0;
+  instance.chunksSkipped.value = 0;
+  instance.decodeErrors.value = 0;
+  instance.joiningFetchStats.value = null;
+  instance.largestLocation.value = null;
+}
+
+/**
+ * `SubscriberInstance` が保持する外部リソース (`decoder` / `session`) を fire-and-forget で
+ * close し、canvas を初期色で塗り潰す。
+ *
+ * WebTransport が close コールバックを同期 dispatch する実装で teardownSubscriber が
+ * 再入する可能性があるため、`session.value = null` を `sessionInstance.close()` より
+ * 先に立てる順序を維持する (#0150)。
+ *
+ * canvas 塗り潰しは decoder の停止と一体で行うことで「停止した decoder の最終フレームが
+ * 残る」表示不整合を避けるため本関数内に置く。
+ */
+export function closeSubscriberResources(
+  instance: sub.SubscriberInstance,
+  canvas: HTMLCanvasElement | null,
+): void {
+  const decoderInstance = instance.decoder.value;
+  if (decoderInstance) {
+    try {
+      decoderInstance.close();
+    } catch {
+      // 既にクローズ済みなら無視
+    }
+  }
+
+  if (canvas) {
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  // 再入時に sessionInstance が null になっているよう close() より先に立てる。
+  const sessionInstance = instance.session.value;
+  instance.session.value = null;
+  if (sessionInstance) {
+    sessionInstance.close().catch(() => {
+      // 既にクローズされている場合は無視
+    });
+  }
+}
+
+/**
+ * `SubscriberInstance` の状態 signal 群を初期値にリセットし、フックローカル参照
+ * (`chainRef` / 必要に応じて ref 群) を巻き戻す。
+ *
+ * `status` / `statusMessage` / `isStopping` は触らない (#0163 の責務境界に従う)。
+ * `settingsDisabled` は `subscriber.value = null` の反映後に `hasActiveSubscriber`
+ * computed で再計算されるため、本関数の末尾で再有効化判定を行う。
+ *
+ * 将来の ref 化に備えて引数を受け取り、未適用フィールドは `null` を渡す
+ * (0164 適用後に joiningFetch 系 ref が埋まる)。
+ */
+export function resetSubscriberState(
+  instance: sub.SubscriberInstance,
+  chainRef: { current: Promise<void> },
+  liveObjectBufferRef: { current: MoqtObject[] },
+  joiningFetchInProgressRef: { current: boolean },
+  joiningFetchLastLocationRef: { current: { group: bigint; object: bigint } | null },
+  isOtherPublisherActive: () => boolean,
+): void {
+  instance.subscriber.value = null;
+  instance.catalogSubscriber.value = null;
+  instance.catalog.value = null;
+  instance.decoder.value = null;
+  instance.decoderConfigured.value = false;
+  instance.codec.value = "";
+  instance.dynamicGroupsSupported.value = false;
+
+  instance.joiningFetchStats.value = null;
+  instance.largestLocation.value = null;
+
+  joiningFetchInProgressRef.current = false;
+  joiningFetchLastLocationRef.current = null;
+  liveObjectBufferRef.current = [];
+
+  chainRef.current = Promise.resolve();
+
+  if (!sub.hasActiveSubscriber.value && !isOtherPublisherActive()) {
+    settings.settingsDisabled.value = false;
+  }
+}
+
+// AbortController ベースの中断検知ヘルパー。
+// signal.aborted が立っていれば cleanup を呼んでから true を返す。
+// cleanup が例外を投げても判定結果は失われないよう握り潰す
+// (中断時の後始末は fire-and-forget)。
+export function checkAborted(signal: AbortSignal, cleanup: () => void): boolean {
+  if (signal.aborted) {
+    try {
+      cleanup();
+    } catch {
+      // 中断時の後始末で発生した例外は無視する
+    }
+    return true;
+  }
+  return false;
+}
+
+export function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
   const logMessage = `[${subscriberId}] [${direction}] ${message.typeName}`;
 
@@ -46,14 +191,25 @@ function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
     Object.assign(data, message.decoded);
   }
 
-  // payload が存在する場合は渡す
-  const payload = message.payload.length > 0 ? message.payload : undefined;
+  // moqt-js の DebugMessage.payload はライフタイム契約が JSDoc 上明文化されて
+  // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
+  // new Uint8Array(typedArray) は新規 ArrayBuffer を確保した独立コピーを返す
+  // (TC39 ECMA-262 %TypedArray%(typedArray) 抽象操作)。
+  const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
   addLog("info", logMessage, data, payload);
 }
 
 export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCanvasElement>) {
-  // ライブオブジェクトの順次処理用 Promise チェーン
-  let liveObjectProcessingChain = Promise.resolve();
+  // ライブオブジェクトの順次処理用 Promise チェーン (レンダリング間で安定参照)
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
+  const abortControllerRef = useRef<AbortController | null>(null);
+  // Joining Fetch 中のライブオブジェクトバッファ (UI 描画不要なため Signal ではなく ref で持つ)
+  const liveObjectBufferRef = useRef<MoqtObject[]>([]);
+  // Joining Fetch 中フラグ (UI / 外部参照なしのためフックローカル ref で持つ)
+  const joiningFetchInProgressRef = useRef<boolean>(false);
+  // Joining Fetch の最後の location (重複除去用、フックローカル ref で持つ)
+  const joiningFetchLastLocationRef = useRef<{ group: bigint; object: bigint } | null>(null);
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -61,11 +217,6 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       frame.close();
       return;
     }
-
-    // draft-ietf-moq-transport-17 §9.14.2.1
-    // Joining FETCH と SUBSCRIBE の範囲は publisher 側で contiguous かつ
-    // non-overlapping に揃えられるため、subscriber 側は timestamp ベースで
-    // 描画を抑制する必要がない。デコード結果は順次そのまま描画する。
 
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -81,52 +232,41 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       return;
     }
 
-    // Resize canvas if needed
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
       canvas.width = frame.displayWidth;
       canvas.height = frame.displayHeight;
     }
 
-    // Draw frame to canvas
     ctx.drawImage(frame, 0, 0);
     frame.close();
 
-    if (instance) {
-      sub.updateSubscriber(subscriberId, {
-        framesDecoded: instance.framesDecoded + 1,
-      });
-    }
+    instance.framesDecoded.value = instance.framesDecoded.value + 1;
   };
 
   const handleObject = async (obj: MoqtObject): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
-    const decoderInstance = instance.decoder;
+    const decoderInstance = instance.decoder.value;
     if (!decoderInstance) {
       console.warn(`[${subscriberId}] handleObject: decoder is null`);
       return;
     }
 
-    sub.updateSubscriber(subscriberId, {
-      objectsReceived: instance.objectsReceived + 1,
-      bytesReceived: instance.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
-      currentGroup: Number(obj.groupId),
-      currentSubGroup: Number(obj.subgroupId ?? 0n),
-      decoderState: decoderInstance.state,
-    });
+    instance.objectsReceived.value = instance.objectsReceived.value + 1;
+    instance.bytesReceived.value =
+      instance.bytesReceived.value + obj.payload.length + (obj.properties?.length ?? 0);
+    instance.currentGroup.value = Number(obj.groupId);
+    instance.currentSubGroup.value = Number(obj.subgroupId ?? 0n);
+    instance.decoderState.value = decoderInstance.state;
 
     try {
       // LOC spec 準拠: extensions からメタデータを取得
       let isKeyFrame = false;
       let timestamp = 0;
-      let currentInstance = sub.getSubscriber(subscriberId);
-      if (!currentInstance) return;
 
       if (obj.properties && obj.properties.length > 0) {
-        sub.updateSubscriber(subscriberId, {
-          objectsWithExtensions: currentInstance.objectsWithExtensions + 1,
-        });
+        instance.objectsWithExtensions.value = instance.objectsWithExtensions.value + 1;
 
         const locProperties = LOC.decodeVideoProperties(obj.properties);
 
@@ -148,118 +288,121 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         data: obj.payload,
       });
 
-      currentInstance = sub.getSubscriber(subscriberId);
-      if (!currentInstance) return;
-      sub.updateSubscriber(subscriberId, {
-        chunksCreated: currentInstance.chunksCreated + 1,
-      });
+      instance.chunksCreated.value = instance.chunksCreated.value + 1;
 
-      // デコーダが設定されていない場合はスキップ
-      if (!currentInstance.decoderConfigured) {
-        sub.updateSubscriber(subscriberId, {
-          chunksSkipped: currentInstance.chunksSkipped + 1,
-        });
+      if (!instance.decoderConfigured.value) {
+        instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
         return;
       }
 
-      // Count keyframes
       if (isKeyFrame) {
-        sub.updateSubscriber(subscriberId, {
-          keyFramesDecoded: currentInstance.keyFramesDecoded + 1,
-        });
+        instance.keyFramesDecoded.value = instance.keyFramesDecoded.value + 1;
       }
 
-      // Check decoder state before decoding
       if (decoderInstance.state !== "configured") {
         console.warn(
           `[${subscriberId}] handleObject: decoder not in configured state:`,
           decoderInstance.state,
         );
-        sub.updateSubscriber(subscriberId, {
-          decoderState: decoderInstance.state,
-          chunksSkipped: currentInstance.chunksSkipped + 1,
-        });
+        instance.decoderState.value = decoderInstance.state;
+        instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
         return;
       }
 
       decoderInstance.decode(chunk);
-      currentInstance = sub.getSubscriber(subscriberId);
-      if (currentInstance) {
-        sub.updateSubscriber(subscriberId, {
-          chunksDecoded: currentInstance.chunksDecoded + 1,
-        });
-      }
+      instance.chunksDecoded.value = instance.chunksDecoded.value + 1;
     } catch (error) {
       console.error(`[${subscriberId}] handleObject: failed to decode object:`, error);
-      const currentInstance = sub.getSubscriber(subscriberId);
-      if (currentInstance) {
-        sub.updateSubscriber(subscriberId, {
-          decodeErrors: currentInstance.decodeErrors + 1,
-        });
-      }
+      instance.decodeErrors.value = instance.decodeErrors.value + 1;
     }
   };
 
+  // stopSubscribing 進行中 (isStopping=true) または teardownSubscriber 通過後
+  // (session.value === null) の close / end / error コールバック発火では、
+  // status / statusMessage を上書きしないと判定する。
+  // 非 stop 主導 (通常のサーバ切断 / Stream ended / Subscribe error) では
+  // ガード成立せず詳細メッセージが表示される。
+  const shouldApplyStatusUpdate = (): boolean => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) return false;
+    return !instance.isStopping.value && instance.session.value !== null;
+  };
+
   const startSubscribing = async (): Promise<void> => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) return;
+    // 停止処理中のときは新規開始しない (二重実行防止)
+    if (instance.isStopping.value) return;
+
+    // 古い controller が残っていれば abort してから新規生成する。
+    // isStopping は二重実行防止、AbortController は中断シグナルで責務が異なるため両方残す。
+    // ローカル signal 経由で参照し、teardownSubscriber が abortControllerRef.current = null
+    // した後も abort 状態を判定できるようにする。
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
     try {
-      sub.updateSubscriber(subscriberId, {
-        status: "disconnected",
-        statusMessage: "Connecting...",
-      });
+      instance.status.value = "disconnected";
+      instance.statusMessage.value = "Connecting...";
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
+      const connectOptions = settings.buildConnectOptions();
 
-      // Build connect options
-      const connectOptions: {
-        serverCertificateHashes?: CertificateHash[];
-        authorizationToken?: AuthorizationToken;
-      } = {};
-      if (settings.certificateHash.value) {
-        connectOptions.serverCertificateHashes = [
-          {
-            algorithm: "sha-256",
-            value: settings.base64ToArrayBuffer(settings.certificateHash.value),
-          },
-        ];
-      }
-      const authToken = settings.buildAuthorizationToken();
-      if (authToken) {
-        connectOptions.authorizationToken = authToken;
-      }
-
-      // Connect to MOQT server
+      // MOQT サーバへ接続する
       const session = await connect(
         settings.url.value,
         {
           close: (closeInfo) => {
-            console.log(
-              `Subscriber: WebTransport closed: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
-            );
-            sub.updateSubscriber(subscriberId, {
-              status: "disconnected",
-              statusMessage: `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`,
+            // shouldApplyStatusUpdate のガード外で addLog を呼び、stop 主導時にも
+            // DebugPanel にイベントを残す。reason は 1024 文字に切って UI 描画負荷を抑える。
+            addLog("warn", `[${subscriberId}] webtransport closed`, {
+              closeCode: closeInfo.closeCode,
+              reason: closeInfo.reason.slice(0, 1024),
             });
-            cleanupSubscriber();
+            // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
+            // teardownSubscriber は abort 経路を維持するため常に呼ぶ。
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "disconnected";
+              instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            }
+            teardownSubscriber();
           },
           error: (error) => {
-            sub.updateSubscriber(subscriberId, {
-              status: "error",
-              statusMessage: `Error: ${error.message}`,
+            addLog("error", `[${subscriberId}] webtransport error`, {
+              name: error.name ?? "Error",
+              message: error.message ?? String(error),
             });
-            cleanupSubscriber();
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "error";
+              instance.statusMessage.value = `Error: ${error.message}`;
+            }
+            teardownSubscriber();
           },
           debug: (msg) => handleDebugMessage(subscriberId, msg),
         },
         connectOptions,
       );
-      sub.updateSubscriber(subscriberId, { session });
+      // connect 解決前の close 発火は session 自体が未存在のため、ここでの cleanup は
+      // await 中に他経路 (stopSubscribing / アンマウント) で teardownSubscriber が呼ばれた場合に限る。
+      // 中断元から見えない (instance.session.value 未代入) ので、ローカル session の close は
+      // startSubscribing 側の責務。
+      if (
+        checkAborted(signal, () => {
+          session.close().catch(() => {});
+        })
+      ) {
+        return;
+      }
+      instance.session.value = session;
       settings.reliability.value = session.reliability;
 
-      sub.updateSubscriber(subscriberId, {
-        status: "connected",
-        statusMessage: "Connected, subscribing to catalog...",
-      });
+      // status は subscribe 完了時にのみ "connected" へ遷移する。
+      // Catalog 購読中 (最大 5 秒) の途中で "connected" にしないこと。
+      instance.statusMessage.value = "Connected, subscribing to catalog...";
 
       // Catalog を購読してコーデック情報を取得
       let videoTrackFromCatalog: CatalogTrack | undefined;
@@ -278,22 +421,24 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           const processCatalogObject = (obj: MoqtObject, source: string) => {
             try {
               const catalog = decodeCatalogMessage(obj.payload);
+              // RECV OBJECT 自体は addLog 経由で残るのでここで重複ログは出さない。
               addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
                 source,
                 catalog,
               });
-              console.log(`[${subscriberId}] Catalog received (${source}):`, catalog);
-              sub.updateSubscriber(subscriberId, { catalog });
+              instance.catalog.value = catalog;
 
               const videoTracks = getVideoTracks(catalog);
               if (videoTracks.length > 0) {
                 resolve(videoTracks[0]);
               } else {
-                console.warn(`[${subscriberId}] No video tracks in catalog`);
+                addLog("warn", `[${subscriberId}] no video tracks in catalog`);
                 resolve(undefined);
               }
             } catch (error) {
-              console.error(`[${subscriberId}] Failed to decode catalog:`, error);
+              addLog("error", `[${subscriberId}] failed to decode catalog`, {
+                message: error instanceof Error ? error.message : String(error),
+              });
               reject(error);
             }
           };
@@ -308,10 +453,12 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                   processCatalogObject(obj, "subscribe");
                 },
                 end: () => {
-                  console.log(`[${subscriberId}] Catalog stream ended`);
+                  addLog("info", `[${subscriberId}] catalog stream ended`);
                 },
                 error: (error) => {
-                  console.error(`[${subscriberId}] Catalog subscribe error:`, error);
+                  addLog("error", `[${subscriberId}] catalog subscribe error`, {
+                    message: error instanceof Error ? error.message : String(error),
+                  });
                   reject(error);
                 },
               },
@@ -335,39 +482,54 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               },
             )
             .then((catalogSubscriberInstance) => {
-              sub.updateSubscriber(subscriberId, {
-                catalogSubscriber: catalogSubscriberInstance,
-              });
+              // startSubscribing 側で signal.aborted を見て return した後に
+              // マイクロタスクで .then が回り catalogSubscriber.value が再代入される
+              // レースを .then 側で潰す。
+              if (signal.aborted) {
+                void catalogSubscriberInstance.unsubscribe().catch(() => {});
+                return;
+              }
+              instance.catalogSubscriber.value = catalogSubscriberInstance;
             })
             .catch(reject);
         });
 
         // Catalog 取得をタイムアウト付きで待機
         const catalogTimeout = settings.catalogSubscriptionTimeout.value;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<CatalogTrack>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`catalog subscription timeout (${catalogTimeout}ms)`));
+          timeoutId = setTimeout(() => {
+            reject(new Error(`catalog subscription did not complete within ${catalogTimeout}ms`));
           }, catalogTimeout);
         });
 
-        videoTrackFromCatalog = await Promise.race([catalogPromise, timeoutPromise]);
+        try {
+          videoTrackFromCatalog = await Promise.race([catalogPromise, timeoutPromise]);
+        } finally {
+          // catalog 取得成功時もタイマーを解放する。タイムアウト発火後の
+          // clearTimeout は無害。
+          clearTimeout(timeoutId);
+        }
 
         if (!videoTrackFromCatalog) {
           throw new Error("no video track in catalog");
         }
 
-        console.log(`[${subscriberId}] Using codec from catalog:`, videoTrackFromCatalog.codec);
+        addLog("info", `[${subscriberId}] using codec from catalog`, {
+          codec: videoTrackFromCatalog.codec,
+        });
         actualTrackName = videoTrackFromCatalog.name;
       } catch (error) {
         throw new Error(`failed to get catalog: ${(error as Error).message}`);
       }
 
-      sub.updateSubscriber(subscriberId, {
-        status: "connected",
-        statusMessage: "Setting up decoder...",
-      });
+      // Catalog 取得経路は finally で clearTimeout 済みのため追加 cleanup は不要。
+      // .then 内側で catalogSubscriber の遅延代入レースは解消済み。
+      if (checkAborted(signal, () => {})) return;
 
-      // Create decoder wrapper
+      instance.statusMessage.value = "Setting up decoder...";
+
+      // デコーダラッパーを生成する
       const useWorker = settings.useDedicatedWorker.value;
 
       const decoderInstance = new DecoderWrapper(useWorker, {
@@ -376,78 +538,57 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
         error: (error) => {
           console.error(`[${subscriberId}] Decoder error:`, error);
-          const instance = sub.getSubscriber(subscriberId);
-          if (instance) {
-            sub.updateSubscriber(subscriberId, {
-              decodeErrors: instance.decodeErrors + 1,
-            });
-          }
+          instance.decodeErrors.value = instance.decodeErrors.value + 1;
           // デコーダーをリセットして次のキーフレームを待つ
           console.log(`[${subscriberId}] Resetting decoder, waiting for next keyframe...`);
           void decoderInstance.reset();
         },
       });
 
-      // デコーダを設定: Catalog から取得
-      if (!videoTrackFromCatalog.codec) {
-        throw new Error("video track codec is not specified in catalog");
-      }
-      const decoderConfig: VideoDecoderConfig = {
-        codec: videoTrackFromCatalog.codec,
-        codedWidth: videoTrackFromCatalog.width,
-        codedHeight: videoTrackFromCatalog.height,
-      };
-      // canonical 形式 (avc1 / hvc1) で必要な VideoDecoderConfig.description を
-      // MSF Catalog の initData (Base64) から取得する
-      // draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1
-      if (videoTrackFromCatalog.initData) {
-        decoderConfig.description = settings.base64ToArrayBuffer(videoTrackFromCatalog.initData);
-      }
+      // デコーダを Catalog から取得した videoTrack で設定する
+      const decoderConfig = buildVideoDecoderConfig(videoTrackFromCatalog);
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
       console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 
       await decoderInstance.configure(decoderConfig);
 
-      sub.updateSubscriber(subscriberId, {
-        decoder: decoderInstance,
-        decoderConfigured: true,
-        decoderState: decoderInstance.state,
-        codec: codecDisplay,
-      });
+      // configure await 中に中断された場合、ローカル decoderInstance は instance に未代入のため
+      // 中断元から見えない。startSubscribing 側で close する。
+      // DecoderWrapper.close は同期メソッドで state !== "closed" ガード付き、例外を投げない。
+      if (
+        checkAborted(signal, () => {
+          decoderInstance.close();
+        })
+      ) {
+        return;
+      }
 
-      // Subscriber オプションを構築
-      const currentInstance = sub.getSubscriber(subscriberId);
-      const joiningFetchEnabled = currentInstance?.joiningFetchEnabled ?? false;
-      const newGroupRequestEnabled = currentInstance?.newGroupRequestEnabled ?? false;
+      instance.decoder.value = decoderInstance;
+      instance.decoderConfigured.value = true;
+      instance.decoderState.value = decoderInstance.state;
+      instance.codec.value = codecDisplay;
 
-      sub.updateSubscriber(subscriberId, {
-        status: "connected",
-        statusMessage: "Subscribing...",
-        // Reset stats
-        framesDecoded: 0,
-        keyFramesDecoded: 0,
-        objectsReceived: 0,
-        currentGroup: 0,
-        currentSubGroup: 0,
-        bytesReceived: 0,
-        objectsWithExtensions: 0,
-        chunksCreated: 0,
-        chunksDecoded: 0,
-        chunksSkipped: 0,
-        decodeErrors: 0,
-        joiningFetchStats: null,
-        largestLocation: null,
-        joiningFetchInProgress: joiningFetchEnabled,
-        liveObjectBuffer: [],
-      });
+      const joiningFetchEnabled = instance.joiningFetchEnabled.value;
+      const newGroupRequestEnabled = instance.newGroupRequestEnabled.value;
 
-      // Create subscriber
+      instance.status.value = "connected";
+      instance.statusMessage.value = "Subscribing...";
+      resetSubscriberStats(instance);
+      // ref のクリアは Signal カウンタリセットとは責務が異なるためフック側で実行する。
+      liveObjectBufferRef.current = [];
+      joiningFetchInProgressRef.current = joiningFetchEnabled;
+      joiningFetchLastLocationRef.current = null;
+
+      // Subscriber オプションを構築する
       const subscribeOptions: {
         newGroupRequest?: bigint;
         joiningFetch?: JoiningFetchOptions;
       } = {};
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
+      // draft-ietf-moq-transport-17 §9.3.11: SUBSCRIBE では MAY (foreknowledge 不要、
+      // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
+      // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
         subscribeOptions.newGroupRequest = 0n;
       }
@@ -458,10 +599,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           type: "relative",
           start: 0n,
           onObject: (obj: MoqtObject) => {
-            const instance = sub.getSubscriber(subscriberId);
-            if (!instance) return;
-
-            const currentStats = instance.joiningFetchStats ?? {
+            const currentStats = instance.joiningFetchStats.value ?? {
               objectsReceived: 0,
               bytesReceived: 0,
               completed: false,
@@ -471,9 +609,9 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
             // LOC から keyframe 情報を取得（ログ用）
             let isKeyFrame = false;
             if (obj.properties && obj.properties.length > 0) {
-              const ext = LOC.decodeVideoProperties(obj.properties);
-              if (ext.frameMarking) {
-                isKeyFrame = ext.frameMarking.isIndependent;
+              const locProperties = LOC.decodeVideoProperties(obj.properties);
+              if (locProperties.frameMarking) {
+                isKeyFrame = locProperties.frameMarking.isIndependent;
               }
             }
 
@@ -484,51 +622,37 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               );
             }
 
-            sub.updateSubscriber(subscriberId, {
-              joiningFetchLastLocation: { group: obj.groupId, object: obj.objectId },
-              joiningFetchStats: {
-                ...currentStats,
-                objectsReceived: currentStats.objectsReceived + 1,
-                bytesReceived:
-                  currentStats.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
-              },
-            });
+            joiningFetchLastLocationRef.current = { group: obj.groupId, object: obj.objectId };
+            instance.joiningFetchStats.value = {
+              ...currentStats,
+              objectsReceived: currentStats.objectsReceived + 1,
+              bytesReceived:
+                currentStats.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
+            };
 
             // Joining Fetch から受信したオブジェクトは即座にデコード
             void handleObject(obj);
           },
           onEnd: () => {
-            const instance = sub.getSubscriber(subscriberId);
-            if (!instance) return;
-
-            const currentStats = instance.joiningFetchStats ?? {
+            const currentStats = instance.joiningFetchStats.value ?? {
               objectsReceived: 0,
               bytesReceived: 0,
               completed: false,
               bufferedLiveObjects: 0,
             };
 
-            // ライブバッファをコピーしてクリア
-            // draft-ietf-moq-transport-17 §10.3 / §10.4 では Subgroup ストリームと
-            // OBJECT_DATAGRAM が並行配送されるため、到着順 ≠ (groupId, objectId) 順
-            // となる可能性がある。デコーダへ流す前に (groupId, objectId) 昇順へ
-            // 並べ替える。
-            const bufferedObjects = sortByGroupObject([...instance.liveObjectBuffer]);
-            sub.updateSubscriber(subscriberId, {
-              liveObjectBuffer: [],
-            });
+            // toSortedByGroupObject 内部で [...objects].sort(...) するため、ここでのスプレッドは省略する。
+            const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
 
-            // Joining Fetch で既に配信済みのオブジェクトをスキップ（重複除去）
-            const lastFetch = instance.joiningFetchLastLocation;
+            // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
+            const lastFetch = joiningFetchLastLocationRef.current;
             let objectsToProcess = bufferedObjects;
             if (lastFetch && bufferedObjects.length > 0) {
               const originalLength = bufferedObjects.length;
               objectsToProcess = bufferedObjects.filter((obj) => {
-                // 同じグループで lastFetch 以下のオブジェクトはスキップ
                 if (obj.groupId === lastFetch.group && obj.objectId <= lastFetch.object) {
                   return false;
                 }
-                // 古いグループのオブジェクトもスキップ
                 if (obj.groupId < lastFetch.group) {
                   return false;
                 }
@@ -546,57 +670,46 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
               `[${subscriberId}] Joining Fetch: completed, processing ${objectsToProcess.length} buffered live objects`,
             );
 
-            // 統計を更新
-            sub.updateSubscriber(subscriberId, {
-              joiningFetchLastLocation: null,
-              joiningFetchStats: {
-                ...currentStats,
-                completed: true,
-                bufferedLiveObjects: objectsToProcess.length,
-              },
-            });
+            // chainRef にバッファ済みオブジェクトのデコードを順次予約してから、
+            // joiningFetchInProgress / liveObjectBuffer / stats を同一 batch で更新する。
+            // ドレイン投入とフラグ立て下げを同期セクションでまとめることで、
+            // 「ドレイン中に object: コールバックが割り込んでバッファに積まれたまま
+            // 永久に放置される」race window を解消する。立て下げ後の object: は
+            // chainRef 経路へ直接流れるため、Promise チェーンで順序保証される。
+            for (const bufferedObj of objectsToProcess) {
+              chainRef.current = chainRef.current
+                .then(() => handleObject(bufferedObj))
+                .catch(() => {});
+            }
 
-            // バッファを順次デコード
-            void (async () => {
-              for (const bufferedObj of objectsToProcess) {
-                await handleObject(bufferedObj);
-              }
-
-              // 処理中に追加されたオブジェクトがあれば処理
-              // 追加分も複数 Subgroup から並行受信し得るため (groupId, objectId) で再ソートする
-              let inst = sub.getSubscriber(subscriberId);
-              while (inst && inst.liveObjectBuffer.length > 0) {
-                const remainingObjects = sortByGroupObject([...inst.liveObjectBuffer]);
-                sub.updateSubscriber(subscriberId, {
-                  liveObjectBuffer: [],
-                });
-                for (const obj of remainingObjects) {
-                  await handleObject(obj);
-                }
-                inst = sub.getSubscriber(subscriberId);
-              }
-
-              // 全てのバッファ処理が完了してから joiningFetchInProgress を false に
-              sub.updateSubscriber(subscriberId, {
-                joiningFetchInProgress: false,
-              });
-            })();
+            // ref のフラグ立て下げと buffer クリアは Signal 統計更新の前に行い、
+            // ドレイン投入と同じ同期セクション内で完了させる。
+            // 0164 適用後は joiningFetchInProgress / joiningFetchLastLocation が ref で
+            // batch の意味は無いため、joiningFetchStats のみ単純代入する。
+            joiningFetchInProgressRef.current = false;
+            joiningFetchLastLocationRef.current = null;
+            liveObjectBufferRef.current = [];
+            instance.joiningFetchStats.value = {
+              ...currentStats,
+              completed: true,
+              bufferedLiveObjects: objectsToProcess.length,
+            };
           },
           onError: (error: Error) => {
             console.error(`[${subscriberId}] joiningFetch: error`, error);
-            // エラー時もバッファをクリアしてフラグをリセット
-            const instance = sub.getSubscriber(subscriberId);
-            if (instance) {
-              // デコーダーをキーフレーム待ち状態にリセット
-              if (instance.decoder) {
-                instance.decoder.resetKeyframeWait();
-              }
-              sub.updateSubscriber(subscriberId, {
-                joiningFetchInProgress: false,
-                liveObjectBuffer: [],
-                joiningFetchLastLocation: null,
-              });
+            // Joining Fetch (過去取得) が失敗しても SUBSCRIBE 経由のライブ配信は
+            // 独立して継続する。ライブバッファに溜まったオブジェクトを破棄せず、
+            // onEnd と同じ手順でドレインしてからフラグを下げる。バッファ内に
+            // keyframe が含まれていれば自然にデコードが再開する。
+            const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
+            for (const bufferedObj of bufferedObjects) {
+              chainRef.current = chainRef.current
+                .then(() => handleObject(bufferedObj))
+                .catch(() => {});
             }
+            joiningFetchInProgressRef.current = false;
+            joiningFetchLastLocationRef.current = null;
+            liveObjectBufferRef.current = [];
           },
         };
       }
@@ -606,155 +719,146 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            const instance = sub.getSubscriber(subscriberId);
-            if (!instance) return;
-
-            // Joining Fetch 中はライブオブジェクトをバッファ
-            if (instance.joiningFetchInProgress) {
-              const newBuffer = [...instance.liveObjectBuffer, obj];
-              sub.updateSubscriber(subscriberId, {
-                liveObjectBuffer: newBuffer,
-              });
+            // Joining Fetch 中はライブオブジェクトをバッファ。push で O(1) 追記する。
+            if (joiningFetchInProgressRef.current) {
+              liveObjectBufferRef.current.push(obj);
               return;
             }
 
-            // 順次処理: Promise チェーンで到着順にデコードする
-            // 制限事項: 複数 Subgroup ストリームを同一 Track で並行使用する Publisher と
-            // 接続した場合、到着順 ≠ (groupId, objectId) 順となるが現状はリオーダー
-            // バッファを持たない。devtools Publisher は単一 Subgroup のみ送出するため
-            // 当面この経路で実害は出ない。複数 Subgroup 対応は別 issue で扱う。
-            liveObjectProcessingChain = liveObjectProcessingChain.then(() => handleObject(obj));
+            // Promise チェーンで到着順にデコードする。
+            // 複数 Subgroup ストリームを並行使用する Publisher との接続では
+            // (groupId, objectId) 順の保証がないが、現状はリオーダーバッファを持たない。
+            // TODO: 複数 Subgroup 対応は別 issue で扱う。
+            chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
           },
           end: () => {
-            sub.updateSubscriber(subscriberId, {
-              status: "disconnected",
-              statusMessage: "Stream ended",
-            });
-            cleanupSubscriber();
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "disconnected";
+              instance.statusMessage.value = "Stream ended";
+            }
+            teardownSubscriber();
           },
           error: (error) => {
             console.error(`[${subscriberId}] Subscriber error:`, error);
-            sub.updateSubscriber(subscriberId, {
-              status: "error",
-              statusMessage: `Subscribe error: ${error.message}`,
-            });
+            if (shouldApplyStatusUpdate()) {
+              instance.status.value = "error";
+              instance.statusMessage.value = `Subscribe error: ${error.message}`;
+            }
           },
         },
         subscribeOptions,
       );
-      // SUBSCRIBE_OK から largestLocation を取得
-      // joiningFetchInProgress の解除は Joining FETCH の onEnd / onError 内で
-      // ドレインループ完了と同期して行う。ここで早期解除すると、ドレインループ
-      // 実行中に到着したライブオブジェクトが直接 handleObject 経路へ流れて
-      // 順序が破綻するため、解除箇所はドレイン側に一本化する。
-      // LARGEST_OBJECT なしの場合も session.ts 側で onEnd が同期呼び出しされ、
-      // ドレインループ末尾で joiningFetchInProgress: false に遷移する。
+
+      // subscribe await 中に中断された場合、ローカル subscriberInstance は instance に未代入のため
+      // 中断元から見えない。fire-and-forget で unsubscribe する。
+      // unsubscribe は state === "closed" でも例外を投げず early return する。
+      if (
+        checkAborted(signal, () => {
+          void subscriberInstance.unsubscribe().catch(() => {});
+        })
+      ) {
+        return;
+      }
+
       const largestLocation = subscriberInstance.largestLocation;
 
-      sub.updateSubscriber(subscriberId, {
-        subscriber: subscriberInstance,
-        status: "connected",
-        statusMessage: `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`,
-        largestLocation: largestLocation ?? null,
-      });
+      instance.subscriber.value = subscriberInstance;
+      // SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれているかを
+      // 1 回だけ確定させる。trackProperties は signal ではないため computed では
+      // 追跡できず、ここで書き込んで UI ボタンの disable と連動させる。
+      instance.dynamicGroupsSupported.value = supportsDynamicGroups(
+        subscriberInstance.trackProperties,
+      );
+      instance.status.value = "connected";
+      instance.statusMessage.value = `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`;
+      instance.largestLocation.value = largestLocation ?? null;
     } catch (error) {
+      // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。
+      // 通常エラーの上書きを避けるため、catch 句先頭で abort を判定して早期 return する。
+      if (signal.aborted) return;
       console.error(`[${subscriberId}] Connection error:`, error);
-      sub.updateSubscriber(subscriberId, {
-        status: "error",
-        statusMessage: `Failed: ${(error as Error).message}`,
-      });
-      cleanupSubscriber();
-      // settingsDisabled は他の subscriber がアクティブかどうかで判断
-      if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
-        settings.settingsDisabled.value = false;
-      }
+      instance.status.value = "error";
+      instance.statusMessage.value = `Failed: ${(error as Error).message}`;
+      // teardownSubscriber 内の resetSubscriberState が settingsDisabled 再有効化判定を含むため
+      // 重複した再有効化処理は不要。
+      teardownSubscriber();
     }
   };
 
   const stopSubscribing = async (): Promise<void> => {
     // 二重実行防止
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance || instance.isStopping) {
+    if (!instance || instance.isStopping.value) {
       return;
     }
-    sub.updateSubscriber(subscriberId, {
-      isStopping: true,
-      status: "disconnected",
-      statusMessage: "Disconnecting...",
-    });
+    instance.isStopping.value = true;
+    // 進行中の startSubscribing を unsubscribe() 完了を待たずに中断する。
+    // controller の null 化は teardownSubscriber 側で行う。
+    abortControllerRef.current?.abort();
+    instance.status.value = "disconnected";
+    instance.statusMessage.value = "Disconnecting...";
 
     try {
-      if (instance.subscriber && instance.subscriber.state === "active") {
-        await instance.subscriber.unsubscribe();
+      const subscriberInstance = instance.subscriber.value;
+      if (subscriberInstance && subscriberInstance.state === "active") {
+        await subscriberInstance.unsubscribe();
       }
     } finally {
-      cleanupSubscriber();
-      sub.updateSubscriber(subscriberId, {
-        isStopping: false,
-        status: "disconnected",
-        statusMessage: "Ready to subscribe",
-      });
+      teardownSubscriber();
+      instance.isStopping.value = false;
+      instance.status.value = "disconnected";
+      instance.statusMessage.value = "Ready to subscribe";
     }
   };
 
-  const cleanupSubscriber = (): void => {
+  // 外部接続を含むランタイム状態を全て巻き戻し、再 startSubscribing 可能な初期状態に戻す。
+  // close 系 (closeSubscriberResources) と signal リセット系 (resetSubscriberState) を
+  // 順に呼ぶ orchestrator。SubscriberInstance を Map から削除しない (= 同じ id で再 setup 可能)。
+  const teardownSubscriber = (): void => {
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
-    // Close decoder
-    if (instance.decoder) {
-      try {
-        instance.decoder.close();
-      } catch {
-        // Ignore
-      }
-    }
+    // 進行中の startSubscribing を中断する。AbortController.abort は冪等で例外を投げない。
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
 
-    // Clear canvas
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.fillStyle = "#1e293b"; // slate-800
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-    }
-
-    // Close session
-    if (instance.session) {
-      instance.session.close().catch(() => {
-        // 既にクローズされている場合は無視
-      });
-    }
-
-    sub.updateSubscriber(subscriberId, {
-      session: null,
-      subscriber: null,
-      catalogSubscriber: null,
-      catalog: null,
-      decoder: null,
-      decoderConfigured: false,
-      codec: "",
-    });
-
-    // Enable settings if no other subscriber/publisher is active
-    if (!sub.hasActiveSubscriber.value && !pub.pubSession.value) {
-      settings.settingsDisabled.value = false;
-    }
+    closeSubscriberResources(instance, canvasRef.current);
+    resetSubscriberState(
+      instance,
+      chainRef,
+      liveObjectBufferRef,
+      joiningFetchInProgressRef,
+      joiningFetchLastLocationRef,
+      () => pub.pubSession.value !== null,
+    );
   };
 
   const requestKeyframe = async (): Promise<void> => {
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance?.subscriber || instance.subscriber.state !== "active") {
+    const subscriberInstance = instance?.subscriber.value;
+    if (!subscriberInstance || subscriberInstance.state !== "active") {
       console.warn(`[${subscriberId}] requestKeyframe: subscriber not active`);
+      return;
+    }
+
+    // draft-ietf-moq-transport-17 §9.3.11:
+    // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
+    //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
+    //  Property with value 1."
+    // UI ボタンは disable 済みのため通常は通らないが、状態の古いボタン押下に
+    // 対する保険として早期 return する。
+    if (!supportsDynamicGroups(subscriberInstance.trackProperties)) {
+      console.warn(
+        `[${subscriberId}] requestKeyframe: track did not include DYNAMIC_GROUPS=1, skipped`,
+      );
       return;
     }
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-17 Section 9.3.11
+      // draft-ietf-moq-transport-17 §9.3.11
       // NEW_GROUP_REQUEST = 0x32
-      await instance.subscriber.update({
+      await subscriberInstance.update({
         parameters: [
           {
             type: 0x32,
@@ -766,6 +870,13 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       console.error(`[${subscriberId}] requestKeyframe: failed`, error);
     }
   };
+
+  // アンマウント時のリソース解放 (HMR 等の想定外経路向けの補助)
+  useEffect(() => {
+    return () => {
+      teardownSubscriber();
+    };
+  }, []);
 
   return {
     startSubscribing,

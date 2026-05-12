@@ -428,6 +428,37 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
 }
 
 /**
+ * Track Properties に DYNAMIC_GROUPS=1 が含まれているかを判定する。
+ *
+ * draft-ietf-moq-transport-17 §11.6:
+ * "When looking for the value of a property, processors MUST search both the
+ * mutable properties and the contents of Immutable Extensions."
+ *
+ * mutable list と Immutable Properties (Type 0x0B) 配下の両方を検索する。
+ * DYNAMIC_GROUPS の値域は §11.5 により 0 / 1 のみで、受信時に
+ * validateTrackPropertyValue が PROTOCOL_VIOLATION 検証済みのため、複数値や
+ * 範囲外は考慮不要。
+ *
+ * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ */
+export function supportsDynamicGroups(properties: ReadonlyArray<Property>): boolean {
+  for (const property of properties) {
+    if (property.id === TrackPropertyId.DYNAMIC_GROUPS && property.value === 1n) {
+      return true;
+    }
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      const immutable = decodeImmutableProperties(property.data);
+      for (const inner of immutable.extensions) {
+        if (inner.id === TrackPropertyId.DYNAMIC_GROUPS && inner.value === 1n) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Extension Headers をパースする
  *
  * 複数の拡張が含まれるデータから、MOQT Core Extensions を抽出する。

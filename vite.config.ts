@@ -6,6 +6,14 @@ export default defineConfig({
   define: {
     __MOQT_JS_VERSION__: JSON.stringify(packageJson.version),
   },
+  resolve: {
+    alias: {
+      // devtools 配下のテストが "moqt-js" をランタイム import するため、
+      // パッケージ名をビルド済み dist ではなくソースへ解決する。
+      // CI では dist が未生成のまま `vp test` が走り、パッケージ解決に失敗するため必要。
+      "moqt-js": resolve(import.meta.dirname, "src/index.ts"),
+    },
+  },
   build: {
     target: "esnext",
     outDir: "dist",
@@ -997,7 +1005,7 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ["src/**/*.{test,prop}.ts"],
+    include: ["src/**/*.{test,prop}.ts", "devtools/src/**/*.{test,prop}.ts"],
     coverage: {
       provider: "v8",
       exclude: ["src/message/debug.ts"],

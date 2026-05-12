@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "preact/hooks";
+import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
 import { formatBytes, formatBitrate } from "../utils/codec";
 import * as sub from "../signals/subscriber";
@@ -27,29 +27,43 @@ export function SubscriberPanel({
     canvasRef,
   );
 
-  // Initialize canvas background
+  // canvas の背景を slate-800 で初期化する
   useEffect(() => {
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d");
       if (ctx) {
-        ctx.fillStyle = "#1e293b"; // slate-800
+        ctx.fillStyle = "#1e293b";
         ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     }
   }, []);
 
-  // Get instance from store
-  const instance = sub.subscriberInstances.value.get(subscriberId);
+  // subscriberInstances Map 全体ではなく、対象 ID 用の派生 signal だけを購読する。
+  // ID が変わらない限り同じ ReadonlySignal を使い続ける。
+  const instanceSignal = useMemo(
+    () => sub.getSubscriberInstanceSignal(subscriberId),
+    [subscriberId],
+  );
+  const instance = instanceSignal.value;
   if (!instance) {
     return null;
   }
 
+  const status = instance.status.value;
+  const session = instance.session.value;
+  const catalog = instance.catalog.value;
+  const codec = instance.codec.value;
+  const isSubscribing = instance.subscriber.value !== null;
+  const isStopping = instance.isStopping.value;
+  const subscribeBtnDisabled = isSubscribing || isStopping;
+  const stopBtnDisabled = !isSubscribing || isStopping;
+
   const getStatusClasses = () => {
     const base = "mb-4 px-4 py-2 rounded-lg text-sm";
-    if (instance.status === "connected") {
+    if (status === "connected") {
       return `${base} bg-blue-50 text-blue-700`;
     }
-    if (instance.status === "error") {
+    if (status === "error") {
       return `${base} bg-red-50 text-red-700`;
     }
     return `${base} bg-slate-100 text-slate-600`;
@@ -57,25 +71,20 @@ export function SubscriberPanel({
 
   const getBadgeClasses = () => {
     const base = "px-2 py-1 text-xs font-medium rounded-full";
-    if (instance.status === "connected") {
+    if (status === "connected") {
       return `${base} bg-blue-400/30 text-white`;
     }
-    if (instance.status === "error") {
+    if (status === "error") {
       return `${base} bg-red-400/30 text-white`;
     }
     return `${base} bg-white/20 text-white`;
   };
 
   const getBadgeText = () => {
-    if (instance.status === "connected") return "Connected";
-    if (instance.status === "error") return "Error";
+    if (status === "connected") return "Connected";
+    if (status === "error") return "Error";
     return "Ready";
   };
-
-  const isSubscribing = instance.subscriber !== null;
-  const isStopping = instance.isStopping;
-  const subscribeBtnDisabled = isSubscribing || isStopping;
-  const stopBtnDisabled = !isSubscribing || isStopping;
 
   return (
     <div class="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -122,7 +131,7 @@ export function SubscriberPanel({
 
       <div class="p-5">
         {/* Status Message */}
-        <div class={getStatusClasses()}>{instance.statusMessage}</div>
+        <div class={getStatusClasses()}>{instance.statusMessage.value}</div>
 
         {/* Subscribe Options */}
         <div class="mb-4 space-y-2">
@@ -130,11 +139,9 @@ export function SubscriberPanel({
             <label class="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={instance.joiningFetchEnabled}
+                checked={instance.joiningFetchEnabled.value}
                 onChange={(e) => {
-                  sub.updateSubscriber(subscriberId, {
-                    joiningFetchEnabled: e.currentTarget.checked,
-                  });
+                  instance.joiningFetchEnabled.value = e.currentTarget.checked;
                 }}
                 disabled={isSubscribing}
                 class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
@@ -144,11 +151,9 @@ export function SubscriberPanel({
             <label class="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={instance.newGroupRequestEnabled}
+                checked={instance.newGroupRequestEnabled.value}
                 onChange={(e) => {
-                  sub.updateSubscriber(subscriberId, {
-                    newGroupRequestEnabled: e.currentTarget.checked,
-                  });
+                  instance.newGroupRequestEnabled.value = e.currentTarget.checked;
                 }}
                 disabled={isSubscribing}
                 class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
@@ -196,15 +201,15 @@ export function SubscriberPanel({
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
             Remote Stream
           </div>
-          {instance.codec && (
+          {codec && (
             <div class="absolute top-2 right-2 px-2 py-1 bg-blue-500/80 rounded text-xs text-white font-medium">
-              {instance.codec}
+              {codec}
             </div>
           )}
         </div>
 
         {/* Catalog */}
-        {instance.catalog && instance.catalog.tracks && instance.catalog.tracks.length > 0 && (
+        {catalog && catalog.tracks && catalog.tracks.length > 0 && (
           <div class="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
             <h3 class="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3 flex items-center gap-2">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -217,7 +222,7 @@ export function SubscriberPanel({
               </svg>
               Catalog
             </h3>
-            {instance.catalog.tracks.map((track, index) => (
+            {catalog.tracks.map((track, index) => (
               <div key={index} class="bg-white rounded-lg p-3 border border-blue-100">
                 <div class="grid grid-cols-4 gap-2 text-xs">
                   {Object.entries(track).map(([key, value]) => (
@@ -245,23 +250,29 @@ export function SubscriberPanel({
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">objects</div>
-              <div class="text-xl font-bold text-blue-600">{instance.objectsReceived}</div>
+              <div class="text-xl font-bold text-blue-600">{instance.objectsReceived.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">withExtensions</div>
-              <div class="text-xl font-bold text-blue-600">{instance.objectsWithExtensions}</div>
+              <div class="text-xl font-bold text-blue-600">
+                {instance.objectsWithExtensions.value}
+              </div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">bytes</div>
               <div class="text-xl font-bold text-blue-600">
-                {formatBytes(instance.bytesReceived)}
+                {formatBytes(instance.bytesReceived.value)}
               </div>
             </div>
             <button
               onClick={() => void requestKeyframe()}
-              disabled={!isSubscribing}
+              disabled={!isSubscribing || !instance.dynamicGroupsSupported.value}
               class="bg-purple-500 hover:bg-purple-600 disabled:bg-slate-200 disabled:cursor-not-allowed text-white rounded-lg p-3 border border-purple-600 disabled:border-slate-300 transition-colors flex flex-col items-center justify-center gap-1"
-              title="NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
+              title={
+                instance.dynamicGroupsSupported.value
+                  ? "NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
+                  : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-17 §9.3.11)"
+              }
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -281,19 +292,19 @@ export function SubscriberPanel({
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">chunksCreated</div>
-              <div class="text-xl font-bold text-blue-600">{instance.chunksCreated}</div>
+              <div class="text-xl font-bold text-blue-600">{instance.chunksCreated.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">chunksDecoded</div>
-              <div class="text-xl font-bold text-green-600">{instance.chunksDecoded}</div>
+              <div class="text-xl font-bold text-green-600">{instance.chunksDecoded.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">chunksSkipped</div>
-              <div class="text-xl font-bold text-yellow-600">{instance.chunksSkipped}</div>
+              <div class="text-xl font-bold text-yellow-600">{instance.chunksSkipped.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">decodeErrors</div>
-              <div class="text-xl font-bold text-red-600">{instance.decodeErrors}</div>
+              <div class="text-xl font-bold text-red-600">{instance.decodeErrors.value}</div>
             </div>
           </div>
 
@@ -301,25 +312,25 @@ export function SubscriberPanel({
           <div class="grid grid-cols-4 gap-3 mb-3">
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">framesDecoded</div>
-              <div class="text-xl font-bold text-blue-600">{instance.framesDecoded}</div>
+              <div class="text-xl font-bold text-blue-600">{instance.framesDecoded.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">keyFrames</div>
-              <div class="text-xl font-bold text-blue-600">{instance.keyFramesDecoded}</div>
+              <div class="text-xl font-bold text-blue-600">{instance.keyFramesDecoded.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
               <div class="text-xs text-slate-500">currentGroup</div>
-              <div class="text-xl font-bold text-blue-600">{instance.currentGroup}</div>
+              <div class="text-xl font-bold text-blue-600">{instance.currentGroup.value}</div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">currentSubGroup</div>
-              <div class="text-xl font-bold text-blue-600">{instance.currentSubGroup}</div>
+              <div class="text-xl font-bold text-blue-600">{instance.currentSubGroup.value}</div>
             </div>
           </div>
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">decoderState</div>
-              <div class="text-sm font-bold text-slate-600">{instance.decoderState}</div>
+              <div class="text-sm font-bold text-slate-600">{instance.decoderState.value}</div>
             </div>
           </div>
 
@@ -330,25 +341,25 @@ export function SubscriberPanel({
             <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
               <div class="text-xs text-slate-500">largestGroup</div>
               <div class="text-xl font-bold text-blue-600">
-                {instance.largestLocation?.group.toString() ?? "-"}
+                {instance.largestLocation.value?.group.toString() ?? "-"}
               </div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">largestObject</div>
               <div class="text-xl font-bold text-blue-600">
-                {instance.largestLocation?.object.toString() ?? "-"}
+                {instance.largestLocation.value?.object.toString() ?? "-"}
               </div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">fetchObjects</div>
               <div class="text-xl font-bold text-purple-600">
-                {instance.joiningFetchStats?.objectsReceived ?? 0}
+                {instance.joiningFetchStats.value?.objectsReceived ?? 0}
               </div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">fetchBytes</div>
               <div class="text-xl font-bold text-purple-600">
-                {formatBytes(instance.joiningFetchStats?.bytesReceived ?? 0)}
+                {formatBytes(instance.joiningFetchStats.value?.bytesReceived ?? 0)}
               </div>
             </div>
           </div>
@@ -360,13 +371,13 @@ export function SubscriberPanel({
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">messagesSent</div>
               <div class="text-xl font-bold text-blue-600">
-                {instance.session?.getStatistics().controlMessagesSent ?? "-"}
+                {session?.getStatistics().controlMessagesSent ?? "-"}
               </div>
             </div>
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">messagesReceived</div>
               <div class="text-xl font-bold text-blue-600">
-                {instance.session?.getStatistics().controlMessagesReceived ?? "-"}
+                {session?.getStatistics().controlMessagesReceived ?? "-"}
               </div>
             </div>
           </div>
@@ -378,7 +389,7 @@ export function SubscriberPanel({
             <div class="bg-white rounded-lg p-3 border border-slate-200">
               <div class="text-xs text-slate-500">streamsReceived</div>
               <div class="text-xl font-bold text-blue-600">
-                {instance.session?.getStatistics().unidirectionalStreamsReceived ?? "-"}
+                {session?.getStatistics().unidirectionalStreamsReceived ?? "-"}
               </div>
             </div>
           </div>
