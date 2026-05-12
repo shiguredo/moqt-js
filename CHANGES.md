@@ -331,8 +331,6 @@
   - TRACK_STATUS に Required Request ID Delta フィールドを追加する (Section 9.16)
   - PUBLISH_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.17)
   - SUBSCRIBE_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.20)
-  - 未対応: SUBSCRIBE_NAMESPACE の専用ストリーム対応
-  - 未対応: SUBSCRIBE_NAMESPACE の NAMESPACE/NAMESPACE_DONE 受信処理
   - 未対応: Subgroup 再オープン禁止
   - @voluntas
 - [CHANGE] draft-ietf-moq-msf-00 に対応する
