@@ -307,7 +307,7 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const namespace = this.options.namespace;
 
-    // Catalog Publisher
+    // Catalog パブリッシャー
     // maxCacheDuration を指定してサーバーにキャッシュさせる
     this.catalogPublisher = await this.session.publish(
       namespace,
@@ -320,7 +320,7 @@ class MediaPublisherImpl implements MediaPublisher {
       },
     );
 
-    // Audio Publisher
+    // 音声パブリッシャー
     if (this.options.audio) {
       const trackName = this.options.audio.trackName ?? DEFAULT_AUDIO_TRACK_NAME;
       this.audioPublisher = await this.session.publish(namespace, trackName, {
@@ -328,7 +328,7 @@ class MediaPublisherImpl implements MediaPublisher {
       });
     }
 
-    // Video Publisher
+    // 映像パブリッシャー
     if (this.options.video) {
       const trackName = this.options.video.trackName ?? DEFAULT_VIDEO_TRACK_NAME;
       this.videoPublisher = await this.session.publish(namespace, trackName, {
@@ -437,7 +437,7 @@ class MediaPublisherImpl implements MediaPublisher {
   private async setupEncoders(): Promise<void> {
     const useWorker = this.options.useWorker ?? true;
 
-    // Audio Encoder
+    // 音声エンコーダー
     if (this.options.audio && this.mediaStream) {
       const audioTrack = this.mediaStream.getAudioTracks()[0];
       if (audioTrack) {
@@ -464,7 +464,7 @@ class MediaPublisherImpl implements MediaPublisher {
       }
     }
 
-    // Video Encoder
+    // 映像エンコーダー
     if (this.options.video && this.mediaStream) {
       const videoTrack = this.mediaStream.getVideoTracks()[0];
       if (videoTrack) {

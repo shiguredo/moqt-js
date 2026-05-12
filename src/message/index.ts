@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-17 Section 9 (Control Messages)
  */
 
-// Types
+// 型定義
 export {
   FilterType,
   GroupOrder,
@@ -17,10 +17,10 @@ export {
   SetupOptionType,
 } from "./types";
 
-// Debug
+// デバッグ
 export { getMessageTypeName } from "./debug";
 
-// Parameter
+// パラメータ
 export {
   type Parameter,
   type SubscriptionFilter,
@@ -54,7 +54,7 @@ export {
   validateTrackNameSize,
 } from "./parameter";
 
-// Setup Messages
+// Setup メッセージ
 export {
   type Setup,
   createSetup,
@@ -80,7 +80,7 @@ export {
   encodeAuthorizationToken,
 } from "./authorizationToken";
 
-// Subscribe Messages
+// Subscribe メッセージ
 export {
   type Subscribe,
   type SubscribeOk,
@@ -93,7 +93,7 @@ export {
   encodeRequestUpdatePayload,
 } from "./subscribe";
 
-// Publish Messages
+// Publish メッセージ
 export {
   type Publish,
   type PublishDone,
@@ -106,7 +106,7 @@ export {
   encodePublishPayload,
 } from "./publish";
 
-// Session Messages
+// Session メッセージ
 export {
   type Goaway,
   type RequestError,
@@ -119,7 +119,7 @@ export {
   encodeRequestOkPayload,
 } from "./session";
 
-// Fetch Messages
+// Fetch メッセージ
 export {
   type Fetch,
   type FetchOk,
@@ -132,14 +132,14 @@ export {
   encodeFetchPayload,
 } from "./fetch";
 
-// Track Status Messages
+// Track Status メッセージ
 export {
   type TrackStatus,
   decodeTrackStatusPayload,
   encodeTrackStatusPayload,
 } from "./trackstatus";
 
-// Namespace Messages
+// Namespace メッセージ
 export {
   type Namespace,
   type NamespaceDone,

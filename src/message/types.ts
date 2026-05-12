@@ -9,13 +9,13 @@
 export const MessageType = {
   // draft-ietf-moq-transport-17 Section 9.4 (SETUP):
   // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
-  // https://github.com/moq-wg/moq-transport/pull/1510
+  // draft-ietf-moq-transport-17 Section 4
   SETUP: 0x2f00,
 
-  // Session
+  // セッション
   GOAWAY: 0x10,
 
-  // Request/Response
+  // リクエスト/レスポンス
   REQUEST_OK: 0x07,
   REQUEST_ERROR: 0x05,
   REQUEST_UPDATE: 0x02,
@@ -33,7 +33,7 @@ export const MessageType = {
   FETCH: 0x16,
   FETCH_OK: 0x18,
 
-  // Track Status
+  // トラックステータス
   TRACK_STATUS: 0x0d,
 
   // Namespace
@@ -46,7 +46,7 @@ export const MessageType = {
    * draft-ietf-moq-transport-17:
    * Publisher が新しい Request ID を割り当てられない場合に送信する。
    * SUBSCRIBE_NAMESPACE のフロー制御の一環。
-   * https://github.com/moq-wg/moq-transport/pull/1452
+   * draft-ietf-moq-transport-17 Section 9.21
    */
   PUBLISH_BLOCKED: 0x0f,
   SUBSCRIBE_NAMESPACE: 0x11,
@@ -59,7 +59,7 @@ export type MessageType = (typeof MessageType)[keyof typeof MessageType];
  *
  * draft-ietf-moq-transport-17:
  * "Setup Parameters" を "Setup Options" にリネーム。
- * https://github.com/moq-wg/moq-transport/pull/1461
+ * draft-ietf-moq-transport-17 Section 9.4.1
  */
 export const SetupOptionType = {
   PATH: 0x01,
@@ -87,7 +87,7 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
  *   DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
  *   Track Extensions に移動
- * https://github.com/moq-wg/moq-transport/pull/1390
+ * draft-ietf-moq-transport-17 Section 11
  *
  * 注意: SUBSCRIBE では DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
  * Message Parameter として使用される（Subscriber の希望値）。
@@ -111,7 +111,7 @@ export const MessageParameterType = {
    * SUBSCRIBE メッセージで使用。
    * リレーが Publisher を待つ時間（ミリ秒）。
    * 0 は即時応答を要求。不在の場合のデフォルト値は 0。
-   * https://github.com/moq-wg/moq-transport/pull/1447
+   * draft-ietf-moq-transport-17 Section 9.3.4
    */
   RENDEZVOUS_TIMEOUT: 0x04,
   /**
@@ -139,7 +139,7 @@ export const MessageParameterType = {
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * Publisher の GROUP_ORDER_PREFERENCE は Track Extension として使用。
-   * https://github.com/moq-wg/moq-transport/pull/1390
+   * draft-ietf-moq-transport-17 Section 11
    */
   GROUP_ORDER: 0x22,
   /**
@@ -185,7 +185,7 @@ export type FilterType = (typeof FilterType)[keyof typeof FilterType];
  *   than the one specified exist.
  *
  * Note: 0x1 (Object Does Not Exist) was removed in draft-16.
- * https://github.com/moq-wg/moq-transport/pull/1342
+ * draft-ietf-moq-transport-17 Section 10.2.1.1
  */
 export const ObjectStatus = {
   NORMAL: 0x0,

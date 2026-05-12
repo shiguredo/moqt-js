@@ -39,7 +39,7 @@ export interface Subscribe {
  * draft-ietf-moq-transport-17:
  * - 双方向ストリーム上で送信されるため Request ID は不要。
  * - Track Extensions が追加された。
- * https://github.com/moq-wg/moq-transport/pull/1374
+ * draft-ietf-moq-transport-17 Section 9
  */
 export interface SubscribeOk {
   type: typeof MessageType.SUBSCRIBE_OK;

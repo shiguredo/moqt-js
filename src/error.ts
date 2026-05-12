@@ -9,7 +9,7 @@
  *
  * draft-ietf-moq-transport-17:
  * - TOO_MANY_REQUESTS を INVALID_REQUIRED_REQUEST_ID に変更
- * https://github.com/moq-wg/moq-transport/pull/1434
+ * draft-ietf-moq-transport-17 Section 3.5
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,

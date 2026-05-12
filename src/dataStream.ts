@@ -7,7 +7,7 @@
  * draft-ietf-moq-transport-17:
  * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
  * Publisher は同じトラックのオブジェクトを Datagram と Stream の両方で送信できる。
- * https://github.com/moq-wg/moq-transport/pull/1350
+ * draft-ietf-moq-transport-17 Section 10
  */
 
 import { decodeVarint, encodeVarint } from "./varint";
@@ -69,59 +69,59 @@ function validateObjectStatus(status: number): void {
  */
 export const SubgroupHeaderType = {
   // Priority Present = Yes, Contains End of Group = No
-  // Subgroup ID = 0, No Extensions
+  // Subgroup ID = 0, No Extensions (Table 6: Type 0x10)
   BASE: 0x10,
-  // Subgroup ID = 0, Extensions Present
+  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x11)
   BASE_EXT: 0x11,
-  // Subgroup ID = First Object ID, No Extensions
+  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x12)
   FIRST_OBJ: 0x12,
-  // Subgroup ID = First Object ID, Extensions Present
+  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x13)
   FIRST_OBJ_EXT: 0x13,
-  // Subgroup ID Field Present, No Extensions
+  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x14)
   EXPLICIT: 0x14,
-  // Subgroup ID Field Present, Extensions Present
+  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x15)
   EXPLICIT_EXT: 0x15,
 
   // Priority Present = Yes, Contains End of Group = Yes
-  // Subgroup ID = 0, No Extensions
+  // Subgroup ID = 0, No Extensions (Table 6: Type 0x18)
   BASE_END_GROUP: 0x18,
-  // Subgroup ID = 0, Extensions Present
+  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x19)
   BASE_EXT_END_GROUP: 0x19,
-  // Subgroup ID = First Object ID, No Extensions
+  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x1A)
   FIRST_OBJ_END_GROUP: 0x1a,
-  // Subgroup ID = First Object ID, Extensions Present
+  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x1B)
   FIRST_OBJ_EXT_END_GROUP: 0x1b,
-  // Subgroup ID Field Present, No Extensions
+  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x1C)
   EXPLICIT_END_GROUP: 0x1c,
-  // Subgroup ID Field Present, Extensions Present
+  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x1D)
   EXPLICIT_EXT_END_GROUP: 0x1d,
 
   // Priority Present = No, Contains End of Group = No
-  // Subgroup ID = 0, No Extensions
+  // Subgroup ID = 0, No Extensions (Table 6: Type 0x30)
   BASE_NO_PRIORITY: 0x30,
-  // Subgroup ID = 0, Extensions Present
+  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x31)
   BASE_EXT_NO_PRIORITY: 0x31,
-  // Subgroup ID = First Object ID, No Extensions
+  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x32)
   FIRST_OBJ_NO_PRIORITY: 0x32,
-  // Subgroup ID = First Object ID, Extensions Present
+  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x33)
   FIRST_OBJ_EXT_NO_PRIORITY: 0x33,
-  // Subgroup ID Field Present, No Extensions
+  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x34)
   EXPLICIT_NO_PRIORITY: 0x34,
-  // Subgroup ID Field Present, Extensions Present
+  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x35)
   EXPLICIT_EXT_NO_PRIORITY: 0x35,
 
   // Priority Present = No, Contains End of Group = Yes
-  // Subgroup ID = 0, No Extensions
+  // Subgroup ID = 0, No Extensions (Table 6: Type 0x38)
   BASE_END_GROUP_NO_PRIORITY: 0x38,
-  // Subgroup ID = 0, Extensions Present
+  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x39)
   BASE_EXT_END_GROUP_NO_PRIORITY: 0x39,
-  // Subgroup ID = First Object ID, No Extensions
+  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x3A)
   FIRST_OBJ_END_GROUP_NO_PRIORITY: 0x3a,
-  // Subgroup ID = First Object ID, Extensions Present
+  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x3B)
   FIRST_OBJ_EXT_END_GROUP_NO_PRIORITY: 0x3b,
-  // Subgroup ID Field Present, No Extensions
+  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x3C)
   EXPLICIT_END_GROUP_NO_PRIORITY: 0x3c,
-  // Subgroup ID Field Present, Extensions Present
+  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x3D)
   EXPLICIT_EXT_END_GROUP_NO_PRIORITY: 0x3d,
 } as const;
 
@@ -192,12 +192,12 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   parts.push(encodeVarint(header.trackAlias));
   parts.push(encodeVarint(header.groupId));
 
-  // Subgroup ID field (only for types with explicit Subgroup ID)
+  // Subgroup ID フィールド (明示的な Subgroup ID を持つタイプのみ)
   if (hasSubgroupIdField(header.type) && header.subgroupId !== undefined) {
     parts.push(encodeVarint(header.subgroupId));
   }
 
-  // Publisher Priority (8 bits) - only for types with Priority Present
+  // Publisher Priority (8 ビット) - Priority Present を持つタイプのみ
   if (hasPriorityPresent(header.type) && header.publisherPriority !== undefined) {
     parts.push(new Uint8Array([header.publisherPriority]));
   }
@@ -246,14 +246,14 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
     );
   }
 
-  // Subgroup ID field present check based on type
+  // タイプに基づいて Subgroup ID フィールドの有無を判定
   // draft-ietf-moq-transport-17 Section 10.4.2 Table 6:
   // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D: Subgroup ID Field Present
   // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39: Subgroup ID = 0
   // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B: Subgroup ID = First Object ID (no field)
   const lowNibble = typeNum & 0x0f;
   if (lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d) {
-    // Explicit Subgroup ID field present
+    // 明示的な Subgroup ID フィールドが存在
     const [sid, sidConsumed] = decodeVarint(data, offset + totalConsumed);
     subgroupId = sid;
     totalConsumed += sidConsumed;
@@ -261,9 +261,10 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
     // Subgroup ID = 0
     subgroupId = 0n;
   }
-  // For types 0x02, 0x03, 0x0A, 0x0B: Subgroup ID = First Object ID (will be set when first object is read)
+  // タイプ 0x02, 0x03, 0x0A, 0x0B:
+  // Subgroup ID = First Object ID (最初のオブジェクト読み取り時に設定)
 
-  // Publisher Priority (8 bits)
+  // Publisher Priority (8 ビット)
   // draft-ietf-moq-transport-17 Section 10.4.2 Table 6
   let publisherPriority: number | undefined;
   if (hasPriorityPresent(typeNum)) {
@@ -321,12 +322,13 @@ export function encodeObjectFields(
   // Object ID Delta
   parts.push(encodeVarint(objectIdDelta));
 
-  // Extensions (only if header type has Extensions Present)
+  // 拡張 (ヘッダータイプが Extensions Present の場合のみ)
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
     // draft-ietf-moq-transport-17 Section 10.2.1.2:
-    // Non-Normal status objects must not have extension headers
+    // "If an endpoint receives extension headers on Objects with status
+    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
       throw new Error("Protocol violation: extension headers on non-Normal status object");
     }
@@ -337,10 +339,10 @@ export function encodeObjectFields(
     }
   }
 
-  // Payload length
+  // ペイロード長
   parts.push(encodeVarint(payloadLength));
 
-  // Status (only if payload length is 0)
+  // ステータス (ペイロード長が 0 の場合のみ)
   // draft-ietf-moq-transport-17 Section 10.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   if (payloadLength === 0n) {
@@ -387,7 +389,7 @@ export function decodeObjectFields(
   const [objectIdDelta, objectIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += objectIdConsumed;
 
-  // Extensions (only if header type has Extensions Present)
+  // 拡張 (ヘッダータイプが Extensions Present の場合のみ)
   let propertiesLength = 0;
   let properties = new Uint8Array(0);
   if (hasPropertiesPresent(headerType)) {
@@ -399,11 +401,11 @@ export function decodeObjectFields(
     totalConsumed += propertiesLength;
   }
 
-  // Payload length
+  // ペイロード長
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
 
-  // Status (only present if payload length is 0)
+  // ステータス (ペイロード長が 0 の場合のみ)
   // draft-ietf-moq-transport-17 Section 10.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   let status: ObjectStatus = ObjectStatus.NORMAL;
@@ -488,43 +490,43 @@ export function createObject(
  * | 0x2D | No           | Yes        | No        | No       | Status         |
  */
 export const DatagramType = {
-  // Payload types with Object ID, Priority Present
+  // ペイロードタイプ、Object ID あり、Priority Present (Table 5: 0x00-0x03)
   PAYLOAD_OBJ: 0x00,
   PAYLOAD_OBJ_EXT: 0x01,
   PAYLOAD_OBJ_END_GROUP: 0x02,
   PAYLOAD_OBJ_EXT_END_GROUP: 0x03,
 
-  // Payload types without Object ID (Object ID = 0), Priority Present
+  // ペイロードタイプ、Object ID なし (Object ID = 1)、Priority Present (Table 5: 0x04-0x07)
   PAYLOAD_NO_OBJ: 0x04,
   PAYLOAD_NO_OBJ_EXT: 0x05,
   PAYLOAD_NO_OBJ_END_GROUP: 0x06,
   PAYLOAD_NO_OBJ_EXT_END_GROUP: 0x07,
 
-  // Payload types with Object ID, No Priority
+  // ペイロードタイプ、Object ID あり、Priority なし (Table 5: 0x08-0x0B)
   PAYLOAD_OBJ_NO_PRI: 0x08,
   PAYLOAD_OBJ_EXT_NO_PRI: 0x09,
   PAYLOAD_OBJ_END_GROUP_NO_PRI: 0x0a,
   PAYLOAD_OBJ_EXT_END_GROUP_NO_PRI: 0x0b,
 
-  // Payload types without Object ID, No Priority
+  // ペイロードタイプ、Object ID なし、Priority なし (Table 5: 0x0C-0x0F)
   PAYLOAD_NO_OBJ_NO_PRI: 0x0c,
   PAYLOAD_NO_OBJ_EXT_NO_PRI: 0x0d,
   PAYLOAD_NO_OBJ_END_GROUP_NO_PRI: 0x0e,
   PAYLOAD_NO_OBJ_EXT_END_GROUP_NO_PRI: 0x0f,
 
-  // Status types with Object ID, Priority Present
+  // ステータスタイプ、Object ID あり、Priority Present (Table 5: 0x20-0x21)
   STATUS_OBJ: 0x20,
   STATUS_OBJ_EXT: 0x21,
 
-  // Status types without Object ID, Priority Present
+  // ステータスタイプ、Object ID なし、Priority Present (Table 5: 0x24-0x25)
   STATUS_NO_OBJ: 0x24,
   STATUS_NO_OBJ_EXT: 0x25,
 
-  // Status types with Object ID, No Priority (0x28-0x29)
+  // ステータスタイプ、Object ID あり、Priority なし (Table 5: 0x28-0x29)
   STATUS_OBJ_NO_PRI: 0x28,
   STATUS_OBJ_EXT_NO_PRI: 0x29,
 
-  // Status types without Object ID (Object ID = 1), No Priority (0x2C-0x2D)
+  // ステータスタイプ、Object ID なし (Object ID = 1)、Priority なし (Table 5: 0x2C-0x2D)
   // draft-ietf-moq-transport-17 Section 10.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
@@ -584,19 +586,19 @@ function datagramIsStatusType(type: number): boolean {
  * Types 0x08-0x0F and 0x28-0x2D have Priority Present = No
  */
 function datagramHasPriority(type: number): boolean {
-  // Types 0x00-0x07 have Priority
+  // タイプ 0x00-0x07 は Priority あり (Table 5)
   if (type <= 0x07) {
     return true;
   }
-  // Types 0x08-0x0F don't have Priority
+  // タイプ 0x08-0x0F は Priority なし (Table 5)
   if (type >= 0x08 && type <= 0x0f) {
     return false;
   }
-  // Types 0x20-0x25 have Priority
+  // タイプ 0x20-0x25 は Priority あり (Table 5)
   if (type >= 0x20 && type <= 0x25) {
     return true;
   }
-  // Types 0x28-0x2D don't have Priority
+  // タイプ 0x28-0x2D は Priority なし (Table 5)
   return false;
 }
 
@@ -617,7 +619,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     throw new Error(`objectId must be 1 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
   }
 
-  // Priority Present check (types 0x08-0x0F and 0x28-0x2D don't have Priority)
+  // Priority Present の有無を判定 (Table 5: 0x08-0x0F, 0x28-0x2D は Priority なし)
   if (datagramHasPriority(datagram.type)) {
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
@@ -697,7 +699,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     totalConsumed += oidConsumed;
   }
 
-  // Priority Present check (types 0x08-0x0F and 0x28-0x2D don't have Priority)
+  // Priority Present の有無を判定 (Table 5: 0x08-0x0F, 0x28-0x2D は Priority なし)
   let publisherPriority = 0;
   if (datagramHasPriority(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
@@ -873,7 +875,7 @@ export const FetchSerializationFlags = {
    * 指定した Location までの Object が存在しないことを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * https://github.com/moq-wg/moq-transport/pull/1513
+   * draft-ietf-moq-transport-17 Section 10.4.4.2
    */
   END_OF_NON_EXISTENT_RANGE: 0x8c,
   /**
@@ -883,7 +885,7 @@ export const FetchSerializationFlags = {
    * 指定した Location までの Object のステータスが不明であることを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * https://github.com/moq-wg/moq-transport/pull/1513
+   * draft-ietf-moq-transport-17 Section 10.4.4.2
    */
   END_OF_UNKNOWN_RANGE: 0x10c,
 } as const;
@@ -982,7 +984,7 @@ export function encodeFetchObjectFields(
     return result;
   }
 
-  // Group ID (if flag 0x08 is set)
+  // Group ID (フラグ 0x08 がセットされている場合)
   if (fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) {
     if (fields.groupId === undefined) {
       throw new Error("Group ID required when GROUP_ID_PRESENT flag is set");
@@ -990,7 +992,7 @@ export function encodeFetchObjectFields(
     parts.push(encodeVarint(fields.groupId));
   }
 
-  // Subgroup ID (if flags & 0x03 == 0x03)
+  // Subgroup ID (flags & 0x03 == 0x03 の場合)
   if (
     (fields.serializationFlags & FetchSerializationFlags.SUBGROUP_MASK) ===
     FetchSerializationFlags.SUBGROUP_PRESENT
@@ -1001,7 +1003,7 @@ export function encodeFetchObjectFields(
     parts.push(encodeVarint(fields.subgroupId));
   }
 
-  // Object ID (if flag 0x04 is set)
+  // Object ID (フラグ 0x04 がセットされている場合)
   if (fields.serializationFlags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     if (fields.objectId === undefined) {
       throw new Error("Object ID required when OBJECT_ID_PRESENT flag is set");
@@ -1009,7 +1011,7 @@ export function encodeFetchObjectFields(
     parts.push(encodeVarint(fields.objectId));
   }
 
-  // Publisher Priority (if flag 0x10 is set)
+  // Publisher Priority (フラグ 0x10 がセットされている場合)
   if (fields.serializationFlags & FetchSerializationFlags.PRIORITY_PRESENT) {
     if (fields.publisherPriority === undefined) {
       throw new Error("Publisher Priority required when PRIORITY_PRESENT flag is set");
@@ -1017,7 +1019,7 @@ export function encodeFetchObjectFields(
     parts.push(new Uint8Array([fields.publisherPriority]));
   }
 
-  // Extensions (if flag 0x20 is set)
+  // 拡張 (フラグ 0x20 がセットされている場合)
   if (fields.serializationFlags & FetchSerializationFlags.PROPERTIES_PRESENT) {
     const extLen = fields.properties?.length ?? 0;
     parts.push(encodeVarint(extLen));
@@ -1034,7 +1036,7 @@ export function encodeFetchObjectFields(
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status を含めない
 
-  // Object Payload (optional, included when specified)
+  // Object Payload (オプション、指定時のみ含める)
   if (includePayload && fields.payload && fields.payloadLength > 0n) {
     parts.push(fields.payload);
   }
@@ -1191,7 +1193,7 @@ export function decodeFetchObjectFields(
     // draft-ietf-moq-transport-17:
     // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
     // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
-    // https://github.com/moq-wg/moq-transport/pull/1317
+    // draft-ietf-moq-transport-17 Section 10.4.4
     if (context !== null && subgroupId === context.subgroupId) {
       if (publisherPriority !== context.publisherPriority) {
         throw new ProtocolViolationError(
@@ -1228,7 +1230,7 @@ export function decodeFetchObjectFields(
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status は存在しない
 
-  // Update context for next object
+  // 次のオブジェクトのためにコンテキストを更新
   const newContext: FetchObjectContext = {
     groupId,
     subgroupId,

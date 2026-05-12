@@ -115,7 +115,7 @@ test("uint8 Message Parameter Value は範囲外を拒否する", () => {
  * Track Namespace / Full Track Name のサイズ制限テスト
  * draft-ietf-moq-transport-17:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * https://github.com/moq-wg/moq-transport/pull/1399
+ * draft-ietf-moq-transport-17 Section 9.3
  */
 test("Track Namespace のサイズ制限定数が 4,096", () => {
   assert.equal(MAX_TRACK_NAMESPACE_SIZE, 4096);

@@ -4,7 +4,7 @@
  *
  * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
- * https://github.com/moq-wg/moq-transport/pull/1510
+ * draft-ietf-moq-transport-17 Section 4
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
@@ -22,7 +22,7 @@ import { MessageType, SetupOptionType } from "./types";
  *
  * draft-ietf-moq-transport-17 Section 9.4 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
- * https://github.com/moq-wg/moq-transport/pull/1510
+ * draft-ietf-moq-transport-17 Section 4
  */
 export interface Setup {
   type: typeof MessageType.SETUP;

@@ -70,7 +70,7 @@ export interface Publisher {
    * draft-ietf-moq-transport-17:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
-   * https://github.com/moq-wg/moq-transport/pull/1350
+   * draft-ietf-moq-transport-17 Section 10
    */
   sendDatagram(params: SendDatagramParams): void;
   done(): Promise<void>;
@@ -93,7 +93,7 @@ export class PublisherImpl implements Publisher {
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
 
-  // Internal callbacks for session to use
+  // セッションが利用する内部コールバック
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: () => Promise<void>;

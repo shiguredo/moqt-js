@@ -8,9 +8,9 @@
  *
  * draft-ietf-moq-transport-17:
  * - Subscriber は DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を送信しない
- *   https://github.com/moq-wg/moq-transport/pull/1325
+ *   draft-ietf-moq-transport-17 Section 9.16
  * - REQUEST_OK レスポンスに LARGEST_OBJECT パラメータを含めることが可能
- *   https://github.com/moq-wg/moq-transport/pull/1367
+ *   draft-ietf-moq-transport-17 Section 9.16
  */
 
 import { decodeVarint, encodeVarint } from "../varint";

@@ -431,7 +431,7 @@ export interface SubscribeOptions {
    *
    * リレーが Publisher を待つ時間。
    * 0 は即時応答を要求。指定しない場合のデフォルトは 0。
-   * https://github.com/moq-wg/moq-transport/pull/1447
+   * draft-ietf-moq-transport-17 Section 9.3.4
    */
   rendezvousTimeout?: bigint;
 }
@@ -685,14 +685,14 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-17 Section 4 (Modularity):
    * 制御ストリームは単方向ストリームのペアに変更された。
    * クライアントとサーバーがそれぞれ 1 本ずつ単方向ストリームを開く。
-   * https://github.com/moq-wg/moq-transport/pull/1510
+   * draft-ietf-moq-transport-17 Section 4
    */
   private controlSendStream?: WritableStream<Uint8Array>;
   private controlReceiveStream?: ReadableStream<Uint8Array>;
   private controlReader?: ControlStreamReader;
   private controlWriter?: ControlStreamWriter;
 
-  // Request ID management
+  // リクエスト ID 管理
   private nextRequestId = 0n;
   private nextTrackAlias = 0n;
 
@@ -701,7 +701,7 @@ export class SessionImpl implements Session {
   private sentGoaway = false;
   private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  // Active publishers, subscribers and fetchers
+  // アクティブなパブリッシャー、サブスクライバー、フェッチャー
   private publishers = new Map<bigint, PublisherImpl>();
   private subscribers = new Map<bigint, SubscriberImpl>();
   private subscribersByAlias = new Map<bigint, SubscriberImpl>();
@@ -726,7 +726,7 @@ export class SessionImpl implements Session {
   // リクエストごとの双方向ストリーム管理
   // draft-ietf-moq-transport-17 Section 3.3:
   // リクエストは双方向ストリーム上で送受信される。
-  // https://github.com/moq-wg/moq-transport/pull/1389
+  // draft-ietf-moq-transport-17 Section 3.3
   private requestStreams = new Map<
     bigint,
     {
@@ -736,7 +736,7 @@ export class SessionImpl implements Session {
     }
   >();
 
-  // Pending requests
+  // 保留中のリクエスト
   private pendingPublish = new Map<
     bigint,
     { resolve: (pub: Publisher) => void; reject: (err: Error) => void; impl: PublisherImpl }
@@ -828,7 +828,7 @@ export class SessionImpl implements Session {
   // TODO: Closed Subgroup Tracking
   // draft-ietf-moq-transport-17:
   // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
-  // https://github.com/moq-wg/moq-transport/pull/1396
+  // draft-ietf-moq-transport-17 Section 10.4.2
   //
   // 現在の実装では 1 Group = 1 Subgroup = 1 Stream モデルを採用しているため、
   // グループが終了すると自然と新しいストリームを作成する。
@@ -913,7 +913,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-17 Section 4 (Modularity):
     // 制御ストリームは単方向ストリームのペアに変更された。
     // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
-    // https://github.com/moq-wg/moq-transport/pull/1510
+    // draft-ietf-moq-transport-17 Section 4
 
     this.controlReader = new ControlStreamReader();
     this.controlWriter = new ControlStreamWriter();
@@ -927,7 +927,7 @@ export class SessionImpl implements Session {
     // 制御ストリームのストリームタイプは 0x2F00 (Table 3)
     const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
-    // Send SETUP
+    // SETUP を送信
     // draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
     // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
     // moqt-js は WebTransport 専用クライアントのため `createSetup` には渡さない。
@@ -1028,13 +1028,13 @@ export class SessionImpl implements Session {
 
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
 
-    // Start reading control messages in background
+    // バックグラウンドで制御メッセージの読み取りを開始
     this.startControlMessageLoop();
 
-    // Start accepting incoming data streams
+    // 受信データストリームの受け入れを開始
     this.startIncomingStreamLoop();
 
-    // Start receiving datagrams
+    // データグラムの受信を開始
     this.startDatagramLoop();
   }
 
@@ -1065,7 +1065,7 @@ export class SessionImpl implements Session {
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
 
-    // Create publisher implementation
+    // パブリッシャー実装を作成
     const impl = new PublisherImpl(
       namespace,
       trackName,
@@ -1075,10 +1075,10 @@ export class SessionImpl implements Session {
       callbacks?.onForwardStateChange,
     );
 
-    // Set up send callback
+    // 送信コールバックを設定
     impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
 
-    // Set up datagram send callback
+    // データグラム送信コールバックを設定
     impl.onSendDatagram = (params: SendDatagramParams) => {
       this.sendDatagram(impl, params);
     };
@@ -1090,7 +1090,7 @@ export class SessionImpl implements Session {
       await this.sendPublishDone(impl);
     };
 
-    // Create promise for PUBLISH_OK
+    // PUBLISH_OK の Promise を作成
     const promise = new Promise<Publisher>((resolve, reject) => {
       this.pendingPublish.set(requestId, { resolve, reject, impl });
     });
@@ -1102,7 +1102,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
     // "The publisher sends PUBLISH as the first message on a new
     //  bidirectional stream to initiate a subscription for a Track."
-    // https://github.com/moq-wg/moq-transport/pull/1389
+    // draft-ietf-moq-transport-17 Section 3.3
     const publishMsg = {
       type: MessageType.PUBLISH,
       requestId,
@@ -1193,8 +1193,8 @@ export class SessionImpl implements Session {
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
 
-    // Create subscriber implementation
-    // Note: trackAlias will be set when SUBSCRIBE_OK is received
+    // サブスクライバー実装を作成
+    // 注意: trackAlias は SUBSCRIBE_OK 受信時に設定される
     const impl = new SubscriberImpl(
       namespace,
       trackName,
@@ -1211,12 +1211,12 @@ export class SessionImpl implements Session {
       await this.cancelSubscription(impl);
     };
 
-    // Set up update callback
+    // 更新コールバックを設定
     impl.onUpdate = async (updateOptions: RequestUpdateOptions) => {
       await this.sendRequestUpdate(impl, updateOptions);
     };
 
-    // Create promise for SUBSCRIBE_OK
+    // SUBSCRIBE_OK の Promise を作成
     const promise = new Promise<Subscriber>((resolve, reject) => {
       this.pendingSubscribe.set(requestId, {
         resolve,
@@ -1232,7 +1232,7 @@ export class SessionImpl implements Session {
     // SUBSCRIBE メッセージを双方向ストリームで送信
     // draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
     // SUBSCRIBE は新しい双方向ストリームで送信される。
-    // https://github.com/moq-wg/moq-transport/pull/1389
+    // draft-ietf-moq-transport-17 Section 3.3
     const subscribeMsg = {
       type: MessageType.SUBSCRIBE,
       requestId,
@@ -1325,7 +1325,7 @@ export class SessionImpl implements Session {
     // FETCH メッセージを双方向ストリームで送信（Standalone Fetch）
     // draft-ietf-moq-transport-17 Section 9.14 (FETCH):
     // FETCH は新しい双方向ストリームで送信される。
-    // https://github.com/moq-wg/moq-transport/pull/1389
+    // draft-ietf-moq-transport-17 Section 3.3
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
@@ -1388,7 +1388,7 @@ export class SessionImpl implements Session {
     // TRACK_STATUS メッセージを双方向ストリームで送信
     // draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
     // TRACK_STATUS は新しい双方向ストリームで送信される。
-    // https://github.com/moq-wg/moq-transport/pull/1389
+    // draft-ietf-moq-transport-17 Section 3.3
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
@@ -1590,7 +1590,7 @@ export class SessionImpl implements Session {
               }
               // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
-              // https://github.com/moq-wg/moq-transport/pull/1499
+              // draft-ietf-moq-transport-17 Section 9.2
               decodeRequestOkPayload(messagePayload);
               // サブスクリプション成功
               resolved = true;
@@ -1612,7 +1612,7 @@ export class SessionImpl implements Session {
               }
               // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
               // Request ID はストリームが特定するため不要
-              // https://github.com/moq-wg/moq-transport/pull/1499
+              // draft-ietf-moq-transport-17 Section 9.2
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               // サブスクリプション失敗
               const error = new RequestError(
@@ -1836,7 +1836,7 @@ export class SessionImpl implements Session {
             case MessageType.REQUEST_OK: {
               // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
-              // https://github.com/moq-wg/moq-transport/pull/1499
+              // draft-ietf-moq-transport-17 Section 9.2
               decodeRequestOkPayload(messagePayload);
               if (resolved) {
                 // 二重応答は仕様違反
@@ -1857,7 +1857,7 @@ export class SessionImpl implements Session {
             case MessageType.REQUEST_ERROR: {
               // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
               // Request ID はストリームが特定するため不要
-              // https://github.com/moq-wg/moq-transport/pull/1499
+              // draft-ietf-moq-transport-17 Section 9.2
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
@@ -2006,10 +2006,10 @@ export class SessionImpl implements Session {
       this.goawayTimeoutId = null;
     }
 
-    // Close all publishers, subscribers and fetchers
-    // Note: We use markClosed() instead of handleEnd() because session close
-    // is session-level termination (Section 3.4), not track-level PUBLISH_DONE.
-    // The end callback is only for PUBLISH_DONE.
+    // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
+    // 注意: セッションクローズはトラックレベルの PUBLISH_DONE ではなく
+    // セッションレベルの終了 (Section 3.4) であるため handleEnd() ではなく
+    // markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
     for (const pub of this.publishers.values()) {
       pub.markClosed();
     }
@@ -2129,7 +2129,7 @@ export class SessionImpl implements Session {
     // close コールバックはコンストラクタの transport.closed 監視で呼ばれる
   }
 
-  // Private methods
+  // プライベートメソッド
 
   /**
    * セッションエラーを通知してセッションを閉じる
@@ -2204,7 +2204,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-17 Section 3.3:
    * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS 等) は
    * 双方向ストリーム上で送受信される。
-   * https://github.com/moq-wg/moq-transport/pull/1389
+   * draft-ietf-moq-transport-17 Section 3.3
    *
    * @param requestId - リクエスト ID
    * @param type - メッセージタイプ
@@ -2530,7 +2530,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK):
    * PUBLISH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
    * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
-   * https://github.com/moq-wg/moq-transport/pull/1389
+   * draft-ietf-moq-transport-17 Section 3.3
    */
   private async readPublishResponse(
     requestId: bigint,
@@ -2550,7 +2550,7 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
    * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
-   * https://github.com/moq-wg/moq-transport/pull/1389
+   * draft-ietf-moq-transport-17 Section 3.3
    */
   private async readSubscribeResponse(
     requestId: bigint,
@@ -2570,7 +2570,7 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
    * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
-   * https://github.com/moq-wg/moq-transport/pull/1389
+   * draft-ietf-moq-transport-17 Section 3.3
    */
   private async readFetchResponse(
     requestId: bigint,
@@ -2590,7 +2590,7 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
    * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
-   * https://github.com/moq-wg/moq-transport/pull/1389
+   * draft-ietf-moq-transport-17 Section 3.3
    */
   private async readTrackStatusResponse(
     requestId: bigint,
@@ -2650,7 +2650,7 @@ export class SessionImpl implements Session {
    * リクエスト/レスポンス (SUBSCRIBE_OK, PUBLISH_OK, FETCH_OK, REQUEST_OK,
    * REQUEST_ERROR) は双方向ストリームに移動した。
    * 制御ストリームに残るのは GOAWAY のみ。
-   * https://github.com/moq-wg/moq-transport/pull/1389
+   * draft-ietf-moq-transport-17 Section 3.3
    *
    * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
    * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
@@ -3044,7 +3044,7 @@ export class SessionImpl implements Session {
             const streamTypeNum = Number(streamType);
 
             if (streamTypeNum === FetchHeaderType) {
-              // Fetch Data Stream
+              // Fetch データストリーム
               isFetchStream = true;
               const [header, consumed] = decodeFetchHeader(buffer);
               fetchHeader = header;

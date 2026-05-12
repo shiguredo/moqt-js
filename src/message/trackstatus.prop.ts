@@ -17,7 +17,7 @@ import { encodeVarint } from "../varint";
 /**
  * draft-ietf-moq-transport-17 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * https://github.com/moq-wg/moq-transport/pull/1472
+ * draft-ietf-moq-transport-17 Section 9
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
