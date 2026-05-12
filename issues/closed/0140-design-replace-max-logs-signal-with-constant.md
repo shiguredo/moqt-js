@@ -1,6 +1,7 @@
 # `maxLogs` を signal から定数に変更する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -39,3 +40,9 @@ Model: Opus 4.7
 - `maxLogs` の signal 定義が定数に変更されている
 - `export` が削除されている
 - `vp run build` が成功する
+
+## 解決方法
+
+- `DebugPanel.tsx` の `export const maxLogs = signal(1000)` を `const MAX_LOGS = 1000` に変更し export を外した
+- `addLog` 内の参照を `maxLogs.value` から `MAX_LOGS` に書き換えた
+- `vp run build:devtools` / `vp test` (456 passed) が通ることを確認した

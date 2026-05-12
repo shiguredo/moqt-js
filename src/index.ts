@@ -112,6 +112,7 @@ export {
   type ImmutableProperties,
   type ParsedProperties,
   encodeProperties,
+  supportsDynamicGroups,
 } from "./properties";
 
 // Re-export Data Stream types and functions

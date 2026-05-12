@@ -1,6 +1,7 @@
 # `DebugPanel` の `useEffect` 内 `effect()` を `useSignalEffect` に統一する
 
 Created: 2026-05-10
+Completed: 2026-05-10
 Model: Opus 4.7
 
 ## 概要
@@ -60,3 +61,10 @@ useEffect(() => {
 - `effect` の import が `useSignalEffect` に変更されている
 - ESC キー処理の `useEffect` はそのまま残っている
 - `vp run build` が成功する
+
+## 解決方法
+
+- `DebugPanel.tsx` の `@preact/signals` import から `effect` を外し `useSignalEffect` を追加した (`signal` は引き続き利用)
+- `useEffect` + `effect` を `useSignalEffect` 1 つに置き換えた (cleanup の手動配線が不要に)
+- ESC キー処理の `useEffect` はそのまま残した
+- `vp run build:devtools` が通ることを確認した
