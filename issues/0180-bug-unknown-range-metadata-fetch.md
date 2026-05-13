@@ -28,6 +28,7 @@ Fetch データストリームのデコード (`processFetchObjects` → `decode
 ## 期待される動作
 
 Unknown Range Metadata Type のレコードを受信した場合:
+
 1. 当該範囲のオブジェクトが未シリアライズであることを認識する
 2. エラーではなく、正常なレスポンスの一部として扱う
 3. `FetchCallbacks` または `Fetcher` インターフェース経由でアプリケーションに通知する (オプション)
