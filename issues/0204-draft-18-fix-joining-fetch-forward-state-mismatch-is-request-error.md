@@ -27,10 +27,10 @@ draft-ietf-moq-transport-18 A.1: "Joining Fetch forward state mismatch is a requ
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
+| ファイル         | 行番号    | 変更内容                                                            |
+| ---------------- | --------- | ------------------------------------------------------------------- |
 | `src/session.ts` | 1168-1178 | forward=false 時の Joining Fetch 拒否コメントを draft-18 に更新する |
-| `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc を draft-18 に更新する |
+| `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc を draft-18 に更新する                  |
 
 ## 期待される動作
 

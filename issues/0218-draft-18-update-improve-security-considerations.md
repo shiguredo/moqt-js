@@ -30,11 +30,11 @@ draft-ietf-moq-transport-18 A.1: "Improve Security Considerations (#1625)"
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/message/setup.ts` | 1-8 | draft 番号を 18 に更新する |
-| `src/message/setup.ts` | 55-60 | MOQT_IMPLEMENTATION の JSDoc に fingerprinting 懸念を追記する |
-| `src/session.ts` | 1-4 | draft 番号を 18 に更新する |
+| ファイル               | 行番号 | 変更内容                                                      |
+| ---------------------- | ------ | ------------------------------------------------------------- |
+| `src/message/setup.ts` | 1-8    | draft 番号を 18 に更新する                                    |
+| `src/message/setup.ts` | 55-60  | MOQT_IMPLEMENTATION の JSDoc に fingerprinting 懸念を追記する |
+| `src/session.ts`       | 1-4    | draft 番号を 18 に更新する                                    |
 
 ## 期待される動作
 

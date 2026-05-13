@@ -29,11 +29,11 @@ draft-ietf-moq-transport-18 A.1: "Clarify Immutable Track Properties (#1535)"
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/properties.ts` | 1-10 | draft 番号を 18 に更新する |
-| `src/properties.ts` | 21-37 | `MOQTPropertyId.IMMUTABLE_PROPERTIES` の JSDoc を更新する |
-| `src/properties.ts` | (decodeImmutableProperties) | 検証ロジックのコメントを draft-18 に更新する |
+| ファイル            | 行番号                      | 変更内容                                                  |
+| ------------------- | --------------------------- | --------------------------------------------------------- |
+| `src/properties.ts` | 1-10                        | draft 番号を 18 に更新する                                |
+| `src/properties.ts` | 21-37                       | `MOQTPropertyId.IMMUTABLE_PROPERTIES` の JSDoc を更新する |
+| `src/properties.ts` | (decodeImmutableProperties) | 検証ロジックのコメントを draft-18 に更新する              |
 
 ## 期待される動作
 

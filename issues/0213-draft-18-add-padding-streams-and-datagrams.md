@@ -38,12 +38,12 @@ draft-ietf-moq-transport-18 A.1: "Add padding streams and datagrams (#1475)"
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/dataStream.ts` | (全般) | `PADDING_TYPE = 0x80` 定数を追加する |
-| `src/session.ts` | `startIncomingStreamLoop` | ストリーム type が 0x80 の場合に読み捨てる処理を追加する |
-| `src/session.ts` | `startDatagramLoop` | データグラム type が 0x80 の場合に読み捨てる処理を追加する |
-| `src/session/stream.ts` | `classifyIncomingStreamType` | PADDING ストリーム (0x80) の分類を追加する |
+| ファイル                | 行番号                       | 変更内容                                                   |
+| ----------------------- | ---------------------------- | ---------------------------------------------------------- |
+| `src/dataStream.ts`     | (全般)                       | `PADDING_TYPE = 0x80` 定数を追加する                       |
+| `src/session.ts`        | `startIncomingStreamLoop`    | ストリーム type が 0x80 の場合に読み捨てる処理を追加する   |
+| `src/session.ts`        | `startDatagramLoop`          | データグラム type が 0x80 の場合に読み捨てる処理を追加する |
+| `src/session/stream.ts` | `classifyIncomingStreamType` | PADDING ストリーム (0x80) の分類を追加する                 |
 
 ## 期待される動作
 

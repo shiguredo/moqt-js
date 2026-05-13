@@ -34,11 +34,11 @@ draft-ietf-moq-transport-18 A.1: "Clarify Joining Fetch ordering with Forward St
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 295-310 | `JoiningFetchOptions` の JSDoc に forward 遷移順序の説明を追記する |
+| ファイル         | 行番号    | 変更内容                                                                                  |
+| ---------------- | --------- | ----------------------------------------------------------------------------------------- |
+| `src/session.ts` | 295-310   | `JoiningFetchOptions` の JSDoc に forward 遷移順序の説明を追記する                        |
 | `src/session.ts` | 1168-1188 | `subscribe()` の Joining Fetch 関連コメントに pending REQUEST_UPDATE の処理順序を追記する |
-| `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc に Joining Location 確立タイミングを追記する |
+| `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc に Joining Location 確立タイミングを追記する                  |
 
 ## 期待される動作
 

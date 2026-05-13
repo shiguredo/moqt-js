@@ -17,7 +17,7 @@ draft-ietf-moq-transport-18 §2.1 (Objects):
 > Since Objects can be delivered out of order, an endpoint can receive
 > an Object after it has already recorded that the Object does not
 > exist (e.g., via a FETCH gap from one source and later delivery via a
-> subscription).  This is not a protocol error and the Track is not
+> subscription). This is not a protocol error and the Track is not
 > malformed.
 
 draft-ietf-moq-transport-18 A.1: "Clarify Object existence and cross-source contradictions (#1566)"
@@ -29,11 +29,11 @@ draft-ietf-moq-transport-18 A.1: "Clarify Object existence and cross-source cont
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
+| ファイル            | 行番号  | 変更内容                                                       |
+| ------------------- | ------- | -------------------------------------------------------------- |
 | `src/subscriber.ts` | 163-177 | `handleObject` の JSDoc に Object 存在状態の矛盾許容を追記する |
-| `src/fetcher.ts` | 115-122 | `handleObject` の JSDoc に unknown range の扱いを追記する |
-| `src/dataStream.ts` | 1-11 | draft 番号を 18 に更新する |
+| `src/fetcher.ts`    | 115-122 | `handleObject` の JSDoc に unknown range の扱いを追記する      |
+| `src/dataStream.ts` | 1-11    | draft 番号を 18 に更新する                                     |
 
 ## 期待される動作
 

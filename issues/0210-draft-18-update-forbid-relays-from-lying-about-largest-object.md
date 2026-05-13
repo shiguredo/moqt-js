@@ -24,10 +24,10 @@ draft-ietf-moq-transport-18 A.1: "Forbid relays from lying about Largest Object 
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 1950-1954 | LARGEST_OBJECT 関連のコメントに「relay は実際に保有する Object のみを LARGEST_OBJECT として通知できる」を追記する |
-| `src/subscriber.ts` | 48-53 | `largestLocation` プロパティの JSDoc に LARGEST_OBJECT の信頼性に関する注記を追記する |
+| ファイル            | 行番号    | 変更内容                                                                                                          |
+| ------------------- | --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `src/session.ts`    | 1950-1954 | LARGEST_OBJECT 関連のコメントに「relay は実際に保有する Object のみを LARGEST_OBJECT として通知できる」を追記する |
+| `src/subscriber.ts` | 48-53     | `largestLocation` プロパティの JSDoc に LARGEST_OBJECT の信頼性に関する注記を追記する                             |
 
 ## 期待される動作
 

@@ -21,9 +21,9 @@ draft-ietf-moq-transport-18 §11.4.2 (Subgroup Header):
 draft-ietf-moq-transport-18 §11.4.2:
 
 > SUBGROUP_HEADER {
->   Type (i) = 0x10..0x15 / 0x18..0x1D / 0x30..0x35 / 0x38..0x3D /
->              0x50..0x55 / 0x58..0x5D / 0x70..0x75 / 0x78..0x7D,
->   ...
+> Type (i) = 0x10..0x15 / 0x18..0x1D / 0x30..0x35 / 0x38..0x3D /
+> 0x50..0x55 / 0x58..0x5D / 0x70..0x75 / 0x78..0x7D,
+> ...
 
 draft-ietf-moq-transport-18 A.1: "Add FIRST_OBJECT bit to SUBGROUP_HEADER type (#1618)"
 
@@ -36,13 +36,13 @@ draft-ietf-moq-transport-18 A.1: "Add FIRST_OBJECT bit to SUBGROUP_HEADER type (
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/dataStream.ts` | 37-126 | `SubgroupHeaderType` に 0x50-0x5D, 0x70-0x7D の定数を追加する |
-| `src/dataStream.ts` | 156-159 | `hasSubgroupIdField` の lowNibble 判定に 0x50-0x5D, 0x70-0x7D 範囲を追加する |
-| `src/dataStream.ts` | 168-170 | `hasPriorityPresent` に 0x50-0x5D 範囲を追加する |
-| `src/dataStream.ts` | 218-285 | `decodeSubgroupHeader` のタイプ値バリデーションに FIRST_OBJECT 範囲を追加する |
-| `src/dataStream.test.ts` | (全般) | FIRST_OBJECT ビットを含むタイプ値のエンコード/デコードテストを追加する |
+| ファイル                 | 行番号  | 変更内容                                                                      |
+| ------------------------ | ------- | ----------------------------------------------------------------------------- |
+| `src/dataStream.ts`      | 37-126  | `SubgroupHeaderType` に 0x50-0x5D, 0x70-0x7D の定数を追加する                 |
+| `src/dataStream.ts`      | 156-159 | `hasSubgroupIdField` の lowNibble 判定に 0x50-0x5D, 0x70-0x7D 範囲を追加する  |
+| `src/dataStream.ts`      | 168-170 | `hasPriorityPresent` に 0x50-0x5D 範囲を追加する                              |
+| `src/dataStream.ts`      | 218-285 | `decodeSubgroupHeader` のタイプ値バリデーションに FIRST_OBJECT 範囲を追加する |
+| `src/dataStream.test.ts` | (全般)  | FIRST_OBJECT ビットを含むタイプ値のエンコード/デコードテストを追加する        |
 
 ## 期待される動作
 

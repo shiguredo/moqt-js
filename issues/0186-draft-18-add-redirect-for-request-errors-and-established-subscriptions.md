@@ -9,17 +9,17 @@ draft-18 で REQUEST_ERROR に Redirect Structure が追加された。
 サーバーがクライアントに対して別の接続先 (moqt URI) への再接続を指示できるようになる。
 
 > REQUEST_ERROR Message {
->   Type (vi64) = 0x5,
->   Length (16),
->   Error Code (vi64),
->   Reason Phrase (..),
->   Number of Redirects (vi64),
->   Redirect (..) ...
+> Type (vi64) = 0x5,
+> Length (16),
+> Error Code (vi64),
+> Reason Phrase (..),
+> Number of Redirects (vi64),
+> Redirect (..) ...
 > }
 >
 > Redirect {
->   Redirect URI Length (vi64),
->   Redirect URI (..),
+> Redirect URI Length (vi64),
+> Redirect URI (..),
 > }
 >
 > -- draft-ietf-moq-transport-18 §10.6.2
@@ -52,11 +52,11 @@ draft-18 で REQUEST_ERROR に Redirect Structure が追加された。
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/session.ts:56-73` | `RequestError` 型に `redirects` を追加する |
-| `src/message/session.ts:130-180` | `decodeRequestErrorPayload` に Redirect デコードを追加する |
-| `src/message/session.ts:180-210` | `encodeRequestErrorPayload` に Redirect エンコードを追加する |
+| ファイル                                | 変更内容                                                     |
+| --------------------------------------- | ------------------------------------------------------------ |
+| `src/message/session.ts:56-73`          | `RequestError` 型に `redirects` を追加する                   |
+| `src/message/session.ts:130-180`        | `decodeRequestErrorPayload` に Redirect デコードを追加する   |
+| `src/message/session.ts:180-210`        | `encodeRequestErrorPayload` に Redirect エンコードを追加する |
 | `src/session.ts` (各リクエスト応答処理) | REQUEST_ERROR 受信時のリダイレクト通知コールバックを追加する |
 
 ## テスト方針

@@ -6,6 +6,7 @@
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
+import { normalizeMoqtUri } from "./moqtUri";
 
 // 公開型の再エクスポート
 export type {
@@ -152,7 +153,7 @@ export {
 /**
  * Connect to a MOQT server
  *
- * @param url - WebTransport URL (e.g., "https://example.com/moqt")
+ * @param url - MOQT URI (例: `moqt://example.com/moqt`)
  * @param init - Connection options
  * @returns Session object
  *
@@ -161,7 +162,7 @@ export {
  * import { connect } from "moqt-js"
  *
  * const session = await connect(
- *   "https://example.com/moqt",
+ *   "moqt://example.com/moqt",
  *   { close: (info) => console.log(`disconnected: closeCode=${info.closeCode}, reason=${info.reason}`), error: (e) => console.error(e) }
  * )
  *
@@ -186,6 +187,8 @@ export async function connect(
   callbacks?: ConnectCallbacks,
   options?: ConnectOptions,
 ): Promise<Session> {
+  const httpsUrl = normalizeMoqtUri(url);
+
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
 
@@ -193,7 +196,7 @@ export async function connect(
     transportOptions.serverCertificateHashes = options.serverCertificateHashes;
   }
 
-  const transport = new WebTransport(url, transportOptions);
+  const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
 
   // Create session

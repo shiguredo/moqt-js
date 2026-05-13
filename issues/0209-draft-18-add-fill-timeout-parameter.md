@@ -37,13 +37,13 @@ draft-ietf-moq-transport-18 A.1: (この追加は §10.2.5 に含まれる)
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/message/parameter.ts` | (全般) | `FILL_TIMEOUT = 0x0A` パラメータ定数とエンコード/デコードを追加する |
-| `src/session.ts` | 451-460 | `FetchOptions` に `fillTimeout?: bigint` を追加する |
-| `src/session.ts` | 1278-1358 | `fetch()` のパラメータ構築に FILL_TIMEOUT を含める |
-| `src/session.ts` | 2090-2140 | `sendJoiningFetch` にも FILL_TIMEOUT オプションを適用する |
-| `src/index.ts` | (全般) | `fillTimeout` を公開する |
+| ファイル                   | 行番号    | 変更内容                                                            |
+| -------------------------- | --------- | ------------------------------------------------------------------- |
+| `src/message/parameter.ts` | (全般)    | `FILL_TIMEOUT = 0x0A` パラメータ定数とエンコード/デコードを追加する |
+| `src/session.ts`           | 451-460   | `FetchOptions` に `fillTimeout?: bigint` を追加する                 |
+| `src/session.ts`           | 1278-1358 | `fetch()` のパラメータ構築に FILL_TIMEOUT を含める                  |
+| `src/session.ts`           | 2090-2140 | `sendJoiningFetch` にも FILL_TIMEOUT オプションを適用する           |
+| `src/index.ts`             | (全般)    | `fillTimeout` を公開する                                            |
 
 ## 期待される動作
 

@@ -10,13 +10,13 @@ draft-18 で GOAWAY メッセージに Request ID フィールドが追加され
 制御ストリーム上の GOAWAY は Request ID を含まない（ゼロ長）。
 
 > GOAWAY Message {
->   Type (vi64) = 0x10,
->   Length (16),
->   Request ID Length (vi64),
->   Request ID (..),
->   New Session URI Length (vi64),
->   New Session URI (..),
->   Timeout (vi64),
+> Type (vi64) = 0x10,
+> Length (16),
+> Request ID Length (vi64),
+> Request ID (..),
+> New Session URI Length (vi64),
+> New Session URI (..),
+> Timeout (vi64),
 > }
 >
 > -- draft-ietf-moq-transport-18 §10.4
@@ -52,13 +52,13 @@ draft-18 で GOAWAY メッセージに Request ID フィールドが追加され
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/session.ts:17-51` | `Goaway` 型に `requestId: bigint \| null` を追加する |
-| `src/message/session.ts:80-128` | `encodeGoawayPayload` に Request ID エンコードを追加する |
-| `src/message/session.ts:110-150` | `decodeGoawayPayload` に Request ID デコードを追加する |
-| `src/session.ts:1900-1930` | `sendGoaway()` の GOAWAY 構築に `requestId: null` を追加する |
-| `src/session.ts` (GOAWAY 受信箇所) | `requestId` を抽出してリクエスト特定に使用する |
+| ファイル                           | 変更内容                                                     |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `src/message/session.ts:17-51`     | `Goaway` 型に `requestId: bigint \| null` を追加する         |
+| `src/message/session.ts:80-128`    | `encodeGoawayPayload` に Request ID エンコードを追加する     |
+| `src/message/session.ts:110-150`   | `decodeGoawayPayload` に Request ID デコードを追加する       |
+| `src/session.ts:1900-1930`         | `sendGoaway()` の GOAWAY 構築に `requestId: null` を追加する |
+| `src/session.ts` (GOAWAY 受信箇所) | `requestId` を抽出してリクエスト特定に使用する               |
 
 ## テスト方針
 

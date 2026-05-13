@@ -16,7 +16,7 @@ draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
 
 > When a subscriber receives a stream reset or FIN on a
 > SUBSCRIBE_NAMESPACE response stream, it SHOULD treat this as though
-> each active namespace received a NAMESPACE_DONE.  Subscriptions
+> each active namespace received a NAMESPACE_DONE. Subscriptions
 > established via PUBLISH on separate bidi streams are not affected
 > by closure of the SUBSCRIBE_NAMESPACE stream.
 
@@ -29,11 +29,11 @@ draft-ietf-moq-transport-18 A.1: "Clarify SUBSCRIBE_NAMESPACE stream closure sem
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 1473-1476 | draft 参照番号を 18 に更新する |
-| `src/session.ts` | 1533 | §9.20 → §10.18 に節番号を更新する |
-| `src/session.ts` | 1537-1678 | ストリームクローズ時のコメントに NAMESPACE_DONE 扱いの説明を追記する |
+| ファイル         | 行番号    | 変更内容                                                                        |
+| ---------------- | --------- | ------------------------------------------------------------------------------- |
+| `src/session.ts` | 1473-1476 | draft 参照番号を 18 に更新する                                                  |
+| `src/session.ts` | 1533      | §9.20 → §10.18 に節番号を更新する                                               |
+| `src/session.ts` | 1537-1678 | ストリームクローズ時のコメントに NAMESPACE_DONE 扱いの説明を追記する            |
 | `src/session.ts` | 1540-1542 | FIN 受信時のコメントに「active namespace を NAMESPACE_DONE 扱いする」を追記する |
 
 ## 期待される動作
