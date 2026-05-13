@@ -11,6 +11,19 @@
 
 ## develop
 
+- [CHANGE] SUBSCRIBE_NAMESPACE を SUBSCRIBE_NAMESPACE (0x50) と SUBSCRIBE_TRACKS (0x51) に分割する (#0184)
+  - draft-ietf-moq-transport-18 §10.18 / §10.19 に基づき、責務を namespace discovery と track subscription に分離する
+  - `MessageType.SUBSCRIBE_NAMESPACE` を `0x11` から `0x50` に変更しワイヤーフォーマットを更新する
+  - `MessageType.SUBSCRIBE_TRACKS = 0x51` を新規追加する
+  - `NamespaceSubscribeMode` enum と `SubscribeNamespace.subscribeOptions` を削除する
+  - `SubscribeTracks` 型と `encodeSubscribeTracksPayload` / `decodeSubscribeTracksPayload` を新設する
+  - `Session.subscribeTracks(namespacePrefix, callbacks)` API を追加する
+  - `NamespaceSubscriptionCallbacks` から `onPublishBlocked` を削除し、`TracksSubscriptionCallbacks` に移す
+  - `namespaceSubscriptions` と `tracksSubscriptions` の Map を独立管理する
+  - `startNamespaceStreamLoop` を SUBSCRIBE_NAMESPACE 応答 (NAMESPACE / NAMESPACE_DONE) 専用にし、PUBLISH_BLOCKED は `startTracksStreamLoop` に移す
+  - `TracksSubscriptionCallbacks` / `TracksSubscription` を `moqt-js` から公開する
+  - `subscribeNamespace()` の第三引数 `subscribeOptions` は削除（破壊的変更）
+  - @voluntas
 - [ADD] moqt URI の Fragment Identifier をパースし `Session.fragment` で公開する (#0183)
   - draft-ietf-moq-transport-18 §3.1.2 に基づき `moqt://example.com/app#type:value` 形式の fragment をパースする
   - `src/moqtUri.ts` に `parseFragment()` と `MoqtFragment` / `NormalizedMoqtUri` 型を追加する
