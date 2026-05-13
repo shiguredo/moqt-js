@@ -49,7 +49,25 @@ export const MessageType = {
    * draft-ietf-moq-transport-17 Section 9.21
    */
   PUBLISH_BLOCKED: 0x0f,
-  SUBSCRIBE_NAMESPACE: 0x11,
+  /**
+   * SUBSCRIBE_NAMESPACE (Section 10.18 SUBSCRIBE_NAMESPACE)
+   *
+   * draft-ietf-moq-transport-18:
+   * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
+   * SUBSCRIBE_TRACKS (0x51) に分割された。
+   * 0x50 は namespace discovery (NAMESPACE / NAMESPACE_DONE 受信) を担当する。
+   * draft-ietf-moq-transport-18 Section 10.18
+   */
+  SUBSCRIBE_NAMESPACE: 0x50,
+  /**
+   * SUBSCRIBE_TRACKS (Section 10.19 SUBSCRIBE_TRACKS)
+   *
+   * draft-ietf-moq-transport-18:
+   * track subscription (PUBLISH メッセージは新規 bidi で到着、
+   * PUBLISH_BLOCKED は応答ストリーム上で到着) を担当する。
+   * draft-ietf-moq-transport-18 Section 10.19
+   */
+  SUBSCRIBE_TRACKS: 0x51,
 } as const;
 
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
@@ -248,32 +266,6 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
       return false;
   }
 }
-
-/**
- * Namespace Subscribe Mode (Section 9.20 SUBSCRIBE_NAMESPACE, Subscribe Options)
- *
- * draft-ietf-moq-transport-17:
- * SUBSCRIBE_NAMESPACE の Subscribe Options フィールドで使用される。
- * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) のいずれかを指定する。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
- */
-export const NamespaceSubscribeMode = {
-  /**
-   * PUBLISH のみを要求する
-   */
-  PUBLISH: 0x00,
-  /**
-   * NAMESPACE のみを要求する
-   */
-  NAMESPACE: 0x01,
-  /**
-   * PUBLISH と NAMESPACE の両方を要求する
-   */
-  BOTH: 0x02,
-} as const;
-
-export type NamespaceSubscribeMode =
-  (typeof NamespaceSubscribeMode)[keyof typeof NamespaceSubscribeMode];
 
 /**
  * Location (Group ID, Object ID)

@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE) — 9.21 (PUBLISH_BLOCKED)
+ * draft-ietf-moq-transport-18 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_BLOCKED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -10,18 +10,21 @@ import {
   type NamespaceDone,
   type PublishNamespace,
   type SubscribeNamespace,
+  type SubscribeTracks,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishNamespacePayload,
   decodeSubscribeNamespacePayload,
+  decodeSubscribeTracksPayload,
   encodeNamespaceDonePayload,
   encodeNamespacePayload,
   encodePublishNamespacePayload,
   encodeSubscribeNamespacePayload,
+  encodeSubscribeTracksPayload,
 } from "./namespace";
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
-import { MessageType, NamespaceSubscribeMode } from "./types";
-import { encodeVarint } from "../varint";
+import { MessageType } from "./types";
+import { encodeVarint, decodeVarint } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 
 /**
@@ -122,18 +125,6 @@ const namespaceSuffixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 
   minLength: 0,
   maxLength: 5,
 });
-
-/**
- * NamespaceSubscribeMode の arbitrary
- *
- * draft-ietf-moq-transport-17 Section 9.25:
- * PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02)
- */
-const namespaceSubscribeModeArb: fc.Arbitrary<NamespaceSubscribeMode> = fc.constantFrom(
-  NamespaceSubscribeMode.PUBLISH,
-  NamespaceSubscribeMode.NAMESPACE,
-  NamespaceSubscribeMode.BOTH,
-);
 
 test("PublishNamespace のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -256,11 +247,10 @@ test("NamespaceDone のエンコード・デコードがラウンドトリップ
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.20:
- * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
- * Subscribe Options フィールドで PUBLISH (0x00)、NAMESPACE (0x01)、BOTH (0x02) を指定できる。
+ * draft-ietf-moq-transport-18 Section 10.18:
+ * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される (0x50)。
+ * Subscribe Options フィールドは draft-18 で廃止された。
  * 空のネームスペース（ワイルドカード）も許可される。
- * draft-ietf-moq-transport-17 Section 9.18
  */
 test("SubscribeNamespace のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -268,15 +258,13 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
-      namespaceSubscribeModeArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, subscribeOptions, parameters) => {
+      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
         const original: SubscribeNamespace = {
           type: MessageType.SUBSCRIBE_NAMESPACE,
           requestId,
           requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
-          subscribeOptions,
           parameters,
         };
 
@@ -287,7 +275,6 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
         assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
-        assert.equal(decoded.subscribeOptions, subscribeOptions);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
           assert.equal(decoded.parameters[i].type, parameters[i].type);
@@ -299,7 +286,7 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.20:
+ * draft-ietf-moq-transport-18 Section 10.18:
  * SUBSCRIBE_NAMESPACE Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  * Length が可変長整数でエンコードされていると受信側で misparse されるため、
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で正しくパースできることを検証する。
@@ -310,15 +297,13 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
-      namespaceSubscribeModeArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, subscribeOptions, parameters) => {
+      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
         const original: SubscribeNamespace = {
           type: MessageType.SUBSCRIBE_NAMESPACE,
           requestId,
           requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
-          subscribeOptions,
           parameters,
         };
 
@@ -337,7 +322,179 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
         assert.equal(decoded.requestId, requestId);
         assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
-        assert.equal(decoded.subscribeOptions, subscribeOptions);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 §10.18:
+ * encodeSubscribeNamespacePayload は Subscribe Options をエンコードしない。
+ * 想定: requestId / requiredRequestIdDelta / trackNamespacePrefix / parameters のみが直列化される。
+ */
+test("encodeSubscribeNamespacePayload は Subscribe Options を含まない", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      (requestId, requiredRequestIdDelta, namespaceParts) => {
+        const original: SubscribeNamespace = {
+          type: MessageType.SUBSCRIBE_NAMESPACE,
+          requestId,
+          requiredRequestIdDelta,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          parameters: [],
+        };
+
+        const encoded = encodeSubscribeNamespacePayload(original);
+
+        // requestId / requiredRequestIdDelta / namespace の長さを消費した直後に
+        // Number of Parameters (= 0) が来ることを確認する。
+        let offset = 0;
+        const [decodedRequestId, requestIdSize] = decodeVarint(encoded, offset);
+        offset += requestIdSize;
+        assert.equal(decodedRequestId, requestId);
+
+        const [decodedDelta, deltaSize] = decodeVarint(encoded, offset);
+        offset += deltaSize;
+        assert.equal(decodedDelta, requiredRequestIdDelta);
+
+        // Namespace tuple count
+        const [tupleCount, tupleCountSize] = decodeVarint(encoded, offset);
+        offset += tupleCountSize;
+        // namespace 部分はスキップ
+        for (let i = 0n; i < tupleCount; i++) {
+          const [len, lenSize] = decodeVarint(encoded, offset);
+          offset += lenSize + Number(len);
+        }
+
+        // 次は Subscribe Options ではなく Number of Parameters であることを確認する。
+        // パラメータ数は 0 なので、次のバイトは 0x00 (varint 0)。
+        const [paramCount] = decodeVarint(encoded, offset);
+        assert.equal(paramCount, 0n);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.19:
+ * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
+ * SUBSCRIBE_NAMESPACE と同構造で Subscribe Options を持たない。
+ */
+test("SubscribeTracks のエンコード・デコードがラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      parametersArb,
+      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+        const original: SubscribeTracks = {
+          type: MessageType.SUBSCRIBE_TRACKS,
+          requestId,
+          requiredRequestIdDelta,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          parameters,
+        };
+
+        const encoded = encodeSubscribeTracksPayload(original);
+        const decoded = decodeSubscribeTracksPayload(encoded);
+
+        assert.equal(decoded.type, MessageType.SUBSCRIBE_TRACKS);
+        assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
+        assert.equal(decoded.parameters.length, parameters.length);
+        for (let i = 0; i < parameters.length; i++) {
+          assert.equal(decoded.parameters[i].type, parameters[i].type);
+          assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.19:
+ * SUBSCRIBE_TRACKS Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
+ */
+test("SubscribeTracks のフレーミングが ControlStreamReader で復元できる", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      parametersArb,
+      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+        const original: SubscribeTracks = {
+          type: MessageType.SUBSCRIBE_TRACKS,
+          requestId,
+          requiredRequestIdDelta,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          parameters,
+        };
+
+        const payload = encodeSubscribeTracksPayload(original);
+        const writer = new ControlStreamWriter();
+        const framed = writer.encode(MessageType.SUBSCRIBE_TRACKS, payload);
+
+        const reader = new ControlStreamReader();
+        const messages = reader.feed(framed);
+
+        assert.equal(messages.length, 1);
+        assert.equal(messages[0].type, MessageType.SUBSCRIBE_TRACKS);
+        assert.deepEqual(messages[0].payload, payload);
+
+        const decoded = decodeSubscribeTracksPayload(messages[0].payload);
+        assert.equal(decoded.requestId, requestId);
+        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 §10.19:
+ * encodeSubscribeTracksPayload は Subscribe Options をエンコードしない。
+ */
+test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      (requestId, requiredRequestIdDelta, namespaceParts) => {
+        const original: SubscribeTracks = {
+          type: MessageType.SUBSCRIBE_TRACKS,
+          requestId,
+          requiredRequestIdDelta,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          parameters: [],
+        };
+
+        const encoded = encodeSubscribeTracksPayload(original);
+
+        let offset = 0;
+        const [decodedRequestId, requestIdSize] = decodeVarint(encoded, offset);
+        offset += requestIdSize;
+        assert.equal(decodedRequestId, requestId);
+
+        const [decodedDelta, deltaSize] = decodeVarint(encoded, offset);
+        offset += deltaSize;
+        assert.equal(decodedDelta, requiredRequestIdDelta);
+
+        const [tupleCount, tupleCountSize] = decodeVarint(encoded, offset);
+        offset += tupleCountSize;
+        for (let i = 0n; i < tupleCount; i++) {
+          const [len, lenSize] = decodeVarint(encoded, offset);
+          offset += lenSize + Number(len);
+        }
+
+        const [paramCount] = decodeVarint(encoded, offset);
+        assert.equal(paramCount, 0n);
       },
     ),
   );
