@@ -2339,6 +2339,9 @@ export class SessionImpl implements Session {
     );
 
     await streamState.writer.write(data);
+    if (params.payload.length > 0) {
+      await streamState.writer.write(params.payload);
+    }
 
     // 状態を更新
     streamState.previousObjectId = objectId;
