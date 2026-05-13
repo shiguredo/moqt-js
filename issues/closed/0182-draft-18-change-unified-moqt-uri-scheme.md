@@ -129,7 +129,7 @@ CLAUDE.md (AGENTS.md) の「draft による仕様変更は後方互換性を維�
 - `tests/e2e/main.ts` と `tests/e2e/index.html` は env から URL を取得するためデフォルト URL を持たず変更対象外とした
 - 後方互換を維持しない方針のため、E2E 環境変数の名前と値を `moqt://` 専用に切り替えた
   - `.env.example` / `.github/workflows/ci.yml` / `tests/e2e/connect.spec.ts` / `tests/e2e/pubsub.spec.ts` の
-    `TEST_MOQT_HTTPS_URI` を `TEST_MOQT_QUIC_URI` に変更した
+    `TEST_MOQT_HTTPS_URI` を `TEST_MOQT_URI` に変更した
   - GitHub Secrets / ローカル `.env` の値は別途 `moqt://` 形式に更新する必要がある
 
 確認:

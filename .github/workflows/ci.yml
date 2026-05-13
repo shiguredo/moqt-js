@@ -84,7 +84,7 @@ jobs:
       - run: vp exec playwright install --with-deps chromium
       - run: vp run e2e-test
         env:
-          TEST_MOQT_QUIC_URI: ${{ secrets.TEST_MOQT_QUIC_URI }}
+          TEST_MOQT_URI: ${{ secrets.TEST_MOQT_URI }}
           TEST_MOQT_AUTH_TOKEN: ${{ secrets.TEST_MOQT_AUTH_TOKEN }}
 
   slack-notify:

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { waitForE2EReady } from "./helpers";
 
-const QUIC_URI = process.env["TEST_MOQT_QUIC_URI"];
+const MOQT_URI = process.env["TEST_MOQT_URI"];
 const AUTH_TOKEN = process.env["TEST_MOQT_AUTH_TOKEN"];
 
 const PUBSUB_DURATION_MS = 5000;
@@ -15,9 +15,9 @@ const SUBSCRIBER_START_DELAY_MS = 500;
 const PUBLISHER_DURATION_MS = PUBSUB_DURATION_MS + SUBSCRIBER_START_DELAY_MS;
 
 test.describe("MOQT Canvas pub/sub", () => {
-  test.skip(!QUIC_URI, "TEST_MOQT_QUIC_URI is not set");
+  test.skip(!MOQT_URI, "TEST_MOQT_URI is not set");
 
-  // 同じ relay (TEST_MOQT_QUIC_URI) に対して同一 namespace で pub/sub する
+  // 同じ relay (TEST_MOQT_URI) に対して同一 namespace で pub/sub する
   // 5 秒間 publish/subscribe を継続し、その間に decode 失敗 (onError) が起きないことを成功条件とする
   test("publishes and subscribes a canvas video over MOQT", async ({ browser }) => {
     test.skip(!AUTH_TOKEN, "TEST_MOQT_AUTH_TOKEN is not set");
@@ -42,7 +42,7 @@ test.describe("MOQT Canvas pub/sub", () => {
             durationMs,
           }),
         {
-          url: QUIC_URI as string,
+          url: MOQT_URI as string,
           token: AUTH_TOKEN as string,
           ns: namespace,
           durationMs: PUBLISHER_DURATION_MS,
@@ -61,7 +61,7 @@ test.describe("MOQT Canvas pub/sub", () => {
             durationMs,
           }),
         {
-          url: QUIC_URI as string,
+          url: MOQT_URI as string,
           token: AUTH_TOKEN as string,
           ns: namespace,
           durationMs: PUBSUB_DURATION_MS,
