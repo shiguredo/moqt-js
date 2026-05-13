@@ -267,9 +267,10 @@ export function usePublisher() {
       }
 
       // Connect to MOQT server
-      console.log("startPublishing: connecting to", settings.url.value);
+      const connectUrl = settings.buildConnectUrl();
+      console.log("startPublishing: connecting to", connectUrl);
       const session = await connect(
-        settings.url.value,
+        connectUrl,
         {
           close: (closeInfo) => {
             addLog("warn", `[publisher] webtransport closed`, {
