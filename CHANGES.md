@@ -19,185 +19,6 @@
 
 Media over QAUIC Transport draft-17 対応
 
-- [CHANGE] `Publisher.sendObject` の戻り値を `void` から `Promise<void>` に変更する (#0133)
-  - draft-ietf-moq-transport-17 §9.14.2: Joining Fetch は object が publish されていなければ INVALID_RANGE を MUST 返す
-  - 仕様の前提 (catalog 1 回 publish + relay の MAX_CACHE_DURATION でキャッシュ) を満たすには、publisher.start() の return 時点で catalog object が relay に向けて flush されている必要がある
-  - `createMediaPublisher.publishCatalog()` で `await sendObject(...)` するようにし、catalog object が WebTransport stream に書き込み完了してから start() が return するようにする
-  - 音声・映像フレームの `sendObject` 呼び出しは fire-and-forget のため `void` 演算子で戻り値を明示的に破棄する
-  - `tests/e2e/pubsub.spec.ts` の flaky (`Error: catalog receive timeout`) を解消する
-  - @voluntas
-- [FIX] devtools の `handleRemoveSubscriber` で WebTransport セッションと VideoDecoder をクローズしてリソースリークを解消する (#0144)
-  - `App.tsx` の `handleRemoveSubscriber` で `sub.removeSubscriber(id)` を呼ぶ前に decoder.close() と session.close() を fire-and-forget で実行する
-  - `useSubscriber` に `useEffect` cleanup を追加し、予期しないアンマウント経路でも `cleanupSubscriber` が呼ばれるようにする
-  - @voluntas
-- [FIX] Joining Fetch `onEnd` ドレインループと `object:` コールバック間の race を解消する (#0157)
-  - ドレイン投入 (`chainRef` への順次予約) と `joiningFetchInProgress` 立て下げを同一 `batch()` 内でアトミックに実行し、ドレイン中にバッファへ積まれたオブジェクトが永久に放置される race window を排除する
-  - 立て下げ後のライブオブジェクトは `object:` コールバックから `chainRef` 経由でデコードされ、Promise チェーンで順序保証される
-  - @voluntas
-- [FIX] Joining Fetch `onError` 時にライブバッファを破棄せず処理する (#0158)
-  - Joining Fetch (過去取得) は SUBSCRIBE 経由のライブ配信と独立したストリームのため、Joining Fetch の失敗でライブバッファを捨てるのは過剰だった
-  - `onEnd` と同じ手順でバッファを `chainRef` 経由のドレインに通し、`decoderInstance.resetKeyframeWait()` の強制リセットも削除して、バッファ内 keyframe で自然にデコードが再開するようにする
-  - @voluntas
-- [FIX] `startSubscribing` に中断機構を追加し status 遷移を修正する (#0148)
-  - 冒頭で `isStopping` をチェックして二重実行を防ぐ
-  - 各 `await` の後に `instance.session.value === null` をチェックし、close コールバックで cleanup された場合に処理を中断する
-  - Catalog 購読中・デコーダセットアップ中の誤った `status="connected"` 遷移を削除し、実際に subscribe 完了するまで `connected` 状態にならないようにする
-  - @voluntas
-
-- [FIX] `createMediaSubscriber.requestKeyframe` と devtools の `useSubscriber.requestKeyframe` で Track Properties に DYNAMIC_GROUPS=1 が含まれていない場合に REQUEST_UPDATE の NEW_GROUP_REQUEST 送信を抑止する (#0168)
-  - draft-ietf-moq-transport-17 §9.3.11 の MUST NOT 準拠
-  - `src/properties.ts` に `supportsDynamicGroups(properties)` を追加し、mutable list と Immutable Properties (Type 0x0B) の両方を検索する
-  - moqt-js 側は条件未充足時に Error を throw する
-  - devtools 側は `console.warn` で警告して早期 return し、`SubscriberInstance.dynamicGroupsSupported` と連動して Keyframe ボタンを disable する
-  - @voluntas
-- [FIX] devtools の `stopSubscribing` と close/end/error コールバックの最終 `statusMessage` レースを解消する (#0163)
-  - `useSubscriber.ts` に `shouldApplyStatusUpdate` ヘルパーを追加し、`isStopping` 進行中または `session === null` の状態では close / end / error コールバックが `status` / `statusMessage` を書き換えないようにする
-  - `cleanupSubscriber()` 呼び出しはガード外に置き、`AbortController` ベースの abort 経路を維持する
-  - stop 主導の終端時は最終メッセージが常に `Ready to subscribe` で確定する
-  - @voluntas
-
-### misc
-
-- [UPDATE] devtools の `SubscriberInstance` から UI / 外部参照されない 2 フィールド (`joiningFetchInProgress` / `joiningFetchLastLocation`) を Signal からフックローカル `useRef` へ移動する (#0164)
-  - `useSubscriber` フック内で `useRef<boolean>` / `useRef<{ group; object } | null>` として保持する
-  - `resetSubscriberStats` の `joiningFetchEnabled` 引数を削除し、ref の初期化を呼び出し側へ移す
-  - `resetSubscriberState` のシグネチャを Non-nullable な ref 引数に確定する
-  - @voluntas
-- [CHANGE] devtools の `cleanupSubscriber` を `teardownSubscriber` にリネームし `closeSubscriberResources` / `resetSubscriberState` に分割する (#0171)
-  - リネームと責務分離で「リソース close」「signal リセット」「UI ガード再有効化」の境界を明確にする
-  - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
-  - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
-  - @voluntas
-- [UPDATE] devtools の `useSubscriber` / `usePublisher` で WebTransport `close` / `error` と Catalog ライフサイクルを `addLog` 経由で DebugPanel に出力する (#0176)
-  - `console.log` / `console.warn` / `console.error` で DevTools コンソールにしか出ていなかった接続終端と Catalog 受信フローを DebugPanel に集約する
-  - close は level=warn、error は level=error、Catalog 進行は level=info / warn / error で振り分ける
-  - `addLog` 呼び出しは `shouldApplyStatusUpdate` ガード外に置き、stop 主導の終端でも DebugPanel にイベントを残す
-  - @voluntas
-- [UPDATE] devtools の `handleDebugMessage` で `DebugMessage.payload` をコピーしてからログに保存する (#0175)
-  - `new Uint8Array(message.payload)` で独立した ArrayBuffer に複製してから `addLog` に渡す
-  - moqt-js 側内部実装の最適化 (slice → subarray など) が将来入っても devtools 側のログ保持が破綻しないよう防御する
-  - @voluntas
-- [UPDATE] `DebugMessage.payload` の寿命契約 (independent / MAY retain / MUST NOT mutate) を JSDoc に明記する (#0175)
-  - @voluntas
-- [UPDATE] `DebugPanel` の formatter 群を `utils/logFormatters.ts` に分離し pure function 化する (#0174)
-  - コンポーネント内に分散していた `formatElapsedTime` / `formatDeltaTime` を引数化してモジュールスコープへ移動する
-  - `formatMessageData` / `formatHexDump` / `formatAbsoluteTime` も同モジュールに集約し、`RFC_FIELD_NAMES` / `isParameter` を共有する
-  - `formatBytes` は重複問題があるため本 issue では移動しない
-  - @voluntas
-- [UPDATE] DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合し、setTimeout のリーク (#0170) を解消する (#0173)
-  - 行コピー用とボタンコピー用の hook を分離し、同時にハイライト状態を持てるようにする
-  - 連続クリック時の早消えとアンマウント後の signal 書き込みを `useRef` + `useEffect` cleanup で防ぐ
-  - 失敗時は #0149 の方針に従い feedback を変更せず `console.error` のみ
-  - @voluntas
-- [UPDATE] Copy URL ボタンのロジックを `useCopyUrlButton` hook に抽出し、アンマウント時と再コピー時の `setTimeout` を解放する (#0172)
-  - `devtools/src/App.tsx` / `devtools/src/webtransport-devtools/App.tsx` の重複ロジックを共通 hook に統合する
-  - 連続クリック時の早消えと、アンマウント後の signal 書き込みリークを解消する
-  - @voluntas
-- [UPDATE] DebugPanel のログ蓄積を破壊的配列操作 + シーケンス signal 分離に変更し、autoScroll トグル単体の effect 再発火を抑制する (#0167)
-  - `logs` Signal を廃止し、プレーン配列 `logBuffer` + `logCount` / `logSequence` の 2 signal 構成に変更する
-  - `addLog` を `push` + `shift` の O(1) 操作に置き換え、スプレッド + slice によるフルコピー × 2 を解消する
-  - autoScroll effect を `logSequence` 変化単独で発火させ、`autoScroll.peek()` で参照することで toggle 単体での再発火を抑制する
-  - @voluntas
-- [UPDATE] devtools の Joining Fetch 中ライブオブジェクトバッファを Signal から useRef へ変更し、追記コストを O(N^2) から O(N) に改善する (#0166)
-  - `SubscriberInstance` から `liveObjectBuffer` フィールドを削除する
-  - `useSubscriber.ts` で `useRef<MoqtObject[]>([])` を導入し、`object:` コールバックの追記を `push` (O(1)) に置き換える
-  - `onEnd` / `onError` の `batch()` 外で ref をクリアする
-  - @voluntas
-- [FIX] devtools の `addSubscriber` で短縮 ID 衝突時に旧 `SubscriberInstance` が上書きされて WebTransport セッションと VideoDecoder がリークする経路を塞ぐ (#0169)
-  - `signals/subscriber.ts` に `generateUniqueSubscriberId` を純粋関数として追加し、`addSubscriber` から利用する
-  - @voluntas
-- [UPDATE] devtools の `SubscriberPanel` が `subscriberInstances` Map 全体を購読していたのを、対象 ID 用の派生 signal だけを購読するように変更する (#0165)
-  - `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と `subscriberInstanceSignalCache` を追加する
-  - `SubscriberPanel.tsx` で `useMemo` を使い対象 ID 用の `ReadonlySignal` を購読する
-  - `removeSubscriber` 末尾で対応するキャッシュエントリを削除する (Map 差し替えの後)
-  - @voluntas
-- [UPDATE] devtools の `removeSubscriber` に decoder / session の fire-and-forget close を集約する (#0162)
-  - `signals/subscriber.ts:removeSubscriber` を「Map 削除 + 当該 instance の外部リソース close」に拡張する
-  - `App.tsx:handleRemoveSubscriber` ラッパーを削除し、`onRemove` を `() => sub.removeSubscriber(id)` に統一する
-  - `Session.close` / `DecoderWrapper.close` の冪等性で `cleanupSubscriber` 経由との二重 close を吸収する
-  - @voluntas
-- [UPDATE] devtools の `useSubscriber` の `startSubscribing` 中断検知を `AbortController` ベースに統一する (#0161)
-  - `useSubscriber` フックに `abortControllerRef` を導入し、`startSubscribing` 各 `await` 直後で `signal.aborted` を確認する設計に置き換える
-  - `cleanupSubscriber` / `stopSubscribing` 冒頭で `abortControllerRef.current?.abort()` を呼び、進行中の `startSubscribing` を `unsubscribe()` 完了を待たずに中断する
-  - 中断検知ヘルパー `checkAborted` を export して単体テストを追加する
-  - Catalog の `.then` 内側で abort 判定を行い、遅延代入による `catalogSubscriber.value` 上書きレースを潰す
-  - @voluntas
-- [UPDATE] `useSubscriber.ts` の RFC 節番号誤り・変数名省略・節参照記法不統一を修正する (#0145)
-  - `§10.3` を `§10.4.2` に修正する (Subgroup ストリームは §10.4.2 で定義)
-  - `ext` を `locProperties` にリネームし、変数名を省略しない方針を徹底する
-  - `Section 9.3.11` を `§9.3.11` に統一する
-  - `draft-ietf-moq-loc-02 §2.1` を `§2.1.2` に具体化する
-  - @voluntas
-- [UPDATE] `DebugPanel.tsx` の過剰コメントを削除する (#0151)
-  - 自明なループ説明と Premature Optimization を正当化するコメントを削除する
-  - @voluntas
-- [UPDATE] `signals/subscriber.ts` の参照フィールドコメントを修正する (#0153)
-  - Signal 化の本質的理由 (Map 再生成回避と `hasActiveSubscriber` computed の追跡要件) を明記する
-  - @voluntas
-- [CHANGE] `useSubscriber.ts` の責務を関数抽出で分割する (#0159)
-  - `buildConnectOptions` を `signals/connectionSettings.ts` へ抽出する
-  - `buildVideoDecoderConfig` (Catalog → `VideoDecoderConfig` 変換) と `resetSubscriberStats` (統計フィールド初期化) を `useSubscriber.ts` のモジュールスコープへ抽出する
-  - `startSubscribing` 本体から重複した手続きを除去し責務を分離する
-  - @voluntas
-- [ADD] devtools 向け Vitest 受け入れ態勢を整備し純粋関数・signal ロジックの単体テストを追加する (#0160)
-  - `vite.config.ts` の `test.include` に `devtools/src/**/*.{test,prop}.ts` を追加する
-  - `sortByGroupObject` を export し非破壊性・順序付け・境界値の単体テスト (8 件) を追加する
-  - `signals/subscriber.ts` の `createSubscriberInstance` / `addSubscriber` / `removeSubscriber` / `subscriberIds` / `hasActiveSubscriber` の単体テスト (9 件) を追加する
-  - @voluntas
-- [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
-  - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
-  - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
-  - 顕在化した実 violation 24 件を `src/codec/index.ts` / `src/frameSource.ts` / `src/msf.ts` / `src/properties.ts` / `src/session.prop.ts` / `src/session.ts` / `src/session/stream.ts` / `src/session/errors.test.ts` / `src/pendingSubgroupBuffer.test.ts` / `playwright.config.ts` で修正する
-  - 最終的に lint 0 warnings / 0 errors (443 rules / 82 files) になる
-  - @voluntas
-- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139, #0140, #0141, #0142, #0143)
-  - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
-  - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
-  - `useSubscriber` の `liveObjectProcessingChain` を `useRef` に変更し、レンダリング間で安定参照になるようにする
-  - `App.tsx` モジュールトップレベルの `effect()` を削除し、`main.tsx` で初期 Subscriber を生成するよう移動する
-  - `PublisherPanel` の `useEffect(deps)` を `useSignalEffect` に置き換える
-  - `DebugPanel` のオートスクロール処理 (`useEffect` 内の `effect`) を `useSignalEffect` に置き換える
-  - `App.tsx` / `PublisherPanel.tsx` / `webtransport-devtools/App.tsx` の JSX で signal を直接渡している箇所を `.value` 経由に統一する
-  - `DebugPanel` の `maxLogs` signal を定数 `MAX_LOGS` に変更する
-  - `addSubscriber` の ID をモジュールスコープ・カウンタから `crypto.randomUUID().slice(0, 8)` ベースに変更する
-  - `DebugPanel` のログ描画を `[...logs.value].reverse()` から逆方向ループに変更し、毎レンダリングの O(n) コピーを排除する
-  - `App.tsx` の `copyButtonText` をモジュールスコープ signal から `App` コンポーネント内の `useSignal` に移動する
-  - @voluntas
-- [FIX] `useSubscriber.ts` の `sortByGroupObject` を非破壊的にする (#0147)
-  - `Array.prototype.sort()` の in-place 動作で signal の `.value` 配列を破壊する潜在的バグを防ぐためコピー後にソートする
-  - @voluntas
-- [FIX] `DebugPanel` の clipboard 操作に try/catch を追加する (#0149)
-  - 4 箇所の `navigator.clipboard.writeText()` 呼び出しを try/catch で囲み、権限拒否等の reject 時に `unhandledrejection` が発生しないようにする
-  - 失敗時は `console.error` のみ出力し、コピー成功フィードバックの状態は変更しない
-  - @voluntas
-- [FIX] `cleanupSubscriber` の再入安全性を改善し joining fetch 関連の信号をリセットする (#0150)
-  - `instance.session.value = null` を `sessionInstance.close()` より先に実行し、close イベントの同期 dispatch による再入で sessionInstance が再クローズされる経路を塞ぐ
-  - `joiningFetchInProgress` / `joiningFetchLastLocation` / `liveObjectBuffer` / `joiningFetchStats` / `largestLocation` をクリアし、`stopSubscribing` 単独呼び出し後の状態不整合を防ぐ
-  - @voluntas
-- [FIX] `webtransport-devtools/App.tsx` の `copyButtonText` を `useSignal` 化し、`App.tsx` で抽出済みの `debugPanelOpen` を使うようにする (#0152)
-  - `webtransport-devtools/App.tsx`: モジュールスコープ signal を `useSignal` に移動して HMR 時の状態残留を防ぐ
-  - `App.tsx`: 既存のローカル変数 `debugPanelOpen` を Debug ボタンとログ件数バッジでも使い、`isDebugPanelOpen.value` の重複参照を 2 箇所統一する
-  - @voluntas
-- [FIX] `useSubscriber.ts` の catalog 購読タイムアウトに `clearTimeout` を追加する (#0154)
-  - `Promise.race` で catalog 取得が先に成功した場合でもタイマーが解放されるように `try / finally` で `clearTimeout` する
-  - @voluntas
-- [FIX] `joiningFetch.onError` で decoder の `state !== "closed"` ガードを追加する (#0155)
-  - `cleanupSubscriber` が先に decoder を close 済みの場合に `resetKeyframeWait()` が呼ばれて意図しない副作用が起きる経路を塞ぐ
-  - @voluntas
-- [FIX] `useSubscriber.ts` の Subgroup 配送順に関する RFC 節参照を `§2.2 (Subgroups)` に修正する (#0156)
-  - `§10.4.2` および `§10.3 / §10.4` は SUBGROUP_HEADER / Datagram / Stream の定義節であり、配送順非保証の規範は `§2.2 (Subgroups)` にある
-  - #0145 で `§10.3` を `§10.4.2` に修正した結果、定義節への誤った参照が確定していたのを訂正する
-  - @voluntas
-
-###
-
-- [FIX] WebTransport セッション終了起源の read エラーを `onError` に通知しないようにする (#0131)
-  - `SessionImpl` コンストラクタの `transport.closed` ハンドラで `callbacks.close` を呼ぶ前に `sessionState` を `"closed"` に遷移させる
-  - read loop の catch を補助メソッド `notifyErrorIfActive` に集約し、`sessionState !== "connected"` または `WebTransportError` の `source === "session"` (フォールバックでメッセージ判定) の場合は通知をスキップする
-  - `startControlMessageLoop` / `startIncomingStreamLoop` / `startDatagramLoop` / `startNamespaceStreamLoop` の 4 箇所を新ヘルパーに置き換える
-  - `isSessionClosedError` を `src/session/errors.ts` に純関数として切り出し、単体テストを追加する
-  - `tests/e2e/pubsub.spec.ts` の flaky (subscriber 側 `errors` に `"The session is closed."` が混入) を解消する
-  - @voluntas
 - [UPDATE] `error.ts` と `grease.ts` の単体テストを追加する
   - エラー型が name / message / code を保持することを検証する
   - GREASE 値の生成・判定・負数拒否を検証する
@@ -267,23 +88,12 @@ Media over QAUIC Transport draft-17 対応
 - [ADD] Subscriber / Fetcher に trackProperties プロパティを追加する (Section 9.9, 9.15)
   - SUBSCRIBE_OK / FETCH_OK で受信した Track Properties にアプリケーションからアクセスできるようにする
   - @voluntas
-- [CHANGE] 未使用の公開 export を削除する
-  - `VersionSpecificParameterType` を削除し `MessageParameterType` に統一する
-  - GREASE ヘルパーとテスト専用の Property / Fetch 系ヘルパーを root export から削除する
-  - 未使用の `PropertyTypeRange` を削除する
-  - @voluntas
-- [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
-  - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
-  - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加
-  - @voluntas
-- [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
-  - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
-  - @voluntas
-- [CHANGE] PUBLISH_NAMESPACE を専用の双方向ストリームで送受信するようにする (#0105)
-  - draft-ietf-moq-transport-17 §9.17 に従い、`Session.publishNamespace()` を新しい双方向ストリームの先頭メッセージとして送信し、同じストリーム上で REQUEST_OK / REQUEST_ERROR を受信する
-  - 制御ストリームの `handleControlMessage` から PUBLISH_NAMESPACE / 関連 REQUEST_OK / REQUEST_ERROR を取り除き、未知メッセージとして PROTOCOL_VIOLATION でセッションを閉じるようにする
-  - `NamespaceSubscriptionCallbacks.announce` と `NamespaceAnnouncement` 型を削除する（受信経路廃止に伴い未使用化）
-  - `NamespacePublication.done()` は専用ストリームを FIN で閉じることで終了を通知する
+- [CHANGE] `Publisher.sendObject` の戻り値を `void` から `Promise<void>` に変更する (#0133)
+  - draft-ietf-moq-transport-17 §9.14.2: Joining Fetch は object が publish されていなければ INVALID_RANGE を MUST 返す
+  - 仕様の前提 (catalog 1 回 publish + relay の MAX_CACHE_DURATION でキャッシュ) を満たすには、publisher.start() の return 時点で catalog object が relay に向けて flush されている必要がある
+  - `createMediaPublisher.publishCatalog()` で `await sendObject(...)` するようにし、catalog object が WebTransport stream に書き込み完了してから start() が return するようにする
+  - 音声・映像フレームの `sendObject` 呼び出しは fire-and-forget のため `void` 演算子で戻り値を明示的に破棄する
+  - `tests/e2e/pubsub.spec.ts` の flaky (`Error: catalog receive timeout`) を解消する
   - @voluntas
 - [CHANGE] Track Property 識別子を draft-17 §14.4 の正式名称に揃える (#0123)
   - `MOQTPropertyId.IMMUTABLE_EXTENSIONS` → `MOQTPropertyId.IMMUTABLE_PROPERTIES`
@@ -297,6 +107,24 @@ Media over QAUIC Transport draft-17 対応
   - `Session#initialize()` の options から `path` / `authority` を削除する
   - SETUP 受信時に AUTHORITY / PATH を検出したら `INVALID_AUTHORITY` / `INVALID_PATH` でセッションを閉じる
   - `setup.test.ts` / `setup.prop.ts` を新方針に追従させる (PBT は PATH / AUTHORITY が決して含まれないことを fast-check で多数検証)
+  - @voluntas
+- [CHANGE] PUBLISH_NAMESPACE を専用の双方向ストリームで送受信するようにする (#0105)
+  - draft-ietf-moq-transport-17 §9.17 に従い、`Session.publishNamespace()` を新しい双方向ストリームの先頭メッセージとして送信し、同じストリーム上で REQUEST_OK / REQUEST_ERROR を受信する
+  - 制御ストリームの `handleControlMessage` から PUBLISH_NAMESPACE / 関連 REQUEST_OK / REQUEST_ERROR を取り除き、未知メッセージとして PROTOCOL_VIOLATION でセッションを閉じるようにする
+  - `NamespaceSubscriptionCallbacks.announce` と `NamespaceAnnouncement` 型を削除する（受信経路廃止に伴い未使用化）
+  - `NamespacePublication.done()` は専用ストリームを FIN で閉じることで終了を通知する
+  - @voluntas
+- [CHANGE] MSF の Media / Event Timeline エンコード API を非同期化して gzip 圧縮に対応する (#0072)
+  - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` を Promise ベースに変更
+  - `gzip: true` を指定したエンコードと gzip マジックによる自動デコードを追加
+  - @voluntas
+- [CHANGE] 未使用の公開 export を削除する
+  - `VersionSpecificParameterType` を削除し `MessageParameterType` に統一する
+  - GREASE ヘルパーとテスト専用の Property / Fetch 系ヘルパーを root export から削除する
+  - 未使用の `PropertyTypeRange` を削除する
+  - @voluntas
+- [CHANGE] CatalogDelta の型を operations 配列に変更して §5.2 の宣言順適用を実装する
+  - `addTracks`/`removeTracks`/`cloneTracks` フィールドを廃止し `operations: CatalogDeltaOperation[]` に変更
   - @voluntas
 - [CHANGE] draft-ietf-moq-transport-17 に対応する
   - 可変長整数エンコーディングを QUIC varint から MOQT varint に変更
@@ -353,57 +181,73 @@ Media over QAUIC Transport draft-17 対応
   - LOC Header Extensions を LOC Properties にリネーム
   - Timestamp / Timescale プロパティを追加
   - @voluntas
-- [FIX] SUBSCRIBE_NAMESPACE の Length フィールドが可変長整数でエンコードされている問題を修正する (#0104)
-  - draft-ietf-moq-transport-17 §9.20 の Length (16-bit big-endian) に準拠させる
-  - 手動フレーミングをやめ `ControlStreamWriter.encode()` に委譲する
+- [FIX] `createMediaSubscriber.requestKeyframe` と devtools の `useSubscriber.requestKeyframe` で Track Properties に DYNAMIC_GROUPS=1 が含まれていない場合に REQUEST_UPDATE の NEW_GROUP_REQUEST 送信を抑止する (#0168)
+  - draft-ietf-moq-transport-17 §9.3.11 の MUST NOT 準拠
+  - `src/properties.ts` に `supportsDynamicGroups(properties)` を追加し、mutable list と Immutable Properties (Type 0x0B) の両方を検索する
+  - moqt-js 側は条件未充足時に Error を throw する
+  - devtools 側は `console.warn` で警告して早期 return し、`SubscriberInstance.dynamicGroupsSupported` と連動して Keyframe ボタンを disable する
   - @voluntas
-- [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
-  - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
+- [FIX] devtools の `stopSubscribing` と close/end/error コールバックの最終 `statusMessage` レースを解消する (#0163)
+  - `useSubscriber.ts` に `shouldApplyStatusUpdate` ヘルパーを追加し、`isStopping` 進行中または `session === null` の状態では close / end / error コールバックが `status` / `statusMessage` を書き換えないようにする
+  - `cleanupSubscriber()` 呼び出しはガード外に置き、`AbortController` ベースの abort 経路を維持する
+  - stop 主導の終端時は最終メッセージが常に `Ready to subscribe` で確定する
   - @voluntas
-- [FIX] Event Timeline デコードが §8.1 のインデックス必須を検証していない問題を修正する (#0069)
-  - `t`/`l`/`m` がちょうど 1 つであることを検証するようにする
+- [FIX] Joining Fetch `onError` 時にライブバッファを破棄せず処理する (#0158)
+  - Joining Fetch (過去取得) は SUBSCRIBE 経由のライブ配信と独立したストリームのため、Joining Fetch の失敗でライブバッファを捨てるのは過剰だった
+  - `onEnd` と同じ手順でバッファを `chainRef` 経由のドレインに通し、`decoderInstance.resetKeyframeWait()` の強制リセットも削除して、バッファ内 keyframe で自然にデコードが再開するようにする
   - @voluntas
-- [FIX] cloneTracks で parentName 欠如や親不明を黙って無視する問題を修正する (#0070)
-  - `parentName` が欠如している場合にエラーをスローするようにする
-  - 親トラックが存在しない場合にエラーをスローするようにする
+- [FIX] Joining Fetch `onEnd` ドレインループと `object:` コールバック間の race を解消する (#0157)
+  - ドレイン投入 (`chainRef` への順次予約) と `joiningFetchInProgress` 立て下げを同一 `batch()` 内でアトミックに実行し、ドレイン中にバッファへ積まれたオブジェクトが永久に放置される race window を排除する
+  - 立て下げ後のライブオブジェクトは `object:` コールバックから `chainRef` 経由でデコードされ、Promise チェーンで順序保証される
   - @voluntas
-- [FIX] applyCatalogDelta の戻りが isComplete を引き継がない問題を修正する (#0071)
-  - draft-ietf-moq-msf-00 §5.1.7 の「isComplete は削除禁止」に準拠する
+- [FIX] `startSubscribing` に中断機構を追加し status 遷移を修正する (#0148)
+  - 冒頭で `isStopping` をチェックして二重実行を防ぐ
+  - 各 `await` の後に `instance.session.value === null` をチェックし、close コールバックで cleanup された場合に処理を中断する
+  - Catalog 購読中・デコーダセットアップ中の誤った `status="connected"` 遷移を削除し、実際に subscribe 完了するまで `connected` 状態にならないようにする
   - @voluntas
-- [FIX] Subgroup Header の予約値で PROTOCOL_VIOLATION を発生させる (#0106)
-  - draft-ietf-moq-transport-17 §10.4.2 に従い、SUBGROUP_ID_MODE = 0b11 のタイプ値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信した場合は PROTOCOL_VIOLATION でセッションを閉じるようにする
-  - `src/dataStream.test.ts` に予約値および 0b00X1XXXX 形式に合わない不正タイプ値のデコードエラー検証を追加する
+- [FIX] devtools の `handleRemoveSubscriber` で WebTransport セッションと VideoDecoder をクローズしてリソースリークを解消する (#0144)
+  - `App.tsx` の `handleRemoveSubscriber` で `sub.removeSubscriber(id)` を呼ぶ前に decoder.close() と session.close() を fire-and-forget で実行する
+  - `useSubscriber` に `useEffect` cleanup を追加し、予期しないアンマウント経路でも `cleanupSubscriber` が呼ばれるようにする
   - @voluntas
-- [FIX] `Session.close()` が WebTransport を閉じずストリームをリークする問題を修正する (#0107)
-  - draft-ietf-moq-transport-17 §3.5 に従い、ユーザー起点の `close()` でも WebTransport セッションを閉じて peer に終了を通知するようにする
-  - `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` / `controlSendStream` の writer / reader を `close()` 時に閉じることで QUIC ストリームの FIN / RESET_STREAM を送出する
-  - `close(closeCode?, reason?)` を引数化し、`closeWithError` から共通化する
+- [FIX] WebTransport セッション終了起源の read エラーを `onError` に通知しないようにする (#0131)
+  - `SessionImpl` コンストラクタの `transport.closed` ハンドラで `callbacks.close` を呼ぶ前に `sessionState` を `"closed"` に遷移させる
+  - read loop の catch を補助メソッド `notifyErrorIfActive` に集約し、`sessionState !== "connected"` または `WebTransportError` の `source === "session"` (フォールバックでメッセージ判定) の場合は通知をスキップする
+  - `startControlMessageLoop` / `startIncomingStreamLoop` / `startDatagramLoop` / `startNamespaceStreamLoop` の 4 箇所を新ヘルパーに置き換える
+  - `isSessionClosedError` を `src/session/errors.ts` に純関数として切り出し、単体テストを追加する
+  - `tests/e2e/pubsub.spec.ts` の flaky (subscriber 側 `errors` に `"The session is closed."` が混入) を解消する
   - @voluntas
-- [FIX] `decodeTrackNamespace` が Field Length=0 のフィールドを silently 受理する問題を修正する (#0108)
-  - draft-ietf-moq-transport-17 §2.3 の "Each Track Namespace Field Value MUST contain at least one byte." に準拠する
-  - `decodeTrackNamespace` で長さ 0 のフィールドを検出した場合にエラーをスローする
-  - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
-  - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
+- [FIX] devtools subscriber の Joining FETCH ドレインで複数 Subgroup ストリームの到着順を `(groupId, objectId)` 昇順へ並べ替える (#0129)
+  - `devtools/src/hooks/useSubscriber.ts` に `sortByGroupObject` ヘルパーを追加し、`onEnd` のバッファドレインと追加分処理に適用する
+  - 「stream 内では順番が保証されるのでソート不要」の誤コメントを draft-ietf-moq-transport-17 §10.3 / §10.4 に基づく実状コメントへ書き換える
+  - 直接処理経路 (`liveObjectProcessingChain`) は到着順のままで、複数 Subgroup 並行受信時の制限事項をコメントで明示する (リオーダーバッファ対応は将来 issue)
   - @voluntas
-- [FIX] FETCH ストリームの decode context が複数チャンクで永続化されず誤って `ProtocolViolationError` を投げる問題を修正する (#0113)
-  - `processFetchObjects` の戻り値に `context` と `isFirst` を含めて caller の `handleIncomingStream` で永続化するようにする
-  - 機能していなかった `if (buffer !== null)` ガードを削除する
-  - 複数チャンクにまたがる FETCH レスポンス (joining fetch でのキャッシュ取得等) で誤って "first object must have GROUP_ID_PRESENT flag set" エラーが発生して subscriber が異常終了するのを防ぐ
+- [FIX] devtools subscriber の Joining FETCH `joiningFetchInProgress` 解除をドレインループ末尾に一本化する (#0128)
+  - `devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` を撤去する
+  - 解除点を Joining FETCH の `onEnd` ドレインループ末尾と `onError` のリセット 2 箇所に統一する
+  - LARGEST_OBJECT なし応答でも `src/session.ts` 側で `onEnd` が同期呼び出しされ、ドレインループ経由で正しい順序でフラグが下りるようにする
+  - ドレインループ実行中に到着するライブオブジェクトが直接 `handleObject` 経路へ漏れて順序が壊れる race を排除する
   - @voluntas
-- [FIX] `waitForSubscriber` / `waitForFetcher` のタイムアウトでストリームが cancel されない問題を修正する (#0111)
-  - `handleIncomingStream` で `waitForSubscriber()` / `waitForFetcher()` が null を返した場合に `reader.cancel()` を呼んで peer に STOP_SENDING を送るようにする
-  - 不明な subscriber / fetcher 向けのデータストリームが silent に消費され続けるのを防ぐ
+- [FIX] devtools subscriber の Joining FETCH 完了後に timestamp ベースで描画フレームを破棄しないようにする (#0127)
+  - `devtools/src/hooks/useSubscriber.ts` の `renderFrame` から `joiningFetchLastTimestamp` ゲートを撤去する
+  - `joiningFetchLastTimestamp` の更新箇所 (Joining FETCH onObject / onEnd / onError) と `SubscriberInstance` のフィールド宣言を削除する
+  - draft-ietf-moq-transport-17 §9.14.2.1 で FETCH と SUBSCRIBE が contiguous かつ non-overlapping に揃えられる責務は publisher 側にあり、subscriber 側で timestamp ベースの描画抑制を行う必要はないため
   - @voluntas
-- [FIX] Joining Fetch 送信エラーで pendingFetch エントリがリークする問題を修正する (#0110)
-  - `sendJoiningFetch()` の bidi ストリーム作成 / 書き込みで例外が発生した場合に `pendingFetch` から該当エントリを削除し、`options.onError?.()` を呼ぶようにする
-  - 呼び出し元での fire-and-forget による Promise rejection の取りこぼしを防止する
+- [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
+  - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
+  - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
+  - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
   - @voluntas
-- [FIX] データストリーム decode の例外がデータ不足とプロトコル違反を区別できない問題を修正する (#0109)
-  - `IncompleteDataError` (バッファ不足) と `ProtocolViolationError` (仕様違反) を `src/error.ts` に新設する
-  - `varint.ts` のデータ不足例外を `IncompleteDataError`、不正コードポイント例外を `ProtocolViolationError` に変更する
-  - `dataStream.ts` の decode 関数群 (`validateObjectStatus` / `decodeSubgroupHeader` / `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchHeader` / `decodeFetchObjectFields`) で投げる仕様違反例外を `ProtocolViolationError` に統一する
-  - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
-  - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
+- [FIX] `pendingSubgroupStreams` の buffer 配線を実装する (#0125)
+  - draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief period to handle reordering with the control message that establishes the Track Alias" に準拠する buffer を実装する
+  - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
+  - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
+  - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
+  - 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) にも `pendingSubgroup` を追加し `connect()` に伝搬する
+  - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
+  - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
+  - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する
+  - `subscriberReadyCallbacks` 関連を削除する
+  - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
   - @voluntas
 - [FIX] FORWARD / GROUP_ORDER パラメータの値域 MUST 検証を全受信経路で行う (#0124)
   - draft-ietf-moq-transport-17 §9.3.6 / §9.3.10 に従い、0 / 1 (FORWARD) / 0x1 / 0x2 (GROUP_ORDER) 以外を `ProtocolViolationError` で拒否する
@@ -444,38 +288,57 @@ Media over QAUIC Transport draft-17 対応
   - `decodeParameters()` で重複パラメータの検出を追加する (SHOULD)
   - 制御メッセージループで `ProtocolViolationError` を catch して `PROTOCOL_VIOLATION` でセッションを閉じる
   - @voluntas
-- [FIX] `pendingSubgroupStreams` の buffer 配線を実装する (#0125)
-  - draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief period to handle reordering with the control message that establishes the Track Alias" に準拠する buffer を実装する
-  - `PendingSubgroupBuffer` クラス (`src/pendingSubgroupBuffer.ts`) を新設する
-  - 上限値 (`perStreamMaxBytes` / `perSessionMaxBytes` / `timeoutMs`) を `ConnectOptions.pendingSubgroup` で指定可能にし、未指定時は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` (1 MiB / 16 MiB / 5000 ms) が適用される
-  - `PendingSubgroupBufferOptions` / `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` を `src/index.ts` から公開する
-  - 高レベル API (`MediaPublisherOptions` / `MediaSubscriberOptions`) にも `pendingSubgroup` を追加し `connect()` に伝搬する
-  - `handleIncomingStream` から Subgroup ストリーム処理を `handleSubgroupStream` メソッドに分割し、Promise.race による pending mode と subscriber mode を一貫して扱うようにする
-  - `waitForSubscriber` による read 停止を廃止し、buffer 経由でストリームを読み進めるようにする
-  - `processPendingSubgroupStream` を削除し、`processSubgroupObjects` に処理を一本化する
-  - `subscriberReadyCallbacks` 関連を削除する
-  - `SessionStatistics.pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を `PendingSubgroupBuffer` の集計値で復活させる
+- [FIX] FETCH ストリームの decode context が複数チャンクで永続化されず誤って `ProtocolViolationError` を投げる問題を修正する (#0113)
+  - `processFetchObjects` の戻り値に `context` と `isFirst` を含めて caller の `handleIncomingStream` で永続化するようにする
+  - 機能していなかった `if (buffer !== null)` ガードを削除する
+  - 複数チャンクにまたがる FETCH レスポンス (joining fetch でのキャッシュ取得等) で誤って "first object must have GROUP_ID_PRESENT flag set" エラーが発生して subscriber が異常終了するのを防ぐ
   - @voluntas
-- [FIX] devtools subscriber の Joining FETCH ドレインで複数 Subgroup ストリームの到着順を `(groupId, objectId)` 昇順へ並べ替える (#0129)
-  - `devtools/src/hooks/useSubscriber.ts` に `sortByGroupObject` ヘルパーを追加し、`onEnd` のバッファドレインと追加分処理に適用する
-  - 「stream 内では順番が保証されるのでソート不要」の誤コメントを draft-ietf-moq-transport-17 §10.3 / §10.4 に基づく実状コメントへ書き換える
-  - 直接処理経路 (`liveObjectProcessingChain`) は到着順のままで、複数 Subgroup 並行受信時の制限事項をコメントで明示する (リオーダーバッファ対応は将来 issue)
+- [FIX] `waitForSubscriber` / `waitForFetcher` のタイムアウトでストリームが cancel されない問題を修正する (#0111)
+  - `handleIncomingStream` で `waitForSubscriber()` / `waitForFetcher()` が null を返した場合に `reader.cancel()` を呼んで peer に STOP_SENDING を送るようにする
+  - 不明な subscriber / fetcher 向けのデータストリームが silent に消費され続けるのを防ぐ
   - @voluntas
-- [FIX] devtools subscriber の Joining FETCH `joiningFetchInProgress` 解除をドレインループ末尾に一本化する (#0128)
-  - `devtools/src/hooks/useSubscriber.ts` の `await session.subscribe()` 直後にあった LARGEST_OBJECT なし時の早期 `joiningFetchInProgress: false` を撤去する
-  - 解除点を Joining FETCH の `onEnd` ドレインループ末尾と `onError` のリセット 2 箇所に統一する
-  - LARGEST_OBJECT なし応答でも `src/session.ts` 側で `onEnd` が同期呼び出しされ、ドレインループ経由で正しい順序でフラグが下りるようにする
-  - ドレインループ実行中に到着するライブオブジェクトが直接 `handleObject` 経路へ漏れて順序が壊れる race を排除する
+- [FIX] Joining Fetch 送信エラーで pendingFetch エントリがリークする問題を修正する (#0110)
+  - `sendJoiningFetch()` の bidi ストリーム作成 / 書き込みで例外が発生した場合に `pendingFetch` から該当エントリを削除し、`options.onError?.()` を呼ぶようにする
+  - 呼び出し元での fire-and-forget による Promise rejection の取りこぼしを防止する
   - @voluntas
-- [FIX] devtools subscriber の Joining FETCH 完了後に timestamp ベースで描画フレームを破棄しないようにする (#0127)
-  - `devtools/src/hooks/useSubscriber.ts` の `renderFrame` から `joiningFetchLastTimestamp` ゲートを撤去する
-  - `joiningFetchLastTimestamp` の更新箇所 (Joining FETCH onObject / onEnd / onError) と `SubscriberInstance` のフィールド宣言を削除する
-  - draft-ietf-moq-transport-17 §9.14.2.1 で FETCH と SUBSCRIBE が contiguous かつ non-overlapping に揃えられる責務は publisher 側にあり、subscriber 側で timestamp ベースの描画抑制を行う必要はないため
+- [FIX] データストリーム decode の例外がデータ不足とプロトコル違反を区別できない問題を修正する (#0109)
+  - `IncompleteDataError` (バッファ不足) と `ProtocolViolationError` (仕様違反) を `src/error.ts` に新設する
+  - `varint.ts` のデータ不足例外を `IncompleteDataError`、不正コードポイント例外を `ProtocolViolationError` に変更する
+  - `dataStream.ts` の decode 関数群 (`validateObjectStatus` / `decodeSubgroupHeader` / `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchHeader` / `decodeFetchObjectFields`) で投げる仕様違反例外を `ProtocolViolationError` に統一する
+  - `session.ts` の受信ループ (`handleIncomingStream` / `processFetchObjects` / `processSubgroupObjects` / `processPendingSubgroupStream` / `handleIncomingDatagram`) で `IncompleteDataError` を「データ待ち」、`ProtocolViolationError` を `closeWithError(PROTOCOL_VIOLATION)`、その他を `closeWithError(INTERNAL_ERROR)` で扱うようにする
+  - `dataStream.test.ts` / `varint.test.ts` にエラー型 (`ProtocolViolationError` / `IncompleteDataError`) を検証するテストを追加する
   - @voluntas
-- [FIX] OBJECT_DATAGRAM の ZERO_OBJECT_ID 省略時のデフォルト値を 1 にする (#0126)
-  - `decodeObjectDatagram` の `objectId` 初期値を `0n` から `1n` に変更する
-  - `encodeObjectDatagram` で ZERO_OBJECT_ID ビットを持つタイプに `objectId !== 1n` が渡された場合エラーを throw する
-  - draft-ietf-moq-transport-17 §10.3.1 の "When set to 1, the Object ID field is omitted and the Object ID is 1." に準拠する
+- [FIX] `decodeTrackNamespace` が Field Length=0 のフィールドを silently 受理する問題を修正する (#0108)
+  - draft-ietf-moq-transport-17 §2.3 の "Each Track Namespace Field Value MUST contain at least one byte." に準拠する
+  - `decodeTrackNamespace` で長さ 0 のフィールドを検出した場合にエラーをスローする
+  - `createTrackNamespace` でも空文字列フィールドを拒否することで対称性を保つ
+  - `parameter.test.ts` に長さ 0 フィールドの単体・複合テストを追加し、`parameter.prop.ts` のラウンドトリップ生成器を `minLength: 1` に修正する
+  - @voluntas
+- [FIX] `Session.close()` が WebTransport を閉じずストリームをリークする問題を修正する (#0107)
+  - draft-ietf-moq-transport-17 §3.5 に従い、ユーザー起点の `close()` でも WebTransport セッションを閉じて peer に終了を通知するようにする
+  - `requestStreams` / `publisherStreams` / `namespaceSubscriptions` / `namespacePublications` / `controlSendStream` の writer / reader を `close()` 時に閉じることで QUIC ストリームの FIN / RESET_STREAM を送出する
+  - `close(closeCode?, reason?)` を引数化し、`closeWithError` から共通化する
+  - @voluntas
+- [FIX] Subgroup Header の予約値で PROTOCOL_VIOLATION を発生させる (#0106)
+  - draft-ietf-moq-transport-17 §10.4.2 に従い、SUBGROUP_ID_MODE = 0b11 のタイプ値 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) を受信した場合は PROTOCOL_VIOLATION でセッションを閉じるようにする
+  - `src/dataStream.test.ts` に予約値および 0b00X1XXXX 形式に合わない不正タイプ値のデコードエラー検証を追加する
+  - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE の Length フィールドが可変長整数でエンコードされている問題を修正する (#0104)
+  - draft-ietf-moq-transport-17 §9.20 の Length (16-bit big-endian) に準拠させる
+  - 手動フレーミングをやめ `ControlStreamWriter.encode()` に委譲する
+  - @voluntas
+- [FIX] applyCatalogDelta の戻りが isComplete を引き継がない問題を修正する (#0071)
+  - draft-ietf-moq-msf-00 §5.1.7 の「isComplete は削除禁止」に準拠する
+  - @voluntas
+- [FIX] cloneTracks で parentName 欠如や親不明を黙って無視する問題を修正する (#0070)
+  - `parentName` が欠如している場合にエラーをスローするようにする
+  - 親トラックが存在しない場合にエラーをスローするようにする
+  - @voluntas
+- [FIX] Event Timeline デコードが §8.1 のインデックス必須を検証していない問題を修正する (#0069)
+  - `t`/`l`/`m` がちょうど 1 つであることを検証するようにする
+  - @voluntas
+- [FIX] MSF カタログ差分の適用順が仕様と一致しない問題を修正する (#0068)
+  - draft-ietf-moq-msf-00 §5.2 の「宣言順に逐次適用」に準拠する
   - @voluntas
 - [FIX] REQUEST_UPDATE の応答 (REQUEST_OK) が resolve されない問題を修正する (Section 9.10)
   - handleRequestOk が PUBLISH_NAMESPACE の応答しか処理しておらず Promise が永久にハングしていた
@@ -552,24 +415,151 @@ Media over QAUIC Transport draft-17 対応
 
 ### misc
 
+- [UPDATE] devtools の `useSubscriber` / `usePublisher` で WebTransport `close` / `error` と Catalog ライフサイクルを `addLog` 経由で DebugPanel に出力する (#0176)
+  - `console.log` / `console.warn` / `console.error` で DevTools コンソールにしか出ていなかった接続終端と Catalog 受信フローを DebugPanel に集約する
+  - close は level=warn、error は level=error、Catalog 進行は level=info / warn / error で振り分ける
+  - `addLog` 呼び出しは `shouldApplyStatusUpdate` ガード外に置き、stop 主導の終端でも DebugPanel にイベントを残す
+  - @voluntas
+- [UPDATE] devtools の `handleDebugMessage` で `DebugMessage.payload` をコピーしてからログに保存する (#0175)
+  - `new Uint8Array(message.payload)` で独立した ArrayBuffer に複製してから `addLog` に渡す
+  - moqt-js 側内部実装の最適化 (slice → subarray など) が将来入っても devtools 側のログ保持が破綻しないよう防御する
+  - @voluntas
+- [UPDATE] `DebugMessage.payload` の寿命契約 (independent / MAY retain / MUST NOT mutate) を JSDoc に明記する (#0175)
+  - @voluntas
+- [UPDATE] `DebugPanel` の formatter 群を `utils/logFormatters.ts` に分離し pure function 化する (#0174)
+  - コンポーネント内に分散していた `formatElapsedTime` / `formatDeltaTime` を引数化してモジュールスコープへ移動する
+  - `formatMessageData` / `formatHexDump` / `formatAbsoluteTime` も同モジュールに集約し、`RFC_FIELD_NAMES` / `isParameter` を共有する
+  - `formatBytes` は重複問題があるため本 issue では移動しない
+  - @voluntas
+- [UPDATE] DebugPanel の 4 つの copy ハンドラを `useCopyFeedback` hook に統合し、setTimeout のリーク (#0170) を解消する (#0173)
+  - 行コピー用とボタンコピー用の hook を分離し、同時にハイライト状態を持てるようにする
+  - 連続クリック時の早消えとアンマウント後の signal 書き込みを `useRef` + `useEffect` cleanup で防ぐ
+  - 失敗時は #0149 の方針に従い feedback を変更せず `console.error` のみ
+  - @voluntas
+- [UPDATE] Copy URL ボタンのロジックを `useCopyUrlButton` hook に抽出し、アンマウント時と再コピー時の `setTimeout` を解放する (#0172)
+  - `devtools/src/App.tsx` / `devtools/src/webtransport-devtools/App.tsx` の重複ロジックを共通 hook に統合する
+  - 連続クリック時の早消えと、アンマウント後の signal 書き込みリークを解消する
+  - @voluntas
+- [UPDATE] DebugPanel のログ蓄積を破壊的配列操作 + シーケンス signal 分離に変更し、autoScroll トグル単体の effect 再発火を抑制する (#0167)
+  - `logs` Signal を廃止し、プレーン配列 `logBuffer` + `logCount` / `logSequence` の 2 signal 構成に変更する
+  - `addLog` を `push` + `shift` の O(1) 操作に置き換え、スプレッド + slice によるフルコピー × 2 を解消する
+  - autoScroll effect を `logSequence` 変化単独で発火させ、`autoScroll.peek()` で参照することで toggle 単体での再発火を抑制する
+  - @voluntas
+- [UPDATE] devtools の Joining Fetch 中ライブオブジェクトバッファを Signal から useRef へ変更し、追記コストを O(N^2) から O(N) に改善する (#0166)
+  - `SubscriberInstance` から `liveObjectBuffer` フィールドを削除する
+  - `useSubscriber.ts` で `useRef<MoqtObject[]>([])` を導入し、`object:` コールバックの追記を `push` (O(1)) に置き換える
+  - `onEnd` / `onError` の `batch()` 外で ref をクリアする
+  - @voluntas
+- [UPDATE] devtools の `SubscriberPanel` が `subscriberInstances` Map 全体を購読していたのを、対象 ID 用の派生 signal だけを購読するように変更する (#0165)
+  - `signals/subscriber.ts` に `getSubscriberInstanceSignal(id)` と `subscriberInstanceSignalCache` を追加する
+  - `SubscriberPanel.tsx` で `useMemo` を使い対象 ID 用の `ReadonlySignal` を購読する
+  - `removeSubscriber` 末尾で対応するキャッシュエントリを削除する (Map 差し替えの後)
+  - @voluntas
+- [UPDATE] devtools の `SubscriberInstance` から UI / 外部参照されない 2 フィールド (`joiningFetchInProgress` / `joiningFetchLastLocation`) を Signal からフックローカル `useRef` へ移動する (#0164)
+  - `useSubscriber` フック内で `useRef<boolean>` / `useRef<{ group; object } | null>` として保持する
+  - `resetSubscriberStats` の `joiningFetchEnabled` 引数を削除し、ref の初期化を呼び出し側へ移す
+  - `resetSubscriberState` のシグネチャを Non-nullable な ref 引数に確定する
+  - @voluntas
+- [UPDATE] devtools の `removeSubscriber` に decoder / session の fire-and-forget close を集約する (#0162)
+  - `signals/subscriber.ts:removeSubscriber` を「Map 削除 + 当該 instance の外部リソース close」に拡張する
+  - `App.tsx:handleRemoveSubscriber` ラッパーを削除し、`onRemove` を `() => sub.removeSubscriber(id)` に統一する
+  - `Session.close` / `DecoderWrapper.close` の冪等性で `cleanupSubscriber` 経由との二重 close を吸収する
+  - @voluntas
+- [UPDATE] devtools の `useSubscriber` の `startSubscribing` 中断検知を `AbortController` ベースに統一する (#0161)
+  - `useSubscriber` フックに `abortControllerRef` を導入し、`startSubscribing` 各 `await` 直後で `signal.aborted` を確認する設計に置き換える
+  - `cleanupSubscriber` / `stopSubscribing` 冒頭で `abortControllerRef.current?.abort()` を呼び、進行中の `startSubscribing` を `unsubscribe()` 完了を待たずに中断する
+  - 中断検知ヘルパー `checkAborted` を export して単体テストを追加する
+  - Catalog の `.then` 内側で abort 判定を行い、遅延代入による `catalogSubscriber.value` 上書きレースを潰す
+  - @voluntas
+- [UPDATE] `signals/subscriber.ts` の参照フィールドコメントを修正する (#0153)
+  - Signal 化の本質的理由 (Map 再生成回避と `hasActiveSubscriber` computed の追跡要件) を明記する
+  - @voluntas
+- [UPDATE] `DebugPanel.tsx` の過剰コメントを削除する (#0151)
+  - 自明なループ説明と Premature Optimization を正当化するコメントを削除する
+  - @voluntas
+- [UPDATE] `useSubscriber.ts` の RFC 節番号誤り・変数名省略・節参照記法不統一を修正する (#0145)
+  - `§10.3` を `§10.4.2` に修正する (Subgroup ストリームは §10.4.2 で定義)
+  - `ext` を `locProperties` にリネームし、変数名を省略しない方針を徹底する
+  - `Section 9.3.11` を `§9.3.11` に統一する
+  - `draft-ietf-moq-loc-02 §2.1` を `§2.1.2` に具体化する
+  - @voluntas
+- [UPDATE] `.oxlintrc.jsonc` を `vite.config.ts` の `lint` ブロックに移植する (#0132)
+  - `plugins` / `categories` / `rules` / `overrides` / `ignorePatterns` を `vite.config.ts` 内に集約し、`.oxlintrc.jsonc` を削除する
+  - sora-devtools の運用を参考に `typescript/prefer-readonly-parameter-types`, `typescript/strict-void-return`, `typescript/prefer-readonly`, `jest/*`, `vitest/prefer-importing-vitest-globals`, `unicorn/require-module-specifiers`, `import/max-dependencies` を off にする
+  - 顕在化した実 violation 24 件を `src/codec/index.ts` / `src/frameSource.ts` / `src/msf.ts` / `src/properties.ts` / `src/session.prop.ts` / `src/session.ts` / `src/session/stream.ts` / `src/session/errors.test.ts` / `src/pendingSubgroupBuffer.test.ts` / `playwright.config.ts` で修正する
+  - 最終的に lint 0 warnings / 0 errors (443 rules / 82 files) になる
+  - @voluntas
+- [UPDATE] `session.ts` の inline ロジックを純粋関数呼び出しに置き換える
+  - `publish()` / `subscribe()` のパラメータ構築 / Track Properties 構築、`readPublishResponse()` の FORWARD 抽出、`readSubscribeResponse()` の LARGEST_OBJECT 抽出、`readFetchResponse()` の End Location 検証、`sendObjectInternal()` の Object ID Delta 計算の 7 箇所を、既存の純粋関数呼び出しに置き換える
+  - @voluntas
 - [UPDATE] prek の pre-commit フックに typecheck を追加し、vp の entry を PATH 前提で簡素化する
   - @voluntas
 - [UPDATE] Vite から Vite+ に切り替える
   - @voluntas
 - [UPDATE] moqt-devtools の Namespace フィールドに説明とプレースホルダーを追加する
   - @voluntas
+- [ADD] devtools 向け Vitest 受け入れ態勢を整備し純粋関数・signal ロジックの単体テストを追加する (#0160)
+  - `vite.config.ts` の `test.include` に `devtools/src/**/*.{test,prop}.ts` を追加する
+  - `sortByGroupObject` を export し非破壊性・順序付け・境界値の単体テスト (8 件) を追加する
+  - `signals/subscriber.ts` の `createSubscriberInstance` / `addSubscriber` / `removeSubscriber` / `subscriberIds` / `hasActiveSubscriber` の単体テスト (9 件) を追加する
+  - @voluntas
+- [ADD] `session.ts` の純粋関数 8 個に対する PBT を追加する
+  - `src/session.prop.ts` に `buildPublishParameters` / `buildPublishTrackProperties` / `buildSubscribeParameters` / `extractLargestLocation` / `extractForwardState` / `validateFetchOkEndLocation` / `classifyIncomingStreamType` / `calculateObjectIdDelta` のプロパティベーステストを実装する
+  - @voluntas
 - [ADD] 低レベル API の実装ドキュメントを `docs/LOW_LEVEL_API.md` に追加する
   - @voluntas
 - [ADD] `pnpm run test:cov` でカバレッジ付きテストを実行できるようにする
   - @voluntas
-
-### misc
-
-- [UPDATE] `session.ts` の inline ロジックを純粋関数呼び出しに置き換える
-  - `publish()` / `subscribe()` のパラメータ構築 / Track Properties 構築、`readPublishResponse()` の FORWARD 抽出、`readSubscribeResponse()` の LARGEST_OBJECT 抽出、`readFetchResponse()` の End Location 検証、`sendObjectInternal()` の Object ID Delta 計算の 7 箇所を、既存の純粋関数呼び出しに置き換える
+- [CHANGE] devtools の `cleanupSubscriber` を `teardownSubscriber` にリネームし `closeSubscriberResources` / `resetSubscriberState` に分割する (#0171)
+  - リネームと責務分離で「リソース close」「signal リセット」「UI ガード再有効化」の境界を明確にする
+  - `closeSubscriberResources` / `resetSubscriberState` を export して単体テスト可能にする
+  - `startSubscribing` catch 句の重複した `settingsDisabled` 再有効化処理を削除する
   - @voluntas
-- [ADD] `session.ts` の純粋関数 8 個に対する PBT を追加する
-  - `src/session.prop.ts` に `buildPublishParameters` / `buildPublishTrackProperties` / `buildSubscribeParameters` / `extractLargestLocation` / `extractForwardState` / `validateFetchOkEndLocation` / `classifyIncomingStreamType` / `calculateObjectIdDelta` のプロパティベーステストを実装する
+- [CHANGE] `useSubscriber.ts` の責務を関数抽出で分割する (#0159)
+  - `buildConnectOptions` を `signals/connectionSettings.ts` へ抽出する
+  - `buildVideoDecoderConfig` (Catalog → `VideoDecoderConfig` 変換) と `resetSubscriberStats` (統計フィールド初期化) を `useSubscriber.ts` のモジュールスコープへ抽出する
+  - `startSubscribing` 本体から重複した手続きを除去し責務を分離する
+  - @voluntas
+- [CHANGE] devtools の Preact + signals 利用を改善する (#0134, #0135, #0136, #0137, #0138, #0139, #0140, #0141, #0142, #0143)
+  - `SubscriberInstance` の各フィールドを `Signal` 化し、`updateSubscriber` の Map 全置換による全 SubscriberPanel 再描画を解消する
+  - `useSubscriber` / `SubscriberPanel` / `DebugPanel` / `testApi` を `.value` 直接アクセスに置き換える
+  - `useSubscriber` の `liveObjectProcessingChain` を `useRef` に変更し、レンダリング間で安定参照になるようにする
+  - `App.tsx` モジュールトップレベルの `effect()` を削除し、`main.tsx` で初期 Subscriber を生成するよう移動する
+  - `PublisherPanel` の `useEffect(deps)` を `useSignalEffect` に置き換える
+  - `DebugPanel` のオートスクロール処理 (`useEffect` 内の `effect`) を `useSignalEffect` に置き換える
+  - `App.tsx` / `PublisherPanel.tsx` / `webtransport-devtools/App.tsx` の JSX で signal を直接渡している箇所を `.value` 経由に統一する
+  - `DebugPanel` の `maxLogs` signal を定数 `MAX_LOGS` に変更する
+  - `addSubscriber` の ID をモジュールスコープ・カウンタから `crypto.randomUUID().slice(0, 8)` ベースに変更する
+  - `DebugPanel` のログ描画を `[...logs.value].reverse()` から逆方向ループに変更し、毎レンダリングの O(n) コピーを排除する
+  - `App.tsx` の `copyButtonText` をモジュールスコープ signal から `App` コンポーネント内の `useSignal` に移動する
+  - @voluntas
+- [FIX] devtools の `addSubscriber` で短縮 ID 衝突時に旧 `SubscriberInstance` が上書きされて WebTransport セッションと VideoDecoder がリークする経路を塞ぐ (#0169)
+  - `signals/subscriber.ts` に `generateUniqueSubscriberId` を純粋関数として追加し、`addSubscriber` から利用する
+  - @voluntas
+- [FIX] `useSubscriber.ts` の Subgroup 配送順に関する RFC 節参照を `§2.2 (Subgroups)` に修正する (#0156)
+  - `§10.4.2` および `§10.3 / §10.4` は SUBGROUP_HEADER / Datagram / Stream の定義節であり、配送順非保証の規範は `§2.2 (Subgroups)` にある
+  - #0145 で `§10.3` を `§10.4.2` に修正した結果、定義節への誤った参照が確定していたのを訂正する
+  - @voluntas
+- [FIX] `joiningFetch.onError` で decoder の `state !== "closed"` ガードを追加する (#0155)
+  - `cleanupSubscriber` が先に decoder を close 済みの場合に `resetKeyframeWait()` が呼ばれて意図しない副作用が起きる経路を塞ぐ
+  - @voluntas
+- [FIX] `useSubscriber.ts` の catalog 購読タイムアウトに `clearTimeout` を追加する (#0154)
+  - `Promise.race` で catalog 取得が先に成功した場合でもタイマーが解放されるように `try / finally` で `clearTimeout` する
+  - @voluntas
+- [FIX] `webtransport-devtools/App.tsx` の `copyButtonText` を `useSignal` 化し、`App.tsx` で抽出済みの `debugPanelOpen` を使うようにする (#0152)
+  - `webtransport-devtools/App.tsx`: モジュールスコープ signal を `useSignal` に移動して HMR 時の状態残留を防ぐ
+  - `App.tsx`: 既存のローカル変数 `debugPanelOpen` を Debug ボタンとログ件数バッジでも使い、`isDebugPanelOpen.value` の重複参照を 2 箇所統一する
+  - @voluntas
+- [FIX] `cleanupSubscriber` の再入安全性を改善し joining fetch 関連の信号をリセットする (#0150)
+  - `instance.session.value = null` を `sessionInstance.close()` より先に実行し、close イベントの同期 dispatch による再入で sessionInstance が再クローズされる経路を塞ぐ
+  - `joiningFetchInProgress` / `joiningFetchLastLocation` / `liveObjectBuffer` / `joiningFetchStats` / `largestLocation` をクリアし、`stopSubscribing` 単独呼び出し後の状態不整合を防ぐ
+  - @voluntas
+- [FIX] `DebugPanel` の clipboard 操作に try/catch を追加する (#0149)
+  - 4 箇所の `navigator.clipboard.writeText()` 呼び出しを try/catch で囲み、権限拒否等の reject 時に `unhandledrejection` が発生しないようにする
+  - 失敗時は `console.error` のみ出力し、コピー成功フィードバックの状態は変更しない
+  - @voluntas
+- [FIX] `useSubscriber.ts` の `sortByGroupObject` を非破壊的にする (#0147)
+  - `Array.prototype.sort()` の in-place 動作で signal の `.value` 配列を破壊する潜在的バグを防ぐためコピー後にソートする
   - @voluntas
 
 ## 2026.1.0
