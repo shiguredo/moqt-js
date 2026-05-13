@@ -86,12 +86,15 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 #### コントロールメッセージ
 
 - SETUP
+  - AUTHORIZATION_TOKEN Setup Option (REGISTER / USE_VALUE)
+  - MOQT_IMPLEMENTATION Setup Option
 - GOAWAY (Timeout 対応)
 - REQUEST_OK
 - REQUEST_ERROR
 - PUBLISH_NAMESPACE
 - NAMESPACE
 - NAMESPACE_DONE
+- PUBLISH_BLOCKED
 - SUBSCRIBE_NAMESPACE
 - TRACK_STATUS
 
@@ -238,7 +241,7 @@ const session = await connect("https://example.com/moqt", {
 
 const publisher = await session.publish(["live"], "video", { error: (e) => console.error(e) });
 
-publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1, 2, 3]) });
+await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1, 2, 3]) });
 await publisher.done();
 ```
 
@@ -305,7 +308,7 @@ vp run dev:examples
 
 ```bash
 vp run build
-vp dev
+vp run dev
 ```
 
 ### オンライン版
@@ -338,10 +341,12 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 解像度 / フレームレート / ビットレート / キーフレーム間隔の設定
 - MAX_CACHE_DURATION の設定
 - 自己署名証明書のハッシュ指定
+- Authorization Token の指定
 - WebCodecs Dedicated Worker 対応
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
 - 統計情報の表示 (エンコード/デコードフレーム数、送受信バイト数など)
 - カタログ情報の表示
+- HTTP/2 / HTTP/3 接続判別表示
 - Forward State の表示
 - Joining Fetch 対応
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
@@ -363,12 +368,14 @@ WebCodecs API の動作確認ツールです。moqt-js とは独立していま�
 
 WebTransport API の動作確認ツールです。moqt-js とは独立しています。
 
+- WebTransport API 対応状況の表示 (静的チェック)
 - WebTransport 接続 / 切断
 - 自己署名証明書のハッシュ指定
 - WebTransport の接続状態とプロパティの表示
   - ready / closed / draining の Promise 状態
   - reliability / congestionControl / supportsReliableOnly
   - protocol / responseHeaders
+- HTTP/2 / HTTP/3 接続判別表示
 - 双方向ストリームの作成と送受信
 - 送信専用単方向ストリームの作成と送信
 - 受信専用単方向ストリームの受信
