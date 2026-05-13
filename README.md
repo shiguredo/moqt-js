@@ -34,11 +34,13 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - 高レベル API (WebCodecs / MediaStream 対応)
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport)
-  - `draft-07` と `draft-15` 対応
+  - `draft-17` 対応
 - Low Overhead Container 対応
   - [Media over QUIC - Low Overhead Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc)
+  - `draft-02` 対応
 - MOQT Streaming Format (MSF) 対応
-  - [MOQT Streaming Format](https://github.com/moq-wg/msf)
+  - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf)
+  - `draft-00` 対応
   - Catalog (トラックメタデータ)
 - 外部依存なし
 
@@ -46,24 +48,25 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Media over QUIC Transport
 
-[draft-ietf-moq-transport-15](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-15) の機能実装状況です。
+[draft-ietf-moq-transport-17](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-17) の機能実装状況です。
 
 #### Publisher
 
 - PUBLISH メッセージ
 - PUBLISH_OK メッセージ
-- PUBLISH_DONE メッセージ
+- PUBLISH_DONE メッセージ (Stream Count 対応)
 - Object Stream 送信 (Subgroup Header)
 - Object Datagram 送信
 - Publisher Priority
-- DELIVERY_TIMEOUT パラメータ
-- MAX_CACHE_DURATION パラメータ
+- Forward State
+- DELIVERY_TIMEOUT プロパティ
+- MAX_CACHE_DURATION プロパティ
 
 #### Subscriber
 
 - SUBSCRIBE メッセージ
 - SUBSCRIBE_OK メッセージ
-- SUBSCRIBE_UPDATE メッセージ
+- REQUEST_UPDATE メッセージ
 - UNSUBSCRIBE メッセージ
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
@@ -71,7 +74,6 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FETCH メッセージ (Joining Relative)
 - FETCH メッセージ (Joining Absolute)
 - FETCH_OK メッセージ
-- FETCH_CANCEL メッセージ
 - Subscription Filter (Largest Object)
 - Subscription Filter (Next Group Start)
 - Subscription Filter (AbsoluteStart)
@@ -79,20 +81,21 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Subscriber Priority
 - Group Order (Ascending / Descending)
 - DELIVERY_TIMEOUT パラメータ
+- RENDEZVOUS_TIMEOUT パラメータ
 
 #### コントロールメッセージ
 
-- CLIENT_SETUP / SERVER_SETUP
-- GOAWAY
-- MAX_REQUEST_ID
-- REQUESTS_BLOCKED
+- SETUP
+  - AUTHORIZATION_TOKEN Setup Option (REGISTER / USE_VALUE)
+  - MOQT_IMPLEMENTATION Setup Option
+- GOAWAY (Timeout 対応)
 - REQUEST_OK
 - REQUEST_ERROR
 - PUBLISH_NAMESPACE
-- PUBLISH_NAMESPACE_DONE
-- PUBLISH_NAMESPACE_CANCEL
+- NAMESPACE
+- NAMESPACE_DONE
+- PUBLISH_BLOCKED
 - SUBSCRIBE_NAMESPACE
-- UNSUBSCRIBE_NAMESPACE
 - TRACK_STATUS
 
 #### データストリーム
@@ -101,23 +104,25 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Fetch Header
 - Object Datagram
 - Object Status (Normal / End of Group / End of Track)
-- Object Extensions
-- Extension Headers (Prior Group ID Gap / Prior Object ID Gap / Immutable Extensions)
+- Object Properties
+- Properties (Prior Group ID Gap / Prior Object ID Gap / Immutable Properties)
+- GREASE
 
 ### Low Overhead Container
 
-[draft-ietf-moq-loc-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-01) の機能実装状況です。
+[draft-ietf-moq-loc-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-02) の機能実装状況です。
 
-#### LOC Header Extensions
+#### LOC Properties
 
-- Capture Timestamp
+- Timestamp
+- Timescale
 - Video Config
 - Video Frame Marking
 - Audio Level
 
 ### MOQT Streaming Format
 
-[draft-ietf-moq-msf](https://github.com/moq-wg/msf) の機能実装状況です。
+[draft-ietf-moq-msf-00](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf) の機能実装状況です。
 
 #### Catalog
 
@@ -141,8 +146,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 #### Timeline
 
-- Media Timeline
-- Event Timeline
+- Media Timeline (gzip 圧縮対応)
+- Event Timeline (gzip 圧縮対応)
 
 ## インストール
 
@@ -236,7 +241,7 @@ const session = await connect("https://example.com/moqt", {
 
 const publisher = await session.publish(["live"], "video", { error: (e) => console.error(e) });
 
-publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1, 2, 3]) });
+await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1, 2, 3]) });
 await publisher.done();
 ```
 
@@ -263,29 +268,26 @@ await subscriber.unsubscribe();
 
 ## 動作環境
 
-Chrome 最新版で `--enable-features=EnableWebTransportDraft07` フラグを有効にした状態でのみ動作確認しています。
+以下のブラウザで動作確認済みです。
+
+- Google Chrome 最新版
+- Microsoft Edge 最新版
+- Mozilla Firefox 最新版
 
 > [!NOTE]
-> Chrome は現時点で WebTransport draft-02 が実装されています。
-> moqt-js は draft-07 を必要とするため、上記のフラグが必須です。
-
-### macOS での実行例
-
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --enable-features=EnableWebTransportDraft07
-```
+> Apple Safari 26.4 での動作確認を行っています。
 
 ## ビルド
 
 ```bash
-pnpm install
-pnpm build
+vp install
+vp run build
 ```
 
 ## テスト
 
 ```bash
-pnpm test
+vp test
 ```
 
 ## サンプル
@@ -293,7 +295,7 @@ pnpm test
 [examples/](examples/) ディレクトリにサンプルコードがあります。
 
 ```bash
-pnpm dev:examples
+vp run dev:examples
 ```
 
 ### high-level-api
@@ -305,21 +307,28 @@ pnpm dev:examples
 [devtools/](devtools/) ディレクトリに開発ツールがあります。
 
 ```bash
-pnpm build
-pnpm run dev
+vp run build
+vp run dev
 ```
+
+### オンライン版
+
+<https://moqt-devtools.shiguredo.app/> から利用できます。
 
 ### 使用技術
 
-- [Preact](https://github.com/preactjs/preact) - UI フレームワーク
-- [@preact/signals](https://github.com/preactjs/signals) - 状態管理
-- [preact-iso](https://github.com/preactjs/preact-iso) - ルーティング
-- [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) - CSS フレームワーク
-- [Vite](https://github.com/vitejs/vite) - ビルドツール
-- [TypeScript](https://github.com/microsoft/TypeScript) - 言語
-- [Oxc](https://github.com/oxc-project/oxc) - リンター / フォーマッター
-- [Vitest](https://github.com/vitest-dev/vitest) - テストフレームワーク
-- [fast-check](https://github.com/dubzzz/fast-check) - プロパティベーステスト
+- [TypeScript](https://github.com/microsoft/TypeScript)
+- [Preact](https://github.com/preactjs/preact)
+  - [@preact/signals](https://github.com/preactjs/signals)
+  - [preact-iso](https://github.com/preactjs/preact-iso)
+- [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss)
+- [Vite+](https://github.com/voidzero-dev/vite-plus)
+  - [Vite](https://github.com/vitejs/vite)
+  - [Rolldown](https://github.com/rolldown/rolldown)
+  - [Vitest](https://github.com/vitest-dev/vitest)
+  - [Oxc](https://github.com/oxc-project/oxc)
+- [Playwright](https://github.com/microsoft/playwright)
+- [fast-check](https://github.com/dubzzz/fast-check)
 
 ### moqt-devtools
 
@@ -332,11 +341,15 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 解像度 / フレームレート / ビットレート / キーフレーム間隔の設定
 - MAX_CACHE_DURATION の設定
 - 自己署名証明書のハッシュ指定
+- Authorization Token の指定
 - WebCodecs Dedicated Worker 対応
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
 - 統計情報の表示 (エンコード/デコードフレーム数、送受信バイト数など)
 - カタログ情報の表示
+- HTTP/2 / HTTP/3 接続判別表示
+- Forward State の表示
 - Joining Fetch 対応
+- キーフレームリクエスト (NEW_GROUP_REQUEST)
 - 設定を URL クエリパラメータで共有
 
 ### webcodecs-devtools
@@ -355,12 +368,19 @@ WebCodecs API の動作確認ツールです。moqt-js とは独立していま�
 
 WebTransport API の動作確認ツールです。moqt-js とは独立しています。
 
+- WebTransport API 対応状況の表示 (静的チェック)
 - WebTransport 接続 / 切断
 - 自己署名証明書のハッシュ指定
+- WebTransport の接続状態とプロパティの表示
+  - ready / closed / draining の Promise 状態
+  - reliability / congestionControl / supportsReliableOnly
+  - protocol / responseHeaders
+- HTTP/2 / HTTP/3 接続判別表示
 - 双方向ストリームの作成と送受信
 - 送信専用単方向ストリームの作成と送信
 - 受信専用単方向ストリームの受信
 - Datagram の送受信
+- 設定を URL クエリパラメータで共有
 
 ## ライセンス
 

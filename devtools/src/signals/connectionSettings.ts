@@ -1,9 +1,17 @@
 import { signal } from "@preact/signals";
+import {
+  type AuthorizationToken,
+  AuthorizationTokenAliasType,
+  type CertificateHash,
+  toHttpVersionLabel,
+} from "moqt-js";
 import type { CameraDevice, CodecType, VideoSourceType } from "../types";
 import { isDebugPanelOpen } from "./debug";
 
+export { toHttpVersionLabel };
+
 // Connection settings
-export const url = signal("https://localhost:4433/moqt");
+export const url = signal("https://127.0.0.1:4443/moqt");
 export const namespace = signal("room/123");
 export const trackName = signal("video");
 export const codec = signal<CodecType>("vp8");
@@ -22,7 +30,7 @@ export const keyframeInterval = signal(3600);
 
 // Publish settings
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
-// draft-ietf-moq-transport-15 Section 9.2.1.3
+// draft-ietf-moq-transport-17 Section 11.2
 // デフォルト: 600000ms (10分)
 export const maxCacheDuration = signal(600000);
 
@@ -38,6 +46,77 @@ export const useDedicatedWorker = signal(true);
 
 // Settings disabled state
 export const settingsDisabled = signal(false);
+
+// 現在のセッションの WebTransport.reliability。初期値は "pending"。
+// 接続確立時に Session.reliability を反映する。
+export const reliability = signal<string>("pending");
+
+// Authorization Token (SETUP Option 0x03)
+// draft-ietf-moq-transport-17 §9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+// SETUP では DELETE / USE_ALIAS は仕様上禁止 (§9.3.2)。
+// REGISTER (0x1) または USE_VALUE (0x3) のみ。
+export type AuthorizationTokenAliasTypeUi = "useValue" | "register";
+export const authorizationTokenAliasType = signal<AuthorizationTokenAliasTypeUi>("useValue");
+// REGISTER 時のみ使用する Token Alias (10 進文字列で保持)
+export const authorizationTokenAlias = signal<string>("0");
+// Token Type (10 進文字列で保持、デフォルト 0 = out-of-band)
+export const authorizationTokenType = signal<string>("0");
+// Token Value (UTF-8 テキスト)。空の場合は送出しない。
+export const authorizationTokenValue = signal<string>("");
+
+/**
+ * 設定値から `AuthorizationToken` を組み立てる。
+ *
+ * - Token Value が空の場合は `undefined` を返し SETUP Option を送出しない。
+ * - Token Alias / Token Type は 10 進文字列をパースする。パース失敗時は `undefined` を返す。
+ *
+ * draft-ietf-moq-transport-17 §9.3.2 / §9.4.1.4
+ */
+export function buildAuthorizationToken(): AuthorizationToken | undefined {
+  const value = authorizationTokenValue.value;
+  if (value.length === 0) {
+    return undefined;
+  }
+  const tokenTypeStr = authorizationTokenType.value.trim();
+  const tokenType = tokenTypeStr.length === 0 ? 0n : safeParseBigInt(tokenTypeStr);
+  if (tokenType === undefined) {
+    return undefined;
+  }
+  const tokenValueBytes = new TextEncoder().encode(value);
+
+  if (authorizationTokenAliasType.value === "register") {
+    const aliasStr = authorizationTokenAlias.value.trim();
+    const tokenAlias = aliasStr.length === 0 ? 0n : safeParseBigInt(aliasStr);
+    if (tokenAlias === undefined) {
+      return undefined;
+    }
+    return {
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias,
+      tokenType,
+      tokenValue: tokenValueBytes,
+    };
+  }
+  return {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType,
+    tokenValue: tokenValueBytes,
+  };
+}
+
+/**
+ * 10 進文字列を非負の BigInt にパースする。失敗時は `undefined` を返す。
+ */
+function safeParseBigInt(str: string): bigint | undefined {
+  if (!/^[0-9]+$/.test(str)) {
+    return undefined;
+  }
+  try {
+    return BigInt(str);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * カメラデバイス一覧を取得する
@@ -72,6 +151,33 @@ export async function fetchCameraDevices(): Promise<void> {
     console.error("Failed to fetch camera devices:", error);
     cameraDevices.value = [];
   }
+}
+
+/**
+ * `connect()` に渡すオプション群を現在の設定から構築する。
+ * certificateHash と authorizationToken は未設定なら省略する。
+ */
+export function buildConnectOptions(): {
+  serverCertificateHashes?: CertificateHash[];
+  authorizationToken?: AuthorizationToken;
+} {
+  const connectOptions: {
+    serverCertificateHashes?: CertificateHash[];
+    authorizationToken?: AuthorizationToken;
+  } = {};
+  if (certificateHash.value) {
+    connectOptions.serverCertificateHashes = [
+      {
+        algorithm: "sha-256",
+        value: base64ToArrayBuffer(certificateHash.value),
+      },
+    ];
+  }
+  const authToken = buildAuthorizationToken();
+  if (authToken) {
+    connectOptions.authorizationToken = authToken;
+  }
+  return connectOptions;
 }
 
 /**
@@ -126,6 +232,14 @@ export function buildQueryString(): string {
   }
   if (maxCacheDuration.value >= 0) {
     params.set("maxCacheDuration", String(maxCacheDuration.value));
+  }
+  if (authorizationTokenValue.value) {
+    params.set("authorizationTokenAliasType", authorizationTokenAliasType.value);
+    params.set("authorizationTokenType", authorizationTokenType.value);
+    params.set("authorizationTokenValue", authorizationTokenValue.value);
+    if (authorizationTokenAliasType.value === "register") {
+      params.set("authorizationTokenAlias", authorizationTokenAlias.value);
+    }
   }
 
   if (isDebugPanelOpen.value) {
@@ -216,5 +330,22 @@ export function initFromUrl(): void {
   const debugParam = params.get("debug");
   if (debugParam === "1") {
     isDebugPanelOpen.value = true;
+  }
+
+  const authAliasTypeParam = params.get("authorizationTokenAliasType");
+  if (authAliasTypeParam === "useValue" || authAliasTypeParam === "register") {
+    authorizationTokenAliasType.value = authAliasTypeParam;
+  }
+  const authAliasParam = params.get("authorizationTokenAlias");
+  if (authAliasParam) {
+    authorizationTokenAlias.value = authAliasParam;
+  }
+  const authTypeParam = params.get("authorizationTokenType");
+  if (authTypeParam) {
+    authorizationTokenType.value = authTypeParam;
+  }
+  const authValueParam = params.get("authorizationTokenValue");
+  if (authValueParam) {
+    authorizationTokenValue.value = authValueParam;
   }
 }

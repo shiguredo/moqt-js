@@ -5,7 +5,7 @@
  */
 
 import { connect } from "./index";
-import type { CertificateHash, ConnectCallbacks, Session } from "./session";
+import type { ConnectCallbacks, ConnectOptions, Session } from "./session";
 import type { Publisher } from "./publisher";
 import * as LOC from "./loc";
 import {
@@ -35,6 +35,11 @@ import type {
   VideoPublishOptions,
   VideoStats,
 } from "./codec/types";
+import {
+  createVideoFrameSource,
+  isMediaStreamTrackProcessorAvailable,
+  type VideoFrameSource,
+} from "./frameSource";
 
 // デフォルト設定
 const DEFAULT_AUDIO_TRACK_NAME = "audio";
@@ -63,7 +68,7 @@ class MediaPublisherImpl implements MediaPublisher {
   // MediaStream 関連
   private mediaStream: MediaStream | null = null;
   private audioTrackProcessor: MediaStreamTrackProcessor<AudioData> | null = null;
-  private videoTrackProcessor: MediaStreamTrackProcessor<VideoFrame> | null = null;
+  private videoFrameSource: VideoFrameSource | null = null;
   private audioFrameReader: ReadableStreamDefaultReader<AudioData> | null = null;
   private videoFrameReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
 
@@ -229,6 +234,10 @@ class MediaPublisherImpl implements MediaPublisher {
     // フレームリーダーをキャンセル
     await this.cancelFrameReaders();
 
+    // VideoFrameSource を解放する
+    this.videoFrameSource?.close();
+    this.videoFrameSource = null;
+
     // エンコーダーを閉じる
     this.audioEncoder?.close();
     this.videoEncoder?.close();
@@ -263,7 +272,7 @@ class MediaPublisherImpl implements MediaPublisher {
 
   private async connectToServer(): Promise<void> {
     const connectCallbacks: ConnectCallbacks = {
-      close: () => {
+      close: (_closeInfo) => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
@@ -274,12 +283,18 @@ class MediaPublisherImpl implements MediaPublisher {
       },
     };
 
-    const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+    const connectOptions: ConnectOptions = {};
     if (this.options.serverCertificateHashes && this.options.serverCertificateHashes.length > 0) {
       connectOptions.serverCertificateHashes = this.options.serverCertificateHashes.map((hash) => ({
         algorithm: "sha-256" as const,
         value: hash,
       }));
+    }
+    if (this.options.authorizationToken) {
+      connectOptions.authorizationToken = this.options.authorizationToken;
+    }
+    if (this.options.pendingSubgroup) {
+      connectOptions.pendingSubgroup = this.options.pendingSubgroup;
     }
 
     this.session = await connect(this.url, connectCallbacks, connectOptions);
@@ -292,7 +307,7 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const namespace = this.options.namespace;
 
-    // Catalog Publisher
+    // Catalog パブリッシャー
     // maxCacheDuration を指定してサーバーにキャッシュさせる
     this.catalogPublisher = await this.session.publish(
       namespace,
@@ -305,7 +320,7 @@ class MediaPublisherImpl implements MediaPublisher {
       },
     );
 
-    // Audio Publisher
+    // 音声パブリッシャー
     if (this.options.audio) {
       const trackName = this.options.audio.trackName ?? DEFAULT_AUDIO_TRACK_NAME;
       this.audioPublisher = await this.session.publish(namespace, trackName, {
@@ -313,7 +328,7 @@ class MediaPublisherImpl implements MediaPublisher {
       });
     }
 
-    // Video Publisher
+    // 映像パブリッシャー
     if (this.options.video) {
       const trackName = this.options.video.trackName ?? DEFAULT_VIDEO_TRACK_NAME;
       this.videoPublisher = await this.session.publish(namespace, trackName, {
@@ -343,7 +358,12 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const payload = encodeCatalog(catalog);
 
-    this.catalogPublisher.sendObject({
+    // Catalog object が WebTransport stream に書き込み完了するまで await する。
+    // draft-ietf-moq-transport-17 §9.14.2: Joining Fetch は object が publish されていなければ
+    // INVALID_RANGE で REQUEST_ERROR を返す MUST。fire-and-forget だと publisher.start() の
+    // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
+    // 書き込み完了してから return する。
+    await this.catalogPublisher.sendObject({
       groupId: 0,
       objectId: 0,
       payload,
@@ -417,7 +437,7 @@ class MediaPublisherImpl implements MediaPublisher {
   private async setupEncoders(): Promise<void> {
     const useWorker = this.options.useWorker ?? true;
 
-    // Audio Encoder
+    // 音声エンコーダー
     if (this.options.audio && this.mediaStream) {
       const audioTrack = this.mediaStream.getAudioTracks()[0];
       if (audioTrack) {
@@ -434,12 +454,17 @@ class MediaPublisherImpl implements MediaPublisher {
           audioOptions.channels ?? DEFAULT_AUDIO_CHANNELS,
         );
 
+        if (!isMediaStreamTrackProcessorAvailable()) {
+          throw new Error(
+            "MediaStreamTrackProcessor is required for audio publishing but is not available in this browser",
+          );
+        }
         this.audioTrackProcessor = new MediaStreamTrackProcessor({ track: audioTrack });
         this.audioFrameReader = this.audioTrackProcessor.readable.getReader();
       }
     }
 
-    // Video Encoder
+    // 映像エンコーダー
     if (this.options.video && this.mediaStream) {
       const videoTrack = this.mediaStream.getVideoTracks()[0];
       if (videoTrack) {
@@ -461,8 +486,8 @@ class MediaPublisherImpl implements MediaPublisher {
           framerate,
         );
 
-        this.videoTrackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
-        this.videoFrameReader = this.videoTrackProcessor.readable.getReader();
+        this.videoFrameSource = createVideoFrameSource(videoTrack);
+        this.videoFrameReader = this.videoFrameSource.readable.getReader();
       }
     }
   }
@@ -530,9 +555,9 @@ class MediaPublisherImpl implements MediaPublisher {
   }): void {
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
-    // LOC Header Extensions をエンコード
-    const extensions = LOC.encodeAudioHeaderExtensions({
-      captureTimestamp: BigInt(chunk.timestamp),
+    // LOC Properties をエンコード
+    const properties = LOC.encodeAudioProperties({
+      timestamp: BigInt(chunk.timestamp),
     });
 
     // オーディオは一定間隔で新しいグループを開始（約1秒ごと）
@@ -544,14 +569,15 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const payload = chunk.data;
     this.audioStats.framesSent++;
-    this.audioStats.bytesSent += payload.length + extensions.length;
+    this.audioStats.bytesSent += payload.length + properties.length;
     this.audioStats.currentGroupId = this.audioGroupId;
 
-    this.audioPublisher.sendObject({
+    // 音声フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
+    void this.audioPublisher.sendObject({
       groupId: this.audioGroupId,
       objectId: this.audioObjectId++,
       payload,
-      extensions,
+      properties,
       priority: PRIORITY_AUDIO,
     });
   }
@@ -572,9 +598,9 @@ class MediaPublisherImpl implements MediaPublisher {
       this.videoStats.keyFramesSent++;
     }
 
-    // LOC Header Extensions をエンコード
-    const extensions = LOC.encodeVideoHeaderExtensions({
-      captureTimestamp: BigInt(chunk.timestamp),
+    // LOC Properties をエンコード
+    const properties = LOC.encodeVideoProperties({
+      timestamp: BigInt(chunk.timestamp),
       frameMarking: {
         isIndependent: chunk.type === "key",
         isDiscardable: chunk.type !== "key",
@@ -586,14 +612,15 @@ class MediaPublisherImpl implements MediaPublisher {
 
     const payload = chunk.data;
     this.videoStats.framesSent++;
-    this.videoStats.bytesSent += payload.length + extensions.length;
+    this.videoStats.bytesSent += payload.length + properties.length;
     this.videoStats.currentGroupId = this.videoGroupId;
 
-    this.videoPublisher.sendObject({
+    // 映像フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
+    void this.videoPublisher.sendObject({
       groupId: this.videoGroupId,
       objectId: this.videoObjectId++,
       payload,
-      extensions,
+      properties,
       priority: chunk.type === "key" ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     });
   }

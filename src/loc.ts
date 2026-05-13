@@ -1,8 +1,8 @@
 /**
  * LOC (Low Overhead Container)
- * draft-ietf-moq-loc-01
+ * draft-ietf-moq-loc-02
  *
- * LOC Header Extensions を MOQ Object Header Extensions に格納し、
+ * LOC Properties を MOQ Object Properties に格納し、
  * LOC Payload には WebCodecs の EncodedVideoChunk/EncodedAudioChunk の
  * "internal data" をそのまま使用する。
  */
@@ -10,19 +10,41 @@
 import { encodeVarint, decodeVarint } from "./varint";
 
 /**
- * LOC Header Extension ID (draft-ietf-moq-loc-01 Section 2.3)
+ * LOC Property ID (draft-ietf-moq-loc-02 Section 2.3 LOC Properties)
  *
  * ID が偶数の場合: varint value
  * ID が奇数の場合: length (varint) + bytes
  */
-export const LOCHeaderExtensionId = {
-  /** Capture Timestamp - Unix epoch からのマイクロ秒 (varint) */
-  CAPTURE_TIMESTAMP: 2n,
-  /** Video Frame Marking - RFC9626 準拠のフレームマーキング (varint) */
+export const LOCPropertyId = {
+  /**
+   * Timestamp (draft-ietf-moq-loc-02 Section 2.3.1.1 Timestamp)
+   * Timescale がない場合は Unix epoch からのマイクロ秒 (varint)
+   * Timescale がある場合はメディア時間 (varint)
+   */
+  TIMESTAMP: 0x06n,
+  /**
+   * Timescale (draft-ietf-moq-loc-02 Section 2.3.1.2 Timescale)
+   * 1 秒あたりの Timestamp 単位数 (varint)
+   */
+  TIMESCALE: 0x08n,
+  /**
+   * Video Frame Marking (draft-ietf-moq-loc-02 Section 2.3.2.2 Video Frame Marking)
+   * RFC9626 準拠のフレームマーキング (varint)
+   */
   VIDEO_FRAME_MARKING: 4n,
-  /** Audio Level - RFC6464 準拠のオーディオレベル (varint) */
+  /**
+   * Audio Level (draft-ietf-moq-loc-02 Section 2.3.3.1 Audio Level)
+   * RFC6464 準拠のオーディオレベル (varint)
+   *
+   * 注意: AUDIO_LEVEL の ID は 6 (= 0x06) であり、TIMESTAMP (0x06) と衝突している。
+   * これは draft-ietf-moq-loc-02 の仕様上のバグである。
+   * IANA による正式な ID 再割り当てが必要。
+   */
   AUDIO_LEVEL: 6n,
-  /** Config - VideoDecoderConfig の description (length + bytes) */
+  /**
+   * Config (draft-ietf-moq-loc-02 Section 2.3.2.1 Video Config)
+   * VideoDecoderConfig の description (length + bytes)
+   */
   CONFIG: 13n,
 } as const;
 
@@ -46,27 +68,29 @@ export interface AudioLevel {
 }
 
 /**
- * Video Header Extensions
+ * Video Properties
  */
-export interface VideoHeaderExtensions {
-  captureTimestamp?: bigint;
+export interface VideoProperties {
+  timestamp?: bigint;
+  timescale?: bigint;
   frameMarking?: VideoFrameMarking;
   config?: Uint8Array;
 }
 
 /**
- * Audio Header Extensions
+ * Audio Properties
  */
-export interface AudioHeaderExtensions {
-  captureTimestamp?: bigint;
+export interface AudioProperties {
+  timestamp?: bigint;
+  timescale?: bigint;
   audioLevel?: AudioLevel;
 }
 
 /**
- * Capture Timestamp をエンコードする (ID: 2)
+ * Timestamp をエンコードする (ID: 0x06)
  */
-export function encodeCaptureTimestamp(timestamp: bigint): Uint8Array {
-  const idBytes = encodeVarint(LOCHeaderExtensionId.CAPTURE_TIMESTAMP);
+export function encodeTimestamp(timestamp: bigint): Uint8Array {
+  const idBytes = encodeVarint(LOCPropertyId.TIMESTAMP);
   const valueBytes = encodeVarint(timestamp);
   const result = new Uint8Array(idBytes.length + valueBytes.length);
   result.set(idBytes, 0);
@@ -75,9 +99,30 @@ export function encodeCaptureTimestamp(timestamp: bigint): Uint8Array {
 }
 
 /**
- * Capture Timestamp をデコードする
+ * Timestamp をデコードする
  */
-export function decodeCaptureTimestamp(data: Uint8Array): bigint {
+export function decodeTimestamp(data: Uint8Array): bigint {
+  const [_id, idLen] = decodeVarint(data);
+  const [value, _valueLen] = decodeVarint(data.subarray(idLen));
+  return value;
+}
+
+/**
+ * Timescale をエンコードする (ID: 0x08)
+ */
+export function encodeTimescale(timescale: bigint): Uint8Array {
+  const idBytes = encodeVarint(LOCPropertyId.TIMESCALE);
+  const valueBytes = encodeVarint(timescale);
+  const result = new Uint8Array(idBytes.length + valueBytes.length);
+  result.set(idBytes, 0);
+  result.set(valueBytes, idBytes.length);
+  return result;
+}
+
+/**
+ * Timescale をデコードする
+ */
+export function decodeTimescale(data: Uint8Array): bigint {
   const [_id, idLen] = decodeVarint(data);
   const [value, _valueLen] = decodeVarint(data.subarray(idLen));
   return value;
@@ -95,7 +140,7 @@ export function decodeCaptureTimestamp(data: Uint8Array): bigint {
  * - bits 5-4: Spatial layer ID (SID) (次のバイト)
  */
 export function encodeVideoFrameMarking(marking: VideoFrameMarking): Uint8Array {
-  const idBytes = encodeVarint(LOCHeaderExtensionId.VIDEO_FRAME_MARKING);
+  const idBytes = encodeVarint(LOCPropertyId.VIDEO_FRAME_MARKING);
 
   // RFC9626 形式でエンコード
   let byte1 = 0;
@@ -143,7 +188,7 @@ export function decodeVideoFrameMarking(data: Uint8Array): VideoFrameMarking {
  * - bits 6-0: Level (0-127)
  */
 export function encodeAudioLevel(level: number, voiceActivity: boolean): Uint8Array {
-  const idBytes = encodeVarint(LOCHeaderExtensionId.AUDIO_LEVEL);
+  const idBytes = encodeVarint(LOCPropertyId.AUDIO_LEVEL);
 
   let value = level & 0x7f;
   if (voiceActivity) value |= 0x80;
@@ -176,7 +221,7 @@ export function decodeAudioLevel(data: Uint8Array): AudioLevel {
  * VideoDecoderConfig の description を格納
  */
 export function encodeConfig(description: Uint8Array): Uint8Array {
-  const idBytes = encodeVarint(LOCHeaderExtensionId.CONFIG);
+  const idBytes = encodeVarint(LOCPropertyId.CONFIG);
   const lengthBytes = encodeVarint(BigInt(description.length));
   const result = new Uint8Array(idBytes.length + lengthBytes.length + description.length);
   result.set(idBytes, 0);
@@ -195,21 +240,25 @@ export function decodeConfig(data: Uint8Array): Uint8Array {
 }
 
 /**
- * Video Header Extensions をエンコードする
+ * Video Properties をエンコードする
  */
-export function encodeVideoHeaderExtensions(extensions: VideoHeaderExtensions): Uint8Array {
+export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  if (extensions.captureTimestamp !== undefined) {
-    parts.push(encodeCaptureTimestamp(extensions.captureTimestamp));
+  if (properties.timestamp !== undefined) {
+    parts.push(encodeTimestamp(properties.timestamp));
   }
 
-  if (extensions.frameMarking !== undefined) {
-    parts.push(encodeVideoFrameMarking(extensions.frameMarking));
+  if (properties.timescale !== undefined) {
+    parts.push(encodeTimescale(properties.timescale));
   }
 
-  if (extensions.config !== undefined) {
-    parts.push(encodeConfig(extensions.config));
+  if (properties.frameMarking !== undefined) {
+    parts.push(encodeVideoFrameMarking(properties.frameMarking));
+  }
+
+  if (properties.config !== undefined) {
+    parts.push(encodeConfig(properties.config));
   }
 
   const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
@@ -223,20 +272,24 @@ export function encodeVideoHeaderExtensions(extensions: VideoHeaderExtensions): 
 }
 
 /**
- * Video Header Extensions をデコードする
+ * Video Properties をデコードする
  */
-export function decodeVideoHeaderExtensions(data: Uint8Array): VideoHeaderExtensions {
-  const result: VideoHeaderExtensions = {};
+export function decodeVideoProperties(data: Uint8Array): VideoProperties {
+  const result: VideoProperties = {};
   let offset = 0;
 
   while (offset < data.length) {
     const [id, idLen] = decodeVarint(data.subarray(offset));
 
-    if (id === LOCHeaderExtensionId.CAPTURE_TIMESTAMP) {
+    if (id === LOCPropertyId.TIMESTAMP) {
       const [value, valueLen] = decodeVarint(data.subarray(offset + idLen));
-      result.captureTimestamp = value;
+      result.timestamp = value;
       offset += idLen + valueLen;
-    } else if (id === LOCHeaderExtensionId.VIDEO_FRAME_MARKING) {
+    } else if (id === LOCPropertyId.TIMESCALE) {
+      const [value, valueLen] = decodeVarint(data.subarray(offset + idLen));
+      result.timescale = value;
+      offset += idLen + valueLen;
+    } else if (id === LOCPropertyId.VIDEO_FRAME_MARKING) {
       const [value, valueLen] = decodeVarint(data.subarray(offset + idLen));
       const byte1 = Number((value >> 8n) & 0xffn);
       const byte2 = Number(value & 0xffn);
@@ -248,7 +301,7 @@ export function decodeVideoHeaderExtensions(data: Uint8Array): VideoHeaderExtens
         spatialLayerId: (byte2 >> 4) & 0x03,
       };
       offset += idLen + valueLen;
-    } else if (id === LOCHeaderExtensionId.CONFIG) {
+    } else if (id === LOCPropertyId.CONFIG) {
       const [length, lengthLen] = decodeVarint(data.subarray(offset + idLen));
       const configData = data.subarray(
         offset + idLen + lengthLen,
@@ -257,7 +310,7 @@ export function decodeVideoHeaderExtensions(data: Uint8Array): VideoHeaderExtens
       result.config = new Uint8Array(configData);
       offset += idLen + lengthLen + Number(length);
     } else {
-      // 未知の extension をスキップ
+      // 未知のプロパティをスキップ
       if (id % 2n === 1n) {
         const [length, lengthLen] = decodeVarint(data.subarray(offset + idLen));
         offset += idLen + lengthLen + Number(length);
@@ -272,17 +325,21 @@ export function decodeVideoHeaderExtensions(data: Uint8Array): VideoHeaderExtens
 }
 
 /**
- * Audio Header Extensions をエンコードする
+ * Audio Properties をエンコードする
  */
-export function encodeAudioHeaderExtensions(extensions: AudioHeaderExtensions): Uint8Array {
+export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  if (extensions.captureTimestamp !== undefined) {
-    parts.push(encodeCaptureTimestamp(extensions.captureTimestamp));
+  if (properties.timestamp !== undefined) {
+    parts.push(encodeTimestamp(properties.timestamp));
   }
 
-  if (extensions.audioLevel !== undefined) {
-    parts.push(encodeAudioLevel(extensions.audioLevel.level, extensions.audioLevel.voiceActivity));
+  if (properties.timescale !== undefined) {
+    parts.push(encodeTimescale(properties.timescale));
+  }
+
+  if (properties.audioLevel !== undefined) {
+    parts.push(encodeAudioLevel(properties.audioLevel.level, properties.audioLevel.voiceActivity));
   }
 
   const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
@@ -296,20 +353,24 @@ export function encodeAudioHeaderExtensions(extensions: AudioHeaderExtensions): 
 }
 
 /**
- * Audio Header Extensions をデコードする
+ * Audio Properties をデコードする
  */
-export function decodeAudioHeaderExtensions(data: Uint8Array): AudioHeaderExtensions {
-  const result: AudioHeaderExtensions = {};
+export function decodeAudioProperties(data: Uint8Array): AudioProperties {
+  const result: AudioProperties = {};
   let offset = 0;
 
   while (offset < data.length) {
     const [id, idLen] = decodeVarint(data.subarray(offset));
 
-    if (id === LOCHeaderExtensionId.CAPTURE_TIMESTAMP) {
+    if (id === LOCPropertyId.TIMESTAMP) {
       const [value, valueLen] = decodeVarint(data.subarray(offset + idLen));
-      result.captureTimestamp = value;
+      result.timestamp = value;
       offset += idLen + valueLen;
-    } else if (id === LOCHeaderExtensionId.AUDIO_LEVEL) {
+    } else if (id === LOCPropertyId.TIMESCALE) {
+      const [value, valueLen] = decodeVarint(data.subarray(offset + idLen));
+      result.timescale = value;
+      offset += idLen + valueLen;
+    } else if (id === LOCPropertyId.AUDIO_LEVEL) {
       const [value, valueLen] = decodeVarint(data.subarray(offset + idLen));
       const byte = Number(value & 0xffn);
       result.audioLevel = {
@@ -318,7 +379,7 @@ export function decodeAudioHeaderExtensions(data: Uint8Array): AudioHeaderExtens
       };
       offset += idLen + valueLen;
     } else {
-      // 未知の extension をスキップ
+      // 未知のプロパティをスキップ
       if (id % 2n === 1n) {
         const [length, lengthLen] = decodeVarint(data.subarray(offset + idLen));
         offset += idLen + lengthLen + Number(length);

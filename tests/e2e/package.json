@@ -1,0 +1,14 @@
+{
+  "name": "moqt-js-e2e",
+  "version": "2025.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview"
+  },
+  "dependencies": {
+    "moqt-js": "workspace:*"
+  }
+}

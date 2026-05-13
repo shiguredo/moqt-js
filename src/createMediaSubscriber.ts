@@ -5,13 +5,14 @@
  */
 
 import { connect } from "./index";
-import type { CertificateHash, ConnectCallbacks, Session, JoiningFetchOptions } from "./session";
+import { supportsDynamicGroups } from "./properties";
+import type { ConnectCallbacks, ConnectOptions, Session, JoiningFetchOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
-  decodeCatalog,
+  decodeCatalogMessage,
   getAudioTracks,
   getVideoTracks,
   type Catalog,
@@ -223,20 +224,33 @@ class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // SUBSCRIBE_UPDATE で NEW_GROUP_REQUEST を送信
-    if (this.videoSubscriber && this.videoSubscriber.state === "active") {
-      await this.videoSubscriber.update({
-        parameters: [
-          {
-            type: 0x0c, // NEW_GROUP_REQUEST
-            value: new Uint8Array([0x01]),
-          },
-        ],
-      });
-
-      // デコーダーをキーフレーム待ち状態にリセット
-      this.videoDecoder?.resetKeyframeWait();
+    if (!this.videoSubscriber || this.videoSubscriber.state !== "active") {
+      return;
     }
+
+    // draft-ietf-moq-transport-17 §9.3.11:
+    // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
+    //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
+    //  Property with value 1."
+    if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
+      throw new Error(
+        "cannot request keyframe: track did not include DYNAMIC_GROUPS property with value 1",
+      );
+    }
+
+    // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
+    // draft-ietf-moq-transport-17 §9.3.11 (NEW_GROUP_REQUEST = 0x32)
+    await this.videoSubscriber.update({
+      parameters: [
+        {
+          type: 0x32,
+          value: new Uint8Array([0x01]),
+        },
+      ],
+    });
+
+    // デコーダーをキーフレーム待ち状態にリセット
+    this.videoDecoder?.resetKeyframeWait();
   }
 
   /**
@@ -289,7 +303,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
 
   private async connectToServer(): Promise<void> {
     const connectCallbacks: ConnectCallbacks = {
-      close: () => {
+      close: (_closeInfo) => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
@@ -300,12 +314,18 @@ class MediaSubscriberImpl implements MediaSubscriber {
       },
     };
 
-    const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+    const connectOptions: ConnectOptions = {};
     if (this.options.serverCertificateHashes && this.options.serverCertificateHashes.length > 0) {
       connectOptions.serverCertificateHashes = this.options.serverCertificateHashes.map((hash) => ({
         algorithm: "sha-256" as const,
         value: hash,
       }));
+    }
+    if (this.options.authorizationToken) {
+      connectOptions.authorizationToken = this.options.authorizationToken;
+    }
+    if (this.options.pendingSubgroup) {
+      connectOptions.pendingSubgroup = this.options.pendingSubgroup;
     }
 
     this.session = await connect(this.url, connectCallbacks, connectOptions);
@@ -333,7 +353,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       }, CATALOG_RECEIVE_TIMEOUT);
     });
 
-    // Catalog Subscriber
+    // Catalog サブスクライバー
     // joiningFetch で過去に publish された Catalog を FETCH で取得
     this.catalogSubscriber = await this.session.subscribe(
       namespace,
@@ -353,10 +373,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
           onEnd: () => {
             // FETCH 完了
           },
-          onError: (error: Error) => {
+          onError: (_error: Error) => {
             // LARGEST_OBJECT がない場合など
             // リアルタイム配信を待つ（object コールバックで受信）
-            console.warn("Catalog joiningFetch error:", error.message);
           },
         } as JoiningFetchOptions,
       },
@@ -422,7 +441,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
   private async setupDecoders(): Promise<void> {
     const useWorker = this.options.useWorker ?? true;
 
-    // Audio Decoder
+    // 音声デコーダー
     if (this.audioTrackInfo) {
       this.audioDecoder = new AudioDecoderWrapper(useWorker, {
         output: (data) => this.handleAudioDecodedData(data),
@@ -448,7 +467,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       this.audioDecoderConfigured = true;
     }
 
-    // Video Decoder
+    // 映像デコーダー
     if (this.videoTrackInfo) {
       this.videoDecoder = new VideoDecoderWrapper(useWorker, {
         output: (data) => this.handleVideoDecodedData(data),
@@ -488,7 +507,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
     const namespace = this.options.namespace;
     const joiningFetchEnabled = this.options.joiningFetch ?? false;
 
-    // Audio Subscriber
+    // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
       this.audioSubscriber = await this.session.subscribe(namespace, trackName, {
@@ -500,7 +519,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       });
     }
 
-    // Video Subscriber
+    // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
       const subscribeOptions: {
@@ -577,7 +596,12 @@ class MediaSubscriberImpl implements MediaSubscriber {
    */
   private handleCatalogObject(obj: MoqtObject): void {
     try {
-      this.receivedCatalog = decodeCatalog(obj.payload);
+      // フルカタログのみ処理する (delta update は現在未対応)
+      const message = decodeCatalogMessage(obj.payload);
+      if (!("version" in message)) {
+        return;
+      }
+      this.receivedCatalog = message;
       this.callbacks.onCatalog?.(this.receivedCatalog);
 
       // Catalog を受信したら Promise を解決
@@ -594,14 +618,14 @@ class MediaSubscriberImpl implements MediaSubscriber {
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
 
     this.audioStats.framesReceived++;
-    this.audioStats.bytesReceived += obj.payload.length + (obj.extensions?.length ?? 0);
+    this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
 
     // LOC から情報を取得
     let timestamp = 0;
-    if (obj.extensions && obj.extensions.length > 0) {
-      const headerExtensions = LOC.decodeAudioHeaderExtensions(obj.extensions);
-      if (headerExtensions.captureTimestamp !== undefined) {
-        timestamp = Number(headerExtensions.captureTimestamp);
+    if (obj.properties && obj.properties.length > 0) {
+      const locProperties = LOC.decodeAudioProperties(obj.properties);
+      if (locProperties.timestamp !== undefined) {
+        timestamp = Number(locProperties.timestamp);
       }
     }
 
@@ -615,18 +639,18 @@ class MediaSubscriberImpl implements MediaSubscriber {
     // LOC から情報を取得
     let isKeyFrame = false;
     let timestamp = 0;
-    if (obj.extensions && obj.extensions.length > 0) {
-      const headerExtensions = LOC.decodeVideoHeaderExtensions(obj.extensions);
-      if (headerExtensions.captureTimestamp !== undefined) {
-        timestamp = Number(headerExtensions.captureTimestamp);
+    if (obj.properties && obj.properties.length > 0) {
+      const locProperties = LOC.decodeVideoProperties(obj.properties);
+      if (locProperties.timestamp !== undefined) {
+        timestamp = Number(locProperties.timestamp);
       }
-      if (headerExtensions.frameMarking) {
-        isKeyFrame = headerExtensions.frameMarking.isIndependent;
+      if (locProperties.frameMarking) {
+        isKeyFrame = locProperties.frameMarking.isIndependent;
       }
     }
 
     this.videoStats.framesReceived++;
-    this.videoStats.bytesReceived += obj.payload.length + (obj.extensions?.length ?? 0);
+    this.videoStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
     if (isKeyFrame) {
       this.videoStats.keyFramesReceived++;
     }

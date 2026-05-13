@@ -1,80 +1,99 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-15 Section 9
+ * draft-ietf-moq-transport-17 Section 9 (Control Messages)
  */
 
-// Types
+// 型定義
 export {
   FilterType,
   GroupOrder,
   type Location,
+  MessageParameterType,
   MessageType,
+  NamespaceSubscribeMode,
   ObjectStatus,
   PublishDoneStatusCode,
-  SetupParameterType,
-  VersionSpecificParameterType,
+  isPublishDoneErrorStatus,
+  SetupOptionType,
 } from "./types";
 
-// Debug
+// デバッグ
 export { getMessageTypeName } from "./debug";
 
-// Parameter
+// パラメータ
 export {
   type Parameter,
   type SubscriptionFilter,
   type TrackNamespace,
+  MAX_REASON_PHRASE_LENGTH,
+  MAX_TRACK_NAME_SIZE,
+  MAX_TRACK_NAMESPACE_FIELDS,
+  MAX_TRACK_NAMESPACE_SIZE,
   createTrackNamespace,
   decodeLocation,
   decodeParameter,
+  decodeKeyValuePairs,
   decodeParameters,
   decodeSubscriptionFilter,
   decodeSubscriptionFilterParameter,
   decodeTrackNamespace,
   encodeLocation,
   encodeParameter,
+  encodeKeyValuePairs,
   encodeParameters,
   encodeSubscriptionFilter,
   encodeSubscriptionFilterParameter,
+  encodeUint8ParameterValue,
+  encodeTrackName,
   encodeTrackNamespace,
   getParameterLocationValue,
   getParameterVarintValue,
+  validateForwardValue,
+  validateGroupOrderValue,
   trackNamespaceToStrings,
+  validateTrackNameSize,
 } from "./parameter";
 
-// Setup Messages
+// Setup メッセージ
 export {
-  type ClientSetup,
-  type ServerSetup,
-  createClientSetup,
-  createServerSetup,
-  decodeClientSetupPayload,
-  decodeServerSetupPayload,
-  encodeClientSetupPayload,
-  encodeServerSetupPayload,
+  type Setup,
+  createSetup,
+  decodeSetupPayload,
+  encodeSetupPayload,
   getSetupAuthority,
-  getSetupMaxRequestId,
+  getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
   getSetupParameter,
   getSetupPath,
 } from "./setup";
 
-// Subscribe Messages
+// Authorization Token (Section 9.3.2)
+export {
+  type AuthorizationToken,
+  type AuthorizationTokenDelete,
+  type AuthorizationTokenRegister,
+  type AuthorizationTokenUseAlias,
+  type AuthorizationTokenUseValue,
+  AuthorizationTokenAliasType,
+  assertAuthorizationTokenForSetup,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./authorizationToken";
+
+// Subscribe メッセージ
 export {
   type Subscribe,
   type SubscribeOk,
-  type SubscribeUpdate,
-  type Unsubscribe,
+  type RequestUpdate,
   decodeSubscribeOkPayload,
   decodeSubscribePayload,
-  decodeSubscribeUpdatePayload,
-  decodeUnsubscribePayload,
+  decodeRequestUpdatePayload,
   encodeSubscribeOkPayload,
   encodeSubscribePayload,
-  encodeSubscribeUpdatePayload,
-  encodeUnsubscribePayload,
+  encodeRequestUpdatePayload,
 } from "./subscribe";
 
-// Publish Messages
+// Publish メッセージ
 export {
   type Publish,
   type PublishDone,
@@ -87,63 +106,54 @@ export {
   encodePublishPayload,
 } from "./publish";
 
-// Session Messages
+// Session メッセージ
 export {
   type Goaway,
-  type MaxRequestId,
   type RequestError,
   type RequestOk,
-  type RequestsBlocked,
   decodeGoawayPayload,
-  decodeMaxRequestIdPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
-  decodeRequestsBlockedPayload,
   encodeGoawayPayload,
-  encodeMaxRequestIdPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
-  encodeRequestsBlockedPayload,
 } from "./session";
 
-// Fetch Messages
+// Fetch メッセージ
 export {
   type Fetch,
-  type FetchCancel,
   type FetchOk,
   type JoiningFetch,
   type StandaloneFetch,
   FetchType,
-  decodeFetchCancelPayload,
   decodeFetchOkPayload,
   decodeFetchPayload,
-  encodeFetchCancelPayload,
   encodeFetchOkPayload,
   encodeFetchPayload,
 } from "./fetch";
 
-// Track Status Messages
+// Track Status メッセージ
 export {
   type TrackStatus,
   decodeTrackStatusPayload,
   encodeTrackStatusPayload,
 } from "./trackstatus";
 
-// Namespace Messages
+// Namespace メッセージ
 export {
+  type Namespace,
+  type NamespaceDone,
   type PublishNamespace,
-  type PublishNamespaceCancel,
-  type PublishNamespaceDone,
+  type PublishBlocked,
   type SubscribeNamespace,
-  type UnsubscribeNamespace,
-  decodePublishNamespaceCancelPayload,
-  decodePublishNamespaceDonePayload,
+  decodeNamespaceDonePayload,
+  decodeNamespacePayload,
+  decodePublishBlockedPayload,
   decodePublishNamespacePayload,
   decodeSubscribeNamespacePayload,
-  decodeUnsubscribeNamespacePayload,
-  encodePublishNamespaceCancelPayload,
-  encodePublishNamespaceDonePayload,
+  encodeNamespaceDonePayload,
+  encodeNamespacePayload,
+  encodePublishBlockedPayload,
   encodePublishNamespacePayload,
   encodeSubscribeNamespacePayload,
-  encodeUnsubscribeNamespacePayload,
 } from "./namespace";

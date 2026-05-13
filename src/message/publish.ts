@@ -1,48 +1,60 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-15 Section 9.13-9.15
+ * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH) — 9.12 (PUBLISH_OK) — 9.13 (PUBLISH_DONE)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
+  MAX_REASON_PHRASE_LENGTH,
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
 
 /**
- * PUBLISH メッセージ (Section 9.13)
- * draft-15 で track_alias の位置が track_name の後に変更
+ * PUBLISH メッセージ (Section 9.11 PUBLISH)
+ *
+ * draft-ietf-moq-transport-17:
+ * Track Extensions が追加された。
+ * draft-ietf-moq-transport-17 Section 9
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
   requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   trackAlias: bigint;
   parameters: Parameter[];
+  trackProperties: Property[];
 }
 
 /**
- * PUBLISH_OK メッセージ (Section 9.14)
+ * PUBLISH_OK メッセージ (Section 9.12 PUBLISH_OK)
+ *
+ * draft-ietf-moq-transport-17:
+ * 双方向ストリーム上で送信されるため Request ID は不要。
  */
 export interface PublishOk {
   type: typeof MessageType.PUBLISH_OK;
-  requestId: bigint;
   parameters: Parameter[];
 }
 
 /**
- * PUBLISH_DONE メッセージ (Section 9.15)
- * draft-15 で stream_count フィールドが追加
+ * PUBLISH_DONE メッセージ (Section 9.13 PUBLISH_DONE)
+ *
+ * draft-ietf-moq-transport-17:
+ * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
   type: typeof MessageType.PUBLISH_DONE;
-  requestId: bigint;
   statusCode: bigint;
   streamCount: bigint;
   reasonPhrase: string;
@@ -50,19 +62,37 @@ export interface PublishDone {
 
 /**
  * Publish のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+ * PUBLISH Message {
+ *   Type (i) = 0x1D,
+ *   Length (16),
+ *   Request ID (i),
+ *   Required Request ID Delta (i),
+ *   Track Namespace (..),
+ *   Track Name Length (i),
+ *   Track Name (..),
+ *   Track Alias (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...,
+ *   Track Properties (..)
+ * }
  */
 export function encodePublishPayload(msg: Publish): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
   parts.push(encodeVarint(msg.trackAlias));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
+
+  // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+  // Track Properties は length プレフィックスなしでシリアライズされる。
+  // Message の Length フィールドで終端が決まる。
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -86,6 +116,12 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
+  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaConsumed;
+
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -97,23 +133,23 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+  // Track Properties は残りバイトすべて
+  const propertiesData = data.slice(offset + totalConsumed);
+  const trackProperties = decodeProperties(propertiesData);
 
   return {
     type: MessageType.PUBLISH,
     requestId,
+    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     trackAlias,
     parameters,
+    trackProperties,
   };
 }
 
@@ -126,11 +162,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
 export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -144,26 +176,18 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
 
 /**
  * PublishOk のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK):
+ * 双方向ストリーム上で送信されるため Request ID は含まない。
  */
 export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
   let totalConsumed = 0;
 
-  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdConsumed;
-
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.PUBLISH_OK,
-    requestId,
     parameters,
   };
 }
@@ -173,13 +197,21 @@ export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk 
  *
  * Session では個別にエンコードしているため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ *
+ * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+ * PUBLISH_DONE Message {
+ *   Type (vi64) = 0xB,
+ *   Length (16),
+ *   Status Code (vi64),
+ *   Stream Count (vi64),
+ *   Error Reason (Reason Phrase)
+ * }
  */
 export function encodePublishDonePayload(msg: PublishDone): Uint8Array {
   const encoder = new TextEncoder();
   const reasonBytes = encoder.encode(msg.reasonPhrase);
 
   const parts: Uint8Array[] = [];
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.statusCode));
   parts.push(encodeVarint(msg.streamCount));
   parts.push(encodeVarint(reasonBytes.length));
@@ -201,9 +233,6 @@ export function encodePublishDonePayload(msg: PublishDone): Uint8Array {
 export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishDone {
   let totalConsumed = 0;
 
-  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdConsumed;
-
   const [statusCode, statusCodeConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += statusCodeConsumed;
 
@@ -213,6 +242,14 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
 
+  // draft-ietf-moq-transport-17 Section 1.4.4:
+  // Reason Phrase の最大長は 1,024 バイト
+  if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
+    throw new Error(
+      `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
+    );
+  }
+
   const reasonBytes = data.slice(
     offset + totalConsumed,
     offset + totalConsumed + Number(reasonLen),
@@ -221,7 +258,6 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
 
   return {
     type: MessageType.PUBLISH_DONE,
-    requestId,
     statusCode,
     streamCount,
     reasonPhrase,

@@ -1,9 +1,9 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-15 Section 5.2
+ * draft-ietf-moq-transport-17 Section 5.2
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "./publisher";
 
 test("closed 状態では sendObject がエラーになる", () => {

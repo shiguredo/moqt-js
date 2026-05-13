@@ -1,5 +1,53 @@
 import * as store from "../signals";
+import type { ApiSupportNode } from "../signals";
 import { SettingsIcon } from "./Icons";
+
+/**
+ * API Support の値に応じた色クラスを返す
+ */
+function apiSupportValueClass(value: string): string {
+  if (value === "undefined" || value === "null" || value.startsWith("N/A")) {
+    return "text-red-500 font-semibold";
+  }
+  return "text-green-600 font-semibold";
+}
+
+/**
+ * HTTP バージョンバッジ
+ * draft-ietf-webtrans-http2 / draft-ietf-webtrans-http3 の判別表示
+ */
+function HttpVersionBadge({ label }: { label: "HTTP/2" | "HTTP/3" | "--" }) {
+  const color =
+    label === "HTTP/3"
+      ? "bg-green-100 text-green-700"
+      : label === "HTTP/2"
+        ? "bg-blue-100 text-blue-700"
+        : "bg-slate-100 text-slate-500";
+  return <span class={`px-2 py-0.5 text-xs font-medium rounded-full ${color}`}>{label}</span>;
+}
+
+/**
+ * API Support のノードを再帰的にインデント表示する
+ */
+function ApiSupportTree({
+  nodes,
+  level,
+}: {
+  nodes: Record<string, ApiSupportNode>;
+  level: number;
+}) {
+  return (
+    <>
+      {Object.entries(nodes).map(([key, node]) => (
+        <div key={key} style={{ paddingLeft: `${(level + 1) * 0.5}rem` }}>
+          <span class="text-slate-400">{key}: </span>
+          <span class={apiSupportValueClass(node.value)}>{node.value}</span>
+          {node.children && <ApiSupportTree nodes={node.children} level={level + 1} />}
+        </div>
+      ))}
+    </>
+  );
+}
 
 /**
  * 接続設定パネル
@@ -104,6 +152,85 @@ export function ConnectionPanel() {
           </button>
           <span class={`text-sm ${getStatusClass()}`}>{getStatusText()}</span>
         </div>
+        {store.connectionStatus.value !== "disconnected" && (
+          <div class="mt-3 p-3 bg-slate-50 rounded-lg text-xs font-mono text-slate-600 space-y-1">
+            <div>
+              <span class="text-slate-400">connectionStatus: </span>
+              <span class="font-semibold">{store.connectionStatus.value}</span>
+            </div>
+            <div>
+              <span class="text-slate-400">ready: </span>
+              <span
+                class={
+                  store.wtReadyState.value === "resolved"
+                    ? "text-green-600 font-semibold"
+                    : store.wtReadyState.value.startsWith("rejected")
+                      ? "text-red-600 font-semibold"
+                      : "text-yellow-600 font-semibold"
+                }
+              >
+                {store.wtReadyState.value}
+              </span>
+            </div>
+            <div>
+              <span class="text-slate-400">closed: </span>
+              <span
+                class={store.wtClosedState.value === "pending" ? "text-slate-500" : "font-semibold"}
+              >
+                {store.wtClosedState.value}
+              </span>
+            </div>
+            <div>
+              <span class="text-slate-400">draining: </span>
+              <span
+                class={
+                  store.wtDrainingState.value === "pending" ? "text-slate-500" : "font-semibold"
+                }
+              >
+                {store.wtDrainingState.value}
+              </span>
+            </div>
+            {store.wtReliability.value && (
+              <div class="flex items-center gap-2">
+                <span class="text-slate-400">reliability: </span>
+                <span class="font-semibold">{store.wtReliability.value}</span>
+                <HttpVersionBadge label={store.wtHttpVersion.value} />
+              </div>
+            )}
+            {store.wtCongestionControl.value && (
+              <div>
+                <span class="text-slate-400">congestionControl: </span>
+                <span class="font-semibold">{store.wtCongestionControl.value}</span>
+              </div>
+            )}
+            {store.wtSupportsReliableOnly.value && (
+              <div>
+                <span class="text-slate-400">supportsReliableOnly: </span>
+                <span class="font-semibold">{store.wtSupportsReliableOnly.value}</span>
+              </div>
+            )}
+            {store.wtProtocol.value !== "" && (
+              <div>
+                <span class="text-slate-400">protocol: </span>
+                <span class="font-semibold">{store.wtProtocol.value || "(empty)"}</span>
+              </div>
+            )}
+            {store.wtResponseHeaders.value && (
+              <div>
+                <span class="text-slate-400">responseHeaders: </span>
+                <span class="font-semibold whitespace-pre-wrap">
+                  {store.wtResponseHeaders.value}
+                </span>
+              </div>
+            )}
+            {store.wtApiSupport.value && (
+              <div class="mt-2 pt-2 border-t border-slate-200">
+                <div class="text-slate-400 mb-1">API Support:</div>
+                <ApiSupportTree nodes={store.wtApiSupport.value} level={0} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

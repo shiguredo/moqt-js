@@ -1,4 +1,4 @@
-import { test, assert, beforeEach } from "vitest";
+import { test, assert, beforeEach } from "vite-plus/test";
 import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
 import { MessageType } from "./message/types";
 
@@ -34,11 +34,12 @@ test("ControlStreamReader でバッファをクリア", () => {
 });
 
 test("ControlStreamReader で単一メッセージを解析", () => {
-  const data = new Uint8Array([0x20, 0x00, 0x02, 0xab, 0xcd]);
+  // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]
+  const data = new Uint8Array([0xaf, 0x00, 0x00, 0x02, 0xab, 0xcd]);
   const messages = reader.feed(data);
 
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.CLIENT_SETUP);
+  assert.equal(messages[0].type, MessageType.SETUP);
   assert.deepEqual(messages[0].payload, new Uint8Array([0xab, 0xcd]));
   assert.equal(reader.bufferSize, 0);
 });
@@ -64,20 +65,22 @@ test("ControlStreamReader で複数メッセージを一度に解析", () => {
 });
 
 test("ControlStreamReader で分割されたメッセージ (ヘッダ途中) を解析", () => {
-  let messages = reader.feed(new Uint8Array([0x20]));
+  // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]
+  let messages = reader.feed(new Uint8Array([0xaf]));
   assert.equal(messages.length, 0);
   assert.equal(reader.bufferSize, 1);
 
-  messages = reader.feed(new Uint8Array([0x00, 0x02, 0xab, 0xcd]));
+  messages = reader.feed(new Uint8Array([0x00, 0x00, 0x02, 0xab, 0xcd]));
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.CLIENT_SETUP);
+  assert.equal(messages[0].type, MessageType.SETUP);
   assert.deepEqual(messages[0].payload, new Uint8Array([0xab, 0xcd]));
 });
 
 test("ControlStreamReader で分割されたメッセージ (Payload 途中) を解析", () => {
-  let messages = reader.feed(new Uint8Array([0x20, 0x00, 0x03, 0xab]));
+  // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]
+  let messages = reader.feed(new Uint8Array([0xaf, 0x00, 0x00, 0x03, 0xab]));
   assert.equal(messages.length, 0);
-  assert.equal(reader.bufferSize, 4);
+  assert.equal(reader.bufferSize, 5);
 
   messages = reader.feed(new Uint8Array([0xcd, 0xef]));
   assert.equal(messages.length, 1);
@@ -98,7 +101,8 @@ test("ControlStreamReader で複数回に分けて供給", () => {
 });
 
 test("ControlStreamReader で 2バイト varint Type のメッセージを解析", () => {
-  const data = new Uint8Array([0x41, 0xdd, 0x00, 0x01, 0xff]);
+  // 0x1dd = 477 → 新 varint: 0x81, 0xdd
+  const data = new Uint8Array([0x81, 0xdd, 0x00, 0x01, 0xff]);
   const messages = reader.feed(data);
 
   assert.equal(messages.length, 1);
@@ -108,9 +112,10 @@ test("ControlStreamReader で 2バイト varint Type のメッセージを解析
 
 test("ControlStreamWriter で基本的なメッセージをエンコード", () => {
   const payload = new Uint8Array([0xab, 0xcd]);
-  const encoded = writer.encode(MessageType.CLIENT_SETUP, payload);
+  // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]
+  const encoded = writer.encode(MessageType.SETUP, payload);
 
-  assert.deepEqual(encoded, new Uint8Array([0x20, 0x00, 0x02, 0xab, 0xcd]));
+  assert.deepEqual(encoded, new Uint8Array([0xaf, 0x00, 0x00, 0x02, 0xab, 0xcd]));
 });
 
 test("ControlStreamWriter で空ペイロードをエンコード", () => {
@@ -144,10 +149,11 @@ test("ControlStreamWriter でペイロードが大きすぎるとエラー", () 
 });
 
 test("ControlStreamWriter で 2バイト varint Type をエンコード", () => {
+  // 0x1dd = 477 → 新 varint: 0x81, 0xdd
   const payload = new Uint8Array([0x11, 0x22]);
   const encoded = writer.encode(0x1dd, payload);
 
-  assert.deepEqual(encoded.slice(0, 2), new Uint8Array([0x41, 0xdd]));
+  assert.deepEqual(encoded.slice(0, 2), new Uint8Array([0x81, 0xdd]));
   assert.equal(encoded[2], 0x00);
   assert.equal(encoded[3], 0x02);
   assert.deepEqual(encoded.slice(4), payload);
@@ -162,7 +168,7 @@ test("ControlStreamWriter で encodeMessage を使用", () => {
 
 test("encode → decode roundtrip", () => {
   const messages = [
-    { type: MessageType.CLIENT_SETUP, payload: new Uint8Array([0x01, 0x02, 0x03]) },
+    { type: MessageType.SETUP, payload: new Uint8Array([0x01, 0x02, 0x03]) },
     { type: MessageType.SUBSCRIBE, payload: new Uint8Array([0x10, 0x20]) },
     { type: MessageType.PUBLISH, payload: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]) },
   ];

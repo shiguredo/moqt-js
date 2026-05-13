@@ -1,54 +1,52 @@
 /**
  * MOQT Setup Messages Property-Based Tests
- * draft-ietf-moq-transport-15 Section 9.1
+ * draft-ietf-moq-transport-17 Section 9.4
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
-  createClientSetup,
-  createServerSetup,
-  encodeClientSetupPayload,
-  decodeClientSetupPayload,
-  encodeServerSetupPayload,
-  decodeServerSetupPayload,
+  createSetup,
+  encodeSetupPayload,
+  decodeSetupPayload,
+  getSetupAuthorizationTokens,
+  getSetupMoqtImplementation,
   getSetupPath,
-  getSetupMaxRequestId,
   getSetupAuthority,
 } from "./setup";
+import { AuthorizationTokenAliasType, type AuthorizationToken } from "./authorizationToken";
 import { MessageType } from "./types";
+import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 
-test("ClientSetup のエンコード・デコードがラウンドトリップする", () => {
+// draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+// AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
+// moqt-js は WebTransport 専用クライアントのため createSetup から PATH / AUTHORITY が
+// 出てこないことを多数のラウンドトリップで保証する。
+test("Setup ラウンドトリップで PATH / AUTHORITY は決して含まれない", () => {
   fc.assert(
     fc.property(
-      fc.option(fc.string({ minLength: 1, maxLength: 100 }), { nil: undefined }),
-      fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
-      fc.option(fc.string({ minLength: 1, maxLength: 100 }), { nil: undefined }),
-      (path, maxRequestId, authority) => {
-        const original = createClientSetup({ path, maxRequestId, authority });
-        const encoded = encodeClientSetupPayload(original);
-        const decoded = decodeClientSetupPayload(encoded);
+      fc.option(fc.uint8Array({ minLength: 1, maxLength: 100 }), { nil: undefined }),
+      (tokenValue) => {
+        let authorizationToken: AuthorizationToken | undefined;
+        if (tokenValue !== undefined) {
+          authorizationToken = {
+            aliasType: AuthorizationTokenAliasType.USE_VALUE,
+            tokenType: 0n,
+            tokenValue,
+          };
+        }
+        const original = createSetup(authorizationToken ? { authorizationToken } : undefined);
+        const encoded = encodeSetupPayload(original);
+        const decoded = decodeSetupPayload(encoded);
 
-        assert.equal(decoded.type, MessageType.CLIENT_SETUP);
-        assert.equal(getSetupPath(decoded), path);
-        assert.equal(getSetupMaxRequestId(decoded), maxRequestId);
-        assert.equal(getSetupAuthority(decoded), authority);
-      },
-    ),
-  );
-});
-
-test("ServerSetup のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
-      (maxRequestId) => {
-        const original = createServerSetup({ maxRequestId });
-        const encoded = encodeServerSetupPayload(original);
-        const decoded = decodeServerSetupPayload(encoded);
-
-        assert.equal(decoded.type, MessageType.SERVER_SETUP);
-        assert.equal(getSetupMaxRequestId(decoded), maxRequestId);
+        assert.equal(decoded.type, MessageType.SETUP);
+        assert.isUndefined(getSetupPath(decoded));
+        assert.isUndefined(getSetupAuthority(decoded));
+        assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
+        if (authorizationToken !== undefined) {
+          const tokens = getSetupAuthorizationTokens(decoded);
+          assert.equal(tokens.length, 1);
+        }
       },
     ),
   );

@@ -1,9 +1,9 @@
 /**
  * Publisher Property-Based Tests
- * draft-ietf-moq-transport-15 Section 5.2
+ * draft-ietf-moq-transport-17 Section 5.2
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { PublisherImpl } from "./publisher";
 
@@ -68,7 +68,7 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
           if (closedAt !== -1) {
             // 不変条件: closed 後の sendObject は必ずエラー
             try {
-              publisher.sendObject({
+              void publisher.sendObject({
                 groupId: op.groupId,
                 objectId: op.objectId,
                 payload: new Uint8Array([1, 2, 3]),
@@ -78,7 +78,7 @@ test("任意の操作列に対して状態遷移が一貫している", () => {
               sendErrorCount++;
             }
           } else {
-            publisher.sendObject({
+            void publisher.sendObject({
               groupId: op.groupId,
               objectId: op.objectId,
               payload: new Uint8Array([1, 2, 3]),

@@ -14,6 +14,9 @@ export const isPreviewActive = signal(false);
 // 停止処理中フラグ（二重実行防止）
 export const isStopping = signal(false);
 
+// Forward State (draft-ietf-moq-transport-17 Section 5.1)
+export const forwardState = signal<boolean | null>(null);
+
 // Publisher status
 export const pubStatus = signal<StatusType>("disconnected");
 export const pubStatusMessage = signal("Ready to publish");

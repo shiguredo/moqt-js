@@ -1,6 +1,6 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-15 Section 5.2
+ * draft-ietf-moq-transport-17 Section 5.2 (Fetch State Management)
  */
 
 /**
@@ -15,19 +15,19 @@ export interface SendObjectParams {
   groupId: number;
   objectId: number;
   payload: Uint8Array;
-  extensions?: Uint8Array;
+  properties?: Uint8Array;
   priority?: number;
 }
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-15 Section 10.3
+ * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
  */
 export interface SendDatagramParams {
   groupId: number;
   objectId: number;
   payload: Uint8Array;
-  extensions?: Uint8Array;
+  properties?: Uint8Array;
   priority?: number;
   /**
    * このオブジェクトがグループの最後かどうか
@@ -42,21 +42,35 @@ export interface Publisher {
   readonly state: PublisherState;
   /**
    * Forward State
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
    * PUBLISH_OK で受信した forwardState を返す。
    * - true (1): オブジェクトを転送する（Subscriber がいる）
    * - false (0): オブジェクトを転送しない（Subscriber がいない）
    *
-   * SUBSCRIBE_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
+   * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
    */
   readonly forwardState: boolean;
-  sendObject(params: SendObjectParams): void;
+  /**
+   * Subgroup ストリームでオブジェクトを送信する
+   *
+   * 戻り値は object が WebTransport stream に書き込まれて完了した時点で resolve する Promise。
+   * Catalog のように「relay に届いてキャッシュされてから後続 subscriber が参照する」必要がある
+   * オブジェクトは await することで、書き込み完了後に return できる。
+   * リアルタイムの音声・映像フレームのように落としても良い (もしくは後続のオブジェクトで上書きされる)
+   * ものは fire-and-forget で良いので、戻り値を `void` で破棄して構わない。
+   */
+  sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
+   *
+   * draft-ietf-moq-transport-17:
+   * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
+   * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
+   * draft-ietf-moq-transport-17 Section 10
    */
   sendDatagram(params: SendDatagramParams): void;
   done(): Promise<void>;
@@ -75,8 +89,12 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
-  // Internal callbacks for session to use
-  onSendObject?: (params: SendObjectParams) => void;
+  // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+  // PUBLISH_DONE の Stream Count 用カウンター
+  private dataStreamCount = 0n;
+
+  // セッションが利用する内部コールバック
+  onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: () => Promise<void>;
 
@@ -120,22 +138,35 @@ export class PublisherImpl implements Publisher {
     return this.trackAlias;
   }
 
+  incrementDataStreamCount(): void {
+    this.dataStreamCount++;
+  }
+
+  getDataStreamCount(): bigint {
+    return this.dataStreamCount;
+  }
+
   /**
    * Send an object on this track
+   *
+   * 戻り値は object が WebTransport stream に書き込み完了した時点で resolve する Promise。
+   * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
+   * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
    */
-  sendObject(params: SendObjectParams): void {
+  sendObject(params: SendObjectParams): Promise<void> {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
 
     if (this.onSendObject) {
-      this.onSendObject(params);
+      return this.onSendObject(params);
     }
+    return Promise.resolve();
   }
 
   /**
    * Send a datagram on this track
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
@@ -156,9 +187,9 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Internal: Set forward state (called by session)
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
-   * PUBLISH_OK または SUBSCRIBE_UPDATE で受信した FORWARD パラメータを反映する。
+   * PUBLISH_OK または REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
    * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。
    */
   setForwardState(forward: boolean): void {

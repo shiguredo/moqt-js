@@ -1,0 +1,61 @@
+name: Deploy DevTools to Cloudflare Pages
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare-devtools
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version: "22"
+
+      - name: 依存をインストールする
+        run: vp install --frozen-lockfile
+
+      - name: ライブラリをビルドする
+        run: vp run build
+
+      - name: DevTools をビルドする
+        run: vp run build:devtools
+
+      - name: Cloudflare Pages にデプロイする
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_PAGES_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          commit_message="$(git log -1 --pretty=%s)"
+          vp dlx wrangler@latest pages deploy devtools/dist \
+            --project-name=shiguredo-moqt-devtools \
+            --commit-message="${commit_message}"
+
+  slack-notify:
+    needs: build-and-deploy
+    if: always()
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: shiguredo/github-actions/.github/actions/slack-notify@main
+        with:
+          status: ${{ job.status }}
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK }}
+          slack_channel: sora-moqt
+          notify_mode: failure_and_fixed
+        env:
+          GH_TOKEN: ${{ github.token }}

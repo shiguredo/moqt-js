@@ -1,6 +1,6 @@
 /**
  * MOQT Session
- * draft-ietf-moq-transport-15 Section 3
+ * draft-ietf-moq-transport-17 Section 3 (Sessions)
  */
 
 import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
@@ -8,51 +8,52 @@ import {
   encodeSubgroupHeader,
   SubgroupHeaderType,
   decodeSubgroupHeader,
-  decodeObjectFields,
   encodeObjectDatagram,
   decodeObjectDatagram,
+  encodeObjectFields,
   DatagramType,
   type MoqtObject,
 } from "./dataStream";
 export type { MoqtObject } from "./dataStream";
-import { RequestError, type RequestErrorCode, SessionError, SessionErrorCode } from "./error";
+import {
+  DataStreamErrorCode,
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  RequestError,
+  type RequestErrorCode,
+  SessionError,
+  SessionErrorCode,
+} from "./error";
 import {
   MessageType,
   PublishDoneStatusCode,
   ObjectStatus,
+  NamespaceSubscribeMode,
   createTrackNamespace,
+  encodeTrackName,
   trackNamespaceToStrings,
-  decodeFetchOkPayload,
   decodeGoawayPayload,
-  decodeMaxRequestIdPayload,
-  decodePublishDonePayload,
-  decodePublishNamespaceCancelPayload,
-  decodePublishNamespacePayload,
-  decodePublishOkPayload,
+  decodeNamespaceDonePayload,
+  decodeNamespacePayload,
+  decodePublishBlockedPayload,
+  decodeRequestErrorPayload,
   decodeRequestOkPayload,
-  decodeRequestsBlockedPayload,
-  decodeServerSetupPayload,
-  decodeSubscribeOkPayload,
-  encodeClientSetupPayload,
-  encodeFetchCancelPayload,
+  decodeSetupPayload,
+  getSetupAuthority,
+  getSetupPath,
+  encodeSetupPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
-  encodePublishNamespaceDonePayload,
   encodePublishNamespacePayload,
   encodePublishPayload,
   encodeSubscribeNamespacePayload,
   encodeSubscribePayload,
-  encodeSubscribeUpdatePayload,
   encodeTrackStatusPayload,
-  encodeUnsubscribeNamespacePayload,
-  encodeUnsubscribePayload,
-  createClientSetup,
+  createSetup,
   getMessageTypeName,
-  getSetupMaxRequestId,
-  getParameterLocationValue,
-  encodeSubscriptionFilterParameter,
   FetchType,
-  VersionSpecificParameterType,
+  type AuthorizationToken,
   type Location,
   type Parameter,
   type SubscriptionFilter,
@@ -64,9 +65,24 @@ import {
   type SendObjectParams,
   type SendDatagramParams,
 } from "./publisher";
-import { type Subscriber, type SubscribeUpdateOptions, SubscriberImpl } from "./subscriber";
+import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
-import { decodeFetchHeader, decodeFetchObjectFields, FetchHeaderType } from "./dataStream";
+import { decodeFetchHeader, FetchHeaderType } from "./dataStream";
+import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
+import {
+  buildPublishParameters,
+  buildPublishTrackProperties,
+  buildSubscribeParameters,
+  calculateObjectIdDelta,
+} from "./session/params";
+import * as bidi from "./session/bidi";
+import {
+  processFetchObjects,
+  processSubgroupObjects,
+  concatChunks,
+  cancelStreamQuiet,
+} from "./session/stream";
+import { isSessionClosedError } from "./session/errors";
 
 /**
  * Session state
@@ -81,9 +97,16 @@ export interface DebugMessage {
   direction: "send" | "recv";
   /** Message type number */
   type: number;
-  /** Message type name (e.g., "CLIENT_SETUP", "SUBSCRIBE") */
+  /** Message type name (e.g., "SETUP", "SUBSCRIBE") */
   typeName: string;
-  /** Raw payload bytes */
+  /**
+   * Raw payload bytes.
+   *
+   * The Uint8Array is independent of moqt-js internal buffers and the receiver
+   * MAY retain it beyond the callback. The receiver MUST NOT mutate it because
+   * the same instance may be referenced by moqt-js internals after the callback
+   * returns (e.g. for retransmission or further encoding).
+   */
   payload: Uint8Array;
   /** Decoded message content (when available) */
   decoded?: Record<string, unknown>;
@@ -95,13 +118,13 @@ export interface DebugMessage {
  * Connect callbacks
  */
 export interface ConnectCallbacks {
-  close?: () => void;
+  close?: (closeInfo: WebTransportCloseInfo) => void;
   error?: (error: Error) => void;
   /** Debug callback for logging MOQT protocol messages */
   debug?: (message: DebugMessage) => void;
   /**
    * GOAWAY 受信時のコールバック
-   * draft-ietf-moq-transport-15 Section 9.4
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
    * @param newSessionUri - 新しいセッション URI（セッションマイグレーション用）
    */
   goaway?: (newSessionUri: string) => void;
@@ -127,6 +150,34 @@ export interface ConnectOptions {
    * Note: Certificate validity period must be 14 days or less
    */
   serverCertificateHashes?: CertificateHash[];
+
+  /**
+   * Authorization Token to send as SETUP Option (Option Type 0x03)
+   * draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+   *
+   * SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.3.2)。
+   * REGISTER (0x1) または USE_VALUE (0x3) のみ指定できる。
+   */
+  authorizationToken?: AuthorizationToken;
+
+  /**
+   * Pending Subgroup Stream の buffer 設定
+   * draft-ietf-moq-transport-17 §10.4.2 の "MAY ... choose to buffer it for a brief
+   * period to handle reordering with the control message that establishes the Track
+   * Alias" を実現する buffer の上限を制御する。
+   *
+   * 指定しなかった field は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` の値が使われる。
+   */
+  pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+}
+
+/**
+ * SessionImpl のコンストラクタが受け取るオプション
+ * `connect()` から `ConnectOptions` の該当フィールドが渡される
+ */
+export interface SessionImplOptions {
+  /** ConnectOptions.pendingSubgroup と同じ */
+  pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
 }
 
 /**
@@ -139,9 +190,9 @@ export interface PublishCallbacks {
   error?: (error: Error) => void;
   /**
    * Forward State が変更された時のコールバック
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
-   * PUBLISH_OK または SUBSCRIBE_UPDATE で Forward State が変更された時に呼ばれる。
+   * PUBLISH_OK または REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
    * - true (1): Subscriber がいる（オブジェクトを送信すべき）
    * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
    */
@@ -154,7 +205,7 @@ export interface PublishCallbacks {
 export interface PublishOptions {
   /**
    * キャッシュの最大保持時間（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.3
+   * draft-ietf-moq-transport-17 Section 11.2 (MAX CACHE DURATION)
    *
    * Relay がオブジェクトをキャッシュして良い最大時間を指定する。
    * 0 を指定するとキャッシュを無効にする。
@@ -163,7 +214,9 @@ export interface PublishOptions {
 
   /**
    * Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.2
+   * draft-ietf-moq-transport-17 Section 11.1 (DELIVERY TIMEOUT)
+   *
+   * PUBLISH の Track Extension として送信される DELIVERY TIMEOUT（Message Parameter の定義は Section 9.3.3）。
    *
    * オブジェクトを受信してから配信を試みる最大時間。
    * Publisher と Subscriber の両方が指定した場合、小さい方の値が使用される。
@@ -173,7 +226,7 @@ export interface PublishOptions {
 
   /**
    * Publisher Priority（0-255）
-   * draft-ietf-moq-transport-15 Section 9.2.1.4
+   * draft-ietf-moq-transport-17 Section 11.3 (DEFAULT PUBLISHER PRIORITY)
    *
    * パブリッシュの優先度。小さい値ほど高優先度。
    * 指定しない場合は 128（デフォルト）
@@ -182,7 +235,7 @@ export interface PublishOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-15 Section 9.2.1.6
+   * draft-ietf-moq-transport-17 Section 11.4 (DEFAULT PUBLISHER GROUP ORDER)
    *
    * グループの配信順序。
    * - "Ascending": 古いグループから順に配信
@@ -192,7 +245,7 @@ export interface PublishOptions {
 
   /**
    * Dynamic Groups サポートの通知
-   * draft-ietf-moq-transport-15 Section 9.2.1.11
+   * draft-ietf-moq-transport-17 Section 11.5 (DYNAMIC GROUPS)
    *
    * true を設定すると、Subscriber が NEW_GROUP_REQUEST パラメータで
    * 新しいグループの生成を要求できることを通知する。
@@ -201,7 +254,7 @@ export interface PublishOptions {
 
   /**
    * Expires（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.8
+   * draft-ietf-moq-transport-17 Section 9.3.8 (EXPIRES Parameter)
    *
    * パブリッシュが自動終了するまでの時間（ミリ秒）。
    * 0 または未指定の場合は期限なし。
@@ -210,7 +263,7 @@ export interface PublishOptions {
 
   /**
    * Forward State
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
    * オブジェクトの転送状態を指定する。
    * - true (1): オブジェクトを転送する（デフォルト）
@@ -229,7 +282,7 @@ export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
   /**
    * Datagram で受信したオブジェクトのコールバック
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    */
@@ -240,7 +293,7 @@ export interface SubscribeCallbacks {
 
 /**
  * Joining Fetch オプション
- * draft-ietf-moq-transport-15 Section 9.16.2
+ * draft-ietf-moq-transport-17 Section 9.14.2 (Joining Fetches)
  *
  * 重要な制約:
  * 1. Joining Fetch は Filter Type が LargestObject のサブスクリプションでのみ使用可能。
@@ -296,7 +349,7 @@ export interface JoiningFetchOptions {
 export interface SubscribeOptions {
   /**
    * Subscription Filter
-   * draft-ietf-moq-transport-15 Section 5.1.2, Section 9.2.1.7
+   * draft-ietf-moq-transport-17 Section 5.1.2, Section 9.3.7
    *
    * どのオブジェクトを受信するかを指定するフィルタ。
    * - NextGroupStart: 次のグループから開始
@@ -310,7 +363,7 @@ export interface SubscribeOptions {
 
   /**
    * Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-15 Section 9.2.1.2
+   * draft-ietf-moq-transport-17 Section 9.3.3 (DELIVERY TIMEOUT Parameter)
    *
    * オブジェクトを受信してから配信を試みる最大時間。
    * Publisher と Subscriber の両方が指定した場合、小さい方の値が使用される。
@@ -320,7 +373,7 @@ export interface SubscribeOptions {
 
   /**
    * Subscriber Priority（0-255）
-   * draft-ietf-moq-transport-15 Section 9.2.1.5
+   * draft-ietf-moq-transport-17 Section 9.3.5 (SUBSCRIBER PRIORITY Parameter)
    *
    * サブスクリプションの優先度。小さい値ほど高優先度。
    * 指定しない場合は 128（デフォルト）
@@ -329,7 +382,7 @@ export interface SubscribeOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-15 Section 9.2.1.6
+   * draft-ietf-moq-transport-17 Section 9.3.6 (GROUP ORDER Parameter)
    *
    * グループの配信順序の希望。
    * - "Ascending": 古いグループから順に配信
@@ -341,7 +394,7 @@ export interface SubscribeOptions {
 
   /**
    * 新しいグループ（キーフレーム）を要求する
-   * draft-ietf-moq-transport-15 Section 9.2.1.12
+   * draft-ietf-moq-transport-17 Section 9.3.11 (NEW GROUP REQUEST Parameter)
    *
    * 0 を指定すると、Publisher は新しい Group を開始する
    * Publisher が DYNAMIC_GROUPS をサポートしていない場合は無視される
@@ -350,7 +403,7 @@ export interface SubscribeOptions {
 
   /**
    * Joining Fetch オプション
-   * draft-ietf-moq-transport-15 Section 9.16.2
+   * draft-ietf-moq-transport-17 Section 9.14.2 (Joining Fetches)
    *
    * SUBSCRIBE と同時に過去のデータを取得する。
    * Relay がキャッシュを持っていれば、過去のグループを取得できる。
@@ -362,7 +415,7 @@ export interface SubscribeOptions {
 
   /**
    * Forward State
-   * draft-ietf-moq-transport-15 Section 9.2.1.10
+   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
    *
    * オブジェクトの転送状態を指定する。
    * - true (1): オブジェクトを転送する（デフォルト）
@@ -371,6 +424,16 @@ export interface SubscribeOptions {
    * 省略した場合は 1（転送する）がデフォルト。
    */
   forward?: boolean;
+
+  /**
+   * Rendezvous Timeout（ミリ秒）
+   * draft-ietf-moq-transport-17 Section 9.3.4 (RENDEZVOUS TIMEOUT Parameter)
+   *
+   * リレーが Publisher を待つ時間。
+   * 0 は即時応答を要求。指定しない場合のデフォルトは 0。
+   * draft-ietf-moq-transport-17 Section 9.3.4
+   */
+  rendezvousTimeout?: bigint;
 }
 
 /**
@@ -398,7 +461,7 @@ export interface FetchOptions {
 
 /**
  * TRACK_STATUS の結果
- * draft-ietf-moq-transport-15 Section 9.19
+ * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
  */
 export interface TrackStatusResult {
   /**
@@ -408,28 +471,38 @@ export interface TrackStatusResult {
 }
 
 /**
- * Namespace 公開通知
- * draft-ietf-moq-transport-15 Section 9.20
- */
-export interface NamespaceAnnouncement {
-  /**
-   * 公開されたトラックの Namespace
-   */
-  namespace: string[];
-  /**
-   * パラメータ
-   */
-  parameters: Parameter[];
-}
-
-/**
  * Namespace サブスクリプションのコールバック
+ *
+ * draft-ietf-moq-transport-17 Section 6.1:
+ * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE/NAMESPACE_DONE または PUBLISH が送信される。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
  */
 export interface NamespaceSubscriptionCallbacks {
   /**
-   * PUBLISH_NAMESPACE を受信したときに呼ばれる
+   * NAMESPACE を受信したときに呼ばれる
+   * draft-ietf-moq-transport-17 Section 9.18 (NAMESPACE)
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
-  announce: (announcement: NamespaceAnnouncement) => void;
+  onNamespace?: (namespaceSuffix: string[]) => void;
+  /**
+   * NAMESPACE_DONE を受信したときに呼ばれる
+   * draft-ietf-moq-transport-17 Section 9.19 (NAMESPACE_DONE)
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
+   */
+  onNamespaceDone?: (namespaceSuffix: string[]) => void;
+  /**
+   * PUBLISH_BLOCKED を受信したときに呼ばれる
+   * draft-ietf-moq-transport-17 Section 6.1 / Section 9.21 (PUBLISH_BLOCKED):
+   * "If a Subscription cannot be created because there is no available Request ID,
+   *  the Publisher sends a PUBLISH_BLOCKED message on the response stream to
+   *  indicate the Full Track Name of the Subscription that could not be established."
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
+   * @param trackName - 確立できなかった Subscription の Track Name
+   */
+  onPublishBlocked?: (namespaceSuffix: string[], trackName: string) => void;
   /**
    * エラー時のコールバック
    */
@@ -449,14 +522,9 @@ export interface NamespaceSubscription {
 
 /**
  * Namespace 公開のコールバック
- * draft-ietf-moq-transport-15 Section 9.20-9.22
+ * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
  */
 export interface NamespacePublicationCallbacks {
-  /**
-   * PUBLISH_NAMESPACE_CANCEL を受信したときに呼ばれる
-   * draft-ietf-moq-transport-15 Section 9.22
-   */
-  cancelled?: (errorCode: bigint, reasonPhrase: string) => void;
   /**
    * エラー時のコールバック
    */
@@ -465,17 +533,17 @@ export interface NamespacePublicationCallbacks {
 
 /**
  * Namespace 公開
- * draft-ietf-moq-transport-15 Section 9.20-9.21
+ * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
  */
 export interface NamespacePublication {
-  readonly state: "active" | "cancelled" | "closed";
+  readonly state: "active" | "closed";
   /**
    * 公開している Namespace
    */
   readonly namespace: string[];
   /**
-   * 公開を終了する（PUBLISH_NAMESPACE_DONE を送信）
-   * draft-ietf-moq-transport-15 Section 9.21
+   * 公開を終了する
+   * draft-ietf-moq-transport-17: ストリームの close で終了を通知する。
    */
   done(): Promise<void>;
 }
@@ -535,7 +603,7 @@ export interface Session {
   readonly state: SessionState;
   /**
    * GOAWAY を受信したかどうか
-   * draft-ietf-moq-transport-15 Section 9.4
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
    */
   readonly goawayReceived: boolean;
   publish(
@@ -552,7 +620,7 @@ export interface Session {
   ): Promise<Subscriber>;
   /**
    * 過去のデータを取得する
-   * draft-ietf-moq-transport-15 Section 9.16
+   * draft-ietf-moq-transport-17 Section 9.14 (FETCH)
    */
   fetch(
     namespace: string[],
@@ -562,20 +630,28 @@ export interface Session {
   ): Promise<Fetcher>;
   /**
    * トラックの状態を問い合わせる
-   * draft-ietf-moq-transport-15 Section 9.19
+   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS)
    */
   trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult>;
   /**
    * Namespace をサブスクライブする（トラック発見用）
-   * draft-ietf-moq-transport-15 Section 9.23
+   *
+   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+   * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
+   *
+   * @param namespacePrefix - Track Namespace Prefix
+   * @param callbacks - コールバック関数
+   * @param subscribeOptions - Subscribe Options（デフォルト: BOTH）
    */
   subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
+    subscribeOptions?: NamespaceSubscribeMode,
   ): Promise<NamespaceSubscription>;
   /**
    * Namespace を公開する（トラック発見用）
-   * draft-ietf-moq-transport-15 Section 9.20
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
    *
    * Publisher が Track Namespace 内にトラックがあることを通知する。
    * Subscriber は SUBSCRIBE_NAMESPACE でこの通知を受け取れる。
@@ -586,10 +662,11 @@ export interface Session {
   ): Promise<NamespacePublication>;
   /**
    * GOAWAY を送信してセッション終了を通知する
-   * draft-ietf-moq-transport-15 Section 9.4
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
    * @param newSessionUri - 新しいセッション URI（オプション）
+   * @param timeout - Graceful shutdown のタイムアウト（ミリ秒、オプション）
    */
-  goaway(newSessionUri?: string): Promise<void>;
+  goaway(newSessionUri?: string, timeout?: bigint): Promise<void>;
   close(): Promise<void>;
   /**
    * セッションレベルの統計情報を取得する
@@ -604,36 +681,62 @@ export class SessionImpl implements Session {
   private sessionState: SessionState = "connected";
   private readonly transport: WebTransport;
   private readonly callbacks: ConnectCallbacks;
-  private controlStream?: WebTransportBidirectionalStream;
+  /**
+   * draft-ietf-moq-transport-17 Section 4 (Modularity):
+   * 制御ストリームは単方向ストリームのペアに変更された。
+   * クライアントとサーバーがそれぞれ 1 本ずつ単方向ストリームを開く。
+   * draft-ietf-moq-transport-17 Section 4
+   */
+  private controlSendStream?: WritableStream<Uint8Array>;
+  private controlReceiveStream?: ReadableStream<Uint8Array>;
   private controlReader?: ControlStreamReader;
   private controlWriter?: ControlStreamWriter;
 
-  // Request ID management
+  // リクエスト ID 管理
   private nextRequestId = 0n;
   private nextTrackAlias = 0n;
 
   // GOAWAY 状態
   private receivedGoaway = false;
   private sentGoaway = false;
+  private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  // MAX_REQUEST_ID 管理
-  private peerMaxRequestId = 0n;
-
-  // Active publishers, subscribers and fetchers
+  // アクティブなパブリッシャー、サブスクライバー、フェッチャー
   private publishers = new Map<bigint, PublisherImpl>();
   private subscribers = new Map<bigint, SubscriberImpl>();
   private subscribersByAlias = new Map<bigint, SubscriberImpl>();
   private fetchers = new Map<bigint, FetcherImpl>();
 
   // Subscriber 登録前に到着した Subgroup ストリームをバッファリング
-  // QUIC ではストリーム間の順序が保証されないため、
-  // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
-  private pendingSubgroupStreams = new Map<
+  // draft-ietf-moq-transport-17 §10.4.2:
+  // "MAY ... choose to buffer it for a brief period to handle reordering with the
+  //  control message that establishes the Track Alias."
+  // QUIC ではストリーム間の順序が保証されないため、SUBSCRIBE_OK より先にデータストリームが
+  // 到着する可能性があり、それを buffer して reordering を吸収する
+  // 上限・タイムアウトは ConnectOptions.pendingSubgroup でユーザーから指定可能
+  private readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
+
+  // Fetcher 登録待ちの Promise を管理
+  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+  // "A publisher MAY send Objects in response to a FETCH before the
+  //  FETCH_OK message is sent."
+  // FETCH_OK より先にデータストリームが到着する可能性がある
+  private fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
+
+  // リクエストごとの双方向ストリーム管理
+  // draft-ietf-moq-transport-17 Section 3.3:
+  // リクエストは双方向ストリーム上で送受信される。
+  // draft-ietf-moq-transport-17 Section 3.3
+  private requestStreams = new Map<
     bigint,
-    Array<{ header: import("./dataStream").SubgroupHeader; data: Uint8Array }>
+    {
+      stream: WebTransportBidirectionalStream;
+      writer: WritableStreamDefaultWriter<Uint8Array>;
+      controlReader: ControlStreamReader;
+    }
   >();
 
-  // Pending requests
+  // 保留中のリクエスト
   private pendingPublish = new Map<
     bigint,
     { resolve: (pub: Publisher) => void; reject: (err: Error) => void; impl: PublisherImpl }
@@ -648,54 +751,64 @@ export class SessionImpl implements Session {
       objectCallback: (object: MoqtObject) => void;
     }
   >();
-  private pendingSubscribeUpdate = new Map<
+  private pendingRequestUpdate = new Map<
     bigint,
-    { resolve: () => void; reject: (err: Error) => void; subscriptionRequestId: bigint }
+    { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
   >();
   private pendingFetch = new Map<
     bigint,
-    { resolve: (fetcher: Fetcher) => void; reject: (err: Error) => void; impl: FetcherImpl }
+    {
+      resolve: (fetcher: Fetcher) => void;
+      reject: (err: Error) => void;
+      impl: FetcherImpl;
+      startLocation?: Location;
+    }
   >();
   private pendingTrackStatus = new Map<
     bigint,
     { resolve: (result: TrackStatusResult) => void; reject: (err: Error) => void }
   >();
-  private pendingNamespaceSubscribe = new Map<
-    bigint,
-    {
-      resolve: (subscription: NamespaceSubscription) => void;
-      reject: (err: Error) => void;
-      callbacks: NamespaceSubscriptionCallbacks;
-    }
-  >();
+  /**
+   * SUBSCRIBE_NAMESPACE の状態管理
+   *
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * SUBSCRIBE_NAMESPACE は専用の双方向ストリームで送受信される。
+   */
   private namespaceSubscriptions = new Map<
     bigint,
     {
       callbacks: NamespaceSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
+      stream?: WebTransportBidirectionalStream;
+      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
+      controlReader?: ControlStreamReader;
+      writer?: WritableStreamDefaultWriter<Uint8Array>;
     }
   >();
-  private pendingNamespacePublish = new Map<
-    bigint,
-    {
-      resolve: (publication: NamespacePublication) => void;
-      reject: (err: Error) => void;
-      callbacks?: NamespacePublicationCallbacks;
-      namespace: string[];
-    }
-  >();
+  /**
+   * PUBLISH_NAMESPACE の状態管理
+   *
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+   * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.17
+   */
   private namespacePublications = new Map<
     bigint,
     {
       callbacks?: NamespacePublicationCallbacks;
-      state: "active" | "cancelled" | "closed";
+      state: "pending" | "active" | "closed";
       namespace: string[];
+      stream: WebTransportBidirectionalStream;
+      streamReader: ReadableStreamDefaultReader<Uint8Array>;
+      controlReader: ControlStreamReader;
+      writer: WritableStreamDefaultWriter<Uint8Array>;
     }
   >();
 
   // Publisher ごとのストリーム状態
-  // draft-ietf-moq-transport-15 Section 2.2:
+  // draft-ietf-moq-transport-17 Section 2.2:
   // "Objects in a subgroup ... are sent on a single stream whenever possible."
   private publisherStreams = new Map<
     bigint,
@@ -705,6 +818,24 @@ export class SessionImpl implements Session {
       previousObjectId: bigint;
     }
   >();
+
+  // Publisher ごとの送信キュー
+  // sendObject は async だが fire-and-forget で呼ばれるため、
+  // 同一トラック内で並行実行されるとストリームの二重作成が発生する。
+  // Promise チェーンでトラック単位のシリアライズを行う。
+  private publisherSendQueues = new Map<bigint, Promise<void>>();
+
+  // TODO: Closed Subgroup Tracking
+  // draft-ietf-moq-transport-17:
+  // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
+  // draft-ietf-moq-transport-17 Section 10.4.2
+  //
+  // 現在の実装では 1 Group = 1 Subgroup = 1 Stream モデルを採用しているため、
+  // グループが終了すると自然と新しいストリームを作成する。
+  // 完全な実装には以下が必要:
+  // 1. WebTransport の STOP_SENDING シグナル検出
+  // 2. 閉じた Subgroup (trackAlias, groupId, subgroupId) の追跡
+  // 3. sendObject 時に閉じた Subgroup への送信を拒否
 
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
@@ -719,13 +850,53 @@ export class SessionImpl implements Session {
   private statsControlMessagesSent = 0;
   private statsControlMessagesReceived = 0;
 
-  constructor(transport: WebTransport, callbacks: ConnectCallbacks) {
+  constructor(
+    transport: WebTransport,
+    callbacks: ConnectCallbacks,
+    options: SessionImplOptions = {},
+  ) {
     this.transport = transport;
     this.callbacks = callbacks;
+    this.pendingSubgroupBuffer = new PendingSubgroupBuffer(options.pendingSubgroup);
+
+    // WebTransport の切断を監視し、close 理由をコールバックに渡す
+    // draft-ietf-moq-transport-17 Section 3.5:
+    // peer 起点でセッションが閉じた場合、各ストリームの read は reject するが
+    // これは正常な終了通知である。read loop の catch 側で正しくスキップできるよう
+    // callbacks.close を呼ぶ前に sessionState を遷移させておく。
+    this.transport.closed
+      .then((closeInfo) => {
+        if (this.sessionState !== "closed") {
+          this.sessionState = "closed";
+        }
+        this.callbacks.close?.(closeInfo);
+      })
+      .catch((error: unknown) => {
+        if (this.sessionState !== "closed") {
+          this.sessionState = "closed";
+        }
+        this.callbacks.close?.({ closeCode: 0, reason: String(error) });
+      });
   }
 
   get state(): SessionState {
     return this.sessionState;
+  }
+
+  /**
+   * 下位 WebTransport の `reliability` をそのまま返す
+   * W3C WebTransport spec: https://www.w3.org/TR/webtransport/#dom-webtransport-reliability
+   *
+   * - "pending": セッション未確立
+   * - "reliable-only": HTTP/2 系 (datagram 不可)
+   * - "supports-unreliable": HTTP/3 系 (datagram 可)
+   *
+   * draft-ietf-webtrans-http2 と draft-ietf-webtrans-http3 のどちらで接続しているか
+   * を判別する指標として利用する。
+   */
+  get reliability(): string {
+    const wt = this.transport as unknown as { reliability?: string };
+    return wt.reliability ?? "pending";
   }
 
   get goawayReceived(): boolean {
@@ -734,64 +905,136 @@ export class SessionImpl implements Session {
 
   /**
    * Initialize the session (called after WebTransport connect)
+   *
+   * options に authorizationToken を指定すると、SETUP Option (0x03) として
+   * draft-ietf-moq-transport-17 Section 9.4.1.4 に従い認証トークンを送出する。
    */
-  async initialize(): Promise<void> {
-    // Open bidirectional control stream
-    this.controlStream = await this.transport.createBidirectionalStream();
+  async initialize(options?: { authorizationToken?: AuthorizationToken }): Promise<void> {
+    // draft-ietf-moq-transport-17 Section 4 (Modularity):
+    // 制御ストリームは単方向ストリームのペアに変更された。
+    // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
+    // draft-ietf-moq-transport-17 Section 4
+
     this.controlReader = new ControlStreamReader();
     this.controlWriter = new ControlStreamWriter();
 
-    // Send CLIENT_SETUP
-    const clientSetup = createClientSetup({
-      maxRequestId: 1000n,
-    });
-    const setupPayload = encodeClientSetupPayload(clientSetup);
-    const setupMessage = this.controlWriter.encode(MessageType.CLIENT_SETUP, setupPayload);
+    // 送信用単方向ストリームを開く
+    this.controlSendStream = await this.transport.createUnidirectionalStream();
 
-    this.emitDebug("send", MessageType.CLIENT_SETUP, setupPayload, {
-      maxRequestId: getSetupMaxRequestId(clientSetup)?.toString(),
-    });
+    // draft-ietf-moq-transport-17 Section 3.4:
+    // All unidirectional MOQT streams start with a variable-length integer
+    // indicating the type of the stream.
+    // 制御ストリームのストリームタイプは 0x2F00 (Table 3)
+    const streamTypeBytes = encodeVarint(MessageType.SETUP);
 
-    const writer = this.controlStream.writable.getWriter();
+    // SETUP を送信
+    // draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+    // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
+    // moqt-js は WebTransport 専用クライアントのため `createSetup` には渡さない。
+    const setup = createSetup({
+      authorizationToken: options?.authorizationToken,
+    });
+    const setupPayload = encodeSetupPayload(setup);
+    const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);
+
+    this.emitDebug("send", MessageType.SETUP, setupPayload, {});
+
+    const writer = this.controlSendStream.getWriter();
+    await writer.write(streamTypeBytes);
     await writer.write(setupMessage);
     writer.releaseLock();
 
-    // Read SERVER_SETUP
-    const reader = this.controlStream.readable.getReader();
+    // サーバーからの単方向ストリームを受信する
+    const incomingReader = this.transport.incomingUnidirectionalStreams.getReader();
+    const { value: incomingStream, done: streamDone } = await incomingReader.read();
+    incomingReader.releaseLock();
+
+    if (streamDone || !incomingStream) {
+      throw new SessionError(
+        "Connection closed before receiving control stream",
+        SessionErrorCode.NO_ERROR,
+      );
+    }
+
+    this.controlReceiveStream = incomingStream;
+
+    // draft-ietf-moq-transport-17 Section 3.4:
+    // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
+    // 制御ストリームのストリームタイプ 0x2F00 を読み取って検証する。
+    const reader = incomingStream.getReader();
     const { value, done } = await reader.read();
     reader.releaseLock();
 
     if (done || !value) {
-      throw new SessionError("Connection closed before SERVER_SETUP", SessionErrorCode.NO_ERROR);
+      throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
     }
 
-    const messages = this.controlReader.feed(value);
-    if (messages.length === 0) {
-      throw new SessionError("No SERVER_SETUP received", SessionErrorCode.PROTOCOL_VIOLATION);
-    }
-
-    const msg = messages[0];
-    if (msg.type !== MessageType.SERVER_SETUP) {
+    // ストリームタイプを読み取る
+    const [streamType, streamTypeConsumed] = decodeVarint(value, 0);
+    if (Number(streamType) !== MessageType.SETUP) {
       throw new SessionError(
-        `Expected SERVER_SETUP, got ${msg.type}`,
+        `expected control stream type 0x2F00, got 0x${streamType.toString(16)}`,
         SessionErrorCode.PROTOCOL_VIOLATION,
       );
     }
 
-    // Decode SERVER_SETUP
-    const serverSetup = decodeServerSetupPayload(msg.payload);
+    // ストリームタイプ以降のデータを ControlStreamReader に供給
+    const remaining = value.slice(streamTypeConsumed);
+    let messages = remaining.length > 0 ? this.controlReader.feed(remaining) : [];
 
-    this.emitDebug("recv", MessageType.SERVER_SETUP, msg.payload, {
-      maxRequestId: getSetupMaxRequestId(serverSetup)?.toString(),
-    });
+    // SETUP メッセージがまだ届いていない場合は追加で読み取る
+    if (messages.length === 0) {
+      const setupReader = incomingStream.getReader();
+      const { value: setupValue, done: setupDone } = await setupReader.read();
+      setupReader.releaseLock();
 
-    // Start reading control messages in background
+      if (setupDone || !setupValue) {
+        throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
+      }
+      messages = this.controlReader.feed(setupValue);
+    }
+
+    if (messages.length === 0) {
+      throw new SessionError("No SETUP received", SessionErrorCode.PROTOCOL_VIOLATION);
+    }
+
+    const msg = messages[0];
+    if (msg.type !== MessageType.SETUP) {
+      throw new SessionError(
+        `Expected SETUP, got ${msg.type}`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    }
+
+    // SETUP をデコードしてバリデーションする
+    const decodedSetup = decodeSetupPayload(msg.payload);
+
+    // draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+    // AUTHORITY (0x05) / PATH (0x01) は server から送信されてはならない。
+    // また WebTransport 使用時には MUST NOT 送信されるため、moqt-js は受信したら
+    // INVALID_AUTHORITY / INVALID_PATH でセッションを閉じなければならない。
+    if (getSetupAuthority(decodedSetup) !== undefined) {
+      throw new SessionError(
+        "received AUTHORITY in SETUP from server (forbidden under WebTransport)",
+        SessionErrorCode.INVALID_AUTHORITY,
+      );
+    }
+    if (getSetupPath(decodedSetup) !== undefined) {
+      throw new SessionError(
+        "received PATH in SETUP from server (forbidden under WebTransport)",
+        SessionErrorCode.INVALID_PATH,
+      );
+    }
+
+    this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
+
+    // バックグラウンドで制御メッセージの読み取りを開始
     this.startControlMessageLoop();
 
-    // Start accepting incoming data streams
+    // 受信データストリームの受け入れを開始
     this.startIncomingStreamLoop();
 
-    // Start receiving datagrams
+    // データグラムの受信を開始
     this.startDatagramLoop();
   }
 
@@ -809,7 +1052,7 @@ export class SessionImpl implements Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-15 Section 9.4
+    // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
     if (this.receivedGoaway) {
       throw new Error("Cannot publish after receiving GOAWAY");
     }
@@ -819,11 +1062,10 @@ export class SessionImpl implements Session {
 
     const trackAlias = this.nextTrackAlias++;
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
-    // Create publisher implementation
+    // パブリッシャー実装を作成
     const impl = new PublisherImpl(
       namespace,
       trackName,
@@ -833,12 +1075,10 @@ export class SessionImpl implements Session {
       callbacks?.onForwardStateChange,
     );
 
-    // Set up send callback
-    impl.onSendObject = (params: SendObjectParams) => {
-      void this.sendObject(impl, params);
-    };
+    // 送信コールバックを設定
+    impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
 
-    // Set up datagram send callback
+    // データグラム送信コールバックを設定
     impl.onSendDatagram = (params: SendDatagramParams) => {
       this.sendDatagram(impl, params);
     };
@@ -850,95 +1090,48 @@ export class SessionImpl implements Session {
       await this.sendPublishDone(impl);
     };
 
-    // Create promise for PUBLISH_OK
+    // PUBLISH_OK の Promise を作成
     const promise = new Promise<Publisher>((resolve, reject) => {
       this.pendingPublish.set(requestId, { resolve, reject, impl });
     });
 
-    // Build parameters
-    const parameters: Parameter[] = [];
-    if (options?.maxCacheDuration !== undefined) {
-      // MAX_CACHE_DURATION (0x04) - varint parameter (偶数 ID)
-      // draft-ietf-moq-transport-15 Section 9.2.1.3
-      parameters.push({
-        type: VersionSpecificParameterType.MAX_CACHE_DURATION,
-        value: encodeVarint(options.maxCacheDuration),
-      });
-    }
+    const parameters = buildPublishParameters(options);
+    const trackProperties = buildPublishTrackProperties(options);
 
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-15 Section 9.2.1.2
-    if (options?.deliveryTimeout !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.DELIVERY_TIMEOUT,
-        value: encodeVarint(options.deliveryTimeout),
-      });
-    }
-
-    // PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-15 Section 9.2.1.4
-    if (options?.publisherPriority !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.PUBLISHER_PRIORITY,
-        value: encodeVarint(options.publisherPriority),
-      });
-    }
-
-    // GROUP_ORDER (0x22) - draft-ietf-moq-transport-15 Section 9.2.1.6
-    if (options?.groupOrder !== undefined) {
-      const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
-      parameters.push({
-        type: VersionSpecificParameterType.GROUP_ORDER,
-        value: encodeVarint(groupOrderValue),
-      });
-    }
-
-    // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-15 Section 9.2.1.11
-    if (options?.dynamicGroups === true) {
-      parameters.push({
-        type: VersionSpecificParameterType.DYNAMIC_GROUPS,
-        value: encodeVarint(1),
-      });
-    }
-
-    // EXPIRES (0x08) - draft-ietf-moq-transport-15 Section 9.2.1.8
-    if (options?.expires !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.EXPIRES,
-        value: encodeVarint(options.expires),
-      });
-    }
-
-    // FORWARD (0x10) - draft-ietf-moq-transport-15 Section 9.2.1.10
-    // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-    if (options?.forward === false) {
-      parameters.push({
-        type: VersionSpecificParameterType.FORWARD,
-        value: encodeVarint(0n),
-      });
-    }
-
-    // Send PUBLISH message
+    // PUBLISH メッセージを双方向ストリームで送信
+    // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+    // "The publisher sends PUBLISH as the first message on a new
+    //  bidirectional stream to initiate a subscription for a Track."
+    // draft-ietf-moq-transport-17 Section 3.3
     const publishMsg = {
       type: MessageType.PUBLISH,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       trackAlias,
       parameters,
+      trackProperties,
     };
 
     const payload = encodePublishPayload(publishMsg as Parameters<typeof encodePublishPayload>[0]);
-    await this.sendControlMessage(MessageType.PUBLISH, payload, {
+    const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.PUBLISH, payload, {
       requestId: requestId.toString(),
       trackNamespace: namespace,
       trackName,
       trackAlias: trackAlias.toString(),
       MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
       DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-      PUBLISHER_PRIORITY: options?.publisherPriority,
+      DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
       GROUP_ORDER: options?.groupOrder,
       DYNAMIC_GROUPS: options?.dynamicGroups,
       EXPIRES: options?.expires?.toString(),
     });
+
+    // 双方向ストリームからレスポンスを読み取る
+    void this.readPublishResponse(requestId, streamInfo.stream, streamInfo.controlReader);
 
     return promise;
   }
@@ -946,9 +1139,9 @@ export class SessionImpl implements Session {
   /**
    * Subscribe to a track
    *
-   * draft-ietf-moq-transport-15 Section 9.9:
+   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
    * SUBSCRIBE does not include Track Alias.
-   * Track Alias is returned by the publisher in SUBSCRIBE_OK (Section 9.10).
+   * Track Alias is returned by the publisher in SUBSCRIBE_OK (Section 9.9 SUBSCRIBE_OK).
    */
   async subscribe(
     namespace: string[],
@@ -961,18 +1154,29 @@ export class SessionImpl implements Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-15 Section 9.4
+    // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
     if (this.receivedGoaway) {
       throw new Error("Cannot subscribe after receiving GOAWAY");
     }
 
     // Joining Fetch は Filter Type が LargestObject の場合のみ許可
-    // draft-ietf-moq-transport-15 Section 9.16.2:
+    // draft-ietf-moq-transport-17 Section 9.14.2 (Joining Fetches):
     // "A Joining Fetch is only permitted when the associated Subscribe has
     //  the Filter Type Largest Object; any other value results in closing
     //  the session with a PROTOCOL_VIOLATION."
     // joiningFetch が有効な場合、自動的に LargestObject フィルターを設定する
     if (options?.joiningFetch) {
+      // draft-ietf-moq-transport-17 Section 9.14.2 (Joining Fetches):
+      // "A Joining Fetch is only permitted when the associated subscription
+      //  has Forward State 1; otherwise the publisher MUST close the session
+      //  with a PROTOCOL_VIOLATION."
+      if (options.forward === false) {
+        throw new Error(
+          "Joining Fetch requires Forward State 1. " +
+            "Remove options.forward or set options.forward = true",
+        );
+      }
+
       if (options.filter === undefined) {
         options = { ...options, filter: { type: "LargestObject" } };
       } else if (options.filter.type !== "LargestObject") {
@@ -986,12 +1190,11 @@ export class SessionImpl implements Session {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n; // Client uses even IDs
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
-    // Create subscriber implementation
-    // Note: trackAlias will be set when SUBSCRIBE_OK is received
+    // サブスクライバー実装を作成
+    // 注意: trackAlias は SUBSCRIBE_OK 受信時に設定される
     const impl = new SubscriberImpl(
       namespace,
       trackName,
@@ -1003,17 +1206,17 @@ export class SessionImpl implements Session {
       callbacks.error,
     );
 
-    // Set up unsubscribe callback
+    // サブスクリプションキャンセルのコールバック
     impl.onUnsubscribe = async () => {
-      await this.sendUnsubscribe(impl);
+      await this.cancelSubscription(impl);
     };
 
-    // Set up update callback
-    impl.onUpdate = async (updateOptions: SubscribeUpdateOptions) => {
-      await this.sendSubscribeUpdate(impl, updateOptions);
+    // 更新コールバックを設定
+    impl.onUpdate = async (updateOptions: RequestUpdateOptions) => {
+      await this.sendRequestUpdate(impl, updateOptions);
     };
 
-    // Create promise for SUBSCRIBE_OK
+    // SUBSCRIBE_OK の Promise を作成
     const promise = new Promise<Subscriber>((resolve, reject) => {
       this.pendingSubscribe.set(requestId, {
         resolve,
@@ -1024,60 +1227,18 @@ export class SessionImpl implements Session {
       });
     });
 
-    // Build parameters
-    const parameters: Parameter[] = [];
+    const parameters = buildSubscribeParameters(options);
 
-    // SUBSCRIPTION_FILTER (0x21) - draft-ietf-moq-transport-15 Section 9.2.1.7
-    if (options?.filter !== undefined) {
-      parameters.push(encodeSubscriptionFilterParameter(options.filter));
-    }
-
-    // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-15 Section 9.2.1.2
-    if (options?.deliveryTimeout !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.DELIVERY_TIMEOUT,
-        value: encodeVarint(options.deliveryTimeout),
-      });
-    }
-
-    // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-15 Section 9.2.1.5
-    if (options?.subscriberPriority !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.SUBSCRIBER_PRIORITY,
-        value: encodeVarint(options.subscriberPriority),
-      });
-    }
-
-    // GROUP_ORDER (0x22) - draft-ietf-moq-transport-15 Section 9.2.1.6
-    if (options?.groupOrder !== undefined) {
-      const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
-      parameters.push({
-        type: VersionSpecificParameterType.GROUP_ORDER,
-        value: encodeVarint(groupOrderValue),
-      });
-    }
-
-    if (options?.newGroupRequest !== undefined) {
-      // NEW_GROUP_REQUEST (0x32) - varint parameter
-      parameters.push({
-        type: VersionSpecificParameterType.NEW_GROUP_REQUEST,
-        value: encodeVarint(options.newGroupRequest),
-      });
-    }
-
-    // FORWARD (0x10) - draft-ietf-moq-transport-15 Section 9.2.1.10
-    // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-    if (options?.forward === false) {
-      parameters.push({
-        type: VersionSpecificParameterType.FORWARD,
-        value: encodeVarint(0n),
-      });
-    }
-
-    // Send SUBSCRIBE message (without trackAlias - it comes from SUBSCRIBE_OK)
+    // SUBSCRIBE メッセージを双方向ストリームで送信
+    // draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
+    // SUBSCRIBE は新しい双方向ストリームで送信される。
+    // draft-ietf-moq-transport-17 Section 3.3
     const subscribeMsg = {
       type: MessageType.SUBSCRIBE,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters,
@@ -1086,16 +1247,24 @@ export class SessionImpl implements Session {
     const payload = encodeSubscribePayload(
       subscribeMsg as Parameters<typeof encodeSubscribePayload>[0],
     );
-    await this.sendControlMessage(MessageType.SUBSCRIBE, payload, {
-      requestId: requestId.toString(),
-      trackNamespace: namespace,
-      trackName,
-      filterType: options?.filter?.type,
-      DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-      SUBSCRIBER_PRIORITY: options?.subscriberPriority,
-      GROUP_ORDER: options?.groupOrder,
-      NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
-    });
+    const streamInfo = await this.sendRequestOnBidiStream(
+      requestId,
+      MessageType.SUBSCRIBE,
+      payload,
+      {
+        requestId: requestId.toString(),
+        trackNamespace: namespace,
+        trackName,
+        filterType: options?.filter?.type,
+        DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
+        SUBSCRIBER_PRIORITY: options?.subscriberPriority,
+        GROUP_ORDER: options?.groupOrder,
+        NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
+      },
+    );
+
+    // 双方向ストリームからレスポンスを読み取る
+    void this.readSubscribeResponse(requestId, streamInfo.stream, streamInfo.controlReader);
 
     return promise;
   }
@@ -1103,7 +1272,7 @@ export class SessionImpl implements Session {
   /**
    * 過去のデータを取得する（Standalone Fetch）
    *
-   * draft-ietf-moq-transport-15 Section 9.16:
+   * draft-ietf-moq-transport-17 Section 9.14 (FETCH):
    * FETCH requests a range of Objects from a track.
    */
   async fetch(
@@ -1124,9 +1293,8 @@ export class SessionImpl implements Session {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
     // Fetcher 実装を作成
     const impl = new FetcherImpl(
@@ -1138,20 +1306,32 @@ export class SessionImpl implements Session {
       callbacks.error,
     );
 
-    // キャンセルコールバックを設定
+    // draft-ietf-moq-transport-17 Section 5.2:
+    // キャンセルはストリームを閉じることで行う。
     impl.onCancel = async () => {
-      await this.sendFetchCancel(impl);
+      await this.cancelFetch(impl);
     };
 
     // FETCH_OK を待つ Promise
     const promise = new Promise<Fetcher>((resolve, reject) => {
-      this.pendingFetch.set(requestId, { resolve, reject, impl });
+      this.pendingFetch.set(requestId, {
+        resolve,
+        reject,
+        impl,
+        startLocation: options.startLocation,
+      });
     });
 
-    // FETCH メッセージを送信（Standalone Fetch）
+    // FETCH メッセージを双方向ストリームで送信（Standalone Fetch）
+    // draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+    // FETCH は新しい双方向ストリームで送信される。
+    // draft-ietf-moq-transport-17 Section 3.3
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       fetchType: FetchType.STANDALONE,
       standalone: {
         trackNamespace,
@@ -1163,7 +1343,7 @@ export class SessionImpl implements Session {
     };
 
     const payload = encodeFetchPayload(fetchMsg);
-    await this.sendControlMessage(MessageType.FETCH, payload, {
+    const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
       requestId: requestId.toString(),
       trackNamespace: namespace,
       trackName,
@@ -1171,13 +1351,16 @@ export class SessionImpl implements Session {
       endLocation: `${options.endLocation.group}:${options.endLocation.object}`,
     });
 
+    // 双方向ストリームからレスポンスを読み取る
+    void this.readFetchResponse(requestId, streamInfo.stream, streamInfo.controlReader);
+
     return promise;
   }
 
   /**
    * トラックの状態を問い合わせる
    *
-   * draft-ietf-moq-transport-15 Section 9.19:
+   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
    * TRACK_STATUS requests information about a track without subscribing.
    * The response is REQUEST_OK with the same parameters as SUBSCRIBE_OK.
    */
@@ -1194,30 +1377,43 @@ export class SessionImpl implements Session {
     const requestId = this.nextRequestId;
     this.nextRequestId += 2n;
 
-    const encoder = new TextEncoder();
     const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encoder.encode(trackName);
+    const trackNameBytes = encodeTrackName(trackName);
 
     // REQUEST_OK を待つ Promise
     const promise = new Promise<TrackStatusResult>((resolve, reject) => {
       this.pendingTrackStatus.set(requestId, { resolve, reject });
     });
 
-    // TRACK_STATUS メッセージを送信
+    // TRACK_STATUS メッセージを双方向ストリームで送信
+    // draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
+    // TRACK_STATUS は新しい双方向ストリームで送信される。
+    // draft-ietf-moq-transport-17 Section 3.3
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters: [],
     };
 
     const payload = encodeTrackStatusPayload(trackStatusMsg);
-    await this.sendControlMessage(MessageType.TRACK_STATUS, payload, {
-      requestId: requestId.toString(),
-      trackNamespace: namespace,
-      trackName,
-    });
+    const streamInfo = await this.sendRequestOnBidiStream(
+      requestId,
+      MessageType.TRACK_STATUS,
+      payload,
+      {
+        requestId: requestId.toString(),
+        trackNamespace: namespace,
+        trackName,
+      },
+    );
+
+    // 双方向ストリームからレスポンスを読み取る
+    void this.readTrackStatusResponse(requestId, streamInfo.stream, streamInfo.controlReader);
 
     return promise;
   }
@@ -1225,20 +1421,27 @@ export class SessionImpl implements Session {
   /**
    * Namespace をサブスクライブする（トラック発見用）
    *
-   * draft-ietf-moq-transport-15 Section 9.23:
-   * SUBSCRIBE_NAMESPACE requests matching published namespaces.
+   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+   * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
+   * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
+   *
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * キャンセルは FIN または RESET_STREAM で行う。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
   async subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
+    subscribeOptions: NamespaceSubscribeMode = NamespaceSubscribeMode.BOTH,
   ): Promise<NamespaceSubscription> {
     if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
+      throw new Error("session is closed");
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
     if (this.receivedGoaway) {
-      throw new Error("Cannot subscribe namespace after receiving GOAWAY");
+      throw new Error("cannot subscribe namespace after receiving GOAWAY");
     }
 
     const requestId = this.nextRequestId;
@@ -1246,45 +1449,280 @@ export class SessionImpl implements Session {
 
     const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
-    // REQUEST_OK を待つ Promise
-    const promise = new Promise<NamespaceSubscription>((resolve, reject) => {
-      this.pendingNamespaceSubscribe.set(requestId, { resolve, reject, callbacks });
-    });
+    // 専用の双方向ストリームを作成
+    const stream = await this.transport.createBidirectionalStream();
+    const streamReader = stream.readable.getReader();
+    const controlReader = new ControlStreamReader();
+    const writer = stream.writable.getWriter();
 
-    // SUBSCRIBE_NAMESPACE メッセージを送信
+    // SUBSCRIBE_NAMESPACE メッセージを構築
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
-      parameters: [],
+      subscribeOptions,
+      parameters: [] as [],
     };
 
+    // メッセージをエンコードして送信
+    // draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // ControlStreamWriter に委譲する。
+    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    await this.sendControlMessage(MessageType.SUBSCRIBE_NAMESPACE, payload, {
-      requestId: requestId.toString(),
-      trackNamespacePrefix: namespacePrefix,
+    const controlWriter = new ControlStreamWriter();
+    const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
+
+    // デバッグコールバック
+    this.callbacks.debug?.({
+      direction: "send",
+      type: MessageType.SUBSCRIBE_NAMESPACE,
+      typeName: getMessageTypeName(MessageType.SUBSCRIBE_NAMESPACE),
+      payload,
+      decoded: {
+        requestId: requestId.toString(),
+        trackNamespacePrefix: namespacePrefix,
+        subscribeOptions,
+      },
+      timestamp: Date.now(),
     });
 
-    return promise;
+    await writer.write(framed);
+
+    // REQUEST_OK/REQUEST_ERROR を待つ Promise
+    return new Promise<NamespaceSubscription>((resolve, reject) => {
+      // 状態を登録
+      this.namespaceSubscriptions.set(requestId, {
+        callbacks,
+        state: "active",
+        namespacePrefix,
+        stream,
+        streamReader,
+        controlReader,
+        writer,
+      });
+
+      // 専用ストリームの受信ループを開始
+      void this.startNamespaceStreamLoop(requestId, resolve, reject);
+    });
+  }
+
+  /**
+   * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
+   *
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * REQUEST_OK/REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE を処理する。
+   */
+  private async startNamespaceStreamLoop(
+    requestId: bigint,
+    resolve: (subscription: NamespaceSubscription) => void,
+    reject: (err: Error) => void,
+  ): Promise<void> {
+    const subscription = this.namespaceSubscriptions.get(requestId);
+    if (!subscription || !subscription.streamReader || !subscription.controlReader) {
+      reject(new Error("namespace subscription not found"));
+      return;
+    }
+
+    const { streamReader, controlReader, callbacks } = subscription;
+    let resolved = false;
+    // NAMESPACE 受信済 suffix を追跡し、NAMESPACE_DONE が先行で来たら PROTOCOL_VIOLATION で閉じる
+    // draft-ietf-moq-transport-17 §9.20 (line 4332-4384)
+    const seenNamespaceSuffixes = new Set<string>();
+    const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
+
+    try {
+      while (subscription.state === "active") {
+        const { value, done } = await streamReader.read();
+        if (done) {
+          // ストリームが閉じられた
+          break;
+        }
+
+        const messages = controlReader.feed(value);
+        for (const msg of messages) {
+          const messageType = msg.type;
+          const messagePayload = msg.payload;
+
+          // デバッグコールバック
+          this.callbacks.debug?.({
+            direction: "recv",
+            type: messageType,
+            typeName: getMessageTypeName(messageType),
+            payload: messagePayload,
+            timestamp: Date.now(),
+          });
+
+          // draft-ietf-moq-transport-17 §6.1 / §9.20:
+          // "If the subscriber receives any frame other than a REQUEST_OK or a
+          //  REQUEST_ERROR as the first frame on the response half of the stream,
+          //  then it MUST close the session with a PROTOCOL_VIOLATION."
+          if (
+            !resolved &&
+            messageType !== MessageType.REQUEST_OK &&
+            messageType !== MessageType.REQUEST_ERROR
+          ) {
+            this.closeWithError(
+              new SessionError(
+                `expected REQUEST_OK or REQUEST_ERROR as first message on namespace stream, got 0x${messageType.toString(16)}`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+            return;
+          }
+
+          switch (messageType) {
+            case MessageType.REQUEST_OK: {
+              if (resolved) {
+                // draft-ietf-moq-transport-17 §6.1:
+                // "The subscriber SHOULD close the session with a protocol error
+                //  if it detects receiving more than one."
+                this.closeWithError(
+                  new SessionError(
+                    "received second REQUEST_OK on namespace stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
+              // Request ID はストリームが特定するため不要
+              // draft-ietf-moq-transport-17 Section 9.2
+              decodeRequestOkPayload(messagePayload);
+              // サブスクリプション成功
+              resolved = true;
+              const namespaceSubscription = this.createNamespaceSubscription(requestId);
+              resolve(namespaceSubscription);
+              break;
+            }
+
+            case MessageType.REQUEST_ERROR: {
+              if (resolved) {
+                // draft-ietf-moq-transport-17 §6.1: REQUEST_OK の後に REQUEST_ERROR は来ない
+                this.closeWithError(
+                  new SessionError(
+                    "received REQUEST_ERROR after REQUEST_OK on namespace stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
+              // Request ID はストリームが特定するため不要
+              // draft-ietf-moq-transport-17 Section 9.2
+              const decodedMsg = decodeRequestErrorPayload(messagePayload);
+              // サブスクリプション失敗
+              const error = new RequestError(
+                decodedMsg.reasonPhrase,
+                Number(decodedMsg.errorCode) as RequestErrorCode,
+              );
+              subscription.state = "closed";
+              callbacks.error?.(error);
+              reject(error);
+              return;
+            }
+
+            case MessageType.NAMESPACE: {
+              const decodedMsg = decodeNamespacePayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              seenNamespaceSuffixes.add(namespaceSuffixKey(suffixStrings));
+              callbacks.onNamespace?.(suffixStrings);
+              break;
+            }
+
+            case MessageType.NAMESPACE_DONE: {
+              const decodedMsg = decodeNamespaceDonePayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              // draft-ietf-moq-transport-17 §9.20:
+              // "The publisher MUST NOT send NAMESPACE_DONE for a namespace suffix before
+              //  the corresponding NAMESPACE. If a subscriber receives a NAMESPACE_DONE
+              //  before the corresponding NAMESPACE, it MUST close the session with a
+              //  'PROTOCOL_VIOLATION'."
+              if (!seenNamespaceSuffixes.has(namespaceSuffixKey(suffixStrings))) {
+                this.closeWithError(
+                  new SessionError(
+                    `received NAMESPACE_DONE before corresponding NAMESPACE: suffix=${JSON.stringify(suffixStrings)}`,
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              callbacks.onNamespaceDone?.(suffixStrings);
+              break;
+            }
+
+            case MessageType.PUBLISH_BLOCKED: {
+              // draft-ietf-moq-transport-17 §6.1 / §9.21 (PUBLISH_BLOCKED):
+              // Subscription を作成できない場合に Publisher が送出する正規メッセージ
+              const decodedMsg = decodePublishBlockedPayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              const trackName = new TextDecoder().decode(decodedMsg.trackName);
+              callbacks.onPublishBlocked?.(suffixStrings, trackName);
+              break;
+            }
+
+            default:
+              // draft-ietf-moq-transport-17 Section 9 (Control Messages):
+              // "An endpoint that receives an unknown message type MUST close the session."
+              this.closeWithError(
+                new SessionError(
+                  `unknown namespace stream message type: 0x${messageType.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+          }
+        }
+      }
+    } catch (error) {
+      if (subscription.state === "active") {
+        subscription.state = "closed";
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        // draft-ietf-moq-transport-17 Section 3.5:
+        // WebTransport セッション終了起源の read 中断は subscription の error には
+        // 流さない (session-level の close で通知される)。
+        // ただし subscribe Promise が未解決ならユーザーが await しているので reject する必要がある。
+        if (!isSessionClosedError(normalizedError)) {
+          callbacks.error?.(normalizedError);
+        }
+        if (!resolved) {
+          reject(normalizedError);
+        }
+      }
+    } finally {
+      // クリーンアップ
+      subscription.state = "closed";
+      streamReader.releaseLock();
+      this.namespaceSubscriptions.delete(requestId);
+    }
   }
 
   /**
    * Namespace を公開する（トラック発見用）
    *
-   * draft-ietf-moq-transport-15 Section 9.20:
-   * PUBLISH_NAMESPACE notifies that a Track Namespace has tracks available.
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+   * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.17
+   *
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * 公開のキャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
   async publishNamespace(
     namespace: string[],
     callbacks?: NamespacePublicationCallbacks,
   ): Promise<NamespacePublication> {
     if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
+      throw new Error("session is closed");
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
     if (this.receivedGoaway) {
-      throw new Error("Cannot publish namespace after receiving GOAWAY");
+      throw new Error("cannot publish namespace after receiving GOAWAY");
     }
 
     const requestId = this.nextRequestId;
@@ -1292,36 +1730,189 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
 
-    // REQUEST_OK を待つ Promise
-    const promise = new Promise<NamespacePublication>((resolve, reject) => {
-      this.pendingNamespacePublish.set(requestId, { resolve, reject, callbacks, namespace });
-    });
+    // 専用の双方向ストリームを作成
+    const stream = await this.transport.createBidirectionalStream();
+    const streamReader = stream.readable.getReader();
+    const controlReader = new ControlStreamReader();
+    const writer = stream.writable.getWriter();
 
-    // PUBLISH_NAMESPACE メッセージを送信
+    // PUBLISH_NAMESPACE メッセージを構築
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // 0 は依存なしを意味する
+      requiredRequestIdDelta: 0n,
       trackNamespace,
       parameters: [],
     };
 
+    // メッセージをエンコードして送信
+    // draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // ControlStreamWriter に委譲する。
+    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.17
     const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-    await this.sendControlMessage(MessageType.PUBLISH_NAMESPACE, payload, {
-      requestId: requestId.toString(),
-      trackNamespace: namespace,
+    const controlWriter = new ControlStreamWriter();
+    const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
+
+    // デバッグコールバック
+    this.callbacks.debug?.({
+      direction: "send",
+      type: MessageType.PUBLISH_NAMESPACE,
+      typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
+      payload,
+      decoded: {
+        requestId: requestId.toString(),
+        trackNamespace: namespace,
+      },
+      timestamp: Date.now(),
     });
 
-    return promise;
+    await writer.write(framed);
+
+    // REQUEST_OK / REQUEST_ERROR を待つ Promise
+    return new Promise<NamespacePublication>((resolve, reject) => {
+      // 状態を登録
+      this.namespacePublications.set(requestId, {
+        callbacks,
+        state: "pending",
+        namespace,
+        stream,
+        streamReader,
+        controlReader,
+        writer,
+      });
+
+      // 専用ストリームの受信ループを開始
+      void this.startNamespacePublicationStreamLoop(requestId, resolve, reject);
+    });
+  }
+
+  /**
+   * PUBLISH_NAMESPACE 専用ストリームの受信ループ
+   *
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
+   * それ以外のメッセージを受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+   */
+  private async startNamespacePublicationStreamLoop(
+    requestId: bigint,
+    resolve: (publication: NamespacePublication) => void,
+    reject: (err: Error) => void,
+  ): Promise<void> {
+    const publication = this.namespacePublications.get(requestId);
+    if (!publication) {
+      reject(new Error("namespace publication not found"));
+      return;
+    }
+
+    const { streamReader, controlReader, callbacks } = publication;
+    let resolved = false;
+
+    try {
+      while (publication.state !== "closed") {
+        const { value, done } = await streamReader.read();
+        if (done) {
+          // ストリームが peer により閉じられた
+          break;
+        }
+
+        const messages = controlReader.feed(value);
+        for (const msg of messages) {
+          const messageType = msg.type;
+          const messagePayload = msg.payload;
+
+          // デバッグコールバック
+          this.callbacks.debug?.({
+            direction: "recv",
+            type: messageType,
+            typeName: getMessageTypeName(messageType),
+            payload: messagePayload,
+            timestamp: Date.now(),
+          });
+
+          switch (messageType) {
+            case MessageType.REQUEST_OK: {
+              // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
+              // Request ID はストリームが特定するため不要
+              // draft-ietf-moq-transport-17 Section 9.2
+              decodeRequestOkPayload(messagePayload);
+              if (resolved) {
+                // 二重応答は仕様違反
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              publication.state = "active";
+              resolved = true;
+              resolve(this.createNamespacePublication(requestId));
+              break;
+            }
+
+            case MessageType.REQUEST_ERROR: {
+              // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
+              // Request ID はストリームが特定するため不要
+              // draft-ietf-moq-transport-17 Section 9.2
+              const decodedMsg = decodeRequestErrorPayload(messagePayload);
+              const error = new RequestError(
+                decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
+                Number(decodedMsg.errorCode) as RequestErrorCode,
+              );
+              publication.state = "closed";
+              callbacks?.error?.(error);
+              if (!resolved) {
+                reject(error);
+              }
+              return;
+            }
+
+            default:
+              // draft-ietf-moq-transport-17 Section 9 (Control Messages):
+              // "An endpoint that receives an unknown message type MUST close the session."
+              this.closeWithError(
+                new SessionError(
+                  `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+          }
+        }
+      }
+    } catch (error) {
+      if (publication.state !== "closed") {
+        publication.state = "closed";
+        const wrapped = error instanceof Error ? error : new Error(String(error));
+        callbacks?.error?.(wrapped);
+        if (!resolved) {
+          reject(wrapped);
+        }
+      }
+    } finally {
+      // クリーンアップ
+      publication.state = "closed";
+      try {
+        streamReader.releaseLock();
+      } catch {
+        // 既に解放済みの場合は無視
+      }
+      this.namespacePublications.delete(requestId);
+    }
   }
 
   /**
    * GOAWAY を送信してセッション終了を通知する
    *
-   * draft-ietf-moq-transport-15 Section 9.4:
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY):
    * An endpoint sends a GOAWAY message to inform the peer it intends to
    * close the session soon.
    */
-  async goaway(newSessionUri?: string): Promise<void> {
+  async goaway(newSessionUri?: string, timeout?: bigint): Promise<void> {
     if (this.sessionState === "closed") {
       throw new Error("Session is closed");
     }
@@ -1331,37 +1922,53 @@ export class SessionImpl implements Session {
       throw new Error("GOAWAY already sent");
     }
 
+    // draft-ietf-moq-transport-17 Section 9.5 (GOAWAY):
+    // "When sent by a client, the New Session URI MUST be zero length."
+    // moqt-js はクライアント実装のため、newSessionUri は常に空文字列
+    if (newSessionUri !== undefined && newSessionUri !== "") {
+      throw new Error("client MUST send GOAWAY with empty New Session URI");
+    }
+
     this.sentGoaway = true;
 
+    const goawayTimeout = timeout ?? 0n;
     const payload = encodeGoawayPayload({
       type: MessageType.GOAWAY,
-      newSessionUri: newSessionUri ?? "",
+      newSessionUri: "",
+      timeout: goawayTimeout,
     });
 
     await this.sendControlMessage(MessageType.GOAWAY, payload, {
       newSessionUri: newSessionUri ?? "",
+      timeout: goawayTimeout.toString(),
     });
+
+    // draft-ietf-moq-transport-17 Section 3.6:
+    // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
+    // the indicated timeout if there are still open subscriptions or
+    // fetches on a connection."
+    if (goawayTimeout > 0n) {
+      this.goawayTimeoutId = setTimeout(() => {
+        if (this.sessionState === "connected") {
+          this.closeWithError(
+            new SessionError("GOAWAY timeout expired", SessionErrorCode.GOAWAY_TIMEOUT),
+          );
+        }
+      }, Number(goawayTimeout));
+    }
   }
 
   /**
    * セッションレベルの統計情報を取得する
    */
   getStatistics(): SessionStatistics {
-    // pendingSubgroupStreams のバイト数を計算
-    let pendingSubgroupStreamsBytes = 0;
-    for (const streams of this.pendingSubgroupStreams.values()) {
-      for (const stream of streams) {
-        pendingSubgroupStreamsBytes += stream.data.byteLength;
-      }
-    }
-
     return {
       objectsReceivedViaFetch: this.statsObjectsReceivedViaFetch,
       objectsReceivedViaSubscribe: this.statsObjectsReceivedViaSubscribe,
       bytesReceivedViaFetch: this.statsBytesReceivedViaFetch,
       bytesReceivedViaSubscribe: this.statsBytesReceivedViaSubscribe,
-      pendingSubgroupStreamsCount: this.pendingSubgroupStreams.size,
-      pendingSubgroupStreamsBytes,
+      pendingSubgroupStreamsCount: this.pendingSubgroupBuffer.streamCount,
+      pendingSubgroupStreamsBytes: this.pendingSubgroupBuffer.totalBytes,
       activePublishers: this.publishers.size,
       activeSubscribers: this.subscribers.size,
       activeFetchers: this.fetchers.size,
@@ -1378,18 +1985,31 @@ export class SessionImpl implements Session {
 
   /**
    * Close the session
+   *
+   * draft-ietf-moq-transport-17 Section 3.5:
+   * "When WebTransport is used, the session is closed using the
+   *  CLOSE_WEBTRANSPORT_SESSION capsule."
+   * 正常終了時もユーザー起点で WebTransport を閉じる必要がある。
+   * 保持している双方向 / 単方向ストリームの writer を閉じてから transport を閉じることで、
+   * QUIC ストリームの FIN 送信とセッション終了通知を行う。
    */
-  async close(): Promise<void> {
+  async close(closeCode: number = SessionErrorCode.NO_ERROR, reason = ""): Promise<void> {
     if (this.sessionState === "closed") {
       return;
     }
 
     this.sessionState = "closed";
 
-    // Close all publishers, subscribers and fetchers
-    // Note: We use markClosed() instead of handleEnd() because session close
-    // is session-level termination (Section 3.4), not track-level PUBLISH_DONE.
-    // The end callback is only for PUBLISH_DONE.
+    // GOAWAY タイムアウトタイマーをクリア
+    if (this.goawayTimeoutId !== null) {
+      clearTimeout(this.goawayTimeoutId);
+      this.goawayTimeoutId = null;
+    }
+
+    // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
+    // 注意: セッションクローズはトラックレベルの PUBLISH_DONE ではなく
+    // セッションレベルの終了 (Section 3.4) であるため handleEnd() ではなく
+    // markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
     for (const pub of this.publishers.values()) {
       pub.markClosed();
     }
@@ -1400,26 +2020,147 @@ export class SessionImpl implements Session {
       fetcher.markClosed();
     }
 
-    // Close all namespace subscriptions
+    // Pending リクエストの Promise を reject する
+    const sessionClosedError = new Error("session closed");
+    for (const [, pending] of this.pendingPublish) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingPublish.clear();
+    for (const [, pending] of this.pendingSubscribe) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingSubscribe.clear();
+    for (const [, pending] of this.pendingFetch) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingFetch.clear();
+    for (const [, pending] of this.pendingRequestUpdate) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingRequestUpdate.clear();
+    for (const [, pending] of this.pendingTrackStatus) {
+      pending.reject(sessionClosedError);
+    }
+    this.pendingTrackStatus.clear();
+
+    // Pending Subgroup ストリームの buffer を解放
+    // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
+    this.pendingSubgroupBuffer.notifyAll("session-close");
+
+    // Fetcher の登録待ちコールバックを解放
+    for (const callbacks of this.fetcherReadyCallbacks.values()) {
+      for (const cb of callbacks) {
+        cb();
+      }
+    }
+    this.fetcherReadyCallbacks.clear();
+
+    // 保持している双方向 / 単方向ストリームの writer / reader を閉じる。
+    // peer 側に FIN / RESET_STREAM を送って受信ループを解除させる。
+    // 既に閉じている等の理由で例外が出ても無視する。
+    const closeWriterSafely = async (
+      writer: WritableStreamDefaultWriter<Uint8Array>,
+    ): Promise<void> => {
+      try {
+        await writer.close();
+      } catch {
+        // ストリームが既に閉じている / abort されている場合は無視
+      }
+    };
+    const cancelReaderSafely = async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+    ): Promise<void> => {
+      try {
+        await reader.cancel();
+      } catch {
+        // 既に解放されている場合は無視
+      }
+    };
+
+    // SUBSCRIBE_NAMESPACE 用の双方向ストリーム
     for (const subscription of this.namespaceSubscriptions.values()) {
       subscription.state = "closed";
+      if (subscription.writer) {
+        void closeWriterSafely(subscription.writer);
+      }
+      if (subscription.streamReader) {
+        void cancelReaderSafely(subscription.streamReader);
+      }
     }
     this.namespaceSubscriptions.clear();
 
-    // Close all namespace publications
+    // PUBLISH_NAMESPACE 用の双方向ストリーム
     for (const publication of this.namespacePublications.values()) {
       publication.state = "closed";
+      void closeWriterSafely(publication.writer);
+      void cancelReaderSafely(publication.streamReader);
     }
     this.namespacePublications.clear();
 
-    // Close WebTransport
-    // closed Promise のエラーを無視（サーバー側からクローズされた場合など）
-    this.transport.closed.catch(() => {});
+    // SUBSCRIBE / PUBLISH / FETCH 等のリクエスト用双方向ストリーム
+    for (const entry of this.requestStreams.values()) {
+      void closeWriterSafely(entry.writer);
+    }
+    this.requestStreams.clear();
 
-    this.callbacks.close?.();
+    // Publisher 用の単方向ストリーム (Subgroup ストリーム)
+    for (const entry of this.publisherStreams.values()) {
+      void closeWriterSafely(entry.writer);
+    }
+    this.publisherStreams.clear();
+
+    // 制御用送信ストリーム (単方向) を閉じる。
+    // writer は SETUP 送信時に releaseLock しているため、ここでは underlying stream を閉じる。
+    if (this.controlSendStream) {
+      try {
+        await this.controlSendStream.close();
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+    }
+
+    // WebTransport セッションを閉じて peer に終了を通知する
+    try {
+      this.transport.close({ closeCode, reason });
+    } catch {
+      // 既に閉じている場合は無視
+    }
+
+    // close コールバックはコンストラクタの transport.closed 監視で呼ばれる
   }
 
-  // Private methods
+  // プライベートメソッド
+
+  /**
+   * セッションエラーを通知してセッションを閉じる
+   *
+   * draft-ietf-moq-transport-17 Section 3.5:
+   * プロトコル違反等のエラーが発生した場合、セッションを閉じる必要がある。
+   */
+  private closeWithError(error: SessionError): void {
+    this.callbacks.error?.(error);
+    void this.close(error.code, error.message);
+  }
+
+  /**
+   * read loop で発生したエラーを必要なときだけ callbacks.error に通知する
+   *
+   * draft-ietf-moq-transport-17 Section 3.5:
+   * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
+   * reject するが、これは正常な終了通知であり onError には流さない。
+   * sessionState がすでに connected でない、または error が WebTransport セッション
+   * 終了起源の場合はスキップし、それ以外のみ通知する。
+   */
+  private notifyErrorIfActive(error: Error): void {
+    if (this.sessionState !== "connected") {
+      return;
+    }
+    if (isSessionClosedError(error)) {
+      this.sessionState = "closed";
+      return;
+    }
+    this.callbacks.error?.(error);
+  }
 
   private emitDebug(
     direction: "send" | "recv",
@@ -1444,7 +2185,7 @@ export class SessionImpl implements Session {
     payload: Uint8Array,
     decoded?: Record<string, unknown>,
   ): Promise<void> {
-    if (!this.controlStream || !this.controlWriter) {
+    if (!this.controlSendStream || !this.controlWriter) {
       throw new Error("Control stream not initialized");
     }
 
@@ -1452,20 +2193,77 @@ export class SessionImpl implements Session {
     this.emitDebug("send", type, payload, decoded);
 
     const message = this.controlWriter.encode(type, payload);
-    const writer = this.controlStream.writable.getWriter();
+    const writer = this.controlSendStream.getWriter();
     await writer.write(message);
     writer.releaseLock();
   }
 
   /**
+   * リクエストを双方向ストリーム上で送信する
+   *
+   * draft-ietf-moq-transport-17 Section 3.3:
+   * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS 等) は
+   * 双方向ストリーム上で送受信される。
+   * draft-ietf-moq-transport-17 Section 3.3
+   *
+   * @param requestId - リクエスト ID
+   * @param type - メッセージタイプ
+   * @param payload - エンコード済みペイロード
+   * @param decoded - デバッグ用のデコード済みメッセージ
+   * @returns 双方向ストリームの情報
+   */
+  private async sendRequestOnBidiStream(
+    requestId: bigint,
+    type: number,
+    payload: Uint8Array,
+    decoded?: Record<string, unknown>,
+  ): Promise<{
+    stream: WebTransportBidirectionalStream;
+    writer: WritableStreamDefaultWriter<Uint8Array>;
+    controlReader: ControlStreamReader;
+  }> {
+    return bidi.bidiSendRequestOnBidiStream(
+      this as unknown as bidi.BidiSessionInternal,
+      requestId,
+      type,
+      payload,
+      decoded,
+    );
+  }
+
+  /**
    * Send an object on a subgroup stream
-   * draft-ietf-moq-transport-15 Section 2.2:
+   * draft-ietf-moq-transport-17 Section 2.2:
    * "Objects in a subgroup ... are sent on a single stream whenever possible."
    *
    * 同じ Group 内のオブジェクトは同じストリームで送信する
    * 新しい Group が来たら前のストリームを閉じて新規作成する
+   *
+   * sendObject は async だが fire-and-forget で呼ばれるため、
+   * トラック単位で Promise チェーンによるシリアライズを行う。
+   * これにより createUnidirectionalStream() の await 中に
+   * 次の呼び出しが割り込んでストリームを二重作成する問題を防ぐ。
    */
-  private async sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
+  private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
+    const trackAlias = publisher.getTrackAlias();
+    const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
+    // 前の Promise のエラーをキャッチしてチェーンが止まらないようにする。
+    // エラーが伝播すると後続の全ての .then() がスキップされ、
+    // 新しいオブジェクトが送信されなくなる。
+    const currentPromise = previousPromise
+      .catch(() => {})
+      .then(() => this.sendObjectInternal(publisher, params))
+      .catch((err: unknown) => {
+        publisher.handleError(err instanceof Error ? err : new Error(String(err)));
+      });
+    this.publisherSendQueues.set(trackAlias, currentPromise);
+    return currentPromise;
+  }
+
+  private async sendObjectInternal(
+    publisher: PublisherImpl,
+    params: SendObjectParams,
+  ): Promise<void> {
     const trackAlias = publisher.getTrackAlias();
     const groupId = BigInt(params.groupId);
     const objectId = BigInt(params.objectId);
@@ -1475,24 +2273,39 @@ export class SessionImpl implements Session {
     // 新しい Group または最初のオブジェクト → 新しいストリームを開く
     if (!streamState || streamState.groupId !== groupId) {
       // 前のストリームを FIN で閉じる
+      // 先に Map から削除して、他の sendObject が同じストリームを閉じようとするのを防ぐ
       if (streamState) {
-        await streamState.writer.close();
+        this.publisherStreams.delete(trackAlias);
+        try {
+          await streamState.writer.close();
+        } catch {
+          // 既に閉じられている場合は無視
+        }
       }
 
       // 新しいストリームを開く
       const stream = await this.transport.createUnidirectionalStream();
       this.statsUnidirectionalStreamsOpened++;
+      publisher.incrementDataStreamCount();
       const writer = stream.getWriter();
 
       // Subgroup Header を書き込む
-      // draft-ietf-moq-transport-15 Section 10.4.2
-      const hasExtensions = params.extensions !== undefined && params.extensions.length > 0;
-      const headerType = hasExtensions ? SubgroupHeaderType.BASE_EXT : SubgroupHeaderType.BASE;
+      // draft-ietf-moq-transport-17 Section 10.4.2
+      // draft-ietf-moq-transport-17 Section 2.2:
+      // "Objects from the same Subgroup MUST NOT be sent on different streams"
+      // FirstObjectId モードを使用して、各ストリームの最初の Object ID を
+      // Subgroup ID として自動的に一意にする
+      //
+      // PROPERTIES ビット (0x01):
+      // "When set to 1, the Object Properties structure is present in all Objects.
+      //  When set to 0, the field is never present."
+      // Properties の有無はストリーム開始時に全オブジェクトについて決められないため、
+      // 常に FIRST_OBJ_EXT (Properties あり) を使用し、
+      // properties がないオブジェクトには Properties Length = 0 を送信する。
       const header = encodeSubgroupHeader({
-        type: headerType,
+        type: SubgroupHeaderType.FIRST_OBJ_EXT,
         trackAlias,
         groupId,
-        subgroupId: 0n,
         publisherPriority: params.priority ?? 128,
       });
       await writer.write(header);
@@ -1502,43 +2315,33 @@ export class SessionImpl implements Session {
     }
 
     // Object ID Delta を計算
-    // draft-ietf-moq-transport-15 Section 10.4.2:
+    // draft-ietf-moq-transport-17 Section 10.4.2:
     // "The Object ID Delta + 1 is added to the previous Object ID ...
     //  The Object ID is the Object ID Delta if it's the first Object"
-    const objectIdDelta =
-      streamState.previousObjectId < 0n ? objectId : objectId - streamState.previousObjectId - 1n;
+    const objectIdDelta = calculateObjectIdDelta(streamState.previousObjectId, objectId);
 
     // Object fields を構築
-    // draft-ietf-moq-transport-15 Section 10.4.2 Figure 28
-    const hasExtensions = params.extensions !== undefined && params.extensions.length > 0;
-    const objectIdDeltaBytes = encodeVarint(objectIdDelta);
-    const payloadLenBytes = encodeVarint(params.payload.length);
-    const extensionsDataLength = hasExtensions ? params.extensions!.length : 0;
-    const extensionsLengthBytes = hasExtensions ? encodeVarint(extensionsDataLength) : null;
-
-    const totalLength =
-      objectIdDeltaBytes.length +
-      (extensionsLengthBytes ? extensionsLengthBytes.length + extensionsDataLength : 0) +
-      payloadLenBytes.length +
-      params.payload.length;
-    const data = new Uint8Array(totalLength);
-    let offset = 0;
-
-    data.set(objectIdDeltaBytes, offset);
-    offset += objectIdDeltaBytes.length;
-
-    if (hasExtensions && extensionsLengthBytes) {
-      data.set(extensionsLengthBytes, offset);
-      offset += extensionsLengthBytes.length;
-      data.set(params.extensions!, offset);
-      offset += extensionsDataLength;
-    }
-
-    data.set(payloadLenBytes, offset);
-    offset += payloadLenBytes.length;
-    data.set(params.payload, offset);
+    // draft-ietf-moq-transport-17 Section 10.4.2 Figure 29
+    // Subgroup Header の PROPERTIES ビットを常に 1 に設定しているため、
+    // 全オブジェクトに Properties フィールドを含める必要がある。
+    // Properties がないオブジェクトには Properties Length = 0 を送信する。
+    //
+    // encodeObjectFields を使用して、Object ID Delta / Properties / Payload Length /
+    // Object Status（ペイロード長 0 の場合）を正しくエンコードする。
+    // draft-ietf-moq-transport-17 §10.2.1.1:
+    // 「Zero-length objects explicitly encode the Normal status.」
+    const data = encodeObjectFields(
+      objectIdDelta,
+      BigInt(params.payload.length),
+      SubgroupHeaderType.FIRST_OBJ_EXT,
+      ObjectStatus.NORMAL,
+      params.properties,
+    );
 
     await streamState.writer.write(data);
+    if (params.payload.length > 0) {
+      await streamState.writer.write(params.payload);
+    }
 
     // 状態を更新
     streamState.previousObjectId = objectId;
@@ -1546,26 +2349,45 @@ export class SessionImpl implements Session {
 
   /**
    * Publisher のストリームを閉じる
+   * 送信キューに入れて、進行中の sendObject が完了してから閉じる
    */
-  private async closePublisherStream(trackAlias: bigint): Promise<void> {
+  private closePublisherStream(trackAlias: bigint): Promise<void> {
+    const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
+    const currentPromise = previousPromise
+      .catch(() => {})
+      .then(() => this.closePublisherStreamInternal(trackAlias));
+    this.publisherSendQueues.set(trackAlias, currentPromise);
+    return currentPromise;
+  }
+
+  private async closePublisherStreamInternal(trackAlias: bigint): Promise<void> {
     const streamState = this.publisherStreams.get(trackAlias);
     if (streamState) {
       // 先に Map から削除して二重クローズを防止
       this.publisherStreams.delete(trackAlias);
       try {
-        await streamState.writer.close();
+        // Safari の WebTransport では WritableStreamDefaultWriter.close() が
+        // resolve しないことが確認されている。
+        // タイムアウトを設けて FIN 送信の完了を待つが、
+        // タイムアウトした場合はストリームを放棄して処理を続行する。
+        await Promise.race([
+          streamState.writer.close(),
+          new Promise<void>((_, reject) => {
+            setTimeout(() => reject(new Error("writer.close() timed out")), 5000);
+          }),
+        ]);
       } catch {
-        // 既にクローズされている場合は無視
+        // タイムアウトまたは既にクローズされている場合は無視
       }
     }
   }
 
   /**
    * Send a datagram
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
-    const hasExtensions = params.extensions !== undefined && params.extensions.length > 0;
+    const hasProperties = params.properties !== undefined && params.properties.length > 0;
     const hasPriority = params.priority !== undefined;
     const endOfGroup = params.endOfGroup ?? false;
 
@@ -1574,19 +2396,19 @@ export class SessionImpl implements Session {
     let type: number;
     if (hasPriority) {
       if (endOfGroup) {
-        type = hasExtensions
+        type = hasProperties
           ? DatagramType.PAYLOAD_OBJ_EXT_END_GROUP
           : DatagramType.PAYLOAD_OBJ_END_GROUP;
       } else {
-        type = hasExtensions ? DatagramType.PAYLOAD_OBJ_EXT : DatagramType.PAYLOAD_OBJ;
+        type = hasProperties ? DatagramType.PAYLOAD_OBJ_EXT : DatagramType.PAYLOAD_OBJ;
       }
     } else {
       if (endOfGroup) {
-        type = hasExtensions
+        type = hasProperties
           ? DatagramType.PAYLOAD_OBJ_EXT_END_GROUP_NO_PRI
           : DatagramType.PAYLOAD_OBJ_END_GROUP_NO_PRI;
       } else {
-        type = hasExtensions
+        type = hasProperties
           ? DatagramType.PAYLOAD_OBJ_EXT_NO_PRI
           : DatagramType.PAYLOAD_OBJ_NO_PRI;
       }
@@ -1598,26 +2420,37 @@ export class SessionImpl implements Session {
       groupId: BigInt(params.groupId),
       objectId: BigInt(params.objectId),
       publisherPriority: params.priority ?? 128,
-      extensions: params.extensions,
+      properties: params.properties,
       payload: params.payload,
     });
 
     // WebTransport datagram として送信
     const writer = this.transport.datagrams.writable.getWriter();
-    void writer.write(datagram).finally(() => {
-      writer.releaseLock();
-    });
+    writer
+      .write(datagram)
+      .finally(() => {
+        writer.releaseLock();
+      })
+      .catch((err: unknown) => {
+        publisher.handleError(err instanceof Error ? err : new Error(String(err)));
+      });
   }
 
+  /**
+   * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+   * PUBLISH_DONE は双方向ストリーム上で送信される。
+   * Request ID フィールドはない（bidi stream で特定可能）。
+   */
   private async sendPublishDone(publisher: PublisherImpl): Promise<void> {
     const requestId = publisher.getRequestId();
 
-    // Encode PUBLISH_DONE payload
-    // draft-ietf-moq-transport-15 Section 9.15
+    // PUBLISH_DONE ペイロードをエンコード
+    // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+    // Stream Count は実際に開いたデータストリーム数を設定する
+    const streamCount = publisher.getDataStreamCount();
     const parts: Uint8Array[] = [];
-    parts.push(encodeVarint(requestId));
     parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
-    parts.push(encodeVarint(0)); // Stream count
+    parts.push(encodeVarint(streamCount));
     parts.push(encodeVarint(0)); // Reason phrase length
 
     const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
@@ -1628,193 +2461,177 @@ export class SessionImpl implements Session {
       offset += part.length;
     }
 
-    await this.sendControlMessage(MessageType.PUBLISH_DONE, payload, {
-      requestId: requestId.toString(),
-      statusCode: PublishDoneStatusCode.TRACK_ENDED,
-      streamCount: "0",
-    });
+    // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+    // PUBLISH_DONE は subscription の bidi stream 上で送信する
+    const streamInfo = this.requestStreams.get(requestId);
+    if (streamInfo) {
+      const message = this.controlWriter!.encode(MessageType.PUBLISH_DONE, payload);
+      this.statsControlMessagesSent++;
+      this.emitDebug("send", MessageType.PUBLISH_DONE, payload, {
+        requestId: requestId.toString(),
+        statusCode: PublishDoneStatusCode.TRACK_ENDED,
+        streamCount: streamCount.toString(),
+      });
+      try {
+        await streamInfo.writer.write(message);
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+    }
 
     this.publishers.delete(requestId);
   }
 
-  private async sendUnsubscribe(subscriber: SubscriberImpl): Promise<void> {
-    const requestId = subscriber.getRequestId();
-
-    const unsubscribeMsg = {
-      type: MessageType.UNSUBSCRIBE,
-      requestId,
-    };
-
-    const payload = encodeUnsubscribePayload(
-      unsubscribeMsg as Parameters<typeof encodeUnsubscribePayload>[0],
-    );
-    await this.sendControlMessage(MessageType.UNSUBSCRIBE, payload, {
-      requestId: requestId.toString(),
-    });
-
-    this.subscribers.delete(requestId);
-    this.subscribersByAlias.delete(subscriber.getTrackAlias());
-  }
-
   /**
-   * FETCH_CANCEL を送信する
+   * サブスクリプションをキャンセルする
    *
-   * draft-ietf-moq-transport-15 Section 9.18
+   * draft-ietf-moq-transport-17 Section 3.3.1:
+   * subscription のキャンセルは双方向ストリームの close で行う。
    */
-  private async sendFetchCancel(fetcher: FetcherImpl): Promise<void> {
-    const requestId = fetcher.getRequestId();
-
-    const fetchCancelMsg = {
-      type: MessageType.FETCH_CANCEL,
-      requestId,
-    };
-
-    const payload = encodeFetchCancelPayload(
-      fetchCancelMsg as Parameters<typeof encodeFetchCancelPayload>[0],
-    );
-    await this.sendControlMessage(MessageType.FETCH_CANCEL, payload, {
-      requestId: requestId.toString(),
-    });
-
-    this.fetchers.delete(requestId);
+  private async cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
+    return bidi.bidiCancelSubscription(this as unknown as bidi.BidiSessionInternal, subscriber);
   }
 
   /**
-   * Joining FETCH を送信する
+   * Fetch をキャンセルする
    *
-   * draft-ietf-moq-transport-15 Section 9.16.2:
-   * Joining Fetch は SUBSCRIBE と関連付けられた FETCH で、
-   * ライブデータを受信しながら過去のデータを取得する。
+   * draft-ietf-moq-transport-17 Section 5.2:
+   * "It MUST send STOP_SENDING for the bidi request stream."
    */
-  private async sendJoiningFetch(
-    subscribeRequestId: bigint,
-    options: JoiningFetchOptions,
-    defaultObjectCallback: (object: MoqtObject) => void,
-  ): Promise<void> {
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    // Fetcher 実装を作成
-    const impl = new FetcherImpl(
-      [],
-      "",
-      requestId,
-      options.onObject ?? defaultObjectCallback,
-      options.onEnd,
-      options.onError,
-    );
-
-    // キャンセルコールバックを設定
-    impl.onCancel = async () => {
-      await this.sendFetchCancel(impl);
-    };
-
-    // FETCH_OK を待つ Promise（Joining Fetch の場合は背景で処理）
-    this.pendingFetch.set(requestId, {
-      resolve: () => {
-        this.fetchers.set(requestId, impl);
-      },
-      reject: (err) => {
-        options.onError?.(err);
-      },
-      impl,
-    });
-
-    // Joining FETCH メッセージを送信
-    const fetchType =
-      options.type === "relative" ? FetchType.RELATIVE_JOINING : FetchType.ABSOLUTE_JOINING;
-
-    const fetchMsg = {
-      type: MessageType.FETCH,
-      requestId,
-      fetchType,
-      joining: {
-        joiningRequestId: subscribeRequestId,
-        joiningStart: options.start,
-      },
-      parameters: [],
-    };
-
-    const payload = encodeFetchPayload(fetchMsg);
-    await this.sendControlMessage(MessageType.FETCH, payload, {
-      requestId: requestId.toString(),
-      fetchType: options.type,
-      joiningRequestId: subscribeRequestId.toString(),
-      joiningStart: options.start.toString(),
-    });
+  private async cancelFetch(fetcher: FetcherImpl): Promise<void> {
+    return bidi.bidiCancelFetch(this as unknown as bidi.BidiSessionInternal, fetcher);
   }
 
   /**
-   * SUBSCRIBE_UPDATE を送信する
+   * REQUEST_UPDATE を送信する
    *
-   * draft-ietf-moq-transport-15 Section 9.11:
-   * SUBSCRIBE_UPDATE Message {
+   * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE):
+   * REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する。
+   *
+   * REQUEST_UPDATE Message {
    *   Type (i) = 0x2,
    *   Length (16),
    *   Request ID (i),
-   *   Subscription Request ID (i),
-   *   Number of Parameters (i),
+   *   Required Request ID Delta (i),
    *   Parameters (..) ...
    * }
    */
-  private async sendSubscribeUpdate(
+  private async sendRequestUpdate(
     subscriber: SubscriberImpl,
-    options: SubscribeUpdateOptions,
+    options: RequestUpdateOptions,
   ): Promise<void> {
-    const updateRequestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    const subscriptionRequestId = subscriber.getRequestId();
-
-    // パラメータを構築
-    const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
-
-    // FORWARD (0x10) - draft-ietf-moq-transport-15 Section 9.2.1.10
-    // forward が明示的に指定された場合のみ送信（undefined の場合は変更しない）
-    if (options.forward !== undefined) {
-      parameters.push({
-        type: VersionSpecificParameterType.FORWARD,
-        value: encodeVarint(options.forward ? 1n : 0n),
-      });
-    }
-
-    const subscribeUpdateMsg = {
-      type: MessageType.SUBSCRIBE_UPDATE,
-      requestId: updateRequestId,
-      subscriptionRequestId,
-      parameters,
-    };
-
-    const payload = encodeSubscribeUpdatePayload(
-      subscribeUpdateMsg as Parameters<typeof encodeSubscribeUpdatePayload>[0],
+    return bidi.bidiSendRequestUpdate(
+      this as unknown as bidi.BidiSessionInternal,
+      subscriber,
+      options,
     );
+  }
 
-    const promise = new Promise<void>((resolve, reject) => {
-      this.pendingSubscribeUpdate.set(updateRequestId, {
-        resolve,
-        reject,
-        subscriptionRequestId,
-      });
-    });
+  /**
+   * PUBLISH リクエストの双方向ストリームからレスポンスを読み取る
+   *
+   * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK):
+   * PUBLISH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
+   * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
+   * draft-ietf-moq-transport-17 Section 3.3
+   */
+  private async readPublishResponse(
+    requestId: bigint,
+    stream: WebTransportBidirectionalStream,
+    controlReader: ControlStreamReader,
+  ): Promise<void> {
+    return bidi.bidiReadPublishResponse(
+      this as unknown as bidi.BidiSessionInternal,
+      requestId,
+      stream,
+      controlReader,
+    );
+  }
 
-    await this.sendControlMessage(MessageType.SUBSCRIBE_UPDATE, payload, {
-      requestId: updateRequestId.toString(),
-      subscriptionRequestId: subscriptionRequestId.toString(),
-    });
+  /**
+   * SUBSCRIBE リクエストの双方向ストリームからレスポンスを読み取る
+   *
+   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
+   * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
+   * draft-ietf-moq-transport-17 Section 3.3
+   */
+  private async readSubscribeResponse(
+    requestId: bigint,
+    stream: WebTransportBidirectionalStream,
+    controlReader: ControlStreamReader,
+  ): Promise<void> {
+    return bidi.bidiReadSubscribeResponse(
+      this as unknown as bidi.BidiSessionInternal,
+      requestId,
+      stream,
+      controlReader,
+    );
+  }
 
-    return promise;
+  /**
+   * FETCH リクエストの双方向ストリームからレスポンスを読み取る
+   *
+   * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+   * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
+   * draft-ietf-moq-transport-17 Section 3.3
+   */
+  private async readFetchResponse(
+    requestId: bigint,
+    stream: WebTransportBidirectionalStream,
+    controlReader: ControlStreamReader,
+  ): Promise<void> {
+    return bidi.bidiReadFetchResponse(
+      this as unknown as bidi.BidiSessionInternal,
+      requestId,
+      stream,
+      controlReader,
+    );
+  }
+
+  /**
+   * TRACK_STATUS リクエストの双方向ストリームからレスポンスを読み取る
+   *
+   * draft-ietf-moq-transport-17 Section 9.16 (TRACK_STATUS):
+   * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
+   * draft-ietf-moq-transport-17 Section 3.3
+   */
+  private async readTrackStatusResponse(
+    requestId: bigint,
+    stream: WebTransportBidirectionalStream,
+    controlReader: ControlStreamReader,
+  ): Promise<void> {
+    return bidi.bidiReadTrackStatusResponse(
+      this as unknown as bidi.BidiSessionInternal,
+      requestId,
+      stream,
+      controlReader,
+    );
   }
 
   private startControlMessageLoop(): void {
     void (async () => {
-      if (!this.controlStream || !this.controlReader) return;
+      if (!this.controlReceiveStream || !this.controlReader) return;
 
-      const reader = this.controlStream.readable.getReader();
+      const reader = this.controlReceiveStream.getReader();
 
       try {
         while (this.sessionState === "connected") {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+            // draft-ietf-moq-transport-17 Section 3.3:
+            // "A control stream MUST NOT be closed at the underlying transport layer
+            // during the session's lifetime. Doing so results in the session being
+            // closed as a PROTOCOL_VIOLATION."
+            if (this.sessionState === "connected") {
+              this.closeWithError(
+                new SessionError(
+                  "control stream closed unexpectedly",
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+            }
+            break;
+          }
 
           const messages = this.controlReader.feed(value);
           for (const msg of messages) {
@@ -1822,303 +2639,64 @@ export class SessionImpl implements Session {
           }
         }
       } catch (err) {
-        if (this.sessionState === "connected") {
-          this.callbacks.error?.(err as Error);
-        }
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
       } finally {
         reader.releaseLock();
       }
     })();
   }
 
+  /**
+   * 制御ストリーム上のメッセージを処理する
+   *
+   * draft-ietf-moq-transport-17 Section 3.3:
+   * リクエスト/レスポンス (SUBSCRIBE_OK, PUBLISH_OK, FETCH_OK, REQUEST_OK,
+   * REQUEST_ERROR) は双方向ストリームに移動した。
+   * 制御ストリームに残るのは GOAWAY のみ。
+   * draft-ietf-moq-transport-17 Section 3.3
+   *
+   * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE):
+   * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
+   * 制御ストリーム上で受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+   */
   private handleControlMessage(type: number, payload: Uint8Array): void {
     this.statsControlMessagesReceived++;
     let decoded: Record<string, unknown> | undefined;
 
     switch (type) {
-      case MessageType.SUBSCRIBE_OK:
-        decoded = this.handleSubscribeOk(payload);
-        break;
-      case MessageType.PUBLISH_OK:
-        decoded = this.handlePublishOk(payload);
-        break;
       case MessageType.PUBLISH_DONE:
-        decoded = this.handlePublishDone(payload);
-        break;
-      case MessageType.REQUEST_ERROR:
-        decoded = this.handleRequestError(payload);
-        break;
-      case MessageType.REQUEST_OK:
-        decoded = this.handleRequestOk(payload);
-        break;
+        // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+        // PUBLISH_DONE は双方向ストリーム上でのみ送信される。
+        // 制御ストリーム上で受信した場合は仕様違反。
+        this.closeWithError(
+          new SessionError(
+            "received PUBLISH_DONE on control stream, expected on bidirectional stream",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return;
       case MessageType.GOAWAY:
         decoded = this.handleGoaway(payload);
         break;
-      case MessageType.MAX_REQUEST_ID:
-        decoded = this.handleMaxRequestId(payload);
-        break;
-      case MessageType.REQUESTS_BLOCKED:
-        decoded = this.handleRequestsBlocked(payload);
-        break;
-      case MessageType.FETCH_OK:
-        decoded = this.handleFetchOk(payload);
-        break;
-      case MessageType.PUBLISH_NAMESPACE:
-        decoded = this.handlePublishNamespace(payload);
-        break;
-      case MessageType.PUBLISH_NAMESPACE_CANCEL:
-        decoded = this.handlePublishNamespaceCancel(payload);
-        break;
+      default:
+        // draft-ietf-moq-transport-17 Section 9 (Control Messages):
+        // "An endpoint that receives an unknown message type MUST close the session."
+        this.closeWithError(
+          new SessionError(
+            `unknown control message type: 0x${type.toString(16)}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return;
     }
 
     this.emitDebug("recv", type, payload, decoded);
   }
 
   /**
-   * Handle SUBSCRIBE_OK message
-   *
-   * draft-ietf-moq-transport-15 Section 9.10:
-   * Track Alias is provided by the publisher in SUBSCRIBE_OK.
-   */
-  private handleSubscribeOk(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodeSubscribeOkPayload(payload);
-    const pending = this.pendingSubscribe.get(msg.requestId);
-
-    // LARGEST_OBJECT パラメータを探す
-    let largestLocation: Location | undefined;
-    for (const param of msg.parameters) {
-      if (param.type === VersionSpecificParameterType.LARGEST_OBJECT) {
-        largestLocation = getParameterLocationValue(param);
-        break;
-      }
-    }
-
-    if (pending) {
-      this.pendingSubscribe.delete(msg.requestId);
-      // Set the track alias from SUBSCRIBE_OK
-      pending.impl.setTrackAlias(msg.trackAlias);
-
-      // Set LARGEST_OBJECT if present
-      if (largestLocation) {
-        pending.impl.setLargestLocation(largestLocation);
-      }
-
-      this.subscribers.set(msg.requestId, pending.impl);
-      this.subscribersByAlias.set(msg.trackAlias, pending.impl);
-
-      // バッファリングされた Subgroup ストリームを処理
-      // SUBSCRIBE_OK より先にデータストリームが到着した場合
-      const pendingStreams = this.pendingSubgroupStreams.get(msg.trackAlias);
-      if (pendingStreams && pendingStreams.length > 0) {
-        this.pendingSubgroupStreams.delete(msg.trackAlias);
-        for (const pendingStream of pendingStreams) {
-          this.processPendingSubgroupStream(pending.impl, pendingStream.header, pendingStream.data);
-        }
-      }
-
-      // Joining Fetch が指定されている場合は送信
-      // draft-ietf-moq-transport-15 Section 9.16.2:
-      // "If no Objects have been published for the track, and the SUBSCRIBE_OK
-      //  did not include a LARGEST_OBJECT parameter, the publisher MUST respond
-      //  with a REQUEST_ERROR with error code INVALID_RANGE."
-      if (pending.joiningFetch && largestLocation) {
-        void this.sendJoiningFetch(msg.requestId, pending.joiningFetch, pending.objectCallback);
-      }
-      // LARGEST_OBJECT がない場合は Joining Fetch を送信せず、リアルタイム配信を待つ
-
-      pending.resolve(pending.impl);
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-      trackAlias: msg.trackAlias.toString(),
-      LARGEST_OBJECT: largestLocation
-        ? `${largestLocation.group}:${largestLocation.object}`
-        : undefined,
-    };
-  }
-
-  private handlePublishOk(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodePublishOkPayload(payload);
-    const pending = this.pendingPublish.get(msg.requestId);
-
-    if (pending) {
-      this.pendingPublish.delete(msg.requestId);
-      this.publishers.set(msg.requestId, pending.impl);
-
-      // FORWARD パラメータを処理
-      // draft-ietf-moq-transport-15 Section 9.2.1.10
-      // デフォルトは 1 (forward) だが、0 が指定された場合は forwardState を false にする
-      let forwardState = true;
-      for (const param of msg.parameters) {
-        if (param.type === VersionSpecificParameterType.FORWARD) {
-          const [value] = decodeVarint(param.value, 0);
-          forwardState = value !== 0n;
-          break;
-        }
-      }
-      pending.impl.setForwardState(forwardState);
-
-      pending.resolve(pending.impl);
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-    };
-  }
-
-  private handlePublishDone(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodePublishDonePayload(payload);
-    const subscriber = this.subscribers.get(msg.requestId);
-
-    if (subscriber) {
-      subscriber.handleEnd();
-      this.subscribers.delete(msg.requestId);
-      this.subscribersByAlias.delete(subscriber.getTrackAlias());
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-      statusCode: msg.statusCode,
-      streamCount: msg.streamCount.toString(),
-      reasonPhrase: msg.reasonPhrase,
-    };
-  }
-
-  /**
-   * Handle REQUEST_ERROR message
-   *
-   * draft-ietf-moq-transport-15 Section 9.8:
-   * REQUEST_ERROR is sent in response to any request
-   * (SUBSCRIBE, FETCH, PUBLISH, SUBSCRIBE_NAMESPACE, PUBLISH_NAMESPACE, TRACK_STATUS)
-   */
-  private handleRequestError(payload: Uint8Array): Record<string, unknown> {
-    const { requestId, errorCode, reason } = this.decodeRequestError(payload);
-
-    const error = new RequestError(
-      reason || `Request failed with code ${errorCode}`,
-      errorCode as RequestErrorCode,
-    );
-
-    const pendingPub = this.pendingPublish.get(requestId);
-    if (pendingPub) {
-      this.pendingPublish.delete(requestId);
-      pendingPub.reject(error);
-    }
-
-    const pendingSub = this.pendingSubscribe.get(requestId);
-    if (pendingSub) {
-      this.pendingSubscribe.delete(requestId);
-      pendingSub.reject(error);
-    }
-
-    const pendingUpdate = this.pendingSubscribeUpdate.get(requestId);
-    if (pendingUpdate) {
-      this.pendingSubscribeUpdate.delete(requestId);
-      pendingUpdate.reject(error);
-    }
-
-    const pendingFetchReq = this.pendingFetch.get(requestId);
-    if (pendingFetchReq) {
-      this.pendingFetch.delete(requestId);
-      pendingFetchReq.reject(error);
-    }
-
-    const pendingStatusReq = this.pendingTrackStatus.get(requestId);
-    if (pendingStatusReq) {
-      this.pendingTrackStatus.delete(requestId);
-      pendingStatusReq.reject(error);
-    }
-
-    const pendingNamespaceReq = this.pendingNamespaceSubscribe.get(requestId);
-    if (pendingNamespaceReq) {
-      this.pendingNamespaceSubscribe.delete(requestId);
-      pendingNamespaceReq.reject(error);
-    }
-
-    const pendingNamespacePubReq = this.pendingNamespacePublish.get(requestId);
-    if (pendingNamespacePubReq) {
-      this.pendingNamespacePublish.delete(requestId);
-      pendingNamespacePubReq.reject(error);
-    }
-
-    return {
-      requestId: requestId.toString(),
-      errorCode,
-      reason,
-    };
-  }
-
-  /**
-   * Handle REQUEST_OK message
-   *
-   * draft-ietf-moq-transport-15 Section 9.7:
-   * REQUEST_OK is sent in response to SUBSCRIBE_UPDATE,
-   * TRACK_STATUS, SUBSCRIBE_NAMESPACE and PUBLISH_NAMESPACE requests.
-   */
-  private handleRequestOk(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodeRequestOkPayload(payload);
-
-    // SUBSCRIBE_UPDATE の応答
-    const pendingUpdate = this.pendingSubscribeUpdate.get(msg.requestId);
-    if (pendingUpdate) {
-      this.pendingSubscribeUpdate.delete(msg.requestId);
-      pendingUpdate.resolve();
-    }
-
-    // TRACK_STATUS の応答
-    const pendingStatus = this.pendingTrackStatus.get(msg.requestId);
-    if (pendingStatus) {
-      this.pendingTrackStatus.delete(msg.requestId);
-      pendingStatus.resolve({ parameters: msg.parameters });
-    }
-
-    // SUBSCRIBE_NAMESPACE の応答
-    const pendingNamespace = this.pendingNamespaceSubscribe.get(msg.requestId);
-    if (pendingNamespace) {
-      this.pendingNamespaceSubscribe.delete(msg.requestId);
-
-      // アクティブなサブスクリプションとして登録
-      this.namespaceSubscriptions.set(msg.requestId, {
-        callbacks: pendingNamespace.callbacks,
-        state: "active",
-        namespacePrefix: [],
-      });
-
-      // NamespaceSubscription を作成
-      const subscription = this.createNamespaceSubscription(msg.requestId);
-
-      pendingNamespace.resolve(subscription);
-    }
-
-    // PUBLISH_NAMESPACE の応答
-    const pendingNamespacePub = this.pendingNamespacePublish.get(msg.requestId);
-    if (pendingNamespacePub) {
-      this.pendingNamespacePublish.delete(msg.requestId);
-
-      // アクティブな公開として登録
-      this.namespacePublications.set(msg.requestId, {
-        callbacks: pendingNamespacePub.callbacks,
-        state: "active",
-        namespace: pendingNamespacePub.namespace,
-      });
-
-      // NamespacePublication を作成
-      const publication = this.createNamespacePublication(msg.requestId);
-
-      pendingNamespacePub.resolve(publication);
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-      parametersCount: msg.parameters.length,
-    };
-  }
-
-  /**
    * Handle GOAWAY message
    *
-   * draft-ietf-moq-transport-15 Section 9.4:
+   * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY):
    * Upon receiving a GOAWAY, an endpoint SHOULD NOT initiate new requests
    * to the peer including SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
    * SUBSCRIBE_NAMESPACE and TRACK_STATUS.
@@ -2129,8 +2707,8 @@ export class SessionImpl implements Session {
   private handleGoaway(payload: Uint8Array): Record<string, unknown> {
     // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
     if (this.receivedGoaway) {
-      this.callbacks.error?.(
-        new SessionError("Received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
+      this.closeWithError(
+        new SessionError("received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
       );
       return { error: "Multiple GOAWAY messages received" };
     }
@@ -2142,152 +2720,26 @@ export class SessionImpl implements Session {
     // GOAWAY コールバックを呼び出す
     this.callbacks.goaway?.(msg.newSessionUri);
 
+    // draft-ietf-moq-transport-17 Section 3.6:
+    // サーバーが指定した timeout 内にセッションを閉じなければ、
+    // サーバーが GOAWAY_TIMEOUT でセッションを切断する。
+    // クライアント側でもタイムアウトを設定し、期限内にグレースフルシャットダウンを試みる。
+    if (msg.timeout > 0n) {
+      this.goawayTimeoutId = setTimeout(() => {
+        if (this.sessionState === "connected") {
+          void this.close();
+          this.transport.close({
+            closeCode: SessionErrorCode.NO_ERROR,
+            reason: "graceful shutdown after receiving GOAWAY",
+          });
+        }
+      }, Number(msg.timeout));
+    }
+
     return {
       newSessionUri: msg.newSessionUri,
+      timeout: msg.timeout.toString(),
     };
-  }
-
-  /**
-   * Handle MAX_REQUEST_ID message
-   *
-   * draft-ietf-moq-transport-15 Section 9.5:
-   * The Maximum Request ID MUST only increase within a session, and
-   * receipt of a MAX_REQUEST_ID message with an equal or smaller Request
-   * ID value is a PROTOCOL_VIOLATION.
-   */
-  private handleMaxRequestId(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodeMaxRequestIdPayload(payload);
-
-    // Request ID は増加のみ許可
-    if (msg.maxRequestId <= this.peerMaxRequestId) {
-      this.callbacks.error?.(
-        new SessionError("MAX_REQUEST_ID must only increase", SessionErrorCode.PROTOCOL_VIOLATION),
-      );
-      return {
-        error: "MAX_REQUEST_ID did not increase",
-        received: msg.maxRequestId.toString(),
-        current: this.peerMaxRequestId.toString(),
-      };
-    }
-
-    this.peerMaxRequestId = msg.maxRequestId;
-
-    return {
-      maxRequestId: msg.maxRequestId.toString(),
-    };
-  }
-
-  /**
-   * Handle REQUESTS_BLOCKED message
-   *
-   * draft-ietf-moq-transport-15 Section 9.6:
-   * The REQUESTS_BLOCKED message is sent when an endpoint would like to
-   * send a new request, but cannot because the Request ID would exceed
-   * the Maximum Request ID value sent by the peer.
-   */
-  private handleRequestsBlocked(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodeRequestsBlockedPayload(payload);
-
-    // 現時点では情報をログに記録するのみ
-    // 将来的には MAX_REQUEST_ID を送信するロジックを追加可能
-
-    return {
-      maximumRequestId: msg.maximumRequestId.toString(),
-    };
-  }
-
-  /**
-   * Handle FETCH_OK message
-   *
-   * draft-ietf-moq-transport-15 Section 9.17:
-   * FETCH_OK is sent in response to a successful FETCH.
-   */
-  private handleFetchOk(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodeFetchOkPayload(payload);
-    const pending = this.pendingFetch.get(msg.requestId);
-
-    if (pending) {
-      this.pendingFetch.delete(msg.requestId);
-      // FETCH_OK の情報を設定
-      pending.impl.setFetchOkInfo(msg.endOfTrack, msg.endLocation);
-      this.fetchers.set(msg.requestId, pending.impl);
-      pending.resolve(pending.impl);
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-      endOfTrack: msg.endOfTrack,
-      endLocation: `${msg.endLocation.group}:${msg.endLocation.object}`,
-    };
-  }
-
-  /**
-   * Handle PUBLISH_NAMESPACE message
-   *
-   * draft-ietf-moq-transport-15 Section 9.20:
-   * PUBLISH_NAMESPACE notifies that a Track Namespace has tracks available.
-   */
-  private handlePublishNamespace(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodePublishNamespacePayload(payload);
-    const namespaceStrings = trackNamespaceToStrings(msg.trackNamespace);
-
-    // Request ID で対応する NamespaceSubscription を検索
-    const subscription = this.namespaceSubscriptions.get(msg.requestId);
-    if (subscription && subscription.state === "active") {
-      // コールバックを呼び出す
-      const announcement: NamespaceAnnouncement = {
-        namespace: namespaceStrings,
-        parameters: msg.parameters,
-      };
-      subscription.callbacks.announce(announcement);
-    }
-
-    return {
-      requestId: msg.requestId.toString(),
-      trackNamespace: namespaceStrings,
-      parametersCount: msg.parameters.length,
-    };
-  }
-
-  /**
-   * Handle PUBLISH_NAMESPACE_CANCEL message
-   *
-   * draft-ietf-moq-transport-15 Section 9.22:
-   * A subscriber sends PUBLISH_NAMESPACE_CANCEL to revoke acceptance
-   * of a PUBLISH_NAMESPACE.
-   */
-  private handlePublishNamespaceCancel(payload: Uint8Array): Record<string, unknown> {
-    const msg = decodePublishNamespaceCancelPayload(payload);
-    const namespaceStrings = trackNamespaceToStrings(msg.trackNamespace);
-
-    // Track Namespace で対応する NamespacePublication を検索
-    for (const publication of this.namespacePublications.values()) {
-      if (
-        publication.state === "active" &&
-        this.namespaceMatches(publication.namespace, namespaceStrings)
-      ) {
-        publication.state = "cancelled";
-        publication.callbacks?.cancelled?.(msg.errorCode, msg.reasonPhrase);
-        break;
-      }
-    }
-
-    return {
-      trackNamespace: namespaceStrings,
-      errorCode: msg.errorCode.toString(),
-      reasonPhrase: msg.reasonPhrase,
-    };
-  }
-
-  /**
-   * 名前空間が一致するかどうかを確認する
-   */
-  private namespaceMatches(a: string[], b: string[]): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] !== b[i]) return false;
-    }
-    return true;
   }
 
   /**
@@ -2300,7 +2752,7 @@ export class SessionImpl implements Session {
     };
 
     const unsubscribe = async (): Promise<void> => {
-      await this.sendUnsubscribeNamespace(requestId);
+      await this.closeNamespaceSubscription(requestId);
     };
 
     return {
@@ -2312,11 +2764,14 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * UNSUBSCRIBE_NAMESPACE を送信する
+   * Namespace サブスクリプションを閉じる
    *
-   * draft-ietf-moq-transport-15 Section 9.24
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * A SUBSCRIBE_NAMESPACE can be cancelled by closing the stream with
+   * either a FIN or RESET_STREAM.
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
-  private async sendUnsubscribeNamespace(requestId: bigint): Promise<void> {
+  private async closeNamespaceSubscription(requestId: bigint): Promise<void> {
     const subscription = this.namespaceSubscriptions.get(requestId);
     if (!subscription || subscription.state === "closed") {
       return;
@@ -2324,17 +2779,14 @@ export class SessionImpl implements Session {
 
     subscription.state = "closed";
 
-    const unsubscribeMsg = {
-      type: MessageType.UNSUBSCRIBE_NAMESPACE,
-      requestId,
-    };
-
-    const payload = encodeUnsubscribeNamespacePayload(
-      unsubscribeMsg as Parameters<typeof encodeUnsubscribeNamespacePayload>[0],
-    );
-    await this.sendControlMessage(MessageType.UNSUBSCRIBE_NAMESPACE, payload, {
-      requestId: requestId.toString(),
-    });
+    // ストリームを閉じる（FIN を送信）
+    try {
+      if (subscription.writer) {
+        await subscription.writer.close();
+      }
+    } catch {
+      // ストリームが既に閉じられている場合は無視
+    }
 
     this.namespaceSubscriptions.delete(requestId);
   }
@@ -2343,9 +2795,11 @@ export class SessionImpl implements Session {
    * NamespacePublication オブジェクトを作成する
    */
   private createNamespacePublication(requestId: bigint): NamespacePublication {
-    const getState = (): "active" | "cancelled" | "closed" => {
+    // 内部状態の "pending" は REQUEST_OK 受信前のみで、外部に公開する前に "active" になる
+    const getState = (): "active" | "closed" => {
       const pub = this.namespacePublications.get(requestId);
-      return pub?.state ?? "closed";
+      if (!pub) return "closed";
+      return pub.state === "active" ? "active" : "closed";
     };
 
     const getNamespace = (): string[] => {
@@ -2354,7 +2808,7 @@ export class SessionImpl implements Session {
     };
 
     const done = async (): Promise<void> => {
-      await this.sendPublishNamespaceDone(requestId);
+      await this.closeNamespacePublication(requestId);
     };
 
     return {
@@ -2369,79 +2823,29 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * PUBLISH_NAMESPACE_DONE を送信する
+   * Namespace 公開を終了する
    *
-   * draft-ietf-moq-transport-15 Section 9.21:
-   * PUBLISH_NAMESPACE_DONE withdraws a previous PUBLISH_NAMESPACE.
+   * draft-ietf-moq-transport-17 Section 6.1:
+   * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、
+   * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
-  private async sendPublishNamespaceDone(requestId: bigint): Promise<void> {
+  private async closeNamespacePublication(requestId: bigint): Promise<void> {
     const publication = this.namespacePublications.get(requestId);
     if (!publication || publication.state === "closed") {
       return;
     }
 
-    // PUBLISH_NAMESPACE_CANCEL を受信していたら PUBLISH_NAMESPACE_DONE を送信しない
-    // draft-ietf-moq-transport-15 Section 6.2:
-    // "After receiving a PUBLISH_NAMESPACE_CANCEL, the publisher does not
-    //  send PUBLISH_NAMESPACE_DONE."
-    if (publication.state === "cancelled") {
-      this.namespacePublications.delete(requestId);
-      return;
-    }
-
     publication.state = "closed";
 
-    const trackNamespace = createTrackNamespace(publication.namespace);
-
-    const publishNamespaceDoneMsg = {
-      type: MessageType.PUBLISH_NAMESPACE_DONE,
-      trackNamespace,
-    };
-
-    const payload = encodePublishNamespaceDonePayload(publishNamespaceDoneMsg);
-    await this.sendControlMessage(MessageType.PUBLISH_NAMESPACE_DONE, payload, {
-      trackNamespace: publication.namespace,
-    });
+    // ストリームを閉じる（FIN を送信）
+    try {
+      await publication.writer.close();
+    } catch {
+      // ストリームが既に閉じられている場合は無視
+    }
 
     this.namespacePublications.delete(requestId);
-  }
-
-  /**
-   * Decode REQUEST_ERROR payload
-   *
-   * draft-ietf-moq-transport-15 Section 9.8:
-   * REQUEST_ERROR Message {
-   *   Type (i) = 0x5,
-   *   Length (16),
-   *   Request ID (i),
-   *   Error Code (i),
-   *   Error Reason (Reason Phrase),
-   * }
-   */
-  private decodeRequestError(payload: Uint8Array): {
-    requestId: bigint;
-    errorCode: number;
-    reason: string;
-  } {
-    let offset = 0;
-
-    // Request ID (varint)
-    const [requestId, requestIdLen] = decodeVarint(payload, offset);
-    offset += requestIdLen;
-
-    // Error Code (varint)
-    const [errorCode, errorCodeLen] = decodeVarint(payload, offset);
-    offset += errorCodeLen;
-
-    // Reason Phrase Length (varint)
-    const [reasonLen, reasonLenLen] = decodeVarint(payload, offset);
-    offset += reasonLenLen;
-
-    // Reason Phrase Value
-    const decoder = new TextDecoder();
-    const reason = decoder.decode(payload.slice(offset, offset + Number(reasonLen)));
-
-    return { requestId, errorCode: Number(errorCode), reason };
   }
 
   private startIncomingStreamLoop(): void {
@@ -2467,9 +2871,7 @@ export class SessionImpl implements Session {
           },
           timestamp: Date.now(),
         });
-        if (this.sessionState === "connected") {
-          this.callbacks.error?.(err as Error);
-        }
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
       } finally {
         reader.releaseLock();
       }
@@ -2478,7 +2880,7 @@ export class SessionImpl implements Session {
 
   /**
    * Start datagram receiving loop
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   private startDatagramLoop(): void {
     void (async () => {
@@ -2504,9 +2906,7 @@ export class SessionImpl implements Session {
           },
           timestamp: Date.now(),
         });
-        if (this.sessionState === "connected") {
-          this.callbacks.error?.(err as Error);
-        }
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
       } finally {
         reader.releaseLock();
       }
@@ -2515,7 +2915,7 @@ export class SessionImpl implements Session {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-15 Section 10.3
+   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
    */
   private handleIncomingDatagram(data: Uint8Array): void {
     try {
@@ -2527,18 +2927,21 @@ export class SessionImpl implements Session {
         return;
       }
 
-      // Datagram コールバックがあれば呼び出す
+      const object: MoqtObject = {
+        groupId: datagram.groupId,
+        subgroupId: undefined,
+        objectId: datagram.objectId,
+        publisherPriority: datagram.publisherPriority,
+        status: datagram.status ?? ObjectStatus.NORMAL,
+        properties: datagram.properties,
+        payload: datagram.payload ?? new Uint8Array(0),
+      };
+
+      // Datagram コールバックがあればそちらを使用、なければ通常の object コールバックにフォールバック
       if (subscriber.hasDatagramCallback()) {
-        const object: MoqtObject = {
-          groupId: datagram.groupId,
-          subgroupId: undefined,
-          objectId: datagram.objectId,
-          publisherPriority: datagram.publisherPriority,
-          status: datagram.status ?? ObjectStatus.NORMAL,
-          extensions: datagram.extensions,
-          payload: datagram.payload ?? new Uint8Array(0),
-        };
         subscriber.handleDatagram(object);
+      } else {
+        subscriber.handleObject(object);
       }
     } catch (err) {
       this.callbacks.debug?.({
@@ -2551,12 +2954,57 @@ export class SessionImpl implements Session {
         },
         timestamp: Date.now(),
       });
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+      if (err instanceof ProtocolViolationError) {
+        this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      }
     }
   }
 
   /**
+   * Fetcher の登録を待つ
+   *
+   * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+   * "A publisher MAY send Objects in response to a FETCH before the
+   *  FETCH_OK message is sent."
+   * FETCH_OK より先にデータストリームが到着した場合に使用。
+   */
+  private waitForFetcher(requestId: bigint): Promise<FetcherImpl | null> {
+    return new Promise<FetcherImpl | null>((resolve) => {
+      // 既に登録されている場合は即座に返す
+      const existing = this.fetchers.get(requestId);
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+
+      // pendingFetch に存在しない場合は不明なリクエスト
+      if (!this.pendingFetch.has(requestId)) {
+        resolve(null);
+        return;
+      }
+
+      let resolved = false;
+
+      const doResolve = () => {
+        if (resolved) return;
+        resolved = true;
+        resolve(this.fetchers.get(requestId) ?? null);
+      };
+
+      // コールバックを登録
+      const callbacks = this.fetcherReadyCallbacks.get(requestId) ?? [];
+      callbacks.push(doResolve);
+      this.fetcherReadyCallbacks.set(requestId, callbacks);
+
+      // タイムアウト: 5 秒以内に FETCH_OK が来なければ null
+      setTimeout(doResolve, 5000);
+    });
+  }
+
+  /**
    * Handle incoming unidirectional data stream
-   * draft-ietf-moq-transport-15 Section 10.4
+   * draft-ietf-moq-transport-17 Section 10.4
    *
    * ストリーミング処理: データが到着するたびにオブジェクトをパースして即座に配信する
    */
@@ -2568,14 +3016,9 @@ export class SessionImpl implements Session {
     const reader = stream.getReader();
 
     // ストリーミングパーサー状態
-    let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+    let buffer: Uint8Array = new Uint8Array(0);
     let headerParsed = false;
     let isFetchStream = false;
-
-    // Subgroup ストリーム用の状態
-    let subgroupHeader: import("./dataStream").SubgroupHeader | null = null;
-    let subscriber: SubscriberImpl | null = null;
-    let previousObjectId = -1n;
 
     // Fetch ストリーム用の状態
     let fetchHeader: import("./dataStream").FetchHeader | null = null;
@@ -2601,8 +3044,10 @@ export class SessionImpl implements Session {
             // 先頭のタイプを確認
             const [streamType] = decodeVarint(buffer, 0);
 
-            if (Number(streamType) === FetchHeaderType) {
-              // Fetch Data Stream
+            const streamTypeNum = Number(streamType);
+
+            if (streamTypeNum === FetchHeaderType) {
+              // Fetch データストリーム
               isFetchStream = true;
               const [header, consumed] = decodeFetchHeader(buffer);
               fetchHeader = header;
@@ -2613,57 +3058,84 @@ export class SessionImpl implements Session {
               this.statsFetchHeadersReceived++;
 
               // Fetcher を検索
+              // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+              // FETCH_OK より先にデータストリームが到着する可能性がある
               fetcher = this.fetchers.get(header.requestId) ?? null;
               if (!fetcher) {
-                // Fetcher が見つからない場合は終了
+                fetcher = await this.waitForFetcher(header.requestId);
+                if (!fetcher) {
+                  // タイムアウトで Fetcher が登録されなかった場合は、
+                  // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
+                  // draft-ietf-moq-transport-17 Section 5.3 に倣ってストリームを reset する。
+                  void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
+                  break;
+                }
+              }
+            } else if (
+              (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
+              (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
+            ) {
+              // draft-ietf-moq-transport-17 Section 10.4.2:
+              // SUBGROUP_ID_MODE = 0b11 のタイプ値
+              // (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約値であり、
+              // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じなければならない
+              if ((streamTypeNum & 0x06) === 0x06) {
+                this.closeWithError(
+                  new SessionError(
+                    `reserved subgroup header type: 0x${streamTypeNum.toString(16)}`,
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
                 break;
               }
-            } else {
+
               // Subgroup ストリーム
               isFetchStream = false;
               const [header, consumed] = decodeSubgroupHeader(buffer);
-              subgroupHeader = header;
-              buffer = buffer.slice(consumed);
+              const initialPayloadBuffer = buffer.slice(consumed);
+              buffer = new Uint8Array(0);
               headerParsed = true;
 
               // 統計カウンターを更新
               this.statsSubgroupHeadersReceived++;
 
-              // Subscriber を検索
-              subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
-              if (!subscriber) {
-                // Subscriber がまだ登録されていない場合、ストリームをバッファリング
-                // QUIC ではストリーム間の順序が保証されないため、
-                // SUBSCRIBE_OK より先にデータストリームが到着する可能性がある
-                const chunks: Uint8Array[] = [buffer];
-                let streamDone = done;
-                while (!streamDone) {
-                  const result = await reader.read();
-                  streamDone = result.done;
-                  if (result.value) {
-                    chunks.push(result.value);
-                  }
-                }
-                // 全データを結合
-                const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-                const fullData = new Uint8Array(totalLength);
-                let dataOffset = 0;
-                for (const chunk of chunks) {
-                  fullData.set(chunk, dataOffset);
-                  dataOffset += chunk.length;
-                }
-                // バッファに保存
-                const pending = this.pendingSubgroupStreams.get(header.trackAlias) ?? [];
-                pending.push({ header, data: fullData });
-                this.pendingSubgroupStreams.set(header.trackAlias, pending);
-                break;
-              }
+              // Subgroup ストリーム本体は専用ハンドラに委譲する
+              // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
+              // draft-ietf-moq-transport-17 §10.4.2 の buffer 経路はこのハンドラ内に集約
+              await this.handleSubgroupStream(reader, header, initialPayloadBuffer);
+              return;
+            } else {
+              // draft-ietf-moq-transport-17 Section 3.2:
+              // "An endpoint that receives an unknown stream type MUST close the session."
+              this.closeWithError(
+                new SessionError(
+                  `unknown unidirectional stream type: 0x${streamTypeNum.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              break;
             }
-          } catch {
-            // ヘッダーのパースに失敗した場合、データが不足している可能性
-            // 次のチャンクを待つ
-            if (done) break;
-            continue;
+          } catch (err) {
+            if (err instanceof IncompleteDataError) {
+              // データ不足: 次のチャンクを待つ
+              if (done) break;
+              continue;
+            }
+            if (err instanceof ProtocolViolationError) {
+              // 仕様違反: PROTOCOL_VIOLATION でセッションを閉じる
+              this.closeWithError(
+                new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION),
+              );
+              break;
+            }
+            // 予期しないエラー: INTERNAL_ERROR でセッションを閉じる
+            this.closeWithError(
+              new SessionError(
+                err instanceof Error ? err.message : String(err),
+                SessionErrorCode.INTERNAL_ERROR,
+              ),
+            );
+            break;
           }
         }
 
@@ -2671,21 +3143,19 @@ export class SessionImpl implements Session {
         if (headerParsed) {
           if (isFetchStream && fetcher && fetchHeader) {
             // Fetch オブジェクトをストリーミング処理
-            buffer = this.processFetchObjects(buffer, fetcher, fetchContext, isFirstFetchObject);
-            // 状態を更新 (最初のオブジェクトが処理されたかどうか)
-            if (buffer !== null) {
-              isFirstFetchObject = false;
-            }
-          } else if (!isFetchStream && subscriber && subgroupHeader) {
-            // Subgroup オブジェクトをストリーミング処理
-            const result = this.processSubgroupObjects(
+            // draft-ietf-moq-transport-17 Section 10.4.3:
+            // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
+            // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
+            // context と isFirst を caller 側で永続化する必要がある
+            const fetchResult = this.processFetchObjects(
               buffer,
-              subscriber,
-              subgroupHeader,
-              previousObjectId,
+              fetcher,
+              fetchContext,
+              isFirstFetchObject,
             );
-            buffer = result.remainingBuffer;
-            previousObjectId = result.previousObjectId;
+            buffer = fetchResult.remainingBuffer;
+            fetchContext = fetchResult.context;
+            isFirstFetchObject = fetchResult.isFirst;
           }
         }
 
@@ -2715,6 +3185,15 @@ export class SessionImpl implements Session {
         },
         timestamp: Date.now(),
       });
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+      if (err instanceof ProtocolViolationError) {
+        this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      } else if (err instanceof MalformedTrackError) {
+        await cancelStreamQuiet(
+          reader,
+          `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${err.message}`,
+        );
+      }
     } finally {
       this.statsSubscriberStreamsActive--;
       reader.releaseLock();
@@ -2726,67 +3205,23 @@ export class SessionImpl implements Session {
    * パース可能なオブジェクトを全て処理し、残りのバッファを返す
    */
   private processFetchObjects(
-    buffer: Uint8Array<ArrayBufferLike>,
+    buffer: Uint8Array,
     fetcher: FetcherImpl,
     context: import("./dataStream").FetchObjectContext | null,
     isFirst: boolean,
-  ): Uint8Array<ArrayBufferLike> {
-    let offset = 0;
-    let currentContext = context;
-    let currentIsFirst = isFirst;
-
-    while (offset < buffer.length) {
-      try {
-        const [fields, fieldsConsumed, newContext] = decodeFetchObjectFields(
-          buffer,
-          currentContext,
-          offset,
-          currentIsFirst,
-        );
-
-        // ペイロード長を確認
-        const payloadLength = Number(fields.payloadLength);
-        const totalNeeded = offset + fieldsConsumed + payloadLength;
-
-        if (totalNeeded > buffer.length) {
-          // ペイロードが不完全 - 次のチャンクを待つ
-          break;
-        }
-
-        offset += fieldsConsumed;
-
-        // ペイロードを抽出
-        const payload = buffer.slice(offset, offset + payloadLength);
-        offset += payloadLength;
-
-        // 状態を更新
-        currentContext = newContext;
-        currentIsFirst = false;
-
-        const object: MoqtObject = {
-          groupId: fields.groupId,
-          subgroupId: fields.subgroupId,
-          objectId: fields.objectId,
-          publisherPriority: fields.publisherPriority,
-          status: fields.status,
-          extensions:
-            fields.extensions && fields.extensions.length > 0 ? fields.extensions : undefined,
-          payload,
-        };
-
-        // 統計カウンターを更新
+  ): {
+    remainingBuffer: Uint8Array;
+    context: import("./dataStream").FetchObjectContext | null;
+    isFirst: boolean;
+  } {
+    return processFetchObjects(buffer, fetcher, context, isFirst, {
+      incrementObjectsReceived: () => {
         this.statsObjectsReceivedViaFetch++;
-        this.statsBytesReceivedViaFetch += payload.byteLength;
-
-        fetcher.handleObject(object);
-      } catch {
-        // パースに失敗 - データが不足している可能性
-        break;
-      }
-    }
-
-    // 残りのバッファを返す
-    return buffer.slice(offset);
+      },
+      incrementBytesReceived: (_subscribePath, bytes) => {
+        this.statsBytesReceivedViaFetch += bytes;
+      },
+    });
   }
 
   /**
@@ -2794,125 +3229,157 @@ export class SessionImpl implements Session {
    * パース可能なオブジェクトを全て処理し、残りのバッファと状態を返す
    */
   private processSubgroupObjects(
-    buffer: Uint8Array<ArrayBufferLike>,
+    buffer: Uint8Array,
     subscriber: SubscriberImpl,
     header: import("./dataStream").SubgroupHeader,
     previousObjectId: bigint,
-  ): { remainingBuffer: Uint8Array<ArrayBufferLike>; previousObjectId: bigint } {
-    let offset = 0;
-    let currentPreviousObjectId = previousObjectId;
-
-    while (offset < buffer.length) {
-      try {
-        const [fields, fieldsConsumed] = decodeObjectFields(buffer, header.type, offset);
-
-        // ペイロード長を確認
-        const payloadLength = Number(fields.payloadLength);
-        const totalNeeded = offset + fieldsConsumed + payloadLength;
-
-        if (totalNeeded > buffer.length) {
-          // ペイロードが不完全 - 次のチャンクを待つ
-          break;
-        }
-
-        offset += fieldsConsumed;
-
-        // Object ID を計算
-        let objectId: bigint;
-        if (currentPreviousObjectId < 0n) {
-          objectId = fields.objectIdDelta;
-        } else {
-          objectId = currentPreviousObjectId + fields.objectIdDelta + 1n;
-        }
-        currentPreviousObjectId = objectId;
-
-        // ペイロードを抽出
-        const payload = buffer.slice(offset, offset + payloadLength);
-        offset += payloadLength;
-
-        const object: MoqtObject = {
-          groupId: header.groupId,
-          subgroupId: header.subgroupId,
-          objectId,
-          publisherPriority: header.publisherPriority,
-          status: fields.status,
-          extensions: fields.extensions.length > 0 ? fields.extensions : undefined,
-          payload,
-        };
-
-        // 統計カウンターを更新
+  ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
+    return processSubgroupObjects(buffer, subscriber, header, previousObjectId, {
+      incrementObjectsReceived: () => {
         this.statsObjectsReceivedViaSubscribe++;
-        this.statsBytesReceivedViaSubscribe += payload.byteLength;
-
-        subscriber.handleObject(object);
-      } catch {
-        // パースに失敗 - データが不足している可能性
-        break;
-      }
-    }
-
-    return {
-      remainingBuffer: buffer.slice(offset),
-      previousObjectId: currentPreviousObjectId,
-    };
+      },
+      incrementBytesReceived: (_subscribePath, bytes) => {
+        this.statsBytesReceivedViaSubscribe += bytes;
+      },
+    });
   }
 
   /**
-   * バッファリングされた Subgroup ストリームを処理
-   * SUBSCRIBE_OK より先にデータストリームが到着した場合に使用
+   * Subgroup ストリームを処理する
+   *
+   * draft-ietf-moq-transport-17 §10.4.2:
+   * "If an endpoint receives a subgroup with an unknown Track Alias, it MAY abandon
+   *  the stream, or choose to buffer it for a brief period to handle reordering with
+   *  the control message that establishes the Track Alias."
+   *
+   * subscriber が登録済みであれば即座に通常 mode で読み出す。
+   * 未登録なら pending mode に入り、Promise.race で chunk 受信と subscriber 通知を並走させる。
+   * subscriber 登録後は累積 chunks を flush して通常 mode に合流する。
+   * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
    */
-  private processPendingSubgroupStream(
-    subscriber: SubscriberImpl,
+  private async handleSubgroupStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
     header: import("./dataStream").SubgroupHeader,
-    data: Uint8Array,
-  ): void {
+    initialBuffer: Uint8Array,
+  ): Promise<void> {
+    let buffer = initialBuffer;
     let previousObjectId = -1n;
-    let buffer = data;
+    let subscriber: SubscriberImpl | null = this.subscribersByAlias.get(header.trackAlias) ?? null;
 
-    while (buffer.length > 0) {
+    // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
+    // ReadableStreamDefaultReader.read() は中断不能なため、Promise.race で別経路が
+    // 勝ったときに pendingRead を破棄せず保持し、subscriber mode の最初の read として消費する
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+
+    if (subscriber === null) {
+      const entry = this.pendingSubgroupBuffer.add(header.trackAlias, header);
+      let entryRemoved = false;
+
       try {
-        const [fields, fieldsConsumed] = decodeObjectFields(buffer, header.type, 0);
-
-        const payloadLength = Number(fields.payloadLength);
-        const totalNeeded = fieldsConsumed + payloadLength;
-
-        if (totalNeeded > buffer.length) {
-          // ペイロードが不完全
-          break;
+        // ヘッダパース直後に余っていた payload を pending entry に移し、ローカル buffer は空にする
+        // subscriber mode 復帰時に entry.chunks の concat 結果で buffer を作り直す
+        if (initialBuffer.byteLength > 0) {
+          this.pendingSubgroupBuffer.appendChunk(entry, initialBuffer);
+          buffer = new Uint8Array(0);
         }
 
-        // Object ID を計算
-        let objectId: bigint;
-        if (previousObjectId < 0n) {
-          objectId = fields.objectIdDelta;
-        } else {
-          objectId = previousObjectId + fields.objectIdDelta + 1n;
+        while (subscriber === null) {
+          pendingRead ??= reader.read();
+          const event = await Promise.race([
+            pendingRead.then((result) => ({ kind: "chunk" as const, result })),
+            entry.notified.then((reason) => ({ kind: "notify" as const, reason })),
+          ]);
+
+          if (event.kind === "chunk") {
+            pendingRead = null;
+            const chunk = event.result.value;
+            if (chunk && chunk.byteLength > 0) {
+              this.pendingSubgroupBuffer.appendChunk(entry, chunk);
+            }
+            if (event.result.done) {
+              entry.notify("end-of-stream");
+            }
+            continue;
+          }
+
+          // event.kind === "notify"
+          if (event.reason === "subscriber") {
+            subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
+            if (subscriber === null) {
+              // 通知発火と subscribers 解放が race した稀なケース: abandon
+              this.pendingSubgroupBuffer.remove(entry);
+              entryRemoved = true;
+              await cancelStreamQuiet(
+                reader,
+                `inconsistent subscriber state: trackAlias=${header.trackAlias}`,
+              );
+              return;
+            }
+            // pending chunks を 1 本に concat して buffer に格納し subscriber mode へ遷移する
+            buffer = concatChunks(entry.chunks);
+            this.pendingSubgroupBuffer.remove(entry);
+            entryRemoved = true;
+            break;
+          }
+
+          // abandon (timeout / overflow-per-stream / overflow-per-session / session-close / end-of-stream)
+          this.pendingSubgroupBuffer.remove(entry);
+          entryRemoved = true;
+          await cancelStreamQuiet(
+            reader,
+            `pending subgroup ${event.reason}: trackAlias=${header.trackAlias}`,
+          );
+          return;
         }
-        previousObjectId = objectId;
-
-        // ペイロードを抽出
-        const payload = buffer.slice(fieldsConsumed, fieldsConsumed + payloadLength);
-        buffer = buffer.slice(totalNeeded);
-
-        const object: MoqtObject = {
-          groupId: header.groupId,
-          subgroupId: header.subgroupId,
-          objectId,
-          publisherPriority: header.publisherPriority,
-          status: fields.status,
-          extensions: fields.extensions.length > 0 ? fields.extensions : undefined,
-          payload,
-        };
-
-        // 統計カウンターを更新
-        this.statsObjectsReceivedViaSubscribe++;
-        this.statsBytesReceivedViaSubscribe += payload.byteLength;
-
-        subscriber.handleObject(object);
-      } catch {
-        // パースに失敗
-        break;
+      } finally {
+        if (!entryRemoved) {
+          // 例外脱出時の救済 cleanup (二重 remove は no-op で安全)
+          this.pendingSubgroupBuffer.remove(entry);
+        }
       }
+    }
+
+    // subscriber mode: 通常の Subgroup ストリーム処理ループ
+    // pendingRead が pending mode から持ち越されている場合はそれを最初の read として消費する
+    while (true) {
+      let result: ReadableStreamReadResult<Uint8Array>;
+      if (pendingRead !== null) {
+        result = await pendingRead;
+        pendingRead = null;
+      } else {
+        result = await reader.read();
+      }
+
+      if (result.value && result.value.byteLength > 0) {
+        const next = new Uint8Array(buffer.byteLength + result.value.byteLength);
+        next.set(buffer);
+        next.set(result.value, buffer.byteLength);
+        buffer = next;
+      }
+
+      const processResult = this.processSubgroupObjects(
+        buffer,
+        subscriber,
+        header,
+        previousObjectId,
+      );
+      buffer = processResult.remainingBuffer;
+      previousObjectId = processResult.previousObjectId;
+
+      if (result.done) break;
     }
   }
 }
+
+// 純粋関数群は session/params.ts に移動
+export {
+  buildPublishParameters,
+  buildPublishTrackProperties,
+  buildSubscribeParameters,
+  extractLargestLocation,
+  extractForwardState,
+  validateFetchOkEndLocation,
+  classifyIncomingStreamType,
+  calculateObjectIdDelta,
+  type IncomingStreamKind,
+} from "./session/params";

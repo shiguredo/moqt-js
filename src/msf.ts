@@ -3,153 +3,198 @@
  *
  * MSF = LOC (メディアパッケージング) + Catalog (メタデータ) + Timeline (オプション)
  *
- * 参照: refs/moq/draft-ietf-moq-msf.md
+ * 参照: draft-ietf-moq-msf-00
  */
 
 // =============================================================================
 // 定数
 // =============================================================================
 
-/** MSF バージョン */
+/** MSF バージョン (Section 5.1.1) */
 export const MSF_VERSION = 1;
 
-/** Catalog トラック名 (固定) */
+/** Catalog トラック名 (固定, Section 5) */
 export const CATALOG_TRACK_NAME = "catalog";
 
-/** パッケージング形式 */
+/** パッケージング形式 (Section 5.1.12, Table 3) */
 export type PackagingType = "loc" | "mediatimeline" | "eventtimeline";
 
-/** トラックの役割 (拡張可能) */
+/** トラックの役割 (Section 5.1.14, Table 4, 拡張可能) */
 export type TrackRole = string;
+
+export interface TimelineEncodingOptions {
+  gzip?: boolean;
+}
+
+const GZIP_MAGIC_BYTE_1 = 0x1f;
+const GZIP_MAGIC_BYTE_2 = 0x8b;
 
 // =============================================================================
 // Catalog 型定義
 // =============================================================================
 
 /**
- * Catalog トラック定義
+ * Catalog トラック定義 (Section 5.1.9)
  */
 export interface CatalogTrack {
-  /** トラック名 (必須) */
+  /** トラック名 (必須, Section 5.1.11) */
   name: string;
 
-  /** パッケージング形式 (必須) */
+  /** パッケージング形式 (必須, Section 5.1.12) */
   packaging: PackagingType;
 
-  /** ライブ配信かどうか (必須) */
+  /** ライブ配信かどうか (必須, Section 5.1.15) */
   isLive: boolean;
 
-  /** トラックの名前空間 */
+  /** トラックの名前空間 (Section 5.1.10) */
   namespace?: string;
 
-  /** 目標遅延 (ms) */
+  /** 目標遅延 (ms, Section 5.1.16) */
   targetLatency?: number;
 
-  /** トラックの役割 */
+  /** トラックの役割 (Section 5.1.14) */
   role?: TrackRole;
 
-  /** 人間が読めるラベル */
+  /** 人間が読めるラベル (Section 5.1.17) */
   label?: string;
 
-  /** 同時レンダリンググループ */
+  /** 同時レンダリンググループ (Section 5.1.18) */
   renderGroup?: number;
 
-  /** 代替トラックグループ (ABR 用) */
+  /** 代替トラックグループ (ABR 用, Section 5.1.19) */
   altGroup?: number;
 
-  /** Base64 エンコードされた初期化データ */
+  /** Base64 エンコードされた初期化データ (Section 5.1.20) */
   initData?: string;
 
-  /** 依存トラック名の配列 */
+  /** 依存トラック名の配列 (Section 5.1.21) */
   depends?: string[];
 
-  /** テンポラルレイヤー ID */
+  /** テンポラルレイヤー ID (Section 5.1.22) */
   temporalId?: number;
 
-  /** スペーシャルレイヤー ID */
+  /** スペーシャルレイヤー ID (Section 5.1.23) */
   spatialId?: number;
 
-  /** コーデック (WebCodecs 形式) */
+  /** コーデック (WebCodecs 形式, Section 5.1.24) */
   codec?: string;
 
-  /** MIME タイプ */
+  /** MIME タイプ (Section 5.1.25) */
   mimeType?: string;
 
-  /** フレームレート (fps) */
+  /** フレームレート (fps, Section 5.1.26) */
   framerate?: number;
 
-  /** 1秒あたりの時間単位数 */
+  /** 1秒あたりの時間単位数 (Section 5.1.27) */
   timescale?: number;
 
-  /** ビットレート (bps) */
+  /** ビットレート (bps, Section 5.1.28) */
   bitrate?: number;
 
-  /** 映像幅 (px) */
+  /** 映像幅 (px, Section 5.1.29) */
   width?: number;
 
-  /** 映像高さ (px) */
+  /** 映像高さ (px, Section 5.1.30) */
   height?: number;
 
-  /** 表示幅 (px) */
+  /** 表示幅 (px, Section 5.1.33) */
   displayWidth?: number;
 
-  /** 表示高さ (px) */
+  /** 表示高さ (px, Section 5.1.34) */
   displayHeight?: number;
 
-  /** オーディオサンプルレート */
+  /** オーディオサンプルレート (Section 5.1.31) */
   samplerate?: number;
 
-  /** チャンネル構成 */
+  /** チャンネル構成 (Section 5.1.32) */
   channelConfig?: string;
 
-  /** 言語タグ (RFC 5646) */
+  /** 言語タグ (RFC 5646, Section 5.1.35) */
   lang?: string;
 
-  /** 親トラック名 (cloneTracks 用) */
+  /** 親トラック名 (cloneTracks 用, Section 5.1.36) */
   parentName?: string;
 
-  /** トラック長 (ms, VOD 用) */
+  /** トラック長 (ms, VOD 用, Section 5.1.37) */
   trackDuration?: number;
 
-  /** イベントタイムラインのタイプ (packaging が eventtimeline の場合に必須) */
+  /** イベントタイムラインのタイプ (packaging が eventtimeline の場合に必須, Section 5.1.13) */
   eventType?: string;
 }
 
 /**
- * Catalog ルート構造
+ * removeTracks で使用するトラック識別子 (Section 5.1.4)
+ *
+ * Each track object MUST include a Track Name field,
+ * MAY include a Track Namespace field and MUST NOT hold any other fields.
+ */
+export interface RemoveTrack {
+  /** トラック名 (必須) */
+  name: string;
+
+  /** トラックの名前空間 */
+  namespace?: string;
+}
+
+/**
+ * フルカタログ (Section 5.1)
+ *
+ * version と tracks が必須。delta update ではないカタログ。
  */
 export interface Catalog {
-  /** MSF バージョン (必須, 現在は 1) */
+  /** MSF バージョン (必須, 現在は 1, Section 5.1.1) */
   version: typeof MSF_VERSION;
 
-  /** トラック配列 (必須) */
+  /** トラック配列 (必須, Section 5.1.8) */
   tracks: CatalogTrack[];
 
-  /** 差分更新かどうか */
-  deltaUpdate?: boolean;
-
-  /** 追加するトラック (差分更新時) */
-  addTracks?: CatalogTrack[];
-
-  /** 削除するトラック名 (差分更新時) */
-  removeTracks?: string[];
-
-  /** 複製するトラック (差分更新時) */
-  cloneTracks?: CatalogTrack[];
-
-  /** 生成時刻 (Unix ms) */
+  /** 生成時刻 (Unix ms, Section 5.1.6) */
   generatedAt?: number;
 
-  /** 配信完了フラグ */
+  /** 配信完了フラグ (Section 5.1.7) */
   isComplete?: boolean;
 }
+
+/**
+ * 差分更新カタログの操作 (Section 5.2)
+ *
+ * The Add, Delete and Clone operations are applied sequentially
+ * in the order they are declared in the document.
+ */
+export type CatalogDeltaOperation =
+  | { type: "add"; tracks: CatalogTrack[] }
+  | { type: "remove"; tracks: RemoveTrack[] }
+  | { type: "clone"; tracks: CatalogTrack[] };
+
+/**
+ * 差分更新カタログ (Section 5.2)
+ *
+ * Delta update は version と tracks を含んではならない (MUST NOT)。
+ * operations に少なくとも 1 つの操作が必須。
+ * 操作は JSON ドキュメント内の宣言順に逐次適用される。
+ */
+export interface CatalogDelta {
+  /** 差分更新フラグ (必須, Section 5.1.2) */
+  deltaUpdate: true;
+
+  /** 操作リスト (宣言順, Section 5.2) */
+  operations: CatalogDeltaOperation[];
+
+  /** 生成時刻 (Unix ms, Section 5.1.6) */
+  generatedAt?: number;
+}
+
+/**
+ * カタログメッセージ (フルカタログまたは差分更新)
+ */
+export type CatalogMessage = Catalog | CatalogDelta;
 
 // =============================================================================
 // Media Timeline 型定義
 // =============================================================================
 
 /**
- * Media Timeline エントリ
+ * Media Timeline エントリ (Section 7.1)
  *
  * [mediaPts, [groupId, objectId], wallclock]
  */
@@ -167,7 +212,10 @@ export type MediaTimelineEntry = [
 // =============================================================================
 
 /**
- * Event Timeline エントリ
+ * Event Timeline エントリ (Section 8.1)
+ *
+ * data は任意の JSON 値 (オブジェクト、配列、文字列、数値等)。
+ * 型と構造は Catalog の eventType フィールドで定義される。
  */
 export interface EventTimelineEntry {
   /** 壁時計時間 (Unix ms) */
@@ -179,8 +227,8 @@ export interface EventTimelineEntry {
   /** メディア PTS (ms) */
   m?: number;
 
-  /** イベントデータ */
-  data: Record<string, unknown>;
+  /** イベントデータ (Section 8.1, 構造は eventType で定義) */
+  data: unknown;
 }
 
 // =============================================================================
@@ -188,7 +236,7 @@ export interface EventTimelineEntry {
 // =============================================================================
 
 /**
- * Catalog を JSON 文字列にエンコードする
+ * フルカタログを JSON 文字列にエンコードする
  */
 export function encodeCatalog(catalog: Catalog): Uint8Array {
   const json = JSON.stringify(catalog);
@@ -196,36 +244,159 @@ export function encodeCatalog(catalog: Catalog): Uint8Array {
 }
 
 /**
- * JSON バイト列を Catalog にデコードする
+ * 差分更新カタログを JSON 文字列にエンコードする (Section 5.2)
+ *
+ * operations の宣言順を JSON キー順として出力する。
  */
-export function decodeCatalog(data: Uint8Array): Catalog {
-  const json = new TextDecoder().decode(data);
-  const parsed = JSON.parse(json) as unknown;
+export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
+  const obj: Record<string, unknown> = { deltaUpdate: true };
 
-  if (!isCatalog(parsed)) {
-    throw new Error("invalid catalog format");
+  // JSON オブジェクトのキーは重複できないため、同一タイプの操作は 1 回のみ許可する
+  const seen = new Set<string>();
+  for (const operation of delta.operations) {
+    if (seen.has(operation.type)) {
+      throw new Error(`duplicate operation type: "${operation.type}"`);
+    }
+    seen.add(operation.type);
+
+    if (operation.type === "add") {
+      obj["addTracks"] = operation.tracks;
+    } else if (operation.type === "remove") {
+      obj["removeTracks"] = operation.tracks;
+    } else if (operation.type === "clone") {
+      obj["cloneTracks"] = operation.tracks;
+    }
   }
 
-  return parsed;
+  if (delta.generatedAt !== undefined) {
+    obj["generatedAt"] = delta.generatedAt;
+  }
+
+  const json = JSON.stringify(obj);
+  return new TextEncoder().encode(json);
 }
 
 /**
- * オブジェクトが Catalog かどうかを検証する
+ * JSON バイト列をカタログメッセージにデコードする (Section 5.1, 5.2)
+ *
+ * deltaUpdate: true の場合は CatalogDelta として、
+ * そうでない場合はフルカタログ (Catalog) としてデコードする。
+ *
+ * CatalogDelta のデコードでは JSON オブジェクトのキー宣言順を operations 配列として保持する。
+ * これにより §5.2 の「宣言順に逐次適用」を正確に再現できる。
  */
-function isCatalog(obj: unknown): obj is Catalog {
-  if (typeof obj !== "object" || obj === null) {
-    return false;
+export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
+  const json = new TextDecoder().decode(data);
+  const parsed = JSON.parse(json) as unknown;
+
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("invalid catalog format: expected object");
   }
 
-  const catalog = obj as Record<string, unknown>;
+  const obj = parsed as Record<string, unknown>;
 
-  // version は必須で 1 である必要がある
-  if (catalog["version"] !== MSF_VERSION) {
+  // deltaUpdate: true の場合は差分更新
+  if (obj["deltaUpdate"] === true) {
+    const delta = decodeCatalogDelta(obj);
+    if (delta === null) {
+      throw new Error("invalid catalog delta format");
+    }
+    return delta;
+  }
+
+  // それ以外はフルカタログ
+  if (!isCatalog(obj)) {
+    throw new Error("invalid catalog format");
+  }
+
+  return obj as unknown as Catalog;
+}
+
+/**
+ * オブジェクトを CatalogDelta にデコードする (Section 5.2)
+ *
+ * JSON キーの宣言順を操作順として operations 配列に変換する。
+ * V8 をはじめ現代の JS エンジンは非整数キーの挿入順を保持するため、
+ * Object.keys() の順序が JSON の宣言順と一致する。
+ */
+function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta | null {
+  // deltaUpdate: true は必須
+  if (obj["deltaUpdate"] !== true) {
+    return null;
+  }
+
+  // version と tracks を含んではならない (MUST NOT)
+  if ("version" in obj || "tracks" in obj) {
+    return null;
+  }
+
+  // addTracks, removeTracks, cloneTracks のうち少なくとも 1 つが必須
+  const hasAddTracks = Array.isArray(obj["addTracks"]);
+  const hasRemoveTracks = Array.isArray(obj["removeTracks"]);
+  const hasCloneTracks = Array.isArray(obj["cloneTracks"]);
+
+  if (!hasAddTracks && !hasRemoveTracks && !hasCloneTracks) {
+    return null;
+  }
+
+  // 各操作内のトラックを検証する
+  if (hasAddTracks) {
+    for (const track of obj["addTracks"] as unknown[]) {
+      if (!isCatalogTrack(track)) {
+        return null;
+      }
+    }
+  }
+  if (hasRemoveTracks) {
+    for (const track of obj["removeTracks"] as unknown[]) {
+      if (!isRemoveTrack(track)) {
+        return null;
+      }
+    }
+  }
+  if (hasCloneTracks) {
+    for (const track of obj["cloneTracks"] as unknown[]) {
+      if (!isCatalogTrack(track)) {
+        return null;
+      }
+    }
+  }
+
+  // JSON キー宣言順で操作リストを構築する
+  const operations: CatalogDeltaOperation[] = [];
+  for (const key of Object.keys(obj)) {
+    if (key === "addTracks" && hasAddTracks) {
+      operations.push({ type: "add", tracks: obj["addTracks"] as CatalogTrack[] });
+    } else if (key === "removeTracks" && hasRemoveTracks) {
+      operations.push({ type: "remove", tracks: obj["removeTracks"] as RemoveTrack[] });
+    } else if (key === "cloneTracks" && hasCloneTracks) {
+      operations.push({ type: "clone", tracks: obj["cloneTracks"] as CatalogTrack[] });
+    }
+  }
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations,
+  };
+
+  if (typeof obj["generatedAt"] === "number") {
+    delta.generatedAt = obj["generatedAt"];
+  }
+
+  return delta;
+}
+
+/**
+ * オブジェクトがフルカタログかどうかを検証する
+ */
+function isCatalog(obj: Record<string, unknown>): boolean {
+  // version は必須で MSF_VERSION (1) である必要がある
+  if (obj["version"] !== MSF_VERSION) {
     return false;
   }
 
   // tracks は必須で配列である必要がある
-  const tracks = catalog["tracks"];
+  const tracks = obj["tracks"];
   if (!Array.isArray(tracks)) {
     return false;
   }
@@ -235,6 +406,27 @@ function isCatalog(obj: unknown): obj is Catalog {
     if (!isCatalogTrack(track)) {
       return false;
     }
+  }
+
+  return true;
+}
+
+/**
+ * オブジェクトが RemoveTrack かどうかを検証する (Section 5.1.4)
+ *
+ * Each track object MUST include a Track Name field,
+ * MAY include a Track Namespace field and MUST NOT hold any other fields.
+ */
+function isRemoveTrack(obj: unknown): obj is RemoveTrack {
+  if (typeof obj !== "object" || obj === null) {
+    return false;
+  }
+
+  const track = obj as Record<string, unknown>;
+
+  // name は必須
+  if (typeof track["name"] !== "string") {
+    return false;
   }
 
   return true;
@@ -273,11 +465,14 @@ function isCatalogTrack(obj: unknown): obj is CatalogTrack {
 // =============================================================================
 
 /**
- * Media Timeline を JSON 文字列にエンコードする
+ * Media Timeline を JSON 文字列にエンコードする (Section 7.1)
  *
  * bigint は JSON.stringify で扱えないため、number に変換する
  */
-export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
+export async function encodeMediaTimeline(
+  entries: MediaTimelineEntry[],
+  options: TimelineEncodingOptions = {},
+): Promise<Uint8Array> {
   // bigint を number に変換
   const serializable = entries.map(([mediaPts, [groupId, objectId], wallclock]) => [
     mediaPts,
@@ -286,14 +481,21 @@ export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
   ]);
 
   const json = JSON.stringify(serializable);
-  return new TextEncoder().encode(json);
+  const encoded = new TextEncoder().encode(json);
+
+  if (!options.gzip) {
+    return encoded;
+  }
+
+  return compressWithGzip(encoded);
 }
 
 /**
- * JSON バイト列を Media Timeline にデコードする
+ * JSON バイト列を Media Timeline にデコードする (Section 7.1)
  */
-export function decodeMediaTimeline(data: Uint8Array): MediaTimelineEntry[] {
-  const json = new TextDecoder().decode(data);
+export async function decodeMediaTimeline(data: Uint8Array): Promise<MediaTimelineEntry[]> {
+  const decodedData = isGzipCompressed(data) ? await decompressWithGzip(data) : data;
+  const json = new TextDecoder().decode(decodedData);
   const parsed = JSON.parse(json) as unknown;
 
   if (!Array.isArray(parsed)) {
@@ -345,9 +547,12 @@ function isMediaTimelineEntry(entry: unknown): boolean {
 // =============================================================================
 
 /**
- * Event Timeline を JSON 文字列にエンコードする
+ * Event Timeline を JSON 文字列にエンコードする (Section 8.1)
  */
-export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
+export async function encodeEventTimeline(
+  entries: EventTimelineEntry[],
+  options: TimelineEncodingOptions = {},
+): Promise<Uint8Array> {
   // bigint を number に変換
   const serializable = entries.map((entry) => {
     const result: Record<string, unknown> = { data: entry.data };
@@ -366,14 +571,21 @@ export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
   });
 
   const json = JSON.stringify(serializable);
-  return new TextEncoder().encode(json);
+  const encoded = new TextEncoder().encode(json);
+
+  if (!options.gzip) {
+    return encoded;
+  }
+
+  return compressWithGzip(encoded);
 }
 
 /**
- * JSON バイト列を Event Timeline にデコードする
+ * JSON バイト列を Event Timeline にデコードする (Section 8.1)
  */
-export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
-  const json = new TextDecoder().decode(data);
+export async function decodeEventTimeline(data: Uint8Array): Promise<EventTimelineEntry[]> {
+  const decodedData = isGzipCompressed(data) ? await decompressWithGzip(data) : data;
+  const json = new TextDecoder().decode(decodedData);
   const parsed = JSON.parse(json) as unknown;
 
   if (!Array.isArray(parsed)) {
@@ -387,7 +599,7 @@ export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
 
     const obj = entry as Record<string, unknown>;
     const result: EventTimelineEntry = {
-      data: obj["data"] as Record<string, unknown>,
+      data: obj["data"],
     };
 
     const t = obj["t"];
@@ -410,7 +622,14 @@ export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
 }
 
 /**
- * オブジェクトが Event Timeline エントリかどうかを検証する
+ * オブジェクトが Event Timeline エントリかどうかを検証する (Section 8.1)
+ *
+ * data は必須 (任意の JSON 値)。
+ * t (壁時計), l (Location), m (メディア PTS) はインデックス参照で、
+ * ちょうど 1 つのみが必須。同一レコード内で複数のインデックスは禁止。
+ *
+ * Each record MUST contain exactly one of the following index references:
+ * a wall clock time, a Location, or a Media PTS.
  */
 function isEventTimelineEntry(entry: unknown): boolean {
   if (typeof entry !== "object" || entry === null) {
@@ -419,19 +638,18 @@ function isEventTimelineEntry(entry: unknown): boolean {
 
   const obj = entry as Record<string, unknown>;
 
-  // data は必須
-  const data = obj["data"];
-  if (typeof data !== "object" || data === null) {
+  // data は必須 (undefined や null でない任意の JSON 値)
+  if (!("data" in obj) || obj["data"] === undefined) {
     return false;
   }
 
-  // t はオプションだが、存在する場合は number
+  // t は存在する場合は number
   const t = obj["t"];
   if (t !== undefined && typeof t !== "number") {
     return false;
   }
 
-  // l はオプションだが、存在する場合は [number, number]
+  // l は存在する場合は [number, number]
   const l = obj["l"];
   if (l !== undefined) {
     if (!Array.isArray(l) || l.length !== 2) {
@@ -442,13 +660,51 @@ function isEventTimelineEntry(entry: unknown): boolean {
     }
   }
 
-  // m はオプションだが、存在する場合は number
+  // m は存在する場合は number
   const m = obj["m"];
   if (m !== undefined && typeof m !== "number") {
     return false;
   }
 
+  // ちょうど 1 つのインデックスが必須 (Section 8.1)
+  const indexCount =
+    (t !== undefined ? 1 : 0) + (l !== undefined ? 1 : 0) + (m !== undefined ? 1 : 0);
+  if (indexCount !== 1) {
+    return false;
+  }
+
   return true;
+}
+
+function isGzipCompressed(data: Uint8Array): boolean {
+  return data.length >= 2 && data[0] === GZIP_MAGIC_BYTE_1 && data[1] === GZIP_MAGIC_BYTE_2;
+}
+
+async function compressWithGzip(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof CompressionStream === "undefined") {
+    throw new Error("gzip compression is not supported in this runtime");
+  }
+
+  return readCompressedStream(data, new CompressionStream("gzip"));
+}
+
+async function decompressWithGzip(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("gzip decompression is not supported in this runtime");
+  }
+
+  return readCompressedStream(data, new DecompressionStream("gzip"));
+}
+
+async function readCompressedStream(
+  data: Uint8Array,
+  compressionStream: CompressionStream | DecompressionStream,
+): Promise<Uint8Array> {
+  const inputBuffer = new ArrayBuffer(data.byteLength);
+  new Uint8Array(inputBuffer).set(data);
+  const stream = new Blob([inputBuffer]).stream().pipeThrough(compressionStream);
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
 }
 
 // =============================================================================
@@ -505,7 +761,7 @@ export function createCatalog(
 }
 
 /**
- * 配信完了を示す Catalog を作成する
+ * 配信完了を示す Catalog を作成する (Section 5.1.7, 9.2)
  */
 export function createCompleteCatalog(): Catalog {
   return {
@@ -520,55 +776,67 @@ export function createCompleteCatalog(): Catalog {
 // =============================================================================
 
 /**
- * 差分更新を適用して新しい Catalog を作成する
+ * 差分更新を適用して新しい Catalog を作成する (Section 5.2)
  *
- * deltaUpdate: true の場合、addTracks, removeTracks, cloneTracks を適用する
+ * The Add, Delete and Clone operations are applied sequentially
+ * in the order they are declared in the document.
+ *
+ * isComplete は一度設定したら削除禁止 (MUST NOT) のため引き継ぐ (Section 5.1.7)。
  */
-export function applyCatalogDelta(current: Catalog, delta: Catalog): Catalog {
-  // deltaUpdate でない場合はそのまま置き換え
-  if (!delta.deltaUpdate) {
-    return delta;
-  }
-
-  // 現在のトラックをコピー
+export function applyCatalogDelta(current: Catalog, delta: CatalogDelta): Catalog {
   let tracks = [...current.tracks];
 
-  // removeTracks: 指定されたトラック名を削除
-  if (delta.removeTracks && delta.removeTracks.length > 0) {
-    const removeSet = new Set(delta.removeTracks);
-    tracks = tracks.filter((track) => !removeSet.has(track.name));
-  }
-
-  // addTracks: 新しいトラックを追加
-  if (delta.addTracks && delta.addTracks.length > 0) {
-    tracks = [...tracks, ...delta.addTracks];
-  }
-
-  // cloneTracks: 既存トラックを複製して追加
-  if (delta.cloneTracks && delta.cloneTracks.length > 0) {
-    for (const cloneTrack of delta.cloneTracks) {
-      // depends に指定されたトラックを探してベースにする
-      if (cloneTrack.depends && cloneTrack.depends.length > 0) {
-        const baseTrackName = cloneTrack.depends[0];
-        const baseTrack = tracks.find((t) => t.name === baseTrackName);
-        if (baseTrack) {
-          // ベーストラックをコピーして cloneTrack のプロパティで上書き
-          const cloned: CatalogTrack = { ...baseTrack, ...cloneTrack };
-          tracks.push(cloned);
+  // 操作を宣言順に逐次適用する (Section 5.2)
+  for (const operation of delta.operations) {
+    if (operation.type === "remove") {
+      // 指定されたトラックを name (+namespace) で削除 (Section 5.1.4)
+      for (const removeTrack of operation.tracks) {
+        tracks = tracks.filter((track) => {
+          if (track.name !== removeTrack.name) {
+            return true;
+          }
+          // namespace が指定されている場合はそれも一致する必要がある
+          if (removeTrack.namespace !== undefined) {
+            return track.namespace !== removeTrack.namespace;
+          }
+          return false;
+        });
+      }
+    } else if (operation.type === "add") {
+      // 新しいトラックを追加 (Section 5.1.3)
+      tracks = [...tracks, ...operation.tracks];
+    } else if (operation.type === "clone") {
+      // parentName で指定された既存トラックを複製して追加 (Section 5.1.5, 5.1.36)
+      for (const cloneTrack of operation.tracks) {
+        // parentName は必須 (Section 5.1.5: Each track object MUST include a Parent Name field)
+        if (!cloneTrack.parentName) {
+          throw new Error(`clone track missing parentName: name="${cloneTrack.name}"`);
         }
-      } else {
-        // depends がない場合はそのまま追加
-        tracks.push(cloneTrack);
+        const baseTrack = tracks.find((t) => t.name === cloneTrack.parentName);
+        if (!baseTrack) {
+          throw new Error(`clone track parent not found: parentName="${cloneTrack.parentName}"`);
+        }
+        // ベーストラックをコピーして cloneTrack のプロパティで上書き
+        // parentName はクローン後のトラックからは削除する
+        const { parentName: _, ...cloneProps } = cloneTrack;
+        const cloned: CatalogTrack = { ...baseTrack, ...cloneProps };
+        tracks.push(cloned);
       }
     }
   }
 
-  return {
+  const result: Catalog = {
     version: MSF_VERSION,
     tracks,
     generatedAt: delta.generatedAt ?? current.generatedAt,
-    isComplete: delta.isComplete,
   };
+
+  // isComplete は一度設定したら削除禁止 (MUST NOT) のため引き継ぐ (Section 5.1.7)
+  if (current.isComplete !== undefined) {
+    result.isComplete = current.isComplete;
+  }
+
+  return result;
 }
 
 // =============================================================================
@@ -576,18 +844,19 @@ export function applyCatalogDelta(current: Catalog, delta: Catalog): Catalog {
 // =============================================================================
 
 /**
- * 最初の Group ID を生成する
+ * 最初の Group ID を生成する (Section 6.1)
  *
- * MSF 仕様: 最初の Group ID は一意な整数 (Unix エポックからのミリ秒を推奨)
+ * The Group ID of the first Group published in a track at application startup
+ * MUST be a unique integer that will not repeat in the future.
  */
 export function createInitialGroupId(): bigint {
   return BigInt(Date.now());
 }
 
 /**
- * 次の Group ID を計算する
+ * 次の Group ID を計算する (Section 6.1)
  *
- * MSF 仕様: 以降の Group ID は 1 ずつ増加
+ * Each subsequent Group ID MUST increase by 1.
  */
 export function nextGroupId(current: bigint): bigint {
   return current + 1n;
