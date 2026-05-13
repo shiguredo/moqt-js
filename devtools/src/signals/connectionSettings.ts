@@ -12,6 +12,9 @@ export { toHttpVersionLabel };
 
 // Connection settings
 export const url = signal("moqt://127.0.0.1:4443/moqt");
+// moqt URI の Fragment Identifier (draft-ietf-moq-transport-18 §3.1.2)
+// 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
+export const fragment = signal("");
 export const namespace = signal("room/123");
 export const trackName = signal("video");
 export const codec = signal<CodecType>("vp8");
@@ -154,6 +157,23 @@ export async function fetchCameraDevices(): Promise<void> {
 }
 
 /**
+ * `connect()` に渡す MOQT URI を現在の設定から構築する。
+ * draft-ietf-moq-transport-18 §3.1.2 (Fragment Identifiers) に従い
+ * `fragment` が空でなければ `#type:value` を連結する。
+ */
+export function buildConnectUrl(): string {
+  const baseUrl = url.value;
+  const fragmentValue = fragment.value.trim();
+  if (fragmentValue.length === 0) {
+    return baseUrl;
+  }
+  // baseUrl 末尾に既に fragment があれば差し替える
+  const hashIndex = baseUrl.indexOf("#");
+  const withoutFragment = hashIndex === -1 ? baseUrl : baseUrl.slice(0, hashIndex);
+  return `${withoutFragment}#${fragmentValue}`;
+}
+
+/**
  * `connect()` に渡すオプション群を現在の設定から構築する。
  * certificateHash と authorizationToken は未設定なら省略する。
  */
@@ -200,6 +220,9 @@ export function buildQueryString(): string {
 
   params.set("url", url.value);
 
+  if (fragment.value) {
+    params.set("fragment", fragment.value);
+  }
   if (namespace.value) {
     params.set("namespace", namespace.value);
   }
@@ -258,6 +281,11 @@ export function initFromUrl(): void {
   const urlParam = params.get("url");
   if (urlParam) {
     url.value = urlParam;
+  }
+
+  const fragmentParam = params.get("fragment");
+  if (fragmentParam) {
+    fragment.value = fragmentParam;
   }
 
   const namespaceParam = params.get("namespace");

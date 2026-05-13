@@ -69,6 +69,7 @@ import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./su
 import { type Fetcher, FetcherImpl } from "./fetcher";
 import { decodeFetchHeader, FetchHeaderType } from "./dataStream";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
+import type { MoqtFragment } from "./moqtUri";
 import {
   buildPublishParameters,
   buildPublishTrackProperties,
@@ -178,6 +179,11 @@ export interface ConnectOptions {
 export interface SessionImplOptions {
   /** ConnectOptions.pendingSubgroup と同じ */
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+  /**
+   * moqt URI の Fragment Identifier
+   * draft-ietf-moq-transport-18 §3.1.2
+   */
+  fragment?: MoqtFragment | null;
 }
 
 /**
@@ -606,6 +612,18 @@ export interface Session {
    * draft-ietf-moq-transport-17 Section 9.5 (GOAWAY)
    */
   readonly goawayReceived: boolean;
+  /**
+   * 接続時に渡された moqt URI の Fragment Identifier
+   *
+   * draft-ietf-moq-transport-18 §3.1.2:
+   *
+   * > Fragment identifiers MAY be used with moqt URIs. The fragment is not
+   * > transmitted to the server; it is processed locally by the client
+   * > after establishing the MOQT session.
+   *
+   * fragment が指定されなかった場合は `null`
+   */
+  readonly fragment: MoqtFragment | null;
   publish(
     namespace: string[],
     trackName: string,
@@ -681,6 +699,8 @@ export class SessionImpl implements Session {
   private sessionState: SessionState = "connected";
   private readonly transport: WebTransport;
   private readonly callbacks: ConnectCallbacks;
+  // draft-ietf-moq-transport-18 §3.1.2 (Fragment Identifiers)
+  private readonly sessionFragment: MoqtFragment | null;
   /**
    * draft-ietf-moq-transport-17 Section 4 (Modularity):
    * 制御ストリームは単方向ストリームのペアに変更された。
@@ -858,6 +878,7 @@ export class SessionImpl implements Session {
     this.transport = transport;
     this.callbacks = callbacks;
     this.pendingSubgroupBuffer = new PendingSubgroupBuffer(options.pendingSubgroup);
+    this.sessionFragment = options.fragment ?? null;
 
     // WebTransport の切断を監視し、close 理由をコールバックに渡す
     // draft-ietf-moq-transport-17 Section 3.5:
@@ -901,6 +922,11 @@ export class SessionImpl implements Session {
 
   get goawayReceived(): boolean {
     return this.receivedGoaway;
+  }
+
+  // draft-ietf-moq-transport-18 §3.1.2 (Fragment Identifiers)
+  get fragment(): MoqtFragment | null {
+    return this.sessionFragment;
   }
 
   /**

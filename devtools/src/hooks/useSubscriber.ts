@@ -354,7 +354,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
       // MOQT サーバへ接続する
       const session = await connect(
-        settings.url.value,
+        settings.buildConnectUrl(),
         {
           close: (closeInfo) => {
             // shouldApplyStatusUpdate のガード外で addLog を呼び、stop 主導時にも

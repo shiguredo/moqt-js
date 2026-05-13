@@ -11,6 +11,15 @@
 
 ## develop
 
+- [ADD] moqt URI の Fragment Identifier をパースし `Session.fragment` で公開する (#0183)
+  - draft-ietf-moq-transport-18 §3.1.2 に基づき `moqt://example.com/app#type:value` 形式の fragment をパースする
+  - `src/moqtUri.ts` に `parseFragment()` と `MoqtFragment` / `NormalizedMoqtUri` 型を追加する
+  - `normalizeMoqtUri()` の戻り値を `{ url, fragment }` に変更し、fragment を `parseFragment()` でパースして返す
+  - `Session` インターフェースに `readonly fragment: MoqtFragment | null` を追加する
+  - `parseFragment` / `MoqtFragment` / `NormalizedMoqtUri` を `moqt-js` から公開する
+  - devtools の Connection Settings に URI Fragment 入力欄を追加し、`buildConnectUrl()` で URL に連結する
+  - クエリパラメータ `fragment` を `buildQueryString` / `initFromUrl` で永続化する
+  - @voluntas
 - [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
   - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
   - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う
