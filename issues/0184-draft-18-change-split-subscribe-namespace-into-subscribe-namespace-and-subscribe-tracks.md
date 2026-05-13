@@ -9,23 +9,23 @@ draft-18 で SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と SUBSC
 Subscribe Options フィールド (NamespaceSubscribeMode) が削除され、各メッセージの責務が明確化された。
 
 > SUBSCRIBE_NAMESPACE Message {
->   Type (vi64) = 0x50,
->   Length (16),
->   Request ID (vi64),
->   Track Namespace Prefix (..),
->   Number of Parameters (vi64),
->   Parameters (..) ...
+> Type (vi64) = 0x50,
+> Length (16),
+> Request ID (vi64),
+> Track Namespace Prefix (..),
+> Number of Parameters (vi64),
+> Parameters (..) ...
 > }
 >
 > -- draft-ietf-moq-transport-18 §10.18
 
 > SUBSCRIBE_TRACKS Message {
->   Type (vi64) = 0x51,
->   Length (16),
->   Request ID (vi64),
->   Track Namespace Prefix (..),
->   Number of Parameters (vi64),
->   Parameters (..) ...
+> Type (vi64) = 0x51,
+> Length (16),
+> Request ID (vi64),
+> Track Namespace Prefix (..),
+> Number of Parameters (vi64),
+> Parameters (..) ...
 > }
 >
 > -- draft-ietf-moq-transport-18 §10.19
@@ -84,21 +84,21 @@ Subscribe Options フィールド (NamespaceSubscribeMode) が削除され、各
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/types.ts:52-53` | `SUBSCRIBE_NAMESPACE` を `0x50` に変更、`SUBSCRIBE_TRACKS = 0x51` を追加 |
-| `src/message/types.ts:260-276` | `NamespaceSubscribeMode` enum を削除する |
-| `src/message/namespace.ts:67-94` | `SubscribeNamespace` から `subscribeOptions` を削除する |
-| `src/message/namespace.ts:202-268` | `encodeSubscribeNamespacePayload`/`decodeSubscribeNamespacePayload` から subscribeOptions 処理を削除する |
-| `src/message/namespace.ts` (新設) | `SubscribeTracks` 型、`encodeSubscribeTracksPayload`、`decodeSubscribeTracksPayload` を追加する |
-| `src/session.ts:477-480` | コメントの draft-17 → draft-18 更新 |
-| `src/session.ts:480-510` | `NamespaceSubscriptionCallbacks` から `onPublishBlocked` を削除し、`TracksSubscriptionCallbacks` を新設する |
-| `src/session.ts:639-675` | `Session` インターフェースに `subscribeTracks()` を追加する |
-| `src/session.ts:772-780` | `namespaceSubscriptions` と `tracksSubscriptions` の Map を分離する |
-| `src/session.ts:1424-1511` | `subscribeNamespace()` の subscribeOptions 関連を削除する |
-| `src/session.ts:1511-1701` | `startNamespaceStreamLoop()` を分割する |
-| `src/session.ts` (新設) | `subscribeTracks()` と `startTracksStreamLoop()` を実装する |
-| `src/message/namespace.prop.ts` | SubscribeNamespace テストから subscribeOptions を削除、SubscribeTracks テストを追加する |
+| ファイル                           | 変更内容                                                                                                    |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `src/message/types.ts:52-53`       | `SUBSCRIBE_NAMESPACE` を `0x50` に変更、`SUBSCRIBE_TRACKS = 0x51` を追加                                    |
+| `src/message/types.ts:260-276`     | `NamespaceSubscribeMode` enum を削除する                                                                    |
+| `src/message/namespace.ts:67-94`   | `SubscribeNamespace` から `subscribeOptions` を削除する                                                     |
+| `src/message/namespace.ts:202-268` | `encodeSubscribeNamespacePayload`/`decodeSubscribeNamespacePayload` から subscribeOptions 処理を削除する    |
+| `src/message/namespace.ts` (新設)  | `SubscribeTracks` 型、`encodeSubscribeTracksPayload`、`decodeSubscribeTracksPayload` を追加する             |
+| `src/session.ts:477-480`           | コメントの draft-17 → draft-18 更新                                                                         |
+| `src/session.ts:480-510`           | `NamespaceSubscriptionCallbacks` から `onPublishBlocked` を削除し、`TracksSubscriptionCallbacks` を新設する |
+| `src/session.ts:639-675`           | `Session` インターフェースに `subscribeTracks()` を追加する                                                 |
+| `src/session.ts:772-780`           | `namespaceSubscriptions` と `tracksSubscriptions` の Map を分離する                                         |
+| `src/session.ts:1424-1511`         | `subscribeNamespace()` の subscribeOptions 関連を削除する                                                   |
+| `src/session.ts:1511-1701`         | `startNamespaceStreamLoop()` を分割する                                                                     |
+| `src/session.ts` (新設)            | `subscribeTracks()` と `startTracksStreamLoop()` を実装する                                                 |
+| `src/message/namespace.prop.ts`    | SubscribeNamespace テストから subscribeOptions を削除、SubscribeTracks テストを追加する                     |
 
 ## 期待される動作
 

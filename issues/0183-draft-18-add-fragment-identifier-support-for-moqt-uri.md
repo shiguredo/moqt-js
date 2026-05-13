@@ -8,7 +8,7 @@ Model: Opus 4.7
 draft-18 で moqt URI に Fragment Identifier が導入された。fragment はサーバーに送信されず、
 セッション確立後にクライアントがローカルで処理する。
 
-> Fragment identifiers MAY be used with moqt URIs.  The fragment is not
+> Fragment identifiers MAY be used with moqt URIs. The fragment is not
 > transmitted to the server; it is processed locally by the client
 > after establishing the MOQT session.
 >
@@ -63,14 +63,14 @@ fragment type registry (§15.3) は現時点で登録済み type がゼロであ
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/moqtUri.ts` (新設) | `parseFragment()` 関数を実装する |
-| `src/index.ts:184-212` | `connect()` 内で fragment をパースし `SessionImpl` に渡す |
-| `src/session.ts:602-675` | `Session` インターフェースに `fragment` プロパティを追加する |
-| `src/session.ts` (SessionImpl) | コンストラクタで fragment を受け取り保持する |
-| `devtools/src/signals/connectionSettings.ts:14` | `fragment` signal を追加する |
-| `devtools/src/components/ConnectionSettings.tsx:299-306` | fragment 入力フィールドを追加する |
+| ファイル                                                 | 変更内容                                                     |
+| -------------------------------------------------------- | ------------------------------------------------------------ |
+| `src/moqtUri.ts` (新設)                                  | `parseFragment()` 関数を実装する                             |
+| `src/index.ts:184-212`                                   | `connect()` 内で fragment をパースし `SessionImpl` に渡す    |
+| `src/session.ts:602-675`                                 | `Session` インターフェースに `fragment` プロパティを追加する |
+| `src/session.ts` (SessionImpl)                           | コンストラクタで fragment を受け取り保持する                 |
+| `devtools/src/signals/connectionSettings.ts:14`          | `fragment` signal を追加する                                 |
+| `devtools/src/components/ConnectionSettings.tsx:299-306` | fragment 入力フィールドを追加する                            |
 
 ## 期待される動作
 

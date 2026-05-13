@@ -24,10 +24,10 @@ draft-ietf-moq-transport-18 A.1: "Add Stream Type column to message type table (
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
+| ファイル               | 行番号              | 変更内容                                 |
+| ---------------------- | ------------------- | ---------------------------------------- |
 | `src/message/types.ts` | (MessageType, 全般) | JSDoc を draft-18 §10 Table 3 に更新する |
-| `src/controlStream.ts` | (全般) | draft 番号を 18 に更新する |
+| `src/controlStream.ts` | (全般)              | draft 番号を 18 に更新する               |
 
 ## 期待される動作
 

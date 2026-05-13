@@ -45,12 +45,12 @@ Wire format 上は REQUEST_OK (0x7) のみ。PUBLISH_OK (0x1E) は存在しな�
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/types.ts:49` | `PUBLISH_OK = 0x1E` を削除する |
-| `src/message/publish.ts:160-265` | `PublishOkPayload` 型と encode/decode を削除または REQUEST_OK ベースに変更する |
-| `src/session.ts` (readPublishResponse 等) | PUBLISH_OK case を REQUEST_OK case に変更する |
-| `src/session/bidi.ts` (bidiReadPublishResponse 等) | 応答タイプ判定から PUBLISH_OK を削除する |
+| ファイル                                           | 変更内容                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `src/message/types.ts:49`                          | `PUBLISH_OK = 0x1E` を削除する                                                 |
+| `src/message/publish.ts:160-265`                   | `PublishOkPayload` 型と encode/decode を削除または REQUEST_OK ベースに変更する |
+| `src/session.ts` (readPublishResponse 等)          | PUBLISH_OK case を REQUEST_OK case に変更する                                  |
+| `src/session/bidi.ts` (bidiReadPublishResponse 等) | 応答タイプ判定から PUBLISH_OK を削除する                                       |
 
 ## テスト方針
 

@@ -15,8 +15,8 @@ draft-ietf-moq-transport-18 §10.9.1 (Updating Subscriptions):
 
 > When a REQUEST_UPDATE is unsuccessful, the publisher MUST also
 > terminate the subscription by sending a PUBLISH_DONE with error code
-> UPDATE_FAILED.  When a REQUEST_UPDATE fails for a FETCH, the
-> publisher MUST reset the FETCH data stream.  When a REQUEST_UPDATE
+> UPDATE_FAILED. When a REQUEST_UPDATE fails for a FETCH, the
+> publisher MUST reset the FETCH data stream. When a REQUEST_UPDATE
 > fails for a SUBSCRIBE_NAMESPACE or PUBLISH_NAMESPACE, the responder
 > MUST close the bidi stream.
 
@@ -29,11 +29,11 @@ draft-ietf-moq-transport-18 A.1: "Clarify REQUEST_UPDATE failure behavior for al
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 2290-2330 | `sendRequestUpdate` メソッドの JSDoc に失敗時のサーバー挙動を追記する |
-| `src/subscriber.ts` | 18-39 | `RequestUpdateOptions` の JSDoc に失敗時の通知方法を追記する |
-| `src/subscriber.ts` | 258-266 | `update()` の JSDoc を更新する |
+| ファイル            | 行番号    | 変更内容                                                              |
+| ------------------- | --------- | --------------------------------------------------------------------- |
+| `src/session.ts`    | 2290-2330 | `sendRequestUpdate` メソッドの JSDoc に失敗時のサーバー挙動を追記する |
+| `src/subscriber.ts` | 18-39     | `RequestUpdateOptions` の JSDoc に失敗時の通知方法を追記する          |
+| `src/subscriber.ts` | 258-266   | `update()` の JSDoc を更新する                                        |
 
 ## 期待される動作
 

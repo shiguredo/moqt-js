@@ -1,6 +1,7 @@
 # `connect()` の URL を `moqt://` スキームに対応させる
 
 Created: 2026-05-13
+Completed: 2026-05-13
 Model: Opus 4.7
 
 ## 概要
@@ -52,14 +53,14 @@ moqt-js の `connect()` は WebTransport 専用のため、スキーム置換 (`
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/index.ts:184-212` | `connect()` 関数にスキーム変換ロジックを追加する。JSDoc の URL 例を更新する |
-| `src/createMediaPublisher.ts:651` | JSDoc の `@param url` の例を `moqt://` に更新する |
-| `src/createMediaSubscriber.ts:712` | JSDoc の `@param url` の例を `moqt://` に更新する |
-| `devtools/src/signals/connectionSettings.ts:14` | デフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する |
-| `tests/e2e/main.ts` | デフォルト URL 文字列を更新する |
-| `tests/e2e/index.html` | デフォルト値を更新する |
+| ファイル                                        | 変更内容                                                                    |
+| ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `src/index.ts:184-212`                          | `connect()` 関数にスキーム変換ロジックを追加する。JSDoc の URL 例を更新する |
+| `src/createMediaPublisher.ts:651`               | JSDoc の `@param url` の例を `moqt://` に更新する                           |
+| `src/createMediaSubscriber.ts:712`              | JSDoc の `@param url` の例を `moqt://` に更新する                           |
+| `devtools/src/signals/connectionSettings.ts:14` | デフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する                   |
+| `tests/e2e/main.ts`                             | デフォルト URL 文字列を更新する                                             |
+| `tests/e2e/index.html`                          | デフォルト値を更新する                                                      |
 
 ## 期待される動作
 
@@ -106,3 +107,32 @@ moqt-js の `connect()` は WebTransport 専用のため、スキーム置換 (`
   スキーム変換ロジックを削除できる。現時点では `https://` のみ受け付ける前提で実装する
 - GOAWAY の `newSessionUri` はサーバーから受信する値であり、クライアント側では変換しない
 - `.env` の `TEST_MOQT_HTTPS_URI` 変数名は変更しない（値として `moqt://` も `https://` も受け付ける）
+
+## 解決方法
+
+CLAUDE.md (AGENTS.md) の「draft による仕様変更は後方互換性を維持せず破壊的変更を行う」方針に従い、
+`https://` の後方互換は維持せず `moqt://` 必須に切り替えた。
+
+- `src/moqtUri.ts` を新設し `normalizeMoqtUri()` を実装した
+  - draft-ietf-moq-transport-18 §3.1.3 に従い `moqt://` を `https://` に置換する
+  - authority 部 (RFC 3986 §3.2) の host を自前で検証する
+    （`new URL("https:///path")` は `https://path/` と解釈されるため URL コンストラクタだけでは検出できない）
+  - IPv6 リテラル (`[::1]:port`) と userinfo (`user@host`) に対応する
+  - fragment (`#...`) は draft-ietf-moq-transport-18 §3.1.2 に従い除去する
+  - `moqt://` 以外のスキーム / 空文字列 / authority host が空の場合は `Error` を throw する
+- `src/index.ts` の `connect()` で `normalizeMoqtUri()` を呼び、変換後 URL を `new WebTransport()` に渡す
+- `src/index.ts` / `src/createMediaPublisher.ts` / `src/createMediaSubscriber.ts` の JSDoc を `moqt://` 例に更新した
+- `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更した
+- `src/moqtUri.test.ts` を新設し、変換・バリデーション・fragment 除去の単体テストを追加した
+  （issue 本文では `src/index.test.ts` だが、`connect()` は WebTransport を必要とするため
+  純粋関数 `normalizeMoqtUri` を独立ファイルに切り出してテスト可能とした）
+- `tests/e2e/main.ts` と `tests/e2e/index.html` は env から URL を取得するためデフォルト URL を持たず変更対象外とした
+- 後方互換を維持しない方針のため、E2E 環境変数の名前と値を `moqt://` 専用に切り替えた
+  - `.env.example` / `.github/workflows/ci.yml` / `tests/e2e/connect.spec.ts` / `tests/e2e/pubsub.spec.ts` の
+    `TEST_MOQT_HTTPS_URI` を `TEST_MOQT_URI` に変更した
+  - GitHub Secrets / ローカル `.env` の値は別途 `moqt://` 形式に更新する必要がある
+
+確認:
+
+- `vp run test` 全 558 件パス
+- `vp run build` 成功

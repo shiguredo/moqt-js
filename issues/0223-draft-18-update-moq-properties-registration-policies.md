@@ -31,10 +31,10 @@ draft-ietf-moq-transport-18 A.1: (Properties の registry 整備に含まれる)
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/properties.ts` | 1-10 | draft 番号を 18 に更新する |
-| `src/properties.ts` | 21-37 | `MOQTPropertyId` の JSDoc に IANA registry 参照を追加する |
+| ファイル            | 行番号 | 変更内容                                                   |
+| ------------------- | ------ | ---------------------------------------------------------- |
+| `src/properties.ts` | 1-10   | draft 番号を 18 に更新する                                 |
+| `src/properties.ts` | 21-37  | `MOQTPropertyId` の JSDoc に IANA registry 参照を追加する  |
 | `src/properties.ts` | 51-100 | `TrackPropertyId` の JSDoc に IANA registry 参照を追加する |
 
 ## 期待される動作

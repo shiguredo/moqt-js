@@ -648,7 +648,7 @@ class MediaPublisherImpl implements MediaPublisher {
 /**
  * MediaPublisher を作成する
  *
- * @param url - MOQT サーバーの URL
+ * @param url - MOQT サーバーの URL (例: `moqt://example.com/moqt`)
  * @param options - 配信オプション
  * @param callbacks - コールバック
  * @returns MediaPublisher インスタンス

@@ -32,11 +32,11 @@ draft-ietf-moq-transport-18 A.1: "FETCH to a track with no objects returns INVAL
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 1-4 | draft 番号を 18 に更新する |
+| ファイル         | 行番号    | 変更内容                                                              |
+| ---------------- | --------- | --------------------------------------------------------------------- |
+| `src/session.ts` | 1-4       | draft 番号を 18 に更新する                                            |
 | `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc に empty track → INVALID_RANGE を追記する |
-| `src/fetcher.ts` | 1-10 | draft 番号を 18 に更新する |
+| `src/fetcher.ts` | 1-10      | draft 番号を 18 に更新する                                            |
 
 ## 期待される動作
 

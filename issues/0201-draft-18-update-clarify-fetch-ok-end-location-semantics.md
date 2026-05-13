@@ -32,11 +32,11 @@ draft-ietf-moq-transport-18 A.1: "Clarify FETCH_OK End Location semantics (#1536
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
+| ファイル         | 行番号    | 変更内容                                                               |
+| ---------------- | --------- | ---------------------------------------------------------------------- |
 | `src/session.ts` | 2070-2090 | `readFetchResponse` の End Location 検証コメントを draft-18 に更新する |
-| `src/fetcher.ts` | 27-29 | `endLocation` の JSDoc に exclusive semantics を追記する |
-| `src/fetcher.ts` | 92-94 | `endLocation` getter にコメントを追記する |
+| `src/fetcher.ts` | 27-29     | `endLocation` の JSDoc に exclusive semantics を追記する               |
+| `src/fetcher.ts` | 92-94     | `endLocation` getter にコメントを追記する                              |
 
 ## 期待される動作
 

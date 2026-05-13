@@ -11,7 +11,7 @@ import { isDebugPanelOpen } from "./debug";
 export { toHttpVersionLabel };
 
 // Connection settings
-export const url = signal("https://127.0.0.1:4443/moqt");
+export const url = signal("moqt://127.0.0.1:4443/moqt");
 export const namespace = signal("room/123");
 export const trackName = signal("video");
 export const codec = signal<CodecType>("vp8");

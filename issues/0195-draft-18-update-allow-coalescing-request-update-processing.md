@@ -26,9 +26,9 @@ moqt-js はクライアント専用（送信側）のため、連続した REQUE
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/subscriber.ts` (requestUpdate) | コメントに coalescing 仕様を注記する |
+| ファイル                               | 変更内容                             |
+| -------------------------------------- | ------------------------------------ |
+| `src/subscriber.ts` (requestUpdate)    | コメントに coalescing 仕様を注記する |
 | `src/session.ts` (REQUEST_UPDATE 送信) | コメントに coalescing 仕様を注記する |
 
 ## テスト方針

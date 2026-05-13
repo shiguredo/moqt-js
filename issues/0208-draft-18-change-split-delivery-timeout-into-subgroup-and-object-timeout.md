@@ -17,13 +17,13 @@ draft-18 で DELIVERY_TIMEOUT が以下の 2 パラメータに分割された�
 draft-ietf-moq-transport-18 §10.2.3 (SUBGROUP_DELIVERY_TIMEOUT Parameter):
 
 > The SUBGROUP_DELIVERY_TIMEOUT parameter (Parameter Type 0x06) is a
-> varint.  It MAY appear in a PUBLISH_OK, SUBSCRIBE, or REQUEST_UPDATE
+> varint. It MAY appear in a PUBLISH_OK, SUBSCRIBE, or REQUEST_UPDATE
 > message.
 
 draft-ietf-moq-transport-18 §10.2.4 (OBJECT_DELIVERY_TIMEOUT Parameter):
 
 > The OBJECT_DELIVERY_TIMEOUT parameter (Parameter Type 0x02) is a
-> varint.  It MAY appear in a PUBLISH_OK, SUBSCRIBE, or REQUEST_UPDATE
+> varint. It MAY appear in a PUBLISH_OK, SUBSCRIBE, or REQUEST_UPDATE
 > message.
 
 draft-ietf-moq-transport-18 A.1: (この分割は §8 から §10.2.3 / §10.2.4 への再編成に含まれる)
@@ -38,13 +38,13 @@ draft-ietf-moq-transport-18 A.1: (この分割は §8 から §10.2.3 / §10.2.4
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/message/parameter.ts` | (全般) | `MessageParameterType.DELIVERY_TIMEOUT` を削除、`SUBGROUP_DELIVERY_TIMEOUT` (0x06) と `OBJECT_DELIVERY_TIMEOUT` (0x02) を追加 |
-| `src/session/params.ts` | (全般) | `buildSubscribeParameters` / `buildPublishParameters` から `deliveryTimeout` を削除し分割する |
-| `src/session.ts` | 221-226 | `PublishOptions.deliveryTimeout` を削除し `subgroupDeliveryTimeout` / `objectDeliveryTimeout` に置き換える |
-| `src/session.ts` | 365-372 | `SubscribeOptions.deliveryTimeout` を削除し `subgroupDeliveryTimeout` / `objectDeliveryTimeout` に置き換える |
-| `src/index.ts` | (全般) | 公開 API を更新する |
+| ファイル                   | 行番号  | 変更内容                                                                                                                      |
+| -------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `src/message/parameter.ts` | (全般)  | `MessageParameterType.DELIVERY_TIMEOUT` を削除、`SUBGROUP_DELIVERY_TIMEOUT` (0x06) と `OBJECT_DELIVERY_TIMEOUT` (0x02) を追加 |
+| `src/session/params.ts`    | (全般)  | `buildSubscribeParameters` / `buildPublishParameters` から `deliveryTimeout` を削除し分割する                                 |
+| `src/session.ts`           | 221-226 | `PublishOptions.deliveryTimeout` を削除し `subgroupDeliveryTimeout` / `objectDeliveryTimeout` に置き換える                    |
+| `src/session.ts`           | 365-372 | `SubscribeOptions.deliveryTimeout` を削除し `subgroupDeliveryTimeout` / `objectDeliveryTimeout` に置き換える                  |
+| `src/index.ts`             | (全般)  | 公開 API を更新する                                                                                                           |
 
 ## 期待される動作
 

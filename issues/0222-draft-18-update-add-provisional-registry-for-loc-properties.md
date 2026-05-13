@@ -20,8 +20,8 @@ draft-ietf-moq-transport-18 A.1: "Add provisional registry for LOC properties (#
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
+| ファイル     | 行番号 | 変更内容                                              |
+| ------------ | ------ | ----------------------------------------------------- |
 | `src/loc.ts` | (全般) | JSDoc に IANA provisional registry への参照を追記する |
 
 ## 期待される動作

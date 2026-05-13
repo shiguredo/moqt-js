@@ -28,12 +28,12 @@ draft-ietf-moq-transport-18 A.1: "Close session when delta encoding wraps (#1560
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/dataStream.ts` | 381-437 | `decodeObjectFields` で delta 累積値のラップ検出を追加する |
-| `src/dataStream.ts` | 1120-1253 | `decodeFetchObjectFields` で Group ID / Object ID / Subgroup ID の delta ラップ検出を追加する |
-| `src/session.ts` | `processSubgroupObjects` | `ProtocolViolationError` の catch 時にセッションを閉じる (既存の catch 経路を確認) |
-| `src/session.ts` | `processFetchObjects` | `ProtocolViolationError` の catch 時にセッションを閉じる (既存の catch 経路を確認) |
+| ファイル            | 行番号                   | 変更内容                                                                                      |
+| ------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
+| `src/dataStream.ts` | 381-437                  | `decodeObjectFields` で delta 累積値のラップ検出を追加する                                    |
+| `src/dataStream.ts` | 1120-1253                | `decodeFetchObjectFields` で Group ID / Object ID / Subgroup ID の delta ラップ検出を追加する |
+| `src/session.ts`    | `processSubgroupObjects` | `ProtocolViolationError` の catch 時にセッションを閉じる (既存の catch 経路を確認)            |
+| `src/session.ts`    | `processFetchObjects`    | `ProtocolViolationError` の catch 時にセッションを閉じる (既存の catch 経路を確認)            |
 
 ## 期待される動作
 

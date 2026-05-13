@@ -31,12 +31,12 @@ draft-ietf-moq-transport-18 A.1: "Rewrite Abstract and Introduction (#1556)"
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 1-4 | draft 番号を 18 に更新する |
-| `src/message/types.ts` | (全般) | draft 番号を 18 に更新する |
-| `src/index.ts` | (全般) | draft 番号を 18 に更新する |
-| 全 `*.ts` ファイル | コメント部 | draft-17 → draft-18 の一括更新 |
+| ファイル               | 行番号     | 変更内容                       |
+| ---------------------- | ---------- | ------------------------------ |
+| `src/session.ts`       | 1-4        | draft 番号を 18 に更新する     |
+| `src/message/types.ts` | (全般)     | draft 番号を 18 に更新する     |
+| `src/index.ts`         | (全般)     | draft 番号を 18 に更新する     |
+| 全 `*.ts` ファイル     | コメント部 | draft-17 → draft-18 の一括更新 |
 
 ## 期待される動作
 

@@ -10,12 +10,12 @@ SUBSCRIBE_OK / PUBLISH_OK / FETCH_OK の応答で Immutable Properties 等の Tr
 受信できるようになる。
 
 > REQUEST_OK Message {
->   Type (vi64) = 0x7,
->   Length (16),
->   Number of Parameters (vi64),
->   Parameters (..) ...,
->   Number of Track Properties (vi64),
->   Track Properties (..) ...
+> Type (vi64) = 0x7,
+> Length (16),
+> Number of Parameters (vi64),
+> Parameters (..) ...,
+> Number of Track Properties (vi64),
+> Track Properties (..) ...
 > }
 >
 > -- draft-ietf-moq-transport-18 §10.5
@@ -45,13 +45,13 @@ draft-18 で全リクエスト応答に統一的に Track Properties が含ま�
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/session.ts:150-200` | `RequestOk` 型に `trackProperties` を追加し、encode/decode に反映する |
-| `src/session.ts` (REQUEST_OK 受信箇所) | Track Properties を抽出して各リクエストに通知する |
-| `src/subscriber.ts` | `trackProperties` getter を追加する |
-| `src/publisher.ts` | `trackProperties` getter を追加する |
-| `src/fetcher.ts` | `trackProperties` getter を追加する |
+| ファイル                               | 変更内容                                                              |
+| -------------------------------------- | --------------------------------------------------------------------- |
+| `src/message/session.ts:150-200`       | `RequestOk` 型に `trackProperties` を追加し、encode/decode に反映する |
+| `src/session.ts` (REQUEST_OK 受信箇所) | Track Properties を抽出して各リクエストに通知する                     |
+| `src/subscriber.ts`                    | `trackProperties` getter を追加する                                   |
+| `src/publisher.ts`                     | `trackProperties` getter を追加する                                   |
+| `src/fetcher.ts`                       | `trackProperties` getter を追加する                                   |
 
 ## テスト方針
 

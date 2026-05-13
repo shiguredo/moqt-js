@@ -8,9 +8,9 @@ Model: Opus 4.7
 draft-18 で GOAWAY を リクエストストリーム (SUBSCRIBE / FETCH / PUBLISH 等の bidi ストリーム) 上で
 送信できるようになった。セッション全体の GOAWAY に加え、個別リクエスト単位でマイグレーションを促せる。
 
-> A GOAWAY message MAY be sent on any open bidirectional stream.  When
+> A GOAWAY message MAY be sent on any open bidirectional stream. When
 > sent on a request stream, the GOAWAY applies to that specific
-> request.  When sent on the control stream, the GOAWAY applies to the
+> request. When sent on the control stream, the GOAWAY applies to the
 > entire session.
 >
 > -- draft-ietf-moq-transport-18 §10.4
@@ -36,14 +36,14 @@ moqt-js はクライアント専用のため、受信側のハンドリングが
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
+| ファイル                                    | 変更内容                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `src/session.ts` (handleIncomingBidiStream) | リクエストストリーム上の GOAWAY メッセージを検出し、該当リクエストのコールバックに通知する |
-| `src/session.ts` (startControlMessageLoop) | 制御ストリーム上の GOAWAY は従来通りセッション全体の GOAWAY として処理する |
-| `src/subscriber.ts` | `SubscribeCallbacks` に `goaway` を追加する |
-| `src/publisher.ts` | `PublishCallbacks` に `goaway` を追加する |
-| `src/fetcher.ts` | `FetchCallbacks` に `goaway` を追加する |
-| `src/message/session.ts` | GOAWAY の Request ID フィールド (0188 により追加) を確認する |
+| `src/session.ts` (startControlMessageLoop)  | 制御ストリーム上の GOAWAY は従来通りセッション全体の GOAWAY として処理する                 |
+| `src/subscriber.ts`                         | `SubscribeCallbacks` に `goaway` を追加する                                                |
+| `src/publisher.ts`                          | `PublishCallbacks` に `goaway` を追加する                                                  |
+| `src/fetcher.ts`                            | `FetchCallbacks` に `goaway` を追加する                                                    |
+| `src/message/session.ts`                    | GOAWAY の Request ID フィールド (0188 により追加) を確認する                               |
 
 ## テスト方針
 

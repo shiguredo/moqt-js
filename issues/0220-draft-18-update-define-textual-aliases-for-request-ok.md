@@ -32,11 +32,11 @@ draft-ietf-moq-transport-18 A.1: "Define textual aliases for REQUEST_OK (#1610)"
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/message/types.ts` | (getMessageTypeName) | SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK 等のエイリアス名マッピングを追加する |
-| `src/session.ts` | (デバッグコールバック内) | デバッグログの typeName をエイリアス対応にする |
-| `src/controlStream.ts` | (全般) | draft 番号を 18 に更新する |
+| ファイル               | 行番号                   | 変更内容                                                                       |
+| ---------------------- | ------------------------ | ------------------------------------------------------------------------------ |
+| `src/message/types.ts` | (getMessageTypeName)     | SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK 等のエイリアス名マッピングを追加する |
+| `src/session.ts`       | (デバッグコールバック内) | デバッグログの typeName をエイリアス対応にする                                 |
+| `src/controlStream.ts` | (全般)                   | draft 番号を 18 に更新する                                                     |
 
 ## 期待される動作
 

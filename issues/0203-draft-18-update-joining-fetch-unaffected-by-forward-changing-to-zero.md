@@ -26,9 +26,9 @@ draft-ietf-moq-transport-18 A.1: "Joining FETCH is unaffected by forward changin
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc に forward=0 の影響なしを追記する |
+| ファイル         | 行番号    | 変更内容                                                                      |
+| ---------------- | --------- | ----------------------------------------------------------------------------- |
+| `src/session.ts` | 2090-2140 | `sendJoiningFetch` の JSDoc に forward=0 の影響なしを追記する                 |
 | `src/session.ts` | 2290-2330 | `sendRequestUpdate` の JSDoc に forward 変更と Joining Fetch の関係を追記する |
 
 ## 期待される動作
