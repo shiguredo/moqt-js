@@ -1,74 +1,96 @@
 /**
  * MOQT Namespace Messages
- * draft-ietf-moq-transport-15 Section 9.20-9.24
+ * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE) — 9.21 (PUBLISH_BLOCKED)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
 import {
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
-import { MessageType } from "./types";
+import { MessageType, type NamespaceSubscribeMode } from "./types";
 
 /**
- * PUBLISH_NAMESPACE メッセージ (Section 9.20)
+ * PUBLISH_NAMESPACE メッセージ (Section 9.17 PUBLISH_NAMESPACE)
  *
  * パブリッシャーが Track Namespace 内にトラックがあることを通知する。
  */
 export interface PublishNamespace {
   type: typeof MessageType.PUBLISH_NAMESPACE;
   requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   parameters: Parameter[];
 }
 
 /**
- * PUBLISH_NAMESPACE_DONE メッセージ (Section 9.21)
+ * NAMESPACE メッセージ (Section 9.18 NAMESPACE)
  *
- * Track Namespace 内の新規サブスクリプションの提供を停止する意図を通知する。
+ * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
+ * Track Namespace Prefix を除いた Suffix のみを含む。
+ *
+ * NAMESPACE Message {
+ *   Type (i) = 0x8,
+ *   Length (16),
+ *   Track Namespace Suffix (..)
+ * }
  */
-export interface PublishNamespaceDone {
-  type: typeof MessageType.PUBLISH_NAMESPACE_DONE;
-  trackNamespace: TrackNamespace;
+export interface Namespace {
+  type: typeof MessageType.NAMESPACE;
+  trackNamespaceSuffix: TrackNamespace;
 }
 
 /**
- * PUBLISH_NAMESPACE_CANCEL メッセージ (Section 9.22)
+ * NAMESPACE_DONE メッセージ (Section 9.19 NAMESPACE_DONE)
  *
- * サブスクライバーが Track Namespace 内の新規サブスクリプションを停止することを通知する。
+ * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
+ * Track Namespace Prefix を除いた Suffix のみを含む。
+ *
+ * NAMESPACE_DONE Message {
+ *   Type (i) = 0xE,
+ *   Length (16),
+ *   Track Namespace Suffix (..)
+ * }
  */
-export interface PublishNamespaceCancel {
-  type: typeof MessageType.PUBLISH_NAMESPACE_CANCEL;
-  trackNamespace: TrackNamespace;
-  errorCode: bigint;
-  reasonPhrase: string;
+export interface NamespaceDone {
+  type: typeof MessageType.NAMESPACE_DONE;
+  trackNamespaceSuffix: TrackNamespace;
 }
 
 /**
- * SUBSCRIBE_NAMESPACE メッセージ (Section 9.23)
+ * SUBSCRIBE_NAMESPACE メッセージ (Section 9.20 SUBSCRIBE_NAMESPACE)
  *
  * サブスクライバーがマッチする公開ネームスペースのセットを要求する。
+ * 新しい双方向ストリームで送信される。
+ *
+ * SUBSCRIBE_NAMESPACE Message {
+ *   Type (i) = 0x11,
+ *   Length (16),
+ *   Request ID (i),
+ *   Track Namespace Prefix (..),
+ *   Subscribe Options (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...
+ * }
+ *
+ * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
+ * 空のネームスペースはワイルドカードとして機能し、全てのネームスペースにマッチする。
  */
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
   requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   trackNamespacePrefix: TrackNamespace;
+  subscribeOptions: NamespaceSubscribeMode;
   parameters: Parameter[];
-}
-
-/**
- * UNSUBSCRIBE_NAMESPACE メッセージ (Section 9.24)
- *
- * 指定した Track Namespace Prefix の PUBLISH_NAMESPACE/PUBLISH メッセージに
- * 興味がなくなったことを通知する。
- */
-export interface UnsubscribeNamespace {
-  type: typeof MessageType.UNSUBSCRIBE_NAMESPACE;
-  requestId: bigint;
 }
 
 /**
@@ -78,11 +100,9 @@ export function encodePublishNamespacePayload(msg: PublishNamespace): Uint8Array
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -103,124 +123,101 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
+  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaSize;
+
   const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.PUBLISH_NAMESPACE,
     requestId,
+    requiredRequestIdDelta,
     trackNamespace,
     parameters,
   };
 }
 
 /**
- * PublishNamespaceDone のペイロードをエンコード
+ * Namespace のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.18 (NAMESPACE):
+ * NAMESPACE Message {
+ *   Type (i) = 0x8,
+ *   Length (16),
+ *   Track Namespace Suffix (..)
+ * }
  */
-export function encodePublishNamespaceDonePayload(msg: PublishNamespaceDone): Uint8Array {
-  return encodeTrackNamespace(msg.trackNamespace);
+export function encodeNamespacePayload(msg: Namespace): Uint8Array {
+  return encodeTrackNamespace(msg.trackNamespaceSuffix);
 }
 
 /**
- * PublishNamespaceDone のペイロードをデコード
- *
- * Subscriber が Publisher の終了を検知するために使用。
- * moqt-js はクライアント専用だが、現在 Session では未実装。
- * TODO: PUBLISH_NAMESPACE_DONE 受信処理の実装。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * Namespace のペイロードをデコード
  */
-export function decodePublishNamespaceDonePayload(
-  data: Uint8Array,
-  offset = 0,
-): PublishNamespaceDone {
-  const [trackNamespace] = decodeTrackNamespace(data, offset);
+export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace {
+  const [trackNamespaceSuffix] = decodeTrackNamespace(data, offset);
 
   return {
-    type: MessageType.PUBLISH_NAMESPACE_DONE,
-    trackNamespace,
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix,
   };
 }
 
 /**
- * PublishNamespaceCancel のペイロードをエンコード
+ * NamespaceDone のペイロードをエンコード
  *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * draft-ietf-moq-transport-17 Section 9.19 (NAMESPACE_DONE):
+ * NAMESPACE_DONE Message {
+ *   Type (i) = 0xE,
+ *   Length (16),
+ *   Track Namespace Suffix (..)
+ * }
  */
-export function encodePublishNamespaceCancelPayload(msg: PublishNamespaceCancel): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(encodeTrackNamespace(msg.trackNamespace));
-  parts.push(encodeVarint(msg.errorCode));
-
-  const reasonBytes = new TextEncoder().encode(msg.reasonPhrase);
-  parts.push(encodeVarint(reasonBytes.length));
-  parts.push(reasonBytes);
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
+export function encodeNamespaceDonePayload(msg: NamespaceDone): Uint8Array {
+  return encodeTrackNamespace(msg.trackNamespaceSuffix);
 }
 
 /**
- * PublishNamespaceCancel のペイロードをデコード
+ * NamespaceDone のペイロードをデコード
  */
-export function decodePublishNamespaceCancelPayload(
-  data: Uint8Array,
-  offset = 0,
-): PublishNamespaceCancel {
-  let totalConsumed = 0;
-
-  const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
-  totalConsumed += namespaceSize;
-
-  const [errorCode, errorCodeSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += errorCodeSize;
-
-  const [reasonLen, reasonLenSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += reasonLenSize;
-
-  const reasonBytes = data.slice(
-    offset + totalConsumed,
-    offset + totalConsumed + Number(reasonLen),
-  );
-  const reasonPhrase = new TextDecoder().decode(reasonBytes);
+export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): NamespaceDone {
+  const [trackNamespaceSuffix] = decodeTrackNamespace(data, offset);
 
   return {
-    type: MessageType.PUBLISH_NAMESPACE_CANCEL,
-    trackNamespace,
-    errorCode,
-    reasonPhrase,
+    type: MessageType.NAMESPACE_DONE,
+    trackNamespaceSuffix,
   };
 }
 
 /**
  * SubscribeNamespace のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+ * SUBSCRIBE_NAMESPACE Message {
+ *   Type (i) = 0x11,
+ *   Length (16),
+ *   Request ID (i),
+ *   Track Namespace Prefix (..),
+ *   Subscribe Options (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...
+ * }
  */
 export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespacePrefix));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeVarint(msg.subscribeOptions));
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -234,9 +231,6 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
 
 /**
  * SubscribeNamespace のペイロードをデコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  */
 export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): SubscribeNamespace {
   let totalConsumed = 0;
@@ -244,48 +238,90 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
+  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaSize;
+
   const [trackNamespacePrefix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
+  const [subscribeOptions, subscribeOptionsSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += subscribeOptionsSize;
 
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.SUBSCRIBE_NAMESPACE,
     requestId,
+    requiredRequestIdDelta,
     trackNamespacePrefix,
+    subscribeOptions: Number(subscribeOptions) as NamespaceSubscribeMode,
     parameters,
   };
 }
 
 /**
- * UnsubscribeNamespace のペイロードをエンコード
+ * PUBLISH_BLOCKED メッセージ (Section 9.21 PUBLISH_BLOCKED)
+ *
+ * draft-ietf-moq-transport-17:
+ * Publisher が新しい Request ID を割り当てられない場合に送信する。
+ * SUBSCRIBE_NAMESPACE のフロー制御の一環。
+ *
+ * PUBLISH_BLOCKED Message {
+ *   Type (vi64) = 0xF,
+ *   Length (16),
+ *   Track Namespace Suffix (..),
+ *   Track Name Length (vi64),
+ *   Track Name (..),
+ * }
+ *
+ * draft-ietf-moq-transport-17 Section 9.21
  */
-export function encodeUnsubscribeNamespacePayload(msg: UnsubscribeNamespace): Uint8Array {
-  return encodeVarint(msg.requestId);
+export interface PublishBlocked {
+  type: typeof MessageType.PUBLISH_BLOCKED;
+  trackNamespaceSuffix: TrackNamespace;
+  trackName: Uint8Array;
 }
 
 /**
- * UnsubscribeNamespace のペイロードをデコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * PublishBlocked のペイロードをエンコード
  */
-export function decodeUnsubscribeNamespacePayload(
-  data: Uint8Array,
-  offset = 0,
-): UnsubscribeNamespace {
-  const [requestId] = decodeVarint(data, offset);
+export function encodePublishBlockedPayload(msg: PublishBlocked): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  parts.push(encodeTrackNamespace(msg.trackNamespaceSuffix));
+  parts.push(encodeVarint(msg.trackName.length));
+  parts.push(msg.trackName);
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * PublishBlocked のペイロードをデコード
+ */
+export function decodePublishBlockedPayload(data: Uint8Array, offset = 0): PublishBlocked {
+  let totalConsumed = 0;
+
+  const [trackNamespaceSuffix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+  totalConsumed += namespaceSize;
+
+  const [nameLen, nameLenSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += nameLenSize;
+  const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
 
   return {
-    type: MessageType.UNSUBSCRIBE_NAMESPACE,
-    requestId,
+    type: MessageType.PUBLISH_BLOCKED,
+    trackNamespaceSuffix,
+    trackName,
   };
 }

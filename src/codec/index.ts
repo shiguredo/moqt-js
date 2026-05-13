@@ -2,7 +2,7 @@
  * コーデックモジュール
  */
 
-export * from "./types";
+export type * from "./types";
 export * from "./config";
 export { AudioEncoderWrapper } from "./AudioEncoder";
 export { AudioDecoderWrapper } from "./AudioDecoder";

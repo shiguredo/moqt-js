@@ -2,12 +2,12 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-15
+ * draft-ietf-moq-transport-17
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 
-// Re-export public types
+// 公開型の再エクスポート
 export type {
   Session,
   SessionStatistics,
@@ -23,31 +23,49 @@ export type {
   FetchCallbacks,
   FetchOptions,
   TrackStatusResult,
-  NamespaceAnnouncement,
   NamespaceSubscriptionCallbacks,
   NamespaceSubscription,
   MoqtObject,
 } from "./session";
+export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Re-export message types
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-17 §10.4.2)
+export {
+  type PendingSubgroupBufferOptions,
+  DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
+} from "./pendingSubgroupBuffer";
+
+// メッセージ型の再エクスポート
 export type { SubscriptionFilter, Location, Parameter } from "./message";
+
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-17 Section 9.3.2)
+export {
+  type AuthorizationToken,
+  type AuthorizationTokenDelete,
+  type AuthorizationTokenRegister,
+  type AuthorizationTokenUseAlias,
+  type AuthorizationTokenUseValue,
+  AuthorizationTokenAliasType,
+  decodeAuthorizationToken,
+  encodeAuthorizationToken,
+} from "./message";
 export type { Publisher, SendObjectParams, SendDatagramParams } from "./publisher";
-export type { Subscriber, SubscribeUpdateOptions } from "./subscriber";
+export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
 
-// Re-export error types
+// エラー型の再エクスポート
 export { MoqtError, SessionError, RequestError, SessionErrorCode, RequestErrorCode } from "./error";
 
-// Re-export LOC (draft-ietf-moq-loc)
+// LOC の再エクスポート (draft-ietf-moq-loc)
 export * as LOC from "./loc";
 
-// Re-export MSF (draft-ietf-moq-msf)
+// MSF の再エクスポート (draft-ietf-moq-msf)
 export * from "./msf";
 
-// Version
+// バージョン
 export { version, MOQT_IMPLEMENTATION_VALUE } from "./version";
 
-// High-level MediaStream API
+// 高レベル MediaStream API
 export {
   createMediaPublisher,
   type MediaPublisher,
@@ -74,31 +92,30 @@ export {
   type VideoSubscribeOptions,
 } from "./createMediaSubscriber";
 
-// Codec types
+// コーデック型
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
 
-// Re-export MOQT Extensions (draft-ietf-moq-transport-15 Section 11)
+// VideoFrame ソース (MediaStreamTrackProcessor フォールバック)
 export {
-  MOQTExtensionHeaderId,
-  type ExtensionHeader,
+  createVideoFrameSource,
+  isMediaStreamTrackProcessorAvailable,
+  type VideoFrameSource,
+} from "./frameSource";
+
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-17 Section 11 (MOQT Properties))
+export {
+  MOQTPropertyId,
+  TrackPropertyId,
+  type Property,
   type PriorGroupIdGap,
   type PriorObjectIdGap,
-  type ImmutableExtensions,
-  type ParsedExtensionHeaders,
-  encodeExtensionHeader,
-  encodeExtensionHeaders,
-  encodePriorGroupIdGap,
-  decodePriorGroupIdGap,
-  encodePriorObjectIdGap,
-  decodePriorObjectIdGap,
-  encodeImmutableExtensions,
-  decodeImmutableExtensions,
-  parseExtensionHeaders,
-  calculateSkippedGroups,
-  calculateSkippedObjects,
-} from "./extensions";
+  type ImmutableProperties,
+  type ParsedProperties,
+  encodeProperties,
+  supportsDynamicGroups,
+} from "./properties";
 
-// Re-export Data Stream types and functions
+// Data Stream の型と関数の再エクスポート
 export {
   // Subgroup Header
   SubgroupHeaderType,
@@ -106,7 +123,7 @@ export {
   encodeSubgroupHeader,
   decodeSubgroupHeader,
   hasContainsEndOfGroup,
-  hasExtensionsPresent,
+  hasPropertiesPresent,
   // Object Fields
   type DecodedObjectFields,
   encodeObjectFields,
@@ -122,17 +139,14 @@ export {
   // Fetch Header
   FetchHeaderType,
   type FetchHeader,
-  encodeFetchHeader,
   decodeFetchHeader,
   // Fetch Object Fields
   FetchSerializationFlags,
+  type EndOfRangeType,
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,
-  encodeFetchObjectFields,
   decodeFetchObjectFields,
-  createFirstFetchObjectFlags,
-  createFetchObjectFlags,
 } from "./dataStream";
 
 /**
@@ -148,7 +162,7 @@ export {
  *
  * const session = await connect(
  *   "https://example.com/moqt",
- *   { close: () => console.log("disconnected"), error: (e) => console.error(e) }
+ *   { close: (info) => console.log(`disconnected: closeCode=${info.closeCode}, reason=${info.reason}`), error: (e) => console.error(e) }
  * )
  *
  * // Publish
@@ -183,10 +197,16 @@ export async function connect(
   await transport.ready;
 
   // Create session
-  const session = new SessionImpl(transport, callbacks ?? {});
+  const session = new SessionImpl(transport, callbacks ?? {}, {
+    pendingSubgroup: options?.pendingSubgroup,
+  });
 
-  // Initialize MOQT session (CLIENT_SETUP / SERVER_SETUP exchange)
-  await session.initialize();
+  // MOQT セッションを初期化する (SETUP メッセージの交換)
+  // authorizationToken は SETUP Option (0x03) として送出する
+  // draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+  await session.initialize({
+    authorizationToken: options?.authorizationToken,
+  });
 
   return session;
 }

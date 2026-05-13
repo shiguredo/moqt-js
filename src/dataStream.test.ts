@@ -1,11 +1,11 @@
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
   SubgroupHeaderType,
   encodeSubgroupHeader,
   decodeSubgroupHeader,
   encodeObjectFields,
   decodeObjectFields,
-  hasExtensionsPresent,
+  hasPropertiesPresent,
   hasContainsEndOfGroup,
   createObject,
   DatagramType,
@@ -25,6 +25,8 @@ import {
   createFetchObjectFlags,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
+import { encodeVarint } from "./varint";
+import { IncompleteDataError, ProtocolViolationError } from "./error";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -121,6 +123,38 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
   assert.equal(consumed, 4);
 });
 
+// draft-ietf-moq-transport-17 Section 10.4.2:
+// SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
+// セッションを閉じなければならない
+for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
+  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は ProtocolViolationError`, () => {
+    const data = new Uint8Array([reservedType, 0x01, 0x02, 0x80]);
+    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
+    assert.throws(() => decodeSubgroupHeader(data), /SUBGROUP_ID_MODE 0b11 is reserved/);
+  });
+}
+
+test("SubgroupHeader: バッファ不足は IncompleteDataError", () => {
+  // 空のバッファを decode に渡すとデータ不足
+  const data = new Uint8Array(0);
+  assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
+});
+
+test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () => {
+  // type のみで他のフィールドが揃っていない
+  const data = new Uint8Array([0x10]);
+  assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
+});
+
+// draft-ietf-moq-transport-17 Section 10.4.2:
+// 0b00X1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
+for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
+  test(`SubgroupHeader: 不正タイプ 0x${invalidType.toString(16)} は decode でエラー`, () => {
+    const data = new Uint8Array([invalidType, 0x01, 0x02, 0x80]);
+    assert.throws(() => decodeSubgroupHeader(data), /does not match form 0b00X1XXXX/);
+  });
+}
+
 const subgroupHeaderTestCases = [
   {
     name: "BASE タイプ",
@@ -138,6 +172,24 @@ const subgroupHeaderTestCases = [
       trackAlias: 0n,
       groupId: 0n,
       publisherPriority: 0,
+    },
+  },
+  {
+    name: "FIRST_OBJ タイプ",
+    header: {
+      type: SubgroupHeaderType.FIRST_OBJ,
+      trackAlias: 10n,
+      groupId: 20n,
+      publisherPriority: 100,
+    },
+  },
+  {
+    name: "FIRST_OBJ_EXT タイプ",
+    header: {
+      type: SubgroupHeaderType.FIRST_OBJ_EXT,
+      trackAlias: 10n,
+      groupId: 20n,
+      publisherPriority: 100,
     },
   },
   {
@@ -177,16 +229,37 @@ for (const tc of subgroupHeaderTestCases) {
   });
 }
 
-test("hasExtensionsPresent: 偶数タイプは Extensions Present = No", () => {
-  assert.equal(hasExtensionsPresent(0x10), false);
-  assert.equal(hasExtensionsPresent(0x12), false);
-  assert.equal(hasExtensionsPresent(0x14), false);
+test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が undefined になる", () => {
+  // draft-ietf-moq-transport-17 Section 10.4.2:
+  // Subgroup ID = First Object ID の場合、ヘッダーに Subgroup ID フィールドはなく、
+  // 最初のオブジェクトの Object ID が Subgroup ID として使われる
+  const header = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 10n,
+    groupId: 20n,
+    publisherPriority: 100,
+  };
+  const encoded = encodeSubgroupHeader(header);
+  const [decoded, consumed] = decodeSubgroupHeader(encoded);
+
+  assert.equal(decoded.type, SubgroupHeaderType.FIRST_OBJ);
+  assert.equal(decoded.trackAlias, 10n);
+  assert.equal(decoded.groupId, 20n);
+  assert.isUndefined(decoded.subgroupId);
+  assert.equal(decoded.publisherPriority, 100);
+  assert.equal(consumed, encoded.length);
 });
 
-test("hasExtensionsPresent: 奇数タイプは Extensions Present = Yes", () => {
-  assert.equal(hasExtensionsPresent(0x11), true);
-  assert.equal(hasExtensionsPresent(0x13), true);
-  assert.equal(hasExtensionsPresent(0x15), true);
+test("hasPropertiesPresent: 偶数タイプは Extensions Present = No", () => {
+  assert.equal(hasPropertiesPresent(0x10), false);
+  assert.equal(hasPropertiesPresent(0x12), false);
+  assert.equal(hasPropertiesPresent(0x14), false);
+});
+
+test("hasPropertiesPresent: 奇数タイプは Extensions Present = Yes", () => {
+  assert.equal(hasPropertiesPresent(0x11), true);
+  assert.equal(hasPropertiesPresent(0x13), true);
+  assert.equal(hasPropertiesPresent(0x15), true);
 });
 
 test("ObjectFields: Extensions なしタイプ (0x10) をエンコード", () => {
@@ -216,12 +289,12 @@ test("ObjectFields: ステータス付き (payload length = 0) をエンコー�
 });
 
 test("ObjectFields: Extensions データ付き (0x11 タイプ) をエンコード", () => {
-  const extensions = new Uint8Array([0xaa, 0xbb, 0xcc]);
-  const encoded = encodeObjectFields(10n, 50n, 0x11, ObjectStatus.NORMAL, extensions);
+  const properties = new Uint8Array([0xaa, 0xbb, 0xcc]);
+  const encoded = encodeObjectFields(10n, 50n, 0x11, ObjectStatus.NORMAL, properties);
 
   assert.equal(encoded[0], 10);
   assert.equal(encoded[1], 3);
-  assert.deepEqual(encoded.slice(2, 5), extensions);
+  assert.deepEqual(encoded.slice(2, 5), properties);
   assert.equal(encoded[5], 50);
 });
 
@@ -236,7 +309,7 @@ test("ObjectFields: Extensions なしタイプ (0x10) をデコード", () => {
   const [fields, consumed] = decodeObjectFields(data, 0x10);
 
   assert.equal(fields.objectIdDelta, 1n);
-  assert.equal(fields.extensionsLength, 0);
+  assert.equal(fields.propertiesLength, 0);
   assert.equal(fields.payloadLength, 63n);
   assert.equal(consumed, 2);
 });
@@ -246,8 +319,8 @@ test("ObjectFields: Extensions ありタイプ (0x11) をデコード", () => {
   const [fields, consumed] = decodeObjectFields(data, 0x11);
 
   assert.equal(fields.objectIdDelta, 5n);
-  assert.equal(fields.extensionsLength, 3);
-  assert.deepEqual(fields.extensions, new Uint8Array([0xaa, 0xbb, 0xcc]));
+  assert.equal(fields.propertiesLength, 3);
+  assert.deepEqual(fields.properties, new Uint8Array([0xaa, 0xbb, 0xcc]));
   assert.equal(fields.payloadLength, 10n);
   assert.equal(consumed, 6);
 });
@@ -280,13 +353,13 @@ for (const tc of objectFieldsTestCases) {
 }
 
 test("ObjectFields: Extensions 付き roundtrip (0x11 タイプ)", () => {
-  const extensions = new Uint8Array([0x11, 0x22, 0x33, 0x44, 0x55]);
-  const encoded = encodeObjectFields(42n, 256n, 0x11, ObjectStatus.NORMAL, extensions);
+  const properties = new Uint8Array([0x11, 0x22, 0x33, 0x44, 0x55]);
+  const encoded = encodeObjectFields(42n, 256n, 0x11, ObjectStatus.NORMAL, properties);
   const [decoded, consumed] = decodeObjectFields(encoded, 0x11);
 
   assert.equal(decoded.objectIdDelta, 42n);
-  assert.equal(decoded.extensionsLength, 5);
-  assert.deepEqual(decoded.extensions, extensions);
+  assert.equal(decoded.propertiesLength, 5);
+  assert.deepEqual(decoded.properties, properties);
   assert.equal(consumed, encoded.length);
 });
 
@@ -323,9 +396,13 @@ test("createObject: 空ペイロードで作成", () => {
   assert.equal(obj.status, ObjectStatus.NORMAL);
 });
 
+/**
+ * draft-ietf-moq-transport-17:
+ * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
+ * draft-ietf-moq-transport-17 Section 10.2.1.1
+ */
 test("ObjectStatus: すべてのステータス値が定義されている", () => {
   assert.equal(ObjectStatus.NORMAL, 0x0);
-  assert.equal(ObjectStatus.OBJECT_DOES_NOT_EXIST, 0x1);
   assert.equal(ObjectStatus.END_OF_GROUP, 0x3);
   assert.equal(ObjectStatus.END_OF_TRACK, 0x4);
 });
@@ -361,15 +438,15 @@ test("SubgroupHeaderType: すべての 24 タイプ値が定義されている",
 });
 
 test("SubgroupHeaderType: Priority Present フラグが正しく判定される", () => {
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE), false);
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_EXT), true);
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_END_GROUP), false);
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_EXT_END_GROUP), true);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE), false);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_EXT), true);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_END_GROUP), false);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_EXT_END_GROUP), true);
 
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_NO_PRIORITY), false);
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_EXT_NO_PRIORITY), true);
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_END_GROUP_NO_PRIORITY), false);
-  assert.equal(hasExtensionsPresent(SubgroupHeaderType.BASE_EXT_END_GROUP_NO_PRIORITY), true);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_NO_PRIORITY), false);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_EXT_NO_PRIORITY), true);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_END_GROUP_NO_PRIORITY), false);
+  assert.equal(hasPropertiesPresent(SubgroupHeaderType.BASE_EXT_END_GROUP_NO_PRIORITY), true);
 });
 
 test("SubgroupHeaderType: Contains End of Group フラグが正しく判定される", () => {
@@ -466,7 +543,7 @@ test("ObjectDatagram: PAYLOAD_NO_OBJ タイプ (0x04) をエンコード", () =>
     type: DatagramType.PAYLOAD_NO_OBJ,
     trackAlias: 1n,
     groupId: 2n,
-    objectId: 0n,
+    objectId: 1n,
     publisherPriority: 100,
     payload: new Uint8Array([0x11, 0x22]),
   };
@@ -501,14 +578,14 @@ test("ObjectDatagram: STATUS_OBJ タイプ (0x20) をエンコード", () => {
 });
 
 test("ObjectDatagram: PAYLOAD_OBJ_EXT タイプ (0x01) - Extensions 付きをエンコード", () => {
-  const extensions = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+  const properties = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
   const datagram: ObjectDatagram = {
     type: DatagramType.PAYLOAD_OBJ_EXT,
     trackAlias: 2n,
     groupId: 3n,
     objectId: 4n,
     publisherPriority: 200,
-    extensions,
+    properties,
     payload: new Uint8Array([0x01]),
   };
 
@@ -516,7 +593,7 @@ test("ObjectDatagram: PAYLOAD_OBJ_EXT タイプ (0x01) - Extensions 付きをエ
 
   assert.equal(encoded[0], 0x01);
   assert.equal(encoded[5], 4);
-  assert.deepEqual(encoded.slice(6, 10), extensions);
+  assert.deepEqual(encoded.slice(6, 10), properties);
   assert.deepEqual(encoded.slice(10), new Uint8Array([0x01]));
 });
 
@@ -564,7 +641,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       type: DatagramType.PAYLOAD_NO_OBJ,
       trackAlias: 10n,
       groupId: 20n,
-      objectId: 0n,
+      objectId: 1n,
       publisherPriority: 255,
       payload: new Uint8Array([0xff]),
     },
@@ -577,7 +654,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       groupId: 10n,
       objectId: 15n,
       publisherPriority: 0,
-      status: ObjectStatus.OBJECT_DOES_NOT_EXIST,
+      status: ObjectStatus.END_OF_TRACK,
     },
   },
   {
@@ -589,6 +666,34 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       objectId: 1n,
       publisherPriority: 100,
       payload: new Uint8Array([0xaa]),
+    },
+  },
+  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
+  // Object ID フィールドなし (Object ID = 1)、Priority フィールドなし
+  {
+    name: "STATUS_NO_OBJ_NO_PRI (0x2C)",
+    datagram: {
+      type: DatagramType.STATUS_NO_OBJ_NO_PRI,
+      trackAlias: 3n,
+      groupId: 7n,
+      objectId: 1n,
+      publisherPriority: 0,
+      status: ObjectStatus.END_OF_TRACK,
+    },
+  },
+  // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
+  // NORMAL status + Properties 付き
+  {
+    name: "STATUS_NO_OBJ_EXT_NO_PRI (0x2D)",
+    datagram: {
+      type: DatagramType.STATUS_NO_OBJ_EXT_NO_PRI,
+      trackAlias: 4n,
+      groupId: 8n,
+      objectId: 1n,
+      publisherPriority: 0,
+      status: ObjectStatus.NORMAL,
+      properties: new Uint8Array([0x01, 0x02]),
     },
   },
 ];
@@ -649,7 +754,7 @@ test("FetchHeader: 基本的な FetchHeader をデコード", () => {
 test("FetchHeader: 無効な type でエラー", () => {
   const data = new Uint8Array([0x10, 0x01]);
 
-  assert.throws(() => decodeFetchHeader(data), "Invalid Fetch Header type");
+  assert.throws(() => decodeFetchHeader(data), "invalid fetch header type");
 });
 
 const requestIds = [0n, 1n, 100n, 1000n, 10000n];
@@ -680,13 +785,13 @@ test("FetchObjectFields: createFirstFetchObjectFlags で Extensions なしフラ
   );
   assert.isOk(flags & FetchSerializationFlags.OBJECT_ID_PRESENT);
   assert.isOk(flags & FetchSerializationFlags.PRIORITY_PRESENT);
-  assert.isNotOk(flags & FetchSerializationFlags.EXTENSIONS_PRESENT);
+  assert.isNotOk(flags & FetchSerializationFlags.PROPERTIES_PRESENT);
 });
 
 test("FetchObjectFields: createFirstFetchObjectFlags で Extensions ありフラグを作成", () => {
   const flags = createFirstFetchObjectFlags(true);
 
-  assert.isOk(flags & FetchSerializationFlags.EXTENSIONS_PRESENT);
+  assert.isOk(flags & FetchSerializationFlags.PROPERTIES_PRESENT);
 });
 
 test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
@@ -710,7 +815,10 @@ test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
   assert.equal(encoded[5], 50);
 });
 
-test("FetchObjectFields: status 付き (payload length = 0) をエンコード", () => {
+// draft-ietf-moq-transport-17 Section 10.2.1.1:
+// "The Object Status is a field that is only present in objects that are
+// delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
+test("FetchObjectFields: payload length = 0 でも Object Status を含めない", () => {
   const flags = createFirstFetchObjectFlags(false);
   const fields: FetchObjectFields = {
     serializationFlags: flags,
@@ -719,13 +827,17 @@ test("FetchObjectFields: status 付き (payload length = 0) をエンコード",
     objectId: 0n,
     publisherPriority: 100,
     payloadLength: 0n,
-    status: ObjectStatus.END_OF_GROUP,
   };
 
   const encoded = encodeFetchObjectFields(fields);
+  // Payload Length (0) の後に Object Status は含まれない
   const lastByte = encoded[encoded.length - 1];
+  assert.equal(lastByte, 0);
 
-  assert.equal(lastByte, ObjectStatus.END_OF_GROUP);
+  const [decoded] = decodeFetchObjectFields(encoded, null, 0, true);
+  assert.equal(decoded.payloadLength, 0n);
+  // DecodedFetchObject には status フィールドが存在しないことを確認
+  assert.equal("status" in decoded, false);
 });
 
 test("FetchObjectFields: 最初のオブジェクトをデコード", () => {
@@ -765,13 +877,19 @@ test("FetchObjectFields: 2番目のオブジェクトをデコード (差分エ�
   assert.equal(newContext.objectId, 11n);
 });
 
-test("FetchObjectFields: 予約ビット使用でエラー", () => {
-  const flags = 0x40;
-  const data = new Uint8Array([flags, 1, 0, 0, 0, 10]);
+/**
+ * draft-ietf-moq-transport-17 Section 10.4.4:
+ * 0x40 は Datagram フラグとして定義された。
+ * 不正な Serialization Flags 値はプロトコル違反。
+ */
+test("FetchObjectFields: 最初のオブジェクトで prior 参照使用はエラー", () => {
+  // 0x40 (Datagram) は有効だが、GROUP_ID_PRESENT が未設定なのでエラー
+  const flags = FetchSerializationFlags.DATAGRAM;
+  const data = new Uint8Array([flags, 0, 0, 0, 0, 10]);
 
   assert.throws(
     () => decodeFetchObjectFields(data, null, 0, true),
-    "Protocol violation: reserved bits 0x40 or 0x80 are set",
+    "first object must have GROUP_ID_PRESENT flag set",
   );
 });
 
@@ -784,7 +902,7 @@ test("FetchObjectFields: 最初のオブジェクトで GROUP_ID_PRESENT なし�
 
   assert.throws(
     () => decodeFetchObjectFields(data, null, 0, true),
-    "Protocol violation: First object must have GROUP_ID_PRESENT flag set",
+    "first object must have GROUP_ID_PRESENT flag set",
   );
 });
 
@@ -892,4 +1010,85 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 
   assert.isOk(flags & FetchSerializationFlags.GROUP_ID_PRESENT);
   assert.isOk(flags & FetchSerializationFlags.OBJECT_ID_PRESENT);
+});
+
+/**
+ * 同一 Subgroup の Priority 一貫性検証テスト
+ * draft-ietf-moq-transport-17:
+ * 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
+ * draft-ietf-moq-transport-17 Section 10.4.4
+ */
+test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", () => {
+  // 最初のオブジェクト
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 同じ Subgroup で異なる Priority を持つオブジェクト
+  // SUBGROUP_SAME + OBJECT_ID_PRESENT + PRIORITY_PRESENT を設定
+  const secondFlags =
+    FetchSerializationFlags.SUBGROUP_SAME |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const objectIdBytes = encodeVarint(1n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const secondEncoded = new Uint8Array(1 + objectIdBytes.length + 1 + payloadLengthBytes.length);
+  secondEncoded[0] = secondFlags;
+  let offset = 1;
+  secondEncoded.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  secondEncoded[offset] = 200; // 異なる Priority
+  offset += 1;
+  secondEncoded.set(payloadLengthBytes, offset);
+
+  assert.throws(
+    () => decodeFetchObjectFields(secondEncoded, firstContext, 0, false),
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", () => {
+  // 最初のオブジェクト
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 異なる Subgroup で異なる Priority
+  // GROUP_ID省略 + SUBGROUP_PLUS_ONE + OBJECT_ID_PRESENT + PRIORITY_PRESENT
+  const secondFlags =
+    FetchSerializationFlags.SUBGROUP_PLUS_ONE |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const secondEncoded = new Uint8Array(1 + objectIdBytes.length + 1 + payloadLengthBytes.length);
+  secondEncoded[0] = secondFlags;
+  let offset = 1;
+  secondEncoded.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  secondEncoded[offset] = 200; // 異なる Priority
+  offset += 1;
+  secondEncoded.set(payloadLengthBytes, offset);
+
+  const [decoded] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+
+  // subgroupId = context.subgroupId + 1 = 1 + 1 = 2
+  assert.equal(decoded.subgroupId, 2n);
+  assert.equal(decoded.publisherPriority, 200);
 });

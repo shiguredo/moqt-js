@@ -8,6 +8,7 @@
 import {
   connect,
   LOC,
+  createVideoFrameSource,
   type Session,
   type Publisher,
   type Subscriber,
@@ -477,11 +478,6 @@ async function startPublishing(): Promise<void> {
 
     setPubStatus("connected", `Publishing to ${namespace.join("/")}/${trackName}`);
 
-    // Check MediaStreamTrackProcessor availability
-    if (typeof MediaStreamTrackProcessor === "undefined") {
-      throw new Error("MediaStreamTrackProcessor is not supported in this browser");
-    }
-
     // Create encoder config and check support
     const encoderConfig = getEncoderConfig(codec, actualWidth, actualHeight, bitrate, framerate);
 
@@ -515,9 +511,11 @@ async function startPublishing(): Promise<void> {
     pubCodecBadge.textContent = `${codec.toUpperCase()} ${actualWidth}x${actualHeight}`;
     pubCodecBadge.classList.remove("hidden");
 
-    // Process video frames using MediaStreamTrackProcessor
-    const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
-    frameReader = trackProcessor.readable.getReader();
+    // VideoFrame ソースを作成する
+    // MediaStreamTrackProcessor が利用可能な場合はそれを使い、
+    // 利用できない場合は requestVideoFrameCallback でフォールバックする
+    const videoFrameSource = createVideoFrameSource(videoTrack);
+    frameReader = videoFrameSource.readable.getReader();
     console.log("Frame reader created");
 
     // Reset stats

@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vite-plus";
 import { resolve } from "node:path";
 import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
@@ -16,6 +16,10 @@ export default defineConfig({
       // 開発中はソースを直接参照
       "moqt-js": resolve(__dirname, "../src/index.ts"),
     },
+  },
+  optimizeDeps: {
+    // alias でソースを直接参照するため、依存スキャンから除外
+    exclude: ["moqt-js"],
   },
   build: {
     outDir: "dist",

@@ -2,15 +2,18 @@
  * MSF (MOQT Streaming Format) の単体テスト
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
   MSF_VERSION,
   CATALOG_TRACK_NAME,
   type Catalog,
   type CatalogTrack,
+  type CatalogDelta,
   type MediaTimelineEntry,
   type EventTimelineEntry,
-  decodeCatalog,
+  decodeCatalogMessage,
+  encodeCatalog,
+  encodeCatalogDelta,
   encodeMediaTimeline,
   decodeMediaTimeline,
   encodeEventTimeline,
@@ -31,67 +34,300 @@ import {
 } from "./msf";
 
 // =============================================================================
-// Catalog エラーケース
+// テスト用ヘルパー
 // =============================================================================
+
+/**
+ * 任意のオブジェクトを JSON バイト列にエンコードする
+ */
+function encodeDeltaRaw(obj: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(obj));
+}
+
+async function assertRejectsWithMessage(
+  factory: () => Promise<unknown>,
+  messagePattern: RegExp,
+): Promise<void> {
+  try {
+    await factory();
+    assert.fail("expected promise to reject");
+  } catch (error) {
+    assert.match((error as Error).message, messagePattern);
+  }
+}
+
+// =============================================================================
+// Catalog エンコード/デコード
+// =============================================================================
+
+test("Catalog: フルカタログのエンコード/デコード", () => {
+  const catalog: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+  };
+  const encoded = encodeCatalog(catalog);
+  const decoded = decodeCatalogMessage(encoded);
+  assert.deepStrictEqual(decoded, catalog);
+});
 
 test("Catalog: 不正な version はエラー", () => {
   const invalidCatalog = { version: 2, tracks: [] };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 test("Catalog: tracks が配列でない場合はエラー", () => {
   const invalidCatalog = { version: 1, tracks: "not an array" };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
 });
 
 test("Catalog: トラックに必須フィールドがない場合はエラー", () => {
   const invalidCatalog = { version: 1, tracks: [{ name: "test" }] };
   const encoded = new TextEncoder().encode(JSON.stringify(invalidCatalog));
-  assert.throws(() => decodeCatalog(encoded), /invalid catalog format/);
+  assert.throws(() => decodeCatalogMessage(encoded), /invalid catalog format/);
+});
+
+// =============================================================================
+// CatalogDelta エンコード/デコード
+// =============================================================================
+
+test("CatalogDelta: addTracks のエンコード/デコード", () => {
+  // draft-ietf-moq-msf-00 §5.2: Add/Delete/Clone 操作は宣言順で保持する
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  const decoded = decodeCatalogMessage(encoded);
+  assert.deepStrictEqual(decoded, delta);
+});
+
+test("CatalogDelta: removeTracks のエンコード/デコード", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "video" }, { name: "slides" }] }],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  const decoded = decodeCatalogMessage(encoded);
+  assert.deepStrictEqual(decoded, delta);
+});
+
+test("CatalogDelta: removeTracks に namespace を含める", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "video", namespace: "example.com/room1" }] }],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  const decoded = decodeCatalogMessage(encoded) as CatalogDelta;
+  const removeOp = decoded.operations[0];
+  assert.strictEqual(removeOp.type, "remove");
+  if (removeOp.type === "remove") {
+    assert.strictEqual(removeOp.tracks[0].namespace, "example.com/room1");
+  }
+});
+
+test("CatalogDelta: version を含む場合はエラー", () => {
+  const invalid = { deltaUpdate: true, version: 1, addTracks: [] };
+  assert.throws(
+    () => decodeCatalogMessage(encodeDeltaRaw(invalid)),
+    /invalid catalog delta format/,
+  );
+});
+
+test("CatalogDelta: tracks を含む場合はエラー", () => {
+  const invalid = { deltaUpdate: true, tracks: [], addTracks: [] };
+  assert.throws(
+    () => decodeCatalogMessage(encodeDeltaRaw(invalid)),
+    /invalid catalog delta format/,
+  );
+});
+
+test("CatalogDelta: addTracks/removeTracks/cloneTracks がない場合はエラー", () => {
+  const invalid = { deltaUpdate: true, generatedAt: 123 };
+  assert.throws(
+    () => decodeCatalogMessage(encodeDeltaRaw(invalid)),
+    /invalid catalog delta format/,
+  );
+});
+
+test("CatalogDelta: operations に同一タイプの操作が重複する場合はエンコード時にエラー", () => {
+  // JSON オブジェクトのキーは重複できないため、同一タイプの操作は 1 回のみ許可する
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      { type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] },
+      { type: "add", tracks: [{ name: "video", packaging: "loc", isLive: true }] },
+    ],
+  };
+  assert.throws(() => encodeCatalogDelta(delta), /duplicate operation type/);
+});
+
+test("CatalogDelta: addTracks 内のトラックに必須フィールドがない場合はデコード時にエラー", () => {
+  // addTracks 内の各トラックも isCatalogTrack の検証を通すべき
+  const raw = {
+    deltaUpdate: true,
+    addTracks: [{ name: "audio" }],
+  };
+  assert.throws(() => decodeCatalogMessage(encodeDeltaRaw(raw)), /invalid catalog delta format/);
+});
+
+test("CatalogDelta: removeTracks 内のトラックに name がない場合はデコード時にエラー", () => {
+  // draft-ietf-moq-msf-00 §5.1.4: Each track object MUST include a Track Name field
+  const raw = {
+    deltaUpdate: true,
+    removeTracks: [{ namespace: "room1" }],
+  };
+  assert.throws(() => decodeCatalogMessage(encodeDeltaRaw(raw)), /invalid catalog delta format/);
+});
+
+test("CatalogDelta: cloneTracks 内のトラックに必須フィールドがない場合はデコード時にエラー", () => {
+  const raw = {
+    deltaUpdate: true,
+    cloneTracks: [{ parentName: "video" }],
+  };
+  assert.throws(() => decodeCatalogMessage(encodeDeltaRaw(raw)), /invalid catalog delta format/);
+});
+
+test("CatalogDelta: 複数操作の宣言順をデコードで保持する", () => {
+  // draft-ietf-moq-msf-00 §5.2: JSON キー宣言順で操作を適用する
+  // JSON では addTracks → removeTracks の順に宣言
+  const raw = {
+    deltaUpdate: true,
+    addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
+    removeTracks: [{ name: "video" }],
+  };
+  const decoded = decodeCatalogMessage(encodeDeltaRaw(raw)) as CatalogDelta;
+  assert.strictEqual(decoded.operations.length, 2);
+  assert.strictEqual(decoded.operations[0].type, "add");
+  assert.strictEqual(decoded.operations[1].type, "remove");
 });
 
 // =============================================================================
 // Media Timeline
 // =============================================================================
 
-test("Media Timeline: 空配列のエンコード/デコード", () => {
+test("Media Timeline: 空配列のエンコード/デコード", async () => {
   const entries: MediaTimelineEntry[] = [];
-  const encoded = encodeMediaTimeline(entries);
-  const decoded = decodeMediaTimeline(encoded);
+  const encoded = await encodeMediaTimeline(entries);
+  const decoded = await decodeMediaTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正な形式はエラー", () => {
-  const invalidData = new TextEncoder().encode('{"not": "an array"}');
-  assert.throws(() => decodeMediaTimeline(invalidData), /invalid media timeline format/);
+test("Media Timeline: gzip のエンコード/デコード", async () => {
+  const entries: MediaTimelineEntry[] = [
+    [0, [0n, 0n], 1759924158381],
+    [2002, [1n, 0n], 1759924160383],
+  ];
+  const encoded = await encodeMediaTimeline(entries, { gzip: true });
+  const decoded = await decodeMediaTimeline(encoded);
+
+  assert.strictEqual(encoded[0], 0x1f);
+  assert.strictEqual(encoded[1], 0x8b);
+  assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正なエントリ形式はエラー", () => {
+test("Media Timeline: 不正な形式はエラー", async () => {
+  const invalidData = new TextEncoder().encode('{"not": "an array"}');
+  await assertRejectsWithMessage(
+    () => decodeMediaTimeline(invalidData),
+    /invalid media timeline format/,
+  );
+});
+
+test("Media Timeline: 不正なエントリ形式はエラー", async () => {
   const invalidData = new TextEncoder().encode("[[1, 2, 3]]");
-  assert.throws(() => decodeMediaTimeline(invalidData), /invalid media timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeMediaTimeline(invalidData),
+    /invalid media timeline entry/,
+  );
 });
 
 // =============================================================================
 // Event Timeline
 // =============================================================================
 
-test("Event Timeline: 空配列のエンコード/デコード", () => {
+test("Event Timeline: 空配列のエンコード/デコード", async () => {
   const entries: EventTimelineEntry[] = [];
-  const encoded = encodeEventTimeline(entries);
-  const decoded = decodeEventTimeline(encoded);
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: 不正な形式はエラー", () => {
-  const invalidData = new TextEncoder().encode('{"not": "an array"}');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline format/);
+test("Event Timeline: gzip のエンコード/デコード", async () => {
+  const entries: EventTimelineEntry[] = [
+    { l: [0n, 0n], data: [47.1812, 8.4592] },
+    { l: [1n, 0n], data: [47.1662, 8.5155] },
+  ];
+  const encoded = await encodeEventTimeline(entries, { gzip: true });
+  const decoded = await decodeEventTimeline(encoded);
+
+  assert.strictEqual(encoded[0], 0x1f);
+  assert.strictEqual(encoded[1], 0x8b);
+  assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: data がない場合はエラー", () => {
+test("Event Timeline: 不正な形式はエラー", async () => {
+  const invalidData = new TextEncoder().encode('{"not": "an array"}');
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline format/,
+  );
+});
+
+test("Event Timeline: data がない場合はエラー", async () => {
+  // draft-ietf-moq-msf-00 §8.1: data は必須
   const invalidData = new TextEncoder().encode('[{"t": 123}]');
-  assert.throws(() => decodeEventTimeline(invalidData), /invalid event timeline entry/);
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
+});
+
+test("Event Timeline: インデックスが 1 つもない場合はエラー", async () => {
+  // draft-ietf-moq-msf-00 §8.1: t/l/m のいずれか 1 つが必須
+  const invalidData = new TextEncoder().encode('[{"data": "event"}]');
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
+});
+
+test("Event Timeline: インデックスが複数ある場合はエラー", async () => {
+  // draft-ietf-moq-msf-00 §8.1: 同一レコード内で複数のインデックスは禁止
+  const invalidData = new TextEncoder().encode('[{"t": 123, "m": 456, "data": "event"}]');
+  await assertRejectsWithMessage(
+    () => decodeEventTimeline(invalidData),
+    /invalid event timeline entry/,
+  );
+});
+
+test("Event Timeline: data が配列の場合も正常にデコードする", async () => {
+  // RFC Section 8.4.2: "data": [47.1812, 8.4592]
+  const entries: EventTimelineEntry[] = [
+    { l: [0n, 0n], data: [47.1812, 8.4592] },
+    { l: [1n, 0n], data: [47.1662, 8.5155] },
+  ];
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
+
+  assert.strictEqual(decoded.length, 2);
+  assert.deepStrictEqual(decoded[0].data, [47.1812, 8.4592]);
+  assert.deepStrictEqual(decoded[1].data, [47.1662, 8.5155]);
+});
+
+test("Event Timeline: data が文字列の場合も正常にデコードする", async () => {
+  const entries: EventTimelineEntry[] = [{ t: 123, data: "hello" }];
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
+  assert.strictEqual(decoded[0].data, "hello");
+});
+
+test("Event Timeline: data が数値の場合も正常にデコードする", async () => {
+  const entries: EventTimelineEntry[] = [{ t: 123, data: 42 }];
+  const encoded = await encodeEventTimeline(entries);
+  const decoded = await decodeEventTimeline(encoded);
+  assert.strictEqual(decoded[0].data, 42);
 });
 
 // =============================================================================
@@ -203,50 +439,15 @@ test("CATALOG_TRACK_NAME: 定数が正しい", () => {
 // Catalog 差分更新
 // =============================================================================
 
-test("applyCatalogDelta: deltaUpdate が false の場合はそのまま置き換え", () => {
-  const current: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "old", packaging: "loc", isLive: true }],
-  };
-
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "new", packaging: "loc", isLive: true }],
-    deltaUpdate: false,
-  };
-
-  const result = applyCatalogDelta(current, delta);
-  assert.strictEqual(result.tracks.length, 1);
-  assert.strictEqual(result.tracks[0].name, "new");
-});
-
-test("applyCatalogDelta: deltaUpdate が undefined の場合はそのまま置き換え", () => {
-  const current: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "old", packaging: "loc", isLive: true }],
-  };
-
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [{ name: "new", packaging: "loc", isLive: true }],
-  };
-
-  const result = applyCatalogDelta(current, delta);
-  assert.strictEqual(result.tracks.length, 1);
-  assert.strictEqual(result.tracks[0].name, "new");
-});
-
 test("applyCatalogDelta: addTracks でトラックを追加", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    addTracks: [{ name: "audio", packaging: "loc", isLive: true }],
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -264,11 +465,9 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["audio"],
+    operations: [{ type: "remove", tracks: [{ name: "audio" }] }],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -276,39 +475,70 @@ test("applyCatalogDelta: removeTracks でトラックを削除", () => {
   assert.strictEqual(result.tracks[0].name, "video");
 });
 
-test("applyCatalogDelta: cloneTracks でトラックを複製", () => {
+test("applyCatalogDelta: removeTracks で namespace を考慮して削除", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [
-      { name: "video", packaging: "loc", isLive: true, codec: "av1", width: 1920, height: 1080 },
+      { name: "video", packaging: "loc", isLive: true, namespace: "room1" },
+      { name: "video", packaging: "loc", isLive: true, namespace: "room2" },
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    cloneTracks: [
+    operations: [{ type: "remove", tracks: [{ name: "video", namespace: "room1" }] }],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual(result.tracks.length, 1);
+  assert.strictEqual(result.tracks[0].namespace, "room2");
+});
+
+test("applyCatalogDelta: cloneTracks で parentName を使用して複製", () => {
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [
       {
-        name: "video-sd",
+        name: "video-1080",
         packaging: "loc",
         isLive: true,
-        depends: ["video"],
-        width: 640,
-        height: 480,
+        codec: "av1",
+        width: 1920,
+        height: 1080,
+      },
+    ],
+  };
+
+  // draft-ietf-moq-msf-00 §5.1.5: parentName でベーストラックを指定
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [
+          {
+            name: "video-720",
+            packaging: "loc",
+            isLive: true,
+            parentName: "video-1080",
+            width: 1280,
+            height: 720,
+            bitrate: 600000,
+          },
+        ],
       },
     ],
   };
 
   const result = applyCatalogDelta(current, delta);
   assert.strictEqual(result.tracks.length, 2);
-  assert.strictEqual(result.tracks[1].name, "video-sd");
+  assert.strictEqual(result.tracks[1].name, "video-720");
   assert.strictEqual(result.tracks[1].codec, "av1");
-  assert.strictEqual(result.tracks[1].width, 640);
-  assert.strictEqual(result.tracks[1].height, 480);
+  assert.strictEqual(result.tracks[1].width, 1280);
+  assert.strictEqual(result.tracks[1].height, 720);
 });
 
-test("applyCatalogDelta: 複合操作 (remove + add)", () => {
+test("applyCatalogDelta: 複合操作 (remove → add)", () => {
   const current: Catalog = {
     version: MSF_VERSION,
     tracks: [
@@ -317,12 +547,12 @@ test("applyCatalogDelta: 複合操作 (remove + add)", () => {
     ],
   };
 
-  const delta: Catalog = {
-    version: MSF_VERSION,
-    tracks: [],
+  const delta: CatalogDelta = {
     deltaUpdate: true,
-    removeTracks: ["video-hd"],
-    addTracks: [{ name: "video-sd", packaging: "loc", isLive: true }],
+    operations: [
+      { type: "remove", tracks: [{ name: "video-hd" }] },
+      { type: "add", tracks: [{ name: "video-sd", packaging: "loc", isLive: true }] },
+    ],
   };
 
   const result = applyCatalogDelta(current, delta);
@@ -330,6 +560,124 @@ test("applyCatalogDelta: 複合操作 (remove + add)", () => {
   assert.isTrue(result.tracks.some((t) => t.name === "audio"));
   assert.isTrue(result.tracks.some((t) => t.name === "video-sd"));
   assert.isFalse(result.tracks.some((t) => t.name === "video-hd"));
+});
+
+test("applyCatalogDelta: 宣言順を守って操作を適用する (add → remove で同名トラック)", () => {
+  // draft-ietf-moq-msf-00 §5.2: 宣言順に操作を逐次適用する
+  // add "new-track" を先に行い、続いて remove "new-track" を行うと最終的に残らない
+  // 逆順 (remove → add) なら "new-track" が残る
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "existing", packaging: "loc", isLive: true }],
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      { type: "add", tracks: [{ name: "new-track", packaging: "loc", isLive: true }] },
+      { type: "remove", tracks: [{ name: "new-track" }] },
+    ],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual(result.tracks.length, 1);
+  assert.strictEqual(result.tracks[0].name, "existing");
+  assert.isFalse(result.tracks.some((t) => t.name === "new-track"));
+});
+
+test("applyCatalogDelta: generatedAt を引き継ぐ", () => {
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+    generatedAt: 100,
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 200,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual(result.generatedAt, 200);
+});
+
+test("applyCatalogDelta: isComplete を引き継ぐ", () => {
+  // draft-ietf-moq-msf-00 §5.1.7: isComplete は一度設定したら削除禁止 (MUST NOT)
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+    isComplete: true,
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual(result.isComplete, true);
+});
+
+test("applyCatalogDelta: isComplete が未設定の場合は引き継がない", () => {
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+  };
+
+  const result = applyCatalogDelta(current, delta);
+  assert.isUndefined(result.isComplete);
+});
+
+test("applyCatalogDelta: cloneTracks で parentName がない場合はエラー", () => {
+  // draft-ietf-moq-msf-00 §5.1.5: Each track object MUST include a Parent Name field
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "video-clone", packaging: "loc", isLive: true }],
+      },
+    ],
+  };
+
+  assert.throws(() => applyCatalogDelta(current, delta), /clone track missing parentName/);
+});
+
+test("applyCatalogDelta: cloneTracks で親トラックが存在しない場合はエラー", () => {
+  const current: Catalog = {
+    version: MSF_VERSION,
+    tracks: [{ name: "video", packaging: "loc", isLive: true }],
+  };
+
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [
+          {
+            name: "video-clone",
+            packaging: "loc",
+            isLive: true,
+            parentName: "nonexistent",
+          },
+        ],
+      },
+    ],
+  };
+
+  assert.throws(() => applyCatalogDelta(current, delta), /clone track parent not found/);
 });
 
 // =============================================================================

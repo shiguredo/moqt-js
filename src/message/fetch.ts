@@ -1,23 +1,25 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-15 Section 9.16-9.18
+ * draft-ietf-moq-transport-17 Section 9.14 (FETCH) — 9.15 (FETCH_OK)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
+import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   type Parameter,
   type TrackNamespace,
   decodeLocation,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
   encodeLocation,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { type Location, MessageType } from "./types";
 
 /**
- * Fetch Type (Section 9.16)
+ * Fetch Type (Section 9.14 FETCH)
  */
 export const FetchType = {
   STANDALONE: 0x01,
@@ -28,7 +30,7 @@ export const FetchType = {
 export type FetchType = (typeof FetchType)[keyof typeof FetchType];
 
 /**
- * Standalone Fetch structure (Section 9.16.1)
+ * Standalone Fetch structure (Section 9.14.1 Standalone Fetch)
  */
 export interface StandaloneFetch {
   trackNamespace: TrackNamespace;
@@ -38,7 +40,7 @@ export interface StandaloneFetch {
 }
 
 /**
- * Joining Fetch structure (Section 9.16.2)
+ * Joining Fetch structure (Section 9.14.2 Joining Fetches)
  */
 export interface JoiningFetch {
   joiningRequestId: bigint;
@@ -46,11 +48,14 @@ export interface JoiningFetch {
 }
 
 /**
- * FETCH メッセージ (Section 9.16)
+ * FETCH メッセージ (Section 9.14 FETCH)
  */
 export interface Fetch {
   type: typeof MessageType.FETCH;
   requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   fetchType: FetchType;
   standalone?: StandaloneFetch;
   joining?: JoiningFetch;
@@ -58,22 +63,19 @@ export interface Fetch {
 }
 
 /**
- * FETCH_OK メッセージ (Section 9.17)
+ * FETCH_OK メッセージ (Section 9.15 FETCH_OK)
+ *
+ * draft-ietf-moq-transport-17:
+ * - 双方向ストリーム上で送信されるため Request ID は不要。
+ * - Track Extensions が追加された。
+ * draft-ietf-moq-transport-17 Section 9
  */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
-  requestId: bigint;
   endOfTrack: boolean;
   endLocation: Location;
   parameters: Parameter[];
-}
-
-/**
- * FETCH_CANCEL メッセージ (Section 9.18)
- */
-export interface FetchCancel {
-  type: typeof MessageType.FETCH_CANCEL;
-  requestId: bigint;
+  trackProperties: Property[];
 }
 
 /**
@@ -83,6 +85,7 @@ export function encodeFetchPayload(msg: Fetch): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeVarint(msg.fetchType));
 
   if (msg.fetchType === FetchType.STANDALONE && msg.standalone) {
@@ -96,10 +99,7 @@ export function encodeFetchPayload(msg: Fetch): Uint8Array {
     parts.push(encodeVarint(msg.joining.joiningStart));
   }
 
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -123,63 +123,77 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
+  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaSize;
+
   const [fetchType, fetchTypeSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += fetchTypeSize;
 
   let standalone: StandaloneFetch | undefined;
   let joining: JoiningFetch | undefined;
 
-  if (Number(fetchType) === FetchType.STANDALONE) {
-    const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
-    totalConsumed += namespaceSize;
+  // draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+  // "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
+  //  the session with a PROTOCOL_VIOLATION."
+  const fetchTypeValue = Number(fetchType);
+  switch (fetchTypeValue) {
+    case FetchType.STANDALONE: {
+      const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+      totalConsumed += namespaceSize;
 
-    const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += trackNameLenSize;
+      const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += trackNameLenSize;
 
-    const trackName = data.slice(
-      offset + totalConsumed,
-      offset + totalConsumed + Number(trackNameLen),
-    );
-    totalConsumed += Number(trackNameLen);
+      const trackName = data.slice(
+        offset + totalConsumed,
+        offset + totalConsumed + Number(trackNameLen),
+      );
+      totalConsumed += Number(trackNameLen);
 
-    const [startLocation, startLocationSize] = decodeLocation(data, offset + totalConsumed);
-    totalConsumed += startLocationSize;
+      const [startLocation, startLocationSize] = decodeLocation(data, offset + totalConsumed);
+      totalConsumed += startLocationSize;
 
-    const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
-    totalConsumed += endLocationSize;
+      const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
+      totalConsumed += endLocationSize;
 
-    standalone = {
-      trackNamespace,
-      trackName,
-      startLocation,
-      endLocation,
-    };
-  } else {
-    const [joiningRequestId, joiningRequestIdSize] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += joiningRequestIdSize;
+      standalone = {
+        trackNamespace,
+        trackName,
+        startLocation,
+        endLocation,
+      };
+      break;
+    }
+    case FetchType.RELATIVE_JOINING:
+    case FetchType.ABSOLUTE_JOINING: {
+      const [joiningRequestId, joiningRequestIdSize] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += joiningRequestIdSize;
 
-    const [joiningStart, joiningStartSize] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += joiningStartSize;
+      const [joiningStart, joiningStartSize] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += joiningStartSize;
 
-    joining = {
-      joiningRequestId,
-      joiningStart,
-    };
+      joining = {
+        joiningRequestId,
+        joiningStart,
+      };
+      break;
+    }
+    default:
+      throw new ProtocolViolationError(
+        `unknown fetch type: 0x${fetchTypeValue.toString(16)}, expected 0x1, 0x2, or 0x3`,
+      );
   }
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < numParams; i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
   return {
     type: MessageType.FETCH,
     requestId,
+    requiredRequestIdDelta,
     fetchType: Number(fetchType) as FetchType,
     standalone,
     joining,
@@ -192,17 +206,28 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ *
+ * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+ * FETCH_OK Message {
+ *   Type (i) = 0x18,
+ *   Length (16),
+ *   End of Track (8),
+ *   End Location (Location),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...,
+ *   Track Properties (..)
+ * }
  */
 export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
   parts.push(new Uint8Array([msg.endOfTrack ? 1 : 0]));
   parts.push(encodeLocation(msg.endLocation));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
+
+  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+  // Track Properties は length プレフィックスなしでシリアライズされる。
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -220,51 +245,25 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
 export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   let totalConsumed = 0;
 
-  const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdSize;
-
   const endOfTrack = data[offset + totalConsumed] === 1;
   totalConsumed += 1;
 
   const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
   totalConsumed += endLocationSize;
 
-  const [numParams, numParamsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsSize;
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
 
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < numParams; i++) {
-    const [param, paramSize] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramSize;
-  }
+  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+  // Track Properties は残りバイトすべて
+  const propertiesData = data.slice(offset + totalConsumed);
+  const trackProperties = decodeProperties(propertiesData);
 
   return {
     type: MessageType.FETCH_OK,
-    requestId,
     endOfTrack,
     endLocation,
     parameters,
-  };
-}
-
-/**
- * FetchCancel のペイロードをエンコード
- */
-export function encodeFetchCancelPayload(msg: FetchCancel): Uint8Array {
-  return encodeVarint(msg.requestId);
-}
-
-/**
- * FetchCancel のペイロードをデコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function decodeFetchCancelPayload(data: Uint8Array, offset = 0): FetchCancel {
-  const [requestId] = decodeVarint(data, offset);
-  return {
-    type: MessageType.FETCH_CANCEL,
-    requestId,
+    trackProperties,
   };
 }

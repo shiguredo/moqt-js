@@ -24,7 +24,7 @@ export function App() {
               W3C WebCodecs
             </a>
           </p>
-          <p class="mt-1">株式会社時雨堂 Copyright © 2025 Shiguredo Inc. All rights reserved.</p>
+          <p class="mt-1">株式会社時雨堂 Copyright © 2026 Shiguredo Inc. All rights reserved.</p>
         </footer>
       </div>
     </div>

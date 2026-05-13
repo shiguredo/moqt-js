@@ -1,70 +1,79 @@
 /**
  * MOQT Subscribe Messages
- * draft-ietf-moq-transport-15 Section 9.9-9.12
+ * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE) — 9.9 (SUBSCRIBE_OK) — 9.10 (REQUEST_UPDATE)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   type Parameter,
   type TrackNamespace,
-  decodeParameter,
+  decodeParameters,
   decodeTrackNamespace,
-  encodeParameter,
+  encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
 
 /**
- * SUBSCRIBE メッセージ (Section 9.9)
+ * SUBSCRIBE メッセージ (Section 9.8 SUBSCRIBE)
  *
- * draft-ietf-moq-transport-15:
+ * draft-ietf-moq-transport-17:
  * SUBSCRIBE does NOT include Track Alias.
  * Track Alias is returned by the publisher in SUBSCRIBE_OK.
  */
 export interface Subscribe {
   type: typeof MessageType.SUBSCRIBE;
   requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   parameters: Parameter[];
 }
 
 /**
- * SUBSCRIBE_OK メッセージ (Section 9.10)
+ * SUBSCRIBE_OK メッセージ (Section 9.9 SUBSCRIBE_OK)
+ *
+ * draft-ietf-moq-transport-17:
+ * - 双方向ストリーム上で送信されるため Request ID は不要。
+ * - Track Extensions が追加された。
+ * draft-ietf-moq-transport-17 Section 9
  */
 export interface SubscribeOk {
   type: typeof MessageType.SUBSCRIBE_OK;
-  requestId: bigint;
   trackAlias: bigint;
   parameters: Parameter[];
+  trackProperties: Property[];
 }
 
 /**
- * SUBSCRIBE_UPDATE メッセージ (Section 9.11)
+ * REQUEST_UPDATE メッセージ (Section 9.10 REQUEST_UPDATE)
+ *
+ * draft-ietf-moq-transport-17:
+ * 既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
+ * パラメータを後から変更するために使用する。
+ * 更新対象のリクエストは同じ bidi stream で特定される。
  */
-export interface SubscribeUpdate {
-  type: typeof MessageType.SUBSCRIBE_UPDATE;
+export interface RequestUpdate {
+  type: typeof MessageType.REQUEST_UPDATE;
   requestId: bigint;
-  subscriptionRequestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
   parameters: Parameter[];
-}
-
-/**
- * UNSUBSCRIBE メッセージ (Section 9.12)
- */
-export interface Unsubscribe {
-  type: typeof MessageType.UNSUBSCRIBE;
-  requestId: bigint;
 }
 
 /**
  * Subscribe のペイロードをエンコード
  *
- * draft-ietf-moq-transport-15 Section 9.9:
+ * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
  * SUBSCRIBE Message {
  *   Type (i) = 0x3,
  *   Length (16),
  *   Request ID (i),
+ *   Required Request ID Delta (i),
  *   Track Namespace (..),
  *   Track Name Length (i),
  *   Track Name (..),
@@ -76,13 +85,11 @@ export function encodeSubscribePayload(msg: Subscribe): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -106,6 +113,12 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
+  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaConsumed;
+
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -114,19 +127,13 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += paramsConsumed;
 
   return {
     type: MessageType.SUBSCRIBE,
     requestId,
+    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     parameters,
@@ -138,16 +145,26 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ *
+ * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
+ * SUBSCRIBE_OK Message {
+ *   Type (i) = 0x4,
+ *   Length (16),
+ *   Track Alias (i),
+ *   Number of Parameters (i),
+ *   Parameters (..) ...,
+ *   Track Properties (..)
+ * }
  */
 export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.trackAlias));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeParameters(msg.parameters));
+
+  // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
+  // Track Properties は length プレフィックスなしでシリアライズされる。
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -165,42 +182,44 @@ export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
 export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): SubscribeOk {
   let totalConsumed = 0;
 
-  const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += requestIdConsumed;
-
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
+  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += paramsConsumed;
 
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  // draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
+  // Track Properties は残りバイトすべて
+  const propertiesData = data.slice(offset + totalConsumed);
+  const trackProperties = decodeProperties(propertiesData);
 
   return {
     type: MessageType.SUBSCRIBE_OK,
-    requestId,
     trackAlias,
     parameters,
+    trackProperties,
   };
 }
 
 /**
- * SubscribeUpdate のペイロードをエンコード
+ * RequestUpdate のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE):
+ * REQUEST_UPDATE Message {
+ *   Type (i) = 0x2,
+ *   Length (16),
+ *   Request ID (vi64),
+ *   Required Request ID Delta (vi64),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
+ * }
  */
-export function encodeSubscribeUpdatePayload(msg: SubscribeUpdate): Uint8Array {
+export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.subscriptionRequestId));
-  parts.push(encodeVarint(msg.parameters.length));
-  for (const param of msg.parameters) {
-    parts.push(encodeParameter(param));
-  }
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
+  parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -213,57 +232,32 @@ export function encodeSubscribeUpdatePayload(msg: SubscribeUpdate): Uint8Array {
 }
 
 /**
- * SubscribeUpdate のペイロードをデコード
+ * RequestUpdate のペイロードをデコード
  *
  * リレーサーバーおよび Publisher 実装用。
  * moqt-js はクライアント専用のため、現在ランタイムでは使用しない。
- * TODO: Publisher として SUBSCRIBE_UPDATE を受信する処理の実装。
+ * TODO: Publisher として REQUEST_UPDATE を受信する処理の実装。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  */
-export function decodeSubscribeUpdatePayload(data: Uint8Array, offset = 0): SubscribeUpdate {
+export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): RequestUpdate {
   let totalConsumed = 0;
 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [subscriptionRequestId, subReqIdConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += subReqIdConsumed;
+  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaConsumed;
 
-  const [numParams, numParamsConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += numParamsConsumed;
-
-  const parameters: Parameter[] = [];
-  for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeParameter(data, offset + totalConsumed);
-    parameters.push(param);
-    totalConsumed += paramConsumed;
-  }
+  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += paramsConsumed;
 
   return {
-    type: MessageType.SUBSCRIBE_UPDATE,
+    type: MessageType.REQUEST_UPDATE,
     requestId,
-    subscriptionRequestId,
+    requiredRequestIdDelta,
     parameters,
-  };
-}
-
-/**
- * Unsubscribe のペイロードをエンコード
- */
-export function encodeUnsubscribePayload(msg: Unsubscribe): Uint8Array {
-  return encodeVarint(msg.requestId);
-}
-
-/**
- * Unsubscribe のペイロードをデコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function decodeUnsubscribePayload(data: Uint8Array, offset = 0): Unsubscribe {
-  const [requestId] = decodeVarint(data, offset);
-  return {
-    type: MessageType.UNSUBSCRIBE,
-    requestId,
   };
 }

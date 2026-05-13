@@ -5,6 +5,8 @@ import {
   createCatalog,
   encodeCatalog,
   createCompleteCatalog,
+  createVideoFrameSource,
+  type AuthorizationToken,
   type DebugMessage,
   type CertificateHash,
 } from "moqt-js";
@@ -16,7 +18,7 @@ import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
 
-function handleDebugMessage(message: DebugMessage): void {
+export function handleDebugMessage(message: DebugMessage): void {
   const direction = message.direction === "send" ? "SEND" : "RECV";
   const logMessage = `[publisher] [${direction}] ${message.typeName}`;
 
@@ -29,8 +31,9 @@ function handleDebugMessage(message: DebugMessage): void {
     Object.assign(data, message.decoded);
   }
 
-  // payload が存在する場合は渡す
-  const payload = message.payload.length > 0 ? message.payload : undefined;
+  // moqt-js の DebugMessage.payload はライフタイム契約が JSDoc 上明文化されて
+  // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
+  const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
   addLog("info", logMessage, data, payload);
 }
 
@@ -186,12 +189,14 @@ export function usePublisher() {
     }
 
     // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
-    // H.264/H.265 は Annex B 形式で出力されるため、description は不要
+    // annexB 形式の場合は description 不要、canonical (avc1/hvc1) の場合は
+    // description を Video Config Extension (ID: 13) で送る
+    // draft-ietf-moq-loc-02 §2.3.2.1
     const payload = chunk.data;
 
-    // LOC Header Extensions をエンコード
-    const extensions = LOC.encodeVideoHeaderExtensions({
-      captureTimestamp: BigInt(chunk.timestamp),
+    // LOC Properties をエンコード
+    const extensions = LOC.encodeVideoProperties({
+      timestamp: BigInt(chunk.timestamp),
       frameMarking: {
         isIndependent: chunk.type === "key",
         isDiscardable: chunk.type !== "key",
@@ -199,6 +204,9 @@ export function usePublisher() {
         temporalLayerId: 0,
         spatialLayerId: 0,
       },
+      // canonical 形式 (avc1 / hvc1) のときに WebCodecs から得られる description を載せる。
+      // annexB 形式の場合は WebCodecs が description を提供しないので何も送らない。
+      config: chunk.description,
     });
 
     pub.objectsWithExtensions.value++;
@@ -210,7 +218,7 @@ export function usePublisher() {
       groupId: pub.pubCurrentGroup.value,
       objectId: pub.pubCurrentObjectId.value++,
       payload,
-      extensions,
+      properties: extensions,
       priority: chunk.type === "key" ? 255 : 128,
     });
 
@@ -241,7 +249,10 @@ export function usePublisher() {
       });
 
       // Build connect options
-      const connectOptions: { serverCertificateHashes?: CertificateHash[] } = {};
+      const connectOptions: {
+        serverCertificateHashes?: CertificateHash[];
+        authorizationToken?: AuthorizationToken;
+      } = {};
       if (settings.certificateHash.value) {
         connectOptions.serverCertificateHashes = [
           {
@@ -250,18 +261,30 @@ export function usePublisher() {
           },
         ];
       }
+      const authToken = settings.buildAuthorizationToken();
+      if (authToken) {
+        connectOptions.authorizationToken = authToken;
+      }
 
       // Connect to MOQT server
       console.log("startPublishing: connecting to", settings.url.value);
       const session = await connect(
         settings.url.value,
         {
-          close: () => {
+          close: (closeInfo) => {
+            addLog("warn", `[publisher] webtransport closed`, {
+              closeCode: closeInfo.closeCode,
+              reason: closeInfo.reason.slice(0, 1024),
+            });
             pub.pubStatus.value = "disconnected";
-            pub.pubStatusMessage.value = "Disconnected";
+            pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             cleanupPublisher();
           },
           error: (error) => {
+            addLog("error", `[publisher] webtransport error`, {
+              name: error.name ?? "Error",
+              message: error.message ?? String(error),
+            });
             pub.pubStatus.value = "error";
             pub.pubStatusMessage.value = `Error: ${error.message}`;
             cleanupPublisher();
@@ -272,6 +295,7 @@ export function usePublisher() {
       );
       console.log("startPublishing: connected");
       pub.pubSession.value = session;
+      settings.reliability.value = session.reliability;
 
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = "Connected, publishing catalog...";
@@ -308,8 +332,8 @@ export function usePublisher() {
       ]);
       const catalogPayload = encodeCatalog(createdCatalog);
       catalogPublisherInstance.sendObject({
-        groupId: 0n,
-        objectId: 0n,
+        groupId: 0,
+        objectId: 0,
         payload: catalogPayload,
       });
       pub.catalog.value = createdCatalog;
@@ -370,21 +394,22 @@ export function usePublisher() {
             pub.pubStatus.value = "error";
             pub.pubStatusMessage.value = `Publish error: ${error.message}`;
           },
+          // draft-ietf-moq-transport-17 Section 5.1:
+          // Forward State の変化を追跡する
+          onForwardStateChange: (forward) => {
+            pub.forwardState.value = forward;
+          },
         },
         {
           maxCacheDuration: BigInt(maxCacheDurationValue),
         },
       );
       console.log("startPublishing: PUBLISH_OK received");
+      pub.forwardState.value = publisherInstance.forwardState;
       pub.publisher.value = publisherInstance;
 
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = `Publishing to ${namespaceArray.join("/")}/${trackNameValue}`;
-
-      // Check MediaStreamTrackProcessor availability
-      if (typeof MediaStreamTrackProcessor === "undefined") {
-        throw new Error("MediaStreamTrackProcessor is not supported in this browser");
-      }
 
       // Create encoder config and check support
       const encoderConfig = getEncoderConfig(
@@ -432,9 +457,11 @@ export function usePublisher() {
       // Show codec badge
       pub.pubCodec.value = `${codecValue.toUpperCase()} ${actualWidth}x${actualHeight}`;
 
-      // Process video frames using MediaStreamTrackProcessor
-      const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
-      pub.frameReader.value = trackProcessor.readable.getReader();
+      // VideoFrame ソースを作成する
+      // MediaStreamTrackProcessor が利用可能な場合はそれを使い、
+      // 利用できない場合は requestVideoFrameCallback でフォールバックする
+      const videoFrameSource = createVideoFrameSource(videoTrack);
+      pub.frameReader.value = videoFrameSource.readable.getReader();
       console.log("Frame reader created");
 
       // Reset stats
@@ -475,8 +502,8 @@ export function usePublisher() {
         const completeCatalog = createCompleteCatalog();
         const completeCatalogPayload = encodeCatalog(completeCatalog);
         pub.catalogPublisher.value.sendObject({
-          groupId: 1n,
-          objectId: 0n,
+          groupId: 1,
+          objectId: 0,
           payload: completeCatalogPayload,
         });
         addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, complete)`, {
@@ -534,6 +561,7 @@ export function usePublisher() {
     pub.catalogPublisher.value = null;
     pub.catalog.value = null;
     pub.pubCodec.value = "";
+    pub.forwardState.value = null;
 
     // Enable settings if no subscriber is active
     if (!sub.hasActiveSubscriber.value) {

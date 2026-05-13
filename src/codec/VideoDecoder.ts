@@ -209,7 +209,6 @@ export class VideoDecoderWrapper {
    */
   close(): void {
     if (this.useWorker && this.worker) {
-      this.worker.postMessage({ type: "close" });
       this.worker.terminate();
       this.worker = null;
     } else if (this.decoder) {

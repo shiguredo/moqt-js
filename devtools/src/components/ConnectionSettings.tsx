@@ -1,8 +1,77 @@
 import { signal } from "@preact/signals";
 import * as settings from "../signals/connectionSettings";
 
+const showMoqtHelp = signal(false);
 const showMsfHelp = signal(false);
 const showLocHelp = signal(false);
+
+function MoqtHelpModal() {
+  if (!showMoqtHelp.value) return null;
+
+  return (
+    <div
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={() => (showMoqtHelp.value = false)}
+    >
+      <div
+        class="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-slate-700">MOQT (Media over QUIC Transport)</h3>
+          <button
+            onClick={() => (showMoqtHelp.value = false)}
+            class="text-slate-400 hover:text-slate-600"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-4 text-sm text-slate-600">
+          <div>
+            <p>
+              QUIC 上でメディアをリアルタイム配信するためのプロトコルです。
+              低遅延かつ信頼性の高いメディアストリーミングを実現します。
+            </p>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">主要概念</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>Client - サーバーに接続してメディアを送受信</li>
+              <li>Server - クライアント間のメディア中継</li>
+              <li>SUBSCRIBE - トラックの購読リクエスト</li>
+              <li>ANNOUNCE - トラックの公開通知</li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">データ構造</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>Track - メディアストリームの単位</li>
+              <li>Group - 関連オブジェクトの集合</li>
+              <li>Object - 最小のデータ単位</li>
+            </ul>
+          </div>
+          <div class="pt-2 border-t border-slate-200">
+            <a
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-blue-600 hover:text-blue-800 hover:underline"
+            >
+              draft-ietf-moq-transport
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function MsfHelpModal() {
   if (!showMsfHelp.value) return null;
@@ -58,7 +127,7 @@ function MsfHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://github.com/moq-wg/msf"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
@@ -118,7 +187,7 @@ function LocHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://github.com/moq-wg/loc"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
@@ -132,11 +201,34 @@ function LocHelpModal() {
   );
 }
 
+/**
+ * 現在の WebTransport.reliability を HTTP バージョンバッジとして表示する。
+ * draft-ietf-webtrans-http2 / draft-ietf-webtrans-http3 の判別に利用する。
+ */
+function HttpVersionBadge() {
+  const label = settings.toHttpVersionLabel(settings.reliability.value);
+  const color =
+    label === "HTTP/3"
+      ? "bg-green-100 text-green-700"
+      : label === "HTTP/2"
+        ? "bg-blue-100 text-blue-700"
+        : "bg-slate-100 text-slate-500";
+  return (
+    <span
+      class={`px-2 py-0.5 text-xs font-medium rounded-full ${color}`}
+      title={`WebTransport.reliability: ${settings.reliability.value}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export function ConnectionSettings() {
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
       <MsfHelpModal />
       <LocHelpModal />
+      <MoqtHelpModal />
       <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -154,6 +246,7 @@ export function ConnectionSettings() {
         </svg>
         Connection Settings
         <div class="ml-auto flex items-center gap-2">
+          <HttpVersionBadge />
           <button
             onClick={() => (showMsfHelp.value = true)}
             class="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 transition-colors flex items-center gap-1"
@@ -181,6 +274,20 @@ export function ConnectionSettings() {
               />
             </svg>
             LOC
+          </button>
+          <button
+            onClick={() => (showMoqtHelp.value = true)}
+            class="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            MOQT
           </button>
         </div>
       </h2>
@@ -219,10 +326,12 @@ export function ConnectionSettings() {
         <div>
           <label for="namespace" class="block text-sm font-medium text-slate-600 mb-1">
             Namespace
+            <span class="text-xs text-slate-400 ml-1">(「/」で tuple に分割)</span>
           </label>
           <input
             type="text"
             id="namespace"
+            placeholder="例: room/123 → [room, 123]"
             value={settings.namespace.value}
             onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
             disabled={settings.settingsDisabled.value}
@@ -467,6 +576,84 @@ export function ConnectionSettings() {
           <label for="useDedicatedWorker" class="text-sm text-slate-600">
             Use Dedicated Worker
           </label>
+        </div>
+      </div>
+
+      {/* Authorization Token Settings */}
+      {/* draft-ietf-moq-transport-17 §9.4.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+      <div class="mt-4 pt-4 border-t border-slate-200">
+        <h3 class="text-sm font-medium text-slate-600 mb-3">
+          Authorization Token
+          <span class="ml-2 text-xs text-slate-400">SETUP Option (0x03)</span>
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div>
+            <label for="authorizationTokenAliasType" class="block text-xs text-slate-500 mb-1">
+              Alias Type
+            </label>
+            <select
+              id="authorizationTokenAliasType"
+              value={settings.authorizationTokenAliasType.value}
+              onChange={(e) => {
+                const v = e.currentTarget.value;
+                if (v === "useValue" || v === "register") {
+                  settings.authorizationTokenAliasType.value = v;
+                }
+              }}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              <option value="useValue">USE_VALUE (0x3)</option>
+              <option value="register">REGISTER (0x1)</option>
+            </select>
+          </div>
+          {settings.authorizationTokenAliasType.value === "register" && (
+            <div>
+              <label for="authorizationTokenAlias" class="block text-xs text-slate-500 mb-1">
+                Token Alias
+              </label>
+              <input
+                type="text"
+                id="authorizationTokenAlias"
+                value={settings.authorizationTokenAlias.value}
+                onInput={(e) => (settings.authorizationTokenAlias.value = e.currentTarget.value)}
+                disabled={settings.settingsDisabled.value}
+                placeholder="0"
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+              />
+            </div>
+          )}
+          <div>
+            <label for="authorizationTokenType" class="block text-xs text-slate-500 mb-1">
+              Token Type
+              <span class="ml-1 text-slate-400">(0 = out-of-band)</span>
+            </label>
+            <input
+              type="text"
+              id="authorizationTokenType"
+              value={settings.authorizationTokenType.value}
+              onInput={(e) => (settings.authorizationTokenType.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              placeholder="0"
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
+          <div class="lg:col-span-2">
+            <label for="authorizationTokenValue" class="block text-xs text-slate-500 mb-1">
+              Token Value
+              <span class="ml-1 text-slate-400">(空の場合は送出しない)</span>
+            </label>
+            <input
+              type="text"
+              id="authorizationTokenValue"
+              autocomplete="off"
+              value={settings.authorizationTokenValue.value}
+              onInput={(e) => (settings.authorizationTokenValue.value = e.currentTarget.value)}
+              disabled={settings.settingsDisabled.value}
+              placeholder="任意のトークン文字列 (UTF-8)"
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+            />
+          </div>
         </div>
       </div>
     </div>

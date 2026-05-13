@@ -1,92 +1,159 @@
 /**
  * MOQT Setup Messages Unit Tests
- * draft-ietf-moq-transport-15 Section 9.1
+ * draft-ietf-moq-transport-17 Section 9.4
  */
 
-import { test, assert } from "vitest";
+import { test, assert } from "vite-plus/test";
 import {
-  createClientSetup,
-  createServerSetup,
+  createSetup,
+  encodeSetupPayload,
+  decodeSetupPayload,
   getSetupPath,
-  getSetupMaxRequestId,
   getSetupAuthority,
+  getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
 } from "./setup";
-import { MessageType, SetupParameterType } from "./types";
+import { AuthorizationTokenAliasType } from "./authorizationToken";
+import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { decodeVarint } from "../varint";
 
 // MOQT_IMPLEMENTATION は常に追加される
-test("ClientSetup: パラメータなしで作成", () => {
-  const setup = createClientSetup();
-  assert.equal(setup.type, MessageType.CLIENT_SETUP);
+test("Setup: パラメータなしで作成", () => {
+  const setup = createSetup();
+  assert.equal(setup.type, MessageType.SETUP);
   // MOQT_IMPLEMENTATION のみ
   assert.equal(setup.parameters.length, 1);
-  assert.equal(setup.parameters[0].type, SetupParameterType.MOQT_IMPLEMENTATION);
+  assert.equal(setup.parameters[0].type, SetupOptionType.MOQT_IMPLEMENTATION);
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-test("ClientSetup: path パラメータ付きで作成", () => {
-  const setup = createClientSetup({ path: "/moqt" });
-  assert.equal(setup.type, MessageType.CLIENT_SETUP);
-  // PATH + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 2);
-  assert.equal(setup.parameters[0].type, SetupParameterType.PATH);
-  assert.equal(getSetupPath(setup), "/moqt");
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
-});
-
-test("ClientSetup: maxRequestId パラメータ付きで作成", () => {
-  const setup = createClientSetup({ maxRequestId: 1000n });
-  assert.equal(setup.type, MessageType.CLIENT_SETUP);
-  // MAX_REQUEST_ID + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 2);
-  assert.equal(setup.parameters[0].type, SetupParameterType.MAX_REQUEST_ID);
-  assert.equal(getSetupMaxRequestId(setup), 1000n);
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
-});
-
-test("ClientSetup: authority パラメータ付きで作成", () => {
-  const setup = createClientSetup({ authority: "example.com" });
-  assert.equal(setup.type, MessageType.CLIENT_SETUP);
-  // AUTHORITY + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 2);
-  assert.equal(setup.parameters[0].type, SetupParameterType.AUTHORITY);
-  assert.equal(getSetupAuthority(setup), "example.com");
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
-});
-
-test("ClientSetup: すべてのパラメータ付きで作成", () => {
-  const setup = createClientSetup({
-    path: "/moqt",
-    maxRequestId: 500n,
-    authority: "example.com",
-  });
-  // PATH + MAX_REQUEST_ID + AUTHORITY + MOQT_IMPLEMENTATION
-  assert.equal(setup.parameters.length, 4);
-  assert.equal(getSetupPath(setup), "/moqt");
-  assert.equal(getSetupMaxRequestId(setup), 500n);
-  assert.equal(getSetupAuthority(setup), "example.com");
-  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
-});
-
-test("ClientSetup: 存在しないパラメータは undefined", () => {
-  const setup = createClientSetup();
+// draft-ietf-moq-transport-17 §9.4.1.1 / §9.4.1.2:
+// AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
+// moqt-js は WebTransport 専用クライアントのため createSetup には PATH / AUTHORITY を
+// 受け付ける引数を持たない (送信不可) ことを確認する。
+test("Setup: createSetup は PATH / AUTHORITY を含まない", () => {
+  const setup = createSetup();
   assert.isUndefined(getSetupPath(setup));
-  assert.isUndefined(getSetupMaxRequestId(setup));
+  assert.isUndefined(getSetupAuthority(setup));
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.PATH));
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORITY));
+});
+
+test("Setup: 存在しないパラメータは undefined", () => {
+  const setup = createSetup();
+  assert.isUndefined(getSetupPath(setup));
   assert.isUndefined(getSetupAuthority(setup));
   // MOQT_IMPLEMENTATION は存在する
   assert.isDefined(getSetupMoqtImplementation(setup));
 });
 
-test("ServerSetup: パラメータなしで作成", () => {
-  const setup = createServerSetup();
-  assert.equal(setup.type, MessageType.SERVER_SETUP);
-  assert.equal(setup.parameters.length, 0);
+// draft-ietf-moq-transport-17 Section 9.4:
+// Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
+// カウントプレフィックスを持たない。Length フィールドで終端が決まる。
+test("Setup: エンコード結果にカウントプレフィックスがない", () => {
+  const setup = createSetup();
+  const encoded = encodeSetupPayload(setup);
+
+  // 先頭バイトをデコードしてカウント値ではないことを確認する。
+  // カウントプレフィックスがある場合、先頭は varint(1) = 0x01 になる。
+  // カウントプレフィックスがない場合、先頭は Delta Type (最初の Setup Option の Type) になる。
+  // MOQT_IMPLEMENTATION の Type は 0x07 なので、Delta Type = 0x07。
+  const [firstVarint] = decodeVarint(encoded, 0);
+  assert.equal(Number(firstVarint), SetupOptionType.MOQT_IMPLEMENTATION);
 });
 
-test("ServerSetup: maxRequestId パラメータ付きで作成", () => {
-  const setup = createServerSetup({ maxRequestId: 2000n });
-  assert.equal(setup.type, MessageType.SERVER_SETUP);
-  assert.equal(setup.parameters.length, 1);
-  assert.equal(getSetupMaxRequestId(setup), 2000n);
+test("Setup: エンコード・デコード roundtrip (MOQT_IMPLEMENTATION のみ)", () => {
+  const setup = createSetup();
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+
+  assert.equal(decoded.type, MessageType.SETUP);
+  assert.isUndefined(getSetupPath(decoded));
+  assert.isUndefined(getSetupAuthority(decoded));
+  assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
+});
+
+// draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+test("Setup: AUTHORIZATION_TOKEN (USE_VALUE) 付きで roundtrip", () => {
+  const tokenValue = new TextEncoder().encode("jwt-payload");
+  const setup = createSetup({
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 0n,
+      tokenValue,
+    },
+  });
+
+  // parameters には AUTHORIZATION_TOKEN と MOQT_IMPLEMENTATION が含まれる
+  assert.equal(setup.parameters.length, 2);
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN));
+
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+
+  const tokens = getSetupAuthorizationTokens(decoded);
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].aliasType, AuthorizationTokenAliasType.USE_VALUE);
+  if (tokens[0].aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    assert.equal(tokens[0].tokenType, 0n);
+    assert.deepEqual(Array.from(tokens[0].tokenValue), Array.from(tokenValue));
+  }
+});
+
+test("Setup: AUTHORIZATION_TOKEN (REGISTER) 付きで roundtrip", () => {
+  const tokenValue = new TextEncoder().encode("register-value");
+  const setup = createSetup({
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias: 5n,
+      tokenType: 1n,
+      tokenValue,
+    },
+  });
+
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+
+  const tokens = getSetupAuthorizationTokens(decoded);
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].aliasType, AuthorizationTokenAliasType.REGISTER);
+  if (tokens[0].aliasType === AuthorizationTokenAliasType.REGISTER) {
+    assert.equal(tokens[0].tokenAlias, 5n);
+    assert.equal(tokens[0].tokenType, 1n);
+    assert.deepEqual(Array.from(tokens[0].tokenValue), Array.from(tokenValue));
+  }
+});
+
+// draft-ietf-moq-transport-17 Section 9.3.2:
+// "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
+//  it MUST close the session with a PROTOCOL_VIOLATION."
+test("Setup: SETUP で DELETE の Authorization Token を指定すると throw", () => {
+  assert.throws(
+    () =>
+      createSetup({
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.DELETE,
+          tokenAlias: 1n,
+        },
+      }),
+    "not allowed in SETUP",
+  );
+});
+
+test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると throw", () => {
+  assert.throws(
+    () =>
+      createSetup({
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 1n,
+        },
+      }),
+    "not allowed in SETUP",
+  );
+});
+
+test("Setup: AUTHORIZATION_TOKEN の Setup Option Type は 0x03", () => {
+  assert.equal(SetupOptionType.AUTHORIZATION_TOKEN, 0x03);
 });
