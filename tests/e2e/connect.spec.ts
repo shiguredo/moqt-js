@@ -1,19 +1,19 @@
 import { test, expect } from "@playwright/test";
 import { waitForE2EReady } from "./helpers";
 
-const HTTPS_URI = process.env["TEST_MOQT_HTTPS_URI"];
+const QUIC_URI = process.env["TEST_MOQT_QUIC_URI"];
 const AUTH_TOKEN = process.env["TEST_MOQT_AUTH_TOKEN"];
 
 // MOQT Session 接続成立まで (SETUP メッセージ交換完了) を検証する
 // draft-ietf-moq-transport-17 Section 9.4.1 (SETUP Message)
 test.describe("MOQT Session connection", () => {
-  test.skip(!HTTPS_URI, "TEST_MOQT_HTTPS_URI is not set");
+  test.skip(!QUIC_URI, "TEST_MOQT_QUIC_URI is not set");
 
   test("connects to MOQT server without authorization token", async ({ page }) => {
     await waitForE2EReady(page);
     const state = await page.evaluate(
       (url) => window.__moqtE2E.connectSession({ url }),
-      HTTPS_URI as string,
+      QUIC_URI as string,
     );
     expect(state).toBe("connected");
   });
@@ -23,7 +23,7 @@ test.describe("MOQT Session connection", () => {
     await waitForE2EReady(page);
     const state = await page.evaluate(
       ({ url, token }) => window.__moqtE2E.connectSession({ url, authorizationTokenValue: token }),
-      { url: HTTPS_URI as string, token: AUTH_TOKEN as string },
+      { url: QUIC_URI as string, token: AUTH_TOKEN as string },
     );
     expect(state).toBe("connected");
   });
