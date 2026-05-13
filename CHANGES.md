@@ -11,6 +11,14 @@
 
 ## develop
 
+### misc
+
+## 2026.2.0
+
+**リリース日**: 2026-03-16
+
+Media over QAUIC Transport draft-17 対応
+
 - [CHANGE] `Publisher.sendObject` の戻り値を `void` から `Promise<void>` に変更する (#0133)
   - draft-ietf-moq-transport-17 §9.14.2: Joining Fetch は object が publish されていなければ INVALID_RANGE を MUST 返す
   - 仕様の前提 (catalog 1 回 publish + relay の MAX_CACHE_DURATION でキャッシュ) を満たすには、publisher.start() の return 時点で catalog object が relay に向けて flush されている必要がある
