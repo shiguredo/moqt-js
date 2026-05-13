@@ -1196,9 +1196,6 @@ export class SessionImpl implements Session {
     const publishMsg = {
       type: MessageType.PUBLISH,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       trackAlias,
@@ -1326,9 +1323,6 @@ export class SessionImpl implements Session {
     const subscribeMsg = {
       type: MessageType.SUBSCRIBE,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters,
@@ -1419,9 +1413,6 @@ export class SessionImpl implements Session {
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       fetchType: FetchType.STANDALONE,
       standalone: {
         trackNamespace,
@@ -1482,9 +1473,6 @@ export class SessionImpl implements Session {
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters: [],
@@ -1550,9 +1538,6 @@ export class SessionImpl implements Session {
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1 (Required Request ID)
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       parameters: [] as [],
     };
@@ -1638,8 +1623,6 @@ export class SessionImpl implements Session {
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1
-      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       parameters: [] as [],
     };
@@ -2036,9 +2019,6 @@ export class SessionImpl implements Session {
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       parameters: [],
     };

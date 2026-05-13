@@ -142,25 +142,15 @@ test("Fetch (Standalone) のエンコード・デコードがラウンドトリ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceArb,
       trackNameArb,
       locationArb,
       locationArb,
       parametersArb,
-      (
-        requestId,
-        requiredRequestIdDelta,
-        trackNamespace,
-        trackName,
-        startLocation,
-        endLocation,
-        parameters,
-      ) => {
+      (requestId, trackNamespace, trackName, startLocation, endLocation, parameters) => {
         const original: Fetch = {
           type: MessageType.FETCH,
           requestId,
-          requiredRequestIdDelta,
           fetchType: FetchType.STANDALONE,
           standalone: {
             trackNamespace,
@@ -176,7 +166,6 @@ test("Fetch (Standalone) のエンコード・デコードがラウンドトリ�
 
         assert.equal(decoded.type, MessageType.FETCH);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.equal(decoded.fetchType, FetchType.STANDALONE);
         assert.isDefined(decoded.standalone);
         assert.deepEqual(
@@ -202,23 +191,14 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       fc.constantFrom(FetchType.RELATIVE_JOINING, FetchType.ABSOLUTE_JOINING),
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      (
-        requestId,
-        requiredRequestIdDelta,
-        fetchType,
-        joiningRequestId,
-        joiningStart,
-        parameters,
-      ) => {
+      (requestId, fetchType, joiningRequestId, joiningStart, parameters) => {
         const original: Fetch = {
           type: MessageType.FETCH,
           requestId,
-          requiredRequestIdDelta,
           fetchType,
           joining: {
             joiningRequestId,
@@ -232,7 +212,6 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
 
         assert.equal(decoded.type, MessageType.FETCH);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.equal(decoded.fetchType, fetchType);
         assert.isDefined(decoded.joining);
         assert.equal(decoded.joining!.joiningRequestId, joiningRequestId);
@@ -248,7 +227,7 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+ * draft-ietf-moq-transport-18 §10.12 (FETCH):
  * "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
  *  the session with a PROTOCOL_VIOLATION."
  * decode 段階で ProtocolViolationError が投げられることを保証する。
@@ -257,19 +236,14 @@ test("Fetch Type が 0x1/0x2/0x3 以外なら decodeFetchPayload は ProtocolVio
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       // 0x0 と 0x4 以上の不正値を混ぜる (0x1/0x2/0x3 だけ除外)
       fc.bigInt({ min: 0n, max: 1024n }).filter((n) => n !== 1n && n !== 2n && n !== 3n),
-      (requestId, requiredRequestIdDelta, invalidFetchType) => {
+      (requestId, invalidFetchType) => {
         const requestIdBytes = encodeVarint(requestId);
-        const requiredRequestIdDeltaBytes = encodeVarint(requiredRequestIdDelta);
         const fetchTypeBytes = encodeVarint(invalidFetchType);
-        const payload = new Uint8Array(
-          requestIdBytes.length + requiredRequestIdDeltaBytes.length + fetchTypeBytes.length,
-        );
+        const payload = new Uint8Array(requestIdBytes.length + fetchTypeBytes.length);
         payload.set(requestIdBytes, 0);
-        payload.set(requiredRequestIdDeltaBytes, requestIdBytes.length);
-        payload.set(fetchTypeBytes, requestIdBytes.length + requiredRequestIdDeltaBytes.length);
+        payload.set(fetchTypeBytes, requestIdBytes.length);
 
         assert.throws(() => decodeFetchPayload(payload), ProtocolViolationError);
       },

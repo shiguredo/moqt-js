@@ -1,6 +1,7 @@
 # Required Request ID Delta フィールドを全リクエストメッセージから削除する
 
 Created: 2026-05-13
+Completed: 2026-05-13
 Model: Opus 4.7
 
 ## 概要
@@ -75,3 +76,28 @@ requiredRequestIdDelta は draft-17 で存在した「次に割り当てるべ�
 
 - 全リクエストメッセージのワイヤーフォーマットが変わる（後方互換なし）
 - SETUP の Required Request ID パラメータは draft-17 ですでに削除済みのため、SETUP への追加変更は不要
+
+## 解決方法
+
+draft-ietf-moq-transport-18 §10.1 に従い、全リクエストメッセージから
+`requiredRequestIdDelta` フィールドを削除した。
+
+- `src/message/publish.ts` / `subscribe.ts` / `fetch.ts` / `trackstatus.ts` /
+  `namespace.ts` の各メッセージ型から `requiredRequestIdDelta: bigint` を削除した
+- 各 encode / decode 実装から該当フィールドの varint 直列化処理を削除した
+- `src/session.ts` の 7 箇所、`src/session/bidi.ts` の 2 箇所から
+  `requiredRequestIdDelta: 0n` の指定を削除した
+- 全 PBT (`publish.prop.ts` / `subscribe.prop.ts` / `fetch.prop.ts` /
+  `trackstatus.prop.ts` / `namespace.prop.ts`) を更新し、ラウンドトリップが
+  該当フィールド無しで成立することを検証した
+- pending issue 0116 (Required Request ID Delta 受信時 MUST 検証未実装) は
+  draft-18 でフィールド自体が削除されたため不要となり、closed に移動した
+
+注: `SessionErrorCode.INVALID_REQUIRED_REQUEST_ID = 0x7` は draft-18 でも
+`error.ts` に残しているが、draft-18 のエラーコード再編は別 issue 群 (0218 等) で
+扱われる想定のため本 issue では触らない。
+
+確認:
+
+- `vp run test` 全 576 件パス
+- `vp run build` 成功

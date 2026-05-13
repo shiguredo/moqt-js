@@ -17,18 +17,14 @@ import {
 import { MessageType } from "./types";
 
 /**
- * PUBLISH メッセージ (Section 9.11 PUBLISH)
+ * PUBLISH メッセージ (Section 10.11 PUBLISH)
  *
- * draft-ietf-moq-transport-17:
- * Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18 §10.1:
+ * クライアントは偶数 / サーバーは奇数で Request ID を独立採番する。
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   trackAlias: bigint;
@@ -63,17 +59,16 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+ * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH):
  * PUBLISH Message {
- *   Type (i) = 0x1D,
+ *   Type (vi64) = 0x1D,
  *   Length (16),
- *   Request ID (i),
- *   Required Request ID Delta (i),
+ *   Request ID (vi64),
  *   Track Namespace (..),
- *   Track Name Length (i),
+ *   Track Name Length (vi64),
  *   Track Name (..),
- *   Track Alias (i),
- *   Number of Parameters (i),
+ *   Track Alias (vi64),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...,
  *   Track Properties (..)
  * }
@@ -82,14 +77,13 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+  // draft-ietf-moq-transport-18 Section 10.11 (PUBLISH):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   // Message の Length フィールドで終端が決まる。
   parts.push(encodeProperties(msg.trackProperties));
@@ -116,12 +110,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -136,7 +124,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+  // draft-ietf-moq-transport-18 Section 10.11 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
@@ -144,7 +132,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   return {
     type: MessageType.PUBLISH,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     trackAlias,

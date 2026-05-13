@@ -53,9 +53,6 @@ export interface JoiningFetch {
 export interface Fetch {
   type: typeof MessageType.FETCH;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   fetchType: FetchType;
   standalone?: StandaloneFetch;
   joining?: JoiningFetch;
@@ -85,7 +82,6 @@ export function encodeFetchPayload(msg: Fetch): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeVarint(msg.fetchType));
 
   if (msg.fetchType === FetchType.STANDALONE && msg.standalone) {
@@ -122,12 +118,6 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
 
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
-
-  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaSize;
 
   const [fetchType, fetchTypeSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += fetchTypeSize;
@@ -193,7 +183,6 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   return {
     type: MessageType.FETCH,
     requestId,
-    requiredRequestIdDelta,
     fetchType: Number(fetchType) as FetchType,
     standalone,
     joining,

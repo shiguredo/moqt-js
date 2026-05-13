@@ -11,6 +11,14 @@
 
 ## develop
 
+- [CHANGE] 全リクエストメッセージから Required Request ID Delta フィールドを削除する (#0185)
+  - draft-ietf-moq-transport-18 §10.1 でクライアント偶数 / サーバー奇数の独立採番に単純化された
+  - `Publish` / `Subscribe` / `Fetch` / `TrackStatus` / `PublishNamespace` / `SubscribeNamespace` / `SubscribeTracks` / `RequestUpdate` から `requiredRequestIdDelta` フィールドを削除する
+  - 各メッセージの encode / decode から該当フィールドの直列化処理を削除する
+  - `session.ts` / `session/bidi.ts` の送信箇所から `requiredRequestIdDelta: 0n` の指定を削除する
+  - 全 PBT を更新し、ラウンドトリップが該当フィールド無しで成立することを検証する
+  - pending issue 0116 (Required Request ID Delta 受信時 MUST 検証未実装) は仕様削除により解決として closed へ移動する
+  - @voluntas
 - [CHANGE] SUBSCRIBE_NAMESPACE を SUBSCRIBE_NAMESPACE (0x50) と SUBSCRIBE_TRACKS (0x51) に分割する (#0184)
   - draft-ietf-moq-transport-18 §10.18 / §10.19 に基づき、責務を namespace discovery と track subscription に分離する
   - `MessageType.SUBSCRIBE_NAMESPACE` を `0x11` から `0x50` に変更しワイヤーフォーマットを更新する

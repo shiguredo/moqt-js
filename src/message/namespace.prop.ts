@@ -130,14 +130,12 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+      (requestId, namespaceParts, parameters) => {
         const original: PublishNamespace = {
           type: MessageType.PUBLISH_NAMESPACE,
           requestId,
-          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -147,7 +145,6 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 
         assert.equal(decoded.type, MessageType.PUBLISH_NAMESPACE);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
@@ -160,7 +157,7 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.17:
+ * draft-ietf-moq-transport-18 §10.15 (PUBLISH_NAMESPACE):
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
  * フレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で
@@ -170,14 +167,12 @@ test("PublishNamespace のフレーミングが ControlStreamReader で復元で
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+      (requestId, namespaceParts, parameters) => {
         const original: PublishNamespace = {
           type: MessageType.PUBLISH_NAMESPACE,
           requestId,
-          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -195,7 +190,6 @@ test("PublishNamespace のフレーミングが ControlStreamReader で復元で
 
         const decoded = decodePublishNamespacePayload(messages[0].payload);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
       },
     ),
@@ -256,14 +250,12 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+      (requestId, namespaceParts, parameters) => {
         const original: SubscribeNamespace = {
           type: MessageType.SUBSCRIBE_NAMESPACE,
           requestId,
-          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -273,7 +265,6 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
 
         assert.equal(decoded.type, MessageType.SUBSCRIBE_NAMESPACE);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
@@ -295,14 +286,12 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+      (requestId, namespaceParts, parameters) => {
         const original: SubscribeNamespace = {
           type: MessageType.SUBSCRIBE_NAMESPACE,
           requestId,
-          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -320,7 +309,6 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
 
         const decoded = decodeSubscribeNamespacePayload(messages[0].payload);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
       },
     ),
@@ -330,35 +318,29 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
 /**
  * draft-ietf-moq-transport-18 §10.18:
  * encodeSubscribeNamespacePayload は Subscribe Options をエンコードしない。
- * 想定: requestId / requiredRequestIdDelta / trackNamespacePrefix / parameters のみが直列化される。
+ * 想定: requestId / trackNamespacePrefix / parameters のみが直列化される。
  */
 test("encodeSubscribeNamespacePayload は Subscribe Options を含まない", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
-      (requestId, requiredRequestIdDelta, namespaceParts) => {
+      (requestId, namespaceParts) => {
         const original: SubscribeNamespace = {
           type: MessageType.SUBSCRIBE_NAMESPACE,
           requestId,
-          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           parameters: [],
         };
 
         const encoded = encodeSubscribeNamespacePayload(original);
 
-        // requestId / requiredRequestIdDelta / namespace の長さを消費した直後に
+        // requestId / namespace の長さを消費した直後に
         // Number of Parameters (= 0) が来ることを確認する。
         let offset = 0;
         const [decodedRequestId, requestIdSize] = decodeVarint(encoded, offset);
         offset += requestIdSize;
         assert.equal(decodedRequestId, requestId);
-
-        const [decodedDelta, deltaSize] = decodeVarint(encoded, offset);
-        offset += deltaSize;
-        assert.equal(decodedDelta, requiredRequestIdDelta);
 
         // Namespace tuple count
         const [tupleCount, tupleCountSize] = decodeVarint(encoded, offset);
@@ -387,14 +369,12 @@ test("SubscribeTracks のエンコード・デコードがラウンドトリッ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+      (requestId, namespaceParts, parameters) => {
         const original: SubscribeTracks = {
           type: MessageType.SUBSCRIBE_TRACKS,
           requestId,
-          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -404,7 +384,6 @@ test("SubscribeTracks のエンコード・デコードがラウンドトリッ�
 
         assert.equal(decoded.type, MessageType.SUBSCRIBE_TRACKS);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
@@ -424,14 +403,12 @@ test("SubscribeTracks のフレーミングが ControlStreamReader で復元で�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, parameters) => {
+      (requestId, namespaceParts, parameters) => {
         const original: SubscribeTracks = {
           type: MessageType.SUBSCRIBE_TRACKS,
           requestId,
-          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           parameters,
         };
@@ -449,7 +426,6 @@ test("SubscribeTracks のフレーミングが ControlStreamReader で復元で�
 
         const decoded = decodeSubscribeTracksPayload(messages[0].payload);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespacePrefix), namespaceParts);
       },
     ),
@@ -464,13 +440,11 @@ test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () =>
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespacePrefixStringsArb,
-      (requestId, requiredRequestIdDelta, namespaceParts) => {
+      (requestId, namespaceParts) => {
         const original: SubscribeTracks = {
           type: MessageType.SUBSCRIBE_TRACKS,
           requestId,
-          requiredRequestIdDelta,
           trackNamespacePrefix: createTrackNamespace(namespaceParts),
           parameters: [],
         };
@@ -481,10 +455,6 @@ test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () =>
         const [decodedRequestId, requestIdSize] = decodeVarint(encoded, offset);
         offset += requestIdSize;
         assert.equal(decodedRequestId, requestId);
-
-        const [decodedDelta, deltaSize] = decodeVarint(encoded, offset);
-        offset += deltaSize;
-        assert.equal(decodedDelta, requiredRequestIdDelta);
 
         const [tupleCount, tupleCountSize] = decodeVarint(encoded, offset);
         offset += tupleCountSize;

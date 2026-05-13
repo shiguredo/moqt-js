@@ -25,9 +25,6 @@ import { MessageType } from "./types";
 export interface Subscribe {
   type: typeof MessageType.SUBSCRIBE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   parameters: Parameter[];
@@ -59,25 +56,21 @@ export interface SubscribeOk {
 export interface RequestUpdate {
   type: typeof MessageType.REQUEST_UPDATE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   parameters: Parameter[];
 }
 
 /**
  * Subscribe のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.8 (SUBSCRIBE):
+ * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE):
  * SUBSCRIBE Message {
- *   Type (i) = 0x3,
+ *   Type (vi64) = 0x3,
  *   Length (16),
- *   Request ID (i),
- *   Required Request ID Delta (i),
+ *   Request ID (vi64),
  *   Track Namespace (..),
- *   Track Name Length (i),
+ *   Track Name Length (vi64),
  *   Track Name (..),
- *   Number of Parameters (i),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
  */
@@ -85,7 +78,6 @@ export function encodeSubscribePayload(msg: Subscribe): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
@@ -113,12 +105,6 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -133,7 +119,6 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   return {
     type: MessageType.SUBSCRIBE,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     parameters,
@@ -204,12 +189,11 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
 /**
  * RequestUpdate のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-18 Section 10.10 (REQUEST_UPDATE):
  * REQUEST_UPDATE Message {
- *   Type (i) = 0x2,
+ *   Type (vi64) = 0x2,
  *   Length (16),
  *   Request ID (vi64),
- *   Required Request ID Delta (vi64),
  *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
@@ -218,7 +202,6 @@ export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
@@ -245,19 +228,12 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
 
   return {
     type: MessageType.REQUEST_UPDATE,
     requestId,
-    requiredRequestIdDelta,
     parameters,
   };
 }
