@@ -1,7 +1,7 @@
 {
   "name": "moqt-js",
-  "version": "2026.2.0-canary.1",
-  "description": "MOQT (Media over QUIC Transport) client library",
+  "version": "2026.2.0",
+  "description": "MOQT (Media over QUIC Transport) library",
   "keywords": [
     "moqt",
     "webtransport"
@@ -51,7 +51,7 @@
     "vite-plus": "0.1.20"
   },
   "engines": {
-    "node": ">=20.12.0"
+    "node": ">=22.22.2"
   },
-  "packageManager": "pnpm@10.33.2"
+  "packageManager": "pnpm@11.1.1"
 }
