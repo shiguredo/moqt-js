@@ -29,7 +29,6 @@ import {
   MessageType,
   PublishDoneStatusCode,
   ObjectStatus,
-  NamespaceSubscribeMode,
   createTrackNamespace,
   encodeTrackName,
   trackNamespaceToStrings,
@@ -48,6 +47,7 @@ import {
   encodePublishNamespacePayload,
   encodePublishPayload,
   encodeSubscribeNamespacePayload,
+  encodeSubscribeTracksPayload,
   encodeSubscribePayload,
   encodeTrackStatusPayload,
   createSetup,
@@ -479,31 +479,58 @@ export interface TrackStatusResult {
 /**
  * Namespace サブスクリプションのコールバック
  *
- * draft-ietf-moq-transport-17 Section 6.1:
- * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE/NAMESPACE_DONE または PUBLISH が送信される。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
+ * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
+ * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE / NAMESPACE_DONE が送信される。
+ * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
+ * SUBSCRIBE_TRACKS (0x51) に分割され、PUBLISH_BLOCKED は SUBSCRIBE_TRACKS 応答に移動した。
  */
 export interface NamespaceSubscriptionCallbacks {
   /**
    * NAMESPACE を受信したときに呼ばれる
-   * draft-ietf-moq-transport-17 Section 9.18 (NAMESPACE)
+   * draft-ietf-moq-transport-18 §10.16 (NAMESPACE)
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
   onNamespace?: (namespaceSuffix: string[]) => void;
   /**
    * NAMESPACE_DONE を受信したときに呼ばれる
-   * draft-ietf-moq-transport-17 Section 9.19 (NAMESPACE_DONE)
+   * draft-ietf-moq-transport-18 §10.17 (NAMESPACE_DONE)
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
   onNamespaceDone?: (namespaceSuffix: string[]) => void;
   /**
+   * エラー時のコールバック
+   */
+  error?: (error: Error) => void;
+}
+
+/**
+ * Namespace サブスクリプション
+ */
+export interface NamespaceSubscription {
+  readonly state: "active" | "closed";
+  /**
+   * サブスクリプションを解除する
+   */
+  unsubscribe(): Promise<void>;
+}
+
+/**
+ * Tracks サブスクリプションのコールバック
+ *
+ * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+ * SUBSCRIBE_TRACKS への応答として PUBLISH メッセージが新規双方向ストリームで
+ * 送信される。応答ストリームでは PUBLISH_BLOCKED が送られる。
+ */
+export interface TracksSubscriptionCallbacks {
+  /**
    * PUBLISH_BLOCKED を受信したときに呼ばれる
-   * draft-ietf-moq-transport-17 Section 6.1 / Section 9.21 (PUBLISH_BLOCKED):
-   * "If a Subscription cannot be created because there is no available Request ID,
-   *  the Publisher sends a PUBLISH_BLOCKED message on the response stream to
-   *  indicate the Full Track Name of the Subscription that could not be established."
+   * draft-ietf-moq-transport-18 §10.20 (PUBLISH_BLOCKED):
+   *
+   * > The publisher sends the PUBLISH_BLOCKED control message to indicate
+   * > it cannot send a PUBLISH message to initiate a new Subscription for a
+   * > Track in the SUBSCRIBE_TRACKS's Track Namespace.
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    * @param trackName - 確立できなかった Subscription の Track Name
@@ -516,9 +543,11 @@ export interface NamespaceSubscriptionCallbacks {
 }
 
 /**
- * Namespace サブスクリプション
+ * Tracks サブスクリプション
+ *
+ * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS)
  */
-export interface NamespaceSubscription {
+export interface TracksSubscription {
   readonly state: "active" | "closed";
   /**
    * サブスクリプションを解除する
@@ -652,21 +681,35 @@ export interface Session {
    */
   trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult>;
   /**
-   * Namespace をサブスクライブする（トラック発見用）
+   * Namespace をサブスクライブする（namespace discovery 用）
    *
-   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+   * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
    * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
+   * 応答として NAMESPACE / NAMESPACE_DONE が送られる。
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
-   * @param subscribeOptions - Subscribe Options（デフォルト: BOTH）
    */
   subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
-    subscribeOptions?: NamespaceSubscribeMode,
   ): Promise<NamespaceSubscription>;
+  /**
+   * Track をサブスクライブする（track subscription 用）
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+   * SUBSCRIBE_TRACKS は新しい双方向ストリームで送信される。
+   * Publisher はマッチするネームスペース内のトラックに対して PUBLISH メッセージを
+   * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_BLOCKED が
+   * 送られる場合がある。
+   *
+   * @param namespacePrefix - Track Namespace Prefix
+   * @param callbacks - コールバック関数
+   */
+  subscribeTracks(
+    namespacePrefix: string[],
+    callbacks: TracksSubscriptionCallbacks,
+  ): Promise<TracksSubscription>;
   /**
    * Namespace を公開する（トラック発見用）
    * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE)
@@ -791,13 +834,34 @@ export class SessionImpl implements Session {
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *
-   * draft-ietf-moq-transport-17 Section 6.1:
+   * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
    * SUBSCRIBE_NAMESPACE は専用の双方向ストリームで送受信される。
+   * 応答として NAMESPACE / NAMESPACE_DONE のみが送られる。
    */
   private namespaceSubscriptions = new Map<
     bigint,
     {
       callbacks: NamespaceSubscriptionCallbacks;
+      state: "active" | "closed";
+      namespacePrefix: string[];
+      stream?: WebTransportBidirectionalStream;
+      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
+      controlReader?: ControlStreamReader;
+      writer?: WritableStreamDefaultWriter<Uint8Array>;
+    }
+  >();
+  /**
+   * SUBSCRIBE_TRACKS の状態管理
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+   * SUBSCRIBE_TRACKS は SUBSCRIBE_NAMESPACE とは別の専用の双方向ストリームで
+   * 送受信される。応答ストリーム上では PUBLISH_BLOCKED が送られる。PUBLISH は
+   * 別の新規双方向ストリームで到着する。
+   */
+  private tracksSubscriptions = new Map<
+    bigint,
+    {
+      callbacks: TracksSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
       stream?: WebTransportBidirectionalStream;
@@ -1445,21 +1509,22 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Namespace をサブスクライブする（トラック発見用）
+   * Namespace をサブスクライブする（namespace discovery 用）
    *
-   * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
-   * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される。
-   * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返される。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
+   * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
+   * SUBSCRIBE_NAMESPACE (0x50) は新しい双方向ストリームで送信される。
+   * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
+   * 以降は NAMESPACE / NAMESPACE_DONE のみが応答ストリーム上で送られる。
    *
-   * draft-ietf-moq-transport-17 Section 6.1:
-   * キャンセルは FIN または RESET_STREAM で行う。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
+   * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が 0x50 と SUBSCRIBE_TRACKS (0x51)
+   * に分割され、Subscribe Options フィールドは廃止された。
+   *
+   * draft-ietf-moq-transport-18 §6.1:
+   * キャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
    */
   async subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
-    subscribeOptions: NamespaceSubscribeMode = NamespaceSubscribeMode.BOTH,
   ): Promise<NamespaceSubscription> {
     if (this.sessionState === "closed") {
       throw new Error("session is closed");
@@ -1485,19 +1550,17 @@ export class SessionImpl implements Session {
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
-      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1 (Required Request ID)
       // 0 は依存なしを意味する
       requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
-      subscribeOptions,
       parameters: [] as [],
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+    // draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
     // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
-    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.20
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
     const controlWriter = new ControlStreamWriter();
     const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
@@ -1511,7 +1574,6 @@ export class SessionImpl implements Session {
       decoded: {
         requestId: requestId.toString(),
         trackNamespacePrefix: namespacePrefix,
-        subscribeOptions,
       },
       timestamp: Date.now(),
     });
@@ -1537,10 +1599,98 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * Track をサブスクライブする（track subscription 用）
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+   * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
+   * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
+   * 以降は PUBLISH_BLOCKED のみが応答ストリーム上で送られる。
+   * PUBLISH メッセージは別の新規双方向ストリームで非同期に到着する。
+   *
+   * draft-ietf-moq-transport-18 §6.1:
+   * キャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
+   */
+  async subscribeTracks(
+    namespacePrefix: string[],
+    callbacks: TracksSubscriptionCallbacks,
+  ): Promise<TracksSubscription> {
+    if (this.sessionState === "closed") {
+      throw new Error("session is closed");
+    }
+
+    // GOAWAY 受信後は新規リクエストを拒否
+    if (this.receivedGoaway) {
+      throw new Error("cannot subscribe tracks after receiving GOAWAY");
+    }
+
+    const requestId = this.nextRequestId;
+    this.nextRequestId += 2n;
+
+    const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
+
+    // 専用の双方向ストリームを作成
+    const stream = await this.transport.createBidirectionalStream();
+    const streamReader = stream.readable.getReader();
+    const controlReader = new ControlStreamReader();
+    const writer = stream.writable.getWriter();
+
+    // SUBSCRIBE_TRACKS メッセージを構築
+    const subscribeTracksMsg = {
+      type: MessageType.SUBSCRIBE_TRACKS,
+      requestId,
+      // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1
+      requiredRequestIdDelta: 0n,
+      trackNamespacePrefix,
+      parameters: [] as [],
+    };
+
+    // メッセージをエンコードして送信
+    // draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // ControlStreamWriter に委譲する。
+    const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
+    const controlWriter = new ControlStreamWriter();
+    const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
+
+    // デバッグコールバック
+    this.callbacks.debug?.({
+      direction: "send",
+      type: MessageType.SUBSCRIBE_TRACKS,
+      typeName: getMessageTypeName(MessageType.SUBSCRIBE_TRACKS),
+      payload,
+      decoded: {
+        requestId: requestId.toString(),
+        trackNamespacePrefix: namespacePrefix,
+      },
+      timestamp: Date.now(),
+    });
+
+    await writer.write(framed);
+
+    // REQUEST_OK/REQUEST_ERROR を待つ Promise
+    return new Promise<TracksSubscription>((resolve, reject) => {
+      // 状態を登録
+      this.tracksSubscriptions.set(requestId, {
+        callbacks,
+        state: "active",
+        namespacePrefix,
+        stream,
+        streamReader,
+        controlReader,
+        writer,
+      });
+
+      // 専用ストリームの受信ループを開始
+      void this.startTracksStreamLoop(requestId, resolve, reject);
+    });
+  }
+
+  /**
    * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
    *
-   * draft-ietf-moq-transport-17 Section 6.1:
-   * REQUEST_OK/REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE を処理する。
+   * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
+   * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
+   * PUBLISH_BLOCKED は SUBSCRIBE_TRACKS 応答ストリーム側 (startTracksStreamLoop) で扱う。
    */
   private async startNamespaceStreamLoop(
     requestId: bigint,
@@ -1556,7 +1706,7 @@ export class SessionImpl implements Session {
     const { streamReader, controlReader, callbacks } = subscription;
     let resolved = false;
     // NAMESPACE 受信済 suffix を追跡し、NAMESPACE_DONE が先行で来たら PROTOCOL_VIOLATION で閉じる
-    // draft-ietf-moq-transport-17 §9.20 (line 4332-4384)
+    // draft-ietf-moq-transport-18 §10.18
     const seenNamespaceSuffixes = new Set<string>();
     const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
 
@@ -1582,9 +1732,9 @@ export class SessionImpl implements Session {
             timestamp: Date.now(),
           });
 
-          // draft-ietf-moq-transport-17 §6.1 / §9.20:
-          // "If the subscriber receives any frame other than a REQUEST_OK or a
-          //  REQUEST_ERROR as the first frame on the response half of the stream,
+          // draft-ietf-moq-transport-18 §10.18:
+          // "If the subscriber receives any message other than a REQUEST_OK or a
+          //  REQUEST_ERROR as the first message on the response half of the stream,
           //  then it MUST close the session with a PROTOCOL_VIOLATION."
           if (
             !resolved &&
@@ -1603,9 +1753,6 @@ export class SessionImpl implements Session {
           switch (messageType) {
             case MessageType.REQUEST_OK: {
               if (resolved) {
-                // draft-ietf-moq-transport-17 §6.1:
-                // "The subscriber SHOULD close the session with a protocol error
-                //  if it detects receiving more than one."
                 this.closeWithError(
                   new SessionError(
                     "received second REQUEST_OK on namespace stream",
@@ -1614,11 +1761,9 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              // draft-ietf-moq-transport-17 Section 9.6 (REQUEST_OK):
-              // Request ID はストリームが特定するため不要
-              // draft-ietf-moq-transport-17 Section 9.2
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+              // Request ID はストリームが特定するため不要 (§10.1 Required Request ID)
               decodeRequestOkPayload(messagePayload);
-              // サブスクリプション成功
               resolved = true;
               const namespaceSubscription = this.createNamespaceSubscription(requestId);
               resolve(namespaceSubscription);
@@ -1627,7 +1772,6 @@ export class SessionImpl implements Session {
 
             case MessageType.REQUEST_ERROR: {
               if (resolved) {
-                // draft-ietf-moq-transport-17 §6.1: REQUEST_OK の後に REQUEST_ERROR は来ない
                 this.closeWithError(
                   new SessionError(
                     "received REQUEST_ERROR after REQUEST_OK on namespace stream",
@@ -1636,11 +1780,8 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              // draft-ietf-moq-transport-17 Section 9.7 (REQUEST_ERROR):
-              // Request ID はストリームが特定するため不要
-              // draft-ietf-moq-transport-17 Section 9.2
+              // draft-ietf-moq-transport-18 §10.6 (REQUEST_ERROR)
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
-              // サブスクリプション失敗
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
                 Number(decodedMsg.errorCode) as RequestErrorCode,
@@ -1662,7 +1803,7 @@ export class SessionImpl implements Session {
             case MessageType.NAMESPACE_DONE: {
               const decodedMsg = decodeNamespaceDonePayload(messagePayload);
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-              // draft-ietf-moq-transport-17 §9.20:
+              // draft-ietf-moq-transport-18 §10.18:
               // "The publisher MUST NOT send NAMESPACE_DONE for a namespace suffix before
               //  the corresponding NAMESPACE. If a subscriber receives a NAMESPACE_DONE
               //  before the corresponding NAMESPACE, it MUST close the session with a
@@ -1680,19 +1821,11 @@ export class SessionImpl implements Session {
               break;
             }
 
-            case MessageType.PUBLISH_BLOCKED: {
-              // draft-ietf-moq-transport-17 §6.1 / §9.21 (PUBLISH_BLOCKED):
-              // Subscription を作成できない場合に Publisher が送出する正規メッセージ
-              const decodedMsg = decodePublishBlockedPayload(messagePayload);
-              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-              const trackName = new TextDecoder().decode(decodedMsg.trackName);
-              callbacks.onPublishBlocked?.(suffixStrings, trackName);
-              break;
-            }
-
             default:
-              // draft-ietf-moq-transport-17 Section 9 (Control Messages):
+              // draft-ietf-moq-transport-18 §10 (Control Messages):
               // "An endpoint that receives an unknown message type MUST close the session."
+              // PUBLISH_BLOCKED は SUBSCRIBE_TRACKS 応答ストリーム側で処理するので
+              // SUBSCRIBE_NAMESPACE 応答ストリームでは PROTOCOL_VIOLATION 扱い。
               this.closeWithError(
                 new SessionError(
                   `unknown namespace stream message type: 0x${messageType.toString(16)}`,
@@ -1707,7 +1840,7 @@ export class SessionImpl implements Session {
       if (subscription.state === "active") {
         subscription.state = "closed";
         const normalizedError = error instanceof Error ? error : new Error(String(error));
-        // draft-ietf-moq-transport-17 Section 3.5:
+        // draft-ietf-moq-transport-18 §3.5:
         // WebTransport セッション終了起源の read 中断は subscription の error には
         // 流さない (session-level の close で通知される)。
         // ただし subscribe Promise が未解決ならユーザーが await しているので reject する必要がある。
@@ -1723,6 +1856,143 @@ export class SessionImpl implements Session {
       subscription.state = "closed";
       streamReader.releaseLock();
       this.namespaceSubscriptions.delete(requestId);
+    }
+  }
+
+  /**
+   * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+   * REQUEST_OK / REQUEST_ERROR、PUBLISH_BLOCKED のみを処理する。
+   * PUBLISH メッセージは別の新規双方向ストリームで到着するためここでは扱わない。
+   */
+  private async startTracksStreamLoop(
+    requestId: bigint,
+    resolve: (subscription: TracksSubscription) => void,
+    reject: (err: Error) => void,
+  ): Promise<void> {
+    const subscription = this.tracksSubscriptions.get(requestId);
+    if (!subscription || !subscription.streamReader || !subscription.controlReader) {
+      reject(new Error("tracks subscription not found"));
+      return;
+    }
+
+    const { streamReader, controlReader, callbacks } = subscription;
+    let resolved = false;
+
+    try {
+      while (subscription.state === "active") {
+        const { value, done } = await streamReader.read();
+        if (done) {
+          break;
+        }
+
+        const messages = controlReader.feed(value);
+        for (const msg of messages) {
+          const messageType = msg.type;
+          const messagePayload = msg.payload;
+
+          this.callbacks.debug?.({
+            direction: "recv",
+            type: messageType,
+            typeName: getMessageTypeName(messageType),
+            payload: messagePayload,
+            timestamp: Date.now(),
+          });
+
+          // draft-ietf-moq-transport-18 §10.19:
+          // "If the subscriber receives any message other than a REQUEST_OK or a
+          //  REQUEST_ERROR as the first message on the response half of the stream,
+          //  then it MUST close the session with a PROTOCOL_VIOLATION."
+          if (
+            !resolved &&
+            messageType !== MessageType.REQUEST_OK &&
+            messageType !== MessageType.REQUEST_ERROR
+          ) {
+            this.closeWithError(
+              new SessionError(
+                `expected REQUEST_OK or REQUEST_ERROR as first message on tracks stream, got 0x${messageType.toString(16)}`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+            return;
+          }
+
+          switch (messageType) {
+            case MessageType.REQUEST_OK: {
+              if (resolved) {
+                this.closeWithError(
+                  new SessionError(
+                    "received second REQUEST_OK on tracks stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              decodeRequestOkPayload(messagePayload);
+              resolved = true;
+              const tracksSubscription = this.createTracksSubscription(requestId);
+              resolve(tracksSubscription);
+              break;
+            }
+
+            case MessageType.REQUEST_ERROR: {
+              if (resolved) {
+                this.closeWithError(
+                  new SessionError(
+                    "received REQUEST_ERROR after REQUEST_OK on tracks stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              const decodedMsg = decodeRequestErrorPayload(messagePayload);
+              const error = new RequestError(
+                decodedMsg.reasonPhrase,
+                Number(decodedMsg.errorCode) as RequestErrorCode,
+              );
+              subscription.state = "closed";
+              callbacks.error?.(error);
+              reject(error);
+              return;
+            }
+
+            case MessageType.PUBLISH_BLOCKED: {
+              // draft-ietf-moq-transport-18 §10.20 (PUBLISH_BLOCKED):
+              // SUBSCRIBE_TRACKS への応答ストリーム上で送られる。
+              const decodedMsg = decodePublishBlockedPayload(messagePayload);
+              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+              const trackName = new TextDecoder().decode(decodedMsg.trackName);
+              callbacks.onPublishBlocked?.(suffixStrings, trackName);
+              break;
+            }
+
+            default:
+              this.closeWithError(
+                new SessionError(
+                  `unknown tracks stream message type: 0x${messageType.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+          }
+        }
+      }
+    } catch (error) {
+      if (subscription.state === "active") {
+        subscription.state = "closed";
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        if (!isSessionClosedError(normalizedError)) {
+          callbacks.error?.(normalizedError);
+        }
+        if (!resolved) {
+          reject(normalizedError);
+        }
+      }
+    } finally {
+      subscription.state = "closed";
+      streamReader.releaseLock();
+      this.tracksSubscriptions.delete(requestId);
     }
   }
 
@@ -2114,6 +2384,19 @@ export class SessionImpl implements Session {
       }
     }
     this.namespaceSubscriptions.clear();
+
+    // SUBSCRIBE_TRACKS 用の双方向ストリーム
+    // draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS)
+    for (const subscription of this.tracksSubscriptions.values()) {
+      subscription.state = "closed";
+      if (subscription.writer) {
+        void closeWriterSafely(subscription.writer);
+      }
+      if (subscription.streamReader) {
+        void cancelReaderSafely(subscription.streamReader);
+      }
+    }
+    this.tracksSubscriptions.clear();
 
     // PUBLISH_NAMESPACE 用の双方向ストリーム
     for (const publication of this.namespacePublications.values()) {
@@ -2792,10 +3075,9 @@ export class SessionImpl implements Session {
   /**
    * Namespace サブスクリプションを閉じる
    *
-   * draft-ietf-moq-transport-17 Section 6.1:
+   * draft-ietf-moq-transport-18 §6.1:
    * A SUBSCRIBE_NAMESPACE can be cancelled by closing the stream with
    * either a FIN or RESET_STREAM.
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-6.1
    */
   private async closeNamespaceSubscription(requestId: bigint): Promise<void> {
     const subscription = this.namespaceSubscriptions.get(requestId);
@@ -2815,6 +3097,55 @@ export class SessionImpl implements Session {
     }
 
     this.namespaceSubscriptions.delete(requestId);
+  }
+
+  /**
+   * TracksSubscription オブジェクトを作成する
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS)
+   */
+  private createTracksSubscription(requestId: bigint): TracksSubscription {
+    const getState = (): "active" | "closed" => {
+      const sub = this.tracksSubscriptions.get(requestId);
+      return sub?.state ?? "closed";
+    };
+
+    const unsubscribe = async (): Promise<void> => {
+      await this.closeTracksSubscription(requestId);
+    };
+
+    return {
+      get state() {
+        return getState();
+      },
+      unsubscribe,
+    };
+  }
+
+  /**
+   * Tracks サブスクリプションを閉じる
+   *
+   * draft-ietf-moq-transport-18 §6.1:
+   * A SUBSCRIBE_TRACKS can be cancelled by closing the stream with
+   * either a FIN or RESET_STREAM.
+   */
+  private async closeTracksSubscription(requestId: bigint): Promise<void> {
+    const subscription = this.tracksSubscriptions.get(requestId);
+    if (!subscription || subscription.state === "closed") {
+      return;
+    }
+
+    subscription.state = "closed";
+
+    try {
+      if (subscription.writer) {
+        await subscription.writer.close();
+      }
+    } catch {
+      // ストリームが既に閉じられている場合は無視
+    }
+
+    this.tracksSubscriptions.delete(requestId);
   }
 
   /**

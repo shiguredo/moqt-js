@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages
- * draft-ietf-moq-transport-17 Section 9.17 (PUBLISH_NAMESPACE) — 9.21 (PUBLISH_BLOCKED)
+ * draft-ietf-moq-transport-18 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_BLOCKED)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -12,7 +12,7 @@ import {
   encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
-import { MessageType, type NamespaceSubscribeMode } from "./types";
+import { MessageType } from "./types";
 
 /**
  * PUBLISH_NAMESPACE メッセージ (Section 9.17 PUBLISH_NAMESPACE)
@@ -64,32 +64,70 @@ export interface NamespaceDone {
 }
 
 /**
- * SUBSCRIBE_NAMESPACE メッセージ (Section 9.20 SUBSCRIBE_NAMESPACE)
+ * SUBSCRIBE_NAMESPACE メッセージ (Section 10.18 SUBSCRIBE_NAMESPACE)
  *
- * サブスクライバーがマッチする公開ネームスペースのセットを要求する。
- * 新しい双方向ストリームで送信される。
+ * draft-ietf-moq-transport-18:
+ * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
+ * SUBSCRIBE_TRACKS (0x51) に分割された。Subscribe Options フィールドは
+ * 廃止され、各メッセージの責務が明確化された。
+ *
+ * SUBSCRIBE_NAMESPACE は namespace discovery を担当する。
+ * 応答として NAMESPACE / NAMESPACE_DONE メッセージが送られてくる。
  *
  * SUBSCRIBE_NAMESPACE Message {
- *   Type (i) = 0x11,
+ *   Type (vi64) = 0x50,
  *   Length (16),
- *   Request ID (i),
+ *   Request ID (vi64),
  *   Track Namespace Prefix (..),
- *   Subscribe Options (i),
- *   Number of Parameters (i),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
  *
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
  * 空のネームスペースはワイルドカードとして機能し、全てのネームスペースにマッチする。
+ *
+ * draft-ietf-moq-transport-18 §10.18
  */
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespacePrefix: TrackNamespace;
-  subscribeOptions: NamespaceSubscribeMode;
+  parameters: Parameter[];
+}
+
+/**
+ * SUBSCRIBE_TRACKS メッセージ (Section 10.19 SUBSCRIBE_TRACKS)
+ *
+ * draft-ietf-moq-transport-18:
+ * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
+ * SUBSCRIBE_TRACKS (0x51) に分割された。
+ *
+ * SUBSCRIBE_TRACKS は track subscription を担当する。Publisher は
+ * マッチするネームスペース内のトラックに対して PUBLISH メッセージを
+ * 新規双方向ストリームで送信する。応答ストリームでは PUBLISH_BLOCKED
+ * のみが追加で送られる。
+ *
+ * SUBSCRIBE_TRACKS Message {
+ *   Type (vi64) = 0x51,
+ *   Length (16),
+ *   Request ID (vi64),
+ *   Track Namespace Prefix (..),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
+ * }
+ *
+ * draft-ietf-moq-transport-18 §10.19
+ */
+export interface SubscribeTracks {
+  type: typeof MessageType.SUBSCRIBE_TRACKS;
+  requestId: bigint;
+  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1 (Required Request ID)
+  // 0 は依存なしを意味する
+  requiredRequestIdDelta: bigint;
+  trackNamespacePrefix: TrackNamespace;
   parameters: Parameter[];
 }
 
@@ -199,14 +237,13 @@ export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): Namesp
 /**
  * SubscribeNamespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.20 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-18 Section 10.18 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE Message {
- *   Type (i) = 0x11,
+ *   Type (vi64) = 0x50,
  *   Length (16),
- *   Request ID (i),
+ *   Request ID (vi64),
  *   Track Namespace Prefix (..),
- *   Subscribe Options (i),
- *   Number of Parameters (i),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
  */
@@ -216,7 +253,6 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
   parts.push(encodeVarint(msg.requestId));
   parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespacePrefix));
-  parts.push(encodeVarint(msg.subscribeOptions));
   parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
@@ -231,6 +267,8 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
 
 /**
  * SubscribeNamespace のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.18 (SUBSCRIBE_NAMESPACE)
  */
 export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): SubscribeNamespace {
   let totalConsumed = 0;
@@ -247,9 +285,6 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   const [trackNamespacePrefix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
-  const [subscribeOptions, subscribeOptionsSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += subscribeOptionsSize;
-
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
@@ -258,7 +293,71 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
     requestId,
     requiredRequestIdDelta,
     trackNamespacePrefix,
-    subscribeOptions: Number(subscribeOptions) as NamespaceSubscribeMode,
+    parameters,
+  };
+}
+
+/**
+ * SubscribeTracks のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.19 (SUBSCRIBE_TRACKS):
+ * SUBSCRIBE_TRACKS Message {
+ *   Type (vi64) = 0x51,
+ *   Length (16),
+ *   Request ID (vi64),
+ *   Track Namespace Prefix (..),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
+ * }
+ *
+ * SUBSCRIBE_NAMESPACE と同構造で Subscribe Options を持たない。
+ */
+export function encodeSubscribeTracksPayload(msg: SubscribeTracks): Uint8Array {
+  const parts: Uint8Array[] = [];
+
+  parts.push(encodeVarint(msg.requestId));
+  parts.push(encodeVarint(msg.requiredRequestIdDelta));
+  parts.push(encodeTrackNamespace(msg.trackNamespacePrefix));
+  parts.push(encodeParameters(msg.parameters));
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * SubscribeTracks のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.19 (SUBSCRIBE_TRACKS)
+ */
+export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): SubscribeTracks {
+  let totalConsumed = 0;
+
+  const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += requestIdSize;
+
+  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
+    data,
+    offset + totalConsumed,
+  );
+  totalConsumed += requiredRequestIdDeltaSize;
+
+  const [trackNamespacePrefix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+  totalConsumed += namespaceSize;
+
+  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
+  totalConsumed += parametersConsumed;
+
+  return {
+    type: MessageType.SUBSCRIBE_TRACKS,
+    requestId,
+    requiredRequestIdDelta,
+    trackNamespacePrefix,
     parameters,
   };
 }

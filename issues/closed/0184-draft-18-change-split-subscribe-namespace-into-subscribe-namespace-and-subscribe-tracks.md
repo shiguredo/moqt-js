@@ -1,6 +1,7 @@
 # SUBSCRIBE_NAMESPACE を SUBSCRIBE_NAMESPACE と SUBSCRIBE_TRACKS に分割する
 
 Created: 2026-05-13
+Completed: 2026-05-13
 Model: Opus 4.7
 
 ## 概要
@@ -135,3 +136,51 @@ Subscribe Options フィールド (NamespaceSubscribeMode) が削除され、各
 - 0179: SUBSCRIBE_NAMESPACE 応答ストリームで PUBLISH メッセージを受信する（0184 で SUBSCRIBE_TRACKS 側に移動するため、0179 と 0184 は相互作用あり。0184 を先に適用する）
 - 0185: Required Request ID を削除する（SubscribeNamespace の requiredRequestIdDelta に影響）
 - 0105: PUBLISH_NAMESPACE を専用ストリームで送受信する（18以降もこの設計は継続）
+
+## 解決方法
+
+draft-ietf-moq-transport-18 §10.18 / §10.19 / §10.20 に従い、メッセージ ID・メッセージ構造・
+コールバック・ストリームループを SUBSCRIBE_NAMESPACE と SUBSCRIBE_TRACKS に分離した。
+
+- `src/message/types.ts`
+  - `MessageType.SUBSCRIBE_NAMESPACE` を `0x11` から `0x50` に変更した
+  - `MessageType.SUBSCRIBE_TRACKS = 0x51` を新規追加した
+  - `NamespaceSubscribeMode` enum を削除した
+- `src/message/namespace.ts`
+  - `SubscribeNamespace` から `subscribeOptions` を削除した
+  - `encodeSubscribeNamespacePayload` / `decodeSubscribeNamespacePayload` から
+    `subscribeOptions` のエンコード・デコードを削除した
+  - `SubscribeTracks` 型と `encodeSubscribeTracksPayload` / `decodeSubscribeTracksPayload` を
+    新設した（`SubscribeNamespace` と同構造）
+- `src/message/index.ts`
+  - `NamespaceSubscribeMode` の export を削除した
+  - `SubscribeTracks` / `encodeSubscribeTracksPayload` / `decodeSubscribeTracksPayload` を export した
+- `src/session.ts`
+  - `Session` インターフェースに `subscribeTracks()` を追加した
+  - `NamespaceSubscriptionCallbacks` から `onPublishBlocked` を削除した
+  - `TracksSubscriptionCallbacks` / `TracksSubscription` を新設した
+  - `namespaceSubscriptions` と `tracksSubscriptions` の Map を独立管理する
+  - `startNamespaceStreamLoop` を NAMESPACE / NAMESPACE_DONE 専用にし、
+    PUBLISH_BLOCKED は `startTracksStreamLoop` に移した
+  - `createTracksSubscription` / `closeTracksSubscription` を追加し、
+    session close 時のクリーンアップも `tracksSubscriptions` を含めた
+  - 関連コメントを draft-18 参照に更新した
+- `src/index.ts`
+  - `TracksSubscriptionCallbacks` / `TracksSubscription` を公開エクスポートに追加した
+- `src/message/namespace.prop.ts`
+  - `namespaceSubscribeModeArb` を削除した
+  - `SubscribeNamespace` のラウンドトリップテストから `subscribeOptions` を除去した
+  - `encodeSubscribeNamespacePayload` で `Subscribe Options` がエンコードされないことを
+    バイト単位で検証するテストを追加した
+  - `SubscribeTracks` のエンコード/デコード/フレーミングのラウンドトリップ PBT を追加した
+  - `encodeSubscribeTracksPayload` で `Subscribe Options` がエンコードされないことを
+    バイト単位で検証するテストを追加した
+
+注: PUBLISH メッセージを別の bidi ストリームで受信して subscription を確立する経路は
+pending issue 0061 (incoming bidi stream handling) のスコープであり、本 issue では
+コールバック構造・メッセージ構造の分離に留めた。
+
+確認:
+
+- `vp run test` 全 576 件パス
+- `vp run build` / `vp run build:devtools` 成功

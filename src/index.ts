@@ -29,6 +29,8 @@ export type {
   TrackStatusResult,
   NamespaceSubscriptionCallbacks,
   NamespaceSubscription,
+  TracksSubscriptionCallbacks,
+  TracksSubscription,
   MoqtObject,
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
