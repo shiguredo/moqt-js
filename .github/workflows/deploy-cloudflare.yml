@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -21,7 +21,7 @@ jobs:
 
       - uses: voidzero-dev/setup-vp@v1
         with:
-          node-version: "24"
+          node-version: "22"
 
       - name: 依存をインストールする
         run: vp install --frozen-lockfile

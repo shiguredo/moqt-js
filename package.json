@@ -1,7 +1,7 @@
 {
   "name": "moqt-js",
   "version": "2026.2.0",
-  "description": "MOQT (Media over QUIC Transport) library",
+  "description": "MOQT (Media over QUIC Transport) client library for browsers",
   "keywords": [
     "moqt",
     "webtransport"
