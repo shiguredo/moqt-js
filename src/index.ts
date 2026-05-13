@@ -8,6 +8,9 @@
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 import { normalizeMoqtUri } from "./moqtUri";
 
+// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-18 §3.1.1 / §3.1.2)
+export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
+
 // 公開型の再エクスポート
 export type {
   Session,
@@ -187,7 +190,7 @@ export async function connect(
   callbacks?: ConnectCallbacks,
   options?: ConnectOptions,
 ): Promise<Session> {
-  const httpsUrl = normalizeMoqtUri(url);
+  const { url: httpsUrl, fragment } = normalizeMoqtUri(url);
 
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
@@ -202,6 +205,7 @@ export async function connect(
   // Create session
   const session = new SessionImpl(transport, callbacks ?? {}, {
     pendingSubgroup: options?.pendingSubgroup,
+    fragment,
   });
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)

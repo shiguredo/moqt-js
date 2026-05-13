@@ -1,6 +1,7 @@
 # moqt URI の Fragment Identifier をパースし Session で公開する
 
 Created: 2026-05-13
+Completed: 2026-05-13
 Model: Opus 4.7
 
 ## 概要
@@ -113,3 +114,34 @@ fragment type registry (§15.3) は現時点で登録済み type がゼロであ
 - 現時点では fragment type registry が空のため、type 名の登録確認は行わない（全 type が未知）
 - アプリケーションは `session.fragment` を参照し、独自に fragment type に応じた処理を実装できる
 - `createMediaPublisher` / `createMediaSubscriber` は `connect()` が返す Session 経由で fragment にアクセス可能なため、変更不要
+
+## 解決方法
+
+draft-ietf-moq-transport-18 §3.1.2 / §15.3 に従い fragment をパースして Session で公開する。
+
+- `src/moqtUri.ts` に `parseFragment()` と `MoqtFragment` / `NormalizedMoqtUri` 型を追加した
+  - 最初のコロンで type / value に分割する (value 中のコロンは保持する)
+  - type は ASCII 小文字 / 数字 / ハイフンのみで空不可、value は空許容
+  - 不正な形式の場合は `Error` を throw する
+- `normalizeMoqtUri()` の戻り値を `{ url: string; fragment: MoqtFragment | null }` に変更した
+  - 0182 で実装した URL 文字列のみ返す型から拡張する形にした
+  - fragment が無ければ `fragment: null` を返す
+- `src/index.ts` の `connect()` で `normalizeMoqtUri()` から fragment を取り出し `SessionImpl` に渡す
+- `Session` インターフェースに `readonly fragment: MoqtFragment | null` を追加した
+- `SessionImpl` に `sessionFragment` フィールドと getter を追加した
+- `SessionImplOptions` に `fragment?: MoqtFragment | null` を追加した
+- `src/index.ts` から `parseFragment` / `MoqtFragment` / `NormalizedMoqtUri` を公開した
+- devtools `connectionSettings.ts` に `fragment` signal と `buildConnectUrl()` を追加した
+  - クエリパラメータ `fragment` を `buildQueryString` / `initFromUrl` で永続化する
+- devtools `ConnectionSettings.tsx` に URI Fragment 入力欄を追加した
+- devtools `usePublisher.ts` / `useSubscriber.ts` で `settings.buildConnectUrl()` を使うよう更新した
+- `src/moqtUri.test.ts` を 26 件まで拡張し、parseFragment / normalizeMoqtUri 両方の境界値を検証した
+
+注: 0182 で後方互換を撤廃したため、issue 本文の「期待される動作」末尾にある
+`https://example.com/moqt#track:video` での fragment パースは適用しない。
+`moqt://` 必須に揃え、`https://` を渡した場合は `normalizeMoqtUri()` が `Error` を throw する。
+
+確認:
+
+- `vp run test` 全 572 件パス
+- `vp run build` / `vp run build:devtools` 成功
