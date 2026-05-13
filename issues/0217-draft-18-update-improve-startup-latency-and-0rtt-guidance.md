@@ -25,10 +25,10 @@ draft-ietf-moq-transport-18 A.1: "Improve startup latency and 0-RTT guidance (#1
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/session.ts` | 1-4 | draft 番号を 18 に更新する |
-| `src/session.ts` | 86-95 | `Session` インターフェースの JSDoc に 0-RTT ガイダンスへの参照を追記する |
+| ファイル         | 行番号 | 変更内容                                                                 |
+| ---------------- | ------ | ------------------------------------------------------------------------ |
+| `src/session.ts` | 1-4    | draft 番号を 18 に更新する                                               |
+| `src/session.ts` | 86-95  | `Session` インターフェースの JSDoc に 0-RTT ガイダンスへの参照を追記する |
 
 ## 期待される動作
 

@@ -28,11 +28,11 @@ draft-ietf-moq-transport-18 A.1: "Make Object ID and Group ID delta encoded in F
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/dataStream.ts` | 1-11 | draft 番号を 18 に更新する |
+| ファイル            | 行番号   | 変更内容                                                            |
+| ------------------- | -------- | ------------------------------------------------------------------- |
+| `src/dataStream.ts` | 1-11     | draft 番号を 18 に更新する                                          |
 | `src/dataStream.ts` | 766-1253 | Fetch Header / Fetch Object Fields のコメントを draft-18 に更新する |
-| `src/dataStream.ts` | 830-891 | `FetchSerializationFlags` のコメントを draft-18 に更新する |
+| `src/dataStream.ts` | 830-891  | `FetchSerializationFlags` のコメントを draft-18 に更新する          |
 
 ## 期待される動作
 

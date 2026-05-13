@@ -10,7 +10,8 @@ draft-18 で Properties と Parameters に "mandatory-to-understand" の概念�
 
 > An endpoint that receives a mandatory-to-understand [Property|Parameter]
 > it does not recognize MUST [close the session|respond with a
-> REQUEST_ERROR].
+>
+> > REQUEST_ERROR].
 >
 > -- draft-ietf-moq-transport-18 §4
 
@@ -39,11 +40,11 @@ mandatory かどうかは Property/Parameter Type の最上位ビット (0x80) �
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/properties.ts:560-684` | `parseProperties` / `decodeProperties` に mandatory ビット判定を追加する |
-| `src/message/parameter.ts:558-737` | `decodeParameters` に mandatory ビット判定を追加する |
-| `src/properties.ts` (新設) | `isMandatoryProperty()` ヘルパーを追加する |
+| ファイル                           | 変更内容                                                                 |
+| ---------------------------------- | ------------------------------------------------------------------------ |
+| `src/properties.ts:560-684`        | `parseProperties` / `decodeProperties` に mandatory ビット判定を追加する |
+| `src/message/parameter.ts:558-737` | `decodeParameters` に mandatory ビット判定を追加する                     |
+| `src/properties.ts` (新設)         | `isMandatoryProperty()` ヘルパーを追加する                               |
 
 ## テスト方針
 

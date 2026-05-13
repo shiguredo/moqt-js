@@ -10,7 +10,7 @@ draft-17 ではリクエスト間の依存関係を表現するために `requir
 draft-18 §10.1 で Request ID 割当方式がクライアント偶数/サーバー奇数の独立した採番に単純化された。
 
 > The client generates even numbered Request IDs, starting at 0, and
-> the server generates odd numbered Request IDs, starting at 1.  Each
+> the server generates odd numbered Request IDs, starting at 1. Each
 > endpoint increments its Request ID by 2 for each new request.
 >
 > -- draft-ietf-moq-transport-18 §10.1
@@ -44,17 +44,17 @@ requiredRequestIdDelta は draft-17 で存在した「次に割り当てるべ�
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/publish.ts:29-31` | `Publish` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/message/subscribe.ts:28-30` | `Subscribe` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/message/subscribe.ts:62-64` | `RequestUpdate` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/message/fetch.ts:56-58` | `Fetch` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/message/trackstatus.ts:40-42` | `TrackStatus` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/message/namespace.ts:25-27` | `PublishNamespace` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/message/namespace.ts:88-90` | `SubscribeNamespace` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
-| `src/session.ts` (8箇所) | `requiredRequestIdDelta: 0n` を削除 |
-| `src/session/bidi.ts:514,598` | `requiredRequestIdDelta: 0n` を削除 |
+| ファイル                           | 変更内容                                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------------------- |
+| `src/message/publish.ts:29-31`     | `Publish` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去            |
+| `src/message/subscribe.ts:28-30`   | `Subscribe` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去          |
+| `src/message/subscribe.ts:62-64`   | `RequestUpdate` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去      |
+| `src/message/fetch.ts:56-58`       | `Fetch` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去              |
+| `src/message/trackstatus.ts:40-42` | `TrackStatus` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去        |
+| `src/message/namespace.ts:25-27`   | `PublishNamespace` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去   |
+| `src/message/namespace.ts:88-90`   | `SubscribeNamespace` 型から `requiredRequestIdDelta` を削除、エンコード/デコードから除去 |
+| `src/session.ts` (8箇所)           | `requiredRequestIdDelta: 0n` を削除                                                      |
+| `src/session/bidi.ts:514,598`      | `requiredRequestIdDelta: 0n` を削除                                                      |
 
 ## テスト方針
 

@@ -709,7 +709,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
 /**
  * MediaSubscriber を作成する
  *
- * @param url - MOQT サーバーの URL
+ * @param url - MOQT サーバーの URL (例: `moqt://example.com/moqt`)
  * @param options - 購読オプション
  * @param callbacks - コールバック
  * @returns MediaSubscriber インスタンス

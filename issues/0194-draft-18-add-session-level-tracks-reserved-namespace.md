@@ -38,10 +38,10 @@ moqt-js は予約名前空間を認識し、ユーザーが予約プレフィク
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/message/parameter.ts` | `RESERVED_NAMESPACE_PREFIX` 定数と `isReservedNamespace()` ヘルパーを追加する |
-| `src/session.ts` (publish/subscribe) | 予約名前空間使用時の警告を追加する |
+| ファイル                             | 変更内容                                                                      |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `src/message/parameter.ts`           | `RESERVED_NAMESPACE_PREFIX` 定数と `isReservedNamespace()` ヘルパーを追加する |
+| `src/session.ts` (publish/subscribe) | 予約名前空間使用時の警告を追加する                                            |
 
 ## テスト方針
 

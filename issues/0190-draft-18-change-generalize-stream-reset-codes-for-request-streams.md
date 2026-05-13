@@ -9,20 +9,20 @@ draft-18 で Stream Reset エラーコードが再編成され、全リクエス
 draft-17 での DataStreamErrorCode (Subgroup Stream 用のエラーコード) が拡張・再構成されている。
 
 > An endpoint MUST NOT send any of these error codes on a stream where
-> they are not applicable.  An endpoint that receives a stream error
+> they are not applicable. An endpoint that receives a stream error
 > code where it is not applicable SHOULD close the session with a
 > PROTOCOL_VIOLATION.
 >
 > -- draft-ietf-moq-transport-18 §3.3.3
 
 > Publish Done Status Code:
->   0x0: UNSUBSCRIBED
->   0x1: INTERNAL_ERROR
->   0x2: UNAUTHORIZED
->   0x3: TRACK_ENDED
->   0x4: PUBLICATION_ENDED
->   0x5: TOO_FAR_BEHIND
->   0x6: EXCESSIVE_LOAD
+> 0x0: UNSUBSCRIBED
+> 0x1: INTERNAL_ERROR
+> 0x2: UNAUTHORIZED
+> 0x3: TRACK_ENDED
+> 0x4: PUBLICATION_ENDED
+> 0x5: TOO_FAR_BEHIND
+> 0x6: EXCESSIVE_LOAD
 >
 > -- draft-ietf-moq-transport-18 §10.11
 
@@ -49,12 +49,12 @@ draft-17 での DataStreamErrorCode (Subgroup Stream 用のエラーコード) �
 
 ## 該当箇所
 
-| ファイル | 変更内容 |
-|---|---|
-| `src/error.ts:17-35` | `DataStreamErrorCode` を draft-18 の Stream Reset Error Codes に更新する |
-| `src/error.ts:96-115` | `PublishDoneStatusCode` を draft-18 §10.11 と照合する |
-| `src/session.ts` (handleIncomingStream) | ストリームリセット受信時のコードマッピングを更新する |
-| `src/session/stream.ts` (cancelStreamQuiet) | STOP_SENDING 送信時のコードマッピングを更新する |
+| ファイル                                    | 変更内容                                                                 |
+| ------------------------------------------- | ------------------------------------------------------------------------ |
+| `src/error.ts:17-35`                        | `DataStreamErrorCode` を draft-18 の Stream Reset Error Codes に更新する |
+| `src/error.ts:96-115`                       | `PublishDoneStatusCode` を draft-18 §10.11 と照合する                    |
+| `src/session.ts` (handleIncomingStream)     | ストリームリセット受信時のコードマッピングを更新する                     |
+| `src/session/stream.ts` (cancelStreamQuiet) | STOP_SENDING 送信時のコードマッピングを更新する                          |
 
 ## テスト方針
 

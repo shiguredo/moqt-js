@@ -22,7 +22,7 @@ draft-ietf-moq-transport-18 §15.4 (Setup Options):
 draft-ietf-moq-transport-18 §10.3.1 (Setup Options):
 
 > Setup Options with reserved identifiers have no semantics and can
-> carry arbitrary values.  Endpoints MUST ignore unknown Setup Options.
+> carry arbitrary values. Endpoints MUST ignore unknown Setup Options.
 
 draft-ietf-moq-transport-18 A.1: "Add IANA registry for Setup Options (#1564)"
 
@@ -34,17 +34,17 @@ draft-ietf-moq-transport-18 A.1: "Add IANA registry for Setup Options (#1564)"
 
 ## 該当ファイル
 
-| ファイル | 行番号 | 変更内容 |
-| --- | --- | --- |
-| `src/message/types.ts` | (SetupOptionType) | JSDoc を draft-18 §15.4 に更新する |
-| `src/message/setup.ts` | 1-8 | draft 番号を 18 に更新する |
-| `src/message/setup.ts` | 81-142 | `decodeSetupPayload` の JSDoc に未知 Setup Option の ignore を追記する |
+| ファイル               | 行番号            | 変更内容                                                               |
+| ---------------------- | ----------------- | ---------------------------------------------------------------------- |
+| `src/message/types.ts` | (SetupOptionType) | JSDoc を draft-18 §15.4 に更新する                                     |
+| `src/message/setup.ts` | 1-8               | draft 番号を 18 に更新する                                             |
+| `src/message/setup.ts` | 81-142            | `decodeSetupPayload` の JSDoc に未知 Setup Option の ignore を追記する |
 
 ## 期待される動作
 
 1. 既知の Setup Options (0x01 PATH, 0x03 AUTHORIZATION_TOKEN, 0x04 MAX_AUTH_TOKEN_CACHE_SIZE, 0x05 AUTHORITY, 0x07 MOQT_IMPLEMENTATION) は従来通り処理する
 2. 未知の Setup Option Type を受信した場合、エラーにせず無視する
-3. GREASE 値 (0x7f * N + 0x9D) の Setup Options も無視する
+3. GREASE 値 (0x7f \* N + 0x9D) の Setup Options も無視する
 
 ## テスト方針
 
