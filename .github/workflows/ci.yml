@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: voidzero-dev/setup-vp@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: voidzero-dev/setup-vp@ca1c46663915d6c1042ae23bd39ab85718bfb0fa # v1.10.0
         with:
           node-version: "22"
           cache: true
@@ -33,8 +33,8 @@ jobs:
           - "24"
           - "22"
     steps:
-      - uses: actions/checkout@v6
-      - uses: voidzero-dev/setup-vp@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: voidzero-dev/setup-vp@ca1c46663915d6c1042ae23bd39ab85718bfb0fa # v1.10.0
         with:
           node-version: ${{ matrix.node }}
           cache: true
@@ -56,8 +56,8 @@ jobs:
           - "5.8"
           - "5.7"
     steps:
-      - uses: actions/checkout@v6
-      - uses: voidzero-dev/setup-vp@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: voidzero-dev/setup-vp@ca1c46663915d6c1042ae23bd39ab85718bfb0fa # v1.10.0
         with:
           node-version: "22"
       # package.json の typescript バージョンを書き換えて再インストール
@@ -75,8 +75,8 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
-      - uses: voidzero-dev/setup-vp@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: voidzero-dev/setup-vp@ca1c46663915d6c1042ae23bd39ab85718bfb0fa # v1.10.0
         with:
           node-version: "22"
           cache: true
