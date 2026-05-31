@@ -232,8 +232,9 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
   // draft-ietf-moq-transport-18 Section 11.4.2:
   // 不正なタイプ値を検証する
-  // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約済み
-  // 0b00X1XXXX の形式でないタイプ値は不正
+  // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
+  // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
+  // 0b0XX1XXXX の形式でないタイプ値は不正
   const subgroupIdMode = (typeNum & 0x06) >> 1;
   if (subgroupIdMode === 0x03) {
     throw new ProtocolViolationError(
@@ -242,7 +243,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   }
   if ((typeNum & 0x10) === 0) {
     throw new ProtocolViolationError(
-      `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b00X1XXXX`,
+      `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
     );
   }
 
@@ -322,15 +323,15 @@ export function encodeObjectFields(
   // Object ID Delta
   parts.push(encodeVarint(objectIdDelta));
 
-  // 拡張 (ヘッダータイプが Properties Present の場合のみ)
+  // プロパティ (ヘッダータイプが Properties Present の場合のみ)
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // "If an endpoint receives extension headers on Objects with status
+    // "If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
-      throw new Error("Protocol violation: extension headers on non-Normal status object");
+      throw new Error("Protocol violation: properties on non-Normal status object");
     }
 
     parts.push(encodeVarint(extLen));
@@ -389,7 +390,7 @@ export function decodeObjectFields(
   const [objectIdDelta, objectIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += objectIdConsumed;
 
-  // 拡張 (ヘッダータイプが Properties Present の場合のみ)
+  // プロパティ (ヘッダータイプが Properties Present の場合のみ)
   let propertiesLength = 0;
   let properties = new Uint8Array(0);
   if (hasPropertiesPresent(headerType)) {
@@ -416,11 +417,11 @@ export function decodeObjectFields(
     totalConsumed += statusConsumed;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // "Any Object with status Normal can have extension headers.
-    // If an endpoint receives extension headers on Objects with status
+    // "Any Object with status Normal can have properties (Section 2.5).
+    // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError("extension headers on non-Normal status object");
+      throw new ProtocolViolationError("properties on non-Normal status object");
     }
   }
 
@@ -496,7 +497,7 @@ export const DatagramType = {
   PAYLOAD_OBJ_END_GROUP: 0x02,
   PAYLOAD_OBJ_EXT_END_GROUP: 0x03,
 
-  // ペイロードタイプ、Object ID なし (Object ID = 1)、Priority Present (Section 11.3.1: 0x04-0x07)
+  // ペイロードタイプ、Object ID なし (Object ID = 0)、Priority Present (Section 11.3.1: 0x04-0x07)
   PAYLOAD_NO_OBJ: 0x04,
   PAYLOAD_NO_OBJ_EXT: 0x05,
   PAYLOAD_NO_OBJ_END_GROUP: 0x06,
@@ -526,7 +527,7 @@ export const DatagramType = {
   STATUS_OBJ_NO_PRI: 0x28,
   STATUS_OBJ_EXT_NO_PRI: 0x29,
 
-  // ステータスタイプ、Object ID なし (Object ID = 1)、Priority なし (Section 11.3.1: 0x2C-0x2D)
+  // ステータスタイプ、Object ID なし (Object ID = 0)、Priority なし (Section 11.3.1: 0x2C-0x2D)
   // draft-ietf-moq-transport-18 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
@@ -555,7 +556,7 @@ export interface ObjectDatagram {
  *
  * draft-ietf-moq-transport-18 Section 11.3.1:
  * "The ZERO_OBJECT_ID bit (0x04) indicates when the Object ID field is present.
- * When set to 1, the Object ID field is omitted and the Object ID is 1.
+ * When set to 1, the Object ID field is omitted and the Object ID is 0.
  * When set to 0, the Object ID field is present."
  *
  * ZERO_OBJECT_ID ビット (0x04) は全タイプに一律に適用される
@@ -567,7 +568,7 @@ function datagramHasObjectId(type: number): boolean {
 /**
  * Check if datagram type has Properties field
  */
-function datagramHasExtensions(type: number): boolean {
+function datagramHasProperties(type: number): boolean {
   return (type & 0x01) === 1;
 }
 
@@ -615,8 +616,8 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
   if (datagramHasObjectId(datagram.type)) {
     parts.push(encodeVarint(datagram.objectId));
-  } else if (datagram.objectId !== 1n) {
-    throw new Error(`objectId must be 1 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
+  } else if (datagram.objectId !== 0n) {
+    throw new Error(`objectId must be 0 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
   }
 
   // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
@@ -624,17 +625,17 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
 
-  if (datagramHasExtensions(datagram.type)) {
+  if (datagramHasProperties(datagram.type)) {
     const extLen = datagram.properties?.length ?? 0;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // Non-Normal status objects must not have extension headers
+    // Non-Normal status objects must not have properties
     if (
       datagramIsStatusType(datagram.type) &&
       datagram.status !== ObjectStatus.NORMAL &&
       extLen > 0
     ) {
-      throw new Error("Protocol violation: extension headers on non-Normal status object");
+      throw new Error("Protocol violation: properties on non-Normal status object");
     }
 
     parts.push(encodeVarint(extLen));
@@ -692,7 +693,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += groupIdConsumed;
 
-  let objectId = 1n;
+  let objectId = 0n;
   if (datagramHasObjectId(typeNum)) {
     const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
     objectId = oid;
@@ -708,7 +709,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
 
   let properties: Uint8Array | undefined;
   let propertiesLength = 0;
-  if (datagramHasExtensions(typeNum)) {
+  if (datagramHasProperties(typeNum)) {
     const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
@@ -737,11 +738,11 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     totalConsumed += statusConsumed;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // "Any Object with status Normal can have extension headers.
-    // If an endpoint receives extension headers on Objects with status
+    // "Any Object with status Normal can have properties (Section 2.5).
+    // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError("extension headers on non-Normal status object");
+      throw new ProtocolViolationError("properties on non-Normal status object");
     }
   } else {
     payload = data.slice(offset + totalConsumed);
@@ -839,8 +840,8 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
  *
  * Section 11.4.4.1 Table 9: Additional flags
  * | Bitmask | Condition if set |
- * | 0x04 | Object ID field is present (else prior + 1) |
- * | 0x08 | Group ID field is present (else prior Group ID) |
+ * | 0x04 | Object ID Delta is present (else prior + 1) |
+ * | 0x08 | Group ID Delta is present (else prior Group ID) |
  * | 0x10 | Priority field is present (else prior Priority) |
  * | 0x20 | Properties field is present |
  * | 0x40 | Datagram: Subgroup ID の 2 ビットを無視 |
@@ -1019,7 +1020,7 @@ export function encodeFetchObjectFields(
     parts.push(new Uint8Array([fields.publisherPriority]));
   }
 
-  // 拡張 (フラグ 0x20 がセットされている場合)
+  // プロパティ (フラグ 0x20 がセットされている場合)
   if (fields.serializationFlags & FetchSerializationFlags.PROPERTIES_PRESENT) {
     const extLen = fields.properties?.length ?? 0;
     parts.push(encodeVarint(extLen));

@@ -14,7 +14,8 @@
  * - Session Termination Error Codes (Section 15.10.1)
  * - REQUEST_ERROR Codes (Section 15.10.2)
  * - PUBLISH_DONE Codes (Section 15.10.3)
- * - Data Stream Reset Error Codes (Section 15.10.4)
+ * - Stream Reset Error Codes (Section 15.10.4)
+ * - MOQT Auth Token Type
  */
 
 /**

@@ -1,4 +1,4 @@
-import { IncompleteDataError, ProtocolViolationError } from "./error";
+import { IncompleteDataError } from "./error";
 
 /**
  * MOQT 可変長整数エンコーディング
@@ -27,6 +27,7 @@ const THRESHOLD_3BYTE = 2097151n;
 const THRESHOLD_4BYTE = 268435455n;
 const THRESHOLD_5BYTE = 34359738367n;
 const THRESHOLD_6BYTE = 4398046511103n;
+const THRESHOLD_7BYTE = 562949953421311n;
 const THRESHOLD_8BYTE = 72057594037927935n;
 // 9 byte: 全 64 ビット
 
@@ -44,6 +45,7 @@ export function varintSize(value: number | bigint): number {
   if (v <= THRESHOLD_4BYTE) return 4;
   if (v <= THRESHOLD_5BYTE) return 5;
   if (v <= THRESHOLD_6BYTE) return 6;
+  if (v <= THRESHOLD_7BYTE) return 7;
   if (v <= THRESHOLD_8BYTE) return 8;
   return 9;
 }
@@ -103,6 +105,16 @@ export function encodeVarint(value: number | bigint): Uint8Array {
       result[3] = Number((v >> 16n) & 0xffn);
       result[4] = Number((v >> 8n) & 0xffn);
       result[5] = Number(v & 0xffn);
+      break;
+    case 7:
+      // 1111110x xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx (49 usable bits)
+      result[0] = 0xfc | Number((v >> 48n) & 0x01n);
+      result[1] = Number((v >> 40n) & 0xffn);
+      result[2] = Number((v >> 32n) & 0xffn);
+      result[3] = Number((v >> 24n) & 0xffn);
+      result[4] = Number((v >> 16n) & 0xffn);
+      result[5] = Number((v >> 8n) & 0xffn);
+      result[6] = Number(v & 0xffn);
       break;
     case 8:
       // 11111110 xxxxxxxx * 7 (56 usable bits)
@@ -176,12 +188,10 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
     // 111110xx: 6 bytes
     length = 6;
     usableBitsInFirstByte = 2;
-  } else if (firstByte === 0xfc) {
-    // 11111100: 無効なコードポイント
-    throw new ProtocolViolationError("invalid varint code point: 0xFC");
-  } else if (firstByte === 0xfd) {
-    // 11111101: 無効なコードポイント
-    throw new ProtocolViolationError("invalid varint code point: 0xFD");
+  } else if ((firstByte & 0xfe) === 0xfc) {
+    // 1111110x: 7 bytes
+    length = 7;
+    usableBitsInFirstByte = 1;
   } else if (firstByte === 0xfe) {
     // 11111110: 8 bytes
     length = 8;

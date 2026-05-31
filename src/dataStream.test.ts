@@ -147,11 +147,11 @@ test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () =>
 });
 
 // draft-ietf-moq-transport-18 Section 11.4.2:
-// 0b00X1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
+// 0b0XX1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
 for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
   test(`SubgroupHeader: 不正タイプ 0x${invalidType.toString(16)} は decode でエラー`, () => {
     const data = new Uint8Array([invalidType, 0x01, 0x02, 0x80]);
-    assert.throws(() => decodeSubgroupHeader(data), /does not match form 0b00X1XXXX/);
+    assert.throws(() => decodeSubgroupHeader(data), /does not match form 0b0XX1XXXX/);
   });
 }
 
@@ -543,7 +543,7 @@ test("ObjectDatagram: PAYLOAD_NO_OBJ タイプ (0x04) をエンコード", () =>
     type: DatagramType.PAYLOAD_NO_OBJ,
     trackAlias: 1n,
     groupId: 2n,
-    objectId: 1n,
+    objectId: 0n,
     publisherPriority: 100,
     payload: new Uint8Array([0x11, 0x22]),
   };
@@ -641,7 +641,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       type: DatagramType.PAYLOAD_NO_OBJ,
       trackAlias: 10n,
       groupId: 20n,
-      objectId: 1n,
+      objectId: 0n,
       publisherPriority: 255,
       payload: new Uint8Array([0xff]),
     },
@@ -670,14 +670,14 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
   },
   // draft-ietf-moq-transport-18 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
-  // Object ID フィールドなし (Object ID = 1)、Priority フィールドなし
+  // Object ID フィールドなし (Object ID = 0)、Priority フィールドなし
   {
     name: "STATUS_NO_OBJ_NO_PRI (0x2C)",
     datagram: {
       type: DatagramType.STATUS_NO_OBJ_NO_PRI,
       trackAlias: 3n,
       groupId: 7n,
-      objectId: 1n,
+      objectId: 0n,
       publisherPriority: 0,
       status: ObjectStatus.END_OF_TRACK,
     },
@@ -690,7 +690,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       type: DatagramType.STATUS_NO_OBJ_EXT_NO_PRI,
       trackAlias: 4n,
       groupId: 8n,
-      objectId: 1n,
+      objectId: 0n,
       publisherPriority: 0,
       status: ObjectStatus.NORMAL,
       properties: new Uint8Array([0x01, 0x02]),
