@@ -1,6 +1,6 @@
 /**
  * Varint Property-Based Tests
- * draft-ietf-moq-transport-17 Section 1.4.1 に基づく MOQT 可変長整数のプロパティテスト
+ * draft-ietf-moq-transport-18 Section 1.4.1 に基づく MOQT 可変長整数のプロパティテスト
  */
 
 import { test, assert } from "vite-plus/test";

@@ -453,7 +453,7 @@ export async function bidiReadRequestStreamMessages(
             break;
           }
           case MessageType.REQUEST_UPDATE: {
-            // draft-ietf-moq-transport-17 §9.10:
+            // draft-ietf-moq-transport-18 §10.9:
             // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
             //  subscription established with PUBLISH.」
             // クライアントが Publisher の場合、サーバー (Subscriber 役) が
@@ -640,7 +640,7 @@ export async function bidiCancelSubscription(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      // draft-ietf-moq-transport-17 §5.1:
+      // draft-ietf-moq-transport-18 §5.1:
       // 「The subscriber terminates a subscription ... by sending STOP_SENDING.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 両方向をリセットして subscription 解除を通知する。
@@ -669,7 +669,7 @@ export async function bidiCancelFetch(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      // draft-ietf-moq-transport-17 §5.2:
+      // draft-ietf-moq-transport-18 §5.2:
       // 「It MUST send STOP_SENDING for the bidi request stream.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 両方向をリセットして fetch 解除を通知する。

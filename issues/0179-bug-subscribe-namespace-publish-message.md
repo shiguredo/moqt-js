@@ -9,7 +9,7 @@ Model: Opus 4.7
 
 ## 一次資料の引用
 
-draft-ietf-moq-transport-17 §6.1:
+draft-ietf-moq-transport-18 §6.1:
 
 > A subscription to a namespace prefix results in PUBLISH, NAMESPACE,
 > NAMESPACE_DONE, and PUBLISH_BLOCKED messages being sent on the response

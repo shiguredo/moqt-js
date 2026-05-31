@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.5-9.7
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -23,7 +23,7 @@ import { encodeVarint } from "../varint";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.3:
+ * draft-ietf-moq-transport-18 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -33,7 +33,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-17 §9.3.6 / §9.3.10: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -86,9 +86,9 @@ const parametersArb = fc
   });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.5:
+ * draft-ietf-moq-transport-18 Section 10.4:
  * GOAWAY に Timeout フィールドが追加された。
- * draft-ietf-moq-transport-17 Section 9.5
+ * draft-ietf-moq-transport-18 Section 10.4
  */
 test("Goaway のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -114,9 +114,9 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.6:
+ * draft-ietf-moq-transport-18 Section 10.5:
  * REQUEST_OK から Request ID が削除された。
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -140,9 +140,9 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.7:
+ * draft-ietf-moq-transport-18 Section 10.6:
  * REQUEST_ERROR から Request ID が削除された。
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない

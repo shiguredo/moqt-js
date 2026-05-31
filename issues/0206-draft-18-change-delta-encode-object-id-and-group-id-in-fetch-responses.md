@@ -15,9 +15,10 @@ prior 値や prior + 1 から計算する)。コメントと RFC 参照の更新
 
 ## RFC 参照
 
-draft-ietf-moq-transport-18 §11.4.4 (Fetch Header):
+draft-ietf-moq-transport-18 §11.4.4 (Fetch Header) / §11.4.4.1 (Flags):
 
-> The Type field in the SUBGROUP_HEADER takes the form 0b0XX1XXXX...
+> The two least significant bits (LSBs) of the Serialization Flags form
+> a two-bit field that defines the encoding of the Subgroup.
 
 draft-ietf-moq-transport-18 A.1: "Make Object ID and Group ID delta encoded in Fetch responses (#1586)"
 

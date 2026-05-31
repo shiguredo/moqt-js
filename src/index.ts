@@ -2,7 +2,7 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-17
+ * draft-ietf-moq-transport-18
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
@@ -35,7 +35,7 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-17 §10.4.2)
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-18 §11.4.2)
 export {
   type PendingSubgroupBufferOptions,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
@@ -44,7 +44,7 @@ export {
 // メッセージ型の再エクスポート
 export type { SubscriptionFilter, Location, Parameter } from "./message";
 
-// Authorization Token の再エクスポート (draft-ietf-moq-transport-17 Section 9.3.2)
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-18 Section 10.2.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,
@@ -108,7 +108,7 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
-// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-17 Section 11 (MOQT Properties))
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-18 Section 12 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,
@@ -212,7 +212,7 @@ export async function connect(
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
-  // draft-ietf-moq-transport-17 Section 9.4.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-18 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
   await session.initialize({
     authorizationToken: options?.authorizationToken,
   });

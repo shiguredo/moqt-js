@@ -1,6 +1,6 @@
 /**
  * MOQT Authorization Token Unit Tests
- * draft-ietf-moq-transport-17 Section 9.3.2 (AUTHORIZATION TOKEN Parameter)
+ * draft-ietf-moq-transport-18 Section 10.2.2 (AUTHORIZATION TOKEN Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -98,7 +98,7 @@ test("AuthorizationToken: USE_VALUE で空の Token Value を扱える", () => {
   }
 });
 
-// draft-ietf-moq-transport-17 Section 9.3.2:
+// draft-ietf-moq-transport-18 Section 10.2.2:
 // "If the Token structure cannot be decoded, the receiver MUST close
 //  the Session with KEY_VALUE_FORMATTING_ERROR."
 test("AuthorizationToken: デコード失敗で KEY_VALUE_FORMATTING_ERROR", () => {
@@ -123,7 +123,7 @@ test("AuthorizationToken: 空データでデコード失敗", () => {
   }
 });
 
-// draft-ietf-moq-transport-17 Section 9.3.2:
+// draft-ietf-moq-transport-18 Section 10.2.2:
 // "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
 //  it MUST close the session with a PROTOCOL_VIOLATION."
 test("AuthorizationToken: SETUP では DELETE を拒否する", () => {

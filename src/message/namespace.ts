@@ -15,14 +15,13 @@ import {
 import { MessageType } from "./types";
 
 /**
- * PUBLISH_NAMESPACE メッセージ (Section 9.17 PUBLISH_NAMESPACE)
+ * PUBLISH_NAMESPACE メッセージ (Section 10.15 PUBLISH_NAMESPACE)
  *
  * パブリッシャーが Track Namespace 内にトラックがあることを通知する。
  */
 export interface PublishNamespace {
   type: typeof MessageType.PUBLISH_NAMESPACE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
@@ -30,7 +29,7 @@ export interface PublishNamespace {
 }
 
 /**
- * NAMESPACE メッセージ (Section 9.18 NAMESPACE)
+ * NAMESPACE メッセージ (Section 10.16 NAMESPACE)
  *
  * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -47,7 +46,7 @@ export interface Namespace {
 }
 
 /**
- * NAMESPACE_DONE メッセージ (Section 9.19 NAMESPACE_DONE)
+ * NAMESPACE_DONE メッセージ (Section 10.17 NAMESPACE_DONE)
  *
  * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -91,7 +90,6 @@ export interface NamespaceDone {
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespacePrefix: TrackNamespace;
@@ -124,7 +122,6 @@ export interface SubscribeNamespace {
 export interface SubscribeTracks {
   type: typeof MessageType.SUBSCRIBE_TRACKS;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-18 Section 10.1 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespacePrefix: TrackNamespace;
@@ -185,7 +182,7 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
 /**
  * Namespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.18 (NAMESPACE):
+ * draft-ietf-moq-transport-18 Section 10.16 (NAMESPACE):
  * NAMESPACE Message {
  *   Type (i) = 0x8,
  *   Length (16),
@@ -211,7 +208,7 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
 /**
  * NamespaceDone のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.19 (NAMESPACE_DONE):
+ * draft-ietf-moq-transport-18 Section 10.17 (NAMESPACE_DONE):
  * NAMESPACE_DONE Message {
  *   Type (i) = 0xE,
  *   Length (16),
@@ -363,9 +360,9 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
 }
 
 /**
- * PUBLISH_BLOCKED メッセージ (Section 9.21 PUBLISH_BLOCKED)
+ * PUBLISH_BLOCKED メッセージ (Section 10.20 PUBLISH_BLOCKED)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * Publisher が新しい Request ID を割り当てられない場合に送信する。
  * SUBSCRIBE_NAMESPACE のフロー制御の一環。
  *
@@ -377,7 +374,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *   Track Name (..),
  * }
  *
- * draft-ietf-moq-transport-17 Section 9.21
+ * draft-ietf-moq-transport-18 Section 10.20 (PUBLISH_BLOCKED)
  */
 export interface PublishBlocked {
   type: typeof MessageType.PUBLISH_BLOCKED;

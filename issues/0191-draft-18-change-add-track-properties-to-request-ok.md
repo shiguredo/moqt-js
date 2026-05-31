@@ -14,8 +14,7 @@ SUBSCRIBE_OK / PUBLISH_OK / FETCH_OK の応答で Immutable Properties 等の Tr
 > Length (16),
 > Number of Parameters (vi64),
 > Parameters (..) ...,
-> Number of Track Properties (vi64),
-> Track Properties (..) ...
+> Track Properties (..),
 > }
 >
 > -- draft-ietf-moq-transport-18 §10.5

@@ -1,12 +1,12 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-17 Section 9.14 (FETCH) — 9.15 (FETCH_OK)
+ * draft-ietf-moq-transport-18 Section 10.12 (FETCH) — 10.13 (FETCH_OK)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
  * "unknown range" として返すことができる。
- * draft-ietf-moq-transport-17 Section 9.14
+ * draft-ietf-moq-transport-18 Section 10.12
  *
  * TODO: Unknown Range Metadata Type の実装
  */
@@ -29,12 +29,12 @@ export interface Fetcher {
   readonly endLocation: Location;
   /**
    * FETCH_OK で受信した Track Properties
-   * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK)
+   * draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK)
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-17 Section 5.2 (Fetch State Management)
+   * draft-ietf-moq-transport-18 Section 5.2 (Fetch State Management)
    */
   cancel(): Promise<void>;
 }
@@ -148,7 +148,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch をキャンセル
    *
-   * draft-ietf-moq-transport-17 Section 5.2 (Fetch State Management):
+   * draft-ietf-moq-transport-18 Section 5.2 (Fetch State Management):
    * "It MUST send STOP_SENDING for the bidi request stream."
    * FETCH_CANCEL は削除された。キャンセルはストリームを閉じることで行う。
    */

@@ -1,6 +1,6 @@
 /**
  * MOQT TrackStatus Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.16
+ * draft-ietf-moq-transport-18 Section 10.14
  */
 
 import { test, assert } from "vite-plus/test";
@@ -15,9 +15,9 @@ import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 
 /**
- * draft-ietf-moq-transport-17 Section 2.3:
+ * draft-ietf-moq-transport-18 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -31,7 +31,7 @@ const trackNameArb = fc
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.3:
+ * draft-ietf-moq-transport-18 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -41,7 +41,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-17 §9.3.6 / §9.3.10: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2

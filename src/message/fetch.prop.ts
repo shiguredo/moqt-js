@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.14-9.15
+ * draft-ietf-moq-transport-18 Section 10.12-10.13
  */
 
 import { test, assert } from "vite-plus/test";
@@ -23,7 +23,7 @@ import { type Property, TrackPropertyId } from "../properties";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.3:
+ * draft-ietf-moq-transport-18 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -33,7 +33,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-17 §9.3.6 / §9.3.10: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -86,11 +86,11 @@ const parametersArb = fc
   });
 
 /**
- * Track Extensions arbitrary
+ * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-17:
- * FETCH_OK に Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18:
+ * FETCH_OK に Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 // 値域制約のある Track Property は除外する (validateTrackPropertyValue で
 // ProtocolViolationError になりラウンドトリップが成立しないため)
@@ -121,9 +121,9 @@ const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropert
 const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
 
 /**
- * draft-ietf-moq-transport-17 Section 2.3:
+ * draft-ietf-moq-transport-18 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 const namespaceArb = fc
   .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })
@@ -248,7 +248,7 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+ * draft-ietf-moq-transport-18 Section 10.12 (FETCH):
  * "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
  *  the session with a PROTOCOL_VIOLATION."
  * decode 段階で ProtocolViolationError が投げられることを保証する。
@@ -278,9 +278,9 @@ test("Fetch Type が 0x1/0x2/0x3 以外なら decodeFetchPayload は ProtocolVio
 });
 
 /**
- * draft-ietf-moq-transport-17:
- * FETCH_OK に Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18:
+ * FETCH_OK に Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 test("FetchOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -310,7 +310,7 @@ test("FetchOk のエンコード・デコードがラウンドトリップする
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
-        // Track Extensions はソートされるため、ソート後の値を比較
+        // Track Properties はソートされるため、ソート後の値を比較
         const sortedOriginal = [...trackProperties].sort((a, b) =>
           a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
         );

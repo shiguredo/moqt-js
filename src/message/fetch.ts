@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-17 Section 9.14 (FETCH) — 9.15 (FETCH_OK)
+ * draft-ietf-moq-transport-18 Section 10.12 (FETCH) — 10.13 (FETCH_OK)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -19,7 +19,7 @@ import {
 import { type Location, MessageType } from "./types";
 
 /**
- * Fetch Type (Section 9.14 FETCH)
+ * Fetch Type (Section 10.12 FETCH)
  */
 export const FetchType = {
   STANDALONE: 0x01,
@@ -30,7 +30,7 @@ export const FetchType = {
 export type FetchType = (typeof FetchType)[keyof typeof FetchType];
 
 /**
- * Standalone Fetch structure (Section 9.14.1 Standalone Fetch)
+ * Standalone Fetch structure (Section 10.12.1 Standalone Fetch)
  */
 export interface StandaloneFetch {
   trackNamespace: TrackNamespace;
@@ -40,7 +40,7 @@ export interface StandaloneFetch {
 }
 
 /**
- * Joining Fetch structure (Section 9.14.2 Joining Fetches)
+ * Joining Fetch structure (Section 10.12.2 Joining Fetches)
  */
 export interface JoiningFetch {
   joiningRequestId: bigint;
@@ -48,12 +48,11 @@ export interface JoiningFetch {
 }
 
 /**
- * FETCH メッセージ (Section 9.14 FETCH)
+ * FETCH メッセージ (Section 10.12 FETCH)
  */
 export interface Fetch {
   type: typeof MessageType.FETCH;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   fetchType: FetchType;
@@ -63,12 +62,12 @@ export interface Fetch {
 }
 
 /**
- * FETCH_OK メッセージ (Section 9.15 FETCH_OK)
+ * FETCH_OK メッセージ (Section 10.13 FETCH_OK)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * - 双方向ストリーム上で送信されるため Request ID は不要。
- * - Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * - Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
@@ -135,7 +134,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   let standalone: StandaloneFetch | undefined;
   let joining: JoiningFetch | undefined;
 
-  // draft-ietf-moq-transport-17 Section 9.14 (FETCH):
+  // draft-ietf-moq-transport-18 Section 10.12 (FETCH):
   // "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
   //  the session with a PROTOCOL_VIOLATION."
   const fetchTypeValue = Number(fetchType);
@@ -207,7 +206,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+ * draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
  * FETCH_OK Message {
  *   Type (i) = 0x18,
  *   Length (16),
@@ -225,7 +224,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   parts.push(encodeLocation(msg.endLocation));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+  // draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -254,7 +253,7 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-17 Section 9.15 (FETCH_OK):
+  // draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);

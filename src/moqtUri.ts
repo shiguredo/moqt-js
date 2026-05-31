@@ -91,7 +91,7 @@ export function parseFragment(fragment: string): MoqtFragment {
  *
  * fragment は WebTransport に渡さない (draft-ietf-moq-transport-18 §3.1.2):
  *
- * > Fragment identifiers MAY be used with moqt URIs. The fragment is not
+ * > Fragment identifiers MAY be used with moqt URIs.  The fragment is not
  * > transmitted to the server; it is processed locally by the client
  * > after establishing the MOQT session.
  *

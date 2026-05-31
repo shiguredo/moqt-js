@@ -1,15 +1,15 @@
 /**
  * MOQT Message Types
- * draft-ietf-moq-transport-17 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 
 /**
- * Message Types (Section 9 Control Messages)
+ * Message Types (Section 10 Control Messages)
  */
 export const MessageType = {
-  // draft-ietf-moq-transport-17 Section 9.4 (SETUP):
+  // draft-ietf-moq-transport-18 Section 10.3 (SETUP):
   // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
-  // draft-ietf-moq-transport-17 Section 4
+  // draft-ietf-moq-transport-18 Section 4
   SETUP: 0x2f00,
 
   // セッション
@@ -41,12 +41,12 @@ export const MessageType = {
   NAMESPACE: 0x08,
   NAMESPACE_DONE: 0x0e,
   /**
-   * PUBLISH_BLOCKED (Section 9.21 PUBLISH_BLOCKED)
+   * PUBLISH_BLOCKED (Section 10.20 PUBLISH_BLOCKED)
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * Publisher が新しい Request ID を割り当てられない場合に送信する。
    * SUBSCRIBE_NAMESPACE のフロー制御の一環。
-   * draft-ietf-moq-transport-17 Section 9.21
+   * draft-ietf-moq-transport-18 Section 10.20 (PUBLISH_BLOCKED)
    */
   PUBLISH_BLOCKED: 0x0f,
   /**
@@ -73,20 +73,20 @@ export const MessageType = {
 export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 
 /**
- * Setup Option Types (Section 9.4.1 Setup Options)
+ * Setup Option Types (Section 10.3.1 Setup Options)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * "Setup Parameters" を "Setup Options" にリネーム。
- * draft-ietf-moq-transport-17 Section 9.4.1
+ * draft-ietf-moq-transport-18 Section 10.3.1
  */
 export const SetupOptionType = {
   PATH: 0x01,
   /**
-   * AUTHORIZATION_TOKEN (Section 9.4.1.4 AUTHORIZATION TOKEN Setup Option)
+   * AUTHORIZATION_TOKEN (Section 10.3.1.4 AUTHORIZATION TOKEN Setup Option)
    *
-   * draft-ietf-moq-transport-17:
-   * SETUP で送出する認証トークン。値は Section 9.3.2 の Token 構造。
-   * SETUP では Alias Type DELETE / USE_ALIAS は禁止（Section 9.3.2）。
+   * draft-ietf-moq-transport-18:
+   * SETUP で送出する認証トークン。値は Section 10.2.2 の Token 構造。
+   * SETUP では Alias Type DELETE / USE_ALIAS は禁止（Section 10.2.2）。
    */
   AUTHORIZATION_TOKEN: 0x03,
   MAX_AUTH_TOKEN_CACHE_SIZE: 0x04,
@@ -97,71 +97,71 @@ export const SetupOptionType = {
 export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionType];
 
 /**
- * Message Parameter Types (Section 9.3 Message Parameters)
+ * Message Parameter Types (Section 10.2 Message Parameters)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
  * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
  *   DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
- *   Track Extensions に移動
- * draft-ietf-moq-transport-17 Section 11
+ *   Track Properties に移動
+ * draft-ietf-moq-transport-18 Section 10.2 (Message Parameters)
  *
  * 注意: SUBSCRIBE では DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
  * Message Parameter として使用される（Subscriber の希望値）。
  */
 export const MessageParameterType = {
   /**
-   * DELIVERY_TIMEOUT (Section 9.3.3 DELIVERY TIMEOUT Parameter)
+   * OBJECT_DELIVERY_TIMEOUT (Section 10.2.4 OBJECT_DELIVERY_TIMEOUT Parameter)
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
-   * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Extension として使用。
+   * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Property として使用。
    */
   DELIVERY_TIMEOUT: 0x02,
   /**
-   * AUTHORIZATION TOKEN (Section 9.3.2 AUTHORIZATION TOKEN Parameter)
+   * AUTHORIZATION TOKEN (Section 10.2.2 AUTHORIZATION TOKEN Parameter)
    */
   AUTHORIZATION_TOKEN: 0x03,
   /**
-   * RENDEZVOUS_TIMEOUT (Section 9.3.4 RENDEZVOUS TIMEOUT Parameter)
+   * RENDEZVOUS_TIMEOUT (Section 10.2.6 RENDEZVOUS TIMEOUT Parameter)
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * SUBSCRIBE メッセージで使用。
    * リレーが Publisher を待つ時間（ミリ秒）。
    * 0 は即時応答を要求。不在の場合のデフォルト値は 0。
-   * draft-ietf-moq-transport-17 Section 9.3.4
+   * draft-ietf-moq-transport-18 Section 10.2.6
    */
   RENDEZVOUS_TIMEOUT: 0x04,
   /**
-   * EXPIRES (Section 9.3.8 EXPIRES Parameter)
+   * EXPIRES (Section 10.2.10 EXPIRES Parameter)
    */
   EXPIRES: 0x08,
   /**
-   * LARGEST_OBJECT (Section 9.3.9 LARGEST OBJECT Parameter)
+   * LARGEST_OBJECT (Section 10.2.11 LARGEST OBJECT Parameter)
    */
   LARGEST_OBJECT: 0x09,
   /**
-   * FORWARD (Section 9.3.10 FORWARD Parameter)
+   * FORWARD (Section 10.2.12 FORWARD Parameter)
    */
   FORWARD: 0x10,
   /**
-   * SUBSCRIBER_PRIORITY (Section 9.3.5 SUBSCRIBER PRIORITY Parameter)
+   * SUBSCRIBER_PRIORITY (Section 10.2.7 SUBSCRIBER PRIORITY Parameter)
    */
   SUBSCRIBER_PRIORITY: 0x20,
   /**
-   * SUBSCRIPTION_FILTER (Section 9.3.7 SUBSCRIPTION FILTER Parameter)
+   * SUBSCRIPTION_FILTER (Section 10.2.9 SUBSCRIPTION FILTER Parameter)
    */
   SUBSCRIPTION_FILTER: 0x21,
   /**
-   * GROUP_ORDER (Section 9.3.6 GROUP ORDER Parameter)
+   * GROUP_ORDER (Section 10.2.8 GROUP ORDER Parameter)
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
-   * Publisher の GROUP_ORDER_PREFERENCE は Track Extension として使用。
-   * draft-ietf-moq-transport-17 Section 11
+   * Publisher の GROUP_ORDER_PREFERENCE は Track Property として使用。
+   * draft-ietf-moq-transport-18 Section 10.2 (Message Parameters)
    */
   GROUP_ORDER: 0x22,
   /**
-   * NEW_GROUP_REQUEST (Section 9.3.11 NEW GROUP REQUEST Parameter)
+   * NEW_GROUP_REQUEST (Section 10.2.13 NEW GROUP REQUEST Parameter)
    */
   NEW_GROUP_REQUEST: 0x32,
 } as const;
@@ -169,7 +169,7 @@ export const MessageParameterType = {
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
 
 /**
- * Group Order (Section 9.3.6 GROUP ORDER Parameter)
+ * Group Order (Section 10.2.8 GROUP ORDER Parameter)
  */
 export const GroupOrder = {
   ASCENDING: 0x01,
@@ -191,9 +191,9 @@ export const FilterType = {
 export type FilterType = (typeof FilterType)[keyof typeof FilterType];
 
 /**
- * Object Status (Section 10.2.1.1 Object Status)
+ * Object Status (Section 11.2.1.1 Object Status)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * - 0x0: Normal object
  * - 0x3: End of Group (EOG)
  *   Indicates that no objects with the specified Group ID and the Object ID
@@ -203,7 +203,7 @@ export type FilterType = (typeof FilterType)[keyof typeof FilterType];
  *   than the one specified exist.
  *
  * Note: 0x1 (Object Does Not Exist) was removed in draft-16.
- * draft-ietf-moq-transport-17 Section 10.2.1.1
+ * draft-ietf-moq-transport-18 Section 11.2.1.1
  */
 export const ObjectStatus = {
   NORMAL: 0x0,
@@ -214,9 +214,9 @@ export const ObjectStatus = {
 export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
 
 /**
- * PUBLISH_DONE Status Codes (Section 9.13 PUBLISH_DONE)
+ * PUBLISH_DONE Status Codes (Section 10.11 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * - 0x0: INTERNAL_ERROR
  * - 0x1: UNAUTHORIZED
  * - 0x2: TRACK_ENDED
@@ -247,11 +247,11 @@ export type PublishDoneStatusCode =
 /**
  * PUBLISH_DONE の Status Code がエラー（アプリに Error として通知すべき）かどうか
  *
- * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
  * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x6), UPDATE_FAILED (0x8),
  * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
  * TRACK_ENDED (0x2) 等はエラーとみなさない。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-17.html#section-9.13
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.11
  */
 export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
   switch (statusCode) {

@@ -1,6 +1,6 @@
 /**
  * MOQT 可変長整数エンコーディング テスト
- * draft-ietf-moq-transport-17 Section 1.4.1
+ * draft-ietf-moq-transport-18 Section 1.4.1
  */
 
 import { test, assert } from "vite-plus/test";

@@ -1,6 +1,6 @@
 /**
  * GREASE 値テスト
- * draft-ietf-moq-transport-17 Section 13 (Grease)
+ * draft-ietf-moq-transport-18 Section 14 (Grease)
  */
 
 import { test, assert } from "vite-plus/test";

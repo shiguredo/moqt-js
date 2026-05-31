@@ -8,16 +8,16 @@ Model: Opus 4.7
 draft-18 で session レベルの予約名前空間 (Session-Level Tracks and Namespaces) が定義された。
 
 > MOQT reserves all Track Namespace values whose first tuple field
-> starts with the ASCII characters "moq-" (case-sensitive) as
-> Session-Level Tracks and Namespaces.
+> begins with a period (0x2e, .).
 >
-> -- draft-ietf-moq-transport-18 §3.2.1
+> -- draft-ietf-moq-transport-18 §3.2.1 (Reserved Namespaces)
 
-> Reserved Namespaces can be used to define session control tracks that
-> carry metadata, configuration, or other session-level information
-> between endpoints.
+> MOQT defines the .session namespace ... in the first position of the Track
+> Namespace for session-level tracks and namespaces. Session-level
+> tracks and namespaces are managed by the MOQT implementation, not the
+> Application.
 >
-> -- draft-ietf-moq-transport-18 §3.2.2
+> -- draft-ietf-moq-transport-18 §3.2.2 (Session-Level Tracks and Namespaces)
 
 moqt-js は予約名前空間を認識し、ユーザーが予約プレフィクスを使用した場合に
 警告または拒否する。
@@ -26,9 +26,11 @@ moqt-js は予約名前空間を認識し、ユーザーが予約プレフィク
 
 ### 1. 予約名前空間プレフィクス定数を定義する (`src/message/parameter.ts`)
 
-- `RESERVED_NAMESPACE_PREFIX = "moq-"` 定数を追加する
+- `RESERVED_NAMESPACE_PREFIX = "."` 定数を追加する
 - `isReservedNamespace(namespace: TrackNamespace): boolean` ヘルパーを新設する
-  - 先頭タプルフィールドが `moq-` で始まるかどうかを case-sensitive で判定する
+  - 先頭タプルフィールドが `.` で始まるかどうかを判定する
+- `isSessionLevelNamespace(namespace: TrackNamespace): boolean` ヘルパーを新設する
+  - 先頭タプルフィールドが `.session` かどうかを判定する
 
 ### 2. namespace 使用時に予約チェックを追加する
 
@@ -38,19 +40,12 @@ moqt-js は予約名前空間を認識し、ユーザーが予約プレフィク
 
 ## 該当箇所
 
-| ファイル                             | 変更内容                                                                      |
-| ------------------------------------ | ----------------------------------------------------------------------------- |
-| `src/message/parameter.ts`           | `RESERVED_NAMESPACE_PREFIX` 定数と `isReservedNamespace()` ヘルパーを追加する |
-| `src/session.ts` (publish/subscribe) | 予約名前空間使用時の警告を追加する                                            |
+| ファイル                   | 変更内容                                           |
+| -------------------------- | -------------------------------------------------- |
+| `src/message/parameter.ts` | 予約名前空間定数とヘルパー関数を追加する           |
+| `src/session.ts`           | publish / subscribe 時に予約名前空間チェックを追加 |
 
-## テスト方針
+## テスト
 
-- `src/message/parameter.test.ts`: `isReservedNamespace()` の単体テストを追加する
-  - `"moq-"` で始まるフィールドが予約判定されること
-  - 異なる大文字/小文字が予約判定されないこと (case-sensitive)
-  - 通常の namespace が予約判定されないこと
-
-## 影響範囲
-
-- 新規定数とヘルパー関数の追加（後方互換あり）
-- 既存の namespace 使用に影響なし
+- `isReservedNamespace()` / `isSessionLevelNamespace()` の単体テストを追加する
+- `.session` 名前空間への publish / subscribe が拒否されることを確認する

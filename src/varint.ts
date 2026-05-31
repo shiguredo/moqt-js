@@ -2,7 +2,7 @@ import { IncompleteDataError, ProtocolViolationError } from "./error";
 
 /**
  * MOQT 可変長整数エンコーディング
- * draft-ietf-moq-transport-17 Section 1.4.1
+ * draft-ietf-moq-transport-18 Section 1.4.1
  *
  * Leading 1-bits の数でエンコード長を決定する。
  * 最初の 0 ビットの後の残りビットと後続バイトが値を表す。
@@ -15,12 +15,9 @@ import { IncompleteDataError, ProtocolViolationError } from "./error";
  * | 1110         | 4      | 28          | 0-268435455                |
  * | 11110        | 5      | 35          | 0-34359738367              |
  * | 111110       | 6      | 42          | 0-4398046511103            |
+ * | 1111110      | 7      | 49          | 0-562949953421311          |
  * | 11111110     | 8      | 56          | 0-72057594037927935        |
  * | 11111111     | 9      | 64          | 0-18446744073709551615     |
- *
- * 注意: 11111100 は無効なコードポイント。
- *
- * draft-ietf-moq-transport-17 Section 3.2
  */
 
 // 各長さの最大値
@@ -54,7 +51,7 @@ export function varintSize(value: number | bigint): number {
 /**
  * 整数を MOQT varint 形式にエンコードする
  *
- * draft-ietf-moq-transport-17 Section 1.4.1:
+ * draft-ietf-moq-transport-18 Section 1.4.1:
  * Leading 1-bits の数で長さを示し、最初の 0 ビット後の残りビットと
  * 後続バイトに値をネットワークバイトオーダーでエンコードする。
  */
@@ -138,7 +135,7 @@ export function encodeVarint(value: number | bigint): Uint8Array {
 /**
  * MOQT varint 形式からデコードする
  *
- * draft-ietf-moq-transport-17 Section 1.4.1:
+ * draft-ietf-moq-transport-18 Section 1.4.1:
  * Leading 1-bits の数から長さを決定し、値をデコードする。
  *
  * @returns [デコードされた値, 消費したバイト数]
