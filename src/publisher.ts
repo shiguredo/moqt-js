@@ -1,6 +1,6 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-17 Section 5.2 (Fetch State Management)
+ * draft-ietf-moq-transport-18 Section 5 (Publishing and Retrieving Tracks)
  */
 
 /**
@@ -21,7 +21,7 @@ export interface SendObjectParams {
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
+ * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
  */
 export interface SendDatagramParams {
   groupId: number;
@@ -42,7 +42,7 @@ export interface Publisher {
   readonly state: PublisherState;
   /**
    * Forward State
-   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+   * draft-ietf-moq-transport-18 Section 10.2.12 (FORWARD Parameter)
    *
    * PUBLISH_OK で受信した forwardState を返す。
    * - true (1): オブジェクトを転送する（Subscriber がいる）
@@ -63,14 +63,14 @@ export interface Publisher {
   sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
+   * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
-   * draft-ietf-moq-transport-17 Section 10
+   * draft-ietf-moq-transport-18 Section 10
    */
   sendDatagram(params: SendDatagramParams): void;
   done(): Promise<void>;
@@ -89,7 +89,7 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
-  // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+  // draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
 
@@ -166,7 +166,7 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Send a datagram on this track
-   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
+   * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
@@ -187,7 +187,7 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Internal: Set forward state (called by session)
-   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+   * draft-ietf-moq-transport-18 Section 10.2.12 (FORWARD Parameter)
    *
    * PUBLISH_OK または REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
    * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。

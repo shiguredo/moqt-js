@@ -8,60 +8,46 @@ Model: Opus 4.7
 draft-18 で Stream Reset エラーコードが再編成され、全リクエストストリームに対して統一されたコード体系が導入された。
 draft-17 での DataStreamErrorCode (Subgroup Stream 用のエラーコード) が拡張・再構成されている。
 
-> An endpoint MUST NOT send any of these error codes on a stream where
-> they are not applicable. An endpoint that receives a stream error
-> code where it is not applicable SHOULD close the session with a
-> PROTOCOL_VIOLATION.
+> INTERNAL_ERROR (0x0): An implementation specific error.
+> CANCELLED (0x1): The stream was cancelled by either endpoint.
+> DELIVERY_TIMEOUT (0x2): A delivery timeout (Section 8) was exceeded for this stream.
+> SESSION_CLOSED (0x3): The session is being closed.
+> GOING_AWAY (0x4): The endpoint is rejecting this request because it has sent or received a GOAWAY.
+> TOO_FAR_BEHIND (0x5): The corresponding subscription has exceeded the publisher's resource limits ...
+> UNKNOWN_OBJECT_STATUS (0x6): In response to a FETCH, the publisher is unable to determine the status ...
+> EXPIRED_AUTH_TOKEN (0x7): The authorization token for the request has expired.
+> EXCESSIVE_LOAD (0x9): The endpoint is overloaded and is resetting this stream.
+> MALFORMED_TRACK (0x12): A relay publisher detected that the track was malformed ...
 >
-> -- draft-ietf-moq-transport-18 §3.3.3
+> -- draft-ietf-moq-transport-18 §3.3.3 (Stream Reset Error Codes)
 
-> Publish Done Status Code:
-> 0x0: UNSUBSCRIBED
-> 0x1: INTERNAL_ERROR
-> 0x2: UNAUTHORIZED
-> 0x3: TRACK_ENDED
-> 0x4: PUBLICATION_ENDED
-> 0x5: TOO_FAR_BEHIND
-> 0x6: EXCESSIVE_LOAD
+> INTERNAL_ERROR (0x0): An implementation specific or generic error occurred.
+> UNAUTHORIZED (0x1): The subscriber is no longer authorized to subscribe to the given track.
+> TRACK_ENDED (0x2): The track is no longer being published.
+> SUBSCRIPTION_ENDED (0x3): The publisher reached the end of an associated subscription filter.
+> GOING_AWAY (0x4): The subscriber or publisher issued a GOAWAY message.
+> TOO_FAR_BEHIND (0x5): The publisher's queue of objects to be sent to the given subscriber exceeds its implementation defined limit.
+> EXPIRED (0x6): The publisher reached the timeout specified in SUBSCRIBE_OK.
+> UPDATE_FAILED (0x8): REQUEST_UPDATE failed on this subscription (see Section 10.9).
+> EXCESSIVE_LOAD (0x9): The publisher is overloaded and is terminating the subscription.
+> MALFORMED_TRACK (0x12): A relay publisher detected that the track was malformed ...
 >
-> -- draft-ietf-moq-transport-18 §10.11
+> -- draft-ietf-moq-transport-18 §10.11 (PUBLISH_DONE)
 
 ## 変更内容
 
-### 1. DataStreamErrorCode を更新する (`src/error.ts`)
-
 - draft-18 §3.3.3 の新しいエラーコード体系に合わせて `DataStreamErrorCode` を更新する
-- 新規追加されたコードがあれば追加する
-- PUBLISH_DONE の Status Code と STREAM_RESET の Error Code を分離する
-  - PUBLISH_DONE Status Code は `PublishDoneStatusCode` enum に保持する
-  - Stream Reset Error Code は `StreamResetErrorCode` enum を新設する（または `DataStreamErrorCode` を更新）
-
-### 2. RESET_STREAM / STOP_SENDING ハンドリングを更新する (`src/session.ts`)
-
-- `handleIncomingStream` でのリセット受信時に新しいコードを正しく解釈する
-- `cancelStreamQuiet` での STOP_SENDING 送信時に正しいコードを使用する
-- 全リクエストストリーム (SUBSCRIBE/FETCH/PUBLISH/NAMESPACE 等) で統一されたコード体系を使用する
-
-### 3. PUBLISH_DONE のステータスコードマッピングを確認する
-
+- `GOING_AWAY` (0x4), `UNKNOWN_OBJECT_STATUS` (0x6), `EXPIRED_AUTH_TOKEN` (0x7) を追加する
 - `PublishDoneStatusCode` が draft-18 §10.11 のコードと一致していることを確認する
-- 新規追加コード (`TOO_FAR_BEHIND`, `EXCESSIVE_LOAD`) が存在することを確認する
 
-## 該当箇所
+## 該当ファイル
 
-| ファイル                                    | 変更内容                                                                 |
-| ------------------------------------------- | ------------------------------------------------------------------------ |
-| `src/error.ts:17-35`                        | `DataStreamErrorCode` を draft-18 の Stream Reset Error Codes に更新する |
-| `src/error.ts:96-115`                       | `PublishDoneStatusCode` を draft-18 §10.11 と照合する                    |
-| `src/session.ts` (handleIncomingStream)     | ストリームリセット受信時のコードマッピングを更新する                     |
-| `src/session/stream.ts` (cancelStreamQuiet) | STOP_SENDING 送信時のコードマッピングを更新する                          |
+| ファイル              | 変更内容                                                    |
+| --------------------- | ----------------------------------------------------------- |
+| `src/error.ts:96-115` | `DataStreamErrorCode` を draft-18 §3.3.3 と照合する         |
+| `src/error.ts:78-89`  | `PublishDoneCode` を draft-18 §10.11 と照合する             |
+| `src/session.ts`      | Stream reset 時のエラーコード使用箇所を draft-18 に合わせる |
 
-## テスト方針
+## テスト
 
-- `src/error.test.ts`: 新しいエラーコード定数の値と対応する名称を検証する
-- ストリームリセットのシミュレーションテストで新しいコードが正しくハンドリングされることを検証する
-
-## 影響範囲
-
-- `DataStreamErrorCode` の値が変更される可能性がある（後方互換なし）
-- ストリームリセット受信時の挙動が新しいコード体系に合わせて更新される
+- `DataStreamErrorCode` / `PublishDoneCode` の値が draft-18 と一致することを確認する

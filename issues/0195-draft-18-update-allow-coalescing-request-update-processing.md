@@ -8,10 +8,10 @@ Model: Opus 4.7
 draft-18 で連続した REQUEST_UPDATE をサーバーが coalesce (集約) して処理することが
 明示的に許可された。
 
-> A publisher MAY coalesce multiple REQUEST_UPDATE messages, processing
-> only the most recent one.
+> A receiver of multiple REQUEST_UPDATE messages on the same stream MAY
+> coalesce their processing by applying only the cumulative result.
 >
-> -- draft-ietf-moq-transport-18 §10.9
+> -- draft-ietf-moq-transport-18 §10.9.1 (Updating Subscriptions)
 
 moqt-js はクライアント専用（送信側）のため、連続した REQUEST_UPDATE を送信しても
 サーバーが最新のものだけを処理する可能性があることを認識する必要がある。

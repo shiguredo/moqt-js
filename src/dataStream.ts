@@ -1,13 +1,13 @@
 /**
  * MOQT Data Stream
- * draft-ietf-moq-transport-17 Section 10 (Data Streams and Datagrams)
+ * draft-ietf-moq-transport-18 Section 11 (Data Streams and Datagrams)
  *
  * Data streams carry Objects via Subgroups or Datagrams.
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
  * Publisher は同じトラックのオブジェクトを Datagram と Stream の両方で送信できる。
- * draft-ietf-moq-transport-17 Section 10
+ * draft-ietf-moq-transport-18 Section 11
  */
 
 import { decodeVarint, encodeVarint } from "./varint";
@@ -17,7 +17,7 @@ import { ProtocolViolationError } from "./error";
 /**
  * Object Status の値を検証する
  *
- * draft-ietf-moq-transport-17 Section 10.2.1.1:
+ * draft-ietf-moq-transport-18 Section 11.2.1.1:
  * "Any other value SHOULD be treated as a protocol error and the session
  *  SHOULD be closed with a PROTOCOL_VIOLATION."
  */
@@ -34,13 +34,13 @@ function validateObjectStatus(status: number): void {
 }
 
 /**
- * Subgroup Header Type (Section 10.4.2)
+ * Subgroup Header Type (Section 11.4.2)
  *
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
  *
- * Table 6 from draft-ietf-moq-transport-17:
- * | Type | Subgroup ID Field | Subgroup ID Value | Extensions | End of Group | Priority |
+ * Section 11.4.2 (Subgroup Header) type matrix from draft-ietf-moq-transport-18:
+ * | Type | Subgroup ID Field | Subgroup ID Value | Properties | End of Group | Priority |
  * |------|-------------------|-------------------|------------|--------------|----------|
  * | 0x10 | No                | 0                 | No         | No           | Yes      |
  * | 0x11 | No                | 0                 | Yes        | No           | Yes      |
@@ -69,59 +69,59 @@ function validateObjectStatus(status: number): void {
  */
 export const SubgroupHeaderType = {
   // Priority Present = Yes, Contains End of Group = No
-  // Subgroup ID = 0, No Extensions (Table 6: Type 0x10)
+  // Subgroup ID = 0, No Properties (Section 11.4.2: Type 0x10)
   BASE: 0x10,
-  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x11)
+  // Subgroup ID = 0, Properties Present (Section 11.4.2: Type 0x11)
   BASE_EXT: 0x11,
-  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x12)
+  // Subgroup ID = First Object ID, No Properties (Section 11.4.2: Type 0x12)
   FIRST_OBJ: 0x12,
-  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x13)
+  // Subgroup ID = First Object ID, Properties Present (Section 11.4.2: Type 0x13)
   FIRST_OBJ_EXT: 0x13,
-  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x14)
+  // Subgroup ID Field Present, No Properties (Section 11.4.2: Type 0x14)
   EXPLICIT: 0x14,
-  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x15)
+  // Subgroup ID Field Present, Properties Present (Section 11.4.2: Type 0x15)
   EXPLICIT_EXT: 0x15,
 
   // Priority Present = Yes, Contains End of Group = Yes
-  // Subgroup ID = 0, No Extensions (Table 6: Type 0x18)
+  // Subgroup ID = 0, No Properties (Section 11.4.2: Type 0x18)
   BASE_END_GROUP: 0x18,
-  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x19)
+  // Subgroup ID = 0, Properties Present (Section 11.4.2: Type 0x19)
   BASE_EXT_END_GROUP: 0x19,
-  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x1A)
+  // Subgroup ID = First Object ID, No Properties (Section 11.4.2: Type 0x1A)
   FIRST_OBJ_END_GROUP: 0x1a,
-  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x1B)
+  // Subgroup ID = First Object ID, Properties Present (Section 11.4.2: Type 0x1B)
   FIRST_OBJ_EXT_END_GROUP: 0x1b,
-  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x1C)
+  // Subgroup ID Field Present, No Properties (Section 11.4.2: Type 0x1C)
   EXPLICIT_END_GROUP: 0x1c,
-  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x1D)
+  // Subgroup ID Field Present, Properties Present (Section 11.4.2: Type 0x1D)
   EXPLICIT_EXT_END_GROUP: 0x1d,
 
   // Priority Present = No, Contains End of Group = No
-  // Subgroup ID = 0, No Extensions (Table 6: Type 0x30)
+  // Subgroup ID = 0, No Properties (Section 11.4.2: Type 0x30)
   BASE_NO_PRIORITY: 0x30,
-  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x31)
+  // Subgroup ID = 0, Properties Present (Section 11.4.2: Type 0x31)
   BASE_EXT_NO_PRIORITY: 0x31,
-  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x32)
+  // Subgroup ID = First Object ID, No Properties (Section 11.4.2: Type 0x32)
   FIRST_OBJ_NO_PRIORITY: 0x32,
-  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x33)
+  // Subgroup ID = First Object ID, Properties Present (Section 11.4.2: Type 0x33)
   FIRST_OBJ_EXT_NO_PRIORITY: 0x33,
-  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x34)
+  // Subgroup ID Field Present, No Properties (Section 11.4.2: Type 0x34)
   EXPLICIT_NO_PRIORITY: 0x34,
-  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x35)
+  // Subgroup ID Field Present, Properties Present (Section 11.4.2: Type 0x35)
   EXPLICIT_EXT_NO_PRIORITY: 0x35,
 
   // Priority Present = No, Contains End of Group = Yes
-  // Subgroup ID = 0, No Extensions (Table 6: Type 0x38)
+  // Subgroup ID = 0, No Properties (Section 11.4.2: Type 0x38)
   BASE_END_GROUP_NO_PRIORITY: 0x38,
-  // Subgroup ID = 0, Extensions Present (Table 6: Type 0x39)
+  // Subgroup ID = 0, Properties Present (Section 11.4.2: Type 0x39)
   BASE_EXT_END_GROUP_NO_PRIORITY: 0x39,
-  // Subgroup ID = First Object ID, No Extensions (Table 6: Type 0x3A)
+  // Subgroup ID = First Object ID, No Properties (Section 11.4.2: Type 0x3A)
   FIRST_OBJ_END_GROUP_NO_PRIORITY: 0x3a,
-  // Subgroup ID = First Object ID, Extensions Present (Table 6: Type 0x3B)
+  // Subgroup ID = First Object ID, Properties Present (Section 11.4.2: Type 0x3B)
   FIRST_OBJ_EXT_END_GROUP_NO_PRIORITY: 0x3b,
-  // Subgroup ID Field Present, No Extensions (Table 6: Type 0x3C)
+  // Subgroup ID Field Present, No Properties (Section 11.4.2: Type 0x3C)
   EXPLICIT_END_GROUP_NO_PRIORITY: 0x3c,
-  // Subgroup ID Field Present, Extensions Present (Table 6: Type 0x3D)
+  // Subgroup ID Field Present, Properties Present (Section 11.4.2: Type 0x3D)
   EXPLICIT_EXT_END_GROUP_NO_PRIORITY: 0x3d,
 } as const;
 
@@ -151,7 +151,7 @@ export interface SubgroupHeader {
 
 /**
  * Check if subgroup header type has explicit Subgroup ID field
- * draft-ietf-moq-transport-17 Section 10.4.2 Table 6
+ * draft-ietf-moq-transport-18 Section 11.4.2
  */
 function hasSubgroupIdField(headerType: number): boolean {
   const lowNibble = headerType & 0x0f;
@@ -160,7 +160,7 @@ function hasSubgroupIdField(headerType: number): boolean {
 
 /**
  * Check if subgroup header type has Priority Present
- * draft-ietf-moq-transport-17 Section 10.4.2 Table 6
+ * draft-ietf-moq-transport-18 Section 11.4.2
  *
  * Types 0x10-0x1D have Priority Present = Yes
  * Types 0x30-0x3D have Priority Present = No
@@ -171,7 +171,7 @@ function hasPriorityPresent(headerType: number): boolean {
 
 /**
  * Check if subgroup header type contains End of Group
- * draft-ietf-moq-transport-17 Section 10.4.2 Table 6
+ * draft-ietf-moq-transport-18 Section 11.4.2
  *
  * Types with bit 3 set (0x08) contain End of Group:
  * 0x18-0x1D (Priority Present) and 0x38-0x3D (No Priority)
@@ -183,7 +183,7 @@ export function hasContainsEndOfGroup(headerType: number): boolean {
 
 /**
  * Encode a Subgroup Header
- * draft-ietf-moq-transport-17 Section 10.4.2 Figure 28
+ * draft-ietf-moq-transport-18 Section 11.4.2 Figure 24
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -230,7 +230,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   let subgroupId: bigint | undefined;
   const typeNum = Number(type);
 
-  // draft-ietf-moq-transport-17 Section 10.4.2:
+  // draft-ietf-moq-transport-18 Section 11.4.2:
   // 不正なタイプ値を検証する
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約済み
   // 0b00X1XXXX の形式でないタイプ値は不正
@@ -247,7 +247,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   }
 
   // タイプに基づいて Subgroup ID フィールドの有無を判定
-  // draft-ietf-moq-transport-17 Section 10.4.2 Table 6:
+  // draft-ietf-moq-transport-18 Section 11.4.2:
   // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D: Subgroup ID Field Present
   // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39: Subgroup ID = 0
   // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B: Subgroup ID = First Object ID (no field)
@@ -265,7 +265,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // Subgroup ID = First Object ID (最初のオブジェクト読み取り時に設定)
 
   // Publisher Priority (8 ビット)
-  // draft-ietf-moq-transport-17 Section 10.4.2 Table 6
+  // draft-ietf-moq-transport-18 Section 11.4.2
   let publisherPriority: number | undefined;
   if (hasPriorityPresent(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
@@ -285,9 +285,9 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 }
 
 /**
- * Check if a subgroup header type has Extensions Present
- * draft-ietf-moq-transport-17 Section 10.4.2 Table 6:
- * Types with bit 0 set (odd types) have Extensions Present
+ * Check if a subgroup header type has Properties Present
+ * draft-ietf-moq-transport-18 Section 11.4.2:
+ * Types with bit 0 set (odd types) have Properties Present
  */
 export function hasPropertiesPresent(headerType: number): boolean {
   return (headerType & 0x01) === 0x01;
@@ -295,10 +295,10 @@ export function hasPropertiesPresent(headerType: number): boolean {
 
 /**
  * Encode Object fields for Subgroup stream
- * draft-ietf-moq-transport-17 Section 10.4.2 Figure 29:
+ * draft-ietf-moq-transport-18 Section 11.4.2 Figure 25:
  * {
  *   Object ID Delta (i),
- *   [Extensions (..),]          <-- Only if header type has Extensions Present
+ *   [Properties (..),]          <-- Only if header type has Properties Present
  *   Object Payload Length (i),
  *   [Object Status (i),]        <-- Only if payload length is 0
  *   [Object Payload (..),]
@@ -308,7 +308,7 @@ export function hasPropertiesPresent(headerType: number): boolean {
  * @param payloadLength - Length of payload
  * @param headerType - Subgroup header type to determine if properties are present
  * @param status - Object status (only encoded if payload length is 0)
- * @param properties - Extensions data (only encoded if header type has Extensions Present)
+ * @param properties - Properties data (only encoded if header type has Properties Present)
  */
 export function encodeObjectFields(
   objectIdDelta: bigint,
@@ -322,11 +322,11 @@ export function encodeObjectFields(
   // Object ID Delta
   parts.push(encodeVarint(objectIdDelta));
 
-  // 拡張 (ヘッダータイプが Extensions Present の場合のみ)
+  // 拡張 (ヘッダータイプが Properties Present の場合のみ)
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-17 Section 10.2.1.2:
+    // draft-ietf-moq-transport-18 Section 11.2.1.2:
     // "If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
@@ -343,7 +343,7 @@ export function encodeObjectFields(
   parts.push(encodeVarint(payloadLength));
 
   // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-17 Section 10.2.1.1:
+  // draft-ietf-moq-transport-18 Section 11.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   if (payloadLength === 0n) {
     parts.push(encodeVarint(status));
@@ -372,7 +372,7 @@ export interface DecodedObjectFields {
 
 /**
  * Decode Object fields from Subgroup stream
- * draft-ietf-moq-transport-17 Section 10.4.2 Figure 29
+ * draft-ietf-moq-transport-18 Section 11.4.2 Figure 25
  *
  * @param data - Data buffer
  * @param headerType - Subgroup header type to determine if properties are present
@@ -389,7 +389,7 @@ export function decodeObjectFields(
   const [objectIdDelta, objectIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += objectIdConsumed;
 
-  // 拡張 (ヘッダータイプが Extensions Present の場合のみ)
+  // 拡張 (ヘッダータイプが Properties Present の場合のみ)
   let propertiesLength = 0;
   let properties = new Uint8Array(0);
   if (hasPropertiesPresent(headerType)) {
@@ -406,7 +406,7 @@ export function decodeObjectFields(
   totalConsumed += payloadLenConsumed;
 
   // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-17 Section 10.2.1.1:
+  // draft-ietf-moq-transport-18 Section 11.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   let status: ObjectStatus = ObjectStatus.NORMAL;
   if (payloadLength === 0n) {
@@ -415,7 +415,7 @@ export function decodeObjectFields(
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-17 Section 10.2.1.2:
+    // draft-ietf-moq-transport-18 Section 11.2.1.2:
     // "Any Object with status Normal can have extension headers.
     // If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
@@ -459,10 +459,10 @@ export function createObject(
 }
 
 /**
- * Object Datagram Type (Section 10.3.1)
+ * Object Datagram Type (Section 11.3.1)
  *
- * Table 5 from draft-ietf-moq-transport-17:
- * | Type | End Of Group | Extensions | Object ID | Priority | Status/Payload |
+ * Section 11.3.1 (Object Datagram) / Figure 23 from draft-ietf-moq-transport-18:
+ * | Type | End Of Group | Properties | Object ID | Priority | Status/Payload |
  * |------|--------------|------------|-----------|----------|----------------|
  * | 0x00 | No           | No         | Yes       | Yes      | Payload        |
  * | 0x01 | No           | Yes        | Yes       | Yes      | Payload        |
@@ -490,44 +490,44 @@ export function createObject(
  * | 0x2D | No           | Yes        | No        | No       | Status         |
  */
 export const DatagramType = {
-  // ペイロードタイプ、Object ID あり、Priority Present (Table 5: 0x00-0x03)
+  // ペイロードタイプ、Object ID あり、Priority Present (Section 11.3.1: 0x00-0x03)
   PAYLOAD_OBJ: 0x00,
   PAYLOAD_OBJ_EXT: 0x01,
   PAYLOAD_OBJ_END_GROUP: 0x02,
   PAYLOAD_OBJ_EXT_END_GROUP: 0x03,
 
-  // ペイロードタイプ、Object ID なし (Object ID = 1)、Priority Present (Table 5: 0x04-0x07)
+  // ペイロードタイプ、Object ID なし (Object ID = 1)、Priority Present (Section 11.3.1: 0x04-0x07)
   PAYLOAD_NO_OBJ: 0x04,
   PAYLOAD_NO_OBJ_EXT: 0x05,
   PAYLOAD_NO_OBJ_END_GROUP: 0x06,
   PAYLOAD_NO_OBJ_EXT_END_GROUP: 0x07,
 
-  // ペイロードタイプ、Object ID あり、Priority なし (Table 5: 0x08-0x0B)
+  // ペイロードタイプ、Object ID あり、Priority なし (Section 11.3.1: 0x08-0x0B)
   PAYLOAD_OBJ_NO_PRI: 0x08,
   PAYLOAD_OBJ_EXT_NO_PRI: 0x09,
   PAYLOAD_OBJ_END_GROUP_NO_PRI: 0x0a,
   PAYLOAD_OBJ_EXT_END_GROUP_NO_PRI: 0x0b,
 
-  // ペイロードタイプ、Object ID なし、Priority なし (Table 5: 0x0C-0x0F)
+  // ペイロードタイプ、Object ID なし、Priority なし (Section 11.3.1: 0x0C-0x0F)
   PAYLOAD_NO_OBJ_NO_PRI: 0x0c,
   PAYLOAD_NO_OBJ_EXT_NO_PRI: 0x0d,
   PAYLOAD_NO_OBJ_END_GROUP_NO_PRI: 0x0e,
   PAYLOAD_NO_OBJ_EXT_END_GROUP_NO_PRI: 0x0f,
 
-  // ステータスタイプ、Object ID あり、Priority Present (Table 5: 0x20-0x21)
+  // ステータスタイプ、Object ID あり、Priority Present (Section 11.3.1: 0x20-0x21)
   STATUS_OBJ: 0x20,
   STATUS_OBJ_EXT: 0x21,
 
-  // ステータスタイプ、Object ID なし、Priority Present (Table 5: 0x24-0x25)
+  // ステータスタイプ、Object ID なし、Priority Present (Section 11.3.1: 0x24-0x25)
   STATUS_NO_OBJ: 0x24,
   STATUS_NO_OBJ_EXT: 0x25,
 
-  // ステータスタイプ、Object ID あり、Priority なし (Table 5: 0x28-0x29)
+  // ステータスタイプ、Object ID あり、Priority なし (Section 11.3.1: 0x28-0x29)
   STATUS_OBJ_NO_PRI: 0x28,
   STATUS_OBJ_EXT_NO_PRI: 0x29,
 
-  // ステータスタイプ、Object ID なし (Object ID = 1)、Priority なし (Table 5: 0x2C-0x2D)
-  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // ステータスタイプ、Object ID なし (Object ID = 1)、Priority なし (Section 11.3.1: 0x2C-0x2D)
+  // draft-ietf-moq-transport-18 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
   STATUS_NO_OBJ_NO_PRI: 0x2c,
@@ -553,7 +553,7 @@ export interface ObjectDatagram {
 /**
  * Object ID フィールドの有無を判定する
  *
- * draft-ietf-moq-transport-17 Section 10.3.1:
+ * draft-ietf-moq-transport-18 Section 11.3.1:
  * "The ZERO_OBJECT_ID bit (0x04) indicates when the Object ID field is present.
  * When set to 1, the Object ID field is omitted and the Object ID is 1.
  * When set to 0, the Object ID field is present."
@@ -565,7 +565,7 @@ function datagramHasObjectId(type: number): boolean {
 }
 
 /**
- * Check if datagram type has Extensions field
+ * Check if datagram type has Properties field
  */
 function datagramHasExtensions(type: number): boolean {
   return (type & 0x01) === 1;
@@ -581,30 +581,30 @@ function datagramIsStatusType(type: number): boolean {
 /**
  * Check if datagram type has Priority Present
  *
- * draft-ietf-moq-transport-17 Section 10.3.1 Table 5:
+ * draft-ietf-moq-transport-18 Section 11.3.1 (Object Datagram):
  * Types 0x00-0x07 and 0x20-0x25 have Priority Present = Yes
  * Types 0x08-0x0F and 0x28-0x2D have Priority Present = No
  */
 function datagramHasPriority(type: number): boolean {
-  // タイプ 0x00-0x07 は Priority あり (Table 5)
+  // タイプ 0x00-0x07 は Priority あり (Section 11.3.1)
   if (type <= 0x07) {
     return true;
   }
-  // タイプ 0x08-0x0F は Priority なし (Table 5)
+  // タイプ 0x08-0x0F は Priority なし (Section 11.3.1)
   if (type >= 0x08 && type <= 0x0f) {
     return false;
   }
-  // タイプ 0x20-0x25 は Priority あり (Table 5)
+  // タイプ 0x20-0x25 は Priority あり (Section 11.3.1)
   if (type >= 0x20 && type <= 0x25) {
     return true;
   }
-  // タイプ 0x28-0x2D は Priority なし (Table 5)
+  // タイプ 0x28-0x2D は Priority なし (Section 11.3.1)
   return false;
 }
 
 /**
  * Encode an Object Datagram
- * draft-ietf-moq-transport-17 Section 10.3.1
+ * draft-ietf-moq-transport-18 Section 11.3.1
  */
 export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -619,7 +619,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     throw new Error(`objectId must be 1 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
   }
 
-  // Priority Present の有無を判定 (Table 5: 0x08-0x0F, 0x28-0x2D は Priority なし)
+  // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
   if (datagramHasPriority(datagram.type)) {
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
@@ -627,7 +627,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   if (datagramHasExtensions(datagram.type)) {
     const extLen = datagram.properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-17 Section 10.2.1.2:
+    // draft-ietf-moq-transport-18 Section 11.2.1.2:
     // Non-Normal status objects must not have extension headers
     if (
       datagramIsStatusType(datagram.type) &&
@@ -661,7 +661,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
 /**
  * Decode an Object Datagram
- * draft-ietf-moq-transport-17 Section 10.3.1
+ * draft-ietf-moq-transport-18 Section 11.3.1
  */
 export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
   let totalConsumed = 0;
@@ -671,7 +671,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
 
   const typeNum = Number(type);
 
-  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // draft-ietf-moq-transport-18 Section 11.3.1:
   // 不正なタイプ値を検証する
   // 0b00X0XXXX の形式でないタイプ値は不正
   if ((typeNum & 0x10) !== 0 || typeNum > 0x2f) {
@@ -699,7 +699,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     totalConsumed += oidConsumed;
   }
 
-  // Priority Present の有無を判定 (Table 5: 0x08-0x0F, 0x28-0x2D は Priority なし)
+  // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
   let publisherPriority = 0;
   if (datagramHasPriority(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
@@ -713,7 +713,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
 
-    // draft-ietf-moq-transport-17 Section 10.3.1:
+    // draft-ietf-moq-transport-18 Section 11.3.1:
     // "If an endpoint receives a datagram with the PROPERTIES bit set and
     //  an Properties Length of 0, it MUST close the session with a
     //  PROTOCOL_VIOLATION."
@@ -736,7 +736,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-17 Section 10.2.1.2:
+    // draft-ietf-moq-transport-18 Section 11.2.1.2:
     // "Any Object with status Normal can have extension headers.
     // If an endpoint receives extension headers on Objects with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
@@ -764,7 +764,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
 }
 
 /**
- * Fetch Header (Section 10.4.4)
+ * Fetch Header (Section 11.4.4)
  *
  * FETCH_HEADER {
  *   Type (i) = 0x05,
@@ -828,24 +828,24 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
 }
 
 /**
- * Serialization Flags for Fetch Object (Section 10.4.4)
+ * Serialization Flags for Fetch Object (Section 11.4.4)
  *
- * Table 7: Subgroup ID encoding (bits 0-1)
+ * Section 11.4.4.1 Table 8: Subgroup ID encoding (bits 0-1)
  * | Bitmask (flags & 0x03) | Meaning |
  * | 0x00 | Subgroup ID is zero |
  * | 0x01 | Subgroup ID is prior Object's Subgroup ID |
  * | 0x02 | Subgroup ID is prior Object's Subgroup ID + 1 |
  * | 0x03 | Subgroup ID field is present |
  *
- * Table 8: Additional flags
+ * Section 11.4.4.1 Table 9: Additional flags
  * | Bitmask | Condition if set |
  * | 0x04 | Object ID field is present (else prior + 1) |
  * | 0x08 | Group ID field is present (else prior Group ID) |
  * | 0x10 | Priority field is present (else prior Priority) |
- * | 0x20 | Extensions field is present |
+ * | 0x20 | Properties field is present |
  * | 0x40 | Datagram: Subgroup ID の 2 ビットを無視 |
  *
- * End of Range (Section 10.4.4.2):
+ * End of Range (Section 11.4.4.2):
  * | 0x8C  | End of Non-Existent Range |
  * | 0x10C | End of Unknown Range      |
  */
@@ -869,31 +869,31 @@ export const FetchSerializationFlags = {
   DATAGRAM: 0x40,
 
   /**
-   * End of Non-Existent Range (Section 10.4.4.2)
+   * End of Non-Existent Range (Section 11.4.4.2)
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * 指定した Location までの Object が存在しないことを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-17 Section 10.4.4.2
+   * draft-ietf-moq-transport-18 Section 11.4.4.2
    */
   END_OF_NON_EXISTENT_RANGE: 0x8c,
   /**
-   * End of Unknown Range (Section 10.4.4.2)
+   * End of Unknown Range (Section 11.4.4.2)
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * 指定した Location までの Object のステータスが不明であることを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-17 Section 10.4.4.2
+   * draft-ietf-moq-transport-18 Section 11.4.4.2
    */
   END_OF_UNKNOWN_RANGE: 0x10c,
 } as const;
 
 /**
- * Fetch Object Fields (Figure 31 in Section 10.4.4)
+ * Fetch Object Fields (Figure 27 in Section 11.4.4)
  */
-// draft-ietf-moq-transport-17 Section 10.2.1.1:
+// draft-ietf-moq-transport-18 Section 11.2.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 export interface FetchObjectFields {
@@ -910,7 +910,7 @@ export interface FetchObjectFields {
 /**
  * End of Range の種別
  *
- * draft-ietf-moq-transport-17 Section 10.4.4.2:
+ * draft-ietf-moq-transport-18 Section 11.4.4.2:
  * FETCH レスポンス内で Object が存在しない/不明な範囲を示す。
  */
 export type EndOfRangeType = "non_existent" | "unknown";
@@ -926,9 +926,9 @@ export interface DecodedFetchObject {
   properties?: Uint8Array;
   payloadLength: bigint;
   /**
-   * End of Range indicator (Section 10.4.4.2)
+   * End of Range indicator (Section 11.4.4.2)
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * 設定されている場合、この Object は実際のデータではなく
    * 指定した Location までの範囲を示す End of Range indicator。
    */
@@ -947,7 +947,7 @@ export interface FetchObjectContext {
 
 /**
  * Encode Fetch Object Fields
- * draft-ietf-moq-transport-17 Section 10.4.4 Figure 31
+ * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -959,7 +959,7 @@ export function encodeFetchObjectFields(
   const parts: Uint8Array[] = [];
 
   // Serialization Flags (varint)
-  // draft-ietf-moq-transport-17: vi64 としてエンコード
+  // draft-ietf-moq-transport-18: vi64 としてエンコード
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
@@ -1031,7 +1031,7 @@ export function encodeFetchObjectFields(
   // Object Payload Length
   parts.push(encodeVarint(fields.payloadLength));
 
-  // draft-ietf-moq-transport-17 Section 10.2.1.1:
+  // draft-ietf-moq-transport-18 Section 11.2.1.1:
   // "The Object Status is a field that is only present in objects that are
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status を含めない
@@ -1053,7 +1053,7 @@ export function encodeFetchObjectFields(
 
 /**
  * Decode Fetch Object Fields
- * draft-ietf-moq-transport-17 Section 10.4.4 Figure 27
+ * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
  *
  * @param data - Data buffer
  * @param context - Context with prior object's values (required after first object)
@@ -1069,12 +1069,12 @@ export function decodeFetchObjectFields(
   let totalConsumed = 0;
 
   // Serialization Flags (varint)
-  // draft-ietf-moq-transport-17: vi64 としてエンコードされる
+  // draft-ietf-moq-transport-18: vi64 としてエンコードされる
   const [flagsRaw, flagsConsumed] = decodeVarint(data, offset + totalConsumed);
   const flags = Number(flagsRaw);
   totalConsumed += flagsConsumed;
 
-  // End of Range チェック (Section 10.4.4.2)
+  // End of Range チェック (Section 11.4.4.2)
   if (
     flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
     flags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE
@@ -1117,7 +1117,7 @@ export function decodeFetchObjectFields(
     ];
   }
 
-  // draft-ietf-moq-transport-17 §10.4.4 Table 6:
+  // draft-ietf-moq-transport-18 Section 11.4.4 Table 7:
   // 「When less than 128, the bits represent flags described below.
   //  The following additional values are defined: 0x8C (End of Non-Existent Range),
   //  0x10C (End of Unknown Range). Any other value is a PROTOCOL_VIOLATION.」
@@ -1190,10 +1190,10 @@ export function decodeFetchObjectFields(
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
 
-    // draft-ietf-moq-transport-17:
+    // draft-ietf-moq-transport-18:
     // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
     // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
-    // draft-ietf-moq-transport-17 Section 10.4.4
+    // draft-ietf-moq-transport-18 Section 11.4.4
     if (context !== null && subgroupId === context.subgroupId) {
       if (publisherPriority !== context.publisherPriority) {
         throw new ProtocolViolationError(
@@ -1209,7 +1209,7 @@ export function decodeFetchObjectFields(
     publisherPriority = context.publisherPriority;
   }
 
-  // Extensions
+  // Properties
   let properties: Uint8Array | undefined;
   if (flags & FetchSerializationFlags.PROPERTIES_PRESENT) {
     const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -1225,7 +1225,7 @@ export function decodeFetchObjectFields(
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
 
-  // draft-ietf-moq-transport-17 Section 10.2.1.1:
+  // draft-ietf-moq-transport-18 Section 11.2.1.1:
   // "The Object Status is a field that is only present in objects that are
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status は存在しない
@@ -1306,7 +1306,7 @@ export function createFetchObjectFlags(
     flags |= FetchSerializationFlags.PRIORITY_PRESENT;
   }
 
-  // Extensions
+  // Properties
   if (hasExtensions) {
     flags |= FetchSerializationFlags.PROPERTIES_PRESENT;
   }

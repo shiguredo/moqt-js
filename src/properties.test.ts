@@ -1,6 +1,6 @@
 /**
- * MOQT Extension Headers Unit Tests
- * draft-ietf-moq-transport-17 Section 11 (MOQT Properties)
+ * MOQT Properties Unit Tests
+ * draft-ietf-moq-transport-18 Section 12 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -49,7 +49,7 @@ test("encodeProperty: 奇数 ID で data がない場合はエラー", () => {
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * delta encoding を使用するため、ID は前の ID からの差分としてエンコードされる。
  */
 test("encodeProperties: 複数の拡張を delta encoding でエンコードして結合", () => {
@@ -199,8 +199,8 @@ test("encodeImmutableProperties と decodeImmutableProperties のラウンドト
   assert.equal(decoded.extensions[2].value, 200n);
 });
 
-test("parseProperties: Immutable Extensions を正しくパース", () => {
-  // Immutable Extensions のみ
+test("parseProperties: Immutable Properties を正しくパース", () => {
+  // Immutable Properties のみ
   const immutable = encodeImmutableProperties({
     extensions: [
       { id: 0x02n, value: 42n },
@@ -219,14 +219,14 @@ test("parseProperties: Immutable Extensions を正しくパース", () => {
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
-test("parseProperties: Immutable Extensions と他の拡張の組み合わせ", () => {
-  // Immutable Extensions の内部データ
+test("parseProperties: Immutable Properties と他の拡張の組み合わせ", () => {
+  // Immutable Properties の内部データ
   const innerExtensions = encodeProperties([{ id: 0x10n, value: 999n }]);
 
-  // Prior Group ID Gap (0x3c) + Immutable Extensions (0x0b) + Prior Object ID Gap (0x3e)
+  // Prior Group ID Gap (0x3c) + Immutable Properties (0x0b) + Prior Object ID Gap (0x3e)
   // encodeProperties は ID の昇順でソートするため、
   // 順序は IMMUTABLE_PROPERTIES (0x0b), PRIOR_GROUP_ID_GAP (0x3c), PRIOR_OBJECT_ID_GAP (0x3e)
   const headers: Property[] = [
@@ -246,24 +246,24 @@ test("parseProperties: Immutable Extensions と他の拡張の組み合わせ", 
   assert.equal(parsed.immutableProperties?.extensions[0].value, 999n);
 });
 
-test("parseProperties: Immutable Extensions が unknownProperties に含まれない", () => {
+test("parseProperties: Immutable Properties が unknownProperties に含まれない", () => {
   const immutable = encodeImmutableProperties({
     extensions: [{ id: 0x02n, value: 1n }],
   });
 
   const parsed = parseProperties(immutable);
 
-  // Immutable Extensions は unknownProperties に含まれない
+  // Immutable Properties は unknownProperties に含まれない
   assert.isUndefined(parsed.unknownProperties);
   assert.isDefined(parsed.immutableProperties);
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
-test("parseProperties: 全ての MOQT Core Extensions を正しくパース", () => {
-  // Immutable Extensions の内部データ
+test("parseProperties: 全ての MOQT Core Properties を正しくパース", () => {
+  // Immutable Properties の内部データ
   const innerExtensions = encodeProperties([
     { id: 0x100n, value: 500n },
     { id: 0x101n, data: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) },
@@ -286,7 +286,7 @@ test("parseProperties: 全ての MOQT Core Extensions を正しくパース", ()
   // Prior Object ID Gap
   assert.equal(parsed.priorObjectIdGap?.gap, 20n);
 
-  // Immutable Extensions
+  // Immutable Properties
   assert.isDefined(parsed.immutableProperties);
   assert.equal(parsed.immutableProperties?.extensions.length, 2);
   assert.equal(parsed.immutableProperties?.extensions[0].id, 0x100n);
@@ -297,11 +297,11 @@ test("parseProperties: 全ての MOQT Core Extensions を正しくパース", ()
     new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
   );
 
-  // Unknown Extensions は空
+  // Unknown Properties は空
   assert.isUndefined(parsed.unknownProperties);
 });
 
-// draft-ietf-moq-transport-17 §11.3 / §11.4 / §11.5
+// draft-ietf-moq-transport-18 §12.4 / §12.5 / §12.6
 // Track Property の値域が MUST レベルで検証されない不具合の修正 (#0119)
 test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY は 0-255 を許容する", () => {
   validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 0n);
@@ -367,14 +367,14 @@ test("parseProperties: 不正な DEFAULT_PUBLISHER_PRIORITY を含むデータ�
 });
 
 test("decodeImmutableProperties: 内部に不正な Track Property を含むと ProtocolViolationError", () => {
-  // Immutable Extensions の内部に DYNAMIC_GROUPS=2 (不正) をネスト
+  // Immutable Properties の内部に DYNAMIC_GROUPS=2 (不正) をネスト
   const immutable = encodeImmutableProperties({
     extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 2n }],
   });
   assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-17 §11.6 / §11.7 / §11.8 (#0122)
+// draft-ietf-moq-transport-18 §12.7 / §12.8 / §12.9 (#0122)
 // IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止と PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP の
 // 「Object 当たり 1 つだけ」MUST を検証する
 test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと MalformedTrackError", () => {
@@ -414,7 +414,7 @@ test("parseProperties: Object 内に PRIOR_OBJECT_ID_GAP が 2 回現れると M
   assert.throws(() => parseProperties(encoded), MalformedTrackError);
 });
 
-// draft-ietf-moq-transport-17 §9.3.11 / §11.5
+// draft-ietf-moq-transport-18 §10.2.13 / §12.6
 test("supportsDynamicGroups: DYNAMIC_GROUPS=1 が mutable 側にあれば true", () => {
   const properties: Property[] = [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }];
   assert.equal(supportsDynamicGroups(properties), true);

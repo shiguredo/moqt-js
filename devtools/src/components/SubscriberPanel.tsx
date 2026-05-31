@@ -271,7 +271,7 @@ export function SubscriberPanel({
               title={
                 instance.dynamicGroupsSupported.value
                   ? "NEW_GROUP_REQUEST を送信して新しいキーフレームを要求する"
-                  : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-17 §9.3.11)"
+                  : "Track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-18 §10.2.13)"
               }
             >
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -21,17 +21,17 @@ Model: Opus 4.7
 
 ## 一次資料の引用
 
-draft-ietf-moq-transport-17 §9.3.3 (DELIVERY TIMEOUT Parameter) は relay に対する規定であり、
-クライアント側 Publisher への対応する規定は §10.4.3 にある:
+draft-ietf-moq-transport-18 §10.2.4 (OBJECT_DELIVERY_TIMEOUT Parameter) は relay に対する規定であり、
+クライアント側 Publisher への対応する規定は §11.4.3 にある:
 
 > A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD
 > NOT attempt to open a new stream to deliver additional Objects in
 > that Subgroup.
 
-§10.4.3 には以下の補足もある:
+§11.4.3 には以下の補足もある:
 
-> RESET_STREAM and STOP_SENDING on SUBSCRIBE data streams have no
-> impact on other Subgroups in the Group or the subscription.
+> Resets and STOP_SENDING on SUBSCRIBE data streams have no impact on
+> other Subgroups in the Group or the subscription.
 
 規定の強制力は SHOULD NOT である。RFC 2119 において SHOULD NOT は「特定の状況下では
 違反が許容される」推奨禁止事項であるが、moqt-js はクライアント側 Publisher であり、
@@ -42,13 +42,13 @@ relay のように別 subscriber 向けに再送する立場でもないため�
 
 ## 該当コード
 
-`src/session.ts:828-838`（TODO コメント内の Section 10.4.2 は誤りであり、正しくは §10.4.3）:
+`src/session.ts:828-838`（TODO コメント内の Section 11.4.2 は誤りであり、正しくは §11.4.3）:
 
 ```typescript
 // TODO: Closed Subgroup Tracking
-// draft-ietf-moq-transport-17:
+// draft-ietf-moq-transport-18:
 // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
-// draft-ietf-moq-transport-17 Section 10.4.2
+// draft-ietf-moq-transport-18 Section 11.4.3 (Closing Subgroup Streams)
 //
 // 現在の実装では 1 Group = 1 Subgroup = 1 Stream モデルを採用しているため、
 // グループが終了すると自然と新しいストリームを作成する。

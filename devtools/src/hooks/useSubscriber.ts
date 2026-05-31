@@ -20,7 +20,7 @@ import { batch } from "@preact/signals";
 import type { RefObject } from "preact";
 
 // 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
-// draft-ietf-moq-transport-17 §2.2 (Subgroups) では Subgroup ストリーム間の配送順は
+// draft-ietf-moq-transport-18 §2.2 (Subgroups) では Subgroup ストリーム間の配送順は
 // 保証されない (個々のストリームは in-order だがストリーム間は publisher 側で
 // out of order に送出されうる) ため、バッファドレイン時に明示的にソートする必要がある。
 // テストで参照するため export している。
@@ -409,7 +409,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       let actualTrackName = settings.trackName.value;
 
       try {
-        // draft-ietf-moq-transport-17 に準拠した Catalog 購読:
+        // draft-ietf-moq-transport-18 に準拠した Catalog 購読:
         // 1. SUBSCRIBE_OK に LARGEST_OBJECT がある場合 → Joining FETCH で過去の Catalog を取得
         // 2. SUBSCRIBE_OK に LARGEST_OBJECT がない場合 → リアルタイムで Catalog が配信されるのを待つ
         //
@@ -463,7 +463,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
                 },
               },
               {
-                // draft-ietf-moq-transport-17: LargestObject フィルターで SUBSCRIBE
+                // draft-ietf-moq-transport-18: LargestObject フィルターで SUBSCRIBE
                 // joiningFetch を使用して、LARGEST_OBJECT がある場合は FETCH で取得
                 // LARGEST_OBJECT がない場合は Joining FETCH は送信されず、リアルタイム配信を待つ
                 joiningFetch: {
@@ -586,7 +586,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       } = {};
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
-      // draft-ietf-moq-transport-17 §9.3.11: SUBSCRIBE では MAY (foreknowledge 不要、
+      // draft-ietf-moq-transport-18 §10.2.13: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
@@ -841,7 +841,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
       return;
     }
 
-    // draft-ietf-moq-transport-17 §9.3.11:
+    // draft-ietf-moq-transport-18 §10.2.13:
     // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
     //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
     //  Property with value 1."
@@ -856,7 +856,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-17 §9.3.11
+      // draft-ietf-moq-transport-18 §10.2.13
       // NEW_GROUP_REQUEST = 0x32
       await subscriberInstance.update({
         parameters: [

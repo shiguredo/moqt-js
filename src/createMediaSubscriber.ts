@@ -228,7 +228,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // draft-ietf-moq-transport-17 §9.3.11:
+    // draft-ietf-moq-transport-18 §10.2.13:
     // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
     //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
     //  Property with value 1."
@@ -239,7 +239,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
-    // draft-ietf-moq-transport-17 §9.3.11 (NEW_GROUP_REQUEST = 0x32)
+    // draft-ietf-moq-transport-18 §10.2.13 (NEW_GROUP_REQUEST = 0x32)
     await this.videoSubscriber.update({
       parameters: [
         {

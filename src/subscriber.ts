@@ -1,6 +1,6 @@
 /**
  * MOQT Subscriber
- * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions)
+ * draft-ietf-moq-transport-18 Section 5.1 (Subscriptions)
  */
 
 import type { Parameter } from "./message/parameter";
@@ -15,11 +15,11 @@ export type SubscriberState = "active" | "closed";
 
 /**
  * REQUEST_UPDATE のオプション
- * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE)
+ * draft-ietf-moq-transport-18 Section 10.9 (REQUEST_UPDATE)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * Start Location は任意の値に減少可能（以前は増加のみ許可されていた）。
- * draft-ietf-moq-transport-17 Section 9.10
+ * draft-ietf-moq-transport-18 Section 10.9
  */
 export interface RequestUpdateOptions {
   /**
@@ -29,7 +29,7 @@ export interface RequestUpdateOptions {
 
   /**
    * Forward State を変更する
-   * draft-ietf-moq-transport-17 Section 9.3.10 (FORWARD Parameter)
+   * draft-ietf-moq-transport-18 Section 10.2.12 (FORWARD Parameter)
    *
    * - true: オブジェクトの転送を開始する（Subscriber がいることを通知）
    * - false: オブジェクトの転送を停止する
@@ -45,7 +45,7 @@ export interface Subscriber {
   readonly state: SubscriberState;
   /**
    * SUBSCRIBE_OK で受信した LARGEST_OBJECT パラメータ
-   * draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-18 Section 10.2.11 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
    * Joining Fetch でどこからデータを取得するか決める際に使用。
@@ -53,14 +53,14 @@ export interface Subscriber {
   readonly largestLocation: Location | null;
   /**
    * SUBSCRIBE_OK で受信した Track Properties
-   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK):
    * DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
    * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
-   * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE)
+   * draft-ietf-moq-transport-18 Section 10.9 (REQUEST_UPDATE)
    */
   update(options?: RequestUpdateOptions): Promise<void>;
   unsubscribe(): Promise<void>;
@@ -136,7 +136,7 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * SUBSCRIBE_OK から LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-17 Section 9.3.9 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-18 Section 10.2.11 (LARGEST OBJECT Parameter)
    */
   setLargestLocation(location: Location): void {
     this.subscriberLargestLocation = location;
@@ -144,7 +144,7 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * SUBSCRIBE_OK から Track Properties を設定
-   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK)
+   * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK)
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
@@ -153,7 +153,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Set track alias (called when SUBSCRIBE_OK is received)
    *
-   * draft-ietf-moq-transport-17 Section 9.9 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK):
    * Track Alias is returned by the publisher in SUBSCRIBE_OK.
    */
   setTrackAlias(alias: bigint): void {
@@ -163,7 +163,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle incoming object from data stream
    *
-   * draft-ietf-moq-transport-17 Section 2.2:
+   * draft-ietf-moq-transport-18 Section 2.2:
    * "Objects in a subgroup ... are sent on a single stream whenever possible."
    *
    * 1 Group = 1 Subgroup = 1 Stream のため、QUIC がストリーム内の順序を保証する。
@@ -178,12 +178,12 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-17 Section 10.3 (Datagrams)
+   * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    *
-   * draft-ietf-moq-transport-17:
+   * draft-ietf-moq-transport-18:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
-   * draft-ietf-moq-transport-17 Section 10
+   * draft-ietf-moq-transport-18 Section 10
    */
   handleDatagram(object: MoqtObject): void {
     if (this.subscriberState === "closed") {
@@ -202,10 +202,10 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle track end (from PUBLISH_DONE)
    *
-   * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions):
+   * draft-ietf-moq-transport-18 Section 5.1 (Subscriptions):
    * "the publisher terminates a subscription using PUBLISH_DONE"
    *
-   * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+   * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
    * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
    * errorCallback で通知する。
    */
@@ -215,7 +215,7 @@ export class SubscriberImpl implements Subscriber {
     }
     this.subscriberState = "closed";
 
-    // draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+    // draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
     // INTERNAL_ERROR (0x0) 等はエラー。TRACK_ENDED (0x2) 等はエラーとみなさない。
     if (statusCode !== undefined && isPublishDoneErrorStatus(statusCode)) {
       this.errorCallback?.(
@@ -238,7 +238,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Mark as closed (called by session on session close)
    *
-   * draft-ietf-moq-transport-17 Section 3.4:
+   * draft-ietf-moq-transport-18 Section 3.4:
    * "The Transport Session can be terminated at any point."
    *
    * Note: endCallback is NOT called here because session close is
@@ -252,7 +252,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * サブスクリプションを更新する
    *
-   * draft-ietf-moq-transport-17 Section 9.10 (REQUEST_UPDATE):
+   * draft-ietf-moq-transport-18 Section 10.9 (REQUEST_UPDATE):
    * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
    */
   async update(options?: RequestUpdateOptions): Promise<void> {
@@ -268,7 +268,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Unsubscribe from the track
    *
-   * draft-ietf-moq-transport-17 Section 5.1 (Subscriptions):
+   * draft-ietf-moq-transport-18 Section 5.1 (Subscriptions):
    * "The subscriber terminates a subscription using UNSUBSCRIBE"
    *
    * Note: endCallback is NOT called here because UNSUBSCRIBE is

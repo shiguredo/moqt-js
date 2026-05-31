@@ -123,7 +123,7 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
   assert.equal(consumed, 4);
 });
 
-// draft-ietf-moq-transport-17 Section 10.4.2:
+// draft-ietf-moq-transport-18 Section 11.4.2:
 // SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
 // セッションを閉じなければならない
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
@@ -146,7 +146,7 @@ test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () =>
   assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
 });
 
-// draft-ietf-moq-transport-17 Section 10.4.2:
+// draft-ietf-moq-transport-18 Section 11.4.2:
 // 0b00X1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
 for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
   test(`SubgroupHeader: 不正タイプ 0x${invalidType.toString(16)} は decode でエラー`, () => {
@@ -230,7 +230,7 @@ for (const tc of subgroupHeaderTestCases) {
 }
 
 test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が undefined になる", () => {
-  // draft-ietf-moq-transport-17 Section 10.4.2:
+  // draft-ietf-moq-transport-18 Section 11.4.2:
   // Subgroup ID = First Object ID の場合、ヘッダーに Subgroup ID フィールドはなく、
   // 最初のオブジェクトの Object ID が Subgroup ID として使われる
   const header = {
@@ -250,19 +250,19 @@ test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が un
   assert.equal(consumed, encoded.length);
 });
 
-test("hasPropertiesPresent: 偶数タイプは Extensions Present = No", () => {
+test("hasPropertiesPresent: 偶数タイプは Properties Present = No", () => {
   assert.equal(hasPropertiesPresent(0x10), false);
   assert.equal(hasPropertiesPresent(0x12), false);
   assert.equal(hasPropertiesPresent(0x14), false);
 });
 
-test("hasPropertiesPresent: 奇数タイプは Extensions Present = Yes", () => {
+test("hasPropertiesPresent: 奇数タイプは Properties Present = Yes", () => {
   assert.equal(hasPropertiesPresent(0x11), true);
   assert.equal(hasPropertiesPresent(0x13), true);
   assert.equal(hasPropertiesPresent(0x15), true);
 });
 
-test("ObjectFields: Extensions なしタイプ (0x10) をエンコード", () => {
+test("ObjectFields: Properties なしタイプ (0x10) をエンコード", () => {
   const encoded = encodeObjectFields(1n, 50n, 0x10);
 
   assert.equal(encoded[0], 1);
@@ -270,7 +270,7 @@ test("ObjectFields: Extensions なしタイプ (0x10) をエンコード", () =>
   assert.equal(encoded.length, 2);
 });
 
-test("ObjectFields: Extensions ありタイプ (0x11) をエンコード", () => {
+test("ObjectFields: Properties ありタイプ (0x11) をエンコード", () => {
   const encoded = encodeObjectFields(1n, 50n, 0x11);
 
   assert.equal(encoded[0], 1);
@@ -288,7 +288,7 @@ test("ObjectFields: ステータス付き (payload length = 0) をエンコー�
   assert.equal(encoded.length, 3);
 });
 
-test("ObjectFields: Extensions データ付き (0x11 タイプ) をエンコード", () => {
+test("ObjectFields: Properties データ付き (0x11 タイプ) をエンコード", () => {
   const properties = new Uint8Array([0xaa, 0xbb, 0xcc]);
   const encoded = encodeObjectFields(10n, 50n, 0x11, ObjectStatus.NORMAL, properties);
 
@@ -304,7 +304,7 @@ test("ObjectFields: 大きな objectIdDelta と payloadLength をエンコード
   assert.isAbove(encoded.length, 2);
 });
 
-test("ObjectFields: Extensions なしタイプ (0x10) をデコード", () => {
+test("ObjectFields: Properties なしタイプ (0x10) をデコード", () => {
   const data = new Uint8Array([0x01, 0x3f]);
   const [fields, consumed] = decodeObjectFields(data, 0x10);
 
@@ -314,7 +314,7 @@ test("ObjectFields: Extensions なしタイプ (0x10) をデコード", () => {
   assert.equal(consumed, 2);
 });
 
-test("ObjectFields: Extensions ありタイプ (0x11) をデコード", () => {
+test("ObjectFields: Properties ありタイプ (0x11) をデコード", () => {
   const data = new Uint8Array([0x05, 0x03, 0xaa, 0xbb, 0xcc, 0x0a]);
   const [fields, consumed] = decodeObjectFields(data, 0x11);
 
@@ -352,7 +352,7 @@ for (const tc of objectFieldsTestCases) {
   });
 }
 
-test("ObjectFields: Extensions 付き roundtrip (0x11 タイプ)", () => {
+test("ObjectFields: Properties 付き roundtrip (0x11 タイプ)", () => {
   const properties = new Uint8Array([0x11, 0x22, 0x33, 0x44, 0x55]);
   const encoded = encodeObjectFields(42n, 256n, 0x11, ObjectStatus.NORMAL, properties);
   const [decoded, consumed] = decodeObjectFields(encoded, 0x11);
@@ -397,9 +397,9 @@ test("createObject: 空ペイロードで作成", () => {
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
- * draft-ietf-moq-transport-17 Section 10.2.1.1
+ * draft-ietf-moq-transport-18 Section 11.2.1.1
  */
 test("ObjectStatus: すべてのステータス値が定義されている", () => {
   assert.equal(ObjectStatus.NORMAL, 0x0);
@@ -577,7 +577,7 @@ test("ObjectDatagram: STATUS_OBJ タイプ (0x20) をエンコード", () => {
   assert.equal(encoded[5], ObjectStatus.END_OF_GROUP);
 });
 
-test("ObjectDatagram: PAYLOAD_OBJ_EXT タイプ (0x01) - Extensions 付きをエンコード", () => {
+test("ObjectDatagram: PAYLOAD_OBJ_EXT タイプ (0x01) - Properties 付きをエンコード", () => {
   const properties = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
   const datagram: ObjectDatagram = {
     type: DatagramType.PAYLOAD_OBJ_EXT,
@@ -668,7 +668,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       payload: new Uint8Array([0xaa]),
     },
   },
-  // draft-ietf-moq-transport-17 Section 10.3.1:
+  // draft-ietf-moq-transport-18 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // Object ID フィールドなし (Object ID = 1)、Priority フィールドなし
   {
@@ -775,7 +775,7 @@ for (const requestId of requestIds) {
   });
 }
 
-test("FetchObjectFields: createFirstFetchObjectFlags で Extensions なしフラグを作成", () => {
+test("FetchObjectFields: createFirstFetchObjectFlags で Properties なしフラグを作成", () => {
   const flags = createFirstFetchObjectFlags(false);
 
   assert.isOk(flags & FetchSerializationFlags.GROUP_ID_PRESENT);
@@ -788,7 +788,7 @@ test("FetchObjectFields: createFirstFetchObjectFlags で Extensions なしフラ
   assert.isNotOk(flags & FetchSerializationFlags.PROPERTIES_PRESENT);
 });
 
-test("FetchObjectFields: createFirstFetchObjectFlags で Extensions ありフラグを作成", () => {
+test("FetchObjectFields: createFirstFetchObjectFlags で Properties ありフラグを作成", () => {
   const flags = createFirstFetchObjectFlags(true);
 
   assert.isOk(flags & FetchSerializationFlags.PROPERTIES_PRESENT);
@@ -815,7 +815,7 @@ test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
   assert.equal(encoded[5], 50);
 });
 
-// draft-ietf-moq-transport-17 Section 10.2.1.1:
+// draft-ietf-moq-transport-18 Section 11.2.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 test("FetchObjectFields: payload length = 0 でも Object Status を含めない", () => {
@@ -878,7 +878,7 @@ test("FetchObjectFields: 2番目のオブジェクトをデコード (差分エ�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 10.4.4:
+ * draft-ietf-moq-transport-18 Section 11.4.4:
  * 0x40 は Datagram フラグとして定義された。
  * 不正な Serialization Flags 値はプロトコル違反。
  */
@@ -1014,9 +1014,9 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 
 /**
  * 同一 Subgroup の Priority 一貫性検証テスト
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
- * draft-ietf-moq-transport-17 Section 10.4.4
+ * draft-ietf-moq-transport-18 Section 11.4.4
  */
 test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", () => {
   // 最初のオブジェクト

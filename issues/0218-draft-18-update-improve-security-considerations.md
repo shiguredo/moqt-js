@@ -11,15 +11,16 @@ moqt-js の AUTHORIZATION TOKEN 処理は既に draft-17 時点で実装済み�
 
 ## RFC 参照
 
-draft-ietf-moq-transport-18 §13 (Security Considerations):
+draft-ietf-moq-transport-18 §14 (Grease):
 
-> Implementations MUST NOT close the session solely because they received
-> an unknown value.
+> Endpoints MUST NOT close the session solely because they received an
+> unknown value.
 
 draft-ietf-moq-transport-18 §13.8 (Implementation Identification Fingerprinting):
 
 > Operators are advised that detailed implementation identification
-> facilitates the same privacy concerns as persistent identifiers.
+> facilitates the same privacy concerns as persistent identifiers,
+> since it enables correlation of sessions across time.
 
 draft-ietf-moq-transport-18 A.1: "Improve Security Considerations (#1625)"
 

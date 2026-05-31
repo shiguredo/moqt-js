@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages
- * draft-ietf-moq-transport-17 Section 9.5-9.7
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -14,13 +14,13 @@ import { MessageType } from "./types";
 import { ProtocolViolationError } from "../error";
 
 /**
- * GOAWAY メッセージ (Section 9.5)
+ * GOAWAY メッセージ (Section 10.4)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * セッションを終了する意図を通知する。
  * サーバーはセッションマイグレーション用のオプショナル URI を含めることができる。
  * Timeout フィールドが追加された。
- * draft-ietf-moq-transport-17 Section 9.5
+ * draft-ietf-moq-transport-18 Section 10.4
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -41,12 +41,12 @@ export interface Goaway {
 }
 
 /**
- * REQUEST_OK メッセージ (Section 9.6)
+ * REQUEST_OK メッセージ (Section 10.5)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * リクエストへの成功応答。双方向ストリーム上で送信されるため、
  * ストリーム自体がリクエストを特定し、Request ID は不要。
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  *
  * REQUEST_OK Message {
  *   Type (vi64) = 0x7,
@@ -61,12 +61,12 @@ export interface RequestOk {
 }
 
 /**
- * REQUEST_ERROR メッセージ (Section 9.7)
+ * REQUEST_ERROR メッセージ (Section 10.6)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * リクエストへの失敗応答。双方向ストリーム上で送信されるため、
  * ストリーム自体がリクエストを特定し、Request ID は不要。
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  *
  * REQUEST_ERROR Message {
  *   Type (vi64) = 0x5,
@@ -90,7 +90,7 @@ export interface RequestError {
 /**
  * Goaway のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.5:
+ * draft-ietf-moq-transport-18 Section 10.4:
  * New Session URI Length + New Session URI + Timeout
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
@@ -118,7 +118,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
   offset += uriLengthSize;
 
-  // draft-ietf-moq-transport-17 Section 9.5:
+  // draft-ietf-moq-transport-18 Section 10.4:
   // "The maximum length of the New Session URI is 8,192 bytes.
   //  If an endpoint receives a length exceeding the maximum,
   //  it MUST close the session with a PROTOCOL_VIOLATION."
@@ -142,9 +142,9 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 /**
  * RequestOk のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.6:
+ * draft-ietf-moq-transport-18 Section 10.5:
  * Number of Parameters + Parameters
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -167,9 +167,9 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
 /**
  * RequestOk のペイロードをデコード
  *
- * draft-ietf-moq-transport-17 Section 9.6:
+ * draft-ietf-moq-transport-18 Section 10.5:
  * Number of Parameters + Parameters
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  */
 export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
   const [parameters] = decodeParameters(data, offset);
@@ -183,9 +183,9 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
 /**
  * RequestError のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.7:
+ * draft-ietf-moq-transport-18 Section 10.6:
  * Error Code + Retry Interval + Error Reason
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -213,9 +213,9 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
 /**
  * RequestError のペイロードをデコード
  *
- * draft-ietf-moq-transport-17 Section 9.7:
+ * draft-ietf-moq-transport-18 Section 10.6:
  * Error Code + Retry Interval + Error Reason
- * draft-ietf-moq-transport-17 Section 9.2
+ * draft-ietf-moq-transport-18 Section 10.1
  */
 export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): RequestError {
   const [errorCode, errorCodeSize] = decodeVarint(data, offset);
@@ -227,7 +227,7 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
   const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
   offset += reasonLenSize;
 
-  // draft-ietf-moq-transport-17 Section 1.4.4:
+  // draft-ietf-moq-transport-18 Section 1.4.4:
   // Reason Phrase の最大長は 1,024 バイト
   if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
     throw new Error(

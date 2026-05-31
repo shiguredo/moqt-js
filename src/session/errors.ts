@@ -8,7 +8,7 @@
 /**
  * WebTransport セッション終了に伴って発生した read エラーかどうかを判定する
  *
- * draft-ietf-moq-transport-17 Section 3.5:
+ * draft-ietf-moq-transport-18 Section 3.5:
  * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
  *

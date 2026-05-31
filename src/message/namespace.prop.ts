@@ -30,7 +30,7 @@ import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.3 (Message Parameter):
+ * draft-ietf-moq-transport-18 Section 10.2 (Message Parameter):
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -40,7 +40,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-17 §9.3.6 / §9.3.10: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -93,9 +93,9 @@ const parametersArb = fc
   });
 
 /**
- * draft-ietf-moq-transport-17 Section 2.3:
+ * draft-ietf-moq-transport-18 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -105,9 +105,9 @@ const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }),
 /**
  * SUBSCRIBE_NAMESPACE 用のネームスペース arbitrary
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
- * draft-ietf-moq-transport-17 Section 9.18
+ * draft-ietf-moq-transport-18 Section 10.16
  */
 const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -117,7 +117,7 @@ const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 
 /**
  * NAMESPACE/NAMESPACE_DONE 用の Track Namespace Suffix arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.21:
+ * draft-ietf-moq-transport-18 Section 10.16 (NAMESPACE):
  * Track Namespace Suffix は Track Namespace Prefix を除いた残りの部分。
  * 空も許容される。
  */
@@ -160,7 +160,7 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.17:
+ * draft-ietf-moq-transport-18 Section 10.15:
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
  * フレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で
@@ -203,7 +203,7 @@ test("PublishNamespace のフレーミングが ControlStreamReader で復元で
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.18:
+ * draft-ietf-moq-transport-18 Section 10.16:
  * NAMESPACE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */
@@ -225,7 +225,7 @@ test("Namespace のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.19:
+ * draft-ietf-moq-transport-18 Section 10.17:
  * NAMESPACE_DONE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */

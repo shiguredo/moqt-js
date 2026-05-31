@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages Property-Based Tests
- * draft-ietf-moq-transport-17 Section 9.11-9.13
+ * draft-ietf-moq-transport-18 Section 10.10-10.11
  */
 
 import { test, assert } from "vite-plus/test";
@@ -21,7 +21,7 @@ import { type Property, TrackPropertyId } from "../properties";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-17 Section 9.3:
+ * draft-ietf-moq-transport-18 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -31,7 +31,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-17 §9.3.6 / §9.3.10: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -84,11 +84,11 @@ const parametersArb = fc
   });
 
 /**
- * Track Extensions arbitrary
+ * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-17:
- * PUBLISH, SUBSCRIBE_OK, FETCH_OK に Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18:
+ * PUBLISH, SUBSCRIBE_OK, FETCH_OK に Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 // 値域制約のある Track Property は除外する (validateTrackPropertyValue で
 // ProtocolViolationError になりラウンドトリップが成立しないため)
@@ -119,9 +119,9 @@ const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropert
 const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
 
 /**
- * draft-ietf-moq-transport-17 Section 2.3:
+ * draft-ietf-moq-transport-18 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -133,9 +133,9 @@ const trackNameArb = fc
   .map((s) => new TextEncoder().encode(s));
 
 /**
- * draft-ietf-moq-transport-17:
- * PUBLISH に Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18:
+ * PUBLISH に Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 test("Publish のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -181,7 +181,7 @@ test("Publish のエンコード・デコードがラウンドトリップする
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
-        // Track Extensions はソートされるため、ソート後の値を比較
+        // Track Properties はソートされるため、ソート後の値を比較
         const sortedOriginal = [...trackProperties].sort((a, b) =>
           a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
         );
@@ -222,7 +222,7 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-17 Section 9.13:
+ * draft-ietf-moq-transport-18 Section 10.11:
  * PUBLISH_DONE は双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 test("PublishDone のエンコード・デコードがラウンドトリップする", () => {

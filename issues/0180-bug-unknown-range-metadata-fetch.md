@@ -11,11 +11,11 @@ Model: Opus 4.7
 // TODO: Unknown Range Metadata Type の実装
 ```
 
-draft-ietf-moq-transport-17 §9.14 で定義されている「未シリアライズのオブジェクト範囲 (unknown range)」を Fetch レスポンスで受け取った場合に、適切に処理できない。
+draft-ietf-moq-transport-18 §10.12 で定義されている「未シリアライズのオブジェクト範囲 (unknown range)」を Fetch レスポンスで受け取った場合に、適切に処理できない。
 
 ## 一次資料の引用
 
-draft-ietf-moq-transport-17 §9.14:
+draft-ietf-moq-transport-18 §10.12:
 
 > A publisher MAY send Objects in a range that it has not yet serialized as
 > an "unknown range", which the subscriber can use to determine that the

@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH) — 9.12 (PUBLISH_OK) — 9.13 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-18 Section 10.10 (PUBLISH) — 10.5 (REQUEST_OK / PUBLISH_OK) — 10.11 (PUBLISH_DONE)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -17,16 +17,15 @@ import {
 import { MessageType } from "./types";
 
 /**
- * PUBLISH メッセージ (Section 9.11 PUBLISH)
+ * PUBLISH メッセージ (Section 10.10 PUBLISH)
  *
- * draft-ietf-moq-transport-17:
- * Track Extensions が追加された。
- * draft-ietf-moq-transport-17 Section 9
+ * draft-ietf-moq-transport-18:
+ * Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10 (Control Messages)
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
   requestId: bigint;
-  // Required Request ID Delta (vi64) - draft-ietf-moq-transport-17 Section 9.2 (Required Request ID)
   // 0 は依存なしを意味する
   requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
@@ -37,9 +36,9 @@ export interface Publish {
 }
 
 /**
- * PUBLISH_OK メッセージ (Section 9.12 PUBLISH_OK)
+ * REQUEST_OK alias PUBLISH_OK (Section 10.5 REQUEST_OK)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * 双方向ストリーム上で送信されるため Request ID は不要。
  */
 export interface PublishOk {
@@ -48,9 +47,9 @@ export interface PublishOk {
 }
 
 /**
- * PUBLISH_DONE メッセージ (Section 9.13 PUBLISH_DONE)
+ * PUBLISH_DONE メッセージ (Section 10.11 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
@@ -63,12 +62,11 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+ * draft-ietf-moq-transport-18 Section 10.10 (PUBLISH):
  * PUBLISH Message {
  *   Type (i) = 0x1D,
  *   Length (16),
  *   Request ID (i),
- *   Required Request ID Delta (i),
  *   Track Namespace (..),
  *   Track Name Length (i),
  *   Track Name (..),
@@ -89,7 +87,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+  // draft-ietf-moq-transport-18 Section 10.10 (PUBLISH):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   // Message の Length フィールドで終端が決まる。
   parts.push(encodeProperties(msg.trackProperties));
@@ -136,7 +134,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-17 Section 9.11 (PUBLISH):
+  // draft-ietf-moq-transport-18 Section 10.10 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
@@ -177,7 +175,7 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
 /**
  * PublishOk のペイロードをデコード
  *
- * draft-ietf-moq-transport-17 Section 9.12 (PUBLISH_OK):
+ * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
  * 双方向ストリーム上で送信されるため Request ID は含まない。
  */
 export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
@@ -198,7 +196,7 @@ export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk 
  * Session では個別にエンコードしているため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-17 Section 9.13 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
  * PUBLISH_DONE Message {
  *   Type (vi64) = 0xB,
  *   Length (16),
@@ -242,7 +240,7 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
 
-  // draft-ietf-moq-transport-17 Section 1.4.4:
+  // draft-ietf-moq-transport-18 Section 1.4.4:
   // Reason Phrase の最大長は 1,024 バイト
   if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
     throw new Error(

@@ -1,6 +1,6 @@
 /**
  * MOQT エラー型テスト
- * draft-ietf-moq-transport-17 Section 14.5 (Error Codes)
+ * draft-ietf-moq-transport-18 Section 15.10 (Error Codes)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -50,9 +50,9 @@ test("decode 用エラーは名前と message を保持する", () => {
   assert.equal(malformedTrack.message, "duplicate immutable properties");
 });
 
-test("draft-17 の代表的なエラーコード値を保持する", () => {
+test("draft-18 の代表的なエラーコード値を保持する", () => {
   assert.equal(SessionErrorCode.PROTOCOL_VIOLATION, 0x03);
-  assert.equal(SessionErrorCode.INVALID_REQUIRED_REQUEST_ID, 0x07);
+  assert.equal(SessionErrorCode.INVALID_PATH, 0x08);
   assert.equal(RequestErrorCode.MALFORMED_TRACK, 0x12);
   assert.equal(PublishDoneCode.MALFORMED_TRACK, 0x12);
   assert.equal(DataStreamErrorCode.MALFORMED_TRACK, 0x12);

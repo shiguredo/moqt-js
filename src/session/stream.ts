@@ -60,7 +60,7 @@ export function processFetchObjects(
       currentContext = newContext;
       currentIsFirst = false;
 
-      // draft-ietf-moq-transport-17 Section 10.2.1.1:
+      // draft-ietf-moq-transport-18 Section 11.2.1.1:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
       const object: MoqtObject = {
         groupId: fields.groupId,
@@ -105,7 +105,7 @@ export function processSubgroupObjects(
 ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
   let offset = 0;
   let currentPreviousObjectId = previousObjectId;
-  // draft-ietf-moq-transport-17 Section 10.4.2:
+  // draft-ietf-moq-transport-18 Section 11.4.2:
   // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
   // Subgroup ID として使用する
   let resolvedSubgroupId = header.subgroupId;

@@ -1,6 +1,6 @@
 /**
- * MOQT Extension Headers Property-Based Tests
- * draft-ietf-moq-transport-17 Section 11 (MOQT Properties)
+ * MOQT Properties Property-Based Tests
+ * draft-ietf-moq-transport-18 Section 12 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -25,7 +25,7 @@ import {
 /**
  * 既知の拡張 ID を除外した未知の ID を生成する Arbitrary
  *
- * draft-ietf-moq-transport-17 §11 で MUST レベルの値域制約がある Track Property
+ * draft-ietf-moq-transport-18 §12 で MUST レベルの値域制約がある Track Property
  * (DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER / DYNAMIC_GROUPS) も
  * 除外する (任意 value だと validateTrackPropertyValue で ProtocolViolationError
  * になり、ラウンドトリップが成立しないため)。
@@ -65,7 +65,7 @@ test("Prior Object ID Gap のエンコード・デコードがラウンドトリ
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * delta encoding を使用するため、encodeProperties でエンコードする。
  */
 test("parseProperties は既知・未知の任意の組み合わせをパースできる", () => {
@@ -274,11 +274,11 @@ test("encodeProperty のラウンドトリップ: 奇数 ID", () => {
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * delta encoding を使用するため、extensions の ID は一意である必要がある。
  * encodeImmutableProperties は内部で encodeProperties を使用して ID の昇順でソートする。
  */
-test("Immutable Extensions のエンコード・デコードがラウンドトリップする", () => {
+test("Immutable Properties のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(fc.array(propertyArb, { minLength: 0, maxLength: 10 }), (extensions) => {
       // delta encoding では ID は一意である必要があるため、重複を除去
@@ -315,11 +315,11 @@ test("Immutable Extensions のエンコード・デコードがラウンドト�
 });
 
 /**
- * draft-ietf-moq-transport-17:
+ * draft-ietf-moq-transport-18:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
- * Immutable Extensions の内部拡張も ID の昇順でソートされる。
+ * Immutable Properties の内部拡張も ID の昇順でソートされる。
  */
-test("parseProperties は Immutable Extensions を正しく抽出する", () => {
+test("parseProperties は Immutable Properties を正しく抽出する", () => {
   fc.assert(
     fc.property(
       fc.option(fc.bigInt({ min: 0n, max: 10000n }), { nil: undefined }),
@@ -335,11 +335,11 @@ test("parseProperties は Immutable Extensions を正しく抽出する", () => 
           headers.push({ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: objectGap });
         }
         if (immutableExts !== undefined) {
-          // Immutable Extensions の内部拡張の重複を除去
+          // Immutable Properties の内部拡張の重複を除去
           const uniqueImmutableExts = immutableExts.filter(
             (ext, index) => immutableExts.findIndex((e) => e.id === ext.id) === index,
           );
-          // Immutable Extensions の内部データをエンコード
+          // Immutable Properties の内部データをエンコード
           const innerEncoded = encodeProperties(uniqueImmutableExts);
           headers.push({ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innerEncoded });
         }
@@ -362,7 +362,7 @@ test("parseProperties は Immutable Extensions を正しく抽出する", () => 
           assert.isUndefined(parsed.priorObjectIdGap);
         }
 
-        // 不変条件: Immutable Extensions が正しくパースされる
+        // 不変条件: Immutable Properties が正しくパースされる
         if (immutableExts !== undefined) {
           // 重複を除去した後の数と一致する
           const uniqueCount = immutableExts.filter(

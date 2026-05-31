@@ -12,13 +12,16 @@ mutable / immutable の境界、変更が起きた場合の relay / subscriber �
 
 ## RFC 参照
 
-draft-ietf-moq-transport-18 §2.5 (Properties):
+draft-ietf-moq-transport-18 §12.7 (Immutable Properties):
 
-> Immutable Properties (Section 12.7) MUST NOT be altered by relays.
+> This Property can be added by the Original Publisher, but MUST NOT be
+> added by Relays. This Property MUST NOT be modified or removed
 
-draft-ietf-moq-transport-18 §2.5.1 (Mandatory Track Properties):
+draft-ietf-moq-transport-18 §12.7 (Immutable Properties):
 
-> Each Track MUST have exactly one set of Immutable Properties.
+> When looking for the value of a property, processors
+> MUST search both the mutable properties and the contents of Immutable
+> Properties.
 
 draft-ietf-moq-transport-18 A.1: "Clarify Immutable Track Properties (#1535)"
 
