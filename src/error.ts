@@ -237,3 +237,24 @@ export class MalformedTrackError extends Error {
     this.name = "MalformedTrackError";
   }
 }
+
+/**
+ * 閉じた Subgroup への送信を拒否するときに投げるエラー
+ *
+ * draft-ietf-moq-transport-18 §11.4.3 (Closing Subgroup Streams):
+ * "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+ *  attempt to open a new stream to deliver additional Objects in that Subgroup."
+ *
+ * delivery timeout または STOP_SENDING で閉じた Subgroup への再送信を
+ * Publisher が検出し上位に伝搬するために使用する。
+ */
+export class ClosedSubgroupError extends Error {
+  constructor(
+    message: string,
+    readonly trackAlias: bigint,
+    readonly groupId: bigint,
+  ) {
+    super(message);
+    this.name = "ClosedSubgroupError";
+  }
+}

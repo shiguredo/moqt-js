@@ -5,6 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  ClosedSubgroupError,
   DataStreamErrorCode,
   IncompleteDataError,
   MalformedTrackError,
@@ -78,4 +79,14 @@ test("normalizePublishDoneCode: 既知のコードはそのまま通す", () => 
 
 test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizePublishDoneCode(0x99), PublishDoneCode.INTERNAL_ERROR);
+});
+
+test("ClosedSubgroupError は Error を継承し name/trackAlias/groupId を保持する", () => {
+  const error = new ClosedSubgroupError("subgroup is closed: trackAlias=1 groupId=3", 1n, 3n);
+
+  assert.instanceOf(error, Error);
+  assert.equal(error.name, "ClosedSubgroupError");
+  assert.equal(error.message, "subgroup is closed: trackAlias=1 groupId=3");
+  assert.equal(error.trackAlias, 1n);
+  assert.equal(error.groupId, 3n);
 });

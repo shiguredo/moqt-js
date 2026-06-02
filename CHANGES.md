@@ -62,6 +62,19 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [FIX] STOP_SENDING / delivery timeout で閉じた Subgroup への送信を拒否する (#0178)
+  - draft-ietf-moq-transport-18 §11.4.3 に基づき、閉じた Subgroup への再送信を事前に拒否する
+  - `ClosedSubgroupError` を `src/error.ts` に新設する
+  - `SessionImpl.closedSubgroups` で閉じた Subgroup の (trackAlias, groupId) を追跡する
+  - `sendObject` の Promise チェーンで送信前に `closedSubgroups` をチェックする
+  - `sendObjectInternal` の `writer.write()` 失敗時に `closedSubgroups` に追加する
+  - publisher done 時と session close 時に `closedSubgroups` をクリアする
+  - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE 応答ストリームで PUBLISH メッセージを処理する (#0179)
+  - draft-ietf-moq-transport-18 §10.10 (PUBLISH) に基づき、NAMESPACE 応答ストリーム上の PUBLISH に対応する
+  - `NamespaceSubscriptionCallbacks` に `onPublish` コールバックを追加する
+  - `startNamespaceStreamLoop` の switch 文に `MessageType.PUBLISH` case を追加する
+  - @voluntas
 
 ### misc
 
@@ -219,7 +232,6 @@ Media over QAUIC Transport draft-17 対応
   - TRACK_STATUS に Required Request ID Delta フィールドを追加する (Section 9.16)
   - PUBLISH_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.17)
   - SUBSCRIBE_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.20)
-  - 未対応: Subgroup 再オープン禁止
   - @voluntas
 - [CHANGE] draft-ietf-moq-msf-00 に対応する
   - removeTracks の型を string[] から RemoveTrack[] ({name, namespace?}) に変更

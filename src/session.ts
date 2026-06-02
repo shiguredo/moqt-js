@@ -16,6 +16,7 @@ import {
 } from "./dataStream";
 export type { MoqtObject } from "./dataStream";
 import {
+  ClosedSubgroupError,
   DataStreamErrorCode,
   IncompleteDataError,
   MalformedTrackError,
@@ -36,6 +37,7 @@ import {
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishBlockedPayload,
+  decodePublishPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeSetupPayload,
@@ -518,6 +520,16 @@ export interface NamespaceSubscriptionCallbacks {
    */
   onNamespaceDone?: (namespaceSuffix: string[]) => void;
   /**
+   * PUBLISH を受信したときに呼ばれる
+   * draft-ietf-moq-transport-18 §10.10 (PUBLISH):
+   * SUBSCRIBE_NAMESPACE 応答ストリーム上で PUBLISH が届いた場合に通知する。
+   *
+   * @param trackNamespaceSuffix - Track Namespace Prefix を除いた Suffix
+   * @param trackName - トラック名
+   * @param trackAlias - トラックエイリアス
+   */
+  onPublish?: (trackNamespaceSuffix: string[], trackName: string, trackAlias: bigint) => void;
+  /**
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
@@ -934,17 +946,15 @@ export class SessionImpl implements Session {
   // Promise チェーンでトラック単位のシリアライズを行う。
   private publisherSendQueues = new Map<bigint, Promise<void>>();
 
-  // TODO: Closed Subgroup Tracking
-  // draft-ietf-moq-transport-18:
-  // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
-  // draft-ietf-moq-transport-18 Section 11.4.2
+  // STOP_SENDING / delivery timeout で閉じた Subgroup の追跡
+  // draft-ietf-moq-transport-18 §11.4.3 (Closing Subgroup Streams):
+  // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+  //  attempt to open a new stream to deliver additional Objects in that Subgroup."
   //
-  // 現在の実装では 1 Group = 1 Subgroup = 1 Stream モデルを採用しているため、
-  // グループが終了すると自然と新しいストリームを作成する。
-  // 完全な実装には以下が必要:
-  // 1. WebTransport の STOP_SENDING シグナル検出
-  // 2. 閉じた Subgroup (trackAlias, groupId, subgroupId) の追跡
-  // 3. sendObject 時に閉じた Subgroup への送信を拒否
+  // 1 Group = 1 Subgroup = 1 Stream モデルでは groupId が subgroupId を一意に決定するため、
+  // キーは `${trackAlias}:${groupId}` で十分である。
+  // sendObject 時にこの Set をチェックし、閉じた Subgroup への送信を拒否する。
+  private closedSubgroups = new Set<string>();
 
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
@@ -1862,6 +1872,19 @@ export class SessionImpl implements Session {
               break;
             }
 
+            case MessageType.PUBLISH: {
+              // draft-ietf-moq-transport-18 §10.10 (PUBLISH):
+              // SUBSCRIBE_NAMESPACE 応答ストリーム上で PUBLISH が届いた場合の処理。
+              // 仕様上 PUBLISH は SUBSCRIBE_TRACKS 応答に属するが、
+              // 実装の堅牢性のため受信可能にしておく。
+              const decodedMsg = decodePublishPayload(messagePayload);
+              const fullNamespace = trackNamespaceToStrings(decodedMsg.trackNamespace);
+              const suffixStrings = fullNamespace.slice(subscription.namespacePrefix.length);
+              const trackName = new TextDecoder().decode(decodedMsg.trackName);
+              callbacks.onPublish?.(suffixStrings, trackName, decodedMsg.trackAlias);
+              break;
+            }
+
             default:
               // draft-ietf-moq-transport-18 §10 (Control Messages):
               // "An endpoint that receives an unknown message type MUST close the session."
@@ -2427,6 +2450,9 @@ export class SessionImpl implements Session {
     }
     this.pendingTrackStatus.clear();
 
+    // 閉じた Subgroup の追跡をクリア
+    this.closedSubgroups.clear();
+
     // Pending Subgroup ストリームの buffer を解放
     // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
     this.pendingSubgroupBuffer.notifyAll("session-close");
@@ -2643,12 +2669,26 @@ export class SessionImpl implements Session {
    */
   private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
     const trackAlias = publisher.getTrackAlias();
+    const groupId = BigInt(params.groupId);
     const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
     // 前の Promise のエラーをキャッチしてチェーンが止まらないようにする。
     // エラーが伝播すると後続の全ての .then() がスキップされ、
     // 新しいオブジェクトが送信されなくなる。
     const currentPromise = previousPromise
       .catch(() => {})
+      .then(() => {
+        // 閉じた Subgroup への送信を拒否する
+        // draft-ietf-moq-transport-18 §11.4.3:
+        // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+        //  attempt to open a new stream to deliver additional Objects in that Subgroup."
+        if (this.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
+          throw new ClosedSubgroupError(
+            `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
+            trackAlias,
+            groupId,
+          );
+        }
+      })
       .then(() => this.sendObjectInternal(publisher, params))
       .catch((err: unknown) => {
         publisher.handleError(err instanceof Error ? err : new Error(String(err)));
@@ -2677,6 +2717,8 @@ export class SessionImpl implements Session {
           await streamState.writer.close();
         } catch {
           // 既に閉じられている場合は無視
+          // writer.close() の失敗は STOP_SENDING とみなさない
+          // publisher が自発的に閉じるストリームの close 失敗は追跡不要
         }
       }
 
@@ -2705,7 +2747,21 @@ export class SessionImpl implements Session {
         groupId,
         publisherPriority: params.priority ?? 128,
       });
-      await writer.write(header);
+
+      // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
+      // closedSubgroups に追加する。
+      // draft-ietf-moq-transport-18 §11.4.3:
+      // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+      //  attempt to open a new stream to deliver additional Objects in that Subgroup."
+      try {
+        await writer.write(header);
+      } catch (err) {
+        // ヘッダー書き込み失敗時は writer の参照が publisherStreams に残らないため、
+        // 明示的にロックを解放する
+        writer.releaseLock();
+        this.closedSubgroups.add(`${trackAlias}:${groupId}`);
+        throw err;
+      }
 
       streamState = { groupId, writer, previousObjectId: -1n };
       this.publisherStreams.set(trackAlias, streamState);
@@ -2735,9 +2791,18 @@ export class SessionImpl implements Session {
       params.properties,
     );
 
-    await streamState.writer.write(data);
-    if (params.payload.length > 0) {
-      await streamState.writer.write(params.payload);
+    // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
+    // closedSubgroups に追加する。
+    try {
+      await streamState.writer.write(data);
+      if (params.payload.length > 0) {
+        await streamState.writer.write(params.payload);
+      }
+    } catch (err) {
+      // 書き込み失敗時は writer が破損しているためロックを解放する
+      streamState.writer.releaseLock();
+      this.closedSubgroups.add(`${trackAlias}:${groupId}`);
+      throw err;
     }
 
     // 状態を更新
@@ -2775,6 +2840,18 @@ export class SessionImpl implements Session {
         ]);
       } catch {
         // タイムアウトまたは既にクローズされている場合は無視
+      }
+    }
+
+    // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
+    // 長時間稼働時のメモリリークを防ぐため、単調増加させない
+    //
+    // ECMAScript 仕様上、Set のイテレーション中の delete は安全である。
+    // キー形式 `${trackAlias}:${groupId}` の `:` 区切りにより、
+    // trackAlias=1 が trackAlias=10 のエントリに誤マッチしないことが保証される。
+    for (const key of this.closedSubgroups) {
+      if (key.startsWith(`${trackAlias}:`)) {
+        this.closedSubgroups.delete(key);
       }
     }
   }

@@ -1,7 +1,9 @@
 # SUBSCRIBE_NAMESPACE 応答ストリームで PUBLISH メッセージを処理できない
 
 Created: 2026-05-13
+Completed: 2026-06-02
 Model: Opus 4.7
+Branch: feature/draft-18
 
 ## 概要
 
@@ -64,3 +66,14 @@ SUBSCRIBE_NAMESPACE 応答ストリーム上で `MessageType.PUBLISH` を受信�
 - `NamespaceSubscriptionCallbacks` に `onPublish` が追加されている
 - `vp run test` 全パス
 - `vp run build` 成功
+
+## 解決方法
+
+- `src/session.ts`:
+  - `NamespaceSubscriptionCallbacks` インターフェースに `onPublish` コールバックを追加
+    - パラメータ: `trackNamespaceSuffix: string[]`, `trackName: string`, `trackAlias: bigint`
+  - `startNamespaceStreamLoop` の switch 文に `MessageType.PUBLISH` case を追加
+    - `decodePublishPayload` でデコードし、`onPublish` コールバックでアプリケーションに通知する
+    - Track Namespace Suffix は `subscription.namespacePrefix` を使って接頭辞を除去して計算する
+  - `decodePublishPayload` のインポートを追加
+- 既存テスト `vp run test` 586 件全パス、`vp run build` 成功

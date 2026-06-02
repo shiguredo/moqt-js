@@ -58,6 +58,7 @@ draft-ietf-moq-transport-18 A.1: "Close session when delta encoding wraps (#1560
 - 実装変更あり
 - 後方互換あり (既存の正常値の処理は変わらない。異常系のプロトコル違反検出が追加される)
 - 既存の `ProtocolViolationError` を catch してセッションを閉じる経路が再利用できる
+
 ## 解決方法
 
 本 issue は dataStream.ts の大規模なワイヤーフォーマット変更を伴うため、別途専用の実装セッションで対応する。draft-18 準拠に必要な変更として認識済み。

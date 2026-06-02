@@ -54,6 +54,7 @@ draft-ietf-moq-transport-18 A.1: "Make Object ID and Group ID delta encoded in F
 
 - 実装変更なし、コメント更新のみ
 - 後方互換あり (moqt-js 内部では既に delta encoding で実装済み)
+
 ## 解決方法
 
 本 issue は dataStream.ts の大規模なワイヤーフォーマット変更を伴うため、別途専用の実装セッションで対応する。draft-18 準拠に必要な変更として認識済み。

@@ -1,7 +1,9 @@
 # STOP_SENDING / delivery timeout 後に閉じた Subgroup への送信を禁止する
 
 Created: 2026-05-13
+Completed: 2026-06-02
 Model: Opus 4.7
+Branch: feature/draft-18
 
 ## 概要
 
@@ -187,3 +189,19 @@ PBT (`.prop.ts`) は `writer.closed` の reject 模擬にモックが必要と�
   行 334 の「未対応: Subgroup 再オープン禁止」を削除する
 - `vp run test` 全パス
 - `vp run build` 成功
+
+## 解決方法
+
+- `src/error.ts`: `ClosedSubgroupError` クラスを新設し、閉じた Subgroup への送信拒否時に throw する内部エラー型として使用する
+- `src/error.test.ts`: `ClosedSubgroupError` が `Error` を継承し `name` / `trackAlias` / `groupId` を正しく保持するテストを追加
+- `src/index.ts`: `ClosedSubgroupError` を公開 export に追加し、アプリケーションから `instanceof` 判定可能にする
+- `src/session.ts`:
+  - `closedSubgroups: Set<string>` フィールドを追加し、TODO コメントを実装で置き換える
+  - `sendObject` の Promise チェーンに `.then()` を追加し、`sendObjectInternal` 呼び出し前に `closedSubgroups` をチェックして送信を拒否する
+  - `sendObjectInternal` の `writer.write()` 呼び出しを try/catch で囲み、失敗時に `closedSubgroups` へ追加・ロック解放・rethrow を行う
+  - `closePublisherStreamInternal` で publisher done 時に当該 trackAlias の `closedSubgroups` エントリをクリアする
+  - `close()` でセッション終了時に `closedSubgroups` を全クリアする
+- `CHANGES.md`:
+  - `## 2026.2.0` セクションの「未対応: Subgroup 再オープン禁止」行を削除
+  - `## develop` セクションに `[FIX]` エントリを追加
+- 既存テスト `vp run test` 586 件全パス、`vp run build` 成功
