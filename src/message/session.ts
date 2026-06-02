@@ -19,11 +19,7 @@ import { ProtocolViolationError } from "../error";
 /**
  * GOAWAY メッセージ (Section 10.4)
  *
- * draft-ietf-moq-transport-18:
- * セッションを終了する意図を通知する。
- * サーバーはセッションマイグレーション用のオプショナル URI を含めることができる。
- * Timeout フィールドが追加された。
- * draft-ietf-moq-transport-18 Section 10.4
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -31,7 +27,13 @@ import { ProtocolViolationError } from "../error";
  *   New Session URI Length (vi64),
  *   New Session URI (..),
  *   Timeout (vi64),
+ *   [Request ID (vi64)],
  * }
+ *
+ * - Request ID: Present only when sent on the control stream.
+ *   制御ストリーム上では、GOAWAY 送信前に処理された最後の
+ *   リクエスト ID より大きい最小の Request ID を設定する。
+ *   リクエストストリーム上では null。
  */
 export interface Goaway {
   type: typeof MessageType.GOAWAY;
@@ -41,6 +43,11 @@ export interface Goaway {
    * 0 の場合は即時切断を意味する
    */
   timeout: bigint;
+  /**
+   * 制御ストリーム上の GOAWAY のみ存在する。
+   * リクエストストリーム上の GOAWAY では null。
+   */
+  requestId: bigint | null;
 }
 
 /**
@@ -180,7 +187,9 @@ export interface RequestError {
  * Goaway のペイロードをエンコード
  *
  * draft-ietf-moq-transport-18 Section 10.4:
- * New Session URI Length + New Session URI + Timeout
+ * New Session URI Length + New Session URI + Timeout + [Request ID]
+ *
+ * - Request ID は制御ストリーム上でのみ存在する (requestId が非 null)
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   const uriBytes = new TextEncoder().encode(msg.newSessionUri);
@@ -189,6 +198,9 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   parts.push(encodeVarint(uriBytes.length));
   parts.push(uriBytes);
   parts.push(encodeVarint(msg.timeout));
+  if (msg.requestId !== null) {
+    parts.push(encodeVarint(msg.requestId));
+  }
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -202,6 +214,10 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
 
 /**
  * Goaway のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.4:
+ * - Timeout の後、残りバイトがあれば Request ID をデコードする
+ * - 残りバイトがない場合（リクエストストリーム上）、requestId は null
  */
 export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
@@ -219,12 +235,20 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const newSessionUri = new TextDecoder().decode(uriBytes);
   offset += Number(uriLength);
 
-  const [timeout] = decodeVarint(data, offset);
+  const [timeout, timeoutSize] = decodeVarint(data, offset);
+  offset += timeoutSize;
+
+  let requestId: bigint | null = null;
+  if (offset < data.length) {
+    const [rid] = decodeVarint(data, offset);
+    requestId = rid;
+  }
 
   return {
     type: MessageType.GOAWAY,
     newSessionUri,
     timeout,
+    requestId,
   };
 }
 

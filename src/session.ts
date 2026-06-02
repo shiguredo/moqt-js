@@ -2319,6 +2319,7 @@ export class SessionImpl implements Session {
       type: MessageType.GOAWAY,
       newSessionUri: "",
       timeout: goawayTimeout,
+      requestId: this.nextRequestId,
     });
 
     await this.sendControlMessage(MessageType.GOAWAY, payload, {
@@ -3111,6 +3112,19 @@ export class SessionImpl implements Session {
     this.receivedGoaway = true;
 
     const msg = decodeGoawayPayload(payload);
+
+    // draft-ietf-moq-transport-18 §10.4:
+    // 制御ストリーム上の GOAWAY には Request ID が必須。
+    // 受信側のパリティと一致しなければ INVALID_REQUEST_ID でセッションを閉じる。
+    if (msg.requestId !== null && msg.requestId % 2n !== 0n) {
+      this.closeWithError(
+        new SessionError(
+          `GOAWAY request ID parity mismatch: ${msg.requestId} (expected odd)`,
+          SessionErrorCode.INVALID_REQUEST_ID,
+        ),
+      );
+      return { error: "GOAWAY request ID parity mismatch" };
+    }
 
     // GOAWAY コールバックを呼び出す
     this.callbacks.goaway?.(msg.newSessionUri);

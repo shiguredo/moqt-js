@@ -2,8 +2,10 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
 - Polished: 2026-06-02
+- Branch: feature/draft-18
 
 ## 目的
 
@@ -115,3 +117,12 @@ draft-ietf-moq-transport-18 §10.4:
 ## 関連 issue
 
 - 0187: リクエストストリーム上の GOAWAY 受信ハンドリング（0188 が GOAWAY に Request ID を追加し、0187 がリクエストストリーム上で null になる前提で受信する）
+
+## 解決方法
+
+- `Goaway` 型に `requestId: bigint | null` を追加。制御ストリーム時は Request ID、リクエストストリーム時は null
+- `encodeGoawayPayload`: requestId が非 null なら末尾に vi64 でエンコード
+- `decodeGoawayPayload`: Timeout デコード後、残りバイトがあれば Request ID をデコード
+- `sendGoaway()`: `this.nextRequestId` を requestId として送信
+- `handleGoaway()`: 制御ストリーム受信時に requestId のパリティ検証（奇数であることを確認）
+- PBT: requestId あり/なし両方の Goaway ラウンドトリップテストを追加

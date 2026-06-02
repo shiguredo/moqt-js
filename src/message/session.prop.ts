@@ -99,11 +99,13 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
     fc.property(
       fc.string({ minLength: 0, maxLength: 200 }),
       fc.bigInt({ min: 0n, max: 1000000n }),
-      (newSessionUri, timeout) => {
+      fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: null }),
+      (newSessionUri, timeout, requestId) => {
         const original: Goaway = {
           type: MessageType.GOAWAY,
           newSessionUri,
           timeout,
+          requestId,
         };
 
         const encoded = encodeGoawayPayload(original);
@@ -112,6 +114,7 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
         assert.equal(decoded.type, MessageType.GOAWAY);
         assert.equal(decoded.newSessionUri, newSessionUri);
         assert.equal(decoded.timeout, timeout);
+        assert.equal(decoded.requestId, requestId);
       },
     ),
   );

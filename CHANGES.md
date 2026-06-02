@@ -17,6 +17,11 @@
   - session.ts / bidi.ts の送信コード全 9 箇所から requiredRequestIdDelta: 0n を削除する
   - 全 PBT テストのラウンドトリップ検証からも requiredRequestIdDelta を削除する
   - @voluntas
+- [CHANGE] GOAWAY メッセージに Request ID フィールドを追加する (#0188)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、制御ストリーム上の GOAWAY に Request ID (vi64) を追加する
+  - Goaway 型に requestId: bigint | null を追加、エンコード/デコードを条件付き対応
+  - sendGoaway() が nextRequestId を送信、handleGoaway() がパリティを検証する
+  - @voluntas
 - [CHANGE] SUBSCRIBE_NAMESPACE を SUBSCRIBE_NAMESPACE (0x50) と SUBSCRIBE_TRACKS (0x51) に分割する (#0184)
   - draft-ietf-moq-transport-18 §10.18 / §10.19 に基づき、責務を namespace discovery と track subscription に分離する
   - `MessageType.SUBSCRIBE_NAMESPACE` を `0x11` から `0x50` に変更しワイヤーフォーマットを更新する
