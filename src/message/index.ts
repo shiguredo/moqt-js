@@ -17,7 +17,7 @@ export {
 } from "./types";
 
 // デバッグ
-export { getMessageTypeName } from "./debug";
+export { getMessageTypeName, getRequestOkAliasName } from "./debug";
 
 // パラメータ
 export {

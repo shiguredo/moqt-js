@@ -59,3 +59,8 @@ draft-ietf-moq-transport-18 A.1: "Define textual aliases for REQUEST_OK (#1610)"
 - 実装変更あり (表示名の追加)
 - 後方互換あり (ワイヤーフォーマット不変、表示名のみの変更)
 - devtools の DebugPanel 表示が改善される
+
+## 解決方法
+
+- `src/message/debug.ts` に REQUEST_OK_ALIASES マッピングと getRequestOkAliasName() を追加
+- index.ts から getRequestOkAliasName を公開
