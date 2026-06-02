@@ -2,7 +2,9 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 目的
@@ -88,3 +90,9 @@ draft-ietf-moq-transport-18 A.1: "Don't close the Session for unknown errors (#1
 - 実装変更あり
 - 後方互換あり (未知エラーコードは従来 PROTOCOL_VIOLATION で切断していたが、切断しなくなる)
 - セッション切断の契機が減るため、より堅牢な動作になる
+
+## 解決方法
+
+- `src/error.ts` に normalizeRequestErrorCode() / normalizePublishDoneCode() を追加
+- §14 に基づき未知のエラーコードを INTERNAL_ERROR に正規化
+- 単体テストを追加

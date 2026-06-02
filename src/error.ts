@@ -68,6 +68,30 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知のエラーコードは INTERNAL_ERROR として扱う。
+ * Receipt of an unknown error code MUST be treated as equivalent to
+ * INTERNAL_ERROR for that context.
+ */
+export function normalizeRequestErrorCode(code: number): RequestErrorCode {
+  if (Object.values(RequestErrorCode).includes(code as RequestErrorCode)) {
+    return code as RequestErrorCode;
+  }
+  return RequestErrorCode.INTERNAL_ERROR;
+}
+
+/**
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
+ */
+export function normalizePublishDoneCode(code: number): PublishDoneCode {
+  if (Object.values(PublishDoneCode).includes(code as PublishDoneCode)) {
+    return code as PublishDoneCode;
+  }
+  return PublishDoneCode.INTERNAL_ERROR;
+}
+
+/**
  * PUBLISH_DONE Codes (Section 10.11 PUBLISH_DONE)
  *
  * draft-ietf-moq-transport-18:
