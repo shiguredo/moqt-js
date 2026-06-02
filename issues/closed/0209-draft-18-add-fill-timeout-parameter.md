@@ -2,9 +2,9 @@
 
 - Priority: Medium
 
-Created: 2026-05-13
-Model: Opus 4.7
-
+- Completed: 2026-06-02
+- Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 概要
@@ -68,3 +68,8 @@ draft-ietf-moq-transport-18 A.1: (この追加は §10.2.5 に含まれる)
 - 後方互換あり (新規パラメータの追加。指定しない場合はパラメータ自体が送信されない)
 - devtools の Fetch パネルに FILL_TIMEOUT 入力欄を追加するのが望ましい
 - `CHANGES.md` に [ADD] エントリを追加する
+
+## 解決方法
+
+- MessageParameterType.FILL_TIMEOUT = 0x0A を追加
+- パラメータエンコーディングマップに varint として登録

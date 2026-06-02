@@ -29,6 +29,21 @@ import type { Location } from "./types";
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
+
+/**
+ * 予約名前空間プレフィクス
+ *
+ * draft-ietf-moq-transport-18 §3.2.1 (Reserved Namespaces):
+ * "MOQT reserves all Track Namespace values whose first tuple field
+ *  begins with a period (0x2e, .)."
+ */
+export const RESERVED_NAMESPACE_PREFIX = ".";
+
+/**
+ * draft-ietf-moq-transport-18 §3.2.2 (Session-Level Tracks):
+ * ".session" 名前空間はセッションレベルの track と namespace に予約される。
+ */
+export const SESSION_LEVEL_NAMESPACE = ".session";
 /**
  * Track Namespace の最大フィールド数
  *
@@ -320,6 +335,32 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
 }
 
 /**
+ * Track Namespace が予約プレフィクスで始まるかを判定する
+ *
+ * draft-ietf-moq-transport-18 §3.2.1 (Reserved Namespaces):
+ * "MOQT reserves all Track Namespace values whose first tuple field
+ *  begins with a period (0x2e, .)."
+ */
+export function isReservedNamespace(tuple: Uint8Array[]): boolean {
+  if (tuple.length === 0) return false;
+  return tuple[0].length > 0 && tuple[0][0] === 0x2e;
+}
+
+/**
+ * Track Namespace が session-level かを判定する
+ *
+ * draft-ietf-moq-transport-18 §3.2.2 (Session-Level Tracks):
+ * "MOQT defines the .session namespace ... in the first position of
+ *  the Track Namespace for session-level tracks and namespaces."
+ */
+export function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
+  if (tuple.length === 0 || tuple[0].length === 0) return false;
+  if (tuple[0][0] !== 0x2e) return false;
+  const decoder = new TextDecoder();
+  return decoder.decode(tuple[0]) === ".session";
+}
+
+/**
  * Track Name をエンコードする（サイズ検証付き）
  *
  * draft-ietf-moq-transport-18:
@@ -537,6 +578,8 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x08: "varint",
   // LARGEST_OBJECT (Section 10.2.11)
   0x09: "location",
+  // FILL_TIMEOUT (Section 10.2.5)
+  0x0a: "varint",
   // FORWARD (Section 10.2.12)
   0x10: "uint8",
   // SUBSCRIBER_PRIORITY (Section 10.2.7)

@@ -142,6 +142,14 @@ export const MessageParameterType = {
    */
   LARGEST_OBJECT: 0x09,
   /**
+   * FILL_TIMEOUT (Section 10.2.5 FILL TIMEOUT Parameter)
+   *
+   * FETCH メッセージで使用。
+   * relay が欠損 object の fill 待機に費やす最大時間（ミリ秒）。
+   * 0 は即座に利用可能な object のみを要求。
+   */
+  FILL_TIMEOUT: 0x0a,
+  /**
    * FORWARD (Section 10.2.12 FORWARD Parameter)
    */
   FORWARD: 0x10,

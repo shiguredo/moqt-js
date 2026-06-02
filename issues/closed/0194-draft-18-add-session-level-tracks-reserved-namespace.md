@@ -1,6 +1,8 @@
 # Session-Level Tracks 用の予約名前空間定数を追加する
 
+- Completed: 2026-06-02
 - Priority: Medium
+- Branch: feature/draft-18
 - Created: 2026-05-13
 - Model: Opus 4.7
 - Polished: 2026-06-02
@@ -87,3 +89,8 @@ moqt-js は予約名前空間を認識し、ユーザーが予約プレフィク
 
 - `isReservedNamespace()` / `isSessionLevelNamespace()` の単体テストを追加する
 - `.session` 名前空間への publish / subscribe が拒否されることを確認する
+
+## 解決方法
+
+- RESERVED_NAMESPACE_PREFIX / SESSION_LEVEL_NAMESPACE 定数を追加
+- isReservedNamespace() / isSessionLevelNamespace() ヘルパーを追加
