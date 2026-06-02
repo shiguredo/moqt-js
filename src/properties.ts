@@ -63,6 +63,16 @@ export const TrackPropertyId = {
    */
   MAX_CACHE_DURATION: 0x04n,
   /**
+   * Subgroup Delivery Timeout (Section 12.1 SUBGROUP_DELIVERY_TIMEOUT)
+   *
+   * draft-ietf-moq-transport-18:
+   * SUBGROUP_DELIVERY_TIMEOUT (Property Type 0x06) は varint。
+   * Publisher が Subgroup の配信タイムアウト（ミリ秒）として設定する。
+   * 0 はタイムアウトなしを意味する。
+   * draft-ietf-moq-transport-18 Section 12.1
+   */
+  SUBGROUP_DELIVERY_TIMEOUT: 0x06n,
+  /**
    * Publisher Priority (Section 12.4 DEFAULT PUBLISHER PRIORITY)
    * Publisher が設定する優先度（0-255）
    */

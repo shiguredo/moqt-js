@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/add-subgroup-delivery-timeout-property
 - Polished: 2026-06-02
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -81,4 +82,20 @@ Subscribe / Fetch の状態管理ロジックへの影響はない。本 Propert
 - `TrackPropertyId` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06n` が定義されている
 - `properties.test.ts` に定数値確認テストがある
 - `vp run test` 全パス
+- `vp run build` 成功
+
+## 解決方法
+
+### 変更ファイル
+
+- `src/properties.ts`: `TrackPropertyId` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06n` を追加（0x04 と 0x0E の間、数値順）
+- `src/properties.test.ts`: 定数値確認テストを追加 (`TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である`)
+
+### 未変更のファイル（意図的）
+
+- `src/properties.prop.ts`: `unknownExtensionIdArb` の filter は値域制約のある Property ID のみを除外する設計のため、SUBGROUP_DELIVERY_TIMEOUT は除外不要（値域制約なし）。PBT の既存 arb で自然にカバーされる。
+
+### テスト
+
+- `vp run test` 全 587 テスト通過
 - `vp run build` 成功

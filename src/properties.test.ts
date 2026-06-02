@@ -19,6 +19,10 @@ import {
 } from "./properties";
 import { MalformedTrackError, ProtocolViolationError } from "./error";
 
+test("TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である", () => {
+  assert.equal(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, 0x06n);
+});
+
 test("encodeProperty: 偶数 ID は varint value 形式でエンコード", () => {
   const header: Property = { id: 0x02n, value: 42n };
   const encoded = encodeProperty(header);

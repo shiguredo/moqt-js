@@ -61,6 +61,10 @@
   - `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x06: "varint"` エントリを追加する
   - PBT の varint パラメータラウンドトリップテストに 0x06 を追加する
   - @voluntas
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT Track Property (Type 0x06) を追加する (#0230)
+  - draft-ietf-moq-transport-18 §12.1 に基づき、`TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT = 0x06n` を追加する
+  - 定数値確認テストを追加する
+  - @voluntas
 - [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
   - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
   - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う
