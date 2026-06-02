@@ -4,7 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-request-ok-empty-track-properties-validation
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-06-03
 
 ## 目的
 

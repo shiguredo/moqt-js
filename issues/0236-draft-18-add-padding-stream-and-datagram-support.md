@@ -4,7 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-padding-stream-and-datagram-support
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-06-03
 
 ## 目的
 

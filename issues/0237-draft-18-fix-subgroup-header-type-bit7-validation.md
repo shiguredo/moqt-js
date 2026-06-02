@@ -4,7 +4,10 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/fix-subgroup-header-type-bit7-validation
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-06-03
+- Branch: feature/fix-subgroup-header-type-bit7-validation
+
+注: 本 issue の修正内容は 0234 (FIRST_OBJECT bit 追加) の一部として同時実装可能。0234 の実装時に本 issue も完了とみなせる。
 
 ## 目的
 

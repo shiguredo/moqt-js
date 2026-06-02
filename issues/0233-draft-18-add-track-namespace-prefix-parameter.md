@@ -4,7 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-track-namespace-prefix-parameter
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -51,16 +51,18 @@ TRACK_NAMESPACE_PREFIX: 0x34,
 
 ### 2. MESSAGE_PARAMETER_VALUE_ENCODING への追加
 
-Track Namespace は既存の 4 種 (uint8/varint/location/length-prefixed) に該当しない独自の構造 (varint count + 各フィールドが varint length + bytes) を持つ。Message Parameter の Value としては Track Namespace のエンコード済みバイト列を保持するため、"namespace" などの新しいエンコーディング種別を追加し、`encodeTrackNamespace` / `decodeTrackNamespace` を利用する。
+Track Namespace は独自の構造 (varint count + 各フィールドが varint length + bytes) を持つが、Message Parameter の Value としてはエンコード済みのバイト列を保持する。既存の "length-prefixed" で扱い、`encodeTrackNamespace` / `decodeTrackNamespace` でバイト列⇔`TrackNamespace` の変換を行う。
 
 ```typescript
 // TRACK_NAMESPACE_PREFIX (Section 10.2.14)
-0x34: "namespace",
+0x34: "length-prefixed",
 ```
 
 ### 3. decodeMessageParameter の対応
 
-`decodeMessageParameter` に "namespace" case を追加し、`decodeTrackNamespace` でデコードする。パラメータ値の型として `TrackNamespace` を返す。
+0x34 は "length-prefixed" のため既存のデコードロジックで bytes として読み取れる。上位レイヤーで `decodeTrackNamespace` を使って `TrackNamespace` に変換する。
+
+`getParameterTrackNamespace` ヘルパーを `parameter.ts` に追加し、パラメータ値から `TrackNamespace` を抽出する。`encodeParameterTrackNamespace` も対称的に追加する。
 
 ### 4. PBT 対応
 
@@ -69,8 +71,9 @@ PBT の arb に 0x34 を追加する。出現可能なメッセージは REQUEST
 ## 影響範囲
 
 - `src/message/types.ts`: `MessageParameterType` に `TRACK_NAMESPACE_PREFIX: 0x34` を追加
-- `src/message/parameter.ts`: `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x34: "namespace"` を追加、`decodeMessageParameter` / `encodeMessageParameter` に対応追加
-- `src/message/subscribe.prop.ts`: PBT arb に 0x34 を追加
+- `src/message/parameter.ts`: `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x34: "length-prefixed"` を追加、`getParameterTrackNamespace` / `encodeParameterTrackNamespace` ヘルパー追加
+- `src/message/subscribe.prop.ts`: PBT arb の `lengthPrefixedParameterArb` に 0x34 を追加
+- `src/message/parameter.prop.ts`: コメントと arb を更新
 
 ## 後方互換
 

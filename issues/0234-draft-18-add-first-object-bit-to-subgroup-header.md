@@ -4,7 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-subgroup-header-first-object-bit
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -70,23 +70,36 @@ export interface SubgroupHeader {
 }
 ```
 
-### 4. encodeSubgroupHeader の対応
+### 4. encodeSubgroupHeader / decodeSubgroupHeader の対応
 
-`encodeSubgroupHeader` に `firstObject` オプションを追加し、0x40 ビットをセットできるようにする。
+`encodeSubgroupHeader` に `firstObject` オプションを追加し、指定時に Type に 0x40 を OR する。
 
-### 5. decodeSubgroupHeader の対応
+`decodeSubgroupHeader` で Type の bit 6 (0x40) をチェックし、`firstObject` を true に設定する。
 
-`decodeSubgroupHeader` で Type の bit 6 (0x40) をチェックし、`firstObject` フィールドを設定する。
+### 5. bit 7 のバリデーション修正（issue 0237 の内容を含む）
 
-### 6. bit 7 のバリデーション修正
+`src/dataStream.ts:244` のチェックに bit 7 (= 0x80) の検証を追加する。0x90 等の不正値が通過しないようにする。
 
-`src/dataStream.ts:244` の `(typeNum & 0x10) === 0` を `(typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0` に変更し、bit 7 がセットされた不正値 (0x90 等) を検出する。
+```typescript
+// draft-ietf-moq-transport-18 §11.4.2:
+// "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
+if ((typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0) {
+```
+
+### 6. テスト対応
+
+既存の Subgroup Header PBT に 0x50-0x7D の Type 値を追加し、ラウンドトリップ検証を拡張する。0x90 等の bit 7 セット不正値のエラーテストも追加する。
 
 ## 影響範囲
 
-- `src/dataStream.ts`: `SubgroupHeaderType` に 24 種類の定数追加、コメント更新、`SubgroupHeader` インターフェイスに `firstObject` 追加、`encodeSubgroupHeader` / `decodeSubgroupHeader` の対応
-- `src/dataStream.test.ts`: FIRST_OBJECT bit のエンコード/デコードテスト追加
-- `src/session.ts`: Subgroup Header のデコード結果を利用する箇所（`firstObject` の伝搬が必要か確認）
+- `src/dataStream.ts`: `SubgroupHeaderType` に 24 種類追加、`SubgroupHeader.firstObject` 追加、`hasPriorityPresent` 更新、`encodeSubgroupHeader`/`decodeSubgroupHeader` 対応、bit 7 バリデーション追加
+- `src/dataStream.test.ts`: FIRST_OBJECT bit テストと 0x90 不正値テスト追加
+- `src/dataStream.prop.ts`: PBT 対応（必要に応じて）
+- `src/session.ts`: Subgroup Header のデコード結果を利用する箇所（`firstObject` の伝搬は本 issue の範囲外、wire format 層の対応のみ）
+
+## 関連 issue
+
+- 0237: bit 7 バリデーションの不足は本 issue の一部として修正する
 
 ## 完了条件
 
