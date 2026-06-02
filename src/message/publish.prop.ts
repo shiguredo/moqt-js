@@ -141,25 +141,15 @@ test("Publish のエンコード・デコードがラウンドトリップする
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       trackNameArb,
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
       trackPropertiesArb,
-      (
-        requestId,
-        requiredRequestIdDelta,
-        namespaceParts,
-        trackName,
-        trackAlias,
-        parameters,
-        trackProperties,
-      ) => {
+      (requestId, namespaceParts, trackName, trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.PUBLISH as typeof MessageType.PUBLISH,
           requestId,
-          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           trackName,
           trackAlias,
@@ -172,7 +162,6 @@ test("Publish のエンコード・デコードがラウンドトリップする
 
         assert.equal(decoded.type, MessageType.PUBLISH);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.deepEqual(decoded.trackName, trackName);
         assert.equal(decoded.trackAlias, trackAlias);

@@ -2,8 +2,10 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
 - Polished: 2026-06-02
+- Branch: feature/draft-18
 
 ## 目的
 
@@ -148,3 +150,28 @@ draft-ietf-moq-transport-18 §10.1 より、Request ID を消費する全メッ�
 - draft-17 実装のサーバーとは通信不能になる
 - SETUP の Required Request ID パラメータは draft-17 ですでに削除済みのため、SETUP への追加変更は不要
 - `src/message/debug.ts` / `src/message/index.ts` に間接的な参照がないか確認すること
+
+## 解決方法
+
+以下の全ファイルから `requiredRequestIdDelta` を削除した:
+
+### メッセージ interface 定義とエンコード/デコード
+
+- `src/message/publish.ts`: `Publish` 型から `requiredRequestIdDelta` を削除、encode/decode から除去
+- `src/message/subscribe.ts`: `Subscribe` 型と `RequestUpdate` 型から `requiredRequestIdDelta` を削除、encode/decode から除去
+- `src/message/fetch.ts`: `Fetch` 型から `requiredRequestIdDelta` を削除、encode/decode から除去
+- `src/message/trackstatus.ts`: `TrackStatus` 型から `requiredRequestIdDelta` を削除、encode/decode から除去
+- `src/message/namespace.ts`: `PublishNamespace` / `SubscribeNamespace` / `SubscribeTracks` 型から `requiredRequestIdDelta` を削除、encode/decode から除去
+
+### 送信コード
+
+- `src/session.ts`: publish(), subscribe(), fetch(), trackStatus(), subscribeNamespace(), subscribeTracks(), publishNamespace() の 7 箇所から `requiredRequestIdDelta: 0n` とコメントを削除。sendRequestUpdate() の JSDoc wire format 図からも削除
+- `src/session/bidi.ts`: bidiCancelSubscription(), bidiSendJoiningFetch() の 2 箇所から `requiredRequestIdDelta: 0n` を削除
+
+### テスト
+
+- `src/message/publish.prop.ts`: Publish ラウンドトリップテストから削除
+- `src/message/subscribe.prop.ts`: Subscribe / RequestUpdate ラウンドトリップテストから削除
+- `src/message/fetch.prop.ts`: Standalone / Joining Fetch ラウンドトリップテストと Fetch Type 不正値テストから削除
+- `src/message/trackstatus.prop.ts`: TrackStatus ラウンドトリップテストから削除
+- `src/message/namespace.prop.ts`: PublishNamespace / SubscribeNamespace / SubscribeTracks のラウンドトリップ、フレーミング、オプション不在テストから削除

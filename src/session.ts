@@ -1196,8 +1196,6 @@ export class SessionImpl implements Session {
     const publishMsg = {
       type: MessageType.PUBLISH,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       trackAlias,
@@ -1325,8 +1323,6 @@ export class SessionImpl implements Session {
     const subscribeMsg = {
       type: MessageType.SUBSCRIBE,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters,
@@ -1417,8 +1413,6 @@ export class SessionImpl implements Session {
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       fetchType: FetchType.STANDALONE,
       standalone: {
         trackNamespace,
@@ -1479,8 +1473,6 @@ export class SessionImpl implements Session {
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters: [],
@@ -1546,8 +1538,6 @@ export class SessionImpl implements Session {
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       parameters: [] as [],
     };
@@ -1633,7 +1623,6 @@ export class SessionImpl implements Session {
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
-      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       parameters: [] as [],
     };
@@ -2030,8 +2019,6 @@ export class SessionImpl implements Session {
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       parameters: [],
     };
@@ -2814,7 +2801,6 @@ export class SessionImpl implements Session {
    *   Type (i) = 0x2,
    *   Length (16),
    *   Request ID (i),
-   *   Required Request ID Delta (i),
    *   Parameters (..) ...
    * }
    */

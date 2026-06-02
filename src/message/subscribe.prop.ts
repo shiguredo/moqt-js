@@ -136,15 +136,13 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       trackNameArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, trackName, parameters) => {
+      (requestId, namespaceParts, trackName, parameters) => {
         const original = {
           type: MessageType.SUBSCRIBE as typeof MessageType.SUBSCRIBE,
           requestId,
-          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           trackName,
           parameters,
@@ -155,7 +153,6 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 
         assert.equal(decoded.type, MessageType.SUBSCRIBE);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.deepEqual(decoded.trackName, trackName);
         assert.equal(decoded.parameters.length, parameters.length);
@@ -224,30 +221,23 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
  */
 test("RequestUpdate のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      parametersArb,
-      (requestId, requiredRequestIdDelta, parameters) => {
-        const original = {
-          type: MessageType.REQUEST_UPDATE as typeof MessageType.REQUEST_UPDATE,
-          requestId,
-          requiredRequestIdDelta,
-          parameters,
-        };
+    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), parametersArb, (requestId, parameters) => {
+      const original = {
+        type: MessageType.REQUEST_UPDATE as typeof MessageType.REQUEST_UPDATE,
+        requestId,
+        parameters,
+      };
 
-        const encoded = encodeRequestUpdatePayload(original);
-        const decoded = decodeRequestUpdatePayload(encoded);
+      const encoded = encodeRequestUpdatePayload(original);
+      const decoded = decodeRequestUpdatePayload(encoded);
 
-        assert.equal(decoded.type, MessageType.REQUEST_UPDATE);
-        assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
-        assert.equal(decoded.parameters.length, parameters.length);
-        for (let i = 0; i < parameters.length; i++) {
-          assert.equal(decoded.parameters[i].type, parameters[i].type);
-          assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
-        }
-      },
-    ),
+      assert.equal(decoded.type, MessageType.REQUEST_UPDATE);
+      assert.equal(decoded.requestId, requestId);
+      assert.equal(decoded.parameters.length, parameters.length);
+      for (let i = 0; i < parameters.length; i++) {
+        assert.equal(decoded.parameters[i].type, parameters[i].type);
+        assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
+      }
+    }),
   );
 });

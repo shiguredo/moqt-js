@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] Required Request ID Delta フィールドを全リクエストメッセージから削除する (#0185)
+  - draft-ietf-moq-transport-18 §10.1 の偶数/奇数独立採番規則に基づき、全 8 メッセージのワイヤーフォーマットから requiredRequestIdDelta を除去する
+  - Publish / Subscribe / RequestUpdate / Fetch / TrackStatus / PublishNamespace / SubscribeNamespace / SubscribeTracks の interface, encode, decode を修正する
+  - session.ts / bidi.ts の送信コード全 9 箇所から requiredRequestIdDelta: 0n を削除する
+  - 全 PBT テストのラウンドトリップ検証からも requiredRequestIdDelta を削除する
+  - @voluntas
 - [CHANGE] SUBSCRIBE_NAMESPACE を SUBSCRIBE_NAMESPACE (0x50) と SUBSCRIBE_TRACKS (0x51) に分割する (#0184)
   - draft-ietf-moq-transport-18 §10.18 / §10.19 に基づき、責務を namespace discovery と track subscription に分離する
   - `MessageType.SUBSCRIBE_NAMESPACE` を `0x11` から `0x50` に変更しワイヤーフォーマットを更新する

@@ -511,7 +511,6 @@ export async function bidiSendRequestUpdate(
   const requestUpdateMsg = {
     type: MessageType.REQUEST_UPDATE,
     requestId: updateRequestId,
-    requiredRequestIdDelta: 0n,
     parameters,
   };
 
@@ -595,7 +594,6 @@ export async function bidiSendJoiningFetch(
   const fetchMsg = {
     type: MessageType.FETCH,
     requestId,
-    requiredRequestIdDelta: 0n,
     fetchType,
     joining: {
       joiningRequestId: subscribeRequestId,

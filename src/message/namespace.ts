@@ -22,8 +22,6 @@ import { MessageType } from "./types";
 export interface PublishNamespace {
   type: typeof MessageType.PUBLISH_NAMESPACE;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   parameters: Parameter[];
 }
@@ -90,8 +88,6 @@ export interface NamespaceDone {
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespacePrefix: TrackNamespace;
   parameters: Parameter[];
 }
@@ -122,8 +118,6 @@ export interface SubscribeNamespace {
 export interface SubscribeTracks {
   type: typeof MessageType.SUBSCRIBE_TRACKS;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespacePrefix: TrackNamespace;
   parameters: Parameter[];
 }
@@ -135,7 +129,6 @@ export function encodePublishNamespacePayload(msg: PublishNamespace): Uint8Array
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeParameters(msg.parameters));
 
@@ -158,12 +151,6 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaSize;
-
   const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
@@ -173,7 +160,6 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
   return {
     type: MessageType.PUBLISH_NAMESPACE,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     parameters,
   };
@@ -248,7 +234,6 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespacePrefix));
   parts.push(encodeParameters(msg.parameters));
 
@@ -273,12 +258,6 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaSize;
-
   const [trackNamespacePrefix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
@@ -288,7 +267,6 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   return {
     type: MessageType.SUBSCRIBE_NAMESPACE,
     requestId,
-    requiredRequestIdDelta,
     trackNamespacePrefix,
     parameters,
   };
@@ -313,7 +291,6 @@ export function encodeSubscribeTracksPayload(msg: SubscribeTracks): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespacePrefix));
   parts.push(encodeParameters(msg.parameters));
 
@@ -338,12 +315,6 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaSize] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaSize;
-
   const [trackNamespacePrefix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceSize;
 
@@ -353,7 +324,6 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
   return {
     type: MessageType.SUBSCRIBE_TRACKS,
     requestId,
-    requiredRequestIdDelta,
     trackNamespacePrefix,
     parameters,
   };

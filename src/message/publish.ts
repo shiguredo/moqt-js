@@ -26,8 +26,6 @@ import { MessageType } from "./types";
 export interface Publish {
   type: typeof MessageType.PUBLISH;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   trackAlias: bigint;
@@ -80,7 +78,6 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
@@ -114,12 +111,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -142,7 +133,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   return {
     type: MessageType.PUBLISH,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     trackAlias,

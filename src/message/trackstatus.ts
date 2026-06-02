@@ -37,8 +37,6 @@ import { MessageType } from "./types";
 export interface TrackStatus {
   type: typeof MessageType.TRACK_STATUS;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   parameters: Parameter[];
@@ -54,7 +52,6 @@ export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
@@ -79,12 +76,6 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -99,7 +90,6 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
   return {
     type: MessageType.TRACK_STATUS,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     parameters,
