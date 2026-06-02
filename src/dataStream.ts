@@ -956,6 +956,7 @@ export interface FetchObjectContext {
 export function encodeFetchObjectFields(
   fields: FetchObjectFields,
   includePayload = false,
+  context: FetchObjectContext | null = null,
 ): Uint8Array {
   const parts: Uint8Array[] = [];
 
@@ -986,11 +987,21 @@ export function encodeFetchObjectFields(
   }
 
   // Group ID (フラグ 0x08 がセットされている場合)
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "If the Group Order is Ascending (default), the Group ID is the prior
+  //  Object's Group ID plus the Group ID Delta + 1."
+  // エンコード時: delta = currentGroupId - priorGroupId - 1n
+  // 先頭オブジェクトまたは context 無しの場合は delta = currentGroupId (絶対値)
   if (fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) {
     if (fields.groupId === undefined) {
       throw new Error("Group ID required when GROUP_ID_PRESENT flag is set");
     }
-    parts.push(encodeVarint(fields.groupId));
+    if (context === null) {
+      parts.push(encodeVarint(fields.groupId));
+    } else {
+      const delta = fields.groupId - context.groupId - 1n;
+      parts.push(encodeVarint(delta));
+    }
   }
 
   // Subgroup ID (flags & 0x03 == 0x03 の場合)
@@ -1005,11 +1016,25 @@ export function encodeFetchObjectFields(
   }
 
   // Object ID (フラグ 0x04 がセットされている場合)
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "When the Group ID Delta field is not present, the Object ID is the
+  //  prior Object's ID plus the Object ID Delta if present."
+  // エンコード時:
+  //   - Group 不変 (!GROUP_ID_PRESENT) かつ context あり: delta = currentObjectId - priorObjectId
+  //   - それ以外（先頭または Group 変化）: delta = currentObjectId (絶対値)
   if (fields.serializationFlags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     if (fields.objectId === undefined) {
       throw new Error("Object ID required when OBJECT_ID_PRESENT flag is set");
     }
-    parts.push(encodeVarint(fields.objectId));
+    if (
+      !(fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) &&
+      context !== null
+    ) {
+      const delta = fields.objectId - context.objectId;
+      parts.push(encodeVarint(delta));
+    } else {
+      parts.push(encodeVarint(fields.objectId));
+    }
   }
 
   // Publisher Priority (フラグ 0x10 がセットされている場合)
@@ -1053,6 +1078,52 @@ export function encodeFetchObjectFields(
 }
 
 /**
+ * End of Range レコードをデコードする
+ *
+ * draft-ietf-moq-transport-18 §11.4.4.2: Group ID と Object ID のみが存在する。
+ */
+function decodeEndOfRange(
+  data: Uint8Array,
+  startOffset: number,
+  flags: number,
+  context: FetchObjectContext | null,
+): [DecodedFetchObject, number, FetchObjectContext] {
+  let consumed = 0;
+
+  const [groupId, gidConsumed] = decodeVarint(data, startOffset + consumed);
+  consumed += gidConsumed;
+
+  const [objectId, oidConsumed] = decodeVarint(data, startOffset + consumed);
+  consumed += oidConsumed;
+
+  const [payloadLength, payloadLenConsumed] = decodeVarint(data, startOffset + consumed);
+  consumed += payloadLenConsumed;
+
+  const endOfRange: EndOfRangeType =
+    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ? "non_existent" : "unknown";
+
+  const newContext: FetchObjectContext = {
+    groupId,
+    subgroupId: context?.subgroupId ?? 0n,
+    objectId,
+    publisherPriority: context?.publisherPriority ?? 0,
+  };
+
+  return [
+    {
+      groupId,
+      subgroupId: context?.subgroupId ?? 0n,
+      objectId,
+      publisherPriority: context?.publisherPriority ?? 0,
+      payloadLength,
+      endOfRange,
+    },
+    consumed,
+    newContext,
+  ];
+}
+
+/**
  * Decode Fetch Object Fields
  * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
  *
@@ -1080,42 +1151,13 @@ export function decodeFetchObjectFields(
     flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
     flags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE
   ) {
-    // End of Range: Group ID と Object ID のみが存在
-    const [groupId, gidConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += gidConsumed;
-
-    const [objectId, oidConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += oidConsumed;
-
-    // Object Payload Length (0 であるべき)
-    const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += payloadLenConsumed;
-
-    const endOfRange: EndOfRangeType =
-      flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ? "non_existent" : "unknown";
-
-    // prior context の更新:
-    // Group ID と Object ID は End of Range の値を使用
-    // Subgroup ID と Priority は直前の実 Object の値を維持
-    const newContext: FetchObjectContext = {
-      groupId,
-      subgroupId: context?.subgroupId ?? 0n,
-      objectId,
-      publisherPriority: context?.publisherPriority ?? 0,
-    };
-
-    return [
-      {
-        groupId,
-        subgroupId: context?.subgroupId ?? 0n,
-        objectId,
-        publisherPriority: context?.publisherPriority ?? 0,
-        payloadLength,
-        endOfRange,
-      },
-      totalConsumed,
-      newContext,
-    ];
+    const [result, consumed, newContext] = decodeEndOfRange(
+      data,
+      offset + totalConsumed,
+      flags,
+      context,
+    );
+    return [result, totalConsumed + consumed, newContext];
   }
 
   // draft-ietf-moq-transport-18 Section 11.4.4 Table 7:
@@ -1131,11 +1173,19 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // GROUP_ID_PRESENT がセットされている場合、フィールド値は delta であり、
+  // 正しい Group ID は prior.groupId + delta + 1n (Ascending 時)。
+  // 先頭オブジェクト (isFirst) の場合は delta が絶対値と等価。
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
-    const [gid, gidConsumed] = decodeVarint(data, offset + totalConsumed);
-    groupId = gid;
-    totalConsumed += gidConsumed;
+    const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
+    if (isFirst || context === null) {
+      groupId = delta;
+    } else {
+      groupId = context.groupId + delta + 1n;
+    }
+    totalConsumed += deltaConsumed;
   } else {
     if (isFirst || context === null) {
       throw new ProtocolViolationError("first object must have GROUP_ID_PRESENT flag set");
@@ -1173,11 +1223,20 @@ export function decodeFetchObjectFields(
   }
 
   // Object ID
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "When the Group ID Delta field is not present, the Object ID is the
+  //  prior Object's ID plus the Object ID Delta if present."
+  // Group 不変時 (!GROUP_ID_PRESENT) かつ非先頭の場合、delta は prior + delta。
+  // 先頭オブジェクトまたは Group 変化時は delta が絶対値。
   let objectId: bigint;
   if (flags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
-    const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
-    objectId = oid;
-    totalConsumed += oidConsumed;
+    const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
+    if (!(flags & FetchSerializationFlags.GROUP_ID_PRESENT) && !isFirst && context !== null) {
+      objectId = context.objectId + delta;
+    } else {
+      objectId = delta;
+    }
+    totalConsumed += deltaConsumed;
   } else {
     if (isFirst || context === null) {
       throw new ProtocolViolationError("first object must have OBJECT_ID_PRESENT flag set");

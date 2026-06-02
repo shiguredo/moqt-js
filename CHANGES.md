@@ -71,6 +71,12 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [FIX] Fetch Object Fields の Group ID / Object ID delta encoding デコードバグを修正する (#0231)
+  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、非先頭オブジェクトで Group ID = prior + delta + 1n に修正する
+  - Object ID Delta を Group 不変時に prior + delta として計算するよう修正する
+  - `encodeFetchObjectFields` に `context` パラメータを追加し delta encoding に対応する
+  - roundtrip テストと delta 非ゼロのデコードテストを追加する
+  - @voluntas
 - [FIX] STOP_SENDING / delivery timeout で閉じた Subgroup への送信を拒否する (#0178)
   - draft-ietf-moq-transport-18 §11.4.3 に基づき、閉じた Subgroup への再送信を事前に拒否する
   - `ClosedSubgroupError` を `src/error.ts` に新設する

@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/fix-fetch-delta-encoding-decode
 - Polished: 2026-06-02
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -137,4 +138,21 @@ encode 側でも同様に delta 計算を行う:
 - 非先頭オブジェクトで delta 非ゼロのテストが追加されている
 - roundtrip テストが追加されている
 - `vp run test` 全パス
+- `vp run build` 成功
+
+## 解決方法
+
+### 変更ファイル
+
+- `src/dataStream.ts`:
+  - `decodeFetchObjectFields`: Group ID Delta の計算を `prior.groupId + delta + 1n` に修正（非先頭オブジェクト時）。Object ID Delta の計算を `prior.objectId + delta` に修正（Group 不変かつ非先頭時）
+  - `encodeFetchObjectFields`: `context` パラメータを追加し、delta 計算を実装（Group ID: `fields.groupId - context.groupId - 1n`、Object ID: `fields.objectId - context.objectId`）
+- `src/dataStream.test.ts`: 3 件の新規テストを追加
+  - 非先頭オブジェクトの Group ID Delta デコードテスト
+  - 非先頭オブジェクトの Object ID Delta (Group 不変) デコードテスト
+  - encode→decode roundtrip テスト（3 オブジェクト）
+
+### テスト
+
+- `vp run test` 全 590 テスト通過
 - `vp run build` 成功

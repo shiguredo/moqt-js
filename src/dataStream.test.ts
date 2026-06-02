@@ -1092,3 +1092,161 @@ test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", ()
   assert.equal(decoded.subgroupId, 2n);
   assert.equal(decoded.publisherPriority, 200);
 });
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "If the Group Order is Ascending (default), the Group ID is the prior
+ *  Object's Group ID plus the Group ID Delta + 1."
+ *
+ * 非先頭オブジェクトで GROUP_ID_PRESENT がセットされている場合、
+ * delta から正しい Group ID (prior + delta + 1) を計算することを検証する。
+ */
+test("FetchObjectFields: 非先頭オブジェクトの Group ID Delta を正しくデコードする", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  // GROUP_ID_PRESENT | SUBGROUP_ZERO | OBJECT_ID_PRESENT | PRIORITY_PRESENT
+  const flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_ZERO |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  // delta_group=3, objectId=0(絶対値), priority=200, payloadLength=50
+  const groupDeltaBytes = encodeVarint(3n);
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(
+    1 + groupDeltaBytes.length + objectIdBytes.length + 1 + payloadLengthBytes.length,
+  );
+  data[0] = flags;
+  let offset = 1;
+  data.set(groupDeltaBytes, offset);
+  offset += groupDeltaBytes.length;
+  data.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  data[offset] = 200;
+  offset += 1;
+  data.set(payloadLengthBytes, offset);
+
+  const [decoded, , newContext] = decodeFetchObjectFields(data, prior, 0, false);
+
+  // groupId = prior.groupId + delta + 1 = 10 + 3 + 1 = 14
+  assert.equal(decoded.groupId, 14n);
+  // subgroupId = 0 (SUBGROUP_ZERO)
+  assert.equal(decoded.subgroupId, 0n);
+  // objectId = 0 (Group 変化時は絶対値)
+  assert.equal(decoded.objectId, 0n);
+  assert.equal(decoded.publisherPriority, 200);
+  assert.equal(decoded.payloadLength, 50n);
+  assert.equal(newContext.groupId, 14n);
+});
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "When the Group ID Delta field is not present, the Object ID is the
+ *  prior Object's ID plus the Object ID Delta if present."
+ *
+ * 非先頭オブジェクトで GROUP_ID_PRESENT なし、OBJECT_ID_PRESENT ありの場合、
+ * delta から正しい Object ID (prior + delta) を計算することを検証する。
+ */
+test("FetchObjectFields: 非先頭オブジェクトの Object ID Delta (Group 不変) を正しくデコードする", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  // SUBGROUP_SAME | OBJECT_ID_PRESENT
+  const flags = FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT;
+
+  // delta_object=3 (Group 不変時は prior + delta)
+  const objectDeltaBytes = encodeVarint(3n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(1 + objectDeltaBytes.length + payloadLengthBytes.length);
+  data[0] = flags;
+  data.set(objectDeltaBytes, 1);
+  data.set(payloadLengthBytes, 1 + objectDeltaBytes.length);
+
+  const [decoded, , newContext] = decodeFetchObjectFields(data, prior, 0, false);
+
+  // groupId = 10 (変化なし)
+  assert.equal(decoded.groupId, 10n);
+  // subgroupId = 1 (SUBGROUP_SAME)
+  assert.equal(decoded.subgroupId, 1n);
+  // objectId = prior.objectId + delta = 5 + 3 = 8
+  assert.equal(decoded.objectId, 8n);
+  assert.equal(decoded.publisherPriority, 128);
+  assert.equal(decoded.payloadLength, 50n);
+  assert.equal(newContext.objectId, 8n);
+});
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1:
+ * encode → decode で複数オブジェクトの delta encoding が正しく roundtrip することを検証する。
+ * オブジェクト 1: group=10, object=0  (先頭)
+ * オブジェクト 2: group=10, object=3  (Group 不変, OBJECT_ID_PRESENT, delta エンコード)
+ * オブジェクト 3: group=14, object=0  (Group 変更, GROUP_ID_PRESENT, delta エンコード)
+ */
+test("FetchObjectFields: encode→decode roundtrip で delta encoding が正しく復元される", () => {
+  // オブジェクト 1 (先頭): group=10, object=0
+  const firstFlags = createFirstFetchObjectFlags(false);
+  const first: FetchObjectFields = {
+    serializationFlags: firstFlags,
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [firstDecoded, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+  assert.equal(firstDecoded.groupId, 10n);
+  assert.equal(firstDecoded.objectId, 0n);
+
+  // オブジェクト 2: Group 不変, object=3 (delta=3), SUBGROUP_SAME
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT,
+    objectId: 3n,
+    payloadLength: 80n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [secondDecoded, , secondContext] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+  );
+  assert.equal(secondDecoded.groupId, 10n);
+  assert.equal(secondDecoded.objectId, 3n);
+  assert.equal(secondDecoded.payloadLength, 80n);
+
+  // オブジェクト 3: Group 変更 (10 → 14, delta=14-10-1=3), object=0
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_ZERO |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 14n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 200,
+    payloadLength: 30n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext);
+  const [thirdDecoded] = decodeFetchObjectFields(thirdEncoded, secondContext, 0, false);
+  assert.equal(thirdDecoded.groupId, 14n);
+  assert.equal(thirdDecoded.subgroupId, 0n);
+  assert.equal(thirdDecoded.objectId, 0n);
+  assert.equal(thirdDecoded.publisherPriority, 200);
+  assert.equal(thirdDecoded.payloadLength, 30n);
+});
