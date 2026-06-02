@@ -1,39 +1,84 @@
-# SUBGROUP_DELIVERY_TIMEOUT Track Property (Type 0x06) が未定義
+# SUBGROUP_DELIVERY_TIMEOUT Track Property (Type 0x06) を追加する
 
 - Priority: High
 - Created: 2026-06-02
 - Model: deepseek-v4-pro
-- Branch: {Git-Flow のブランチ名}
-- Polished: {YYYY-MM-DD}
+- Branch: feature/add-subgroup-delivery-timeout-property
+- Polished: 2026-06-02
 
 ## 目的
 
-draft-ietf-moq-transport-18 §12.1 で定義されている SUBGROUP_DELIVERY_TIMEOUT Track Property (Type 0x06) が TrackPropertyId に未定義である問題を修正する。
+draft-ietf-moq-transport-18 §12.1 で定義されている SUBGROUP_DELIVERY_TIMEOUT Track Property (Type 0x06) を `TrackPropertyId` に追加する。
 
 ## 優先度根拠
 
-仕様で定義された Track Property の欠落であり、他実装がこの Property を含むトラックを正しく処理できないため High。
-
-## 現状
-
-`src/properties.ts` の `TrackPropertyId` に `0x06` のエントリがない。
-定義済みの Track Property: MAX_CACHE_DURATION (0x04), OBJECT_DELIVERY_TIMEOUT (0x02), DEFAULT_PUBLISHER_PRIORITY (0x0E), DEFAULT_PUBLISHER_GROUP_ORDER (0x22), DYNAMIC_GROUPS (0x30)。
+draft-18 §8 で規定されている delivery timeout 機構の中核をなす Track Property であり、Publisher が timeout 値を設定するために必須。クライアント専用実装でも、Publisher としてこの Property を設定可能にする必要がある。欠落していると他実装との相互運用に支障があるため High。
 
 ## 一次資料の引用
 
 draft-ietf-moq-transport-18 §12.1 (SUBGROUP_DELIVERY_TIMEOUT):
 
-> SUBGROUP_DELIVERY_TIMEOUT (0x06): A varint property identifying the
-> maximum amount of time, in milliseconds, that the relay has to deliver
-> an entire subgroup after it has started delivering the subgroup.
+> SUBGROUP_DELIVERY_TIMEOUT (Property Type 0x06) is a Track Property. It is a varint.
+
+draft-ietf-moq-transport-18 §8 (Delivery Timeouts and Data Reliability):
+
+> The publisher communicates both timeout values as a Track Property;
+> the subscriber communicates them as Message Parameters.
+
+値の単位はミリ秒。0 はタイムアウトなしを意味する。仕様上、値域の上限は定義されていない。
+
+## 現状
+
+`src/properties.ts:51-83` の `TrackPropertyId` に `0x06` がない。`decodeProperties` / `parseProperties` は汎用的な KVP ループで任意の Property ID を処理できるため、0x06 を受信してもエラーにはならないが、値の意味をコードが認識できず、`getTrackProperty` で取得できない。
 
 ## 設計方針
 
-1. `TrackPropertyId` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06` を追加
-2. `decodeTrackProperties` / `encodeTrackProperties` のテストを追加
+### 1. TrackPropertyId への追加
+
+`src/properties.ts` の `TrackPropertyId` に以下を追加する。数値順で `0x04` (MAX_CACHE_DURATION) と `0x0e` (DEFAULT_PUBLISHER_PRIORITY) の間に挿入する。
+
+```typescript
+// draft-ietf-moq-transport-18 Section 12.1
+SUBGROUP_DELIVERY_TIMEOUT: 0x06n,
+```
+
+### 2. エンコード/デコードへの影響
+
+エンコード/デコードは既存の汎用 KVP ループが処理するため、`decodeProperties` / `encodeProperty` / `validateTrackPropertyValue` への変更は不要。偶数 ID なので Value は varint として自動処理される。
+
+### 3. 状態管理上の影響
+
+Subscribe / Fetch の状態管理ロジックへの影響はない。本 Property は relay が timeout 判断に使用するものであり、クライアント側の状態機械には直接関与しない。
+
+### 4. 関連 issue
+
+- Message Parameter 側の SUBGROUP_DELIVERY_TIMEOUT (0x06) は issue 0228 で対応
+- 0x02 の `OBJECT_DELIVERY_TIMEOUT` への改名と DELIVERY_TIMEOUT 分割は issue 0208 で対応
+
+## テスト戦略
+
+### 単体テスト (properties.test.ts)
+
+`TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT` が `0x06n` であることを確認。
+
+### PBT テスト (properties.prop.ts)
+
+`generateTrackPropertyId` に `0x06` を追加し、生成された Property ID でエンコード/デコードのラウンドトリップテストを行う。
+
+## 影響範囲
+
+- `src/properties.ts`: `TrackPropertyId` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06n` を追加
+- `src/properties.test.ts`: 定数値確認テストを追加
+- `src/properties.prop.ts`: arb に 0x06 を追加
+
+## 後方互換
+
+- 新規定数の追加のみであり、既存の動作に影響なし。後方互換あり
+- 既存の `DELIVERY_TIMEOUT: 0x02n` は維持する（改名は 0208 の範囲）
 
 ## 完了条件
 
-- `TrackPropertyId` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06` が定義されている
+- `TrackPropertyId` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06n` が定義されている
+- `properties.test.ts` に定数値確認テストがある
 - `vp run test` 全パス
 - `vp run build` 成功
