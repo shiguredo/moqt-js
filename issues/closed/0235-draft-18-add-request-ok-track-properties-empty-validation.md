@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-03
+- Completed: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-request-ok-empty-track-properties-validation
 - Polished: 2026-06-03
@@ -68,3 +69,7 @@ draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
 - 該当テストが追加されている
 - `vp run test` 全パス
 - `vp run build` 成功
+
+## 解決方法
+
+- `src/message/publish.ts`: `decodePublishOkPayload` に Track Properties 空チェックを追加。PUBLISH_OK で Track Properties が存在する場合 `ProtocolViolationError` をスローする。
