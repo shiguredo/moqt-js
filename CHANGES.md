@@ -70,6 +70,12 @@
   - `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x34: "length-prefixed"` エントリを追加する
   - `encodeParameterTrackNamespace` / `getParameterTrackNamespace` ヘルパーを追加する
   - @voluntas
+- [ADD] Subgroup Header に FIRST_OBJECT bit (0x40) を追加し、対応する 24 種類の Type 定数を実装する (#0234)
+  - draft-ietf-moq-transport-18 §11.4.2 に基づき、0x50-0x5D / 0x70-0x7D の 24 種類を `SubgroupHeaderType` に追加する
+  - `SubgroupHeader` インターフェイスに `firstObject` フィールドを追加する
+  - `encodeSubgroupHeader` / `decodeSubgroupHeader` で FIRST_OBJECT bit を扱う
+  - Subgroup Header Type の bit 7 (0x80) バリデーションを追加する (#0237)
+  - @voluntas
 - [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
   - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
   - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う

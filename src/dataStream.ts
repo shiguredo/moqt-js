@@ -66,6 +66,34 @@ function validateObjectStatus(status: number): void {
  * | 0x3B | No                | First Object ID   | Yes        | Yes          | No       |
  * | 0x3C | Yes               | N/A               | No         | Yes          | No       |
  * | 0x3D | Yes               | N/A               | Yes        | Yes          | No       |
+ * | 0x50 | No                | 0                 | No         | No           | Yes      |
+ * | 0x51 | No                | 0                 | Yes        | No           | Yes      |
+ * | 0x52 | No                | First Object ID   | No         | No           | Yes      |
+ * | 0x53 | No                | First Object ID   | Yes        | No           | Yes      |
+ * | 0x54 | Yes               | N/A               | No         | No           | Yes      |
+ * | 0x55 | Yes               | N/A               | Yes        | No           | Yes      |
+ * | 0x58 | No                | 0                 | No         | Yes          | Yes      |
+ * | 0x59 | No                | 0                 | Yes        | Yes          | Yes      |
+ * | 0x5A | No                | First Object ID   | No         | Yes          | Yes      |
+ * | 0x5B | No                | First Object ID   | Yes        | Yes          | Yes      |
+ * | 0x5C | Yes               | N/A               | No         | Yes          | Yes      |
+ * | 0x5D | Yes               | N/A               | Yes        | Yes          | Yes      |
+ * | 0x70 | No                | 0                 | No         | No           | No       |
+ * | 0x71 | No                | 0                 | Yes        | No           | No       |
+ * | 0x72 | No                | First Object ID   | No         | No           | No       |
+ * | 0x73 | No                | First Object ID   | Yes        | No           | No       |
+ * | 0x74 | Yes               | N/A               | No         | No           | No       |
+ * | 0x75 | Yes               | N/A               | Yes        | No           | No       |
+ * | 0x78 | No                | 0                 | No         | Yes          | No       |
+ * | 0x79 | No                | 0                 | Yes        | Yes          | No       |
+ * | 0x7A | No                | First Object ID   | No         | Yes          | No       |
+ * | 0x7B | No                | First Object ID   | Yes        | Yes          | No       |
+ * | 0x7C | Yes               | N/A               | No         | Yes          | No       |
+ * | 0x7D | Yes               | N/A               | Yes        | Yes          | No       |
+ *
+ * FIRST_OBJECT bit (0x40): Type 0x50-0x5D and 0x70-0x7D have the
+ * FIRST_OBJECT bit set, indicating the first object in the subgroup stream
+ * is the first object ever published in that subgroup.
  */
 export const SubgroupHeaderType = {
   // Priority Present = Yes, Contains End of Group = No
@@ -123,6 +151,38 @@ export const SubgroupHeaderType = {
   EXPLICIT_END_GROUP_NO_PRIORITY: 0x3c,
   // Subgroup ID Field Present, Properties Present (Section 11.4.2: Type 0x3D)
   EXPLICIT_EXT_END_GROUP_NO_PRIORITY: 0x3d,
+
+  // FIRST_OBJECT bit (0x40) セット: Priority Present = Yes, Contains End of Group = No
+  BASE_FIRST: 0x50,
+  BASE_EXT_FIRST: 0x51,
+  FIRST_OBJ_FIRST: 0x52,
+  FIRST_OBJ_EXT_FIRST: 0x53,
+  EXPLICIT_FIRST: 0x54,
+  EXPLICIT_EXT_FIRST: 0x55,
+
+  // FIRST_OBJECT: Priority Present = Yes, Contains End of Group = Yes
+  BASE_END_GROUP_FIRST: 0x58,
+  BASE_EXT_END_GROUP_FIRST: 0x59,
+  FIRST_OBJ_END_GROUP_FIRST: 0x5a,
+  FIRST_OBJ_EXT_END_GROUP_FIRST: 0x5b,
+  EXPLICIT_END_GROUP_FIRST: 0x5c,
+  EXPLICIT_EXT_END_GROUP_FIRST: 0x5d,
+
+  // FIRST_OBJECT: Priority Present = No, Contains End of Group = No
+  BASE_NO_PRIORITY_FIRST: 0x70,
+  BASE_EXT_NO_PRIORITY_FIRST: 0x71,
+  FIRST_OBJ_NO_PRIORITY_FIRST: 0x72,
+  FIRST_OBJ_EXT_NO_PRIORITY_FIRST: 0x73,
+  EXPLICIT_NO_PRIORITY_FIRST: 0x74,
+  EXPLICIT_EXT_NO_PRIORITY_FIRST: 0x75,
+
+  // FIRST_OBJECT: Priority Present = No, Contains End of Group = Yes
+  BASE_END_GROUP_NO_PRIORITY_FIRST: 0x78,
+  BASE_EXT_END_GROUP_NO_PRIORITY_FIRST: 0x79,
+  FIRST_OBJ_END_GROUP_NO_PRIORITY_FIRST: 0x7a,
+  FIRST_OBJ_EXT_END_GROUP_NO_PRIORITY_FIRST: 0x7b,
+  EXPLICIT_END_GROUP_NO_PRIORITY_FIRST: 0x7c,
+  EXPLICIT_EXT_END_GROUP_NO_PRIORITY_FIRST: 0x7d,
 } as const;
 
 /**
@@ -147,6 +207,13 @@ export interface SubgroupHeader {
   groupId: bigint;
   subgroupId?: bigint;
   publisherPriority?: number;
+  /**
+   * FIRST_OBJECT bit (0x40) がセットされている場合に true。
+   * Subgroup 内の最初のオブジェクトが、その Subgroup で最初に publish された
+   * オブジェクトであることを示す。
+   * draft-ietf-moq-transport-18 Section 11.4.2
+   */
+  firstObject?: boolean;
 }
 
 /**
@@ -166,7 +233,10 @@ function hasSubgroupIdField(headerType: number): boolean {
  * Types 0x30-0x3D have Priority Present = No
  */
 function hasPriorityPresent(headerType: number): boolean {
-  return headerType >= 0x10 && headerType <= 0x1d;
+  // FIRST_OBJECT bit (0x40) をマスクして判定
+  // 0x50-0x5D も Priority Present = Yes
+  const normalizedType = headerType & 0x3f;
+  return normalizedType >= 0x10 && normalizedType <= 0x1d;
 }
 
 /**
@@ -188,7 +258,9 @@ export function hasContainsEndOfGroup(headerType: number): boolean {
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(header.type));
+  // FIRST_OBJECT bit (0x40) がセットされている場合、Type に OR する
+  const type = header.firstObject ? header.type | 0x40 : header.type;
+  parts.push(encodeVarint(type));
   parts.push(encodeVarint(header.trackAlias));
   parts.push(encodeVarint(header.groupId));
 
@@ -232,6 +304,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
   // draft-ietf-moq-transport-18 Section 11.4.2:
   // 不正なタイプ値を検証する
+  // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
   // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
   // 0b0XX1XXXX の形式でないタイプ値は不正
@@ -241,7 +314,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
     );
   }
-  if ((typeNum & 0x10) === 0) {
+  if ((typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
     );
@@ -249,9 +322,12 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
   // タイプに基づいて Subgroup ID フィールドの有無を判定
   // draft-ietf-moq-transport-18 Section 11.4.2:
-  // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D: Subgroup ID Field Present
-  // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39: Subgroup ID = 0
-  // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B: Subgroup ID = First Object ID (no field)
+  // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D,
+  //   0x54-0x55, 0x5C-0x5D, 0x74-0x75, 0x7C-0x7D: Subgroup ID Field Present
+  // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39,
+  //   0x50-0x51, 0x58-0x59, 0x70-0x71, 0x78-0x79: Subgroup ID = 0
+  // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B,
+  //   0x52-0x53, 0x5A-0x5B, 0x72-0x73, 0x7A-0x7B: Subgroup ID = First Object ID (no field)
   const lowNibble = typeNum & 0x0f;
   if (lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d) {
     // 明示的な Subgroup ID フィールドが存在
@@ -273,6 +349,9 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
     totalConsumed += 1;
   }
 
+  // FIRST_OBJECT bit (0x40) の抽出
+  const firstObject = (typeNum & 0x40) !== 0 ? true : undefined;
+
   return [
     {
       type: typeNum,
@@ -280,6 +359,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       groupId,
       subgroupId,
       publisherPriority,
+      firstObject,
     },
     totalConsumed,
   ];

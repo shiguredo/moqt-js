@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-03
+- Completed: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-subgroup-header-first-object-bit
 - Polished: 2026-06-03
@@ -112,4 +113,22 @@ if ((typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0) {
 - コメントのタイプマトリクスが 0x50-0x7D まで網羅されている
 - `(typeNum & 0x80) !== 0` のバリデーションが追加されている
 - `vp run test` 全パス
+- `vp run build` 成功
+
+## 解決方法
+
+### 変更ファイル
+
+- `src/dataStream.ts`:
+  - `SubgroupHeaderType`: 0x50-0x5D, 0x70-0x7D の 24 種類の FIRST_OBJECT 定数を追加
+  - `SubgroupHeader` インターフェイスに `firstObject?: boolean` を追加
+  - `hasPriorityPresent`: FIRST_OBJECT bit をマスクして判定するよう修正 (`headerType & 0x3f`)
+  - `encodeSubgroupHeader`: `firstObject` が true の場合に Type に 0x40 を OR する
+  - `decodeSubgroupHeader`: Type から FIRST_OBJECT bit を抽出し `firstObject` を設定
+  - bit 7 バリデーションを追加: `(typeNum & 0x80) !== 0` のチェック（issue 0237 を含む）
+  - コメントのタイプマトリクス表に 0x50-0x7D を追記
+
+### テスト
+
+- `vp run test` 全 590 テスト通過
 - `vp run build` 成功

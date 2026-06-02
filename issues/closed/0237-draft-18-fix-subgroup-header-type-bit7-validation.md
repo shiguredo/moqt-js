@@ -2,6 +2,10 @@
 
 - Priority: Medium
 - Created: 2026-06-03
+- Completed: 2026-06-03
+
+注: 本 issue の修正内容は 0234 (FIRST_OBJECT bit 追加) の一部として同時実装済み。
+
 - Model: deepseek-v4-pro
 - Branch: feature/fix-subgroup-header-type-bit7-validation
 - Polished: 2026-06-03
@@ -72,3 +76,7 @@ if ((typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0) {
 - 不正値のテストが追加されている
 - `vp run test` 全パス
 - `vp run build` 成功
+
+## 解決方法
+
+0234 の実装の一部として修正。`src/dataStream.ts` の `decodeSubgroupHeader` で `(typeNum & 0x80) !== 0` のチェックを追加した。
