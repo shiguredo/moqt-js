@@ -2,7 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 目的
@@ -58,3 +60,7 @@ INTERNAL_ERROR(0x0), UNAUTHORIZED(0x1), TRACK_ENDED(0x2), SUBSCRIPTION_ENDED(0x3
 
 - コメントと値の確認が主。不一致がなければコード変更不要
 - 不一致があった場合、エラーコードの数値変更は既存のストリーム処理に影響（後方互換なし）
+
+## 解決方法
+
+DataStreamErrorCode と PublishDoneCode の全コード値が draft-18 §3.3.3 / §10.11 と完全に一致していることを確認済み。コード変更不要。
