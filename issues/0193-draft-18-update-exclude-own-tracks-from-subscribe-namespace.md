@@ -21,6 +21,7 @@ moqt-js はクライアント専用で受信側のため、実装変更は不要
 受信ロジックに変更は不要。
 
 draft-ietf-moq-transport-18 §6.1:
+
 > SUBSCRIBE_TRACKS requests track subscriptions: the publisher sends
 > PUBLISH messages for tracks within matching namespaces, excluding
 > tracks published by the subscriber.

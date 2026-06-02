@@ -293,7 +293,11 @@ export type IncomingStreamKind = "subgroup" | "fetch" | "unknown";
 /**
  * 純粋関数: 単方向ストリームの先頭バイトから種別を判定する
  *
- * draft-ietf-moq-transport-18 Section 3.4, Section 12.4
+ * draft-ietf-moq-transport-18 Section 3.4, Section 11.4.2
+ *
+ * SUBGROUP_HEADER の type 値範囲: 0x10..0x1F, 0x30..0x3F, 0x50..0x5F, 0x70..0x7F
+ * 現在はクライアント実装として必要な 0x10..0x1F と 0x30..0x3F のみを判定する。
+ * 0x50..0x5F と 0x70..0x7F は relay 等が生成するため、受信時に未知として扱われる。
  */
 export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKind {
   const streamTypeNum = Number(firstByte);

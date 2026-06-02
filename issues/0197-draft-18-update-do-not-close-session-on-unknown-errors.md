@@ -19,6 +19,7 @@ draft-18 §14 で未知のエラーコードを受信した際にセッション
 REQUEST_ERROR / PUBLISH_DONE 受信時に未知のエラーコードを受け取った場合、現在のコードでは適切にフォールバックせずに未知のコードのまま処理される可能性がある。
 
 draft-ietf-moq-transport-18 §14:
+
 > Receipt of an unknown error code in any error context (Session
 > Termination, REQUEST_ERROR, PUBLISH_DONE, or Data Stream Reset) MUST
 > be treated as equivalent to INTERNAL_ERROR for that context. An

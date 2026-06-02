@@ -222,8 +222,8 @@ export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
  * - 0x2: TRACK_ENDED
  * - 0x3: SUBSCRIPTION_ENDED
  * - 0x4: GOING_AWAY
- * - 0x5: EXPIRED
- * - 0x6: TOO_FAR_BEHIND
+ * - 0x5: TOO_FAR_BEHIND
+ * - 0x6: EXPIRED
  * - 0x8: UPDATE_FAILED
  * - 0x9: EXCESSIVE_LOAD
  * - 0x12: MALFORMED_TRACK
@@ -234,8 +234,8 @@ export const PublishDoneStatusCode = {
   TRACK_ENDED: 0x2,
   SUBSCRIPTION_ENDED: 0x3,
   GOING_AWAY: 0x4,
-  EXPIRED: 0x5,
-  TOO_FAR_BEHIND: 0x6,
+  TOO_FAR_BEHIND: 0x5,
+  EXPIRED: 0x6,
   UPDATE_FAILED: 0x8,
   EXCESSIVE_LOAD: 0x9,
   MALFORMED_TRACK: 0x12,
@@ -248,7 +248,7 @@ export type PublishDoneStatusCode =
  * PUBLISH_DONE の Status Code がエラー（アプリに Error として通知すべき）かどうか
  *
  * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
- * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x6), UPDATE_FAILED (0x8),
+ * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x5), UPDATE_FAILED (0x8),
  * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
  * TRACK_ENDED (0x2) 等はエラーとみなさない。
  * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.11
@@ -257,7 +257,7 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
   switch (statusCode) {
     case 0x0n:
     case 0x1n:
-    case 0x6n:
+    case 0x5n:
     case 0x8n:
     case 0x9n:
     case 0x12n:

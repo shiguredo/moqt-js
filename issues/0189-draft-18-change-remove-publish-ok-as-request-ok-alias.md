@@ -18,11 +18,13 @@ draft-18 で PUBLISH_OK (0x1E) がメッセージタイプから削除され、P
 ## 現状
 
 現在のコードベースでは PUBLISH への成功応答として PUBLISH_OK (0x1E) を使用している:
+
 - `MessageType.PUBLISH_OK = 0x1E`
 - `PublishOk` インターフェース (type: PUBLISH_OK)
 - `encodePublishOkPayload` / `decodePublishOkPayload`
 
 draft-ietf-moq-transport-18 §10.5:
+
 > This document uses the shorthand PUBLISH_OK, REQUEST_UPDATE_OK,
 > TRACK_STATUS_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK to
 > refer to a REQUEST_OK sent in response to the corresponding request
@@ -66,15 +68,15 @@ Wire format 上は REQUEST_OK (0x7) のみが存在し、PUBLISH_OK (0x1E) は�
 
 ## 該当箇所一覧
 
-| ファイル                         | 変更内容                                                     |
-| -------------------------------- | ------------------------------------------------------------ |
-| `src/message/types.ts`           | `PUBLISH_OK = 0x1E` を削除                                   |
-| `src/message/publish.ts:44-47`   | `PublishOk` 型の type を `MessageType.REQUEST_OK` に変更     |
+| ファイル                         | 変更内容                                                          |
+| -------------------------------- | ----------------------------------------------------------------- |
+| `src/message/types.ts`           | `PUBLISH_OK = 0x1E` を削除                                        |
+| `src/message/publish.ts:44-47`   | `PublishOk` 型の type を `MessageType.REQUEST_OK` に変更          |
 | `src/message/publish.ts:160-191` | `encodePublishOkPayload` の実装を `encodeRequestOkPayload` に委譲 |
 | `src/message/publish.ts:181-191` | `decodePublishOkPayload` の実装を `decodeRequestOkPayload` に委譲 |
-| `src/session/bidi.ts`            | `bidiReadPublishResponse`: PUBLISH_OK → REQUEST_OK           |
-| `src/session.ts`                 | `readPublishResponse`: PUBLISH_OK → REQUEST_OK               |
-| `src/message/publish.prop.ts`    | PUBLISH_OK テストを REQUEST_OK に変更                        |
+| `src/session/bidi.ts`            | `bidiReadPublishResponse`: PUBLISH_OK → REQUEST_OK                |
+| `src/session.ts`                 | `readPublishResponse`: PUBLISH_OK → REQUEST_OK                    |
+| `src/message/publish.prop.ts`    | PUBLISH_OK テストを REQUEST_OK に変更                             |
 
 ## テスト方針
 

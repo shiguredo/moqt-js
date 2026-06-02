@@ -20,6 +20,7 @@ moqt-js の既存実装は既に準拠済みのため、draft 番号とコメン
 FIN / stream reset 受信時の NAMESPACE_DONE 扱いは既に実装されている。
 
 draft-ietf-moq-transport-18 §10.18:
+
 > When a subscriber receives a stream reset or FIN on a
 > SUBSCRIBE_NAMESPACE response stream, it SHOULD treat this as though
 > each active namespace received a NAMESPACE_DONE.

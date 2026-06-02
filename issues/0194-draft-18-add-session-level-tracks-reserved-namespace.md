@@ -20,10 +20,12 @@ draft-18 §3.2.1 / §3.2.2 で session レベルの予約名前空間 (`.` プ�
 予約名前空間のチェック機構は存在しない。ユーザーは任意の namespace 文字列を自由に使用できる。
 
 draft-ietf-moq-transport-18 §3.2.1:
+
 > MOQT reserves all Track Namespace values whose first tuple field
 > begins with a period (0x2e, .).
 
 draft-ietf-moq-transport-18 §3.2.2:
+
 > MOQT defines the .session namespace ... in the first position of the
 > Track Namespace for session-level tracks and namespaces.
 

@@ -15,11 +15,13 @@ draft-ietf-moq-transport-18 §10.12 で定義されている「未シリアラ�
 
 ## 一次資料の引用
 
-draft-ietf-moq-transport-18 §10.12:
+draft-ietf-moq-transport-18 §10.12 (Fetch) / Table 7 (Fetch Object Serialization Flags):
 
-> A publisher MAY send Objects in a range that it has not yet serialized as
-> an "unknown range", which the subscriber can use to determine that the
-> publisher is still generating Objects in that range.
+> End of Non-Existent Range: 0x8C | End of Unknown Range: 0x10C
+
+Unknown Range は FETCH オブジェクトの Serialization Flags 値として定義されており、
+未シリアライズのオブジェクト範囲を示す。実装上は Unknown Range フラグがセットされた
+オブジェクトを検出して処理する必要がある。
 
 ## 現状の実装
 

@@ -19,6 +19,7 @@ moqt-js は relay 機能を持たないクライアントのため実装変更�
 クライアント専用の moqt-js では relay の優先判断は行わないため、受信側の挙動に変更はない。
 
 draft-ietf-moq-transport-18 A.1:
+
 > SUBSCRIBE takes precedence over SUBSCRIBE_NAMESPACE at relay (#1533)
 
 ## 設計方針

@@ -4,6 +4,7 @@
 
 Created: 2026-05-13
 Model: Opus 4.7
+
 - Polished: 2026-06-02
 
 ## 概要

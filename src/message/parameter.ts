@@ -12,7 +12,7 @@
  * Type Delta は前のパラメータの Type との差分。
  * 偶数型: varint 値
  * 奇数型: Length プレフィックス付きバイト列
- * draft-ietf-moq-transport-18 Section 10.2.1
+ * draft-ietf-moq-transport-18 Section 1.4.3
  */
 
 import { ProtocolViolationError } from "../error";
@@ -25,7 +25,7 @@ import type { Location } from "./types";
  * draft-ietf-moq-transport-18:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
  * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
@@ -200,7 +200,7 @@ export interface TrackNamespace {
  *
  * draft-ietf-moq-transport-18:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
   // 先にサイズをチェック
@@ -237,7 +237,7 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
  *
  * draft-ietf-moq-transport-18:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  *
  * @returns [namespace, consumed bytes]
  */
@@ -259,7 +259,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
-    // draft-ietf-moq-transport-18 Section 2.3:
+    // draft-ietf-moq-transport-18 Section 2.4.1:
     // "Each Track Namespace Field Value MUST contain at least one byte.
     //  If an endpoint receives a Track Namespace Field with a Track
     //  Namespace Field Length of 0, it MUST close the session with a
@@ -287,13 +287,13 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
  *
  * draft-ietf-moq-transport-18:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
 
-  // draft-ietf-moq-transport-18 Section 2.3:
+  // draft-ietf-moq-transport-18 Section 2.4.1:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   let dataSize = 0;
   for (const element of tuple) {
@@ -324,7 +324,7 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
  *
  * draft-ietf-moq-transport-18:
  * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function encodeTrackName(trackName: string): Uint8Array {
   const encoder = new TextEncoder();
@@ -342,7 +342,7 @@ export function encodeTrackName(trackName: string): Uint8Array {
  *
  * draft-ietf-moq-transport-18:
  * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
   if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
@@ -541,7 +541,7 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x10: "uint8",
   // SUBSCRIBER_PRIORITY (Section 10.2.7)
   0x20: "uint8",
-  // SUBSCRIPTION_FILTER (Section 10.2.11)
+  // SUBSCRIPTION_FILTER (Section 10.2.9)
   0x21: "length-prefixed",
   // GROUP_ORDER (Section 10.2.8)
   0x22: "uint8",

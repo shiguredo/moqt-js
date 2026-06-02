@@ -183,7 +183,7 @@ export class SubscriberImpl implements Subscriber {
    * draft-ietf-moq-transport-18:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
-   * draft-ietf-moq-transport-18 Section 10
+   * draft-ietf-moq-transport-18 Section 2.2, Section 11.3
    */
   handleDatagram(object: MoqtObject): void {
     if (this.subscriberState === "closed") {
@@ -238,7 +238,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Mark as closed (called by session on session close)
    *
-   * draft-ietf-moq-transport-18 Section 3.4:
+   * draft-ietf-moq-transport-18 Section 3.5:
    * "The Transport Session can be terminated at any point."
    *
    * Note: endCallback is NOT called here because session close is
@@ -269,9 +269,10 @@ export class SubscriberImpl implements Subscriber {
    * Unsubscribe from the track
    *
    * draft-ietf-moq-transport-18 Section 5.1 (Subscriptions):
-   * "The subscriber terminates a subscription using UNSUBSCRIBE"
+   * "The subscriber terminates a subscription in the Pending (Subscriber) or Established states
+   * by sending STOP_SENDING."
    *
-   * Note: endCallback is NOT called here because UNSUBSCRIBE is
+   * Note: endCallback is NOT called here because unsubscribe is
    * subscriber-initiated. endCallback is only for PUBLISH_DONE
    * (publisher-initiated termination).
    */

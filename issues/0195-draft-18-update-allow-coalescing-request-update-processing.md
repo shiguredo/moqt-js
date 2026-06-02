@@ -20,6 +20,7 @@ moqt-js はクライアント専用（送信側）のため実装変更は不要
 送信ロジックに変更は不要。
 
 draft-ietf-moq-transport-18 §10.9.1:
+
 > A receiver of multiple REQUEST_UPDATE messages on the same stream MAY
 > coalesce their processing by applying only the cumulative result.
 

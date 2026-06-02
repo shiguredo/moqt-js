@@ -5,8 +5,8 @@
  * draft-ietf-moq-transport-18:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
- * "unknown range" として返すことができる。
- * draft-ietf-moq-transport-18 Section 10.12
+ * "unknown range" として返すことができる (Section 11.4.4, Table 7)。
+ * draft-ietf-moq-transport-18 Section 10.12, Section 11.4.4
  *
  * TODO: Unknown Range Metadata Type の実装
  */

@@ -85,10 +85,13 @@ export const TrackPropertyId = {
 /**
  * Property Type の値範囲 (Section 15.8)
  *
- * draft-ietf-moq-transport-18:
- * - 0x00 - 0x37: Standards Action or IESG Approval (1-byte encoding)
+ * draft-ietf-moq-transport-18 Section 15.8:
+ * - 0x00 - 0x77: Standards Action or IESG Approval (1-byte encoding)
+ * - 0x78 - 0x7F: アプリケーション固有 (1-byte encoding, 登録不要)
+ * - 0x80 - 0x37FF: Specification Required (2-byte encoding)
  * - 0x3800 - 0x3FFF: アプリケーション固有 (2-byte encoding, 登録不要)
- * - 0x4000 以上: First Come First Served
+ * - 0x4000 - 0x7FFF: Mandatory Track Properties 用に予約 (Track scope のみ)
+ * - 0x8000 以上: First Come First Served
  *
  * アプリケーション固有の範囲は IANA に登録する必要がない。
  * 異なるソースからのトラックを消費するアプリケーションでは

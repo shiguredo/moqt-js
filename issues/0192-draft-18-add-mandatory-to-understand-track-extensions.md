@@ -10,6 +10,7 @@
 draft-18 §2.5.1 で Mandatory Track Properties の処理規則が明確化された。未知の Mandatory Track Property (Property Type 0x4000-0x7FFF) を受信した場合、トラックを処理・転送してはならない。
 
 draft-ietf-moq-transport-18 §2.5.1:
+
 > When an endpoint receives Track Properties (in PUBLISH, SUBSCRIBE_OK,
 > or FETCH_OK messages) containing a Mandatory Track Property type that
 > it does not understand, it MUST NOT process or forward that track.
@@ -57,11 +58,11 @@ Mandatory Track Property 範囲 (0x4000-0x7FFF) かどうかの判定と拒否�
 
 ## 該当箇所一覧
 
-| ファイル            | 変更内容                                                         |
-| ------------------- | ---------------------------------------------------------------- |
+| ファイル            | 変更内容                                                           |
+| ------------------- | ------------------------------------------------------------------ |
 | `src/properties.ts` | Mandatory Track Property 範囲 (0x4000-0x7FFF) の検出と拒否ロジック |
-| `src/session.ts`    | PUBLISH / SUBSCRIBE_OK / FETCH_OK 受信時の error handling 更新   |
-| `src/error.ts`      | UNSUPPORTED_EXTENSION (0x33) の追加 (0186 と連携)               |
+| `src/session.ts`    | PUBLISH / SUBSCRIBE_OK / FETCH_OK 受信時の error handling 更新     |
+| `src/error.ts`      | UNSUPPORTED_EXTENSION (0x33) の追加 (0186 と連携)                  |
 
 ## テスト方針
 

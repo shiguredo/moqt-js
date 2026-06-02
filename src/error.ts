@@ -78,8 +78,8 @@ export const PublishDoneCode = {
   TRACK_ENDED: 0x2,
   SUBSCRIPTION_ENDED: 0x3,
   GOING_AWAY: 0x4,
-  EXPIRED: 0x5,
-  TOO_FAR_BEHIND: 0x6,
+  TOO_FAR_BEHIND: 0x5,
+  EXPIRED: 0x6,
   UPDATE_FAILED: 0x8,
   EXCESSIVE_LOAD: 0x9,
   MALFORMED_TRACK: 0x12,
@@ -88,7 +88,7 @@ export const PublishDoneCode = {
 export type PublishDoneCode = (typeof PublishDoneCode)[keyof typeof PublishDoneCode];
 
 /**
- * Data Stream Reset Error Codes (Section 15.10.4)
+ * Stream Reset Error Codes (Section 15.10.4)
  *
  * draft-ietf-moq-transport-18 Section 15.10.4 (Stream Reset Error Codes):
  * - GOING_AWAY (0x4) を追加

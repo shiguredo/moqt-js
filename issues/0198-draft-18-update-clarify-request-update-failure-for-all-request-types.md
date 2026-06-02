@@ -20,6 +20,7 @@ SUBSCRIBE の REQUEST_UPDATE 失敗時は PUBLISH_DONE(UPDATE_FAILED) が既に�
 FETCH / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の REQUEST_UPDATE 失敗時の挙動はクライアント側で追加実装不要。
 
 draft-ietf-moq-transport-18 §10.9.1:
+
 > When a REQUEST_UPDATE is unsuccessful, the publisher MUST also
 > terminate the subscription by sending a PUBLISH_DONE with error code
 > UPDATE_FAILED. When a REQUEST_UPDATE fails for a FETCH, the

@@ -22,12 +22,13 @@ SUBSCRIBE_OK と FETCH_OK はそれぞれの型 (`SubscribeOk` / `FetchOk`) で�
 PUBLISH_OK 用の `PublishOk` 型には Track Properties がない。
 
 draft-ietf-moq-transport-18 §10.5:
+
 > REQUEST_OK Message {
->   Type (vi64) = 0x7,
->   Length (16),
->   Number of Parameters (vi64),
->   Parameters (..) ...,
->   Track Properties (..),
+> Type (vi64) = 0x7,
+> Length (16),
+> Number of Parameters (vi64),
+> Parameters (..) ...,
+> Track Properties (..),
 > }
 
 ## 設計方針

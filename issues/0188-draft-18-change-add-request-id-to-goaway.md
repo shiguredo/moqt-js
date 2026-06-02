@@ -22,21 +22,22 @@ draft-18 で GOAWAY メッセージに Request ID フィールドが追加され
 `sendGoaway()` はクライアント専用として空の New Session URI を送信しているが、Request ID の計算と送信は行っていない。
 
 draft-ietf-moq-transport-18 §10.4:
+
 > GOAWAY Message {
->   Type (vi64) = 0x10,
->   Length (16),
->   New Session URI Length (vi64),
->   New Session URI (..),
->   Timeout (vi64),
->   [Request ID (vi64)],
+> Type (vi64) = 0x10,
+> Length (16),
+> New Session URI Length (vi64),
+> New Session URI (..),
+> Timeout (vi64),
+> [Request ID (vi64)],
 > }
 
-> *  Request ID: Present only when sent on the control stream.  The
->    smallest peer Request ID that was not or might not have been
->    processed prior to sending the GOAWAY.  If no requests have been
->    processed, this is 0 (at a server) or 1 (at a client).  If the
->    parity of the Request ID does not match the receiver's parity, the
->    endpoint MUST close the session with INVALID_REQUEST_ID.
+> - Request ID: Present only when sent on the control stream. The
+>   smallest peer Request ID that was not or might not have been
+>   processed prior to sending the GOAWAY. If no requests have been
+>   processed, this is 0 (at a server) or 1 (at a client). If the
+>   parity of the Request ID does not match the receiver's parity, the
+>   endpoint MUST close the session with INVALID_REQUEST_ID.
 
 ## 設計方針
 
@@ -84,13 +85,13 @@ draft-ietf-moq-transport-18 §10.4:
 
 ## 該当箇所一覧
 
-| ファイル                         | 変更内容                                                         |
-| -------------------------------- | ---------------------------------------------------------------- |
-| `src/message/session.ts:33-41`   | `Goaway` 型に `requestId: bigint \| null` を追加                 |
-| `src/message/session.ts:96-112`  | `encodeGoawayPayload` に条件付き Request ID エンコードを追加     |
+| ファイル                         | 変更内容                                                           |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `src/message/session.ts:33-41`   | `Goaway` 型に `requestId: bigint \| null` を追加                   |
+| `src/message/session.ts:96-112`  | `encodeGoawayPayload` に条件付き Request ID エンコードを追加       |
 | `src/message/session.ts:117-140` | `decodeGoawayPayload` に残りバイトからの Request ID デコードを追加 |
-| `src/session.ts:725-780`         | `sendGoaway()`: requestId の計算と送信を追加                     |
-| `src/session.ts:3009-3045`       | `handleGoaway()`: Request ID の存在確認とパリティ検証を追加      |
+| `src/session.ts:725-780`         | `sendGoaway()`: requestId の計算と送信を追加                       |
+| `src/session.ts:3009-3045`       | `handleGoaway()`: Request ID の存在確認とパリティ検証を追加        |
 
 ## テスト方針
 

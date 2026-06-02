@@ -9,11 +9,12 @@ Model: Opus 4.7
 
 ## 一次資料の引用
 
-draft-ietf-moq-transport-18 §6.1:
+draft-ietf-moq-transport-18 §6.1 (Subscribing to Namespaces) / §10.19 (SUBSCRIBE_TRACKS):
 
-> A subscription to a namespace prefix results in PUBLISH, NAMESPACE,
-> NAMESPACE_DONE, and PUBLISH_BLOCKED messages being sent on the response
-> half of the SUBSCRIBE_NAMESPACE stream.
+SUBSCRIBE_NAMESPACE 応答ストリームでは NAMESPACE / NAMESPACE_DONE が送られる (§6.1)。
+一方、SUBSCRIBE_TRACKS 応答ストリームでは PUBLISH / PUBLISH_BLOCKED が送られる (§10.19)。
+PUBLISH は SUBSCRIBE_TRACKS の応答ストリームに属し、SUBSCRIBE_NAMESPACE の応答ストリームには
+本来送られない。
 
 ## 現状の実装
 

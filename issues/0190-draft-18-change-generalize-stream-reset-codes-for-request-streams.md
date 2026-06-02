@@ -36,23 +36,23 @@ INTERNAL_ERROR(0x0), UNAUTHORIZED(0x1), TRACK_ENDED(0x2), SUBSCRIPTION_ENDED(0x3
 
 ## 変更内容（確認項目）
 
-| 確認項目 | 確認先 | 状態 |
-|----------|--------|------|
-| INTERNAL_ERROR (0x0) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
-| CANCELLED (0x1) | DataStreamErrorCode | 既存で存在 |
-| DELIVERY_TIMEOUT (0x2) | DataStreamErrorCode | 既存で存在 |
-| SESSION_CLOSED (0x3) | DataStreamErrorCode | 既存で存在 |
-| GOING_AWAY (0x4) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
-| TOO_FAR_BEHIND (0x5) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
-| UNKNOWN_OBJECT_STATUS (0x6) | DataStreamErrorCode | 既存で存在 |
-| EXPIRED_AUTH_TOKEN (0x7) | DataStreamErrorCode | 既存で存在 |
-| EXCESSIVE_LOAD (0x9) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
-| MALFORMED_TRACK (0x12) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
-| UNAUTHORIZED (0x1) | PublishDoneCode | 既存で存在 |
-| TRACK_ENDED (0x2) | PublishDoneCode | 既存で存在 |
-| SUBSCRIPTION_ENDED (0x3) | PublishDoneCode | 既存で存在 |
-| EXPIRED (0x6) | PublishDoneCode | 既存で存在 |
-| UPDATE_FAILED (0x8) | PublishDoneCode | 既存で存在 |
+| 確認項目                    | 確認先                               | 状態       |
+| --------------------------- | ------------------------------------ | ---------- |
+| INTERNAL_ERROR (0x0)        | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| CANCELLED (0x1)             | DataStreamErrorCode                  | 既存で存在 |
+| DELIVERY_TIMEOUT (0x2)      | DataStreamErrorCode                  | 既存で存在 |
+| SESSION_CLOSED (0x3)        | DataStreamErrorCode                  | 既存で存在 |
+| GOING_AWAY (0x4)            | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| TOO_FAR_BEHIND (0x5)        | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| UNKNOWN_OBJECT_STATUS (0x6) | DataStreamErrorCode                  | 既存で存在 |
+| EXPIRED_AUTH_TOKEN (0x7)    | DataStreamErrorCode                  | 既存で存在 |
+| EXCESSIVE_LOAD (0x9)        | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| MALFORMED_TRACK (0x12)      | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| UNAUTHORIZED (0x1)          | PublishDoneCode                      | 既存で存在 |
+| TRACK_ENDED (0x2)           | PublishDoneCode                      | 既存で存在 |
+| SUBSCRIPTION_ENDED (0x3)    | PublishDoneCode                      | 既存で存在 |
+| EXPIRED (0x6)               | PublishDoneCode                      | 既存で存在 |
+| UPDATE_FAILED (0x8)         | PublishDoneCode                      | 既存で存在 |
 
 ## 影響範囲
 

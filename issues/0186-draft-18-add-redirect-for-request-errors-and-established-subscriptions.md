@@ -10,7 +10,8 @@
 draft-18 で REQUEST_ERROR に Redirect Structure が追加され、新規エラーコード REDIRECT (0x34) と UNSUPPORTED_EXTENSION (0x33) が定義された。サーバーがクライアントに対して別の接続先 (moqt URI) への再接続を指示できるようにする。
 
 draft-ietf-moq-transport-18 Appendix 変更履歴:
-> *  Add REDIRECT for request errors and established subscriptions (#1615)
+
+> - Add REDIRECT for request errors and established subscriptions (#1615)
 
 ## 優先度根拠
 
@@ -31,26 +32,28 @@ draft-ietf-moq-transport-18 Appendix 変更履歴:
 7. `retryInterval` はデコードされているが、9 箇所の REQUEST_ERROR 受信処理で破棄されている
 
 draft-ietf-moq-transport-18 §10.6.1 (Redirect Structure):
+
 > Redirect {
->   Connect URI Length (vi64),
->   Connect URI (..),
->   Track Namespace (..),
->   Track Name Length (vi64),
->   Track Name (..),
+> Connect URI Length (vi64),
+> Connect URI (..),
+> Track Namespace (..),
+> Track Name Length (vi64),
+> Track Name (..),
 > }
 
 draft-ietf-moq-transport-18 §10.6.2 (REQUEST_ERROR Message Format):
+
 > REQUEST_ERROR Message {
->   Type (vi64) = 0x5,
->   Length (16),
->   Error Code (vi64),
->   Retry Interval (vi64),
->   Error Reason (Reason Phrase),
->   [Redirect (Redirect),]
+> Type (vi64) = 0x5,
+> Length (16),
+> Error Code (vi64),
+> Retry Interval (vi64),
+> Error Reason (Reason Phrase),
+> [Redirect (Redirect),]
 > }
 >
-> *  Redirect: Present only when Error Code is REDIRECT.  See
->    Section 10.6.1.
+> - Redirect: Present only when Error Code is REDIRECT. See
+>   Section 10.6.1.
 
 ## 設計方針
 
@@ -63,6 +66,7 @@ draft-ietf-moq-transport-18 §10.6.2 (REQUEST_ERROR Message Format):
 - moqt-js はクライアント専用のため、非ゼロ Connect URI Length の Redirect を送信することはない。受信専用。
 
 RFC §10.6.1 のエッジケース:
+
 - Connect URI Length = 0: SHOULD use the current session's URI（受信側で適切に扱う）
 - Track Namespace と Track Name が両方とも長さ 0: same values as the original request（受信側で適切に扱う）
 - namespace-scoped リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE) での非空 Track Name: MUST close with PROTOCOL_VIOLATION（decode 段階で検証）
@@ -83,6 +87,7 @@ RFC §10.6.1 のエッジケース:
 ### 1. Redirect Structure の型とエンコード/デコードを追加する (`src/message/session.ts`)
 
 新規追加:
+
 - `Redirect` インターフェース
   - `connectUri: string` (Connect URI)
   - `trackNamespace: TrackNamespace` (Track Namespace、`TrackNamespace` 型を使用)
@@ -115,44 +120,44 @@ RFC §10.6.1 のエッジケース:
 
 **session.ts (制御ストリーム / namespace ストリーム) — 4 箇所**:
 
-| 行番号 | メソッド                         |
-| ------ | -------------------------------- |
-| 1767   | startNamespaceStreamLoop         |
-| 1933   | startTracksStreamLoop            |
-| 2146   | startPublishNamespaceStreamLoop  |
-| 2980   | handleControlMessage             |
+| 行番号 | メソッド                        |
+| ------ | ------------------------------- |
+| 1767   | startNamespaceStreamLoop        |
+| 1933   | startTracksStreamLoop           |
+| 2146   | startPublishNamespaceStreamLoop |
+| 2980   | handleControlMessage            |
 
 **session/bidi.ts (双方向ストリーム応答) — 5 箇所**:
 
-| 行番号 | メソッド                         |
-| ------ | -------------------------------- |
-| 193    | bidiReadPublishResponse          |
-| 281    | bidiReadSubscribeResponse        |
-| 347    | bidiReadFetchResponse            |
-| 390    | bidiReadTrackStatusResponse      |
-| 440    | bidiReadRequestStreamMessages    |
+| 行番号 | メソッド                      |
+| ------ | ----------------------------- |
+| 193    | bidiReadPublishResponse       |
+| 281    | bidiReadSubscribeResponse     |
+| 347    | bidiReadFetchResponse         |
+| 390    | bidiReadTrackStatusResponse   |
+| 440    | bidiReadRequestStreamMessages |
 
 各箇所で `new RequestError(reasonPhrase, Number(errorCode))` の呼び出しに `retryInterval` と `redirect` を渡すように変更し、`RequestError` クラスのコンストラクタを拡張する。
 
 ## 該当箇所一覧
 
-| ファイル                        | 行番号    | 変更内容                                                         |
-| ------------------------------- | --------- | ---------------------------------------------------------------- |
-| `src/message/session.ts`        | 新規追加  | `Redirect` 型, `encodeRedirect()`, `decodeRedirect()` を追加     |
-| `src/message/session.ts:83-88`  | 83-88     | `RequestError` インターフェースに `redirect?: Redirect` を追加   |
-| `src/message/session.ts:193-211`| 193-211   | `encodeRequestErrorPayload` に条件付き Redirect エンコードを追加 |
-| `src/message/session.ts:220-247`| 220-247   | `decodeRequestErrorPayload` に条件付き Redirect デコードを追加   |
-| `src/error.ts:47-64`            | 47-64     | `RequestErrorCode` に 0x33, 0x34 を追加                          |
-| `src/error.ts:141-146`          | 141-146   | `RequestError` クラスに redirect フィールドと retryInterval を追加 |
-| `src/session.ts:1767-1786`      | 1767-1786 | startNamespaceStreamLoop: retryInterval/redirect を RequestError に伝搬 |
-| `src/session.ts:1933-1951`      | 1933-1951 | startTracksStreamLoop: retryInterval/redirect を RequestError に伝搬 |
-| `src/session.ts:2146-2160`      | 2146-2160 | startPublishNamespaceStreamLoop: retryInterval/redirect を伝搬 |
-| `src/session.ts:2980`           | 2980      | handleControlMessage: retryInterval/redirect を RequestError に伝搬 |
-| `src/session/bidi.ts:193-201`   | 193-201   | bidiReadPublishResponse: retryInterval/redirect を伝搬 |
-| `src/session/bidi.ts:281-289`   | 281-289   | bidiReadSubscribeResponse: retryInterval/redirect を伝搬 |
-| `src/session/bidi.ts:347-355`   | 347-355   | bidiReadFetchResponse: retryInterval/redirect を伝搬 |
-| `src/session/bidi.ts:390-398`   | 390-398   | bidiReadTrackStatusResponse: retryInterval/redirect を伝搬 |
-| `src/session/bidi.ts:440-453`   | 440-453   | bidiReadRequestStreamMessages: retryInterval/redirect を伝搬 |
+| ファイル                         | 行番号    | 変更内容                                                                |
+| -------------------------------- | --------- | ----------------------------------------------------------------------- |
+| `src/message/session.ts`         | 新規追加  | `Redirect` 型, `encodeRedirect()`, `decodeRedirect()` を追加            |
+| `src/message/session.ts:83-88`   | 83-88     | `RequestError` インターフェースに `redirect?: Redirect` を追加          |
+| `src/message/session.ts:193-211` | 193-211   | `encodeRequestErrorPayload` に条件付き Redirect エンコードを追加        |
+| `src/message/session.ts:220-247` | 220-247   | `decodeRequestErrorPayload` に条件付き Redirect デコードを追加          |
+| `src/error.ts:47-64`             | 47-64     | `RequestErrorCode` に 0x33, 0x34 を追加                                 |
+| `src/error.ts:141-146`           | 141-146   | `RequestError` クラスに redirect フィールドと retryInterval を追加      |
+| `src/session.ts:1767-1786`       | 1767-1786 | startNamespaceStreamLoop: retryInterval/redirect を RequestError に伝搬 |
+| `src/session.ts:1933-1951`       | 1933-1951 | startTracksStreamLoop: retryInterval/redirect を RequestError に伝搬    |
+| `src/session.ts:2146-2160`       | 2146-2160 | startPublishNamespaceStreamLoop: retryInterval/redirect を伝搬          |
+| `src/session.ts:2980`            | 2980      | handleControlMessage: retryInterval/redirect を RequestError に伝搬     |
+| `src/session/bidi.ts:193-201`    | 193-201   | bidiReadPublishResponse: retryInterval/redirect を伝搬                  |
+| `src/session/bidi.ts:281-289`    | 281-289   | bidiReadSubscribeResponse: retryInterval/redirect を伝搬                |
+| `src/session/bidi.ts:347-355`    | 347-355   | bidiReadFetchResponse: retryInterval/redirect を伝搬                    |
+| `src/session/bidi.ts:390-398`    | 390-398   | bidiReadTrackStatusResponse: retryInterval/redirect を伝搬              |
+| `src/session/bidi.ts:440-453`    | 440-453   | bidiReadRequestStreamMessages: retryInterval/redirect を伝搬            |
 
 ## テスト方針
 

@@ -20,10 +20,12 @@ Joining Fetch と Standalone Fetch の REQUEST_ERROR(INVALID_RANGE) ハンドリ
 サーバー側の挙動に関するコメントがない部分を補完する。
 
 draft-ietf-moq-transport-18 §10.12.2:
+
 > If no Objects have been published for the track the publisher MUST
 > respond with a REQUEST_ERROR with error code INVALID_RANGE.
 
 draft-ietf-moq-transport-18 §10.12.3:
+
 > If no Objects have been published for the track or Start Location is
 > greater than the Largest Object the publisher MUST return
 > REQUEST_ERROR with error code INVALID_RANGE.

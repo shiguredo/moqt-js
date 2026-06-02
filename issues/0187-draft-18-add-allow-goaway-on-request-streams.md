@@ -10,7 +10,8 @@
 draft-18 で GOAWAY をリクエストストリーム (SUBSCRIBE / FETCH / PUBLISH 等の bidi ストリーム) 上で送信できるようになった。セッション全体の GOAWAY に加え、個別リクエスト単位でのマイグレーション指示が可能になる。
 
 draft-ietf-moq-transport-18 Appendix 変更履歴:
-> *  Allow GOAWAY on request streams (#1615)
+
+> - Allow GOAWAY on request streams (#1615)
 
 ## 優先度根拠
 
@@ -32,6 +33,7 @@ draft-ietf-moq-transport-18 Appendix 変更履歴:
 Subscriber / Publisher / Fetcher のコールバック型には現在 `goaway` コールバックが存在しない。
 
 draft-ietf-moq-transport-18 §10.4:
+
 > A GOAWAY message MAY be sent on any open bidirectional stream. When
 > sent on a request stream, the GOAWAY applies to that specific
 > request. When sent on the control stream, the GOAWAY applies to the
@@ -99,20 +101,20 @@ draft-ietf-moq-transport-18 §10.4:
 
 ## 該当箇所一覧
 
-| ファイル                                | 変更内容                                                         |
-| --------------------------------------- | ---------------------------------------------------------------- |
-| `src/subscriber.ts`                     | `SubscribeCallbacks` に `goaway?: (newSessionUri: string) => void` を追加 |
-| `src/publisher.ts`                      | `PublishCallbacks` に `goaway?: (newSessionUri: string) => void` を追加 |
-| `src/fetcher.ts`                        | `FetchCallbacks` に `goaway?: (newSessionUri: string) => void` を追加 |
-| `src/session/bidi.ts:145-201`           | bidiReadPublishResponse に GOAWAY 検出を追加 |
-| `src/session/bidi.ts:240-289`           | bidiReadSubscribeResponse に GOAWAY 検出を追加 |
-| `src/session/bidi.ts:310-355`           | bidiReadFetchResponse に GOAWAY 検出を追加 |
-| `src/session/bidi.ts:370-398`           | bidiReadTrackStatusResponse に GOAWAY 検出を追加 |
-| `src/session/bidi.ts:415-486`           | bidiReadRequestStreamMessages の switch-case に GOAWAY 追加 |
-| `src/session.ts:1767-1786`              | startNamespaceStreamLoop に GOAWAY 検出を追加 |
-| `src/session.ts:1933-1951`              | startTracksStreamLoop に GOAWAY 検出を追加 |
-| `src/session.ts:2146-2160`              | startNamespacePublicationStreamLoop に GOAWAY 検出を追加 |
-| `src/session.ts:3009`                   | handleGoaway: 制御ストリーム用としてキープ、グローバルフラグと分離 |
+| ファイル                      | 変更内容                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------- |
+| `src/subscriber.ts`           | `SubscribeCallbacks` に `goaway?: (newSessionUri: string) => void` を追加 |
+| `src/publisher.ts`            | `PublishCallbacks` に `goaway?: (newSessionUri: string) => void` を追加   |
+| `src/fetcher.ts`              | `FetchCallbacks` に `goaway?: (newSessionUri: string) => void` を追加     |
+| `src/session/bidi.ts:145-201` | bidiReadPublishResponse に GOAWAY 検出を追加                              |
+| `src/session/bidi.ts:240-289` | bidiReadSubscribeResponse に GOAWAY 検出を追加                            |
+| `src/session/bidi.ts:310-355` | bidiReadFetchResponse に GOAWAY 検出を追加                                |
+| `src/session/bidi.ts:370-398` | bidiReadTrackStatusResponse に GOAWAY 検出を追加                          |
+| `src/session/bidi.ts:415-486` | bidiReadRequestStreamMessages の switch-case に GOAWAY 追加               |
+| `src/session.ts:1767-1786`    | startNamespaceStreamLoop に GOAWAY 検出を追加                             |
+| `src/session.ts:1933-1951`    | startTracksStreamLoop に GOAWAY 検出を追加                                |
+| `src/session.ts:2146-2160`    | startNamespacePublicationStreamLoop に GOAWAY 検出を追加                  |
+| `src/session.ts:3009`         | handleGoaway: 制御ストリーム用としてキープ、グローバルフラグと分離        |
 
 ## テスト方針
 
