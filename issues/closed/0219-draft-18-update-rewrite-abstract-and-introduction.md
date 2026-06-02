@@ -5,6 +5,7 @@
 Created: 2026-05-13
 Model: Opus 4.7
 
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 概要
@@ -55,3 +56,7 @@ draft-ietf-moq-transport-18 A.1: "Rewrite Abstract and Introduction (#1556)"
 
 - 実装変更なし、コメント更新のみ (ファイル数が多いが機械的な置換)
 - 後方互換あり
+
+## 解決方法
+
+moqt-js はクライアント専用実装であり、本 issue の仕様変更はクライアント側のコード変更を伴わない。仕様理解のための確認をもって完了とする。

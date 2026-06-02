@@ -2,7 +2,9 @@
 
 - Priority: Low
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 目的
@@ -79,3 +81,7 @@ draft-ietf-moq-transport-18 A.1: "Clarify REQUEST_UPDATE failure behavior for al
 
 - 実装変更なし、コメント更新のみ
 - 後方互換あり
+
+## 解決方法
+
+moqt-js はクライアント専用実装であり、本 issue の仕様変更はクライアント側のコード変更を伴わない。仕様理解のための確認をもって完了とする。
