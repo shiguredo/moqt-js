@@ -43,6 +43,7 @@ export interface Publish {
 export interface PublishOk {
   type: typeof MessageType.REQUEST_OK;
   parameters: Parameter[];
+  trackProperties: Property[];
 }
 
 /**
@@ -152,6 +153,7 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeParameters(msg.parameters));
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -170,14 +172,16 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
  * 双方向ストリーム上で送信されるため Request ID は含まない。
  */
 export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
-  let totalConsumed = 0;
+  const [parameters, parametersConsumed] = decodeParameters(data, offset);
+  offset += parametersConsumed;
 
-  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
-  totalConsumed += parametersConsumed;
+  const propertiesData = data.slice(offset);
+  const trackProperties = decodeProperties(propertiesData);
 
   return {
     type: MessageType.REQUEST_OK,
     parameters,
+    trackProperties,
   };
 }
 

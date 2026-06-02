@@ -195,6 +195,7 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
       const original = {
         type: MessageType.REQUEST_OK as typeof MessageType.REQUEST_OK,
         parameters,
+        trackProperties: [] as Property[],
       };
 
       const encoded = encodePublishOkPayload(original);

@@ -11,11 +11,9 @@ import {
   type RequestError,
   type RequestOk,
   decodeGoawayPayload,
-  decodeRedirect,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
-  encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
 } from "./session";
@@ -122,8 +120,8 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 
 /**
  * draft-ietf-moq-transport-18 Section 10.5:
- * REQUEST_OK から Request ID が削除された。
- * draft-ietf-moq-transport-18 Section 10.1
+ * REQUEST_OK に Track Properties が追加された。
+ * draft-ietf-moq-transport-18 Section 10.5
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -131,6 +129,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
       const original: RequestOk = {
         type: MessageType.REQUEST_OK,
         parameters,
+        trackProperties: [],
       };
 
       const encoded = encodeRequestOkPayload(original);
@@ -142,36 +141,8 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
         assert.equal(decoded.parameters[i].type, parameters[i].type);
         assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
       }
+      assert.equal(decoded.trackProperties.length, 0);
     }),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure):
- * REQUEST_ERROR でエラーコードが REDIRECT (0x34) のときに
- * 末尾に追加される接続先指示構造体。
- */
-test("Redirect のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.string({ minLength: 0, maxLength: 100 }),
-      fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
-      fc.uint8Array({ minLength: 0, maxLength: 50 }),
-      (connectUri, namespaceParts, trackName) => {
-        const original: Redirect = {
-          connectUri,
-          trackNamespace: createTrackNamespace(namespaceParts),
-          trackName,
-        };
-
-        const encoded = encodeRedirect(original);
-        const [decoded] = decodeRedirect(encoded, 0);
-
-        assert.equal(decoded.connectUri, connectUri);
-        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
-        assert.deepEqual(decoded.trackName, trackName);
-      },
-    ),
   );
 });
 

@@ -2,7 +2,9 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 目的
@@ -89,3 +91,11 @@ draft-ietf-moq-transport-18 §10.5:
 - REQUEST_OK のワイヤーフォーマットが変わる（後方互換なし）
 - `RequestOk` 型に `trackProperties` が追加（デフォルト空配列で後方互換あり）
 - Subscriber / Publisher / Fetcher に Track Properties が公開される
+
+## 解決方法
+
+- RequestOk 型に trackProperties: Property[] を追加
+- encodeRequestOkPayload: Parameters 後に encodeProperties(trackProperties) を追加
+- decodeRequestOkPayload: Parameters 後に残りバイトを decodeProperties でパース
+- PublishOk 型にも trackProperties を追加、encode/decode を同様に更新
+- PBT: RequestOk テストに空プロパティ検証を追加、PublishOk テストも更新

@@ -15,6 +15,7 @@ import {
 } from "./parameter";
 import { MessageType } from "./types";
 import { ProtocolViolationError } from "../error";
+import { type Property, decodeProperties, encodeProperties } from "../properties";
 
 /**
  * GOAWAY メッセージ (Section 10.4)
@@ -68,6 +69,7 @@ export interface Goaway {
 export interface RequestOk {
   type: typeof MessageType.REQUEST_OK;
   parameters: Parameter[];
+  trackProperties: Property[];
 }
 
 /**
@@ -266,6 +268,7 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeParameters(msg.parameters));
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -281,15 +284,20 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
  * RequestOk のペイロードをデコード
  *
  * draft-ietf-moq-transport-18 Section 10.5:
- * Number of Parameters + Parameters
- * draft-ietf-moq-transport-18 Section 10.1
+ * Number of Parameters + Parameters + Track Properties
+ * - Track Properties は残りバイトすべて
  */
 export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
-  const [parameters] = decodeParameters(data, offset);
+  const [parameters, paramsConsumed] = decodeParameters(data, offset);
+  offset += paramsConsumed;
+
+  const propertiesData = data.slice(offset);
+  const trackProperties = decodeProperties(propertiesData);
 
   return {
     type: MessageType.REQUEST_OK,
     parameters,
+    trackProperties,
   };
 }
 
