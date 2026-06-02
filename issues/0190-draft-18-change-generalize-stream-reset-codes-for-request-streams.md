@@ -1,53 +1,60 @@
 # Stream Reset エラーコードを全リクエストストリームに一般化する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Medium
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
 
-## 概要
+## 目的
 
-draft-18 で Stream Reset エラーコードが再編成され、全リクエストストリームに対して統一されたコード体系が導入された。
-draft-17 での DataStreamErrorCode (Subgroup Stream 用のエラーコード) が拡張・再構成されている。
+draft-18 §3.3.3 で Stream Reset エラーコードが全リクエストストリーム向けに再編成された。DataStreamErrorCode と PublishDoneCode が仕様に準拠していることを確認する。
 
-> INTERNAL_ERROR (0x0): An implementation specific error.
-> CANCELLED (0x1): The stream was cancelled by either endpoint.
-> DELIVERY_TIMEOUT (0x2): A delivery timeout (Section 8) was exceeded for this stream.
-> SESSION_CLOSED (0x3): The session is being closed.
-> GOING_AWAY (0x4): The endpoint is rejecting this request because it has sent or received a GOAWAY.
-> TOO_FAR_BEHIND (0x5): The corresponding subscription has exceeded the publisher's resource limits ...
-> UNKNOWN_OBJECT_STATUS (0x6): In response to a FETCH, the publisher is unable to determine the status ...
-> EXPIRED_AUTH_TOKEN (0x7): The authorization token for the request has expired.
-> EXCESSIVE_LOAD (0x9): The endpoint is overloaded and is resetting this stream.
-> MALFORMED_TRACK (0x12): A relay publisher detected that the track was malformed ...
->
-> -- draft-ietf-moq-transport-18 §3.3.3 (Stream Reset Error Codes)
+## 優先度根拠
 
-> INTERNAL_ERROR (0x0): An implementation specific or generic error occurred.
-> UNAUTHORIZED (0x1): The subscriber is no longer authorized to subscribe to the given track.
-> TRACK_ENDED (0x2): The track is no longer being published.
-> SUBSCRIPTION_ENDED (0x3): The publisher reached the end of an associated subscription filter.
-> GOING_AWAY (0x4): The subscriber or publisher issued a GOAWAY message.
-> TOO_FAR_BEHIND (0x5): The publisher's queue of objects to be sent to the given subscriber exceeds its implementation defined limit.
-> EXPIRED (0x6): The publisher reached the timeout specified in SUBSCRIBE_OK.
-> UPDATE_FAILED (0x8): REQUEST_UPDATE failed on this subscription (see Section 10.9).
-> EXCESSIVE_LOAD (0x9): The publisher is overloaded and is terminating the subscription.
-> MALFORMED_TRACK (0x12): A relay publisher detected that the track was malformed ...
->
-> -- draft-ietf-moq-transport-18 §10.11 (PUBLISH_DONE)
+- 既存コードの値は draft-18 と一致しているように見えるため、確認作業が主
+- 不一致があれば修正が必要だが、現状のコードコメントも draft-18 を参照している
 
-## 変更内容
+## 現状
 
-- draft-18 §3.3.3 の新しいエラーコード体系に合わせて `DataStreamErrorCode` を更新する
-- `GOING_AWAY` (0x4), `UNKNOWN_OBJECT_STATUS` (0x6), `EXPIRED_AUTH_TOKEN` (0x7) を追加する
-- `PublishDoneStatusCode` が draft-18 §10.11 のコードと一致していることを確認する
+`src/error.ts:100-111` の `DataStreamErrorCode` は既に以下を含む:
+INTERNAL_ERROR(0x0), CANCELLED(0x1), DELIVERY_TIMEOUT(0x2), SESSION_CLOSED(0x3), GOING_AWAY(0x4), TOO_FAR_BEHIND(0x5), UNKNOWN_OBJECT_STATUS(0x6), EXPIRED_AUTH_TOKEN(0x7), EXCESSIVE_LOAD(0x9), MALFORMED_TRACK(0x12)
 
-## 該当ファイル
+`src/error.ts:75-86` の `PublishDoneCode` は既に以下を含む:
+INTERNAL_ERROR(0x0), UNAUTHORIZED(0x1), TRACK_ENDED(0x2), SUBSCRIPTION_ENDED(0x3), GOING_AWAY(0x4), TOO_FAR_BEHIND(0x5), EXPIRED(0x6), UPDATE_FAILED(0x8), EXCESSIVE_LOAD(0x9), MALFORMED_TRACK(0x12)
 
-| ファイル              | 変更内容                                                    |
-| --------------------- | ----------------------------------------------------------- |
-| `src/error.ts:96-115` | `DataStreamErrorCode` を draft-18 §3.3.3 と照合する         |
-| `src/error.ts:78-89`  | `PublishDoneCode` を draft-18 §10.11 と照合する             |
-| `src/session.ts`      | Stream reset 時のエラーコード使用箇所を draft-18 に合わせる |
+## 設計方針
 
-## テスト
+- `DataStreamErrorCode` と `PublishDoneCode` の値が draft-18 §3.3.3 / §10.11 と完全に一致することを確認する
+- 不一致があれば修正し、未定義のコードがあれば追加する
+- 既に一致している場合はコメントを更新して確認済みであることを明記する
 
-- `DataStreamErrorCode` / `PublishDoneCode` の値が draft-18 と一致することを確認する
+## 完了条件
+
+- `DataStreamErrorCode` が draft-18 §3.3.3 の全コードと一致している
+- `PublishDoneCode` が draft-18 §10.11 の全コードと一致している
+- Stream reset 使用箇所で誤ったコードが使われていない
+
+## 変更内容（確認項目）
+
+| 確認項目 | 確認先 | 状態 |
+|----------|--------|------|
+| INTERNAL_ERROR (0x0) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| CANCELLED (0x1) | DataStreamErrorCode | 既存で存在 |
+| DELIVERY_TIMEOUT (0x2) | DataStreamErrorCode | 既存で存在 |
+| SESSION_CLOSED (0x3) | DataStreamErrorCode | 既存で存在 |
+| GOING_AWAY (0x4) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| TOO_FAR_BEHIND (0x5) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| UNKNOWN_OBJECT_STATUS (0x6) | DataStreamErrorCode | 既存で存在 |
+| EXPIRED_AUTH_TOKEN (0x7) | DataStreamErrorCode | 既存で存在 |
+| EXCESSIVE_LOAD (0x9) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| MALFORMED_TRACK (0x12) | DataStreamErrorCode, PublishDoneCode | 既存で存在 |
+| UNAUTHORIZED (0x1) | PublishDoneCode | 既存で存在 |
+| TRACK_ENDED (0x2) | PublishDoneCode | 既存で存在 |
+| SUBSCRIPTION_ENDED (0x3) | PublishDoneCode | 既存で存在 |
+| EXPIRED (0x6) | PublishDoneCode | 既存で存在 |
+| UPDATE_FAILED (0x8) | PublishDoneCode | 既存で存在 |
+
+## 影響範囲
+
+- コメントと値の確認が主。不一致がなければコード変更不要
+- 不一致があった場合、エラーコードの数値変更は既存のストリーム処理に影響（後方互換なし）

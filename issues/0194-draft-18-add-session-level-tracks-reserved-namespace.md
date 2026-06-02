@@ -1,7 +1,43 @@
 # Session-Level Tracks 用の予約名前空間定数を追加する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Medium
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
+
+## 目的
+
+draft-18 §3.2.1 / §3.2.2 で session レベルの予約名前空間 (`.` プレフィクス) が定義された。
+アプリケーションが誤って予約名前空間を使用するのを防ぐ。
+
+## 優先度根拠
+
+- 軽微な追加機能だが、予約名前空間の誤使用を防ぐ防御的実装として有用
+- 新規定数とヘルパー関数の追加で実装コストは小さい
+
+## 現状
+
+予約名前空間のチェック機構は存在しない。ユーザーは任意の namespace 文字列を自由に使用できる。
+
+draft-ietf-moq-transport-18 §3.2.1:
+> MOQT reserves all Track Namespace values whose first tuple field
+> begins with a period (0x2e, .).
+
+draft-ietf-moq-transport-18 §3.2.2:
+> MOQT defines the .session namespace ... in the first position of the
+> Track Namespace for session-level tracks and namespaces.
+
+## 設計方針
+
+- `RESERVED_NAMESPACE_PREFIX = "."` 定数を定義
+- `isReservedNamespace()`: 先頭タプルフィールドが `.` で始まるか判定
+- `isSessionLevelNamespace()`: 先頭タプルフィールドが `.session` か判定
+- publish / subscribe 時に予約プレフィクス使用を拒否または警告
+
+## 完了条件
+
+- `isReservedNamespace()` / `isSessionLevelNamespace()` が実装され単体テストが通る
+- publish / subscribe 時に予約名前空間使用で適切なエラーが返る
 
 ## 概要
 

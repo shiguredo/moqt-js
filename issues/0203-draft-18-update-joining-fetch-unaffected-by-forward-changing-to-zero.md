@@ -1,7 +1,10 @@
 # Joining Fetch を forward が 0 に変わっても影響させない
 
+- Priority: Low
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 

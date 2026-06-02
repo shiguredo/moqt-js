@@ -1,7 +1,10 @@
 # REQUEST_OK の Request Type 別 textual alias を定義する
 
+- Priority: Medium
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 
@@ -44,7 +47,7 @@ draft-ietf-moq-transport-18 A.1: "Define textual aliases for REQUEST_OK (#1610)"
 2. FETCH の応答 REQUEST_OK はログ上 "FETCH_OK" と表示される
 3. TRACK_STATUS の応答 REQUEST_OK はログ上 "TRACK_STATUS_OK" と表示される
 4. REQUEST_UPDATE の応答 REQUEST_OK はログ上 "REQUEST_UPDATE_OK" と表示される
-5. ワイヤーフォーマットに変更はない (全て REQUEST_OK = 0x05)
+5. ワイヤーフォーマットに変更はない (全て REQUEST_OK = 0x07)
 
 ## テスト方針
 

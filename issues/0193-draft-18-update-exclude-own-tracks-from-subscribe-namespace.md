@@ -1,7 +1,38 @@
 # SUBSCRIBE_TRACKS 応答で自身の track を除外する仕様に対応する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Low
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
+
+## 目的
+
+draft-18 §6.1 で SUBSCRIBE_TRACKS 応答に購読者自身が publish している track を含めない仕様となった。
+moqt-js はクライアント専用で受信側のため、実装変更は不要だがコメント更新で仕様理解を明確にする。
+
+## 優先度根拠
+
+- 実装変更不要、コメント更新のみ
+- 仕様理解のための documentation update
+
+## 現状
+
+クライアント専用の moqt-js では、relay が正しく自身の track を除外してくることを前提としている。
+受信ロジックに変更は不要。
+
+draft-ietf-moq-transport-18 §6.1:
+> SUBSCRIBE_TRACKS requests track subscriptions: the publisher sends
+> PUBLISH messages for tracks within matching namespaces, excluding
+> tracks published by the subscriber.
+
+## 設計方針
+
+- SUBSCRIBE_TRACKS 応答受信処理のコメントに self-track exclusion 仕様を注記
+- draft 参照を 17 → 18 に更新
+
+## 完了条件
+
+- コメントが draft-18 §6.1 の self-track exclusion に言及している
 
 ## 概要
 

@@ -1,7 +1,10 @@
 # Joining Fetch の forward state 不整合を request error として扱う
 
+- Priority: High
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 

@@ -1,7 +1,10 @@
 # Joining Fetch と forward state 遷移の順序を明確化する
 
+- Priority: Low
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 
@@ -18,7 +21,7 @@ draft-ietf-moq-transport-18 §10.12.2 (Joining Fetches):
 > A publisher MUST process any pending REQUEST_UPDATE messages for
 > the associated subscription before evaluating the current request.
 
-draft-ietf-moq-transport-18 §5.1.3 (Joining an Ongoing Track):
+draft-ietf-moq-transport-18 §5.1.1 (Subscription State Management):
 
 > The Joining Location is established when the subscription's Forward
 > State transitions from 0 to 1, and a publisher MUST save the

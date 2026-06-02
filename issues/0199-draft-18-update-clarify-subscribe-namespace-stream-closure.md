@@ -1,14 +1,37 @@
 # SUBSCRIBE_NAMESPACE ストリームのクローズ semantics を明確化する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Low
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
 
-## 概要
+## 目的
 
-draft-18 で SUBSCRIBE_NAMESPACE 応答ストリームのクローズ条件と
-クローズ後の挙動が明確化された。
-moqt-js の SUBSCRIBE_NAMESPACE 応答ストリーム処理は既に draft-17 時点で準拠済みであり、
-draft 番号とコメントを更新する。
+draft-18 §10.18 で SUBSCRIBE_NAMESPACE 応答ストリームのクローズ条件とクローズ後の挙動が明確化された。
+moqt-js の既存実装は既に準拠済みのため、draft 番号とコメントの更新のみ。
+
+## 優先度根拠
+
+- 実装変更不要、コメント更新のみ
+
+## 現状
+
+既存の SUBSCRIBE_NAMESPACE 応答ストリーム処理は draft-17 時点で準拠済み。
+FIN / stream reset 受信時の NAMESPACE_DONE 扱いは既に実装されている。
+
+draft-ietf-moq-transport-18 §10.18:
+> When a subscriber receives a stream reset or FIN on a
+> SUBSCRIBE_NAMESPACE response stream, it SHOULD treat this as though
+> each active namespace received a NAMESPACE_DONE.
+
+## 設計方針
+
+- コメントの draft 参照を 17 → 18 に更新
+- 節番号を §9.20 → §10.18 に更新
+
+## 完了条件
+
+- コメントが draft-18 §10.18 を参照している
 
 ## RFC 参照
 

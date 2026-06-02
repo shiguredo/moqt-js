@@ -1,65 +1,88 @@
-# PUBLISH_OK メッセージタイプをテキストエイリアスに変更する
+# PUBLISH_OK メッセージタイプ (0x1E) を削除し REQUEST_OK (0x7) に統一する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: High
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
 
-## 概要
+## 目的
 
-draft-18 で PUBLISH_OK (0x1E) が削除され、REQUEST_OK (0x7) の textual alias になった。
-PUBLISH リクエストへの成功応答は REQUEST_OK で表現し、リクエスト種別による応答名の区別は
-コード上でのみ行う。
+draft-18 で PUBLISH_OK (0x1E) がメッセージタイプから削除され、PUBLISH リクエストへの成功応答も REQUEST_OK (0x7) で表現されるようになった。ワイヤーフォーマット上の重複メッセージタイプを整理する。
 
+## 優先度根拠
+
+- draft-18 準拠のための必須変更
+- 存在しないメッセージタイプ (0x1E) を送信し続けるとサーバーとの相互運用に問題が生じる
+- 破壊的変更だが影響範囲は限定的
+
+## 現状
+
+現在のコードベースでは PUBLISH への成功応答として PUBLISH_OK (0x1E) を使用している:
+- `MessageType.PUBLISH_OK = 0x1E`
+- `PublishOk` インターフェース (type: PUBLISH_OK)
+- `encodePublishOkPayload` / `decodePublishOkPayload`
+
+draft-ietf-moq-transport-18 §10.5:
 > This document uses the shorthand PUBLISH_OK, REQUEST_UPDATE_OK,
-> SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK to refer to a
-> REQUEST_OK response to SUBSCRIBE, FETCH, PUBLISH, SUBSCRIBE_NAMESPACE,
-> SUBSCRIBE_TRACKS and PUBLISH_NAMESPACE respectively.
->
-> -- draft-ietf-moq-transport-18 §10.5
+> TRACK_STATUS_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK to
+> refer to a REQUEST_OK sent in response to the corresponding request
+> type.
 
-Wire format 上は REQUEST_OK (0x7) のみ。PUBLISH_OK (0x1E) は存在しない。
+Wire format 上は REQUEST_OK (0x7) のみが存在し、PUBLISH_OK (0x1E) は廃止された。
+
+## 設計方針
+
+- `MessageType.PUBLISH_OK = 0x1E` を削除する
+- `PublishOk` インターフェースの type を `MessageType.REQUEST_OK` に変更する
+- 専用の `encodePublishOkPayload` / `decodePublishOkPayload` は維持し、内部実装を `encodeRequestOkPayload` / `decodeRequestOkPayload` に委譲する（API 互換性のため）
+- あるいは完全に削除し、呼び出し元で `encodeRequestOkPayload` を直接使う
+- PUBLISH 応答受信コードでは `MessageType.PUBLISH_OK` の代わりに `MessageType.REQUEST_OK` で判定する
+
+## 完了条件
+
+- `MessageType.PUBLISH_OK = 0x1E` が削除されている
+- `PublishOk` 型の type が `MessageType.REQUEST_OK` になっている
+- PUBLISH 応答のエンコード/デコードが REQUEST_OK (0x7) を使っている
+- 全 PBT が PUBLISH_OK なしで成功する
+- `git grep PUBLISH_OK` がヒットしない（型名としての PublishOk は除く）
 
 ## 変更内容
 
-### 1. MessageType.PUBLISH_OK を削除する (`src/message/types.ts`)
+### 1. MessageType から PUBLISH_OK を削除 (`src/message/types.ts`)
 
-- `PUBLISH_OK = 0x1E` を削除する
-- PUBLISH 応答のメッセージ型を `REQUEST_OK = 0x7` に統一する
+- `PUBLISH_OK = 0x1E` を削除
 
-### 2. publish.ts の PublishOk 型を変更する (`src/message/publish.ts`)
+### 2. PublishOk 型を REQUEST_OK ベースに変更 (`src/message/publish.ts`)
 
-- `PublishOk` インターフェースの `type` を `typeof MessageType.REQUEST_OK` に変更する
-- `encodePublishOkPayload()` を `encodeRequestOkPayload()` に置換する
-  - または `encodePublishOkPayload` の内部実装を `RequestOk` ベースに変更する
-- `decodePublishOkPayload()` を `decodeRequestOkPayload()` に置換する
-  - または `decodePublishOkPayload` の内部実装を `RequestOk` デコードに変更する
+- `PublishOk.type` を `typeof MessageType.REQUEST_OK` に変更
+- `encodePublishOkPayload` の実装を `encodeRequestOkPayload` の呼び出しに置換
+- `decodePublishOkPayload` の実装を `decodeRequestOkPayload` の呼び出しに置換（戻り値の型は `PublishOk` のまま）
 
-### 3. PublishOkPayload を RequestOkPayload に統一する (`src/message/publish.ts`)
+### 3. PUBLISH_OK 参照を REQUEST_OK に変更
 
-- `PublishOkPayload` インターフェースを削除するか、`RequestOkPayload` のエイリアスにする
-- PUBLISH_OK の専用エンコード/デコード関数を削除する
+- `src/session/bidi.ts` (`bidiReadPublishResponse`): `MessageType.PUBLISH_OK` → `MessageType.REQUEST_OK`
+- `src/session.ts` (`readPublishResponse`): 同様
+- PBT (`src/message/publish.prop.ts`): PUBLISH_OK のテストを REQUEST_OK に変更
 
-### 4. session.ts の PUBLISH_OK 処理を REQUEST_OK に統一する
+## 該当箇所一覧
 
-- `readPublishResponse()` の `PUBLISH_OK` case を `REQUEST_OK` case に変更する
-- PUBLISH_OK を期待している既存コードを REQUEST_OK に書き換える
-
-## 該当箇所
-
-| ファイル                                           | 変更内容                                                                       |
-| -------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `src/message/types.ts:49`                          | `PUBLISH_OK = 0x1E` を削除する                                                 |
-| `src/message/publish.ts:160-265`                   | `PublishOkPayload` 型と encode/decode を削除または REQUEST_OK ベースに変更する |
-| `src/session.ts` (readPublishResponse 等)          | PUBLISH_OK case を REQUEST_OK case に変更する                                  |
-| `src/session/bidi.ts` (bidiReadPublishResponse 等) | 応答タイプ判定から PUBLISH_OK を削除する                                       |
+| ファイル                         | 変更内容                                                     |
+| -------------------------------- | ------------------------------------------------------------ |
+| `src/message/types.ts`           | `PUBLISH_OK = 0x1E` を削除                                   |
+| `src/message/publish.ts:44-47`   | `PublishOk` 型の type を `MessageType.REQUEST_OK` に変更     |
+| `src/message/publish.ts:160-191` | `encodePublishOkPayload` の実装を `encodeRequestOkPayload` に委譲 |
+| `src/message/publish.ts:181-191` | `decodePublishOkPayload` の実装を `decodeRequestOkPayload` に委譲 |
+| `src/session/bidi.ts`            | `bidiReadPublishResponse`: PUBLISH_OK → REQUEST_OK           |
+| `src/session.ts`                 | `readPublishResponse`: PUBLISH_OK → REQUEST_OK               |
+| `src/message/publish.prop.ts`    | PUBLISH_OK テストを REQUEST_OK に変更                        |
 
 ## テスト方針
 
-- PUBLISH_OK (0x1E) がメッセージタイプ定数から削除されていることを確認する
-- PUBLISH 応答が REQUEST_OK (0x7) でエンコード/デコードされることを検証する
-- 全 PBT で PUBLISH_OK を含むテストケースを REQUEST_OK に書き換える
+- PBT: `PublishOk` のエンコード/デコードが REQUEST_OK (0x7) を使っていることのラウンドトリップ検証
+- 単体: `MessageType` 定数から `PUBLISH_OK` が削除されていることの確認
+- 既存の PUBLISH 応答受信テストが引き続き動作することを確認
 
 ## 影響範囲
 
-- `MessageType.PUBLISH_OK` 定数が削除される（後方互換なし）
-- PUBLISH 応答パースが REQUEST_OK ベースに変更される
-- 既存の PUBLISH_OK 参照コードはビルドエラーになる
+- `MessageType.PUBLISH_OK` 定数が削除される（後方互換なし、参照コードはコンパイルエラー）
+- PUBLISH 応答のワイヤーフォーマットが変わる（0x1E → 0x7、後方互換なし）

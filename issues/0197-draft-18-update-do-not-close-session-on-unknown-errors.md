@@ -1,12 +1,45 @@
 # 未知エラーコード受信時にセッションを閉じない
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: High
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
 
-## 概要
+## 目的
 
-draft-18 で未知のエラーコードを受信した際にセッションを閉じてはならないと明示された。
-未知エラーコードは INTERNAL_ERROR と同等に扱い、セッションは維持する。
+draft-18 §14 で未知のエラーコードを受信した際にセッションを閉じてはならないと明示された。未知エラーコードは `INTERNAL_ERROR` と同等に扱う。
+
+## 優先度根拠
+
+- MUST 要件の違反（現在は未知エラーコード受信時にセッションを切断している可能性がある）
+- 実装変更が必要で破壊的ではないが、セッション切断動作が変わる
+
+## 現状
+
+REQUEST_ERROR / PUBLISH_DONE 受信時に未知のエラーコードを受け取った場合、現在のコードでは適切にフォールバックせずに未知のコードのまま処理される可能性がある。
+
+draft-ietf-moq-transport-18 §14:
+> Receipt of an unknown error code in any error context (Session
+> Termination, REQUEST_ERROR, PUBLISH_DONE, or Data Stream Reset) MUST
+> be treated as equivalent to INTERNAL_ERROR for that context. An
+> endpoint MUST NOT close the session because it received an unknown
+> error code in a REQUEST_ERROR or PUBLISH_DONE.
+
+draft-ietf-moq-transport-18 A.1: "Don't close the Session for unknown errors (#1561)"
+
+## 設計方針
+
+- `normalizeRequestErrorCode()`: 未知コード → `INTERNAL_ERROR`、既知コード → そのまま
+- `normalizePublishDoneCode()`: 同様
+- `normalizeDataStreamErrorCode()`: 同様
+- REQUEST_ERROR / PUBLISH_DONE / DataStream reset 受信時に正規化関数を通す
+
+## 完了条件
+
+- 未知の REQUEST_ERROR コード受信時にセッションが維持される
+- 未知の PUBLISH_DONE コード受信時にセッションが維持され INTERNAL_ERROR として通知される
+- 未知の DataStream Reset コード受信時にセッションが維持される
+- 単体テストで正規化関数の動作が検証される
 
 ## RFC 参照
 

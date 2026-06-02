@@ -1,7 +1,10 @@
 # DELIVERY_TIMEOUT を SUBGROUP_DELIVERY_TIMEOUT と OBJECT_DELIVERY_TIMEOUT に分割する
 
+- Priority: Medium
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 

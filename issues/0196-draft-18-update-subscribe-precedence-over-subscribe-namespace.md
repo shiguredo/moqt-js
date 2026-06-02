@@ -1,7 +1,33 @@
 # Relay で SUBSCRIBE を SUBSCRIBE_NAMESPACE より優先させる
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Low
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
+
+## 目的
+
+draft-18 A.1 で relay は同一 track への SUBSCRIBE を SUBSCRIBE_NAMESPACE より優先するよう明示された。
+moqt-js は relay 機能を持たないクライアントのため実装変更不要。コメント更新のみ。
+
+## 優先度根拠
+
+- 実装変更不要、コメント更新のみ
+
+## 現状
+
+クライアント専用の moqt-js では relay の優先判断は行わないため、受信側の挙動に変更はない。
+
+draft-ietf-moq-transport-18 A.1:
+> SUBSCRIBE takes precedence over SUBSCRIBE_NAMESPACE at relay (#1533)
+
+## 設計方針
+
+- 関連コメントの draft 参照を 17 → 18 に更新
+
+## 完了条件
+
+- コメントの draft 参照が 18 になっている
 
 ## 概要
 

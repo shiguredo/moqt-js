@@ -1,7 +1,10 @@
 # REQUEST_UPDATE で forward 0→1 後の Subgroup 再オープンを許可する
 
+- Priority: Low
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 

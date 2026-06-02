@@ -1,13 +1,40 @@
 # 全 request type に対する REQUEST_UPDATE 失敗時の挙動を明確化する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Low
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
 
-## 概要
+## 目的
 
-draft-18 で REQUEST_UPDATE が失敗した場合の挙動が全 request type について明確化された。
-moqt-js はクライアントであり Publisher/Subscriber としてのみ動作するため、
-受信側のエラーハンドリングのコメントを更新する。
+draft-18 §10.9.1 で REQUEST_UPDATE が失敗した場合の挙動が全 request type について明確化された。
+moqt-js はクライアントであり受信側のため、コメント更新のみ。
+
+## 優先度根拠
+
+- 実装変更不要、コメント更新のみ
+
+## 現状
+
+SUBSCRIBE の REQUEST_UPDATE 失敗時は PUBLISH_DONE(UPDATE_FAILED) が既にハンドリングされている。
+FETCH / SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の REQUEST_UPDATE 失敗時の挙動はクライアント側で追加実装不要。
+
+draft-ietf-moq-transport-18 §10.9.1:
+> When a REQUEST_UPDATE is unsuccessful, the publisher MUST also
+> terminate the subscription by sending a PUBLISH_DONE with error code
+> UPDATE_FAILED. When a REQUEST_UPDATE fails for a FETCH, the
+> publisher MUST reset the FETCH data stream. When a REQUEST_UPDATE
+> fails for a SUBSCRIBE_NAMESPACE or PUBLISH_NAMESPACE, the responder
+> MUST close the bidi stream.
+
+## 設計方針
+
+- 関連 JSDoc に失敗時の挙動を追記
+- 実装変更なし
+
+## 完了条件
+
+- JSDoc が draft-18 §10.9.1 の失敗時挙動に言及している
 
 ## RFC 参照
 

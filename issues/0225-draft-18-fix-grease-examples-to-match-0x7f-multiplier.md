@@ -1,7 +1,10 @@
 # Grease 例を 0x7f 倍数に揃える
 
+- Priority: High
+
 Created: 2026-05-13
 Model: Opus 4.7
+- Polished: 2026-06-02
 
 ## 概要
 

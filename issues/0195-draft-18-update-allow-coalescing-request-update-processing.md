@@ -1,7 +1,35 @@
 # REQUEST_UPDATE の coalescing 処理を許可する仕様に対応する
 
-Created: 2026-05-13
-Model: Opus 4.7
+- Priority: Low
+- Created: 2026-05-13
+- Model: Opus 4.7
+- Polished: 2026-06-02
+
+## 目的
+
+draft-18 §10.9.1 で連続した REQUEST_UPDATE をサーバーが coalesce して処理することが明示的に許可された。
+moqt-js はクライアント専用（送信側）のため実装変更は不要だが、コメント更新で仕様理解を明確にする。
+
+## 優先度根拠
+
+- 実装変更不要、コメント更新のみ
+
+## 現状
+
+クライアントが連続して REQUEST_UPDATE を送信しても、サーバーが最新のものだけを処理する可能性がある。
+送信ロジックに変更は不要。
+
+draft-ietf-moq-transport-18 §10.9.1:
+> A receiver of multiple REQUEST_UPDATE messages on the same stream MAY
+> coalesce their processing by applying only the cumulative result.
+
+## 設計方針
+
+- REQUEST_UPDATE 送信処理のコメントに coalescing 仕様を注記
+
+## 完了条件
+
+- コメントが draft-18 §10.9.1 の coalescing 仕様に言及している
 
 ## 概要
 
