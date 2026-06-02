@@ -2,8 +2,10 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
 - Polished: 2026-06-02
+- Branch: feature/draft-18
 
 ## 目的
 
@@ -133,3 +135,39 @@ draft-ietf-moq-transport-18 §10.4:
 ## 関連 issue
 
 - 0188: GOAWAY に Request ID フィールドを追加する。0188 完了後、`decodeGoawayPayload` の返り値に `requestId` が追加される。リクエストストリーム上の GOAWAY では `requestId` は null となる。
+
+## 解決方法
+
+以下の変更を実施した:
+
+### コールバックインターフェース (`src/session.ts`)
+
+- `PublishCallbacks` に `goaway?: (newSessionUri: string) => void` を追加
+- `SubscribeCallbacks` に `goaway?: (newSessionUri: string) => void` を追加
+- `FetchCallbacks` に `goaway?: (newSessionUri: string) => void` を追加
+
+### Pending 構造体 (`src/session/bidi.ts`)
+
+- `PendingPublish` / `PendingSubscribe` / `PendingFetch` に `goawayCallback` フィールドを追加
+
+### bidi ストリーム第一応答 (`src/session/bidi.ts`)
+
+- `bidiReadPublishResponse`: REQUEST_ERROR 後に GOAWAY 検出を追加、goawayCallback を呼ぶ
+- `bidiReadSubscribeResponse`: 同様
+- `bidiReadFetchResponse`: 同様
+- `bidiReadTrackStatusResponse`: GOAWAY 検出を追加、goaway URI 付きで reject
+
+### bidi ストリーム後続メッセージ (`src/session/bidi.ts`)
+
+- `bidiReadRequestStreamMessages` の switch-case に `MessageType.GOAWAY` を追加
+- 重複 GOAWAY 検出: リクエストストリーム上の 2 回目の GOAWAY は PROTOCOL_VIOLATION
+
+### namespace 系ストリームループ (`src/session.ts`)
+
+- `startNamespaceStreamLoop`: REQUEST_ERROR 後に GOAWAY 検出を追加
+- `startTracksStreamLoop`: 同様
+- `startNamespacePublicationStreamLoop`: 同様
+
+### 送信側 (`src/session.ts`)
+
+- `publish()` / `subscribe()` / `fetch()` の pending セット時に goawayCallback を設定

@@ -18,6 +18,7 @@ import {
   encodeRequestUpdatePayload,
   encodeUint8ParameterValue,
   decodeFetchOkPayload,
+  decodeGoawayPayload,
   decodePublishDonePayload,
   decodePublishOkPayload,
   decodeRequestErrorPayload,
@@ -48,6 +49,7 @@ interface PendingPublish {
   resolve: (pub: Publisher) => void;
   reject: (err: Error) => void;
   impl: PublisherImpl;
+  goawayCallback?: (newSessionUri: string) => void;
 }
 
 interface PendingSubscribe {
@@ -56,6 +58,7 @@ interface PendingSubscribe {
   impl: SubscriberImpl;
   joiningFetch?: JoiningFetchOptions;
   objectCallback: (object: MoqtObject) => void;
+  goawayCallback?: (newSessionUri: string) => void;
 }
 
 interface PendingFetch {
@@ -63,6 +66,7 @@ interface PendingFetch {
   reject: (err: Error) => void;
   impl: FetcherImpl;
   startLocation?: Location;
+  goawayCallback?: (newSessionUri: string) => void;
 }
 
 interface PendingTrackStatus {
@@ -207,6 +211,12 @@ export async function bidiReadPublishResponse(
           : undefined,
       );
       pending.reject(error);
+    } else if (msg.type === MessageType.GOAWAY) {
+      const decoded = decodeGoawayPayload(msg.payload);
+      session.pendingPublish.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.goawayCallback?.(decoded.newSessionUri);
+      pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -295,6 +305,12 @@ export async function bidiReadSubscribeResponse(
         Number(decoded.errorCode) as RequestErrorCode,
       );
       pending.reject(error);
+    } else if (msg.type === MessageType.GOAWAY) {
+      const decoded = decodeGoawayPayload(msg.payload);
+      session.pendingSubscribe.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.goawayCallback?.(decoded.newSessionUri);
+      pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -361,6 +377,12 @@ export async function bidiReadFetchResponse(
         Number(decoded.errorCode) as RequestErrorCode,
       );
       pending.reject(error);
+    } else if (msg.type === MessageType.GOAWAY) {
+      const decoded = decodeGoawayPayload(msg.payload);
+      session.pendingFetch.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.goawayCallback?.(decoded.newSessionUri);
+      pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -404,6 +426,13 @@ export async function bidiReadTrackStatusResponse(
         Number(decoded.errorCode) as RequestErrorCode,
       );
       pending.reject(error);
+    } else if (msg.type === MessageType.GOAWAY) {
+      const decoded = decodeGoawayPayload(msg.payload);
+      session.pendingTrackStatus.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(
+        new Error(`request stream goaway: ${decoded.newSessionUri || "no redirect URI"}`),
+      );
     } else {
       session.pendingTrackStatus.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -473,6 +502,19 @@ export async function bidiReadRequestStreamMessages(
               publisher.setForwardState(forwardState);
             }
             break;
+          }
+          case MessageType.GOAWAY: {
+            // draft-ietf-moq-transport-18 §10.4:
+            // draft-ietf-moq-transport-18 §10.4:
+            // リクエストストリーム上の GOAWAY は当該リクエストのみに適用される
+            void decodeGoawayPayload(msg.payload);
+            session.closeWithError(
+              new SessionError(
+                `received duplicate GOAWAY on request stream ${requestId}`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+            return;
           }
           default:
             session.closeWithError(

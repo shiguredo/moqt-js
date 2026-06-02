@@ -203,6 +203,12 @@ export interface PublishCallbacks {
    * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
    */
   onForwardStateChange?: (forward: boolean) => void;
+  /**
+   * リクエストストリーム上で GOAWAY を受信した時のコールバック
+   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * 当該リクエストのマイグレーション先 URI を通知する。
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -295,6 +301,12 @@ export interface SubscribeCallbacks {
   datagram?: (object: MoqtObject) => void;
   end?: () => void;
   error?: (error: Error) => void;
+  /**
+   * リクエストストリーム上で GOAWAY を受信した時のコールバック
+   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * 当該リクエストのマイグレーション先 URI を通知する。
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -449,6 +461,12 @@ export interface FetchCallbacks {
   object: (object: MoqtObject) => void;
   end?: () => void;
   error?: (error: Error) => void;
+  /**
+   * リクエストストリーム上で GOAWAY を受信した時のコールバック
+   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * 当該リクエストのマイグレーション先 URI を通知する。
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -802,7 +820,12 @@ export class SessionImpl implements Session {
   // 保留中のリクエスト
   private pendingPublish = new Map<
     bigint,
-    { resolve: (pub: Publisher) => void; reject: (err: Error) => void; impl: PublisherImpl }
+    {
+      resolve: (pub: Publisher) => void;
+      reject: (err: Error) => void;
+      impl: PublisherImpl;
+      goawayCallback?: (newSessionUri: string) => void;
+    }
   >();
   private pendingSubscribe = new Map<
     bigint,
@@ -812,6 +835,7 @@ export class SessionImpl implements Session {
       impl: SubscriberImpl;
       joiningFetch?: JoiningFetchOptions;
       objectCallback: (object: MoqtObject) => void;
+      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingRequestUpdate = new Map<
@@ -825,6 +849,7 @@ export class SessionImpl implements Session {
       reject: (err: Error) => void;
       impl: FetcherImpl;
       startLocation?: Location;
+      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingTrackStatus = new Map<
@@ -1182,7 +1207,12 @@ export class SessionImpl implements Session {
 
     // PUBLISH_OK の Promise を作成
     const promise = new Promise<Publisher>((resolve, reject) => {
-      this.pendingPublish.set(requestId, { resolve, reject, impl });
+      this.pendingPublish.set(requestId, {
+        resolve,
+        reject,
+        impl,
+        goawayCallback: callbacks?.goaway,
+      });
     });
 
     const parameters = buildPublishParameters(options);
@@ -1311,6 +1341,7 @@ export class SessionImpl implements Session {
         impl,
         joiningFetch: options?.joiningFetch,
         objectCallback: callbacks.object,
+        goawayCallback: callbacks.goaway,
       });
     });
 
@@ -1403,6 +1434,7 @@ export class SessionImpl implements Session {
         reject,
         impl,
         startLocation: options.startLocation,
+        goawayCallback: callbacks.goaway,
       });
     });
 
@@ -1783,6 +1815,24 @@ export class SessionImpl implements Session {
               return;
             }
 
+            case MessageType.GOAWAY: {
+              // draft-ietf-moq-transport-18 §10.4:
+              // リクエストストリーム上の GOAWAY は当該リクエストのみに適用される
+              const decodedMsg = decodeGoawayPayload(messagePayload);
+              subscription.state = "closed";
+              callbacks.error?.(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              reject(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              return;
+            }
+
             case MessageType.NAMESPACE: {
               const decodedMsg = decodeNamespacePayload(messagePayload);
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
@@ -1953,6 +2003,22 @@ export class SessionImpl implements Session {
               subscription.state = "closed";
               callbacks.error?.(error);
               reject(error);
+              return;
+            }
+
+            case MessageType.GOAWAY: {
+              const decodedMsg = decodeGoawayPayload(messagePayload);
+              subscription.state = "closed";
+              callbacks.error?.(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              reject(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
               return;
             }
 
@@ -2166,6 +2232,24 @@ export class SessionImpl implements Session {
               callbacks?.error?.(error);
               if (!resolved) {
                 reject(error);
+              }
+              return;
+            }
+
+            case MessageType.GOAWAY: {
+              const decodedMsg = decodeGoawayPayload(messagePayload);
+              publication.state = "closed";
+              callbacks?.error?.(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              if (!resolved) {
+                reject(
+                  new Error(
+                    `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                  ),
+                );
               }
               return;
             }

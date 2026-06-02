@@ -37,6 +37,11 @@
   - RequestError クラスに retryInterval / redirect フィールドを追加する
   - 全 8 箇所の REQUEST_ERROR 受信処理で retryInterval / redirect を伝搬する
   - @voluntas
+- [ADD] GOAWAY をリクエストストリーム上で受信可能にする (#0187)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、リクエストストリーム上の GOAWAY を検出し個別リクエストの goaway コールバックを呼ぶ
+  - PublishCallbacks / SubscribeCallbacks / FetchCallbacks に goaway コールバックを追加する
+  - bidi 第一応答 / 後続メッセージ / namespace 系ストリームループの全経路で GOAWAY を処理する
+  - @voluntas
 - [ADD] moqt URI の Fragment Identifier をパースし `Session.fragment` で公開する (#0183)
   - draft-ietf-moq-transport-18 §3.1.2 に基づき `moqt://example.com/app#type:value` 形式の fragment をパースする
   - `src/moqtUri.ts` に `parseFragment()` と `MoqtFragment` / `NormalizedMoqtUri` 型を追加する
