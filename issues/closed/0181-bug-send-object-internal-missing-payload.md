@@ -1,7 +1,9 @@
 # sendObjectInternal が encodeObjectFields 切替後にペイロードを送信しなくなり E2E テストが catalog receive timeout になる
 
 Created: 2026-05-13
+Completed: 2026-06-02
 Model: Opus 4.7
+Branch: feature/draft-18
 
 ## 概要
 
@@ -71,3 +73,7 @@ if (params.payload.length > 0) {
 - `vp run test` 全パス
 - `vp run build` 成功
 - CI の E2E テスト (`vp run e2e-test`) が成功すること
+
+## 解決方法
+
+本 issue は過去のコミットで既に修正済みである。`src/session.ts` の `sendObjectInternal` 関数 (2797-2800 行) において、`encodeObjectFields` のヘッダ書き込み後に `params.payload` を別途 `writer.write()` することが適切に実装されている。変更不要。
