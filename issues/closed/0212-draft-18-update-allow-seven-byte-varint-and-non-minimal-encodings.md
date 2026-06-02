@@ -2,9 +2,10 @@
 
 - Priority: Medium
 
-Created: 2026-05-13
-Model: Opus 4.7
 
+- Completed: 2026-06-02
+- Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 概要
@@ -70,3 +71,6 @@ draft-ietf-moq-transport-18 A.1: (7 バイト varint の最上位ビット検証
 - 実装変更あり
 - 後方互換あり (0xFC / 0xFD を拒否していたのを受容するようになるのは前方互換の改善)
 - エンコーダは最小エンコードを維持する (非最小エンコードの送信はしない方針)
+## 解決方法
+
+src/varint.ts は既に 7 バイト varint (1111110, 49 usable bits) のエンコード/デコードを実装済み。コード変更不要。
