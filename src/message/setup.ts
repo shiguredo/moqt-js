@@ -82,9 +82,10 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
 /**
  * Setup のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-18 Section 10.3 (SETUP), Section 15.4 (IANA registry):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
+ * 未知の Setup Option は MUST ignore（§10.3.1）。
  */
 export function decodeSetupPayload(data: Uint8Array, offset = 0): Setup {
   const [parameters] = decodeKeyValuePairs(data, offset);

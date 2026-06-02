@@ -2,9 +2,9 @@
 
 - Priority: Medium
 
-Created: 2026-05-13
-Model: Opus 4.7
-
+- Completed: 2026-06-02
+- Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 概要
@@ -60,3 +60,8 @@ draft-ietf-moq-transport-18 A.1: "Add IANA registry for Setup Options (#1564)"
 - 実装変更あり (未知 Setup Option の ignore 処理)
 - 後方互換あり (未知 Option をエラーにしていたのを ignore に変更)
 - 0197 と強く関連 (未知値受信時のセッション維持)
+
+## 解決方法
+
+- SetupOptionType の JSDoc に draft-18 §15.4 IANA registry と §10.3.1 MUST ignore への参照を追加
+- decodeSetupPayload の JSDoc に未知 Setup Option の MUST ignore 規則を明記

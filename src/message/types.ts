@@ -74,9 +74,11 @@ export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 /**
  * Setup Option Types (Section 10.3.1 Setup Options)
  *
- * draft-ietf-moq-transport-18:
- * "Setup Parameters" を "Setup Options" にリネーム。
- * draft-ietf-moq-transport-18 Section 10.3.1
+ * draft-ietf-moq-transport-18 Section 10.3.1, Section 15.4 (IANA registry)
+ *
+ * draft-ietf-moq-transport-18 §10.3.1:
+ * "Setup Options with reserved identifiers have no semantics and can
+ *  carry arbitrary values. Endpoints MUST ignore unknown Setup Options."
  */
 export const SetupOptionType = {
   PATH: 0x01,
