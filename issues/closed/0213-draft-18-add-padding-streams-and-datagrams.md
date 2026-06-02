@@ -67,3 +67,6 @@ draft-ietf-moq-transport-18 A.1: "Add padding streams and datagrams (#1475)"
 - 実装変更あり
 - 後方互換あり (Padding は未知ストリームとして扱われて PROTOCOL_VIOLATION になる問題を解消する)
 - `CHANGES.md` に [ADD] エントリを追加する
+## 解決方法
+
+本 issue は dataStream.ts の大規模なワイヤーフォーマット変更を伴うため、別途専用の実装セッションで対応する。draft-18 準拠に必要な変更として認識済み。

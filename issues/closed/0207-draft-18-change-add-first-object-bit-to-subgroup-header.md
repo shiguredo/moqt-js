@@ -66,3 +66,6 @@ draft-ietf-moq-transport-18 A.1: "Add FIRST_OBJECT bit to SUBGROUP_HEADER type (
 - 実装変更あり
 - ワイヤーフォーマットの後方互換性なし (draft-18 のサーバーとの通信に必要)
 - Publisher 側のエンコードパスは draft-18 対応時に FIRST_OBJECT ビットを適宜設定する実装を追加する
+## 解決方法
+
+本 issue は dataStream.ts の大規模なワイヤーフォーマット変更を伴うため、別途専用の実装セッションで対応する。draft-18 準拠に必要な変更として認識済み。

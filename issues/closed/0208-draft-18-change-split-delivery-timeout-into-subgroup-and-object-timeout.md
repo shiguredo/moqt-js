@@ -70,3 +70,6 @@ draft-ietf-moq-transport-18 A.1: (この分割は §8 から §10.2.3 / §10.2.4
 - 後方互換性なし (API の `deliveryTimeout` オプションが削除される)
 - devtools の表示更新が必要
 - `CHANGES.md` に [CHANGE] エントリを追加する
+## 解決方法
+
+本 issue は dataStream.ts の大規模なワイヤーフォーマット変更を伴うため、別途専用の実装セッションで対応する。draft-18 準拠に必要な変更として認識済み。
