@@ -4,6 +4,7 @@ Created: 2026-06-01
 Completed: 2026-06-01
 Priority: High
 Model: deepseek-v4-flash
+Branch: feature/draft-18
 
 ## 概要
 
