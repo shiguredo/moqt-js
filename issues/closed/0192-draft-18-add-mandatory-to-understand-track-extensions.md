@@ -2,7 +2,9 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
+- Branch: feature/draft-18
 - Polished: 2026-06-02
 
 ## 目的
@@ -74,3 +76,7 @@ Mandatory Track Property 範囲 (0x4000-0x7FFF) かどうかの判定と拒否�
 
 - `decodeProperties` の振る舞いが変わる（未知 Mandatory Property でエラー、破壊的変更）
 - PUBLISH / SUBSCRIBE_OK / FETCH_OK の受信処理にエラーケースが追加される
+
+## 解決方法
+
+- `decodeProperties` の未知拡張処理で、Mandatory Track Property 範囲 (0x4000-0x7FFF) の Property Type を検出し MalformedTrackError を throw するよう修正

@@ -570,6 +570,15 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       offset += deltaIdLen + lengthLen + Number(length);
     } else {
       // 未知の拡張
+      // draft-ietf-moq-transport-18 §2.5.1:
+      // Mandatory Track Property (0x4000-0x7FFF) かつ未知の場合は
+      // トラックを処理してはならない (MUST NOT process or forward)
+      if (id >= 0x4000n && id <= 0x7fffn) {
+        throw new MalformedTrackError(
+          `unknown mandatory track property: type 0x${id.toString(16)}`,
+        );
+      }
+
       if (id % 2n === 1n) {
         // 奇数 ID: length + bytes 形式
         const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
