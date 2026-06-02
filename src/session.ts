@@ -1768,6 +1768,14 @@ export class SessionImpl implements Session {
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
                 Number(decodedMsg.errorCode) as RequestErrorCode,
+                decodedMsg.retryInterval,
+                decodedMsg.redirect
+                  ? {
+                      connectUri: decodedMsg.redirect.connectUri,
+                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+                      trackName: decodedMsg.redirect.trackName,
+                    }
+                  : undefined,
               );
               subscription.state = "closed";
               callbacks.error?.(error);
@@ -1933,6 +1941,14 @@ export class SessionImpl implements Session {
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
                 Number(decodedMsg.errorCode) as RequestErrorCode,
+                decodedMsg.retryInterval,
+                decodedMsg.redirect
+                  ? {
+                      connectUri: decodedMsg.redirect.connectUri,
+                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+                      trackName: decodedMsg.redirect.trackName,
+                    }
+                  : undefined,
               );
               subscription.state = "closed";
               callbacks.error?.(error);
@@ -2131,13 +2147,20 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.REQUEST_ERROR: {
-              // draft-ietf-moq-transport-18 Section 10.6 (REQUEST_ERROR):
+              // draft-ietf-moq-transport-18 Section 10.6.2 (REQUEST_ERROR):
               // Request ID はストリームが特定するため不要
-              // draft-ietf-moq-transport-18 Section 10.1
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
                 Number(decodedMsg.errorCode) as RequestErrorCode,
+                decodedMsg.retryInterval,
+                decodedMsg.redirect
+                  ? {
+                      connectUri: decodedMsg.redirect.connectUri,
+                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+                      trackName: decodedMsg.redirect.trackName,
+                    }
+                  : undefined,
               );
               publication.state = "closed";
               callbacks?.error?.(error);

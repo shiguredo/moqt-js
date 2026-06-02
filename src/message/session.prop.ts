@@ -7,18 +7,22 @@ import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
   type Goaway,
+  type Redirect,
   type RequestError,
   type RequestOk,
   decodeGoawayPayload,
+  decodeRedirect,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
+  encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
 } from "./session";
-import { type Parameter } from "./parameter";
+import { type Parameter, createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
 
 /**
  * Message Parameter の arbitrary
@@ -140,6 +144,76 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
+ * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure):
+ * REQUEST_ERROR でエラーコードが REDIRECT (0x34) のときに
+ * 末尾に追加される接続先指示構造体。
+ */
+test("Redirect のエンコード・デコードがラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.string({ minLength: 0, maxLength: 100 }),
+      fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
+      fc.uint8Array({ minLength: 0, maxLength: 50 }),
+      (connectUri, namespaceParts, trackName) => {
+        const original: Redirect = {
+          connectUri,
+          trackNamespace: createTrackNamespace(namespaceParts),
+          trackName,
+        };
+
+        const encoded = encodeRedirect(original);
+        const [decoded] = decodeRedirect(encoded, 0);
+
+        assert.equal(decoded.connectUri, connectUri);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
+        assert.deepEqual(decoded.trackName, trackName);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.6.2:
+ * REQUEST_ERROR に Redirect が含まれる場合（REDIRECT エラーコード）
+ */
+test("REQUEST_ERROR with Redirect のエンコード・デコードがラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.string({ minLength: 0, maxLength: 200 }),
+      fc.string({ minLength: 0, maxLength: 100 }),
+      fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
+      fc.uint8Array({ minLength: 0, maxLength: 50 }),
+      (retryInterval, reasonPhrase, connectUri, namespaceParts, trackName) => {
+        const original: RequestError = {
+          type: MessageType.REQUEST_ERROR,
+          errorCode: 0x34n, // REDIRECT
+          retryInterval,
+          reasonPhrase,
+          redirect: {
+            connectUri,
+            trackNamespace: createTrackNamespace(namespaceParts),
+            trackName,
+          },
+        };
+
+        const encoded = encodeRequestErrorPayload(original);
+        const decoded = decodeRequestErrorPayload(encoded);
+
+        assert.equal(decoded.type, MessageType.REQUEST_ERROR);
+        assert.equal(decoded.errorCode, 0x34n);
+        assert.equal(decoded.retryInterval, retryInterval);
+        assert.equal(decoded.reasonPhrase, reasonPhrase);
+        assert.isDefined(decoded.redirect);
+        assert.equal(decoded.redirect!.connectUri, connectUri);
+        assert.deepEqual(trackNamespaceToStrings(decoded.redirect!.trackNamespace), namespaceParts);
+        assert.deepEqual(decoded.redirect!.trackName, trackName);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-18 Section 10.6:
  * REQUEST_ERROR から Request ID が削除された。
  * draft-ietf-moq-transport-18 Section 10.1
@@ -169,6 +243,37 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
         assert.equal(decoded.errorCode, errorCode);
         assert.equal(decoded.retryInterval, retryInterval);
         assert.equal(decoded.reasonPhrase, reasonPhrase);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.6.2:
+ * Error Code が REDIRECT 以外だが Redirect バイト列が存在する場合は
+ * ProtocolViolationError を throw する。
+ */
+test("REDIRECT 以外のエラーコードで Redirect バイトが存在すると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000n }).filter((n) => n !== 0x34n),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.string({ minLength: 0, maxLength: 200 }),
+      (errorCode, retryInterval, reasonPhrase) => {
+        const redirect: Redirect = {
+          connectUri: "moqt://example.com",
+          trackNamespace: createTrackNamespace(["test"]),
+          trackName: new Uint8Array([1, 2, 3]),
+        };
+        const original: RequestError = {
+          type: MessageType.REQUEST_ERROR,
+          errorCode,
+          retryInterval,
+          reasonPhrase,
+          redirect,
+        };
+        const encoded = encodeRequestErrorPayload(original);
+        assert.throws(() => decodeRequestErrorPayload(encoded), ProtocolViolationError);
       },
     ),
   );

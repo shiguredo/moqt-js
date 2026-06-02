@@ -108,12 +108,15 @@ export {
 // Session メッセージ
 export {
   type Goaway,
+  type Redirect,
   type RequestError,
   type RequestOk,
   decodeGoawayPayload,
+  decodeRedirect,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
+  encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
 } from "./session";

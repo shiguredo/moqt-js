@@ -2,8 +2,10 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
 - Polished: 2026-06-02
+- Branch: feature/draft-18
 
 ## 目的
 
@@ -184,3 +186,38 @@ RFC §10.6.1 のエッジケース:
 - REQUEST_ERROR のワイヤーフォーマットが変わる（後方互換なし）
 - 全 9 箇所の REQUEST_ERROR 受信処理で `retryInterval` の伝搬が追加される（既存の破棄動作が改善される）
 - `encodeRequestErrorPayload` のシグネチャが変わる（第二引数追加）
+
+## 解決方法
+
+以下の変更を実施した:
+
+### エラーコード追加 (`src/error.ts`)
+
+- `RequestErrorCode` に `UNSUPPORTED_EXTENSION: 0x33` と `REDIRECT: 0x34` を追加
+- `RedirectInfo` インターフェースを新設 (`connectUri`, `trackNamespace`, `trackName`)
+- `RequestError` クラスに `retryInterval` と `redirect` フィールドを追加し、コンストラクタを拡張
+
+### Redirect Structure 実装 (`src/message/session.ts`)
+
+- `Redirect` インターフェース、`encodeRedirect()`、`decodeRedirect()` を追加
+- Connect URI の最大長 8,192 バイトのバリデーションを追加
+- `RequestError` インターフェースに `redirect?: Redirect` を追加
+- `encodeRequestErrorPayload`: redirect が存在する場合にメッセージ末尾にエンコード
+- `decodeRequestErrorPayload`: Error Reason 後の残りバイトから条件付きで Redirect をデコード。Error Code が REDIRECT (0x34) 以外で Redirect が存在する場合は `ProtocolViolationError` を throw
+
+### REQUEST_ERROR 受信処理の更新
+
+全 8 箇所の `new RequestError()` 呼び出しに `retryInterval` と `redirect` を伝搬:
+
+- `src/session.ts`: startNamespaceStreamLoop, startTracksStreamLoop, startPublishNamespaceStreamLoop (3 箇所)
+- `src/session/bidi.ts`: bidiReadPublishResponse, bidiReadSubscribeResponse, bidiReadFetchResponse, bidiReadTrackStatusResponse, bidiReadRequestStreamMessages (5 箇所)
+
+### テスト追加 (`src/message/session.prop.ts`)
+
+- Redirect 構造のエンコード/デコード ラウンドトリップテスト
+- REQUEST_ERROR with REDIRECT + Redirect ラウンドトリップテスト
+- REDIRECT 以外のエラーコードで Redirect バイトが存在する場合の ProtocolViolationError テスト
+
+### エクスポート更新
+
+- `src/message/index.ts` に `Redirect` 型、`encodeRedirect`、`decodeRedirect` を追加

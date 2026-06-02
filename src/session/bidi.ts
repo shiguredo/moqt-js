@@ -197,6 +197,14 @@ export async function bidiReadPublishResponse(
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
         Number(decoded.errorCode) as RequestErrorCode,
+        decoded.retryInterval,
+        decoded.redirect
+          ? {
+              connectUri: decoded.redirect.connectUri,
+              trackNamespace: decoded.redirect.trackNamespace.tuple,
+              trackName: decoded.redirect.trackName,
+            }
+          : undefined,
       );
       pending.reject(error);
     } else {

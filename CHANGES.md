@@ -30,6 +30,13 @@
   - `TracksSubscriptionCallbacks` / `TracksSubscription` を `moqt-js` から公開する
   - `subscribeNamespace()` の第三引数 `subscribeOptions` は削除（破壊的変更）
   - @voluntas
+- [ADD] REQUEST_ERROR に Redirect Structure と REDIRECT/UNSUPPORTED_EXTENSION エラーコードを追加する (#0186)
+  - draft-ietf-moq-transport-18 §10.6.1 / §10.6.2 に基づき、REQUEST_ERROR 末尾に条件付き Redirect を追加する
+  - Redirect 型 / encodeRedirect / decodeRedirect を新設する
+  - RequestErrorCode に UNSUPPORTED_EXTENSION (0x33) と REDIRECT (0x34) を追加する
+  - RequestError クラスに retryInterval / redirect フィールドを追加する
+  - 全 8 箇所の REQUEST_ERROR 受信処理で retryInterval / redirect を伝搬する
+  - @voluntas
 - [ADD] moqt URI の Fragment Identifier をパースし `Session.fragment` で公開する (#0183)
   - draft-ietf-moq-transport-18 §3.1.2 に基づき `moqt://example.com/app#type:value` 形式の fragment をパースする
   - `src/moqtUri.ts` に `parseFragment()` と `MoqtFragment` / `NormalizedMoqtUri` 型を追加する

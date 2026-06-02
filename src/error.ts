@@ -61,6 +61,8 @@ export const RequestErrorCode = {
   PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,
   INVALID_JOINING_REQUEST_ID: 0x32,
+  UNSUPPORTED_EXTENSION: 0x33,
+  REDIRECT: 0x34,
 } as const;
 
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
@@ -136,12 +138,35 @@ export class SessionError extends MoqtError {
 }
 
 /**
+ * Redirect 情報 (Section 10.6.1)
+ *
+ * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure):
+ * サーバーがクライアントに対して別の接続先への再接続を指示する。
+ * Track Namespace は tuple 形式で保持する。
+ */
+export interface RedirectInfo {
+  connectUri: string;
+  trackNamespace: Uint8Array[];
+  trackName: Uint8Array;
+}
+
+/**
  * Request error (SUBSCRIBE, PUBLISH, FETCH failed)
  */
 export class RequestError extends MoqtError {
-  constructor(message: string, code: RequestErrorCode) {
+  readonly retryInterval: bigint | undefined;
+  readonly redirect: RedirectInfo | undefined;
+
+  constructor(
+    message: string,
+    code: RequestErrorCode,
+    retryInterval?: bigint,
+    redirect?: RedirectInfo,
+  ) {
     super(message, code);
     this.name = "RequestError";
+    this.retryInterval = retryInterval;
+    this.redirect = redirect;
   }
 }
 
