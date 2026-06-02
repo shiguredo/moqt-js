@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-03
+- Completed: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-track-namespace-prefix-parameter
 - Polished: 2026-06-03
@@ -87,4 +88,19 @@ PBT の arb に 0x34 を追加する。出現可能なメッセージは REQUEST
 - `decodeMessageParameter(0x34)` が Track Namespace を正しくデコードする
 - PBT テストが 0x34 をカバーしている
 - `vp run test` 全パス
+- `vp run build` 成功
+
+## 解決方法
+
+### 変更ファイル
+
+- `src/message/types.ts`: `MessageParameterType` に `TRACK_NAMESPACE_PREFIX: 0x34` を追加
+- `src/message/parameter.ts`: `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x34: "length-prefixed"` を追加、`encodeParameterTrackNamespace` / `getParameterTrackNamespace` ヘルパーを追加
+- `src/message/index.ts`: 新規ヘルパーを export に追加
+- `src/message/parameter.prop.ts`: `lengthPrefixedParameterArb` に `0x34` を追加
+- `src/message/subscribe.prop.ts`: `lengthPrefixedParameterArb` に `0x34` を追加
+
+### テスト
+
+- `vp run test` 全 590 テスト通過
 - `vp run build` 成功

@@ -19,12 +19,14 @@ draft-ietf-moq-transport-18 §11.4.2 で定義されている FIRST_OBJECT bit (
 draft-ietf-moq-transport-18 §11.4.2 (Subgroup Header):
 
 > The Type field in the SUBGROUP_HEADER takes the following form:
+>
 > ```
 >  0 1 2 3 4 5 6 7
 > +-+-+-+-+-+-+-+-+
 > |0|X|X|1|X|X|X|X|
 > +-+-+-+-+-+-+-+-+
 > ```
+>
 > Bit 4 MUST be set to 1.
 > Bit 7 MUST be set to 0. FIRST_OBJECT: When set to 1, the first object in the subgroup stream is the first object ever published in that subgroup.
 
@@ -65,7 +67,7 @@ export interface SubgroupHeader {
   groupId: bigint;
   subgroupId: bigint;
   publisherPriority: number;
-  firstObject?: boolean;  // Type の bit 6 (0x40) から抽出
+  firstObject?: boolean; // Type の bit 6 (0x40) から抽出
   properties?: Uint8Array;
 }
 ```

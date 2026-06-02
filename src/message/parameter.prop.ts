@@ -108,7 +108,7 @@ test("Location のエンコード・デコードがラウンドトリップす�
  * - varint: 0x02, 0x04, 0x06, 0x08, 0x32
  * - uint8: 0x10, 0x20, 0x22
  * - location: 0x09
- * - length-prefixed: 0x03, 0x21
+ * - length-prefixed: 0x03, 0x21, 0x34
  */
 const varintParameterArb = fc
   .record({
@@ -149,7 +149,7 @@ const locationParameterArb = fc
 
 const lengthPrefixedParameterArb = fc
   .record({
-    type: fc.constantFrom(0x03, 0x21),
+    type: fc.constantFrom(0x03, 0x21, 0x34),
     value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
   })
   .map(({ type, value }) => ({ type, value }));

@@ -65,6 +65,11 @@
   - draft-ietf-moq-transport-18 §12.1 に基づき、`TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT = 0x06n` を追加する
   - 定数値確認テストを追加する
   - @voluntas
+- [ADD] TRACK_NAMESPACE_PREFIX Message Parameter (Type 0x34) を追加する (#0233)
+  - draft-ietf-moq-transport-18 §10.2.14 に基づき、`MessageParameterType.TRACK_NAMESPACE_PREFIX = 0x34` を追加する
+  - `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x34: "length-prefixed"` エントリを追加する
+  - `encodeParameterTrackNamespace` / `getParameterTrackNamespace` ヘルパーを追加する
+  - @voluntas
 - [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
   - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
   - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う

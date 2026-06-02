@@ -183,6 +183,16 @@ export const MessageParameterType = {
    * NEW_GROUP_REQUEST (Section 10.2.13 NEW GROUP REQUEST Parameter)
    */
   NEW_GROUP_REQUEST: 0x32,
+  /**
+   * TRACK_NAMESPACE_PREFIX (Section 10.2.14 TRACK_NAMESPACE_PREFIX Parameter)
+   *
+   * draft-ietf-moq-transport-18:
+   * REQUEST_UPDATE で SUBSCRIBE_NAMESPACE または SUBSCRIBE_TRACKS の
+   * Track Namespace Prefix を更新するために使用する。
+   * 値は Track Namespace エンコーディング。
+   * draft-ietf-moq-transport-18 Section 10.2.14
+   */
+  TRACK_NAMESPACE_PREFIX: 0x34,
 } as const;
 
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];

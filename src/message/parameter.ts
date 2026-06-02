@@ -592,6 +592,8 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x22: "uint8",
   // NEW_GROUP_REQUEST (Section 10.2.13)
   0x32: "varint",
+  // TRACK_NAMESPACE_PREFIX (Section 10.2.14)
+  0x34: "length-prefixed",
 };
 
 /**
@@ -918,4 +920,31 @@ export function decodeSubscriptionFilterParameter(param: Parameter): Subscriptio
   }
   const [filter] = decodeSubscriptionFilter(param.value, 0);
   return filter;
+}
+
+/**
+ * TRACK_NAMESPACE_PREFIX パラメータをエンコードする
+ *
+ * draft-ietf-moq-transport-18 §10.2.14:
+ * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
+ *  Track Namespace encoding described in Section 2.4.1."
+ */
+export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parameter {
+  const value = encodeTrackNamespace(namespace);
+  return { type: 0x34, value };
+}
+
+/**
+ * TRACK_NAMESPACE_PREFIX パラメータから Track Namespace を取得する
+ *
+ * draft-ietf-moq-transport-18 §10.2.14:
+ * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
+ *  Track Namespace encoding described in Section 2.4.1."
+ */
+export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
+  if (param.type !== 0x34) {
+    throw new Error(`Invalid parameter type: expected 0x34, got ${param.type}`);
+  }
+  const [namespace] = decodeTrackNamespace(param.value);
+  return namespace;
 }

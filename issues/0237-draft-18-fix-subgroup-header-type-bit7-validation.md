@@ -22,12 +22,14 @@ draft-ietf-moq-transport-18 §11.4.2 で規定されている Subgroup Header Ty
 draft-ietf-moq-transport-18 §11.4.2 (Subgroup Header):
 
 > The Type field in the SUBGROUP_HEADER takes the following form:
+>
 > ```
 >  0 1 2 3 4 5 6 7
 > +-+-+-+-+-+-+-+-+
 > |0|X|X|1|X|X|X|X|
 > +-+-+-+-+-+-+-+-+
 > ```
+>
 > Bit 7 MUST be set to 0.
 
 draft-ietf-moq-transport-18 §11.4.2:

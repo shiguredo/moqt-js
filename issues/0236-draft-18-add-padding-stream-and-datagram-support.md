@@ -41,8 +41,8 @@ draft-ietf-moq-transport-18 §11.5.2 (Padding Datagrams):
 ### 1. 定数定義
 
 ```typescript
-export const PADDING_STREAM_TYPE = 0x132B3E28;
-export const PADDING_DATAGRAM_TYPE = 0x132B3E29;
+export const PADDING_STREAM_TYPE = 0x132b3e28;
+export const PADDING_DATAGRAM_TYPE = 0x132b3e29;
 ```
 
 ### 2. Stream 側の対応
