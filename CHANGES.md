@@ -75,6 +75,11 @@
   - `NamespaceSubscriptionCallbacks` に `onPublish` コールバックを追加する
   - `startNamespaceStreamLoop` の switch 文に `MessageType.PUBLISH` case を追加する
   - @voluntas
+- [FIX] Fetch レスポンスの Unknown Range Metadata Type を適切にスキップする (#0180)
+  - draft-ietf-moq-transport-18 §11.4.4.2 に基づき、End of Range レコードをオブジェクトとして処理せずスキップする
+  - `processFetchObjects` に `endOfRange` チェックを追加する
+  - `fetcher.ts` の TODO コメントを削除する
+  - @voluntas
 
 ### misc
 

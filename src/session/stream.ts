@@ -60,6 +60,13 @@ export function processFetchObjects(
       currentContext = newContext;
       currentIsFirst = false;
 
+      // draft-ietf-moq-transport-18 Section 11.4.4.2:
+      // End of Range レコードは実際のオブジェクトデータを含まないためスキップする。
+      // コンテキスト (Group ID, Object ID 等) は既に newContext で更新済み。
+      if (fields.endOfRange) {
+        continue;
+      }
+
       // draft-ietf-moq-transport-18 Section 11.2.1.1:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
       const object: MoqtObject = {

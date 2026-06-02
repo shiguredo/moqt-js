@@ -1,7 +1,9 @@
 # Fetch レスポンスの Unknown Range Metadata Type を処理できない
 
 Created: 2026-05-13
+Completed: 2026-06-02
 Model: Opus 4.7
+Branch: feature/draft-18
 
 ## 概要
 
@@ -64,3 +66,9 @@ Unknown Range Metadata Type のレコードを受信した場合:
 - `processFetchObjects` で Unknown Range を正常に処理できる
 - `vp run test` 全パス
 - `vp run build` 成功
+
+## 解決方法
+
+- `src/dataStream.ts`: `decodeFetchObjectFields` は既に `END_OF_UNKNOWN_RANGE` (0x10C) を正しくデコードし `endOfRange: "unknown"` を返していた
+- `src/session/stream.ts`: `processFetchObjects` に `endOfRange` チェックを追加し、End of Range レコードをスキップして実際のオブジェクトとして処理しないよう修正した。コンテキスト（Group ID, Object ID 等）は正しく更新される
+- `src/fetcher.ts`: TODO コメント「Unknown Range Metadata Type の実装」を削除し、ヘッダーコメントを更新した
