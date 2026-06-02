@@ -34,13 +34,14 @@ export interface Publish {
 }
 
 /**
- * REQUEST_OK alias PUBLISH_OK (Section 10.5 REQUEST_OK)
+ * PublishOk: PUBLISH への成功応答 (REQUEST_OK with PUBLISH_OK semantics)
  *
- * draft-ietf-moq-transport-18:
- * 双方向ストリーム上で送信されるため Request ID は不要。
+ * draft-ietf-moq-transport-18 §10.5:
+ * Wire format 上は REQUEST_OK (0x7) のみが存在し、
+ * PUBLISH_OK は REQUEST_OK の textual alias。
  */
 export interface PublishOk {
-  type: typeof MessageType.PUBLISH_OK;
+  type: typeof MessageType.REQUEST_OK;
   parameters: Parameter[];
 }
 
@@ -175,7 +176,7 @@ export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk 
   totalConsumed += parametersConsumed;
 
   return {
-    type: MessageType.PUBLISH_OK,
+    type: MessageType.REQUEST_OK,
     parameters,
   };
 }

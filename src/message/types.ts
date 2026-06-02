@@ -26,7 +26,6 @@ export const MessageType = {
 
   // Publish
   PUBLISH: 0x1d,
-  PUBLISH_OK: 0x1e,
   PUBLISH_DONE: 0x0b,
 
   // Fetch

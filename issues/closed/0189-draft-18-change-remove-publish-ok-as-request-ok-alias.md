@@ -2,8 +2,10 @@
 
 - Priority: High
 - Created: 2026-05-13
+- Completed: 2026-06-02
 - Model: Opus 4.7
 - Polished: 2026-06-02
+- Branch: feature/draft-18
 
 ## 目的
 
@@ -88,3 +90,10 @@ Wire format 上は REQUEST_OK (0x7) のみが存在し、PUBLISH_OK (0x1E) は�
 
 - `MessageType.PUBLISH_OK` 定数が削除される（後方互換なし、参照コードはコンパイルエラー）
 - PUBLISH 応答のワイヤーフォーマットが変わる（0x1E → 0x7、後方互換なし）
+
+## 解決方法
+
+- `MessageType.PUBLISH_OK = 0x1e` を削除（wire format 上は REQUEST_OK (0x7) のみに統一）
+- `PublishOk` インターフェースの type を `MessageType.REQUEST_OK` に変更
+- `bidiReadPublishResponse` で `MessageType.PUBLISH_OK` の代わりに `MessageType.REQUEST_OK` で判定
+- PBT: PublishOk テストの型参照を REQUEST_OK に更新

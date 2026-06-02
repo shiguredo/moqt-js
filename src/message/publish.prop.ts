@@ -193,14 +193,14 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
   fc.assert(
     fc.property(parametersArb, (parameters) => {
       const original = {
-        type: MessageType.PUBLISH_OK as typeof MessageType.PUBLISH_OK,
+        type: MessageType.REQUEST_OK as typeof MessageType.REQUEST_OK,
         parameters,
       };
 
       const encoded = encodePublishOkPayload(original);
       const decoded = decodePublishOkPayload(encoded);
 
-      assert.equal(decoded.type, MessageType.PUBLISH_OK);
+      assert.equal(decoded.type, MessageType.REQUEST_OK);
       assert.equal(decoded.parameters.length, parameters.length);
       for (let i = 0; i < parameters.length; i++) {
         assert.equal(decoded.parameters[i].type, parameters[i].type);

@@ -184,7 +184,7 @@ export async function bidiReadPublishResponse(
     const msg = await bidiReadResponseFromBidiStream(stream, controlReader);
     session.emitDebug("recv", msg.type, msg.payload);
 
-    if (msg.type === MessageType.PUBLISH_OK) {
+    if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodePublishOkPayload(msg.payload);
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
