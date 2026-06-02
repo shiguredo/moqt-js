@@ -98,6 +98,10 @@
 
 ### misc
 
+- [UPDATE] REQUEST_OK のコメントに欠落していた Track Properties フィールドを追加する (#0232)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`session.ts` の REQUEST_OK Message 構造コメントに `Track Properties (..)` 行を追加する
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
