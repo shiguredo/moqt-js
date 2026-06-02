@@ -4,6 +4,11 @@
  * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-15.10
  */
 
+import { PublishDoneStatusCode } from "./message/types";
+
+// PublishDoneStatusCode を再公開（error.ts の利用者が import しやすいように）
+export { PublishDoneStatusCode };
+
 /**
  * Session Termination Error Codes (Section 3.5 Termination)
  *
@@ -84,34 +89,12 @@ export function normalizeRequestErrorCode(code: number): RequestErrorCode {
  * draft-ietf-moq-transport-18 §14 (Grease):
  * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
  */
-export function normalizePublishDoneCode(code: number): PublishDoneCode {
-  if (Object.values(PublishDoneCode).includes(code as PublishDoneCode)) {
-    return code as PublishDoneCode;
+export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
+  if (Object.values(PublishDoneStatusCode).includes(code as unknown as PublishDoneStatusCode)) {
+    return code as PublishDoneStatusCode;
   }
-  return PublishDoneCode.INTERNAL_ERROR;
+  return PublishDoneStatusCode.INTERNAL_ERROR;
 }
-
-/**
- * PUBLISH_DONE Codes (Section 10.11 PUBLISH_DONE)
- *
- * draft-ietf-moq-transport-18:
- * - MALFORMED_TRACK を 0x12 に変更
- * - EXCESSIVE_LOAD (0x9) を追加 (#1479)
- */
-export const PublishDoneCode = {
-  INTERNAL_ERROR: 0x0,
-  UNAUTHORIZED: 0x1,
-  TRACK_ENDED: 0x2,
-  SUBSCRIPTION_ENDED: 0x3,
-  GOING_AWAY: 0x4,
-  TOO_FAR_BEHIND: 0x5,
-  EXPIRED: 0x6,
-  UPDATE_FAILED: 0x8,
-  EXCESSIVE_LOAD: 0x9,
-  MALFORMED_TRACK: 0x12,
-} as const;
-
-export type PublishDoneCode = (typeof PublishDoneCode)[keyof typeof PublishDoneCode];
 
 /**
  * Stream Reset Error Codes (Section 15.10.4)

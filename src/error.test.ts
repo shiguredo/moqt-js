@@ -11,7 +11,7 @@ import {
   MalformedTrackError,
   MoqtError,
   ProtocolViolationError,
-  PublishDoneCode,
+  PublishDoneStatusCode,
   RequestError,
   RequestErrorCode,
   normalizeRequestErrorCode,
@@ -57,7 +57,7 @@ test("draft-18 の代表的なエラーコード値を保持する", () => {
   assert.equal(SessionErrorCode.PROTOCOL_VIOLATION, 0x03);
   assert.equal(SessionErrorCode.INVALID_PATH, 0x08);
   assert.equal(RequestErrorCode.MALFORMED_TRACK, 0x12);
-  assert.equal(PublishDoneCode.MALFORMED_TRACK, 0x12);
+  assert.equal(PublishDoneStatusCode.MALFORMED_TRACK, 0x12);
   assert.equal(DataStreamErrorCode.MALFORMED_TRACK, 0x12);
 });
 
@@ -73,12 +73,12 @@ test("normalizeRequestErrorCode: 未知のコードは INTERNAL_ERROR に正規�
 });
 
 test("normalizePublishDoneCode: 既知のコードはそのまま通す", () => {
-  assert.equal(normalizePublishDoneCode(0x0), PublishDoneCode.INTERNAL_ERROR);
-  assert.equal(normalizePublishDoneCode(0x4), PublishDoneCode.GOING_AWAY);
+  assert.equal(normalizePublishDoneCode(0x0), PublishDoneStatusCode.INTERNAL_ERROR);
+  assert.equal(normalizePublishDoneCode(0x4), PublishDoneStatusCode.GOING_AWAY);
 });
 
 test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
-  assert.equal(normalizePublishDoneCode(0x99), PublishDoneCode.INTERNAL_ERROR);
+  assert.equal(normalizePublishDoneCode(0x99), PublishDoneStatusCode.INTERNAL_ERROR);
 });
 
 test("ClosedSubgroupError は Error を継承し name/trackAlias/groupId を保持する", () => {

@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-03
+- Completed: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/add-padding-stream-and-datagram-support
 - Polished: 2026-06-03
@@ -67,3 +68,9 @@ export const PADDING_DATAGRAM_TYPE = 0x132b3e29;
 - 受信した PADDING データは正しく破棄される
 - `vp run test` 全パス
 - `vp run build` 成功
+
+## 解決方法
+
+- `src/session.ts`: `handleIncomingStream` に PADDING stream (0x132B3E28) の分岐を追加、データを drain して破棄
+- `src/session.ts`: `handleIncomingDatagram` に PADDING datagram (0x132B3E29) のチェックを追加、データを破棄
+- `src/session.ts`: Subgroup Header Type の範囲チェックに FIRST_OBJECT 型 (0x50-0x5F, 0x70-0x7F) を追加

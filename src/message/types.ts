@@ -7,9 +7,9 @@
  * Message Types (Section 10 Control Messages)
  */
 export const MessageType = {
-  // draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+  // draft-ietf-moq-transport-18 Section 3.3:
   // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
-  // draft-ietf-moq-transport-18 Section 4
+  // draft-ietf-moq-transport-18 Section 10.3
   SETUP: 0x2f00,
 
   // セッション
@@ -295,6 +295,21 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
       return false;
   }
 }
+
+/**
+ * Object Forwarding Preference (Section 11.2.1)
+ *
+ * draft-ietf-moq-transport-18:
+ * "An enumeration indicating how a publisher sends an object.
+ *  The preferences are Subgroup and Datagram."
+ */
+export const ObjectForwardingPreference = {
+  SUBGROUP: 0x1,
+  DATAGRAM: 0x2,
+} as const;
+
+export type ObjectForwardingPreference =
+  (typeof ObjectForwardingPreference)[keyof typeof ObjectForwardingPreference];
 
 /**
  * Location (Group ID, Object ID)

@@ -2,9 +2,8 @@
  * MOQT Setup Messages
  * draft-ietf-moq-transport-18 Section 10.3 (SETUP)
  *
- * draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-18 Section 3.3 (Session initialization):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
- * draft-ietf-moq-transport-18 Section 4
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";

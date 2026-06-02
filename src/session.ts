@@ -3453,6 +3453,16 @@ export class SessionImpl implements Session {
    */
   private handleIncomingDatagram(data: Uint8Array): void {
     try {
+      // draft-ietf-moq-transport-18 §11.5.2 (Padding Datagrams):
+      // "The receiver MUST discard the contents of a padding datagram."
+      if (data.length > 0) {
+        const [datagramType] = decodeVarint(data, 0);
+        if (Number(datagramType) === 0x132b3e29) {
+          // PADDING datagram は破棄して何もしない
+          return;
+        }
+      }
+
       const [datagram] = decodeObjectDatagram(data);
 
       // Track Alias で Subscriber を検索
@@ -3607,7 +3617,9 @@ export class SessionImpl implements Session {
               }
             } else if (
               (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
-              (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
+              (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
+              (streamTypeNum >= 0x50 && streamTypeNum <= 0x5f) ||
+              (streamTypeNum >= 0x70 && streamTypeNum <= 0x7f)
             ) {
               // draft-ietf-moq-transport-18 Section 11.4.2:
               // SUBGROUP_ID_MODE = 0b11 のタイプ値
@@ -3637,6 +3649,20 @@ export class SessionImpl implements Session {
               // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
               // draft-ietf-moq-transport-18 §11.4.2 の buffer 経路はこのハンドラ内に集約
               await this.handleSubgroupStream(reader, header, initialPayloadBuffer);
+              return;
+            } else if (streamTypeNum === 0x132b3e28) {
+              // draft-ietf-moq-transport-18 §11.5.1 (Padding Streams):
+              // "The receiver MUST discard all data received on a padding stream."
+              // PADDING stream のデータはすべて読み捨てる
+              isFetchStream = false;
+              headerParsed = true;
+              buffer = new Uint8Array(0);
+              // 残りのデータを drain してストリームを読み切る
+              let streamDone = false;
+              while (!streamDone) {
+                const next = await reader.read();
+                streamDone = next.done;
+              }
               return;
             } else {
               // draft-ietf-moq-transport-18 Section 3.4 (Unidirectional Stream Types):

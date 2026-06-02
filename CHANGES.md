@@ -87,6 +87,15 @@
   - Object ID Delta を Group 不変時に prior + delta として計算するよう修正する
   - `encodeFetchObjectFields` に `context` パラメータを追加し delta encoding に対応する
   - roundtrip テストと delta 非ゼロのデコードテストを追加する
+  - Subgroup Header Type の有効範囲に FIRST_OBJECT 型 (0x50-0x5F, 0x70-0x7F) を追加する
+  - @voluntas
+- [ADD] PADDING Stream (0x132B3E28) と PADDING Datagram (0x132B3E29) の受信対応を追加する (#0236)
+  - draft-ietf-moq-transport-18 §11.5 に基づき、PADDING stream/datagram のデータを破棄する
+  - `handleIncomingStream` に PADDING stream の drain 処理を追加する
+  - `handleIncomingDatagram` に PADDING datagram の discard 処理を追加する
+  - @voluntas
+- [FIX] PUBLISH_OK の REQUEST_OK 応答で Track Properties が空であることを検証する (#0235)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`decodePublishOkPayload` で非空の場合に ProtocolViolationError をスローする
   - @voluntas
 - [FIX] STOP_SENDING / delivery timeout で閉じた Subgroup への送信を拒否する (#0178)
   - draft-ietf-moq-transport-18 §11.4.3 に基づき、閉じた Subgroup への再送信を事前に拒否する
@@ -109,6 +118,15 @@
 
 ### misc
 
+- [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
+  - `types.ts` / `setup.ts` のコメントの参照先を Section 4 から Section 3.3 に修正する
+  - @voluntas
+- [ADD] Object Forwarding Preference の enum を追加する (#0239)
+  - draft-ietf-moq-transport-18 §11.2.1 に基づき、`ObjectForwardingPreference` enum を追加する
+  - @voluntas
+- [UPDATE] PublishDoneStatusCode と PublishDoneCode の重複定義を整理する (#0240)
+  - `PublishDoneCode` を削除し `PublishDoneStatusCode` に一本化する
+  - @voluntas
 - [UPDATE] REQUEST_OK のコメントに欠落していた Track Properties フィールドを追加する (#0232)
   - draft-ietf-moq-transport-18 §10.5 に基づき、`session.ts` の REQUEST_OK Message 構造コメントに `Track Properties (..)` 行を追加する
   - @voluntas
