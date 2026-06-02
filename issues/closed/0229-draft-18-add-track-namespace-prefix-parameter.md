@@ -32,15 +32,15 @@ draft-ietf-moq-transport-18 §10.2.14 (TRACK_NAMESPACE_PREFIX Parameter):
 draft-ietf-moq-transport-18 §2.4.1 (Track Naming):
 
 > Track Namespace {
->   Number of Track Namespace Fields (vi64),
->   Track Namespace Field (..) ...
+> Number of Track Namespace Fields (vi64),
+> Track Namespace Field (..) ...
 > }
 
 Track Namespace Field:
 
 > Track Namespace Field {
->   Track Namespace Field Length (vi64),
->   Track Namespace Field Value (..)
+> Track Namespace Field Length (vi64),
+> Track Namespace Field Value (..)
 > }
 
 値エンコーディングは Track Namespace 形式であり、これは既存の varint / uint8 / location / length-prefixed のいずれとも異なる。0x34 は偶数型だが、値は varint ではなく Track Namespace encoding である点が特殊。

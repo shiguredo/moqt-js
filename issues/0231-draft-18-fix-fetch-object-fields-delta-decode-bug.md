@@ -19,10 +19,12 @@ FETCH で複数オブジェクトを受信する場合に誤った ID が計算�
 draft-ietf-moq-transport-18 §11.4.4.1 (Fetch Serialization Flags, Table 9):
 
 Group ID Delta (0x08):
+
 > If the Group Order is Ascending (default), the Group ID is the prior
 > Object's Group ID plus the Group ID Delta + 1.
 
 Object ID Delta (0x02):
+
 > When the Group ID Delta field is not present, the Object ID is the
 > prior Object's ID plus the Object ID Delta if present.
 
@@ -101,6 +103,7 @@ if (flags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
 ### encodeFetchObjectFields の修正
 
 encode 側でも同様に delta 計算を行う:
+
 - `GROUP_ID_PRESENT`: `delta = currentGroupId - priorGroupId - 1` (先頭オブジェクトの場合は delta = currentGroupId)
 - `OBJECT_ID_PRESENT` (Group 不変時): `delta = currentObjectId - priorObjectId`
 

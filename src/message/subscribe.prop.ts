@@ -26,7 +26,7 @@ import { type Property, TrackPropertyId } from "../properties";
  */
 const varintParameterArb = fc
   .record({
-    type: fc.constantFrom(0x02, 0x04, 0x08, 0x32),
+    type: fc.constantFrom(0x02, 0x04, 0x06, 0x08, 0x32),
     varintValue: fc.bigInt({ min: 0n, max: 1000000n }),
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));

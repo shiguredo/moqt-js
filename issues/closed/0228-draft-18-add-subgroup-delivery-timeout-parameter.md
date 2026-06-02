@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/change-add-subgroup-delivery-timeout-param
 - Polished: 2026-06-02
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -26,12 +27,12 @@ draft-ietf-moq-transport-18 §10.2.3 (SUBGROUP_DELIVERY_TIMEOUT Parameter):
 draft-ietf-moq-transport-18 §8 (Delivery Timeouts and Data Reliability):
 
 > Each MOQT subscription has two timeout values associated with it: a
-> SUBGROUP_DELIVERY_TIMEOUT and an OBJECT_DELIVERY_TIMEOUT.  Both of
+> SUBGROUP_DELIVERY_TIMEOUT and an OBJECT_DELIVERY_TIMEOUT. Both of
 > those values are expressed in milliseconds; both are optional; a
 > value of 0 means that there is no timeout set.
 >
 > The publisher communicates both timeout values as a Track Property;
-> the subscriber communicates them as Message Parameters.  For each
+> the subscriber communicates them as Message Parameters. For each
 > type of timeout, if both the publisher and the subscriber have a non-
 > zero value, the smaller of the two is used.
 
@@ -40,6 +41,7 @@ draft-ietf-moq-transport-18 §8 (Delivery Timeouts and Data Reliability):
 ## 現状
 
 `src/message/types.ts:121`:
+
 ```typescript
 DELIVERY_TIMEOUT: 0x02,  // 注: draft-18 では OBJECT_DELIVERY_TIMEOUT に名称変更
 ```
@@ -128,4 +130,24 @@ SUBSCRIBE と PUBLISH_OK と REQUEST_UPDATE の 3 メッセージが対象。他
 - `parameter.prop.ts` の `varintParameterArb` に `0x06` が含まれている
 - 0x06 を受信可能なメッセージ 3 種 (PUBLISH_OK, SUBSCRIBE, REQUEST_UPDATE) の prop ファイルで正しく扱われる
 - `vp run test` 全パス
+- `vp run build` 成功
+
+## 解決方法
+
+### 変更ファイル
+
+- `src/message/types.ts`: `MessageParameterType` に `SUBGROUP_DELIVERY_TIMEOUT: 0x06` を追加（0x04 と 0x08 の間、数値順）
+- `src/message/parameter.ts`: `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x06: "varint"` を追加
+- `src/message/parameter.prop.ts`: `varintParameterArb` に `0x06` を数値順で追加
+- `src/message/subscribe.prop.ts`: `varintParameterArb` に `0x06` を追加（SUBSCRIBE / REQUEST_UPDATE が受信可能）
+- `src/message/publish.prop.ts`: `varintParameterArb` に `0x06` を追加（PUBLISH_OK が受信可能）
+
+### 未変更のファイル（意図的）
+
+- `session.prop.ts` / `fetch.prop.ts` / `namespace.prop.ts` / `trackstatus.prop.ts`: 0x06 はこれらのメッセージに出現不可のため `varintParameterArb` に追加しない
+
+### テスト
+
+- PBT のラウンドトリップテストが 0x06 を含めた全 varint パラメータで通過
+- `vp run test` 全 586 テスト通過
 - `vp run build` 成功

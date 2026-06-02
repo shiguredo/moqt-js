@@ -574,6 +574,8 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x03: "length-prefixed",
   // RENDEZVOUS_TIMEOUT (Section 10.2.6)
   0x04: "varint",
+  // SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3)
+  0x06: "varint",
   // EXPIRES (Section 10.2.10)
   0x08: "varint",
   // LARGEST_OBJECT (Section 10.2.11)

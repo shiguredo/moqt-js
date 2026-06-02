@@ -134,6 +134,16 @@ export const MessageParameterType = {
    */
   RENDEZVOUS_TIMEOUT: 0x04,
   /**
+   * SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3 SUBGROUP_DELIVERY TIMEOUT Parameter)
+   *
+   * draft-ietf-moq-transport-18:
+   * SUBGROUP_DELIVERY_TIMEOUT パラメータは varint。
+   * PUBLISH_OK / SUBSCRIBE / REQUEST_UPDATE に出現可能。
+   * 単位はミリ秒。0 はタイムアウトなしを意味する。
+   * draft-ietf-moq-transport-18 Section 10.2.3
+   */
+  SUBGROUP_DELIVERY_TIMEOUT: 0x06,
+  /**
    * EXPIRES (Section 10.2.10 EXPIRES Parameter)
    */
   EXPIRES: 0x08,

@@ -56,6 +56,11 @@
   - devtools の Connection Settings に URI Fragment 入力欄を追加し、`buildConnectUrl()` で URL に連結する
   - クエリパラメータ `fragment` を `buildQueryString` / `initFromUrl` で永続化する
   - @voluntas
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT Message Parameter (Type 0x06) を追加する (#0228)
+  - draft-ietf-moq-transport-18 §10.2.3 に基づき、`MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT = 0x06` を追加する
+  - `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x06: "varint"` エントリを追加する
+  - PBT の varint パラメータラウンドトリップテストに 0x06 を追加する
+  - @voluntas
 - [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
   - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
   - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う
