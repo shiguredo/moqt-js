@@ -37,7 +37,6 @@ import {
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishBlockedPayload,
-  decodePublishPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeSetupPayload,
@@ -519,16 +518,6 @@ export interface NamespaceSubscriptionCallbacks {
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    */
   onNamespaceDone?: (namespaceSuffix: string[]) => void;
-  /**
-   * PUBLISH を受信したときに呼ばれる
-   * draft-ietf-moq-transport-18 §10.10 (PUBLISH):
-   * SUBSCRIBE_NAMESPACE 応答ストリーム上で PUBLISH が届いた場合に通知する。
-   *
-   * @param trackNamespaceSuffix - Track Namespace Prefix を除いた Suffix
-   * @param trackName - トラック名
-   * @param trackAlias - トラックエイリアス
-   */
-  onPublish?: (trackNamespaceSuffix: string[], trackName: string, trackAlias: bigint) => void;
   /**
    * エラー時のコールバック
    */
@@ -1931,19 +1920,6 @@ export class SessionImpl implements Session {
                 return;
               }
               callbacks.onNamespaceDone?.(suffixStrings);
-              break;
-            }
-
-            case MessageType.PUBLISH: {
-              // draft-ietf-moq-transport-18 §10.10 (PUBLISH):
-              // SUBSCRIBE_NAMESPACE 応答ストリーム上で PUBLISH が届いた場合の処理。
-              // 仕様上 PUBLISH は SUBSCRIBE_TRACKS 応答に属するが、
-              // 実装の堅牢性のため受信可能にしておく。
-              const decodedMsg = decodePublishPayload(messagePayload);
-              const fullNamespace = trackNamespaceToStrings(decodedMsg.trackNamespace);
-              const suffixStrings = fullNamespace.slice(subscription.namespacePrefix.length);
-              const trackName = new TextDecoder().decode(decodedMsg.trackName);
-              callbacks.onPublish?.(suffixStrings, trackName, decodedMsg.trackAlias);
               break;
             }
 

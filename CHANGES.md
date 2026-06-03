@@ -212,6 +212,12 @@
   - パリティチェックのコメントを更新する
   - @voluntas
 
+- [FIX] SUBSCRIBE_NAMESPACE 応答ストリーム上の PUBLISH 受信を PROTOCOL_VIOLATION にする (#0274)
+  - draft-ietf-moq-transport-18 §10.18 に基づき、`startNamespaceStreamLoop` 内の `case MessageType.PUBLISH` ブロックを削除する
+  - `NamespaceSubscriptionCallbacks.onPublish` コールバックを削除する
+  - PUBLISH は §10.19 の双方向ストリーム上で送られるべきであり、SUBSCRIBE_NAMESPACE 応答上ではプロトコル違反
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
