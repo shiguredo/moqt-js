@@ -106,6 +106,9 @@
   - `encodeFetchObjectFields` で DATAGRAM 時に Subgroup ID フィールドをエンコードしない
   - `createFirstFetchObjectFlags` に Datagram 用パラメータを追加する
   - @voluntas
+- [FIX] Grease エラーコード正規化のグリースコードテストを追加する (#0247)
+  - draft-ietf-moq-transport-18 §14 に基づき、`normalizeRequestErrorCode` / `normalizePublishDoneCode` の Grease コード (0x9d, 0x7f+0x9d) テストを `src/error.test.ts` に追加する
+  - @voluntas
 - [FIX] REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK 応答で Track Properties 空チェック漏れを修正する (#0246)
   - draft-ietf-moq-transport-18 §10.5 の MUST 要件に基づき、REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の 3 つで Track Properties が非空の場合に PROTOCOL_VIOLATION でセッションを閉じる
   - テストを `src/session/bidi.test.ts` と `src/message/session.prop.ts` に追加する

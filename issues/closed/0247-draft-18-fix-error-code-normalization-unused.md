@@ -6,6 +6,8 @@
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
+- Completed: 2026-06-03
+
 ## 目的
 
 draft-ietf-moq-transport-18 Section 14 の MUST 要件を満たすため、未知の REQUEST_ERROR コードおよび PUBLISH_DONE コード受信時に INTERNAL_ERROR として正規化する関数をすべての受信箇所で実際に呼び出す。
@@ -97,10 +99,18 @@ normalizeRequestErrorCode(Number(decoded.errorCode));
 
 ## 解決方法
 
-1. `src/error.ts` の `normalizeRequestErrorCode` / `normalizePublishDoneCode` を各呼び出し箇所で import
-2. REQUEST_ERROR 受信 8 箇所で `Number(decoded.errorCode) as RequestErrorCode` を `normalizeRequestErrorCode(Number(decoded.errorCode))` に置き換え
-3. `bidiHandlePublishDone` で `msg.statusCode` を `normalizePublishDoneCode(Number(msg.statusCode))` で正規化してから `handleEnd` に渡す
-4. 結合テストを追加
+正規化関数の呼び出しは既に全 9 箇所に適用済みであることを確認した：
+
+1. `src/session/bidi.ts:15-16` で `normalizeRequestErrorCode` / `normalizePublishDoneCode` を import
+2. REQUEST_ERROR 受信 8 箇所すべてで `normalizeRequestErrorCode(Number(decoded.errorCode))` が使用されている
+3. `bidiHandlePublishDone` で `normalizePublishDoneCode(Number(msg.statusCode))` が使用されている
+
+Grease コードのテストを `src/error.test.ts` に追加した：
+
+- `normalizeRequestErrorCode` に Grease コード `0x9d` および `0x7f + 0x9d` のテストを追加
+- `normalizePublishDoneCode` に Grease コード `0x9d` および `0x7f + 0x9d` のテストを追加
+
+`CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追記した。
 
 ## 仕様引用
 
