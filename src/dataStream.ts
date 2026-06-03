@@ -1427,10 +1427,14 @@ export function decodeFetchObjectFields(
       }
     }
   } else {
-    if (isFirst || context === null) {
-      throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
+    // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+    // 先頭オブジェクトに MUST なのは Group ID Delta と Object ID Delta のみ。
+    // PRIORITY_PRESENT は任意であり、省略時はデフォルト値 128 を使用する。
+    if (context === null) {
+      publisherPriority = 128;
+    } else {
+      publisherPriority = context.publisherPriority;
     }
-    publisherPriority = context.publisherPriority;
   }
 
   // Properties

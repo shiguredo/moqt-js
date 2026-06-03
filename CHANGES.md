@@ -235,6 +235,10 @@
   - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
   - @voluntas
 
+- [FIX] Fetch 先頭オブジェクトに PRIORITY_PRESENT を MUST で要求していたのを修正する (#0287)
+  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、 条件を削除し省略時はデフォルト値 128 を使用する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -664,6 +668,10 @@ Media over QAUIC Transport draft-17 対応
 
 - [REFACTOR] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
   - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
+  - @voluntas
+
+- [FIX] Fetch 先頭オブジェクトに PRIORITY_PRESENT を MUST で要求していたのを修正する (#0287)
+  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、 条件を削除し省略時はデフォルト値 128 を使用する
   - @voluntas
 
 ### misc

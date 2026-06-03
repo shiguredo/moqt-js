@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -46,3 +47,9 @@ PRIORITY_PRESENT は MUST 要件に含まれていない。
 
 - Priority なしの Fetch 先頭オブジェクトが正常に処理される
 - テストが修正されている
+
+## 解決方法
+
+`src/dataStream.ts` の `decodeFetchObjectFields` 内、先頭オブジェクトの PRIORITY_PRESENT チェックから `isFirst` 条件を削除した。draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、先頭オブジェクトに MUST なのは Group ID Delta と Object ID Delta のみで、Priority は任意。PRIORITY_PRESENT がない場合はデフォルト値 128 を使用する。
+
+変更ファイル: `src/dataStream.ts`。全テスト 624/624 PASS 確認済み。
