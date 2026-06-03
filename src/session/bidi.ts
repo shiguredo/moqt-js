@@ -37,6 +37,7 @@ import {
 } from "../message";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
+import type { Property } from "../properties";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
 import type { JoiningFetchOptions, SessionState, TrackStatusResult } from "../session";
 import { extractForwardState, extractLargestLocation, validateFetchOkEndLocation } from "./params";
@@ -141,6 +142,34 @@ export function validateGoawayOnRequestStream(
     closeSession(
       new SessionError(
         "goaway on request stream must not include request id",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * REQUEST_OK Track Properties 非空検証
+ *
+ * draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+ * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST
+ *  close the session with a PROTOCOL_VIOLATION."
+ *
+ * @returns バリデーション通過時は true、違反時は false
+ */
+export function validateRequestOkNoTrackProperties(
+  trackProperties: Property[],
+  contextName: string,
+  closeSession: (error: SessionError) => void,
+): boolean {
+  if (trackProperties.length > 0) {
+    closeSession(
+      new SessionError(
+        `track properties must be empty in ${contextName}`,
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
     );
@@ -912,17 +941,11 @@ export function bidiHandleRequestUpdateOk(
   const msg = decodeRequestOkPayload(payload);
 
   // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
-  // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
-  //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
-  //  If an endpoint receives Track Properties in one of these messages it MUST
-  //  close the session with a PROTOCOL_VIOLATION."
-  if (msg.trackProperties.length > 0) {
-    session.closeWithError(
-      new SessionError(
-        "track properties must be empty in REQUEST_UPDATE_OK",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      ),
-    );
+  if (
+    !validateRequestOkNoTrackProperties(msg.trackProperties, "REQUEST_UPDATE_OK", (error) =>
+      session.closeWithError(error),
+    )
+  ) {
     return;
   }
 

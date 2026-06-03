@@ -3,9 +3,9 @@
 - Priority: High
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
-- Relations: #0255-#0265 の各 issue 完了後にテスト追加（各 issue のテスト要件を集約して対応）
 - Completed: 2026-06-03
 
 ## 目的

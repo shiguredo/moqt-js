@@ -154,7 +154,11 @@
 - [FIX] TRACK_STATUS の GOAWAY ハンドリングにコメントを追記する (#0271)
   - `bidiReadTrackStatusResponse` の GOAWAY 分岐に goawayCallback 不要の根拠をコメント追記
   - @voluntas
-  - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
+- [UPDATE] REQUEST_OK Track Properties 検証を共通関数に抽出する (#0269)
+  - `bidi.ts` に `validateRequestOkNoTrackProperties` を追加し、全 4 箇所の重複コードを置き換える
+  - @voluntas
+- [UPDATE] review-diff-code で検出された不足テストを各 issue 対応に含めて追加する (#0266)
+  - #0246-0271 の各 issue 実装に含めてテストを追加済み
   - @voluntas
 - [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックが実装済みであることを確認する (#0251)
   - draft-ietf-moq-transport-18 §12.7 に基づく再帰ネスト検証が既に `src/properties.ts:657-686` に実装されている

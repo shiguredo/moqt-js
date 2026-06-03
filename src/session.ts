@@ -1820,18 +1820,14 @@ export class SessionImpl implements Session {
               // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要 (§10.1 Request ID)
               const requestOk = decodeRequestOkPayload(messagePayload);
-              // draft-ietf-moq-transport-18 §10.5:
-              // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
-              //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
-              //  If an endpoint receives Track Properties in one of these messages it MUST
-              //  close the session with a PROTOCOL_VIOLATION."
-              if (requestOk.trackProperties.length > 0) {
-                this.closeWithError(
-                  new SessionError(
-                    "track properties must be empty in SUBSCRIBE_NAMESPACE_OK",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
+              if (
+                !bidi.validateRequestOkNoTrackProperties(
+                  requestOk.trackProperties,
+                  "SUBSCRIBE_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
                 return;
               }
               resolved = true;
@@ -2059,19 +2055,15 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
-              // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
-              //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
-              //  If an endpoint receives Track Properties in one of these messages it MUST
-              //  close the session with a PROTOCOL_VIOLATION."
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
               const requestOk = decodeRequestOkPayload(messagePayload);
-              if (requestOk.trackProperties.length > 0) {
-                this.closeWithError(
-                  new SessionError(
-                    "track properties must be empty in SUBSCRIBE_TRACKS_OK",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
+              if (
+                !bidi.validateRequestOkNoTrackProperties(
+                  requestOk.trackProperties,
+                  "SUBSCRIBE_TRACKS_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
                 return;
               }
               resolved = true;
@@ -2319,18 +2311,14 @@ export class SessionImpl implements Session {
               // Request ID はストリームが特定するため不要
               // draft-ietf-moq-transport-18 Section 10.1
               const requestOk = decodeRequestOkPayload(messagePayload);
-              // draft-ietf-moq-transport-18 §10.5:
-              // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
-              //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
-              //  If an endpoint receives Track Properties in one of these messages it MUST
-              //  close the session with a PROTOCOL_VIOLATION."
-              if (requestOk.trackProperties.length > 0) {
-                this.closeWithError(
-                  new SessionError(
-                    "track properties must be empty in PUBLISH_NAMESPACE_OK",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
+              if (
+                !bidi.validateRequestOkNoTrackProperties(
+                  requestOk.trackProperties,
+                  "PUBLISH_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
                 return;
               }
               if (resolved) {
