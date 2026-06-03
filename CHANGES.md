@@ -109,6 +109,9 @@
 - [FIX] classifyIncomingStreamType が FIRST_OBJECT ビット付き範囲を認識する (#0249)
   - draft-ietf-moq-transport-18 §3.4 / §11.4.2 に基づき、0x50..0x5F と 0x70..0x7F を subgroup として認識する
   - @voluntas
+- [FIX] REQUEST_OK エイリアス名が debug.ts で仕様どおり正しいことを確認する (#0250)
+  - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
+  - @voluntas
 - [FIX] リクエストストリーム上 GOAWAY の goawayCallback 呼び出しテストを追加する (#0248)
   - draft-ietf-moq-transport-18 §10.4 に基づき、`PublisherImpl` / `SubscriberImpl` の `goawayCallback` 設定テストを `src/publisher.test.ts` / `src/subscriber.test.ts` に追加する
   - @voluntas
