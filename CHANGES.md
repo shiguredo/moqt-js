@@ -112,6 +112,15 @@
 - [FIX] REQUEST_OK エイリアス名が debug.ts で仕様どおり正しいことを確認する (#0250)
   - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
   - @voluntas
+- [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックが実装済みであることを確認する (#0251)
+  - draft-ietf-moq-transport-18 §12.7 に基づく再帰ネスト検証が既に `src/properties.ts:657-686` に実装されている
+  - @voluntas
+- [FIX] PUBLISH_BLOCKED コメントが SUBSCRIBE_TRACKS を正しく参照していることを確認する (#0252)
+  - draft-ietf-moq-transport-18 の分割に従い、types.ts と namespace.ts のコメントを確認する
+  - @voluntas
+- [FIX] REQUEST_OK JSDoc wire format 図に Track Properties が含まれていることを確認する (#0253)
+  - `src/message/session.ts:62-68` の JSDoc に Track Properties フィールドが既に含まれている
+  - @voluntas
 - [FIX] リクエストストリーム上 GOAWAY の goawayCallback 呼び出しテストを追加する (#0248)
   - draft-ietf-moq-transport-18 §10.4 に基づき、`PublisherImpl` / `SubscriberImpl` の `goawayCallback` 設定テストを `src/publisher.test.ts` / `src/subscriber.test.ts` に追加する
   - @voluntas
