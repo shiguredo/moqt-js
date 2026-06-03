@@ -7,20 +7,20 @@ import { decodeVarint, encodeVarint } from "../varint";
 import {
   MAX_REASON_PHRASE_LENGTH,
   type Parameter,
+  type TrackNamespace,
   decodeParameters,
+  decodeTrackNamespace,
   encodeParameters,
+  encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
 import { ProtocolViolationError } from "../error";
+import { type Property, decodeProperties, encodeProperties } from "../properties";
 
 /**
  * GOAWAY メッセージ (Section 10.4)
  *
- * draft-ietf-moq-transport-18:
- * セッションを終了する意図を通知する。
- * サーバーはセッションマイグレーション用のオプショナル URI を含めることができる。
- * Timeout フィールドが追加された。
- * draft-ietf-moq-transport-18 Section 10.4
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -28,7 +28,13 @@ import { ProtocolViolationError } from "../error";
  *   New Session URI Length (vi64),
  *   New Session URI (..),
  *   Timeout (vi64),
+ *   [Request ID (vi64)],
  * }
+ *
+ * - Request ID: Present only when sent on the control stream.
+ *   制御ストリーム上では、GOAWAY 送信前に処理されなかった
+ *   可能性がある最小の peer Request ID を設定する。
+ *   リクエストストリーム上では null。
  */
 export interface Goaway {
   type: typeof MessageType.GOAWAY;
@@ -38,6 +44,11 @@ export interface Goaway {
    * 0 の場合は即時切断を意味する
    */
   timeout: bigint;
+  /**
+   * 制御ストリーム上の GOAWAY のみ存在する。
+   * リクエストストリーム上の GOAWAY では null。
+   */
+  requestId: bigint | null;
 }
 
 /**
@@ -53,20 +64,104 @@ export interface Goaway {
  *   Length (16),
  *   Number of Parameters (vi64),
  *   Parameters (..),
+ *   Track Properties (..),
  * }
  */
 export interface RequestOk {
   type: typeof MessageType.REQUEST_OK;
   parameters: Parameter[];
+  trackProperties: Property[];
 }
 
 /**
- * REQUEST_ERROR メッセージ (Section 10.6)
+ * Redirect Structure (Section 10.6.1)
  *
- * draft-ietf-moq-transport-18:
- * リクエストへの失敗応答。双方向ストリーム上で送信されるため、
- * ストリーム自体がリクエストを特定し、Request ID は不要。
- * draft-ietf-moq-transport-18 Section 10.1
+ * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure):
+ *
+ * Redirect {
+ *   Connect URI Length (vi64),
+ *   Connect URI (..),
+ *   Track Namespace (..),
+ *   Track Name Length (vi64),
+ *   Track Name (..),
+ * }
+ */
+export interface Redirect {
+  connectUri: string;
+  trackNamespace: TrackNamespace;
+  trackName: Uint8Array;
+}
+
+/**
+ * Redirect のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure)
+ */
+export function encodeRedirect(redirect: Redirect): Uint8Array {
+  const uriBytes = new TextEncoder().encode(redirect.connectUri);
+  const trackNameLen = redirect.trackName.length;
+
+  const parts: Uint8Array[] = [];
+  parts.push(encodeVarint(uriBytes.length));
+  parts.push(uriBytes);
+  parts.push(encodeTrackNamespace(redirect.trackNamespace));
+  parts.push(encodeVarint(trackNameLen));
+  parts.push(redirect.trackName);
+
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/**
+ * Redirect のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure)
+ *
+ * @returns [redirect, consumed bytes]
+ */
+export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, number] {
+  let totalConsumed = 0;
+
+  const [uriLength, uriLengthSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += uriLengthSize;
+
+  // draft-ietf-moq-transport-18 Section 10.6.1:
+  // Connect URI の最大長は GOAWAY と同様に 8,192 バイト
+  if (Number(uriLength) > 8192) {
+    throw new ProtocolViolationError(
+      `redirect connect URI length exceeds maximum: ${uriLength} > 8192`,
+    );
+  }
+
+  const uriBytes = data.slice(offset + totalConsumed, offset + totalConsumed + Number(uriLength));
+  const connectUri = new TextDecoder().decode(uriBytes);
+  totalConsumed += Number(uriLength);
+
+  const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+  totalConsumed += namespaceSize;
+
+  const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += trackNameLenSize;
+
+  const trackName = data.slice(
+    offset + totalConsumed,
+    offset + totalConsumed + Number(trackNameLen),
+  );
+  totalConsumed += Number(trackNameLen);
+
+  return [{ connectUri, trackNamespace, trackName }, totalConsumed];
+}
+
+/**
+ * REQUEST_ERROR メッセージ (Section 10.6.2)
+ *
+ * draft-ietf-moq-transport-18 Section 10.6.2 (REQUEST_ERROR Message Format):
  *
  * REQUEST_ERROR Message {
  *   Type (vi64) = 0x5,
@@ -74,7 +169,10 @@ export interface RequestOk {
  *   Error Code (vi64),
  *   Retry Interval (vi64),
  *   Error Reason (Reason Phrase),
+ *   [Redirect (Redirect),]
  * }
+ *
+ * - Redirect: Present only when Error Code is REDIRECT. See Section 10.6.1.
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない
@@ -85,13 +183,16 @@ export interface RequestError {
   errorCode: bigint;
   retryInterval: bigint;
   reasonPhrase: string;
+  redirect?: Redirect;
 }
 
 /**
  * Goaway のペイロードをエンコード
  *
  * draft-ietf-moq-transport-18 Section 10.4:
- * New Session URI Length + New Session URI + Timeout
+ * New Session URI Length + New Session URI + Timeout + [Request ID]
+ *
+ * - Request ID は制御ストリーム上でのみ存在する (requestId が非 null)
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   const uriBytes = new TextEncoder().encode(msg.newSessionUri);
@@ -100,6 +201,9 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   parts.push(encodeVarint(uriBytes.length));
   parts.push(uriBytes);
   parts.push(encodeVarint(msg.timeout));
+  if (msg.requestId !== null) {
+    parts.push(encodeVarint(msg.requestId));
+  }
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -113,6 +217,10 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
 
 /**
  * Goaway のペイロードをデコード
+ *
+ * draft-ietf-moq-transport-18 Section 10.4:
+ * - Timeout の後、残りバイトがあれば Request ID をデコードする
+ * - 残りバイトがない場合（リクエストストリーム上）、requestId は null
  */
 export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
@@ -130,12 +238,20 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const newSessionUri = new TextDecoder().decode(uriBytes);
   offset += Number(uriLength);
 
-  const [timeout] = decodeVarint(data, offset);
+  const [timeout, timeoutSize] = decodeVarint(data, offset);
+  offset += timeoutSize;
+
+  let requestId: bigint | null = null;
+  if (offset < data.length) {
+    const [rid] = decodeVarint(data, offset);
+    requestId = rid;
+  }
 
   return {
     type: MessageType.GOAWAY,
     newSessionUri,
     timeout,
+    requestId,
   };
 }
 
@@ -153,6 +269,7 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeParameters(msg.parameters));
+  parts.push(encodeProperties(msg.trackProperties));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -168,24 +285,30 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
  * RequestOk のペイロードをデコード
  *
  * draft-ietf-moq-transport-18 Section 10.5:
- * Number of Parameters + Parameters
- * draft-ietf-moq-transport-18 Section 10.1
+ * Number of Parameters + Parameters + Track Properties
+ * - Track Properties は残りバイトすべて
  */
 export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk {
-  const [parameters] = decodeParameters(data, offset);
+  const [parameters, paramsConsumed] = decodeParameters(data, offset);
+  offset += paramsConsumed;
+
+  const propertiesData = data.slice(offset);
+  const trackProperties = decodeProperties(propertiesData);
 
   return {
     type: MessageType.REQUEST_OK,
     parameters,
+    trackProperties,
   };
 }
 
 /**
  * RequestError のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.6:
- * Error Code + Retry Interval + Error Reason
- * draft-ietf-moq-transport-18 Section 10.1
+ * draft-ietf-moq-transport-18 Section 10.6.2:
+ * Error Code + Retry Interval + Error Reason + [Redirect]
+ *
+ * - Redirect は msg.redirect が存在する場合のみエンコードする
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -200,6 +323,10 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
   parts.push(encodeVarint(reasonBytes.length));
   parts.push(reasonBytes);
 
+  if (msg.redirect) {
+    parts.push(encodeRedirect(msg.redirect));
+  }
+
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
@@ -213,9 +340,11 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
 /**
  * RequestError のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.6:
- * Error Code + Retry Interval + Error Reason
- * draft-ietf-moq-transport-18 Section 10.1
+ * draft-ietf-moq-transport-18 Section 10.6.2:
+ * Error Code + Retry Interval + Error Reason + [Redirect]
+ *
+ * - Error Reason の後、残りバイトがあれば Redirect をデコードする
+ * - Error Code が REDIRECT (0x34) 以外で Redirect が存在する場合: ProtocolViolationError
  */
 export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): RequestError {
   const [errorCode, errorCodeSize] = decodeVarint(data, offset);
@@ -237,11 +366,26 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
 
   const decoder = new TextDecoder();
   const reasonPhrase = decoder.decode(data.slice(offset, offset + Number(reasonLen)));
+  offset += Number(reasonLen);
+
+  let redirect: Redirect | undefined;
+  if (offset < data.length) {
+    // draft-ietf-moq-transport-18 Section 10.6.2:
+    // "Redirect: Present only when Error Code is REDIRECT."
+    // それ以外のエラーコードで Redirect が存在する場合はプロトコル違反
+    if (Number(errorCode) !== 0x34) {
+      throw new ProtocolViolationError(
+        `unexpected redirect in REQUEST_ERROR with error code 0x${Number(errorCode).toString(16)}, expected REDIRECT (0x34)`,
+      );
+    }
+    redirect = decodeRedirect(data, offset)[0];
+  }
 
   return {
     type: MessageType.REQUEST_ERROR,
     errorCode,
     retryInterval,
     reasonPhrase,
+    redirect,
   };
 }

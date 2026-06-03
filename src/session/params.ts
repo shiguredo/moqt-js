@@ -82,12 +82,21 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
 export function buildPublishTrackProperties(options?: PublishOptions): Property[] {
   const trackProperties: Property[] = [];
 
-  // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
   if (options?.deliveryTimeout !== undefined) {
-    validateNonNegative(options.deliveryTimeout, "DELIVERY_TIMEOUT");
+    validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     trackProperties.push({
-      id: TrackPropertyId.DELIVERY_TIMEOUT,
+      id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT,
       value: options.deliveryTimeout,
+    });
+  }
+
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-18 Section 12.1 (SUBGROUP_DELIVERY_TIMEOUT)
+  if (options?.subgroupDeliveryTimeout !== undefined) {
+    validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
+    trackProperties.push({
+      id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT,
+      value: options.subgroupDeliveryTimeout,
     });
   }
 
@@ -158,12 +167,21 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     parameters.push(encodeSubscriptionFilterParameter(options.filter));
   }
 
-  // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 10.2.4
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 10.2.4
   if (options?.deliveryTimeout !== undefined) {
-    validateNonNegative(options.deliveryTimeout, "DELIVERY_TIMEOUT");
+    validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     parameters.push({
-      type: MessageParameterType.DELIVERY_TIMEOUT,
+      type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
       value: encodeVarint(options.deliveryTimeout),
+    });
+  }
+
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-18 Section 10.2.3
+  if (options?.subgroupDeliveryTimeout !== undefined) {
+    validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+      value: encodeVarint(options.subgroupDeliveryTimeout),
     });
   }
 
@@ -293,7 +311,14 @@ export type IncomingStreamKind = "subgroup" | "fetch" | "unknown";
 /**
  * 純粋関数: 単方向ストリームの先頭バイトから種別を判定する
  *
- * draft-ietf-moq-transport-18 Section 3.4, Section 12.4
+ * draft-ietf-moq-transport-18 Section 3.4, Section 11.4.2
+ *
+ * SUBGROUP_HEADER の type 値範囲: 0x10..0x1F, 0x30..0x3F, 0x50..0x5F, 0x70..0x7F
+ *
+ * draft-ietf-moq-transport-18 Section 3.4:
+ * 0b0XX1XXXX のパターンに一致する全範囲を subgroup として判定する。
+ * 0x50..0x5F / 0x70..0x7F は FIRST_OBJECT ビット (0x40) が設定された
+ * SUBGROUP_HEADER であり、relay 経由でクライアントに配送される場合もある。
  */
 export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKind {
   const streamTypeNum = Number(firstByte);
@@ -304,7 +329,9 @@ export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKin
 
   if (
     (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
-    (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
+    (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
+    (streamTypeNum >= 0x50 && streamTypeNum <= 0x5f) ||
+    (streamTypeNum >= 0x70 && streamTypeNum <= 0x7f)
   ) {
     return "subgroup";
   }

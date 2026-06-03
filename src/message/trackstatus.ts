@@ -7,7 +7,7 @@
  * 応答は REQUEST_OK（SUBSCRIBE_OK と同じパラメータを含む）。
  *
  * draft-ietf-moq-transport-18:
- * - Subscriber は DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を送信しない
+ * - Subscriber は OBJECT_DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を送信しない
  *   draft-ietf-moq-transport-18 Section 10.14
  * - REQUEST_OK レスポンスに LARGEST_OBJECT パラメータを含めることが可能
  *   draft-ietf-moq-transport-18 Section 10.14
@@ -31,14 +31,12 @@ import { MessageType } from "./types";
  * サブスクリプション状態を作成せず、オブジェクトも送信しない。
  *
  * draft-ietf-moq-transport-18:
- * Subscriber からの TRACK_STATUS には DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を
+ * Subscriber からの TRACK_STATUS には OBJECT_DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を
  * 含めてはならない（これらは Publisher からの REQUEST_OK レスポンスにのみ含まれる）。
  */
 export interface TrackStatus {
   type: typeof MessageType.TRACK_STATUS;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   parameters: Parameter[];
@@ -54,7 +52,6 @@ export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
@@ -79,12 +76,6 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -99,7 +90,6 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
   return {
     type: MessageType.TRACK_STATUS,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     parameters,

@@ -631,7 +631,7 @@ test("selectHighestBitrateTrack: altGroup が存在しない場合は undefined"
 // =============================================================================
 
 test("仕様書例: Time-aligned Audio/Video Tracks with single quality", () => {
-  // refs/moq/draft-ietf-moq-msf.md Section 5.2.1
+  // draft-ietf-moq-msf-00 Section 5.3.1
   const catalogJson = `{
     "version": 1,
     "generatedAt": 1746104606044,
@@ -682,7 +682,7 @@ test("仕様書例: Time-aligned Audio/Video Tracks with single quality", () => 
 });
 
 test("仕様書例: Simulcast video tracks - 3 alternate qualities", () => {
-  // refs/moq/draft-ietf-moq-msf.md Section 5.2.2
+  // draft-ietf-moq-msf-00 Section 5.3.2
   const catalogJson = `{
     "version": 1,
     "generatedAt": 1746104606044,
@@ -770,7 +770,7 @@ test("仕様書例: Simulcast video tracks - 3 alternate qualities", () => {
 });
 
 test("仕様書例: SVC video tracks with dependencies", () => {
-  // refs/moq/draft-ietf-moq-msf.md Section 5.2.3
+  // draft-ietf-moq-msf-00 Section 5.3.3
   const catalogJson = `{
     "version": 1,
     "generatedAt": 1746104606044,
@@ -958,7 +958,7 @@ test("仕様書例: Delta update - removing tracks", () => {
 });
 
 test("仕様書例: VOD Audio/Video Tracks", () => {
-  // refs/moq/draft-ietf-moq-msf.md Section 5.2.7
+  // draft-ietf-moq-msf-00 Section 5.3.7
   const catalogJson = `{
     "version": 1,
     "tracks": [

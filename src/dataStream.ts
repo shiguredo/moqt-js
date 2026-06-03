@@ -13,6 +13,17 @@
 import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
 import { ProtocolViolationError } from "./error";
+import { GroupOrder } from "./message/types";
+
+/**
+ * Object ID および Group ID の最大値 (2^64 - 1)
+ * draft-ietf-moq-transport-18 §11.4.2 / §11.4.4.1 Table 9:
+ * "If the resulting Object ID would be greater than 2^64 - 1,
+ *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
+ * "If the computed Group ID would be less than 0 or greater than 2^64-1,
+ *  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+ */
+const maxObjectId = (1n << 64n) - 1n;
 
 /**
  * Object Status の値を検証する
@@ -66,6 +77,34 @@ function validateObjectStatus(status: number): void {
  * | 0x3B | No                | First Object ID   | Yes        | Yes          | No       |
  * | 0x3C | Yes               | N/A               | No         | Yes          | No       |
  * | 0x3D | Yes               | N/A               | Yes        | Yes          | No       |
+ * | 0x50 | No                | 0                 | No         | No           | Yes      |
+ * | 0x51 | No                | 0                 | Yes        | No           | Yes      |
+ * | 0x52 | No                | First Object ID   | No         | No           | Yes      |
+ * | 0x53 | No                | First Object ID   | Yes        | No           | Yes      |
+ * | 0x54 | Yes               | N/A               | No         | No           | Yes      |
+ * | 0x55 | Yes               | N/A               | Yes        | No           | Yes      |
+ * | 0x58 | No                | 0                 | No         | Yes          | Yes      |
+ * | 0x59 | No                | 0                 | Yes        | Yes          | Yes      |
+ * | 0x5A | No                | First Object ID   | No         | Yes          | Yes      |
+ * | 0x5B | No                | First Object ID   | Yes        | Yes          | Yes      |
+ * | 0x5C | Yes               | N/A               | No         | Yes          | Yes      |
+ * | 0x5D | Yes               | N/A               | Yes        | Yes          | Yes      |
+ * | 0x70 | No                | 0                 | No         | No           | No       |
+ * | 0x71 | No                | 0                 | Yes        | No           | No       |
+ * | 0x72 | No                | First Object ID   | No         | No           | No       |
+ * | 0x73 | No                | First Object ID   | Yes        | No           | No       |
+ * | 0x74 | Yes               | N/A               | No         | No           | No       |
+ * | 0x75 | Yes               | N/A               | Yes        | No           | No       |
+ * | 0x78 | No                | 0                 | No         | Yes          | No       |
+ * | 0x79 | No                | 0                 | Yes        | Yes          | No       |
+ * | 0x7A | No                | First Object ID   | No         | Yes          | No       |
+ * | 0x7B | No                | First Object ID   | Yes        | Yes          | No       |
+ * | 0x7C | Yes               | N/A               | No         | Yes          | No       |
+ * | 0x7D | Yes               | N/A               | Yes        | Yes          | No       |
+ *
+ * FIRST_OBJECT bit (0x40): Type 0x50-0x5D and 0x70-0x7D have the
+ * FIRST_OBJECT bit set, indicating the first object in the subgroup stream
+ * is the first object ever published in that subgroup.
  */
 export const SubgroupHeaderType = {
   // Priority Present = Yes, Contains End of Group = No
@@ -123,6 +162,38 @@ export const SubgroupHeaderType = {
   EXPLICIT_END_GROUP_NO_PRIORITY: 0x3c,
   // Subgroup ID Field Present, Properties Present (Section 11.4.2: Type 0x3D)
   EXPLICIT_EXT_END_GROUP_NO_PRIORITY: 0x3d,
+
+  // FIRST_OBJECT bit (0x40) セット: Priority Present = Yes, Contains End of Group = No
+  BASE_FIRST: 0x50,
+  BASE_EXT_FIRST: 0x51,
+  FIRST_OBJ_FIRST: 0x52,
+  FIRST_OBJ_EXT_FIRST: 0x53,
+  EXPLICIT_FIRST: 0x54,
+  EXPLICIT_EXT_FIRST: 0x55,
+
+  // FIRST_OBJECT: Priority Present = Yes, Contains End of Group = Yes
+  BASE_END_GROUP_FIRST: 0x58,
+  BASE_EXT_END_GROUP_FIRST: 0x59,
+  FIRST_OBJ_END_GROUP_FIRST: 0x5a,
+  FIRST_OBJ_EXT_END_GROUP_FIRST: 0x5b,
+  EXPLICIT_END_GROUP_FIRST: 0x5c,
+  EXPLICIT_EXT_END_GROUP_FIRST: 0x5d,
+
+  // FIRST_OBJECT: Priority Present = No, Contains End of Group = No
+  BASE_NO_PRIORITY_FIRST: 0x70,
+  BASE_EXT_NO_PRIORITY_FIRST: 0x71,
+  FIRST_OBJ_NO_PRIORITY_FIRST: 0x72,
+  FIRST_OBJ_EXT_NO_PRIORITY_FIRST: 0x73,
+  EXPLICIT_NO_PRIORITY_FIRST: 0x74,
+  EXPLICIT_EXT_NO_PRIORITY_FIRST: 0x75,
+
+  // FIRST_OBJECT: Priority Present = No, Contains End of Group = Yes
+  BASE_END_GROUP_NO_PRIORITY_FIRST: 0x78,
+  BASE_EXT_END_GROUP_NO_PRIORITY_FIRST: 0x79,
+  FIRST_OBJ_END_GROUP_NO_PRIORITY_FIRST: 0x7a,
+  FIRST_OBJ_EXT_END_GROUP_NO_PRIORITY_FIRST: 0x7b,
+  EXPLICIT_END_GROUP_NO_PRIORITY_FIRST: 0x7c,
+  EXPLICIT_EXT_END_GROUP_NO_PRIORITY_FIRST: 0x7d,
 } as const;
 
 /**
@@ -147,6 +218,13 @@ export interface SubgroupHeader {
   groupId: bigint;
   subgroupId?: bigint;
   publisherPriority?: number;
+  /**
+   * FIRST_OBJECT bit (0x40) がセットされている場合に true。
+   * Subgroup 内の最初のオブジェクトが、その Subgroup で最初に publish された
+   * オブジェクトであることを示す。
+   * draft-ietf-moq-transport-18 Section 11.4.2
+   */
+  firstObject?: boolean;
 }
 
 /**
@@ -166,7 +244,10 @@ function hasSubgroupIdField(headerType: number): boolean {
  * Types 0x30-0x3D have Priority Present = No
  */
 function hasPriorityPresent(headerType: number): boolean {
-  return headerType >= 0x10 && headerType <= 0x1d;
+  // FIRST_OBJECT bit (0x40) をマスクして判定
+  // 0x50-0x5D も Priority Present = Yes
+  const normalizedType = headerType & 0x3f;
+  return normalizedType >= 0x10 && normalizedType <= 0x1d;
 }
 
 /**
@@ -188,7 +269,9 @@ export function hasContainsEndOfGroup(headerType: number): boolean {
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  parts.push(encodeVarint(header.type));
+  // FIRST_OBJECT bit (0x40) がセットされている場合、Type に OR する
+  const type = header.firstObject ? header.type | 0x40 : header.type;
+  parts.push(encodeVarint(type));
   parts.push(encodeVarint(header.trackAlias));
   parts.push(encodeVarint(header.groupId));
 
@@ -232,25 +315,30 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
   // draft-ietf-moq-transport-18 Section 11.4.2:
   // 不正なタイプ値を検証する
-  // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約済み
-  // 0b00X1XXXX の形式でないタイプ値は不正
+  // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
+  // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
+  // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
+  // 0b0XX1XXXX の形式でないタイプ値は不正
   const subgroupIdMode = (typeNum & 0x06) >> 1;
   if (subgroupIdMode === 0x03) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
     );
   }
-  if ((typeNum & 0x10) === 0) {
+  if ((typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0) {
     throw new ProtocolViolationError(
-      `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b00X1XXXX`,
+      `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
     );
   }
 
   // タイプに基づいて Subgroup ID フィールドの有無を判定
   // draft-ietf-moq-transport-18 Section 11.4.2:
-  // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D: Subgroup ID Field Present
-  // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39: Subgroup ID = 0
-  // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B: Subgroup ID = First Object ID (no field)
+  // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D,
+  //   0x54-0x55, 0x5C-0x5D, 0x74-0x75, 0x7C-0x7D: Subgroup ID Field Present
+  // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39,
+  //   0x50-0x51, 0x58-0x59, 0x70-0x71, 0x78-0x79: Subgroup ID = 0
+  // - Types 0x12-0x13, 0x1A-0x1B, 0x32-0x33, 0x3A-0x3B,
+  //   0x52-0x53, 0x5A-0x5B, 0x72-0x73, 0x7A-0x7B: Subgroup ID = First Object ID (no field)
   const lowNibble = typeNum & 0x0f;
   if (lowNibble === 0x04 || lowNibble === 0x05 || lowNibble === 0x0c || lowNibble === 0x0d) {
     // 明示的な Subgroup ID フィールドが存在
@@ -272,6 +360,9 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
     totalConsumed += 1;
   }
 
+  // FIRST_OBJECT bit (0x40) の抽出
+  const firstObject = (typeNum & 0x40) !== 0 ? true : undefined;
+
   return [
     {
       type: typeNum,
@@ -279,6 +370,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       groupId,
       subgroupId,
       publisherPriority,
+      firstObject,
     },
     totalConsumed,
   ];
@@ -322,15 +414,15 @@ export function encodeObjectFields(
   // Object ID Delta
   parts.push(encodeVarint(objectIdDelta));
 
-  // 拡張 (ヘッダータイプが Properties Present の場合のみ)
+  // プロパティ (ヘッダータイプが Properties Present の場合のみ)
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // "If an endpoint receives extension headers on Objects with status
+    // "If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
-      throw new Error("Protocol violation: extension headers on non-Normal status object");
+      throw new Error("Protocol violation: properties on non-Normal status object");
     }
 
     parts.push(encodeVarint(extLen));
@@ -389,7 +481,7 @@ export function decodeObjectFields(
   const [objectIdDelta, objectIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += objectIdConsumed;
 
-  // 拡張 (ヘッダータイプが Properties Present の場合のみ)
+  // プロパティ (ヘッダータイプが Properties Present の場合のみ)
   let propertiesLength = 0;
   let properties = new Uint8Array(0);
   if (hasPropertiesPresent(headerType)) {
@@ -416,11 +508,11 @@ export function decodeObjectFields(
     totalConsumed += statusConsumed;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // "Any Object with status Normal can have extension headers.
-    // If an endpoint receives extension headers on Objects with status
+    // "Any Object with status Normal can have properties (Section 2.5).
+    // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError("extension headers on non-Normal status object");
+      throw new ProtocolViolationError("properties on non-Normal status object");
     }
   }
 
@@ -496,7 +588,7 @@ export const DatagramType = {
   PAYLOAD_OBJ_END_GROUP: 0x02,
   PAYLOAD_OBJ_EXT_END_GROUP: 0x03,
 
-  // ペイロードタイプ、Object ID なし (Object ID = 1)、Priority Present (Section 11.3.1: 0x04-0x07)
+  // ペイロードタイプ、Object ID なし (Object ID = 0)、Priority Present (Section 11.3.1: 0x04-0x07)
   PAYLOAD_NO_OBJ: 0x04,
   PAYLOAD_NO_OBJ_EXT: 0x05,
   PAYLOAD_NO_OBJ_END_GROUP: 0x06,
@@ -526,7 +618,7 @@ export const DatagramType = {
   STATUS_OBJ_NO_PRI: 0x28,
   STATUS_OBJ_EXT_NO_PRI: 0x29,
 
-  // ステータスタイプ、Object ID なし (Object ID = 1)、Priority なし (Section 11.3.1: 0x2C-0x2D)
+  // ステータスタイプ、Object ID なし (Object ID = 0)、Priority なし (Section 11.3.1: 0x2C-0x2D)
   // draft-ietf-moq-transport-18 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
@@ -555,7 +647,7 @@ export interface ObjectDatagram {
  *
  * draft-ietf-moq-transport-18 Section 11.3.1:
  * "The ZERO_OBJECT_ID bit (0x04) indicates when the Object ID field is present.
- * When set to 1, the Object ID field is omitted and the Object ID is 1.
+ * When set to 1, the Object ID field is omitted and the Object ID is 0.
  * When set to 0, the Object ID field is present."
  *
  * ZERO_OBJECT_ID ビット (0x04) は全タイプに一律に適用される
@@ -567,7 +659,7 @@ function datagramHasObjectId(type: number): boolean {
 /**
  * Check if datagram type has Properties field
  */
-function datagramHasExtensions(type: number): boolean {
+function datagramHasProperties(type: number): boolean {
   return (type & 0x01) === 1;
 }
 
@@ -615,8 +707,8 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
   if (datagramHasObjectId(datagram.type)) {
     parts.push(encodeVarint(datagram.objectId));
-  } else if (datagram.objectId !== 1n) {
-    throw new Error(`objectId must be 1 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
+  } else if (datagram.objectId !== 0n) {
+    throw new Error(`objectId must be 0 when ZERO_OBJECT_ID bit is set: got ${datagram.objectId}`);
   }
 
   // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
@@ -624,17 +716,17 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
 
-  if (datagramHasExtensions(datagram.type)) {
+  if (datagramHasProperties(datagram.type)) {
     const extLen = datagram.properties?.length ?? 0;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // Non-Normal status objects must not have extension headers
+    // Non-Normal status objects must not have properties
     if (
       datagramIsStatusType(datagram.type) &&
       datagram.status !== ObjectStatus.NORMAL &&
       extLen > 0
     ) {
-      throw new Error("Protocol violation: extension headers on non-Normal status object");
+      throw new Error("Protocol violation: properties on non-Normal status object");
     }
 
     parts.push(encodeVarint(extLen));
@@ -692,7 +784,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += groupIdConsumed;
 
-  let objectId = 1n;
+  let objectId = 0n;
   if (datagramHasObjectId(typeNum)) {
     const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
     objectId = oid;
@@ -708,7 +800,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
 
   let properties: Uint8Array | undefined;
   let propertiesLength = 0;
-  if (datagramHasExtensions(typeNum)) {
+  if (datagramHasProperties(typeNum)) {
     const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
@@ -737,11 +829,11 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     totalConsumed += statusConsumed;
 
     // draft-ietf-moq-transport-18 Section 11.2.1.2:
-    // "Any Object with status Normal can have extension headers.
-    // If an endpoint receives extension headers on Objects with status
+    // "Any Object with status Normal can have properties (Section 2.5).
+    // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError("extension headers on non-Normal status object");
+      throw new ProtocolViolationError("properties on non-Normal status object");
     }
   } else {
     payload = data.slice(offset + totalConsumed);
@@ -839,8 +931,8 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
  *
  * Section 11.4.4.1 Table 9: Additional flags
  * | Bitmask | Condition if set |
- * | 0x04 | Object ID field is present (else prior + 1) |
- * | 0x08 | Group ID field is present (else prior Group ID) |
+ * | 0x04 | Object ID Delta is present (else prior + 1) |
+ * | 0x08 | Group ID Delta is present (else prior Group ID) |
  * | 0x10 | Priority field is present (else prior Priority) |
  * | 0x20 | Properties field is present |
  * | 0x40 | Datagram: Subgroup ID の 2 ビットを無視 |
@@ -955,6 +1047,8 @@ export interface FetchObjectContext {
 export function encodeFetchObjectFields(
   fields: FetchObjectFields,
   includePayload = false,
+  context: FetchObjectContext | null = null,
+  groupOrder: GroupOrder = GroupOrder.ASCENDING,
 ): Uint8Array {
   const parts: Uint8Array[] = [];
 
@@ -985,17 +1079,38 @@ export function encodeFetchObjectFields(
   }
 
   // Group ID (フラグ 0x08 がセットされている場合)
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "If the Group Order is Ascending (default), the Group ID is the prior
+  //  Object's Group ID plus the Group ID Delta + 1."
+  // "If the Group Order is Descending, the Group ID is the prior
+  //  Object's Group ID minus the (Group ID Delta + 1)."
+  // エンコード時:
+  //   Ascending: delta = currentGroupId - priorGroupId - 1n
+  //   Descending: delta = priorGroupId - currentGroupId - 1n
+  // 先頭オブジェクトまたは context 無しの場合は delta = currentGroupId (絶対値)
   if (fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) {
     if (fields.groupId === undefined) {
       throw new Error("Group ID required when GROUP_ID_PRESENT flag is set");
     }
-    parts.push(encodeVarint(fields.groupId));
+    if (context === null) {
+      parts.push(encodeVarint(fields.groupId));
+    } else if (groupOrder === GroupOrder.DESCENDING) {
+      const delta = context.groupId - fields.groupId - 1n;
+      parts.push(encodeVarint(delta));
+    } else {
+      const delta = fields.groupId - context.groupId - 1n;
+      parts.push(encodeVarint(delta));
+    }
   }
 
   // Subgroup ID (flags & 0x03 == 0x03 の場合)
+  // Datagram 時 (0x40) は Subgroup ID フィールドをエンコードしない
+  // draft-ietf-moq-transport-18 §11.4.4.1:
+  // "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
   if (
+    !(fields.serializationFlags & FetchSerializationFlags.DATAGRAM) &&
     (fields.serializationFlags & FetchSerializationFlags.SUBGROUP_MASK) ===
-    FetchSerializationFlags.SUBGROUP_PRESENT
+      FetchSerializationFlags.SUBGROUP_PRESENT
   ) {
     if (fields.subgroupId === undefined) {
       throw new Error("Subgroup ID required when SUBGROUP_PRESENT is set");
@@ -1004,11 +1119,25 @@ export function encodeFetchObjectFields(
   }
 
   // Object ID (フラグ 0x04 がセットされている場合)
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "When the Group ID Delta field is not present, the Object ID is the
+  //  prior Object's ID plus the Object ID Delta if present."
+  // エンコード時:
+  //   - Group 不変 (!GROUP_ID_PRESENT) かつ context あり: delta = currentObjectId - priorObjectId
+  //   - それ以外（先頭または Group 変化）: delta = currentObjectId (絶対値)
   if (fields.serializationFlags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     if (fields.objectId === undefined) {
       throw new Error("Object ID required when OBJECT_ID_PRESENT flag is set");
     }
-    parts.push(encodeVarint(fields.objectId));
+    if (
+      !(fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) &&
+      context !== null
+    ) {
+      const delta = fields.objectId - context.objectId;
+      parts.push(encodeVarint(delta));
+    } else {
+      parts.push(encodeVarint(fields.objectId));
+    }
   }
 
   // Publisher Priority (フラグ 0x10 がセットされている場合)
@@ -1019,7 +1148,7 @@ export function encodeFetchObjectFields(
     parts.push(new Uint8Array([fields.publisherPriority]));
   }
 
-  // 拡張 (フラグ 0x20 がセットされている場合)
+  // プロパティ (フラグ 0x20 がセットされている場合)
   if (fields.serializationFlags & FetchSerializationFlags.PROPERTIES_PRESENT) {
     const extLen = fields.properties?.length ?? 0;
     parts.push(encodeVarint(extLen));
@@ -1052,6 +1181,107 @@ export function encodeFetchObjectFields(
 }
 
 /**
+ * End of Range レコードをデコードする
+ *
+ * draft-ietf-moq-transport-18 §11.4.4.2: Group ID と Object ID のみが存在する。
+ */
+function decodeEndOfRange(
+  data: Uint8Array,
+  startOffset: number,
+  flags: number,
+  context: FetchObjectContext | null,
+): [DecodedFetchObject, number, FetchObjectContext] {
+  let consumed = 0;
+
+  const [groupId, gidConsumed] = decodeVarint(data, startOffset + consumed);
+  consumed += gidConsumed;
+
+  const [objectId, oidConsumed] = decodeVarint(data, startOffset + consumed);
+  consumed += oidConsumed;
+
+  const [payloadLength, payloadLenConsumed] = decodeVarint(data, startOffset + consumed);
+  consumed += payloadLenConsumed;
+
+  const endOfRange: EndOfRangeType =
+    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ? "non_existent" : "unknown";
+
+  const newContext: FetchObjectContext = {
+    groupId,
+    subgroupId: context?.subgroupId ?? 0n,
+    objectId,
+    publisherPriority: context?.publisherPriority ?? 0,
+  };
+
+  return [
+    {
+      groupId,
+      subgroupId: context?.subgroupId ?? 0n,
+      objectId,
+      publisherPriority: context?.publisherPriority ?? 0,
+      payloadLength,
+      endOfRange,
+    },
+    consumed,
+    newContext,
+  ];
+}
+
+/**
+ * Fetch Object の Subgroup ID をデコードする
+ *
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "When encoding an Object with a Forwarding Preference of 'Datagram',
+ *  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
+ *
+ * @returns subgroupId, isDatagram, and extra bytes consumed
+ */
+function decodeFetchSubgroupId(
+  data: Uint8Array,
+  flags: number,
+  offset: number,
+  isFirst: boolean,
+  context: FetchObjectContext | null,
+): { subgroupId: bigint; isDatagram: boolean; consumed: number } {
+  const isDatagram = (flags & FetchSerializationFlags.DATAGRAM) !== 0;
+  let consumed = 0;
+
+  // DATAGRAM + SUBGROUP_PRESENT: wire 上の Subgroup ID vi64 を読み飛ばす
+  if (
+    isDatagram &&
+    (flags & FetchSerializationFlags.SUBGROUP_MASK) === FetchSerializationFlags.SUBGROUP_PRESENT
+  ) {
+    const [, skipConsumed] = decodeVarint(data, offset);
+    consumed += skipConsumed;
+  }
+
+  if (isDatagram) {
+    return { subgroupId: 0n, isDatagram: true, consumed };
+  }
+
+  const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
+  switch (subgroupEncoding) {
+    case FetchSerializationFlags.SUBGROUP_ZERO:
+      return { subgroupId: 0n, isDatagram: false, consumed };
+    case FetchSerializationFlags.SUBGROUP_SAME:
+      if (isFirst || context === null) {
+        throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
+      }
+      return { subgroupId: context.subgroupId, isDatagram: false, consumed };
+    case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
+      if (isFirst || context === null) {
+        throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
+      }
+      return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed };
+    case FetchSerializationFlags.SUBGROUP_PRESENT: {
+      const [sid, sidConsumed] = decodeVarint(data, offset + consumed);
+      return { subgroupId: sid, isDatagram: false, consumed: consumed + sidConsumed };
+    }
+    default:
+      throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
+  }
+}
+
+/**
  * Decode Fetch Object Fields
  * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
  *
@@ -1059,12 +1289,14 @@ export function encodeFetchObjectFields(
  * @param context - Context with prior object's values (required after first object)
  * @param offset - Starting offset in buffer
  * @param isFirst - Whether this is the first object (no prior context allowed)
+ * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
  */
 export function decodeFetchObjectFields(
   data: Uint8Array,
   context: FetchObjectContext | null,
   offset = 0,
   isFirst = false,
+  groupOrder: GroupOrder = GroupOrder.ASCENDING,
 ): [DecodedFetchObject, number, FetchObjectContext] {
   let totalConsumed = 0;
 
@@ -1079,42 +1311,13 @@ export function decodeFetchObjectFields(
     flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
     flags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE
   ) {
-    // End of Range: Group ID と Object ID のみが存在
-    const [groupId, gidConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += gidConsumed;
-
-    const [objectId, oidConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += oidConsumed;
-
-    // Object Payload Length (0 であるべき)
-    const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += payloadLenConsumed;
-
-    const endOfRange: EndOfRangeType =
-      flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ? "non_existent" : "unknown";
-
-    // prior context の更新:
-    // Group ID と Object ID は End of Range の値を使用
-    // Subgroup ID と Priority は直前の実 Object の値を維持
-    const newContext: FetchObjectContext = {
-      groupId,
-      subgroupId: context?.subgroupId ?? 0n,
-      objectId,
-      publisherPriority: context?.publisherPriority ?? 0,
-    };
-
-    return [
-      {
-        groupId,
-        subgroupId: context?.subgroupId ?? 0n,
-        objectId,
-        publisherPriority: context?.publisherPriority ?? 0,
-        payloadLength,
-        endOfRange,
-      },
-      totalConsumed,
-      newContext,
-    ];
+    const [result, consumed, newContext] = decodeEndOfRange(
+      data,
+      offset + totalConsumed,
+      flags,
+      context,
+    );
+    return [result, totalConsumed + consumed, newContext];
   }
 
   // draft-ietf-moq-transport-18 Section 11.4.4 Table 7:
@@ -1130,11 +1333,22 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // Ascending: "The Group ID is the prior Object's Group ID plus the Group ID Delta + 1."
+  // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
+  // "If the computed Group ID would be less than 0 or greater than 2^64-1, the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+  // 先頭オブジェクト (isFirst) の場合は delta が絶対値と等価。
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
-    const [gid, gidConsumed] = decodeVarint(data, offset + totalConsumed);
-    groupId = gid;
-    totalConsumed += gidConsumed;
+    const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
+    if (isFirst || context === null) {
+      groupId = delta;
+    } else if (groupOrder === GroupOrder.DESCENDING) {
+      groupId = context.groupId - delta - 1n;
+    } else {
+      groupId = context.groupId + delta + 1n;
+    }
+    totalConsumed += deltaConsumed;
   } else {
     if (isFirst || context === null) {
       throw new ProtocolViolationError("first object must have GROUP_ID_PRESENT flag set");
@@ -1142,46 +1356,55 @@ export function decodeFetchObjectFields(
     groupId = context.groupId;
   }
 
-  // Subgroup ID
-  let subgroupId: bigint;
-  const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
-  switch (subgroupEncoding) {
-    case FetchSerializationFlags.SUBGROUP_ZERO:
-      subgroupId = 0n;
-      break;
-    case FetchSerializationFlags.SUBGROUP_SAME:
-      if (isFirst || context === null) {
-        throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
-      }
-      subgroupId = context.subgroupId;
-      break;
-    case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
-      if (isFirst || context === null) {
-        throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
-      }
-      subgroupId = context.subgroupId + 1n;
-      break;
-    case FetchSerializationFlags.SUBGROUP_PRESENT: {
-      const [sid, sidConsumed] = decodeVarint(data, offset + totalConsumed);
-      subgroupId = sid;
-      totalConsumed += sidConsumed;
-      break;
-    }
-    default:
-      throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
+  // Group ID の範囲検証: 0 以上 2^64-1 以下
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9
+  if (groupId < 0n || groupId > maxObjectId) {
+    throw new ProtocolViolationError(
+      `computed group id out of range: ${groupId}, expected 0 to 2^64-1`,
+    );
   }
 
+  // Subgroup ID をデコード（DATAGRAM フラグの処理を含む）
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "When encoding an Object with a Forwarding Preference of 'Datagram',
+  //  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
+  const {
+    subgroupId,
+    isDatagram,
+    consumed: subgroupConsumed,
+  } = decodeFetchSubgroupId(data, flags, offset + totalConsumed, isFirst, context);
+  totalConsumed += subgroupConsumed;
+
   // Object ID
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "When the Group ID Delta field is not present, the Object ID is the
+  //  prior Object's ID plus the Object ID Delta if present."
+  // Group 不変時 (!GROUP_ID_PRESENT) かつ非先頭の場合、delta は prior + delta。
+  // 先頭オブジェクトまたは Group 変化時は delta が絶対値。
   let objectId: bigint;
   if (flags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
-    const [oid, oidConsumed] = decodeVarint(data, offset + totalConsumed);
-    objectId = oid;
-    totalConsumed += oidConsumed;
+    const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
+    if (!(flags & FetchSerializationFlags.GROUP_ID_PRESENT) && !isFirst && context !== null) {
+      objectId = context.objectId + delta;
+    } else {
+      objectId = delta;
+    }
+    totalConsumed += deltaConsumed;
   } else {
     if (isFirst || context === null) {
       throw new ProtocolViolationError("first object must have OBJECT_ID_PRESENT flag set");
     }
     objectId = context.objectId + 1n;
+  }
+
+  // Object ID の範囲検証: 0 以上 2^64-1 以下
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "If the computed Object ID would be greater than 2^64-1, the
+  //  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+  if (objectId > maxObjectId) {
+    throw new ProtocolViolationError(
+      `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
+    );
   }
 
   // Publisher Priority
@@ -1193,8 +1416,9 @@ export function decodeFetchObjectFields(
     // draft-ietf-moq-transport-18:
     // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
     // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
+    // Datagram オブジェクトは Subgroup に属さないためチェックをスキップする。
     // draft-ietf-moq-transport-18 Section 11.4.4
-    if (context !== null && subgroupId === context.subgroupId) {
+    if (!isDatagram && context !== null && subgroupId === context.subgroupId) {
       if (publisherPriority !== context.publisherPriority) {
         throw new ProtocolViolationError(
           `malformed track: different priorities in same subgroup ` +
@@ -1203,10 +1427,14 @@ export function decodeFetchObjectFields(
       }
     }
   } else {
-    if (isFirst || context === null) {
-      throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
+    // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+    // 先頭オブジェクトに MUST なのは Group ID Delta と Object ID Delta のみ。
+    // PRIORITY_PRESENT は任意であり、省略時はデフォルト値 128 を使用する。
+    if (context === null) {
+      publisherPriority = 128;
+    } else {
+      publisherPriority = context.publisherPriority;
     }
-    publisherPriority = context.publisherPriority;
   }
 
   // Properties
@@ -1231,9 +1459,11 @@ export function decodeFetchObjectFields(
   // Fetch Object には Object Status は存在しない
 
   // 次のオブジェクトのためにコンテキストを更新
+  // Datagram オブジェクトは Subgroup ID を持たないため、
+  // コンテキストには Datagram 以前の実際の Subgroup ID を伝搬させる
   const newContext: FetchObjectContext = {
     groupId,
-    subgroupId,
+    subgroupId: isDatagram ? (context?.subgroupId ?? 0n) : subgroupId,
     objectId,
     publisherPriority,
   };
@@ -1255,13 +1485,25 @@ export function decodeFetchObjectFields(
 /**
  * Create serialization flags for first Fetch object
  * First object must have all fields present
+ *
+ * @param hasExtensions - Whether the object has extension properties
+ * @param isDatagram - Whether the object uses Datagram forwarding preference
  */
-export function createFirstFetchObjectFlags(hasExtensions = false): number {
+export function createFirstFetchObjectFlags(hasExtensions = false, isDatagram = false): number {
   let flags =
     FetchSerializationFlags.GROUP_ID_PRESENT |
-    FetchSerializationFlags.SUBGROUP_PRESENT |
     FetchSerializationFlags.OBJECT_ID_PRESENT |
     FetchSerializationFlags.PRIORITY_PRESENT;
+
+  if (isDatagram) {
+    // Datagram 時は Subgroup ID フィールドなし、DATAGRAM ビットを設定
+    // draft-ietf-moq-transport-18 §11.4.4.1:
+    // "the publisher MUST SET bit 0x40 to '1'"
+    // 下位 2 ビットは SUBGROUP_ZERO (0x00) が推奨
+    flags |= FetchSerializationFlags.DATAGRAM;
+  } else {
+    flags |= FetchSerializationFlags.SUBGROUP_PRESENT;
+  }
 
   if (hasExtensions) {
     flags |= FetchSerializationFlags.PROPERTIES_PRESENT;

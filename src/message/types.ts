@@ -7,9 +7,9 @@
  * Message Types (Section 10 Control Messages)
  */
 export const MessageType = {
-  // draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+  // draft-ietf-moq-transport-18 Section 3.3:
   // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
-  // draft-ietf-moq-transport-18 Section 4
+  // draft-ietf-moq-transport-18 Section 10.3
   SETUP: 0x2f00,
 
   // セッション
@@ -26,7 +26,6 @@ export const MessageType = {
 
   // Publish
   PUBLISH: 0x1d,
-  PUBLISH_OK: 0x1e,
   PUBLISH_DONE: 0x0b,
 
   // Fetch
@@ -45,7 +44,7 @@ export const MessageType = {
    *
    * draft-ietf-moq-transport-18:
    * Publisher が新しい Request ID を割り当てられない場合に送信する。
-   * SUBSCRIBE_NAMESPACE のフロー制御の一環。
+   * SUBSCRIBE_TRACKS のフロー制御の一環。
    * draft-ietf-moq-transport-18 Section 10.20 (PUBLISH_BLOCKED)
    */
   PUBLISH_BLOCKED: 0x0f,
@@ -75,9 +74,11 @@ export type MessageType = (typeof MessageType)[keyof typeof MessageType];
 /**
  * Setup Option Types (Section 10.3.1 Setup Options)
  *
- * draft-ietf-moq-transport-18:
- * "Setup Parameters" を "Setup Options" にリネーム。
- * draft-ietf-moq-transport-18 Section 10.3.1
+ * draft-ietf-moq-transport-18 Section 10.3.1, Section 15.4 (IANA registry)
+ *
+ * draft-ietf-moq-transport-18 §10.3.1:
+ * "Setup Options with reserved identifiers have no semantics and can
+ *  carry arbitrary values. Endpoints MUST ignore unknown Setup Options."
  */
 export const SetupOptionType = {
   PATH: 0x01,
@@ -102,12 +103,12 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  * draft-ietf-moq-transport-18:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
- * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
+ * - Track Properties (OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
  *   DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
  *   Track Properties に移動
  * draft-ietf-moq-transport-18 Section 10.2 (Message Parameters)
  *
- * 注意: SUBSCRIBE では DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
+ * 注意: SUBSCRIBE では OBJECT_DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
  * Message Parameter として使用される（Subscriber の希望値）。
  */
 export const MessageParameterType = {
@@ -117,7 +118,7 @@ export const MessageParameterType = {
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Property として使用。
    */
-  DELIVERY_TIMEOUT: 0x02,
+  OBJECT_DELIVERY_TIMEOUT: 0x02,
   /**
    * AUTHORIZATION TOKEN (Section 10.2.2 AUTHORIZATION TOKEN Parameter)
    */
@@ -133,6 +134,16 @@ export const MessageParameterType = {
    */
   RENDEZVOUS_TIMEOUT: 0x04,
   /**
+   * SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3 SUBGROUP_DELIVERY TIMEOUT Parameter)
+   *
+   * draft-ietf-moq-transport-18:
+   * SUBGROUP_DELIVERY_TIMEOUT パラメータは varint。
+   * PUBLISH_OK / SUBSCRIBE / REQUEST_UPDATE に出現可能。
+   * 単位はミリ秒。0 はタイムアウトなしを意味する。
+   * draft-ietf-moq-transport-18 Section 10.2.3
+   */
+  SUBGROUP_DELIVERY_TIMEOUT: 0x06,
+  /**
    * EXPIRES (Section 10.2.10 EXPIRES Parameter)
    */
   EXPIRES: 0x08,
@@ -140,6 +151,14 @@ export const MessageParameterType = {
    * LARGEST_OBJECT (Section 10.2.11 LARGEST OBJECT Parameter)
    */
   LARGEST_OBJECT: 0x09,
+  /**
+   * FILL_TIMEOUT (Section 10.2.5 FILL TIMEOUT Parameter)
+   *
+   * FETCH メッセージで使用。
+   * relay が欠損 object の fill 待機に費やす最大時間（ミリ秒）。
+   * 0 は即座に利用可能な object のみを要求。
+   */
+  FILL_TIMEOUT: 0x0a,
   /**
    * FORWARD (Section 10.2.12 FORWARD Parameter)
    */
@@ -164,6 +183,16 @@ export const MessageParameterType = {
    * NEW_GROUP_REQUEST (Section 10.2.13 NEW GROUP REQUEST Parameter)
    */
   NEW_GROUP_REQUEST: 0x32,
+  /**
+   * TRACK_NAMESPACE_PREFIX (Section 10.2.14 TRACK_NAMESPACE_PREFIX Parameter)
+   *
+   * draft-ietf-moq-transport-18:
+   * REQUEST_UPDATE で SUBSCRIBE_NAMESPACE または SUBSCRIBE_TRACKS の
+   * Track Namespace Prefix を更新するために使用する。
+   * 値は Track Namespace エンコーディング。
+   * draft-ietf-moq-transport-18 Section 10.2.14
+   */
+  TRACK_NAMESPACE_PREFIX: 0x34,
 } as const;
 
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
@@ -222,8 +251,8 @@ export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
  * - 0x2: TRACK_ENDED
  * - 0x3: SUBSCRIPTION_ENDED
  * - 0x4: GOING_AWAY
- * - 0x5: EXPIRED
- * - 0x6: TOO_FAR_BEHIND
+ * - 0x5: TOO_FAR_BEHIND
+ * - 0x6: EXPIRED
  * - 0x8: UPDATE_FAILED
  * - 0x9: EXCESSIVE_LOAD
  * - 0x12: MALFORMED_TRACK
@@ -234,8 +263,8 @@ export const PublishDoneStatusCode = {
   TRACK_ENDED: 0x2,
   SUBSCRIPTION_ENDED: 0x3,
   GOING_AWAY: 0x4,
-  EXPIRED: 0x5,
-  TOO_FAR_BEHIND: 0x6,
+  TOO_FAR_BEHIND: 0x5,
+  EXPIRED: 0x6,
   UPDATE_FAILED: 0x8,
   EXCESSIVE_LOAD: 0x9,
   MALFORMED_TRACK: 0x12,
@@ -248,7 +277,7 @@ export type PublishDoneStatusCode =
  * PUBLISH_DONE の Status Code がエラー（アプリに Error として通知すべき）かどうか
  *
  * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
- * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x6), UPDATE_FAILED (0x8),
+ * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x5), UPDATE_FAILED (0x8),
  * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
  * TRACK_ENDED (0x2) 等はエラーとみなさない。
  * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.11
@@ -257,7 +286,7 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
   switch (statusCode) {
     case 0x0n:
     case 0x1n:
-    case 0x6n:
+    case 0x5n:
     case 0x8n:
     case 0x9n:
     case 0x12n:
@@ -266,6 +295,21 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
       return false;
   }
 }
+
+/**
+ * Object Forwarding Preference (Section 11.2.1)
+ *
+ * draft-ietf-moq-transport-18:
+ * "An enumeration indicating how a publisher sends an object.
+ *  The preferences are Subgroup and Datagram."
+ */
+export const ObjectForwardingPreference = {
+  SUBGROUP: 0x1,
+  DATAGRAM: 0x2,
+} as const;
+
+export type ObjectForwardingPreference =
+  (typeof ObjectForwardingPreference)[keyof typeof ObjectForwardingPreference];
 
 /**
  * Location (Group ID, Object ID)

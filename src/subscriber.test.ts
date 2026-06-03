@@ -212,3 +212,20 @@ test("setLargestLocation で largestLocation が更新される", () => {
   subscriber.setLargestLocation({ group: 10n, object: 7n });
   assert.deepEqual(subscriber.largestLocation, { group: 10n, object: 7n });
 });
+
+// draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+// "A GOAWAY MAY also be sent on a request stream to initiate migration
+//  of that individual request."
+// goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
+test("goawayCallback が設定できる", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  let calledUri = "";
+  subscriber.goawayCallback = (uri: string) => {
+    calledUri = uri;
+  };
+
+  assert.isDefined(subscriber.goawayCallback);
+  subscriber.goawayCallback!("moqt://new.example.com");
+  assert.equal(calledUri, "moqt://new.example.com");
+});

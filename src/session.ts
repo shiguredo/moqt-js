@@ -16,14 +16,15 @@ import {
 } from "./dataStream";
 export type { MoqtObject } from "./dataStream";
 import {
+  ClosedSubgroupError,
   DataStreamErrorCode,
   IncompleteDataError,
   MalformedTrackError,
   ProtocolViolationError,
   RequestError,
-  type RequestErrorCode,
   SessionError,
   SessionErrorCode,
+  normalizeRequestErrorCode,
 } from "./error";
 import {
   MessageType,
@@ -58,6 +59,7 @@ import {
   type Parameter,
   type SubscriptionFilter,
 } from "./message";
+import { EMPTY_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
 import {
   type Publisher,
@@ -203,6 +205,12 @@ export interface PublishCallbacks {
    * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
    */
   onForwardStateChange?: (forward: boolean) => void;
+  /**
+   * リクエストストリーム上で GOAWAY を受信した時のコールバック
+   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * 当該リクエストのマイグレーション先 URI を通知する。
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -229,6 +237,15 @@ export interface PublishOptions {
    * タイムアウトを超過したオブジェクトは配信されない。
    */
   deliveryTimeout?: bigint;
+
+  /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 12.1 (SUBGROUP_DELIVERY_TIMEOUT)
+   *
+   * Subgroup 内のオブジェクトを配信する最大時間。
+   * 0 はタイムアウトなしを意味する。
+   */
+  subgroupDeliveryTimeout?: bigint;
 
   /**
    * Publisher Priority（0-255）
@@ -295,6 +312,12 @@ export interface SubscribeCallbacks {
   datagram?: (object: MoqtObject) => void;
   end?: () => void;
   error?: (error: Error) => void;
+  /**
+   * リクエストストリーム上で GOAWAY を受信した時のコールバック
+   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * 当該リクエストのマイグレーション先 URI を通知する。
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -347,6 +370,15 @@ export interface JoiningFetchOptions {
    * LARGEST_OBJECT がない場合や、サーバーからのエラーを受け取る
    */
   onError?: (error: Error) => void;
+
+  /**
+   * Fill Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 10.2.5 (FILL TIMEOUT Parameter)
+   *
+   * relay が欠損 object の fill 待機に費やす最大時間。
+   * 0 は即座に利用可能な object のみを要求。
+   */
+  fillTimeout?: bigint;
 }
 
 /**
@@ -376,6 +408,15 @@ export interface SubscribeOptions {
    * タイムアウトを超過したオブジェクトは配信されない。
    */
   deliveryTimeout?: bigint;
+
+  /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 10.2.3 (SUBGROUP_DELIVERY_TIMEOUT)
+   *
+   * Subgroup 内のオブジェクトを配信する最大時間。
+   * 0 はタイムアウトなしを意味する。
+   */
+  subgroupDeliveryTimeout?: bigint;
 
   /**
    * Subscriber Priority（0-255）
@@ -449,12 +490,27 @@ export interface FetchCallbacks {
   object: (object: MoqtObject) => void;
   end?: () => void;
   error?: (error: Error) => void;
+  /**
+   * リクエストストリーム上で GOAWAY を受信した時のコールバック
+   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * 当該リクエストのマイグレーション先 URI を通知する。
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
  * Fetch options
  */
 export interface FetchOptions {
+  /**
+   * Fill Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 10.2.5 (FILL TIMEOUT Parameter)
+   *
+   * relay が欠損 object の fill 待機に費やす最大時間。
+   * 0 は即座に利用可能な object のみを要求。
+   */
+  fillTimeout?: bigint;
+
   /**
    * 開始位置
    */
@@ -503,6 +559,15 @@ export interface NamespaceSubscriptionCallbacks {
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
+  /**
+   * GOAWAY 受信時に呼ばれる
+   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * リクエストストリーム上の GOAWAY は当該リクエストの
+   * マイグレーションのみを目的とする。
+   *
+   * @param newSessionUri - 新しいセッション URI
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -540,6 +605,15 @@ export interface TracksSubscriptionCallbacks {
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
+  /**
+   * GOAWAY 受信時に呼ばれる
+   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * リクエストストリーム上の GOAWAY は当該リクエストの
+   * マイグレーションのみを目的とする。
+   *
+   * @param newSessionUri - 新しいセッション URI
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -564,6 +638,15 @@ export interface NamespacePublicationCallbacks {
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
+  /**
+   * GOAWAY 受信時に呼ばれる
+   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * リクエストストリーム上の GOAWAY は当該リクエストの
+   * マイグレーションのみを目的とする。
+   *
+   * @param newSessionUri - 新しいセッション URI
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -761,6 +844,10 @@ export class SessionImpl implements Session {
 
   // GOAWAY 状態
   private receivedGoaway = false;
+  // リクエストストリームごとの GOAWAY 受信済みフラグ
+  // draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+  // 単一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
+  private goawayReceivedOnRequestStreams = new Set<bigint>();
   private sentGoaway = false;
   private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -802,7 +889,12 @@ export class SessionImpl implements Session {
   // 保留中のリクエスト
   private pendingPublish = new Map<
     bigint,
-    { resolve: (pub: Publisher) => void; reject: (err: Error) => void; impl: PublisherImpl }
+    {
+      resolve: (pub: Publisher) => void;
+      reject: (err: Error) => void;
+      impl: PublisherImpl;
+      goawayCallback?: (newSessionUri: string) => void;
+    }
   >();
   private pendingSubscribe = new Map<
     bigint,
@@ -812,6 +904,7 @@ export class SessionImpl implements Session {
       impl: SubscriberImpl;
       joiningFetch?: JoiningFetchOptions;
       objectCallback: (object: MoqtObject) => void;
+      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingRequestUpdate = new Map<
@@ -825,6 +918,7 @@ export class SessionImpl implements Session {
       reject: (err: Error) => void;
       impl: FetcherImpl;
       startLocation?: Location;
+      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingTrackStatus = new Map<
@@ -909,17 +1003,15 @@ export class SessionImpl implements Session {
   // Promise チェーンでトラック単位のシリアライズを行う。
   private publisherSendQueues = new Map<bigint, Promise<void>>();
 
-  // TODO: Closed Subgroup Tracking
-  // draft-ietf-moq-transport-18:
-  // delivery timeout または STOP_SENDING 後に Subgroup を再オープンしてはならない。
-  // draft-ietf-moq-transport-18 Section 11.4.2
+  // STOP_SENDING / delivery timeout で閉じた Subgroup の追跡
+  // draft-ietf-moq-transport-18 §11.4.3 (Closing Subgroup Streams):
+  // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+  //  attempt to open a new stream to deliver additional Objects in that Subgroup."
   //
-  // 現在の実装では 1 Group = 1 Subgroup = 1 Stream モデルを採用しているため、
-  // グループが終了すると自然と新しいストリームを作成する。
-  // 完全な実装には以下が必要:
-  // 1. WebTransport の STOP_SENDING シグナル検出
-  // 2. 閉じた Subgroup (trackAlias, groupId, subgroupId) の追跡
-  // 3. sendObject 時に閉じた Subgroup への送信を拒否
+  // 1 Group = 1 Subgroup = 1 Stream モデルでは groupId が subgroupId を一意に決定するため、
+  // キーは `${trackAlias}:${groupId}` で十分である。
+  // sendObject 時にこの Set をチェックし、閉じた Subgroup への送信を拒否する。
+  private closedSubgroups = new Set<string>();
 
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
@@ -1182,7 +1274,12 @@ export class SessionImpl implements Session {
 
     // PUBLISH_OK の Promise を作成
     const promise = new Promise<Publisher>((resolve, reject) => {
-      this.pendingPublish.set(requestId, { resolve, reject, impl });
+      this.pendingPublish.set(requestId, {
+        resolve,
+        reject,
+        impl,
+        goawayCallback: callbacks?.goaway,
+      });
     });
 
     const parameters = buildPublishParameters(options);
@@ -1196,8 +1293,6 @@ export class SessionImpl implements Session {
     const publishMsg = {
       type: MessageType.PUBLISH,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       trackAlias,
@@ -1212,7 +1307,7 @@ export class SessionImpl implements Session {
       trackName,
       trackAlias: trackAlias.toString(),
       MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
-      DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
+      OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
       DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
       GROUP_ORDER: options?.groupOrder,
       DYNAMIC_GROUPS: options?.dynamicGroups,
@@ -1313,6 +1408,7 @@ export class SessionImpl implements Session {
         impl,
         joiningFetch: options?.joiningFetch,
         objectCallback: callbacks.object,
+        goawayCallback: callbacks.goaway,
       });
     });
 
@@ -1325,8 +1421,6 @@ export class SessionImpl implements Session {
     const subscribeMsg = {
       type: MessageType.SUBSCRIBE,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters,
@@ -1344,7 +1438,7 @@ export class SessionImpl implements Session {
         trackNamespace: namespace,
         trackName,
         filterType: options?.filter?.type,
-        DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
+        OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
         SUBSCRIBER_PRIORITY: options?.subscriberPriority,
         GROUP_ORDER: options?.groupOrder,
         NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
@@ -1407,6 +1501,7 @@ export class SessionImpl implements Session {
         reject,
         impl,
         startLocation: options.startLocation,
+        goawayCallback: callbacks.goaway,
       });
     });
 
@@ -1417,8 +1512,6 @@ export class SessionImpl implements Session {
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       fetchType: FetchType.STANDALONE,
       standalone: {
         trackNamespace,
@@ -1479,8 +1572,6 @@ export class SessionImpl implements Session {
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       trackName: trackNameBytes,
       parameters: [],
@@ -1546,8 +1637,6 @@ export class SessionImpl implements Session {
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       parameters: [] as [],
     };
@@ -1633,7 +1722,6 @@ export class SessionImpl implements Session {
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
-      requiredRequestIdDelta: 0n,
       trackNamespacePrefix,
       parameters: [] as [],
     };
@@ -1757,7 +1845,29 @@ export class SessionImpl implements Session {
               }
               // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要 (§10.1 Request ID)
-              decodeRequestOkPayload(messagePayload);
+              const requestOk = decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+              // SUBSCRIBE_NAMESPACE_OK の許可パラメータは空
+              if (
+                !validateParameterScope(
+                  requestOk.parameters,
+                  EMPTY_ALLOWED_PARAMS,
+                  "SUBSCRIBE_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
+                return;
+              }
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
+              if (
+                !bidi.validateRequestOkNoTrackProperties(
+                  requestOk.trackProperties,
+                  "SUBSCRIBE_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
+                return;
+              }
               resolved = true;
               const namespaceSubscription = this.createNamespaceSubscription(requestId);
               resolve(namespaceSubscription);
@@ -1778,11 +1888,59 @@ export class SessionImpl implements Session {
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
-                Number(decodedMsg.errorCode) as RequestErrorCode,
+                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
+                decodedMsg.retryInterval,
+                decodedMsg.redirect
+                  ? {
+                      connectUri: decodedMsg.redirect.connectUri,
+                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+                      trackName: decodedMsg.redirect.trackName,
+                    }
+                  : undefined,
               );
               subscription.state = "closed";
               callbacks.error?.(error);
               reject(error);
+              return;
+            }
+
+            case MessageType.GOAWAY: {
+              // draft-ietf-moq-transport-18 §10.4:
+              // リクエストストリーム上の GOAWAY は当該リクエストのみに適用される
+              // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
+              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate goaway on request stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              this.goawayReceivedOnRequestStreams.add(requestId);
+              const decodedMsg = decodeGoawayPayload(messagePayload);
+              if (decodedMsg.requestId !== null) {
+                this.closeWithError(
+                  new SessionError(
+                    "goaway on request stream must not include request id",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              callbacks.goaway?.(decodedMsg.newSessionUri);
+              subscription.state = "closed";
+              callbacks.error?.(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              reject(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              void streamReader.cancel();
               return;
             }
 
@@ -1923,7 +2081,6 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              decodeRequestOkPayload(messagePayload);
               resolved = true;
               const tracksSubscription = this.createTracksSubscription(requestId);
               resolve(tracksSubscription);
@@ -1943,11 +2100,56 @@ export class SessionImpl implements Session {
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
-                Number(decodedMsg.errorCode) as RequestErrorCode,
+                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
+                decodedMsg.retryInterval,
+                decodedMsg.redirect
+                  ? {
+                      connectUri: decodedMsg.redirect.connectUri,
+                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+                      trackName: decodedMsg.redirect.trackName,
+                    }
+                  : undefined,
               );
               subscription.state = "closed";
               callbacks.error?.(error);
               reject(error);
+              return;
+            }
+
+            case MessageType.GOAWAY: {
+              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate goaway on request stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              this.goawayReceivedOnRequestStreams.add(requestId);
+              const decodedMsg = decodeGoawayPayload(messagePayload);
+              if (decodedMsg.requestId !== null) {
+                this.closeWithError(
+                  new SessionError(
+                    "goaway on request stream must not include request id",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              callbacks.goaway?.(decodedMsg.newSessionUri);
+              subscription.state = "closed";
+              callbacks.error?.(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              reject(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              void streamReader.cancel();
               return;
             }
 
@@ -2030,8 +2232,6 @@ export class SessionImpl implements Session {
     const publishNamespaceMsg = {
       type: MessageType.PUBLISH_NAMESPACE,
       requestId,
-      // 0 は依存なしを意味する
-      requiredRequestIdDelta: 0n,
       trackNamespace,
       parameters: [],
     };
@@ -2126,7 +2326,29 @@ export class SessionImpl implements Session {
               // draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
               // draft-ietf-moq-transport-18 Section 10.1
-              decodeRequestOkPayload(messagePayload);
+              const requestOk = decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+              // PUBLISH_NAMESPACE_OK の許可パラメータは空
+              if (
+                !validateParameterScope(
+                  requestOk.parameters,
+                  EMPTY_ALLOWED_PARAMS,
+                  "PUBLISH_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
+                return;
+              }
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
+              if (
+                !bidi.validateRequestOkNoTrackProperties(
+                  requestOk.trackProperties,
+                  "PUBLISH_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
+                return;
+              }
               if (resolved) {
                 // 二重応答は仕様違反
                 this.closeWithError(
@@ -2144,19 +2366,65 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.REQUEST_ERROR: {
-              // draft-ietf-moq-transport-18 Section 10.6 (REQUEST_ERROR):
+              // draft-ietf-moq-transport-18 Section 10.6.2 (REQUEST_ERROR):
               // Request ID はストリームが特定するため不要
-              // draft-ietf-moq-transport-18 Section 10.1
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
-                Number(decodedMsg.errorCode) as RequestErrorCode,
+                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
+                decodedMsg.retryInterval,
+                decodedMsg.redirect
+                  ? {
+                      connectUri: decodedMsg.redirect.connectUri,
+                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+                      trackName: decodedMsg.redirect.trackName,
+                    }
+                  : undefined,
               );
               publication.state = "closed";
               callbacks?.error?.(error);
               if (!resolved) {
                 reject(error);
               }
+              return;
+            }
+
+            case MessageType.GOAWAY: {
+              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate goaway on request stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              this.goawayReceivedOnRequestStreams.add(requestId);
+              const decodedMsg = decodeGoawayPayload(messagePayload);
+              if (decodedMsg.requestId !== null) {
+                this.closeWithError(
+                  new SessionError(
+                    "goaway on request stream must not include request id",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              callbacks?.goaway?.(decodedMsg.newSessionUri);
+              publication.state = "closed";
+              callbacks?.error?.(
+                new Error(
+                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                ),
+              );
+              if (!resolved) {
+                reject(
+                  new Error(
+                    `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
+                  ),
+                );
+              }
+              void streamReader.cancel();
               return;
             }
 
@@ -2225,6 +2493,7 @@ export class SessionImpl implements Session {
       type: MessageType.GOAWAY,
       newSessionUri: "",
       timeout: goawayTimeout,
+      requestId: 1n, // draft-ietf-moq-transport-18 §10.4: クライアントの GOAWAY Request ID はピア（サーバー）の最小 Request ID (奇数パリティ、1 から開始)
     });
 
     await this.sendControlMessage(MessageType.GOAWAY, payload, {
@@ -2331,6 +2600,12 @@ export class SessionImpl implements Session {
       pending.reject(sessionClosedError);
     }
     this.pendingTrackStatus.clear();
+
+    // 閉じた Subgroup の追跡をクリア
+    this.closedSubgroups.clear();
+
+    // GOAWAY 受信追跡をクリア
+    this.goawayReceivedOnRequestStreams.clear();
 
     // Pending Subgroup ストリームの buffer を解放
     // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
@@ -2548,12 +2823,26 @@ export class SessionImpl implements Session {
    */
   private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
     const trackAlias = publisher.getTrackAlias();
+    const groupId = BigInt(params.groupId);
     const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
     // 前の Promise のエラーをキャッチしてチェーンが止まらないようにする。
     // エラーが伝播すると後続の全ての .then() がスキップされ、
     // 新しいオブジェクトが送信されなくなる。
     const currentPromise = previousPromise
       .catch(() => {})
+      .then(() => {
+        // 閉じた Subgroup への送信を拒否する
+        // draft-ietf-moq-transport-18 §11.4.3:
+        // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+        //  attempt to open a new stream to deliver additional Objects in that Subgroup."
+        if (this.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
+          throw new ClosedSubgroupError(
+            `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
+            trackAlias,
+            groupId,
+          );
+        }
+      })
       .then(() => this.sendObjectInternal(publisher, params))
       .catch((err: unknown) => {
         publisher.handleError(err instanceof Error ? err : new Error(String(err)));
@@ -2582,6 +2871,8 @@ export class SessionImpl implements Session {
           await streamState.writer.close();
         } catch {
           // 既に閉じられている場合は無視
+          // writer.close() の失敗は STOP_SENDING とみなさない
+          // publisher が自発的に閉じるストリームの close 失敗は追跡不要
         }
       }
 
@@ -2610,7 +2901,21 @@ export class SessionImpl implements Session {
         groupId,
         publisherPriority: params.priority ?? 128,
       });
-      await writer.write(header);
+
+      // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
+      // closedSubgroups に追加する。
+      // draft-ietf-moq-transport-18 §11.4.3:
+      // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+      //  attempt to open a new stream to deliver additional Objects in that Subgroup."
+      try {
+        await writer.write(header);
+      } catch (err) {
+        // ヘッダー書き込み失敗時は writer の参照が publisherStreams に残らないため、
+        // 明示的にロックを解放する
+        writer.releaseLock();
+        this.closedSubgroups.add(`${trackAlias}:${groupId}`);
+        throw err;
+      }
 
       streamState = { groupId, writer, previousObjectId: -1n };
       this.publisherStreams.set(trackAlias, streamState);
@@ -2640,9 +2945,18 @@ export class SessionImpl implements Session {
       params.properties,
     );
 
-    await streamState.writer.write(data);
-    if (params.payload.length > 0) {
-      await streamState.writer.write(params.payload);
+    // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
+    // closedSubgroups に追加する。
+    try {
+      await streamState.writer.write(data);
+      if (params.payload.length > 0) {
+        await streamState.writer.write(params.payload);
+      }
+    } catch (err) {
+      // 書き込み失敗時は writer が破損しているためロックを解放する
+      streamState.writer.releaseLock();
+      this.closedSubgroups.add(`${trackAlias}:${groupId}`);
+      throw err;
     }
 
     // 状態を更新
@@ -2680,6 +2994,18 @@ export class SessionImpl implements Session {
         ]);
       } catch {
         // タイムアウトまたは既にクローズされている場合は無視
+      }
+    }
+
+    // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
+    // 長時間稼働時のメモリリークを防ぐため、単調増加させない
+    //
+    // ECMAScript 仕様上、Set のイテレーション中の delete は安全である。
+    // キー形式 `${trackAlias}:${groupId}` の `:` 区切りにより、
+    // trackAlias=1 が trackAlias=10 のエントリに誤マッチしないことが保証される。
+    for (const key of this.closedSubgroups) {
+      if (key.startsWith(`${trackAlias}:`)) {
+        this.closedSubgroups.delete(key);
       }
     }
   }
@@ -2814,7 +3140,6 @@ export class SessionImpl implements Session {
    *   Type (i) = 0x2,
    *   Length (16),
    *   Request ID (i),
-   *   Required Request ID Delta (i),
    *   Parameters (..) ...
    * }
    */
@@ -3018,6 +3343,35 @@ export class SessionImpl implements Session {
     this.receivedGoaway = true;
 
     const msg = decodeGoawayPayload(payload);
+
+    // draft-ietf-moq-transport-18 §10.4:
+    // 制御ストリーム上の GOAWAY には Request ID が必須。
+    // Request ID が不在の場合は PROTOCOL_VIOLATION でセッションを閉じる。
+    if (msg.requestId === null) {
+      this.closeWithError(
+        new SessionError(
+          "goaway on control stream must include request id",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return { error: "GOAWAY on control stream missing Request ID" };
+    }
+
+    // draft-ietf-moq-transport-18 §10.4:
+    // GOAWAY の Request ID は送信元のピア空間を指す。
+    // クライアントの Request ID パリティは even なため、
+    // サーバーからの GOAWAY Request ID は even であることが期待される。
+    // 受信した Request ID のパリティがクライアント (even) と一致しなければ
+    // INVALID_REQUEST_ID でセッションを閉じる。
+    if (msg.requestId % 2n !== 0n) {
+      this.closeWithError(
+        new SessionError(
+          `GOAWAY request ID parity mismatch: ${msg.requestId} (expected even)`,
+          SessionErrorCode.INVALID_REQUEST_ID,
+        ),
+      );
+      return { error: "GOAWAY request ID parity mismatch" };
+    }
 
     // GOAWAY コールバックを呼び出す
     this.callbacks.goaway?.(msg.newSessionUri);
@@ -3269,6 +3623,18 @@ export class SessionImpl implements Session {
    */
   private handleIncomingDatagram(data: Uint8Array): void {
     try {
+      // draft-ietf-moq-transport-18 §11.5.2 (Padding Datagrams):
+      // "The receiver MUST discard the contents of a padding datagram."
+      // PADDING datagram (0x132b3e29) の 4 バイト varint 先頭バイトは 0xe4。
+      // data.length < 4 の場合は完全な varint をデコードできないため PADDING ではない。
+      if (data.length >= 4 && data[0] === 0xe4) {
+        const [datagramType] = decodeVarint(data, 0);
+        if (Number(datagramType) === 0x132b3e29) {
+          // PADDING datagram は破棄して何もしない
+          return;
+        }
+      }
+
       const [datagram] = decodeObjectDatagram(data);
 
       // Track Alias で Subscriber を検索
@@ -3423,7 +3789,9 @@ export class SessionImpl implements Session {
               }
             } else if (
               (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
-              (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
+              (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
+              (streamTypeNum >= 0x50 && streamTypeNum <= 0x5f) ||
+              (streamTypeNum >= 0x70 && streamTypeNum <= 0x7f)
             ) {
               // draft-ietf-moq-transport-18 Section 11.4.2:
               // SUBGROUP_ID_MODE = 0b11 のタイプ値
@@ -3453,6 +3821,20 @@ export class SessionImpl implements Session {
               // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
               // draft-ietf-moq-transport-18 §11.4.2 の buffer 経路はこのハンドラ内に集約
               await this.handleSubgroupStream(reader, header, initialPayloadBuffer);
+              return;
+            } else if (streamTypeNum === 0x132b3e28) {
+              // draft-ietf-moq-transport-18 §11.5.1 (Padding Streams):
+              // "The receiver MUST discard all data received on a padding stream."
+              // PADDING stream のデータはすべて読み捨てる
+              isFetchStream = false;
+              headerParsed = true;
+              buffer = new Uint8Array(0);
+              // 残りのデータを drain してストリームを読み切る
+              let streamDone = false;
+              while (!streamDone) {
+                const next = await reader.read();
+                streamDone = next.done;
+              }
               return;
             } else {
               // draft-ietf-moq-transport-18 Section 3.4 (Unidirectional Stream Types):
@@ -3564,14 +3946,21 @@ export class SessionImpl implements Session {
     context: import("./dataStream").FetchObjectContext | null;
     isFirst: boolean;
   } {
-    return processFetchObjects(buffer, fetcher, context, isFirst, {
-      incrementObjectsReceived: () => {
-        this.statsObjectsReceivedViaFetch++;
+    return processFetchObjects(
+      buffer,
+      fetcher,
+      context,
+      isFirst,
+      {
+        incrementObjectsReceived: () => {
+          this.statsObjectsReceivedViaFetch++;
+        },
+        incrementBytesReceived: (_subscribePath, bytes) => {
+          this.statsBytesReceivedViaFetch += bytes;
+        },
       },
-      incrementBytesReceived: (_subscribePath, bytes) => {
-        this.statsBytesReceivedViaFetch += bytes;
-      },
-    });
+      fetcher.getGroupOrder(),
+    );
   }
 
   /**

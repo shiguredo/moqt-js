@@ -34,7 +34,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - 高レベル API (WebCodecs / MediaStream 対応)
 - Media over QUIC Transport (MOQT) 対応
   - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport)
-  - `draft-17` 対応
+  - `draft-18` 対応
 - Low Overhead Container 対応
   - [Media over QUIC - Low Overhead Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc)
   - `draft-02` 対応
@@ -48,61 +48,84 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Media over QUIC Transport
 
-[draft-ietf-moq-transport-17](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-17) の機能実装状況です。
+[draft-ietf-moq-transport-18](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-18) の機能実装状況です。
+
+#### MOQT URI
+
+- `moqt://` スキーム
+- Fragment Identifier
 
 #### Publisher
 
 - PUBLISH メッセージ
-- PUBLISH_OK メッセージ
 - PUBLISH_DONE メッセージ (Stream Count 対応)
 - Object Stream 送信 (Subgroup Header)
 - Object Datagram 送信
+- Datagram と Subgroup の混在送信
 - Publisher Priority
 - Forward State
-- DELIVERY_TIMEOUT プロパティ
-- MAX_CACHE_DURATION プロパティ
+- Track Properties
+  - OBJECT_DELIVERY_TIMEOUT
+  - SUBGROUP_DELIVERY_TIMEOUT
+  - MAX_CACHE_DURATION
+  - DEFAULT_PUBLISHER_PRIORITY
+  - DEFAULT_PUBLISHER_GROUP_ORDER
+  - DYNAMIC_GROUPS
+- EXPIRES パラメータ
 
 #### Subscriber
 
 - SUBSCRIBE メッセージ
 - SUBSCRIBE_OK メッセージ
 - REQUEST_UPDATE メッセージ
-- UNSUBSCRIBE メッセージ
+- サブスクリプションのキャンセル (双方向ストリームのクローズ)
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
 - FETCH メッセージ (Standalone)
 - FETCH メッセージ (Joining Relative)
 - FETCH メッセージ (Joining Absolute)
 - FETCH_OK メッセージ
+- Fetch Group Order (Ascending / Descending)
 - Subscription Filter (Largest Object)
 - Subscription Filter (Next Group Start)
-- Subscription Filter (AbsoluteStart)
-- Subscription Filter (AbsoluteRange)
+- Subscription Filter (Absolute Start)
+- Subscription Filter (Absolute Range)
 - Subscriber Priority
 - Group Order (Ascending / Descending)
-- DELIVERY_TIMEOUT パラメータ
+- OBJECT_DELIVERY_TIMEOUT パラメータ
+- SUBGROUP_DELIVERY_TIMEOUT パラメータ
 - RENDEZVOUS_TIMEOUT パラメータ
+- FILL_TIMEOUT パラメータ (Fetch)
+- NEW_GROUP_REQUEST パラメータ
 
 #### コントロールメッセージ
 
 - SETUP
   - AUTHORIZATION_TOKEN Setup Option (REGISTER / USE_VALUE)
   - MOQT_IMPLEMENTATION Setup Option
-- GOAWAY (Timeout 対応)
-- REQUEST_OK
+- GOAWAY
+  - Timeout 対応
+  - Request ID 対応
+  - リクエストストリーム上での受信
+- REQUEST_OK (Track Properties 対応)
 - REQUEST_ERROR
+  - Retry Interval
+  - Redirect Structure
+  - REDIRECT / UNSUPPORTED_EXTENSION エラーコード
 - PUBLISH_NAMESPACE
 - NAMESPACE
 - NAMESPACE_DONE
 - PUBLISH_BLOCKED
-- SUBSCRIBE_NAMESPACE
+- SUBSCRIBE_NAMESPACE (Namespace 発見)
+- SUBSCRIBE_TRACKS (Track 購読)
 - TRACK_STATUS
 
 #### データストリーム
 
-- Subgroup Header
+- Subgroup Header (FIRST_OBJECT bit 対応)
 - Fetch Header
 - Object Datagram
+- PADDING Stream / Datagram (受信時破棄)
 - Object Status (Normal / End of Group / End of Track)
 - Object Properties
 - Properties (Prior Group ID Gap / Prior Object ID Gap / Immutable Properties)
@@ -169,7 +192,7 @@ import { createMediaPublisher } from "moqt-js";
 const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
 
 const publisher = await createMediaPublisher(
-  "https://example.com/moqt",
+  "moqt://example.com/moqt",
   {
     namespace: ["live"],
     audio: {
@@ -204,7 +227,7 @@ await publisher.close();
 import { createMediaSubscriber } from "moqt-js";
 
 const subscriber = await createMediaSubscriber(
-  "https://example.com/moqt",
+  "moqt://example.com/moqt",
   {
     namespace: ["live"],
     audio: { trackName: "audio" },
@@ -234,7 +257,7 @@ await subscriber.close();
 ```typescript
 import { connect } from "moqt-js";
 
-const session = await connect("https://example.com/moqt", {
+const session = await connect("moqt://example.com/moqt", {
   close: () => console.log("disconnected"),
   error: (e) => console.error(e),
 });
@@ -250,7 +273,7 @@ await publisher.done();
 ```typescript
 import { connect } from "moqt-js";
 
-const session = await connect("https://example.com/moqt", {
+const session = await connect("moqt://example.com/moqt", {
   close: () => console.log("disconnected"),
   error: (e) => console.error(e),
 });

@@ -19,6 +19,10 @@ import {
 } from "./properties";
 import { MalformedTrackError, ProtocolViolationError } from "./error";
 
+test("TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である", () => {
+  assert.equal(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, 0x06n);
+});
+
 test("encodeProperty: 偶数 ID は varint value 形式でエンコード", () => {
   const header: Property = { id: 0x02n, value: 42n };
   const encoded = encodeProperty(header);
@@ -459,4 +463,52 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
     { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded },
   ];
   assert.equal(supportsDynamicGroups(properties), true);
+});
+
+// ============================================================================
+// decodeProperties: IMMUTABLE_PROPERTIES 再帰チェックテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 §12.7 (Immutable Properties):
+ * IMMUTABLE_PROPERTIES MUST NOT recursively contain an IMMUTABLE_PROPERTIES property.
+ * 再帰的な IMMUTABLE_PROPERTIES を含むバイト列を decodeProperties に渡し、
+ * MalformedTrackError が throw されることを検証する。
+ */
+test("decodeProperties: IMMUTABLE_PROPERTIES 再帰検出で MalformedTrackError", () => {
+  // ID: 0x0B (IMMUTABLE_PROPERTIES) + length: 3 + inner data:
+  //   inner ID: 0x0B (再帰 IMMUTABLE_PROPERTIES) + length: 1 + dummy byte: 0x00
+  const data = new Uint8Array([
+    0x0b, // ID: IMMUTABLE_PROPERTIES (delta = 0x0B since previousId = 0)
+    0x03, // inner length: 3
+    0x0b, // inner ID: IMMUTABLE_PROPERTIES (delta = 0x0B since innerPreviousId = 0)
+    0x01, // inner length: 1
+    0x00, // inner data byte
+  ]);
+
+  assert.throws(
+    () => decodeProperties(data),
+    MalformedTrackError,
+    "immutable properties must not recursively contain another immutable properties key",
+  );
+});
+
+/**
+ * 内側 KVP データが不完全（途中で切れている）場合は、
+ * IncompleteDataError のみ break され、decodeProperties が正常に完了することを検証する。
+ */
+test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError を握り潰す", () => {
+  // ID: 0x0B (IMMUTABLE_PROPERTIES) + length: 2 + truncated inner data (2 bytes)
+  // inner data: 0x40, 0x00 (varint の途中で切れている不完全な KVP)
+  const data = new Uint8Array([
+    0x0b, // ID: IMMUTABLE_PROPERTIES
+    0x02, // inner length: 2
+    0x40, // varint の続きが必要だが 1 バイトしかない
+    0x00,
+  ]);
+
+  // 不完全な内側データでも decodeProperties が完了すること
+  const result = decodeProperties(data);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 0x0bn);
 });

@@ -4,6 +4,11 @@
  * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-15.10
  */
 
+import { PublishDoneStatusCode } from "./message/types";
+
+// PublishDoneStatusCode を再公開（error.ts の利用者が import しやすいように）
+export { PublishDoneStatusCode };
+
 /**
  * Session Termination Error Codes (Section 3.5 Termination)
  *
@@ -61,34 +66,55 @@ export const RequestErrorCode = {
   PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,
   INVALID_JOINING_REQUEST_ID: 0x32,
+  UNSUPPORTED_EXTENSION: 0x33,
+  REDIRECT: 0x34,
 } as const;
 
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * PUBLISH_DONE Codes (Section 10.11 PUBLISH_DONE)
- *
- * draft-ietf-moq-transport-18:
- * - MALFORMED_TRACK を 0x12 に変更
- * - EXCESSIVE_LOAD (0x9) を追加 (#1479)
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知のエラーコードは INTERNAL_ERROR として扱う。
+ * Receipt of an unknown error code MUST be treated as equivalent to
+ * INTERNAL_ERROR for that context.
  */
-export const PublishDoneCode = {
-  INTERNAL_ERROR: 0x0,
-  UNAUTHORIZED: 0x1,
-  TRACK_ENDED: 0x2,
-  SUBSCRIPTION_ENDED: 0x3,
-  GOING_AWAY: 0x4,
-  EXPIRED: 0x5,
-  TOO_FAR_BEHIND: 0x6,
-  UPDATE_FAILED: 0x8,
-  EXCESSIVE_LOAD: 0x9,
-  MALFORMED_TRACK: 0x12,
-} as const;
+const REQUEST_ERROR_CODE_SET = new Set(Object.values(RequestErrorCode));
 
-export type PublishDoneCode = (typeof PublishDoneCode)[keyof typeof PublishDoneCode];
+export function normalizeRequestErrorCode(code: number): RequestErrorCode {
+  if (REQUEST_ERROR_CODE_SET.has(code as RequestErrorCode)) {
+    return code as RequestErrorCode;
+  }
+  return RequestErrorCode.INTERNAL_ERROR;
+}
 
 /**
- * Data Stream Reset Error Codes (Section 15.10.4)
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
+ */
+const PUBLISH_DONE_CODE_SET = new Set(Object.values(PublishDoneStatusCode));
+
+export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
+  if (PUBLISH_DONE_CODE_SET.has(code as unknown as PublishDoneStatusCode)) {
+    return code as PublishDoneStatusCode;
+  }
+  return PublishDoneStatusCode.INTERNAL_ERROR;
+}
+
+/**
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知の Session Termination エラーコードは INTERNAL_ERROR として扱う。
+ */
+const SESSION_ERROR_CODE_SET = new Set(Object.values(SessionErrorCode));
+
+export function normalizeSessionErrorCode(code: number): SessionErrorCode {
+  if (SESSION_ERROR_CODE_SET.has(code as unknown as SessionErrorCode)) {
+    return code as SessionErrorCode;
+  }
+  return SessionErrorCode.INTERNAL_ERROR;
+}
+
+/**
+ * Stream Reset Error Codes (Section 15.10.4)
  *
  * draft-ietf-moq-transport-18 Section 15.10.4 (Stream Reset Error Codes):
  * - GOING_AWAY (0x4) を追加
@@ -111,6 +137,19 @@ export const DataStreamErrorCode = {
 } as const;
 
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];
+
+/**
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知の Data Stream Reset エラーコードは INTERNAL_ERROR として扱う。
+ */
+const DATA_STREAM_ERROR_CODE_SET = new Set(Object.values(DataStreamErrorCode));
+
+export function normalizeDataStreamErrorCode(code: number): DataStreamErrorCode {
+  if (DATA_STREAM_ERROR_CODE_SET.has(code as unknown as DataStreamErrorCode)) {
+    return code as DataStreamErrorCode;
+  }
+  return DataStreamErrorCode.INTERNAL_ERROR;
+}
 
 /**
  * MOQT Error class
@@ -136,12 +175,35 @@ export class SessionError extends MoqtError {
 }
 
 /**
+ * Redirect 情報 (Section 10.6.1)
+ *
+ * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure):
+ * サーバーがクライアントに対して別の接続先への再接続を指示する。
+ * Track Namespace は tuple 形式で保持する。
+ */
+export interface RedirectInfo {
+  connectUri: string;
+  trackNamespace: Uint8Array[];
+  trackName: Uint8Array;
+}
+
+/**
  * Request error (SUBSCRIBE, PUBLISH, FETCH failed)
  */
 export class RequestError extends MoqtError {
-  constructor(message: string, code: RequestErrorCode) {
+  readonly retryInterval: bigint | undefined;
+  readonly redirect: RedirectInfo | undefined;
+
+  constructor(
+    message: string,
+    code: RequestErrorCode,
+    retryInterval?: bigint,
+    redirect?: RedirectInfo,
+  ) {
     super(message, code);
     this.name = "RequestError";
+    this.retryInterval = retryInterval;
+    this.redirect = redirect;
   }
 }
 
@@ -186,5 +248,26 @@ export class MalformedTrackError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "MalformedTrackError";
+  }
+}
+
+/**
+ * 閉じた Subgroup への送信を拒否するときに投げるエラー
+ *
+ * draft-ietf-moq-transport-18 §11.4.3 (Closing Subgroup Streams):
+ * "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
+ *  attempt to open a new stream to deliver additional Objects in that Subgroup."
+ *
+ * delivery timeout または STOP_SENDING で閉じた Subgroup への再送信を
+ * Publisher が検出し上位に伝搬するために使用する。
+ */
+export class ClosedSubgroupError extends Error {
+  constructor(
+    message: string,
+    readonly trackAlias: bigint,
+    readonly groupId: bigint,
+  ) {
+    super(message);
+    this.name = "ClosedSubgroupError";
   }
 }
