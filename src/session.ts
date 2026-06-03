@@ -22,9 +22,9 @@ import {
   MalformedTrackError,
   ProtocolViolationError,
   RequestError,
-  type RequestErrorCode,
   SessionError,
   SessionErrorCode,
+  normalizeRequestErrorCode,
 } from "./error";
 import {
   MessageType,
@@ -1788,7 +1788,21 @@ export class SessionImpl implements Session {
               }
               // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要 (§10.1 Request ID)
-              decodeRequestOkPayload(messagePayload);
+              const requestOk = decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.5:
+              // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+              //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+              //  If an endpoint receives Track Properties in one of these messages it MUST
+              //  close the session with a PROTOCOL_VIOLATION."
+              if (requestOk.trackProperties.length > 0) {
+                this.closeWithError(
+                  new SessionError(
+                    "SUBSCRIBE_NAMESPACE_OK must not contain Track Properties",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               resolved = true;
               const namespaceSubscription = this.createNamespaceSubscription(requestId);
               resolve(namespaceSubscription);
@@ -1809,7 +1823,7 @@ export class SessionImpl implements Session {
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
-                Number(decodedMsg.errorCode) as RequestErrorCode,
+                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
                 decodedMsg.retryInterval,
                 decodedMsg.redirect
                   ? {
@@ -2013,7 +2027,7 @@ export class SessionImpl implements Session {
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase,
-                Number(decodedMsg.errorCode) as RequestErrorCode,
+                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
                 decodedMsg.retryInterval,
                 decodedMsg.redirect
                   ? {
@@ -2218,7 +2232,21 @@ export class SessionImpl implements Session {
               // draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
               // draft-ietf-moq-transport-18 Section 10.1
-              decodeRequestOkPayload(messagePayload);
+              const requestOk = decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.5:
+              // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+              //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+              //  If an endpoint receives Track Properties in one of these messages it MUST
+              //  close the session with a PROTOCOL_VIOLATION."
+              if (requestOk.trackProperties.length > 0) {
+                this.closeWithError(
+                  new SessionError(
+                    "PUBLISH_NAMESPACE_OK must not contain Track Properties",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               if (resolved) {
                 // 二重応答は仕様違反
                 this.closeWithError(
@@ -2241,7 +2269,7 @@ export class SessionImpl implements Session {
               const decodedMsg = decodeRequestErrorPayload(messagePayload);
               const error = new RequestError(
                 decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
-                Number(decodedMsg.errorCode) as RequestErrorCode,
+                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
                 decodedMsg.retryInterval,
                 decodedMsg.redirect
                   ? {

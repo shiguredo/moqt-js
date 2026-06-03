@@ -94,6 +94,7 @@ export class PublisherImpl implements Publisher {
   private dataStreamCount = 0n;
 
   // セッションが利用する内部コールバック
+  goawayCallback?: (newSessionUri: string) => void;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: () => Promise<void>;

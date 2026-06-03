@@ -64,6 +64,7 @@ export interface Goaway {
  *   Length (16),
  *   Number of Parameters (vi64),
  *   Parameters (..),
+ *   Track Properties (..),
  * }
  */
 export interface RequestOk {

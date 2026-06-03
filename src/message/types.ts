@@ -44,7 +44,7 @@ export const MessageType = {
    *
    * draft-ietf-moq-transport-18:
    * Publisher が新しい Request ID を割り当てられない場合に送信する。
-   * SUBSCRIBE_NAMESPACE のフロー制御の一環。
+   * SUBSCRIBE_TRACKS のフロー制御の一環。
    * draft-ietf-moq-transport-18 Section 10.20 (PUBLISH_BLOCKED)
    */
   PUBLISH_BLOCKED: 0x0f,

@@ -296,8 +296,11 @@ export type IncomingStreamKind = "subgroup" | "fetch" | "unknown";
  * draft-ietf-moq-transport-18 Section 3.4, Section 11.4.2
  *
  * SUBGROUP_HEADER の type 値範囲: 0x10..0x1F, 0x30..0x3F, 0x50..0x5F, 0x70..0x7F
- * 現在はクライアント実装として必要な 0x10..0x1F と 0x30..0x3F のみを判定する。
- * 0x50..0x5F と 0x70..0x7F は relay 等が生成するため、受信時に未知として扱われる。
+ *
+ * draft-ietf-moq-transport-18 Section 3.4:
+ * 0b0XX1XXXX のパターンに一致する全範囲を subgroup として判定する。
+ * 0x50..0x5F / 0x70..0x7F は FIRST_OBJECT ビット (0x40) が設定された
+ * SUBGROUP_HEADER であり、relay 経由でクライアントに配送される場合もある。
  */
 export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKind {
   const streamTypeNum = Number(firstByte);
@@ -308,7 +311,9 @@ export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKin
 
   if (
     (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
-    (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f)
+    (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
+    (streamTypeNum >= 0x50 && streamTypeNum <= 0x5f) ||
+    (streamTypeNum >= 0x70 && streamTypeNum <= 0x7f)
   ) {
     return "subgroup";
   }

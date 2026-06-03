@@ -61,6 +61,7 @@ export class FetcherImpl implements Fetcher {
   private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING;
 
   // Session がストリームクローズ処理を差し込むためのコールバック
+  goawayCallback?: (newSessionUri: string) => void;
   onCancel?: () => Promise<void>;
 
   constructor(

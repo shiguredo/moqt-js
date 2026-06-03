@@ -11,21 +11,21 @@ import { MessageType } from "./types";
  * draft-ietf-moq-transport-18 §10.5:
  * > This document uses the shorthand PUBLISH_OK, REQUEST_UPDATE_OK,
  * > TRACK_STATUS_OK, SUBSCRIBE_NAMESPACE_OK, and PUBLISH_NAMESPACE_OK
- * > to refer to REQUEST_OK messages on the response stream of each
+ * > to refer to a REQUEST_OK sent in response to the corresponding
  * > request type.
  *
  * Wire format 上はすべて REQUEST_OK (0x7) だが、デバッグ表示用に
  * リクエスト種別に応じた別名を提供する。
+ *
+ * SUBSCRIBE_OK (0x04) と FETCH_OK (0x18) は独立したメッセージタイプであり、
+ * REQUEST_OK のエイリアスではない。
  */
 const REQUEST_OK_ALIASES: Record<number, string> = {
-  [MessageType.SUBSCRIBE]: "SUBSCRIBE_OK",
   [MessageType.PUBLISH]: "PUBLISH_OK",
-  [MessageType.FETCH]: "FETCH_OK",
+  0x02: "REQUEST_UPDATE_OK",
   [MessageType.TRACK_STATUS]: "TRACK_STATUS_OK",
   [MessageType.PUBLISH_NAMESPACE]: "PUBLISH_NAMESPACE_OK",
   [MessageType.SUBSCRIBE_NAMESPACE]: "SUBSCRIBE_NAMESPACE_OK",
-  [MessageType.SUBSCRIBE_TRACKS]: "SUBSCRIBE_TRACKS_OK",
-  0x2: "REQUEST_UPDATE_OK",
 };
 
 /**

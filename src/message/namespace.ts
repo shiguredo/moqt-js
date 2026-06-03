@@ -334,7 +334,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *
  * draft-ietf-moq-transport-18:
  * Publisher が新しい Request ID を割り当てられない場合に送信する。
- * SUBSCRIBE_NAMESPACE のフロー制御の一環。
+ * SUBSCRIBE_TRACKS のフロー制御の一環。
  *
  * PUBLISH_BLOCKED Message {
  *   Type (vi64) = 0xF,

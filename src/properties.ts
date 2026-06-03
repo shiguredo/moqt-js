@@ -654,6 +654,36 @@ export function decodeProperties(data: Uint8Array): Property[] {
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
       );
+      // draft-ietf-moq-transport-18 §12.7 (Immutable Properties):
+      // IMMUTABLE_PROPERTIES MUST NOT recursively contain an
+      // IMMUTABLE_PROPERTIES property. 早期検出のため、内側の KVP を走査して
+      // IMMUTABLE_PROPERTIES (0x0B) が再度現れないか検証する。
+      // 内側データが不完全な KVP の場合はスキップ（後段で検出される）。
+      if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES && extData.length > 0) {
+        try {
+          let innerOffset = 0;
+          let innerPreviousId = 0n;
+          while (innerOffset < extData.length) {
+            const [deltaId, deltaIdLen] = decodeVarint(extData.subarray(innerOffset));
+            const innerId = innerPreviousId + deltaId;
+            innerPreviousId = innerId;
+            if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+              throw new MalformedTrackError(
+                "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+              );
+            }
+            if (innerId % 2n === 0n) {
+              const [, valueLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
+              innerOffset += deltaIdLen + valueLen;
+            } else {
+              const [length, lengthLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
+              innerOffset += deltaIdLen + lengthLen + Number(length);
+            }
+          }
+        } catch {
+          // 内側データが KVP として不完全な場合はスキップ
+        }
+      }
       extensions.push({ id, data: extData });
       offset += deltaIdLen + lengthLen + Number(length);
     }

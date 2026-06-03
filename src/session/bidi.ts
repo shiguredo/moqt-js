@@ -8,7 +8,13 @@
 
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import type { MoqtObject } from "../dataStream";
-import { RequestError, type RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import {
+  RequestError,
+  SessionError,
+  SessionErrorCode,
+  normalizeRequestErrorCode,
+  normalizePublishDoneCode,
+} from "../error";
 import { FetcherImpl, type Fetcher } from "../fetcher";
 import {
   MessageType,
@@ -187,6 +193,8 @@ export async function bidiReadPublishResponse(
 
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodePublishOkPayload(msg.payload);
+      // PUBLISH 応答の GOAWAY コールバックを Impl に永続化
+      pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
 
@@ -201,7 +209,7 @@ export async function bidiReadPublishResponse(
       session.requestStreams.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        Number(decoded.errorCode) as RequestErrorCode,
+        normalizeRequestErrorCode(Number(decoded.errorCode)),
         decoded.retryInterval,
         decoded.redirect
           ? {
@@ -252,6 +260,8 @@ export async function bidiReadSubscribeResponse(
 
       const largestLocation = extractLargestLocation(decoded.parameters);
 
+      // SUBSCRIBE 応答の GOAWAY コールバックを Impl に永続化
+      pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingSubscribe.delete(requestId);
 
       const existingSubscriber = session.subscribersByAlias.get(decoded.trackAlias);
@@ -303,7 +313,7 @@ export async function bidiReadSubscribeResponse(
       session.requestStreams.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        Number(decoded.errorCode) as RequestErrorCode,
+        normalizeRequestErrorCode(Number(decoded.errorCode)),
       );
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
@@ -367,6 +377,8 @@ export async function bidiReadFetchResponse(
           ? (groupOrderParam.value[0] as GroupOrder)
           : undefined;
 
+      // FETCH 応答の GOAWAY コールバックを Impl に永続化
+      pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingFetch.delete(requestId);
       pending.impl.setFetchOkInfo(
         decoded.endOfTrack,
@@ -390,7 +402,7 @@ export async function bidiReadFetchResponse(
       session.requestStreams.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        Number(decoded.errorCode) as RequestErrorCode,
+        normalizeRequestErrorCode(Number(decoded.errorCode)),
       );
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
@@ -439,7 +451,7 @@ export async function bidiReadTrackStatusResponse(
       session.requestStreams.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        Number(decoded.errorCode) as RequestErrorCode,
+        normalizeRequestErrorCode(Number(decoded.errorCode)),
       );
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
@@ -494,7 +506,7 @@ export async function bidiReadRequestStreamMessages(
             const decoded = decodeRequestErrorPayload(msg.payload);
             const error = new RequestError(
               decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-              Number(decoded.errorCode) as RequestErrorCode,
+              normalizeRequestErrorCode(Number(decoded.errorCode)),
             );
             for (const [updateId, pendingUpdate] of session.pendingRequestUpdate) {
               if (pendingUpdate.targetRequestId === requestId) {
@@ -521,15 +533,23 @@ export async function bidiReadRequestStreamMessages(
           }
           case MessageType.GOAWAY: {
             // draft-ietf-moq-transport-18 §10.4:
-            // draft-ietf-moq-transport-18 §10.4:
-            // リクエストストリーム上の GOAWAY は当該リクエストのみに適用される
-            void decodeGoawayPayload(msg.payload);
-            session.closeWithError(
-              new SessionError(
-                `received duplicate GOAWAY on request stream ${requestId}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
-            );
+            // リクエストストリーム上の GOAWAY は当該リクエストの
+            // マイグレーションのみを目的とし、セッション全体は閉じない。
+            // "A GOAWAY MAY also be sent on a request stream to initiate
+            //  migration of that individual request."
+            const decoded = decodeGoawayPayload(msg.payload);
+            const publisher = session.publishers.get(requestId);
+            if (publisher?.goawayCallback) {
+              publisher.goawayCallback(decoded.newSessionUri);
+            }
+            const subscriber = session.subscribers.get(requestId);
+            if (subscriber?.goawayCallback) {
+              subscriber.goawayCallback(decoded.newSessionUri);
+            }
+            const fetcher = session.fetchers.get(requestId);
+            if (fetcher?.goawayCallback) {
+              fetcher.goawayCallback(decoded.newSessionUri);
+            }
             return;
           }
           default:
@@ -762,7 +782,10 @@ export function bidiHandlePublishDone(
   if (requestId !== undefined) {
     const subscriber = session.subscribers.get(requestId);
     if (subscriber) {
-      subscriber.handleEnd(msg.statusCode, msg.reasonPhrase);
+      // draft-ietf-moq-transport-18 §14 (Grease):
+      // 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う
+      const normalizedCode = normalizePublishDoneCode(Number(msg.statusCode));
+      subscriber.handleEnd(BigInt(normalizedCode), msg.reasonPhrase);
       session.subscribers.delete(requestId);
       session.subscribersByAlias.delete(subscriber.getTrackAlias());
     }
@@ -786,6 +809,21 @@ export function bidiHandleRequestUpdateOk(
   streamRequestId: bigint,
 ): void {
   const msg = decodeRequestOkPayload(payload);
+
+  // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+  // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+  //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+  //  If an endpoint receives Track Properties in one of these messages it MUST
+  //  close the session with a PROTOCOL_VIOLATION."
+  if (msg.trackProperties.length > 0) {
+    session.closeWithError(
+      new SessionError(
+        "REQUEST_UPDATE_OK must not contain Track Properties",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return;
+  }
 
   for (const param of msg.parameters) {
     if (param.type === MessageParameterType.LARGEST_OBJECT) {

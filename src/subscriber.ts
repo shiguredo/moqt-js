@@ -83,6 +83,7 @@ export class SubscriberImpl implements Subscriber {
   private subscriberTrackProperties: Property[] = [];
 
   // セッションが利用する内部コールバック
+  goawayCallback?: (newSessionUri: string) => void;
   onUnsubscribe?: () => Promise<void>;
   onUpdate?: (options: RequestUpdateOptions) => Promise<void>;
 

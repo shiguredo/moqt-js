@@ -355,7 +355,12 @@ test("classifyIncomingStreamType: 0x05 は fetch を返す", () => {
 test("classifyIncomingStreamType: サブグループ範囲は subgroup を返す", () => {
   fc.assert(
     fc.property(
-      fc.oneof(fc.integer({ min: 0x10, max: 0x1f }), fc.integer({ min: 0x30, max: 0x3f })),
+      fc.oneof(
+        fc.integer({ min: 0x10, max: 0x1f }),
+        fc.integer({ min: 0x30, max: 0x3f }),
+        fc.integer({ min: 0x50, max: 0x5f }),
+        fc.integer({ min: 0x70, max: 0x7f }),
+      ),
       (streamType) => {
         const result = classifyIncomingStreamType(BigInt(streamType));
         assert.equal(result, "subgroup");
@@ -369,7 +374,14 @@ test("classifyIncomingStreamType: 上記以外の全値は unknown を返す", (
     fc.property(
       fc
         .integer({ min: 0x00, max: 0xff })
-        .filter((n) => n !== 0x05 && !(n >= 0x10 && n <= 0x1f) && !(n >= 0x30 && n <= 0x3f)),
+        .filter(
+          (n) =>
+            n !== 0x05 &&
+            !(n >= 0x10 && n <= 0x1f) &&
+            !(n >= 0x30 && n <= 0x3f) &&
+            !(n >= 0x50 && n <= 0x5f) &&
+            !(n >= 0x70 && n <= 0x7f),
+        ),
       (streamType) => {
         const result = classifyIncomingStreamType(BigInt(streamType));
         assert.equal(result, "unknown");
