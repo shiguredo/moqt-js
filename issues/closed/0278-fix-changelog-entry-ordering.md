@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -36,3 +37,7 @@ CHANGES.md `## develop` セクション内で以下の順序違反がある:
 
 - CHANGES.md `## develop` セクションの全エントリが正しい種別順序になっている
 - `### misc` セクションも正しい順序になっている
+
+## 解決方法
+
+CHANGES.md `## develop` セクションの全エントリを `CHANGE → ADD → UPDATE → FIX` の順に並べ替えた。`### misc` サブセクション内も同様の順序に修正した。

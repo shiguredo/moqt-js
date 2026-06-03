@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -33,3 +34,13 @@ CHANGES.md は実際に行った変更の記録であるべきで、確認作業
 
 - CHANGES.md にコード変更のない確認エントリが存在しない
 - 残ったエントリの種別順序が正しい
+
+## 解決方法
+
+CHANGES.md から以下のコード変更のない確認エントリを削除した:
+
+- #0251: decodeProperties 再帰チェック確認
+- #0252: PUBLISH_BLOCKED コメント確認
+- #0253: REQUEST_OK JSDoc 確認
+
+これらの issue は実装確認のみでコード変更を伴わないため、CHANGES.md から削除した。
