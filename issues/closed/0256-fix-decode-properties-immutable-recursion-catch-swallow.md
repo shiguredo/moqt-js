@@ -3,6 +3,7 @@
 - Priority: High
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 - Relations: #0251 (先行実装。再帰チェック追加時の catch {} が原因)

@@ -279,7 +279,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
   assert.notEqual(closedWithError, undefined);
   assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(
-    closedWithError!.message.includes("REQUEST_UPDATE_OK must not contain Track Properties"),
+    closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
   );
 });
 

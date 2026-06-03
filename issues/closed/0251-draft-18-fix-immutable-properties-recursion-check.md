@@ -3,6 +3,7 @@
 - Priority: Low
 - Created: 2026-06-03
 - Model: DeepSeek V4 Pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
@@ -27,6 +28,10 @@ FETCH_OK や SUBSCRIBE_OK、PUBLISH の Track Properties は `decodeProperties` 
 `decodeProperties` のループ内で、デコードされた ID が 0x0B (IMMUTABLE_PROPERTIES) かつ data プロパティが存在する場合、`decodeImmutableProperties` を呼び出して再帰チェックを強制する。
 
 もしくは、`decodeProperties` は低レベルデコーダとしてそのまま維持し、呼び出し側で `parseProperties` を使用するように統一する。
+
+## 解決方法
+
+`src/properties.ts:657-686` (`decodeProperties`) に既に IMMUTABLE_PROPERTIES 再帰検証が実装されていることを確認した。内側 KVP を走査し、IMMUTABLE_PROPERTIES (0x0B) が再度現れた場合に `MalformedTrackError` を throw する。
 
 ## 完了条件
 

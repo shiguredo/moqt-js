@@ -533,6 +533,15 @@ export interface NamespaceSubscriptionCallbacks {
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
+  /**
+   * GOAWAY 受信時に呼ばれる
+   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * リクエストストリーム上の GOAWAY は当該リクエストの
+   * マイグレーションのみを目的とする。
+   *
+   * @param newSessionUri - 新しいセッション URI
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -570,6 +579,15 @@ export interface TracksSubscriptionCallbacks {
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
+  /**
+   * GOAWAY 受信時に呼ばれる
+   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * リクエストストリーム上の GOAWAY は当該リクエストの
+   * マイグレーションのみを目的とする。
+   *
+   * @param newSessionUri - 新しいセッション URI
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -594,6 +612,15 @@ export interface NamespacePublicationCallbacks {
    * エラー時のコールバック
    */
   error?: (error: Error) => void;
+  /**
+   * GOAWAY 受信時に呼ばれる
+   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * リクエストストリーム上の GOAWAY は当該リクエストの
+   * マイグレーションのみを目的とする。
+   *
+   * @param newSessionUri - 新しいセッション URI
+   */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /**
@@ -1801,7 +1828,7 @@ export class SessionImpl implements Session {
               if (requestOk.trackProperties.length > 0) {
                 this.closeWithError(
                   new SessionError(
-                    "SUBSCRIBE_NAMESPACE_OK must not contain Track Properties",
+                    "track properties must be empty in SUBSCRIBE_NAMESPACE_OK",
                     SessionErrorCode.PROTOCOL_VIOLATION,
                   ),
                 );
@@ -1867,6 +1894,7 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
+              callbacks.goaway?.(decodedMsg.newSessionUri);
               subscription.state = "closed";
               callbacks.error?.(
                 new Error(
@@ -2031,7 +2059,21 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+              // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+              //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+              //  If an endpoint receives Track Properties in one of these messages it MUST
+              //  close the session with a PROTOCOL_VIOLATION."
+              const requestOk = decodeRequestOkPayload(messagePayload);
+              if (requestOk.trackProperties.length > 0) {
+                this.closeWithError(
+                  new SessionError(
+                    "track properties must be empty in SUBSCRIBE_TRACKS_OK",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               resolved = true;
               const tracksSubscription = this.createTracksSubscription(requestId);
               resolve(tracksSubscription);
@@ -2088,6 +2130,7 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
+              callbacks.goaway?.(decodedMsg.newSessionUri);
               subscription.state = "closed";
               callbacks.error?.(
                 new Error(
@@ -2284,7 +2327,7 @@ export class SessionImpl implements Session {
               if (requestOk.trackProperties.length > 0) {
                 this.closeWithError(
                   new SessionError(
-                    "PUBLISH_NAMESPACE_OK must not contain Track Properties",
+                    "track properties must be empty in PUBLISH_NAMESPACE_OK",
                     SessionErrorCode.PROTOCOL_VIOLATION,
                   ),
                 );
@@ -2351,6 +2394,7 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
+              callbacks?.goaway?.(decodedMsg.newSessionUri);
               publication.state = "closed";
               callbacks?.error?.(
                 new Error(

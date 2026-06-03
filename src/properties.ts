@@ -419,7 +419,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     //  Immutable Properties key." → Track is malformed
     if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       throw new MalformedTrackError(
-        "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+        "immutable properties must not recursively contain another immutable properties key",
       );
     }
 
@@ -552,7 +552,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         //  Immutable Properties key." → Track is malformed
         if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
           throw new MalformedTrackError(
-            "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+            "immutable properties must not recursively contain another immutable properties key",
           );
         }
 
@@ -669,7 +669,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
             innerPreviousId = innerId;
             if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
               throw new MalformedTrackError(
-                "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+                "immutable properties must not recursively contain another immutable properties key",
               );
             }
             if (innerId % 2n === 0n) {

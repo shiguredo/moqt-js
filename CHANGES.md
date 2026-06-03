@@ -134,6 +134,26 @@
   - 既存の normalize 関数を Object.values().includes() から Set.has() にリファクタリング
   - `src/error.test.ts` にテストを追加する
   - @voluntas
+- [FIX] エラーメッセージの先頭を小文字に修正する (#0262)
+  - AGENTS.md の規約に基づき、大文字始まりのエラーメッセージ 4 箇所を小文字始まりに修正
+  - テストも追従修正する
+  - @voluntas
+- [ADD] SUBSCRIBE_TRACKS_OK の Track Properties 検証を追加する (#0263)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`startTracksStreamLoop` で Track Properties 非空時に PROTOCOL_VIOLATION
+  - @voluntas
+- [ADD] REQUEST_OK_ALIASES に SUBSCRIBE_TRACKS_OK を追加する (#0264)
+  - `debug.ts` の REQUEST_OK_ALIASES に SUBSCRIBE_TRACKS のエントリを追加
+  - @voluntas
+- [ADD] namespace 系リクエストのコールバックに goaway を追加する (#0265)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`NamespaceSubscriptionCallbacks` / `TracksSubscriptionCallbacks` / `NamespacePublicationCallbacks` に goaway コールバックを追加
+  - `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` の GOAWAY ハンドラでコールバックを呼ぶ
+  - @voluntas
+- [FIX] goawayCallback 永続化の冗長コメントを削除する (#0267)
+  - `src/session/bidi.ts` の冗長コメント 3 箇所を削除する
+  - @voluntas
+- [FIX] TRACK_STATUS の GOAWAY ハンドリングにコメントを追記する (#0271)
+  - `bidiReadTrackStatusResponse` の GOAWAY 分岐に goawayCallback 不要の根拠をコメント追記
+  - @voluntas
   - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
   - @voluntas
 - [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックが実装済みであることを確認する (#0251)

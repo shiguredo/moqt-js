@@ -239,7 +239,6 @@ export async function bidiReadPublishResponse(
         session.closeWithError(error);
         return;
       }
-      // PUBLISH 応答の GOAWAY コールバックを Impl に永続化
       pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
@@ -315,7 +314,6 @@ export async function bidiReadSubscribeResponse(
 
       const largestLocation = extractLargestLocation(decoded.parameters);
 
-      // SUBSCRIBE 応答の GOAWAY コールバックを Impl に永続化
       pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingSubscribe.delete(requestId);
 
@@ -441,7 +439,6 @@ export async function bidiReadFetchResponse(
           ? (groupOrderParam.value[0] as GroupOrder)
           : undefined;
 
-      // FETCH 応答の GOAWAY コールバックを Impl に永続化
       pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingFetch.delete(requestId);
       pending.impl.setFetchOkInfo(
@@ -528,6 +525,8 @@ export async function bidiReadTrackStatusResponse(
       );
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
+      // TRACK_STATUS は単発リクエストであり ongoing loop を持たないため
+      // goawayCallback は不要。newSessionUri は Error.message 経由で通知する。
       const decoded = decodeGoawayPayload(msg.payload);
       if (decoded.requestId !== null) {
         session.closeWithError(
@@ -920,7 +919,7 @@ export function bidiHandleRequestUpdateOk(
   if (msg.trackProperties.length > 0) {
     session.closeWithError(
       new SessionError(
-        "REQUEST_UPDATE_OK must not contain Track Properties",
+        "track properties must be empty in REQUEST_UPDATE_OK",
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
     );

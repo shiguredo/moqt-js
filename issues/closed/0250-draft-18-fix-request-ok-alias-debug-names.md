@@ -3,6 +3,7 @@
 - Priority: Low
 - Created: 2026-06-03
 - Model: DeepSeek V4 Pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
@@ -47,6 +48,10 @@ const REQUEST_OK_ALIASES: Record<number, string> = {
   [MessageType.SUBSCRIBE_NAMESPACE]: "SUBSCRIBE_NAMESPACE_OK",
 };
 ```
+
+## 解決方法
+
+`src/message/debug.ts:23-29` の `REQUEST_OK_ALIASES` は既に仕様の 5 エイリアス (`PUBLISH_OK`, `REQUEST_UPDATE_OK`, `TRACK_STATUS_OK`, `SUBSCRIBE_NAMESPACE_OK`, `PUBLISH_NAMESPACE_OK`) のみを含んでいることを確認した。SUBSCRIBE_OK と FETCH_OK はエントリに含まれていない。
 
 ## 完了条件
 

@@ -6,6 +6,7 @@
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 - Relations: 全 #0255-#0271 の解決後に実施（CHANGES.md エントリは全修正の最終状態を反映するため）
+- Completed: 2026-06-03
 
 ## 目的
 

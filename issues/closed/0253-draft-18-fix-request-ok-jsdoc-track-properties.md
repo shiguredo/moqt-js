@@ -3,6 +3,7 @@
 - Priority: Low
 - Created: 2026-06-03
 - Model: DeepSeek V4 Pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
@@ -43,6 +44,10 @@ JSDoc コメントの軽微な誤り。`RequestOk` インターフェースや�
 ## 設計方針
 
 JSDoc の wire format 図に `Track Properties (..),` を追加する。
+
+## 解決方法
+
+`src/message/session.ts:62-68` の REQUEST_OK JSDoc wire format 図に既に `Track Properties (..),` が含まれていることを確認した。
 
 ## 完了条件
 

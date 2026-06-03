@@ -3,6 +3,7 @@
 - Priority: Medium
 - Created: 2026-06-03
 - Model: DeepSeek V4 Pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
@@ -47,6 +48,16 @@ if (
 2. `src/session/params.ts:298-301` のコメントから「未知として扱われる」の記述を削除し、全 4 範囲を正しく認識していることを記載する
 
 3. `src/session.prop.ts:358` の `fc.oneof` に `0x50..0x5F` と `0x70..0x7F` の範囲を追加する。またフィルタ (`session.prop.ts:372`) もこれらの範囲が "subgroup" として識別されるよう更新する
+
+## 解決方法
+
+修正は既に全適用済みであることを確認した：
+
+1. `src/session/params.ts:312-316` (`classifyIncomingStreamType`) が `0x50..0x5F` と `0x70..0x7F` を "subgroup" として認識
+2. `src/session/params.ts:298-303` のコメントが全範囲を正しく記載
+3. `src/session.prop.ts:361-362` / `src/session.prop.ts:382-383` の PBT テストがこれらの範囲をカバー
+
+コード・テスト・コメントすべて既に修正済み。
 
 ## 完了条件
 

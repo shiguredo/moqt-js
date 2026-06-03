@@ -3,6 +3,7 @@
 - Priority: Low
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
+- Completed: 2026-06-03
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 - Relations: #0256 (IMMUTABLE_PROPERTIES 再帰チェック修正と同時に対応可能)

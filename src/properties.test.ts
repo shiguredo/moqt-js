@@ -489,7 +489,7 @@ test("decodeProperties: IMMUTABLE_PROPERTIES 再帰検出で MalformedTrackError
   assert.throws(
     () => decodeProperties(data),
     MalformedTrackError,
-    "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+    "immutable properties must not recursively contain another immutable properties key",
   );
 });
 
