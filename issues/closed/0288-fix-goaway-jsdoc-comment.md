@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -35,3 +36,9 @@ draft-ietf-moq-transport-18 §10.4:
 ## 完了条件
 
 - JSDoc コメントが仕様と一致している
+
+## 解決方法
+
+`src/message/session.ts` の `Goaway` インターフェース JSDoc の Request ID 説明を「処理された最後のリクエスト ID より大きい最小の Request ID」から「処理されなかった可能性がある最小の peer Request ID」に修正した。
+
+変更ファイル: `src/message/session.ts` (コメント 2 行修正)。

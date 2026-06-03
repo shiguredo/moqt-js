@@ -683,7 +683,8 @@ export function decodeProperties(data: Uint8Array): Property[] {
             }
           } catch (err) {
             if (err instanceof IncompleteDataError) {
-              break; // 不完全な内側 KVP は後段の decodeImmutableProperties で検出される
+              // 不完全な内側 KVP は後段の decodeImmutableProperties で検出される
+              break;
             }
             throw err;
           }

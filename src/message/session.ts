@@ -32,8 +32,8 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
  * }
  *
  * - Request ID: Present only when sent on the control stream.
- *   制御ストリーム上では、GOAWAY 送信前に処理された最後の
- *   リクエスト ID より大きい最小の Request ID を設定する。
+ *   制御ストリーム上では、GOAWAY 送信前に処理されなかった
+ *   可能性がある最小の peer Request ID を設定する。
  *   リクエストストリーム上では null。
  */
 export interface Goaway {

@@ -239,6 +239,14 @@
   - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、 条件を削除し省略時はデフォルト値 128 を使用する
   - @voluntas
 
+- [FIX] goaway JSDoc コメントを仕様に合わせて修正する (#0288)
+  - Goaway インターフェースの Request ID 説明を正しい仕様文言に修正する
+  - @voluntas
+
+- [FIX] 誤解を招くコメントを修正する (#0294)
+  - 末尾コメントを行コメントに変更、誤った内容のコメントを修正する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -672,6 +680,14 @@ Media over QAUIC Transport draft-17 対応
 
 - [FIX] Fetch 先頭オブジェクトに PRIORITY_PRESENT を MUST で要求していたのを修正する (#0287)
   - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、 条件を削除し省略時はデフォルト値 128 を使用する
+  - @voluntas
+
+- [FIX] goaway JSDoc コメントを仕様に合わせて修正する (#0288)
+  - Goaway インターフェースの Request ID 説明を正しい仕様文言に修正する
+  - @voluntas
+
+- [FIX] 誤解を招くコメントを修正する (#0294)
+  - 末尾コメントを行コメントに変更、誤った内容のコメントを修正する
   - @voluntas
 
 ### misc

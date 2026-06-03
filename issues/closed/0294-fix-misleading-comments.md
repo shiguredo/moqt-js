@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -28,3 +29,15 @@
 ## 完了条件
 
 - 全コメントが正確で規約に準拠している
+
+## 解決方法
+
+以下のコメント修正を実施した:
+
+1. `src/session.ts` PUBLISH コメント: #0274 で PUBLISH case 削除時に除去済み
+2. `src/session.ts` "expected odd" → "expected even": #0273 で修正済み
+3. `src/message/session.ts` GOAWAY JSDoc: #0288 で修正済み
+4. `src/properties.ts:686` 末尾コメント: 行コメントに変更
+5. `src/session/bidi.ts` TRACK_STATUS GOAWAY コメント: #0280 で修正済み
+
+変更ファイル: `src/properties.ts` (1 箇所)。
