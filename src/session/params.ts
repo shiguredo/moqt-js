@@ -91,6 +91,15 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     });
   }
 
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-18 Section 12.1 (SUBGROUP_DELIVERY_TIMEOUT)
+  if (options?.subgroupDeliveryTimeout !== undefined) {
+    validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
+    trackProperties.push({
+      id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT,
+      value: options.subgroupDeliveryTimeout,
+    });
+  }
+
   // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-18 Section 12.3 (MAX CACHE DURATION)
   if (options?.maxCacheDuration !== undefined) {
     validateNonNegative(options.maxCacheDuration, "MAX_CACHE_DURATION");
@@ -164,6 +173,15 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     parameters.push({
       type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
       value: encodeVarint(options.deliveryTimeout),
+    });
+  }
+
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-18 Section 10.2.3
+  if (options?.subgroupDeliveryTimeout !== undefined) {
+    validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+      value: encodeVarint(options.subgroupDeliveryTimeout),
     });
   }
 

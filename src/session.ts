@@ -239,6 +239,15 @@ export interface PublishOptions {
   deliveryTimeout?: bigint;
 
   /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 12.1 (SUBGROUP_DELIVERY_TIMEOUT)
+   *
+   * Subgroup 内のオブジェクトを配信する最大時間。
+   * 0 はタイムアウトなしを意味する。
+   */
+  subgroupDeliveryTimeout?: bigint;
+
+  /**
    * Publisher Priority（0-255）
    * draft-ietf-moq-transport-18 Section 12.4 (DEFAULT PUBLISHER PRIORITY)
    *
@@ -361,6 +370,15 @@ export interface JoiningFetchOptions {
    * LARGEST_OBJECT がない場合や、サーバーからのエラーを受け取る
    */
   onError?: (error: Error) => void;
+
+  /**
+   * Fill Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 10.2.5 (FILL TIMEOUT Parameter)
+   *
+   * relay が欠損 object の fill 待機に費やす最大時間。
+   * 0 は即座に利用可能な object のみを要求。
+   */
+  fillTimeout?: bigint;
 }
 
 /**
@@ -390,6 +408,15 @@ export interface SubscribeOptions {
    * タイムアウトを超過したオブジェクトは配信されない。
    */
   deliveryTimeout?: bigint;
+
+  /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 10.2.3 (SUBGROUP_DELIVERY_TIMEOUT)
+   *
+   * Subgroup 内のオブジェクトを配信する最大時間。
+   * 0 はタイムアウトなしを意味する。
+   */
+  subgroupDeliveryTimeout?: bigint;
 
   /**
    * Subscriber Priority（0-255）
@@ -475,6 +502,15 @@ export interface FetchCallbacks {
  * Fetch options
  */
 export interface FetchOptions {
+  /**
+   * Fill Timeout（ミリ秒）
+   * draft-ietf-moq-transport-18 Section 10.2.5 (FILL TIMEOUT Parameter)
+   *
+   * relay が欠損 object の fill 待機に費やす最大時間。
+   * 0 は即座に利用可能な object のみを要求。
+   */
+  fillTimeout?: bigint;
+
   /**
    * 開始位置
    */

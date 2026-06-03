@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -38,3 +39,10 @@ draft-ietf-moq-transport-18:
 - SUBGROUP_DELIVERY_TIMEOUT が publish/subscribe API から設定可能
 - FILL_TIMEOUT が fetch API から設定可能
 - テストが追加されている
+
+## 解決方法
+
+- `PublishOptions` / `SubscribeOptions` に `subgroupDeliveryTimeout?: bigint` を追加し、`buildPublishTrackProperties` / `buildSubscribeParameters` でそれぞれ Track Property (0x06) / Message Parameter (0x06) としてエンコードする
+- `FetchOptions` / `JoiningFetchOptions` に `fillTimeout?: bigint` を追加し、`bidiSendJoiningFetch` で FILL_TIMEOUT (0x0a) パラメータとしてエンコードする
+
+変更ファイル: `session.ts`, `session/params.ts`, `session/bidi.ts`。全テスト PASS 確認済み。

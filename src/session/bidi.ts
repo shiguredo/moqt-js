@@ -46,6 +46,7 @@ import {
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
+import { encodeVarint } from "../varint";
 import type { JoiningFetchOptions, SessionState, TrackStatusResult } from "../session";
 import { extractForwardState, extractLargestLocation, validateFetchOkEndLocation } from "./params";
 
@@ -837,8 +838,16 @@ export async function bidiSendJoiningFetch(
       joiningRequestId: subscribeRequestId,
       joiningStart: options.start,
     },
-    parameters: [],
+    parameters: [] as Parameter[],
   };
+
+  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-18 Section 10.2.5
+  if (options.fillTimeout !== undefined) {
+    fetchMsg.parameters.push({
+      type: MessageParameterType.FILL_TIMEOUT,
+      value: encodeVarint(options.fillTimeout),
+    });
+  }
 
   try {
     const payload = encodeFetchPayload(fetchMsg);

@@ -241,6 +241,11 @@
   - PBT テストを に移行する
   - @voluntas
 
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
+  - / に を追加する
+  - / に を追加する
+  - @voluntas
+
 ### misc
 
 - [ADD] Object Forwarding Preference の enum を追加する (#0239)
@@ -699,6 +704,11 @@ Media over QAUIC Transport draft-17 対応
 - [ADD] Parameter Scope 検証を追加する (#0276)
   - draft-ietf-moq-transport-18 §10.2.1 に基づき、 を新設し許可パラメータ集合と検証関数を実装する
   - PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK で検証を追加する
+  - @voluntas
+
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
+  - / に を追加する
+  - / に を追加する
   - @voluntas
 
 ### misc
