@@ -41,16 +41,19 @@ if (seenTypes.has(param.type)) {
 
 ## 設計方針
 
-1. AUTHORIZATION_TOKEN (0x03) を重複許可の例外とする（仕様上、このパラメータのみが明示的に繰り返しを許可している）
-2. 他のパラメータ型は引き続き重複を拒否する
+1. `decodeParameters` の重複チェックで AUTHORIZATION_TOKEN (0x03) をスキップする。他のパラメータ型は引き続き重複を拒否する
+2. 仕様 Section 10.2.2 の「as long as the combination of Token Type and Token Value are unique after resolving any aliases」の制約については、現状のコードが Token の中身を解析していないため本 issue のスコープ外とする（同一内容の AUTHORIZATION_TOKEN 重複は検知されないが、これは別 issue で対応）
 
 ## 完了条件
 
 - AUTHORIZATION_TOKEN (0x03) が複数回出現しても重複エラーが発生しないこと
-- 他のパラメータ型の重複は引き続き PROTOCOL_VIOLATION で拒否されること
-- 関連するテストが追加されていること
+- 他のパラメータ型（例: 0x02, 0x04 等）の重複は引き続き `ProtocolViolationError` で拒否されること
+- `parameter.test.ts` の既存テスト「重複パラメータで ProtocolViolationError」が修正後も通過すること（後退防止）
 
-## 解決方法
+### 必要なテストケース
 
-1. `decodeParameters` の重複チェックで AUTHORIZATION_TOKEN (0x03) をスキップする
-2. PBT で AUTHORIZATION_TOKEN 複数指定のラウンドトリップテストを追加する
+1. AUTHORIZATION_TOKEN が 2 回出現 → 正常デコード、両方の値が取得可能
+2. AUTHORIZATION_TOKEN が 3 回出現 → 同上
+3. AUTHORIZATION_TOKEN 以外のパラメータ（0x02 など）が重複 → `ProtocolViolationError`
+4. AUTHORIZATION_TOKEN + 他パラメータの正常混在 → 正常デコード
+5. `parameter.prop.ts` で AUTHORIZATION_TOKEN 複数指定のラウンドトリップ PBT を追加
