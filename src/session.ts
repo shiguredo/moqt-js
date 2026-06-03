@@ -3558,7 +3558,9 @@ export class SessionImpl implements Session {
     try {
       // draft-ietf-moq-transport-18 §11.5.2 (Padding Datagrams):
       // "The receiver MUST discard the contents of a padding datagram."
-      if (data.length > 0) {
+      // PADDING datagram (0x132b3e29) の 4 バイト varint 先頭バイトは 0xe4。
+      // data.length < 4 の場合は完全な varint をデコードできないため PADDING ではない。
+      if (data.length >= 4 && data[0] === 0xe4) {
         const [datagramType] = decodeVarint(data, 0);
         if (Number(datagramType) === 0x132b3e29) {
           // PADDING datagram は破棄して何もしない

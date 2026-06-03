@@ -218,6 +218,11 @@
   - PUBLISH は §10.19 の双方向ストリーム上で送られるべきであり、SUBSCRIBE_NAMESPACE 応答上ではプロトコル違反
   - @voluntas
 
+- [UPDATE] PADDING datagram の検出を先頭バイトパターンチェックに改善して短データ時の不要な例外送出を防止する (#0275)
+  - draft-ietf-moq-transport-18 §11.5.2 に基づき、`handleIncomingDatagram` の PADDING 判定を `data[0] === 0xe4` 事前フィルタに変更する
+  - 1〜3 バイトの短いデータで `IncompleteDataError` が送出されないようにする
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -630,6 +635,11 @@ Media over QAUIC Transport draft-17 対応
   - SUBSCRIBER_PRIORITY / GROUP_ORDER / FORWARD を varint ではなく uint8 として送信する
   - Subgroup ストリーム処理で `MalformedTrackError` を握り潰さず MALFORMED_TRACK として受信ストリームを cancel する
   - `handleIncomingStream()` の到達不能な Subgroup 分岐を削除する
+  - @voluntas
+
+- [UPDATE] PADDING datagram の検出を先頭バイトパターンチェックに改善して短データ時の不要な例外送出を防止する (#0275)
+  - draft-ietf-moq-transport-18 §11.5.2 に基づき、`handleIncomingDatagram` の PADDING 判定を `data[0] === 0xe4` 事前フィルタに変更する
+  - 1〜3 バイトの短いデータで `IncompleteDataError` が送出されないようにする
   - @voluntas
 
 ### misc
