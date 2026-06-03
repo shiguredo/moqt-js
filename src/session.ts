@@ -791,6 +791,10 @@ export class SessionImpl implements Session {
 
   // GOAWAY 状態
   private receivedGoaway = false;
+  // リクエストストリームごとの GOAWAY 受信済みフラグ
+  // draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+  // 単一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
+  private goawayReceivedOnRequestStreams = new Set<bigint>();
   private sentGoaway = false;
   private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -1842,7 +1846,27 @@ export class SessionImpl implements Session {
             case MessageType.GOAWAY: {
               // draft-ietf-moq-transport-18 §10.4:
               // リクエストストリーム上の GOAWAY は当該リクエストのみに適用される
+              // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
+              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate goaway on request stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              this.goawayReceivedOnRequestStreams.add(requestId);
               const decodedMsg = decodeGoawayPayload(messagePayload);
+              if (decodedMsg.requestId !== null) {
+                this.closeWithError(
+                  new SessionError(
+                    "goaway on request stream must not include request id",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               subscription.state = "closed";
               callbacks.error?.(
                 new Error(
@@ -2044,7 +2068,26 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.GOAWAY: {
+              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate goaway on request stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              this.goawayReceivedOnRequestStreams.add(requestId);
               const decodedMsg = decodeGoawayPayload(messagePayload);
+              if (decodedMsg.requestId !== null) {
+                this.closeWithError(
+                  new SessionError(
+                    "goaway on request stream must not include request id",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               subscription.state = "closed";
               callbacks.error?.(
                 new Error(
@@ -2288,7 +2331,26 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.GOAWAY: {
+              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
+                this.closeWithError(
+                  new SessionError(
+                    "received duplicate goaway on request stream",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+              this.goawayReceivedOnRequestStreams.add(requestId);
               const decodedMsg = decodeGoawayPayload(messagePayload);
+              if (decodedMsg.requestId !== null) {
+                this.closeWithError(
+                  new SessionError(
+                    "goaway on request stream must not include request id",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
               publication.state = "closed";
               callbacks?.error?.(
                 new Error(
@@ -3220,8 +3282,20 @@ export class SessionImpl implements Session {
 
     // draft-ietf-moq-transport-18 §10.4:
     // 制御ストリーム上の GOAWAY には Request ID が必須。
+    // Request ID が不在の場合は PROTOCOL_VIOLATION でセッションを閉じる。
+    if (msg.requestId === null) {
+      this.closeWithError(
+        new SessionError(
+          "goaway on control stream must include request id",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return { error: "GOAWAY on control stream missing Request ID" };
+    }
+
+    // draft-ietf-moq-transport-18 §10.4:
     // 受信側のパリティと一致しなければ INVALID_REQUEST_ID でセッションを閉じる。
-    if (msg.requestId !== null && msg.requestId % 2n !== 0n) {
+    if (msg.requestId % 2n !== 0n) {
       this.closeWithError(
         new SessionError(
           `GOAWAY request ID parity mismatch: ${msg.requestId} (expected odd)`,

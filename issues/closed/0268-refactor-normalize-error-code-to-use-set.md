@@ -7,6 +7,7 @@
 - Relations: #0260 (新規追加の normalizeSessionErrorCode / normalizeDataStreamErrorCode も Set ベースで実装すること)
 
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 

@@ -120,6 +120,20 @@
   - 内側変数 `length` を `innerLength` にリネームしシャドウイングを解消する
   - `src/properties.test.ts` に再帰検出テストと不完全データテストを追加する
   - @voluntas
+- [FIX] 制御ストリーム上 GOAWAY の Request ID 不在を PROTOCOL_VIOLATION で検出する (#0257)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`handleGoaway` で `requestId === null` の場合にセッションを閉じる
+  - @voluntas
+- [FIX] リクエストストリーム上 GOAWAY の Request ID 存在を PROTOCOL_VIOLATION で検出する (#0258)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、全リクエストストリーム GOAWAY 受信箇所で Request ID 非 null チェックを追加
+  - @voluntas
+- [FIX] 同一リクエストストリーム上の重複 GOAWAY を PROTOCOL_VIOLATION で検出する (#0259)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`goawayReceivedOnRequestStreams` Set で追跡し重複検出
+  - @voluntas
+- [FIX] normalizeSessionErrorCode と normalizeDataStreamErrorCode を追加する (#0260, #0268)
+  - draft-ietf-moq-transport-18 §14 に基づき、Session Termination / Data Stream Reset エラーコードの Grease 正規化関数を追加
+  - 既存の normalize 関数を Object.values().includes() から Set.has() にリファクタリング
+  - `src/error.test.ts` にテストを追加する
+  - @voluntas
   - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
   - @voluntas
 - [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックが実装済みであることを確認する (#0251)

@@ -6,6 +6,7 @@
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 - Relations: #0257 (制御ストリーム GOAWAY 検証), #0258 (リクエストストリーム GOAWAY 検証)
+- Completed: 2026-06-03
 
 ## 目的
 

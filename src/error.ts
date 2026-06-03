@@ -78,8 +78,10 @@ export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErr
  * Receipt of an unknown error code MUST be treated as equivalent to
  * INTERNAL_ERROR for that context.
  */
+const REQUEST_ERROR_CODE_SET = new Set(Object.values(RequestErrorCode));
+
 export function normalizeRequestErrorCode(code: number): RequestErrorCode {
-  if (Object.values(RequestErrorCode).includes(code as RequestErrorCode)) {
+  if (REQUEST_ERROR_CODE_SET.has(code as RequestErrorCode)) {
     return code as RequestErrorCode;
   }
   return RequestErrorCode.INTERNAL_ERROR;
@@ -89,11 +91,26 @@ export function normalizeRequestErrorCode(code: number): RequestErrorCode {
  * draft-ietf-moq-transport-18 §14 (Grease):
  * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
  */
+const PUBLISH_DONE_CODE_SET = new Set(Object.values(PublishDoneStatusCode));
+
 export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
-  if (Object.values(PublishDoneStatusCode).includes(code as unknown as PublishDoneStatusCode)) {
+  if (PUBLISH_DONE_CODE_SET.has(code as unknown as PublishDoneStatusCode)) {
     return code as PublishDoneStatusCode;
   }
   return PublishDoneStatusCode.INTERNAL_ERROR;
+}
+
+/**
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知の Session Termination エラーコードは INTERNAL_ERROR として扱う。
+ */
+const SESSION_ERROR_CODE_SET = new Set(Object.values(SessionErrorCode));
+
+export function normalizeSessionErrorCode(code: number): SessionErrorCode {
+  if (SESSION_ERROR_CODE_SET.has(code as unknown as SessionErrorCode)) {
+    return code as SessionErrorCode;
+  }
+  return SessionErrorCode.INTERNAL_ERROR;
 }
 
 /**
@@ -120,6 +137,19 @@ export const DataStreamErrorCode = {
 } as const;
 
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];
+
+/**
+ * draft-ietf-moq-transport-18 §14 (Grease):
+ * 未知の Data Stream Reset エラーコードは INTERNAL_ERROR として扱う。
+ */
+const DATA_STREAM_ERROR_CODE_SET = new Set(Object.values(DataStreamErrorCode));
+
+export function normalizeDataStreamErrorCode(code: number): DataStreamErrorCode {
+  if (DATA_STREAM_ERROR_CODE_SET.has(code as unknown as DataStreamErrorCode)) {
+    return code as DataStreamErrorCode;
+  }
+  return DataStreamErrorCode.INTERNAL_ERROR;
+}
 
 /**
  * MOQT Error class

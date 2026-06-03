@@ -6,6 +6,7 @@
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 - Relations: #0268 (Set ベース実装へのリファクタリング)
+- Completed: 2026-06-03
 
 ## 目的
 

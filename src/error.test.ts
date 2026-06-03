@@ -16,6 +16,8 @@ import {
   RequestErrorCode,
   normalizeRequestErrorCode,
   normalizePublishDoneCode,
+  normalizeSessionErrorCode,
+  normalizeDataStreamErrorCode,
   SessionError,
   SessionErrorCode,
 } from "./error";
@@ -85,6 +87,27 @@ test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規�
   // draft-ietf-moq-transport-18 §14: Grease PUBLISH_DONE codes
   assert.equal(normalizePublishDoneCode(0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
   assert.equal(normalizePublishDoneCode(0x7f * 1 + 0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
+});
+
+test("normalizeSessionErrorCode: 既知のコードはそのまま通す", () => {
+  assert.equal(normalizeSessionErrorCode(0x0), SessionErrorCode.NO_ERROR);
+  assert.equal(normalizeSessionErrorCode(0x1), SessionErrorCode.INTERNAL_ERROR);
+  assert.equal(normalizeSessionErrorCode(0x3), SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
+  assert.equal(normalizeSessionErrorCode(0x99), SessionErrorCode.INTERNAL_ERROR);
+  assert.equal(normalizeSessionErrorCode(0x9d), SessionErrorCode.INTERNAL_ERROR);
+});
+
+test("normalizeDataStreamErrorCode: 既知のコードはそのまま通す", () => {
+  assert.equal(normalizeDataStreamErrorCode(0x0), DataStreamErrorCode.INTERNAL_ERROR);
+  assert.equal(normalizeDataStreamErrorCode(0x1), DataStreamErrorCode.CANCELLED);
+});
+
+test("normalizeDataStreamErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
+  assert.equal(normalizeDataStreamErrorCode(0x99), DataStreamErrorCode.INTERNAL_ERROR);
+  assert.equal(normalizeDataStreamErrorCode(0x9d), DataStreamErrorCode.INTERNAL_ERROR);
 });
 
 test("ClosedSubgroupError は Error を継承し name/trackAlias/groupId を保持する", () => {
