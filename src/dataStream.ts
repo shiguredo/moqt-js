@@ -1094,9 +1094,13 @@ export function encodeFetchObjectFields(
   }
 
   // Subgroup ID (flags & 0x03 == 0x03 の場合)
+  // Datagram 時 (0x40) は Subgroup ID フィールドをエンコードしない
+  // draft-ietf-moq-transport-18 §11.4.4.1:
+  // "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
   if (
+    !(fields.serializationFlags & FetchSerializationFlags.DATAGRAM) &&
     (fields.serializationFlags & FetchSerializationFlags.SUBGROUP_MASK) ===
-    FetchSerializationFlags.SUBGROUP_PRESENT
+      FetchSerializationFlags.SUBGROUP_PRESENT
   ) {
     if (fields.subgroupId === undefined) {
       throw new Error("Subgroup ID required when SUBGROUP_PRESENT is set");
@@ -1213,6 +1217,61 @@ function decodeEndOfRange(
 }
 
 /**
+ * Fetch Object の Subgroup ID をデコードする
+ *
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "When encoding an Object with a Forwarding Preference of 'Datagram',
+ *  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
+ *
+ * @returns subgroupId, isDatagram, and extra bytes consumed
+ */
+function decodeFetchSubgroupId(
+  data: Uint8Array,
+  flags: number,
+  offset: number,
+  isFirst: boolean,
+  context: FetchObjectContext | null,
+): { subgroupId: bigint; isDatagram: boolean; consumed: number } {
+  const isDatagram = (flags & FetchSerializationFlags.DATAGRAM) !== 0;
+  let consumed = 0;
+
+  // DATAGRAM + SUBGROUP_PRESENT: wire 上の Subgroup ID vi64 を読み飛ばす
+  if (
+    isDatagram &&
+    (flags & FetchSerializationFlags.SUBGROUP_MASK) === FetchSerializationFlags.SUBGROUP_PRESENT
+  ) {
+    const [, skipConsumed] = decodeVarint(data, offset);
+    consumed += skipConsumed;
+  }
+
+  if (isDatagram) {
+    return { subgroupId: 0n, isDatagram: true, consumed };
+  }
+
+  const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
+  switch (subgroupEncoding) {
+    case FetchSerializationFlags.SUBGROUP_ZERO:
+      return { subgroupId: 0n, isDatagram: false, consumed };
+    case FetchSerializationFlags.SUBGROUP_SAME:
+      if (isFirst || context === null) {
+        throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
+      }
+      return { subgroupId: context.subgroupId, isDatagram: false, consumed };
+    case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
+      if (isFirst || context === null) {
+        throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
+      }
+      return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed };
+    case FetchSerializationFlags.SUBGROUP_PRESENT: {
+      const [sid, sidConsumed] = decodeVarint(data, offset + consumed);
+      return { subgroupId: sid, isDatagram: false, consumed: consumed + sidConsumed };
+    }
+    default:
+      throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
+  }
+}
+
+/**
  * Decode Fetch Object Fields
  * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
  *
@@ -1296,34 +1355,16 @@ export function decodeFetchObjectFields(
     );
   }
 
-  // Subgroup ID
-  let subgroupId: bigint;
-  const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
-  switch (subgroupEncoding) {
-    case FetchSerializationFlags.SUBGROUP_ZERO:
-      subgroupId = 0n;
-      break;
-    case FetchSerializationFlags.SUBGROUP_SAME:
-      if (isFirst || context === null) {
-        throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
-      }
-      subgroupId = context.subgroupId;
-      break;
-    case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
-      if (isFirst || context === null) {
-        throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
-      }
-      subgroupId = context.subgroupId + 1n;
-      break;
-    case FetchSerializationFlags.SUBGROUP_PRESENT: {
-      const [sid, sidConsumed] = decodeVarint(data, offset + totalConsumed);
-      subgroupId = sid;
-      totalConsumed += sidConsumed;
-      break;
-    }
-    default:
-      throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
-  }
+  // Subgroup ID をデコード（DATAGRAM フラグの処理を含む）
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // "When encoding an Object with a Forwarding Preference of 'Datagram',
+  //  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
+  const {
+    subgroupId,
+    isDatagram,
+    consumed: subgroupConsumed,
+  } = decodeFetchSubgroupId(data, flags, offset + totalConsumed, isFirst, context);
+  totalConsumed += subgroupConsumed;
 
   // Object ID
   // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
@@ -1356,8 +1397,9 @@ export function decodeFetchObjectFields(
     // draft-ietf-moq-transport-18:
     // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
     // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
+    // Datagram オブジェクトは Subgroup に属さないためチェックをスキップする。
     // draft-ietf-moq-transport-18 Section 11.4.4
-    if (context !== null && subgroupId === context.subgroupId) {
+    if (!isDatagram && context !== null && subgroupId === context.subgroupId) {
       if (publisherPriority !== context.publisherPriority) {
         throw new ProtocolViolationError(
           `malformed track: different priorities in same subgroup ` +
@@ -1394,9 +1436,11 @@ export function decodeFetchObjectFields(
   // Fetch Object には Object Status は存在しない
 
   // 次のオブジェクトのためにコンテキストを更新
+  // Datagram オブジェクトは Subgroup ID を持たないため、
+  // コンテキストには Datagram 以前の実際の Subgroup ID を伝搬させる
   const newContext: FetchObjectContext = {
     groupId,
-    subgroupId,
+    subgroupId: isDatagram ? (context?.subgroupId ?? 0n) : subgroupId,
     objectId,
     publisherPriority,
   };
@@ -1418,13 +1462,25 @@ export function decodeFetchObjectFields(
 /**
  * Create serialization flags for first Fetch object
  * First object must have all fields present
+ *
+ * @param hasExtensions - Whether the object has extension properties
+ * @param isDatagram - Whether the object uses Datagram forwarding preference
  */
-export function createFirstFetchObjectFlags(hasExtensions = false): number {
+export function createFirstFetchObjectFlags(hasExtensions = false, isDatagram = false): number {
   let flags =
     FetchSerializationFlags.GROUP_ID_PRESENT |
-    FetchSerializationFlags.SUBGROUP_PRESENT |
     FetchSerializationFlags.OBJECT_ID_PRESENT |
     FetchSerializationFlags.PRIORITY_PRESENT;
+
+  if (isDatagram) {
+    // Datagram 時は Subgroup ID フィールドなし、DATAGRAM ビットを設定
+    // draft-ietf-moq-transport-18 §11.4.4.1:
+    // "the publisher MUST SET bit 0x40 to '1'"
+    // 下位 2 ビットは SUBGROUP_ZERO (0x00) が推奨
+    flags |= FetchSerializationFlags.DATAGRAM;
+  } else {
+    flags |= FetchSerializationFlags.SUBGROUP_PRESENT;
+  }
 
   if (hasExtensions) {
     flags |= FetchSerializationFlags.PROPERTIES_PRESENT;

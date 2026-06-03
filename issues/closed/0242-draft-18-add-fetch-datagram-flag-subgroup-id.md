@@ -2,8 +2,9 @@
 
 - Priority: Medium
 - Created: 2026-06-03
+- Completed: 2026-06-03
 - Model: deepseek-v4-pro
-- Branch: feature/add-fetch-datagram-flag-handling
+- Branch: feature/draft-18
 - Polished: 2026-06-03
 
 ## 目的

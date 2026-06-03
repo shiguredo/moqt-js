@@ -1517,3 +1517,207 @@ test("FetchObjectFields: Descending で prior=0,delta=0 の場合は Group ID �
     /computed group id out of range/,
   );
 });
+
+// ============================================================================
+// Fetch Object Fields - DATAGRAM フラグ (0x40) のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1:
+ * "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
+ * "the subscriber MUST ignore the bits."
+ *
+ * DATAGRAM (0x40) 単独の先頭オブジェクトを正しくデコードすることを検証する。
+ */
+test("FetchObjectFields: DATAGRAM (0x40) の先頭オブジェクトを正しくデコードする", () => {
+  const flags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  const data = new Uint8Array([flags, 5, 10, 64, 50]);
+
+  const [decoded, , context] = decodeFetchObjectFields(data, null, 0, true);
+
+  assert.equal(decoded.groupId, 5n);
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.objectId, 10n);
+  assert.equal(decoded.publisherPriority, 64);
+  assert.equal(decoded.payloadLength, 50n);
+  assert.equal(context.subgroupId, 0n);
+});
+
+/**
+ * DATAGRAM + SUBGROUP_PRESENT (0x43): wire 上の Subgroup ID vi64 を読み飛ばし、
+ * subgroupId = 0n を返すことを検証する。
+ *
+ * ワイヤーフォーマット: flags, group_id, subgroup_id, object_id, priority, payload_length
+ * DATAGRAM+SUBGROUP_PRESENT なので group_id の後の subgroup_id_vi64 は読み飛ばされる。
+ */
+test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT (0x43) で Subgroup ID vi64 を読み飛ばす", () => {
+  const flags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.SUBGROUP_PRESENT |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  // wire: [flags][groupId=5][subgroupId_vi64=99][objectId=10][priority=64][payloadLength=50]
+  const subgroupIdBytes = encodeVarint(99n);
+  const data = new Uint8Array(1 + 1 + subgroupIdBytes.length + 3);
+  data[0] = flags;
+  data[1] = 5; // groupId
+  data.set(subgroupIdBytes, 2);
+  data[2 + subgroupIdBytes.length] = 10; // objectId
+  data[2 + subgroupIdBytes.length + 1] = 64; // priority
+  data[2 + subgroupIdBytes.length + 2] = 50; // payloadLength
+
+  const [decoded] = decodeFetchObjectFields(data, null, 0, true);
+
+  assert.equal(decoded.groupId, 5n);
+  assert.equal(decoded.subgroupId, 0n); // 読み飛ばしたので 0n
+  assert.equal(decoded.objectId, 10n);
+  assert.equal(decoded.publisherPriority, 64);
+  assert.equal(decoded.payloadLength, 50n);
+});
+
+/**
+ * DATAGRAM + SUBGROUP_SAME (0x41) の先頭オブジェクト:
+ * 下位ビットが SUBGROUP_SAME (0x01) でも、DATAGRAM ビットにより無視されるため
+ * "first object cannot use SUBGROUP_SAME" が throw されないことを検証する。
+ */
+test("FetchObjectFields: DATAGRAM+SUBGROUP_SAME (0x41) の先頭オブジェクトがエラーにならない", () => {
+  const flags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.SUBGROUP_SAME |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  const data = new Uint8Array([flags, 1, 0, 128, 50]);
+
+  const [decoded] = decodeFetchObjectFields(data, null, 0, true);
+
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.groupId, 1n);
+});
+
+/**
+ * DATAGRAM + SUBGROUP_PLUS_ONE (0x42) の先頭オブジェクト:
+ * 下位ビットが SUBGROUP_PLUS_ONE でも DATAGRAM により無視されるためエラーにならない。
+ */
+test("FetchObjectFields: DATAGRAM+SUBGROUP_PLUS_ONE (0x42) の先頭オブジェクトがエラーにならない", () => {
+  const flags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.SUBGROUP_PLUS_ONE |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  const data = new Uint8Array([flags, 1, 0, 128, 50]);
+
+  const [decoded] = decodeFetchObjectFields(data, null, 0, true);
+
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.groupId, 1n);
+});
+
+/**
+ * 非 Datagram → Datagram → 非 Datagram の混在シーケンスで
+ * Subgroup ID が正しく伝搬することを検証する。
+ */
+test("FetchObjectFields: 非Datagram→Datagram→非Datagram の混在で Subgroup ID が正しく伝搬する", () => {
+  // オブジェクト 1: 非 Datagram (SUBGROUP_PRESENT)
+  const firstFlags = createFirstFetchObjectFlags(false, false);
+  const first: FetchObjectFields = {
+    serializationFlags: firstFlags,
+    groupId: 10n,
+    subgroupId: 5n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+  assert.equal(firstContext.subgroupId, 5n);
+
+  // オブジェクト 2: Datagram (0x40) + GROUP_ID_PRESENT + ...
+  const secondFlags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const groupDeltaBytes = encodeVarint(0n); // delta=0 → groupId=10+0+1=11
+  const secondEncoded = new Uint8Array(1 + groupDeltaBytes.length + 3);
+  secondEncoded[0] = secondFlags;
+  secondEncoded.set(groupDeltaBytes, 1);
+  secondEncoded[1 + groupDeltaBytes.length] = 0; // objectId
+  secondEncoded[1 + groupDeltaBytes.length + 1] = 200; // priority
+  secondEncoded[1 + groupDeltaBytes.length + 2] = 100; // payloadLength
+
+  const [secondDecoded, , secondContext] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+  );
+  assert.equal(secondDecoded.subgroupId, 0n); // Datagram なので 0n
+  // Datagram 後も context の subgroupId は非 Datagram の値 5n を保持する
+  assert.equal(secondContext.subgroupId, 5n);
+
+  // オブジェクト 3: 非 Datagram (SUBGROUP_SAME)
+  const thirdFlags =
+    FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT;
+  const objectDeltaBytes = encodeVarint(2n);
+  const payloadLengthBytes = encodeVarint(50n);
+  const thirdEncoded = new Uint8Array(1 + objectDeltaBytes.length + payloadLengthBytes.length);
+  thirdEncoded[0] = thirdFlags;
+  thirdEncoded.set(objectDeltaBytes, 1);
+  thirdEncoded.set(payloadLengthBytes, 1 + objectDeltaBytes.length);
+
+  const [thirdDecoded] = decodeFetchObjectFields(thirdEncoded, secondContext, 0, false);
+  // SUBGROUP_SAME → context の subgroupId (5n) が正しく伝搬
+  assert.equal(thirdDecoded.subgroupId, 5n);
+});
+
+/**
+ * createFirstFetchObjectFlags: Datagram 引数で DATAGRAM ビット付き flags を生成する。
+ */
+test("FetchObjectFields: createFirstFetchObjectFlags で Datagram 用 flags を生成できる", () => {
+  const flags = createFirstFetchObjectFlags(false, true);
+
+  assert.isOk(flags & FetchSerializationFlags.DATAGRAM);
+  assert.isOk(flags & FetchSerializationFlags.GROUP_ID_PRESENT);
+  assert.isOk(flags & FetchSerializationFlags.OBJECT_ID_PRESENT);
+  assert.isOk(flags & FetchSerializationFlags.PRIORITY_PRESENT);
+  // Datagram 時は SUBGROUP_PRESENT を含まない
+  assert.isNotOk(
+    (flags & FetchSerializationFlags.SUBGROUP_MASK) === FetchSerializationFlags.SUBGROUP_PRESENT,
+  );
+});
+
+/**
+ * encode → decode roundtrip: Datagram つきの先頭オブジェクト
+ */
+test("FetchObjectFields: Datagram 先頭オブジェクトの encode→decode roundtrip", () => {
+  const flags = createFirstFetchObjectFlags(false, true);
+  const original: FetchObjectFields = {
+    serializationFlags: flags,
+    groupId: 100n,
+    subgroupId: 0n, // Datagram 時は 0n
+    objectId: 50n,
+    publisherPriority: 200,
+    payloadLength: 1000n,
+  };
+
+  const encoded = encodeFetchObjectFields(original);
+  const [decoded, , context] = decodeFetchObjectFields(encoded, null, 0, true);
+
+  assert.equal(decoded.groupId, 100n);
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.objectId, 50n);
+  assert.equal(decoded.publisherPriority, 200);
+  assert.equal(decoded.payloadLength, 1000n);
+  assert.equal(context.subgroupId, 0n);
+});

@@ -101,6 +101,11 @@
   - Group ID の範囲検証（0〜2^64-1）を追加する
   - PBT (`dataStream.prop.ts`) を追加する
   - @voluntas
+- [ADD] Fetch Object Fields の DATAGRAM ビット (0x40) 対応を実装する (#0242)
+  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、DATAGRAM フラグ時に Subgroup ID 下位ビットを無視し Subgroup ID vi64 を読み飛ばす
+  - `encodeFetchObjectFields` で DATAGRAM 時に Subgroup ID フィールドをエンコードしない
+  - `createFirstFetchObjectFlags` に Datagram 用パラメータを追加する
+  - @voluntas
 - [FIX] PUBLISH_OK の REQUEST_OK 応答で Track Properties が空であることを検証する (#0235)
   - draft-ietf-moq-transport-18 §10.5 に基づき、`decodePublishOkPayload` で非空の場合に ProtocolViolationError をスローする
   - @voluntas
