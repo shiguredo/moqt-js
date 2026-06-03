@@ -254,6 +254,11 @@
 - [UPDATE] PADDING datagram 判定改善は #0275 で対応済みのためクローズする (#0295)
   - @voluntas
 
+- [REFACTOR] PublishOk 型と encodePublishOkPayload を削除する (#0290)
+  - PUBLISH_OK は REQUEST_OK の textual alias であり、 / で代替可能
+  - PBT テストを に移行する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -702,6 +707,11 @@ Media over QAUIC Transport draft-17 対応
   - @voluntas
 
 - [UPDATE] PADDING datagram 判定改善は #0275 で対応済みのためクローズする (#0295)
+  - @voluntas
+
+- [REFACTOR] PublishOk 型と encodePublishOkPayload を削除する (#0290)
+  - PUBLISH_OK は REQUEST_OK の textual alias であり、 / で代替可能
+  - PBT テストを に移行する
   - @voluntas
 
 ### misc

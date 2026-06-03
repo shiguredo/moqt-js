@@ -102,11 +102,9 @@ export {
 export {
   type Publish,
   type PublishDone,
-  type PublishOk,
   decodePublishDonePayload,
   decodePublishPayload,
   encodePublishDonePayload,
-  encodePublishOkPayload,
   encodePublishPayload,
 } from "./publish";
 

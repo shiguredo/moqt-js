@@ -8,7 +8,6 @@ import * as fc from "fast-check";
 import {
   encodePublishPayload,
   decodePublishPayload,
-  encodePublishOkPayload,
   encodePublishDonePayload,
   decodePublishDonePayload,
 } from "./publish";
@@ -16,7 +15,7 @@ import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from ".
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 import { type Property, TrackPropertyId } from "../properties";
-import { decodeRequestOkPayload } from "./session";
+import { decodeRequestOkPayload, encodeRequestOkPayload } from "./session";
 
 /**
  * Message Parameter の arbitrary
@@ -198,7 +197,7 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
         trackProperties: [] as Property[],
       };
 
-      const encoded = encodePublishOkPayload(original);
+      const encoded = encodeRequestOkPayload(original);
       const decoded = decodeRequestOkPayload(encoded);
 
       assert.equal(decoded.type, MessageType.REQUEST_OK);

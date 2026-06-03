@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -30,3 +31,11 @@ PUBLISH_OK (0x1E) 削除に伴い、`PublishOk` 型と `encodePublishOkPayload` 
 
 - `PublishOk` 型と `encodePublishOkPayload` が存在しない
 - 全テストが PASS する
+
+## 解決方法
+
+- `src/message/publish.ts`: `PublishOk` インターフェースと `encodePublishOkPayload` 関数を削除
+- `src/message/index.ts`: `PublishOk` 型と `encodePublishOkPayload` の re-export を削除
+- `src/message/publish.prop.ts`: `encodePublishOkPayload` → `encodeRequestOkPayload` に置き換え
+
+変更ファイル: `publish.ts`, `index.ts`, `publish.prop.ts`。全テスト PASS 確認済み。

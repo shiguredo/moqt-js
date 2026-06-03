@@ -34,19 +34,6 @@ export interface Publish {
 }
 
 /**
- * PublishOk: PUBLISH への成功応答 (REQUEST_OK with PUBLISH_OK semantics)
- *
- * draft-ietf-moq-transport-18 §10.5:
- * Wire format 上は REQUEST_OK (0x7) のみが存在し、
- * PUBLISH_OK は REQUEST_OK の textual alias。
- */
-export interface PublishOk {
-  type: typeof MessageType.REQUEST_OK;
-  parameters: Parameter[];
-  trackProperties: Property[];
-}
-
-/**
  * PUBLISH_DONE メッセージ (Section 10.11 PUBLISH_DONE)
  *
  * draft-ietf-moq-transport-18:
@@ -141,28 +128,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
     parameters,
     trackProperties,
   };
-}
-
-/**
- * PublishOk のペイロードをエンコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(encodeParameters(msg.parameters));
-  parts.push(encodeProperties(msg.trackProperties));
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
 }
 
 /**
