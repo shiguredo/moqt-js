@@ -1721,3 +1721,64 @@ test("FetchObjectFields: Datagram 先頭オブジェクトの encode→decode ro
   assert.equal(decoded.payloadLength, 1000n);
   assert.equal(context.subgroupId, 0n);
 });
+
+// ============================================================================
+// Fetch Object Fields - Object ID オーバーフローチェックのテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "If the computed Object ID would be greater than 2^64-1, the
+ *  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+ *
+ * Object ID Delta なし（+1）で Object ID が overflow する場合。
+ */
+test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は ProtocolViolationError", () => {
+  const prior: FetchObjectContext = {
+    groupId: 5n,
+    subgroupId: 1n,
+    objectId: (1n << 64n) - 1n,
+    publisherPriority: 128,
+  };
+
+  // SUBGROUP_SAME (OBJECT_ID_PRESENT なし → +1)
+  const flags = FetchSerializationFlags.SUBGROUP_SAME;
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(1 + payloadLengthBytes.length);
+  data[0] = flags;
+  data.set(payloadLengthBytes, 1);
+
+  assert.throws(
+    () => decodeFetchObjectFields(data, prior, 0, false),
+    /computed object id out of range/,
+  );
+});
+
+/**
+ * Group 不変時の Object ID Delta で overflow する場合。
+ * Prior: 2^64-2, delta: 3 → 2^64-2 + 3 = 2^64+1 > 2^64-1
+ */
+test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過する場合は ProtocolViolationError", () => {
+  const prior: FetchObjectContext = {
+    groupId: 5n,
+    subgroupId: 1n,
+    objectId: (1n << 64n) - 2n,
+    publisherPriority: 128,
+  };
+
+  const flags = FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT;
+
+  const objectDeltaBytes = encodeVarint(3n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(1 + objectDeltaBytes.length + payloadLengthBytes.length);
+  data[0] = flags;
+  data.set(objectDeltaBytes, 1);
+  data.set(payloadLengthBytes, 1 + objectDeltaBytes.length);
+
+  assert.throws(
+    () => decodeFetchObjectFields(data, prior, 0, false),
+    /computed object id out of range/,
+  );
+});
