@@ -110,8 +110,12 @@
   - `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` の GOAWAY ハンドラでコールバックを呼ぶ
   - @voluntas
 - [ADD] Parameter Scope 検証を追加する (#0276)
-  - draft-ietf-moq-transport-18 §10.2.1 に基づき、 を新設し許可パラメータ集合と検証関数を実装する
+  - draft-ietf-moq-transport-18 §10.2.1 に基づき、`src/message/parameterScope.ts` を新設し許可パラメータ集合と検証関数 `validateParameterScope` を実装する
   - PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK で検証を追加する
+  - @voluntas
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
+  - `PublishOptions` / `SubscribeOptions` に `subgroupDeliveryTimeout` を追加する
+  - `FetchOptions` / `JoiningFetchOptions` に `fillTimeout` を追加する
   - @voluntas
 - [UPDATE] REQUEST_OK Track Properties 検証を共通関数に抽出する (#0269)
   - `bidi.ts` に `validateRequestOkNoTrackProperties` を追加し、全 4 箇所の重複コードを置き換える
@@ -222,7 +226,7 @@
   - `cleanUp()` に `goawayReceivedOnRequestStreams.clear()` を追加する
   - @voluntas
 - [FIX] Fetch 先頭オブジェクトに PRIORITY_PRESENT を MUST で要求していたのを修正する (#0287)
-  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、 条件を削除し省略時はデフォルト値 128 を使用する
+  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、`isFirst` 条件を削除し省略時はデフォルト値 128 を使用する
   - @voluntas
 - [FIX] goaway JSDoc コメントを仕様に合わせて修正する (#0288)
   - Goaway インターフェースの Request ID 説明を正しい仕様文言に修正する
@@ -231,23 +235,15 @@
   - 末尾コメントを行コメントに変更、誤った内容のコメントを修正する
   - @voluntas
 - [FIX] GOAWAY ハンドリング時にストリームリソースが解放されないのを修正する (#0283)
-  - 3 箇所のループ GOAWAY ハンドラに を追加する
-  - @voluntas
-- [REFACTOR] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
-  - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
-  - @voluntas
-- [REFACTOR] PublishOk 型と encodePublishOkPayload を削除する (#0290)
-  - PUBLISH_OK は REQUEST_OK の textual alias であり、 / で代替可能
-  - PBT テストを に移行する
-  - @voluntas
-
-- [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
-  - / に を追加する
-  - / に を追加する
+  - 3 箇所のループ GOAWAY ハンドラに `void streamReader.cancel()` を追加する
   - @voluntas
 
 ### misc
 
+- [CHANGE] PublishOk 型と encodePublishOkPayload を削除する (#0290)
+  - PUBLISH_OK は REQUEST_OK の textual alias であり、`RequestOk` / `encodeRequestOkPayload` で代替可能
+  - PBT テストを `encodeRequestOkPayload` に移行する
+  - @voluntas
 - [ADD] Object Forwarding Preference の enum を追加する (#0239)
   - draft-ietf-moq-transport-18 §11.2.1 に基づき、`ObjectForwardingPreference` enum を追加する
   - @voluntas
@@ -260,12 +256,24 @@
 - [UPDATE] REQUEST_OK のコメントに欠落していた Track Properties フィールドを追加する (#0232)
   - draft-ietf-moq-transport-18 §10.5 に基づき、`session.ts` の REQUEST_OK Message 構造コメントに `Track Properties (..)` 行を追加する
   - @voluntas
+- [UPDATE] README.md の実装状況を draft-ietf-moq-transport-18 に合わせて更新する
+  - draft バージョン表記を draft-17 から draft-18 に変更する
+  - 実装状況に MOQT URI (moqt:// スキーム / Fragment Identifier) を追加する
+  - Publisher を Track Properties (OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / MAX_CACHE_DURATION / DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER / DYNAMIC_GROUPS) と Datagram/Subgroup 混在送信に更新する
+  - Subscriber の UNSUBSCRIBE 廃止 (双方向ストリームのクローズ) / Fetch の Descending Group Order / FILL_TIMEOUT / NEW_GROUP_REQUEST を反映する
+  - コントロールメッセージの SUBSCRIBE_NAMESPACE と SUBSCRIBE_TRACKS の分割、GOAWAY の Request ID とリクエストストリーム受信、REQUEST_ERROR の Redirect を反映する
+  - データストリームの Subgroup Header FIRST_OBJECT bit と PADDING Stream/Datagram を反映する
+  - 使い方のコード例の URL を moqt:// スキームに変更する
+  - @voluntas
+- [UPDATE] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
+  - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
+  - @voluntas
 
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
 
-Media over QAUIC Transport draft-17 対応
+Media over QUIC Transport draft-17 対応
 
 - [UPDATE] `error.ts` と `grease.ts` の単体テストを追加する
   - エラー型が name / message / code を保持することを検証する
@@ -658,57 +666,6 @@ Media over QAUIC Transport draft-17 対応
   - SUBSCRIBER_PRIORITY / GROUP_ORDER / FORWARD を varint ではなく uint8 として送信する
   - Subgroup ストリーム処理で `MalformedTrackError` を握り潰さず MALFORMED_TRACK として受信ストリームを cancel する
   - `handleIncomingStream()` の到達不能な Subgroup 分岐を削除する
-  - @voluntas
-
-- [UPDATE] PADDING datagram の検出を先頭バイトパターンチェックに改善して短データ時の不要な例外送出を防止する (#0275)
-  - draft-ietf-moq-transport-18 §11.5.2 に基づき、`handleIncomingDatagram` の PADDING 判定を `data[0] === 0xe4` 事前フィルタに変更する
-  - 1〜3 バイトの短いデータで `IncompleteDataError` が送出されないようにする
-  - @voluntas
-
-- [FIX] GOAWAY 受信時に goawayReceivedOnRequestStreams が更新されないバグを修正する (#0280)
-  - `bidiReadPublishResponse` 等の 4 箇所の初回応答 GOAWAY 分岐に `goawayReceivedOnRequestStreams.add` を追加する
-  - @voluntas
-
-- [FIX] goawayReceivedOnRequestStreams がセッションクローズ時にクリアされないのを修正する (#0281)
-  - `cleanUp()` に `goawayReceivedOnRequestStreams.clear()` を追加する
-  - @voluntas
-
-- [REFACTOR] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
-  - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
-  - @voluntas
-
-- [FIX] Fetch 先頭オブジェクトに PRIORITY_PRESENT を MUST で要求していたのを修正する (#0287)
-  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、 条件を削除し省略時はデフォルト値 128 を使用する
-  - @voluntas
-
-- [FIX] goaway JSDoc コメントを仕様に合わせて修正する (#0288)
-  - Goaway インターフェースの Request ID 説明を正しい仕様文言に修正する
-  - @voluntas
-
-- [FIX] 誤解を招くコメントを修正する (#0294)
-  - 末尾コメントを行コメントに変更、誤った内容のコメントを修正する
-  - @voluntas
-
-- [FIX] GOAWAY ハンドリング時にストリームリソースが解放されないのを修正する (#0283)
-  - 3 箇所のループ GOAWAY ハンドラに を追加する
-  - @voluntas
-
-- [UPDATE] PADDING datagram 判定改善は #0275 で対応済みのためクローズする (#0295)
-  - @voluntas
-
-- [REFACTOR] PublishOk 型と encodePublishOkPayload を削除する (#0290)
-  - PUBLISH_OK は REQUEST_OK の textual alias であり、 / で代替可能
-  - PBT テストを に移行する
-  - @voluntas
-
-- [ADD] Parameter Scope 検証を追加する (#0276)
-  - draft-ietf-moq-transport-18 §10.2.1 に基づき、 を新設し許可パラメータ集合と検証関数を実装する
-  - PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK で検証を追加する
-  - @voluntas
-
-- [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
-  - / に を追加する
-  - / に を追加する
   - @voluntas
 
 ### misc
