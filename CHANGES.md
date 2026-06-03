@@ -251,6 +251,9 @@
   - 3 箇所のループ GOAWAY ハンドラに を追加する
   - @voluntas
 
+- [UPDATE] PADDING datagram 判定改善は #0275 で対応済みのためクローズする (#0295)
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -696,6 +699,9 @@ Media over QAUIC Transport draft-17 対応
 
 - [FIX] GOAWAY ハンドリング時にストリームリソースが解放されないのを修正する (#0283)
   - 3 箇所のループ GOAWAY ハンドラに を追加する
+  - @voluntas
+
+- [UPDATE] PADDING datagram 判定改善は #0275 で対応済みのためクローズする (#0295)
   - @voluntas
 
 ### misc

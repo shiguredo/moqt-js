@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -40,3 +41,9 @@ if (data.length > 0) {
 - 1〜3 バイトの短い PADDING datagram が安全に破棄される
 - 従来の 4 バイト以上の PADDING datagram も正しく破棄される
 - テストが追加されている
+
+## 解決方法
+
+#0275 で PADDING datagram 判定が既に `data[0] === 0xe4` + `data.length >= 4` の先頭バイトチェック方式に改善されたため、本 issue の要件は満たされている。PADDING stream (0x132b3e28) 判定は `classifyIncomingStreamType` で既に適切に処理されている。
+
+変更は #0275 のコミットに含まれる。
