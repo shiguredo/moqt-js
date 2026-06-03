@@ -259,6 +259,11 @@
   - PBT テストを に移行する
   - @voluntas
 
+- [ADD] Parameter Scope 検証を追加する (#0276)
+  - draft-ietf-moq-transport-18 §10.2.1 に基づき、 を新設し許可パラメータ集合と検証関数を実装する
+  - PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK で検証を追加する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -712,6 +717,11 @@ Media over QAUIC Transport draft-17 対応
 - [REFACTOR] PublishOk 型と encodePublishOkPayload を削除する (#0290)
   - PUBLISH_OK は REQUEST_OK の textual alias であり、 / で代替可能
   - PBT テストを に移行する
+  - @voluntas
+
+- [ADD] Parameter Scope 検証を追加する (#0276)
+  - draft-ietf-moq-transport-18 §10.2.1 に基づき、 を新設し許可パラメータ集合と検証関数を実装する
+  - PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK で検証を追加する
   - @voluntas
 
 ### misc

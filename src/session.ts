@@ -59,6 +59,7 @@ import {
   type Parameter,
   type SubscriptionFilter,
 } from "./message";
+import { EMPTY_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
 import {
   type Publisher,
@@ -1809,6 +1810,18 @@ export class SessionImpl implements Session {
               // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要 (§10.1 Request ID)
               const requestOk = decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+              // SUBSCRIBE_NAMESPACE_OK の許可パラメータは空
+              if (
+                !validateParameterScope(
+                  requestOk.parameters,
+                  EMPTY_ALLOWED_PARAMS,
+                  "SUBSCRIBE_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
+                return;
+              }
               // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
               if (
                 !bidi.validateRequestOkNoTrackProperties(
@@ -2278,6 +2291,18 @@ export class SessionImpl implements Session {
               // Request ID はストリームが特定するため不要
               // draft-ietf-moq-transport-18 Section 10.1
               const requestOk = decodeRequestOkPayload(messagePayload);
+              // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+              // PUBLISH_NAMESPACE_OK の許可パラメータは空
+              if (
+                !validateParameterScope(
+                  requestOk.parameters,
+                  EMPTY_ALLOWED_PARAMS,
+                  "PUBLISH_NAMESPACE_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
+                return;
+              }
               // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
               if (
                 !bidi.validateRequestOkNoTrackProperties(

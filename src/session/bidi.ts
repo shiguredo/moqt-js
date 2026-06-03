@@ -38,6 +38,13 @@ import {
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
 import type { Property } from "../properties";
+import {
+  PUBLISH_OK_ALLOWED_PARAMS,
+  SUBSCRIBE_OK_ALLOWED_PARAMS,
+  FETCH_OK_ALLOWED_PARAMS,
+  REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+  validateParameterScope,
+} from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
 import type { JoiningFetchOptions, SessionState, TrackStatusResult } from "../session";
 import { extractForwardState, extractLargestLocation, validateFetchOkEndLocation } from "./params";
@@ -252,6 +259,18 @@ export async function bidiReadPublishResponse(
 
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodeRequestOkPayload(msg.payload);
+      // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+      // 許可されていないパラメータを受信した場合は PROTOCOL_VIOLATION
+      if (
+        !validateParameterScope(
+          decoded.parameters,
+          PUBLISH_OK_ALLOWED_PARAMS,
+          "PUBLISH_OK",
+          (error) => session.closeWithError(error),
+        )
+      ) {
+        return;
+      }
       // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
@@ -337,6 +356,16 @@ export async function bidiReadSubscribeResponse(
 
     if (msg.type === MessageType.SUBSCRIBE_OK) {
       const decoded = decodeSubscribeOkPayload(msg.payload);
+      if (
+        !validateParameterScope(
+          decoded.parameters,
+          SUBSCRIBE_OK_ALLOWED_PARAMS,
+          "SUBSCRIBE_OK",
+          (error) => session.closeWithError(error),
+        )
+      ) {
+        return;
+      }
 
       const largestLocation = extractLargestLocation(decoded.parameters);
 
@@ -438,6 +467,13 @@ export async function bidiReadFetchResponse(
 
     if (msg.type === MessageType.FETCH_OK) {
       const decoded = decodeFetchOkPayload(msg.payload);
+      if (
+        !validateParameterScope(decoded.parameters, FETCH_OK_ALLOWED_PARAMS, "FETCH_OK", (error) =>
+          session.closeWithError(error),
+        )
+      ) {
+        return;
+      }
 
       if (pending.startLocation) {
         const endLoc = decoded.endLocation;
@@ -925,6 +961,18 @@ export function bidiHandleRequestUpdateOk(
   streamRequestId: bigint,
 ): void {
   const msg = decodeRequestOkPayload(payload);
+
+  // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+  if (
+    !validateParameterScope(
+      msg.parameters,
+      REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+      "REQUEST_UPDATE_OK",
+      (error) => session.closeWithError(error),
+    )
+  ) {
+    return;
+  }
 
   // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
   if (
