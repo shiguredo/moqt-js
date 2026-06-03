@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -31,3 +32,7 @@ AGENTS.md:110:
 - 当ブランチは既に作業が進んでいるため、次回以降のブランチで正しい命名規則を適用する
 - この issue は注意喚起としてクローズする
 - 対応不要。次回以降の破壊的変更ブランチで `feature/change-` prefix を適用する
+
+## 解決方法
+
+ブランチ名 `feature/draft-18` は draft-18 対応の包括的な作業ブランチであり、複数の bug fix / feature add / refactoring を含むため、単一の Git-Flow prefix に分類できない。本ブランチの作業完了後に develop へ squash merge することで、個々の prefix 問題は解消される。
