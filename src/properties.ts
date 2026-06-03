@@ -10,7 +10,7 @@
  */
 
 import { encodeVarint, decodeVarint } from "./varint";
-import { MalformedTrackError, ProtocolViolationError } from "./error";
+import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
 
 /**
  * MOQT Property ID (Section 12)
@@ -658,12 +658,12 @@ export function decodeProperties(data: Uint8Array): Property[] {
       // IMMUTABLE_PROPERTIES MUST NOT recursively contain an
       // IMMUTABLE_PROPERTIES property. 早期検出のため、内側の KVP を走査して
       // IMMUTABLE_PROPERTIES (0x0B) が再度現れないか検証する。
-      // 内側データが不完全な KVP の場合はスキップ（後段で検出される）。
+      // 内側データが不完全な KVP の場合は IncompleteDataError のみ無視する。
       if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES && extData.length > 0) {
-        try {
-          let innerOffset = 0;
-          let innerPreviousId = 0n;
-          while (innerOffset < extData.length) {
+        let innerOffset = 0;
+        let innerPreviousId = 0n;
+        while (innerOffset < extData.length) {
+          try {
             const [deltaId, deltaIdLen] = decodeVarint(extData.subarray(innerOffset));
             const innerId = innerPreviousId + deltaId;
             innerPreviousId = innerId;
@@ -676,12 +676,17 @@ export function decodeProperties(data: Uint8Array): Property[] {
               const [, valueLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
               innerOffset += deltaIdLen + valueLen;
             } else {
-              const [length, lengthLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
-              innerOffset += deltaIdLen + lengthLen + Number(length);
+              const [innerLength, innerLengthLen] = decodeVarint(
+                extData.subarray(innerOffset + deltaIdLen),
+              );
+              innerOffset += deltaIdLen + innerLengthLen + Number(innerLength);
             }
+          } catch (err) {
+            if (err instanceof IncompleteDataError) {
+              break; // 不完全な内側 KVP は後段の decodeImmutableProperties で検出される
+            }
+            throw err;
           }
-        } catch {
-          // 内側データが KVP として不完全な場合はスキップ
         }
       }
       extensions.push({ id, data: extData });

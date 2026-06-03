@@ -115,6 +115,11 @@
   - `publish.prop.ts` のテストを `decodeRequestOkPayload` 使用に修正する
   - `src/session/bidi.test.ts` に PUBLISH_OK Track Properties テストを追加する
   - @voluntas
+- [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックの try/catch 握り潰しを修正する (#0256, #0270)
+  - draft-ietf-moq-transport-18 §12.7 に基づき、`catch {}` を `catch(err)` に変更し `IncompleteDataError` のみ break する
+  - 内側変数 `length` を `innerLength` にリネームしシャドウイングを解消する
+  - `src/properties.test.ts` に再帰検出テストと不完全データテストを追加する
+  - @voluntas
   - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
   - @voluntas
 - [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックが実装済みであることを確認する (#0251)
