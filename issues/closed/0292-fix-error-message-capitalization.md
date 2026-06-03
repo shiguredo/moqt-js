@@ -4,6 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -32,3 +33,7 @@ AGENTS.md:126「小文字で始めること」に反するエラーメッセー�
 
 - 全エラーメッセージが小文字始まりになっている
 - 全テストが PASS する
+
+## 解決方法
+
+AGENTS.md から「小文字で始めること」規約が撤廃されたため、本 issue は不要と判断しクローズする。エラーメッセージの先頭ケースはもはや制約がなく、既存の大文字始まりエラーメッセージ（`dataStream.ts` の `"Protocol violation:..."` 等）も修正不要。
