@@ -223,6 +223,18 @@
   - 1〜3 バイトの短いデータで `IncompleteDataError` が送出されないようにする
   - @voluntas
 
+- [FIX] GOAWAY 受信時に goawayReceivedOnRequestStreams が更新されないバグを修正する (#0280)
+  - `bidiReadPublishResponse` 等の 4 箇所の初回応答 GOAWAY 分岐に `goawayReceivedOnRequestStreams.add` を追加する
+  - @voluntas
+
+- [FIX] goawayReceivedOnRequestStreams がセッションクローズ時にクリアされないのを修正する (#0281)
+  - `cleanUp()` に `goawayReceivedOnRequestStreams.clear()` を追加する
+  - @voluntas
+
+- [REFACTOR] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
+  - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
@@ -640,6 +652,18 @@ Media over QAUIC Transport draft-17 対応
 - [UPDATE] PADDING datagram の検出を先頭バイトパターンチェックに改善して短データ時の不要な例外送出を防止する (#0275)
   - draft-ietf-moq-transport-18 §11.5.2 に基づき、`handleIncomingDatagram` の PADDING 判定を `data[0] === 0xe4` 事前フィルタに変更する
   - 1〜3 バイトの短いデータで `IncompleteDataError` が送出されないようにする
+  - @voluntas
+
+- [FIX] GOAWAY 受信時に goawayReceivedOnRequestStreams が更新されないバグを修正する (#0280)
+  - `bidiReadPublishResponse` 等の 4 箇所の初回応答 GOAWAY 分岐に `goawayReceivedOnRequestStreams.add` を追加する
+  - @voluntas
+
+- [FIX] goawayReceivedOnRequestStreams がセッションクローズ時にクリアされないのを修正する (#0281)
+  - `cleanUp()` に `goawayReceivedOnRequestStreams.clear()` を追加する
+  - @voluntas
+
+- [REFACTOR] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
+  - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
   - @voluntas
 
 ### misc

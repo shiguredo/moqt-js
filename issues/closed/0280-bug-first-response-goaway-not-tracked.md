@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -34,3 +35,9 @@ draft-ietf-moq-transport-18 §10.4: 同一リクエストストリーム上の�
 
 - 全 GOAWAY 受信箇所で `goawayReceivedOnRequestStreams` に一貫して追加される
 - テストが追加されている
+
+## 解決方法
+
+`src/session/bidi.ts` の 4 箇所の初回応答 GOAWAY 分岐（`bidiReadPublishResponse`, `bidiReadSubscribeResponse`, `bidiReadFetchResponse`, `bidiReadTrackStatusResponse`）に `session.goawayReceivedOnRequestStreams.add(requestId)` を追加した。また全 5 箇所の GOAWAY Request ID チェックを `validateGoawayOnRequestStream` 関数呼び出しに置き換え、重複コードを解消した。
+
+変更ファイル: `src/session/bidi.ts`。全テスト 624/624 PASS 確認済み。

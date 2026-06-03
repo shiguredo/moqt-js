@@ -2540,6 +2540,9 @@ export class SessionImpl implements Session {
     // 閉じた Subgroup の追跡をクリア
     this.closedSubgroups.clear();
 
+    // GOAWAY 受信追跡をクリア
+    this.goawayReceivedOnRequestStreams.clear();
+
     // Pending Subgroup ストリームの buffer を解放
     // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
     this.pendingSubgroupBuffer.notifyAll("session-close");

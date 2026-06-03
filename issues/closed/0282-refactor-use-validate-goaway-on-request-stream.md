@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -53,3 +54,9 @@ if (decoded.requestId !== null) {
 
 - `validateGoawayOnRequestStream` が実際に使用されている
 - 重複コードが解消されている
+
+## 解決方法
+
+`src/session/bidi.ts` の全 5 箇所の GOAWAY Request ID インラインチェックを `validateGoawayOnRequestStream` 関数呼び出しに置き換えた。これによりデッドコードだった同関数が実際に使用されるようになり、重複コードが解消された。
+
+変更ファイル: `src/session/bidi.ts`。全テスト 624/624 PASS 確認済み。

@@ -296,15 +296,12 @@ export async function bidiReadPublishResponse(
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
       const decoded = decodeGoawayPayload(msg.payload);
-      if (decoded.requestId !== null) {
-        session.closeWithError(
-          new SessionError(
-            "goaway on request stream must not include request id",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
+      if (
+        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
+      ) {
         return;
       }
+      session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
       pending.goawayCallback?.(decoded.newSessionUri);
@@ -400,15 +397,12 @@ export async function bidiReadSubscribeResponse(
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
       const decoded = decodeGoawayPayload(msg.payload);
-      if (decoded.requestId !== null) {
-        session.closeWithError(
-          new SessionError(
-            "goaway on request stream must not include request id",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
+      if (
+        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
+      ) {
         return;
       }
+      session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       pending.goawayCallback?.(decoded.newSessionUri);
@@ -497,15 +491,12 @@ export async function bidiReadFetchResponse(
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
       const decoded = decodeGoawayPayload(msg.payload);
-      if (decoded.requestId !== null) {
-        session.closeWithError(
-          new SessionError(
-            "goaway on request stream must not include request id",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
+      if (
+        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
+      ) {
         return;
       }
+      session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       pending.goawayCallback?.(decoded.newSessionUri);
@@ -557,15 +548,12 @@ export async function bidiReadTrackStatusResponse(
       // TRACK_STATUS は単発リクエストであり ongoing loop を持たないため
       // goawayCallback は不要。newSessionUri は Error.message 経由で通知する。
       const decoded = decodeGoawayPayload(msg.payload);
-      if (decoded.requestId !== null) {
-        session.closeWithError(
-          new SessionError(
-            "goaway on request stream must not include request id",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
+      if (
+        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
+      ) {
         return;
       }
+      session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingTrackStatus.delete(requestId);
       session.requestStreams.delete(requestId);
       pending.reject(
@@ -659,13 +647,11 @@ export async function bidiReadRequestStreamMessages(
             }
             session.goawayReceivedOnRequestStreams.add(requestId);
             const decoded = decodeGoawayPayload(msg.payload);
-            if (decoded.requestId !== null) {
-              session.closeWithError(
-                new SessionError(
-                  "goaway on request stream must not include request id",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
+            if (
+              !validateGoawayOnRequestStream(decoded.requestId, (error) =>
+                session.closeWithError(error),
+              )
+            ) {
               return;
             }
             const publisher = session.publishers.get(requestId);
