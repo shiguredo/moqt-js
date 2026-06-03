@@ -206,6 +206,12 @@
   - `startTracksStreamLoop` 内の `decodeRequestOkPayload` 呼び出しと `validateRequestOkNoTrackProperties` 検証ブロックを削除する
   - @voluntas
 
+- [FIX] GOAWAY の Request ID パリティが送信側・受信側両方で誤っていたのを修正する (#0273, #0286)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、送信側 `sendGoaway()` の `requestId` を `this.nextRequestId` (クライアント自身の even 空間) から `1n` (ピアのサーバー最小 Request ID、奇数パリティ) に修正する
+  - 受信側 `handleGoaway()` のエラーメッセージを `(expected odd)` から `(expected even)` に修正する
+  - パリティチェックのコメントを更新する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)

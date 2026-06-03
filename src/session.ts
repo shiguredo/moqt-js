@@ -2453,7 +2453,7 @@ export class SessionImpl implements Session {
       type: MessageType.GOAWAY,
       newSessionUri: "",
       timeout: goawayTimeout,
-      requestId: this.nextRequestId,
+      requestId: 1n, // draft-ietf-moq-transport-18 §10.4: クライアントの GOAWAY Request ID はピア（サーバー）の最小 Request ID (奇数パリティ、1 から開始)
     });
 
     await this.sendControlMessage(MessageType.GOAWAY, payload, {
@@ -3315,11 +3315,15 @@ export class SessionImpl implements Session {
     }
 
     // draft-ietf-moq-transport-18 §10.4:
-    // 受信側のパリティと一致しなければ INVALID_REQUEST_ID でセッションを閉じる。
+    // GOAWAY の Request ID は送信元のピア空間を指す。
+    // クライアントの Request ID パリティは even なため、
+    // サーバーからの GOAWAY Request ID は even であることが期待される。
+    // 受信した Request ID のパリティがクライアント (even) と一致しなければ
+    // INVALID_REQUEST_ID でセッションを閉じる。
     if (msg.requestId % 2n !== 0n) {
       this.closeWithError(
         new SessionError(
-          `GOAWAY request ID parity mismatch: ${msg.requestId} (expected odd)`,
+          `GOAWAY request ID parity mismatch: ${msg.requestId} (expected even)`,
           SessionErrorCode.INVALID_REQUEST_ID,
         ),
       );
