@@ -56,7 +56,7 @@ export const TrackPropertyId = {
    * draft-ietf-moq-transport-18:
    * Message Parameter から Track Property に移動。
    */
-  DELIVERY_TIMEOUT: 0x02n,
+  OBJECT_DELIVERY_TIMEOUT: 0x02n,
   /**
    * Max Cache Duration (Section 12.3 MAX CACHE DURATION)
    * オブジェクトの最大キャッシュ期間（ミリ秒）

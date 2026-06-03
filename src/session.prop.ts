@@ -168,7 +168,7 @@ test("extractLargestLocation: LARGEST_OBJECT を含まない場合、undefined �
       fc.array(
         fc.oneof(
           fc.record({
-            type: fc.constant(MessageParameterType.DELIVERY_TIMEOUT),
+            type: fc.constant(MessageParameterType.OBJECT_DELIVERY_TIMEOUT),
             value: fc.bigInt({ min: 0n, max: 1000000n }).map((v) => encodeVarint(v)),
           }),
           fc.record({
@@ -267,7 +267,7 @@ test("extractForwardState: FORWARD を含まない場合デフォルト値 true 
       fc.array(
         fc.oneof(
           fc.record({
-            type: fc.constant(MessageParameterType.DELIVERY_TIMEOUT),
+            type: fc.constant(MessageParameterType.OBJECT_DELIVERY_TIMEOUT),
             value: fc.bigInt({ min: 0n, max: 1000000n }).map((v) => encodeVarint(v)),
           }),
           fc.record({

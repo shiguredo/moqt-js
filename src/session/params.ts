@@ -82,11 +82,11 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
 export function buildPublishTrackProperties(options?: PublishOptions): Property[] {
   const trackProperties: Property[] = [];
 
-  // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
   if (options?.deliveryTimeout !== undefined) {
-    validateNonNegative(options.deliveryTimeout, "DELIVERY_TIMEOUT");
+    validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     trackProperties.push({
-      id: TrackPropertyId.DELIVERY_TIMEOUT,
+      id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT,
       value: options.deliveryTimeout,
     });
   }
@@ -158,11 +158,11 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     parameters.push(encodeSubscriptionFilterParameter(options.filter));
   }
 
-  // DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 10.2.4
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 10.2.4
   if (options?.deliveryTimeout !== undefined) {
-    validateNonNegative(options.deliveryTimeout, "DELIVERY_TIMEOUT");
+    validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     parameters.push({
-      type: MessageParameterType.DELIVERY_TIMEOUT,
+      type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
       value: encodeVarint(options.deliveryTimeout),
     });
   }

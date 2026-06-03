@@ -17,7 +17,7 @@
 
 import { ProtocolViolationError } from "../error";
 import { decodeVarint, encodeVarint } from "../varint";
-import type { Location } from "./types";
+import { MessageParameterType, type Location } from "./types";
 
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）
@@ -568,7 +568,7 @@ type MessageParameterValueEncoding = "uint8" | "varint" | "location" | "length-p
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEncoding> = {
-  // DELIVERY_TIMEOUT (Section 10.2.4)
+  // OBJECT_DELIVERY_TIMEOUT (Section 10.2.4)
   0x02: "varint",
   // AUTHORIZATION_TOKEN (Section 10.2.2)
   0x03: "length-prefixed",
@@ -781,8 +781,10 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
     // draft-ietf-moq-transport-18 Section 10.2:
     // "Receivers SHOULD check that there are no unexpected duplicate parameters
     //  and close the session with PROTOCOL_VIOLATION if found."
+    // Section 10.2.2: AUTHORIZATION_TOKEN は複数回出現が許可されているため
+    // 重複チェックから除外する
     // https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.2
-    if (seenTypes.has(param.type)) {
+    if (seenTypes.has(param.type) && param.type !== MessageParameterType.AUTHORIZATION_TOKEN) {
       throw new ProtocolViolationError(
         `duplicate message parameter type: 0x${param.type.toString(16)}`,
       );

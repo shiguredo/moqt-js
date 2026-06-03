@@ -103,12 +103,12 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  * draft-ietf-moq-transport-18:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
- * - Track Properties (DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
+ * - Track Properties (OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
  *   DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
  *   Track Properties に移動
  * draft-ietf-moq-transport-18 Section 10.2 (Message Parameters)
  *
- * 注意: SUBSCRIBE では DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
+ * 注意: SUBSCRIBE では OBJECT_DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
  * Message Parameter として使用される（Subscriber の希望値）。
  */
 export const MessageParameterType = {
@@ -118,7 +118,7 @@ export const MessageParameterType = {
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
    * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Property として使用。
    */
-  DELIVERY_TIMEOUT: 0x02,
+  OBJECT_DELIVERY_TIMEOUT: 0x02,
   /**
    * AUTHORIZATION TOKEN (Section 10.2.2 AUTHORIZATION TOKEN Parameter)
    */

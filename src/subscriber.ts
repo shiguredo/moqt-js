@@ -54,7 +54,7 @@ export interface Subscriber {
   /**
    * SUBSCRIBE_OK で受信した Track Properties
    * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK):
-   * DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
+   * OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
    * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
    */
   readonly trackProperties: ReadonlyArray<Property>;
