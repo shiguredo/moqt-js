@@ -6,6 +6,8 @@
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
+- Completed: 2026-06-03
+
 ## 目的
 
 draft-ietf-moq-transport-18 Section 10.5 の MUST 要件を満たすため、REQUEST_OK エイリアス応答での Track Properties 空チェック漏れを修正する。
@@ -73,10 +75,18 @@ SUBSCRIBE_TRACKS_OK は仕様 Section 10.5 の空チェック対象一覧に含�
 
 ## 解決方法
 
-1. `src/session/bidi.ts` の `bidiHandleRequestUpdateOk` 内、`decodeRequestOkPayload` 呼び出し直後に空チェックを追加
-2. `src/session.ts` の `startNamespaceStreamLoop` 内、同様に追加
-3. `src/session.ts` の `startNamespacePublicationStreamLoop` 内、同様に追加
-4. 上記 3 箇所のテストを追加
+空チェックは以下の 3 箇所で実装済みであることを確認した：
+
+1. `src/session/bidi.ts:818` (`bidiHandleRequestUpdateOk`) - REQUEST_UPDATE_OK 用の空チェック
+2. `src/session.ts:1797` (`startNamespaceStreamLoop`) - SUBSCRIBE_NAMESPACE_OK 用の空チェック
+3. `src/session.ts:2241` (`startNamespacePublicationStreamLoop`) - PUBLISH_NAMESPACE_OK 用の空チェック
+
+テストを以下の 2 ファイルに追加した：
+
+1. `src/message/session.prop.ts` - `decodeRequestOkPayload` の非空 Track Properties ラウンドトリップ PBT テストを追加
+2. `src/session/bidi.test.ts` - `bidiHandleRequestUpdateOk` の空 / 非空 Track Properties テストを追加
+
+`CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追記した。
 
 ## 仕様引用
 

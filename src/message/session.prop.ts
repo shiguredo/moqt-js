@@ -20,6 +20,7 @@ import {
 import { type Parameter, createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
+import { type Property, TrackPropertyId } from "../properties";
 import { ProtocolViolationError } from "../error";
 
 /**
@@ -123,7 +124,7 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
  * REQUEST_OK に Track Properties が追加された。
  * draft-ietf-moq-transport-18 Section 10.5
  */
-test("RequestOk のエンコード・デコードがラウンドトリップする", () => {
+test("RequestOk のエンコード・デコードがラウンドトリップする（空 Track Properties）", () => {
   fc.assert(
     fc.property(parametersArb, (parameters) => {
       const original: RequestOk = {
@@ -145,6 +146,81 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
     }),
   );
 });
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
+ * REQUEST_OK に Track Properties が追加された。
+ * 非空 Track Properties のエンコード・デコードが正しくラウンドトリップすることを検証する。
+ */
+test("RequestOk のエンコード・デコードがラウンドトリップする（非空 Track Properties）", () => {
+  fc.assert(
+    fc.property(
+      parametersArb,
+      fc.array(propertyArb, { minLength: 1, maxLength: 3 }),
+      (parameters, trackProperties) => {
+        const original: RequestOk = {
+          type: MessageType.REQUEST_OK,
+          parameters,
+          trackProperties,
+        };
+
+        const encoded = encodeRequestOkPayload(original);
+        const decoded = decodeRequestOkPayload(encoded);
+
+        assert.equal(decoded.type, MessageType.REQUEST_OK);
+        assert.equal(decoded.parameters.length, parameters.length);
+        for (let i = 0; i < parameters.length; i++) {
+          assert.equal(decoded.parameters[i].type, parameters[i].type);
+          assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
+        }
+        assert.equal(decoded.trackProperties.length, trackProperties.length);
+        // Track Properties はソートされるため、ソート後の値を比較
+        const sortedOriginal = [...trackProperties].sort((a, b) =>
+          a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+        );
+        for (let i = 0; i < sortedOriginal.length; i++) {
+          assert.equal(decoded.trackProperties[i].id, sortedOriginal[i].id);
+          if (sortedOriginal[i].value !== undefined) {
+            assert.equal(decoded.trackProperties[i].value, sortedOriginal[i].value);
+          }
+          if (sortedOriginal[i].data !== undefined) {
+            assert.deepEqual(decoded.trackProperties[i].data, sortedOriginal[i].data);
+          }
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * Track Properties arbitrary
+ *
+ * draft-ietf-moq-transport-18 Section 10.5:
+ * REQUEST_OK は Track Properties を末尾に含む場合がある。
+ */
+const evenPropertyArb = fc
+  .record({
+    id: fc
+      .bigInt({ min: 0n, max: 100n })
+      .map((n) => n * 2n)
+      .filter(
+        (id) =>
+          id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+          id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
+          id !== TrackPropertyId.DYNAMIC_GROUPS,
+      ),
+    value: fc.bigInt({ min: 0n, max: 1000000n }),
+  })
+  .map(({ id, value }) => ({ id, value }));
+
+const oddPropertyArb = fc
+  .record({
+    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n + 1n),
+    data: fc.uint8Array({ minLength: 0, maxLength: 20 }),
+  })
+  .map(({ id, data }) => ({ id, data }));
+
+const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 
 /**
  * draft-ietf-moq-transport-18 Section 10.6.2:

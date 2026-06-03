@@ -8,6 +8,10 @@ import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
 import { ObjectStatus, type Location } from "../message";
+import { encodeRequestOkPayload } from "../message/session";
+import { MessageType } from "../message/types";
+import { SessionError, SessionErrorCode } from "../error";
+import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -238,4 +242,68 @@ test("SubscriberImpl: 二重 unsubscribe は no-op", async () => {
   await subscriber.unsubscribe();
 
   assert.equal(callCount, 1);
+});
+
+// ============================================================================
+// bidiHandleRequestUpdateOk の Track Properties 空チェックテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
+ * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST
+ *  close the session with a PROTOCOL_VIOLATION."
+ * REQUEST_UPDATE_OK で非空 Track Properties を受信した場合の検証。
+ */
+test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が呼ばれる", () => {
+  let closedWithError: SessionError | undefined;
+
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    pendingRequestUpdate: new Map(),
+    // BidiSessionInternal の他のフィールドは本関数のテストで未使用のため undefined
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0n, value: 1n }],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.notEqual(closedWithError, undefined);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    closedWithError!.message.includes("REQUEST_UPDATE_OK must not contain Track Properties"),
+  );
+});
+
+/**
+ * REQUEST_UPDATE_OK で空 Track Properties を受信した場合の正常系検証。
+ */
+test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が呼ばれない", () => {
+  let closedWithError: SessionError | undefined;
+
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    pendingRequestUpdate: new Map(),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.equal(closedWithError, undefined);
 });
