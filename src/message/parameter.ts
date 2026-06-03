@@ -12,12 +12,12 @@
  * Type Delta は前のパラメータの Type との差分。
  * 偶数型: varint 値
  * 奇数型: Length プレフィックス付きバイト列
- * draft-ietf-moq-transport-18 Section 10.2.1
+ * draft-ietf-moq-transport-18 Section 1.4.3
  */
 
 import { ProtocolViolationError } from "../error";
 import { decodeVarint, encodeVarint } from "../varint";
-import type { Location } from "./types";
+import { MessageParameterType, type Location } from "./types";
 
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）
@@ -25,10 +25,25 @@ import type { Location } from "./types";
  * draft-ietf-moq-transport-18:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
  * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
+
+/**
+ * 予約名前空間プレフィクス
+ *
+ * draft-ietf-moq-transport-18 §3.2.1 (Reserved Namespaces):
+ * "MOQT reserves all Track Namespace values whose first tuple field
+ *  begins with a period (0x2e, .)."
+ */
+export const RESERVED_NAMESPACE_PREFIX = ".";
+
+/**
+ * draft-ietf-moq-transport-18 §3.2.2 (Session-Level Tracks):
+ * ".session" 名前空間はセッションレベルの track と namespace に予約される。
+ */
+export const SESSION_LEVEL_NAMESPACE = ".session";
 /**
  * Track Namespace の最大フィールド数
  *
@@ -200,7 +215,7 @@ export interface TrackNamespace {
  *
  * draft-ietf-moq-transport-18:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
   // 先にサイズをチェック
@@ -237,7 +252,7 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
  *
  * draft-ietf-moq-transport-18:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  *
  * @returns [namespace, consumed bytes]
  */
@@ -259,7 +274,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
-    // draft-ietf-moq-transport-18 Section 2.3:
+    // draft-ietf-moq-transport-18 Section 2.4.1:
     // "Each Track Namespace Field Value MUST contain at least one byte.
     //  If an endpoint receives a Track Namespace Field with a Track
     //  Namespace Field Length of 0, it MUST close the session with a
@@ -287,13 +302,13 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
  *
  * draft-ietf-moq-transport-18:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
 
-  // draft-ietf-moq-transport-18 Section 2.3:
+  // draft-ietf-moq-transport-18 Section 2.4.1:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   let dataSize = 0;
   for (const element of tuple) {
@@ -320,11 +335,37 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
 }
 
 /**
+ * Track Namespace が予約プレフィクスで始まるかを判定する
+ *
+ * draft-ietf-moq-transport-18 §3.2.1 (Reserved Namespaces):
+ * "MOQT reserves all Track Namespace values whose first tuple field
+ *  begins with a period (0x2e, .)."
+ */
+export function isReservedNamespace(tuple: Uint8Array[]): boolean {
+  if (tuple.length === 0) return false;
+  return tuple[0].length > 0 && tuple[0][0] === 0x2e;
+}
+
+/**
+ * Track Namespace が session-level かを判定する
+ *
+ * draft-ietf-moq-transport-18 §3.2.2 (Session-Level Tracks):
+ * "MOQT defines the .session namespace ... in the first position of
+ *  the Track Namespace for session-level tracks and namespaces."
+ */
+export function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
+  if (tuple.length === 0 || tuple[0].length === 0) return false;
+  if (tuple[0][0] !== 0x2e) return false;
+  const decoder = new TextDecoder();
+  return decoder.decode(tuple[0]) === ".session";
+}
+
+/**
  * Track Name をエンコードする（サイズ検証付き）
  *
  * draft-ietf-moq-transport-18:
  * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function encodeTrackName(trackName: string): Uint8Array {
   const encoder = new TextEncoder();
@@ -342,7 +383,7 @@ export function encodeTrackName(trackName: string): Uint8Array {
  *
  * draft-ietf-moq-transport-18:
  * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-18 Section 2.4.1
  */
 export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
   if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
@@ -527,26 +568,32 @@ type MessageParameterValueEncoding = "uint8" | "varint" | "location" | "length-p
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEncoding> = {
-  // DELIVERY_TIMEOUT (Section 10.2.4)
+  // OBJECT_DELIVERY_TIMEOUT (Section 10.2.4)
   0x02: "varint",
   // AUTHORIZATION_TOKEN (Section 10.2.2)
   0x03: "length-prefixed",
   // RENDEZVOUS_TIMEOUT (Section 10.2.6)
   0x04: "varint",
+  // SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3)
+  0x06: "varint",
   // EXPIRES (Section 10.2.10)
   0x08: "varint",
   // LARGEST_OBJECT (Section 10.2.11)
   0x09: "location",
+  // FILL_TIMEOUT (Section 10.2.5)
+  0x0a: "varint",
   // FORWARD (Section 10.2.12)
   0x10: "uint8",
   // SUBSCRIBER_PRIORITY (Section 10.2.7)
   0x20: "uint8",
-  // SUBSCRIPTION_FILTER (Section 10.2.11)
+  // SUBSCRIPTION_FILTER (Section 10.2.9)
   0x21: "length-prefixed",
   // GROUP_ORDER (Section 10.2.8)
   0x22: "uint8",
   // NEW_GROUP_REQUEST (Section 10.2.13)
   0x32: "varint",
+  // TRACK_NAMESPACE_PREFIX (Section 10.2.14)
+  0x34: "length-prefixed",
 };
 
 /**
@@ -734,8 +781,10 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
     // draft-ietf-moq-transport-18 Section 10.2:
     // "Receivers SHOULD check that there are no unexpected duplicate parameters
     //  and close the session with PROTOCOL_VIOLATION if found."
+    // Section 10.2.2: AUTHORIZATION_TOKEN は複数回出現が許可されているため
+    // 重複チェックから除外する
     // https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.2
-    if (seenTypes.has(param.type)) {
+    if (seenTypes.has(param.type) && param.type !== MessageParameterType.AUTHORIZATION_TOKEN) {
       throw new ProtocolViolationError(
         `duplicate message parameter type: 0x${param.type.toString(16)}`,
       );
@@ -873,4 +922,31 @@ export function decodeSubscriptionFilterParameter(param: Parameter): Subscriptio
   }
   const [filter] = decodeSubscriptionFilter(param.value, 0);
   return filter;
+}
+
+/**
+ * TRACK_NAMESPACE_PREFIX パラメータをエンコードする
+ *
+ * draft-ietf-moq-transport-18 §10.2.14:
+ * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
+ *  Track Namespace encoding described in Section 2.4.1."
+ */
+export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parameter {
+  const value = encodeTrackNamespace(namespace);
+  return { type: 0x34, value };
+}
+
+/**
+ * TRACK_NAMESPACE_PREFIX パラメータから Track Namespace を取得する
+ *
+ * draft-ietf-moq-transport-18 §10.2.14:
+ * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
+ *  Track Namespace encoding described in Section 2.4.1."
+ */
+export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
+  if (param.type !== 0x34) {
+    throw new Error(`Invalid parameter type: expected 0x34, got ${param.type}`);
+  }
+  const [namespace] = decodeTrackNamespace(param.value);
+  return namespace;
 }

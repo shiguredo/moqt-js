@@ -51,3 +51,20 @@ test("done は closed 状態では onDoneInternal を呼ばない", async () => 
 
   assert.equal(doneCallCount, 1);
 });
+
+// draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+// "A GOAWAY MAY also be sent on a request stream to initiate migration
+//  of that individual request."
+// goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
+test("goawayCallback が設定できる", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+
+  let calledUri = "";
+  publisher.goawayCallback = (uri: string) => {
+    calledUri = uri;
+  };
+
+  assert.isDefined(publisher.goawayCallback);
+  publisher.goawayCallback!("moqt://new.example.com");
+  assert.equal(calledUri, "moqt://new.example.com");
+});

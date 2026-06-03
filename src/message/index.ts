@@ -17,7 +17,7 @@ export {
 } from "./types";
 
 // デバッグ
-export { getMessageTypeName } from "./debug";
+export { getMessageTypeName, getRequestOkAliasName } from "./debug";
 
 // パラメータ
 export {
@@ -28,6 +28,8 @@ export {
   MAX_TRACK_NAME_SIZE,
   MAX_TRACK_NAMESPACE_FIELDS,
   MAX_TRACK_NAMESPACE_SIZE,
+  RESERVED_NAMESPACE_PREFIX,
+  SESSION_LEVEL_NAMESPACE,
   createTrackNamespace,
   decodeLocation,
   decodeParameter,
@@ -40,13 +42,17 @@ export {
   encodeParameter,
   encodeKeyValuePairs,
   encodeParameters,
+  encodeParameterTrackNamespace,
   encodeSubscriptionFilter,
   encodeSubscriptionFilterParameter,
-  encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
+  encodeUint8ParameterValue,
   getParameterLocationValue,
+  getParameterTrackNamespace,
   getParameterVarintValue,
+  isReservedNamespace,
+  isSessionLevelNamespace,
   validateForwardValue,
   validateGroupOrderValue,
   trackNamespaceToStrings,
@@ -96,24 +102,24 @@ export {
 export {
   type Publish,
   type PublishDone,
-  type PublishOk,
   decodePublishDonePayload,
-  decodePublishOkPayload,
   decodePublishPayload,
   encodePublishDonePayload,
-  encodePublishOkPayload,
   encodePublishPayload,
 } from "./publish";
 
 // Session メッセージ
 export {
   type Goaway,
+  type Redirect,
   type RequestError,
   type RequestOk,
   decodeGoawayPayload,
+  decodeRedirect,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
+  encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
 } from "./session";

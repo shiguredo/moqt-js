@@ -1,0 +1,43 @@
+# 初回応答 GOAWAY が goawayReceivedOnRequestStreams に追加されない
+
+- Priority: Medium
+- Created: 2026-06-03
+- Model: deepseek-v4-pro
+- Branch: feature/draft-18
+- Polished: 2026-06-03
+- Completed: 2026-06-03
+
+## 目的
+
+`bidiReadPublishResponse` 等の初回応答 GOAWAY 分岐では `goawayReceivedOnRequestStreams.add(requestId)` が行われておらず、その後の後続メッセージループ (`bidiReadRequestStreamMessages`) が起動された場合に重複 GOAWAY 検出が機能しないバグを修正する。
+
+## 優先度根拠
+
+重複 GOAWAY 検出の抜け穴。攻撃やプロトコル違反の検出漏れにつながる。
+
+## 現状
+
+- `src/session/bidi.ts:297-311` (`bidiReadPublishResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:401-415` (`bidiReadSubscribeResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:498-512` (`bidiReadFetchResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:556-573` (`bidiReadTrackStatusResponse`): GOAWAY 受信時に `add` なし
+
+一方 `src/session/bidi.ts:660` (`bidiReadRequestStreamMessages`) では `goawayReceivedOnRequestStreams.add(requestId)` が正しく行われている。
+
+draft-ietf-moq-transport-18 §10.4: 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
+
+## 設計方針
+
+- 全 4 箇所の初回応答 GOAWAY 分岐に `session.goawayReceivedOnRequestStreams.add(requestId)` を追加する
+- または初回応答では `bidiReadRequestStreamMessages` が起動されない前提なら、その意図をコメントで明示する
+
+## 完了条件
+
+- 全 GOAWAY 受信箇所で `goawayReceivedOnRequestStreams` に一貫して追加される
+- テストが追加されている
+
+## 解決方法
+
+`src/session/bidi.ts` の 4 箇所の初回応答 GOAWAY 分岐（`bidiReadPublishResponse`, `bidiReadSubscribeResponse`, `bidiReadFetchResponse`, `bidiReadTrackStatusResponse`）に `session.goawayReceivedOnRequestStreams.add(requestId)` を追加した。また全 5 箇所の GOAWAY Request ID チェックを `validateGoawayOnRequestStream` 関数呼び出しに置き換え、重複コードを解消した。
+
+変更ファイル: `src/session/bidi.ts`。全テスト 624/624 PASS 確認済み。

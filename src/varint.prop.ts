@@ -14,6 +14,7 @@ const THRESHOLD_3BYTE = 2097151n;
 const THRESHOLD_4BYTE = 268435455n;
 const THRESHOLD_5BYTE = 34359738367n;
 const THRESHOLD_6BYTE = 4398046511103n;
+const THRESHOLD_7BYTE = 562949953421311n;
 const THRESHOLD_8BYTE = 72057594037927935n;
 const MAX_VARINT = 18446744073709551615n;
 
@@ -24,7 +25,8 @@ const varint3ByteArb = fc.bigInt({ min: THRESHOLD_2BYTE + 1n, max: THRESHOLD_3BY
 const varint4ByteArb = fc.bigInt({ min: THRESHOLD_3BYTE + 1n, max: THRESHOLD_4BYTE });
 const varint5ByteArb = fc.bigInt({ min: THRESHOLD_4BYTE + 1n, max: THRESHOLD_5BYTE });
 const varint6ByteArb = fc.bigInt({ min: THRESHOLD_5BYTE + 1n, max: THRESHOLD_6BYTE });
-const varint8ByteArb = fc.bigInt({ min: THRESHOLD_6BYTE + 1n, max: THRESHOLD_8BYTE });
+const varint7ByteArb = fc.bigInt({ min: THRESHOLD_6BYTE + 1n, max: THRESHOLD_7BYTE });
+const varint8ByteArb = fc.bigInt({ min: THRESHOLD_7BYTE + 1n, max: THRESHOLD_8BYTE });
 const varint9ByteArb = fc.bigInt({ min: THRESHOLD_8BYTE + 1n, max: MAX_VARINT });
 
 // 全範囲の有効な varint 値を生成する Arbitrary
@@ -35,6 +37,7 @@ const varintArb = fc.oneof(
   varint4ByteArb,
   varint5ByteArb,
   varint6ByteArb,
+  varint7ByteArb,
   varint8ByteArb,
   varint9ByteArb,
 );
@@ -104,6 +107,18 @@ test("4 バイト範囲の値は 4 バイトにエンコードされる", () => 
       assert.equal(encoded.length, 4);
       // プレフィックスは 1110
       assert.equal(encoded[0] & 0xf0, 0xe0);
+    }),
+  );
+});
+
+test("7 バイト範囲の値は 7 バイトにエンコードされる", () => {
+  fc.assert(
+    fc.property(varint7ByteArb, (value) => {
+      assert.equal(varintSize(value), 7);
+      const encoded = encodeVarint(value);
+      assert.equal(encoded.length, 7);
+      // プレフィックスは 1111110
+      assert.equal(encoded[0] & 0xfe, 0xfc);
     }),
   );
 });

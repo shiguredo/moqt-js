@@ -303,7 +303,7 @@ test("Event Timeline: インデックスが複数ある場合はエラー", asyn
 });
 
 test("Event Timeline: data が配列の場合も正常にデコードする", async () => {
-  // RFC Section 8.4.2: "data": [47.1812, 8.4592]
+  // draft-ietf-moq-msf-00 Section 8.4.2: "data": [47.1812, 8.4592]
   const entries: EventTimelineEntry[] = [
     { l: [0n, 0n], data: [47.1812, 8.4592] },
     { l: [1n, 0n], data: [47.1662, 8.5155] },

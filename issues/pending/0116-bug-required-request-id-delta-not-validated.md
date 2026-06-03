@@ -68,6 +68,20 @@ if (msg.requiredRequestIdDelta > 0n && (msg.requiredRequestIdDelta * 2n) > msg.r
 
 重大。受信側 MUST 検証が無いため、不正な peer が送ってきた延滞リクエストでセッション状態が壊れる。送信側の常時 0 は機能不足だが互換性ベースでは害はない。
 
+## 追記: draft-18 での削除
+
+draft-ietf-moq-transport-18 で Required Request ID Delta フィールドは
+**削除された** (Appendix A.1: "Remove Required Request ID (#1615)")。
+
+これに伴い:
+
+- ワイヤフォーマットから `requiredRequestIdDelta` が除去された
+- `INVALID_REQUIRED_REQUEST_ID` (0x7) エラーコードも削除された
+- 受信側の MUST 検証も不要になった
+
+したがって本 issue は **draft-18 ベースの moqt-js では実装不要** である。
+draft-17 との互換性を維持する必要が生じた場合にのみ再検討する。
+
 ## pending にした理由
 
 現在のクライアント専用実装では対応が難しいため。

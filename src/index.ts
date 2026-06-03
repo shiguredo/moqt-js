@@ -60,7 +60,14 @@ export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
 
 // エラー型の再エクスポート
-export { MoqtError, SessionError, RequestError, SessionErrorCode, RequestErrorCode } from "./error";
+export {
+  MoqtError,
+  SessionError,
+  RequestError,
+  ClosedSubgroupError,
+  SessionErrorCode,
+  RequestErrorCode,
+} from "./error";
 
 // LOC の再エクスポート (draft-ietf-moq-loc)
 export * as LOC from "./loc";

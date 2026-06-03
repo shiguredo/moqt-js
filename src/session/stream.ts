@@ -7,10 +7,19 @@
 
 import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStream";
 import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
-import { IncompleteDataError } from "../error";
+import { IncompleteDataError, ProtocolViolationError } from "../error";
 import { ObjectStatus } from "../message";
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
+import type { GroupOrder } from "../message/types";
+
+/**
+ * Object ID の最大値 (2^64 - 1)
+ * draft-ietf-moq-transport-18 §11.4.2:
+ * "If the resulting Object ID would be greater than 2^64 - 1,
+ *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
+ */
+const maxObjectId = (1n << 64n) - 1n;
 
 export interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
@@ -21,12 +30,17 @@ export interface StreamStatsUpdate {
 // processFetchObjects
 // ============================================================================
 
+/**
+ * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
+ *   draft-ietf-moq-transport-18 §11.4.4.1 Table 9
+ */
 export function processFetchObjects(
   buffer: Uint8Array,
   fetcher: FetcherImpl,
   context: FetchObjectContext | null,
   isFirst: boolean,
   stats: StreamStatsUpdate,
+  groupOrder: GroupOrder,
 ): {
   remainingBuffer: Uint8Array;
   context: FetchObjectContext | null;
@@ -43,6 +57,7 @@ export function processFetchObjects(
         currentContext,
         offset,
         currentIsFirst,
+        groupOrder,
       );
 
       const payloadLength = Number(fields.payloadLength);
@@ -59,6 +74,13 @@ export function processFetchObjects(
 
       currentContext = newContext;
       currentIsFirst = false;
+
+      // draft-ietf-moq-transport-18 Section 11.4.4.2:
+      // End of Range レコードは実際のオブジェクトデータを含まないためスキップする。
+      // コンテキスト (Group ID, Object ID 等) は既に newContext で更新済み。
+      if (fields.endOfRange) {
+        continue;
+      }
 
       // draft-ietf-moq-transport-18 Section 11.2.1.1:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
@@ -130,6 +152,16 @@ export function processSubgroupObjects(
         objectId = currentPreviousObjectId + fields.objectIdDelta + 1n;
       }
       currentPreviousObjectId = objectId;
+
+      // Object ID の範囲検証: 0 以上 2^64-1 以下
+      // draft-ietf-moq-transport-18 §11.4.2:
+      // "If the resulting Object ID would be greater than 2^64 - 1,
+      //  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
+      if (objectId > maxObjectId) {
+        throw new ProtocolViolationError(
+          `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
+        );
+      }
 
       resolvedSubgroupId ??= objectId;
 

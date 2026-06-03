@@ -5,14 +5,13 @@
  * draft-ietf-moq-transport-18:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
- * "unknown range" として返すことができる。
- * draft-ietf-moq-transport-18 Section 10.12
- *
- * TODO: Unknown Range Metadata Type の実装
+ * "unknown range" として返すことができる (Section 11.4.4, Table 7)。
+ * draft-ietf-moq-transport-18 Section 10.12, Section 11.4.4
  */
 
 import type { MoqtObject } from "./dataStream";
 import type { Location } from "./message/types";
+import { GroupOrder } from "./message/types";
 import type { Property } from "./properties";
 
 /**
@@ -54,7 +53,15 @@ export class FetcherImpl implements Fetcher {
   private fetchEndLocation: Location = { group: 0n, object: 0n };
   private fetchTrackProperties: Property[] = [];
 
+  /**
+   * Fetch リクエストの Group Order
+   * draft-ietf-moq-transport-18 Section 10.2.8 (GROUP ORDER Parameter)
+   * 省略時は Ascending (0x1)。
+   */
+  private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING;
+
   // Session がストリームクローズ処理を差し込むためのコールバック
+  goawayCallback?: (newSessionUri: string) => void;
   onCancel?: () => Promise<void>;
 
   constructor(
@@ -104,10 +111,25 @@ export class FetcherImpl implements Fetcher {
   /**
    * FETCH_OK から情報を設定
    */
-  setFetchOkInfo(endOfTrack: boolean, endLocation: Location, trackProperties: Property[]): void {
+  setFetchOkInfo(
+    endOfTrack: boolean,
+    endLocation: Location,
+    trackProperties: Property[],
+    groupOrder?: GroupOrder,
+  ): void {
     this.fetchEndOfTrack = endOfTrack;
     this.fetchEndLocation = endLocation;
     this.fetchTrackProperties = trackProperties;
+    if (groupOrder !== undefined) {
+      this.fetchGroupOrder = groupOrder;
+    }
+  }
+
+  /**
+   * Fetch リクエストの Group Order を取得
+   */
+  getGroupOrder(): GroupOrder {
+    return this.fetchGroupOrder;
   }
 
   /**

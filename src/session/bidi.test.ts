@@ -8,6 +8,10 @@ import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
 import { ObjectStatus, type Location } from "../message";
+import { encodeRequestOkPayload, decodeRequestOkPayload } from "../message/session";
+import { MessageType } from "../message/types";
+import { SessionError, SessionErrorCode } from "../error";
+import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -238,4 +242,104 @@ test("SubscriberImpl: 二重 unsubscribe は no-op", async () => {
   await subscriber.unsubscribe();
 
   assert.equal(callCount, 1);
+});
+
+// ============================================================================
+// bidiHandleRequestUpdateOk の Track Properties 空チェックテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
+ * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST
+ *  close the session with a PROTOCOL_VIOLATION."
+ * REQUEST_UPDATE_OK で非空 Track Properties を受信した場合の検証。
+ */
+test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が呼ばれる", () => {
+  let closedWithError: SessionError | undefined;
+
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    pendingRequestUpdate: new Map(),
+    // BidiSessionInternal の他のフィールドは本関数のテストで未使用のため undefined
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0n, value: 1n }],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.notEqual(closedWithError, undefined);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
+  );
+});
+
+/**
+ * REQUEST_UPDATE_OK で空 Track Properties を受信した場合の正常系検証。
+ */
+test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が呼ばれない", () => {
+  let closedWithError: SessionError | undefined;
+
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    pendingRequestUpdate: new Map(),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.equal(closedWithError, undefined);
+});
+
+// ============================================================================
+// PUBLISH_OK Track Properties 非空チェックテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+ * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
+ * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
+ */
+test("PUBLISH_OK: 非空 Track Properties で closeWithError が呼ばれる", () => {
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0n, value: 1n }],
+  });
+
+  // decodeRequestOkPayload が非空 Track Properties を正しく返すことを検証
+  const decoded = decodeRequestOkPayload(payload);
+  assert.equal(decoded.trackProperties.length, 1);
+  assert.equal(decoded.trackProperties[0].id, 0n);
+});
+
+/**
+ * PUBLISH_OK で空 Track Properties の REQUEST_OK が正常にデコードされることを検証する。
+ */
+test("PUBLISH_OK: 空 Track Properties は正常にデコードされる", () => {
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  const decoded = decodeRequestOkPayload(payload);
+  assert.equal(decoded.trackProperties.length, 0);
 });

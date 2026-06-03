@@ -11,6 +11,17 @@
 
 ## develop
 
+- [CHANGE] Required Request ID Delta フィールドを全リクエストメッセージから削除する (#0185)
+  - draft-ietf-moq-transport-18 §10.1 の偶数/奇数独立採番規則に基づき、全 8 メッセージのワイヤーフォーマットから requiredRequestIdDelta を除去する
+  - Publish / Subscribe / RequestUpdate / Fetch / TrackStatus / PublishNamespace / SubscribeNamespace / SubscribeTracks の interface, encode, decode を修正する
+  - session.ts / bidi.ts の送信コード全 9 箇所から requiredRequestIdDelta: 0n を削除する
+  - 全 PBT テストのラウンドトリップ検証からも requiredRequestIdDelta を削除する
+  - @voluntas
+- [CHANGE] GOAWAY メッセージに Request ID フィールドを追加する (#0188)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、制御ストリーム上の GOAWAY に Request ID (vi64) を追加する
+  - Goaway 型に requestId: bigint | null を追加、エンコード/デコードを条件付き対応
+  - sendGoaway() が nextRequestId を送信、handleGoaway() がパリティを検証する
+  - @voluntas
 - [CHANGE] SUBSCRIBE_NAMESPACE を SUBSCRIBE_NAMESPACE (0x50) と SUBSCRIBE_TRACKS (0x51) に分割する (#0184)
   - draft-ietf-moq-transport-18 §10.18 / §10.19 に基づき、責務を namespace discovery と track subscription に分離する
   - `MessageType.SUBSCRIBE_NAMESPACE` を `0x11` から `0x50` に変更しワイヤーフォーマットを更新する
@@ -24,6 +35,24 @@
   - `TracksSubscriptionCallbacks` / `TracksSubscription` を `moqt-js` から公開する
   - `subscribeNamespace()` の第三引数 `subscribeOptions` は削除（破壊的変更）
   - @voluntas
+- [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
+  - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
+  - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う
+  - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
+  - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
+  - @voluntas
+- [ADD] REQUEST_ERROR に Redirect Structure と REDIRECT/UNSUPPORTED_EXTENSION エラーコードを追加する (#0186)
+  - draft-ietf-moq-transport-18 §10.6.1 / §10.6.2 に基づき、REQUEST_ERROR 末尾に条件付き Redirect を追加する
+  - Redirect 型 / encodeRedirect / decodeRedirect を新設する
+  - RequestErrorCode に UNSUPPORTED_EXTENSION (0x33) と REDIRECT (0x34) を追加する
+  - RequestError クラスに retryInterval / redirect フィールドを追加する
+  - 全 8 箇所の REQUEST_ERROR 受信処理で retryInterval / redirect を伝搬する
+  - @voluntas
+- [ADD] GOAWAY をリクエストストリーム上で受信可能にする (#0187)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、リクエストストリーム上の GOAWAY を検出し個別リクエストの goaway コールバックを呼ぶ
+  - PublishCallbacks / SubscribeCallbacks / FetchCallbacks に goaway コールバックを追加する
+  - bidi 第一応答 / 後続メッセージ / namespace 系ストリームループの全経路で GOAWAY を処理する
+  - @voluntas
 - [ADD] moqt URI の Fragment Identifier をパースし `Session.fragment` で公開する (#0183)
   - draft-ietf-moq-transport-18 §3.1.2 に基づき `moqt://example.com/app#type:value` 形式の fragment をパースする
   - `src/moqtUri.ts` に `parseFragment()` と `MoqtFragment` / `NormalizedMoqtUri` 型を追加する
@@ -33,20 +62,218 @@
   - devtools の Connection Settings に URI Fragment 入力欄を追加し、`buildConnectUrl()` で URL に連結する
   - クエリパラメータ `fragment` を `buildQueryString` / `initFromUrl` で永続化する
   - @voluntas
-- [CHANGE] `connect()` / `createMediaPublisher()` / `createMediaSubscriber()` の URL を `moqt://` スキーム必須に切り替える (#0182)
-  - draft-ietf-moq-transport-18 §3.1.1 / §3.1.3 に基づき `moqt://` URI を `https://` に置換して WebTransport に渡す
-  - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う
-  - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
-  - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT Message Parameter (Type 0x06) を追加する (#0228)
+  - draft-ietf-moq-transport-18 §10.2.3 に基づき、`MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT = 0x06` を追加する
+  - `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x06: "varint"` エントリを追加する
+  - PBT の varint パラメータラウンドトリップテストに 0x06 を追加する
+  - @voluntas
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT Track Property (Type 0x06) を追加する (#0230)
+  - draft-ietf-moq-transport-18 §12.1 に基づき、`TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT = 0x06n` を追加する
+  - 定数値確認テストを追加する
+  - @voluntas
+- [ADD] TRACK_NAMESPACE_PREFIX Message Parameter (Type 0x34) を追加する (#0233)
+  - draft-ietf-moq-transport-18 §10.2.14 に基づき、`MessageParameterType.TRACK_NAMESPACE_PREFIX = 0x34` を追加する
+  - `MESSAGE_PARAMETER_VALUE_ENCODING` に `0x34: "length-prefixed"` エントリを追加する
+  - `encodeParameterTrackNamespace` / `getParameterTrackNamespace` ヘルパーを追加する
+  - @voluntas
+- [ADD] Subgroup Header に FIRST_OBJECT bit (0x40) を追加し、対応する 24 種類の Type 定数を実装する (#0234)
+  - draft-ietf-moq-transport-18 §11.4.2 に基づき、0x50-0x5D / 0x70-0x7D の 24 種類を `SubgroupHeaderType` に追加する
+  - `SubgroupHeader` インターフェイスに `firstObject` フィールドを追加する
+  - `encodeSubgroupHeader` / `decodeSubgroupHeader` で FIRST_OBJECT bit を扱う
+  - Subgroup Header Type の bit 7 (0x80) バリデーションを追加する (#0237)
+  - @voluntas
+- [ADD] PADDING Stream (0x132B3E28) と PADDING Datagram (0x132B3E29) の受信対応を追加する (#0236)
+  - draft-ietf-moq-transport-18 §11.5 に基づき、PADDING stream/datagram のデータを破棄する
+  - `handleIncomingStream` に PADDING stream の drain 処理を追加する
+  - `handleIncomingDatagram` に PADDING datagram の discard 処理を追加する
+  - @voluntas
+- [ADD] Fetch Object Fields に Descending Group Order を実装する (#0241)
+  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、Group Order = Descending (0x02) 時の Group ID 計算式を追加する
+  - `encodeFetchObjectFields` / `decodeFetchObjectFields` に `groupOrder` パラメータを追加する
+  - `FetcherImpl` に Group Order 保持フィールドを追加し FETCH_OK から取得する
+  - Group ID の範囲検証（0〜2^64-1）を追加する
+  - PBT (`dataStream.prop.ts`) を追加する
+  - @voluntas
+- [ADD] Fetch Object Fields の DATAGRAM ビット (0x40) 対応を実装する (#0242)
+  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、DATAGRAM フラグ時に Subgroup ID 下位ビットを無視し Subgroup ID vi64 を読み飛ばす
+  - `encodeFetchObjectFields` で DATAGRAM 時に Subgroup ID フィールドをエンコードしない
+  - `createFirstFetchObjectFlags` に Datagram 用パラメータを追加する
+  - @voluntas
+- [ADD] SUBSCRIBE_TRACKS_OK の Track Properties 検証を追加する (#0263)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`startTracksStreamLoop` で Track Properties 非空時に PROTOCOL_VIOLATION
+  - @voluntas
+- [ADD] REQUEST_OK_ALIASES に SUBSCRIBE_TRACKS_OK を追加する (#0264)
+  - `debug.ts` の REQUEST_OK_ALIASES に SUBSCRIBE_TRACKS のエントリを追加
+  - @voluntas
+- [ADD] namespace 系リクエストのコールバックに goaway を追加する (#0265)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`NamespaceSubscriptionCallbacks` / `TracksSubscriptionCallbacks` / `NamespacePublicationCallbacks` に goaway コールバックを追加
+  - `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` の GOAWAY ハンドラでコールバックを呼ぶ
+  - @voluntas
+- [ADD] Parameter Scope 検証を追加する (#0276)
+  - draft-ietf-moq-transport-18 §10.2.1 に基づき、`src/message/parameterScope.ts` を新設し許可パラメータ集合と検証関数 `validateParameterScope` を実装する
+  - PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK で検証を追加する
+  - @voluntas
+- [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
+  - `PublishOptions` / `SubscribeOptions` に `subgroupDeliveryTimeout` を追加する
+  - `FetchOptions` / `JoiningFetchOptions` に `fillTimeout` を追加する
+  - @voluntas
+- [UPDATE] REQUEST_OK Track Properties 検証を共通関数に抽出する (#0269)
+  - `bidi.ts` に `validateRequestOkNoTrackProperties` を追加し、全 4 箇所の重複コードを置き換える
+  - @voluntas
+- [UPDATE] review-diff-code で検出された不足テストを各 issue 対応に含めて追加する (#0266)
+  - #0246-0271 の各 issue 実装に含めてテストを追加済み
+  - @voluntas
+- [UPDATE] PADDING datagram の検出を先頭バイトパターンチェックに改善して短データ時の不要な例外送出を防止する (#0275)
+  - draft-ietf-moq-transport-18 §11.5.2 に基づき、`handleIncomingDatagram` の PADDING 判定を `data[0] === 0xe4` 事前フィルタに変更する
+  - 1〜3 バイトの短いデータで `IncompleteDataError` が送出されないようにする
+  - @voluntas
+- [UPDATE] PADDING datagram 判定改善は #0275 で対応済みのためクローズする (#0295)
+  - @voluntas
+- [FIX] Fetch Object Fields の Group ID / Object ID delta encoding デコードバグを修正する (#0231)
+  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、非先頭オブジェクトで Group ID = prior + delta + 1n に修正する
+  - Object ID Delta を Group 不変時に prior + delta として計算するよう修正する
+  - `encodeFetchObjectFields` に `context` パラメータを追加し delta encoding に対応する
+  - roundtrip テストと delta 非ゼロのデコードテストを追加する
+  - Subgroup Header Type の有効範囲に FIRST_OBJECT 型 (0x50-0x5F, 0x70-0x7F) を追加する
+  - @voluntas
+- [FIX] classifyIncomingStreamType が FIRST_OBJECT ビット付き範囲を認識する (#0249)
+  - draft-ietf-moq-transport-18 §3.4 / §11.4.2 に基づき、0x50..0x5F と 0x70..0x7F を subgroup として認識する
+  - @voluntas
+- [FIX] PUBLISH_OK の Track Properties 非空時に PROTOCOL_VIOLATION でセッションを閉じる (#0255)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`bidiReadPublishResponse` で Track Properties 非空時に `closeWithError(PROTOCOL_VIOLATION)` を呼ぶ
+  - `decodePublishOkPayload` を削除し、`decodeRequestOkPayload` に統一する
+  - `publish.prop.ts` のテストを `decodeRequestOkPayload` 使用に修正する
+  - `src/session/bidi.test.ts` に PUBLISH_OK Track Properties テストを追加する
+  - @voluntas
+- [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックの try/catch 握り潰しを修正する (#0256, #0270)
+  - draft-ietf-moq-transport-18 §12.7 に基づき、`catch {}` を `catch(err)` に変更し `IncompleteDataError` のみ break する
+  - 内側変数 `length` を `innerLength` にリネームしシャドウイングを解消する
+  - `src/properties.test.ts` に再帰検出テストと不完全データテストを追加する
+  - @voluntas
+- [FIX] 制御ストリーム上 GOAWAY の Request ID 不在を PROTOCOL_VIOLATION で検出する (#0257)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`handleGoaway` で `requestId === null` の場合にセッションを閉じる
+  - @voluntas
+- [FIX] リクエストストリーム上 GOAWAY の Request ID 存在を PROTOCOL_VIOLATION で検出する (#0258)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、全リクエストストリーム GOAWAY 受信箇所で Request ID 非 null チェックを追加
+  - @voluntas
+- [FIX] 同一リクエストストリーム上の重複 GOAWAY を PROTOCOL_VIOLATION で検出する (#0259)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`goawayReceivedOnRequestStreams` Set で追跡し重複検出
+  - @voluntas
+- [FIX] normalizeSessionErrorCode と normalizeDataStreamErrorCode を追加する (#0260, #0268)
+  - draft-ietf-moq-transport-18 §14 に基づき、Session Termination / Data Stream Reset エラーコードの Grease 正規化関数を追加
+  - 既存の normalize 関数を Object.values().includes() から Set.has() にリファクタリング
+  - `src/error.test.ts` にテストを追加する
+  - @voluntas
+- [FIX] エラーメッセージの先頭を小文字に修正する (#0262)
+  - AGENTS.md の規約に基づき、大文字始まりのエラーメッセージ 4 箇所を小文字始まりに修正
+  - テストも追従修正する
+  - @voluntas
+- [FIX] goawayCallback 永続化の冗長コメントを削除する (#0267)
+  - `src/session/bidi.ts` の冗長コメント 3 箇所を削除する
+  - @voluntas
+- [FIX] TRACK_STATUS の GOAWAY ハンドリングにコメントを追記する (#0271)
+  - `bidiReadTrackStatusResponse` の GOAWAY 分岐に goawayCallback 不要の根拠をコメント追記
+  - @voluntas
+- [FIX] リクエストストリーム上 GOAWAY の goawayCallback 呼び出しテストを追加する (#0248)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`PublisherImpl` / `SubscriberImpl` の `goawayCallback` 設定テストを `src/publisher.test.ts` / `src/subscriber.test.ts` に追加する
+  - @voluntas
+- [FIX] Grease エラーコード正規化のグリースコードテストを追加する (#0247)
+  - draft-ietf-moq-transport-18 §14 に基づき、`normalizeRequestErrorCode` / `normalizePublishDoneCode` の Grease コード (0x9d, 0x7f+0x9d) テストを `src/error.test.ts` に追加する
+  - @voluntas
+- [FIX] REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK 応答で Track Properties 空チェック漏れを修正する (#0246)
+  - draft-ietf-moq-transport-18 §10.5 の MUST 要件に基づき、REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の 3 つで Track Properties が非空の場合に PROTOCOL_VIOLATION でセッションを閉じる
+  - テストを `src/session/bidi.test.ts` と `src/message/session.prop.ts` に追加する
+  - @voluntas
+- [FIX] PUBLISH_OK の REQUEST_OK 応答で Track Properties が空であることを検証する (#0235)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`decodePublishOkPayload` で非空の場合に ProtocolViolationError をスローする
+  - @voluntas
+- [FIX] STOP_SENDING / delivery timeout で閉じた Subgroup への送信を拒否する (#0178)
+  - draft-ietf-moq-transport-18 §11.4.3 に基づき、閉じた Subgroup への再送信を事前に拒否する
+  - `ClosedSubgroupError` を `src/error.ts` に新設する
+  - `SessionImpl.closedSubgroups` で閉じた Subgroup の (trackAlias, groupId) を追跡する
+  - `sendObject` の Promise チェーンで送信前に `closedSubgroups` をチェックする
+  - `sendObjectInternal` の `writer.write()` 失敗時に `closedSubgroups` に追加する
+  - publisher done 時と session close 時に `closedSubgroups` をクリアする
+  - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE 応答ストリームで PUBLISH メッセージを処理する (#0179)
+  - draft-ietf-moq-transport-18 §10.10 (PUBLISH) に基づき、NAMESPACE 応答ストリーム上の PUBLISH に対応する
+  - `NamespaceSubscriptionCallbacks` に `onPublish` コールバックを追加する
+  - `startNamespaceStreamLoop` の switch 文に `MessageType.PUBLISH` case を追加する
+  - @voluntas
+- [FIX] Fetch レスポンスの Unknown Range Metadata Type を適切にスキップする (#0180)
+  - draft-ietf-moq-transport-18 §11.4.4.2 に基づき、End of Range レコードをオブジェクトとして処理せずスキップする
+  - `processFetchObjects` に `endOfRange` チェックを追加する
+  - `fetcher.ts` の TODO コメントを削除する
+  - @voluntas
+- [FIX] SUBSCRIBE_TRACKS_OK 応答に対して誤って適用されていた Track Properties 空チェック検証を削除する (#0272)
+  - draft-ietf-moq-transport-18 §10.5 で空を MUST で要求するのは PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の 4 つのみ
+  - `startTracksStreamLoop` 内の `decodeRequestOkPayload` 呼び出しと `validateRequestOkNoTrackProperties` 検証ブロックを削除する
+  - @voluntas
+- [FIX] GOAWAY の Request ID パリティが送信側・受信側両方で誤っていたのを修正する (#0273, #0286)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、送信側 `sendGoaway()` の `requestId` を `this.nextRequestId` (クライアント自身の even 空間) から `1n` (ピアのサーバー最小 Request ID、奇数パリティ) に修正する
+  - 受信側 `handleGoaway()` のエラーメッセージを `(expected odd)` から `(expected even)` に修正する
+  - パリティチェックのコメントを更新する
+  - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE 応答ストリーム上の PUBLISH 受信を PROTOCOL_VIOLATION にする (#0274)
+  - draft-ietf-moq-transport-18 §10.18 に基づき、`startNamespaceStreamLoop` 内の `case MessageType.PUBLISH` ブロックを削除する
+  - `NamespaceSubscriptionCallbacks.onPublish` コールバックを削除する
+  - PUBLISH は §10.19 の双方向ストリーム上で送られるべきであり、SUBSCRIBE_NAMESPACE 応答上ではプロトコル違反
+  - @voluntas
+- [FIX] GOAWAY 受信時に goawayReceivedOnRequestStreams が更新されないバグを修正する (#0280)
+  - `bidiReadPublishResponse` 等の 4 箇所の初回応答 GOAWAY 分岐に `goawayReceivedOnRequestStreams.add` を追加する
+  - @voluntas
+- [FIX] goawayReceivedOnRequestStreams がセッションクローズ時にクリアされないのを修正する (#0281)
+  - `cleanUp()` に `goawayReceivedOnRequestStreams.clear()` を追加する
+  - @voluntas
+- [FIX] Fetch 先頭オブジェクトに PRIORITY_PRESENT を MUST で要求していたのを修正する (#0287)
+  - draft-ietf-moq-transport-18 §11.4.4.1 に基づき、`isFirst` 条件を削除し省略時はデフォルト値 128 を使用する
+  - @voluntas
+- [FIX] goaway JSDoc コメントを仕様に合わせて修正する (#0288)
+  - Goaway インターフェースの Request ID 説明を正しい仕様文言に修正する
+  - @voluntas
+- [FIX] 誤解を招くコメントを修正する (#0294)
+  - 末尾コメントを行コメントに変更、誤った内容のコメントを修正する
+  - @voluntas
+- [FIX] GOAWAY ハンドリング時にストリームリソースが解放されないのを修正する (#0283)
+  - 3 箇所のループ GOAWAY ハンドラに `void streamReader.cancel()` を追加する
   - @voluntas
 
 ### misc
+
+- [CHANGE] PublishOk 型と encodePublishOkPayload を削除する (#0290)
+  - PUBLISH_OK は REQUEST_OK の textual alias であり、`RequestOk` / `encodeRequestOkPayload` で代替可能
+  - PBT テストを `encodeRequestOkPayload` に移行する
+  - @voluntas
+- [ADD] Object Forwarding Preference の enum を追加する (#0239)
+  - draft-ietf-moq-transport-18 §11.2.1 に基づき、`ObjectForwardingPreference` enum を追加する
+  - @voluntas
+- [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
+  - `types.ts` / `setup.ts` のコメントの参照先を Section 4 から Section 3.3 に修正する
+  - @voluntas
+- [UPDATE] PublishDoneStatusCode と PublishDoneCode の重複定義を整理する (#0240)
+  - `PublishDoneCode` を削除し `PublishDoneStatusCode` に一本化する
+  - @voluntas
+- [UPDATE] REQUEST_OK のコメントに欠落していた Track Properties フィールドを追加する (#0232)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`session.ts` の REQUEST_OK Message 構造コメントに `Track Properties (..)` 行を追加する
+  - @voluntas
+- [UPDATE] README.md の実装状況を draft-ietf-moq-transport-18 に合わせて更新する
+  - draft バージョン表記を draft-17 から draft-18 に変更する
+  - 実装状況に MOQT URI (moqt:// スキーム / Fragment Identifier) を追加する
+  - Publisher を Track Properties (OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / MAX_CACHE_DURATION / DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER / DYNAMIC_GROUPS) と Datagram/Subgroup 混在送信に更新する
+  - Subscriber の UNSUBSCRIBE 廃止 (双方向ストリームのクローズ) / Fetch の Descending Group Order / FILL_TIMEOUT / NEW_GROUP_REQUEST を反映する
+  - コントロールメッセージの SUBSCRIBE_NAMESPACE と SUBSCRIBE_TRACKS の分割、GOAWAY の Request ID とリクエストストリーム受信、REQUEST_ERROR の Redirect を反映する
+  - データストリームの Subgroup Header FIRST_OBJECT bit と PADDING Stream/Datagram を反映する
+  - 使い方のコード例の URL を moqt:// スキームに変更する
+  - @voluntas
+- [UPDATE] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
+  - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
+  - @voluntas
 
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
 
-Media over QAUIC Transport draft-17 対応
+Media over QUIC Transport draft-17 対応
 
 - [UPDATE] `error.ts` と `grease.ts` の単体テストを追加する
   - エラー型が name / message / code を保持することを検証する
@@ -196,7 +423,6 @@ Media over QAUIC Transport draft-17 対応
   - TRACK_STATUS に Required Request ID Delta フィールドを追加する (Section 9.16)
   - PUBLISH_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.17)
   - SUBSCRIBE_NAMESPACE に Required Request ID Delta フィールドを追加する (Section 9.20)
-  - 未対応: Subgroup 再オープン禁止
   - @voluntas
 - [CHANGE] draft-ietf-moq-msf-00 に対応する
   - removeTracks の型を string[] から RemoveTrack[] ({name, namespace?}) に変更

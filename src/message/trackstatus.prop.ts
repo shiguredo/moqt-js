@@ -97,15 +97,13 @@ test("TrackStatus のエンコード・デコードがラウンドトリップ�
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       trackNameArb,
       parametersArb,
-      (requestId, requiredRequestIdDelta, namespaceParts, trackName, parameters) => {
+      (requestId, namespaceParts, trackName, parameters) => {
         const original: TrackStatus = {
           type: MessageType.TRACK_STATUS,
           requestId,
-          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           trackName,
           parameters,
@@ -116,7 +114,6 @@ test("TrackStatus のエンコード・デコードがラウンドトリップ�
 
         assert.equal(decoded.type, MessageType.TRACK_STATUS);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.deepEqual(decoded.trackName, trackName);
         assert.equal(decoded.parameters.length, parameters.length);

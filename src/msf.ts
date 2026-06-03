@@ -170,6 +170,7 @@ export type CatalogDeltaOperation =
  * 差分更新カタログ (Section 5.2)
  *
  * Delta update は version と tracks を含んではならない (MUST NOT)。
+ * draft-ietf-moq-msf-00 Section 5.2
  * operations に少なくとも 1 つの操作が必須。
  * 操作は JSON ドキュメント内の宣言順に逐次適用される。
  */

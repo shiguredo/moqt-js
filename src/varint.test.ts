@@ -5,7 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { encodeVarint, decodeVarint, varintSize } from "./varint";
-import { IncompleteDataError, ProtocolViolationError } from "./error";
+import { IncompleteDataError } from "./error";
 
 // 1 バイト (0xxxxxxx): 0-127
 test("encodeVarint: 0 をエンコード", () => {
@@ -60,11 +60,26 @@ test("encodeVarint: 34359738368 をエンコード (6 バイト最小)", () => {
   );
 });
 
-// 8 バイト (11111110): 4398046511104-72057594037927935
-test("encodeVarint: 4398046511104 をエンコード (8 バイト最小)", () => {
+// 7 バイト (1111110x): 4398046511104-562949953421311
+test("encodeVarint: 4398046511104 をエンコード (7 バイト最小)", () => {
   assert.deepEqual(
     encodeVarint(4398046511104n),
-    new Uint8Array([0xfe, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]),
+    new Uint8Array([0xfc, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]),
+  );
+});
+
+test("encodeVarint: 562949953421311 をエンコード (7 バイト最大)", () => {
+  assert.deepEqual(
+    encodeVarint(562949953421311n),
+    new Uint8Array([0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+  );
+});
+
+// 8 バイト (11111110): 562949953421312-72057594037927935
+test("encodeVarint: 562949953421312 をエンコード (8 バイト最小)", () => {
+  assert.deepEqual(
+    encodeVarint(562949953421312n),
+    new Uint8Array([0xfe, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
   );
 });
 
@@ -126,12 +141,20 @@ test("decodeVarint: データ不足は IncompleteDataError", () => {
   assert.throws(() => decodeVarint(new Uint8Array([0x80])), IncompleteDataError);
 });
 
-test("decodeVarint: 無効なコードポイント 0xFC は ProtocolViolationError", () => {
-  assert.throws(() => decodeVarint(new Uint8Array([0xfc])), ProtocolViolationError);
+test("decodeVarint: 4398046511104 をデコード (7 バイト)", () => {
+  const [value, consumed] = decodeVarint(
+    new Uint8Array([0xfc, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00]),
+  );
+  assert.equal(value, 4398046511104n);
+  assert.equal(consumed, 7);
 });
 
-test("decodeVarint: 無効なコードポイント 0xFD は ProtocolViolationError", () => {
-  assert.throws(() => decodeVarint(new Uint8Array([0xfd])), ProtocolViolationError);
+test("decodeVarint: 562949953421311 をデコード (7 バイト最大)", () => {
+  const [value, consumed] = decodeVarint(
+    new Uint8Array([0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+  );
+  assert.equal(value, 562949953421311n);
+  assert.equal(consumed, 7);
 });
 
 // varintSize テスト
@@ -148,7 +171,9 @@ test("varintSize: 各範囲で正しいサイズを返す", () => {
   assert.equal(varintSize(34359738367n), 5);
   assert.equal(varintSize(34359738368n), 6);
   assert.equal(varintSize(4398046511103n), 6);
-  assert.equal(varintSize(4398046511104n), 8);
+  assert.equal(varintSize(4398046511104n), 7);
+  assert.equal(varintSize(562949953421311n), 7);
+  assert.equal(varintSize(562949953421312n), 8);
   assert.equal(varintSize(72057594037927935n), 8);
   assert.equal(varintSize(72057594037927936n), 9);
 });

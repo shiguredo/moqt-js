@@ -10,7 +10,7 @@
  */
 
 import { encodeVarint, decodeVarint } from "./varint";
-import { MalformedTrackError, ProtocolViolationError } from "./error";
+import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
 
 /**
  * MOQT Property ID (Section 12)
@@ -56,12 +56,22 @@ export const TrackPropertyId = {
    * draft-ietf-moq-transport-18:
    * Message Parameter から Track Property に移動。
    */
-  DELIVERY_TIMEOUT: 0x02n,
+  OBJECT_DELIVERY_TIMEOUT: 0x02n,
   /**
    * Max Cache Duration (Section 12.3 MAX CACHE DURATION)
    * オブジェクトの最大キャッシュ期間（ミリ秒）
    */
   MAX_CACHE_DURATION: 0x04n,
+  /**
+   * Subgroup Delivery Timeout (Section 12.1 SUBGROUP_DELIVERY_TIMEOUT)
+   *
+   * draft-ietf-moq-transport-18:
+   * SUBGROUP_DELIVERY_TIMEOUT (Property Type 0x06) は varint。
+   * Publisher が Subgroup の配信タイムアウト（ミリ秒）として設定する。
+   * 0 はタイムアウトなしを意味する。
+   * draft-ietf-moq-transport-18 Section 12.1
+   */
+  SUBGROUP_DELIVERY_TIMEOUT: 0x06n,
   /**
    * Publisher Priority (Section 12.4 DEFAULT PUBLISHER PRIORITY)
    * Publisher が設定する優先度（0-255）
@@ -85,10 +95,13 @@ export const TrackPropertyId = {
 /**
  * Property Type の値範囲 (Section 15.8)
  *
- * draft-ietf-moq-transport-18:
- * - 0x00 - 0x37: Standards Action or IESG Approval (1-byte encoding)
+ * draft-ietf-moq-transport-18 Section 15.8:
+ * - 0x00 - 0x77: Standards Action or IESG Approval (1-byte encoding)
+ * - 0x78 - 0x7F: アプリケーション固有 (1-byte encoding, 登録不要)
+ * - 0x80 - 0x37FF: Specification Required (2-byte encoding)
  * - 0x3800 - 0x3FFF: アプリケーション固有 (2-byte encoding, 登録不要)
- * - 0x4000 以上: First Come First Served
+ * - 0x4000 - 0x7FFF: Mandatory Track Properties 用に予約 (Track scope のみ)
+ * - 0x8000 以上: First Come First Served
  *
  * アプリケーション固有の範囲は IANA に登録する必要がない。
  * 異なるソースからのトラックを消費するアプリケーションでは
@@ -406,7 +419,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     //  Immutable Properties key." → Track is malformed
     if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       throw new MalformedTrackError(
-        "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+        "immutable properties must not recursively contain another immutable properties key",
       );
     }
 
@@ -539,7 +552,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         //  Immutable Properties key." → Track is malformed
         if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
           throw new MalformedTrackError(
-            "IMMUTABLE_PROPERTIES cannot contain another IMMUTABLE_PROPERTIES",
+            "immutable properties must not recursively contain another immutable properties key",
           );
         }
 
@@ -567,6 +580,15 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       offset += deltaIdLen + lengthLen + Number(length);
     } else {
       // 未知の拡張
+      // draft-ietf-moq-transport-18 §2.5.1:
+      // Mandatory Track Property (0x4000-0x7FFF) かつ未知の場合は
+      // トラックを処理してはならない (MUST NOT process or forward)
+      if (id >= 0x4000n && id <= 0x7fffn) {
+        throw new MalformedTrackError(
+          `unknown mandatory track property: type 0x${id.toString(16)}`,
+        );
+      }
+
       if (id % 2n === 1n) {
         // 奇数 ID: length + bytes 形式
         const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
@@ -632,6 +654,42 @@ export function decodeProperties(data: Uint8Array): Property[] {
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
       );
+      // draft-ietf-moq-transport-18 §12.7 (Immutable Properties):
+      // IMMUTABLE_PROPERTIES MUST NOT recursively contain an
+      // IMMUTABLE_PROPERTIES property. 早期検出のため、内側の KVP を走査して
+      // IMMUTABLE_PROPERTIES (0x0B) が再度現れないか検証する。
+      // 内側データが不完全な KVP の場合は IncompleteDataError のみ無視する。
+      if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES && extData.length > 0) {
+        let innerOffset = 0;
+        let innerPreviousId = 0n;
+        while (innerOffset < extData.length) {
+          try {
+            const [deltaId, deltaIdLen] = decodeVarint(extData.subarray(innerOffset));
+            const innerId = innerPreviousId + deltaId;
+            innerPreviousId = innerId;
+            if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+              throw new MalformedTrackError(
+                "immutable properties must not recursively contain another immutable properties key",
+              );
+            }
+            if (innerId % 2n === 0n) {
+              const [, valueLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
+              innerOffset += deltaIdLen + valueLen;
+            } else {
+              const [innerLength, innerLengthLen] = decodeVarint(
+                extData.subarray(innerOffset + deltaIdLen),
+              );
+              innerOffset += deltaIdLen + innerLengthLen + Number(innerLength);
+            }
+          } catch (err) {
+            if (err instanceof IncompleteDataError) {
+              // 不完全な内側 KVP は後段の decodeImmutableProperties で検出される
+              break;
+            }
+            throw err;
+          }
+        }
+      }
       extensions.push({ id, data: extData });
       offset += deltaIdLen + lengthLen + Number(length);
     }

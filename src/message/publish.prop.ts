@@ -8,8 +8,6 @@ import * as fc from "fast-check";
 import {
   encodePublishPayload,
   decodePublishPayload,
-  encodePublishOkPayload,
-  decodePublishOkPayload,
   encodePublishDonePayload,
   decodePublishDonePayload,
 } from "./publish";
@@ -17,6 +15,7 @@ import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from ".
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 import { type Property, TrackPropertyId } from "../properties";
+import { decodeRequestOkPayload, encodeRequestOkPayload } from "./session";
 
 /**
  * Message Parameter の arbitrary
@@ -26,7 +25,7 @@ import { type Property, TrackPropertyId } from "../properties";
  */
 const varintParameterArb = fc
   .record({
-    type: fc.constantFrom(0x02, 0x04, 0x08, 0x32),
+    type: fc.constantFrom(0x02, 0x04, 0x06, 0x08, 0x32),
     varintValue: fc.bigInt({ min: 0n, max: 1000000n }),
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
@@ -141,25 +140,15 @@ test("Publish のエンコード・デコードがラウンドトリップする
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceStringsArb,
       trackNameArb,
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
       trackPropertiesArb,
-      (
-        requestId,
-        requiredRequestIdDelta,
-        namespaceParts,
-        trackName,
-        trackAlias,
-        parameters,
-        trackProperties,
-      ) => {
+      (requestId, namespaceParts, trackName, trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.PUBLISH as typeof MessageType.PUBLISH,
           requestId,
-          requiredRequestIdDelta,
           trackNamespace: createTrackNamespace(namespaceParts),
           trackName,
           trackAlias,
@@ -172,7 +161,6 @@ test("Publish のエンコード・デコードがラウンドトリップする
 
         assert.equal(decoded.type, MessageType.PUBLISH);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.requiredRequestIdDelta, requiredRequestIdDelta);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), namespaceParts);
         assert.deepEqual(decoded.trackName, trackName);
         assert.equal(decoded.trackAlias, trackAlias);
@@ -204,19 +192,21 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
   fc.assert(
     fc.property(parametersArb, (parameters) => {
       const original = {
-        type: MessageType.PUBLISH_OK as typeof MessageType.PUBLISH_OK,
+        type: MessageType.REQUEST_OK as typeof MessageType.REQUEST_OK,
         parameters,
+        trackProperties: [] as Property[],
       };
 
-      const encoded = encodePublishOkPayload(original);
-      const decoded = decodePublishOkPayload(encoded);
+      const encoded = encodeRequestOkPayload(original);
+      const decoded = decodeRequestOkPayload(encoded);
 
-      assert.equal(decoded.type, MessageType.PUBLISH_OK);
+      assert.equal(decoded.type, MessageType.REQUEST_OK);
       assert.equal(decoded.parameters.length, parameters.length);
       for (let i = 0; i < parameters.length; i++) {
         assert.equal(decoded.parameters[i].type, parameters[i].type);
         assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
       }
+      assert.equal(decoded.trackProperties.length, 0);
     }),
   );
 });

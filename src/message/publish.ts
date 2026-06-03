@@ -26,24 +26,11 @@ import { MessageType } from "./types";
 export interface Publish {
   type: typeof MessageType.PUBLISH;
   requestId: bigint;
-  // 0 は依存なしを意味する
-  requiredRequestIdDelta: bigint;
   trackNamespace: TrackNamespace;
   trackName: Uint8Array;
   trackAlias: bigint;
   parameters: Parameter[];
   trackProperties: Property[];
-}
-
-/**
- * REQUEST_OK alias PUBLISH_OK (Section 10.5 REQUEST_OK)
- *
- * draft-ietf-moq-transport-18:
- * 双方向ストリーム上で送信されるため Request ID は不要。
- */
-export interface PublishOk {
-  type: typeof MessageType.PUBLISH_OK;
-  parameters: Parameter[];
 }
 
 /**
@@ -80,7 +67,6 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.requiredRequestIdDelta));
   parts.push(encodeTrackNamespace(msg.trackNamespace));
   parts.push(encodeVarint(msg.trackName.length));
   parts.push(msg.trackName);
@@ -114,12 +100,6 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [requiredRequestIdDelta, requiredRequestIdDeltaConsumed] = decodeVarint(
-    data,
-    offset + totalConsumed,
-  );
-  totalConsumed += requiredRequestIdDeltaConsumed;
-
   const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
   totalConsumed += namespaceConsumed;
 
@@ -142,51 +122,11 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   return {
     type: MessageType.PUBLISH,
     requestId,
-    requiredRequestIdDelta,
     trackNamespace,
     trackName,
     trackAlias,
     parameters,
     trackProperties,
-  };
-}
-
-/**
- * PublishOk のペイロードをエンコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- */
-export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(encodeParameters(msg.parameters));
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
-}
-
-/**
- * PublishOk のペイロードをデコード
- *
- * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
- * 双方向ストリーム上で送信されるため Request ID は含まない。
- */
-export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
-  let totalConsumed = 0;
-
-  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
-  totalConsumed += parametersConsumed;
-
-  return {
-    type: MessageType.PUBLISH_OK,
-    parameters,
   };
 }
 
