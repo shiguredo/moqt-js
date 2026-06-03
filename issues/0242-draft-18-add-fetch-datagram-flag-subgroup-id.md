@@ -11,14 +11,15 @@
 draft-ietf-moq-transport-18 で定義されている Fetch Object Fields の DATAGRAM フラグ (0x40) が未対応であるため、実装する。
 
 - Section 11.2.1 (Object Header):
+
   > "Subgroup ID: The identifier of the Object's Subgroup within the Group.
-  >  This field is omitted if the Object Forwarding Preference is Datagram."
+  > This field is omitted if the Object Forwarding Preference is Datagram."
 
 - Section 11.4.4.1 Table 9:
   > "When encoding an Object with a Forwarding Preference of 'Datagram',
-  >  the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'.
-  >  When 0x40 is set, it SHOULD set the two least significant bits to
-  >  zero and the subscriber MUST ignore the bits."
+  > the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'.
+  > When 0x40 is set, it SHOULD set the two least significant bits to
+  > zero and the subscriber MUST ignore the bits."
 
 現在の `decodeFetchObjectFields` は DATAGRAM ビット (0x40) を全くチェックしておらず、下位 2 ビットの Subgroup ID encoding を無視せずに処理してしまう。これにより以下の問題が発生する:
 
@@ -39,14 +40,15 @@ Subscriber 側の MUST 要件 (Section 11.4.4.1: "subscriber MUST ignore the bit
 // DATAGRAM ビットのチェックなしに下位 2 ビットを評価している
 const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
 switch (subgroupEncoding) {
-  case FetchSerializationFlags.SUBGROUP_ZERO:       // subgroupId = 0n
-  case FetchSerializationFlags.SUBGROUP_SAME:       // context.subgroupId
-  case FetchSerializationFlags.SUBGROUP_PLUS_ONE:   // context.subgroupId + 1n
-  case FetchSerializationFlags.SUBGROUP_PRESENT:    // decodeVarint で Subgroup ID 読み取り
+  case FetchSerializationFlags.SUBGROUP_ZERO: // subgroupId = 0n
+  case FetchSerializationFlags.SUBGROUP_SAME: // context.subgroupId
+  case FetchSerializationFlags.SUBGROUP_PLUS_ONE: // context.subgroupId + 1n
+  case FetchSerializationFlags.SUBGROUP_PRESENT: // decodeVarint で Subgroup ID 読み取り
 }
 ```
 
 DATAGRAM ビット (0x40) が立っている場合:
+
 - 下位 2 ビットが `SUBGROUP_ZERO (0x00)` なら、意図しない `subgroupId = 0n` になる（たまたま動作するが不正）
 - 下位 2 ビットが `SUBGROUP_PRESENT (0x03)` なら、wire 上の Subgroup ID vi64 を読み取って `offset` がずれる
 - 下位 2 ビットが `SUBGROUP_SAME (0x01)` または `SUBGROUP_PLUS_ONE (0x02)` で先頭オブジェクトの場合、ProtocolViolationError が誤って throw される

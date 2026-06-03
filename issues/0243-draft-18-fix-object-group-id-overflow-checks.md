@@ -11,16 +11,17 @@
 draft-ietf-moq-transport-18 で MUST 要件として定義されている Object ID および Group ID のオーバーフローチェックが欠落しているため、全計算パスに追加する。
 
 - Section 11.4.2 (Subgroup):
+
   > "If the resulting Object ID would be greater than 2^64 - 1, the
-  >  endpoint MUST close the session with a PROTOCOL_VIOLATION."
+  > endpoint MUST close the session with a PROTOCOL_VIOLATION."
 
 - Section 11.4.4.1 (Fetch, Table 9):
   > "If the computed Group ID would be less than 0 or greater than
-  >  2^64-1, the Subscriber MUST close the Session with error
-  >  'PROTOCOL_VIOLATION'."
+  > 2^64-1, the Subscriber MUST close the Session with error
+  > 'PROTOCOL_VIOLATION'."
   >
   > "If the computed Object ID would be greater than 2^64-1, the
-  >  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+  > Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
 
 ## 優先度根拠
 
@@ -34,10 +35,10 @@ MUST 要件の欠落。64 ビット整数の境界で誤動作する可能性が
 
 ```ts
 // line 135: 先頭オブジェクトの Object ID（絶対値）
-objectId = fields.objectIdDelta;  // オーバーフローチェックなし
+objectId = fields.objectIdDelta; // オーバーフローチェックなし
 
 // line 137: 2 番目以降の Object ID
-objectId = currentPreviousObjectId + fields.objectIdDelta + 1n;  // チェックなし
+objectId = currentPreviousObjectId + fields.objectIdDelta + 1n; // チェックなし
 ```
 
 ### Fetch データストリーム
@@ -46,19 +47,19 @@ objectId = currentPreviousObjectId + fields.objectIdDelta + 1n;  // チェック
 
 ```ts
 // line 1264: 先頭オブジェクトの Group ID（絶対値）
-groupId = delta;  // チェックなし
+groupId = delta; // チェックなし
 
 // line 1266: 2 番目以降の Group ID（Ascending）
-groupId = context.groupId + delta + 1n;  // チェックなし
+groupId = context.groupId + delta + 1n; // チェックなし
 
 // line 1273: Group ID 不変時（context 継承）
-groupId = context.groupId;  // overflow しないのでチェック不要
+groupId = context.groupId; // overflow しないのでチェック不要
 
 // line 1317: 先頭または Group 変化時の Object ID（絶対値）
-objectId = delta;  // チェックなし
+objectId = delta; // チェックなし
 
 // line 1324: Object ID Delta なし（+1）
-objectId = context.objectId + 1n;  // チェックなし
+objectId = context.objectId + 1n; // チェックなし
 ```
 
 上記のうち `stream.ts:135, stream.ts:137, dataStream.ts:1264, dataStream.ts:1266, dataStream.ts:1317, dataStream.ts:1324, dataStream.ts:1315` の最低 7 箇所に overflow チェックが必要。

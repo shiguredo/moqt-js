@@ -11,6 +11,7 @@ import { IncompleteDataError } from "../error";
 import { ObjectStatus } from "../message";
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
+import type { GroupOrder } from "../message/types";
 
 export interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
@@ -21,12 +22,17 @@ export interface StreamStatsUpdate {
 // processFetchObjects
 // ============================================================================
 
+/**
+ * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
+ *   draft-ietf-moq-transport-18 §11.4.4.1 Table 9
+ */
 export function processFetchObjects(
   buffer: Uint8Array,
   fetcher: FetcherImpl,
   context: FetchObjectContext | null,
   isFirst: boolean,
   stats: StreamStatsUpdate,
+  groupOrder: GroupOrder,
 ): {
   remainingBuffer: Uint8Array;
   context: FetchObjectContext | null;
@@ -43,6 +49,7 @@ export function processFetchObjects(
         currentContext,
         offset,
         currentIsFirst,
+        groupOrder,
       );
 
       const payloadLength = Number(fields.payloadLength);

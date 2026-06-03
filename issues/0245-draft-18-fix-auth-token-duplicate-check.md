@@ -11,16 +11,18 @@
 draft-ietf-moq-transport-18 Section 10.2.2 で AUTHORIZATION_TOKEN は単一メッセージ内での複数回出現が許可されているが、現在のコードでは無条件に重複を拒否している。
 
 Section 10.2:
+
 > "Senders MUST NOT repeat the same Parameter Type in a message unless
->  the parameter definition explicitly allows multiple instances of
->  that type to be sent in a single message. Receivers SHOULD check
->  that there are no unexpected duplicate parameters and close the
->  session with PROTOCOL_VIOLATION if found."
+> the parameter definition explicitly allows multiple instances of
+> that type to be sent in a single message. Receivers SHOULD check
+> that there are no unexpected duplicate parameters and close the
+> session with PROTOCOL_VIOLATION if found."
 
 Section 10.2.2:
+
 > "The AUTHORIZATION TOKEN parameter MAY be repeated within a message
->  as long as the combination of Token Type and Token Value are unique
->  after resolving any aliases."
+> as long as the combination of Token Type and Token Value are unique
+> after resolving any aliases."
 
 ## 優先度根拠
 
@@ -29,6 +31,7 @@ Section 10.2.2:
 ## 現状
 
 `src/message/parameter.ts` `decodeParameters` (line 785-789):
+
 ```ts
 if (seenTypes.has(param.type)) {
   throw new ProtocolViolationError(

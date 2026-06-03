@@ -2,8 +2,9 @@
 
 - Priority: High
 - Created: 2026-06-03
+- Completed: 2026-06-03
 - Model: deepseek-v4-pro
-- Branch: feature/add-descending-fetch-group-order
+- Branch: feature/draft-18
 - Polished: 2026-06-03
 
 ## 目的
@@ -13,9 +14,11 @@ draft-ietf-moq-transport-18 で定義されている Fetch Object Fields の Des
 仕様上の根拠:
 
 - Section 10.12.3 (Fetch Handling):
+
   > "A publisher MUST send fetched groups in the requested group order, either ascending or descending."
 
 - Section 11.4.4.1 (Table 9):
+
   > "If the Group Order is Descending, the Group ID is the prior Object's Group ID minus the (Group ID Delta + 1). If the computed Group ID would be less than 0 or greater than 2^64-1, the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
 
 - Section 10.2.8 (GROUP ORDER Parameter): 値は Ascending (0x1) または Descending (0x2)。`If omitted from FETCH, the receiver uses Ascending (0x1)`。
@@ -75,25 +78,21 @@ const delta = fields.groupId - context.groupId - 1n;
 
 ## 解決方法
 
-### Step 1: `FetcherImpl` に groupOrder フィールドを追加
+### 実装内容
 
-- `src/fetcher.ts`: `FetcherImpl` に `private groupOrder: number = GroupOrder.ASCENDING` を追加
-- `src/session/bidi.ts`: `bidiReadFetchResponse` で FETCH_OK の parameters から GROUP_ORDER (0x22) を抽出し、`setFetchOkInfo` に渡す
-- `src/fetcher.ts:105`: `setFetchOkInfo` のシグネチャに `groupOrder?: number` を追加
+1. **`src/fetcher.ts`**: `FetcherImpl` に `private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING` フィールドを追加。`setFetchOkInfo` に `groupOrder?: GroupOrder` パラメータを追加し、`getGroupOrder(): GroupOrder` を新設。
 
-### Step 2: コールチェーンに groupOrder を伝搬
+2. **`src/session/bidi.ts`**: `bidiReadFetchResponse` で FETCH_OK の `decoded.parameters` から GROUP_ORDER (0x22) を抽出し `setFetchOkInfo` に渡す。
 
-- `src/session/stream.ts`: `processFetchObjects` のシグネチャに `groupOrder: number` を追加
-- `src/session.ts`: 受信ループ内の `processFetchObjects` 呼び出しで、`FetcherImpl` から groupOrder を取得して渡す
+3. **`src/dataStream.ts`**:
+   - `encodeFetchObjectFields`: `groupOrder?: GroupOrder` パラメータを追加。Descending 時は `delta = context.groupId - fields.groupId - 1n`。
+   - `decodeFetchObjectFields`: `groupOrder: GroupOrder` パラメータを追加。Descending 時は `groupId = context.groupId - delta - 1n`。
+   - Group ID の範囲検証（0〜2^64-1）を追加。範囲外は `ProtocolViolationError`。
 
-### Step 3: decode/encode に groupOrder を追加
+4. **`src/session/stream.ts`**: `processFetchObjects` に `groupOrder: GroupOrder` パラメータを追加し `decodeFetchObjectFields` に伝搬。
 
-- `src/dataStream.ts` `decodeFetchObjectFields`: `groupOrder: number` パラメータを追加。Descending 時は `groupId = context.groupId - delta - 1n`
-- `src/dataStream.ts` `encodeFetchObjectFields`: `groupOrder?: number` パラメータを追加（PBT 用、デフォルトは Ascending）。Descending 時はエンコード側で delta の符号を反転
+5. **`src/session.ts`**: `SessionImpl.processFetchObjects` で `fetcher.getGroupOrder()` を渡す。
 
-### Step 4: 検証とテスト
-
-- Group ID が 0 未満または 2^64-1 超過時に `ProtocolViolationError` を throw する検証を追加
-- `src/dataStream.test.ts` の全 `decodeFetchObjectFields` 呼び出しに `groupOrder` を追加
-- `src/dataStream.prop.ts` を新規作成し、Ascending/Descending 両方のラウンドトリップ PBT を追加
-- `src/session/stream.test.ts` の `processFetchObjects` テストがあれば更新
+6. **テスト**:
+   - `src/dataStream.test.ts`: Descending decode テスト、範囲検証（Ascending overflow / Descending underflow）テスト、Descending roundtrip テストを追加。
+   - `src/dataStream.prop.ts`（新規）: Ascending/Descending の roundtrip PBT、Group ID 範囲検証 PBT を追加。

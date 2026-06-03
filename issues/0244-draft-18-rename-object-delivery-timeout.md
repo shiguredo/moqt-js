@@ -25,26 +25,26 @@ draft-ietf-moq-transport-18 の正式名称に合わせて、内部の定数名�
 
 定数定義 2 箇所に加え、コメント・文字列キー・PBT テストを含む全参照箇所の修正が必要。
 
-| ファイル:行 | 種別 | 修正内容 |
-|---|---|---|
-| `src/message/types.ts:106` | コメント | `DELIVERY_TIMEOUT` → `OBJECT_DELIVERY_TIMEOUT` |
-| `src/message/types.ts:111` | コメント | 同上 |
-| `src/message/types.ts:121` | **定数定義** | `DELIVERY_TIMEOUT: 0x02,` → `OBJECT_DELIVERY_TIMEOUT: 0x02,` |
-| `src/properties.ts:59` | **定数定義** | `DELIVERY_TIMEOUT: 0x02n,` → `OBJECT_DELIVERY_TIMEOUT: 0x02n,` |
-| `src/session/params.ts:85` | コメント | `// DELIVERY_TIMEOUT` → `// OBJECT_DELIVERY_TIMEOUT` |
-| `src/session/params.ts:87` | 文字列リテラル | `"DELIVERY_TIMEOUT"` → `"OBJECT_DELIVERY_TIMEOUT"` (エラーメッセージ用) |
-| `src/session/params.ts:89` | **定数参照** | `TrackPropertyId.DELIVERY_TIMEOUT` → `TrackPropertyId.OBJECT_DELIVERY_TIMEOUT` |
-| `src/session/params.ts:161` | コメント | `// DELIVERY_TIMEOUT` → `// OBJECT_DELIVERY_TIMEOUT` |
-| `src/session/params.ts:163` | 文字列リテラル | `"DELIVERY_TIMEOUT"` → `"OBJECT_DELIVERY_TIMEOUT"` |
-| `src/session/params.ts:165` | **定数参照** | `MessageParameterType.DELIVERY_TIMEOUT` → `MessageParameterType.OBJECT_DELIVERY_TIMEOUT` |
-| `src/session.ts:1253` | 文字列キー | `DELIVERY_TIMEOUT:` → `OBJECT_DELIVERY_TIMEOUT:` (debug 出力用プロパティ名) |
-| `src/session.ts:1384` | 文字列キー | 同上 |
-| `src/session.prop.ts:171` | **PBT** | `MessageParameterType.DELIVERY_TIMEOUT` → `MessageParameterType.OBJECT_DELIVERY_TIMEOUT` |
-| `src/session.prop.ts:270` | **PBT** | 同上 |
-| `src/message/parameter.ts:571` | コメント | `// DELIVERY_TIMEOUT` → `// OBJECT_DELIVERY_TIMEOUT` |
-| `src/message/trackstatus.ts:10` | コメント | `DELIVERY_TIMEOUT` → `OBJECT_DELIVERY_TIMEOUT` |
-| `src/message/trackstatus.ts:34` | コメント | 同上 |
-| `src/subscriber.ts:57` | コメント | `DELIVERY_TIMEOUT` → `OBJECT_DELIVERY_TIMEOUT` |
+| ファイル:行                     | 種別           | 修正内容                                                                                 |
+| ------------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
+| `src/message/types.ts:106`      | コメント       | `DELIVERY_TIMEOUT` → `OBJECT_DELIVERY_TIMEOUT`                                           |
+| `src/message/types.ts:111`      | コメント       | 同上                                                                                     |
+| `src/message/types.ts:121`      | **定数定義**   | `DELIVERY_TIMEOUT: 0x02,` → `OBJECT_DELIVERY_TIMEOUT: 0x02,`                             |
+| `src/properties.ts:59`          | **定数定義**   | `DELIVERY_TIMEOUT: 0x02n,` → `OBJECT_DELIVERY_TIMEOUT: 0x02n,`                           |
+| `src/session/params.ts:85`      | コメント       | `// DELIVERY_TIMEOUT` → `// OBJECT_DELIVERY_TIMEOUT`                                     |
+| `src/session/params.ts:87`      | 文字列リテラル | `"DELIVERY_TIMEOUT"` → `"OBJECT_DELIVERY_TIMEOUT"` (エラーメッセージ用)                  |
+| `src/session/params.ts:89`      | **定数参照**   | `TrackPropertyId.DELIVERY_TIMEOUT` → `TrackPropertyId.OBJECT_DELIVERY_TIMEOUT`           |
+| `src/session/params.ts:161`     | コメント       | `// DELIVERY_TIMEOUT` → `// OBJECT_DELIVERY_TIMEOUT`                                     |
+| `src/session/params.ts:163`     | 文字列リテラル | `"DELIVERY_TIMEOUT"` → `"OBJECT_DELIVERY_TIMEOUT"`                                       |
+| `src/session/params.ts:165`     | **定数参照**   | `MessageParameterType.DELIVERY_TIMEOUT` → `MessageParameterType.OBJECT_DELIVERY_TIMEOUT` |
+| `src/session.ts:1253`           | 文字列キー     | `DELIVERY_TIMEOUT:` → `OBJECT_DELIVERY_TIMEOUT:` (debug 出力用プロパティ名)              |
+| `src/session.ts:1384`           | 文字列キー     | 同上                                                                                     |
+| `src/session.prop.ts:171`       | **PBT**        | `MessageParameterType.DELIVERY_TIMEOUT` → `MessageParameterType.OBJECT_DELIVERY_TIMEOUT` |
+| `src/session.prop.ts:270`       | **PBT**        | 同上                                                                                     |
+| `src/message/parameter.ts:571`  | コメント       | `// DELIVERY_TIMEOUT` → `// OBJECT_DELIVERY_TIMEOUT`                                     |
+| `src/message/trackstatus.ts:10` | コメント       | `DELIVERY_TIMEOUT` → `OBJECT_DELIVERY_TIMEOUT`                                           |
+| `src/message/trackstatus.ts:34` | コメント       | 同上                                                                                     |
+| `src/subscriber.ts:57`          | コメント       | `DELIVERY_TIMEOUT` → `OBJECT_DELIVERY_TIMEOUT`                                           |
 
 ## 設計方針
 

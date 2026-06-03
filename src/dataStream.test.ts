@@ -25,6 +25,7 @@ import {
   createFetchObjectFlags,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
+import { GroupOrder } from "./message/types";
 import { encodeVarint } from "./varint";
 import { IncompleteDataError, ProtocolViolationError } from "./error";
 
@@ -1249,4 +1250,270 @@ test("FetchObjectFields: encode→decode roundtrip で delta encoding が正し�
   assert.equal(thirdDecoded.objectId, 0n);
   assert.equal(thirdDecoded.publisherPriority, 200);
   assert.equal(thirdDecoded.payloadLength, 30n);
+});
+
+// ============================================================================
+// Fetch Object Fields - Descending Group Order のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "If the Group Order is Descending, the Group ID is the prior Object's
+ *  Group ID minus the (Group ID Delta + 1)."
+ *
+ * Descending 時に正しい Group ID を計算することを検証する。
+ */
+test("FetchObjectFields: Descending Group Order で Group ID を正しくデコードする", () => {
+  const prior: FetchObjectContext = {
+    groupId: 100n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  // GROUP_ID_PRESENT | SUBGROUP_ZERO | OBJECT_ID_PRESENT | PRIORITY_PRESENT
+  const flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_ZERO |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  // delta_group=3, objectId=0(絶対値), priority=200, payloadLength=50
+  const groupDeltaBytes = encodeVarint(3n);
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(
+    1 + groupDeltaBytes.length + objectIdBytes.length + 1 + payloadLengthBytes.length,
+  );
+  data[0] = flags;
+  let offset = 1;
+  data.set(groupDeltaBytes, offset);
+  offset += groupDeltaBytes.length;
+  data.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  data[offset] = 200;
+  offset += 1;
+  data.set(payloadLengthBytes, offset);
+
+  const [decoded, , newContext] = decodeFetchObjectFields(
+    data,
+    prior,
+    0,
+    false,
+    GroupOrder.DESCENDING,
+  );
+
+  // groupId = prior.groupId - delta - 1 = 100 - 3 - 1 = 96
+  assert.equal(decoded.groupId, 96n);
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.objectId, 0n);
+  assert.equal(decoded.publisherPriority, 200); // サブグループが異なるので異なる Priority で問題なし
+  assert.equal(decoded.payloadLength, 50n);
+  assert.equal(newContext.groupId, 96n);
+});
+
+/**
+ * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * "If the Group Order is Descending, the Group ID is the prior Object's
+ *  Group ID minus the (Group ID Delta + 1)."
+ *
+ * "If the computed Group ID would be less than 0 or greater than 2^64-1,
+ *  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+ *
+ * Descending 時に Group ID が 0 未満になる場合、ProtocolViolationError が throw されることを検証する。
+ */
+test("FetchObjectFields: Descending で Group ID が 0 未満になる場合は ProtocolViolationError", () => {
+  const prior: FetchObjectContext = {
+    groupId: 2n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  // GROUP_ID_PRESENT | SUBGROUP_ZERO | OBJECT_ID_PRESENT | PRIORITY_PRESENT
+  const flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_ZERO |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  // delta_group=5 → groupId = prior.groupId - delta - 1 = 2 - 5 - 1 = -4 (< 0)
+  const groupDeltaBytes = encodeVarint(5n);
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(
+    1 + groupDeltaBytes.length + objectIdBytes.length + 1 + payloadLengthBytes.length,
+  );
+  data[0] = flags;
+  let offset = 1;
+  data.set(groupDeltaBytes, offset);
+  offset += groupDeltaBytes.length;
+  data.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  data[offset] = 200;
+  offset += 1;
+  data.set(payloadLengthBytes, offset);
+
+  assert.throws(
+    () => decodeFetchObjectFields(data, prior, 0, false, GroupOrder.DESCENDING),
+    /computed group id out of range/,
+  );
+});
+
+/**
+ * Descending Group Order で encode→decode roundtrip が正しく動作することを検証する。
+ */
+test("FetchObjectFields: Descending Group Order で encode→decode roundtrip が成功する", () => {
+  // オブジェクト 1 (先頭): group=100, object=0
+  const firstFlags = createFirstFetchObjectFlags(false);
+  const first: FetchObjectFields = {
+    serializationFlags: firstFlags,
+    groupId: 100n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first, false, null, GroupOrder.DESCENDING);
+  const [firstDecoded, , firstContext] = decodeFetchObjectFields(
+    firstEncoded,
+    null,
+    0,
+    true,
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(firstDecoded.groupId, 100n);
+  assert.equal(firstDecoded.objectId, 0n);
+
+  // オブジェクト 2: Group 減少 (100 → 95, delta=100-95-1=4)
+  // 同一 Subgroup の Priority 一貫性を保つため、同じ Priority を使用する
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 95n,
+    objectId: 2n,
+    publisherPriority: 100, // 先頭と同じ Priority
+    payloadLength: 80n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext, GroupOrder.DESCENDING);
+  const [secondDecoded, , secondContext] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(secondDecoded.groupId, 95n);
+  assert.equal(secondDecoded.objectId, 2n);
+  assert.equal(secondDecoded.payloadLength, 80n);
+
+  // オブジェクト 3: Group さらに減少 (95 → 80, delta=95-80-1=14)
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 80n,
+    objectId: 5n,
+    publisherPriority: 100, // 先頭と同じ Priority
+    payloadLength: 30n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext, GroupOrder.DESCENDING);
+  const [thirdDecoded] = decodeFetchObjectFields(
+    thirdEncoded,
+    secondContext,
+    0,
+    false,
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(thirdDecoded.groupId, 80n);
+  assert.equal(thirdDecoded.objectId, 5n);
+});
+
+/**
+ * Ascending Group Order で Group ID が 2^64-1 を超過する場合の検証。
+ */
+test("FetchObjectFields: Ascending で Group ID が 2^64-1 を超過する場合は ProtocolViolationError", () => {
+  const prior: FetchObjectContext = {
+    groupId: (1n << 64n) - 1n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  const flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_ZERO |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  // delta_group=0 → groupId = prior.groupId + delta + 1 = (2^64-1) + 0 + 1 = 2^64 (overflow)
+  const groupDeltaBytes = encodeVarint(0n);
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(
+    1 + groupDeltaBytes.length + objectIdBytes.length + 1 + payloadLengthBytes.length,
+  );
+  data[0] = flags;
+  let offset = 1;
+  data.set(groupDeltaBytes, offset);
+  offset += groupDeltaBytes.length;
+  data.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  data[offset] = 200;
+  offset += 1;
+  data.set(payloadLengthBytes, offset);
+
+  assert.throws(
+    () => decodeFetchObjectFields(data, prior, 0, false, GroupOrder.ASCENDING),
+    /computed group id out of range/,
+  );
+});
+
+/**
+ * Descending Group Order で Group ID が 2^64-1 を超過する場合の検証。
+ * prior = 0, delta = 0 → groupId = 0 - 0 - 1 = -1 (< 0)、0 未満のため out of range。
+ */
+test("FetchObjectFields: Descending で prior=0,delta=0 の場合は Group ID が 0 未満で ProtocolViolationError", () => {
+  const prior: FetchObjectContext = {
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  const flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_ZERO |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+
+  const groupDeltaBytes = encodeVarint(0n);
+  const objectIdBytes = encodeVarint(0n);
+  const payloadLengthBytes = encodeVarint(50n);
+
+  const data = new Uint8Array(
+    1 + groupDeltaBytes.length + objectIdBytes.length + 1 + payloadLengthBytes.length,
+  );
+  data[0] = flags;
+  let offset = 1;
+  data.set(groupDeltaBytes, offset);
+  offset += groupDeltaBytes.length;
+  data.set(objectIdBytes, offset);
+  offset += objectIdBytes.length;
+  data[offset] = 200;
+  offset += 1;
+  data.set(payloadLengthBytes, offset);
+
+  assert.throws(
+    () => decodeFetchObjectFields(data, prior, 0, false, GroupOrder.DESCENDING),
+    /computed group id out of range/,
+  );
 });

@@ -94,6 +94,13 @@
   - `handleIncomingStream` に PADDING stream の drain 処理を追加する
   - `handleIncomingDatagram` に PADDING datagram の discard 処理を追加する
   - @voluntas
+- [ADD] Fetch Object Fields に Descending Group Order を実装する (#0241)
+  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、Group Order = Descending (0x02) 時の Group ID 計算式を追加する
+  - `encodeFetchObjectFields` / `decodeFetchObjectFields` に `groupOrder` パラメータを追加する
+  - `FetcherImpl` に Group Order 保持フィールドを追加し FETCH_OK から取得する
+  - Group ID の範囲検証（0〜2^64-1）を追加する
+  - PBT (`dataStream.prop.ts`) を追加する
+  - @voluntas
 - [FIX] PUBLISH_OK の REQUEST_OK 応答で Track Properties が空であることを検証する (#0235)
   - draft-ietf-moq-transport-18 §10.5 に基づき、`decodePublishOkPayload` で非空の場合に ProtocolViolationError をスローする
   - @voluntas

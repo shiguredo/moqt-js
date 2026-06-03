@@ -13,6 +13,7 @@
 import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
 import { ProtocolViolationError } from "./error";
+import { GroupOrder } from "./message/types";
 
 /**
  * Object Status の値を検証する
@@ -1037,6 +1038,7 @@ export function encodeFetchObjectFields(
   fields: FetchObjectFields,
   includePayload = false,
   context: FetchObjectContext | null = null,
+  groupOrder: GroupOrder = GroupOrder.ASCENDING,
 ): Uint8Array {
   const parts: Uint8Array[] = [];
 
@@ -1070,7 +1072,11 @@ export function encodeFetchObjectFields(
   // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
   // "If the Group Order is Ascending (default), the Group ID is the prior
   //  Object's Group ID plus the Group ID Delta + 1."
-  // エンコード時: delta = currentGroupId - priorGroupId - 1n
+  // "If the Group Order is Descending, the Group ID is the prior
+  //  Object's Group ID minus the (Group ID Delta + 1)."
+  // エンコード時:
+  //   Ascending: delta = currentGroupId - priorGroupId - 1n
+  //   Descending: delta = priorGroupId - currentGroupId - 1n
   // 先頭オブジェクトまたは context 無しの場合は delta = currentGroupId (絶対値)
   if (fields.serializationFlags & FetchSerializationFlags.GROUP_ID_PRESENT) {
     if (fields.groupId === undefined) {
@@ -1078,6 +1084,9 @@ export function encodeFetchObjectFields(
     }
     if (context === null) {
       parts.push(encodeVarint(fields.groupId));
+    } else if (groupOrder === GroupOrder.DESCENDING) {
+      const delta = context.groupId - fields.groupId - 1n;
+      parts.push(encodeVarint(delta));
     } else {
       const delta = fields.groupId - context.groupId - 1n;
       parts.push(encodeVarint(delta));
@@ -1211,12 +1220,14 @@ function decodeEndOfRange(
  * @param context - Context with prior object's values (required after first object)
  * @param offset - Starting offset in buffer
  * @param isFirst - Whether this is the first object (no prior context allowed)
+ * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
  */
 export function decodeFetchObjectFields(
   data: Uint8Array,
   context: FetchObjectContext | null,
   offset = 0,
   isFirst = false,
+  groupOrder: GroupOrder = GroupOrder.ASCENDING,
 ): [DecodedFetchObject, number, FetchObjectContext] {
   let totalConsumed = 0;
 
@@ -1254,14 +1265,17 @@ export function decodeFetchObjectFields(
 
   // Group ID
   // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
-  // GROUP_ID_PRESENT がセットされている場合、フィールド値は delta であり、
-  // 正しい Group ID は prior.groupId + delta + 1n (Ascending 時)。
+  // Ascending: "The Group ID is the prior Object's Group ID plus the Group ID Delta + 1."
+  // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
+  // "If the computed Group ID would be less than 0 or greater than 2^64-1, the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
   // 先頭オブジェクト (isFirst) の場合は delta が絶対値と等価。
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
     const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
     if (isFirst || context === null) {
       groupId = delta;
+    } else if (groupOrder === GroupOrder.DESCENDING) {
+      groupId = context.groupId - delta - 1n;
     } else {
       groupId = context.groupId + delta + 1n;
     }
@@ -1271,6 +1285,15 @@ export function decodeFetchObjectFields(
       throw new ProtocolViolationError("first object must have GROUP_ID_PRESENT flag set");
     }
     groupId = context.groupId;
+  }
+
+  // Group ID の範囲検証: 0 以上 2^64-1 以下
+  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9
+  const maxGroupId = (1n << 64n) - 1n;
+  if (groupId < 0n || groupId > maxGroupId) {
+    throw new ProtocolViolationError(
+      `computed group id out of range: ${groupId}, expected 0 to 2^64-1`,
+    );
   }
 
   // Subgroup ID

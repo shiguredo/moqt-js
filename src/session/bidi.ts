@@ -28,6 +28,7 @@ import {
   getParameterLocationValue,
   type Location,
   type Parameter,
+  type GroupOrder,
 } from "../message";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
@@ -356,8 +357,23 @@ export async function bidiReadFetchResponse(
         }
       }
 
+      // draft-ietf-moq-transport-18 Section 10.2.8 (GROUP ORDER Parameter):
+      // 省略時は Ascending (0x1) がデフォルト
+      const groupOrderParam = decoded.parameters.find(
+        (p) => p.type === MessageParameterType.GROUP_ORDER,
+      );
+      const groupOrder =
+        groupOrderParam && groupOrderParam.value.length > 0
+          ? (groupOrderParam.value[0] as GroupOrder)
+          : undefined;
+
       session.pendingFetch.delete(requestId);
-      pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation, decoded.trackProperties);
+      pending.impl.setFetchOkInfo(
+        decoded.endOfTrack,
+        decoded.endLocation,
+        decoded.trackProperties,
+        groupOrder,
+      );
       session.fetchers.set(requestId, pending.impl);
       pending.resolve(pending.impl);
 

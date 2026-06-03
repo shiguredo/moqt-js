@@ -3774,14 +3774,21 @@ export class SessionImpl implements Session {
     context: import("./dataStream").FetchObjectContext | null;
     isFirst: boolean;
   } {
-    return processFetchObjects(buffer, fetcher, context, isFirst, {
-      incrementObjectsReceived: () => {
-        this.statsObjectsReceivedViaFetch++;
+    return processFetchObjects(
+      buffer,
+      fetcher,
+      context,
+      isFirst,
+      {
+        incrementObjectsReceived: () => {
+          this.statsObjectsReceivedViaFetch++;
+        },
+        incrementBytesReceived: (_subscribePath, bytes) => {
+          this.statsBytesReceivedViaFetch += bytes;
+        },
       },
-      incrementBytesReceived: (_subscribePath, bytes) => {
-        this.statsBytesReceivedViaFetch += bytes;
-      },
-    });
+      fetcher.getGroupOrder(),
+    );
   }
 
   /**
