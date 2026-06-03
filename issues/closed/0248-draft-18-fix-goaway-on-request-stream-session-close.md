@@ -6,6 +6,8 @@
 - Branch: feature/draft-18
 - Polished: 2026-06-03
 
+- Completed: 2026-06-03
+
 ## 目的
 
 draft-ietf-moq-transport-18 Section 10.4 の動作仕様に従い、リクエストストリーム上で 1 回目の GOAWAY を受信した際にセッション全体を閉じず、当該リクエストのマイグレーションのみを行うように修正する。
@@ -97,6 +99,21 @@ case MessageType.GOAWAY: {
 ### 対象外
 
 TRACK_STATUS は一発のリクエスト/レスポンスであり ongoing loop を持たないため、`bidiReadRequestStreamMessages` を通らない。修正対象外。
+
+## 解決方法
+
+コード修正は既に全適用済みであることを確認した：
+
+1. `src/session/bidi.ts:534-546` (`bidiReadRequestStreamMessages`) の GOAWAY case が `session.closeWithError` ではなく `publisher.goawayCallback` / `subscriber.goawayCallback` / `fetcher.goawayCallback` を呼び出す
+2. `src/publisher.ts:97` (`PublisherImpl`) / `src/subscriber.ts:86` (`SubscriberImpl`) / `src/fetcher.ts:64` (`FetcherImpl`) に `goawayCallback` プロパティが追加済み
+3. `src/session.ts` の `publish()` / `subscribe()` / `fetch()` で `goawayCallback` を設定済み
+
+テストを以下の 2 ファイルに追加した：
+
+1. `src/subscriber.test.ts` - SubscriberImpl.goawayCallback 設定テストを追加
+2. `src/publisher.test.ts` - PublisherImpl.goawayCallback 設定テストを追加
+
+`CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追記した。
 
 ## 完了条件
 

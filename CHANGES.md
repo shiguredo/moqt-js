@@ -106,6 +106,9 @@
   - `encodeFetchObjectFields` で DATAGRAM 時に Subgroup ID フィールドをエンコードしない
   - `createFirstFetchObjectFlags` に Datagram 用パラメータを追加する
   - @voluntas
+- [FIX] リクエストストリーム上 GOAWAY の goawayCallback 呼び出しテストを追加する (#0248)
+  - draft-ietf-moq-transport-18 §10.4 に基づき、`PublisherImpl` / `SubscriberImpl` の `goawayCallback` 設定テストを `src/publisher.test.ts` / `src/subscriber.test.ts` に追加する
+  - @voluntas
 - [FIX] Grease エラーコード正規化のグリースコードテストを追加する (#0247)
   - draft-ietf-moq-transport-18 §14 に基づき、`normalizeRequestErrorCode` / `normalizePublishDoneCode` の Grease コード (0x9d, 0x7f+0x9d) テストを `src/error.test.ts` に追加する
   - @voluntas
