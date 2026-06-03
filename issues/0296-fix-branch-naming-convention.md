@@ -19,9 +19,11 @@
 ブランチ名: `feature/draft-18`
 
 AGENTS.md:58:
+
 > 後方互換のない変更は prefix を `feature/change-` でブランチを切って対応すること
 
 AGENTS.md:110:
+
 > draft の更新による仕様変更は 後方互換性を維持せず破壊的変更を行う こと
 
 ## 設計方針

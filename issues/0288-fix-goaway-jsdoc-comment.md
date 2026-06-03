@@ -17,12 +17,14 @@
 ## 現状
 
 `src/message/session.ts:36`:
+
 ```
 制御ストリーム上では、GOAWAY 送信前に処理された最後の
 リクエスト ID より大きい最小の Request ID を設定する。
 ```
 
 draft-ietf-moq-transport-18 §10.4:
+
 > The smallest peer Request ID that was not or might not have been
 > processed prior to sending the GOAWAY.
 

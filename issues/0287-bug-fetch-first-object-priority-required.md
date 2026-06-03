@@ -17,6 +17,7 @@ Priority なしの Fetch 先頭オブジェクトを不正に拒否してしま�
 ## 現状
 
 `src/dataStream.ts:1429-1433`:
+
 ```typescript
 } else {
   if (isFirst || context === null) {
@@ -29,6 +30,7 @@ Priority なしの Fetch 先頭オブジェクトを不正に拒否してしま�
 PRIORITY_PRESENT フラグ (0x10) が設定されていない場合の分岐。先頭オブジェクト (`isFirst`) または初回受信 (`context === null`) の場合に ProtocolViolationError を throw している。
 
 draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+
 > The first Object MUST include a Group ID Delta and Object ID Delta,
 > and these values are the absolute Group ID and Object ID.
 

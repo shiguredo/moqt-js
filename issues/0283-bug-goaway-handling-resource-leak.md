@@ -17,12 +17,15 @@
 ## 現状
 
 `src/session.ts:1882-1893` (`startNamespaceStreamLoop` GOAWAY):
+
 - `callbacks.error()` と `reject()` は呼ばれるが `namespaceSubscriptions.delete()` やストリームの close がない
 
 `src/session.ts:2114-2140` (`startTracksStreamLoop` GOAWAY):
+
 - 同様に `tracksSubscriptions.delete()` やストリームの close がない
 
 `src/session.ts:2374-2388` (`startNamespacePublicationStreamLoop` GOAWAY):
+
 - 同様に `namespacePublications.delete()` やストリームの close がない
 
 ## 設計方針

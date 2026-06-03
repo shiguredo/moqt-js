@@ -201,6 +201,11 @@
   - `fetcher.ts` の TODO コメントを削除する
   - @voluntas
 
+- [FIX] SUBSCRIBE_TRACKS_OK 応答に対して誤って適用されていた Track Properties 空チェック検証を削除する (#0272)
+  - draft-ietf-moq-transport-18 §10.5 で空を MUST で要求するのは PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の 4 つのみ
+  - `startTracksStreamLoop` 内の `decodeRequestOkPayload` 呼び出しと `validateRequestOkNoTrackProperties` 検証ブロックを削除する
+  - @voluntas
+
 ### misc
 
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)

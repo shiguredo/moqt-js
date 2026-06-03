@@ -17,6 +17,7 @@
 ## 現状
 
 `src/message/session.ts:372-382`:
+
 ```typescript
 const [redirect] = decodeRedirect(data.subarray(offset + deltaIdLen));
 ```

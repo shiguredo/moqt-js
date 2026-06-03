@@ -21,6 +21,7 @@
 ## 現状
 
 `src/session.ts:1937-1947` (`startNamespaceStreamLoop`):
+
 ```typescript
 case MessageType.PUBLISH: {
   // 実装の堅牢性のため受信可能にしておく。
@@ -34,6 +35,7 @@ case MessageType.PUBLISH: {
 ```
 
 `src/session.ts:522-531` (`NamespaceSubscriptionCallbacks`):
+
 ```typescript
 onPublish?: (trackNamespaceSuffix: string[], trackName: string, trackAlias: bigint) => void;
 ```
@@ -41,10 +43,12 @@ onPublish?: (trackNamespaceSuffix: string[], trackName: string, trackAlias: bigi
 PUBLISH が 2 つ目以降のメッセージとして来た場合、既存の `default` 分岐 (`src/session.ts:1948-1955`) が PROTOCOL_VIOLATION でセッションを閉じないため、明示的にハンドリングされている。先頭メッセージとして来た場合は既存の先頭メッセージチェック (`src/session.ts:1791-1807`) で捕捉される。
 
 draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
+
 > If the SUBSCRIBE_NAMESPACE is successful, the publisher will send
 > matching NAMESPACE messages on the response stream.
 
 draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+
 > the publisher will send PUBLISH messages on new bidirectional streams
 
 ## 設計方針

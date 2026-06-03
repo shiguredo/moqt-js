@@ -17,6 +17,7 @@
 ## 現状
 
 `src/session/bidi.ts:137-151`:
+
 ```typescript
 export function validateGoawayOnRequestStream(
   requestId: bigint | null,
@@ -25,12 +26,15 @@ export function validateGoawayOnRequestStream(
 ```
 
 この関数は export されているが、どのファイルからも import されていない。全 5 箇所で以下の重複コードが存在する:
+
 ```typescript
 if (decoded.requestId !== null) {
-  session.closeWithError(new SessionError(
-    "goaway on request stream must not include request id",
-    SessionErrorCode.PROTOCOL_VIOLATION,
-  ));
+  session.closeWithError(
+    new SessionError(
+      "goaway on request stream must not include request id",
+      SessionErrorCode.PROTOCOL_VIOLATION,
+    ),
+  );
   return;
 }
 ```

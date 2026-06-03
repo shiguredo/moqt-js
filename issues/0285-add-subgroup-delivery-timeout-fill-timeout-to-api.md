@@ -22,6 +22,7 @@ draft-18 で導入された主要なパラメータが API から利用できな
 - `buildFetchParameters` 関数は未実装。FETCH リクエスト送信箇所は `src/session.ts:1457-1506` 付近。FILL_TIMEOUT は未対応
 
 draft-ietf-moq-transport-18:
+
 - §10.2.3: SUBGROUP_DELIVERY_TIMEOUT は PUBLISH と SUBSCRIBE で送信可能
 - §10.2.5: FILL_TIMEOUT は FETCH で使用
 

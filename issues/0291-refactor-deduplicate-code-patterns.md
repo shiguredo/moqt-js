@@ -22,7 +22,7 @@
 
 - GOAWAY Request ID チェックを `validateGoawayOnRequestStream` に統一する
 - namespace/namespace publication/tracks の GOAWAY ハンドリングを共通関数に抽出する
-- Pending* 型を bidi.ts に集約し session.ts から import する
+- Pending\* 型を bidi.ts に集約し session.ts から import する
 
 ## 完了条件
 

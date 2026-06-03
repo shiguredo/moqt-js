@@ -20,6 +20,7 @@ draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope) は、許可されない�
 - moqt-js には一切のパラメータスコープ検証がない。
 
 draft-ietf-moq-transport-18 §10.2.1:
+
 > An endpoint that receives a parameter in a context where it is not
 > allowed MUST close the session with a PROTOCOL_VIOLATION.
 

@@ -17,6 +17,7 @@ AGENTS.md:126「小文字で始めること」に反するエラーメッセー�
 ## 現状
 
 `src/dataStream.ts`:
+
 - Line 425: `"Protocol violation: properties on non-Normal status object"`
 - Line 1065: `"Group ID and Object ID required for End of Range"`
 - Line 1093: `"Group ID required when GROUP_ID_PRESENT flag is set"`

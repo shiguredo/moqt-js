@@ -24,25 +24,32 @@ GOAWAY の Request ID パリティが送信側 (`sendGoaway`) と受信側 (`han
 ### 送信側 (sendGoaway)
 
 `src/session.ts:2467`:
+
 ```typescript
 requestId: this.nextRequestId,
 ```
+
 `this.nextRequestId` はクライアント自身の Request ID (偶数パリティ)。しかし §10.4 の GOAWAY Request ID は "peer Request ID" であり、クライアントから送る場合はサーバーの Request ID 空間 (奇数パリティ) を指すべき。
 
 ### 受信側 (handleGoaway)
 
 `src/session.ts:3330`:
+
 ```typescript
 if (msg.requestId % 2n !== 0n) {
-  this.closeWithError(new SessionError(
-    `GOAWAY request ID parity mismatch: ${msg.requestId} (expected odd)`,
-    SessionErrorCode.INVALID_REQUEST_ID,
-  ));
+  this.closeWithError(
+    new SessionError(
+      `GOAWAY request ID parity mismatch: ${msg.requestId} (expected odd)`,
+      SessionErrorCode.INVALID_REQUEST_ID,
+    ),
+  );
 }
 ```
+
 サーバーから送られる GOAWAY の Request ID はクライアント自身の空間 (偶数パリティ) を指すため、チェックは `% 2n !== 0n` (odd) ではなく `=== 0n` (even でない) が正しい。
 
 draft-ietf-moq-transport-18 §10.4:
+
 > The smallest peer Request ID that was not or might not have been
 > processed prior to sending the GOAWAY. If no requests have been
 > processed, this is 0 (at a server) or 1 (at a client). If the parity

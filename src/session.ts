@@ -2055,17 +2055,6 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
-              const requestOk = decodeRequestOkPayload(messagePayload);
-              if (
-                !bidi.validateRequestOkNoTrackProperties(
-                  requestOk.trackProperties,
-                  "SUBSCRIBE_TRACKS_OK",
-                  (error) => this.closeWithError(error),
-                )
-              ) {
-                return;
-              }
               resolved = true;
               const tracksSubscription = this.createTracksSubscription(requestId);
               resolve(tracksSubscription);

@@ -19,6 +19,7 @@
 ## 現状
 
 `src/session.ts:3592-3598`:
+
 ```typescript
 if (data.length > 0) {
   const [datagramType] = decodeVarint(data, 0);

@@ -17,6 +17,7 @@ PADDING datagram (0x132b3e29) の判定で `decodeVarint(data, 0)` を呼び出�
 ## 現状
 
 `src/session.ts:3588-3598`:
+
 ```typescript
 private handleIncomingDatagram(data: Uint8Array): void {
   try {

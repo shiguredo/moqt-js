@@ -17,9 +17,11 @@
 ## 現状
 
 `src/session.ts:2576`:
+
 ```typescript
 this.closedSubgroups.clear();
 ```
+
 `goawayReceivedOnRequestStreams.clear()` がない。
 
 ## 設計方針
