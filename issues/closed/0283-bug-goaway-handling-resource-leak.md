@@ -5,6 +5,7 @@
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
 - Polished: 2026-06-03
+- Completed: 2026-06-03
 
 ## 目的
 
@@ -40,3 +41,9 @@
 
 - GOAWAY 受信時にストリームリソースが適切に解放される
 - テストが追加されている
+
+## 解決方法
+
+`src/session.ts` の 3 つの GOAWAY ハンドラ（`startNamespaceStreamLoop`, `startTracksStreamLoop`, `startNamespacePublicationStreamLoop`）に `void streamReader.cancel()` を追加し、GOAWAY 受信時に peer に STOP_SENDING を送信してストリームリソースを適切に解放するようにした。
+
+変更ファイル: `src/session.ts` (3 箇所に `void streamReader.cancel()` 追加)。全テスト 624/624 PASS 確認済み。

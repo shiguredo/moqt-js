@@ -1891,6 +1891,7 @@ export class SessionImpl implements Session {
                   `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
                 ),
               );
+              void streamReader.cancel();
               return;
             }
 
@@ -2099,6 +2100,7 @@ export class SessionImpl implements Session {
                   `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
                 ),
               );
+              void streamReader.cancel();
               return;
             }
 
@@ -2361,6 +2363,7 @@ export class SessionImpl implements Session {
                   ),
                 );
               }
+              void streamReader.cancel();
               return;
             }
 
