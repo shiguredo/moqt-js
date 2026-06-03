@@ -9,7 +9,6 @@ import {
   encodePublishPayload,
   decodePublishPayload,
   encodePublishOkPayload,
-  decodePublishOkPayload,
   encodePublishDonePayload,
   decodePublishDonePayload,
 } from "./publish";
@@ -17,6 +16,7 @@ import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from ".
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 import { type Property, TrackPropertyId } from "../properties";
+import { decodeRequestOkPayload } from "./session";
 
 /**
  * Message Parameter の arbitrary
@@ -199,7 +199,7 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
       };
 
       const encoded = encodePublishOkPayload(original);
-      const decoded = decodePublishOkPayload(encoded);
+      const decoded = decodeRequestOkPayload(encoded);
 
       assert.equal(decoded.type, MessageType.REQUEST_OK);
       assert.equal(decoded.parameters.length, parameters.length);
@@ -207,6 +207,7 @@ test("PublishOk のエンコード・デコードがラウンドトリップす�
         assert.equal(decoded.parameters[i].type, parameters[i].type);
         assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
       }
+      assert.equal(decoded.trackProperties.length, 0);
     }),
   );
 });

@@ -26,7 +26,6 @@ import {
   decodeFetchOkPayload,
   decodeGoawayPayload,
   decodePublishDonePayload,
-  decodePublishOkPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeRequestUpdatePayload,
@@ -192,7 +191,23 @@ export async function bidiReadPublishResponse(
     session.emitDebug("recv", msg.type, msg.payload);
 
     if (msg.type === MessageType.REQUEST_OK) {
-      const decoded = decodePublishOkPayload(msg.payload);
+      const decoded = decodeRequestOkPayload(msg.payload);
+      // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+      // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+      //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+      //  If an endpoint receives Track Properties in one of these messages it MUST
+      //  close the session with a PROTOCOL_VIOLATION."
+      if (decoded.trackProperties.length > 0) {
+        const error = new SessionError(
+          "track properties must be empty in PUBLISH_OK",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+        session.pendingPublish.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(error);
+        session.closeWithError(error);
+        return;
+      }
       // PUBLISH 応答の GOAWAY コールバックを Impl に永続化
       pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingPublish.delete(requestId);

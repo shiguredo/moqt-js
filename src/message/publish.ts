@@ -5,7 +5,6 @@
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
-import { ProtocolViolationError } from "../error";
 import {
   MAX_REASON_PHRASE_LENGTH,
   type Parameter,
@@ -164,35 +163,6 @@ export function encodePublishOkPayload(msg: PublishOk): Uint8Array {
     offset += part.length;
   }
   return result;
-}
-
-/**
- * PublishOk のペイロードをデコード
- *
- * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
- * 双方向ストリーム上で送信されるため Request ID は含まない。
- */
-export function decodePublishOkPayload(data: Uint8Array, offset = 0): PublishOk {
-  const [parameters, parametersConsumed] = decodeParameters(data, offset);
-  offset += parametersConsumed;
-
-  const propertiesData = data.slice(offset);
-  const trackProperties = decodeProperties(propertiesData);
-
-  // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
-  // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
-  //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
-  //  If an endpoint receives Track Properties in one of these messages it MUST
-  //  close the session with a PROTOCOL_VIOLATION."
-  if (trackProperties.length > 0) {
-    throw new ProtocolViolationError("PUBLISH_OK must not contain Track Properties");
-  }
-
-  return {
-    type: MessageType.REQUEST_OK,
-    parameters,
-    trackProperties,
-  };
 }
 
 /**

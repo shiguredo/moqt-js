@@ -104,7 +104,6 @@ export {
   type PublishDone,
   type PublishOk,
   decodePublishDonePayload,
-  decodePublishOkPayload,
   decodePublishPayload,
   encodePublishDonePayload,
   encodePublishOkPayload,

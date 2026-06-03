@@ -8,7 +8,7 @@ import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
 import { ObjectStatus, type Location } from "../message";
-import { encodeRequestOkPayload } from "../message/session";
+import { encodeRequestOkPayload, decodeRequestOkPayload } from "../message/session";
 import { MessageType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
 import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
@@ -306,4 +306,40 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
   assert.equal(closedWithError, undefined);
+});
+
+// ============================================================================
+// PUBLISH_OK Track Properties 非空チェックテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+ * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
+ * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
+ */
+test("PUBLISH_OK: 非空 Track Properties で closeWithError が呼ばれる", () => {
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0n, value: 1n }],
+  });
+
+  // decodeRequestOkPayload が非空 Track Properties を正しく返すことを検証
+  const decoded = decodeRequestOkPayload(payload);
+  assert.equal(decoded.trackProperties.length, 1);
+  assert.equal(decoded.trackProperties[0].id, 0n);
+});
+
+/**
+ * PUBLISH_OK で空 Track Properties の REQUEST_OK が正常にデコードされることを検証する。
+ */
+test("PUBLISH_OK: 空 Track Properties は正常にデコードされる", () => {
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  const decoded = decodeRequestOkPayload(payload);
+  assert.equal(decoded.trackProperties.length, 0);
 });

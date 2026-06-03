@@ -109,7 +109,12 @@
 - [FIX] classifyIncomingStreamType が FIRST_OBJECT ビット付き範囲を認識する (#0249)
   - draft-ietf-moq-transport-18 §3.4 / §11.4.2 に基づき、0x50..0x5F と 0x70..0x7F を subgroup として認識する
   - @voluntas
-- [FIX] REQUEST_OK エイリアス名が debug.ts で仕様どおり正しいことを確認する (#0250)
+- [FIX] PUBLISH_OK の Track Properties 非空時に PROTOCOL_VIOLATION でセッションを閉じる (#0255)
+  - draft-ietf-moq-transport-18 §10.5 に基づき、`bidiReadPublishResponse` で Track Properties 非空時に `closeWithError(PROTOCOL_VIOLATION)` を呼ぶ
+  - `decodePublishOkPayload` を削除し、`decodeRequestOkPayload` に統一する
+  - `publish.prop.ts` のテストを `decodeRequestOkPayload` 使用に修正する
+  - `src/session/bidi.test.ts` に PUBLISH_OK Track Properties テストを追加する
+  - @voluntas
   - draft-ietf-moq-transport-18 §10.5 の 5 エイリアスのみが定義されていることを確認する
   - @voluntas
 - [FIX] decodeProperties の IMMUTABLE_PROPERTIES 再帰チェックが実装済みであることを確認する (#0251)
