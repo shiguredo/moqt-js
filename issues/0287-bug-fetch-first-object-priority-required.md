@@ -4,6 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -15,14 +16,17 @@ Priority なしの Fetch 先頭オブジェクトを不正に拒否してしま�
 
 ## 現状
 
-`src/dataStream.ts:1430-1433`:
+`src/dataStream.ts:1429-1433`:
 ```typescript
-if ((fields.flags & 0x10) === 0) {
-  throw new ProtocolViolationError(
-    "protocol violation: fetch first object must have priority present"
-  );
+} else {
+  if (isFirst || context === null) {
+    throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
+  }
+  publisherPriority = context.publisherPriority;
 }
 ```
+
+PRIORITY_PRESENT フラグ (0x10) が設定されていない場合の分岐。先頭オブジェクト (`isFirst`) または初回受信 (`context === null`) の場合に ProtocolViolationError を throw している。
 
 draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
 > The first Object MUST include a Group ID Delta and Object ID Delta,
@@ -34,6 +38,7 @@ PRIORITY_PRESENT は MUST 要件に含まれていない。
 
 - 先頭オブジェクトの PRIORITY_PRESENT チェックを緩和し、任意にする
 - PRIORITY_PRESENT がない場合は Publisher Priority にデフォルト値 (128) を使用する
+- `isFirst` のチェックを削除し、`context === null` の場合のみエラーとする（初回オブジェクトに Priority がない場合は context が確立されていないため）
 
 ## 完了条件
 

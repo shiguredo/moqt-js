@@ -4,6 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -34,11 +35,11 @@ if (decoded.requestId !== null) {
 }
 ```
 
-- `bidi.ts:299` (`bidiReadPublishResponse`)
-- `bidi.ts:403` (`bidiReadSubscribeResponse`)
-- `bidi.ts:500` (`bidiReadFetchResponse`)
-- `bidi.ts:560` (`bidiReadTrackStatusResponse`)
-- `bidi.ts:662` (`bidiReadRequestStreamMessages`)
+- `bidi.ts:297` (`bidiReadPublishResponse`)
+- `bidi.ts:401` (`bidiReadSubscribeResponse`)
+- `bidi.ts:498` (`bidiReadFetchResponse`)
+- `bidi.ts:556` (`bidiReadTrackStatusResponse`)
+- `bidi.ts:660` (`bidiReadRequestStreamMessages`)
 
 ## 設計方針
 

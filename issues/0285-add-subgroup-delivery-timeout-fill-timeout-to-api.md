@@ -4,6 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -16,9 +17,9 @@ draft-18 で導入された主要なパラメータが API から利用できな
 ## 現状
 
 - `src/message/types.ts`: `MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT = 0x06`, `FILL_TIMEOUT = 0x0a` は定義済み
-- `src/session.ts:1255-1262` (`buildPublishParameters`): OBJECT_DELIVERY_TIMEOUT のみ対応
-- `src/session.ts:1335-1358` (`buildSubscribeParameters`): OBJECT_DELIVERY_TIMEOUT のみ対応
-- `src/session.ts:1437-1452` (`buildFetchParameters`): FILL_TIMEOUT 未対応
+- `src/session/params.ts:53-75` (`buildPublishParameters`): OBJECT_DELIVERY_TIMEOUT は Track Properties 側 (`buildPublishTrackProperties`) で対応済み。SUBGROUP_DELIVERY_TIMEOUT は未対応
+- `src/session/params.ts:153-220` (`buildSubscribeParameters`): OBJECT_DELIVERY_TIMEOUT は対応済み。SUBGROUP_DELIVERY_TIMEOUT は未対応
+- `buildFetchParameters` 関数は未実装。FETCH リクエスト送信箇所は `src/session.ts:1457-1506` 付近。FILL_TIMEOUT は未対応
 
 draft-ietf-moq-transport-18:
 - §10.2.3: SUBGROUP_DELIVERY_TIMEOUT は PUBLISH と SUBSCRIBE で送信可能
@@ -26,9 +27,10 @@ draft-ietf-moq-transport-18:
 
 ## 設計方針
 
-- `PublishOptions` に `subgroupDeliveryTimeout?: number` を追加し `buildPublishParameters` でエンコードする
+- `PublishOptions` に `subgroupDeliveryTimeout?: number` を追加し `buildPublishTrackProperties` でエンコードする
 - `SubscribeOptions` に `subgroupDeliveryTimeout?: number` を追加し `buildSubscribeParameters` でエンコードする
-- `FetchOptions` に `fillTimeout?: number` を追加し `buildFetchParameters` でエンコードする
+- `FetchOptions` に `fillTimeout?: number` を追加し、FETCH 送信時にパラメータをエンコードする
+- `buildFetchParameters` 関数を `src/session/params.ts` に新規作成する
 
 ## 完了条件
 

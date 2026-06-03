@@ -4,6 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -27,7 +28,4 @@ AGENTS.md:110:
 
 - 当ブランチは既に作業が進んでいるため、次回以降のブランチで正しい命名規則を適用する
 - この issue は注意喚起としてクローズする
-
-## 完了条件
-
-- 将来の破壊的変更ブランチが `feature/change-` prefix で作成される
+- 対応不要。次回以降の破壊的変更ブランチで `feature/change-` prefix を適用する

@@ -4,13 +4,14 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
 以下の重複コードパターンを解消し保守性を向上させる:
 
-1. GOAWAY Request ID チェックの重複 (5 箇所)
-2. startNamespaceStreamLoop / startTracksStreamLoop / startNamespacePublicationStreamLoop の GOAWAY ハンドリング重複
+1. GOAWAY Request ID チェックの重複 (5 箇所) — 詳細は #0282 で対応
+2. startNamespaceStreamLoop / startTracksStreamLoop / startNamespacePublicationStreamLoop の GOAWAY ハンドリング重複 — リソース解放の追加は #0283、共通関数抽出は本 issue で対応
 3. PendingPublish / PendingSubscribe / PendingFetch 型が session.ts と bidi.ts で二重定義
 
 ## 優先度根拠

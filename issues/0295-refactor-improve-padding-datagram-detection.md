@@ -4,14 +4,17 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
 現在の PADDING datagram 判定は `decodeVarint` に依存しているが、0x132b3e29 は 4 バイト varint であり、短いデータでは不完全データエラーが発生する。より堅牢な判定方法に改善する。
 
+本 issue は #0275 `bug-padding-datagram-short-data` の改善案として位置づけられる。#0275 が先頭バイトチェック + データ長判定による効率化を目的とするのに対し、本 issue は PADDING stream (0x132b3e28) を含めた判定ロジック全体の設計改善を扱う。実装時に統合を検討すること。
+
 ## 優先度根拠
 
-#0275 の本質的な解決策。バグ修正と合わせて判定ロジック自体を改善する。
+#0275 の改善案。PADDING datagram/stream 両方の判定ロジックを根本的に見直す。
 
 ## 現状
 

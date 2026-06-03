@@ -4,6 +4,7 @@
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
 ## 目的
 
@@ -15,10 +16,10 @@
 
 ## 現状
 
-- `src/session/bidi.ts:307` (`bidiReadPublishResponse`): GOAWAY 受信時に `add` なし
-- `src/session/bidi.ts:406` (`bidiReadSubscribeResponse`): GOAWAY 受信時に `add` なし
-- `src/session/bidi.ts:503` (`bidiReadFetchResponse`): GOAWAY 受信時に `add` なし
-- `src/session/bidi.ts:560` (`bidiReadTrackStatusResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:297-311` (`bidiReadPublishResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:401-415` (`bidiReadSubscribeResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:498-512` (`bidiReadFetchResponse`): GOAWAY 受信時に `add` なし
+- `src/session/bidi.ts:556-573` (`bidiReadTrackStatusResponse`): GOAWAY 受信時に `add` なし
 
 一方 `src/session/bidi.ts:660` (`bidiReadRequestStreamMessages`) では `goawayReceivedOnRequestStreams.add(requestId)` が正しく行われている。
 

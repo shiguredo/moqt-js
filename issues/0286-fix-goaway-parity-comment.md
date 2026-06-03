@@ -1,30 +1,13 @@
-# GOAWAY パリティチェックのコメントを修正する
+# → #0273 に統合する
 
 - Priority: Low
 - Created: 2026-06-03
 - Model: deepseek-v4-pro
 - Branch: feature/draft-18
+- Polished: 2026-06-03
 
-## 目的
+## 統合理由
 
-`handleGoaway` 内のパリティチェックコメントが「expected odd」としているが、クライアントが受信する GOAWAY の正しいパリティは even (クライアント生成 ID のパリティ)。コード動作は正しいがコメントが誤っている。
+#0273 の受信側パリティ修正に統合する。単独では対応不要。
 
-## 優先度根拠
-
-コード動作に影響しないが、将来のメンテナに誤解を与える。
-
-## 現状
-
-`src/session.ts:3339`:
-```typescript
-`GOAWAY request ID parity mismatch: ${msg.requestId} (expected odd)`,
-```
-
-## 設計方針
-
-- `expected odd` → `expected even` に修正する
-- クライアント視点であることをコメントに明記する
-
-## 完了条件
-
-- コメントが正しいパリティ (even) を指している
+#0273 `bug-client-goaway-request-id-parity` が GOAWAY の送信側・受信側両方のパリティバグ（コメント修正を含む）を包括的に扱っているため、本 issue の内容は #0273 の「受信側のパリティチェック修正（`expected odd` → `expected even`）」の一部としてカバーされている。
