@@ -39,12 +39,12 @@
 
 ### 抽出単位
 
-| 新規モジュール | 抽出する責務 |
-| --- | --- |
-| `src/session/types.ts` | `SessionInternal` 内部インターフェース・共有型 (既存の `BidiSessionInternal` を包含または拡張) |
-| `src/session/namespaceLoops.ts` | `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` |
-| `src/session/publish.ts` | `sendObject` / `sendObjectInternal` / `closePublisherStream(Internal)` / `sendDatagram` / `sendPublishDone` と `publisherStreams` 管理 |
-| `src/session/incoming.ts` | `handleIncomingDatagram` / 単方向データストリームループ / `handleSubgroupStream` / `waitForFetcher` |
+| 新規モジュール                  | 抽出する責務                                                                                                                           |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/session/types.ts`          | `SessionInternal` 内部インターフェース・共有型 (既存の `BidiSessionInternal` を包含または拡張)                                         |
+| `src/session/namespaceLoops.ts` | `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop`                                           |
+| `src/session/publish.ts`        | `sendObject` / `sendObjectInternal` / `closePublisherStream(Internal)` / `sendDatagram` / `sendPublishDone` と `publisherStreams` 管理 |
+| `src/session/incoming.ts`       | `handleIncomingDatagram` / 単方向データストリームループ / `handleSubgroupStream` / `waitForFetcher`                                    |
 
 `initialize` と公開 API (`publish` / `subscribe` / `fetch` 等)、状態フィールド、`closeWithError` / `emitDebug` 等の中核ヘルパは `SessionImpl` (session.ts) に残し、オーケストレーターとする。
 
