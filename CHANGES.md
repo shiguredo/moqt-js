@@ -288,6 +288,9 @@
 - [UPDATE] GOAWAY の Request ID パリティ判定と重複検出を pure function に抽出してテストを追加する (#0289)
   - draft-ietf-moq-transport-18 Section 10.4 / 10.1 に基づき、`isValidGoawayRequestIdParity` と `validateNoDuplicateGoawayOnRequestStream` を抽出し、`handleGoaway` / `bidiReadRequestStreamMessages` から使用して単体テストを追加する
   - @voluntas
+- [UPDATE] namespace ループの GOAWAY ハンドリング重複を共通メソッドに抽出する (#0291)
+  - 3 つの namespace ループの GOAWAY ハンドリングを `handleGoawayOnNamespaceStream` に共通化し、#0289 の `validateNoDuplicateGoawayOnRequestStream` を再利用する
+  - @voluntas
 
 ## 2026.2.0
 

@@ -1773,6 +1773,58 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * namespace 系ループ共通: リクエストストリーム上の GOAWAY を処理する
+   *
+   * draft-ietf-moq-transport-18 §10.4:
+   * リクエストストリーム上の GOAWAY は当該リクエストのみに適用される。
+   * 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
+   *
+   * 重複検出は validateNoDuplicateGoawayOnRequestStream (#0289 で抽出)、
+   * Request ID null チェックは validateGoawayOnRequestStream を使う。
+   * state 変更は closeState で行う。元の inline 実装と同じく goaway と error の間で
+   * state を "closed" にするため、呼び出し元から closeState を渡す。
+   * reject は対象と条件がループごとに異なるため呼び出し元で行う。
+   *
+   * @returns GOAWAY を処理した場合は newSessionUri、重複・違反でセッションを閉じた場合は null
+   */
+  private handleGoawayOnNamespaceStream(
+    requestId: bigint,
+    messagePayload: Uint8Array,
+    callbacks: { goaway?: (uri: string) => void; error?: (err: Error) => void } | undefined,
+    streamReader: ReadableStreamDefaultReader<Uint8Array>,
+    closeState: () => void,
+  ): string | null {
+    // 重複 GOAWAY チェック (#0289 で抽出した pure function を再利用)
+    if (
+      !bidi.validateNoDuplicateGoawayOnRequestStream(
+        requestId,
+        this.goawayReceivedOnRequestStreams,
+        (error) => this.closeWithError(error),
+      )
+    ) {
+      return null;
+    }
+    // Request ID null チェック
+    const decodedMsg = decodeGoawayPayload(messagePayload);
+    if (
+      !bidi.validateGoawayOnRequestStream(decodedMsg.requestId, (error) =>
+        this.closeWithError(error),
+      )
+    ) {
+      return null;
+    }
+    // コールバック呼び出し + state 変更 + リソース解放
+    // 元の inline 実装と同じ順序 (goaway -> state="closed" -> error) を保つ
+    callbacks?.goaway?.(decodedMsg.newSessionUri);
+    closeState();
+    callbacks?.error?.(
+      new Error(`request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`),
+    );
+    void streamReader.cancel();
+    return decodedMsg.newSessionUri;
+  }
+
+  /**
    * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
    *
    * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
@@ -1910,42 +1962,18 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.GOAWAY: {
-              // draft-ietf-moq-transport-18 §10.4:
-              // リクエストストリーム上の GOAWAY は当該リクエストのみに適用される
-              // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
-              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
-                this.closeWithError(
-                  new SessionError(
-                    "received duplicate goaway on request stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              this.goawayReceivedOnRequestStreams.add(requestId);
-              const decodedMsg = decodeGoawayPayload(messagePayload);
-              if (decodedMsg.requestId !== null) {
-                this.closeWithError(
-                  new SessionError(
-                    "goaway on request stream must not include request id",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              callbacks.goaway?.(decodedMsg.newSessionUri);
-              subscription.state = "closed";
-              callbacks.error?.(
-                new Error(
-                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
-                ),
+              const newSessionUri = this.handleGoawayOnNamespaceStream(
+                requestId,
+                messagePayload,
+                callbacks,
+                streamReader,
+                () => {
+                  subscription.state = "closed";
+                },
               );
-              reject(
-                new Error(
-                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
-                ),
-              );
-              void streamReader.cancel();
+              if (newSessionUri !== null) {
+                reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
+              }
               return;
             }
 
@@ -2122,39 +2150,18 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.GOAWAY: {
-              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
-                this.closeWithError(
-                  new SessionError(
-                    "received duplicate goaway on request stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              this.goawayReceivedOnRequestStreams.add(requestId);
-              const decodedMsg = decodeGoawayPayload(messagePayload);
-              if (decodedMsg.requestId !== null) {
-                this.closeWithError(
-                  new SessionError(
-                    "goaway on request stream must not include request id",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              callbacks.goaway?.(decodedMsg.newSessionUri);
-              subscription.state = "closed";
-              callbacks.error?.(
-                new Error(
-                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
-                ),
+              const newSessionUri = this.handleGoawayOnNamespaceStream(
+                requestId,
+                messagePayload,
+                callbacks,
+                streamReader,
+                () => {
+                  subscription.state = "closed";
+                },
               );
-              reject(
-                new Error(
-                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
-                ),
-              );
-              void streamReader.cancel();
+              if (newSessionUri !== null) {
+                reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
+              }
               return;
             }
 
@@ -2395,41 +2402,20 @@ export class SessionImpl implements Session {
             }
 
             case MessageType.GOAWAY: {
-              if (this.goawayReceivedOnRequestStreams.has(requestId)) {
-                this.closeWithError(
-                  new SessionError(
-                    "received duplicate goaway on request stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              this.goawayReceivedOnRequestStreams.add(requestId);
-              const decodedMsg = decodeGoawayPayload(messagePayload);
-              if (decodedMsg.requestId !== null) {
-                this.closeWithError(
-                  new SessionError(
-                    "goaway on request stream must not include request id",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              callbacks?.goaway?.(decodedMsg.newSessionUri);
-              publication.state = "closed";
-              callbacks?.error?.(
-                new Error(
-                  `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
-                ),
+              const newSessionUri = this.handleGoawayOnNamespaceStream(
+                requestId,
+                messagePayload,
+                callbacks,
+                streamReader,
+                () => {
+                  publication.state = "closed";
+                },
               );
-              if (!resolved) {
-                reject(
-                  new Error(
-                    `request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`,
-                  ),
-                );
+              if (newSessionUri !== null) {
+                if (!resolved) {
+                  reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
+                }
               }
-              void streamReader.cancel();
               return;
             }
 
