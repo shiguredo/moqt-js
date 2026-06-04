@@ -177,3 +177,17 @@ test("varintSize: 各範囲で正しいサイズを返す", () => {
   assert.equal(varintSize(72057594037927935n), 8);
   assert.equal(varintSize(72057594037927936n), 9);
 });
+
+// draft-ietf-moq-transport-18 §11.5.1 (Padding Streams) / §11.5.2 (Padding Datagrams):
+// PADDING Datagram (0x132b3e29) / PADDING Stream (0x132b3e28) の varint エンコードを pin する。
+// handleIncomingDatagram の fast-path が依存する先頭バイトと長さの回帰防止であり、
+// 誤った 0xe4 / 4 バイト前提への先祖返りを検出する。
+// 0x132b3e29 = 321601065 は 4 バイト上限 (2^28 - 1 = 268435455) を超えるため 5 バイト varint になる。
+test("PADDING の type は 5 バイト varint で先頭バイトが 0xf0", () => {
+  assert.equal(varintSize(0x132b3e29), 5);
+  assert.equal(encodeVarint(0x132b3e29)[0], 0xf0);
+  assert.deepEqual(encodeVarint(0x132b3e29), new Uint8Array([0xf0, 0x13, 0x2b, 0x3e, 0x29]));
+  assert.equal(varintSize(0x132b3e28), 5);
+  assert.equal(encodeVarint(0x132b3e28)[0], 0xf0);
+  assert.deepEqual(encodeVarint(0x132b3e28), new Uint8Array([0xf0, 0x13, 0x2b, 0x3e, 0x28]));
+});
