@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-bidi-protocol-violation-handling
 - Polished: 2026-06-05
@@ -120,3 +121,31 @@ pure function `toProtocolViolationSessionError` を `src/session/errors.test.ts`
 - ストリームの正常終了・キャンセル等、`ProtocolViolationError` 以外のエラーは既存通り無視される
 - `src/session/errors.test.ts` に `toProtocolViolationSessionError` の単体テスト（スタブ不使用）が追加され、既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリを追記する
+
+## 解決方法
+
+設計方針の推奨案（catch で `ProtocolViolationError` のみ `PROTOCOL_VIOLATION` 化し、判定ロジックを pure function に抽出する）を採用した。
+
+### src/session/errors.ts
+
+`isSessionClosedError` の先例に倣い、pure function `toProtocolViolationSessionError(error: unknown): SessionError | null` を追加した。`ProtocolViolationError` の場合のみ `SessionError(message, PROTOCOL_VIOLATION)` を返し、それ以外は `null` を返す。catch 変数が `unknown` 型（`useUnknownInCatchVariables`）であるため引数型は `unknown` とした。ファイル冒頭コメントを 2 関数の責務を表す形に更新した。
+
+### src/session/bidi.ts
+
+`bidiReadRequestStreamMessages` の `} catch {` を `} catch (error) {` に変更し、`toProtocolViolationSessionError(error)` が `null` でなければ `session.closeWithError` を呼ぶようにした。それ以外（ストリームの正常終了・キャンセル等）は従来通り無視して既存動作を維持する。GOAWAY case / default case は switch 内で既に `closeWithError` 後に return しているため catch には到達せず、二重 close は発生しない。
+
+### src/session/errors.test.ts
+
+pure function の単体テストを追加した（スタブ不使用、本物の値を渡す）。`ProtocolViolationError` の変換（code / message 引き継ぎ）、通常 `Error`・別 Error 派生クラス（`SessionError`）・`undefined`・`null`・Error 非継承オブジェクト（DOMException 相当）がいずれも `null` になることを検証する。
+
+### CHANGES.md
+
+`[FIX]` エントリを追記した。
+
+### スコープ外として別 issue 化する事項
+
+review-diff-code で以下の同型バグ・改善余地を検出した。本 issue のスコープ（`bidiReadRequestStreamMessages` の catch）外のため別 issue で対応する。
+
+- `session.ts` の namespace / tracks / namespace-publication ストリームループの catch も同型で、`ProtocolViolationError` 受信時に `closeWithError` を呼ばずセッションが残る（同じ §3.5 MUST 違反）。
+- `decodeRequestErrorPayload` / `decodePublishDonePayload` の Reason Phrase 長超過がプレーン `Error` を throw するため、本修正の `ProtocolViolationError` 判定で捕捉されず握り潰される。
+- `session.ts` の 3 箇所にインライン展開された同一ロジックを `toProtocolViolationSessionError` に共通化できる（issue 本文でも別 issue 宣言済み）。
