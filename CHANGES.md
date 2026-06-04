@@ -234,6 +234,10 @@
 - [FIX] decodeRequestErrorPayload で Redirect の後続データを PROTOCOL_VIOLATION として検出する (#0277)
   - draft-ietf-moq-transport-18 Section 10 の Message Length 一致規則に基づき、`decodeRedirect` の消費バイト数を検証して trailing data を `ProtocolViolationError` で拒否する
   - @voluntas
+- [FIX] リクエストストリーム受信ループの ProtocolViolationError 握り潰しを修正する (#0298)
+  - draft-ietf-moq-transport-18 Section 3.5 に基づき、`bidiReadRequestStreamMessages` の catch が全例外を握り潰していたのを修正し、`ProtocolViolationError` 検出時に `PROTOCOL_VIOLATION` でセッションを閉じる
+  - 判定ロジックを純関数 `toProtocolViolationSessionError` として `src/session/errors.ts` に抽出する
+  - @voluntas
 
 ### misc
 
