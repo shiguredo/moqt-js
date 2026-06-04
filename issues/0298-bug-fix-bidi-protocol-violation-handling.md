@@ -4,11 +4,11 @@
 - Created: 2026-06-04
 - Model: qwen3.7-plus
 - Branch: feature/fix-bidi-protocol-violation-handling
-- Polished: 2026-06-04
+- Polished: 2026-06-05
 
 ## 目的
 
-リクエストストリームの受信ループ `bidiReadRequestStreamMessages` で `ProtocolViolationError` が発生した際に、セッションを `PROTOCOL_VIOLATION` で正しく終了させる。
+リクエストストリームの受信ループ `bidiReadRequestStreamMessages` で `ProtocolViolationError` が発生した際に、セッションを `PROTOCOL_VIOLATION` で正しく終了させる。GOAWAY 群（#0289 / #0291 / #0298）一括見直しの一部であり、テストはアンチスタブ（pure function 単体テスト）方針で揃える。
 
 ## 優先度根拠
 
@@ -16,19 +16,19 @@ draft-ietf-moq-transport-18 §3.5 は PROTOCOL_VIOLATION (0x3) を "The remote e
 
 ## 現状
 
-`src/session/bidi.ts:615` の `bidiReadRequestStreamMessages` は、リクエストストリーム上のメッセージを `switch (msg.type)` で処理する。各 case はペイロードのデコード関数を呼ぶ。
+`src/session/bidi.ts` の `bidiReadRequestStreamMessages` は、リクエストストリーム上のメッセージを `switch (msg.type)` で処理する。各 case はペイロードのデコード関数を呼ぶ。
 
-- `PUBLISH_DONE` -> `bidiHandlePublishDone` (`bidi.ts:936`) -> `decodePublishDonePayload`
+- `PUBLISH_DONE` -> `bidiHandlePublishDone` -> `decodePublishDonePayload`
 - `REQUEST_ERROR` -> `decodeRequestErrorPayload`
 - `REQUEST_UPDATE` -> `decodeRequestUpdatePayload`
 - `GOAWAY` -> `decodeGoawayPayload`
 
-これらのデコード関数は仕様違反入力に対して `ProtocolViolationError` を throw する。例えば `decodeGoawayPayload` (`src/message/session.ts:234`) は GOAWAY URI 長が上限超過の場合に `throw new ProtocolViolationError("GOAWAY URI length exceeds maximum: ...")` する。
+これらのデコード関数は仕様違反入力に対して `ProtocolViolationError` を throw する。例えば `decodeGoawayPayload`（`src/message/session.ts`）は GOAWAY URI 長が上限超過の場合に `throw new ProtocolViolationError("GOAWAY URI length exceeds maximum: ...")` する。
 
 しかし受信ループ末尾の catch が全例外を無条件で握り潰している。
 
 ```typescript
-// src/session/bidi.ts:719-724
+// src/session/bidi.ts の bidiReadRequestStreamMessages 末尾
   } catch {
     // ストリームが閉じられた場合は無視
   } finally {
@@ -50,44 +50,63 @@ draft-ietf-moq-transport-18:
 
 ## 設計方針
 
-catch で例外を受け取り、`ProtocolViolationError` の場合のみ `session.closeWithError` で `PROTOCOL_VIOLATION` を発行する。それ以外の例外 (ストリームの正常終了・キャンセル等) は従来通り無視して既存動作を維持する。
+catch で例外を受け取り、`ProtocolViolationError` の場合のみ `session.closeWithError` で `PROTOCOL_VIOLATION` を発行する。それ以外の例外（ストリームの正常終了・キャンセル等）は従来通り無視して既存動作を維持する。
+
+テスト可能化（モック禁止下でのアンチスタブ）のため、判定ロジックを pure function に抽出する。
+
+```typescript
+// src/session/errors.ts に追加（isSessionClosedError の先例に倣う pure function）
+/**
+ * ProtocolViolationError を PROTOCOL_VIOLATION の SessionError に変換する。
+ * ProtocolViolationError 以外は null を返す（catch 側で無視させる）。
+ */
+export function toProtocolViolationSessionError(error: unknown): SessionError | null {
+  if (error instanceof ProtocolViolationError) {
+    return new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+  return null;
+}
+```
+
+`bidiReadRequestStreamMessages` の catch をこの関数で書き換える。
 
 ```typescript
   } catch (error) {
     // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
-    if (error instanceof ProtocolViolationError) {
-      session.closeWithError(
-        new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION),
-      );
+    const sessionError = toProtocolViolationSessionError(error);
+    if (sessionError !== null) {
+      session.closeWithError(sessionError);
     }
-    // それ以外 (ストリーム閉じ等) は既存通り無視する
+    // それ以外（ストリーム閉じ等）は既存通り無視する
   } finally {
     reader.releaseLock();
     session.requestStreams.delete(requestId);
   }
 ```
 
-`bidi.ts` は現状 `ProtocolViolationError` を import していないため、`src/error.ts` からの import を追加する (`SessionError` / `SessionErrorCode` は既に import 済み)。`handleIncomingDatagram` (`src/session.ts:3674-3677`) が同じ判定パターンを既に採用しており、それに揃える。
+`src/session/errors.ts` は `ProtocolViolationError` / `SessionError` / `SessionErrorCode` を `src/error.ts` から import する（必要なら追加する）。`bidi.ts` は `toProtocolViolationSessionError` を `src/session/errors.ts` から import する。
 
-## 変更対象ファイル
-
-- `src/session/bidi.ts`: `bidiReadRequestStreamMessages` の catch を修正し、`ProtocolViolationError` の import を追加する
-- `CHANGES.md`: `[FIX]` エントリを追記する
+なお `src/session.ts` の `handleIncomingDatagram` 等 3 箇所（`err instanceof ProtocolViolationError` 判定）も同じパターンだが、本 issue のスコープは `bidiReadRequestStreamMessages` の catch に限定する。これら 3 箇所を `toProtocolViolationSessionError` に揃える共通化は別 issue で検討する（本 issue で抽出する関数を将来再利用できる形にしておく）。
 
 ## エッジケース
 
-| ケース                                                                           | 期待動作                                            |
-| -------------------------------------------------------------------------------- | --------------------------------------------------- |
-| 上限超過の GOAWAY URI を持つメッセージを受信 (`decodeGoawayPayload` が throw)    | セッションを `PROTOCOL_VIOLATION` で閉じる          |
-| 不正な REQUEST_ERROR / PUBLISH_DONE / REQUEST_UPDATE を受信 (各デコードが throw) | セッションを `PROTOCOL_VIOLATION` で閉じる          |
-| リクエストストリームが正常に閉じられた (`read()` が done)                        | ループを抜けるのみ。セッションは閉じない (既存動作) |
-| ストリームが reset / cancel された (非 `ProtocolViolationError`)                 | 無視 (既存動作)                                     |
+| ケース                                                                             | 期待動作                                            |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------- |
+| 上限超過の GOAWAY URI を持つメッセージを受信 (`decodeGoawayPayload` が throw)      | セッションを `PROTOCOL_VIOLATION` で閉じる          |
+| 不正な Redirect を持つ REQUEST_ERROR を受信 (`decodeRequestErrorPayload` が throw) | セッションを `PROTOCOL_VIOLATION` で閉じる          |
+| リクエストストリームが正常に閉じられた (`read()` が done)                          | ループを抜けるのみ。セッションは閉じない (既存動作) |
+| ストリームが reset / cancel された (非 `ProtocolViolationError`)                   | 無視 (既存動作)                                     |
+
+注: 現状 `bidiReadRequestStreamMessages` の各 case のデコード関数のうち `ProtocolViolationError` を throw するのは `decodeGoawayPayload`（GOAWAY URI 長超過）と `decodeRequestErrorPayload`（Redirect 後続データ・不正 Redirect）のみである。`decodePublishDonePayload` は Reason Phrase 長超過時にプレーンな `Error` を throw しており（仕様上は PROTOCOL_VIOLATION 相当だが、本修正の `ProtocolViolationError` 判定では捕捉されず握り潰されたままになる）、`decodeRequestUpdatePayload` は throw しない。`decodePublishDonePayload` のエラークラスを `ProtocolViolationError` に是正するのは別 issue で扱う（本 issue のスコープ外）。
 
 ## テスト方針
 
-`src/session/bidi.test.ts` の `BidiSessionInternal` テストハーネス (`bidiReadRequestStreamMessages` 相当を駆動できる、#0289 でも活用予定) を用いて、リクエストストリームに上限超過 GOAWAY URI を持つ GOAWAY を流し込み、`session.closeWithError` が `PROTOCOL_VIOLATION` で呼ばれることを検証する。
+pure function `toProtocolViolationSessionError` を `src/session/errors.test.ts` で単体テストする。`as unknown as BidiSessionInternal` 等のスタブは使わず、本物の値を渡す（GOAWAY 群一括見直しのアンチスタブ方針）。
 
-非 `ProtocolViolationError` 経路 (正常クローズ) では `closeWithError` が呼ばれないことも併せて確認する。Vitest の test / assert を使用し、テストメッセージは日本語で書く。モックやスタブは利用しない。
+- `ProtocolViolationError` を渡すと、`code` が `SessionErrorCode.PROTOCOL_VIOLATION`、`message` が元の `ProtocolViolationError.message` と一致する `SessionError` が返る
+- `ProtocolViolationError` 以外（通常の `Error`、`DOMException` 相当のオブジェクト、`undefined` 等）を渡すと `null` が返る
+
+`bidiReadRequestStreamMessages` 本体（WebTransport ストリーム依存の非同期ループ）の動作確認は E2E の対象とし、本 issue では pure function 単体テストに留める。Vitest の `test` / `assert`（`vite-plus/test`）を使用し、テストメッセージは日本語で書く。
 
 ## 後方互換の影響
 
@@ -96,8 +115,8 @@ catch で例外を受け取り、`ProtocolViolationError` の場合のみ `sessi
 
 ## 完了条件
 
-- リクエストストリーム上で `ProtocolViolationError` が発生した際にセッションが `PROTOCOL_VIOLATION` で閉じられる
+- `toProtocolViolationSessionError`（`src/session/errors.ts`、export）が追加されている
+- `bidiReadRequestStreamMessages` の catch が `toProtocolViolationSessionError` を使い、`ProtocolViolationError` 発生時にセッションが `PROTOCOL_VIOLATION` で閉じられる
 - ストリームの正常終了・キャンセル等、`ProtocolViolationError` 以外のエラーは既存通り無視される
-- `bidi.ts` に `ProtocolViolationError` の import が追加されている
-- 上記テストが追加され、既存の全テストが PASS する
+- `src/session/errors.test.ts` に `toProtocolViolationSessionError` の単体テスト（スタブ不使用）が追加され、既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリを追記する
