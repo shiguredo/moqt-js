@@ -247,6 +247,17 @@
 - [ADD] Object Forwarding Preference の enum を追加する (#0239)
   - draft-ietf-moq-transport-18 §11.2.1 に基づき、`ObjectForwardingPreference` enum を追加する
   - @voluntas
+- [UPDATE] 開発依存とランタイム依存を最新版に更新する
+  - vite-plus を 0.1.20 から 0.1.24 へ更新する
+  - @playwright/test / @types/node / @vitest/coverage-v8 / fast-check / @preact/signals / preact / pnpm を更新する
+  - @voluntas
+- [UPDATE] vite-plus 更新で変わった lint ルールセットに合わせて設定を調整する
+  - 実際に有効なのは vitest プラグインのため、テスト規約と衝突する `vitest/*` ルールを無効化する (従来は空振りしていた `jest/*` の無効化を置き換える)
+  - ASCII 専用正規表現に Unicode フラグを要求する require-unicode-regexp とビルド時グローバルを誤検出する no-underscore-dangle を無効化する
+  - `!== undefined` の存在チェックを反転させる unicorn/no-negated-condition を無効化する
+  - 可変長整数デコーダの可読性を保つため varint.ts のみ oxc/branches-sharing-code を無効化する
+  - 新たに検出された `dataStream.ts` の delta 分岐統合と `session.ts` の import 整形をコード側で対応する
+  - @voluntas
 - [UPDATE] SETUP 統合に関する spec セクション番号の誤りを修正する (#0238)
   - `types.ts` / `setup.ts` のコメントの参照先を Section 4 から Section 3.3 に修正する
   - @voluntas
