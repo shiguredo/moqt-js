@@ -32,11 +32,11 @@
 
 データストリームの種別 (Subgroup / Datagram / Fetch) を軸に 3 ファイルへ分割する。`dataStream.ts` 自体は単一ファイルのままなので、テストはフラットなドット命名で co-located にする。
 
-| 分割先ファイル | 含めるテスト群 |
-| --- | --- |
+| 分割先ファイル                    | 含めるテスト群                                                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `src/dataStream.subgroup.test.ts` | SubgroupHeader / `hasPropertiesPresent` / ObjectFields / `createObject` / `ObjectStatus` / `SubgroupHeaderType` |
-| `src/dataStream.datagram.test.ts` | ObjectDatagram |
-| `src/dataStream.fetch.test.ts` | FetchHeader / FetchObjectFields |
+| `src/dataStream.datagram.test.ts` | ObjectDatagram                                                                                                  |
+| `src/dataStream.fetch.test.ts`    | FetchHeader / FetchObjectFields                                                                                 |
 
 - テストの内容・アサーションは一切変更せず、移動のみ行う
 - 各ファイルは必要な import を個別に持たせる (共有ヘルパがある場合は各ファイルへ複製、または共通ヘルパを別ファイルに切り出すかは実装時に判断)

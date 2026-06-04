@@ -31,15 +31,15 @@
 
 ### codec 文字列マッピング (実装から)
 
-| 関数 | 入力 codec | 期待される `codec` 文字列 | 追加フィールド |
-| --- | --- | --- | --- |
-| getVideoEncoderConfig | `vp8` | `vp8` | - |
-| getVideoEncoderConfig | `vp9` | `vp09.00.10.08` | - |
-| getVideoEncoderConfig | `av1` | `av01.0.04M.08` | - |
-| getVideoEncoderConfig | `h264` | `avc1.42001f` | `avc: { format: "annexb" }` |
-| getVideoEncoderConfig | `h265` | `hvc1.1.6.L93.B0` | `hevc: { format: "annexb" }` |
-| getAudioEncoderConfig | `opus` | `opus` | - |
-| getAudioEncoderConfig | `aac` | `mp4a.40.2` | - |
+| 関数                  | 入力 codec | 期待される `codec` 文字列 | 追加フィールド               |
+| --------------------- | ---------- | ------------------------- | ---------------------------- |
+| getVideoEncoderConfig | `vp8`      | `vp8`                     | -                            |
+| getVideoEncoderConfig | `vp9`      | `vp09.00.10.08`           | -                            |
+| getVideoEncoderConfig | `av1`      | `av01.0.04M.08`           | -                            |
+| getVideoEncoderConfig | `h264`     | `avc1.42001f`             | `avc: { format: "annexb" }`  |
+| getVideoEncoderConfig | `h265`     | `hvc1.1.6.L93.B0`         | `hevc: { format: "annexb" }` |
+| getAudioEncoderConfig | `opus`     | `opus`                    | -                            |
+| getAudioEncoderConfig | `aac`      | `mp4a.40.2`               | -                            |
 
 `getVideoDecoderConfig` / `getAudioDecoderConfig` も同じ codec 文字列マッピングを検証する。
 
