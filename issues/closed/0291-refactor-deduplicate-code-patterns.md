@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-06-03
+- Completed: 2026-06-05
 - Model: deepseek-v4 Pro
 - Branch: feature/refactor-deduplicate-namespace-goaway
 - Polished: 2026-06-05
@@ -150,3 +151,19 @@ case MessageType.GOAWAY: {
 - 抽出前後で 3 ループの GOAWAY ハンドリング挙動が変わらない（特に publication ループの `publication.state` / `if (!resolved)` / callbacks optional の差異が保たれる）
 - 全テストが PASS する
 - `CHANGES.md` の `### misc` に `[UPDATE]` エントリ（次行に担当者 `- @<ユーザー名>`）を追記する
+
+## 解決方法
+
+3 つの namespace ループ（`startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop`）の GOAWAY ハンドリング重複を、共通 private メソッド `handleGoawayOnNamespaceStream` に抽出した。
+
+- 重複検出は #0289 の `bidi.validateNoDuplicateGoawayOnRequestStream`、Request ID null チェックは `bidi.validateGoawayOnRequestStream` を再利用した（`import * as bidi` 経由で `bidi.` 接頭辞で呼ぶ）。3 ループのインライン実装を廃止した
+- 共通メソッドは boolean ではなく newSessionUri（`string | null`）を返す。reject / error メッセージに newSessionUri を使うため、boolean だと呼び出し元で newSessionUri が失われ reject メッセージが変わる。`string | null` を返すことで挙動不変を保つ（`decodeGoawayPayload` の newSessionUri は常に string のため null と衝突しない）
+- state 変更（`subscription.state` / `publication.state`）は `closeState` コールバックで共通メソッドに渡す。元の inline 実装と同じく `goaway` → `state="closed"` → `error` の順序を保ち、error コールバックから見える state を変えないため
+- reject は呼び出し元で行う（startNamespace / Tracks は無条件、startNamespacePublicationStreamLoop は `if (!resolved)`）
+
+挙動不変を `/review-diff-code` で確認した。error コールバックから観測される state の順序差を `closeState` で解消し、テスト 628 件が PASS することを確認した。
+
+### 触ったファイル
+
+- `src/session.ts`（`handleGoawayOnNamespaceStream` 追加、3 ループの GOAWAY ケース置換）
+- `CHANGES.md`（`### misc` に `[UPDATE]`）
