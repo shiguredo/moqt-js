@@ -34,6 +34,7 @@ Audio Level の "ID: 6 (IANA, please assign)" は仮の値であり、IANA に�
 - IANA テーブルに正式登録されている TIMESTAMP (0x06) を優先
 - デコードループでは ID `0x06` を常に TIMESTAMP として処理
 - Audio Level の encode/decode 関数はスタンドアロンで提供するが、デコードループでは使用しない
+- 利用者向けドキュメント (README / docs) にこの制約 (AUDIO_LEVEL は ID 衝突のためデコードループで TIMESTAMP として扱われ自動デコードされない) を記載する。LOC の利用者向けドキュメントを追加する際に含める (旧 #0308 を統合)
 
 ## 解決条件
 
