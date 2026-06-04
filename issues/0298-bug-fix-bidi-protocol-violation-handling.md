@@ -76,12 +76,12 @@ catch で例外を受け取り、`ProtocolViolationError` の場合のみ `sessi
 
 ## エッジケース
 
-| ケース | 期待動作 |
-| --- | --- |
-| 上限超過の GOAWAY URI を持つメッセージを受信 (`decodeGoawayPayload` が throw) | セッションを `PROTOCOL_VIOLATION` で閉じる |
-| 不正な REQUEST_ERROR / PUBLISH_DONE / REQUEST_UPDATE を受信 (各デコードが throw) | セッションを `PROTOCOL_VIOLATION` で閉じる |
-| リクエストストリームが正常に閉じられた (`read()` が done) | ループを抜けるのみ。セッションは閉じない (既存動作) |
-| ストリームが reset / cancel された (非 `ProtocolViolationError`) | 無視 (既存動作) |
+| ケース                                                                           | 期待動作                                            |
+| -------------------------------------------------------------------------------- | --------------------------------------------------- |
+| 上限超過の GOAWAY URI を持つメッセージを受信 (`decodeGoawayPayload` が throw)    | セッションを `PROTOCOL_VIOLATION` で閉じる          |
+| 不正な REQUEST_ERROR / PUBLISH_DONE / REQUEST_UPDATE を受信 (各デコードが throw) | セッションを `PROTOCOL_VIOLATION` で閉じる          |
+| リクエストストリームが正常に閉じられた (`read()` が done)                        | ループを抜けるのみ。セッションは閉じない (既存動作) |
+| ストリームが reset / cancel された (非 `ProtocolViolationError`)                 | 無視 (既存動作)                                     |
 
 ## テスト方針
 

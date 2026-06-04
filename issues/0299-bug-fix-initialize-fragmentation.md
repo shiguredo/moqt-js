@@ -98,7 +98,10 @@ let streamTypeConsumed: number;
 for (;;) {
   const { value, done } = await reader.read();
   if (done || !value) {
-    throw new SessionError("Connection closed before control stream type", SessionErrorCode.NO_ERROR);
+    throw new SessionError(
+      "Connection closed before control stream type",
+      SessionErrorCode.NO_ERROR,
+    );
   }
   buffer = concatChunks([buffer, value]);
   try {
@@ -139,15 +142,15 @@ while (messages.length === 0) {
 
 ## エッジケース
 
-| ケース | 期待動作 |
-| --- | --- |
-| ストリームタイプが 2 バイト以上で最初に届く | 即座に `decodeVarint` 成功 (既存と同じ) |
-| ストリームタイプが 1 バイトずつ届く | 追加 `read()` で連結して `decodeVarint` 成功 |
-| SETUP が最初のチャンクに収まっている | 追加読み取りなしで成功 (既存と同じ) |
-| SETUP が 2 チャンクに分割 | 1 回の追加 `read()` で成功 (既存と同じ) |
-| SETUP が 3 チャンク以上に分割 | 揃うまで `read()` を繰り返して成功 (本修正で改善) |
-| ストリームタイプ / SETUP が揃う前に接続が閉じた (`done`) | 接続切断エラーを throw |
-| ストリームタイプが `0x2F00` 以外 | `PROTOCOL_VIOLATION` (既存と同じ) |
+| ケース                                                   | 期待動作                                          |
+| -------------------------------------------------------- | ------------------------------------------------- |
+| ストリームタイプが 2 バイト以上で最初に届く              | 即座に `decodeVarint` 成功 (既存と同じ)           |
+| ストリームタイプが 1 バイトずつ届く                      | 追加 `read()` で連結して `decodeVarint` 成功      |
+| SETUP が最初のチャンクに収まっている                     | 追加読み取りなしで成功 (既存と同じ)               |
+| SETUP が 2 チャンクに分割                                | 1 回の追加 `read()` で成功 (既存と同じ)           |
+| SETUP が 3 チャンク以上に分割                            | 揃うまで `read()` を繰り返して成功 (本修正で改善) |
+| ストリームタイプ / SETUP が揃う前に接続が閉じた (`done`) | 接続切断エラーを throw                            |
+| ストリームタイプが `0x2F00` 以外                         | `PROTOCOL_VIOLATION` (既存と同じ)                 |
 
 ## テスト方針
 

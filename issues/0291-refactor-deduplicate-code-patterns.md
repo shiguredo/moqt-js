@@ -20,6 +20,7 @@
 ### 重複コード（3 箇所とも同一パターン）
 
 `src/session.ts` の以下 3 箇所:
+
 - **line 1908-1946**: `startNamespaceStreamLoop`
 - **line 2120-2155**: `startTracksStreamLoop`
 - **line 2393-2430**: `startNamespacePublicationStreamLoop`
@@ -52,10 +53,10 @@ case MessageType.GOAWAY: {
 
 ### 微差
 
-| 箇所 | 差異 |
-|---|---|
-| startNamespaceStreamLoop | コメントあり、`callbacks.error?.()` |
-| startTracksStreamLoop | コメントなし、`callbacks.error?.()` |
+| 箇所                                | 差異                                                                                                            |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| startNamespaceStreamLoop            | コメントあり、`callbacks.error?.()`                                                                             |
+| startTracksStreamLoop               | コメントなし、`callbacks.error?.()`                                                                             |
 | startNamespacePublicationStreamLoop | `callbacks?.goaway?.()` (optional chaining 深さが異なる)、`publication.state`、`if (!resolved) { reject(...) }` |
 
 ### 関連: validateGoawayOnRequestStream の未使用

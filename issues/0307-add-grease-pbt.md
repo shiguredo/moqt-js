@@ -19,7 +19,7 @@
 `src/grease.ts` の実装は次の通り (draft-ietf-moq-transport-18 §14 のパターンに準拠)。
 
 ```typescript
-const GREASE_BASE = 0x9dn;     // 基数
+const GREASE_BASE = 0x9dn; // 基数
 const GREASE_INTERVAL = 0x7fn; // 間隔
 
 export function isGreaseValue(value: bigint): boolean {
@@ -41,7 +41,7 @@ export function generateGreaseValue(n: number): bigint {
 
 ## 仕様根拠
 
-- **draft-ietf-moq-transport-18 §14 (Grease)**: "Grease values follow the pattern 0x7f * N + 0x9D for non-negative integer values of N (that is, 0x9D, 0x11C, ..., 0x3fffffffffffffde)." 実装の `GREASE_BASE = 0x9D` / `GREASE_INTERVAL = 0x7F` はこのパターンと一致する。
+- **draft-ietf-moq-transport-18 §14 (Grease)**: "Grease values follow the pattern 0x7f \* N + 0x9D for non-negative integer values of N (that is, 0x9D, 0x11C, ..., 0x3fffffffffffffde)." 実装の `GREASE_BASE = 0x9D` / `GREASE_INTERVAL = 0x7F` はこのパターンと一致する。
 
 参考 URL: https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-14
 

@@ -25,9 +25,9 @@ try {
 } catch (err) {
   // ヘッダー書き込み失敗時は writer の参照が publisherStreams に残らないため、
   // 明示的にロックを解放する
-  writer.releaseLock();              // ← これが throw すると以降に到達しない
+  writer.releaseLock(); // ← これが throw すると以降に到達しない
   this.closedSubgroups.add(`${trackAlias}:${groupId}`);
-  throw err;                         // ← 到達しない可能性
+  throw err; // ← 到達しない可能性
 }
 ```
 
@@ -40,9 +40,9 @@ try {
   }
 } catch (err) {
   // 書き込み失敗時は writer が破損しているためロックを解放する
-  streamState.writer.releaseLock();  // ← これが throw すると以降に到達しない
+  streamState.writer.releaseLock(); // ← これが throw すると以降に到達しない
   this.closedSubgroups.add(`${trackAlias}:${groupId}`);
-  throw err;                         // ← 到達しない可能性
+  throw err; // ← 到達しない可能性
 }
 ```
 
@@ -73,9 +73,9 @@ try {
 
 ## エッジケース
 
-| ケース | 期待動作 |
-| --- | --- |
-| write 失敗、`releaseLock()` 成功 | `closedSubgroups` に登録し、元の write エラーを throw (既存と同じ挙動) |
+| ケース                             | 期待動作                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------- |
+| write 失敗、`releaseLock()` 成功   | `closedSubgroups` に登録し、元の write エラーを throw (既存と同じ挙動)                |
 | write 失敗、`releaseLock()` も失敗 | `releaseLock()` の例外は無視し、`closedSubgroups` に登録して元の write エラーを throw |
 
 ## テスト方針

@@ -28,7 +28,7 @@ redirect = decodeRedirect(data, offset)[0];
 `decodeRedirect` のシグネチャ（line 128）:
 
 ```typescript
-export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, number]
+export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, number];
 //                                                                       ^^^^^^^^^^^^^^
 //                                                                       第二戻り値 = 消費バイト数
 ```
@@ -83,25 +83,25 @@ if (offset !== data.length) {
 
 `decodeRequestErrorPayload` の呼び出し元は全 8 箇所。修正は関数内部のみのため、呼び出し元の変更は不要。
 
-| ファイル | 行 | コンテキスト |
-|---|---|---|
-| `src/session.ts` | 1889 | `startNamespaceStreamLoop` |
-| `src/session.ts` | 2101 | `startTracksStreamLoop` |
-| `src/session.ts` | 2372 | `startNamespacePublicationStreamLoop` |
-| `src/session/bidi.ts` | 301 | `bidiReadPublishResponse` |
-| `src/session/bidi.ts` | 420 | `bidiReadSubscribeResponse` |
-| `src/session/bidi.ts` | 521 | `bidiReadFetchResponse` |
-| `src/session/bidi.ts` | 576 | `bidiReadTrackStatusResponse` |
-| `src/session/bidi.ts` | 641 | `bidiReadRequestStreamMessages` |
+| ファイル              | 行   | コンテキスト                          |
+| --------------------- | ---- | ------------------------------------- |
+| `src/session.ts`      | 1889 | `startNamespaceStreamLoop`            |
+| `src/session.ts`      | 2101 | `startTracksStreamLoop`               |
+| `src/session.ts`      | 2372 | `startNamespacePublicationStreamLoop` |
+| `src/session/bidi.ts` | 301  | `bidiReadPublishResponse`             |
+| `src/session/bidi.ts` | 420  | `bidiReadSubscribeResponse`           |
+| `src/session/bidi.ts` | 521  | `bidiReadFetchResponse`               |
+| `src/session/bidi.ts` | 576  | `bidiReadTrackStatusResponse`         |
+| `src/session/bidi.ts` | 641  | `bidiReadRequestStreamMessages`       |
 
 ## エッジケース
 
-| ケース | 期待動作 |
-|---|---|
-| 後続データが 1 バイトだけある | `ProtocolViolationError` |
-| 後続データが 10,000 バイトある | `ProtocolViolationError` |
-| 後続データがない（正常系） | 正常にデコード |
-| Error Code != REDIRECT で trailing data | `ProtocolViolationError`（既存の非 REDIRECT + 残データ分岐で検出、エラーメッセージは "unexpected redirect" となるが実害はない） |
+| ケース                                                                     | 期待動作                                                                                                                                                     |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 後続データが 1 バイトだけある                                              | `ProtocolViolationError`                                                                                                                                     |
+| 後続データが 10,000 バイトある                                             | `ProtocolViolationError`                                                                                                                                     |
+| 後続データがない（正常系）                                                 | 正常にデコード                                                                                                                                               |
+| Error Code != REDIRECT で trailing data                                    | `ProtocolViolationError`（既存の非 REDIRECT + 残データ分岐で検出、エラーメッセージは "unexpected redirect" となるが実害はない）                              |
 | Redirect の varint が読めるがフィールド実データが不足（意味的 truncation） | `decodeRedirect` 内で `data.slice` が短い配列を返しサイレント成功する可能性がある。完全な truncation 検出は `decodeRedirect` 側の責務であり本 issue の範囲外 |
 
 ## テスト方針

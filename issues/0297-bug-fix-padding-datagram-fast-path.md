@@ -49,10 +49,10 @@ if (err instanceof ProtocolViolationError) {
 
 MOQT の可変長整数は QUIC (RFC 9000) の 2 ビット prefix 方式ではなく、draft-ietf-moq-transport-18 §1.4.1 で定義される「先頭 1-bits の数で長さを示す」独自方式である (`src/varint.ts`)。
 
-| Leading Bits | Length | Usable Bits | Range            |
-| ------------ | ------ | ----------- | ---------------- |
-| `1110`       | 4      | 28          | 0 - 268435455    |
-| `11110`      | 5      | 35          | 0 - 34359738367  |
+| Leading Bits | Length | Usable Bits | Range           |
+| ------------ | ------ | ----------- | --------------- |
+| `1110`       | 4      | 28          | 0 - 268435455   |
+| `11110`      | 5      | 35          | 0 - 34359738367 |
 
 `0x132B3E29` = `321601065` は 4 バイトの上限 `2^28 - 1 = 268435455` を超えるため、**5 バイト** varint になる。`src/varint.ts` の `encodeVarint` (case 5: `result[0] = 0xf0 | Number((v >> 32n) & 0x07n)`) で実測すると次の通り。
 
@@ -113,13 +113,13 @@ fast-path を残す場合でも、先頭バイトを `0xf0`、長さチェック
 
 ## エッジケース
 
-| ケース | 期待動作 |
-| --- | --- |
-| PADDING Datagram (`f0 13 2b 3e 29` + 任意の 0 埋め) | discard してセッションは継続 |
-| PADDING Datagram で type のみ (payload なし, 5 バイト) | discard |
-| 通常の Object Datagram (先頭が小さい 1 バイト type) | 既存通りデコードして配信 |
-| 先頭が `0xf0` だが 5 バイト未満の不完全な datagram | `decodeVarint` が `IncompleteDataError` を throw -> 末尾 catch で discard (セッションは閉じない) |
-| `0x132B3E28` (PADDING Stream type) を datagram で受信 | PADDING ではないため通常処理 (Object Datagram として未知 type -> `ProtocolViolationError`)。Stream type を datagram で送るのは送信側の誤りであり、仕様上 discard 対象ではない |
+| ケース                                                 | 期待動作                                                                                                                                                                      |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PADDING Datagram (`f0 13 2b 3e 29` + 任意の 0 埋め)    | discard してセッションは継続                                                                                                                                                  |
+| PADDING Datagram で type のみ (payload なし, 5 バイト) | discard                                                                                                                                                                       |
+| 通常の Object Datagram (先頭が小さい 1 バイト type)    | 既存通りデコードして配信                                                                                                                                                      |
+| 先頭が `0xf0` だが 5 バイト未満の不完全な datagram     | `decodeVarint` が `IncompleteDataError` を throw -> 末尾 catch で discard (セッションは閉じない)                                                                              |
+| `0x132B3E28` (PADDING Stream type) を datagram で受信  | PADDING ではないため通常処理 (Object Datagram として未知 type -> `ProtocolViolationError`)。Stream type を datagram で送るのは送信側の誤りであり、仕様上 discard 対象ではない |
 
 ## テスト方針
 
