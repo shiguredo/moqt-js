@@ -839,8 +839,6 @@ export default defineConfig({
       "vitest/prefer-spy-on": "error",
       // テストファイル名の一貫性
       "vitest/consistent-test-filename": "error",
-      // require-hook を強制
-      "vitest/require-hook": "error",
 
       // ===== react: プロジェクト特性上無効化 =====
       // devtools コンポーネントのネスト構造上避けられない
@@ -927,17 +925,28 @@ export default defineConfig({
       // private フィールドの readonly 強制は段階的対応
       "typescript/prefer-readonly": "off",
 
-      // ===== jest: 不採用 (vitest を使用) =====
+      // ===== vitest: テスト規約と衝突するため不採用 =====
       // CLAUDE.md は vitest + Chai API (test / assert) のみ使用するポリシー。
-      // jest プラグイン由来のルールは全て無効化する
-      "jest/require-hook": "off",
-      "jest/require-top-level-describe": "off",
-      "jest/prefer-lowercase-title": "off",
-      "jest/no-hooks": "off",
-      "jest/prefer-ending-with-an-expect": "off",
-      "jest/no-conditional-in-test": "off",
-      "jest/prefer-each": "off",
-      "jest/expect-expect": "off",
+      // describe / expect / hook を使わず、トップレベルの test() に日本語タイトルを
+      // 付け、型ナローイングのために条件分岐を用いる。これらの規約と衝突する
+      // vitest プラグイン由来のルールは全て無効化する
+      // (lint プラグインは "vitest" のみ有効で "jest" は無効のため、
+      //  jest/* ではなく vitest/* を無効化しないと発火する)
+      "vitest/require-hook": "off",
+      "vitest/no-hooks": "off",
+      "vitest/require-top-level-describe": "off",
+      "vitest/prefer-lowercase-title": "off",
+      "vitest/prefer-expect-assertions": "off",
+      "vitest/no-conditional-in-test": "off",
+      "vitest/prefer-each": "off",
+      "vitest/expect-expect": "off",
+
+      // ===== eslint: プロジェクト特性上無効化 =====
+      // 正規表現はいずれも ASCII 専用で Unicode フラグは不要
+      "require-unicode-regexp": "off",
+      // __MOQT_JS_VERSION__ は vite.config.ts の define で埋め込む
+      // ビルド時グローバルでリネーム不可
+      "no-underscore-dangle": "off",
 
       // ===== vitest: import スタイル =====
       // `vite-plus/test` 経由で test / assert を import するためグローバル不使用
@@ -950,6 +959,9 @@ export default defineConfig({
       // ===== unicorn: 個別緩和 =====
       // Worker ファイルで TypeScript にモジュールとして扱わせるための `export {}` を許可
       "unicorn/require-module-specifiers": "off",
+      // `x !== undefined` / `x !== null` の存在チェックは「存在したら検証」という
+      // 自然な読み順を持ち、正条件へ反転すると可読性が下がるため無効化
+      "unicorn/no-negated-condition": "off",
     },
     overrides: [
       {
@@ -982,6 +994,15 @@ export default defineConfig({
         files: ["src/codec/workers/**/*.ts"],
         rules: {
           "typescript/explicit-function-return-type": "off",
+        },
+      },
+      {
+        // 可変長整数デコーダはバイト長ごとにビットパターンのコメントを付けた
+        // 分岐で構成しており、共通行を括り出すとコメント構造と可読性が崩れるため
+        // branches-sharing-code を無効化する
+        files: ["src/varint.ts"],
+        rules: {
+          "oxc/branches-sharing-code": "off",
         },
       },
       {

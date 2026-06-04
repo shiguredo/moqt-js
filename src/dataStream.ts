@@ -1094,11 +1094,11 @@ export function encodeFetchObjectFields(
     }
     if (context === null) {
       parts.push(encodeVarint(fields.groupId));
-    } else if (groupOrder === GroupOrder.DESCENDING) {
-      const delta = context.groupId - fields.groupId - 1n;
-      parts.push(encodeVarint(delta));
     } else {
-      const delta = fields.groupId - context.groupId - 1n;
+      const delta =
+        groupOrder === GroupOrder.DESCENDING
+          ? context.groupId - fields.groupId - 1n
+          : fields.groupId - context.groupId - 1n;
       parts.push(encodeVarint(delta));
     }
   }
