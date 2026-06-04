@@ -11,7 +11,11 @@ import { ObjectStatus, type Location } from "../message";
 import { encodeRequestOkPayload, decodeRequestOkPayload } from "../message/session";
 import { MessageType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
-import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
+import {
+  bidiHandleRequestUpdateOk,
+  validateNoDuplicateGoawayOnRequestStream,
+  type BidiSessionInternal,
+} from "./bidi";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -342,4 +346,39 @@ test("PUBLISH_OK: 空 Track Properties は正常にデコードされる", () =>
 
   const decoded = decodeRequestOkPayload(payload);
   assert.equal(decoded.trackProperties.length, 0);
+});
+
+// ============================================================================
+// validateNoDuplicateGoawayOnRequestStream のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+ * リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
+ * 初回の Request ID は seenSet に追加され true を返す。
+ */
+test("validateNoDuplicateGoawayOnRequestStream: 初回は true で seenSet に追加される", () => {
+  const seen = new Set<bigint>();
+  let closed: SessionError | undefined;
+  const result = validateNoDuplicateGoawayOnRequestStream(0n, seen, (error) => {
+    closed = error;
+  });
+  assert.isTrue(result);
+  assert.isTrue(seen.has(0n));
+  assert.isUndefined(closed);
+});
+
+/**
+ * 2 回目の同一 Request ID は重複として PROTOCOL_VIOLATION で closeSession を呼び false を返す。
+ */
+test("validateNoDuplicateGoawayOnRequestStream: 2 回目は PROTOCOL_VIOLATION で false を返す", () => {
+  const seen = new Set<bigint>([0n]);
+  let closed: SessionError | undefined;
+  const result = validateNoDuplicateGoawayOnRequestStream(0n, seen, (error) => {
+    closed = error;
+  });
+  assert.isFalse(result);
+  assert.isDefined(closed);
+  assert.equal(closed!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(closed!.message.includes("received duplicate goaway on request stream"));
 });

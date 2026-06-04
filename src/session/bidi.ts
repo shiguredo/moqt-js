@@ -156,6 +156,37 @@ export function validateGoawayOnRequestStream(
 }
 
 /**
+ * リクエストストリーム上の重複 GOAWAY を検出する
+ *
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+ * "The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 3.5)
+ *  if it receives more than one GOAWAY on the control stream or on a single
+ *  request stream."
+ *
+ * 重複なし（初回）の場合は seenSet に requestId を追加して true を返す。
+ * 重複の場合は closeSession を PROTOCOL_VIOLATION で呼び false を返す。
+ *
+ * @returns 重複なしなら true、重複なら false
+ */
+export function validateNoDuplicateGoawayOnRequestStream(
+  requestId: bigint,
+  seenSet: Set<bigint>,
+  closeSession: (error: SessionError) => void,
+): boolean {
+  if (seenSet.has(requestId)) {
+    closeSession(
+      new SessionError(
+        "received duplicate goaway on request stream",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return false;
+  }
+  seenSet.add(requestId);
+  return true;
+}
+
+/**
  * REQUEST_OK Track Properties 非空検証
  *
  * draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
@@ -667,16 +698,15 @@ export async function bidiReadRequestStreamMessages(
             // "A GOAWAY MAY also be sent on a request stream to initiate
             //  migration of that individual request."
             // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
-            if (session.goawayReceivedOnRequestStreams.has(requestId)) {
-              session.closeWithError(
-                new SessionError(
-                  "received duplicate goaway on request stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
+            if (
+              !validateNoDuplicateGoawayOnRequestStream(
+                requestId,
+                session.goawayReceivedOnRequestStreams,
+                (error) => session.closeWithError(error),
+              )
+            ) {
               return;
             }
-            session.goawayReceivedOnRequestStreams.add(requestId);
             const decoded = decodeGoawayPayload(msg.payload);
             if (
               !validateGoawayOnRequestStream(decoded.requestId, (error) =>

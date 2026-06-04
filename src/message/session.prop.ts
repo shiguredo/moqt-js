@@ -16,6 +16,7 @@ import {
   encodeGoawayPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
+  isValidGoawayRequestIdParity,
 } from "./session";
 import { type Parameter, createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
@@ -116,6 +117,23 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
         assert.equal(decoded.requestId, requestId);
       },
     ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY) / Section 10.1 (Request ID):
+ * 制御ストリーム上の GOAWAY の Request ID は受信側 (クライアント) のパリティ、
+ * すなわち even でなければならない。
+ * isValidGoawayRequestIdParity は even を妥当 (true)、odd を違反 (false) と判定する。
+ */
+test("GOAWAY の Request ID パリティ判定は even を妥当・odd を違反とする", () => {
+  fc.assert(
+    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), (n) => {
+      // even (n * 2n) は受信側 (クライアント) のパリティと一致するため妥当
+      assert.isTrue(isValidGoawayRequestIdParity(n * 2n));
+      // odd (n * 2n + 1n) は受信側のパリティと不一致のため違反
+      assert.isFalse(isValidGoawayRequestIdParity(n * 2n + 1n));
+    }),
   );
 });
 
