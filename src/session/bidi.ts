@@ -64,7 +64,6 @@ interface PendingPublish {
   resolve: (pub: Publisher) => void;
   reject: (err: Error) => void;
   impl: PublisherImpl;
-  goawayCallback?: (newSessionUri: string) => void;
 }
 
 interface PendingSubscribe {
@@ -73,7 +72,6 @@ interface PendingSubscribe {
   impl: SubscriberImpl;
   joiningFetch?: JoiningFetchOptions;
   objectCallback: (object: MoqtObject) => void;
-  goawayCallback?: (newSessionUri: string) => void;
 }
 
 interface PendingFetch {
@@ -81,7 +79,6 @@ interface PendingFetch {
   reject: (err: Error) => void;
   impl: FetcherImpl;
   startLocation?: Location;
-  goawayCallback?: (newSessionUri: string) => void;
 }
 
 interface PendingTrackStatus {
@@ -288,7 +285,6 @@ export async function bidiReadPublishResponse(
         session.closeWithError(error);
         return;
       }
-      pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
 
@@ -324,7 +320,7 @@ export async function bidiReadPublishResponse(
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
-      pending.goawayCallback?.(decoded.newSessionUri);
+      pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingPublish.delete(requestId);
@@ -370,7 +366,6 @@ export async function bidiReadSubscribeResponse(
 
       const largestLocation = extractLargestLocation(decoded.parameters);
 
-      pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingSubscribe.delete(requestId);
 
       const existingSubscriber = session.subscribersByAlias.get(decoded.trackAlias);
@@ -435,7 +430,7 @@ export async function bidiReadSubscribeResponse(
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
-      pending.goawayCallback?.(decoded.newSessionUri);
+      pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingSubscribe.delete(requestId);
@@ -499,7 +494,6 @@ export async function bidiReadFetchResponse(
           ? (groupOrderParam.value[0] as GroupOrder)
           : undefined;
 
-      pending.impl.goawayCallback = pending.goawayCallback;
       session.pendingFetch.delete(requestId);
       pending.impl.setFetchOkInfo(
         decoded.endOfTrack,
@@ -536,7 +530,7 @@ export async function bidiReadFetchResponse(
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
-      pending.goawayCallback?.(decoded.newSessionUri);
+      pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingFetch.delete(requestId);

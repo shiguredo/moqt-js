@@ -894,7 +894,6 @@ export class SessionImpl implements Session {
       resolve: (pub: Publisher) => void;
       reject: (err: Error) => void;
       impl: PublisherImpl;
-      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingSubscribe = new Map<
@@ -905,7 +904,6 @@ export class SessionImpl implements Session {
       impl: SubscriberImpl;
       joiningFetch?: JoiningFetchOptions;
       objectCallback: (object: MoqtObject) => void;
-      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingRequestUpdate = new Map<
@@ -919,7 +917,6 @@ export class SessionImpl implements Session {
       reject: (err: Error) => void;
       impl: FetcherImpl;
       startLocation?: Location;
-      goawayCallback?: (newSessionUri: string) => void;
     }
   >();
   private pendingTrackStatus = new Map<
@@ -1258,6 +1255,9 @@ export class SessionImpl implements Session {
       callbacks?.onForwardStateChange,
     );
 
+    // GOAWAY コールバックを設定（セッション内部コールバック）
+    impl.goawayCallback = callbacks?.goaway;
+
     // 送信コールバックを設定
     impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
 
@@ -1279,7 +1279,6 @@ export class SessionImpl implements Session {
         resolve,
         reject,
         impl,
-        goawayCallback: callbacks?.goaway,
       });
     });
 
@@ -1391,6 +1390,9 @@ export class SessionImpl implements Session {
       callbacks.error,
     );
 
+    // GOAWAY コールバックを設定（セッション内部コールバック）
+    impl.goawayCallback = callbacks.goaway;
+
     // サブスクリプションキャンセルのコールバック
     impl.onUnsubscribe = async () => {
       await this.cancelSubscription(impl);
@@ -1409,7 +1411,6 @@ export class SessionImpl implements Session {
         impl,
         joiningFetch: options?.joiningFetch,
         objectCallback: callbacks.object,
-        goawayCallback: callbacks.goaway,
       });
     });
 
@@ -1489,6 +1490,9 @@ export class SessionImpl implements Session {
       callbacks.error,
     );
 
+    // GOAWAY コールバックを設定（セッション内部コールバック）
+    impl.goawayCallback = callbacks.goaway;
+
     // draft-ietf-moq-transport-18 Section 5.2:
     // キャンセルはストリームを閉じることで行う。
     impl.onCancel = async () => {
@@ -1502,7 +1506,6 @@ export class SessionImpl implements Session {
         reject,
         impl,
         startLocation: options.startLocation,
-        goawayCallback: callbacks.goaway,
       });
     });
 

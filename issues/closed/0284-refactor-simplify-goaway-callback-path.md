@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-06-03
+- Completed: 2026-06-04
 - Model: deepseek-v4 Pro
 - Branch: feature/refactor-simplify-goaway-callback
 - Polished: 2026-06-04
@@ -117,3 +118,24 @@ interface PendingPublish {
 - pre-OK GOAWAY が `pending.impl.goawayCallback` で呼ばれている（3 箇所すべて）
 - 全テストが PASS する
 - `CHANGES.md` に `[UPDATE]` エントリを追記する
+
+## 解決方法
+
+`goawayCallback` を pending Map と impl の 2 箇所で重複保持していたのを、impl 側に一本化した。
+
+- `src/session.ts`: `PublisherImpl`/`SubscriberImpl`/`FetcherImpl` 生成直後に `impl.goawayCallback = callbacks?.goaway`（publish）/ `callbacks.goaway`（subscribe/fetch）を設定し、`pendingPublish`/`pendingSubscribe`/`pendingFetch` の格納と Map のインライン型定義から `goawayCallback` を削除した
+- `src/session/bidi.ts`: `PendingPublish`/`PendingSubscribe`/`PendingFetch` 型から `goawayCallback` を削除し、REQUEST_OK 受信時の転送代入 `pending.impl.goawayCallback = pending.goawayCallback` 3 行を削除、pre-OK GOAWAY の呼び出しを `pending.goawayCallback?.(...)` から `pending.impl.goawayCallback?.(...)` に変更した
+
+`session.ts` のインライン型定義の削除は、`bidi.ts` の `BidiSessionInternal`（`Map<bigint, PendingPublish>`）と構造的に整合させデッドフィールドを防ぐために必要であり、issue の「変更内容」の指示どおりである。
+
+挙動は不変である。`impl.goawayCallback` は impl 生成直後かつリクエスト送信前に設定されるため、pre-OK / post-OK のいずれの GOAWAY でも同じコールバックが同じ引数 `decoded.newSessionUri` で呼ばれる。
+
+### 触ったファイル
+
+- `src/session.ts`
+- `src/session/bidi.ts`
+- `CHANGES.md`
+
+### 残課題（別 issue 推奨）
+
+- pending 型が `src/session.ts` のインライン型と `src/session/bidi.ts` の `PendingPublish` 等で二重定義されており、構造的型付けに依存しているため片方だけ更新すると乖離するリスクがある。`bidi.ts` の型を export して単一定義にする整理を別 issue で検討する。
