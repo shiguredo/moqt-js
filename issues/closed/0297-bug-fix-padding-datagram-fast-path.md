@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-padding-datagram-fast-path
 - Polished: 2026-06-04
@@ -144,3 +145,31 @@ Vitest の test / assert を使用し、テストメッセージは日本語で�
 - 誤ったコメントと不正確な spec 引用文が修正されている
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリを追記する
+
+## 解決方法
+
+推奨案 (varint デコードで type を判定する / magic byte 廃止) を採用した。
+
+### src/session.ts
+
+`handleIncomingDatagram` の PADDING fast-path を、誤った `data[0] === 0xe4` && `data.length >= 4` の先頭バイト判定から、PADDING Stream 受信経路と同じ varint デコード方式へ統一した。
+
+```typescript
+if (data.length > 0) {
+  const [datagramType] = decodeVarint(data, 0);
+  if (Number(datagramType) === 0x132b3e29) {
+    // PADDING datagram は破棄して何もしない
+    return;
+  }
+}
+```
+
+先頭バイトのハードコードを廃止したことで、`0x132B3E29` の正しい符号 (`0xf0` 始まり, 5 バイト varint) と構造的に一致しない本バグを再発不可能にした。あわせて誤ったコメント (「4 バイト varint 先頭バイトは 0xe4」) と不正確な spec 引用文 ("discard the contents of a padding datagram") を、正しい引用 ("The receiver MUST discard all data received in a padding datagram") へ修正した。
+
+### src/varint.test.ts
+
+fast-path が依存する定数を純粋関数レベルで pin する回帰テストを追加した。`varintSize(0x132B3E29) === 5` と `encodeVarint(0x132B3E29)[0] === 0xf0` を検証し、誤った `0xe4` / 4 バイト前提への先祖返りを検出する。PADDING Stream (`0x132B3E28`) も同様に pin した。
+
+### CHANGES.md
+
+`[FIX]` エントリは追記していない。develop ブランチには本バグを混入させた中間状態のエントリ (#0275 / #0295) が残っていたため、これらを削除し、PADDING datagram の discard 処理は当初の追加エントリ #0236 に集約した。CLAUDE.md の「変更履歴は派生元ブランチとの最終的な差分のみ/開発ブランチ内の中間状態の修正は記載しない」方針に従い、派生元との最終差分としては #0236 が正しい discard 動作を表す形に整えた。
