@@ -33,6 +33,7 @@ import {
   encodeTrackName,
   trackNamespaceToStrings,
   decodeGoawayPayload,
+  isValidGoawayRequestIdParity,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishBlockedPayload,
@@ -3367,7 +3368,7 @@ export class SessionImpl implements Session {
     // サーバーからの GOAWAY Request ID は even であることが期待される。
     // 受信した Request ID のパリティがクライアント (even) と一致しなければ
     // INVALID_REQUEST_ID でセッションを閉じる。
-    if (msg.requestId % 2n !== 0n) {
+    if (!isValidGoawayRequestIdParity(msg.requestId)) {
       this.closeWithError(
         new SessionError(
           `GOAWAY request ID parity mismatch: ${msg.requestId} (expected even)`,
