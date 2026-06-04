@@ -237,6 +237,9 @@
 - [FIX] GOAWAY ハンドリング時にストリームリソースが解放されないのを修正する (#0283)
   - 3 箇所のループ GOAWAY ハンドラに `void streamReader.cancel()` を追加する
   - @voluntas
+- [FIX] decodeRequestErrorPayload で Redirect の後続データを PROTOCOL_VIOLATION として検出する (#0277)
+  - draft-ietf-moq-transport-18 Section 10 の Message Length 一致規則に基づき、`decodeRedirect` の消費バイト数を検証して trailing data を `ProtocolViolationError` で拒否する
+  - @voluntas
 
 ### misc
 

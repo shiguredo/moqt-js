@@ -378,7 +378,19 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
         `unexpected redirect in REQUEST_ERROR with error code 0x${Number(errorCode).toString(16)}, expected REDIRECT (0x34)`,
       );
     }
-    redirect = decodeRedirect(data, offset)[0];
+    const [decodedRedirect, redirectSize] = decodeRedirect(data, offset);
+    redirect = decodedRedirect;
+    offset += redirectSize;
+    // draft-ietf-moq-transport-18 Section 10:
+    // "If the length does not match the length of the Message Payload,
+    //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+    // Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 10.6.2) であり、
+    // その後ろに後続データがあると消費バイト数が Message Payload 長と一致しないため違反となる
+    if (offset !== data.length) {
+      throw new ProtocolViolationError(
+        `trailing data after Redirect in REQUEST_ERROR: expected ${data.length} bytes, consumed ${offset}`,
+      );
+    }
   }
 
   return {
