@@ -285,6 +285,9 @@
 - [UPDATE] goawayCallback の設定経路を impl 側に一本化する (#0284)
   - pending Map と impl への二重保持をやめ、impl 生成直後に goawayCallback を設定して pending 型から削除する
   - @voluntas
+- [UPDATE] GOAWAY の Request ID パリティ判定と重複検出を pure function に抽出してテストを追加する (#0289)
+  - draft-ietf-moq-transport-18 Section 10.4 / 10.1 に基づき、`isValidGoawayRequestIdParity` と `validateNoDuplicateGoawayOnRequestStream` を抽出し、`handleGoaway` / `bidiReadRequestStreamMessages` から使用して単体テストを追加する
+  - @voluntas
 
 ## 2026.2.0
 

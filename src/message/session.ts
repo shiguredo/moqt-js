@@ -256,6 +256,24 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 }
 
 /**
+ * 制御ストリーム上の GOAWAY の Request ID パリティを検証する
+ *
+ * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+ * "If the parity of the Request ID does not match the receiver's parity,
+ *  the endpoint MUST close the session with INVALID_REQUEST_ID."
+ * draft-ietf-moq-transport-18 Section 10.1 (Request ID):
+ * "The client generates even numbered Request IDs, starting at 0, and the
+ *  server generates odd numbered Request IDs, starting at 1."
+ * moqt-js はクライアント専用のため、受信側 (クライアント) のパリティは even であり、
+ * 受信する制御ストリーム上の GOAWAY の Request ID は even でなければならない。
+ *
+ * @returns Request ID が even（妥当）なら true、odd（違反）なら false
+ */
+export function isValidGoawayRequestIdParity(requestId: bigint): boolean {
+  return requestId % 2n === 0n;
+}
+
+/**
  * RequestOk のペイロードをエンコード
  *
  * draft-ietf-moq-transport-18 Section 10.5:

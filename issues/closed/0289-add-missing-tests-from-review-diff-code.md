@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-03
+- Completed: 2026-06-05
 - Model: deepseek-v4 Pro
 - Branch: feature/add-missing-goaway-and-error-tests
 - Polished: 2026-06-05
@@ -104,3 +105,20 @@ WebTransport 依存のフローテストでありモック禁止下で単体テ�
 - 抽出前後で `handleGoaway` / `bidiReadRequestStreamMessages` の挙動が変わらない（`add` のタイミングを含む）
 - 全テストが PASS する
 - pure function 抽出（テスト可能化のためのリファクタ、外部挙動は不変）を伴うため、`CHANGES.md` の `### misc` に `[UPDATE]` エントリ（次行に担当者 `- @<ユーザー名>`）を追記する
+
+## 解決方法
+
+GOAWAY バリデーションの 2 ロジックを pure function に抽出し、抽出関数の単体テストを追加した。
+
+- `src/message/session.ts`: `isValidGoawayRequestIdParity(requestId): boolean` を抽出・export し、`src/message/index.ts` で再エクスポートした。`src/session.ts` の `handleGoaway` のパリティチェックを `!isValidGoawayRequestIdParity(msg.requestId)` に置換した（`INVALID_REQUEST_ID` で閉じる挙動は不変）
+- `src/session/bidi.ts`: `validateNoDuplicateGoawayOnRequestStream(requestId, seenSet, closeSession): boolean` を抽出・export し、`bidiReadRequestStreamMessages` の重複検出を置換した（`PROTOCOL_VIOLATION` で閉じる挙動と `add` のタイミングは不変）。この関数は #0291 が namespace ループでも再利用する
+- `src/message/session.prop.ts`: パリティ判定の PBT（even → true、odd → false）を追加した
+- `src/session/bidi.test.ts`: 重複検出の単体テスト（初回 → true、2 回目 → PROTOCOL_VIOLATION）を本物の `Set` とコールバックで追加した（モック・スタブ不使用）
+
+挙動不変・テスト妥当・整合性を `/review-diff-code` の 3 観点で確認し、致命的・重要な指摘は 0 件だった。
+
+### 触ったファイル
+
+- `src/message/session.ts`、`src/message/index.ts`、`src/session.ts`、`src/session/bidi.ts`（実装）
+- `src/message/session.prop.ts`、`src/session/bidi.test.ts`（テスト）
+- `CHANGES.md`（`[UPDATE]` エントリ）

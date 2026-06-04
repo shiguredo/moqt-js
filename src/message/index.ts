@@ -122,6 +122,7 @@ export {
   encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
+  isValidGoawayRequestIdParity,
 } from "./session";
 
 // Fetch メッセージ
