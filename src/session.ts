@@ -14,7 +14,6 @@ import {
   DatagramType,
   type MoqtObject,
 } from "./dataStream";
-export type { MoqtObject } from "./dataStream";
 import {
   ClosedSubgroupError,
   DataStreamErrorCode,
@@ -86,6 +85,8 @@ import {
   cancelStreamQuiet,
 } from "./session/stream";
 import { isSessionClosedError } from "./session/errors";
+
+export type { MoqtObject } from "./dataStream";
 
 /**
  * Session state
