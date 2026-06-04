@@ -49,6 +49,7 @@ import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../s
 import { encodeVarint } from "../varint";
 import type { JoiningFetchOptions, SessionState, TrackStatusResult } from "../session";
 import { extractForwardState, extractLargestLocation, validateFetchOkEndLocation } from "./params";
+import { toProtocolViolationSessionError } from "./errors";
 
 // ============================================================================
 // 内部インターフェース
@@ -740,8 +741,13 @@ export async function bidiReadRequestStreamMessages(
         }
       }
     }
-  } catch {
-    // ストリームが閉じられた場合は無視
+  } catch (error) {
+    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    const sessionError = toProtocolViolationSessionError(error);
+    if (sessionError !== null) {
+      session.closeWithError(sessionError);
+    }
+    // それ以外（ストリームの正常終了・キャンセル等）は既存通り無視する
   } finally {
     reader.releaseLock();
     session.requestStreams.delete(requestId);
