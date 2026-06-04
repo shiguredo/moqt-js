@@ -282,6 +282,9 @@
 - [UPDATE] validateGoawayOnRequestStream を全 GOAWAY 受信箇所で使用する (#0282)
   - 全 5 箇所の GOAWAY Request ID インラインチェックを同関数呼び出しに置き換える
   - @voluntas
+- [UPDATE] goawayCallback の設定経路を impl 側に一本化する (#0284)
+  - pending Map と impl への二重保持をやめ、impl 生成直後に goawayCallback を設定して pending 型から削除する
+  - @voluntas
 
 ## 2026.2.0
 
