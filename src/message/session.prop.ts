@@ -328,3 +328,49 @@ test("REDIRECT 以外のエラーコードで Redirect バイトが存在する�
     ),
   );
 });
+
+/**
+ * draft-ietf-moq-transport-18 Section 10:
+ * "If the length does not match the length of the Message Payload,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 10.6.2) であり、
+ * その後ろに後続データがあると消費バイト数が Message Payload 長と一致しないため違反となる。
+ * 正常な REQUEST_ERROR + Redirect の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ * 検出は消費オフセットと data.length の比較であり後続データの長さに依存しないため、
+ * 1 バイトから大きめの長さまでを生成して代表的に検証する。
+ * 後続データが無い正常系は既存の「REQUEST_ERROR with Redirect のラウンドトリップ」テストが担保する。
+ */
+test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.string({ minLength: 0, maxLength: 200 }),
+      fc.string({ minLength: 0, maxLength: 100 }),
+      fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
+      fc.uint8Array({ minLength: 0, maxLength: 50 }),
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (retryInterval, reasonPhrase, connectUri, namespaceParts, trackName, trailing) => {
+        const original: RequestError = {
+          type: MessageType.REQUEST_ERROR,
+          errorCode: 0x34n, // REDIRECT
+          retryInterval,
+          reasonPhrase,
+          redirect: {
+            connectUri,
+            trackNamespace: createTrackNamespace(namespaceParts),
+            trackName,
+          },
+        };
+
+        const encoded = encodeRequestErrorPayload(original);
+        // 正常な REQUEST_ERROR + Redirect の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeRequestErrorPayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});

@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-03
+- Completed: 2026-06-04
 - Model: deepseek-v4 Pro
 - Branch: feature/fix-redirect-trailing-data
 - Polished: 2026-06-04
@@ -129,6 +130,22 @@ if (offset !== data.length) {
 - `src/message/session.prop.ts` に後続データ検出の PBT テストが追加されている
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリを追記する
+
+## 解決方法
+
+`decodeRequestErrorPayload`（`src/message/session.ts`）で `decodeRedirect` の第二戻り値（消費バイト数）を取得して `offset` を進め、`offset !== data.length` の場合に `ProtocolViolationError` を throw するよう修正した。これにより Redirect の後ろに後続データがある REQUEST_ERROR、および Redirect の長さフィールドが残バイトを超える消費過多のケースの両方を検出する。
+
+仕様根拠は draft-ietf-moq-transport-18 Section 10 の "If the length does not match the length of the Message Payload, the receiver MUST close the session with a PROTOCOL_VIOLATION" を直接の根拠としてコメントに英語で記載した。
+
+`src/message/session.prop.ts` に後続データ検出の PBT テストを追加した。後続データが無い正常系は既存の「REQUEST_ERROR with Redirect のラウンドトリップ」テストが担保するため、別途追加していない。
+
+なお呼び出し元 8 箇所で throw された `ProtocolViolationError` を PROTOCOL_VIOLATION でセッションクローズに連動させる対応は、本 issue のスコープ外であり issue 0298 で扱う（握り潰しは develop 由来の既存構造であり、本修正が新たに導入した問題ではない）。
+
+### 触ったファイル
+
+- `src/message/session.ts`: `decodeRequestErrorPayload` に trailing data 検出を追加
+- `src/message/session.prop.ts`: 後続データ検出の PBT テストを追加
+- `CHANGES.md`: `[FIX]` エントリを追記
 
 ## 備考
 
