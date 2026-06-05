@@ -1,0 +1,212 @@
+/**
+ * MOQT データストリーム Datagram テスト
+ * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
+ */
+
+import { test, assert } from "vite-plus/test";
+import {
+  DatagramType,
+  type ObjectDatagram,
+  encodeObjectDatagram,
+  decodeObjectDatagram,
+} from "./dataStream";
+import { ObjectStatus } from "./message/types";
+
+test("ObjectDatagram: PAYLOAD_OBJ タイプ (0x00) をエンコード", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    payload: new Uint8Array([0xaa, 0xbb, 0xcc]),
+  };
+
+  const encoded = encodeObjectDatagram(datagram);
+
+  assert.equal(encoded[0], 0x00);
+  assert.equal(encoded[1], 5);
+  assert.equal(encoded[2], 10);
+  assert.equal(encoded[3], 3);
+  assert.equal(encoded[4], 128);
+  assert.deepEqual(encoded.slice(5), new Uint8Array([0xaa, 0xbb, 0xcc]));
+});
+
+test("ObjectDatagram: PAYLOAD_NO_OBJ タイプ (0x04) をエンコード", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_NO_OBJ,
+    trackAlias: 1n,
+    groupId: 2n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payload: new Uint8Array([0x11, 0x22]),
+  };
+
+  const encoded = encodeObjectDatagram(datagram);
+
+  assert.equal(encoded[0], 0x04);
+  assert.equal(encoded[1], 1);
+  assert.equal(encoded[2], 2);
+  assert.equal(encoded[3], 100);
+  assert.deepEqual(encoded.slice(4), new Uint8Array([0x11, 0x22]));
+});
+
+test("ObjectDatagram: STATUS_OBJ タイプ (0x20) をエンコード", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.STATUS_OBJ,
+    trackAlias: 7n,
+    groupId: 8n,
+    objectId: 9n,
+    publisherPriority: 50,
+    status: ObjectStatus.END_OF_GROUP,
+  };
+
+  const encoded = encodeObjectDatagram(datagram);
+
+  assert.equal(encoded[0], 0x20);
+  assert.equal(encoded[1], 7);
+  assert.equal(encoded[2], 8);
+  assert.equal(encoded[3], 9);
+  assert.equal(encoded[4], 50);
+  assert.equal(encoded[5], ObjectStatus.END_OF_GROUP);
+});
+
+test("ObjectDatagram: PAYLOAD_OBJ_EXT タイプ (0x01) - Properties 付きをエンコード", () => {
+  const properties = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 2n,
+    groupId: 3n,
+    objectId: 4n,
+    publisherPriority: 200,
+    properties,
+    payload: new Uint8Array([0x01]),
+  };
+
+  const encoded = encodeObjectDatagram(datagram);
+
+  assert.equal(encoded[0], 0x01);
+  assert.equal(encoded[5], 4);
+  assert.deepEqual(encoded.slice(6, 10), properties);
+  assert.deepEqual(encoded.slice(10), new Uint8Array([0x01]));
+});
+
+test("ObjectDatagram: PAYLOAD_OBJ タイプをデコード", () => {
+  const data = new Uint8Array([0x00, 0x05, 0x0a, 0x03, 0x80, 0xaa, 0xbb, 0xcc]);
+  const [datagram, consumed] = decodeObjectDatagram(data);
+
+  assert.equal(datagram.type, DatagramType.PAYLOAD_OBJ);
+  assert.equal(datagram.trackAlias, 5n);
+  assert.equal(datagram.groupId, 10n);
+  assert.equal(datagram.objectId, 3n);
+  assert.equal(datagram.publisherPriority, 128);
+  assert.deepEqual(datagram.payload, new Uint8Array([0xaa, 0xbb, 0xcc]));
+  assert.equal(consumed, 8);
+});
+
+test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {
+  const data = new Uint8Array([0x20, 0x07, 0x08, 0x09, 0x32, ObjectStatus.END_OF_TRACK]);
+  const [datagram, consumed] = decodeObjectDatagram(data);
+
+  assert.equal(datagram.type, DatagramType.STATUS_OBJ);
+  assert.equal(datagram.trackAlias, 7n);
+  assert.equal(datagram.groupId, 8n);
+  assert.equal(datagram.objectId, 9n);
+  assert.equal(datagram.publisherPriority, 50);
+  assert.equal(datagram.status, ObjectStatus.END_OF_TRACK);
+  assert.equal(consumed, 6);
+});
+
+const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }> = [
+  {
+    name: "PAYLOAD_OBJ",
+    datagram: {
+      type: DatagramType.PAYLOAD_OBJ,
+      trackAlias: 100n,
+      groupId: 200n,
+      objectId: 50n,
+      publisherPriority: 128,
+      payload: new Uint8Array([0x01, 0x02, 0x03, 0x04]),
+    },
+  },
+  {
+    name: "PAYLOAD_NO_OBJ",
+    datagram: {
+      type: DatagramType.PAYLOAD_NO_OBJ,
+      trackAlias: 10n,
+      groupId: 20n,
+      objectId: 0n,
+      publisherPriority: 255,
+      payload: new Uint8Array([0xff]),
+    },
+  },
+  {
+    name: "STATUS_OBJ",
+    datagram: {
+      type: DatagramType.STATUS_OBJ,
+      trackAlias: 5n,
+      groupId: 10n,
+      objectId: 15n,
+      publisherPriority: 0,
+      status: ObjectStatus.END_OF_TRACK,
+    },
+  },
+  {
+    name: "PAYLOAD_OBJ_END_GROUP",
+    datagram: {
+      type: DatagramType.PAYLOAD_OBJ_END_GROUP,
+      trackAlias: 1n,
+      groupId: 1n,
+      objectId: 1n,
+      publisherPriority: 100,
+      payload: new Uint8Array([0xaa]),
+    },
+  },
+  // draft-ietf-moq-transport-18 Section 11.3.1:
+  // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
+  // Object ID フィールドなし (Object ID = 0)、Priority フィールドなし
+  {
+    name: "STATUS_NO_OBJ_NO_PRI (0x2C)",
+    datagram: {
+      type: DatagramType.STATUS_NO_OBJ_NO_PRI,
+      trackAlias: 3n,
+      groupId: 7n,
+      objectId: 0n,
+      publisherPriority: 0,
+      status: ObjectStatus.END_OF_TRACK,
+    },
+  },
+  // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
+  // NORMAL status + Properties 付き
+  {
+    name: "STATUS_NO_OBJ_EXT_NO_PRI (0x2D)",
+    datagram: {
+      type: DatagramType.STATUS_NO_OBJ_EXT_NO_PRI,
+      trackAlias: 4n,
+      groupId: 8n,
+      objectId: 0n,
+      publisherPriority: 0,
+      status: ObjectStatus.NORMAL,
+      properties: new Uint8Array([0x01, 0x02]),
+    },
+  },
+];
+
+for (const tc of objectDatagramTestCases) {
+  test(`ObjectDatagram roundtrip: ${tc.name}`, () => {
+    const encoded = encodeObjectDatagram(tc.datagram);
+    const [decoded] = decodeObjectDatagram(encoded);
+
+    assert.equal(decoded.type, tc.datagram.type);
+    assert.equal(decoded.trackAlias, tc.datagram.trackAlias);
+    assert.equal(decoded.groupId, tc.datagram.groupId);
+    assert.equal(decoded.publisherPriority, tc.datagram.publisherPriority);
+
+    if (tc.datagram.payload) {
+      assert.deepEqual(decoded.payload, tc.datagram.payload);
+    }
+    if (tc.datagram.status !== undefined) {
+      assert.equal(decoded.status, tc.datagram.status);
+    }
+  });
+}
