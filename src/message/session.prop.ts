@@ -397,3 +397,22 @@ test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolVi
     ),
   );
 });
+
+/**
+ * draft-ietf-moq-transport-18 Section 1.4.4:
+ * "If an endpoint receives a length exceeding the maximum, it MUST close
+ *  the session with a PROTOCOL_VIOLATION"
+ * Reason Phrase Length が上限 (1024) を超える REQUEST_ERROR を受信すると
+ * decodeRequestErrorPayload が ProtocolViolationError を throw することを検証する。
+ */
+test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolationError を throw する", () => {
+  // errorCode + retryInterval + reasonLen(>1024) を組み立てる。
+  // reasonLen のチェックは Reason Phrase バイト読み取り前に行われるため、
+  // 実際の Reason Phrase バイトは不要。
+  const data = new Uint8Array([
+    ...encodeVarint(0x01n),
+    ...encodeVarint(0n),
+    ...encodeVarint(1025n),
+  ]);
+  assert.throws(() => decodeRequestErrorPayload(data), ProtocolViolationError);
+});

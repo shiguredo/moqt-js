@@ -375,9 +375,11 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
   offset += reasonLenSize;
 
   // draft-ietf-moq-transport-18 Section 1.4.4:
-  // Reason Phrase の最大長は 1,024 バイト
+  // Reason Phrase の最大長は 1,024 バイト。
+  // "If an endpoint receives a length exceeding the maximum, it MUST close
+  //  the session with a PROTOCOL_VIOLATION"
   if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
-    throw new Error(
+    throw new ProtocolViolationError(
       `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
     );
   }
