@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/add-codec-config-tests
 - Polished: 2026-06-04
@@ -67,3 +68,19 @@
 - 各コーデック (vp8 / vp9 / av1 / h264 / h265 / opus / aac) の設定生成と default フォールバックがテストされている
 - デフォルト引数の適用がテストされている
 - すべてのテストが PASS する
+
+## 解決方法
+
+`src/codec/config.test.ts` を新規作成し、4 つの設定生成純粋関数の単体テストを追加した (計 22 ケース)。
+
+- 各コーデックの codec 文字列マッピングを列挙して検証する (`vp8` / `vp09.00.10.08` / `av01.0.04M.08` / `avc1.42001f` / `hvc1.1.6.L93.B0` / `opus` / `mp4a.40.2`)。
+- `getVideoEncoderConfig` の `avc.format` / `hevc.format` annexb、`width` / `height` / `bitrate` / `framerate` の透過を検証する。
+- `getVideoDecoderConfig` の `codedWidth` / `codedHeight` 設定、`description` の透過と省略時 `undefined` を検証する。
+- `getAudioEncoderConfig` / `getAudioDecoderConfig` のデフォルト引数 (`sampleRate` 48000、`channels` 2) の適用と引数指定時の透過を検証する。
+- 未知 codec を渡したときの default フォールバック (Video は `vp8`、Audio は `opus`) を検証する。
+
+`isXxxSupported` 系 4 関数は WebCodecs グローバルに依存し純粋関数ではないため、モック禁止制約下では対象外とした。
+
+`hevc` フィールドは `lib.dom.d.ts` の `VideoEncoderConfig` 型にまだ無いため、実行時値を型キャストで検証した。default フォールバックは union 外の値を型アサーションで渡して実挙動を確認した。いずれもモック・スタブは使っていない。
+
+機能変更がないため `CHANGES.md` への追記はしていない。
