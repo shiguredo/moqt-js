@@ -19,7 +19,6 @@ import {
   DataStreamErrorCode,
   IncompleteDataError,
   MalformedTrackError,
-  ProtocolViolationError,
   RequestError,
   SessionError,
   SessionErrorCode,
@@ -3760,8 +3759,9 @@ export class SessionImpl implements Session {
         timestamp: Date.now(),
       });
       // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
-      if (err instanceof ProtocolViolationError) {
-        this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      const sessionError = toProtocolViolationSessionError(err);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
       }
     }
   }
@@ -3942,11 +3942,10 @@ export class SessionImpl implements Session {
               if (done) break;
               continue;
             }
-            if (err instanceof ProtocolViolationError) {
+            const sessionError = toProtocolViolationSessionError(err);
+            if (sessionError !== null) {
               // 仕様違反: PROTOCOL_VIOLATION でセッションを閉じる
-              this.closeWithError(
-                new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION),
-              );
+              this.closeWithError(sessionError);
               break;
             }
             // 予期しないエラー: INTERNAL_ERROR でセッションを閉じる
@@ -4007,8 +4006,9 @@ export class SessionImpl implements Session {
         timestamp: Date.now(),
       });
       // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
-      if (err instanceof ProtocolViolationError) {
-        this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      const sessionError = toProtocolViolationSessionError(err);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
       } else if (err instanceof MalformedTrackError) {
         await cancelStreamQuiet(
           reader,
