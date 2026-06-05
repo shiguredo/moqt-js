@@ -304,6 +304,10 @@
 - [UPDATE] namespace ループの GOAWAY ハンドリング重複を共通メソッドに抽出する (#0291)
   - 3 つの namespace ループの GOAWAY ハンドリングを `handleGoawayOnNamespaceStream` に共通化し、#0289 の `validateNoDuplicateGoawayOnRequestStream` を再利用する
   - @voluntas
+- [FIX] PBT の oddPropertyArb が再帰的 IMMUTABLE_PROPERTIES を生成して flaky に fail するのを修正する (#0314)
+  - `fetch` / `publish` / `subscribe` / `session` の各 `.prop.ts` の `oddPropertyArb` から IMMUTABLE_PROPERTIES (0x0b) を除外する
+  - 任意 data 付きの IMMUTABLE_PROPERTIES が再帰的に自身を含むと `decodeProperties` が `MalformedTrackError` を投げてラウンドトリップが成立しなかった
+  - @voluntas
 
 ## 2026.2.0
 
