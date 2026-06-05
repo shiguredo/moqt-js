@@ -359,3 +359,24 @@ export function calculateObjectIdDelta(previousObjectId: bigint, currentObjectId
   }
   return currentObjectId - previousObjectId - 1n;
 }
+
+// ============================================================================
+// setTimeout 遅延クランプ
+// ============================================================================
+
+// setTimeout の遅延上限 (2^31 - 1 = 2147483647 ms、約 24.8 日)。
+// WHATWG HTML 仕様および主要ブラウザは 2^31 - 1 ms を超える遅延を 0 に丸めて
+// 即発火するため、この値でクランプする。
+const MAX_SETTIMEOUT_DELAY = 2147483647;
+
+/**
+ * 純粋関数: bigint のタイムアウト (ms) を setTimeout に安全に渡せる値にクランプする
+ *
+ * 2^31 - 1 を超える遅延は WHATWG HTML 仕様で 0 に丸められ即発火するため、上限で抑える。
+ * GOAWAY タイムアウトには受信した GOAWAY のピア由来の値が渡るため、防御的にクランプする。
+ *
+ * @param timeout - クランプ対象のタイムアウト (ms)
+ */
+export function clampTimeoutMs(timeout: bigint): number {
+  return Math.min(Number(timeout), MAX_SETTIMEOUT_DELAY);
+}

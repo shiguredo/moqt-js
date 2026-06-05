@@ -248,6 +248,11 @@
   - セッションクローズ後の送信を弾き、クローズ時の `releaseLock()` による in-flight write の reject を握り潰してエラーコールバックの誤発火を防ぐ
   - セッションクローズ時に datagram writer を解放する
   - @voluntas
+- [FIX] GOAWAY タイムアウトの setTimeout 32-bit オーバーフローを修正する (#0304)
+  - GOAWAY タイムアウトを `setTimeout` に渡す際、`2^31 - 1` ms を超える値を上限でクランプする
+  - クランプしないとブラウザが遅延を 0 に丸めて即発火し、ピア由来の巨大な GOAWAY timeout で猶予を待たずに即クローズしていた
+  - クランプ処理を純粋関数 `clampTimeoutMs` として `src/session/params.ts` に追加する
+  - @voluntas
 
 ### misc
 
