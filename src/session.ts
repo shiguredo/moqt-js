@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-18 Section 3 (Sessions)
  */
 
-import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
+import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "./controlStream";
 import {
   encodeSubgroupHeader,
   SubgroupHeaderType,
@@ -1142,41 +1142,60 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-18 Section 3.4:
     // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
     // 制御ストリームのストリームタイプ 0x2F00 を読み取って検証する。
+    // WebTransport の read() はチャンク境界を保証しないため、ストリームタイプ varint も
+    // SETUP メッセージ本体も複数チャンクに分割されて届きうる。揃うまで読み続ける。
+    // reader は 1 つだけ保持し、後続の制御ストリーム読み取り (startControlMessageLoop)
+    // が getReader() で再取得できるよう finally で必ず releaseLock する。
     const reader = incomingStream.getReader();
-    const { value, done } = await reader.read();
-    reader.releaseLock();
-
-    if (done || !value) {
-      throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
-    }
-
-    // ストリームタイプを読み取る
-    const [streamType, streamTypeConsumed] = decodeVarint(value, 0);
-    if (Number(streamType) !== MessageType.SETUP) {
-      throw new SessionError(
-        `expected control stream type 0x2F00, got 0x${streamType.toString(16)}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      );
-    }
-
-    // ストリームタイプ以降のデータを ControlStreamReader に供給
-    const remaining = value.slice(streamTypeConsumed);
-    let messages = remaining.length > 0 ? this.controlReader.feed(remaining) : [];
-
-    // SETUP メッセージがまだ届いていない場合は追加で読み取る
-    if (messages.length === 0) {
-      const setupReader = incomingStream.getReader();
-      const { value: setupValue, done: setupDone } = await setupReader.read();
-      setupReader.releaseLock();
-
-      if (setupDone || !setupValue) {
-        throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
+    let messages: ControlMessage[] = [];
+    try {
+      // ストリームタイプ varint を読み切るまで read + 連結を繰り返す
+      let buffer: Uint8Array = new Uint8Array(0);
+      let streamType: bigint;
+      let streamTypeConsumed: number;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || !value) {
+          throw new SessionError(
+            "Connection closed before control stream type",
+            SessionErrorCode.NO_ERROR,
+          );
+        }
+        buffer = concatChunks([buffer, value]);
+        try {
+          [streamType, streamTypeConsumed] = decodeVarint(buffer, 0);
+          break;
+        } catch (error) {
+          // varint がまだ揃っていない場合は次の read() で続きを読む。
+          // それ以外のエラーは再 throw する。
+          if (!(error instanceof IncompleteDataError)) {
+            throw error;
+          }
+        }
       }
-      messages = this.controlReader.feed(setupValue);
-    }
 
-    if (messages.length === 0) {
-      throw new SessionError("No SETUP received", SessionErrorCode.PROTOCOL_VIOLATION);
+      if (Number(streamType) !== MessageType.SETUP) {
+        throw new SessionError(
+          `expected control stream type 0x2F00, got 0x${streamType.toString(16)}`,
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+
+      // draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+      // SETUP は制御ストリーム上で最初に送られる制御メッセージである。
+      // SETUP メッセージが揃うまで read + feed を繰り返す。
+      // ControlStreamReader.feed は部分データを内部バッファに蓄積し、
+      // 揃ったメッセージだけを返す。
+      messages = this.controlReader.feed(buffer.slice(streamTypeConsumed));
+      while (messages.length === 0) {
+        const { value: chunk, done } = await reader.read();
+        if (done || !chunk) {
+          throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
+        }
+        messages = this.controlReader.feed(chunk);
+      }
+    } finally {
+      reader.releaseLock();
     }
 
     const msg = messages[0];
