@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-settimeout-overflow
 - Polished: 2026-06-04
@@ -105,3 +106,27 @@ export function clampTimeoutMs(timeout: bigint): number {
 - クランプ処理が純粋関数として単体テストされている
 - 通常値の挙動が変わらないことが確認される
 - 既存の全テストが PASS する
+
+## 解決方法
+
+設計方針通り、純粋関数 `clampTimeoutMs` を `src/session/params.ts` に追加し、`setTimeout` に bigint タイムアウトを渡す 2 箇所を置き換えた。
+
+### src/session/params.ts
+
+`clampTimeoutMs(timeout: bigint): number = Math.min(Number(timeout), MAX_SETTIMEOUT_DELAY)` を追加した。`MAX_SETTIMEOUT_DELAY = 2147483647` (2^31 - 1) はファイルスコープの非 export 定数とした。`Number(timeout)` が巨大値で `Infinity` になっても `Math.min` で上限に収まる。コメントは末尾コメントを使わず行頭ブロックにし、WHATWG HTML 仕様の根拠を記載した。
+
+### src/session.ts
+
+`goaway()` の `Number(goawayTimeout)` と `handleGoaway()` の `Number(msg.timeout)` を `clampTimeoutMs(...)` に置き換えた。両箇所の `> 0n` ガードは維持した。`clampTimeoutMs` は内部ヘルパのため、末尾の公開 API re-export には追加していない。
+
+### src/session/params.test.ts
+
+`clampTimeoutMs` の単体テストを新規作成した。通常値 (1n / 1000n)、上限ちょうど (2147483647n)、上限 +1 (2147483648n)、varint 上限近傍 (2^62)、bigint 最大級 (2^64 - 1) を検証する。モック・スタブは使っていない。
+
+### 設計判断: 下限クランプは追加しない
+
+`clampTimeoutMs` は上限のみクランプし下限を持たない。負値・0n は呼び出し側 2 箇所の `> 0n` ガードで到達不能であり、エッジケース表にも負値は無いため、到達不能なケースへの防御 (YAGNI) は避けた。
+
+### CHANGES.md
+
+issue 本文は「機能変更がないため追記不要」としていたが、ピア由来の巨大 GOAWAY timeout で即クローズしていた観測可能なバグの修正であるため、CLAUDE.md の `[FIX]` 方針に従い `[FIX]` エントリを追記した。
