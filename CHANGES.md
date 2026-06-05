@@ -261,6 +261,10 @@
   - draft-ietf-moq-transport-18 Section 1.4.4 の MUST に基づき、`decodeRequestErrorPayload` / `decodePublishDonePayload` が Reason Phrase 長超過時にプレーン `Error` を throw していたのを `ProtocolViolationError` に是正する
   - これにより受信ループの catch が `PROTOCOL_VIOLATION` でセッションを閉じられるようになる
   - @voluntas
+- [FIX] initialize() で SETUP に相乗りした後続制御メッセージが破棄されるのを修正する (#0315)
+  - draft-ietf-moq-transport-18 Section 10.3 / Section 3.3 に基づき、SETUP と同一 read チャンクに相乗りした後続制御メッセージを `handleControlMessage` で処理する
+  - `ControlStreamReader.feed` が返した `messages[1..]` を SETUP 確立後に処理し、`startControlMessageLoop` 開始前に取りこぼさないようにする
+  - @voluntas
 
 ### misc
 
