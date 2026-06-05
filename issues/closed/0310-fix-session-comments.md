@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-session-comments
 - Polished: 2026-06-04
@@ -84,3 +85,26 @@ this.nextRequestId += 2n; // Client uses even IDs
 - `src/session.ts` 内の英語 JSDoc 説明文がすべて日本語化されている
 - RFC / draft からの英語原文引用は英語のまま維持されている
 - 既存の全テストが PASS する (コメントのみの変更のため挙動は不変)
+
+## 解決方法
+
+設計方針通り、`src/session.ts` のコメントのみを変更した (コードロジックは不変)。
+
+### (A) 末尾コメント 4 箇所の是正
+
+末尾コメントを削除し、対象行の直前 (引数途中の場合は呼び出し全体の直前) に日本語コメントを移した。
+
+- `// Client uses even IDs` (2 箇所) -> 行上に `// draft-ietf-moq-transport-18 Section 10.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する`
+- `// Placeholder, will be updated from SUBSCRIBE_OK` -> `new SubscriberImpl(...)` 直前に `// Track Alias のプレースホルダー。SUBSCRIBE_OK 受信時に更新する`
+- `// Reason phrase length` -> 行上に `// Reason Phrase の長さ (0)`
+
+### (B) 英語 JSDoc 説明文の日本語化
+
+`src/session.ts` 全体を走査し、関数・メソッド・型・プロパティ・セクションの英語 JSDoc 説明文を日本語化した。RFC / draft からの引用 (`>` 始まり・`"..."` 囲み・ワイヤフォーマット図・`Section X.Y:` 直後の verbatim) は英語のまま維持した。スペック用語 (SETUP / Track Alias / SUBSCRIBE_OK / REQUEST_OK / Group Order 等) と `@param` タグ・URL も維持した。`SHOULD NOT` / `MUST` を含むが引用符のない moqt-js 独自のパラフレーズ説明 (GOAWAY 受信・namespace キャンセル等) は日本語化した。
+
+### 検証
+
+- コメントのみの変更で `vp check` / `vp run test` (668 passed) が pass し挙動は不変。
+- review-diff-code で、コードが 1 文字も変わっていないこと・RFC 引用の誤訳がないこと・英語 JSDoc 説明文の翻訳漏れがないことを確認した。
+
+機能変更がないため `CHANGES.md` への追記はしていない。

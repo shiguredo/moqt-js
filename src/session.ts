@@ -1,5 +1,5 @@
 /**
- * MOQT Session
+ * MOQT セッション
  * draft-ietf-moq-transport-18 Section 3 (Sessions)
  */
 
@@ -91,42 +91,42 @@ import { isSessionClosedError } from "./session/errors";
 export type { MoqtObject } from "./dataStream";
 
 /**
- * Session state
+ * セッション状態
  */
 export type SessionState = "connected" | "closed";
 
 /**
- * Debug message for logging MOQT protocol messages
+ * MOQT プロトコルメッセージをログ出力するためのデバッグメッセージ
  */
 export interface DebugMessage {
-  /** Message direction */
+  /** メッセージの方向 */
   direction: "send" | "recv";
-  /** Message type number */
+  /** メッセージタイプ番号 */
   type: number;
-  /** Message type name (e.g., "SETUP", "SUBSCRIBE") */
+  /** メッセージタイプ名 (例: "SETUP", "SUBSCRIBE") */
   typeName: string;
   /**
-   * Raw payload bytes.
+   * 生のペイロードバイト列。
    *
-   * The Uint8Array is independent of moqt-js internal buffers and the receiver
-   * MAY retain it beyond the callback. The receiver MUST NOT mutate it because
-   * the same instance may be referenced by moqt-js internals after the callback
-   * returns (e.g. for retransmission or further encoding).
+   * Uint8Array は moqt-js 内部のバッファとは独立しており、受信側は
+   * コールバックを超えて保持してよい。ただし受信側はこれを変更してはならない。
+   * コールバックの返却後も同一インスタンスが moqt-js 内部から参照される
+   * 可能性があるためである (例: 再送やさらなるエンコードのため)。
    */
   payload: Uint8Array;
-  /** Decoded message content (when available) */
+  /** デコードされたメッセージ内容 (利用可能な場合) */
   decoded?: Record<string, unknown>;
-  /** Timestamp in milliseconds */
+  /** ミリ秒単位のタイムスタンプ */
   timestamp: number;
 }
 
 /**
- * Connect callbacks
+ * 接続コールバック
  */
 export interface ConnectCallbacks {
   close?: (closeInfo: WebTransportCloseInfo) => void;
   error?: (error: Error) => void;
-  /** Debug callback for logging MOQT protocol messages */
+  /** MOQT プロトコルメッセージをログ出力するためのデバッグコールバック */
   debug?: (message: DebugMessage) => void;
   /**
    * GOAWAY 受信時のコールバック
@@ -137,9 +137,9 @@ export interface ConnectCallbacks {
 }
 
 /**
- * Certificate hash for self-signed certificates
- * Used with WebTransport's serverCertificateHashes option
- * Note: The certificate must have a validity period of 14 days or less
+ * 自己署名証明書用の証明書ハッシュ
+ * WebTransport の serverCertificateHashes オプションと共に使用する
+ * 注意: 証明書の有効期間は 14 日以下でなければならない
  */
 export interface CertificateHash {
   algorithm: "sha-256";
@@ -147,18 +147,18 @@ export interface CertificateHash {
 }
 
 /**
- * Connect options
+ * 接続オプション
  */
 export interface ConnectOptions {
   /**
-   * Certificate hashes for self-signed certificates
-   * Use this for local development with self-signed certificates
-   * Note: Certificate validity period must be 14 days or less
+   * 自己署名証明書用の証明書ハッシュ
+   * 自己署名証明書を使ったローカル開発で使用する
+   * 注意: 証明書の有効期間は 14 日以下でなければならない
    */
   serverCertificateHashes?: CertificateHash[];
 
   /**
-   * Authorization Token to send as SETUP Option (Option Type 0x03)
+   * SETUP Option (Option Type 0x03) として送信する Authorization Token
    * draft-ietf-moq-transport-18 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
    *
    * SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 10.2.2)。
@@ -192,10 +192,10 @@ export interface SessionImplOptions {
 }
 
 /**
- * Session interface
+ * セッションインターフェース
  */
 /**
- * Publish callbacks
+ * パブリッシュコールバック
  */
 export interface PublishCallbacks {
   error?: (error: Error) => void;
@@ -217,7 +217,7 @@ export interface PublishCallbacks {
 }
 
 /**
- * Publish options
+ * パブリッシュオプション
  */
 export interface PublishOptions {
   /**
@@ -302,7 +302,7 @@ export interface PublishOptions {
 }
 
 /**
- * Subscribe callbacks
+ * サブスクライブコールバック
  */
 export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
@@ -385,7 +385,7 @@ export interface JoiningFetchOptions {
 }
 
 /**
- * Subscribe options
+ * サブスクライブオプション
  */
 export interface SubscribeOptions {
   /**
@@ -487,7 +487,7 @@ export interface SubscribeOptions {
 }
 
 /**
- * Fetch callbacks
+ * フェッチコールバック
  */
 export interface FetchCallbacks {
   object: (object: MoqtObject) => void;
@@ -502,7 +502,7 @@ export interface FetchCallbacks {
 }
 
 /**
- * Fetch options
+ * フェッチオプション
  */
 export interface FetchOptions {
   /**
@@ -822,7 +822,7 @@ export interface Session {
 }
 
 /**
- * Internal Session implementation
+ * 内部セッション実装
  */
 export class SessionImpl implements Session {
   private sessionState: SessionState = "connected";
@@ -1089,7 +1089,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Initialize the session (called after WebTransport connect)
+   * セッションを初期化する (WebTransport 接続後に呼ばれる)
    *
    * options に authorizationToken を指定すると、SETUP Option (0x03) として
    * draft-ietf-moq-transport-18 Section 10.3.1.4 に従い認証トークンを送出する。
@@ -1243,7 +1243,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Publish a track
+   * トラックを publish する
    */
   async publish(
     namespace: string[],
@@ -1262,7 +1262,8 @@ export class SessionImpl implements Session {
     }
 
     const requestId = this.nextRequestId;
-    this.nextRequestId += 2n; // Client uses even IDs
+    // draft-ietf-moq-transport-18 Section 10.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
+    this.nextRequestId += 2n;
 
     const trackAlias = this.nextTrackAlias++;
 
@@ -1345,11 +1346,11 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Subscribe to a track
+   * トラックを subscribe する
    *
    * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK):
-   * SUBSCRIBE does not include Track Alias.
-   * Track Alias is returned by the publisher in SUBSCRIBE_OK (Section 10.8 SUBSCRIBE_OK).
+   * SUBSCRIBE は Track Alias を含まない。
+   * Track Alias は SUBSCRIBE_OK で publisher から返される (Section 10.8 SUBSCRIBE_OK)。
    */
   async subscribe(
     namespace: string[],
@@ -1396,18 +1397,20 @@ export class SessionImpl implements Session {
     }
 
     const requestId = this.nextRequestId;
-    this.nextRequestId += 2n; // Client uses even IDs
+    // draft-ietf-moq-transport-18 Section 10.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
+    this.nextRequestId += 2n;
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
 
     // サブスクライバー実装を作成
     // 注意: trackAlias は SUBSCRIBE_OK 受信時に設定される
+    // Track Alias のプレースホルダー。SUBSCRIBE_OK 受信時に更新する
     const impl = new SubscriberImpl(
       namespace,
       trackName,
       requestId,
-      0n, // Placeholder, will be updated from SUBSCRIBE_OK
+      0n,
       callbacks.object,
       callbacks.datagram,
       callbacks.end,
@@ -1481,7 +1484,7 @@ export class SessionImpl implements Session {
    * 過去のデータを取得する（Standalone Fetch）
    *
    * draft-ietf-moq-transport-18 Section 10.12 (FETCH):
-   * FETCH requests a range of Objects from a track.
+   * FETCH はトラックから Object の範囲を要求する
    */
   async fetch(
     namespace: string[],
@@ -1569,8 +1572,8 @@ export class SessionImpl implements Session {
    * トラックの状態を問い合わせる
    *
    * draft-ietf-moq-transport-18 Section 10.14 (TRACK_STATUS):
-   * TRACK_STATUS requests information about a track without subscribing.
-   * The response is REQUEST_OK with the same parameters as SUBSCRIBE_OK.
+   * TRACK_STATUS は subscribe せずにトラックの情報を要求する
+   * 応答は SUBSCRIBE_OK と同じパラメータを持つ REQUEST_OK である
    */
   async trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult> {
     if (this.sessionState === "closed") {
@@ -2480,8 +2483,8 @@ export class SessionImpl implements Session {
    * GOAWAY を送信してセッション終了を通知する
    *
    * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
-   * An endpoint sends a GOAWAY message to inform the peer it intends to
-   * close the session soon.
+   * エンドポイントは間もなくセッションを閉じる意図を peer に通知するために
+   * GOAWAY メッセージを送信する。
    */
   async goaway(newSessionUri?: string, timeout?: bigint): Promise<void> {
     if (this.sessionState === "closed") {
@@ -2556,7 +2559,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Close the session
+   * セッションを閉じる
    *
    * draft-ietf-moq-transport-18 Section 3.5:
    * "When WebTransport is used, the session is closed using the
@@ -2834,7 +2837,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Send an object on a subgroup stream
+   * Subgroup ストリームでオブジェクトを送信する
    * draft-ietf-moq-transport-18 Section 2.2:
    * "Objects in a subgroup ... are sent on a single stream whenever possible."
    *
@@ -3063,7 +3066,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Send a datagram
+   * datagram を送信する
    * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
@@ -3139,7 +3142,8 @@ export class SessionImpl implements Session {
     const parts: Uint8Array[] = [];
     parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
     parts.push(encodeVarint(streamCount));
-    parts.push(encodeVarint(0)); // Reason phrase length
+    // Reason Phrase の長さ (0)
+    parts.push(encodeVarint(0));
 
     const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
     const payload = new Uint8Array(totalLength);
@@ -3381,15 +3385,15 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Handle GOAWAY message
+   * GOAWAY メッセージを処理する
    *
    * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
-   * Upon receiving a GOAWAY, an endpoint SHOULD NOT initiate new requests
-   * to the peer including SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
-   * SUBSCRIBE_NAMESPACE and TRACK_STATUS.
+   * GOAWAY を受信したエンドポイントは SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
+   * SUBSCRIBE_NAMESPACE, TRACK_STATUS を含む新規リクエストを peer に対して
+   * 開始すべきでない。
    *
-   * The endpoint MUST terminate the session with a PROTOCOL_VIOLATION
-   * if it receives multiple GOAWAY messages.
+   * 複数の GOAWAY メッセージを受信した場合、エンドポイントは PROTOCOL_VIOLATION で
+   * セッションを終了しなければならない。
    */
   private handleGoaway(payload: Uint8Array): Record<string, unknown> {
     // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
@@ -3483,8 +3487,8 @@ export class SessionImpl implements Session {
    * Namespace サブスクリプションを閉じる
    *
    * draft-ietf-moq-transport-18 §6.1:
-   * A SUBSCRIBE_NAMESPACE can be cancelled by closing the stream with
-   * either a FIN or RESET_STREAM.
+   * SUBSCRIBE_NAMESPACE は FIN または RESET_STREAM でストリームを閉じることで
+   * キャンセルできる。
    */
   private async closeNamespaceSubscription(requestId: bigint): Promise<void> {
     const subscription = this.namespaceSubscriptions.get(requestId);
@@ -3533,8 +3537,8 @@ export class SessionImpl implements Session {
    * Tracks サブスクリプションを閉じる
    *
    * draft-ietf-moq-transport-18 §6.1:
-   * A SUBSCRIBE_TRACKS can be cancelled by closing the stream with
-   * either a FIN or RESET_STREAM.
+   * SUBSCRIBE_TRACKS は FIN または RESET_STREAM でストリームを閉じることで
+   * キャンセルできる。
    */
   private async closeTracksSubscription(requestId: bigint): Promise<void> {
     const subscription = this.tracksSubscriptions.get(requestId);
@@ -3643,7 +3647,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Start datagram receiving loop
+   * datagram 受信ループを開始する
    * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    */
   private startDatagramLoop(): void {
@@ -3678,7 +3682,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Handle incoming datagram
+   * 受信した datagram を処理する
    * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    */
   private handleIncomingDatagram(data: Uint8Array): void {
@@ -3780,7 +3784,7 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Handle incoming unidirectional data stream
+   * 受信した単方向データストリームを処理する
    * draft-ietf-moq-transport-18 Section 11.4 (Streams)
    *
    * ストリーミング処理: データが到着するたびにオブジェクトをパースして即座に配信する
