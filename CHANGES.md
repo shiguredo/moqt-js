@@ -257,6 +257,10 @@
   - draft-ietf-moq-transport-18 Section 3.5 に基づき、`startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` の catch が `ProtocolViolationError` を握り潰していたのを修正し、検出時に `PROTOCOL_VIOLATION` でセッションを閉じる
   - `closeWithError` は subscription/publication を同期クローズするため、既存のローカルクローズ・reject の後に呼んで subscribe Promise のハングを防ぐ
   - @voluntas
+- [FIX] Reason Phrase 長超過の decode を ProtocolViolationError に是正する (#0312)
+  - draft-ietf-moq-transport-18 Section 1.4.4 の MUST に基づき、`decodeRequestErrorPayload` / `decodePublishDonePayload` が Reason Phrase 長超過時にプレーン `Error` を throw していたのを `ProtocolViolationError` に是正する
+  - これにより受信ループの catch が `PROTOCOL_VIOLATION` でセッションを閉じられるようになる
+  - @voluntas
 
 ### misc
 
