@@ -21,7 +21,7 @@ import {
 import { type Parameter, createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import { type Property, TrackPropertyId } from "../properties";
+import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
 import { ProtocolViolationError } from "../error";
 
 /**
@@ -233,7 +233,12 @@ const evenPropertyArb = fc
 
 const oddPropertyArb = fc
   .record({
-    id: fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n + 1n),
+    // IMMUTABLE_PROPERTIES (0x0b) は data に再帰的に IMMUTABLE_PROPERTIES を含むと
+    // decodeProperties が MalformedTrackError を投げてラウンドトリップが成立しないため除外する
+    id: fc
+      .bigInt({ min: 0n, max: 100n })
+      .map((n) => n * 2n + 1n)
+      .filter((id) => id !== MOQTPropertyId.IMMUTABLE_PROPERTIES),
     data: fc.uint8Array({ minLength: 0, maxLength: 20 }),
   })
   .map(({ id, data }) => ({ id, data }));

@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-05
+- Completed: 2026-06-05
 - Model: Opus 4.8
 - Branch: feature/fix-prop-arb-recursive-immutable-properties
 - Reporter: @voluntas
@@ -77,6 +78,35 @@ IMMUTABLE_PROPERTIES のラウンドトリップを別途検証したい場合�
 - 同一 seed (`1516739457`) で fail しないことを確認する
 - 既存の全テストが PASS する
 - `CHANGES.md` の `### misc` に `[FIX]` エントリを追記する (テスト専用の修正のため)
+
+## 解決方法
+
+設計方針通り、`oddPropertyArb` の id 生成に `.filter((id) => id !== MOQTPropertyId.IMMUTABLE_PROPERTIES)` を追加して IMMUTABLE_PROPERTIES (0x0b = 11) を除外した。
+
+### 修正したファイル
+
+`n * 2n + 1n` で odd id を生成し IMMUTABLE_PROPERTIES を除外していなかった 4 ファイルを修正した。
+
+- `src/message/fetch.prop.ts`
+- `src/message/publish.prop.ts`
+- `src/message/subscribe.prop.ts`
+- `src/message/session.prop.ts`
+
+各ファイルで `MOQTPropertyId` を `../properties` から import し、`evenPropertyArb` の除外方式に倣って filter を追加した。`src/properties.prop.ts` は既に IMMUTABLE_PROPERTIES を除外済みのため修正対象外。リポジトリ全体の `*.prop.ts` を確認し、他に同型の flake-prone ジェネレータが無いことを確認した。
+
+### 検証
+
+- 文書化された flaky seed (`1516739457`) を含め、修正後はテストが安定して PASS することを複数回の実行で確認した。
+- odd id 全域 [1, 201] のうち IMMUTABLE_PROPERTIES (11) のみがラウンドトリップを破綻させる id であることを確認した (他の odd id は worst-case data でも `MalformedTrackError` を投げない)。よって 11 の除外で必要十分。
+- IMMUTABLE_PROPERTIES の正常 roundtrip は `src/properties.prop.ts` (有効な nested data を生成) が、再帰検出の MUST 違反は `src/properties.test.ts` の専用テストが維持しており、カバレッジ損失はない。
+
+### CHANGES.md
+
+テスト専用の修正のため `### misc` に `[FIX]` エントリを追記した。
+
+### スコープ外として記録する事項
+
+`oddPropertyArb` / `evenPropertyArb` / `propertyArb` が 5 ファイルにほぼ同一コピーで重複しており、今回も 4 箇所に同じ filter を貼る形になった。共通ヘルパーへの集約は DRY 改善になるが、`properties.prop.ts` のみ id 範囲が異なる (0xff vs 100n) など挙動差があり、本 issue のスコープ (flaky 解消) 外のため見送った。
 
 ## 解決方法
 
