@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-05
+- Completed: 2026-06-05
 - Model: Opus 4.8
 - Branch: feature/fix-namespace-loop-protocol-violation-handling
 - Reporter: @voluntas
@@ -85,4 +86,20 @@ draft-ietf-moq-transport-18:
 
 ## 解決方法
 
-(対応時に記載する)
+`#0298` で `src/session/errors.ts` に追加した pure function `toProtocolViolationSessionError` を再利用し、3 つの namespace 系ループ (`startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop`) の catch で `ProtocolViolationError` 検出時に `this.closeWithError(PROTOCOL_VIOLATION)` を呼ぶようにした。`toProtocolViolationSessionError` を `src/session.ts` の import に追加した。
+
+### closeWithError の呼び出し順序 (設計方針からの変更)
+
+issue の設計方針スニペットは `closeWithError` を catch の先頭に置いていたが、実装では **catch の末尾** (既存のローカルクローズ・error コールバック・reject の後) に置いた。
+
+`closeWithError` -> `void this.close()` は最初の `await` の前に namespaceSubscriptions / tracksSubscriptions / namespacePublications の各 state を同期的に "closed" にしてマップを clear する。さらに `close()` は namespace 系の subscribe/publish Promise (ループ関数の resolve/reject 引数) を reject しない (`pendingSubscribe` 等とは別管理)。そのため `closeWithError` を先頭に置くと、後続の `if (subscription.state === "active")` ブロックが skip され、未解決の subscribe Promise が reject されずハングする。
+
+末尾に置くことで、(a) ローカルの reject が確実に発火し、(b) その後 `closeWithError` でセッションが閉じる、という正しい順序になる。subscription レベルの error コールバックと session レベルの error コールバックは別オブジェクトのため、双方への通知も意図通り。
+
+### CHANGES.md
+
+`[FIX]` エントリを追記した。
+
+### テストについて
+
+3 ループは WebTransport の単方向ストリームに依存し、モック・スタブ禁止制約下では順序依存を単体テストで再現できないため E2E (Playwright) 対象とした。`toProtocolViolationSessionError` 自体の pure function テストは `#0298` で `src/session/errors.test.ts` に追加済み。closeWithError 末尾順序の正しさは review-diff-code で `close()` の同期挙動・Promise 管理を実コードで裏取りして確認した。

@@ -253,6 +253,10 @@
   - クランプしないとブラウザが遅延を 0 に丸めて即発火し、ピア由来の巨大な GOAWAY timeout で猶予を待たずに即クローズしていた
   - クランプ処理を純粋関数 `clampTimeoutMs` として `src/session/params.ts` に追加する
   - @voluntas
+- [FIX] namespace 系ストリームループの ProtocolViolationError 握り潰しを修正する (#0311)
+  - draft-ietf-moq-transport-18 Section 3.5 に基づき、`startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` の catch が `ProtocolViolationError` を握り潰していたのを修正し、検出時に `PROTOCOL_VIOLATION` でセッションを閉じる
+  - `closeWithError` は subscription/publication を同期クローズするため、既存のローカルクローズ・reject の後に呼んで subscribe Promise のハングを防ぐ
+  - @voluntas
 
 ### misc
 

@@ -86,7 +86,7 @@ import {
   concatChunks,
   cancelStreamQuiet,
 } from "./session/stream";
-import { isSessionClosedError } from "./session/errors";
+import { isSessionClosedError, toProtocolViolationSessionError } from "./session/errors";
 
 export type { MoqtObject } from "./dataStream";
 
@@ -2062,6 +2062,14 @@ export class SessionImpl implements Session {
           reject(normalizedError);
         }
       }
+      // draft-ietf-moq-transport-18 §3.5:
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる。
+      // closeWithError は close() を同期実行で subscription を閉じるため、上記の
+      // ローカルクローズ・reject の後に呼ぶ。
+      const sessionError = toProtocolViolationSessionError(error);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+      }
     } finally {
       // クリーンアップ
       subscription.state = "closed";
@@ -2222,6 +2230,14 @@ export class SessionImpl implements Session {
         if (!resolved) {
           reject(normalizedError);
         }
+      }
+      // draft-ietf-moq-transport-18 §3.5:
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる。
+      // closeWithError は close() を同期実行で subscription を閉じるため、上記の
+      // ローカルクローズ・reject の後に呼ぶ。
+      const sessionError = toProtocolViolationSessionError(error);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
       }
     } finally {
       subscription.state = "closed";
@@ -2466,6 +2482,14 @@ export class SessionImpl implements Session {
         if (!resolved) {
           reject(wrapped);
         }
+      }
+      // draft-ietf-moq-transport-18 §3.5:
+      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる。
+      // closeWithError は close() を同期実行で publication を閉じるため、上記の
+      // ローカルクローズ・reject の後に呼ぶ。
+      const sessionError = toProtocolViolationSessionError(error);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
       }
     } finally {
       // クリーンアップ
