@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-send-datagram-writer-race
 - Polished: 2026-06-04
@@ -99,3 +100,33 @@ datagram 送信は WebTransport の `datagrams.writable` に依存するため�
 - セッションクローズ時に datagram writer が解放される
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリを追記する
+
+## 解決方法
+
+推奨案 (datagram writer をセッションで保持して使い回す) を採用した。
+
+### src/session.ts
+
+- フィールド `private datagramWriter?: WritableStreamDefaultWriter<Uint8Array>` を追加した。
+- `getDatagramWriter()` ヘルパーで `this.datagramWriter ??= this.transport.datagrams.writable.getWriter()` と遅延取得して保持し、以降は同じ writer を返す。これにより呼び出しごとの `getWriter()` / `releaseLock()` 往復が無くなり、ロック競合の `TypeError` が構造的に消える。
+- `sendDatagram()` は保持 writer を使い、`write()` の `catch` で `publisher.handleError` に流す (旧 `finally` の `releaseLock()` を削除)。
+- `close()` で保持 writer を `releaseLock()` して `undefined` にリセットする (`transport.close()` が datagram writable を所有するため `close()` ではなく `releaseLock()` が正しい)。
+
+### review-diff-code 指摘への対応 (ハードニング)
+
+レビューで以下の経路を検出し、あわせて修正した。
+
+- セッションクローズ後に `sendDatagram` が呼ばれると `getDatagramWriter` が閉じた transport に対して同期的に `getWriter()` を呼んで throw しうる (本 issue が元々防ごうとした失敗モード)。`sendDatagram` 冒頭に `sessionState === "closed"` ガードを追加した。
+- `close()` の `releaseLock()` (および `transport.close()`) は in-flight の `write()` を `TypeError` で reject させる。`sendObject` と異なり datagram writer は `releaseLock()` するためこの reject が `catch` -> `publisher.handleError` に流れ、正常終了時に偽のエラーコールバックが発火する。`catch` 内で `sessionState === "closed"` の場合は握り潰すようにした。
+
+### コメントの是正
+
+`§11.3` は datagram のワイヤ表現を規定するもので、「writable が単一 WritableStream」という writer 保持の根拠ではない (これは WebTransport / WHATWG Streams のセマンティクス)。フィールドコメントの重複を排し、`getDatagramWriter` の JSDoc に WebTransport の根拠としてまとめ直した。
+
+### テストについて
+
+writer 保持の状態遷移は `SessionImpl` に WebTransport を注入しないと到達できず、注入用の transport を手作りするのはスタブに該当するため (CLAUDE.md のモック・スタブ禁止)、単体テストは追加しない。連続送信で `TypeError` が出ないことの検証は E2E (Playwright) を想定する。構造的正しさは review-diff-code の複数エージェントレビューで確認した。
+
+### スコープ外として記録する事項
+
+peer 起点の異常クローズ経路 (`transport.closed` ハンドラ) は `sessionState` を `closed` にするのみで `publisher.markClosed()` を呼ばない。このため publisher 側のガードが効かない経路が残るが、これは `sendObject` も含む既存挙動であり本 issue のスコープ外。`sendDatagram` 冒頭の `sessionState` ガードで datagram 経路は保護される。
