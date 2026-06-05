@@ -2936,8 +2936,14 @@ export class SessionImpl implements Session {
         await writer.write(header);
       } catch (err) {
         // ヘッダー書き込み失敗時は writer の参照が publisherStreams に残らないため、
-        // 明示的にロックを解放する
-        writer.releaseLock();
+        // 明示的にロックを解放する。releaseLock() が破損した writer に対して
+        // 例外を投げても、元の write エラーの再 throw と closedSubgroups への
+        // 登録を確実に実行するため、releaseLock() の例外は握りつぶす。
+        try {
+          writer.releaseLock();
+        } catch {
+          // releaseLock の失敗は無視し、元の write エラーを優先する
+        }
         this.closedSubgroups.add(`${trackAlias}:${groupId}`);
         throw err;
       }
@@ -2978,8 +2984,14 @@ export class SessionImpl implements Session {
         await streamState.writer.write(params.payload);
       }
     } catch (err) {
-      // 書き込み失敗時は writer が破損しているためロックを解放する
-      streamState.writer.releaseLock();
+      // 書き込み失敗時は writer が破損しているためロックを解放する。
+      // releaseLock() がさらに例外を投げても、元の write エラーの再 throw と
+      // closedSubgroups への登録を確実に実行するため、例外は握りつぶす。
+      try {
+        streamState.writer.releaseLock();
+      } catch {
+        // releaseLock の失敗は無視し、元の write エラーを優先する
+      }
       this.closedSubgroups.add(`${trackAlias}:${groupId}`);
       throw err;
     }
