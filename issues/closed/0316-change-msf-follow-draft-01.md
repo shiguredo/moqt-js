@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-05
+- Completed: 2026-06-05
 - Model: Opus 4.7
 - Branch: feature/change-msf-follow-draft-01
 - Polished: 2026-06-05
@@ -91,6 +92,7 @@ draft-01 で Track Object Fields は §5.1 から **§5.2 に分離**。draft-00
 ### 5 Catalog Track 全体ルール
 
 §5 (refs L522-542):
+
 > All catalog updates, both independent and delta, MUST be mapped to MOQT sub-group 0. The first Object (with Object ID 0) in any Group in a catalog track MUST hold an independent copy of the catalog. All subsequent Objects within that Group (i.e Objects IDs >= 1) MUST hold a delta update. As soon as an independent update is produced, it MUST be placed at the start of a new Group.
 >
 > Subscribers accessing the catalog MUST use SUBSCRIBE with a Joining FETCH (offset = 0) in order to obtain the latest complete catalog along with all subsequent catalog objects, including delta updates, that follow.
@@ -100,6 +102,7 @@ draft-01 で Track Object Fields は §5.1 から **§5.2 に分離**。draft-00
 ### 5.4 Variable Substitution (新規)
 
 §5.4 (refs L1584-1633):
+
 - 変数名は `[A-Za-z0-9_-]+`、**case-sensitive**。
 - 値は `[A-Za-z0-9_@-]+` のみ (injection 防止のため `,;\"&` 等は MUST NOT)。
 - catalog field values 全体で `%` リテラル MUST NOT (変数参照以外で `%` を出現させない)。
@@ -108,6 +111,7 @@ draft-01 で Track Object Fields は §5.1 から **§5.2 に分離**。draft-00
 ### 5.5 / §12 MSF_COMPRESSION
 
 §12.1 (refs L3732-3778):
+
 - Track Property (§12.1.1) と Object Property (§12.1.2) を提供。**同一 track での併用 MUST NOT**。
 - Compression algorithm 値 (Table 11 / Table 15、refs L3765-3773, L3925-3931): `0 = None`, `1 = GZIP` で確定。
 - `All MSF implementations MUST support both uncompressed payloads (value 0 or property absent) and GZIP compressed payloads (value 1)`。
@@ -130,13 +134,16 @@ draft-01 で Track Object Fields は §5.1 から **§5.2 に分離**。draft-00
 ### 11 Workflow / MSF URI fragment (新規)
 
 §11.1 (refs L3287-3411):
+
 - MSF URI: `moqt://authority/path?query#msf:track-identifier&key=value`。
 - ABNF: `msf-fragment-value = track-identifier [ "&" parameter-list ]`。track-identifier 内に `&` / `?` MUST NOT (出現時 `%3F` percent-encode)。
 
 §11.1.1 reserved fragment parameters (refs L3421-3500, Table 8): `wallclock-range`, `mediatime-range`, `location-range`, `c4m`, `connection` の 5 種のみ。`connection=q` で raw QUIC、`connection=wt` で WebTransport を **MUST 強制**。
+
 > If multiple ranges are specified within the same URL for the same parameter, the client MUST process the union of those ranges.
 
 §11.1.2 MSF Namespace-Name String Encoding (refs L3504-3539):
+
 - Namespace tuple の各要素を **単一ハイフン (`-`)** で連結。
 - Track Name を **二重ハイフン (`--`)** で連結。
 - Unreserved (`a-z A-Z 0-9 _`) は literal、その他は **`.HH` (period + lowercase 2 hex digits)** で percent-encode。
@@ -175,6 +182,7 @@ draft-01 で Track Object Fields は §5.1 から **§5.2 に分離**。draft-00
 signature を `applyCatalogDelta(current: Catalog, delta: CatalogDelta, options?: { catalogNamespace?: string }): Catalog` に変更。
 
 親探索ロジック:
+
 1. 探索キーは `(name, namespace_normalized)` のタプル。`namespace_normalized = track.namespace ?? options.catalogNamespace`。
 2. clone 側: `(cloneTrack.parentName, cloneTrack.parentNamespace ?? options.catalogNamespace)` を取り出す。
 3. parent 側: tracks 配列の各 track について `(t.name, t.namespace ?? options.catalogNamespace)` を計算し、タプル一致で親を特定する。
@@ -200,6 +208,7 @@ remove operation の対象探索も同じ正規化を適用する。
 旧 `isCatalog` / `isCatalogTrack` / `isRemoveTrack` を `validateCatalog` / `validateCatalogTrack` に格上げし、違反時は track 名や該当フィールド名と実値を含む `Error` を throw。エラー文言は CLAUDE.md「先頭小文字、末尾ピリオドなし、期待値と実際値を含む、簡潔」に従い、プレースホルダー (`<value>`, `<actual-type>`, `<field-name>`) 込みで具体的に記述する。
 
 `validateCatalog(catalog: unknown): Catalog`:
+
 - `version` が `MSF_KNOWN_VERSIONS` に含まれること。
 - `isComplete: false` を含む catalog を reject (§5.1.3 MUST NOT include if FALSE)。
 - `tracks` 配列内で `(name, namespace_normalized)` タプル uniqueness を検証 (§5.2.3 "track names MUST be unique per namespace")。`publishTracks` 配列内も同じく個別に uniqueness 検証。`tracks` と `publishTracks` の合算 uniqueness は §5.2.3 文面が「unique per namespace」と「track 種別ごと」を明示しておらず、また §5.1.5 で publish track は逆方向データフロー用と定義されているため、本実装では合算しない (subscribe 用 track と publish 用 track の同名共存を許容)。
@@ -208,6 +217,7 @@ remove operation の対象探索も同じ正規化を適用する。
 - 未知フィールド (root level) は **ignore** (§5 parser MUST ignore unknown)。「ignore」の実装意味: validation エラーを出さずに `Catalog` 型 cast 時に構造的に残るが、TS 型として named field のみ露出する (`resolveCatalogVariables` も named field のみ走査し、未知フィールド内の変数参照は置換されない)。
 
 `validateCatalogTrack(track, ctx)`:
+
 - `name` / `packaging` / `isLive` の通常 track 必須を検証。publishTracks 内エントリも同じく `isLive` MUST (§5.6.16 例の `isLive` 欠落は draft erratum と判断、Table 3 を厳格採用)。
 - `ctx.source === "clone"` のみで `parentName` MUST、`parentNamespace` MAY、子 `name` MUST 存在を検証。それ以外で `parentName` / `parentNamespace` が出現したら reject。
 - `ctx.source === "remove"` のみで「`name` MUST + `namespace` MAY + 他フィールド MUST NOT」を検証。違反時 `Error("invalid remove track: unexpected field '<field-name>', remove tracks accept only name and namespace")`。
@@ -254,6 +264,7 @@ remove operation の対象探索も同じ正規化を適用する。
 ### 10. Variable Substitution helper (§5.4)
 
 signature: `resolveCatalogVariables(catalog: Catalog, variables: Readonly<Record<string, string>>): Catalog`
+
 - 変数名: `/^[A-Za-z0-9_-]+$/` (case-sensitive)。
 - 値: `/^[A-Za-z0-9_@-]*$/`。違反時 `Error("invalid variable value for '<name>': '<value>' contains disallowed characters per §5.4.1")`。
 - 走査対象: `Catalog` 型の **named field** に属する全 string 値 (`tracks[]` / `publishTracks[]` / `initDataList[]` の string 値、`accessibility[].scheme/value`, `authInfo` のキー / string 値、`depends[]` の各要素)。`version` は `MsfVersion` literal 型のため変数置換対象外。number / boolean / `template` 配列内の値 / `buffers` の number 値も対象外。**未知フィールド (例: §5.6.14 で Track Object 内に出現する `c4m`) は `validateCatalogTrack` で ignore されているため Variable Substitution の対象外**。未知フィールドの変数置換対応は範囲外。
@@ -375,20 +386,70 @@ signature: `resolveCatalogVariables(catalog: Catalog, variables: Readonly<Record
 
 ## 解決方法
 
-CLAUDE.md「何か変更をする場合はテストを先に修正すること」に従いつつ、TypeScript 型整合性のため次の順序で進める。
+### 実装内容
 
-1. **型定義の更新**: 設計方針 4 に従い `MSF_VERSION` / `MSF_KNOWN_VERSIONS` を string 化、`Catalog` / `CatalogTrack` / `PublishTrack` と補助型を追加。`initData` を削除して `initRef` + `initDataList` に分離。
-2. **テスト先行修正**: `src/msf.test.ts` / `src/msf.prop.ts` を draft-01 形式に全面書き換え。`assert.throws` の正規表現を新エラー文言に置換、Section 5.3.x → §5.6.x マッピングを実施、新規テスト最小セット (完了条件参照) を追加、`packagingArb` / `roleArb` を全 reserved 値で網羅。
-3. **encode / decode 実装書き換え**: `encodeCatalog` / `decodeCatalogMessage` / `encodeCatalogDelta` / `decodeCatalogDelta` を新構造に対応。`Object.keys` 順序依存と `duplicate operation type` チェックを撤去。`validateCatalog` / `validateCatalogTrack` を `ValidationContext` 付きで新規導入。
-4. **`applyCatalogDelta`**: 設計方針 3 の正規化ロジックで remove / clone 対象を探索する。
-5. **section コメント刷新**: 冒頭引用を `draft-ietf-moq-msf-01` に。`grep -nE 'Section |§' src/msf.ts` の全件を draft-01 節番号に再マップ。範囲外項目 (§6 / §9 / §10 / §11.4) の TODO コメントを設計方針「範囲外」セクションに沿って残す。
-6. **publisher / subscriber 追従**: 設計方針 12 に従う。
-7. **`resolveCatalogVariables` / `parseMsfFragmentValue` helper の追加**: 設計方針 10 / 11 のとおり実装し、PBT を追加。
-8. **`properties.ts`**: 設計方針 8 に従い `MsfCompressionAlgorithm` のみ追加。Property ID 定数は追加せず、doc コメントを残す。
-9. **`encodeMediaTimeline` 系の API 変更**: 設計方針 9 に従い `options.gzip` と `isGzipCompressed` を撤廃。内部 helper は private のまま残す。
-10. **devtools 追従**: 設計方針 13 に従い `buildVideoDecoderConfig` の signature 変更と `resolveInitData` 経由化。
-11. **CHANGES.md 更新**: 完了条件「CHANGES.md」のエントリを追加。
-12. **テスト / ビルド確認**: `vp run test`, `vp run build`, `vp run build:devtools` を pass。
+`src/msf.ts` を draft-ietf-moq-msf-01 仕様に追従させる形で全面書き換え (949 行 → 2454 行)。draft-00 との後方互換は維持せず破壊的変更を実施した。
+
+- **型定義**:
+  - `MSF_VERSION` を `1` (number) から `"draft-01"` (string) に変更し、`MsfVersion` / `MSF_KNOWN_VERSIONS` を export
+  - `Catalog` に `publishTracks` / `initDataList` を追加し、`isComplete` を `true` 限定型に
+  - `CatalogTrack` から `initData` を削除し、`initRef` + `Catalog.initDataList` への参照に分離
+  - 新規 optional フィールドを追加: `buffers`, `template`, `parentNamespace`, `connectionUri`, `token`, `encryptionScheme`, `cipherSuite`, `keyId`, `trackBaseKey`, `authInfo`, `accessibility`, `avgBitrate`, `maxGopDuration`, `maxGroupDuration`
+  - `PackagingType` に `"moqlog"` / `"moqmetrics"` を追加 (Table 4)
+  - 補助型: `Buffers`, `InitDataEntry`, `AccessibilityDescriptor`, `AuthInfo`, `MediaTimelineTemplate`, `PublishTrack`, `ValidationContext`
+- **encode/decode**:
+  - `encodeCatalog`: fixed-order object literal で §5.1.7 「initDataList MUST be located after the tracks array」を遵守。template 内 bigint Location は `assertJsonSafeBigInt` で precision loss / 負数を encode 時に reject
+  - `encodeCatalogDelta`: `{deltaUpdate: Array<{op, tracks}>}` の draft-01 wire format を出力。同一 `op` の複数出現を許可。add / clone は `serializeTrackForJson` 経由で template bigint を number 化
+  - `decodeCatalogMessage`: `deltaUpdate` フィールドが Array なら CatalogDelta、それ以外は full catalog として `validateCatalog` を呼ぶ。draft-00 boolean 形式 (`deltaUpdate: true`) と root level `addTracks/removeTracks/cloneTracks` を明示 reject
+  - `decodeCatalogDelta`: `version` / `tracks` フィールド同梱を §5.3 MUST NOT として reject。`generatedAt` の非 number は validateCatalog と同じく reject (非対称解消)
+- **validator (新規)**:
+  - `validateCatalog(value)`: §5 全体の MUST/MUST NOT を検証。`tracks` / `publishTracks` 配列内の (name, namespace) uniqueness を Map<namespace, Set<name>> ベースで衝突なく検査。`initDataList` の id uniqueness、`isComplete=false` reject、未知 root フィールド ignore (§5 「parser MUST ignore unknown」)
+  - `validateCatalogTrack(value, ctx: ValidationContext)`: ctx.source ("root" | "publishTracks" | "add" | "remove" | "clone") で振る舞いを切り替え。clone 経路は `validateCloneCatalogTrack` に分岐し parentName MUST 化、connectionUri/token/mimetype を MUST NOT reject
+  - 検証内容を 10 個の picker 関数 (`pickIdentityFields` 等) と `validatePackagingSpecificRules` に分割。packaging 別の MUST (mediatimeline/eventtimeline の depends/mimeType/eventType) と MUST NOT (eventType ⇔ eventtimeline) を検証
+  - `buildValidatedCatalogTrack` 内で `targetLatency` ⇔ `buffers` 排他、`encryptionScheme` 指定時の `cipherSuite` MUST、`trackDuration` の `isLive=true` 時 MUST NOT、`mimeType` のみ受理 (mimetype は混在も含めて reject) を検証
+- **applyCatalogDelta**:
+  - `options?: { catalogNamespace?: string }` を追加し、(name, namespace ?? catalogNamespace) のタプル正規化で remove / clone 対象を探索
+  - `current.isComplete === true` 確定後の add/clone operation は §5.1.3 違反として reject (remove のみ許容)
+  - clone 結果に対し parent との name 同一 reject (§5.1.6 「Track Name which MUST be new」)、`targetLatency` ⇔ `buffers` 併存 reject (§5.2.8/§5.2.9)、`validatePackagingSpecificRules` 再実行で MUST/MUST NOT 違反 reject
+  - 全 operation 適用後の tracks 配列で `assertTrackNameUnique` を再実行
+  - `current.version` を維持 (上書きしない)
+- **timeline API**:
+  - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` から `options.gzip` パラメータと `isGzipCompressed` (gzip magic byte 自動検出) を完全撤廃 (§12.1 MSF_COMPRESSION 経由に統一予定)
+  - `toMsfLocationBigInt` / `assertJsonSafeBigInt` 共通 helper で precision loss / 非整数 / 負数を encode/decode 両側で reject
+- **helper (新規)**:
+  - `resolveCatalogVariables(catalog, variables)`: §5.4 Variable Substitution。`%name%` 置換、変数名 `[A-Za-z0-9_-]+` / 値 `[A-Za-z0-9_@-]*` の文字種制約、`%` リテラル単独 reject
+  - `parseMsfFragmentValue(value)`: §11.1 MSF URI fragment 解析。`--` で namespace tuple / track name 分離、`-` で namespace 要素分解、`.HH` lowercase percent-decode を `TextDecoder("utf-8")` 経由で UTF-8 復元、unreserved 文字集合 `[A-Za-z0-9_]` 違反を reject。`getConnectionParameter` で `connection=q|wt` を抽出
+  - `resolveInitData(catalog, track)`: §5.1.7 + §5.2.13 経由で initData を解決
+- **properties.ts**: §12.1 / §14.4 Table 15 の `MsfCompressionAlgorithm = { NONE: 0n, GZIP: 1n }` のみ追加。MSF_COMPRESSION の Property ID は §14.3 で IANA 未割当 (TBD) のため定数追加しない
+- **publisher / subscriber 追従**:
+  - `createMediaPublisher.publishCatalog` に §5 sub-group 0 / Object ID 0 / §11.2 「MUST publish a catalog track object before publishing any media」の MUST 根拠を doc コメントで明記
+  - `createMediaSubscriber.subscribeCatalog` に §5 「SUBSCRIBE with Joining FETCH (offset=0)」MUST 根拠を doc 明記
+- **devtools 追従**:
+  - `buildVideoDecoderConfig(videoTrack, catalog)` シグネチャに変更し、`videoTrack.initData` 直接参照を `resolveInitData(catalog, videoTrack)` 経由に置換
+  - `processCatalogObject` に CatalogDelta を skip する delta ガード追加 (full catalog のみ処理)
+
+### テスト
+
+`src/msf.test.ts` を 805 行に拡張し、`src/msf.prop.ts` を 1100 行に拡張 (合計 696 テスト、すべて pass)。
+
+- 単体テスト: 完了条件「テスト最小セット」を全件カバー (version 受理範囲、deltaUpdate wire round-trip、各 MUST/MUST NOT 違反 reject、initDataList JSON 出力順序、template precision loss、resolveCatalogVariables / parseMsfFragmentValue 等)
+- PBT: `catalogTrackArb` を draft-01 新規フィールド (template, encryption, authInfo, accessibility) で網羅、`catalogArb` に publishTracks / initDataList を組み込み、CatalogDelta wire round-trip / applyCatalogDelta / resolveCatalogVariables / parseMsfFragmentValue の性質テストを追加
+- Date.now() 依存の arbitrary を固定値 `2_000_000_000_000` に置換 (flaky 解消)
+- 仕様書例 §5.6.1 / §5.6.2 / §5.6.3 / §5.6.4 / §5.6.5 / §5.6.7 の round-trip を網羅
+
+### 検証
+
+`vp run test`、`vp run build`、`vp run build:devtools`、`vp run lint`、`vp run typecheck` がすべて pass する。
+
+### コードレビューループ (`/review-diff-code`)
+
+5 周回し、各周で並列 6 観点 (バグ / 設計 / 規約 / テスト / 仕様 / 削除候補) のレビュー指摘を全件反映:
+
+- 1 周目: 致命的 5 件 (encodeCatalogDelta の template bigint serialize 失敗、decodeMsfSegment の UTF-8 マルチバイト破壊、applyCatalogDelta が version 上書き、assertTrackNameUnique のキー衝突、validateCloneCatalogTrack で connectionUri/token silent 許可) + 重要 16 件
+- 2 周目: 重要 2 件 (encodeCatalog 経路で template bigint precision loss 未検出、applyCatalogDelta clone 結果の packaging 別 MUST 未再検証)
+- 3 周目: 重要 2 件 (clone で eventType 継承 + packaging override の MUST NOT 違反、isComplete=true 確定後の add/clone reject 欠落)
+- 4 周目: 重要 1 件 (devtools subscriber で CatalogMessage を Catalog として扱う TypeError リスク)
+- 5 周目: 致命的+重要 0 件で完了
 
 ## PR 粒度
 

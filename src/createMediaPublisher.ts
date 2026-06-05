@@ -342,6 +342,13 @@ class MediaPublisherImpl implements MediaPublisher {
 
   /**
    * Catalog を作成して publish する
+   *
+   * draft-ietf-moq-msf-01 §5: All catalog updates, both independent and delta,
+   * MUST be mapped to MOQT sub-group 0. The first Object (with Object ID 0) in
+   * any Group in a catalog track MUST hold an independent copy of the catalog.
+   *
+   * draft-ietf-moq-msf-01 §11.2: An MSF publisher MUST publish a catalog track
+   * object before publishing any media track objects.
    */
   private async publishCatalog(): Promise<void> {
     if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
@@ -363,6 +370,8 @@ class MediaPublisherImpl implements MediaPublisher {
     // INVALID_RANGE で REQUEST_ERROR を返す MUST。fire-and-forget だと publisher.start() の
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。
+    // groupId=0, objectId=0 は draft-ietf-moq-msf-01 §5 で MUST 規定 (independent catalog
+    // in subgroup 0)。
     await this.catalogPublisher.sendObject({
       groupId: 0,
       objectId: 0,

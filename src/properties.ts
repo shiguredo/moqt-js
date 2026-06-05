@@ -13,6 +13,29 @@ import { encodeVarint, decodeVarint } from "./varint";
 import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
 
 /**
+ * MSF_COMPRESSION の Compression Algorithm 値 (draft-ietf-moq-msf-01 §12.1 / §14.4 Table 15)
+ *
+ * Track Property (§12.1.1) と Object Property (§12.1.2) の双方で共有される。
+ *
+ *   | Value | Compression Algorithm |
+ *   |-------|-----------------------|
+ *   | 0     | None (uncompressed)   |
+ *   | 1     | GZIP                  |
+ *
+ * §12.1: All MSF implementations MUST support both uncompressed payloads
+ * (value 0 or property absent) and GZIP compressed payloads (value 1).
+ *
+ * 注: MSF_COMPRESSION の Track / Object Property ID 自体は draft-ietf-moq-msf-01
+ * §14.3 で IANA 未割当 (TBD) のため、本モジュールでは Property ID 定数を
+ * 追加しない。確定後 (`TrackPropertyId.MSF_COMPRESSION` 等の追加と encode/decode
+ * helper、Track / Object Property 併用 MUST NOT 検証) は別 issue で対応する。
+ */
+export const MsfCompressionAlgorithm = {
+  NONE: 0n,
+  GZIP: 1n,
+} as const;
+
+/**
  * MOQT Property ID (Section 12)
  *
  * ID が偶数の場合: varint value
