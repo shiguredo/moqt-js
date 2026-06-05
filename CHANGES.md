@@ -243,6 +243,11 @@
   - reader を 1 つだけ保持し、ストリームタイプ varint は `IncompleteDataError` を catch してリトライ、SETUP は `feed` が揃うまで read を繰り返すループに置き換える
   - 1 回限りの追加読み取りと `"No SETUP received"` 分岐を削除する
   - @voluntas
+- [FIX] sendDatagram() の連続呼び出しによる datagram writer のロック競合を修正する (#0301)
+  - datagram writer をセッションで 1 つ保持して使い回すことで、呼び出しごとの `getWriter()` / `releaseLock()` 往復による `TypeError` (WritableStream is locked) を防ぐ
+  - セッションクローズ後の送信を弾き、クローズ時の `releaseLock()` による in-flight write の reject を握り潰してエラーコールバックの誤発火を防ぐ
+  - セッションクローズ時に datagram writer を解放する
+  - @voluntas
 
 ### misc
 
