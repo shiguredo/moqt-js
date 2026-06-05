@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/refactor-datastream-test-split
 - Polished: 2026-06-04
@@ -60,3 +61,25 @@
 
 - 上記 3 ファイルに機能別で分割され、元の `dataStream.test.ts` が削除されている
 - 移動前後でテスト総数が変わらず、すべてのテストが PASS する
+
+## 解決方法
+
+設計方針通り、`src/dataStream.test.ts` (1784 行・78 テスト) をデータストリームの種別を軸に 3 ファイルへ分割した。テスト本体・アサーション・ヘルパ配列・for ループ・セクション区切りコメントはバイト単位で一切変更せず移動のみ行った。
+
+### 分割先
+
+- `src/dataStream.subgroup.test.ts`: SubgroupHeader / `hasPropertiesPresent` / ObjectFields / `createObject` / `ObjectStatus` / `SubgroupHeaderType` (ヘルパ `subgroupHeaderTestCases` / `objectFieldsTestCases` を含む)
+- `src/dataStream.datagram.test.ts`: ObjectDatagram (ヘルパ `objectDatagramTestCases` を含む)
+- `src/dataStream.fetch.test.ts`: FetchHeader / FetchObjectFields (ヘルパ `requestIds` とセクション区切りを含む)
+
+### import の最小化
+
+各ファイルで実際に使用するシンボルのみを import するよう絞った。`fetch` は `ProtocolViolationError` を import していないが、当該テストは `assert.throws(..., /computed group id out of range/)` の正規表現マッチで検証しておりクラス識別子を参照しないため、import 不要。
+
+### 検証
+
+- 元ファイル単独実行 (107 passed) と分割後 3 ファイル合計 (107 passed) が一致し、ループ展開後のテスト数も含めて欠落・重複がないことを確認した。
+- 全体テストは分割前後とも 663 passed で変化なし。
+- 各ファイルに日本語の doc コメント (RFC セクション参照付き) を追加した。これは「移動のみ」を僅かに超えるが、3 ファイルの責務を明示するため追加した。
+
+機能変更がないため `CHANGES.md` への追記はしていない。
