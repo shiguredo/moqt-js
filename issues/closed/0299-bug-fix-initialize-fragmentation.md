@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-initialize-fragmentation
 - Polished: 2026-06-04
@@ -176,3 +177,35 @@ Vitest の test / assert を使用し、テストメッセージは日本語で�
 - 1 回限りの追加読み取りと `"No SETUP received"` 分岐が削除されている
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリを追記する
+
+## 解決方法
+
+設計方針通り、`initialize()` の制御ストリーム読み取りを reader を 1 つ保持する一連のループに作り替えた。
+
+### src/session.ts
+
+`incomingStream.getReader()` で取得した reader 1 つを `try` で囲み、`finally` で必ず `releaseLock` する構造にした。`finally` での解放は、後続の `startControlMessageLoop` が同一ストリームを `getReader()` で再取得するために必須である（設計方針のスニペットには欠けていたため補った）。
+
+1. ストリームタイプ varint を読み切るまで `read` + `concatChunks` で連結を繰り返す。`decodeVarint` が `IncompleteDataError` を throw する間はリトライし、それ以外のエラーは再 throw する。
+2. ストリームタイプが SETUP (`0x2F00`) 以外なら `PROTOCOL_VIOLATION` で閉じる。
+3. SETUP メッセージが揃うまで `read` + `this.controlReader.feed` を繰り返す。
+
+1 回限りの追加読み取り（`setupReader` の再取得）と `"No SETUP received"` 分岐を削除した。`type ControlMessage` を import し、`messages` を `try` 外で型注釈付き宣言した。
+
+### CHANGES.md
+
+`[FIX]` エントリを追記した。
+
+### 設計判断: DoS ガードは追加しない
+
+review-diff-code で「varint / SETUP が揃わないまま peer がデータを送り続ける DoS」「空チャンクの無限ループ」の懸念が挙がったが、追加ガードは入れなかった。理由は次の通り。
+
+- ストリームタイプ varint は最大 9 バイトで構造的に bounded（`buffer.length >= 9` なら `decodeVarint` は必ず成功するため無制限成長しない）。
+- SETUP 本体は SETUP の Length フィールドで bounded（`feed` が宣言長まで待つだけで無制限成長しない）。peer がデータを送らなければ `read()` がブロックするのみで CPU スピンにはならない。
+- `read()` が `done=false` で長さ 0 の `Uint8Array` を返し続けるケースは WebTransport の標準実装では発生しない。
+
+過剰な防御は YAGNI のため避け、断片化耐性という本 issue のスコープに限定した。
+
+### スコープ外として別 issue 化する事項
+
+SETUP と同一 read チャンクに後続の完全な制御メッセージ（GOAWAY 等）が相乗りした場合、`feed` が `[SETUP, 後続]` を返すが `messages[0]`（SETUP）しか処理されず後続が破棄される。これは旧コードからの既存挙動で本 issue のスコープ（断片化耐性）外のため、別 issue で対応する。

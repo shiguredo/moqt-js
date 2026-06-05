@@ -238,6 +238,11 @@
   - draft-ietf-moq-transport-18 Section 3.5 に基づき、`bidiReadRequestStreamMessages` の catch が全例外を握り潰していたのを修正し、`ProtocolViolationError` 検出時に `PROTOCOL_VIOLATION` でセッションを閉じる
   - 判定ロジックを純関数 `toProtocolViolationSessionError` として `src/session/errors.ts` に抽出する
   - @voluntas
+- [FIX] initialize() の制御ストリーム読み取りを断片化耐性にする (#0299)
+  - draft-ietf-moq-transport-18 Section 3.4 / Section 10.3 に基づき、ストリームタイプ varint と SETUP メッセージが複数チャンクに分割されて届いても揃うまで読み続けるようにする
+  - reader を 1 つだけ保持し、ストリームタイプ varint は `IncompleteDataError` を catch してリトライ、SETUP は `feed` が揃うまで read を繰り返すループに置き換える
+  - 1 回限りの追加読み取りと `"No SETUP received"` 分岐を削除する
+  - @voluntas
 
 ### misc
 
