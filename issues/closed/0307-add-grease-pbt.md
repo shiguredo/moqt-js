@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/add-grease-pbt
 - Polished: 2026-06-04
@@ -82,3 +83,21 @@ export function generateGreaseValue(n: number): bigint {
 - `src/grease.prop.ts` で上記プロパティが検証される
 - `src/grease.test.ts` が削除され、PBT に一本化されている
 - すべてのテストが PASS する
+
+## 解決方法
+
+`src/grease.prop.ts` を新規作成し、設計方針の 7 プロパティを fast-check で検証した。`src/grease.test.ts` は削除して PBT に一本化した。
+
+### 検証するプロパティ
+
+1. 生成 -> 判定の往復: 任意の `n >= 0` で `isGreaseValue(generateGreaseValue(n)) === true`
+2. 定義式との一致: `generateGreaseValue(n) === 0x7f * n + 0x9d`
+3. 剰余不変条件: `(generateGreaseValue(n) - 0x9d) % 0x7f === 0` および派生 `value % 0x7f === 0x1e`
+4. 単調増加: `generateGreaseValue(n) < generateGreaseValue(n + 1)`
+5. 非 GREASE 値の否定: GREASE 値に `1..0x7e` を足した値は `isGreaseValue` が false
+6. 基数未満の否定: `0 <= v <= 0x9c` で `isGreaseValue(v) === false`
+7. 負数の拒否: 負数のインデックスで `generateGreaseValue` が throw する
+
+`n` は `fc.nat()`、隣接値は `fc.integer({ min: 1, max: 0x7e })`、基数未満は `fc.bigInt({ min: 0n, max: 0x9cn })`、負数は `fc.integer({ max: -1 })` で生成した。旧テストの代表値 (`0x9d` / `0x11c` / `0x19b` / `0x21a`) は回帰アンカーとして明示的な assert で残した。
+
+機能変更がないため `CHANGES.md` への追記はしていない。
