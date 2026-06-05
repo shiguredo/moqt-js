@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-05
+- Completed: 2026-06-05
 - Model: Opus 4.8
 - Branch: feature/fix-reason-phrase-length-protocol-violation
 - Reporter: @voluntas
@@ -71,4 +72,20 @@ draft-ietf-moq-transport-18:
 
 ## 解決方法
 
-(対応時に記載する)
+`decodeRequestErrorPayload` (`src/message/session.ts`) と `decodePublishDonePayload` (`src/message/publish.ts`) の Reason Phrase 長超過 throw を `new Error(...)` から `new ProtocolViolationError(...)` に変更した。エラーメッセージは現状維持。コメントに §1.4.4 の MUST 引用 (英語) を追加した。`publish.ts` には `ProtocolViolationError` の import を追加した (`session.ts` は既存)。
+
+これにより受信ループ (`#0298` の `bidiReadRequestStreamMessages`、`#0311` の namespace 系ループ) の catch が `toProtocolViolationSessionError` でこれらを捕捉し、`PROTOCOL_VIOLATION` でセッションを閉じられるようになった。
+
+### テスト
+
+Reason Phrase Length が上限 (1024) を超える payload を手動構築し、`ProtocolViolationError` が throw されることを検証する単体テストを `session.prop.ts` / `publish.prop.ts` に追加した。reasonLen のチェックは Reason Phrase バイト読み取り前に行われるため、payload は `errorCode`(または `statusCode`) + `retryInterval`(または `streamCount`) + `reasonLen=1025` のみで足りる。
+
+### 横断確認の結果
+
+`MAX_REASON_PHRASE_LENGTH` を使う decode は `decodeRequestErrorPayload` と `decodePublishDonePayload` の 2 箇所のみで、両方とも是正済み。Reason Phrase 長を読む他の decode 関数は無く、是正漏れはない。
+
+なお `decodeTrackNamespace` (`src/message/parameter.ts`) の Track Name 長超過 (§1.5、4096 バイト) も同型でプレーン `Error` を throw するが、これは Reason Phrase ではなく本 issue のスコープ外のため別 issue で扱う。
+
+### CHANGES.md
+
+`[FIX]` エントリを追記した。
