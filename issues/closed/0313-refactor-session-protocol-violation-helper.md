@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-06-05
+- Completed: 2026-06-05
 - Model: Opus 4.8
 - Branch: feature/refactor-session-protocol-violation-helper
 - Reporter: @voluntas
@@ -78,4 +79,20 @@ if (sessionError !== null) {
 
 ## 解決方法
 
-(対応時に記載する)
+`src/session.ts` の 3 箇所にインライン展開された `if (err instanceof ProtocolViolationError) { this.closeWithError(new SessionError(err.message, SessionErrorCode.PROTOCOL_VIOLATION)); }` を、`#0298` で追加した pure function `toProtocolViolationSessionError` (`src/session/errors.ts`) の呼び出しに置き換えた。`toProtocolViolationSessionError` は既に import 済みのため import 追加は不要。
+
+- 単純な 2 箇所: `const sessionError = toProtocolViolationSessionError(err); if (sessionError !== null) { this.closeWithError(sessionError); }`
+- IncompleteDataError / INTERNAL_ERROR 分岐を伴う箇所: `sessionError !== null` で `closeWithError` + `break`、null なら従来通り INTERNAL_ERROR フォールバックに進む。`break` と順序を維持。
+- `else if (err instanceof MalformedTrackError)` を伴う箇所: `MalformedTrackError` は `ProtocolViolationError` のサブクラスでないため、`toProtocolViolationSessionError(err) !== null` が `ProtocolViolationError` 専用判定として働き、else-if 分岐の意味は不変。
+
+`toProtocolViolationSessionError` は `instanceof ProtocolViolationError` のとき `SessionError(err.message, PROTOCOL_VIOLATION)` を返し、それ以外は null を返すため、置き換えは挙動完全等価。3 箇所とも変数名を `sessionError` に統一した。
+
+リファクタ後 `ProtocolViolationError` は `session.ts` のコードから消えた (コメントにのみ残る) ため、`../error` からの import を削除した。
+
+### 検証
+
+挙動を変えない純粋リファクタのため、既存の全テスト (670 passed) が変更なしで PASS することを確認した。`toProtocolViolationSessionError` 自体の pure function テストは `#0298` で `src/session/errors.test.ts` に追加済み。
+
+### CHANGES.md
+
+機能に直接影響しないリファクタリングのため `### misc` に `[UPDATE]` エントリを追記した。
