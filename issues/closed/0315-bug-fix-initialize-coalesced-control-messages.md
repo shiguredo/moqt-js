@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-05
+- Completed: 2026-06-05
 - Model: Opus 4.8
 - Branch: feature/fix-initialize-coalesced-control-messages
 - Reporter: @voluntas
@@ -68,4 +69,24 @@ draft-ietf-moq-transport-18:
 
 ## 解決方法
 
-(対応時に記載する)
+設計方針の候補 1 を採用した。`initialize()` で SETUP (`messages[0]`) を検証・確立 (decode / AUTHORITY / PATH チェック) した後、`startControlMessageLoop` を開始する前に `messages[1..]` を `this.handleControlMessage` へ順次流すループを追加した。
+
+```typescript
+for (let i = 1; i < messages.length; i++) {
+  this.handleControlMessage(messages[i].type, messages[i].payload);
+}
+```
+
+`handleControlMessage(type, payload)` は `startControlMessageLoop` が各メッセージに対して行う処理と同一であり、相乗りメッセージが通常の制御メッセージと同じ扱い (GOAWAY 処理、禁止メッセージの PROTOCOL_VIOLATION 等) を受ける。
+
+- 順序: SETUP 確立 -> emitDebug -> `messages[1..]` 処理 -> `startControlMessageLoop` 開始。相乗りメッセージは同期ループで処理され、`startControlMessageLoop` が読む新規データより確実に先に処理される。
+- 二重処理なし: `messages[1..]` は initialize の `feed` が返したもので `controlReader` 内部バッファから削除済み。`startControlMessageLoop` は同じ `controlReader` に新規 read 分のみ feed するため二重処理されない。
+- closeWithError 相互作用: 相乗りメッセージが `closeWithError` を呼んでも `close()` 冒頭の closed ガードで二重 close は防がれる。同一バッチ内の後続処理を止めない点は `startControlMessageLoop` の for ループと同じ既存挙動。
+
+### テスト
+
+`initialize()` 本体は WebTransport 依存かつモック禁止のため E2E 対象とした。本修正が依存する純粋挙動 (`ControlStreamReader.feed` が相乗りチャンクから複数メッセージを順序通り返す) を直接 pin する単体テストを `src/controlStream.test.ts` に追加した。SETUP (type 0x2f00 = varint `0xaf,0x00`) と後続メッセージを 1 チャンクで供給し、feed が 2 メッセージを順序通り返すことを検証する。
+
+### CHANGES.md
+
+`[FIX]` エントリを追記した。
