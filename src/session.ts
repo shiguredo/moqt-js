@@ -77,6 +77,7 @@ import {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   calculateObjectIdDelta,
+  clampTimeoutMs,
 } from "./session/params";
 import * as bidi from "./session/bidi";
 import {
@@ -2525,7 +2526,7 @@ export class SessionImpl implements Session {
             new SessionError("GOAWAY timeout expired", SessionErrorCode.GOAWAY_TIMEOUT),
           );
         }
-      }, Number(goawayTimeout));
+      }, clampTimeoutMs(goawayTimeout));
     }
   }
 
@@ -3436,7 +3437,7 @@ export class SessionImpl implements Session {
             reason: "graceful shutdown after receiving GOAWAY",
           });
         }
-      }, Number(msg.timeout));
+      }, clampTimeoutMs(msg.timeout));
     }
 
     return {
