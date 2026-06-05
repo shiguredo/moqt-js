@@ -110,6 +110,21 @@ test("ControlStreamReader で 2バイト varint Type のメッセージを解析
   assert.deepEqual(messages[0].payload, new Uint8Array([0xff]));
 });
 
+test("ControlStreamReader で SETUP に後続メッセージが相乗りしたチャンクを順序通り解析", () => {
+  // initialize() の SETUP 相乗りメッセージ処理 (#0315) が依存する挙動を pin する。
+  // SETUP (type 0x2f00 = varint 0xaf,0x00、length 0、payload なし) と
+  // 後続メッセージ (type 0x10、length 1、payload 0xab) を 1 チャンクで供給する。
+  const data = new Uint8Array([0xaf, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01, 0xab]);
+  const messages = reader.feed(data);
+
+  // feed は揃った全メッセージを順序通り返すため、SETUP と後続の両方が得られる
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.SETUP);
+  assert.deepEqual(messages[0].payload, new Uint8Array([]));
+  assert.equal(messages[1].type, 0x10);
+  assert.deepEqual(messages[1].payload, new Uint8Array([0xab]));
+});
+
 test("ControlStreamWriter で基本的なメッセージをエンコード", () => {
   const payload = new Uint8Array([0xab, 0xcd]);
   // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]

@@ -1231,6 +1231,16 @@ export class SessionImpl implements Session {
 
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
 
+    // draft-ietf-moq-transport-18 Section 10.3 (SETUP) / Section 3.3 (Control Streams):
+    // SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
+    // チャンクに相乗りして届くことがある。ControlStreamReader.feed は揃った全メッセージを
+    // 返し内部バッファから削除するため、messages[0] (SETUP) 以外を処理しないと、後続の
+    // startControlMessageLoop は新規 read 分しか処理せず相乗りメッセージが恒久的に失われる。
+    // SETUP 確立後に messages[1..] を通常の制御メッセージ処理経路へ順次流す。
+    for (let i = 1; i < messages.length; i++) {
+      this.handleControlMessage(messages[i].type, messages[i].payload);
+    }
+
     // バックグラウンドで制御メッセージの読み取りを開始
     this.startControlMessageLoop();
 
