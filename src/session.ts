@@ -840,6 +840,9 @@ export class SessionImpl implements Session {
   private controlReader?: ControlStreamReader;
   private controlWriter?: ControlStreamWriter;
 
+  // datagram 送信用 writer。保持して使い回す理由は getDatagramWriter を参照。
+  private datagramWriter?: WritableStreamDefaultWriter<Uint8Array>;
+
   // リクエスト ID 管理
   private nextRequestId = 0n;
   private nextTrackAlias = 0n;
@@ -2706,6 +2709,17 @@ export class SessionImpl implements Session {
       }
     }
 
+    // 保持している datagram writer を解放する。
+    // 一度も sendDatagram していない場合は未取得 (undefined) なので何もしない。
+    if (this.datagramWriter !== undefined) {
+      try {
+        this.datagramWriter.releaseLock();
+      } catch {
+        // 既に解放されている場合は無視
+      }
+      this.datagramWriter = undefined;
+    }
+
     // WebTransport セッションを閉じて peer に終了を通知する
     try {
       this.transport.close({ closeCode, reason });
@@ -3021,10 +3035,31 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * datagram 送信用 writer を取得する
+   *
+   * WebTransport の `datagrams.writable` は単一の WritableStream であり、writer は
+   * 1 つだけロックを保持できる。最初の呼び出しで getWriter() して保持し、以降は同じ
+   * writer を返す。呼び出しごとに getWriter() / releaseLock() を往復すると、前回の
+   * releaseLock() 完了前に次の getWriter() が呼ばれてロック競合 (TypeError) になるため。
+   * write() は内部キューに順次積まれるため呼び出し順は保たれる (到達順は §11.3 の
+   * best-effort であり保証しない)。
+   */
+  private getDatagramWriter(): WritableStreamDefaultWriter<Uint8Array> {
+    this.datagramWriter ??= this.transport.datagrams.writable.getWriter();
+    return this.datagramWriter;
+  }
+
+  /**
    * Send a datagram
    * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
+    // セッションクローズ後は datagram を送らない。getDatagramWriter は閉じた
+    // transport に対して同期的に getWriter() を呼んで throw しうるため、ここで弾く。
+    if (this.sessionState === "closed") {
+      return;
+    }
+
     const hasProperties = params.properties !== undefined && params.properties.length > 0;
     const hasPriority = params.priority !== undefined;
     const endOfGroup = params.endOfGroup ?? false;
@@ -3062,16 +3097,18 @@ export class SessionImpl implements Session {
       payload: params.payload,
     });
 
-    // WebTransport datagram として送信
-    const writer = this.transport.datagrams.writable.getWriter();
-    writer
-      .write(datagram)
-      .finally(() => {
-        writer.releaseLock();
-      })
-      .catch((err: unknown) => {
-        publisher.handleError(err instanceof Error ? err : new Error(String(err)));
-      });
+    // WebTransport datagram として送信。保持した writer を使い回すことで、
+    // 連続送信時の getWriter() / releaseLock() 競合による TypeError を防ぐ。
+    const writer = this.getDatagramWriter();
+    writer.write(datagram).catch((err: unknown) => {
+      // クローズ時の releaseLock() や transport.close() は in-flight の write() を
+      // reject させる。セッションが既に閉じている場合の reject は正常終了に伴うもので
+      // エラーではないため、handleError には流さない。
+      if (this.sessionState === "closed") {
+        return;
+      }
+      publisher.handleError(err instanceof Error ? err : new Error(String(err)));
+    });
   }
 
   /**
