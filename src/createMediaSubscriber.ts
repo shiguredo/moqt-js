@@ -333,6 +333,14 @@ class MediaSubscriberImpl implements MediaSubscriber {
 
   /**
    * Catalog を subscribe して受信を待つ
+   *
+   * draft-ietf-moq-msf-01 §5: Subscribers accessing the catalog MUST use
+   * SUBSCRIBE with a Joining FETCH (offset = 0) in order to obtain the latest
+   * complete catalog along with all subsequent catalog objects, including
+   * delta updates, that follow.
+   *
+   * 本実装の `joiningFetch: { type: "absolute", start: 0n, ... }` で MUST を
+   * 満たす。
    */
   private async subscribeCatalog(): Promise<void> {
     if (!this.session) {
@@ -354,7 +362,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
     });
 
     // Catalog サブスクライバー
-    // joiningFetch で過去に publish された Catalog を FETCH で取得
+    // draft-ietf-moq-msf-01 §5: SUBSCRIBE with Joining FETCH (offset = 0) MUST
     this.catalogSubscriber = await this.session.subscribe(
       namespace,
       CATALOG_TRACK_NAME,

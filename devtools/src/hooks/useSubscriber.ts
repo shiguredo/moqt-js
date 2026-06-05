@@ -3,8 +3,10 @@ import {
   LOC,
   decodeCatalogMessage,
   getVideoTracks,
+  resolveInitData,
   CATALOG_TRACK_NAME,
   supportsDynamicGroups,
+  type Catalog,
   type MoqtObject,
   type DebugMessage,
   type JoiningFetchOptions,
@@ -40,11 +42,13 @@ export function toSortedByGroupObject(objects: MoqtObject[]): MoqtObject[] {
 
 /**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
- * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の initData (Base64)
- * から復元する。
- * draft-ietf-moq-msf §5.1.20 / draft-ietf-moq-loc-02 §2.1.2
+ * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の Initialization Data
+ * (Base64) から復元する。
+ * draft-ietf-moq-msf-01 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
+ * `CatalogTrack.initRef` (§5.2.13) の参照に分離されたため、`resolveInitData` 経由で取得する。
+ * draft-ietf-moq-loc-02 §2.1.2 の用途は変わらない。
  */
-function buildVideoDecoderConfig(videoTrack: CatalogTrack): VideoDecoderConfig {
+function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): VideoDecoderConfig {
   if (!videoTrack.codec) {
     throw new Error("video track codec is not specified in catalog");
   }
@@ -53,8 +57,9 @@ function buildVideoDecoderConfig(videoTrack: CatalogTrack): VideoDecoderConfig {
     codedWidth: videoTrack.width,
     codedHeight: videoTrack.height,
   };
-  if (videoTrack.initData) {
-    decoderConfig.description = settings.base64ToArrayBuffer(videoTrack.initData);
+  const initData = resolveInitData(catalog, videoTrack);
+  if (initData !== undefined) {
+    decoderConfig.description = settings.base64ToArrayBuffer(initData);
   }
   return decoderConfig;
 }
@@ -420,7 +425,21 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
           // Catalog オブジェクトを処理する共通関数
           const processCatalogObject = (obj: MoqtObject, source: string) => {
             try {
-              const catalog = decodeCatalogMessage(obj.payload);
+              const message = decodeCatalogMessage(obj.payload);
+              // draft-ietf-moq-msf-01 §5.1.6 wire format で deltaUpdate が array 形式の場合は
+              // CatalogDelta を返す。devtools subscriber は現在 full catalog のみ処理する
+              // (delta apply は createMediaSubscriber 同様、別 issue 対応)。
+              if (!("version" in message)) {
+                addLog(
+                  "info",
+                  `[${subscriberId}] [RECV] CatalogDelta (skipped, delta apply not supported)`,
+                  {
+                    source,
+                  },
+                );
+                return;
+              }
+              const catalog = message;
               // RECV OBJECT 自体は addLog 経由で残るのでここで重複ログは出さない。
               addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
                 source,
@@ -545,8 +564,14 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
         },
       });
 
-      // デコーダを Catalog から取得した videoTrack で設定する
-      const decoderConfig = buildVideoDecoderConfig(videoTrackFromCatalog);
+      // デコーダを Catalog から取得した videoTrack で設定する。
+      // draft-ietf-moq-msf-01 §5.2.13 (initRef) → §5.1.7 (initDataList) 経路で initData
+      // を解決するため、現在保持している catalog signal を渡す。
+      const catalogValue = instance.catalog.value;
+      if (!catalogValue) {
+        throw new Error("catalog is not available when building VideoDecoderConfig");
+      }
+      const decoderConfig = buildVideoDecoderConfig(videoTrackFromCatalog, catalogValue);
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
       console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 

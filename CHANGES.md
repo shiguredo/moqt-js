@@ -41,6 +41,14 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [CHANGE] MSF を draft-ietf-moq-msf-01 に追従する (#0316)
+  - draft-ietf-moq-msf-01 §5.1.1 に基づき Catalog version を string 型 (MsfVersion = "draft-01" | "1") に変更する
+  - draft-ietf-moq-msf-01 §5.1.6 に基づき deltaUpdate ワイヤフォーマットを operation 配列形式に変更する
+  - draft-ietf-moq-msf-01 §5.1.7 / §5.2.13 に基づき CatalogTrack.initData を Catalog.initDataList + CatalogTrack.initRef へ分離する
+  - encodeMediaTimeline / encodeEventTimeline の options.gzip パラメータを撤廃する (圧縮機能自体は MSF_COMPRESSION (§12.1) 経由で別 issue 対応)
+  - draft-01 Table 3 に基づき mimeType のみ受理し mimetype (lowercase) は拒否する
+  - validateCatalog / validateCatalogTrack を新規導入し各種 MUST / MUST NOT を検証する
+  - @voluntas
 - [ADD] REQUEST_ERROR に Redirect Structure と REDIRECT/UNSUPPORTED_EXTENSION エラーコードを追加する (#0186)
   - draft-ietf-moq-transport-18 §10.6.1 / §10.6.2 に基づき、REQUEST_ERROR 末尾に条件付き Redirect を追加する
   - Redirect 型 / encodeRedirect / decodeRedirect を新設する
@@ -116,6 +124,16 @@
 - [ADD] SUBGROUP_DELIVERY_TIMEOUT と FILL_TIMEOUT を PublishOptions/FetchOptions に追加する (#0285)
   - `PublishOptions` / `SubscribeOptions` に `subgroupDeliveryTimeout` を追加する
   - `FetchOptions` / `JoiningFetchOptions` に `fillTimeout` を追加する
+  - @voluntas
+- [ADD] MSF Catalog の draft-01 新規フィールドを追加する (#0316)
+  - draft-ietf-moq-msf-01 §5.1.5 / §5.1.7 / §5.2.x に基づき publishTracks, initDataList, initRef, buffers, template, parentNamespace, connectionUri, token, encryptionScheme, cipherSuite, keyId, trackBaseKey, authInfo, accessibility, avgBitrate, maxGopDuration, maxGroupDuration を追加する
+  - @voluntas
+- [ADD] MSF Variable Substitution (§5.4) の解析 helper resolveCatalogVariables を追加する (#0316)
+  - @voluntas
+- [ADD] MSF URI Fragment Type "msf" (§11.1) の解析 helper parseMsfFragmentValue を追加する (#0316)
+  - @voluntas
+- [ADD] MSF Compression Algorithm 値定数 MsfCompressionAlgorithm (NONE=0n, GZIP=1n) を properties.ts に追加する (#0316)
+  - MSF_COMPRESSION Property ID は draft-ietf-moq-msf-01 §14.3 で IANA 未割当のため別 issue で対応する準備段階の定数
   - @voluntas
 - [UPDATE] REQUEST_OK Track Properties 検証を共通関数に抽出する (#0269)
   - `bidi.ts` に `validateRequestOkNoTrackProperties` を追加し、全 4 箇所の重複コードを置き換える
