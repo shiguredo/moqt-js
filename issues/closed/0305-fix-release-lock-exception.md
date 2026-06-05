@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-04
+- Completed: 2026-06-05
 - Model: qwen3.7-plus
 - Branch: feature/fix-release-lock-exception
 - Polished: 2026-06-04
@@ -93,3 +94,28 @@ try {
 - write 失敗時に `closedSubgroups` への登録が確実に行われる
 - 2 箇所とも修正されている
 - 既存の全テストが PASS する
+
+## 解決方法
+
+設計方針通り、`sendObjectInternal` の 2 箇所の catch で `releaseLock()` を try/catch で囲み、例外を握りつぶして元の write エラーの再 throw と `closedSubgroups` への登録を確実に実行するようにした。
+
+### src/session.ts
+
+- ヘッダー write 失敗の catch (Subgroup ヘッダー write 失敗箇所): `writer.releaseLock()` を try/catch で囲んだ。
+- payload write 失敗の catch (Object fields / payload write 失敗箇所): `streamState.writer.releaseLock()` を try/catch で囲んだ。
+
+いずれも内側 catch を空にして「releaseLock の失敗は無視し、元の write エラーを優先する」とコメントを付けた。`closedSubgroups.add` の後に `throw err` する順序は維持した。
+
+### review-diff-code の指摘の検証
+
+レビューで「payload write 失敗の catch は `streamState` を `publisherStreams` Map から削除しないため stale エントリが残る」という観察があったが、実コードを追跡した結果これは benign と判断し、別 issue 化しなかった。理由は次の通り。
+
+- 次に異なる groupId のオブジェクトを送ると `sendObjectInternal` 冒頭 (`!streamState || streamState.groupId !== groupId` 分岐) で stale エントリが Map から削除され、released writer への `close()` は try/catch で握りつぶされる。
+- 同一 groupId は `closedSubgroups` ガードで弾かれるため released writer は再利用されない。
+- セッションクローズ時も `publisherStreams` の各 writer は `closeWriterSafely` で安全に処理される。
+
+つまり既存コードが次グループ遷移とセッションクローズの両経路で stale エントリを安全に処理しており、実害はない。
+
+### CHANGES.md
+
+issue 本文の方針通り追記していない。本修正は write 失敗かつ releaseLock も失敗するという二重失敗時のみエラー診断と状態整合性を改善するもので、正常系・単一失敗時の観測可能な挙動は変わらないため。
