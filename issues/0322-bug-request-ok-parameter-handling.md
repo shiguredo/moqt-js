@@ -22,8 +22,8 @@
 
 ```typescript
 export const FETCH_OK_ALLOWED_PARAMS = new Set<number>([
-  MessageParameterType.EXPIRES,        // ← draft では FETCH_OK に許可されない
-  MessageParameterType.LARGEST_OBJECT,   // ← draft では FETCH_OK に許可されない
+  MessageParameterType.EXPIRES, // ← draft では FETCH_OK に許可されない
+  MessageParameterType.LARGEST_OBJECT, // ← draft では FETCH_OK に許可されない
 ]);
 ```
 

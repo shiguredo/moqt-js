@@ -283,6 +283,12 @@
   - draft-ietf-moq-transport-18 Section 10.3 / Section 3.3 に基づき、SETUP と同一 read チャンクに相乗りした後続制御メッセージを `handleControlMessage` で処理する
   - `ControlStreamReader.feed` が返した `messages[1..]` を SETUP 確立後に処理し、`startControlMessageLoop` 開始前に取りこぼさないようにする
   - @voluntas
+- [FIX] SUBSCRIBE_TRACKS に対する PUBLISH メッセージ受信を実装する
+  - draft-ietf-moq-transport-18 §10.19 / §10.10 / §5.1 に基づき、`transport.incomingBidirectionalStreams` を監視するループを新設し、サーバーから到着する新規双方向ストリーム上の PUBLISH を処理する
+  - `TracksSubscriptionCallbacks.onPublish` コールバックを追加し、`subscribeTracks()` 使用時にアプリケーションが PUBLISH 経由でデータを受け取れるようにする
+  - 前方一致しない PUBLISH には UNINTERESTED (0x20)、重複 PUBLISH には DUPLICATE_SUBSCRIPTION (0x19) の REQUEST_ERROR を返す
+  - マッチング用の純関数 `matchNamespacePrefix` を `src/session/params.ts` に追加する
+  - @voluntas
 
 ### misc
 

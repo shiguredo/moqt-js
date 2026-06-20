@@ -20,6 +20,7 @@ import {
   IncompleteDataError,
   MalformedTrackError,
   RequestError,
+  RequestErrorCode,
   SessionError,
   SessionErrorCode,
   normalizeRequestErrorCode,
@@ -36,6 +37,7 @@ import {
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishBlockedPayload,
+  decodePublishPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeSetupPayload,
@@ -46,6 +48,8 @@ import {
   encodeGoawayPayload,
   encodePublishNamespacePayload,
   encodePublishPayload,
+  encodeRequestErrorPayload,
+  encodeRequestOkPayload,
   encodeSubscribeNamespacePayload,
   encodeSubscribeTracksPayload,
   encodeSubscribePayload,
@@ -77,6 +81,7 @@ import {
   buildSubscribeParameters,
   calculateObjectIdDelta,
   clampTimeoutMs,
+  matchNamespacePrefix,
 } from "./session/params";
 import * as bidi from "./session/bidi";
 import {
@@ -592,6 +597,18 @@ export interface NamespaceSubscription {
  */
 export interface TracksSubscriptionCallbacks {
   /**
+   * サーバーから PUBLISH メッセージを受信したときに呼ばれる
+   * draft-ietf-moq-transport-18 §10.19 / §10.10
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
+   * @param trackName - PUBLISH に含まれる Track Name
+   * @returns SubscribeCallbacks — 内部的に SubscriberImpl を生成しコールバックを伝搬する
+   */
+  onPublish?: (
+    namespaceSuffix: string[],
+    trackName: string,
+  ) => SubscribeCallbacks | Promise<SubscribeCallbacks>;
+  /**
    * PUBLISH_BLOCKED を受信したときに呼ばれる
    * draft-ietf-moq-transport-18 §10.20 (PUBLISH_BLOCKED):
    *
@@ -842,6 +859,12 @@ export class SessionImpl implements Session {
 
   // datagram 送信用 writer。保持して使い回す理由は getDatagramWriter を参照。
   private datagramWriter?: WritableStreamDefaultWriter<Uint8Array>;
+
+  // 受信双方向ストリームの reader。
+  // draft-ietf-moq-transport-18 §10.19: SUBSCRIBE_TRACKS への応答として
+  // サーバーが新規双方向ストリームを開き PUBLISH を送信する。
+  // この reader で incomingBidirectionalStreams を監視する。
+  private incomingBidiStreamReader?: ReadableStreamDefaultReader<WebTransportBidirectionalStream>;
 
   // リクエスト ID 管理
   private nextRequestId = 0n;
@@ -1249,6 +1272,11 @@ export class SessionImpl implements Session {
 
     // データグラムの受信を開始
     this.startDatagramLoop();
+
+    // 受信双方向ストリームの監視を開始
+    // draft-ietf-moq-transport-18 §10.19: SUBSCRIBE_TRACKS への応答として
+    // サーバーが新規双方向ストリームを開き PUBLISH を送信する
+    this.startIncomingBidirectionalStreamLoop();
   }
 
   /**
@@ -2757,6 +2785,21 @@ export class SessionImpl implements Session {
       this.datagramWriter = undefined;
     }
 
+    // 受信双方向ストリームの reader を解放する
+    if (this.incomingBidiStreamReader) {
+      try {
+        await this.incomingBidiStreamReader.cancel();
+      } catch {
+        // 既にキャンセル済みの場合は無視
+      }
+      try {
+        this.incomingBidiStreamReader.releaseLock();
+      } catch {
+        // 既に解放されている場合は無視
+      }
+      this.incomingBidiStreamReader = undefined;
+    }
+
     // WebTransport セッションを閉じて peer に終了を通知する
     try {
       this.transport.close({ closeCode, reason });
@@ -3712,6 +3755,384 @@ export class SessionImpl implements Session {
         reader.releaseLock();
       }
     })();
+  }
+
+  /**
+   * 受信双方向ストリームの監視ループを開始する
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+   * SUBSCRIBE_TRACKS への応答として、サーバーは新規双方向ストリームを開き
+   * PUBLISH メッセージを送信する。このループで incomingBidirectionalStreams を
+   * 監視し、到着した双方向ストリームを処理する。
+   *
+   * draft-ietf-moq-transport-18 §3.3.2 (Bidirectional Streams):
+   * 双方向ストリームは特定のメッセージタイプで開始されなければならない。
+   */
+  private startIncomingBidirectionalStreamLoop(): void {
+    void (async () => {
+      const reader = this.transport.incomingBidirectionalStreams.getReader();
+      this.incomingBidiStreamReader = reader;
+
+      try {
+        while (this.sessionState === "connected") {
+          const { value: stream, done } = await reader.read();
+          if (done) break;
+
+          void this.handleIncomingBidirectionalStream(stream);
+        }
+      } catch (err) {
+        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        reader.releaseLock();
+      }
+    })();
+  }
+
+  /**
+   * REQUEST_ERROR を送信し、ストリームをキャンセルする
+   */
+  private async sendRequestErrorAndCancel(
+    stream: WebTransportBidirectionalStream,
+    errorCode: RequestErrorCode,
+    reasonPhrase: string,
+  ): Promise<void> {
+    let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+    try {
+      writer = stream.writable.getWriter();
+      const errorPayload = encodeRequestErrorPayload({
+        type: MessageType.REQUEST_ERROR,
+        errorCode: BigInt(errorCode),
+        retryInterval: 0n,
+        reasonPhrase,
+      });
+      const controlWriter = new ControlStreamWriter();
+      const framed = controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload);
+      await writer.write(framed);
+    } catch {
+      // ストリームが既に閉じている場合は無視
+    } finally {
+      if (writer !== null) {
+        try {
+          writer.releaseLock();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    try {
+      await stream.readable.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * PUBLISH ストリームの後続メッセージ読み取りサブループ
+   */
+  private async runPublishStreamSubLoop(
+    impl: SubscriberImpl,
+    publishRequestId: bigint,
+    subReader: ReadableStreamDefaultReader<Uint8Array>,
+    subControlReader: ControlStreamReader,
+    callbacks: SubscribeCallbacks,
+  ): Promise<void> {
+    try {
+      while (impl.state === "active") {
+        const { value, done } = await subReader.read();
+        if (done) return;
+
+        const messages = subControlReader.feed(value);
+        for (const msg of messages) {
+          this.emitDebug("recv", msg.type, msg.payload);
+
+          if (msg.type === MessageType.PUBLISH_DONE) {
+            bidi.bidiHandlePublishDone(
+              this as unknown as bidi.BidiSessionInternal,
+              msg.payload,
+              publishRequestId,
+            );
+            continue;
+          }
+          if (msg.type === MessageType.GOAWAY) {
+            const decodedMsg = decodeGoawayPayload(msg.payload);
+            if (
+              !bidi.validateNoDuplicateGoawayOnRequestStream(
+                publishRequestId,
+                this.goawayReceivedOnRequestStreams,
+                (error) => this.closeWithError(error),
+              )
+            ) {
+              return;
+            }
+            if (
+              bidi.validateGoawayOnRequestStream(decodedMsg.requestId, (error) =>
+                this.closeWithError(error),
+              )
+            ) {
+              impl.goawayCallback?.(decodedMsg.newSessionUri);
+            }
+            return;
+          }
+          if (msg.type === MessageType.REQUEST_OK) {
+            bidi.bidiHandleRequestUpdateOk(
+              this as unknown as bidi.BidiSessionInternal,
+              msg.payload,
+              publishRequestId,
+            );
+            continue;
+          }
+          if (msg.type === MessageType.REQUEST_ERROR) {
+            const decoded = decodeRequestErrorPayload(msg.payload);
+            const error = new RequestError(
+              decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
+              normalizeRequestErrorCode(Number(decoded.errorCode)),
+            );
+            for (const [updateId, pendingUpdate] of this.pendingRequestUpdate) {
+              if (pendingUpdate.targetRequestId === publishRequestId) {
+                this.pendingRequestUpdate.delete(updateId);
+                pendingUpdate.reject(error);
+                break;
+              }
+            }
+            continue;
+          }
+          // 未知のメッセージタイプは PROTOCOL_VIOLATION
+          this.closeWithError(
+            new SessionError(
+              `unknown message type on publish stream: 0x${msg.type.toString(16)}`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+          return;
+        }
+      }
+    } catch (err) {
+      if (impl.state === "active") {
+        const normalizedError = err instanceof Error ? err : new Error(String(err));
+        if (!isSessionClosedError(normalizedError)) {
+          callbacks.error?.(normalizedError);
+        }
+      }
+      const sessionError = toProtocolViolationSessionError(err);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+      }
+    }
+  }
+
+  /**
+   * 受信した双方向ストリームを処理する
+   *
+   * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+   * SUBSCRIBE_TRACKS への応答としてサーバーが開く双方向ストリームでは、
+   * 先頭メッセージとして PUBLISH が送信される。
+   *
+   * draft-ietf-moq-transport-18 §3.3.2:
+   * 双方向ストリームは特定のメッセージタイプで開始されなければならない。
+   */
+  private async handleIncomingBidirectionalStream(
+    stream: WebTransportBidirectionalStream,
+  ): Promise<void> {
+    if (this.sessionState !== "connected") {
+      try {
+        await stream.readable.cancel();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    const firstControlReader = new ControlStreamReader();
+    let firstMsg: ControlMessage;
+
+    try {
+      const firstMsgReader = stream.readable.getReader();
+      try {
+        while (true) {
+          const { value, done } = await firstMsgReader.read();
+          if (done) return;
+          const messages = firstControlReader.feed(value);
+          if (messages.length > 0) {
+            firstMsg = messages[0];
+            break;
+          }
+        }
+      } finally {
+        firstMsgReader.releaseLock();
+      }
+    } catch (err) {
+      this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+
+    // PUBLISH 以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
+    // draft-ietf-moq-transport-18 §3.3.2
+    if (firstMsg.type !== MessageType.PUBLISH) {
+      this.closeWithError(
+        new SessionError(
+          `expected PUBLISH as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+
+    // PUBLISH ペイロードをデコード
+    // draft-ietf-moq-transport-18 §10.10
+    let decodedPublish: ReturnType<typeof decodePublishPayload>;
+    try {
+      decodedPublish = decodePublishPayload(firstMsg.payload);
+    } catch (err) {
+      const sessionError = toProtocolViolationSessionError(err);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+      }
+      return;
+    }
+
+    const publishRequestId = decodedPublish.requestId;
+    const publishTrackAlias = decodedPublish.trackAlias;
+    const publishTrackNamespace = trackNamespaceToStrings(decodedPublish.trackNamespace);
+    const publishTrackName = new TextDecoder().decode(decodedPublish.trackName);
+
+    this.emitDebug("recv", MessageType.PUBLISH, firstMsg.payload, {
+      requestId: publishRequestId.toString(),
+      trackAlias: publishTrackAlias.toString(),
+      trackNamespace: publishTrackNamespace,
+      trackName: publishTrackName,
+    });
+
+    // trackNamespace がアクティブな tracksSubscriptions の namespacePrefix に前方一致するか検証
+    const match = this.matchPublishToSubscription(publishTrackNamespace);
+    if (match === null) {
+      // draft-ietf-moq-transport-18 §10.10 (SHOULD): マッチしない PUBLISH は UNINTERESTED
+      await this.sendRequestErrorAndCancel(stream, RequestErrorCode.UNINTERESTED, "uninterested");
+      return;
+    }
+
+    // 同一 track に対する重複 PUBLISH をチェック
+    // draft-ietf-moq-transport-18 §5.1 (MUST): DUPLICATE_SUBSCRIPTION の REQUEST_ERROR を返す
+    if (this.subscribersByAlias.has(publishTrackAlias)) {
+      await this.sendRequestErrorAndCancel(
+        stream,
+        RequestErrorCode.DUPLICATE_SUBSCRIPTION,
+        "duplicate subscription",
+      );
+      return;
+    }
+
+    // onPublish コールバックから SubscribeCallbacks を取得
+    let subscribeCallbacks: SubscribeCallbacks;
+    try {
+      const result = match.callbacks.onPublish?.(match.suffix, publishTrackName);
+      if (result === undefined) {
+        subscribeCallbacks = { object: () => {} };
+      } else {
+        const resolved = await result;
+        subscribeCallbacks = resolved ?? { object: () => {} };
+      }
+    } catch {
+      // アプリケーションのエラーはプロトコル違反ではない
+      try {
+        await stream.readable.cancel();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    // SubscriberImpl を生成して登録
+    const impl = new SubscriberImpl(
+      publishTrackNamespace,
+      publishTrackName,
+      publishRequestId,
+      publishTrackAlias,
+      subscribeCallbacks.object,
+      subscribeCallbacks.datagram,
+      subscribeCallbacks.end,
+      subscribeCallbacks.error,
+    );
+    impl.goawayCallback = subscribeCallbacks.goaway;
+
+    const subControlReader = new ControlStreamReader();
+    let subReader: ReadableStreamDefaultReader<Uint8Array>;
+    let subWriter: WritableStreamDefaultWriter<Uint8Array>;
+    try {
+      subReader = stream.readable.getReader();
+      subWriter = stream.writable.getWriter();
+    } catch {
+      // ストリームのロックが取得できない場合
+      impl.markClosed();
+      return;
+    }
+
+    this.subscribers.set(publishRequestId, impl);
+    this.subscribersByAlias.set(publishTrackAlias, impl);
+    this.requestStreams.set(publishRequestId, {
+      stream,
+      writer: subWriter,
+      controlReader: subControlReader,
+    });
+
+    impl.onUnsubscribe = async () => {
+      return bidi.bidiCancelSubscription(this as unknown as bidi.BidiSessionInternal, impl);
+    };
+    impl.onUpdate = async (options: RequestUpdateOptions) => {
+      return bidi.bidiSendRequestUpdate(this as unknown as bidi.BidiSessionInternal, impl, options);
+    };
+
+    this.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
+
+    // PUBLISH_OK を送信 (draft-ietf-moq-transport-18 §5.1 MUST)
+    {
+      const publishOkPayload = encodeRequestOkPayload({
+        type: MessageType.REQUEST_OK,
+        parameters: [],
+        trackProperties: [],
+      });
+      const controlWriter = new ControlStreamWriter();
+      const framed = controlWriter.encode(MessageType.REQUEST_OK, publishOkPayload);
+      await subWriter.write(framed);
+    }
+
+    // 後続メッセージのサブループ
+    await this.runPublishStreamSubLoop(
+      impl,
+      publishRequestId,
+      subReader,
+      subControlReader,
+      subscribeCallbacks,
+    );
+
+    this.requestStreams.delete(publishRequestId);
+    this.subscribers.delete(publishRequestId);
+    this.subscribersByAlias.delete(publishTrackAlias);
+    subReader.releaseLock();
+    try {
+      subWriter.releaseLock();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * PUBLISH の trackNamespace をアクティブな tracksSubscriptions にマッチさせる
+   *
+   * @returns マッチした subscription の callbacks と suffix、マッチしなければ null
+   */
+  private matchPublishToSubscription(
+    publishTrackNamespace: string[],
+  ): { callbacks: TracksSubscriptionCallbacks; suffix: string[] } | null {
+    for (const [, subscription] of this.tracksSubscriptions) {
+      if (subscription.state !== "active") {
+        continue;
+      }
+      const suffix = matchNamespacePrefix(publishTrackNamespace, subscription.namespacePrefix);
+      if (suffix !== null) {
+        return { callbacks: subscription.callbacks, suffix };
+      }
+    }
+    return null;
   }
 
   /**

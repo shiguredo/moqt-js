@@ -48,7 +48,7 @@ const header = encodeSubgroupHeader({
   trackAlias,
   groupId,
   publisherPriority: params.priority ?? 128,
-  firstObject: true,  // ← 追加
+  firstObject: true, // ← 追加
 });
 ```
 
