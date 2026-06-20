@@ -2300,9 +2300,9 @@ export class SessionImpl implements Session {
    * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
    * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.15
    *
-   * draft-ietf-moq-transport-18 Section 6.1:
+   * draft-ietf-moq-transport-18 §6.2:
    * 公開のキャンセルはストリームを FIN または RESET_STREAM で閉じることで行う。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-6.1
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-6.2
    */
   async publishNamespace(
     namespace: string[],
@@ -3707,10 +3707,10 @@ export class SessionImpl implements Session {
   /**
    * Namespace 公開を終了する
    *
-   * draft-ietf-moq-transport-18 Section 6.1:
+   * draft-ietf-moq-transport-18 §6.2:
    * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、
    * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-6.1
+   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-6.2
    */
   private async closeNamespacePublication(requestId: bigint): Promise<void> {
     const publication = this.namespacePublications.get(requestId);
