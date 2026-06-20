@@ -29,6 +29,30 @@ import { MessageParameterType, type Location } from "./types";
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
+export const MAX_FULL_TRACK_NAME_SIZE = 4096;
+
+/**
+ * Full Track Name の合計長を検証する
+ *
+ * draft-ietf-moq-transport-18 §2.4.1:
+ * Namespace 全フィールド長 + Track Name 長の合計が 4096 バイトを
+ * 超えてはならない (MUST NOT)。
+ *
+ * @param namespace - TrackNamespace
+ * @param trackName - Track Name (UTF-8 文字列)
+ * @throws ProtocolViolationError 合計長が 4096 バイトを超える場合
+ */
+export function validateFullTrackName(namespace: TrackNamespace, trackName: string): void {
+  let totalSize = new TextEncoder().encode(trackName).length;
+  for (const field of namespace.tuple) {
+    totalSize += field.length;
+  }
+  if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
+    throw new ProtocolViolationError(
+      `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
+    );
+  }
+}
 
 /**
  * 予約名前空間プレフィクス

@@ -36,7 +36,6 @@ import {
   getParameterLocationValue,
   type Location,
   type Parameter,
-  type GroupOrder,
 } from "../message";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
@@ -47,6 +46,7 @@ import {
   FETCH_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_ALLOWED_PARAMS,
+  TRACK_STATUS_OK_ALLOWED_PARAMS,
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
@@ -538,23 +538,10 @@ export async function bidiReadFetchResponse(
         }
       }
 
-      // draft-ietf-moq-transport-18 Section 10.2.8 (GROUP ORDER Parameter):
-      // 省略時は Ascending (0x1) がデフォルト
-      const groupOrderParam = decoded.parameters.find(
-        (p) => p.type === MessageParameterType.GROUP_ORDER,
-      );
-      const groupOrder =
-        groupOrderParam && groupOrderParam.value.length > 0
-          ? (groupOrderParam.value[0] as GroupOrder)
-          : undefined;
-
+      // draft-ietf-moq-transport-18 §10.2.8: GROUP_ORDER は FETCH_OK に許可されない。
+      // FETCH リクエスト側から groupOrder を設定できるようフィールドは FetcherImpl に残す。
       session.pendingFetch.delete(requestId);
-      pending.impl.setFetchOkInfo(
-        decoded.endOfTrack,
-        decoded.endLocation,
-        decoded.trackProperties,
-        groupOrder,
-      );
+      pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation, decoded.trackProperties);
       session.fetchers.set(requestId, pending.impl);
       pending.resolve(pending.impl);
 
@@ -617,6 +604,19 @@ export async function bidiReadTrackStatusResponse(
 
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodeRequestOkPayload(msg.payload);
+
+      // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope)
+      if (
+        !validateParameterScope(
+          decoded.parameters,
+          TRACK_STATUS_OK_ALLOWED_PARAMS,
+          "TRACK_STATUS_OK",
+          (error) => session.closeWithError(error),
+        )
+      ) {
+        return;
+      }
+
       session.pendingTrackStatus.delete(requestId);
       session.requestStreams.delete(requestId);
       pending.resolve({ parameters: decoded.parameters });
@@ -827,6 +827,11 @@ export async function bidiReadRequestStreamMessages(
     // それ以外（ストリームの正常終了・キャンセル等）は既存通り無視する
   } finally {
     reader.releaseLock();
+    const subscriber = session.subscribers.get(requestId);
+    if (subscriber) {
+      session.subscribers.delete(requestId);
+      session.subscribersByAlias.delete(subscriber.getTrackAlias());
+    }
     session.requestStreams.delete(requestId);
   }
 }
@@ -1054,8 +1059,9 @@ export function bidiHandlePublishDone(
       // 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う
       const normalizedCode = normalizePublishDoneCode(Number(msg.statusCode));
       subscriber.handleEnd(BigInt(normalizedCode), msg.reasonPhrase);
-      session.subscribers.delete(requestId);
-      session.subscribersByAlias.delete(subscriber.getTrackAlias());
+      // subscriber/subscribersByAlias の削除はストリーム close 時
+      // (bidiReadRequestStreamMessages の finally) に委譲する
+      // draft-ietf-moq-transport-18 §5.1
     }
   }
 

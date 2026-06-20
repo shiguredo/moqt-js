@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-request-ok-parameter-handling
 - Polished: 2026-06-20
@@ -88,3 +89,13 @@ GROUP_ORDER 抽出コードを削除した後、`setFetchOkInfo` (`src/fetcher.t
 - `bidiReadTrackStatusResponse` がパラメータを検証する
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリが追記される
+
+## 解決方法
+
+`FETCH_OK_ALLOWED_PARAMS` から `EXPIRES` と `LARGEST_OBJECT` を削除し空集合にした。`REQUEST_UPDATE_OK_ALLOWED_PARAMS` に `EXPIRES` を追加した。`bidiReadFetchResponse` から `GROUP_ORDER` の find 処理を削除した。`bidiReadTrackStatusResponse` に `TRACK_STATUS_OK_ALLOWED_PARAMS` によるパラメータスコープ検証を追加した。
+
+変更ファイル:
+
+- `src/message/parameterScope.ts`: 2 箇所修正
+- `src/session/bidi.ts`: 2 箇所修正
+- `CHANGES.md`: `[FIX]` エントリ追記
