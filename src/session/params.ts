@@ -380,3 +380,29 @@ const MAX_SETTIMEOUT_DELAY = 2147483647;
 export function clampTimeoutMs(timeout: bigint): number {
   return Math.min(Number(timeout), MAX_SETTIMEOUT_DELAY);
 }
+
+/**
+ * Track Namespace が namespacePrefix に前方一致するか判定する
+ *
+ * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+ * PUBLISH の trackNamespace が tracksSubscriptions の namespacePrefix に
+ * 前方一致する場合、当該 subscription が PUBLISH を受信する対象となる。
+ *
+ * @param trackNamespace - PUBLISH からデコードした TrackNamespace tuple
+ * @param namespacePrefix - SUBSCRIBE_TRACKS で指定した namespacePrefix (string[])
+ * @returns 前方一致する場合は namespaceSuffix (string[])、一致しない場合は null
+ */
+export function matchNamespacePrefix(
+  trackNamespace: string[],
+  namespacePrefix: string[],
+): string[] | null {
+  if (namespacePrefix.length > trackNamespace.length) {
+    return null;
+  }
+  for (let i = 0; i < namespacePrefix.length; i++) {
+    if (trackNamespace[i] !== namespacePrefix[i]) {
+      return null;
+    }
+  }
+  return trackNamespace.slice(namespacePrefix.length);
+}

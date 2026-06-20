@@ -102,6 +102,7 @@ export interface TracksSubscriptionCallbacks {
 10. サブループ終了時（finally）に `requestStreams.delete(requestId)` を実行する
 
 生成する `SubscriberImpl` には以下を設定する:
+
 - subscriber の `requestId` キーとして、PUBLISH に含まれるサーバー発行の `requestId`（odd パリティ）をそのまま用いる。これはクライアント発行の requestId（even パリティ）と ID 空間が異なるため衝突しない
 - `onUnsubscribe`: `bidiCancelSubscription(session, requestId)` を呼び、STOP_SENDING 送信とストリームリソース解放を行う（要 `requestStreams` 登録）
 - `onUpdate`: `bidiSendRequestUpdate(session, targetRequestId, options)` を呼び、同ストリームに REQUEST_UPDATE を送信する（要 `requestStreams` 登録）

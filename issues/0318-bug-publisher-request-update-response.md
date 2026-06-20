@@ -52,8 +52,11 @@ draft-ietf-moq-transport-18:
 
 ```typescript
 if (
-  !validateParameterScope(decoded.parameters, REQUEST_UPDATE_ALLOWED_PARAMS, "REQUEST_UPDATE", (error) =>
-    session.closeWithError(error),
+  !validateParameterScope(
+    decoded.parameters,
+    REQUEST_UPDATE_ALLOWED_PARAMS,
+    "REQUEST_UPDATE",
+    (error) => session.closeWithError(error),
   )
 ) {
   return;
@@ -78,18 +81,20 @@ const errorPayload = encodeRequestErrorPayload({
 });
 const errorMessage = session.controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload);
 await session.requestStreams.get(requestId)?.writer.write(errorMessage);
-session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, { errorCode: RequestErrorCode.INTERNAL_ERROR });
+session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, {
+  errorCode: RequestErrorCode.INTERNAL_ERROR,
+});
 ```
 
 `INTERNAL_ERROR (0x0)` を使用する。`src/error.ts` の `normalizeRequestErrorCode` が未知コードを `INTERNAL_ERROR` に正規化する既存パターンと整合させる。`retryInterval` は 0n（再試行しない）、`reasonPhrase` は説明文、redirect は含めない。
 
 ### エラー条件と対応
 
-| 条件 | 応答/処理 |
-|------|-----------|
-| publisher が存在しない | `REQUEST_ERROR` （`INTERNAL_ERROR` = 0x0）を送信する。セッションは閉じない |
-| 許可外パラメータを含む | `PROTOCOL_VIOLATION` でセッションを閉じる |
-| publisher が存在し正常に更新 | `REQUEST_OK` （空の parameters、空の trackProperties）を送信する |
+| 条件                         | 応答/処理                                                                  |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| publisher が存在しない       | `REQUEST_ERROR` （`INTERNAL_ERROR` = 0x0）を送信する。セッションは閉じない |
+| 許可外パラメータを含む       | `PROTOCOL_VIOLATION` でセッションを閉じる                                  |
+| publisher が存在し正常に更新 | `REQUEST_OK` （空の parameters、空の trackProperties）を送信する           |
 
 ### writer.write() のエラーハンドリング
 
