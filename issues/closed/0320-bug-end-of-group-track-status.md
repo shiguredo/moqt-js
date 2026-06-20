@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-end-of-group-track-status
 - Polished: 2026-06-20
@@ -61,3 +62,15 @@ draft-ietf-moq-transport-18:
 - `END_OF_GROUP` / `END_OF_TRACK` の送信が可能になる
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリが追記される
+
+## 解決方法
+
+`SendObjectParams` に `status?: ObjectStatus` を追加し、`sendObjectInternal` で `params.status ?? ObjectStatus.NORMAL` を `encodeObjectFields` に渡すようにした。`encodeObjectFields` の `Error` throw を `ProtocolViolationError` に修正し、非 NORMAL ステータス + 非空ペイロードの検証を追加した。
+
+変更ファイル:
+
+- `src/publisher.ts`: `SendObjectParams.status` 追加
+- `src/session.ts`: `sendObjectInternal` で `params.status` を使用
+- `src/dataStream.ts`: `encodeObjectFields` のエラー種別修正と検証追加
+- `src/dataStream.subgroup.test.ts`: ステータスエンコードテスト追加
+- `CHANGES.md`: `[FIX]` エントリ追記

@@ -3,6 +3,8 @@
  * draft-ietf-moq-transport-18 Section 5 (Publishing and Retrieving Tracks)
  */
 
+import type { ObjectStatus } from "./message/types";
+
 /**
  * Publisher state
  */
@@ -17,6 +19,16 @@ export interface SendObjectParams {
   payload: Uint8Array;
   properties?: Uint8Array;
   priority?: number;
+  /**
+   * オブジェクトステータス
+   * draft-ietf-moq-transport-18 §11.2.1.1
+   *
+   * - NORMAL (0x0): 通常のオブジェクト（デフォルト）
+   * - END_OF_GROUP (0x3): グループの終端。payload は空でなければならない
+   * - END_OF_TRACK (0x4): トラックの終端。payload は空でなければならない。
+   *   END_OF_TRACK 送信後は同一トラックへの後続 sendObject() が禁止される（MUST）
+   */
+  status?: ObjectStatus;
 }
 
 /**
