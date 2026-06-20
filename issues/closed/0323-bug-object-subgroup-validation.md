@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-object-subgroup-validation
 - Polished: 2026-06-20
@@ -68,6 +69,22 @@ draft-ietf-moq-transport-18:
 - `PUBLISH_DONE` 受信後、ストリームが閉じられるまで状態が保持される
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリが追記される
+
+## 解決方法
+
+4 項目の検証強化を実施した:
+
+1. `validateFullTrackName` を `parameter.ts` に新設し、Full Track Name 合計長が 4096 バイトを超えた場合 `ProtocolViolationError` を throw
+2. `sendObjectInternal` に Object ID 上限検証を追加し、`2^64-1` 超過時は `PROTOCOL_VIOLATION` でセッションを閉じる
+3. `sendPublishDone` で PUBLISH_DONE 送信後に `writer.close()` で FIN を送信し、`requestStreams` を削除
+4. `bidiHandlePublishDone` から `subscribers`/`subscribersByAlias` の削除を除去し、代わりに `bidiReadRequestStreamMessages` の finally ブロックで削除
+
+変更ファイル:
+
+- `src/message/parameter.ts`: `validateFullTrackName` 追加
+- `src/session.ts`: Object ID 上限検証追加、PUBLISH_DONE FIN 送信追加
+- `src/session/bidi.ts`: 状態破棄タイミング調整
+- `CHANGES.md`: `[FIX]` エントリ追記
 
 ## テスト方針
 
