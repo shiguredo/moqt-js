@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-subgroup-header-first-object-bit
 - Polished: 2026-06-20
@@ -75,3 +76,14 @@ const header = encodeSubgroupHeader({
 - 2 番目以降のオブジェクトには `FIRST_OBJECT` ビットが立たない
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリが追記される
+
+## 解決方法
+
+`src/session.ts` の `sendObjectInternal` において、新しいストリームを開く分岐での `encodeSubgroupHeader` 呼び出しに `firstObject: true` を追加した。
+`src/dataStream.subgroup.test.ts` に `firstObject: true` のエンコード・デコードテスト 2 件を追加した。
+
+変更ファイル:
+
+- `src/session.ts`: `encodeSubgroupHeader` 呼び出しに `firstObject: true` 追加
+- `src/dataStream.subgroup.test.ts`: `firstObject` ビットのエンコード・デコードテスト追加
+- `CHANGES.md`: `[FIX]` エントリ追記

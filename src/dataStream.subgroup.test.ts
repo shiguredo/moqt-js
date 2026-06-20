@@ -506,3 +506,41 @@ test("SubgroupHeaderType: No Priority + End of Group タイプの roundtrip テ�
   assert.isUndefined(decoded.publisherPriority);
   assert.equal(consumed, encoded.length);
 });
+
+test("SubgroupHeader: FIRST_OBJECT ビットを設定したエンコード", () => {
+  // draft-ietf-moq-transport-18 §11.4.2:
+  // 新しい subgroup の最初のオブジェクトには FIRST_OBJECT ビット (0x40) を設定する (MUST)
+  const header = {
+    type: SubgroupHeaderType.FIRST_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    publisherPriority: 128,
+    firstObject: true,
+  };
+
+  const encoded = encodeSubgroupHeader(header);
+
+  // type バイトは FIRST_OBJ_EXT (0x13) | FIRST_OBJECT (0x40) = 0x53
+  assert.equal(encoded[0], 0x53);
+});
+
+test("SubgroupHeader: FIRST_OBJECT ビット付きエンコードのデコード roundtrip", () => {
+  const header = {
+    type: SubgroupHeaderType.FIRST_OBJ_EXT,
+    trackAlias: 42n,
+    groupId: 99n,
+    publisherPriority: 200,
+    firstObject: true,
+  };
+
+  const encoded = encodeSubgroupHeader(header);
+  const [decoded, consumed] = decodeSubgroupHeader(encoded);
+
+  // デコード後の type は FIRST_OBJECT ビットを含む
+  assert.equal(decoded.type, SubgroupHeaderType.FIRST_OBJ_EXT | 0x40);
+  assert.equal(decoded.firstObject, true);
+  assert.equal(decoded.trackAlias, 42n);
+  assert.equal(decoded.groupId, 99n);
+  assert.equal(decoded.publisherPriority, 200);
+  assert.equal(consumed, encoded.length);
+});

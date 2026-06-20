@@ -3004,6 +3004,7 @@ export class SessionImpl implements Session {
         trackAlias,
         groupId,
         publisherPriority: params.priority ?? 128,
+        firstObject: true,
       });
 
       // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
