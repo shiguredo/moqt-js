@@ -10,6 +10,7 @@ import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from ".
 import type { MoqtObject } from "../dataStream";
 import {
   RequestError,
+  RequestErrorCode,
   SessionError,
   SessionErrorCode,
   normalizeRequestErrorCode,
@@ -22,6 +23,8 @@ import {
   MessageParameterType,
   encodeFetchPayload,
   encodeRequestUpdatePayload,
+  encodeRequestErrorPayload,
+  encodeRequestOkPayload,
   encodeUint8ParameterValue,
   decodeFetchOkPayload,
   decodeGoawayPayload,
@@ -43,6 +46,7 @@ import {
   SUBSCRIBE_OK_ALLOWED_PARAMS,
   FETCH_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+  REQUEST_UPDATE_ALLOWED_PARAMS,
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
@@ -702,11 +706,66 @@ export async function bidiReadRequestStreamMessages(
             //  subscription established with PUBLISH.」
             // クライアントが Publisher の場合、サーバー (Subscriber 役) が
             // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
+            //
+            // draft-ietf-moq-transport-18 §10.9:
+            // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
+            //  REQUEST_OK or REQUEST_ERROR message indicating if the update was successful.」
             const decoded = decodeRequestUpdatePayload(msg.payload);
+
+            // パラメータスコープ検証
+            // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope)
+            if (
+              !validateParameterScope(
+                decoded.parameters,
+                REQUEST_UPDATE_ALLOWED_PARAMS,
+                "REQUEST_UPDATE",
+                (error) => session.closeWithError(error),
+              )
+            ) {
+              return;
+            }
+
             const publisher = session.publishers.get(requestId);
             if (publisher) {
               const forwardState = extractForwardState(decoded.parameters);
               publisher.setForwardState(forwardState);
+
+              // REQUEST_OK を送信 (draft-ietf-moq-transport-18 §10.9 MUST)
+              const okPayload = encodeRequestOkPayload({
+                type: MessageType.REQUEST_OK,
+                parameters: [],
+                trackProperties: [],
+              });
+              if (session.controlWriter) {
+                const message = session.controlWriter.encode(MessageType.REQUEST_OK, okPayload);
+                const streamInfo = session.requestStreams.get(requestId);
+                if (streamInfo) {
+                  await streamInfo.writer.write(message);
+                }
+              }
+              session.emitDebug("send", MessageType.REQUEST_OK, okPayload);
+            } else {
+              // publisher が存在しない場合は REQUEST_ERROR を送信
+              // draft-ietf-moq-transport-18 §10.9: 更新失敗時は REQUEST_ERROR
+              const errorPayload = encodeRequestErrorPayload({
+                type: MessageType.REQUEST_ERROR,
+                errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
+                retryInterval: 0n,
+                reasonPhrase: "publisher not found for request update",
+              });
+              if (session.controlWriter) {
+                const message = session.controlWriter.encode(
+                  MessageType.REQUEST_ERROR,
+                  errorPayload,
+                );
+                const streamInfo = session.requestStreams.get(requestId);
+                if (streamInfo) {
+                  await streamInfo.writer.write(message);
+                }
+              }
+              session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, {
+                errorCode: RequestErrorCode.INTERNAL_ERROR,
+              });
             }
             break;
           }

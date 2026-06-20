@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-publisher-request-update-response
 - Polished: 2026-06-20
@@ -126,3 +127,18 @@ session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, {
 - 正常系・異常系のテストが PASS する
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリが追記される
+
+## 解決方法
+
+`src/session/bidi.ts` の `bidiReadRequestStreamMessages` 内 `case MessageType.REQUEST_UPDATE` ブロックを修正し、`REQUEST_UPDATE` 受信時に必ず `REQUEST_OK` または `REQUEST_ERROR` を送信するようにした。
+
+- publisher が存在し正常に更新できた場合は `REQUEST_OK`（空 parameters、空 trackProperties）を送信する
+- publisher が存在しない場合は `INTERNAL_ERROR (0x0)` の `REQUEST_ERROR` を送信する
+- 許可外パラメータを含む場合は `validateParameterScope` が `PROTOCOL_VIOLATION` でセッションを閉じる
+- `src/message/subscribe.ts` L222 の TODO コメントを削除した
+
+変更ファイル:
+
+- `src/session/bidi.ts`: `case MessageType.REQUEST_UPDATE` の応答送信処理を追加
+- `src/message/subscribe.ts`: TODO コメント削除
+- `CHANGES.md`: `[FIX]` エントリ追記
