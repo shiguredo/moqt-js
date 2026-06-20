@@ -57,6 +57,7 @@ import {
   createSetup,
   getMessageTypeName,
   FetchType,
+  MessageParameterType,
   type AuthorizationToken,
   type Location,
   type Parameter,
@@ -1587,8 +1588,16 @@ export class SessionImpl implements Session {
         startLocation: options.startLocation,
         endLocation: options.endLocation,
       },
-      parameters: [],
+      parameters: [] as Parameter[],
     };
+
+    // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-18 Section 10.2.5
+    if (options.fillTimeout !== undefined) {
+      fetchMsg.parameters.push({
+        type: MessageParameterType.FILL_TIMEOUT,
+        value: encodeVarint(options.fillTimeout),
+      });
+    }
 
     const payload = encodeFetchPayload(fetchMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
