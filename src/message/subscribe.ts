@@ -219,7 +219,6 @@ export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
  *
  * リレーサーバーおよび Publisher 実装用。
  * moqt-js はクライアント専用のため、現在ランタイムでは使用しない。
- * TODO: Publisher として REQUEST_UPDATE を受信する処理の実装。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  */
 export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): RequestUpdate {

@@ -289,6 +289,11 @@
   - 前方一致しない PUBLISH には UNINTERESTED (0x20)、重複 PUBLISH には DUPLICATE_SUBSCRIPTION (0x19) の REQUEST_ERROR を返す
   - マッチング用の純関数 `matchNamespacePrefix` を `src/session/params.ts` に追加する
   - @voluntas
+- [FIX] Publisher 側が REQUEST_UPDATE を受信しても応答しないのを修正する
+  - draft-ietf-moq-transport-18 §10.9 の MUST に基づき、`REQUEST_UPDATE` 受信時に `REQUEST_OK` または `REQUEST_ERROR` を必ず返す
+  - publisher 不在時は `INTERNAL_ERROR` の `REQUEST_ERROR` を送信する
+  - `REQUEST_UPDATE_ALLOWED_PARAMS` のパラメータスコープ検証を追加する
+  - @voluntas
 
 ### misc
 
