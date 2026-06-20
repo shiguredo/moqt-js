@@ -294,6 +294,9 @@
   - publisher 不在時は `INTERNAL_ERROR` の `REQUEST_ERROR` を送信する
   - `REQUEST_UPDATE_ALLOWED_PARAMS` のパラメータスコープ検証を追加する
   - @voluntas
+- [FIX] Subgroup Header に FIRST_OBJECT ビットを設定する
+  - draft-ietf-moq-transport-18 §11.4.2 の MUST に基づき、新しい subgroup の最初のオブジェクトに FIRST_OBJECT ビット (0x40) を設定する
+  - @voluntas
 
 ### misc
 
