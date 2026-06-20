@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-standalone-fetch-fill-timeout
 - Polished: 2026-06-20
@@ -49,3 +50,12 @@ draft-ietf-moq-transport-18:
 - `fillTimeout` 未指定時は既存挙動が変わらない
 - 既存の全テストが PASS する
 - `CHANGES.md` に `[FIX]` エントリが追記される
+
+## 解決方法
+
+`Session.fetch()` の `FETCH` メッセージ構築時に `options.fillTimeout` が指定されていれば `FILL_TIMEOUT` パラメータを追加するようにした。`bidi.ts` の Joining Fetch と同一のパターンを使用した。
+
+変更ファイル:
+
+- `src/session.ts`: `fetch()` の `parameters` に `fillTimeout` 追加
+- `CHANGES.md`: `[FIX]` エントリ追記
