@@ -301,6 +301,8 @@
   - `SendObjectParams.status` を追加し `sendObjectInternal` で伝搬する
   - `encodeObjectFields` の非 NORMAL ステータス検証を `ProtocolViolationError` に是正する
   - @voluntas
+- [FIX] Standalone Fetch で FILL_TIMEOUT パラメータを送信する
+  - @voluntas
 
 ### misc
 
