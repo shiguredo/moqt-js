@@ -185,6 +185,7 @@ export interface TracksSubscriptionCallbacks {
 `decodePublishPayload` のコメントを「リレーサーバー実装用」から実際の用途に合わせて更新した。
 
 変更ファイル:
+
 - `src/session.ts`: 新規メソッド 5 つ + `TracksSubscriptionCallbacks.onPublish` + `incomingBidiStreamReader` フィールド + `initialize()` / `close()` 対応
 - `src/session/bidi.ts`: `BidiSessionInternal.tracksSubscriptions` 追加
 - `src/session/params.ts`: `matchNamespacePrefix` 追加

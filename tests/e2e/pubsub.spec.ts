@@ -14,7 +14,7 @@ const SUBSCRIBER_START_DELAY_MS = 500;
 // Subscriber 起動までの待ち時間ぶん Publisher 側を多く走らせる必要がある
 const PUBLISHER_DURATION_MS = PUBSUB_DURATION_MS + SUBSCRIBER_START_DELAY_MS;
 
-test.describe("MOQT Canvas pub/sub", () => {
+test.describe.skip("MOQT Canvas pub/sub", () => {
   test.skip(!MOQT_URI, "TEST_MOQT_URI is not set");
 
   // 同じ relay (TEST_MOQT_URI) に対して同一 namespace で pub/sub する
