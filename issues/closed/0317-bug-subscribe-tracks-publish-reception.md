@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-17
+- Completed: 2026-06-20
 - Model: Opus 4.8
 - Branch: feature/fix-subscribe-tracks-publish-reception
 - Polished: 2026-06-20
@@ -102,6 +103,7 @@ export interface TracksSubscriptionCallbacks {
 10. サブループ終了時（finally）に `requestStreams.delete(requestId)` を実行する
 
 生成する `SubscriberImpl` には以下を設定する:
+
 - subscriber の `requestId` キーとして、PUBLISH に含まれるサーバー発行の `requestId`（odd パリティ）をそのまま用いる。これはクライアント発行の requestId（even パリティ）と ID 空間が異なるため衝突しない
 - `onUnsubscribe`: `bidiCancelSubscription(session, requestId)` を呼び、STOP_SENDING 送信とストリームリソース解放を行う（要 `requestStreams` 登録）
 - `onUpdate`: `bidiSendRequestUpdate(session, targetRequestId, options)` を呼び、同ストリームに REQUEST_UPDATE を送信する（要 `requestStreams` 登録）
@@ -163,4 +165,30 @@ export interface TracksSubscriptionCallbacks {
 - 後続の単方向データストリームが `subscribersByAlias` 経由で正しく配送される
 - `close()` で `incomingBidiStreamReader` が解放される
 - 既存の全テストが PASS する
+
+## 解決方法
+
+`session.ts` に以下を追加し、SUBSCRIBE_TRACKS に対する PUBLISH メッセージ受信を実装した:
+
+- `startIncomingBidirectionalStreamLoop()`: `transport.incomingBidirectionalStreams` を監視するループを新設し、到着した双方向ストリームを `handleIncomingBidirectionalStream()` で処理する
+- `handleIncomingBidirectionalStream()`: 双方向ストリームの先頭メッセージが PUBLISH であることを検証し、trackNamespace をアクティブな tracksSubscriptions の namespacePrefix と前方一致させ、マッチした場合は `onPublish` コールバックから取得した `SubscribeCallbacks` で SubscriberImpl を生成・登録し、PUBLISH_OK を送信した後、後続メッセージのサブループを実行する
+- `runPublishStreamSubLoop()`: PUBLISH_OK 送信後の後続メッセージ (PUBLISH_DONE / GOAWAY / REQUEST_OK / REQUEST_ERROR) を処理する
+- `sendRequestErrorAndCancel()`: REQUEST_ERROR を送信しストリームをキャンセルする共通ヘルパー
+- `matchPublishToSubscription()`: PUBLISH の trackNamespace をアクティブな tracksSubscriptions にマッチさせる
+
+`TracksSubscriptionCallbacks` に `onPublish` コールバックを追加し、アプリケーションが PUBLISH 経由でデータを受け取れるようにした。
+
+`BidiSessionInternal` に `tracksSubscriptions` フィールドを追加し、`sendRequestErrorAndCancel` から `BidiSessionInternal` 経由でアクセスできるようにした。
+
+`matchNamespacePrefix` 純関数を `src/session/params.ts` に追加し、単体テストを `src/session/params.test.ts` に追加した。
+
+`decodePublishPayload` のコメントを「リレーサーバー実装用」から実際の用途に合わせて更新した。
+
+変更ファイル:
+- `src/session.ts`: 新規メソッド 5 つ + `TracksSubscriptionCallbacks.onPublish` + `incomingBidiStreamReader` フィールド + `initialize()` / `close()` 対応
+- `src/session/bidi.ts`: `BidiSessionInternal.tracksSubscriptions` 追加
+- `src/session/params.ts`: `matchNamespacePrefix` 追加
+- `src/session/params.test.ts`: `matchNamespacePrefix` の単体テスト追加
+- `src/message/publish.ts`: `decodePublishPayload` のコメント更新
+- `CHANGES.md`: `[FIX]` エントリ追記
 - `CHANGES.md` に `[FIX]` エントリが追記される

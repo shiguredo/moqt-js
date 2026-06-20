@@ -149,6 +149,7 @@ const unsubscribe = async (): Promise<void> => {
 ```
 
 抽出先の free function はファクトリメソッドの戻り値のみを使用し、close メソッドを直接呼ばない
+
 - `namespaceSubscriptions` / `tracksSubscriptions` / `namespacePublications` の `readonly` 修飾は「Map 変数そのものの再代入禁止」を意味し、内容の不変性を保証するものではない。各ループの finally ブロックでの `delete(requestId)` は問題なく動作する。同様に `closedSubgroups: Set<string>` への `add()` / `delete()` も `readonly` で禁止されない
 - `createNamespaceSubscription` / `createTracksSubscription` / `createNamespacePublication` は現在 `private` メソッドだが、`SessionInternal` インターフェースで宣言するため `SessionImpl` での可視性を public に変更する必要がある。ただしこれらのメソッドは `Session` 公開インターフェースには含まれず、`moqt-js` から export されないため、外部 API の後方互換性には影響しない
 - `NamespaceSubscriptionState` / `TracksSubscriptionState` の `streamReader` / `controlReader` / `writer` は optional だが、`NamespacePublicationState` のこれらは必須である。これは、subscription 側がストリーム確立前（`pending` 状態）に状態オブジェクトを生成するため optional であり、publication 側は `createBidirectionalStream` 完了後にストリーム参照が確定した状態で生成するため必須となる設計上の非対称性に由来する。抽出先 free function では `namespaceSubscriptions.get()` 後の null チェックでガード済みのため、optional のままでも安全にアクセスできる
@@ -158,6 +159,7 @@ const unsubscribe = async (): Promise<void> => {
 `handleSubgroupStream` (4098-4209) は本リファクタでは **`SessionImpl` に残す**。
 
 根拠:
+
 - `PendingSubgroupBuffer.add()` が返す entry オブジェクトを経由した `Promise.race` によるレース制御（`reader.read()` と `entry.notified` の競合）は `SessionInternal` インターフェースでは表現しきれない密結合を持つ
 - 抽出に必要な `SessionInternal` への追加フィールドが過大になる（`pendingSubgroupBuffer` の内部 entry 操作、`cancelStreamQuiet` 等）
 - #0293 の「状態結合が強い」という判断は本質的に正しく、free function 抽出には不向き
@@ -168,6 +170,7 @@ const unsubscribe = async (): Promise<void> => {
 `handleIncomingStream` (3826-4031) は **`SessionImpl` に残す**。
 
 根拠:
+
 - `handleIncomingStream` は subgroup ストリームを検出すると `this.handleSubgroupStream(reader, header, initialPayloadBuffer)` を呼び出す (session.ts:3922)。`handleSubgroupStream` は本リファクタで `SessionImpl` に残すため、`handleIncomingStream` を free function 化するとこの呼び出し経路を `SessionInternal` 経由で露出する必要があり、interface が不必要に肥大化する
 - `handleIncomingStream` は fetch / subgroup / padding / 未知ストリームの 4 分岐と 2 重の while ループを持つ複合ロジックであり、分岐先に対する状態管理が密結合している。特に `waitForFetcher` の Promise 制御と `handleSubgroupStream` の非同期呼び出しの順序保証を free function 化で維持するのは困難
 
@@ -183,12 +186,12 @@ const unsubscribe = async (): Promise<void> => {
 
 ### 抽出単位
 
-| 新規モジュール | 抽出する責務 |
-|---|---|
-| `src/session/types.ts` | `SessionInternal` インターフェースと共有型。`BidiSessionInternal` を継承し、抽出先モジュールが必要とする追加フィールドを宣言する |
-| `src/session/namespaceLoops.ts` | `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` / `handleGoawayOnNamespaceStream` |
-| `src/session/publish.ts` | `sendObject` / `sendObjectInternal` / `closePublisherStream(Internal)` / `sendDatagram` / `getDatagramWriter` / `sendPublishDone` |
-| `src/session/incoming.ts` | `handleIncomingDatagram` / `waitForFetcher` / `processFetchObjects` ラッパー / `processSubgroupObjects` ラッパー |
+| 新規モジュール                  | 抽出する責務                                                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `src/session/types.ts`          | `SessionInternal` インターフェースと共有型。`BidiSessionInternal` を継承し、抽出先モジュールが必要とする追加フィールドを宣言する  |
+| `src/session/namespaceLoops.ts` | `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` / `handleGoawayOnNamespaceStream`    |
+| `src/session/publish.ts`        | `sendObject` / `sendObjectInternal` / `closePublisherStream(Internal)` / `sendDatagram` / `getDatagramWriter` / `sendPublishDone` |
+| `src/session/incoming.ts`       | `handleIncomingDatagram` / `waitForFetcher` / `processFetchObjects` ラッパー / `processSubgroupObjects` ラッパー                  |
 
 `initialize`、公開 API (`publish` / `subscribe` / `fetch` 等)、状態フィールド、`closeWithError` / `emitDebug`、`handleIncomingStream`、`handleSubgroupStream`、`closeNamespaceSubscription` / `closeTracksSubscription` / `closeNamespacePublication`、`createNamespaceSubscription` / `createTracksSubscription` / `createNamespacePublication` は `SessionImpl` (session.ts) に残し、オーケストレーターとする。
 
@@ -229,17 +232,18 @@ impl.onSendPublishDone = () => publishSendPublishDone(sessionRef, impl);
 ```
 
 このパターンは既存の `bidi.ts` 抽出時に `SessionImpl` が `bidi*` free function を import してコールバックに設定したのと同様である。
+
 - `publisherSendQueues` による Promise チェーン排他制御: `sendObject` と `closePublisherStream` は同一の `publisherSendQueues` Map に対して `.catch(() => {})` → `.then(...)` のパターンでシリアライズを行う。両 free function とも `session.publisherSendQueues` を介して同一のパターンでチェーンを構築することで、同一トラックの逐次実行を保証する。これは draft-ietf-moq-transport-18 §2.2 の「Objects from the same Subgroup MUST NOT be sent on different streams」を実装するための要件である
 
 ## 仕様書参照
 
 抽出先モジュールが担当するプロトコル機能について、実装時の正しさ確認のため以下の節を参照する。
 
-| 抽出モジュール | 関連する仕様節 |
-|---|---|
-| `namespaceLoops.ts` | §3.3, §6.1, §6.2, §10.4 (GOAWAY), §10.15 (PUBLISH_NAMESPACE), §10.18 (SUBSCRIBE_NAMESPACE), §10.19 (SUBSCRIBE_TRACKS) |
-| `publish.ts` | §2.2 (Subgroups), §10.10 (PUBLISH), §10.11 (PUBLISH_DONE), §11.2 (Objects), §11.3 (Datagrams), §11.3.1 (Object Datagram), §11.4.3 (Closing Subgroup Streams) |
-| `incoming.ts` | §11.2, §11.3, §11.4, §11.4.2 (Subgroup Header), §11.4.4 (Fetch Header) |
+| 抽出モジュール      | 関連する仕様節                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `namespaceLoops.ts` | §3.3, §6.1, §6.2, §10.4 (GOAWAY), §10.15 (PUBLISH_NAMESPACE), §10.18 (SUBSCRIBE_NAMESPACE), §10.19 (SUBSCRIBE_TRACKS)                                        |
+| `publish.ts`        | §2.2 (Subgroups), §10.10 (PUBLISH), §10.11 (PUBLISH_DONE), §11.2 (Objects), §11.3 (Datagrams), §11.3.1 (Object Datagram), §11.4.3 (Closing Subgroup Streams) |
+| `incoming.ts`       | §11.2, §11.3, §11.4, §11.4.2 (Subgroup Header), §11.4.4 (Fetch Header)                                                                                       |
 
 ## 前提 issue
 
@@ -281,12 +285,12 @@ impl.onSendPublishDone = () => publishSendPublishDone(sessionRef, impl);
 
 - 各抽出先のテスト戦略:
 
-| モジュール | PBT | 単体テスト | テスト実装要件 |
-|---|---|---|---|
-| `namespaceLoops.ts` | 非対象 (async + 副作用多) | 抽出する（非同期ストリームループの単位テストは WebTransport 接続なしでは実現困難なため、同期処理部分のみ） | REQUEST_OK / REQUEST_ERROR のデコード分岐、GOAWAY ハンドリング等の純粋ロジックを抽出して単体テスト。非同期ループ全体のテストは既存の `session.prop.ts` 等の PBT/統合テストでカバーする |
-| `publish.ts` | 非対象 (Map mutation + async) | 抽出する | `publisherSendQueues` の Promise チェーン排他制御を実際の Map を用いて検証。`sendObject` の逐次実行保証と `closedSubgroups` チェックを含める |
-| `incoming.ts` | 非対象 | 抽出する | `handleIncomingDatagram` の type 分岐（PADDING / Object Datagram / エラー経路）を検証。`waitForFetcher` の registration callback と timeout 経路を検証。これらの free function は WebTransport 非依存または制御可能な依存のみのため mock/stub 不要 |
-| `types.ts` | 不要 (宣言のみ) | 不要 | — |
+| モジュール          | PBT                           | 単体テスト                                                                                                 | テスト実装要件                                                                                                                                                                                                                                     |
+| ------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `namespaceLoops.ts` | 非対象 (async + 副作用多)     | 抽出する（非同期ストリームループの単位テストは WebTransport 接続なしでは実現困難なため、同期処理部分のみ） | REQUEST_OK / REQUEST_ERROR のデコード分岐、GOAWAY ハンドリング等の純粋ロジックを抽出して単体テスト。非同期ループ全体のテストは既存の `session.prop.ts` 等の PBT/統合テストでカバーする                                                             |
+| `publish.ts`        | 非対象 (Map mutation + async) | 抽出する                                                                                                   | `publisherSendQueues` の Promise チェーン排他制御を実際の Map を用いて検証。`sendObject` の逐次実行保証と `closedSubgroups` チェックを含める                                                                                                       |
+| `incoming.ts`       | 非対象                        | 抽出する                                                                                                   | `handleIncomingDatagram` の type 分岐（PADDING / Object Datagram / エラー経路）を検証。`waitForFetcher` の registration callback と timeout 経路を検証。これらの free function は WebTransport 非依存または制御可能な依存のみのため mock/stub 不要 |
+| `types.ts`          | 不要 (宣言のみ)               | 不要                                                                                                       | —                                                                                                                                                                                                                                                  |
 
 - 単体テストのテストハーネスパターン:
   - `BidiSessionInternal` のテストと同様に、`SessionInternal` の部分実装オブジェクトを作成し `as unknown as SessionInternal` で型アサーションする
@@ -311,6 +315,7 @@ impl.onSendPublishDone = () => publishSendPublishDone(sessionRef, impl);
 #0293 で同様の `incoming.ts` 抽出が検討され、不要と判断された。
 
 本 issue では以下の点で #0293 と状況・設計が異なる:
+
 - `SessionInternal` インターフェースを経由することで、状態へのアクセスを型安全に行える（#0293 時点では `SessionInternal` の概念がなかった）
 - 抽出対象を `incoming.ts` だけでなく `namespaceLoops.ts` / `publish.ts` と並行して進めることで、全体の整合性を保ちつつ分割できる
 - 内部状態との結合が強い `handleSubgroupStream` は抽出を断念し `SessionImpl` に残す（#0293 の問題の核心を認める）

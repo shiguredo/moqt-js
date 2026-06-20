@@ -47,7 +47,12 @@ import {
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
 import { encodeVarint } from "../varint";
-import type { JoiningFetchOptions, SessionState, TrackStatusResult } from "../session";
+import type {
+  JoiningFetchOptions,
+  SessionState,
+  TrackStatusResult,
+  TracksSubscriptionCallbacks,
+} from "../session";
 import { extractForwardState, extractLargestLocation, validateFetchOkEndLocation } from "./params";
 import { toProtocolViolationSessionError } from "./errors";
 
@@ -116,6 +121,19 @@ export interface BidiSessionInternal {
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
 
   statsControlMessagesSent: number;
+
+  readonly tracksSubscriptions: Map<
+    bigint,
+    {
+      callbacks: TracksSubscriptionCallbacks;
+      state: "active" | "closed";
+      namespacePrefix: string[];
+      stream?: WebTransportBidirectionalStream;
+      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
+      controlReader?: ControlStreamReader;
+      writer?: WritableStreamDefaultWriter<Uint8Array>;
+    }
+  >;
 
   emitDebug(
     direction: "send" | "recv",

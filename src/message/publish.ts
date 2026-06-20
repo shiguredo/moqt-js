@@ -92,8 +92,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
 /**
  * Publish のペイロードをデコード
  *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * draft-ietf-moq-transport-18 Section 10.10 (PUBLISH)
  */
 export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   let totalConsumed = 0;
