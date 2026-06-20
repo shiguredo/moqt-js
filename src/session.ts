@@ -3052,7 +3052,7 @@ export class SessionImpl implements Session {
       objectIdDelta,
       BigInt(params.payload.length),
       SubgroupHeaderType.FIRST_OBJ_EXT,
-      ObjectStatus.NORMAL,
+      params.status ?? ObjectStatus.NORMAL,
       params.properties,
     );
 

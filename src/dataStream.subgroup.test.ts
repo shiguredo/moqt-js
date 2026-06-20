@@ -544,3 +544,58 @@ test("SubgroupHeader: FIRST_OBJECT ビット付きエンコードのデコード
   assert.equal(decoded.publisherPriority, 200);
   assert.equal(consumed, encoded.length);
 });
+
+test("encodeObjectFields: END_OF_GROUP ステータスをエンコードできる", () => {
+  // draft-ietf-moq-transport-18 §11.2.1.1:
+  // END_OF_GROUP ステータスはペイロード長 0 の場合にエンコードされる
+  const data = encodeObjectFields(
+    0n,
+    0n,
+    SubgroupHeaderType.FIRST_OBJ_EXT,
+    ObjectStatus.END_OF_GROUP,
+  );
+
+  // Object ID Delta (0) + Ext Length (0) + Payload Length (0) + Status (END_OF_GROUP=3)
+  assert.equal(data[0], 0); // Object ID Delta = 0
+  assert.equal(data[1], 0); // Ext Length = 0
+  assert.equal(data[2], 0); // Payload Length = 0
+  assert.equal(data[3], ObjectStatus.END_OF_GROUP);
+});
+
+test("encodeObjectFields: END_OF_TRACK ステータスをエンコードできる", () => {
+  const data = encodeObjectFields(
+    0n,
+    0n,
+    SubgroupHeaderType.FIRST_OBJ_EXT,
+    ObjectStatus.END_OF_TRACK,
+  );
+
+  assert.equal(data[3], ObjectStatus.END_OF_TRACK);
+});
+
+test("encodeObjectFields: NORMAL ステータスでペイロード長 0 の場合 status=0 がエンコードされる", () => {
+  const data = encodeObjectFields(0n, 0n, SubgroupHeaderType.FIRST_OBJ_EXT, ObjectStatus.NORMAL);
+
+  assert.equal(data[3], ObjectStatus.NORMAL);
+});
+
+test("encodeObjectFields: END_OF_GROUP + 非空 properties は ProtocolViolationError", () => {
+  assert.throws(
+    () =>
+      encodeObjectFields(
+        0n,
+        0n,
+        SubgroupHeaderType.FIRST_OBJ_EXT,
+        ObjectStatus.END_OF_GROUP,
+        new Uint8Array([1, 2, 3]),
+      ),
+    ProtocolViolationError,
+  );
+});
+
+test("encodeObjectFields: END_OF_GROUP + 非空 payload は ProtocolViolationError", () => {
+  assert.throws(
+    () => encodeObjectFields(0n, 1n, SubgroupHeaderType.FIRST_OBJ_EXT, ObjectStatus.END_OF_GROUP),
+    ProtocolViolationError,
+  );
+});

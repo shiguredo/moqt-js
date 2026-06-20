@@ -422,7 +422,7 @@ export function encodeObjectFields(
     // "If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
-      throw new Error("Protocol violation: properties on non-Normal status object");
+      throw new ProtocolViolationError("properties on non-Normal status object");
     }
 
     parts.push(encodeVarint(extLen));
@@ -433,6 +433,13 @@ export function encodeObjectFields(
 
   // ペイロード長
   parts.push(encodeVarint(payloadLength));
+
+  // draft-ietf-moq-transport-18 §11.2.1.1:
+  // 非 NORMAL ステータスはペイロード長が 0 の場合のみエンコードされる。
+  // payloadLength > 0 の場合、ステータスは wire に乗らないため ProtocolViolationError とする
+  if (status !== ObjectStatus.NORMAL && payloadLength > 0n) {
+    throw new ProtocolViolationError(`non-Normal status ${status} with non-empty payload`);
+  }
 
   // ステータス (ペイロード長が 0 の場合のみ)
   // draft-ietf-moq-transport-18 Section 11.2.1.1:

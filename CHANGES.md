@@ -297,6 +297,10 @@
 - [FIX] Subgroup Header に FIRST_OBJECT ビットを設定する
   - draft-ietf-moq-transport-18 §11.4.2 の MUST に基づき、新しい subgroup の最初のオブジェクトに FIRST_OBJECT ビット (0x40) を設定する
   - @voluntas
+- [FIX] END_OF_GROUP / END_OF_TRACK ステータスオブジェクトを送信できるようにする
+  - `SendObjectParams.status` を追加し `sendObjectInternal` で伝搬する
+  - `encodeObjectFields` の非 NORMAL ステータス検証を `ProtocolViolationError` に是正する
+  - @voluntas
 
 ### misc
 
