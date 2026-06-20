@@ -3041,6 +3041,19 @@ export class SessionImpl implements Session {
       this.publisherStreams.set(trackAlias, streamState);
     }
 
+    // Object ID 上限検証
+    // draft-ietf-moq-transport-18 §11.4.2:
+    // Object ID は 2^64-1 を超えてはならない (MUST NOT)
+    if (objectId < 0n || objectId > (1n << 64n) - 1n) {
+      this.closeWithError(
+        new SessionError(
+          `object id exceeds maximum value: ${objectId}`,
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+
     // Object ID Delta を計算
     // draft-ietf-moq-transport-18 Section 11.4.2:
     // "The Object ID Delta + 1 is added to the previous Object ID ...
@@ -3255,8 +3268,23 @@ export class SessionImpl implements Session {
       } catch {
         // ストリームが既に閉じている場合は無視
       }
+
+      // draft-ietf-moq-transport-18 §10.11:
+      // publisher は PUBLISH_DONE を最後のメッセージとして送信した後、
+      // bidi ストリームを閉じる (SHOULD)
+      try {
+        await streamInfo.writer.close();
+      } catch (err) {
+        this.closeWithError(
+          new SessionError(
+            `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+      }
     }
 
+    this.requestStreams.delete(requestId);
     this.publishers.delete(requestId);
   }
 

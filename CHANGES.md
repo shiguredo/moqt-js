@@ -309,6 +309,12 @@
   - `bidiReadFetchResponse` から `GROUP_ORDER` find を削除する
   - `bidiReadTrackStatusResponse` にパラメータスコープ検証を追加する
   - @voluntas
+- [FIX] Full Track Name 長など Object/Subgroup 送信時の検証を強化する
+  - `validateFullTrackName` を追加し Full Track Name 合計長上限を検証する
+  - `sendObjectInternal` に Object ID 上限 (`2^64-1`) 検証を追加する
+  - `sendPublishDone` で PUBLISH_DONE 送信後に writer.close() する
+  - `bidiHandlePublishDone` の状態破棄をストリーム close 時に移動する
+  - @voluntas
 
 ### misc
 

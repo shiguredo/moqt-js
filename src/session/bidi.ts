@@ -827,6 +827,11 @@ export async function bidiReadRequestStreamMessages(
     // それ以外（ストリームの正常終了・キャンセル等）は既存通り無視する
   } finally {
     reader.releaseLock();
+    const subscriber = session.subscribers.get(requestId);
+    if (subscriber) {
+      session.subscribers.delete(requestId);
+      session.subscribersByAlias.delete(subscriber.getTrackAlias());
+    }
     session.requestStreams.delete(requestId);
   }
 }
@@ -1054,8 +1059,9 @@ export function bidiHandlePublishDone(
       // 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う
       const normalizedCode = normalizePublishDoneCode(Number(msg.statusCode));
       subscriber.handleEnd(BigInt(normalizedCode), msg.reasonPhrase);
-      session.subscribers.delete(requestId);
-      session.subscribersByAlias.delete(subscriber.getTrackAlias());
+      // subscriber/subscribersByAlias の削除はストリーム close 時
+      // (bidiReadRequestStreamMessages の finally) に委譲する
+      // draft-ietf-moq-transport-18 §5.1
     }
   }
 
