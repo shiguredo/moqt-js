@@ -50,6 +50,7 @@ export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([
 /** REQUEST_OK (REQUEST_UPDATE_OK) の許可パラメータ */
 export const REQUEST_UPDATE_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LARGEST_OBJECT,
+  MessageParameterType.EXPIRES,
 ]);
 
 /** REQUEST_OK (TRACK_STATUS_OK) の許可パラメータ */
@@ -81,10 +82,7 @@ export const FETCH_ALLOWED_PARAMS = new Set<number>([
 ]);
 
 /** FETCH_OK メッセージの許可パラメータ */
-export const FETCH_OK_ALLOWED_PARAMS = new Set<number>([
-  MessageParameterType.EXPIRES,
-  MessageParameterType.LARGEST_OBJECT,
-]);
+export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
 
 /** SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE の許可パラメータ */
 export const NAMESPACE_ALLOWED_PARAMS = new Set<number>([MessageParameterType.AUTHORIZATION_TOKEN]);

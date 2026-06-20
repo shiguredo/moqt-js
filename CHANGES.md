@@ -303,6 +303,12 @@
   - @voluntas
 - [FIX] Standalone Fetch で FILL_TIMEOUT パラメータを送信する
   - @voluntas
+- [FIX] FETCH_OK / REQUEST_UPDATE_OK / TRACK_STATUS_OK のパラメータ処理を修正する
+  - `FETCH_OK_ALLOWED_PARAMS` から `EXPIRES` と `LARGEST_OBJECT` を削除し空集合にする
+  - `REQUEST_UPDATE_OK_ALLOWED_PARAMS` に `EXPIRES` を追加する
+  - `bidiReadFetchResponse` から `GROUP_ORDER` find を削除する
+  - `bidiReadTrackStatusResponse` にパラメータスコープ検証を追加する
+  - @voluntas
 
 ### misc
 
