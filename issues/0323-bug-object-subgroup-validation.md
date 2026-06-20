@@ -4,75 +4,75 @@
 - Created: 2026-06-17
 - Model: Opus 4.8
 - Branch: feature/fix-object-subgroup-validation
+- Polished: 2026-06-20
 
 ## 目的
 
-Object/Subgroup 送信時の各種検証を draft-ietf-moq-transport-18 に従って強化する。具体的には Full Track Name の最大長検証、Object ID の上限検証、`PUBLISH_DONE` 送信後の FIN 送信、`PUBLISH_DONE` 受信後の状態破棄タイミングの改善である。
+Object/Subgroup 送信時の各種検証を draft-ietf-moq-transport-18 に従って強化する。対象は以下の 4 項目。
 
 ## 優先度根拠
 
-これらの検証・振る舞いはプロトコル違反やセッション不整合を防ぐため重要だが、通常の使用範囲では即座の障害には繋がりにくい。仕様厳格化の観点から Medium とする。
+これらの検証はプロトコル違反やセッション不整合を防ぐために重要だが、通常の使用範囲では即座の障害につながらない。仕様厳格化の観点から Medium とする。
 
-## 現状
+## 問題と修正内容
 
-`src/message/parameter.ts` L220-L298:
+### 1. Full Track Name 長の合計値検証 (`src/message/parameter.ts`)
 
-- Full Track Name (Namespace 全フィールド長 + Track Name 長) の合計が 4096 バイトを超えてはならないが、個別のフィールド長のみをチェックしており、合計値の検証を行っていない (§2.4.1)。
+`MAX_TRACK_NAMESPACE_SIZE` と `MAX_TRACK_NAME_SIZE` がそれぞれ 4096 バイトで定義されているが、Full Track Name（Namespace 全フィールド長 + Track Name 長の合計）が 4096 バイトを超えてはならないという §2.4.1 の MUST NOT 要件に対し、合計値の検証が行われていない。個別フィールド長のみのチェックになっているため、namespace=4096 + name=4096 = 8192 バイトの Full Track Name が通過しうる。
 
-`src/message/publish.ts` L67:
+修正: `parameter.ts` に `validateFullTrackName(namespace: TrackNamespace, trackName: string): void` を新設し、両者の合計長が 4096 バイトを超えた場合に `ProtocolViolationError` を throw する。呼び出し側（`subscribe()` / `fetch()` / `publish()` / `trackStatus()` 等、TrackNamespace と TrackName の両方を処理する全メソッド）で使用する。
 
-- 関連する検証が不足している可能性がある (詳細はコード確認時に調査)。
+### 2. Object ID 上限検証 (`src/session.ts`)
 
-`src/session/params.ts` `calculateObjectIdDelta` L356:
+`sendObjectInternal` で送信する Object ID が `2^64-1` (`18446744073709551615n`) を超えた場合、§11.4.2 の MUST NOT に基づき `PROTOCOL_VIOLATION` でセッションを閉じなければならないが、送信側でこの検証を行っていない。受信側（`stream.ts` L156-162）では既に検証済み。
 
-- 送信時の Object ID が `2^64-1` を超えた場合、`PROTOCOL_VIOLATION` でセッションを閉じなければならないが、送信側でこの検証を行っていない (§11.4.2)。
+修正: `sendObjectInternal` の Object ID Delta 計算前に `objectId > maxObjectId` をチェックし、超過時は `this.closeWithError(new SessionError(..., SessionErrorCode.PROTOCOL_VIOLATION))` を直接呼び出す。単に throw すると `sendObject` の `.catch()` → `publisher.handleError()` に流れてセッション閉鎖に至らないため注意。定数 `maxObjectId`（`(1n << 64n) - 1n`）は `stream.ts` / `dataStream.ts` で既に定義済みの再利用または共通化を検討する。
 
-`src/session.ts` `sendPublishDone` L3200-L3205:
+### 3. PUBLISH_DONE 送信後の FIN 送信 (`src/session.ts` L3168-3205)
 
-- `PUBLISH_DONE` メッセージを送信後、ストリームの FIN を送信していない (§10.11 SHOULD)。
+`sendPublishDone` は `streamInfo.writer.write(message)` で PUBLISH_DONE メッセージを書き込むが、writer の close（FIN 送信）を行っていない。§10.11 では publisher が PUBLISH_DONE を最後のメッセージとして送信した後に bidi ストリームを閉じる。
 
-`src/session.ts` `bidiHandlePublishDone` L973-L982:
+修正: `writer.write(message)` 成功後、`await writer.close()` を追加し、次に `this.requestStreams.delete(requestId)` でエントリを除去する。writer.close() 失敗は catch し、`this.closeWithError` でセッションを閉じる。
 
-- `PUBLISH_DONE` を受信後、関連する状態を即座に破棄している。draft §5.1.1 に従い、ストリームが閉じられるまで状態を保持すべき場合がある。
+### 4. PUBLISH_DONE 受信後の状態破棄タイミング (`src/session/bidi.ts` L966-982)
+
+`bidiHandlePublishDone` で PUBLISH_DONE 受信後、即座に `subscribers` と `subscribersByAlias` から削除している。§5.1 (Subscriptions) に従い、ストリームが閉じられるまで状態を保持すべき。
+
+修正: `bidiHandlePublishDone` から `subscribers.delete()` / `subscribersByAlias.delete()` を除去する。代わりに `bidiReadRequestStreamMessages` の finally ブロック（`bidi.ts` L752-754）に `subscribers.delete(requestId)` / `subscribersByAlias.delete(trackAlias)` を追加し、ストリーム close 時に削除する。`handleEnd()` による subscriber 内部状態のクローズは PUBLISH_DONE 受信時に即時行ってよい。
 
 ## 仕様根拠
 
 draft-ietf-moq-transport-18:
 
-- **§2.4.1 (Full Track Name)**: Full Track Name の長さ (Namespace 全フィールド長 + Track Name 長) は 4096 バイトを超えてはならない (MUST NOT)。
-- **§11.4.2 (Subgroup)**: Object ID は `2^64-1` を超えてはならない (MUST NOT)。超えた場合、セッションを `PROTOCOL_VIOLATION` で閉じなければならない。
-- **§10.11 (PUBLISH_DONE)**: 送信側は `PUBLISH_DONE` を送信した後、ストリームを FIN するべきである (SHOULD)。
-- **§5.1.1 (Session Termination)**: 状態はストリームが閉じられるまで保持すべきである。`PUBLISH_DONE` 受信後も、関連するストリームが完全に閉じられるまでは状態を維持する。
+- **§2.4.1 (Full Track Name)**: Full Track Name の長さ（Namespace 全フィールド長 + Track Name 長）は 4096 バイトを超えてはならない (MUST NOT)
+- **§11.4.2 (Subgroup)**: Object ID は `2^64-1` を超えてはならない (MUST NOT)。超えた場合 `PROTOCOL_VIOLATION` でセッションを閉じる
+- **§10.11 (PUBLISH_DONE)**: publisher は PUBLISH_DONE を最後のメッセージとして送信した後、subscription の bidi ストリームを閉じる (SHOULD)
+- **§5.1 (Subscriptions)**: サブスクリプションの状態はストリームが閉じられるまで保持すべき
 
 ## 設計方針
 
-1. Full Track Name 長の検証:
-   - `src/message/parameter.ts` のトラック名/ネームスペース検証関数で、全 namespace フィールド長と track name 長の合計が 4096 バイト以下かをチェックする。
-   - 超過時は適切なエラーコードでセッションを閉じるか、エラーを返す。
+実装順序: 項目 3（PUBLISH_DONE FIN）→ 項目 4（状態破棄タイミング）の順で行う。FIN が送信されなければ受信側の read loop は `done = true` にならず、Map 削除が遅延するため。
 
-2. Object ID 上限検証:
-   - `src/session/params.ts` の `calculateObjectIdDelta` または `sendObjectInternal` 呼び出し前に、Object ID が `2^64-1` (`18446744073709551615n`) を超えていないかを検証する。
-   - 超過時は `PROTOCOL_VIOLATION` で `closeWithError` する。
+## 変更対象ファイル
 
-3. `PUBLISH_DONE` 後の FIN 送信:
-   - `sendPublishDone` でメッセージ送信後、writer を close して FIN を送信する。
-   - WebTransport writer の `close()` を適切に await し、エラー時はセッション終了処理へ繋げる。
-
-4. `PUBLISH_DONE` 受信後の状態破棄:
-   - `bidiHandlePublishDone` で即座に状態を破棄するのではなく、対応するストリームの `closed` promise 等を待ってから破棄する。
-   - ただし、リソースリークを防ぐためタイムアウトや既存のクリーンアップ機構と統合する。
-
-5. テスト追加:
-   - Full Track Name 長が 4096 バイト境界のケースを検証する。
-   - Object ID が `2^64-1` を超えるケースでセッションが `PROTOCOL_VIOLATION` になることを検証する。
-   - `PUBLISH_DONE` 送信後に FIN が送信されることを検証する (可能な範囲で)。
+- `src/message/parameter.ts`: Full Track Name 合計長の検証を追加する
+- `src/session.ts`: Object ID 上限検証を追加する（`sendObjectInternal` の `calculateObjectIdDelta` 呼び出し前）、`sendPublishDone` に writer.close() を追加する
+- `src/session/bidi.ts`: `bidiHandlePublishDone` の状態破棄タイミングを調整する
+- `CHANGES.md` に `[FIX]` エントリを追記する
 
 ## 完了条件
 
 - Full Track Name 長が 4096 バイトを超える場合にエラーとなる
 - 送信時の Object ID が `2^64-1` を超える場合に `PROTOCOL_VIOLATION` でセッションが閉じられる
 - `PUBLISH_DONE` 送信後に FIN が送信される
-- `PUBLISH_DONE` 受信後、ストリームが閉じられるまで状態を保持するようになる
-- 上記検証のテストが追加される
+- `PUBLISH_DONE` 受信後、ストリームが閉じられるまで状態が保持される
 - 既存の全テストが PASS する
-- `CHANGES.md` に `[FIX]` エントリを追記する
+- `CHANGES.md` に `[FIX]` エントリが追記される
+
+## テスト方針
+
+- 既存の全テストが PASS することを必須とする
+- 項目 1: `parameter.test.ts` に `validateFullTrackName` のテストを追加する（合計 4097 バイトでエラー、4096 バイトで通過）
+- 項目 2: Object ID 境界値テスト（`objectId = 2^64 - 1` で通過、`objectId = 2^64` で PROTOCOL_VIOLATION）を追加する
+- 項目 3: PUBLISH_DONE 送信後の writer.close() 呼び出しと requestStreams 削除は結合テストで検証する
+- 項目 4: `bidi.test.ts` に PUBLISH_DONE 受信後も subscriber が Map に残っていることのテストを追加する
