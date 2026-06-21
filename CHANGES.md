@@ -11,6 +11,18 @@
 
 ## develop
 
+- [UPDATE] 開発依存を最新版に更新する
+  - vite-plus を 0.1.24 から 0.2.1 へ更新する
+  - v0.2.0 で削除された `@voidzero-dev/vite-plus-test` ラッパーをやめて、`vite-plus` が束縛する upstream の vitest 4.1.9 を直接利用する形へ移行する
+  - `pnpm-workspace.yaml` の overrides を `vite: npm:@voidzero-dev/vite-plus-core@0.2.1` / `vitest: 4.1.9` に更新する
+  - `@vitest/coverage-v8` を 4.1.8 から 4.1.9 へ更新し、bundled vitest との単一版数を担保する
+  - @voluntas
+- [UPDATE] vite-plus 更新で増えた lint ルールに合わせて設定を調整する
+  - プロトコルエンコーダの 1 行 1 フィールド規約と衝突する `unicorn/prefer-single-call` を無効化する
+  - メソッドシグネチャ `close(): void` を一貫して使うため `typescript/method-signature-style` を無効化する
+  - 内部使用と再エクスポートを兼ねる import + re-export パターンを許容するため `unicorn/prefer-export-from` を無効化する
+  - 単一使用箇所の正規表現は位置引数のほうが読みやすいという既存方針に合わせ `eslint/prefer-named-capture-group` を無効化する
+  - @voluntas
 - [CHANGE] Required Request ID Delta フィールドを全リクエストメッセージから削除する (#0185)
   - draft-ietf-moq-transport-18 §10.1 の偶数/奇数独立採番規則に基づき、全 8 メッセージのワイヤーフォーマットから requiredRequestIdDelta を除去する
   - Publish / Subscribe / RequestUpdate / Fetch / TrackStatus / PublishNamespace / SubscribeNamespace / SubscribeTracks の interface, encode, decode を修正する

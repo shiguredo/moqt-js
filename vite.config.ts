@@ -87,6 +87,10 @@ export default defineConfig({
       "no-nested-ternary": "off",
       // sort() は比較的安全に使用
       "unicorn/no-array-sort": "off",
+      // 連続する Array#push() の単一呼び出しへの結合を強制するルール。
+      // プロトコルエンコーダは 1 行 1 ワイヤフォーマットフィールドで
+      // parts.push() する規約のため、結合すると仕様と行の対応が崩れる
+      "unicorn/prefer-single-call": "off",
       // TypeScript のスプレッド構文は既存コードに合わせる
       "unicorn/prefer-spread": "off",
       // Map のスプレッドは既存コードで使用
@@ -578,6 +582,10 @@ export default defineConfig({
       "unicorn/no-abusive-eslint-disable": "error",
       // アクセサの再帰を禁止
       "unicorn/no-accessor-recursion": "error",
+      // 内部使用と再エクスポートを兼ねる型 import + re-export パターン。
+      // 多くの公開 API ファイル (createMediaPublisher.ts / createMediaSubscriber.ts /
+      // error.ts) は内部実装で使った型をそのまま公開するため、import のみに統一する
+      "unicorn/prefer-export-from": "off",
       // 配列コールバック参照を禁止
       "unicorn/no-array-callback-reference": "error",
       // 上部で無効化済み
@@ -924,6 +932,10 @@ export default defineConfig({
       "typescript/strict-void-return": "off",
       // private フィールドの readonly 強制は段階的対応
       "typescript/prefer-readonly": "off",
+      // メソッドシグネチャを property signature (close: () => void) に強制する
+      // ルール。プロトコル実装でメソッドシグネチャ (close(): void) が一貫して
+      // 使われており、外部 API (WebCodecs 等) との対称性も良いため採用しない
+      "typescript/method-signature-style": "off",
 
       // ===== vitest: テスト規約と衝突するため不採用 =====
       // CLAUDE.md は vitest + Chai API (test / assert) のみ使用するポリシー。
@@ -947,6 +959,9 @@ export default defineConfig({
       // __MOQT_JS_VERSION__ は vite.config.ts の define で埋め込む
       // ビルド時グローバルでリネーム不可
       "no-underscore-dangle": "off",
+      // 正規表現のキャプチャグループは単一使用箇所のみであり、
+      // 位置引数 (?<_match, name>) のほうが読みやすいため名前付きグループ化を強制しない
+      "eslint/prefer-named-capture-group": "off",
 
       // ===== vitest: import スタイル =====
       // `vite-plus/test` 経由で test / assert を import するためグローバル不使用
