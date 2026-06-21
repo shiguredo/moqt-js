@@ -45,10 +45,10 @@
   "devDependencies": {
     "@playwright/test": "1.60.0",
     "@types/node": "25.9.1",
-    "@vitest/coverage-v8": "4.1.8",
+    "@vitest/coverage-v8": "4.1.9",
     "fast-check": "4.8.0",
     "typescript": "6.0.3",
-    "vite-plus": "0.1.24"
+    "vite-plus": "0.2.1"
   },
   "engines": {
     "node": ">=22.22.2"
