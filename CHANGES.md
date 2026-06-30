@@ -141,6 +141,9 @@
 - [UPDATE] review-diff-code で検出された不足テストを各 issue 対応に含めて追加する (#0266)
   - #0246-0271 の各 issue 実装に含めてテストを追加済み
   - @voluntas
+- [FIX] devtools の Connection Settings ヘッダーで HTTP バージョンバッジを仕様ヘルプボタン群と分離し、未確立時の表示を "--" から "Pending" に変更する
+  - `HttpVersionBadge` をタイトル横に移動し、`--` の場合は "Pending" と表示する
+  - @voluntas
 - [FIX] initialize() で SETUP に相乗りした後続制御メッセージが破棄されるのを修正する (#0315)
   - draft-ietf-moq-transport-18 Section 10.3 / Section 3.3 に基づき、SETUP と同一 read チャンクに相乗りした後続制御メッセージを `handleControlMessage` で処理する
   - `ControlStreamReader.feed` が返した `messages[1..]` を SETUP 確立後に処理し、`startControlMessageLoop` 開始前に取りこぼさないようにする
