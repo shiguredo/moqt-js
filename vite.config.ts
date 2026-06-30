@@ -1,6 +1,51 @@
 import { defineConfig } from "vite-plus";
-import { resolve } from "node:path";
+import { resolve, dirname, basename, extname } from "node:path";
 import packageJson from "./package.json" with { type: "json" };
+
+/**
+ * Vite の ?worker インポートを tsdown / Rolldown でも扱えるようにするプラグイン。
+ * ?worker で import されたワーカーは別 chunk として出力し、default export を
+ * そのワーカー URL で初期化する Worker コンストラクタに置き換える。
+ */
+function moqtWorkerPlugin(): {
+  name: string;
+  resolveId(source: string, importer?: string): string | null;
+  load(
+    this: { emitFile: (asset: { type: "chunk"; id: string; fileName?: string }) => string },
+    id: string,
+  ): string | null;
+} {
+  return {
+    name: "moqt-worker",
+    resolveId(source, importer) {
+      if (!source.endsWith("?worker")) {
+        return null;
+      }
+      if (importer === undefined) {
+        return null;
+      }
+      const base = source.slice(0, -"?worker".length);
+      return resolve(dirname(importer), base) + "?worker";
+    },
+    load(id) {
+      if (!id.endsWith("?worker")) {
+        return null;
+      }
+      const workerPath = id.slice(0, -"?worker".length);
+      const name = basename(workerPath, extname(workerPath));
+      const ref = this.emitFile({
+        type: "chunk",
+        id: workerPath,
+        fileName: `codec/workers/${name}.js`,
+      });
+      return `export default class extends Worker {
+  constructor() {
+    super(import.meta.ROLLUP_FILE_URL_${ref}, { type: "module" });
+  }
+}`;
+    },
+  };
+}
 
 export default defineConfig({
   define: {
@@ -14,14 +59,17 @@ export default defineConfig({
       "moqt-js": resolve(import.meta.dirname, "src/index.ts"),
     },
   },
-  build: {
-    target: "esnext",
+  pack: {
+    entry: resolve(import.meta.dirname, "src/index.ts"),
+    format: ["esm"],
     outDir: "dist",
-    lib: {
-      entry: resolve(import.meta.dirname, "src/index.ts"),
-      formats: ["es"],
-      fileName: "index",
+    dts: true,
+    platform: "neutral",
+    fromVite: true,
+    define: {
+      __MOQT_JS_VERSION__: JSON.stringify(packageJson.version),
     },
+    plugins: [moqtWorkerPlugin()],
   },
   fmt: {
     ignorePatterns: ["dist/**", "devtools/dist/**"],
