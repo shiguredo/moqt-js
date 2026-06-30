@@ -141,6 +141,14 @@
 - [UPDATE] review-diff-code で検出された不足テストを各 issue 対応に含めて追加する (#0266)
   - #0246-0271 の各 issue 実装に含めてテストを追加済み
   - @voluntas
+- [UPDATE] ライブラリのパッケージングを `vp pack` に切り替える
+  - `package.json` の `build` スクリプトを `vp pack` に変更し、`tsconfig.build.json` を削除する
+  - `vite.config.ts` の `build.lib` を `pack` ブロックに移行し、`?worker` インポート用のカスタムプラグインを追加する
+  - `__MOQT_JS_VERSION__` の define と `dist` 出力を維持する
+  - @voluntas
+- [UPDATE] ワークスペースの依存関係を最新化する
+  - `vp up -L -r` を実行し、@playwright/test / @types/node / @preact/signals / preact / @tailwindcss/vite / tailwindcss を更新する
+  - @voluntas
 - [FIX] devtools の Connection Settings ヘッダーで HTTP バージョンバッジを仕様ヘルプボタン群と分離し、未確立時の表示を "--" から "Pending" に変更する
   - `HttpVersionBadge` をタイトル横に移動し、`--` の場合は "Pending" と表示する
   - @voluntas

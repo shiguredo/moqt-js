@@ -28,7 +28,7 @@
   "scripts": {
     "dev": "vp dev devtools",
     "dev:examples": "vp dev examples",
-    "build": "vp build && tsc -p tsconfig.build.json",
+    "build": "vp pack",
     "build:devtools": "vp build devtools",
     "build:examples": "vp build examples",
     "fmt": "vp fmt --write .",
@@ -43,8 +43,8 @@
     "e2e-test-webkit": "vp run build && playwright test --project='WebKit'"
   },
   "devDependencies": {
-    "@playwright/test": "1.60.0",
-    "@types/node": "25.9.1",
+    "@playwright/test": "1.61.1",
+    "@types/node": "26.0.1",
     "@vitest/coverage-v8": "4.1.9",
     "fast-check": "4.8.0",
     "typescript": "6.0.3",
