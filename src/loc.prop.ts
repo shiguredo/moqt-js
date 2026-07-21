@@ -1,6 +1,6 @@
 /**
  * LOC (Low Overhead Container) Property-Based Tests
- * draft-ietf-moq-loc-02 に基づくプロパティテスト
+ * draft-ietf-moq-loc-04 に基づくプロパティテスト
  */
 
 import { test, assert } from "vite-plus/test";
@@ -14,12 +14,17 @@ import {
   decodeVideoFrameMarking,
   encodeAudioLevel,
   decodeAudioLevel,
-  encodeConfig,
-  decodeConfig,
+  encodeVideoConfig,
+  decodeVideoConfig,
+  encodeAudioConfig,
+  decodeAudioConfig,
   encodeVideoProperties,
   decodeVideoProperties,
+  encodeAudioProperties,
+  decodeAudioProperties,
   type VideoFrameMarking,
   type VideoProperties,
+  type AudioProperties,
 } from "./loc";
 
 // varint の最大値
@@ -49,8 +54,11 @@ const audioLevelArb = fc.record({
   voiceActivity: fc.boolean(),
 });
 
-// Config 用の Arbitrary (任意のバイト列)
-const configArb = fc.uint8Array({ minLength: 0, maxLength: 256 });
+// VideoConfig 用の Arbitrary (任意のバイト列)
+const videoConfigArb = fc.uint8Array({ minLength: 0, maxLength: 256 });
+
+// AudioConfig 用の Arbitrary (任意のバイト列)
+const audioConfigArb = fc.uint8Array({ minLength: 0, maxLength: 256 });
 
 // VideoProperties 用の Arbitrary
 const videoPropertiesArb: fc.Arbitrary<VideoProperties> = fc.record(
@@ -58,7 +66,18 @@ const videoPropertiesArb: fc.Arbitrary<VideoProperties> = fc.record(
     timestamp: fc.option(timestampArb, { nil: undefined }),
     timescale: fc.option(timescaleArb, { nil: undefined }),
     frameMarking: fc.option(videoFrameMarkingArb, { nil: undefined }),
-    config: fc.option(configArb, { nil: undefined }),
+    config: fc.option(videoConfigArb, { nil: undefined }),
+  },
+  { requiredKeys: [] },
+);
+
+// AudioProperties 用の Arbitrary
+const audioPropertiesArb: fc.Arbitrary<AudioProperties> = fc.record(
+  {
+    timestamp: fc.option(timestampArb, { nil: undefined }),
+    timescale: fc.option(timescaleArb, { nil: undefined }),
+    audioLevel: fc.option(audioLevelArb, { nil: undefined }),
+    audioConfig: fc.option(audioConfigArb, { nil: undefined }),
   },
   { requiredKeys: [] },
 );
@@ -104,11 +123,21 @@ test("AudioLevel の encode/decode ラウンドトリップが成立する", () 
   );
 });
 
-test("Config の encode/decode ラウンドトリップが成立する", () => {
+test("VideoConfig の encode/decode ラウンドトリップが成立する", () => {
   fc.assert(
-    fc.property(configArb, (config) => {
-      const encoded = encodeConfig(config);
-      const decoded = decodeConfig(encoded);
+    fc.property(videoConfigArb, (config) => {
+      const encoded = encodeVideoConfig(config);
+      const decoded = decodeVideoConfig(encoded);
+      assert.deepEqual(decoded, config);
+    }),
+  );
+});
+
+test("AudioConfig の encode/decode ラウンドトリップが成立する", () => {
+  fc.assert(
+    fc.property(audioConfigArb, (config) => {
+      const encoded = encodeAudioConfig(config);
+      const decoded = decodeAudioConfig(encoded);
       assert.deepEqual(decoded, config);
     }),
   );
@@ -147,10 +176,40 @@ test("VideoProperties の encode/decode ラウンドトリップが成立する"
   );
 });
 
-// AudioProperties のラウンドトリップテストは除外
-// 理由: AUDIO_LEVEL (ID: 6 = 0x06) と TIMESTAMP (ID: 0x06) の ID が衝突しているため、
-// デコードループで ID 0x06 は常に TIMESTAMP として処理される。
-// draft-ietf-moq-loc-02 の仕様上のバグであり、IANA による ID 再割り当てが必要。
+// draft-ietf-moq-loc-04 で AUDIO_LEVEL (0x0C) と TIMESTAMP (0x10) の ID 衝突が解消されたため、
+// AudioProperties のラウンドトリップテストが正常に動作する
+test("AudioProperties の encode/decode ラウンドトリップが成立する", () => {
+  fc.assert(
+    fc.property(audioPropertiesArb, (properties) => {
+      const encoded = encodeAudioProperties(properties);
+      const decoded = decodeAudioProperties(encoded);
+
+      if (properties.timestamp !== undefined) {
+        assert.equal(decoded.timestamp, properties.timestamp);
+      } else {
+        assert.isUndefined(decoded.timestamp);
+      }
+
+      if (properties.timescale !== undefined) {
+        assert.equal(decoded.timescale, properties.timescale);
+      } else {
+        assert.isUndefined(decoded.timescale);
+      }
+
+      if (properties.audioLevel !== undefined) {
+        assert.deepEqual(decoded.audioLevel, properties.audioLevel);
+      } else {
+        assert.isUndefined(decoded.audioLevel);
+      }
+
+      if (properties.audioConfig !== undefined) {
+        assert.deepEqual(decoded.audioConfig, properties.audioConfig);
+      } else {
+        assert.isUndefined(decoded.audioConfig);
+      }
+    }),
+  );
+});
 
 test("空の VideoProperties は空のバイト列にエンコードされる", () => {
   const properties: VideoProperties = {};
@@ -163,6 +222,17 @@ test("空の VideoProperties は空のバイト列にエンコードされる", 
   assert.isUndefined(decoded.config);
 });
 
+test("空の AudioProperties は空のバイト列にエンコードされる", () => {
+  const properties: AudioProperties = {};
+  const encoded = encodeAudioProperties(properties);
+  assert.equal(encoded.length, 0);
+  const decoded = decodeAudioProperties(encoded);
+  assert.isUndefined(decoded.timestamp);
+  assert.isUndefined(decoded.timescale);
+  assert.isUndefined(decoded.audioLevel);
+  assert.isUndefined(decoded.audioConfig);
+});
+
 // =============================================================================
 // 複数プロパティのテスト
 // =============================================================================
@@ -173,7 +243,7 @@ test("VideoProperties: 全てのプロパティを含む場合のラウンドト
       timestampArb,
       timescaleArb,
       videoFrameMarkingArb,
-      configArb,
+      videoConfigArb,
       (ts, timescale, marking, config) => {
         const properties: VideoProperties = {
           timestamp: ts,
@@ -194,17 +264,44 @@ test("VideoProperties: 全てのプロパティを含む場合のラウンドト
   );
 });
 
+test("AudioProperties: 全てのプロパティを含む場合のラウンドトリップ", () => {
+  fc.assert(
+    fc.property(
+      timestampArb,
+      timescaleArb,
+      audioLevelArb,
+      audioConfigArb,
+      (ts, timescale, level, config) => {
+        const properties: AudioProperties = {
+          timestamp: ts,
+          timescale,
+          audioLevel: level,
+          audioConfig: config,
+        };
+
+        const encoded = encodeAudioProperties(properties);
+        const decoded = decodeAudioProperties(encoded);
+
+        assert.strictEqual(decoded.timestamp, ts);
+        assert.strictEqual(decoded.timescale, timescale);
+        assert.deepEqual(decoded.audioLevel, level);
+        assert.deepEqual(decoded.audioConfig, config);
+      },
+    ),
+  );
+});
+
 // =============================================================================
 // Property ID 形式のテスト
 // =============================================================================
 
-test("Timestamp: ID=0x06 (偶数) は varint 形式でエンコードされる", () => {
+test("Timestamp: ID=0x10 (偶数) は varint 形式でエンコードされる", () => {
   const timestamp = 1234567890123456n;
   const encoded = encodeTimestamp(timestamp);
   const decoded = decodeTimestamp(encoded);
 
-  // ID=0x06 は 1 バイトで表現できる
-  assert.strictEqual(encoded[0], 0x06);
+  // ID=0x10 は 1 バイトで表現できる
+  assert.strictEqual(encoded[0], 0x10);
   assert.strictEqual(decoded, timestamp);
 });
 
@@ -218,16 +315,56 @@ test("Timescale: ID=0x08 (偶数) は varint 形式でエンコードされる",
   assert.strictEqual(decoded, timescale);
 });
 
-test("Config: ID=13 (奇数) は length + bytes 形式でエンコードされる", () => {
+test("VideoConfig: ID=0x0D (奇数) は length + bytes 形式でエンコードされる", () => {
   const config = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05]);
-  const encoded = encodeConfig(config);
-  const decoded = decodeConfig(encoded);
+  const encoded = encodeVideoConfig(config);
+  const decoded = decodeVideoConfig(encoded);
 
-  // ID=13 は 1 バイトで表現できる
-  assert.strictEqual(encoded[0], 13);
+  // ID=0x0D は 1 バイトで表現できる
+  assert.strictEqual(encoded[0], 0x0d);
   // 次のバイトは length
   assert.strictEqual(encoded[1], 5);
   assert.deepEqual(decoded, config);
+});
+
+test("AudioConfig: ID=0x0F (奇数) は length + bytes 形式でエンコードされる", () => {
+  const config = new Uint8Array([0x01, 0x02, 0x03]);
+  const encoded = encodeAudioConfig(config);
+  const decoded = decodeAudioConfig(encoded);
+
+  // ID=0x0F は 1 バイトで表現できる
+  assert.strictEqual(encoded[0], 0x0f);
+  // 次のバイトは length
+  assert.strictEqual(encoded[1], 3);
+  assert.deepEqual(decoded, config);
+});
+
+test("VideoFrameMarking: ID=0x09 (奇数) は length + bytes 形式でエンコードされる", () => {
+  const marking: VideoFrameMarking = {
+    isIndependent: true,
+    isDiscardable: false,
+    isBaseLayerSync: true,
+    temporalLayerId: 0,
+    spatialLayerId: 0,
+  };
+  const encoded = encodeVideoFrameMarking(marking);
+  const decoded = decodeVideoFrameMarking(encoded);
+
+  // ID=0x09 は 1 バイトで表現できる
+  assert.strictEqual(encoded[0], 0x09);
+  // 次のバイトは length (RFC9626 の 2 バイト)
+  assert.strictEqual(encoded[1], 2);
+  assert.deepEqual(decoded, marking);
+});
+
+test("AudioLevel: ID=0x0C (偶数) は varint 形式でエンコードされる", () => {
+  const encoded = encodeAudioLevel(50, true);
+  const decoded = decodeAudioLevel(encoded);
+
+  // ID=0x0C は 1 バイトで表現できる
+  assert.strictEqual(encoded[0], 0x0c);
+  assert.strictEqual(decoded.level, 50);
+  assert.strictEqual(decoded.voiceActivity, true);
 });
 
 // =============================================================================
