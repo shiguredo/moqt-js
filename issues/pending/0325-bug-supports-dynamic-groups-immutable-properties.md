@@ -60,7 +60,7 @@ supportsDynamicGroups(properties); // => false (本来は true)
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/properties.ts` | `supportsDynamicGroups()` の Immutable Properties 解析を修正 |
-| `src/properties.test.ts` | テストデータ形式を実際のワイヤー形式に修正 |
+| ファイル                 | 変更内容                                                     |
+| ------------------------ | ------------------------------------------------------------ |
+| `src/properties.ts`      | `supportsDynamicGroups()` の Immutable Properties 解析を修正 |
+| `src/properties.test.ts` | テストデータ形式を実際のワイヤー形式に修正                   |

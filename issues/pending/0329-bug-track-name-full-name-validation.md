@@ -52,10 +52,10 @@ draft-18 §2.4.1 に基づき、Track Name および Full Track Name（Namespace
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/message/subscribe.ts` | Track Name デコード時の長検証追加 |
-| `src/message/publish.ts` | Track Name デコード時の長検証追加 |
-| `src/message/fetch.ts` | Track Name デコード時の長検証追加 |
-| `src/message/trackstatus.ts` | Track Name デコード時の長検証追加 |
-| `src/session.ts` | 送信時の Full Track Name 長検証追加 |
+| ファイル                     | 変更内容                            |
+| ---------------------------- | ----------------------------------- |
+| `src/message/subscribe.ts`   | Track Name デコード時の長検証追加   |
+| `src/message/publish.ts`     | Track Name デコード時の長検証追加   |
+| `src/message/fetch.ts`       | Track Name デコード時の長検証追加   |
+| `src/message/trackstatus.ts` | Track Name デコード時の長検証追加   |
+| `src/session.ts`             | 送信時の Full Track Name 長検証追加 |

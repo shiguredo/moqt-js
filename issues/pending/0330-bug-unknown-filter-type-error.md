@@ -44,7 +44,7 @@ throw new Error(`Unknown filter type: ${filterType}`);
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/message/parameter.ts` | 未知 Filter Type のエラーを `ProtocolViolationError` に変更 |
-| `src/message/parameter.test.ts` | テスト追加 |
+| ファイル                        | 変更内容                                                    |
+| ------------------------------- | ----------------------------------------------------------- |
+| `src/message/parameter.ts`      | 未知 Filter Type のエラーを `ProtocolViolationError` に変更 |
+| `src/message/parameter.test.ts` | テスト追加                                                  |

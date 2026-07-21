@@ -65,8 +65,8 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/message/parameterScope.ts` | REQUEST_UPDATE の許可パラメータを元リクエスト型別に定義 |
-| `src/session/bidi.ts` | REQUEST_UPDATE 受信時の検証を元リクエスト型に応じて切り替え |
-| `src/session.ts` | REQUEST_UPDATE 送信時の検証を調整 |
+| ファイル                        | 変更内容                                                    |
+| ------------------------------- | ----------------------------------------------------------- |
+| `src/message/parameterScope.ts` | REQUEST_UPDATE の許可パラメータを元リクエスト型別に定義     |
+| `src/session/bidi.ts`           | REQUEST_UPDATE 受信時の検証を元リクエスト型に応じて切り替え |
+| `src/session.ts`                | REQUEST_UPDATE 送信時の検証を調整                           |

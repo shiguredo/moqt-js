@@ -52,8 +52,8 @@ draft-18 §10.2.2 / §10.3.1.4 に基づき、SETUP メッセージ内の AUTHOR
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/message/authorizationToken.ts` | Alias Type 検証/USE_VALUE 変換ヘルパー追加 |
-| `src/message/setup.ts` | MAX_AUTH_TOKEN_CACHE_SIZE 送受信、受信時検証追加 |
-| `src/session.ts` | SETUP 受信時の検証統合 |
+| ファイル                            | 変更内容                                         |
+| ----------------------------------- | ------------------------------------------------ |
+| `src/message/authorizationToken.ts` | Alias Type 検証/USE_VALUE 変換ヘルパー追加       |
+| `src/message/setup.ts`              | MAX_AUTH_TOKEN_CACHE_SIZE 送受信、受信時検証追加 |
+| `src/session.ts`                    | SETUP 受信時の検証統合                           |

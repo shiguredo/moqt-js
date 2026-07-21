@@ -23,6 +23,7 @@ PUBLISH メッセージに対して Parameter Scope 検証を実装し、許可�
 `src/session.ts` の `handleIncomingPublishStream()` 等で PUBLISH メッセージを受信した際、`validateParameterScope()` が呼ばれていない。
 
 PUBLISH メッセージに許可されるパラメータ（§10.2 各節）:
+
 - `AUTHORIZATION_TOKEN`（0x03）
 - `EXPIRES`（0x08）
 - `LARGEST_OBJECT`（0x09）
@@ -49,7 +50,7 @@ PUBLISH メッセージに許可されるパラメータ（§10.2 各節）:
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/message/parameterScope.ts` | `PUBLISH_ALLOWED_PARAMS` の追加 |
-| `src/session.ts` | PUBLISH 受信時の Parameter Scope 検証追加 |
+| ファイル                        | 変更内容                                  |
+| ------------------------------- | ----------------------------------------- |
+| `src/message/parameterScope.ts` | `PUBLISH_ALLOWED_PARAMS` の追加           |
+| `src/session.ts`                | PUBLISH 受信時の Parameter Scope 検証追加 |

@@ -48,7 +48,7 @@ draft-18 §2.5.1 で定義された Mandatory Track Properties（Property Type 0
 
 ## 該当箇所一覧
 
-| ファイル | 変更内容 |
-| --- | --- |
+| ファイル            | 変更内容                                                          |
+| ------------------- | ----------------------------------------------------------------- |
 | `src/properties.ts` | `decodeProperties()` に Mandatory Track Property 範囲の検出を追加 |
-| `src/session.ts` | PUBLISH / SUBSCRIBE_OK / FETCH_OK 受信時の拒否処理を追加 |
+| `src/session.ts`    | PUBLISH / SUBSCRIBE_OK / FETCH_OK 受信時の拒否処理を追加          |
