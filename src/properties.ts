@@ -479,6 +479,11 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
  * validateTrackPropertyValue が PROTOCOL_VIOLATION 検証済みのため、複数値や
  * 範囲外は考慮不要。
  *
+ * decodeProperties() の出力では Immutable Properties の property.data は
+ * body のみ（ID + length は除去済み）のため、内側の KVP は decodeProperties()
+ * でパースする。decodeImmutableProperties() は ID + length + body の完全な
+ * ワイヤー形式を期待するため、property.data には使用できない。
+ *
  * @param properties - Subscriber.trackProperties (decodeProperties の出力)
  */
 export function supportsDynamicGroups(properties: ReadonlyArray<Property>): boolean {
@@ -487,8 +492,8 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
       return true;
     }
     if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
-      const immutable = decodeImmutableProperties(property.data);
-      for (const inner of immutable.extensions) {
+      const innerProperties = decodeProperties(property.data);
+      for (const inner of innerProperties) {
         if (inner.id === TrackPropertyId.DYNAMIC_GROUPS && inner.value === 1n) {
           return true;
         }
@@ -706,7 +711,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
             }
           } catch (err) {
             if (err instanceof IncompleteDataError) {
-              // 不完全な内側 KVP は後段の decodeImmutableProperties で検出される
+              // 不完全な内側 KVP は後段の decodeProperties（supportsDynamicGroups 経由）で検出される
               break;
             }
             throw err;

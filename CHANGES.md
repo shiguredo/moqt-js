@@ -397,6 +397,10 @@
   - `fetch` / `publish` / `subscribe` / `session` の各 `.prop.ts` の `oddPropertyArb` から IMMUTABLE_PROPERTIES (0x0b) を除外する
   - 任意 data 付きの IMMUTABLE_PROPERTIES が再帰的に自身を含むと `decodeProperties` が `MalformedTrackError` を投げてラウンドトリップが成立しなかった
   - @voluntas
+- [FIX] supportsDynamicGroups が Immutable Properties 内の DYNAMIC_GROUPS を検出できないのを修正する
+  - decodeProperties() の出力（body のみ）を decodeImmutableProperties()（ID + length + body 前提）に渡していたのを、decodeProperties() でパースするように修正する
+  - テストデータ形式を実際の decodeProperties() 出力に合わせる
+  - @voluntas
 
 ## 2026.2.0
 
