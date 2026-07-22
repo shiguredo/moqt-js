@@ -24,24 +24,24 @@ refs/moq/ には `draft-ietf-moq-transport-18.txt` のみがあり、draft-19 �
 
 コードから参照されているセクションのうち、draft-19 で番号または名称が変わるもの:
 
-| draft-18 | draft-19 | 主な参照箇所 |
-|---|---|---|
-| 3.1.3 WebTransport | 3.1.4 (3.1.3 は新設 Dereferencing a MOQT URI) | `src/moqtUri.ts:6, 84`、`src/moqtUri.test.ts:3` |
-| 3.1.4 Native QUIC | 3.1.5 | SETUP 関連コメント |
-| 3.6 Migration | 3.6 Session Migration (名称変更のみ) | `src/session.ts` |
-| 3.3.2 Request Cancellation | 3.3.3 (3.3.2 は新設 Graceful Request Stream Closure) | `src/subscriber.ts:274`、`src/fetcher.ts:174` |
-| 3.3.3 Stream Reset Error Codes | 3.3.4 | `src/error.ts` |
-| 5.1.2 Subscription Filters | 5.1.2 Location Filters (名称変更) | `src/message/types.ts:171, 211` |
-| 5.1.3 Joining an Ongoing Track | 5.1.5 | subscriber 系 |
-| 10.2.9 SUBSCRIPTION FILTER | 10.2.9 LOCATION FILTER (名称変更) | `src/session/params.ts:165` ほか |
-| 10.2.10 EXPIRES | 10.2.15 | `src/session/params.ts:56` |
-| 10.2.11 LARGEST OBJECT | 10.2.16 | `src/session/params.ts:247` |
-| 10.2.12 FORWARD | 10.2.17 | `src/session/params.ts:65, 228, 261` ほか |
-| 10.2.13 NEW GROUP REQUEST | 10.2.18 | `src/session/params.ts:210`、devtools 5 件 |
-| 10.2.14 TRACK_NAMESPACE_PREFIX | 10.2.19 | `src/message/parameter.ts` ほか |
-| 10.20 PUBLISH_BLOCKED | 10.20 PUBLISH_SKIPPED (名称変更) | `src/message/types.ts:43, 48, 50` ほか |
-| 15.10 Error Codes | 15.11 (15.9 Object Status 新設による繰り下がり) | `src/error.ts` |
-| 15.10.4 Stream Reset Error Codes | 15.11.4 | `src/error.ts` |
+| draft-18                         | draft-19                                             | 主な参照箇所                                    |
+| -------------------------------- | ---------------------------------------------------- | ----------------------------------------------- |
+| 3.1.3 WebTransport               | 3.1.4 (3.1.3 は新設 Dereferencing a MOQT URI)        | `src/moqtUri.ts:6, 84`、`src/moqtUri.test.ts:3` |
+| 3.1.4 Native QUIC                | 3.1.5                                                | SETUP 関連コメント                              |
+| 3.6 Migration                    | 3.6 Session Migration (名称変更のみ)                 | `src/session.ts`                                |
+| 3.3.2 Request Cancellation       | 3.3.3 (3.3.2 は新設 Graceful Request Stream Closure) | `src/subscriber.ts:274`、`src/fetcher.ts:174`   |
+| 3.3.3 Stream Reset Error Codes   | 3.3.4                                                | `src/error.ts`                                  |
+| 5.1.2 Subscription Filters       | 5.1.2 Location Filters (名称変更)                    | `src/message/types.ts:171, 211`                 |
+| 5.1.3 Joining an Ongoing Track   | 5.1.5                                                | subscriber 系                                   |
+| 10.2.9 SUBSCRIPTION FILTER       | 10.2.9 LOCATION FILTER (名称変更)                    | `src/session/params.ts:165` ほか                |
+| 10.2.10 EXPIRES                  | 10.2.15                                              | `src/session/params.ts:56`                      |
+| 10.2.11 LARGEST OBJECT           | 10.2.16                                              | `src/session/params.ts:247`                     |
+| 10.2.12 FORWARD                  | 10.2.17                                              | `src/session/params.ts:65, 228, 261` ほか       |
+| 10.2.13 NEW GROUP REQUEST        | 10.2.18                                              | `src/session/params.ts:210`、devtools 5 件      |
+| 10.2.14 TRACK_NAMESPACE_PREFIX   | 10.2.19                                              | `src/message/parameter.ts` ほか                 |
+| 10.20 PUBLISH_BLOCKED            | 10.20 PUBLISH_SKIPPED (名称変更)                     | `src/message/types.ts:43, 48, 50` ほか          |
+| 15.10 Error Codes                | 15.11 (15.9 Object Status 新設による繰り下がり)      | `src/error.ts`                                  |
+| 15.10.4 Stream Reset Error Codes | 15.11.4                                              | `src/error.ts`                                  |
 
 また、制御メッセージの "Message Payload" フィールドは draft-19 で "Message Body" にリネームされたため、引用している 4 箇所 (`src/message/session.ts:405, 408`、`src/message/session.prop.ts:357, 360`) の文言更新が必要。
 
