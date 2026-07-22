@@ -435,14 +435,12 @@ test("supportsDynamicGroups: DYNAMIC_GROUPS が存在しなければ false", () 
 });
 
 test("supportsDynamicGroups: Immutable Properties 内 DYNAMIC_GROUPS=1 で true", () => {
-  // Immutable Properties に DYNAMIC_GROUPS=1 を 1 件入れてエンコードする。
-  // encodeImmutableProperties は ID + length + body を返すため、ID 部を除いた
-  // body 部のみが Property.data として decode 側に渡される想定。
-  // supportsDynamicGroups は decodeImmutableProperties に Property.data をそのまま渡す。
+  // encodeImmutableProperties → decodeProperties のラウンドトリップで
+  // 実際のワイヤー形式（body のみ）の Property.data を生成する
   const encoded = encodeImmutableProperties({
     extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
   });
-  const properties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded }];
+  const properties = decodeProperties(encoded);
   assert.equal(supportsDynamicGroups(properties), true);
 });
 
@@ -450,7 +448,7 @@ test("supportsDynamicGroups: Immutable Properties 内 DYNAMIC_GROUPS=0 で false
   const encoded = encodeImmutableProperties({
     extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 0n }],
   });
-  const properties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded }];
+  const properties = decodeProperties(encoded);
   assert.equal(supportsDynamicGroups(properties), false);
 });
 
@@ -458,9 +456,10 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
   const encoded = encodeImmutableProperties({
     extensions: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
   });
+  const immutableProperties = decodeProperties(encoded);
   const properties: Property[] = [
     { id: TrackPropertyId.DYNAMIC_GROUPS, value: 0n },
-    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encoded },
+    ...immutableProperties,
   ];
   assert.equal(supportsDynamicGroups(properties), true);
 });
