@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] LOC を draft-ietf-moq-loc-04 に対応する
+  - draft-ietf-moq-loc-04 Section 6.1 MOQ Properties Registry に基づき Property ID を更新する (TIMESTAMP: 0x06 → 0x10, VIDEO_FRAME_MARKING: 4 → 0x09, AUDIO_LEVEL: 6 → 0x0C, CONFIG → VIDEO_CONFIG: 0x0D)
+  - VIDEO_FRAME_MARKING を varint 形式から length + bytes 形式に変更する (ID が偶数から奇数に変更されたため)
+  - Audio Config (ID: 0x0F) のエンコード / デコードを追加する
+  - @voluntas
 - [CHANGE] MSF を draft-ietf-moq-msf-01 に追従する (#0316)
   - draft-ietf-moq-msf-01 §5.1.1 に基づき Catalog version を string 型 (MsfVersion = "draft-01" | "1") に変更する
   - draft-ietf-moq-msf-01 §5.1.6 に基づき deltaUpdate ワイヤフォーマットを operation 配列形式に変更する
