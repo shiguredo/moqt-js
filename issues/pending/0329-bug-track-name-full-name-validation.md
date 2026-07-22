@@ -82,3 +82,7 @@ Track Name 単体の最大長制限は仕様に存在しない。コード上の
 2. `src/message/publish.ts` の `decodePublishPayload()` に `validateFullTrackName()` を追加する（Track Namespace と Track Name のデコード後）。
 3. `src/session.ts` の `subscribe()` / `publish()` / `fetch()` / `trackStatus()` に `validateFullTrackName()` を追加する（Track Namespace と Track Name の確定後）。
 4. テストを追加する（Full Track Name 合計長超過の受信・送信）。
+
+## reopened にする理由
+
+polish-issue による磨き上げが完了したため。仕様引用の検証・設計方針の確定・完了条件の具体化を実施済み。
