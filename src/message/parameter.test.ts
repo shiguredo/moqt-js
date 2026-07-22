@@ -18,6 +18,7 @@ import {
   MAX_TRACK_NAME_SIZE,
   MAX_TRACK_NAMESPACE_SIZE,
 } from "./parameter";
+import { ProtocolViolationError } from "../error";
 import { encodeVarint } from "../varint";
 
 test("無効なパラメータタイプでエラー", () => {
@@ -25,9 +26,9 @@ test("無効なパラメータタイプでエラー", () => {
   assert.throws(() => decodeSubscriptionFilterParameter(invalidParam), "Invalid parameter type");
 });
 
-test("無効なフィルタタイプでエラー", () => {
+test("無効なフィルタタイプで ProtocolViolationError", () => {
   const invalidData = new Uint8Array([0x10]);
-  assert.throws(() => decodeSubscriptionFilter(invalidData), "Unknown filter type");
+  assert.throws(() => decodeSubscriptionFilter(invalidData), ProtocolViolationError);
 });
 
 /**

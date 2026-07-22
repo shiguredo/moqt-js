@@ -921,7 +921,9 @@ export function decodeSubscriptionFilter(
     }
 
     default:
-      throw new Error(`Unknown filter type: ${filterType}`);
+      // draft-ietf-moq-transport-18 §5.1.2:
+      // 未知の Filter Type は PROTOCOL_VIOLATION でセッションを閉じる
+      throw new ProtocolViolationError(`Unknown filter type: ${filterType}`);
   }
 }
 
