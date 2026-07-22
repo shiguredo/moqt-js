@@ -74,3 +74,7 @@ draft-18 §2.5.1 で定義された Mandatory Track Properties（Property Type 0
 3. `src/session/bidi.ts` の `bidiReadSubscribeResponse()` / `bidiReadFetchResponse()` の catch ブロックに `MalformedTrackError` の処理を追加する。
 4. `src/properties.test.ts` に `decodeProperties()` の Mandatory Track Property 検出テストを追加する（境界値テスト含む）。
 5. `src/session/bidi.test.ts` に SUBSCRIBE_OK / FETCH_OK 受信時のキャンセル動作テストを追加する。
+
+## reopened にする理由
+
+polish-issue による磨き上げが完了したため。仕様引用の検証・設計方針の確定・完了条件の具体化を実施済み。
