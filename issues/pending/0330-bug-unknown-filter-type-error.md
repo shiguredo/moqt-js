@@ -45,3 +45,7 @@ throw new Error(`Unknown filter type: ${filterType}`);
 
 1. `src/message/parameter.ts` の `decodeSubscriptionFilter()` の `default` ケースで `Error` を `ProtocolViolationError` に置き換える。
 2. `src/message/parameter.test.ts` の既存テスト "無効なフィルタタイプでエラー" を `ProtocolViolationError` のインスタンス検証に更新する。
+
+## reopened にする理由
+
+polish-issue による磨き上げが完了したため。仕様引用の検証・設計方針の確定・完了条件の具体化を実施済み。
