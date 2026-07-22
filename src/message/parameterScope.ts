@@ -81,6 +81,14 @@ export const FETCH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.GROUP_ORDER,
 ]);
 
+/** PUBLISH メッセージの許可パラメータ */
+export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.AUTHORIZATION_TOKEN,
+  MessageParameterType.EXPIRES,
+  MessageParameterType.LARGEST_OBJECT,
+  MessageParameterType.FORWARD,
+]);
+
 /** FETCH_OK メッセージの許可パラメータ */
 export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
 
