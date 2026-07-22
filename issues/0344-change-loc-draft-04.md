@@ -2,7 +2,7 @@
 
 - Priority: High
 - Created: 2026-07-22
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-07-22
 - Model: qwen3.8-max-preview
 - Branch: feature/update-loc-v04
 - Polished: {YYYY-MM-DD}
@@ -48,10 +48,11 @@ VIDEO_FRAME_MARKING は ID が偶数から奇数に変わったため、varint �
 
 ## 解決方法
 
-- `src/loc.ts` の `LOCPropertyId` を draft-04 の IANA テーブルに合わせて更新する
-- `encodeVideoFrameMarking` / `decodeVideoFrameMarking` を length + bytes 形式に変更する
-- `encodeConfig` / `decodeConfig` を `encodeVideoConfig` / `decodeVideoConfig` にリネームする
-- `encodeAudioConfig` / `decodeAudioConfig` を追加する
-- `AudioProperties` に `audioConfig` フィールドを追加する
-- `src/loc.prop.ts` に AudioProperties / AudioConfig のテストを追加する
-- devtools のコメントと README の仕様参照を draft-04 に更新する
+- `src/loc.ts` の `LOCPropertyId` を draft-04 の IANA テーブルに合わせて更新した
+- `encodeVideoFrameMarking` / `decodeVideoFrameMarking` を length + bytes 形式に変更した
+- `encodeConfig` / `decodeConfig` を `encodeVideoConfig` / `decodeVideoConfig` にリネームした
+- `encodeAudioConfig` / `decodeAudioConfig` を追加した
+- `AudioProperties` に `audioConfig` フィールドを追加した
+- `src/loc.prop.ts` に AudioProperties / AudioConfig のテストを追加した
+- devtools のコメントと README の仕様参照を draft-04 に更新した
+- 関連する pending issue 0036 (AUDIO_LEVEL / TIMESTAMP ID 衝突) を closed にした
