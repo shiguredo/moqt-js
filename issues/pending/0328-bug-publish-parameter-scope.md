@@ -54,3 +54,7 @@ PUBLISH メッセージに許可されるパラメータ（§10.2 各節で PUBL
 1. `src/message/parameterScope.ts` に `PUBLISH_ALLOWED_PARAMS`（AUTHORIZATION_TOKEN / EXPIRES / LARGEST_OBJECT / FORWARD の 4 個）を追加する。
 2. `src/session.ts` の PUBLISH 受信処理（`decodePublishPayload` 成功直後）に `validateParameterScope()` を組み込む。既存の SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の呼び出しパターンを参照。
 3. PUBLISH 受信時の Parameter Scope 検証テストを追加する（許可パラメータ通過、不許可パラメータで PROTOCOL_VIOLATION）。
+
+## reopened にする理由
+
+polish-issue による磨き上げが完了したため。仕様引用の検証・設計方針の確定・完了条件の具体化を実施済み。
