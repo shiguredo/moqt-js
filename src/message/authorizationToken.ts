@@ -219,3 +219,38 @@ export function assertAuthorizationTokenForSetup(token: AuthorizationToken): voi
     );
   }
 }
+
+/**
+ * Authorization Token のサイズを計算する
+ * draft-ietf-moq-transport-18 §10.3.1.3:
+ * "The token size is calculated as 16 bytes + the size of the Token Value field"
+ *
+ * REGISTER / USE_VALUE のみ Token Value を持つ。
+ * DELETE / USE_ALIAS は Token Value を持たないため 0 を返す。
+ */
+export function calculateAuthTokenSize(token: AuthorizationToken): number {
+  if (
+    token.aliasType === AuthorizationTokenAliasType.REGISTER ||
+    token.aliasType === AuthorizationTokenAliasType.USE_VALUE
+  ) {
+    return 16 + token.tokenValue.length;
+  }
+  return 0;
+}
+
+/**
+ * REGISTER を USE_VALUE にフォールバックする
+ * draft-ietf-moq-transport-18 §10.3.1.4:
+ * "If an endpoint receives an AUTHORIZATION TOKEN option in SETUP with
+ *  Alias Type REGISTER that exceeds its MAX_AUTH_TOKEN_CACHE_SIZE,
+ *  it MUST treat the option as Alias Type USE_VALUE."
+ */
+export function fallbackRegisterToUseValue(
+  token: AuthorizationTokenRegister,
+): AuthorizationTokenUseValue {
+  return {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: token.tokenType,
+    tokenValue: token.tokenValue,
+  };
+}

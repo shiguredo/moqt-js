@@ -416,6 +416,10 @@
 - [FIX] 未知の Subscription Filter Type 受信時に ProtocolViolationError を throw するように修正する
   - draft-ietf-moq-transport-18 §5.1.2 に基づき、decodeSubscriptionFilter() の default ケースを ProtocolViolationError に変更する
   - @voluntas
+- [FIX] SETUP の MAX_AUTH_TOKEN_CACHE_SIZE 送受信と REGISTER→USE_VALUE フォールバックを追加する
+  - draft-ietf-moq-transport-18 §10.3.1.3 / §10.3.1.4 に基づき、MAX_AUTH_TOKEN_CACHE_SIZE Setup Option の送受信を追加する
+  - トークンサイズ計算（16 bytes + Token Value サイズ）と REGISTER→USE_VALUE フォールバックのヘルパーを追加する
+  - @voluntas
 
 ## 2026.2.0
 
