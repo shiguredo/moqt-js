@@ -14,6 +14,7 @@ import {
   decodeTrackNamespace,
   encodeParameters,
   encodeTrackNamespace,
+  validateFullTrackName,
 } from "./parameter";
 import { MessageType } from "./types";
 
@@ -107,6 +108,10 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   totalConsumed += nameLenConsumed;
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
+
+  // draft-ietf-moq-transport-18 §2.4.1:
+  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
+  validateFullTrackName(trackNamespace, new TextDecoder().decode(trackName));
 
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
