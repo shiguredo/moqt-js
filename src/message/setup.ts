@@ -15,6 +15,7 @@ import {
 } from "./authorizationToken";
 import { type Parameter, decodeKeyValuePairs, encodeKeyValuePairs } from "./parameter";
 import { MessageType, SetupOptionType } from "./types";
+import { decodeVarint, encodeVarint } from "../varint";
 
 /**
  * SETUP メッセージ
@@ -39,7 +40,10 @@ export interface Setup {
  * として Option Type 0x03 に積む。Section 10.2.2 より SETUP では Alias Type
  * DELETE / USE_ALIAS は禁止されているため、事前に検証する。
  */
-export function createSetup(options?: { authorizationToken?: AuthorizationToken }): Setup {
+export function createSetup(options?: {
+  authorizationToken?: AuthorizationToken;
+  maxAuthTokenCacheSize?: number;
+}): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
 
@@ -48,6 +52,15 @@ export function createSetup(options?: { authorizationToken?: AuthorizationToken 
     parameters.push({
       type: SetupOptionType.AUTHORIZATION_TOKEN,
       value: encodeAuthorizationToken(options.authorizationToken),
+    });
+  }
+
+  // draft-ietf-moq-transport-18 §10.3.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+  // 送信しない場合のデフォルトは 0（Alias の使用禁止）
+  if (options?.maxAuthTokenCacheSize !== undefined) {
+    parameters.push({
+      type: SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE,
+      value: encodeVarint(BigInt(options.maxAuthTokenCacheSize)),
     });
   }
 
@@ -139,4 +152,17 @@ export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
   return msg.parameters
     .filter((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN)
     .map((p) => decodeAuthorizationToken(p.value));
+}
+
+/**
+ * Setup メッセージから MAX_AUTH_TOKEN_CACHE_SIZE を取得する
+ * draft-ietf-moq-transport-18 §10.3.1.3
+ *
+ * デフォルト値は 0（Alias の使用禁止）。
+ */
+export function getSetupMaxAuthTokenCacheSize(msg: Setup): number {
+  const param = getSetupParameter(msg, SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE);
+  if (!param) return 0;
+  const [value] = decodeVarint(param.value);
+  return Number(value);
 }

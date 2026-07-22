@@ -44,6 +44,7 @@ import {
   decodeSetupPayload,
   getSetupAuthority,
   getSetupPath,
+  getSetupMaxAuthTokenCacheSize,
   encodeSetupPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
@@ -1258,7 +1259,13 @@ export class SessionImpl implements Session {
       );
     }
 
-    this.emitDebug("recv", MessageType.SETUP, msg.payload, {});
+    // draft-ietf-moq-transport-18 §10.3.1.3:
+    // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
+    const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
+
+    this.emitDebug("recv", MessageType.SETUP, msg.payload, {
+      peerMaxAuthTokenCacheSize: peerMaxAuthTokenCacheSize.toString(),
+    });
 
     // draft-ietf-moq-transport-18 Section 10.3 (SETUP) / Section 3.3 (Control Streams):
     // SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
