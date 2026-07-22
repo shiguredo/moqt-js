@@ -2,7 +2,7 @@
 
 - Priority: High
 - Created: 2026-06-30
-- Completed:
+- Completed: 2026-07-23
 - Model: Kimi Code CLI
 - Branch: feature/fix-request-update-allowed-params
 - Polished:
@@ -58,15 +58,10 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 
 ## 解決方法
 
-1. `src/message/parameterScope.ts` に元リクエスト型別の REQUEST_UPDATE 許可パラメータ集合を定義する。
-2. `validateParameterScope()` の呼び出し元で元リクエスト型を渡せるようにインターフェースを調整する。
-3. `src/session/bidi.ts` / `src/session.ts` の REQUEST_UPDATE 送信/受信処理を修正する。
-4. テストを追加する。
+本 issue は仕様引用の捏造が判明したため、実装せず closed にする。
 
-## 該当箇所一覧
-
-| ファイル | 変更内容 |
-| --- | --- |
-| `src/message/parameterScope.ts` | REQUEST_UPDATE の許可パラメータを元リクエスト型別に定義 |
-| `src/session/bidi.ts` | REQUEST_UPDATE 受信時の検証を元リクエスト型に応じて切り替え |
-| `src/session.ts` | REQUEST_UPDATE 送信時の検証を調整 |
+- §10.2.8 の引用 "GROUP_ORDER MAY appear in a SUBSCRIBE, FETCH, REQUEST_UPDATE (for a subscription) message" は一次資料に存在しない。実際の文言は "It MAY appear in a SUBSCRIBE, PUBLISH_OK, or FETCH." であり REQUEST_UPDATE は含まれない。
+- §10.9 に「REQUEST_UPDATE は元のリクエストと同じパラメータを変更できる」という一般規則は存在しない。"Parameters: The parameters are defined in Section 10.2." と各節に委ねている。
+- §10.2.5 FILL_TIMEOUT も REQUEST_UPDATE への言及なし。
+- 現在の `REQUEST_UPDATE_ALLOWED_PARAMS` の 8 項目は仕様で REQUEST_UPDATE 出現が明示された 8 パラメータと完全に一致しており、実装は正しい。
+- 本 issue を実装すると §10.2.1 の MUST 要件（PROTOCOL_VIOLATION）に違反するコードが導入される。
