@@ -63,7 +63,11 @@ import {
   type Parameter,
   type SubscriptionFilter,
 } from "./message";
-import { EMPTY_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
+import {
+  EMPTY_ALLOWED_PARAMS,
+  PUBLISH_ALLOWED_PARAMS,
+  validateParameterScope,
+} from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
 import {
   type Publisher,
@@ -4050,6 +4054,19 @@ export class SessionImpl implements Session {
       trackNamespace: publishTrackNamespace,
       trackName: publishTrackName,
     });
+
+    // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+    // PUBLISH に許可されていないパラメータは PROTOCOL_VIOLATION
+    if (
+      !validateParameterScope(
+        decodedPublish.parameters,
+        PUBLISH_ALLOWED_PARAMS,
+        "PUBLISH",
+        (error) => this.closeWithError(error),
+      )
+    ) {
+      return;
+    }
 
     // trackNamespace がアクティブな tracksSubscriptions の namespacePrefix に前方一致するか検証
     const match = this.matchPublishToSubscription(publishTrackNamespace);

@@ -405,6 +405,10 @@
   - draft-ietf-moq-transport-18 §2.5.1 に基づき、未知の Mandatory Track Property を含む Track Properties を MalformedTrackError で拒否する
   - PUBLISH 受信時に MalformedTrackError を REQUEST_ERROR(UNSUPPORTED_EXTENSION) として返す
   - @voluntas
+- [FIX] PUBLISH メッセージの Parameter Scope 検証を追加する
+  - draft-ietf-moq-transport-18 §10.2.1 に基づき、PUBLISH に許可されていないパラメータを PROTOCOL_VIOLATION で拒否する
+  - PUBLISH_ALLOWED_PARAMS（AUTHORIZATION_TOKEN / EXPIRES / LARGEST_OBJECT / FORWARD）を定義する
+  - @voluntas
 
 ## 2026.2.0
 
