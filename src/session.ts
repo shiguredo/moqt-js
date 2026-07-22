@@ -4021,6 +4021,17 @@ export class SessionImpl implements Session {
     try {
       decodedPublish = decodePublishPayload(firstMsg.payload);
     } catch (err) {
+      // draft-ietf-moq-transport-18 §2.5.1:
+      // 未知の Mandatory Track Property を含む PUBLISH には
+      // REQUEST_ERROR(UNSUPPORTED_EXTENSION) を返す
+      if (err instanceof MalformedTrackError) {
+        await this.sendRequestErrorAndCancel(
+          stream,
+          RequestErrorCode.UNSUPPORTED_EXTENSION,
+          err.message,
+        );
+        return;
+      }
       const sessionError = toProtocolViolationSessionError(err);
       if (sessionError !== null) {
         this.closeWithError(sessionError);

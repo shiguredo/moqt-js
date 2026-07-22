@@ -401,6 +401,10 @@
   - decodeProperties() の出力（body のみ）を decodeImmutableProperties()（ID + length + body 前提）に渡していたのを、decodeProperties() でパースするように修正する
   - テストデータ形式を実際の decodeProperties() 出力に合わせる
   - @voluntas
+- [FIX] decodeProperties() に未知の Mandatory Track Property (0x4000-0x7FFF) 検出を追加する
+  - draft-ietf-moq-transport-18 §2.5.1 に基づき、未知の Mandatory Track Property を含む Track Properties を MalformedTrackError で拒否する
+  - PUBLISH 受信時に MalformedTrackError を REQUEST_ERROR(UNSUPPORTED_EXTENSION) として返す
+  - @voluntas
 
 ## 2026.2.0
 

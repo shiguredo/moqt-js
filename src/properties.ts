@@ -664,6 +664,13 @@ export function decodeProperties(data: Uint8Array): Property[] {
     const id = previousId + deltaId;
     previousId = id;
 
+    // draft-ietf-moq-transport-18 §2.5.1:
+    // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+    // 処理・転送してはならない (MUST NOT process or forward)
+    if (id >= 0x4000n && id <= 0x7fffn) {
+      throw new MalformedTrackError(`unknown mandatory track property: type 0x${id.toString(16)}`);
+    }
+
     if (id % 2n === 0n) {
       // 偶数 ID: varint value 形式
       const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));

@@ -365,6 +365,31 @@ test("decodeProperties: 不正な DYNAMIC_GROUPS を含むデータで ProtocolV
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
+// draft-ietf-moq-transport-18 §2.5.1: 未知の Mandatory Track Property (0x4000-0x7FFF)
+test("decodeProperties: 未知の Mandatory Track Property (0x4000) で MalformedTrackError", () => {
+  const data = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  assert.throws(() => decodeProperties(data), MalformedTrackError);
+});
+
+test("decodeProperties: 未知の Mandatory Track Property (0x7FFF) で MalformedTrackError", () => {
+  const data = encodeProperties([{ id: 0x7fffn, data: new Uint8Array([0x01]) }]);
+  assert.throws(() => decodeProperties(data), MalformedTrackError);
+});
+
+test("decodeProperties: 非 Mandatory 範囲の上限 (0x3FFF) は通過", () => {
+  const data = encodeProperties([{ id: 0x3fffn, data: new Uint8Array([0x01]) }]);
+  const result = decodeProperties(data);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 0x3fffn);
+});
+
+test("decodeProperties: Mandatory 範囲外 (0x8000) は通過", () => {
+  const data = encodeProperties([{ id: 0x8000n, value: 0n }]);
+  const result = decodeProperties(data);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 0x8000n);
+});
+
 test("parseProperties: 不正な DEFAULT_PUBLISHER_PRIORITY を含むデータで ProtocolViolationError", () => {
   const data = encodeProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 256n }]);
   assert.throws(() => parseProperties(data), ProtocolViolationError);
