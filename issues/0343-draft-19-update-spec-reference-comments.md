@@ -5,10 +5,11 @@
 - Model: Fable 5
 - Branch: feature/fix-draft-19-spec-reference-comments
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-07-22
 
 ## 目的
 
-moqt-js のコード・テスト・devtools は仕様参照コメントとして `draft-ietf-moq-transport-18` を全体で 779 箇所参照している (src 748 / tests 2 / devtools 13)。draft-19 ではセクション番号の振り直しと用語変更が多数あるため、参照ドラフト番号と節番号・引用文言を一括で draft-19 に更新する。
+moqt-js のコード・テスト・devtools は仕様参照コメントとして `draft-ietf-moq-transport-18` を全体で 779 箇所参照している (src 758 / tests 2 / devtools 19)。draft-19 ではセクション番号の振り直しと用語変更が多数あるため、参照ドラフト番号と節番号・引用文言を一括で draft-19 に更新する。
 
 polish-refs による引用検証の正確性は refs/ の一次資料とコメントの一致に依存するため、実装系の draft-19 対応 issue がすべて closed になった後、残りの参照を本 issue で一括更新する。
 
@@ -20,7 +21,7 @@ polish-refs による引用検証の正確性は refs/ の一次資料とコメ�
 
 `draft-ietf-moq-transport-18` の参照は 76 ファイルに分布 (主なもの: `src/session.ts` 207 件、`src/dataStream.ts` 60 件、`src/message/parameter.ts` 49 件、`src/properties.ts` 31 件、`src/session/params.ts` 28 件、`src/message/types.ts` 27 件)。
 
-refs/moq/ には `draft-ietf-moq-transport-18.txt` のみがあり、draft-19 は未取り込み。
+refs/moq/ には `draft-ietf-moq-transport-19.txt` が取り込み済み。`draft-ietf-moq-transport-18.txt` は削除済み。
 
 コードから参照されているセクションのうち、draft-19 で番号または名称が変わるもの:
 
@@ -29,7 +30,7 @@ refs/moq/ には `draft-ietf-moq-transport-18.txt` のみがあり、draft-19 �
 | 3.1.3 WebTransport               | 3.1.4 (3.1.3 は新設 Dereferencing a MOQT URI)        | `src/moqtUri.ts:6, 84`、`src/moqtUri.test.ts:3` |
 | 3.1.4 Native QUIC                | 3.1.5                                                | SETUP 関連コメント                              |
 | 3.6 Migration                    | 3.6 Session Migration (名称変更のみ)                 | `src/session.ts`                                |
-| 3.3.2 Request Cancellation       | 3.3.3 (3.3.2 は新設 Graceful Request Stream Closure) | `src/subscriber.ts:274`、`src/fetcher.ts:174`   |
+| 3.3.2 Request Cancellation       | 3.3.3 (3.3.2 は新設 Graceful Request Stream Closure) | `src/session.ts:3806, 3968, 4007`               |
 | 3.3.3 Stream Reset Error Codes   | 3.3.4                                                | `src/error.ts`                                  |
 | 5.1.2 Subscription Filters       | 5.1.2 Location Filters (名称変更)                    | `src/message/types.ts:171, 211`                 |
 | 5.1.3 Joining an Ongoing Track   | 5.1.5                                                | subscriber 系                                   |
@@ -49,7 +50,7 @@ refs/moq/ には `draft-ietf-moq-transport-18.txt` のみがあり、draft-19 �
 
 ## 設計方針
 
-- 前提: refs/moq/ に `draft-ietf-moq-transport-19.txt` を取り込み、`draft-ietf-moq-transport-18.txt` を置き換える (update-refs スキルを使用)
+- 前提: refs/moq/ に `draft-ietf-moq-transport-19.txt` は取り込み済み (完了)
 - 前提: 実装変更を伴う draft-19 対応 issue (0332-0342) がすべて closed になっていること。各 issue が自分の変更箇所の参照を更新するため、本 issue は残りを対象とする
 - 上記の対応表に従い、節番号が変わる参照を先に個別修正し、その後 `draft-ietf-moq-transport-18` → `draft-ietf-moq-transport-19` を一括置換する
 - 英文引用を含むコメントは draft-19 の原文と突き合わせて文言差分 (Message Body 等) を反映する

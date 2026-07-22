@@ -5,6 +5,7 @@
 - Model: Fable 5
 - Branch: feature/change-draft-19-delivery-timeout-object-property
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-07-22
 
 ## 目的
 
@@ -28,7 +29,7 @@ additive な拡張であり、未対応でも相互運用は壊れない (Object
 - `src/properties.ts:74-97`: `TrackPropertyId` に `OBJECT_DELIVERY_TIMEOUT: 0x02n` / `SUBGROUP_DELIVERY_TIMEOUT: 0x06n` を定義。Object Property スコープの概念はない
 - `src/session/params.ts:85-99` (Track Property) / `src/session/params.ts:170-184` (Message Parameter): 送信は Track Property / Message Parameter としてのみ
 - `src/session.ts:247, 256, 418, 427`: SubscribeOptions / PublishOptions の `deliveryTimeout` / `subgroupDeliveryTimeout`
-- `src/dataStream.ts:510-524`: 受信オブジェクトの properties は `Uint8Array` として opaque に扱い、個別のプロパティ ID を解釈していない。subgroup 先頭オブジェクトでの上書きは未実装
+- `src/dataStream.ts:491-501`: 受信オブジェクトの properties は `Uint8Array` として opaque に扱い、個別のプロパティ ID を解釈していない。subgroup 先頭オブジェクトでの上書きは未実装
 
 ## 設計方針
 

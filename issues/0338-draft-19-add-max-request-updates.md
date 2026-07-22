@@ -5,6 +5,7 @@
 - Model: Fable 5
 - Branch: feature/add-draft-19-max-request-updates
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-07-22
 
 ## 目的
 
@@ -37,7 +38,7 @@ moqt-js が REQUEST_UPDATE 送信側としてピアの MAX_REQUEST_UPDATES を�
 - `src/message/types.ts:83-96`: `SetupOptionType` に 0x08 (MAX_REQUEST_UPDATES) が未定義
 - `src/message/setup.ts:42-65`: `createSetup` が送出するのは AUTHORIZATION_TOKEN (0x03) と MOQT_IMPLEMENTATION (0x07) のみ。未知オプションは受信時に無視される (`src/message/setup.ts:89-95`) ため受信で壊れはしない
 - `src/error.ts:17-38`: `SessionErrorCode` は MALFORMED_AUTHORITY (0x1a) まで。TOO_MANY_REQUEST_UPDATES (0x1b) が未定義で、受信時に正しく識別できない
-- REQUEST_UPDATE 送信経路: `src/subscriber.ts:259-267` `update()` → `src/session.ts:3324-3333` `sendRequestUpdate` → `src/session/bidi.ts:850-891` `bidiSendRequestUpdate`。outstanding 数の管理・制限なし
+- REQUEST_UPDATE 送信経路: `src/subscriber.ts:259-267` `update()` → `src/session.ts:3324-3333` `sendRequestUpdate` → `src/session/bidi.ts:843-897` `bidiSendRequestUpdate`。outstanding 数の管理・制限なし
 
 ## 設計方針
 

@@ -5,6 +5,7 @@
 - Model: Fable 5
 - Branch: feature/change-draft-19-expires-namespace-ok
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-07-22
 
 ## 目的
 
@@ -24,7 +25,7 @@ moqt-js はこの 3 メッセージの許可パラメータを空集合として
 
 ## 現状
 
-- `src/message/parameterScope.ts:61-62`: `EMPTY_ALLOWED_PARAMS = new Set()` が「SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK の許可パラメータ（空）」として使われている
+- `src/message/parameterScope.ts:61-62`: `EMPTY_ALLOWED_PARAMS = new Set()` が SUBSCRIBE_NAMESPACE_OK (`src/session.ts:1983`) / PUBLISH_NAMESPACE_OK (`src/session.ts:2435`) の検証に使われている。SUBSCRIBE_TRACKS_OK はコメント (`parameterScope.ts:61`) で言及されているのみで、`src/session.ts:2187-2201` の tracks ストリームループにはパラメータ検証が存在しない
 - `src/message/parameterScope.ts:107-125`: `validateParameterScope` が許可外パラメータを ProtocolViolationError にする
 - `src/message/parameterScope.ts:33-36, 39-48, 51-54`: SUBSCRIBE_OK / PUBLISH_OK / REQUEST_UPDATE_OK の許可集合には既に EXPIRES が含まれている (draft-18 準拠)
 - `src/message/types.ts:147-149`: `MessageParameterType.EXPIRES: 0x08` 定義済み
@@ -32,6 +33,7 @@ moqt-js はこの 3 メッセージの許可パラメータを空集合として
 ## 設計方針
 
 - SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK 用の許可パラメータ集合を新設し (EXPIRES を含む)、`EMPTY_ALLOWED_PARAMS` の使用箇所を置き換える
+- tracks ストリームループの REQUEST_OK (SUBSCRIBE_TRACKS_OK) にパラメータスコープ検証を新設する (現状は検証自体が存在しない)
 - 受信した EXPIRES 値の扱いは、既存の SUBSCRIBE_OK / REQUEST_UPDATE_OK での EXPIRES 処理と同じ方針に揃える (最低限、スコープ検証を通過させて値を破棄しない)
 - 仕様参照コメントを draft-19 Section 10.2.15 に更新する
 

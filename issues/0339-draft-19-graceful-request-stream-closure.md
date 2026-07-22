@@ -5,6 +5,7 @@
 - Model: Fable 5
 - Branch: feature/change-draft-19-graceful-request-stream-closure
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-07-22
 
 ## 目的
 
@@ -37,7 +38,7 @@ draft-18 には Section 3.3.2 に相当する節がなく、キャンセル記�
 - `src/session/bidi.ts:1004-1005` (`cancelSubscription`) / `src/session/bidi.ts:1033-1034` (`cancelFetch`): `readable.cancel()` (STOP_SENDING 相当) + `writer.abort()` (RESET_STREAM 相当) で方向別に終了。draft-19 Section 3.3.3 に整合
 - `src/session.ts:1333, 3615, 3723` など: 正常クローズは `writer.close()` (FIN)
 - publisher 側で PUBLISH_DONE 送信と FIN 送信の順序を保証しているかは未検証
-- `src/subscriber.ts:274` / `src/fetcher.ts:174`: STOP_SENDING 関連の draft-18 引用コメント (節番号が draft-19 で 3.3.3 / 3.3.4 に変わる)
+- `src/subscriber.ts:272` / `src/fetcher.ts:173`: draft-18 Section 5.1 / 5.2 の引用コメント。draft-19 で節番号が変更されているかは要確認
 
 ## 設計方針
 
