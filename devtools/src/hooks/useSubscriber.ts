@@ -46,7 +46,7 @@ export function toSortedByGroupObject(objects: MoqtObject[]): MoqtObject[] {
  * (Base64) から復元する。
  * draft-ietf-moq-msf-01 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
  * `CatalogTrack.initRef` (§5.2.13) の参照に分離されたため、`resolveInitData` 経由で取得する。
- * draft-ietf-moq-loc-02 §2.1.2 の用途は変わらない。
+ * draft-ietf-moq-loc-04 §2.1.2 の用途は変わらない。
  */
 function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): VideoDecoderConfig {
   if (!videoTrack.codec) {

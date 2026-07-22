@@ -190,8 +190,8 @@ export function usePublisher() {
 
     // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
     // annexB 形式の場合は description 不要、canonical (avc1/hvc1) の場合は
-    // description を Video Config Extension (ID: 13) で送る
-    // draft-ietf-moq-loc-02 §2.3.2.1
+    // description を Video Config (ID: 0x0D) で送る
+    // draft-ietf-moq-loc-04 §2.3.2.1
     const payload = chunk.data;
 
     // LOC Properties をエンコード

@@ -133,7 +133,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Low Overhead Container
 
-[draft-ietf-moq-loc-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-02) の機能実装状況です。
+[draft-ietf-moq-loc-04](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04) の機能実装状況です。
 
 #### LOC Properties
 
@@ -142,6 +142,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Video Config
 - Video Frame Marking
 - Audio Level
+- Audio Config
 
 ### MOQT Streaming Format
 
