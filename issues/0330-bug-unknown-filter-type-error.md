@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-06-30
-- Completed:
+- Completed: 2026-07-23
 - Model: Kimi Code CLI
 - Branch: feature/fix-unknown-filter-type-error
 - Polished: 2026-07-23
