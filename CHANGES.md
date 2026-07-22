@@ -409,6 +409,10 @@
   - draft-ietf-moq-transport-18 §10.2.1 に基づき、PUBLISH に許可されていないパラメータを PROTOCOL_VIOLATION で拒否する
   - PUBLISH_ALLOWED_PARAMS（AUTHORIZATION_TOKEN / EXPIRES / LARGEST_OBJECT / FORWARD）を定義する
   - @voluntas
+- [FIX] Track Name / Full Track Name の最大長検証をデコード・送信パスに追加する
+  - draft-ietf-moq-transport-18 §2.4.1 に基づき、Full Track Name 合計長 4096 バイト超過を PROTOCOL_VIOLATION で拒否する
+  - decodePublishPayload() と subscribe() / publish() / fetch() / trackStatus() に validateFullTrackName() を追加する
+  - @voluntas
 
 ## 2026.2.0
 

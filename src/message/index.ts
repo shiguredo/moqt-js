@@ -57,6 +57,7 @@ export {
   validateGroupOrderValue,
   trackNamespaceToStrings,
   validateTrackNameSize,
+  validateFullTrackName,
 } from "./parameter";
 
 // Setup メッセージ

@@ -31,6 +31,7 @@ import {
   ObjectStatus,
   createTrackNamespace,
   encodeTrackName,
+  validateFullTrackName,
   trackNamespaceToStrings,
   decodeGoawayPayload,
   isValidGoawayRequestIdParity,
@@ -1311,6 +1312,8 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
+    // draft-ietf-moq-transport-18 §2.4.1: Full Track Name 合計長検証
+    validateFullTrackName(trackNamespace, trackName);
 
     // パブリッシャー実装を作成
     const impl = new PublisherImpl(
@@ -1444,6 +1447,8 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
+    // draft-ietf-moq-transport-18 §2.4.1: Full Track Name 合計長検証
+    validateFullTrackName(trackNamespace, trackName);
 
     // サブスクライバー実装を作成
     // 注意: trackAlias は SUBSCRIBE_OK 受信時に設定される
@@ -1548,6 +1553,8 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
+    // draft-ietf-moq-transport-18 §2.4.1: Full Track Name 合計長検証
+    validateFullTrackName(trackNamespace, trackName);
 
     // Fetcher 実装を作成
     const impl = new FetcherImpl(
@@ -1640,6 +1647,8 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
+    // draft-ietf-moq-transport-18 §2.4.1: Full Track Name 合計長検証
+    validateFullTrackName(trackNamespace, trackName);
 
     // REQUEST_OK を待つ Promise
     const promise = new Promise<TrackStatusResult>((resolve, reject) => {
