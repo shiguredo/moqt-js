@@ -86,3 +86,7 @@ supportsDynamicGroups(properties); // => false (本来は true)
 2. `src/properties.test.ts` の `supportsDynamicGroups` 関連テスト（"Immutable Properties 内 DYNAMIC_GROUPS=1 で true"、"Immutable Properties 内 DYNAMIC_GROUPS=0 で false"、"mutable=0 / Immutable=1 混在で true"）を、`decodeProperties(encodeImmutableProperties(...))` の出力を `supportsDynamicGroups()` に渡す形に修正する。テストコメントも実際のデータフローと一致させる。
 3. `src/properties.ts` の `decodeProperties()` 内再帰チェック catch ブロックのコメント（「不完全な内側 KVP は後段の decodeImmutableProperties で検出される」）を、修正後の実装と整合する内容に修正する。
 4. `properties.prop.ts` の PBT テストは `decodeImmutableProperties()` のインターフェースを変更しないため影響なし。変更不要。
+
+## reopened にする理由
+
+polish-issue による磨き上げが完了したため。仕様引用の検証・設計方針の確定・完了条件の具体化を実施済み。
