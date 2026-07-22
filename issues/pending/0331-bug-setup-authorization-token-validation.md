@@ -61,3 +61,7 @@ draft-18 §10.3.1.3 / §10.3.1.4 に基づき、SETUP メッセージでの MAX_
 3. `src/message/authorizationToken.ts` にトークンサイズ計算（16 bytes + Token Value サイズ）と REGISTER→USE_VALUE フォールバックのヘルパーを追加する。
 4. `src/session.ts` の SETUP 処理で、ピアの MAX_AUTH_TOKEN_CACHE_SIZE に基づく alias purging を統合する。
 5. テストを追加する。
+
+## reopened にする理由
+
+polish-issue による磨き上げが完了したため。仕様引用の検証・設計方針の確定・完了条件の具体化を実施済み。
