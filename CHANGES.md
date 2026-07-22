@@ -413,6 +413,9 @@
   - draft-ietf-moq-transport-18 §2.4.1 に基づき、Full Track Name 合計長 4096 バイト超過を PROTOCOL_VIOLATION で拒否する
   - decodePublishPayload() と subscribe() / publish() / fetch() / trackStatus() に validateFullTrackName() を追加する
   - @voluntas
+- [FIX] 未知の Subscription Filter Type 受信時に ProtocolViolationError を throw するように修正する
+  - draft-ietf-moq-transport-18 §5.1.2 に基づき、decodeSubscriptionFilter() の default ケースを ProtocolViolationError に変更する
+  - @voluntas
 
 ## 2026.2.0
 
