@@ -1,8 +1,8 @@
 /**
  * MOQT Setup Messages
- * draft-ietf-moq-transport-18 Section 10.3 (SETUP)
+ * draft-ietf-moq-transport-19 Section 10.3 (SETUP)
  *
- * draft-ietf-moq-transport-18 Section 3.3 (Session initialization):
+ * draft-ietf-moq-transport-19 Section 3.3 (Session initialization):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
  */
 
@@ -20,9 +20,9 @@ import { decodeVarint, encodeVarint } from "../varint";
 /**
  * SETUP メッセージ
  *
- * draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-19 Section 10.3 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
- * draft-ietf-moq-transport-18 Section 4
+ * draft-ietf-moq-transport-19 Section 4
  */
 export interface Setup {
   type: typeof MessageType.SETUP;
@@ -32,7 +32,7 @@ export interface Setup {
 /**
  * Setup を作成
  *
- * draft-ietf-moq-transport-18 §10.3.1.1 / §10.3.1.2:
+ * draft-ietf-moq-transport-19 §10.3.1.1 / §10.3.1.2:
  * AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
  * moqt-js は WebTransport 専用クライアントのため、これらは作成手段を持たない。
  *
@@ -55,7 +55,7 @@ export function createSetup(options?: {
     });
   }
 
-  // draft-ietf-moq-transport-18 §10.3.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+  // draft-ietf-moq-transport-19 §10.3.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
   // 送信しない場合のデフォルトは 0（Alias の使用禁止）
   if (options?.maxAuthTokenCacheSize !== undefined) {
     parameters.push({
@@ -80,7 +80,7 @@ export function createSetup(options?: {
 /**
  * Setup のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-19 Section 10.3 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
@@ -94,7 +94,7 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
 /**
  * Setup のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.3 (SETUP), Section 15.4 (IANA registry):
+ * draft-ietf-moq-transport-19 Section 10.3 (SETUP), Section 15.4 (IANA registry):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  * 未知の Setup Option は MUST ignore（§10.3.1）。
@@ -143,7 +143,7 @@ export function getSetupMoqtImplementation(msg: Setup): string | undefined {
 
 /**
  * Setup メッセージから AUTHORIZATION_TOKEN を取得する
- * draft-ietf-moq-transport-18 Section 10.3.1.4 (AUTHORIZATION TOKEN)
+ * draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN)
  *
  * Setup Option の値は Section 10.2.2 の Token 構造。
  * 複数の Authorization Token を一つの SETUP に載せられるため、配列で返す。
@@ -156,7 +156,7 @@ export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
 
 /**
  * Setup メッセージから MAX_AUTH_TOKEN_CACHE_SIZE を取得する
- * draft-ietf-moq-transport-18 §10.3.1.3
+ * draft-ietf-moq-transport-19 §10.3.1.3
  *
  * デフォルト値は 0（Alias の使用禁止）。
  */

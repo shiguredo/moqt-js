@@ -1,6 +1,6 @@
 /**
  * MOQT Session 純粋関数の Property-Based Tests
- * draft-ietf-moq-transport-18 Section 10.2, Section 11.4, Section 12
+ * draft-ietf-moq-transport-19 Section 10.2, Section 11.4, Section 12
  */
 
 import { test, assert } from "vite-plus/test";

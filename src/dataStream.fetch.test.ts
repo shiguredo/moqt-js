@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Fetch テスト
- * draft-ietf-moq-transport-18 Section 11.4.4 (Fetch Header and Objects)
+ * draft-ietf-moq-transport-19 Section 11.4.4 (Fetch Header and Objects)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -118,7 +118,7 @@ test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
   assert.equal(encoded[5], 50);
 });
 
-// draft-ietf-moq-transport-18 Section 11.2.1.1:
+// draft-ietf-moq-transport-19 Section 11.2.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 test("FetchObjectFields: payload length = 0 でも Object Status を含めない", () => {
@@ -181,7 +181,7 @@ test("FetchObjectFields: 2番目のオブジェクトをデコード (差分エ�
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 11.4.4:
+ * draft-ietf-moq-transport-19 Section 11.4.4:
  * 0x40 は Datagram フラグとして定義された。
  * 不正な Serialization Flags 値はプロトコル違反。
  */
@@ -317,9 +317,9 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 
 /**
  * 同一 Subgroup の Priority 一貫性検証テスト
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
- * draft-ietf-moq-transport-18 Section 11.4.4
+ * draft-ietf-moq-transport-19 Section 11.4.4
  */
 test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", () => {
   // 最初のオブジェクト
@@ -397,7 +397,7 @@ test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", ()
 });
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "If the Group Order is Ascending (default), the Group ID is the prior
  *  Object's Group ID plus the Group ID Delta + 1."
  *
@@ -451,7 +451,7 @@ test("FetchObjectFields: 非先頭オブジェクトの Group ID Delta を正し
 });
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "When the Group ID Delta field is not present, the Object ID is the
  *  prior Object's ID plus the Object ID Delta if present."
  *
@@ -492,7 +492,7 @@ test("FetchObjectFields: 非先頭オブジェクトの Object ID Delta (Group �
 });
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1:
+ * draft-ietf-moq-transport-19 §11.4.4.1:
  * encode → decode で複数オブジェクトの delta encoding が正しく roundtrip することを検証する。
  * オブジェクト 1: group=10, object=0  (先頭)
  * オブジェクト 2: group=10, object=3  (Group 不変, OBJECT_ID_PRESENT, delta エンコード)
@@ -559,7 +559,7 @@ test("FetchObjectFields: encode→decode roundtrip で delta encoding が正し�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "If the Group Order is Descending, the Group ID is the prior Object's
  *  Group ID minus the (Group ID Delta + 1)."
  *
@@ -616,7 +616,7 @@ test("FetchObjectFields: Descending Group Order で Group ID を正しくデコ�
 });
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "If the Group Order is Descending, the Group ID is the prior Object's
  *  Group ID minus the (Group ID Delta + 1)."
  *
@@ -825,7 +825,7 @@ test("FetchObjectFields: Descending で prior=0,delta=0 の場合は Group ID �
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1:
+ * draft-ietf-moq-transport-19 §11.4.4.1:
  * "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
  * "the subscriber MUST ignore the bits."
  *
@@ -1029,7 +1029,7 @@ test("FetchObjectFields: Datagram 先頭オブジェクトの encode→decode ro
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "If the computed Object ID would be greater than 2^64-1, the
  *  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
  *

@@ -48,7 +48,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Media over QUIC Transport
 
-[draft-ietf-moq-transport-18](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-18) の機能実装状況です。
+[draft-ietf-moq-transport-19](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-19) の機能実装状況です。
 
 #### MOQT URI
 

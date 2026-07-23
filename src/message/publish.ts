@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-18 Section 10.10 (PUBLISH) — 10.5 (REQUEST_OK / PUBLISH_OK) — 10.11 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-19 Section 10.10 (PUBLISH) — 10.5 (REQUEST_OK / PUBLISH_OK) — 10.11 (PUBLISH_DONE)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -21,9 +21,9 @@ import { MessageType } from "./types";
 /**
  * PUBLISH メッセージ (Section 10.10 PUBLISH)
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * Track Properties が追加された。
- * draft-ietf-moq-transport-18 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-19 Section 10 (Control Messages)
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
@@ -38,7 +38,7 @@ export interface Publish {
 /**
  * PUBLISH_DONE メッセージ (Section 10.11 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
@@ -51,7 +51,7 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.10 (PUBLISH):
+ * draft-ietf-moq-transport-19 Section 10.10 (PUBLISH):
  * PUBLISH Message {
  *   Type (i) = 0x1D,
  *   Length (16),
@@ -75,7 +75,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-18 Section 10.10 (PUBLISH):
+  // draft-ietf-moq-transport-19 Section 10.10 (PUBLISH):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   // Message の Length フィールドで終端が決まる。
   parts.push(encodeProperties(msg.trackProperties));
@@ -93,7 +93,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
 /**
  * Publish のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.10 (PUBLISH)
+ * draft-ietf-moq-transport-19 Section 10.10 (PUBLISH)
  */
 export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   let totalConsumed = 0;
@@ -109,7 +109,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-18 §2.4.1:
+  // draft-ietf-moq-transport-19 §2.4.1:
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
   validateFullTrackName(trackNamespace, new TextDecoder().decode(trackName));
 
@@ -119,7 +119,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-18 Section 10.10 (PUBLISH):
+  // draft-ietf-moq-transport-19 Section 10.10 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);
@@ -141,7 +141,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
  * Session では個別にエンコードしているため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
  * PUBLISH_DONE Message {
  *   Type (vi64) = 0xB,
  *   Length (16),
@@ -185,7 +185,7 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
 
-  // draft-ietf-moq-transport-18 Section 1.4.4:
+  // draft-ietf-moq-transport-19 Section 1.4.4:
   // Reason Phrase の最大長は 1,024 バイト。
   // "If an endpoint receives a length exceeding the maximum, it MUST close
   //  the session with a PROTOCOL_VIOLATION"

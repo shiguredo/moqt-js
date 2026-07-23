@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages Unit Tests
- * draft-ietf-moq-transport-18 Section 10.3
+ * draft-ietf-moq-transport-19 Section 10.3
  */
 
 import { test, assert } from "vite-plus/test";
@@ -28,7 +28,7 @@ test("Setup: パラメータなしで作成", () => {
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-// draft-ietf-moq-transport-18 §10.3.1.1 / §10.3.1.2:
+// draft-ietf-moq-transport-19 §10.3.1.1 / §10.3.1.2:
 // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
 // moqt-js は WebTransport 専用クライアントのため createSetup には PATH / AUTHORITY を
 // 受け付ける引数を持たない (送信不可) ことを確認する。
@@ -48,7 +48,7 @@ test("Setup: 存在しないパラメータは undefined", () => {
   assert.isDefined(getSetupMoqtImplementation(setup));
 });
 
-// draft-ietf-moq-transport-18 Section 10.3:
+// draft-ietf-moq-transport-19 Section 10.3:
 // Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
 // カウントプレフィックスを持たない。Length フィールドで終端が決まる。
 test("Setup: エンコード結果にカウントプレフィックスがない", () => {
@@ -74,7 +74,7 @@ test("Setup: エンコード・デコード roundtrip (MOQT_IMPLEMENTATION の�
   assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
 });
 
-// draft-ietf-moq-transport-18 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
+// draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
 test("Setup: AUTHORIZATION_TOKEN (USE_VALUE) 付きで roundtrip", () => {
   const tokenValue = new TextEncoder().encode("jwt-payload");
   const setup = createSetup({
@@ -125,7 +125,7 @@ test("Setup: AUTHORIZATION_TOKEN (REGISTER) 付きで roundtrip", () => {
   }
 });
 
-// draft-ietf-moq-transport-18 Section 10.2.2:
+// draft-ietf-moq-transport-19 Section 10.2.2:
 // "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
 //  it MUST close the session with a PROTOCOL_VIOLATION."
 test("Setup: SETUP で DELETE の Authorization Token を指定すると throw", () => {

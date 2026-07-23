@@ -1,13 +1,13 @@
 /**
  * MOQT Data Stream
- * draft-ietf-moq-transport-18 Section 11 (Data Streams and Datagrams)
+ * draft-ietf-moq-transport-19 Section 11 (Data Streams and Datagrams)
  *
  * Data streams carry Objects via Subgroups or Datagrams.
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
  * Publisher は同じトラックのオブジェクトを Datagram と Stream の両方で送信できる。
- * draft-ietf-moq-transport-18 Section 11
+ * draft-ietf-moq-transport-19 Section 11
  */
 
 import { decodeVarint, encodeVarint } from "./varint";
@@ -17,7 +17,7 @@ import { GroupOrder } from "./message/types";
 
 /**
  * Object ID および Group ID の最大値 (2^64 - 1)
- * draft-ietf-moq-transport-18 §11.4.2 / §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.2 / §11.4.4.1 Table 9:
  * "If the resulting Object ID would be greater than 2^64 - 1,
  *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
  * "If the computed Group ID would be less than 0 or greater than 2^64-1,
@@ -28,7 +28,7 @@ const maxObjectId = (1n << 64n) - 1n;
 /**
  * Object Status の値を検証する
  *
- * draft-ietf-moq-transport-18 Section 11.2.1.1:
+ * draft-ietf-moq-transport-19 Section 11.2.1.1:
  * "Any other value SHOULD be treated as a protocol error and the session
  *  SHOULD be closed with a PROTOCOL_VIOLATION."
  */
@@ -50,7 +50,7 @@ function validateObjectStatus(status: number): void {
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
  *
- * Section 11.4.2 (Subgroup Header) type matrix from draft-ietf-moq-transport-18:
+ * Section 11.4.2 (Subgroup Header) type matrix from draft-ietf-moq-transport-19:
  * | Type | Subgroup ID Field | Subgroup ID Value | Properties | End of Group | Priority |
  * |------|-------------------|-------------------|------------|--------------|----------|
  * | 0x10 | No                | 0                 | No         | No           | Yes      |
@@ -238,14 +238,14 @@ export interface SubgroupHeader {
    * FIRST_OBJECT bit (0x40) がセットされている場合に true。
    * Subgroup 内の最初のオブジェクトが、その Subgroup で最初に publish された
    * オブジェクトであることを示す。
-   * draft-ietf-moq-transport-18 Section 11.4.2
+   * draft-ietf-moq-transport-19 Section 11.4.2
    */
   firstObject?: boolean;
 }
 
 /**
  * Check if subgroup header type has explicit Subgroup ID field
- * draft-ietf-moq-transport-18 Section 11.4.2
+ * draft-ietf-moq-transport-19 Section 11.4.2
  */
 function hasSubgroupIdField(headerType: number): boolean {
   const lowNibble = headerType & 0x0f;
@@ -254,7 +254,7 @@ function hasSubgroupIdField(headerType: number): boolean {
 
 /**
  * Check if subgroup header type has Priority Present
- * draft-ietf-moq-transport-18 Section 11.4.2
+ * draft-ietf-moq-transport-19 Section 11.4.2
  *
  * Types 0x10-0x1D have Priority Present = Yes
  * Types 0x30-0x3D have Priority Present = No
@@ -268,7 +268,7 @@ function hasPriorityPresent(headerType: number): boolean {
 
 /**
  * Check if subgroup header type contains End of Group
- * draft-ietf-moq-transport-18 Section 11.4.2
+ * draft-ietf-moq-transport-19 Section 11.4.2
  *
  * Types with bit 3 set (0x08) contain End of Group:
  * 0x18-0x1D (Priority Present) and 0x38-0x3D (No Priority)
@@ -280,7 +280,7 @@ export function hasContainsEndOfGroup(headerType: number): boolean {
 
 /**
  * Encode a Subgroup Header
- * draft-ietf-moq-transport-18 Section 11.4.2 Figure 24
+ * draft-ietf-moq-transport-19 Section 11.4.2 Figure 24
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -329,7 +329,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   let subgroupId: bigint | undefined;
   const typeNum = Number(type);
 
-  // draft-ietf-moq-transport-18 Section 11.4.2:
+  // draft-ietf-moq-transport-19 Section 11.4.2:
   // 不正なタイプ値を検証する
   // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
@@ -348,7 +348,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   }
 
   // タイプに基づいて Subgroup ID フィールドの有無を判定
-  // draft-ietf-moq-transport-18 Section 11.4.2:
+  // draft-ietf-moq-transport-19 Section 11.4.2:
   // - Types 0x14-0x15, 0x1C-0x1D, 0x34-0x35, 0x3C-0x3D,
   //   0x54-0x55, 0x5C-0x5D, 0x74-0x75, 0x7C-0x7D: Subgroup ID Field Present
   // - Types 0x10-0x11, 0x18-0x19, 0x30-0x31, 0x38-0x39,
@@ -369,7 +369,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // Subgroup ID = First Object ID (最初のオブジェクト読み取り時に設定)
 
   // Publisher Priority (8 ビット)
-  // draft-ietf-moq-transport-18 Section 11.4.2
+  // draft-ietf-moq-transport-19 Section 11.4.2
   let publisherPriority: number | undefined;
   if (hasPriorityPresent(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
@@ -394,7 +394,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
 /**
  * Check if a subgroup header type has Properties Present
- * draft-ietf-moq-transport-18 Section 11.4.2:
+ * draft-ietf-moq-transport-19 Section 11.4.2:
  * Types with bit 0 set (odd types) have Properties Present
  */
 export function hasPropertiesPresent(headerType: number): boolean {
@@ -403,7 +403,7 @@ export function hasPropertiesPresent(headerType: number): boolean {
 
 /**
  * Encode Object fields for Subgroup stream
- * draft-ietf-moq-transport-18 Section 11.4.2 Figure 25:
+ * draft-ietf-moq-transport-19 Section 11.4.2 Figure 25:
  * {
  *   Object ID Delta (i),
  *   [Properties (..),]          <-- Only if header type has Properties Present
@@ -434,7 +434,7 @@ export function encodeObjectFields(
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-18 Section 11.2.1.2:
+    // draft-ietf-moq-transport-19 Section 11.2.1.2:
     // "If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
@@ -450,7 +450,7 @@ export function encodeObjectFields(
   // ペイロード長
   parts.push(encodeVarint(payloadLength));
 
-  // draft-ietf-moq-transport-18 §11.2.1.1:
+  // draft-ietf-moq-transport-19 §11.2.1.1:
   // 非 NORMAL ステータスはペイロード長が 0 の場合のみエンコードされる。
   // payloadLength > 0 の場合、ステータスは wire に乗らないため ProtocolViolationError とする
   if (status !== ObjectStatus.NORMAL && payloadLength > 0n) {
@@ -458,7 +458,7 @@ export function encodeObjectFields(
   }
 
   // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-18 Section 11.2.1.1:
+  // draft-ietf-moq-transport-19 Section 11.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   if (payloadLength === 0n) {
     parts.push(encodeVarint(status));
@@ -487,7 +487,7 @@ export interface DecodedObjectFields {
 
 /**
  * Decode Object fields from Subgroup stream
- * draft-ietf-moq-transport-18 Section 11.4.2 Figure 25
+ * draft-ietf-moq-transport-19 Section 11.4.2 Figure 25
  *
  * @param data - Data buffer
  * @param headerType - Subgroup header type to determine if properties are present
@@ -521,7 +521,7 @@ export function decodeObjectFields(
   totalConsumed += payloadLenConsumed;
 
   // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-18 Section 11.2.1.1:
+  // draft-ietf-moq-transport-19 Section 11.2.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   let status: ObjectStatus = ObjectStatus.NORMAL;
   if (payloadLength === 0n) {
@@ -530,7 +530,7 @@ export function decodeObjectFields(
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-18 Section 11.2.1.2:
+    // draft-ietf-moq-transport-19 Section 11.2.1.2:
     // "Any Object with status Normal can have properties (Section 2.5).
     // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
@@ -576,7 +576,7 @@ export function createObject(
 /**
  * Object Datagram Type (Section 11.3.1)
  *
- * Section 11.3.1 (Object Datagram) / Figure 23 from draft-ietf-moq-transport-18:
+ * Section 11.3.1 (Object Datagram) / Figure 23 from draft-ietf-moq-transport-19:
  * | Type | End Of Group | Properties | Object ID | Priority | Status/Payload |
  * |------|--------------|------------|-----------|----------|----------------|
  * | 0x00 | No           | No         | Yes       | Yes      | Payload        |
@@ -642,7 +642,7 @@ export const DatagramType = {
   STATUS_OBJ_EXT_NO_PRI: 0x29,
 
   // ステータスタイプ、Object ID なし (Object ID = 0)、Priority なし (Section 11.3.1: 0x2C-0x2D)
-  // draft-ietf-moq-transport-18 Section 11.3.1:
+  // draft-ietf-moq-transport-19 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
   STATUS_NO_OBJ_NO_PRI: 0x2c,
@@ -668,7 +668,7 @@ export interface ObjectDatagram {
 /**
  * Object ID フィールドの有無を判定する
  *
- * draft-ietf-moq-transport-18 Section 11.3.1:
+ * draft-ietf-moq-transport-19 Section 11.3.1:
  * "The ZERO_OBJECT_ID bit (0x04) indicates when the Object ID field is present.
  * When set to 1, the Object ID field is omitted and the Object ID is 0.
  * When set to 0, the Object ID field is present."
@@ -696,7 +696,7 @@ function datagramIsStatusType(type: number): boolean {
 /**
  * Check if datagram type has Priority Present
  *
- * draft-ietf-moq-transport-18 Section 11.3.1 (Object Datagram):
+ * draft-ietf-moq-transport-19 Section 11.3.1 (Object Datagram):
  * Types 0x00-0x07 and 0x20-0x25 have Priority Present = Yes
  * Types 0x08-0x0F and 0x28-0x2D have Priority Present = No
  */
@@ -719,7 +719,7 @@ function datagramHasPriority(type: number): boolean {
 
 /**
  * Encode an Object Datagram
- * draft-ietf-moq-transport-18 Section 11.3.1
+ * draft-ietf-moq-transport-19 Section 11.3.1
  */
 export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -742,7 +742,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   if (datagramHasProperties(datagram.type)) {
     const extLen = datagram.properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-18 Section 11.2.1.2:
+    // draft-ietf-moq-transport-19 Section 11.2.1.2:
     // Non-Normal status objects must not have properties
     if (
       datagramIsStatusType(datagram.type) &&
@@ -776,7 +776,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
 /**
  * Decode an Object Datagram
- * draft-ietf-moq-transport-18 Section 11.3.1
+ * draft-ietf-moq-transport-19 Section 11.3.1
  */
 export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
   let totalConsumed = 0;
@@ -786,7 +786,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
 
   const typeNum = Number(type);
 
-  // draft-ietf-moq-transport-18 Section 11.3.1:
+  // draft-ietf-moq-transport-19 Section 11.3.1:
   // 不正なタイプ値を検証する
   // 0b00X0XXXX の形式でないタイプ値は不正
   if ((typeNum & 0x10) !== 0 || typeNum > 0x2f) {
@@ -828,7 +828,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
 
-    // draft-ietf-moq-transport-18 Section 11.3.1:
+    // draft-ietf-moq-transport-19 Section 11.3.1:
     // "If an endpoint receives a datagram with the PROPERTIES bit set and
     //  an Properties Length of 0, it MUST close the session with a
     //  PROTOCOL_VIOLATION."
@@ -851,7 +851,7 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-18 Section 11.2.1.2:
+    // draft-ietf-moq-transport-19 Section 11.2.1.2:
     // "Any Object with status Normal can have properties (Section 2.5).
     // If an endpoint receives properties on an Object with status
     // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
@@ -986,21 +986,21 @@ export const FetchSerializationFlags = {
   /**
    * End of Non-Existent Range (Section 11.4.4.2)
    *
-   * draft-ietf-moq-transport-18:
+   * draft-ietf-moq-transport-19:
    * 指定した Location までの Object が存在しないことを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-18 Section 11.4.4.2
+   * draft-ietf-moq-transport-19 Section 11.4.4.2
    */
   END_OF_NON_EXISTENT_RANGE: 0x8c,
   /**
    * End of Unknown Range (Section 11.4.4.2)
    *
-   * draft-ietf-moq-transport-18:
+   * draft-ietf-moq-transport-19:
    * 指定した Location までの Object のステータスが不明であることを示す。
    * Group ID と Object ID フィールドが存在する。
    * Subgroup ID, Priority, Properties は存在しない。
-   * draft-ietf-moq-transport-18 Section 11.4.4.2
+   * draft-ietf-moq-transport-19 Section 11.4.4.2
    */
   END_OF_UNKNOWN_RANGE: 0x10c,
 } as const;
@@ -1008,7 +1008,7 @@ export const FetchSerializationFlags = {
 /**
  * Fetch Object Fields (Figure 27 in Section 11.4.4)
  */
-// draft-ietf-moq-transport-18 Section 11.2.1.1:
+// draft-ietf-moq-transport-19 Section 11.2.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 export interface FetchObjectFields {
@@ -1025,7 +1025,7 @@ export interface FetchObjectFields {
 /**
  * End of Range の種別
  *
- * draft-ietf-moq-transport-18 Section 11.4.4.2:
+ * draft-ietf-moq-transport-19 Section 11.4.4.2:
  * FETCH レスポンス内で Object が存在しない/不明な範囲を示す。
  */
 export type EndOfRangeType = "non_existent" | "unknown";
@@ -1043,7 +1043,7 @@ export interface DecodedFetchObject {
   /**
    * End of Range indicator (Section 11.4.4.2)
    *
-   * draft-ietf-moq-transport-18:
+   * draft-ietf-moq-transport-19:
    * 設定されている場合、この Object は実際のデータではなく
    * 指定した Location までの範囲を示す End of Range indicator。
    */
@@ -1062,7 +1062,7 @@ export interface FetchObjectContext {
 
 /**
  * Encode Fetch Object Fields
- * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
+ * draft-ietf-moq-transport-19 Section 11.4.4 Figure 27
  *
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
@@ -1076,7 +1076,7 @@ export function encodeFetchObjectFields(
   const parts: Uint8Array[] = [];
 
   // Serialization Flags (varint)
-  // draft-ietf-moq-transport-18: vi64 としてエンコード
+  // draft-ietf-moq-transport-19: vi64 としてエンコード
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
@@ -1102,7 +1102,7 @@ export function encodeFetchObjectFields(
   }
 
   // Group ID (フラグ 0x08 がセットされている場合)
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
   // "If the Group Order is Ascending (default), the Group ID is the prior
   //  Object's Group ID plus the Group ID Delta + 1."
   // "If the Group Order is Descending, the Group ID is the prior
@@ -1128,7 +1128,7 @@ export function encodeFetchObjectFields(
 
   // Subgroup ID (flags & 0x03 == 0x03 の場合)
   // Datagram 時 (0x40) は Subgroup ID フィールドをエンコードしない
-  // draft-ietf-moq-transport-18 §11.4.4.1:
+  // draft-ietf-moq-transport-19 §11.4.4.1:
   // "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
   if (
     !(fields.serializationFlags & FetchSerializationFlags.DATAGRAM) &&
@@ -1142,7 +1142,7 @@ export function encodeFetchObjectFields(
   }
 
   // Object ID (フラグ 0x04 がセットされている場合)
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
   // "When the Group ID Delta field is not present, the Object ID is the
   //  prior Object's ID plus the Object ID Delta if present."
   // エンコード時:
@@ -1183,7 +1183,7 @@ export function encodeFetchObjectFields(
   // Object Payload Length
   parts.push(encodeVarint(fields.payloadLength));
 
-  // draft-ietf-moq-transport-18 Section 11.2.1.1:
+  // draft-ietf-moq-transport-19 Section 11.2.1.1:
   // "The Object Status is a field that is only present in objects that are
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status を含めない
@@ -1206,7 +1206,7 @@ export function encodeFetchObjectFields(
 /**
  * End of Range レコードをデコードする
  *
- * draft-ietf-moq-transport-18 §11.4.4.2: Group ID と Object ID のみが存在する。
+ * draft-ietf-moq-transport-19 §11.4.4.2: Group ID と Object ID のみが存在する。
  */
 function decodeEndOfRange(
   data: Uint8Array,
@@ -1252,7 +1252,7 @@ function decodeEndOfRange(
 /**
  * Fetch Object の Subgroup ID をデコードする
  *
- * draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "When encoding an Object with a Forwarding Preference of 'Datagram',
  *  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
  *
@@ -1306,7 +1306,7 @@ function decodeFetchSubgroupId(
 
 /**
  * Decode Fetch Object Fields
- * draft-ietf-moq-transport-18 Section 11.4.4 Figure 27
+ * draft-ietf-moq-transport-19 Section 11.4.4 Figure 27
  *
  * @param data - Data buffer
  * @param context - Context with prior object's values (required after first object)
@@ -1324,7 +1324,7 @@ export function decodeFetchObjectFields(
   let totalConsumed = 0;
 
   // Serialization Flags (varint)
-  // draft-ietf-moq-transport-18: vi64 としてエンコードされる
+  // draft-ietf-moq-transport-19: vi64 としてエンコードされる
   const [flagsRaw, flagsConsumed] = decodeVarint(data, offset + totalConsumed);
   const flags = Number(flagsRaw);
   totalConsumed += flagsConsumed;
@@ -1343,7 +1343,7 @@ export function decodeFetchObjectFields(
     return [result, totalConsumed + consumed, newContext];
   }
 
-  // draft-ietf-moq-transport-18 Section 11.4.4 Table 7:
+  // draft-ietf-moq-transport-19 Section 11.4.4 Table 7:
   // 「When less than 128, the bits represent flags described below.
   //  The following additional values are defined: 0x8C (End of Non-Existent Range),
   //  0x10C (End of Unknown Range). Any other value is a PROTOCOL_VIOLATION.」
@@ -1356,7 +1356,7 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
   // Ascending: "The Group ID is the prior Object's Group ID plus the Group ID Delta + 1."
   // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
   // "If the computed Group ID would be less than 0 or greater than 2^64-1, the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
@@ -1380,7 +1380,7 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9
   if (groupId < 0n || groupId > maxObjectId) {
     throw new ProtocolViolationError(
       `computed group id out of range: ${groupId}, expected 0 to 2^64-1`,
@@ -1388,7 +1388,7 @@ export function decodeFetchObjectFields(
   }
 
   // Subgroup ID をデコード（DATAGRAM フラグの処理を含む）
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
   // "When encoding an Object with a Forwarding Preference of 'Datagram',
   //  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
   const {
@@ -1399,7 +1399,7 @@ export function decodeFetchObjectFields(
   totalConsumed += subgroupConsumed;
 
   // Object ID
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
   // "When the Group ID Delta field is not present, the Object ID is the
   //  prior Object's ID plus the Object ID Delta if present."
   // Group 不変時 (!GROUP_ID_PRESENT) かつ非先頭の場合、delta は prior + delta。
@@ -1421,7 +1421,7 @@ export function decodeFetchObjectFields(
   }
 
   // Object ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+  // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
   // "If the computed Object ID would be greater than 2^64-1, the
   //  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
   if (objectId > maxObjectId) {
@@ -1436,11 +1436,11 @@ export function decodeFetchObjectFields(
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
 
-    // draft-ietf-moq-transport-18:
+    // draft-ietf-moq-transport-19:
     // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
     // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
     // Datagram オブジェクトは Subgroup に属さないためチェックをスキップする。
-    // draft-ietf-moq-transport-18 Section 11.4.4
+    // draft-ietf-moq-transport-19 Section 11.4.4
     if (!isDatagram && context !== null && subgroupId === context.subgroupId) {
       if (publisherPriority !== context.publisherPriority) {
         throw new ProtocolViolationError(
@@ -1450,7 +1450,7 @@ export function decodeFetchObjectFields(
       }
     }
   } else {
-    // draft-ietf-moq-transport-18 §11.4.4.1 Table 9:
+    // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
     // 先頭オブジェクトに MUST なのは Group ID Delta と Object ID Delta のみ。
     // PRIORITY_PRESENT は任意であり、省略時はデフォルト値 128 を使用する。
     if (context === null) {
@@ -1476,7 +1476,7 @@ export function decodeFetchObjectFields(
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
 
-  // draft-ietf-moq-transport-18 Section 11.2.1.1:
+  // draft-ietf-moq-transport-19 Section 11.2.1.1:
   // "The Object Status is a field that is only present in objects that are
   // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
   // Fetch Object には Object Status は存在しない
@@ -1520,7 +1520,7 @@ export function createFirstFetchObjectFlags(hasExtensions = false, isDatagram = 
 
   if (isDatagram) {
     // Datagram 時は Subgroup ID フィールドなし、DATAGRAM ビットを設定
-    // draft-ietf-moq-transport-18 §11.4.4.1:
+    // draft-ietf-moq-transport-19 §11.4.4.1:
     // "the publisher MUST SET bit 0x40 to '1'"
     // 下位 2 ビットは SUBGROUP_ZERO (0x00) が推奨
     flags |= FetchSerializationFlags.DATAGRAM;

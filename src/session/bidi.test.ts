@@ -253,7 +253,7 @@ test("SubscriberImpl: 二重 unsubscribe は no-op", async () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-19 Section 10.5 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
  *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
  *  If an endpoint receives Track Properties in one of these messages it MUST
@@ -317,7 +317,7 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
  * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
  * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
  */
@@ -353,7 +353,7 @@ test("PUBLISH_OK: 空 Track Properties は正常にデコードされる", () =>
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+ * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
  * リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
  * 初回の Request ID は seenSet に追加され true を返す。
  */

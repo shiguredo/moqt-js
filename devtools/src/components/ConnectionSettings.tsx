@@ -599,7 +599,7 @@ export function ConnectionSettings() {
       </div>
 
       {/* Authorization Token Settings */}
-      {/* draft-ietf-moq-transport-18 §10.3.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+      {/* draft-ietf-moq-transport-19 §10.3.1.4 (AUTHORIZATION TOKEN Setup Option) */}
       <div class="mt-4 pt-4 border-t border-slate-200">
         <h3 class="text-sm font-medium text-slate-600 mb-3">
           Authorization Token

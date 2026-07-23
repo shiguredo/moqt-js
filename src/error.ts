@@ -1,7 +1,7 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-18 Section 15.10 (Error Codes)
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-15.10
+ * draft-ietf-moq-transport-19 Section 15.11 (Error Codes)
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-15.10
  */
 
 import { PublishDoneStatusCode } from "./message/types";
@@ -12,7 +12,7 @@ export { PublishDoneStatusCode };
 /**
  * Session Termination Error Codes (Section 3.5 Termination)
  *
- * draft-ietf-moq-transport-18 Section 3.5 (Termination)
+ * draft-ietf-moq-transport-19 Section 3.5 (Termination)
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
@@ -89,7 +89,7 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * draft-ietf-moq-transport-18 §14 (Grease):
+ * draft-ietf-moq-transport-19 §14 (Grease):
  * 未知のエラーコードは INTERNAL_ERROR として扱う。
  * Receipt of an unknown error code MUST be treated as equivalent to
  * INTERNAL_ERROR for that context.
@@ -104,7 +104,7 @@ export function normalizeRequestErrorCode(code: number): RequestErrorCode {
 }
 
 /**
- * draft-ietf-moq-transport-18 §14 (Grease):
+ * draft-ietf-moq-transport-19 §14 (Grease):
  * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
  */
 const PUBLISH_DONE_CODE_SET = new Set(Object.values(PublishDoneStatusCode));
@@ -117,7 +117,7 @@ export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
 }
 
 /**
- * draft-ietf-moq-transport-18 §14 (Grease):
+ * draft-ietf-moq-transport-19 §14 (Grease):
  * 未知の Session Termination エラーコードは INTERNAL_ERROR として扱う。
  */
 const SESSION_ERROR_CODE_SET = new Set(Object.values(SessionErrorCode));
@@ -130,9 +130,9 @@ export function normalizeSessionErrorCode(code: number): SessionErrorCode {
 }
 
 /**
- * Stream Reset Error Codes (Section 15.10.4)
+ * Stream Reset Error Codes (Section 15.11.4)
  *
- * draft-ietf-moq-transport-18 Section 15.10.4 (Stream Reset Error Codes):
+ * draft-ietf-moq-transport-19 Section 15.11.4 (Stream Reset Error Codes):
  * - GOING_AWAY (0x4) を追加
  * - UNKNOWN_OBJECT_STATUS (0x6) を追加
  * - EXPIRED_AUTH_TOKEN (0x7) を追加
@@ -155,7 +155,7 @@ export const DataStreamErrorCode = {
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];
 
 /**
- * draft-ietf-moq-transport-18 §14 (Grease):
+ * draft-ietf-moq-transport-19 §14 (Grease):
  * 未知の Data Stream Reset エラーコードは INTERNAL_ERROR として扱う。
  */
 const DATA_STREAM_ERROR_CODE_SET = new Set(Object.values(DataStreamErrorCode));
@@ -193,7 +193,7 @@ export class SessionError extends MoqtError {
 /**
  * Redirect 情報 (Section 10.6.1)
  *
- * draft-ietf-moq-transport-18 Section 10.6.1 (Redirect Structure):
+ * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
  * サーバーがクライアントに対して別の接続先への再接続を指示する。
  * Track Namespace は tuple 形式で保持する。
  */
@@ -226,7 +226,7 @@ export class RequestError extends MoqtError {
 /**
  * decode 関数がバッファ不足を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-18 のデータストリーム / 制御メッセージ decode は、
+ * draft-ietf-moq-transport-19 のデータストリーム / 制御メッセージ decode は、
  * バッファに必要なバイト数が揃っていない時点で例外を投げる。
  * 受信ループはこのエラーを受けて次のチャンクを待つ。
  */
@@ -240,7 +240,7 @@ export class IncompleteDataError extends Error {
 /**
  * プロトコル違反 (仕様で定められた値・形式に違反した受信データ) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-18 で MUST 要件として定められた受信データの妥当性検証
+ * draft-ietf-moq-transport-19 で MUST 要件として定められた受信データの妥当性検証
  * (ストリームヘッダーの予約値、Object Status の不正値、Properties Length の不整合等) で
  * 違反を検出した場合に投げる。受信ループはこのエラーを受けて
  * PROTOCOL_VIOLATION でセッションを閉じる。
@@ -255,7 +255,7 @@ export class ProtocolViolationError extends Error {
 /**
  * Malformed Track を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-18 §2.4.2 / §12.7 / §12.8 / §12.9:
+ * draft-ietf-moq-transport-19 §2.4.2 / §12.7 / §12.8 / §12.9:
  * Object 内で MUST 規定 (IMMUTABLE_PROPERTIES の再帰禁止、各 Property の Object 当たり
  * 1 つだけ等) が違反された場合、Track は malformed として扱われる。データストリーム
  * 単位で `RESET_STREAM_AT(MALFORMED_TRACK)` で打ち切る上位ハンドリングへ伝搬する。
@@ -270,7 +270,7 @@ export class MalformedTrackError extends Error {
 /**
  * 閉じた Subgroup への送信を拒否するときに投げるエラー
  *
- * draft-ietf-moq-transport-18 §11.4.3 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams):
  * "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
  *  attempt to open a new stream to deliver additional Objects in that Subgroup."
  *

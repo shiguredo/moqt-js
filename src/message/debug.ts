@@ -1,6 +1,6 @@
 /**
  * MOQT Debug Utilities
- * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK)
+ * draft-ietf-moq-transport-19 Section 10.5 (REQUEST_OK)
  */
 
 import { MessageType } from "./types";
@@ -8,7 +8,7 @@ import { MessageType } from "./types";
 /**
  * REQUEST_OK の textual alias マッピング
  *
- * draft-ietf-moq-transport-18 §10.5:
+ * draft-ietf-moq-transport-19 §10.5:
  * > This document uses the shorthand PUBLISH_OK, REQUEST_UPDATE_OK,
  * > TRACK_STATUS_OK, SUBSCRIBE_NAMESPACE_OK, and PUBLISH_NAMESPACE_OK
  * > to refer to a REQUEST_OK sent in response to the corresponding

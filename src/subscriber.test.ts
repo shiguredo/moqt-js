@@ -1,6 +1,6 @@
 /**
  * Subscriber Unit Tests
- * draft-ietf-moq-transport-18 Section 5.1 (Subscriptions)
+ * draft-ietf-moq-transport-19 Section 5.1 (Subscriptions)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -101,7 +101,7 @@ test("update は closed 状態ではエラーになる", async () => {
   }
 });
 
-// draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
+// draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
 // UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
 test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -129,7 +129,7 @@ test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", (
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
+// draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
 // TRACK_ENDED (0x2) は正常終了。errorCallback は呼ばない
 test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
   let endCalled = false;
@@ -154,7 +154,7 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
   assert.isFalse(errorCalled);
 });
 
-// draft-ietf-moq-transport-18 Section 10.11 (PUBLISH_DONE):
+// draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
 // INTERNAL_ERROR (0x0) はエラー。errorCallback を呼ぶ
 test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -180,7 +180,7 @@ test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK):
+// draft-ietf-moq-transport-19 Section 10.8 (SUBSCRIBE_OK):
 // SUBSCRIBE_OK の Track Properties が Subscriber に設定される
 test("setTrackProperties で Track Properties が設定される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -198,7 +198,7 @@ test("setTrackProperties で Track Properties が設定される", () => {
   assert.equal(subscriber.trackProperties[1].id, 0x04n);
 });
 
-// draft-ietf-moq-transport-18 Section 10.2.11 (LARGEST OBJECT Parameter):
+// draft-ietf-moq-transport-19 Section 10.2.16 (LARGEST OBJECT Parameter):
 // setLargestLocation で largestLocation が更新される
 test("setLargestLocation で largestLocation が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -213,7 +213,7 @@ test("setLargestLocation で largestLocation が更新される", () => {
   assert.deepEqual(subscriber.largestLocation, { group: 10n, object: 7n });
 });
 
-// draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+// draft-ietf-moq-transport-19 §10.4 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。

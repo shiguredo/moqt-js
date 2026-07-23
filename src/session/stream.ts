@@ -16,7 +16,7 @@ import { readDeliveryTimeoutObjectProperties } from "../properties";
 
 /**
  * Object ID の最大値 (2^64 - 1)
- * draft-ietf-moq-transport-18 §11.4.2:
+ * draft-ietf-moq-transport-19 §11.4.2:
  * "If the resulting Object ID would be greater than 2^64 - 1,
  *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
  */
@@ -33,7 +33,7 @@ export interface StreamStatsUpdate {
 
 /**
  * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
- *   draft-ietf-moq-transport-18 §11.4.4.1 Table 9
+ *   draft-ietf-moq-transport-19 §11.4.4.1 Table 9
  */
 export function processFetchObjects(
   buffer: Uint8Array,
@@ -76,14 +76,14 @@ export function processFetchObjects(
       currentContext = newContext;
       currentIsFirst = false;
 
-      // draft-ietf-moq-transport-18 Section 11.4.4.2:
+      // draft-ietf-moq-transport-19 Section 11.4.4.2:
       // End of Range レコードは実際のオブジェクトデータを含まないためスキップする。
       // コンテキスト (Group ID, Object ID 等) は既に newContext で更新済み。
       if (fields.endOfRange) {
         continue;
       }
 
-      // draft-ietf-moq-transport-18 Section 11.2.1.1:
+      // draft-ietf-moq-transport-19 Section 11.2.1.1:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
       const object: MoqtObject = {
         groupId: fields.groupId,
@@ -128,7 +128,7 @@ export function processSubgroupObjects(
 ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
   let offset = 0;
   let currentPreviousObjectId = previousObjectId;
-  // draft-ietf-moq-transport-18 Section 11.4.2:
+  // draft-ietf-moq-transport-19 Section 11.4.2:
   // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
   // Subgroup ID として使用する
   let resolvedSubgroupId = header.subgroupId;
@@ -155,7 +155,7 @@ export function processSubgroupObjects(
       currentPreviousObjectId = objectId;
 
       // Object ID の範囲検証: 0 以上 2^64-1 以下
-      // draft-ietf-moq-transport-18 §11.4.2:
+      // draft-ietf-moq-transport-19 §11.4.2:
       // "If the resulting Object ID would be greater than 2^64 - 1,
       //  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
       if (objectId > maxObjectId) {

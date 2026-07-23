@@ -12,7 +12,7 @@ export { toHttpVersionLabel };
 
 // Connection settings
 export const url = signal("moqt://127.0.0.1:4443/moqt");
-// moqt URI の Fragment Identifier (draft-ietf-moq-transport-18 §3.1.2)
+// moqt URI の Fragment Identifier (draft-ietf-moq-transport-19 §3.1.2)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");
 export const namespace = signal("room/123");
@@ -33,7 +33,7 @@ export const keyframeInterval = signal(3600);
 
 // Publish settings
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
-// draft-ietf-moq-transport-18 Section 12.3 (MAX CACHE DURATION)
+// draft-ietf-moq-transport-19 Section 12.3 (MAX CACHE DURATION)
 // デフォルト: 600000ms (10分)
 export const maxCacheDuration = signal(600000);
 
@@ -55,7 +55,7 @@ export const settingsDisabled = signal(false);
 export const reliability = signal<string>("pending");
 
 // Authorization Token (SETUP Option 0x03)
-// draft-ietf-moq-transport-18 §10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
+// draft-ietf-moq-transport-19 §10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
 // SETUP では DELETE / USE_ALIAS は仕様上禁止 (§10.2.2)。
 // REGISTER (0x1) または USE_VALUE (0x3) のみ。
 export type AuthorizationTokenAliasTypeUi = "useValue" | "register";
@@ -73,7 +73,7 @@ export const authorizationTokenValue = signal<string>("");
  * - Token Value が空の場合は `undefined` を返し SETUP Option を送出しない。
  * - Token Alias / Token Type は 10 進文字列をパースする。パース失敗時は `undefined` を返す。
  *
- * draft-ietf-moq-transport-18 §10.2.2 / §10.3.1.4
+ * draft-ietf-moq-transport-19 §10.2.2 / §10.3.1.4
  */
 export function buildAuthorizationToken(): AuthorizationToken | undefined {
   const value = authorizationTokenValue.value;
@@ -158,7 +158,7 @@ export async function fetchCameraDevices(): Promise<void> {
 
 /**
  * `connect()` に渡す MOQT URI を現在の設定から構築する。
- * draft-ietf-moq-transport-18 §3.1.2 (Fragment Identifiers) に従い
+ * draft-ietf-moq-transport-19 §3.1.2 (Fragment Identifiers) に従い
  * `fragment` が空でなければ `#type:value` を連結する。
  */
 export function buildConnectUrl(): string {
