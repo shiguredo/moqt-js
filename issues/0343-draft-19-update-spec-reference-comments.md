@@ -3,22 +3,22 @@
 - Priority: Medium
 - Created: 2026-07-07
 - Model: Fable 5
-- Branch: feature/fix-draft-19-spec-reference-comments
-- Polished: {YYYY-MM-DD}
+- Branch: feature/update-draft-19-spec-reference-comments
+- Polished: 2026-07-23
 
 ## 目的
 
-moqt-js のコード・テスト・devtools は仕様参照コメントとして `draft-ietf-moq-transport-18` を全体で 779 箇所参照している (src 748 / tests 2 / devtools 13)。draft-19 ではセクション番号の振り直しと用語変更が多数あるため、参照ドラフト番号と節番号・引用文言を一括で draft-19 に更新する。
+moqt-js のコード・テスト・devtools は仕様参照コメントとして `draft-ietf-moq-transport-18` を全体で 795 箇所参照している (src 773 / tests 2 / devtools 20)。draft-19 ではセクション番号の振り直しと用語変更が多数あるため、参照ドラフト番号と節番号・引用文言を一括で draft-19 に更新する。
 
 polish-refs による引用検証の正確性は refs/ の一次資料とコメントの一致に依存するため、実装系の draft-19 対応 issue がすべて closed になった後、残りの参照を本 issue で一括更新する。
 
 ## 優先度根拠
 
-コメントのみの変更で動作に影響はないが、779 箇所の参照が古い版のままだと以後のレビュー・polish-refs 検証がすべて draft-18 基準になり、仕様追従の妨げになる。他の draft-19 対応 issue 完了後に速やかに実施すべきなので Medium。
+コメントのみの変更で動作に影響はないが、795 箇所の参照が古い版のままだと以後のレビュー・polish-refs 検証がすべて draft-18 基準になり、仕様追従の妨げになる。他の draft-19 対応 issue 完了後に速やかに実施すべきなので Medium。
 
 ## 現状
 
-`draft-ietf-moq-transport-18` の参照は 76 ファイルに分布 (主なもの: `src/session.ts` 207 件、`src/dataStream.ts` 60 件、`src/message/parameter.ts` 49 件、`src/properties.ts` 31 件、`src/session/params.ts` 28 件、`src/message/types.ts` 27 件)。
+`draft-ietf-moq-transport-18` の参照は src 65 ファイルに分布 (主なもの: `src/session.ts` 214 件、`src/dataStream.ts` 60 件、`src/message/parameter.ts` 50 件、`src/properties.ts` 32 件、`src/session/params.ts` 28 件、`src/message/types.ts` 27 件)。
 
 refs/moq/ には `draft-ietf-moq-transport-18.txt` のみがあり、draft-19 は未取り込み。
 
