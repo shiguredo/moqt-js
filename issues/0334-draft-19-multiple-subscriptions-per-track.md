@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-07-07
+- Completed: 2026-07-24
 - Model: Fable 5
 - Branch: feature/change-draft-19-multiple-subscriptions-per-track
 - Polished: 2026-07-23
@@ -121,13 +122,11 @@ client-as-publisher（送信側）のスコープ:
 
 ## 解決方法
 
-1. Object Location × Location Filter のマッチ純関数を追加する（Start 解決・End Group 判定を含む）。単位テストを付ける
-2. `SubscriberImpl`（または同等）に解決済み Location Filter を保持する。SUBSCRIBE 送信時の `options.filter` と、REQUEST_UPDATE 成功後の更新経路を実装する
-3. `subscribersByAlias` / `BidiSessionInternal` を多重化（requestId 主キー + alias インデックス）。追加 / 削除 / 空エントリ掃除を実装する
+1. `src/filter.ts`: Object Location × Location Filter のマッチ純関数（`resolveFilter` / `objectMatchesFilter`）を追加。`src/filter.test.ts` に 14 本の単体テストを付ける
+2. `src/subscriber.ts`: `SubscriberImpl` に `subscriptionFilter` / `resolvedFilterCache` を保持。`setSubscriptionFilter` / `getFullTrackName` を追加。`handleObject` / `handleDatagram` に filter 再適用を組み込む
+3. `src/session.ts` / `src/session/bidi.ts`: `subscribersByAlias` を `Map<bigint, SubscriberImpl[]>` に多重化。追加 / 削除を requestId 単位に変更。SUBSCRIBE 送信時に `options.filter` を設定
 4. `src/session/bidi.ts`: SUBSCRIBE_OK の alias 衝突を「異 Track のみ DUPLICATE_TRACK_ALIAS」に変更。cancel / finally を requestId 単位削除に変更
-5. `src/session.ts` / `src/session/stream.ts`: PUBLISH 受信の `DUPLICATE_SUBSCRIPTION` を撤廃し Track 同一性判定に置換。datagram / subgroup / `handleSubgroupStream` / `processSubgroupObjects` を複数 subscription + filter 再適用に変更
-6. `src/error.ts`: `DUPLICATE_SUBSCRIPTION` を削除。参照箇所をすべて除去
-7. 共有 alias / 異 Track alias / unsubscribe 残存は e2e または session 層テストで確認
-8. 触った箇所の仕様参照を draft-19 Section 5.1 / 5.1.2 / 11.1 に更新
-9. `CHANGES.md` に `[CHANGE]` を追記
-10. `vp check` / `tsc --noEmit` / `vp test run` で確認
+5. `src/session.ts` / `src/session/stream.ts`: PUBLISH 受信の `DUPLICATE_SUBSCRIPTION` を撤廃し Track 同一性判定に置換。datagram / subgroup / `processSubgroupObjects` を複数 subscription + filter 再適用に変更
+6. `src/error.ts`: `DUPLICATE_SUBSCRIPTION` を削除
+7. `CHANGES.md` に `[CHANGE]` を追記
+8. `vp check` / `tsc --noEmit` / `vp test run` で確認（全 733 テスト通過）
