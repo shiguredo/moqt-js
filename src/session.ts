@@ -36,7 +36,7 @@ import {
   decodeGoawayPayload,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
-  decodePublishBlockedPayload,
+  decodePublishSkippedPayload,
   decodePublishPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
@@ -551,7 +551,7 @@ export interface TrackStatusResult {
  * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE への応答として、NAMESPACE / NAMESPACE_DONE が送信される。
  * draft-18 で旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
- * SUBSCRIBE_TRACKS (0x51) に分割され、PUBLISH_BLOCKED は SUBSCRIBE_TRACKS 応答に移動した。
+ * SUBSCRIBE_TRACKS (0x51) に分割され、PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答に移動した。
  */
 export interface NamespaceSubscriptionCallbacks {
   /**
@@ -599,7 +599,7 @@ export interface NamespaceSubscription {
  *
  * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
  * SUBSCRIBE_TRACKS への応答として PUBLISH メッセージが新規双方向ストリームで
- * 送信される。応答ストリームでは PUBLISH_BLOCKED が送られる。
+ * 送信される。応答ストリームでは PUBLISH_SKIPPED が送られる。
  */
 export interface TracksSubscriptionCallbacks {
   /**
@@ -615,17 +615,17 @@ export interface TracksSubscriptionCallbacks {
     trackName: string,
   ) => SubscribeCallbacks | Promise<SubscribeCallbacks>;
   /**
-   * PUBLISH_BLOCKED を受信したときに呼ばれる
-   * draft-ietf-moq-transport-18 §10.20 (PUBLISH_BLOCKED):
+   * PUBLISH_SKIPPED を受信したときに呼ばれる
+   * draft-ietf-moq-transport-18 §10.20 (PUBLISH_SKIPPED):
    *
-   * > The publisher sends the PUBLISH_BLOCKED control message to indicate
+   * > The publisher sends the PUBLISH_SKIPPED control message to indicate
    * > it cannot send a PUBLISH message to initiate a new Subscription for a
    * > Track in the SUBSCRIBE_TRACKS's Track Namespace.
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    * @param trackName - 確立できなかった Subscription の Track Name
    */
-  onPublishBlocked?: (namespaceSuffix: string[], trackName: string) => void;
+  onPublishSkipped?: (namespaceSuffix: string[], trackName: string) => void;
   /**
    * エラー時のコールバック
    */
@@ -808,7 +808,7 @@ export interface Session {
    * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS は新しい双方向ストリームで送信される。
    * Publisher はマッチするネームスペース内のトラックに対して PUBLISH メッセージを
-   * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_BLOCKED が
+   * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_SKIPPED が
    * 送られる場合がある。
    *
    * @param namespacePrefix - Track Namespace Prefix
@@ -980,7 +980,7 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS は SUBSCRIBE_NAMESPACE とは別の専用の双方向ストリームで
-   * 送受信される。応答ストリーム上では PUBLISH_BLOCKED が送られる。PUBLISH は
+   * 送受信される。応答ストリーム上では PUBLISH_SKIPPED が送られる。PUBLISH は
    * 別の新規双方向ストリームで到着する。
    */
   private tracksSubscriptions = new Map<
@@ -1787,7 +1787,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
    * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
    * REQUEST_OK または REQUEST_ERROR が最初のレスポンスとして返され、
-   * 以降は PUBLISH_BLOCKED のみが応答ストリーム上で送られる。
+   * 以降は PUBLISH_SKIPPED のみが応答ストリーム上で送られる。
    * PUBLISH メッセージは別の新規双方向ストリームで非同期に到着する。
    *
    * draft-ietf-moq-transport-18 §6.1:
@@ -1914,7 +1914,7 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-18 §10.18 (SUBSCRIBE_NAMESPACE):
    * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
-   * PUBLISH_BLOCKED は SUBSCRIBE_TRACKS 応答ストリーム側 (startTracksStreamLoop) で扱う。
+   * PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答ストリーム側 (startTracksStreamLoop) で扱う。
    */
   private async startNamespaceStreamLoop(
     requestId: bigint,
@@ -2094,7 +2094,7 @@ export class SessionImpl implements Session {
             default:
               // draft-ietf-moq-transport-18 §10 (Control Messages):
               // "An endpoint that receives an unknown message type MUST close the session."
-              // PUBLISH_BLOCKED は SUBSCRIBE_TRACKS 応答ストリーム側で処理するので
+              // PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答ストリーム側で処理するので
               // SUBSCRIBE_NAMESPACE 応答ストリームでは PROTOCOL_VIOLATION 扱い。
               this.closeWithError(
                 new SessionError(
@@ -2141,7 +2141,7 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
    *
    * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
-   * REQUEST_OK / REQUEST_ERROR、PUBLISH_BLOCKED のみを処理する。
+   * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
    * PUBLISH メッセージは別の新規双方向ストリームで到着するためここでは扱わない。
    */
   private async startTracksStreamLoop(
@@ -2271,13 +2271,13 @@ export class SessionImpl implements Session {
               return;
             }
 
-            case MessageType.PUBLISH_BLOCKED: {
-              // draft-ietf-moq-transport-18 §10.20 (PUBLISH_BLOCKED):
+            case MessageType.PUBLISH_SKIPPED: {
+              // draft-ietf-moq-transport-18 §10.20 (PUBLISH_SKIPPED):
               // SUBSCRIBE_TRACKS への応答ストリーム上で送られる。
-              const decodedMsg = decodePublishBlockedPayload(messagePayload);
+              const decodedMsg = decodePublishSkippedPayload(messagePayload);
               const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
               const trackName = new TextDecoder().decode(decodedMsg.trackName);
-              callbacks.onPublishBlocked?.(suffixStrings, trackName);
+              callbacks.onPublishSkipped?.(suffixStrings, trackName);
               break;
             }
 

@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-18 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_BLOCKED)
+ * draft-ietf-moq-transport-19 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_SKIPPED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -9,16 +9,19 @@ import {
   type Namespace,
   type NamespaceDone,
   type PublishNamespace,
+  type PublishSkipped,
   type SubscribeNamespace,
   type SubscribeTracks,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishNamespacePayload,
+  decodePublishSkippedPayload,
   decodeSubscribeNamespacePayload,
   decodeSubscribeTracksPayload,
   encodeNamespaceDonePayload,
   encodeNamespacePayload,
   encodePublishNamespacePayload,
+  encodePublishSkippedPayload,
   encodeSubscribeNamespacePayload,
   encodeSubscribeTracksPayload,
 } from "./namespace";
@@ -468,4 +471,39 @@ test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () =>
       },
     ),
   );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10.20 (PUBLISH_SKIPPED):
+ * PUBLISH_SKIPPED のエンコード・デコードがラウンドトリップすることを検証する。
+ * コードポイント 0x0f は不変。
+ */
+test("PublishSkipped のエンコード・デコードがラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
+      fc.uint8Array({ minLength: 1, maxLength: 50 }),
+      (namespaceParts, trackName) => {
+        const original: PublishSkipped = {
+          type: MessageType.PUBLISH_SKIPPED,
+          trackNamespaceSuffix: createTrackNamespace(namespaceParts),
+          trackName,
+        };
+
+        const encoded = encodePublishSkippedPayload(original);
+        const decoded = decodePublishSkippedPayload(encoded);
+
+        assert.equal(decoded.type, MessageType.PUBLISH_SKIPPED);
+        assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespaceSuffix), namespaceParts);
+        assert.deepEqual(decoded.trackName, trackName);
+      },
+    ),
+  );
+});
+
+/**
+ * MessageType.PUBLISH_SKIPPED のコードポイントが 0x0f であることを検証する。
+ */
+test("PUBLISH_SKIPPED のコードポイントは 0x0f", () => {
+  assert.equal(MessageType.PUBLISH_SKIPPED, 0x0f);
 });
