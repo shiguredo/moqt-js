@@ -74,6 +74,16 @@ export const RequestErrorCode = {
   INVALID_JOINING_REQUEST_ID: 0x32,
   UNSUPPORTED_EXTENSION: 0x33,
   REDIRECT: 0x34,
+  /**
+   * CONFLICTING_FILTERS (Section 10.6)
+   * draft-ietf-moq-transport-19: SUBSCRIBE_TRACKS 応答専用
+   */
+  CONFLICTING_FILTERS: 0x35,
+  /**
+   * INVALID_FILTER (Section 10.6)
+   * draft-ietf-moq-transport-19: フィルタ不正・上限超過
+   */
+  INVALID_FILTER: 0x36,
 } as const;
 
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];

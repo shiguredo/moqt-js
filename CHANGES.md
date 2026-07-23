@@ -76,6 +76,12 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] Range Filters と MAX_FILTER_RANGES Setup Option を追加する
+  - draft-ietf-moq-transport-19 §5.1.3 に基づき、Range Filter 5 種（SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY/TRACK_PROPERTY_FILTER）の encode/decode を追加する
+  - SetupOptionType.MAX_FILTER_RANGES (0x06) と getSetupMaxFilterRanges を追加する
+  - RequestErrorCode.CONFLICTING_FILTERS (0x35) / INVALID_FILTER (0x36) を追加する
+  - subscribe() / fetch() / subscribeTracks() / update() で Range Filter を送信可能にする
+  - @voluntas
 - [ADD] MAX_REQUEST_UPDATES Setup Option と TOO_MANY_REQUEST_UPDATES を追加する
   - draft-ietf-moq-transport-19 §10.3.1.7 に基づき、ピアの MAX_REQUEST_UPDATES を尊重して REQUEST_UPDATE 送信をガードする
   - SessionErrorCode.TOO_MANY_REQUEST_UPDATES (0x1b) を追加する

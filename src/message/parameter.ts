@@ -618,6 +618,12 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x32: "varint",
   // TRACK_NAMESPACE_PREFIX (Section 10.2.14)
   0x34: "length-prefixed",
+  // Range Filters (draft-ietf-moq-transport-19 Section 5.1.3 / 10.2.10–10.2.14)
+  0x25: "length-prefixed", // SUBGROUP_FILTER
+  0x26: "length-prefixed", // OBJECTID_FILTER
+  0x27: "length-prefixed", // PRIORITY_FILTER
+  0x28: "length-prefixed", // OBJECT_PROPERTY_FILTER
+  0x29: "length-prefixed", // TRACK_PROPERTY_FILTER
 };
 
 /**
@@ -802,13 +808,16 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
       previousType,
     );
 
-    // draft-ietf-moq-transport-18 Section 10.2:
+    // draft-ietf-moq-transport-19 Section 10.2:
     // "Receivers SHOULD check that there are no unexpected duplicate parameters
     //  and close the session with PROTOCOL_VIOLATION if found."
-    // Section 10.2.2: AUTHORIZATION_TOKEN は複数回出現が許可されているため
+    // AUTHORIZATION_TOKEN と Range Filter (0x25–0x29) は複数回出現が許可されているため
     // 重複チェックから除外する
-    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-10.2
-    if (seenTypes.has(param.type) && param.type !== MessageParameterType.AUTHORIZATION_TOKEN) {
+    // draft-ietf-moq-transport-19 Section 5.1.3: Range Filters は複数回 MAY
+    const isRepeatable =
+      param.type === MessageParameterType.AUTHORIZATION_TOKEN ||
+      (param.type >= 0x25 && param.type <= 0x29);
+    if (seenTypes.has(param.type) && !isRepeatable) {
       throw new ProtocolViolationError(
         `duplicate message parameter type: 0x${param.type.toString(16)}`,
       );
@@ -972,4 +981,175 @@ export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
   }
   const [namespace] = decodeTrackNamespace(param.value);
   return namespace;
+}
+
+// ============================================================================
+// Range Filters (draft-ietf-moq-transport-19 Section 5.1.3)
+// ============================================================================
+
+/**
+ * Range Filter の単一 Range
+ *
+ * draft-ietf-moq-transport-19 Section 5.1.3:
+ * Start は直前 Range の End からの delta（先頭は 0 から）。
+ * End は当該 Start からの delta。末尾 Range のみ End 省略可（open-ended）。
+ */
+export interface FilterRange {
+  start: bigint;
+  end?: bigint;
+}
+
+/**
+ * Range Filter パラメータ
+ *
+ * draft-ietf-moq-transport-19 Section 5.1.3:
+ * 同一 SetID 内は AND、異なる SetID 間は OR。
+ */
+export interface RangeFilterParam {
+  type: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty";
+  setId: number;
+  /** OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER のみ使用。偶数であること */
+  propertyType?: bigint;
+  ranges: FilterRange[];
+}
+
+/**
+ * Range Filter の削除（REQUEST_UPDATE で Length=0）
+ */
+export interface RangeFilterRemove {
+  type: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty";
+  remove: true;
+}
+
+/** Range Filter の送信指定（追加または削除） */
+export type RangeFilterSpec = RangeFilterParam | RangeFilterRemove;
+
+/**
+ * Range Filter のワイヤエンコーディング
+ *
+ * draft-ietf-moq-transport-19 Section 5.1.3:
+ * Value = Length (vi64) + [SetID (8 bit) + [Property Type (vi64)] + Range 列]
+ * Length = 0 は削除を意味する。
+ */
+export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
+  if ("remove" in spec && spec.remove) {
+    // Length = 0（削除）
+    return encodeVarint(0n);
+  }
+
+  const param = spec as RangeFilterParam;
+  const parts: Uint8Array[] = [];
+
+  // SetID (8 bit)
+  parts.push(new Uint8Array([param.setId & 0xff]));
+
+  // Property Type (vi64) - OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER のみ
+  if (param.type === "objectProperty" || param.type === "trackProperty") {
+    if (param.propertyType === undefined) {
+      throw new Error("propertyType is required for objectProperty/trackProperty filter");
+    }
+    parts.push(encodeVarint(param.propertyType));
+  }
+
+  // Range 列（delta エンコーディング）
+  let prevEnd = 0n;
+  for (let i = 0; i < param.ranges.length; i++) {
+    const range = param.ranges[i];
+    const startDelta = range.start - prevEnd;
+    if (startDelta < 0n) {
+      throw new Error("range start must be >= previous end");
+    }
+    parts.push(encodeVarint(startDelta));
+
+    if (range.end !== undefined) {
+      const endDelta = range.end - range.start;
+      if (endDelta < 0n) {
+        throw new Error("range end must be >= range start");
+      }
+      parts.push(encodeVarint(endDelta));
+      prevEnd = range.end;
+    } else {
+      // 末尾 Range のみ End 省略可
+      if (i !== param.ranges.length - 1) {
+        throw new Error("only the last range may omit end");
+      }
+    }
+  }
+
+  const body = concatUint8Arrays(parts);
+  const result = new Uint8Array(encodeVarint(BigInt(body.length)).length + body.length);
+  const lenBytes = encodeVarint(BigInt(body.length));
+  result.set(lenBytes, 0);
+  result.set(body, lenBytes.length);
+  return result;
+}
+
+/**
+ * Range Filter のワイヤデコード
+ *
+ * @returns [RangeFilterSpec, consumed bytes]
+ */
+export function decodeRangeFilter(
+  type: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty",
+  data: Uint8Array,
+  offset = 0,
+): [RangeFilterSpec, number] {
+  const [length, lengthSize] = decodeVarint(data, offset);
+  let totalConsumed = lengthSize;
+
+  // Length = 0 は削除
+  if (Number(length) === 0) {
+    return [{ type, remove: true }, totalConsumed];
+  }
+
+  const bodyStart = offset + totalConsumed;
+  const bodyEnd = bodyStart + Number(length);
+
+  // SetID (8 bit)
+  const setId = data[bodyStart];
+  let pos = bodyStart + 1;
+
+  // Property Type (vi64) - OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER のみ
+  let propertyType: bigint | undefined;
+  if (type === "objectProperty" || type === "trackProperty") {
+    const [pt, ptSize] = decodeVarint(data, pos);
+    propertyType = pt;
+    pos += ptSize;
+  }
+
+  // Range 列（delta デコーディング）
+  const ranges: FilterRange[] = [];
+  let prevEnd = 0n;
+  while (pos < bodyEnd) {
+    const [startDelta, startDeltaSize] = decodeVarint(data, pos);
+    pos += startDeltaSize;
+    const start = prevEnd + startDelta;
+
+    if (pos >= bodyEnd) {
+      // 末尾 Range の End 省略（open-ended）
+      ranges.push({ start });
+      break;
+    }
+
+    const [endDelta, endDeltaSize] = decodeVarint(data, pos);
+    pos += endDeltaSize;
+    const end = start + endDelta;
+    ranges.push({ start, end });
+    prevEnd = end;
+  }
+
+  totalConsumed += Number(length);
+  return [{ type, setId, propertyType, ranges }, totalConsumed];
+}
+
+/** Uint8Array 配列を連結するヘルパー */
+function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  const total = arrays.reduce((sum, a) => sum + a.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
 }

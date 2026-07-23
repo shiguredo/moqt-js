@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-07-07
+- Completed: 2026-07-24
 - Model: Fable 5
 - Branch: feature/add-draft-19-range-filters
 - Polished: 2026-07-23
