@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/change-draft-19-graceful-request-stream-closure
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
@@ -34,7 +34,7 @@ draft-18 には Section 3.3.2 に相当する節がなく、キャンセル記�
 ## 現状
 
 - `src/session/bidi.ts:282-283`: 応答受信前の FIN を「bidi stream closed before receiving response」として失敗扱い。draft-19 の「FIN before required messages = failed」に整合
-- `src/session/bidi.ts:1004-1005` (`cancelSubscription`) / `src/session/bidi.ts:1033-1034` (`cancelFetch`): `readable.cancel()` (STOP_SENDING 相当) + `writer.abort()` (RESET_STREAM 相当) で方向別に終了。draft-19 Section 3.3.3 に整合
+- `src/session/bidi.ts:991-1013` (`bidiCancelSubscription`) / `src/session/bidi.ts:1020-1040` (`bidiCancelFetch`): `readable.cancel()` (STOP_SENDING 相当) + `writer.abort()` (RESET_STREAM 相当) で方向別に終了。draft-19 Section 3.3.3 に整合
 - `src/session.ts:1333, 3615, 3723` など: 正常クローズは `writer.close()` (FIN)
 - publisher 側で PUBLISH_DONE 送信と FIN 送信の順序を保証しているかは未検証
 - `src/subscriber.ts:274` / `src/fetcher.ts:174`: STOP_SENDING 関連の draft-18 引用コメント (節番号が draft-19 で 3.3.3 / 3.3.4 に変わる)
