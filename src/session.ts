@@ -44,6 +44,7 @@ import {
   getSetupAuthority,
   getSetupPath,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
   encodeSetupPayload,
   encodeFetchPayload,
@@ -64,6 +65,7 @@ import {
   type Location,
   type Parameter,
   type LocationFilter,
+  type RangeFilterSpec,
 } from "./message";
 import {
   NAMESPACE_OK_ALLOWED_PARAMS,
@@ -496,6 +498,14 @@ export interface SubscribeOptions {
    * draft-ietf-moq-transport-18 Section 10.2.6
    */
   rendezvousTimeout?: bigint;
+
+  /**
+   * Range Filters
+   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+   *
+   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 /**
@@ -519,6 +529,14 @@ export interface SubscribeTracksOptions {
    * 明示的に false のときだけワイヤに FORWARD=0 を載せる。
    */
   forward?: boolean;
+
+  /**
+   * Range Filters
+   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+   *
+   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 /**
@@ -557,6 +575,12 @@ export interface FetchOptions {
    * 終了位置
    */
   endLocation: Location;
+
+  /**
+   * Range Filters
+   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 /**
@@ -913,6 +937,8 @@ export class SessionImpl implements Session {
   private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // draft-ietf-moq-transport-19 §10.3.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   peerMaxRequestUpdates = 0;
+  // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
+  peerMaxFilterRanges = 0;
 
   // アクティブなパブリッシャー、サブスクライバー、フェッチャー
   private publishers = new Map<bigint, PublisherImpl>();
@@ -1295,9 +1321,14 @@ export class SessionImpl implements Session {
     // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）
     this.peerMaxRequestUpdates = getSetupMaxRequestUpdates(decodedSetup);
 
+    // draft-ietf-moq-transport-19 §10.3.1.6:
+    // ピアの MAX_FILTER_RANGES を取得（デフォルト 0 = Range Filter 送信禁止）
+    this.peerMaxFilterRanges = getSetupMaxFilterRanges(decodedSetup);
+
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {
       peerMaxAuthTokenCacheSize: peerMaxAuthTokenCacheSize.toString(),
       peerMaxRequestUpdates: this.peerMaxRequestUpdates.toString(),
+      peerMaxFilterRanges: this.peerMaxFilterRanges.toString(),
     });
 
     // draft-ietf-moq-transport-18 Section 10.3 (SETUP) / Section 3.3 (Control Streams):
@@ -1530,6 +1561,22 @@ export class SessionImpl implements Session {
         objectCallback: callbacks.object,
       });
     });
+
+    // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
+    if (options?.rangeFilters !== undefined && options.rangeFilters.length > 0) {
+      if (this.peerMaxFilterRanges === 0) {
+        throw new Error("cannot send range filters: peer MAX_FILTER_RANGES is 0 (not advertised)");
+      }
+      const totalRanges = options.rangeFilters.reduce(
+        (sum, f) => sum + ("ranges" in f ? f.ranges.length : 0),
+        0,
+      );
+      if (totalRanges > this.peerMaxFilterRanges) {
+        throw new Error(
+          `cannot send range filters: total ranges ${totalRanges} exceeds peer MAX_FILTER_RANGES ${this.peerMaxFilterRanges}`,
+        );
+      }
+    }
 
     const parameters = buildSubscribeParameters(options);
 

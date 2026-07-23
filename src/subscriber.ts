@@ -4,7 +4,7 @@
  */
 
 import type { Parameter } from "./message/parameter";
-import type { LocationFilter } from "./message/parameter";
+import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
@@ -38,6 +38,14 @@ export interface RequestUpdateOptions {
    * - undefined: 変更しない（REQUEST_UPDATE に FORWARD を含めない）
    */
   forward?: boolean;
+
+  /**
+   * Range Filters
+   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+   *
+   * Length=0 で削除、省略で不変。
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 /**

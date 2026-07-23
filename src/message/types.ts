@@ -101,6 +101,13 @@ export const SetupOptionType = {
    * 0 は無制限。欠落時のデフォルトも 0。
    */
   MAX_REQUEST_UPDATES: 0x08,
+  /**
+   * MAX_FILTER_RANGES (Section 10.3.1.6)
+   *
+   * draft-ietf-moq-transport-19:
+   * ピアが送信可能な Range Filter の最大数。デフォルト 0（送信禁止）。
+   */
+  MAX_FILTER_RANGES: 0x06,
 } as const;
 
 export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionType];
@@ -201,6 +208,31 @@ export const MessageParameterType = {
    * draft-ietf-moq-transport-18 Section 10.2.14
    */
   TRACK_NAMESPACE_PREFIX: 0x34,
+  /**
+   * SUBGROUP_FILTER (Section 10.2.10)
+   * draft-ietf-moq-transport-19: Range Filter の一種
+   */
+  SUBGROUP_FILTER: 0x25,
+  /**
+   * OBJECTID_FILTER (Section 10.2.11)
+   * draft-ietf-moq-transport-19: Range Filter の一種
+   */
+  OBJECTID_FILTER: 0x26,
+  /**
+   * PRIORITY_FILTER (Section 10.2.12)
+   * draft-ietf-moq-transport-19: Range Filter の一種
+   */
+  PRIORITY_FILTER: 0x27,
+  /**
+   * OBJECT_PROPERTY_FILTER (Section 10.2.13)
+   * draft-ietf-moq-transport-19: Range Filter の一種。Property Type 付き
+   */
+  OBJECT_PROPERTY_FILTER: 0x28,
+  /**
+   * TRACK_PROPERTY_FILTER (Section 10.2.14)
+   * draft-ietf-moq-transport-19: Range Filter の一種。Property Type 付き。SUBSCRIBE_TRACKS 専用
+   */
+  TRACK_PROPERTY_FILTER: 0x29,
 } as const;
 
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];

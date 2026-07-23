@@ -179,3 +179,16 @@ export function getSetupMaxRequestUpdates(msg: Setup): number {
   const [value] = decodeVarint(param.value);
   return Number(value);
 }
+
+/**
+ * SETUP メッセージから MAX_FILTER_RANGES を取得する
+ *
+ * draft-ietf-moq-transport-19 Section 10.3.1.6:
+ * 欠落時のデフォルトは 0（Range Filter 送信禁止）。
+ */
+export function getSetupMaxFilterRanges(msg: Setup): number {
+  const param = getSetupParameter(msg, SetupOptionType.MAX_FILTER_RANGES);
+  if (!param) return 0;
+  const [value] = decodeVarint(param.value);
+  return Number(value);
+}

@@ -11,6 +11,7 @@ import type { PublishOptions, SubscribeOptions } from "../session";
 import {
   MessageParameterType,
   encodeLocationFilterParameter,
+  encodeRangeFilter,
   encodeUint8ParameterValue,
   validateForwardValue,
   getParameterLocationValue,
@@ -234,6 +235,17 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3
+  if (options?.rangeFilters !== undefined) {
+    for (const spec of options.rangeFilters) {
+      const paramType = rangeFilterTypeToParamType(spec.type);
+      parameters.push({
+        type: paramType,
+        value: encodeRangeFilter(spec),
+      });
+    }
+  }
+
   return parameters;
 }
 
@@ -443,4 +455,28 @@ export function matchNamespacePrefix(
     }
   }
   return trackNamespace.slice(namespacePrefix.length);
+}
+
+/**
+ * Range Filter の type 文字列を MessageParameterType に変換する
+ */
+function rangeFilterTypeToParamType(
+  type: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty",
+): number {
+  switch (type) {
+    case "subgroup":
+      return MessageParameterType.SUBGROUP_FILTER;
+    case "objectId":
+      return MessageParameterType.OBJECTID_FILTER;
+    case "priority":
+      return MessageParameterType.PRIORITY_FILTER;
+    case "objectProperty":
+      return MessageParameterType.OBJECT_PROPERTY_FILTER;
+    case "trackProperty":
+      return MessageParameterType.TRACK_PROPERTY_FILTER;
+    default: {
+      const _exhaustive: never = type;
+      return _exhaustive;
+    }
+  }
 }

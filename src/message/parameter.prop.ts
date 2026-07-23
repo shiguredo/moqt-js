@@ -20,6 +20,8 @@ import {
   decodeLocationFilter,
   encodeLocationFilterParameter,
   decodeLocationFilterParameter,
+  encodeRangeFilter,
+  decodeRangeFilter,
   getParameterVarintValue,
   type LocationFilter,
 } from "./parameter";
@@ -256,5 +258,77 @@ test("LocationFilter パラメータのエンコード・デコードがラウ�
         assert.equal(decoded.endGroupDelta, filter.endGroupDelta);
       }
     }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * Range Filter の encode/decode がラウンドトリップすることを検証する。
+ * delta エンコーディング（例: ranges 3–5 と 10–15 → Start=3, End=2, Start=5, End=5）。
+ */
+test("RangeFilter のエンコード・デコードがラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom("subgroup", "objectId", "priority") as fc.Arbitrary<
+        "subgroup" | "objectId" | "priority"
+      >,
+      fc.integer({ min: 0, max: 255 }),
+      // 単調増加する ranges を生成（各 start >= 前 end）
+      fc
+        .array(fc.bigInt({ min: 0n, max: 100n }), { minLength: 1, maxLength: 3 })
+        .chain((deltas) => {
+          // deltas から単調増加する ranges を構築
+          let current = 0n;
+          const ranges: Array<{ start: bigint; end: bigint }> = [];
+          for (const d of deltas) {
+            const start = current + d;
+            const end = start + d; // end >= start を保証
+            ranges.push({ start, end });
+            current = end;
+          }
+          return fc.constant({ type: "subgroup" as const, setId: 0, ranges });
+        }),
+      (_type, setId, spec) => {
+        const finalSpec = { ...spec, setId };
+        const encoded = encodeRangeFilter(finalSpec);
+        const [decoded, consumed] = decodeRangeFilter(finalSpec.type, encoded);
+
+        assert.equal(consumed, encoded.length);
+        assert.isFalse("remove" in decoded && decoded.remove);
+        if (!("remove" in decoded)) {
+          assert.equal(decoded.setId, setId);
+          assert.equal(decoded.ranges.length, finalSpec.ranges.length);
+          for (let i = 0; i < finalSpec.ranges.length; i++) {
+            assert.equal(decoded.ranges[i].start, finalSpec.ranges[i].start);
+            assert.equal(decoded.ranges[i].end, finalSpec.ranges[i].end);
+          }
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * Range Filter の Length=0（削除）がラウンドトリップすることを検証する。
+ */
+test("RangeFilter の削除（Length=0）がラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(
+        "subgroup",
+        "objectId",
+        "priority",
+        "objectProperty",
+        "trackProperty",
+      ) as fc.Arbitrary<"subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty">,
+      (type) => {
+        const spec = { type, remove: true as const };
+        const encoded = encodeRangeFilter(spec);
+        const [decoded, consumed] = decodeRangeFilter(type, encoded);
+
+        assert.equal(consumed, encoded.length);
+        assert.isTrue("remove" in decoded && decoded.remove);
+      },
+    ),
   );
 });
