@@ -1,4 +1,4 @@
-# MAX_REQUEST_UPDATES Setup Option と TOO_MANY_REQUEST_UPDATES エラーコードを追加する (draft-19 追従)
+# MAX_REQUEST_UPDATES Setup Option と TOO_MANY_REQUEST_UPDATES を追加する (draft-19 追従)
 
 - Priority: Medium
 - Created: 2026-07-07
@@ -8,7 +8,10 @@
 
 ## 目的
 
-draft-ietf-moq-transport-19 Section 10.3.1.7 で MAX_REQUEST_UPDATES Setup Option (Option Type 0x08) と、セッション終了エラーコード TOO_MANY_REQUEST_UPDATES (0x1B) が新設された (draft-18 → 19 変更履歴 "Add MAX_REQUEST_UPDATES Setup Option and TOO_MANY_REQUEST_UPDATES error (#1613)")。
+draft-ietf-moq-transport-19 で MAX_REQUEST_UPDATES Setup Option と TOO_MANY_REQUEST_UPDATES エラーコードが新設された。変更履歴は Appendix A.1 `#1613`。
+
+- Setup Option: Section 10.3.1.7 (MAX_REQUEST_UPDATES)、Option Type `0x08`
+- セッション終了エラー: Section 3.5、`TOO_MANY_REQUEST_UPDATES (0x1B)`
 
 draft-19 Section 10.3.1.7:
 
@@ -16,17 +19,24 @@ draft-19 Section 10.3.1.7:
 > maximum number of unacknowledged REQUEST_UPDATE messages per request
 > stream that the endpoint is willing to receive.
 >
-> The sender MUST NOT have more than MAX_REQUEST_UPDATES
+> A REQUEST_UPDATE is considered outstanding from when it is sent until
+> the sender receives the corresponding REQUEST_OK or REQUEST_ERROR
+> response. The sender MUST NOT have more than MAX_REQUEST_UPDATES
 > outstanding REQUEST_UPDATEs on any single request stream at a time.
->
-> A value of 0 means the endpoint does not limit REQUEST_UPDATE
-> concurrency. If not present, the default value is 0.
+> ...
+> The value is encoded as a variable-length integer. A value of 0
+> means the endpoint does not limit REQUEST_UPDATE concurrency. If not
+> present, the default value is 0.
 >
 > If an endpoint receives a REQUEST_UPDATE on a stream that already has
 > MAX_REQUEST_UPDATES outstanding REQUEST_UPDATEs, it MUST close the
 > session with TOO_MANY_REQUEST_UPDATES.
 
-REQUEST_UPDATE は「送信してから対応する REQUEST_OK / REQUEST_ERROR を受信するまで」outstanding として数える。draft-18 には 0x08 の Setup Option もエラーコード 0x1B も存在しない。
+draft-19 Section 3.5:
+
+> TOO_MANY_REQUEST_UPDATES (0x1B): The endpoint received a
+> REQUEST_UPDATE that exceeded the per-stream limit communicated via
+> the MAX_REQUEST_UPDATES Setup Option (Section 10.3.1.7).
 
 ## 優先度根拠
 
@@ -34,18 +44,18 @@ moqt-js が REQUEST_UPDATE 送信側としてピアの MAX_REQUEST_UPDATES を�
 
 ## 現状
 
-- `src/message/types.ts:83-96`: `SetupOptionType` に 0x08 (MAX_REQUEST_UPDATES) が未定義
-- `src/message/setup.ts:42-78`: `createSetup` が送出するのは AUTHORIZATION_TOKEN (0x03) と MAX_AUTH_TOKEN_CACHE_SIZE (0x04) と MOQT_IMPLEMENTATION (0x07) のみ。未知オプションは受信時に無視される (`src/message/setup.ts:89-95`) ため受信で壊れはしない
-- `src/error.ts:17-38`: `SessionErrorCode` は MALFORMED_AUTHORITY (0x1a) まで。TOO_MANY_REQUEST_UPDATES (0x1b) が未定義で、受信時に正しく識別できない
-- REQUEST_UPDATE 送信経路: `src/subscriber.ts:259-267` `update()` → `src/session.ts:3344-3348` `sendRequestUpdate` → `src/session/bidi.ts:843-891` `bidiSendRequestUpdate`。outstanding 数の管理・制限なし
+- `src/message/types.ts`: `SetupOptionType` に `0x08` (MAX_REQUEST_UPDATES) が未定義
+- `src/message/setup.ts`: `createSetup` が送出するのは AUTHORIZATION_TOKEN / MAX_AUTH_TOKEN_CACHE_SIZE / MOQT_IMPLEMENTATION のみ。未知オプションは受信時に無視されるため、受信だけでは直ちに壊れない
+- `src/error.ts`: `SessionErrorCode` は MALFORMED_AUTHORITY (0x1a) まで。TOO_MANY_REQUEST_UPDATES (0x1b) が未定義
+- REQUEST_UPDATE 送信経路に outstanding 数の管理・制限がない
 
 ## 設計方針
 
-- `SetupOptionType.MAX_REQUEST_UPDATES = 0x08` を追加し、受信した SETUP からピアの値を取得・保持する getter を `src/message/setup.ts` に追加する
-- 送信側: リクエストストリームごとの outstanding REQUEST_UPDATE 数を管理し、ピアの上限に達している間は送信をエラーにする (0 = 無制限)
-- `SessionErrorCode.TOO_MANY_REQUEST_UPDATES = 0x1b` を追加する
+- `SetupOptionType.MAX_REQUEST_UPDATES = 0x08` を追加し、受信した SETUP からピアの値を取得・保持する getter を追加する
+- 送信側: リクエストストリームごとの outstanding REQUEST_UPDATE 数を管理し、ピアの上限に達している間は送信をエラーにする (0 = 無制限、Section 10.3.1.7)
+- `SessionErrorCode.TOO_MANY_REQUEST_UPDATES = 0x1b` を追加する (Section 3.5)
 - 受信側: 自側の上限を広告する場合は、超過受信時に TOO_MANY_REQUEST_UPDATES でセッションを閉じる。自側上限の広告 API (initialize オプション) を追加するかは設計時に判断する (広告しない場合、デフォルト 0 = 無制限のため受信側制限の実装は不要)
-- 仕様参照コメントは draft-19 Section 10.3.1.7 を引用する
+- 仕様参照コメントは Section 10.3.1.7 と Section 3.5 を分けて引用する
 
 ## 完了条件
 
