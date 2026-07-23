@@ -320,7 +320,7 @@ export async function bidiReadPublishResponse(
       pending.impl.setForwardState(forwardState);
       pending.resolve(pending.impl);
 
-      void bidiReadRequestStreamMessages(session, requestId, stream, controlReader);
+      void bidiReadRequestStreamMessages(session, requestId, stream, controlReader, "publish");
     } else if (msg.type === MessageType.REQUEST_ERROR) {
       const decoded = decodeRequestErrorPayload(msg.payload);
       session.pendingPublish.delete(requestId);
@@ -448,7 +448,7 @@ export async function bidiReadSubscribeResponse(
 
       pending.resolve(pending.impl);
 
-      void bidiReadRequestStreamMessages(session, requestId, stream, controlReader);
+      void bidiReadRequestStreamMessages(session, requestId, stream, controlReader, "subscribe");
     } else if (msg.type === MessageType.REQUEST_ERROR) {
       const decoded = decodeRequestErrorPayload(msg.payload);
       session.pendingSubscribe.delete(requestId);
@@ -652,6 +652,7 @@ export async function bidiReadRequestStreamMessages(
   requestId: bigint,
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
+  role: "publish" | "subscribe",
 ): Promise<void> {
   const reader = stream.readable.getReader();
   try {
@@ -678,25 +679,41 @@ export async function bidiReadRequestStreamMessages(
               decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
               normalizeRequestErrorCode(Number(decoded.errorCode)),
             );
+            // draft-ietf-moq-transport-19 §10.9: coalescing により単一 REQUEST_ERROR で
+            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する
             for (const [updateId, pendingUpdate] of session.pendingRequestUpdate) {
               if (pendingUpdate.targetRequestId === requestId) {
                 session.pendingRequestUpdate.delete(updateId);
                 pendingUpdate.reject(error);
-                break;
               }
             }
             break;
           }
           case MessageType.REQUEST_UPDATE: {
-            // draft-ietf-moq-transport-18 §10.9:
+            // draft-ietf-moq-transport-19 §10.9:
+            // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
+            // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
+            // Section 10.9 の 2 ケースに該当しない。
+            if (role === "subscribe") {
+              session.closeWithError(
+                new SessionError(
+                  "unexpected REQUEST_UPDATE on subscribe stream",
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+            }
+
+            // draft-ietf-moq-transport-19 §10.9:
             // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
             //  subscription established with PUBLISH.」
             // クライアントが Publisher の場合、サーバー (Subscriber 役) が
             // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
             //
-            // draft-ietf-moq-transport-18 §10.9:
+            // draft-ietf-moq-transport-19 §10.9:
             // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
-            //  REQUEST_OK or REQUEST_ERROR message indicating if the update was successful.」
+            //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
+            //  successful, unless it is coalescing failed updates.」
             const decoded = decodeRequestUpdatePayload(msg.payload);
 
             // パラメータスコープ検証
