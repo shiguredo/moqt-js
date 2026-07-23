@@ -5,37 +5,38 @@
 - Model: qwen3.7-plus
 - Branch: feature/refactor-session-module-split
 - Polished: 2026-06-20
+- Updated: 2026-07-24
 
 ## 目的
 
-`session.ts` (4223 行) の `SessionImpl` に集中している責務を、既存の `src/session/` 配下に追加分割し、保守性・可読性・テスト容易性を向上させる。
+`session.ts` (4863 行) の `SessionImpl` に集中している責務を、既存の `src/session/` 配下に追加分割し、保守性・可読性・テスト容易性を向上させる。
 
 ## 優先度根拠
 
-`SessionImpl` (`src/session.ts:826-4210`、約 3384 行) に多数の責務が集中しており、可読性・差分レビュー・テストのしやすさを損なう。ただし直接の不具合ではなく、後方互換を保つ純粋なリファクタのため Medium。
+`SessionImpl` (`src/session.ts:901-4863`、約 3962 行) に多数の責務が集中しており、可読性・差分レビュー・テストのしやすさを損なう。ただし直接の不具合ではなく、後方互換を保つ純粋なリファクタのため Medium。
 
 ## 現状
 
 ### 既に分割済み (`src/session/`)
 
-- `bidi.ts` (1043 行): 双方向ストリーム上の request/response 処理。`BidiSessionInternal` インターフェース経由で `SessionImpl` の状態にアクセスする free function 群
-- `stream.ts` (228 行): 受信データストリーム処理の純粋ヘルパー（統計更新・`handleObject` はコールバック経由）
-- `params.ts` (382 行): WebTransport や状態に依存しない純粋関数群 (PBT 対象)
+- `bidi.ts` (1163 行): 双方向ストリーム上の request/response 処理。`BidiSessionInternal` インターフェース経由で `SessionImpl` の状態にアクセスする free function 群。`bidiReadRequestStreamMessages` は role 引数 (`"publish" | "subscribe"`) を受け取る
+- `stream.ts` (245 行): 受信データストリーム処理の純粋ヘルパー（統計更新・`handleObject` はコールバック経由）。`processSubgroupObjects` は `SubscriberImpl[]` を受け取り同一 alias の全 subscription に配送する
+- `params.ts` (482 行): WebTransport や状態に依存しない純粋関数群 (PBT 対象)。`buildSubscribeTracksParameters` / `rangeFilterTypeToParamType` を含む
 - `errors.ts` (56 行): read loop の catch から使うエラー判定純関数 (`isSessionClosedError` / `toProtocolViolationSessionError`)
 
 ### `session.ts` に残存している `SessionImpl` の責務
 
-- 状態フィールド群 (`src/session.ts:826-1028`): `sessionState` / `transport` / 制御ストリーム / `nextRequestId` / 多数の Map (`publishers` / `subscribers` / `subscribersByAlias` / `fetchers` / `pending*` / `namespaceSubscriptions` / `tracksSubscriptions` / `namespacePublications` / `publisherStreams` / `publisherSendQueues` / `closedSubgroups`) / 統計カウンタ群 / `datagramWriter` / `callbacks`
-- `initialize` (1096): 制御ストリーム確立と SETUP 送受信
-- 公開 API: `publish` (1257) / `subscribe` (1364) / `fetch` (1498) / `trackStatus` (1587) / `subscribeNamespace` (1652) / `subscribeTracks` (1737) / `publishNamespace` (2270) / `goaway` (2522) / `close` (2604) / `getStatistics` (2572)
-- 内部ループ群: `startControlMessageLoop` (3335) / `startIncomingStreamLoop` (3652) / `startDatagramLoop` (3686)
-- namespace 系ストリームループ 3 種: `startNamespaceStreamLoop` (1869) / `startTracksStreamLoop` (2097) / `startNamespacePublicationStreamLoop` (2351)
-- 送信系: `sendObject` (2885) / `sendObjectInternal` (2915) / `closePublisherStream` (3043) / `closePublisherStreamInternal` (3052) / `sendDatagram` (3105) / `getDatagramWriter` (3096) / `sendPublishDone` (3168)
-- 受信系: `handleIncomingDatagram` (3721) / `handleIncomingStream` (3826) / `handleSubgroupStream` (4098) / `waitForFetcher` (3787)
-- 内部ヘルパ: `closeWithError` (2778) / `notifyErrorIfActive` (2792) / `emitDebug` (2803) / `sendControlMessage` (2821) / `sendRequestOnBidiStream` (2853) / `handleGoawayOnNamespaceStream` (1825) / `handleControlMessage` (3386)
-- 統計ラッパー: `processFetchObjects` (4038) / `processSubgroupObjects` (4069) — 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ
-- ファクトリメソッド: `createNamespaceSubscription` (3501) / `createTracksSubscription` (3551) / `createNamespacePublication` (3598)
-- close メソッド: `closeNamespaceSubscription` (3526) / `closeTracksSubscription` (3576) / `closeNamespacePublication` (3634)
+- 状態フィールド群 (`src/session.ts:901-1100`): `sessionState` / `transport` / 制御ストリーム / `nextRequestId` / 多数の Map (`publishers` / `subscribers` / `subscribersByAlias` (`Map<bigint, SubscriberImpl[]>`) / `fetchers` / `pending*` / `namespaceSubscriptions` / `tracksSubscriptions` / `namespacePublications` / `publisherStreams` / `publisherSendQueues` / `closedSubgroups`) / 統計カウンタ群 / `datagramWriter` / `callbacks` / `peerMaxRequestUpdates` / `peerMaxFilterRanges`
+- `initialize` (1181): 制御ストリーム確立と SETUP 送受信。ピアの MAX_REQUEST_UPDATES / MAX_FILTER_RANGES をフィールドに保持する
+- 公開 API: `publish` (1363) / `subscribe` (1472) / `fetch` (1627) / `trackStatus` (1726) / `subscribeNamespace` (1793) / `subscribeTracks` (1878) / `publishNamespace` (2424) / `goaway` (2679) / `close` (2760) / `getStatistics` (2728)
+- 内部ループ群: `startControlMessageLoop` (3571) / `startIncomingStreamLoop` (3871) / `startDatagramLoop` (3905)
+- namespace 系ストリームループ 3 種: `startNamespaceStreamLoop` (2003) / `startTracksStreamLoop` (2234) / `startNamespacePublicationStreamLoop` (2505)
+- 送信系: `sendObject` (3069) / `sendObjectInternal` (3099) / `closePublisherStream` (3264) / `closePublisherStreamInternal` (3273) / `sendDatagram` (3326) / `getDatagramWriter` (3317) / `sendPublishDone` (3389)
+- 受信系: `handleIncomingDatagram` (4358) / `handleIncomingStream` (4465) / `handleSubgroupStream` (4737) / `waitForFetcher` (4426)
+- 内部ヘルパ: `closeWithError` (2962) / `notifyErrorIfActive` (2976) / `emitDebug` (2987) / `sendControlMessage` (3005) / `sendRequestOnBidiStream` (3037) / `handleGoawayOnNamespaceStream` (1967) / `handleControlMessage` (3622)
+- 統計ラッパー: `processFetchObjects` (4677) / `processSubgroupObjects` (4708) — 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ
+- ファクトリメソッド: `createNamespaceSubscription` (3720) / `createTracksSubscription` (3770) / `createNamespacePublication` (3817)
+- close メソッド: `closeNamespaceSubscription` (3745) / `closeTracksSubscription` (3795) / `closeNamespacePublication` (3853)
 
 ## 設計方針
 
@@ -129,13 +130,19 @@ export interface SessionInternal extends BidiSessionInternal {
   // SessionImpl に残留するため types.ts に露出不要。
   statsUnidirectionalStreamsReceived: number;
 
+  // ============================================================
+  // publish.ts 用（追加分）
+  // ============================================================
+  // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
+  peerMaxFilterRanges: number;
+
   readonly callbacks: ConnectCallbacks;
 }
 ```
 
 **注意点**:
 
-- `BidiSessionInternal` からの継承フィールド（`transport`, `sessionState`, `nextRequestId`, `publishers`, `subscribersByAlias`, `fetchers`, `pendingSubgroupBuffer`, `fetcherReadyCallbacks`, `requestStreams`, `goawayReceivedOnRequestStreams`, `statsControlMessagesSent`, `controlWriter`, `emitDebug()`, `closeWithError()`, 各種 pending Map）は `SessionInternal` に宣言不要（継承で自動的に含まれる）
+- `BidiSessionInternal` からの継承フィールド（`transport`, `sessionState`, `nextRequestId`, `publishers`, `subscribersByAlias` (`Map<bigint, SubscriberImpl[]>`), `fetchers`, `pendingSubgroupBuffer`, `fetcherReadyCallbacks`, `requestStreams`, `goawayReceivedOnRequestStreams`, `statsControlMessagesSent`, `controlWriter`, `emitDebug()`, `closeWithError()`, `peerMaxRequestUpdates`, 各種 pending Map）は `SessionInternal` に宣言不要（継承で自動的に含まれる）
 - `callbacks` を `SessionInternal` に追加する。これは `incoming.ts` に抽出される `handleIncomingDatagram` の catch 節と、`namespaceLoops.ts` に抽出される namespace ループ内のデバッグ出力に使用する。namespace ループ内の `this.callbacks.debug?.()` 呼び出しは `emitDebug()` に統一せず、既存の `emitDebug` が `getMessageTypeName(type)` を内部で呼び type=0 に対して `"UNKNOWN(0x0)"` を出力してしまう問題を回避するため、`callbacks.debug` に直接アクセスするパターンを維持する。この `emitDebug` の問題は本 issue の範囲外とし、別 issue で `emitDebug` に optional `typeName` パラメータを追加して根本修正する
 - `datagramWriter` は `WritableStreamDefaultWriter<Uint8Array> | undefined` で宣言するが、`readonly` にしない。遅延初期化（`??= `）で代入されるため、`SessionImpl` が `implements SessionInternal` でコンパイルエラーにならないよう注意
 - `NamespaceSubscription` / `TracksSubscription` / `NamespacePublication` は `session.ts` で `export interface` 定義済みであり、`types.ts` が `import type` で参照する。`types.ts` が `session.ts` を import しても、`session.ts` は常に `types.ts` を `import type` で参照するため循環参照は発生しない（TypeScript の型レベル import は循環可能）
@@ -156,7 +163,7 @@ const unsubscribe = async (): Promise<void> => {
 
 ### `handleSubgroupStream` 抽出に関する判断
 
-`handleSubgroupStream` (4098-4209) は本リファクタでは **`SessionImpl` に残す**。
+`handleSubgroupStream` (4737-4863) は本リファクタでは **`SessionImpl` に残す**。
 
 根拠:
 
@@ -171,16 +178,16 @@ const unsubscribe = async (): Promise<void> => {
 
 根拠:
 
-- `handleIncomingStream` は subgroup ストリームを検出すると `this.handleSubgroupStream(reader, header, initialPayloadBuffer)` を呼び出す (session.ts:3922)。`handleSubgroupStream` は本リファクタで `SessionImpl` に残すため、`handleIncomingStream` を free function 化するとこの呼び出し経路を `SessionInternal` 経由で露出する必要があり、interface が不必要に肥大化する
+- `handleIncomingStream` は subgroup ストリームを検出すると `this.handleSubgroupStream(reader, header, initialPayloadBuffer)` を呼び出す (session.ts:4737)。`handleSubgroupStream` は本リファクタで `SessionImpl` に残すため、`handleIncomingStream` を free function 化するとこの呼び出し経路を `SessionInternal` 経由で露出する必要があり、interface が不必要に肥大化する
 - `handleIncomingStream` は fetch / subgroup / padding / 未知ストリームの 4 分岐と 2 重の while ループを持つ複合ロジックであり、分岐先に対する状態管理が密結合している。特に `waitForFetcher` の Promise 制御と `handleSubgroupStream` の非同期呼び出しの順序保証を free function 化で維持するのは困難
 
 この判断により、`incoming.ts` の抽出範囲は後述の抽出単位テーブルに従う。
 
 ### `processSubgroupObjects` ラッパー抽出の影響
 
-`processSubgroupObjects` ラッパー (session.ts:4069) は現在 `this.processSubgroupObjects(...)` として `SessionImpl` の private メソッドだが、`incoming.ts` に free function として抽出する。`SessionImpl` に残る `handleSubgroupStream` からの呼び出しは `processSubgroupObjects(session, ...)` に変更される。
+`processSubgroupObjects` ラッパー (session.ts:4708) は現在 `this.processSubgroupObjects(...)` として `SessionImpl` の private メソッドだが、`incoming.ts` に free function として抽出する。`SessionImpl` に残る `handleSubgroupStream` からの呼び出しは `processSubgroupObjects(session, ...)` に変更される。
 
-同様に `processFetchObjects` ラッパー (session.ts:4038) も `incoming.ts` に抽出し、`SessionImpl` に残る `handleIncomingStream` からの呼び出しは `processFetchObjects(session, ...)` に変更される。
+同様に `processFetchObjects` ラッパー (session.ts:4677) も `incoming.ts` に抽出し、`SessionImpl` に残る `handleIncomingStream` からの呼び出しは `processFetchObjects(session, ...)` に変更される。
 
 いずれの変更も純粋な呼び出し形式の変更であり、ロジックは変わらない。
 
@@ -218,7 +225,7 @@ bidi.ts ──→ session.ts (import type: SessionState, JoiningFetchOptions 等
 
 ### 実装上の注意
 
-- `handleGoawayOnNamespaceStream` は 3 つの namespace ループから共通に呼ばれるため `namespaceLoops.ts` に抽出する。このメソッドは `bidi.validateNoDuplicateGoawayOnRequestStream` と `bidi.validateGoawayOnRequestStream` を呼ぶが、概念的には namespace ループの共通処理であり `bidi.ts` ではなく `namespaceLoops.ts` に置く方が適切
+- `handleGoawayOnNamespaceStream` は 3 つの namespace ループから共通に呼ばれるため `namespaceLoops.ts` に抽出する。このメソッドは `bidi.validateNoDuplicateGoawayOnRequestStream` を呼ぶが、概念的には namespace ループの共通処理であり `bidi.ts` ではなく `namespaceLoops.ts` に置く方が適切
 - `getDatagramWriter` は `session.datagramWriter ??= session.transport.datagrams.writable.getWriter()` を free function 内で実行する。`datagramWriter` は `SessionInternal` 上で writable として宣言するため `??=` が可能
 - `namespaceLoops.ts` で用いる局所変数 `callbacks`（`NamespaceSubscriptionCallbacks` 型への destructure）と `session.callbacks`（`ConnectCallbacks` 型）は名前が衝突する。free function 内で `session.callbacks` を直接使う場合は、局所変数名を `subCallbacks` 等に変更して衝突を避ける
 - 公開 API が `PublisherImpl` / `SubscriberImpl` / `FetcherImpl` に設定するコールバック (`onSendObject`, `onSendDatagram` 等) は、`SessionImpl` 側で free function をキャプチャするラッパーを作成してバインドを維持する。具体的には `publish()` メソッド内で以下のように free function をクロージャに閉じ込める:
@@ -233,7 +240,7 @@ impl.onSendPublishDone = () => publishSendPublishDone(sessionRef, impl);
 
 このパターンは既存の `bidi.ts` 抽出時に `SessionImpl` が `bidi*` free function を import してコールバックに設定したのと同様である。
 
-- `publisherSendQueues` による Promise チェーン排他制御: `sendObject` と `closePublisherStream` は同一の `publisherSendQueues` Map に対して `.catch(() => {})` → `.then(...)` のパターンでシリアライズを行う。両 free function とも `session.publisherSendQueues` を介して同一のパターンでチェーンを構築することで、同一トラックの逐次実行を保証する。これは draft-ietf-moq-transport-18 §2.2 の「Objects from the same Subgroup MUST NOT be sent on different streams」を実装するための要件である
+- `publisherSendQueues` による Promise チェーン排他制御: `sendObject` と `closePublisherStream` は同一の `publisherSendQueues` Map に対して `.catch(() => {})` → `.then(...)` のパターンでシリアライズを行う。両 free function とも `session.publisherSendQueues` を介して同一のパターンでチェーンを構築することで、同一トラックの逐次実行を保証する。これは draft-ietf-moq-transport-19 §2.2 の「Objects from the same Subgroup MUST NOT be sent on different streams」を実装するための要件である
 
 ## 仕様書参照
 
@@ -255,17 +262,14 @@ impl.onSendPublishDone = () => publishSendPublishDone(sessionRef, impl);
 - **#0301** (`sendDatagram` の writer 競合修正、High): 完了 (Completed: 2026-06-05)
 - **#0305** (`sendObjectInternal` の `releaseLock` 修正、Medium): 完了 (Completed: 2026-06-05)
 - **#0291** (namespace ループの GOAWAY ハンドリング重複解消、Low): 完了 (Completed: 2026-06-05)。共通メソッド `handleGoawayOnNamespaceStream` が導入済みのため、本リファクタではそのまま抽出する
+- **#0317** (subscribe-tracks-publish-reception): 完了。`startTracksStreamLoop` に PUBLISH 受信処理が追加済み
+- **#0319** (subgroup-header-first-object-bit): 完了。`sendObjectInternal` に FIRST_OBJECT bit 対応が追加済み
+- **#0320** (end-of-group-track-status): 完了
+- **#0323** (object-subgroup-validation): 完了。`sendObjectInternal` / `handleSubgroupStream` に検証が追加済み
 
 ### 先行完了が必要な open bug issue
 
-以下の open bug issue は `session.ts` の抽出対象メソッドを直接編集するため、本リファクタより先に完了させること:
-
-- **#0317** (subscribe-tracks-publish-reception) — `startTracksStreamLoop` に直接影響
-- **#0319** (subgroup-header-first-object-bit) — `sendObjectInternal` に直接影響
-- **#0320** (end-of-group-track-status) — `sendObjectInternal` に直接影響の可能性
-- **#0323** (object-subgroup-validation) — `sendObjectInternal` / `handleSubgroupStream` に直接影響
-
-#0318、#0321、#0322 は修正対象が `bidi.ts` / `parameterScope.ts` または公開 API メソッド（抽出対象外）であり、本 issue の抽出と直接競合しないため、完了順序を必須とはしない。ただし #0321 の修正内容を抽出後に適用する場合は `publish.ts` 側への追従が必要になるため、本リファクタより先に完了させることが望ましい。
+なし。上記の open bug issue はすべて完了している。
 
 ## 変更対象ファイル
 
