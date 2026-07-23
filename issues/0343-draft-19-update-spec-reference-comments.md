@@ -30,21 +30,21 @@ refs/moq/ には `draft-ietf-moq-transport-19.txt` が取り込み済みであ�
 
 コードから参照されているセクションのうち、draft-19 で番号または名称が変わるもの（節タイトルは一次資料 TOC の正式名称）:
 
-| draft-18 | draft-19 |
-| --- | --- |
-| 3.1.3 WebTransport | 3.1.4 WebTransport（3.1.3 は新設 Dereferencing a MOQT URI） |
-| 3.6 Migration（当時見出し） | 3.6 Session Migration（名称変更のみ） |
-| 3.3.3 Stream Reset Error Codes | 3.3.4 Stream Reset Error Codes |
-| 5.1.2 Subscription Filters | 5.1.2 Location Filters（名称変更） |
-| 10.2.9 SUBSCRIPTION FILTER Parameter | 10.2.9 LOCATION FILTER Parameter（名称変更） |
-| 10.2.10 EXPIRES Parameter | 10.2.15 EXPIRES Parameter（間に 10.2.10–14 の各 Filter Parameter が挿入） |
-| 10.2.11 LARGEST OBJECT Parameter | 10.2.16 LARGEST OBJECT Parameter |
-| 10.2.12 FORWARD Parameter | 10.2.17 FORWARD Parameter |
-| 10.2.13 NEW GROUP REQUEST Parameter | 10.2.18 NEW GROUP REQUEST Parameter |
-| 10.2.14 TRACK_NAMESPACE_PREFIX Parameter | 10.2.19 TRACK_NAMESPACE_PREFIX Parameter |
-| 10.20 PUBLISH_BLOCKED | 10.20 PUBLISH_SKIPPED（名称変更。**識別子リネームは `#0335`**） |
-| 15.10 Error Codes | 15.11 Error Codes |
-| 15.10.4 Stream Reset Error Codes | 15.11.4 Stream Reset Error Codes |
+| draft-18                                 | draft-19                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------- |
+| 3.1.3 WebTransport                       | 3.1.4 WebTransport（3.1.3 は新設 Dereferencing a MOQT URI）               |
+| 3.6 Migration（当時見出し）              | 3.6 Session Migration（名称変更のみ）                                     |
+| 3.3.3 Stream Reset Error Codes           | 3.3.4 Stream Reset Error Codes                                            |
+| 5.1.2 Subscription Filters               | 5.1.2 Location Filters（名称変更）                                        |
+| 10.2.9 SUBSCRIPTION FILTER Parameter     | 10.2.9 LOCATION FILTER Parameter（名称変更）                              |
+| 10.2.10 EXPIRES Parameter                | 10.2.15 EXPIRES Parameter（間に 10.2.10–14 の各 Filter Parameter が挿入） |
+| 10.2.11 LARGEST OBJECT Parameter         | 10.2.16 LARGEST OBJECT Parameter                                          |
+| 10.2.12 FORWARD Parameter                | 10.2.17 FORWARD Parameter                                                 |
+| 10.2.13 NEW GROUP REQUEST Parameter      | 10.2.18 NEW GROUP REQUEST Parameter                                       |
+| 10.2.14 TRACK_NAMESPACE_PREFIX Parameter | 10.2.19 TRACK_NAMESPACE_PREFIX Parameter                                  |
+| 10.20 PUBLISH_BLOCKED                    | 10.20 PUBLISH_SKIPPED（名称変更。**識別子リネームは `#0335`**）           |
+| 15.10 Error Codes                        | 15.11 Error Codes                                                         |
+| 15.10.4 Stream Reset Error Codes         | 15.11.4 Stream Reset Error Codes                                          |
 
 15.10 → 15.11 の繰り下がり理由（draft-18 / draft-19 TOC 照合）:
 

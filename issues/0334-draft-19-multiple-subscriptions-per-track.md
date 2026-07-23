@@ -54,11 +54,11 @@ High。相互運用問題がある。
 
 壊れているケース / 既に通るケース:
 
-| ケース | 現状 |
-| --- | --- |
-| 同一 Track・異なる alias の複数 SUBSCRIBE | `subscribe()` に同一 Track 禁止は無く、alias が違えば Map 衝突しないため概ね動く |
-| 同一 Track・同一 alias の複数 SUBSCRIBE_OK | `bidi.ts` が無条件 `DUPLICATE_TRACK_ALIAS` でセッション切断 |
-| 同一 Track・同一 alias の 2 本目 PUBLISH | `subscribersByAlias.has(alias)` なら `DUPLICATE_SUBSCRIPTION` で拒否（Track 同一性を見ていない） |
+| ケース                                         | 現状                                                                                                     |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 同一 Track・異なる alias の複数 SUBSCRIBE      | `subscribe()` に同一 Track 禁止は無く、alias が違えば Map 衝突しないため概ね動く                         |
+| 同一 Track・同一 alias の複数 SUBSCRIBE_OK     | `bidi.ts` が無条件 `DUPLICATE_TRACK_ALIAS` でセッション切断                                              |
+| 同一 Track・同一 alias の 2 本目 PUBLISH       | `subscribersByAlias.has(alias)` なら `DUPLICATE_SUBSCRIPTION` で拒否（Track 同一性を見ていない）         |
 | 異 Track・同一 alias の PUBLISH / SUBSCRIBE_OK | Section 11.1 どおりセッション終了すべきだが、PUBLISH 側は `DUPLICATE_SUBSCRIPTION`（誤ったコード）を返す |
 
 主な実装:

@@ -18,13 +18,13 @@ draft-19 Section 5.1.3:
 
 新設 Message Parameters (Section 10.2.10–10.2.14 / IANA Table 13):
 
-| Parameter | Type | 節 |
-| --- | --- | --- |
-| SUBGROUP_FILTER | `0x25` | 10.2.10 |
-| OBJECTID_FILTER | `0x26` | 10.2.11 |
-| PRIORITY_FILTER | `0x27` | 10.2.12 |
+| Parameter              | Type   | 節      |
+| ---------------------- | ------ | ------- |
+| SUBGROUP_FILTER        | `0x25` | 10.2.10 |
+| OBJECTID_FILTER        | `0x26` | 10.2.11 |
+| PRIORITY_FILTER        | `0x27` | 10.2.12 |
 | OBJECT_PROPERTY_FILTER | `0x28` | 10.2.13 |
-| TRACK_PROPERTY_FILTER | `0x29` | 10.2.14 |
+| TRACK_PROPERTY_FILTER  | `0x29` | 10.2.14 |
 
 ワイヤ（Section 5.1.3）:
 
@@ -68,14 +68,14 @@ REQUEST_ERROR コード（Section 10.6 / IANA Section 15.11.2）。**混ぜな�
 
 INVALID_FILTER の MUST 条件（網羅）:
 
-| 条件 | 出典 |
-| --- | --- |
-| delta が `2^64-1` 超過 | 5.1.3 |
-| Parameter Type + SetID + Property Type の重複 | 5.1.3 |
-| MAX_FILTER_RANGES 超過（subscription / fetch 単位の Range 総数） | 5.1.3 / 10.3.1.6 |
-| PRIORITY_FILTER の復号値 > 255 | 10.2.12 |
-| OBJECT / TRACK PROPERTY FILTER の Property Type が偶数でない | 10.2.13 / 10.2.14 |
-| 途中 Range の End 省略 | 5.1.3（最終 End のみ省略可） |
+| 条件                                                             | 出典                         |
+| ---------------------------------------------------------------- | ---------------------------- |
+| delta が `2^64-1` 超過                                           | 5.1.3                        |
+| Parameter Type + SetID + Property Type の重複                    | 5.1.3                        |
+| MAX_FILTER_RANGES 超過（subscription / fetch 単位の Range 総数） | 5.1.3 / 10.3.1.6             |
+| PRIORITY_FILTER の復号値 > 255                                   | 10.2.12                      |
+| OBJECT / TRACK PROPERTY FILTER の Property Type が偶数でない     | 10.2.13 / 10.2.14            |
+| 途中 Range の End 省略                                           | 5.1.3（最終 End のみ省略可） |
 
 ## 優先度根拠
 
@@ -99,11 +99,11 @@ MAX_FILTER_RANGES のデフォルトは 0 であり、moqt-js が広告しない
 
 ### エラー層の分離（重要）
 
-| 層 | 役割 |
-| --- | --- |
+| 層                                | 役割                                                                                                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | encode / decode（`parameter.ts`） | ワイヤの往復。不正値は専用結果（例: `InvalidFilterError` または検証関数の戻り値）で返す。**`ProtocolViolationError` にしない**（セッション切断に繋がるため） |
-| `decodeParameters` | `0x25`–`0x29` の複数出現を許容。未知型・AUTH 以外の他 Type 重複は従来どおり `ProtocolViolationError` |
-| session / bidi | 検証失敗・MAX 超過時に `REQUEST_ERROR`（`INVALID_FILTER`）を送りリクエストを失敗させる。`MalformedTrackError` → `UNSUPPORTED_EXTENSION` と同型の振り分け |
+| `decodeParameters`                | `0x25`–`0x29` の複数出現を許容。未知型・AUTH 以外の他 Type 重複は従来どおり `ProtocolViolationError`                                                         |
+| session / bidi                    | 検証失敗・MAX 超過時に `REQUEST_ERROR`（`INVALID_FILTER`）を送りリクエストを失敗させる。`MalformedTrackError` → `UNSUPPORTED_EXTENSION` と同型の振り分け     |
 
 MAX 超過はピア／自側の Setup 状態に依存するため、decode 単体ではなく session 層で判定する。
 
@@ -140,9 +140,9 @@ MAX 超過はピア／自側の Setup 状態に依存するため、decode 単�
 
 ### パラメータスコープ表（Section 5.1.3）
 
-| パラメータ | 許可 |
-| --- | --- |
-| TRACK_PROPERTY_FILTER (`0x29`) | SUBSCRIBE_TRACKS、その REQUEST_UPDATE |
+| パラメータ                                                       | 許可                                                                                             |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| TRACK_PROPERTY_FILTER (`0x29`)                                   | SUBSCRIBE_TRACKS、その REQUEST_UPDATE                                                            |
 | SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY (`0x25`–`0x28`) | FETCH / SUBSCRIBE / SUBSCRIBE_TRACKS / PUBLISH_OK / subscription の REQUEST_UPDATE（subscriber） |
 
 `NAMESPACE_ALLOWED_PARAMS` を安易に広げて SUBSCRIBE_NAMESPACE に誤許可しない。SUBSCRIBE_TRACKS 用集合は `#0336` の `SUBSCRIBE_TRACKS_ALLOWED_PARAMS`（または同等）に追加する。
