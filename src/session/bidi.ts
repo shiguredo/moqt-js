@@ -117,7 +117,7 @@ export interface BidiSessionInternal {
 
   readonly publishers: Map<bigint, PublisherImpl>;
   readonly subscribers: Map<bigint, SubscriberImpl>;
-  readonly subscribersByAlias: Map<bigint, SubscriberImpl>;
+  readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   readonly fetchers: Map<bigint, FetcherImpl>;
 
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
@@ -397,15 +397,19 @@ export async function bidiReadSubscribeResponse(
 
       session.pendingSubscribe.delete(requestId);
 
-      const existingSubscriber = session.subscribersByAlias.get(decoded.trackAlias);
-      if (existingSubscriber && existingSubscriber !== pending.impl) {
-        const error = new SessionError(
-          `duplicate track alias: ${decoded.trackAlias}`,
-          SessionErrorCode.DUPLICATE_TRACK_ALIAS,
-        );
-        pending.reject(error);
-        session.closeWithError(error);
-        return;
+      const existingSubscribers = session.subscribersByAlias.get(decoded.trackAlias);
+      if (existingSubscribers && existingSubscribers.length > 0) {
+        // draft-ietf-moq-transport-19 §11.1: 同一 Track Alias が異なる Track に使われている場合のみ DUPLICATE_TRACK_ALIAS
+        const fullTrackName = pending.impl.getFullTrackName();
+        if (existingSubscribers[0].getFullTrackName() !== fullTrackName) {
+          const error = new SessionError(
+            `duplicate track alias: ${decoded.trackAlias}`,
+            SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+          );
+          pending.reject(error);
+          session.closeWithError(error);
+          return;
+        }
       }
 
       pending.impl.setTrackAlias(decoded.trackAlias);
@@ -419,7 +423,12 @@ export async function bidiReadSubscribeResponse(
       }
 
       session.subscribers.set(requestId, pending.impl);
-      session.subscribersByAlias.set(decoded.trackAlias, pending.impl);
+      const aliasList = session.subscribersByAlias.get(decoded.trackAlias);
+      if (aliasList !== undefined) {
+        aliasList.push(pending.impl);
+      } else {
+        session.subscribersByAlias.set(decoded.trackAlias, [pending.impl]);
+      }
 
       session.pendingSubgroupBuffer.notifyAlias(decoded.trackAlias, "subscriber");
 
@@ -801,7 +810,17 @@ export async function bidiReadRequestStreamMessages(
     const subscriber = session.subscribers.get(requestId);
     if (subscriber) {
       session.subscribers.delete(requestId);
-      session.subscribersByAlias.delete(subscriber.getTrackAlias());
+      // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
+      const aliasSubscribers = session.subscribersByAlias.get(subscriber.getTrackAlias());
+      if (aliasSubscribers !== undefined) {
+        const idx = aliasSubscribers.indexOf(subscriber);
+        if (idx !== -1) {
+          aliasSubscribers.splice(idx, 1);
+        }
+        if (aliasSubscribers.length === 0) {
+          session.subscribersByAlias.delete(subscriber.getTrackAlias());
+        }
+      }
     }
     session.requestStreams.delete(requestId);
   }
@@ -981,7 +1000,17 @@ export async function bidiCancelSubscription(
   }
 
   session.subscribers.delete(requestId);
-  session.subscribersByAlias.delete(subscriber.getTrackAlias());
+  // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
+  const aliasSubscribers = session.subscribersByAlias.get(subscriber.getTrackAlias());
+  if (aliasSubscribers !== undefined) {
+    const idx = aliasSubscribers.indexOf(subscriber);
+    if (idx !== -1) {
+      aliasSubscribers.splice(idx, 1);
+    }
+    if (aliasSubscribers.length === 0) {
+      session.subscribersByAlias.delete(subscriber.getTrackAlias());
+    }
+  }
 }
 
 // ============================================================================
