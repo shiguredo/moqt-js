@@ -85,6 +85,7 @@ import {
   buildPublishParameters,
   buildPublishTrackProperties,
   buildSubscribeParameters,
+  buildSubscribeTracksParameters,
   calculateObjectIdDelta,
   clampTimeoutMs,
   matchNamespacePrefix,
@@ -497,6 +498,29 @@ export interface SubscribeOptions {
 }
 
 /**
+ * SUBSCRIBE_TRACKS のオプション
+ * draft-ietf-moq-transport-19 Section 10.19.1 (Parameters on SUBSCRIBE_TRACKS)
+ *
+ * SUBSCRIBE のパラメータのうち SUBSCRIBE_TRACKS で有効なもののサブセット。
+ */
+export interface SubscribeTracksOptions {
+  /**
+   * Group Order
+   * draft-ietf-moq-transport-19 Section 10.2.8 (GROUP ORDER Parameter)
+   */
+  groupOrder?: "Ascending" | "Descending";
+
+  /**
+   * Forward State
+   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   *
+   * 省略した場合は 1（転送する）がデフォルト。
+   * 明示的に false のときだけワイヤに FORWARD=0 を載せる。
+   */
+  forward?: boolean;
+}
+
+/**
  * フェッチコールバック
  */
 export interface FetchCallbacks {
@@ -813,10 +837,12 @@ export interface Session {
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
+   * @param options - サブスクリプションパラメータ（groupOrder / forward）
    */
   subscribeTracks(
     namespacePrefix: string[],
     callbacks: TracksSubscriptionCallbacks,
+    options?: SubscribeTracksOptions,
   ): Promise<TracksSubscription>;
   /**
    * Namespace を公開する（トラック発見用）
@@ -1796,6 +1822,7 @@ export class SessionImpl implements Session {
   async subscribeTracks(
     namespacePrefix: string[],
     callbacks: TracksSubscriptionCallbacks,
+    options?: SubscribeTracksOptions,
   ): Promise<TracksSubscription> {
     if (this.sessionState === "closed") {
       throw new Error("session is closed");
@@ -1818,11 +1845,12 @@ export class SessionImpl implements Session {
     const writer = stream.writable.getWriter();
 
     // SUBSCRIBE_TRACKS メッセージを構築
+    // draft-ietf-moq-transport-19 §10.19.1: GROUP_ORDER / FORWARD を送信可能
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
       trackNamespacePrefix,
-      parameters: [] as [],
+      parameters: buildSubscribeTracksParameters(options),
     };
 
     // メッセージをエンコードして送信
@@ -4722,6 +4750,7 @@ export {
   buildPublishParameters,
   buildPublishTrackProperties,
   buildSubscribeParameters,
+  buildSubscribeTracksParameters,
   extractLargestLocation,
   extractForwardState,
   validateFetchOkEndLocation,

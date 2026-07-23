@@ -237,6 +237,44 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
   return parameters;
 }
 
+/**
+ * 純粋関数: SUBSCRIBE_TRACKS のパラメータを構築する
+ *
+ * draft-ietf-moq-transport-19 Section 10.19.1 (Parameters on SUBSCRIBE_TRACKS):
+ * GROUP_ORDER (§10.2.8) と FORWARD (§10.2.17) のみ。
+ */
+export function buildSubscribeTracksParameters(options?: {
+  groupOrder?: "Ascending" | "Descending";
+  forward?: boolean;
+}): Parameter[] {
+  const parameters: Parameter[] = [];
+
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-19 Section 10.2.8 (uint8)
+  if (options?.groupOrder !== undefined) {
+    if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
+      throw new Error(
+        `GROUP_ORDER must be "Ascending" or "Descending": ${options.groupOrder as string}`,
+      );
+    }
+    const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
+    parameters.push({
+      type: MessageParameterType.GROUP_ORDER,
+      value: encodeUint8ParameterValue(groupOrderValue, "GROUP_ORDER"),
+    });
+  }
+
+  // FORWARD (0x10) - draft-ietf-moq-transport-19 Section 10.2.17 (uint8)
+  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
+  if (options?.forward === false) {
+    parameters.push({
+      type: MessageParameterType.FORWARD,
+      value: encodeUint8ParameterValue(0, "FORWARD"),
+    });
+  }
+
+  return parameters;
+}
+
 // ============================================================================
 // パラメータ抽出
 // ============================================================================

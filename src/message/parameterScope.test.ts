@@ -4,7 +4,13 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { NAMESPACE_OK_ALLOWED_PARAMS, validateParameterScope } from "./parameterScope";
+import {
+  NAMESPACE_OK_ALLOWED_PARAMS,
+  PUBLISH_OK_ALLOWED_PARAMS,
+  PUBLISH_ALLOWED_PARAMS,
+  SUBSCRIBE_TRACKS_ALLOWED_PARAMS,
+  validateParameterScope,
+} from "./parameterScope";
 import { MessageParameterType } from "./types";
 import { SessionError, SessionErrorCode } from "../error";
 
@@ -91,4 +97,96 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION でセ�
   assert.isFalse(result);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+// ============================================================================
+// SUBSCRIBE_TRACKS_ALLOWED_PARAMS のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10.19.1:
+ * SUBSCRIBE_TRACKS では AUTHORIZATION_TOKEN / FORWARD / GROUP_ORDER が許可される。
+ */
+test("SUBSCRIBE_TRACKS_ALLOWED_PARAMS は AUTH / FORWARD / GROUP_ORDER のみを含む", () => {
+  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.AUTHORIZATION_TOKEN));
+  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.FORWARD));
+  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
+  assert.equal(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.size, 3);
+});
+
+/**
+ * SUBSCRIBE_TRACKS で許可外パラメータは PROTOCOL_VIOLATION。
+ */
+test("SUBSCRIBE_TRACKS で許可外パラメータは拒否される", () => {
+  const errors: SessionError[] = [];
+  const result = validateParameterScope(
+    [{ type: MessageParameterType.SUBSCRIBER_PRIORITY }],
+    SUBSCRIBE_TRACKS_ALLOWED_PARAMS,
+    "SUBSCRIBE_TRACKS",
+    (error) => {
+      errors.push(error);
+    },
+  );
+  assert.isFalse(result);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+// ============================================================================
+// PUBLISH_OK_ALLOWED_PARAMS のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.8:
+ * GROUP_ORDER は PUBLISH_OK から削除された。
+ */
+test("PUBLISH_OK_ALLOWED_PARAMS は GROUP_ORDER を含まない", () => {
+  assert.isFalse(PUBLISH_OK_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
+});
+
+/**
+ * GROUP_ORDER 付き PUBLISH_OK はスコープ検証で拒否される。
+ */
+test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否される", () => {
+  const errors: SessionError[] = [];
+  const result = validateParameterScope(
+    [{ type: MessageParameterType.GROUP_ORDER }],
+    PUBLISH_OK_ALLOWED_PARAMS,
+    "PUBLISH_OK",
+    (error) => {
+      errors.push(error);
+    },
+  );
+  assert.isFalse(result);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+// ============================================================================
+// PUBLISH_ALLOWED_PARAMS のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10.19.1:
+ * SUBSCRIBE_TRACKS の結果 PUBLISH に GROUP_ORDER が載るため許可する。
+ */
+test("PUBLISH_ALLOWED_PARAMS は GROUP_ORDER を含む", () => {
+  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
+});
+
+/**
+ * GROUP_ORDER 付き PUBLISH はスコープ検証で受理される。
+ */
+test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
+  const errors: SessionError[] = [];
+  const result = validateParameterScope(
+    [{ type: MessageParameterType.GROUP_ORDER }],
+    PUBLISH_ALLOWED_PARAMS,
+    "PUBLISH",
+    (error) => {
+      errors.push(error);
+    },
+  );
+  assert.isTrue(result);
+  assert.equal(errors.length, 0);
 });
