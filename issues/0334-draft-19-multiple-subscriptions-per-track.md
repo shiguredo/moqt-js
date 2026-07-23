@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/change-draft-19-multiple-subscriptions-per-track
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
@@ -33,11 +33,11 @@ moqt-js は draft-18 の旧制約を実装しているため、draft-19 準拠�
 
 ## 現状
 
-- `src/session.ts:886`: `subscribersByAlias = new Map<bigint, SubscriberImpl>()`。Track Alias と subscriber が 1:1 の前提で、受信オブジェクトを alias で単一 subscriber にルーティングしている (datagram: `src/session.ts:4198`、subgroup: `src/session.ts:4564` / `src/session.ts:4604`)
+- `src/session.ts:892`: `subscribersByAlias = new Map<bigint, SubscriberImpl>()`。Track Alias と subscriber が 1:1 の前提で、受信オブジェクトを alias で単一 subscriber にルーティングしている (datagram: `src/session.ts:4242`、subgroup: `src/session.ts:4608`)
 - `src/session/bidi.ts:425-434`: SUBSCRIBE_OK で既存 alias と衝突したら DUPLICATE_TRACK_ALIAS でセッションを閉じる。同一 Track への 2 本目が同じ alias を割り当てられた正当なケースも誤って落とす
-- `src/session.ts:4051-4059`: PUBLISH 受信時、既存 alias があれば `RequestErrorCode.DUPLICATE_SUBSCRIPTION` を返して拒否する (draft-18 Section 5.1 を引用)
+- `src/session.ts:4096-4103`: PUBLISH 受信時、既存 alias があれば `RequestErrorCode.DUPLICATE_SUBSCRIPTION` を返して拒否する (draft-18 Section 5.1 を引用)
 - `src/error.ts:64`: `DUPLICATE_SUBSCRIPTION: 0x19` を定義 (draft-19 では削除済みのコード)
-- `src/session.ts:1393` 以降の `subscribe()` はリクエストごとに一意の requestId を採番しており (`src/session.ts:1437-1439`)、送信側は既に複数サブスクリプションを発行できる
+- `src/session.ts:1407` 以降の `subscribe()` はリクエストごとに一意の requestId を採番しており (`src/session.ts:1451-1453`)、送信側は既に複数サブスクリプションを発行できる
 
 ## 設計方針
 
