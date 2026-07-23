@@ -42,11 +42,11 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
 /**
  * REQUEST_ERROR Codes (Section 10.6 REQUEST_ERROR)
  *
- * draft-ietf-moq-transport-18:
- * - GOING_AWAY (0x6) を追加 (#1434)
- * - EXCESSIVE_LOAD (0x9) を追加 (#1479)
- * - DUPLICATE_SUBSCRIPTION を 0x19 に変更
- * - NAMESPACE_TOO_LARGE (0x31) を追加 (#1496)
+ * draft-ietf-moq-transport-19:
+ * - GOING_AWAY (0x6) を追加
+ * - EXCESSIVE_LOAD (0x9) を追加
+ * - DUPLICATE_SUBSCRIPTION を削除（draft-19 §5.1 で同一 Track への複数サブスクリプションが許可）
+ * - NAMESPACE_TOO_LARGE (0x31) を追加
  * - UNKNOWN_STATUS_IN_RANGE を削除
  */
 export const RequestErrorCode = {
@@ -61,7 +61,6 @@ export const RequestErrorCode = {
   DOES_NOT_EXIST: 0x10,
   INVALID_RANGE: 0x11,
   MALFORMED_TRACK: 0x12,
-  DUPLICATE_SUBSCRIPTION: 0x19,
   UNINTERESTED: 0x20,
   PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,

@@ -1,12 +1,14 @@
 /**
  * MOQT Subscriber
- * draft-ietf-moq-transport-18 Section 5.1 (Subscriptions)
+ * draft-ietf-moq-transport-19 Section 5.1 (Subscriptions)
  */
 
 import type { Parameter } from "./message/parameter";
+import type { SubscriptionFilter } from "./message/parameter";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
+import { type ResolvedFilter, resolveFilter, objectMatchesFilter } from "./filter";
 
 /**
  * Subscriber state
@@ -81,6 +83,9 @@ export class SubscriberImpl implements Subscriber {
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
+  // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter の再適用に使用
+  private subscriptionFilter: SubscriptionFilter | undefined;
+  private resolvedFilterCache: ResolvedFilter | undefined;
 
   // セッションが利用する内部コールバック
   goawayCallback?: (newSessionUri: string) => void;
@@ -137,15 +142,20 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * SUBSCRIBE_OK から LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-18 Section 10.2.11 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-19 Section 10.2.11 (LARGEST OBJECT Parameter)
    */
   setLargestLocation(location: Location): void {
     this.subscriberLargestLocation = location;
+    // LARGEST_OBJECT 更新時に解決済みフィルタを再計算
+    this.resolvedFilterCache = resolveFilter(
+      this.subscriptionFilter,
+      this.subscriberLargestLocation,
+    );
   }
 
   /**
    * SUBSCRIBE_OK から Track Properties を設定
-   * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK)
+   * draft-ietf-moq-transport-19 Section 10.8 (SUBSCRIBE_OK)
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
@@ -154,7 +164,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Set track alias (called when SUBSCRIBE_OK is received)
    *
-   * draft-ietf-moq-transport-18 Section 10.8 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-19 Section 10.8 (SUBSCRIBE_OK):
    * Track Alias is returned by the publisher in SUBSCRIBE_OK.
    */
   setTrackAlias(alias: bigint): void {
@@ -162,10 +172,29 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
+   * Location Filter を設定する
+   *
+   * draft-ietf-moq-transport-19 Section 5.1.2:
+   * SUBSCRIBE 送信時の options.filter または REQUEST_UPDATE 成功後の更新で設定される。
+   */
+  setSubscriptionFilter(filter: SubscriptionFilter | undefined): void {
+    this.subscriptionFilter = filter;
+    this.resolvedFilterCache = resolveFilter(filter, this.subscriberLargestLocation);
+  }
+
+  /**
+   * Full Track Name を取得する（Track 同一性判定用）
+   * draft-ietf-moq-transport-19 Section 2.4.1: Track の同一性は Full Track Name で判定
+   */
+  getFullTrackName(): string {
+    return `${this.subscriberNamespace.join("/")}/${this.subscriberTrackName}`;
+  }
+
+  /**
    * Handle incoming object from data stream
    *
-   * draft-ietf-moq-transport-18 Section 2.2:
-   * "Objects in a subgroup ... are sent on a single stream whenever possible."
+   * draft-ietf-moq-transport-19 Section 5.1:
+   * 同一 Track の複数 subscription に対して、各 subscription の filter を再適用する。
    *
    * 1 Group = 1 Subgroup = 1 Stream のため、QUIC がストリーム内の順序を保証する。
    * Group 間の順序はキーフレーム単位なので、順序保証は不要。
@@ -174,20 +203,38 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
+    // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter 再適用
+    if (
+      !objectMatchesFilter(
+        { group: object.groupId, object: object.objectId },
+        this.resolvedFilterCache,
+      )
+    ) {
+      return;
+    }
     this.objectCallback(object);
   }
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
+   * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
    *
-   * draft-ietf-moq-transport-18:
+   * draft-ietf-moq-transport-19:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
-   * draft-ietf-moq-transport-18 Section 2.2, Section 11.3
+   * draft-ietf-moq-transport-19 Section 2.2, Section 11.3
    */
   handleDatagram(object: MoqtObject): void {
     if (this.subscriberState === "closed") {
+      return;
+    }
+    // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter 再適用
+    if (
+      !objectMatchesFilter(
+        { group: object.groupId, object: object.objectId },
+        this.resolvedFilterCache,
+      )
+    ) {
       return;
     }
     this.datagramCallback?.(object);

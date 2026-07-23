@@ -120,7 +120,7 @@ export function processFetchObjects(
 
 export function processSubgroupObjects(
   buffer: Uint8Array,
-  subscriber: SubscriberImpl,
+  subscribers: SubscriberImpl[],
   header: SubgroupHeader,
   previousObjectId: bigint,
   stats: StreamStatsUpdate,
@@ -181,7 +181,10 @@ export function processSubgroupObjects(
       stats.incrementObjectsReceived(true);
       stats.incrementBytesReceived(true, payload.byteLength);
 
-      subscriber.handleObject(object);
+      // draft-ietf-moq-transport-19 §5.1: 同一 alias の全 subscription に配送（filter 再適用は各 handleObject 内）
+      for (const sub of subscribers) {
+        sub.handleObject(object);
+      }
     } catch (err) {
       if (err instanceof IncompleteDataError) {
         break;
