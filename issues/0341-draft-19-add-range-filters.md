@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/add-draft-19-range-filters
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
