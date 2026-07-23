@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-07-07
+- Completed: 2026-07-23
 - Model: Fable 5
 - Branch: feature/change-draft-19-expires-namespace-ok
 - Polished: 2026-07-23
@@ -62,10 +63,9 @@ closed `#0272` で SUBSCRIBE_TRACKS_OK の Track Properties 空チェック付�
 
 ## 解決方法
 
-1. `src/message/parameterScope.ts`: EXPIRES のみの許可定数を新設。コメントに draft-19 Section 10.2.15。未使用なら `EMPTY_ALLOWED_PARAMS` を削除
-2. `src/session.ts`: SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の `EMPTY_ALLOWED_PARAMS` を新定数に置換。コメント更新。`validateRequestOkNoTrackProperties` は維持
-3. `src/session.ts` `startTracksStreamLoop` の REQUEST_OK: `decodeRequestOkPayload` → 新定数で `validateParameterScope` を追加（Track Properties 空チェックは付けない）。`resolved = true` / `resolve` は検証成功後に置く（`startNamespaceStreamLoop` と同順。現状の TRACKS 経路は検証前に `resolved = true` している）
-4. テスト: `src/message/parameterScope.test.ts`（または同等）で新集合と `validateParameterScope` の通過 / 拒否を検証。モック禁止
-5. 触った箇所の仕様参照を draft-19 に更新
-6. `CHANGES.md` にエントリを追記
-7. `vp check` / `tsc --noEmit` / `vp test run` で確認
+1. `src/message/parameterScope.ts`: `EMPTY_ALLOWED_PARAMS` を削除し、EXPIRES のみの `NAMESPACE_OK_ALLOWED_PARAMS` を新設。コメントに draft-19 §10.2.15 を記載。ファイルヘッダと `validateParameterScope` の JSDoc を draft-19 に更新
+2. `src/session.ts`: SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の `EMPTY_ALLOWED_PARAMS` を `NAMESPACE_OK_ALLOWED_PARAMS` に置換。コメントを draft-19 §10.2.15 に更新。`validateRequestOkNoTrackProperties` は維持
+3. `src/session.ts` `startTracksStreamLoop` の REQUEST_OK: `decodeRequestOkPayload` → `NAMESPACE_OK_ALLOWED_PARAMS` で `validateParameterScope` を追加。Track Properties 空チェックは付けない。`resolved = true` / `resolve` は検証成功後に配置
+4. `src/message/parameterScope.test.ts`: 新集合の内容検証、EXPIRES 通過、空配列通過、許可外拒否、混合拒否の 5 テストを追加
+5. `CHANGES.md`: `[FIX]` エントリを追記
+6. `vp check` / `tsc --noEmit` / `vp test run` で確認（全 719 テスト通過）
