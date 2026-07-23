@@ -23,9 +23,9 @@ draft-19 Section 10.2.9 (LOCATION FILTER Parameter):
 draft-19 Section 5.1.2 (Location Filters) の構造:
 
 > Location Filter {
->   Filter Type (vi64),
->   [Start Location (Location),]
->   [End Group Delta (vi64),]
+> Filter Type (vi64),
+> [Start Location (Location),]
+> [End Group Delta (vi64),]
 > }
 
 IANA Section 15.7 (Message Parameters) Table 13 も `0x21` → `LOCATION_FILTER` (Section 10.2.9)。

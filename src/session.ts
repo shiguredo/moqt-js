@@ -34,7 +34,6 @@ import {
   validateFullTrackName,
   trackNamespaceToStrings,
   decodeGoawayPayload,
-  isValidGoawayRequestIdParity,
   decodeNamespaceDonePayload,
   decodeNamespacePayload,
   decodePublishBlockedPayload,
@@ -141,7 +140,7 @@ export interface ConnectCallbacks {
   debug?: (message: DebugMessage) => void;
   /**
    * GOAWAY 受信時のコールバック
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY)
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY)
    * @param newSessionUri - 新しいセッション URI（セッションマイグレーション用）
    */
   goaway?: (newSessionUri: string) => void;
@@ -221,7 +220,7 @@ export interface PublishCallbacks {
   onForwardStateChange?: (forward: boolean) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
@@ -328,7 +327,7 @@ export interface SubscribeCallbacks {
   error?: (error: Error) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
@@ -506,7 +505,7 @@ export interface FetchCallbacks {
   error?: (error: Error) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
@@ -575,7 +574,7 @@ export interface NamespaceSubscriptionCallbacks {
   error?: (error: Error) => void;
   /**
    * GOAWAY 受信時に呼ばれる
-   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
    * リクエストストリーム上の GOAWAY は当該リクエストの
    * マイグレーションのみを目的とする。
    *
@@ -633,7 +632,7 @@ export interface TracksSubscriptionCallbacks {
   error?: (error: Error) => void;
   /**
    * GOAWAY 受信時に呼ばれる
-   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
    * リクエストストリーム上の GOAWAY は当該リクエストの
    * マイグレーションのみを目的とする。
    *
@@ -666,7 +665,7 @@ export interface NamespacePublicationCallbacks {
   error?: (error: Error) => void;
   /**
    * GOAWAY 受信時に呼ばれる
-   * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
    * リクエストストリーム上の GOAWAY は当該リクエストの
    * マイグレーションのみを目的とする。
    *
@@ -747,7 +746,7 @@ export interface Session {
   readonly state: SessionState;
   /**
    * GOAWAY を受信したかどうか
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY)
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY)
    */
   readonly goawayReceived: boolean;
   /**
@@ -832,7 +831,7 @@ export interface Session {
   ): Promise<NamespacePublication>;
   /**
    * GOAWAY を送信してセッション終了を通知する
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY)
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY)
    * @param newSessionUri - 新しいセッション URI（オプション）
    * @param timeout - Graceful shutdown のタイムアウト（ミリ秒、オプション）
    */
@@ -880,7 +879,7 @@ export class SessionImpl implements Session {
   // GOAWAY 状態
   private receivedGoaway = false;
   // リクエストストリームごとの GOAWAY 受信済みフラグ
-  // draft-ietf-moq-transport-18 §10.4 (GOAWAY):
+  // draft-ietf-moq-transport-19 §10.4 (GOAWAY):
   // 単一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
   private goawayReceivedOnRequestStreams = new Set<bigint>();
   private sentGoaway = false;
@@ -1306,7 +1305,7 @@ export class SessionImpl implements Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-18 Section 10.4 (GOAWAY)
+    // draft-ietf-moq-transport-19 Section 10.4 (GOAWAY)
     if (this.receivedGoaway) {
       throw new Error("Cannot publish after receiving GOAWAY");
     }
@@ -1415,7 +1414,7 @@ export class SessionImpl implements Session {
     }
 
     // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-18 Section 10.4 (GOAWAY)
+    // draft-ietf-moq-transport-19 Section 10.4 (GOAWAY)
     if (this.receivedGoaway) {
       throw new Error("Cannot subscribe after receiving GOAWAY");
     }
@@ -1867,12 +1866,11 @@ export class SessionImpl implements Session {
   /**
    * namespace 系ループ共通: リクエストストリーム上の GOAWAY を処理する
    *
-   * draft-ietf-moq-transport-18 §10.4:
+   * draft-ietf-moq-transport-19 §10.4:
    * リクエストストリーム上の GOAWAY は当該リクエストのみに適用される。
    * 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
    *
-   * 重複検出は validateNoDuplicateGoawayOnRequestStream (#0289 で抽出)、
-   * Request ID null チェックは validateGoawayOnRequestStream を使う。
+   * 重複検出は validateNoDuplicateGoawayOnRequestStream を使う。
    * state 変更は closeState で行う。元の inline 実装と同じく goaway と error の間で
    * state を "closed" にするため、呼び出し元から closeState を渡す。
    * reject は対象と条件がループごとに異なるため呼び出し元で行う。
@@ -1886,7 +1884,7 @@ export class SessionImpl implements Session {
     streamReader: ReadableStreamDefaultReader<Uint8Array>,
     closeState: () => void,
   ): string | null {
-    // 重複 GOAWAY チェック (#0289 で抽出した pure function を再利用)
+    // 重複 GOAWAY チェック
     if (
       !bidi.validateNoDuplicateGoawayOnRequestStream(
         requestId,
@@ -1896,15 +1894,7 @@ export class SessionImpl implements Session {
     ) {
       return null;
     }
-    // Request ID null チェック
     const decodedMsg = decodeGoawayPayload(messagePayload);
-    if (
-      !bidi.validateGoawayOnRequestStream(decodedMsg.requestId, (error) =>
-        this.closeWithError(error),
-      )
-    ) {
-      return null;
-    }
     // コールバック呼び出し + state 変更 + リソース解放
     // 元の inline 実装と同じ順序 (goaway -> state="closed" -> error) を保つ
     callbacks?.goaway?.(decodedMsg.newSessionUri);
@@ -2572,7 +2562,7 @@ export class SessionImpl implements Session {
   /**
    * GOAWAY を送信してセッション終了を通知する
    *
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
    * エンドポイントは間もなくセッションを閉じる意図を peer に通知するために
    * GOAWAY メッセージを送信する。
    */
@@ -2586,7 +2576,7 @@ export class SessionImpl implements Session {
       throw new Error("GOAWAY already sent");
     }
 
-    // draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+    // draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
     // "When sent by a client, the New Session URI MUST be zero length."
     // moqt-js はクライアント実装のため、newSessionUri は常に空文字列
     if (newSessionUri !== undefined && newSessionUri !== "") {
@@ -2600,7 +2590,6 @@ export class SessionImpl implements Session {
       type: MessageType.GOAWAY,
       newSessionUri: "",
       timeout: goawayTimeout,
-      requestId: 1n, // draft-ietf-moq-transport-18 §10.4: クライアントの GOAWAY Request ID はピア（サーバー）の最小 Request ID (奇数パリティ、1 から開始)
     });
 
     await this.sendControlMessage(MessageType.GOAWAY, payload, {
@@ -2608,7 +2597,7 @@ export class SessionImpl implements Session {
       timeout: goawayTimeout.toString(),
     });
 
-    // draft-ietf-moq-transport-18 Section 3.6:
+    // draft-ietf-moq-transport-19 Section 3.6:
     // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
     // the indicated timeout if there are still open subscriptions or
     // fetches on a connection."
@@ -3521,7 +3510,7 @@ export class SessionImpl implements Session {
   /**
    * GOAWAY メッセージを処理する
    *
-   * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+   * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
    * GOAWAY を受信したエンドポイントは SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
    * SUBSCRIBE_NAMESPACE, TRACK_STATUS を含む新規リクエストを peer に対して
    * 開始すべきでない。
@@ -3538,43 +3527,26 @@ export class SessionImpl implements Session {
       return { error: "Multiple GOAWAY messages received" };
     }
 
+    // デコードに失敗した場合（trailing data 等）は PROTOCOL_VIOLATION でセッションを閉じる。
+    // receivedGoaway はデコード成功後に立てることで、半端状態を避ける
+    let msg: ReturnType<typeof decodeGoawayPayload>;
+    try {
+      msg = decodeGoawayPayload(payload);
+    } catch (error) {
+      const sessionError = toProtocolViolationSessionError(error);
+      if (sessionError) {
+        this.closeWithError(sessionError);
+        return { error: "GOAWAY decode failed" };
+      }
+      throw error;
+    }
+
     this.receivedGoaway = true;
-
-    const msg = decodeGoawayPayload(payload);
-
-    // draft-ietf-moq-transport-18 §10.4:
-    // 制御ストリーム上の GOAWAY には Request ID が必須。
-    // Request ID が不在の場合は PROTOCOL_VIOLATION でセッションを閉じる。
-    if (msg.requestId === null) {
-      this.closeWithError(
-        new SessionError(
-          "goaway on control stream must include request id",
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
-      return { error: "GOAWAY on control stream missing Request ID" };
-    }
-
-    // draft-ietf-moq-transport-18 §10.4:
-    // GOAWAY の Request ID は送信元のピア空間を指す。
-    // クライアントの Request ID パリティは even なため、
-    // サーバーからの GOAWAY Request ID は even であることが期待される。
-    // 受信した Request ID のパリティがクライアント (even) と一致しなければ
-    // INVALID_REQUEST_ID でセッションを閉じる。
-    if (!isValidGoawayRequestIdParity(msg.requestId)) {
-      this.closeWithError(
-        new SessionError(
-          `GOAWAY request ID parity mismatch: ${msg.requestId} (expected even)`,
-          SessionErrorCode.INVALID_REQUEST_ID,
-        ),
-      );
-      return { error: "GOAWAY request ID parity mismatch" };
-    }
 
     // GOAWAY コールバックを呼び出す
     this.callbacks.goaway?.(msg.newSessionUri);
 
-    // draft-ietf-moq-transport-18 Section 3.6:
+    // draft-ietf-moq-transport-19 Section 3.6:
     // サーバーが指定した timeout 内にセッションを閉じなければ、
     // サーバーが GOAWAY_TIMEOUT でセッションを切断する。
     // クライアント側でもタイムアウトを設定し、期限内にグレースフルシャットダウンを試みる。
@@ -3912,7 +3884,6 @@ export class SessionImpl implements Session {
             continue;
           }
           if (msg.type === MessageType.GOAWAY) {
-            const decodedMsg = decodeGoawayPayload(msg.payload);
             if (
               !bidi.validateNoDuplicateGoawayOnRequestStream(
                 publishRequestId,
@@ -3922,13 +3893,8 @@ export class SessionImpl implements Session {
             ) {
               return;
             }
-            if (
-              bidi.validateGoawayOnRequestStream(decodedMsg.requestId, (error) =>
-                this.closeWithError(error),
-              )
-            ) {
-              impl.goawayCallback?.(decodedMsg.newSessionUri);
-            }
+            const decodedMsg = decodeGoawayPayload(msg.payload);
+            impl.goawayCallback?.(decodedMsg.newSessionUri);
             return;
           }
           if (msg.type === MessageType.REQUEST_OK) {

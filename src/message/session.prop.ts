@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
+ * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -16,7 +16,6 @@ import {
   encodeGoawayPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
-  isValidGoawayRequestIdParity,
 } from "./session";
 import { type Parameter, createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
@@ -90,22 +89,20 @@ const parametersArb = fc
   });
 
 /**
- * draft-ietf-moq-transport-18 Section 10.4:
- * GOAWAY に Timeout フィールドが追加された。
- * draft-ietf-moq-transport-18 Section 10.4
+ * draft-ietf-moq-transport-19 Section 10.4:
+ * GOAWAY のワイヤフォーマットは New Session URI Length + New Session URI + Timeout。
+ * draft-19 で Request ID フィールドが削除された。
  */
 test("Goaway のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 0, maxLength: 200 }),
       fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: null }),
-      (newSessionUri, timeout, requestId) => {
+      (newSessionUri, timeout) => {
         const original: Goaway = {
           type: MessageType.GOAWAY,
           newSessionUri,
           timeout,
-          requestId,
         };
 
         const encoded = encodeGoawayPayload(original);
@@ -114,26 +111,42 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
         assert.equal(decoded.type, MessageType.GOAWAY);
         assert.equal(decoded.newSessionUri, newSessionUri);
         assert.equal(decoded.timeout, timeout);
-        assert.equal(decoded.requestId, requestId);
       },
     ),
   );
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY) / Section 10.1 (Request ID):
- * 制御ストリーム上の GOAWAY の Request ID は受信側 (クライアント) のパリティ、
- * すなわち even でなければならない。
- * isValidGoawayRequestIdParity は even を妥当 (true)、odd を違反 (false) と判定する。
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Payload,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Timeout は GOAWAY ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Payload 長と一致しないため違反となる。
+ * 正常な GOAWAY の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
  */
-test("GOAWAY の Request ID パリティ判定は even を妥当・odd を違反とする", () => {
+test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationError を throw する", () => {
   fc.assert(
-    fc.property(fc.bigInt({ min: 0n, max: 1000000n }), (n) => {
-      // even (n * 2n) は受信側 (クライアント) のパリティと一致するため妥当
-      assert.isTrue(isValidGoawayRequestIdParity(n * 2n));
-      // odd (n * 2n + 1n) は受信側のパリティと不一致のため違反
-      assert.isFalse(isValidGoawayRequestIdParity(n * 2n + 1n));
-    }),
+    fc.property(
+      fc.string({ minLength: 0, maxLength: 200 }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (newSessionUri, timeout, trailing) => {
+        const original: Goaway = {
+          type: MessageType.GOAWAY,
+          newSessionUri,
+          timeout,
+        };
+
+        const encoded = encodeGoawayPayload(original);
+        // 正常な GOAWAY の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeGoawayPayload(withTrailing), ProtocolViolationError);
+      },
+    ),
   );
 });
 
