@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] 同一 Track への複数同時サブスクリプションに対応する
+  - draft-ietf-moq-transport-19 §5.1 に基づき、同一 Track への複数 SUBSCRIBE を許可する
+  - subscribersByAlias を多重化し、datagram / subgroup 配送を全 subscription への filter 再適用に変更する
+  - DUPLICATE_SUBSCRIPTION エラーコードを削除し、異 Track の同一 alias のみ DUPLICATE_TRACK_ALIAS で拒否する
+  - @voluntas
 - [CHANGE] GOAWAY メッセージから Request ID フィールドを削除する
   - draft-ietf-moq-transport-19 §10.4 に基づき、GOAWAY のワイヤフォーマットから Request ID を削除する
   - Goaway 型から requestId を削除、エンコード/デコードを Request ID なしに更新する

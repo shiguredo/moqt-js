@@ -888,7 +888,7 @@ export class SessionImpl implements Session {
   // アクティブなパブリッシャー、サブスクライバー、フェッチャー
   private publishers = new Map<bigint, PublisherImpl>();
   private subscribers = new Map<bigint, SubscriberImpl>();
-  private subscribersByAlias = new Map<bigint, SubscriberImpl>();
+  private subscribersByAlias = new Map<bigint, SubscriberImpl[]>();
   private fetchers = new Map<bigint, FetcherImpl>();
 
   // Subscriber 登録前に到着した Subgroup ストリームをバッファリング
@@ -1472,6 +1472,9 @@ export class SessionImpl implements Session {
 
     // GOAWAY コールバックを設定（セッション内部コールバック）
     impl.goawayCallback = callbacks.goaway;
+
+    // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
+    impl.setSubscriptionFilter(options?.filter);
 
     // サブスクリプションキャンセルのコールバック
     impl.onUnsubscribe = async () => {
@@ -4071,15 +4074,21 @@ export class SessionImpl implements Session {
       return;
     }
 
-    // 同一 track に対する重複 PUBLISH をチェック
-    // draft-ietf-moq-transport-18 §5.1 (MUST): DUPLICATE_SUBSCRIPTION の REQUEST_ERROR を返す
-    if (this.subscribersByAlias.has(publishTrackAlias)) {
-      await this.sendRequestErrorAndCancel(
-        stream,
-        RequestErrorCode.DUPLICATE_SUBSCRIPTION,
-        "duplicate subscription",
-      );
-      return;
+    // draft-ietf-moq-transport-19 §11.1 (Track Alias):
+    // 同一 Track Alias が異なる Track に使われている場合は DUPLICATE_TRACK_ALIAS でセッション終了。
+    // 同一 Track への複数 PUBLISH は draft-19 §5.1 で許可される。
+    const existingSubscribers = this.subscribersByAlias.get(publishTrackAlias);
+    if (existingSubscribers !== undefined && existingSubscribers.length > 0) {
+      const fullTrackName = `${publishTrackNamespace.join("/")}/${publishTrackName}`;
+      if (existingSubscribers[0].getFullTrackName() !== fullTrackName) {
+        this.closeWithError(
+          new SessionError(
+            `track alias 0x${publishTrackAlias.toString(16)} used for different tracks`,
+            SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+          ),
+        );
+        return;
+      }
     }
 
     // onPublish コールバックから SubscribeCallbacks を取得
@@ -4128,7 +4137,12 @@ export class SessionImpl implements Session {
     }
 
     this.subscribers.set(publishRequestId, impl);
-    this.subscribersByAlias.set(publishTrackAlias, impl);
+    const aliasList = this.subscribersByAlias.get(publishTrackAlias);
+    if (aliasList !== undefined) {
+      aliasList.push(impl);
+    } else {
+      this.subscribersByAlias.set(publishTrackAlias, [impl]);
+    }
     this.requestStreams.set(publishRequestId, {
       stream,
       writer: subWriter,
@@ -4167,7 +4181,17 @@ export class SessionImpl implements Session {
 
     this.requestStreams.delete(publishRequestId);
     this.subscribers.delete(publishRequestId);
-    this.subscribersByAlias.delete(publishTrackAlias);
+    // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
+    const aliasSubscribers = this.subscribersByAlias.get(publishTrackAlias);
+    if (aliasSubscribers !== undefined) {
+      const idx = aliasSubscribers.indexOf(impl);
+      if (idx !== -1) {
+        aliasSubscribers.splice(idx, 1);
+      }
+      if (aliasSubscribers.length === 0) {
+        this.subscribersByAlias.delete(publishTrackAlias);
+      }
+    }
     subReader.releaseLock();
     try {
       subWriter.releaseLock();
@@ -4217,9 +4241,9 @@ export class SessionImpl implements Session {
 
       const [datagram] = decodeObjectDatagram(data);
 
-      // Track Alias で Subscriber を検索
-      const subscriber = this.subscribersByAlias.get(datagram.trackAlias);
-      if (!subscriber) {
+      // Track Alias で Subscriber を検索（draft-19 §5.1: 同一 alias に複数 subscription あり得る）
+      const subscribers = this.subscribersByAlias.get(datagram.trackAlias);
+      if (!subscribers || subscribers.length === 0) {
         return;
       }
 
@@ -4233,11 +4257,13 @@ export class SessionImpl implements Session {
         payload: datagram.payload ?? new Uint8Array(0),
       };
 
-      // Datagram コールバックがあればそちらを使用、なければ通常の object コールバックにフォールバック
-      if (subscriber.hasDatagramCallback()) {
-        subscriber.handleDatagram(object);
-      } else {
-        subscriber.handleObject(object);
+      // 各 subscription に filter 再適用して配送
+      for (const subscriber of subscribers) {
+        if (subscriber.hasDatagramCallback()) {
+          subscriber.handleDatagram(object);
+        } else {
+          subscriber.handleObject(object);
+        }
       }
     } catch (err) {
       this.callbacks.debug?.({
@@ -4550,11 +4576,11 @@ export class SessionImpl implements Session {
    */
   private processSubgroupObjects(
     buffer: Uint8Array,
-    subscriber: SubscriberImpl,
+    subscribers: SubscriberImpl[],
     header: import("./dataStream").SubgroupHeader,
     previousObjectId: bigint,
   ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
-    return processSubgroupObjects(buffer, subscriber, header, previousObjectId, {
+    return processSubgroupObjects(buffer, subscribers, header, previousObjectId, {
       incrementObjectsReceived: () => {
         this.statsObjectsReceivedViaSubscribe++;
       },
@@ -4584,14 +4610,14 @@ export class SessionImpl implements Session {
   ): Promise<void> {
     let buffer = initialBuffer;
     let previousObjectId = -1n;
-    let subscriber: SubscriberImpl | null = this.subscribersByAlias.get(header.trackAlias) ?? null;
+    let subscribers: SubscriberImpl[] = this.subscribersByAlias.get(header.trackAlias) ?? [];
 
     // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
     // ReadableStreamDefaultReader.read() は中断不能なため、Promise.race で別経路が
     // 勝ったときに pendingRead を破棄せず保持し、subscriber mode の最初の read として消費する
     let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
-    if (subscriber === null) {
+    if (subscribers.length === 0) {
       const entry = this.pendingSubgroupBuffer.add(header.trackAlias, header);
       let entryRemoved = false;
 
@@ -4603,7 +4629,7 @@ export class SessionImpl implements Session {
           buffer = new Uint8Array(0);
         }
 
-        while (subscriber === null) {
+        while (subscribers.length === 0) {
           pendingRead ??= reader.read();
           const event = await Promise.race([
             pendingRead.then((result) => ({ kind: "chunk" as const, result })),
@@ -4624,8 +4650,8 @@ export class SessionImpl implements Session {
 
           // event.kind === "notify"
           if (event.reason === "subscriber") {
-            subscriber = this.subscribersByAlias.get(header.trackAlias) ?? null;
-            if (subscriber === null) {
+            subscribers = this.subscribersByAlias.get(header.trackAlias) ?? [];
+            if (subscribers.length === 0) {
               // 通知発火と subscribers 解放が race した稀なケース: abandon
               this.pendingSubgroupBuffer.remove(entry);
               entryRemoved = true;
@@ -4679,7 +4705,7 @@ export class SessionImpl implements Session {
 
       const processResult = this.processSubgroupObjects(
         buffer,
-        subscriber,
+        subscribers,
         header,
         previousObjectId,
       );
