@@ -124,6 +124,9 @@ export interface BidiSessionInternal {
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
 
+  // draft-ietf-moq-transport-19 §10.3.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
+  readonly peerMaxRequestUpdates: number;
+
   statsControlMessagesSent: number;
 
   readonly tracksSubscriptions: Map<
@@ -852,10 +855,27 @@ export async function bidiSendRequestUpdate(
   subscriber: SubscriberImpl,
   options: RequestUpdateOptions,
 ): Promise<void> {
+  const targetRequestId = subscriber.getRequestId();
+
+  // draft-ietf-moq-transport-19 §10.3.1.7:
+  // ピアの MAX_REQUEST_UPDATES を超える outstanding REQUEST_UPDATE を送信してはならない
+  const peerMax = session.peerMaxRequestUpdates;
+  if (peerMax > 0) {
+    let outstanding = 0;
+    for (const [, pending] of session.pendingRequestUpdate) {
+      if (pending.targetRequestId === targetRequestId) {
+        outstanding++;
+      }
+    }
+    if (outstanding >= peerMax) {
+      throw new Error(
+        `cannot send REQUEST_UPDATE: outstanding count ${outstanding} exceeds peer MAX_REQUEST_UPDATES ${peerMax}`,
+      );
+    }
+  }
+
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
-
-  const targetRequestId = subscriber.getRequestId();
 
   const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 

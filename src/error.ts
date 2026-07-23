@@ -35,6 +35,13 @@ export const SessionErrorCode = {
   EXPIRED_AUTH_TOKEN: 0x18,
   INVALID_AUTHORITY: 0x19,
   MALFORMED_AUTHORITY: 0x1a,
+  /**
+   * TOO_MANY_REQUEST_UPDATES (Section 3.5)
+   *
+   * draft-ietf-moq-transport-19:
+   * MAX_REQUEST_UPDATES で広告した上限を超える REQUEST_UPDATE を受信した。
+   */
+  TOO_MANY_REQUEST_UPDATES: 0x1b,
 } as const;
 
 export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErrorCode];

@@ -166,3 +166,16 @@ export function getSetupMaxAuthTokenCacheSize(msg: Setup): number {
   const [value] = decodeVarint(param.value);
   return Number(value);
 }
+
+/**
+ * SETUP メッセージから MAX_REQUEST_UPDATES を取得する
+ *
+ * draft-ietf-moq-transport-19 Section 10.3.1.7:
+ * 欠落時のデフォルトは 0（無制限）。
+ */
+export function getSetupMaxRequestUpdates(msg: Setup): number {
+  const param = getSetupParameter(msg, SetupOptionType.MAX_REQUEST_UPDATES);
+  if (!param) return 0;
+  const [value] = decodeVarint(param.value);
+  return Number(value);
+}

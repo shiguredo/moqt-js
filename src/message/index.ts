@@ -69,6 +69,7 @@ export {
   getSetupAuthority,
   getSetupAuthorizationTokens,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxRequestUpdates,
   getSetupMoqtImplementation,
   getSetupParameter,
   getSetupPath,
