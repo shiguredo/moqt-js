@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/change-draft-19-request-update-session-error
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
@@ -35,7 +35,7 @@ moqt-js は予期しない REQUEST_UPDATE を受けたときに REQUEST_ERROR �
 - `src/session/bidi.ts:703-771`: PUBLISH リクエストストリームループの `case MessageType.REQUEST_UPDATE`。マッチする publisher が見つかれば FORWARD を反映し REQUEST_OK を返す (`src/session/bidi.ts:728-746`)
 - `src/session/bidi.ts:747-769`: publisher が見つからない場合に REQUEST_ERROR (INTERNAL_ERROR) を返すだけでセッションを閉じない。draft-19 では PROTOCOL_VIOLATION でセッションを閉じるべきケース
 - `src/session/bidi.ts:710-712`: doc コメントが draft-18 の「MUST respond with exactly one」を引用しており、coalescing 例外が未反映
-- `src/session.ts:937`: 送信側は `pendingRequestUpdate` で「1 REQUEST_UPDATE = 1 応答」を前提に管理している
+- `src/session.ts:943`: 送信側は `pendingRequestUpdate` で「1 REQUEST_UPDATE = 1 応答」を前提に管理している
 
 ## 設計方針
 
