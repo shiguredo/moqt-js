@@ -43,7 +43,7 @@ export {
 } from "./pendingSubgroupBuffer";
 
 // メッセージ型の再エクスポート
-export type { SubscriptionFilter, Location, Parameter } from "./message";
+export type { LocationFilter, Location, Parameter } from "./message";
 
 // Authorization Token の再エクスポート (draft-ietf-moq-transport-18 Section 10.2.2)
 export {

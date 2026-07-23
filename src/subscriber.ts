@@ -4,7 +4,7 @@
  */
 
 import type { Parameter } from "./message/parameter";
-import type { SubscriptionFilter } from "./message/parameter";
+import type { LocationFilter } from "./message/parameter";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
@@ -25,7 +25,7 @@ export type SubscriberState = "active" | "closed";
  */
 export interface RequestUpdateOptions {
   /**
-   * パラメータ配列（SUBSCRIPTION_FILTER, SUBSCRIBER_PRIORITY など）
+   * パラメータ配列（LOCATION_FILTER, SUBSCRIBER_PRIORITY など）
    */
   parameters?: Parameter[];
 
@@ -84,7 +84,7 @@ export class SubscriberImpl implements Subscriber {
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
   // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter の再適用に使用
-  private subscriptionFilter: SubscriptionFilter | undefined;
+  private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
 
   // セッションが利用する内部コールバック
@@ -147,10 +147,7 @@ export class SubscriberImpl implements Subscriber {
   setLargestLocation(location: Location): void {
     this.subscriberLargestLocation = location;
     // LARGEST_OBJECT 更新時に解決済みフィルタを再計算
-    this.resolvedFilterCache = resolveFilter(
-      this.subscriptionFilter,
-      this.subscriberLargestLocation,
-    );
+    this.resolvedFilterCache = resolveFilter(this.locationFilter, this.subscriberLargestLocation);
   }
 
   /**
@@ -177,8 +174,8 @@ export class SubscriberImpl implements Subscriber {
    * draft-ietf-moq-transport-19 Section 5.1.2:
    * SUBSCRIBE 送信時の options.filter または REQUEST_UPDATE 成功後の更新で設定される。
    */
-  setSubscriptionFilter(filter: SubscriptionFilter | undefined): void {
-    this.subscriptionFilter = filter;
+  setLocationFilter(filter: LocationFilter | undefined): void {
+    this.locationFilter = filter;
     this.resolvedFilterCache = resolveFilter(filter, this.subscriberLargestLocation);
   }
 

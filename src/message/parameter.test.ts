@@ -6,8 +6,8 @@
 import { test, assert } from "vite-plus/test";
 import {
   createTrackNamespace,
-  decodeSubscriptionFilter,
-  decodeSubscriptionFilterParameter,
+  decodeLocationFilter,
+  decodeLocationFilterParameter,
   decodeTrackNamespace,
   encodeParameters,
   decodeParameters,
@@ -23,12 +23,12 @@ import { encodeVarint } from "../varint";
 
 test("無効なパラメータタイプでエラー", () => {
   const invalidParam = { type: 0x20, value: new Uint8Array([0x01]) };
-  assert.throws(() => decodeSubscriptionFilterParameter(invalidParam), "Invalid parameter type");
+  assert.throws(() => decodeLocationFilterParameter(invalidParam), "Invalid parameter type");
 });
 
 test("無効なフィルタタイプで ProtocolViolationError", () => {
   const invalidData = new Uint8Array([0x10]);
-  assert.throws(() => decodeSubscriptionFilter(invalidData), ProtocolViolationError);
+  assert.throws(() => decodeLocationFilter(invalidData), ProtocolViolationError);
 });
 
 /**

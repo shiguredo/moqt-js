@@ -9,7 +9,7 @@
  */
 
 import type { Location } from "./message/types";
-import type { SubscriptionFilter } from "./message/parameter";
+import type { LocationFilter } from "./message/parameter";
 
 /**
  * 解決済み Location Filter
@@ -25,7 +25,7 @@ export interface ResolvedFilter {
 }
 
 /**
- * SubscriptionFilter を具体的な ResolvedFilter に解決する
+ * LocationFilter を具体的な ResolvedFilter に解決する
  *
  * draft-ietf-moq-transport-19 Section 5.1.2:
  * - NextGroupStart: LARGEST_OBJECT の Group + 1 から開始
@@ -33,11 +33,11 @@ export interface ResolvedFilter {
  * - AbsoluteStart: 指定された Location から開始
  * - AbsoluteRange: 指定された Location から開始し、End Group = Start.Group + EndGroupDelta
  *
- * @param filter - SubscriptionFilter（省略時は全 Object 通過）
+ * @param filter - LocationFilter（省略時は全 Object 通過）
  * @param largestLocation - SUBSCRIBE_OK / REQUEST_UPDATE_OK の LARGEST_OBJECT（未受信時は null）
  */
 export function resolveFilter(
-  filter: SubscriptionFilter | undefined,
+  filter: LocationFilter | undefined,
   largestLocation: Location | null,
 ): ResolvedFilter | undefined {
   if (filter === undefined) {

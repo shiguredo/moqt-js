@@ -63,7 +63,7 @@ import {
   type AuthorizationToken,
   type Location,
   type Parameter,
-  type SubscriptionFilter,
+  type LocationFilter,
 } from "./message";
 import {
   NAMESPACE_OK_ALLOWED_PARAMS,
@@ -401,7 +401,7 @@ export interface JoiningFetchOptions {
  */
 export interface SubscribeOptions {
   /**
-   * Subscription Filter
+   * Location Filter
    * draft-ietf-moq-transport-18 Section 5.1.2, Section 10.2.11
    *
    * どのオブジェクトを受信するかを指定するフィルタ。
@@ -412,7 +412,7 @@ export interface SubscribeOptions {
    *
    * 指定しない場合、フィルタなし（全オブジェクト）
    */
-  filter?: SubscriptionFilter;
+  filter?: LocationFilter;
 
   /**
    * Delivery Timeout（ミリ秒）
@@ -1508,7 +1508,7 @@ export class SessionImpl implements Session {
     impl.goawayCallback = callbacks.goaway;
 
     // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
-    impl.setSubscriptionFilter(options?.filter);
+    impl.setLocationFilter(options?.filter);
 
     // サブスクリプションキャンセルのコールバック
     impl.onUnsubscribe = async () => {

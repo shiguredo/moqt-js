@@ -610,7 +610,7 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x10: "uint8",
   // SUBSCRIBER_PRIORITY (Section 10.2.7)
   0x20: "uint8",
-  // SUBSCRIPTION_FILTER (Section 10.2.9)
+  // LOCATION_FILTER (Section 10.2.9)
   0x21: "length-prefixed",
   // GROUP_ORDER (Section 10.2.8)
   0x22: "uint8",
@@ -824,10 +824,10 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
 }
 
 /**
- * Subscription Filter (Section 5.1.2, Section 10.2.9)
+ * Location Filter (Section 5.1.2, Section 10.2.9)
  *
  * draft-ietf-moq-transport-18:
- * Subscription Filter {
+ * Location Filter {
  *   Filter Type (vi64),
  *   [Start Location (Location),]
  *   [End Group Delta (vi64),]
@@ -837,7 +837,7 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
  * 0 の場合は Start Location の Group の残りが対象。
  * draft-ietf-moq-transport-18 Section 10.2
  */
-export type SubscriptionFilter =
+export type LocationFilter =
   | { type: "NextGroupStart" }
   | { type: "LargestObject" }
   | { type: "AbsoluteStart"; startLocation: Location }
@@ -854,10 +854,10 @@ const FILTER_TYPE = {
 } as const;
 
 /**
- * Subscription Filter をエンコードする
+ * Location Filter をエンコードする
  * draft-ietf-moq-transport-18 Section 10.2.9 (SUBSCRIPTION FILTER Parameter)
  */
-export function encodeSubscriptionFilter(filter: SubscriptionFilter): Uint8Array {
+export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
   const parts: Uint8Array[] = [];
 
   switch (filter.type) {
@@ -889,13 +889,10 @@ export function encodeSubscriptionFilter(filter: SubscriptionFilter): Uint8Array
 }
 
 /**
- * Subscription Filter をデコードする
+ * Location Filter をデコードする
  * @returns [filter, consumed bytes]
  */
-export function decodeSubscriptionFilter(
-  data: Uint8Array,
-  offset = 0,
-): [SubscriptionFilter, number] {
+export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFilter, number] {
   const [filterType, typeConsumed] = decodeVarint(data, offset);
   let totalConsumed = typeConsumed;
 
@@ -928,11 +925,11 @@ export function decodeSubscriptionFilter(
 }
 
 /**
- * Subscription Filter を SUBSCRIPTION_FILTER パラメータとしてエンコードする
+ * Location Filter を LOCATION_FILTER パラメータとしてエンコードする
  * Parameter Type: 0x21 (奇数なので Length プレフィックス付き)
  */
-export function encodeSubscriptionFilterParameter(filter: SubscriptionFilter): Parameter {
-  const value = encodeSubscriptionFilter(filter);
+export function encodeLocationFilterParameter(filter: LocationFilter): Parameter {
+  const value = encodeLocationFilter(filter);
   return {
     type: 0x21,
     value,
@@ -940,13 +937,13 @@ export function encodeSubscriptionFilterParameter(filter: SubscriptionFilter): P
 }
 
 /**
- * SUBSCRIPTION_FILTER パラメータをデコードする
+ * LOCATION_FILTER パラメータをデコードする
  */
-export function decodeSubscriptionFilterParameter(param: Parameter): SubscriptionFilter {
+export function decodeLocationFilterParameter(param: Parameter): LocationFilter {
   if (param.type !== 0x21) {
     throw new Error(`Invalid parameter type: expected 0x21, got ${param.type}`);
   }
-  const [filter] = decodeSubscriptionFilter(param.value, 0);
+  const [filter] = decodeLocationFilter(param.value, 0);
   return filter;
 }
 

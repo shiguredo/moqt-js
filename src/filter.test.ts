@@ -6,7 +6,7 @@
 import { test, assert } from "vite-plus/test";
 import { resolveFilter, objectMatchesFilter } from "./filter";
 import type { Location } from "./message/types";
-import type { SubscriptionFilter } from "./message/parameter";
+import type { LocationFilter } from "./message/parameter";
 
 // ============================================================================
 // resolveFilter のテスト
@@ -24,7 +24,7 @@ test("resolveFilter: filter 省略時は undefined", () => {
  * AbsoluteStart は指定された Location をそのまま start にする。
  */
 test("resolveFilter: AbsoluteStart は指定 Location を start にする", () => {
-  const filter: SubscriptionFilter = {
+  const filter: LocationFilter = {
     type: "AbsoluteStart",
     startLocation: { group: 5n, object: 3n },
   };
@@ -40,7 +40,7 @@ test("resolveFilter: AbsoluteStart は指定 Location を start にする", () =
  * Delta = 0 は当該 Group のみが対象。
  */
 test("resolveFilter: AbsoluteRange の End Group は Start.Group + Delta", () => {
-  const filter: SubscriptionFilter = {
+  const filter: LocationFilter = {
     type: "AbsoluteRange",
     startLocation: { group: 5n, object: 0n },
     endGroupDelta: 3n,
@@ -55,7 +55,7 @@ test("resolveFilter: AbsoluteRange の End Group は Start.Group + Delta", () =>
  * AbsoluteRange で Delta = 0 は当該 Group のみ。
  */
 test("resolveFilter: AbsoluteRange で Delta 0 は当該 Group のみ", () => {
-  const filter: SubscriptionFilter = {
+  const filter: LocationFilter = {
     type: "AbsoluteRange",
     startLocation: { group: 5n, object: 2n },
     endGroupDelta: 0n,
@@ -70,7 +70,7 @@ test("resolveFilter: AbsoluteRange で Delta 0 は当該 Group のみ", () => {
  * LARGEST_OBJECT 未受信時は {0, 0} から開始するため Group 1 になる。
  */
 test("resolveFilter: NextGroupStart は LARGEST_OBJECT の Group + 1", () => {
-  const filter: SubscriptionFilter = { type: "NextGroupStart" };
+  const filter: LocationFilter = { type: "NextGroupStart" };
   const result = resolveFilter(filter, { group: 10n, object: 5n });
   assert.isDefined(result);
   assert.equal(result.start.group, 11n);
@@ -82,7 +82,7 @@ test("resolveFilter: NextGroupStart は LARGEST_OBJECT の Group + 1", () => {
  * NextGroupStart で LARGEST_OBJECT 未受信時は {1, 0}。
  */
 test("resolveFilter: NextGroupStart で LARGEST_OBJECT 未受信時は Group 1", () => {
-  const filter: SubscriptionFilter = { type: "NextGroupStart" };
+  const filter: LocationFilter = { type: "NextGroupStart" };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
   assert.equal(result.start.group, 1n);
@@ -93,7 +93,7 @@ test("resolveFilter: NextGroupStart で LARGEST_OBJECT 未受信時は Group 1",
  * LargestObject は LARGEST_OBJECT の Location をそのまま start にする。
  */
 test("resolveFilter: LargestObject は LARGEST_OBJECT の Location を start にする", () => {
-  const filter: SubscriptionFilter = { type: "LargestObject" };
+  const filter: LocationFilter = { type: "LargestObject" };
   const result = resolveFilter(filter, { group: 7n, object: 2n });
   assert.isDefined(result);
   assert.equal(result.start.group, 7n);
@@ -105,7 +105,7 @@ test("resolveFilter: LargestObject は LARGEST_OBJECT の Location を start に
  * LargestObject で LARGEST_OBJECT 未受信時は {0, 0}。
  */
 test("resolveFilter: LargestObject で LARGEST_OBJECT 未受信時は {0, 0}", () => {
-  const filter: SubscriptionFilter = { type: "LargestObject" };
+  const filter: LocationFilter = { type: "LargestObject" };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
   assert.equal(result.start.group, 0n);

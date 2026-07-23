@@ -16,12 +16,12 @@ import {
   decodeLocation,
   encodeParameters,
   decodeParameters,
-  encodeSubscriptionFilter,
-  decodeSubscriptionFilter,
-  encodeSubscriptionFilterParameter,
-  decodeSubscriptionFilterParameter,
+  encodeLocationFilter,
+  decodeLocationFilter,
+  encodeLocationFilterParameter,
+  decodeLocationFilterParameter,
   getParameterVarintValue,
-  type SubscriptionFilter,
+  type LocationFilter,
 } from "./parameter";
 import { encodeVarint } from "../varint";
 
@@ -197,7 +197,7 @@ test("Parameters リストのエンコード・デコードがラウンドトリ
   );
 });
 
-const subscriptionFilterArb: fc.Arbitrary<SubscriptionFilter> = fc.oneof(
+const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
   fc.constant({ type: "NextGroupStart" as const }),
   fc.constant({ type: "LargestObject" as const }),
   fc.record({
@@ -217,11 +217,11 @@ const subscriptionFilterArb: fc.Arbitrary<SubscriptionFilter> = fc.oneof(
   }),
 );
 
-test("SubscriptionFilter のエンコード・デコードがラウンドトリップする", () => {
+test("LocationFilter のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(subscriptionFilterArb, (filter) => {
-      const encoded = encodeSubscriptionFilter(filter);
-      const [decoded, consumed] = decodeSubscriptionFilter(encoded);
+    fc.property(locationFilterArb, (filter) => {
+      const encoded = encodeLocationFilter(filter);
+      const [decoded, consumed] = decodeLocationFilter(encoded);
 
       assert.equal(decoded.type, filter.type);
       if (filter.type === "AbsoluteStart" && decoded.type === "AbsoluteStart") {
@@ -238,13 +238,13 @@ test("SubscriptionFilter のエンコード・デコードがラウンドトリ�
   );
 });
 
-test("SubscriptionFilter パラメータのエンコード・デコードがラウンドトリップする", () => {
+test("LocationFilter パラメータのエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
-    fc.property(subscriptionFilterArb, (filter) => {
-      const param = encodeSubscriptionFilterParameter(filter);
+    fc.property(locationFilterArb, (filter) => {
+      const param = encodeLocationFilterParameter(filter);
       assert.equal(param.type, 0x21);
 
-      const decoded = decodeSubscriptionFilterParameter(param);
+      const decoded = decodeLocationFilterParameter(param);
       assert.equal(decoded.type, filter.type);
       if (filter.type === "AbsoluteStart" && decoded.type === "AbsoluteStart") {
         assert.equal(decoded.startLocation.group, filter.startLocation.group);

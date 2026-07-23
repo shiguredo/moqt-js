@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] SUBSCRIPTION_FILTER を LOCATION_FILTER にリネームする
+  - draft-ietf-moq-transport-19 §10.2.9 / §5.1.2 に基づき、公開型 SubscriptionFilter を LocationFilter にリネームする
+  - MessageParameterType.LOCATION_FILTER / encodeLocationFilter / decodeLocationFilter 等に統一する
+  - @voluntas
 - [CHANGE] 予期しない REQUEST_UPDATE 受信でセッションを PROTOCOL_VIOLATION で閉じる
   - draft-ietf-moq-transport-19 §10.9 に基づき、SUBSCRIBE ストリーム上の REQUEST_UPDATE を PROTOCOL_VIOLATION で拒否する
   - REQUEST_ERROR 受信時に該当 pending をすべて reject する（coalescing 対応）

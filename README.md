@@ -86,10 +86,10 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FETCH メッセージ (Joining Absolute)
 - FETCH_OK メッセージ
 - Fetch Group Order (Ascending / Descending)
-- Subscription Filter (Largest Object)
-- Subscription Filter (Next Group Start)
-- Subscription Filter (Absolute Start)
-- Subscription Filter (Absolute Range)
+- Location Filter (Largest Object)
+- Location Filter (Next Group Start)
+- Location Filter (Absolute Start)
+- Location Filter (Absolute Range)
 - Subscriber Priority
 - Group Order (Ascending / Descending)
 - OBJECT_DELIVERY_TIMEOUT パラメータ
