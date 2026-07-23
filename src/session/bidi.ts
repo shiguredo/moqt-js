@@ -153,35 +153,9 @@ export interface BidiSessionInternal {
 // ============================================================================
 
 /**
- * リクエストストリーム上の GOAWAY の Request ID 存在チェック
- *
- * draft-ietf-moq-transport-18 §10.4 (GOAWAY):
- * "Request ID: Present only when sent on the control stream."
- * リクエストストリーム上の GOAWAY に Request ID が含まれている場合、
- * PROTOCOL_VIOLATION でセッションを閉じる。
- *
- * @returns バリデーション通過時は true、違反時は false
- */
-export function validateGoawayOnRequestStream(
-  requestId: bigint | null,
-  closeSession: (error: SessionError) => void,
-): boolean {
-  if (requestId !== null) {
-    closeSession(
-      new SessionError(
-        "goaway on request stream must not include request id",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      ),
-    );
-    return false;
-  }
-  return true;
-}
-
-/**
  * リクエストストリーム上の重複 GOAWAY を検出する
  *
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+ * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
  * "The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 3.5)
  *  if it receives more than one GOAWAY on the control stream or on a single
  *  request stream."
@@ -366,11 +340,6 @@ export async function bidiReadPublishResponse(
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
       const decoded = decodeGoawayPayload(msg.payload);
-      if (
-        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
-      ) {
-        return;
-      }
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -382,6 +351,12 @@ export async function bidiReadPublishResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for PUBLISH request`));
     }
   } catch (error) {
+    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    const sessionError = toProtocolViolationSessionError(error);
+    if (sessionError) {
+      session.closeWithError(sessionError);
+      return;
+    }
     session.pendingPublish.delete(requestId);
     session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
@@ -476,11 +451,6 @@ export async function bidiReadSubscribeResponse(
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
       const decoded = decodeGoawayPayload(msg.payload);
-      if (
-        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
-      ) {
-        return;
-      }
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -492,6 +462,12 @@ export async function bidiReadSubscribeResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for SUBSCRIBE request`));
     }
   } catch (error) {
+    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    const sessionError = toProtocolViolationSessionError(error);
+    if (sessionError) {
+      session.closeWithError(sessionError);
+      return;
+    }
     session.pendingSubscribe.delete(requestId);
     session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
@@ -563,11 +539,6 @@ export async function bidiReadFetchResponse(
       pending.reject(error);
     } else if (msg.type === MessageType.GOAWAY) {
       const decoded = decodeGoawayPayload(msg.payload);
-      if (
-        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
-      ) {
-        return;
-      }
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -579,6 +550,12 @@ export async function bidiReadFetchResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for FETCH request`));
     }
   } catch (error) {
+    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    const sessionError = toProtocolViolationSessionError(error);
+    if (sessionError) {
+      session.closeWithError(sessionError);
+      return;
+    }
     session.pendingFetch.delete(requestId);
     session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
@@ -633,11 +610,6 @@ export async function bidiReadTrackStatusResponse(
       // TRACK_STATUS は単発リクエストであり ongoing loop を持たないため
       // goawayCallback は不要。newSessionUri は Error.message 経由で通知する。
       const decoded = decodeGoawayPayload(msg.payload);
-      if (
-        !validateGoawayOnRequestStream(decoded.requestId, (error) => session.closeWithError(error))
-      ) {
-        return;
-      }
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingTrackStatus.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -650,6 +622,12 @@ export async function bidiReadTrackStatusResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for TRACK_STATUS request`));
     }
   } catch (error) {
+    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    const sessionError = toProtocolViolationSessionError(error);
+    if (sessionError) {
+      session.closeWithError(sessionError);
+      return;
+    }
     session.pendingTrackStatus.delete(requestId);
     session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
@@ -770,7 +748,7 @@ export async function bidiReadRequestStreamMessages(
             break;
           }
           case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-18 §10.4:
+            // draft-ietf-moq-transport-19 §10.4:
             // リクエストストリーム上の GOAWAY は当該リクエストの
             // マイグレーションのみを目的とし、セッション全体は閉じない。
             // "A GOAWAY MAY also be sent on a request stream to initiate
@@ -786,13 +764,6 @@ export async function bidiReadRequestStreamMessages(
               return;
             }
             const decoded = decodeGoawayPayload(msg.payload);
-            if (
-              !validateGoawayOnRequestStream(decoded.requestId, (error) =>
-                session.closeWithError(error),
-              )
-            ) {
-              return;
-            }
             const publisher = session.publishers.get(requestId);
             if (publisher?.goawayCallback) {
               publisher.goawayCallback(decoded.newSessionUri);

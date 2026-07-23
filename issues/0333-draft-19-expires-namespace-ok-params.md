@@ -43,7 +43,7 @@ closed `#0272` で SUBSCRIBE_TRACKS_OK の Track Properties 空チェック付�
 
 ## 設計方針
 
-- EXPIRES のみを含む許可パラメータ定数を新設する（名称は実装時判断。例: `NAMESPACE_OR_TRACKS_OK_ALLOWED_PARAMS`。TRACKS_OK も含むので `NAMESPACE_OK_*` だけだと紛らわしい）。`EMPTY_ALLOWED_PARAMS` を EXPIRES 入りに改名流用しない
+- EXPIRES のみを含む許可パラメータ定数を新設する（名称は実装時判断。例: `NAMESPACE_OR_TRACKS_OK_ALLOWED_PARAMS`。TRACKS*OK も含むので `NAMESPACE_OK*\*` だけだと紛らわしい）。`EMPTY_ALLOWED_PARAMS` を EXPIRES 入りに改名流用しない
 - SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の検証を新定数に置き換え、「許可パラメータは空」コメントを直す。既存の `validateRequestOkNoTrackProperties` はそのまま維持する
 - SUBSCRIBE_TRACKS_OK では **先に** 新定数を用意したうえで、`decodeRequestOkPayload` → 新定数での `validateParameterScope` を追加する。空集合のまま検証だけ先に入れない。Track Properties 空チェックは付けない
 - 本 issue の範囲は受信側の許可集合更新とスコープ検証の通過まで。送信側（クライアントがこれら OK を送る経路）・EXPIRES の解釈・タイマー・`REQUEST_UPDATE` 延長・コールバック / `expires` API 公開は対象外。既存 SUBSCRIBE_OK と同様、検証通過後に値は利用しない

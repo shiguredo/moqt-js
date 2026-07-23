@@ -31,11 +31,11 @@ draft-19 Section 3.3.3 (Request Cancellation and Rejection):
 
 節番号の繰り下がり:
 
-| draft-18 | draft-19 |
-| --- | --- |
-| (なし) | 3.3.2 Graceful Request Stream Closure (新設) |
-| 3.3.2 Request Cancellation and Rejection | 3.3.3 Request Cancellation and Rejection |
-| 3.3.3 Stream Reset Error Codes | 3.3.4 Stream Reset Error Codes |
+| draft-18                                 | draft-19                                     |
+| ---------------------------------------- | -------------------------------------------- |
+| (なし)                                   | 3.3.2 Graceful Request Stream Closure (新設) |
+| 3.3.2 Request Cancellation and Rejection | 3.3.3 Request Cancellation and Rejection     |
+| 3.3.3 Stream Reset Error Codes           | 3.3.4 Stream Reset Error Codes               |
 
 ## 優先度根拠
 

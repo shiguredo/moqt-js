@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-07-07
+- Completed: 2026-07-23
 - Model: Fable 5
 - Branch: feature/change-draft-19-goaway-remove-request-id
 - Polished: 2026-07-23
@@ -94,11 +95,10 @@ open `#0302`（session モジュール分割）は `validateGoawayOnRequestStrea
 
 ## 解決方法
 
-1. `src/message/session.ts`: 型・encode・decode・`isValidGoawayRequestIdParity` を更新 / 削除。Timeout 後の trailing を即 ProtocolViolationError にする（`expected` / `consumed` 付き）
+1. `src/message/session.ts`: `Goaway` 型から `requestId` を削除。`encodeGoawayPayload` / `decodeGoawayPayload` から Request ID 処理を除去。Timeout 後の trailing を即 ProtocolViolationError にする（`expected` / `consumed` 付き）。`isValidGoawayRequestIdParity` を削除。GOAWAY 関連コメントを draft-19 に更新
 2. `src/message/index.ts`: `isValidGoawayRequestIdParity` の再エクスポートを削除
 3. `src/message/session.prop.ts`: ラウンドトリップから `requestId` を除去。パリティ PBT を削除。Timeout 後余剰バイトの ProtocolViolation テストを追加
-4. `src/session.ts`（呼び出し 2 箇所 + 制御経路）: `goaway()` / `handleGoaway` / `handleGoawayOnNamespaceStream` / PUBLISH 後続 GOAWAY 分岐から Request ID 検証を除去。`handleGoaway` で decode 成功後に `receivedGoaway` を立て、trailing を `closeWithError` で PROTOCOL_VIOLATION にする。関連 import・JSDoc を更新
-5. `src/session/bidi.ts`（呼び出し 5 箇所）: `validateGoawayOnRequestStream` 定義と 5 呼び出しを除去（重複検出は残す）。全体 7 = 手順 4 の 2 + 手順 5 の 5
+4. `src/session.ts`: `goaway()` から `requestId: 1n` を除去。`handleGoaway` の Request ID 欠落チェックとパリティ検証を削除し、decode 成功後に `receivedGoaway` を立て、trailing を `closeWithError` で PROTOCOL_VIOLATION にする。`handleGoawayOnNamespaceStream` と PUBLISH 後続 GOAWAY 分岐から `validateGoawayOnRequestStream` 呼び出しを除去。GOAWAY 関連コメントを draft-19 に更新
+5. `src/session/bidi.ts`: `validateGoawayOnRequestStream` 定義と 5 呼び出しを除去（重複検出は残す）。初期応答リーダー 4 箇所の catch に `toProtocolViolationSessionError` → `closeWithError` 処理を追加。GOAWAY 関連コメントを draft-19 に更新
 6. `CHANGES.md`: `[CHANGE] GOAWAY メッセージから Request ID を削除する` を追記
-7. `vp check` / `tsc --noEmit` / `vp test run` で確認
-8. open `#0302` は本変更後に refresh が必要な旨を実装 PR / 作業メモで残す（本 issue では `#0302` を編集しない）
+7. `vp check` / `tsc --noEmit` / `vp test run` で確認（全 714 テスト通過）
