@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/change-draft-19-subscribe-tracks-parameters
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
@@ -32,7 +32,7 @@ moqt-js の `subscribeTracks()` はパラメータを一切指定できず、dra
 
 ## 現状
 
-- `src/session.ts:1774-1804`: `subscribeTracks()` は `parameters: [] as []` (`src/session.ts:1803`) で空固定。GROUP_ORDER / FORWARD / フィルタ等を指定する API がない
+- `src/session.ts:1794-1834`: `subscribeTracks()` は `parameters: [] as []` (`src/session.ts:1823`) で空固定。GROUP_ORDER / FORWARD / フィルタ等を指定する API がない
 - `src/message/parameterScope.ts:87-88`: SUBSCRIBE_TRACKS の許可パラメータは `NAMESPACE_ALLOWED_PARAMS` (AUTHORIZATION_TOKEN のみ)
 - `src/message/parameterScope.ts:39-48`: `PUBLISH_OK_ALLOWED_PARAMS` が `MessageParameterType.GROUP_ORDER` を含む (`src/message/parameterScope.ts:42`)。draft-19 では PUBLISH_OK に GROUP_ORDER は載らない
 - `src/session/bidi.ts:316-323`: client-as-publisher が受信した PUBLISH_OK (REQUEST_OK) の検証に `PUBLISH_OK_ALLOWED_PARAMS` を使用
