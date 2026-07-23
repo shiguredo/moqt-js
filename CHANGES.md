@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] PUBLISH_BLOCKED を PUBLISH_SKIPPED にリネームする
+  - draft-ietf-moq-transport-19 §10.20 に基づき、メッセージ名・型・コールバック名を PUBLISH_SKIPPED 系に統一する
+  - TracksSubscriptionCallbacks.onPublishBlocked を onPublishSkipped にリネームする（公開 API 破壊）
+  - @voluntas
 - [CHANGE] 同一 Track への複数同時サブスクリプションに対応する
   - draft-ietf-moq-transport-19 §5.1 に基づき、同一 Track への複数 SUBSCRIBE を許可する
   - subscribersByAlias を多重化し、datagram / subgroup 配送を全 subscription への filter 再適用に変更する
