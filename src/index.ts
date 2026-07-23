@@ -23,6 +23,7 @@ export type {
   PublishOptions,
   SubscribeCallbacks,
   SubscribeOptions,
+  SubscribeTracksOptions,
   JoiningFetchOptions,
   FetchCallbacks,
   FetchOptions,
