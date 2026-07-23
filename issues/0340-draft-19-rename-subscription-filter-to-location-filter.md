@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/change-draft-19-location-filter-rename
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
@@ -25,7 +25,7 @@ draft-ietf-moq-transport-19 で SUBSCRIPTION_FILTER パラメータ (Parameter T
 - `src/message/parameter.ts:613-614`: `MESSAGE_PARAMETER_VALUE_ENCODING` の 0x21 エントリ (コメント "SUBSCRIPTION_FILTER")
 - `src/session/params.ts:165-168`: `buildSubscribeParameters` での SUBSCRIPTION_FILTER 組み立て
 - `src/index.ts:45`: `SubscriptionFilter` を公開 API として re-export
-- `src/session.ts:395-408`: `SubscribeOptions.filter?: SubscriptionFilter`
+- `src/session.ts:401-414`: `SubscribeOptions.filter?: SubscriptionFilter`
 
 ## 設計方針
 
