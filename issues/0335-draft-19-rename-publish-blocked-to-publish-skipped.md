@@ -4,7 +4,7 @@
 - Created: 2026-07-07
 - Model: Fable 5
 - Branch: feature/change-draft-19-publish-skipped
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-07-23
 
 ## 目的
 
@@ -32,9 +32,9 @@ draft-19 Section 10.20:
 - `src/message/namespace.ts:358-373`: `encodePublishBlockedPayload`
 - `src/message/namespace.ts:378-392`: `decodePublishBlockedPayload`
 - `src/message/index.ts:153, 158, 164`: re-export
-- `src/session.ts:608-623`: 公開コールバック `onPublishBlocked?` (draft-18 Section 10.20 の英文を引用)
-- `src/session.ts:2248-2255`: `case MessageType.PUBLISH_BLOCKED` の受信処理
-- そのほか `src/session.ts:549, 597, 806, 978, 1768, 1904, 2084, 2131` 等に PUBLISH_BLOCKED へ言及するコメント多数
+- `src/session.ts:619-629`: 公開コールバック `onPublishBlocked?` (draft-18 Section 10.20 の英文を引用)
+- `src/session.ts:2268-2275`: `case MessageType.PUBLISH_BLOCKED` の受信処理
+- そのほか `src/session.ts:555, 603, 812, 984, 1788, 1924, 2104, 2151` 等に PUBLISH_BLOCKED へ言及するコメント多数
 
 ## 設計方針
 
