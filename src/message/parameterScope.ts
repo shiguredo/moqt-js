@@ -27,6 +27,11 @@ export const SUBSCRIBE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.GROUP_ORDER,
   MessageParameterType.NEW_GROUP_REQUEST,
   MessageParameterType.RENDEZVOUS_TIMEOUT,
+  // draft-ietf-moq-transport-19 §5.1.3: Range Filters
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
 ]);
 
 /** SUBSCRIBE_OK メッセージの許可パラメータ */
@@ -39,6 +44,7 @@ export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
  * REQUEST_OK (PUBLISH_OK) の許可パラメータ
  *
  * draft-ietf-moq-transport-19 §10.2.8: GROUP_ORDER は PUBLISH_OK から削除
+ * draft-ietf-moq-transport-19 §5.1.3: Range Filters (0x25–0x28) は PUBLISH_OK に許可
  */
 export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
@@ -48,6 +54,11 @@ export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.FORWARD,
   MessageParameterType.NEW_GROUP_REQUEST,
   MessageParameterType.EXPIRES,
+  // draft-ietf-moq-transport-19 §5.1.3: Range Filters
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
 ]);
 
 /** REQUEST_OK (REQUEST_UPDATE_OK) の許可パラメータ */
@@ -80,6 +91,12 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.NEW_GROUP_REQUEST,
   MessageParameterType.TRACK_NAMESPACE_PREFIX,
+  // draft-ietf-moq-transport-19 §5.1.3: Range Filters (subscription の REQUEST_UPDATE)
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
+  MessageParameterType.TRACK_PROPERTY_FILTER,
 ]);
 
 /** FETCH メッセージの許可パラメータ */
@@ -88,6 +105,11 @@ export const FETCH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.FILL_TIMEOUT,
   MessageParameterType.SUBSCRIBER_PRIORITY,
   MessageParameterType.GROUP_ORDER,
+  // draft-ietf-moq-transport-19 §5.1.3: Range Filters
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
 ]);
 
 /**
@@ -115,11 +137,18 @@ export const NAMESPACE_ALLOWED_PARAMS = new Set<number>([MessageParameterType.AU
  *
  * draft-ietf-moq-transport-19 §10.19.1 (Parameters on SUBSCRIBE_TRACKS):
  * AUTHORIZATION_TOKEN (§10.2.2) / FORWARD (§10.2.17) / GROUP_ORDER (§10.2.8)
+ * draft-ietf-moq-transport-19 §5.1.3: Range Filters (TRACK_PROPERTY_FILTER 含む)
  */
 export const SUBSCRIBE_TRACKS_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
   MessageParameterType.FORWARD,
   MessageParameterType.GROUP_ORDER,
+  // draft-ietf-moq-transport-19 §5.1.3: Range Filters
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
+  MessageParameterType.TRACK_PROPERTY_FILTER,
 ]);
 
 // ============================================================================
