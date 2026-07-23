@@ -1,6 +1,6 @@
 /**
  * MOQT Properties Unit Tests
- * draft-ietf-moq-transport-18 Section 12 (MOQT Properties)
+ * draft-ietf-moq-transport-19 Section 12 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -53,7 +53,7 @@ test("encodeProperty: 奇数 ID で data がない場合はエラー", () => {
 });
 
 /**
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * delta encoding を使用するため、ID は前の ID からの差分としてエンコードされる。
  */
 test("encodeProperties: 複数の拡張を delta encoding でエンコードして結合", () => {
@@ -223,7 +223,7 @@ test("parseProperties: Immutable Properties を正しくパース", () => {
 });
 
 /**
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: Immutable Properties と他の拡張の組み合わせ", () => {
@@ -263,7 +263,7 @@ test("parseProperties: Immutable Properties が unknownProperties に含まれ�
 });
 
 /**
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: 全ての MOQT Core Properties を正しくパース", () => {
@@ -305,7 +305,7 @@ test("parseProperties: 全ての MOQT Core Properties を正しくパース", ()
   assert.isUndefined(parsed.unknownProperties);
 });
 
-// draft-ietf-moq-transport-18 §12.4 / §12.5 / §12.6
+// draft-ietf-moq-transport-19 §12.4 / §12.5 / §12.6
 // Track Property の値域が MUST レベルで検証されない不具合の修正 (#0119)
 test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY は 0-255 を許容する", () => {
   validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 0n);
@@ -365,7 +365,7 @@ test("decodeProperties: 不正な DYNAMIC_GROUPS を含むデータで ProtocolV
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-18 §2.5.1: 未知の Mandatory Track Property (0x4000-0x7FFF)
+// draft-ietf-moq-transport-19 §2.5.1: 未知の Mandatory Track Property (0x4000-0x7FFF)
 test("decodeProperties: 未知の Mandatory Track Property (0x4000) で MalformedTrackError", () => {
   const data = encodeProperties([{ id: 0x4000n, value: 0n }]);
   assert.throws(() => decodeProperties(data), MalformedTrackError);
@@ -403,7 +403,7 @@ test("decodeImmutableProperties: 内部に不正な Track Property を含むと 
   assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-18 §12.7 / §12.8 / §12.9 (#0122)
+// draft-ietf-moq-transport-19 §12.7 / §12.8 / §12.9 (#0122)
 // IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止と PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP の
 // 「Object 当たり 1 つだけ」MUST を検証する
 test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと MalformedTrackError", () => {
@@ -443,7 +443,7 @@ test("parseProperties: Object 内に PRIOR_OBJECT_ID_GAP が 2 回現れると M
   assert.throws(() => parseProperties(encoded), MalformedTrackError);
 });
 
-// draft-ietf-moq-transport-18 §10.2.13 / §12.6
+// draft-ietf-moq-transport-19 §10.2.18 / §12.6
 test("supportsDynamicGroups: DYNAMIC_GROUPS=1 が mutable 側にあれば true", () => {
   const properties: Property[] = [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }];
   assert.equal(supportsDynamicGroups(properties), true);
@@ -494,7 +494,7 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-18 §12.7 (Immutable Properties):
+ * draft-ietf-moq-transport-19 §12.7 (Immutable Properties):
  * IMMUTABLE_PROPERTIES MUST NOT recursively contain an IMMUTABLE_PROPERTIES property.
  * 再帰的な IMMUTABLE_PROPERTIES を含むバイト列を decodeProperties に渡し、
  * MalformedTrackError が throw されることを検証する。

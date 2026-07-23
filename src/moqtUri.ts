@@ -1,15 +1,15 @@
 /**
  * MOQT URI スキーム処理
  *
- * draft-ietf-moq-transport-18 §3.1.1 (MOQT URI Scheme)
- * draft-ietf-moq-transport-18 §3.1.2 (Fragment Identifiers)
- * draft-ietf-moq-transport-18 §3.1.3 (WebTransport)
+ * draft-ietf-moq-transport-19 §3.1.1 (MOQT URI Scheme)
+ * draft-ietf-moq-transport-19 §3.1.2 (Fragment Identifiers)
+ * draft-ietf-moq-transport-19 §3.1.4 (WebTransport)
  */
 
 /**
  * MOQT URI Fragment Identifier
  *
- * draft-ietf-moq-transport-18 §3.1.2:
+ * draft-ietf-moq-transport-19 §3.1.2:
  *
  * > A moqt URI fragment MUST begin with a registered fragment type
  * > identifier, followed by a colon (:), followed by a type-specific
@@ -33,7 +33,7 @@ export interface NormalizedMoqtUri {
 }
 
 /**
- * fragment type identifier の許容文字 (draft-ietf-moq-transport-18 §3.1.2):
+ * fragment type identifier の許容文字 (draft-ietf-moq-transport-19 §3.1.2):
  *
  * > Fragment type identifiers MUST consist of ASCII lowercase letters,
  * > digits, and hyphens (a-z, 0-9, -).
@@ -43,7 +43,7 @@ const FRAGMENT_TYPE_PATTERN = /^[a-z0-9-]+$/;
 /**
  * fragment 文字列 (先頭 `#` 除去後) を type と value に分割する。
  *
- * draft-ietf-moq-transport-18 §3.1.2:
+ * draft-ietf-moq-transport-19 §3.1.2:
  *
  * > A moqt URI fragment MUST begin with a registered fragment type
  * > identifier, followed by a colon (:), followed by a type-specific
@@ -81,7 +81,7 @@ export function parseFragment(fragment: string): MoqtFragment {
 /**
  * `moqt://` URI を WebTransport が受け付ける `https://` URL と fragment 情報に分解する。
  *
- * draft-ietf-moq-transport-18 §3.1.3:
+ * draft-ietf-moq-transport-19 §3.1.4:
  *
  * > When the client uses WebTransport, it constructs an https URI from
  * > the moqt URI by replacing the scheme with https.
@@ -89,7 +89,7 @@ export function parseFragment(fragment: string): MoqtFragment {
  * - `moqt://` で始まる場合: スキームを `https://` に置換する
  * - 上記以外のスキーム / 空文字列 / authority host が空の場合は `Error` を throw する
  *
- * fragment は WebTransport に渡さない (draft-ietf-moq-transport-18 §3.1.2):
+ * fragment は WebTransport に渡さない (draft-ietf-moq-transport-19 §3.1.2):
  *
  * > Fragment identifiers MAY be used with moqt URIs.  The fragment is not
  * > transmitted to the server; it is processed locally by the client

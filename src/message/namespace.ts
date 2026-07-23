@@ -63,7 +63,7 @@ export interface NamespaceDone {
 /**
  * SUBSCRIBE_NAMESPACE メッセージ (Section 10.18 SUBSCRIBE_NAMESPACE)
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割された。Subscribe Options フィールドは
  * 廃止され、各メッセージの責務が明確化された。
@@ -83,7 +83,7 @@ export interface NamespaceDone {
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
  * 空のネームスペースはワイルドカードとして機能し、全てのネームスペースにマッチする。
  *
- * draft-ietf-moq-transport-18 §10.18
+ * draft-ietf-moq-transport-19 §10.18
  */
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
@@ -95,7 +95,7 @@ export interface SubscribeNamespace {
 /**
  * SUBSCRIBE_TRACKS メッセージ (Section 10.19 SUBSCRIBE_TRACKS)
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割された。
  *
@@ -113,7 +113,7 @@ export interface SubscribeNamespace {
  *   Parameters (..) ...
  * }
  *
- * draft-ietf-moq-transport-18 §10.19
+ * draft-ietf-moq-transport-19 §10.19
  */
 export interface SubscribeTracks {
   type: typeof MessageType.SUBSCRIBE_TRACKS;
@@ -168,7 +168,7 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
 /**
  * Namespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.16 (NAMESPACE):
+ * draft-ietf-moq-transport-19 Section 10.16 (NAMESPACE):
  * NAMESPACE Message {
  *   Type (i) = 0x8,
  *   Length (16),
@@ -194,7 +194,7 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
 /**
  * NamespaceDone のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.17 (NAMESPACE_DONE):
+ * draft-ietf-moq-transport-19 Section 10.17 (NAMESPACE_DONE):
  * NAMESPACE_DONE Message {
  *   Type (i) = 0xE,
  *   Length (16),
@@ -220,7 +220,7 @@ export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): Namesp
 /**
  * SubscribeNamespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.18 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-19 Section 10.18 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE Message {
  *   Type (vi64) = 0x50,
  *   Length (16),
@@ -250,7 +250,7 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
 /**
  * SubscribeNamespace のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.18 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-19 Section 10.18 (SUBSCRIBE_NAMESPACE)
  */
 export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): SubscribeNamespace {
   let totalConsumed = 0;
@@ -275,7 +275,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
 /**
  * SubscribeTracks のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.19 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-19 Section 10.19 (SUBSCRIBE_TRACKS):
  * SUBSCRIBE_TRACKS Message {
  *   Type (vi64) = 0x51,
  *   Length (16),
@@ -307,7 +307,7 @@ export function encodeSubscribeTracksPayload(msg: SubscribeTracks): Uint8Array {
 /**
  * SubscribeTracks のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.19 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-19 Section 10.19 (SUBSCRIBE_TRACKS)
  */
 export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): SubscribeTracks {
   let totalConsumed = 0;

@@ -25,7 +25,7 @@ import { TrackPropertyId, type Property } from "../properties";
 
 /**
  * 値が 0 以上であることを検証する
- * draft-ietf-moq-transport-18 §10.2.4, §10.2.6, §10.2.10, §10.2.13, §12.1, §12.2
+ * draft-ietf-moq-transport-19 §10.2.4, §10.2.6, §10.2.15, §10.2.18, §12.1, §12.2
  */
 function validateNonNegative(value: bigint, name: string): void {
   if (value < 0n) {
@@ -35,7 +35,7 @@ function validateNonNegative(value: bigint, name: string): void {
 
 /**
  * DEFAULT PUBLISHER PRIORITY の値域 (0-255) を検証する
- * draft-ietf-moq-transport-18 §12.4:
+ * draft-ietf-moq-transport-19 §12.4:
  * 「The value is from 0 to 255 and lower numbers get higher priority.
  *  Priorities above 255 are invalid.」
  */
@@ -49,12 +49,12 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
 /**
  * 純粋関数: PUBLISH の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-19 Section 10.2
  */
 export function buildPublishParameters(options?: PublishOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // EXPIRES (0x08) - draft-ietf-moq-transport-18 Section 10.2.10 (EXPIRES Parameter)
+  // EXPIRES (0x08) - draft-ietf-moq-transport-19 Section 10.2.15 (EXPIRES Parameter)
   if (options?.expires !== undefined) {
     validateNonNegative(options.expires, "EXPIRES");
     parameters.push({
@@ -63,7 +63,7 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-18 Section 10.2.12 (FORWARD Parameter)
+  // FORWARD (0x10) - draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
   // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
   if (options?.forward === false) {
     parameters.push({
@@ -78,12 +78,12 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
 /**
  * 純粋関数: PUBLISH の Track Properties を構築する
  *
- * draft-ietf-moq-transport-18 Section 12.1-12.6
+ * draft-ietf-moq-transport-19 Section 12.1-12.6
  */
 export function buildPublishTrackProperties(options?: PublishOptions): Property[] {
   const trackProperties: Property[] = [];
 
-  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-19 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
   if (options?.deliveryTimeout !== undefined) {
     validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     trackProperties.push({
@@ -92,7 +92,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     });
   }
 
-  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-18 Section 12.1 (SUBGROUP_DELIVERY_TIMEOUT)
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-19 Section 12.1 (SUBGROUP_DELIVERY_TIMEOUT)
   if (options?.subgroupDeliveryTimeout !== undefined) {
     validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
     trackProperties.push({
@@ -101,7 +101,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     });
   }
 
-  // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-18 Section 12.3 (MAX CACHE DURATION)
+  // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-19 Section 12.3 (MAX CACHE DURATION)
   if (options?.maxCacheDuration !== undefined) {
     validateNonNegative(options.maxCacheDuration, "MAX_CACHE_DURATION");
     trackProperties.push({
@@ -110,7 +110,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     });
   }
 
-  // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-18 Section 12.4 (DEFAULT PUBLISHER PRIORITY)
+  // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-19 Section 12.4 (DEFAULT PUBLISHER PRIORITY)
   if (options?.publisherPriority !== undefined) {
     if (
       options.publisherPriority < DEFAULT_PUBLISHER_PRIORITY_MIN ||
@@ -126,7 +126,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     });
   }
 
-  // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-18 Section 12.5 (DEFAULT PUBLISHER GROUP ORDER)
+  // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-19 Section 12.5 (DEFAULT PUBLISHER GROUP ORDER)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
       throw new Error(
@@ -140,7 +140,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     });
   }
 
-  // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-18 Section 12.6 (DYNAMIC GROUPS)
+  // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-19 Section 12.6 (DYNAMIC GROUPS)
   if (options?.dynamicGroups === true) {
     trackProperties.push({
       id: TrackPropertyId.DYNAMIC_GROUPS,
@@ -158,7 +158,7 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
 /**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-19 Section 10.2
  */
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
@@ -168,7 +168,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
-  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 10.2.4
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-19 Section 10.2.4
   if (options?.deliveryTimeout !== undefined) {
     validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     parameters.push({
@@ -177,7 +177,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-18 Section 10.2.3
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-19 Section 10.2.3
   if (options?.subgroupDeliveryTimeout !== undefined) {
     validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
     parameters.push({
@@ -186,7 +186,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-18 Section 10.2.7 (uint8)
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-19 Section 10.2.7 (uint8)
   if (options?.subscriberPriority !== undefined) {
     parameters.push({
       type: MessageParameterType.SUBSCRIBER_PRIORITY,
@@ -194,7 +194,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-18 Section 10.2.8 (uint8)
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-19 Section 10.2.8 (uint8)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
       throw new Error(
@@ -208,7 +208,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-18 Section 10.2.13 (varint)
+  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-19 Section 10.2.18 (varint)
   if (options?.newGroupRequest !== undefined) {
     validateNonNegative(options.newGroupRequest, "NEW_GROUP_REQUEST");
     parameters.push({
@@ -217,7 +217,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // RENDEZVOUS_TIMEOUT (0x04) - draft-ietf-moq-transport-18 Section 10.2.6
+  // RENDEZVOUS_TIMEOUT (0x04) - draft-ietf-moq-transport-19 Section 10.2.6
   if (options?.rendezvousTimeout !== undefined) {
     validateNonNegative(options.rendezvousTimeout, "RENDEZVOUS_TIMEOUT");
     parameters.push({
@@ -226,7 +226,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-18 Section 10.2.12 (uint8)
+  // FORWARD (0x10) - draft-ietf-moq-transport-19 Section 10.2.17 (uint8)
   // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
   if (options?.forward === false) {
     parameters.push({
@@ -294,7 +294,7 @@ export function buildSubscribeTracksParameters(options?: {
 /**
  * 純粋関数: SUBSCRIBE_OK のパラメータから LARGEST_OBJECT を抽出する
  *
- * draft-ietf-moq-transport-18 Section 10.2.11 (LARGEST OBJECT Parameter)
+ * draft-ietf-moq-transport-19 Section 10.2.16 (LARGEST OBJECT Parameter)
  */
 export function extractLargestLocation(parameters: Parameter[]): Location | undefined {
   for (const param of parameters) {
@@ -308,7 +308,7 @@ export function extractLargestLocation(parameters: Parameter[]): Location | unde
 /**
  * 純粋関数: パラメータから FORWARD 状態を抽出する
  *
- * draft-ietf-moq-transport-18 Section 10.2.12 (FORWARD Parameter)
+ * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
  * FORWARD がない場合はデフォルト値 true を返す。
  */
 export function extractForwardState(parameters: Parameter[]): boolean {
@@ -329,7 +329,7 @@ export function extractForwardState(parameters: Parameter[]): boolean {
 /**
  * 純粋関数: FETCH_OK の End Location 検証
  *
- * draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
+ * draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
  * "If End Location is smaller than the Start Location in the
  *  corresponding FETCH the receiver MUST close the session with
  *  a PROTOCOL_VIOLATION."
@@ -361,11 +361,11 @@ export type IncomingStreamKind = "subgroup" | "fetch" | "unknown";
 /**
  * 純粋関数: 単方向ストリームの先頭バイトから種別を判定する
  *
- * draft-ietf-moq-transport-18 Section 3.4, Section 11.4.2
+ * draft-ietf-moq-transport-19 Section 3.4, Section 11.4.2
  *
  * SUBGROUP_HEADER の type 値範囲: 0x10..0x1F, 0x30..0x3F, 0x50..0x5F, 0x70..0x7F
  *
- * draft-ietf-moq-transport-18 Section 3.4:
+ * draft-ietf-moq-transport-19 Section 3.4:
  * 0b0XX1XXXX のパターンに一致する全範囲を subgroup として判定する。
  * 0x50..0x5F / 0x70..0x7F は FIRST_OBJECT ビット (0x40) が設定された
  * SUBGROUP_HEADER であり、relay 経由でクライアントに配送される場合もある。
@@ -396,7 +396,7 @@ export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKin
 /**
  * 純粋関数: Object ID Delta を計算する
  *
- * draft-ietf-moq-transport-18 Section 11.4.2:
+ * draft-ietf-moq-transport-19 Section 11.4.2:
  * "The Object ID Delta + 1 is added to the previous Object ID ...
  *  The Object ID is the Object ID Delta if it's the first Object"
  *
@@ -434,7 +434,7 @@ export function clampTimeoutMs(timeout: bigint): number {
 /**
  * Track Namespace が namespacePrefix に前方一致するか判定する
  *
- * draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-19 §10.19 (SUBSCRIBE_TRACKS):
  * PUBLISH の trackNamespace が tracksSubscriptions の namespacePrefix に
  * 前方一致する場合、当該 subscription が PUBLISH を受信する対象となる。
  *

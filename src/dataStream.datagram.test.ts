@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Datagram テスト
- * draft-ietf-moq-transport-18 Section 11.3 (Datagrams)
+ * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -162,7 +162,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       payload: new Uint8Array([0xaa]),
     },
   },
-  // draft-ietf-moq-transport-18 Section 11.3.1:
+  // draft-ietf-moq-transport-19 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // Object ID フィールドなし (Object ID = 0)、Priority フィールドなし
   {

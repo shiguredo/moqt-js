@@ -189,7 +189,7 @@ export function validateNoDuplicateGoawayOnRequestStream(
 /**
  * REQUEST_OK Track Properties 非空検証
  *
- * draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
  *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
  *  If an endpoint receives Track Properties in one of these messages it MUST
@@ -288,7 +288,7 @@ export async function bidiReadPublishResponse(
 
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodeRequestOkPayload(msg.payload);
-      // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+      // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
       // 許可されていないパラメータを受信した場合は PROTOCOL_VIOLATION
       if (
         !validateParameterScope(
@@ -300,7 +300,7 @@ export async function bidiReadPublishResponse(
       ) {
         return;
       }
-      // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+      // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
       //  If an endpoint receives Track Properties in one of these messages it MUST
@@ -526,7 +526,7 @@ export async function bidiReadFetchResponse(
         }
       }
 
-      // draft-ietf-moq-transport-18 §10.2.8: GROUP_ORDER は FETCH_OK に許可されない。
+      // draft-ietf-moq-transport-19 §10.2.8: GROUP_ORDER は FETCH_OK に許可されない。
       // FETCH リクエスト側から groupOrder を設定できるようフィールドは FetcherImpl に残す。
       session.pendingFetch.delete(requestId);
       pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation, decoded.trackProperties);
@@ -594,7 +594,7 @@ export async function bidiReadTrackStatusResponse(
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodeRequestOkPayload(msg.payload);
 
-      // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope)
+      // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope)
       if (
         !validateParameterScope(
           decoded.parameters,
@@ -720,7 +720,7 @@ export async function bidiReadRequestStreamMessages(
             const decoded = decodeRequestUpdatePayload(msg.payload);
 
             // パラメータスコープ検証
-            // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope)
+            // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope)
             if (
               !validateParameterScope(
                 decoded.parameters,
@@ -737,7 +737,7 @@ export async function bidiReadRequestStreamMessages(
               const forwardState = extractForwardState(decoded.parameters);
               publisher.setForwardState(forwardState);
 
-              // REQUEST_OK を送信 (draft-ietf-moq-transport-18 §10.9 MUST)
+              // REQUEST_OK を送信 (draft-ietf-moq-transport-19 §10.9 MUST)
               const okPayload = encodeRequestOkPayload({
                 type: MessageType.REQUEST_OK,
                 parameters: [],
@@ -753,7 +753,7 @@ export async function bidiReadRequestStreamMessages(
               session.emitDebug("send", MessageType.REQUEST_OK, okPayload);
             } else {
               // publisher が存在しない場合は REQUEST_ERROR を送信
-              // draft-ietf-moq-transport-18 §10.9: 更新失敗時は REQUEST_ERROR
+              // draft-ietf-moq-transport-19 §10.9: 更新失敗時は REQUEST_ERROR
               const errorPayload = encodeRequestErrorPayload({
                 type: MessageType.REQUEST_ERROR,
                 errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
@@ -980,7 +980,7 @@ export async function bidiSendJoiningFetch(
     parameters: [] as Parameter[],
   };
 
-  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-18 Section 10.2.5
+  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-19 Section 10.2.5
   if (options.fillTimeout !== undefined) {
     fetchMsg.parameters.push({
       type: MessageParameterType.FILL_TIMEOUT,
@@ -1024,7 +1024,7 @@ export async function bidiCancelSubscription(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      // draft-ietf-moq-transport-18 §5.1:
+      // draft-ietf-moq-transport-19 §5.1:
       // 「The subscriber terminates a subscription ... by sending STOP_SENDING.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 両方向をリセットして subscription 解除を通知する。
@@ -1063,7 +1063,7 @@ export async function bidiCancelFetch(
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
-      // draft-ietf-moq-transport-18 §5.2:
+      // draft-ietf-moq-transport-19 §5.2:
       // 「It MUST send STOP_SENDING for the bidi request stream.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 両方向をリセットして fetch 解除を通知する。
@@ -1092,13 +1092,13 @@ export function bidiHandlePublishDone(
   if (requestId !== undefined) {
     const subscriber = session.subscribers.get(requestId);
     if (subscriber) {
-      // draft-ietf-moq-transport-18 §14 (Grease):
+      // draft-ietf-moq-transport-19 §14 (Grease):
       // 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う
       const normalizedCode = normalizePublishDoneCode(Number(msg.statusCode));
       subscriber.handleEnd(BigInt(normalizedCode), msg.reasonPhrase);
       // subscriber/subscribersByAlias の削除はストリーム close 時
       // (bidiReadRequestStreamMessages の finally) に委譲する
-      // draft-ietf-moq-transport-18 §5.1
+      // draft-ietf-moq-transport-19 §5.1
     }
   }
 
@@ -1121,7 +1121,7 @@ export function bidiHandleRequestUpdateOk(
 ): void {
   const msg = decodeRequestOkPayload(payload);
 
-  // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
+  // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
   if (
     !validateParameterScope(
       msg.parameters,
@@ -1133,7 +1133,7 @@ export function bidiHandleRequestUpdateOk(
     return;
   }
 
-  // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+  // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
   if (
     !validateRequestOkNoTrackProperties(msg.trackProperties, "REQUEST_UPDATE_OK", (error) =>
       session.closeWithError(error),

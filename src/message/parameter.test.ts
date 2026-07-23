@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Unit Tests
- * draft-ietf-moq-transport-18 Section 10.2 (Message Parameter)
+ * draft-ietf-moq-transport-19 Section 10.2 (Message Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -33,8 +33,8 @@ test("無効なフィルタタイプで ProtocolViolationError", () => {
 
 /**
  * delta encoding のテスト
- * draft-ietf-moq-transport-18 Section 1.4.3 (Key-Value-Pair Structure):
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-1.4.3
+ * draft-ietf-moq-transport-19 Section 1.4.3 (Key-Value-Pair Structure):
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-1.4.3
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  */
@@ -114,9 +114,9 @@ test("uint8 Message Parameter Value は範囲外を拒否する", () => {
 
 /**
  * Track Namespace / Full Track Name のサイズ制限テスト
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-19 Section 10.2
  */
 test("Track Namespace のサイズ制限定数が 4,096", () => {
   assert.equal(MAX_TRACK_NAMESPACE_SIZE, 4096);
@@ -166,7 +166,7 @@ test("decodeTrackNamespace で制限を超えるとエラー", () => {
 });
 
 test("decodeTrackNamespace で Field Length=0 のフィールドはエラー", () => {
-  // draft-ietf-moq-transport-18 §2.3:
+  // draft-ietf-moq-transport-19 §2.3:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   // 要素数 1、長さ 0 のデータを作成
   const countBytes = encodeVarint(1n);
@@ -225,7 +225,7 @@ test("validateTrackNameSize で制限内なら成功", () => {
 
 /**
  * 未知 Message Parameter 受信時の PROTOCOL_VIOLATION テスト
- * draft-ietf-moq-transport-18 Section 10.2:
+ * draft-ietf-moq-transport-19 Section 10.2:
  * "An endpoint that receives an unknown Message Parameter MUST close
  *  the session with PROTOCOL_VIOLATION."
  */
@@ -244,7 +244,7 @@ test("未知のパラメータタイプで ProtocolViolationError", () => {
 
 /**
  * 重複 Message Parameter 検出の SHOULD テスト
- * draft-ietf-moq-transport-18 Section 10.2:
+ * draft-ietf-moq-transport-19 Section 10.2:
  * "Receivers SHOULD check that there are no unexpected duplicate parameters
  *  and close the session with PROTOCOL_VIOLATION if found."
  */

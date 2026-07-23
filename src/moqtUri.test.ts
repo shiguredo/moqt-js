@@ -1,6 +1,6 @@
 /**
  * normalizeMoqtUri / parseFragment のテスト
- * draft-ietf-moq-transport-18 §3.1.1 / §3.1.2 / §3.1.3
+ * draft-ietf-moq-transport-19 §3.1.1 / §3.1.2 / §3.1.4
  */
 
 import { assert, test } from "vite-plus/test";

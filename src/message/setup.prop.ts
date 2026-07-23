@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages Property-Based Tests
- * draft-ietf-moq-transport-18 Section 10.3
+ * draft-ietf-moq-transport-19 Section 10.3
  */
 
 import { test, assert } from "vite-plus/test";
@@ -18,7 +18,7 @@ import { AuthorizationTokenAliasType, type AuthorizationToken } from "./authoriz
 import { MessageType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 
-// draft-ietf-moq-transport-18 §10.3.1.1 / §10.3.1.2:
+// draft-ietf-moq-transport-19 §10.3.1.1 / §10.3.1.2:
 // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
 // moqt-js は WebTransport 専用クライアントのため createSetup から PATH / AUTHORITY が
 // 出てこないことを多数のラウンドトリップで保証する。

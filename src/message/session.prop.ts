@@ -26,7 +26,7 @@ import { ProtocolViolationError } from "../error";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-18 Section 10.2:
+ * draft-ietf-moq-transport-19 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -36,7 +36,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-19 §10.2.8 / §10.2.17: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -118,10 +118,10 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 
 /**
  * draft-ietf-moq-transport-19 Section 10:
- * "If the length does not match the length of the Message Payload,
+ * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Timeout は GOAWAY ペイロードの最後のフィールドであり、
- * その後ろに後続データがあると消費バイト数が Message Payload 長と一致しないため違反となる。
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  * 正常な GOAWAY の後ろに後続バイト列を連結すると
  * ProtocolViolationError を throw することを検証する。
  */
@@ -151,9 +151,9 @@ test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationE
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 10.5:
+ * draft-ietf-moq-transport-19 Section 10.5:
  * REQUEST_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-18 Section 10.5
+ * draft-ietf-moq-transport-19 Section 10.5
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする（空 Track Properties）", () => {
   fc.assert(
@@ -179,7 +179,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-19 Section 10.5 (REQUEST_OK):
  * REQUEST_OK に Track Properties が追加された。
  * 非空 Track Properties のエンコード・デコードが正しくラウンドトリップすることを検証する。
  */
@@ -226,7 +226,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 /**
  * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-18 Section 10.5:
+ * draft-ietf-moq-transport-19 Section 10.5:
  * REQUEST_OK は Track Properties を末尾に含む場合がある。
  */
 const evenPropertyArb = fc
@@ -259,7 +259,7 @@ const oddPropertyArb = fc
 const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 
 /**
- * draft-ietf-moq-transport-18 Section 10.6.2:
+ * draft-ietf-moq-transport-19 Section 10.6.2:
  * REQUEST_ERROR に Redirect が含まれる場合（REDIRECT エラーコード）
  */
 test("REQUEST_ERROR with Redirect のエンコード・デコードがラウンドトリップする", () => {
@@ -300,9 +300,9 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 10.6:
+ * draft-ietf-moq-transport-19 Section 10.6:
  * REQUEST_ERROR から Request ID が削除された。
- * draft-ietf-moq-transport-18 Section 10.1
+ * draft-ietf-moq-transport-19 Section 10.1
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない
@@ -335,7 +335,7 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 10.6.2:
+ * draft-ietf-moq-transport-19 Section 10.6.2:
  * Error Code が REDIRECT 以外だが Redirect バイト列が存在する場合は
  * ProtocolViolationError を throw する。
  */
@@ -366,11 +366,11 @@ test("REDIRECT 以外のエラーコードで Redirect バイトが存在する�
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 10:
- * "If the length does not match the length of the Message Payload,
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 10.6.2) であり、
- * その後ろに後続データがあると消費バイト数が Message Payload 長と一致しないため違反となる。
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  * 正常な REQUEST_ERROR + Redirect の後ろに後続バイト列を連結すると
  * ProtocolViolationError を throw することを検証する。
  * 検出は消費オフセットと data.length の比較であり後続データの長さに依存しないため、
@@ -412,7 +412,7 @@ test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolVi
 });
 
 /**
- * draft-ietf-moq-transport-18 Section 1.4.4:
+ * draft-ietf-moq-transport-19 Section 1.4.4:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
  *  the session with a PROTOCOL_VIOLATION"
  * Reason Phrase Length が上限 (1024) を超える REQUEST_ERROR を受信すると

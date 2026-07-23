@@ -1,7 +1,7 @@
 /**
  * Pending Subgroup Stream Buffer
  *
- * draft-ietf-moq-transport-18 Section 11.4.2 (Subgroup Header):
+ * draft-ietf-moq-transport-19 Section 11.4.2 (Subgroup Header):
  *
  * > If an endpoint receives a subgroup with an unknown Track Alias, it
  * > MAY abandon the stream, or choose to buffer it for a brief period to
@@ -41,7 +41,7 @@ export interface PendingSubgroupBufferOptions {
  *
  * - perStreamMaxBytes: 1 MiB
  * - perSessionMaxBytes: 16 MiB
- * - timeoutMs: 5000 (draft-ietf-moq-transport-18 §11.4.2 "brief period")
+ * - timeoutMs: 5000 (draft-ietf-moq-transport-19 §11.4.2 "brief period")
  */
 export const DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS: PendingSubgroupBufferOptions = {
   perStreamMaxBytes: 1 << 20,
@@ -95,7 +95,7 @@ export class PendingSubgroupBuffer {
 
   /**
    * 新しい pending entry を作成して Map に追加し、timeout を起動する
-   * draft-ietf-moq-transport-18 §11.4.2 "brief period" の上限を timeoutMs で表現する
+   * draft-ietf-moq-transport-19 §11.4.2 "brief period" の上限を timeoutMs で表現する
    */
   add(trackAlias: bigint, header: SubgroupHeader): PendingSubgroupEntry {
     const entry = new PendingSubgroupEntry(trackAlias, header);

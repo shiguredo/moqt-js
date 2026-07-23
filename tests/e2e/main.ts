@@ -6,7 +6,7 @@
  * - publishCanvas: Canvas captureStream で生成した MediaStream を VP8 で publish する
  * - subscribeCanvas: 同一 namespace に subscribe して MediaStream を受信する
  *
- * draft-ietf-moq-transport-18 Section 10.3.1 (SETUP Message)
+ * draft-ietf-moq-transport-19 Section 10.3.1 (SETUP Message)
  */
 
 import {

@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-07
+- Completed: 2026-07-24
 - Model: Fable 5
 - Branch: feature/update-draft-19-spec-reference-comments
 - Polished: 2026-07-23

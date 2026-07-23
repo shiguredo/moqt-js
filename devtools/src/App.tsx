@@ -142,12 +142,12 @@ export function App() {
               </a>{" "}
               -{" "}
               <a
-                href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-18"
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-19"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                draft-ietf-moq-transport-18
+                draft-ietf-moq-transport-19
               </a>
               {" / "}
               <a

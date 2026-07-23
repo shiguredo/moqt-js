@@ -1,16 +1,16 @@
 /**
  * MOQT Track Status Message
- * draft-ietf-moq-transport-18 Section 10.14 (TRACK_STATUS)
+ * draft-ietf-moq-transport-19 Section 10.14 (TRACK_STATUS)
  *
  * TRACK_STATUS のメッセージフォーマットは SUBSCRIBE と同一。
  * トラックの状態を問い合わせるために使用し、実際にサブスクライブはしない。
  * 応答は REQUEST_OK（SUBSCRIBE_OK と同じパラメータを含む）。
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * - Subscriber は OBJECT_DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を送信しない
- *   draft-ietf-moq-transport-18 Section 10.14
+ *   draft-ietf-moq-transport-19 Section 10.14
  * - REQUEST_OK レスポンスに LARGEST_OBJECT パラメータを含めることが可能
- *   draft-ietf-moq-transport-18 Section 10.14
+ *   draft-ietf-moq-transport-19 Section 10.14
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -30,7 +30,7 @@ import { MessageType } from "./types";
  * SUBSCRIBE と同じフォーマットだが、トラックの状態照会用。
  * サブスクリプション状態を作成せず、オブジェクトも送信しない。
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * Subscriber からの TRACK_STATUS には OBJECT_DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を
  * 含めてはならない（これらは Publisher からの REQUEST_OK レスポンスにのみ含まれる）。
  */
@@ -45,7 +45,7 @@ export interface TrackStatus {
 /**
  * TrackStatus のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.14 (TRACK_STATUS):
+ * draft-ietf-moq-transport-19 Section 10.14 (TRACK_STATUS):
  * TRACK_STATUS message format is identical to the SUBSCRIBE message.
  */
 export function encodeTrackStatusPayload(msg: TrackStatus): Uint8Array {
