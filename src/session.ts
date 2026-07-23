@@ -3955,11 +3955,12 @@ export class SessionImpl implements Session {
               decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
               normalizeRequestErrorCode(Number(decoded.errorCode)),
             );
+            // draft-ietf-moq-transport-19 §10.9: coalescing により単一 REQUEST_ERROR で
+            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する
             for (const [updateId, pendingUpdate] of this.pendingRequestUpdate) {
               if (pendingUpdate.targetRequestId === publishRequestId) {
                 this.pendingRequestUpdate.delete(updateId);
                 pendingUpdate.reject(error);
-                break;
               }
             }
             continue;
