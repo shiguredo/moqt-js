@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] 予期しない REQUEST_UPDATE 受信でセッションを PROTOCOL_VIOLATION で閉じる
+  - draft-ietf-moq-transport-19 §10.9 に基づき、SUBSCRIBE ストリーム上の REQUEST_UPDATE を PROTOCOL_VIOLATION で拒否する
+  - REQUEST_ERROR 受信時に該当 pending をすべて reject する（coalescing 対応）
+  - @voluntas
 - [CHANGE] SUBSCRIBE_TRACKS のパラメータ対応を draft-19 に追従する
   - draft-ietf-moq-transport-19 §10.19.1 に基づき、subscribeTracks() に groupOrder / forward オプションを追加する
   - PUBLISH_OK_ALLOWED_PARAMS から GROUP_ORDER を削除し、PUBLISH_ALLOWED_PARAMS に GROUP_ORDER を追加する
