@@ -1974,7 +1974,10 @@ export class SessionImpl implements Session {
       while (subscription.state === "active") {
         const { value, done } = await streamReader.read();
         if (done) {
-          // ストリームが閉じられた
+          // draft-ietf-moq-transport-19 §3.3.2: 応答前 FIN はリクエスト失敗
+          if (!resolved) {
+            reject(new Error("stream closed before receiving response"));
+          }
           break;
         }
 
@@ -2198,6 +2201,10 @@ export class SessionImpl implements Session {
       while (subscription.state === "active") {
         const { value, done } = await streamReader.read();
         if (done) {
+          // draft-ietf-moq-transport-19 §3.3.2: 応答前 FIN はリクエスト失敗
+          if (!resolved) {
+            reject(new Error("stream closed before receiving response"));
+          }
           break;
         }
 
@@ -2465,7 +2472,10 @@ export class SessionImpl implements Session {
       while (publication.state !== "closed") {
         const { value, done } = await streamReader.read();
         if (done) {
-          // ストリームが peer により閉じられた
+          // draft-ietf-moq-transport-19 §3.3.2: 応答前 FIN はリクエスト失敗
+          if (!resolved) {
+            reject(new Error("stream closed before receiving response"));
+          }
           break;
         }
 
@@ -2770,6 +2780,19 @@ export class SessionImpl implements Session {
     // 保持している双方向 / 単方向ストリームの writer / reader を閉じる。
     // peer 側に FIN / RESET_STREAM を送って受信ループを解除させる。
     // 既に閉じている等の理由で例外が出ても無視する。
+    //
+    // draft-ietf-moq-transport-19 §3.3.2: セッション解体は graceful request completion
+    // ではないため、リクエストストリームには FIN ではなく abort（RESET 相当）を使う。
+    // PUBLISH_DONE 無しの FIN は MUST 違反になり得る。
+    const abortWriterSafely = async (
+      writer: WritableStreamDefaultWriter<Uint8Array>,
+    ): Promise<void> => {
+      try {
+        await writer.abort();
+      } catch {
+        // ストリームが既に閉じている / abort されている場合は無視
+      }
+    };
     const closeWriterSafely = async (
       writer: WritableStreamDefaultWriter<Uint8Array>,
     ): Promise<void> => {
@@ -2793,7 +2816,7 @@ export class SessionImpl implements Session {
     for (const subscription of this.namespaceSubscriptions.values()) {
       subscription.state = "closed";
       if (subscription.writer) {
-        void closeWriterSafely(subscription.writer);
+        void abortWriterSafely(subscription.writer);
       }
       if (subscription.streamReader) {
         void cancelReaderSafely(subscription.streamReader);
@@ -2802,11 +2825,11 @@ export class SessionImpl implements Session {
     this.namespaceSubscriptions.clear();
 
     // SUBSCRIBE_TRACKS 用の双方向ストリーム
-    // draft-ietf-moq-transport-18 §10.19 (SUBSCRIBE_TRACKS)
+    // draft-ietf-moq-transport-19 §10.19 (SUBSCRIBE_TRACKS)
     for (const subscription of this.tracksSubscriptions.values()) {
       subscription.state = "closed";
       if (subscription.writer) {
-        void closeWriterSafely(subscription.writer);
+        void abortWriterSafely(subscription.writer);
       }
       if (subscription.streamReader) {
         void cancelReaderSafely(subscription.streamReader);
@@ -2817,14 +2840,14 @@ export class SessionImpl implements Session {
     // PUBLISH_NAMESPACE 用の双方向ストリーム
     for (const publication of this.namespacePublications.values()) {
       publication.state = "closed";
-      void closeWriterSafely(publication.writer);
+      void abortWriterSafely(publication.writer);
       void cancelReaderSafely(publication.streamReader);
     }
     this.namespacePublications.clear();
 
     // SUBSCRIBE / PUBLISH / FETCH 等のリクエスト用双方向ストリーム
     for (const entry of this.requestStreams.values()) {
-      void closeWriterSafely(entry.writer);
+      void abortWriterSafely(entry.writer);
     }
     this.requestStreams.clear();
 
