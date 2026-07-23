@@ -93,6 +93,7 @@ import {
   clampTimeoutMs,
   matchNamespacePrefix,
 } from "./session/params";
+import { mergeDeliveryTimeoutObjectProperties } from "./properties";
 import * as bidi from "./session/bidi";
 import {
   processFetchObjects,
@@ -3201,12 +3202,35 @@ export class SessionImpl implements Session {
     // Object Status（ペイロード長 0 の場合）を正しくエンコードする。
     // draft-ietf-moq-transport-18 §11.2.1.1:
     // 「Zero-length objects explicitly encode the Normal status.」
+
+    // draft-ietf-moq-transport-19 Section 8:
+    // delivery timeout の Object Property は subgroup 先頭オブジェクトにのみ載せる。
+    // 先頭以外で指定されたら API が throw する。
+    const isFirstInSubgroup = streamState.previousObjectId < 0n;
+    if (
+      !isFirstInSubgroup &&
+      (params.deliveryTimeout !== undefined || params.subgroupDeliveryTimeout !== undefined)
+    ) {
+      throw new Error(
+        "deliveryTimeout/subgroupDeliveryTimeout can only be set on the first object in a subgroup",
+      );
+    }
+
+    let objectProperties = params.properties;
+    if (isFirstInSubgroup) {
+      objectProperties = mergeDeliveryTimeoutObjectProperties(
+        params.properties,
+        params.deliveryTimeout,
+        params.subgroupDeliveryTimeout,
+      );
+    }
+
     const data = encodeObjectFields(
       objectIdDelta,
       BigInt(params.payload.length),
       SubgroupHeaderType.FIRST_OBJ_EXT,
       params.status ?? ObjectStatus.NORMAL,
-      params.properties,
+      objectProperties,
     );
 
     // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して

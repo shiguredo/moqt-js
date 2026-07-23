@@ -12,6 +12,7 @@ import { ObjectStatus } from "../message";
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
 import type { GroupOrder } from "../message/types";
+import { readDeliveryTimeoutObjectProperties } from "../properties";
 
 /**
  * Object ID の最大値 (2^64 - 1)
@@ -177,6 +178,19 @@ export function processSubgroupObjects(
         properties: fields.properties.length > 0 ? fields.properties : undefined,
         payload,
       };
+
+      // draft-ietf-moq-transport-19 Section 8:
+      // subgroup 先頭オブジェクトの Object Property から delivery timeout を抽出する。
+      // 先頭以外に同 ID が付いていても ignore（PROTOCOL_VIOLATION にしない）。
+      if (previousObjectId < 0n && fields.properties.length > 0) {
+        const timeouts = readDeliveryTimeoutObjectProperties(fields.properties);
+        if (timeouts.objectDeliveryTimeout !== undefined) {
+          object.objectDeliveryTimeout = timeouts.objectDeliveryTimeout;
+        }
+        if (timeouts.subgroupDeliveryTimeout !== undefined) {
+          object.subgroupDeliveryTimeout = timeouts.subgroupDeliveryTimeout;
+        }
+      }
 
       stats.incrementObjectsReceived(true);
       stats.incrementBytesReceived(true, payload.byteLength);
