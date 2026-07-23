@@ -207,6 +207,22 @@ export interface MoqtObject {
   status: ObjectStatus;
   properties?: Uint8Array;
   payload: Uint8Array;
+  /**
+   * Object Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-19 Section 12.2 / Section 8
+   *
+   * subgroup 先頭オブジェクトの Object Property から抽出される。
+   * 先頭以外・Fetch・Datagram では設定されない。
+   */
+  objectDeliveryTimeout?: bigint;
+  /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-19 Section 12.1 / Section 8
+   *
+   * subgroup 先頭オブジェクトの Object Property から抽出される。
+   * 先頭以外・Fetch・Datagram では設定されない。
+   */
+  subgroupDeliveryTimeout?: bigint;
 }
 
 /**
