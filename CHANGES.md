@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] GOAWAY メッセージから Request ID フィールドを削除する
+  - draft-ietf-moq-transport-19 §10.4 に基づき、GOAWAY のワイヤフォーマットから Request ID を削除する
+  - Goaway 型から requestId を削除、エンコード/デコードを Request ID なしに更新する
+  - isValidGoawayRequestIdParity / validateGoawayOnRequestStream を削除する
+  - @voluntas
 - [CHANGE] MSF を draft-ietf-moq-msf-01 に追従する (#0316)
   - draft-ietf-moq-msf-01 §5.1.1 に基づき Catalog version を string 型 (MsfVersion = "draft-01" | "1") に変更する
   - draft-ietf-moq-msf-01 §5.1.6 に基づき deltaUpdate ワイヤフォーマットを operation 配列形式に変更する

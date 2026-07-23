@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
+ * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -20,7 +20,7 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
 /**
  * GOAWAY メッセージ (Section 10.4)
  *
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
+ * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -28,13 +28,10 @@ import { type Property, decodeProperties, encodeProperties } from "../properties
  *   New Session URI Length (vi64),
  *   New Session URI (..),
  *   Timeout (vi64),
- *   [Request ID (vi64)],
  * }
  *
- * - Request ID: Present only when sent on the control stream.
- *   制御ストリーム上では、GOAWAY 送信前に処理されなかった
- *   可能性がある最小の peer Request ID を設定する。
- *   リクエストストリーム上では null。
+ * draft-19 で Request ID フィールドが削除された。
+ * 制御ストリームとリクエストストリームでワイヤフォーマットは同一。
  */
 export interface Goaway {
   type: typeof MessageType.GOAWAY;
@@ -44,11 +41,6 @@ export interface Goaway {
    * 0 の場合は即時切断を意味する
    */
   timeout: bigint;
-  /**
-   * 制御ストリーム上の GOAWAY のみ存在する。
-   * リクエストストリーム上の GOAWAY では null。
-   */
-  requestId: bigint | null;
 }
 
 /**
@@ -189,10 +181,8 @@ export interface RequestError {
 /**
  * Goaway のペイロードをエンコード
  *
- * draft-ietf-moq-transport-18 Section 10.4:
- * New Session URI Length + New Session URI + Timeout + [Request ID]
- *
- * - Request ID は制御ストリーム上でのみ存在する (requestId が非 null)
+ * draft-ietf-moq-transport-19 Section 10.4:
+ * New Session URI Length + New Session URI + Timeout
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   const uriBytes = new TextEncoder().encode(msg.newSessionUri);
@@ -201,9 +191,6 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
   parts.push(encodeVarint(uriBytes.length));
   parts.push(uriBytes);
   parts.push(encodeVarint(msg.timeout));
-  if (msg.requestId !== null) {
-    parts.push(encodeVarint(msg.requestId));
-  }
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
   const result = new Uint8Array(totalLength);
@@ -218,15 +205,15 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
 /**
  * Goaway のペイロードをデコード
  *
- * draft-ietf-moq-transport-18 Section 10.4:
- * - Timeout の後、残りバイトがあれば Request ID をデコードする
- * - 残りバイトがない場合（リクエストストリーム上）、requestId は null
+ * draft-ietf-moq-transport-19 Section 10.4:
+ * New Session URI Length + New Session URI + Timeout
+ * Timeout 消費後に余剰バイトがあれば PROTOCOL_VIOLATION
  */
 export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
   offset += uriLengthSize;
 
-  // draft-ietf-moq-transport-18 Section 10.4:
+  // draft-ietf-moq-transport-19 Section 10.4:
   // "The maximum length of the New Session URI is 8,192 bytes.
   //  If an endpoint receives a length exceeding the maximum,
   //  it MUST close the session with a PROTOCOL_VIOLATION."
@@ -241,36 +228,22 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [timeout, timeoutSize] = decodeVarint(data, offset);
   offset += timeoutSize;
 
-  let requestId: bigint | null = null;
-  if (offset < data.length) {
-    const [rid] = decodeVarint(data, offset);
-    requestId = rid;
+  // draft-ietf-moq-transport-19 Section 10:
+  // "If the length does not match the length of the Message Payload,
+  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  // Timeout は GOAWAY ペイロードの最後のフィールドであり、
+  // その後ろに後続データがあると消費バイト数が Message Payload 長と一致しないため違反となる
+  if (offset !== data.length) {
+    throw new ProtocolViolationError(
+      `trailing data after Timeout in GOAWAY: expected ${data.length} bytes, consumed ${offset}`,
+    );
   }
 
   return {
     type: MessageType.GOAWAY,
     newSessionUri,
     timeout,
-    requestId,
   };
-}
-
-/**
- * 制御ストリーム上の GOAWAY の Request ID パリティを検証する
- *
- * draft-ietf-moq-transport-18 Section 10.4 (GOAWAY):
- * "If the parity of the Request ID does not match the receiver's parity,
- *  the endpoint MUST close the session with INVALID_REQUEST_ID."
- * draft-ietf-moq-transport-18 Section 10.1 (Request ID):
- * "The client generates even numbered Request IDs, starting at 0, and the
- *  server generates odd numbered Request IDs, starting at 1."
- * moqt-js はクライアント専用のため、受信側 (クライアント) のパリティは even であり、
- * 受信する制御ストリーム上の GOAWAY の Request ID は even でなければならない。
- *
- * @returns Request ID が even（妥当）なら true、odd（違反）なら false
- */
-export function isValidGoawayRequestIdParity(requestId: bigint): boolean {
-  return requestId % 2n === 0n;
 }
 
 /**
