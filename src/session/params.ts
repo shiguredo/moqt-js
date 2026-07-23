@@ -10,7 +10,7 @@ import type { Parameter, Location } from "../message";
 import type { PublishOptions, SubscribeOptions } from "../session";
 import {
   MessageParameterType,
-  encodeSubscriptionFilterParameter,
+  encodeLocationFilterParameter,
   encodeUint8ParameterValue,
   validateForwardValue,
   getParameterLocationValue,
@@ -162,9 +162,9 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // SUBSCRIPTION_FILTER (0x21) - draft-ietf-moq-transport-18 Section 10.2.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-19 Section 10.2.9
   if (options?.filter !== undefined) {
-    parameters.push(encodeSubscriptionFilterParameter(options.filter));
+    parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
   // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-18 Section 10.2.4

@@ -23,7 +23,7 @@ import {
   encodeLocation,
   encodeUint8ParameterValue,
   type Parameter,
-  type SubscriptionFilter,
+  type LocationFilter,
 } from "./message/parameter";
 import { MessageParameterType, type Location } from "./message/types";
 import { encodeVarint } from "./varint";
@@ -43,9 +43,9 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
 });
 
 /**
- * SubscriptionFilter の任意構築
+ * LocationFilter の任意構築
  */
-const subscriptionFilterArb: fc.Arbitrary<SubscriptionFilter> = fc.oneof(
+const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
   fc.constant({ type: "NextGroupStart" as const }),
   fc.constant({ type: "LargestObject" as const }),
   locationArb.map((startLocation) => ({ type: "AbsoluteStart" as const, startLocation })),
@@ -80,7 +80,7 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
  * SubscribeOptions の任意構築
  */
 const subscribeOptionsArb: fc.Arbitrary<SubscribeOptions> = fc.record({
-  filter: fc.option(subscriptionFilterArb, { nil: undefined }),
+  filter: fc.option(locationFilterArb, { nil: undefined }),
   deliveryTimeout: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
   subscriberPriority: fc.option(fc.integer({ min: 0, max: 255 }), { nil: undefined }),
   groupOrder: fc.option(fc.constantFrom("Ascending" as const, "Descending" as const), {
