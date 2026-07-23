@@ -1,6 +1,6 @@
 /**
  * Fetcher Unit Tests
- * draft-ietf-moq-transport-18 Section 5.2
+ * draft-ietf-moq-transport-19 Section 5.2
  */
 
 import { test, assert } from "vite-plus/test";
@@ -46,7 +46,7 @@ test("handleEnd は endCallback を呼んで closed にする", () => {
   assert.equal(fetcher.state, "closed");
 });
 
-// draft-ietf-moq-transport-18 Section 5.2:
+// draft-ietf-moq-transport-19 Section 5.2:
 // cancel() は onCancel コールバックを呼ぶ
 test("cancel は onCancel コールバックを呼んで closed にする", async () => {
   let cancelCalled = false;
@@ -73,7 +73,7 @@ test("cancel は closed 状態では onCancel を呼ばない", async () => {
   assert.equal(cancelCallCount, 1);
 });
 
-// draft-ietf-moq-transport-18 Section 10.13:
+// draft-ietf-moq-transport-19 Section 10.13:
 // setFetchOkInfo で Track Properties が設定される
 test("setFetchOkInfo で Track Properties が設定される", () => {
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});

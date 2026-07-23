@@ -2,7 +2,7 @@ import { IncompleteDataError } from "./error";
 
 /**
  * MOQT 可変長整数エンコーディング
- * draft-ietf-moq-transport-18 Section 1.4.1
+ * draft-ietf-moq-transport-19 Section 1.4.1
  *
  * Leading 1-bits の数でエンコード長を決定する。
  * 最初の 0 ビットの後の残りビットと後続バイトが値を表す。
@@ -53,7 +53,7 @@ export function varintSize(value: number | bigint): number {
 /**
  * 整数を MOQT varint 形式にエンコードする
  *
- * draft-ietf-moq-transport-18 Section 1.4.1:
+ * draft-ietf-moq-transport-19 Section 1.4.1:
  * Leading 1-bits の数で長さを示し、最初の 0 ビット後の残りビットと
  * 後続バイトに値をネットワークバイトオーダーでエンコードする。
  */
@@ -147,7 +147,7 @@ export function encodeVarint(value: number | bigint): Uint8Array {
 /**
  * MOQT varint 形式からデコードする
  *
- * draft-ietf-moq-transport-18 Section 1.4.1:
+ * draft-ietf-moq-transport-19 Section 1.4.1:
  * Leading 1-bits の数から長さを決定し、値をデコードする。
  *
  * @returns [デコードされた値, 消費したバイト数]

@@ -1,6 +1,6 @@
 /**
  * GREASE (Generate Random Extensions And Sustain Extensibility)
- * draft-ietf-moq-transport-18 Section 14 (Grease)
+ * draft-ietf-moq-transport-19 Section 14 (Grease)
  *
  * 未知の値を正しくハンドリングすることを保証するために、
  * 各レジストリに GREASE 用の予約値が定義されている。
@@ -11,10 +11,10 @@
  * 対象レジストリ:
  * - Setup Options (Section 15.4)
  * - Properties (Section 15.8)
- * - Session Termination Error Codes (Section 15.10.1)
- * - REQUEST_ERROR Codes (Section 15.10.2)
- * - PUBLISH_DONE Codes (Section 15.10.3)
- * - Stream Reset Error Codes (Section 15.10.4)
+ * - Session Termination Error Codes (Section 15.11.1)
+ * - REQUEST_ERROR Codes (Section 15.11.2)
+ * - PUBLISH_DONE Codes (Section 15.11.3)
+ * - Stream Reset Error Codes (Section 15.11.4)
  * - MOQT Auth Token Type
  */
 

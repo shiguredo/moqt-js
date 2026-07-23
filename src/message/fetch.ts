@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-18 Section 10.12 (FETCH) — 10.13 (FETCH_OK)
+ * draft-ietf-moq-transport-19 Section 10.12 (FETCH) — 10.13 (FETCH_OK)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -62,10 +62,10 @@ export interface Fetch {
 /**
  * FETCH_OK メッセージ (Section 10.13 FETCH_OK)
  *
- * draft-ietf-moq-transport-18:
+ * draft-ietf-moq-transport-19:
  * - 双方向ストリーム上で送信されるため Request ID は不要。
  * - Track Properties が追加された。
- * draft-ietf-moq-transport-18 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-19 Section 10 (Control Messages)
  */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
@@ -125,7 +125,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   let standalone: StandaloneFetch | undefined;
   let joining: JoiningFetch | undefined;
 
-  // draft-ietf-moq-transport-18 Section 10.12 (FETCH):
+  // draft-ietf-moq-transport-19 Section 10.12 (FETCH):
   // "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
   //  the session with a PROTOCOL_VIOLATION."
   const fetchTypeValue = Number(fetchType);
@@ -196,7 +196,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
+ * draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
  * FETCH_OK Message {
  *   Type (i) = 0x18,
  *   Length (16),
@@ -214,7 +214,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   parts.push(encodeLocation(msg.endLocation));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
+  // draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -243,7 +243,7 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-18 Section 10.13 (FETCH_OK):
+  // draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);

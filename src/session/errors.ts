@@ -12,7 +12,7 @@ import { ProtocolViolationError, SessionError, SessionErrorCode } from "../error
 /**
  * WebTransport セッション終了に伴って発生した read エラーかどうかを判定する
  *
- * draft-ietf-moq-transport-18 Section 3.5:
+ * draft-ietf-moq-transport-19 Section 3.5:
  * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
  *
@@ -36,7 +36,7 @@ export function isSessionClosedError(error: Error): boolean {
 /**
  * ProtocolViolationError を PROTOCOL_VIOLATION の SessionError に変換する
  *
- * draft-ietf-moq-transport-18 Section 3.5 (Termination):
+ * draft-ietf-moq-transport-19 Section 3.5 (Termination):
  * "PROTOCOL_VIOLATION (0x3): The remote endpoint performed an action that was
  *  disallowed by the specification."
  * 受信メッセージの妥当性検証で違反を検出した場合、各 decode 関数は
@@ -46,7 +46,7 @@ export function isSessionClosedError(error: Error): boolean {
  * ProtocolViolationError 以外（ストリームの正常終了・キャンセル等）は
  * null を返し、catch 側で握り潰させる。
  *
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-18.html#section-3.5
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-3.5
  */
 export function toProtocolViolationSessionError(error: unknown): SessionError | null {
   if (error instanceof ProtocolViolationError) {

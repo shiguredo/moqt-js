@@ -1,6 +1,6 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-18 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-19 Section 10 (Control Messages)
  */
 
 // 型定義

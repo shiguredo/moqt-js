@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Property-Based Tests
- * draft-ietf-moq-transport-18 Section 10.2
+ * draft-ietf-moq-transport-19 Section 10.2
  */
 
 import { test, assert } from "vite-plus/test";
@@ -65,7 +65,7 @@ test("奇数タイプの Parameter のエンコード・デコードがラウン
 });
 
 test("TrackNamespace のエンコード・デコードがラウンドトリップする", () => {
-  // draft-ietf-moq-transport-18 §2.3:
+  // draft-ietf-moq-transport-19 §2.3:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   // 各フィールドは 1 バイト以上必要なため minLength: 1 とする
   fc.assert(
@@ -105,7 +105,7 @@ test("Location のエンコード・デコードがラウンドトリップす�
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-18 Section 10.2:
+ * draft-ietf-moq-transport-19 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  * - varint: 0x02, 0x04, 0x06, 0x08, 0x32
  * - uint8: 0x10, 0x20, 0x22
@@ -119,7 +119,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-18 §10.2.8 / §10.2.12: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-19 §10.2.8 / §10.2.17: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -166,7 +166,7 @@ const messageParameterArb = fc.oneof(
 /**
  * Message Parameters リストの arbitrary
  *
- * draft-ietf-moq-transport-18 Section 10.2:
+ * draft-ietf-moq-transport-19 Section 10.2:
  * パラメータは Type の昇順でソートされ、各 Type は一意である必要がある。
  */
 const parametersArb = fc
@@ -179,7 +179,7 @@ const parametersArb = fc
 /**
  * Parameters リストのエンコード・デコードがラウンドトリップする
  *
- * draft-ietf-moq-transport-18 Section 10.2:
+ * draft-ietf-moq-transport-19 Section 10.2:
  * delta encoding を使用するため、type は昇順である必要がある。
  * テストでは生成されたパラメータを type でソートしてから使用する。
  */
