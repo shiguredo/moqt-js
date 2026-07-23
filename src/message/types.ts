@@ -40,14 +40,14 @@ export const MessageType = {
   NAMESPACE: 0x08,
   NAMESPACE_DONE: 0x0e,
   /**
-   * PUBLISH_BLOCKED (Section 10.20 PUBLISH_BLOCKED)
+   * PUBLISH_SKIPPED (Section 10.20 PUBLISH_SKIPPED)
    *
-   * draft-ietf-moq-transport-18:
-   * Publisher が新しい Request ID を割り当てられない場合に送信する。
-   * SUBSCRIBE_TRACKS のフロー制御の一環。
-   * draft-ietf-moq-transport-18 Section 10.20 (PUBLISH_BLOCKED)
+   * draft-ietf-moq-transport-19 Section 10.20 (PUBLISH_SKIPPED):
+   * Publisher が Track に対する PUBLISH を送信しないことを示す。
+   * SUBSCRIBE_TRACKS の応答ストリーム上で送信される。
+   * draft-ietf-moq-transport-19 Section 6.1: "or any other reason"
    */
-  PUBLISH_BLOCKED: 0x0f,
+  PUBLISH_SKIPPED: 0x0f,
   /**
    * SUBSCRIBE_NAMESPACE (Section 10.18 SUBSCRIBE_NAMESPACE)
    *
@@ -63,7 +63,7 @@ export const MessageType = {
    *
    * draft-ietf-moq-transport-18:
    * track subscription (PUBLISH メッセージは新規 bidi で到着、
-   * PUBLISH_BLOCKED は応答ストリーム上で到着) を担当する。
+   * PUBLISH_SKIPPED は応答ストリーム上で到着) を担当する。
    * draft-ietf-moq-transport-18 Section 10.19
    */
   SUBSCRIBE_TRACKS: 0x51,

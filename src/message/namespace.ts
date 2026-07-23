@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages
- * draft-ietf-moq-transport-18 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_BLOCKED)
+ * draft-ietf-moq-transport-19 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_SKIPPED)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -101,7 +101,7 @@ export interface SubscribeNamespace {
  *
  * SUBSCRIBE_TRACKS は track subscription を担当する。Publisher は
  * マッチするネームスペース内のトラックに対して PUBLISH メッセージを
- * 新規双方向ストリームで送信する。応答ストリームでは PUBLISH_BLOCKED
+ * 新規双方向ストリームで送信する。応答ストリームでは PUBLISH_SKIPPED
  * のみが追加で送られる。
  *
  * SUBSCRIBE_TRACKS Message {
@@ -330,13 +330,12 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
 }
 
 /**
- * PUBLISH_BLOCKED メッセージ (Section 10.20 PUBLISH_BLOCKED)
+ * PUBLISH_SKIPPED メッセージ (Section 10.20 PUBLISH_SKIPPED)
  *
- * draft-ietf-moq-transport-18:
- * Publisher が新しい Request ID を割り当てられない場合に送信する。
- * SUBSCRIBE_TRACKS のフロー制御の一環。
+ * draft-ietf-moq-transport-19 Section 10.20 (PUBLISH_SKIPPED):
+ * Publisher が Track に対する PUBLISH を送信しないことを示す。
  *
- * PUBLISH_BLOCKED Message {
+ * PUBLISH_SKIPPED Message {
  *   Type (vi64) = 0xF,
  *   Length (16),
  *   Track Namespace Suffix (..),
@@ -344,18 +343,20 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *   Track Name (..),
  * }
  *
- * draft-ietf-moq-transport-18 Section 10.20 (PUBLISH_BLOCKED)
+ * draft-ietf-moq-transport-19 Section 6.1:
+ * "or any other reason" — 理由はストリーム不足に限定されない。
+ * MUST NOT send a PUBLISH for a Track after PUBLISH_SKIPPED, scoped to a single PUBLISH.
  */
-export interface PublishBlocked {
-  type: typeof MessageType.PUBLISH_BLOCKED;
+export interface PublishSkipped {
+  type: typeof MessageType.PUBLISH_SKIPPED;
   trackNamespaceSuffix: TrackNamespace;
   trackName: Uint8Array;
 }
 
 /**
- * PublishBlocked のペイロードをエンコード
+ * PublishSkipped のペイロードをエンコード
  */
-export function encodePublishBlockedPayload(msg: PublishBlocked): Uint8Array {
+export function encodePublishSkippedPayload(msg: PublishSkipped): Uint8Array {
   const parts: Uint8Array[] = [];
 
   parts.push(encodeTrackNamespace(msg.trackNamespaceSuffix));
@@ -373,9 +374,9 @@ export function encodePublishBlockedPayload(msg: PublishBlocked): Uint8Array {
 }
 
 /**
- * PublishBlocked のペイロードをデコード
+ * PublishSkipped のペイロードをデコード
  */
-export function decodePublishBlockedPayload(data: Uint8Array, offset = 0): PublishBlocked {
+export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): PublishSkipped {
   let totalConsumed = 0;
 
   const [trackNamespaceSuffix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
@@ -386,7 +387,7 @@ export function decodePublishBlockedPayload(data: Uint8Array, offset = 0): Publi
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
 
   return {
-    type: MessageType.PUBLISH_BLOCKED,
+    type: MessageType.PUBLISH_SKIPPED,
     trackNamespaceSuffix,
     trackName,
   };

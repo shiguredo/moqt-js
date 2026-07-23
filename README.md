@@ -115,7 +115,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - PUBLISH_NAMESPACE
 - NAMESPACE
 - NAMESPACE_DONE
-- PUBLISH_BLOCKED
+- PUBLISH_SKIPPED
 - SUBSCRIBE_NAMESPACE (Namespace 発見)
 - SUBSCRIBE_TRACKS (Track 購読)
 - TRACK_STATUS
