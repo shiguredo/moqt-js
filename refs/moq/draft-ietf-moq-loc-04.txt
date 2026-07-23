@@ -5,13 +5,13 @@
 Media Over QUIC                                                M. Zanaty
 Internet-Draft                                             S. Nandakumar
 Intended status: Standards Track                                   Cisco
-Expires: 16 September 2026                                   P. Thatcher
+Expires: 21 January 2027                                     P. Thatcher
                                                                Microsoft
-                                                           15 March 2026
+                                                            20 July 2026
 
 
                       Low Overhead Media Container
-                         draft-ietf-moq-loc-02
+                         draft-ietf-moq-loc-04
 
 Abstract
 
@@ -53,9 +53,9 @@ Status of This Memo
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 1]
+Zanaty, et al.           Expires 21 January 2027                [Page 1]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
    Internet-Drafts are draft documents valid for a maximum of six months
@@ -63,7 +63,7 @@ Internet-Draft               media-container                  March 2026
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 16 September 2026.
+   This Internet-Draft will expire on 21 January 2027.
 
 Copyright Notice
 
@@ -93,45 +93,44 @@ Table of Contents
      2.2.  MOQ Object Mapping  . . . . . . . . . . . . . . . . . . .   6
      2.3.  LOC Properties  . . . . . . . . . . . . . . . . . . . . .   6
        2.3.1.  Common Properties . . . . . . . . . . . . . . . . . .   7
-       2.3.2.  Video Header Data . . . . . . . . . . . . . . . . . .   8
-       2.3.3.  Audio Header Data . . . . . . . . . . . . . . . . . .   8
+       2.3.2.  Video Properties  . . . . . . . . . . . . . . . . . .   8
+       2.3.3.  Audio Properties  . . . . . . . . . . . . . . . . . .   8
    3.  Payload Encryption  . . . . . . . . . . . . . . . . . . . . .   9
      3.1.  Secure Objects Integration  . . . . . . . . . . . . . . .   9
        3.1.1.  Key Identification  . . . . . . . . . . . . . . . . .   9
-       3.1.2.  Immutable Properties  . . . . . . . . . . . . . . . .   9
-       3.1.3.  Private Properties for Sensitive Metadata . . . . . .   9
+       3.1.2.  Immutable Properties  . . . . . . . . . . . . . . . .  10
+       3.1.3.  Private Properties for Sensitive Metadata . . . . . .  10
        3.1.4.  Cipher Suite Requirements . . . . . . . . . . . . . .  10
-       3.1.5.  AAD Construction  . . . . . . . . . . . . . . . . . .  10
-   4.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  10
-     4.1.  Application with one audio track  . . . . . . . . . . . .  11
+       3.1.5.  AAD Construction  . . . . . . . . . . . . . . . . . .  11
+   4.  Examples  . . . . . . . . . . . . . . . . . . . . . . . . . .  11
+     4.1.  Application with one audio track  . . . . . . . . . . . .  12
      4.2.  Application with one single quality video track . . . . .  12
 
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 2]
+Zanaty, et al.           Expires 21 January 2027                [Page 2]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
      4.3.  Application with single video track with temporal
-           layers  . . . . . . . . . . . . . . . . . . . . . . . . .  12
+           layers  . . . . . . . . . . . . . . . . . . . . . . . . .  13
      4.4.  Application with mutiple dependent video tracks . . . . .  13
      4.5.  Application with mutiple dependent video tracks with dyadic
            framerate levels. . . . . . . . . . . . . . . . . . . . .  14
      4.6.  Application with multiple simulcast qualities video
            tracks  . . . . . . . . . . . . . . . . . . . . . . . . .  15
-   5.  Security and Privacy Considerations . . . . . . . . . . . . .  15
+   5.  Security and Privacy Considerations . . . . . . . . . . . . .  16
      5.1.  Protecting Sensitive Metadata . . . . . . . . . . . . . .  16
      5.2.  Immutable Property Considerations . . . . . . . . . . . .  16
-     5.3.  Relay Trust Model . . . . . . . . . . . . . . . . . . . .  16
+     5.3.  Relay Trust Model . . . . . . . . . . . . . . . . . . . .  17
      5.4.  Deletion Detection  . . . . . . . . . . . . . . . . . . .  17
    6.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  17
      6.1.  MOQ Properties Registry . . . . . . . . . . . . . . . . .  17
-     6.2.  MoQ Streaming Format Registry . . . . . . . . . . . . . .  17
-   7.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  17
-     7.1.  Normative References  . . . . . . . . . . . . . . . . . .  17
-     7.2.  Informative References  . . . . . . . . . . . . . . . . .  18
+   7.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  18
+     7.1.  Normative References  . . . . . . . . . . . . . . . . . .  18
+     7.2.  Informative References  . . . . . . . . . . . . . . . . .  19
    Appendix A.  Acknowledgements . . . . . . . . . . . . . . . . . .  19
    Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  19
 
@@ -165,9 +164,10 @@ Internet-Draft               media-container                  March 2026
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 3]
+
+Zanaty, et al.           Expires 21 January 2027                [Page 3]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
    This specification can also be used by applications outside the
@@ -221,9 +221,9 @@ Internet-Draft               media-container                  March 2026
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 4]
+Zanaty, et al.           Expires 21 January 2027                [Page 4]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
 2.1.  Video Payload Format
@@ -270,16 +270,16 @@ Internet-Draft               media-container                  March 2026
    "annexB" formats.  The start code value is 1 in network byte order,
    i.e. big endian, and SHOULD be 4 bytes long to disambiguate from
    length prefixes.  A 3-byte start code, which is uncommon, MAY be used
-   if the track never uses length prefixes or any Config
+   if the track never uses length prefixes or any Video Config
    Section 2.3.2.1.
 
 
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 5]
+Zanaty, et al.           Expires 21 January 2027                [Page 5]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
 2.2.  MOQ Object Mapping
@@ -296,7 +296,7 @@ Internet-Draft               media-container                  March 2026
 
    The LOC Public and Private Properties carry optional metadata related
    to the Payload, where Public Properties are visible to relays while
-   Private Properties can be encypted end to end wi
+   Private Properties can be encypted end to end with the Payload.
 
    <-----------  MOQ Object  ------------>
    +----------+--------------+-----------+
@@ -329,13 +329,13 @@ Internet-Draft               media-container                  March 2026
 
    The following sections define specific metadata as LOC Public and
    Private Properties and register them in the IANA registry for MOQ
-   Object Properties.
+   Properties.
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 6]
+Zanaty, et al.           Expires 21 January 2027                [Page 6]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
    Other specifications can define other metadata as LOC Public and
@@ -366,11 +366,11 @@ Internet-Draft               media-container                  March 2026
       timestamp is interpreted as wall-clock time in microseconds since
       the Unix epoch.
 
-   *  ID: 0x06
+   *  ID: 0x10
 
    *  Length: Omitted (ID is even)
 
-   *  Value: vi64 (1-8 bytes)
+   *  Value: vi64 (1-9 bytes)
 
 2.3.1.2.  Timescale
 
@@ -389,9 +389,9 @@ Internet-Draft               media-container                  March 2026
 
 
 
-Zanaty, et al.          Expires 16 September 2026               [Page 7]
+Zanaty, et al.           Expires 21 January 2027                [Page 7]
 
-Internet-Draft               media-container                  March 2026
+Internet-Draft               media-container                   July 2026
 
 
    *  ID: 0x08
@@ -400,7 +400,7 @@ Internet-Draft               media-container                  March 2026
 
    *  Value: vi64 (1-9 bytes)
 
-2.3.2.  Video Header Data
+2.3.2.  Video Properties
 
 2.3.2.1.  Video Config
 
@@ -411,7 +411,7 @@ Internet-Draft               media-container                  March 2026
       VideoDecoderConfig description property in the
       EncodedVideoChunkMetadata.
 
-   *  ID: 13 (IANA, please assign from the MOQ Properties Registry)
+   *  ID: 0x0D
 
    *  Length: Varies
 
@@ -423,18 +423,40 @@ Internet-Draft               media-container                  March 2026
 
    *  Description: Flags for video frames which are independent,
       discardable, or base layer sync points, as well as temporal and
-      spatial layer identification, as defined in [RFC9626], encoded in
-      the least significant bits of a vi64.
+      spatial layer identification, as defined in [RFC9626], encoded
+      with a length prefix.
 
-   *  ID: 4 (IANA, please assign from the MOQ Properties Registry)
+   *  ID: 0x09
 
    *  Length: Varies (1-4 bytes)
 
    *  Value: Varies
 
-2.3.3.  Audio Header Data
+2.3.3.  Audio Properties
 
-2.3.3.1.  Audio Level
+2.3.3.1.  Audio Config
+
+   *  Name: Audio Config
+
+   *  Description: Audio codec configuration, as defined by the
+      corresponding codec specification, which maps to the WebCodecs
+      AudioDecoderConfig description property in the
+      EncodedAudioChunkMetadata.
+
+
+
+Zanaty, et al.           Expires 21 January 2027                [Page 8]
+
+Internet-Draft               media-container                   July 2026
+
+
+   *  ID: 0x0F
+
+   *  Length: Varies
+
+   *  Value: Varies
+
+2.3.3.2.  Audio Level
 
    *  Name: Audio Level
 
@@ -443,18 +465,11 @@ Internet-Draft               media-container                  March 2026
       section 3 of [RFC6464], encoded in the least significant 8 bits of
       a vi64.
 
+   *  ID: 0x0C
 
+   *  Length: Omitted (ID is even)
 
-Zanaty, et al.          Expires 16 September 2026               [Page 8]
-
-Internet-Draft               media-container                  March 2026
-
-
-   *  ID: 6 (IANA, please assign from the MOQ Properties Registry)
-
-   *  Length: Varies (1-2 bytes)
-
-   *  Value: Varies
+   *  Value: vi64 (1-2 bytes to encode values 0x00-0xFF)
 
 3.  Payload Encryption
 
@@ -477,6 +492,20 @@ Internet-Draft               media-container                  March 2026
    encrypted, allowing relays to forward objects without decryption
    while ensuring subscribers can identify the correct decryption key.
 
+
+
+
+
+
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027                [Page 9]
+
+Internet-Draft               media-container                   July 2026
+
+
 3.1.2.  Immutable Properties
 
    LOC Properties that should be immutable but visible to relays SHOULD
@@ -497,14 +526,6 @@ Internet-Draft               media-container                  March 2026
 
    *  Timestamp and Timescale - reveals timing information about the
       source
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026               [Page 9]
-
-Internet-Draft               media-container                  March 2026
-
 
    *  Audio Level - reveals voice activity and audio characteristics
 
@@ -533,6 +554,14 @@ Internet-Draft               media-container                  March 2026
    defined in [SecureObjects] MAY be used based on application
    requirements for authentication tag size versus bandwidth overhead.
 
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 10]
+
+Internet-Draft               media-container                   July 2026
+
+
 3.1.5.  AAD Construction
 
    The authenticated associated data (AAD) for AEAD encryption includes:
@@ -553,14 +582,6 @@ Internet-Draft               media-container                  March 2026
    This section provides examples with details for building audio and
    video applications using MOQ and LOC; more specifically, it provides
    information on:
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 10]
-
-Internet-Draft               media-container                  March 2026
-
 
    *  Using a MSF catalog [MoQCatalog] to describe track information,
 
@@ -590,6 +611,13 @@ Internet-Draft               media-container                  March 2026
    |        Streams, Datagrams    |
    +------------------------------+
 
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 11]
+
+Internet-Draft               media-container                   July 2026
+
+
 4.1.  Application with one audio track
 
    An example is shown below for an Opus mono channel audio track at
@@ -606,17 +634,6 @@ Internet-Draft               media-container                  March 2026
    per MOQT Group, where the GroupID in the object header is increment
    by one for each encoded audio chunk and the ObjectID is defaulted to
    value 0.
-
-
-
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 11]
-
-Internet-Draft               media-container                  March 2026
-
 
    These objects can be sent as QUIC streams or datagrams.  When mapped
    to QUIC datagrams, each object must fit entirely within a QUIC
@@ -648,6 +665,15 @@ Internet-Draft               media-container                  March 2026
    When mapping to QUIC for sending, one unidirectional QUIC stream is
    setup to deliver all the encoded video chunks within a MOQT group.
 
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 12]
+
+Internet-Draft               media-container                   July 2026
+
+
    When decoding at the 'End Consumer', the objects from each of the
    QUIC streams are fed in the GroupID then ObjectID order to the
    decoder for the track.
@@ -662,17 +688,6 @@ Internet-Draft               media-container                  March 2026
    framerate: 60
    width: 1280
    height: 720
-
-
-
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 12]
-
-Internet-Draft               media-container                  March 2026
-
 
    When ready for publishing, each encoded video chunk is considered as
    input to MOQT Object payload.  If encrypted, the output of encryption
@@ -702,6 +717,19 @@ Internet-Draft               media-container                  March 2026
    An example is shown below for an H.264 video track with 2 spatial
    qualities at 360p and 720p each at 30 fps
 
+
+
+
+
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 13]
+
+Internet-Draft               media-container                   July 2026
+
+
    Video Track 1
    codec: "avc3.42E01E"
    bitrate: 500000
@@ -719,16 +747,6 @@ Internet-Draft               media-container                  March 2026
    When ready for publishing, the mapping to the MOQT object model and
    to underlying QUIC, follows the same procedures as described in
    Section 4.2 for each video track.
-
-
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 13]
-
-Internet-Draft               media-container                  March 2026
-
 
    When decoding at the 'End Consumer' for a given MOQT group, the
    objects must be fed in the GroupID then ObjectID order in the
@@ -749,6 +767,24 @@ Internet-Draft               media-container                  March 2026
    An example is shown below for an H.264 video track with 2 spatial
    qualities at 360p and 720p, however, the framerate between tracks
    vary dyadically.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 14]
+
+Internet-Draft               media-container                   July 2026
+
 
    Video Track 1
    codec: "avc3.42E01E"
@@ -775,17 +811,6 @@ Internet-Draft               media-container                  March 2026
    If the encoding uses frame reordering, or if timestamp cannot be
    obtained, the object to choose next shall follow the below formula.
 
-
-
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 14]
-
-Internet-Draft               media-container                  March 2026
-
-
    Object Decode Order = ObjectID * multiplier + offset
 
    multiplier = 2^(maxlayer-max(0,layer-1))
@@ -810,6 +835,13 @@ Internet-Draft               media-container                  March 2026
    width: 1280
    height: 720
 
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 15]
+
+Internet-Draft               media-container                   July 2026
+
+
    When ready for publishing, the mapping to the MOQT object model and
    to underlying QUIC, follows the same procedures as described in
    Section 4.2 for each video track.
@@ -828,19 +860,6 @@ Internet-Draft               media-container                  March 2026
    metadata to relays.  Each metadata that is defined should consider
    the security and privacy aspects of granting relays visibility to the
    metadata.
-
-
-
-
-
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 15]
-
-Internet-Draft               media-container                  March 2026
-
 
 5.1.  Protecting Sensitive Metadata
 
@@ -871,6 +890,14 @@ Internet-Draft               media-container                  March 2026
 
    *  Confidentiality (use Private properties)
 
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 16]
+
+Internet-Draft               media-container                   July 2026
+
+
    *  Integrity without confidentiality (use Immutable properties)
 
    *  Neither (standard mutable properties suitable for relay operation)
@@ -890,14 +917,6 @@ Internet-Draft               media-container                  March 2026
    *  Trusted relays: May have full key access for transcoding or
       processing
 
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 16]
-
-Internet-Draft               media-container                  March 2026
-
-
    Applications should select the appropriate protection mechanisms
    based on their relay trust model and privacy requirements.
 
@@ -916,24 +935,42 @@ Internet-Draft               media-container                  March 2026
 
 6.1.  MOQ Properties Registry
 
-   This document registers the following entries in the "MOQ property
-   Headers" registry established by [MoQTransport]:
+   This document registers the following entries in the MOQ Properties
+   registry established by [MoQTransport]:
 
-         +======+===========+=================+=================+
-         | Type | Name      | Scope           | Specification   |
-         +======+===========+=================+=================+
-         | 0x06 | TIMESTAMP | Object          | Section 2.3.1.1 |
-         +------+-----------+-----------------+-----------------+
-         | 0x08 | TIMESCALE | Track or Object | Section 2.3.1.2 |
-         +------+-----------+-----------------+-----------------+
+
+
+
+
+
+
+
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 17]
+
+Internet-Draft               media-container                   July 2026
+
+
+     +======+=====================+===============+=================+
+     | Type | Name                | Scope         | Specification   |
+     +======+=====================+===============+=================+
+     | 0x10 | TIMESTAMP           | Object        | Section 2.3.1.1 |
+     +------+---------------------+---------------+-----------------+
+     | 0x08 | TIMESCALE           | Track, Object | Section 2.3.1.2 |
+     +------+---------------------+---------------+-----------------+
+     | 0x09 | VIDEO_FRAME_MARKING | Object        | Section 2.3.2.2 |
+     +------+---------------------+---------------+-----------------+
+     | 0x0C | AUDIO_LEVEL         | Object        | Section 2.3.3.2 |
+     +------+---------------------+---------------+-----------------+
+     | 0x0D | VIDEO_CONFIG        | Track, Object | Section 2.3.2.1 |
+     +------+---------------------+---------------+-----------------+
+     | 0x0F | AUDIO_CONFIG        | Track, Object | Section 2.3.3.1 |
+     +------+---------------------+---------------+-----------------+
 
                                  Table 1
-
-6.2.  MoQ Streaming Format Registry
-
-   This document creates a new entry in the "MoQ Streaming Format"
-   Registry (see [MoQTransport] Sect 8).  The type value is 0x002, the
-   name is "LOC Streaming Format" and the RFC is XXX.
 
 7.  References
 
@@ -942,17 +979,9 @@ Internet-Draft               media-container                  March 2026
    [MoQTransport]
               Nandakumar, S., Vasiliev, V., Swett, I., and A. Frindell,
               "Media over QUIC Transport", Work in Progress, Internet-
-              Draft, draft-ietf-moq-transport-17, 2 March 2026,
+              Draft, draft-ietf-moq-transport-19, 6 July 2026,
               <https://datatracker.ietf.org/doc/html/draft-ietf-moq-
-              transport-17>.
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 17]
-
-Internet-Draft               media-container                  March 2026
-
+              transport-19>.
 
    [WebCodecs]
               "WebCodecs", July 2023,
@@ -971,6 +1000,16 @@ Internet-Draft               media-container                  March 2026
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
 
+
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 18]
+
+Internet-Draft               media-container                   July 2026
+
+
    [RFC9626]  Zanaty, M., Berger, E., and S. Nandakumar, "Video Frame
               Marking RTP Header Extension", RFC 9626,
               DOI 10.17487/RFC9626, March 2025,
@@ -985,30 +1024,17 @@ Internet-Draft               media-container                  March 2026
 7.2.  Informative References
 
    [MoQCatalog]
-              Law, W., "MOQT Streaming Format", Work in Progress,
-              Internet-Draft, draft-ietf-moq-msf-00, 19 January 2026,
-              <https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-
-              00>.
+              Law, W. and S. Nandakumar, "MOQT Streaming Format", Work
+              in Progress, Internet-Draft, draft-ietf-moq-msf-01, 2 June
+              2026, <https://datatracker.ietf.org/doc/html/draft-ietf-
+              moq-msf-01>.
 
    [SecureObjects]
               Jennings, C. F., Nandakumar, S., and R. Barnes, "End-to-
               End Secure Objects for Media over QUIC Transport", Work in
-              Progress, Internet-Draft, draft-jennings-moq-secure-
-              objects-04, 8 February 2026,
-              <https://datatracker.ietf.org/doc/html/draft-jennings-moq-
-              secure-objects-04>.
-
-
-
-
-
-
-
-
-Zanaty, et al.          Expires 16 September 2026              [Page 18]
-
-Internet-Draft               media-container                  March 2026
-
+              Progress, Internet-Draft, draft-ietf-moq-secure-objects-
+              01, 6 July 2026, <https://datatracker.ietf.org/doc/html/
+              draft-ietf-moq-secure-objects-01>.
 
    [MOQ-MLS]  Jennings, C. F., Nandakumar, S., and R. Barnes, "End-to-
               end Security for Media over QUIC", Work in Progress,
@@ -1018,7 +1044,8 @@ Internet-Draft               media-container                  March 2026
 
 Appendix A.  Acknowledgements
 
-   Thanks to Cullen Jennings for suggestions and review.
+   Thanks to Cullen Jennings, Luke Curley, Upendra Sharma, and Yu You
+   for suggestions and review.
 
 Authors' Addresses
 
@@ -1030,6 +1057,13 @@ Authors' Addresses
    Suhas Nandakumar
    Cisco
    Email: snandaku@cisco.com
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 19]
+
+Internet-Draft               media-container                   July 2026
 
 
    Peter Thatcher
@@ -1061,4 +1095,26 @@ Authors' Addresses
 
 
 
-Zanaty, et al.          Expires 16 September 2026              [Page 19]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Zanaty, et al.           Expires 21 January 2027               [Page 20]
