@@ -33,15 +33,15 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Publisher / Subscriber 対応
   - 高レベル API (WebCodecs / MediaStream 対応)
 - Media over QUIC Transport (MOQT) 対応
-  - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport)
-  - `draft-18` 対応
-- Low Overhead Container 対応
-  - [Media over QUIC - Low Overhead Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc)
-  - `draft-02` 対応
+  - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-19)
+  - `draft-19` 対応
+- Low Overhead Media Container (LOC) 対応
+  - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
+  - `draft-04` 対応
 - MOQT Streaming Format (MSF) 対応
-  - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf)
-  - `draft-00` 対応
-  - Catalog (トラックメタデータ)
+  - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
+  - `draft-01` 対応
+  - Catalog / Timeline
 - 外部依存なし
 
 ## 実装状況
@@ -81,6 +81,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - サブスクリプションのキャンセル (双方向ストリームのクローズ)
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
+- Pending Subgroup Buffer
 - FETCH メッセージ (Standalone)
 - FETCH メッセージ (Joining Relative)
 - FETCH メッセージ (Joining Absolute)
@@ -90,6 +91,12 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Location Filter (Next Group Start)
 - Location Filter (Absolute Start)
 - Location Filter (Absolute Range)
+- Range Filters
+  - Subgroup Filter
+  - Object ID Filter
+  - Priority Filter
+  - Object Property Filter
+  - Track Property Filter
 - Subscriber Priority
 - Group Order (Ascending / Descending)
 - OBJECT_DELIVERY_TIMEOUT パラメータ
@@ -102,7 +109,10 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 - SETUP
   - AUTHORIZATION_TOKEN Setup Option (REGISTER / USE_VALUE)
+  - MAX_AUTH_TOKEN_CACHE_SIZE Setup Option
   - MOQT_IMPLEMENTATION Setup Option
+  - MAX_FILTER_RANGES Setup Option
+  - MAX_REQUEST_UPDATES Setup Option
 - GOAWAY
   - Timeout 対応
   - Request ID 対応
@@ -128,12 +138,13 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - PADDING Stream / Datagram (受信時破棄)
 - Object Status (Normal / End of Group / End of Track)
 - Object Properties
-- Properties (Prior Group ID Gap / Prior Object ID Gap / Immutable Properties)
+  - Prior Group ID Gap / Prior Object ID Gap / Immutable Properties
+  - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT
 - GREASE
 
-### Low Overhead Container
+### Low Overhead Media Container
 
-[draft-ietf-moq-loc-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-02) の機能実装状況です。
+[draft-ietf-moq-loc-04](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04) の機能実装状況です。
 
 #### LOC Properties
 
@@ -145,32 +156,42 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### MOQT Streaming Format
 
-[draft-ietf-moq-msf-00](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf) の機能実装状況です。
+[draft-ietf-moq-msf-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01) の機能実装状況です。
 
 #### Catalog
 
 - Root
-  - version / generatedAt / isComplete / tracks
-  - deltaUpdate / addTracks / removeTracks / cloneTracks
+  - version (`draft-01`) / generatedAt / isComplete / tracks
+  - publishTracks / initDataList
+- Delta Update
+  - deltaUpdate (operation 配列形式)
+  - add / remove / clone
 - Track
   - namespace / name / packaging / isLive
-  - role / label / lang
-  - targetLatency / trackDuration
+  - packaging: loc / mediatimeline / eventtimeline / moqlog / moqmetrics
+  - role / label / lang / eventType
+  - targetLatency / buffers / trackDuration
+  - initRef / template
+  - parentName / parentNamespace
 - Track Grouping
   - renderGroup / altGroup / depends
-  - temporalId / spatialId / parentName
-- Codec
-  - codec / mimeType / initData / eventType
-- Video
+  - temporalId / spatialId
+- Codec / Media
+  - codec / mimeType
   - width / height / displayWidth / displayHeight
-  - framerate / timescale / bitrate
-- Audio
-  - samplerate / channelConfig / bitrate
+  - framerate / timescale / bitrate / avgBitrate
+  - maxGopDuration / maxGroupDuration
+  - samplerate / channelConfig
+- Encryption / Auth
+  - encryptionScheme / cipherSuite / keyId / trackBaseKey
+  - authInfo / accessibility
+- Publish Track
+  - connectionUri / token
 
 #### Timeline
 
-- Media Timeline (gzip 圧縮対応)
-- Event Timeline (gzip 圧縮対応)
+- Media Timeline
+- Event Timeline
 
 ## インストール
 
