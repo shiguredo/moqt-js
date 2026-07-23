@@ -65,7 +65,7 @@ import {
   type SubscriptionFilter,
 } from "./message";
 import {
-  EMPTY_ALLOWED_PARAMS,
+  NAMESPACE_OK_ALLOWED_PARAMS,
   PUBLISH_ALLOWED_PARAMS,
   validateParameterScope,
 } from "./message/parameterScope";
@@ -1982,22 +1982,22 @@ export class SessionImpl implements Session {
                 );
                 return;
               }
-              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK):
+              // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要 (§10.1 Request ID)
               const requestOk = decodeRequestOkPayload(messagePayload);
-              // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
-              // SUBSCRIBE_NAMESPACE_OK の許可パラメータは空
+              // draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
+              // SUBSCRIBE_NAMESPACE_OK では EXPIRES が許可される
               if (
                 !validateParameterScope(
                   requestOk.parameters,
-                  EMPTY_ALLOWED_PARAMS,
+                  NAMESPACE_OK_ALLOWED_PARAMS,
                   "SUBSCRIBE_NAMESPACE_OK",
                   (error) => this.closeWithError(error),
                 )
               ) {
                 return;
               }
-              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
+              // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK)
               if (
                 !bidi.validateRequestOkNoTrackProperties(
                   requestOk.trackProperties,
@@ -2202,6 +2202,19 @@ export class SessionImpl implements Session {
                     SessionErrorCode.PROTOCOL_VIOLATION,
                   ),
                 );
+                return;
+              }
+              // draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
+              // SUBSCRIBE_TRACKS_OK では EXPIRES が許可される
+              const requestOk = decodeRequestOkPayload(messagePayload);
+              if (
+                !validateParameterScope(
+                  requestOk.parameters,
+                  NAMESPACE_OK_ALLOWED_PARAMS,
+                  "SUBSCRIBE_TRACKS_OK",
+                  (error) => this.closeWithError(error),
+                )
+              ) {
                 return;
               }
               resolved = true;
@@ -2435,21 +2448,21 @@ export class SessionImpl implements Session {
             case MessageType.REQUEST_OK: {
               // draft-ietf-moq-transport-18 Section 10.5 (REQUEST_OK):
               // Request ID はストリームが特定するため不要
-              // draft-ietf-moq-transport-18 Section 10.1
+              // draft-ietf-moq-transport-19 Section 10.1
               const requestOk = decodeRequestOkPayload(messagePayload);
-              // draft-ietf-moq-transport-18 §10.2.1 (Parameter Scope):
-              // PUBLISH_NAMESPACE_OK の許可パラメータは空
+              // draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
+              // PUBLISH_NAMESPACE_OK では EXPIRES が許可される
               if (
                 !validateParameterScope(
                   requestOk.parameters,
-                  EMPTY_ALLOWED_PARAMS,
+                  NAMESPACE_OK_ALLOWED_PARAMS,
                   "PUBLISH_NAMESPACE_OK",
                   (error) => this.closeWithError(error),
                 )
               ) {
                 return;
               }
-              // draft-ietf-moq-transport-18 §10.5 (REQUEST_OK)
+              // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK)
               if (
                 !bidi.validateRequestOkNoTrackProperties(
                   requestOk.trackProperties,
