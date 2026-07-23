@@ -35,12 +35,15 @@ export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LARGEST_OBJECT,
 ]);
 
-/** REQUEST_OK (PUBLISH_OK) の許可パラメータ */
+/**
+ * REQUEST_OK (PUBLISH_OK) の許可パラメータ
+ *
+ * draft-ietf-moq-transport-19 §10.2.8: GROUP_ORDER は PUBLISH_OK から削除
+ */
 export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
   MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
   MessageParameterType.SUBSCRIBER_PRIORITY,
-  MessageParameterType.GROUP_ORDER,
   MessageParameterType.SUBSCRIPTION_FILTER,
   MessageParameterType.FORWARD,
   MessageParameterType.NEW_GROUP_REQUEST,
@@ -87,19 +90,37 @@ export const FETCH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.GROUP_ORDER,
 ]);
 
-/** PUBLISH メッセージの許可パラメータ */
+/**
+ * PUBLISH メッセージの許可パラメータ
+ *
+ * draft-ietf-moq-transport-19 §10.19.1: SUBSCRIBE_TRACKS の結果 PUBLISH に
+ * GROUP_ORDER が載るため許可する（Section 10.2.8 の MAY 列挙より 10.19.1 を優先）
+ */
 export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
   MessageParameterType.EXPIRES,
   MessageParameterType.LARGEST_OBJECT,
   MessageParameterType.FORWARD,
+  MessageParameterType.GROUP_ORDER,
 ]);
 
 /** FETCH_OK メッセージの許可パラメータ */
 export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
 
-/** SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE の許可パラメータ */
+/** SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE の許可パラメータ */
 export const NAMESPACE_ALLOWED_PARAMS = new Set<number>([MessageParameterType.AUTHORIZATION_TOKEN]);
+
+/**
+ * SUBSCRIBE_TRACKS メッセージの許可パラメータ
+ *
+ * draft-ietf-moq-transport-19 §10.19.1 (Parameters on SUBSCRIBE_TRACKS):
+ * AUTHORIZATION_TOKEN (§10.2.2) / FORWARD (§10.2.17) / GROUP_ORDER (§10.2.8)
+ */
+export const SUBSCRIBE_TRACKS_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.AUTHORIZATION_TOKEN,
+  MessageParameterType.FORWARD,
+  MessageParameterType.GROUP_ORDER,
+]);
 
 // ============================================================================
 // 検証関数

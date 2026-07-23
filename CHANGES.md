@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] SUBSCRIBE_TRACKS のパラメータ対応を draft-19 に追従する
+  - draft-ietf-moq-transport-19 §10.19.1 に基づき、subscribeTracks() に groupOrder / forward オプションを追加する
+  - PUBLISH_OK_ALLOWED_PARAMS から GROUP_ORDER を削除し、PUBLISH_ALLOWED_PARAMS に GROUP_ORDER を追加する
+  - SUBSCRIBE_TRACKS_ALLOWED_PARAMS を新設する
+  - @voluntas
 - [CHANGE] PUBLISH_BLOCKED を PUBLISH_SKIPPED にリネームする
   - draft-ietf-moq-transport-19 §10.20 に基づき、メッセージ名・型・コールバック名を PUBLISH_SKIPPED 系に統一する
   - TracksSubscriptionCallbacks.onPublishBlocked を onPublishSkipped にリネームする（公開 API 破壊）
