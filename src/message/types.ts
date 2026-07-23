@@ -176,9 +176,9 @@ export const MessageParameterType = {
    */
   SUBSCRIBER_PRIORITY: 0x20,
   /**
-   * SUBSCRIPTION_FILTER (Section 10.2.9 SUBSCRIPTION FILTER Parameter)
+   * LOCATION_FILTER (Section 10.2.9 SUBSCRIPTION FILTER Parameter)
    */
-  SUBSCRIPTION_FILTER: 0x21,
+  LOCATION_FILTER: 0x21,
   /**
    * GROUP_ORDER (Section 10.2.8 GROUP ORDER Parameter)
    *
@@ -216,7 +216,7 @@ export const GroupOrder = {
 export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
 
 /**
- * Subscription Filter Types (Section 5.1.2 Subscription Filters)
+ * Location Filter Types (Section 5.1.2 Location Filters)
  */
 export const FilterType = {
   NEXT_GROUP_START: 0x01,
