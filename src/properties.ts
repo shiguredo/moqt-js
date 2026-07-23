@@ -774,3 +774,129 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
   }
   return skipped;
 }
+
+// ============================================================================
+// Object Property: Delivery Timeout ヘルパー
+// draft-ietf-moq-transport-19 Section 8 / 12.1 / 12.2
+// ============================================================================
+
+/**
+ * Object Properties バイト列から delivery timeout 値を寛容に抽出する
+ *
+ * draft-ietf-moq-transport-19 Section 8:
+ * subgroup 先頭オブジェクトの Object Property で Track 値を上書きできる。
+ * Track 向け decodeProperties とは異なり、Mandatory Track Property 検証や
+ * validateTrackPropertyValue は行わない（Object バイト列に載せると誤るため）。
+ *
+ * @returns 抽出できた値。不明・不完全なら undefined
+ */
+export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | undefined): {
+  objectDeliveryTimeout?: bigint;
+  subgroupDeliveryTimeout?: bigint;
+} {
+  if (properties === undefined || properties.length === 0) {
+    return {};
+  }
+
+  let objectDeliveryTimeout: bigint | undefined;
+  let subgroupDeliveryTimeout: bigint | undefined;
+
+  try {
+    let offset = 0;
+    while (offset < properties.length) {
+      const [propType, typeSize] = decodeVarint(properties, offset);
+      offset += typeSize;
+      const [propLen, lenSize] = decodeVarint(properties, offset);
+      offset += lenSize;
+      if (offset + Number(propLen) > properties.length) break;
+
+      if (propType === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT && Number(propLen) > 0) {
+        const [value] = decodeVarint(properties, offset);
+        objectDeliveryTimeout = value;
+      } else if (propType === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT && Number(propLen) > 0) {
+        const [value] = decodeVarint(properties, offset);
+        subgroupDeliveryTimeout = value;
+      }
+      offset += Number(propLen);
+    }
+  } catch {
+    // 不完全データは型付きフィールドだけ未設定にし、配信は継続
+  }
+
+  return { objectDeliveryTimeout, subgroupDeliveryTimeout };
+}
+
+/**
+ * 既存の Object Properties バイト列に型付き delivery timeout 値を合成する
+ *
+ * draft-ietf-moq-transport-19 Section 8:
+ * 同一 ID が既存 properties にある場合、型付き値を優先して上書きする。
+ *
+ * @param existing - 既存の properties バイト列（undefined 可）
+ * @param deliveryTimeout - OBJECT_DELIVERY_TIMEOUT 値（undefined は未指定）
+ * @param subgroupDeliveryTimeout - SUBGROUP_DELIVERY_TIMEOUT 値（undefined は未指定）
+ * @returns 合成後の properties バイト列。全て undefined なら existing をそのまま返す
+ */
+export function mergeDeliveryTimeoutObjectProperties(
+  existing: Uint8Array | undefined,
+  deliveryTimeout: bigint | undefined,
+  subgroupDeliveryTimeout: bigint | undefined,
+): Uint8Array | undefined {
+  if (deliveryTimeout === undefined && subgroupDeliveryTimeout === undefined) {
+    return existing;
+  }
+
+  const parts: Uint8Array[] = [];
+
+  // 既存 properties から 0x02 / 0x06 を除外してコピー
+  if (existing !== undefined && existing.length > 0) {
+    try {
+      let offset = 0;
+      while (offset < existing.length) {
+        const start = offset;
+        const [propType, typeSize] = decodeVarint(existing, offset);
+        offset += typeSize;
+        const [propLen, lenSize] = decodeVarint(existing, offset);
+        offset += lenSize;
+        if (offset + Number(propLen) > existing.length) break;
+        offset += Number(propLen);
+
+        // 型付き値で上書きする ID はスキップ
+        if (
+          (propType === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT && deliveryTimeout !== undefined) ||
+          (propType === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT &&
+            subgroupDeliveryTimeout !== undefined)
+        ) {
+          continue;
+        }
+        parts.push(existing.slice(start, offset));
+      }
+    } catch {
+      // 既存が不完全ならそのまま全バイトを保持
+      parts.push(existing);
+    }
+  }
+
+  // 型付き値を追加
+  if (deliveryTimeout !== undefined) {
+    const value = encodeVarint(deliveryTimeout);
+    parts.push(encodeVarint(TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
+    parts.push(encodeVarint(BigInt(value.length)));
+    parts.push(value);
+  }
+  if (subgroupDeliveryTimeout !== undefined) {
+    const value = encodeVarint(subgroupDeliveryTimeout);
+    parts.push(encodeVarint(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT));
+    parts.push(encodeVarint(BigInt(value.length)));
+    parts.push(value);
+  }
+
+  const total = parts.reduce((sum, p) => sum + p.length, 0);
+  const result = new Uint8Array(total);
+  let pos = 0;
+  for (const part of parts) {
+    result.set(part, pos);
+    pos += part.length;
+  }
+  return result;
+}

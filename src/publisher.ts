@@ -29,6 +29,22 @@ export interface SendObjectParams {
    *   END_OF_TRACK 送信後は同一トラックへの後続 sendObject() が禁止される（MUST）
    */
   status?: ObjectStatus;
+  /**
+   * Object Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-19 Section 12.2 / Section 8
+   *
+   * subgroup 先頭オブジェクトの Object Property として送信される。
+   * 先頭以外で指定すると throw する。
+   */
+  deliveryTimeout?: bigint;
+  /**
+   * Subgroup Delivery Timeout（ミリ秒）
+   * draft-ietf-moq-transport-19 Section 12.1 / Section 8
+   *
+   * subgroup 先頭オブジェクトの Object Property として送信される。
+   * 先頭以外で指定すると throw する。
+   */
+  subgroupDeliveryTimeout?: bigint;
 }
 
 /**

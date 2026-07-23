@@ -76,6 +76,11 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] Delivery Timeout を Object Property としても扱えるようにする
+  - draft-ietf-moq-transport-19 §8 / §12.1 / §12.2 に基づき、subgroup 先頭オブジェクトの Object Property で delivery timeout を送受信可能にする
+  - SendObjectParams に deliveryTimeout / subgroupDeliveryTimeout を追加する（先頭以外で指定すると throw）
+  - MoqtObject に objectDeliveryTimeout / subgroupDeliveryTimeout を追加する（先頭以外では設定されない）
+  - @voluntas
 - [ADD] Range Filters と MAX_FILTER_RANGES Setup Option を追加する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、Range Filter 5 種（SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY/TRACK_PROPERTY_FILTER）の encode/decode を追加する
   - SetupOptionType.MAX_FILTER_RANGES (0x06) と getSetupMaxFilterRanges を追加する
