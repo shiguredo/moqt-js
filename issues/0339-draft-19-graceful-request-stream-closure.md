@@ -39,25 +39,63 @@ draft-19 Section 3.3.3 (Request Cancellation and Rejection):
 
 ## 優先度根拠
 
-調査時点で moqt-js は主要なセマンティクス (応答前 FIN の失敗扱い、送信方向 RESET / 受信方向 STOP_SENDING の分離) を既に満たしている。ただし「Established なサブスクリプションの publisher は FIN の前に PUBLISH_DONE を送らなければならない (MUST)」の順序保証が検証されておらず、違反していれば準拠問題になるため Medium。
+正常終了パス（`sendPublishDone`）の PUBLISH_DONE → FIN は既に実装されている（closed `#0323`）。一方、(1) 応答前 FIN を失敗扱いにしない namespace 系ループ、(2) `session.close()` が Established publisher のリクエストストリームに PUBLISH_DONE 無しで FIN しうる点は Section 3.3.2 MUST と衝突し得る。準拠ギャップの修正と回帰テストのため Medium。
 
 ## 現状
 
-- `src/session/bidi.ts`: 応答受信前の FIN を失敗扱い。Section 3.3.2 の「FIN before required messages = failed」に整合
-- `src/session/bidi.ts` (`bidiCancelSubscription` / `bidiCancelFetch`): `readable.cancel()` (STOP_SENDING 相当) + `writer.abort()` (RESET_STREAM 相当) で方向別に終了。Section 3.3.3 に整合
-- 正常クローズは `writer.close()` (FIN)
-- publisher 側で PUBLISH_DONE 送信と FIN 送信の順序を保証しているかは未検証
-- `src/subscriber.ts` / `src/fetcher.ts`: STOP_SENDING 関連の draft-18 引用コメント (節番号が 3.3.3 / 3.3.4 に変わる)
+シンボル名を正とする。
+
+### 既に整合しているもの
+
+- `sendPublishDone`（`src/session.ts`）: リクエスト bidi に PUBLISH_DONE を `writer.write` したあと `writer.close()`（FIN）。Section 3.3.2 / 10.11 の順序は満たす（closed `#0323` で追加）
+- `PublisherImpl.onDoneInternal`（`session.ts` の `publish()` 結線）: 先に `closePublisherStream`（**データ**ストリーム閉鎖。Section 10.11 の「PUBLISH_DONE 前にデータストリームを閉じる」）、続けて `sendPublishDone`。コメントの「まずストリームを閉じる（FIN を送信）」は **誤解を招く**（リクエストストリームの FIN ではない）
+- `bidiReadPublishResponse` / `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `bidiReadTrackStatusResponse`（`src/session/bidi.ts`）: 応答前に readable が `done` なら throw / reject（失敗扱い）。Section 3.3.2 の「required messages 前の FIN = failed」に整合
+- `bidiCancelSubscription` / `bidiCancelFetch`: `readable.cancel()`（STOP_SENDING 相当）+ `writer.abort()`（RESET_STREAM 相当）。Section 3.3.3 に整合。本 issue で仕様変更は不要
+
+### ギャップ
+
+1. **`startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop`**: readable が `done`（FIN）で `break` したとき、`resolved === false` でも Promise を reject せず `finally` で消える。await 中の呼び出しが宙吊りになり、Section 3.3.2 の「required messages 前の FIN = failed」を満たさない
+2. **`session.close()`**: 保持中の request stream writer に対し `writer.close()`（FIN）する。Established publisher について PUBLISH_DONE 無しの FIN になり得る（Section 3.3.2 MUST 違反の可能性）。セッション解体は abrupt 終了が自然なら `abort`（RESET）に寄せる判断が必要
+3. **回帰テスト不足**: PUBLISH_DONE → FIN の順序を固定するテストが無い（実装はある）
+4. **コメント**: `onDoneInternal` の誤記、および触るファイルの draft-18 §3.3.x 参照。リポジトリ全体の一掃は `#0343`
 
 ## 設計方針
 
-- publisher が Established なサブスクリプションのリクエストストリームに FIN を送るパスをすべて洗い出し、PUBLISH_DONE 送信 → FIN の順序を保証する (Section 3.3.2)
-- FIN と PUBLISH_DONE の順序を検証するテストを追加する
-- 受信側で「必要なメッセージが揃う前の FIN」を失敗扱いする経路が全リクエスト種別 (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE) で一貫しているかを確認する
-- 仕様参照コメントを draft-19 Section 3.3.2 / 3.3.3 / 3.3.4 に更新する
+### 本 issue の範囲
+
+1. namespace / tracks / publishNamespace の 3 ループで、応答前（`!resolved`）に FIN（`done`）を検出したら Promise を reject する（エラーメッセージは英語ログ規約に従いコード側は英語）。セッション全体は閉じない（リクエスト失敗）
+2. `session.close()` で Established な publisher リクエストストリームを閉じるとき、PUBLISH_DONE 無しの FIN を避ける。方針は次のいずれか（実装時に一方を選ぶ。推奨は A）
+   - **A（推奨）**: 当該 writer は `close()` せず `abort()`（RESET 相当）にする。セッション解体は graceful request completion ではない
+   - **B**: 各 publisher に `sendPublishDone` してから FIN。ただし close 中の例外・順序が重い
+3. `sendPublishDone` の PUBLISH_DONE → FIN 順序を、エンコード結果または writer 操作順が検証できるテストで固定する（モック禁止。`WritableStream` 実体で write/close 順を記録する等）
+4. `onDoneInternal` の誤コメントを「データストリーム閉鎖 → PUBLISH_DONE → リクエスト FIN」に直す。触ったファイルの 3.3.x 参照だけ draft-19 に更新
+
+### 意図的に含めないもの
+
+- Section 3.3.3 キャンセル実装の作り直し（既存で充足）
+- Established 後・PUBLISH_DONE 未受信の受信側 FIN を「failed」としてアプリ通知する強化（`bidiReadRequestStreamMessages` / `runPublishStreamSubLoop` の `done` で掃除のみ）。応答前 FIN の失敗扱いは本 issue の対象。Established 後は既存の end/error 経路に委ねる
+- `#0337` の unexpected REQUEST_UPDATE / 10.9.1 NS 失敗時 close
+- `#0343` による draft-18 コメント一括更新
+- データストリーム（Subgroup）上の FIN / RESET_STREAM_AT（Section 11 系。本 issue はリクエスト bidi）
+
+### テスト戦略（モック禁止）
+
+- PUBLISH_DONE → FIN: `sendPublishDone` が使う writer を実 `WritableStream` で差し替え可能なら、write ペイロードに PUBLISH_DONE 型が載ったあと close が呼ばれる順を assert。難しければ encode + 順序を保証するヘルパー抽出をテスト
+- 応答前 FIN: `startNamespaceStreamLoop` 等は private のため、制御メッセージ無しで readable を閉じたときに subscribeNamespace Promise が reject される経路を、テスト用に露出したヘルパーか、ループ内の「`done && !resolved` → reject」を純粋判定に切り出して単体テストする。WebTransport モックは禁止
 
 ## 完了条件
 
-- publisher がサブスクリプション終了時に PUBLISH_DONE → FIN の順で送ることをテストで確認していること
-- 応答前 FIN の失敗扱いが全リクエスト種別で一貫していること
+- `sendPublishDone` が PUBLISH_DONE のあと FIN する順序のテストがあること
+- `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop` で応答前 FIN 時に Promise が reject されること（テストまたは切り出し単体で確認）
+- `session.close()` が Established publisher に PUBLISH_DONE 無し FIN を送らないこと（方針 A なら abort、B なら PUBLISH_DONE 後 FIN）
+- 3.3.3 キャンセル経路（`bidiCancelSubscription` / `bidiCancelFetch`）を本変更で壊していないこと
+- `CHANGES.md` の `## develop` にエントリがあること
 - lint / build / typecheck / 既存テストが通ること
+
+## 解決方法
+
+1. `src/session.ts` の 3 ループ: `if (done) { if (!resolved) reject(...); break; }`（文言は実装時に統一）
+2. `src/session.ts` `session.close()`: request stream writer の閉じ方を方針 A または B に変更。publisher 以外（subscriber 側ストリーム等）も FIN が「応答完了前」にならないか確認し、未完了なら abort に寄せる
+3. `onDoneInternal` コメント修正。`sendPublishDone` の仕様参照を draft-19 Section 3.3.2 / 10.11 に更新
+4. テスト追加（上記戦略）。モック禁止
+5. `CHANGES.md` の `## develop` に `[FIX]` または `[CHANGE]` で追記する
