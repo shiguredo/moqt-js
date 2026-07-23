@@ -44,6 +44,7 @@ import {
   getSetupAuthority,
   getSetupPath,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxRequestUpdates,
   encodeSetupPayload,
   encodeFetchPayload,
   encodeGoawayPayload,
@@ -910,6 +911,8 @@ export class SessionImpl implements Session {
   private goawayReceivedOnRequestStreams = new Set<bigint>();
   private sentGoaway = false;
   private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // draft-ietf-moq-transport-19 §10.3.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
+  peerMaxRequestUpdates = 0;
 
   // アクティブなパブリッシャー、サブスクライバー、フェッチャー
   private publishers = new Map<bigint, PublisherImpl>();
@@ -1288,8 +1291,13 @@ export class SessionImpl implements Session {
     // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
     const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
 
+    // draft-ietf-moq-transport-19 §10.3.1.7:
+    // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）
+    this.peerMaxRequestUpdates = getSetupMaxRequestUpdates(decodedSetup);
+
     this.emitDebug("recv", MessageType.SETUP, msg.payload, {
       peerMaxAuthTokenCacheSize: peerMaxAuthTokenCacheSize.toString(),
+      peerMaxRequestUpdates: this.peerMaxRequestUpdates.toString(),
     });
 
     // draft-ietf-moq-transport-18 Section 10.3 (SETUP) / Section 3.3 (Control Streams):

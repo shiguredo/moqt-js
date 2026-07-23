@@ -72,6 +72,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MAX_REQUEST_UPDATES Setup Option と TOO_MANY_REQUEST_UPDATES を追加する
+  - draft-ietf-moq-transport-19 §10.3.1.7 に基づき、ピアの MAX_REQUEST_UPDATES を尊重して REQUEST_UPDATE 送信をガードする
+  - SessionErrorCode.TOO_MANY_REQUEST_UPDATES (0x1b) を追加する
+  - @voluntas
 - [ADD] MSF Catalog の draft-01 新規フィールドを追加する (#0316)
   - draft-ietf-moq-msf-01 §5.1.5 / §5.1.7 / §5.2.x に基づき publishTracks, initDataList, initRef, buffers, template, parentNamespace, connectionUri, token, encryptionScheme, cipherSuite, keyId, trackBaseKey, authInfo, accessibility, avgBitrate, maxGopDuration, maxGroupDuration を追加する
   - @voluntas

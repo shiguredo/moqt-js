@@ -93,6 +93,14 @@ export const SetupOptionType = {
   MAX_AUTH_TOKEN_CACHE_SIZE: 0x04,
   AUTHORITY: 0x05,
   MOQT_IMPLEMENTATION: 0x07,
+  /**
+   * MAX_REQUEST_UPDATES (Section 10.3.1.7)
+   *
+   * draft-ietf-moq-transport-19:
+   * リクエストストリームごとの未応答 REQUEST_UPDATE の最大数。
+   * 0 は無制限。欠落時のデフォルトも 0。
+   */
+  MAX_REQUEST_UPDATES: 0x08,
 } as const;
 
 export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionType];
