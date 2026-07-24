@@ -120,3 +120,12 @@ GREASE は RFC では SHOULD レベルの推奨であり、送信頻度や対象
 - `src/message/setup.ts:39-80` の `createSetup()` は依然として `PATH` / `AUTHORIZATION_TOKEN` / `AUTHORITY` / `MOQT_IMPLEMENTATION` のみを追加。GREASE Setup Option を入れる経路はなし。
 - `src/session.ts` 内のオブジェクト送信パス (`sendObjectInternal()` / `sendDatagram()`) からも `grease.ts` の参照は出ておらず、自動 GREASE 注入は未配線のまま。
 - 送信側 GREASE は引き続き未実装。pending 維持で変更なし。
+
+## reopened にする理由
+
+draft-ietf-moq-transport-19 §14 でも GREASE 予約は存続しており、実装対象として有効なため。
+
+- `generateGreaseValue()` / `isGreaseValue()` は `src/grease.ts` に存在する
+- 未配線なのは送信パスのみ
+
+着手スコープは SETUP Option への opt-in GREASE 送信に限定する。Object / Track Properties への注入は本 issue の必須とせず、必要なら後続 issue に分ける。参照は draft-17 ではなく draft-19 §14 / §15.4 に更新する。
