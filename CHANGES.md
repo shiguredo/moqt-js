@@ -81,6 +81,11 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] LOC Object Payload に Private Properties の平文フレーミング API を追加する
+  - draft-ietf-moq-loc-04 §2.2 の配置に従い encodeLocObjectPayload / decodeLocObjectPayload を公開する
+  - 空 Private は prefix 無しで LOC Payload とビット一致し、非空は暫定ワイヤ（varint length + Private + LOC Payload）とする
+  - 平文の区切りは loc-04 に未定義のためリポジトリ暫定であり、Secure Objects 取得後に変わりうる
+  - @voluntas
 - [ADD] Delivery Timeout を Object Property としても扱えるようにする
   - draft-ietf-moq-transport-19 §8 / §12.1 / §12.2 に基づき、subgroup 先頭オブジェクトの Object Property で delivery timeout を送受信可能にする
   - SendObjectParams に deliveryTimeout / subgroupDeliveryTimeout を追加する（先頭以外で指定すると throw）

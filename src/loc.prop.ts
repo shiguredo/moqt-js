@@ -5,7 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { ProtocolViolationError } from "./error";
+import { ProtocolViolationError, IncompleteDataError } from "./error";
 import { encodeVarint } from "./varint";
 import {
   LOCPropertyId,
@@ -25,6 +25,8 @@ import {
   decodeVideoProperties,
   encodeAudioProperties,
   decodeAudioProperties,
+  encodeLocObjectPayload,
+  decodeLocObjectPayload,
   type VideoFrameMarking,
   type VideoProperties,
   type AudioProperties,
@@ -561,4 +563,152 @@ test("AudioLevel: 音声活動あり (level=50, V=true) のエンコード", () 
 
   assert.strictEqual(decoded.level, 50);
   assert.strictEqual(decoded.voiceActivity, true);
+});
+
+// =============================================================================
+// Object Payload Private Properties フレーミング（暫定ワイヤ）
+// =============================================================================
+
+/** 空でないバイト列 Arbitrary（1 バイト varint length 領域） */
+const nonEmptyBytesArb = fc.uint8Array({ minLength: 1, maxLength: 64 });
+
+/** multi-byte varint length を含む Private 領域（128–256 バイト） */
+const multiByteLengthPrivateArb = fc.uint8Array({ minLength: 128, maxLength: 256 });
+
+test("encodeLocObjectPayload: 空 Private は LOC Payload とビット一致する", () => {
+  fc.assert(
+    fc.property(fc.uint8Array({ minLength: 0, maxLength: 256 }), (locPayload) => {
+      // 空 Private では length prefix を付けない
+      const encoded = encodeLocObjectPayload(new Uint8Array(0), locPayload);
+      assert.deepEqual(Array.from(encoded), Array.from(locPayload));
+    }),
+  );
+});
+
+test("encodeLocObjectPayload / decodeLocObjectPayload: 非空 Private の round-trip が成立する", () => {
+  fc.assert(
+    fc.property(nonEmptyBytesArb, nonEmptyBytesArb, (privateProperties, locPayload) => {
+      const encoded = encodeLocObjectPayload(privateProperties, locPayload);
+      const decoded = decodeLocObjectPayload(encoded, { framed: true });
+      assert.deepEqual(Array.from(decoded.privateProperties), Array.from(privateProperties));
+      assert.deepEqual(Array.from(decoded.locPayload), Array.from(locPayload));
+      // 戻り値は入力の独立コピーである（mutation しても encoded に波及しない）
+      const encodedSnapshot = Array.from(encoded);
+      decoded.privateProperties[0] = (decoded.privateProperties[0] ?? 0) ^ 0xff;
+      decoded.locPayload[0] = (decoded.locPayload[0] ?? 0) ^ 0xff;
+      assert.deepEqual(Array.from(encoded), encodedSnapshot);
+    }),
+  );
+});
+
+test("encodeLocObjectPayload / decodeLocObjectPayload: multi-byte varint length でも round-trip する", () => {
+  fc.assert(
+    fc.property(multiByteLengthPrivateArb, nonEmptyBytesArb, (privateProperties, locPayload) => {
+      // Private 長 128 以上で length prefix が 2 バイト以上になる経路を固定する
+      const encoded = encodeLocObjectPayload(privateProperties, locPayload);
+      const decoded = decodeLocObjectPayload(encoded, { framed: true });
+      assert.deepEqual(Array.from(decoded.privateProperties), Array.from(privateProperties));
+      assert.deepEqual(Array.from(decoded.locPayload), Array.from(locPayload));
+    }),
+  );
+});
+
+test("encodeLocObjectPayload / decodeLocObjectPayload: locPayload が空でも round-trip する", () => {
+  const privateProperties = new Uint8Array([0xaa, 0xbb, 0xcc]);
+  const encoded = encodeLocObjectPayload(privateProperties, new Uint8Array(0));
+  const decoded = decodeLocObjectPayload(encoded, { framed: true });
+  assert.deepEqual(Array.from(decoded.privateProperties), Array.from(privateProperties));
+  assert.strictEqual(decoded.locPayload.length, 0);
+});
+
+test("decodeLocObjectPayload: framed=false （既定）は全体を locPayload とし private は空", () => {
+  fc.assert(
+    fc.property(fc.uint8Array({ minLength: 0, maxLength: 128 }), (objectPayload) => {
+      const decodedDefault = decodeLocObjectPayload(objectPayload);
+      const decodedExplicit = decodeLocObjectPayload(objectPayload, { framed: false });
+      assert.strictEqual(decodedDefault.privateProperties.length, 0);
+      assert.deepEqual(Array.from(decodedDefault.locPayload), Array.from(objectPayload));
+      assert.strictEqual(decodedExplicit.privateProperties.length, 0);
+      assert.deepEqual(Array.from(decodedExplicit.locPayload), Array.from(objectPayload));
+      // framed=false でも戻り値は入力の独立コピー
+      if (decodedDefault.locPayload.length > 0) {
+        decodedDefault.locPayload[0] = (decodedDefault.locPayload[0] ?? 0) ^ 0xff;
+        assert.notDeepEqual(Array.from(decodedDefault.locPayload), Array.from(objectPayload));
+      }
+    }),
+  );
+});
+
+test("decodeLocObjectPayload: framed=true の空バッファは ProtocolViolationError", () => {
+  try {
+    decodeLocObjectPayload(new Uint8Array(0), { framed: true });
+    assert.fail("例外が投げられるべき");
+  } catch (error) {
+    assert.ok(error instanceof ProtocolViolationError);
+    assert.ok(!(error instanceof IncompleteDataError));
+  }
+});
+
+test("decodeLocObjectPayload: framed=true の不完全 varint は ProtocolViolationError", () => {
+  // 2 バイト長を宣言するが 1 バイトしか無い
+  try {
+    decodeLocObjectPayload(new Uint8Array([0x80]), { framed: true });
+    assert.fail("例外が投げられるべき");
+  } catch (error) {
+    assert.ok(error instanceof ProtocolViolationError);
+    assert.ok(!(error instanceof IncompleteDataError));
+  }
+});
+
+test("decodeLocObjectPayload: framed=true の length=0 は ProtocolViolationError", () => {
+  // varint(0) = 0x00
+  assert.throws(
+    () => decodeLocObjectPayload(new Uint8Array([0x00, 0x01, 0x02]), { framed: true }),
+    ProtocolViolationError,
+  );
+});
+
+test("decodeLocObjectPayload: framed=true で privateLength が残りを超えると ProtocolViolationError", () => {
+  // length=5 だが残りが 2 バイトしかない
+  const payload = new Uint8Array([0x05, 0xaa, 0xbb]);
+  assert.throws(() => decodeLocObjectPayload(payload, { framed: true }), ProtocolViolationError);
+});
+
+test("decodeLocObjectPayload: framed=true で Number.MAX_SAFE_INTEGER 超は ProtocolViolationError", () => {
+  // 9 バイト varint で Number.MAX_SAFE_INTEGER + 1 を載せる
+  const tooLarge = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+  const lengthBytes = encodeVarint(tooLarge);
+  assert.throws(
+    () => decodeLocObjectPayload(lengthBytes, { framed: true }),
+    ProtocolViolationError,
+  );
+});
+
+test("空 encode 結果を framed=true で decode しても round-trip にはならない", () => {
+  // 空 Private のカノニカル形は prefix 無し。先頭バイトを誤って length と解釈しうる
+  const locPayload = new Uint8Array([0x05, 0x11, 0x22, 0x33, 0x44, 0x55]);
+  const encoded = encodeLocObjectPayload(new Uint8Array(0), locPayload);
+  assert.deepEqual(Array.from(encoded), Array.from(locPayload));
+
+  // framed=true で分割すると先頭 0x05 を length とみなし、残りが locPayload になる（元と異なる）
+  const decoded = decodeLocObjectPayload(encoded, { framed: true });
+  assert.notDeepEqual(Array.from(decoded.locPayload), Array.from(locPayload));
+  assert.strictEqual(decoded.privateProperties.length, 5);
+});
+
+test("encodeVideoProperties → encodeLocObjectPayload → framed decode → decodeVideoProperties の結合", () => {
+  const properties: VideoProperties = {
+    timestamp: 12345n,
+    timescale: 90000n,
+  };
+  const privateBytes = encodeVideoProperties(properties);
+  const locPayload = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+  const encoded = encodeLocObjectPayload(privateBytes, locPayload);
+  const { privateProperties, locPayload: decodedPayload } = decodeLocObjectPayload(encoded, {
+    framed: true,
+  });
+  const decoded = decodeVideoProperties(privateProperties);
+  assert.strictEqual(decoded.timestamp, 12345n);
+  assert.strictEqual(decoded.timescale, 90000n);
+  assert.deepEqual(Array.from(decodedPayload), Array.from(locPayload));
 });

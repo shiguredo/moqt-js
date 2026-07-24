@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-24
 - Model: Composer
 - Branch: feature/add-loc-private-properties-payload
 - Polished: 2026-07-24
@@ -47,10 +47,10 @@ draft-ietf-moq-loc-04 §2.2 は、MOQ Object Payload を「LOC Private Propertie
 
 ### 暫定ワイヤ（平文）
 
-| Private | Object Payload のバイト列 |
-| ------- | ------------------------- |
-| 空 / 未使用（長さ 0） | LOC Payload のみ（**現行と同じ生チャンク。prefix 無し**） |
-| 非空 | `Private Properties Length (varint)` + `Private Properties バイト列` + `LOC Payload` |
+| Private               | Object Payload のバイト列                                                            |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| 空 / 未使用（長さ 0） | LOC Payload のみ（**現行と同じ生チャンク。prefix 無し**）                            |
+| 非空                  | `Private Properties Length (varint)` + `Private Properties バイト列` + `LOC Payload` |
 
 - 非空時の length prefix は LOC Private Properties **領域のシリアライズ（区切り）**であり、§2.2 の配置（Private 領域の後に LOC Payload）は維持する。等式の左辺は「length 付き Private 領域 + LOC Payload」と読む
 - Private Properties バイト列の中身は呼び出し側規約。本 API はフレーミングのみ。推奨は現行 Public と同じ **絶対 Type 連結**（`encodeVideoProperties` / `encodeAudioProperties` の出力を渡す）。`properties.ts` の delta `encodeProperties` は使わない（Public の delta 未対応と同じく範囲外）。Secure Objects の 0xA 内 KVP は `#0353` で別契約になりうる
@@ -136,10 +136,13 @@ decodeLocObjectPayload(
 
 ## 解決方法
 
-1. `src/loc.ts` に API を追加する（空=ビット一致、非空= length prefix、`framed` 明示、不正は `ProtocolViolationError`、戻りは独立コピー）。冒頭コメントを更新する
-2. `src/loc.prop.ts` に空一致・非空 round-trip・framed=false・不正長・length=0 拒否のテストを追加する
-3. 高レベル / devtools は触らない
-4. `CHANGES.md` に `[ADD]` を追記する（issue 番号なし）
+1. `src/loc.ts` に `encodeLocObjectPayload` / `decodeLocObjectPayload` を追加し、`LOC` 名前空間経由で公開した
+2. 空 Private は length prefix 無しで LOC Payload とビット一致、非空は暫定ワイヤ `varint(len) + Private + LOC Payload` とした
+3. `framed: true` の不正（空バッファ・不完全 varint・length=0・超過・`Number.MAX_SAFE_INTEGER` 超）は外向け `ProtocolViolationError` のみとした（`IncompleteDataError` は変換）
+4. モジュール冒頭コメントを空 / 非空の契約と暫定ワイヤである旨に更新した（issue 番号は書かない）
+5. `src/loc.prop.ts` に空一致・非空 round-trip・multi-byte varint・空 locPayload・framed=false・不正長・負例・VideoProperties 結合のテストを追加した
+6. 高レベル API / devtools の送受信経路は未変更のままとした
+7. `CHANGES.md` の `## develop` に `[ADD]` を追記した（平文区切りは暫定である旨。issue 番号なし）
 
 ## 関連
 

@@ -2,16 +2,28 @@
  * LOC (Low Overhead Container)
  * draft-ietf-moq-loc-04
  *
- * LOC Properties を MOQ Object Properties に格納し、
- * LOC Payload には WebCodecs の EncodedVideoChunk/EncodedAudioChunk の
- * "internal data" をそのまま使用する。
+ * LOC Public Properties は MOQ Object Properties に格納する。
+ * MOQ Object Payload は draft-ietf-moq-loc-04 §2.2 に従い
+ * LOC Private Properties + LOC Payload で構成する。
+ *
+ * 空の Private Properties（未使用）のとき Object Payload は
+ * EncodedVideoChunk / EncodedAudioChunk の "internal data" （LOC Payload）と
+ * ビット一致する（ length prefix 無し）。
+ * 非空の Private Properties を載せるときは encodeLocObjectPayload /
+ * decodeLocObjectPayload の暫定フレーミングを使う。
+ *
+ * 注意: loc-04 §2.2 は配置（Private → LOC Payload）のみを定め、
+ * Private ブロック全体の長さ prefix は定義しない。本モジュールの
+ * 非空時ワイヤ（varint length + Private + LOC Payload）はリポジトリ暫定であり、
+ * Secure Objects 取得後に見直しうる。本ヘルパ出力を暗号化 plaintext に
+ * そのまま流用しないこと。
  *
  * 注意: 本モジュールの encode*Properties は絶対 Type を連結するだけであり、
  * Object Properties が要求する Key-Value-Pair delta 符号化
  * (draft-ietf-moq-transport-19 §1.4.3 / §11.2.1.2) にはなっていない。
  */
 
-import { ProtocolViolationError } from "./error";
+import { IncompleteDataError, ProtocolViolationError } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
 
 /**
@@ -474,4 +486,104 @@ export function decodeAudioProperties(data: Uint8Array): AudioProperties {
   }
 
   return result;
+}
+
+/**
+ * 平文の MOQ Object Payload を組み立てる。
+ *
+ * draft-ietf-moq-loc-04 §2.2 の配置（LOC Private Properties + LOC Payload）に従う。
+ * Private が空のときは LOC Payload のみ（ length prefix 無し）を返し、現行ワイヤとビット一致する。
+ * 非空のときは暫定ワイヤ `varint(len) + Private Properties + LOC Payload` を返す。
+ * 空のカノニカル形は prefix 無しのみであり、`varint(0) + LOC Payload` は出さない。
+ *
+ * @param privateProperties LOC Private Properties のバイト列（呼び出し側規約。推奨は絶対 Type 連結）
+ * @param locPayload Encoded*Chunk の internal data
+ * @returns Object Payload バイト列（入力との参照同一性は保証しない）
+ */
+export function encodeLocObjectPayload(
+  privateProperties: Uint8Array,
+  locPayload: Uint8Array,
+): Uint8Array {
+  // 空 Private: prefix 無しで LOC Payload とビット一致
+  if (privateProperties.length === 0) {
+    return new Uint8Array(locPayload);
+  }
+
+  const lengthBytes = encodeVarint(privateProperties.length);
+  const result = new Uint8Array(lengthBytes.length + privateProperties.length + locPayload.length);
+  result.set(lengthBytes, 0);
+  result.set(privateProperties, lengthBytes.length);
+  result.set(locPayload, lengthBytes.length + privateProperties.length);
+  return result;
+}
+
+/**
+ * 平文の MOQ Object Payload を LOC Private Properties と LOC Payload に分割する。
+ *
+ * `framed: false`（既定）: 全体を LOC Payload とみなし privateProperties は空。
+ * `framed: true`: 先頭 varint を Private Properties Length として分割する。
+ * length=0 / 空バッファ / 不完全 varint / privateLength 超過 / Number.MAX_SAFE_INTEGER 超は
+ * すべて ProtocolViolationError（IncompleteDataError は外向けに漏らさない）。
+ *
+ * @param objectPayload MOQ Object Payload 全体
+ * @param options.framed 非空 Private を載せた暫定ワイヤとして解釈するか
+ * @returns privateProperties / locPayload（いずれも入力の独立コピー）
+ * @throws ProtocolViolationError framed=true で不正な区切りのとき
+ */
+export function decodeLocObjectPayload(
+  objectPayload: Uint8Array,
+  options?: { framed?: boolean },
+): { privateProperties: Uint8Array; locPayload: Uint8Array } {
+  // 既定は現行ワイヤ（空 Private = 生チャンク）として扱う
+  if (options?.framed !== true) {
+    return {
+      privateProperties: new Uint8Array(0),
+      locPayload: new Uint8Array(objectPayload),
+    };
+  }
+
+  if (objectPayload.length === 0) {
+    throw new ProtocolViolationError("framed LOC Object Payload must not be empty");
+  }
+
+  let privateLength: bigint;
+  let lengthSize: number;
+  try {
+    [privateLength, lengthSize] = decodeVarint(objectPayload);
+  } catch (error) {
+    // 完全に揃った Object Payload 上での次チャンク待ちは起きない
+    if (error instanceof IncompleteDataError) {
+      throw new ProtocolViolationError(
+        `incomplete Private Properties Length varint: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+
+  // 空 Private のカノニカル形は prefix 無しのみ。framed 経路で length=0 は拒否する
+  if (privateLength === 0n) {
+    throw new ProtocolViolationError(
+      "framed LOC Object Payload must not use Private Properties Length 0",
+    );
+  }
+
+  if (privateLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new ProtocolViolationError(
+      `Private Properties Length exceeds Number.MAX_SAFE_INTEGER: ${privateLength}`,
+    );
+  }
+
+  const remainingAfterLength = objectPayload.length - lengthSize;
+  // privateLength は bigint のまま残り長と比較する
+  if (privateLength > BigInt(remainingAfterLength)) {
+    throw new ProtocolViolationError(
+      `Private Properties Length exceeds remaining bytes: length=${privateLength}, remaining=${remainingAfterLength}`,
+    );
+  }
+
+  const privateEnd = lengthSize + Number(privateLength);
+  return {
+    privateProperties: new Uint8Array(objectPayload.subarray(lengthSize, privateEnd)),
+    locPayload: new Uint8Array(objectPayload.subarray(privateEnd)),
+  };
 }
