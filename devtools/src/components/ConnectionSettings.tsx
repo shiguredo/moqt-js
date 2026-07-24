@@ -177,22 +177,24 @@ function LocHelpModal() {
             </p>
           </div>
           <div>
-            <h4 class="font-medium text-slate-700 mb-1">Header Extensions</h4>
+            <h4 class="font-medium text-slate-700 mb-1">Properties</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
-              <li>Capture Timestamp - キャプチャ時刻</li>
+              <li>Timestamp - タイムスタンプ</li>
+              <li>Timescale - Timestamp の単位</li>
               <li>Video Frame Marking - キーフレーム判定</li>
               <li>Video Config - デコーダ設定</li>
+              <li>Audio Config - デコーダ設定</li>
               <li>Audio Level - オーディオレベル</li>
             </ul>
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-loc
+              draft-ietf-moq-loc-04
             </a>
           </div>
         </div>

@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] LOC Properties を draft-ietf-moq-loc-04 に追従する
+  - Property ID を §6.1 Table 1 に合わせる (TIMESTAMP=0x10 / VIDEO_FRAME_MARKING=0x09 / AUDIO_LEVEL=0x0C 等)
+  - VIDEO_FRAME_MARKING を length + bytes 形式にし、AUDIO_CONFIG (0x0F) を追加する
+  - `LOCPropertyId.CONFIG` / `encodeConfig` / `decodeConfig` を `VIDEO_CONFIG` / `encodeVideoConfig` / `decodeVideoConfig` にリネームする
+  - @voluntas
 - [CHANGE] SUBSCRIPTION_FILTER を LOCATION_FILTER にリネームする
   - draft-ietf-moq-transport-19 §10.2.9 / §5.1.2 に基づき、公開型 SubscriptionFilter を LocationFilter にリネームする
   - MessageParameterType.LOCATION_FILTER / encodeLocationFilter / decodeLocationFilter 等に統一する

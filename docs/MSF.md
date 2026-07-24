@@ -262,20 +262,20 @@ JSON 配列。各要素にはインデックス参照 (`t`: 壁時計時間, `l`
 
 ### 実装済み
 
-| 機能                               | ファイル     | 説明                                                             |
-| ---------------------------------- | ------------ | ---------------------------------------------------------------- |
-| LOC Header Extensions              | `src/loc.ts` | Capture Timestamp, Video Frame Marking, Audio Level, Config      |
-| Catalog 型定義                     | `src/msf.ts` | 全フィールド対応                                                 |
-| Catalog エンコード/デコード        | `src/msf.ts` | `encodeCatalog()`, `decodeCatalog()`                             |
-| Catalog 差分更新                   | `src/msf.ts` | `applyCatalogDelta()`                                            |
-| Media Timeline 型定義              | `src/msf.ts` | `MediaTimelineEntry`                                             |
-| Media Timeline エンコード/デコード | `src/msf.ts` | `encodeMediaTimeline()`, `decodeMediaTimeline()`                 |
-| Event Timeline 型定義              | `src/msf.ts` | `EventTimelineEntry`                                             |
-| Event Timeline エンコード/デコード | `src/msf.ts` | `encodeEventTimeline()`, `decodeEventTimeline()`                 |
-| ヘルパー関数                       | `src/msf.ts` | `getVideoTracks()`, `getAudioTracks()`, `getTrackByName()`, etc. |
-| 配信完了 Catalog 作成              | `src/msf.ts` | `createCompleteCatalog()`                                        |
-| Group 番号付け                     | `src/msf.ts` | `createInitialGroupId()`, `nextGroupId()`                        |
-| ABR トラック選択                   | `src/msf.ts` | `selectTrackByMaxBitrate()`, `selectHighestBitrateTrack()`, etc. |
+| 機能                               | ファイル     | 説明                                                                               |
+| ---------------------------------- | ------------ | ---------------------------------------------------------------------------------- |
+| LOC Properties                     | `src/loc.ts` | Timestamp, Timescale, Video Frame Marking, Audio Level, Video Config, Audio Config |
+| Catalog 型定義                     | `src/msf.ts` | 全フィールド対応                                                                   |
+| Catalog エンコード/デコード        | `src/msf.ts` | `encodeCatalog()`, `decodeCatalog()`                                               |
+| Catalog 差分更新                   | `src/msf.ts` | `applyCatalogDelta()`                                                              |
+| Media Timeline 型定義              | `src/msf.ts` | `MediaTimelineEntry`                                                               |
+| Media Timeline エンコード/デコード | `src/msf.ts` | `encodeMediaTimeline()`, `decodeMediaTimeline()`                                   |
+| Event Timeline 型定義              | `src/msf.ts` | `EventTimelineEntry`                                                               |
+| Event Timeline エンコード/デコード | `src/msf.ts` | `encodeEventTimeline()`, `decodeEventTimeline()`                                   |
+| ヘルパー関数                       | `src/msf.ts` | `getVideoTracks()`, `getAudioTracks()`, `getTrackByName()`, etc.                   |
+| 配信完了 Catalog 作成              | `src/msf.ts` | `createCompleteCatalog()`                                                          |
+| Group 番号付け                     | `src/msf.ts` | `createInitialGroupId()`, `nextGroupId()`                                          |
+| ABR トラック選択                   | `src/msf.ts` | `selectTrackByMaxBitrate()`, `selectHighestBitrateTrack()`, etc.                   |
 
 ### 未実装
 
