@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-24
 - Model: Composer
 - Branch: feature/update-msf-md-draft-01
 - Polished: 2026-07-24
@@ -97,10 +97,13 @@ moqt-js からの入口のみを示す。
 
 ## 解決方法
 
-1. `docs/MSF.md` を設計方針の「完成文面」で全文置き換えする
-2. 完成文面にメタ注記・禁則文字列・issue 番号が混入していないことを確認する
-3. 完了条件の禁則を `rg` で確認する
-4. Markdown リンクをブラウザまたはパス解決で目視確認する（README の見出しアンカーが環境により異なる場合は、アンカー無し `../README.md` に落とす）
+`docs/MSF.md` を設計方針の「完成文面」で全文置き換えた（約 330 行 → 26 行）。
+
+- 変更ファイルは `docs/MSF.md` のみ。`README.md` / `CHANGES.md` / `src/` / テストは未変更
+- 旧見出し（`## draft-15 での変更点` / `## 概要` / `## Catalog` / `## ワークフロー` / `## moqt-js 実装状況` 等）と gzip / `createMsfPublisher` 等の禁則語を削除した
+- 正本 `refs/moq/draft-ietf-moq-msf-01.txt`、公開版 datatracker、LOC-04、`createMediaPublisher` / `createMediaSubscriber`、`decodeCatalogMessage` への誘導を残した
+- 完了条件の禁則を `rg` で確認し、相対リンク先（正本・HIGH_LEVEL_API・README アンカー）の実在を確認した
+- `.md` のみの変更のため `CHANGES.md` は追記していない（changelog 規約）
 
 ## 関連
 
