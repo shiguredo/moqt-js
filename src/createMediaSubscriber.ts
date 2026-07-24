@@ -12,6 +12,7 @@ import type { MoqtObject } from "./dataStream";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
+  applyCatalogDelta,
   decodeCatalogMessage,
   getAudioTracks,
   getVideoTracks,
@@ -39,6 +40,51 @@ import type {
 const DEFAULT_AUDIO_TRACK_NAME = "audio";
 const DEFAULT_VIDEO_TRACK_NAME = "video";
 const CATALOG_RECEIVE_TIMEOUT = 5000;
+
+/**
+ * Catalog Object payload を現在カタログへ適用した結果
+ *
+ * - `full`: 独立フルカタログで置換
+ * - `delta`: `applyCatalogDelta` 成功
+ * - `ignored`: フル未受信時の delta（サイレント無視）
+ * - `error`: decode / apply 失敗（`catalog` は入力 `current` を維持）
+ */
+export type ProcessCatalogPayloadResult =
+  | { kind: "full"; catalog: Catalog }
+  | { kind: "delta"; catalog: Catalog }
+  | { kind: "ignored"; catalog: Catalog | null }
+  | { kind: "error"; catalog: Catalog | null; error: Error };
+
+/**
+ * Catalog Object の payload を純関数で適用する
+ *
+ * `handleCatalogObject` から切り出した配線用ヘルパー。
+ * CatalogDelta の判別は `"deltaUpdate" in message` とする（decode 後の内部マーカーは
+ * 常に `deltaUpdate: true`。wire の boolean 形式ではない。draft-ietf-moq-msf-01 §5.1.6）。
+ * delta 適用規則（§5.3）は `applyCatalogDelta` に委譲する。
+ */
+export function processCatalogPayload(
+  current: Catalog | null,
+  payload: Uint8Array,
+): ProcessCatalogPayloadResult {
+  try {
+    const message = decodeCatalogMessage(payload);
+    if ("deltaUpdate" in message) {
+      if (current === null) {
+        return { kind: "ignored", catalog: null };
+      }
+      const catalog = applyCatalogDelta(current, message);
+      return { kind: "delta", catalog };
+    }
+    return { kind: "full", catalog: message };
+  } catch (cause) {
+    return {
+      kind: "error",
+      catalog: current,
+      error: cause instanceof Error ? cause : new Error(String(cause)),
+    };
+  }
+}
 
 /**
  * WebCodecs 形式の codec 文字列から AudioCodecType に変換する
@@ -93,6 +139,10 @@ class MediaSubscriberImpl implements MediaSubscriber {
   // Catalog
   private receivedCatalog: Catalog | null = null;
   private catalogResolve: ((catalog: Catalog) => void) | null = null;
+  // Catalog Joining FETCH フェーズ中フラグと live SUBSCRIBE バッファ
+  // (映像の videoFetchInProgress / pendingVideoObjects に相当)
+  private catalogFetchInProgress = false;
+  private pendingCatalogObjects: MoqtObject[] = [];
 
   // Catalog から取得したトラック情報
   private audioTrackInfo: CatalogTrack | null = null;
@@ -339,8 +389,11 @@ class MediaSubscriberImpl implements MediaSubscriber {
    * complete catalog along with all subsequent catalog objects, including
    * delta updates, that follow.
    *
-   * 本実装の `joiningFetch: { type: "absolute", start: 0n, ... }` で MUST を
-   * 満たす。
+   * MSF offset = 0 は draft-ietf-moq-transport-19 §10.12.2.1 の Relative Joining
+   * Start = 0（Start Location = {Joining Location.Group, 0}）に対応する。
+   * Absolute Joining Start = 0（{0, 0}）とは別物であるため、`type: "relative"` を使う。
+   * §5 の precede-latest MUST ignore は Joining FETCH 正規経路で満たす想定とし、
+   * Location 比較ゲートは実装しない。
    */
   private async subscribeCatalog(): Promise<void> {
     if (!this.session) {
@@ -350,16 +403,26 @@ class MediaSubscriberImpl implements MediaSubscriber {
     const namespace = this.options.namespace;
 
     // Catalog 受信を待つ Promise を作成
+    // タイムアウトは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
+    // resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時にハングする。
     const catalogPromise = new Promise<Catalog>((resolve, reject) => {
       this.catalogResolve = resolve;
 
-      // タイムアウト
       setTimeout(() => {
-        if (!this.receivedCatalog) {
+        if (this.catalogResolve !== null) {
+          this.catalogResolve = null;
+          // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
+          this.catalogFetchInProgress = false;
+          this.pendingCatalogObjects = [];
           reject(new Error("catalog receive timeout"));
         }
       }, CATALOG_RECEIVE_TIMEOUT);
     });
+
+    // FETCH フェーズ用フラグは session.subscribe 呼び出し前に立てる
+    // (SUBSCRIBE_OK までの race で live がバッファを迂回するのを防ぐ)
+    this.catalogFetchInProgress = true;
+    this.pendingCatalogObjects = [];
 
     // Catalog サブスクライバー
     // draft-ietf-moq-msf-01 §5: SUBSCRIBE with Joining FETCH (offset = 0) MUST
@@ -367,7 +430,14 @@ class MediaSubscriberImpl implements MediaSubscriber {
       namespace,
       CATALOG_TRACK_NAME,
       {
-        object: (obj) => this.handleCatalogObject(obj),
+        object: (obj) => {
+          // FETCH フェーズ中の live SUBSCRIBE オブジェクトはバッファする
+          if (this.catalogFetchInProgress) {
+            this.pendingCatalogObjects.push(obj);
+            return;
+          }
+          this.handleCatalogObject(obj);
+        },
         end: () => {
           // Catalog トラック終了
         },
@@ -375,22 +445,64 @@ class MediaSubscriberImpl implements MediaSubscriber {
       },
       {
         joiningFetch: {
-          type: "absolute",
+          type: "relative",
           start: 0n,
+          // FETCH 経由は即時適用。live は object コールバック側でバッファする
           onObject: (obj: MoqtObject) => this.handleCatalogObject(obj),
           onEnd: () => {
-            // FETCH 完了
+            this.finishCatalogFetchPhase();
           },
           onError: (_error: Error) => {
-            // LARGEST_OBJECT がない場合など
-            // リアルタイム配信を待つ（object コールバックで受信）
+            // FETCH 失敗時もバッファを破棄せずドレインする（Catalog は初回待ちのため）
+            this.finishCatalogFetchPhase();
           },
-        } as JoiningFetchOptions,
+        } satisfies JoiningFetchOptions,
       },
     );
 
+    // largestLocation 無し時は session 側が subscribe 完了前に onEnd を呼ぶ
+    // (draft-ietf-moq-transport-19 Joining FETCH 未開始相当)。追加の後処理は不要。
+
     // Catalog を受信するまで待つ
     await catalogPromise;
+  }
+
+  /**
+   * Catalog Joining FETCH フェーズを終了する
+   *
+   * live バッファを順適用（ドレイン）してからフラグを下ろし、
+   * その時点でフルカタログがあれば catalogResolve する。
+   */
+  private finishCatalogFetchPhase(): void {
+    if (!this.catalogFetchInProgress) {
+      return;
+    }
+
+    const pending = this.pendingCatalogObjects;
+    this.pendingCatalogObjects = [];
+    for (const pendingObj of pending) {
+      this.handleCatalogObject(pendingObj);
+    }
+
+    this.catalogFetchInProgress = false;
+    this.tryResolveCatalog();
+  }
+
+  /**
+   * catalogResolve 契約に従い、未解決ならフルカタログで resolve する
+   *
+   * FETCH フェーズ中は resolve しない。フェーズ終了後に receivedCatalog が
+   * あれば resolve。終了時点で null なら、後続の初回フル適用時に呼ばれる。
+   */
+  private tryResolveCatalog(): void {
+    if (this.catalogFetchInProgress) {
+      return;
+    }
+    if (this.catalogResolve === null || this.receivedCatalog === null) {
+      return;
+    }
+    this.catalogResolve(this.receivedCatalog);
+    this.catalogResolve = null;
   }
 
   /**
@@ -603,23 +715,21 @@ class MediaSubscriberImpl implements MediaSubscriber {
    * Catalog オブジェクトを処理する
    */
   private handleCatalogObject(obj: MoqtObject): void {
-    try {
-      // フルカタログのみ処理する (delta update は現在未対応)
-      const message = decodeCatalogMessage(obj.payload);
-      if (!("version" in message)) {
-        return;
-      }
-      this.receivedCatalog = message;
-      this.callbacks.onCatalog?.(this.receivedCatalog);
+    const result = processCatalogPayload(this.receivedCatalog, obj.payload);
 
-      // Catalog を受信したら Promise を解決
-      if (this.catalogResolve) {
-        this.catalogResolve(this.receivedCatalog);
-        this.catalogResolve = null;
-      }
-    } catch (error) {
-      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    if (result.kind === "error") {
+      this.callbacks.onError?.(result.error);
+      return;
     }
+
+    if (result.kind === "ignored") {
+      return;
+    }
+
+    // full / delta: 適用後カタログで置換し onCatalog を発火する
+    this.receivedCatalog = result.catalog;
+    this.callbacks.onCatalog?.(this.receivedCatalog);
+    this.tryResolveCatalog();
   }
 
   private handleAudioObject(obj: MoqtObject): void {

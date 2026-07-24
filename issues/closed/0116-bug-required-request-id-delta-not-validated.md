@@ -1,6 +1,7 @@
 # Required Request ID Delta の受信時 MUST 検証が未実装で送信値も常に 0 固定
 
 Created: 2026-05-02
+Completed: 2026-07-24
 Model: Opus 4.7
 
 ## 概要
@@ -101,3 +102,12 @@ moqt-js はクライアント専用実装のため、リクエストメッセー
 ### 送信値固定 0 について
 
 現在の実装では依存関係がないため 0 が正しい。将来的に Joining Fetch 等で依存関係を表現する際は別 issue で対応する。
+
+## 解決方法
+
+draft-ietf-moq-transport-18 / draft-19 で Required Request ID Delta フィールドが削除され、対応不要になった。
+
+- Appendix A.1: "Remove Required Request ID (#1615)"
+- `#0185` で `requiredRequestIdDelta` と `INVALID_REQUIRED_REQUEST_ID` を実装から除去済み
+- 現行 `src/` に該当シンボルは残っていない
+- Joining Fetch の依存関係は draft-19 の `joiningRequestId` で表現する

@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] LOC Properties を draft-ietf-moq-loc-04 に追従する
+  - Property ID を §6.1 Table 1 に合わせる (TIMESTAMP=0x10 / VIDEO_FRAME_MARKING=0x09 / AUDIO_LEVEL=0x0C 等)
+  - VIDEO_FRAME_MARKING を length + bytes 形式にし、AUDIO_CONFIG (0x0F) を追加する
+  - `LOCPropertyId.CONFIG` / `encodeConfig` / `decodeConfig` を `VIDEO_CONFIG` / `encodeVideoConfig` / `decodeVideoConfig` にリネームする
+  - @voluntas
 - [CHANGE] SUBSCRIPTION_FILTER を LOCATION_FILTER にリネームする
   - draft-ietf-moq-transport-19 §10.2.9 / §5.1.2 に基づき、公開型 SubscriptionFilter を LocationFilter にリネームする
   - MessageParameterType.LOCATION_FILTER / encodeLocationFilter / decodeLocationFilter 等に統一する
@@ -75,6 +80,11 @@
   - `src/moqtUri.ts` を新設し `normalizeMoqtUri()` で moqt:// → https:// の置換、authority host のバリデーション、fragment 除去を行う
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
+  - @voluntas
+- [ADD] LOC Object Payload に Private Properties の平文フレーミング API を追加する
+  - draft-ietf-moq-loc-04 §2.2 の配置に従い encodeLocObjectPayload / decodeLocObjectPayload を公開する
+  - 空 Private は prefix 無しで LOC Payload とビット一致し、非空は暫定ワイヤ（varint length + Private + LOC Payload）とする
+  - 平文の区切りは loc-04 に未定義のためリポジトリ暫定であり、Secure Objects 取得後に変わりうる
   - @voluntas
 - [ADD] Delivery Timeout を Object Property としても扱えるようにする
   - draft-ietf-moq-transport-19 §8 / §12.1 / §12.2 に基づき、subgroup 先頭オブジェクトの Object Property で delivery timeout を送受信可能にする
@@ -190,6 +200,10 @@
   - @voluntas
 - [UPDATE] ワークスペースの依存関係を最新化する
   - `vp up -L -r` を実行し、@playwright/test / @types/node / @preact/signals / preact / @tailwindcss/vite / tailwindcss を更新する
+  - @voluntas
+- [FIX] MediaSubscriber が Catalog delta を破棄していたのを修正する
+  - draft-ietf-moq-msf-01 §5 / draft-ietf-moq-transport-19 §10.12.2.1 に基づき Catalog Joining FETCH を Relative Start 0 にし、FETCH 中の live catalog object をドレインする
+  - delta を `applyCatalogDelta` で適用し適用後カタログを `onCatalog` に渡す
   - @voluntas
 - [FIX] リクエストストリームの Graceful Closure に追従する
   - draft-ietf-moq-transport-19 §3.3.2 に基づき、応答前 FIN をリクエスト失敗として reject する

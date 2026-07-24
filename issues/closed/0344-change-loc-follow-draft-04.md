@@ -2,7 +2,7 @@
 
 - Priority: High
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-24
 - Model: Composer
 - Branch: feature/change-loc-follow-draft-04
 - Polished: 2026-07-24
@@ -28,14 +28,14 @@ LOC Properties は高レベル API / devtools の映像・音声 Object に載�
 - `src/loc.ts:3` が `* draft-ietf-moq-loc-02` を参照している
 - `LOCPropertyId` (`src/loc.ts:18-49`) の ID は draft-02 値:
 
-| プロパティ | 実装 (loc-02) | draft-04 (§2.3.x / §6.1 Table 1) |
-|---|---|---|
-| TIMESTAMP | `0x06` (偶数 / vi64) | `0x10` (偶数 / vi64) |
-| TIMESCALE | `0x08` (偶数 / vi64) | `0x08` (一致) |
-| VIDEO_FRAME_MARKING | `4` (偶数 / varint 詰め) | `0x09` (奇数 / length + bytes, Length 1–4) |
-| AUDIO_LEVEL | `6` (= `0x06`, 偶数 / vi64) | `0x0C` (偶数 / vi64) |
-| VIDEO_CONFIG (`CONFIG`) | `13` (`0x0D`, 奇数 / length + bytes) | `0x0D` (一致、名称のみ VIDEO_CONFIG) |
-| AUDIO_CONFIG | 未定義 | `0x0F` (奇数 / length + bytes, 新規) |
+| プロパティ              | 実装 (loc-02)                        | draft-04 (§2.3.x / §6.1 Table 1)           |
+| ----------------------- | ------------------------------------ | ------------------------------------------ |
+| TIMESTAMP               | `0x06` (偶数 / vi64)                 | `0x10` (偶数 / vi64)                       |
+| TIMESCALE               | `0x08` (偶数 / vi64)                 | `0x08` (一致)                              |
+| VIDEO_FRAME_MARKING     | `4` (偶数 / varint 詰め)             | `0x09` (奇数 / length + bytes, Length 1–4) |
+| AUDIO_LEVEL             | `6` (= `0x06`, 偶数 / vi64)          | `0x0C` (偶数 / vi64)                       |
+| VIDEO_CONFIG (`CONFIG`) | `13` (`0x0D`, 奇数 / length + bytes) | `0x0D` (一致、名称のみ VIDEO_CONFIG)       |
+| AUDIO_CONFIG            | 未定義                               | `0x0F` (奇数 / length + bytes, 新規)       |
 
 - VIDEO_FRAME_MARKING は `encodeVideoFrameMarking` (`src/loc.ts:142-163`) が偶数 ID + varint 値として符号化している。draft-04 §2.3.2.2 は「encoded with a length prefix」「ID: 0x09」「Length: Varies (1-4 bytes)」
 - AUDIO_CONFIG (`0x0F`) の encode / decode / 型が無い
@@ -141,4 +141,23 @@ LOC Properties は高レベル API / devtools の映像・音声 Object に載�
 
 ## 解決方法
 
-(実装時に記入)
+draft-ietf-moq-loc-04 §2.3.x / §6.1 Table 1 に合わせて LOC Properties のワイヤと公開シンボルを更新した。
+
+### コード
+
+- `src/loc.ts`: `LOCPropertyId` を Table 1 に合わせた (`TIMESTAMP=0x10`, `VIDEO_FRAME_MARKING=0x09`, `AUDIO_LEVEL=0x0C`, `VIDEO_CONFIG=0x0D`, `AUDIO_CONFIG=0x0F`)
+- `CONFIG` / `encodeConfig` / `decodeConfig` を `VIDEO_CONFIG` / `encodeVideoConfig` / `decodeVideoConfig` にリネームした (エイリアス無し)
+- `VIDEO_FRAME_MARKING` を奇数 ID の length + bytes 形式に変更した。Value のビット配置は独自レイアウトを維持する
+- Length 0 / Length>4 / Value バイト不足は `ProtocolViolationError` で明示失敗する
+- `encodeAudioConfig` / `decodeAudioConfig` と `AudioProperties.config` を追加した
+- `src/loc.prop.ts`: 新ワイヤ向けの ID 断言、VFM Length 1–4 / 失敗系、AudioProperties 同時載せ、未知 ID スキップを追加した
+
+### ドキュメント / クライアント
+
+- README / `docs/HIGH_LEVEL_API.md` / `docs/MSF.md` / `ConnectionSettings.tsx` を draft-04 名称に更新した
+- `usePublisher.ts` / `useSubscriber.ts` のコメントを draft-04 に更新した
+- `CHANGES.md` の `## develop` に `[CHANGE]` を追記した
+
+### 関連
+
+- pending `#0036` は本対応完了後に別コミットで closed にする

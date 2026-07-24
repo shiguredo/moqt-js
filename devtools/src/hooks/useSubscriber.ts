@@ -46,7 +46,7 @@ export function toSortedByGroupObject(objects: MoqtObject[]): MoqtObject[] {
  * (Base64) から復元する。
  * draft-ietf-moq-msf-01 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
  * `CatalogTrack.initRef` (§5.2.13) の参照に分離されたため、`resolveInitData` 経由で取得する。
- * draft-ietf-moq-loc-02 §2.1.2 の用途は変わらない。
+ * draft-ietf-moq-loc-04 §2.1.2 の用途は変わらない。
  */
 function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): VideoDecoderConfig {
   if (!videoTrack.codec) {
@@ -266,7 +266,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
     instance.decoderState.value = decoderInstance.state;
 
     try {
-      // LOC spec 準拠: extensions からメタデータを取得
+      // LOC Properties からメタデータを取得
       let isKeyFrame = false;
       let timestamp = 0;
 
@@ -275,7 +275,7 @@ export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCan
 
         const locProperties = LOC.decodeVideoProperties(obj.properties);
 
-        // Capture Timestamp から timestamp を取得
+        // TIMESTAMP から timestamp を取得
         if (locProperties.timestamp !== undefined) {
           timestamp = Number(locProperties.timestamp);
         }
