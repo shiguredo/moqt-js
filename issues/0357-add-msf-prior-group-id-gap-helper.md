@@ -33,9 +33,7 @@ Gap 付与は SHOULD（transport-19 §12.8 は optional）。高レベル `creat
 
 ```ts
 const gap = computePriorGroupIdGap(8n, 11n); // 2n
-const encoded = encodeProperties([
-  { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: gap },
-]);
+const encoded = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: gap }]);
 assert.equal(parseProperties(encoded).priorGroupIdGap?.gap, 2n);
 ```
 
