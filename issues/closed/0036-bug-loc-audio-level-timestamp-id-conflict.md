@@ -1,5 +1,7 @@
 # LOC draft-ietf-moq-loc-02 の AUDIO_LEVEL と TIMESTAMP の ID 衝突
 
+- Completed: 2026-07-24
+
 ## 概要
 
 draft-ietf-moq-loc-02 において、TIMESTAMP (Section 2.3.1.1) と AUDIO_LEVEL (Section 2.3.3.1) の Property ID が衝突している。
@@ -56,3 +58,7 @@ draft-ietf-moq-loc-02 の仕様バグ。AUDIO_LEVEL に対する IANA からの�
 - `refs/moq/` 配下の LOC ドラフトは依然として `draft-ietf-moq-loc-02.txt` のみ。`-03` 以降は未取得。
 - `src/loc.ts:24-43` で `TIMESTAMP: 0x06n` と `AUDIO_LEVEL: 6n` が共存する暫定状態を維持。デコードループ (`src/loc.ts:284-373`) も TIMESTAMP / TIMESCALE のみ処理し、AUDIO_LEVEL は ID `0x06` での突き合わせ対象外という方針のまま。
 - 仕様側 (IANA への AUDIO_LEVEL ID 割り当て、または LOC ドラフト改訂) に動きがない以上、moqt-js 側で取れるアクションはなく、pending 維持で変更なし。
+
+## 解決方法
+
+draft-ietf-moq-loc-04 §6.1 Table 1 で TIMESTAMP=`0x10` / AUDIO_LEVEL=`0x0C` に分離された。本リポジトリの LOC 実装を draft-04 に追従したことで、衝突前提の暫定措置 (AudioProperties ラウンドトリップ除外、同一 ID での TIMESTAMP 優先解釈) を除去した。`decodeAudioProperties` は両 Property を同一バイト列から正しく読める。

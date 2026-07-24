@@ -152,6 +152,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Timescale
 - Video Config
 - Video Frame Marking
+- Audio Config
 - Audio Level
 
 ### MOQT Streaming Format

@@ -20,7 +20,7 @@ draft-ietf-moq-msf-01 §12 / §5.5 / §7.1 / §8.1 は Catalog / Timeline 等の
 - `MsfCompressionAlgorithm = { NONE: 0n, GZIP: 1n }` (`src/properties.ts:33-36`)
 - Property ID 定数は未定義 (コメントで TBD と明記)
 - Timeline encode / decode は無圧縮 JSON のみ (`src/msf.ts:1836` 付近)
-- `#0316` / `#0345` で「ID 確定後に別 issue」とされていた本項目
+- `#0316` で「ID 確定後に別 issue」とされていた本項目
 
 ## 設計方針
 
@@ -43,4 +43,4 @@ draft-ietf-moq-msf-01 §14.3 で MSF_COMPRESSION の Property ID が TBD。仮�
 ## 関連
 
 - `#0316` (closed) gzip API 撤廃と Algorithm 定数準備
-- `#0345` 残項目 (圧縮は本 issue へ分離)
+- `#0345` Catalog delta / Joining FETCH（圧縮は本 issue へ分離済み）

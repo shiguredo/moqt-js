@@ -190,12 +190,12 @@ export function usePublisher() {
 
     // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
     // annexB 形式の場合は description 不要、canonical (avc1/hvc1) の場合は
-    // description を Video Config Extension (ID: 13) で送る
-    // draft-ietf-moq-loc-02 §2.3.2.1
+    // description を Video Config (ID: 0x0D) で送る
+    // draft-ietf-moq-loc-04 §2.3.2.1
     const payload = chunk.data;
 
     // LOC Properties をエンコード
-    const extensions = LOC.encodeVideoProperties({
+    const properties = LOC.encodeVideoProperties({
       timestamp: BigInt(chunk.timestamp),
       frameMarking: {
         isIndependent: chunk.type === "key",
@@ -211,14 +211,14 @@ export function usePublisher() {
 
     pub.objectsWithExtensions.value++;
 
-    pub.bytesSent.value += payload.length + extensions.length;
+    pub.bytesSent.value += payload.length + properties.length;
 
     // Send object
     publisherInstance.sendObject({
       groupId: pub.pubCurrentGroup.value,
       objectId: pub.pubCurrentObjectId.value++,
       payload,
-      properties: extensions,
+      properties,
       priority: chunk.type === "key" ? 255 : 128,
     });
 

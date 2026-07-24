@@ -1,5 +1,12 @@
 # MOQT_IMPLEMENTATION のセキュリティ考慮
 
+- Priority: Low
+- Created: 2026-03-16
+- Completed: YYYY-MM-DD
+- Model: manual
+- Branch: feature/change-moqt-implementation-opt-out
+- Polished: YYYY-MM-DD
+
 ## 概要
 
 MOQT_IMPLEMENTATION Setup Option のセキュリティ・プライバシー考慮事項を追加する。
@@ -50,3 +57,13 @@ MOQT_IMPLEMENTATION の送信をオプション化する独自機能の追加が
 - `src/message/setup.ts:69-74` を再確認。`createSetup()` は依然として `MOQT_IMPLEMENTATION` を無条件で push しており、opt-out / override の分岐は追加されていない。
 - `src/version.ts:13` の `MOQT_IMPLEMENTATION_VALUE = \`moqt-js/${version}\`` も変更なし。送信値は実装名 + バージョンそのまま。
 - 設計判断 (どこで opt-out させるか) も未決定のまま。pending 維持で変更なし。
+
+## reopened にする理由
+
+draft-ietf-moq-transport-19 §13.8 がプライバシー緩和を具体化したため着手可能になった。
+
+- Implementations SHOULD send only the minimum information necessary
+- Privacy-conscious deployments MAY omit the option entirely or send a generic value
+- Implementations MAY provide users with the ability to configure or disable the option
+
+設計方針は draft-19 に合わせて次で固定する。既定は現状どおり送信を維持し、`ConnectOptions`（または同等）で opt-out / override を提供する。参照節は Section 13.8 / §10.3.1.5 に更新する。
