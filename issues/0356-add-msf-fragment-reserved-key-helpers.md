@@ -25,20 +25,20 @@ draft-ietf-moq-msf-01 §11.1.1 の reserved fragment parameters のうち、`con
 
 `parameters` から取得。`msf.ts` に追加（`export * from "./msf"` で公開）。不正値はそのエントリをスキップ（throw しない。`getConnectionParameter` と同型）。
 
-| 関数 | 戻り値 |
-| --- | --- |
-| `getWallclockRanges` | `{ start: bigint; end?: bigint }[]`（出現順 = union） |
-| `getMediatimeRanges` | 同上 |
-| `getLocationRanges` | `{ start: { groupId: bigint; objectId?: bigint }; end?: { groupId: bigint; objectId?: bigint } }[]` |
-| `getC4mParameter` | `string \| undefined`（最初の `c4m`。base64 文字列のまま。検証しない。検証は C4M 利用時 / `#0350`） |
+| 関数                 | 戻り値                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| `getWallclockRanges` | `{ start: bigint; end?: bigint }[]`（出現順 = union）                                               |
+| `getMediatimeRanges` | 同上                                                                                                |
+| `getLocationRanges`  | `{ start: { groupId: bigint; objectId?: bigint }; end?: { groupId: bigint; objectId?: bigint } }[]` |
+| `getC4mParameter`    | `string \| undefined`（最初の `c4m`。base64 文字列のまま。検証しない。検証は C4M 利用時 / `#0350`） |
 
 `getLocationRanges` の期待戻り値（仕様例を固定）:
 
-| 入力 | 戻り値 |
-| --- | --- |
-| `34.0-2145.16` | `{ start: { groupId: 34n, objectId: 0n }, end: { groupId: 2145n, objectId: 16n } }` |
-| `16.24` | `{ start: { groupId: 16n, objectId: 24n } }`（`end` 無し） |
-| `16-24` | `{ start: { groupId: 16n }, end: { groupId: 24n } }`（`objectId` キーを付けない。`0n` と同一視しない） |
+| 入力           | 戻り値                                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------ |
+| `34.0-2145.16` | `{ start: { groupId: 34n, objectId: 0n }, end: { groupId: 2145n, objectId: 16n } }`                    |
+| `16.24`        | `{ start: { groupId: 16n, objectId: 24n } }`（`end` 無し）                                             |
+| `16-24`        | `{ start: { groupId: 16n }, end: { groupId: 24n } }`（`objectId` キーを付けない。`0n` と同一視しない） |
 
 規範: §11.1.1 — range は inclusive。終端省略で open range MAY。同一 key 複数は union MUST。`location-range` は Group.Object を `.`、範囲を `-`。第 2 値省略時は `.` / `-` を MUST omit。
 

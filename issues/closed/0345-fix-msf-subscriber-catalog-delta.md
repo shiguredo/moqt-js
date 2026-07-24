@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-24
 - Model: Composer
 - Branch: feature/fix-msf-subscriber-catalog-delta
 - Polished: 2026-07-24
@@ -112,11 +112,12 @@ Catalog の破壊的変更自体は `#0316` で完了しているため、loc-04
 
 ## 解決方法
 
-1. 純関数を切り出し、単体テストを追加する
-2. `subscribeCatalog` を Relative Joining + FETCH 中バッファ（subscribe 前フラグ、`onEnd` / `onError` ドレイン、resolve / タイムアウト契約）に変更し、`handleCatalogObject` を純関数へ配線する。JSDoc の Absolute 誤記を訂正する
-3. コード分を `CHANGES.md` の `## develop` に追記する
+1. `processCatalogPayload` を `createMediaSubscriber.ts` に切り出し、フル置換 / delta 適用 / null+delta=ignored / apply・decode 失敗で current 維持を `createMediaSubscriber.test.ts` で検証した
+2. `subscribeCatalog` の Joining FETCH を `{ type: "relative", start: 0n }` に変更し、subscribe 前に `catalogFetchInProgress` を立てて live をバッファ、`onEnd` / `onError` とも `finishCatalogFetchPhase` でドレインする。JSDoc の Absolute 誤記を Relative（§10.12.2.1）に訂正した
+3. `catalogResolve` は FETCH フェーズ終了後（またはその後の初回フル）に行い、タイムアウトは未 resolve（`catalogResolve !== null`）で reject する。タイムアウト時はフェーズ状態も解除する
+4. `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
-`codec/types.ts` / `src/index.ts` の変更は通常不要。
+`codec/types.ts` / `src/index.ts` の変更は不要だった。devtools の同型 skip は任意フォローのため未着手。
 
 ## 関連
 
