@@ -5,7 +5,7 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/add-loc-private-properties-payload
-- Polished: YYYY-MM-DD
+- Polished: 2026-07-24
 
 ## 目的
 
