@@ -196,6 +196,10 @@
 - [UPDATE] ワークスペースの依存関係を最新化する
   - `vp up -L -r` を実行し、@playwright/test / @types/node / @preact/signals / preact / @tailwindcss/vite / tailwindcss を更新する
   - @voluntas
+- [FIX] MediaSubscriber が Catalog delta を破棄していたのを修正する
+  - draft-ietf-moq-msf-01 §5 / draft-ietf-moq-transport-19 §10.12.2.1 に基づき Catalog Joining FETCH を Relative Start 0 にし、FETCH 中の live catalog object をドレインする
+  - delta を `applyCatalogDelta` で適用し適用後カタログを `onCatalog` に渡す
+  - @voluntas
 - [FIX] リクエストストリームの Graceful Closure に追従する
   - draft-ietf-moq-transport-19 §3.3.2 に基づき、応答前 FIN をリクエスト失敗として reject する
   - session.close() でリクエストストリームに FIN ではなく abort（RESET 相当）を使う
