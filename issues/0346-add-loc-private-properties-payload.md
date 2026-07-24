@@ -47,10 +47,10 @@ draft-ietf-moq-loc-04 §2.2 は、MOQ Object Payload を「LOC Private Propertie
 
 ### 暫定ワイヤ（平文）
 
-| Private | Object Payload のバイト列 |
-| ------- | ------------------------- |
-| 空 / 未使用（長さ 0） | LOC Payload のみ（**現行と同じ生チャンク。prefix 無し**） |
-| 非空 | `Private Properties Length (varint)` + `Private Properties バイト列` + `LOC Payload` |
+| Private               | Object Payload のバイト列                                                            |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| 空 / 未使用（長さ 0） | LOC Payload のみ（**現行と同じ生チャンク。prefix 無し**）                            |
+| 非空                  | `Private Properties Length (varint)` + `Private Properties バイト列` + `LOC Payload` |
 
 - 非空時の length prefix は LOC Private Properties **領域のシリアライズ（区切り）**であり、§2.2 の配置（Private 領域の後に LOC Payload）は維持する。等式の左辺は「length 付き Private 領域 + LOC Payload」と読む
 - Private Properties バイト列の中身は呼び出し側規約。本 API はフレーミングのみ。推奨は現行 Public と同じ **絶対 Type 連結**（`encodeVideoProperties` / `encodeAudioProperties` の出力を渡す）。`properties.ts` の delta `encodeProperties` は使わない（Public の delta 未対応と同じく範囲外）。Secure Objects の 0xA 内 KVP は `#0353` で別契約になりうる
