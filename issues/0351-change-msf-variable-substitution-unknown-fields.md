@@ -36,4 +36,5 @@ draft-ietf-moq-msf-01 §5.4 Variable Substitution と §5.6.14 では、Track Ob
 ## 関連
 
 - `#0316` (closed)
-- `#0345` fragment / 残項目 (本項目はそこから分離)
+- `#0345` Catalog delta / Joining FETCH（本項目は draft-01 残から分離）
+- `#0356` URI fragment reserved key helper
