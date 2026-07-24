@@ -359,11 +359,11 @@ MediaStream
     │
     ├─► AudioTrack ─► MediaStreamTrackProcessor ─► AudioEncoder ─► MOQT Publisher (audio)
     │                                                    │
-    │                                              LOC Extensions
+    │                                              LOC Properties
     │
     └─► VideoTrack ─► MediaStreamTrackProcessor ─► VideoEncoder ─► MOQT Publisher (video)
                                                          │
-                                                   LOC Extensions
+                                                   LOC Properties
 ```
 
 ### MediaSubscriber 内部構成
@@ -371,11 +371,11 @@ MediaStream
 ```
 MOQT Subscriber (audio) ─► AudioDecoder ─► MediaStreamTrackGenerator ─┐
         │                       │                                      │
-  LOC Extensions          AudioData                                    ├─► MediaStream
+  LOC Properties          AudioData                                    ├─► MediaStream
         │                                                              │
 MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─┘
         │                       │
-  LOC Extensions          VideoFrame
+  LOC Properties          VideoFrame
 ```
 
 ### Worker 処理
@@ -386,12 +386,16 @@ MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─
 
 ### LOC コンテナ
 
-内部で LOC Header Extensions を自動処理:
+高レベル API が自動処理する LOC Properties:
 
-- `CAPTURE_TIMESTAMP`: フレームのキャプチャタイムスタンプ
-- `VIDEO_FRAME_MARKING`: キーフレーム判定、破棄可能フラグ
-- `VIDEO_CONFIG`: H.264/H.265 の description（SPS/PPS）
+- `TIMESTAMP`: フレームのタイムスタンプ
+- `VIDEO_FRAME_MARKING`: キーフレーム判定、破棄可能フラグ（映像のみ）
+
+LOC モジュール自体は次も対応するが、高レベル API では未配線:
+
+- `VIDEO_CONFIG` / `AUDIO_CONFIG`: コーデック description
 - `AUDIO_LEVEL`: オーディオレベル
+- `TIMESCALE`: Timestamp の単位
 
 ### groupId / objectId 管理
 

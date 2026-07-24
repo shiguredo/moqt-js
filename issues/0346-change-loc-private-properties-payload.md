@@ -9,7 +9,7 @@
 
 ## 目的
 
-draft-ietf-moq-loc-04 §2.2 では、MOQ Object Payload は「LOC Private Properties + LOC Payload」で構成される。現状の高レベル API は Encoded*Chunk の internal data のみを Payload に載せており、Private Properties を Payload 側へ載せる経路が無い。公開 Properties と Payload 側 Private Properties の配置を仕様どおりにする。
+draft-ietf-moq-loc-04 §2.2 では、MOQ Object Payload は「LOC Private Properties + LOC Payload」で構成される。現状の高レベル API は Encoded\*Chunk の internal data のみを Payload に載せており、Private Properties を Payload 側へ載せる経路が無い。公開 Properties と Payload 側 Private Properties の配置を仕様どおりにする。
 
 ## 優先度根拠
 

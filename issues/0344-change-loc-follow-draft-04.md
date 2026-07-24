@@ -28,14 +28,14 @@ LOC Properties は高レベル API / devtools の映像・音声 Object に載�
 - `src/loc.ts:3` が `* draft-ietf-moq-loc-02` を参照している
 - `LOCPropertyId` (`src/loc.ts:18-49`) の ID は draft-02 値:
 
-| プロパティ | 実装 (loc-02) | draft-04 (§2.3.x / §6.1 Table 1) |
-|---|---|---|
-| TIMESTAMP | `0x06` (偶数 / vi64) | `0x10` (偶数 / vi64) |
-| TIMESCALE | `0x08` (偶数 / vi64) | `0x08` (一致) |
-| VIDEO_FRAME_MARKING | `4` (偶数 / varint 詰め) | `0x09` (奇数 / length + bytes, Length 1–4) |
-| AUDIO_LEVEL | `6` (= `0x06`, 偶数 / vi64) | `0x0C` (偶数 / vi64) |
-| VIDEO_CONFIG (`CONFIG`) | `13` (`0x0D`, 奇数 / length + bytes) | `0x0D` (一致、名称のみ VIDEO_CONFIG) |
-| AUDIO_CONFIG | 未定義 | `0x0F` (奇数 / length + bytes, 新規) |
+| プロパティ              | 実装 (loc-02)                        | draft-04 (§2.3.x / §6.1 Table 1)           |
+| ----------------------- | ------------------------------------ | ------------------------------------------ |
+| TIMESTAMP               | `0x06` (偶数 / vi64)                 | `0x10` (偶数 / vi64)                       |
+| TIMESCALE               | `0x08` (偶数 / vi64)                 | `0x08` (一致)                              |
+| VIDEO_FRAME_MARKING     | `4` (偶数 / varint 詰め)             | `0x09` (奇数 / length + bytes, Length 1–4) |
+| AUDIO_LEVEL             | `6` (= `0x06`, 偶数 / vi64)          | `0x0C` (偶数 / vi64)                       |
+| VIDEO_CONFIG (`CONFIG`) | `13` (`0x0D`, 奇数 / length + bytes) | `0x0D` (一致、名称のみ VIDEO_CONFIG)       |
+| AUDIO_CONFIG            | 未定義                               | `0x0F` (奇数 / length + bytes, 新規)       |
 
 - VIDEO_FRAME_MARKING は `encodeVideoFrameMarking` (`src/loc.ts:142-163`) が偶数 ID + varint 値として符号化している。draft-04 §2.3.2.2 は「encoded with a length prefix」「ID: 0x09」「Length: Varies (1-4 bytes)」
 - AUDIO_CONFIG (`0x0F`) の encode / decode / 型が無い
