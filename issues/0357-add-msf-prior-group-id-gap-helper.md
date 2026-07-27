@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-27
 - Model: Composer
 - Branch: feature/add-msf-prior-group-id-gap-helper
 - Polished: YYYY-MM-DD
@@ -49,9 +49,11 @@ assert.equal(parseProperties(encoded).priorGroupIdGap?.gap, 2n);
 
 ## 解決方法
 
-1. `src/msf.ts` に `computePriorGroupIdGap` を追加する
-2. `src/msf.test.ts` または `src/properties.test.ts` に到達テストを追加する
-3. `CHANGES.md` の `## develop` に `[ADD]` を追記する
+closed にする。実装しない。
+
+- encode→parse の round-trip テストは `src/properties.test.ts:237-245` に既に存在し、「付与到達を単体で示す」という目的の半分は既充足
+- `computePriorGroupIdGap` は `createMediaPublisher` 配線を範囲外とするため呼び出し元ゼロの死にコードとして追加される。AGENTS.md「Premature Optimization is the Root of All Evil」に抵触する
+- `createMediaPublisher` の §6.1 restart 対応（`number`→`bigint`・0 起点の作り直し）を実装する際に、その issue 内で計算 helper も追加する方が適切
 
 ## 関連
 
