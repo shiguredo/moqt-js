@@ -1,5 +1,12 @@
 # MOQT_IMPLEMENTATION のセキュリティ考慮
 
+- Priority: Low
+- Created: 2026-03-16
+- Completed: YYYY-MM-DD
+- Model: manual
+- Branch: feature/change-moqt-implementation-opt-out
+- Polished: YYYY-MM-DD
+
 ## 概要
 
 MOQT_IMPLEMENTATION Setup Option のセキュリティ・プライバシー考慮事項を追加する。
