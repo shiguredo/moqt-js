@@ -5,7 +5,7 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/add-msf-fragment-reserved-key-helpers
-- Polished: YYYY-MM-DD
+- Polished: 2026-07-27
 
 ## 目的
 
@@ -23,12 +23,12 @@ draft-ietf-moq-msf-01 §11.1.1 の reserved fragment parameters のうち、`con
 
 ## 設計方針
 
-`parameters` から取得。`msf.ts` に追加（`export * from "./msf"` で公開）。不正値はそのエントリをスキップ（throw しない。`getConnectionParameter` と同型）。
+`parameters` から取得。`msf.ts` に追加（`export * from "./msf"` で公開）。不正値はそのエントリをスキップして走査を続行する（throw しない。有効なエントリだけを配列に含める）。start 省略形（例: `-200`）は不正値としてスキップする。
 
 | 関数                 | 戻り値                                                                                              |
 | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `getWallclockRanges` | `{ start: bigint; end?: bigint }[]`（出現順 = union）                                               |
-| `getMediatimeRanges` | 同上                                                                                                |
+| `getWallclockRanges` | `{ start: number; end?: number }[]`（出現順 = union。wallclock ms は `MediaTimelineTemplate` と同じ `number`） |
+| `getMediatimeRanges` | 同上（mediatime ms も `number`）                                                                     |
 | `getLocationRanges`  | `{ start: { groupId: bigint; objectId?: bigint }; end?: { groupId: bigint; objectId?: bigint } }[]` |
 | `getC4mParameter`    | `string \| undefined`（最初の `c4m`。base64 文字列のまま。検証しない。検証は C4M 利用時 / `#0350`） |
 
@@ -45,6 +45,7 @@ draft-ietf-moq-msf-01 §11.1.1 の reserved fragment parameters のうち、`con
 ## 完了条件
 
 - 上記 4 関数が export され、仕様例を含む単体テストがある（`src/msf.test.ts`、必要なら `msf.prop.ts`）
+- 不正値スキップのテストがある（非数値、空値、`location-range=1.2.3` ドット過多、`location-range=1.` 末尾ドット、有効/不正混在で有効分だけ返ること）
 - `CHANGES.md` に `[ADD]` を追記する
 - `vp run test` / `vp run build` が pass する
 
