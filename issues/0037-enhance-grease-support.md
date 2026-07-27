@@ -1,5 +1,12 @@
 # GREASE 送信の実装
 
+- Priority: Low
+- Created: 2026-03-23
+- Completed: YYYY-MM-DD
+- Model: manual
+- Branch: feature/add-grease-sending
+- Polished: YYYY-MM-DD
+
 ## 概要
 
 draft-ietf-moq-transport-17 Section 13 で定義されている GREASE (Generate Random Extensions And Sustain Extensibility) の送信機能が未実装である。
