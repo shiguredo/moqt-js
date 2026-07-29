@@ -309,6 +309,12 @@ export interface CatalogTrack {
 
   /** Accessibility descriptor 配列 (§5.2.44) */
   accessibility?: AccessibilityDescriptor[];
+
+  /**
+   * 未知フィールド（§5 の "parser MUST ignore unknown" を「検証はしないが保持」と解釈）
+   * draft-ietf-moq-msf-01 §5.4 Variable Substitution の対象になり得る。
+   */
+  [key: string]: unknown;
 }
 
 /**
@@ -1191,6 +1197,10 @@ function buildValidatedCatalogTrack(
     validatePackagingSpecificRules(track, packaging, name);
   }
 
+  // draft-ietf-moq-msf-01 §5: "parser MUST ignore unknown" を「検証はしないが保持」と解釈。
+  // 未知 field を保持することで §5.4 Variable Substitution の対象にする。
+  pickUnknownFields(obj, track);
+
   return track;
 }
 
@@ -1413,6 +1423,70 @@ function pickPublishTrackFields(
       );
     }
     (track as PublishTrack).token = value;
+  }
+}
+
+/**
+ * 既知フィールド名（§5.2 で定義された全フィールド + 内部管理用）
+ * pickUnknownFields で未知フィールドを判定するために使用する。
+ */
+const KNOWN_TRACK_FIELDS = new Set<string>([
+  "name",
+  "packaging",
+  "isLive",
+  "namespace",
+  "eventType",
+  "targetLatency",
+  "buffers",
+  "role",
+  "label",
+  "renderGroup",
+  "altGroup",
+  "initRef",
+  "depends",
+  "template",
+  "temporalId",
+  "spatialId",
+  "codec",
+  "mimeType",
+  "framerate",
+  "timescale",
+  "bitrate",
+  "avgBitrate",
+  "maxGopDuration",
+  "maxGroupDuration",
+  "width",
+  "height",
+  "samplerate",
+  "channelConfig",
+  "displayWidth",
+  "displayHeight",
+  "lang",
+  "parentName",
+  "parentNamespace",
+  "trackDuration",
+  "encryptionScheme",
+  "cipherSuite",
+  "keyId",
+  "trackBaseKey",
+  "authInfo",
+  "accessibility",
+  "connectionUri",
+  "token",
+]);
+
+/**
+ * 未知フィールドを保持する
+ *
+ * draft-ietf-moq-msf-01 §5: "parser MUST ignore unknown" を「検証はしないが保持」と解釈。
+ * 既知フィールド以外のキーをそのまま track にコピーする。
+ * これにより §5.4 Variable Substitution の対象になる。
+ */
+function pickUnknownFields(obj: Record<string, unknown>, track: CatalogTrack): void {
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_TRACK_FIELDS.has(key)) {
+      track[key] = obj[key];
+    }
   }
 }
 
@@ -2200,7 +2274,44 @@ function substituteTrack(
       "publishTracks[].token",
     );
   }
+  // 未知フィールドの再帰的置換
+  // draft-ietf-moq-msf-01 §5.4: "Catalog field values MAY contain variables"
+  // 既知フィールド以外の string 値にも %var% 置換を適用する。
+  // ネストした object / array 内の文字列も再帰的に走査する。
+  for (const key of Object.keys(track)) {
+    if (!KNOWN_TRACK_FIELDS.has(key)) {
+      result[key] = substituteUnknownValue(track[key], variables, `tracks[].${key}`);
+    }
+  }
   return result;
+}
+
+/**
+ * 未知フィールドの値を再帰的に置換する
+ *
+ * draft-ietf-moq-msf-01 §5.4: "Catalog field values MAY contain variables"
+ * 仕様 §5.4 にはネストした object / array への再帰規則は存在しないが、
+ * 本実装ではネストした object / array 内の文字列も再帰的に走査する。
+ */
+function substituteUnknownValue(
+  value: unknown,
+  variables: Readonly<Record<string, string>>,
+  fieldPath: string,
+): unknown {
+  if (typeof value === "string") {
+    return substituteString(value, variables, fieldPath);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, i) => substituteUnknownValue(item, variables, `${fieldPath}[${i}]`));
+  }
+  if (value !== null && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      result[k] = substituteUnknownValue(v, variables, `${fieldPath}.${k}`);
+    }
+    return result;
+  }
+  return value;
 }
 
 function substituteInitDataEntry(

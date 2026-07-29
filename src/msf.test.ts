@@ -901,6 +901,52 @@ test("resolveCatalogVariables: % リテラル単独は reject (§5.4.1)", () => 
   assert.throws(() => resolveCatalogVariables(catalog, {}), /literal %/);
 });
 
+// draft-ietf-moq-msf-01 §5.4 / §5.6.14: 未知フィールドも Variable Substitution の対象
+test("resolveCatalogVariables: 未知 string field の %var% が置換される", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, c4m: "%token%" }],
+  };
+  const resolved = resolveCatalogVariables(catalog, { token: "abc123" });
+  assert.strictEqual(resolved.tracks[0].c4m, "abc123");
+});
+
+test("resolveCatalogVariables: ネストした未知 object 内の string も置換される", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, custom: { url: "https://%host%/path" } }],
+  };
+  const resolved = resolveCatalogVariables(catalog, { host: "example-com" });
+  const custom = resolved.tracks[0].custom as Record<string, unknown>;
+  assert.strictEqual(custom.url, "https://example-com/path");
+});
+
+test("resolveCatalogVariables: 未知 array 内の string も置換される", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, tags: ["%env%", "static"] }],
+  };
+  const resolved = resolveCatalogVariables(catalog, { env: "prod" });
+  const tags = resolved.tracks[0].tags as string[];
+  assert.deepEqual(tags, ["prod", "static"]);
+});
+
+// decode 経路を含む end-to-end テスト: 未知フィールドが保持され置換される
+test("Catalog: decode → validate → resolveCatalogVariables で未知 field が置換される (end-to-end)", () => {
+  const raw = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, c4m: "%token%" }],
+    variables: { token: "secret-value" },
+  };
+  const encoded = encodeCatalog(raw as unknown as Catalog);
+  const decoded = decodeCatalogMessage(encoded);
+  // 未知フィールド c4m が保持されている
+  assert.strictEqual((decoded as Catalog).tracks[0].c4m, "%token%");
+  // resolveCatalogVariables で置換される
+  const resolved = resolveCatalogVariables(decoded as Catalog, { token: "secret-value" });
+  assert.strictEqual(resolved.tracks[0].c4m, "secret-value");
+});
+
 // =============================================================================
 // MSF URI Fragment Parsing (§11.1)
 // =============================================================================
