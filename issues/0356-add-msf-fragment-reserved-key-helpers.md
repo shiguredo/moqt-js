@@ -5,7 +5,7 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/add-msf-fragment-reserved-key-helpers
-- Polished: 2026-07-27
+- Polished: 2026-07-30
 
 ## 目的
 
@@ -47,7 +47,7 @@ draft-ietf-moq-msf-01 §11.1.1 の reserved fragment parameters のうち、`con
 - 上記 4 関数が export され、仕様例を含む単体テストがある（`src/msf.test.ts`、必要なら `msf.prop.ts`）
 - 不正値スキップのテストがある（非数値、空値、`location-range=1.2.3` ドット過多、`location-range=1.` 末尾ドット、有効/不正混在で有効分だけ返ること）
 - `CHANGES.md` に `[ADD]` を追記する
-- `vp run test` / `vp run build` が pass する
+- `vp test run` / `vp build` が pass する
 
 ## 解決方法
 
