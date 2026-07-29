@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] GREASE Setup Option の opt-in 送信を追加する
+  - draft-ietf-moq-transport-19 Section 14 に基づき、ConnectOptions に grease フラグを追加する
+  - grease=true で SETUP メッセージに GREASE Setup Option を 1 つ追加する
+  - @voluntas
 - [ADD] MOQT_IMPLEMENTATION Setup Option の opt-out / override 機構を追加する
   - draft-ietf-moq-transport-19 §13.8 に基づき、ConnectOptions に moqtImplementation フィールドを追加する
   - undefined で既定値送信、false で送信停止、string でカスタム値を送信する

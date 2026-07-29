@@ -200,6 +200,15 @@ export interface ConnectOptions {
    * - string: 指定したカスタム値を送信する
    */
   moqtImplementation?: string | false;
+
+  /**
+   * GREASE Setup Option の送信を有効化する
+   * draft-ietf-moq-transport-19 Section 14 (Grease)
+   *
+   * true を指定すると、SETUP メッセージに GREASE Setup Option を 1 つ追加する。
+   * 既定 (undefined / false) では送信しない。
+   */
+  grease?: boolean;
 }
 
 /**
@@ -1191,6 +1200,7 @@ export class SessionImpl implements Session {
   async initialize(options?: {
     authorizationToken?: AuthorizationToken;
     moqtImplementation?: string | false;
+    grease?: boolean;
   }): Promise<void> {
     // draft-ietf-moq-transport-19 Section 4 (Extensibility):
     // 制御ストリームは単方向ストリームのペアに変更された。
@@ -1216,6 +1226,7 @@ export class SessionImpl implements Session {
     const setup = createSetup({
       authorizationToken: options?.authorizationToken,
       moqtImplementation: options?.moqtImplementation,
+      grease: options?.grease,
     });
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);

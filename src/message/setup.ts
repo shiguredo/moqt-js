@@ -7,6 +7,7 @@
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { generateGreaseValue } from "../grease";
 import {
   type AuthorizationToken,
   assertAuthorizationTokenForSetup,
@@ -52,6 +53,14 @@ export function createSetup(options?: {
    * - string: 指定した値を送信する
    */
   moqtImplementation?: string | false;
+  /**
+   * GREASE Setup Option の送信を有効化する
+   * draft-ietf-moq-transport-19 Section 14 (Grease)
+   *
+   * true を指定すると、SETUP メッセージに GREASE Setup Option を 1 つ追加する。
+   * 既定 (undefined / false) では送信しない。
+   */
+  grease?: boolean;
 }): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
@@ -86,6 +95,22 @@ export function createSetup(options?: {
     parameters.push({
       type: SetupOptionType.MOQT_IMPLEMENTATION,
       value: encoder.encode(implementationValue),
+    });
+  }
+
+  // draft-ietf-moq-transport-19 Section 14 (Grease):
+  // GREASE Setup Option は未知の Option Type をピアが正しく無視できることを検証する。
+  // 送信は任意（opt-in）。value は任意のバイト列でセマンティクスなし。
+  // Key-Value-Pairs は Type の奇偶でワイヤ形式が決まる（奇数 = length-prefixed）。
+  // GREASE 値 0x7f * N + 0x9D は N が偶数のとき奇数になるため、N を偶数に限定する。
+  if (options?.grease) {
+    const greaseIndex = Math.floor(Math.random() * 50) * 2;
+    const greaseType = Number(generateGreaseValue(greaseIndex));
+    const greasePayload = new Uint8Array(4);
+    crypto.getRandomValues(greasePayload);
+    parameters.push({
+      type: greaseType,
+      value: greasePayload,
     });
   }
 

@@ -224,6 +224,7 @@ export async function connect(
   await session.initialize({
     authorizationToken: options?.authorizationToken,
     moqtImplementation: options?.moqtImplementation,
+    grease: options?.grease,
   });
 
   return session;
