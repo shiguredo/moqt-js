@@ -5,128 +5,69 @@
 - Completed: YYYY-MM-DD
 - Model: manual
 - Branch: feature/add-grease-sending
-- Polished: YYYY-MM-DD
+- Polished: 2026-07-30
 
-## 概要
+## 目的
 
-draft-ietf-moq-transport-17 Section 13 で定義されている GREASE (Generate Random Extensions And Sustain Extensibility) の送信機能が未実装である。
-現在は受信側の処理 (未知の値を無視する) は対応済みだが、送信側で GREASE 値を積極的に送る処理がない。
+draft-ietf-moq-transport-19 Section 14 (Grease) で予約されている GREASE 値を送信パスに配線し、ピアが未知の値を正しく無視できることを検証可能にする。
 
-## 仕様
+## 現状
 
-### RFC 参照
+- `src/grease.ts` に `isGreaseValue()` と `generateGreaseValue(n: number)` が存在するが、送信パスからの参照はない。import 元はテスト (`grease.prop.ts`) のみ
+- `src/message/setup.ts` の `createSetup()` は GREASE Setup Option を追加しない
+- `src/session.ts` の `sendObjectInternal()` / `sendDatagram()` は呼び出し元から渡された properties をそのまま送るだけで、自動 GREASE 注入はしない
 
-- draft-ietf-moq-transport-17 Section 13
-- draft-ietf-moq-transport-17 Section 5.3
+## 設計方針
 
-### GREASE 値のパターン
+### 仕様根拠
 
-```
-0x7f * N + 0x9D (N = 0, 1, 2, ...)
-```
+draft-ietf-moq-transport-19 Section 14:
+- GREASE 値のパターン: `0x7f * N + 0x9D`（N は非負整数。例: `0x9D`, `0x11C`, `0x19B`, ..., `0x3fffffffffffffde`）
+- 受信側: "implementations MUST handle unknown values gracefully" / "Endpoints MUST NOT close the session solely because they received an unknown value"
+- 送信側: draft-19 本文に送信の SHOULD/MUST はなく、RFC 9170 §3.3 の参照先に委ねられている。送信は任意（opt-in）とする
 
-具体例: `0x9D`, `0x11C`, `0x19B`, `0x21A`, ...
+### GREASE 予約を持つレジストリ（draft-19 Section 14）
 
-最大値: `0x3ffffffffffffffe`
+| レジストリ | RFC セクション | 用途 |
+| --- | --- | --- |
+| Setup Options | Section 15.4 | SETUP メッセージのオプション |
+| Properties | Section 15.8 | Track / Object Properties |
+| Session Termination Error Codes | Section 15.11.1 | セッション終了エラー |
+| REQUEST_ERROR Codes | Section 15.11.2 | リクエストエラー |
+| PUBLISH_DONE Codes | Section 15.11.3 | PUBLISH_DONE ステータス |
+| Stream Reset Error Codes | Section 15.11.4 | ストリームリセット |
+| MOQT Auth Token Type | - | 認証トークン種別 |
 
-### GREASE が適用されるレジストリ
+### 実装スコープ
 
-| レジストリ                      | RFC セクション | 用途                         |
-| ------------------------------- | -------------- | ---------------------------- |
-| Setup Options                   | Section 9.4.1  | SETUP メッセージのオプション |
-| Properties                      | Section 14.4   | Track / Object Properties    |
-| Session Termination Error Codes | Section 14.5.1 | セッション終了エラー         |
-| REQUEST_ERROR Codes             | Section 14.5.2 | リクエストエラー             |
-| PUBLISH_DONE Codes              | Section 14.5.3 | PUBLISH_DONE ステータス      |
-| Data Stream Reset Error Codes   | Section 14.5.4 | データストリームリセット     |
-| MOQT Auth Token Type            | -              | 認証トークン種別             |
+SETUP Option への opt-in GREASE 送信に限定する。Object / Track Properties への GREASE 注入は本 issue の必須とせず、必要なら後続 issue に分ける。
 
-### RFC の要件レベル
+### 方針
 
-RFC では GREASE に関して以下のように記述されている:
+1. `ConnectOptions`（`src/session.ts`）に GREASE Setup Option の送信を有効化するオプションを追加する
+2. `createSetup()`（`src/message/setup.ts`）で GREASE Setup Option を条件付きで追加する
+3. GREASE 値は既存の `generateGreaseValue(n: number)` を使い、`n` は乱数で選定する
+4. GREASE Setup Option の value は任意のバイト列（仕様にセマンティクスなし）
 
-- **受信側**: MUST として未知の値を gracefully にハンドルすること
-- **送信側**: SHOULD レベルの推奨 (MUST ではない)
+## 完了条件
 
-> Implementations MUST handle unknown values from these registries gracefully.
+- opt-in で SETUP メッセージに GREASE Setup Option を含めて送信できる
+- 既定（オプション未指定）では GREASE を送信しない（現状維持）
+- `vp check` / `tsc --noEmit` / `vp test run` が通る
 
-> Setup Options with reserved identifiers carry arbitrary values and have no semantics.
+## 解決方法
 
-## 現在の実装状況
+### 変更対象
 
-### 受信側 (対応済み)
+- `src/session.ts`: `ConnectOptions` に GREASE 送信オプションを追加し、`initialize()` から `createSetup()` に中継する
+- `src/message/setup.ts`: `createSetup()` の options に GREASE 送信フラグを追加し、条件付きで GREASE Setup Option を push する
+- `src/message/setup.test.ts`: GREASE Setup Option あり/なしのテストを追加する
 
-- Setup Options の未知の Option Type は無視される (`src/message/setup.ts`)
-- Object Properties の未知のプロパティ ID は無視される (`src/dataStream.ts`)
+### 参照
 
-### 送信側 (未実装)
-
-以下の箇所で GREASE 値を送信する処理がない:
-
-1. **SETUP メッセージ**: `src/session.ts` の `initialize()` で送信する SETUP メッセージに GREASE Setup Option を含めていない
-2. **Object Properties**: `src/dataStream.ts` の `encodeObjectFields()` で GREASE プロパティを含めていない
-3. **Track Properties**: `src/properties.ts` で GREASE Track Property を含めていない
-
-## 実装方針
-
-### 1. GREASE 値生成ユーティリティ
-
-```typescript
-function generateGreaseValue(): bigint {
-  const n = BigInt(Math.floor(Math.random() * 100));
-  return 0x7fn * n + 0x9dn;
-}
-```
-
-### 2. 送信対象の優先順位
-
-GREASE はインターオペラビリティの確保が目的であるため、相手側の実装が未知の値を正しく無視できることを検証するのが重要である。
-
-1. **Setup Options** (最も効果的): 全セッション開始時に 1 回送信される。相手が未知 Option を無視できるか検証できる
-2. **Object Properties**: 送信頻度が高いため性能への影響を考慮する必要がある
-3. **Track Properties**: PUBLISH / SUBSCRIBE_OK / FETCH_OK で送信される
-
-### 3. 設計判断が必要な点
-
-- GREASE を常に送信するか、確率的に送信するか (例: 10% の確率)
-- GREASE の値とペイロードのサイズ制限
-- GREASE 送信を無効化するオプションの提供
-
-## 影響範囲
-
-- `src/session.ts`: SETUP メッセージ送信時の GREASE Option 追加
-- `src/message/setup.ts`: GREASE Setup Option のエンコード
-- `src/dataStream.ts`: Object Properties への GREASE 追加 (任意)
-- `src/properties.ts`: Track Properties への GREASE 追加 (任意)
-
-## pending 理由
-
-GREASE は RFC では SHOULD レベルの推奨であり、送信頻度や対象の設計判断が必要。また、相手側の実装が GREASE を正しく処理できない場合の接続性リスクがあるため、実装タイミングと範囲の判断が必要。
-
-## 調査結果
-
-**送信側 GREASE は未実装のまま**
-
-- `src/grease.ts` には `isGreaseValue()` と `generateGreaseValue()` があるが、これは値判定と値生成の helper に留まっている。
-- `generateGreaseValue()` の現在の API は `generateGreaseValue(n: number)` であり、issue 本文にある「乱数で都度生成する helper」とは実装形が異なる。
-- 利用箇所を確認すると、`generateGreaseValue()` / `isGreaseValue()` はランタイムの送信パスから参照されていない。
-- `src/message/setup.ts` の `createSetup()` は `PATH` / `AUTHORIZATION_TOKEN` / `AUTHORITY` / `MOQT_IMPLEMENTATION` しか積んでおらず、GREASE Setup Option を追加しない。
-- `src/session.ts` の `publish()` は concrete な `TrackPropertyId` だけを組み立てており、GREASE Track Property を挿入しない。
-- `src/session.ts` の `sendObjectInternal()` / `sendDatagram()` も、呼び出し元から渡された `properties` をそのまま送るだけで、自動 GREASE 注入はしない。
-- 以上から、現状は「helper はあるが送信への配線がない」状態であり、issue の本体は未解決である。
-
-## 今どうするべきか
-
-- 当面は `issues/pending/` のまま維持するのが妥当である。
-- もし着手するなら、まずは影響範囲が最も限定的な `SETUP` Option への opt-in な GREASE 送信から始めるべきである。
-- `Object Properties` や `Track Properties` への GREASE 注入は、相互接続確認と性能影響の見積もりを別途行った上で後続 issue に分けるべきである。
-
-## 状況確認 (2026-04-29)
-
-- `src/grease.ts:37-54` を再確認。`isGreaseValue()` / `generateGreaseValue(n: number)` は前回調査時の API のまま。
-- `src/message/setup.ts:39-80` の `createSetup()` は依然として `PATH` / `AUTHORIZATION_TOKEN` / `AUTHORITY` / `MOQT_IMPLEMENTATION` のみを追加。GREASE Setup Option を入れる経路はなし。
-- `src/session.ts` 内のオブジェクト送信パス (`sendObjectInternal()` / `sendDatagram()`) からも `grease.ts` の参照は出ておらず、自動 GREASE 注入は未配線のまま。
-- 送信側 GREASE は引き続き未実装。pending 維持で変更なし。
+- draft-ietf-moq-transport-19 Section 14 (Grease)
+- draft-ietf-moq-transport-19 Section 15.4 (Setup Options IANA registry)
+- RFC 9170 §3.3
 
 ## reopened にする理由
 
@@ -135,4 +76,4 @@ draft-ietf-moq-transport-19 §14 でも GREASE 予約は存続しており、実
 - `generateGreaseValue()` / `isGreaseValue()` は `src/grease.ts` に存在する
 - 未配線なのは送信パスのみ
 
-着手スコープは SETUP Option への opt-in GREASE 送信に限定する。Object / Track Properties への注入は本 issue の必須とせず、必要なら後続 issue に分ける。参照は draft-17 ではなく draft-19 §14 / §15.4 に更新する。
+着手スコープは SETUP Option への opt-in GREASE 送信に限定する。Object / Track Properties への注入は本 issue の必須とせず、必要なら後続 issue に分ける。
