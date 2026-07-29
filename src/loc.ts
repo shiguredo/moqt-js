@@ -25,6 +25,7 @@
 
 import { IncompleteDataError, ProtocolViolationError } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
+import type { Property } from "./properties";
 
 /**
  * LOC Property ID (draft-ietf-moq-loc-04 Section 2.3 / §6.1 Table 1)
@@ -586,4 +587,103 @@ export function decodeLocObjectPayload(
     privateProperties: new Uint8Array(objectPayload.subarray(lengthSize, privateEnd)),
     locPayload: new Uint8Array(objectPayload.subarray(privateEnd)),
   };
+}
+
+// ============================================================
+// Track Property 経路 (draft-ietf-moq-loc-04 Table 1: Scope = Track, Object)
+// ============================================================
+
+/**
+ * Track Property として送信可能な LOC Property のオプション
+ *
+ * draft-ietf-moq-loc-04 Table 1 で Scope が "Track, Object" なのは
+ * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) の 3 種。
+ */
+export interface LocTrackPropertyOptions {
+  /** Timescale: 1 秒あたりの Timestamp 単位数 (vi64) */
+  timescale?: bigint;
+  /** Video Config: VideoDecoderConfig の description */
+  videoConfig?: Uint8Array;
+  /** Audio Config: AudioDecoderConfig の description */
+  audioConfig?: Uint8Array;
+}
+
+/**
+ * LOC Track Properties を Property オブジェクト配列として構築する
+ *
+ * draft-ietf-moq-transport-19 §1.4.3 の delta-encoded Key-Value-Pair 形式で
+ * encodeProperties() に渡せる形式を返す。
+ *
+ * - TIMESCALE (0x08): 偶数 ID のため varint value 形式
+ * - VIDEO_CONFIG (0x0D): 奇数 ID のため length + bytes 形式
+ * - AUDIO_CONFIG (0x0F): 奇数 ID のため length + bytes 形式
+ */
+export function buildLocTrackProperties(options: LocTrackPropertyOptions): Property[] {
+  const properties: Property[] = [];
+
+  if (options.timescale !== undefined) {
+    properties.push({ id: LOCPropertyId.TIMESCALE, value: options.timescale });
+  }
+  if (options.videoConfig !== undefined) {
+    properties.push({ id: LOCPropertyId.VIDEO_CONFIG, data: options.videoConfig });
+  }
+  if (options.audioConfig !== undefined) {
+    properties.push({ id: LOCPropertyId.AUDIO_CONFIG, data: options.audioConfig });
+  }
+
+  return properties;
+}
+
+/**
+ * Track Properties と Object Properties の両方から LOC Property を解決する
+ *
+ * draft-ietf-moq-transport-19 §12.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
+ * 同一 Property が両方に存在する場合は Object Property が Track Property を上書きする。
+ *
+ * @param trackProperties - decodeProperties() の出力（Track Properties）
+ * @param objectLocPayload - Object Properties バイト列（LOC 絶対 Type 連結形式）
+ * @returns 解決済みの LOC Property マップ（ID → value/data）
+ */
+export function resolveLocProperties(
+  trackProperties: ReadonlyArray<Property>,
+  objectLocPayload?: Uint8Array,
+): Property[] {
+  // Track Properties から LOC Scope (Track, Object) のものを抽出
+  const locTrackIds = new Set<bigint>([
+    LOCPropertyId.TIMESCALE,
+    LOCPropertyId.VIDEO_CONFIG,
+    LOCPropertyId.AUDIO_CONFIG,
+  ]);
+
+  const resolved = new Map<bigint, Property>();
+  for (const prop of trackProperties) {
+    if (locTrackIds.has(prop.id)) {
+      resolved.set(prop.id, prop);
+    }
+  }
+
+  // Object Properties があれば上書きする
+  if (objectLocPayload && objectLocPayload.length > 0) {
+    let offset = 0;
+    while (offset < objectLocPayload.length) {
+      const [id, idLen] = decodeVarint(objectLocPayload, offset);
+      offset += idLen;
+
+      if (id % 2n === 0n) {
+        // 偶数 ID: varint value
+        const [value, valueLen] = decodeVarint(objectLocPayload, offset);
+        offset += valueLen;
+        resolved.set(id, { id, value });
+      } else {
+        // 奇数 ID: length + bytes
+        const [length, lengthLen] = decodeVarint(objectLocPayload, offset);
+        offset += lengthLen;
+        const data = new Uint8Array(objectLocPayload.subarray(offset, offset + Number(length)));
+        offset += Number(length);
+        resolved.set(id, { id, data });
+      }
+    }
+  }
+
+  return [...resolved.values()];
 }
