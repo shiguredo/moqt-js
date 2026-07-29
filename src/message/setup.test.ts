@@ -157,3 +157,63 @@ test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると thro
 test("Setup: AUTHORIZATION_TOKEN の Setup Option Type は 0x03", () => {
   assert.equal(SetupOptionType.AUTHORIZATION_TOKEN, 0x03);
 });
+
+// draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting):
+// "Privacy-conscious deployments MAY omit the MOQT_IMPLEMENTATION option entirely
+//  or send a generic value."
+// "Implementations MAY provide users with the ability to configure or disable the
+//  MOQT_IMPLEMENTATION option."
+
+// moqtImplementation: false で MOQT_IMPLEMENTATION が送信されないことを確認する
+test("Setup: moqtImplementation=false で MOQT_IMPLEMENTATION が含まれない", () => {
+  const setup = createSetup({ moqtImplementation: false });
+  assert.equal(setup.parameters.length, 0);
+  assert.isUndefined(getSetupMoqtImplementation(setup));
+});
+
+// moqtImplementation: string でカスタム値が送信されることを確認する
+test("Setup: moqtImplementation=string でカスタム値が送信される", () => {
+  const setup = createSetup({ moqtImplementation: "generic" });
+  assert.equal(setup.parameters.length, 1);
+  assert.equal(setup.parameters[0].type, SetupOptionType.MOQT_IMPLEMENTATION);
+  assert.equal(getSetupMoqtImplementation(setup), "generic");
+});
+
+// moqtImplementation 未指定時は既定値が送信されることを確認する（後方互換）
+test("Setup: moqtImplementation 未指定時は既定値が送信される", () => {
+  const setup = createSetup({});
+  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
+});
+
+// opt-out 時のエンコード・デコード roundtrip
+test("Setup: moqtImplementation=false で roundtrip 時にパラメータ空", () => {
+  const setup = createSetup({ moqtImplementation: false });
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+  assert.equal(decoded.parameters.length, 0);
+  assert.isUndefined(getSetupMoqtImplementation(decoded));
+});
+
+// override 時のエンコード・デコード roundtrip
+test("Setup: moqtImplementation=string で roundtrip 時にカスタム値が維持される", () => {
+  const setup = createSetup({ moqtImplementation: "my-app/1.0" });
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+  assert.equal(getSetupMoqtImplementation(decoded), "my-app/1.0");
+});
+
+// AUTHORIZATION_TOKEN と moqtImplementation=false の組み合わせ
+test("Setup: AUTHORIZATION_TOKEN あり + moqtImplementation=false で TOKEN のみ含まれる", () => {
+  const tokenValue = new TextEncoder().encode("test-token");
+  const setup = createSetup({
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 0n,
+      tokenValue,
+    },
+    moqtImplementation: false,
+  });
+  assert.equal(setup.parameters.length, 1);
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN));
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
+});

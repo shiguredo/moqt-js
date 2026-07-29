@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MOQT_IMPLEMENTATION Setup Option の opt-out / override 機構を追加する
+  - draft-ietf-moq-transport-19 §13.8 に基づき、ConnectOptions に moqtImplementation フィールドを追加する
+  - undefined で既定値送信、false で送信停止、string でカスタム値を送信する
+  - @voluntas
 - [ADD] LOC Object Payload に Private Properties の平文フレーミング API を追加する
   - draft-ietf-moq-loc-04 §2.2 の配置に従い encodeLocObjectPayload / decodeLocObjectPayload を公開する
   - 空 Private は prefix 無しで LOC Payload とビット一致し、非空は暫定ワイヤ（varint length + Private + LOC Payload）とする

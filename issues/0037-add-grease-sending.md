@@ -22,21 +22,22 @@ draft-ietf-moq-transport-19 Section 14 (Grease) で予約されている GREASE 
 ### 仕様根拠
 
 draft-ietf-moq-transport-19 Section 14:
+
 - GREASE 値のパターン: `0x7f * N + 0x9D`（N は非負整数。例: `0x9D`, `0x11C`, `0x19B`, ..., `0x3fffffffffffffde`）
 - 受信側: "implementations MUST handle unknown values gracefully" / "Endpoints MUST NOT close the session solely because they received an unknown value"
 - 送信側: draft-19 本文に送信の SHOULD/MUST はなく、RFC 9170 §3.3 の参照先に委ねられている。送信は任意（opt-in）とする
 
 ### GREASE 予約を持つレジストリ（draft-19 Section 14）
 
-| レジストリ | RFC セクション | 用途 |
-| --- | --- | --- |
-| Setup Options | Section 15.4 | SETUP メッセージのオプション |
-| Properties | Section 15.8 | Track / Object Properties |
-| Session Termination Error Codes | Section 15.11.1 | セッション終了エラー |
-| REQUEST_ERROR Codes | Section 15.11.2 | リクエストエラー |
-| PUBLISH_DONE Codes | Section 15.11.3 | PUBLISH_DONE ステータス |
-| Stream Reset Error Codes | Section 15.11.4 | ストリームリセット |
-| MOQT Auth Token Type | - | 認証トークン種別 |
+| レジストリ                      | RFC セクション  | 用途                         |
+| ------------------------------- | --------------- | ---------------------------- |
+| Setup Options                   | Section 15.4    | SETUP メッセージのオプション |
+| Properties                      | Section 15.8    | Track / Object Properties    |
+| Session Termination Error Codes | Section 15.11.1 | セッション終了エラー         |
+| REQUEST_ERROR Codes             | Section 15.11.2 | リクエストエラー             |
+| PUBLISH_DONE Codes              | Section 15.11.3 | PUBLISH_DONE ステータス      |
+| Stream Reset Error Codes        | Section 15.11.4 | ストリームリセット           |
+| MOQT Auth Token Type            | -               | 認証トークン種別             |
 
 ### 実装スコープ
 

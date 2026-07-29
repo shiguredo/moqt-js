@@ -23,6 +23,7 @@ draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting
 draft-ietf-moq-transport-19 §10.3.1.5: "An endpoint SHOULD send a MOQT_IMPLEMENTATION option unless specifically configured not to do so."
 
 draft-ietf-moq-transport-19 §13.8:
+
 - "Privacy-conscious deployments MAY omit the MOQT_IMPLEMENTATION option entirely or send a generic value."
 - "Implementations MAY provide users with the ability to configure or disable the MOQT_IMPLEMENTATION option."
 

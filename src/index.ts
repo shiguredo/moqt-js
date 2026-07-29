@@ -223,6 +223,7 @@ export async function connect(
   // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
   await session.initialize({
     authorizationToken: options?.authorizationToken,
+    moqtImplementation: options?.moqtImplementation,
   });
 
   return session;
