@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MSF の Authorization Token 自動付与を実装する
+  - draft-ietf-moq-msf-01 §11.4.3 に基づき SubscribeOptions / FetchOptions に authorizationToken フィールドを追加する
+  - MediaSubscriberOptions に authorizationTokenProvider コールバックを追加し catalog の authInfo ベースで自動付与する
+  - @voluntas
 - [ADD] MSF Metrics track の payload を実装する
   - draft-jennings-moq-metrics-02 §3 / draft-ietf-moq-msf-01 §10 に基づき MetricsCaptureObject / MetricsValueObject の encode/decode と Group ID helper を追加する
   - validatePackagingSpecificRules に moqmetrics + role="metrics" の MUST 検証を追加する

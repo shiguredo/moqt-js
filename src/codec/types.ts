@@ -134,6 +134,22 @@ export interface MediaSubscriberOptions {
   // draft-ietf-moq-transport-19 §11.4.2
   // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
   pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
+  /**
+   * Authorization Token プロバイダーコールバック
+   * draft-ietf-moq-msf-01 §11.4.3 (Authorization Token auto-attach)
+   *
+   * catalog の track に authInfo がある場合、subscribe / fetch 時にこのコールバックを呼び出して
+   * トークンを取得し、AUTHORIZATION_TOKEN パラメータとして付与する。
+   * コールバックが undefined を返した場合、トークンなしで subscribe する（エラーはサーバー側で発生）。
+   *
+   * @param authInfo - catalog track の authInfo オブジェクト（スキーム識別子とパラメータを含む）
+   * @param trackName - 対象の track name
+   * @returns 付与する Authorization Token、または undefined（トークン取得失敗・不要時）
+   */
+  authorizationTokenProvider?: (
+    authInfo: import("../msf").AuthInfo,
+    trackName: string,
+  ) => import("../message").AuthorizationToken | undefined;
 }
 
 // MediaSubscriber コールバック
