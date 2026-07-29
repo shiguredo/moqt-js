@@ -16,6 +16,7 @@ import {
   validateForwardValue,
   getParameterLocationValue,
 } from "../message";
+import { encodeAuthorizationToken } from "../message/authorizationToken";
 import { encodeVarint } from "../varint";
 import { TrackPropertyId, type Property } from "../properties";
 
@@ -244,6 +245,15 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
         value: encodeRangeFilter(spec),
       });
     }
+  }
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
+  // draft-ietf-moq-msf-01 §11.4.3: catalog の authInfo を見てトークンを自動付与する
+  if (options?.authorizationToken !== undefined) {
+    parameters.push({
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(options.authorizationToken),
+    });
   }
 
   return parameters;

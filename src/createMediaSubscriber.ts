@@ -617,6 +617,27 @@ class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * catalog track の authInfo を見て Authorization Token を解決する
+   *
+   * draft-ietf-moq-msf-01 §11.4.3:
+   * catalog の track に authInfo がある場合、authorizationTokenProvider コールバックを
+   * 呼び出してトークンを取得する。プロバイダーが未設定または undefined を返した場合は
+   * トークンなしで subscribe する。
+   */
+  private resolveAuthorizationToken(
+    trackInfo: CatalogTrack,
+    trackName: string,
+  ): import("./message").AuthorizationToken | undefined {
+    if (trackInfo.authInfo === undefined) {
+      return undefined;
+    }
+    if (this.options.authorizationTokenProvider === undefined) {
+      return undefined;
+    }
+    return this.options.authorizationTokenProvider(trackInfo.authInfo, trackName);
+  }
+
+  /**
    * メディアトラックを subscribe する
    */
   private async subscribeMediaTracks(): Promise<void> {
@@ -630,19 +651,27 @@ class MediaSubscriberImpl implements MediaSubscriber {
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
-      this.audioSubscriber = await this.session.subscribe(namespace, trackName, {
-        object: (obj) => this.handleAudioObject(obj),
-        end: () => {
-          // トラック終了
+      const authToken = this.resolveAuthorizationToken(this.audioTrackInfo, trackName);
+      this.audioSubscriber = await this.session.subscribe(
+        namespace,
+        trackName,
+        {
+          object: (obj) => this.handleAudioObject(obj),
+          end: () => {
+            // トラック終了
+          },
+          error: (error) => this.callbacks.onError?.(error),
         },
-        error: (error) => this.callbacks.onError?.(error),
-      });
+        authToken ? { authorizationToken: authToken } : undefined,
+      );
     }
 
     // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
+      const authToken = this.resolveAuthorizationToken(this.videoTrackInfo, trackName);
       const subscribeOptions: {
+        authorizationToken?: import("./message").AuthorizationToken;
         joiningFetch?: {
           type: "relative";
           start: bigint;
@@ -651,6 +680,10 @@ class MediaSubscriberImpl implements MediaSubscriber {
           onError?: (error: Error) => void;
         };
       } = {};
+
+      if (authToken) {
+        subscribeOptions.authorizationToken = authToken;
+      }
 
       if (joiningFetchEnabled) {
         // Joining Fetch 有効時は FETCH 完了まで SUBSCRIBE オブジェクトをバッファリング

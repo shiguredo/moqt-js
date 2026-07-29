@@ -3,7 +3,9 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { clampTimeoutMs, matchNamespacePrefix } from "./params";
+import { clampTimeoutMs, matchNamespacePrefix, buildSubscribeParameters } from "./params";
+import { MessageParameterType } from "../message";
+import { AuthorizationTokenAliasType } from "../message/authorizationToken";
 
 // ============================================================================
 // clampTimeoutMs
@@ -83,4 +85,28 @@ test("matchNamespacePrefix: 先頭から不一致の場合は null を返す", (
 test("matchNamespacePrefix: 両方空配列の場合は空 suffix を返す", () => {
   const result = matchNamespacePrefix([], []);
   assert.deepEqual(result, []);
+});
+
+// ============================================================================
+// buildSubscribeParameters - AUTHORIZATION_TOKEN
+// ============================================================================
+
+// draft-ietf-moq-msf-01 §11.4.3: catalog の authInfo を見てトークンを自動付与する
+test("buildSubscribeParameters: authorizationToken 指定時は AUTHORIZATION_TOKEN パラメータが含まれる", () => {
+  const tokenValue = new TextEncoder().encode("test-token");
+  const params = buildSubscribeParameters({
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 0n,
+      tokenValue,
+    },
+  });
+  const authParam = params.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.isDefined(authParam);
+});
+
+test("buildSubscribeParameters: authorizationToken 未指定時は AUTHORIZATION_TOKEN パラメータが含まれない", () => {
+  const params = buildSubscribeParameters({});
+  const authParam = params.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.isUndefined(authParam);
 });

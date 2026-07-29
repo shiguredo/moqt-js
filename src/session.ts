@@ -61,6 +61,7 @@ import {
   getMessageTypeName,
   FetchType,
   MessageParameterType,
+  encodeAuthorizationToken,
   type AuthorizationToken,
   type Location,
   type Parameter,
@@ -526,6 +527,16 @@ export interface SubscribeOptions {
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
    */
   rangeFilters?: RangeFilterSpec[];
+
+  /**
+   * Authorization Token
+   * draft-ietf-moq-transport-19 Section 10.2.2 (AUTHORIZATION_TOKEN Parameter)
+   * draft-ietf-moq-msf-01 §11.4.3 (Authorization Token auto-attach)
+   *
+   * SUBSCRIBE メッセージに AUTHORIZATION_TOKEN パラメータを付与する。
+   * catalog の authInfo を見てトークン取得コールバック経由で取得したトークンを渡す。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -601,6 +612,15 @@ export interface FetchOptions {
    * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
    */
   rangeFilters?: RangeFilterSpec[];
+
+  /**
+   * Authorization Token
+   * draft-ietf-moq-transport-19 Section 10.2.2 (AUTHORIZATION_TOKEN Parameter)
+   * draft-ietf-moq-msf-01 §11.4.3 (Authorization Token auto-attach)
+   *
+   * FETCH メッセージに AUTHORIZATION_TOKEN パラメータを付与する。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -1723,6 +1743,15 @@ export class SessionImpl implements Session {
       fetchMsg.parameters.push({
         type: MessageParameterType.FILL_TIMEOUT,
         value: encodeVarint(options.fillTimeout),
+      });
+    }
+
+    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
+    // draft-ietf-moq-msf-01 §11.4.3: catalog の authInfo を見てトークンを自動付与する
+    if (options.authorizationToken !== undefined) {
+      fetchMsg.parameters.push({
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken(options.authorizationToken),
       });
     }
 
