@@ -16,6 +16,7 @@ import {
 import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { isGreaseValue } from "../grease";
 import { decodeVarint } from "../varint";
 
 // MOQT_IMPLEMENTATION は常に追加される
@@ -216,4 +217,56 @@ test("Setup: AUTHORIZATION_TOKEN あり + moqtImplementation=false で TOKEN の
   assert.equal(setup.parameters.length, 1);
   assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN));
   assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
+});
+
+// draft-ietf-moq-transport-19 Section 14 (Grease):
+// GREASE Setup Option は opt-in で送信する。
+// 受信側は未知の Setup Option を MUST ignore する。
+
+// grease 未指定時は GREASE Setup Option が含まれないことを確認する（既定挙動）
+test("Setup: grease 未指定時は GREASE Setup Option が含まれない", () => {
+  const setup = createSetup();
+  // MOQT_IMPLEMENTATION のみ
+  assert.equal(setup.parameters.length, 1);
+  const greaseParams = setup.parameters.filter((p) => isGreaseValue(BigInt(p.type)));
+  assert.equal(greaseParams.length, 0);
+});
+
+// grease=false 時も GREASE Setup Option が含まれないことを確認する
+test("Setup: grease=false で GREASE Setup Option が含まれない", () => {
+  const setup = createSetup({ grease: false });
+  assert.equal(setup.parameters.length, 1);
+  const greaseParams = setup.parameters.filter((p) => isGreaseValue(BigInt(p.type)));
+  assert.equal(greaseParams.length, 0);
+});
+
+// grease=true で GREASE Setup Option が 1 つ追加されることを確認する
+test("Setup: grease=true で GREASE Setup Option が 1 つ追加される", () => {
+  const setup = createSetup({ grease: true });
+  // MOQT_IMPLEMENTATION + GREASE の 2 つ
+  assert.equal(setup.parameters.length, 2);
+  const greaseParams = setup.parameters.filter((p) => isGreaseValue(BigInt(p.type)));
+  assert.equal(greaseParams.length, 1);
+  // GREASE Setup Option の value は任意のバイト列（空でない）
+  assert.isTrue(greaseParams[0].value.length > 0);
+});
+
+// grease=true 時のエンコード・デコード roundtrip
+test("Setup: grease=true で roundtrip 時に GREASE Option が維持される", () => {
+  const setup = createSetup({ grease: true });
+  const encoded = encodeSetupPayload(setup);
+  const decoded = decodeSetupPayload(encoded);
+  const greaseParams = decoded.parameters.filter((p) => isGreaseValue(BigInt(p.type)));
+  assert.equal(greaseParams.length, 1);
+  // MOQT_IMPLEMENTATION も維持される
+  assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
+});
+
+// grease=true + moqtImplementation=false の組み合わせ
+test("Setup: grease=true + moqtImplementation=false で GREASE のみ含まれる", () => {
+  const setup = createSetup({ grease: true, moqtImplementation: false });
+  assert.equal(setup.parameters.length, 1);
+  const greaseParams = setup.parameters.filter((p) => isGreaseValue(BigInt(p.type)));
+  assert.equal(greaseParams.length, 1);
+  assert.isUndefined(getSetupMoqtImplementation(setup));
 });
