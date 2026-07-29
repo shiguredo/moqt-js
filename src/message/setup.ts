@@ -43,6 +43,15 @@ export interface Setup {
 export function createSetup(options?: {
   authorizationToken?: AuthorizationToken;
   maxAuthTokenCacheSize?: number;
+  /**
+   * MOQT_IMPLEMENTATION Setup Option の制御
+   * draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting)
+   *
+   * - undefined: 既定値 (moqt-js/${version}) を送信する
+   * - false: MOQT_IMPLEMENTATION を送信しない
+   * - string: 指定した値を送信する
+   */
+  moqtImplementation?: string | false;
 }): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
@@ -65,11 +74,20 @@ export function createSetup(options?: {
   }
 
   // MOQT_IMPLEMENTATION (0x07) - Section 10.3.1.5 (MOQT IMPLEMENTATION)
-  // 実装名とバージョンを送信
-  parameters.push({
-    type: SetupOptionType.MOQT_IMPLEMENTATION,
-    value: encoder.encode(MOQT_IMPLEMENTATION_VALUE),
-  });
+  // draft-ietf-moq-transport-19 §13.8: プライバシー緩和のため opt-out / override を許可する
+  // - undefined: 既定値を送信する (§10.3.1.5 の SHOULD に従う)
+  // - false: 送信しない (§13.8 "MAY omit the MOQT_IMPLEMENTATION option entirely")
+  // - string: カスタム値を送信する (§13.8 "or send a generic value")
+  if (options?.moqtImplementation !== false) {
+    const implementationValue =
+      typeof options?.moqtImplementation === "string"
+        ? options.moqtImplementation
+        : MOQT_IMPLEMENTATION_VALUE;
+    parameters.push({
+      type: SetupOptionType.MOQT_IMPLEMENTATION,
+      value: encoder.encode(implementationValue),
+    });
+  }
 
   return {
     type: MessageType.SETUP,

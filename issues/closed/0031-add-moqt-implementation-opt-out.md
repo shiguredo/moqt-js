@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-03-16
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-30
 - Model: manual
 - Branch: feature/add-moqt-implementation-opt-out
 - Polished: 2026-07-30
@@ -23,6 +23,7 @@ draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting
 draft-ietf-moq-transport-19 §10.3.1.5: "An endpoint SHOULD send a MOQT_IMPLEMENTATION option unless specifically configured not to do so."
 
 draft-ietf-moq-transport-19 §13.8:
+
 - "Privacy-conscious deployments MAY omit the MOQT_IMPLEMENTATION option entirely or send a generic value."
 - "Implementations MAY provide users with the ability to configure or disable the MOQT_IMPLEMENTATION option."
 
