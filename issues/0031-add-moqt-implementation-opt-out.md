@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-03-16
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-30
 - Model: manual
 - Branch: feature/add-moqt-implementation-opt-out
 - Polished: 2026-07-30
