@@ -5,7 +5,7 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/add-msf-log-track-payload
-- Polished: 2026-07-27
+- Polished: 2026-07-30
 
 ## 目的
 
@@ -17,18 +17,18 @@ catalog 宣言だけだと publishTracks を読んだ subscriber が実際のロ
 
 ## 現状
 
-- `PackagingType` に `"moqlog"` あり (`src/msf.ts:50`)。`RESERVED_TRACK_ROLES` に `"log"` あり (`src/msf.ts:76`)
+- `PackagingType` に `"moqlog"` あり (`src/msf.ts`)。`RESERVED_TRACK_ROLES` に `"log"` あり (`src/msf.ts`)
 - `#0316` (closed) で catalog 上の declare 型まで対応。payload は範囲外のまま
-- msf-01 §9.1: payload は [MOQLOG] Section 4 の JSON (L3118 MUST 参照)
-- msf-01 §9.2: namespace / track name 形式。**§9.2 には "TODO: Finalize on track naming" (L3123) があり未確定**。本文は [MOQLOG] Section 3 の形式を MUST とする
-- msf-01 §9.3: Group ID = timestamp を 62-bit に truncate（**Unix epoch からのマイクロ秒**、L3143-3145）。Object ID = 同一マイクロ秒内で連番
+- msf-01 §9.1: payload は [MOQLOG] Section 4 の JSON (MUST 参照)
+- msf-01 §9.2: namespace / track name 形式。**§9.2 には "TODO: Finalize on track naming" があり未確定**。本文は [MOQLOG] Section 3 の形式を MUST とする
+- msf-01 §9.3: Group ID = timestamp を 62-bit に truncate（**Unix epoch からのマイクロ秒**）。Object ID = 同一マイクロ秒内で連番
 - msf-01 §9.4: packaging="moqlog" + role="log" の双方 MUST
 - [MOQLOG] §4: payload は全フィールド optional の JSON object (severity / timestamp / pri / hostname / appname / procid / msgid / msg + 未知フィールドは structured data)
 - [MOQLOG] §3: Track Name は log priority level の 1 バイト (0=Emergency 〜 7=Debug)。payload の severity 文字列 ("Emergency"〜"Debug") と Track Name のバイナリ優先度は syslog severity 規約で対応する
 - 一次資料: `refs/moq/draft-jennings-moq-log-03.txt`（**Expires: 2026-04-23 で期限切れ**。後継 draft なし。msf-01 が MUST 参照するため現時点で最新の参照仕様）
 - **timestamp epoch の矛盾**: [MOQLOG] §4 は payload timestamp を "microseconds since 1 Jan 1972 (NTP Era zero)" と定義するが、msf-01 §9.3 は Group ID を "microseconds since the Unix epoch (1970)" と定義する。[MOQLOG] §7 の例も本文と数値が不整合（timestamp=3155587200 は 1900 起点の秒としか一致しない）。本 issue では **Group ID は msf-01 §9.3 に従い Unix epoch マイクロ秒**、**payload timestamp は [MOQLOG] §4 の記述に従う**（[MOQLOG] 内部の不整合は実装時にコードコメントで注記する）
-- `validatePackagingSpecificRules` (`src/msf.ts:1423-1469`) は `mediatimeline` / `eventtimeline` のみ処理し、`moqlog` 分岐は未実装
-- 既存の `createInitialGroupId()` (`src/msf.ts:2469`) はメディアトラック用の `Date.now()` ベースであり、Log track の timestamp ベース Group ID とは意味が異なる
+- `validatePackagingSpecificRules` (`src/msf.ts`) は `mediatimeline` / `eventtimeline` のみ処理し、`moqlog` 分岐は未実装
+- 既存の `createInitialGroupId()` (`src/msf.ts`) はメディアトラック用の `Date.now()` ベースであり、Log track の timestamp ベース Group ID とは意味が異なる
 
 ## 設計方針
 
@@ -46,7 +46,7 @@ catalog 宣言だけだと publishTracks を読んだ subscriber が実際のロ
 - §9.2 の namespace / track name helper がある（暫定対応である旨をコードコメントに明記）
 - `validatePackagingSpecificRules` に `moqlog` + `role: "log"` の MUST 検証がある
 - `CHANGES.md` の `## develop` に `[ADD]` を追記する
-- `vp run test` / `vp run build` が pass する
+- `vp test run` / `vp build` が pass する
 
 ## 関連
 
