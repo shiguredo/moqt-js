@@ -11,6 +11,9 @@
 
 ## develop
 
+- [CHANGE] MSF URI fragment の connection による transport 選択を適用する
+  - draft-ietf-moq-msf-01 §11.1.1 に基づき connect() で connection=q 時に Native QUIC 未実装エラーを返す
+  - @voluntas
 - [CHANGE] 未知 Catalog field を Variable Substitution 対象にする
   - draft-ietf-moq-msf-01 §5.4 に基づき validateCatalog の未知 field 保持と resolveCatalogVariables の再帰的置換を追加する
   - @voluntas

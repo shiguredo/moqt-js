@@ -7,6 +7,7 @@
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 import { normalizeMoqtUri } from "./moqtUri";
+import { parseMsfFragmentValue, getConnectionParameter } from "./msf";
 
 // MOQT URI / Fragment Identifier (draft-ietf-moq-transport-19 §3.1.1 / §3.1.2)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
@@ -201,6 +202,18 @@ export async function connect(
   options?: ConnectOptions,
 ): Promise<Session> {
   const { url: httpsUrl, fragment } = normalizeMoqtUri(url);
+
+  // draft-ietf-moq-msf-01 §11.1.1: connection=q|wt は transport 選択を強制する
+  // connection=q は Native QUIC 未実装のため明確にエラーとする
+  if (fragment && fragment.type === "msf") {
+    const msfFragment = parseMsfFragmentValue(fragment.value);
+    const connection = getConnectionParameter(msfFragment.parameters);
+    if (connection === "q") {
+      throw new Error(
+        "native QUIC connection is not supported: connection=q requires Native QUIC transport, but moqt-js only supports WebTransport",
+      );
+    }
+  }
 
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
