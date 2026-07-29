@@ -4,39 +4,39 @@
 - Created: 2026-06-04
 - Model: qwen3.7-plus
 - Branch: feature/refactor-session-module-split
-- Polished: 2026-06-20
+- Polished: 2026-07-30
 - Updated: 2026-07-24
 
 ## 目的
 
-`session.ts` (4863 行) の `SessionImpl` に集中している責務を、既存の `src/session/` 配下に追加分割し、保守性・可読性・テスト容易性を向上させる。
+`session.ts` の `SessionImpl` に集中している責務を、既存の `src/session/` 配下に追加分割し、保守性・可読性・テスト容易性を向上させる。
 
 ## 優先度根拠
 
-`SessionImpl` (`src/session.ts:901-4863`、約 3962 行) に多数の責務が集中しており、可読性・差分レビュー・テストのしやすさを損なう。ただし直接の不具合ではなく、後方互換を保つ純粋なリファクタのため Medium。
+`SessionImpl` (`src/session.ts` の大部分) に多数の責務が集中しており、可読性・差分レビュー・テストのしやすさを損なう。ただし直接の不具合ではなく、後方互換を保つ純粋なリファクタのため Medium。
 
 ## 現状
 
 ### 既に分割済み (`src/session/`)
 
-- `bidi.ts` (1163 行): 双方向ストリーム上の request/response 処理。`BidiSessionInternal` インターフェース経由で `SessionImpl` の状態にアクセスする free function 群。`bidiReadRequestStreamMessages` は role 引数 (`"publish" | "subscribe"`) を受け取る
-- `stream.ts` (245 行): 受信データストリーム処理の純粋ヘルパー（統計更新・`handleObject` はコールバック経由）。`processSubgroupObjects` は `SubscriberImpl[]` を受け取り同一 alias の全 subscription に配送する
-- `params.ts` (482 行): WebTransport や状態に依存しない純粋関数群 (PBT 対象)。`buildSubscribeTracksParameters` / `rangeFilterTypeToParamType` を含む
-- `errors.ts` (56 行): read loop の catch から使うエラー判定純関数 (`isSessionClosedError` / `toProtocolViolationSessionError`)
+- `bidi.ts`: 双方向ストリーム上の request/response 処理。`BidiSessionInternal` インターフェース経由で `SessionImpl` の状態にアクセスする free function 群。`bidiReadRequestStreamMessages` は role 引数 (`"publish" | "subscribe"`) を受け取る
+- `stream.ts`: 受信データストリーム処理の純粋ヘルパー（統計更新・`handleObject` はコールバック経由）。`processSubgroupObjects` は `SubscriberImpl[]` を受け取り同一 alias の全 subscription に配送する
+- `params.ts`: WebTransport や状態に依存しない純粋関数群 (PBT 対象)。`buildSubscribeTracksParameters` / `rangeFilterTypeToParamType` を含む
+- `errors.ts`: read loop の catch から使うエラー判定純関数 (`isSessionClosedError` / `toProtocolViolationSessionError`)
 
 ### `session.ts` に残存している `SessionImpl` の責務
 
-- 状態フィールド群 (`src/session.ts:901-1100`): `sessionState` / `transport` / 制御ストリーム / `nextRequestId` / 多数の Map (`publishers` / `subscribers` / `subscribersByAlias` (`Map<bigint, SubscriberImpl[]>`) / `fetchers` / `pending*` / `namespaceSubscriptions` / `tracksSubscriptions` / `namespacePublications` / `publisherStreams` / `publisherSendQueues` / `closedSubgroups`) / 統計カウンタ群 / `datagramWriter` / `callbacks` / `peerMaxRequestUpdates` / `peerMaxFilterRanges`
-- `initialize` (1181): 制御ストリーム確立と SETUP 送受信。ピアの MAX_REQUEST_UPDATES / MAX_FILTER_RANGES をフィールドに保持する
-- 公開 API: `publish` (1363) / `subscribe` (1472) / `fetch` (1627) / `trackStatus` (1726) / `subscribeNamespace` (1793) / `subscribeTracks` (1878) / `publishNamespace` (2424) / `goaway` (2679) / `close` (2760) / `getStatistics` (2728)
-- 内部ループ群: `startControlMessageLoop` (3571) / `startIncomingStreamLoop` (3871) / `startDatagramLoop` (3905)
-- namespace 系ストリームループ 3 種: `startNamespaceStreamLoop` (2003) / `startTracksStreamLoop` (2234) / `startNamespacePublicationStreamLoop` (2505)
-- 送信系: `sendObject` (3069) / `sendObjectInternal` (3099) / `closePublisherStream` (3264) / `closePublisherStreamInternal` (3273) / `sendDatagram` (3326) / `getDatagramWriter` (3317) / `sendPublishDone` (3389)
-- 受信系: `handleIncomingDatagram` (4358) / `handleIncomingStream` (4465) / `handleSubgroupStream` (4737) / `waitForFetcher` (4426)
-- 内部ヘルパ: `closeWithError` (2962) / `notifyErrorIfActive` (2976) / `emitDebug` (2987) / `sendControlMessage` (3005) / `sendRequestOnBidiStream` (3037) / `handleGoawayOnNamespaceStream` (1967) / `handleControlMessage` (3622)
-- 統計ラッパー: `processFetchObjects` (4677) / `processSubgroupObjects` (4708) — 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ
-- ファクトリメソッド: `createNamespaceSubscription` (3720) / `createTracksSubscription` (3770) / `createNamespacePublication` (3817)
-- close メソッド: `closeNamespaceSubscription` (3745) / `closeTracksSubscription` (3795) / `closeNamespacePublication` (3853)
+- 状態フィールド群: `sessionState` / `transport` / 制御ストリーム / `nextRequestId` / 多数の Map (`publishers` / `subscribers` / `subscribersByAlias` (`Map<bigint, SubscriberImpl[]>`) / `fetchers` / `pending*` / `namespaceSubscriptions` / `tracksSubscriptions` / `namespacePublications` / `publisherStreams` / `publisherSendQueues` / `closedSubgroups`) / 統計カウンタ群 / `datagramWriter` / `callbacks` / `peerMaxRequestUpdates` / `peerMaxFilterRanges`
+- `initialize`: 制御ストリーム確立と SETUP 送受信。ピアの MAX_REQUEST_UPDATES / MAX_FILTER_RANGES をフィールドに保持する
+- 公開 API: `publish` / `subscribe` / `fetch` / `trackStatus` / `subscribeNamespace` / `subscribeTracks` / `publishNamespace` / `goaway` / `close` / `getStatistics`
+- 内部ループ群: `startControlMessageLoop` / `startIncomingStreamLoop` / `startDatagramLoop`
+- namespace 系ストリームループ 3 種: `startNamespaceStreamLoop` / `startTracksStreamLoop` / `startNamespacePublicationStreamLoop`
+- 送信系: `sendObject` / `sendObjectInternal` / `closePublisherStream` / `closePublisherStreamInternal` / `sendDatagram` / `getDatagramWriter` / `sendPublishDone`
+- 受信系: `handleIncomingDatagram` / `handleIncomingStream` / `handleSubgroupStream` / `waitForFetcher`
+- 内部ヘルパ: `closeWithError` / `notifyErrorIfActive` / `emitDebug` / `sendControlMessage` / `sendRequestOnBidiStream` / `handleGoawayOnNamespaceStream` / `handleControlMessage`
+- 統計ラッパー: `processFetchObjects` / `processSubgroupObjects` — 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ
+- ファクトリメソッド: `createNamespaceSubscription` / `createTracksSubscription` / `createNamespacePublication`
+- close メソッド: `closeNamespaceSubscription` / `closeTracksSubscription` / `closeNamespacePublication`
 
 ## 設計方針
 
@@ -163,7 +163,7 @@ const unsubscribe = async (): Promise<void> => {
 
 ### `handleSubgroupStream` 抽出に関する判断
 
-`handleSubgroupStream` (4737-4863) は本リファクタでは **`SessionImpl` に残す**。
+`handleSubgroupStream` は本リファクタでは **`SessionImpl` に残す**。
 
 根拠:
 
@@ -174,20 +174,20 @@ const unsubscribe = async (): Promise<void> => {
 
 ### `handleIncomingStream` 抽出に関する判断
 
-`handleIncomingStream` (3826-4031) は **`SessionImpl` に残す**。
+`handleIncomingStream` は **`SessionImpl` に残す**。
 
 根拠:
 
-- `handleIncomingStream` は subgroup ストリームを検出すると `this.handleSubgroupStream(reader, header, initialPayloadBuffer)` を呼び出す (session.ts:4737)。`handleSubgroupStream` は本リファクタで `SessionImpl` に残すため、`handleIncomingStream` を free function 化するとこの呼び出し経路を `SessionInternal` 経由で露出する必要があり、interface が不必要に肥大化する
+- `handleIncomingStream` は subgroup ストリームを検出すると `this.handleSubgroupStream(reader, header, initialPayloadBuffer)` を呼び出す。`handleSubgroupStream` は本リファクタで `SessionImpl` に残すため、`handleIncomingStream` を free function 化するとこの呼び出し経路を `SessionInternal` 経由で露出する必要があり、interface が不必要に肥大化する
 - `handleIncomingStream` は fetch / subgroup / padding / 未知ストリームの 4 分岐と 2 重の while ループを持つ複合ロジックであり、分岐先に対する状態管理が密結合している。特に `waitForFetcher` の Promise 制御と `handleSubgroupStream` の非同期呼び出しの順序保証を free function 化で維持するのは困難
 
 この判断により、`incoming.ts` の抽出範囲は後述の抽出単位テーブルに従う。
 
 ### `processSubgroupObjects` ラッパー抽出の影響
 
-`processSubgroupObjects` ラッパー (session.ts:4708) は現在 `this.processSubgroupObjects(...)` として `SessionImpl` の private メソッドだが、`incoming.ts` に free function として抽出する。`SessionImpl` に残る `handleSubgroupStream` からの呼び出しは `processSubgroupObjects(session, ...)` に変更される。
+`processSubgroupObjects` ラッパーは現在 `this.processSubgroupObjects(...)` として `SessionImpl` の private メソッドだが、`incoming.ts` に free function として抽出する。`SessionImpl` に残る `handleSubgroupStream` からの呼び出しは `processSubgroupObjects(session, ...)` に変更される。
 
-同様に `processFetchObjects` ラッパー (session.ts:4677) も `incoming.ts` に抽出し、`SessionImpl` に残る `handleIncomingStream` からの呼び出しは `processFetchObjects(session, ...)` に変更される。
+同様に `processFetchObjects` ラッパーも `incoming.ts` に抽出し、`SessionImpl` に残る `handleIncomingStream` からの呼び出しは `processFetchObjects(session, ...)` に変更される。
 
 いずれの変更も純粋な呼び出し形式の変更であり、ロジックは変わらない。
 
@@ -240,7 +240,7 @@ impl.onSendPublishDone = () => publishSendPublishDone(sessionRef, impl);
 
 このパターンは既存の `bidi.ts` 抽出時に `SessionImpl` が `bidi*` free function を import してコールバックに設定したのと同様である。
 
-- `publisherSendQueues` による Promise チェーン排他制御: `sendObject` と `closePublisherStream` は同一の `publisherSendQueues` Map に対して `.catch(() => {})` → `.then(...)` のパターンでシリアライズを行う。両 free function とも `session.publisherSendQueues` を介して同一のパターンでチェーンを構築することで、同一トラックの逐次実行を保証する。これは draft-ietf-moq-transport-19 §2.2 の「Objects from the same Subgroup MUST NOT be sent on different streams」を実装するための要件である
+- `publisherSendQueues` による Promise チェーン排他制御: `sendObject` と `closePublisherStream` は同一の `publisherSendQueues` Map に対して `.catch(() => {})` → `.then(...)` のパターンでシリアライズを行う。両 free function とも `session.publisherSendQueues` を介して同一のパターンでチェーンを構築することで、同一トラックの逐次実行を保証する。これは draft-ietf-moq-transport-19 §2.2 の「Objects from the same Subgroup MUST NOT be sent on different streams, unless one of the streams was reset prematurely, or upstream conditions have forced objects from a Subgroup to be sent out of Object ID order」を実装するための要件である
 
 ## 仕様書参照
 
