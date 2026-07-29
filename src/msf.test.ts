@@ -155,7 +155,7 @@ test("Catalog: encodeCatalog の JSON フィールド順序は version→...→t
     version: "draft-01",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
     initDataList: [{ id: "v-init", type: "inline", data: "AQID" }],
-    publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
   const json = new TextDecoder().decode(encodeCatalog(catalog));
   const tracksAt = json.indexOf('"tracks"');
@@ -180,7 +180,7 @@ test("Catalog: tracks と publishTracks の合算 uniqueness は行わない (su
   const catalog: Catalog = {
     version: "draft-01",
     tracks: [{ name: "log", packaging: "loc", isLive: true }],
-    publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
   const encoded = encodeCatalog(catalog);
   // round-trip が成立する = 例外なくデコードされる
@@ -194,8 +194,8 @@ test("Catalog: publishTracks 配列内の name uniqueness 違反は reject (§5.
     version: "draft-01",
     tracks: [],
     publishTracks: [
-      { name: "log", packaging: "moqlog", isLive: true },
-      { name: "log", packaging: "moqlog", isLive: true },
+      { name: "log", packaging: "moqlog", role: "log", isLive: true },
+      { name: "log", packaging: "moqlog", role: "log", isLive: true },
     ],
   };
   assert.throws(() => decodeCatalogMessage(encodeRaw(catalog)), /duplicate track name 'log'/);
@@ -357,6 +357,7 @@ test("Catalog: publishTracks では connectionUri を許可", () => {
       {
         name: "log",
         packaging: "moqlog",
+        role: "log",
         isLive: true,
         connectionUri: "moqt://logs.example.com:4443",
         token: "abc",

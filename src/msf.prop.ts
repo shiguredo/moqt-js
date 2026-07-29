@@ -209,6 +209,12 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
     const { latencyBuffersMode, latencyValue, buffersValue, encryptionMode, ...base } =
       raw as Record<string, unknown>;
     const track = { ...base } as unknown as CatalogTrack;
+    // msf-01 §9.4 / §10.4: moqlog / moqmetrics は role MUST
+    if (track.packaging === "moqlog") {
+      track.role = "log";
+    } else if (track.packaging === "moqmetrics") {
+      track.role = "metrics";
+    }
     if (latencyBuffersMode === "latency") {
       track.targetLatency = latencyValue as number;
     } else if (latencyBuffersMode === "buffers") {
