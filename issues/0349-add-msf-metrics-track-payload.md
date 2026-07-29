@@ -5,7 +5,7 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/add-msf-metrics-track-payload
-- Polished: 2026-07-27
+- Polished: 2026-07-30
 
 ## 目的
 
@@ -17,20 +17,20 @@ Log track と同様、catalog 宣言だけでは定量メトリクスを送れ�
 
 ## 現状
 
-- `PackagingType` に `"moqmetrics"` あり (`src/msf.ts:50`)。`RESERVED_TRACK_ROLES` に `"metrics"` あり (`src/msf.ts:76`)
+- `PackagingType` に `"moqmetrics"` あり (`src/msf.ts`)。`RESERVED_TRACK_ROLES` に `"metrics"` あり (`src/msf.ts`)
 - `#0316` (closed) で catalog 上の declare 型まで対応。payload は範囲外のまま
-- msf-01 §10.1: payload は [MOQMETRICS] Section 3 の形式 (L3186-3187 MUST 参照)。データモデルは Resource / Attributes / Metrics (Gauge / Counter、float64 または int64)
-- msf-01 §10.2: namespace / track name 形式。**§10.2 には "TODO: Finalize the track naming" (L3199) があり未確定**。本文は [MOQMETRICS] Section 3 の形式を MUST とする
-- msf-01 §10.3: Group ID = capture time を **Unix epoch からのミリ秒** で表す (L3214-3215)。Object ID 0 = capture timestamp (Unix epoch **ナノ秒**) + attributes、Object ID 1 以降 = metric name-value pair
+- msf-01 §10.1: payload は [MOQMETRICS] Section 3 の形式 (MUST 参照)。データモデルは Resource / Attributes / Metrics (Gauge / Counter、float64 または int64)
+- msf-01 §10.2: namespace / track name 形式。**§10.2 には "TODO: Finalize the track naming" があり未確定**。本文は [MOQMETRICS] Section 3 の形式を MUST とする
+- msf-01 §10.3: Group ID = capture time を **Unix epoch からのミリ秒** で表す。Object ID 0 = capture timestamp (Unix epoch **ナノ秒**) + attributes、Object ID 1 以降 = metric name-value pair
 - msf-01 §10.4: packaging="moqmetrics" + role="metrics" の双方 MUST
-- [MOQMETRICS] §2: データモデル定義。**"TODO: Define ABNF" (L140) があり正式な ABNF は未定義**
-- [MOQMETRICS] §3: Group ID = "milliseconds since 1 Jan 1972 (NTP Era zero)" を 62-bit に truncate (L242-244)。Object 0 capture timestamp = Unix epoch ナノ秒 (L247-248)
+- [MOQMETRICS] §2: データモデル定義。**"TODO: Define ABNF" があり正式な ABNF は未定義**
+- [MOQMETRICS] §3: Group ID = "milliseconds since 1 Jan 1972 (NTP Era zero)" を 62-bit に truncate。Object 0 capture timestamp = Unix epoch ナノ秒
 - 一次資料: `refs/moq/draft-jennings-moq-metrics-02.txt`（**Expires: 2026-04-23 で期限切れ**。後継 draft なし。msf-01 が MUST 参照するため現時点で最新の参照仕様）
 - **Group ID epoch の矛盾**: [MOQMETRICS] §3 は Group ID を "milliseconds since 1 Jan 1972 (NTP Era zero)" と定義するが、msf-01 §10.3 は "milliseconds since January 1, 1970 (Unix epoch)" と定義する。本 issue では **Group ID は msf-01 §10.3 に従い Unix epoch ミリ秒** とする
 - **Group ID と Object 0 timestamp の単位不一致**: Group ID はミリ秒、Object 0 capture timestamp はナノ秒。単位が 10^6 倍異なる。実装時に相互変換が必要（コードコメントで注記する）
-- [MOQMETRICS] §3.1 の JSON 例には構文誤りあり（L344 `value: 99` キー引用符なし、L358 JSON 内コメント）。テストベクタとして使用する場合は修正が必要
-- `validatePackagingSpecificRules` (`src/msf.ts:1423-1469`) は `mediatimeline` / `eventtimeline` のみ処理し、`moqmetrics` 分岐は未実装
-- 既存の `createInitialGroupId()` (`src/msf.ts:2469`) はメディアトラック用の `Date.now()` ベースであり、Metrics track の timestamp ベース Group ID とは意味が異なる
+- [MOQMETRICS] §3.1 の JSON 例には構文誤りあり（`value: 99` キー引用符なし、JSON 内コメント）。テストベクタとして使用する場合は修正が必要
+- `validatePackagingSpecificRules` (`src/msf.ts`) は `mediatimeline` / `eventtimeline` のみ処理し、`moqmetrics` 分岐は未実装
+- 既存の `createInitialGroupId()` (`src/msf.ts`) はメディアトラック用の `Date.now()` ベースであり、Metrics track の timestamp ベース Group ID とは意味が異なる
 
 ## 設計方針
 
@@ -48,7 +48,7 @@ Log track と同様、catalog 宣言だけでは定量メトリクスを送れ�
 - §10.2 の namespace / track name helper がある（暫定対応である旨をコードコメントに明記）
 - `validatePackagingSpecificRules` に `moqmetrics` + `role: "metrics"` の MUST 検証がある
 - `CHANGES.md` の `## develop` に `[ADD]` を追記する
-- `vp run test` / `vp run build` が pass する
+- `vp test run` / `vp build` が pass する
 
 ## 関連
 
