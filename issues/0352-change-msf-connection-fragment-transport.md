@@ -5,11 +5,11 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/change-msf-connection-fragment-transport
-- Polished: 2026-07-27
+- Polished: 2026-07-30
 
 ## 目的
 
-draft-ietf-moq-msf-01 §11.1.1 の `connection=q|wt` は Native QUIC / WebTransport の選択を示す。"connection - mandates the client to use a particular connection type when connecting to the server. There are two allowed values - 'q' or 'wt'. 'q' indicates that a Native QUIC connection MUST be used. 'wt' indicates that a WebTransport connection MUST be used." (refs L3463-3466)。`getConnectionParameter` は実装済みだが、接続 API への強制適用は未配線である (`#0316` で helper まで)。
+draft-ietf-moq-msf-01 §11.1.1 の `connection=q|wt` は Native QUIC / WebTransport の選択を示す。"connection - mandates the client to use a particular connection type when connecting to the server. There are two allowed values - 'q' or 'wt'. 'q' indicates that a Native QUIC connection MUST be used. 'wt' indicates that a WebTransport connection MUST be used."。`getConnectionParameter` は実装済みだが、接続 API への強制適用は未配線である (`#0316` で helper まで)。
 
 ## 優先度根拠
 
@@ -17,10 +17,10 @@ fragment で `connection=q` と指定してもサイレントに無視され、W
 
 ## 現状
 
-- `parseMsfFragmentValue` / `getConnectionParameter` (`src/msf.ts:2352` 付近) は `"q"` / `"wt"` を返す。`q` / `wt` 以外は `undefined` を返す（silent ignore）
+- `parseMsfFragmentValue` / `getConnectionParameter` (`src/msf.ts`) は `"q"` / `"wt"` を返す。`q` / `wt` 以外は `undefined` を返す（silent ignore）
 - 高レベル API の connect は WebTransport 前提で、`connection` 値を見て分岐・拒否しない
-- `connect()` (`src/index.ts:198` 付近) 内で `normalizeMoqtUri(url)` が fragment を解析済み (`src/index.ts:203`)。`new WebTransport(httpsUrl, transportOptions)` は `src/index.ts:212` で無条件実行
-- `SessionImpl.fragment` (`src/session.ts:813`) に `MoqtFragment | null` が既に公開されている
+- `connect()` (`src/index.ts`) 内で `normalizeMoqtUri(url)` が fragment を解析済み。`new WebTransport(httpsUrl, transportOptions)` は無条件実行
+- `SessionImpl.fragment` (`src/session.ts`) に `MoqtFragment | null` が既に公開されている
 - reserved key のうち range / c4m helper は `#0356`。本 issue は `connection` の transport 適用のみ
 
 ## 設計方針
@@ -37,7 +37,7 @@ fragment で `connection=q` と指定してもサイレントに無視され、W
 - `connection=q` (Native QUIC 未実装時) で失敗理由が分かるエラーになる
 - テストがある
 - `CHANGES.md` の `## develop` に `[CHANGE]` を追記する
-- `vp run test` / `vp run build` が pass する
+- `vp test run` / `vp build` が pass する
 
 ## 関連
 
