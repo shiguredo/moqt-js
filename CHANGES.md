@@ -11,6 +11,9 @@
 
 ## develop
 
+- [CHANGE] 未知 Catalog field を Variable Substitution 対象にする
+  - draft-ietf-moq-msf-01 §5.4 に基づき validateCatalog の未知 field 保持と resolveCatalogVariables の再帰的置換を追加する
+  - @voluntas
 - [CHANGE] LOC Properties を draft-ietf-moq-loc-04 に追従する
   - Property ID を §6.1 Table 1 に合わせる (TIMESTAMP=0x10 / VIDEO_FRAME_MARKING=0x09 / AUDIO_LEVEL=0x0C 等)
   - VIDEO_FRAME_MARKING を length + bytes 形式にし、AUDIO_CONFIG (0x0F) を追加する
