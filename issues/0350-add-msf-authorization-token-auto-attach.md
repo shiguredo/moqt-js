@@ -5,7 +5,7 @@
 - Completed: YYYY-MM-DD
 - Model: Composer
 - Branch: feature/add-msf-authorization-token-auto-attach
-- Polished: 2026-07-27
+- Polished: 2026-07-30
 
 ## 目的
 
@@ -20,11 +20,11 @@ draft-ietf-moq-msf-01 §5.2.42 `authInfo` / §11.4.3 では、catalog が認可�
 ## 現状
 
 - `CatalogTrack.authInfo` / `token` / `connectionUri` は型・MUST 検証済み (`src/msf.ts`)
-- `createMediaPublisher` / `createMediaSubscriber` の `authorizationToken` は **接続オプション** として SETUP に載せる用途 (`src/createMediaSubscriber.ts:374-375` 付近)
+- `createMediaPublisher` / `createMediaSubscriber` の `authorizationToken` は **接続オプション** として SETUP に載せる用途 (`src/createMediaSubscriber.ts` 付近)
 - catalog の `authInfo` を読んでトラック subscribe 時に AUTHORIZATION_TOKEN パラメータを付与する経路は無い
-- `SubscribeOptions` (`src/session.ts:405-510`) / `FetchOptions` (`src/session.ts:561-`) に `authorizationToken` フィールドは **無い**
-- `buildSubscribeParameters` (`src/session/params.ts:163-250`) / `buildFetchParameters` は AUTHORIZATION_TOKEN を **一切送出しない**
-- wire 層のみ存在: `MessageParameterType.AUTHORIZATION_TOKEN=0x03` (`src/message/types.ts:140`)、encoding `"length-prefixed"` (`src/message/parameter.ts:598`)、scope 許可 (`src/message/parameterScope.ts:21,104`)
+- `SubscribeOptions` (`src/session.ts`) / `FetchOptions` (`src/session.ts`) に `authorizationToken` フィールドは **無い**
+- `buildSubscribeParameters` (`src/session/params.ts`) / `buildFetchParameters` は AUTHORIZATION_TOKEN を **一切送出しない**
+- wire 層のみ存在: `MessageParameterType.AUTHORIZATION_TOKEN=0x03` (`src/message/types.ts`)、encoding `"length-prefixed"` (`src/message/parameter.ts`)、scope 許可 (`src/message/parameterScope.ts`)
 - `#0316` 範囲外: 「§11.4.3 Authorization Token の SUBSCRIBE / SUBSCRIBE_NAMESPACE / FETCH / REQUEST_UPDATE / PUBLISH / PUBLISH_NAMESPACE への MUST 自動付与」
 
 ## 設計方針
@@ -42,7 +42,7 @@ draft-ietf-moq-msf-01 §5.2.42 `authInfo` / §11.4.3 では、catalog が認可�
 - トークン欠落時のエラーが呼び出し元に伝わる
 - 選択した認可スキーム 1 つ以上の単体 / 結合テストがある
 - `CHANGES.md` の `## develop` に `[ADD]` を追記する
-- `vp run test` / `vp run build` が pass する
+- `vp test run` / `vp build` が pass する
 
 ### 範囲外
 
