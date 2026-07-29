@@ -1461,6 +1461,13 @@ function validatePackagingSpecificRules(
         `invalid track '${name}': moqlog track must have role='log' per §9.4, got '${track.role ?? "(absent)"}'`,
       );
     }
+  } else if (packaging === "moqmetrics") {
+    // msf-01 §10.4: packaging="moqmetrics" + role="metrics" の双方 MUST
+    if (track.role !== "metrics") {
+      throw new Error(
+        `invalid track '${name}': moqmetrics track must have role='metrics' per §10.4, got '${track.role ?? "(absent)"}'`,
+      );
+    }
   }
 
   // packaging に対する MUST NOT 検証。

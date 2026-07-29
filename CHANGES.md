@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MSF Metrics track の payload を実装する
+  - draft-jennings-moq-metrics-02 §3 / draft-ietf-moq-msf-01 §10 に基づき MetricsCaptureObject / MetricsValueObject の encode/decode と Group ID helper を追加する
+  - validatePackagingSpecificRules に moqmetrics + role="metrics" の MUST 検証を追加する
+  - @voluntas
 - [ADD] MSF Log track の payload を実装する
   - draft-jennings-moq-log-03 §4 / draft-ietf-moq-msf-01 §9 に基づき LogEntry encode/decode と Group ID helper を追加する
   - validatePackagingSpecificRules に moqlog + role="log" の MUST 検証を追加する
