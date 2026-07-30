@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-30
 - Model: Composer
 - Branch: feature/add-msf-fragment-reserved-key-helpers
 - Polished: 2026-07-27
@@ -25,12 +25,12 @@ draft-ietf-moq-msf-01 §11.1.1 の reserved fragment parameters のうち、`con
 
 `parameters` から取得。`msf.ts` に追加（`export * from "./msf"` で公開）。不正値はそのエントリをスキップして走査を続行する（throw しない。有効なエントリだけを配列に含める）。start 省略形（例: `-200`）は不正値としてスキップする。
 
-| 関数                 | 戻り値                                                                                              |
-| -------------------- | --------------------------------------------------------------------------------------------------- |
+| 関数                 | 戻り値                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `getWallclockRanges` | `{ start: number; end?: number }[]`（出現順 = union。wallclock ms は `MediaTimelineTemplate` と同じ `number`） |
-| `getMediatimeRanges` | 同上（mediatime ms も `number`）                                                                     |
-| `getLocationRanges`  | `{ start: { groupId: bigint; objectId?: bigint }; end?: { groupId: bigint; objectId?: bigint } }[]` |
-| `getC4mParameter`    | `string \| undefined`（最初の `c4m`。base64 文字列のまま。検証しない。検証は C4M 利用時 / `#0350`） |
+| `getMediatimeRanges` | 同上（mediatime ms も `number`）                                                                               |
+| `getLocationRanges`  | `{ start: { groupId: bigint; objectId?: bigint }; end?: { groupId: bigint; objectId?: bigint } }[]`            |
+| `getC4mParameter`    | `string \| undefined`（最初の `c4m`。base64 文字列のまま。検証しない。検証は C4M 利用時 / `#0350`）            |
 
 `getLocationRanges` の期待戻り値（仕様例を固定）:
 

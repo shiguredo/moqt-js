@@ -81,6 +81,9 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MSF URI fragment の reserved key helper を追加する
+  - draft-ietf-moq-msf-01 §11.1.1 に基づき getWallclockRanges / getMediatimeRanges / getLocationRanges / getC4mParameter を追加する
+  - @voluntas
 - [ADD] LOC Object Payload に Private Properties の平文フレーミング API を追加する
   - draft-ietf-moq-loc-04 §2.2 の配置に従い encodeLocObjectPayload / decodeLocObjectPayload を公開する
   - 空 Private は prefix 無しで LOC Payload とビット一致し、非空は暫定ワイヤ（varint length + Private + LOC Payload）とする
