@@ -396,6 +396,10 @@
 
 ### misc
 
+- [UPDATE] session.ts をさらにモジュール分割する
+  - namespaceLoops.ts / publish.ts / incoming.ts / types.ts を src/session/ 配下に新規作成し、SessionImpl のメソッドを free function として抽出する
+  - 公開 API に変更なし（内部リファクタのみ）
+  - @voluntas
 - [CHANGE] PublishOk 型と encodePublishOkPayload を削除する (#0290)
   - PUBLISH_OK は REQUEST_OK の textual alias であり、`RequestOk` / `encodeRequestOkPayload` で代替可能
   - PBT テストを `encodeRequestOkPayload` に移行する
