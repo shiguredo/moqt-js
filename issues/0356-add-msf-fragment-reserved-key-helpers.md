@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-30
 - Model: Composer
 - Branch: feature/add-msf-fragment-reserved-key-helpers
 - Polished: 2026-07-27
