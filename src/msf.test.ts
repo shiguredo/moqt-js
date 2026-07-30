@@ -36,6 +36,10 @@ import {
   resolveInitData,
   parseMsfFragmentValue,
   getConnectionParameter,
+  getWallclockRanges,
+  getMediatimeRanges,
+  getLocationRanges,
+  getC4mParameter,
   validateCatalog,
   validateCatalogTrack,
 } from "./msf";
@@ -1140,4 +1144,136 @@ test("selectHighestBitrateTrack / selectLowestBitrateTrack: altGroup 内で選�
   };
   assert.strictEqual(selectHighestBitrateTrack(catalog, 1)?.name, "hd");
   assert.strictEqual(selectLowestBitrateTrack(catalog, 1)?.name, "sd");
+});
+
+// =============================================================================
+// MSF URI Fragment reserved key helpers (§11.1.1)
+// =============================================================================
+
+// --- getWallclockRanges ---
+
+test("getWallclockRanges: 仕様例 start-end", () => {
+  const params: Array<readonly [string, string]> = [["wallclock-range", "100-200"]];
+  const result = getWallclockRanges(params);
+  assert.deepEqual(result, [{ start: 100, end: 200 }]);
+});
+
+test("getWallclockRanges: start のみ（open range）", () => {
+  const params: Array<readonly [string, string]> = [["wallclock-range", "500"]];
+  const result = getWallclockRanges(params);
+  assert.deepEqual(result, [{ start: 500 }]);
+});
+
+test("getWallclockRanges: 複数エントリは union", () => {
+  const params: Array<readonly [string, string]> = [
+    ["wallclock-range", "100-200"],
+    ["wallclock-range", "300-400"],
+  ];
+  const result = getWallclockRanges(params);
+  assert.deepEqual(result, [
+    { start: 100, end: 200 },
+    { start: 300, end: 400 },
+  ]);
+});
+
+test("getWallclockRanges: 不正値はスキップ", () => {
+  const params: Array<readonly [string, string]> = [
+    ["wallclock-range", "abc"],
+    ["wallclock-range", "-200"],
+    ["wallclock-range", ""],
+    ["wallclock-range", "100-200"],
+  ];
+  const result = getWallclockRanges(params);
+  assert.deepEqual(result, [{ start: 100, end: 200 }]);
+});
+
+test("getWallclockRanges: 該当なしは空配列", () => {
+  const params: Array<readonly [string, string]> = [["connection", "wt"]];
+  assert.deepEqual(getWallclockRanges(params), []);
+});
+
+// --- getMediatimeRanges ---
+
+test("getMediatimeRanges: 仕様例 start-end", () => {
+  const params: Array<readonly [string, string]> = [["mediatime-range", "0-5000"]];
+  const result = getMediatimeRanges(params);
+  assert.deepEqual(result, [{ start: 0, end: 5000 }]);
+});
+
+test("getMediatimeRanges: 不正値はスキップ", () => {
+  const params: Array<readonly [string, string]> = [
+    ["mediatime-range", "-100"],
+    ["mediatime-range", "1000"],
+  ];
+  const result = getMediatimeRanges(params);
+  assert.deepEqual(result, [{ start: 1000 }]);
+});
+
+// --- getLocationRanges ---
+
+test("getLocationRanges: 仕様例 Group.Object-Group.Object", () => {
+  const params: Array<readonly [string, string]> = [["location-range", "34.0-2145.16"]];
+  const result = getLocationRanges(params);
+  assert.deepEqual(result, [
+    { start: { groupId: 34n, objectId: 0n }, end: { groupId: 2145n, objectId: 16n } },
+  ]);
+});
+
+test("getLocationRanges: 仕様例 Group.Object（end なし）", () => {
+  const params: Array<readonly [string, string]> = [["location-range", "16.24"]];
+  const result = getLocationRanges(params);
+  assert.deepEqual(result, [{ start: { groupId: 16n, objectId: 24n } }]);
+});
+
+test("getLocationRanges: 仕様例 Group-Group（objectId なし）", () => {
+  const params: Array<readonly [string, string]> = [["location-range", "16-24"]];
+  const result = getLocationRanges(params);
+  assert.deepEqual(result, [{ start: { groupId: 16n }, end: { groupId: 24n } }]);
+});
+
+test("getLocationRanges: ドット過多はスキップ", () => {
+  const params: Array<readonly [string, string]> = [["location-range", "1.2.3"]];
+  assert.deepEqual(getLocationRanges(params), []);
+});
+
+test("getLocationRanges: 末尾ドットはスキップ", () => {
+  const params: Array<readonly [string, string]> = [["location-range", "1."]];
+  assert.deepEqual(getLocationRanges(params), []);
+});
+
+test("getLocationRanges: 有効/不正混在で有効分だけ返る", () => {
+  const params: Array<readonly [string, string]> = [
+    ["location-range", "1.2.3"],
+    ["location-range", "10.5-20.8"],
+    ["location-range", ""],
+  ];
+  const result = getLocationRanges(params);
+  assert.deepEqual(result, [
+    { start: { groupId: 10n, objectId: 5n }, end: { groupId: 20n, objectId: 8n } },
+  ]);
+});
+
+test("getLocationRanges: start 省略形はスキップ", () => {
+  const params: Array<readonly [string, string]> = [["location-range", "-100.5"]];
+  assert.deepEqual(getLocationRanges(params), []);
+});
+
+// --- getC4mParameter ---
+
+test("getC4mParameter: 最初の c4m を返す", () => {
+  const params: Array<readonly [string, string]> = [
+    ["c4m", "dG9rZW4x"],
+    ["c4m", "dG9rZW4y"],
+  ];
+  assert.strictEqual(getC4mParameter(params), "dG9rZW4x");
+});
+
+test("getC4mParameter: 該当なしは undefined", () => {
+  const params: Array<readonly [string, string]> = [["connection", "wt"]];
+  assert.isUndefined(getC4mParameter(params));
+});
+
+test("getC4mParameter: 空文字列もそのまま返す（検証しない）", () => {
+  const params: Array<readonly [string, string]> = [["c4m", ""]];
+  assert.strictEqual(getC4mParameter(params), "");
 });
