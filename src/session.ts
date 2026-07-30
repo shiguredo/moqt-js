@@ -4,18 +4,8 @@
  */
 
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "./controlStream";
+import { decodeSubgroupHeader, type MoqtObject } from "./dataStream";
 import {
-  encodeSubgroupHeader,
-  SubgroupHeaderType,
-  decodeSubgroupHeader,
-  encodeObjectDatagram,
-  decodeObjectDatagram,
-  encodeObjectFields,
-  DatagramType,
-  type MoqtObject,
-} from "./dataStream";
-import {
-  ClosedSubgroupError,
   DataStreamErrorCode,
   IncompleteDataError,
   MalformedTrackError,
@@ -27,19 +17,13 @@ import {
 } from "./error";
 import {
   MessageType,
-  PublishDoneStatusCode,
-  ObjectStatus,
   createTrackNamespace,
   encodeTrackName,
   validateFullTrackName,
   trackNamespaceToStrings,
   decodeGoawayPayload,
-  decodeNamespaceDonePayload,
-  decodeNamespacePayload,
-  decodePublishSkippedPayload,
   decodePublishPayload,
   decodeRequestErrorPayload,
-  decodeRequestOkPayload,
   decodeSetupPayload,
   getSetupAuthority,
   getSetupPath,
@@ -67,11 +51,7 @@ import {
   type LocationFilter,
   type RangeFilterSpec,
 } from "./message";
-import {
-  NAMESPACE_OK_ALLOWED_PARAMS,
-  PUBLISH_ALLOWED_PARAMS,
-  validateParameterScope,
-} from "./message/parameterScope";
+import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
 import {
   type Publisher,
@@ -89,19 +69,30 @@ import {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
-  calculateObjectIdDelta,
   clampTimeoutMs,
   matchNamespacePrefix,
 } from "./session/params";
-import { mergeDeliveryTimeoutObjectProperties } from "./properties";
 import * as bidi from "./session/bidi";
-import {
-  processFetchObjects,
-  processSubgroupObjects,
-  concatChunks,
-  cancelStreamQuiet,
-} from "./session/stream";
+import { concatChunks, cancelStreamQuiet } from "./session/stream";
 import { isSessionClosedError, toProtocolViolationSessionError } from "./session/errors";
+import type { SessionInternal } from "./session/types";
+import {
+  publishSendObject,
+  publishClosePublisherStream,
+  publishSendDatagram,
+  publishSendPublishDone,
+} from "./session/publish";
+import {
+  incomingHandleDatagram,
+  incomingWaitForFetcher,
+  incomingProcessFetchObjects,
+  incomingProcessSubgroupObjects,
+} from "./session/incoming";
+import {
+  namespaceStartNamespaceStreamLoop,
+  namespaceStartTracksStreamLoop,
+  namespaceStartPublicationStreamLoop,
+} from "./session/namespaceLoops";
 
 export type { MoqtObject } from "./dataStream";
 
@@ -1088,7 +1079,7 @@ export class SessionImpl implements Session {
   // sendObject は async だが fire-and-forget で呼ばれるため、
   // 同一トラック内で並行実行されるとストリームの二重作成が発生する。
   // Promise チェーンでトラック単位のシリアライズを行う。
-  private publisherSendQueues = new Map<bigint, Promise<void>>();
+  publisherSendQueues = new Map<bigint, Promise<void>>();
 
   // STOP_SENDING / delivery timeout で閉じた Subgroup の追跡
   // draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams):
@@ -1964,34 +1955,6 @@ export class SessionImpl implements Session {
    *
    * @returns GOAWAY を処理した場合は newSessionUri、重複・違反でセッションを閉じた場合は null
    */
-  private handleGoawayOnNamespaceStream(
-    requestId: bigint,
-    messagePayload: Uint8Array,
-    callbacks: { goaway?: (uri: string) => void; error?: (err: Error) => void } | undefined,
-    streamReader: ReadableStreamDefaultReader<Uint8Array>,
-    closeState: () => void,
-  ): string | null {
-    // 重複 GOAWAY チェック
-    if (
-      !bidi.validateNoDuplicateGoawayOnRequestStream(
-        requestId,
-        this.goawayReceivedOnRequestStreams,
-        (error) => this.closeWithError(error),
-      )
-    ) {
-      return null;
-    }
-    const decodedMsg = decodeGoawayPayload(messagePayload);
-    // コールバック呼び出し + state 変更 + リソース解放
-    // 元の inline 実装と同じ順序 (goaway -> state="closed" -> error) を保つ
-    callbacks?.goaway?.(decodedMsg.newSessionUri);
-    closeState();
-    callbacks?.error?.(
-      new Error(`request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`),
-    );
-    void streamReader.cancel();
-    return decodedMsg.newSessionUri;
-  }
 
   /**
    * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
@@ -2005,223 +1968,12 @@ export class SessionImpl implements Session {
     resolve: (subscription: NamespaceSubscription) => void,
     reject: (err: Error) => void,
   ): Promise<void> {
-    const subscription = this.namespaceSubscriptions.get(requestId);
-    if (!subscription || !subscription.streamReader || !subscription.controlReader) {
-      reject(new Error("namespace subscription not found"));
-      return;
-    }
-
-    const { streamReader, controlReader, callbacks } = subscription;
-    let resolved = false;
-    // NAMESPACE 受信済 suffix を追跡し、NAMESPACE_DONE が先行で来たら PROTOCOL_VIOLATION で閉じる
-    // draft-ietf-moq-transport-19 §10.18
-    const seenNamespaceSuffixes = new Set<string>();
-    const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
-
-    try {
-      while (subscription.state === "active") {
-        const { value, done } = await streamReader.read();
-        if (done) {
-          // draft-ietf-moq-transport-19 §3.3.2: 応答前 FIN はリクエスト失敗
-          if (!resolved) {
-            reject(new Error("stream closed before receiving response"));
-          }
-          break;
-        }
-
-        const messages = controlReader.feed(value);
-        for (const msg of messages) {
-          const messageType = msg.type;
-          const messagePayload = msg.payload;
-
-          // デバッグコールバック
-          this.callbacks.debug?.({
-            direction: "recv",
-            type: messageType,
-            typeName: getMessageTypeName(messageType),
-            payload: messagePayload,
-            timestamp: Date.now(),
-          });
-
-          // draft-ietf-moq-transport-19 §10.18:
-          // "If the subscriber receives any message other than a REQUEST_OK or a
-          //  REQUEST_ERROR as the first message on the response half of the stream,
-          //  then it MUST close the session with a PROTOCOL_VIOLATION."
-          if (
-            !resolved &&
-            messageType !== MessageType.REQUEST_OK &&
-            messageType !== MessageType.REQUEST_ERROR
-          ) {
-            this.closeWithError(
-              new SessionError(
-                `expected REQUEST_OK or REQUEST_ERROR as first message on namespace stream, got 0x${messageType.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
-            );
-            return;
-          }
-
-          switch (messageType) {
-            case MessageType.REQUEST_OK: {
-              if (resolved) {
-                this.closeWithError(
-                  new SessionError(
-                    "received second REQUEST_OK on namespace stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
-              // Request ID はストリームが特定するため不要 (§10.1 Request ID)
-              const requestOk = decodeRequestOkPayload(messagePayload);
-              // draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
-              // SUBSCRIBE_NAMESPACE_OK では EXPIRES が許可される
-              if (
-                !validateParameterScope(
-                  requestOk.parameters,
-                  NAMESPACE_OK_ALLOWED_PARAMS,
-                  "SUBSCRIBE_NAMESPACE_OK",
-                  (error) => this.closeWithError(error),
-                )
-              ) {
-                return;
-              }
-              // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK)
-              if (
-                !bidi.validateRequestOkNoTrackProperties(
-                  requestOk.trackProperties,
-                  "SUBSCRIBE_NAMESPACE_OK",
-                  (error) => this.closeWithError(error),
-                )
-              ) {
-                return;
-              }
-              resolved = true;
-              const namespaceSubscription = this.createNamespaceSubscription(requestId);
-              resolve(namespaceSubscription);
-              break;
-            }
-
-            case MessageType.REQUEST_ERROR: {
-              if (resolved) {
-                this.closeWithError(
-                  new SessionError(
-                    "received REQUEST_ERROR after REQUEST_OK on namespace stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              // draft-ietf-moq-transport-19 §10.6 (REQUEST_ERROR)
-              const decodedMsg = decodeRequestErrorPayload(messagePayload);
-              const error = new RequestError(
-                decodedMsg.reasonPhrase,
-                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-                decodedMsg.retryInterval,
-                decodedMsg.redirect
-                  ? {
-                      connectUri: decodedMsg.redirect.connectUri,
-                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-                      trackName: decodedMsg.redirect.trackName,
-                    }
-                  : undefined,
-              );
-              subscription.state = "closed";
-              callbacks.error?.(error);
-              reject(error);
-              return;
-            }
-
-            case MessageType.GOAWAY: {
-              const newSessionUri = this.handleGoawayOnNamespaceStream(
-                requestId,
-                messagePayload,
-                callbacks,
-                streamReader,
-                () => {
-                  subscription.state = "closed";
-                },
-              );
-              if (newSessionUri !== null) {
-                reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
-              }
-              return;
-            }
-
-            case MessageType.NAMESPACE: {
-              const decodedMsg = decodeNamespacePayload(messagePayload);
-              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-              seenNamespaceSuffixes.add(namespaceSuffixKey(suffixStrings));
-              callbacks.onNamespace?.(suffixStrings);
-              break;
-            }
-
-            case MessageType.NAMESPACE_DONE: {
-              const decodedMsg = decodeNamespaceDonePayload(messagePayload);
-              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-              // draft-ietf-moq-transport-19 §10.18:
-              // "The publisher MUST NOT send NAMESPACE_DONE for a namespace suffix before
-              //  the corresponding NAMESPACE. If a subscriber receives a NAMESPACE_DONE
-              //  before the corresponding NAMESPACE, it MUST close the session with a
-              //  'PROTOCOL_VIOLATION'."
-              if (!seenNamespaceSuffixes.has(namespaceSuffixKey(suffixStrings))) {
-                this.closeWithError(
-                  new SessionError(
-                    `received NAMESPACE_DONE before corresponding NAMESPACE: suffix=${JSON.stringify(suffixStrings)}`,
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              callbacks.onNamespaceDone?.(suffixStrings);
-              break;
-            }
-
-            default:
-              // draft-ietf-moq-transport-19 §10 (Control Messages):
-              // "An endpoint that receives an unknown message type MUST close the session."
-              // PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答ストリーム側で処理するので
-              // SUBSCRIBE_NAMESPACE 応答ストリームでは PROTOCOL_VIOLATION 扱い。
-              this.closeWithError(
-                new SessionError(
-                  `unknown namespace stream message type: 0x${messageType.toString(16)}`,
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-          }
-        }
-      }
-    } catch (error) {
-      if (subscription.state === "active") {
-        subscription.state = "closed";
-        const normalizedError = error instanceof Error ? error : new Error(String(error));
-        // draft-ietf-moq-transport-19 §3.5:
-        // WebTransport セッション終了起源の read 中断は subscription の error には
-        // 流さない (session-level の close で通知される)。
-        // ただし subscribe Promise が未解決ならユーザーが await しているので reject する必要がある。
-        if (!isSessionClosedError(normalizedError)) {
-          callbacks.error?.(normalizedError);
-        }
-        if (!resolved) {
-          reject(normalizedError);
-        }
-      }
-      // draft-ietf-moq-transport-19 §3.5:
-      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる。
-      // closeWithError は close() を同期実行で subscription を閉じるため、上記の
-      // ローカルクローズ・reject の後に呼ぶ。
-      const sessionError = toProtocolViolationSessionError(error);
-      if (sessionError !== null) {
-        this.closeWithError(sessionError);
-      }
-    } finally {
-      // クリーンアップ
-      subscription.state = "closed";
-      streamReader.releaseLock();
-      this.namespaceSubscriptions.delete(requestId);
-    }
+    return namespaceStartNamespaceStreamLoop(
+      this as unknown as SessionInternal,
+      requestId,
+      resolve,
+      reject,
+    );
   }
 
   /**
@@ -2236,177 +1988,12 @@ export class SessionImpl implements Session {
     resolve: (subscription: TracksSubscription) => void,
     reject: (err: Error) => void,
   ): Promise<void> {
-    const subscription = this.tracksSubscriptions.get(requestId);
-    if (!subscription || !subscription.streamReader || !subscription.controlReader) {
-      reject(new Error("tracks subscription not found"));
-      return;
-    }
-
-    const { streamReader, controlReader, callbacks } = subscription;
-    let resolved = false;
-
-    try {
-      while (subscription.state === "active") {
-        const { value, done } = await streamReader.read();
-        if (done) {
-          // draft-ietf-moq-transport-19 §3.3.2: 応答前 FIN はリクエスト失敗
-          if (!resolved) {
-            reject(new Error("stream closed before receiving response"));
-          }
-          break;
-        }
-
-        const messages = controlReader.feed(value);
-        for (const msg of messages) {
-          const messageType = msg.type;
-          const messagePayload = msg.payload;
-
-          this.callbacks.debug?.({
-            direction: "recv",
-            type: messageType,
-            typeName: getMessageTypeName(messageType),
-            payload: messagePayload,
-            timestamp: Date.now(),
-          });
-
-          // draft-ietf-moq-transport-19 §10.19:
-          // "If the subscriber receives any message other than a REQUEST_OK or a
-          //  REQUEST_ERROR as the first message on the response half of the stream,
-          //  then it MUST close the session with a PROTOCOL_VIOLATION."
-          if (
-            !resolved &&
-            messageType !== MessageType.REQUEST_OK &&
-            messageType !== MessageType.REQUEST_ERROR
-          ) {
-            this.closeWithError(
-              new SessionError(
-                `expected REQUEST_OK or REQUEST_ERROR as first message on tracks stream, got 0x${messageType.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
-            );
-            return;
-          }
-
-          switch (messageType) {
-            case MessageType.REQUEST_OK: {
-              if (resolved) {
-                this.closeWithError(
-                  new SessionError(
-                    "received second REQUEST_OK on tracks stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              // draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
-              // SUBSCRIBE_TRACKS_OK では EXPIRES が許可される
-              const requestOk = decodeRequestOkPayload(messagePayload);
-              if (
-                !validateParameterScope(
-                  requestOk.parameters,
-                  NAMESPACE_OK_ALLOWED_PARAMS,
-                  "SUBSCRIBE_TRACKS_OK",
-                  (error) => this.closeWithError(error),
-                )
-              ) {
-                return;
-              }
-              resolved = true;
-              const tracksSubscription = this.createTracksSubscription(requestId);
-              resolve(tracksSubscription);
-              break;
-            }
-
-            case MessageType.REQUEST_ERROR: {
-              if (resolved) {
-                this.closeWithError(
-                  new SessionError(
-                    "received REQUEST_ERROR after REQUEST_OK on tracks stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              const decodedMsg = decodeRequestErrorPayload(messagePayload);
-              const error = new RequestError(
-                decodedMsg.reasonPhrase,
-                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-                decodedMsg.retryInterval,
-                decodedMsg.redirect
-                  ? {
-                      connectUri: decodedMsg.redirect.connectUri,
-                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-                      trackName: decodedMsg.redirect.trackName,
-                    }
-                  : undefined,
-              );
-              subscription.state = "closed";
-              callbacks.error?.(error);
-              reject(error);
-              return;
-            }
-
-            case MessageType.GOAWAY: {
-              const newSessionUri = this.handleGoawayOnNamespaceStream(
-                requestId,
-                messagePayload,
-                callbacks,
-                streamReader,
-                () => {
-                  subscription.state = "closed";
-                },
-              );
-              if (newSessionUri !== null) {
-                reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
-              }
-              return;
-            }
-
-            case MessageType.PUBLISH_SKIPPED: {
-              // draft-ietf-moq-transport-19 §10.20 (PUBLISH_SKIPPED):
-              // SUBSCRIBE_TRACKS への応答ストリーム上で送られる。
-              const decodedMsg = decodePublishSkippedPayload(messagePayload);
-              const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-              const trackName = new TextDecoder().decode(decodedMsg.trackName);
-              callbacks.onPublishSkipped?.(suffixStrings, trackName);
-              break;
-            }
-
-            default:
-              this.closeWithError(
-                new SessionError(
-                  `unknown tracks stream message type: 0x${messageType.toString(16)}`,
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-          }
-        }
-      }
-    } catch (error) {
-      if (subscription.state === "active") {
-        subscription.state = "closed";
-        const normalizedError = error instanceof Error ? error : new Error(String(error));
-        if (!isSessionClosedError(normalizedError)) {
-          callbacks.error?.(normalizedError);
-        }
-        if (!resolved) {
-          reject(normalizedError);
-        }
-      }
-      // draft-ietf-moq-transport-19 §3.5:
-      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる。
-      // closeWithError は close() を同期実行で subscription を閉じるため、上記の
-      // ローカルクローズ・reject の後に呼ぶ。
-      const sessionError = toProtocolViolationSessionError(error);
-      if (sessionError !== null) {
-        this.closeWithError(sessionError);
-      }
-    } finally {
-      subscription.state = "closed";
-      streamReader.releaseLock();
-      this.tracksSubscriptions.delete(requestId);
-    }
+    return namespaceStartTracksStreamLoop(
+      this as unknown as SessionInternal,
+      requestId,
+      resolve,
+      reject,
+    );
   }
 
   /**
@@ -2507,166 +2094,12 @@ export class SessionImpl implements Session {
     resolve: (publication: NamespacePublication) => void,
     reject: (err: Error) => void,
   ): Promise<void> {
-    const publication = this.namespacePublications.get(requestId);
-    if (!publication) {
-      reject(new Error("namespace publication not found"));
-      return;
-    }
-
-    const { streamReader, controlReader, callbacks } = publication;
-    let resolved = false;
-
-    try {
-      while (publication.state !== "closed") {
-        const { value, done } = await streamReader.read();
-        if (done) {
-          // draft-ietf-moq-transport-19 §3.3.2: 応答前 FIN はリクエスト失敗
-          if (!resolved) {
-            reject(new Error("stream closed before receiving response"));
-          }
-          break;
-        }
-
-        const messages = controlReader.feed(value);
-        for (const msg of messages) {
-          const messageType = msg.type;
-          const messagePayload = msg.payload;
-
-          // デバッグコールバック
-          this.callbacks.debug?.({
-            direction: "recv",
-            type: messageType,
-            typeName: getMessageTypeName(messageType),
-            payload: messagePayload,
-            timestamp: Date.now(),
-          });
-
-          switch (messageType) {
-            case MessageType.REQUEST_OK: {
-              // draft-ietf-moq-transport-19 Section 10.5 (REQUEST_OK):
-              // Request ID はストリームが特定するため不要
-              // draft-ietf-moq-transport-19 Section 10.1
-              const requestOk = decodeRequestOkPayload(messagePayload);
-              // draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
-              // PUBLISH_NAMESPACE_OK では EXPIRES が許可される
-              if (
-                !validateParameterScope(
-                  requestOk.parameters,
-                  NAMESPACE_OK_ALLOWED_PARAMS,
-                  "PUBLISH_NAMESPACE_OK",
-                  (error) => this.closeWithError(error),
-                )
-              ) {
-                return;
-              }
-              // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK)
-              if (
-                !bidi.validateRequestOkNoTrackProperties(
-                  requestOk.trackProperties,
-                  "PUBLISH_NAMESPACE_OK",
-                  (error) => this.closeWithError(error),
-                )
-              ) {
-                return;
-              }
-              if (resolved) {
-                // 二重応答は仕様違反
-                this.closeWithError(
-                  new SessionError(
-                    "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-              publication.state = "active";
-              resolved = true;
-              resolve(this.createNamespacePublication(requestId));
-              break;
-            }
-
-            case MessageType.REQUEST_ERROR: {
-              // draft-ietf-moq-transport-19 Section 10.6.2 (REQUEST_ERROR):
-              // Request ID はストリームが特定するため不要
-              const decodedMsg = decodeRequestErrorPayload(messagePayload);
-              const error = new RequestError(
-                decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
-                normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-                decodedMsg.retryInterval,
-                decodedMsg.redirect
-                  ? {
-                      connectUri: decodedMsg.redirect.connectUri,
-                      trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-                      trackName: decodedMsg.redirect.trackName,
-                    }
-                  : undefined,
-              );
-              publication.state = "closed";
-              callbacks?.error?.(error);
-              if (!resolved) {
-                reject(error);
-              }
-              return;
-            }
-
-            case MessageType.GOAWAY: {
-              const newSessionUri = this.handleGoawayOnNamespaceStream(
-                requestId,
-                messagePayload,
-                callbacks,
-                streamReader,
-                () => {
-                  publication.state = "closed";
-                },
-              );
-              if (newSessionUri !== null) {
-                if (!resolved) {
-                  reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
-                }
-              }
-              return;
-            }
-
-            default:
-              // draft-ietf-moq-transport-19 Section 10 (Control Messages):
-              // "An endpoint that receives an unknown message type MUST close the session."
-              this.closeWithError(
-                new SessionError(
-                  `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-          }
-        }
-      }
-    } catch (error) {
-      if (publication.state !== "closed") {
-        publication.state = "closed";
-        const wrapped = error instanceof Error ? error : new Error(String(error));
-        callbacks?.error?.(wrapped);
-        if (!resolved) {
-          reject(wrapped);
-        }
-      }
-      // draft-ietf-moq-transport-19 §3.5:
-      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる。
-      // closeWithError は close() を同期実行で publication を閉じるため、上記の
-      // ローカルクローズ・reject の後に呼ぶ。
-      const sessionError = toProtocolViolationSessionError(error);
-      if (sessionError !== null) {
-        this.closeWithError(sessionError);
-      }
-    } finally {
-      // クリーンアップ
-      publication.state = "closed";
-      try {
-        streamReader.releaseLock();
-      } catch {
-        // 既に解放済みの場合は無視
-      }
-      this.namespacePublications.delete(requestId);
-    }
+    return namespaceStartPublicationStreamLoop(
+      this as unknown as SessionInternal,
+      requestId,
+      resolve,
+      reject,
+    );
   }
 
   /**
@@ -3067,194 +2500,7 @@ export class SessionImpl implements Session {
    * 次の呼び出しが割り込んでストリームを二重作成する問題を防ぐ。
    */
   private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
-    const trackAlias = publisher.getTrackAlias();
-    const groupId = BigInt(params.groupId);
-    const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
-    // 前の Promise のエラーをキャッチしてチェーンが止まらないようにする。
-    // エラーが伝播すると後続の全ての .then() がスキップされ、
-    // 新しいオブジェクトが送信されなくなる。
-    const currentPromise = previousPromise
-      .catch(() => {})
-      .then(() => {
-        // 閉じた Subgroup への送信を拒否する
-        // draft-ietf-moq-transport-19 §11.4.3:
-        // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
-        //  attempt to open a new stream to deliver additional Objects in that Subgroup."
-        if (this.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
-          throw new ClosedSubgroupError(
-            `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
-            trackAlias,
-            groupId,
-          );
-        }
-      })
-      .then(() => this.sendObjectInternal(publisher, params))
-      .catch((err: unknown) => {
-        publisher.handleError(err instanceof Error ? err : new Error(String(err)));
-      });
-    this.publisherSendQueues.set(trackAlias, currentPromise);
-    return currentPromise;
-  }
-
-  private async sendObjectInternal(
-    publisher: PublisherImpl,
-    params: SendObjectParams,
-  ): Promise<void> {
-    const trackAlias = publisher.getTrackAlias();
-    const groupId = BigInt(params.groupId);
-    const objectId = BigInt(params.objectId);
-
-    let streamState = this.publisherStreams.get(trackAlias);
-
-    // 新しい Group または最初のオブジェクト → 新しいストリームを開く
-    if (!streamState || streamState.groupId !== groupId) {
-      // 前のストリームを FIN で閉じる
-      // 先に Map から削除して、他の sendObject が同じストリームを閉じようとするのを防ぐ
-      if (streamState) {
-        this.publisherStreams.delete(trackAlias);
-        try {
-          await streamState.writer.close();
-        } catch {
-          // 既に閉じられている場合は無視
-          // writer.close() の失敗は STOP_SENDING とみなさない
-          // publisher が自発的に閉じるストリームの close 失敗は追跡不要
-        }
-      }
-
-      // 新しいストリームを開く
-      const stream = await this.transport.createUnidirectionalStream();
-      this.statsUnidirectionalStreamsOpened++;
-      publisher.incrementDataStreamCount();
-      const writer = stream.getWriter();
-
-      // Subgroup Header を書き込む
-      // draft-ietf-moq-transport-19 Section 11.4.2
-      // draft-ietf-moq-transport-19 Section 2.2:
-      // "Objects from the same Subgroup MUST NOT be sent on different streams"
-      // FirstObjectId モードを使用して、各ストリームの最初の Object ID を
-      // Subgroup ID として自動的に一意にする
-      //
-      // PROPERTIES ビット (0x01):
-      // "When set to 1, the Object Properties structure is present in all Objects.
-      //  When set to 0, the field is never present."
-      // Properties の有無はストリーム開始時に全オブジェクトについて決められないため、
-      // 常に FIRST_OBJ_EXT (Properties あり) を使用し、
-      // properties がないオブジェクトには Properties Length = 0 を送信する。
-      const header = encodeSubgroupHeader({
-        type: SubgroupHeaderType.FIRST_OBJ_EXT,
-        trackAlias,
-        groupId,
-        publisherPriority: params.priority ?? 128,
-        firstObject: true,
-      });
-
-      // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
-      // closedSubgroups に追加する。
-      // draft-ietf-moq-transport-19 §11.4.3:
-      // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
-      //  attempt to open a new stream to deliver additional Objects in that Subgroup."
-      try {
-        await writer.write(header);
-      } catch (err) {
-        // ヘッダー書き込み失敗時は writer の参照が publisherStreams に残らないため、
-        // 明示的にロックを解放する。releaseLock() が破損した writer に対して
-        // 例外を投げても、元の write エラーの再 throw と closedSubgroups への
-        // 登録を確実に実行するため、releaseLock() の例外は握りつぶす。
-        try {
-          writer.releaseLock();
-        } catch {
-          // releaseLock の失敗は無視し、元の write エラーを優先する
-        }
-        this.closedSubgroups.add(`${trackAlias}:${groupId}`);
-        throw err;
-      }
-
-      streamState = { groupId, writer, previousObjectId: -1n };
-      this.publisherStreams.set(trackAlias, streamState);
-    }
-
-    // Object ID 上限検証
-    // draft-ietf-moq-transport-19 §11.4.2:
-    // Object ID は 2^64-1 を超えてはならない (MUST NOT)
-    if (objectId < 0n || objectId > (1n << 64n) - 1n) {
-      this.closeWithError(
-        new SessionError(
-          `object id exceeds maximum value: ${objectId}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
-      return;
-    }
-
-    // Object ID Delta を計算
-    // draft-ietf-moq-transport-19 Section 11.4.2:
-    // "The Object ID Delta + 1 is added to the previous Object ID ...
-    //  The Object ID is the Object ID Delta if it's the first Object"
-    const objectIdDelta = calculateObjectIdDelta(streamState.previousObjectId, objectId);
-
-    // Object fields を構築
-    // draft-ietf-moq-transport-19 Section 11.4.2 Figure 25
-    // Subgroup Header の PROPERTIES ビットを常に 1 に設定しているため、
-    // 全オブジェクトに Properties フィールドを含める必要がある。
-    // Properties がないオブジェクトには Properties Length = 0 を送信する。
-    //
-    // encodeObjectFields を使用して、Object ID Delta / Properties / Payload Length /
-    // Object Status（ペイロード長 0 の場合）を正しくエンコードする。
-    // draft-ietf-moq-transport-19 §11.2.1.1:
-    // 「Zero-length objects explicitly encode the Normal status.」
-
-    // draft-ietf-moq-transport-19 Section 8:
-    // delivery timeout の Object Property は subgroup 先頭オブジェクトにのみ載せる。
-    // 先頭以外で指定されたら API が throw する。
-    const isFirstInSubgroup = streamState.previousObjectId < 0n;
-    if (
-      !isFirstInSubgroup &&
-      (params.deliveryTimeout !== undefined || params.subgroupDeliveryTimeout !== undefined)
-    ) {
-      throw new Error(
-        "deliveryTimeout/subgroupDeliveryTimeout can only be set on the first object in a subgroup",
-      );
-    }
-
-    let objectProperties = params.properties;
-    if (isFirstInSubgroup) {
-      objectProperties = mergeDeliveryTimeoutObjectProperties(
-        params.properties,
-        params.deliveryTimeout,
-        params.subgroupDeliveryTimeout,
-      );
-    }
-
-    const data = encodeObjectFields(
-      objectIdDelta,
-      BigInt(params.payload.length),
-      SubgroupHeaderType.FIRST_OBJ_EXT,
-      params.status ?? ObjectStatus.NORMAL,
-      objectProperties,
-    );
-
-    // writer.write() の失敗 (STOP_SENDING / delivery timeout) を検出して
-    // closedSubgroups に追加する。
-    try {
-      await streamState.writer.write(data);
-      if (params.payload.length > 0) {
-        await streamState.writer.write(params.payload);
-      }
-    } catch (err) {
-      // 書き込み失敗時は writer が破損しているためロックを解放する。
-      // releaseLock() がさらに例外を投げても、元の write エラーの再 throw と
-      // closedSubgroups への登録を確実に実行するため、例外は握りつぶす。
-      try {
-        streamState.writer.releaseLock();
-      } catch {
-        // releaseLock の失敗は無視し、元の write エラーを優先する
-      }
-      this.closedSubgroups.add(`${trackAlias}:${groupId}`);
-      throw err;
-    }
-
-    // 状態を更新
-    streamState.previousObjectId = objectId;
+    return publishSendObject(this as unknown as SessionInternal, publisher, params);
   }
 
   /**
@@ -3262,61 +2508,7 @@ export class SessionImpl implements Session {
    * 送信キューに入れて、進行中の sendObject が完了してから閉じる
    */
   private closePublisherStream(trackAlias: bigint): Promise<void> {
-    const previousPromise = this.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
-    const currentPromise = previousPromise
-      .catch(() => {})
-      .then(() => this.closePublisherStreamInternal(trackAlias));
-    this.publisherSendQueues.set(trackAlias, currentPromise);
-    return currentPromise;
-  }
-
-  private async closePublisherStreamInternal(trackAlias: bigint): Promise<void> {
-    const streamState = this.publisherStreams.get(trackAlias);
-    if (streamState) {
-      // 先に Map から削除して二重クローズを防止
-      this.publisherStreams.delete(trackAlias);
-      try {
-        // Safari の WebTransport では WritableStreamDefaultWriter.close() が
-        // resolve しないことが確認されている。
-        // タイムアウトを設けて FIN 送信の完了を待つが、
-        // タイムアウトした場合はストリームを放棄して処理を続行する。
-        await Promise.race([
-          streamState.writer.close(),
-          new Promise<void>((_, reject) => {
-            setTimeout(() => reject(new Error("writer.close() timed out")), 5000);
-          }),
-        ]);
-      } catch {
-        // タイムアウトまたは既にクローズされている場合は無視
-      }
-    }
-
-    // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
-    // 長時間稼働時のメモリリークを防ぐため、単調増加させない
-    //
-    // ECMAScript 仕様上、Set のイテレーション中の delete は安全である。
-    // キー形式 `${trackAlias}:${groupId}` の `:` 区切りにより、
-    // trackAlias=1 が trackAlias=10 のエントリに誤マッチしないことが保証される。
-    for (const key of this.closedSubgroups) {
-      if (key.startsWith(`${trackAlias}:`)) {
-        this.closedSubgroups.delete(key);
-      }
-    }
-  }
-
-  /**
-   * datagram 送信用 writer を取得する
-   *
-   * WebTransport の `datagrams.writable` は単一の WritableStream であり、writer は
-   * 1 つだけロックを保持できる。最初の呼び出しで getWriter() して保持し、以降は同じ
-   * writer を返す。呼び出しごとに getWriter() / releaseLock() を往復すると、前回の
-   * releaseLock() 完了前に次の getWriter() が呼ばれてロック競合 (TypeError) になるため。
-   * write() は内部キューに順次積まれるため呼び出し順は保たれる (到達順は §11.3 の
-   * best-effort であり保証しない)。
-   */
-  private getDatagramWriter(): WritableStreamDefaultWriter<Uint8Array> {
-    this.datagramWriter ??= this.transport.datagrams.writable.getWriter();
-    return this.datagramWriter;
+    return publishClosePublisherStream(this as unknown as SessionInternal, trackAlias);
   }
 
   /**
@@ -3324,61 +2516,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
-    // セッションクローズ後は datagram を送らない。getDatagramWriter は閉じた
-    // transport に対して同期的に getWriter() を呼んで throw しうるため、ここで弾く。
-    if (this.sessionState === "closed") {
-      return;
-    }
-
-    const hasProperties = params.properties !== undefined && params.properties.length > 0;
-    const hasPriority = params.priority !== undefined;
-    const endOfGroup = params.endOfGroup ?? false;
-
-    // Datagram Type を決定
-    // Section 11.3.1: Type bits = EndOfGroup(bit 1) | PROPERTIES(bit 0)
-    let type: number;
-    if (hasPriority) {
-      if (endOfGroup) {
-        type = hasProperties
-          ? DatagramType.PAYLOAD_OBJ_EXT_END_GROUP
-          : DatagramType.PAYLOAD_OBJ_END_GROUP;
-      } else {
-        type = hasProperties ? DatagramType.PAYLOAD_OBJ_EXT : DatagramType.PAYLOAD_OBJ;
-      }
-    } else {
-      if (endOfGroup) {
-        type = hasProperties
-          ? DatagramType.PAYLOAD_OBJ_EXT_END_GROUP_NO_PRI
-          : DatagramType.PAYLOAD_OBJ_END_GROUP_NO_PRI;
-      } else {
-        type = hasProperties
-          ? DatagramType.PAYLOAD_OBJ_EXT_NO_PRI
-          : DatagramType.PAYLOAD_OBJ_NO_PRI;
-      }
-    }
-
-    const datagram = encodeObjectDatagram({
-      type,
-      trackAlias: publisher.getTrackAlias(),
-      groupId: BigInt(params.groupId),
-      objectId: BigInt(params.objectId),
-      publisherPriority: params.priority ?? 128,
-      properties: params.properties,
-      payload: params.payload,
-    });
-
-    // WebTransport datagram として送信。保持した writer を使い回すことで、
-    // 連続送信時の getWriter() / releaseLock() 競合による TypeError を防ぐ。
-    const writer = this.getDatagramWriter();
-    writer.write(datagram).catch((err: unknown) => {
-      // クローズ時の releaseLock() や transport.close() は in-flight の write() を
-      // reject させる。セッションが既に閉じている場合の reject は正常終了に伴うもので
-      // エラーではないため、handleError には流さない。
-      if (this.sessionState === "closed") {
-        return;
-      }
-      publisher.handleError(err instanceof Error ? err : new Error(String(err)));
-    });
+    publishSendDatagram(this as unknown as SessionInternal, publisher, params);
   }
 
   /**
@@ -3387,60 +2525,7 @@ export class SessionImpl implements Session {
    * Request ID フィールドはない（bidi stream で特定可能）。
    */
   private async sendPublishDone(publisher: PublisherImpl): Promise<void> {
-    const requestId = publisher.getRequestId();
-
-    // PUBLISH_DONE ペイロードをエンコード
-    // draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
-    // Stream Count は実際に開いたデータストリーム数を設定する
-    const streamCount = publisher.getDataStreamCount();
-    const parts: Uint8Array[] = [];
-    parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
-    parts.push(encodeVarint(streamCount));
-    // Reason Phrase の長さ (0)
-    parts.push(encodeVarint(0));
-
-    const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-    const payload = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const part of parts) {
-      payload.set(part, offset);
-      offset += part.length;
-    }
-
-    // draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
-    // PUBLISH_DONE は subscription の bidi stream 上で送信する
-    const streamInfo = this.requestStreams.get(requestId);
-    if (streamInfo) {
-      const message = this.controlWriter!.encode(MessageType.PUBLISH_DONE, payload);
-      this.statsControlMessagesSent++;
-      this.emitDebug("send", MessageType.PUBLISH_DONE, payload, {
-        requestId: requestId.toString(),
-        statusCode: PublishDoneStatusCode.TRACK_ENDED,
-        streamCount: streamCount.toString(),
-      });
-      try {
-        await streamInfo.writer.write(message);
-      } catch {
-        // ストリームが既に閉じている場合は無視
-      }
-
-      // draft-ietf-moq-transport-19 §10.11:
-      // publisher は PUBLISH_DONE を最後のメッセージとして送信した後、
-      // bidi ストリームを閉じる (SHOULD)
-      try {
-        await streamInfo.writer.close();
-      } catch (err) {
-        this.closeWithError(
-          new SessionError(
-            `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
-      }
-    }
-
-    this.requestStreams.delete(requestId);
-    this.publishers.delete(requestId);
+    return publishSendPublishDone(this as unknown as SessionInternal, publisher);
   }
 
   /**
@@ -3717,7 +2802,7 @@ export class SessionImpl implements Session {
   /**
    * NamespaceSubscription オブジェクトを作成する
    */
-  private createNamespaceSubscription(requestId: bigint): NamespaceSubscription {
+  createNamespaceSubscription(requestId: bigint): NamespaceSubscription {
     const getState = (): "active" | "closed" => {
       const sub = this.namespaceSubscriptions.get(requestId);
       return sub?.state ?? "closed";
@@ -3767,7 +2852,7 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-19 §10.19 (SUBSCRIBE_TRACKS)
    */
-  private createTracksSubscription(requestId: bigint): TracksSubscription {
+  createTracksSubscription(requestId: bigint): TracksSubscription {
     const getState = (): "active" | "closed" => {
       const sub = this.tracksSubscriptions.get(requestId);
       return sub?.state ?? "closed";
@@ -3814,7 +2899,7 @@ export class SessionImpl implements Session {
   /**
    * NamespacePublication オブジェクトを作成する
    */
-  private createNamespacePublication(requestId: bigint): NamespacePublication {
+  createNamespacePublication(requestId: bigint): NamespacePublication {
     // 内部状態の "pending" は REQUEST_OK 受信前のみで、外部に公開する前に "active" になる
     const getState = (): "active" | "closed" => {
       const pub = this.namespacePublications.get(requestId);
@@ -4356,63 +3441,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
    */
   private handleIncomingDatagram(data: Uint8Array): void {
-    try {
-      // draft-ietf-moq-transport-19 §11.5.2 (Padding Datagrams):
-      // "The receiver MUST discard all data received in a padding datagram."
-      // PADDING datagram (0x132b3e29) を varint type のデコードで判定する。
-      // PADDING Stream 受信経路と同じく先頭バイトのハードコードに依存しない
-      // (0x132b3e29 は 5 バイト varint で先頭バイトは 0xf0)。
-      if (data.length > 0) {
-        const [datagramType] = decodeVarint(data, 0);
-        if (Number(datagramType) === 0x132b3e29) {
-          // PADDING datagram は破棄して何もしない
-          return;
-        }
-      }
-
-      const [datagram] = decodeObjectDatagram(data);
-
-      // Track Alias で Subscriber を検索（draft-19 §5.1: 同一 alias に複数 subscription あり得る）
-      const subscribers = this.subscribersByAlias.get(datagram.trackAlias);
-      if (!subscribers || subscribers.length === 0) {
-        return;
-      }
-
-      const object: MoqtObject = {
-        groupId: datagram.groupId,
-        subgroupId: undefined,
-        objectId: datagram.objectId,
-        publisherPriority: datagram.publisherPriority,
-        status: datagram.status ?? ObjectStatus.NORMAL,
-        properties: datagram.properties,
-        payload: datagram.payload ?? new Uint8Array(0),
-      };
-
-      // 各 subscription に filter 再適用して配送
-      for (const subscriber of subscribers) {
-        if (subscriber.hasDatagramCallback()) {
-          subscriber.handleDatagram(object);
-        } else {
-          subscriber.handleObject(object);
-        }
-      }
-    } catch (err) {
-      this.callbacks.debug?.({
-        direction: "recv",
-        type: 0,
-        typeName: "DATAGRAM_DECODE_ERROR",
-        payload: data,
-        decoded: {
-          error: err instanceof Error ? err.message : String(err),
-        },
-        timestamp: Date.now(),
-      });
-      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
-      const sessionError = toProtocolViolationSessionError(err);
-      if (sessionError !== null) {
-        this.closeWithError(sessionError);
-      }
-    }
+    incomingHandleDatagram(this as unknown as SessionInternal, data);
   }
 
   /**
@@ -4424,36 +3453,7 @@ export class SessionImpl implements Session {
    * FETCH_OK より先にデータストリームが到着した場合に使用。
    */
   private waitForFetcher(requestId: bigint): Promise<FetcherImpl | null> {
-    return new Promise<FetcherImpl | null>((resolve) => {
-      // 既に登録されている場合は即座に返す
-      const existing = this.fetchers.get(requestId);
-      if (existing) {
-        resolve(existing);
-        return;
-      }
-
-      // pendingFetch に存在しない場合は不明なリクエスト
-      if (!this.pendingFetch.has(requestId)) {
-        resolve(null);
-        return;
-      }
-
-      let resolved = false;
-
-      const doResolve = () => {
-        if (resolved) return;
-        resolved = true;
-        resolve(this.fetchers.get(requestId) ?? null);
-      };
-
-      // コールバックを登録
-      const callbacks = this.fetcherReadyCallbacks.get(requestId) ?? [];
-      callbacks.push(doResolve);
-      this.fetcherReadyCallbacks.set(requestId, callbacks);
-
-      // タイムアウト: 5 秒以内に FETCH_OK が来なければ null
-      setTimeout(doResolve, 5000);
-    });
+    return incomingWaitForFetcher(this as unknown as SessionInternal, requestId);
   }
 
   /**
@@ -4684,20 +3684,12 @@ export class SessionImpl implements Session {
     context: import("./dataStream").FetchObjectContext | null;
     isFirst: boolean;
   } {
-    return processFetchObjects(
+    return incomingProcessFetchObjects(
+      this as unknown as SessionInternal,
       buffer,
       fetcher,
       context,
       isFirst,
-      {
-        incrementObjectsReceived: () => {
-          this.statsObjectsReceivedViaFetch++;
-        },
-        incrementBytesReceived: (_subscribePath, bytes) => {
-          this.statsBytesReceivedViaFetch += bytes;
-        },
-      },
-      fetcher.getGroupOrder(),
     );
   }
 
@@ -4711,14 +3703,13 @@ export class SessionImpl implements Session {
     header: import("./dataStream").SubgroupHeader,
     previousObjectId: bigint,
   ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
-    return processSubgroupObjects(buffer, subscribers, header, previousObjectId, {
-      incrementObjectsReceived: () => {
-        this.statsObjectsReceivedViaSubscribe++;
-      },
-      incrementBytesReceived: (_subscribePath, bytes) => {
-        this.statsBytesReceivedViaSubscribe += bytes;
-      },
-    });
+    return incomingProcessSubgroupObjects(
+      this as unknown as SessionInternal,
+      buffer,
+      subscribers,
+      header,
+      previousObjectId,
+    );
   }
 
   /**
