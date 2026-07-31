@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: Composer
 - Branch: feature/add-msf-log-track-payload
 - Polished: 2026-07-27
@@ -52,3 +52,14 @@ catalog 宣言だけだと publishTracks を読んだ subscriber が実際のロ
 
 - `#0316` (closed) catalog 型までの先行対応
 - `#0349` Metrics track payload (対になる publishTracks)
+
+## 解決方法
+
+draft-ietf-moq-msf-01 §9 / draft-jennings-moq-log-03 ([MOQLOG]) に従い、Log track の payload と catalog 検証を実装した。
+
+- `src/moqlog.ts`（新規）: `LogEntry` interface（全フィールド optional + 索引シグネチャで未知フィールドを round-trip 保持）、`encodeLogEntry()` / `decodeLogEntry()`（[MOQLOG] §4 の JSON、fatal UTF-8 decode + ProtocolViolationError）、`LOG_SEVERITY_LEVELS`、`logGroupId()`（msf-01 §9.3、Unix epoch マイクロ秒の 62-bit truncate）/ `logObjectId()`、`logTrackNamespace()` / `logTrackName()`（[MOQLOG] §3、§9.2 の "TODO: Finalize on track naming" により暫定対応である旨を注記）。timestamp epoch の矛盾（payload=[MOQLOG]§4 の 1972 起点、Group ID=msf-01§9.3 の Unix epoch）も注記する。
+- `src/msf.ts`: `validatePackagingSpecificRules()` に moqlog 分岐を追加し、packaging="moqlog" は role="log" が MUST（§9.4）を検証する。
+- `src/msf.prop.ts`: `catalogTrackArb` が moqlog 生成時に role="log" を固定する。
+- `src/index.ts`: `export * as MOQLOG` で公開する。
+- `src/moqlog.test.ts` / `src/moqlog.prop.ts`（新規）: round-trip PBT、[MOQLOG] §7 ベクタ、Group/Object ID、namespace/track name、エラーパスを検証する。`src/msf.test.ts` に moqlog + role=log の MUST 検証（直接経路 + clone 経路）を追加する。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記する。
