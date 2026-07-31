@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-03-23
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: manual
 - Branch: feature/add-grease-sending
 - Polished: 2026-07-31
@@ -65,3 +65,13 @@ SETUP はセッション開始時に 1 回だけ送信されるため、確率�
 draft-ietf-moq-transport-19 §14 でも GREASE 予約は存続しており、実装対象として有効なため。`generateGreaseValue()` / `isGreaseValue()` は `src/grease.ts` に存在し、未配線なのは送信パスのみである。
 
 着手スコープは SETUP Option への opt-in GREASE 送信に限定する。Object / Track Properties への注入は本 issue の必須とせず、後続 issue に分ける。
+
+## 解決方法
+
+`ConnectOptions` に `grease?: boolean` を追加し、既存の `authorizationToken` と同じ伝搬経路（`connect()` → `initialize()` → `createSetup()`）で GREASE Setup Option の opt-in 送信を実装した。
+
+- `src/session.ts`: `ConnectOptions` にフィールドを追加し、`initialize()` のオプション経由で `createSetup()` へ受け渡す。
+- `src/index.ts`: `connect()` から `initialize()` へ pass-through する。
+- `src/message/setup.ts`: `createSetup()` に `grease` オプションを追加。`true` のとき GREASE Setup Option を 1 つ追加する。Option Type は `generateGreaseSetupOptionType()` が生成する。N を偶数に固定して奇数 Type（Length プレフィックス付きバイト列）にし、`Number.MAX_SAFE_INTEGER` 内に収める。value は空バイト列。
+- `src/message/setup.test.ts`: grease 未指定 / false / true の各ケース、`isGreaseValue()` による予約値検証、奇数 Type・範囲の不変条件（100 回サンプリング）、roundtrip（20 回サンプリング）を検証する。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記する。
