@@ -16,6 +16,7 @@ import {
 import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { isGreaseValue } from "../grease";
 import { decodeVarint } from "../varint";
 
 // MOQT_IMPLEMENTATION は既定で追加される（moqtImplementation で opt-out / override 可能）
@@ -87,6 +88,55 @@ test("Setup: moqtImplementation: false でも AUTHORIZATION_TOKEN は送信さ�
   assert.equal(setup.parameters.length, 1);
   assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN));
   assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
+});
+
+// draft-ietf-moq-transport-19 §14 (Grease):
+// GREASE 値は 0x7f * N + 0x9D パターンの予約値。grease: true で SETUP に 1 つ追加する。
+// Option Type はランダム生成のため、isGreaseValue() で予約値であることを検証する。
+test("Setup: grease 未指定は GREASE Option を含まない", () => {
+  const setup = createSetup();
+  assert.isUndefined(setup.parameters.find((p) => isGreaseValue(BigInt(p.type))));
+});
+
+test("Setup: grease: false は GREASE Option を含まない", () => {
+  const setup = createSetup({ grease: false });
+  assert.isUndefined(setup.parameters.find((p) => isGreaseValue(BigInt(p.type))));
+});
+
+test("Setup: grease: true は GREASE Setup Option を 1 つ含む", () => {
+  // Option Type はランダム生成のため、複数回サンプリングして不変条件を検証する
+  for (let i = 0; i < 100; i++) {
+    const setup = createSetup({ grease: true });
+    const greaseParams = setup.parameters.filter((p) => isGreaseValue(BigInt(p.type)));
+    assert.equal(greaseParams.length, 1);
+    // 奇数 Type（Length プレフィックス付きバイト列）であること
+    assert.equal(greaseParams[0].type % 2, 1);
+    // Parameter.type (number) で安全に表現できる範囲であること
+    assert.equal(greaseParams[0].type <= Number.MAX_SAFE_INTEGER, true);
+  }
+});
+
+test("Setup: grease: true の GREASE Option は roundtrip する", () => {
+  // GREASE Type はランダムなため、複数回サンプリングして varint 長が異なる
+  // ケース（小さい Type の 1 バイト〜大きい Type の 8 バイト）のエンコード経路を検証する
+  for (let i = 0; i < 20; i++) {
+    const setup = createSetup({ grease: true });
+    const greaseParam = setup.parameters.find((p) => isGreaseValue(BigInt(p.type)));
+    assert.isDefined(greaseParam);
+
+    const encoded = encodeSetupPayload(setup);
+    const decoded = decodeSetupPayload(encoded);
+
+    const decodedGrease = decoded.parameters.find((p) => isGreaseValue(BigInt(p.type)));
+    assert.isDefined(decodedGrease);
+    assert.equal(decodedGrease?.type, greaseParam?.type);
+  }
+});
+
+test("Setup: grease: true でも MOQT_IMPLEMENTATION は送信される", () => {
+  // GREASE は他の Option に影響しない
+  const setup = createSetup({ grease: true });
+  assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
 // draft-ietf-moq-transport-19 Section 10.3:

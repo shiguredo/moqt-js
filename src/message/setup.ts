@@ -7,6 +7,7 @@
  */
 
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
+import { generateGreaseValue } from "../grease";
 import {
   type AuthorizationToken,
   assertAuthorizationTokenForSetup,
@@ -46,11 +47,16 @@ export interface Setup {
  * - 未指定（既定）: MOQT_IMPLEMENTATION_VALUE（`moqt-js/${version}`）を送信する。
  * - false: MOQT_IMPLEMENTATION Option を送信しない（opt-out）。
  * - 文字列: その値をそのまま送信する（override。空文字列も指定どおり送信する）。
+ *
+ * grease: true で Section 14 (Grease) の GREASE Setup Option を 1 つ追加する。
+ * 未知の Option を gracefully に扱えることを対向に保証するための予約値（RFC 9170 §3.3 由来の
+ * SHOULD 推奨）を送信する。既定（未指定 / false）では送信しない。
  */
 export function createSetup(options?: {
   authorizationToken?: AuthorizationToken;
   maxAuthTokenCacheSize?: number;
   moqtImplementation?: string | false;
+  grease?: boolean;
 }): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
@@ -86,10 +92,36 @@ export function createSetup(options?: {
     });
   }
 
+  // GREASE Setup Option - draft-ietf-moq-transport-19 §14 (Grease)
+  // 0x7f * N + 0x9D パターンの予約値を送信し、対向が未知の Option を gracefully に
+  // 扱えることを保証する（RFC 9170 §3.3 由来の SHOULD 推奨）。opt-in のとき 1 つ追加する。
+  if (options?.grease) {
+    parameters.push({
+      type: generateGreaseSetupOptionType(),
+      value: new Uint8Array(0),
+    });
+  }
+
   return {
     type: MessageType.SETUP,
     parameters,
   };
+}
+
+/**
+ * GREASE Setup Option の Option Type を生成する
+ *
+ * draft-ietf-moq-transport-19 §14: GREASE 値は 0x7f * N + 0x9D（N は非負整数）のパターン。
+ * Key-Value-Pairs 規則（parameter.ts）では奇数 Type は Length プレフィックス付きバイト列、
+ * 偶数 Type は varint 値としてエンコードされる。任意のバイト列を安全に送信するため、
+ * N を偶数に固定して Option Type を奇数にする（0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。
+ * Parameter.type は number 型のため、generateGreaseValue() の bigint 結果が
+ * Number.MAX_SAFE_INTEGER を超えない範囲で N を選ぶ。
+ */
+function generateGreaseSetupOptionType(): number {
+  const maxN = Math.floor((Number.MAX_SAFE_INTEGER - 0x9d) / 0x7f);
+  const n = 2 * Math.floor(Math.random() * Math.floor(maxN / 2));
+  return Number(generateGreaseValue(n));
 }
 
 /**
