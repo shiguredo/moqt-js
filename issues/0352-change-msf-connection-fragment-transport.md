@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: Composer
 - Branch: feature/change-msf-connection-fragment-transport
 - Polished: 2026-07-27
@@ -43,3 +43,12 @@ fragment で `connection=q` と指定してもサイレントに無視され、W
 
 - `#0316` (closed) `getConnectionParameter`
 - `#0356` URI fragment reserved key helper (range / c4m。本適用とは独立)
+
+## 解決方法
+
+draft-ietf-moq-msf-01 §11.1.1 の `connection=q|wt` を接続 API に適用した。
+
+- `src/msf.ts`: 純粋関数 `assertMsfConnectionSupported(fragment)` を新設。`fragment.type === "msf"` のとき `parseMsfFragmentValue` + `getConnectionParameter` で `connection` 値を取得し、`"q"` は Native QUIC 未実装のためエラーを throw、`"wt"` / 欠如 / 不正値（undefined）は現行の WebTransport を許可する。msf 以外の fragment type / null は対象外。
+- `src/index.ts`: `connect()` が `normalizeMoqtUri` 直後・`new WebTransport` 直前に `assertMsfConnectionSupported(fragment)` を呼び、connection を接続開始前に解釈する。
+- `src/msf.test.ts`: `assertMsfConnectionSupported` のテスト 5 件（q throw / wt 許可 / 欠如許可 / 不正値 silent ignore / msf 以外・null 対象外）を追加。
+- `CHANGES.md`: `## develop` に `[CHANGE]` を追記する。
