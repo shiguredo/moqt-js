@@ -218,6 +218,10 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       track.encryptionScheme = "moq-secure-objects";
       track.cipherSuite = "aes-128-gcm-sha256";
     }
+    // §9.4: packaging="moqlog" の Log track は role="log" が MUST。検証を通過するよう固定する。
+    if (track.packaging === "moqlog") {
+      track.role = "log";
+    }
     return track;
   });
 

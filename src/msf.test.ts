@@ -184,7 +184,7 @@ test("Catalog: tracks と publishTracks の合算 uniqueness は行わない (su
   const catalog: Catalog = {
     version: "draft-01",
     tracks: [{ name: "log", packaging: "loc", isLive: true }],
-    publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
   const encoded = encodeCatalog(catalog);
   // round-trip が成立する = 例外なくデコードされる
@@ -198,8 +198,8 @@ test("Catalog: publishTracks 配列内の name uniqueness 違反は reject (§5.
     version: "draft-01",
     tracks: [],
     publishTracks: [
-      { name: "log", packaging: "moqlog", isLive: true },
-      { name: "log", packaging: "moqlog", isLive: true },
+      { name: "log", packaging: "moqlog", role: "log", isLive: true },
+      { name: "log", packaging: "moqlog", role: "log", isLive: true },
     ],
   };
   assert.throws(() => decodeCatalogMessage(encodeRaw(catalog)), /duplicate track name 'log'/);
@@ -361,6 +361,7 @@ test("Catalog: publishTracks では connectionUri を許可", () => {
       {
         name: "log",
         packaging: "moqlog",
+        role: "log",
         isLive: true,
         connectionUri: "moqt://logs.example.com:4443",
         token: "abc",
@@ -370,6 +371,41 @@ test("Catalog: publishTracks では connectionUri を許可", () => {
   const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
   assert.strictEqual(decoded.publishTracks?.[0].connectionUri, "moqt://logs.example.com:4443");
   assert.strictEqual(decoded.publishTracks?.[0].token, "abc");
+});
+
+// draft-ietf-moq-msf-01 §9.4: packaging="moqlog" の Log track は role="log" が MUST。
+test("Catalog: packaging=moqlog で role=log は許可 (§9.4)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
+  };
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.strictEqual(decoded.publishTracks?.[0].role, "log");
+});
+
+test("Catalog: packaging=moqlog で role 欠落は reject (§9.4)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /moqlog track must have role='log' per §9.4/,
+  );
+});
+
+test("Catalog: packaging=moqlog で role=log 以外は reject (§9.4)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "log", packaging: "moqlog", role: "video", isLive: true }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /moqlog track must have role='log' per §9.4/,
+  );
 });
 
 test("Catalog: trackDuration を isLive=true で含めると reject (§5.2.35)", () => {
@@ -526,6 +562,28 @@ test("applyCatalogDelta: clone で packaging を mediatimeline に上書き + de
   assert.throws(
     () => applyCatalogDelta(current, delta),
     /mediatimeline track must include depends/,
+  );
+});
+
+test("applyCatalogDelta: clone で packaging を moqlog に上書き + role 欠落は reject (§9.4)", () => {
+  // clone で base.packaging=loc を moqlog に override したが role="log" が無い場合、
+  // 適用後に §9.4 MUST 違反として reject される。
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "log", parentName: "v", packaging: "moqlog" } as CatalogTrack],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /moqlog track must have role='log' per §9.4/,
   );
 });
 

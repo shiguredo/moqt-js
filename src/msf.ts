@@ -1454,6 +1454,15 @@ function validatePackagingSpecificRules(
         }'`,
       );
     }
+  } else if (packaging === "moqlog") {
+    // §9.4: packaging="moqlog" の Log track は role="log" が MUST
+    if (track.role !== "log") {
+      throw new Error(
+        `invalid track '${name}': moqlog track must have role='log' per §9.4, got '${
+          track.role ?? "(absent)"
+        }'`,
+      );
+    }
   }
 
   // packaging に対する MUST NOT 検証。

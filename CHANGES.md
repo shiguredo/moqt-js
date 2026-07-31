@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MSF Log track の payload を実装する
+  - src/moqlog.ts を新設し LogEntry の encode / decode、Group ID / Object ID、namespace / track name helper を追加する
+  - validatePackagingSpecificRules に packaging=moqlog は role=log が MUST の検証を追加する
+  - @voluntas
 - [ADD] LOC Properties を Track Property としても扱えるようにする
   - PublishOptions に locTimescale / locVideoConfig / locAudioConfig を追加し、Track Properties として広告する
   - resolveVideoProperties / resolveAudioProperties が Track と Object の両方を探索し Object を優先する
