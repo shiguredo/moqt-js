@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: Composer
 - Branch: feature/add-msf-metrics-track-payload
 - Polished: 2026-07-27
@@ -54,3 +54,14 @@ Log track と同様、catalog 宣言だけでは定量メトリクスを送れ�
 
 - `#0316` (closed) catalog 型までの先行対応
 - `#0348` Log track payload (対になる publishTracks)
+
+## 解決方法
+
+draft-ietf-moq-msf-01 §10 / draft-jennings-moq-metrics-02 ([MOQMETRICS]) に従い、Metrics track の payload と catalog 検証を実装した。`src/moqlog.ts`（#0348）と対の構成。
+
+- `src/moqmetrics.ts`（新規）: `MetricsCaptureObject`（Object 0: capture_timestamp ナノ秒 + attributes）/ `MetricObject`（Object 1 以降: metric_name + value、Gauge/Counter の float64/int64）の encode/decode（[MOQMETRICS] §3、fatal UTF-8 decode + ProtocolViolationError、共通 `decodeJsonObject`）、`METRICS_GRANULARITY_LEVELS`、`metricsGroupId()`（msf-01 §10.3、Unix epoch ミリ秒の 62-bit truncate）/ `metricObjectId()`、`metricsTrackNamespace()` / `metricsTrackName()`（[MOQMETRICS] §3、§10.2 の "TODO: Finalize the track naming" により暫定対応である旨を注記）。Group ID epoch の矛盾（[MOQMETRICS]§3 の 1972 vs msf-01§10.3 の 1970）と単位差（Group ID ミリ秒 / Object 0 ナノ秒）も注記する。
+- `src/msf.ts`: `validatePackagingSpecificRules()` に moqmetrics 分岐を追加し、packaging="moqmetrics" は role="metrics" が MUST（§10.4）を検証する。
+- `src/msf.prop.ts`: `catalogTrackArb` が moqmetrics 生成時に role="metrics" を固定する。
+- `src/index.ts`: `export * as MOQMETRICS` で公開する。
+- `src/moqmetrics.test.ts` / `src/moqmetrics.prop.ts`（新規）: Object 0 / Object 1 以降の round-trip（[MOQMETRICS] §3.1 の例、構文誤り修正版）、Group/Object ID、namespace/track name、エラーパスを検証する。`src/msf.test.ts` に moqmetrics + role=metrics の MUST 検証（直接経路 + clone 経路）を追加する。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記する。

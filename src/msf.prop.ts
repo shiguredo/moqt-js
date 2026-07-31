@@ -222,6 +222,10 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
     if (track.packaging === "moqlog") {
       track.role = "log";
     }
+    // §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST。検証を通過するよう固定する。
+    if (track.packaging === "moqmetrics") {
+      track.role = "metrics";
+    }
     return track;
   });
 
