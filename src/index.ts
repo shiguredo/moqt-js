@@ -221,8 +221,11 @@ export async function connect(
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
   // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // moqtImplementation は SETUP Option (0x07) の送信を制御する
+  // draft-ietf-moq-transport-19 §10.3.1.5 / §13.8
   await session.initialize({
     authorizationToken: options?.authorizationToken,
+    moqtImplementation: options?.moqtImplementation,
   });
 
   return session;
