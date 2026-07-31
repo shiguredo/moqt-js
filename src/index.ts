@@ -79,6 +79,9 @@ export * from "./msf";
 // MOQ Log の再エクスポート (draft-jennings-moq-log / draft-ietf-moq-msf §9)
 export * as MOQLOG from "./moqlog";
 
+// MOQ Metrics の再エクスポート (draft-jennings-moq-metrics / draft-ietf-moq-msf §10)
+export * as MOQMETRICS from "./moqmetrics";
+
 // バージョン
 export { version, MOQT_IMPLEMENTATION_VALUE } from "./version";
 

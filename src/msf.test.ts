@@ -408,6 +408,41 @@ test("Catalog: packaging=moqlog で role=log 以外は reject (§9.4)", () => {
   );
 });
 
+// draft-ietf-moq-msf-01 §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST。
+test("Catalog: packaging=moqmetrics で role=metrics は許可 (§10.4)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "metrics", packaging: "moqmetrics", role: "metrics", isLive: true }],
+  };
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.strictEqual(decoded.publishTracks?.[0].role, "metrics");
+});
+
+test("Catalog: packaging=moqmetrics で role 欠落は reject (§10.4)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "metrics", packaging: "moqmetrics", isLive: true }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /moqmetrics track must have role='metrics' per §10.4/,
+  );
+});
+
+test("Catalog: packaging=moqmetrics で role=metrics 以外は reject (§10.4)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "metrics", packaging: "moqmetrics", role: "video", isLive: true }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /moqmetrics track must have role='metrics' per §10.4/,
+  );
+});
+
 test("Catalog: trackDuration を isLive=true で含めると reject (§5.2.35)", () => {
   const catalog = {
     version: "draft-01",
@@ -584,6 +619,28 @@ test("applyCatalogDelta: clone で packaging を moqlog に上書き + role 欠�
   assert.throws(
     () => applyCatalogDelta(current, delta),
     /moqlog track must have role='log' per §9.4/,
+  );
+});
+
+test("applyCatalogDelta: clone で packaging を moqmetrics に上書き + role 欠落は reject (§10.4)", () => {
+  // clone で base.packaging=loc を moqmetrics に override したが role="metrics" が無い場合、
+  // 適用後に §10.4 MUST 違反として reject される。
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "metrics", parentName: "v", packaging: "moqmetrics" } as CatalogTrack],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /moqmetrics track must have role='metrics' per §10.4/,
   );
 });
 
