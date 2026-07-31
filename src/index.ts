@@ -223,9 +223,11 @@ export async function connect(
   // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
   // draft-ietf-moq-transport-19 §10.3.1.5 / §13.8
+  // grease: true は GREASE Setup Option (§14) を追加する
   await session.initialize({
     authorizationToken: options?.authorizationToken,
     moqtImplementation: options?.moqtImplementation,
+    grease: options?.grease,
   });
 
   return session;
