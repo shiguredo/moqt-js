@@ -1463,6 +1463,15 @@ function validatePackagingSpecificRules(
         }'`,
       );
     }
+  } else if (packaging === "moqmetrics") {
+    // §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST
+    if (track.role !== "metrics") {
+      throw new Error(
+        `invalid track '${name}': moqmetrics track must have role='metrics' per §10.4, got '${
+          track.role ?? "(absent)"
+        }'`,
+      );
+    }
   }
 
   // packaging に対する MUST NOT 検証。
