@@ -18,6 +18,7 @@ import {
 } from "../message";
 import { encodeVarint } from "../varint";
 import { TrackPropertyId, type Property } from "../properties";
+import { LOCPropertyId } from "../loc";
 
 // ============================================================================
 // 値域検証ヘルパー
@@ -145,6 +146,34 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
     trackProperties.push({
       id: TrackPropertyId.DYNAMIC_GROUPS,
       value: 1n,
+    });
+  }
+
+  // LOC TIMESCALE (0x08) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // 偶数 ID のため value 形式。Track 初期化時に広告し Object 単位の冗長送信を削減する。
+  if (options?.locTimescale !== undefined) {
+    validateNonNegative(options.locTimescale, "LOC TIMESCALE");
+    trackProperties.push({
+      id: LOCPropertyId.TIMESCALE,
+      value: options.locTimescale,
+    });
+  }
+
+  // LOC VIDEO_CONFIG (0x0D) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // 奇数 ID のため data 形式。
+  if (options?.locVideoConfig !== undefined) {
+    trackProperties.push({
+      id: LOCPropertyId.VIDEO_CONFIG,
+      data: options.locVideoConfig,
+    });
+  }
+
+  // LOC AUDIO_CONFIG (0x0F) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // 奇数 ID のため data 形式。
+  if (options?.locAudioConfig !== undefined) {
+    trackProperties.push({
+      id: LOCPropertyId.AUDIO_CONFIG,
+      data: options.locAudioConfig,
     });
   }
 

@@ -25,6 +25,7 @@
 
 import { IncompleteDataError, ProtocolViolationError } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
+import { type Property } from "./properties";
 
 /**
  * LOC Property ID (draft-ietf-moq-loc-04 Section 2.3 / §6.1 Table 1)
@@ -486,6 +487,81 @@ export function decodeAudioProperties(data: Uint8Array): AudioProperties {
   }
 
   return result;
+}
+
+/**
+ * Track Properties（delta 復元済みの Property[]）から LOC の Track スコープ値を抽出する。
+ *
+ * draft-ietf-moq-loc-04 Table 1 で Scope が Track, Object なのは
+ * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) の 3 つ。
+ * TIMESTAMP / VIDEO_FRAME_MARKING / AUDIO_LEVEL は Object スコープのみのためここでは抽出しない。
+ * TIMESCALE は偶数 ID（value 形式）、VIDEO_CONFIG / AUDIO_CONFIG は奇数 ID（data 形式）。
+ */
+function extractLocTrackProperties(trackProperties?: ReadonlyArray<Property>): {
+  timescale?: bigint;
+  videoConfig?: Uint8Array;
+  audioConfig?: Uint8Array;
+} {
+  const result: { timescale?: bigint; videoConfig?: Uint8Array; audioConfig?: Uint8Array } = {};
+  if (!trackProperties) {
+    return result;
+  }
+  for (const property of trackProperties) {
+    if (property.id === LOCPropertyId.TIMESCALE && property.value !== undefined) {
+      result.timescale = property.value;
+    } else if (property.id === LOCPropertyId.VIDEO_CONFIG && property.data !== undefined) {
+      result.videoConfig = property.data;
+    } else if (property.id === LOCPropertyId.AUDIO_CONFIG && property.data !== undefined) {
+      result.audioConfig = property.data;
+    }
+  }
+  return result;
+}
+
+/**
+ * Video の LOC Properties を Track Property と Object Property の両方から解決する。
+ *
+ * draft-ietf-moq-transport-19 §12.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
+ * 同一 Property が両方に存在する場合は Object Property を優先する。
+ * trackProperties は decodeProperties() で delta 復元済みの Property[]、
+ * objectProperties は絶対 Type 連結の Object Properties バイト列。
+ * timestamp / frameMarking は Object スコープのみのため Object から取得する。
+ * timescale / config は Track スコープを持つため、Object が持たなければ Track でフォールバックする。
+ */
+export function resolveVideoProperties(
+  trackProperties: ReadonlyArray<Property> | undefined,
+  objectProperties: Uint8Array | undefined,
+): VideoProperties {
+  const track = extractLocTrackProperties(trackProperties);
+  const object =
+    objectProperties && objectProperties.length > 0 ? decodeVideoProperties(objectProperties) : {};
+  return {
+    timestamp: object.timestamp,
+    timescale: object.timescale ?? track.timescale,
+    frameMarking: object.frameMarking,
+    config: object.config ?? track.videoConfig,
+  };
+}
+
+/**
+ * Audio の LOC Properties を Track Property と Object Property の両方から解決する。
+ *
+ * 優先規則は resolveVideoProperties と同じ（Object 優先、Track はフォールバック）。
+ * timestamp / audioLevel は Object スコープのみのため Object から取得する。
+ */
+export function resolveAudioProperties(
+  trackProperties: ReadonlyArray<Property> | undefined,
+  objectProperties: Uint8Array | undefined,
+): AudioProperties {
+  const track = extractLocTrackProperties(trackProperties);
+  const object =
+    objectProperties && objectProperties.length > 0 ? decodeAudioProperties(objectProperties) : {};
+  return {
+    timestamp: object.timestamp,
+    timescale: object.timescale ?? track.timescale,
+    audioLevel: object.audioLevel,
+    config: object.config ?? track.audioConfig,
+  };
 }
 
 /**

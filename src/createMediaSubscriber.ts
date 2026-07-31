@@ -739,12 +739,14 @@ class MediaSubscriberImpl implements MediaSubscriber {
     this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
 
     // LOC から情報を取得
+    // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
     let timestamp = 0;
-    if (obj.properties && obj.properties.length > 0) {
-      const locProperties = LOC.decodeAudioProperties(obj.properties);
-      if (locProperties.timestamp !== undefined) {
-        timestamp = Number(locProperties.timestamp);
-      }
+    const locProperties = LOC.resolveAudioProperties(
+      this.audioSubscriber?.trackProperties,
+      obj.properties,
+    );
+    if (locProperties.timestamp !== undefined) {
+      timestamp = Number(locProperties.timestamp);
     }
 
     // デコード
@@ -755,16 +757,18 @@ class MediaSubscriberImpl implements MediaSubscriber {
     if (!this.videoDecoder || !this.videoDecoderConfigured) return;
 
     // LOC から情報を取得
+    // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
     let isKeyFrame = false;
     let timestamp = 0;
-    if (obj.properties && obj.properties.length > 0) {
-      const locProperties = LOC.decodeVideoProperties(obj.properties);
-      if (locProperties.timestamp !== undefined) {
-        timestamp = Number(locProperties.timestamp);
-      }
-      if (locProperties.frameMarking) {
-        isKeyFrame = locProperties.frameMarking.isIndependent;
-      }
+    const locProperties = LOC.resolveVideoProperties(
+      this.videoSubscriber?.trackProperties,
+      obj.properties,
+    );
+    if (locProperties.timestamp !== undefined) {
+      timestamp = Number(locProperties.timestamp);
+    }
+    if (locProperties.frameMarking) {
+      isKeyFrame = locProperties.frameMarking.isIndependent;
     }
 
     this.videoStats.framesReceived++;

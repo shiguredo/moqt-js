@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] LOC Properties を Track Property としても扱えるようにする
+  - PublishOptions に locTimescale / locVideoConfig / locAudioConfig を追加し、Track Properties として広告する
+  - resolveVideoProperties / resolveAudioProperties が Track と Object の両方を探索し Object を優先する
+  - @voluntas
 - [ADD] GREASE Setup Option の opt-in 送信を追加する
   - ConnectOptions に grease?: boolean を追加し、true のとき SETUP に GREASE Setup Option を 1 つ送信する
   - draft-ietf-moq-transport-19 §14 に基づき 0x7f \* N + 0x9D パターンの予約値（奇数 Type）を送信する
