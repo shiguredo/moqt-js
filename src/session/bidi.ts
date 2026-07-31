@@ -21,6 +21,7 @@ import {
   MessageType,
   FetchType,
   MessageParameterType,
+  encodeAuthorizationToken,
   encodeFetchPayload,
   encodeRequestUpdatePayload,
   encodeRequestErrorPayload,
@@ -34,6 +35,7 @@ import {
   decodeRequestUpdatePayload,
   decodeSubscribeOkPayload,
   getParameterLocationValue,
+  type AuthorizationToken,
   type Location,
   type Parameter,
 } from "../message";
@@ -443,6 +445,7 @@ export async function bidiReadSubscribeResponse(
             pending.joiningFetch,
             pending.objectCallback,
             largestLocation,
+            pending.impl.getAuthorizationToken(),
           );
         } else {
           pending.joiningFetch.onEnd?.();
@@ -886,6 +889,16 @@ export async function bidiSendRequestUpdate(
     });
   }
 
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
+  // track に関連するトークンは REQUEST_UPDATE に MUST 付与。SUBSCRIBE 送信時のトークンを再利用する。
+  const authorizationToken = subscriber.getAuthorizationToken();
+  if (authorizationToken !== undefined) {
+    parameters.push({
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(authorizationToken),
+    });
+  }
+
   const requestUpdateMsg = {
     type: MessageType.REQUEST_UPDATE,
     requestId: updateRequestId,
@@ -933,6 +946,7 @@ export async function bidiSendJoiningFetch(
   options: JoiningFetchOptions,
   defaultObjectCallback: (object: MoqtObject) => void,
   largestLocation: Location,
+  authorizationToken?: AuthorizationToken,
 ): Promise<void> {
   const requestId = session.nextRequestId;
   session.nextRequestId += 2n;
@@ -985,6 +999,15 @@ export async function bidiSendJoiningFetch(
     fetchMsg.parameters.push({
       type: MessageParameterType.FILL_TIMEOUT,
       value: encodeVarint(options.fillTimeout),
+    });
+  }
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
+  // Joining Fetch は SUBSCRIBE に紐づく FETCH のため、SUBSCRIBE と同じトークンを MUST 付与。
+  if (authorizationToken !== undefined) {
+    fetchMsg.parameters.push({
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(authorizationToken),
     });
   }
 

@@ -130,6 +130,15 @@ export interface MediaSubscriberOptions {
   // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 10.2.2)
   authorizationToken?: import("../message").AuthorizationToken;
+  // draft-ietf-moq-msf-01 §11.4.2: トークン取得は仕様の対象外のためコールバックで注入する。
+  // §5.2.42 authInfo を持つ track の subscribe 時に呼ばれ、AUTHORIZATION_TOKEN を返す。
+  // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.4.4）。
+  getAuthorizationToken?: (
+    authInfo: import("../msf").AuthInfo,
+  ) =>
+    | import("../message").AuthorizationToken
+    | undefined
+    | Promise<import("../message").AuthorizationToken | undefined>;
   // Pending Subgroup Stream の buffer 設定 (低レベル API の ConnectOptions.pendingSubgroup)
   // draft-ietf-moq-transport-19 §11.4.2
   // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される

@@ -6,9 +6,16 @@
 
 import { connect } from "./index";
 import { supportsDynamicGroups } from "./properties";
-import type { ConnectCallbacks, ConnectOptions, Session, JoiningFetchOptions } from "./session";
+import type {
+  ConnectCallbacks,
+  ConnectOptions,
+  Session,
+  JoiningFetchOptions,
+  SubscribeOptions,
+} from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
+import type { AuthorizationToken } from "./message";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
@@ -16,6 +23,7 @@ import {
   decodeCatalogMessage,
   getAudioTracks,
   getVideoTracks,
+  type AuthInfo,
   type Catalog,
   type CatalogTrack,
 } from "./msf";
@@ -35,6 +43,40 @@ import type {
   VideoReceiverStats,
   VideoSubscribeOptions,
 } from "./codec/types";
+
+/**
+ * authInfo に応じて Authorization Token を解決する純粋関数
+ *
+ * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
+ * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
+ * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
+ *
+ * @param authInfo track の authInfo（§5.2.42）。空または未指定なら認可不要。
+ * @param getAuthorizationToken トークン取得コールバック（§11.4.2、呼び出し側注入）
+ * @returns 解決したトークン。認可不要なら undefined。
+ * @throws authInfo があるのにコールバック未提供、またはトークンを取得できない場合
+ */
+export async function resolveAuthorizationToken(
+  authInfo: AuthInfo | undefined,
+  getAuthorizationToken?: (
+    authInfo: AuthInfo,
+  ) => AuthorizationToken | undefined | Promise<AuthorizationToken | undefined>,
+): Promise<AuthorizationToken | undefined> {
+  if (!authInfo || Object.keys(authInfo).length === 0) {
+    // 認可不要
+    return undefined;
+  }
+  if (!getAuthorizationToken) {
+    throw new Error(
+      "track requires authorization (authInfo present) but no getAuthorizationToken callback was provided",
+    );
+  }
+  const token = await getAuthorizationToken(authInfo);
+  if (!token) {
+    throw new Error("track requires authorization but getAuthorizationToken returned no token");
+  }
+  return token;
+}
 
 // デフォルト設定
 const DEFAULT_AUDIO_TRACK_NAME = "audio";
@@ -617,6 +659,19 @@ class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * track の authInfo に応じて Authorization Token を解決する
+   *
+   * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
+   * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
+   * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
+   */
+  private async resolveTrackAuthorizationToken(
+    track: CatalogTrack | null,
+  ): Promise<AuthorizationToken | undefined> {
+    return resolveAuthorizationToken(track?.authInfo, this.options.getAuthorizationToken);
+  }
+
+  /**
    * メディアトラックを subscribe する
    */
   private async subscribeMediaTracks(): Promise<void> {
@@ -630,27 +685,31 @@ class MediaSubscriberImpl implements MediaSubscriber {
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
-      this.audioSubscriber = await this.session.subscribe(namespace, trackName, {
-        object: (obj) => this.handleAudioObject(obj),
-        end: () => {
-          // トラック終了
+      // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
+      const authorizationToken = await this.resolveTrackAuthorizationToken(this.audioTrackInfo);
+      this.audioSubscriber = await this.session.subscribe(
+        namespace,
+        trackName,
+        {
+          object: (obj) => this.handleAudioObject(obj),
+          end: () => {
+            // トラック終了
+          },
+          error: (error) => this.callbacks.onError?.(error),
         },
-        error: (error) => this.callbacks.onError?.(error),
-      });
+        { authorizationToken },
+      );
     }
 
     // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
-      const subscribeOptions: {
-        joiningFetch?: {
-          type: "relative";
-          start: bigint;
-          onObject?: (obj: MoqtObject) => void;
-          onEnd?: () => void;
-          onError?: (error: Error) => void;
-        };
-      } = {};
+      const subscribeOptions: SubscribeOptions = {};
+
+      // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
+      subscribeOptions.authorizationToken = await this.resolveTrackAuthorizationToken(
+        this.videoTrackInfo,
+      );
 
       if (joiningFetchEnabled) {
         // Joining Fetch 有効時は FETCH 完了まで SUBSCRIBE オブジェクトをバッファリング
