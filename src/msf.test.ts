@@ -36,6 +36,7 @@ import {
   resolveInitData,
   parseMsfFragmentValue,
   getConnectionParameter,
+  assertMsfConnectionSupported,
   getWallclockRanges,
   getMediatimeRanges,
   getLocationRanges,
@@ -1150,6 +1151,32 @@ test("parseMsfFragmentValue: connection=q parameter を解析", () => {
   const result = parseMsfFragmentValue("ns--track&connection=q");
   assert.deepStrictEqual(result.parameters, [["connection", "q"]]);
   assert.strictEqual(getConnectionParameter(result.parameters), "q");
+});
+
+// assertMsfConnectionSupported（§11.1.1 connection による transport 選択の適用）
+test("assertMsfConnectionSupported: connection=q は Native QUIC 未実装で throw", () => {
+  assert.throws(
+    () => assertMsfConnectionSupported({ type: "msf", value: "ns--track&connection=q" }),
+    /connection='q' requires Native QUIC/,
+  );
+});
+
+test("assertMsfConnectionSupported: connection=wt は WebTransport を許可（throw しない）", () => {
+  assertMsfConnectionSupported({ type: "msf", value: "ns--track&connection=wt" });
+});
+
+test("assertMsfConnectionSupported: connection 欠如は現行 WebTransport（throw しない）", () => {
+  assertMsfConnectionSupported({ type: "msf", value: "ns--track" });
+});
+
+test("assertMsfConnectionSupported: connection 不正値は silent ignore（throw しない）", () => {
+  // getConnectionParameter が undefined を返すため connection 欠如と同じ扱い
+  assertMsfConnectionSupported({ type: "msf", value: "ns--track&connection=xyz" });
+});
+
+test("assertMsfConnectionSupported: msf 以外の fragment / null は対象外（throw しない）", () => {
+  assertMsfConnectionSupported({ type: "other", value: "anything" });
+  assertMsfConnectionSupported(null);
 });
 
 test("parseMsfFragmentValue: 複数 wallclock-range を順序保持で返す (§11.1.1)", () => {

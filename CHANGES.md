@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] MSF URI fragment の connection による transport 選択を適用する
+  - connect() が msf fragment の connection パラメータを接続開始前に解釈する（§11.1.1）
+  - connection=q は Native QUIC 未実装のためエラーにし、connection=wt / 欠如は WebTransport を許可する
+  - @voluntas
 - [CHANGE] 未知 Catalog field を Variable Substitution 対象にする
   - validateCatalog / buildValidatedCatalogTrack が未知 field を検証しないが保持するよう変更する（§5 の ignore を「保持」と解釈）
   - resolveCatalogVariables が root / track の未知 string field（ネスト object / array 内含む）の %var% を置換する
