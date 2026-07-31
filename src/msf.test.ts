@@ -454,8 +454,9 @@ test("Catalog: trackDuration を isLive=true で含めると reject (§5.2.35)",
   );
 });
 
-test("Catalog: 未知ルートフィールドは ignore する (§5)", () => {
+test("Catalog: 未知ルートフィールドは検証しないが保持する (§5)", () => {
   // §5: A parser MUST ignore fields it does not understand.
+  // 本実装では「ignore」を「検証はしないが保持」と解釈する（§5.4 Variable Substitution の対象になり得るため）。
   const raw = {
     version: "draft-01",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
@@ -463,7 +464,9 @@ test("Catalog: 未知ルートフィールドは ignore する (§5)", () => {
   };
   const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
   assert.strictEqual(decoded.tracks[0].name, "v");
-  assert.isFalse("customRootField" in decoded);
+  assert.deepEqual((decoded as unknown as Record<string, unknown>).customRootField, {
+    foo: "bar",
+  });
 });
 
 test("Catalog: template の round-trip と precision loss reject (§7.4.1)", () => {
@@ -1017,6 +1020,118 @@ test("resolveCatalogVariables: % リテラル単独は reject (§5.4.1)", () => 
     tracks: [{ name: "v", packaging: "loc", isLive: true, label: "100% off" }],
   };
   assert.throws(() => resolveCatalogVariables(catalog, {}), /literal %/);
+});
+
+// 未知フィールドの Variable Substitution（§5.4 / §5.6.14）
+// decodeCatalogMessage → validateCatalog → resolveCatalogVariables の end-to-end 経路で、
+// 未知 string field 内の %var% が置換されることを検証する。
+
+test("resolveCatalogVariables: 未知 track field の %var% を end-to-end で置換する (§5.6.14)", () => {
+  // §5.6.14 の例: 未知 field "c4m" の "%token%" が置換される
+  const raw = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "cmcdv2-%id%",
+        namespace: "advertising-decisions/live-sports/%event%",
+        packaging: "eventtimeline",
+        isLive: true,
+        eventType: "com.example.iab.vast",
+        depends: ["v"],
+        mimeType: "application/json",
+        c4m: "%token%",
+      },
+    ],
+  };
+  // decode 経路で未知 field c4m が保持される
+  const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
+  assert.strictEqual((decoded.tracks[0] as unknown as Record<string, unknown>).c4m, "%token%");
+
+  // resolve 経路で既知 field と未知 field の両方が置換される
+  const resolved = resolveCatalogVariables(decoded, { token: "1234", id: "bob", event: "xyz" });
+  assert.strictEqual(resolved.tracks[0].name, "cmcdv2-bob");
+  assert.strictEqual(resolved.tracks[0].namespace, "advertising-decisions/live-sports/xyz");
+  assert.strictEqual((resolved.tracks[0] as unknown as Record<string, unknown>).c4m, "1234");
+});
+
+test("resolveCatalogVariables: 未知 root field の %var% を置換する", () => {
+  const raw = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    customEndpoint: "https://log.example.com/%id%",
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { id: "viewer1" });
+  assert.strictEqual(
+    (resolved as unknown as Record<string, unknown>).customEndpoint,
+    "https://log.example.com/viewer1",
+  );
+});
+
+test("resolveCatalogVariables: ネスト object / array 内の未知 field 文字列も置換する", () => {
+  // §5.4 にネスト再帰規則は無いが、本実装の方針としてネスト内も走査する
+  const raw = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "v",
+        packaging: "loc",
+        isLive: true,
+        vendorExt: { url: "https://x.example/%id%", list: ["a-%id%", "static"] },
+      },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { id: "42" });
+  const vendorExt = (resolved.tracks[0] as unknown as Record<string, unknown>).vendorExt as {
+    url: string;
+    list: string[];
+  };
+  assert.strictEqual(vendorExt.url, "https://x.example/42");
+  assert.deepEqual(vendorExt.list, ["a-42", "static"]);
+});
+
+test("Catalog: 未知 track field は decode で保持され encode で再出力される", () => {
+  const raw = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, c4m: "abc" }],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
+  assert.strictEqual((decoded.tracks[0] as unknown as Record<string, unknown>).c4m, "abc");
+  // encode → decode で未知 field が round-trip する
+  const redecoded = decodeCatalogMessage(encodeCatalog(decoded)) as Catalog;
+  assert.strictEqual((redecoded.tracks[0] as unknown as Record<string, unknown>).c4m, "abc");
+});
+
+test("resolveCatalogVariables: 未知 publishTracks field の %var% を置換する", () => {
+  const raw = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [
+      { name: "log", packaging: "moqlog", role: "log", isLive: true, c4m: "%token%" },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
+  const resolved = resolveCatalogVariables(decoded, { token: "abc" });
+  const publishTrack = resolved.publishTracks?.[0];
+  assert.isDefined(publishTrack);
+  assert.strictEqual((publishTrack as unknown as Record<string, unknown>).c4m, "abc");
+});
+
+test("applyCatalogDelta: 未知 root field をベース catalog から引き継ぐ", () => {
+  const raw = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    customRootField: "kept",
+  };
+  const current = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+  };
+  const result = applyCatalogDelta(current, delta);
+  assert.strictEqual((result as unknown as Record<string, unknown>).customRootField, "kept");
+  assert.strictEqual(result.tracks.length, 2);
 });
 
 // =============================================================================
