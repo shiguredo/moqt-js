@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: Composer
 - Branch: feature/add-loc-track-property-scope
 - Polished: 2026-07-27
@@ -41,3 +41,14 @@ Object 単位の Properties でも再生は成立する。Track スコープは�
 ## 関連
 
 - `#0344` LOC draft-04 Property ID 追従 (2026-07-24 完了)
+
+## 解決方法
+
+LOC の Track, Object スコープの 3 Property（TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG）を Track Property 経路でも扱えるようにした。
+
+- `src/session.ts`: `PublishOptions` に `locTimescale` / `locVideoConfig` / `locAudioConfig` を追加する。
+- `src/session/params.ts`: `buildPublishTrackProperties()` が `LOCPropertyId` の `Property` を構築し、`encodeProperties()`（delta 符号化）経由で PUBLISH の Track Properties に載せる。`locTimescale` は `validateNonNegative` で検証する。
+- `src/loc.ts`: `resolveVideoProperties()` / `resolveAudioProperties()` を追加する。Track Property（decodeProperties 済みの Property[]）と Object Property（絶対 Type 連結バイト列）の両方を探索し、draft-ietf-moq-transport-19 §12.1 の先例に倣い Object を優先する。timestamp / frameMarking / audioLevel は Object スコープのみのため Object から取得する。
+- `src/createMediaSubscriber.ts`: `handleVideoObject()` / `handleAudioObject()` が `LOC.decode*Properties` の代わりに `LOC.resolve*Properties(this.*Subscriber?.trackProperties, obj.properties)` を使用する。Object 優先のため既存の挙動は保存される。
+- `src/loc.test.ts`: encodeProperties / decodeProperties の roundtrip と、resolve の Object のみ / Track のみ / 両方（Object 優先）を Video / Audio 双方で検証する。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記する。
