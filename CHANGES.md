@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MSF の Authorization Token 自動付与を実装する
+  - SubscribeOptions / FetchOptions に authorizationToken を追加し、SUBSCRIBE / FETCH / REQUEST_UPDATE / SUBSCRIBE_NAMESPACE に AUTHORIZATION_TOKEN を付与する
+  - createMediaSubscriber が catalog の authInfo を見てトークン取得コールバック経由でトークンを付与する
+  - @voluntas
 - [ADD] MSF Metrics track の payload を実装する
   - src/moqmetrics.ts を新設し Object 0 / Object 1 以降の encode / decode、Group ID / Object ID、namespace / track name helper を追加する
   - validatePackagingSpecificRules に packaging=moqmetrics は role=metrics が MUST の検証を追加する

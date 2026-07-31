@@ -3,7 +3,21 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { clampTimeoutMs, matchNamespacePrefix } from "./params";
+import {
+  clampTimeoutMs,
+  matchNamespacePrefix,
+  buildSubscribeParameters,
+  buildFetchParameters,
+  buildSubscribeNamespaceParameters,
+  encodeAuthorizationTokenParameter,
+} from "./params";
+import { encodeParameters, decodeParameters } from "../message/parameter";
+import { MessageParameterType } from "../message/types";
+import {
+  AuthorizationTokenAliasType,
+  decodeAuthorizationToken,
+  type AuthorizationToken,
+} from "../message/authorizationToken";
 
 // ============================================================================
 // clampTimeoutMs
@@ -83,4 +97,79 @@ test("matchNamespacePrefix: 先頭から不一致の場合は null を返す", (
 test("matchNamespacePrefix: 両方空配列の場合は空 suffix を返す", () => {
   const result = matchNamespacePrefix([], []);
   assert.deepEqual(result, []);
+});
+
+// ============================================================================
+// AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
+// ============================================================================
+
+// USE_VALUE スキームのトークン（draft-ietf-moq-transport-19 §10.2.2 Alias Type 0x3）
+function useValueToken(): AuthorizationToken {
+  return {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 0n,
+    tokenValue: new TextEncoder().encode("scheme-token"),
+  };
+}
+
+test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-trip する", () => {
+  const param = encodeAuthorizationTokenParameter(useValueToken());
+  assert.equal(param.type, MessageParameterType.AUTHORIZATION_TOKEN);
+
+  const decoded = decodeAuthorizationToken(param.value);
+  assert.equal(decoded.aliasType, AuthorizationTokenAliasType.USE_VALUE);
+  if (decoded.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    assert.equal(new TextDecoder().decode(decoded.tokenValue), "scheme-token");
+  }
+});
+
+test("buildSubscribeParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
+  const parameters = buildSubscribeParameters({ authorizationToken: useValueToken() });
+  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.equal(authParams.length, 1);
+
+  // encodeParameters / decodeParameters で round-trip してもトークンが再現する
+  const [decoded] = decodeParameters(encodeParameters(parameters));
+  const decodedAuth = decoded.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.isDefined(decodedAuth);
+  const token = decodeAuthorizationToken(decodedAuth!.value);
+  assert.equal(token.aliasType, AuthorizationTokenAliasType.USE_VALUE);
+});
+
+test("buildSubscribeParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
+  const parameters = buildSubscribeParameters({});
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
+});
+
+test("buildFetchParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
+  const parameters = buildFetchParameters({
+    fillTimeout: 1000n,
+    startLocation: { group: 0n, object: 0n },
+    endLocation: { group: 1n, object: 0n },
+    authorizationToken: useValueToken(),
+  });
+  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.equal(authParams.length, 1);
+  // FILL_TIMEOUT も同時に送出される
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.FILL_TIMEOUT));
+});
+
+test("buildFetchParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
+  const parameters = buildFetchParameters({
+    fillTimeout: 1000n,
+    startLocation: { group: 0n, object: 0n },
+    endLocation: { group: 1n, object: 0n },
+  });
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
+});
+
+test("buildSubscribeNamespaceParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
+  const parameters = buildSubscribeNamespaceParameters({ authorizationToken: useValueToken() });
+  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.equal(authParams.length, 1);
+});
+
+test("buildSubscribeNamespaceParameters: authorizationToken 未指定は空", () => {
+  const parameters = buildSubscribeNamespaceParameters({});
+  assert.equal(parameters.length, 0);
 });

@@ -26,6 +26,7 @@ import {
   type LocationFilter,
 } from "./message/parameter";
 import { MessageParameterType, type Location } from "./message/types";
+import { AuthorizationTokenAliasType, type AuthorizationToken } from "./message/authorizationToken";
 import { encodeVarint } from "./varint";
 import { encodeProperties, decodeProperties } from "./properties";
 import { ProtocolViolationError } from "./error";
@@ -77,6 +78,17 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
 });
 
 /**
+ * Authorization Token の任意構築（USE_VALUE。Message Parameter では 4 種全て許可されるが、
+ * round-trip 検証には値を持つ USE_VALUE が代表的）
+ * draft-ietf-moq-transport-19 Section 10.2.2
+ */
+const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
+  aliasType: fc.constant(AuthorizationTokenAliasType.USE_VALUE),
+  tokenType: fc.bigInt({ min: 0n, max: 1000n }),
+  tokenValue: fc.uint8Array({ maxLength: 64 }).map((arr) => new Uint8Array(arr)),
+});
+
+/**
  * SubscribeOptions の任意構築
  */
 const subscribeOptionsArb: fc.Arbitrary<SubscribeOptions> = fc.record({
@@ -89,6 +101,7 @@ const subscribeOptionsArb: fc.Arbitrary<SubscribeOptions> = fc.record({
   newGroupRequest: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
   rendezvousTimeout: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
   forward: fc.option(fc.boolean(), { nil: undefined }),
+  authorizationToken: fc.option(authorizationTokenArb, { nil: undefined }),
 });
 
 // ============================================================================

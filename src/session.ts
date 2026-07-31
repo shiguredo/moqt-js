@@ -44,7 +44,6 @@ import {
   createSetup,
   getMessageTypeName,
   FetchType,
-  MessageParameterType,
   type AuthorizationToken,
   type Location,
   type Parameter,
@@ -69,6 +68,8 @@ import {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
+  buildFetchParameters,
+  buildSubscribeNamespaceParameters,
   clampTimeoutMs,
   matchNamespacePrefix,
 } from "./session/params";
@@ -545,6 +546,15 @@ export interface SubscribeOptions {
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
    */
   rangeFilters?: RangeFilterSpec[];
+
+  /**
+   * AUTHORIZATION_TOKEN Message Parameter (0x03) として送信する Authorization Token
+   * draft-ietf-moq-transport-19 Section 10.2.2 (AUTHORIZATION TOKEN Parameter)
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
+   * SETUP にトークンを載せていても免除されない。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -620,6 +630,14 @@ export interface FetchOptions {
    * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
    */
   rangeFilters?: RangeFilterSpec[];
+
+  /**
+   * AUTHORIZATION_TOKEN Message Parameter (0x03) として送信する Authorization Token
+   * draft-ietf-moq-transport-19 Section 10.2.2 (AUTHORIZATION TOKEN Parameter)
+   *
+   * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -885,10 +903,12 @@ export interface Session {
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
+   * @param options - オプション（authorizationToken: §11.4.3 により SUBSCRIBE_NAMESPACE に MUST 付与）
    */
   subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
+    options?: { authorizationToken?: AuthorizationToken },
   ): Promise<NamespaceSubscription>;
   /**
    * Track をサブスクライブする（track subscription 用）
@@ -1588,6 +1608,9 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
     impl.setLocationFilter(options?.filter);
 
+    // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
+    impl.setAuthorizationToken(options?.authorizationToken);
+
     // サブスクリプションキャンセルのコールバック
     impl.onUnsubscribe = async () => {
       await this.cancelSubscription(impl);
@@ -1736,16 +1759,8 @@ export class SessionImpl implements Session {
         startLocation: options.startLocation,
         endLocation: options.endLocation,
       },
-      parameters: [] as Parameter[],
+      parameters: buildFetchParameters(options),
     };
-
-    // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-19 Section 10.2.5
-    if (options.fillTimeout !== undefined) {
-      fetchMsg.parameters.push({
-        type: MessageParameterType.FILL_TIMEOUT,
-        value: encodeVarint(options.fillTimeout),
-      });
-    }
 
     const payload = encodeFetchPayload(fetchMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
@@ -1839,6 +1854,7 @@ export class SessionImpl implements Session {
   async subscribeNamespace(
     namespacePrefix: string[],
     callbacks: NamespaceSubscriptionCallbacks,
+    options?: { authorizationToken?: AuthorizationToken },
   ): Promise<NamespaceSubscription> {
     if (this.sessionState === "closed") {
       throw new Error("session is closed");
@@ -1861,11 +1877,12 @@ export class SessionImpl implements Session {
     const writer = stream.writable.getWriter();
 
     // SUBSCRIBE_NAMESPACE メッセージを構築
+    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
     const subscribeNamespaceMsg = {
       type: MessageType.SUBSCRIBE_NAMESPACE,
       requestId,
       trackNamespacePrefix,
-      parameters: [] as [],
+      parameters: buildSubscribeNamespaceParameters(options),
     };
 
     // メッセージをエンコードして送信
@@ -3900,6 +3917,9 @@ export {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
+  buildFetchParameters,
+  buildSubscribeNamespaceParameters,
+  encodeAuthorizationTokenParameter,
   extractLargestLocation,
   extractForwardState,
   validateFetchOkEndLocation,
