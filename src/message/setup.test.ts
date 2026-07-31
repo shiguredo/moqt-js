@@ -18,7 +18,7 @@ import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import { decodeVarint } from "../varint";
 
-// MOQT_IMPLEMENTATION は常に追加される
+// MOQT_IMPLEMENTATION は既定で追加される（moqtImplementation で opt-out / override 可能）
 test("Setup: パラメータなしで作成", () => {
   const setup = createSetup();
   assert.equal(setup.type, MessageType.SETUP);
@@ -48,6 +48,47 @@ test("Setup: 存在しないパラメータは undefined", () => {
   assert.isDefined(getSetupMoqtImplementation(setup));
 });
 
+// draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting):
+// プライバシー緩和策として「オプションを完全に省略する」「汎用的な値を送る」
+// 「利用者が設定・無効化できるようにする」が MAY として提示されている。
+// moqtImplementation: false で opt-out（省略）、文字列で override（任意の値）を送信する。
+// 既定 / opt-out / override のラウンドトリップは setup.prop.ts の PBT で検証する。
+test("Setup: moqtImplementation: false は MOQT_IMPLEMENTATION を送信しない", () => {
+  const setup = createSetup({ moqtImplementation: false });
+  // MOQT_IMPLEMENTATION を抑止するため parameters は空になる
+  assert.equal(setup.parameters.length, 0);
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
+  assert.isUndefined(getSetupMoqtImplementation(setup));
+});
+
+test("Setup: moqtImplementation の文字列 override を送信する", () => {
+  const setup = createSetup({ moqtImplementation: "moqt-js" });
+  assert.equal(setup.parameters.length, 1);
+  assert.equal(getSetupMoqtImplementation(setup), "moqt-js");
+});
+
+test("Setup: moqtImplementation の空文字列 override を送信する", () => {
+  // 空文字列も指定どおり送信する（値の妥当性検証は行わない）
+  const setup = createSetup({ moqtImplementation: "" });
+  assert.equal(setup.parameters.length, 1);
+  assert.equal(getSetupMoqtImplementation(setup), "");
+});
+
+test("Setup: moqtImplementation: false でも AUTHORIZATION_TOKEN は送信される", () => {
+  // opt-out は MOQT_IMPLEMENTATION のみに影響し、他の Option には影響しない
+  const setup = createSetup({
+    moqtImplementation: false,
+    authorizationToken: {
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 0n,
+      tokenValue: new TextEncoder().encode("jwt-payload"),
+    },
+  });
+  assert.equal(setup.parameters.length, 1);
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.AUTHORIZATION_TOKEN));
+  assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
+});
+
 // draft-ietf-moq-transport-19 Section 10.3:
 // Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
 // カウントプレフィックスを持たない。Length フィールドで終端が決まる。
@@ -61,17 +102,6 @@ test("Setup: エンコード結果にカウントプレフィックスがない"
   // MOQT_IMPLEMENTATION の Type は 0x07 なので、Delta Type = 0x07。
   const [firstVarint] = decodeVarint(encoded, 0);
   assert.equal(Number(firstVarint), SetupOptionType.MOQT_IMPLEMENTATION);
-});
-
-test("Setup: エンコード・デコード roundtrip (MOQT_IMPLEMENTATION のみ)", () => {
-  const setup = createSetup();
-  const encoded = encodeSetupPayload(setup);
-  const decoded = decodeSetupPayload(encoded);
-
-  assert.equal(decoded.type, MessageType.SETUP);
-  assert.isUndefined(getSetupPath(decoded));
-  assert.isUndefined(getSetupAuthority(decoded));
-  assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
 });
 
 // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)

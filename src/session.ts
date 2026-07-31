@@ -181,6 +181,18 @@ export interface ConnectOptions {
    * 指定しなかった field は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` の値が使われる。
    */
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+
+  /**
+   * MOQT_IMPLEMENTATION Setup Option (Option Type 0x07) の送信制御
+   * draft-ietf-moq-transport-19 §10.3.1.5 (MOQT IMPLEMENTATION) /
+   * §13.8 (Implementation Identification Fingerprinting)
+   *
+   * - 未指定（既定）: `moqt-js/${version}` を送信する。
+   * - false: MOQT_IMPLEMENTATION Option を送信しない（opt-out）。
+   * - 文字列: その値をそのまま送信する（override）。値の妥当性検証は行わないため、
+   *   内容は呼び出し側の責任（§10.3.1.5 は実装名とバージョンに限定する SHOULD を定める）。
+   */
+  moqtImplementation?: string | false;
 }
 
 /**
@@ -1168,8 +1180,12 @@ export class SessionImpl implements Session {
    *
    * options に authorizationToken を指定すると、SETUP Option (0x03) として
    * draft-ietf-moq-transport-19 Section 10.3.1.4 に従い認証トークンを送出する。
+   * options に moqtImplementation を指定すると、SETUP Option (0x07) の送信を制御する。
    */
-  async initialize(options?: { authorizationToken?: AuthorizationToken }): Promise<void> {
+  async initialize(options?: {
+    authorizationToken?: AuthorizationToken;
+    moqtImplementation?: string | false;
+  }): Promise<void> {
     // draft-ietf-moq-transport-19 Section 4 (Extensibility):
     // 制御ストリームは単方向ストリームのペアに変更された。
     // クライアントは送信用単方向ストリームを開き、サーバーの単方向ストリームを受信する。
@@ -1193,6 +1209,7 @@ export class SessionImpl implements Session {
     // moqt-js は WebTransport 専用クライアントのため `createSetup` には渡さない。
     const setup = createSetup({
       authorizationToken: options?.authorizationToken,
+      moqtImplementation: options?.moqtImplementation,
     });
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);

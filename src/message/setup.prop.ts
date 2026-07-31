@@ -51,3 +51,39 @@ test("Setup ラウンドトリップで PATH / AUTHORITY は決して含まれ�
     ),
   );
 });
+
+// draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting):
+// moqtImplementation の 3 分岐（未指定 / false / 文字列）のラウンドトリップを検証する。
+// 未指定は既定値、false は Option 欠落、文字列（空文字列・BMP 外文字を含む）はその値が復元される。
+// fast-check v4 の fc.string() 既定は printable ASCII のみのため、unit: "grapheme" で
+// 全 Unicode（サロゲートペアを含む）の UTF-8 ラウンドトリップを検証する。
+test("Setup ラウンドトリップで moqtImplementation の 3 分岐が再現される", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        fc.constant(undefined),
+        fc.constant(false as const),
+        fc.string({ unit: "grapheme" }),
+      ),
+      (moqtImplementation) => {
+        const original = createSetup(
+          moqtImplementation === undefined ? undefined : { moqtImplementation },
+        );
+        const encoded = encodeSetupPayload(original);
+        const decoded = decodeSetupPayload(encoded);
+
+        assert.equal(decoded.type, MessageType.SETUP);
+        if (moqtImplementation === false) {
+          // opt-out: MOQT_IMPLEMENTATION は欠落する
+          assert.isUndefined(getSetupMoqtImplementation(decoded));
+        } else if (typeof moqtImplementation === "string") {
+          // override: 指定値（空文字列を含む）がそのまま復元される
+          assert.equal(getSetupMoqtImplementation(decoded), moqtImplementation);
+        } else {
+          // 既定: MOQT_IMPLEMENTATION_VALUE が復元される
+          assert.equal(getSetupMoqtImplementation(decoded), MOQT_IMPLEMENTATION_VALUE);
+        }
+      },
+    ),
+  );
+});
