@@ -520,6 +520,13 @@ export function encodeCatalog(catalog: Catalog): Uint8Array {
   if (catalog.initDataList !== undefined) {
     obj["initDataList"] = catalog.initDataList;
   }
+  // root level の未知フィールドを保持する（§5: parser MUST ignore unknown fields の保持解釈）
+  const catalogRecord = catalog as unknown as Record<string, unknown>;
+  for (const key of Object.keys(catalog)) {
+    if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
+      obj[key] = catalogRecord[key];
+    }
+  }
 
   const json = JSON.stringify(obj);
   return new TextEncoder().encode(json);
@@ -856,12 +863,19 @@ export function validateCatalog(value: unknown): Catalog {
     }
   }
 
-  // §5 parser MUST ignore unknown fields → root level の未知フィールドは無視する
+  // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
   const catalog: Catalog = { version: version as MsfVersion, tracks };
   if (generatedAt !== undefined) catalog.generatedAt = generatedAt;
   if (isComplete !== undefined) catalog.isComplete = isComplete;
   if (publishTracks !== undefined) catalog.publishTracks = publishTracks;
   if (initDataList !== undefined) catalog.initDataList = initDataList;
+  // root level の未知フィールドを保持する（既知 6 key 以外）
+  const catalogRecord = catalog as unknown as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
+      catalogRecord[key] = obj[key];
+    }
+  }
   return catalog;
 }
 
@@ -1156,6 +1170,67 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
 }
 
 /**
+ * Catalog root の既知フィールド名（§5.1）。未知フィールド保持・置換時に除外するために使う。
+ */
+const KNOWN_CATALOG_ROOT_FIELDS: ReadonlySet<string> = new Set([
+  "version",
+  "tracks",
+  "generatedAt",
+  "isComplete",
+  "publishTracks",
+  "initDataList",
+]);
+
+/**
+ * CatalogTrack の既知フィールド名（§5.2）。未知フィールド保持時に除外するために使う。
+ * name / packaging / isLive は呼び出し側で検証済み、parentName / parentNamespace は clone 経路。
+ */
+const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
+  "name",
+  "packaging",
+  "isLive",
+  "namespace",
+  "role",
+  "label",
+  "eventType",
+  "targetLatency",
+  "buffers",
+  "renderGroup",
+  "altGroup",
+  "initRef",
+  "depends",
+  "template",
+  "temporalId",
+  "spatialId",
+  "codec",
+  "mimeType",
+  "framerate",
+  "timescale",
+  "bitrate",
+  "avgBitrate",
+  "maxGopDuration",
+  "maxGroupDuration",
+  "width",
+  "height",
+  "samplerate",
+  "channelConfig",
+  "displayWidth",
+  "displayHeight",
+  "lang",
+  "parentName",
+  "parentNamespace",
+  "trackDuration",
+  "encryptionScheme",
+  "cipherSuite",
+  "keyId",
+  "trackBaseKey",
+  "authInfo",
+  "accessibility",
+  "connectionUri",
+  "token",
+]);
+
+/**
  * 既知フィールドを pick して `CatalogTrack` を組み立てる共通ロジック。
  *
  * `name`, `packaging`, `isLive` は呼び出し側で検証済み。残りの optional
@@ -1189,6 +1264,14 @@ function buildValidatedCatalogTrack(
 
   if (!options?.skipPackagingRequiredFields && packaging !== undefined) {
     validatePackagingSpecificRules(track, packaging, name);
+  }
+
+  // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
+  const trackRecord = track as unknown as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_TRACK_FIELDS.has(key)) {
+      trackRecord[key] = obj[key];
+    }
   }
 
   return track;
@@ -1798,6 +1881,15 @@ export function applyCatalogDelta(
     result.initDataList = current.initDataList;
   }
 
+  // root level の未知フィールドをベース catalog から引き継ぐ（§5 保持解釈）
+  const currentRecord = current as unknown as Record<string, unknown>;
+  const resultRecord = result as unknown as Record<string, unknown>;
+  for (const key of Object.keys(current)) {
+    if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
+      resultRecord[key] = currentRecord[key];
+    }
+  }
+
   return result;
 }
 
@@ -2071,8 +2163,9 @@ const VARIABLE_REFERENCE_PATTERN = /%([A-Za-z0-9_-]+)%/g;
  * §5.4.2: 変数は URL fragment 由来のみで解決する。query parameter MUST NOT。
  * 入力 `variables` の出所制御は呼び出し側の責務。
  *
- * 走査対象は `Catalog` 型の named field 内 string 値のみ。未知フィールドは
- * `validateCatalog` で ignore 済みのため対象外。
+ * 走査対象は `Catalog` の既知 named field 内 string 値に加え、root / track の未知フィールド
+ * （`validateCatalog` が保持する、§5.6.14 例の `c4m` 等）の string 値も含む。未知フィールドは
+ * ネストした object / array 内の string も再帰的に走査する（§5.4 に再帰規則は無いが本実装の方針）。
  */
 export function resolveCatalogVariables(
   catalog: Catalog,
@@ -2092,24 +2185,27 @@ export function resolveCatalogVariables(
     }
   }
 
-  return {
-    ...catalog,
-    tracks: catalog.tracks.map((track) => substituteTrack(track, variables)),
-    ...(catalog.publishTracks !== undefined
-      ? {
-          publishTracks: catalog.publishTracks.map(
-            (track) => substituteTrack(track, variables) as PublishTrack,
-          ),
-        }
-      : {}),
-    ...(catalog.initDataList !== undefined
-      ? {
-          initDataList: catalog.initDataList.map((entry) =>
-            substituteInitDataEntry(entry, variables),
-          ),
-        }
-      : {}),
-  };
+  const result: Catalog = { ...catalog };
+  // root level の未知フィールドにも %var% 置換を適用する（§5.4）
+  const catalogRecord = catalog as unknown as Record<string, unknown>;
+  const resultRecord = result as unknown as Record<string, unknown>;
+  for (const key of Object.keys(catalog)) {
+    if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
+      resultRecord[key] = substituteUnknownValue(catalogRecord[key], variables, key);
+    }
+  }
+  result.tracks = catalog.tracks.map((track) => substituteTrack(track, variables));
+  if (catalog.publishTracks !== undefined) {
+    result.publishTracks = catalog.publishTracks.map(
+      (track) => substituteTrack(track, variables) as PublishTrack,
+    );
+  }
+  if (catalog.initDataList !== undefined) {
+    result.initDataList = catalog.initDataList.map((entry) =>
+      substituteInitDataEntry(entry, variables),
+    );
+  }
+  return result;
 }
 
 function substituteString(
@@ -2204,7 +2300,46 @@ function substituteTrack(
       "publishTracks[].token",
     );
   }
+  // 未知フィールド（KNOWN_TRACK_FIELDS 以外）にも %var% 置換を適用する（§5.4、§5.6.14 例 c4m）。
+  // §5.4 にネスト再帰規則は無いが、本実装ではネスト object / array 内の string も走査する
+  // （再帰方針は本実装で定義しテストで固定する）。
+  for (const key of Object.keys(track)) {
+    if (!KNOWN_TRACK_FIELDS.has(key)) {
+      (result as unknown as Record<string, unknown>)[key] = substituteUnknownValue(
+        (track as unknown as Record<string, unknown>)[key],
+        variables,
+        `tracks[].${key}`,
+      );
+    }
+  }
   return result;
+}
+
+/**
+ * 未知フィールドの値に対して再帰的に %var% 置換を適用する。
+ *
+ * string は substituteString で置換、array / object は要素・値を再帰走査、
+ * それ以外（number / boolean / null）はそのまま返す。
+ */
+function substituteUnknownValue(
+  value: unknown,
+  variables: Readonly<Record<string, string>>,
+  fieldPath: string,
+): unknown {
+  if (typeof value === "string") {
+    return substituteString(value, variables, fieldPath);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, i) => substituteUnknownValue(item, variables, `${fieldPath}[${i}]`));
+  }
+  if (typeof value === "object" && value !== null) {
+    const replaced: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      replaced[k] = substituteUnknownValue(v, variables, `${fieldPath}.${k}`);
+    }
+    return replaced;
+  }
+  return value;
 }
 
 function substituteInitDataEntry(
