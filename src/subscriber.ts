@@ -5,6 +5,7 @@
 
 import type { Parameter } from "./message/parameter";
 import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
+import type { AuthorizationToken } from "./message/authorizationToken";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
@@ -91,6 +92,8 @@ export class SubscriberImpl implements Subscriber {
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
+  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
+  private subscriberAuthorizationToken: AuthorizationToken | undefined;
   // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
@@ -164,6 +167,21 @@ export class SubscriberImpl implements Subscriber {
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
+  }
+
+  /**
+   * SUBSCRIBE 送信時の Authorization Token を設定
+   * draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを MUST 付与する。
+   */
+  setAuthorizationToken(token: AuthorizationToken | undefined): void {
+    this.subscriberAuthorizationToken = token;
+  }
+
+  /**
+   * SUBSCRIBE 送信時の Authorization Token を取得
+   */
+  getAuthorizationToken(): AuthorizationToken | undefined {
+    return this.subscriberAuthorizationToken;
   }
 
   /**

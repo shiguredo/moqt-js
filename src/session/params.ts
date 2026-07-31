@@ -6,10 +6,11 @@
  */
 
 import { FetchHeaderType } from "../dataStream";
-import type { Parameter, Location } from "../message";
-import type { PublishOptions, SubscribeOptions } from "../session";
+import type { Parameter, Location, AuthorizationToken } from "../message";
+import type { PublishOptions, SubscribeOptions, FetchOptions } from "../session";
 import {
   MessageParameterType,
+  encodeAuthorizationToken,
   encodeLocationFilterParameter,
   encodeRangeFilter,
   encodeUint8ParameterValue,
@@ -273,6 +274,71 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
         value: encodeRangeFilter(spec),
       });
     }
+  }
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
+  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
+  if (options?.authorizationToken !== undefined) {
+    parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
+  return parameters;
+}
+
+/**
+ * 純粋関数: AUTHORIZATION_TOKEN Message Parameter を構築する
+ *
+ * draft-ietf-moq-transport-19 Section 10.2.2 (AUTHORIZATION TOKEN Parameter):
+ * Parameter Type 0x03、Length-prefixed encoding。値は Token 構造。
+ * SETUP とは異なり Message Parameter では Alias Type DELETE / USE_ALIAS も許可される。
+ */
+export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Parameter {
+  return {
+    type: MessageParameterType.AUTHORIZATION_TOKEN,
+    value: encodeAuthorizationToken(token),
+  };
+}
+
+/**
+ * 純粋関数: FETCH の Message Parameters を構築する
+ *
+ * draft-ietf-moq-transport-19 Section 10.13 (FETCH)
+ */
+export function buildFetchParameters(options?: FetchOptions): Parameter[] {
+  const parameters: Parameter[] = [];
+
+  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-19 Section 10.2.5
+  if (options?.fillTimeout !== undefined) {
+    validateNonNegative(options.fillTimeout, "FILL_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.FILL_TIMEOUT,
+      value: encodeVarint(options.fillTimeout),
+    });
+  }
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
+  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
+  if (options?.authorizationToken !== undefined) {
+    parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
+  return parameters;
+}
+
+/**
+ * 純粋関数: SUBSCRIBE_NAMESPACE の Message Parameters を構築する
+ *
+ * draft-ietf-moq-transport-19 Section 10.18 (SUBSCRIBE_NAMESPACE)
+ */
+export function buildSubscribeNamespaceParameters(options?: {
+  authorizationToken?: AuthorizationToken;
+}): Parameter[] {
+  const parameters: Parameter[] = [];
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
+  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE_NAMESPACE に MUST 付与。
+  if (options?.authorizationToken !== undefined) {
+    parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
 
   return parameters;

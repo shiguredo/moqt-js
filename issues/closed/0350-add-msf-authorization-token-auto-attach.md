@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: Composer
 - Branch: feature/add-msf-authorization-token-auto-attach
 - Polished: 2026-07-27
@@ -53,3 +53,17 @@ draft-ietf-moq-msf-01 §5.2.42 `authInfo` / §11.4.3 では、catalog が認可�
 
 - `#0316` (closed) catalog 型までの先行対応
 - `refs/moq/draft-ietf-moq-c4m-01.txt` / `draft-ietf-moq-privacy-pass-auth-03.txt`
+
+## 解決方法
+
+draft-ietf-moq-msf-01 §5.2.42 / §11.4.3 に基づき、subscriber 側の Authorization Token 自動付与を実装した。
+
+- `src/session/params.ts`: `encodeAuthorizationTokenParameter()` helper を新設し、`buildSubscribeParameters()` / `buildFetchParameters()`（新設）/ `buildSubscribeNamespaceParameters()`（新設）が AUTHORIZATION_TOKEN (0x03) を送出する。
+- `src/session.ts`: `SubscribeOptions` / `FetchOptions` に `authorizationToken` を追加。`fetch()` は `buildFetchParameters()` を使用。`subscribeNamespace()` は options で `authorizationToken` を受け付ける。`subscribe()` は `SubscriberImpl` にトークンを保持させる。
+- `src/subscriber.ts`: `SubscriberImpl` が `authorizationToken` を保持（`setAuthorizationToken` / `getAuthorizationToken`）。
+- `src/session/bidi.ts`: `bidiSendRequestUpdate()` が REQUEST_UPDATE に、`bidiSendJoiningFetch()` が Joining Fetch に、SUBSCRIBE 送信時のトークンを付与する（§11.4.3 の MUST 対象 4 メッセージ + Joining Fetch を網羅）。
+- `src/createMediaSubscriber.ts`: 純粋関数 `resolveAuthorizationToken()` を export。`MediaSubscriberOptions.getAuthorizationToken` コールバック（§11.4.2、トークン取得は out of scope のため注入）でトークンを取得し、catalog の `authInfo`（§5.2.42）を持つ track の subscribe に付与する。トークンを取得できない場合はエラーを呼び出し元に伝播する（§11.4.4）。
+- `src/codec/types.ts`: `MediaSubscriberOptions` に `getAuthorizationToken` コールバックを追加。
+- テスト: `src/session/params.test.ts`（AUTHORIZATION_TOKEN 付与・USE_VALUE roundtrip）、`src/createMediaSubscriber.test.ts`（resolveAuthorizationToken のエラー伝播含む 6 件）、`src/session.prop.ts`（subscribeOptionsArb に authorizationToken 追加）。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記する。
+- 範囲外（publisher 側 §5.2.37、スキーム固有トークン取得 §11.4.2）には踏み込んでいない。

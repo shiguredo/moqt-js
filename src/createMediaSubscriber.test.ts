@@ -6,7 +6,8 @@
 
 import { test, assert } from "vite-plus/test";
 import { encodeCatalog, encodeCatalogDelta, type Catalog, type CatalogDelta } from "./msf";
-import { processCatalogPayload } from "./createMediaSubscriber";
+import { processCatalogPayload, resolveAuthorizationToken } from "./createMediaSubscriber";
+import { AuthorizationTokenAliasType, type AuthorizationToken } from "./message/authorizationToken";
 
 /** テスト用の最小フルカタログ */
 function makeCatalog(tracks: Catalog["tracks"] = []): Catalog {
@@ -108,4 +109,59 @@ test("processCatalogPayload: current=null の decode 失敗も error を返す",
   assert.equal(result.kind, "error");
   assert.equal(result.catalog, null);
   assert.ok(result.kind === "error" && result.error instanceof Error);
+});
+
+// ============================================================================
+// resolveAuthorizationToken（draft-ietf-moq-msf-01 §5.2.42 / §11.4.2 / §11.4.4）
+// ============================================================================
+
+function useValueToken(): AuthorizationToken {
+  return {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType: 0n,
+    tokenValue: new TextEncoder().encode("token"),
+  };
+}
+
+test("resolveAuthorizationToken: authInfo 未指定は認可不要で undefined", async () => {
+  assert.equal(await resolveAuthorizationToken(undefined), undefined);
+});
+
+test("resolveAuthorizationToken: 空の authInfo は認可不要で undefined", async () => {
+  assert.equal(await resolveAuthorizationToken({}), undefined);
+});
+
+test("resolveAuthorizationToken: authInfo あり・コールバック未提供は throw（§11.4.4）", async () => {
+  // トークン欠落時のエラーが呼び出し元に伝わることを検証する
+  let error: unknown;
+  try {
+    await resolveAuthorizationToken({ "privacy-pass": {} });
+  } catch (e) {
+    error = e;
+  }
+  assert.ok(error instanceof Error);
+  assert.ok(error.message.includes("no getAuthorizationToken callback was provided"));
+});
+
+test("resolveAuthorizationToken: コールバックが undefined を返すと throw（§11.4.4）", async () => {
+  let error: unknown;
+  try {
+    await resolveAuthorizationToken({ cat: {} }, () => undefined);
+  } catch (e) {
+    error = e;
+  }
+  assert.ok(error instanceof Error);
+  assert.ok(error.message.includes("getAuthorizationToken returned no token"));
+});
+
+test("resolveAuthorizationToken: コールバックが返したトークンを解決する", async () => {
+  const token = useValueToken();
+  const resolved = await resolveAuthorizationToken({ "privacy-pass": {} }, () => token);
+  assert.equal(resolved, token);
+});
+
+test("resolveAuthorizationToken: 非同期コールバックにも対応する", async () => {
+  const token = useValueToken();
+  const resolved = await resolveAuthorizationToken({ cat: {} }, async () => token);
+  assert.equal(resolved, token);
 });
