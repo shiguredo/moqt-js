@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-03-16
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: manual
 - Branch: feature/change-moqt-implementation-opt-out
 - Polished: 2026-07-31
@@ -68,3 +68,14 @@ draft-ietf-moq-transport-19 §10.3.1.5 は "An endpoint SHOULD send a MOQT_IMPLE
 draft-ietf-moq-transport-19 §13.8 がプライバシー緩和を具体化し、§10.3.1.5 が "unless specifically configured not to do so" と設定による無効化を前提としたため着手可能になった。設計方針は上記「設計方針」セクションのとおり draft-19 に合わせて固定する。
 
 なお `issues/closed/0218-draft-18-update-improve-security-considerations.md` は同一の §13.8 fingerprinting 懸念を扱っているが、コード変更なし（コメント更新のみ）で完了としている。本 issue は公開 API に opt-out / override 機構を追加する点で 0218 とは目的が異なる。
+
+## 解決方法
+
+`ConnectOptions` に `moqtImplementation?: string | false` を追加し、既存の `authorizationToken` と同じ伝搬経路（`connect()` → `initialize()` → `createSetup()`）で SETUP Option (0x07) の送信を制御できるようにした。
+
+- `src/session.ts`: `ConnectOptions` にフィールドを追加し、`initialize()` のオプション経由で `createSetup()` へ受け渡す。
+- `src/index.ts`: `connect()` から `initialize()` へ pass-through する。
+- `src/message/setup.ts`: `createSetup()` に `moqtImplementation` オプションを追加。`false` で Option を抑止、文字列でその値を送信、未指定で既定値（`moqt-js/${version}`）を送信する。
+- `src/message/setup.test.ts`: opt-out / override / 空文字列 / AUTHORIZATION_TOKEN との独立性を単体テストで検証する。
+- `src/message/setup.prop.ts`: 既定 / opt-out / override の 3 分岐のラウンドトリップを PBT（`fc.string({ unit: "grapheme" })` で全 Unicode）で検証する。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記する。

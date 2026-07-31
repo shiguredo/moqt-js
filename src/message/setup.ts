@@ -39,10 +39,18 @@ export interface Setup {
  * authorizationToken を指定すると Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
  * として Option Type 0x03 に積む。Section 10.2.2 より SETUP では Alias Type
  * DELETE / USE_ALIAS は禁止されているため、事前に検証する。
+ *
+ * moqtImplementation で Section 10.3.1.5 (MOQT IMPLEMENTATION) の送信を制御する。
+ * draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting)
+ * のプライバシー緩和策に対応する。
+ * - 未指定（既定）: MOQT_IMPLEMENTATION_VALUE（`moqt-js/${version}`）を送信する。
+ * - false: MOQT_IMPLEMENTATION Option を送信しない（opt-out）。
+ * - 文字列: その値をそのまま送信する（override。空文字列も指定どおり送信する）。
  */
 export function createSetup(options?: {
   authorizationToken?: AuthorizationToken;
   maxAuthTokenCacheSize?: number;
+  moqtImplementation?: string | false;
 }): Setup {
   const encoder = new TextEncoder();
   const parameters: Parameter[] = [];
@@ -65,11 +73,18 @@ export function createSetup(options?: {
   }
 
   // MOQT_IMPLEMENTATION (0x07) - Section 10.3.1.5 (MOQT IMPLEMENTATION)
-  // 実装名とバージョンを送信
-  parameters.push({
-    type: SetupOptionType.MOQT_IMPLEMENTATION,
-    value: encoder.encode(MOQT_IMPLEMENTATION_VALUE),
-  });
+  // draft-ietf-moq-transport-19 §13.8 のプライバシー緩和策として opt-out / override を受け付ける。
+  // false のときは送信を抑止する。文字列のときはその値を、未指定のときは既定値を送信する。
+  if (options?.moqtImplementation !== false) {
+    const moqtImplementation =
+      typeof options?.moqtImplementation === "string"
+        ? options.moqtImplementation
+        : MOQT_IMPLEMENTATION_VALUE;
+    parameters.push({
+      type: SetupOptionType.MOQT_IMPLEMENTATION,
+      value: encoder.encode(moqtImplementation),
+    });
+  }
 
   return {
     type: MessageType.SETUP,

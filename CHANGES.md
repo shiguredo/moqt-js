@@ -81,6 +81,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] MOQT_IMPLEMENTATION Setup Option の opt-out / override に対応する
+  - ConnectOptions に moqtImplementation?: string | false を追加し、false で送信抑止、文字列で任意の値を送信する
+  - draft-ietf-moq-transport-19 §13.8 のプライバシー緩和策（オプションの省略 / 汎用的な値の送信）に対応する
+  - @voluntas
 - [ADD] MSF URI fragment の reserved key helper を追加する
   - draft-ietf-moq-msf-01 §11.1.1 に基づき getWallclockRanges / getMediatimeRanges / getLocationRanges / getC4mParameter を追加する
   - @voluntas
