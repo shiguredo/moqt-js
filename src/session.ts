@@ -193,6 +193,16 @@ export interface ConnectOptions {
    *   内容は呼び出し側の責任（§10.3.1.5 は実装名とバージョンに限定する SHOULD を定める）。
    */
   moqtImplementation?: string | false;
+
+  /**
+   * GREASE Setup Option の送信（opt-in）
+   * draft-ietf-moq-transport-19 §14 (Grease)
+   *
+   * true のとき、SETUP に GREASE Setup Option（0x7f * N + 0x9D パターンの予約値）を
+   * 1 つ追加する。対向が未知の Option を gracefully に扱えることを保証する。
+   * 既定（未指定 / false）では送信しない。
+   */
+  grease?: boolean;
 }
 
 /**
@@ -1181,10 +1191,12 @@ export class SessionImpl implements Session {
    * options に authorizationToken を指定すると、SETUP Option (0x03) として
    * draft-ietf-moq-transport-19 Section 10.3.1.4 に従い認証トークンを送出する。
    * options に moqtImplementation を指定すると、SETUP Option (0x07) の送信を制御する。
+   * options に grease: true を指定すると、SETUP に GREASE Setup Option (§14) を追加する。
    */
   async initialize(options?: {
     authorizationToken?: AuthorizationToken;
     moqtImplementation?: string | false;
+    grease?: boolean;
   }): Promise<void> {
     // draft-ietf-moq-transport-19 Section 4 (Extensibility):
     // 制御ストリームは単方向ストリームのペアに変更された。
@@ -1210,6 +1222,7 @@ export class SessionImpl implements Session {
     const setup = createSetup({
       authorizationToken: options?.authorizationToken,
       moqtImplementation: options?.moqtImplementation,
+      grease: options?.grease,
     });
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);
