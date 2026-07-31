@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-07-31
 - Model: Composer
 - Branch: feature/change-msf-variable-substitution-unknown-fields
 - Polished: 2026-07-27
@@ -45,3 +45,15 @@ draft-ietf-moq-msf-01 §5.4 Variable Substitution と §5.6.14 (非規範例) �
 - `#0316` (closed)
 - `#0345` (closed) Catalog delta / Joining FETCH（本項目は draft-01 残から分離。依存関係ではない）
 - `#0356` URI fragment reserved key helper
+
+## 解決方法
+
+draft-ietf-moq-msf-01 §5 の "A parser MUST ignore fields it does not understand" の解釈を「破棄」から「検証はしないが保持」に変更し、未知 Catalog field を Variable Substitution（§5.4）の対象にした。
+
+- `src/msf.ts`:
+  - `KNOWN_CATALOG_ROOT_FIELDS` / `KNOWN_TRACK_FIELDS` 定数を新設し、既知 field を定義する。
+  - `validateCatalog()` が root の未知 field を保持する。`buildValidatedCatalogTrack()` が track の未知 field を保持する（公開型への索引シグネチャ追加は `noPropertyAccessFromIndexSignature` と競合するため、`as unknown as Record<string, unknown>` cast 経由で読み書きする）。
+  - `substituteUnknownValue()` helper を新設し、`substituteTrack()` が `KNOWN_TRACK_FIELDS` 以外の未知 field を再帰置換する（string / array / object）。`resolveCatalogVariables()` が root の未知 field も置換する。§5.4 にネスト再帰規則は無いが、本実装ではネスト object / array 内も走査する方針をテストで固定する。
+  - `encodeCatalog()` が root の未知 field を JSON 出力し、`applyCatalogDelta()` が root の未知 field をベース catalog から引き継ぐ。
+- `src/msf.test.ts`: 既存「未知ルートフィールドは ignore する」テストを「検証しないが保持する」に更新。未知 field 置換の end-to-end（§5.6.14 の c4m 例）/ root / ネスト object・array / decode-encode round-trip / publishTracks / applyCatalogDelta 引き継ぎのテストを追加。
+- `CHANGES.md`: `## develop` に `[CHANGE]` を追記する。

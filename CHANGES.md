@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] 未知 Catalog field を Variable Substitution 対象にする
+  - validateCatalog / buildValidatedCatalogTrack が未知 field を検証しないが保持するよう変更する（§5 の ignore を「保持」と解釈）
+  - resolveCatalogVariables が root / track の未知 string field（ネスト object / array 内含む）の %var% を置換する
+  - @voluntas
 - [CHANGE] LOC Properties を draft-ietf-moq-loc-04 に追従する
   - Property ID を §6.1 Table 1 に合わせる (TIMESTAMP=0x10 / VIDEO_FRAME_MARKING=0x09 / AUDIO_LEVEL=0x0C 等)
   - VIDEO_FRAME_MARKING を length + bytes 形式にし、AUDIO_CONFIG (0x0F) を追加する
