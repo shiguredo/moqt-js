@@ -2514,6 +2514,35 @@ export function getConnectionParameter(
   return undefined;
 }
 
+/**
+ * msf fragment の connection パラメータがサポートされる transport か検証する
+ * (draft-ietf-moq-msf-01 §11.1.1)
+ *
+ * connection=q は Native QUIC MUST だが未実装のため reject する。
+ * connection=wt / 欠如 / 不正値（undefined）は WebTransport（現行）を許可する。
+ * msf 以外の fragment type は対象外（何もしない）。
+ *
+ * @param fragment moqt URI fragment（type / value の組、指定なしは null）
+ * @throws Error connection=q のとき（Native QUIC 未実装）。msf fragment value が不正な場合は
+ *   parseMsfFragmentValue のエラーが伝播する。
+ */
+export function assertMsfConnectionSupported(
+  fragment: {
+    readonly type: string;
+    readonly value: string;
+  } | null,
+): void {
+  if (fragment?.type !== "msf") {
+    return;
+  }
+  const connection = getConnectionParameter(parseMsfFragmentValue(fragment.value).parameters);
+  if (connection === "q") {
+    throw new Error(
+      "msf fragment connection='q' requires Native QUIC, which is not implemented (only 'wt' WebTransport is supported)",
+    );
+  }
+}
+
 // =============================================================================
 // MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-01 §11.1.1)
 // =============================================================================

@@ -7,6 +7,7 @@
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 import { normalizeMoqtUri } from "./moqtUri";
+import { assertMsfConnectionSupported } from "./msf";
 
 // MOQT URI / Fragment Identifier (draft-ietf-moq-transport-19 §3.1.1 / §3.1.2)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
@@ -207,6 +208,10 @@ export async function connect(
   options?: ConnectOptions,
 ): Promise<Session> {
   const { url: httpsUrl, fragment } = normalizeMoqtUri(url);
+
+  // draft-ietf-moq-msf-01 §11.1.1: connection=q|wt は transport 選択を強制する。
+  // msf fragment の connection パラメータを接続開始前に解釈・適用する。
+  assertMsfConnectionSupported(fragment);
 
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
