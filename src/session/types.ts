@@ -98,5 +98,9 @@ export interface SessionInternal extends BidiSessionInternal {
   // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
   peerMaxFilterRanges: number;
 
+  // draft-ietf-moq-transport-19 §14 (Grease): true のとき Track / Object Properties に
+  // GREASE Property を 1 つ注入する。ConnectOptions.grease を initialize() で受け渡す。
+  readonly grease: boolean;
+
   readonly callbacks: ConnectCallbacks;
 }

@@ -9,10 +9,13 @@ import {
   buildSubscribeParameters,
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
+  buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
 } from "./params";
 import { encodeParameters, decodeParameters } from "../message/parameter";
 import { MessageParameterType } from "../message/types";
+import { TrackPropertyId } from "../properties";
+import { isGreaseValue } from "../grease";
 import {
   AuthorizationTokenAliasType,
   decodeAuthorizationToken,
@@ -172,4 +175,42 @@ test("buildSubscribeNamespaceParameters: authorizationToken が AUTHORIZATION_TO
 test("buildSubscribeNamespaceParameters: authorizationToken 未指定は空", () => {
   const parameters = buildSubscribeNamespaceParameters({});
   assert.equal(parameters.length, 0);
+});
+
+// ============================================================================
+// buildPublishTrackProperties (GREASE)
+// draft-ietf-moq-transport-19 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
+// ============================================================================
+
+test("buildPublishTrackProperties: grease 未指定は GREASE Property を含まない", () => {
+  const properties = buildPublishTrackProperties({});
+  assert.isUndefined(properties.find((p) => isGreaseValue(p.id)));
+});
+
+test("buildPublishTrackProperties: grease: false は GREASE Property を含まない", () => {
+  const properties = buildPublishTrackProperties({}, false);
+  assert.isUndefined(properties.find((p) => isGreaseValue(p.id)));
+});
+
+test("buildPublishTrackProperties: grease: true は GREASE Property を 1 つ含む", () => {
+  // Property ID はランダム生成のため、複数回サンプリングして不変条件を検証する
+  for (let i = 0; i < 100; i++) {
+    const properties = buildPublishTrackProperties({}, true);
+    const greaseProperties = properties.filter((p) => isGreaseValue(p.id));
+    assert.equal(greaseProperties.length, 1);
+    // §2.5.1 の Mandatory Track Property 範囲 0x4000-0x7FFF に落入しないこと
+    assert.isTrue(greaseProperties[0].id < 0x4000n);
+    // 奇数 ID（Length プレフィックス付きバイト列形式）であること
+    assert.equal(greaseProperties[0].id % 2n, 1n);
+  }
+});
+
+test("buildPublishTrackProperties: grease: true でも他の Track Property は保持される", () => {
+  const properties = buildPublishTrackProperties(
+    { deliveryTimeout: 1000n, dynamicGroups: true },
+    true,
+  );
+  assert.isDefined(properties.find((p) => p.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
+  assert.isDefined(properties.find((p) => p.id === TrackPropertyId.DYNAMIC_GROUPS));
+  assert.equal(properties.filter((p) => isGreaseValue(p.id)).length, 1);
 });

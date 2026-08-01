@@ -89,6 +89,10 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] Object / Track Properties への GREASE opt-in 送信を追加する
+  - ConnectOptions.grease が true のとき PUBLISH の Track Properties と Object Properties（subgroup / datagram）に GREASE Property を 1 つ注入する
+  - GREASE Property ID は 0x7f \* N + 0x9D（N は [0, 126] の偶数）で Mandatory Track Property 範囲 0x4000-0x7FFF を避ける
+  - @voluntas
 - [ADD] MSF の Authorization Token 自動付与を実装する
   - SubscribeOptions / FetchOptions に authorizationToken を追加し、SUBSCRIBE / FETCH / REQUEST_UPDATE / SUBSCRIBE_NAMESPACE に AUTHORIZATION_TOKEN を付与する
   - createMediaSubscriber が catalog の authInfo を見てトークン取得コールバック経由でトークンを付与する
