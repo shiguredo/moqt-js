@@ -998,6 +998,9 @@ export class SessionImpl implements Session {
   peerMaxRequestUpdates = 0;
   // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
   peerMaxFilterRanges = 0;
+  // draft-ietf-moq-transport-19 §14 (Grease): true のとき Track / Object Properties に
+  // GREASE Property を 1 つ注入する。initialize() で ConnectOptions.grease を受け渡す。
+  grease = false;
 
   // アクティブなパブリッシャー、サブスクライバー、フェッチャー
   private publishers = new Map<bigint, PublisherImpl>();
@@ -1264,6 +1267,9 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-19 §10.3.1.1 / §10.3.1.2:
     // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
     // moqt-js は WebTransport 専用クライアントのため `createSetup` には渡さない。
+    // grease は SETUP 送信だけでなく、Track / Object Properties への注入にも使うため
+    // セッション状態として保持する。
+    this.grease = options?.grease === true;
     const setup = createSetup({
       authorizationToken: options?.authorizationToken,
       moqtImplementation: options?.moqtImplementation,
@@ -1491,7 +1497,7 @@ export class SessionImpl implements Session {
     });
 
     const parameters = buildPublishParameters(options);
-    const trackProperties = buildPublishTrackProperties(options);
+    const trackProperties = buildPublishTrackProperties(options, this.grease);
 
     // PUBLISH メッセージを双方向ストリームで送信
     // draft-ietf-moq-transport-19 Section 10.10 (PUBLISH):
