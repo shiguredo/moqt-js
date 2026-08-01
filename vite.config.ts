@@ -139,6 +139,12 @@ export default defineConfig({
       // プロトコルエンコーダは 1 行 1 ワイヤフォーマットフィールドで
       // parts.push() する規約のため、結合すると仕様と行の対応が崩れる
       "unicorn/prefer-single-call": "off",
+      // fast-check の arbitraries は fc.array(fc.string(...)) のように
+      // ネストして組み立てるのが自然なため、呼び出し深さ制限は無効化する
+      "unicorn/max-nested-calls": "off",
+      // channelConfig 等の文字列から基数 10 で整数化する箇所では
+      // Number.parseInt(..., 10) の意図が明確なため無効化する
+      "unicorn/prefer-number-coercion": "off",
       // TypeScript のスプレッド構文は既存コードに合わせる
       "unicorn/prefer-spread": "off",
       // Map のスプレッドは既存コードで使用

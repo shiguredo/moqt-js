@@ -80,4 +80,4 @@ Object Properties への注入:
 - テスト: `src/properties.test.ts`（generateGreaseProperty 不変条件 / appendGreaseObjectProperty / Track Properties roundtrip / parseProperties 保持）、`src/session/params.test.ts`（grease opt-in / 既定不変）、`src/dataStream.datagram.test.ts`（GREASE Object Properties の EXT 型 roundtrip）を追加。
 - `CHANGES.md`: `## develop` に `[ADD]` を追記。
 
- Object Properties のエンコードは既存 helper（`mergeDeliveryTimeoutObjectProperties`）と同じ absolute TLV 規約に従う。仕様の delta encoding（§11.2.1.2 / Figure 2）との乖離は既存のもので、本 issue の対象外（別 issue で対応予定）。
+Object Properties のエンコードは既存 helper（`mergeDeliveryTimeoutObjectProperties`）と同じ absolute TLV 規約に従う。仕様の delta encoding（§11.2.1.2 / Figure 2）との乖離は既存のもので、本 issue の対象外（別 issue で対応予定）。

@@ -6,8 +6,8 @@ packages:
   - tests/e2e
 
 overrides:
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.1
-  vitest: 4.1.9
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.6
+  vitest: 4.1.10
 
 allowBuilds:
   esbuild: true
