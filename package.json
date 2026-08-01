@@ -37,10 +37,10 @@
     "test": "vp test",
     "test:cov": "vp test --coverage",
     "test:watch": "vp test --watch",
-    "e2e-test": "vp run build && playwright test --project='chromium'",
-    "e2e-test-chrome": "vp run build && playwright test --project='Google Chrome*'",
-    "e2e-test-edge": "vp run build && playwright test --project='Microsoft Edge*'",
-    "e2e-test-webkit": "vp run build && playwright test --project='WebKit'"
+    "e2e-test": "vp run build && vp exec playwright test --project='chromium'",
+    "e2e-test-chrome": "vp run build && vp exec playwright test --project='Google Chrome*'",
+    "e2e-test-edge": "vp run build && vp exec playwright test --project='Microsoft Edge*'",
+    "e2e-test-webkit": "vp run build && vp exec playwright test --project='WebKit'"
   },
   "devDependencies": {
     "@playwright/test": "1.62.0",
@@ -53,5 +53,5 @@
   "engines": {
     "node": ">=22.22.2"
   },
-  "packageManager": "pnpm@11.5.1"
+  "packageManager": "pnpm@11.18.0"
 }
