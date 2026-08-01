@@ -16,6 +16,7 @@ import {
   generateGreaseProperty,
   appendGreaseObjectProperty,
   mergeDeliveryTimeoutObjectProperties,
+  readDeliveryTimeoutObjectProperties,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -547,17 +548,28 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
 // draft-ietf-moq-transport-19 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
 // ============================================================================
 
-// Object Properties の absolute TLV（Type + Length + Value）から Property ID の一覧を抽出する。
+// Object Properties の Key-Value-Pairs（Figure 2、delta encoding）から
+// Property ID の一覧を抽出する。
 // mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties と同じ規約。
 function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
   const ids: bigint[] = [];
   let offset = 0;
+  let previousId = 0n;
   while (offset < bytes.length) {
-    const [type, typeLen] = decodeVarint(bytes, offset);
+    const [deltaType, typeLen] = decodeVarint(bytes, offset);
     offset += typeLen;
-    const [len, lenLen] = decodeVarint(bytes, offset);
-    offset += lenLen + Number(len);
-    ids.push(type);
+    const id = previousId + deltaType;
+    previousId = id;
+    ids.push(id);
+    if (id % 2n === 0n) {
+      // 偶数 ID: varint value 形式
+      const [, valueLen] = decodeVarint(bytes, offset);
+      offset += valueLen;
+    } else {
+      // 奇数 ID: length + bytes 形式
+      const [len, lenLen] = decodeVarint(bytes, offset);
+      offset += lenLen + Number(len);
+    }
   }
   return ids;
 }
@@ -588,18 +600,85 @@ test("appendGreaseObjectProperty: 空の入力には GREASE Property のみ返�
 });
 
 test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Property を追加する", () => {
-  // 既存: OBJECT_DELIVERY_TIMEOUT (0x02) を absolute TLV で用意する
+  // 既存: OBJECT_DELIVERY_TIMEOUT (0x02) を delta encoding で用意する
   const existing = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, undefined);
   assert.isDefined(existing);
 
   const result = appendGreaseObjectProperty(existing);
   const ids = parseObjectPropertyIds(result);
 
-  // 既存 Property が保持され、末尾に GREASE Property が追加されること
+  // 既存 Property が保持され、GREASE Property が追加されること（ID 昇順）
   assert.equal(ids.length, 2);
   assert.equal(ids[0], TrackPropertyId.OBJECT_DELIVERY_TIMEOUT);
   assert.isTrue(isGreaseValue(ids[1]));
   assert.isTrue(ids[1] < 0x4000n);
+});
+
+// ============================================================================
+// Object Properties の delta encoding ワイヤ形式検証
+// draft-ietf-moq-transport-19 §1.4.3 (Key-Value-Pair Structure) / §11.2.1.2
+// ============================================================================
+
+test("mergeDeliveryTimeoutObjectProperties: 単一の偶数 ID Property は [Type][Value] の 2 フィールドになる", () => {
+  // §1.4.3 は偶数 Type の Length を禁止し varint value のみを許す。
+  // 単一の OBJECT_DELIVERY_TIMEOUT (0x02) は [0x02][value] で固定バイト列になる。
+  const encoded = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, undefined);
+  assert.isDefined(encoded);
+  assert.deepEqual(encoded, new Uint8Array([0x02, 0x93, 0x88]));
+});
+
+test("mergeDeliveryTimeoutObjectProperties: 複数 Property の Delta Type が前 ID との差分になる", () => {
+  // 0x02 の次は 0x06 なので Delta Type は 0x04。
+  // [0x02][5000][0x04][7000] の固定バイト列になる（§1.4.3 の delta encoding）。
+  const encoded = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, 7000n);
+  assert.isDefined(encoded);
+  assert.deepEqual(encoded, new Uint8Array([0x02, 0x93, 0x88, 0x04, 0x9b, 0x58]));
+});
+
+test("mergeDeliveryTimeoutObjectProperties: 既存 Property より大きい ID との合成でも昇順で再エンコードされる", () => {
+  // 既存に PRIOR_OBJECT_ID_GAP (0x3E、0x02 / 0x06 より大きい) を含む場合、
+  // 末尾追記では負の delta になりエンコードできない。再構成方式で ID 昇順に
+  // 並び替えられることを検証する。
+  const existing = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 3n }]);
+  const encoded = mergeDeliveryTimeoutObjectProperties(existing, 5000n, undefined);
+  assert.isDefined(encoded);
+  const ids = parseObjectPropertyIds(encoded);
+  assert.deepEqual(ids, [0x02n, 0x3en]);
+});
+
+test("mergeDeliveryTimeoutObjectProperties: 不正な既存バイト列は破棄して型付き値のみで再構成する", () => {
+  // 奇数 ID (0x9d) の Length が 9 バイト varint を要求するがデータが足りない不完全バイト列。
+  // 保持すると delta 連鎖を壊した不正ワイヤを送信し得るため、破棄して再構成する。
+  const broken = new Uint8Array([0x9d, 0xff, 0xff, 0xff]);
+  const encoded = mergeDeliveryTimeoutObjectProperties(broken, 5000n, undefined);
+  assert.isDefined(encoded);
+  assert.deepEqual(encoded, new Uint8Array([0x02, 0x93, 0x88]));
+});
+
+test("appendGreaseObjectProperty: 不正な既存バイト列は破棄して GREASE のみで再構成する", () => {
+  const broken = new Uint8Array([0x9d, 0xff, 0xff, 0xff]);
+  const result = appendGreaseObjectProperty(broken);
+  const ids = parseObjectPropertyIds(result);
+  assert.equal(ids.length, 1);
+  assert.isTrue(isGreaseValue(ids[0]));
+});
+
+test("readDeliveryTimeoutObjectProperties: 不完全なデータでも PROTOCOL_VIOLATION を送出しない", () => {
+  // 0x02 の varint value が 5 バイトを要求するが 1 バイトしかない不完全バイト列。
+  // 寛容な抽出経路は §1.4.3 の MUST を検証せず、型付きフィールド未設定で配信継続する。
+  const broken = new Uint8Array([0x02, 0xff, 0xff]);
+  const result = readDeliveryTimeoutObjectProperties(broken);
+  assert.equal(result.objectDeliveryTimeout, undefined);
+  assert.equal(result.subgroupDeliveryTimeout, undefined);
+});
+
+test("readDeliveryTimeoutObjectProperties: delta encoding の delivery timeout を抽出する", () => {
+  // 0x02 と 0x06 を delta encoding で並べたバイト列から両方を抽出する
+  const encoded = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, 7000n);
+  assert.isDefined(encoded);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, 5000n);
+  assert.equal(result.subgroupDeliveryTimeout, 7000n);
 });
 
 test("encodeProperties/decodeProperties: GREASE Property を含む Track Properties がラウンドトリップする", () => {
