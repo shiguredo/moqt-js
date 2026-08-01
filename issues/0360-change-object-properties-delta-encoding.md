@@ -1,7 +1,7 @@
 # Object Properties のエンコードを delta encoding に追従させる
 
 - Created: 2026-08-01
-- Completed: YYYY-MM-DD
+- Completed: 2026-08-01
 - Branch: feature/change-object-properties-delta-encoding
 - Polished: 2026-08-01
 
@@ -46,3 +46,11 @@ draft-ietf-moq-transport-19 §11.2.1.2 / §2.5 に基づき、Object Properties 
 - draft-ietf-moq-transport-19 §11.2.1.2 (Object Properties)
 - draft-ietf-moq-transport-19 §2.5 (Properties)
 - 関連: `0342-draft-19-delivery-timeout-object-property.md`（Object Properties 導入）、`0359-add-grease-properties.md`（GREASE 注入で複数 Property 化が顕在化）
+
+## 解決方法
+
+Object Properties のエンコード / デコードを delta encoding（Figure 2）に追従させた。
+
+- `src/properties.ts`: 寛容デコーダ `decodeObjectPropertiesTolerant()` を新設し、`mergeDeliveryTimeoutObjectProperties()` / `readDeliveryTimeoutObjectProperties()` / `appendGreaseObjectProperty()` を delta 規約に整合させた。既存バイト列との合成は「デコード → 合成 → ID 昇順ソート → 再エンコード」の再構成方式にし、不完全・不正な既存バイト列は破棄して再構成する
+- `src/properties.test.ts` / `src/dataStream.datagram.test.ts`: `parseObjectPropertyIds` を delta 対応にし、固定バイト列検証（単一 / 複数 Property）、寛容抽出の非送出、破棄・再構成のテストを追加した
+- `CHANGES.md`: `[CHANGE]` を追記した
