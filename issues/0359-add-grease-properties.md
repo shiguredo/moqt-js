@@ -1,7 +1,7 @@
 # Object / Track Properties への GREASE 送信
 
 - Created: 2026-07-31
-- Completed: YYYY-MM-DD
+- Completed: 2026-08-01
 - Branch: feature/add-grease-properties
 - Polished: 2026-08-01
 
@@ -68,3 +68,16 @@ Object Properties への注入:
 - draft-ietf-moq-transport-19 §15.8 (MOQ Properties)
 - draft-ietf-moq-transport-19 §11.2.1.2 (Object Properties) / §12 (MOQT Properties)
 - RFC 9170 §3.3 (GREASE 送信の SHOULD 推奨)
+
+## 解決方法
+
+`ConnectOptions.grease`（0037 で追加済み）を再利用し、Track Properties と Object Properties に GREASE Property の opt-in 注入を実装した。
+
+- `src/properties.ts`: `generateGreaseProperty()`（N を [0, 126] の偶数から選び 0x7f * N + 0x9D の奇数 ID + 空バイト列の Property を生成。Mandatory Track Property 範囲 0x4000-0x7FFF を避ける）と `appendGreaseObjectProperty()`（Object Properties バイト列に GREASE を Type + Length + Value で末尾追加）を追加。
+- `src/session/params.ts`: `buildPublishTrackProperties()` に `grease` 引数を追加し、`true` で GREASE Property を 1 つ追加。
+- `src/session.ts` / `src/session/types.ts`: `SessionImpl` に `grease` フィールドを追加し、`initialize()` で `ConnectOptions.grease` を受け渡す。PUBLISH 送信で `buildPublishTrackProperties(options, this.grease)`。
+- `src/session/publish.ts`: `publishSendObjectInternal()` が status Normal かつ grease 有効時に各オブジェクトへ GREASE Object Property を注入。`publishSendDatagram()` が grease 有効時に hasProperties 判定前に注入し Datagram Type の Properties Present ビットを整合。
+- テスト: `src/properties.test.ts`（generateGreaseProperty 不変条件 / appendGreaseObjectProperty / Track Properties roundtrip / parseProperties 保持）、`src/session/params.test.ts`（grease opt-in / 既定不変）、`src/dataStream.datagram.test.ts`（GREASE Object Properties の EXT 型 roundtrip）を追加。
+- `CHANGES.md`: `## develop` に `[ADD]` を追記。
+
+ Object Properties のエンコードは既存 helper（`mergeDeliveryTimeoutObjectProperties`）と同じ absolute TLV 規約に従う。仕様の delta encoding（§11.2.1.2 / Figure 2）との乖離は既存のもので、本 issue の対象外（別 issue で対応予定）。
