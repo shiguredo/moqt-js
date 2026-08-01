@@ -20,11 +20,12 @@
 `src/message/debug.ts:20-29` の `REQUEST_OK_ALIASES` に以下の問題がある：
 
 **誤ったエントリ**:
-| 行 | エントリ | 問題 |
-|---|---|---|
-| 21 | `[MessageType.SUBSCRIBE]: "SUBSCRIBE_OK"` | SUBSCRIBE_OK は独立したメッセージタイプ (0x04)。REQUEST_OK (0x07) のエイリアスではない |
-| 23 | `[MessageType.FETCH]: "FETCH_OK"` | FETCH_OK は独立したメッセージタイプ (0x18)。REQUEST_OK のエイリアスではない |
-| 27 | `[MessageType.SUBSCRIBE_TRACKS]: "SUBSCRIBE_TRACKS_OK"` | 仕様の公式エイリアスとして定義されていない |
+
+| 行  | エントリ                                                | 問題                                                                                   |
+| --- | ------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 21  | `[MessageType.SUBSCRIBE]: "SUBSCRIBE_OK"`               | SUBSCRIBE_OK は独立したメッセージタイプ (0x04)。REQUEST_OK (0x07) のエイリアスではない |
+| 23  | `[MessageType.FETCH]: "FETCH_OK"`                       | FETCH_OK は独立したメッセージタイプ (0x18)。REQUEST_OK のエイリアスではない            |
+| 27  | `[MessageType.SUBSCRIBE_TRACKS]: "SUBSCRIBE_TRACKS_OK"` | 仕様の公式エイリアスとして定義されていない                                             |
 
 SUBSCRIBE への応答は wire format 上 REQUEST_OK ではなく SUBSCRIBE_OK (0x04)。FETCH への応答は REQUEST_OK ではなく FETCH_OK (0x18)。これらはエイリアスではなく独立したメッセージタイプである。
 

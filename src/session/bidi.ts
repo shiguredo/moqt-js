@@ -905,9 +905,7 @@ export async function bidiSendRequestUpdate(
     parameters,
   };
 
-  const payload = encodeRequestUpdatePayload(
-    requestUpdateMsg as Parameters<typeof encodeRequestUpdatePayload>[0],
-  );
+  const payload = encodeRequestUpdatePayload(requestUpdateMsg);
 
   const streamInfo = session.requestStreams.get(targetRequestId);
   if (!streamInfo) {

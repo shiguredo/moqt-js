@@ -1514,7 +1514,7 @@ export class SessionImpl implements Session {
       trackProperties,
     };
 
-    const payload = encodePublishPayload(publishMsg as Parameters<typeof encodePublishPayload>[0]);
+    const payload = encodePublishPayload(publishMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.PUBLISH, payload, {
       requestId: requestId.toString(),
       trackNamespace: namespace,
@@ -1668,9 +1668,7 @@ export class SessionImpl implements Session {
       parameters,
     };
 
-    const payload = encodeSubscribePayload(
-      subscribeMsg as Parameters<typeof encodeSubscribePayload>[0],
-    );
+    const payload = encodeSubscribePayload(subscribeMsg);
     const streamInfo = await this.sendRequestOnBidiStream(
       requestId,
       MessageType.SUBSCRIBE,
