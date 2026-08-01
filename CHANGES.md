@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] Object Properties のエンコードを delta encoding に追従させる
+  - draft-ietf-moq-transport-19 §11.2.1.2 / §2.5 に基づき、Object Properties を Key-Value-Pairs（Figure 2、delta encoding）でエンコード / デコードする
+  - mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties / appendGreaseObjectProperty を delta 規約に整合させる
+  - 既存バイト列との合成はデコード → 合成 → ID 昇順ソート → 再エンコードの再構成方式にし、不完全・不正な既存バイト列は破棄して再構成する
+  - @voluntas
 - [CHANGE] MSF URI fragment の connection による transport 選択を適用する
   - connect() が msf fragment の connection パラメータを接続開始前に解釈する（§11.1.1）
   - connection=q は Native QUIC 未実装のためエラーにし、connection=wt / 欠如は WebTransport を許可する
