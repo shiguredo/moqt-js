@@ -22,7 +22,7 @@ import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
 import { encodeVarint } from "../varint";
 import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } from "../publisher";
 import { calculateObjectIdDelta } from "./params";
-import { mergeDeliveryTimeoutObjectProperties } from "../properties";
+import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
 import type { SessionInternal } from "./types";
 
 /**
@@ -169,11 +169,20 @@ export async function publishSendObjectInternal(
     );
   }
 
+  // GREASE Object Property - draft-ietf-moq-transport-19 §14 (Grease)
+  // opt-in 時、各オブジェクトに 1 つ追加する。§11.2.1.2 により Object Properties は
+  // status Normal のオブジェクトにのみ許容される（非 Normal は PROTOCOL_VIOLATION）ため、
+  // Normal のときだけ注入する。
+  const status = params.status ?? ObjectStatus.NORMAL;
+  if (session.grease && status === ObjectStatus.NORMAL) {
+    objectProperties = appendGreaseObjectProperty(objectProperties);
+  }
+
   const data = encodeObjectFields(
     objectIdDelta,
     BigInt(params.payload.length),
     SubgroupHeaderType.FIRST_OBJ_EXT,
-    params.status ?? ObjectStatus.NORMAL,
+    status,
     objectProperties,
   );
 
@@ -255,7 +264,14 @@ export function publishSendDatagram(
     return;
   }
 
-  const hasProperties = params.properties !== undefined && params.properties.length > 0;
+  // GREASE Object Property - draft-ietf-moq-transport-19 §14 (Grease)
+  // opt-in 時、datagram に 1 つ追加する。Datagram Type の Properties Present ビット
+  // （bit 0）を正しく設定するため、hasProperties の判定より前に注入する。
+  const properties = session.grease
+    ? appendGreaseObjectProperty(params.properties)
+    : params.properties;
+
+  const hasProperties = properties !== undefined && properties.length > 0;
   const hasPriority = params.priority !== undefined;
   const endOfGroup = params.endOfGroup ?? false;
 
@@ -286,7 +302,7 @@ export function publishSendDatagram(
     groupId: BigInt(params.groupId),
     objectId: BigInt(params.objectId),
     publisherPriority: params.priority ?? 128,
-    properties: params.properties,
+    properties,
     payload: params.payload,
   });
 

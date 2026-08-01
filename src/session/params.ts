@@ -18,7 +18,7 @@ import {
   getParameterLocationValue,
 } from "../message";
 import { encodeVarint } from "../varint";
-import { TrackPropertyId, type Property } from "../properties";
+import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
 import { LOCPropertyId } from "../loc";
 
 // ============================================================================
@@ -81,8 +81,14 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
  * 純粋関数: PUBLISH の Track Properties を構築する
  *
  * draft-ietf-moq-transport-19 Section 12.1-12.6
+ *
+ * @param options - PUBLISH オプション
+ * @param grease - true のとき GREASE Property（§14）を 1 つ追加する。既定（未指定 / false）では追加しない。
  */
-export function buildPublishTrackProperties(options?: PublishOptions): Property[] {
+export function buildPublishTrackProperties(
+  options?: PublishOptions,
+  grease?: boolean,
+): Property[] {
   const trackProperties: Property[] = [];
 
   // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-19 Section 12.2 (OBJECT_DELIVERY_TIMEOUT)
@@ -176,6 +182,14 @@ export function buildPublishTrackProperties(options?: PublishOptions): Property[
       id: LOCPropertyId.AUDIO_CONFIG,
       data: options.locAudioConfig,
     });
+  }
+
+  // GREASE Property - draft-ietf-moq-transport-19 §14 (Grease)
+  // opt-in 時、0x7f * N + 0x9D パターンの予約値を 1 つ追加する。対向が未知の Property を
+  // gracefully に扱えることを保証する。encodeProperties の delta encoding / 昇順ソートは
+  // GREASE Property も他 Property と同様に扱うだけで壊れない。
+  if (grease === true) {
+    trackProperties.push(generateGreaseProperty());
   }
 
   return trackProperties;

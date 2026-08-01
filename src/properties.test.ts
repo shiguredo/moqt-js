@@ -13,11 +13,16 @@ import {
   parseProperties,
   supportsDynamicGroups,
   validateTrackPropertyValue,
+  generateGreaseProperty,
+  appendGreaseObjectProperty,
+  mergeDeliveryTimeoutObjectProperties,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
 } from "./properties";
 import { MalformedTrackError, ProtocolViolationError } from "./error";
+import { isGreaseValue } from "./grease";
+import { decodeVarint } from "./varint";
 
 test("TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である", () => {
   assert.equal(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, 0x06n);
@@ -535,4 +540,98 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
   const result = decodeProperties(data);
   assert.equal(result.length, 1);
   assert.equal(result[0].id, 0x0bn);
+});
+
+// ============================================================================
+// GREASE Property
+// draft-ietf-moq-transport-19 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
+// ============================================================================
+
+// Object Properties の absolute TLV（Type + Length + Value）から Property ID の一覧を抽出する。
+// mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties と同じ規約。
+function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
+  const ids: bigint[] = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const [type, typeLen] = decodeVarint(bytes, offset);
+    offset += typeLen;
+    const [len, lenLen] = decodeVarint(bytes, offset);
+    offset += lenLen + Number(len);
+    ids.push(type);
+  }
+  return ids;
+}
+
+test("generateGreaseProperty: GREASE 予約値の奇数 ID で空バイト列を返す", () => {
+  // N はランダム生成のため、複数回サンプリングして不変条件を検証する
+  for (let i = 0; i < 100; i++) {
+    const property = generateGreaseProperty();
+    // §14 の GREASE パターン 0x7f * N + 0x9D に一致する予約値であること
+    assert.isTrue(isGreaseValue(property.id));
+    // §2.5.1 の Mandatory Track Property 範囲 0x4000-0x7FFF に落入しないこと
+    assert.isTrue(property.id < 0x4000n);
+    // 奇数 ID（Length プレフィックス付きバイト列形式）であること
+    assert.equal(property.id % 2n, 1n);
+    // 値は空バイト列であること
+    assert.equal(property.data?.length, 0);
+  }
+});
+
+test("appendGreaseObjectProperty: 空の入力には GREASE Property のみ返す", () => {
+  for (let i = 0; i < 20; i++) {
+    const bytes = appendGreaseObjectProperty(undefined);
+    const ids = parseObjectPropertyIds(bytes);
+    assert.equal(ids.length, 1);
+    assert.isTrue(isGreaseValue(ids[0]));
+    assert.isTrue(ids[0] < 0x4000n);
+  }
+});
+
+test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Property を追加する", () => {
+  // 既存: OBJECT_DELIVERY_TIMEOUT (0x02) を absolute TLV で用意する
+  const existing = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, undefined);
+  assert.isDefined(existing);
+
+  const result = appendGreaseObjectProperty(existing);
+  const ids = parseObjectPropertyIds(result);
+
+  // 既存 Property が保持され、末尾に GREASE Property が追加されること
+  assert.equal(ids.length, 2);
+  assert.equal(ids[0], TrackPropertyId.OBJECT_DELIVERY_TIMEOUT);
+  assert.isTrue(isGreaseValue(ids[1]));
+  assert.isTrue(ids[1] < 0x4000n);
+});
+
+test("encodeProperties/decodeProperties: GREASE Property を含む Track Properties がラウンドトリップする", () => {
+  for (let i = 0; i < 20; i++) {
+    const grease = generateGreaseProperty();
+    const headers: Property[] = [
+      { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1000n },
+      grease,
+    ];
+    const encoded = encodeProperties(headers);
+    const decoded = decodeProperties(encoded);
+
+    // GREASE Property が ID と空バイト列を保ってラウンドトリップすること
+    const decodedGrease = decoded.find((p) => isGreaseValue(p.id));
+    assert.isDefined(decodedGrease);
+    assert.equal(decodedGrease?.id, grease.id);
+    assert.equal(decodedGrease?.data?.length, 0);
+    // concrete Property も保持されること
+    assert.isDefined(decoded.find((p) => p.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
+  }
+});
+
+test("parseProperties: GREASE Property は未知 Property として保持され拒否されない", () => {
+  for (let i = 0; i < 20; i++) {
+    const grease = generateGreaseProperty();
+    const encoded = encodeProperties([grease]);
+    const parsed = parseProperties(encoded);
+
+    // 0x4000-0x7FFF 範囲外の GREASE は unknownProperties に保持され、throw しない
+    assert.equal(parsed.unknownProperties?.length, 1);
+    const greaseId = parsed.unknownProperties?.[0]?.id;
+    assert.isDefined(greaseId);
+    assert.isTrue(greaseId !== undefined && isGreaseValue(greaseId));
+  }
 });

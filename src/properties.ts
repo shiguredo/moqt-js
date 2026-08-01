@@ -11,6 +11,7 @@
 
 import { encodeVarint, decodeVarint } from "./varint";
 import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
+import { generateGreaseValue } from "./grease";
 
 /**
  * MSF_COMPRESSION の Compression Algorithm 値 (draft-ietf-moq-msf-01 §12.1 / §14.4 Table 15)
@@ -307,6 +308,63 @@ export function encodeProperty(header: Property): Uint8Array {
   result.set(idBytes, 0);
   result.set(lengthBytes, idBytes.length);
   result.set(header.data, idBytes.length + lengthBytes.length);
+  return result;
+}
+
+// ============================================================================
+// GREASE Property
+// draft-ietf-moq-transport-19 Section 14 (Grease) / Section 15.8 (MOQ Properties)
+// ============================================================================
+
+/**
+ * GREASE Property の N の取りうる偶数個数
+ *
+ * N は [0, 126] の偶数（0, 2, ..., 126）から選ぶ。個数は (126 - 0) / 2 + 1 = 64。
+ */
+const GREASE_PROPERTY_N_CHOICES = 64;
+
+/**
+ * GREASE Property を生成する
+ *
+ * draft-ietf-moq-transport-19 §14 (Grease): GREASE 値は 0x7f * N + 0x9D（N は非負整数）。
+ * Properties は §2.5 / §11.2.1.2 の Key-Value-Pairs（Figure 2）に従い、奇数 ID は
+ * Length プレフィックス付きバイト列、偶数 ID は varint 値としてエンコードされる。
+ * 任意のバイト列を安全に送信するため、N を偶数に固定して Property ID を奇数にする
+ * （0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。値は空バイト列とする。
+ *
+ * draft-ietf-moq-transport-19 §2.5.1 (Mandatory Track Properties): 0x4000-0x7FFF は
+ * Mandatory Track Property 範囲。0x7f * N + 0x9D は N ∈ [128, 256] でこの範囲に落入し、
+ * 受信側は未知の Mandatory Track Property として Track Properties では track を拒否
+ * （REQUEST_ERROR UNSUPPORTED_EXTENSION）、Object Properties では malformed と判定する。
+ * そのため N は [0, 126] の偶数から選ぶ（GREASE 値は 0x9D 〜 0x3F1F、奇数 ID、0x4000 未満）。
+ */
+export function generateGreaseProperty(): Property {
+  const n = 2 * Math.floor(Math.random() * GREASE_PROPERTY_N_CHOICES);
+  return {
+    id: generateGreaseValue(n),
+    data: new Uint8Array(0),
+  };
+}
+
+/**
+ * 既存の Object Properties バイト列に GREASE Property を 1 つ追加する
+ *
+ * draft-ietf-moq-transport-19 §11.2.1.2 (Object Properties): Object Properties は
+ * "length in bytes followed by Key-Value-Pairs (see Figure 2)"。既存の Object Properties
+ * helper（mergeDeliveryTimeoutObjectProperties）と同じ Type + Length + Value 規約に従い、
+ * 奇数 ID の GREASE Property を Length プレフィックス付きバイト列として末尾に追加する。
+ *
+ * @param existing - 既存の Object Properties バイト列（undefined / 空は GREASE のみ返す）
+ * @returns GREASE Property を追加した Object Properties バイト列
+ */
+export function appendGreaseObjectProperty(existing: Uint8Array | undefined): Uint8Array {
+  const greaseBytes = encodeProperty(generateGreaseProperty());
+  if (existing === undefined || existing.length === 0) {
+    return greaseBytes;
+  }
+  const result = new Uint8Array(existing.length + greaseBytes.length);
+  result.set(existing, 0);
+  result.set(greaseBytes, existing.length);
   return result;
 }
 

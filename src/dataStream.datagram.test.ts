@@ -11,6 +11,9 @@ import {
   decodeObjectDatagram,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
+import { appendGreaseObjectProperty } from "./properties";
+import { isGreaseValue } from "./grease";
+import { decodeVarint } from "./varint";
 
 test("ObjectDatagram: PAYLOAD_OBJ タイプ (0x00) をエンコード", () => {
   const datagram: ObjectDatagram = {
@@ -210,3 +213,49 @@ for (const tc of objectDatagramTestCases) {
     }
   });
 }
+
+// Object Properties の absolute TLV（Type + Length + Value）から Property ID の一覧を抽出する。
+function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
+  const ids: bigint[] = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const [type, typeLen] = decodeVarint(bytes, offset);
+    offset += typeLen;
+    const [len, lenLen] = decodeVarint(bytes, offset);
+    offset += lenLen + Number(len);
+    ids.push(type);
+  }
+  return ids;
+}
+
+// draft-ietf-moq-transport-19 §14 (Grease):
+// grease opt-in 時、Object Properties に GREASE Property を 1 つ注入する。
+// 元々 properties がない datagram でも Properties Present ビット（Datagram Type bit 0）が
+// 立った EXT 型となり、GREASE Property がラウンドトリップすることを検証する。
+test("ObjectDatagram: GREASE Object Properties が EXT 型でラウンドトリップする", () => {
+  for (let i = 0; i < 20; i++) {
+    const greaseProperties = appendGreaseObjectProperty(undefined);
+    const datagram: ObjectDatagram = {
+      type: DatagramType.PAYLOAD_OBJ_EXT,
+      trackAlias: 1n,
+      groupId: 2n,
+      objectId: 3n,
+      publisherPriority: 128,
+      properties: greaseProperties,
+      payload: new Uint8Array([0xaa]),
+    };
+
+    const encoded = encodeObjectDatagram(datagram);
+    const [decoded] = decodeObjectDatagram(encoded);
+
+    // Properties Present ビット（bit 0）が立っていること
+    assert.equal(decoded.type & 0x01, 0x01);
+    // 注入した GREASE Properties バイト列が保持されること
+    assert.deepEqual(decoded.properties, greaseProperties);
+    // properties 内に GREASE 予約値（0x4000 未満）が 1 つ含まれること
+    const ids = parseObjectPropertyIds(decoded.properties ?? new Uint8Array(0));
+    assert.equal(ids.length, 1);
+    assert.isTrue(isGreaseValue(ids[0]));
+    assert.isTrue(ids[0] < 0x4000n);
+  }
+});
