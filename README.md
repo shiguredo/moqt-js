@@ -140,6 +140,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Properties
   - Prior Group ID Gap / Prior Object ID Gap / Immutable Properties
   - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT
+  - Key-Value-Pairs (Figure 2) の delta encoding
 - GREASE
 
 ### Low Overhead Media Container

@@ -350,22 +350,27 @@ export function generateGreaseProperty(): Property {
  * 既存の Object Properties バイト列に GREASE Property を 1 つ追加する
  *
  * draft-ietf-moq-transport-19 §11.2.1.2 (Object Properties): Object Properties は
- * "length in bytes followed by Key-Value-Pairs (see Figure 2)"。既存の Object Properties
- * helper（mergeDeliveryTimeoutObjectProperties）と同じ Type + Length + Value 規約に従い、
- * 奇数 ID の GREASE Property を Length プレフィックス付きバイト列として末尾に追加する。
+ * "length in bytes followed by Key-Value-Pairs (see Figure 2)" であり、§1.4.3 の
+ * Key-Value-Pairs（delta encoding）に従う。delta は前 Property との差分で Type を
+ * エンコードするため末尾追記ができず、既存バイト列をデコードして Property[] に
+ * 分解し、GREASE Property を合成して ID 昇順で再エンコードする（再構成方式）。
+ * 既存バイト列が不完全・不正でデコードできない場合は破棄し、GREASE Property
+ * のみで再構成する（不完全バイト列の保持は delta 連鎖を壊した不正ワイヤを
+ * 送信し得る）。
  *
  * @param existing - 既存の Object Properties バイト列（undefined / 空は GREASE のみ返す）
  * @returns GREASE Property を追加した Object Properties バイト列
  */
 export function appendGreaseObjectProperty(existing: Uint8Array | undefined): Uint8Array {
-  const greaseBytes = encodeProperty(generateGreaseProperty());
-  if (existing === undefined || existing.length === 0) {
-    return greaseBytes;
+  const headers: Property[] = [];
+  if (existing !== undefined && existing.length > 0) {
+    const decoded = decodeObjectPropertiesTolerant(existing);
+    if (decoded.complete) {
+      headers.push(...decoded.properties);
+    }
   }
-  const result = new Uint8Array(existing.length + greaseBytes.length);
-  result.set(existing, 0);
-  result.set(greaseBytes, existing.length);
-  return result;
+  headers.push(generateGreaseProperty());
+  return encodeProperties(headers);
 }
 
 /**
@@ -839,12 +844,71 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
 // ============================================================================
 
 /**
+ * Object Properties バイト列を Key-Value-Pairs（Figure 2、delta encoding）で
+ * 寛容にデコードする
+ *
+ * draft-ietf-moq-transport-19 §1.4.3:
+ * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
+ * or from 0 if there is no previous Type value.
+ *
+ * 寛容なデコード: 不完全・不正なデータではそこで停止し、complete=false で
+ * 途中まで読めた Property 列を返す。Delta Type オーバーフロー / Length 上限など
+ * の §1.4.3 の MUST 検証は行わない（Track 向け decodeProperties の厳密検証は
+ * 流用しない。Object バイト列に適用すると誤って MalformedTrackError になり得る）。
+ *
+ * @returns complete=false のとき、properties は途中までデコードできた Property 列
+ */
+function decodeObjectPropertiesTolerant(data: Uint8Array): {
+  properties: Property[];
+  complete: boolean;
+} {
+  const properties: Property[] = [];
+  let offset = 0;
+  let previousId = 0n;
+
+  while (offset < data.length) {
+    try {
+      const [deltaId, deltaIdLen] = decodeVarint(data, offset);
+      offset += deltaIdLen;
+      const id = previousId + deltaId;
+      previousId = id;
+
+      if (id % 2n === 0n) {
+        // 偶数 ID: varint value 形式
+        const [value, valueLen] = decodeVarint(data, offset);
+        offset += valueLen;
+        properties.push({ id, value });
+      } else {
+        // 奇数 ID: length + bytes 形式
+        const [length, lengthLen] = decodeVarint(data, offset);
+        offset += lengthLen;
+        if (offset + Number(length) > data.length) {
+          return { properties, complete: false };
+        }
+        properties.push({ id, data: data.slice(offset, offset + Number(length)) });
+        offset += Number(length);
+      }
+    } catch {
+      // 不完全データはそこで停止し、読めた分のみ返す
+      return { properties, complete: false };
+    }
+  }
+
+  return { properties, complete: true };
+}
+
+/**
  * Object Properties バイト列から delivery timeout 値を寛容に抽出する
  *
  * draft-ietf-moq-transport-19 Section 8:
  * subgroup 先頭オブジェクトの Object Property で Track 値を上書きできる。
  * Track 向け decodeProperties とは異なり、Mandatory Track Property 検証や
  * validateTrackPropertyValue は行わない（Object バイト列に載せると誤るため）。
+ *
+ * §1.4.3 の Key-Value-Pairs（delta encoding）でデコードする。delta 形式は Type が
+ * 前 Property との差分で連鎖するため、途中で壊れた場合は後続 Property の抽出が
+ * 全滅し、抽出済みの先行値のみが保持される（absolute 形式より寛容性が低下する
+ * 既知の制約）。
  *
  * @returns 抽出できた値。不明・不完全なら undefined
  */
@@ -859,26 +923,14 @@ export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | und
   let objectDeliveryTimeout: bigint | undefined;
   let subgroupDeliveryTimeout: bigint | undefined;
 
-  try {
-    let offset = 0;
-    while (offset < properties.length) {
-      const [propType, typeSize] = decodeVarint(properties, offset);
-      offset += typeSize;
-      const [propLen, lenSize] = decodeVarint(properties, offset);
-      offset += lenSize;
-      if (offset + Number(propLen) > properties.length) break;
-
-      if (propType === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT && Number(propLen) > 0) {
-        const [value] = decodeVarint(properties, offset);
-        objectDeliveryTimeout = value;
-      } else if (propType === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT && Number(propLen) > 0) {
-        const [value] = decodeVarint(properties, offset);
-        subgroupDeliveryTimeout = value;
-      }
-      offset += Number(propLen);
+  // 寛容にデコードし、読めた分の先行値のみを保持する
+  const decoded = decodeObjectPropertiesTolerant(properties);
+  for (const property of decoded.properties) {
+    if (property.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT) {
+      objectDeliveryTimeout = property.value;
+    } else if (property.id === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT) {
+      subgroupDeliveryTimeout = property.value;
     }
-  } catch {
-    // 不完全データは型付きフィールドだけ未設定にし、配信は継続
   }
 
   return { objectDeliveryTimeout, subgroupDeliveryTimeout };
@@ -889,6 +941,13 @@ export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | und
  *
  * draft-ietf-moq-transport-19 Section 8:
  * 同一 ID が既存 properties にある場合、型付き値を優先して上書きする。
+ *
+ * §1.4.3 の Key-Value-Pairs（delta encoding）に従い、既存バイト列をデコードして
+ * Property[] に分解し、上書き ID（0x02 / 0x06）の全出現を除外して型付き値を 1 つ
+ * 追加し、ID 昇順で再エンコードする（再構成方式）。delta は前 Property との差分で
+ * Type をエンコードするため、既存バイト列のスライスコピーや末尾追記はできない。
+ * 既存バイト列が不完全・不正でデコードできない場合は破棄し、型付き値のみで
+ * 再構成する（不完全バイト列の保持は delta 連鎖を壊した不正ワイヤを送信し得る）。
  *
  * @param existing - 既存の properties バイト列（undefined 可）
  * @param deliveryTimeout - OBJECT_DELIVERY_TIMEOUT 値（undefined は未指定）
@@ -904,57 +963,39 @@ export function mergeDeliveryTimeoutObjectProperties(
     return existing;
   }
 
-  const parts: Uint8Array[] = [];
-
-  // 既存 properties から 0x02 / 0x06 を除外してコピー
+  // delta encoding のため再構成方式で合成する
+  const headers: Property[] = [];
   if (existing !== undefined && existing.length > 0) {
-    try {
-      let offset = 0;
-      while (offset < existing.length) {
-        const start = offset;
-        const [propType, typeSize] = decodeVarint(existing, offset);
-        offset += typeSize;
-        const [propLen, lenSize] = decodeVarint(existing, offset);
-        offset += lenSize;
-        if (offset + Number(propLen) > existing.length) break;
-        offset += Number(propLen);
-
-        // 型付き値で上書きする ID はスキップ
-        if (
-          (propType === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT && deliveryTimeout !== undefined) ||
-          (propType === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT &&
-            subgroupDeliveryTimeout !== undefined)
-        ) {
-          continue;
-        }
-        parts.push(existing.slice(start, offset));
-      }
-    } catch {
-      // 既存が不完全ならそのまま全バイトを保持
-      parts.push(existing);
+    const decoded = decodeObjectPropertiesTolerant(existing);
+    if (decoded.complete) {
+      headers.push(...decoded.properties);
     }
   }
 
+  // 型付き値で上書きする ID は既存の全出現を除外する
+  const filtered = headers.filter((property) => {
+    if (property.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT && deliveryTimeout !== undefined) {
+      return false;
+    }
+    if (
+      property.id === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT &&
+      subgroupDeliveryTimeout !== undefined
+    ) {
+      return false;
+    }
+    return true;
+  });
+
   // 型付き値を追加
   if (deliveryTimeout !== undefined) {
-    const value = encodeVarint(deliveryTimeout);
-    parts.push(encodeVarint(TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
-    parts.push(encodeVarint(BigInt(value.length)));
-    parts.push(value);
+    filtered.push({ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: deliveryTimeout });
   }
   if (subgroupDeliveryTimeout !== undefined) {
-    const value = encodeVarint(subgroupDeliveryTimeout);
-    parts.push(encodeVarint(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT));
-    parts.push(encodeVarint(BigInt(value.length)));
-    parts.push(value);
+    filtered.push({
+      id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT,
+      value: subgroupDeliveryTimeout,
+    });
   }
 
-  const total = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(total);
-  let pos = 0;
-  for (const part of parts) {
-    result.set(part, pos);
-    pos += part.length;
-  }
-  return result;
+  return encodeProperties(filtered);
 }
