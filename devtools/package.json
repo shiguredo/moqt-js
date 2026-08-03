@@ -9,7 +9,7 @@
     "preview": "vp preview"
   },
   "dependencies": {
-    "@preact/signals": "2.10.0",
+    "@preact/signals": "2.10.1",
     "moqt-js": "workspace:*",
     "preact": "10.29.7",
     "preact-iso": "2.12.1"
