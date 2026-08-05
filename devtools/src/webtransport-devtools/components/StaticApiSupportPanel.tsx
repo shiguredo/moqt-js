@@ -120,6 +120,7 @@ export function StaticApiSupportPanel() {
       <button
         type="button"
         onClick={toggle}
+        data-testid="api-support-toggle"
         class="w-full flex items-center justify-between gap-4 text-left"
       >
         <h2 class="text-lg font-semibold text-slate-700">WebTransport API Support</h2>
