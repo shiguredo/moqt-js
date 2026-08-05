@@ -1,5 +1,6 @@
 import {
   ConnectionPanel,
+  PostConnectionPanel,
   StaticApiSupportPanel,
   BidiStreamPanel,
   UniSendStreamPanel,
@@ -19,6 +20,7 @@ export function App() {
       <div class="fixed top-4 right-4 z-30">
         <button
           onClick={copyUrlToClipboard}
+          data-testid="copy-url"
           class="p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
           title="Copy URL with current settings"
         >
@@ -38,6 +40,7 @@ export function App() {
         <h1 class="text-2xl font-bold text-slate-800 mb-6">WebTransport DevTools</h1>
         <StaticApiSupportPanel />
         <ConnectionPanel />
+        <PostConnectionPanel />
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <BidiStreamPanel />
           <div class="space-y-6">
