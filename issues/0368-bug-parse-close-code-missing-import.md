@@ -1,7 +1,7 @@
 # webtransport-devtools の parseCloseCode の import 漏れでビルドエラーになる
 
 - Created: 2026-08-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-05
 - Branch: feature/fix-parse-close-code-import
 - Polished: {YYYY-MM-DD}
 - Reporter: @voluntas
@@ -21,7 +21,8 @@ webtransport-devtools のビルドエラーを解消する。
 
 ## 解決方法
 
-- `devtools/src/webtransport-devtools/signals.ts` の `./params` からの import に `parseCloseCode` を追加する
+- `devtools/src/webtransport-devtools/signals.ts` の `./params` からの import に `parseCloseCode` を追加した
+- `tsc --noEmit` で `TS2304: Cannot find name 'parseCloseCode'` が消えることを確認した
 
 ## 完了条件
 
