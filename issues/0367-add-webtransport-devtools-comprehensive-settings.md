@@ -1,7 +1,7 @@
 # webtransport-devtools で WebTransport の設定を徹底的に設定可能にする
 
 - Created: 2026-08-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-05
 - Branch: feature/add-webtransport-devtools-settings
 - Polished: 2026-08-05
 
@@ -72,3 +72,17 @@ W3C WebTransport CR の辞書定義に従い、設定を 4 系統に分けて UI
 - 既存の StaticApiSupportPanel の Datagrams グループが新しい属性名に更新されていること
 - `vp run build:devtools` が成功すること
 - CHANGES.md の `## develop` に [ADD] エントリが追加されていること
+
+## 解決方法
+
+- `params.ts` を新設し、接続時設定の入力検証（headers の forbidden request-header / wt-available-protocols 拒否、protocols の重複・空要素・512 文字超過拒否、anticipated streams の unsigned short 検証、allowPooling と certificateHash の排他検証）とクエリパラメータのビルド / パースを純粋関数として実装した
+- `bcd.ts` を新設し、MDN Browser Compat Data に基づく静的テーブル（確認日 2026-08-05）を追加した
+- `signals.ts` を拡張し、接続時設定の signal 群、接続後設定（datagrams 属性と closeCode / reason）、ストリーム作成時設定（sendOrder / waitUntilAvailable）を追加した
+- `ConnectionPanel` に W3C §6.9 の全接続時設定 UI を追加し、各項目に仕様節番号と BCD 対応バッジを表示した
+- `PostConnectionPanel` を新設し、W3C §5.3 の datagrams 属性（適用ボタン付き）と §6.10 の closeCode / reason を提供した
+- `BidiStreamPanel` / `UniSendStreamPanel` に sendOrder / waitUntilAvailable の入力欄を追加した
+- `StaticApiSupportPanel` の Datagrams グループを incomingMaxBufferedDatagrams / outgoingMaxBufferedDatagrams に更新した
+- `buildQueryString` / `getInitialParams` を拡張し、接続時設定の URL 共有・復元に対応した
+- `params.test.ts` に 44 件の単体テストを追加した
+- `tests/e2e/webtransport-devtools.spec.ts` に Playwright E2E テスト 3 件を追加し、主要 UI 要素に data-testid を付与した
+- `playwright.config.ts` に devtools の webServer を追加した
