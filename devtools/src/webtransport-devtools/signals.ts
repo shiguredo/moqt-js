@@ -9,6 +9,7 @@ import {
   parseDatagramMaxAge,
   parseMaxBufferedDatagrams,
   parseSendOrder,
+  parseCloseCode,
   validateConnectionSettings,
   type CongestionControl,
   type DatagramsReadableType,
