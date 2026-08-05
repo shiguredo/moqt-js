@@ -1,13 +1,23 @@
 import { signal, computed } from "@preact/signals";
 import { toHttpVersionLabel } from "moqt-js";
+import {
+  parseSettingsQueryString,
+  buildSettingsQueryString,
+  parseHeadersText,
+  parseProtocolsText,
+  parseAnticipatedStreams,
+  parseDatagramMaxAge,
+  parseMaxBufferedDatagrams,
+  parseSendOrder,
+  validateConnectionSettings,
+  type CongestionControl,
+  type DatagramsReadableType,
+  type ConnectionSettings,
+} from "./params";
 
 // クエリパラメータからの初期値読み込み
-function getInitialParams(): { url: string; certificateHash: string } {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    url: params.get("url") || "https://127.0.0.1:4443/wt",
-    certificateHash: params.get("certificateHash") || "",
-  };
+function getInitialParams(): ConnectionSettings {
+  return parseSettingsQueryString(window.location.search);
 }
 
 const initialParams = getInitialParams();
@@ -15,17 +25,40 @@ const initialParams = getInitialParams();
 // Connection settings
 export const url = signal(initialParams.url);
 export const certificateHash = signal(initialParams.certificateHash);
+export const allowPooling = signal(initialParams.allowPooling);
+export const requireUnreliable = signal(initialParams.requireUnreliable);
+export const congestionControl = signal<CongestionControl>(initialParams.congestionControl);
+export const headersText = signal(initialParams.headersText);
+export const protocolsText = signal(initialParams.protocolsText);
+export const datagramsReadableType = signal<DatagramsReadableType>(
+  initialParams.datagramsReadableType,
+);
+export const anticipatedConcurrentIncomingUnidirectionalStreams = signal(
+  initialParams.anticipatedConcurrentIncomingUnidirectionalStreams,
+);
+export const anticipatedConcurrentIncomingBidirectionalStreams = signal(
+  initialParams.anticipatedConcurrentIncomingBidirectionalStreams,
+);
 
 /**
  * 現在の設定からクエリ文字列を構築する
  */
 export function buildQueryString(): string {
-  const params = new URLSearchParams();
-  params.set("url", url.value);
-  if (certificateHash.value) {
-    params.set("certificateHash", certificateHash.value);
-  }
-  return params.toString();
+  const settings: ConnectionSettings = {
+    url: url.value,
+    certificateHash: certificateHash.value,
+    allowPooling: allowPooling.value,
+    requireUnreliable: requireUnreliable.value,
+    congestionControl: congestionControl.value,
+    headersText: headersText.value,
+    protocolsText: protocolsText.value,
+    datagramsReadableType: datagramsReadableType.value,
+    anticipatedConcurrentIncomingUnidirectionalStreams:
+      anticipatedConcurrentIncomingUnidirectionalStreams.value,
+    anticipatedConcurrentIncomingBidirectionalStreams:
+      anticipatedConcurrentIncomingBidirectionalStreams.value,
+  };
+  return buildSettingsQueryString(settings);
 }
 
 // Connection state
@@ -290,13 +323,13 @@ function detectStaticApiSupport(): StaticApiGroup[] {
           description: "送信側で破棄されるまでの最大滞在時間 (ms)",
         },
         {
-          name: "WebTransportDatagramDuplexStream.prototype.incomingHighWaterMark",
-          supported: hasOnProto(DDuplex, "incomingHighWaterMark"),
+          name: "WebTransportDatagramDuplexStream.prototype.incomingMaxBufferedDatagrams",
+          supported: hasOnProto(DDuplex, "incomingMaxBufferedDatagrams"),
           description: "受信キュー溢れ時に先頭から破棄する閾値",
         },
         {
-          name: "WebTransportDatagramDuplexStream.prototype.outgoingHighWaterMark",
-          supported: hasOnProto(DDuplex, "outgoingHighWaterMark"),
+          name: "WebTransportDatagramDuplexStream.prototype.outgoingMaxBufferedDatagrams",
+          supported: hasOnProto(DDuplex, "outgoingMaxBufferedDatagrams"),
           description: "送信キュー溢れ時に backpressure を掛ける閾値",
         },
       ],
@@ -438,6 +471,68 @@ let uniRecvStreamCounter = 0;
 // Settings disabled when connected
 export const settingsDisabled = computed(() => connectionStatus.value !== "disconnected");
 
+// 接続後設定 (接続中のみ適用可能)
+// 入力値は仕様の setter 制約 (§5.3 / §6.10) に従って検証し、切断時にリセットする
+export const datagramIncomingMaxAge = signal("");
+export const datagramOutgoingMaxAge = signal("");
+export const datagramIncomingMaxBufferedDatagrams = signal("");
+export const datagramOutgoingMaxBufferedDatagrams = signal("");
+export const closeCode = signal("");
+export const closeReason = signal("");
+
+/**
+ * 接続中の WebTransport の datagrams 設定を適用する
+ * W3C §5.3 の setter 制約（負値・NaN 拒否、0 は null、1 未満は 1 にクランプ）に従う
+ */
+export function applyDatagramSettings(): void {
+  const wt = transport.value;
+  if (!wt) {
+    return;
+  }
+
+  const incomingMaxAgeResult = parseDatagramMaxAge(datagramIncomingMaxAge.value);
+  if (!incomingMaxAgeResult.ok) {
+    connectionError.value = incomingMaxAgeResult.error;
+    return;
+  }
+  const outgoingMaxAgeResult = parseDatagramMaxAge(datagramOutgoingMaxAge.value);
+  if (!outgoingMaxAgeResult.ok) {
+    connectionError.value = outgoingMaxAgeResult.error;
+    return;
+  }
+  const incomingMaxBufferedResult = parseMaxBufferedDatagrams(
+    datagramIncomingMaxBufferedDatagrams.value,
+  );
+  if (!incomingMaxBufferedResult.ok) {
+    connectionError.value = incomingMaxBufferedResult.error;
+    return;
+  }
+  const outgoingMaxBufferedResult = parseMaxBufferedDatagrams(
+    datagramOutgoingMaxBufferedDatagrams.value,
+  );
+  if (!outgoingMaxBufferedResult.ok) {
+    connectionError.value = outgoingMaxBufferedResult.error;
+    return;
+  }
+
+  // lib.dom.d.ts の WebTransportDatagramDuplexStream には無いが W3C §5.3 で定義されている
+  // 属性は any 経由でアクセスする
+  // biome-ignore lint/suspicious/noExplicitAny: WebTransportDatagramDuplexStream 型定義が W3C §5.3 に追従していない
+  const datagrams = wt.datagrams as any;
+  if (incomingMaxAgeResult.value !== undefined) {
+    datagrams.incomingMaxAge = incomingMaxAgeResult.value;
+  }
+  if (outgoingMaxAgeResult.value !== undefined) {
+    datagrams.outgoingMaxAge = outgoingMaxAgeResult.value;
+  }
+  if (incomingMaxBufferedResult.value !== undefined) {
+    datagrams.incomingMaxBufferedDatagrams = incomingMaxBufferedResult.value;
+  }
+  if (outgoingMaxBufferedResult.value !== undefined) {
+    datagrams.outgoingMaxBufferedDatagrams = outgoingMaxBufferedResult.value;
+  }
+}
+
 /**
  * Base64 encoded string to ArrayBuffer
  */
@@ -471,6 +566,58 @@ export async function connect(): Promise<void> {
     return;
   }
 
+  // 接続時設定の排他・入力検証
+  // §6.9 の allowPooling と serverCertificateHashes の排他、§6.2 の headers /
+  // protocols の SyntaxError / TypeError 条件を接続前に検証する
+  const settings: ConnectionSettings = {
+    url: url.value,
+    certificateHash: certificateHash.value,
+    allowPooling: allowPooling.value,
+    requireUnreliable: requireUnreliable.value,
+    congestionControl: congestionControl.value,
+    headersText: headersText.value,
+    protocolsText: protocolsText.value,
+    datagramsReadableType: datagramsReadableType.value,
+    anticipatedConcurrentIncomingUnidirectionalStreams:
+      anticipatedConcurrentIncomingUnidirectionalStreams.value,
+    anticipatedConcurrentIncomingBidirectionalStreams:
+      anticipatedConcurrentIncomingBidirectionalStreams.value,
+  };
+  const validationError = validateConnectionSettings(settings);
+  if (validationError) {
+    connectionStatus.value = "error";
+    connectionError.value = validationError;
+    return;
+  }
+  const headersResult = parseHeadersText(headersText.value);
+  if (!headersResult.ok) {
+    connectionStatus.value = "error";
+    connectionError.value = headersResult.error;
+    return;
+  }
+  const protocolsResult = parseProtocolsText(protocolsText.value);
+  if (!protocolsResult.ok) {
+    connectionStatus.value = "error";
+    connectionError.value = protocolsResult.error;
+    return;
+  }
+  const anticipatedUniResult = parseAnticipatedStreams(
+    anticipatedConcurrentIncomingUnidirectionalStreams.value,
+  );
+  if (!anticipatedUniResult.ok) {
+    connectionStatus.value = "error";
+    connectionError.value = anticipatedUniResult.error;
+    return;
+  }
+  const anticipatedBidiResult = parseAnticipatedStreams(
+    anticipatedConcurrentIncomingBidirectionalStreams.value,
+  );
+  if (!anticipatedBidiResult.ok) {
+    connectionStatus.value = "error";
+    connectionError.value = anticipatedBidiResult.error;
+    return;
+  }
+
   connectionStatus.value = "connecting";
   connectionError.value = "";
 
@@ -484,6 +631,37 @@ export async function connect(): Promise<void> {
           value: base64ToArrayBuffer(certificateHash.value),
         },
       ];
+    }
+
+    // lib.dom.d.ts の WebTransportOptions には無いが W3C §6.9 で定義されている
+    // 辞書メンバーは any 経由で渡す
+    // biome-ignore lint/suspicious/noExplicitAny: WebTransportOptions 型定義が W3C §6.9 に追従していない
+    const extendedOptions = options as any;
+    if (allowPooling.value) {
+      extendedOptions.allowPooling = true;
+    }
+    if (requireUnreliable.value) {
+      extendedOptions.requireUnreliable = true;
+    }
+    if (congestionControl.value !== "default") {
+      extendedOptions.congestionControl = congestionControl.value;
+    }
+    if (headersResult.value && Object.keys(headersResult.value).length > 0) {
+      extendedOptions.headers = headersResult.value;
+    }
+    if (protocolsResult.value.length > 0) {
+      extendedOptions.protocols = protocolsResult.value;
+    }
+    if (datagramsReadableType.value === "bytes") {
+      extendedOptions.datagramsReadableType = "bytes";
+    }
+    if (anticipatedUniResult.value !== null) {
+      extendedOptions.anticipatedConcurrentIncomingUnidirectionalStreams =
+        anticipatedUniResult.value;
+    }
+    if (anticipatedBidiResult.value !== null) {
+      extendedOptions.anticipatedConcurrentIncomingBidirectionalStreams =
+        anticipatedBidiResult.value;
     }
 
     const wt = new WebTransport(url.value, options);
@@ -614,11 +792,12 @@ export async function connect(): Promise<void> {
 
 /**
  * Disconnect from WebTransport server
+ * ユーザー操作による切断の場合のみ closeInfo を渡す（サーバー起因の切断では渡さない）
  */
-export function disconnect(): void {
+export function disconnect(closeInfo?: WebTransportCloseInfo): void {
   if (transport.value) {
     try {
-      transport.value.close();
+      transport.value.close(closeInfo);
     } catch {
       // ignore
     }
@@ -634,6 +813,14 @@ export function disconnect(): void {
   uniSendStreamCounter = 0;
   uniRecvStreamCounter = 0;
 
+  // 接続後設定をリセットする
+  datagramIncomingMaxAge.value = "";
+  datagramOutgoingMaxAge.value = "";
+  datagramIncomingMaxBufferedDatagrams.value = "";
+  datagramOutgoingMaxBufferedDatagrams.value = "";
+  closeCode.value = "";
+  closeReason.value = "";
+
   connectionStatus.value = "disconnected";
   wtReadyState.value = "pending";
   wtClosedState.value = "pending";
@@ -644,6 +831,28 @@ export function disconnect(): void {
   wtProtocol.value = "";
   wtResponseHeaders.value = "";
   wtApiSupport.value = null;
+}
+
+/**
+ * closeCode / reason の入力から WebTransportCloseInfo を構築する
+ * 空入力のフィールドは含めない。入力が不正な場合は null を返す
+ */
+export function buildCloseInfo(): WebTransportCloseInfo | null {
+  const closeInfo: WebTransportCloseInfo = {};
+  const codeResult = parseCloseCode(closeCode.value);
+  if (!codeResult.ok) {
+    return null;
+  }
+  if (codeResult.value !== undefined) {
+    closeInfo.closeCode = codeResult.value;
+  }
+  if (closeReason.value.trim()) {
+    closeInfo.reason = closeReason.value.trim();
+  }
+  if (closeInfo.closeCode === undefined && closeInfo.reason === undefined) {
+    return null;
+  }
+  return closeInfo;
 }
 
 /**
@@ -758,6 +967,11 @@ export function removeUniRecvStream(streamId: number): void {
   uniRecvStreams.value = uniRecvStreams.value.filter((s) => s.id !== streamId);
 }
 
+// ストリーム作成時設定 (W3C §6.11 / §6.12)
+// New Stream ボタン付近の入力欄と連動する
+export const streamSendOrder = signal("");
+export const streamWaitUntilAvailable = signal(false);
+
 /**
  * Create a bidirectional stream
  */
@@ -765,8 +979,27 @@ export async function createBidiStream(): Promise<void> {
   const wt = transport.value;
   if (!wt) return;
 
+  // ストリーム作成時設定を検証してオプションを構築する
+  // W3C §6.11 sendOrder / §6.12 waitUntilAvailable
+  const sendOrderResult = parseSendOrder(streamSendOrder.value);
+  if (!sendOrderResult.ok) {
+    connectionError.value = sendOrderResult.error;
+    return;
+  }
+
   try {
-    const stream = await wt.createBidirectionalStream();
+    const options: WebTransportSendStreamOptions = {};
+    if (sendOrderResult.value !== undefined) {
+      options.sendOrder = sendOrderResult.value;
+    }
+    // lib.dom.d.ts の WebTransportSendStreamOptions には無いが W3C §6.12 で定義されている
+    // biome-ignore lint/suspicious/noExplicitAny: WebTransportSendStreamOptions 型定義が W3C §6.12 に追従していない
+    const extendedOptions = options as any;
+    if (streamWaitUntilAvailable.value) {
+      extendedOptions.waitUntilAvailable = true;
+    }
+
+    const stream = await wt.createBidirectionalStream(extendedOptions);
     const writer = stream.writable.getWriter();
     const id = bidiStreamCounter++;
 
@@ -901,8 +1134,27 @@ export async function createUniStream(): Promise<void> {
   const wt = transport.value;
   if (!wt) return;
 
+  // ストリーム作成時設定を検証してオプションを構築する
+  // W3C §6.11 sendOrder / §6.12 waitUntilAvailable
+  const sendOrderResult = parseSendOrder(streamSendOrder.value);
+  if (!sendOrderResult.ok) {
+    connectionError.value = sendOrderResult.error;
+    return;
+  }
+
   try {
-    const stream = await wt.createUnidirectionalStream();
+    const options: WebTransportSendStreamOptions = {};
+    if (sendOrderResult.value !== undefined) {
+      options.sendOrder = sendOrderResult.value;
+    }
+    // lib.dom.d.ts の WebTransportSendStreamOptions には無いが W3C §6.12 で定義されている
+    // biome-ignore lint/suspicious/noExplicitAny: WebTransportSendStreamOptions 型定義が W3C §6.12 に追従していない
+    const extendedOptions = options as any;
+    if (streamWaitUntilAvailable.value) {
+      extendedOptions.waitUntilAvailable = true;
+    }
+
+    const stream = await wt.createUnidirectionalStream(extendedOptions);
     const writer = stream.getWriter();
     const id = uniSendStreamCounter++;
 

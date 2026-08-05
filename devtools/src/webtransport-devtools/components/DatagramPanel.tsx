@@ -43,6 +43,7 @@ export function DatagramPanel() {
       <div class="flex gap-2 mb-3">
         <input
           type="text"
+          data-testid="datagram-input"
           value={input.value}
           onInput={(e) => (input.value = e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
@@ -52,6 +53,7 @@ export function DatagramPanel() {
         />
         <button
           onClick={handleSend}
+          data-testid="datagram-send"
           disabled={store.connectionStatus.value !== "connected"}
           class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed"
         >

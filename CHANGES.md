@@ -94,6 +94,14 @@
   - `moqt://` 以外のスキーム (`https://` / `http://` など)、authority の host が空、空文字列の URL は `Error` を throw する
   - `devtools/src/signals/connectionSettings.ts` のデフォルト URL を `moqt://127.0.0.1:4443/moqt` に変更する
   - @voluntas
+- [ADD] webtransport-devtools で WebTransport の設定を徹底的に設定可能にする
+  - W3C WebTransport CR (2026-07-30) §6.9 に基づき、allowPooling / requireUnreliable / congestionControl / headers / protocols / datagramsReadableType / anticipatedConcurrentIncoming*Streams を接続時設定に追加する
+  - §5.3 に基づき、datagrams の incomingMaxAge / outgoingMaxAge / incomingMaxBufferedDatagrams / outgoingMaxBufferedDatagrams を接続後設定パネルで適用可能にする
+  - §6.10 に基づき、ユーザー操作の Disconnect 時に closeCode / reason を渡せるようにする
+  - §6.11 / §6.12 に基づき、ストリーム作成時に sendOrder / waitUntilAvailable を指定可能にする
+  - MDN Browser Compat Data に基づくブラウザ対応バッジを各設定項目に表示する
+  - 接続時設定をクエリパラメータで URL 共有・復元できるようにする
+  - @voluntas
 - [ADD] Object / Track Properties への GREASE opt-in 送信を追加する
   - ConnectOptions.grease が true のとき PUBLISH の Track Properties と Object Properties（subgroup / datagram）に GREASE Property を 1 つ注入する
   - GREASE Property ID は 0x7f \* N + 0x9D（N は [0, 126] の偶数）で Mandatory Track Property 範囲 0x4000-0x7FFF を避ける

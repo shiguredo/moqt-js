@@ -7,6 +7,11 @@ import packageJson from "../package.json";
 export default defineConfig({
   plugins: [preact(), tailwindcss()],
   base: "/",
+  // Playwright E2E テストから dev サーバーへ安定してアクセスするためポートを固定する
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
   define: {
     // moqt-js ソースを直接参照するため、ビルド時にバージョン定数を注入
     __MOQT_JS_VERSION__: JSON.stringify(packageJson.version),

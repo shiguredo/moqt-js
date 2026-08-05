@@ -110,11 +110,45 @@ export function BidiStreamPanel() {
         </h2>
         <button
           onClick={handleCreateStream}
+          data-testid="bidi-new-stream"
           disabled={store.connectionStatus.value !== "connected"}
           class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors disabled:bg-slate-300 disabled:cursor-not-allowed"
         >
           + New Stream
         </button>
+      </div>
+
+      {/* ストリーム作成時設定 (W3C §6.11 / §6.12) */}
+      <div class="mb-4 p-3 bg-slate-50 rounded-lg space-y-3">
+        <div class="text-xs font-semibold text-slate-500">
+          Stream Options <span class="text-slate-400 font-normal">W3C §6.11 / §6.12</span>
+        </div>
+        <div>
+          <label for="bidiSendOrder" class="block text-xs font-medium text-slate-600 mb-1">
+            sendOrder
+          </label>
+          <input
+            type="number"
+            id="bidiSendOrder"
+            data-testid="bidi-stream-send-order"
+            value={store.streamSendOrder.value}
+            onInput={(e) => (store.streamSendOrder.value = e.currentTarget.value)}
+            disabled={store.connectionStatus.value !== "connected"}
+            placeholder="empty = default"
+            class="w-full px-2 py-1.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+          />
+        </div>
+        <label class="flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            data-testid="bidi-stream-wait-until-available"
+            checked={store.streamWaitUntilAvailable.value}
+            onChange={(e) => (store.streamWaitUntilAvailable.value = e.currentTarget.checked)}
+            disabled={store.connectionStatus.value !== "connected"}
+            class="w-4 h-4 accent-blue-500"
+          />
+          waitUntilAvailable
+        </label>
       </div>
 
       {store.bidiStreams.value.length === 0 ? (

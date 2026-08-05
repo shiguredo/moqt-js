@@ -29,10 +29,21 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "pnpm --filter moqt-js-e2e dev",
-    url: "http://localhost:5180",
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
-  },
+  webServer: [
+    {
+      // moqt-js E2E 用の独立 Vite アプリ
+      command: "pnpm --filter moqt-js-e2e dev",
+      url: "http://localhost:5180",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+    {
+      // webtransport-devtools の UI テスト用
+      // ポートは devtools/vite.config.ts の server.port (5173) に固定される
+      command: "pnpm --filter moqt-devtools dev",
+      url: "http://localhost:5173/webtransport-devtools.html",
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
 });
