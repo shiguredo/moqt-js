@@ -59,7 +59,13 @@ import type {
   TrackStatusResult,
   TracksSubscriptionCallbacks,
 } from "../session";
-import { extractForwardState, extractLargestLocation, validateFetchOkEndLocation } from "./params";
+import {
+  extractForwardState,
+  extractLargestLocation,
+  validateFetchOkEndLocation,
+  buildRangeFilterParameters,
+  validateRangeFilterLimits,
+} from "./params";
 import { toProtocolViolationSessionError } from "./errors";
 
 // ============================================================================
@@ -128,6 +134,9 @@ export interface BidiSessionInternal {
 
   // draft-ietf-moq-transport-19 §10.3.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   readonly peerMaxRequestUpdates: number;
+
+  // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
+  readonly peerMaxFilterRanges: number;
 
   statsControlMessagesSent: number;
 
@@ -880,7 +889,20 @@ export async function bidiSendRequestUpdate(
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
 
+  // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
+  // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみチェックする
+  validateRangeFilterLimits(options.rangeFilters, session.peerMaxFilterRanges, "REQUEST_UPDATE");
+
   const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
+
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3:
+  // "In REQUEST_UPDATE, Length can be 0 to remove a filter parameter or
+  //  non-zero to replace that entire filter parameter including all sets
+  //  and Property Types. If a filter parameter is omitted from
+  //  REQUEST_UPDATE, the value is unchanged."
+  if (options.rangeFilters !== undefined) {
+    parameters.push(...buildRangeFilterParameters(options.rangeFilters));
+  }
 
   if (options.forward !== undefined) {
     parameters.push({

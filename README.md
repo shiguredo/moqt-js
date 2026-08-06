@@ -91,7 +91,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Location Filter (Next Group Start)
 - Location Filter (Absolute Start)
 - Location Filter (Absolute Range)
-- Range Filters
+- Range Filters (subscribe() / subscribeTracks() / update() で送信可能)
   - Subgroup Filter
   - Object ID Filter
   - Priority Filter

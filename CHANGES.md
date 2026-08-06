@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] SUBSCRIBE_TRACKS / REQUEST_UPDATE で Range Filters を送信できるようにする
+  - draft-ietf-moq-transport-19 §10.19.1 / §6.3 / §5.1.3 に基づき、subscribeTracks() と subscriber.update() で Range Filters (TRACK_PROPERTY_FILTER 含む) を送信可能にする
+  - subscribeTracks() にピアの MAX_FILTER_RANGES ガードを追加し、subscribe() と共通の validateRangeFilterLimits に整理する
+  - @voluntas
 - [CHANGE] Object Properties のエンコードを delta encoding に追従させる
   - draft-ietf-moq-transport-19 §11.2.1.2 / §2.5 に基づき、Object Properties を Key-Value-Pairs（Figure 2、delta encoding）でエンコード / デコードする
   - mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties / appendGreaseObjectProperty を delta 規約に整合させる

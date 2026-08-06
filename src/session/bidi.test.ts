@@ -9,10 +9,13 @@ import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
 import { ObjectStatus, type Location } from "../message";
 import { encodeRequestOkPayload, decodeRequestOkPayload } from "../message/session";
-import { MessageType } from "../message/types";
+import { MessageType, MessageParameterType } from "../message/types";
+import { decodeRequestUpdatePayload } from "../message/subscribe";
 import { SessionError, SessionErrorCode } from "../error";
+import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import {
   bidiHandleRequestUpdateOk,
+  bidiSendRequestUpdate,
   validateNoDuplicateGoawayOnRequestStream,
   type BidiSessionInternal,
 } from "./bidi";
@@ -382,3 +385,159 @@ test("validateNoDuplicateGoawayOnRequestStream: 2 回目は PROTOCOL_VIOLATION �
   assert.equal(closed!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(closed!.message.includes("received duplicate goaway on request stream"));
 });
+
+// ============================================================================
+// bidiSendRequestUpdate の Range Filters テスト
+// draft-ietf-moq-transport-19 §5.1.3 / §10.3.1.6
+// ============================================================================
+
+/**
+ * BidiSessionInternal のモックを構築する。
+ * writer.write に渡されたバイト列を `written` に蓄積し、後からデコードして検証する。
+ */
+function createBidiSession(): {
+  session: BidiSessionInternal;
+  written: Uint8Array[];
+} {
+  const written: Uint8Array[] = [];
+  const writer = {
+    write: async (data: Uint8Array): Promise<void> => {
+      written.push(data);
+    },
+  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter: new ControlStreamWriter(),
+    nextRequestId: 100n,
+    requestStreams: new Map([
+      [
+        0n,
+        {
+          stream: {},
+          writer,
+          controlReader: new ControlStreamReader(),
+        },
+      ],
+    ]),
+    pendingPublish: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
+    pendingTrackStatus: new Map(),
+    pendingRequestUpdate: new Map(),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 2,
+    tracksSubscriptions: new Map(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: () => {},
+  } as unknown as BidiSessionInternal;
+
+  return { session, written };
+}
+
+test("bidiSendRequestUpdate: rangeFilters が REQUEST_UPDATE にエンコードされる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  // bidiSendRequestUpdate は REQUEST_OK 受信まで resolve しない Promise を返すため、
+  // 送信完了後に pendingRequestUpdate の Promise を解決してから await する
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    rangeFilters: [
+      { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
+      { type: "trackProperty", remove: true },
+    ],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  // writer.write されたバイト列を ControlStreamReader でフレームに分解する
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_UPDATE);
+
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
+  assert.isDefined(
+    decoded.parameters.find((p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER),
+  );
+});
+
+test("bidiSendRequestUpdate: Range Filters の Ranges 数が MAX_FILTER_RANGES を超えると throw する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [
+        {
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 3n, end: 4n },
+            { start: 5n, end: 6n },
+          ],
+        },
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+});
+
+test("bidiSendRequestUpdate: Range Filters が MAX_FILTER_RANGES 以内なら throw しない", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    // pendingRequestUpdate の Promise を解決してから await する
+    const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [
+        {
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 3n, end: 4n },
+          ],
+        },
+      ],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isUndefined(thrown);
+});
+
+/** Uint8Array 配列を連結するヘルパー */
+function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
