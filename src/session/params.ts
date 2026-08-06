@@ -84,6 +84,58 @@ const DEFAULT_PUBLISHER_PRIORITY_MIN = 0;
 const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
 
 // ============================================================================
+// Track Namespace 送信検証
+// ============================================================================
+
+/**
+ * 送信前に Track Namespace が予約 namespace に該当しないことを検証する
+ *
+ * draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces):
+ * "MOQT reserves all Track Namespace values whose first tuple field
+ *  begins with a period (0x2e, .). These namespaces MUST NOT be used
+ *  unless their meaning is defined through IANA registration."
+ * また先頭フィールドが "." 単体の namespace は "MUST NOT be used for any purpose"。
+ *
+ * draft-ietf-moq-transport-19 §3.2.2 (Session-Level Tracks and Namespaces):
+ * "The Application MUST NOT publish tracks or namespaces whose first field
+ *  is .session."
+ * "A request with a Track Namespace whose first field is .session and an
+ *  empty Track Name MUST be rejected with DOES_NOT_EXIST."
+ *
+ * moqt-js はクライアント実装であり IANA 登録済みの予約 namespace を定義しないため、
+ * 先頭フィールドが "." で始まるすべての namespace (".session" 含む) を送信対象として
+ * 拒否する。拒否は送信前の同期 throw であり、アプリケーションの入力ミスとして
+ * セッションは閉じない (プロトコル違反ではない)。
+ *
+ * @param namespace - 送信対象の Track Namespace (string[])
+ * @param trackName - Track Name。namespace スコープ外のリクエスト (SUBSCRIBE_NAMESPACE /
+ *                    SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE) では省略する
+ * @throws Error 予約 namespace / session-level namespace の場合
+ */
+export function validateTrackNamespaceForSend(namespace: string[], trackName?: string): void {
+  if (namespace.length === 0) {
+    return;
+  }
+  const first = namespace[0];
+  if (!first.startsWith(".")) {
+    return;
+  }
+  if (first === ".session") {
+    if (trackName === "") {
+      throw new Error(
+        "track with .session namespace and empty track name does not exist (DOES_NOT_EXIST)",
+      );
+    }
+    throw new Error(
+      "session-level namespace .session is reserved for the MOQT implementation (MUST NOT be used by applications)",
+    );
+  }
+  throw new Error(
+    `reserved namespace prefix ${first} is not allowed (MUST NOT be used without IANA registration)`,
+  );
+}
+
+// ============================================================================
 // PUBLISH 用
 // ============================================================================
 

@@ -55,6 +55,12 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - `moqt://` スキーム
 - Fragment Identifier
 
+#### Track Namespace
+
+- 予約 namespace の送信拒否
+  - 先頭フィールドが `.` で始まる Track Namespace (`.session` 含む) は publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否される
+  - `.session` namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当で拒否される
+
 #### Publisher
 
 - PUBLISH メッセージ

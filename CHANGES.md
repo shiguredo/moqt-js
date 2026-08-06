@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] 予約 namespace / .session namespace の送信を拒否する
+  - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
+  - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
+  - @voluntas
 - [ADD] SUBSCRIBE_TRACKS / REQUEST_UPDATE で Range Filters を送信できるようにする
   - draft-ietf-moq-transport-19 §10.19.1 / §6.3 / §5.1.3 に基づき、subscribeTracks() と subscriber.update() で Range Filters (TRACK_PROPERTY_FILTER 含む) を送信可能にする
   - subscribeTracks() にピアの MAX_FILTER_RANGES ガードを追加し、subscribe() と共通の validateRangeFilterLimits に整理する
