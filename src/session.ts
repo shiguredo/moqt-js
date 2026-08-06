@@ -73,6 +73,7 @@ import {
   clampTimeoutMs,
   matchNamespacePrefix,
   validateRangeFilterLimits,
+  validateTrackNamespaceForSend,
 } from "./session/params";
 import * as bidi from "./session/bidi";
 import { concatChunks, cancelStreamQuiet } from "./session/stream";
@@ -1459,6 +1460,8 @@ export class SessionImpl implements Session {
     const trackNameBytes = encodeTrackName(trackName);
     // draft-ietf-moq-transport-19 §2.4.1: Full Track Name 合計長検証
     validateFullTrackName(trackNamespace, trackName);
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespace, trackName);
 
     // パブリッシャー実装を作成
     const impl = new PublisherImpl(
@@ -1594,6 +1597,8 @@ export class SessionImpl implements Session {
     const trackNameBytes = encodeTrackName(trackName);
     // draft-ietf-moq-transport-19 §2.4.1: Full Track Name 合計長検証
     validateFullTrackName(trackNamespace, trackName);
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespace, trackName);
 
     // サブスクライバー実装を作成
     // 注意: trackAlias は SUBSCRIBE_OK 受信時に設定される
@@ -1707,6 +1712,8 @@ export class SessionImpl implements Session {
     const trackNameBytes = encodeTrackName(trackName);
     // draft-ietf-moq-transport-19 §2.4.1: Full Track Name 合計長検証
     validateFullTrackName(trackNamespace, trackName);
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespace, trackName);
 
     // Fetcher 実装を作成
     const impl = new FetcherImpl(
@@ -1793,6 +1800,8 @@ export class SessionImpl implements Session {
     const trackNameBytes = encodeTrackName(trackName);
     // draft-ietf-moq-transport-19 §2.4.1: Full Track Name 合計長検証
     validateFullTrackName(trackNamespace, trackName);
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespace, trackName);
 
     // REQUEST_OK を待つ Promise
     const promise = new Promise<TrackStatusResult>((resolve, reject) => {
@@ -1861,6 +1870,9 @@ export class SessionImpl implements Session {
     this.nextRequestId += 2n;
 
     const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
+
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespacePrefix);
 
     // 専用の双方向ストリームを作成
     const stream = await this.transport.createBidirectionalStream();
@@ -1948,6 +1960,9 @@ export class SessionImpl implements Session {
     this.nextRequestId += 2n;
 
     const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
+
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespacePrefix);
 
     // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
     // draft-ietf-moq-transport-19 §6.3: SUBSCRIBE_TRACKS で Range Filter を送信できる
@@ -2093,6 +2108,9 @@ export class SessionImpl implements Session {
     this.nextRequestId += 2n;
 
     const trackNamespace = createTrackNamespace(namespace);
+
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    validateTrackNamespaceForSend(namespace);
 
     // 専用の双方向ストリームを作成
     const stream = await this.transport.createBidirectionalStream();
