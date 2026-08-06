@@ -7,6 +7,9 @@ import {
   clampTimeoutMs,
   matchNamespacePrefix,
   buildSubscribeParameters,
+  buildSubscribeTracksParameters,
+  buildRangeFilterParameters,
+  validateRangeFilterLimits,
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
   buildPublishTrackProperties,
@@ -213,4 +216,149 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
   assert.isDefined(properties.find((p) => p.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
   assert.isDefined(properties.find((p) => p.id === TrackPropertyId.DYNAMIC_GROUPS));
   assert.equal(properties.filter((p) => isGreaseValue(p.id)).length, 1);
+});
+
+// ============================================================================
+// buildSubscribeTracksParameters (Range Filters)
+// draft-ietf-moq-transport-19 §10.19.1 / §6.3 / §5.1.3
+// ============================================================================
+
+test("buildSubscribeTracksParameters: rangeFilters が SUBSCRIBE_TRACKS パラメータになる", () => {
+  const parameters = buildSubscribeTracksParameters({
+    groupOrder: "Ascending",
+    forward: false,
+    rangeFilters: [
+      {
+        type: "trackProperty",
+        setId: 0,
+        propertyType: 0x30n,
+        ranges: [{ start: 1n, end: 1n }],
+      },
+      {
+        type: "subgroup",
+        setId: 0,
+        ranges: [{ start: 0n, end: 2n }],
+      },
+    ],
+  });
+
+  const trackPropertyFilter = parameters.find(
+    (p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER,
+  );
+  assert.isDefined(trackPropertyFilter);
+  const subgroupFilter = parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER);
+  assert.isDefined(subgroupFilter);
+
+  // GROUP_ORDER / FORWARD も同時に送出される
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.GROUP_ORDER));
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.FORWARD));
+
+  // encodeParameters / decodeParameters で round-trip しても再現する
+  const [decoded] = decodeParameters(encodeParameters(parameters));
+  const decodedTrackPropertyFilter = decoded.find(
+    (p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER,
+  );
+  assert.isDefined(decodedTrackPropertyFilter);
+});
+
+test("buildSubscribeTracksParameters: rangeFilters 未指定は Range Filter を含まない", () => {
+  const parameters = buildSubscribeTracksParameters({ groupOrder: "Descending" });
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER));
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
+});
+
+test("buildSubscribeTracksParameters: 削除指定 (remove: true) が Length=0 でエンコードされる", () => {
+  const parameters = buildSubscribeTracksParameters({
+    rangeFilters: [{ type: "objectId", remove: true }],
+  });
+  const objectIdFilter = parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER);
+  assert.isDefined(objectIdFilter);
+  // 削除は Length=0 の varint としてエンコードされる
+  assert.deepEqual(objectIdFilter!.value, new Uint8Array([0x00]));
+});
+
+test("buildRangeFilterParameters: 追加と削除が混在してもパラメータ列に変換される", () => {
+  const parameters = buildRangeFilterParameters([
+    { type: "priority", setId: 1, ranges: [{ start: 128n }] },
+    { type: "objectProperty", remove: true },
+  ]);
+  assert.equal(parameters.length, 2);
+  assert.equal(parameters[0].type, MessageParameterType.PRIORITY_FILTER);
+  assert.equal(parameters[1].type, MessageParameterType.OBJECT_PROPERTY_FILTER);
+});
+
+// ============================================================================
+// validateRangeFilterLimits
+// draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES)
+// ============================================================================
+
+test("validateRangeFilterLimits: undefined は throw しない", () => {
+  assert.doesNotThrow(() => validateRangeFilterLimits(undefined, 0, "SUBSCRIBE_TRACKS"));
+});
+
+test("validateRangeFilterLimits: 空配列は throw しない", () => {
+  assert.doesNotThrow(() => validateRangeFilterLimits([], 0, "SUBSCRIBE_TRACKS"));
+});
+
+test("validateRangeFilterLimits: ピアの MAX_FILTER_RANGES が 0 なら throw する", () => {
+  assert.throws(
+    () =>
+      validateRangeFilterLimits(
+        [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+        0,
+        "SUBSCRIBE_TRACKS",
+      ),
+    /MAX_FILTER_RANGES is 0/,
+  );
+});
+
+test("validateRangeFilterLimits: Ranges 数が上限を超えるなら throw する", () => {
+  assert.throws(
+    () =>
+      validateRangeFilterLimits(
+        [
+          {
+            type: "subgroup",
+            setId: 0,
+            ranges: [
+              { start: 0n, end: 1n },
+              { start: 3n, end: 4n },
+            ],
+          },
+        ],
+        1,
+        "REQUEST_UPDATE",
+      ),
+    /exceeds peer MAX_FILTER_RANGES 1/,
+  );
+});
+
+test("validateRangeFilterLimits: Ranges 数が上限以下なら throw しない", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterLimits(
+      [
+        {
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 3n, end: 4n },
+          ],
+        },
+      ],
+      2,
+      "SUBSCRIBE_TRACKS",
+    ),
+  );
+});
+
+test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数えられない", () => {
+  // 削除のみは Ranges を持たないため、上限 1 でも超過しない
+  assert.doesNotThrow(() =>
+    validateRangeFilterLimits([{ type: "objectId", remove: true }], 1, "REQUEST_UPDATE"),
+  );
+  // 上限 0 は「any such filter parameters」を MUST NOT 送信のため、削除もブロックされる
+  assert.throws(() =>
+    validateRangeFilterLimits([{ type: "objectId", remove: true }], 0, "REQUEST_UPDATE"),
+  );
 });
