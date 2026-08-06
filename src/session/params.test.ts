@@ -14,6 +14,7 @@ import {
   buildSubscribeNamespaceParameters,
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
+  validateTrackNamespaceForSend,
 } from "./params";
 import { encodeParameters, decodeParameters } from "../message/parameter";
 import { MessageParameterType } from "../message/types";
@@ -360,5 +361,54 @@ test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数え�
   // 上限 0 は「any such filter parameters」を MUST NOT 送信のため、削除もブロックされる
   assert.throws(() =>
     validateRangeFilterLimits([{ type: "objectId", remove: true }], 0, "REQUEST_UPDATE"),
+  );
+});
+
+// ============================================================================
+// validateTrackNamespaceForSend
+// draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces) / §3.2.2 (.session)
+// ============================================================================
+
+test("validateTrackNamespaceForSend: 通常の namespace は throw しない", () => {
+  assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", "team"], "video"));
+  assert.doesNotThrow(() => validateTrackNamespaceForSend(["example.com"]));
+});
+
+test("validateTrackNamespaceForSend: 空 namespace は throw しない", () => {
+  // ゼロ要素 namespace は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS で全対象を意味する
+  assert.doesNotThrow(() => validateTrackNamespaceForSend([]));
+});
+
+test("validateTrackNamespaceForSend: .session namespace は throw する", () => {
+  assert.throws(
+    () => validateTrackNamespaceForSend([".session"], "track"),
+    /session-level namespace \.session is reserved/,
+  );
+});
+
+test("validateTrackNamespaceForSend: 予約 namespace の判定は先頭フィールドのみ", () => {
+  // draft-ietf-moq-transport-19 §3.2.1: 判定は先頭フィールドのみ
+  assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", ".session"], "track"));
+});
+
+test("validateTrackNamespaceForSend: .session + 空 Track Name は DOES_NOT_EXIST で throw する", () => {
+  assert.throws(
+    () => validateTrackNamespaceForSend([".session"], ""),
+    /does not exist \(DOES_NOT_EXIST\)/,
+  );
+});
+
+test("validateTrackNamespaceForSend: . で始まる予約 namespace は throw する", () => {
+  assert.throws(
+    () => validateTrackNamespaceForSend([".foo"], "track"),
+    /reserved namespace prefix \.foo is not allowed/,
+  );
+});
+
+test("validateTrackNamespaceForSend: . 単体の namespace は throw する", () => {
+  // draft-ietf-moq-transport-19 §3.2.1: "." 単体は MUST NOT be used for any purpose
+  assert.throws(
+    () => validateTrackNamespaceForSend(["."], "track"),
+    /reserved namespace prefix \. is not allowed/,
   );
 });
