@@ -6,7 +6,7 @@
  */
 
 import { FetchHeaderType } from "../dataStream";
-import type { Parameter, Location, AuthorizationToken } from "../message";
+import type { Parameter, Location, AuthorizationToken, RangeFilterSpec } from "../message";
 import type { PublishOptions, SubscribeOptions, FetchOptions } from "../session";
 import {
   MessageParameterType,
@@ -32,6 +32,45 @@ import { LOCPropertyId } from "../loc";
 function validateNonNegative(value: bigint, name: string): void {
   if (value < 0n) {
     throw new Error(`${name} must not be negative: ${value}`);
+  }
+}
+
+/**
+ * ピアの MAX_FILTER_RANGES に対して Range Filter の送信が許可されるかを検証する
+ *
+ * draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES):
+ * "The default value is 0, so if not specified, the peer MUST NOT send
+ *  any such filter parameters. If this limit is exceeded, an endpoint
+ *  MUST reject this with REQUEST_ERROR with error code INVALID_FILTER."
+ *
+ * moqt-js はクライアントのため、送信前に throw して不正なワイヤを防ぐ。
+ * REQUEST_UPDATE の削除 (Length=0) は Ranges を消費しないため除外する。
+ *
+ * @param rangeFilters - 送信する Range Filter 指定
+ * @param peerMaxFilterRanges - ピアの MAX_FILTER_RANGES (0 = 送信禁止)
+ * @param contextName - エラーメッセージ用のコンテキスト名
+ */
+export function validateRangeFilterLimits(
+  rangeFilters: RangeFilterSpec[] | undefined,
+  peerMaxFilterRanges: number,
+  contextName: string,
+): void {
+  if (rangeFilters === undefined || rangeFilters.length === 0) {
+    return;
+  }
+  if (peerMaxFilterRanges === 0) {
+    throw new Error(
+      `cannot send range filters in ${contextName}: peer MAX_FILTER_RANGES is 0 (not advertised)`,
+    );
+  }
+  const totalRanges = rangeFilters.reduce(
+    (sum, f) => sum + ("ranges" in f ? f.ranges.length : 0),
+    0,
+  );
+  if (totalRanges > peerMaxFilterRanges) {
+    throw new Error(
+      `cannot send range filters in ${contextName}: total ranges ${totalRanges} exceeds peer MAX_FILTER_RANGES ${peerMaxFilterRanges}`,
+    );
   }
 }
 
@@ -200,6 +239,26 @@ export function buildPublishTrackProperties(
 // ============================================================================
 
 /**
+ * 純粋関数: Range Filter 指定を Message Parameter 配列に変換する
+ *
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * SUBSCRIBE / SUBSCRIBE_TRACKS / PUBLISH_OK / REQUEST_UPDATE で共通のワイヤ形式。
+ *
+ * @param rangeFilters - Range Filter 指定（追加または削除）
+ */
+export function buildRangeFilterParameters(rangeFilters: RangeFilterSpec[]): Parameter[] {
+  const parameters: Parameter[] = [];
+  for (const spec of rangeFilters) {
+    const paramType = rangeFilterTypeToParamType(spec.type);
+    parameters.push({
+      type: paramType,
+      value: encodeRangeFilter(spec),
+    });
+  }
+  return parameters;
+}
+
+/**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
  * draft-ietf-moq-transport-19 Section 10.2
@@ -281,13 +340,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
 
   // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3
   if (options?.rangeFilters !== undefined) {
-    for (const spec of options.rangeFilters) {
-      const paramType = rangeFilterTypeToParamType(spec.type);
-      parameters.push({
-        type: paramType,
-        value: encodeRangeFilter(spec),
-      });
-    }
+    parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
@@ -362,11 +415,17 @@ export function buildSubscribeNamespaceParameters(options?: {
  * 純粋関数: SUBSCRIBE_TRACKS のパラメータを構築する
  *
  * draft-ietf-moq-transport-19 Section 10.19.1 (Parameters on SUBSCRIBE_TRACKS):
- * GROUP_ORDER (§10.2.8) と FORWARD (§10.2.17) のみ。
+ * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
+ *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
+ *
+ * draft-ietf-moq-transport-19 Section 6.3 (Filtering SUBSCRIBE_TRACKS):
+ * "Range Filters Section 5.1.3 can be used in SUBSCRIBE_TRACKS to filter
+ *  Tracks in a namespace using the Track Property Filter."
  */
 export function buildSubscribeTracksParameters(options?: {
   groupOrder?: "Ascending" | "Descending";
   forward?: boolean;
+  rangeFilters?: RangeFilterSpec[];
 }): Parameter[] {
   const parameters: Parameter[] = [];
 
@@ -391,6 +450,11 @@ export function buildSubscribeTracksParameters(options?: {
       type: MessageParameterType.FORWARD,
       value: encodeUint8ParameterValue(0, "FORWARD"),
     });
+  }
+
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3 / 6.3
+  if (options?.rangeFilters !== undefined) {
+    parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
   return parameters;

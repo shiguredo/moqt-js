@@ -72,6 +72,7 @@ import {
   buildSubscribeNamespaceParameters,
   clampTimeoutMs,
   matchNamespacePrefix,
+  validateRangeFilterLimits,
 } from "./session/params";
 import * as bidi from "./session/bidi";
 import { concatChunks, cancelStreamQuiet } from "./session/stream";
@@ -1639,20 +1640,7 @@ export class SessionImpl implements Session {
     });
 
     // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
-    if (options?.rangeFilters !== undefined && options.rangeFilters.length > 0) {
-      if (this.peerMaxFilterRanges === 0) {
-        throw new Error("cannot send range filters: peer MAX_FILTER_RANGES is 0 (not advertised)");
-      }
-      const totalRanges = options.rangeFilters.reduce(
-        (sum, f) => sum + ("ranges" in f ? f.ranges.length : 0),
-        0,
-      );
-      if (totalRanges > this.peerMaxFilterRanges) {
-        throw new Error(
-          `cannot send range filters: total ranges ${totalRanges} exceeds peer MAX_FILTER_RANGES ${this.peerMaxFilterRanges}`,
-        );
-      }
-    }
+    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "SUBSCRIBE");
 
     const parameters = buildSubscribeParameters(options);
 
@@ -1961,6 +1949,10 @@ export class SessionImpl implements Session {
 
     const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
+    // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
+    // draft-ietf-moq-transport-19 §6.3: SUBSCRIBE_TRACKS で Range Filter を送信できる
+    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "SUBSCRIBE_TRACKS");
+
     // 専用の双方向ストリームを作成
     const stream = await this.transport.createBidirectionalStream();
     const streamReader = stream.readable.getReader();
@@ -1968,7 +1960,7 @@ export class SessionImpl implements Session {
     const writer = stream.writable.getWriter();
 
     // SUBSCRIBE_TRACKS メッセージを構築
-    // draft-ietf-moq-transport-19 §10.19.1: GROUP_ORDER / FORWARD を送信可能
+    // draft-ietf-moq-transport-19 §10.19.1: GROUP_ORDER / FORWARD / Range Filters を送信可能
     const subscribeTracksMsg = {
       type: MessageType.SUBSCRIBE_TRACKS,
       requestId,
