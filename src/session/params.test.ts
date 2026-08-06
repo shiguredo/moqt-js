@@ -15,6 +15,8 @@ import {
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
   validateTrackNamespaceForSend,
+  compareLocations,
+  validateFetchOkEndLocation,
 } from "./params";
 import { encodeParameters, decodeParameters } from "../message/parameter";
 import { MessageParameterType } from "../message/types";
@@ -411,4 +413,42 @@ test("validateTrackNamespaceForSend: . 単体の namespace は throw する", ()
     () => validateTrackNamespaceForSend(["."], "track"),
     /reserved namespace prefix \. is not allowed/,
   );
+});
+
+// ============================================================================
+// compareLocations
+// draft-ietf-moq-transport-19 §1.4.2 (Location Structure)
+// ============================================================================
+
+test("compareLocations: 同一 Location は 0 を返す", () => {
+  assert.equal(compareLocations({ group: 1n, object: 2n }, { group: 1n, object: 2n }), 0);
+});
+
+test("compareLocations: Group が小さい方が負を返す", () => {
+  assert.equal(compareLocations({ group: 1n, object: 9n }, { group: 2n, object: 0n }), -1);
+  assert.equal(compareLocations({ group: 2n, object: 0n }, { group: 1n, object: 9n }), 1);
+});
+
+test("compareLocations: 同一 Group 内では Object で比較する", () => {
+  assert.equal(compareLocations({ group: 1n, object: 1n }, { group: 1n, object: 2n }), -1);
+  assert.equal(compareLocations({ group: 1n, object: 2n }, { group: 1n, object: 1n }), 1);
+});
+
+// ============================================================================
+// validateFetchOkEndLocation
+// ============================================================================
+
+test("validateFetchOkEndLocation: End が Start 以上なら undefined", () => {
+  assert.isUndefined(
+    validateFetchOkEndLocation({ group: 0n, object: 0n }, { group: 0n, object: 0n }),
+  );
+  assert.isUndefined(
+    validateFetchOkEndLocation({ group: 0n, object: 0n }, { group: 1n, object: 0n }),
+  );
+});
+
+test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセージを返す", () => {
+  const message = validateFetchOkEndLocation({ group: 2n, object: 0n }, { group: 1n, object: 0n });
+  assert.isDefined(message);
+  assert.isTrue(message!.includes("is smaller than start location"));
 });

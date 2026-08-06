@@ -71,6 +71,7 @@ import {
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
   clampTimeoutMs,
+  compareLocations,
   matchNamespacePrefix,
   validateRangeFilterLimits,
   validateTrackNamespaceForSend,
@@ -1714,6 +1715,16 @@ export class SessionImpl implements Session {
     validateFullTrackName(trackNamespace, trackName);
     // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
     validateTrackNamespaceForSend(namespace, trackName);
+
+    // draft-ietf-moq-transport-19 §10.12.3 (Fetch Handling):
+    // "End Location MUST specify the same or a larger Location than Start
+    //  Location for Standalone and Absolute Joining Fetches."
+    // 不正な範囲をワイヤに載せないよう送信前に検証する
+    if (compareLocations(options.endLocation, options.startLocation) < 0) {
+      throw new Error(
+        `FETCH end location (${options.endLocation.group}:${options.endLocation.object}) is smaller than start location (${options.startLocation.group}:${options.startLocation.object})`,
+      );
+    }
 
     // Fetcher 実装を作成
     const impl = new FetcherImpl(

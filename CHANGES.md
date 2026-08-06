@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] Standalone FETCH の End Location 検証を送信前に追加する
+  - draft-ietf-moq-transport-19 §10.12.3 に基づき、End Location が Start Location 未満の FETCH を送信前に拒否する
+  - Location 比較の純関数 compareLocations を追加し、FETCH_OK 応答検証 (validateFetchOkEndLocation) と共通化する
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
