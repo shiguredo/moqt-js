@@ -26,7 +26,7 @@ export interface UseCopyFeedbackResult {
  */
 export function useCopyFeedback(durationMs: number = DEFAULT_DURATION_MS): UseCopyFeedbackResult {
   const feedback = useSignal<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
     return () => {

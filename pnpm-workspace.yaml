@@ -6,8 +6,20 @@ packages:
   - tests/e2e
 
 overrides:
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.6
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
   vitest: 4.1.10
 
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - "@preact/signals"
+  - "vite-plus"
+  - "@voidzero-dev/vite-plus-core"
+  - "@voidzero-dev/vite-plus-darwin-arm64"
+  - "@voidzero-dev/vite-plus-darwin-x64"
+  - "@voidzero-dev/vite-plus-linux-arm64-gnu"
+  - "@voidzero-dev/vite-plus-linux-arm64-musl"
+  - "@voidzero-dev/vite-plus-linux-x64-gnu"
+  - "@voidzero-dev/vite-plus-linux-x64-musl"
+  - "@voidzero-dev/vite-plus-win32-arm64-msvc"
+  - "@voidzero-dev/vite-plus-win32-x64-msvc"

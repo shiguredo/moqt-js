@@ -48,7 +48,7 @@
     "@vitest/coverage-v8": "4.1.10",
     "fast-check": "4.9.0",
     "typescript": "7.0.2",
-    "vite-plus": "0.2.7"
+    "vite-plus": "0.2.8"
   },
   "engines": {
     "node": ">=22.22.2"
