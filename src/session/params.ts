@@ -552,6 +552,25 @@ export function extractForwardState(parameters: Parameter[]): boolean {
 // ============================================================================
 
 /**
+ * 純粋関数: Location の大小比較
+ *
+ * draft-ietf-moq-transport-19 §1.4.2 (Location Structure):
+ * "Location A < Location B if:
+ *  A.Group < B.Group || (A.Group == B.Group && A.Object < B.Object)"
+ *
+ * @returns a < b なら負、a == b なら 0、a > b なら正
+ */
+export function compareLocations(a: Location, b: Location): number {
+  if (a.group !== b.group) {
+    return a.group < b.group ? -1 : 1;
+  }
+  if (a.object !== b.object) {
+    return a.object < b.object ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
  * 純粋関数: FETCH_OK の End Location 検証
  *
  * draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
@@ -565,10 +584,7 @@ export function validateFetchOkEndLocation(
   startLocation: Location,
   endLocation: Location,
 ): string | undefined {
-  if (
-    endLocation.group < startLocation.group ||
-    (endLocation.group === startLocation.group && endLocation.object < startLocation.object)
-  ) {
+  if (compareLocations(endLocation, startLocation) < 0) {
     return `FETCH_OK end location (${endLocation.group}:${endLocation.object}) is smaller than start location (${startLocation.group}:${startLocation.object})`;
   }
   return undefined;
