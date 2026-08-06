@@ -204,7 +204,13 @@ export function handleDebugMessage(subscriberId: string, message: DebugMessage):
   addLog("info", logMessage, data, payload);
 }
 
-export function useSubscriber(subscriberId: string, canvasRef: RefObject<HTMLCanvasElement>) {
+// preact 11 では useRef<T>(null) の戻り値が RefObject<T | null> になるため、
+// null を許容するシグネチャにしている。実装側は canvasRef.current を
+// null チェックしてから利用する。
+export function useSubscriber(
+  subscriberId: string,
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+) {
   // ライブオブジェクトの順次処理用 Promise チェーン (レンダリング間で安定参照)
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)

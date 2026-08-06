@@ -239,6 +239,14 @@
   - devtools の Connection Settings に URI Fragment 入力欄を追加し、`buildConnectUrl()` で URL に連結する
   - クエリパラメータ `fragment` を `buildQueryString` / `initFromUrl` で永続化する
   - @voluntas
+- [UPDATE] devtools の preact / @preact/signals / vite-plus を最新版に更新する
+  - preact を 10.29.7 から 11.0.0-beta.2 へ更新する
+  - preact 11 で削除された useRef の引数なしオーバーロードに合わせ、useCopyFeedback / useCopyUrlButton の timerRef に undefined を渡すように変更する
+  - preact 11 で useRef<T>(null) の戻り値が RefObject<T | null> に変わったため、useSubscriber の canvasRef 引数の型を RefObject<HTMLCanvasElement | null> に変更する
+  - @preact/signals を 2.10.1 から 2.11.0 へ更新する
+  - vite-plus を 0.2.7 から 0.2.8 へ更新する (overrides の vite-plus-core も 0.2.8 に合わせる)
+  - minimumReleaseAge ポリシーに引っかかる @preact/signals 2.11.0 / vite-plus 0.2.8 系を許可するため、pnpm-workspace.yaml に minimumReleaseAgeExclude を追加する
+  - @voluntas
 - [UPDATE] REQUEST_OK Track Properties 検証を共通関数に抽出する (#0269)
   - `bidi.ts` に `validateRequestOkNoTrackProperties` を追加し、全 4 箇所の重複コードを置き換える
   - @voluntas

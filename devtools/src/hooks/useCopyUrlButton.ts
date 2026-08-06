@@ -32,7 +32,7 @@ export interface UseCopyUrlButtonResult {
  */
 export function useCopyUrlButton(buildQueryString: () => string): UseCopyUrlButtonResult {
   const buttonText = useSignal(LABEL_INITIAL);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
     return () => {
