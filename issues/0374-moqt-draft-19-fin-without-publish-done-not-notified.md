@@ -66,6 +66,10 @@ Established subscription でピア (publisher) が PUBLISH_DONE を送らずに 
 
 - 0371 (未対応リクエストの NOT_SUPPORTED 応答) の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`runPublishStreamSubLoop` の FIN 検出点等の session.ts 行番号参照をシンボル名に書き換えること。
 
+## 注記 (0373 実装時)
+
+- 0373 (受信 PUBLISH ストリーム上の REQUEST_UPDATE 誤検知) の実装により、`runPublishStreamSubLoop` の REQUEST_UPDATE 分岐が「0372 の暫定無視」から `bidiHandlePublishRequestUpdate` 呼び出しに置換された (0373 の設計方針どおりの撤去・置換)。本 issue の変更箇所 (同ループの FIN 検出点) とは機能範囲の重複はないが、同ループ内の行番号が 0373 実装でさらにドリフトしているため、コード位置はシンボル名で参照すること。
+
 ## 解決方法
 
 未着手。

@@ -42,6 +42,10 @@ draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter) に従い、SUBSCRIBE_
 
 - 0371 (未対応リクエストの NOT_SUPPORTED 応答) の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`src/session.ts:3368-3396` の行番号参照をシンボル名 (`handleIncomingBidirectionalStream` 内の該当処理) に書き換えること。
 
+## 注記 (0373 実装時)
+
+- 0373 (受信 PUBLISH ストリーム上の REQUEST_UPDATE 誤検知) の実装により、受信 PUBLISH ストリーム上の REQUEST_UPDATE は REQUEST_OK で受理されるが、文脈限定パラメータ (FORWARD / LOCATION_FILTER / SUBSCRIBER_PRIORITY / NEW_GROUP_REQUEST / TRACK_NAMESPACE_PREFIX / Range Filters) を含む REQUEST_UPDATE は REQUEST_ERROR (NOT_SUPPORTED) で応答される。本 issue を実装する時点で、ケース 1 の FORWARD 受理と反映 (FORWARD を NOT_SUPPORTED 対象から外して REQUEST_OK で受理し `bidiHandlePublishRequestUpdate` に反映処理を追加する) を本 issue のスコープとして追加すること。
+
 ## 解決方法
 
 未着手。

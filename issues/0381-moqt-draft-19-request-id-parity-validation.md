@@ -44,6 +44,10 @@ INVALID_REQUEST_ID (0x4) は `src/error.ts:22` に定義済みだが受信時検
 - 0371 (未対応リクエストの NOT_SUPPORTED 応答) 実装後は、受信 bidi ストリームの先頭が分類 2 (未対応の 6 種: SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の場合にペイロードをデコードしないため、本 issue のパリティ・重複検証は受信 PUBLISH (分類 1) のみに適用される。完了条件の「LSB が期待値と一致しない Request ID を受信した場合に INVALID_REQUEST_ID でセッションが閉じること」「重複 Request ID を受信した場合に INVALID_REQUEST_ID でセッションが閉じること」は 6 種では発火しないため、検証対象を受信 PUBLISH のみとする注記と完了条件の調整が必要。分類 2 の 6 種では §10.1 の MUST (INVALID_REQUEST_ID) が未達のまま残る (残余リスク)。
 - 0371 の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`src/session.ts:3300-3360` の行番号参照をシンボル名に書き換えること。
 
+## 注記 (0373 実装時)
+
+- 0373 (受信 PUBLISH ストリーム上の REQUEST_UPDATE 誤検知) の実装で、受信 PUBLISH ストリーム上の REQUEST_UPDATE の Request ID を `bidiHandlePublishRequestUpdate` (`src/session/bidi.ts`) 内で `decodeRequestUpdatePayload` により読み取るが、パリティ・重複検証は行わない。本 issue の検証対象 (受信側 Request ID のパリティ・重複検証) に受信 REQUEST_UPDATE の Request ID を含めるか否かを、本 issue の実装時に確定して完了条件を調整すること。
+
 ## 解決方法
 
 未着手。

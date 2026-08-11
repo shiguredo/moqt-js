@@ -20,6 +20,7 @@ import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
+  bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
@@ -1113,6 +1114,287 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
   await readPromise;
 
   // REQUEST_UPDATE は無視され、応答も送信されずセッションも閉じない
+  assert.equal(ctx.written.length, 0);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+// ============================================================================
+// bidiHandlePublishRequestUpdate のテスト
+// draft-ietf-moq-transport-19 §10.9 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * 受信 PUBLISH ストリーム上で無限定 3 種 (AUTHORIZATION_TOKEN /
+ * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT) のみを含む
+ * REQUEST_UPDATE を受信した場合、REQUEST_OK が 1 通応答され、セッションが
+ * 閉じないことを検証する (§10.9 MUST)。ペイロードの Request ID (100n) は
+ * 応答には含まれず、引数の requestId (10n) で判定されることも暗黙に検証
+ * される。
+ */
+test("bidiHandlePublishRequestUpdate: 無限定 3 種のみの REQUEST_UPDATE で REQUEST_OK が応答されセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [
+      { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
+      { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: new Uint8Array([2]) },
+      { type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT, value: new Uint8Array([3]) },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_OK が 1 通書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  const decoded = decodeRequestOkPayload(messages[0].payload);
+  assert.equal(decoded.parameters.length, 0);
+  assert.equal(decoded.trackProperties.length, 0);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * パラメータを含まない REQUEST_UPDATE でも REQUEST_OK が 1 通応答され、
+ * セッションが閉じないことを検証する (§10.9 MUST)。パラメータ無しは
+ * 文脈限定パラメータの判定を通過する空集合として扱われる。
+ */
+test("bidiHandlePublishRequestUpdate: パラメータ無しの REQUEST_UPDATE で REQUEST_OK が応答されセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_OK が 1 通書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
+ * REQUEST_UPDATE に出現できないパラメータ (スコープ違反) を含む
+ * REQUEST_UPDATE を受信した場合、§10.2.1 の MUST に従い REQUEST_ERROR で
+ * 応答せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    // EXPIRES は REQUEST_UPDATE に出現できない (REQUEST_UPDATE_ALLOWED_PARAMS 外)
+    parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([1]) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  assert.equal(ctx.written.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.6:
+ * 文脈限定パラメータ (例: FORWARD) を含む REQUEST_UPDATE を受信した場合、
+ * REQUEST_ERROR (NOT_SUPPORTED) が応答されセッションが閉じないことを
+ * 検証する (文脈限定パラメータの許可拡大は将来の対応とする。§10.6 の
+ * NOT_SUPPORTED 定義に基づく設計判断)。
+ */
+test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUEST_UPDATE で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR (NOT_SUPPORTED) が 1 通書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.equal(decoded.reasonPhrase, "parameter not supported for request update");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.6:
+ * 無限定パラメータと文脈限定パラメータを混合して含む REQUEST_UPDATE は、
+ * 1 つでも文脈限定パラメータを含む限り REQUEST_ERROR (NOT_SUPPORTED) が
+ * 応答されることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_UPDATE で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [
+      { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR (NOT_SUPPORTED) が 1 通書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+ * GOAWAY 受信後 (writer オープン時) の REQUEST_UPDATE には REQUEST_ERROR
+ * (GOING_AWAY) が応答され、セッションが閉じないことを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: GOAWAY 受信後の REQUEST_UPDATE に REQUEST_ERROR (GOING_AWAY) が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+  // GOAWAY を受信済みの状態を作る (writer はオープンのまま)
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR (GOING_AWAY) が書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.GOING_AWAY));
+  assert.equal(decoded.reasonPhrase, "request stream is being migrated");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 / §10.2.1 / §10.9:
+ * GOAWAY 受信後 + パラメータスコープ違反が同時に発生した REQUEST_UPDATE は、
+ * GOING_AWAY 応答が優先され (PROTOCOL_VIOLATION で閉じずに)、セッションが
+ * 閉じないことを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の同時発生時は GOING_AWAY が優先される", async () => {
+  const ctx = createPublishReadTestContext({});
+  // GOAWAY を受信済みの状態を作る (writer はオープンのまま)
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    // EXPIRES はスコープ違反パラメータだが、判定順序 (1) の GOING_AWAY が優先される
+    parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([1]) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR (GOING_AWAY) が書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.GOING_AWAY));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * 応答の書き込みに失敗した場合 (writer が閉じている等) は黙殺され、
+ * PROTOCOL_VIOLATION への昇格も callbacks.error の発火も行われず、
+ * セッションが閉じないことを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗は黙殺されセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({
+    write() {
+      throw new Error("write failed");
+    },
+  });
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // 書き込みは実際に試行され、失敗は吸収され、セッションは閉じない
+  assert.deepEqual(ctx.events, ["write"]);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * 判定順序 (1) の GOING_AWAY 応答の書き込みに失敗した場合も黙殺され、
+ * セッションが閉じないことを検証する (production では GOAWAY 処理の
+ * writer.close() により常にこの経路になる。テスト 8 は判定順序 (4) の
+ * REQUEST_OK 経路で同じ黙殺パスを検証する)。
+ */
+test("bidiHandlePublishRequestUpdate: GOAWAY 後の GOING_AWAY 応答の書き込み失敗は黙殺されセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({
+    write() {
+      throw new Error("write failed");
+    },
+  });
+  // GOAWAY を受信済みの状態を作る
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // 書き込みは実際に試行され、失敗は吸収され、セッションは閉じない
+  assert.deepEqual(ctx.events, ["write"]);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * REQUEST_UPDATE のペイロードのデコードに失敗した場合 (メッセージ構造の
+ * 破損)、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * 閉じない場合、呼び出し元のループ catch では IncompleteDataError が変換
+ * されず、セッションが開いたままストリーム読み取りが止まるためである。
+ */
+test("bidiHandlePublishRequestUpdate: デコード失敗は PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  // 不完全なペイロード (Request ID の後に Parameters が無い)
+  const invalidPayload = new Uint8Array([0x01]);
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, invalidPayload);
+
+  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  assert.equal(ctx.written.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("invalid REQUEST_UPDATE payload"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * requestStreams に存在しない requestId (エントリ削除後など) への REQUEST_UPDATE
+ * は、応答の書き込み先が無いため黙殺され、セッションが閉じないことを
+ * 検証する。
+ */
+test("bidiHandlePublishRequestUpdate: requestStreams に存在しない requestId では応答が黙殺されセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  // requestStreams からエントリを削除して writer が引けない状態を作る
+  ctx.session.requestStreams.delete(ctx.requestId);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // 書き込みは発生せず、セッションも閉じない
   assert.equal(ctx.written.length, 0);
   assert.isUndefined(ctx.closedWithError);
 });
