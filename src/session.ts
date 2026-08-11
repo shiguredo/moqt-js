@@ -42,6 +42,7 @@ import {
   encodeTrackStatusPayload,
   createSetup,
   getMessageTypeName,
+  isRejectedReceiveNamespace,
   FetchType,
   type AuthorizationToken,
   type Location,
@@ -3368,6 +3369,25 @@ export class SessionImpl implements Session {
       trackNamespace: publishTrackNamespace,
       trackName: publishTrackName,
     });
+
+    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2:
+    // 受信 PUBLISH の Track Namespace 先頭フィールドが "." 単体または
+    // ".session" の場合、REQUEST_ERROR (DOES_NOT_EXIST) で拒否してアプリへ
+    // 渡さない (§3.2.1 / §3.2.2 の MUST)。それ以外の予約名前空間
+    // (例: ".foo") は §3.2.1 によりアプリへ渡す。
+    // 拒否時は §3.3.3 の SHOULD に従い REQUEST_ERROR 送信後に送信方向を
+    // FIN で閉じ、受信方向を cancel する。パラメータスコープ検証より
+    // 先に判定し、両方違反の場合は DOES_NOT_EXIST 拒否を優先する。
+    // なお、デコード失敗 (MalformedTrackError 等) はデコード時に先に
+    // 検出されるため、この判定に到達するのはデコード成功時のみ。
+    if (isRejectedReceiveNamespace(decodedPublish.trackNamespace.tuple)) {
+      await incomingSendRequestErrorAndClose(
+        stream,
+        RequestErrorCode.DOES_NOT_EXIST,
+        "request references reserved namespace",
+      );
+      return;
+    }
 
     // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
     // PUBLISH に許可されていないパラメータは PROTOCOL_VIOLATION

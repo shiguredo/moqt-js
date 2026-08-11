@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] 受信 PUBLISH の .session / . 名前空間を DOES_NOT_EXIST で拒否する
+  - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、受信 PUBLISH の Track Namespace 先頭フィールドが .session または . 単体の場合に REQUEST_ERROR (DOES_NOT_EXIST) で拒否し、アプリの onPublish へ渡さない
+  - それ以外の予約名前空間 (例: .foo) は §3.2.1 の MUST に従い従来どおりアプリへ渡す
+  - @voluntas
 - [FIX] PUBLISH_DONE なしの FIN で subscriber の終了通知が失われる
   - draft-ietf-moq-transport-19 §3.3.2 に基づき、受信側 (subscribe ロール) でピアが PUBLISH_DONE を送らずに FIN した場合に error コールバックで通知し state を closed にする
   - publish ロールの FIN は正常完了シグナルとして従来どおり通知しない
