@@ -20,6 +20,10 @@ issue 0370（PUBLISH_OK 後にピアが FIN すると PUBLISH_DONE が送信さ�
 - 0390 の issue ファイルに「`bidiReadRequestStreamMessages` は 0370 のテストで使用するため export を維持する」旨の注記を追加する。
 - 0390 の非公開化対象リストから `bidiReadRequestStreamMessages` を除外する。
 
+## 注記 (0374 実装時)
+
+- 0374 (PUBLISH_DONE なしの FIN で subscriber の終了通知が失われる) のテストも `bidiReadRequestStreamMessages` (subscribe ロール) を駆動するため、0390 への export 維持注記に 0374 分も含めること (0374 の設計方針に「0397 が 0370 向けに追加する注記に 0374 分も含める」と明記済み)。あわせて、0374 で新設した `notifySubscriberFin` と `FIN_WITHOUT_PUBLISH_DONE_MESSAGE` は production (session.ts) からも使用されるため 0390 の非公開化対象外である旨を 0390 側に注記する。
+
 ## 完了条件
 
 - 0390 の issue ファイルに、`bidiReadRequestStreamMessages` の export を維持する旨の注記と、0370 への相互参照が追加されていること。
