@@ -35,7 +35,6 @@ import {
   encodeGoawayPayload,
   encodePublishNamespacePayload,
   encodePublishPayload,
-  encodeRequestErrorPayload,
   encodeRequestOkPayload,
   encodeSubscribeNamespacePayload,
   encodeSubscribeTracksPayload,
@@ -91,6 +90,8 @@ import {
   incomingWaitForFetcher,
   incomingProcessFetchObjects,
   incomingProcessSubgroupObjects,
+  incomingHandleFirstBidiMessage,
+  incomingSendRequestErrorAndClose,
 } from "./session/incoming";
 import {
   namespaceStartNamespaceStreamLoop,
@@ -3147,44 +3148,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * REQUEST_ERROR を送信し、ストリームをキャンセルする
-   */
-  private async sendRequestErrorAndCancel(
-    stream: WebTransportBidirectionalStream,
-    errorCode: RequestErrorCode,
-    reasonPhrase: string,
-  ): Promise<void> {
-    let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
-    try {
-      writer = stream.writable.getWriter();
-      const errorPayload = encodeRequestErrorPayload({
-        type: MessageType.REQUEST_ERROR,
-        errorCode: BigInt(errorCode),
-        retryInterval: 0n,
-        reasonPhrase,
-      });
-      const controlWriter = new ControlStreamWriter();
-      const framed = controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload);
-      await writer.write(framed);
-    } catch {
-      // ストリームが既に閉じている場合は無視
-    } finally {
-      if (writer !== null) {
-        try {
-          writer.releaseLock();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    try {
-      await stream.readable.cancel();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  /**
    * PUBLISH ストリームの後続メッセージ読み取りサブループ
    */
   private async runPublishStreamSubLoop(
@@ -3304,6 +3267,8 @@ export class SessionImpl implements Session {
         while (true) {
           const { value, done } = await firstMsgReader.read();
           if (done) return;
+          // 同一チャンクに連結された先頭以降のメッセージは破棄される
+          // (先頭メッセージのみを 3 分類の対象とする。既存挙動の継続)
           const messages = firstControlReader.feed(value);
           if (messages.length > 0) {
             firstMsg = messages[0];
@@ -3318,15 +3283,14 @@ export class SessionImpl implements Session {
       return;
     }
 
-    // PUBLISH 以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
-    // draft-ietf-moq-transport-19 §3.3
-    if (firstMsg.type !== MessageType.PUBLISH) {
-      this.closeWithError(
-        new SessionError(
-          `expected PUBLISH as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
+    // 先頭メッセージを 3 分類して処理する
+    // draft-ietf-moq-transport-19 §3.3 (Session initialization):
+    // 先頭が 7 種以外のメッセージタイプの場合は PROTOCOL_VIOLATION でセッションを閉じる。
+    // 7 種のうち未対応のリクエストには NOT_SUPPORTED を応答する (§4 SHOULD)。
+    // true が返れば先頭メッセージの処理が完了しているため return する。
+    if (
+      await incomingHandleFirstBidiMessage(this as unknown as SessionInternal, stream, firstMsg)
+    ) {
       return;
     }
 
@@ -3340,7 +3304,7 @@ export class SessionImpl implements Session {
       // 未知の Mandatory Track Property を含む PUBLISH には
       // REQUEST_ERROR(UNSUPPORTED_EXTENSION) を返す
       if (err instanceof MalformedTrackError) {
-        await this.sendRequestErrorAndCancel(
+        await incomingSendRequestErrorAndClose(
           stream,
           RequestErrorCode.UNSUPPORTED_EXTENSION,
           err.message,
@@ -3383,7 +3347,7 @@ export class SessionImpl implements Session {
     const match = this.matchPublishToSubscription(publishTrackNamespace);
     if (match === null) {
       // draft-ietf-moq-transport-19 §10.10 (SHOULD): マッチしない PUBLISH は UNINTERESTED
-      await this.sendRequestErrorAndCancel(stream, RequestErrorCode.UNINTERESTED, "uninterested");
+      await incomingSendRequestErrorAndClose(stream, RequestErrorCode.UNINTERESTED, "uninterested");
       return;
     }
 
