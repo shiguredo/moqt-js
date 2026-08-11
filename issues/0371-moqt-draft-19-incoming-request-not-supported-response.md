@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-10
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-incoming-request-not-supported-response
 - Polished: 2026-08-07
@@ -72,4 +72,12 @@ draft-ietf-moq-transport-19 §3.3 は双方向ストリームの先頭メッセ�
 
 ## 解決方法
 
-未着手。
+- `src/session/incoming.ts` に `incomingClassifyFirstBidiMessage` / `incomingSendRequestErrorAndClose` / `incomingHandleFirstBidiMessage` を新設。
+  - `incomingClassifyFirstBidiMessage`: 先頭メッセージを publish / unsupported-request / protocol-violation の 3 分類。
+  - `incomingSendRequestErrorAndClose`: REQUEST_ERROR 書込 → FIN (writer.close()) → 受信方向 cancel の拒否フロー。既存の `sendRequestErrorAndCancel` を移設し、FIN 付きに統一。
+  - `incomingHandleFirstBidiMessage`: 3 分類のディスパッチ。分類 2 は NOT_SUPPORTED 応答でセッション維持、分類 3 は PROTOCOL_VIOLATION、分類 1 は false を返して従来処理へ。
+- `src/session.ts` の `handleIncomingBidirectionalStream`: 先頭メッセージの「PUBLISH 以外は PROTOCOL_VIOLATION」分岐を 3 分類ディスパッチに置き換え。UNSUPPORTED_EXTENSION / UNINTERESTED の 2 経路も `incomingSendRequestErrorAndClose` に統一。`sendRequestErrorAndCancel` を削除。
+- テスト: `src/session/incoming.test.ts` を新設 (9 件)。3 分類の全経路、NOT_SUPPORTED 応答のバイト列、FIN / cancel の呼び出し順序、write / close 失敗時の受信方向キャンセルを実 W3C ストリーム注入方式で検証。
+- 他 issue への相互参照注記を 7 件追加 (0372 / 0374 / 0377 / 0381 / 0388 / 0389 / 0390。0375 / 0378 は既に注記済み)。
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加。
+- `vp check` / `tsc --noEmit` / `vp test run` (997 件) すべて通過。
