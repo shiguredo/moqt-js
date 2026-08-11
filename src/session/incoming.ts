@@ -3,7 +3,9 @@
  *
  * SessionImpl の handleIncomingDatagram / waitForFetcher /
  * processFetchObjects ラッパー / processSubgroupObjects ラッパー
- * を free function として抽出する。
+ * と、受信 bidi ストリームの先頭メッセージの 3 分類ディスパッチ
+ * (incomingClassifyFirstBidiMessage / incomingSendRequestErrorAndClose /
+ * incomingHandleFirstBidiMessage) を free function として抽出する。
  *
  * handleIncomingStream / handleSubgroupStream は SessionImpl に残留する
  * （状態結合が強いため。issue 0302 設計方針参照）。
@@ -11,7 +13,9 @@
 
 import { decodeVarint } from "../varint";
 import { decodeObjectDatagram, type MoqtObject } from "../dataStream";
-import { ObjectStatus } from "../message";
+import { ObjectStatus, MessageType, encodeRequestErrorPayload } from "../message";
+import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toProtocolViolationSessionError } from "./errors";
 import {
   processFetchObjects as streamProcessFetchObjects,
@@ -20,6 +24,153 @@ import {
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
 import type { SessionInternal } from "./types";
+
+// ============================================================================
+// 受信 bidi ストリームの先頭メッセージ 3 分類
+// ============================================================================
+
+/**
+ * 受信 bidi ストリームの先頭メッセージを 3 分類する
+ *
+ * draft-ietf-moq-transport-19 §3.3 (Session initialization):
+ * リクエストストリームの先頭として許可されるメッセージは 7 種
+ * (TRACK_STATUS / SUBSCRIBE / PUBLISH / FETCH / PUBLISH_NAMESPACE /
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS)。
+ * - "publish": 対応済み (moqt-js はクライアントのため受信 PUBLISH のみ処理する)
+ * - "unsupported-request": 7 種のうち未対応の 6 種。
+ *   draft-ietf-moq-transport-19 §4 (Extensibility):
+ *   「Limited endpoints SHOULD respond to any unsupported messages with the
+ *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
+ * - "protocol-violation": 7 種以外 (未知タイプ等)。
+ *   draft-ietf-moq-transport-19 §3.3:
+ *   「Bidirectional streams MUST NOT begin with any other message type unless
+ *   negotiated. If they do, the peer MUST close the Session with a
+ *   PROTOCOL_VIOLATION.」
+ */
+export function incomingClassifyFirstBidiMessage(
+  type: number,
+): "publish" | "unsupported-request" | "protocol-violation" {
+  switch (type) {
+    case MessageType.PUBLISH:
+      return "publish";
+    case MessageType.TRACK_STATUS:
+    case MessageType.SUBSCRIBE:
+    case MessageType.FETCH:
+    case MessageType.PUBLISH_NAMESPACE:
+    case MessageType.SUBSCRIBE_NAMESPACE:
+    case MessageType.SUBSCRIBE_TRACKS:
+      return "unsupported-request";
+    default:
+      return "protocol-violation";
+  }
+}
+
+/**
+ * REQUEST_ERROR を送信し、送信方向を FIN で閉じた後に受信方向をキャンセルする
+ *
+ * draft-ietf-moq-transport-19 §3.3.3 (Request Cancellation and Rejection):
+ * 「When an endpoint rejects a request without performing any application
+ * processing, it SHOULD send a REQUEST_ERROR and FIN the stream.」
+ * draft-ietf-moq-transport-19 §10.19 (SUBSCRIBE_TRACKS):
+ * 「If it is an error, the stream will be closed via FIN after REQUEST_ERROR
+ * is sent.」
+ *
+ * FIN (writer.close()) は writer.releaseLock() の前に実行する。
+ * releaseLock 後の close() は WHATWG Streams 仕様上、ロック非保持時に
+ * TypeError で reject する Promise を返すため、try ブロック内で await し
+ * catch で吸収する。受信方向 (readable) は FIN 送信後に cancel() で閉じる
+ * (draft-ietf-moq-transport-19 §3.3.3 の STOP_SENDING 相当)。
+ */
+export async function incomingSendRequestErrorAndClose(
+  stream: WebTransportBidirectionalStream,
+  errorCode: RequestErrorCode,
+  reasonPhrase: string,
+): Promise<void> {
+  let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  try {
+    writer = stream.writable.getWriter();
+    const errorPayload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(errorCode),
+      retryInterval: 0n,
+      reasonPhrase,
+    });
+    const controlWriter = new ControlStreamWriter();
+    const framed = controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload);
+    await writer.write(framed);
+    await writer.close();
+  } catch {
+    // ストリームが既に閉じている場合は無視。
+    // write が失敗するのは writable がエラー状態 (ピアの RESET_STREAM /
+    // セッション終了等) の場合であり、その場合は close() を試行しても
+    // 失敗するだけのため FIN は送信しない。ストリームは QUIC レベルで
+    // 既にクローズされており、リソースリークは発生しない。
+  } finally {
+    if (writer !== null) {
+      try {
+        writer.releaseLock();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  try {
+    await stream.readable.cancel("request rejected");
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * 受信 bidi ストリームの先頭メッセージを 3 分類してディスパッチする
+ *
+ * - 分類 1 (publish): false を返し、呼び出し側で従来の受信 PUBLISH 処理を
+ *   継続させる。
+ * - 分類 2 (unsupported-request): REQUEST_ERROR (NOT_SUPPORTED) を応答して
+ *   FIN で閉じ、true を返す。セッションは閉じない (§4 SHOULD)。
+ * - 分類 3 (protocol-violation): PROTOCOL_VIOLATION でセッションを閉じ、
+ *   true を返す (§3.3 MUST)。
+ *
+ * @returns 先頭メッセージの処理を完了した場合は true、従来の PUBLISH 処理を
+ *          継続する場合は false
+ */
+export async function incomingHandleFirstBidiMessage(
+  session: SessionInternal,
+  stream: WebTransportBidirectionalStream,
+  firstMsg: ControlMessage,
+): Promise<boolean> {
+  const classification = incomingClassifyFirstBidiMessage(firstMsg.type);
+  if (classification === "publish") {
+    return false;
+  }
+  if (classification === "unsupported-request") {
+    // 受信メッセージをデバッグ出力する (moqlog / debug コールバックで
+    // 未対応リクエストの受信を観測できるようにする)
+    session.emitDebug("recv", firstMsg.type, firstMsg.payload);
+    // draft-ietf-moq-transport-19 §4 (Extensibility):
+    // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
+    // incomingClassifyFirstBidiMessage の docstring 参照)。
+    // ペイロードをデコードしないため、各メッセージ節の MUST 検証
+    // (§10.1 の Request ID パリティ・重複、§10.19 の Track Namespace Prefix
+    // 32 フィールド上限等) は分類 2 では適用されない (残余リスク。
+    // Request ID 検証の扱いは関連 issue の注記参照)。
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.NOT_SUPPORTED,
+      "request type not supported",
+    );
+    return true;
+  }
+  // 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-19 §3.3
+  session.closeWithError(
+    new SessionError(
+      `expected a request message as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
+      SessionErrorCode.PROTOCOL_VIOLATION,
+    ),
+  );
+  return true;
+}
 
 /**
  * 受信した datagram を処理する

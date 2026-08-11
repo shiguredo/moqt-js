@@ -34,6 +34,10 @@ draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope) に従い、SUBSCRIBE_TRA
 - `CHANGES.md` の `## develop` に `[FIX]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
+## 注記 (0371 実装時)
+
+- 0371 (未対応リクエストの NOT_SUPPORTED 応答) 実装後は、受信 bidi ストリームの先頭が SUBSCRIBE_TRACKS の場合に NOT_SUPPORTED で閉じられるため、本 issue の受信側パラメータ検証は到達不能になる。完了条件を「受信側検証を前提としない形」に調整すること (例: 送信側のみの検証、または未使用定数の整理として 0388 と同様に削除へ収束)。
+
 ## 参照
 
 - draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope)
