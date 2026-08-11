@@ -22,6 +22,7 @@ import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
 import { encodeVarint } from "../varint";
 import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } from "../publisher";
 import { calculateObjectIdDelta } from "./params";
+import { isPeerStreamError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
 import type { SessionInternal } from "./types";
 
@@ -325,6 +326,16 @@ export async function publishSendPublishDone(
 ): Promise<void> {
   const requestId = publisher.getRequestId();
 
+  // セッション終了後は送信を試行しない。
+  // アプリの session.close() では publishers が markClosed され done() が no-op に
+  // なるが、ピア起因のセッション終了では markClosed が実行されないため、
+  // ここでガードする。ガードしないと write / close がセッション終了起因の
+  // エラーで失敗し、誤って PROTOCOL_VIOLATION に昇格して callbacks.error に
+  // 通知される。
+  if (session.sessionState === "closed") {
+    return;
+  }
+
   const streamCount = publisher.getDataStreamCount();
   const parts: Uint8Array[] = [];
   parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
@@ -348,10 +359,13 @@ export async function publishSendPublishDone(
       statusCode: PublishDoneStatusCode.TRACK_ENDED,
       streamCount: streamCount.toString(),
     });
+    // write 失敗は従来どおり黙殺し、失敗エラーは close 失敗の非昇格判定に
+    // 併用するため保持する (詳細は close 失敗のコメント参照)。
+    let writeError: unknown;
     try {
       await streamInfo.writer.write(message);
-    } catch {
-      // ストリームが既に閉じている場合は無視
+    } catch (err) {
+      writeError = err;
     }
 
     // draft-ietf-moq-transport-19 §10.11:
@@ -359,12 +373,28 @@ export async function publishSendPublishDone(
     try {
       await streamInfo.writer.close();
     } catch (err) {
-      session.closeWithError(
-        new SessionError(
-          `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-      );
+      // draft-ietf-moq-transport-19 §3.3.3:
+      // 「An endpoint that has already sent a FIN on its sending direction and
+      //  subsequently wishes to cancel sends STOP_SENDING on the receiving
+      //  direction.」— ピアが FIN 後に STOP_SENDING で当方の送信方向を
+      // キャンセルした場合、write / close は WebTransportError
+      // (source: "stream") で reject する (W3C WebTransport の実装挙動。
+      // 判定は isPeerStreamError 参照)。
+      // STOP_SENDING の到着は非同期のため、write() が成功した後に close() が
+      // 失敗するレースが実 WebTransport で起こり得る。このとき close 失敗エラー
+      // 自体の source を判定して非昇格にする。
+      // また write が既にピア起因のキャンセルで失敗している場合、その後の close
+      // 失敗 (Node の実装では source なしの TypeError になることがある) も同じ
+      // キャンセルの結果であるため、write 失敗エラーも併せて判定して非昇格にする。
+      // どちらも stream でない失敗は従来どおり PROTOCOL_VIOLATION でセッションを閉じる。
+      if (!isPeerStreamError(err) && !isPeerStreamError(writeError)) {
+        session.closeWithError(
+          new SessionError(
+            `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+      }
     }
   }
 
