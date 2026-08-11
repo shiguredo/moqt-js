@@ -33,14 +33,15 @@ import type { SessionInternal } from "./types";
  *
  * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
  * 重複 GOAWAY は PROTOCOL_VIOLATION。
+ * 重複なし (初回) の場合は `callbacks.goaway` を通知し、New Session URI を
+ * 返す。受信方向のクローズや state 遷移は行わない (読み取り継続は呼び出し側
+ * のループが担う)。
  */
 export function namespaceHandleGoaway(
   session: SessionInternal,
   requestId: bigint,
   messagePayload: Uint8Array,
-  callbacks: { goaway?: (uri: string) => void; error?: (err: Error) => void } | undefined,
-  streamReader: ReadableStreamDefaultReader<Uint8Array>,
-  closeState: () => void,
+  callbacks: { goaway?: (uri: string) => void } | undefined,
 ): string | null {
   // 重複 GOAWAY チェック
   if (
@@ -54,11 +55,6 @@ export function namespaceHandleGoaway(
   }
   const decodedMsg = decodeGoawayPayload(messagePayload);
   callbacks?.goaway?.(decodedMsg.newSessionUri);
-  closeState();
-  callbacks?.error?.(
-    new Error(`request stream goaway: ${decodedMsg.newSessionUri || "no redirect URI"}`),
-  );
-  void streamReader.cancel();
   return decodedMsg.newSessionUri;
 }
 
@@ -82,6 +78,11 @@ export async function namespaceStartNamespaceStreamLoop(
 
   const { streamReader, controlReader, callbacks } = subscription;
   let resolved = false;
+  // draft-ietf-moq-transport-19 §10.4:
+  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
+  // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
+  // まで遅延するため、メッセージ処理判断専用に使う。
+  let goawayReceived = false;
   const seenNamespaceSuffixes = new Set<string>();
   const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
 
@@ -160,7 +161,11 @@ export async function namespaceStartNamespaceStreamLoop(
           }
 
           case MessageType.REQUEST_ERROR: {
-            if (resolved) {
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
+            // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
+            // REQUEST_OK」を防ぐ)
+            if (resolved && !goawayReceived) {
               session.closeWithError(
                 new SessionError(
                   "received REQUEST_ERROR after REQUEST_OK on namespace stream",
@@ -168,6 +173,9 @@ export async function namespaceStartNamespaceStreamLoop(
                 ),
               );
               return;
+            }
+            if (goawayReceived) {
+              break;
             }
             const decodedMsg = decodeRequestErrorPayload(messagePayload);
             const error = new RequestError(
@@ -189,20 +197,23 @@ export async function namespaceStartNamespaceStreamLoop(
           }
 
           case MessageType.GOAWAY: {
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+            // (§10.4 MUST)。callbacks.goaway 通知は namespaceHandleGoaway が行い、
+            // state 遷移 (closeState) はピアの FIN 検出時 (ループ自然終了時) に
+            // 遅延する。
             const newSessionUri = namespaceHandleGoaway(
               session,
               requestId,
               messagePayload,
               callbacks,
-              streamReader,
-              () => {
-                subscription.state = "closed";
-              },
             );
-            if (newSessionUri !== null) {
-              reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
+            if (newSessionUri === null) {
+              // 重複 GOAWAY: セッションは PROTOCOL_VIOLATION で閉じられる
+              return;
             }
-            return;
+            goawayReceived = true;
+            break;
           }
 
           case MessageType.NAMESPACE: {
@@ -241,7 +252,10 @@ export async function namespaceStartNamespaceStreamLoop(
       }
     }
   } catch (error) {
-    if (subscription.state === "active") {
+    // draft-ietf-moq-transport-19 §10.4:
+    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
+    // spurious error 通知を抑止する
+    if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
       const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (!isSessionClosedError(normalizedError)) {
@@ -282,6 +296,11 @@ export async function namespaceStartTracksStreamLoop(
 
   const { streamReader, controlReader, callbacks } = subscription;
   let resolved = false;
+  // draft-ietf-moq-transport-19 §10.4:
+  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
+  // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
+  // まで遅延するため、メッセージ処理判断専用に使う。
+  let goawayReceived = false;
 
   try {
     while (subscription.state === "active") {
@@ -349,7 +368,11 @@ export async function namespaceStartTracksStreamLoop(
           }
 
           case MessageType.REQUEST_ERROR: {
-            if (resolved) {
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
+            // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
+            // REQUEST_OK」を防ぐ)
+            if (resolved && !goawayReceived) {
               session.closeWithError(
                 new SessionError(
                   "received REQUEST_ERROR after REQUEST_OK on tracks stream",
@@ -357,6 +380,9 @@ export async function namespaceStartTracksStreamLoop(
                 ),
               );
               return;
+            }
+            if (goawayReceived) {
+              break;
             }
             const decodedMsg = decodeRequestErrorPayload(messagePayload);
             const error = new RequestError(
@@ -378,20 +404,23 @@ export async function namespaceStartTracksStreamLoop(
           }
 
           case MessageType.GOAWAY: {
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+            // (§10.4 MUST)。callbacks.goaway 通知は namespaceHandleGoaway が行い、
+            // state 遷移 (closeState) はピアの FIN 検出時 (ループ自然終了時) に
+            // 遅延する。
             const newSessionUri = namespaceHandleGoaway(
               session,
               requestId,
               messagePayload,
               callbacks,
-              streamReader,
-              () => {
-                subscription.state = "closed";
-              },
             );
-            if (newSessionUri !== null) {
-              reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
+            if (newSessionUri === null) {
+              // 重複 GOAWAY: セッションは PROTOCOL_VIOLATION で閉じられる
+              return;
             }
-            return;
+            goawayReceived = true;
+            break;
           }
 
           case MessageType.PUBLISH_SKIPPED: {
@@ -414,7 +443,10 @@ export async function namespaceStartTracksStreamLoop(
       }
     }
   } catch (error) {
-    if (subscription.state === "active") {
+    // draft-ietf-moq-transport-19 §10.4:
+    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
+    // spurious error 通知を抑止する
+    if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
       const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (!isSessionClosedError(normalizedError)) {
@@ -455,6 +487,11 @@ export async function namespaceStartPublicationStreamLoop(
 
   const { streamReader, controlReader, callbacks } = publication;
   let resolved = false;
+  // draft-ietf-moq-transport-19 §10.4:
+  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
+  // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
+  // まで遅延するため、メッセージ処理判断専用に使う。
+  let goawayReceived = false;
 
   try {
     while (publication.state !== "closed") {
@@ -517,6 +554,11 @@ export async function namespaceStartPublicationStreamLoop(
           }
 
           case MessageType.REQUEST_ERROR: {
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
+            if (goawayReceived) {
+              break;
+            }
             const decodedMsg = decodeRequestErrorPayload(messagePayload);
             const error = new RequestError(
               decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
@@ -539,22 +581,34 @@ export async function namespaceStartPublicationStreamLoop(
           }
 
           case MessageType.GOAWAY: {
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+            // (§10.4 MUST)。callbacks.goaway 通知は namespaceHandleGoaway が行い、
+            // state 遷移 (closeState) はピアの FIN 検出時 (ループ自然終了時) に
+            // 遅延する。
             const newSessionUri = namespaceHandleGoaway(
               session,
               requestId,
               messagePayload,
               callbacks,
-              streamReader,
-              () => {
-                publication.state = "closed";
-              },
             );
-            if (newSessionUri !== null) {
-              if (!resolved) {
-                reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
-              }
+            if (newSessionUri === null) {
+              // 重複 GOAWAY: セッションは PROTOCOL_VIOLATION で閉じられる
+              return;
             }
-            return;
+            if (!resolved) {
+              // REQUEST_OK 受信前 (resolved=false) の GOAWAY は reject 後に
+              // ループを終了する (reject 済みリクエストに後続メッセージが
+              // 発火しないようにする)。受信方向は cancel して閉じる
+              // (旧実装の STOP_SENDING 相当。ストリームが半開きで残らないようにする)。
+              reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
+              // 受信方向を cancel して閉じる。ストリームがエラー状態の場合に
+              // reject し得るため握り潰す。
+              void streamReader.cancel().catch(() => {});
+              return;
+            }
+            goawayReceived = true;
+            break;
           }
 
           default:
@@ -569,7 +623,10 @@ export async function namespaceStartPublicationStreamLoop(
       }
     }
   } catch (error) {
-    if (publication.state !== "closed") {
+    // draft-ietf-moq-transport-19 §10.4:
+    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
+    // spurious error 通知を抑止する
+    if (publication.state !== "closed" && !goawayReceived) {
       publication.state = "closed";
       const wrapped = error instanceof Error ? error : new Error(String(error));
       callbacks?.error?.(wrapped);

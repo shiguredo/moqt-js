@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-10
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-duplicate-goaway-on-request-stream-undetected
 - Polished: 2026-08-06
@@ -67,4 +67,10 @@ draft-ietf-moq-transport-19 §10.4 の MUST 要件「The endpoint MUST close the
 
 ## 解決方法
 
-未着手。
+- `bidiReadRequestStreamMessages` (src/session/bidi.ts): GOAWAY ケースを「読み取り継続」に変更。publisher は requestStreams を保持して done() に委ね、subscriber は送信方向を FIN (writer.close()) で閉じる。GOAWAY 後の REQUEST_UPDATE は publish ロールで REQUEST_ERROR (GOING_AWAY) 応答、subscribe ロールで無視。到達不能だった fetcher 分岐を削除。
+- `runPublishStreamSubLoop` (src/session.ts): GOAWAY ケースで読み取り継続 + subscriber の送信方向 FIN。GOAWAY 後の REQUEST_UPDATE は無視。catch に goawayReceived 抑止を追加。
+- `namespaceLoops.ts`: `namespaceHandleGoaway` を「重複チェック + callbacks.goaway 通知のみ」に簡素化 (closeState / streamReader.cancel / callbacks.error 廃止)。3 ループに goawayReceived フラグを導入し、GOAWAY 後も読み取り継続。REQUEST_ERROR は GOAWAY 後は無視。catch の callbacks.error を抑止。resolved=false の GOAWAY は reject + cancel + return。
+- `bidiSendRequestUpdate`: GOAWAY 受信後の送信をガード (pendingRequestUpdate のリーク防止)。
+- テスト: bidi.test.ts に重複 GOAWAY (同一チャンク / チャンク境界) の PROTOCOL_VIOLATION、subscriber の送信方向 FIN、GOAWAY 後の REQUEST_UPDATE (publish は GOING_AWAY / subscribe は無視)、GOAWAY → FIN → done() の PUBLISH_DONE 経路を追加。
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加。
+- `vp check` / `tsc --noEmit` / `vp test run` (1002 件) すべて通過。

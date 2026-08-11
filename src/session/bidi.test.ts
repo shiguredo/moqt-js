@@ -11,11 +11,12 @@ import { ObjectStatus, type Location } from "../message";
 import {
   encodeRequestOkPayload,
   decodeRequestOkPayload,
+  decodeRequestErrorPayload,
   encodeGoawayPayload,
 } from "../message/session";
 import { MessageType, MessageParameterType } from "../message/types";
-import { decodeRequestUpdatePayload } from "../message/subscribe";
-import { SessionError, SessionErrorCode } from "../error";
+import { decodeRequestUpdatePayload, encodeRequestUpdatePayload } from "../message/subscribe";
+import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
@@ -886,12 +887,12 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で alias 
 
 /**
  * draft-ietf-moq-transport-19 §10.4 (GOAWAY) / §3.3.2:
- * GOAWAY 受信は graceful FIN ではないため (receivedFin = false)、
- * publish ロールでも従来どおり requestStreams から削除されることを検証する。
- * GOAWAY 後の done() で PUBLISH_DONE を送信できない (streamInfo が無い) 挙動は
- * 既存どおりである。
+ * GOAWAY 受信 (publish ロール) 後は読み取りを継続し、requestStreams が保持
+ * される。その後ピアが FIN した場合、readRequestStreamMessages の finally の
+ * 「publish ロール && receivedFin」経路に合流してエントリが保持され、アプリの
+ * done() による PUBLISH_DONE → FIN の経路が維持されることを検証する。
  */
-test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) では従来どおり requestStreams から削除される", async () => {
+test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読み取り継続し done() で PUBLISH_DONE が送信される", async () => {
   const ctx = createPublishReadTestContext({});
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -901,7 +902,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) では従
     ctx.controlReader,
     "publish",
   );
-  // GOAWAY メッセージを feed し、ループを return で終了させる
+  // GOAWAY メッセージを feed し、読み取りを継続させる
   const goawayPayload = encodeGoawayPayload({
     type: MessageType.GOAWAY,
     newSessionUri: "moqt://new.example.com",
@@ -909,17 +910,209 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) では従
   });
   const message = ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload);
   ctx.readableController.enqueue(message);
+  // ピアの FIN (読み取り継続の自然終了)
   ctx.readableController.close();
   await readPromise;
 
-  // GOAWAY 経路では保持されず、従来どおり削除される
-  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
   // 重複 GOAWAY 検出 (PROTOCOL_VIOLATION) の seed として登録される
   assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
+  // GOAWAY 受信時は publisher に FIN を送らない (§3.3.2 MUST: done() に委ねる)
+  assert.deepEqual(ctx.events, []);
+  // GOAWAY 後のピア FIN は receivedFin 経路で保持される
+  assert.isTrue(ctx.session.requestStreams.has(ctx.requestId));
 
   await ctx.publisher.done();
 
-  // GOAWAY 後は streamInfo が無いため PUBLISH_DONE を送信せず、セッションも閉じない
+  // done() で PUBLISH_DONE → FIN が送信される
+  assert.deepEqual(ctx.events, ["write", "close"]);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 3.5)
+ * if it receives more than one GOAWAY on the control stream or on a single
+ * request stream.」
+ * GOAWAY 受信後も読み取りを継続し、2 通目の GOAWAY (同一チャンク) で
+ * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ */
+test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // GOAWAY 2 通を同一チャンクで feed する
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload);
+  ctx.readableController.enqueue(concatUint8Arrays([message, message]));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 2 通目 GOAWAY で PROTOCOL_VIOLATION
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx.closedWithError!.message.includes("received duplicate goaway on request stream"),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * チャンク境界をまたぐ 2 通目の GOAWAY でも PROTOCOL_VIOLATION でセッションが
+ * 閉じることを検証する。
+ */
+test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // GOAWAY 2 通を別チャンクで feed する
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx.closedWithError!.message.includes("received duplicate goaway on request stream"),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * GOAWAY 受信 (subscribe ロール) で送信方向が FIN (writer.close()) で閉じられ、
+ * 受信方向は読み取りが継続されることを検証する。1 通目 GOAWAY ではセッション
+ * が閉じない。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 受信 (subscribe ロール) で送信方向が FIN で閉じられる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload);
+  ctx.readableController.enqueue(message);
+  // 読み取り継続の自然終了 (ピアの FIN)
+  ctx.readableController.close();
+  await readPromise;
+
+  // 1 通目 GOAWAY ではセッションが閉じない
+  assert.isUndefined(ctx.closedWithError);
+  // 送信方向の FIN (writer.close()) が呼ばれる (GOAWAY は受信のみなので write はない)
+  assert.deepEqual(ctx.events, ["close"]);
+  // subscribe ロールでは FIN 後に従来どおり削除される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+ * GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE は、publish ロールでは
+ * REQUEST_ERROR (GOING_AWAY) で応答される (§10.9 MUST) ことを検証する。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE に REQUEST_ERROR (GOING_AWAY) が応答される (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+  // GOAWAY を受信済みの状態を作る
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // REQUEST_UPDATE を feed する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR (GOING_AWAY) が書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.GOING_AWAY));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+ * GOAWAY 受信後の REQUEST_UPDATE は subscribe ロールでは無視されることを
+ * 検証する。subscribe ロールは GOAWAY 処理で送信方向を FIN (writer.close())
+ * で閉じており、GOING_AWAY 応答を書き込むことができないためである。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視される (subscribe ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+  // GOAWAY を受信済みの状態を作る
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // REQUEST_UPDATE を feed する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_UPDATE は無視され、応答も送信されずセッションも閉じない
   assert.equal(ctx.written.length, 0);
   assert.isUndefined(ctx.closedWithError);
 });

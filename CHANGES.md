@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] リクエストストリーム上の重複 GOAWAY を検出してセッションを閉じる
+  - draft-ietf-moq-transport-19 §10.4 に基づき、GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を PROTOCOL_VIOLATION で検出する
+  - GOAWAY 受信時に subscriber の送信方向を FIN で閉じ、publisher は done() による PUBLISH_DONE → FIN の経路を維持する
+  - namespace 系ループは GOAWAY 後も読み取りを継続し、callbacks.goaway 通知のみを行う
+  - @voluntas
 - [FIX] 未対応リクエストの受信時に NOT_SUPPORTED を応答してセッションを維持する
   - draft-ietf-moq-transport-19 §4 に基づき、受信 bidi ストリームの先頭が未対応の 6 種 (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の場合に REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じる
   - draft-ietf-moq-transport-19 §3.3 に基づき、7 種以外の先頭メッセージは従来どおり PROTOCOL_VIOLATION でセッションを閉じる

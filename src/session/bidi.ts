@@ -662,6 +662,40 @@ export async function bidiReadTrackStatusResponse(
 // readRequestStreamMessages
 // ============================================================================
 
+/**
+ * リクエストストリーム上に REQUEST_ERROR (GOING_AWAY) を送信する
+ *
+ * draft-ietf-moq-transport-19 §10.4 / §3.3.4:
+ * GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE を拒否するために使用する。
+ * GOING_AWAY は「The endpoint is rejecting this request because it has sent or
+ * received a GOAWAY」を意味する。送信方向が FIN 済みなどの理由で write に
+ * 失敗した場合は黙殺する。
+ */
+async function bidiSendRequestErrorGoaway(
+  session: BidiSessionInternal,
+  requestId: bigint,
+): Promise<void> {
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.GOING_AWAY),
+    retryInterval: 0n,
+    reasonPhrase: "request stream is being migrated",
+  });
+  const message = session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload);
+  const streamInfo = session.requestStreams.get(requestId);
+  if (streamInfo) {
+    try {
+      await streamInfo.writer.write(message);
+      session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, {
+        errorCode: RequestErrorCode.GOING_AWAY,
+      });
+    } catch {
+      // ストリームが既に閉じている場合は無視 (実際には送信されていないため
+      // emitDebug は呼ばない)
+    }
+  }
+}
+
 export async function bidiReadRequestStreamMessages(
   session: BidiSessionInternal,
   requestId: bigint,
@@ -711,6 +745,26 @@ export async function bidiReadRequestStreamMessages(
             break;
           }
           case MessageType.REQUEST_UPDATE: {
+            // draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+            // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE の扱い。
+            // - publish ロール: GOAWAY 処理で送信方向を閉じないため応答可能。
+            //   §10.9 の MUST「The receiver of a REQUEST_UPDATE MUST respond
+            //   with exactly one REQUEST_OK or REQUEST_ERROR message」を満たす
+            //   ため、REQUEST_ERROR (GOING_AWAY) で応答する。
+            // - subscribe ロール: GOAWAY 処理で送信方向を FIN (writer.close())
+            //   で閉じているため GOING_AWAY 応答を書き込むことができない。
+            //   §10.9 の MUST からは逸脱するが、§3.3.2 によりピアは FIN 後に
+            //   REQUEST_UPDATE を送るべきではない (「will not need to respond
+            //   to a future REQUEST_UPDATE」) ため、無視する。
+            if (session.goawayReceivedOnRequestStreams.has(requestId)) {
+              // publish ロールは送信方向が開いているため GOING_AWAY で応答する
+              // (§10.9 MUST)。subscribe ロールは送信方向が FIN 済みのため応答
+              // 不能であり、無視する。
+              if (role === "publish") {
+                await bidiSendRequestErrorGoaway(session, requestId);
+              }
+              break;
+            }
             // draft-ietf-moq-transport-19 §10.9:
             // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
             // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
@@ -819,11 +873,32 @@ export async function bidiReadRequestStreamMessages(
             if (subscriber?.goawayCallback) {
               subscriber.goawayCallback(decoded.newSessionUri);
             }
-            const fetcher = session.fetchers.get(requestId);
-            if (fetcher?.goawayCallback) {
-              fetcher.goawayCallback(decoded.newSessionUri);
+            // draft-ietf-moq-transport-19 §10.4:
+            // 「Upon receiving a GOAWAY on a request stream, the endpoint SHOULD
+            //  re-issue that specific request ... and close the old request stream
+            //  using the appropriate mechanism (e.g. FIN, stream reset, or
+            //  PUBLISH_DONE).」
+            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+            // (§10.4 MUST)。
+            // subscription state は変更しない (§10.4「The GOAWAY message does
+            // not impact subscription state.」)。
+            // - publisher: 即時クローズせずアプリの done() に委ねる
+            //   (§3.3.2 MUST「the publisher of an Established subscription MUST
+            //   send PUBLISH_DONE, before sending a FIN」)
+            // - subscriber: 送信方向を FIN (writer.close()) で閉じ、受信方向は
+            //   読み取りを継続する
+            // - fetcher: established FETCH に読み取りループは存在しないため対象外
+            if (subscriber) {
+              const streamInfo = session.requestStreams.get(requestId);
+              if (streamInfo) {
+                try {
+                  await streamInfo.writer.close();
+                } catch {
+                  // ストリームが既に閉じている場合は無視
+                }
+              }
             }
-            return;
+            break;
           }
           default:
             session.closeWithError(
@@ -887,6 +962,14 @@ export async function bidiSendRequestUpdate(
   options: RequestUpdateOptions,
 ): Promise<void> {
   const targetRequestId = subscriber.getRequestId();
+
+  // draft-ietf-moq-transport-19 §10.4:
+  // GOAWAY 受信後の旧リクエストへの REQUEST_UPDATE は送信しない。
+  // GOAWAY 処理で送信方向が FIN (writer.close()) 済みの場合、write は失敗し
+  // pendingRequestUpdate エントリがリークするため、送信前にガードする。
+  if (session.goawayReceivedOnRequestStreams.has(targetRequestId)) {
+    throw new Error(`cannot send REQUEST_UPDATE: request stream is being migrated`);
+  }
 
   // draft-ietf-moq-transport-19 §10.3.1.7:
   // ピアの MAX_REQUEST_UPDATES を超える outstanding REQUEST_UPDATE を送信してはならない
@@ -1091,7 +1174,10 @@ export async function bidiCancelSubscription(
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 両方向をリセットして subscription 解除を通知する。
       await streamInfo.stream.readable.cancel("subscription cancelled");
-      void streamInfo.writer.abort("subscription cancelled");
+      // GOAWAY 受信で送信方向を FIN (writer.close()) 済みの場合、abort は
+      // reject する (閉じた writer への操作)。unhandled rejection を避けるため
+      // catch で握り潰す。
+      void streamInfo.writer.abort("subscription cancelled").catch(() => {});
     } catch {
       // ストリームが既に閉じている場合は無視
     }
