@@ -37,6 +37,10 @@
 
 - 0371 (未対応リクエストの NOT_SUPPORTED 応答) 実装後は、受信 SUBSCRIBE_TRACKS が NOT_SUPPORTED で閉じられるため、`SUBSCRIBE_TRACKS_ALLOWED_PARAMS` の受信検証への配線は不可能になる。本 issue は「削除」に収束する (未使用定数として削除)。
 
+## 注記 (0373 実装時)
+
+- 0373 (受信 PUBLISH ストリーム上の REQUEST_UPDATE 誤検知) の実装で `PUBLISH_REQUEST_UPDATE_OK_PARAMS` (`src/message/parameterScope.ts`) を新設した。同定数は `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため、削除対象外である。本 issue の未使用定数整理時には使用箇所を確認すること。
+
 ## 参照
 
 - draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope)
