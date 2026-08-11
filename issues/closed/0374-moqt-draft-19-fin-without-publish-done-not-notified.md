@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-11
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-fin-without-publish-done-not-notified
 - Polished: 2026-08-08
@@ -29,7 +29,7 @@ Established subscription でピア (publisher) が PUBLISH_DONE を送らずに 
 
 - **対象ロールの限定**: `bidiReadRequestStreamMessages` は publish / subscribe 両ロール共通であり、`if (done) break;` も両ロールで実行される。本 issue の対象は **subscribe ロールのみ** である。publish ロールではピア (requester / subscriber) の FIN は正常完了シグナル (§3.3.2「A FIN sent by the responder after its response and any subsequent messages for the request signals that the request is complete; if it has not already done so, the requester SHOULD then send a FIN on its direction, gracefully closing the stream.」の responder 側 FIN) であり、失敗通知してはならない。ロール分岐は 0370 の finally ロール分岐と同じ方式 (`role === "subscribe"` ガード) で行う。
 - **通知場所の限定**: 失敗通知は **FIN 検出点** (`bidiReadRequestStreamMessages` の `break` 直前、`runPublishStreamSubLoop` の `return` 直前) に置き、以下の 2 条件でガードする: (a) `state === "active"`、(b) `goawayReceivedOnRequestStreams.has(requestId)` が false。finally ブロックや呼び出し元クリーンアップには置かない。finally は GOAWAY の `return`、PROTOCOL_VIOLATION の return、catch (RESET_STREAM 等)、while 条件によるセッション終了など全 exit 経路で実行されるため、finally に置くと spurious な error 通知が発火する。GOAWAY return は (b) のガードで、セッション close は (a) の state ガードで抑止されるが、unknown message の PROTOCOL_VIOLATION return (`closeWithError` は非同期のため finally 実行時点で `markClosed()` が未完了であり (a) を通り抜ける) と catch (RESET_STREAM 等) の経路はどちらのガードも通過してしまうため、FIN 検出点に置く必要がある。
-- **GOAWAY 経由のピア FIN のガード**: 0372 (重複 GOAWAY 検出) は「GOAWAY 受信後の読み取り継続」方式を採用するため、0372 実装後は「GOAWAY → その後ピアが FIN」が 0374 の FIN 検出点に合流する。GOAWAY はリクエストのマイグレーション通知であり失敗ではない (§10.4「The GOAWAY message does not impact subscription state.」) ため、FIN 検出点で `session.goawayReceivedOnRequestStreams.has(requestId)` を確認し、GOAWAY 受信済みの requestId では失敗通知しない (0372 の polish 済み issue も「0374 実装後の『GOAWAY 経由のピア FIN』で誤った error 通知が発火しないよう、0374 側にも注記が必要」と明記している)。現行コードでは GOAWAY 受信時に return するためこの合流は発生しないが、0372 実装後の前提としてガードを入れる。GOAWAY 後 FIN では error 通知も `markClosed()` も行わず、subscriber の state は "active" のままとする (GOAWAY は migration 通知であり、migration の処理はアプリが `goawayCallback` で行う)。
+- **GOAWAY 経由のピア FIN のガード**: 0372 (重複 GOAWAY 検出) は「GOAWAY 受信後の読み取り継続」方式を採用するため、0372 実装後は「GOAWAY → その後ピアが FIN」が 0374 の FIN 検出点に合流する。GOAWAY はリクエストのマイグレーション通知であり失敗ではない (§10.4「The GOAWAY message does not impact subscription state.」) ため、FIN 検出点で `session.goawayReceivedOnRequestStreams.has(requestId)` を確認し、GOAWAY 受信済みの requestId では失敗通知しない (0372 の polish 済み issue も「0374 実装後の『GOAWAY 経由のピア FIN』で誤った error 通知が発火しないよう、0374 側にも注記が必要」と明記している)。0374 実装時点では 0372 はマージ済みであり、GOAWAY 後の読み取り継続により「GOAWAY → ピア FIN」の合流は現行コードで実際に発生する (bidi 経路は GOAWAY ケース末尾の break、runPublishStreamSubLoop 経路は continue で読み取り継続)。GOAWAY 後 FIN では error 通知も `markClosed()` も行わず、subscriber の state は "active" のままとする (GOAWAY は migration 通知であり、migration の処理はアプリが `goawayCallback` で行う)。
 - **通知方法**: `SubscriberImpl.handleError(new Error(...))` と `SubscriberImpl.markClosed()` の組み合わせで行う。呼び出し順は error 通知 → markClosed とする (error コールバック内から subscriber の state を参照するアプリの観測を考慮。ただし `errorCallback` が throw した場合に `markClosed()` が実行されないリスクを避けるため、free function 内を try/finally で包み、finally で必ず `markClosed()` を実行する)。`handleEnd(statusCode, reasonPhrase)` は使用しない。理由: (1) `handleEnd` は statusCode のエラー判定後に必ず `endCallback` を呼び、FIN 失敗 (失敗扱い) で end を呼ぶと「正常終了」としてアプリに誤認される。(2) `endCallback` は「PUBLISH_DONE 専用」 (セッション close 処理のコメント) であり、FIN-without-PUBLISH_DONE で呼ぶのは API 契約違反になる。(3) `handleError` は errorCallback のみで state を閉じないため、`markClosed()` との組み合わせで「error 通知 + state closed」を満たす。エラーメッセージは既存の `handleEnd` のエラー (「PUBLISH_DONE with status 0x...」) と区別可能な文言にする (例: `publisher closed request stream without PUBLISH_DONE`)。
 - **free function 抽出**: `runPublishStreamSubLoop` は private メソッドであり、`src/session.test.ts` は `SessionImpl` の公開 API 検証のみ (private メソッド駆動なし) のため、FIN 検出時の通知ロジックは free function (例: `notifySubscriberFin(session: BidiSessionInternal, requestId: bigint, error: Error): void` を `src/session/bidi.ts` に追加) として抽出し、bidi.ts の FIN 検出点と session.ts の FIN 検出点の両方から呼ぶ。free function 内でガード (a)(b) と `session.subscribers.get(requestId)` が undefined (unsubscribe 済み等) の場合の no-op を一括して行う (呼び出し側 2 箇所にガードを重複実装しないため)。テストは free function 単体 + 0370 方式の実 W3C ストリーム注入で検証する。
 - **既存 catch 経路との整合**: `runPublishStreamSubLoop` の既存 catch は `impl.state === "active"` なら `callbacks.error` を呼ぶが `markClosed` しない。本 issue の FIN 検出時は「error 通知 + closed」の両方を行うため、catch 経路より厳しい要件になる。既存 catch 経路は本 issue の対象外とし変更しない (catch 経路は RESET_STREAM 等の異常で、FIN とは経路が異なる)。
@@ -72,4 +72,10 @@ Established subscription でピア (publisher) が PUBLISH_DONE を送らずに 
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts`: free function `notifySubscriberFin` と定数 `FIN_WITHOUT_PUBLISH_DONE_MESSAGE` を新設した。ガードは (a) subscribers に requestId が存在すること、(b) GOAWAY 受信済みでないこと、(c) state が "active" であること。通知は error コールバック → try/finally で必ず markClosed (handleEnd は不使用)。
+- `src/session/bidi.ts` (`bidiReadRequestStreamMessages`): FIN 検出点で subscribe ロールのみ `notifySubscriberFin` を呼ぶ (publish ロールの requester FIN は正常完了シグナル)。
+- `src/session.ts` (`runPublishStreamSubLoop`): FIN 検出点 (`if (done)` の直前) で `notifySubscriberFin` を呼ぶ。
+- テスト: `src/session/bidi.test.ts` に 12 件追加した (free function 単体 5 件: 通知 + state closed / error コールバック throw でも markClosed / subscribers 非存在 no-op / GOAWAY 済み no-op / 非 active no-op。統合 7 件: subscribe FIN → error + closed / publish FIN → 通知なし / GOAWAY feed → FIN 通知なし / PUBLISH_DONE → FIN で end のみ / エラー statusCode PUBLISH_DONE → FIN で error 1 回のみ / subscribers 未登録 FIN 通知なし / error コールバック throw でセッション維持)。
+- 注記追加: `issues/0397` (0390 への export 維持注記に 0374 分と `notifySubscriberFin` / `FIN_WITHOUT_PUBLISH_DONE_MESSAGE` の非公開化対象外を含める旨)。
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した。
+- `vp check` / `tsc --noEmit` / `vp test run` (1025 件) すべて通過した。
