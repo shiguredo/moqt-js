@@ -57,6 +57,7 @@ export {
   getParameterLocationValue,
   getParameterTrackNamespace,
   getParameterVarintValue,
+  isRejectedReceiveNamespace,
   isReservedNamespace,
   isSessionLevelNamespace,
   validateForwardValue,

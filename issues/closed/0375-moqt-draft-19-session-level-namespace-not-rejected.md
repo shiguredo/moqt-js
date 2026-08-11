@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-11
 - Model: DeepSeek V4 Flash
 - Branch: feature/change-moqt-draft-19-session-level-namespace-not-rejected
 - Polished: 2026-08-08
@@ -56,4 +56,10 @@ draft-ietf-moq-transport-19 §3.2.2 の MUST「An endpoint that receives a reque
 
 ## 解決方法
 
-未着手。
+- `src/message/parameter.ts`: `isRejectedReceiveNamespace(tuple)` を新設した。拒否対象は Track Namespace 先頭フィールドが `.` 単体 (0x2e 1 バイト、§3.2.1) または `.session` (§3.2.2、Track Name の空/非空に関わらない) のみ。それ以外の予約名前空間 (例: `.foo`) は §3.2.1 の「unrecognized reserved namespace はアプリへ渡す MUST」により拒否しない。`.session` 判定は既存の `isSessionLevelNamespace` を再利用した。
+- `src/message/index.ts`: `isRejectedReceiveNamespace` を re-export に追加した。
+- `src/session.ts` (`handleIncomingBidirectionalStream`): PUBLISH デコード後の `emitDebug` の後に判定を挿入した。拒否時は `incomingSendRequestErrorAndClose` (0371 移設済み) で REQUEST_ERROR (DOES_NOT_EXIST) を送信し、§3.3.3 SHOULD に従い送信方向を FIN で閉じ受信方向を cancel して return する (onPublish に到達しない)。判定は `matchPublishToSubscription` と `validateParameterScope` より前に置き、両方違反の場合は DOES_NOT_EXIST 拒否を優先する。Reason Phrase は固定文言 `request references reserved namespace`。
+- テスト: `src/message/parameter.test.ts` に 12 件追加した (.session 正例 (文字列・バイト列リテラル・複数フィールド) / `.` 単体正例 (バイト列リテラル) / `.foo`・`.session2`・`.sess`・`.Session`・`..`・無効 UTF-8・空フィールド・空 namespace の負例)。
+- 注記追加: `issues/0397` (`isRejectedReceiveNamespace` は 0390 対象外、`isSessionLevelNamespace` / `isReservedNamespace` / `RESERVED_NAMESPACE_PREFIX` / `SESSION_LEVEL_NAMESPACE` は 0390 の対象リストに追加で含める旨)。
+- `CHANGES.md` の `## develop` に `[CHANGE]` エントリを追加した。
+- `vp check` / `tsc --noEmit` / `vp test run` (1035 件) すべて通過した。
