@@ -2037,21 +2037,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * namespace 系ループ共通: リクエストストリーム上の GOAWAY を処理する
-   *
-   * draft-ietf-moq-transport-19 §10.4:
-   * リクエストストリーム上の GOAWAY は当該リクエストのみに適用される。
-   * 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
-   *
-   * 重複検出は validateNoDuplicateGoawayOnRequestStream を使う。
-   * state 変更は closeState で行う。元の inline 実装と同じく goaway と error の間で
-   * state を "closed" にするため、呼び出し元から closeState を渡す。
-   * reject は対象と条件がループごとに異なるため呼び出し元で行う。
-   *
-   * @returns GOAWAY を処理した場合は newSessionUri、重複・違反でセッションを閉じた場合は null
-   */
-
-  /**
    * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
    *
    * draft-ietf-moq-transport-19 §10.18 (SUBSCRIBE_NAMESPACE):
@@ -3157,6 +3142,11 @@ export class SessionImpl implements Session {
     subControlReader: ControlStreamReader,
     callbacks: SubscribeCallbacks,
   ): Promise<void> {
+    // draft-ietf-moq-transport-19 §10.4:
+    // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
+    // フラグ。GOAWAY 受信時は state 遷移を行わないため、catch での spurious
+    // error 通知を抑止する判定に使う。
+    let goawayReceived = false;
     try {
       while (impl.state === "active") {
         const { value, done } = await subReader.read();
@@ -3186,7 +3176,31 @@ export class SessionImpl implements Session {
             }
             const decodedMsg = decodeGoawayPayload(msg.payload);
             impl.goawayCallback?.(decodedMsg.newSessionUri);
-            return;
+            goawayReceived = true;
+            // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+            // (§10.4 MUST)。受信 PUBLISH の subscriber (impl) は送信方向を
+            // FIN (writer.close()) で閉じ、受信方向は読み取りを継続する。
+            const streamInfo = this.requestStreams.get(publishRequestId);
+            if (streamInfo) {
+              try {
+                await streamInfo.writer.close();
+              } catch {
+                // ストリームが既に閉じている場合は無視
+              }
+            }
+            continue;
+          }
+          if (msg.type === MessageType.REQUEST_UPDATE) {
+            // draft-ietf-moq-transport-19 §10.4 / §3.3.4:
+            // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE は無視する。
+            // 受信 PUBLISH の subscriber は GOAWAY 処理で送信方向を FIN
+            // (writer.close()) で閉じているため、GOING_AWAY 応答を書き込むことが
+            // できない。REQUEST_UPDATE を無視することで、従来の unknown message
+            // type による PROTOCOL_VIOLATION (セッション切断) を回避する。
+            if (this.goawayReceivedOnRequestStreams.has(publishRequestId)) {
+              continue;
+            }
           }
           if (msg.type === MessageType.REQUEST_OK) {
             bidi.bidiHandleRequestUpdateOk(
@@ -3223,7 +3237,10 @@ export class SessionImpl implements Session {
         }
       }
     } catch (err) {
-      if (impl.state === "active") {
+      // draft-ietf-moq-transport-19 §10.4:
+      // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
+      // spurious error 通知を抑止する (namespace ループと同様)
+      if (impl.state === "active" && !goawayReceived) {
         const normalizedError = err instanceof Error ? err : new Error(String(err));
         if (!isSessionClosedError(normalizedError)) {
           callbacks.error?.(normalizedError);
