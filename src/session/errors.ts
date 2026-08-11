@@ -3,6 +3,7 @@
  *
  * SessionImpl の read loop catch から利用する純関数群。
  * - isSessionClosedError: WebTransport セッション終了起源のエラーかどうかを判定する
+ * - isPeerStreamError: ピア起因のストリームエラー (source: "stream") かどうかを判定する
  * - toProtocolViolationSessionError: ProtocolViolationError を PROTOCOL_VIOLATION の
  *   SessionError に変換する
  */
@@ -31,6 +32,28 @@ export function isSessionClosedError(error: Error): boolean {
   }
   const message = error.message ?? "";
   return message.includes("session is closed") || message.includes("session closed");
+}
+
+/**
+ * ピア起因のストリームエラーかどうかを判定する
+ *
+ * draft-ietf-moq-transport-19 Section 3.3.3 (Request Cancellation and Rejection):
+ * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
+ * キャンセルされた writable の write / close は WebTransportError
+ * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
+ * これはピア起因のキャンセルであり、セッション終了 (PROTOCOL_VIOLATION) には
+ * 昇格させない。
+ *
+ * source プロパティは WebTransportError の instanceof 成否に関わらず直接読む
+ * (テスト環境の Node には WebTransportError グローバルが存在しないため)。
+ * 失敗値が null / undefined 等の非オブジェクトの場合は source 非該当として
+ * 昇格側に落とす。
+ */
+export function isPeerStreamError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  return (error as { source?: unknown }).source === "stream";
 }
 
 /**

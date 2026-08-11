@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] ピアの FIN 後でも PUBLISH_DONE を送信してストリームを閉じる
+  - draft-ietf-moq-transport-19 §3.3.2 に基づき、ピアが graceful FIN した場合でも publisher の done() で PUBLISH_DONE を送信してから自方向を FIN で閉じる
+  - ピア起因のキャンセル (STOP_SENDING / RESET_STREAM) を PROTOCOL_VIOLATION に昇格させない (isPeerStreamError 判定)
+  - @voluntas
 - [FIX] Standalone FETCH の End Location 検証を送信前に追加する
   - draft-ietf-moq-transport-19 §10.12.3 に基づき、End Location が Start Location 未満の FETCH を送信前に拒否する
   - Location 比較の純関数 compareLocations を追加し、FETCH_OK 応答検証 (validateFetchOkEndLocation) と共通化する

@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { isSessionClosedError, toProtocolViolationSessionError } from "./errors";
+import { isSessionClosedError, isPeerStreamError, toProtocolViolationSessionError } from "./errors";
 import { ProtocolViolationError, SessionError, SessionErrorCode } from "../error";
 
 test("isSessionClosedError: メッセージに 'session is closed' を含むエラーは true", () => {
@@ -105,4 +105,46 @@ test("toProtocolViolationSessionError: Error を継承しないオブジェク�
   // ProtocolViolationError ではないため null になることを検証する
   const domExceptionLike = { name: "AbortError", message: "aborted" };
   assert.isNull(toProtocolViolationSessionError(domExceptionLike));
+});
+
+// ============================================================================
+// isPeerStreamError のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
+ * キャンセルされた writable の write / close は WebTransportError
+ * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
+ * source === "stream" の失敗はピア起因のキャンセルであり、
+ * PROTOCOL_VIOLATION に昇格させない。
+ */
+test("isPeerStreamError: source: 'stream' を持つ Error は true", () => {
+  const error = Object.assign(new Error("peer cancel"), { source: "stream" });
+  assert.isTrue(isPeerStreamError(error));
+});
+
+test("isPeerStreamError: source: 'stream' を持つオブジェクトは true", () => {
+  // Error を継承しないプレーンオブジェクトでも source プロパティを直接読む
+  assert.isTrue(isPeerStreamError({ source: "stream", streamErrorCode: 0x1 }));
+});
+
+test("isPeerStreamError: source: 'session' を持つ Error は false", () => {
+  const error = Object.assign(new Error("session closed"), { source: "session" });
+  assert.isFalse(isPeerStreamError(error));
+});
+
+test("isPeerStreamError: source を持たない Error は false", () => {
+  assert.isFalse(isPeerStreamError(new Error("internal error")));
+});
+
+test("isPeerStreamError: null / undefined は false", () => {
+  assert.isFalse(isPeerStreamError(null));
+  assert.isFalse(isPeerStreamError(undefined));
+});
+
+test("isPeerStreamError: 非オブジェクトは false", () => {
+  // reject が文字列等の非オブジェクト値を渡すケースを想定し、安全に false を返す
+  assert.isFalse(isPeerStreamError("stream"));
+  assert.isFalse(isPeerStreamError(42));
 });

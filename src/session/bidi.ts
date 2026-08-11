@@ -670,10 +670,16 @@ export async function bidiReadRequestStreamMessages(
   role: "publish" | "subscribe",
 ): Promise<void> {
   const reader = stream.readable.getReader();
+  // ピアの graceful FIN (reader.read() の { done: true }) を記録し、
+  // publish ロールのみ削除を done() 完了後まで遅延する判定に使う。
+  let receivedFin = false;
   try {
     while (session.sessionState === "connected") {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        receivedFin = true;
+        break;
+      }
 
       const messages = controlReader.feed(value);
       for (const msg of messages) {
@@ -854,7 +860,20 @@ export async function bidiReadRequestStreamMessages(
         }
       }
     }
-    session.requestStreams.delete(requestId);
+    // draft-ietf-moq-transport-19 §3.3.2 の MUST「the publisher of an
+    // Established subscription MUST send PUBLISH_DONE, before sending a FIN」:
+    // ピアが送信方向を FIN で閉じた場合でも、publisher はアプリの done() が
+    // 呼ばれたときに PUBLISH_DONE を送信してから自方向を FIN で閉じる必要が
+    // ある。ここで requestStreams のエントリを削除してしまうと
+    // publishSendPublishDone が streamInfo を引けず、PUBLISH_DONE 送信と FIN の
+    // 両方をスキップする (§10.11 の MUST「A sender MUST NOT destroy subscription
+    // state until it sends PUBLISH_DONE」にも抵触する)。
+    // ピアの graceful FIN を受けた publisher ロールのみ削除を done() 完了後まで
+    // 遅延する。それ以外の exit 経路 (GOAWAY / PROTOCOL_VIOLATION /
+    // RESET_STREAM / セッション終了等) と subscribe ロールは従来どおり削除する。
+    if (!(role === "publish" && receivedFin)) {
+      session.requestStreams.delete(requestId);
+    }
   }
 }
 
