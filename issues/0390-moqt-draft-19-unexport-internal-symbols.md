@@ -51,6 +51,10 @@ export されているが外部から参照されていないシンボルは、�
 
 - 特になし (リポジトリ内部の整理)
 
+## 注記 (0371 実装時)
+
+- 0371 で新設した `incomingClassifyFirstBidiMessage` (src/session/incoming.ts) は、`incoming.ts` 内部と `incoming.test.ts` からのみ参照され、session.ts から直接 import されない。テストで使用するため export を維持すること (0390 の非公開化対象に含めない)。
+
 ## 解決方法
 
 未着手。

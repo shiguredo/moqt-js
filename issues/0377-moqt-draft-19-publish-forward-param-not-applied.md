@@ -38,6 +38,10 @@ draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter) に従い、SUBSCRIBE_
 - draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter)
 - draft-ietf-moq-transport-19 §10.19.1 (Parameters on SUBSCRIBE_TRACKS)
 
+## 注記 (0371 実装時)
+
+- 0371 (未対応リクエストの NOT_SUPPORTED 応答) の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`src/session.ts:3368-3396` の行番号参照をシンボル名 (`handleIncomingBidirectionalStream` 内の該当処理) に書き換えること。
+
 ## 解決方法
 
 未着手。

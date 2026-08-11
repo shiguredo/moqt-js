@@ -62,6 +62,10 @@ Established subscription でピア (publisher) が PUBLISH_DONE を送らずに 
 - draft-ietf-moq-transport-19 §10.4 (GOAWAY / リクエストストリーム上の GOAWAY は migration 通知 / GOAWAY は subscription state に影響しない)
 - draft-ietf-moq-transport-19 §10.11 (PUBLISH_DONE / 最後のメッセージとして送信)
 
+## 注記 (0371 実装時)
+
+- 0371 (未対応リクエストの NOT_SUPPORTED 応答) の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`runPublishStreamSubLoop` の FIN 検出点等の session.ts 行番号参照をシンボル名に書き換えること。
+
 ## 解決方法
 
 未着手。

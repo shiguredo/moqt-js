@@ -33,6 +33,10 @@
 - 未使用の許可パラメータ集合が削除または配線され、実態と一致すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
+## 注記 (0371 実装時)
+
+- 0371 (未対応リクエストの NOT_SUPPORTED 応答) 実装後は、受信 SUBSCRIBE_TRACKS が NOT_SUPPORTED で閉じられるため、`SUBSCRIBE_TRACKS_ALLOWED_PARAMS` の受信検証への配線は不可能になる。本 issue は「削除」に収束する (未使用定数として削除)。
+
 ## 参照
 
 - draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope)

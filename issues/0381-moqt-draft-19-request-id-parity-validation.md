@@ -39,6 +39,11 @@ INVALID_REQUEST_ID (0x4) は `src/error.ts:22` に定義済みだが受信時検
 
 - draft-ietf-moq-transport-19 §10.1 (Request ID)
 
+## 注記 (0371 実装時)
+
+- 0371 (未対応リクエストの NOT_SUPPORTED 応答) 実装後は、受信 bidi ストリームの先頭が分類 2 (未対応の 6 種: SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の場合にペイロードをデコードしないため、本 issue のパリティ・重複検証は受信 PUBLISH (分類 1) のみに適用される。完了条件の「LSB が期待値と一致しない Request ID を受信した場合に INVALID_REQUEST_ID でセッションが閉じること」「重複 Request ID を受信した場合に INVALID_REQUEST_ID でセッションが閉じること」は 6 種では発火しないため、検証対象を受信 PUBLISH のみとする注記と完了条件の調整が必要。分類 2 の 6 種では §10.1 の MUST (INVALID_REQUEST_ID) が未達のまま残る (残余リスク)。
+- 0371 の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`src/session.ts:3300-3360` の行番号参照をシンボル名に書き換えること。
+
 ## 解決方法
 
 未着手。
