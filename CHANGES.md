@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] 未対応リクエストの受信時に NOT_SUPPORTED を応答してセッションを維持する
+  - draft-ietf-moq-transport-19 §4 に基づき、受信 bidi ストリームの先頭が未対応の 6 種 (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の場合に REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じる
+  - draft-ietf-moq-transport-19 §3.3 に基づき、7 種以外の先頭メッセージは従来どおり PROTOCOL_VIOLATION でセッションを閉じる
+  - @voluntas
 - [FIX] ピアの FIN 後でも PUBLISH_DONE を送信してストリームを閉じる
   - draft-ietf-moq-transport-19 §3.3.2 に基づき、ピアが graceful FIN した場合でも publisher の done() で PUBLISH_DONE を送信してから自方向を FIN で閉じる
   - ピア起因のキャンセル (STOP_SENDING / RESET_STREAM) を PROTOCOL_VIOLATION に昇格させない (isPeerStreamError 判定)

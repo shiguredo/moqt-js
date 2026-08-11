@@ -61,6 +61,10 @@ draft-ietf-moq-transport-19 §10.4 の MUST 要件「The endpoint MUST close the
 - draft-ietf-moq-transport-19 §3.6 (Session Migration / リクエストストリーム GOAWAY は当該リクエストのみ移行)
 - draft-ietf-moq-transport-19 §10.4 (GOAWAY / 重複 GOAWAY の MUST / 旧ストリームクローズの SHOULD / Timeout フィールドと GOING_AWAY リセット)
 
+## 注記 (0371 実装時)
+
+- 0371 (未対応リクエストの NOT_SUPPORTED 応答) の実装で session.ts の `handleIncomingBidirectionalStream` の構造が変更され行がドリフトしたため、`runPublishStreamSubLoop` の GOAWAY ケース等の session.ts 行番号参照をシンボル名に書き換えること。
+
 ## 解決方法
 
 未着手。
