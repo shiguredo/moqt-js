@@ -2,7 +2,7 @@
 
 - Priority: High
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-10
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-publish-done-skipped-after-peer-fin
 - Polished: 2026-08-06
@@ -62,4 +62,9 @@ draft-ietf-moq-transport-19 §5.1 により publisher が PUBLISH を送信し s
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` の `bidiReadRequestStreamMessages`: ピアの graceful FIN 検出時に `receivedFin` フラグを立て、finally の `requestStreams` 削除を「publish ロール && receivedFin」の場合のみ done() 完了後まで遅延する (subscribe ロールとそれ以外の exit 経路は従来どおり削除)。
+- `src/session/publish.ts` の `publishSendPublishDone`: write 失敗エラーを保持し、close 失敗を「close 失敗エラー自体 or write 失敗エラーが `source === "stream"`」の場合に黙殺する (ピア起因のキャンセル)。どちらも stream でない失敗は従来どおり PROTOCOL_VIOLATION でセッションを閉じる。ピア起因のセッション終了後は送信を試行しない sessionState ガードを追加。
+- `src/session/errors.ts` に `isPeerStreamError` を純関数として追加。
+- テスト: `src/session/bidi.test.ts` に実 W3C ストリーム注入方式で 11 件追加 (FIN 後の PUBLISH_DONE → FIN 順序、RESET / STOP_SENDING (0x1 / 0x2) 非昇格、close 失敗 (source: "stream") 非昇格、昇格ブランチ、write 失敗 (source なし) 黙殺、受信前 FIN の失敗処理、subscribe ロール回帰、GOAWAY 経路、セッション終了ガード)。`src/session/errors.test.ts` に `isPeerStreamError` の単体テスト 6 件追加。
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加。
+- `vp check` / `tsc --noEmit` / `vp test run` (988 件) すべて通過。
