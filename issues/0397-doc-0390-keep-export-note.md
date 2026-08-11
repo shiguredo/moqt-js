@@ -24,6 +24,10 @@ issue 0370（PUBLISH_OK 後にピアが FIN すると PUBLISH_DONE が送信さ�
 
 - 0374 (PUBLISH_DONE なしの FIN で subscriber の終了通知が失われる) のテストも `bidiReadRequestStreamMessages` (subscribe ロール) を駆動するため、0390 への export 維持注記に 0374 分も含めること (0374 の設計方針に「0397 が 0370 向けに追加する注記に 0374 分も含める」と明記済み)。あわせて、0374 で新設した `notifySubscriberFin` と `FIN_WITHOUT_PUBLISH_DONE_MESSAGE` は production (session.ts) からも使用されるため 0390 の非公開化対象外である旨を 0390 側に注記する。
 
+## 注記 (0375 実装時)
+
+- 0375 (受信 .session / . 名前空間の拒否) の実装で、`isRejectedReceiveNamespace` (`src/message/parameter.ts`) が新設され `src/session.ts` (handleIncomingBidirectionalStream) から使用されるため、0390 の非公開化対象にしないこと。一方、次の 4 シンボルは 0375 実装後も外部 (index.ts の re-export を除く) から使用されないため、0390 の対象リストに追加で含めること (現状リストには未記載): `isSessionLevelNamespace` (isRejectedReceiveNamespace から同一ファイル内で使用されるのみで export 除去可能)、`isReservedNamespace` / `RESERVED_NAMESPACE_PREFIX` / `SESSION_LEVEL_NAMESPACE` (実行パスから未使用のまま)。
+
 ## 完了条件
 
 - 0390 の issue ファイルに、`bidiReadRequestStreamMessages` の export を維持する旨の注記と、0370 への相互参照が追加されていること。
