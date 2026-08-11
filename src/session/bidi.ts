@@ -869,6 +869,14 @@ export async function bidiReadRequestStreamMessages(
       const { value, done } = await reader.read();
       if (done) {
         receivedFin = true;
+        // draft-ietf-moq-transport-19 §3.3.2:
+        // 受信側 (subscribe ロール) でピア (publisher) が PUBLISH_DONE を
+        // 送らずに FIN した場合は失敗扱いであり、subscriber に通知する。
+        // publish ロールでは requester の FIN は正常完了シグナルであり
+        // 通知しない。
+        if (role === "subscribe") {
+          notifySubscriberFin(session, requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+        }
         break;
       }
 
@@ -1418,6 +1426,66 @@ export function bidiHandlePublishDone(
     streamCount: msg.streamCount.toString(),
     reasonPhrase: msg.reasonPhrase,
   };
+}
+
+// ============================================================================
+// notifySubscriberFin
+// ============================================================================
+
+// ピアが PUBLISH_DONE を送らずに FIN した (失敗扱い) 際のエラーメッセージ
+export const FIN_WITHOUT_PUBLISH_DONE_MESSAGE =
+  "publisher closed request stream without PUBLISH_DONE";
+
+/**
+ * ピアが PUBLISH_DONE を送らずに FIN した (失敗扱い) ことを subscriber へ
+ * 通知する
+ *
+ * draft-ietf-moq-transport-19 §3.3.2 (Graceful Request Stream Closure):
+ * 「An endpoint that receives a FIN before all required messages have
+ * arrived treats the request as failed.」
+ * 受信側 (subscribe ロール) で、ピア (publisher) が Established subscription
+ * の必須メッセージ (PUBLISH_DONE) を送る前に FIN した場合、subscriber の
+ * error コールバックを呼び state を closed にする。
+ *
+ * 本関数は subscribe ロール専用である。publish ロールのピア (requester) の
+ * FIN は正常完了シグナル (§3.3.2) であり、本関数を呼んではならない
+ * (ロール分岐は呼び出し側が行う)。
+ *
+ * ガード:
+ * - subscribers に requestId のエントリが無い場合は何もしない
+ *   (unsubscribe 済み・未登録等)
+ * - GOAWAY 受信済みの requestId では何もしない (GOAWAY は migration 通知
+ *   であり失敗ではない。draft-ietf-moq-transport-19 §10.4「The GOAWAY
+ *   message does not impact subscription state.」。migration の処理は
+ *   アプリが goawayCallback で行う)
+ * - state が "active" でない場合は何もしない (正常な PUBLISH_DONE → FIN は
+ *   bidiHandlePublishDone → handleEnd で既に closed になっている)
+ *
+ * error コールバックを呼んだ後、finally で必ず markClosed する (error
+ * コールバックが throw しても state が closed になることを保証する)。
+ * handleEnd は使用しない (endCallback は PUBLISH_DONE 専用であり、失敗
+ * 扱いの FIN で end を呼ぶと「正常終了」として誤認されるため)。
+ */
+export function notifySubscriberFin(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  error: Error,
+): void {
+  const subscriber = session.subscribers.get(requestId);
+  if (!subscriber) {
+    return;
+  }
+  if (session.goawayReceivedOnRequestStreams.has(requestId)) {
+    return;
+  }
+  if (subscriber.state !== "active") {
+    return;
+  }
+  try {
+    subscriber.handleError(error);
+  } finally {
+    subscriber.markClosed();
+  }
 }
 
 // ============================================================================

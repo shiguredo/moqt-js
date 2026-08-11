@@ -3150,7 +3150,18 @@ export class SessionImpl implements Session {
     try {
       while (impl.state === "active") {
         const { value, done } = await subReader.read();
-        if (done) return;
+        if (done) {
+          // draft-ietf-moq-transport-19 §3.3.2:
+          // 受信 PUBLISH の subscriber (impl) が、ピア (publisher) の
+          // PUBLISH_DONE を送らない FIN を受けた場合は失敗扱いであり、
+          // subscriber に通知する (通知のガードは free function 内で行う)。
+          bidi.notifySubscriberFin(
+            this as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+            new Error(bidi.FIN_WITHOUT_PUBLISH_DONE_MESSAGE),
+          );
+          return;
+        }
 
         const messages = subControlReader.feed(value);
         for (const msg of messages) {
