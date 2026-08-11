@@ -44,6 +44,7 @@ import { PublisherImpl, type Publisher } from "../publisher";
 import type { Property } from "../properties";
 import {
   PUBLISH_OK_ALLOWED_PARAMS,
+  PUBLISH_REQUEST_UPDATE_OK_PARAMS,
   SUBSCRIBE_OK_ALLOWED_PARAMS,
   FETCH_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
@@ -659,42 +660,198 @@ export async function bidiReadTrackStatusResponse(
 }
 
 // ============================================================================
-// readRequestStreamMessages
+// handlePublishRequestUpdate
 // ============================================================================
+// 本セクションの応答送信ヘルパー (bidiSendRequestMessage / bidiSendRequestError
+// / bidiSendRequestOk) と REQUEST_GOING_AWAY_REASON は、後続の
+// readRequestStreamMessages (既存 role=publish ハンドラ) からも使用される。
+
+// GOAWAY 受信後の旧リクエストへの REQUEST_UPDATE を拒否する際の reasonPhrase
+const REQUEST_GOING_AWAY_REASON = "request stream is being migrated";
 
 /**
- * リクエストストリーム上に REQUEST_ERROR (GOING_AWAY) を送信する
+ * リクエストストリーム上にメッセージを送信する
  *
- * draft-ietf-moq-transport-19 §10.4 / §3.3.4:
- * GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE を拒否するために使用する。
- * GOING_AWAY は「The endpoint is rejecting this request because it has sent or
- * received a GOAWAY」を意味する。送信方向が FIN 済みなどの理由で write に
- * 失敗した場合は黙殺する。
+ * 以下の場合は黙殺する (送信されていないため emitDebug は呼ばない):
+ * - controlWriter が未設定
+ * - requestStreams に requestId のエントリが無い
+ * - write に失敗した (送信方向が FIN 済みなど)
+ * 応答送信はベストエフォートであり、失敗しても受信方向の読み取りを継続する
+ * (リクエスト送信側の bidiSendRequestOnBidiStream が controlWriter 不在で
+ * throw するのとは意図が異なる)。
  */
-async function bidiSendRequestErrorGoaway(
+async function bidiSendRequestMessage(
   session: BidiSessionInternal,
   requestId: bigint,
+  type: number,
+  payload: Uint8Array,
+  decoded?: Record<string, unknown>,
 ): Promise<void> {
-  const errorPayload = encodeRequestErrorPayload({
-    type: MessageType.REQUEST_ERROR,
-    errorCode: BigInt(RequestErrorCode.GOING_AWAY),
-    retryInterval: 0n,
-    reasonPhrase: "request stream is being migrated",
-  });
-  const message = session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload);
-  const streamInfo = session.requestStreams.get(requestId);
-  if (streamInfo) {
-    try {
-      await streamInfo.writer.write(message);
-      session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, {
-        errorCode: RequestErrorCode.GOING_AWAY,
-      });
-    } catch {
-      // ストリームが既に閉じている場合は無視 (実際には送信されていないため
-      // emitDebug は呼ばない)
+  if (session.controlWriter) {
+    const message = session.controlWriter.encode(type, payload);
+    const streamInfo = session.requestStreams.get(requestId);
+    if (streamInfo) {
+      try {
+        await streamInfo.writer.write(message);
+        session.emitDebug("send", type, payload, decoded);
+      } catch {
+        // ストリームが既に閉じている場合は無視 (実際には送信されていないため
+        // emitDebug は呼ばない)
+      }
     }
   }
 }
+
+/**
+ * リクエストストリーム上に REQUEST_ERROR を送信する
+ */
+async function bidiSendRequestError(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  errorCode: RequestErrorCode,
+  reasonPhrase: string,
+): Promise<void> {
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(errorCode),
+    retryInterval: 0n,
+    reasonPhrase,
+  });
+  await bidiSendRequestMessage(session, requestId, MessageType.REQUEST_ERROR, errorPayload, {
+    errorCode,
+  });
+}
+
+/**
+ * リクエストストリーム上に REQUEST_OK (空 parameters / 空 trackProperties) を送信する
+ */
+async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint): Promise<void> {
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  await bidiSendRequestMessage(session, requestId, MessageType.REQUEST_OK, okPayload);
+}
+
+/**
+ * 受信 PUBLISH ストリーム上の REQUEST_UPDATE (ケース 1) を処理する
+ *
+ * draft-ietf-moq-transport-19 §10.9 (REQUEST_UPDATE):
+ * 「The sender of a request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
+ * SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send a REQUEST_UPDATE on
+ * the same bidi stream as the request to modify it.」
+ * 受信 PUBLISH の publisher (ピア) が同じ bidi ストリーム上で送る
+ * REQUEST_UPDATE を処理し、§10.9 の MUST に従い REQUEST_OK または
+ * REQUEST_ERROR を 1 通応答する (coalescing はスコープ外)。
+ *
+ * 判定順序:
+ * (1) GOAWAY 受信済みなら GOING_AWAY で応答して終了 (GOAWAY 後 + スコープ
+ *     違反の同時発生時は GOING_AWAY を優先)。
+ * (2) パラメータスコープ検証。違反は §10.2.1 の MUST により
+ *     PROTOCOL_VIOLATION でセッションを閉じる。
+ * (3) 文脈限定パラメータを含む場合は NOT_SUPPORTED で応答する。
+ * (4) REQUEST_OK を応答する (ペイロードは空 parameters / 空 trackProperties)。
+ *
+ * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
+ * デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる (詳細は
+ * インラインコメントを参照)。Request ID は読み取るだけで応答には含めない
+ * (応答は同一 bidi ストリーム上に書き込まれることでリクエストが特定される。
+ * 既存 role=publish ハンドラと同様)。
+ *
+ * moqt-js は受信 PUBLISH のパラメータを状態として保持しないため、REQUEST_OK
+ * で受理したパラメータの適用は行わない (accept-then-ignore の意味論乖離が
+ * 残る)。
+ */
+export async function bidiHandlePublishRequestUpdate(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  payload: Uint8Array,
+): Promise<void> {
+  // 判定順序 (1): GOAWAY 受信済みの旧リクエストへの REQUEST_UPDATE は
+  // REQUEST_ERROR (GOING_AWAY) で拒否する (draft-ietf-moq-transport-19
+  // §10.6「GOING_AWAY: The endpoint has received a GOAWAY and MAY reject
+  // new requests.」の趣旨に基づく拡張適用)。受信 PUBLISH の subscriber は
+  // GOAWAY 処理で送信方向を FIN (writer.close()) で閉じているため、実際の
+  // production では書き込み失敗となり黙殺される (無応答は GOAWAY 後の
+  // マイグレーション対象リクエストに対する先行対応の「無視」と等価)。
+  if (session.goawayReceivedOnRequestStreams.has(requestId)) {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.GOING_AWAY,
+      REQUEST_GOING_AWAY_REASON,
+    );
+    return;
+  }
+
+  // 判定順序 (2) の前に REQUEST_UPDATE ペイロードをデコードする
+  // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。ControlStreamReader
+  // は Length 分の完全なメッセージのみ渡すため、IncompleteDataError は
+  // メッセージ構造の破損を意味する。ここで閉じない場合、呼び出し元のループ
+  // catch (ProtocolViolationError のみ変換) では IncompleteDataError が
+  // 変換されず、セッションが開いたままストリーム読み取りが止まるためである。
+  let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
+  try {
+    decoded = decodeRequestUpdatePayload(payload);
+  } catch (err) {
+    session.closeWithError(
+      new SessionError(
+        `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return;
+  }
+
+  // 判定順序 (2): パラメータスコープ検証
+  // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
+  // "If it appears in some other type of message, the receiving endpoint
+  //  MUST close the connection with a PROTOCOL_VIOLATION."
+  // 検証はメッセージ型単位であり、「for a subscription」等の文脈 (ケース 1
+  // では publisher 送信) に違反するパラメータは判定順序 (3) で処理する。
+  // REQUEST_UPDATE_ALLOWED_PARAMS (無限定 3 種 + 文脈限定 10 種) が
+  // REQUEST_UPDATE に出現し得る全パラメータと完全一致する。
+  if (
+    !validateParameterScope(
+      decoded.parameters,
+      REQUEST_UPDATE_ALLOWED_PARAMS,
+      "REQUEST_UPDATE",
+      (error) => session.closeWithError(error),
+    )
+  ) {
+    return;
+  }
+
+  // 判定順序 (3): 文脈限定パラメータの含有確認
+  // REQUEST_OK で受理するのは PUBLISH_REQUEST_UPDATE_OK_PARAMS (無限定 3 種)
+  // のみ。それ以外の文脈限定パラメータ (SUBSCRIBER_PRIORITY / FORWARD /
+  // LOCATION_FILTER / NEW_GROUP_REQUEST / TRACK_NAMESPACE_PREFIX /
+  // Range Filters の 10 種。列挙は PUBLISH_REQUEST_UPDATE_OK_PARAMS の
+  // JSDoc を参照) を含む REQUEST_UPDATE は REQUEST_ERROR (NOT_SUPPORTED)
+  // で応答する (draft-ietf-moq-transport-19 §10.6「NOT_SUPPORTED: The
+  // endpoint does not support the type of request.」に基づく設計判断)。
+  if (decoded.parameters.some((param) => !PUBLISH_REQUEST_UPDATE_OK_PARAMS.has(param.type))) {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.NOT_SUPPORTED,
+      "parameter not supported for request update",
+    );
+    return;
+  }
+
+  // 判定順序 (4): REQUEST_OK を応答する
+  // draft-ietf-moq-transport-19 §10.9:
+  // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
+  //  or REQUEST_ERROR message indicating if the update was successful, ...」
+  // (末尾の coalescing 例外は本関数のスコープ外)
+  await bidiSendRequestOk(session, requestId);
+}
+
+// ============================================================================
+// readRequestStreamMessages
+// ============================================================================
 
 export async function bidiReadRequestStreamMessages(
   session: BidiSessionInternal,
@@ -761,7 +918,12 @@ export async function bidiReadRequestStreamMessages(
               // (§10.9 MUST)。subscribe ロールは送信方向が FIN 済みのため応答
               // 不能であり、無視する。
               if (role === "publish") {
-                await bidiSendRequestErrorGoaway(session, requestId);
+                await bidiSendRequestError(
+                  session,
+                  requestId,
+                  RequestErrorCode.GOING_AWAY,
+                  REQUEST_GOING_AWAY_REASON,
+                );
               }
               break;
             }

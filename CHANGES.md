@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] 受信 PUBLISH ストリーム上の REQUEST_UPDATE を PROTOCOL_VIOLATION で誤検知する
+  - draft-ietf-moq-transport-19 §10.9 ケース 1 に基づき、受信 PUBLISH の publisher による REQUEST_UPDATE に REQUEST_OK / REQUEST_ERROR を応答してセッションを維持する
+  - パラメータスコープ違反は §10.2.1 の MUST に従い PROTOCOL_VIOLATION でセッションを閉じ、文脈限定パラメータ (SUBSCRIBER_PRIORITY / FORWARD / LOCATION_FILTER / NEW_GROUP_REQUEST / TRACK_NAMESPACE_PREFIX / Range Filters) を含む REQUEST_UPDATE は REQUEST_ERROR (NOT_SUPPORTED) で応答する
+  - GOAWAY 受信後の REQUEST_UPDATE には REQUEST_ERROR (GOING_AWAY) で応答を試みる (送信方向が FIN 済みの場合は黙殺される)
+  - @voluntas
 - [FIX] リクエストストリーム上の重複 GOAWAY を検出してセッションを閉じる
   - draft-ietf-moq-transport-19 §10.4 に基づき、GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を PROTOCOL_VIOLATION で検出する
   - GOAWAY 受信時に subscriber の送信方向を FIN で閉じ、publisher は done() による PUBLISH_DONE → FIN の経路を維持する
