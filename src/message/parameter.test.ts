@@ -17,6 +17,7 @@ import {
   validateTrackNameSize,
   MAX_TRACK_NAME_SIZE,
   MAX_TRACK_NAMESPACE_SIZE,
+  isRejectedReceiveNamespace,
 } from "./parameter";
 import { ProtocolViolationError } from "../error";
 import { encodeVarint } from "../varint";
@@ -275,4 +276,87 @@ test("重複パラメータで ProtocolViolationError", () => {
   data.set(secondValueBytes, pos);
 
   assert.throws(() => decodeParameters(data), /duplicate message parameter type/);
+});
+
+/**
+ * isRejectedReceiveNamespace のテスト
+ * draft-ietf-moq-transport-19 Section 3.2.1 (Reserved Namespaces):
+ * "A Track Namespace whose first field is exactly . (a single period,
+ *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
+ *  MUST NOT publish tracks or namespaces under it and MUST reject
+ *  requests referencing it with DOES_NOT_EXIST."
+ * draft-ietf-moq-transport-19 Section 3.2.2 (Session-Level Tracks and Namespaces):
+ * "An endpoint that receives a request for an unrecognized session-level
+ *  track or namespace MUST reject it with REQUEST_ERROR using error code
+ *  DOES_NOT_EXIST rather than passing it to the Application."
+ */
+test("isRejectedReceiveNamespace: 先頭フィールドが .session なら拒否対象", () => {
+  // §3.2.2: セッションレベルの名前空間は DOES_NOT_EXIST で拒否する
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".session"]).tuple), true);
+});
+
+test("isRejectedReceiveNamespace: 先頭フィールドが .session で複数フィールドでも拒否対象", () => {
+  // §3.2.2: セッションレベル名前空間の下の track も拒否対象
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".session", "sub"]).tuple), true);
+});
+
+test("isRejectedReceiveNamespace: 先頭フィールドが . 単体なら拒否対象", () => {
+  // §3.2.1: 先頭フィールドが "." (0x2e) 単体の名前空間は DOES_NOT_EXIST で拒否する
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace(["."]).tuple), true);
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".", "sub"]).tuple), true);
+});
+
+test("isRejectedReceiveNamespace: その他の予約名前空間 (.foo) は拒否しない", () => {
+  // §3.2.1: 認識されない予約名前空間はアプリへ渡す (将来の拡張を壊さないため)
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".foo"]).tuple), false);
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace([".session2"]).tuple), false);
+});
+
+test("isRejectedReceiveNamespace: 通常の名前空間は拒否しない", () => {
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace(["example"]).tuple), false);
+  assert.equal(isRejectedReceiveNamespace(createTrackNamespace(["example", "sub"]).tuple), false);
+});
+
+test("isRejectedReceiveNamespace: 空の名前空間は拒否しない", () => {
+  // 先頭フィールドが存在しないため §3.2.1 / §3.2.2 の対象外
+  assert.equal(isRejectedReceiveNamespace([]), false);
+});
+
+test("isRejectedReceiveNamespace: 先頭フィールドが空バイト列なら拒否しない", () => {
+  // 先頭フィールドが空 (. でも .session でもない) ため拒否対象外
+  assert.equal(isRejectedReceiveNamespace([new Uint8Array(0)]), false);
+});
+
+test("isRejectedReceiveNamespace: . 単体をバイト列リテラルで判定する", () => {
+  // §3.2.1 は 0x2e をバイト値で定義しているため、エンコーダに依存しない
+  // バイト列直接の検証。0x2e を含む他のバイト列 (. 単体以外) は拒否しない
+  assert.equal(isRejectedReceiveNamespace([new Uint8Array([0x2e])]), true);
+  assert.equal(isRejectedReceiveNamespace([new Uint8Array([0x2e, 0x2e])]), false);
+  assert.equal(isRejectedReceiveNamespace([new Uint8Array([0x2e, 0xff])]), false);
+});
+
+test("isRejectedReceiveNamespace: .session をバイト列リテラルで判定する", () => {
+  // §3.2.2 は .session を 8 バイト (0x2e 0x73 0x65 0x73 0x73 0x69 0x6f
+  // 0x6e) で定義しているため、エンコーダに依存しないバイト列直接の検証
+  assert.equal(
+    isRejectedReceiveNamespace([new Uint8Array([0x2e, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e])]),
+    true,
+  );
+  assert.equal(
+    isRejectedReceiveNamespace([
+      new Uint8Array([0x2e, 0x73, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e]),
+      new Uint8Array([0x74]),
+    ]),
+    true,
+  );
+});
+
+test("isRejectedReceiveNamespace: .session の類似バイト列は拒否しない", () => {
+  // .session は完全一致のみ拒否対象 (プレフィックス・大文字小文字の
+  // 違いは対象外)
+  assert.equal(isRejectedReceiveNamespace([new Uint8Array([0x2e, 0x73, 0x65, 0x73, 0x73])]), false);
+  assert.equal(
+    isRejectedReceiveNamespace([new Uint8Array([0x2e, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e])]),
+    false,
+  );
 });

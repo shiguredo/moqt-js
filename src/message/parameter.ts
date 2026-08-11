@@ -385,6 +385,41 @@ export function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
 }
 
 /**
+ * 受信した Track Namespace を DOES_NOT_EXIST で拒否すべきかを判定する
+ *
+ * draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces):
+ * "A Track Namespace whose first field is exactly . (a single period,
+ *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
+ *  MUST NOT publish tracks or namespaces under it and MUST reject
+ *  requests referencing it with DOES_NOT_EXIST."
+ * draft-ietf-moq-transport-19 §3.2.2 (Session-Level Tracks and Namespaces):
+ * "An endpoint that receives a request for an unrecognized session-level
+ *  track or namespace MUST reject it with REQUEST_ERROR using error code
+ *  DOES_NOT_EXIST rather than passing it to the Application."
+ *
+ * 拒否対象は "." 単体と ".session" のみに限定する。それ以外の予約
+ * 名前空間 (例: ".foo") は §3.2.1 の "an endpoint that receives a
+ * request for an unrecognized reserved namespace MUST pass it to the
+ * Application" により拒否せずアプリへ渡す (送信側の ". で始まる
+ * すべてを拒否する方針 (validateTrackNamespaceForSend) は受信側には
+ * 持ち込まない)。
+ *
+ * 将来 .session 配下の既知の track を実装する場合、§3.2.2 の拒否 MUST
+ * は "unrecognized" な session-level track / namespace に限定される
+ * ため、本関数を namespace 単位の全拒否から track 単位の認識判定へ
+ * 緩和すること。
+ */
+export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
+  if (tuple.length === 0) return false;
+  // "." 単体 (0x2e 1 バイトのみ) は §3.2.1 により MUST 拒否
+  if (tuple[0].length === 1 && tuple[0][0] === 0x2e) return true;
+  // 先頭フィールドが .session なら §3.2.2 により MUST 拒否。
+  // 本関数は namespace のみで判定し、Track Name は判定に使わないため、
+  // Track Name が空でも非空でも拒否対象になる (空 Track Name の MUST 拒否を包含)。
+  return isSessionLevelNamespace(tuple);
+}
+
+/**
  * Track Name をエンコードする（サイズ検証付き）
  *
  * draft-ietf-moq-transport-19:
