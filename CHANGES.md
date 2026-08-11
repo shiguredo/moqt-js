@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] PUBLISH_DONE なしの FIN で subscriber の終了通知が失われる
+  - draft-ietf-moq-transport-19 §3.3.2 に基づき、受信側 (subscribe ロール) でピアが PUBLISH_DONE を送らずに FIN した場合に error コールバックで通知し state を closed にする
+  - publish ロールの FIN は正常完了シグナルとして従来どおり通知しない
+  - GOAWAY 受信後の FIN は migration 通知のため通知しない (§10.4)
+  - @voluntas
 - [FIX] 受信 PUBLISH ストリーム上の REQUEST_UPDATE を PROTOCOL_VIOLATION で誤検知する
   - draft-ietf-moq-transport-19 §10.9 ケース 1 に基づき、受信 PUBLISH の publisher による REQUEST_UPDATE に REQUEST_OK / REQUEST_ERROR を応答してセッションを維持する
   - パラメータスコープ違反は §10.2.1 の MUST に従い PROTOCOL_VIOLATION でセッションを閉じ、文脈限定パラメータ (SUBSCRIBER_PRIORITY / FORWARD / LOCATION_FILTER / NEW_GROUP_REQUEST / TRACK_NAMESPACE_PREFIX / Range Filters) を含む REQUEST_UPDATE は REQUEST_ERROR (NOT_SUPPORTED) で応答する
