@@ -3192,15 +3192,26 @@ export class SessionImpl implements Session {
             continue;
           }
           if (msg.type === MessageType.REQUEST_UPDATE) {
-            // draft-ietf-moq-transport-19 §10.4 / §3.3.4:
-            // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE は無視する。
-            // 受信 PUBLISH の subscriber は GOAWAY 処理で送信方向を FIN
-            // (writer.close()) で閉じているため、GOING_AWAY 応答を書き込むことが
-            // できない。REQUEST_UPDATE を無視することで、従来の unknown message
-            // type による PROTOCOL_VIOLATION (セッション切断) を回避する。
-            if (this.goawayReceivedOnRequestStreams.has(publishRequestId)) {
-              continue;
+            // draft-ietf-moq-transport-19 §10.9 ケース 1:
+            // 「The sender of a request (SUBSCRIBE, PUBLISH, FETCH,
+            // PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can
+            // later send a REQUEST_UPDATE on the same bidi stream as the
+            // request to modify it.」
+            // 受信 PUBLISH の publisher (ピア) による REQUEST_UPDATE を処理し、
+            // REQUEST_OK / REQUEST_ERROR を 1 通応答する (§10.9 MUST)。
+            // GOAWAY 受信後 / パラメータスコープ検証 / 文脈限定パラメータの
+            // 判定は free function 内で行う (GOING_AWAY 応答も同関数の判定
+            // 順序 (1) が担う)。スコープ違反等でセッションが閉じた場合は、
+            // 同一チャンクの残りメッセージの処理を打ち切る。
+            await bidi.bidiHandlePublishRequestUpdate(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+              msg.payload,
+            );
+            if (this.sessionState !== "connected") {
+              return;
             }
+            continue;
           }
           if (msg.type === MessageType.REQUEST_OK) {
             bidi.bidiHandleRequestUpdateOk(
