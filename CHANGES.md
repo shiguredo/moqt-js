@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] encodeVarint / varintSize が 2^64-1 を超える入力で例外を投げる
+  - draft-ietf-moq-transport-19 §1.4.1 に基づき、2^64 以上の入力は varint で表現できないため varintSize / encodeVarint が例外を投げる
+  - MAX_VARINT (2^64-1) 定数を varint.ts に追加して export する
+  - Subgroup Header のエンコードをストリーム生成前に移動し、2^64 超過時にストリーム未生成のまま失敗させる
+  - @voluntas
 - [CHANGE] 受信 PUBLISH の .session / . 名前空間を DOES_NOT_EXIST で拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、受信 PUBLISH の Track Namespace 先頭フィールドが .session または . 単体の場合に REQUEST_ERROR (DOES_NOT_EXIST) で拒否し、アプリの onPublish へ渡さない
   - それ以外の予約名前空間 (例: .foo) は §3.2.1 の MUST に従い従来どおりアプリへ渡す

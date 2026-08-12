@@ -32,12 +32,26 @@ const THRESHOLD_8BYTE = 72057594037927935n;
 // 9 byte: 全 64 ビット
 
 /**
+ * varint で表現できる最大値 (2^64-1)
+ *
+ * draft-ietf-moq-transport-19 Section 1.4.1:
+ * 9 バイト varint の Range は 0-18446744073709551615 (= 2^64-1)。
+ */
+export const MAX_VARINT = 18446744073709551615n;
+
+/**
  * varint のエンコードに必要なバイト数を返す
+ *
+ * 2^64-1 を超える値は仕様の範囲外 (draft-ietf-moq-transport-19 Section 1.4.1) のため、
+ * 負値と同様に例外を投げる。
  */
 export function varintSize(value: number | bigint): number {
   const v = BigInt(value);
   if (v < 0n) {
     throw new Error(`negative value not allowed: ${value}`);
+  }
+  if (v > MAX_VARINT) {
+    throw new Error(`value exceeds varint maximum: ${value} > ${MAX_VARINT}`);
   }
   if (v <= THRESHOLD_1BYTE) return 1;
   if (v <= THRESHOLD_2BYTE) return 2;
@@ -56,6 +70,8 @@ export function varintSize(value: number | bigint): number {
  * draft-ietf-moq-transport-19 Section 1.4.1:
  * Leading 1-bits の数で長さを示し、最初の 0 ビット後の残りビットと
  * 後続バイトに値をネットワークバイトオーダーでエンコードする。
+ *
+ * 2^64-1 を超える値は仕様の範囲外のため、例外を投げる (varintSize で検証)。
  */
 export function encodeVarint(value: number | bigint): Uint8Array {
   const v = BigInt(value);
