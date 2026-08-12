@@ -50,6 +50,12 @@
   - draft-ietf-moq-transport-19 §10.19.1 / §6.3 / §5.1.3 に基づき、subscribeTracks() と subscriber.update() で Range Filters (TRACK_PROPERTY_FILTER 含む) を送信可能にする
   - subscribeTracks() にピアの MAX_FILTER_RANGES ガードを追加し、subscribe() と共通の validateRangeFilterLimits に整理する
   - @voluntas
+- [ADD] SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Track Namespace Prefix 更新 API を追加する
+  - draft-ietf-moq-transport-19 §10.9.2 に基づき、NamespaceSubscription / TracksSubscription に update() を追加し、REQUEST_UPDATE で TRACK_NAMESPACE_PREFIX (0x34) を送信して prefix を更新できるようにする
+  - REQUEST_OK 受信後に namespacePrefix を更新し、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリームクローズ時は reject して prefix を更新しない
+  - §10.9.2 の per-type 独立 overlap 制約を送信前に検証し、同一型のアクティブなサブスクリプション (更新対象自身を除く) と共通 prefix を持つ更新は throw する
+  - 更新反映は単一スロットで管理するため、更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目は throw する
+  - @voluntas
 - [CHANGE] Object Properties のエンコードを delta encoding に追従させる
   - draft-ietf-moq-transport-19 §11.2.1.2 / §2.5 に基づき、Object Properties を Key-Value-Pairs（Figure 2、delta encoding）でエンコード / デコードする
   - mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties / appendGreaseObjectProperty を delta 規約に整合させる

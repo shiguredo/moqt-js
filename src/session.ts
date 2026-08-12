@@ -695,6 +695,22 @@ export interface NamespaceSubscriptionCallbacks {
 }
 
 /**
+ * Namespace サブスクリプションの更新オプション
+ *
+ * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+ * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータ (0x34) を含めて
+ * 確立済みの SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Track Namespace Prefix を
+ * 更新する。
+ */
+export interface NamespaceUpdateOptions {
+  /**
+   * 更新後の Track Namespace Prefix
+   * draft-ietf-moq-transport-19 §10.2.19 (TRACK_NAMESPACE_PREFIX Parameter)
+   */
+  trackNamespacePrefix: string[];
+}
+
+/**
  * Namespace サブスクリプション
  */
 export interface NamespaceSubscription {
@@ -703,6 +719,26 @@ export interface NamespaceSubscription {
    * サブスクリプションを解除する
    */
   unsubscribe(): Promise<void>;
+  /**
+   * Track Namespace Prefix を更新する (REQUEST_UPDATE を送信)
+   *
+   * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+   * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
+   * クローズで reject する。
+   *
+   * 以下の場合はローカル検証として throw する:
+   * - サブスクリプションが active でない
+   * - GOAWAY 受信後 (ストリーム移行中)
+   * - ピアの MAX_REQUEST_UPDATES を超える送信
+   * - 前の更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目
+   *   (前の update() の settle を待ってから呼ぶこと)
+   * - 予約 namespace / .session への更新
+   * - 同一型のアクティブなサブスクリプション (更新対象自身を除く) と
+   *   共通 prefix を持つ更新
+   *
+   * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX)
+   */
+  update(options: NamespaceUpdateOptions): Promise<void>;
 }
 
 /**
@@ -763,6 +799,29 @@ export interface TracksSubscription {
    * サブスクリプションを解除する
    */
   unsubscribe(): Promise<void>;
+  /**
+   * Track Namespace Prefix を更新する (REQUEST_UPDATE を送信)
+   *
+   * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+   * "Updating the prefix of a SUBSCRIBE_TRACKS has no effect on existing
+   *  subscriptions." (既存の確立済み SubscriberImpl には影響しない)
+   *
+   * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
+   * クローズで reject する。
+   *
+   * 以下の場合はローカル検証として throw する:
+   * - サブスクリプションが active でない
+   * - GOAWAY 受信後 (ストリーム移行中)
+   * - ピアの MAX_REQUEST_UPDATES を超える送信
+   * - 前の更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目
+   *   (前の update() の settle を待ってから呼ぶこと)
+   * - 予約 namespace / .session への更新
+   * - 同一型のアクティブなサブスクリプション (更新対象自身を除く) と
+   *   共通 prefix を持つ更新
+   *
+   * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX)
+   */
+  update(options: NamespaceUpdateOptions): Promise<void>;
 }
 
 /**
@@ -1091,6 +1150,7 @@ export class SessionImpl implements Session {
       callbacks: NamespaceSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
+      pendingPrefix?: string[];
       stream?: WebTransportBidirectionalStream;
       streamReader?: ReadableStreamDefaultReader<Uint8Array>;
       controlReader?: ControlStreamReader;
@@ -1111,6 +1171,7 @@ export class SessionImpl implements Session {
       callbacks: TracksSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
+      pendingPrefix?: string[];
       stream?: WebTransportBidirectionalStream;
       streamReader?: ReadableStreamDefaultReader<Uint8Array>;
       controlReader?: ControlStreamReader;
@@ -2896,12 +2957,44 @@ export class SessionImpl implements Session {
       await this.closeNamespaceSubscription(requestId);
     };
 
+    const update = async (options: NamespaceUpdateOptions): Promise<void> => {
+      await this.sendNamespaceRequestUpdate(requestId, "namespace", options);
+    };
+
     return {
       get state() {
         return getState();
       },
       unsubscribe,
+      update,
     };
+  }
+
+  /**
+   * Namespace / Tracks サブスクリプションの Track Namespace Prefix を更新する
+   *
+   * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+   * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータを含めて送信する。
+   * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
+   */
+  private async sendNamespaceRequestUpdate(
+    requestId: bigint,
+    kind: "namespace" | "tracks",
+    options: NamespaceUpdateOptions,
+  ): Promise<void> {
+    const subscription =
+      kind === "namespace"
+        ? this.namespaceSubscriptions.get(requestId)
+        : this.tracksSubscriptions.get(requestId);
+    if (!subscription || subscription.state !== "active" || !subscription.writer) {
+      throw new Error(`${kind} subscription is not active`);
+    }
+    return bidi.bidiSendNamespaceRequestUpdate(
+      this as unknown as bidi.BidiSessionInternal,
+      requestId,
+      subscription.writer,
+      options,
+    );
   }
 
   /**
@@ -2946,11 +3039,16 @@ export class SessionImpl implements Session {
       await this.closeTracksSubscription(requestId);
     };
 
+    const update = async (options: NamespaceUpdateOptions): Promise<void> => {
+      await this.sendNamespaceRequestUpdate(requestId, "tracks", options);
+    };
+
     return {
       get state() {
         return getState();
       },
       unsubscribe,
+      update,
     };
   }
 
