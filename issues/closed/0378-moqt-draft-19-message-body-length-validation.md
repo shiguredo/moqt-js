@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-message-body-length-validation
 - Polished: 2026-08-08
@@ -55,4 +55,15 @@ Length フィールドで切り出した Body に余剰バイトを載せた不�
 
 ## 解決方法
 
-未着手。
+- draft-ietf-moq-transport-19 §10 の MUST「If the length does not match the length of the Message Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」に基づき、対象 11 デコーダの末尾で消費バイト数と `data.length` の一致検証を追加した
+  - `src/message/subscribe.ts` の `decodeSubscribePayload` / `decodeRequestUpdatePayload`
+  - `src/message/trackstatus.ts` の `decodeTrackStatusPayload`
+  - `src/message/namespace.ts` の `decodePublishNamespacePayload` / `decodeSubscribeNamespacePayload` / `decodeSubscribeTracksPayload` / `decodeNamespacePayload` / `decodeNamespaceDonePayload` / `decodePublishSkippedPayload`
+  - `src/message/fetch.ts` の `decodeFetchPayload`
+  - `src/message/publish.ts` の `decodePublishDonePayload`
+- 検証は既存の `decodeGoawayPayload` / `decodeRequestErrorPayload` のパターンに合わせ、不一致時は `ProtocolViolationError` を throw する。戻り値は変更しない
+- `decodeNamespacePayload` / `decodeNamespaceDonePayload` は `decodeTrackNamespace` の第二戻り値 (consumed) を取得するように修正した
+- `decodePublishSkippedPayload` の Track Name 長と `decodePublishDonePayload` の Reason Phrase 長の `totalConsumed` 計上漏れを修正した
+- 検証不能デコーダ (REQUEST_OK / SUBSCRIBE_OK / FETCH_OK / PUBLISH / SETUP) は Track Properties / Setup Options が残りバイトすべてを消費する構造のため対象外
+- テスト: 各 `src/message/*.prop.ts` に「正常メッセージの末尾に後続バイト列を連結すると `ProtocolViolationError` を throw する」PBT を追加した (SUBSCRIBE / REQUEST_UPDATE / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED / FETCH (Standalone / Joining) / PUBLISH_DONE の 12 テスト)
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した

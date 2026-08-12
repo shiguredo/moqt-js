@@ -232,6 +232,93 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
 });
 
 /**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は FETCH (Standalone) ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な FETCH (Standalone) の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("FETCH (Standalone) の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespaceArb,
+      trackNameArb,
+      locationArb,
+      locationArb,
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, trackNamespace, trackName, startLocation, endLocation, parameters, trailing) => {
+        const original: Fetch = {
+          type: MessageType.FETCH,
+          requestId,
+          fetchType: FetchType.STANDALONE,
+          standalone: {
+            trackNamespace,
+            trackName,
+            startLocation,
+            endLocation,
+          },
+          parameters,
+        };
+
+        const encoded = encodeFetchPayload(original);
+        // 正常な FETCH の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は FETCH (Joining) ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な FETCH (Joining) の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("FETCH (Joining) の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.constantFrom(FetchType.RELATIVE_JOINING, FetchType.ABSOLUTE_JOINING),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, fetchType, joiningRequestId, joiningStart, parameters, trailing) => {
+        const original: Fetch = {
+          type: MessageType.FETCH,
+          requestId,
+          fetchType,
+          joining: {
+            joiningRequestId,
+            joiningStart,
+          },
+          parameters,
+        };
+
+        const encoded = encodeFetchPayload(original);
+        // 正常な FETCH の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
  * "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
  *  the session with a PROTOCOL_VIOLATION."

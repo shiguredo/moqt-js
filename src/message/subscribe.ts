@@ -4,6 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   type Parameter,
@@ -115,6 +116,17 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
 
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
+
+  // draft-ietf-moq-transport-19 Section 10:
+  // "If the length does not match the length of the Message Body,
+  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  // Parameters は SUBSCRIBE ペイロードの最後のフィールドであり、
+  // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
+  if (offset + totalConsumed !== data.length) {
+    throw new ProtocolViolationError(
+      `trailing data in SUBSCRIBE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+    );
+  }
 
   return {
     type: MessageType.SUBSCRIBE,
@@ -229,6 +241,17 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
 
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
+
+  // draft-ietf-moq-transport-19 Section 10:
+  // "If the length does not match the length of the Message Body,
+  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  // Parameters は REQUEST_UPDATE ペイロードの最後のフィールドであり、
+  // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
+  if (offset + totalConsumed !== data.length) {
+    throw new ProtocolViolationError(
+      `trailing data in REQUEST_UPDATE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+    );
+  }
 
   return {
     type: MessageType.REQUEST_UPDATE,

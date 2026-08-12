@@ -180,6 +180,17 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
+  // draft-ietf-moq-transport-19 Section 10:
+  // "If the length does not match the length of the Message Body,
+  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  // Parameters は FETCH ペイロードの最後のフィールドであり、
+  // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
+  if (offset + totalConsumed !== data.length) {
+    throw new ProtocolViolationError(
+      `trailing data in FETCH: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+    );
+  }
+
   return {
     type: MessageType.FETCH,
     requestId,

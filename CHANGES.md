@@ -15,6 +15,10 @@
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、受信 PUBLISH の Track Namespace 先頭フィールドが .session または . 単体の場合に REQUEST_ERROR (DOES_NOT_EXIST) で拒否し、アプリの onPublish へ渡さない
   - それ以外の予約名前空間 (例: .foo) は §3.2.1 の MUST に従い従来どおりアプリへ渡す
   - @voluntas
+- [FIX] 制御メッセージのデコード消費バイト数と Body 長の不一致を検出する
+  - draft-ietf-moq-transport-19 §10 の MUST に基づき、SUBSCRIBE / REQUEST_UPDATE / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED / FETCH / PUBLISH_DONE のデコーダで Body 長と消費バイト数の一致を検証し、不一致なら ProtocolViolationError を throw する
+  - PUBLISH_SKIPPED / PUBLISH_DONE の可変長フィールド消費バイト数の計上漏れを修正する
+  - @voluntas
 - [FIX] PUBLISH_DONE なしの FIN で subscriber の終了通知が失われる
   - draft-ietf-moq-transport-19 §3.3.2 に基づき、受信側 (subscribe ロール) でピアが PUBLISH_DONE を送らずに FIN した場合に error コールバックで通知し state を closed にする
   - publish ロールの FIN は正常完了シグナルとして従来どおり通知しない
