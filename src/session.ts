@@ -94,6 +94,7 @@ import {
   incomingProcessSubgroupObjects,
   incomingHandleFirstBidiMessage,
   incomingSendRequestErrorAndClose,
+  incomingValidateRequestId,
 } from "./session/incoming";
 import {
   namespaceStartNamespaceStreamLoop,
@@ -1057,6 +1058,12 @@ export class SessionImpl implements Session {
   // draft-ietf-moq-transport-19 §10.4 (GOAWAY):
   // 単一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
   private goawayReceivedOnRequestStreams = new Set<bigint>();
+  // 受信済み Request ID の追跡 (重複検出用)
+  // draft-ietf-moq-transport-19 §10.1:
+  // 重複 Request ID の受信は INVALID_REQUEST_ID でセッションを閉じる。
+  // Set には add のみ行い、リクエスト完了後も削除しない (セッション内での
+  // 再出現の禁止のため)。セッションクローズ時にクリアする。
+  private receivedRequestIds = new Set<bigint>();
   private sentGoaway = false;
   private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // draft-ietf-moq-transport-19 §10.3.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
@@ -2399,6 +2406,9 @@ export class SessionImpl implements Session {
     // GOAWAY 受信追跡をクリア
     this.goawayReceivedOnRequestStreams.clear();
 
+    // 受信済み Request ID の追跡をクリア
+    this.receivedRequestIds.clear();
+
     // Pending Subgroup ストリームの buffer を解放
     // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
     this.pendingSubgroupBuffer.notifyAll("session-close");
@@ -3404,28 +3414,8 @@ export class SessionImpl implements Session {
       return;
     }
 
-    const firstControlReader = new ControlStreamReader();
-    let firstMsg: ControlMessage;
-
-    try {
-      const firstMsgReader = stream.readable.getReader();
-      try {
-        while (true) {
-          const { value, done } = await firstMsgReader.read();
-          if (done) return;
-          // 同一チャンクに連結された先頭以降のメッセージは破棄される
-          // (先頭メッセージのみを 3 分類の対象とする。既存挙動の継続)
-          const messages = firstControlReader.feed(value);
-          if (messages.length > 0) {
-            firstMsg = messages[0];
-            break;
-          }
-        }
-      } finally {
-        firstMsgReader.releaseLock();
-      }
-    } catch (err) {
-      this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+    const firstMsg = await this.readFirstBidiMessage(stream);
+    if (firstMsg === null) {
       return;
     }
 
@@ -3475,6 +3465,13 @@ export class SessionImpl implements Session {
       trackNamespace: publishTrackNamespace,
       trackName: publishTrackName,
     });
+
+    // draft-ietf-moq-transport-19 §10.1 (Request ID):
+    // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
+    // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
+    if (!this.validateIncomingPublishRequestId(publishRequestId)) {
+      return;
+    }
 
     // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2:
     // 受信 PUBLISH の Track Namespace 先頭フィールドが "." 単体または
@@ -3675,6 +3672,59 @@ export class SessionImpl implements Session {
    */
   private handleIncomingDatagram(data: Uint8Array): void {
     incomingHandleDatagram(this as unknown as SessionInternal, data);
+  }
+
+  /**
+   * 受信 bidi ストリームの先頭メッセージを読み取る
+   *
+   * 同一チャンクに連結された先頭以降のメッセージは破棄される
+   * (先頭メッセージのみを 3 分類の対象とする。既存挙動の継続)。
+   *
+   * @returns 先頭メッセージ。FIN 検出時・読み取り失敗時は null
+   */
+  private async readFirstBidiMessage(
+    stream: WebTransportBidirectionalStream,
+  ): Promise<ControlMessage | null> {
+    const firstControlReader = new ControlStreamReader();
+    try {
+      const firstMsgReader = stream.readable.getReader();
+      try {
+        while (true) {
+          const { value, done } = await firstMsgReader.read();
+          if (done) return null;
+          const messages = firstControlReader.feed(value);
+          if (messages.length > 0) {
+            return messages[0];
+          }
+        }
+      } finally {
+        firstMsgReader.releaseLock();
+      }
+    } catch (err) {
+      this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+      return null;
+    }
+  }
+
+  /**
+   * 受信 PUBLISH の Request ID のパリティ・重複検証を行う
+   *
+   * draft-ietf-moq-transport-19 §10.1 (Request ID):
+   * moqt-js はクライアントロールのため、受信 Request ID はサーバー発の奇数が
+   * 期待値。違反時は INVALID_REQUEST_ID でセッションを閉じる。
+   * 予約 namespace 拒否 / パラメータスコープ検証 / DUPLICATE_TRACK_ALIAS の
+   * 各既存検証より前に配置する (§10.1 の MUST は受信即時閉鎖のため)。
+   *
+   * 適用範囲は受信 PUBLISH のみ。受信リクエスト 6 種 (ペイロード非デコードの
+   * ため検証は発火しない) と受信 REQUEST_UPDATE (スコープ外) では適用されない
+   * (残余リスク)。
+   *
+   * @returns 検証に合格した場合は true、違反でセッションを閉じた場合は false
+   */
+  private validateIncomingPublishRequestId(requestId: bigint): boolean {
+    return incomingValidateRequestId(requestId, this.receivedRequestIds, (error) =>
+      this.closeWithError(error),
+    );
   }
 
   /**
