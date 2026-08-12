@@ -15,6 +15,7 @@ import {
   incomingClassifyFirstBidiMessage,
   incomingHandleFirstBidiMessage,
   incomingSendRequestErrorAndClose,
+  incomingValidateRequestId,
 } from "./incoming";
 import type { SessionInternal } from "./types";
 
@@ -303,3 +304,116 @@ function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
   }
   return result;
 }
+
+// ============================================================================
+// incomingValidateRequestId のテスト
+// draft-ietf-moq-transport-19 §10.1 (Request ID)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10.1:
+ * 「If an endpoint receives a Request ID where the least significant bit is
+ *  incorrect for the sender, or a duplicate Request ID, it MUST close the
+ *  session with INVALID_REQUEST_ID.」
+ * moqt-js はクライアントロールのため、受信 Request ID はサーバー発の奇数が
+ * 期待値。偶数の Request ID は INVALID_REQUEST_ID でセッションを閉じる。
+ */
+test("incomingValidateRequestId: 偶数 Request ID で INVALID_REQUEST_ID", () => {
+  const received = new Set<bigint>();
+  let closedWithError: SessionError | undefined;
+
+  const result = incomingValidateRequestId(2n, received, (error) => {
+    closedWithError = error;
+  });
+
+  assert.isFalse(result);
+  assert.isDefined(closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(closedWithError!.message.includes("parity"));
+  // 違反時は Set に add しない
+  assert.equal(received.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.1:
+ * 正常な奇数 Request ID は検証を通過し、Set に記録される。
+ */
+test("incomingValidateRequestId: 奇数 Request ID は通過して Set に記録される", () => {
+  const received = new Set<bigint>();
+  let closedWithError: SessionError | undefined;
+
+  const result = incomingValidateRequestId(1n, received, (error) => {
+    closedWithError = error;
+  });
+
+  assert.isTrue(result);
+  assert.isUndefined(closedWithError);
+  assert.isTrue(received.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.1:
+ * 同一 Request ID の再出現は INVALID_REQUEST_ID でセッションを閉じる。
+ */
+test("incomingValidateRequestId: 重複 Request ID で INVALID_REQUEST_ID", () => {
+  const received = new Set<bigint>([1n]);
+  let closedWithError: SessionError | undefined;
+
+  const result = incomingValidateRequestId(1n, received, (error) => {
+    closedWithError = error;
+  });
+
+  assert.isFalse(result);
+  assert.isDefined(closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(closedWithError!.message.includes("duplicate"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.1:
+ * パリティ検証を通過した Request ID は、その後の拒否経路 (予約 namespace 拒否 /
+ * UNINTERESTED 等) で return されても Set に記録され、同一 ID の再送が検出
+ * されることを検証する。
+ */
+test("incomingValidateRequestId: 検証通過後に Set へ add され再送が検出される", () => {
+  const received = new Set<bigint>();
+  let closedWithError: SessionError | undefined;
+
+  // 1 回目: 検証通過 + add
+  const first = incomingValidateRequestId(1n, received, (error) => {
+    closedWithError = error;
+  });
+  assert.isTrue(first);
+
+  // 2 回目: 同一 ID は重複として検出される
+  const second = incomingValidateRequestId(1n, received, (error) => {
+    closedWithError = error;
+  });
+  assert.isFalse(second);
+  assert.isDefined(closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.1:
+ * 異なる奇数 Request ID はそれぞれ独立に検証を通過する。
+ */
+test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", () => {
+  const received = new Set<bigint>();
+  let closedWithError: SessionError | undefined;
+
+  const first = incomingValidateRequestId(1n, received, (error) => {
+    closedWithError = error;
+  });
+  const second = incomingValidateRequestId(3n, received, (error) => {
+    closedWithError = error;
+  });
+
+  assert.isTrue(first);
+  assert.isTrue(second);
+  assert.isUndefined(closedWithError);
+  assert.deepEqual(
+    [...received].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    [1n, 3n],
+  );
+});
