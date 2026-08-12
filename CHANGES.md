@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] 受信 Request ID のパリティ・重複検証を追加する
+  - draft-ietf-moq-transport-19 §10.1 に基づき、受信 PUBLISH の Request ID が偶数 (パリティ違反) または重複の場合に INVALID_REQUEST_ID でセッションを閉じる
+  - 受信済み Request ID をセッション寿命で追跡し、リクエスト完了後も再出現を検出する
+  - @voluntas
 - [FIX] Range Filter の受信検証 (INVALID_FILTER) を実装する
   - draft-ietf-moq-transport-19 §5.1.3 / §10.2.12-14 に基づき、PRIORITY_FILTER の 255 超・Property Type の奇数・Range delta 累積値の 2^64-1 超過・構造不正 (SetID / Property Type / Range 列の欠落)・同一組み合わせ重複を検出し、InvalidFilterError を throw する
   - role=publish の受信 REQUEST_UPDATE の不正 Range Filter には REQUEST_ERROR (INVALID_FILTER) で応答し、受信 PUBLISH_OK では PROTOCOL_VIOLATION でセッションを閉じる

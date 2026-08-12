@@ -21,7 +21,7 @@
 - 0373 と同じ理由 (ループ catch は ProtocolViolationError のみ変換する) により、デコード失敗は黙殺せず PROTOCOL_VIOLATION でセッションを閉じる。
 - 対応方式は実装時に確定する: (a) REQUEST_UPDATE ケース内で `decodeRequestUpdatePayload` のデコード失敗を catch して `closeWithError(PROTOCOL_VIOLATION)` する (0373 の `bidiHandlePublishRequestUpdate` と同方式)、(b) 外側 catch で `IncompleteDataError` も PROTOCOL_VIOLATION に変換する (他のメッセージのデコード失敗にも波及するため影響範囲の検討が必要)。
 - 0373 の `bidiHandlePublishRequestUpdate` (受信 PUBLISH パス) は変更しない。
-- REQUEST_UPDATE の Request ID のパリティ・重複検証は本 issue のスコープ外 (issue 0381 の注記に委譲済み)。
+- REQUEST_UPDATE の Request ID のパリティ・重複検証は本 issue のスコープ外 (closed issue 0381 の注記に委譲済み。0381 実装時に本 issue の Request ID 検証はスコープ外と確定し、残存する)。
 
 ## 完了条件
 

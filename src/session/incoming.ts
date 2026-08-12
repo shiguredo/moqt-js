@@ -122,6 +122,63 @@ export async function incomingSendRequestErrorAndClose(
 }
 
 /**
+ * 受信 Request ID のパリティ・重複検証を行う
+ *
+ * draft-ietf-moq-transport-19 §10.1 (Request ID):
+ * "The client generates even numbered Request IDs, starting at 0, and the
+ *  server generates odd numbered Request IDs, starting at 1. Each endpoint
+ *  increments its Request ID by 2 for each new request."
+ * "If an endpoint receives a Request ID where the least significant bit is
+ *  incorrect for the sender, or a duplicate Request ID, it MUST close the
+ *  session with INVALID_REQUEST_ID."
+ *
+ * moqt-js は WebTransport 専用クライアントであり常に client ロールのため、
+ * 受信 PUBLISH の Request ID はサーバー発の奇数が期待値となる。
+ *
+ * パリティ・重複検証と receivedRequestIds への add を同一の同期ブロックで
+ * 行う。受信 bidi ストリーム処理は fire-and-forget で並行実行されるため、
+ * 検証と add の間に await を挟むと同一 ID の 2 本が同時に検証を通過し得る。
+ * Set には add のみ行い、リクエスト完了後も削除しない (§10.1 の重複禁止は
+ * セッション内での再出現の禁止であり、Map エントリの削除後も検出できる
+ * 必要がある)。
+ *
+ * @returns 検証に合格した場合は true、違反で closeSession を呼んだ場合は false
+ */
+export function incomingValidateRequestId(
+  requestId: bigint,
+  receivedRequestIds: Set<bigint>,
+  closeSession: (error: SessionError) => void,
+): boolean {
+  // draft-ietf-moq-transport-19 §10.1:
+  // moqt-js はクライアントロールのため、受信 Request ID は奇数 (サーバー発) が期待値。
+  // LSB が 0 (偶数) はパリティ違反。
+  if ((requestId & 1n) === 0n) {
+    closeSession(
+      new SessionError(
+        `invalid request id parity: ${requestId}, expected odd (server-generated)`,
+        SessionErrorCode.INVALID_REQUEST_ID,
+      ),
+    );
+    return false;
+  }
+
+  // draft-ietf-moq-transport-19 §10.1:
+  // 同一 Request ID の再出現は INVALID_REQUEST_ID。
+  // add は検証と同じ同期ブロック内で行い、拒否経路で return される PUBLISH も
+  // Request ID を消費したものとして記録する (§10.1「Each SUBSCRIBE, PUBLISH,
+  // FETCH, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE,
+  // REQUEST_UPDATE, and TRACK_STATUS message consumes a Request ID」)。
+  if (receivedRequestIds.has(requestId)) {
+    closeSession(
+      new SessionError(`duplicate request id: ${requestId}`, SessionErrorCode.INVALID_REQUEST_ID),
+    );
+    return false;
+  }
+  receivedRequestIds.add(requestId);
+  return true;
+}
+
+/**
  * 受信 bidi ストリームの先頭メッセージを 3 分類してディスパッチする
  *
  * - 分類 1 (publish): false を返し、呼び出し側で従来の受信 PUBLISH 処理を
@@ -153,7 +210,7 @@ export async function incomingHandleFirstBidiMessage(
     // ペイロードをデコードしないため、各メッセージ節の MUST 検証
     // (§10.1 の Request ID パリティ・重複、§10.19 の Track Namespace Prefix
     // 32 フィールド上限等) は分類 2 では適用されない (残余リスク。
-    // Request ID 検証の扱いは関連 issue の注記参照)。
+    // Request ID 検証は受信 PUBLISH (分類 1) のみに適用される)。
     await incomingSendRequestErrorAndClose(
       stream,
       RequestErrorCode.NOT_SUPPORTED,
