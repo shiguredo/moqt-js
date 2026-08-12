@@ -15,7 +15,7 @@
  * draft-ietf-moq-transport-19 Section 1.4.3
  */
 
-import { ProtocolViolationError } from "../error";
+import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
 import { MessageParameterType, type Location } from "./types";
 
@@ -1153,13 +1153,32 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
   const param = spec as RangeFilterParam;
   const parts: Uint8Array[] = [];
 
+  // draft-ietf-moq-transport-19 Section 5.1.3:
+  // Range Filter は 1 つ以上の Range を持つ。空の ranges はデコード側
+  // (decodeRangeFilter の「no ranges」検証) が InvalidFilterError で拒否する
+  // ため、送信前に検出する。
+  if (param.ranges.length === 0) {
+    throw new InvalidFilterError("range filter must have at least one range");
+  }
+
+  // draft-ietf-moq-transport-19 Section 5.1.3:
+  // SetID は 8 bit (0-255) のため、範囲外の値は送信できない
+  if (!Number.isInteger(param.setId) || param.setId < 0 || param.setId > 255) {
+    throw new InvalidFilterError(`set id out of range: ${param.setId}, expected 0-255`);
+  }
+
   // SetID (8 bit)
-  parts.push(new Uint8Array([param.setId & 0xff]));
+  parts.push(new Uint8Array([param.setId]));
 
   // Property Type (vi64) - OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER のみ
   if (param.type === "objectProperty" || param.type === "trackProperty") {
     if (param.propertyType === undefined) {
       throw new Error("propertyType is required for objectProperty/trackProperty filter");
+    }
+    // draft-ietf-moq-transport-19 §10.2.13 / §10.2.14:
+    // Property Type は偶数でなければならない
+    if (param.propertyType % 2n !== 0n) {
+      throw new InvalidFilterError(`property type must be even: ${param.propertyType}`);
     }
     parts.push(encodeVarint(param.propertyType));
   }
@@ -1172,6 +1191,12 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     if (startDelta < 0n) {
       throw new Error("range start must be >= previous end");
     }
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // "Any delta encoding that results in a value that exceeds 2^64-1
+    //  MUST be rejected with REQUEST_ERROR with error code INVALID_FILTER."
+    if (range.start > MAX_VARINT) {
+      throw new InvalidFilterError(`range start exceeds maximum: ${range.start} > ${MAX_VARINT}`);
+    }
     parts.push(encodeVarint(startDelta));
 
     if (range.end !== undefined) {
@@ -1179,12 +1204,28 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
       if (endDelta < 0n) {
         throw new Error("range end must be >= range start");
       }
+      if (range.end > MAX_VARINT) {
+        throw new InvalidFilterError(`range end exceeds maximum: ${range.end} > ${MAX_VARINT}`);
+      }
       parts.push(encodeVarint(endDelta));
       prevEnd = range.end;
     } else {
       // 末尾 Range のみ End 省略可
       if (i !== param.ranges.length - 1) {
         throw new Error("only the last range may omit end");
+      }
+    }
+  }
+
+  // draft-ietf-moq-transport-19 §10.2.12:
+  // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
+  if (param.type === "priority") {
+    for (const range of param.ranges) {
+      if (range.start > 255n) {
+        throw new InvalidFilterError(`priority filter value exceeds maximum: ${range.start} > 255`);
+      }
+      if (range.end !== undefined && range.end > 255n) {
+        throw new InvalidFilterError(`priority filter value exceeds maximum: ${range.end} > 255`);
       }
     }
   }
@@ -1199,6 +1240,11 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
 
 /**
  * Range Filter のワイヤデコード
+ *
+ * draft-ietf-moq-transport-19 Section 5.1.3:
+ * 値域・構造の不正は InvalidFilterError で検出する (REQUEST_ERROR
+ * (INVALID_FILTER) 応答または PROTOCOL_VIOLATION セッション閉鎖は
+ * 受信経路の責務)。
  *
  * @returns [RangeFilterSpec, consumed bytes]
  */
@@ -1218,6 +1264,11 @@ export function decodeRangeFilter(
   const bodyStart = offset + totalConsumed;
   const bodyEnd = bodyStart + Number(length);
 
+  // 構造不正: Length > 0 なのに SetID が欠落
+  if (bodyStart >= data.length) {
+    throw new InvalidFilterError("range filter is missing SetID");
+  }
+
   // SetID (8 bit)
   const setId = data[bodyStart];
   let pos = bodyStart + 1;
@@ -1225,7 +1276,16 @@ export function decodeRangeFilter(
   // Property Type (vi64) - OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER のみ
   let propertyType: bigint | undefined;
   if (type === "objectProperty" || type === "trackProperty") {
-    const [pt, ptSize] = decodeVarint(data, pos);
+    // 構造不正: SetID のみで Property Type が欠落
+    if (pos >= bodyEnd) {
+      throw new InvalidFilterError("range filter is missing property type");
+    }
+    const [pt, ptSize] = decodeRangeFilterVarint(data, pos);
+    // draft-ietf-moq-transport-19 §10.2.13 / §10.2.14:
+    // Property Type は偶数でなければならない
+    if (pt % 2n !== 0n) {
+      throw new InvalidFilterError(`property type must be even: ${pt}`);
+    }
     propertyType = pt;
     pos += ptSize;
   }
@@ -1234,9 +1294,16 @@ export function decodeRangeFilter(
   const ranges: FilterRange[] = [];
   let prevEnd = 0n;
   while (pos < bodyEnd) {
-    const [startDelta, startDeltaSize] = decodeVarint(data, pos);
+    const [startDelta, startDeltaSize] = decodeRangeFilterVarint(data, pos);
     pos += startDeltaSize;
     const start = prevEnd + startDelta;
+
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // "Any delta encoding that results in a value that exceeds 2^64-1
+    //  MUST be rejected with REQUEST_ERROR with error code INVALID_FILTER."
+    if (start > MAX_VARINT) {
+      throw new InvalidFilterError(`range start exceeds maximum: ${start} > ${MAX_VARINT}`);
+    }
 
     if (pos >= bodyEnd) {
       // 末尾 Range の End 省略（open-ended）
@@ -1244,15 +1311,113 @@ export function decodeRangeFilter(
       break;
     }
 
-    const [endDelta, endDeltaSize] = decodeVarint(data, pos);
+    const [endDelta, endDeltaSize] = decodeRangeFilterVarint(data, pos);
     pos += endDeltaSize;
     const end = start + endDelta;
+    if (end > MAX_VARINT) {
+      throw new InvalidFilterError(`range end exceeds maximum: ${end} > ${MAX_VARINT}`);
+    }
     ranges.push({ start, end });
     prevEnd = end;
   }
 
+  // 構造不正: Length > 0 なのに Range 列が欠落
+  if (ranges.length === 0) {
+    throw new InvalidFilterError("range filter has no ranges");
+  }
+
+  // draft-ietf-moq-transport-19 §10.2.12:
+  // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
+  if (type === "priority") {
+    for (const range of ranges) {
+      if (range.start > 255n) {
+        throw new InvalidFilterError(`priority filter value exceeds maximum: ${range.start} > 255`);
+      }
+      if (range.end !== undefined && range.end > 255n) {
+        throw new InvalidFilterError(`priority filter value exceeds maximum: ${range.end} > 255`);
+      }
+    }
+  }
+
   totalConsumed += Number(length);
   return [{ type, setId, propertyType, ranges }, totalConsumed];
+}
+
+/**
+ * Range Filter 内部の varint デコード
+ *
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 宣言 Length 内で varint が途中終端するケース (構造不正) は
+ * IncompleteDataError のままにせず InvalidFilterError に変換して扱う。
+ * IncompleteDataError は受信ループの toProtocolViolationSessionError で
+ * 変換されず黙殺されるため、構造不正を検出できないとセッションが
+ * 開いたまま応答なしになる。
+ */
+function decodeRangeFilterVarint(data: Uint8Array, offset: number): [bigint, number] {
+  try {
+    return decodeVarint(data, offset);
+  } catch (error) {
+    if (error instanceof IncompleteDataError) {
+      throw new InvalidFilterError("truncated varint in range filter");
+    }
+    throw error;
+  }
+}
+
+/**
+ * Range Filter パラメータの組み合わせ重複を検証する
+ *
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * "If the same combination of Parameter Type, SetID, and Property Type
+ *  (only in the Track and Object Property Filters) repeat in any message,
+ *  an endpoint MUST reject this with REQUEST_ERROR with error code
+ *  INVALID_FILTER."
+ *
+ * Length=0 の削除エントリは SetID / Property Type を持たないため重複判定の対象外。
+ * 違反時は InvalidFilterError を throw する。
+ *
+ * @param parameters - デコード済みのパラメータ配列
+ */
+export function validateRangeFilterCombination(parameters: Parameter[]): void {
+  const seenCombinations = new Set<string>();
+  for (const param of parameters) {
+    if (param.type < 0x25 || param.type > 0x29) {
+      continue;
+    }
+    const filterType = rangeFilterTypeOf(param.type);
+    const [decoded] = decodeRangeFilter(filterType, param.value);
+    if ("remove" in decoded) {
+      continue;
+    }
+    // (Parameter Type, SetID, [Property Type]) の組み合わせキー
+    const combinationKey = `${param.type}:${decoded.setId}:${decoded.propertyType ?? ""}`;
+    if (seenCombinations.has(combinationKey)) {
+      throw new InvalidFilterError(`duplicate range filter combination: ${combinationKey}`);
+    }
+    seenCombinations.add(combinationKey);
+  }
+}
+
+/**
+ * パラメータタイプ (0x25-0x29) から Range Filter の種別名を返す
+ */
+function rangeFilterTypeOf(
+  type: number,
+): "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty" {
+  switch (type) {
+    case 0x25:
+      return "subgroup";
+    case 0x26:
+      return "objectId";
+    case 0x27:
+      return "priority";
+    case 0x28:
+      return "objectProperty";
+    case 0x29:
+      return "trackProperty";
+    default:
+      throw new InvalidFilterError(`unknown range filter parameter type: 0x${type.toString(16)}`);
+  }
 }
 
 /** Uint8Array 配列を連結するヘルパー */

@@ -13,6 +13,9 @@ import {
   decodeParameters,
   decodeKeyValuePairs,
   decodeMessageParameter,
+  decodeRangeFilter,
+  encodeRangeFilter,
+  validateRangeFilterCombination,
   encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
@@ -21,7 +24,7 @@ import {
   MAX_TRACK_NAMESPACE_SIZE,
   isRejectedReceiveNamespace,
 } from "./parameter";
-import { ProtocolViolationError } from "../error";
+import { InvalidFilterError, ProtocolViolationError } from "../error";
 import { encodeVarint, MAX_VARINT } from "../varint";
 
 test("無効なパラメータタイプでエラー", () => {
@@ -407,6 +410,247 @@ test("decodeMessageParameter: Range Filter の内側 Length 超過で ProtocolVi
   // Length = 5 と宣言されているが残りバイトは 2 (SetID 1 + Start delta 3)
   const data = new Uint8Array([0x25, 0x05, 0x01, 0x03]);
   assert.throws(() => decodeMessageParameter(data, 0, 0n), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.12 (PRIORITY FILTER Parameter):
+ * "If a decoded value exceeds 255, the endpoint MUST reject this with
+ *  REQUEST_ERROR with error code INVALID_FILTER since Publisher Priority
+ *  is an 8-bit field."
+ * PRIORITY_FILTER の Range 値が 255 を超える場合に InvalidFilterError が
+ * 送出されることを検証する。
+ */
+test("decodeRangeFilter: PRIORITY_FILTER の 255 超の値で InvalidFilterError", () => {
+  // Length 3 / SetID 1 / Start delta 258 (Start=258 > 255)
+  const data = new Uint8Array([0x03, 0x01, 0x81, 0x02]);
+  assert.throws(() => decodeRangeFilter("priority", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.12:
+ * PRIORITY_FILTER の境界値 255 ちょうどは違反にならないことを検証する。
+ */
+test("decodeRangeFilter: PRIORITY_FILTER の 255 ちょうどは違反にならない", () => {
+  // Length 3 / SetID 1 / Start delta 255 (2 バイト varint: 0x80 0xff) / End 省略
+  const data = new Uint8Array([0x03, 0x01, 0x80, 0xff]);
+  const [decoded] = decodeRangeFilter("priority", data);
+  assert.isFalse("remove" in decoded);
+  if (!("remove" in decoded)) {
+    assert.equal(decoded.ranges[0].start, 255n);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.13 (OBJECT PROPERTY FILTER Parameter):
+ * Property Type は偶数でなければならず、奇数の場合は InvalidFilterError。
+ */
+test("decodeRangeFilter: OBJECT_PROPERTY_FILTER の奇数 Property Type で InvalidFilterError", () => {
+  // Length 4 / SetID 1 / Property Type 3 (奇数) / Start delta 0 / End delta 0
+  const data = new Uint8Array([0x04, 0x01, 0x03, 0x00, 0x00]);
+  assert.throws(() => decodeRangeFilter("objectProperty", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * "Any delta encoding that results in a value that exceeds 2^64-1 MUST be
+ *  rejected with REQUEST_ERROR with error code INVALID_FILTER."
+ * Range delta の累積値 (Start) が 2^64-1 を超える場合に InvalidFilterError が
+ * 送出されることを検証する。
+ */
+test("decodeRangeFilter: Range 累積値が 2^64-1 を超えると InvalidFilterError", () => {
+  // body = SetID(1) + Start delta 2^64-1 (9 バイト) + End delta 0 (1 バイト)
+  //        + Start delta 1 (1 バイト) = 12 バイト
+  // 1 個目: Start = 2^64-1 は合法、End = 2^64-1 も合法
+  // 2 個目: Start = 2^64-1 + 1 = 2^64 > 2^64-1 で超過
+  const data = new Uint8Array([
+    ...encodeVarint(12n),
+    ...encodeVarint(1n),
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n), // End delta 0 → End = 2^64-1
+    ...encodeVarint(1n), // Start delta 1 → Start = 2^64 (超過)
+  ]);
+  assert.throws(() => decodeRangeFilter("objectId", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * Range 列の varint が宣言 Length 内で途中終端する構造不正は、
+ * IncompleteDataError ではなく InvalidFilterError になることを検証する。
+ * (IncompleteDataError は受信ループで黙殺されるため、構造不正として
+ * 明示的に InvalidFilterError に変換する)
+ */
+test("decodeRangeFilter: Range 列の varint 途中終端で InvalidFilterError", () => {
+  // Length 4 / SetID 1 / Start delta 0 / End delta 0 / 最後の 0x81 は 2 バイト
+  // varint の先頭であり、body 終端で途切れる (構造不正)
+  const data = new Uint8Array([0x04, 0x01, 0x00, 0x00, 0x81]);
+  assert.throws(() => decodeRangeFilter("objectId", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 構造不正 (Length > 0 なのに SetID / Property Type / Range 列の欠落) は
+ * InvalidFilterError になることを検証する。
+ */
+test("decodeRangeFilter: SetID が欠落していると InvalidFilterError", () => {
+  // Length 1 を宣言しているが body (SetID) が存在しない
+  const data = new Uint8Array([0x01]);
+  assert.throws(() => decodeRangeFilter("objectId", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 構造不正 (Length > 0 なのに Range 列が欠落) は InvalidFilterError になる
+ * ことを検証する。SetID のみで Range が 1 つもない構成。
+ */
+test("decodeRangeFilter: Range 列が欠落していると InvalidFilterError", () => {
+  // Length 1 / SetID 1 のみで Range 列がない
+  const data = new Uint8Array([0x01, 0x01]);
+  assert.throws(() => decodeRangeFilter("objectId", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 構造不正 (Property Type の欠落) は InvalidFilterError になることを検証する。
+ */
+test("decodeRangeFilter: Property Type が欠落していると InvalidFilterError", () => {
+  // Length 1 / SetID 1 のみで Property Type がない (objectProperty は PT 必須)
+  const data = new Uint8Array([0x01, 0x01]);
+  assert.throws(() => decodeRangeFilter("objectProperty", data), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * "If the same combination of Parameter Type, SetID, and Property Type
+ *  (only in the Track and Object Property Filters) repeat in any message,
+ *  an endpoint MUST reject this with REQUEST_ERROR with error code
+ *  INVALID_FILTER."
+ * 同一組み合わせの Range Filter パラメータの重複を検出することを検証する。
+ */
+test("validateRangeFilterCombination: 同一組み合わせの重複で InvalidFilterError", () => {
+  // 同じ (Type=0x25, SetID=1) の SUBGROUP_FILTER を 2 つ
+  const param = {
+    type: 0x25,
+    value: new Uint8Array([0x03, 0x01, 0x00, 0x00]),
+  };
+  assert.throws(() => validateRangeFilterCombination([param, param]), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * SetID が異なる同型 Range Filter は重複にならないことを検証する。
+ */
+test("validateRangeFilterCombination: SetID 違いは重複にならない", () => {
+  const param1 = {
+    type: 0x25,
+    value: new Uint8Array([0x03, 0x01, 0x00, 0x00]),
+  };
+  const param2 = {
+    type: 0x25,
+    value: new Uint8Array([0x03, 0x02, 0x00, 0x00]),
+  };
+  assert.doesNotThrow(() => validateRangeFilterCombination([param1, param2]));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * Length=0 の削除エントリは SetID を持たないため重複判定の対象外であることを
+ * 検証する。
+ */
+test("validateRangeFilterCombination: 削除エントリは重複判定の対象外", () => {
+  const removeParam = {
+    type: 0x25,
+    value: new Uint8Array([0x00]),
+  };
+  const param = {
+    type: 0x25,
+    value: new Uint8Array([0x03, 0x01, 0x00, 0x00]),
+  };
+  assert.doesNotThrow(() => validateRangeFilterCombination([removeParam, param]));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.13 / §10.2.14:
+ * encodeRangeFilter は奇数 Property Type を送信前に拒否することを検証する。
+ */
+test("encodeRangeFilter: 奇数 Property Type で InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      encodeRangeFilter({
+        type: "objectProperty",
+        setId: 1,
+        propertyType: 3n,
+        ranges: [{ start: 0n, end: 10n }],
+      }),
+    InvalidFilterError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.12:
+ * encodeRangeFilter は PRIORITY_FILTER の 255 超の値を送信前に拒否することを
+ * 検証する。
+ */
+test("encodeRangeFilter: PRIORITY_FILTER の 255 超の値で InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      encodeRangeFilter({
+        type: "priority",
+        setId: 1,
+        ranges: [{ start: 0n, end: 256n }],
+      }),
+    InvalidFilterError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * encodeRangeFilter は SetID 255 超を送信前に拒否することを検証する。
+ */
+test("encodeRangeFilter: SetID 255 超で InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      encodeRangeFilter({
+        type: "subgroup",
+        setId: 256,
+        ranges: [{ start: 0n, end: 10n }],
+      }),
+    InvalidFilterError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * encodeRangeFilter は Range の絶対値 (Start / End) が 2^64-1 を超える場合に
+ * 送信前に拒否することを検証する。
+ */
+test("encodeRangeFilter: Range 絶対値が 2^64-1 を超えると InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      encodeRangeFilter({
+        type: "objectId",
+        setId: 1,
+        ranges: [{ start: MAX_VARINT + 1n, end: MAX_VARINT + 2n }],
+      }),
+    InvalidFilterError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * encodeRangeFilter は空の ranges を送信前に拒否することを検証する。
+ * (デコード側が「no ranges」を InvalidFilterError で拒否するため、
+ *  送受信不整合を防ぐ)
+ */
+test("encodeRangeFilter: 空の ranges で InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      encodeRangeFilter({
+        type: "subgroup",
+        setId: 1,
+        ranges: [],
+      }),
+    InvalidFilterError,
+  );
 });
 
 /**
