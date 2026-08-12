@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-request-id-parity-validation
 - Polished: 2026-08-12
@@ -60,4 +60,14 @@ draft-ietf-moq-transport-19 §10.1 の「If an endpoint receives a Request ID wh
 
 ## 解決方法
 
-未着手。
+- `src/session/incoming.ts` に `incomingValidateRequestId` free function を追加した
+  - パリティ検証: 受信 Request ID の LSB が 0 (偶数) の場合、INVALID_REQUEST_ID でセッションを閉じる (moqt-js はクライアントロールのため、受信 Request ID はサーバー発の奇数が期待値)
+  - 重複検証: 受信済み Request ID の Set に存在する場合、INVALID_REQUEST_ID でセッションを閉じる
+  - 検証と Set への add を同一の同期ブロックで行う (fire-and-forget の並行実行で同一 ID の 2 本が同時に検証を通過しないようにする)
+  - Set には add のみ行い、リクエスト完了後も削除しない (セッション内での再出現の禁止のため)。セッションクローズ時にクリアする
+- `src/session.ts` の `handleIncomingBidirectionalStream` で、受信 PUBLISH の `decodePublishPayload` 成功直後に `incomingValidateRequestId` を呼び出し、違反時は INVALID_REQUEST_ID でセッションを閉じる。配置は予約 namespace 拒否 / パラメータスコープ検証 / DUPLICATE_TRACK_ALIAS の各既存検証より前
+- 受信済み Request ID の Set は `receivedRequestIds` private フィールドとして保持し、`close()` 内でクリアする
+- `readFirstBidiMessage` private メソッドを抽出した (先頭メッセージ読み取りのロジックを `handleIncomingBidirectionalStream` から分離し、max-statements 制限に収める)
+- 適用範囲は受信 PUBLISH のみ。受信リクエスト 6 種 (ペイロード非デコードのため検証は発火しない) と受信 REQUEST_UPDATE (スコープ外) では適用されない (残余リスク。issue 本文の注記参照)
+- テスト: `src/session/incoming.test.ts` に 5 件 (偶数で INVALID_REQUEST_ID / 奇数は通過して Set に記録 / 重複で INVALID_REQUEST_ID / 検証通過後に add され再送が検出 / 異なる奇数は通過) を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した
