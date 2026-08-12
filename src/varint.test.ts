@@ -4,7 +4,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { encodeVarint, decodeVarint, varintSize } from "./varint";
+import { encodeVarint, decodeVarint, varintSize, MAX_VARINT } from "./varint";
 import { IncompleteDataError } from "./error";
 
 // 1 バイト (0xxxxxxx): 0-127
@@ -176,6 +176,35 @@ test("varintSize: 各範囲で正しいサイズを返す", () => {
   assert.equal(varintSize(562949953421312n), 8);
   assert.equal(varintSize(72057594037927935n), 8);
   assert.equal(varintSize(72057594037927936n), 9);
+});
+
+// draft-ietf-moq-transport-19 Section 1.4.1:
+// 9 バイト varint の Range は 0-18446744073709551615 (= 2^64-1)。
+// 2^64-1 ちょうどは 9 バイトでエンコードされ、超過は例外になることを検証する。
+test("varintSize: 2^64-1 ちょうどは 9 を返し、超過は例外になる", () => {
+  assert.equal(varintSize(MAX_VARINT), 9);
+  assert.throws(() => varintSize(MAX_VARINT + 1n));
+  assert.throws(() => varintSize(2 ** 64));
+});
+
+// draft-ietf-moq-transport-19 Section 1.4.1:
+// 2^64 以上の入力は varint で表現できないため、encodeVarint は例外を投げる。
+// 以前は 9 バイト分岐のマスク処理で上位ビットが切り捨てられ、
+// 無音で mod 2^64 にラップされた値がワイヤに載るデータ破壊経路だった。
+test("encodeVarint: 2^64-1 ちょうどを 9 バイトでエンコードする", () => {
+  assert.deepEqual(
+    encodeVarint(MAX_VARINT),
+    new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+  );
+});
+
+test("encodeVarint: 2^64 以上 (bigint) は例外になる", () => {
+  assert.throws(() => encodeVarint(2n ** 64n));
+  assert.throws(() => encodeVarint(2n ** 64n + 5n));
+});
+
+test("encodeVarint: 2^64 以上 (number) は例外になる", () => {
+  assert.throws(() => encodeVarint(2 ** 64));
 });
 
 // draft-ietf-moq-transport-19 §11.5.1 (Padding Streams) / §11.5.2 (Padding Datagrams):

@@ -5,7 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { encodeVarint, decodeVarint, varintSize } from "./varint";
+import { encodeVarint, decodeVarint, varintSize, MAX_VARINT } from "./varint";
 
 // 各サイズ範囲の閾値
 const THRESHOLD_1BYTE = 127n;
@@ -16,7 +16,6 @@ const THRESHOLD_5BYTE = 34359738367n;
 const THRESHOLD_6BYTE = 4398046511103n;
 const THRESHOLD_7BYTE = 562949953421311n;
 const THRESHOLD_8BYTE = 72057594037927935n;
-const MAX_VARINT = 18446744073709551615n;
 
 // 各サイズ範囲の Arbitrary
 const varint1ByteArb = fc.bigInt({ min: 0n, max: THRESHOLD_1BYTE });
@@ -208,6 +207,19 @@ test("連続したエンコード値を順次デコードできる", () => {
 test("負の値はエラーになる", () => {
   fc.assert(
     fc.property(fc.bigInt({ min: -1000000n, max: -1n }), (value) => {
+      assert.throws(() => encodeVarint(value));
+      assert.throws(() => varintSize(value));
+    }),
+  );
+});
+
+// draft-ietf-moq-transport-19 Section 1.4.1:
+// 9 バイト varint の Range は 0-2^64-1 であり、2^64 以上は仕様の範囲外。
+// 範囲外入力は無音で mod 2^64 にラップされるデータ破壊を防ぐため、
+// encodeVarint / varintSize の両方が例外を投げることを検証する。
+test("2^64 以上の値は encodeVarint / varintSize で例外になる", () => {
+  fc.assert(
+    fc.property(fc.bigInt({ min: MAX_VARINT + 1n, max: 2n ** 80n }), (value) => {
       assert.throws(() => encodeVarint(value));
       assert.throws(() => varintSize(value));
     }),
