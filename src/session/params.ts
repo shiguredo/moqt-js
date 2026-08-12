@@ -699,6 +699,63 @@ export function matchNamespacePrefix(
 }
 
 /**
+ * 2 つの Track Namespace Prefix が共通の prefix を持つか判定する
+ *
+ * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+ * "the new prefix MUST NOT share a common prefix with any other active
+ *  SUBSCRIBE_NAMESPACE (for a SUBSCRIBE_NAMESPACE update) or SUBSCRIBE_TRACKS
+ *  (for a SUBSCRIBE_TRACKS update) in the same session."
+ *
+ * 共通 prefix を持つとは、一方が他方の sub-prefix (前方一致) であること。
+ * 片方向の matchNamespacePrefix では判定できないため、双方向を確認する。
+ *
+ * @param a - 比較する Track Namespace Prefix
+ * @param b - 比較する Track Namespace Prefix
+ * @returns 一方が他方の sub-prefix の場合は true
+ */
+export function namespacePrefixesOverlap(a: string[], b: string[]): boolean {
+  if (matchNamespacePrefix(b, a) !== null) {
+    return true;
+  }
+  return matchNamespacePrefix(a, b) !== null;
+}
+
+/**
+ * 更新後の Track Namespace Prefix が既存のアクティブなサブスクリプションと
+ * 共通 prefix を持たないことを検証する
+ *
+ * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+ * "The overlap restriction applies independently per type: the new prefix
+ *  MUST NOT share a common prefix with any other active SUBSCRIBE_NAMESPACE
+ *  (for a SUBSCRIBE_NAMESPACE update) or SUBSCRIBE_TRACKS (for a
+ *  SUBSCRIBE_TRACKS update) in the same session."
+ *
+ * 送信前のクライアント側先行検証であり、仕様の MUST は受信側の
+ * REQUEST_ERROR (PREFIX_OVERLAP) 応答 (§10.2.19) である。
+ * 検証失敗時は throw する (セッションは閉じない)。
+ *
+ * @param newPrefix - 更新後の Track Namespace Prefix
+ * @param activePrefixes - 同一型のアクティブなサブスクリプションの prefix 一覧
+ *                         (更新対象自身は含めない。含めると prefix 拡大更新を
+ *                         誤って拒否するため)
+ * @param contextName - エラーメッセージ用のコンテキスト名
+ * @throws Error 共通 prefix を持つ既存のアクティブなサブスクリプションがある場合
+ */
+export function validateNamespacePrefixUpdate(
+  newPrefix: string[],
+  activePrefixes: string[][],
+  contextName: string,
+): void {
+  for (const activePrefix of activePrefixes) {
+    if (namespacePrefixesOverlap(newPrefix, activePrefix)) {
+      throw new Error(
+        `cannot update ${contextName} track namespace prefix: new prefix ${JSON.stringify(newPrefix)} overlaps with active subscription prefix ${JSON.stringify(activePrefix)}`,
+      );
+    }
+  }
+}
+
+/**
  * Range Filter の type 文字列を MessageParameterType に変換する
  */
 function rangeFilterTypeToParamType(

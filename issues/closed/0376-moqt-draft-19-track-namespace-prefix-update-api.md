@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-12
 - Model: DeepSeek V4 Flash
 - Branch: feature/add-moqt-draft-19-track-namespace-prefix-update-api
 - Polished: 2026-08-08
@@ -60,4 +60,9 @@ draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions) で定�
 
 ## 解決方法
 
-未着手。
+- `NamespaceSubscription` / `TracksSubscription` に `update(options: NamespaceUpdateOptions)` を追加し、`SessionImpl.sendNamespaceRequestUpdate` 経由で `bidiSendNamespaceRequestUpdate` (`src/session/bidi.ts`) により REQUEST_UPDATE + TRACK_NAMESPACE_PREFIX (0x34) を送信する
+- `src/session/namespaceLoops.ts` の受信ループを改修し、確立後の REQUEST_OK を REQUEST_UPDATE_OK としてスコープ検証 (REQUEST_UPDATE_OK_ALLOWED_PARAMS) 後に pending を解決して `namespacePrefix` へ反映、REQUEST_ERROR / ストリームクローズ (FIN / RESET) / セッションクローズ検証失敗時は pending を reject して反映しない
+- §10.9.2 の per-type 独立 overlap 制約を `src/session/params.ts` の `namespacePrefixesOverlap` / `validateNamespacePrefixUpdate` で送信前に検証し、同一型のアクティブなサブスクリプション (更新対象自身を除く) と共通 prefix を持つ更新は throw する
+- 更新反映は単一スロット `pendingPrefix` で管理するため、in-flight (REQUEST_OK 未受信) 中の 2 件目は throw する (並行更新の誤反映防止)
+- テスト: `src/session/params.test.ts` (overlap 純関数)、`src/session/bidi.test.ts` (送信ワイヤ / ガード群 / 掃除)、`src/session/namespaceLoops.test.ts` を新規作成 (受信ループの REQUEST_OK / REQUEST_ERROR / ストリームクローズ / GOAWAY / RESET 応答処理)
+- `CHANGES.md` の `## develop` に [ADD] を追記
