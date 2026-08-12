@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-range-filter-value-validation
 - Polished: 2026-08-12
@@ -82,4 +82,17 @@ closed issue 0341 は自側 MAX_FILTER_RANGES を広告しないため仕様準�
 
 ## 解決方法
 
-未着手。
+- `src/error.ts` に `InvalidFilterError` を追加した。既存の `ProtocolViolationError` → PROTOCOL_VIOLATION 変換に自動で乗せず、経路ごとの変換を明示するため `ProtocolViolationError` を継承しない
+- `src/message/parameter.ts` の `decodeRangeFilter` に検証を追加した:
+  - PRIORITY_FILTER の Range 値 (delta デコード後の絶対値。Start / End とも) が 255 超の場合は `InvalidFilterError` (draft-ietf-moq-transport-19 §10.2.12)
+  - OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER の Property Type が奇数の場合は `InvalidFilterError` (§10.2.13 / §10.2.14)
+  - delta 累積値 (Start / End) が 2^64-1 を超える場合は `InvalidFilterError` (§5.1.3)
+  - 構造不正 (Length > 0 なのに SetID / Property Type / Range 列の欠落) は `InvalidFilterError`。Range 列の varint 途中終端は `IncompleteDataError` のままにせず `decodeRangeFilterVarint` ヘルパで `InvalidFilterError` に変換する (受信ループの `toProtocolViolationSessionError` は IncompleteDataError を変換しないため黙殺される)
+- `validateRangeFilterCombination` を追加し、(Parameter Type, SetID, [Property Type]) の組み合わせ重複を検出する (§5.1.3 の MUST)。Length=0 の削除エントリは SetID を持たないため対象外
+- 受信経路への配線 (`src/session/bidi.ts`):
+  - role=publish の受信 REQUEST_UPDATE: スコープ検証後に `validateRangeFilterCombination` を呼び、違反時は REQUEST_ERROR (INVALID_FILTER) で応答する。検証は forward state 反映 (`setForwardState`) より前に配置し、違反で REQUEST_ERROR を応答したにも関わらず forward state が反映される不整合を防ぐ
+  - 受信 PUBLISH_OK: `validateRangeFilterCombination` を呼び、違反時は PROTOCOL_VIOLATION でセッションを閉じる (PUBLISH_OK では REQUEST_ERROR を送信できないため)
+- `encodeRangeFilter` に送信前検証を追加した: SetID 範囲外 (非整数・0-255 超) / Property Type 奇数 / PRIORITY_FILTER 255 超 / Range 絶対値 2^64-1 超過 / 空 ranges は送信前に throw する
+- テスト: `src/message/parameter.test.ts` に 15 件 (decode 検証 8 件 / encode 検証 5 件 / 組み合わせ重複 2 件)、`src/session/bidi.test.ts` に 3 件 (REQUEST_UPDATE → REQUEST_ERROR / 重複 → REQUEST_ERROR / PUBLISH_OK → PROTOCOL_VIOLATION) を追加した
+- PBT: `src/message/parameter.prop.ts` の arbitrary を調整し、PRIORITY_FILTER は 255 以下の値のみ生成するようにした
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した

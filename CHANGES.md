@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] Range Filter の受信検証 (INVALID_FILTER) を実装する
+  - draft-ietf-moq-transport-19 §5.1.3 / §10.2.12-14 に基づき、PRIORITY_FILTER の 255 超・Property Type の奇数・Range delta 累積値の 2^64-1 超過・構造不正 (SetID / Property Type / Range 列の欠落)・同一組み合わせ重複を検出し、InvalidFilterError を throw する
+  - role=publish の受信 REQUEST_UPDATE の不正 Range Filter には REQUEST_ERROR (INVALID_FILTER) で応答し、受信 PUBLISH_OK では PROTOCOL_VIOLATION でセッションを閉じる
+  - encodeRangeFilter に SetID 範囲外・Property Type 奇数・PRIORITY_FILTER 255 超・Range 絶対値の 2^64-1 超過・空 ranges の送信前検証を追加する
+  - @voluntas
 - [FIX] Range Filter パラメータの Length 二重エンコードを修正する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、Range Filter (0x25-0x29) を length-prefixed 分類から分離し、「Type Delta + Length + [SetID + [Property Type] + Range 列]」の 1 Length 構造でエンコード / デコードする
   - REQUEST_UPDATE での削除は「Type Delta + 0x00」になる

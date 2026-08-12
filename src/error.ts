@@ -268,6 +268,26 @@ export class MalformedTrackError extends Error {
 }
 
 /**
+ * 不正な Range Filter (値域・Property Type 偶数・組み合わせ重複・構造不正) を
+ * 検出したときに投げるエラー
+ *
+ * draft-ietf-moq-transport-19 §5.1.3 / §10.2.12-14:
+ * 受信側ではフィルタ不正は REQUEST_ERROR (INVALID_FILTER) で応答するか、応答不能な
+ * 経路 (PUBLISH_OK 受信等) では PROTOCOL_VIOLATION でセッションを閉じる。
+ * 送信側 (encodeRangeFilter) ではローカル API 誤用 (SetID 範囲外・奇数 Property
+ * Type・PRIORITY_FILTER 255 超・Range 絶対値 2^64-1 超過・空 ranges) を
+ * 送信前に検出して throw する。
+ * 既存の ProtocolViolationError → PROTOCOL_VIOLATION 変換に自動で乗せず、
+ * 経路ごとの変換を明示するために ProtocolViolationError を継承しない。
+ */
+export class InvalidFilterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidFilterError";
+  }
+}
+
+/**
  * 閉じた Subgroup への送信を拒否するときに投げるエラー
  *
  * draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams):

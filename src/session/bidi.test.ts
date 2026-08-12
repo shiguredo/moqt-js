@@ -1551,6 +1551,167 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
 // ============================================================================
 
 /**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が
+ * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
+ * 検証は forward state 反映より前に配置されるため、状態は変更されない。
+ */
+test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UPDATE に REQUEST_ERROR (INVALID_FILTER) が応答される (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // PRIORITY_FILTER (0x27) で 255 超の値 (Start=11266) を含む REQUEST_UPDATE を feed する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR (INVALID_FILTER) が書き込まれ、forward state は変更されない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.isUndefined(ctx.closedWithError);
+  // 検証は forward state 反映より前に配置されるため、状態は初期値 (true) のまま
+  assert.isTrue(ctx.publisher.forwardState);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * role=publish の受信 REQUEST_UPDATE に同一組み合わせの重複 Range Filter が
+ * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
+ */
+test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を含む REQUEST_UPDATE に REQUEST_ERROR (INVALID_FILTER) が応答される (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 同一 (Type=0x25, SetID=1) の SUBGROUP_FILTER を 2 つ含む REQUEST_UPDATE
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      { type: 0x25, value: new Uint8Array([0x03, 0x01, 0x00, 0x00]) },
+      { type: 0x25, value: new Uint8Array([0x03, 0x01, 0x00, 0x00]) },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 受信 PUBLISH_OK に不正な Range Filter (値域違反) が含まれる場合、
+ * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ */
+test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
+  const requestId = 10n;
+  const events: string[] = [];
+  const written: Uint8Array[] = [];
+  let closedWithError: SessionError | undefined;
+
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // PRIORITY_FILTER (0x27) で 255 超の値 (Start=11266) を含む PUBLISH_OK を feed する
+      const okPayload = encodeRequestOkPayload({
+        type: MessageType.REQUEST_OK,
+        parameters: [
+          {
+            type: 0x27,
+            value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+          },
+        ],
+        trackProperties: [],
+      });
+      const writer = new ControlStreamWriter();
+      const message = writer.encode(MessageType.REQUEST_OK, okPayload);
+      controller.enqueue(message);
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      events.push("write");
+      written.push(chunk);
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const controlReader = new ControlStreamReader();
+
+  const pending = {
+    impl: new PublisherImpl(["test"], "track", requestId, 1n),
+    resolve: () => {},
+    reject: (e: Error) => {
+      rejected = e;
+    },
+  };
+  let rejected: Error | undefined;
+
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter: new ControlStreamWriter(),
+    nextRequestId: 100n,
+    pendingPublish: new Map([[requestId, pending]]),
+    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    tracksSubscriptions: new Map(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+  } as unknown as BidiSessionInternal;
+
+  await bidiReadPublishResponse(session, requestId, stream, controlReader);
+
+  assert.isDefined(closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(session.pendingPublish.has(requestId));
+  assert.isDefined(rejected);
+});
+
+/**
  * draft-ietf-moq-transport-19 §10.9:
  * 受信 PUBLISH ストリーム上で無限定 3 種 (AUTHORIZATION_TOKEN /
  * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT) のみを含む

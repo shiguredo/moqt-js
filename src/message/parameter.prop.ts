@@ -209,10 +209,13 @@ const rangeFilterParameterArb = fc
     ranges: rangeFilterRangesArb,
   })
   .filter(
-    ({ filter, propertyType }) =>
+    ({ filter, propertyType, ranges }) =>
       // OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER は propertyType 必須
-      (filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
-      propertyType !== undefined,
+      ((filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
+        propertyType !== undefined) &&
+      // PRIORITY_FILTER は 255 以下の値のみ (§10.2.12)
+      (filter.filterType !== "priority" ||
+        ranges.every((r) => r.start <= 255n && (r.end === undefined || r.end <= 255n))),
   )
   .map(({ filter, setId, propertyType, ranges }) => {
     return {
