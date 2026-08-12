@@ -156,11 +156,82 @@ const lengthPrefixedParameterArb = fc
   })
   .map(({ type, value }) => ({ type, value }));
 
+/**
+ * Range Filter パラメータ (0x25-0x29) の arbitrary
+ *
+ * draft-ietf-moq-transport-19 Section 5.1.3:
+ * Range Filter の Value は「Length + [SetID + [Property Type] + Range 列]」の
+ * 1 Length 構造。encodeRangeFilter の出力 (内部 Length と整合したバイト列) で
+ * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
+ * 同型複数出現 (複数 SetID) のケースを含めるため、型ごとの重複除去はしない。
+ */
+const RANGE_FILTER_TYPE_TO_PARAM: Array<{
+  type: number;
+  filterType: "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty";
+}> = [
+  { type: 0x25, filterType: "subgroup" },
+  { type: 0x26, filterType: "objectId" },
+  { type: 0x27, filterType: "priority" },
+  { type: 0x28, filterType: "objectProperty" },
+  { type: 0x29, filterType: "trackProperty" },
+];
+
+// 単調増加する ranges を生成する arbitrary (各 start >= 前 end)
+const rangeFilterRangesArb = fc
+  .array(fc.bigInt({ min: 0n, max: 100n }), { minLength: 1, maxLength: 3 })
+  .map((deltas) => {
+    let current = 0n;
+    const ranges: Array<{ start: bigint; end?: bigint }> = [];
+    for (let i = 0; i < deltas.length; i++) {
+      const start = current + deltas[i];
+      // 末尾以外は End を必ず付け、末尾は省略できる
+      const end = i < deltas.length - 1 ? start + deltas[i] : undefined;
+      if (end !== undefined) {
+        ranges.push({ start, end });
+      } else {
+        ranges.push({ start });
+      }
+      current = end ?? start;
+    }
+    return ranges;
+  });
+
+const rangeFilterParameterArb = fc
+  .record({
+    filter: fc.constantFrom(...RANGE_FILTER_TYPE_TO_PARAM),
+    setId: fc.integer({ min: 0, max: 255 }),
+    propertyType: fc.option(
+      fc.bigInt({ min: 0n, max: 1000n }).map((n) => n * 2n),
+      {
+        nil: undefined,
+      },
+    ),
+    ranges: rangeFilterRangesArb,
+  })
+  .filter(
+    ({ filter, propertyType }) =>
+      // OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER は propertyType 必須
+      (filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
+      propertyType !== undefined,
+  )
+  .map(({ filter, setId, propertyType, ranges }) => {
+    return {
+      type: filter.type,
+      value: encodeRangeFilter({
+        type: filter.filterType,
+        setId,
+        propertyType,
+        ranges,
+      }),
+    };
+  });
+
 const messageParameterArb = fc.oneof(
   varintParameterArb,
   uint8ParameterArb,
   locationParameterArb,
   lengthPrefixedParameterArb,
+  rangeFilterParameterArb,
 );
 
 /**
@@ -168,12 +239,43 @@ const messageParameterArb = fc.oneof(
  *
  * draft-ietf-moq-transport-19 Section 10.2:
  * パラメータは Type の昇順でソートされ、各 Type は一意である必要がある。
+ * ただし Range Filters (0x25-0x29) は複数回出現が許可される (isRepeatable と同じ扱い)。
+ * 同型の Range Filter が複数出現する場合、同一 SetID の重複は仕様違反
+ * (draft-ietf-moq-transport-19 §5.1.3 の INVALID_FILTER MUST) のため、
+ * SetID が重複するケースを生成から除外する。
  */
 const parametersArb = fc
   .array(messageParameterArb, { minLength: 0, maxLength: 3 })
   .map((params) => {
     const sorted = [...params].sort((a, b) => a.type - b.type);
-    return sorted.filter((param, index) => index === 0 || param.type !== sorted[index - 1].type);
+    // Range Filters は同型複数出現を許可する (SetID 違い)
+    return sorted.filter((param, index) => {
+      if (index === 0) return true;
+      if (param.type !== sorted[index - 1].type) return true;
+      return param.type >= 0x25 && param.type <= 0x29;
+    });
+  })
+  .filter((params) => {
+    // 同型の Range Filter 間で SetID が重複しないことを保証する。
+    // decodeRangeFilter で SetID を読み取り、重複があれば生成を除外する
+    // (Length=0 の削除エントリは SetID を持たないため対象外)。
+    const seenSetIds = new Map<number, Set<number>>();
+    for (const param of params) {
+      if (param.type < 0x25 || param.type > 0x29) continue;
+      const filterType = RANGE_FILTER_TYPE_TO_PARAM.find((f) => f.type === param.type);
+      if (filterType === undefined) continue;
+      const [decoded] = decodeRangeFilter(filterType.filterType, param.value);
+      if ("remove" in decoded && decoded.remove) continue;
+      const setIds = seenSetIds.get(param.type) ?? new Set<number>();
+      if ("setId" in decoded && setIds.has(decoded.setId)) {
+        return false;
+      }
+      if ("setId" in decoded) {
+        setIds.add(decoded.setId);
+        seenSetIds.set(param.type, setIds);
+      }
+    }
+    return true;
   });
 
 /**
