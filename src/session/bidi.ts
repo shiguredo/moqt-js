@@ -9,6 +9,7 @@
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import type { MoqtObject } from "../dataStream";
 import {
+  InvalidFilterError,
   RequestError,
   RequestErrorCode,
   SessionError,
@@ -37,6 +38,7 @@ import {
   decodeRequestUpdatePayload,
   decodeSubscribeOkPayload,
   getParameterLocationValue,
+  validateRangeFilterCombination,
   type AuthorizationToken,
   type Location,
   type Parameter,
@@ -314,6 +316,23 @@ export async function bidiReadPublishResponse(
         )
       ) {
         return;
+      }
+      // Range Filter の値域・構造・組み合わせ重複検証
+      // draft-ietf-moq-transport-19 §5.1.3:
+      // PUBLISH_OK では REQUEST_ERROR を送信できないため、違反は
+      // PROTOCOL_VIOLATION でセッションを閉じる。
+      try {
+        validateRangeFilterCombination(decoded.parameters);
+      } catch (error) {
+        if (error instanceof InvalidFilterError) {
+          const sessionError = new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
+          session.pendingPublish.delete(requestId);
+          session.requestStreams.delete(requestId);
+          pending.reject(sessionError);
+          session.closeWithError(sessionError);
+          return;
+        }
+        throw error;
       }
       // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
@@ -991,6 +1010,27 @@ export async function bidiReadRequestStreamMessages(
               )
             ) {
               return;
+            }
+
+            // Range Filter の値域・構造・組み合わせ重複検証
+            // draft-ietf-moq-transport-19 §5.1.3 / §10.2.12-14:
+            // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
+            // 検証は状態変更 (setForwardState) より前に配置し、違反で
+            // REQUEST_ERROR を応答したにも関わらず forward state が反映される
+            // 不整合を防ぐ。
+            try {
+              validateRangeFilterCombination(decoded.parameters);
+            } catch (error) {
+              if (error instanceof InvalidFilterError) {
+                await bidiSendRequestError(
+                  session,
+                  requestId,
+                  RequestErrorCode.INVALID_FILTER,
+                  error.message,
+                );
+                break;
+              }
+              throw error;
             }
 
             const publisher = session.publishers.get(requestId);

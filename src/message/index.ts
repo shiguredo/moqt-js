@@ -62,6 +62,7 @@ export {
   isSessionLevelNamespace,
   validateForwardValue,
   validateGroupOrderValue,
+  validateRangeFilterCombination,
   trackNamespaceToStrings,
   validateTrackNameSize,
   validateFullTrackName,
