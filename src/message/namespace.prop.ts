@@ -28,6 +28,7 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint, decodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 
 /**
@@ -200,6 +201,42 @@ test("PublishNamespace のフレーミングが ControlStreamReader で復元で
 });
 
 /**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は PUBLISH_NAMESPACE ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な PUBLISH_NAMESPACE の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("PUBLISH_NAMESPACE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespaceStringsArb,
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, namespaceParts, parameters, trailing) => {
+        const original: PublishNamespace = {
+          type: MessageType.PUBLISH_NAMESPACE,
+          requestId,
+          trackNamespace: createTrackNamespace(namespaceParts),
+          parameters,
+        };
+
+        const encoded = encodePublishNamespacePayload(original);
+        // 正常な PUBLISH_NAMESPACE の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodePublishNamespacePayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-19 Section 10.16:
  * NAMESPACE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -222,6 +259,38 @@ test("Namespace のエンコード・デコードがラウンドトリップす�
 });
 
 /**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Track Namespace Suffix は NAMESPACE ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な NAMESPACE の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("NAMESPACE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      namespaceSuffixStringsArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (suffixParts, trailing) => {
+        const original: Namespace = {
+          type: MessageType.NAMESPACE,
+          trackNamespaceSuffix: createTrackNamespace(suffixParts),
+        };
+
+        const encoded = encodeNamespacePayload(original);
+        // 正常な NAMESPACE の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeNamespacePayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-19 Section 10.17:
  * NAMESPACE_DONE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -240,6 +309,38 @@ test("NamespaceDone のエンコード・デコードがラウンドトリップ
       assert.equal(decoded.type, MessageType.NAMESPACE_DONE);
       assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespaceSuffix), suffixParts);
     }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Track Namespace Suffix は NAMESPACE_DONE ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な NAMESPACE_DONE の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("NAMESPACE_DONE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      namespaceSuffixStringsArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (suffixParts, trailing) => {
+        const original: NamespaceDone = {
+          type: MessageType.NAMESPACE_DONE,
+          trackNamespaceSuffix: createTrackNamespace(suffixParts),
+        };
+
+        const encoded = encodeNamespaceDonePayload(original);
+        // 正常な NAMESPACE_DONE の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeNamespaceDonePayload(withTrailing), ProtocolViolationError);
+      },
+    ),
   );
 });
 
@@ -274,6 +375,42 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
           assert.equal(decoded.parameters[i].type, parameters[i].type);
           assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
         }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は SUBSCRIBE_NAMESPACE ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な SUBSCRIBE_NAMESPACE の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("SUBSCRIBE_NAMESPACE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, namespaceParts, parameters, trailing) => {
+        const original: SubscribeNamespace = {
+          type: MessageType.SUBSCRIBE_NAMESPACE,
+          requestId,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          parameters,
+        };
+
+        const encoded = encodeSubscribeNamespacePayload(original);
+        // 正常な SUBSCRIBE_NAMESPACE の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeSubscribeNamespacePayload(withTrailing), ProtocolViolationError);
       },
     ),
   );
@@ -399,6 +536,42 @@ test("SubscribeTracks のエンコード・デコードがラウンドトリッ�
 });
 
 /**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は SUBSCRIBE_TRACKS ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な SUBSCRIBE_TRACKS の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("SUBSCRIBE_TRACKS の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespacePrefixStringsArb,
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, namespaceParts, parameters, trailing) => {
+        const original: SubscribeTracks = {
+          type: MessageType.SUBSCRIBE_TRACKS,
+          requestId,
+          trackNamespacePrefix: createTrackNamespace(namespaceParts),
+          parameters,
+        };
+
+        const encoded = encodeSubscribeTracksPayload(original);
+        // 正常な SUBSCRIBE_TRACKS の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeSubscribeTracksPayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-19 Section 10.19:
  * SUBSCRIBE_TRACKS Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  */
@@ -496,6 +669,40 @@ test("PublishSkipped のエンコード・デコードがラウンドトリッ�
         assert.equal(decoded.type, MessageType.PUBLISH_SKIPPED);
         assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespaceSuffix), namespaceParts);
         assert.deepEqual(decoded.trackName, trackName);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Track Name は PUBLISH_SKIPPED ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な PUBLISH_SKIPPED の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("PUBLISH_SKIPPED の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
+      fc.uint8Array({ minLength: 1, maxLength: 50 }),
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (namespaceParts, trackName, trailing) => {
+        const original: PublishSkipped = {
+          type: MessageType.PUBLISH_SKIPPED,
+          trackNamespaceSuffix: createTrackNamespace(namespaceParts),
+          trackName,
+        };
+
+        const encoded = encodePublishSkippedPayload(original);
+        // 正常な PUBLISH_SKIPPED の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodePublishSkippedPayload(withTrailing), ProtocolViolationError);
       },
     ),
   );
