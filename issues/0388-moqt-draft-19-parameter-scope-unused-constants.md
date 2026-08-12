@@ -26,7 +26,7 @@
 ## 設計方針
 
 - `SUBSCRIBE_ALLOWED_PARAMS` / `FETCH_ALLOWED_PARAMS` / `NAMESPACE_ALLOWED_PARAMS` / `SUBSCRIBE_TRACKS_ALLOWED_PARAMS` の 4 定数を**削除する** (0371 の注記で確定済み。配線は不可能のため)。
-- `PUBLISH_REQUEST_UPDATE_OK_PARAMS` は `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため削除対象外。0377 が FORWARD を追加するため、0377 実装時に本 issue の注記 (0373 実装時) を更新すること。
+- `PUBLISH_REQUEST_UPDATE_OK_PARAMS` は `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため削除対象外。0377 実装時に FORWARD が追加され 4 種 (AUTHORIZATION_TOKEN / OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / FORWARD) になった (本 issue の注記 (0377 実装時) に反映済み)。
 - テスト (`parameterScope.test.ts`) の `SUBSCRIBE_TRACKS_ALLOWED_PARAMS` を参照するテスト 2 件 (「SUBSCRIBE_TRACKS_ALLOWED_PARAMS は AUTH / FORWARD / GROUP_ORDER / Range Filters を含む」と「SUBSCRIBE_TRACKS で許可外パラメータは拒否される」) と import を削除する (他の定数のテストは残る)。
 - 削除後に `tsc --noEmit` とテストが通ることを確認する。
 
@@ -43,7 +43,7 @@
 - draft-ietf-moq-transport-19 §10.19.1 (Parameters on SUBSCRIBE_TRACKS / `SUBSCRIBE_TRACKS_ALLOWED_PARAMS` の根拠)
 - 関連: `issues/closed/0371-moqt-draft-19-incoming-request-not-supported-response.md`（受信リクエスト 6 種のペイロード非デコード。削除への収束を確定した元）
 - 関連: `issues/closed/0373-moqt-draft-19-request-update-on-publish-stream-misdetected.md`（`PUBLISH_REQUEST_UPDATE_OK_PARAMS` の削除対象外注記）
-- 関連: `issues/0377-moqt-draft-19-publish-forward-param-not-applied.md`（`PUBLISH_REQUEST_UPDATE_OK_PARAMS` に FORWARD を追加予定。0377 実装時に本 issue の注記 (0373 実装時) を更新すること）
+- 関連: `issues/0377-moqt-draft-19-publish-forward-param-not-applied.md`（`PUBLISH_REQUEST_UPDATE_OK_PARAMS` に FORWARD を追加済み。本 issue の注記 (0377 実装時) に反映済み）
 - 関連: `issues/0389-moqt-draft-19-subscribe-tracks-allowed-params-unwired.md`（`SUBSCRIBE_TRACKS_ALLOWED_PARAMS` の配線が目的。本 issue の削除確定により対象を失うため、0389 側でクローズまたは削除へ収束する。実装順は本 issue が先）
 
 ## 注記 (0371 実装時)
@@ -52,7 +52,11 @@
 
 ## 注記 (0373 実装時)
 
-- 0373 の実装で `PUBLISH_REQUEST_UPDATE_OK_PARAMS` (`src/message/parameterScope.ts`) を新設した。同定数は `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため、削除対象外である。0377 が FORWARD を追加するため、0377 実装時に本注記を更新すること。
+- 0373 の実装で `PUBLISH_REQUEST_UPDATE_OK_PARAMS` (`src/message/parameterScope.ts`) を新設した。同定数は `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため、削除対象外である。
+
+## 注記 (0377 実装時)
+
+- 0377 の実装で `PUBLISH_REQUEST_UPDATE_OK_PARAMS` に FORWARD (0x10) を追加し、4 種 (AUTHORIZATION_TOKEN / OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / FORWARD) になった。同定数は引き続き `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため、削除対象外である。
 
 ## 解決方法
 

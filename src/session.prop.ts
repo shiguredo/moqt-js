@@ -10,13 +10,13 @@ import {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   extractLargestLocation,
-  extractForwardState,
   validateFetchOkEndLocation,
   classifyIncomingStreamType,
   calculateObjectIdDelta,
   type PublishOptions,
   type SubscribeOptions,
 } from "./session";
+import { extractForwardState } from "./session/params";
 import {
   encodeParameters,
   decodeParameters,

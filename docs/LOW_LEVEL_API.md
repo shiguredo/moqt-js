@@ -90,13 +90,14 @@ const session = await connect(url, callbacks?, options?)
 
 ### `Subscriber`
 
-| プロパティ / メソッド | 説明                                                             |
-| --------------------- | ---------------------------------------------------------------- |
-| `state`               | `"active"` / `"closed"`                                          |
-| `largestLocation`     | `SUBSCRIBE_OK` または `REQUEST_OK` で更新される `LARGEST_OBJECT` |
-| `trackProperties`     | `SUBSCRIBE_OK` で受信した Track Properties                       |
-| `update(options?)`    | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                   |
-| `unsubscribe()`       | 双方向ストリームを close して購読を終了する                      |
+| プロパティ / メソッド | 説明                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `state`               | `"active"` / `"closed"`                                                                                                           |
+| `largestLocation`     | `SUBSCRIBE_OK` または `REQUEST_OK` で更新される `LARGEST_OBJECT`                                                                  |
+| `trackProperties`     | `SUBSCRIBE_OK` で受信した Track Properties                                                                                        |
+| `forwardState`        | `SUBSCRIBE` 送信時・受信 `PUBLISH`・ケース 1 の `REQUEST_UPDATE`・自 `REQUEST_UPDATE` の `REQUEST_OK` で更新される `FORWARD` 状態 |
+| `update(options?)`    | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                    |
+| `unsubscribe()`       | 双方向ストリームを close して購読を終了する                                                                                       |
 
 ### `Fetcher`
 

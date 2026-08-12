@@ -70,6 +70,19 @@ export interface Subscriber {
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
+   * Forward State
+   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   *
+   * - SUBSCRIBE 送信時の options.forward の宣言値 (省略時は 1)
+   * - 自 subscriber.update({ forward }) の REQUEST_OK 確認値
+   *
+   * を反映したものであり、ピアの PUBLISH_OK 確認値である
+   * Publisher.forwardState とは意味論が異なる点に注意。
+   * 受信 PUBLISH から生成される SubscriberImpl には、ピアが PUBLISH /
+   * REQUEST_UPDATE で宣言した Forward State が設定される。
+   */
+  readonly forwardState: boolean;
+  /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
    * draft-ietf-moq-transport-19 Section 10.9 (REQUEST_UPDATE)
    */
@@ -92,6 +105,10 @@ export class SubscriberImpl implements Subscriber {
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
+  // draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter):
+  // Forward State。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
+  // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
+  private subscriberForwardState = true;
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
   // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter の再適用に使用
@@ -133,6 +150,27 @@ export class SubscriberImpl implements Subscriber {
 
   get trackProperties(): ReadonlyArray<Property> {
     return this.subscriberTrackProperties;
+  }
+
+  /**
+   * Forward State
+   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   */
+  get forwardState(): boolean {
+    return this.subscriberForwardState;
+  }
+
+  /**
+   * Forward State を設定する (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-19 §10.2.17:
+   * SUBSCRIBE 送信時 (options.forward) / 受信 PUBLISH / ケース 1 の
+   * REQUEST_UPDATE / 自 update() の REQUEST_OK の各経路から設定される。
+   * アプリケーションへの変化通知コールバックは持たない (Publisher の
+   * onForwardStateChange とは非対称。必要になったら別途追加する)。
+   */
+  setForwardState(forward: boolean): void {
+    this.subscriberForwardState = forward;
   }
 
   get namespace(): string[] {

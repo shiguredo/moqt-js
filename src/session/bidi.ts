@@ -114,6 +114,14 @@ interface PendingRequestUpdate {
   resolve: () => void;
   reject: (err: Error) => void;
   targetRequestId: bigint;
+  /**
+   * REQUEST_UPDATE 送信時に指定された FORWARD 値。
+   * draft-ietf-moq-transport-19 §10.2.17:
+   * "If the parameter is omitted from REQUEST_UPDATE, the value for the
+   *  subscription remains unchanged."
+   * 省略時 (undefined) は REQUEST_OK 受信時に Forward State を更新しない。
+   */
+  forward?: boolean;
 }
 
 export interface BidiSessionInternal {
@@ -745,7 +753,10 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  *     違反の同時発生時は GOING_AWAY を優先)。
  * (2) パラメータスコープ検証。違反は §10.2.1 の MUST により
  *     PROTOCOL_VIOLATION でセッションを閉じる。
- * (3) 文脈限定パラメータを含む場合は NOT_SUPPORTED で応答する。
+ * (3) PUBLISH_REQUEST_UPDATE_OK_PARAMS (無限定 3 種 + FORWARD) 以外の
+ *     文脈限定パラメータを含む場合は NOT_SUPPORTED で応答する。
+ *     受理した FORWARD は受信 PUBLISH から生成された SubscriberImpl の
+ *     Forward State に反映する (FORWARD 省略時は不変)。
  * (4) REQUEST_OK を応答する (ペイロードは空 parameters / 空 trackProperties)。
  *
  * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
@@ -754,9 +765,9 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  * (応答は同一 bidi ストリーム上に書き込まれることでリクエストが特定される。
  * 既存 role=publish ハンドラと同様)。
  *
- * moqt-js は受信 PUBLISH のパラメータを状態として保持しないため、REQUEST_OK
- * で受理したパラメータの適用は行わない (accept-then-ignore の意味論乖離が
- * 残る)。
+ * 受理した FORWARD 以外のパラメータ (無限定 3 種) は状態として保持しない
+ * (accept-then-ignore。更新の反映を前提とするピアと意味論が乖離する点は
+ * 残余リスクとして残る)。
  */
 export async function bidiHandlePublishRequestUpdate(
   session: BidiSessionInternal,
@@ -819,13 +830,16 @@ export async function bidiHandlePublishRequestUpdate(
   }
 
   // 判定順序 (3): 文脈限定パラメータの含有確認
-  // REQUEST_OK で受理するのは PUBLISH_REQUEST_UPDATE_OK_PARAMS (無限定 3 種)
-  // のみ。それ以外の文脈限定パラメータ (SUBSCRIBER_PRIORITY / FORWARD /
-  // LOCATION_FILTER / NEW_GROUP_REQUEST / TRACK_NAMESPACE_PREFIX /
-  // Range Filters の 10 種。列挙は PUBLISH_REQUEST_UPDATE_OK_PARAMS の
-  // JSDoc を参照) を含む REQUEST_UPDATE は REQUEST_ERROR (NOT_SUPPORTED)
-  // で応答する (draft-ietf-moq-transport-19 §10.6「NOT_SUPPORTED: The
-  // endpoint does not support the type of request.」に基づく設計判断)。
+  // REQUEST_OK で受理するのは PUBLISH_REQUEST_UPDATE_OK_PARAMS
+  // (無限定 3 種 + FORWARD) のみ。それ以外の文脈限定パラメータ
+  // (SUBSCRIBER_PRIORITY / LOCATION_FILTER / NEW_GROUP_REQUEST /
+  // TRACK_NAMESPACE_PREFIX / Range Filters。列挙は
+  // PUBLISH_REQUEST_UPDATE_OK_PARAMS の JSDoc を参照) を含む REQUEST_UPDATE
+  // は REQUEST_ERROR (NOT_SUPPORTED) で応答する (draft-ietf-moq-transport-19
+  // §10.6「NOT_SUPPORTED: The endpoint does not support the type of
+  // request.」に基づく設計判断)。FORWARD と他の文脈限定パラメータが混合した
+  // REQUEST_UPDATE もメッセージ単位で全体拒否する (FORWARD の部分受理は
+  // しない)。
   if (decoded.parameters.some((param) => !PUBLISH_REQUEST_UPDATE_OK_PARAMS.has(param.type))) {
     await bidiSendRequestError(
       session,
@@ -834,6 +848,21 @@ export async function bidiHandlePublishRequestUpdate(
       "parameter not supported for request update",
     );
     return;
+  }
+
+  // draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+  // "If the parameter is omitted from REQUEST_UPDATE, the value for the
+  //  subscription remains unchanged."
+  // FORWARD パラメータが存在する場合のみ、受信 PUBLISH から生成された
+  // SubscriberImpl の Forward State に反映する (省略時は不変)。
+  const forwardParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.FORWARD,
+  );
+  if (forwardParam !== undefined) {
+    const subscriber = session.subscribers.get(requestId);
+    if (subscriber) {
+      subscriber.setForwardState(extractForwardState(decoded.parameters));
+    }
   }
 
   // 判定順序 (4): REQUEST_OK を応答する
@@ -1201,6 +1230,10 @@ export async function bidiSendRequestUpdate(
       resolve,
       reject,
       targetRequestId,
+      // draft-ietf-moq-transport-19 §10.2.17:
+      // REQUEST_OK 受信時に Forward State へ反映するため、送信時の FORWARD
+      // 値を保持する (省略時は undefined = 不変)。
+      forward: options.forward,
     });
   });
 
@@ -1686,7 +1719,19 @@ export function bidiHandleRequestUpdateOk(
     }
   }
 
-  resolvePendingRequestUpdate(session, streamRequestId);
+  // draft-ietf-moq-transport-19 §10.2.17:
+  // "If the parameter is omitted from REQUEST_UPDATE, the value for the
+  //  subscription remains unchanged."
+  // 自 update({ forward }) の REQUEST_OK 受信時に、送信時の FORWARD 値
+  // (pendingRequestUpdate エントリに保持) を Forward State へ反映する。
+  // 省略時 (undefined) は反映しない。
+  const forward = resolvePendingRequestUpdate(session, streamRequestId);
+  if (forward !== undefined) {
+    const subscriber = session.subscribers.get(streamRequestId);
+    if (subscriber) {
+      subscriber.setForwardState(forward);
+    }
+  }
 }
 
 // ============================================================================
@@ -1718,18 +1763,21 @@ export function hasPendingRequestUpdate(
  * draft-ietf-moq-transport-19 §10.9.1:
  * "The receiver MUST still send a REQUEST_OK for each successful update"
  * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
+ *
+ * @returns 解決した更新の FORWARD 送信値 (省略時は undefined = 反映しない)
  */
 export function resolvePendingRequestUpdate(
   session: BidiSessionInternal,
   targetRequestId: bigint,
-): void {
+): boolean | undefined {
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.resolve();
-      break;
+      return pending.forward;
     }
   }
+  return undefined;
 }
 
 /**
