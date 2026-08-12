@@ -11,9 +11,11 @@ import {
   type RequestError,
   type RequestOk,
   decodeGoawayPayload,
+  decodeRedirect,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
+  encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
 } from "./session";
@@ -428,4 +430,55 @@ test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolation
     ...encodeVarint(1025n),
   ]);
   assert.throws(() => decodeRequestErrorPayload(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
+ * Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の New Session URI
+ * §10.4 にのみ存在する)。8,192 バイトを超える Connect URI を含む Redirect が
+ * デコードできることを固定バイト列で検証する。
+ */
+test("Redirect の 8,192 バイト超 Connect URI がデコードできる", () => {
+  const connectUri = "m".repeat(8193);
+  const redirect: Redirect = {
+    connectUri,
+    trackNamespace: createTrackNamespace(["test"]),
+    trackName: new Uint8Array([1, 2, 3]),
+  };
+  const encoded = encodeRedirect(redirect);
+
+  const [decoded, consumed] = decodeRedirect(encoded, 0);
+
+  assert.equal(decoded.connectUri, connectUri);
+  assert.deepEqual(trackNamespaceToStrings(decoded.trackNamespace), ["test"]);
+  assert.deepEqual(decoded.trackName, new Uint8Array([1, 2, 3]));
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
+ * 8,192 バイトを超える Connect URI を含む REQUEST_ERROR (REDIRECT) が
+ * デコード経路 (encodeRequestErrorPayload → decodeRequestErrorPayload) で
+ * ラウンドトリップし、trailing 検査と干渉しないことを検証する。
+ */
+test("REQUEST_ERROR (REDIRECT) の 8,192 バイト超 Connect URI がラウンドトリップする", () => {
+  const connectUri = "m".repeat(8193);
+  const original: RequestError = {
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0x34n, // REDIRECT
+    retryInterval: 0n,
+    reasonPhrase: "redirect",
+    redirect: {
+      connectUri,
+      trackNamespace: createTrackNamespace(["test"]),
+      trackName: new Uint8Array([1, 2, 3]),
+    },
+  };
+
+  const encoded = encodeRequestErrorPayload(original);
+  const decoded = decodeRequestErrorPayload(encoded);
+
+  assert.equal(decoded.errorCode, 0x34n);
+  assert.isDefined(decoded.redirect);
+  assert.equal(decoded.redirect!.connectUri, connectUri);
 });
