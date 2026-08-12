@@ -72,6 +72,7 @@ import {
   buildSubscribeNamespaceParameters,
   clampTimeoutMs,
   compareLocations,
+  extractForwardState,
   matchNamespacePrefix,
   validateRangeFilterLimits,
   validateTrackNamespaceForSend,
@@ -1680,6 +1681,13 @@ export class SessionImpl implements Session {
 
     // GOAWAY コールバックを設定（セッション内部コールバック）
     impl.goawayCallback = callbacks.goaway;
+
+    // draft-ietf-moq-transport-19 §5.1 (Subscriptions):
+    // "The initiator of the subscription sets the initial Forward State in
+    //  either PUBLISH or SUBSCRIBE."
+    // SUBSCRIBE 送信時の options.forward (省略時は §10.2.17 のデフォルト 1)
+    // を Forward State として保持する。
+    impl.setForwardState(options?.forward ?? true);
 
     // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
     impl.setLocationFilter(options?.filter);
@@ -3558,6 +3566,13 @@ export class SessionImpl implements Session {
     );
     impl.goawayCallback = subscribeCallbacks.goaway;
 
+    // draft-ietf-moq-transport-19 §5.1 (Subscriptions):
+    // "The initiator of the subscription sets the initial Forward State in
+    //  either PUBLISH or SUBSCRIBE."
+    // 受信 PUBLISH の FORWARD パラメータ (省略時は §10.2.17 のデフォルト 1)
+    // を Forward State として保持する。
+    impl.setForwardState(extractForwardState(decodedPublish.parameters));
+
     const subControlReader = new ControlStreamReader();
     let subReader: ReadableStreamDefaultReader<Uint8Array>;
     let subWriter: WritableStreamDefaultWriter<Uint8Array>;
@@ -4067,7 +4082,6 @@ export {
   buildSubscribeNamespaceParameters,
   encodeAuthorizationTokenParameter,
   extractLargestLocation,
-  extractForwardState,
   validateFetchOkEndLocation,
   classifyIncomingStreamType,
   calculateObjectIdDelta,
