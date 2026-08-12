@@ -633,9 +633,16 @@ export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[],
  * - uint8: 1 バイトの符号なし整数
  * - varint: 可変長整数
  * - location: 2 つの連続した varint (Group, Object)
- * - length-prefixed: varint 長 + バイト列
+ * - length-prefixed: varint 長 + バイト列 (外側に Length を付加する)
+ * - range-filter: 内側 Length 込みのバイト列 (外側 Length は付加しない。
+ *   draft-ietf-moq-transport-19 §5.1.3 の 1 Length 構造)
  */
-type MessageParameterValueEncoding = "uint8" | "varint" | "location" | "length-prefixed";
+type MessageParameterValueEncoding =
+  | "uint8"
+  | "varint"
+  | "location"
+  | "length-prefixed"
+  | "range-filter";
 
 /**
  * パラメータ型ごとの Value エンコーディング定義
@@ -672,11 +679,13 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   // TRACK_NAMESPACE_PREFIX (Section 10.2.19)
   0x34: "length-prefixed",
   // Range Filters (draft-ietf-moq-transport-19 Section 5.1.3 / 10.2.10–10.2.14)
-  0x25: "length-prefixed", // SUBGROUP_FILTER
-  0x26: "length-prefixed", // OBJECTID_FILTER
-  0x27: "length-prefixed", // PRIORITY_FILTER
-  0x28: "length-prefixed", // OBJECT_PROPERTY_FILTER
-  0x29: "length-prefixed", // TRACK_PROPERTY_FILTER
+  // Value は Length (vi64) + [SetID + [Property Type] + Range 列] の 1 Length 構造。
+  // 外側に Length を付加しない (length-prefixed から分離した専用種別)。
+  0x25: "range-filter", // SUBGROUP_FILTER
+  0x26: "range-filter", // OBJECTID_FILTER
+  0x27: "range-filter", // PRIORITY_FILTER
+  0x28: "range-filter", // OBJECT_PROPERTY_FILTER
+  0x29: "range-filter", // TRACK_PROPERTY_FILTER
 };
 
 /**
@@ -726,7 +735,9 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
     return result;
   }
 
-  // uint8, varint, location: Value をそのまま書き込む
+  // uint8, varint, location, range-filter: Value をそのまま書き込む。
+  // range-filter の Value は encodeRangeFilter の出力 (内側 Length 込み) のため、
+  // 外側 Length は付加しない (1 Length 構造。draft-ietf-moq-transport-19 §5.1.3)
   const result = new Uint8Array(deltaBytes.length + param.value.length);
   result.set(deltaBytes, 0);
   result.set(param.value, deltaBytes.length);
@@ -742,12 +753,15 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
  *   Value (..)
  * }
  *
+ * 主に decodeParameters の内部実装として使用される。テスト用に公開するが、
+ * 公開 API (src/message/index.ts) には含めない。
+ *
  * @returns [parameter, consumed bytes, paramType (bigint)]
  *          paramType は次のパラメータの previousType に使う。
  *          Parameter.type (number) への変換は丸めが発生するため、
  *          連続デコードのアキュムレータには bigint の paramType を使うこと。
  */
-function decodeMessageParameter(
+export function decodeMessageParameter(
   data: Uint8Array,
   offset: number,
   previousType: bigint,
@@ -811,6 +825,36 @@ function decodeMessageParameter(
         );
       }
       value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
+      totalConsumed += Number(length);
+      break;
+    }
+    case "range-filter": {
+      // draft-ietf-moq-transport-19 Section 5.1.3:
+      // Range Filter の Value は Length (vi64) で始まり、その後に
+      // [SetID + [Property Type] + Range 列] が続く 1 Length 構造。
+      // 内側 Length を読んで全体を value として保持する (decodeRangeFilter の
+      // 入力形式に合わせる。Length を剥がすと SetID を Length と誤読する)。
+      const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
+      totalConsumed += lengthConsumed;
+      // 既存 length-prefixed 分岐と同じ上限を維持する (防御的制限。
+      // Range Filter の Length は仕様で上限が明記されていないが、
+      // 6 万バイト超のフィルタは実用上存在せず、過大宣言の DoS を防ぐ)
+      if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+        throw new ProtocolViolationError(
+          `message parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+        );
+      }
+      // 内側 Length が残りバイト数を超える場合はフレーミング破損として
+      // PROTOCOL_VIOLATION で扱う (長い slice を作らない)
+      if (offset + totalConsumed + Number(length) > data.length) {
+        throw new ProtocolViolationError(
+          `range filter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
+        );
+      }
+      value = data.slice(
+        offset + totalConsumed - lengthConsumed,
+        offset + totalConsumed + Number(length),
+      );
       totalConsumed += Number(length);
       break;
     }

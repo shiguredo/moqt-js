@@ -1,7 +1,7 @@
 # Range Filter の Length が二重にエンコードされる
 
 - Created: 2026-08-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Branch: feature/fix-range-filter-length-encoding
 - Polished: 2026-08-07
 
@@ -48,4 +48,9 @@ draft-ietf-moq-transport-19 §5.1.3 に基づき、Range Filter パラメータ�
 
 ## 解決方法
 
-未着手。
+- `src/message/parameter.ts` の `MESSAGE_PARAMETER_VALUE_ENCODING` で 0x25-0x29 を `"length-prefixed"` から専用の `"range-filter"` 種別に変更した。`encodeMessageParameter` は range-filter を外側 Length なし (Value をそのまま) で書き込むため、ワイヤは「Type Delta + Length + [SetID + [Property Type] + Range 列]」の 1 Length 構造になる
+- `decodeMessageParameter` に `"range-filter"` の case を追加した。先頭 Length varint を読んで消費バイト数を決め、Length 込みのバイト列を value として保持する (decodeRangeFilter の入力形式に合わせる)。内側 Length が残りバイト数を超える場合は `ProtocolViolationError` で拒否する
+- `decodeMessageParameter` をテスト用に export した (公開 API の index.ts には含めない)
+- テスト: `src/message/parameter.test.ts` に固定バイト列テスト 5 件 (1 Length 構造のエンコード / デコード、削除 Length=0 のエンコード / デコード、内側 Length 超過の ProtocolViolationError) を追加した
+- PBT: `src/message/parameter.prop.ts` に range-filter の arbitrary を追加し、`encodeParameters()` → `decodeParameters()` 経由の round-trip で回帰を防ぐ。同型複数出現 (複数 SetID) を含め、SetID 重複ケースは §5.1.3 の INVALID_FILTER MUST に従い生成から除外した
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した

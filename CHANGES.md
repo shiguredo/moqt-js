@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] Range Filter パラメータの Length 二重エンコードを修正する
+  - draft-ietf-moq-transport-19 §5.1.3 に基づき、Range Filter (0x25-0x29) を length-prefixed 分類から分離し、「Type Delta + Length + [SetID + [Property Type] + Range 列]」の 1 Length 構造でエンコード / デコードする
+  - REQUEST_UPDATE での削除は「Type Delta + 0x00」になる
+  - 内側 Length が残りバイト数を超える不正ワイヤは ProtocolViolationError で拒否する
+  - @voluntas
 - [FIX] Key-Value-Pair / Message Parameter / Track Property の Delta Type 加算の 2^64-1 超過を検証する
   - draft-ietf-moq-transport-19 §1.4.3 / §10.2 の MUST に基づき、decodeKeyValuePairs / decodeParameters / decodeProperties / parseProperties / decodeImmutableProperties の加算結果を bigint で検証し、超過時は ProtocolViolationError を throw する
   - @voluntas

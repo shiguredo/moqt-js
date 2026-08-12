@@ -12,6 +12,7 @@ import {
   encodeParameters,
   decodeParameters,
   decodeKeyValuePairs,
+  decodeMessageParameter,
   encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
@@ -337,6 +338,75 @@ test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると Protoco
   // 仮に加算検証を除去しても 2^64+1 は未知型として同じクラスの
   // ProtocolViolationError が投げられるため、メッセージで加算パスを特定する
   assert.throws(() => decodeParameters(data), /delta type addition exceeds maximum/);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * Range Filter パラメータは「Type Delta + Length + SetID + [Property Type] + Range 列」の
+ * 1 Length 構造である。encodeMessageParameter が外側に Length を二重に付加しないことを
+ * 固定バイト列で検証する。
+ * 例: 0x25 0x03 0x01 0x03 0x02 = Type Delta 0x25 / Length 3 / SetID 1 /
+ *     Start delta 3 / End delta 2 (Range {3, 5})
+ */
+test("encodeParameters: Range Filter は 1 Length 構造でエンコードされる", () => {
+  // SUBGROUP_FILTER (0x25) + Length 3 + SetID 1 + Start delta 3 + End delta 2
+  const param = { type: 0x25, value: new Uint8Array([0x03, 0x01, 0x03, 0x02]) };
+  const encoded = encodeParameters([param]);
+
+  // Number of Parameters (1) + Type Delta (0x25) + 上記バイト列
+  assert.deepEqual(encoded, new Uint8Array([0x01, 0x25, 0x03, 0x01, 0x03, 0x02]));
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * 仕様準拠のワイヤバイト列 (1 Length 構造) をデコードできることを検証する。
+ * decodeMessageParameter は count プレフィックスなしのパラメータ単体をデコードする。
+ */
+test("decodeMessageParameter: 1 Length 構造の Range Filter をデコードする", () => {
+  const data = new Uint8Array([0x25, 0x03, 0x01, 0x03, 0x02]);
+  const [param, consumed, paramType] = decodeMessageParameter(data, 0, 0n);
+
+  assert.equal(param.type, 0x25);
+  // Length 込みのバイト列が value として保持される
+  assert.deepEqual(param.value, new Uint8Array([0x03, 0x01, 0x03, 0x02]));
+  assert.equal(consumed, 5);
+  assert.equal(paramType, 0x25n);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * REQUEST_UPDATE での Range Filter 削除は「Type Delta + 0x00」の 1 Length 構造になる。
+ */
+test("encodeParameters: Range Filter の削除は Length=0 の 1 Length 構造になる", () => {
+  // 削除は Length = 0 のみ (encodeRangeFilter の remove 指定で生成される value)
+  const param = { type: 0x25, value: new Uint8Array([0x00]) };
+  const encoded = encodeParameters([param]);
+
+  assert.deepEqual(encoded, new Uint8Array([0x01, 0x25, 0x00]));
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * Range Filter の削除 (Length=0) をデコードできることを検証する。
+ */
+test("decodeMessageParameter: Range Filter の削除 (Length=0) をデコードする", () => {
+  const data = new Uint8Array([0x25, 0x00]);
+  const [param, consumed] = decodeMessageParameter(data, 0, 0n);
+
+  assert.equal(param.type, 0x25);
+  assert.deepEqual(param.value, new Uint8Array([0x00]));
+  assert.equal(consumed, 2);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * Range Filter の内側 Length が残りバイト数を超える不正ワイヤをデコードすると
+ * ProtocolViolationError になることを検証する。
+ */
+test("decodeMessageParameter: Range Filter の内側 Length 超過で ProtocolViolationError", () => {
+  // Length = 5 と宣言されているが残りバイトは 2 (SetID 1 + Start delta 3)
+  const data = new Uint8Array([0x25, 0x05, 0x01, 0x03]);
+  assert.throws(() => decodeMessageParameter(data, 0, 0n), ProtocolViolationError);
 });
 
 /**
