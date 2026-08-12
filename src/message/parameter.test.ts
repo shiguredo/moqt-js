@@ -11,6 +11,7 @@ import {
   decodeTrackNamespace,
   encodeParameters,
   decodeParameters,
+  decodeKeyValuePairs,
   encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
@@ -20,7 +21,7 @@ import {
   isRejectedReceiveNamespace,
 } from "./parameter";
 import { ProtocolViolationError } from "../error";
-import { encodeVarint } from "../varint";
+import { encodeVarint, MAX_VARINT } from "../varint";
 
 test("無効なパラメータタイプでエラー", () => {
   const invalidParam = { type: 0x20, value: new Uint8Array([0x01]) };
@@ -276,6 +277,66 @@ test("重複パラメータで ProtocolViolationError", () => {
   data.set(secondValueBytes, pos);
 
   assert.throws(() => decodeParameters(data), /duplicate message parameter type/);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than
+ *  2^64 - 1. If a Delta Type is received that would be too large, the
+ *  Session MUST be closed with a PROTOCOL_VIOLATION."
+ * 加算結果が 2^64-1 ちょうど (deltaType 単体が 2^64-1、previousType=0) は
+ * 違反にならないことを検証する。
+ * 2^64-1 は奇数型のため length-prefixed 形式で、length (0) + 空バイト列を付加する。
+ */
+test("decodeKeyValuePairs: deltaType 単体が 2^64-1 は違反にならない", () => {
+  const data = new Uint8Array([...encodeVarint(MAX_VARINT), ...encodeVarint(0n)]);
+  const [parameters] = decodeKeyValuePairs(data);
+
+  assert.equal(parameters.length, 1);
+  assert.equal(parameters[0].type, Number(MAX_VARINT));
+  assert.deepEqual(parameters[0].value, new Uint8Array());
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * 加算結果が 2^64-1 を超える (previousType=2^64-1 + deltaType=1) 場合は
+ * ProtocolViolationError になることを検証する。
+ */
+test("decodeKeyValuePairs: 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+  // 1 個目: deltaType = 2^64-1 (奇数型)、length (0) + 空バイト列
+  // 2 個目: deltaType = 1 → previousType + 1 = 2^64 > 2^64-1
+  const data = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+
+  assert.throws(() => decodeKeyValuePairs(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * Message Parameter の deltaType 加算でも 2^64-1 超過は ProtocolViolationError
+ * になることを検証する。
+ * decodeParameters は Number of Parameters プレフィックス付きのため、
+ * 先頭にパラメータ数を付加する。
+ * 2 個目の deltaType を 2^64-1 とし、1 個目の type (0x02) との加算結果を
+ * 2^64 にすることで超過を直接検証する。
+ */
+test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+  // 1 個目: deltaType = 0x02 (OBJECT_DELIVERY_TIMEOUT、varint 型) + value
+  // 2 個目: deltaType = 2^64-1 → 0x02 + 2^64-1 = 2^64+1 > 2^64-1
+  const data = new Uint8Array([
+    ...encodeVarint(2n),
+    ...encodeVarint(0x02n),
+    ...encodeVarint(100n),
+    ...encodeVarint(MAX_VARINT),
+  ]);
+
+  // 加算検証のエラーメッセージを特定して検証する。
+  // 仮に加算検証を除去しても 2^64+1 は未知型として同じクラスの
+  // ProtocolViolationError が投げられるため、メッセージで加算パスを特定する
+  assert.throws(() => decodeParameters(data), /delta type addition exceeds maximum/);
 });
 
 /**

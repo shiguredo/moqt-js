@@ -9,7 +9,7 @@
  * Properties は Key-Value-Pair 形式を使用し、delta encoding を適用する。
  */
 
-import { encodeVarint, decodeVarint } from "./varint";
+import { encodeVarint, decodeVarint, MAX_VARINT } from "./varint";
 import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
 import { generateGreaseValue } from "./grease";
 
@@ -498,6 +498,17 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
   while (offset < innerData.length) {
     const [deltaId, deltaIdLen] = decodeVarint(innerData.subarray(offset));
     const extId = previousId + deltaId;
+
+    // draft-ietf-moq-transport-19 Section 1.4.3:
+    // "The previous Type value plus the Delta Type MUST NOT be greater than
+    //  2^64 - 1. If a Delta Type is received that would be too large, the
+    //  Session MUST be closed with a PROTOCOL_VIOLATION."
+    if (extId > MAX_VARINT) {
+      throw new ProtocolViolationError(
+        `delta id addition exceeds maximum: ${extId} > ${MAX_VARINT}`,
+      );
+    }
+
     previousId = extId;
 
     // draft-ietf-moq-transport-19 §12.7:
@@ -586,6 +597,15 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
   while (offset < data.length) {
     const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
     const id = previousId + deltaId;
+
+    // draft-ietf-moq-transport-19 Section 1.4.3:
+    // "The previous Type value plus the Delta Type MUST NOT be greater than
+    //  2^64 - 1. If a Delta Type is received that would be too large, the
+    //  Session MUST be closed with a PROTOCOL_VIOLATION."
+    if (id > MAX_VARINT) {
+      throw new ProtocolViolationError(`delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`);
+    }
+
     previousId = id;
 
     if (id === MOQTPropertyId.PRIOR_GROUP_ID_GAP) {
@@ -636,6 +656,17 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       while (innerOffset < innerData.length) {
         const [innerDeltaId, innerDeltaIdLen] = decodeVarint(innerData.subarray(innerOffset));
         const extId = innerPreviousId + innerDeltaId;
+
+        // draft-ietf-moq-transport-19 Section 1.4.3:
+        // "The previous Type value plus the Delta Type MUST NOT be greater than
+        //  2^64 - 1. If a Delta Type is received that would be too large, the
+        //  Session MUST be closed with a PROTOCOL_VIOLATION."
+        if (extId > MAX_VARINT) {
+          throw new ProtocolViolationError(
+            `delta id addition exceeds maximum: ${extId} > ${MAX_VARINT}`,
+          );
+        }
+
         innerPreviousId = extId;
 
         // draft-ietf-moq-transport-19 §12.7:
@@ -725,6 +756,15 @@ export function decodeProperties(data: Uint8Array): Property[] {
   while (offset < data.length) {
     const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
     const id = previousId + deltaId;
+
+    // draft-ietf-moq-transport-19 Section 1.4.3:
+    // "The previous Type value plus the Delta Type MUST NOT be greater than
+    //  2^64 - 1. If a Delta Type is received that would be too large, the
+    //  Session MUST be closed with a PROTOCOL_VIOLATION."
+    if (id > MAX_VARINT) {
+      throw new ProtocolViolationError(`delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`);
+    }
+
     previousId = id;
 
     // draft-ietf-moq-transport-19 §2.5.1:
@@ -764,6 +804,17 @@ export function decodeProperties(data: Uint8Array): Property[] {
           try {
             const [deltaId, deltaIdLen] = decodeVarint(extData.subarray(innerOffset));
             const innerId = innerPreviousId + deltaId;
+
+            // draft-ietf-moq-transport-19 Section 1.4.3:
+            // "The previous Type value plus the Delta Type MUST NOT be greater
+            //  than 2^64 - 1. If a Delta Type is received that would be too large,
+            //  the Session MUST be closed with a PROTOCOL_VIOLATION."
+            if (innerId > MAX_VARINT) {
+              throw new ProtocolViolationError(
+                `delta id addition exceeds maximum: ${innerId} > ${MAX_VARINT}`,
+              );
+            }
+
             innerPreviousId = innerId;
             if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
               throw new MalformedTrackError(

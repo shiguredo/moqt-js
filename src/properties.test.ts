@@ -23,7 +23,7 @@ import {
 } from "./properties";
 import { MalformedTrackError, ProtocolViolationError } from "./error";
 import { isGreaseValue } from "./grease";
-import { decodeVarint } from "./varint";
+import { decodeVarint, encodeVarint, MAX_VARINT } from "./varint";
 
 test("TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である", () => {
   assert.equal(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, 0x06n);
@@ -387,6 +387,143 @@ test("decodeProperties: 非 Mandatory 範囲の上限 (0x3FFF) は通過", () =>
   const result = decodeProperties(data);
   assert.equal(result.length, 1);
   assert.equal(result[0].id, 0x3fffn);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than
+ *  2^64 - 1. If a Delta Type is received that would be too large, the
+ *  Session MUST be closed with a PROTOCOL_VIOLATION."
+ * decodeProperties の delta 加算でも 2^64-1 超過は ProtocolViolationError
+ * になることを検証する。
+ */
+test("decodeProperties: delta 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+  // 1 個目: deltaId = 2^64-1 (偶数型、value=0)
+  // 2 個目: deltaId = 1 → previousId + 1 = 2^64 > 2^64-1
+  const data = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+
+  assert.throws(() => decodeProperties(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * deltaId 単体が 2^64-1 (previousId=0) は違反にならないことを検証する。
+ * 2^64-1 は奇数 ID のため length-prefixed 形式で、length (0) + 空バイト列を付加する。
+ */
+test("decodeProperties: deltaId 単体が 2^64-1 は違反にならない", () => {
+  const data = new Uint8Array([...encodeVarint(MAX_VARINT), ...encodeVarint(0n)]);
+
+  const result = decodeProperties(data);
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, MAX_VARINT);
+  assert.deepEqual(result[0].data, new Uint8Array());
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * 非自明な加算 (previousId=0x02 + deltaId=2^64-3) の結果が 2^64-1 ちょうどは
+ * 違反にならないことを検証する。
+ */
+test("decodeProperties: 加算結果が 2^64-1 ちょうどは違反にならない", () => {
+  // 1 個目: deltaId = 0x02 (偶数型、value=0)
+  // 2 個目: deltaId = 2^64-3 → 0x02 + 2^64-3 = 2^64-1 (奇数 ID、length-prefixed)
+  const data = new Uint8Array([
+    ...encodeVarint(0x02n),
+    ...encodeVarint(0n),
+    ...encodeVarint(2n ** 64n - 3n),
+    ...encodeVarint(0n),
+  ]);
+
+  const result = decodeProperties(data);
+
+  assert.equal(result.length, 2);
+  assert.equal(result[1].id, MAX_VARINT);
+  assert.deepEqual(result[1].data, new Uint8Array());
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * parseProperties の delta 加算でも 2^64-1 超過は ProtocolViolationError
+ * になることを検証する。
+ */
+test("parseProperties: delta 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+  const data = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+
+  assert.throws(() => parseProperties(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * decodeImmutableProperties の delta 加算でも 2^64-1 超過は
+ * ProtocolViolationError になることを検証する。
+ * IMMUTABLE_PROPERTIES は奇数 ID の length-prefixed 形式のため、
+ * ID + length + body の完全なワイヤ形式を組み立てる。
+ */
+test("decodeImmutableProperties: delta 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+  // IMMUTABLE_PROPERTIES (0x0B) の ID + length + 内側 KVP を組み立てる
+  const inner = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const data = new Uint8Array([
+    ...encodeVarint(MOQTPropertyId.IMMUTABLE_PROPERTIES),
+    ...encodeVarint(BigInt(inner.length)),
+    ...inner,
+  ]);
+
+  assert.throws(() => decodeImmutableProperties(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * parseProperties の IMMUTABLE_PROPERTIES 内側 KVP でも 2^64-1 超過は
+ * ProtocolViolationError になることを検証する。
+ */
+test("parseProperties: IMMUTABLE_PROPERTIES 内側の delta 加算超過で ProtocolViolationError", () => {
+  // IMMUTABLE_PROPERTIES (0x0B、奇数 ID) の length-prefixed 形式
+  const inner = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const data = new Uint8Array([
+    ...encodeVarint(MOQTPropertyId.IMMUTABLE_PROPERTIES),
+    ...encodeVarint(BigInt(inner.length)),
+    ...inner,
+  ]);
+
+  assert.throws(() => parseProperties(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 1.4.3:
+ * decodeProperties の IMMUTABLE_PROPERTIES 内側 KVP 再帰走査でも
+ * 2^64-1 超過は ProtocolViolationError になることを検証する。
+ */
+test("decodeProperties: IMMUTABLE_PROPERTIES 内側の delta 加算超過で ProtocolViolationError", () => {
+  // IMMUTABLE_PROPERTIES (0x0B、奇数 ID) の length-prefixed 形式
+  const inner = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const data = new Uint8Array([
+    ...encodeVarint(MOQTPropertyId.IMMUTABLE_PROPERTIES),
+    ...encodeVarint(BigInt(inner.length)),
+    ...inner,
+  ]);
+
+  assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
 test("decodeProperties: Mandatory 範囲外 (0x8000) は通過", () => {
