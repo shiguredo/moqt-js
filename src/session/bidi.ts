@@ -21,8 +21,10 @@ import {
   MessageType,
   FetchType,
   MessageParameterType,
+  createTrackNamespace,
   encodeAuthorizationToken,
   encodeFetchPayload,
+  encodeParameterTrackNamespace,
   encodeRequestUpdatePayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
@@ -56,9 +58,9 @@ import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../s
 import { encodeVarint } from "../varint";
 import type {
   JoiningFetchOptions,
+  NamespaceUpdateOptions,
   SessionState,
   TrackStatusResult,
-  TracksSubscriptionCallbacks,
 } from "../session";
 import {
   extractForwardState,
@@ -66,8 +68,11 @@ import {
   validateFetchOkEndLocation,
   buildRangeFilterParameters,
   validateRangeFilterLimits,
+  validateNamespacePrefixUpdate,
+  validateTrackNamespaceForSend,
 } from "./params";
 import { toProtocolViolationSessionError } from "./errors";
+import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 
 // ============================================================================
 // 内部インターフェース
@@ -141,18 +146,8 @@ export interface BidiSessionInternal {
 
   statsControlMessagesSent: number;
 
-  readonly tracksSubscriptions: Map<
-    bigint,
-    {
-      callbacks: TracksSubscriptionCallbacks;
-      state: "active" | "closed";
-      namespacePrefix: string[];
-      stream?: WebTransportBidirectionalStream;
-      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
-      controlReader?: ControlStreamReader;
-      writer?: WritableStreamDefaultWriter<Uint8Array>;
-    }
-  >;
+  readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
+  readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
 
   emitDebug(
     direction: "send" | "recv",
@@ -901,12 +896,7 @@ export async function bidiReadRequestStreamMessages(
             );
             // draft-ietf-moq-transport-19 §10.9: coalescing により単一 REQUEST_ERROR で
             // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する
-            for (const [updateId, pendingUpdate] of session.pendingRequestUpdate) {
-              if (pendingUpdate.targetRequestId === requestId) {
-                session.pendingRequestUpdate.delete(updateId);
-                pendingUpdate.reject(error);
-              }
-            }
+            rejectPendingRequestUpdates(session, requestId, error);
             break;
           }
           case MessageType.REQUEST_UPDATE: {
@@ -1228,6 +1218,171 @@ export async function bidiSendRequestUpdate(
   return promise;
 }
 
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Track Namespace Prefix 更新
+ * REQUEST_UPDATE を送信する
+ *
+ * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+ * "A subscriber can update the Track Namespace Prefix of an established
+ *  SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS by including the
+ *  TRACK_NAMESPACE_PREFIX parameter (Section 10.2.19) in a REQUEST_UPDATE."
+ *
+ * SubscriberImpl 非依存の free function であり、namespaceSubscriptions /
+ * tracksSubscriptions が保持する writer を経由して送信する。
+ * 新 prefix は REQUEST_OK 受信時に namespacePrefix へ反映するため、
+ * サブスクリプション状態の pendingPrefix に保持する。
+ *
+ * 送信前に以下を検証する:
+ * - GOAWAY 受信後は送信しない (bidiSendRequestUpdate と同様)
+ * - ピアの MAX_REQUEST_UPDATES を超える outstanding REQUEST_UPDATE を送信しない
+ * - 更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目は送信しない
+ *   (単一スロット pendingPrefix による prefix 反映の競合を防ぐ)
+ * - 予約 namespace の送信拒否 (§3.2.1 / §3.2.2)
+ * - §10.9.2 の per-type 独立 overlap 制約 (更新対象自身を除く)
+ *
+ * @param session - セッション内部状態
+ * @param requestId - 更新対象の SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Request ID
+ * @param streamWriter - サブスクリプションの双方向ストリーム writer
+ * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX)
+ * @returns REQUEST_OK 受信で resolve、REQUEST_ERROR / ストリームクローズで reject する Promise
+ */
+export async function bidiSendNamespaceRequestUpdate(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  streamWriter: WritableStreamDefaultWriter<Uint8Array>,
+  options: NamespaceUpdateOptions,
+): Promise<void> {
+  // draft-ietf-moq-transport-19 §10.4:
+  // GOAWAY を受信したリクエストストリームはマイグレーション対象のため、
+  // 旧リクエストへの REQUEST_UPDATE は送信しない。
+  // §10.4 の SHOULD NOT 列挙は SUBSCRIBE / PUBLISH 等の新規リクエストのみだが、
+  // GOAWAY 処理で送信方向が FIN (writer.close()) 済みの場合に write が失敗し
+  // pendingRequestUpdate エントリがリークするため、防御的に REQUEST_UPDATE も
+  // 送信しない (bidiSendRequestUpdate と同様のガード)。
+  if (session.goawayReceivedOnRequestStreams.has(requestId)) {
+    throw new Error(`cannot send REQUEST_UPDATE: request stream is being migrated`);
+  }
+
+  // draft-ietf-moq-transport-19 §10.3.1.7:
+  // ピアの MAX_REQUEST_UPDATES を超える outstanding REQUEST_UPDATE を送信してはならない
+  const peerMax = session.peerMaxRequestUpdates;
+  if (peerMax > 0) {
+    let outstanding = 0;
+    for (const [, pending] of session.pendingRequestUpdate) {
+      if (pending.targetRequestId === requestId) {
+        outstanding++;
+      }
+    }
+    if (outstanding >= peerMax) {
+      throw new Error(
+        `cannot send REQUEST_UPDATE: outstanding count ${outstanding} exceeds peer MAX_REQUEST_UPDATES ${peerMax}`,
+      );
+    }
+  }
+
+  // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+  validateTrackNamespaceForSend(options.trackNamespacePrefix);
+
+  // draft-ietf-moq-transport-19 §10.9.2:
+  // overlap 制約は型ごとに独立して適用される。更新対象自身は比較対象から除外する
+  // (prefix 拡大更新を許可するため)。
+  // 受信側の MUST は PREFIX_OVERLAP 応答 (§10.2.19) であり、この検証は
+  // クライアント側の送信前先行担保である。
+  const namespaceSubscription = session.namespaceSubscriptions.get(requestId);
+  const tracksSubscription = session.tracksSubscriptions.get(requestId);
+  const subscription = namespaceSubscription ?? tracksSubscription;
+  if (!subscription) {
+    throw new Error(`namespace subscription not found for request ID ${requestId}`);
+  }
+  if (subscription.state !== "active") {
+    throw new Error("cannot send REQUEST_UPDATE: subscription is closed");
+  }
+  // draft-ietf-moq-transport-19 §10.9.2 の設計判断:
+  // 更新の反映は subscription 状態の単一スロット pendingPrefix で行うため、
+  // 複数の更新を並行送信すると先の REQUEST_OK 到着時に後の更新の prefix が
+  // 誤って反映される。pendingPrefix が残っている (更新 in-flight) うちの
+  // 2 件目は throw してこの競合を構造的に防ぐ。
+  // ユーザーは前の update() の settle (resolve / reject) を待ってから呼ぶこと。
+  if (subscription.pendingPrefix !== undefined) {
+    throw new Error("cannot send REQUEST_UPDATE: another update is already in flight");
+  }
+  // 同一型のアクティブなサブスクリプション (更新対象自身を除く) の prefix を収集する
+  const isNamespaceSubscription = namespaceSubscription !== undefined;
+  const activeSubscriptions = isNamespaceSubscription
+    ? session.namespaceSubscriptions
+    : session.tracksSubscriptions;
+  const activePrefixes: string[][] = [];
+  for (const [id, sub] of activeSubscriptions) {
+    if (id !== requestId && sub.state === "active") {
+      activePrefixes.push(sub.namespacePrefix);
+    }
+  }
+  validateNamespacePrefixUpdate(
+    options.trackNamespacePrefix,
+    activePrefixes,
+    isNamespaceSubscription ? "SUBSCRIBE_NAMESPACE" : "SUBSCRIBE_TRACKS",
+  );
+
+  const updateRequestId = session.nextRequestId;
+  session.nextRequestId += 2n;
+
+  // 新 prefix を pendingPrefix に保持する。
+  // REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする
+  // (反映処理は namespaceLoops.ts の受信ループが行う)。
+  subscription.pendingPrefix = options.trackNamespacePrefix;
+
+  const parameters: Parameter[] = [
+    // TRACK_NAMESPACE_PREFIX (0x34) - draft-ietf-moq-transport-19 Section 10.2.19
+    encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
+  ];
+
+  const requestUpdateMsg = {
+    type: MessageType.REQUEST_UPDATE,
+    requestId: updateRequestId,
+    parameters,
+  };
+
+  const payload = encodeRequestUpdatePayload(requestUpdateMsg);
+
+  const promise = new Promise<void>((resolve, reject) => {
+    session.pendingRequestUpdate.set(updateRequestId, {
+      resolve,
+      reject,
+      targetRequestId: requestId,
+    });
+  });
+
+  if (!session.controlWriter) {
+    // 登録済みの pending と pendingPrefix を掃除してから throw する
+    // (残留すると後続の REQUEST_OK で未送信の prefix が誤って反映される)
+    session.pendingRequestUpdate.delete(updateRequestId);
+    subscription.pendingPrefix = undefined;
+    throw new Error("Control writer not initialized");
+  }
+  try {
+    const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
+    session.statsControlMessagesSent++;
+    session.emitDebug("send", MessageType.REQUEST_UPDATE, payload, {
+      requestId: updateRequestId.toString(),
+      targetRequestId: requestId.toString(),
+    });
+    await streamWriter.write(message);
+  } catch (error) {
+    // 送信失敗時は保留中の更新と pendingPrefix を掃除してから throw する
+    // (失敗した更新の REQUEST_OK は届かないため、残留すると後続の REQUEST_OK
+    //  で未送信の prefix が誤って反映される)。
+    // なお write 失敗はストリーム破壊 (RESET 等) を意味し、受信ループ側も
+    // 同時に終了する想定である。理論上は掃除後に遅延 REQUEST_OK が届き得るが、
+    // その場合は保留中更新なしとして PROTOCOL_VIOLATION で閉じられる
+    // (handleNamespaceRequestUpdateOk の hasPendingRequestUpdate 検証)。
+    session.pendingRequestUpdate.delete(updateRequestId);
+    subscription.pendingPrefix = undefined;
+    throw error;
+  }
+
+  return promise;
+}
+
 // ============================================================================
 // sendJoiningFetch
 // ============================================================================
@@ -1531,11 +1686,71 @@ export function bidiHandleRequestUpdateOk(
     }
   }
 
-  for (const [updateId, pendingUpdate] of session.pendingRequestUpdate) {
-    if (pendingUpdate.targetRequestId === streamRequestId) {
+  resolvePendingRequestUpdate(session, streamRequestId);
+}
+
+// ============================================================================
+// pendingRequestUpdate ヘルパー
+// ============================================================================
+
+/**
+ * 指定の targetRequestId を対象とする保留中の REQUEST_UPDATE が存在するか
+ * 判定する
+ *
+ * 確立済みストリーム上の REQUEST_OK / REQUEST_ERROR が REQUEST_UPDATE への
+ * 応答なのか、それとも不正な 2 通目の応答なのかを区別するために使う。
+ */
+export function hasPendingRequestUpdate(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+): boolean {
+  for (const [, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId === targetRequestId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 指定の targetRequestId を対象とする保留中の REQUEST_UPDATE を 1 件解決する
+ *
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * "The receiver MUST still send a REQUEST_OK for each successful update"
+ * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
+ */
+export function resolvePendingRequestUpdate(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+): void {
+  for (const [updateId, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
-      pendingUpdate.resolve();
+      pending.resolve();
       break;
+    }
+  }
+}
+
+/**
+ * 指定の targetRequestId を対象とする保留中の REQUEST_UPDATE をすべて reject する
+ *
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * "If the coalesced REQUEST_UPDATE results in REQUEST_ERROR, only a single
+ *  REQUEST_ERROR will be sent and the sender of the REQUEST_UPDATEs will not
+ *  always be able to determine which caused an error."
+ * coalescing により単一 REQUEST_ERROR が複数の REQUEST_UPDATE を失敗させる
+ * 可能性があるため、すべて reject する。
+ */
+export function rejectPendingRequestUpdates(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+  error: Error,
+): void {
+  for (const [updateId, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId === targetRequestId) {
+      session.pendingRequestUpdate.delete(updateId);
+      pending.reject(error);
     }
   }
 }

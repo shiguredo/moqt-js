@@ -27,6 +27,12 @@ export interface NamespaceSubscriptionState {
   callbacks: NamespaceSubscriptionCallbacks;
   state: "active" | "closed";
   namespacePrefix: string[];
+  /**
+   * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
+   * draft-ietf-moq-transport-19 §10.9.2:
+   * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
+   */
+  pendingPrefix?: string[];
   stream?: WebTransportBidirectionalStream;
   streamReader?: ReadableStreamDefaultReader<Uint8Array>;
   controlReader?: ControlStreamReader;
@@ -37,6 +43,12 @@ export interface TracksSubscriptionState {
   callbacks: TracksSubscriptionCallbacks;
   state: "active" | "closed";
   namespacePrefix: string[];
+  /**
+   * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
+   * draft-ietf-moq-transport-19 §10.9.2:
+   * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
+   */
+  pendingPrefix?: string[];
   stream?: WebTransportBidirectionalStream;
   streamReader?: ReadableStreamDefaultReader<Uint8Array>;
   controlReader?: ControlStreamReader;
@@ -68,7 +80,6 @@ export interface SessionInternal extends BidiSessionInternal {
   // ============================================================
   // namespaceLoops.ts 用
   // ============================================================
-  readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
   readonly namespacePublications: Map<bigint, NamespacePublicationState>;
 
   createNamespaceSubscription(requestId: bigint): NamespaceSubscription;

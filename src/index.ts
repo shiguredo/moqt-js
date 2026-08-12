@@ -31,6 +31,7 @@ export type {
   TrackStatusResult,
   NamespaceSubscriptionCallbacks,
   NamespaceSubscription,
+  NamespaceUpdateOptions,
   TracksSubscriptionCallbacks,
   TracksSubscription,
   MoqtObject,

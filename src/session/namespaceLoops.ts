@@ -21,11 +21,16 @@ import {
   decodeRequestOkPayload,
   trackNamespaceToStrings,
 } from "../message";
-import { NAMESPACE_OK_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
+import {
+  NAMESPACE_OK_ALLOWED_PARAMS,
+  REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+  validateParameterScope,
+} from "../message/parameterScope";
 import { RequestError, SessionError, SessionErrorCode, normalizeRequestErrorCode } from "../error";
 import * as bidi from "./bidi";
 import { isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
+import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 import type { SessionInternal } from "./types";
 
 /**
@@ -56,6 +61,190 @@ export function namespaceHandleGoaway(
   const decodedMsg = decodeGoawayPayload(messagePayload);
   callbacks?.goaway?.(decodedMsg.newSessionUri);
   return decodedMsg.newSessionUri;
+}
+
+/**
+ * REQUEST_ERROR ペイロードを RequestError に変換する
+ *
+ * namespace 系ループの 3 箇所 (初期 REQUEST_ERROR / 更新失敗応答 /
+ * GOAWAY 後の REQUEST_ERROR) で共通の構築ロジック。
+ */
+function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestError {
+  const decodedMsg = decodeRequestErrorPayload(messagePayload);
+  return new RequestError(
+    decodedMsg.reasonPhrase,
+    normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
+    decodedMsg.retryInterval,
+    decodedMsg.redirect
+      ? {
+          connectUri: decodedMsg.redirect.connectUri,
+          trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+          trackName: decodedMsg.redirect.trackName,
+        }
+      : undefined,
+  );
+}
+
+/**
+ * 保留中の REQUEST_UPDATE をすべて失敗させ、pendingPrefix をクリアする
+ *
+ * REQUEST_ERROR 受信 (goawayReceived を含む) / ストリームクローズ /
+ * セッションクローズ検出の各経路で共通の後始末。
+ * 保留中の更新が無い場合は何もしない。
+ */
+function rejectPendingNamespaceUpdates(
+  session: SessionInternal,
+  requestId: bigint,
+  subscription: NamespaceSubscriptionState | TracksSubscriptionState,
+  error: Error,
+): void {
+  if (!bidi.hasPendingRequestUpdate(session, requestId)) {
+    return;
+  }
+  bidi.rejectPendingRequestUpdates(session, requestId, error);
+  subscription.pendingPrefix = undefined;
+}
+
+/**
+ * 確立後の REQUEST_OK (REQUEST_UPDATE 応答) を処理する
+ *
+ * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+ * 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK) であり、
+ * 保留中の更新を解決して新 prefix をサブスクリプション状態へ反映する。
+ *
+ * - 保留中の更新が無い 2 通目以降の REQUEST_OK は PROTOCOL_VIOLATION
+ * - 更新応答は REQUEST_UPDATE_OK_ALLOWED_PARAMS でスコープ検証する
+ *   (初期 REQUEST_OK が NAMESPACE_OK_ALLOWED_PARAMS を使うのとは区別する)
+ * - Track Properties は REQUEST_UPDATE_OK では空であること (§10.5)
+ * - 検証失敗時はセッションが PROTOCOL_VIOLATION で閉じられるため、保留中の
+ *   更新も失敗として reject して掃除する (update() のハング防止)
+ *
+ * @param onPrefixApplied - 新 prefix を反映した直後に呼ばれるコールバック。
+ *   draft-ietf-moq-transport-19 §10.9.2:
+ *   "NAMESPACE and NAMESPACE_DONE messages following the REQUEST_OK will contain
+ *    Track Namespace suffixes relative to the updated prefix."
+ *   SUBSCRIBE_NAMESPACE ループは NAMESPACE_DONE の重複検証キーを新 prefix 基準に
+ *   リセットするために使う。
+ * @returns 読み取りを継続してよい場合は true、セッションが閉じられ中断する場合は false
+ */
+function handleNamespaceRequestUpdateOk(
+  session: SessionInternal,
+  requestId: bigint,
+  requestOk: ReturnType<typeof decodeRequestOkPayload>,
+  subscription: NamespaceSubscriptionState | TracksSubscriptionState,
+  streamKind: "namespace" | "tracks",
+  onPrefixApplied?: () => void,
+): boolean {
+  if (!bidi.hasPendingRequestUpdate(session, requestId)) {
+    session.closeWithError(
+      new SessionError(
+        `received second REQUEST_OK on ${streamKind} stream`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return false;
+  }
+  if (
+    !validateParameterScope(
+      requestOk.parameters,
+      REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+      "REQUEST_UPDATE_OK",
+      (error) => session.closeWithError(error),
+    )
+  ) {
+    rejectPendingNamespaceUpdates(
+      session,
+      requestId,
+      subscription,
+      new Error("update failed: session closed with PROTOCOL_VIOLATION in REQUEST_UPDATE_OK"),
+    );
+    return false;
+  }
+  if (
+    !bidi.validateRequestOkNoTrackProperties(
+      requestOk.trackProperties,
+      "REQUEST_UPDATE_OK",
+      (error) => session.closeWithError(error),
+    )
+  ) {
+    rejectPendingNamespaceUpdates(
+      session,
+      requestId,
+      subscription,
+      new Error("update failed: session closed with PROTOCOL_VIOLATION in REQUEST_UPDATE_OK"),
+    );
+    return false;
+  }
+  // 更新応答を解決し、保留中の新 prefix を反映する
+  bidi.resolvePendingRequestUpdate(session, requestId);
+  if (subscription.pendingPrefix !== undefined) {
+    subscription.namespacePrefix = subscription.pendingPrefix;
+    subscription.pendingPrefix = undefined;
+    onPrefixApplied?.();
+  }
+  return true;
+}
+
+/**
+ * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗応答) を処理する
+ *
+ * draft-ietf-moq-transport-19 §10.9.2:
+ * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答 (例: PREFIX_OVERLAP) であり、
+ * 保留中の更新をすべて reject する (coalescing 対応)。prefix は反映せず
+ * pendingPrefix をクリアする。
+ *
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * "When a REQUEST_UPDATE fails for a SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS or
+ *  PUBLISH_NAMESPACE, the responder MUST close the bidi stream"
+ * に従い、ピアがストリームを閉じるまで読み取りを継続する (done 検出でループが
+ * 終了する)。保留中の更新が無い REQUEST_ERROR は PROTOCOL_VIOLATION。
+ *
+ * @returns 読み取りを継続してよい場合は true、セッションが閉じられ中断する場合は false
+ */
+function handleNamespaceRequestUpdateError(
+  session: SessionInternal,
+  requestId: bigint,
+  messagePayload: Uint8Array,
+  subscription: NamespaceSubscriptionState | TracksSubscriptionState,
+  streamKind: "namespace" | "tracks",
+): boolean {
+  if (!bidi.hasPendingRequestUpdate(session, requestId)) {
+    session.closeWithError(
+      new SessionError(
+        `received REQUEST_ERROR after REQUEST_OK on ${streamKind} stream`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return false;
+  }
+  rejectPendingNamespaceUpdates(
+    session,
+    requestId,
+    subscription,
+    decodeRequestErrorToRequestError(messagePayload),
+  );
+  return true;
+}
+
+/**
+ * ストリームクローズ (done) 時の保留中 REQUEST_UPDATE を処理する
+ *
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * REQUEST_UPDATE 失敗時はピアが bidi ストリームを閉じるため、応答
+ * (REQUEST_OK / REQUEST_ERROR) を待たずに閉じた場合は保留中の更新を
+ * 暗黙の失敗として reject する。
+ */
+function handleNamespaceRequestUpdateStreamClosed(
+  session: SessionInternal,
+  requestId: bigint,
+  subscription: NamespaceSubscriptionState | TracksSubscriptionState,
+): void {
+  rejectPendingNamespaceUpdates(
+    session,
+    requestId,
+    subscription,
+    new Error("stream closed before receiving update response"),
+  );
 }
 
 /**
@@ -92,6 +281,10 @@ export async function namespaceStartNamespaceStreamLoop(
       if (done) {
         if (!resolved) {
           reject(new Error("stream closed before receiving response"));
+        } else {
+          // draft-ietf-moq-transport-19 §10.9:
+          // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
+          handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
         }
         break;
       }
@@ -125,16 +318,24 @@ export async function namespaceStartNamespaceStreamLoop(
 
         switch (messageType) {
           case MessageType.REQUEST_OK: {
-            if (resolved) {
-              session.closeWithError(
-                new SessionError(
-                  "received second REQUEST_OK on namespace stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
             const requestOk = decodeRequestOkPayload(messagePayload);
+            if (resolved) {
+              // draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+              // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
+              if (
+                !handleNamespaceRequestUpdateOk(
+                  session,
+                  requestId,
+                  requestOk,
+                  subscription,
+                  "namespace",
+                  () => seenNamespaceSuffixes.clear(),
+                )
+              ) {
+                return;
+              }
+              break;
+            }
             if (
               !validateParameterScope(
                 requestOk.parameters,
@@ -166,30 +367,34 @@ export async function namespaceStartNamespaceStreamLoop(
             // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
             // REQUEST_OK」を防ぐ)
             if (resolved && !goawayReceived) {
-              session.closeWithError(
-                new SessionError(
-                  "received REQUEST_ERROR after REQUEST_OK on namespace stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
-            if (goawayReceived) {
+              // draft-ietf-moq-transport-19 §10.9.2:
+              // 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答
+              if (
+                !handleNamespaceRequestUpdateError(
+                  session,
+                  requestId,
+                  messagePayload,
+                  subscription,
+                  "namespace",
+                )
+              ) {
+                return;
+              }
               break;
             }
-            const decodedMsg = decodeRequestErrorPayload(messagePayload);
-            const error = new RequestError(
-              decodedMsg.reasonPhrase,
-              normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-              decodedMsg.retryInterval,
-              decodedMsg.redirect
-                ? {
-                    connectUri: decodedMsg.redirect.connectUri,
-                    trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-                    trackName: decodedMsg.redirect.trackName,
-                  }
-                : undefined,
-            );
+            if (goawayReceived) {
+              // GOAWAY 受信後の REQUEST_ERROR は spurious PROTOCOL_VIOLATION を
+              // 防ぐためセッションは閉じないが、GOAWAY 前に送信済みの保留中
+              // 更新は失敗として reject する (update() のハング防止)
+              rejectPendingNamespaceUpdates(
+                session,
+                requestId,
+                subscription,
+                decodeRequestErrorToRequestError(messagePayload),
+              );
+              break;
+            }
+            const error = decodeRequestErrorToRequestError(messagePayload);
             subscription.state = "closed";
             callbacks.error?.(error);
             reject(error);
@@ -255,15 +460,23 @@ export async function namespaceStartNamespaceStreamLoop(
     // draft-ietf-moq-transport-19 §10.4:
     // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
     // spurious error 通知を抑止する
+    const normalizedError = error instanceof Error ? error : new Error(String(error));
     if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
-      const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (!isSessionClosedError(normalizedError)) {
         callbacks.error?.(normalizedError);
       }
       if (!resolved) {
         reject(normalizedError);
       }
+    }
+    // draft-ietf-moq-transport-19 §10.9.1:
+    // RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
+    // 一種として保留中の更新を暗黙の失敗として reject する。
+    // goawayReceived の有無に関わらず実行する (reject しないと update() が
+    // 永不解決になる。done 検出経路と同じ扱い)。
+    if (resolved) {
+      handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
     }
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError !== null) {
@@ -308,6 +521,10 @@ export async function namespaceStartTracksStreamLoop(
       if (done) {
         if (!resolved) {
           reject(new Error("stream closed before receiving response"));
+        } else {
+          // draft-ietf-moq-transport-19 §10.9:
+          // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
+          handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
         }
         break;
       }
@@ -341,16 +558,23 @@ export async function namespaceStartTracksStreamLoop(
 
         switch (messageType) {
           case MessageType.REQUEST_OK: {
-            if (resolved) {
-              session.closeWithError(
-                new SessionError(
-                  "received second REQUEST_OK on tracks stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
             const requestOk = decodeRequestOkPayload(messagePayload);
+            if (resolved) {
+              // draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+              // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
+              if (
+                !handleNamespaceRequestUpdateOk(
+                  session,
+                  requestId,
+                  requestOk,
+                  subscription,
+                  "tracks",
+                )
+              ) {
+                return;
+              }
+              break;
+            }
             if (
               !validateParameterScope(
                 requestOk.parameters,
@@ -373,30 +597,34 @@ export async function namespaceStartTracksStreamLoop(
             // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
             // REQUEST_OK」を防ぐ)
             if (resolved && !goawayReceived) {
-              session.closeWithError(
-                new SessionError(
-                  "received REQUEST_ERROR after REQUEST_OK on tracks stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
-            if (goawayReceived) {
+              // draft-ietf-moq-transport-19 §10.9.2:
+              // 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答
+              if (
+                !handleNamespaceRequestUpdateError(
+                  session,
+                  requestId,
+                  messagePayload,
+                  subscription,
+                  "tracks",
+                )
+              ) {
+                return;
+              }
               break;
             }
-            const decodedMsg = decodeRequestErrorPayload(messagePayload);
-            const error = new RequestError(
-              decodedMsg.reasonPhrase,
-              normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-              decodedMsg.retryInterval,
-              decodedMsg.redirect
-                ? {
-                    connectUri: decodedMsg.redirect.connectUri,
-                    trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-                    trackName: decodedMsg.redirect.trackName,
-                  }
-                : undefined,
-            );
+            if (goawayReceived) {
+              // GOAWAY 受信後の REQUEST_ERROR は spurious PROTOCOL_VIOLATION を
+              // 防ぐためセッションは閉じないが、GOAWAY 前に送信済みの保留中
+              // 更新は失敗として reject する (update() のハング防止)
+              rejectPendingNamespaceUpdates(
+                session,
+                requestId,
+                subscription,
+                decodeRequestErrorToRequestError(messagePayload),
+              );
+              break;
+            }
+            const error = decodeRequestErrorToRequestError(messagePayload);
             subscription.state = "closed";
             callbacks.error?.(error);
             reject(error);
@@ -446,15 +674,23 @@ export async function namespaceStartTracksStreamLoop(
     // draft-ietf-moq-transport-19 §10.4:
     // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
     // spurious error 通知を抑止する
+    const normalizedError = error instanceof Error ? error : new Error(String(error));
     if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
-      const normalizedError = error instanceof Error ? error : new Error(String(error));
       if (!isSessionClosedError(normalizedError)) {
         callbacks.error?.(normalizedError);
       }
       if (!resolved) {
         reject(normalizedError);
       }
+    }
+    // draft-ietf-moq-transport-19 §10.9.1:
+    // RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
+    // 一種として保留中の更新を暗黙の失敗として reject する。
+    // goawayReceived の有無に関わらず実行する (reject しないと update() が
+    // 永不解決になる。done 検出経路と同じ扱い)。
+    if (resolved) {
+      handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
     }
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError !== null) {

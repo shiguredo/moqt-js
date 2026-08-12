@@ -6,6 +6,8 @@ import { test, assert } from "vite-plus/test";
 import {
   clampTimeoutMs,
   matchNamespacePrefix,
+  namespacePrefixesOverlap,
+  validateNamespacePrefixUpdate,
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
   buildRangeFilterParameters,
@@ -106,6 +108,68 @@ test("matchNamespacePrefix: 先頭から不一致の場合は null を返す", (
 test("matchNamespacePrefix: 両方空配列の場合は空 suffix を返す", () => {
   const result = matchNamespacePrefix([], []);
   assert.deepEqual(result, []);
+});
+
+// ============================================================================
+// namespacePrefixesOverlap / validateNamespacePrefixUpdate
+// draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions)
+// ============================================================================
+
+test("namespacePrefixesOverlap: 新 prefix が既存 prefix の sub-prefix なら true", () => {
+  // 新 prefix ["a"] は既存 prefix ["a", "b"] の sub-prefix であり共通 prefix を持つ
+  assert.isTrue(namespacePrefixesOverlap(["a"], ["a", "b"]));
+});
+
+test("namespacePrefixesOverlap: 既存 prefix が新 prefix の sub-prefix なら true", () => {
+  // 既存 prefix ["a"] は新 prefix ["a", "b"] の sub-prefix であり共通 prefix を持つ
+  assert.isTrue(namespacePrefixesOverlap(["a", "b"], ["a"]));
+});
+
+test("namespacePrefixesOverlap: 完全一致は true", () => {
+  assert.isTrue(namespacePrefixesOverlap(["a", "b"], ["a", "b"]));
+});
+
+test("namespacePrefixesOverlap: 共通 prefix が無ければ false", () => {
+  assert.isFalse(namespacePrefixesOverlap(["a"], ["b"]));
+  assert.isFalse(namespacePrefixesOverlap(["a", "b"], ["a", "c"]));
+});
+
+test("namespacePrefixesOverlap: 空 prefix はすべてと共通 prefix を持つ", () => {
+  // 空配列はあらゆる prefix の sub-prefix であるため true
+  assert.isTrue(namespacePrefixesOverlap([], ["a"]));
+  assert.isTrue(namespacePrefixesOverlap(["a"], []));
+});
+
+test("validateNamespacePrefixUpdate: 重複が無ければ throw しない", () => {
+  // 新 prefix ["a", "b"] は既存 prefix ["a", "c"] と共通 prefix を持たない
+  assert.doesNotThrow(() =>
+    validateNamespacePrefixUpdate(["a", "b"], [["a", "c"]], "SUBSCRIBE_TRACKS"),
+  );
+});
+
+test("validateNamespacePrefixUpdate: 新 prefix が既存 prefix の sub-prefix なら throw する", () => {
+  assert.throws(
+    () => validateNamespacePrefixUpdate(["a"], [["a", "b"]], "SUBSCRIBE_NAMESPACE"),
+    /overlaps with active subscription prefix/,
+  );
+});
+
+test("validateNamespacePrefixUpdate: 既存 prefix が新 prefix の sub-prefix なら throw する", () => {
+  assert.throws(
+    () => validateNamespacePrefixUpdate(["a", "b"], [["a"]], "SUBSCRIBE_TRACKS"),
+    /overlaps with active subscription prefix/,
+  );
+});
+
+test("validateNamespacePrefixUpdate: 複数既存 prefix のいずれかと重複すれば throw する", () => {
+  assert.throws(
+    () => validateNamespacePrefixUpdate(["a", "b"], [["x"], ["a"]], "SUBSCRIBE_NAMESPACE"),
+    /overlaps with active subscription prefix/,
+  );
+});
+
+test("validateNamespacePrefixUpdate: アクティブな既存 prefix が無ければ throw しない", () => {
+  assert.doesNotThrow(() => validateNamespacePrefixUpdate(["a", "b"], [], "SUBSCRIBE_NAMESPACE"));
 });
 
 // ============================================================================
