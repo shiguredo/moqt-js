@@ -16,6 +16,7 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings, type Parameter } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
+import { ProtocolViolationError } from "../error";
 import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
 
 /**
@@ -219,6 +220,44 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
 });
 
 /**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は SUBSCRIBE ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な SUBSCRIBE の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("SUBSCRIBE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      namespaceStringsArb,
+      trackNameArb,
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, namespaceParts, trackName, parameters, trailing) => {
+        const original = {
+          type: MessageType.SUBSCRIBE as typeof MessageType.SUBSCRIBE,
+          requestId,
+          trackNamespace: createTrackNamespace(namespaceParts),
+          trackName,
+          parameters,
+        };
+
+        const encoded = encodeSubscribePayload(original);
+        // 正常な SUBSCRIBE の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeSubscribePayload(withTrailing), ProtocolViolationError);
+      },
+    ),
+  );
+});
+
+/**
  * draft-ietf-moq-transport-19 Section 10.9:
  * REQUEST_UPDATE は既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
@@ -244,5 +283,39 @@ test("RequestUpdate のエンコード・デコードがラウンドトリップ
         assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
       }
     }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 Section 10:
+ * "If the length does not match the length of the Message Body,
+ *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は REQUEST_UPDATE ペイロードの最後のフィールドであり、
+ * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
+ * 正常な REQUEST_UPDATE の後ろに後続バイト列を連結すると
+ * ProtocolViolationError を throw することを検証する。
+ */
+test("REQUEST_UPDATE の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      parametersArb,
+      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
+      (requestId, parameters, trailing) => {
+        const original = {
+          type: MessageType.REQUEST_UPDATE as typeof MessageType.REQUEST_UPDATE,
+          requestId,
+          parameters,
+        };
+
+        const encoded = encodeRequestUpdatePayload(original);
+        // 正常な REQUEST_UPDATE の後ろに 1 バイト以上の後続データを連結する
+        const withTrailing = new Uint8Array(encoded.length + trailing.length);
+        withTrailing.set(encoded, 0);
+        withTrailing.set(trailing, encoded.length);
+
+        assert.throws(() => decodeRequestUpdatePayload(withTrailing), ProtocolViolationError);
+      },
+    ),
   );
 });

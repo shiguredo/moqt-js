@@ -200,6 +200,18 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
     offset + totalConsumed + Number(reasonLen),
   );
   const reasonPhrase = new TextDecoder().decode(reasonBytes);
+  totalConsumed += Number(reasonLen);
+
+  // draft-ietf-moq-transport-19 Section 10:
+  // "If the length does not match the length of the Message Body,
+  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  // Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、
+  // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
+  if (offset + totalConsumed !== data.length) {
+    throw new ProtocolViolationError(
+      `trailing data in PUBLISH_DONE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+    );
+  }
 
   return {
     type: MessageType.PUBLISH_DONE,
