@@ -332,6 +332,93 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
   assert.equal(closedWithError, undefined);
 });
 
+/**
+ * draft-ietf-moq-transport-19 §10.2.17:
+ * "If the parameter is omitted from REQUEST_UPDATE, the value for the
+ *  subscription remains unchanged."
+ * 自 update({ forward: false }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
+ * SubscriberImpl の Forward State に反映されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で Forward State が反映される", () => {
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: false }],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // 送信時の FORWARD=0 が反映され、pending エントリは解決・削除される
+  assert.equal(subscriber.forwardState, false);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.17:
+ * 自 update({ forward: true }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
+ * SubscriberImpl の Forward State に true として反映されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK で Forward State が true に反映される", () => {
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  subscriber.setForwardState(false);
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: true }],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.equal(subscriber.forwardState, true);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.17:
+ * 自 update() で FORWARD を省略した場合 (undefined)、REQUEST_OK 受信時に
+ * Forward State は変化しないことを検証する。
+ */
+test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で Forward State は不変", () => {
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  subscriber.setForwardState(false);
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // FORWARD 省略時は不変 (§10.2.17)
+  assert.equal(subscriber.forwardState, false);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
 // ============================================================================
 // PUBLISH_OK Track Properties 非空チェックテスト
 // ============================================================================
@@ -1472,7 +1559,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
  * 応答には含まれず、引数の requestId (10n) で判定されることも暗黙に検証
  * される。
  */
-test("bidiHandlePublishRequestUpdate: 無限定 3 種のみの REQUEST_UPDATE で REQUEST_OK が応答されセッションが閉じない", async () => {
+test("bidiHandlePublishRequestUpdate: 受理パラメータのみの REQUEST_UPDATE で REQUEST_OK が応答されセッションが閉じない", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -1542,17 +1629,17 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
 
 /**
  * draft-ietf-moq-transport-19 §10.9 / §10.6:
- * 文脈限定パラメータ (例: FORWARD) を含む REQUEST_UPDATE を受信した場合、
- * REQUEST_ERROR (NOT_SUPPORTED) が応答されセッションが閉じないことを
- * 検証する (文脈限定パラメータの許可拡大は将来の対応とする。§10.6 の
- * NOT_SUPPORTED 定義に基づく設計判断)。
+ * 文脈限定パラメータ (例: SUBSCRIBER_PRIORITY) を含む REQUEST_UPDATE を
+ * 受信した場合、REQUEST_ERROR (NOT_SUPPORTED) が応答されセッションが
+ * 閉じないことを検証する (§10.6 の NOT_SUPPORTED 定義に基づく設計判断。
+ * FORWARD は受理対象のため例から除外する)。
  */
 test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUEST_UPDATE で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 100n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) }],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
@@ -1564,6 +1651,31 @@ test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUE
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
   assert.equal(decoded.reasonPhrase, "parameter not supported for request update");
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * ケース 1 の REQUEST_UPDATE で FORWARD=1 が含まれる場合も REQUEST_OK で
+ * 受理され、Forward State に true が反映されることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で Forward State が true に反映される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  subscriber.setForwardState(false);
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+  assert.equal(subscriber.forwardState, true);
 });
 
 /**
@@ -1579,7 +1691,7 @@ test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_
     requestId: 100n,
     parameters: [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+      { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) },
     ],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -1591,6 +1703,95 @@ test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * ケース 1 (受信 PUBLISH の publisher による REQUEST_UPDATE) で FORWARD
+ * パラメータが含まれる場合、REQUEST_OK で受理され、受信 PUBLISH から生成
+ * された SubscriberImpl の Forward State に反映されることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUEST_OK が応答され Forward State に反映される", async () => {
+  const ctx = createPublishReadTestContext({});
+  // 受信 PUBLISH から生成された SubscriberImpl を登録する (初期 Forward State 1)
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    // FORWARD=0: オブジェクトを送信しない宣言
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_OK が 1 通書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+  // FORWARD=0 が SubscriberImpl の Forward State に反映される
+  assert.equal(subscriber.forwardState, false);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.2.17:
+ * "If the parameter is omitted from REQUEST_UPDATE, the value for the
+ *  subscription remains unchanged."
+ * FORWARD を含まないケース 1 の REQUEST_UPDATE は REQUEST_OK で受理されるが、
+ * Forward State は変化しないことを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で Forward State は不変", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  subscriber.setForwardState(false);
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+  // FORWARD 省略時は不変 (§10.2.17)
+  assert.equal(subscriber.forwardState, false);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.6:
+ * FORWARD と他の文脈限定パラメータ (例: SUBSCRIBER_PRIORITY) が混合した
+ * REQUEST_UPDATE はメッセージ単位で全体拒否され、FORWARD の部分受理は
+ * 行われないことを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: FORWARD + 他の文脈限定パラメータの混合は NOT_SUPPORTED で全体拒否される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+      { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR (NOT_SUPPORTED) が 1 通書き込まれ、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.isUndefined(ctx.closedWithError);
+  // 全体拒否のため FORWARD は反映されない
+  assert.equal(subscriber.forwardState, true);
 });
 
 /**

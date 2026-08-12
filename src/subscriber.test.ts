@@ -229,3 +229,18 @@ test("goawayCallback が設定できる", () => {
   subscriber.goawayCallback!("moqt://new.example.com");
   assert.equal(calledUri, "moqt://new.example.com");
 });
+
+// draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter):
+// setForwardState で Forward State が更新され、forwardState で取得できることを検証する。
+test("setForwardState で Forward State が更新される", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  // 初期値はデフォルト 1 (§10.2.17)
+  assert.equal(subscriber.forwardState, true);
+
+  subscriber.setForwardState(false);
+  assert.equal(subscriber.forwardState, false);
+
+  subscriber.setForwardState(true);
+  assert.equal(subscriber.forwardState, true);
+});

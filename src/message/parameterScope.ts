@@ -95,21 +95,27 @@ export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType
  * の各パラメータ定義が REQUEST_UPDATE を無限定で許可するか否かである。
  * 無限定で許可されるのは AUTHORIZATION_TOKEN (§10.2.2) /
  * OBJECT_DELIVERY_TIMEOUT (§10.2.4) / SUBGROUP_DELIVERY_TIMEOUT (§10.2.3)
- * の 3 種のみ。文脈限定パラメータ (SUBSCRIBER_PRIORITY (§10.2.7) /
- * FORWARD (§10.2.17) / LOCATION_FILTER (§10.2.9) / NEW_GROUP_REQUEST
- * (§10.2.18) / TRACK_NAMESPACE_PREFIX (§10.2.19) / Range Filters
- * (SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER /
- * OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER、§5.1.3)) は REQUEST_UPDATE
- * 自体には出現可能なためスコープ検証は通過するが REQUEST_OK では受理せず、
- * REQUEST_ERROR (NOT_SUPPORTED) で応答する (文脈限定パラメータの許可拡大は
- * 将来の対応とする)。特に Range Filters は §5.1.3「... in a REQUEST_UPDATE
- * (on a subscription, from the subscriber only) message」により、ケース 1
- * の送信者 (publisher) には出現できない。
+ * の 3 種。加えて FORWARD (§10.2.17「It MAY appear in ... REQUEST_UPDATE
+ * (for a subscription) ...」) は「for a subscription」限定の文脈限定
+ * パラメータだが、受信側で Forward State として反映する対象であるため、
+ * publisher 発 (ケース 1) の FORWARD も REQUEST_OK で受理して反映する
+ * (計 4 種)。
+ *
+ * その他の文脈限定パラメータ (SUBSCRIBER_PRIORITY (§10.2.7) /
+ * LOCATION_FILTER (§10.2.9) / NEW_GROUP_REQUEST (§10.2.18) /
+ * TRACK_NAMESPACE_PREFIX (§10.2.19) / Range Filters (SUBGROUP_FILTER /
+ * OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER /
+ * TRACK_PROPERTY_FILTER、§5.1.3)) は REQUEST_UPDATE 自体には出現可能なため
+ * スコープ検証は通過するが REQUEST_OK では受理せず、REQUEST_ERROR
+ * (NOT_SUPPORTED) で応答する。特に Range Filters は §5.1.3「... in a
+ * REQUEST_UPDATE (on a subscription, from the subscriber only) message」に
+ * より、ケース 1 の送信者 (publisher) には出現できない。
  */
 export const PUBLISH_REQUEST_UPDATE_OK_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
   MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
   MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+  MessageParameterType.FORWARD,
 ]);
 
 /** REQUEST_UPDATE メッセージの許可パラメータ */
