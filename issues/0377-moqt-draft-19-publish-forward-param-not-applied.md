@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-12
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-publish-forward-param-not-applied
 - Polished: 2026-08-12
@@ -63,4 +63,11 @@ draft-ietf-moq-transport-19 §5.1 は「The publisher does not send Objects if t
 
 ## 解決方法
 
-未着手。
+- `src/subscriber.ts`: `Subscriber` インターフェースに `readonly forwardState: boolean` を追加し、`SubscriberImpl` にフィールド・getter・`setForwardState` (internal) を実装した (初期値はデフォルト 1)
+- `src/session.ts`: `subscribe()` で `options.forward` (省略時 1) を設定 (経路 1)、`handleIncomingBidirectionalStream` で受信 PUBLISH の FORWARD を `extractForwardState` で抽出して設定 (経路 2)
+- `src/session/bidi.ts`: `bidiHandlePublishRequestUpdate` の判定順序 (3) を改修し、FORWARD は REQUEST_OK で受理して受信 PUBLISH 由来の SubscriberImpl に反映 (経路 3、FORWARD 省略時は不変)。`bidiSendRequestUpdate` で送信時の FORWARD 値を pendingRequestUpdate エントリに保持し、`bidiHandleRequestUpdateOk` の REQUEST_OK 受信時に反映 (経路 4)。`resolvePendingRequestUpdate` が解決エントリの FORWARD 値を返すよう変更
+- `src/message/parameterScope.ts`: `PUBLISH_REQUEST_UPDATE_OK_PARAMS` に FORWARD を追加 (計 4 種) し、JSDoc を更新 (FORWARD が「for a subscription」限定ながら受理対象である旨を理由そのもので記述)
+- `docs/LOW_LEVEL_API.md`: Subscriber テーブルに forwardState 行を追加
+- テスト: `src/session/bidi.test.ts` にケース 1 の FORWARD 受理・反映 (0/1・省略時不変・他文脈限定との混合拒否) と自 update の REQUEST_OK 反映 (false/true/省略時不変) を追加、既存 NOT_SUPPORTED テスト 2 件のパラメータを SUBSCRIBER_PRIORITY に置き換え。`src/subscriber.test.ts` に setForwardState 単体テストを追加
+- `issues/0388` に「注記 (0377 実装時)」を追加し、`PUBLISH_REQUEST_UPDATE_OK_PARAMS` が 4 種になった旨を反映
+- `CHANGES.md` の `## develop` に [FIX] を追記し、0373 エントリの FORWARD 列挙を修正
