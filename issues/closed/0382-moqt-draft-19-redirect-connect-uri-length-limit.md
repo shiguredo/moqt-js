@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-redirect-connect-uri-length-limit
 - Polished: 2026-08-12
@@ -46,4 +46,10 @@ moqt-js はクライアント専用であり、§10.6.1 のサーバー向け MU
 
 ## 解決方法
 
-未着手。
+- `src/message/session.ts` の `decodeRedirect` から 8,192 バイト上限チェックを削除した (draft-ietf-moq-transport-19 §10.6.1 の Redirect 構造には Connect URI の最大長規定がない。8,192 バイト上限は GOAWAY の New Session URI (§10.4) にのみ存在する)
+- 削除後の防御経路: 制御メッセージは `ControlStreamReader` が Length (16-bit) でペイロードを切り出すため最大 65,535 バイトに制限され、過剰な URI Length 宣言は後続フィールドのデコード時に `IncompleteDataError` として検出される
+- GOAWAY 側の 8,192 バイトチェック (`decodeGoawayPayload`) は §10.4 の MUST に基づくため維持した
+- テスト: `src/message/session.prop.ts` に 2 件追加した
+  - 「Redirect の 8,192 バイト超 Connect URI がデコードできる」: 8,193 バイトの Connect URI を含む Redirect が `decodeRedirect` でラウンドトリップすることを検証
+  - 「REQUEST_ERROR (REDIRECT) の 8,192 バイト超 Connect URI がラウンドトリップする」: 8,193 バイトの Connect URI を含む REQUEST_ERROR (REDIRECT) が `encodeRequestErrorPayload` → `decodeRequestErrorPayload` でラウンドトリップし、trailing 検査と干渉しないことを検証
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した

@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] Redirect の Connect URI の 8,192 バイト上限チェックを撤去する
+  - draft-ietf-moq-transport-19 §10.6.1 の Redirect 構造には Connect URI の最大長規定がないため、GOAWAY の New Session URI (§10.4) にのみ存在する 8,192 バイト上限を decodeRedirect から削除する
+  - 8,192 バイト超の Connect URI を含む Redirect がデコードできることを検証するテストを追加する
+  - @voluntas
 - [FIX] 受信 Request ID のパリティ・重複検証を追加する
   - draft-ietf-moq-transport-19 §10.1 に基づき、受信 PUBLISH の Request ID が偶数 (パリティ違反) または重複の場合に INVALID_REQUEST_ID でセッションを閉じる
   - 受信済み Request ID をセッション寿命で追跡し、リクエスト完了後も再出現を検出する
