@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-delta-type-overflow-validation
 - Polished: 2026-08-12
@@ -62,4 +62,10 @@ SETUP 経路 (Key-Value-Pairs) と Track Property のデコード経路で Delta
 
 ## 解決方法
 
-未着手。
+- `src/message/parameter.ts` の `decodeKeyValuePair` / `decodeMessageParameter` で、`previousType + deltaType` の加算結果を bigint で検証し、2^64-1 超過時は `ProtocolViolationError` を throw するようにした (draft-ietf-moq-transport-19 §1.4.3 / §10.2 の MUST)
+- `src/properties.ts` の `decodeImmutableProperties` / `parseProperties` (外側 + IMMUTABLE_PROPERTIES 内側) / `decodeProperties` (外側 + IMMUTABLE_PROPERTIES 再帰走査) で `previousId + deltaId` の加算結果を検証し、2^64-1 超過時は `ProtocolViolationError` を throw するようにした
+- 上限定数は 0363 で導入された `src/varint.ts` の `MAX_VARINT` を参照する (独自定数を定義しない)
+- アキュムレータを bigint で保持し、`Number()` 変換は `Parameter.type` への変換 1 回のみに限定した。`decodeKeyValuePair` / `decodeMessageParameter` の戻り値に bigint の paramType を追加し、丸めによる 2 個目以降の検証回避を防いだ
+- `decodeObjectPropertiesTolerant` は既存の寛容契約 (検証なし) を維持し、変更していない
+- テスト: `src/message/parameter.test.ts` に 3 件 (decodeKeyValuePairs の 2^64-1 ちょうど通過 / 超過 throw / decodeParameters の超過 throw)、`src/properties.test.ts` に 7 件 (decodeProperties / parseProperties / decodeImmutableProperties / 両方の IMMUTABLE_PROPERTIES 内側の超過 throw、decodeProperties の境界 2 件) を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した

@@ -11,6 +11,9 @@
 
 ## develop
 
+- [FIX] Key-Value-Pair / Message Parameter / Track Property の Delta Type 加算の 2^64-1 超過を検証する
+  - draft-ietf-moq-transport-19 §1.4.3 / §10.2 の MUST に基づき、decodeKeyValuePairs / decodeParameters / decodeProperties / parseProperties / decodeImmutableProperties の加算結果を bigint で検証し、超過時は ProtocolViolationError を throw する
+  - @voluntas
 - [FIX] encodeVarint / varintSize が 2^64-1 を超える入力で例外を投げる
   - draft-ietf-moq-transport-19 §1.4.1 に基づき、2^64 以上の入力は varint で表現できないため varintSize / encodeVarint が例外を投げる
   - MAX_VARINT (2^64-1) 定数を varint.ts に追加して export する

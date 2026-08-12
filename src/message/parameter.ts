@@ -16,7 +16,7 @@
  */
 
 import { ProtocolViolationError } from "../error";
-import { decodeVarint, encodeVarint } from "../varint";
+import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
 import { MessageParameterType, type Location } from "./types";
 
 /**
@@ -514,25 +514,39 @@ function encodeKeyValuePair(param: Parameter, previousType: number): Uint8Array 
 }
 
 /**
- * 単一のパラメータを delta encoding でデコードする
+ * Key-Value-Pair を 1 つデコードする
  *
- * @param data - デコードするデータ
+ * @param data - デコード対象データ
  * @param offset - 開始オフセット
  * @param previousType - 前のパラメータの Type 値（最初のパラメータの場合は 0）
- * @returns [parameter, consumed bytes]
+ * @returns [parameter, consumed bytes, paramType (bigint)]
+ *          paramType は次のパラメータの previousType に使う。
+ *          Parameter.type (number) への変換は丸めが発生するため、
+ *          連続デコードのアキュムレータには bigint の paramType を使うこと。
  */
 function decodeKeyValuePair(
   data: Uint8Array,
   offset: number,
-  previousType: number,
-): [Parameter, number] {
+  previousType: bigint,
+): [Parameter, number, bigint] {
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
-  const paramType = previousType + Number(deltaType);
+  const paramType = previousType + deltaType;
+
+  // draft-ietf-moq-transport-19 Section 1.4.3:
+  // "The previous Type value plus the Delta Type MUST NOT be greater than
+  //  2^64 - 1. If a Delta Type is received that would be too large, the
+  //  Session MUST be closed with a PROTOCOL_VIOLATION."
+  if (paramType > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `delta type addition exceeds maximum: ${paramType} > ${MAX_VARINT}`,
+    );
+  }
+
   let totalConsumed = deltaConsumed;
 
   let value: Uint8Array;
 
-  if (paramType % 2 === 1) {
+  if (paramType % 2n === 1n) {
     // 奇数型: Length プレフィックス付き
     const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lengthConsumed;
@@ -550,7 +564,7 @@ function decodeKeyValuePair(
     totalConsumed += valConsumed;
   }
 
-  return [{ type: paramType, value }, totalConsumed];
+  return [{ type: Number(paramType), value }, totalConsumed, paramType];
 }
 
 /**
@@ -595,13 +609,17 @@ export function encodeKeyValuePairs(params: Parameter[]): Uint8Array {
 export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[], number] {
   const parameters: Parameter[] = [];
   let totalConsumed = 0;
-  let previousType = 0;
+  let previousType = 0n;
 
   while (offset + totalConsumed < data.length) {
-    const [param, paramConsumed] = decodeKeyValuePair(data, offset + totalConsumed, previousType);
+    const [param, paramConsumed, paramType] = decodeKeyValuePair(
+      data,
+      offset + totalConsumed,
+      previousType,
+    );
     parameters.push(param);
     totalConsumed += paramConsumed;
-    previousType = param.type;
+    previousType = paramType;
   }
 
   return [parameters, totalConsumed];
@@ -723,17 +741,33 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
  *   Type Delta (vi64),
  *   Value (..)
  * }
+ *
+ * @returns [parameter, consumed bytes, paramType (bigint)]
+ *          paramType は次のパラメータの previousType に使う。
+ *          Parameter.type (number) への変換は丸めが発生するため、
+ *          連続デコードのアキュムレータには bigint の paramType を使うこと。
  */
 function decodeMessageParameter(
   data: Uint8Array,
   offset: number,
-  previousType: number,
-): [Parameter, number] {
+  previousType: bigint,
+): [Parameter, number, bigint] {
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
-  const paramType = previousType + Number(deltaType);
+  const paramType = previousType + deltaType;
+
+  // draft-ietf-moq-transport-19 Section 10.2 (Message Parameters):
+  // "If the resulting Type would be greater than 2^64 - 1, the endpoint MUST
+  //  close the session with a PROTOCOL_VIOLATION."
+  if (paramType > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `delta type addition exceeds maximum: ${paramType} > ${MAX_VARINT}`,
+    );
+  }
+
+  const paramTypeNumber = Number(paramType);
   let totalConsumed = deltaConsumed;
 
-  const encoding = getMessageParameterValueEncoding(paramType);
+  const encoding = getMessageParameterValueEncoding(paramTypeNumber);
   let value: Uint8Array;
 
   switch (encoding) {
@@ -742,9 +776,9 @@ function decodeMessageParameter(
       totalConsumed += 1;
       // draft-ietf-moq-transport-19 §10.2.8 / §10.2.17:
       // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
-      if (paramType === 0x10) {
+      if (paramTypeNumber === 0x10) {
         validateForwardValue(value[0]);
-      } else if (paramType === 0x22) {
+      } else if (paramTypeNumber === 0x22) {
         validateGroupOrderValue(value[0]);
       }
       break;
@@ -782,7 +816,7 @@ function decodeMessageParameter(
     }
   }
 
-  return [{ type: paramType, value }, totalConsumed];
+  return [{ type: paramTypeNumber, value }, totalConsumed, paramType];
 }
 
 /**
@@ -833,11 +867,11 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   const [numParams, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
   const parameters: Parameter[] = [];
-  let previousType = 0;
+  let previousType = 0n;
   const seenTypes = new Set<number>();
 
   for (let i = 0; i < Number(numParams); i++) {
-    const [param, paramConsumed] = decodeMessageParameter(
+    const [param, paramConsumed, paramType] = decodeMessageParameter(
       data,
       offset + totalConsumed,
       previousType,
@@ -861,7 +895,7 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
 
     parameters.push(param);
     totalConsumed += paramConsumed;
-    previousType = param.type;
+    previousType = paramType;
   }
 
   return [parameters, totalConsumed];
