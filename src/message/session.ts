@@ -115,6 +115,11 @@ export function encodeRedirect(redirect: Redirect): Uint8Array {
  *
  * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure)
  *
+ * 注: Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の
+ * New Session URI (§10.4) にのみ存在する)。宣言された URI Length が
+ * 実データを超える過剰宣言は、後続フィールドのデコード時に
+ * IncompleteDataError として検出される。
+ *
  * @returns [redirect, consumed bytes]
  */
 export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, number] {
@@ -122,14 +127,6 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
 
   const [uriLength, uriLengthSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += uriLengthSize;
-
-  // draft-ietf-moq-transport-19 Section 10.6.1:
-  // Connect URI の最大長は GOAWAY と同様に 8,192 バイト
-  if (Number(uriLength) > 8192) {
-    throw new ProtocolViolationError(
-      `redirect connect URI length exceeds maximum: ${uriLength} > 8192`,
-    );
-  }
 
   const uriBytes = data.slice(offset + totalConsumed, offset + totalConsumed + Number(uriLength));
   const connectUri = new TextDecoder().decode(uriBytes);
