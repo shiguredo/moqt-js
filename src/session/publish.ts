@@ -103,14 +103,12 @@ export async function publishSendObjectInternal(
       }
     }
 
-    // 新しいストリームを開く
-    const stream = await session.transport.createUnidirectionalStream();
-    session.statsUnidirectionalStreamsOpened++;
-    publisher.incrementDataStreamCount();
-    const writer = stream.getWriter();
-
-    // Subgroup Header を書き込む
+    // Subgroup Header をエンコードする
     // draft-ietf-moq-transport-19 Section 11.4.2
+    // ストリーム生成前にエンコードする。trackAlias / groupId が 2^64-1 を
+    // 超える等でエンコードが throw した場合、新規ストリーム生成という
+    // 副作用なしで失敗させるためである (グループ切替時の前ストリームの
+    // FIN はエンコード前に実行済み)。
     const header = encodeSubgroupHeader({
       type: SubgroupHeaderType.FIRST_OBJ_EXT,
       trackAlias,
@@ -118,6 +116,12 @@ export async function publishSendObjectInternal(
       publisherPriority: params.priority ?? 128,
       firstObject: true,
     });
+
+    // 新しいストリームを開く
+    const stream = await session.transport.createUnidirectionalStream();
+    session.statsUnidirectionalStreamsOpened++;
+    publisher.incrementDataStreamCount();
+    const writer = stream.getWriter();
 
     try {
       await writer.write(header);

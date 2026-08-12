@@ -1,7 +1,7 @@
 # encodeVarint / varintSize が 2^64-1 を超える入力を受け入れる
 
 - Created: 2026-08-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Branch: feature/fix-varint-overflow-wrap
 - Polished: 2026-08-07
 
@@ -41,4 +41,12 @@ draft-ietf-moq-transport-19 §1.4.1 は可変長整数で「Integers are encoded
 
 ## 解決方法
 
-未着手。
+- `src/varint.ts` に `MAX_VARINT` (2^64-1) を定義して export した
+- `varintSize()` に入力値の上限検証 (2^64-1 以下) を追加し、超過時は既存の負値チェックと同じ `Error` を投げるようにした。`encodeVarint()` は内部で `varintSize()` を呼ぶため、両関数が 1 箇所の検証でカバーされる
+- `varintSize()` / `encodeVarint()` の doc comment に範囲外入力で例外を投げる旨を追記した
+- `src/varint.test.ts` に固定値テスト (2^64-1 ちょうどは 9 バイトでエンコード、2^64 以上 (bigint / number) は例外) を追加した
+- `src/varint.prop.ts` に 2^64 〜 2^80 の範囲外 Arbitrary のテストを追加した (encodeVarint / varintSize 両関数)
+- `publishSendObjectInternal` の新規 Subgroup 経路は方式 (b) (ストリーム生成前移動) を採用した。Subgroup Header のエンコードを `createUnidirectionalStream()` より前に移動し、trackAlias / groupId が 2^64 超の場合にストリーム未生成・統計カウント不変のまま throw する。`src/session/publish.test.ts` にストリーム未生成と統計カウント不変を検証するテストを追加した
+- **呼び出し側経路の洗い出し結果**: `encodeVarint` の呼び出し側はすべてアプリが値を渡す経路 (expires / deliveryTimeout / fillTimeout / Location / Range Filter / LOC timestamp / Property エンコード / publish の groupId・objectId / datagram) であり、2^64 超の入力が流れた場合は例外が throw され、ストリーム経路は publisher.handleError に、datagram 経路は同期 throw としてアプリに伝播する。データ破壊 (無音の mod 2^64 ラップ) は例外で防がれるため、呼び出し側の検証追加は必須ではないと判断した
+  - 補足: `publishSendObjectInternal` の objectId=2^64-1 指定時は delta 計算 (previousObjectId=-1n との差) が 2^64 になり `encodeObjectFields` が throw して handleError に伝播する。この経路はストリーム生成後のため方式 (b) の保護対象外だが、従来の「無音ラップ (ピアが 0 を誤受信)」から「throw」に改善されておりデータ破壊はない
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した
