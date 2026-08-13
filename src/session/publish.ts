@@ -33,7 +33,7 @@ import type { SessionInternal } from "./types";
  * 1 つだけロックを保持できる。最初の呼び出しで getWriter() して保持し、以降は同じ
  * writer を返す。
  */
-export function publishGetDatagramWriter(
+function publishGetDatagramWriter(
   session: SessionInternal,
 ): WritableStreamDefaultWriter<Uint8Array> {
   session.datagramWriter ??= session.transport.datagrams.writable.getWriter();
@@ -228,7 +228,7 @@ export function publishClosePublisherStream(
 /**
  * Publisher のストリームを閉じる内部実装
  */
-export async function publishClosePublisherStreamInternal(
+async function publishClosePublisherStreamInternal(
   session: SessionInternal,
   trackAlias: bigint,
 ): Promise<void> {

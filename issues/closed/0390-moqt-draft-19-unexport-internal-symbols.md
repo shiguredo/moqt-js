@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/refactor-moqt-draft-19-unexport-internal-symbols
 - Polished: 2026-08-12
@@ -81,4 +81,23 @@ export されているが外部から参照されていないシンボルは、�
 
 ## 解決方法
 
-未着手。
+- 以下 12 シンボルの export を除去し、モジュールローカルにした:
+  - `namespaceHandleGoaway` (src/session/namespaceLoops.ts)
+  - `RequestStreamInfo` / `bidiReadResponseFromBidiStream` (src/session/bidi.ts)
+  - `publishGetDatagramWriter` / `publishClosePublisherStreamInternal` (src/session/publish.ts)
+  - `StreamStatsUpdate` (src/session/stream.ts)
+  - `PendingNotifyReason` / `PendingSubgroupEntry` (src/pendingSubgroupBuffer.ts)
+  - `SessionImplOptions` (src/session.ts)
+  - `ProcessCatalogPayloadResult` (src/createMediaSubscriber.ts)
+  - `NamespacePublicationState` / `PublisherStreamState` (src/session/types.ts)
+  - `MAX_KVP_VALUE_LENGTH` / `isSessionLevelNamespace` (src/message/parameter.ts)
+- `src/session.ts` 末尾の再 export ブロック (12 シンボル) を削除し、`src/session.prop.ts` の import を `./session/params` に移行した
+- 完全未参照の 3 シンボル (`RESERVED_NAMESPACE_PREFIX` / `SESSION_LEVEL_NAMESPACE` / `isReservedNamespace`) は、issue の設計方針では「非公開化」とされていたが、noUnusedLocals により完全未使用の非公開シンボルはコンパイルエラーになるため**削除**に変更した (0387 の判断基準と同じ)
+- `src/message/index.ts` から上記 4 シンボルの re-export を除去した
+- **実装時の状況変化により対象外になったシンボル** (後続 issue の実装で使用開始):
+  - `bidiSendJoiningFetch` (0393 で bidi.test.ts から使用)
+  - `publishSendObjectInternal` (0363 で publish.test.ts から使用)
+  - `TracksSubscriptionState` (0385 で bidi.ts / namespaceLoops.ts から production で使用。issue の「削除」方針は対象外に変更)
+  - `MAX_FULL_TRACK_NAME_SIZE` (0384 で parameter.test.ts から使用)
+  - `NamespaceSubscriptionState` (bidi.ts / namespaceLoops.ts から production で使用)
+- `CHANGES.md` の `## develop` 末尾の `### misc` に `[CHANGE]` エントリを追加した
