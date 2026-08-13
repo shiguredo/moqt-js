@@ -11,6 +11,7 @@
 
 import type { BidiSessionInternal } from "./bidi";
 import type { ControlStreamReader } from "../controlStream";
+import type { RangeFilterSpec } from "../message/parameter";
 import type {
   ConnectCallbacks,
   NamespaceSubscriptionCallbacks,
@@ -49,6 +50,12 @@ export interface TracksSubscriptionState {
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   pendingPrefix?: string[];
+  /**
+   * SUBSCRIBE_TRACKS 送信時の Range Filter 指定。
+   * draft-ietf-moq-transport-19 §5.1.3:
+   * 受信 PUBLISH の TRACK_PROPERTY_FILTER 評価に使用する。
+   */
+  rangeFilters?: RangeFilterSpec[];
   stream?: WebTransportBidirectionalStream;
   streamReader?: ReadableStreamDefaultReader<Uint8Array>;
   controlReader?: ControlStreamReader;

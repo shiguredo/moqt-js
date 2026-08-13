@@ -17,6 +17,7 @@ import {
   appendGreaseObjectProperty,
   mergeDeliveryTimeoutObjectProperties,
   readDeliveryTimeoutObjectProperties,
+  findPropertyValue,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -850,4 +851,39 @@ test("parseProperties: GREASE Property は未知 Property として保持され�
     assert.isDefined(greaseId);
     assert.isTrue(greaseId !== undefined && isGreaseValue(greaseId));
   }
+});
+
+/**
+ * draft-ietf-moq-transport-19 §12.7:
+ * IMMUTABLE_PROPERTIES (0x0B) ネスト内も検索する。
+ * ネスト深さの上限 (64 段) を超えると、スタックオーバーフロー (リモート
+ * 起因の DoS) を防ぐため、対象 Property が見つからない扱いで undefined を
+ * 返すことを検証する。
+ */
+test("findPropertyValue: ネスト上限を超えると undefined を返す", () => {
+  // IMMUTABLE_PROPERTIES (0x0B、奇数 ID = length + bytes) の KVP を
+  // depth 段ネストして包む
+  const wrapImmutable = (depth: number, inner: Uint8Array): Uint8Array => {
+    let data = inner;
+    for (let i = 0; i < depth; i++) {
+      data = new Uint8Array([
+        ...encodeVarint(0x0bn),
+        ...encodeVarint(BigInt(data.length)),
+        ...data,
+      ]);
+    }
+    return data;
+  };
+
+  // 最深部に対象 Property (0x30 = 1) を置く
+  const inner = new Uint8Array([...encodeVarint(0x30n), ...encodeVarint(1n)]);
+
+  // 64 段までのネストは検索できる (64 段の IMMUTABLE_PROPERTIES 内の
+  // 最深部は depth 65 で検索されるが、上限 64 のため不通過扱いになる)
+  const nested64 = wrapImmutable(64, inner);
+  assert.isUndefined(findPropertyValue([{ id: 0x0bn, data: nested64 }], 0x30n));
+
+  // 1 段のみのネストは検索できる
+  const nested1 = wrapImmutable(1, inner);
+  assert.equal(findPropertyValue([{ id: 0x0bn, data: nested1 }], 0x30n), 1n);
 });

@@ -11,6 +11,17 @@
 
 ## develop
 
+- [ADD] Range Filter の評価 (マッチング) ロジックを実装する
+  - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY / TRACK_PROPERTY の各 Range Filter を評価する evaluateRangeFilters / evaluateTrackPropertyFilters を追加し、Subscriber のオブジェクト受信経路と受信 PUBLISH 処理に適用する
+  - 同一 SetID は AND・異なる SetID は OR で結合し、両端を含む Range 判定・open-ended に対応する。結合規則は TRACK_PROPERTY_FILTER とオブジェクトフィルタをまたいで適用し、SetID 単位の track 評価結果をオブジェクト評価と AND 結合する
+  - OBJECT_PROPERTY_FILTER は寛容デコードで評価し、IMMUTABLE_PROPERTIES ネスト内も検索する (§12.7)
+  - REQUEST_UPDATE 成功時に Range Filter の削除 / 置換 / 不変を反映する (mergeRangeFilters)
+  - @voluntas
+- [CHANGE] Object Datagram の publisherPriority を明示値のみに変更する
+  - draft-ietf-moq-transport-19 §11.3.1 に基づき、decodeObjectDatagram が Priority Present なしの型 (0x08-0x0F, 0x28-0x2D) で publisherPriority を 0 として返すのをやめ、ObjectDatagram.publisherPriority を optional にして明示値のみを保持する
+  - PRIORITY_FILTER の評価がデフォルト値 (0) を明示値として扱ってしまう問題を防ぐ
+  - encodeObjectDatagram / encodeSubgroupHeader が Priority Present ありの型で明示値なしの publisherPriority をエラーにする
+  - @voluntas
 - [ADD] FETCH / Joining Fetch で Range Filters を送信できるようにし、送信ガードを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、buildFetchParameters / bidiSendJoiningFetch に Range Filters を載荷する
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する

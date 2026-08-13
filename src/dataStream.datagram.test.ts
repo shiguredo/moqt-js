@@ -168,6 +168,8 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
   // draft-ietf-moq-transport-19 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // Object ID フィールドなし (Object ID = 0)、Priority フィールドなし
+  // (Priority Present なしの型では publisherPriority は明示されないため
+  //  undefined になる)
   {
     name: "STATUS_NO_OBJ_NO_PRI (0x2C)",
     datagram: {
@@ -175,12 +177,11 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       trackAlias: 3n,
       groupId: 7n,
       objectId: 0n,
-      publisherPriority: 0,
       status: ObjectStatus.END_OF_TRACK,
     },
   },
   // 0x2D = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04) + PROPERTIES(0x01)
-  // NORMAL status + Properties 付き
+  // NORMAL status + Properties 付き (Priority Present なし)
   {
     name: "STATUS_NO_OBJ_EXT_NO_PRI (0x2D)",
     datagram: {
@@ -188,7 +189,6 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       trackAlias: 4n,
       groupId: 8n,
       objectId: 0n,
-      publisherPriority: 0,
       status: ObjectStatus.NORMAL,
       properties: new Uint8Array([0x01, 0x02]),
     },
@@ -269,4 +269,15 @@ test("ObjectDatagram: GREASE Object Properties が EXT 型でラウンドトリ�
     assert.isTrue(isGreaseValue(ids[0]));
     assert.isTrue(ids[0] < 0x4000n);
   }
+});
+
+test("ObjectDatagram: Priority Present ありの型で publisherPriority 未指定はエラー", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ,
+    trackAlias: 1n,
+    groupId: 2n,
+    objectId: 3n,
+    payload: new Uint8Array([0xaa]),
+  };
+  assert.throws(() => encodeObjectDatagram(datagram), /publisherPriority is required/);
 });

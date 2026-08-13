@@ -66,9 +66,9 @@ test("SubgroupHeader: 大きな値をエンコード", () => {
   assert.isAbove(encoded.length, 4);
 });
 
-test("SubgroupHeader: Priority なしをエンコード", () => {
+test("SubgroupHeader: Priority なし (Priority Present なし型) をエンコード", () => {
   const header = {
-    type: SubgroupHeaderType.BASE,
+    type: SubgroupHeaderType.BASE_NO_PRIORITY,
     trackAlias: 1n,
     groupId: 1n,
   };

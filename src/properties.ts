@@ -578,6 +578,58 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
 }
 
 /**
+ * 指定した Property ID の値を検索する
+ *
+ * draft-ietf-moq-transport-19 §12.7:
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ * mutable な Property 列と IMMUTABLE_PROPERTIES (0x0B) ネスト内の両方を
+ * 再帰的に検索する。
+ *
+ * decodeProperties() / decodeObjectPropertiesTolerant() の出力では
+ * IMMUTABLE_PROPERTIES の property.data は body のみ (ID + length は除去済み)
+ * のため、内側の KVP も寛容デコード (decodeObjectPropertiesTolerant) で
+ * パースする。Object バイト列は Track スコープの厳密デコーダ
+ * (decodeProperties) を適用すると Mandatory Track Property 予約域
+ * (0x4000-0x7FFF) や値域検証で誤って throw し得るため、寛容デコードで
+ * 読めた分のみを検索対象とする。内側がデコード不能の場合は無視する
+ * (対象 Property が見つからないものとして扱う)。
+ *
+ * @param properties - 検索対象の Property 列 (decodeProperties /
+ *                     decodeObjectPropertiesTolerant の出力)
+ * @param id - 検索する Property ID (偶数 ID = varint value 形式のもの)
+ * @param depth - 再帰の深さ (内部使用。上限超過時は不通過扱い)
+ * @returns 見つかった場合は value、見つからない場合は undefined
+ */
+export function findPropertyValue(
+  properties: ReadonlyArray<Property>,
+  id: bigint,
+  depth = 0,
+): bigint | undefined {
+  // draft-ietf-moq-transport-19 §12.7:
+  // "The contents of Immutable Properties MUST NOT include Immutable
+  //  Properties" によりネストは仕様上 1 段のみだが、寛容デコードは不正な
+  // ネストを受容するため、深すぎるネストは再帰スタックの枯渇 (リモート
+  // 起因の DoS) を防ぐため打ち切る (対象 Property が見つからない扱い)。
+  if (depth > 64) {
+    return undefined;
+  }
+  for (const property of properties) {
+    if (property.id === id) {
+      return property.value;
+    }
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      const inner = decodeObjectPropertiesTolerant(property.data).properties;
+      const innerValue = findPropertyValue(inner, id, depth + 1);
+      if (innerValue !== undefined) {
+        return innerValue;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Properties をパースする
  *
  * 複数の Property が含まれるデータから、MOQT Core Properties を抽出する。
@@ -909,7 +961,7 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
  *
  * @returns complete=false のとき、properties は途中までデコードできた Property 列
  */
-function decodeObjectPropertiesTolerant(data: Uint8Array): {
+export function decodeObjectPropertiesTolerant(data: Uint8Array): {
   properties: Property[];
   complete: boolean;
 } {

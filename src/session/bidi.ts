@@ -18,6 +18,7 @@ import {
   normalizePublishDoneCode,
 } from "../error";
 import { FetcherImpl, type Fetcher } from "../fetcher";
+import { mergeRangeFilters } from "../filter";
 import {
   MessageType,
   FetchType,
@@ -42,6 +43,7 @@ import {
   type AuthorizationToken,
   type Location,
   type Parameter,
+  type RangeFilterSpec,
 } from "../message";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
@@ -125,6 +127,16 @@ interface PendingRequestUpdate {
    * 省略時 (undefined) は REQUEST_OK 受信時に Forward State を更新しない。
    */
   forward?: boolean;
+  /**
+   * REQUEST_UPDATE 送信時に指定された Range Filter 指定。
+   * draft-ietf-moq-transport-19 §5.1.3:
+   * "In REQUEST_UPDATE, Length can be 0 to remove a filter parameter or
+   *  non-zero to replace that entire filter parameter ... If a filter
+   *  parameter is omitted from REQUEST_UPDATE, the value is unchanged."
+   * REQUEST_OK 受信時に applyRangeFilterUpdate (mergeRangeFilters) で現在のフィルタ状態へ適用する。
+   * 省略時 (undefined) はフィルタを更新しない。
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 export interface BidiSessionInternal {
@@ -1221,9 +1233,13 @@ export async function bidiSendRequestUpdate(
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
 
-  // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
-  // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみチェックする
-  validateRangeFilterLimits(options.rangeFilters, session.peerMaxFilterRanges, "REQUEST_UPDATE");
+  // draft-ietf-moq-transport-19 §10.3.1.6 / §5.1.3:
+  // ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガードする。
+  // 制限対象は「total number of Ranges ... for a given subscription」すなわち
+  // マージ後 (現在のフィルタ状態 + update) の Ranges 数であるため、
+  // mergeRangeFilters の適用結果で検証する。
+  const mergedRangeFilters = mergeRangeFilters(subscriber.getRangeFilters(), options.rangeFilters);
+  validateRangeFilterLimits(mergedRangeFilters, session.peerMaxFilterRanges, "REQUEST_UPDATE");
 
   // draft-ietf-moq-transport-19 §5.1.3:
   // REQUEST_UPDATE では削除 (Length=0) が許可されるが、TRACK_PROPERTY_FILTER (0x29) は
@@ -1285,6 +1301,10 @@ export async function bidiSendRequestUpdate(
       // REQUEST_OK 受信時に Forward State へ反映するため、送信時の FORWARD
       // 値を保持する (省略時は undefined = 不変)。
       forward: options.forward,
+      // draft-ietf-moq-transport-19 §5.1.3:
+      // REQUEST_OK 受信時に Range Filter の削除 / 置換 / 不変を反映するため、
+      // 送信時の rangeFilters を保持する (省略時は undefined = 不変)。
+      rangeFilters: options.rangeFilters,
     });
   });
 
@@ -1797,11 +1817,22 @@ export function bidiHandleRequestUpdateOk(
   // 自 update({ forward }) の REQUEST_OK 受信時に、送信時の FORWARD 値
   // (pendingRequestUpdate エントリに保持) を Forward State へ反映する。
   // 省略時 (undefined) は反映しない。
-  const forward = resolvePendingRequestUpdate(session, streamRequestId);
-  if (forward !== undefined) {
-    const subscriber = session.subscribers.get(streamRequestId);
-    if (subscriber) {
-      subscriber.setForwardState(forward);
+  //
+  // draft-ietf-moq-transport-19 §5.1.3:
+  // "In REQUEST_UPDATE, Length can be 0 to remove a filter parameter or
+  //  non-zero to replace that entire filter parameter ... If a filter
+  //  parameter is omitted from REQUEST_UPDATE, the value is unchanged."
+  // 送信時の rangeFilters (pendingRequestUpdate エントリに保持) を現在の
+  // フィルタ状態に適用する (削除 / 置換 / 不変は applyRangeFilterUpdate が
+  // 行う)。省略時 (undefined) は不変。
+  const resolved = resolvePendingRequestUpdate(session, streamRequestId);
+  const subscriber = session.subscribers.get(streamRequestId);
+  if (resolved !== undefined && subscriber !== undefined) {
+    if (resolved.forward !== undefined) {
+      subscriber.setForwardState(resolved.forward);
+    }
+    if (resolved.rangeFilters !== undefined) {
+      subscriber.applyRangeFilterUpdate(resolved.rangeFilters);
     }
   }
 }
@@ -1836,17 +1867,21 @@ export function hasPendingRequestUpdate(
  * "The receiver MUST still send a REQUEST_OK for each successful update"
  * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
  *
- * @returns 解決した更新の FORWARD 送信値 (省略時は undefined = 反映しない)
+ * @returns 解決した更新の送信値 (FORWARD / Range Filter)。省略時は undefined
+ *          (= 反映しない)
  */
 export function resolvePendingRequestUpdate(
   session: BidiSessionInternal,
   targetRequestId: bigint,
-): boolean | undefined {
+): { forward?: boolean; rangeFilters?: RangeFilterSpec[] } | undefined {
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.resolve();
-      return pending.forward;
+      return {
+        forward: pending.forward,
+        rangeFilters: pending.rangeFilters,
+      };
     }
   }
   return undefined;

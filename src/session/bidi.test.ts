@@ -421,6 +421,122 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
   assert.equal(session.pendingRequestUpdate.size, 0);
 });
 
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filter が
+ * 現在のフィルタ状態に mergeRangeFilters で適用されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: 自 update({ rangeFilters }) の REQUEST_OK で Range Filter が適用される", () => {
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 5n }] }]);
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          rangeFilters: [
+            { type: "objectId", setId: 0, ranges: [{ start: 10n, end: 20n }] },
+            { type: "subgroup", setId: 1, ranges: [{ start: 0n }] },
+          ],
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // 同一組み合わせ (objectId, setId 0) は置換され、subgroup は追加される
+  assert.deepEqual(subscriber.getRangeFilters(), [
+    { type: "objectId", setId: 0, ranges: [{ start: 10n, end: 20n }] },
+    { type: "subgroup", setId: 1, ranges: [{ start: 0n }] },
+  ]);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 自 update({ rangeFilters }) で remove を含む場合、REQUEST_OK 受信時に
+ * 対応する Parameter Type のフィルタが削除されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: remove を含む update の REQUEST_OK で Range Filter が削除される", () => {
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  subscriber.setRangeFilters([
+    { type: "objectId", setId: 0, ranges: [{ start: 0n, end: 5n }] },
+    { type: "subgroup", setId: 0, ranges: [{ start: 0n }] },
+  ]);
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          rangeFilters: [{ type: "objectId", remove: true }],
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // objectId は削除され、subgroup は維持される
+  assert.deepEqual(subscriber.getRangeFilters(), [
+    { type: "subgroup", setId: 0, ranges: [{ start: 0n }] },
+  ]);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 自 update() で rangeFilters を省略した場合、REQUEST_OK 受信時にフィルタ状態は
+ * 変化しないことを検証する。
+ */
+test("bidiHandleRequestUpdateOk: rangeFilters 省略の update の REQUEST_OK でフィルタは不変", () => {
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 5n }] }]);
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // rangeFilters 省略時は不変 (§5.1.3)
+  assert.deepEqual(subscriber.getRangeFilters(), [
+    { type: "objectId", setId: 0, ranges: [{ start: 0n, end: 5n }] },
+  ]);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
 // ============================================================================
 // PUBLISH_OK Track Properties 非空チェックテスト
 // ============================================================================
@@ -708,6 +824,48 @@ test("bidiSendRequestUpdate: Range Filters の Ranges 数が MAX_FILTER_RANGES �
           setId: 0,
           ranges: [
             { start: 0n, end: 1n },
+            { start: 3n, end: 4n },
+            { start: 5n, end: 6n },
+          ],
+        },
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+});
+
+test("bidiSendRequestUpdate: 既存フィルタ状態と update の合算が MAX_FILTER_RANGES を超えると throw する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  // 既存フィルタ状態 (trackProperty 1 Range + subgroup 1 Range) を設定する
+  subscriber.setRangeFilters([
+    {
+      type: "trackProperty",
+      setId: 0,
+      propertyType: 0x30n,
+      ranges: [{ start: 1n, end: 1n }],
+    },
+    {
+      type: "subgroup",
+      setId: 0,
+      ranges: [{ start: 0n, end: 1n }],
+    },
+  ]);
+
+  // update で subgroup を 2 Range に置換すると、合算は trackProperty 1 +
+  // subgroup 2 = 3 となり、peerMaxFilterRanges (2) を超える
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [
+        {
+          type: "subgroup",
+          setId: 0,
+          ranges: [
             { start: 3n, end: 4n },
             { start: 5n, end: 6n },
           ],

@@ -244,3 +244,77 @@ test("setForwardState で Forward State が更新される", () => {
   subscriber.setForwardState(true);
   assert.equal(subscriber.forwardState, true);
 });
+
+// draft-ietf-moq-transport-19 §5.1.3 (Range Filters):
+// setRangeFilters で設定した Range Filter が handleObject / handleDatagram で
+// 再適用され、不通過のオブジェクトがアプリに渡されないことを検証する。
+test("setRangeFilters で設定した Range Filter が handleObject で再適用される", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 3n, end: 5n }] }]);
+
+  subscriber.handleObject(createObject(0n, 4n));
+  subscriber.handleObject(createObject(0n, 7n));
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].objectId, 4n);
+});
+
+test("Range Filter が handleDatagram でも再適用される", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    () => {},
+    (obj) => delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 3n, end: 5n }] }]);
+
+  subscriber.handleDatagram(createObject(0n, 4n));
+  subscriber.handleDatagram(createObject(0n, 7n));
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].objectId, 4n);
+});
+
+// draft-ietf-moq-transport-19 §5.1.3:
+// フィルタなし (undefined) は全通過。
+test("Range Filter 未設定の場合は全通過する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+
+  subscriber.handleObject(createObject(0n, 4n));
+  subscriber.handleObject(createObject(0n, 7n));
+
+  assert.equal(delivered.length, 2);
+});
+
+// draft-ietf-moq-transport-19 §5.1.3:
+// SUBGROUP_FILTER は subgroupId が明示されていない (datagram 経路) オブジェクトを
+// 不通過にする。
+test("SUBGROUP_FILTER は subgroupId のないオブジェクトを不通過にする", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    (obj) => delivered.push(obj),
+    (obj) => delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 5n }] }]);
+
+  // subgroup 経路: subgroupId あり → 通過
+  subscriber.handleObject({ ...createObject(0n, 0n), subgroupId: 3n });
+  // datagram 経路: subgroupId なし → 不通過
+  subscriber.handleDatagram(createObject(0n, 0n));
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].subgroupId, 3n);
+});

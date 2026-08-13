@@ -60,6 +60,8 @@ import {
 } from "./publisher";
 import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
+import { evaluateTrackPropertyFiltersBySetId } from "./filter";
+import type { Property } from "./properties";
 import { decodeFetchHeader, FetchHeaderType } from "./dataStream";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
@@ -1191,6 +1193,7 @@ export class SessionImpl implements Session {
       state: "active" | "closed";
       namespacePrefix: string[];
       pendingPrefix?: string[];
+      rangeFilters?: RangeFilterSpec[];
       stream?: WebTransportBidirectionalStream;
       streamReader?: ReadableStreamDefaultReader<Uint8Array>;
       controlReader?: ControlStreamReader;
@@ -1710,6 +1713,12 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
     impl.setLocationFilter(options?.filter);
 
+    // draft-ietf-moq-transport-19 Section 5.1.3: Range Filter を設定
+    // SUBSCRIBE 送信時の rangeFilters を保持し、handleObject / handleDatagram
+    // で再適用する (REQUEST_UPDATE 成功時は bidiHandleRequestUpdateOk が
+    // mergeRangeFilters で更新する)。
+    impl.setRangeFilters(options?.rangeFilters);
+
     // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
     impl.setAuthorizationToken(options?.authorizationToken);
 
@@ -2129,6 +2138,10 @@ export class SessionImpl implements Session {
         callbacks,
         state: "active",
         namespacePrefix,
+        // draft-ietf-moq-transport-19 §5.1.3:
+        // SUBSCRIBE_TRACKS の Range Filter を保持し、受信 PUBLISH の
+        // TRACK_PROPERTY_FILTER 評価に使用する。
+        rangeFilters: options?.rangeFilters,
         stream,
         streamReader,
         controlReader,
@@ -3532,17 +3545,11 @@ export class SessionImpl implements Session {
       return;
     }
 
-    // trackNamespace がアクティブな tracksSubscriptions の namespacePrefix に前方一致するか検証
-    const match = this.matchPublishToSubscription(publishTrackNamespace);
-    if (match === null) {
-      // draft-ietf-moq-transport-19 §10.10 (SHOULD): マッチしない PUBLISH は UNINTERESTED
-      await incomingSendRequestErrorAndClose(stream, RequestErrorCode.UNINTERESTED, "uninterested");
-      return;
-    }
-
     // draft-ietf-moq-transport-19 §11.1 (Track Alias):
     // 同一 Track Alias が異なる Track に使われている場合は DUPLICATE_TRACK_ALIAS でセッション終了。
     // 同一 Track への複数 PUBLISH は draft-19 §5.1 で許可される。
+    // フィルタ評価 (matchPublishToSubscription) より先に検証し、TRACK_PROPERTY_FILTER
+    // 不通過の PUBLISH でも MUST 違反の検出漏れを防ぐ。
     const existingSubscribers = this.subscribersByAlias.get(publishTrackAlias);
     if (existingSubscribers !== undefined && existingSubscribers.length > 0) {
       const fullTrackName = `${publishTrackNamespace.join("/")}/${publishTrackName}`;
@@ -3555,6 +3562,26 @@ export class SessionImpl implements Session {
         );
         return;
       }
+    }
+
+    // trackNamespace がアクティブな tracksSubscriptions の namespacePrefix に前方一致し、
+    // TRACK_PROPERTY_FILTER を通過する subscription を探す
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // "The Track Property Filter can be used in SUBSCRIBE_TRACKS to filter
+    //  PUBLISH messages with required Track Property types and values.
+    //  PUBLISH messages which pass the filter will be forwarded while those
+    //  which do not pass it will not be forwarded nor will any Objects."
+    // 同一 prefix に複数の subscription がマッチする場合は、先勝ちでマッチした
+    // subscription がフィルタを通過しないときのみ後続を試す (いずれかの
+    // subscription が受理できるなら受理する。すべて不通過なら UNINTERESTED)。
+    const match = this.matchPublishToSubscription(
+      publishTrackNamespace,
+      decodedPublish.trackProperties,
+    );
+    if (match === null) {
+      // draft-ietf-moq-transport-19 §10.10 (SHOULD): マッチしない PUBLISH は UNINTERESTED
+      await incomingSendRequestErrorAndClose(stream, RequestErrorCode.UNINTERESTED, "uninterested");
+      return;
     }
 
     // onPublish コールバックから SubscribeCallbacks を取得
@@ -3596,6 +3623,20 @@ export class SessionImpl implements Session {
     // 受信 PUBLISH の FORWARD パラメータ (省略時は §10.2.17 のデフォルト 1)
     // を Forward State として保持する。
     impl.setForwardState(extractForwardState(decodedPublish.parameters));
+
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // マッチした SUBSCRIBE_TRACKS の Range Filter を SubscriberImpl に渡す。
+    // remove エントリ (Length=0) は REQUEST_UPDATE の更新操作であり評価対象
+    // ではないため除外する。TRACK_PROPERTY_FILTER はオブジェクト評価
+    // (evaluateRangeFilters) が除外して評価するため、trackProperty 込みで
+    // 保持してよい (REQUEST_UPDATE のマージ後 MAX_FILTER_RANGES 検証で
+    // trackProperty の Ranges を正しく数えるため)。
+    // TRACK_PROPERTY_FILTER の SetID 別評価結果 (PUBLISH 時に確定) も併せて
+    // 渡し、オブジェクト評価時に同一 SetID のオブジェクトフィルタと AND 結合する
+    // (SetID 単位の AND / SetID 間 OR の結合規則 (§5.1.3) は種別をまたいで
+    // 適用される)。
+    impl.setRangeFilters(match.rangeFilters?.filter((spec) => !("remove" in spec)));
+    impl.setTrackFilterResultsBySetId(match.trackResultsBySetId);
 
     const subControlReader = new ControlStreamReader();
     let subReader: ReadableStreamDefaultReader<Uint8Array>;
@@ -3674,21 +3715,82 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * PUBLISH の trackNamespace をアクティブな tracksSubscriptions にマッチさせる
+   * PUBLISH の trackNamespace にマッチし、かつ TRACK_PROPERTY_FILTER を
+   * 通過する最初のアクティブな subscription を返す
    *
-   * @returns マッチした subscription の callbacks と suffix、マッチしなければ null
+   * draft-ietf-moq-transport-19 §5.1.3:
+   * "The Track Property Filter can be used in SUBSCRIBE_TRACKS to filter
+   *  PUBLISH messages with required Track Property types and values.
+   *  PUBLISH messages which pass the filter will be forwarded while those
+   *  which do not pass it will not be forwarded nor will any Objects."
+   * 同一 prefix に複数の subscription がマッチする場合は、先勝ちでマッチした
+   * subscription がフィルタを通過しないときのみ後続を試す (いずれかの
+   * subscription が受理できるなら受理し、すべて不通過なら null を返して
+   * 呼び出し側が UNINTERESTED で拒否する)。
+   *
+   * @param publishTrackNamespace - 受信 PUBLISH の Track Namespace
+   * @param trackProperties - 受信 PUBLISH の Track Properties
+   * @returns マッチした subscription の callbacks / suffix / rangeFilters /
+   *          track 評価結果、マッチしなければ null
    */
   private matchPublishToSubscription(
     publishTrackNamespace: string[],
-  ): { callbacks: TracksSubscriptionCallbacks; suffix: string[] } | null {
+    trackProperties: ReadonlyArray<Property>,
+  ): {
+    callbacks: TracksSubscriptionCallbacks;
+    suffix: string[];
+    rangeFilters?: RangeFilterSpec[];
+    trackResultsBySetId?: Map<number, boolean>;
+  } | null {
     for (const [, subscription] of this.tracksSubscriptions) {
       if (subscription.state !== "active") {
         continue;
       }
       const suffix = matchNamespacePrefix(publishTrackNamespace, subscription.namespacePrefix);
-      if (suffix !== null) {
-        return { callbacks: subscription.callbacks, suffix };
+      if (suffix === null) {
+        continue;
       }
+      // TRACK_PROPERTY_FILTER を SetID ごとに評価する
+      // draft-ietf-moq-transport-19 §5.1.3:
+      // "All filter parameters with the same SetID value are combined using
+      //  logical "AND" operations, then all the resulting sets are combined
+      //  using logical "OR" operations."
+      // 結合規則は TRACK_PROPERTY_FILTER とオブジェクトフィルタをまたいで
+      // 適用される。track 評価で通過する SetID があれば受理し、全 SetID で
+      // 不通過でも、track フィルタを含まない SetID にオブジェクトフィルタが
+      // あればオブジェクト評価で通過し得るため受理する (すべて不通過なら
+      // 後続の subscription を試す)。
+      const trackResultsBySetId = evaluateTrackPropertyFiltersBySetId(
+        subscription.rangeFilters,
+        trackProperties,
+      );
+      if (trackResultsBySetId !== undefined && trackResultsBySetId.size > 0) {
+        let anyPasses = false;
+        for (const passes of trackResultsBySetId.values()) {
+          if (passes) {
+            anyPasses = true;
+            break;
+          }
+        }
+        if (!anyPasses) {
+          const hasPureObjectFilterSetId =
+            subscription.rangeFilters?.some(
+              (spec) =>
+                !("remove" in spec) &&
+                spec.type !== "trackProperty" &&
+                !trackResultsBySetId.has(spec.setId),
+            ) ?? false;
+          if (!hasPureObjectFilterSetId) {
+            continue;
+          }
+        }
+      }
+      return {
+        callbacks: subscription.callbacks,
+        suffix,
+        rangeFilters: subscription.rangeFilters,
+        trackResultsBySetId,
+      };
     }
     return null;
   }

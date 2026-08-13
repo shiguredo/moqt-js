@@ -8,8 +8,14 @@ import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import type { AuthorizationToken } from "./message/authorizationToken";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
+import { mergeRangeFilters } from "./filter";
 import type { Property } from "./properties";
-import { type ResolvedFilter, resolveFilter, objectMatchesFilter } from "./filter";
+import {
+  type ResolvedFilter,
+  resolveFilter,
+  objectMatchesFilter,
+  evaluateRangeFilters,
+} from "./filter";
 
 /**
  * Subscriber state
@@ -114,6 +120,13 @@ export class SubscriberImpl implements Subscriber {
   // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
+  // draft-ietf-moq-transport-19 Section 5.1.3: Range Filter の再適用に使用
+  private subscriberRangeFilters: RangeFilterSpec[] | undefined;
+  // draft-ietf-moq-transport-19 Section 5.1.3:
+  // 受信 PUBLISH で確定した TRACK_PROPERTY_FILTER の SetID 別評価結果。
+  // オブジェクト評価時に同一 SetID のオブジェクトフィルタと AND 結合する
+  // (SetID 単位の AND → SetID 間 OR の結合規則を種別をまたいで適用するため)。
+  private trackFilterResultsBySetId: Map<number, boolean> | undefined;
 
   // セッションが利用する内部コールバック
   goawayCallback?: (newSessionUri: string) => void;
@@ -244,6 +257,76 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
+   * Range Filter を設定する (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+   * SUBSCRIBE 送信時 (options.rangeFilters) と REQUEST_UPDATE 成功時に設定される。
+   * REQUEST_UPDATE の削除 / 置換 / 不変のセマンティクス適用は
+   * applyRangeFilterUpdate が行う。
+   */
+  setRangeFilters(rangeFilters: RangeFilterSpec[] | undefined): void {
+    this.subscriberRangeFilters = rangeFilters;
+  }
+
+  /**
+   * 受信 PUBLISH で確定した TRACK_PROPERTY_FILTER の SetID 別評価結果を設定する
+   * (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-19 §5.1.3:
+   * "All filter parameters with the same SetID value are combined using logical
+   *  "AND" operations, then all the resulting sets are combined using logical
+   *  "OR" operations."
+   * TRACK_PROPERTY_FILTER は PUBLISH 時にしか評価できない (MoqtObject に Track
+   * Properties はない) ため、SetID ごとの結果を保持し、オブジェクト評価時に
+   * 同一 SetID のオブジェクトフィルタと AND 結合する。
+   */
+  setTrackFilterResultsBySetId(results: Map<number, boolean> | undefined): void {
+    this.trackFilterResultsBySetId = results;
+  }
+
+  /**
+   * REQUEST_UPDATE 成功時に Range Filter 更新を適用する (セッション内部)
+   *
+   * draft-ietf-moq-transport-19 §5.1.3:
+   * "In REQUEST_UPDATE, Length can be 0 to remove a filter parameter or
+   *  non-zero to replace that entire filter parameter including all sets
+   *  and Property Types. If a filter parameter is omitted from
+   *  REQUEST_UPDATE, the value is unchanged."
+   * 削除 / 置換 / 不変のセマンティクス (mergeRangeFilters) を現在のフィルタ
+   * 状態に適用する。
+   */
+  applyRangeFilterUpdate(update: RangeFilterSpec[]): void {
+    this.subscriberRangeFilters = mergeRangeFilters(this.subscriberRangeFilters, update);
+  }
+
+  /**
+   * 現在の Range Filter 状態を取得する (テスト用 / セッション内部)
+   */
+  getRangeFilters(): RangeFilterSpec[] | undefined {
+    return this.subscriberRangeFilters;
+  }
+
+  /**
+   * Range Filter をオブジェクトに再適用する
+   *
+   * draft-ietf-moq-transport-19 §5.1.3 / §5.1.4:
+   * 不通過のオブジェクトはアプリへ渡さない (Location Filter と同様)。
+   * フィルタなしは全通過。
+   */
+  private objectPassesRangeFilters(object: MoqtObject): boolean {
+    return evaluateRangeFilters(
+      this.subscriberRangeFilters,
+      {
+        subgroupId: object.subgroupId,
+        objectId: object.objectId,
+        publisherPriority: object.publisherPriority,
+        objectProperties: object.properties,
+      },
+      this.trackFilterResultsBySetId,
+    );
+  }
+
+  /**
    * Full Track Name を取得する（Track 同一性判定用）
    * draft-ietf-moq-transport-19 Section 2.4.1: Track の同一性は Full Track Name で判定
    */
@@ -273,6 +356,10 @@ export class SubscriberImpl implements Subscriber {
     ) {
       return;
     }
+    // draft-ietf-moq-transport-19 Section 5.1.3: Range Filter 再適用
+    if (!this.objectPassesRangeFilters(object)) {
+      return;
+    }
     this.objectCallback(object);
   }
 
@@ -296,6 +383,10 @@ export class SubscriberImpl implements Subscriber {
         this.resolvedFilterCache,
       )
     ) {
+      return;
+    }
+    // draft-ietf-moq-transport-19 Section 5.1.3: Range Filter 再適用
+    if (!this.objectPassesRangeFilters(object)) {
       return;
     }
     this.datagramCallback?.(object);

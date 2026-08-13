@@ -297,7 +297,14 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   }
 
   // Publisher Priority (8 ビット) - Priority Present を持つタイプのみ
-  if (hasPriorityPresent(header.type) && header.publisherPriority !== undefined) {
+  if (hasPriorityPresent(header.type)) {
+    // Priority Present ありの型では送信側が必ず明示値を設定する
+    // (publish.ts は params.priority ?? 128 で値を渡す)
+    if (header.publisherPriority === undefined) {
+      throw new Error(
+        "publisherPriority is required for subgroup header types with Priority Present",
+      );
+    }
     parts.push(new Uint8Array([header.publisherPriority]));
   }
 
@@ -659,7 +666,15 @@ export interface ObjectDatagram {
   trackAlias: bigint;
   groupId: bigint;
   objectId: bigint;
-  publisherPriority: number;
+  /**
+   * Publisher Priority (明示値のみ)。
+   * draft-ietf-moq-transport-19 §11.3.1: Priority Present なしの型
+   * (0x08-0x0F, 0x28-0x2D。0x2A-0x2B は STATUS + END_OF_GROUP 同時セットの
+   * 無効型) ではフィールドが無く、undefined になる。
+   * デフォルト値 (0) は実装上のはけ口であり、継承値 (Default Publisher
+   * Priority、省略時 128) とは無関係のため、評価値として使ってはならない。
+   */
+  publisherPriority?: number;
   properties?: Uint8Array;
   status?: ObjectStatus;
   payload?: Uint8Array;
@@ -736,6 +751,11 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
   // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
   if (datagramHasPriority(datagram.type)) {
+    // Priority Present ありの型では送信側が必ず明示値を設定する
+    // (publish.ts は params.priority ?? 128 で値を渡す)
+    if (datagram.publisherPriority === undefined) {
+      throw new Error("publisherPriority is required for datagram types with Priority Present");
+    }
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
 
@@ -815,7 +835,9 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   }
 
   // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
-  let publisherPriority = 0;
+  // 明示値のみを保持し、Priority Present なしでは publisherPriority を設定しない
+  // (評価時に 0 を明示値として扱わないための設計)。
+  let publisherPriority: number | undefined;
   if (datagramHasPriority(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
