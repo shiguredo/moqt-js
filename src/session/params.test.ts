@@ -12,6 +12,7 @@ import {
   buildSubscribeTracksParameters,
   buildRangeFilterParameters,
   validateRangeFilterLimits,
+  validateRangeFilterSpecs,
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
   buildPublishTrackProperties,
@@ -334,14 +335,19 @@ test("buildSubscribeTracksParameters: rangeFilters 未指定は Range Filter を
   assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
 });
 
-test("buildSubscribeTracksParameters: 削除指定 (remove: true) が Length=0 でエンコードされる", () => {
-  const parameters = buildSubscribeTracksParameters({
-    rangeFilters: [{ type: "objectId", remove: true }],
-  });
-  const objectIdFilter = parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER);
-  assert.isDefined(objectIdFilter);
-  // 削除は Length=0 の varint としてエンコードされる
-  assert.deepEqual(objectIdFilter!.value, new Uint8Array([0x00]));
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 削除 (Length=0) は REQUEST_UPDATE のみに定義されるため、
+ * SUBSCRIBE_TRACKS で削除を指定すると throw することを検証する。
+ */
+test("buildSubscribeTracksParameters: 削除指定 (remove: true) で throw する", () => {
+  assert.throws(
+    () =>
+      buildSubscribeTracksParameters({
+        rangeFilters: [{ type: "objectId", remove: true }],
+      }),
+    /cannot remove range filters in SUBSCRIBE_TRACKS: remove is only allowed in REQUEST_UPDATE/,
+  );
 });
 
 test("buildRangeFilterParameters: 追加と削除が混在してもパラメータ列に変換される", () => {
@@ -352,6 +358,72 @@ test("buildRangeFilterParameters: 追加と削除が混在してもパラメー�
   assert.equal(parameters.length, 2);
   assert.equal(parameters[0].type, MessageParameterType.PRIORITY_FILTER);
   assert.equal(parameters[1].type, MessageParameterType.OBJECT_PROPERTY_FILTER);
+});
+
+// ============================================================================
+// buildSubscribeParameters / buildFetchParameters (送信ガード)
+// draft-ietf-moq-transport-19 §5.1.3
+// ============================================================================
+
+test("buildSubscribeParameters: 削除指定で throw する", () => {
+  assert.throws(
+    () => buildSubscribeParameters({ rangeFilters: [{ type: "objectId", remove: true }] }),
+    /cannot remove range filters in SUBSCRIBE/,
+  );
+});
+
+test("buildSubscribeParameters: TRACK_PROPERTY_FILTER で throw する", () => {
+  assert.throws(
+    () =>
+      buildSubscribeParameters({
+        rangeFilters: [
+          { type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] },
+        ],
+      }),
+    /cannot send TRACK_PROPERTY_FILTER in SUBSCRIBE/,
+  );
+});
+
+test("buildSubscribeParameters: 正常な rangeFilters はエンコードされる", () => {
+  const parameters = buildSubscribeParameters({
+    rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+  });
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER));
+});
+
+test("buildFetchParameters: rangeFilters が FETCH パラメータになる", () => {
+  const parameters = buildFetchParameters({
+    startLocation: { group: 0n, object: 0n },
+    endLocation: { group: 1n, object: 0n },
+    rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+  });
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
+});
+
+test("buildFetchParameters: 削除指定で throw する", () => {
+  assert.throws(
+    () =>
+      buildFetchParameters({
+        startLocation: { group: 0n, object: 0n },
+        endLocation: { group: 1n, object: 0n },
+        rangeFilters: [{ type: "objectId", remove: true }],
+      }),
+    /cannot remove range filters in FETCH/,
+  );
+});
+
+test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
+  assert.throws(
+    () =>
+      buildFetchParameters({
+        startLocation: { group: 0n, object: 0n },
+        endLocation: { group: 1n, object: 0n },
+        rangeFilters: [
+          { type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] },
+        ],
+      }),
+    /cannot send TRACK_PROPERTY_FILTER in FETCH/,
+  );
 });
 
 // ============================================================================
@@ -427,6 +499,166 @@ test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数え�
   // 上限 0 は「any such filter parameters」を MUST NOT 送信のため、削除もブロックされる
   assert.throws(() =>
     validateRangeFilterLimits([{ type: "objectId", remove: true }], 0, "REQUEST_UPDATE"),
+  );
+});
+
+// ============================================================================
+// validateRangeFilterSpecs
+// draft-ietf-moq-transport-19 §5.1.3 (削除は REQUEST_UPDATE のみ / 0x29 のスコープ / 組み合わせ重複)
+// ============================================================================
+
+test("validateRangeFilterSpecs: undefined / 空配列は throw しない", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs(undefined, "SUBSCRIBE", {
+      allowRemove: false,
+      allowTrackProperty: false,
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs([], "SUBSCRIBE", {
+      allowRemove: false,
+      allowTrackProperty: false,
+    }),
+  );
+});
+
+test("validateRangeFilterSpecs: allowRemove=false で削除を指定すると throw する", () => {
+  assert.throws(
+    () =>
+      validateRangeFilterSpecs([{ type: "objectId", remove: true }], "SUBSCRIBE", {
+        allowRemove: false,
+        allowTrackProperty: false,
+      }),
+    /cannot remove range filters in SUBSCRIBE: remove is only allowed in REQUEST_UPDATE/,
+  );
+});
+
+test("validateRangeFilterSpecs: allowRemove=true なら削除は許可される", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs([{ type: "objectId", remove: true }], "REQUEST_UPDATE", {
+      allowRemove: true,
+      allowTrackProperty: false,
+    }),
+  );
+});
+
+test("validateRangeFilterSpecs: allowTrackProperty=false で 0x29 を指定すると throw する", () => {
+  assert.throws(
+    () =>
+      validateRangeFilterSpecs(
+        [{ type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] }],
+        "FETCH",
+        { allowRemove: false, allowTrackProperty: false },
+      ),
+    /cannot send TRACK_PROPERTY_FILTER in FETCH: only allowed in SUBSCRIBE_TRACKS/,
+  );
+  // 削除エントリでも 0x29 は throw する
+  assert.throws(
+    () =>
+      validateRangeFilterSpecs([{ type: "trackProperty", remove: true }], "FETCH", {
+        allowRemove: false,
+        allowTrackProperty: false,
+      }),
+    /cannot send TRACK_PROPERTY_FILTER in FETCH: only allowed in SUBSCRIBE_TRACKS/,
+  );
+});
+
+test("validateRangeFilterSpecs: allowTrackProperty=true なら 0x29 は許可される", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs(
+      [{ type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] }],
+      "SUBSCRIBE_TRACKS",
+      { allowRemove: false, allowTrackProperty: true },
+    ),
+  );
+});
+
+test("validateRangeFilterSpecs: 同一組み合わせの重複で throw する", () => {
+  assert.throws(
+    () =>
+      validateRangeFilterSpecs(
+        [
+          { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
+          { type: "subgroup", setId: 0, ranges: [{ start: 2n, end: 3n }] },
+        ],
+        "SUBSCRIBE",
+        { allowRemove: false, allowTrackProperty: false },
+      ),
+    /duplicate range filter combination in SUBSCRIBE: subgroup:0:/,
+  );
+});
+
+test("validateRangeFilterSpecs: SetID 違いは重複にならない", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs(
+      [
+        { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
+        { type: "subgroup", setId: 1, ranges: [{ start: 2n, end: 3n }] },
+      ],
+      "SUBSCRIBE",
+      { allowRemove: false, allowTrackProperty: false },
+    ),
+  );
+});
+
+test("validateRangeFilterSpecs: Property Type 違いは重複にならない", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs(
+      [
+        {
+          type: "objectProperty",
+          setId: 0,
+          propertyType: 0x02n,
+          ranges: [{ start: 1n }],
+        },
+        {
+          type: "objectProperty",
+          setId: 0,
+          propertyType: 0x04n,
+          ranges: [{ start: 1n }],
+        },
+      ],
+      "SUBSCRIBE",
+      { allowRemove: false, allowTrackProperty: false },
+    ),
+  );
+});
+
+test("validateRangeFilterSpecs: 同一 Property Type の重複で throw する", () => {
+  assert.throws(
+    () =>
+      validateRangeFilterSpecs(
+        [
+          {
+            type: "objectProperty",
+            setId: 0,
+            propertyType: 0x02n,
+            ranges: [{ start: 1n }],
+          },
+          {
+            type: "objectProperty",
+            setId: 0,
+            propertyType: 0x02n,
+            ranges: [{ start: 2n }],
+          },
+        ],
+        "SUBSCRIBE",
+        { allowRemove: false, allowTrackProperty: false },
+      ),
+    /duplicate range filter combination in SUBSCRIBE: objectProperty:0:2/,
+  );
+});
+
+test("validateRangeFilterSpecs: 削除エントリは重複判定の対象外", () => {
+  assert.doesNotThrow(() =>
+    validateRangeFilterSpecs(
+      [
+        { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
+        { type: "subgroup", remove: true },
+      ],
+      "REQUEST_UPDATE",
+      { allowRemove: true, allowTrackProperty: false },
+    ),
   );
 });
 

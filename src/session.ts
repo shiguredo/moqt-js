@@ -75,6 +75,7 @@ import {
   extractForwardState,
   matchNamespacePrefix,
   validateRangeFilterLimits,
+  validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
 } from "./session/params";
 import * as bidi from "./session/bidi";
@@ -443,6 +444,14 @@ export interface JoiningFetchOptions {
    * 0 は即座に利用可能な object のみを要求。
    */
   fillTimeout?: bigint;
+
+  /**
+   * Range Filters
+   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+   *
+   * ピアの MAX_FILTER_RANGES が 0 (未広告含む) の場合に指定すると throw する。
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 /**
@@ -635,6 +644,8 @@ export interface FetchOptions {
   /**
    * Range Filters
    * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+   *
+   * ピアの MAX_FILTER_RANGES が 0 (未広告含む) の場合に指定すると throw する。
    */
   rangeFilters?: RangeFilterSpec[];
 
@@ -1712,6 +1723,19 @@ export class SessionImpl implements Session {
       await this.sendRequestUpdate(impl, updateOptions);
     };
 
+    // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
+    // pendingSubscribe.set より前に配置し、throw 時に pending エントリが残らないようにする
+    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "SUBSCRIBE");
+
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // SUBSCRIBE の Range Filter 送信ガード (削除は REQUEST_UPDATE のみ・0x29 は
+    // SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止)。buildSubscribeParameters 内でも
+    // 検証されるが、pendingSubscribe.set より前に throw させるため明示的に呼ぶ。
+    validateRangeFilterSpecs(options?.rangeFilters, "SUBSCRIBE", {
+      allowRemove: false,
+      allowTrackProperty: false,
+    });
+
     // SUBSCRIBE_OK の Promise を作成
     const promise = new Promise<Subscriber>((resolve, reject) => {
       this.pendingSubscribe.set(requestId, {
@@ -1722,9 +1746,6 @@ export class SessionImpl implements Session {
         objectCallback: callbacks.object,
       });
     });
-
-    // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
-    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "SUBSCRIBE");
 
     const parameters = buildSubscribeParameters(options);
 
@@ -1804,6 +1825,10 @@ export class SessionImpl implements Session {
       );
     }
 
+    // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
+    // pendingFetch.set より前に配置し、throw 時に pending エントリが残らないようにする
+    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "FETCH");
+
     // Fetcher 実装を作成
     const impl = new FetcherImpl(
       namespace,
@@ -1823,20 +1848,12 @@ export class SessionImpl implements Session {
       await this.cancelFetch(impl);
     };
 
-    // FETCH_OK を待つ Promise
-    const promise = new Promise<Fetcher>((resolve, reject) => {
-      this.pendingFetch.set(requestId, {
-        resolve,
-        reject,
-        impl,
-        startLocation: options.startLocation,
-      });
-    });
-
-    // FETCH メッセージを双方向ストリームで送信（Standalone Fetch）
+    // FETCH メッセージを構築する（Standalone Fetch）
     // draft-ietf-moq-transport-19 Section 10.12 (FETCH):
     // FETCH は新しい双方向ストリームで送信される。
     // draft-ietf-moq-transport-19 Section 3.3
+    // buildFetchParameters (buildRangeFilterParameters を含む) が throw する場合、
+    // pendingFetch.set より前で失敗させるため、構築は Promise 作成より前に行う。
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
@@ -1849,6 +1866,16 @@ export class SessionImpl implements Session {
       },
       parameters: buildFetchParameters(options),
     };
+
+    // FETCH_OK を待つ Promise
+    const promise = new Promise<Fetcher>((resolve, reject) => {
+      this.pendingFetch.set(requestId, {
+        resolve,
+        reject,
+        impl,
+        startLocation: options.startLocation,
+      });
+    });
 
     const payload = encodeFetchPayload(fetchMsg);
     const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {

@@ -27,6 +27,7 @@ import {
   bidiHandleRequestUpdateOk,
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
+  bidiSendJoiningFetch,
   bidiSendNamespaceRequestUpdate,
   bidiSendRequestUpdate,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
@@ -34,6 +35,7 @@ import {
   validateNoDuplicateGoawayOnRequestStream,
   type BidiSessionInternal,
 } from "./bidi";
+import { FetcherImpl } from "../fetcher";
 import { publishSendPublishDone } from "./publish";
 import type { SessionInternal } from "./types";
 
@@ -549,6 +551,38 @@ function createBidiSession(): {
   return { session, written };
 }
 
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * REQUEST_UPDATE では TRACK_PROPERTY_FILTER (0x29) は一律 throw する。
+ * moqt-js が送信する REQUEST_UPDATE はすべて per-subscription の更新 (§10.9) であり、
+ * 0x29 が許可される SUBSCRIBE_TRACKS リクエスト自身のストリーム上の REQUEST_UPDATE
+ * (「REQUEST_UPDATE for it」) に該当しないため。
+ */
+test("bidiSendRequestUpdate: TRACK_PROPERTY_FILTER を含む rangeFilters で throw する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [
+        { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
+        { type: "trackProperty", remove: true },
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("TRACK_PROPERTY_FILTER"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * REQUEST_UPDATE の rangeFilters (0x29 以外) が REQUEST_UPDATE にエンコードされ、
+ * 削除 (Length=0) も許可されることを検証する。
+ */
 test("bidiSendRequestUpdate: rangeFilters が REQUEST_UPDATE にエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
@@ -558,7 +592,7 @@ test("bidiSendRequestUpdate: rangeFilters が REQUEST_UPDATE にエンコード�
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
     rangeFilters: [
       { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
-      { type: "trackProperty", remove: true },
+      { type: "objectId", remove: true },
     ],
   });
   for (const [, pending] of session.pendingRequestUpdate) {
@@ -573,9 +607,92 @@ test("bidiSendRequestUpdate: rangeFilters が REQUEST_UPDATE にエンコード�
 
   const decoded = decodeRequestUpdatePayload(messages[0].payload);
   assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
-  assert.isDefined(
-    decoded.parameters.find((p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER),
+  assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER));
+});
+
+// ============================================================================
+// bidiSendJoiningFetch の Range Filters テスト
+// draft-ietf-moq-transport-19 §5.1.3 / §10.3.1.6
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * bidiSendJoiningFetch の rangeFilters ガード (削除・0x29) 違反時は、
+ * fire-and-forget (void) 起動のため未処理 rejection にならないよう catch で
+ * 処理し、pendingFetch を削除して options.onError で通知することを検証する。
+ */
+test("bidiSendJoiningFetch: 削除指定の rangeFilters で pendingFetch が削除され onError が呼ばれる", async () => {
+  const { session } = createBidiSession();
+  const requestId = 100n; // nextRequestId 100n
+  let onErrorCalled: Error | undefined;
+
+  // ガードは pendingFetch.set の後に配置されるため、テスト開始時に pendingFetch を作る
+  session.pendingFetch.set(requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: {} as FetcherImpl,
+    startLocation: { group: 0n, object: 0n },
+  });
+
+  await bidiSendJoiningFetch(
+    session,
+    1n, // subscribeRequestId
+    {
+      type: "relative",
+      start: 0n,
+      rangeFilters: [{ type: "objectId", remove: true }],
+      onError: (error) => {
+        onErrorCalled = error;
+      },
+    },
+    () => {},
+    { group: 0n, object: 0n },
   );
+
+  // ガード違反時は pendingFetch が削除され、onError が呼ばれる
+  assert.isFalse(session.pendingFetch.has(requestId));
+  assert.isDefined(onErrorCalled);
+  assert.isTrue(onErrorCalled!.message.includes("cannot remove range filters in Joining Fetch"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * bidiSendJoiningFetch の rangeFilters ガード (削除・0x29) 違反時は、
+ * fire-and-forget (void) 起動のため未処理 rejection にならないよう catch で
+ * 処理し、pendingFetch を削除して options.onError で通知することを検証する。
+ */
+test("bidiSendJoiningFetch: TRACK_PROPERTY_FILTER 指定の rangeFilters で pendingFetch が削除され onError が呼ばれる", async () => {
+  const { session } = createBidiSession();
+  const requestId = 100n; // nextRequestId 100n
+  let onErrorCalled: Error | undefined;
+
+  session.pendingFetch.set(requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: {} as FetcherImpl,
+    startLocation: { group: 0n, object: 0n },
+  });
+
+  await bidiSendJoiningFetch(
+    session,
+    1n,
+    {
+      type: "relative",
+      start: 0n,
+      rangeFilters: [
+        { type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] },
+      ],
+      onError: (error) => {
+        onErrorCalled = error;
+      },
+    },
+    () => {},
+    { group: 0n, object: 0n },
+  );
+
+  assert.isFalse(session.pendingFetch.has(requestId));
+  assert.isDefined(onErrorCalled);
+  assert.isTrue(onErrorCalled!.message.includes("TRACK_PROPERTY_FILTER"));
 });
 
 test("bidiSendRequestUpdate: Range Filters の Ranges 数が MAX_FILTER_RANGES を超えると throw する", async () => {
