@@ -659,7 +659,13 @@ export interface ObjectDatagram {
   trackAlias: bigint;
   groupId: bigint;
   objectId: bigint;
-  publisherPriority: number;
+  /**
+   * Publisher Priority。Priority Present のない datagram では undefined
+   * (draft-ietf-moq-transport-19 Section 11.3.1: 0x08-0x0F, 0x28-0x2D は
+   * Priority なし)。PRIORITY_FILTER の評価では明示値のみを使うため、
+   * 0 のダミー値は使わない。
+   */
+  publisherPriority?: number;
   properties?: Uint8Array;
   status?: ObjectStatus;
   payload?: Uint8Array;
@@ -736,6 +742,11 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
   // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
   if (datagramHasPriority(datagram.type)) {
+    // Priority Present ありの場合は publisherPriority が必須 (encodeObjectDatagram
+    // の入力はアプリが指定するため)
+    if (datagram.publisherPriority === undefined) {
+      throw new Error("publisherPriority is required when Priority Present bit is set");
+    }
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
 
@@ -815,7 +826,9 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   }
 
   // Priority Present の有無を判定 (Section 11.3.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
-  let publisherPriority = 0;
+  // Priority が明示されていない場合は undefined を設定する (PRIORITY_FILTER の
+  // 評価では明示値のみを使い、0 のダミー値は使わないため)
+  let publisherPriority: number | undefined;
   if (datagramHasPriority(typeNum)) {
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;

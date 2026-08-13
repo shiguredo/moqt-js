@@ -8,6 +8,7 @@ import { SubscriberImpl } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import type { Property } from "./properties";
+import { encodeProperties } from "./properties";
 
 function createObject(groupId: bigint, objectId: bigint): MoqtObject {
   return {
@@ -243,4 +244,168 @@ test("setForwardState で Forward State が更新される", () => {
 
   subscriber.setForwardState(true);
   assert.equal(subscriber.forwardState, true);
+});
+
+// ============================================================================
+// Range Filters の再適用テスト
+// draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+// ============================================================================
+
+/**
+ * OBJECTID_FILTER で不通過のオブジェクトは handleObject で破棄される。
+ */
+test("handleObject: OBJECTID_FILTER 不通過のオブジェクトは配信しない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 5n, end: 7n }] }]);
+
+  subscriber.handleObject(createObject(0n, 6n));
+  subscriber.handleObject(createObject(0n, 10n));
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].objectId, 6n);
+});
+
+/**
+ * SUBGROUP_FILTER で subgroupId 未指定 (datagram 経路等) のオブジェクトは
+ * handleObject で不通過になる。
+ */
+test("handleObject: SUBGROUP_FILTER で subgroupId 未指定は配信しない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 10n }] }]);
+
+  // subgroupId 未指定 (undefined)
+  subscriber.handleObject(createObject(0n, 0n));
+  assert.equal(delivered.length, 0);
+
+  // subgroupId 指定
+  subscriber.handleObject({ ...createObject(0n, 0n), subgroupId: 5n });
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * PRIORITY_FILTER で publisherPriority 未指定のオブジェクトは handleDatagram で
+ * 不通過になる (0 のダミー値は評価値として使わない)。
+ */
+test("handleDatagram: PRIORITY_FILTER で publisherPriority 未指定は配信しない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    () => {},
+    (obj) => delivered.push(obj),
+  );
+  subscriber.setRangeFilters([{ type: "priority", setId: 0, ranges: [{ start: 0n, end: 255n }] }]);
+
+  // publisherPriority 未指定 (undefined) は不通過
+  subscriber.handleDatagram(createObject(0n, 0n));
+  assert.equal(delivered.length, 0);
+
+  // publisherPriority 明示 (0) は通過 (明示された 0 は評価値として有効)
+  subscriber.handleDatagram({ ...createObject(0n, 0n), publisherPriority: 0 });
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * setRangeFilters の削除 (Length=0) は当該パラメータ型全体を削除する。
+ */
+test("setRangeFilters: 削除エントリは当該型全体を削除する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setRangeFilters([
+    { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 2n }] },
+    { type: "objectId", setId: 0, ranges: [{ start: 5n, end: 7n }] },
+  ]);
+  // objectId の削除エントリ (SetID なし) で objectId 型全体を削除する
+  subscriber.setRangeFilters([{ type: "objectId", remove: true }]);
+
+  // objectId フィルタが消えているため、objectId はどの値でも通過する。
+  // subgroup フィルタは不変のため、subgroupId は評価される。
+  subscriber.handleObject({ ...createObject(0n, 150n), subgroupId: 1n });
+  subscriber.handleObject({ ...createObject(0n, 150n), subgroupId: 3n });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].objectId, 150n);
+});
+
+/**
+ * setRangeFilters: 同型の異なる SetID が共存することを検証する。
+ * (§5.1.3「The final result is SetID=0 OR SetID=1 OR ... SetID=255」)
+ */
+test("setRangeFilters: 同型の異なる SetID は共存する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setRangeFilters([
+    { type: "objectId", setId: 0, ranges: [{ start: 1n, end: 2n }] },
+    { type: "objectId", setId: 1, ranges: [{ start: 10n, end: 11n }] },
+  ]);
+
+  // SetID 0 (objectId 1-2) と SetID 1 (objectId 10-11) が OR で共存する
+  subscriber.handleObject(createObject(0n, 1n));
+  subscriber.handleObject(createObject(0n, 10n));
+  subscriber.handleObject(createObject(0n, 5n));
+  assert.equal(delivered.length, 2);
+});
+
+/**
+ * setRangeFilters: REQUEST_UPDATE で他種のフィルタが不変であることを検証する。
+ * (「If a filter parameter is omitted from REQUEST_UPDATE, the value is
+ *  unchanged」§5.1.3)
+ */
+test("setRangeFilters: REQUEST_UPDATE で省略された型は不変", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  // SUBSCRIBE 時に subgroup + objectId を設定
+  subscriber.setRangeFilters([
+    { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 2n }] },
+    { type: "objectId", setId: 0, ranges: [{ start: 5n, end: 7n }] },
+  ]);
+  // REQUEST_UPDATE で objectId のみ置換 (subgroup は省略 = 不変)
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 8n, end: 9n }] }]);
+
+  // subgroup フィルタは維持されている (subgroupId 1 は通過、3 は不通過)。
+  // objectId は新フィルタ [8-9] で評価されるため 6n は不通過
+  subscriber.handleObject({ ...createObject(0n, 8n), subgroupId: 1n });
+  subscriber.handleObject({ ...createObject(0n, 8n), subgroupId: 3n });
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * setRangeFilters: 同一 SetID・異なる Property Type の共存を検証する。
+ */
+test("setRangeFilters: 異なる Property Type は共存する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  // 異なる SetID に分けて OR 結合で検証する (同一 SetID では AND 結合のため
+  // 片方の Property のみ持つオブジェクトは通過しない)
+  subscriber.setRangeFilters([
+    { type: "objectProperty", setId: 0, propertyType: 0x02n, ranges: [{ start: 1n, end: 100n }] },
+    { type: "objectProperty", setId: 1, propertyType: 0x04n, ranges: [{ start: 1n, end: 100n }] },
+  ]);
+
+  // 0x02 のみ持つオブジェクトは SetID 0 で通過する (0x02 フィルタが保持されている)
+  const objectWith02 = { ...createObject(0n, 0n) };
+  objectWith02.properties = encodeProperties([{ id: 0x02n, value: 50n }]);
+  subscriber.handleObject(objectWith02);
+  assert.equal(delivered.length, 1);
+
+  // 0x04 のみ持つオブジェクトは SetID 1 で通過する (0x04 フィルタが保持されている)
+  const objectWith04 = { ...createObject(0n, 0n) };
+  objectWith04.properties = encodeProperties([{ id: 0x04n, value: 50n }]);
+  subscriber.handleObject(objectWith04);
+  assert.equal(delivered.length, 2);
 });

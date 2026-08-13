@@ -310,6 +310,73 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
 });
 
 /**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filters が
+ * SubscriberImpl に反映されることを検証する。
+ * REQUEST_UPDATE で省略された型は不変 (「If a filter parameter is omitted from
+ * REQUEST_UPDATE, the value is unchanged」§5.1.3)。
+ */
+test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映される", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, (obj) => delivered.push(obj));
+  // SUBSCRIBE 時に subgroup + objectId を設定
+  subscriber.setRangeFilters([
+    { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 2n }] },
+    { type: "objectId", setId: 0, ranges: [{ start: 5n, end: 7n }] },
+  ]);
+
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        1n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          forward: undefined,
+          rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 8n, end: 9n }] }],
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // objectId フィルタは [8-9] に置換され、subgroup フィルタは不変のため、
+  // subgroupId=1 かつ objectId=8 のみ通過する
+  subscriber.handleObject({
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 8n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  subscriber.handleObject({
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 6n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  subscriber.handleObject({
+    groupId: 0n,
+    subgroupId: 3n,
+    objectId: 8n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].objectId, 8n);
+});
+
+/**
  * REQUEST_UPDATE_OK で空 Track Properties を受信した場合の正常系検証。
  */
 test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が呼ばれない", () => {

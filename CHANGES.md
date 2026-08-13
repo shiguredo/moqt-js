@@ -11,6 +11,12 @@
 
 ## develop
 
+- [ADD] Range Filter の評価 (マッチング) ロジックを実装する
+  - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY の評価関数 (SetID ごとの AND / OR 結合、両端含む判定、open-ended) を実装する
+  - SubscriberImpl の handleObject / handleDatagram に Range Filter 再適用を追加し、不通過オブジェクトを破棄する
+  - 受信 PUBLISH の Track Properties に対する TRACK_PROPERTY_FILTER 評価を追加し、不通過は UNINTERESTED で拒否する
+  - SUBSCRIBE / SUBSCRIBE_TRACKS 送信時と REQUEST_UPDATE 成功時のフィルタ状態更新を実装する
+  - @voluntas
 - [ADD] FETCH / Joining Fetch で Range Filters を送信できるようにし、送信ガードを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、buildFetchParameters / bidiSendJoiningFetch に Range Filters を載荷する
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
