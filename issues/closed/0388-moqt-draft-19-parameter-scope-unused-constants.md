@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/refactor-moqt-draft-19-parameter-scope-unused-constants
 - Polished: 2026-08-12
@@ -60,4 +60,8 @@
 
 ## 解決方法
 
-未着手。
+- `src/message/parameterScope.ts` から `SUBSCRIBE_ALLOWED_PARAMS` / `FETCH_ALLOWED_PARAMS` / `NAMESPACE_ALLOWED_PARAMS` / `SUBSCRIBE_TRACKS_ALLOWED_PARAMS` の 4 定数を削除した (0371 により受信リクエスト 6 種はペイロード非デコード + NOT_SUPPORTED 応答のため、受信検証に使われることはない)
+- `PUBLISH_REQUEST_UPDATE_OK_PARAMS` は `bidiHandlePublishRequestUpdate` (production から使用) で参照されるため削除対象外とした
+- `src/message/parameterScope.test.ts` から `SUBSCRIBE_TRACKS_ALLOWED_PARAMS` を参照するテスト 2 件と import を削除した (他の定数のテストは残る)
+- `issues/0389-moqt-draft-19-subscribe-tracks-allowed-params-unwired.md` に「対象喪失によるクローズまたは削除への収束」の注記を追加した (0388 の削除確定により 0389 は対象を失う)
+- `CHANGES.md` の `## develop` 末尾の `### misc` に `[CHANGE]` エントリを追加した
