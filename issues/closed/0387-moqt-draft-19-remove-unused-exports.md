@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/refactor-moqt-draft-19-remove-unused-exports
 - Polished: 2026-08-12
@@ -48,4 +48,7 @@
 
 ## 解決方法
 
-未着手。
+- `src/message/authorizationToken.ts` から `calculateAuthTokenSize` / `fallbackRegisterToUseValue` を削除した (リポジトリ全体から参照されていないデッドコード。doc コメントも併せて削除)
+- `src/message/types.ts` から `ObjectForwardingPreference` (const + type) を削除した (draft-19 では wire 上の明示フィールドがなく、Subgroup ストリームと Object Datagram の使い分けで暗黙に表現されるため使用箇所がない)
+- `AuthorizationTokenRegister` / `AuthorizationTokenUseValue` 型は `AuthorizationToken` discriminated union の構成要素として必要であり、削除しない
+- `CHANGES.md` の `## develop` 末尾に `### misc` セクションを追加し、`[CHANGE]` エントリを記載した (シンボル削除を伴う変更の先例に従い [CHANGE] で記載)
