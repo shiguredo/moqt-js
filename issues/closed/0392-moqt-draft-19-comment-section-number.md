@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-comment-section-number
 - Polished: 2026-08-12
@@ -60,4 +60,10 @@
 
 ## 解決方法
 
-未着手。
+- `src/message/types.ts` の `MessageParameterType` コメント (コメントのみ。コード変更なし) を修正した:
+  - Range Filter 5 種のセクション番号を §10.2.10-14 に修正し、正式節タイトル (SUBGROUP FILTER Parameter / OBJECTID FILTER Parameter / PRIORITY FILTER Parameter / OBJECT PROPERTY FILTER Parameter / TRACK PROPERTY FILTER Parameter) を付与した
+  - `LOCATION_FILTER` のコメントタイトルを「LOCATION FILTER Parameter」に修正した (draft-18 の旧名「SUBSCRIPTION FILTER」のままだった 0340 のリネーム漏れ)
+  - `GROUP_ORDER` のコメントの `GROUP_ORDER_PREFERENCE` を `DEFAULT_PUBLISHER_GROUP_ORDER` に修正し、参照を §12.5 (DEFAULT PUBLISHER GROUP ORDER) に変更した (draft-17 からの残存)
+  - レビューで見つかった `SUBGROUP_DELIVERY_TIMEOUT` の節タイトルの表記ゆれ (SUBGROUP_DELIVERY TIMEOUT → SUBGROUP_DELIVERY_TIMEOUT) もついでに修正した
+- 全エントリのセクション番号と節タイトルを `refs/moq/draft-ietf-moq-transport-19.txt` の目次 (§10.2.1-10.2.19) と一字一致で照合し、誤りがないことを確認した
+- レビュー 3 周すべて致命的・重要 0 件 (1 周目・3 周目は指摘なし、2 周目の改善 1 件は反映済み)

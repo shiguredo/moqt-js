@@ -149,7 +149,7 @@ export const MessageParameterType = {
    */
   RENDEZVOUS_TIMEOUT: 0x04,
   /**
-   * SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3 SUBGROUP_DELIVERY TIMEOUT Parameter)
+   * SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3 SUBGROUP_DELIVERY_TIMEOUT Parameter)
    *
    * draft-ietf-moq-transport-19:
    * SUBGROUP_DELIVERY_TIMEOUT パラメータは varint。
@@ -183,15 +183,15 @@ export const MessageParameterType = {
    */
   SUBSCRIBER_PRIORITY: 0x20,
   /**
-   * LOCATION_FILTER (Section 10.2.9 SUBSCRIPTION FILTER Parameter)
+   * LOCATION_FILTER (Section 10.2.9 LOCATION FILTER Parameter)
    */
   LOCATION_FILTER: 0x21,
   /**
    * GROUP_ORDER (Section 10.2.8 GROUP ORDER Parameter)
    *
    * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
-   * Publisher の GROUP_ORDER_PREFERENCE は Track Property として使用。
-   * draft-ietf-moq-transport-19 Section 10.2 (Message Parameters)
+   * Publisher の DEFAULT_PUBLISHER_GROUP_ORDER は Track Property として使用。
+   * draft-ietf-moq-transport-19 Section 12.5 (DEFAULT PUBLISHER GROUP ORDER)
    */
   GROUP_ORDER: 0x22,
   /**
@@ -209,27 +209,27 @@ export const MessageParameterType = {
    */
   TRACK_NAMESPACE_PREFIX: 0x34,
   /**
-   * SUBGROUP_FILTER (Section 10.2.15)
+   * SUBGROUP_FILTER (Section 10.2.10 SUBGROUP FILTER Parameter)
    * draft-ietf-moq-transport-19: Range Filter の一種
    */
   SUBGROUP_FILTER: 0x25,
   /**
-   * OBJECTID_FILTER (Section 10.2.16)
+   * OBJECTID_FILTER (Section 10.2.11 OBJECTID FILTER Parameter)
    * draft-ietf-moq-transport-19: Range Filter の一種
    */
   OBJECTID_FILTER: 0x26,
   /**
-   * PRIORITY_FILTER (Section 10.2.17)
+   * PRIORITY_FILTER (Section 10.2.12 PRIORITY FILTER Parameter)
    * draft-ietf-moq-transport-19: Range Filter の一種
    */
   PRIORITY_FILTER: 0x27,
   /**
-   * OBJECT_PROPERTY_FILTER (Section 10.2.18)
+   * OBJECT_PROPERTY_FILTER (Section 10.2.13 OBJECT PROPERTY FILTER Parameter)
    * draft-ietf-moq-transport-19: Range Filter の一種。Property Type 付き
    */
   OBJECT_PROPERTY_FILTER: 0x28,
   /**
-   * TRACK_PROPERTY_FILTER (Section 10.2.19)
+   * TRACK_PROPERTY_FILTER (Section 10.2.14 TRACK PROPERTY FILTER Parameter)
    * draft-ietf-moq-transport-19: Range Filter の一種。Property Type 付き。SUBSCRIBE_TRACKS 専用
    */
   TRACK_PROPERTY_FILTER: 0x29,
