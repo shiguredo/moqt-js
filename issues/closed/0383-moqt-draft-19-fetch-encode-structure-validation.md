@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-fetch-encode-structure-validation
 - Polished: 2026-08-12
@@ -48,4 +48,11 @@ decode 側 (`decodeFetchPayload` の switch の default 分岐) は Fetch Type 1
 
 ## 解決方法
 
-未着手。
+- `src/message/fetch.ts` の `encodeFetchPayload` の先頭に構造検証を追加した:
+  - Fetch Type が 0x1 / 0x2 / 0x3 以外の場合はエラー (decode 側の先例と同形式のメッセージ)
+  - `FetchType.STANDALONE` (0x1) は standalone 必須・joining 禁止
+  - `FetchType.RELATIVE_JOINING` (0x2) / `FetchType.ABSOLUTE_JOINING` (0x3) は joining 必須・standalone 禁止
+  - null も undefined と同様に構造未設定として拒否する (型外入力の防御)
+- 不正な入力にはプレーンな `Error` で throw する (decode 側の `ProtocolViolationError` とは区別。自コードの防御のため)
+- テスト: `src/message/fetch.test.ts` を新規作成し、エラーパス 7 件 (fetchType 不正 / STANDALONE で standalone なし・null / STANDALONE で joining あり / JOINING 系で joining なし・null / JOINING 系で standalone あり) と正常系 3 種を検証した。fetchType 不正ケースでは `ProtocolViolationError` でないことを明示的に検証する
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した

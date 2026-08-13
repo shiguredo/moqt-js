@@ -77,8 +77,43 @@ export interface FetchOk {
 
 /**
  * Fetch のペイロードをエンコード
+ *
+ * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
+ * 不正な Fetch Type や Standalone / Joining 構造の不整合はエンコード前に
+ * throw する (自コードの防御。decode 側の ProtocolViolationError とは区別)。
  */
 export function encodeFetchPayload(msg: Fetch): Uint8Array {
+  // draft-ietf-moq-transport-19 Section 10.12 (FETCH):
+  // Fetch Type は 0x1 (STANDALONE) / 0x2 (RELATIVE_JOINING) / 0x3 (ABSOLUTE_JOINING) のみ
+  if (
+    msg.fetchType !== FetchType.STANDALONE &&
+    msg.fetchType !== FetchType.RELATIVE_JOINING &&
+    msg.fetchType !== FetchType.ABSOLUTE_JOINING
+  ) {
+    throw new Error(
+      `unknown fetch type: 0x${Number(msg.fetchType).toString(16)}, expected 0x1, 0x2, or 0x3`,
+    );
+  }
+
+  // draft-ietf-moq-transport-19 Section 10.12.1 / 10.12.2:
+  // Standalone は Fetch Type 0x1 のとき、Joining は 0x2 / 0x3 のときに含まれる。
+  // null も undefined と同様に構造未設定として拒否する (型外入力の防御)。
+  if (msg.fetchType === FetchType.STANDALONE) {
+    if (msg.standalone === undefined || msg.standalone === null) {
+      throw new Error("standalone fetch requires a standalone structure");
+    }
+    if (msg.joining !== undefined && msg.joining !== null) {
+      throw new Error("standalone fetch must not contain a joining structure");
+    }
+  } else {
+    if (msg.joining === undefined || msg.joining === null) {
+      throw new Error("joining fetch requires a joining structure");
+    }
+    if (msg.standalone !== undefined && msg.standalone !== null) {
+      throw new Error("joining fetch must not contain a standalone structure");
+    }
+  }
+
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));

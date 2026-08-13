@@ -11,6 +11,9 @@
 
 ## develop
 
+- [FIX] FETCH encode 側の構造検証を追加する
+  - draft-ietf-moq-transport-19 §10.12 に基づき、encodeFetchPayload が Fetch Type と Standalone / Joining 構造の整合を検証し、不正な組み合わせはエンコード前に throw する
+  - @voluntas
 - [FIX] Redirect の Connect URI の 8,192 バイト上限チェックを撤去する
   - draft-ietf-moq-transport-19 §10.6.1 の Redirect 構造には Connect URI の最大長規定がないため、GOAWAY の New Session URI (§10.4) にのみ存在する 8,192 バイト上限を decodeRedirect から削除する
   - 8,192 バイト超の Connect URI を含む Redirect がデコードできることを検証するテストを追加する
