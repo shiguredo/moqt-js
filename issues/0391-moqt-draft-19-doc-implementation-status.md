@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/update-moqt-draft-19-implementation-status
 - Polished: 2026-08-12
@@ -50,4 +50,17 @@ README は実装状況の一次情報源であり、draft-19 で削除された�
 
 ## 解決方法
 
-未着手。
+- `README.md` の GOAWAY 項目から「Request ID 対応」を削除した (draft-19 §10.4 に Request ID は存在しない)
+- `docs/LOW_LEVEL_API.md` の `subscribeNamespace` の第 3 引数を `mode?` から `options?` に修正した
+- `docs/LOW_LEVEL_API.md` の旧関数名 4 箇所を現行の関数名に修正した (`readRequestStreamMessages` → `bidiReadRequestStreamMessages` / `readResponseFromBidiStream` → `bidiReadResponseFromBidiStream` / `sendJoiningFetch` → `bidiSendJoiningFetch` / `handleRequestUpdateOk` → `bidiHandleRequestUpdateOk`)。レスポンス読み取り関数名 4 種も `bidi*` プレフィックスに統一した
+- `docs/LOW_LEVEL_API.md` の「先行到着への対応」節の `waitForSubscriber(trackAlias)` の記述を、現行の `PendingSubgroupBuffer` による pending mode の説明に修正した
+- コード実装との照合で見つかった食い違いも修正した:
+  - `publishNamespace()` の送信経路を「制御ストリーム」から「専用双方向ストリーム」に修正
+  - 制御ストリームで処理するメッセージを GOAWAY のみである旨に修正 (draft-19 §3.3)
+  - `handleIncomingStream()` のストリーム種別判定に FIRST_OBJECT bit 付き Subgroup stream (`0x50-0x5F` / `0x70-0x7F`) と PADDING stream を追記
+  - `Closed Subgroup Tracking` の TODO 記述を `closedSubgroups` Set による実装済みの説明に修正
+  - 背景ループを 3 つから 4 つ (受信双方向ストリームループ追加) に修正
+  - `SessionStatistics` に `pendingSubgroupStreamsCount` / `pendingSubgroupStreamsBytes` を追記
+  - `ConnectOptions` 表に `pendingSubgroup` / `moqtImplementation` / `grease` を追記
+  - `README.md` の Range Filters 送信経路に `fetch()` を追記
+- `CHANGES.md` には記載しない (.md ファイルの変更は変更履歴に反映しない規約)
