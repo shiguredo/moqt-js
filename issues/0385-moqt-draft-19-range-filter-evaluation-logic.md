@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/add-moqt-draft-19-range-filter-evaluation-logic
 - Polished: 2026-08-12
@@ -64,4 +64,20 @@ draft-ietf-moq-transport-19 §5.1.3 / §5.1.4 で定義される Range Filter �
 
 ## 解決方法
 
-未着手。
+- `src/filter.ts` に以下を追加した:
+  - `evaluateRangeFilters`: オブジェクト (Subgroup ID / Object ID / Publisher Priority / Object Property 値) に対する Range Filter 評価。同一 SetID は AND、異なる SetID の結果は OR で結合。両端を含む (inclusive) Range 判定、終端省略 (End なし) は open-ended。
+  - `evaluateTrackPropertyFilters` / `evaluateTrackPropertyFiltersBySetId`: 受信 PUBLISH の Track Properties に対する TRACK_PROPERTY_FILTER 評価。SetID 別の結果を返し、オブジェクト評価と SetID 単位で AND 結合する (§5.1.3 の結合規則は種別をまたいで適用される)。
+  - `mergeRangeFilters`: REQUEST_UPDATE の削除 (Length=0、Parameter Type 単位) / 置換 (Parameter Type 全体、全 SetID・全 Property Type) / 不変 (省略) を反映。
+  - `isObjectRangeFilterParam` 型ガード、`groupBySetId` ヘルパー、`rangeContains`。
+- `src/subscriber.ts`: `SubscriberImpl` に Range Filter 状態 (setRangeFilters / getRangeFilters / applyRangeFilterUpdate) と SetID 別 track 評価結果 (setTrackFilterResultsBySetId) を追加し、`handleObject` / `handleDatagram` で不通過オブジェクトを破棄 (Location Filter と同じ位置)。
+- `src/session.ts`:
+  - `matchPublishToSubscription` が「track 評価で通過する SetID がある、または track フィルタを含まない SetID にオブジェクトフィルタがある」場合に受理するよう変更 (SetID 混在の OR 結合)。すべて不通過なら UNINTERESTED。
+  - 受信 PUBLISH 処理で TRACK_PROPERTY_FILTER を SetID 別に評価し、SubscriberImpl に渡す。DUPLICATE_TRACK_ALIAS 検証 (§11.1 MUST) はフィルタ評価より前に移動。
+  - `subscribeTracks` / `subscribe` の送信時 rangeFilters 保持と、受信 PUBLISH の impl への伝播。
+- `src/session/bidi.ts`: `bidiSendRequestUpdate` の `PendingRequestUpdate` に rangeFilters を保持し、REQUEST_OK 受信時に `applyRangeFilterUpdate` (mergeRangeFilters) で反映。MAX_FILTER_RANGES 検証をマージ後状態で実行。
+- `src/properties.ts`: `decodeObjectPropertiesTolerant` を export し、`findPropertyValue` を追加 (§12.7 の IMMUTABLE_PROPERTIES ネスト内検索。ネスト深さ 64 で打ち切り、スタックオーバーフロー DoS を防止)。内側デコードも寛容デコードに統一。
+- `src/dataStream.ts`: `ObjectDatagram.publisherPriority` を optional 化し、Priority Present なしの型では明示値のみ保持。`encodeObjectDatagram` / `encodeSubgroupHeader` は Priority Present ありの型で明示値なしをエラーに。
+- テスト: `filter.test.ts` (30 件追加。§5.1.3 の例・境界値・SetID 混在の AND/OR・寛容デコード・IMMUTABLE_PROPERTIES ネスト検索・mergeRangeFilters)、`filter.prop.ts` (PBT 3 件)、`subscriber.test.ts`、`session.test.ts` (受信 PUBLISH の TRACK_PROPERTY_FILTER 評価・SetID 混在受理・複数マッチ優先・DUPLICATE_TRACK_ALIAS 回帰)、`session/bidi.test.ts` (REQUEST_UPDATE 反映・マージ後 MAX_FILTER_RANGES)、`properties.test.ts` (findPropertyValue ネスト上限)、`dataStream.datagram.test.ts` / `dataStream.subgroup.test.ts` (publisherPriority 必須化)。
+- `CHANGES.md` に [ADD] (評価ロジック) と [CHANGE] (publisherPriority 明示値化) を追記。
+- 判断したこと:
+  - PRIORITY_FILTER の継承値 (Default Publisher Priority) 解決は行わない (設計方針に明記。継承値の解決が必要になった場合は別 issue の対応とする)。
