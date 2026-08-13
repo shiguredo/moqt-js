@@ -337,21 +337,6 @@ export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
 }
 
 /**
- * Object Forwarding Preference (Section 11.2.1)
- *
- * draft-ietf-moq-transport-19:
- * "An enumeration indicating how a publisher sends an object.
- *  The preferences are Subgroup and Datagram."
- */
-export const ObjectForwardingPreference = {
-  SUBGROUP: 0x1,
-  DATAGRAM: 0x2,
-} as const;
-
-export type ObjectForwardingPreference =
-  (typeof ObjectForwardingPreference)[keyof typeof ObjectForwardingPreference];
-
-/**
  * Location (Group ID, Object ID)
  */
 export interface Location {
