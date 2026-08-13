@@ -8,7 +8,6 @@ import {
   NAMESPACE_OK_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_ALLOWED_PARAMS,
-  SUBSCRIBE_TRACKS_ALLOWED_PARAMS,
   validateParameterScope,
 } from "./parameterScope";
 import { MessageParameterType } from "./types";
@@ -90,44 +89,6 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION でセ�
     [{ type: MessageParameterType.EXPIRES }, { type: MessageParameterType.SUBSCRIBER_PRIORITY }],
     NAMESPACE_OK_ALLOWED_PARAMS,
     "SUBSCRIBE_NAMESPACE_OK",
-    (error) => {
-      errors.push(error);
-    },
-  );
-  assert.isFalse(result);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
-});
-
-// ============================================================================
-// SUBSCRIBE_TRACKS_ALLOWED_PARAMS のテスト
-// ============================================================================
-
-/**
- * draft-ietf-moq-transport-19 §10.19.1 / §5.1.3:
- * SUBSCRIBE_TRACKS では AUTHORIZATION_TOKEN / FORWARD / GROUP_ORDER / Range Filters が許可される。
- */
-test("SUBSCRIBE_TRACKS_ALLOWED_PARAMS は AUTH / FORWARD / GROUP_ORDER / Range Filters を含む", () => {
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.AUTHORIZATION_TOKEN));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.FORWARD));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.SUBGROUP_FILTER));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.OBJECTID_FILTER));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.PRIORITY_FILTER));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.OBJECT_PROPERTY_FILTER));
-  assert.isTrue(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.has(MessageParameterType.TRACK_PROPERTY_FILTER));
-  assert.equal(SUBSCRIBE_TRACKS_ALLOWED_PARAMS.size, 8);
-});
-
-/**
- * SUBSCRIBE_TRACKS で許可外パラメータは PROTOCOL_VIOLATION。
- */
-test("SUBSCRIBE_TRACKS で許可外パラメータは拒否される", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
-    [{ type: MessageParameterType.SUBSCRIBER_PRIORITY }],
-    SUBSCRIBE_TRACKS_ALLOWED_PARAMS,
-    "SUBSCRIBE_TRACKS",
     (error) => {
       errors.push(error);
     },

@@ -648,6 +648,9 @@
 
 ### misc
 
+- [CHANGE] 未使用の許可パラメータ集合を削除する
+  - SUBSCRIBE / FETCH / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の受信はサーバー側責務であり、受信リクエストはペイロード非デコード + NOT_SUPPORTED 応答のため、未使用の SUBSCRIBE_ALLOWED_PARAMS / FETCH_ALLOWED_PARAMS / NAMESPACE_ALLOWED_PARAMS / SUBSCRIBE_TRACKS_ALLOWED_PARAMS を削除する
+  - @voluntas
 - [CHANGE] 未使用の export (calculateAuthTokenSize / fallbackRegisterToUseValue / ObjectForwardingPreference) を削除する
   - リポジトリ全体から参照されていないデッドコードを削除する
   - @voluntas
