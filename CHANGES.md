@@ -646,6 +646,12 @@
   - トークンサイズ計算（16 bytes + Token Value サイズ）と REGISTER→USE_VALUE フォールバックのヘルパーを追加する
   - @voluntas
 
+### misc
+
+- [CHANGE] 未使用の export (calculateAuthTokenSize / fallbackRegisterToUseValue / ObjectForwardingPreference) を削除する
+  - リポジトリ全体から参照されていないデッドコードを削除する
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
