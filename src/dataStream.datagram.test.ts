@@ -167,7 +167,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
   },
   // draft-ietf-moq-transport-19 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
-  // Object ID フィールドなし (Object ID = 0)、Priority フィールドなし
+  // Priority Present なし (0x08-0x0F, 0x28-0x2D は Priority なし)。END_OF_TRACK status
   {
     name: "STATUS_NO_OBJ_NO_PRI (0x2C)",
     datagram: {
@@ -175,7 +175,6 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       trackAlias: 3n,
       groupId: 7n,
       objectId: 0n,
-      publisherPriority: 0,
       status: ObjectStatus.END_OF_TRACK,
     },
   },
@@ -188,7 +187,6 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       trackAlias: 4n,
       groupId: 8n,
       objectId: 0n,
-      publisherPriority: 0,
       status: ObjectStatus.NORMAL,
       properties: new Uint8Array([0x01, 0x02]),
     },

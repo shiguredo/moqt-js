@@ -907,9 +907,12 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
  * の §1.4.3 の MUST 検証は行わない（Track 向け decodeProperties の厳密検証は
  * 流用しない。Object バイト列に適用すると誤って MalformedTrackError になり得る）。
  *
+ * OBJECT_PROPERTY_FILTER の評価 (draft-ietf-moq-transport-19 §5.1.3) でも
+ * 同じ寛容経路を使用する (Object バイト列には Track 向けの検証を適用しない)。
+ *
  * @returns complete=false のとき、properties は途中までデコードできた Property 列
  */
-function decodeObjectPropertiesTolerant(data: Uint8Array): {
+export function decodeObjectPropertiesTolerant(data: Uint8Array): {
   properties: Property[];
   complete: boolean;
 } {

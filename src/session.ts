@@ -80,6 +80,7 @@ import {
 } from "./session/params";
 import * as bidi from "./session/bidi";
 import { concatChunks, cancelStreamQuiet } from "./session/stream";
+import { trackPropertyFiltersMatch } from "./filter";
 import { isSessionClosedError, toProtocolViolationSessionError } from "./session/errors";
 import type { SessionInternal } from "./session/types";
 import {
@@ -1190,6 +1191,7 @@ export class SessionImpl implements Session {
       callbacks: TracksSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
+      rangeFilters?: RangeFilterSpec[];
       pendingPrefix?: string[];
       stream?: WebTransportBidirectionalStream;
       streamReader?: ReadableStreamDefaultReader<Uint8Array>;
@@ -1710,6 +1712,9 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
     impl.setLocationFilter(options?.filter);
 
+    // draft-ietf-moq-transport-19 Section 5.1.3: Range Filters を設定
+    impl.setRangeFilters(options?.rangeFilters);
+
     // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
     impl.setAuthorizationToken(options?.authorizationToken);
 
@@ -2129,6 +2134,9 @@ export class SessionImpl implements Session {
         callbacks,
         state: "active",
         namespacePrefix,
+        // draft-ietf-moq-transport-19 §5.1.3:
+        // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
+        rangeFilters: options?.rangeFilters,
         stream,
         streamReader,
         controlReader,
@@ -3543,6 +3551,8 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-19 §11.1 (Track Alias):
     // 同一 Track Alias が異なる Track に使われている場合は DUPLICATE_TRACK_ALIAS でセッション終了。
     // 同一 Track への複数 PUBLISH は draft-19 §5.1 で許可される。
+    // TRACK_PROPERTY_FILTER 評価より先に検証する (フィルタ不通過で UNINTERESTED 応答すると
+    // alias 重複というセッション違反が検出されず隠れるため)。
     const existingSubscribers = this.subscribersByAlias.get(publishTrackAlias);
     if (existingSubscribers !== undefined && existingSubscribers.length > 0) {
       const fullTrackName = `${publishTrackNamespace.join("/")}/${publishTrackName}`;
@@ -3555,6 +3565,18 @@ export class SessionImpl implements Session {
         );
         return;
       }
+    }
+
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)。
+    // 通過しない PUBLISH は onPublish を呼ばず、§10.10 の SHOULD に従い
+    // REQUEST_ERROR (UNINTERESTED) で応答してストリームの読み取りを放棄する。
+    if (
+      match.rangeFilters !== undefined &&
+      !trackPropertyFiltersMatch(match.rangeFilters, decodedPublish.trackProperties)
+    ) {
+      await incomingSendRequestErrorAndClose(stream, RequestErrorCode.UNINTERESTED, "uninterested");
+      return;
     }
 
     // onPublish コールバックから SubscribeCallbacks を取得
@@ -3596,6 +3618,18 @@ export class SessionImpl implements Session {
     // 受信 PUBLISH の FORWARD パラメータ (省略時は §10.2.17 のデフォルト 1)
     // を Forward State として保持する。
     impl.setForwardState(extractForwardState(decodedPublish.parameters));
+
+    // draft-ietf-moq-transport-19 §5.1.3:
+    // SUBSCRIBE_TRACKS 由来のオブジェクトレベル Range Filter (0x25-0x28) を
+    // SubscriberImpl に設定し、handleObject / handleDatagram で評価する。
+    // TRACK_PROPERTY_FILTER (0x29) は track 単位の評価として既に通過しており、
+    // オブジェクト受信経路では評価しないため除外する。
+    if (match.rangeFilters !== undefined) {
+      const objectLevelFilters = match.rangeFilters.filter(
+        (spec) => !("remove" in spec) && spec.type !== "trackProperty",
+      );
+      impl.setRangeFilters(objectLevelFilters);
+    }
 
     const subControlReader = new ControlStreamReader();
     let subReader: ReadableStreamDefaultReader<Uint8Array>;
@@ -3678,16 +3712,22 @@ export class SessionImpl implements Session {
    *
    * @returns マッチした subscription の callbacks と suffix、マッチしなければ null
    */
-  private matchPublishToSubscription(
-    publishTrackNamespace: string[],
-  ): { callbacks: TracksSubscriptionCallbacks; suffix: string[] } | null {
+  private matchPublishToSubscription(publishTrackNamespace: string[]): {
+    callbacks: TracksSubscriptionCallbacks;
+    suffix: string[];
+    rangeFilters?: RangeFilterSpec[];
+  } | null {
     for (const [, subscription] of this.tracksSubscriptions) {
       if (subscription.state !== "active") {
         continue;
       }
       const suffix = matchNamespacePrefix(publishTrackNamespace, subscription.namespacePrefix);
       if (suffix !== null) {
-        return { callbacks: subscription.callbacks, suffix };
+        return {
+          callbacks: subscription.callbacks,
+          suffix,
+          rangeFilters: subscription.rangeFilters,
+        };
       }
     }
     return null;
