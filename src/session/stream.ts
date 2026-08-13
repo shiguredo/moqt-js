@@ -22,7 +22,7 @@ import { readDeliveryTimeoutObjectProperties } from "../properties";
  */
 const maxObjectId = (1n << 64n) - 1n;
 
-export interface StreamStatsUpdate {
+interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
   incrementBytesReceived(subscribePath: boolean, bytes: number): void;
 }

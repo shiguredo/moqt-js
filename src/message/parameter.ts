@@ -88,20 +88,6 @@ export function validateFullTrackNameBytes(
 }
 
 /**
- * 予約名前空間プレフィクス
- *
- * draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces):
- * "MOQT reserves all Track Namespace values whose first tuple field
- *  begins with a period (0x2e, .)."
- */
-export const RESERVED_NAMESPACE_PREFIX = ".";
-
-/**
- * draft-ietf-moq-transport-19 §3.2.2 (Session-Level Tracks):
- * ".session" 名前空間はセッションレベルの track と namespace に予約される。
- */
-export const SESSION_LEVEL_NAMESPACE = ".session";
-/**
  * Track Namespace の最大フィールド数
  *
  * draft-ietf-moq-transport-19 Section 10.18 (SUBSCRIBE_NAMESPACE):
@@ -127,7 +113,7 @@ export const MAX_REASON_PHRASE_LENGTH = 1024;
  *  a length larger than the maximum, it MUST close the session with a
  *  PROTOCOL_VIOLATION.」
  */
-export const MAX_KVP_VALUE_LENGTH = 65535;
+const MAX_KVP_VALUE_LENGTH = 65535;
 
 /**
  * MOQT Parameter
@@ -392,25 +378,13 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
 }
 
 /**
- * Track Namespace が予約プレフィクスで始まるかを判定する
- *
- * draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces):
- * "MOQT reserves all Track Namespace values whose first tuple field
- *  begins with a period (0x2e, .)."
- */
-export function isReservedNamespace(tuple: Uint8Array[]): boolean {
-  if (tuple.length === 0) return false;
-  return tuple[0].length > 0 && tuple[0][0] === 0x2e;
-}
-
-/**
  * Track Namespace が session-level かを判定する
  *
  * draft-ietf-moq-transport-19 §3.2.2 (Session-Level Tracks):
  * "MOQT defines the .session namespace ... in the first position of
  *  the Track Namespace for session-level tracks and namespaces."
  */
-export function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
+function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
   if (tuple.length === 0 || tuple[0].length === 0) return false;
   if (tuple[0][0] !== 0x2e) return false;
   const decoder = new TextDecoder();

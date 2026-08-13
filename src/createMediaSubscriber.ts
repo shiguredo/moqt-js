@@ -91,7 +91,7 @@ const CATALOG_RECEIVE_TIMEOUT = 5000;
  * - `ignored`: フル未受信時の delta（サイレント無視）
  * - `error`: decode / apply 失敗（`catalog` は入力 `current` を維持）
  */
-export type ProcessCatalogPayloadResult =
+type ProcessCatalogPayloadResult =
   | { kind: "full"; catalog: Catalog }
   | { kind: "delta"; catalog: Catalog }
   | { kind: "ignored"; catalog: Catalog | null }

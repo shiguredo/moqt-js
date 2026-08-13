@@ -219,7 +219,7 @@ export interface ConnectOptions {
  * SessionImpl のコンストラクタが受け取るオプション
  * `connect()` から `ConnectOptions` の該当フィールドが渡される
  */
-export interface SessionImplOptions {
+interface SessionImplOptions {
   /** ConnectOptions.pendingSubgroup と同じ */
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
   /**
@@ -4188,19 +4188,3 @@ export class SessionImpl implements Session {
     }
   }
 }
-
-// 純粋関数群は session/params.ts に移動
-export {
-  buildPublishParameters,
-  buildPublishTrackProperties,
-  buildSubscribeParameters,
-  buildSubscribeTracksParameters,
-  buildFetchParameters,
-  buildSubscribeNamespaceParameters,
-  encodeAuthorizationTokenParameter,
-  extractLargestLocation,
-  validateFetchOkEndLocation,
-  classifyIncomingStreamType,
-  calculateObjectIdDelta,
-  type IncomingStreamKind,
-} from "./session/params";

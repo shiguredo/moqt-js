@@ -19,7 +19,7 @@
 
 import type { SubgroupHeader } from "./dataStream";
 
-export type PendingNotifyReason =
+type PendingNotifyReason =
   | "subscriber"
   | "timeout"
   | "overflow-per-stream"
@@ -49,7 +49,7 @@ export const DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS: PendingSubgroupBufferOptio
   timeoutMs: 5000,
 };
 
-export class PendingSubgroupEntry {
+class PendingSubgroupEntry {
   readonly chunks: Uint8Array[] = [];
   totalBytes = 0;
   private resolved = false;
