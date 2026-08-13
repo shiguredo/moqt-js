@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-subscribe-tracks-allowed-params-unwired
 - Polished: {YYYY-MM-DD}
@@ -49,4 +49,4 @@ draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope) に従い、SUBSCRIBE_TRA
 
 ## 解決方法
 
-未着手。
+- 0388 の実装で `SUBSCRIBE_TRACKS_ALLOWED_PARAMS` が削除されたため、本 issue は対象を失い closed とする (0371 により受信 SUBSCRIBE_TRACKS はペイロード非デコード + NOT_SUPPORTED 応答のため、受信側パラメータ検証への配線は不可能)。
