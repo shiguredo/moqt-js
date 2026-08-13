@@ -456,6 +456,30 @@ test("Redirect の 8,192 バイト超 Connect URI がデコードできる", () 
 });
 
 /**
+ * draft-ietf-moq-transport-19 §2.4.1:
+ * Full Track Name (Namespace + Track Name 合計) が 4,096 バイトを超える
+ * Redirect (REQUEST_ERROR) がデコード時に ProtocolViolationError になることを
+ * 検証する (decodeRedirect 経由の統合テスト)。
+ */
+test("REQUEST_ERROR (REDIRECT) の Full Track Name 4,096 バイト超過で ProtocolViolationError", () => {
+  // namespace 4,000 バイト + trackName 97 バイト = 合計 4,097 バイト
+  const original: RequestError = {
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0x34n, // REDIRECT
+    retryInterval: 0n,
+    reasonPhrase: "redirect",
+    redirect: {
+      connectUri: "moqt://example.com",
+      trackNamespace: createTrackNamespace(["a".repeat(4000)]),
+      trackName: new TextEncoder().encode("a".repeat(97)),
+    },
+  };
+
+  const encoded = encodeRequestErrorPayload(original);
+  assert.throws(() => decodeRequestErrorPayload(encoded), ProtocolViolationError);
+});
+
+/**
  * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
  * 8,192 バイトを超える Connect URI を含む REQUEST_ERROR (REDIRECT) が
  * デコード経路 (encodeRequestErrorPayload → decodeRequestErrorPayload) で

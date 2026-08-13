@@ -16,12 +16,14 @@ import {
   decodeRangeFilter,
   encodeRangeFilter,
   validateRangeFilterCombination,
+  validateFullTrackNameBytes,
   encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
   validateTrackNameSize,
   MAX_TRACK_NAME_SIZE,
   MAX_TRACK_NAMESPACE_SIZE,
+  MAX_FULL_TRACK_NAME_SIZE,
   isRejectedReceiveNamespace,
 } from "./parameter";
 import { InvalidFilterError, ProtocolViolationError } from "../error";
@@ -227,6 +229,60 @@ test("validateTrackNameSize で制限内なら成功", () => {
   const normalBytes = new Uint8Array(4000);
   // エラーが投げられなければ成功
   validateTrackNameSize(normalBytes);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §2.4.1:
+ * 「The length of a Full Track Name is computed as the sum of the Track
+ *  Namespace Field Length fields and the Track Name Length field.」
+ * Full Track Name の合計が 4,096 バイトを超えると ProtocolViolationError に
+ * なることを検証する。
+ * namespace 単体は 4,096 未満に収め、Track Name を足して合計 4,097 にする
+ * (namespace 単体が 4,096 超のケースは decodeTrackNamespace の既存検証が先に
+ * throw するため)。
+ */
+test("validateFullTrackNameBytes: 合計 4,097 バイトで ProtocolViolationError", () => {
+  const namespace = createTrackNamespace(["a".repeat(4000)]);
+  const trackName = new TextEncoder().encode("a".repeat(97));
+
+  assert.throws(() => validateFullTrackNameBytes(namespace, trackName), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §2.4.1:
+ * Full Track Name の合計が 4,096 バイトちょうどは違反にならないことを検証する。
+ */
+test("validateFullTrackNameBytes: 合計 4,096 バイトちょうどは違反にならない", () => {
+  const namespace = createTrackNamespace(["a".repeat(4000)]);
+  const trackName = new TextEncoder().encode("a".repeat(96));
+
+  validateFullTrackNameBytes(namespace, trackName);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §2.4.1:
+ * 不正な UTF-8 バイト列を含む Track Name は、TextDecoder の置換 (U+FFFD) による
+ * 水増しではなくワイヤバイト長で正確に計測されることを検証する。
+ * 0xFF は単独では不正な UTF-8 であり、TextDecoder は U+FFFD (3 バイト) に置換する。
+ *
+ * 差別化点は後半の 4,096 バイト配列: string 版 (validateFullTrackName) では
+ * 0xFF が U+FFFD (3 バイト) に置換され 4,098 バイトと誤計測されて throw するが、
+ * バイト版は 4,096 バイトのまま計測して通過する。
+ */
+test("validateFullTrackNameBytes: 不正 UTF-8 バイト列がバイト長で計測される", () => {
+  const namespace = createTrackNamespace([]);
+  // 0xFF 1 バイト + 0x80 1 バイト = 2 バイトの不正 UTF-8
+  const trackName = new Uint8Array([0xff, 0x80]);
+
+  // 2 バイトとして計測されるため違反にならない
+  validateFullTrackNameBytes(namespace, trackName);
+
+  // 4,096 バイトのうち先頭 1 バイトを不正 UTF-8 (0xFF) にしても、
+  // バイト長 4,096 のまま計測されるため違反にならない
+  // (string 版なら U+FFFD 置換で 4,098 バイトと誤計測され throw する)
+  const largeTrackName = new Uint8Array(MAX_FULL_TRACK_NAME_SIZE);
+  largeTrackName[0] = 0xff;
+  validateFullTrackNameBytes(namespace, largeTrackName);
 });
 
 /**

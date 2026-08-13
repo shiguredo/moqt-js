@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] Full Track Name の 4,096 バイト検証をデコード経路に追加する
+  - draft-ietf-moq-transport-19 §2.4.1 に基づき、SUBSCRIBE / FETCH (STANDALONE) / TRACK_STATUS / Redirect のデコーダで Full Track Name の合計バイト長を検証し、4,096 バイト超過は ProtocolViolationError を throw する
+  - ワイヤバイト長で計測する validateFullTrackNameBytes を新設し、不正 UTF-8 の置換による誤計測を防ぐ (PUBLISH デコードもバイト長版に置き換え)
+  - @voluntas
 - [FIX] FETCH encode 側の構造検証を追加する
   - draft-ietf-moq-transport-19 §10.12 に基づき、encodeFetchPayload が Fetch Type と Standalone / Joining 構造の整合を検証し、不正な組み合わせはエンコード前に throw する
   - @voluntas

@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-full-track-name-size-validation
 - Polished: 2026-08-12
@@ -48,4 +48,10 @@ draft-ietf-moq-transport-19 §2.4.1 の「If an endpoint receives a Track Namesp
 
 ## 解決方法
 
-未着手。
+- `src/message/parameter.ts` に `validateFullTrackNameBytes` を新設した。§2.4.1 の「The length of a Full Track Name is computed as the sum of the Track Namespace Field Length fields and the Track Name Length field」に正確に一致し、Track Namespace フィールドのバイト長合計 + Track Name のワイヤバイト長を加算して 4,096 バイト超過を検証する (4,096 ちょうどは許容)
+- string ベースの `validateFullTrackName` は TextEncoder による再エンコードで長さを計測するため、不正な UTF-8 バイト列は TextDecoder の置換 (U+FFFD) で長さが水増しされる。デコード経路ではワイヤバイト長を直接加算する `validateFullTrackNameBytes` を使用する
+- 検証を追加したデコーダ: `decodeSubscribePayload` / `decodeTrackStatusPayload` / `decodeFetchPayload` (STANDALONE ブランチ内。Joining ブランチには Track Namespace / Track Name がないため対象外) / `decodeRedirect`
+- `decodePublishPayload` の既存 TextDecoder 経由呼び出しをバイト長版に置き換えた (ランタイム経路の誤拒否・過小受理の修正)
+- 送信パス (session.ts の 4 箇所) の string 版 `validateFullTrackName` はアプリから渡される文字列の長さを直接計測するため正確であり、そのまま維持した
+- テスト: `src/message/parameter.test.ts` に境界テスト 3 件 (合計 4,097 で違反 / 4,096 ちょうどは許容 / 不正 UTF-8 がバイト長で計測される) と、`src/message/session.prop.ts` に decodeRedirect 経由の統合テスト 1 件 (4,097 バイトの Redirect で ProtocolViolationError) を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した
