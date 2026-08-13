@@ -55,6 +55,39 @@ export function validateFullTrackName(namespace: TrackNamespace, trackName: stri
 }
 
 /**
+ * Full Track Name の合計長をワイヤバイト長で検証する
+ *
+ * draft-ietf-moq-transport-19 §2.4.1:
+ * 「The length of a Full Track Name is computed as the sum of the Track
+ *  Namespace Field Length fields and the Track Name Length field.」
+ * Length フィールドの値のみを加算し、varint エンコードサイズは含まない。
+ * 4,096 バイトちょうどは許容される。
+ *
+ * string ベースの validateFullTrackName は TextEncoder による再エンコードで
+ * 長さを計測するため、不正な UTF-8 バイト列は TextDecoder の置換 (U+FFFD) で
+ * 長さが水増しされ、誤って超過判定されたり、BOM 除去で短く計測されたりする。
+ * デコード経路ではワイヤバイト長を直接加算する本関数を使用する。
+ *
+ * @param namespace - TrackNamespace
+ * @param trackNameBytes - Track Name のワイヤバイト列
+ * @throws ProtocolViolationError 合計長が 4096 バイトを超える場合
+ */
+export function validateFullTrackNameBytes(
+  namespace: TrackNamespace,
+  trackNameBytes: Uint8Array,
+): void {
+  let totalSize = trackNameBytes.length;
+  for (const field of namespace.tuple) {
+    totalSize += field.length;
+  }
+  if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
+    throw new ProtocolViolationError(
+      `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
+    );
+  }
+}
+
+/**
  * 予約名前空間プレフィクス
  *
  * draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces):

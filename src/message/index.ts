@@ -66,6 +66,7 @@ export {
   trackNamespaceToStrings,
   validateTrackNameSize,
   validateFullTrackName,
+  validateFullTrackNameBytes,
 } from "./parameter";
 
 // Setup メッセージ
