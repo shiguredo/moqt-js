@@ -97,7 +97,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Location Filter (Next Group Start)
 - Location Filter (Absolute Start)
 - Location Filter (Absolute Range)
-- Range Filters (subscribe() / subscribeTracks() / update() で送信可能)
+- Range Filters (subscribe() / subscribeTracks() / fetch() / update() で送信可能)
   - Subgroup Filter
   - Object ID Filter
   - Priority Filter
@@ -121,7 +121,6 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - MAX_REQUEST_UPDATES Setup Option
 - GOAWAY
   - Timeout 対応
-  - Request ID 対応
   - リクエストストリーム上での受信
 - REQUEST_OK (Track Properties 対応)
 - REQUEST_ERROR

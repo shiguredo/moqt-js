@@ -55,26 +55,29 @@ const session = await connect(url, callbacks?, options?)
 
 #### `ConnectOptions`
 
-| 名前                      | 説明                                                             |
-| ------------------------- | ---------------------------------------------------------------- |
-| `serverCertificateHashes` | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes` |
-| `authorizationToken`      | `SETUP` Option `0x03` として送る認証トークン                     |
+| 名前                      | 説明                                                               |
+| ------------------------- | ------------------------------------------------------------------ |
+| `serverCertificateHashes` | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`   |
+| `authorizationToken`      | `SETUP` Option `0x03` として送る認証トークン                       |
+| `pendingSubgroup`         | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト) |
+| `moqtImplementation`      | `SETUP` Option `0x0A` (MOQT_IMPLEMENTATION) として送る実装名       |
+| `grease`                  | 送受信に GREASE 拡張を注入するか                                   |
 
 ### `Session`
 
-| API                                                     | 役割                                                    |
-| ------------------------------------------------------- | ------------------------------------------------------- |
-| `state`                                                 | `"connected"` / `"closed"`                              |
-| `goawayReceived`                                        | peer から `GOAWAY` を受信済みかどうか                   |
-| `publish(namespace, trackName, callbacks?, options?)`   | 新しい双方向ストリームで `PUBLISH` を送る               |
-| `subscribe(namespace, trackName, callbacks, options?)`  | 新しい双方向ストリームで `SUBSCRIBE` を送る             |
-| `fetch(namespace, trackName, options, callbacks)`       | 新しい双方向ストリームで `FETCH` を送る                 |
-| `trackStatus(namespace, trackName)`                     | `TRACK_STATUS` を送り `REQUEST_OK` を待つ               |
-| `subscribeNamespace(namespacePrefix, callbacks, mode?)` | 専用双方向ストリームで Namespace 発見を行う             |
-| `publishNamespace(namespace, callbacks?)`               | 制御ストリームで `PUBLISH_NAMESPACE` を送る             |
-| `goaway(newSessionUri?, timeout?)`                      | 制御ストリームで `GOAWAY` を送る                        |
-| `close()`                                               | セッション内部状態と保留中 Promise をクリーンアップする |
-| `getStatistics()`                                       | セッション統計を取得する                                |
+| API                                                        | 役割                                                    |
+| ---------------------------------------------------------- | ------------------------------------------------------- |
+| `state`                                                    | `"connected"` / `"closed"`                              |
+| `goawayReceived`                                           | peer から `GOAWAY` を受信済みかどうか                   |
+| `publish(namespace, trackName, callbacks?, options?)`      | 新しい双方向ストリームで `PUBLISH` を送る               |
+| `subscribe(namespace, trackName, callbacks, options?)`     | 新しい双方向ストリームで `SUBSCRIBE` を送る             |
+| `fetch(namespace, trackName, options, callbacks)`          | 新しい双方向ストリームで `FETCH` を送る                 |
+| `trackStatus(namespace, trackName)`                        | `TRACK_STATUS` を送り `REQUEST_OK` を待つ               |
+| `subscribeNamespace(namespacePrefix, callbacks, options?)` | 専用双方向ストリームで Namespace 発見を行う             |
+| `publishNamespace(namespace, callbacks?)`                  | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る       |
+| `goaway(newSessionUri?, timeout?)`                         | 制御ストリームで `GOAWAY` を送る                        |
+| `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする |
+| `getStatistics()`                                          | セッション統計を取得する                                |
 
 ### `Publisher`
 
@@ -171,10 +174,11 @@ interface MoqtObject {
 7. 最初の `SETUP` をデコードする
 8. 背景ループを開始する
 
-開始される背景ループは 3 つある。
+開始される背景ループは 4 つある。
 
 - `startControlMessageLoop()`
 - `startIncomingStreamLoop()`
+- `startIncomingBidirectionalStreamLoop()` (受信 PUBLISH 等の双方向ストリーム処理)
 - `startDatagramLoop()`
 
 `close` callback は `transport.closed` の監視結果から呼ばれる。
@@ -203,20 +207,20 @@ interface MoqtObject {
 1. 新しい双方向ストリームを開く
 2. `ControlStreamWriter` でメッセージをフレーミングする
 3. `requestStreams` に `writer` と `ControlStreamReader` を登録する
-4. `readResponseFromBidiStream()` で最初のレスポンスを待つ
+4. `bidiReadResponseFromBidiStream()` で最初のレスポンスを待つ
 
 最初のレスポンスは request ごとに専用メソッドで処理する。
 
-- `readPublishResponse()`
-- `readSubscribeResponse()`
-- `readFetchResponse()`
-- `readTrackStatusResponse()`
+- `bidiReadPublishResponse()`
+- `bidiReadSubscribeResponse()`
+- `bidiReadFetchResponse()`
+- `bidiReadTrackStatusResponse()`
 
-`PUBLISH_OK` / `SUBSCRIBE_OK` の後は、同じ双方向ストリームを `readRequestStreamMessages()` が監視し続ける。ここで `PUBLISH_DONE` や `REQUEST_UPDATE` の応答を受け取る。
+`PUBLISH_OK` / `SUBSCRIBE_OK` の後は、同じ双方向ストリームを `bidiReadRequestStreamMessages()` が監視し続ける。ここで `PUBLISH_DONE` や `REQUEST_UPDATE` の応答を受け取る。
 
 ### Namespace 系の扱い
 
-- `publishNamespace()` は制御ストリームで `PUBLISH_NAMESPACE` を送り、制御ストリーム上の `REQUEST_OK` / `REQUEST_ERROR` を待つ
+- `publishNamespace()` は専用双方向ストリームで `PUBLISH_NAMESPACE` を送り、専用ループで `REQUEST_OK` / `REQUEST_ERROR` を待つ
 - `subscribeNamespace()` は専用双方向ストリームを別実装で開き、`REQUEST_OK` の後も `NAMESPACE` / `NAMESPACE_DONE` を受け続ける
 - `PUBLISH_NAMESPACE_DONE` は draft-17 で削除されたため、公開終了はローカル状態の cleanup のみで表現している
 
@@ -298,11 +302,11 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 4. `SUBSCRIBE_OK` を待つ
 5. `trackAlias` / `largestLocation` / `trackProperties` を反映する
 6. `subscribers` と `subscribersByAlias` に登録する
-7. 必要なら `sendJoiningFetch()` を起動する
+7. 必要なら `bidiSendJoiningFetch()` を起動する
 
 #### `REQUEST_UPDATE`
 
-`Subscriber.update()` は新しい `Request ID` を採番するが、メッセージ自体は元の subscription と同じ双方向ストリームに送る。成功時の `REQUEST_OK` は `handleRequestUpdateOk()` が処理し、`LARGEST_OBJECT` が含まれていれば `Subscriber.largestLocation` も更新する。
+`Subscriber.update()` は新しい `Request ID` を採番するが、メッセージ自体は元の subscription と同じ双方向ストリームに送る。成功時の `REQUEST_OK` は `bidiHandleRequestUpdateOk()` が処理し、`LARGEST_OBJECT` が含まれていれば `Subscriber.largestLocation` も更新する。
 
 #### `unsubscribe()`
 
@@ -342,17 +346,19 @@ Joining Fetch は `subscribe()` 成功後に別の `FETCH` を追加で送る実
 `handleIncomingStream()` は chunk 単位でバッファを伸ばしながら、先頭 varint でストリーム種別を判定する。
 
 - `FetchHeaderType` なら Fetch data stream
-- `0x10-0x1F` / `0x30-0x3F` なら Subgroup stream
+- `0x10-0x1F` / `0x30-0x3F` / `0x50-0x5F` / `0x70-0x7F` なら Subgroup stream (FIRST_OBJECT bit の有無を含む)
+  - ただし SUBGROUP_ID_MODE = 0b11 の予約値 (`0x16` / `0x17` / `0x1E` / `0x1F` / `0x36` / `0x37` / `0x3E` / `0x3F`) は `PROTOCOL_VIOLATION`
+- `0x132b3e28` なら PADDING stream (データをすべて読み捨てる)
 - それ以外は `PROTOCOL_VIOLATION`
 
 #### 先行到着への対応
 
 MOQT / QUIC ではレスポンスとデータストリームの順序が保証されないため、以下を待ち合わせる。
 
-- `waitForSubscriber(trackAlias)`
-- `waitForFetcher(requestId)`
+- Subgroup stream: `PendingSubgroupBuffer` にバッファし、対応する `SUBSCRIBE_OK` が来てから処理する (pending mode)
+- Fetch data stream: `waitForFetcher(requestId)`
 
-どちらも最大 `5 秒` 待ち、対応する `SUBSCRIBE_OK` / `FETCH_OK` が来なければそのストリームは処理しない。
+`waitForFetcher()` は最大 `5 秒` 待ち、対応する `FETCH_OK` が来なければそのストリームは処理しない。
 
 ### `processSubgroupObjects()`
 
@@ -368,7 +374,7 @@ Subgroup stream の各 Object について以下を行う。
 
 ### `processFetchObjects()`
 
-Fetch stream は `decodeFetchObjectFields()` が前回の context を使いながら復元する。draft-17 では Fetch Object に `Object Status` がないため、現在の実装では常に `ObjectStatus.NORMAL` として `Fetcher` に渡す。
+Fetch stream は `decodeFetchObjectFields()` が前回の context を使いながら復元する。Fetch Object Fields には `Object Status` が存在しないため、現在の実装では常に `ObjectStatus.NORMAL` として `Fetcher` に渡す。
 
 ストリーム末尾まで読んだら `fetcher.handleEnd()` を呼び、`fetchers` から外す。
 
@@ -389,14 +395,10 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 `startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
 
-制御ストリームで処理する主なメッセージは以下。
+制御ストリームで処理するメッセージは `GOAWAY` のみである (draft-19 §3.3 でリクエスト / レスポンスは双方向ストリームに移動した)。
 
-- `REQUEST_OK` / `REQUEST_ERROR`
-  - `PUBLISH_NAMESPACE` の応答
-- `GOAWAY`
-- `PUBLISH_NAMESPACE`
-
-`PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
+- `PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
+- `PUBLISH_NAMESPACE` / `REQUEST_OK` / `REQUEST_ERROR` は制御ストリーム上で受け取った場合も仕様違反としてセッションを閉じる。これらは専用の双方向ストリームで送受信される。
 
 ### `GOAWAY`
 
@@ -442,6 +444,9 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
   - `objectsReceivedViaSubscribe`
   - `bytesReceivedViaFetch`
   - `bytesReceivedViaSubscribe`
+- Pending Subgroup バッファ
+  - `pendingSubgroupStreamsCount`
+  - `pendingSubgroupStreamsBytes`
 - アクティブなハンドル数
   - `activePublishers`
   - `activeSubscribers`
@@ -464,7 +469,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 - `moqt-js` はクライアント専用実装であり、サーバー側の振る舞いは持たない
 - 実装の中心は `SessionImpl` で、公開ハンドルは状態と callback の薄いラッパーである
 - 現在の送信モデルは `1 Group = 1 Subgroup = 1 Stream` を前提にしている
-- `Closed Subgroup Tracking` は TODO のままで、`STOP_SENDING` 後の厳密な再オープン防止までは実装していない
+- `Closed Subgroup Tracking` は `closedSubgroups` Set で実装されており、`STOP_SENDING` 等で閉じた Subgroup への送信は `ClosedSubgroupError` で拒否される (送信時・write 失敗時・done 時・セッション close 時に登録・クリアされる)
 - `close()` は主にローカル状態と pending Promise の cleanup を担当し、protocol error 時の `transport.close()` は `closeWithError()` 側で行う
 
 低レベル API はあくまで「MOQT のワイヤ表現をほぼそのまま扱う層」であり、LOC / MSF / WebCodecs を組み合わせるかどうかは利用側の責務になる。
