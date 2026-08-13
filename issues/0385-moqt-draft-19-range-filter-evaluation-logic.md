@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/add-moqt-draft-19-range-filter-evaluation-logic
 - Polished: 2026-08-12
@@ -64,4 +64,19 @@ draft-ietf-moq-transport-19 §5.1.3 / §5.1.4 で定義される Range Filter �
 
 ## 解決方法
 
-未着手。
+- `src/filter.ts` に評価関数を追加した:
+  - `rangeFiltersMatch`: オブジェクトの Subgroup ID / Object ID / Publisher Priority / Object Property 値が Range Filter にマッチするかを判定する。同一 SetID は AND、異なる SetID は OR で結合する (§5.1.3)。両端含む (inclusive) 判定、終端省略 (open-ended) 対応。フィルタなし・削除エントリのみは全通過。評価値が明示されていないオブジェクト (subgroupId / publisherPriority が undefined) は不通過
+  - `trackPropertyFiltersMatch`: 受信 PUBLISH の Track Properties に対する TRACK_PROPERTY_FILTER (0x29) の評価
+  - IMMUTABLE_PROPERTIES (0x0B) のネスト内検索 (§12.7) は共通ヘルパ `findPropertyValueInList` に統合し、再帰深さ上限 (MAX_PROPERTY_NESTING_DEPTH = 8) を設けた (悪意ある深いネストでのスタックオーバーフロー防止)
+- `src/dataStream.ts` の `ObjectDatagram.publisherPriority` を `number | undefined` に変更した。Priority Present なしの datagram では undefined を設定し、PRIORITY_FILTER の評価で 0 のダミー値を評価値として使わないようにした
+- `src/subscriber.ts`:
+  - `setRangeFilters` を追加し、REQUEST_UPDATE のセマンティクス (Length=0 は当該パラメータ型全体を削除・非ゼロは当該型全体を置換・省略は不変) に従ってフィルタ状態を更新する。同型の異なる SetID / Property Type は共存させる
+  - `handleObject` / `handleDatagram` に Range Filter 再適用を追加し、不通過のオブジェクトを破棄する (Location Filter の再適用と同じ位置)
+- `src/session.ts`:
+  - SUBSCRIBE 送信時 (`impl.setRangeFilters`) と SUBSCRIBE_TRACKS 送信時 (tracksSubscriptions の rangeFilters 保持) にフィルタ状態を設定する
+  - 受信 PUBLISH 処理で TRACK_PROPERTY_FILTER を評価し、不通過の PUBLISH は onPublish を呼ばず REQUEST_ERROR (UNINTERESTED) で応答する。DUPLICATE_TRACK_ALIAS 検証を TRACK_PROPERTY_FILTER 評価より前に移動した (フィルタ不通過で違反が隠れないように)
+  - 受信 PUBLISH から生成される SubscriberImpl にオブジェクトレベル Range Filter (0x25-0x28) を渡す
+- `src/session/bidi.ts`: `PendingRequestUpdate` に rangeFilters を追加し、REQUEST_UPDATE 成功時 (`bidiHandleRequestUpdateOk`) に SubscriberImpl へ反映する
+- `src/properties.ts`: `decodeObjectPropertiesTolerant` を export 化した (OBJECT_PROPERTY_FILTER の評価で使用)
+- テスト: `src/filter.test.ts` (評価関数の単体テスト 12 件)、`src/subscriber.test.ts` (handleObject / handleDatagram の再適用・setRangeFilters の削除・置換・不変・共存テスト)、`src/session/bidi.test.ts` (REQUEST_UPDATE OK 後の反映テスト)、`src/session.test.ts` (受信 PUBLISH の TRACK_PROPERTY_FILTER 通過 / 不通過の統合テスト)、`src/dataStream.datagram.test.ts` (Priority なし datagram の publisherPriority 期待値修正) を追加・更新した
+- `CHANGES.md` の `## develop` に `[ADD]` エントリを追加した
