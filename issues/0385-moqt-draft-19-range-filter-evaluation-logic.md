@@ -60,7 +60,7 @@ draft-ietf-moq-transport-19 §5.1.3 / §5.1.4 で定義される Range Filter �
 - 関連: `issues/closed/0334-draft-19-multiple-subscriptions-per-track.md`（Location Filter の再適用を実装した先例）
 - 関連: `0362-bug-range-filter-length-encoding.md`（value 形式の修正。実装順は先に 0362。本 issue は 0362 修正後の value 形式を前提とする）
 - 関連: `0380-moqt-draft-19-range-filter-value-validation.md`（受信検証。検証後の value 形式を共有）
-- 関連: `0393-add-range-filters-fetch.md`（送信ガード。実装順は先に 0393 の SUBSCRIBE での 0x29 throw ガードを確認してから本 issue の TRACK_PROPERTY_FILTER 適用を実装する）
+- 関連: `0393-add-range-filters-fetch.md`（送信ガード。実装順は先に 0393 の SUBSCRIBE での 0x29 throw ガードを確認してから本 issue の TRACK_PROPERTY_FILTER 適用を実装する。SUBSCRIBE_TRACKS の更新 API は 0393 実装時に別 issue の対応と確定済み）
 
 ## 解決方法
 

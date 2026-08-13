@@ -91,3 +91,65 @@ test("fetch: End Location が Start Location と等しい場合は Location 検�
   // Location 検証は通過する。後続の送信経路 (controlWriter 未初期化等) のエラーは対象外
   assert.isNull(thrown?.message.match(/is smaller than start location/) ?? null);
 });
+
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES):
+ * ピアの MAX_FILTER_RANGES が 0 (未広告) の状態で FETCH の rangeFilters を
+ * 指定すると throw することを検証する。
+ * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
+ */
+test("fetch: peer MAX_FILTER_RANGES が 0 のとき rangeFilters 指定で throw する", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(
+      ["live"],
+      "video",
+      {
+        startLocation: { group: 0n, object: 0n },
+        endLocation: { group: 1n, object: 0n },
+        rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+      },
+      { object: () => {} },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES is 0"));
+  // ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない
+  assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * FETCH で削除 (Length=0) を指定すると throw することを検証する。
+ * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
+ */
+test("fetch: 削除指定の rangeFilters で throw する", async () => {
+  const session = createSessionImpl();
+  // MAX_FILTER_RANGES ガードを通過させるため、ピアの上限を設定する
+  session.peerMaxFilterRanges = 10;
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(
+      ["live"],
+      "video",
+      {
+        startLocation: { group: 0n, object: 0n },
+        endLocation: { group: 1n, object: 0n },
+        rangeFilters: [{ type: "objectId", remove: true }],
+      },
+      { object: () => {} },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("cannot remove range filters in FETCH"));
+  assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
+});

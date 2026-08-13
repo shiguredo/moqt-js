@@ -70,6 +70,7 @@ import {
   validateFetchOkEndLocation,
   buildRangeFilterParameters,
   validateRangeFilterLimits,
+  validateRangeFilterSpecs,
   validateNamespacePrefixUpdate,
   validateTrackNamespaceForSend,
 } from "./params";
@@ -1224,6 +1225,16 @@ export async function bidiSendRequestUpdate(
   // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみチェックする
   validateRangeFilterLimits(options.rangeFilters, session.peerMaxFilterRanges, "REQUEST_UPDATE");
 
+  // draft-ietf-moq-transport-19 §5.1.3:
+  // REQUEST_UPDATE では削除 (Length=0) が許可されるが、TRACK_PROPERTY_FILTER (0x29) は
+  // SUBSCRIBE_TRACKS リクエスト自身のストリーム上のみ許可される。moqt-js が送信する
+  // REQUEST_UPDATE はすべて per-subscription の更新 (§10.9) のため、0x29 は一律 throw する。
+  // 組み合わせ重複も送信前に検証する (§5.1.3 の MUST)
+  validateRangeFilterSpecs(options.rangeFilters, "REQUEST_UPDATE", {
+    allowRemove: true,
+    allowTrackProperty: false,
+  });
+
   const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
   // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3:
@@ -1520,6 +1531,27 @@ export async function bidiSendJoiningFetch(
       type: MessageParameterType.FILL_TIMEOUT,
       value: encodeVarint(options.fillTimeout),
     });
+  }
+
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-19 Section 5.1.3
+  // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ。
+  // この関数は fire-and-forget (void) で起動されるため、ガード・エンコードの throw は
+  // 未処理 rejection にならないよう catch で処理し、pendingFetch を削除して
+  // options.onError で通知する。
+  if (options.rangeFilters !== undefined) {
+    try {
+      validateRangeFilterLimits(options.rangeFilters, session.peerMaxFilterRanges, "Joining Fetch");
+      validateRangeFilterSpecs(options.rangeFilters, "Joining Fetch", {
+        allowRemove: false,
+        allowTrackProperty: false,
+      });
+      fetchMsg.parameters.push(...buildRangeFilterParameters(options.rangeFilters));
+    } catch (err) {
+      session.pendingFetch.delete(requestId);
+      const error = err instanceof Error ? err : new Error(String(err));
+      options.onError?.(error);
+      return;
+    }
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:

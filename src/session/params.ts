@@ -75,6 +75,70 @@ export function validateRangeFilterLimits(
 }
 
 /**
+ * Range Filter 送信ガードを検証する
+ *
+ * draft-ietf-moq-transport-19 §5.1.3 (Range Filters):
+ * - 削除 (Length=0) は REQUEST_UPDATE のみに定義される (§5.1.3「In REQUEST_UPDATE,
+ *   Length can be 0 to remove a filter parameter」)。他メッセージでの指定は
+ *   仕様未定義のため送信前に throw する
+ * - TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS / その REQUEST_UPDATE のみ
+ *   許可される。他メッセージでの指定は §10.2.1 により対向が PROTOCOL_VIOLATION
+ *   でセッションを閉じる実害があるため、送信前に throw する
+ * - 同一組み合わせ (Type, SetID, [Property Type]) の重複は in any message で
+ *   MUST 拒否 (INVALID_FILTER)。Length=0 の削除エントリは SetID / Property Type
+ *   を持たないため重複判定の対象外
+ *
+ * この関数はメッセージ種別ごとの許可を options で切り替える純関数であり、
+ * MAX_FILTER_RANGES ガード (validateRangeFilterLimits) とは別に呼び出す。
+ *
+ * @param rangeFilters - 送信する Range Filter 指定
+ * @param contextName - エラーメッセージ用のコンテキスト名
+ * @param options - メッセージごとの許可設定
+ * @param options.allowRemove - 削除 (Length=0) を許可するか (REQUEST_UPDATE のみ true)
+ * @param options.allowTrackProperty - TRACK_PROPERTY_FILTER (0x29) を許可するか
+ *                                    (SUBSCRIBE_TRACKS のみ true)
+ */
+export function validateRangeFilterSpecs(
+  rangeFilters: RangeFilterSpec[] | undefined,
+  contextName: string,
+  options: { allowRemove: boolean; allowTrackProperty: boolean },
+): void {
+  if (rangeFilters === undefined || rangeFilters.length === 0) {
+    return;
+  }
+
+  const seenCombinations = new Set<string>();
+  for (const spec of rangeFilters) {
+    // TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS / その REQUEST_UPDATE のみ (§5.1.3)。
+    // 削除エントリ (Length=0) でも 0x29 は載せられないため、削除チェックより先に判定する。
+    if (spec.type === "trackProperty" && !options.allowTrackProperty) {
+      throw new Error(
+        `cannot send TRACK_PROPERTY_FILTER in ${contextName}: only allowed in SUBSCRIBE_TRACKS`,
+      );
+    }
+
+    // 削除 (Length=0) は REQUEST_UPDATE のみ (§5.1.3)
+    if ("remove" in spec) {
+      if (!options.allowRemove) {
+        throw new Error(
+          `cannot remove range filters in ${contextName}: remove is only allowed in REQUEST_UPDATE`,
+        );
+      }
+      // 削除エントリは SetID / Property Type を持たないため重複判定の対象外
+      continue;
+    }
+
+    // 同一組み合わせ (Type, SetID, [Property Type]) の重複は MUST 拒否 (§5.1.3)
+    // RangeFilterRemove は continue 済みのため、ここでは RangeFilterParam に絞られる
+    const combinationKey = `${spec.type}:${spec.setId}:${spec.propertyType ?? ""}`;
+    if (seenCombinations.has(combinationKey)) {
+      throw new Error(`duplicate range filter combination in ${contextName}: ${combinationKey}`);
+    }
+    seenCombinations.add(combinationKey);
+  }
+}
+
+/**
  * DEFAULT PUBLISHER PRIORITY の値域 (0-255) を検証する
  * draft-ietf-moq-transport-19 §12.4:
  * 「The value is from 0 to 255 and lower numbers get higher priority.
@@ -391,7 +455,12 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
   }
 
   // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3
+  // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ (§5.1.3)
   if (options?.rangeFilters !== undefined) {
+    validateRangeFilterSpecs(options.rangeFilters, "SUBSCRIBE", {
+      allowRemove: false,
+      allowTrackProperty: false,
+    });
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
@@ -433,6 +502,16 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
       type: MessageParameterType.FILL_TIMEOUT,
       value: encodeVarint(options.fillTimeout),
     });
+  }
+
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-19 Section 5.1.3
+  // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ
+  if (options?.rangeFilters !== undefined) {
+    validateRangeFilterSpecs(options.rangeFilters, "FETCH", {
+      allowRemove: false,
+      allowTrackProperty: false,
+    });
+    parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-19 Section 10.2.2
@@ -505,7 +584,12 @@ export function buildSubscribeTracksParameters(options?: {
   }
 
   // Range Filters (0x25–0x29) - draft-ietf-moq-transport-19 Section 5.1.3 / 6.3
+  // TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS で許可される (§5.1.3)。削除は REQUEST_UPDATE のみ
   if (options?.rangeFilters !== undefined) {
+    validateRangeFilterSpecs(options.rangeFilters, "SUBSCRIBE_TRACKS", {
+      allowRemove: false,
+      allowTrackProperty: true,
+    });
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 

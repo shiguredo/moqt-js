@@ -11,6 +11,11 @@
 
 ## develop
 
+- [ADD] FETCH / Joining Fetch で Range Filters を送信できるようにし、送信ガードを実装する
+  - draft-ietf-moq-transport-19 §5.1.3 に基づき、buildFetchParameters / bidiSendJoiningFetch に Range Filters を載荷する
+  - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
+  - fetch() に peer MAX_FILTER_RANGES ガードを追加する
+  - @voluntas
 - [FIX] Full Track Name の 4,096 バイト検証をデコード経路に追加する
   - draft-ietf-moq-transport-19 §2.4.1 に基づき、SUBSCRIBE / FETCH (STANDALONE) / TRACK_STATUS / Redirect のデコーダで Full Track Name の合計バイト長を検証し、4,096 バイト超過は ProtocolViolationError を throw する
   - ワイヤバイト長で計測する validateFullTrackNameBytes を新設し、不正 UTF-8 の置換による誤計測を防ぐ (PUBLISH デコードもバイト長版に置き換え)

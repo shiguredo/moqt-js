@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-13
 - Model: DeepSeek V4 Flash
 - Branch: feature/add-range-filters-fetch
 - Polished: 2026-08-12
@@ -64,4 +64,15 @@ FETCH で Range Filters を送信できない状態が残っており (FetchOpti
 
 ## 解決方法
 
-未着手。
+- `src/session/params.ts` に `validateRangeFilterSpecs` を追加した (送信ガードの集約):
+  - 削除 (Length=0) は `allowRemove: false` のメッセージで throw (§5.1.3「In REQUEST_UPDATE, Length can be 0 to remove a filter parameter」)
+  - TRACK_PROPERTY_FILTER (0x29) は `allowTrackProperty: false` のメッセージで throw (§5.1.3。SUBSCRIBE_TRACKS / その REQUEST_UPDATE のみ許可)。削除エントリでも 0x29 は載せられないため、削除チェックより先に判定する
+  - 同一組み合わせ (Type, SetID, [Property Type]) の重複は throw (§5.1.3 の MUST)。Length=0 の削除エントリは SetID / Property Type を持たないため重複判定の対象外
+- 適用箇所: `buildSubscribeParameters` (allowRemove: false / allowTrackProperty: false)、`buildSubscribeTracksParameters` (allowRemove: false / allowTrackProperty: true)、`buildFetchParameters` (allowRemove: false / allowTrackProperty: false)、`bidiSendRequestUpdate` (allowRemove: true / allowTrackProperty: false。per-subscription の REQUEST_UPDATE には 0x29 を載せられないため一律 throw)、`bidiSendJoiningFetch` (allowRemove: false / allowTrackProperty: false)
+- `buildFetchParameters` に Range Filters の載荷を追加し、`fetch()` で渡すようにした。`JoiningFetchOptions` に `rangeFilters` を追加し、`bidiSendJoiningFetch` に載荷を追加した
+- `fetch()` に peer MAX_FILTER_RANGES ガード (`validateRangeFilterLimits`) を追加した。ガードは `pendingFetch.set` より前に配置し、throw 時に pending エントリが残らないようにした。`fetchMsg` の構築 (`buildFetchParameters` 呼び出し) も `pendingFetch.set` より前に移動した (buildRangeFilterParameters の throw が pending 登録後にならないようにするため)
+- `bidiSendJoiningFetch` のガードは fire-and-forget (void) 起動のため、catch で処理して未処理 rejection を防ぐ。ガード違反時は `pendingFetch.delete` + `options.onError` 通知 + return する
+- 既存テストの更新: `bidiSendRequestUpdate` の 0x29 送信テストを throw 期待に、SUBSCRIBE_TRACKS の削除指定テストを throw 期待に変更した。REQUEST_UPDATE の正常系 rangeFilters エンコードテストは 0x29 を除いた形に修正した
+- テスト: `validateRangeFilterSpecs` の単体テスト (削除 / 0x29 / 重複 / SetID 違い / Property Type 違い / 削除エントリ対象外)、`buildSubscribeParameters` / `buildFetchParameters` のガードテスト、`fetch()` の MAX_FILTER_RANGES / 削除ガードテスト、`bidiSendJoiningFetch` のガードテスト (pendingFetch 削除 + onError 通知) を追加した
+- `FetchOptions.rangeFilters` の JSDoc に「ピアの MAX_FILTER_RANGES が 0 (未広告含む) の場合に指定すると throw する」を追記した
+- `CHANGES.md` の `## develop` に `[ADD]` エントリを追加した
