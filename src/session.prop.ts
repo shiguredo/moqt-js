@@ -13,10 +13,9 @@ import {
   validateFetchOkEndLocation,
   classifyIncomingStreamType,
   calculateObjectIdDelta,
-  type PublishOptions,
-  type SubscribeOptions,
-} from "./session";
+} from "./session/params";
 import { extractForwardState } from "./session/params";
+import { type PublishOptions, type SubscribeOptions } from "./session";
 import {
   encodeParameters,
   decodeParameters,

@@ -648,6 +648,10 @@
 
 ### misc
 
+- [CHANGE] 外部から使用されていない内部シンボルの export を非公開化する
+  - 同一ファイル内でのみ使用される関数・型・定数の export を除去し、公開 API 面を縮小する
+  - 完全未参照のシンボル (RESERVED_NAMESPACE_PREFIX / SESSION_LEVEL_NAMESPACE / isReservedNamespace) は削除する
+  - @voluntas
 - [CHANGE] 未使用の許可パラメータ集合を削除する
   - SUBSCRIBE / FETCH / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の受信はサーバー側責務であり、受信リクエストはペイロード非デコード + NOT_SUPPORTED 応答のため、未使用の SUBSCRIBE_ALLOWED_PARAMS / FETCH_ALLOWED_PARAMS / NAMESPACE_ALLOWED_PARAMS / SUBSCRIBE_TRACKS_ALLOWED_PARAMS を削除する
   - @voluntas

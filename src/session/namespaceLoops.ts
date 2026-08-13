@@ -42,7 +42,7 @@ import type { SessionInternal } from "./types";
  * 返す。受信方向のクローズや state 遷移は行わない (読み取り継続は呼び出し側
  * のループが担う)。
  */
-export function namespaceHandleGoaway(
+function namespaceHandleGoaway(
   session: SessionInternal,
   requestId: bigint,
   messagePayload: Uint8Array,

@@ -82,7 +82,7 @@ import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./type
 // 内部インターフェース
 // ============================================================================
 
-export interface RequestStreamInfo {
+interface RequestStreamInfo {
   stream: WebTransportBidirectionalStream;
   writer: WritableStreamDefaultWriter<Uint8Array>;
   controlReader: ControlStreamReader;
@@ -275,7 +275,7 @@ export async function bidiSendRequestOnBidiStream(
 // readResponseFromBidiStream
 // ============================================================================
 
-export async function bidiReadResponseFromBidiStream(
+async function bidiReadResponseFromBidiStream(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<ControlMessage> {
