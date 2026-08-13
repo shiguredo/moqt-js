@@ -42,6 +42,7 @@ import {
   type AuthorizationToken,
   type Location,
   type Parameter,
+  type RangeFilterSpec,
 } from "../message";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
@@ -125,6 +126,14 @@ interface PendingRequestUpdate {
    * 省略時 (undefined) は REQUEST_OK 受信時に Forward State を更新しない。
    */
   forward?: boolean;
+  /**
+   * REQUEST_UPDATE 送信時に指定された Range Filters。
+   * draft-ietf-moq-transport-19 §5.1.3:
+   * "If a filter parameter is omitted from REQUEST_UPDATE, the value is
+   *  unchanged."
+   * 省略時 (undefined) は REQUEST_OK 受信時に Range Filters を更新しない。
+   */
+  rangeFilters?: RangeFilterSpec[];
 }
 
 export interface BidiSessionInternal {
@@ -1285,6 +1294,10 @@ export async function bidiSendRequestUpdate(
       // REQUEST_OK 受信時に Forward State へ反映するため、送信時の FORWARD
       // 値を保持する (省略時は undefined = 不変)。
       forward: options.forward,
+      // draft-ietf-moq-transport-19 §5.1.3:
+      // REQUEST_OK 受信時に Range Filters へ反映するため、送信時の値を保持する
+      // (省略時は undefined = 不変)。
+      rangeFilters: options.rangeFilters,
     });
   });
 
@@ -1797,11 +1810,19 @@ export function bidiHandleRequestUpdateOk(
   // 自 update({ forward }) の REQUEST_OK 受信時に、送信時の FORWARD 値
   // (pendingRequestUpdate エントリに保持) を Forward State へ反映する。
   // 省略時 (undefined) は反映しない。
-  const forward = resolvePendingRequestUpdate(session, streamRequestId);
-  if (forward !== undefined) {
+  const resolved = resolvePendingRequestUpdate(session, streamRequestId);
+  if (resolved !== undefined) {
     const subscriber = session.subscribers.get(streamRequestId);
     if (subscriber) {
-      subscriber.setForwardState(forward);
+      if (resolved.forward !== undefined) {
+        subscriber.setForwardState(resolved.forward);
+      }
+      // draft-ietf-moq-transport-19 §5.1.3:
+      // 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filters
+      // を反映する (省略時は不変)
+      if (resolved.rangeFilters !== undefined) {
+        subscriber.setRangeFilters(resolved.rangeFilters);
+      }
     }
   }
 }
@@ -1841,12 +1862,12 @@ export function hasPendingRequestUpdate(
 export function resolvePendingRequestUpdate(
   session: BidiSessionInternal,
   targetRequestId: bigint,
-): boolean | undefined {
+): { forward?: boolean; rangeFilters?: RangeFilterSpec[] } | undefined {
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.resolve();
-      return pending.forward;
+      return { forward: pending.forward, rangeFilters: pending.rangeFilters };
     }
   }
   return undefined;
