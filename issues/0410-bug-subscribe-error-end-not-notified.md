@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-subscribe-error-end-not-notified
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-08-15
 
 ## 目的
 
@@ -13,7 +14,7 @@
 
 - `bidiReadRequestStreamMessages` の外側 catch は `toProtocolViolationSessionError` (`src/session/errors.ts`) で ProtocolViolationError のみ PROTOCOL_VIOLATION の SessionError に変換してセッションを閉じ、それ以外 (ピアの RESET_STREAM 等による WebTransportError 等) は黙殺する。
 - 黙殺された場合も finally は実行され、`subscribers` / `subscribersByAlias` / `requestStreams` からエントリが削除されるが、subscriber の error コールバックも state 遷移も行われない。アプリは subscription が終了したことを検知できず、state が "active" のまま残る。
-- 同種の終了通知欠落は FIN 経路で closed issue 0374 が解決済み (`notifySubscriberFin`: error 通知 + markClosed)。受信 PUBLISH 経路 (`src/session.ts` の `runPublishStreamSubLoop`) は catch で `impl.state === "active"` のとき error コールバックを呼ぶため、subscribe ロールの読み取り経路のみが非対称に未対応のままである。
+- 同種の終了通知欠落は FIN 経路で closed issue 0374 が解決済み (`notifySubscriberFin`: error 通知 + markClosed)。受信 PUBLISH 経路 (`src/session.ts` の `runPublishStreamSubLoop`) は catch で `impl.state === "active" && !goawayReceived` のとき error コールバックを呼ぶ (GOAWAY 受信後は spurious error 通知を抑止) ため、subscribe ロールの読み取り経路のみが非対称に未対応のままである。
 
 ## 設計方針
 
@@ -35,4 +36,4 @@
 
 - 関連: `issues/closed/0374-moqt-draft-19-fin-without-publish-done-not-notified.md`（FIN 経路の終了通知。エラー終了経路は本 issue の対象として記録された）
 - 関連: `issues/0409-bug-publish-stream-request-update-decode-failure.md`（publish ロールの終了通知欠落）
-- 関連: `issues/closed/0405-bug-subscribe-fin-response.md`（subscribe ロールの FIN 応答）
+- 関連: `issues/0405-bug-subscribe-fin-response.md`（subscribe ロールの FIN 応答。open のまま）
