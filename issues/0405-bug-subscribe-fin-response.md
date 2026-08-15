@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-subscribe-fin-response
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-08-15
 
 ## 目的
 
@@ -11,7 +12,7 @@ draft-ietf-moq-transport-19 §3.3.2 の SHOULD「A FIN sent by the responder aft
 
 ## 現状
 
-- `bidiReadRequestStreamMessages` (src/session/bidi.ts) の subscribe ロールでピアの FIN (`reader.read()` が `{ done: true }`) を検出すると、finally で `requestStreams` から削除するのみであり、自方向の FIN (writer.close()) を送信しない。
+- `bidiReadRequestStreamMessages` (src/session/bidi.ts) の subscribe ロールでピアの FIN (`reader.read()` が `{ done: true }`) を検出すると、FIN 検出点で `notifySubscriberFin` (error 通知 + state closed。issue 0374 で追加済み) を実行し、finally で `requestStreams` から削除する。しかし、自方向の FIN (writer.close()) は送信しない。
 - ピア (publisher) が PUBLISH_DONE 後に FIN を送った場合、requester である moqt-js は §3.3.2 の SHOULD に従い自方向を FIN で閉じるのが望ましいが、現状は閉じない。リソースの観点ではセッション終了時のクリーンアップで回収されるため、実害は限定的。
 - 正常な PUBLISH_DONE 受信経路 (`bidiHandlePublishDone` → `SubscriberImpl.handleEnd`) に影響させないこと。
 
