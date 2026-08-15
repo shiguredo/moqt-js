@@ -4,15 +4,17 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publish-stream-request-update-decode-failure
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-08-15
 
 ## 目的
 
-`bidiReadRequestStreamMessages` (`src/session/bidi.ts`) の role=publish パスで、破損した REQUEST_UPDATE (メッセージ長とフィールド構造の不一致等) を受信すると、デコード失敗 (`IncompleteDataError`) が外側 catch で黙殺され、ストリーム読み取りが停止して subscription の終了通知が失われる問題を修正する。同種の問題は受信 PUBLISH パスで closed issue 0373 が解決済みであり、既存ハンドラにのみ非対称に残っている。
+`bidiReadRequestStreamMessages` (`src/session/bidi.ts`) の role=publish パスで、破損した REQUEST_UPDATE (不完全なフィールド構造のペイロード等) を受信すると、デコード失敗 (`IncompleteDataError`) が外側 catch で黙殺され、ストリーム読み取りが停止して subscription の終了通知が失われる問題を修正する。同種の問題は受信 PUBLISH パスで closed issue 0373 が解決済みであり、既存ハンドラにのみ非対称に残っている。
 
 ## 現状
 
 - `bidiReadRequestStreamMessages` の REQUEST_UPDATE ケース内で `decodeRequestUpdatePayload` が try/catch なしで呼ばれる。
 - 同関数の外側 catch は `toProtocolViolationSessionError` (ProtocolViolationError のみ PROTOCOL_VIOLATION の SessionError に変換) のみを処理し、`IncompleteDataError` は無視する (「それ以外は既存通り無視する」コメント)。
+- なお closed issue 0378 実装により、Body 長不一致 (trailing data) は `ProtocolViolationError` として処理され外側 catch で変換されるため、黙殺されるのは不完全なフィールド構造 (データ不足) による `IncompleteDataError` のみである。
 - したがって破損 REQUEST_UPDATE を受信すると、ループが終了し、finally で subscribers / requestStreams のエントリが削除される。ピアの後続メッセージ (PUBLISH_DONE / REQUEST_OK / REQUEST_ERROR / FIN) は処理されず、subscription の終了通知 (endCallback / errorCallback) が失われる。セッションは開いたまま。
 - closed issue 0373 の新設 free function `bidiHandlePublishRequestUpdate` は、デコード失敗を関数内で catch して PROTOCOL_VIOLATION でセッションを閉じる方式を採用済み (ループ catch が IncompleteDataError を変換しないため)。`bidiReadRequestStreamMessages` 側は未対応のまま。
 
