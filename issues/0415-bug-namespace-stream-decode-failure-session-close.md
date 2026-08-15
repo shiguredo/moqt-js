@@ -5,15 +5,16 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-namespace-stream-decode-failure-session-close
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-08-15
 
 ## 目的
 
-`src/session/namespaceLoops.ts` の `namespaceStartStreamLoop` / `namespaceStartTracksStreamLoop` で、Body 短縮等によるデコード失敗 (`IncompleteDataError`) が外側 catch で黙殺され、セッションが開いたままになる問題を修正する。draft-ietf-moq-transport-19 §10 の MUST「If the length does not match the length of the Message Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」の短縮方向を満たす。
+`src/session/namespaceLoops.ts` の `namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop` で、Body 短縮等によるデコード失敗 (`IncompleteDataError`) が外側 catch で黙殺され、セッションが開いたままになる問題を修正する。draft-ietf-moq-transport-19 §10 の MUST「If the length does not match the length of the Message Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」の短縮方向を満たす。
 
 ## 現状
 
-- 制御メッセージのデコーダは、Body 短縮 (varint 途中切れ・長さ宣言超過等) で `IncompleteDataError` を throw する (`src/varint.ts` の `decodeVarint` / `decodeVarintWithLength`、`src/message/parameter.ts` の各デコーダ)。
-- `namespaceStartStreamLoop` (NAMESPACE / NAMESPACE_DONE ループ) の catch (`namespaceLoops.ts` の `toProtocolViolationSessionError` 呼び出し) は `ProtocolViolationError` のみ `SessionError (PROTOCOL_VIOLATION)` に変換し、`IncompleteDataError` は変換されず黙殺される。セッションは閉じず、subscription の error コールバック / reject のみが実行される。
+- 制御メッセージのデコーダは、フィールド構造のデータ不足 (varint 途中切れ等) で `IncompleteDataError` を throw する (`src/varint.ts` の `decodeVarint`、`src/message/parameter.ts` の各デコーダ)。Body 長不一致 (trailing data) は closed issue 0378 で `ProtocolViolationError` として処理済みであり、長さ宣言超過は `ControlStreamReader` が Length 分のバイトを揃えるまで待機するため、黙殺され得るのは Length が揃った後のフィールド構造のデータ不足による `IncompleteDataError` のみである。
+- `namespaceStartNamespaceStreamLoop` (NAMESPACE / NAMESPACE_DONE ループ) の catch (`namespaceLoops.ts` の `toProtocolViolationSessionError` 呼び出し) は `ProtocolViolationError` のみ `SessionError (PROTOCOL_VIOLATION)` に変換し、`IncompleteDataError` は変換されず黙殺される。セッションは閉じず、subscription の error コールバック / reject のみが実行される。
 - `namespaceStartTracksStreamLoop` (SUBSCRIBE_TRACKS ループ、PUBLISH_SKIPPED を処理) も同様の構造で、同じ問題を持つ。
 - 対照的に `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` はデコード失敗を関数内で catch して PROTOCOL_VIOLATION でセッションを閉じる方式を採用済み (closed issue 0373 由来)。`bidiReadRequestStreamMessages` 側の同種問題は issue 0409 で対応中であり、本 issue のスコープ外。
 - 影響: ピアが不正な Length 付きメッセージ (Body 短縮) を namespace / tracks ストリームに送ると、受信ループが静かに終了し、セッションは PROTOCOL_VIOLATION で閉じられない。draft-19 §10 の MUST 違反。
