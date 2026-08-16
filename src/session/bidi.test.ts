@@ -19,7 +19,7 @@ import { MessageType, MessageParameterType } from "../message/types";
 import { trackNamespaceToStrings } from "../message";
 import { decodeRequestUpdatePayload, encodeRequestUpdatePayload } from "../message/subscribe";
 import { getParameterTrackNamespace } from "../message/parameter";
-import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
+import { SessionError, SessionErrorCode, RequestErrorCode, RequestError } from "../error";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
@@ -1162,6 +1162,81 @@ test("bidiSendNamespaceRequestUpdate: 送信失敗時は pending と pendingPref
   assert.equal(session.pendingRequestUpdate.size, 0);
   assert.isUndefined(subscription.pendingPrefix);
   assert.deepEqual(subscription.namespacePrefix, ["live"]);
+});
+
+/**
+ * bidiSendRequestUpdate の write 失敗時に pendingRequestUpdate エントリが
+ * 削除されることを検証する。削除しないと、後続の GOAWAY 処理やセッション
+ * close が登録済みの reject を呼び、呼び出し元に返されていない Promise の
+ * unhandled rejection を生む。
+ */
+test("bidiSendRequestUpdate: write 失敗時に pendingRequestUpdate エントリが削除される", async () => {
+  const ctx = createPublishReadTestContext({
+    write() {
+      throw new Error("stream closed by peer");
+    },
+  });
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(ctx.session, subscriber, {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 失敗は呼び出し元へ伝播し、pending エントリが残留しない
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("stream closed by peer"));
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * GOAWAY 受信時にアプリの goawayCallback が throw しても、後続の
+ * pendingRequestUpdate の掃除と writer.close() が実行されることを検証する。
+ * try/catch で黙殺しないと、コールバック例外で掃除が中断され update() の
+ * Promise が未解決のまま残る。
+ */
+test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingRequestUpdate の掃除と close() が実行される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  subscriber.goawayCallback = () => {
+    throw new Error("goaway callback failed");
+  };
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+
+  // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  // controlWriter は createPublishReadTestContext で設定済みのため安全
+  const goawayMessage = ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload);
+  ctx.readableController.enqueue(goawayMessage);
+  ctx.readableController.close();
+  await readPromise;
+
+  // コールバック例外が黙殺されても、掃除と自方向 FIN は実行される
+  assert.isDefined(rejected);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.deepEqual(ctx.events, ["close"]);
 });
 
 // ============================================================================
@@ -2987,6 +3062,79 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の FIN (subscribe ロー�
   // 2 回目の close() は reject して黙殺されるため、sink の close は 1 回のみ
   // (unhandled rejection も発生しない)
   assert.deepEqual(ctx.events, ["close"]);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4:
+ * GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗として扱い、
+ * update() の Promise を reject してエントリを削除することを検証する。
+ * GOAWAY 後の読み取り継続中に REQUEST_OK が届いても、エントリ削除済みのため
+ * 二重解決しない (Forward State の誤反映も起きない)。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_UPDATE が reject され二重解決しない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  // 遅延 REQUEST_OK による Forward State の誤反映を検出するため、
+  // Forward State を false にしておく (エントリの forward は true)
+  subscriber.setForwardState(false);
+
+  // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  let resolved = false;
+  const updateId = 100n;
+  ctx.session.pendingRequestUpdate.set(updateId, {
+    resolve: () => {
+      resolved = true;
+    },
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+    forward: true,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // GOAWAY → 遅延 REQUEST_OK → FIN の順に feed する
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  // controlWriter は createPublishReadTestContext で設定済みのため安全
+  const goawayMessage = ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload);
+  ctx.readableController.enqueue(goawayMessage);
+  const requestOkPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  // controlWriter は createPublishReadTestContext で設定済みのため安全
+  const requestOkMessage = ctx.session.controlWriter!.encode(
+    MessageType.REQUEST_OK,
+    requestOkPayload,
+  );
+  ctx.readableController.enqueue(requestOkMessage);
+  ctx.readableController.close();
+  await readPromise;
+
+  // GOAWAY 受信時点で未応答 REQUEST_UPDATE が reject され、エントリが削除される
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, RequestError);
+  assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  // GOAWAY 後の REQUEST_OK はエントリ削除済みのため二重解決しない
+  assert.isFalse(resolved);
+  // 遅延 REQUEST_OK による Forward State の誤反映も起きない (false のまま)
+  assert.isFalse(subscriber.forwardState);
 });
 
 /**
