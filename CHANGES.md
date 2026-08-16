@@ -22,6 +22,10 @@
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
   - fetch() に peer MAX_FILTER_RANGES ガードを追加する
   - @voluntas
+- [FIX] 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と PROTOCOL_VIOLATION 昇格が起きるのを修正する
+  - draft-ietf-moq-transport-19 §10.11 に基づき、PublisherImpl.done() に in-flight ガードを追加し、並行呼び出しでは進行中の done() を再利用して PUBLISH_DONE を 1 回だけ送信する
+  - 2 回目の done() は 1 回目の完了まで待ち、close 失敗の PROTOCOL_VIOLATION 昇格でセッションが閉じないようにする
+  - @voluntas
 - [FIX] FETCH 応答の同一 Group・同一 Subgroup の Publisher Priority 不一致を FETCH キャンセルで処理する
   - draft-ietf-moq-transport-19 §2.4.2 に基づき、同一 Group・同一 Subgroup 内の Priority 不一致の検出をセッション終了 (ProtocolViolationError) から MalformedTrackError に変更し、対象 FETCH のキャンセルと error コールバック通知で処理する
   - §2.2 に基づき、検出を Group スコープに限定し、異なる Group の同一 Subgroup ID の Priority 差を誤検出しないようにする
