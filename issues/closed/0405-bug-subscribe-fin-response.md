@@ -1,7 +1,7 @@
 # subscribe ロールでピアの FIN 受信時に自方向の FIN を送信しない
 
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-subscribe-fin-response
 - Polished: 2026-08-16
 - Updated: 2026-08-15
@@ -44,4 +44,7 @@ draft-ietf-moq-transport-19 §3.3.2 の SHOULD「A FIN sent by the responder aft
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` の `bidiReadRequestStreamMessages` の subscribe ロールでピア (publisher) の FIN を検出したとき、`notifySubscriberFin` と並べて try/finally で包み、`requestStreams` から取得した writer を `close()` で閉じて自方向の FIN を送信する (draft-19 §3.3.2 の SHOULD「the requester SHOULD then send a FIN on its direction」)。
+- 正常経路 (PUBLISH_DONE → FIN) も失敗ケース (PUBLISH_DONE なしの FIN) も無条件に close() する。error コールバックが throw しても close() が実行されるよう finally で包み、close() 失敗 (GOAWAY 受信済みで既に close 済みの場合の reject) は黙殺する。
+- publish ロールには影響させない (role === "subscribe" の中に閉じている)。publish ロールでは従来どおり done() に委ねる。
+- テスト: `src/session/bidi.test.ts` に 3 本追加 (subscribe ロールの FIN で自方向 FIN が送信され error 通知される / publish ロールでは自方向 FIN を送信しない / 正常な PUBLISH_DONE → FIN で自方向 FIN が送信され通知挙動が変わらない)。既存テスト 3 本 (error コールバック throw 時の close() 実行 / GOAWAY 後の FIN での二重 close 黙殺 / エラー statusCode の PUBLISH_DONE → FIN での close() 送信) に events 検証を追加した。
