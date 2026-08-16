@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-goaway-subscribe-hang
 - Polished: {YYYY-MM-DD}
 - Updated: 2026-08-15
@@ -34,3 +34,17 @@ SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの受信ループ (`src/s
 ## 解決方法
 
 未着手。
+
+## closed にした理由
+
+- 本 issue の対象経路 (goawayReceived=true かつ resolved=false の状態での read 例外) は現状のコードで到達不能である。先頭メッセージガード (`src/session/namespaceLoops.ts` の `namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop`) が resolved=false の GOAWAY を PROTOCOL_VIOLATION でセッションクローズにするため、`goawayReceived=true && resolved=false` の状態は現状発生しない (polish-issue 本審で検証済み)。
+- 0407 (先頭 GOAWAY の許可) は 2026-08-15 に polish 済みであり、その設計方針 (resolved=false の GOAWAY は callbacks.goaway 通知 → reject → `streamReader.cancel()` → ループ終了) により、0407 実装後も本 issue の対象経路は発生しない (reject + cancel + return で即ループ終了するため)。0413 自身の記述「0407 の設計方針どおり実装されると本 issue の対象経路は消滅する」に照らし、要否再評価のトリガーは発火済みであり、評価結果は「対象経路消滅」。
+- 完了条件のテスト (resolved=false で GOAWAY 受信後に read 例外を再現) は、現行・0407 実装後のいずれのコード経路でも構築不能である。
+- 以上により、本 issue の対象問題は存在しないと確定したため closed とする。万一 0407 の実装が設計方針から逸脱した場合 (resolved=false の GOAWAY で読み取りを継続する実装になった場合) は、新規 issue として起票し直す (reopened の対象は open issue のみのため)。
+
+## pending にした理由
+
+- 本 issue の対象経路 (goawayReceived=true かつ resolved=false の状態での read 例外) は現状のコードで到達不能である。先頭メッセージガード (`src/session/namespaceLoops.ts` の `namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop`) が resolved=false の GOAWAY を PROTOCOL_VIOLATION でセッションクローズにするため、`goawayReceived=true && resolved=false` の状態は現状発生しない (polish-issue 本審で検証済み)。
+- 0407 (先頭 GOAWAY の許可) は 2026-08-15 に polish 済みであり、その設計方針 (resolved=false の GOAWAY は callbacks.goaway 通知 → reject → `streamReader.cancel()` → ループ終了) により、0407 実装後も本 issue の対象経路は発生しない (reject + cancel + return で即ループ終了するため)。0413 自身の記述「0407 の設計方針どおり実装されると本 issue の対象経路は消滅する」に照らし、要否再評価のトリガーは発火済みであり、評価結果は「対象経路消滅」。
+- 完了条件のテスト (resolved=false で GOAWAY 受信後に read 例外を再現) は、現行・0407 実装後のいずれのコード経路でも構築不能である。
+- 対応方針: 0407 の実装完了時に本 issue を closed にする。万一 0407 の実装が設計方針から逸脱した場合 (resolved=false の GOAWAY で読み取りを継続する実装になった場合) のみ、本 issue を reopened にして対応する。
