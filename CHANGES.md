@@ -22,6 +22,11 @@
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
   - fetch() に peer MAX_FILTER_RANGES ガードを追加する
   - @voluntas
+- [FIX] subscribe ロールでピアの FIN 受信時に自方向の FIN を送信する
+  - draft-ietf-moq-transport-19 §3.3.2 に基づき、bidiReadRequestStreamMessages の subscribe ロールでピア (publisher) の FIN を検出したときに writer.close() で自方向を FIN で閉じる
+  - notifySubscriberFin (error 通知) と並べて try/finally で包み、error コールバックが throw しても自方向 FIN が送信されるようにする
+  - publish ロールは従来どおり done() に委ね、自方向 FIN を送信しない
+  - @voluntas
 - [FIX] セッション close と done() の並行実行で close 失敗が PROTOCOL_VIOLATION に誤昇格するのを修正する
   - draft-ietf-moq-transport-19 §3.5 に基づき、publishSendPublishDone の close 失敗時に sessionState を再確認し、入り口ガード通過後にセッションが閉じていた場合は PROTOCOL_VIOLATION に昇格しないようにする
   - ローカル abort 起因の close 失敗が callbacks.error に誤報として通知される主経路を塞ぐ (ピア起因のセッション終了は sessionState 遷移が非同期のため、遷移完了済み状態でのみ再確認が機能する)
