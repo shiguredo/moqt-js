@@ -257,8 +257,11 @@ export class ProtocolViolationError extends Error {
  *
  * draft-ietf-moq-transport-19 §2.4.2 / §12.7 / §12.8 / §12.9:
  * Object 内で MUST 規定 (IMMUTABLE_PROPERTIES の再帰禁止、各 Property の Object 当たり
- * 1 つだけ等) が違反された場合、Track は malformed として扱われる。データストリーム
- * 単位で `RESET_STREAM_AT(MALFORMED_TRACK)` で打ち切る上位ハンドリングへ伝搬する。
+ * 1 つだけ、同一 Subgroup 内の Publisher Priority 不一致等) が違反された場合、
+ * Track は malformed として扱われる。セッションは閉じず、データストリーム単位で
+ * STOP_SENDING 相当 (cancelStreamQuiet) で打ち切るか、FETCH データストリームの場合は
+ * 対応する FETCH をキャンセルして error コールバックで通知する上位ハンドリングへ
+ * 伝搬する。
  */
 export class MalformedTrackError extends Error {
   constructor(message: string) {

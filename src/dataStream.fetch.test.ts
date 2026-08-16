@@ -19,6 +19,7 @@ import {
 } from "./dataStream";
 import { GroupOrder } from "./message/types";
 import { encodeVarint } from "./varint";
+import { IncompleteDataError, MalformedTrackError } from "./error";
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
   const header: FetchHeader = {
@@ -316,10 +317,13 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 });
 
 /**
- * 同一 Subgroup の Priority 一貫性検証テスト
- * draft-ietf-moq-transport-19:
- * 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
- * draft-ietf-moq-transport-19 Section 11.4.4
+ * 同一 Group・同一 Subgroup の Priority 一貫性検証テスト
+ * draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+ * "An Object with a particular Subgroup ID is received, but its Publisher
+ *  Priority is different from that of the previous Object with the same
+ *  Subgroup ID." を malformed track と定義している。
+ * デコードは MalformedTrackError を throw し、上位ハンドラが FETCH キャンセル
+ * (セッション終了ではない) に変換する。
  */
 test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", () => {
   // 最初のオブジェクト
@@ -352,8 +356,191 @@ test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", ()
   offset += 1;
   secondEncoded.set(payloadLengthBytes, offset);
 
+  // MalformedTrackError (セッション終了を引き起こさないエラー種別) で throw される
   assert.throws(
     () => decodeFetchObjectFields(secondEncoded, firstContext, 0, false),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
+ * 異なる Group の同一 Subgroup ID は比較対象にならないテスト
+ * draft-ietf-moq-transport-19 §2.2:
+ * "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
+ *  MAY share a Subgroup ID without implying any relationship between them."
+ * Group 跨ぎでは Subgroup ID が同じでも Priority が異なってよい。
+ */
+test("FetchObjectFields: 異なる Group の同一 Subgroup ID で異なる Priority は許可", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 異なる Group (11) の同一 Subgroup ID (1) で異なる Priority (200)
+  // wire 上の Group ID delta = fields.groupId - context.groupId - 1n = 11 - 10 - 1 = 0n
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 11n,
+    subgroupId: 1n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+
+  // 誤検出されず、正常にデコードされる
+  const [decoded] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+  assert.equal(decoded.groupId, 11n);
+  assert.equal(decoded.subgroupId, 1n);
+  assert.equal(decoded.publisherPriority, 200);
+});
+
+/**
+ * Descending Group Order での Group スコープ比較テスト
+ *
+ * draft-ietf-moq-transport-19 §2.2:
+ * Subgroup ID のスコープは Group 内のため、Group 跨ぎでは同一 Subgroup ID でも
+ * Priority が異なってよい。Descending で Group ID が減少する場合も
+ * Group スコープ比較により誤検出しないことを検証する。
+ */
+test("FetchObjectFields: Descending で Group が変わる場合の同一 Subgroup ID の異なる Priority は許可", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // Descending で Group 9 に遷移する同一 Subgroup ID (1) の異なる Priority (200)
+  // delta = context.groupId - fields.groupId - 1n = 10 - 9 - 1 = 0n
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 9n,
+    subgroupId: 1n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext, GroupOrder.DESCENDING);
+
+  // 誤検出されず、正常にデコードされる
+  const [decoded] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(decoded.groupId, 9n);
+  assert.equal(decoded.subgroupId, 1n);
+  assert.equal(decoded.publisherPriority, 200);
+});
+
+/**
+ * Priority バイトでバッファが切れている場合のテスト
+ *
+ * draft-ietf-moq-transport-19 §11.4.4.1:
+ * Publisher Priority は 8 bit 固定。チャンク境界が Priority バイトの直前と
+ * 一致した場合、範囲外アクセス (undefined 取得) で Priority 不一致を誤検出せず、
+ * IncompleteDataError を throw して次のチャンクを待つことを検証する。
+ */
+test("FetchObjectFields: Priority バイトでバッファが切れていると IncompleteDataError", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+  };
+
+  // flags(1) + groupDelta(1) + objectId(1) で Priority バイトが欠落している
+  const flags =
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.SUBGROUP_ZERO |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const data = new Uint8Array([flags, 0x01, 0x01]);
+
+  assert.throws(() => decodeFetchObjectFields(data, prior, 0, false), IncompleteDataError);
+});
+
+/**
+ * Datagram 混在ケースの挙動固定テスト
+ *
+ * 前オブジェクトが Datagram の場合、コンテキストの publisherPriority が
+ * Datagram の値で更新される (Datagram は Subgroup に属さないため Subgroup ID は
+ * 引き継がれる)。そのため Datagram 直後の同一 Group・同一 Subgroup オブジェクト
+ * は、Datagram の Priority と比較されて誤検出され得る既知の挙動がある。
+ * 本テストは現行挙動 (誤検出で MalformedTrackError になる) を固定し、将来の
+ * 変更で黙って挙動が変わらないようにする。
+ */
+test("FetchObjectFields: Datagram 直後の同一 Group・同一 Subgroup の Priority 不一致は検出される (既知の誤検出を固定)", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // Datagram オブジェクト (Group 10, Priority 200)
+  // Group はコンテキストと同じため GROUP_ID_PRESENT は立てない。
+  // Datagram は Subgroup を持たないため、コンテキストの Subgroup ID は引き継がれる
+  const datagram: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.DATAGRAM |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const datagramEncoded = encodeFetchObjectFields(datagram, false, firstContext);
+  const [, , datagramContext] = decodeFetchObjectFields(datagramEncoded, firstContext, 0, false);
+
+  // Datagram 直後の同一 Group・同一 Subgroup オブジェクト (Priority 100)
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    objectId: 2n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, datagramContext);
+
+  // コンテキストの publisherPriority が Datagram の値 (200) に更新されているため、
+  // 既知の誤検出として MalformedTrackError になる現行挙動を固定する
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, datagramContext, 0, false),
+    MalformedTrackError,
     /malformed track: different priorities in same subgroup/,
   );
 });

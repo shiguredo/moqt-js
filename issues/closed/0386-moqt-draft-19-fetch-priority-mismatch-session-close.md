@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-moqt-draft-19-fetch-priority-mismatch-cancel
 - Polished: 2026-08-16
@@ -49,4 +49,10 @@ draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks) の扱いに従い、FETC
 
 ## 解決方法
 
-未着手。
+- `src/dataStream.ts` の `decodeFetchObjectFields` が同一 Group・同一 Subgroup 内の Publisher Priority 不一致を検出した場合に throw するエラーを、セッション終了を引き起こす `ProtocolViolationError` から `MalformedTrackError` に変更した。エラーメッセージの先頭 (`malformed track: different priorities in same subgroup`) は既存テストの正規表現を壊さないよう維持した。
+- 検出条件を Group スコープに限定した (draft-19 §2.2: Subgroup ID のスコープは Group 内)。異なる Group の同一 Subgroup ID では Priority が異なっても誤検出しない (ASCENDING / DESCENDING 両方でテスト)。
+- Priority バイトでバッファが切れている場合は `IncompleteDataError` を throw して次のチャンクを待つようにし、範囲外アクセス (undefined 取得) による誤検出を防いだ。
+- `src/session.ts` の `handleIncomingStream` の catch 経路に `handleMalformedFetchTrack` を追加し、受信データストリームの打ち切り (`cancelStreamQuiet`) に加えて、fetcher の error コールバック通知と `FetcherImpl.cancel()` 経由の `bidiCancelFetch` (draft-19 §5.2 の MUST に従う bidi リクエストストリームへの STOP_SENDING と fetchers Map からの削除) を実施した。アプリの error コールバックが throw してもキャンセルが完了するよう try/finally で保証した。
+- `src/fetcher.ts` の `FetcherImpl.handleError` に closed 状態チェックを追加し、キャンセル済み fetcher への二重通知を防いだ。
+- `src/session/bidi.ts` の `bidiCancelFetch` の `writer.abort` に `.catch` を追加し、GOAWAY 受信後に abort が reject する場合の unhandled rejection を防いだ。
+- テスト: `src/dataStream.fetch.test.ts` に同一 Subgroup 不一致で MalformedTrackError・異なる Group では許可 (ASCENDING / DESCENDING)・Datagram 混在の既知の誤検出を固定・Priority バイト境界の IncompleteDataError を追加した。`src/session.test.ts` に FETCH キャンセルの統合テスト (1 チャンク・2 チャンク分割) を追加し、セッション不閉鎖・データストリーム打ち切り・bidi リクエストストリームへの STOP_SENDING・fetchers / requestStreams からの削除・error コールバック通知を検証した。

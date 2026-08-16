@@ -3994,29 +3994,84 @@ export class SessionImpl implements Session {
       }
     } catch (err) {
       // デバッグ: ストリームエラーをログ
-      this.callbacks.debug?.({
-        direction: "recv",
-        type: 0,
-        typeName: "DATA_STREAM_ERROR",
-        payload: new Uint8Array(0),
-        decoded: {
-          error: err instanceof Error ? err.message : String(err),
-        },
-        timestamp: Date.now(),
-      });
+      this.emitDataStreamErrorDebug(err, fetchHeader);
       // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
       const sessionError = toProtocolViolationSessionError(err);
       if (sessionError !== null) {
         this.closeWithError(sessionError);
       } else if (err instanceof MalformedTrackError) {
-        await cancelStreamQuiet(
-          reader,
-          `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${err.message}`,
-        );
+        await this.handleMalformedFetchTrack(reader, err, fetcher);
       }
     } finally {
       this.statsSubscriberStreamsActive--;
       reader.releaseLock();
+    }
+  }
+
+  /**
+   * DATA_STREAM_ERROR のデバッグログを出力する
+   *
+   * FETCH データストリームの場合は対象の requestId を含めて追跡できるようにする。
+   * fetchHeader は Fetch ヘッダーパース時にのみ設定されるため、非 null なら
+   * FETCH データストリームと判定できる。
+   */
+  private emitDataStreamErrorDebug(
+    err: unknown,
+    fetchHeader: import("./dataStream").FetchHeader | null,
+  ): void {
+    this.callbacks.debug?.({
+      direction: "recv",
+      type: 0,
+      typeName: "DATA_STREAM_ERROR",
+      payload: new Uint8Array(0),
+      decoded: {
+        error: err instanceof Error ? err.message : String(err),
+        ...(fetchHeader ? { requestId: fetchHeader.requestId.toString() } : {}),
+      },
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Malformed Track 検出時の FETCH キャンセル処理
+   *
+   * draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+   * Malformed Track 検出時は「cancel any corresponding subscription or fetches
+   * for that Track from that publisher」であり、セッションを閉じない。
+   * まず受信データストリームを STOP_SENDING 相当 (cancelStreamQuiet) で打ち切る。
+   * fetcher が存在する場合 (FETCH データストリーム)、fetcher の error コールバックで
+   * アプリへ通知し (§2.4.2 SHOULD)、FetcherImpl.cancel() 経由で
+   * draft-ietf-moq-transport-19 §5.2 の MUST「It MUST send STOP_SENDING for
+   * the bidi request stream.」に従い bidi リクエストストリームへ STOP_SENDING
+   * を送り、fetchers Map から削除する。
+   *
+   * §2.4.2 の「fetches for that Track」は複数形だが、FETCH ごとにデータストリーム
+   * と検出が独立するため、対象は該当 requestId の FETCH のみとする (同一 Track の
+   * 他 FETCH には波及しない)。Joining Fetch も bidiSendJoiningFetch が新規 bidi
+   * ストリームを開いて requestStreams に登録するため (§10.12「A subscriber sends
+   * FETCH as the first message on a new bidi stream」)、同じく STOP_SENDING が送られる。
+   *
+   * アプリの error コールバックが throw した場合は握り潰してキャンセルを継続する。
+   * 呼び出し元の handleIncomingStream は fire-and-forget で起動されるため、throw を
+   * 伝搬させると unhandled rejection になる。
+   */
+  private async handleMalformedFetchTrack(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    error: MalformedTrackError,
+    fetcher: FetcherImpl | null,
+  ): Promise<void> {
+    await cancelStreamQuiet(
+      reader,
+      `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${error.message}`,
+    );
+    if (fetcher) {
+      try {
+        fetcher.handleError(error);
+      } catch {
+        // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
+      } finally {
+        await fetcher.cancel();
+      }
     }
   }
 

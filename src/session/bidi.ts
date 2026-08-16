@@ -1659,7 +1659,10 @@ export async function bidiCancelFetch(
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
       // 両方向をリセットして fetch 解除を通知する。
       await streamInfo.stream.readable.cancel("fetch cancelled");
-      void streamInfo.writer.abort("fetch cancelled");
+      // GOAWAY 受信で送信方向を FIN (writer.close()) 済みの場合、abort は
+      // reject する (閉じた writer への操作)。unhandled rejection を避けるため
+      // catch で握り潰す。
+      void streamInfo.writer.abort("fetch cancelled").catch(() => {});
     } catch {
       // ストリームが既に閉じている場合は無視
     }
