@@ -928,7 +928,32 @@ export async function bidiReadRequestStreamMessages(
         // publish ロールでは requester の FIN は正常完了シグナルであり
         // 通知しない。
         if (role === "subscribe") {
-          notifySubscriberFin(session, requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+          try {
+            notifySubscriberFin(session, requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+          } finally {
+            // draft-ietf-moq-transport-19 §3.3.2:
+            // 「A FIN sent by the responder after its response and any
+            //  subsequent messages for the request signals that the request is
+            //  complete; if it has not already done so, the requester SHOULD
+            //  then send a FIN on its direction, gracefully closing the stream.」
+            // ピア (publisher) の FIN を受けた requester は自方向も FIN で閉じて
+            // graceful closure を完了する。正常経路 (PUBLISH_DONE → FIN) も
+            // 失敗ケース (PUBLISH_DONE なしの FIN) も、この SHOULD に基づき
+            // 無条件に close() する。
+            // notifySubscriberFin の error コールバックが throw しても close()
+            // が実行されるよう finally で包む。
+            // GOAWAY 受信済みの subscribe ロール (subscriber が存在する場合) では
+            // GOAWAY ハンドラが既に writer.close() 済みのため、再度 close() する
+            // と reject するが黙殺する。
+            const streamInfo = session.requestStreams.get(requestId);
+            if (streamInfo) {
+              try {
+                await streamInfo.writer.close();
+              } catch {
+                // ストリームが既に閉じている場合は無視
+              }
+            }
+          }
         }
         break;
       }

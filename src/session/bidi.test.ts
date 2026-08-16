@@ -1475,6 +1475,135 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN では従�
 
 /**
  * draft-ietf-moq-transport-19 §3.3.2:
+ * subscribe ロールでピア (publisher) の FIN を検出した場合、自方向の FIN
+ * (writer.close()) を送信して graceful closure を完了することを検証する。
+ * 0374 で追加された notifySubscriberFin (error 通知) に加えて、自方向 FIN が
+ * 送信される。
+ */
+test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方向 FIN (writer.close()) が送信される", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 失敗扱いの FIN として error 通知される (0374 の挙動)
+  assert.isDefined(errorCalled);
+  assert.equal(errorCalled!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
+  // 自方向の FIN (writer.close()) が送信される
+  assert.deepEqual(ctx.events, ["close"]);
+  // クリーンアップは従来どおり実行される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.2:
+ * publish ロールでは requester の FIN は正常完了シグナルであり、自方向の
+ * FIN は送信しない (アプリの done() に委ねる)。0370 の保持経路が維持される
+ * ことを検証する。
+ */
+test("bidiReadRequestStreamMessages: publish ロールのピア FIN では自方向 FIN を送信しない", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 自方向の FIN は送信しない (done() に委ねる)
+  assert.deepEqual(ctx.events, []);
+  // publish ロールの FIN は requestStreams を保持する (0370)
+  assert.isTrue(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.2:
+ * 正常な PUBLISH_DONE → FIN 経路でも自方向の FIN (writer.close()) が送信され、
+ * 通知挙動 (end コールバックのみ呼ばれ error コールバックは呼ばれず state が
+ * closed) が変わらないことを検証する。
+ */
+test("bidiReadRequestStreamMessages: 正常な PUBLISH_DONE → FIN で自方向 FIN が送信され通知挙動が変わらない", async () => {
+  const ctx = createPublishReadTestContext({});
+  let endCalled = false;
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    () => {
+      errorCalled = true;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // PUBLISH_DONE (TRACK_ENDED) を feed してから FIN
+  const publishDonePayload = encodePublishDonePayload({
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0x2n,
+    streamCount: 0n,
+    reasonPhrase: "",
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.PUBLISH_DONE, publishDonePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // end のみが呼ばれ、error は呼ばれない
+  assert.isTrue(endCalled);
+  assert.isFalse(errorCalled);
+  assert.equal(subscriber.state, "closed");
+  // 自方向の FIN (writer.close()) が送信される
+  assert.deepEqual(ctx.events, ["close"]);
+  // クリーンアップは従来どおり実行される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.2:
  * subscribe ロールのピア FIN で、同一 Track Alias に他 subscription が残っている
  * 場合は subscribersByAlias のエントリが保持される (該当 subscriber のみ除去)
  * ことを検証する。
@@ -2854,6 +2983,10 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の FIN (subscribe ロー�
   // error 通知も state 遷移も行われない
   assert.isFalse(errorCalled);
   assert.equal(subscriber.state, "active");
+  // GOAWAY ハンドラが close() 済み (events に "close" が 1 回入る)。FIN 検出時の
+  // 2 回目の close() は reject して黙殺されるため、sink の close は 1 回のみ
+  // (unhandled rejection も発生しない)
+  assert.deepEqual(ctx.events, ["close"]);
 });
 
 /**
@@ -2956,6 +3089,9 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
   assert.equal(errorMessages.length, 1);
   assert.isTrue(errorMessages[0].includes("PUBLISH_DONE"));
   assert.equal(subscriber.state, "closed");
+  // エラー statusCode の PUBLISH_DONE → FIN でも自方向の FIN (writer.close())
+  // が送信される
+  assert.deepEqual(ctx.events, ["close"]);
 });
 
 /**
@@ -3020,4 +3156,7 @@ test("bidiReadRequestStreamMessages: error コールバックが throw しても
   // throw はループ catch で黙殺され、セッションは閉じない。state は closed
   assert.isUndefined(ctx.closedWithError);
   assert.equal(subscriber.state, "closed");
+  // error コールバックが throw しても、try/finally により自方向の FIN
+  // (writer.close()) が送信される
+  assert.deepEqual(ctx.events, ["close"]);
 });
