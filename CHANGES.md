@@ -22,6 +22,10 @@
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
   - fetch() に peer MAX_FILTER_RANGES ガードを追加する
   - @voluntas
+- [FIX] セッション close と done() の並行実行で close 失敗が PROTOCOL_VIOLATION に誤昇格するのを修正する
+  - draft-ietf-moq-transport-19 §3.5 に基づき、publishSendPublishDone の close 失敗時に sessionState を再確認し、入り口ガード通過後にセッションが閉じていた場合は PROTOCOL_VIOLATION に昇格しないようにする
+  - ローカル abort 起因の close 失敗が callbacks.error に誤報として通知される主経路を塞ぐ (ピア起因のセッション終了は sessionState 遷移が非同期のため、遷移完了済み状態でのみ再確認が機能する)
+  - @voluntas
 - [FIX] 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と PROTOCOL_VIOLATION 昇格が起きるのを修正する
   - draft-ietf-moq-transport-19 §10.11 に基づき、PublisherImpl.done() に in-flight ガードを追加し、並行呼び出しでは進行中の done() を再利用して PUBLISH_DONE を 1 回だけ送信する
   - 2 回目の done() は 1 回目の完了まで待ち、close 失敗の PROTOCOL_VIOLATION 昇格でセッションが閉じないようにする
