@@ -1408,7 +1408,15 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 後の done() で PUBLISH_DONE
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.5:
+ * テスト用に session の sessionState を "closed" に遷移させる
+ * (型上 readonly のため、テスト用に型を偽装して書き換える)
+ */
+function forceSessionClosed(session: BidiSessionInternal): void {
+  (session as unknown as { sessionState: "connected" | "closed" }).sessionState = "closed";
+}
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.2:
  * ピア起因のセッション終了後 (sessionState: "closed") に done() を呼んだ場合、
  * publishSendPublishDone は write / close を試行しない。試行するとセッション
  * 終了起因のエラーで reject し、誤って PROTOCOL_VIOLATION に昇格して
@@ -1428,7 +1436,7 @@ test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionSta
   await readPromise;
 
   // ピアのセッション終了相当 (transport.closed のハンドラは sessionState のみ遷移させる)
-  (ctx.session as unknown as { sessionState: "connected" | "closed" }).sessionState = "closed";
+  forceSessionClosed(ctx.session);
 
   await ctx.publisher.done();
 
@@ -2495,6 +2503,77 @@ test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信
   // close 失敗の PROTOCOL_VIOLATION 昇格でセッションが閉じない
   assert.isUndefined(ctx.closedWithError);
   // requestStreams / publishers から削除される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.5 (Termination):
+ * session.close() と publisher.done() の並行実行で、セッションクローズに伴う
+ * close 失敗 (source なし) が PROTOCOL_VIOLATION に誤昇格して
+ * callbacks.error に誤報が流れるのを防ぐことを検証する。
+ *
+ * session.close() は sessionState を同期で "closed" にしてから writer を
+ * abort するため、close 失敗の reject 処理時には sessionState が既に "closed"
+ * になっている。入り口ガード (関数先頭の sessionState チェック) は「チェック
+ * 時点で既に closed」の場合のみ有効であり、ガード通過後に走るこのレースは
+ * close 失敗時の再確認で塞ぐ。
+ */
+test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessionState closed) で PROTOCOL_VIOLATION に昇格しない", async () => {
+  let ctx: ReturnType<typeof createPublishReadTestContext>;
+  ctx = createPublishReadTestContext({
+    close() {
+      // session.close() との並行実行を再現する
+      forceSessionClosed(ctx.session);
+      throw new Error("close aborted by session close");
+    },
+  });
+
+  // レース再現には read loop は無関係なため、直接 done() を呼ぶ
+  await ctx.publisher.done();
+
+  // PROTOCOL_VIOLATION に誤昇格しない (callbacks.error に誤報が流れない)
+  assert.isUndefined(ctx.closedWithError);
+  // クリーンアップは従来どおり実行される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.5 (Termination):
+ * ピア起因のセッション終了 (transport.closed) と done() の並行実行でも、
+ * close 失敗が PROTOCOL_VIOLATION に誤昇格しないことを検証する。
+ *
+ * ピア起因の sessionState 遷移は非同期 (transport.closed のハンドラ) のため、
+ * ストリームの reject 処理時には遷移が完了している状態を前提とする。
+ * 本テストはその遷移完了済み状態での非昇格を検証する (reject 処理が遷移より
+ * 先に走った場合の残余リスクは publish.ts のコメントで明記)。
+ * ピア起因では write が失敗し、write 失敗後の close はストリームが error
+ * 状態のため reject する (sink の close は呼ばれない)。エラーは source なしの
+ * Error で throw する (source 判定に依存しない実装であることの検証も兼ねる)。
+ */
+test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了済み状態) で PROTOCOL_VIOLATION に昇格しない", async () => {
+  let ctx: ReturnType<typeof createPublishReadTestContext>;
+  ctx = createPublishReadTestContext({
+    write() {
+      // ピア起因のセッション終了 (transport.closed) のハンドラが sessionState を
+      // 非同期で "closed" に遷移させた状態を再現する
+      forceSessionClosed(ctx.session);
+      throw new Error("write reset by peer session close");
+    },
+  });
+
+  // レース再現には read loop は無関係なため、直接 done() を呼ぶ
+  await ctx.publisher.done();
+
+  // write が失敗し、ストリームが error 状態になった経路を通っていること
+  // (write フック不発の退化を検出する)
+  assert.isTrue(ctx.events.includes("write"));
+  // error 状態のストリームへの close は sink の close を呼ばず reject する
+  assert.isFalse(ctx.events.includes("close"));
+  // PROTOCOL_VIOLATION に誤昇格しない
+  assert.isUndefined(ctx.closedWithError);
+  // クリーンアップは従来どおり実行される
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
   assert.isFalse(ctx.session.publishers.has(ctx.requestId));
 });

@@ -24,6 +24,7 @@ import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } fr
 import { calculateObjectIdDelta } from "./params";
 import { isPeerStreamError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
+import type { SessionState } from "../session";
 import type { SessionInternal } from "./types";
 
 /**
@@ -392,12 +393,27 @@ export async function publishSendPublishDone(
       // キャンセルの結果であるため、write 失敗エラーも併せて判定して非昇格にする。
       // どちらも stream でない失敗は従来どおり PROTOCOL_VIOLATION でセッションを閉じる。
       if (!isPeerStreamError(err) && !isPeerStreamError(writeError)) {
-        session.closeWithError(
-          new SessionError(
-            `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
+        // session.close() との並行実行では、ローカルの writer.abort() 起因の
+        // close 失敗 (source なしの TypeError) がここに到達し得る。セッションは
+        // 既に閉じているため、この失敗はピアの違反ではなく誤報になる。
+        // 入り口ガード (関数先頭の sessionState チェック) 通過後にセッションが
+        // 閉じた場合は PROTOCOL_VIOLATION に昇格しない。
+        // ピア起因のセッション終了 (transport.closed) は sessionState 遷移が
+        // 非同期のため、reject 処理時に遷移が完了している場合のみ再確認が
+        // 機能する。遷移より先に reject が処理された場合は昇格し得る既知の
+        // 残余リスクである (エラーの source 判定に依存せず、sessionState の
+        // 再確認のみで判定する設計のため。両経路の検証は bidi.test.ts の
+        // close() 並行テスト / ピア起因テストを参照)。
+        // なお、入り口ガードにより sessionState は "connected" に絞り込まれる
+        // ため、絞り込みを解除して実状態を再確認する。
+        if ((session.sessionState as SessionState) !== "closed") {
+          session.closeWithError(
+            new SessionError(
+              `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+        }
       }
     }
   }

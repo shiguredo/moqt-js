@@ -1,7 +1,7 @@
 # セッション close と done() の並行実行で close 失敗が誤って PROTOCOL_VIOLATION に昇格する
 
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-done-session-close-race
 - Polished: 2026-08-16
 
@@ -44,4 +44,8 @@
 
 ## 解決方法
 
-未着手。
+- `src/session/publish.ts` の `publishSendPublishDone` の close 失敗時、`closeWithError` の前に sessionState を再確認し、入り口ガード (関数先頭の sessionState チェック) 通過後にセッションが閉じていた場合は PROTOCOL_VIOLATION に昇格しないようにした。クリーンアップ (requestStreams / publishers からの削除) は従来どおり実行される。
+- 再確認は TS の制御フロー絞り込み (入り口ガードで "connected" に絞られる) を `as SessionState` で解除して実状態を評価する。キャストはコンパイル必須 (await をまたいでも絞り込みが維持されるため、TS2367 になる)。
+- ピア起因のセッション終了 (transport.closed) は sessionState 遷移が非同期のため、reject 処理時に遷移が完了している場合のみ再確認が機能する。遷移より先に reject が処理された場合は昇格し得る既知の残余リスクとしてコメントに明記した (エラーの source 判定に依存しない設計のため)。
+- テスト: `src/session/bidi.test.ts` に 2 本追加 (close() と並行実行で close 失敗時に sessionState closed → 昇格しない / ピア起因のセッション終了で遷移完了済み状態 → 昇格しない。ピア起因は write 失敗 + close 失敗のシナリオで、write フック不発の退化を検出する events 検証付き)。`forceSessionClosed` ヘルパーを追加し、既存テストの sessionState 変更も共通化した。
+- 既存の「close 失敗 (source なし) で closeWithError(PROTOCOL_VIOLATION) が呼ばれる」テストは sessionState が "connected" のままのため、従来どおり昇格する (回帰ガード)。
