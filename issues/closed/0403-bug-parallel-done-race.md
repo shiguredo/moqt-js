@@ -1,7 +1,7 @@
 # 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と PROTOCOL_VIOLATION 昇格が起きる
 
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-parallel-done-race
 - Polished: 2026-08-16
 
@@ -40,4 +40,8 @@
 
 ## 解決方法
 
-未着手。
+- `src/publisher.ts` の `PublisherImpl.done()` に in-flight ガード (`donePromise`) を追加した。並行呼び出しでは進行中の Promise を再利用し、2 回目の done() は 1 回目の完了まで待つ。これにより `publishSendPublishDone` が 1 回だけ実行され、2 回目の write / close 失敗による PROTOCOL_VIOLATION 昇格 (セッション終了) を防ぐ。
+- ガードは完了 (成功・失敗) 後に finally で常にクリアする。成功時は `publisherState` が "closed" になり以後の done() は早期 return する。失敗時は再試行を許す (reject 後も "active" のままの意味論を維持)。
+- 並行呼び出しの 2 回目にも reject が伝播する (進行中の Promise を再利用する意味論)。
+- `Publisher` インターフェースの done() JSDoc に並行呼び出しの意味論 (PUBLISH_DONE は 1 回だけ、2 回目は 1 回目の完了まで待つ、セッション終了後は送信せず即 resolve) を追記した。
+- テスト: `src/publisher.test.ts` に単体テスト 5 本 (並行 done で onDoneInternal が 1 回だけ実行 / 2 回目が 1 回目の完了まで解決しない / reject 時のガードリセットと再試行 / 並行 reject の伝播 / done 実行中の markClosed 割り込み)、`src/session/bidi.test.ts` に実ストリーム注入方式の統合テスト 1 本 (並行 done() で PUBLISH_DONE が write + close 各 1 回だけ実行され、PROTOCOL_VIOLATION 昇格でセッションが閉じない) を追加した。

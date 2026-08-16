@@ -2471,6 +2471,34 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
   assert.isFalse(ctx.closedWithError!.message.includes("internal write failure"));
 });
 
+/**
+ * draft-ietf-moq-transport-19 §10.11:
+ * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と close 失敗の
+ * PROTOCOL_VIOLATION 昇格が起きないことを検証する。
+ *
+ * PublisherImpl.done() の in-flight ガードにより、2 回目の done() は 1 回目の
+ * 完了を待つため、publishSendPublishDone は 1 回だけ実行される。ガードがない
+ * 場合の失敗モードはタイミングにより 2 通りある (2 回目の write が既に閉じた
+ * writer に対して失敗する、または 1 回目の close 完了前に write がキューされ
+ * PUBLISH_DONE が 2 回送信される)。いずれもこのテストのアサーション
+ * (written / events / closedWithError) で検出できる。
+ */
+test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信されセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  // 並行 done() 呼び出し: 2 回目の done() は 1 回目の完了を待つ
+  await Promise.all([ctx.publisher.done(), ctx.publisher.done()]);
+
+  // PUBLISH_DONE フレームが 1 回だけ送信される (write 1 回 + close 1 回)
+  assert.equal(ctx.written.length, 1);
+  assert.equal(ctx.events.filter((event) => event === "close").length, 1);
+  // close 失敗の PROTOCOL_VIOLATION 昇格でセッションが閉じない
+  assert.isUndefined(ctx.closedWithError);
+  // requestStreams / publishers から削除される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+});
+
 // ============================================================================
 // notifySubscriberFin のテスト
 // draft-ietf-moq-transport-19 §3.3.2 (FIN without PUBLISH_DONE は失敗扱い)

@@ -101,6 +101,14 @@ export interface Publisher {
    * draft-ietf-moq-transport-19 Section 2.2, Section 11.3
    */
   sendDatagram(params: SendDatagramParams): void;
+  /**
+   * パブリッシングを終了し、PUBLISH_DONE を送信してストリームを閉じる
+   * draft-ietf-moq-transport-19 §10.11 (PUBLISH_DONE)
+   *
+   * 並行して呼ばれた場合も PUBLISH_DONE は 1 回だけ送信され、
+   * 2 回目の呼び出しは 1 回目の完了まで待つ。
+   * セッションが閉じられた後は PUBLISH_DONE を送信せず即 resolve する。
+   */
   done(): Promise<void>;
 }
 
@@ -126,6 +134,19 @@ export class PublisherImpl implements Publisher {
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: () => Promise<void>;
+
+  /**
+   * 進行中の done() の Promise
+   *
+   * draft-ietf-moq-transport-19 §10.11:
+   * 「A publisher sends a PUBLISH_DONE message as the final message before
+   *  closing the subscription's bidi stream」の枠組みに反する二重 PUBLISH_DONE
+   * 送信を防ぐため、並行 done() 呼び出しでは進行中の Promise を再利用する。
+   * 二重送信は、2 回目の publishSendPublishDone が既に閉じた writer への
+   * write / close を試行して close 失敗の PROTOCOL_VIOLATION 昇格でセッション
+   * を閉じる経路にもなる。
+   */
+  private donePromise: Promise<void> | null = null;
 
   constructor(
     namespace: string[],
@@ -231,12 +252,39 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Signal that publishing is done
+   *
+   * 並行呼び出しでは、進行中の done() の Promise を再利用して二重の
+   * PUBLISH_DONE 送信を防ぐ。done() の resolve は「PUBLISH_DONE 送信完了まで
+   * 待つ」意味論を維持するため、2 回目の呼び出しも 1 回目の完了を待つ。
+   * ただしセッション終了後は PUBLISH_DONE を送信せずに resolve する
+   * (publishSendPublishDone の sessionState ガード)。
+   * 完了 (成功・失敗) 後はガードをリセットする。成功時は publisherState が
+   * "closed" になり以後の done() は早期 return するため再試行は起きず、
+   * 失敗時は以後の done() で再試行を許す (reject 後も publisherState が
+   * "active" のままの意味論を維持する)。
    */
   async done(): Promise<void> {
     if (this.publisherState === "closed") {
       return;
     }
 
+    if (this.donePromise) {
+      return this.donePromise;
+    }
+
+    this.donePromise = this.doneInternal();
+    try {
+      await this.donePromise;
+    } finally {
+      this.donePromise = null;
+    }
+  }
+
+  /**
+   * onDoneInternal (PUBLISH_DONE 送信) を実行してから publisherState を
+   * "closed" に遷移する
+   */
+  private async doneInternal(): Promise<void> {
     if (this.onDoneInternal) {
       await this.onDoneInternal();
     }
