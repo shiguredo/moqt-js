@@ -12,7 +12,7 @@
 
 import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
-import { ProtocolViolationError } from "./error";
+import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
 import { GroupOrder } from "./message/types";
 
 /**
@@ -1446,19 +1446,39 @@ export function decodeFetchObjectFields(
   // Publisher Priority
   let publisherPriority: number;
   if (flags & FetchSerializationFlags.PRIORITY_PRESENT) {
+    // Priority は 8 bit 固定 (draft-ietf-moq-transport-19 §11.4.4.1) のため、
+    // バッファが Priority バイトで切れている場合は範囲外アクセス (undefined 取得)
+    // による誤検出を避け、IncompleteDataError で次のチャンクを待つ
+    if (offset + totalConsumed >= data.length) {
+      throw new IncompleteDataError("incomplete fetch object fields: publisher priority");
+    }
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
 
-    // draft-ietf-moq-transport-19:
-    // 同一 Subgroup 内のオブジェクトは同じ Priority を持つ必要がある。
-    // 異なる Priority を検出した場合は MALFORMED_TRACK エラー。
+    // draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+    // 同一 Group・同一 Subgroup 内のオブジェクトは同じ Publisher Priority を
+    // 持つ必要がある。異なる Priority を検出した場合は MalformedTrackError を
+    // throw する。上位ハンドラはこれを FETCH キャンセル (セッション終了ではない)
+    // に変換する。
+    // 検出は Group スコープで行う。draft-ietf-moq-transport-19 §2.2:
+    // "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
+    //  MAY share a Subgroup ID without implying any relationship between them."
+    // 異なる Group の同一 Subgroup ID は無関係であり、Priority が異なっても合法。
     // Datagram オブジェクトは Subgroup に属さないためチェックをスキップする。
-    // draft-ietf-moq-transport-19 Section 11.4.4
-    if (!isDatagram && context !== null && subgroupId === context.subgroupId) {
+    // なお、前オブジェクトが Datagram の場合にコンテキストの publisherPriority が
+    // Datagram の値で更新されるため、Datagram 直後の同一 Group・同一 Subgroup
+    // オブジェクトが誤検出され得る既知の挙動がある (dataStream.fetch.test.ts の
+    // Datagram 混在テストで固定している)。
+    if (
+      !isDatagram &&
+      context !== null &&
+      groupId === context.groupId &&
+      subgroupId === context.subgroupId
+    ) {
       if (publisherPriority !== context.publisherPriority) {
-        throw new ProtocolViolationError(
+        throw new MalformedTrackError(
           `malformed track: different priorities in same subgroup ` +
-            `(subgroup=${subgroupId}, expected=${context.publisherPriority}, actual=${publisherPriority})`,
+            `(group=${groupId}, subgroup=${subgroupId}, expected=${context.publisherPriority}, actual=${publisherPriority})`,
         );
       }
     }

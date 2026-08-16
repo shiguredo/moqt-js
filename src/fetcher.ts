@@ -155,8 +155,15 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * エラーハンドリング
+   *
+   * handleObject / handleEnd と同じく、キャンセル済み (closed) の fetcher には
+   * 通知しない。データストリーム受信中にアプリが cancel() を呼んだ後に
+   * MalformedTrackError 等が検出された場合の二重通知を防ぐ。
    */
   handleError(error: Error): void {
+    if (this.fetcherState === "closed") {
+      return;
+    }
     this.errorCallback?.(error);
   }
 
