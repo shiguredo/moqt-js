@@ -7,12 +7,12 @@
 import { test, assert } from "vite-plus/test";
 import { SessionImpl, type TracksSubscriptionCallbacks } from "./session";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
-import { MessageType } from "./message";
+import { MessageType, encodeGoawayPayload } from "./message";
 import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl } from "./fetcher";
-import { MalformedTrackError } from "./error";
+import { MalformedTrackError, RequestError, RequestErrorCode } from "./error";
 import {
   FetchHeaderType,
   FetchSerializationFlags,
@@ -332,6 +332,100 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ば�
   await sessionInternal.handleIncomingBidirectionalStream(stream);
 
   assert.isTrue(onPublishCalled);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4:
+ * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) で GOAWAY を受信した場合、
+ * 旧ストリーム上の未応答 REQUEST_UPDATE の update() の Promise が reject され、
+ * エントリが削除されることを検証する。
+ */
+test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUEST_UPDATE が reject されエントリが削除される", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    tracksSubscriptions: Map<
+      bigint,
+      {
+        callbacks: TracksSubscriptionCallbacks;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        rangeFilters?: RangeFilterSpec[];
+      }
+    >;
+    receivedRequestIds: Set<bigint>;
+    subscribersByAlias: Map<bigint, unknown[]>;
+    pendingRequestUpdate: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        targetRequestId: bigint;
+      }
+    >;
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  sessionInternal.tracksSubscriptions.set(1n, {
+    callbacks: {
+      onPublish: async () => {
+        return { object: () => {} };
+      },
+      onNamespaceDone: () => {},
+      onPublishSkipped: () => {},
+    } as TracksSubscriptionCallbacks,
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  sessionInternal.receivedRequestIds = new Set();
+  sessionInternal.subscribersByAlias = new Map();
+
+  // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  // (publishRequestId = 1n を targetRequestId とする)
+  let rejected: Error | undefined;
+  sessionInternal.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: 1n,
+  });
+
+  // 受信 PUBLISH を feed して subscriber を確立し、その後 GOAWAY を feed する
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  const controlWriter = new ControlStreamWriter();
+  const publishFramed = controlWriter.encode(MessageType.PUBLISH, publishPayload);
+  const goawayFramed = controlWriter.encode(MessageType.GOAWAY, goawayPayload);
+
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(publishFramed);
+      controller.enqueue(goawayFramed);
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await sessionInternal.handleIncomingBidirectionalStream(stream);
+
+  // GOAWAY 受信時点で未応答 REQUEST_UPDATE が reject され、エントリが削除される
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, RequestError);
+  assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
+  assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
 });
 
 /** Uint8Array 配列を連結するヘルパー */

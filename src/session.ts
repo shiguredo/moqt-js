@@ -3338,9 +3338,25 @@ export class SessionImpl implements Session {
               return;
             }
             const decodedMsg = decodeGoawayPayload(msg.payload);
-            impl.goawayCallback?.(decodedMsg.newSessionUri);
+            try {
+              impl.goawayCallback?.(decodedMsg.newSessionUri);
+            } catch {
+              // アプリのコールバック例外はプロトコル違反ではないため黙殺する。
+              // 黙殺しないと後続の pendingRequestUpdate 掃除や close() が
+              // 実行されず、update() の Promise が未解決のまま残る。
+            }
             goawayReceived = true;
             // draft-ietf-moq-transport-19 §10.4:
+            // GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗
+            // として扱う (受信 PUBLISH の subscriber として送信済みの update()
+            // の Promise を未解決のまま残さない)。GOAWAY 後の読み取り継続中に
+            // REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため
+            // 二重解決しない。
+            bidi.rejectPendingRequestUpdates(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+              new RequestError(bidi.REQUEST_GOING_AWAY_REASON, RequestErrorCode.GOING_AWAY),
+            );
             // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
             // (§10.4 MUST)。受信 PUBLISH の subscriber (impl) は送信方向を
             // FIN (writer.close()) で閉じ、受信方向は読み取りを継続する。
@@ -3392,12 +3408,11 @@ export class SessionImpl implements Session {
             );
             // draft-ietf-moq-transport-19 §10.9: coalescing により単一 REQUEST_ERROR で
             // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する
-            for (const [updateId, pendingUpdate] of this.pendingRequestUpdate) {
-              if (pendingUpdate.targetRequestId === publishRequestId) {
-                this.pendingRequestUpdate.delete(updateId);
-                pendingUpdate.reject(error);
-              }
-            }
+            bidi.rejectPendingRequestUpdates(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+              error,
+            );
             continue;
           }
           // 未知のメッセージタイプは PROTOCOL_VIOLATION

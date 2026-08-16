@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-16
 - Branch: feature/fix-goaway-pending-request-update-cleanup
 - Polished: 2026-08-16
 
@@ -42,4 +42,9 @@ GOAWAY 受信前に送信済みで応答待ちの REQUEST_UPDATE の Promise (`p
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` の `bidiReadRequestStreamMessages` の GOAWAY ケースに、`rejectPendingRequestUpdates` (RequestError + GOING_AWAY + REQUEST_GOING_AWAY_REASON) を追加し、GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE を失敗として扱った。GOAWAY 後の読み取り継続中に REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため二重解決しない。
+- `src/session.ts` の `runPublishStreamSubLoop` (受信 PUBLISH 経路) の GOAWAY ケースにも同様の掃除を追加した。既存の REQUEST_ERROR ケースのインライン実装も `bidi.rejectPendingRequestUpdates` に置き換えて重複を排除した。
+- GOAWAY ケースの旧ストリーム終了処理 (goawayCallback 呼び出し + pending 掃除 + writer.close()) を `closeOldRequestStreamOnGoaway` ヘルパーに抽出した。アプリの goawayCallback が throw しても掃除と close() が実行されるよう try/catch で黙殺する。
+- `bidiSendRequestUpdate` に write 失敗時のエントリ削除と、登録 Promise の無観測 reject 抑制 (`promise.catch`) を追加し、GOAWAY 掃除やセッション close との競合で unhandled rejection を生まないようにした。controlWriter チェックもエントリ登録前に移動した。
+- `REQUEST_GOING_AWAY_REASON` を export に変更した。
+- テスト: `src/session/bidi.test.ts` に subscribe ロールの GOAWAY で reject + 二重解決しない (Forward State 誤反映なし) / goawayCallback throw 時の掃除継続 / write 失敗時のエントリ削除を追加。`src/session.test.ts` に受信 PUBLISH ストリームの GOAWAY で reject を追加。
