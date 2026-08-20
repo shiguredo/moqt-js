@@ -4,7 +4,7 @@
 - Created: 2026-08-13
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-subgroup-header-publisher-priority-required
-- Polished: 2026-08-16
+- Polished: 2026-08-20
 - Updated: 2026-08-15
 
 ## 目的
@@ -14,16 +14,16 @@ draft-ietf-moq-transport-19 §11.4.2 の Subgroup Header で、DEFAULT_PRIORITY 
 ## 現状
 
 - `encodeSubgroupHeader` (`src/dataStream.ts`) は `if (hasPriorityPresent(header.type) && header.publisherPriority !== undefined)` の条件で、Priority present の型で publisherPriority が undefined の場合にフィールドを黙って省略する。
-- これはワイヤ形式の違反 (Priority present なのに Priority フィールドが無い) である。デコード側 (`decodeSubgroupHeader`) は Priority バイトを無条件に 1 バイト消費するため、欠落時は後続バイト (Object ID Delta の先頭等) が Priority として誤読されてフィールドずれが生じる (データ次第でデコードエラーになるか誤った値として成立する)。
+- これはワイヤ形式の違反 (Priority present なのに Priority フィールドが無い) である。デコード側 (`decodeSubgroupHeader`) は Priority Present な型では存在確認なしに Priority バイトを 1 バイト消費するため、欠落時は後続バイト (Object ID Delta の先頭等) が Priority として誤読されてフィールドずれが生じる (データ次第でデコードエラーになるか誤った値として成立する)。
 - 送信経路 (`src/session/publish.ts` は `params.priority ?? 128` で値を補う) では現実に発生しないが、ライブラリの公開関数として不正入力を検出できない。
 - `encodeObjectDatagram` (`src/dataStream.ts`) は同条件で `publisherPriority is required when Priority Present bit is set` を throw しており、`encodeSubgroupHeader` のみ非対称。
-- 変更対象ファイル: `src/dataStream.ts` (`encodeSubgroupHeader`)、`src/dataStream.subgroup.test.ts` (テスト追加)、`CHANGES.md`。
+- 変更対象ファイル: `src/dataStream.ts` (`encodeSubgroupHeader`)、`src/dataStream.subgroup.test.ts` (テスト追加・既存テスト修正)、`CHANGES.md`。
 
 ## 設計方針
 
-- `encodeSubgroupHeader` で Priority present の型に publisherPriority が undefined の場合、`encodeObjectDatagram` と同じ文言の英語エラーメッセージ (`publisherPriority is required when Priority Present bit is set`) で `Error` を throw する。
+- `encodeSubgroupHeader` で Priority Present ありの型 (0x10-0x1D、FIRST_OBJECT ビット付きの 0x50-0x5D を含む) に publisherPriority が undefined の場合、`encodeObjectDatagram` と同じ文言の英語エラーメッセージ (`publisherPriority is required when Priority Present bit is set`) で `Error` を throw する。
 - Priority present なしの型 (0x30-0x3D / 0x70-0x7D) は従来どおり publisherPriority をワイヤ上にエンコードしない (インターフェイスの `publisherPriority?` は省略可能のまま維持する)。
-- 既存テスト `src/dataStream.subgroup.test.ts` の「SubgroupHeader: Priority なしをエンコード」は Priority present の型 (BASE / 0x10) で publisherPriority なしをエンコードしており、本変更で throw するため、テストの修正 (NO_PRIORITY 型への変更または throw 検証への変更) が必要である。
+- 既存テスト `src/dataStream.subgroup.test.ts` の「SubgroupHeader: Priority なしをエンコード」は Priority present の型 (BASE / 0x10) で publisherPriority なしをエンコードしており、本変更で throw するため、**throw 検証への変更**を採用する (no-priority 型のエンコード挙動は既存の roundtrip テストでカバー済みのため、テストを throw 検証に変えることで完了条件 1・2 の両方を充足できる)。
 
 ## 完了条件
 
