@@ -3,7 +3,7 @@
 - Created: 2026-08-10
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-namespace-goaway-send-direction-close
-- Polished: 2026-08-16
+- Polished: 2026-08-20
 
 ## 目的
 
@@ -15,22 +15,24 @@ namespace 系ストリーム (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_N
 - ピアが FIN も GOING_AWAY リセットも送らない場合、namespaceSubscriptions / tracksSubscriptions / namespacePublications の Map エントリと streamReader ロックがセッション close まで残る。
 - 一方、bidi の subscribe ロール (bidiReadRequestStreamMessages) は GOAWAY 受信時に `streamInfo.writer.close()` で送信方向を FIN する。namespace ループには同様の FIN 送信がない。
 - 0372 の設計方針は「送信方向はアプリの再発行に委ね、受信方向の読み取りを継続する」としていたが、§10.4 SHOULD の観点で FIN 送信が望ましい。
-- なお、本修正 (送信方向 FIN) は Map エントリと streamReader ロックの残留を直接解消しない (受信方向は読み取り継続のままであり、ピアが FIN / GOING_AWAY を送らない限りエントリは残る。0372 がこの残留を許容済み)。
 
 ## 設計方針
 
 - namespace ループの GOAWAY 受信 (resolved=true) 時も、送信方向を `writer.close()` で FIN し、ピアのストリームクローズ (FIN / GOING_AWAY) を促す。受信方向の読み取り継続は維持する。
-- writer は namespaceSubscriptions / tracksSubscriptions / namespacePublications のエントリから取得する。writer は optional (`NamespaceSubscriptionState` / `TracksSubscriptionState`) または必須 (`NamespacePublicationState`) であり、undefined ガードを付ける。
-- PUBLISH_NAMESPACE ループ (publisher ロール) への FIN 適用は、bidi の publisher ロール (GOAWAY 受信時に FIN を送らずアプリの done() に委ねる) と非対称に見えるが、§3.3.2 の「the publisher of an Established subscription MUST send PUBLISH_DONE, before sending a FIN」は Established subscription 限定であり、namespace publication は subscription ではないため対象外。§10.4 の「e.g. FIN, stream reset, or PUBLISH_DONE」の選択肢に FIN が含まれ、PUBLISH_NAMESPACE への FIN は妥当である。
-- `writer.close()` は局所 try/catch で囲む (0372 のエッジケース (e) の知見)。try/catch なしで置くと close() の reject がループ全体の catch に落ち、catch → finally でループが終了して重複 GOAWAY 検出のための読み取り継続が失われる (goawayReceived 設定の前後に関わらず、catch は読み取り継続を維持しない)。
-- 変更対象ファイル: `src/session/namespaceLoops.ts` (3 ループの GOAWAY ケース)、`src/session/namespaceLoops.test.ts` (テスト追加。テスト基盤 `createNamespaceLoopTestContext` の subscription オブジェクトに writer が含まれていないため、writer の注入が必要)、`CHANGES.md` (既存の 0372 エントリ「namespace 系ループは GOAWAY 後も読み取りを継続し、callbacks.goaway 通知のみを行う」の「のみ」は不正確になるため更新)。
+- `writer.close()` は局所 try/catch で囲み、`await` で実行する（bidi の `closeOldRequestStreamOnGoaway`（`src/session/bidi.ts`）の既存パターン `await streamInfo.writer.close()` に揃える。await しないと close() の reject が局所 try/catch をすり抜けて unhandled rejection になる）。try/catch なしで置くと close() の reject がループ全体の catch に落ち、catch → finally でループが終了して重複 GOAWAY 検出のための読み取り継続が失われる (goawayReceived 設定の前後に関わらず、catch は読み取り継続を維持しない)。
+- writer は namespaceSubscriptions / tracksSubscriptions / namespacePublications のエントリから取得する。writer は optional (`NamespaceSubscriptionState` / `TracksSubscriptionState`) または必須 (`NamespacePublicationState`) であり、undefined ガードを付ける。なお実行時は `src/session.ts` のエントリ生成時に必ず writer が設定されるため、ガードは型起因の防御である。
+- GOAWAY 受信時点で pending の REQUEST_UPDATE がある場合の扱いは変更しない。namespace ループは「GOAWAY 後の REQUEST_ERROR 受信時」または「ストリームクローズ時」に reject する既存設計のままとし、`writer.close()` 追加後も読み取り継続により reject 経路は健在である（bidi の GOAWAY 受信時即時 reject とは非同期だが、挙動を揃える変更は行わない）。
+- アプリの done() / unsubscribe() との二重 close は、既存の局所 try/catch により黙殺される（bidi の二重 close 黙殺パターンと同様）。GOAWAY 時は state を閉じないため、GOAWAY 後にアプリが done() を呼ぶと二重 close になり得るが、実害はない。
+- PUBLISH_NAMESPACE ループ (namespace 系リクエストの requester 側) への FIN 適用は、bidi の Established subscription の publisher ロール (GOAWAY 受信時に FIN を送らずアプリの done() に委ねる) と非対称に見えるが、§3.3.2 の「the publisher of an Established subscription MUST send PUBLISH_DONE, before sending a FIN」は Established subscription 限定であり、namespace publication は subscription ではないため対象外。§10.4 の「e.g. FIN, stream reset, or PUBLISH_DONE」の選択肢に FIN が含まれ、PUBLISH_NAMESPACE への FIN は妥当である。
+- 変更対象ファイル: `src/session/namespaceLoops.ts` (3 ループの GOAWAY ケース)、`src/session/namespaceLoops.test.ts` (テスト追加。テスト基盤 `createNamespaceLoopTestContext` の subscription オブジェクトに writer が含まれていないため、writer の注入が必要)、`CHANGES.md` (既存の 0372 エントリ「namespace 系ループは GOAWAY 後も読み取りを継続し、callbacks.goaway 通知のみを行う」の「のみ」は不正確になるため更新、および本 issue の新規 `[FIX]` エントリ追加。`## develop` は未リリースのため、0372 エントリの文言修正は本 issue の差分に含めてよい)。
+- 実装順序: 0407 (先頭 GOAWAY の許可、resolved=false 対象) を先に実装する。0408 は「0407 の resolved=false 分岐に触れず resolved=true 側へ `writer.close()` を追加」という変更範囲が明確になり、完了条件「resolved=false の GOAWAY (先頭 GOAWAY) の扱いは変更しないこと」の検証も実装後に可能になる。
 
 ## 完了条件
 
 - namespace ループで GOAWAY 受信時 (resolved=true) に送信方向が FIN (writer.close()) で閉じられること。
-- 重複 GOAWAY 検出 (読み取り継続) が維持されること。
+- 重複 GOAWAY 検出 (読み取り継続) が維持されること (`writer.close()` 後も読み取りが継続することを新テストで検証する)。
 - resolved=false の GOAWAY (先頭 GOAWAY) の扱いは変更しないこと (open issue 0407 のスコープ)。
-- 上記を検証するテストがあること (namespaceLoops.test.ts の既存 GOAWAY テスト基盤を使用し、writer 注入により送信方向 FIN を検証。既存の GOAWAY 受信後 REQUEST_ERROR テストによる読み取り継続の維持も検証手段に含む。なおテスト基盤 `createNamespaceLoopTestContext` は namespace / tracks の 2 種のみであり、PUBLISH_NAMESPACE ループの検証には kind: "publication" の基盤拡張または新規テストが必要)。
+- 上記を検証するテストがあること (namespaceLoops.test.ts の既存 GOAWAY テスト基盤を使用し、実 `WritableStream` を writer として注入して送信方向 FIN を検証。検証方法: close() 後の write が reject する、または close() の Promise が resolve することを確認する。モック / スタブは使わない)。あわせて `writer.close()` 後も読み取り継続が維持されること (既存の GOAWAY 受信後 REQUEST_ERROR テストによる読み取り継続の維持も検証手段に含む) を検証する。なおテスト基盤 `createNamespaceLoopTestContext` は namespace / tracks の 2 種のみであり、PUBLISH_NAMESPACE ループの検証には kind: "publication" の基盤拡張または新規テストが必要)。
 - `CHANGES.md` の `## develop` に `[FIX]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
