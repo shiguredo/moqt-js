@@ -3,7 +3,7 @@
 - Created: 2026-08-11
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-subscribe-error-end-not-notified
-- Polished: 2026-08-16
+- Polished: 2026-08-20
 - Updated: 2026-08-15
 
 ## 目的
@@ -20,11 +20,14 @@
 
 ## 設計方針
 
-- **通知の契機**: `bidiReadRequestStreamMessages` の外側 catch で、`toProtocolViolationSessionError` が null を返す (ProtocolViolationError 以外) 場合に subscriber のエラー終了として通知する。通知は subscribe ロール限定とする (publish ロールの catch では通知しない。完了条件の回帰ガードと対応)。このケースの代表例はピアの RESET_STREAM によるストリームエラーであり、プロトコル違反ではないためセッションは閉じない。通知対象の範囲は「ストリームエラー (source: "stream") 限定」にするか「非 ProtocolViolationError 全般」にするかを実装時に確定する (前者は `isPeerStreamError` で絞る。後者の場合、subscribe ロールのデコード失敗 (IncompleteDataError 等) や内部エラーでも通知され、エラー文言が原因誤認になるため、文言は `publisher reset request stream` 固定ではなく汎用化する)。なお 0409 が方式 (b) を選んだ場合、IncompleteDataError は変換されて通知対象から外れるため、挙動が 0409 の実装内容に依存して変わる。
+- **通知の契機**: `bidiReadRequestStreamMessages` の外側 catch で、`toProtocolViolationSessionError` が null を返す (ProtocolViolationError 以外) 場合に subscriber のエラー終了として通知する。通知は subscribe ロール限定とする (publish ロールの catch では通知しない。完了条件の回帰ガードと対応)。このケースの代表例はピアの RESET_STREAM によるストリームエラーであり、プロトコル違反ではないためセッションは閉じない。
+- **通知対象の範囲（既定）**: 「ストリームエラー (source: "stream") 限定」を既定とする (`isPeerStreamError` で絞る)。理由: 完了条件が RESET_STREAM 検出のみであり、非 ProtocolViolationError 全般にすると subscribe ロールのデコード失敗 (IncompleteDataError 等) や内部エラーでも通知され、エラー文言が原因誤認になる。また 0409 の方式 (b) 実装有無で挙動が変わる依存を排除する。エラー文言は FIN 経路 (`publisher closed request stream without PUBLISH_DONE`) と区別できる `publisher reset request stream` に固定する。なお「非 ProtocolViolationError 全般」方式を採る場合は、文言を汎用化し (例: `request stream ended unexpectedly`)、デコード失敗・内部エラーも通知対象になる点を許容する判断が必要である (0409 が方式 (b) を実装した場合、`IncompleteDataError` は PROTOCOL_VIOLATION に変換されて通知対象から外れるため、方式 (b) 実装後のデコード失敗は「非 ProtocolViolationError」ではなくなる点に注意)。
+- **エラーコールバックの throw 吸収**: 通知処理内で error コールバックが throw しても、外側 catch の外へ漏らさない (漏れると `void bidiReadRequestStreamMessages(...)` の fire-and-forget 呼び出しで unhandled rejection になる)。FIN 経路は通知が try 内にあり外側 catch で黙殺されるのに対し、RESET 経路は通知を catch 内で行うため非対称になる。通知処理は try/catch で error コールバックの throw を吸収し、finally で `markClosed()` を必ず実行する。
 - **セッション終了の除外**: ピア起因のセッション終了 (source: "session" のエラー) では通知しない (`isSessionClosedError` で判定)。`transport.closed` ハンドラは sessionState のみ遷移させ subscriber の markClosed を実行しないため、ガード (state が "active" でない場合は通知しない) では抑止できない。通知すると `ConnectCallbacks.close` によるセッション終了通知と二重になる。既存の `runPublishStreamSubLoop` の catch と同じ `isSessionClosedError` の扱いを採用する。
-- **通知方法**: closed issue 0374 の `notifySubscriberFin` を流用するか、同様のガード付きのエラー通知専用処理にするかを実装時に確定する。`notifySubscriberFin` は「FIN 専用」「subscribe ロール専用」と JSDoc に明記されているため、流用する場合は JSDoc の更新が必要。エラー文言は FIN 経路 (`publisher closed request stream without PUBLISH_DONE`) と区別できるものにする (例: `publisher reset request stream`)。
+- **通知方法**: closed issue 0374 の `notifySubscriberFin` を流用するか、同様のガード付きのエラー通知専用処理にするかを実装時に確定する。`notifySubscriberFin` は「subscribe ロール専用」と JSDoc に明記され FIN 経路向けのため、流用する場合は JSDoc の更新が必要 (「FIN 専用」の文言は JSDoc 冒頭の説明からの暗黙読み取りであり、流用時は FIN / RESET 両対応である旨を明記する)。なお `notifySubscriberFin` 本体は `try { handleError } finally { markClosed }` であり **throw を吸収しない** (例外は外へ伝播する) ため、流用する場合は呼び出し側で try/catch で包むか関数本体を変更する必要がある (上記の「エラーコールバックの throw 吸収」要件を満たすため)。エラー文言は上記のとおり FIN 経路と区別する。
 - **ガード**: `notifySubscriberFin` と同様、subscribers に存在しない場合・state が "active" でない場合は通知しない。GOAWAY 受信済みの場合は通知しない (GOAWAY 後の RESET_STREAM は旧ストリームの破壊 = migration の完了であり、§10.4「The GOAWAY message does not impact subscription state」の趣旨と 0374 の確定内容 (GOAWAY 後の FIN は通知しない) に整合)。notifySubscriberFin を流用すると GOAWAY ガードも自動的に適用される。
-- **テスト**: 0374 方式の実 W3C ストリーム注入 (モック不使用) で、RESET_STREAM 相当のエラー終了 (reader.read() が WebTransportError 相当 (`Object.assign(new Error(...), { source: "stream" })`) で reject する。Node テスト環境には WebTransportError グローバルが存在しないため) を再現して error コールバック + state closed を検証する。セッション終了 (source: "session") のテストは、Node テスト環境では `isSessionClosedError` がメッセージフォールバック ("session is closed" / "session closed") に依存するため、reject する Error のメッセージに "session closed" を含めるか、`errors.test.ts` の FakeWebTransportError 方式のグローバル注入が必要。
+- **テスト**: 0374 方式の実 W3C ストリーム注入 (モック不使用) で、RESET_STREAM 相当のエラー終了 (reader.read() が WebTransportError 相当 (`Object.assign(new Error(...), { source: "stream" })`) で reject する。Node テスト環境には WebTransportError グローバルが存在しないため) を再現して error コールバック + state closed を検証する。回帰ガードとして、GOAWAY 受信済み (`goawayReceivedOnRequestStreams` 事前登録) の RESET では通知されないこと、publish ロールの RESET では通知されないこと、error コールバックが throw しても unhandled rejection にならず markClosed されることを検証する。セッション終了 (source: "session") のテストは、Node テスト環境では `isSessionClosedError` がメッセージフォールバック ("session is closed" / "session closed") に依存するため、reject する Error のメッセージに "session closed" を含めるか、`errors.test.ts` の FakeWebTransportError 方式のグローバル注入が必要。
+- **残余リスク (RESET 経路の pending リーク)**: RESET 経路 (catch) では `rejectPendingRequestUpdates` が呼ばれず、`pendingRequestUpdate` がセッション close まで残る。0374 の残余リスク (5) (FIN 経路の pending 未解決は pre-existing gap) と同構図であり、本 issue の対象外として記録のみ行う (open issue 0422 は FIN 経路のみを対象とし RESET 経路は含まない)。
 - 変更対象ファイル: `src/session/bidi.ts` (`bidiReadRequestStreamMessages` の外側 catch / `notifySubscriberFin` または新規ヘルパー)、`src/session/bidi.test.ts` (テスト追加)、`CHANGES.md`。
 
 ## 完了条件
@@ -34,8 +37,10 @@
 - ピア起因のセッション終了 (source: "session") では error コールバックが呼ばれないこと (二重通知の防止)。
 - GOAWAY 受信済みのエラー終了では error コールバックが呼ばれないこと。
 - publish ロールではエラー終了通知が呼ばれないこと (対象ロール限定の回帰ガード)。
+- ストリームエラー (source: "stream") 以外のエラー (source を持たない一般 Error、デコード失敗等) では error コールバックが呼ばれないこと (`isPeerStreamError` ガードの回帰ガード)。
 - 正常な PUBLISH_DONE → FIN 経路は従来どおり end コールバックのみ呼ばれること (closed issue 0374 のテストと整合)。
-- 上記を検証するテストがあること。
+- 公開 API は変更しないこと (`bidiReadRequestStreamMessages` 内部とテストの追加のみ)。
+- 上記を検証するテストがあること (RESET 経路のテストでは error コールバックに渡るエラーメッセージが `publisher reset request stream` であることも assert する)。
 - `CHANGES.md` の `## develop` に `[FIX]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
@@ -46,8 +51,9 @@
 - draft-ietf-moq-transport-19 §5.1.1 (Subscription State Management / 状態破棄の契機)
 - draft-ietf-moq-transport-19 §10.4 (GOAWAY / subscription state への影響なし)
 - 関連: `issues/closed/0374-moqt-draft-19-fin-without-publish-done-not-notified.md`（FIN 経路の終了通知。エラー終了経路は本 issue の対象として記録された）
-- 関連: `issues/0405-bug-subscribe-fin-response.md`（subscribe ロールの FIN 応答。本 issue と同じ `bidiReadRequestStreamMessages` を対象とするため、実装順序・干渉に注意）
+- 関連: `issues/closed/0405-bug-subscribe-fin-response.md`（subscribe ロールの FIN 応答。同じ `bidiReadRequestStreamMessages` を対象としていたが実装済みのため干渉なし）
 - 関連: `issues/0409-bug-publish-stream-request-update-decode-failure.md`（publish ロールの REQUEST_UPDATE デコード失敗。方式 (b) を選んだ場合、外側 catch を同一箇所で変更するため整合に注意）
+- 関連: `issues/0422-bug-fin-path-pending-request-update-leak.md`（FIN 経路の pending REQUEST_UPDATE リーク。RESET 経路は本 issue の残余リスクとして記録）
 
 ## 解決方法
 
