@@ -20,8 +20,10 @@ import { decodeObjectPropertiesTolerant, type Property } from "./properties";
 /**
  * 解決済み Location Filter
  *
- * 相対 Filter（NextGroupStart / LargestObject）は LARGEST_OBJECT で
- * 具体的な Start Location に解決される。未解決時は {0, 0} を使用する。
+ * 相対 Filter（NextGroupStart / LargestObject）は LARGEST_OBJECT から
+ * 具体的な Start Location に解決される（詳細は resolveFilter を参照）。
+ * LARGEST_OBJECT 未受信（コンテンツ未配信）時は {0, 0} から開始する
+ * (draft-ietf-moq-transport-19 Section 5.1.2)。
  */
 export interface ResolvedFilter {
   /** 開始 Location（この Location 以上の Object が通過） */
@@ -34,8 +36,9 @@ export interface ResolvedFilter {
  * LocationFilter を具体的な ResolvedFilter に解決する
  *
  * draft-ietf-moq-transport-19 Section 5.1.2:
- * - NextGroupStart: LARGEST_OBJECT の Group + 1 から開始
- * - LargestObject: LARGEST_OBJECT の Location から開始
+ * - NextGroupStart: LARGEST_OBJECT の Group + 1 から開始。未配信時は {0, 0} から開始
+ * - LargestObject: {LARGEST_OBJECT の Group, LARGEST_OBJECT の Object + 1} から開始。
+ *   未配信時は {0, 0} から開始
  * - AbsoluteStart: 指定された Location から開始
  * - AbsoluteRange: 指定された Location から開始し、End Group = Start.Group + EndGroupDelta
  *
@@ -50,13 +53,33 @@ export function resolveFilter(
     return undefined;
   }
 
-  const resolved = largestLocation ?? { group: 0n, object: 0n };
-
   switch (filter.type) {
     case "NextGroupStart":
-      return { start: { group: resolved.group + 1n, object: 0n }, endGroup: undefined };
+      // 未配信時 (LARGEST_OBJECT 省略) は仕様どおり {0, 0} から開始する。
+      // フォールバック値に +1 を適用すると未配信時に {0, 1} になる罠があるため、
+      // null を先に分岐する
+      if (largestLocation === null) {
+        return { start: { group: 0n, object: 0n }, endGroup: undefined };
+      }
+      return {
+        start: { group: largestLocation.group + 1n, object: 0n },
+        endGroup: undefined,
+      };
     case "LargestObject":
-      return { start: resolved, endGroup: undefined };
+      // NextGroupStart と同様に、未配信時は {0, 0} から開始する
+      if (largestLocation === null) {
+        return { start: { group: 0n, object: 0n }, endGroup: undefined };
+      }
+      // Section 5.1.2: {Largest Object.Group, Largest Object.Object + 1}
+      // §10.12.2.1 の Joining Fetch は End Location を {Joining Location.Group,
+      // Joining Location.Object + 1} と定義し、Note では「the last Object included
+      // in the Joining FETCH response is the Object at the Joining Location」と
+      // 説明される。Fetch は {G, O} まで、Subscribe は {G, O+1} からとなり
+      // 連続・非重複になる
+      return {
+        start: { group: largestLocation.group, object: largestLocation.object + 1n },
+        endGroup: undefined,
+      };
     case "AbsoluteStart":
       return { start: filter.startLocation, endGroup: undefined };
     case "AbsoluteRange":
