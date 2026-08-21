@@ -1,7 +1,7 @@
 # Location Filter の解決が仕様と不一致
 
 - Created: 2026-08-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-22
 - Branch: feature/fix-location-filter-resolution
 - Polished: 2026-08-20
 
@@ -48,4 +48,7 @@ draft-ietf-moq-transport-19 §5.1.2 に基づき、Location Filter の解決ロ�
 
 ## 解決方法
 
-未着手。
+- `src/filter.ts` の `resolveFilter()` を修正した。LargestObject は LARGEST_OBJECT 未受信時 `{0, 0}`・受信済み時 `{Largest Object.Group, Largest Object.Object + 1}`、NextGroupStart は未受信時 `{0, 0}`・受信済み時 `{Largest Object.Group + 1, 0}` を返す。`largestLocation` を null 先に分岐し、フォールバック値への +1 適用による未配信時 `{0, 1}` の罠を回避した。
+- `src/filter.test.ts` の既存テストを新仕様に合わせて更新し、LARGEST_OBJECT = {0, 0} 時の境界テスト（LargestObject → {0, 1} / NextGroupStart → {1, 0}）を追加した。
+- `src/subscriber.test.ts` に結合テストを追加した。実フローと同じ順序（`setLocationFilter` → `setLargestLocation`）と逆順の再適用で、LARGEST_OBJECT と同一 Location のオブジェクトがブロックされ `{Object + 1}` から配信されること、`handleDatagram` 経路も同一の解決済みフィルタを共有することを検証する。NextGroupStart で `{Group + 1, 0}` から配信されることも検証する。
+- `src/filter.ts` の `ResolvedFilter` と `resolveFilter()` の JSDoc、`src/session.ts` の `SubscribeOptions.filter` の説明を修正後の挙動に合わせて更新した。

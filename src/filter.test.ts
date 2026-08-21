@@ -73,7 +73,7 @@ test("resolveFilter: AbsoluteRange で Delta 0 は当該 Group のみ", () => {
 
 /**
  * NextGroupStart は LARGEST_OBJECT の Group + 1 から開始。
- * LARGEST_OBJECT 未受信時は {0, 0} から開始するため Group 1 になる。
+ * LARGEST_OBJECT 未受信（コンテンツ未配信）時は {0, 0} から開始する。
  */
 test("resolveFilter: NextGroupStart は LARGEST_OBJECT の Group + 1", () => {
   const filter: LocationFilter = { type: "NextGroupStart" };
@@ -85,26 +85,50 @@ test("resolveFilter: NextGroupStart は LARGEST_OBJECT の Group + 1", () => {
 });
 
 /**
- * NextGroupStart で LARGEST_OBJECT 未受信時は {1, 0}。
+ * NextGroupStart で LARGEST_OBJECT 未受信時（コンテンツ未配信）は {0, 0} から開始する。
  */
-test("resolveFilter: NextGroupStart で LARGEST_OBJECT 未受信時は Group 1", () => {
+test("resolveFilter: NextGroupStart で LARGEST_OBJECT 未受信時は {0, 0}", () => {
   const filter: LocationFilter = { type: "NextGroupStart" };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
-  assert.equal(result.start.group, 1n);
+  assert.equal(result.start.group, 0n);
   assert.equal(result.start.object, 0n);
 });
 
 /**
- * LargestObject は LARGEST_OBJECT の Location をそのまま start にする。
+ * LargestObject は LARGEST_OBJECT の次のオブジェクト（{Group, Object + 1}）から開始する。
  */
-test("resolveFilter: LargestObject は LARGEST_OBJECT の Location を start にする", () => {
+test("resolveFilter: LargestObject は LARGEST_OBJECT の次のオブジェクトから開始", () => {
   const filter: LocationFilter = { type: "LargestObject" };
   const result = resolveFilter(filter, { group: 7n, object: 2n });
   assert.isDefined(result);
   assert.equal(result.start.group, 7n);
-  assert.equal(result.start.object, 2n);
+  assert.equal(result.start.object, 3n);
   assert.isUndefined(result.endGroup);
+});
+
+/**
+ * LargestObject で LARGEST_OBJECT = {0, 0} 配信済み時は {0, 1} から開始する。
+ */
+test("resolveFilter: LargestObject で LARGEST_OBJECT {0, 0} 時は {0, 1}", () => {
+  const filter: LocationFilter = { type: "LargestObject" };
+  const result = resolveFilter(filter, { group: 0n, object: 0n });
+  assert.isDefined(result);
+  assert.equal(result.start.group, 0n);
+  assert.equal(result.start.object, 1n);
+});
+
+/**
+ * NextGroupStart で LARGEST_OBJECT = {0, 0} のときは {1, 0} から開始する。
+ * 未配信時 = {0, 0} と start が隣接する境界であり、未配信判定を値 ({0, 0}) で
+ * 書く誤りを検出できる。
+ */
+test("resolveFilter: NextGroupStart で LARGEST_OBJECT {0, 0} 時は {1, 0}", () => {
+  const filter: LocationFilter = { type: "NextGroupStart" };
+  const result = resolveFilter(filter, { group: 0n, object: 0n });
+  assert.isDefined(result);
+  assert.equal(result.start.group, 1n);
+  assert.equal(result.start.object, 0n);
 });
 
 /**
