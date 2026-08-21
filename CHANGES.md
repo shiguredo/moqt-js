@@ -668,6 +668,10 @@
   - draft-ietf-moq-transport-18 §10.3.1.3 / §10.3.1.4 に基づき、MAX_AUTH_TOKEN_CACHE_SIZE Setup Option の送受信を追加する
   - トークンサイズ計算（16 bytes + Token Value サイズ）と REGISTER→USE_VALUE フォールバックのヘルパーを追加する
   - @voluntas
+- [FIX] Location Filter の解決ロジックを仕様に合わせる
+  - draft-ietf-moq-transport-19 §5.1.2 に基づき、LargestObject の Start Location を {Largest Object.Group, Largest Object.Object + 1}、NextGroupStart を {Largest Object.Group + 1, 0} とし、LARGEST_OBJECT 未受信時は {0, 0} から開始するように修正する
+  - LARGEST_OBJECT と同一 Location のオブジェクトが購読後に通過して重複配信される問題と、コンテンツ未配信時の subscribe で Group 0 が欠落する問題を解消する
+  - @voluntas
 
 ### misc
 

@@ -409,3 +409,96 @@ test("setRangeFilters: 異なる Property Type は共存する", () => {
   subscriber.handleObject(objectWith04);
   assert.equal(delivered.length, 2);
 });
+
+// ============================================================================
+// Location Filter 再適用のテスト
+// draft-ietf-moq-transport-19 Section 5.1.2 (Location Filters)
+// ============================================================================
+
+/**
+ * 実フローと同じ順序 (SUBSCRIBE 送信時の setLocationFilter → SUBSCRIBE_OK 受信時の
+ * setLargestLocation) で、LargestObject フィルタの Start が
+ * {Largest Object.Group, Largest Object.Object + 1} になることを検証する。
+ * LARGEST_OBJECT と同一 Location のオブジェクトがフィルタを通過して配信される
+ * のは誤り (§5.1.2)。
+ */
+test("Location Filter 再適用: setLargestLocation 後に LARGEST_OBJECT と同一 Location は配信しない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+
+  // SUBSCRIBE 送信時に Location Filter を設定
+  subscriber.setLocationFilter({ type: "LargestObject" });
+  // SUBSCRIBE_OK 受信時に LARGEST_OBJECT = {7, 2} を設定
+  subscriber.setLargestLocation({ group: 7n, object: 2n });
+
+  // LARGEST_OBJECT と同一 Location のオブジェクトはブロックされる
+  subscriber.handleObject(createObject(7n, 2n));
+  assert.equal(delivered.length, 0);
+
+  // {7, 3} 以降のオブジェクトは配信される
+  subscriber.handleObject(createObject(7n, 3n));
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * setLocationFilter の再適用時に resolvedFilterCache が再計算されることを検証する。
+ * 実フロー (SUBSCRIBE 送信時 setLocationFilter → SUBSCRIBE_OK 受信時 setLargestLocation)
+ * とは逆順に設定する防御的組合せであり、setLocationFilter が後から来ても
+ * LARGEST_OBJECT と同一 Location はブロックされ、{Object + 1} から配信される。
+ */
+test("Location Filter 再適用: setLocationFilter 再適用後も LARGEST_OBJECT と同一 Location は配信しない", () => {
+  const delivered: MoqtObject[] = [];
+  const datagrams: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(
+    ["namespace"],
+    "track",
+    0n,
+    0n,
+    (obj) => delivered.push(obj),
+    (obj) => datagrams.push(obj),
+  );
+
+  // setLargestLocation を先に設定してから、setLocationFilter を再適用する
+  subscriber.setLargestLocation({ group: 7n, object: 2n });
+  subscriber.setLocationFilter({ type: "LargestObject" });
+
+  subscriber.handleObject(createObject(7n, 2n));
+  assert.equal(delivered.length, 0);
+
+  subscriber.handleObject(createObject(7n, 3n));
+  assert.equal(delivered.length, 1);
+
+  // handleDatagram 経路も同一の resolvedFilterCache を共有するため、
+  // 同一 Location はブロックされ、{Object + 1} から配信される
+  subscriber.handleDatagram(createObject(7n, 2n));
+  assert.equal(datagrams.length, 0);
+
+  subscriber.handleDatagram(createObject(7n, 3n));
+  // handleDatagram は objectCallback (delivered) へは渡らないことも同時に確認する
+  assert.equal(delivered.length, 1);
+  assert.equal(datagrams.length, 1);
+});
+
+/**
+ * NextGroupStart フィルタの再適用: LARGEST_OBJECT の次の Group ({Group + 1, 0})
+ * から配信されることを検証する。
+ */
+test("Location Filter 再適用: NextGroupStart は LARGEST_OBJECT の次のグループから配信する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+
+  subscriber.setLocationFilter({ type: "NextGroupStart" });
+  subscriber.setLargestLocation({ group: 7n, object: 2n });
+
+  // 同一 Group で LARGEST_OBJECT 以下の Object、および前 Group のオブジェクトはブロックされる
+  subscriber.handleObject(createObject(7n, 2n));
+  assert.equal(delivered.length, 0);
+
+  // 次の Group ({8, 0}) 以降は配信される
+  subscriber.handleObject(createObject(8n, 0n));
+  assert.equal(delivered.length, 1);
+});

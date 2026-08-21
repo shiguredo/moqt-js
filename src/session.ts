@@ -464,8 +464,9 @@ export interface SubscribeOptions {
    * draft-ietf-moq-transport-19 Section 5.1.2, Section 10.2.16
    *
    * どのオブジェクトを受信するかを指定するフィルタ。
-   * - NextGroupStart: 次のグループから開始
-   * - LargestObject: 最新のオブジェクトから開始
+   * - NextGroupStart: 配信済み時は LARGEST_OBJECT の次のグループから開始、
+   *   未配信時は {0, 0} から開始
+   * - LargestObject: 最新オブジェクトの次から開始、未配信時は {0, 0} から開始
    * - AbsoluteStart: 指定した位置から開始（終了なし）
    * - AbsoluteRange: 指定した範囲のオブジェクトのみ
    *
