@@ -672,6 +672,10 @@
   - draft-ietf-moq-transport-19 §5.1.2 に基づき、LargestObject の Start Location を {Largest Object.Group, Largest Object.Object + 1}、NextGroupStart を {Largest Object.Group + 1, 0} とし、LARGEST_OBJECT 未受信時は {0, 0} から開始するように修正する
   - LARGEST_OBJECT と同一 Location のオブジェクトが購読後に通過して重複配信される問題と、コンテンツ未配信時の subscribe で Group 0 が欠落する問題を解消する
   - @voluntas
+- [FIX] 確立前の namespace / tracks ストリームで GOAWAY が先頭に来てもセッションを閉じない
+  - draft-ietf-moq-transport-19 §10.4 に基づき、SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の先頭 GOAWAY を PROTOCOL_VIOLATION にせず、callbacks.goaway 通知と Promise の reject、送信方向の FIN (writer.close()) と受信方向の cancel でリクエストを終了する (§10.18 / §10.19 の先頭メッセージ MUST に対する相互運用緩和)
+  - 確立後 (resolved=true) の GOAWAY は従来どおり読み取りを継続して 2 通目以降の GOAWAY を検出する
+  - @voluntas
 
 ### misc
 

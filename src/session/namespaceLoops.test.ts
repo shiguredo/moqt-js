@@ -29,7 +29,10 @@ import type { SessionInternal } from "./types";
  * ストリーム機構は実物 (ReadableStream + WritableStream) であり、テストは
  * readableController.enqueue でメッセージを注入する。
  */
-function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
+function createNamespaceLoopTestContext(
+  kind: "namespace" | "tracks",
+  onCancel?: () => void,
+): {
   session: SessionInternal;
   requestId: bigint;
   readableController: ReadableStreamDefaultController<Uint8Array>;
@@ -38,6 +41,8 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     state: "active" | "closed";
     namespacePrefix: string[];
     pendingPrefix?: string[];
+    callbacks: { goaway?: (uri: string) => void };
+    writer: WritableStreamDefaultWriter<Uint8Array>;
   };
   getClosedWithError: () => SessionError | undefined;
 } {
@@ -48,14 +53,22 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     start(controller) {
       readableController = controller;
     },
+    cancel() {
+      onCancel?.();
+    },
   });
   const streamReader = readable.getReader();
   const controlReader = new ControlStreamReader();
+
+  // 送信方向 (writer) は実 WritableStream で検証する
+  const writable = new WritableStream<Uint8Array>();
+  const writer = writable.getWriter();
 
   const subscription = {
     callbacks: {},
     state: "active" as const,
     namespacePrefix: ["live"],
+    writer,
   };
 
   let closedWithError: SessionError | undefined;
@@ -440,6 +453,112 @@ test("namespaceStartNamespaceStreamLoop: GOAWAY 受信後の REQUEST_ERROR で�
   assert.isUndefined(ctx.getClosedWithError());
 });
 
+// draft-ietf-moq-transport-19 §10.4:
+// "A GOAWAY MAY also be sent on a request stream to initiate migration of
+//  that individual request."
+// 確立前 (resolved=false) の先頭 GOAWAY は PROTOCOL_VIOLATION にせず、
+// マイグレーション通知 + Promise の reject + 受信方向の cancel で処理する。
+test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY はセッションを閉じず goaway 通知と reject を行う", async () => {
+  let cancelCalled = false;
+  const ctx = createNamespaceLoopTestContext("namespace", () => {
+    cancelCalled = true;
+  });
+
+  let goawayUri = "";
+  ctx.subscription.callbacks.goaway = (uri: string) => {
+    goawayUri = uri;
+  };
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // REQUEST_OK を受信する前に GOAWAY が先頭メッセージとして届く
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  await readPromise;
+
+  // GOAWAY 処理 (通知 + FIN + reject + cancel) が行われ、セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(goawayUri, "moqt://new.example.com");
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "request stream goaway: moqt://new.example.com");
+  // 送信方向は FIN (writer.close()) で閉じられる (§10.4 SHOULD)
+  await ctx.subscription.writer.closed;
+  // 受信方向は cancel されて閉じられる
+  assert.isTrue(cancelCalled);
+});
+
+test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY と後続メッセージが同一チャンクでも reject のみでループが終了する", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  let rejectCalled = false;
+  let resolveCalled = false;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolveCalled = true;
+    },
+    () => {
+      rejectCalled = true;
+    },
+  );
+
+  // GOAWAY と REQUEST_OK を同一チャンク (連結フレーム) で注入する
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  const goawayFrame = ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload);
+  const okFrame = requestOkMessage(ctx.controlWriter);
+  const combined = new Uint8Array(goawayFrame.length + okFrame.length);
+  combined.set(goawayFrame, 0);
+  combined.set(okFrame, goawayFrame.length);
+  ctx.readableController.enqueue(combined);
+  await readPromise;
+
+  // GOAWAY の reject 後に後続 REQUEST_OK へ発火しないことを検証する
+  assert.isTrue(rejectCalled);
+  assert.isFalse(resolveCalled);
+});
+
+test("namespaceStartNamespaceStreamLoop: 先頭メッセージガードは GOAWAY 以外のメッセージを PROTOCOL_VIOLATION にする", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 先頭メッセージに GOAWAY 以外のメッセージ (NAMESPACE) を注入する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.NAMESPACE, new Uint8Array([0x01])),
+  );
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx
+      .getClosedWithError()!
+      .message.includes("expected REQUEST_OK, REQUEST_ERROR, or GOAWAY as first message"),
+  );
+});
+
 // ============================================================================
 // namespaceStartTracksStreamLoop の REQUEST_UPDATE 応答処理
 // ============================================================================
@@ -568,5 +687,111 @@ test("namespaceStartTracksStreamLoop: 保留中の更新が無い REQUEST_ERROR 
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("received REQUEST_ERROR after REQUEST_OK"),
+  );
+});
+
+// draft-ietf-moq-transport-19 §10.4:
+// "A GOAWAY MAY also be sent on a request stream to initiate migration of
+//  that individual request."
+// 確立前 (resolved=false) の先頭 GOAWAY は PROTOCOL_VIOLATION にせず、
+// マイグレーション通知 + Promise の reject + 受信方向の cancel で処理する。
+test("namespaceStartTracksStreamLoop: 先頭 GOAWAY はセッションを閉じず goaway 通知と reject を行う", async () => {
+  let cancelCalled = false;
+  const ctx = createNamespaceLoopTestContext("tracks", () => {
+    cancelCalled = true;
+  });
+
+  let goawayUri = "";
+  ctx.subscription.callbacks.goaway = (uri: string) => {
+    goawayUri = uri;
+  };
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // REQUEST_OK を受信する前に GOAWAY が先頭メッセージとして届く
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  await readPromise;
+
+  // GOAWAY 処理 (通知 + FIN + reject + cancel) が行われ、セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(goawayUri, "moqt://new.example.com");
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "request stream goaway: moqt://new.example.com");
+  // 送信方向は FIN (writer.close()) で閉じられる (§10.4 SHOULD)
+  await ctx.subscription.writer.closed;
+  // 受信方向は cancel されて閉じられる
+  assert.isTrue(cancelCalled);
+});
+
+test("namespaceStartTracksStreamLoop: 先頭 GOAWAY と後続メッセージが同一チャンクでも reject のみでループが終了する", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  let rejectCalled = false;
+  let resolveCalled = false;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolveCalled = true;
+    },
+    () => {
+      rejectCalled = true;
+    },
+  );
+
+  // GOAWAY と REQUEST_OK を同一チャンク (連結フレーム) で注入する
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  const goawayFrame = ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload);
+  const okFrame = requestOkMessage(ctx.controlWriter);
+  const combined = new Uint8Array(goawayFrame.length + okFrame.length);
+  combined.set(goawayFrame, 0);
+  combined.set(okFrame, goawayFrame.length);
+  ctx.readableController.enqueue(combined);
+  await readPromise;
+
+  // GOAWAY の reject 後に後続 REQUEST_OK へ発火しないことを検証する
+  assert.isTrue(rejectCalled);
+  assert.isFalse(resolveCalled);
+});
+
+test("namespaceStartTracksStreamLoop: 先頭メッセージガードは GOAWAY 以外のメッセージを PROTOCOL_VIOLATION にする", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 先頭メッセージに GOAWAY 以外のメッセージ (PUBLISH_SKIPPED) を注入する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.PUBLISH_SKIPPED, new Uint8Array([0x01])),
+  );
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx
+      .getClosedWithError()!
+      .message.includes("expected REQUEST_OK, REQUEST_ERROR, or GOAWAY as first message"),
   );
 });
