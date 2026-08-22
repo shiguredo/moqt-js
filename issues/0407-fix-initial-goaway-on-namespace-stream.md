@@ -1,7 +1,7 @@
 # 確立前の namespace / tracks ストリームで GOAWAY が先頭メッセージだと PROTOCOL_VIOLATION になる
 
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-22
 - Branch: feature/fix-initial-goaway-on-namespace-stream
 - Polished: 2026-08-20
 
@@ -21,7 +21,7 @@ SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭メッセージ�
 ## 設計方針
 
 - 先頭メッセージガードで GOAWAY を許可し、GOAWAY ケースへ流す。
-- GOAWAY ケースには resolved=false の分岐を追加する (namespaceStartPublicationStreamLoop の既存実装と同構造)。resolved=false のときは `namespaceHandleGoaway` による callbacks.goaway 通知 → Promise の reject (`Error("request stream goaway: <uri>")`) → 受信方向の `streamReader.cancel()` → ループ終了とする。reject 後に読み取りを継続しないのは、reject 済みリクエストに後続の REQUEST_OK 等が発火して矛盾した通知が発生するのを防ぐためである。送信方向 (writer) は publication ループの既存実装と同様に閉じない (§10.4 の SHOULD「close the old request stream using the appropriate mechanism」はアプリの再発行 (re-issue) を前提としており、送信方向はアプリの再発行に委ねる)。
+- GOAWAY ケースには resolved=false の分岐を追加する。resolved=false のときは `namespaceHandleGoaway` による callbacks.goaway 通知 → 送信方向の `writer.close()` (FIN) → Promise の reject (`Error("request stream goaway: <uri>")`) → 受信方向の `streamReader.cancel()` → ループ終了とする。reject 後に読み取りを継続しないのは、reject 済みリクエストに後続の REQUEST_OK 等が発火して矛盾した通知が発生するのを防ぐためである。送信方向 (writer) は §10.4 の SHOULD「close the old request stream using the appropriate mechanism (e.g. FIN, stream reset, or PUBLISH_DONE)」に従い `writer.close()` (FIN) で閉じる (確立前はアプリにサブスクリプションハンドルが渡らないため、リクエストストリームを片付けられるのはループ自身となる)。`writer.close()` は局所 try/catch で包み、アプリの done() / unsubscribe() との二重 close を黙殺する。
 - resolved=true 側の挙動 (goawayReceived フラグ + 読み取り継続、0372 の実装) は既に実装済みであり変更しない。新規実装は「先頭ガードの GOAWAY 許可」「2 ループの GOAWAY ケースへの resolved=false 分岐追加」「先頭メッセージガードのエラーメッセージ文言更新」のみ。
 - 先頭メッセージガードのエラーメッセージ ("expected REQUEST_OK or REQUEST_ERROR as first message ...") は、GOAWAY 許可後に実際に許されるメッセージ (REQUEST_OK / REQUEST_ERROR / GOAWAY) と整合する文言 (例: "expected REQUEST_OK, REQUEST_ERROR, or GOAWAY as first message on namespace stream, got 0x..." / "... on tracks stream, got 0x...") に更新する (ガードに引っかかった際のログが実態と乖離しないようにするため)。
 - 先頭 GOAWAY 受信時は reject + cancel + return でループが即終了するため、その後に届く 2 通目 GOAWAY は検出されない。これは §10.4 の MUST「The endpoint MUST close the session with a PROTOCOL_VIOLATION ... if it receives more than one GOAWAY on ... a single request stream」の確立前経路における未達として許容する (0372 のエッジケース (h) が「確立前経路の GOAWAY 2 通目はスコープ外 (残余リスク)」と明記したのと同じ扱い)。
@@ -31,7 +31,7 @@ SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭メッセージ�
 
 ## 完了条件
 
-- SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭に GOAWAY が来てもセッションが閉じず、`callbacks.goaway` が通知され、Promise が reject され受信方向が cancel されること (resolved=false の場合)。
+- SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭に GOAWAY が来てもセッションが閉じず、`callbacks.goaway` が通知され、Promise が reject され、送信方向が FIN (`writer.close()`)、受信方向が cancel されること (resolved=false の場合)。
 - resolved=true の GOAWAY は従来どおり goawayReceived フラグ + 読み取り継続で処理されること。
 - 先頭メッセージガードのエラーメッセージ文言の更新 ("expected REQUEST_OK, REQUEST_ERROR, or GOAWAY ...") が反映され、既存の guard 発火テストが更新後の文言に整合していること。
 - 上記を検証するテストがあること (namespaceLoops.test.ts の既存 GOAWAY テスト基盤を使用)。
@@ -48,4 +48,8 @@ SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭メッセージ�
 
 ## 解決方法
 
-未着手。
+- `src/session/namespaceLoops.ts` の `namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop` に、確立前 (resolved=false) の先頭 GOAWAY を許可する処理を追加した。判定は `isNamespaceFirstMessageAllowed` ヘルパー (REQUEST_OK / REQUEST_ERROR / GOAWAY) に集約し、先頭メッセージガードのエラーメッセージも「expected REQUEST_OK, REQUEST_ERROR, or GOAWAY ...」に更新した。
+- GOAWAY 受信時の resolved=false 分岐は `rejectNamespaceGoaway` ヘルパーに集約した。callbacks.goaway 通知後、送信方向を FIN (`writer.close()`、局所 try/catch で二重 close を黙殺) で閉じ、Promise を reject (`request stream goaway: <uri>`) し、受信方向を `streamReader.cancel()` で閉じてループを終了する。reject 済みリクエストに後続メッセージが発火しないようにするためである。
+- 確立後 (resolved=true) の挙動 (goawayReceived フラグ + 読み取り継続 + 2 通目 GOAWAY 検出) は変更していない。確立前経路で 2 通目 GOAWAY が検出されないことは設計判断として許容した (referenced 0372 のエッジケース (h) と同じ扱い)。
+- `src/session/namespaceLoops.test.ts` にテストを追加した。実際の `ReadableStream` / `WritableStream` で cancel / writer.close() を検証する「先頭 GOAWAY はセッションを閉じず goaway 通知・FIN・reject・cancel を行う」(namespace / tracks 各 1 件)、GOAWAY と REQUEST_OK が同一チャンクで届いても reject のみでループが終了する「同一チャンク」テスト (各 1 件)、先頭メッセージガードが GOAWAY 以外を PROTOCOL_VIOLATION にするテスト (各 1 件)。
+- `CHANGES.md` の `## develop` に `[FIX]` エントリを追加した (§10.18 / §10.19 の先頭メッセージ MUST に対する相互運用緩和の位置づけを含む)。
