@@ -22,6 +22,10 @@
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
   - fetch() に peer MAX_FILTER_RANGES ガードを追加する
   - @voluntas
+- [UPDATE] 依存ライブラリを最新版に更新する
+  - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
+  - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
+  - @voluntas
 - [FIX] GOAWAY 受信時に応答待ちの REQUEST_UPDATE がクリーンアップされないのを修正する
   - draft-ietf-moq-transport-19 §10.4 に基づき、bidiReadRequestStreamMessages / runPublishStreamSubLoop の GOAWAY 受信時に、当該 requestId を targetRequestId とする保留中の REQUEST_UPDATE を REQUEST_ERROR (GOING_AWAY) で reject してエントリを削除する
   - GOAWAY 後の読み取り継続中に REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため二重解決しない
