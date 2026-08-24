@@ -97,6 +97,12 @@ export default defineConfig({
     },
     rules: {
       // ===== eslint: プロジェクト特性上無効化 =====
+      // const 値と type の同名宣言 (`const X = {} as const` + `type X = ...`) は
+      // TypeScript の値と型の名前空間分離によって意図的に成立させるため無効化
+      "no-redeclare": "off",
+      // 複数の const 宣言を 1 文に結合することを強制するルール。プロトコル実装では
+      // エンコード処理を仕様と 1 対 1 で対応させるため宣言を 1 行 1 つに保つので無効化
+      "one-var": "off",
       // プロトコル実装でバイトオフセット・サイズ指定・ビットマスク等に数値リテラルが必須
       "no-magic-numbers": "off",
       // 三項演算子は可読性を損なわない範囲で使用
