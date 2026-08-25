@@ -1,10 +1,11 @@
 /**
- * LOC Track Property Scope Unit Tests
- * draft-ietf-moq-loc-04 Table 1 (TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG: Scope Track, Object)
+ * LOC Properties (Track / Object Scope) Unit Tests
+ * draft-ietf-moq-loc-04 Table 1 (TIMESTAMP 0x10 / TIMESCALE 0x08 / VIDEO_FRAME_MARKING 0x09 /
+ * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F)
  *
- * LOC Properties を Track Property としても扱えるようにする経路を検証する。
- * Track Properties も Object Properties も delta 符号化
- * (draft-ietf-moq-transport-19 §1.4.3 / §11.2.1.2 の Key-Value-Pairs) を使用する。
+ * LOC Properties を Track Property と Object Property の両方で扱う経路、および
+ * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-19
+ * §1.4.3 / §11.2.1.2）のワイヤ形式・寛容デコード・合成経路を検証する。
  * 単体エンコーダ / デコーダ（encodeTimestamp 等）は単一 Property 用の絶対 Type ワイヤであり、
  * 複数 Property のワイヤは encode*Properties / decode*Properties が担う。
  */
@@ -15,6 +16,7 @@ import {
   encodeVideoProperties,
   encodeAudioProperties,
   encodeTimestamp,
+  encodeTimescale,
   encodeVideoFrameMarking,
   encodeAudioLevel,
   encodeVideoConfig,
@@ -141,6 +143,41 @@ test("resolveAudioProperties: 両方（Object 優先）", () => {
   assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
 });
 
+// track 入力に Object スコープ専用の ID が現れても抽出しない (draft-ietf-moq-loc-04 Table 1 の scope)。
+test("resolveVideoProperties: Track に Object スコープの ID を含めても抽出しない", () => {
+  const trackProperties: Property[] = [
+    { id: LOCPropertyId.TIMESTAMP, value: 5n },
+    { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array([0xe8, 0x00]) },
+    { id: LOCPropertyId.TIMESCALE, value: 90000n },
+  ];
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.isUndefined(resolved.timestamp);
+  assert.isUndefined(resolved.frameMarking);
+  assert.equal(resolved.timescale, 90000n);
+});
+
+test("resolveAudioProperties: Track に Object スコープの ID を含めても抽出しない", () => {
+  const trackProperties: Property[] = [
+    { id: LOCPropertyId.TIMESTAMP, value: 5n },
+    { id: LOCPropertyId.AUDIO_LEVEL, value: 50n },
+    { id: LOCPropertyId.TIMESCALE, value: 48000n },
+  ];
+  const resolved = resolveAudioProperties(trackProperties, undefined);
+  assert.isUndefined(resolved.timestamp);
+  assert.isUndefined(resolved.audioLevel);
+  assert.equal(resolved.timescale, 48000n);
+});
+
+// Object と Track の両方が同一 Property を持つ場合は Object 優先 (Track フォールバックの写像)。
+test("resolveVideoProperties: Object と Track の両方が config を持つ場合は Object を優先する", () => {
+  const trackProperties: Property[] = [
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0a]) },
+  ];
+  const objectProperties = encodeVideoProperties({ config: new Uint8Array([0x0b]) });
+  const resolved = resolveVideoProperties(trackProperties, objectProperties);
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
+});
+
 // ==========================================================================
 // 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-19 §1.4.3 / §11.2.1.2)
 // ==========================================================================
@@ -181,6 +218,16 @@ test("encodeAudioProperties: config 単体のワイヤは encodeAudioConfig と�
   assert.deepEqual(Array.from(viaProps), Array.from(encodeAudioConfig(config)));
 });
 
+test("encodeVideoProperties: timescale 単体のワイヤは encodeTimescale とビット一致する", () => {
+  const viaProps = encodeVideoProperties({ timescale: 48000n });
+  assert.deepEqual(Array.from(viaProps), Array.from(encodeTimescale(48000n)));
+});
+
+test("encodeAudioProperties: timescale 単体のワイヤは encodeTimescale とビット一致する", () => {
+  const viaProps = encodeAudioProperties({ timescale: 44100n });
+  assert.deepEqual(Array.from(viaProps), Array.from(encodeTimescale(44100n)));
+});
+
 // 複数 Property: ID 昇順ソート後に delta 連鎖し、2 番目以降の Delta Type が前 ID との差分になる。
 // timestamp (0x10) + frameMarking (0x09) → frameMarking が先頭になり、Delta Type は 0x09, 0x07。
 test("encodeVideoProperties: timestamp + frameMarking のワイヤは delta 形式（Delta Type 0x09, 0x07）になる", () => {
@@ -193,7 +240,6 @@ test("encodeVideoProperties: timestamp + frameMarking のワイヤは delta 形�
   assert.deepEqual(Array.from(encoded), [0x09, 0x02, 0xe8, 0x00, 0x07, 0x84, 0xd2]);
 });
 
-// audioLevel (0x0C) + timestamp (0x10): Delta Type は 0x0C, 0x04。
 test("encodeAudioProperties: timestamp + audioLevel のワイヤは delta 形式（Delta Type 0x0C, 0x04）になる", () => {
   const encoded = encodeAudioProperties({
     timestamp: 42n,
@@ -225,20 +271,23 @@ test("decodeAudioProperties: 仕様準拠の delta KVP 固定バイト列をデ�
 });
 
 // 不正な delta / 不正な Length を含む Object Properties で PROTOCOL_VIOLATION を送出せず、
-// 抽出できたフィールドのみを設定して配信を継続する (0360 と同じ寛容性)。
+// 抽出できたフィールドのみを設定して配信を継続する (delta 連鎖の寛容解釈)。
+// 途中で壊れた場合は先行値のみ保持され、先頭から壊れた場合は全て未設定になる。
 test("decodeVideoProperties: 不正な Length の後続 Property でも PROTOCOL_VIOLATION を送出せず、先行値のみ保持する", () => {
   // timescale (0x08) は正常、後続の frameMarking (0x09) が Length=10 を宣言するが
-  // Value は 1 バイトしかない (不完全な delta KVP)。delta は前 Property との差分で
-  // 連鎖するため、途中で壊れると後続 Property は抽出されない。
-  const wire = new Uint8Array([0x08, 0x80, 0x80, 0x09, 0x0a, 0xe8]);
+  // Value は 1 バイトしかない (不完全な delta KVP)。frameMarking の Delta Type は
+  // 0x09 - 0x08 = 0x01。
+  const wire = new Uint8Array([0x08, 0x80, 0x80, 0x01, 0x0a, 0xe8]);
   const decoded = decodeVideoProperties(wire);
   assert.equal(decoded.timescale, 128n);
   assert.isUndefined(decoded.timestamp);
   assert.isUndefined(decoded.frameMarking);
 });
 
-test("decodeVideoProperties: 単一の不正な delta でも PROTOCOL_VIOLATION を送出せず、フィールドを空にする", () => {
-  // 先頭がダミー Property (Length=10 宣言 + Value 1 バイト) のみの不完全な delta KVP
+test("decodeVideoProperties: 先頭 Property の Length 宣言が切り詰まれた delta KVP でも PROTOCOL_VIOLATION を送出せず、フィールドを空にする", () => {
+  // 先頭 Property (delta 0x09 → VIDEO_FRAME_MARKING) が Length=10 を宣言するが
+  // Value は 1 バイトしかない (不完全な delta KVP)。この時点で抽出は全滅するため
+  // 全てのフィールドが未設定になる。
   const wire = new Uint8Array([0x09, 0x0a, 0xe8]);
   const decoded = decodeVideoProperties(wire);
   assert.isUndefined(decoded.timestamp);
@@ -247,18 +296,14 @@ test("decodeVideoProperties: 単一の不正な delta でも PROTOCOL_VIOLATION 
   assert.isUndefined(decoded.config);
 });
 
-test("decodeVideoProperties: VIDEO_FRAME_MARKING の Value が不正 (Length=5) なら frameMarking 未設定", () => {
-  // 単一 Property: Delta Type 0x09, Length 5, Value 5 バイト
-  const wire = new Uint8Array([0x09, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]);
-  const decoded = decodeVideoProperties(wire);
-  assert.isUndefined(decoded.frameMarking);
-});
-
-test("decodeVideoProperties: VIDEO_FRAME_MARKING の Value が不正 (Length=0) なら frameMarking 未設定", () => {
-  // 単一 Property: Delta Type 0x09, Length 0
-  const wire = new Uint8Array([0x09, 0x00]);
-  const decoded = decodeVideoProperties(wire);
-  assert.isUndefined(decoded.frameMarking);
+test("decodeAudioProperties: 後続 Property が不完全でも PROTOCOL_VIOLATION を送出せず、先行値のみ保持する", () => {
+  // audioLevel (0x0C) は正常、後続の未知奇数 ID (0x0C + 0x05 = 0x11) が Length=10 を宣言するが
+  // Value は 1 バイトしかない (不完全な delta KVP)。
+  const wire = new Uint8Array([0x0c, 0x80, 0xb2, 0x05, 0x0a, 0xe8]);
+  const decoded = decodeAudioProperties(wire);
+  assert.deepEqual(decoded.audioLevel, { level: 50, voiceActivity: true });
+  assert.isUndefined(decoded.timestamp);
+  assert.isUndefined(decoded.config);
 });
 
 // GREASE Property と LOC Property が混在した delta KVP から LOC フィールドのみ抽出する。
