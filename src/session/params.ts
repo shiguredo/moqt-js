@@ -36,6 +36,91 @@ function validateNonNegative(value: bigint, name: string): void {
 }
 
 /**
+ * Range Filter を区別するキーを生成する
+ *
+ * 同一型 (0x25–0x29) で SetID / Property Type が異なるエントリは
+ * draft-ietf-moq-transport-19 §5.1.3 の「MAY appear multiple times」に従い
+ * 別エントリとして扱う。マージ・反映・検証の各経路で同一のキーを使い、
+ * 結果の一致を構造的に保証する。
+ */
+export function rangeFilterKey(spec: RangeFilterSpec): string {
+  if ("remove" in spec) {
+    // remove エントリはマージ結果に保存されない (型単位の削除) が、
+    // 型の網羅性のための分岐
+    return `${spec.type}:remove`;
+  }
+  return `${spec.type}:${spec.setId}:${spec.propertyType ?? ""}`;
+}
+
+/**
+ * Range Filter パラメータの「削除・置換・不変」マージ
+ *
+ * draft-ietf-moq-transport-19 §5.1.3 (Range Filters):
+ * "In REQUEST_UPDATE, Length can be 0 to remove a filter parameter or
+ *  non-zero to replace that entire filter parameter including all sets and
+ *  Property Types. If a filter parameter is omitted from REQUEST_UPDATE,
+ *  the value is unchanged." に従う:
+ * - update に remove (Length=0): 当該パラメータ型 (0x25–0x29) 全体を削除
+ * - update に非 remove エントリ: 当該パラメータ型全体を置換 (他の型は不変)
+ * - update に現れない型: 不変
+ *
+ * 同一型の複数エントリ (異なる SetID / Property Type) は MAY appear multiple
+ * times に従い保持される。同一 update 内で同型の remove と非 remove が
+ * 混在する場合、最終効果は置換 (非 remove 優先) になる (仕様では挙動が
+ * 定義されていないため、既存挙動を維持する)。
+ * 送信前検証 (MAX_FILTER_RANGES) とフィルタ状態の反映
+ * (SubscriberImpl.setRangeFilters 等) の両経路で同一実装を共有し、
+ * 結果の一致を構造的に保証する。
+ */
+export function mergeRangeFilters(
+  current: RangeFilterSpec[],
+  update: RangeFilterSpec[],
+): RangeFilterSpec[] {
+  // 現在のフィルタを保持し、update で指定された型のみ削除・置換する
+  const next = new Map<string, RangeFilterSpec>();
+  for (const spec of current) {
+    next.set(rangeFilterKey(spec), spec);
+  }
+
+  // remove エントリと非 remove エントリを分離する。
+  // 非 remove エントリに出現する型は「置換」のため、既存の同型エントリを
+  // すべて削除してから、非 remove エントリをまとめて追加する (1 件ずつ
+  // 全削除すると同型の複数エントリが最後の 1 件以外すべて失われるため)。
+  const removedTypes = new Set<string>();
+  const replaceSpecs: RangeFilterSpec[] = [];
+  for (const spec of update) {
+    if ("remove" in spec) {
+      removedTypes.add(spec.type);
+    } else {
+      replaceSpecs.push(spec);
+    }
+  }
+
+  // Length=0 の削除: 当該パラメータ型全体 (全 SetID / Property Type) を削除
+  for (const type of removedTypes) {
+    for (const key of next.keys()) {
+      if (key.startsWith(`${type}:`)) {
+        next.delete(key);
+      }
+    }
+  }
+
+  // 非ゼロ Length の置換: 当該パラメータ型全体を置き換える
+  for (const spec of replaceSpecs) {
+    for (const key of next.keys()) {
+      if (key.startsWith(`${spec.type}:`)) {
+        next.delete(key);
+      }
+    }
+  }
+  for (const spec of replaceSpecs) {
+    next.set(rangeFilterKey(spec), spec);
+  }
+
+  return [...next.values()];
+}
+
+/**
  * ピアの MAX_FILTER_RANGES に対して Range Filter の送信が許可されるかを検証する
  *
  * draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES):
@@ -129,8 +214,9 @@ export function validateRangeFilterSpecs(
     }
 
     // 同一組み合わせ (Type, SetID, [Property Type]) の重複は MUST 拒否 (§5.1.3)
-    // RangeFilterRemove は continue 済みのため、ここでは RangeFilterParam に絞られる
-    const combinationKey = `${spec.type}:${spec.setId}:${spec.propertyType ?? ""}`;
+    // RangeFilterRemove は continue 済みのため、ここでは RangeFilterParam に絞られる。
+    // キーはマージ・反映と共通の rangeFilterKey を使う。
+    const combinationKey = rangeFilterKey(spec);
     if (seenCombinations.has(combinationKey)) {
       throw new Error(`duplicate range filter combination in ${contextName}: ${combinationKey}`);
     }

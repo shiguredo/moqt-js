@@ -820,6 +820,319 @@ test("bidiSendRequestUpdate: Range Filters が MAX_FILTER_RANGES 以内なら th
   assert.isUndefined(thrown);
 });
 
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6 / §5.1.3:
+ * MAX_FILTER_RANGES は「マージ後のフィルタ状態」に対して適用される。
+ * 既存フィルタ (2 Range) と update (1 Range) のマージ後 (3 Range) が
+ * 上限 2 を超える場合、update 単体では合法でも送信前に throw することを
+ * 検証する。
+ */
+test("bidiSendRequestUpdate: 既存フィルタとマージすると MAX_FILTER_RANGES を超える場合に throw する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  // 既存フィルタ (subgroup 2 Range。単体では上限 2 以内)
+  subscriber.setRangeFilters([
+    {
+      type: "subgroup",
+      setId: 0,
+      ranges: [
+        { start: 0n, end: 1n },
+        { start: 3n, end: 4n },
+      ],
+    },
+  ]);
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [
+        {
+          type: "objectId",
+          setId: 0,
+          ranges: [{ start: 5n, end: 6n }],
+        },
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  // throw 時に pending エントリが残らない
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+test("bidiSendRequestUpdate: マージ後の状態が上限以内なら throw しない", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }]);
+
+  let thrown: Error | undefined;
+  try {
+    const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 5n, end: 6n }] }],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isUndefined(thrown);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * 「Parameter values from later REQUEST_UPDATE messages override values from
+ *  earlier ones.」により、in-flight の update (送信順) もマージに含めて
+ * 検証する。in-flight の削除 update が反映されない場合は
+ * subgroup 2 Range + objectId 1 Range = 3 Range (> 2) で超過するケースが、
+ * 削除後は objectId 1 Range で上限以内になることを検証する (判別力を持つ)。
+ */
+test("bidiSendRequestUpdate: in-flight の削除 update がマージに反映される", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setRangeFilters([
+    {
+      type: "subgroup",
+      setId: 0,
+      ranges: [
+        { start: 0n, end: 1n },
+        { start: 3n, end: 4n },
+      ],
+    },
+  ]);
+  // in-flight の update (subgroup を全削除) を送信順で登録する
+  session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: () => {},
+    targetRequestId: 0n,
+    rangeFilters: [{ type: "subgroup", remove: true }],
+  });
+
+  let thrown: Error | undefined;
+  try {
+    const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 5n, end: 6n }] }],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isUndefined(thrown);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * in-flight の update は送信順 (挿入順) で適用され、後からの値が前の値を
+ * 上書きする。同じ型を 3 → 2 に置換する 2 件の in-flight を登録し、
+ * 最後の値 (2 Range) でマージされることを検証する (先発が勝つ順序なら
+ * 3 Range + 今回の 1 Range = 4 Range > 3 で throw するため判別力を持つ)。
+ */
+test("bidiSendRequestUpdate: in-flight の update は送信順で適用される", async () => {
+  const { session } = createBidiSession();
+  (session as unknown as { peerMaxFilterRanges: number }).peerMaxFilterRanges = 3;
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setRangeFilters([
+    {
+      type: "subgroup",
+      setId: 0,
+      ranges: [
+        { start: 0n, end: 1n },
+        { start: 3n, end: 4n },
+      ],
+    },
+  ]);
+  // in-flight 1 件目: subgroup を 3 Range に置換
+  session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: () => {},
+    targetRequestId: 0n,
+    rangeFilters: [
+      {
+        type: "subgroup",
+        setId: 0,
+        ranges: [
+          { start: 10n, end: 11n },
+          { start: 12n, end: 13n },
+          { start: 14n, end: 15n },
+        ],
+      },
+    ],
+  });
+  // in-flight 2 件目: subgroup を 2 Range に置換 (送信順で最後)
+  session.pendingRequestUpdate.set(92n, {
+    resolve: () => {},
+    reject: () => {},
+    targetRequestId: 0n,
+    rangeFilters: [
+      {
+        type: "subgroup",
+        setId: 0,
+        ranges: [
+          { start: 20n, end: 21n },
+          { start: 22n, end: 23n },
+        ],
+      },
+    ],
+  });
+
+  let thrown: Error | undefined;
+  try {
+    const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 5n, end: 6n }] }],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isUndefined(thrown);
+});
+
+test("bidiSendRequestUpdate: in-flight の update でマージ後が上限超過になる場合に throw する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 1n }] }]);
+  // in-flight の update (subgroup 2 Range。対象型が異なるため objectId と共存)
+  session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: () => {},
+    targetRequestId: 0n,
+    rangeFilters: [
+      {
+        type: "subgroup",
+        setId: 0,
+        ranges: [
+          { start: 2n, end: 3n },
+          { start: 4n, end: 5n },
+        ],
+      },
+    ],
+  });
+
+  let thrown: Error | undefined;
+  try {
+    // 今回の update (objectId 1 Range) は単体では上限 2 以内だが、
+    // in-flight の subgroup 2 Range を含むマージ後は 3 Range になる
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 10n, end: 11n }] }],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6:
+ * ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §10.3.1.6 により送信禁止。
+ * マージ後が空になる削除のみの update でも throw することを検証する
+ * (既存ガードの維持)。
+ */
+test("bidiSendRequestUpdate: MAX_FILTER_RANGES が 0 のとき削除のみの update でも throw する", async () => {
+  const { session } = createBidiSession();
+  (session as unknown as { peerMaxFilterRanges: number }).peerMaxFilterRanges = 0;
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [{ type: "subgroup", remove: true }],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES is 0"));
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6:
+ * 空配列の rangeFilters (フィルタ指定なしの no-op メッセージ) は、ピアの
+ * MAX_FILTER_RANGES が 0 (未広告) でも送信できる (フィルタパラメータ自体が
+ * 送信されないため。旧実装でも送信可能だった挙動の維持)。
+ * ガードが「undefined でも空配列でも throw する」形に退化した場合に
+ * 送信経路に到達しないことを検出できるよう、メッセージ書き込みまで
+ * 確認する。
+ */
+test("bidiSendRequestUpdate: 空配列の rangeFilters は MAX_FILTER_RANGES が 0 でも送信できる", async () => {
+  const { session, written } = createBidiSession();
+  (session as unknown as { peerMaxFilterRanges: number }).peerMaxFilterRanges = 0;
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isUndefined(thrown);
+  // REQUEST_UPDATE メッセージが送信経路に到達している
+  assert.equal(written.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.3:
+ * 削除を含む update は削除後の状態で検証される (既存の同型フィルタは
+ * マージで取り除かれ、Ranges 数に数えられない)。本テストが検出するのは
+ * 「update をマージせず連結する」誤実装のみである (削除後の Ranges 数と
+ * 単体の Ranges 数が一致するケースのため)。
+ */
+test("bidiSendRequestUpdate: 削除を含む update は削除後の状態で検証される", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setRangeFilters([
+    {
+      type: "subgroup",
+      setId: 0,
+      ranges: [
+        { start: 0n, end: 1n },
+        { start: 3n, end: 4n },
+      ],
+    },
+  ]);
+
+  let thrown: Error | undefined;
+  try {
+    const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [
+        { type: "subgroup", remove: true },
+        { type: "objectId", setId: 0, ranges: [{ start: 5n, end: 6n }] },
+      ],
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isUndefined(thrown);
+});
+
 /** Uint8Array 配列を連結するヘルパー */
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
   const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
@@ -915,7 +1228,7 @@ test("bidiSendNamespaceRequestUpdate: MAX_REQUEST_UPDATES を超える更新は 
   // このテストは throw で終わるため、既存 pending の resolve は不要 (無意味な
   // Promise を作らない)。
   (session as unknown as { peerMaxRequestUpdates: number }).peerMaxRequestUpdates = 1;
-  session.pendingRequestUpdate.set(100n, {
+  session.pendingRequestUpdate.set(90n, {
     resolve: () => {},
     reject: () => {},
     targetRequestId: 0n,
@@ -1208,7 +1521,7 @@ test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingR
 
   // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
   let rejected: Error | undefined;
-  ctx.session.pendingRequestUpdate.set(100n, {
+  ctx.session.pendingRequestUpdate.set(90n, {
     resolve: () => {},
     reject: (err: Error) => {
       rejected = err;

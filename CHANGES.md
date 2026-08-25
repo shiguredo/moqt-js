@@ -26,6 +26,11 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] REQUEST_UPDATE の MAX_FILTER_RANGES 検証をマージ後のフィルタ状態で行う
+  - draft-ietf-moq-transport-19 §10.3.1.6 / §5.1.3 に基づき、送信時点のフィルタ状態 (既存フィルタ + in-flight の update + 今回の update) を削除・置換・不変の規則でマージした状態に対して Ranges 数を検証する
+  - マージ規則は受信側のフィルタ反映と共通の純関数 mergeRangeFilters に集約し、検証と反映の一致を構造的に保証する
+  - ピアの MAX_FILTER_RANGES = 0 のガード (削除のみの update を含む) は維持する
+  - @voluntas
 - [FIX] FORWARD 省略の REQUEST_UPDATE で Forward State が true に上書きされるのを修正する
   - draft-ietf-moq-transport-19 §10.2.17 に基づき、role=publish の受信 REQUEST_UPDATE で FORWARD パラメータが存在する場合のみ Publisher の Forward State に反映する (省略時は不変)
   - FORWARD=0 を受けて送信を止めたアプリが、パラメータ無しの REQUEST_UPDATE で送信を再開してしまうのを防ぐ
