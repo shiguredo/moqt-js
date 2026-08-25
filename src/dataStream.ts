@@ -25,6 +25,11 @@ import { GroupOrder } from "./message/types";
  */
 const maxObjectId = (1n << 64n) - 1n;
 
+// Priority Present の型で Publisher Priority が省略された場合のエラーメッセージ
+// (encodeSubgroupHeader と encodeObjectDatagram で共通)
+const ERR_PUBLISHER_PRIORITY_REQUIRED =
+  "publisherPriority is required when Priority Present bit is set";
+
 /**
  * Object Status の値を検証する
  *
@@ -297,7 +302,18 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   }
 
   // Publisher Priority (8 ビット) - Priority Present を持つタイプのみ
-  if (hasPriorityPresent(header.type) && header.publisherPriority !== undefined) {
+  // draft-ietf-moq-transport-19 Section 11.4.2:
+  // "When set to 0, the Priority field is present in the Subgroup header."
+  // Priority Present の型で省略すると、デコード側は Priority フィールドを
+  // 存在確認なしに消費し、後続フィールド (Object ID Delta の先頭等) が
+  // Priority として誤読される (フィールドずれ)。encodeObjectDatagram と
+  // 同じ防御で throw する。判定は未 OR の header.type で行うが、
+  // hasPriorityPresent が 0x3f でマスクするため firstObject (0x40) の有無は
+  // 結果に影響しない (decode 側は OR 済みの値で同条件を判定する)。
+  if (hasPriorityPresent(header.type)) {
+    if (header.publisherPriority === undefined) {
+      throw new Error(ERR_PUBLISHER_PRIORITY_REQUIRED);
+    }
     parts.push(new Uint8Array([header.publisherPriority]));
   }
 
@@ -745,7 +761,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     // Priority Present ありの場合は publisherPriority が必須 (encodeObjectDatagram
     // の入力はアプリが指定するため)
     if (datagram.publisherPriority === undefined) {
-      throw new Error("publisherPriority is required when Priority Present bit is set");
+      throw new Error(ERR_PUBLISHER_PRIORITY_REQUIRED);
     }
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
