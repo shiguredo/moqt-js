@@ -26,6 +26,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] Subgroup Header で Priority Present の型の Publisher Priority 省略を throw する
+  - draft-ietf-moq-transport-19 §11.4.2 に基づき、encodeSubgroupHeader が Priority Present (DEFAULT_PRIORITY bit = 0) の型で publisherPriority 未指定の場合にエラーを throw する
+  - 欠落ワイヤはデコード側でフィールドずれを生むため、encodeObjectDatagram と同じ防御を適用する
+  - @voluntas
 - [FIX] REQUEST_UPDATE の MAX_FILTER_RANGES 検証をマージ後のフィルタ状態で行う
   - draft-ietf-moq-transport-19 §10.3.1.6 / §5.1.3 に基づき、送信時点のフィルタ状態 (既存フィルタ + in-flight の update + 今回の update) を削除・置換・不変の規則でマージした状態に対して Ranges 数を検証する
   - マージ規則は受信側のフィルタ反映と共通の純関数 mergeRangeFilters に集約し、検証と反映の一致を構造的に保証する

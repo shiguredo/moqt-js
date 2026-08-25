@@ -66,16 +66,33 @@ test("SubgroupHeader: 大きな値をエンコード", () => {
   assert.isAbove(encoded.length, 4);
 });
 
-test("SubgroupHeader: Priority なしをエンコード", () => {
-  const header = {
-    type: SubgroupHeaderType.BASE,
-    trackAlias: 1n,
-    groupId: 1n,
-  };
-
-  const encoded = encodeSubgroupHeader(header);
-
-  assert.equal(encoded.length, 3);
+/**
+ * draft-ietf-moq-transport-19 §11.4.2:
+ * Priority Present (DEFAULT_PRIORITY bit = 0) の型で publisherPriority が
+ * 省略された場合、エラーを throw することを検証する。
+ * SUBGROUP_ID_MODE により Subgroup ID フィールドが先にエンコードされる
+ * EXPLICIT 型でも省略を黙過せず throw される。
+ */
+test("SubgroupHeader: Priority Present の型で publisherPriority 省略は throw する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: SubgroupHeaderType.BASE,
+        trackAlias: 1n,
+        groupId: 1n,
+      }),
+    /publisherPriority is required when Priority Present bit is set/,
+  );
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: SubgroupHeaderType.EXPLICIT,
+        trackAlias: 1n,
+        groupId: 1n,
+        subgroupId: 0n,
+      }),
+    /publisherPriority is required when Priority Present bit is set/,
+  );
 });
 
 test("SubgroupHeader: BASE タイプをデコード", () => {
@@ -464,6 +481,29 @@ test("SubgroupHeaderType: No Priority タイプの roundtrip テスト", () => {
   assert.equal(decoded.trackAlias, 10n);
   assert.equal(decoded.groupId, 20n);
   assert.equal(decoded.subgroupId, 0n);
+  assert.isUndefined(decoded.publisherPriority);
+  assert.equal(consumed, encoded.length);
+});
+
+test("SubgroupHeaderType: No Priority + firstObject タイプの roundtrip テスト", () => {
+  // TYPE はワイヤ上で 0x40 が OR されるが (0x70 系)、Priority Present では
+  // ないため Priority フィールドはエンコードされず、publisherPriority なしで
+  // エンコードできる (完了条件 2 の No Priority 側の回帰ガード)。
+  const header = {
+    type: SubgroupHeaderType.BASE_NO_PRIORITY,
+    trackAlias: 10n,
+    groupId: 20n,
+    firstObject: true,
+  };
+
+  const encoded = encodeSubgroupHeader(header);
+  const [decoded, consumed] = decodeSubgroupHeader(encoded);
+
+  assert.equal(decoded.type, SubgroupHeaderType.BASE_NO_PRIORITY | 0x40);
+  assert.equal(decoded.trackAlias, 10n);
+  assert.equal(decoded.groupId, 20n);
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.firstObject, true);
   assert.isUndefined(decoded.publisherPriority);
   assert.equal(consumed, encoded.length);
 });
