@@ -1,7 +1,7 @@
 # subscribe ロールのエラー終了 (RESET_STREAM) 時に subscriber の終了通知が失われる
 
 - Created: 2026-08-11
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-subscribe-error-end-not-notified
 - Polished: 2026-08-20
 - Updated: 2026-08-15
@@ -57,4 +57,7 @@
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` (`bidiReadRequestStreamMessages` の外側 catch): 方式 (a) 相当として、`toProtocolViolationSessionError` が null を返し、かつ `role === "subscribe"` かつ `isPeerStreamError(error)` (source: "stream") の場合に subscriber エラー終了として通知する。通知は既存 `notifySubscriberFin` を `notifySubscriberFailure` に改名して共用 (FIN / RESET 両経路) し、エラー文言 `RESET_REQUEST_STREAM_MESSAGE` ("publisher reset request stream") は FIN 経路と区別。error コールバックの throw は内側 try/catch で吸収し、unhandled rejection を防ぐ (FIN 経路は外側 catch、RESET 経路は内側 catch が担う。この非対称をコメントと JSDoc に明記)。セッション終了 (source: "session")・GOAWAY 受信済み・内部エラーでは通知しない (notifySubscriberFailure の既存ガード + isPeerStreamError)。
+- `src/session/errors.ts`: `isPeerStreamError` の JSDoc に受信側 (readable の read() が reject) の適用を追記。
+- テスト (`src/session/bidi.test.ts`): RESET_STREAM (subscribe) で error 通知 + state closed + セッション非閉鎖、GOAWAY 済みでは通知されない (state も active のまま)、publish ロールでは通知されない、error コールバック throw では state closed、セッション終了 / source なしエラーでは通知されない、の 5 本を追加 (最後の 3 本は修正前でも通る回帰ガードとして JSDoc に明記)。
+- `CHANGES.md`: `[FIX]` を追記。
