@@ -2,10 +2,16 @@
  * session/namespaceLoops.ts の単体テスト
  *
  * 実 W3C ストリーム (`ReadableStream`) と実 Map で構成した session に
- * メッセージを注入し、namespace 系ストリームループの REQUEST_UPDATE 応答
- * (REQUEST_OK / REQUEST_ERROR) 処理を検証する。
+ * メッセージを注入し、namespace / tracks / publish namespace の各
+ * ストリームループを検証する。対象は REQUEST_UPDATE 応答 (REQUEST_OK /
+ * REQUEST_ERROR)、GOAWAY、NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED、
+ * および長さ検証後メッセージデコード破損 (IncompleteDataError) 時の
+ * PROTOCOL_VIOLATION でセッションが閉じる挙動。
  *
- * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions)
+ * draft-ietf-moq-transport-19 §10.4 (GOAWAY) / §10.5 (REQUEST_OK) /
+ * §10.9.2 (Updating Namespace Subscriptions) / §10.15 (PUBLISH_NAMESPACE) /
+ * §10.16 (NAMESPACE) / §10.17 (NAMESPACE_DONE) / §10.19 (SUBSCRIBE_TRACKS) /
+ * §10.20 (PUBLISH_SKIPPED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -17,8 +23,15 @@ import {
 } from "../message/session";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import { createTrackNamespace } from "../message/parameter";
+import {
+  encodeNamespaceDonePayload,
+  encodeNamespacePayload,
+  encodePublishSkippedPayload,
+} from "../message/namespace";
 import {
   namespaceStartNamespaceStreamLoop,
+  namespaceStartPublicationStreamLoop,
   namespaceStartTracksStreamLoop,
 } from "./namespaceLoops";
 import type { SessionInternal } from "./types";
@@ -569,4 +582,276 @@ test("namespaceStartTracksStreamLoop: 保留中の更新が無い REQUEST_ERROR 
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("received REQUEST_ERROR after REQUEST_OK"),
   );
+});
+
+// ============================================================================
+// namespace 系ループ共通: メッセージデコード破損と確立後メッセージのテスト
+// draft-ietf-moq-transport-19 §10 (Control Messages) / §10.5 / §10.16-10.20
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10 / §10.5:
+ * ループ内のメッセージデコードが IncompleteDataError (Length が揃った後の
+ * フィールド構造の破損) の場合、黙殺されず PROTOCOL_VIOLATION でセッションが
+ * 閉じることを検証する。変換は toProtocolViolationSessionError
+ * (受信メッセージのデコード失敗は PROTOCOL_VIOLATION として扱うリポジトリ
+ * 共通解釈) が行うため、デコーダの短縮ペイロードを feed すればよい。
+ */
+test("namespaceStartNamespaceStreamLoop: 破損 REQUEST_OK は PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を feed する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.REQUEST_OK, new Uint8Array([0x01])),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  // IncompleteDataError のメッセージが引き継がれる (デコード破損経由であることの証憑)
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+});
+
+test("namespaceStartTracksStreamLoop: 破損 REQUEST_OK は PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を feed する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.REQUEST_OK, new Uint8Array([0x01])),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+});
+
+test("namespaceStartNamespaceStreamLoop: 正常な NAMESPACE / NAMESPACE_DONE でセッションが閉じない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let resolved = false;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  // 先頭に確立応答の REQUEST_OK、続けて NAMESPACE / NAMESPACE_DONE を feed する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  const suffix = createTrackNamespace(["live", "sports"]);
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: suffix,
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 確立応答が反映され、正常な NAMESPACE / NAMESPACE_DONE はセッションを
+  // 閉じない (回帰ガード)
+  assert.isTrue(resolved);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAMESPACE_DONE は PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 先頭に確立応答の REQUEST_OK、続けて NAMESPACE を経ない NAMESPACE_DONE を feed する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: createTrackNamespace(["live", "sports"]),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("before corresponding NAMESPACE"));
+});
+
+test("namespaceStartTracksStreamLoop: 正常な PUBLISH_SKIPPED でセッションが閉じない", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let resolved = false;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  // 先頭に確立応答の REQUEST_OK、続けて PUBLISH_SKIPPED を feed する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.PUBLISH_SKIPPED,
+      encodePublishSkippedPayload({
+        type: MessageType.PUBLISH_SKIPPED,
+        trackNamespaceSuffix: createTrackNamespace(["live", "sports"]),
+        trackName: new TextEncoder().encode("track1"),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 確立応答が反映され、正常な PUBLISH_SKIPPED はセッションを閉じない (回帰ガード)
+  assert.isTrue(resolved);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+// ============================================================================
+// namespaceStartPublicationStreamLoop のテスト
+// draft-ietf-moq-transport-19 §10.15 (PUBLISH_NAMESPACE、応答は §10.5 / §10.6)
+// ============================================================================
+
+/**
+ * namespaceStartPublicationStreamLoop 用のテストコンテキストを構築する。
+ *
+ * ストリーム機構は実物 (ReadableStream) であり、テストは
+ * readableController.enqueue でメッセージを注入する。ループが参照する
+ * state / streamReader / controlReader / callbacks を備えた publication と、
+ * closeWithError 等の必要なメソッドを持つ session を構築する。
+ */
+function createPublicationLoopTestContext(): {
+  session: SessionInternal;
+  requestId: bigint;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+  controlWriter: ControlStreamWriter;
+  getClosedWithError: () => SessionError | undefined;
+} {
+  const requestId = 10n;
+
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+  });
+  const streamReader = readable.getReader();
+  const controlReader = new ControlStreamReader();
+
+  const publication = {
+    callbacks: {},
+    state: "pending" as const,
+    streamReader,
+    controlReader,
+  };
+
+  let closedWithError: SessionError | undefined;
+  const session = {
+    namespaceSubscriptions: new Map(),
+    tracksSubscriptions: new Map(),
+    namespacePublications: new Map([[requestId, publication]]),
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    callbacks: { debug: undefined },
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    createNamespacePublication: () => ({
+      get state() {
+        return "active";
+      },
+      unsubscribe: async () => {},
+    }),
+  } as unknown as SessionInternal;
+
+  return {
+    session,
+    requestId,
+    readableController,
+    controlWriter: new ControlStreamWriter(),
+    getClosedWithError: () => closedWithError,
+  };
+}
+
+test("namespaceStartPublicationStreamLoop: 正常な REQUEST_OK で解決されセッションが閉じない", async () => {
+  const ctx = createPublicationLoopTestContext();
+  let resolved = false;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isTrue(resolved);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartPublicationStreamLoop: 破損 REQUEST_OK は PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createPublicationLoopTestContext();
+
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を feed する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.REQUEST_OK, new Uint8Array([0x01])),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
+  // finally で publication が掃除される
+  assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
 });

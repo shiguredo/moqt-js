@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-namespace-stream-decode-failure-session-close
 - Polished: 2026-08-20
 - Updated: 2026-08-15
@@ -51,4 +51,8 @@
 
 ## 解決方法
 
-未着手。
+3 ループの本体修正は issue 0409 で実施済み。0409 は対応方式 (b) (4415 側の方式 (a)) として `toProtocolViolationSessionError` (`src/session/errors.ts`) に `IncompleteDataError` の PROTOCOL_VIOLATION 変換を追加しており、`namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop` / `namespaceStartPublicationStreamLoop` の外側 catch (いずれも `toProtocolViolationSessionError` 経由) は自動的に IncompleteDataError でセッションを閉じる。本 issue ではその完了条件確認と回帰ガードとして以下を実施した。
+
+- `src/session/namespaceLoops.test.ts`: 3 ループに破損 REQUEST_OK (Number of Parameters=1 宣言のみの短縮ペイロード) を feed し、黙殺されず PROTOCOL_VIOLATION でセッションが閉じることを検証するテストを追加 (実 W3C ストリーム注入方式)。あわせて正常な NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED / REQUEST_OK でセッションが閉じない回帰ガード、および対応する NAMESPACE に先立つ NAMESPACE_DONE の PROTOCOL_VIOLATION テストを追加。
+- `namespaceStartPublicationStreamLoop` はテスト基盤 (`createNamespaceLoopTestContext` が kind: "namespace" / "tracks" のみ対応) の制約があるため、`createPublicationLoopTestContext` を新設した。
+- `CHANGES.md` は 0409 の `[FIX]` エントリ (「受信メッセージのデコード失敗でセッションが閉じないのを修正する」) が namespace 系 3 ループを含むため、重複エントリを追加しない。
