@@ -22,6 +22,7 @@ import { getParameterTrackNamespace } from "../message/parameter";
 import { SessionError, SessionErrorCode, RequestErrorCode, RequestError } from "../error";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
+import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
   bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
@@ -3498,6 +3499,44 @@ test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で err
   assert.equal(errorCalled!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
   assert.equal(subscriber.state, "closed");
   assert.isFalse(endCalled);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+ * subscribe ロールでピアが FIN した場合、応答待ちの REQUEST_UPDATE
+ * (update() の Promise) が reject され、エントリが削除されることを検証する。
+ * 未解決のまま残すとアプリは FIN 後に update() の結果を待ち続ける。
+ */
+test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で応答待ちの REQUEST_UPDATE が reject される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // ピアの FIN を再現する
+  ctx.readableController.close();
+  await readPromise;
+
+  // 応答待ちの REQUEST_UPDATE が reject され、エントリが削除される
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
 });
 
 /**

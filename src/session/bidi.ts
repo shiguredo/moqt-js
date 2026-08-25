@@ -1004,6 +1004,23 @@ export async function bidiReadRequestStreamMessages(
         // 通知しない。
         if (role === "subscribe") {
           try {
+            // draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+            // 応答を待たずにストリームが閉じた場合は保留中の更新の失敗であり、
+            // アプリの update() の Promise を reject する (namespace ループの
+            // handleNamespaceRequestUpdateStreamClosed と同じ)。未解決のまま
+            // 残すと、アプリは FIN 後に update() の結果を待ち続ける。
+            // 保留中の更新が無い場合は no-op。GOAWAY 受信済みの場合は GOAWAY
+            // 掃除でエントリ削除済みのため no-op になる (エラー文言は namespace
+            // ループの REQUEST_UPDATE_STREAM_CLOSED_MESSAGE と同じ)。reject の
+            // 形式はトリガーごとに異なる (GOAWAY 掃除は RequestError
+            // (GOING_AWAY)、本処理は Error) が、失敗の種類が異なるため許容する。
+            // notifySubscriberFailure より先に実行することで、アプリの error
+            // コールバックが throw しても reject が実行される (順序の根拠)。
+            rejectPendingRequestUpdates(
+              session,
+              requestId,
+              new Error("stream closed before receiving update response"),
+            );
             notifySubscriberFailure(
               session,
               requestId,

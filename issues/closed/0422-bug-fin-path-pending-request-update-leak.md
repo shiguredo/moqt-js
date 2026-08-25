@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-fin-path-pending-request-update-leak
 - Polished: 2026-08-20
@@ -49,4 +49,8 @@
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` (`bidiReadRequestStreamMessages` の FIN (done) ケース、subscribe ロール): `rejectPendingRequestUpdates` により当該 requestId の保留中 REQUEST_UPDATE を reject してエントリを削除する。`notifySubscriberFailure` より前に実行し、アプリの error コールバックが throw しても reject が実行されるようにする。
+- `src/session.ts` (`runPublishStreamSubLoop` の FIN (done) ケース): 同様に reject を追加 (エラー文言は namespace ループ共通の `REQUEST_UPDATE_STREAM_CLOSED_MESSAGE` を使用)。
+- 双方とも、保留中の更新が無い場合は no-op、GOAWAY 受信済み (掃除済み) の場合はエントリ削除済みのため no-op (二重 reject なし)。
+- テスト: `bidi.test.ts` / `session.test.ts` に、FIN で応答待ちの REQUEST_UPDATE が reject されエントリが削除されるテストを追加 (実 W3C ストリーム注入方式)。
+- `CHANGES.md`: `[FIX]` を追記。

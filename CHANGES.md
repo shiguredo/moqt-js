@@ -26,6 +26,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
+  - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
+  - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)
+  - @voluntas
 - [FIX] Subgroup Header / Datagram デコーダの Publisher Priority バイト境界不足を修正する
   - decodeSubgroupHeader / decodeObjectDatagram が Priority バイトでバッファが切れている場合に範囲外アクセス (undefined 取得) をせず、IncompleteDataError を throw するようにする(decodeFetchObjectFields と同方式)
   - subgroup ストリーム経路では次のチャンクを待ち、datagram 経路では PROTOCOL_VIOLATION に変換されてセッションが閉じる（長さ検証後の構造破損のリポジトリ共通解釈。既存の varint 不足と同じ扱い）
