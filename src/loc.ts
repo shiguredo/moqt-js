@@ -132,7 +132,7 @@ function parseVideoFrameMarkingValue(value: Uint8Array): VideoFrameMarking {
 }
 
 /**
- * Video Frame Marking の length + value をデコードする共通処理。
+ * Video Frame Marking の length + value をデコードする。
  * Length は 1–4 のみ受理。宣言 Length バイトは必ず消費する。
  *
  * @throws ProtocolViolationError Length が不正、または Value バイトが不足する場合
@@ -274,13 +274,19 @@ export function decodeVideoFrameMarking(data: Uint8Array): VideoFrameMarking {
  * 単一 Property を絶対 Type でエンコードする。複数 Property の連結には
  * encodeAudioProperties を使うこと。
  */
-export function encodeAudioLevel(level: number, voiceActivity: boolean): Uint8Array {
-  const idBytes = encodeVarint(LOCPropertyId.AUDIO_LEVEL);
-
+/**
+ * Audio Level の varint value (vi64) を組み立てる
+ * RFC6464: 下位 8 bit に level (bits 6-0) と voice activity (bit 7)
+ */
+function encodeAudioLevelValue(level: number, voiceActivity: boolean): bigint {
   let value = level & 0x7f;
   if (voiceActivity) value |= 0x80;
+  return BigInt(value);
+}
 
-  const valueBytes = encodeVarint(BigInt(value));
+export function encodeAudioLevel(level: number, voiceActivity: boolean): Uint8Array {
+  const idBytes = encodeVarint(LOCPropertyId.AUDIO_LEVEL);
+  const valueBytes = encodeVarint(encodeAudioLevelValue(level, voiceActivity));
 
   const result = new Uint8Array(idBytes.length + valueBytes.length);
   result.set(idBytes, 0);
@@ -443,9 +449,13 @@ export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
   }
 
   if (properties.audioLevel !== undefined) {
-    let value = properties.audioLevel.level & 0x7f;
-    if (properties.audioLevel.voiceActivity) value |= 0x80;
-    headers.push({ id: LOCPropertyId.AUDIO_LEVEL, value: BigInt(value) });
+    headers.push({
+      id: LOCPropertyId.AUDIO_LEVEL,
+      value: encodeAudioLevelValue(
+        properties.audioLevel.level,
+        properties.audioLevel.voiceActivity,
+      ),
+    });
   }
 
   if (properties.config !== undefined) {
@@ -495,15 +505,12 @@ interface ExtractedLocProperties {
  * draft-ietf-moq-loc-04 Table 1 で Scope が Track, Object なのは
  * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) の 3 つ。
  * TIMESTAMP / VIDEO_FRAME_MARKING / AUDIO_LEVEL は Object スコープのみのため、
- * track 入力に Object スコープのみの ID が現れた場合は抽出しない
- * (現行の extractLocTrackProperties の挙動を維持)。
+ * track 入力では抽出しない (Track, Object 両スコープの ID のみが対象)。
  * TIMESCALE / AUDIO_LEVEL / TIMESTAMP は偶数 ID (value 形式)、
  * VIDEO_CONFIG / AUDIO_CONFIG / VIDEO_FRAME_MARKING は奇数 ID (data 形式)。
  *
  * 抽出不能・不正な Property は読み飛ばし、抽出できたフィールドのみを返す
  * (セッションを閉じない。寛容性は decodeVideoProperties / decodeAudioProperties と同じ)。
- * VIDEO_FRAME_MARKING の Value が不正 (Length 1-4 外) な場合は frameMarking を
- * 未設定として扱う。
  */
 function extractLocProperties(
   properties: ReadonlyArray<Property> | undefined,

@@ -6,7 +6,7 @@
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { ProtocolViolationError, IncompleteDataError } from "./error";
-import { encodeVarint } from "./varint";
+import { encodeVarint, MAX_VARINT } from "./varint";
 import {
   LOCPropertyId,
   encodeTimestamp,
@@ -31,9 +31,6 @@ import {
   type VideoProperties,
   type AudioProperties,
 } from "./loc";
-
-// varint の最大値
-const MAX_VARINT = 4611686018427387903n;
 
 // Timestamp 用の Arbitrary (Unix epoch からのマイクロ秒、または Timescale ありの場合はメディア時間)
 const timestampArb = fc.bigInt({ min: 0n, max: MAX_VARINT });
@@ -260,7 +257,7 @@ test("空の AudioProperties は空のバイト列にエンコードされる", 
 });
 
 // =============================================================================
-// 複数プロパティのテスト
+// 全てのプロパティを含む場合のラウンドトリップ (多段 delta)
 // =============================================================================
 
 test("VideoProperties: 全てのプロパティを含む場合のラウンドトリップ", () => {
@@ -505,7 +502,7 @@ test("未知の奇数 ID は length + bytes としてスキップされる", () 
 });
 
 // =============================================================================
-// 仕様書例に基づくテスト
+// 代表値に基づくテスト (VideoFrameMarking のキーフレーム / レイヤー、AudioLevel の無音 / 有音)
 // =============================================================================
 
 test("VideoFrameMarking: キーフレーム (I=true, D=false, B=true) のエンコード", () => {
