@@ -1,7 +1,7 @@
 # 自発 PUBLISH ストリーム上の REQUEST_UPDATE のデコード失敗が黙殺されセッションが閉じない
 
 - Created: 2026-08-11
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-publish-stream-request-update-decode-failure
 - Polished: 2026-08-20
 - Updated: 2026-08-15
@@ -46,4 +46,12 @@
 
 ## 解決方法
 
-未着手。
+対応方式 (b) を採用し、`toProtocolViolationSessionError` (`src/session/errors.ts`) が `IncompleteDataError` も PROTOCOL_VIOLATION の SessionError に変換するようにした。これにより Length が揃った後のメッセージ構造の破損は、全受信経路 (bidi 系ループ・namespace 系ループ・受信応答読み取り・datagram) で黙殺されずセッションが閉じる。data stream の「データ不足 = 次チャンク待ち」経路は `instanceof IncompleteDataError` が変換より先に処理されるため挙動は変わらない。
+
+- `src/session/bidi.ts`: `bidiReadRequestStreamMessages` の role=publish REQUEST_UPDATE デコード失敗を「invalid REQUEST_UPDATE payload」の文脈を付与して閉じるローカル catch に変更。`bidiHandlePublishRequestUpdate` と同パターン。あわせて受信応答読み取り (PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS) の 4 catch で、セッション閉鎖前に当該 pending へ具体エラーを reject する (既存の Range Filter 違反経路と同パターン)。
+- `src/session/errors.ts` / `src/session/errors.test.ts`: 変換対象に IncompleteDataError を追加。ユニットテストを追加。
+- `src/session/bidi.test.ts`: 破損 REQUEST_UPDATE (publish ロール) で PROTOCOL_VIOLATION になるテスト、正常 REQUEST_UPDATE で FORWARD 反映 + REQUEST_OK の回帰ガードテスト、破損 PUBLISH_OK で pending に具体エラーが渡るテストを追加。
+- `src/session/incoming.test.ts`: 破損 datagram で PROTOCOL_VIOLATION になるテストを追加。
+- 帰結的修正として、陳腐化したコメント (`src/session/bidi.ts` / `src/session/incoming.ts` / `src/message/parameter.ts`) と `CHANGES.md` の [FIX] エントリを更新。
+
+0415 (namespace 系ループ) は本変更により自動解決されるため、0415 の完了条件確認時に重複コミットしないこと。

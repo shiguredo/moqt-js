@@ -532,8 +532,9 @@ test("decodeRangeFilter: Range 累積値が 2^64-1 を超えると InvalidFilter
  * draft-ietf-moq-transport-19 §5.1.3:
  * Range 列の varint が宣言 Length 内で途中終端する構造不正は、
  * IncompleteDataError ではなく InvalidFilterError になることを検証する。
- * (IncompleteDataError は受信ループで黙殺されるため、構造不正として
- * 明示的に InvalidFilterError に変換する)
+ * (IncompleteDataError のまま流すと受信ループの
+ * toProtocolViolationSessionError でセッションが閉じるため、値違反として
+ * REQUEST_ERROR で応答できる InvalidFilterError に明示的に変換する)
  */
 test("decodeRangeFilter: Range 列の varint 途中終端で InvalidFilterError", () => {
   // Length 4 / SetID 1 / Start delta 0 / End delta 0 / 最後の 0x81 は 2 バイト
