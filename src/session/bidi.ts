@@ -70,6 +70,7 @@ import {
   extractLargestLocation,
   validateFetchOkEndLocation,
   buildRangeFilterParameters,
+  mergeRangeFilters,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateNamespacePrefixUpdate,
@@ -1320,6 +1321,37 @@ export async function bidiReadRequestStreamMessages(
 // sendRequestUpdate
 // ============================================================================
 
+/**
+ * 送信時点のフィルタ状態に、in-flight の REQUEST_UPDATE (送信順) と今回の
+ * update をマージした状態を返す
+ *
+ * draft-ietf-moq-transport-19 §10.9.1:
+ * 「Parameter values from later REQUEST_UPDATE messages override values from
+ *  earlier ones.」により、pendingRequestUpdate の挿入順 (送信順) で適用する。
+ * in-flight の update は以後の REQUEST_ERROR で失敗し得る。成功する前提で
+ * 含めるため、in-flight の追加 update は過剰検証 (安全側)、削除 update は
+ * 過少検証 (実際は上限超過でも送信し得る) になる。結果を確定できない以上
+ * 許容するが、失敗確定時はエントリが削除され、以後の検証は正しい状態に
+ * 戻る。
+ */
+function computeMergedRangeFilters(
+  session: BidiSessionInternal,
+  subscriber: SubscriberImpl,
+  update: RangeFilterSpec[],
+): RangeFilterSpec[] {
+  let merged = subscriber.getRangeFilters();
+  for (const [, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId !== subscriber.getRequestId()) {
+      continue;
+    }
+    if (pending.rangeFilters === undefined) {
+      continue;
+    }
+    merged = mergeRangeFilters(merged, pending.rangeFilters);
+  }
+  return mergeRangeFilters(merged, update);
+}
+
 export async function bidiSendRequestUpdate(
   session: BidiSessionInternal,
   subscriber: SubscriberImpl,
@@ -1356,9 +1388,32 @@ export async function bidiSendRequestUpdate(
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
 
-  // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
-  // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみチェックする
-  validateRangeFilterLimits(options.rangeFilters, session.peerMaxFilterRanges, "REQUEST_UPDATE");
+  // draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES):
+  // 「limits the peer's total number of Ranges (Start/End pairs) allowed
+  //  concurrently in all Range filter Section 5.1.3 parameters for a given
+  //  subscription or fetch」であり、マージ後のフィルタ状態 (§5.1.3 の
+  // 削除・置換・不変規則で適用した結果) に対して検証する。§5.1.3 にも
+  // 「limits the total number of Ranges allowed in all Range Filter parameters
+  //  for a given subscription or fetch」とある。
+  // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみ
+  // チェックする (マージ結果には remove エントリが含まれない)。
+  if (options.rangeFilters !== undefined && options.rangeFilters.length > 0) {
+    // ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §10.3.1.6 により送信禁止。
+    // 削除のみの update (マージ後が空) でも送信してはならないため、
+    // マージ後検証 (空配列は no-op) とは別に options 単体でガードする。
+    // 空配列 (フィルタ指定なしの no-op) はここに到達しない。
+    if (session.peerMaxFilterRanges === 0) {
+      throw new Error(
+        "cannot send range filters in REQUEST_UPDATE: peer MAX_FILTER_RANGES is 0 (not advertised)",
+      );
+    }
+    const merged = computeMergedRangeFilters(session, subscriber, options.rangeFilters);
+    validateRangeFilterLimits(
+      merged,
+      session.peerMaxFilterRanges,
+      "REQUEST_UPDATE after merging current filters",
+    );
+  }
 
   // draft-ietf-moq-transport-19 §5.1.3:
   // REQUEST_UPDATE では削除 (Length=0) が許可されるが、TRACK_PROPERTY_FILTER (0x29) は
