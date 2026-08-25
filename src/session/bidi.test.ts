@@ -2094,6 +2094,79 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
 });
 
 /**
+ * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * role=publish の受信 REQUEST_UPDATE で FORWARD が省略された場合、Forward
+ * State は変化しないことを検証する (extractForwardState のデフォルト true に
+ * よる上書きを防ぐ)。FORWARD=0 を受けて送信を止めたアプリが、パラメータ無し
+ * の REQUEST_UPDATE で送信を再開してしまうケースの回帰ガード。
+ */
+test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish ロール) で Forward State は不変", async () => {
+  const ctx = createPublishReadTestContext({});
+  // FORWARD=0 を受けて送信を止めた状態を作る (アプリ側の反映)
+  ctx.publisher.setForwardState(false);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // Forward State は false のまま、REQUEST_OK が応答される
+  assert.equal(ctx.publisher.forwardState, false);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * role=publish の受信 REQUEST_UPDATE で FORWARD=1 が明示された場合、Forward
+ * State が true に反映されることを検証する (FORWARD 省略時は不変ではなく
+ * 省略以外の本分岐が従来どおり動作することの回帰ガード)。
+ */
+test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロール) で Forward State が true に反映される", async () => {
+  const ctx = createPublishReadTestContext({});
+  // FORWARD=0 に変更した状態から、FORWARD=1 の明示で戻ることも検証する
+  ctx.publisher.setForwardState(false);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // Forward State が true に反映され、REQUEST_OK が応答される
+  assert.equal(ctx.publisher.forwardState, true);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-19 §5.1.3:
  * 受信 PUBLISH_OK に不正な Range Filter (値域違反) が含まれる場合、
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。

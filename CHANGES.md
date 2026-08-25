@@ -26,6 +26,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] FORWARD 省略の REQUEST_UPDATE で Forward State が true に上書きされるのを修正する
+  - draft-ietf-moq-transport-19 §10.2.17 に基づき、role=publish の受信 REQUEST_UPDATE で FORWARD パラメータが存在する場合のみ Publisher の Forward State に反映する (省略時は不変)
+  - FORWARD=0 を受けて送信を止めたアプリが、パラメータ無しの REQUEST_UPDATE で送信を再開してしまうのを防ぐ
+  - @voluntas
 - [FIX] subscribe ロールのエラー終了 (RESET_STREAM) を subscriber へ通知する
   - draft-ietf-moq-transport-19 §3.3.3 に基づき、bidiReadRequestStreamMessages の subscribe ロールでピアの RESET_STREAM 相当 (source: "stream" の read 失敗) を検出した場合、error コールバックを呼び state を closed にする
   - セッション終了 (source: "session")・GOAWAY 受信済み・内部エラーでは通知せず、error コールバックの throw も吸収する (セッションは閉じない)
