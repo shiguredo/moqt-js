@@ -26,6 +26,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] subscribe ロールのエラー終了 (RESET_STREAM) を subscriber へ通知する
+  - draft-ietf-moq-transport-19 §3.3.3 に基づき、bidiReadRequestStreamMessages の subscribe ロールでピアの RESET_STREAM 相当 (source: "stream" の read 失敗) を検出した場合、error コールバックを呼び state を closed にする
+  - セッション終了 (source: "session")・GOAWAY 受信済み・内部エラーでは通知せず、error コールバックの throw も吸収する (セッションは閉じない)
+  - @voluntas
 - [FIX] unsubscribe() 時に応答待ちの REQUEST_UPDATE を掃除する
   - draft-ietf-moq-transport-19 §10.9.1 / §10.9.2 に基づき、namespace / tracks の unsubscribe() が保留中の REQUEST_UPDATE を reject して pendingRequestUpdate エントリと pendingPrefix を掃除し、update() の Promise が未解決で残らないようにする
   - unsubscribe 後に遅延して届く REQUEST_OK / REQUEST_ERROR / NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED / GOAWAY は受信ループの state ガードで無視し、セッションが PROTOCOL_VIOLATION で閉じるのと callbacks の spurious 発火を防ぐ
@@ -43,7 +47,7 @@
   - @voluntas
 - [FIX] subscribe ロールでピアの FIN 受信時に自方向の FIN を送信する
   - draft-ietf-moq-transport-19 §3.3.2 に基づき、bidiReadRequestStreamMessages の subscribe ロールでピア (publisher) の FIN を検出したときに writer.close() で自方向を FIN で閉じる
-  - notifySubscriberFin (error 通知) と並べて try/finally で包み、error コールバックが throw しても自方向 FIN が送信されるようにする
+  - notifySubscriberFailure (error 通知) と並べて try/finally で包み、error コールバックが throw しても自方向 FIN が送信されるようにする
   - publish ロールは従来どおり done() に委ね、自方向 FIN を送信しない
   - @voluntas
 - [FIX] セッション close と done() の並行実行で close 失敗が PROTOCOL_VIOLATION に誤昇格するのを修正する

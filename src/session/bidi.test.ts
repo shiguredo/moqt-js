@@ -31,7 +31,8 @@ import {
   bidiSendNamespaceRequestUpdate,
   bidiSendRequestUpdate,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
-  notifySubscriberFin,
+  RESET_REQUEST_STREAM_MESSAGE,
+  notifySubscriberFailure,
   validateNoDuplicateGoawayOnRequestStream,
   type BidiSessionInternal,
 } from "./bidi";
@@ -1552,7 +1553,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN では従�
  * draft-ietf-moq-transport-19 §3.3.2:
  * subscribe ロールでピア (publisher) の FIN を検出した場合、自方向の FIN
  * (writer.close()) を送信して graceful closure を完了することを検証する。
- * 0374 で追加された notifySubscriberFin (error 通知) に加えて、自方向 FIN が
+ * 0374 で追加された notifySubscriberFailure (error 通知) に加えて、自方向 FIN が
  * 送信される。
  */
 test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方向 FIN (writer.close()) が送信される", async () => {
@@ -2918,7 +2919,7 @@ test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了
 });
 
 // ============================================================================
-// notifySubscriberFin のテスト
+// notifySubscriberFailure のテスト
 // draft-ietf-moq-transport-19 §3.3.2 (FIN without PUBLISH_DONE は失敗扱い)
 // ============================================================================
 
@@ -2927,7 +2928,7 @@ test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了
  * active な subscriber に対して error 通知が行われ、state が closed になる
  * ことを検証する。
  */
-test("notifySubscriberFin: active な subscriber に error 通知し state を closed にする", () => {
+test("notifySubscriberFailure: active な subscriber に error 通知し state を closed にする", () => {
   const ctx = createPublishReadTestContext({});
   let errorCalled: Error | undefined;
   const subscriber = new SubscriberImpl(
@@ -2944,7 +2945,7 @@ test("notifySubscriberFin: active な subscriber に error 通知し state を c
   );
   ctx.session.subscribers.set(ctx.requestId, subscriber);
 
-  notifySubscriberFin(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+  notifySubscriberFailure(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
 
   assert.isDefined(errorCalled);
   assert.equal(errorCalled!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
@@ -2956,7 +2957,7 @@ test("notifySubscriberFin: active な subscriber に error 通知し state を c
  * error コールバックが throw した場合でも、finally で state が closed に
  * なることを検証する (error コールバックの例外で状態遷移が失われない)。
  */
-test("notifySubscriberFin: error コールバックが throw しても state は closed になる", () => {
+test("notifySubscriberFailure: error コールバックが throw しても state は closed になる", () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(
     ["test"],
@@ -2974,7 +2975,11 @@ test("notifySubscriberFin: error コールバックが throw しても state は
 
   let thrown: Error | undefined;
   try {
-    notifySubscriberFin(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+    notifySubscriberFailure(
+      ctx.session,
+      ctx.requestId,
+      new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE),
+    );
   } catch (err) {
     thrown = err instanceof Error ? err : new Error(String(err));
   }
@@ -2990,10 +2995,10 @@ test("notifySubscriberFin: error コールバックが throw しても state は
  * subscribers に存在しない requestId (unsubscribe 済み等) では何もしない
  * ことを検証する。
  */
-test("notifySubscriberFin: subscribers に存在しない requestId では何もしない", () => {
+test("notifySubscriberFailure: subscribers に存在しない requestId では何もしない", () => {
   const ctx = createPublishReadTestContext({});
   // subscribers に登録しないまま呼ぶ
-  notifySubscriberFin(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+  notifySubscriberFailure(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
 
   // セッションも閉じず、書き込みも発生しない
   assert.isUndefined(ctx.closedWithError);
@@ -3005,7 +3010,7 @@ test("notifySubscriberFin: subscribers に存在しない requestId では何も
  * GOAWAY 受信済みの requestId (マイグレーション通知) では何もしないことを
  * 検証する (GOAWAY は subscription state に影響しない)。
  */
-test("notifySubscriberFin: GOAWAY 受信済みの requestId では何もしない", () => {
+test("notifySubscriberFailure: GOAWAY 受信済みの requestId では何もしない", () => {
   const ctx = createPublishReadTestContext({});
   let errorCalled = false;
   const subscriber = new SubscriberImpl(
@@ -3024,7 +3029,7 @@ test("notifySubscriberFin: GOAWAY 受信済みの requestId では何もしな�
   // GOAWAY を受信済みの状態を作る
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
-  notifySubscriberFin(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+  notifySubscriberFailure(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
 
   // error 通知も state 遷移も行われない (migration はアプリの goawayCallback が処理する)
   assert.isFalse(errorCalled);
@@ -3036,7 +3041,7 @@ test("notifySubscriberFin: GOAWAY 受信済みの requestId では何もしな�
  * state が active でない subscriber (正常な PUBLISH_DONE 済み等) では何も
  * しないことを検証する。
  */
-test("notifySubscriberFin: state が active でない subscriber では何もしない", () => {
+test("notifySubscriberFailure: state が active でない subscriber では何もしない", () => {
   const ctx = createPublishReadTestContext({});
   let errorCalled = false;
   const subscriber = new SubscriberImpl(
@@ -3054,15 +3059,15 @@ test("notifySubscriberFin: state が active でない subscriber では何もし
   ctx.session.subscribers.set(ctx.requestId, subscriber);
   subscriber.markClosed();
 
-  notifySubscriberFin(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+  notifySubscriberFailure(ctx.session, ctx.requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
 
   assert.isFalse(errorCalled);
   assert.equal(subscriber.state, "closed");
 });
 
 // ============================================================================
-// bidiReadRequestStreamMessages の FIN 検出 (subscribe ロール) テスト
-// draft-ietf-moq-transport-19 §3.3.2
+// bidiReadRequestStreamMessages の FIN / RESET_STREAM 検出 (subscribe ロール) テスト
+// draft-ietf-moq-transport-19 §3.3.2 (FIN) / §3.3.3 (RESET_STREAM)
 // ============================================================================
 
 /**
@@ -3107,6 +3112,222 @@ test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で err
   assert.equal(errorCalled!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
   assert.equal(subscriber.state, "closed");
   assert.isFalse(endCalled);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * subscribe ロールでピアが RESET_STREAM でストリームをエラー終了させた場合、
+ * error コールバックが呼ばれ state が closed になることを検証する。プロトコル
+ * 違反ではないためセッションは閉じない。エラーメッセージは FIN 経路
+ * (PUBLISH_DONE なし) と区別できる固定文言になる。
+ */
+test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール) で error 通知され state が closed になる", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  let endCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  // error 通知 + state closed + end は呼ばれない。セッションは閉じない
+  assert.isDefined(errorCalled);
+  assert.equal(errorCalled!.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.equal(subscriber.state, "closed");
+  assert.isFalse(endCalled);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 / §3.3.3:
+ * GOAWAY 受信済みの subscribe ロールの RESET_STREAM では error 通知されない
+ * ことを検証する (GOAWAY 後の旧ストリームの破壊は migration の完了であり、
+ * GOAWAY 後の FIN と同じ扱い)。修正前の実装でも通る回帰ガードである
+ * (通知経路の拡大を防ぐ)。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 受信後の RESET_STREAM (subscribe ロール) では error 通知されない", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    () => {
+      errorCalled = true;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  // GOAWAY 後は state も変更されない (notifySubscriberFailure 全体が no-op)
+  assert.isFalse(errorCalled);
+  assert.equal(subscriber.state, "active");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * publish ロールのピア (requester) の RESET_STREAM では error 通知されない
+ * ことを検証する (対象ロール限定の回帰ガード。修正前の実装でも通る)。
+ */
+test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (publish ロール) では error 通知されない", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    () => {
+      errorCalled = true;
+    },
+  );
+  // publish ロールにも subscriber を登録しておき、呼ばれないことを検証する
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  assert.isFalse(errorCalled);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * error コールバックが throw しても、notification 経路で吸収され unhandled
+ * rejection にならず、state が closed になることを検証する。
+ */
+test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバックが throw しても state は closed になる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    () => {
+      throw new Error("error callback failed");
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  // コールバック例外が伝播して unhandled rejection にならないこと (await が解決する)
+  await readPromise;
+
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3 / §3.5:
+ * ピア起因のセッション終了 (source: "session") および source を持たない
+ * 内部エラーでは error コールバックが呼ばれないことを検証する
+ * (isPeerStreamError ガードの回帰ガード。修正前の実装でも通る)。
+ */
+test("bidiReadRequestStreamMessages: セッション終了や source なしエラー (subscribe ロール) では error 通知されない", async () => {
+  const errors: Error[] = [
+    Object.assign(new Error("session closed by peer"), { source: "session" }),
+    new Error("internal error"),
+  ];
+  for (const error of errors) {
+    const ctx = createPublishReadTestContext({});
+    let errorCalled = false;
+    const subscriber = new SubscriberImpl(
+      ["test"],
+      "track",
+      ctx.requestId,
+      1n,
+      () => {},
+      undefined,
+      undefined,
+      () => {
+        errorCalled = true;
+      },
+    );
+    ctx.session.subscribers.set(ctx.requestId, subscriber);
+    ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+    const readPromise = bidiReadRequestStreamMessages(
+      ctx.session,
+      ctx.requestId,
+      ctx.stream,
+      ctx.controlReader,
+      "subscribe",
+    );
+    ctx.readableController.error(error);
+    await readPromise;
+
+    assert.isFalse(errorCalled, `エラー通知が発生しました: ${error.message}`);
+    assert.isUndefined(ctx.closedWithError);
+  }
 });
 
 /**

@@ -46,8 +46,11 @@ export function isSessionClosedError(error: Error): boolean {
  * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
- * これはピア起因のキャンセルであり、セッション終了 (PROTOCOL_VIOLATION) には
- * 昇格させない。
+ * 逆方向 (ピアの送信方向 = 当方の readable) をピアが RESET_STREAM した場合も、
+ * reader.read() は source: "stream" の WebTransportError で reject する。
+ * これらはいずれもピア起因のキャンセルであり、セッション終了
+ * (PROTOCOL_VIOLATION) には昇格させない。受信 READ_FAILURE 検出 (subscriber
+ * エラー通知) の判定にも使用する。
  *
  * source プロパティは WebTransportError の instanceof 成否に関わらず直接読む
  * (テスト環境の Node には WebTransportError グローバルが存在しないため)。

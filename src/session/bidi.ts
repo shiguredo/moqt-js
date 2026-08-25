@@ -75,7 +75,7 @@ import {
   validateNamespacePrefixUpdate,
   validateTrackNamespaceForSend,
 } from "./params";
-import { toProtocolViolationSessionError } from "./errors";
+import { isPeerStreamError, toProtocolViolationSessionError } from "./errors";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 
 // ============================================================================
@@ -1003,7 +1003,11 @@ export async function bidiReadRequestStreamMessages(
         // 通知しない。
         if (role === "subscribe") {
           try {
-            notifySubscriberFin(session, requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+            notifySubscriberFailure(
+              session,
+              requestId,
+              new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE),
+            );
           } finally {
             // draft-ietf-moq-transport-19 §3.3.2:
             // 「A FIN sent by the responder after its response and any
@@ -1014,7 +1018,7 @@ export async function bidiReadRequestStreamMessages(
             // graceful closure を完了する。正常経路 (PUBLISH_DONE → FIN) も
             // 失敗ケース (PUBLISH_DONE なしの FIN) も、この SHOULD に基づき
             // 無条件に close() する。
-            // notifySubscriberFin の error コールバックが throw しても close()
+            // notifySubscriberFailure の error コールバックが throw しても close()
             // が実行されるよう finally で包む。
             // GOAWAY 受信済みの subscribe ロール (subscriber が存在する場合) では
             // GOAWAY ハンドラが既に writer.close() 済みのため、再度 close() する
@@ -1247,8 +1251,25 @@ export async function bidiReadRequestStreamMessages(
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
+    } else if (role === "subscribe" && isPeerStreamError(error)) {
+      // draft-ietf-moq-transport-19 §3.3.3:
+      // ピアの RESET_STREAM により readable がエラー終了した場合、subscriber の
+      // error コールバックを呼び state を closed にする (アプリが終了を検知
+      // できるようにする実用上の対応。FIN 経路の notifySubscriberFailure と同じ)。
+      // セッションは閉じない (プロトコル違反ではない)。source: "stream" 以外
+      // (セッション終了・内部エラー等) では通知しない。
+      // 内側に try/catch が必要なのは、FIN 経路は外側の try 内で呼ばれ throw が
+      // この catch に落ちて吸収されるのに対し、ここは catch ブロックの内側で
+      // throw すると戻り値の Promise が reject し、fire-and-forget の void 呼び出し
+      // で unhandled rejection になるためである。
+      try {
+        notifySubscriberFailure(session, requestId, new Error(RESET_REQUEST_STREAM_MESSAGE));
+      } catch {
+        // アプリの error コールバック例外は吸収する (markClosed は
+        // notifySubscriberFailure 内の finally で実行済み)。
+      }
     }
-    // それ以外（ストリームの正常終了・キャンセル等）は既存通り無視する
+    // それ以外（セッション終了・内部エラー等）は既存通り無視する
   } finally {
     reader.releaseLock();
     const subscriber = session.subscribers.get(requestId);
@@ -1820,16 +1841,19 @@ export function bidiHandlePublishDone(
 }
 
 // ============================================================================
-// notifySubscriberFin
+// notifySubscriberFailure
 // ============================================================================
 
 // ピアが PUBLISH_DONE を送らずに FIN した (失敗扱い) 際のエラーメッセージ
 export const FIN_WITHOUT_PUBLISH_DONE_MESSAGE =
   "publisher closed request stream without PUBLISH_DONE";
 
+// ピアが RESET_STREAM でストリームをエラー終了させた際のエラーメッセージ
+export const RESET_REQUEST_STREAM_MESSAGE = "publisher reset request stream";
+
 /**
- * ピアが PUBLISH_DONE を送らずに FIN した (失敗扱い) ことを subscriber へ
- * 通知する
+ * ピアによる FIN (PUBLISH_DONE なし) または RESET_STREAM によるストリーム
+ * エラー終了を subscriber へ通知する
  *
  * draft-ietf-moq-transport-19 §3.3.2 (Graceful Request Stream Closure):
  * 「An endpoint that receives a FIN before all required messages have
@@ -1837,10 +1861,12 @@ export const FIN_WITHOUT_PUBLISH_DONE_MESSAGE =
  * 受信側 (subscribe ロール) で、ピア (publisher) が Established subscription
  * の必須メッセージ (PUBLISH_DONE) を送る前に FIN した場合、subscriber の
  * error コールバックを呼び state を closed にする。
+ * ピアの RESET_STREAM によるエラー終了の通知 (RESET_REQUEST_STREAM_MESSAGE
+ * を渡す) にも共用する。メッセージの区別は呼び出し側が行う。
  *
  * 本関数は subscribe ロール専用である。publish ロールのピア (requester) の
- * FIN は正常完了シグナル (§3.3.2) であり、本関数を呼んではならない
- * (ロール分岐は呼び出し側が行う)。
+ * FIN / RESET は正常完了またはエラーシグナルであり、本関数を呼んでは
+ * ならない (ロール分岐は呼び出し側が行う)。
  *
  * ガード:
  * - subscribers に requestId のエントリが無い場合は何もしない
@@ -1854,10 +1880,12 @@ export const FIN_WITHOUT_PUBLISH_DONE_MESSAGE =
  *
  * error コールバックを呼んだ後、finally で必ず markClosed する (error
  * コールバックが throw しても state が closed になることを保証する)。
+ * throw 自体はここでは吸収しない (FIN 経路は呼び出し元の外側 catch が、
+ * RESET 経路は呼び出し元の内側 try/catch が担う)。
  * handleEnd は使用しない (endCallback は PUBLISH_DONE 専用であり、失敗
  * 扱いの FIN で end を呼ぶと「正常終了」として誤認されるため)。
  */
-export function notifySubscriberFin(
+export function notifySubscriberFailure(
   session: BidiSessionInternal,
   requestId: bigint,
   error: Error,
