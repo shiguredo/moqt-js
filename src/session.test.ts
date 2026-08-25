@@ -23,6 +23,7 @@ import {
   decodeFetchObjectFields,
 } from "./dataStream";
 import { bidiCancelFetch, type BidiSessionInternal } from "./session/bidi";
+import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 
 /**
  * SessionImpl を構築するための WebTransport モック
@@ -335,6 +336,91 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ば�
 });
 
 /**
+ * draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+ * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) でピアが GOAWAY を送らずに
+ * FIN した場合、応答待ちの REQUEST_UPDATE の update() の Promise が reject
+ * され、エントリが削除されることを検証する。
+ */
+test("受信 PUBLISH ストリーム上のピア FIN で応答待ちの REQUEST_UPDATE が reject されエントリが削除される", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    tracksSubscriptions: Map<
+      bigint,
+      {
+        callbacks: TracksSubscriptionCallbacks;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        rangeFilters?: RangeFilterSpec[];
+      }
+    >;
+    receivedRequestIds: Set<bigint>;
+    subscribersByAlias: Map<bigint, unknown[]>;
+    pendingRequestUpdate: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        targetRequestId: bigint;
+      }
+    >;
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  sessionInternal.tracksSubscriptions.set(1n, {
+    callbacks: {
+      onPublish: async () => {
+        return { object: () => {} };
+      },
+      onNamespaceDone: () => {},
+      onPublishSkipped: () => {},
+    } as TracksSubscriptionCallbacks,
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  sessionInternal.receivedRequestIds = new Set();
+  sessionInternal.subscribersByAlias = new Map();
+
+  // FIN 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  sessionInternal.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: 1n,
+  });
+
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  const controlWriter = new ControlStreamWriter();
+  const publishFramed = controlWriter.encode(MessageType.PUBLISH, publishPayload);
+
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(publishFramed);
+      // GOAWAY を送らずにピアが FIN する
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await sessionInternal.handleIncomingBidirectionalStream(stream);
+
+  // FIN 時点で未応答 REQUEST_UPDATE が reject され、エントリが削除される
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+});
+
+/**
  * draft-ietf-moq-transport-19 §10.4:
  * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) で GOAWAY を受信した場合、
  * 旧ストリーム上の未応答 REQUEST_UPDATE の update() の Promise が reject され、
@@ -486,7 +572,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
 
   // update() の Promise が reject され、pending エントリと pendingPrefix が掃除される
   assert.isDefined(rejected);
-  assert.equal(rejected!.message, "stream closed before receiving update response");
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
   assert.isUndefined(entry.pendingPrefix);
   // ストリームが FIN (writer.close()) で閉じられ、エントリが削除される
@@ -547,7 +633,7 @@ test("tracks の unsubscribe() で in-flight の update() が reject され pend
   await subscription.unsubscribe();
 
   assert.isDefined(rejected);
-  assert.equal(rejected!.message, "stream closed before receiving update response");
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
   assert.isUndefined(entry.pendingPrefix);
   assert.equal(entry.state, "closed");
