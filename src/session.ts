@@ -3334,7 +3334,7 @@ export class SessionImpl implements Session {
           // 受信 PUBLISH の subscriber (impl) が、ピア (publisher) の
           // PUBLISH_DONE を送らない FIN を受けた場合は失敗扱いであり、
           // subscriber に通知する (通知のガードは free function 内で行う)。
-          bidi.notifySubscriberFin(
+          bidi.notifySubscriberFailure(
             this as unknown as bidi.BidiSessionInternal,
             publishRequestId,
             new Error(bidi.FIN_WITHOUT_PUBLISH_DONE_MESSAGE),
