@@ -51,6 +51,7 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     state: "active" | "closed";
     namespacePrefix: string[];
     pendingPrefix?: string[];
+    callbacks: Record<string, unknown>;
   };
   getClosedWithError: () => SessionError | undefined;
 } {
@@ -712,6 +713,238 @@ test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAM
   assert.isDefined(ctx.getClosedWithError());
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("before corresponding NAMESPACE"));
+});
+
+test("namespaceStartNamespaceStreamLoop: unsubscribe 後の遅延 REQUEST_OK で PROTOCOL_VIOLATION にならない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let resolved = false;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  // 確立応答を feed して処理を待つ
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isTrue(resolved);
+
+  // unsubscribe() 相当: state を closed にした後、ピアから遅延 REQUEST_OK が
+  // 別フィードとして届く実運用の流れを再現する (while 条件は read() 開始時に
+  // 検査済みのため、for ループ冒頭のガードが唯一の防衛線になる)。
+  ctx.subscription.state = "closed";
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 遅延 REQUEST_OK は state ガードで無視され、セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartNamespaceStreamLoop: unsubscribe 後の遅延 REQUEST_ERROR で PROTOCOL_VIOLATION にならない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let resolved = false;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isTrue(resolved);
+
+  // unsubscribe 相当で state を closed にしてから、遅延 REQUEST_ERROR を feed する
+  ctx.subscription.state = "closed";
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 遅延 REQUEST_ERROR は state ガードで無視され、セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartNamespaceStreamLoop: unsubscribe 後の遅延 NAMESPACE / NAMESPACE_DONE / GOAWAY でコールバックが発火しない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const fired: string[] = [];
+  ctx.subscription.callbacks = {
+    onNamespace: () => {
+      fired.push("onNamespace");
+    },
+    onNamespaceDone: () => {
+      fired.push("onNamespaceDone");
+    },
+    goaway: () => {
+      fired.push("goaway");
+    },
+  };
+  let resolved = false;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isTrue(resolved);
+
+  // unsubscribe 相当で state を closed にしてから、遅延 NAMESPACE /
+  // NAMESPACE_DONE / GOAWAY を feed する
+  const suffix = createTrackNamespace(["live", "sports"]);
+  ctx.subscription.state = "closed";
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: suffix,
+      }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.GOAWAY,
+      encodeGoawayPayload({
+        type: MessageType.GOAWAY,
+        newSessionUri: "moqt://new.example.com",
+        timeout: 0n,
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // state ガードとループ終了により、spurious コールバックも PROTOCOL_VIOLATION
+  // も発生しない (最初の NAMESPACE がガードで無視された後、while 条件により
+  // ループが終了して以後のメッセージは処理されない)
+  assert.deepEqual(fired, []);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartTracksStreamLoop: unsubscribe 後の遅延 REQUEST_OK で PROTOCOL_VIOLATION にならない", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let resolved = false;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isTrue(resolved);
+
+  // unsubscribe 相当で state を closed にしてから、遅延 REQUEST_OK を feed する
+  ctx.subscription.state = "closed";
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 遅延 REQUEST_OK は state ガードで無視され、セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartTracksStreamLoop: unsubscribe 後の遅延 REQUEST_ERROR で PROTOCOL_VIOLATION にならない", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let resolved = false;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isTrue(resolved);
+
+  // unsubscribe 相当で state を closed にしてから、遅延 REQUEST_ERROR を feed する
+  ctx.subscription.state = "closed";
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 遅延 REQUEST_ERROR は state ガードで無視され、セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartTracksStreamLoop: unsubscribe 後の遅延 PUBLISH_SKIPPED でコールバックが発火しない", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let onPublishSkippedCalled = false;
+  ctx.subscription.callbacks = {
+    onPublishSkipped: () => {
+      onPublishSkippedCalled = true;
+    },
+  };
+  let resolved = false;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolved = true;
+    },
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isTrue(resolved);
+
+  // unsubscribe 相当で state を closed にしてから、遅延 PUBLISH_SKIPPED を feed する
+  ctx.subscription.state = "closed";
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.PUBLISH_SKIPPED,
+      encodePublishSkippedPayload({
+        type: MessageType.PUBLISH_SKIPPED,
+        trackNamespaceSuffix: createTrackNamespace(["live", "sports"]),
+        trackName: new TextEncoder().encode("track1"),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // state ガードにより onPublishSkipped の spurious 発火は発生しない
+  assert.isFalse(onPublishSkippedCalled);
+  assert.isUndefined(ctx.getClosedWithError());
 });
 
 test("namespaceStartTracksStreamLoop: 正常な PUBLISH_SKIPPED でセッションが閉じない", async () => {

@@ -89,10 +89,13 @@ function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestEr
  * 保留中の REQUEST_UPDATE をすべて失敗させ、pendingPrefix をクリアする
  *
  * REQUEST_ERROR 受信 (goawayReceived を含む) / ストリームクローズ /
- * セッションクローズ検出の各経路で共通の後始末。
- * 保留中の更新が無い場合は何もしない。
+ * セッションクローズ検出 / unsubscribe の各経路で共通の後始末。
+ * 保留中の更新が無い場合は何もしない (pendingPrefix が残ることは無い。
+ * pendingPrefix の設定と pending エントリの登録は同一 tick 内の対であり、
+ * 失敗経路でも対で掃除されるため、pendingPrefix が undefined でない場合は
+ * pending エントリが必ず存在する)。
  */
-function rejectPendingNamespaceUpdates(
+export function rejectPendingNamespaceUpdates(
   session: SessionInternal,
   requestId: bigint,
   subscription: NamespaceSubscriptionState | TracksSubscriptionState,
@@ -104,6 +107,15 @@ function rejectPendingNamespaceUpdates(
   bidi.rejectPendingRequestUpdates(session, requestId, error);
   subscription.pendingPrefix = undefined;
 }
+
+/**
+ * ストリームクローズ / unsubscribe 時に保留中の更新を失敗させるときの
+ * エラー文言。FIN 経路 (handleNamespaceRequestUpdateStreamClosed) と
+ * unsubscribe 経路 (closeNamespaceSubscription / closeTracksSubscription) で
+ * update() の reject 内容を統一する。
+ */
+export const REQUEST_UPDATE_STREAM_CLOSED_MESSAGE =
+  "stream closed before receiving update response";
 
 /**
  * 確立後の REQUEST_OK (REQUEST_UPDATE 応答) を処理する
@@ -243,7 +255,7 @@ function handleNamespaceRequestUpdateStreamClosed(
     session,
     requestId,
     subscription,
-    new Error("stream closed before receiving update response"),
+    new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
   );
 }
 
@@ -291,6 +303,16 @@ export async function namespaceStartNamespaceStreamLoop(
 
       const messages = controlReader.feed(value);
       for (const msg of messages) {
+        // unsubscribe() (closeNamespaceSubscription) により state が "closed" に
+        // なった後の遅延応答 (REQUEST_OK / REQUEST_ERROR / NAMESPACE /
+        // NAMESPACE_DONE / GOAWAY) は処理しない。unsubscribe 側で保留中の更新を
+        // reject し掃除済みのため、遅延 REQUEST_OK は「保留中の更新が無い 2 通目
+        // REQUEST_OK」として PROTOCOL_VIOLATION で誤って閉じる (ピアは §10.9 の
+        // 応答必須規約に従い応答しただけであり、誤検知である)。同様に
+        // callbacks.onNamespace / goaway の spurious 発火も防ぐ。
+        if (subscription.state !== "active") {
+          break;
+        }
         const messageType = msg.type;
         const messagePayload = msg.payload;
 
@@ -531,6 +553,13 @@ export async function namespaceStartTracksStreamLoop(
 
       const messages = controlReader.feed(value);
       for (const msg of messages) {
+        // namespaceStartNamespaceStreamLoop のガードと同様
+        // (unsubscribe 後の遅延応答 (REQUEST_OK / REQUEST_ERROR / PUBLISH_SKIPPED /
+        // GOAWAY) は無視し、PROTOCOL_VIOLATION で誤って閉じるのと
+        // callbacks.onPublishSkipped / goaway の spurious 発火を防ぐ)。
+        if (subscription.state !== "active") {
+          break;
+        }
         const messageType = msg.type;
         const messagePayload = msg.payload;
 
