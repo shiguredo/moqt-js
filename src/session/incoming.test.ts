@@ -13,6 +13,7 @@ import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
 import {
   incomingClassifyFirstBidiMessage,
+  incomingHandleDatagram,
   incomingHandleFirstBidiMessage,
   incomingSendRequestErrorAndClose,
   incomingValidateRequestId,
@@ -416,4 +417,35 @@ test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", ()
     [...received].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     [1n, 3n],
   );
+});
+
+// ============================================================================
+// incomingHandleDatagram のテスト
+// draft-ietf-moq-transport-19 §11.3.1 (Object Datagram)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §11.3.1:
+ * 不完全な Object Datagram (varint が途中終端する構造破損) は、黙殺せず
+ * PROTOCOL_VIOLATION でセッションが閉じることを検証する。datagram は
+ * Length フレーミングを持たないが、原子配信のため不完全なフィールド構造は
+ * 構造破損の意味しか持たない (toProtocolViolationSessionError の変換対象)。
+ */
+test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッションが閉じる", () => {
+  let closedWithError: SessionError | undefined;
+  const session = {
+    callbacks: {
+      debug: () => {},
+    },
+    subscribersByAlias: new Map(),
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+  } as unknown as SessionInternal;
+
+  // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
+  incomingHandleDatagram(session, new Uint8Array([0x80]));
+
+  assert.isDefined(closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
 });

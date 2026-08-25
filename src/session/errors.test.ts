@@ -1,6 +1,11 @@
 import { test, assert } from "vite-plus/test";
 import { isSessionClosedError, isPeerStreamError, toProtocolViolationSessionError } from "./errors";
-import { ProtocolViolationError, SessionError, SessionErrorCode } from "../error";
+import {
+  IncompleteDataError,
+  ProtocolViolationError,
+  SessionError,
+  SessionErrorCode,
+} from "../error";
 
 test("isSessionClosedError: メッセージに 'session is closed' を含むエラーは true", () => {
   const error = new Error("The session is closed.");
@@ -74,16 +79,26 @@ test("toProtocolViolationSessionError: ProtocolViolationError は PROTOCOL_VIOLA
   assert.equal(sessionError?.message, "GOAWAY URI length exceeds maximum: 9000 > 8192");
 });
 
+test("toProtocolViolationSessionError: IncompleteDataError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
+  // Length が揃った後のメッセージ構造の破損は仕様違反として
+  // PROTOCOL_VIOLATION で閉じる (リポジトリ共通解釈)
+  const original = new IncompleteDataError("incomplete request update fields");
+  const sessionError = toProtocolViolationSessionError(original);
+  assert.instanceOf(sessionError, SessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(sessionError?.message, "incomplete request update fields");
+});
+
 test("toProtocolViolationSessionError: 通常の Error は null を返す", () => {
   // ストリームの正常終了・キャンセル等で投げられる通常の Error は握り潰し対象なので null
   const sessionError = toProtocolViolationSessionError(new Error("stream reset by peer"));
   assert.isNull(sessionError);
 });
 
-test("toProtocolViolationSessionError: ProtocolViolationError 以外のエラークラスは null を返す", () => {
-  // 別の Error 派生クラス (SessionError) を渡しても ProtocolViolationError ではないので
-  // null になることを検証する。closeWithError が投げうる SessionError を二度
-  // PROTOCOL_VIOLATION 化して握り潰さない意図を担保する。
+test("toProtocolViolationSessionError: 変換対象以外のエラークラスは null を返す", () => {
+  // 別の Error 派生クラス (SessionError) を渡しても変換対象 (ProtocolViolationError /
+  // IncompleteDataError) ではないので null になることを検証する。closeWithError が
+  // 投げうる SessionError を二度 PROTOCOL_VIOLATION 化して握り潰さない意図を担保する。
   const sessionError = toProtocolViolationSessionError(
     new SessionError("already closed", SessionErrorCode.PROTOCOL_VIOLATION),
   );

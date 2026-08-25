@@ -26,6 +26,11 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] 受信メッセージのデコード失敗でセッションが閉じないのを修正する
+  - draft-ietf-moq-transport-19 §10 の MUST に基づき、toProtocolViolationSessionError が IncompleteDataError も PROTOCOL_VIOLATION の SessionError へ変換するようにし、制御メッセージ層のデコード失敗 (Length が揃った後の構造破損) で黙殺されずにセッションが閉じるようにする
+  - publish ロールの受信 REQUEST_UPDATE、namespace 系ループ、受信応答読み取り、datagram デコードの失敗が潜んでいた経路を一括で塞ぐ
+  - data stream の「データ不足 = 次チャンク待ち」経路は instanceof IncompleteDataError が変換より先にチェックされるため挙動は変わらない
+  - @voluntas
 - [FIX] GOAWAY 受信時に応答待ちの REQUEST_UPDATE がクリーンアップされないのを修正する
   - draft-ietf-moq-transport-19 §10.4 に基づき、bidiReadRequestStreamMessages / runPublishStreamSubLoop の GOAWAY 受信時に、当該 requestId を targetRequestId とする保留中の REQUEST_UPDATE を REQUEST_ERROR (GOING_AWAY) で reject してエントリを削除する
   - GOAWAY 後の読み取り継続中に REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため二重解決しない

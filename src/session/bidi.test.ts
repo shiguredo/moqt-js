@@ -2027,6 +2027,72 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
 });
 
 /**
+ * draft-ietf-moq-transport-19 §10.9 / §10:
+ * role=publish の受信 REQUEST_UPDATE のペイロードが不完全 (メッセージ構造の
+ * 破損) な場合、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを
+ * 検証する。ControlStreamReader が Length 分の完全なメッセージのみ渡す
+ * ため、IncompleteDataError はここでは構造破損を意味する。
+ */
+test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // Request ID の後に Parameters が無い不完全なペイロードを feed する
+  const invalidPayload = new Uint8Array([0x01]);
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, invalidPayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_OK / REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  assert.equal(ctx.written.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("invalid REQUEST_UPDATE payload"));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * role=publish の受信 REQUEST_UPDATE が正常な場合、FORWARD が publisher の
+ * Forward State に反映され REQUEST_OK が応答されることを検証する (回帰
+ * ガード)。IncompleteDataError の変換対象追加で既存処理が変わらないことを
+ * 担保する。
+ */
+test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール) で FORWARD が反映され REQUEST_OK が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // FORWARD=0 が publisher の Forward State に反映され、REQUEST_OK が応答される
+  assert.equal(ctx.publisher.forwardState, false);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-19 §5.1.3:
  * 受信 PUBLISH_OK に不正な Range Filter (値域違反) が含まれる場合、
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
@@ -2105,6 +2171,74 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
   assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isFalse(session.pendingPublish.has(requestId));
   assert.isDefined(rejected);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.5:
+ * 受信 PUBLISH_OK のペイロードが不完全 (メッセージ構造の破損) な場合、
+ * PROTOCOL_VIOLATION でセッションが閉じることを検証する。IncompleteDataError
+ * は toProtocolViolationSessionError で変換され、閉鎖前に当該リクエストの
+ * pending にも具体エラーで reject される (Range Filter 違反の既存経路と
+ * 同パターン)。
+ */
+test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const requestId = 10n;
+  let closedWithError: SessionError | undefined;
+  let rejected: Error | undefined;
+
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を feed する
+      const writer = new ControlStreamWriter();
+      const message = writer.encode(MessageType.REQUEST_OK, new Uint8Array([0x01]));
+      controller.enqueue(message);
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>();
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const controlReader = new ControlStreamReader();
+
+  const pending = {
+    impl: new PublisherImpl(["test"], "track", requestId, 1n),
+    resolve: () => {},
+    reject: (e: Error) => {
+      rejected = e;
+    },
+  };
+
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter: new ControlStreamWriter(),
+    nextRequestId: 100n,
+    pendingPublish: new Map([[requestId, pending]]),
+    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    tracksSubscriptions: new Map(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+  } as unknown as BidiSessionInternal;
+
+  await bidiReadPublishResponse(session, requestId, stream, controlReader);
+
+  assert.isDefined(closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(session.pendingPublish.has(requestId));
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, closedWithError!.message);
 });
 
 /**
@@ -2458,9 +2592,10 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 後の GOING_AWAY 応答の書き�
 /**
  * draft-ietf-moq-transport-19 §10.9:
  * REQUEST_UPDATE のペイロードのデコードに失敗した場合 (メッセージ構造の
- * 破損)、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
- * 閉じない場合、呼び出し元のループ catch では IncompleteDataError が変換
- * されず、セッションが開いたままストリーム読み取りが止まるためである。
+ * 破損)、本関数内で PROTOCOL_VIOLATION としてセッションが閉じることを
+ * 検証する。ここで閉じることで、「invalid REQUEST_UPDATE payload」の文脈を
+ * 付与した SessionError が callbacks.error に渡り、後続のパラメータ検証を
+ * 実行しない。
  */
 test("bidiHandlePublishRequestUpdate: デコード失敗は PROTOCOL_VIOLATION でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
