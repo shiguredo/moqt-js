@@ -3330,6 +3330,17 @@ export class SessionImpl implements Session {
       while (impl.state === "active") {
         const { value, done } = await subReader.read();
         if (done) {
+          // draft-ietf-moq-transport-19 §10.9.1:
+          // 応答を待たずにストリームが閉じた場合は保留中の更新の失敗として、
+          // アプリの update() の Promise を reject する (bidiReadRequestStreamMessages
+          // の FIN ケースと同じ。GOAWAY 掃除と二重 reject にならないよう、
+          // エントリ削除済みなら no-op になる)。reject はアプリの error
+          // コールバック例外の影響を受けないよう、通知の前に置く。
+          bidi.rejectPendingRequestUpdates(
+            this as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+            new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+          );
           // draft-ietf-moq-transport-19 §3.3.2:
           // 受信 PUBLISH の subscriber (impl) が、ピア (publisher) の
           // PUBLISH_DONE を送らない FIN を受けた場合は失敗扱いであり、
