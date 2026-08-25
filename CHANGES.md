@@ -26,6 +26,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] Datagram / End of Range 直後の同一 Subgroup の Priority 不一致を誤検出するのを修正する
+  - draft-ietf-moq-transport-19 §2.4.2 に基づき、Priority 比較を同一 Group・同一 Subgroup の直近の Subgroup オブジェクトに限定する (Datagram は Subgroup に属さないため比較対象外、Group 跨ぎは比較対象なし)
+  - §2.4.2 比較専用の subgroupPublisherPriority (Subgroup オブジェクトでのみ更新) を FetchObjectContext に追加し、継承用の publisherPriority (直近の実オブジェクトの値、§11.4.4.1 Table 9) とは分離する (Group 横断時の比較対象の存在には hasPriorSubgroup を使用)
+  - @voluntas
 - [FIX] Subgroup Header で Priority Present の型の Publisher Priority 省略を throw する
   - draft-ietf-moq-transport-19 §11.4.2 に基づき、encodeSubgroupHeader が Priority Present (DEFAULT_PRIORITY bit = 0) の型で publisherPriority 未指定の場合にエラーを throw する
   - 欠落ワイヤはデコード側でフィールドずれを生むため、encodeObjectDatagram と同じ防御を適用する

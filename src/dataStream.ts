@@ -1086,7 +1086,31 @@ export interface FetchObjectContext {
   groupId: bigint;
   subgroupId: bigint;
   objectId: bigint;
+  /**
+   * 直近の実オブジェクト (Datagram を含む) の Publisher Priority。
+   * draft-ietf-moq-transport-19 §11.4.4.1 Table 9 の「Priority is the prior
+   * Object's Priority」の規定に従い、0x10 省略時の継承値に使う (prior Object
+   * には Datagram も含まれる)。
+   */
   publisherPriority: number;
+  /**
+   * 直近の Subgroup オブジェクトの Publisher Priority。
+   * draft-ietf-moq-transport-19 §2.4.2 の比較対象
+   * ("the previous Object with the same Subgroup ID") に使う値であり、
+   * Subgroup オブジェクトでのみ更新される (Datagram / End of Range では
+   * 保持する。Subgroup を持たないオブジェクトは比較対象外のため)。
+   * optional (undefined) は publisherPriority を代用する (ハードコード
+   * されたテストコンテキストとの互換)。
+   */
+  subgroupPublisherPriority?: number;
+  /**
+   * 現在の Group 内に先行する Subgroup オブジェクトが存在するか。
+   * 存在しない場合 (まだ Subgroup オブジェクトが出現していない・Group を
+   * 横断した直後) は、Priority 比較の対象が無いため比較しない。
+   * optional (undefined) は「先行する Subgroup オブジェクトあり」として
+   * 扱う (ハードコードされたテストコンテキストとの互換)。
+   */
+  hasPriorSubgroup?: boolean;
 }
 
 /**
@@ -1257,11 +1281,22 @@ function decodeEndOfRange(
   const endOfRange: EndOfRangeType =
     flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ? "non_existent" : "unknown";
 
+  // End of Range は常に Group ID を明示する。Group が変更された場合は
+  // 先行する Subgroup オブジェクトの存在をリセットし、同一 Group 内の
+  // End of Range では引き継ぐ (後続の同一 Subgroup オブジェクトの比較
+  // 対象が直前の Subgroup オブジェクトになり得るため)。
+  // publisherPriority / subgroupPublisherPriority は End of Range の前の
+  // 実オブジェクトの値を保持する (§11.4.4.2 の「The Priority from the
+  // last actual Object before the End of Range indicator」)。
+  const sameGroup = context !== null && groupId === context.groupId;
   const newContext: FetchObjectContext = {
     groupId,
     subgroupId: context?.subgroupId ?? 0n,
     objectId,
     publisherPriority: context?.publisherPriority ?? 0,
+    subgroupPublisherPriority:
+      context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0,
+    hasPriorSubgroup: sameGroup ? (context?.hasPriorSubgroup ?? true) : false,
   };
 
   return [
@@ -1330,6 +1365,53 @@ function decodeFetchSubgroupId(
     }
     default:
       throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
+  }
+}
+
+/**
+ * 同一 Group・同一 Subgroup の直近の Subgroup オブジェクトとの Publisher
+ * Priority の一致を検証する
+ *
+ * draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+ * "An Object with a particular Subgroup ID is received, but its Publisher
+ *  Priority is different from that of the previous Object with the same
+ *  Subgroup ID."
+ * 同一 Group・同一 Subgroup 内のオブジェクトは同じ Publisher Priority を
+ * 持つ必要がある。異なる Priority を検出した場合は MalformedTrackError を
+ * throw する。上位ハンドラはこれを FETCH キャンセル (セッション終了ではない)
+ * に変換する。
+ *
+ * 検出は Group スコープで行う。draft-ietf-moq-transport-19 §2.2:
+ * "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
+ *  MAY share a Subgroup ID without implying any relationship between them."
+ * 異なる Group の同一 Subgroup ID は無関係であり、Priority が異なっても合法。
+ * 比較対象は「同一 Group・同一 Subgroup の直近の Subgroup オブジェクト」であり、
+ * 前オブジェクトが Datagram / End of Range の場合はその前の Subgroup
+ * オブジェクトを対象にする (Datagram は Subgroup に属さないため比較対象外。
+ * Group が横断された場合 (hasPriorSubgroup = false) は比較対象が無いため
+ * 比較しない)。
+ */
+function checkSubgroupPriorityMismatch(
+  context: FetchObjectContext | null,
+  isDatagram: boolean,
+  groupId: bigint,
+  subgroupId: bigint,
+  publisherPriority: number,
+): void {
+  if (
+    !isDatagram &&
+    context !== null &&
+    groupId === context.groupId &&
+    subgroupId === context.subgroupId &&
+    (context.hasPriorSubgroup ?? true)
+  ) {
+    const expected = context.subgroupPublisherPriority ?? context.publisherPriority;
+    if (publisherPriority !== expected) {
+      throw new MalformedTrackError(
+        `malformed track: different priorities in same subgroup ` +
+          `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
+      );
+    }
   }
 }
 
@@ -1471,37 +1553,13 @@ export function decodeFetchObjectFields(
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
 
-    // draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
-    // 同一 Group・同一 Subgroup 内のオブジェクトは同じ Publisher Priority を
-    // 持つ必要がある。異なる Priority を検出した場合は MalformedTrackError を
-    // throw する。上位ハンドラはこれを FETCH キャンセル (セッション終了ではない)
-    // に変換する。
-    // 検出は Group スコープで行う。draft-ietf-moq-transport-19 §2.2:
-    // "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
-    //  MAY share a Subgroup ID without implying any relationship between them."
-    // 異なる Group の同一 Subgroup ID は無関係であり、Priority が異なっても合法。
-    // Datagram オブジェクトは Subgroup に属さないためチェックをスキップする。
-    // なお、前オブジェクトが Datagram の場合にコンテキストの publisherPriority が
-    // Datagram の値で更新されるため、Datagram 直後の同一 Group・同一 Subgroup
-    // オブジェクトが誤検出され得る既知の挙動がある (dataStream.fetch.test.ts の
-    // Datagram 混在テストで固定している)。
-    if (
-      !isDatagram &&
-      context !== null &&
-      groupId === context.groupId &&
-      subgroupId === context.subgroupId
-    ) {
-      if (publisherPriority !== context.publisherPriority) {
-        throw new MalformedTrackError(
-          `malformed track: different priorities in same subgroup ` +
-            `(group=${groupId}, subgroup=${subgroupId}, expected=${context.publisherPriority}, actual=${publisherPriority})`,
-        );
-      }
-    }
+    checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
   } else {
     // draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
     // 先頭オブジェクトに MUST なのは Group ID Delta と Object ID Delta のみ。
-    // PRIORITY_PRESENT は任意であり、省略時はデフォルト値 128 を使用する。
+    // PRIORITY_PRESENT は任意であり、省略時は直近の実オブジェクト (Datagram
+    // を含む) の Priority を継承する。先頭オブジェクト (context null) のみ
+    // デフォルト値 128 を使用する。
     if (context === null) {
       publisherPriority = 128;
     } else {
@@ -1532,14 +1590,30 @@ export function decodeFetchObjectFields(
 
   // 次のオブジェクトのためにコンテキストを更新
   // Datagram オブジェクトは Subgroup ID を持たないため、
-  // コンテキストには Datagram 以前の実際の Subgroup ID を伝搬させる
+  // コンテキストには Datagram 以前の実際の Subgroup ID を伝搬させる。
+  // publisherPriority は直近の実オブジェクトの値として全オブジェクトで更新する
+  // (§11.4.4.1 Table 9 の 0x10 省略時の継承値)。§2.4.2 比較専用の
+  // subgroupPublisherPriority は Subgroup オブジェクトでのみ更新する。
+  const groupChanged = (flags & FetchSerializationFlags.GROUP_ID_PRESENT) !== 0 || context === null;
   const newContext: FetchObjectContext = {
     groupId,
     subgroupId: isDatagram ? (context?.subgroupId ?? 0n) : subgroupId,
     objectId,
     publisherPriority,
+    // 直近の Subgroup オブジェクトの Priority (Datagram / End of Range では保持)
+    subgroupPublisherPriority: isDatagram
+      ? (context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0)
+      : publisherPriority,
+    // 現在の Group 内に先行する Subgroup オブジェクトが存在するか。
+    // Group が変更された場合はリセットし、Datagram は存在を加算しない
+    // (非 Datagram ではこのオブジェクト自身が先行 Subgroup として数える)。
+    // ハードコードされたコンテキストとの互換のため、undefined は「あり」扱い。
+    hasPriorSubgroup: isDatagram
+      ? groupChanged
+        ? false
+        : (context?.hasPriorSubgroup ?? true)
+      : true,
   };
-
   return [
     {
       groupId,

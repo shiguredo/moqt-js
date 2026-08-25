@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Model: DeepSeek V4 Flash
 - Branch: feature/fix-fetch-priority-mismatch-after-non-subgroup-object
 - Polished: 2026-08-20
@@ -50,4 +50,12 @@ FETCH 応答のデコードで、前オブジェクトが Subgroup を持たな�
 
 ## 解決方法
 
-未着手。
+- `src/dataStream.ts` (`FetchObjectContext` `hasPriorSubgroup` / `subgroupPublisherPriority` フィールド追加、`checkSubgroupPriorityMismatch` ヘルパー抽出、`decodeFetchObjectFields` / `decodeEndOfRange` のコンテキスト更新):
+  - `publisherPriority` は従来どおり全オブジェクト (Datagram を含む) で更新する。§11.4.4.1 Table 9 の「Priority is the prior Object's Priority」の継承値として維持し、0x10 省略時のデコード値を仕様どおりにする。
+  - §2.4.2 比較専用として `subgroupPublisherPriority` を追加し、Subgroup オブジェクトでのみ更新 (Datagram / End of Range では保持。undefined は publisherPriority を代用する互換)。
+  - 同一 Group 内に先行する Subgroup オブジェクトが存在するか (`hasPriorSubgroup`) を追加。Datagram / 同一 Group 内 End of Range では保持し、Group 横断 (EOR または Datagram の GROUP_ID_PRESENT) ではリセット。リセットされている場合は比較しない。
+  - `checkSubgroupPriorityMismatch` は「同一 Group・同一 Subgroup かつ先行 Subgroup オブジェクトあり」の場合のみ比較する。
+- テスト (`src/dataStream.fetch.test.ts`): 既知の誤検出を固定していたテストを「誤検出されない」に書き換え (Datagram 直後の同一 Subgroup は直近 Subgroup の Priority と比較)。真の不一致の検出維持 (Datagram を挟んだケース・同一 Group EOR 後)、EOR / Datagram の Group 横断後の比較なし、hasPriorSubgroup 未指定コンテキストとの互換、Priority 省略時の継承値 (直近の実オブジェクト = Datagram の値) のテストを追加。
+- `CHANGES.md`: `[FIX]` を追記。
+
+残余: Subgroup 交互出現 (S1 → S2 → S1) の際の同一 Subgroup 直近 Priority の追跡は従来から存在しない (単一コンテキストの制約)。本 issue のスコープ外の既存ギャップとして記録する。
