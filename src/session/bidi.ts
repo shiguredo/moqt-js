@@ -398,9 +398,14 @@ export async function bidiReadPublishResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for PUBLISH request`));
     }
   } catch (error) {
-    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError) {
+      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
+      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+      session.pendingPublish.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(sessionError);
       session.closeWithError(sessionError);
       return;
     }
@@ -519,14 +524,17 @@ export async function bidiReadSubscribeResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for SUBSCRIBE request`));
     }
   } catch (error) {
-    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError) {
+      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
+      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+      session.pendingSubscribe.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(sessionError);
       session.closeWithError(sessionError);
       return;
     }
-    session.pendingSubscribe.delete(requestId);
-    session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
@@ -607,14 +615,17 @@ export async function bidiReadFetchResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for FETCH request`));
     }
   } catch (error) {
-    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError) {
+      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
+      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+      session.pendingFetch.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(sessionError);
       session.closeWithError(sessionError);
       return;
     }
-    session.pendingFetch.delete(requestId);
-    session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
@@ -679,14 +690,17 @@ export async function bidiReadTrackStatusResponse(
       pending.reject(new Error(`unexpected response type ${msg.type} for TRACK_STATUS request`));
     }
   } catch (error) {
-    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError) {
+      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
+      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+      session.pendingTrackStatus.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(sessionError);
       session.closeWithError(sessionError);
       return;
     }
-    session.pendingTrackStatus.delete(requestId);
-    session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
@@ -826,9 +840,11 @@ export async function bidiHandlePublishRequestUpdate(
   // 判定順序 (2) の前に REQUEST_UPDATE ペイロードをデコードする
   // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。ControlStreamReader
   // は Length 分の完全なメッセージのみ渡すため、IncompleteDataError は
-  // メッセージ構造の破損を意味する。ここで閉じない場合、呼び出し元のループ
-  // catch (ProtocolViolationError のみ変換) では IncompleteDataError が
-  // 変換されず、セッションが開いたままストリーム読み取りが止まるためである。
+  // メッセージ構造の破損を意味する。呼び出し元ループの catch
+  // (toProtocolViolationSessionError) でも IncompleteDataError は
+  // PROTOCOL_VIOLATION に変換されるが、ここでは「invalid REQUEST_UPDATE
+  // payload」の文脈を付与したメッセージで閉じ、後続のパラメータ検証を
+  // 実行しないよう早期 return する。
   let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
   try {
     decoded = decodeRequestUpdatePayload(payload);
@@ -1090,7 +1106,23 @@ export async function bidiReadRequestStreamMessages(
             // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
             //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
             //  successful, unless it is coalescing failed updates.」
-            const decoded = decodeRequestUpdatePayload(msg.payload);
+            // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
+            // ループ catch (toProtocolViolationSessionError) と同じだが、ここでは
+            // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
+            // 後続のパラメータ検証を実行しないよう早期 return する
+            // (bidiHandlePublishRequestUpdate と同パターン)。
+            let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
+            try {
+              decoded = decodeRequestUpdatePayload(msg.payload);
+            } catch (err) {
+              session.closeWithError(
+                new SessionError(
+                  `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+            }
 
             // パラメータスコープ検証
             // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope)
@@ -1211,7 +1243,7 @@ export async function bidiReadRequestStreamMessages(
       }
     }
   } catch (error) {
-    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError !== null) {
       session.closeWithError(sessionError);

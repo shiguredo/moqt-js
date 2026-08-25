@@ -285,7 +285,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       },
       timestamp: Date.now(),
     });
-    // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
     const sessionError = toProtocolViolationSessionError(err);
     if (sessionError !== null) {
       session.closeWithError(sessionError);

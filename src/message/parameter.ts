@@ -1354,11 +1354,13 @@ export function decodeRangeFilter(
  * Range Filter 内部の varint デコード
  *
  * draft-ietf-moq-transport-19 §5.1.3:
- * 宣言 Length 内で varint が途中終端するケース (構造不正) は
- * IncompleteDataError のままにせず InvalidFilterError に変換して扱う。
- * IncompleteDataError は受信ループの toProtocolViolationSessionError で
- * 変換されず黙殺されるため、構造不正を検出できないとセッションが
- * 開いたまま応答なしになる。
+ * 宣言 Length 内で varint が途中終端するケース (構造不正) は、そのまま流すと
+ * 受信ループの toProtocolViolationSessionError で PROTOCOL_VIOLATION の
+ * セッション終了になるため、Range Filter の値違反として扱える
+ * InvalidFilterError に変換する。REQUEST_UPDATE 経路ではこの値違反を
+ * REQUEST_ERROR (INVALID_FILTER) で応答でき、PUBLISH_OK 経路では
+ * REQUEST_ERROR を送信できないため PROTOCOL_VIOLATION でセッションを
+ * 閉じる。
  */
 function decodeRangeFilterVarint(data: Uint8Array, offset: number): [bigint, number] {
   try {
