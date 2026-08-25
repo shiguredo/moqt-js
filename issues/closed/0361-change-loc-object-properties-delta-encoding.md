@@ -1,7 +1,7 @@
 # LOC Object Properties のエンコードを delta encoding に追従させる
 
 - Created: 2026-08-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/change-loc-object-properties-delta-encoding
 - Polished: 2026-08-07
 
@@ -58,4 +58,12 @@ issue 0379（Delta Type 加算の 2^64-1 超過検証）は `decodeObjectPropert
 
 ## 解決方法
 
-未着手。
+LOC Object Properties のエンコード / デコードを Key-Value-Pair delta encoding（draft-ietf-moq-transport-19 §1.4.3 / §11.2.1.2）に追従させた。
+
+- `src/loc.ts`: `encodeVideoProperties()` / `encodeAudioProperties()` を Property[] 組み立て + `encodeProperties()` 方式（ID 昇順ソート・delta 連鎖）に置き換えた。単体エンコーダ / デコーダ 12 関数は維持し、JSDoc に単一 Property 前提・複数連結に使わない旨の注記を追加した。冒頭コメント・`encodeLocObjectPayload()` の JSDoc・`resolveVideoProperties()` / `resolveAudioProperties()` の JSDoc を delta 規約の記述に更新した
+- `src/loc.ts`: `decodeVideoProperties()` / `decodeAudioProperties()` を `decodeObjectPropertiesTolerant()` 経由の寛容な delta 解釈に置き換え、`extractLocTrackProperties()` を scope（track / object）引数を持つ `extractLocProperties()` に拡張した。不正な delta / Length で PROTOCOL_VIOLATION を送出せず、抽出できたフィールドのみ設定して配信を継続する（VIDEO_FRAME_MARKING の不正な Value は frameMarking 未設定扱い。track 入力時の Object スコープ ID は現行どおり抽出しない）
+- `src/loc.test.ts`: 単一 Property の従来ワイヤとのビット一致（timestamp / frameMarking / audioLevel / config）、複数 Property の Delta Type（frameMarking 0x09 + timestamp 0x07 等）、仕様準拠 delta KVP の直接入力デコード、不正 delta / Length の非 throw と先行値保持、GREASE 混在からの LOC 抽出、delivery timeout / GREASE 合成経路の delta 維持のテストを追加した
+- `src/loc.prop.ts`: 絶対 Type 連結前提のテスト（余剰付き frameMarking の後続 ID、Length 0 / 5 / 不足の寛容化、未知 ID スキップ）を delta 規約に更新した
+- `CHANGES.md`: `[CHANGE]` を追記した（複数 Property 時に旧版 moqt-js（絶対 Type 連結）と相互運用できないワイヤ非互換を含む旨）
+
+0379（Delta Type オーバーフロー検証）は `decodeObjectPropertiesTolerant()` に検証を追加しない方針で closed 済みのため、0379 の「注記 (0361 との調整)」のとおり調整は発生しない（0361 側の完了条件成立）。

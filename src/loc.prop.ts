@@ -421,11 +421,14 @@ test("VideoFrameMarking: Length=3 (余剰付き) は先頭 2 バイトを解釈�
   assert.strictEqual(decoded.isBaseLayerSync, true);
   assert.strictEqual(decoded.spatialLayerId, 2);
 
-  // 余剰バイトを消費したうえで後続 TIMESTAMP が読めること
-  const trailing = encodeTimestamp(42n);
-  const combined = new Uint8Array(wire.length + trailing.length);
+  // 余剰バイトを消費したうえで後続 TIMESTAMP が読めること。
+  // Object Properties は delta encoding (Figure 2) のため、後続 TIMESTAMP (0x10) は
+  // 前 Property VIDEO_FRAME_MARKING (0x09) との差分 Delta Type 0x07 で書く。
+  const trailing = encodeVarint(42n);
+  const combined = new Uint8Array(wire.length + 1 + trailing.length);
   combined.set(wire, 0);
-  combined.set(trailing, wire.length);
+  combined.set([0x07], wire.length);
+  combined.set(trailing, wire.length + 1);
   const props = decodeVideoProperties(combined);
   assert.deepEqual(props.frameMarking, decoded);
   assert.strictEqual(props.timestamp, 42n);
@@ -434,10 +437,12 @@ test("VideoFrameMarking: Length=3 (余剰付き) は先頭 2 バイトを解釈�
 test("VideoFrameMarking: Length=4 (余剰付き) は decodeVideoProperties でも宣言 Length を消費する", () => {
   const value = new Uint8Array([0xe8, 0x10, 0xaa, 0xbb]);
   const wire = buildVideoFrameMarkingWire(4, value);
-  const trailing = encodeTimestamp(7n);
-  const combined = new Uint8Array(wire.length + trailing.length);
+  // 後続 TIMESTAMP (0x10) は Delta Type 0x07 (0x10 - 0x09) で書く
+  const trailing = encodeVarint(7n);
+  const combined = new Uint8Array(wire.length + 1 + trailing.length);
   combined.set(wire, 0);
-  combined.set(trailing, wire.length);
+  combined.set([0x07], wire.length);
+  combined.set(trailing, wire.length + 1);
 
   const viaMarking = decodeVideoFrameMarking(wire);
   const viaProps = decodeVideoProperties(combined);
@@ -446,23 +451,29 @@ test("VideoFrameMarking: Length=4 (余剰付き) は decodeVideoProperties で�
   assert.strictEqual(viaMarking.spatialLayerId, 1);
 });
 
-test("VideoFrameMarking: Length=0 は ProtocolViolationError で明示失敗する", () => {
+test("VideoFrameMarking: Length=0 は単体デコーダでは ProtocolViolationError、寛容デコーダでは frameMarking 未設定", () => {
   const wire = buildVideoFrameMarkingWire(0, new Uint8Array(0));
   assert.throws(() => decodeVideoFrameMarking(wire), ProtocolViolationError);
-  assert.throws(() => decodeVideoProperties(wire), ProtocolViolationError);
+  // decodeVideoProperties は寛容な delta デコードであり、不正な Value の
+  // frameMarking は未設定として扱い、PROTOCOL_VIOLATION を送出しない
+  const props = decodeVideoProperties(wire);
+  assert.isUndefined(props.frameMarking);
 });
 
-test("VideoFrameMarking: Length=5 は ProtocolViolationError で明示失敗する", () => {
+test("VideoFrameMarking: Length=5 は単体デコーダでは ProtocolViolationError、寛容デコーダでは frameMarking 未設定", () => {
   const wire = buildVideoFrameMarkingWire(5, new Uint8Array([1, 2, 3, 4, 5]));
   assert.throws(() => decodeVideoFrameMarking(wire), ProtocolViolationError);
-  assert.throws(() => decodeVideoProperties(wire), ProtocolViolationError);
+  const props = decodeVideoProperties(wire);
+  assert.isUndefined(props.frameMarking);
 });
 
-test("VideoFrameMarking: Value バイト不足は ProtocolViolationError で明示失敗する", () => {
+test("VideoFrameMarking: Value バイト不足は単体デコーダでは ProtocolViolationError、寛容デコーダでは未設定", () => {
   // Length=2 を宣言するが Value は 1 バイトしかない
   const wire = buildVideoFrameMarkingWire(2, new Uint8Array([0xe8]));
   assert.throws(() => decodeVideoFrameMarking(wire), ProtocolViolationError);
-  assert.throws(() => decodeVideoProperties(wire), ProtocolViolationError);
+  const props = decodeVideoProperties(wire);
+  assert.isUndefined(props.frameMarking);
+  assert.isUndefined(props.timestamp);
 });
 
 // =============================================================================
@@ -470,14 +481,9 @@ test("VideoFrameMarking: Value バイト不足は ProtocolViolationError で明�
 // =============================================================================
 
 test("未知の偶数 ID は vi64 としてスキップされる", () => {
-  // 未知偶数 ID 0x12 + value 99、その後 TIMESTAMP
-  const unknownId = encodeVarint(0x12n);
-  const unknownValue = encodeVarint(99n);
-  const timestamp = encodeTimestamp(123n);
-  const data = new Uint8Array(unknownId.length + unknownValue.length + timestamp.length);
-  data.set(unknownId, 0);
-  data.set(unknownValue, unknownId.length);
-  data.set(timestamp, unknownId.length + unknownValue.length);
+  // Object Properties は delta encoding (Figure 2) のため ID は昇順連鎖する。
+  // 未知偶数 ID 0x0E + value 99、その後 TIMESTAMP (0x10, delta 0x02)
+  const data = new Uint8Array([0x0e, 0x63, 0x02, 0x7b]);
 
   const video = decodeVideoProperties(data);
   assert.strictEqual(video.timestamp, 123n);
@@ -487,18 +493,9 @@ test("未知の偶数 ID は vi64 としてスキップされる", () => {
 });
 
 test("未知の奇数 ID は length + bytes としてスキップされる", () => {
-  // 未知奇数 ID 0x11 + length 3 + 3 bytes、その後 TIMESTAMP
-  const unknownId = encodeVarint(0x11n);
-  const lengthBytes = encodeVarint(3n);
-  const value = new Uint8Array([0x01, 0x02, 0x03]);
-  const timestamp = encodeTimestamp(456n);
-  const data = new Uint8Array(
-    unknownId.length + lengthBytes.length + value.length + timestamp.length,
-  );
-  data.set(unknownId, 0);
-  data.set(lengthBytes, unknownId.length);
-  data.set(value, unknownId.length + lengthBytes.length);
-  data.set(timestamp, unknownId.length + lengthBytes.length + value.length);
+  // TIMESTAMP (0x10, delta 0x10) の後に未知奇数 ID 0x11 (delta 0x01) + length 3 + 3 bytes
+  // timestamp value 456 の varint は [0x81, 0xc8]
+  const data = new Uint8Array([0x10, 0x81, 0xc8, 0x01, 0x03, 0x01, 0x02, 0x03]);
 
   const video = decodeVideoProperties(data);
   assert.strictEqual(video.timestamp, 456n);
