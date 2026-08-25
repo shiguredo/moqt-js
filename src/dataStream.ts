@@ -388,6 +388,13 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // draft-ietf-moq-transport-19 Section 11.4.2
   let publisherPriority: number | undefined;
   if (hasPriorityPresent(typeNum)) {
+    // Priority は 8 bit 固定のため、バッファが Priority バイトで切れている
+    // 場合は範囲外アクセス (undefined 取得) による誤デコードを避け、
+    // IncompleteDataError で次のチャンクを待つ (decodeFetchObjectFields と同方式。
+    // 誤読すると残りバイト列が 1 バイトずれてフィールドずれを生む)。
+    if (offset + totalConsumed >= data.length) {
+      throw new IncompleteDataError("incomplete subgroup header: publisher priority");
+    }
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
   }
@@ -846,6 +853,16 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   // 評価では明示値のみを使い、0 のダミー値は使わないため)
   let publisherPriority: number | undefined;
   if (datagramHasPriority(typeNum)) {
+    // Priority は 8 bit 固定のため、バッファが Priority バイトで切れている
+    // 場合は範囲外アクセス (undefined 取得) による誤配信を避け、
+    // IncompleteDataError を throw する (subgroup ヘッダーと同方式)。
+    // 受信側 (incomingHandleDatagram) は IncompleteDataError を
+    // toProtocolViolationSessionError で PROTOCOL_VIOLATION に変換して
+    // セッションを閉じる (長さ検証後の構造破損 = プロトコル違反の
+    // リポジトリ共通解釈。既存の varint 不足と同じ扱い)。
+    if (offset + totalConsumed >= data.length) {
+      throw new IncompleteDataError("incomplete datagram: publisher priority");
+    }
     publisherPriority = data[offset + totalConsumed];
     totalConsumed += 1;
   }
