@@ -11,6 +11,7 @@ import {
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
   buildRangeFilterParameters,
+  mergeRangeFilters,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   buildFetchParameters,
@@ -500,6 +501,66 @@ test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数え�
   assert.throws(() =>
     validateRangeFilterLimits([{ type: "objectId", remove: true }], 0, "REQUEST_UPDATE"),
   );
+});
+
+// ============================================================================
+// mergeRangeFilters
+// draft-ietf-moq-transport-19 §5.1.3 (削除・置換・不変)
+// ============================================================================
+
+test("mergeRangeFilters: remove で当該パラメータ型全体が削除される", () => {
+  const current = [
+    { type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] },
+    { type: "subgroup" as const, setId: 1, ranges: [{ start: 2n, end: 3n }] },
+    { type: "objectId" as const, setId: 0, ranges: [{ start: 4n, end: 5n }] },
+  ];
+  const merged = mergeRangeFilters(current, [{ type: "subgroup", remove: true }]);
+  assert.deepEqual(merged, [current[2]]);
+});
+
+test("mergeRangeFilters: 非 remove で当該パラメータ型全体が置換される", () => {
+  const current = [
+    { type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] },
+    { type: "subgroup" as const, setId: 1, ranges: [{ start: 2n, end: 3n }] },
+    { type: "objectId" as const, setId: 0, ranges: [{ start: 4n, end: 5n }] },
+  ];
+  const merged = mergeRangeFilters(current, [
+    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
+  ]);
+  // subgroup は全体置換 (SetID 1 も消え、置換後のエントリは末尾に移動)、
+  // objectId は不変
+  assert.deepEqual(merged, [
+    { type: "objectId", setId: 0, ranges: [{ start: 4n, end: 5n }] },
+    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
+  ]);
+});
+
+test("mergeRangeFilters: 同一型の複数エントリ (異なる SetID) は他型の追加で保持される", () => {
+  const current = [
+    { type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] },
+    { type: "subgroup" as const, setId: 1, ranges: [{ start: 2n, end: 3n }] },
+  ];
+  const merged = mergeRangeFilters(current, [
+    { type: "objectId", setId: 0, ranges: [{ start: 4n, end: 5n }] },
+  ]);
+  // update に現れない型 (subgroup) は不変のまま複数エントリが保持される
+  assert.deepEqual(merged, [
+    ...current,
+    { type: "objectId", setId: 0, ranges: [{ start: 4n, end: 5n }] },
+  ]);
+});
+
+test("mergeRangeFilters: update 内の同一型複数エントリ (異なる SetID) は置換として保持される", () => {
+  const current = [{ type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] }];
+  const merged = mergeRangeFilters(current, [
+    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
+    { type: "subgroup", setId: 1, ranges: [{ start: 20n, end: 21n }] },
+  ]);
+  // 同一型の複数エントリ (異なる SetID) は置換後の状態として保持される
+  assert.deepEqual(merged, [
+    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
+    { type: "subgroup", setId: 1, ranges: [{ start: 20n, end: 21n }] },
+  ]);
 });
 
 // ============================================================================

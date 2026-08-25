@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-max-filter-ranges-merged-check
 - Polished: 2026-08-20
 - Updated: 2026-08-15
@@ -51,4 +51,10 @@ draft-ietf-moq-transport-19 §10.3.1.6 / §5.1.3 の「MAX_FILTER_RANGES ... lim
 
 ## 解決方法
 
-未着手。
+- マージ規則を `src/session/params.ts` の純関数 `mergeRangeFilters` (および鍵生成 `rangeFilterKey`) として抽出し、`SubscriberImpl.setRangeFilters` (受信反映) と送信前検証の両経路から参照 (同一実装の共有により結果の一致を構造的に保証)。
+- `SubscriberImpl` に `getRangeFilters()` を追加 (内部配列のコピーを返す)。
+- `bidiSendRequestUpdate` (`src/session/bidi.ts`): `options.rangeFilters` が非空のとき、`computeMergedRangeFilters` (現在のフィルタ + in-flight の update を送信順で適用 + 今回の update) の結果に対して `validateRangeFilterLimits` を実行し、マージ後の Ranges 数がピアの MAX_FILTER_RANGES を超える場合は throw。throw は pendingRequestUpdate 登録前であり、エントリは残らない。
+- 方式 (a) の限界 (in-flight が成功する前提の過剰検証と削除 update による過少検証) はコメントに明記。
+- peerMax=0 ガードは `options.rangeFilters` 単体で維持 (削除のみの update も throw)。空配列 (フィルタ指定なし) は従来どおり送信可能。
+- テスト: `params.test.ts` に `mergeRangeFilters` の単体テスト (remove / 置換 / 保持 / update 内複数エントリ)、`bidi.test.ts` にマージ後検証の統合テスト (マージ後超過 throw、上限以内、in-flight 反映、送信順適用、削除後検証、peerMax=0 の削除のみ throw と空配列送信可) を追加。
+- `CHANGES.md`: `[FIX]` を追記。

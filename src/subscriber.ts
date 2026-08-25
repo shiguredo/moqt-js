@@ -15,30 +15,12 @@ import {
   objectMatchesFilter,
   rangeFiltersMatch,
 } from "./filter";
+import { mergeRangeFilters } from "./session/params";
 
 /**
  * Subscriber state
  */
 export type SubscriberState = "active" | "closed";
-
-/**
- * Range Filter パラメータの一意キーを生成する
- *
- * draft-ietf-moq-transport-19 §5.1.3:
- * 同一 (Type, SetID, Property Type) の組み合わせのみ重複禁止であり、
- * Property Type が異なる OBJECT_PROPERTY / TRACK_PROPERTY_FILTER は共存できる。
- * キーに propertyType を含めることで共存を保持する。
- * (remove エントリは setRangeFilters で保存されないため、ここには渡らない。
- *  型上は RangeFilterSpec の union のため、非 remove 側に絞ってアクセスする)
- */
-function rangeFilterKey(spec: RangeFilterSpec): string {
-  if ("remove" in spec) {
-    // 到達しない (setRangeFilters は remove エントリを保存しない) が、
-    // 型の網羅性のための分岐
-    return `${spec.type}:remove`;
-  }
-  return `${spec.type}:${spec.setId}:${spec.propertyType ?? ""}`;
-}
 
 /**
  * REQUEST_UPDATE のオプション
@@ -272,67 +254,29 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Range Filters を設定する
    *
-   * draft-ietf-moq-transport-19 Section 5.1.3:
-   * SUBSCRIBE 送信時の options.rangeFilters または REQUEST_UPDATE 成功後の更新で
-   * 設定される。
-   *
-   * REQUEST_UPDATE のセマンティクス (§5.1.3「In REQUEST_UPDATE, Length can be 0
-   * to remove a filter parameter or non-zero to replace that entire filter
-   * parameter including all sets and Property Types. If a filter parameter is
-   * omitted from REQUEST_UPDATE, the value is unchanged.」) に従う:
-   * - Length=0 (remove): 当該パラメータ型 (0x25-0x29) 全体を削除
-   * - 非ゼロ Length: 当該パラメータ型全体を置換 (他の型は不変)
-   * - 省略 (undefined): 不変 (呼び出し側で早期 return)
-   *
-   * 同型の複数エントリ (異なる SetID / Property Type) は §5.1.3 の
-   * 「MAY appear multiple times」に従い保持される。
+   * SUBSCRIBE 送信時の options.rangeFilters または REQUEST_UPDATE 成功後の
+   * 更新で設定される。削除・置換・不変の適用規則は送信前検証と共通の
+   * 純関数 mergeRangeFilters (src/session/params.ts) に集約している。
+   * 適用規則の詳細は mergeRangeFilters の JSDoc を参照。
    */
   setRangeFilters(rangeFilters: RangeFilterSpec[] | undefined): void {
     if (rangeFilters === undefined) {
       return;
     }
-    // 現在のフィルタを保持し、当該メッセージで指定された型のみ削除・置換する
-    const next = new Map<string, RangeFilterSpec>();
-    for (const spec of this.rangeFilters) {
-      next.set(rangeFilterKey(spec), spec);
-    }
+    this.rangeFilters = mergeRangeFilters(this.rangeFilters, rangeFilters);
+  }
 
-    // remove エントリと非 remove エントリを分離する。
-    // 非 remove エントリに出現する型は「置換」のため、既存の同型エントリを
-    // すべて削除してから、非 remove エントリをまとめて追加する (1 件ずつ
-    // 全削除すると同型の複数エントリが最後の 1 件以外すべて失われるため)。
-    const removedTypes = new Set<string>();
-    const replaceSpecs: RangeFilterSpec[] = [];
-    for (const spec of rangeFilters) {
-      if ("remove" in spec) {
-        removedTypes.add(spec.type);
-      } else {
-        replaceSpecs.push(spec);
-      }
-    }
-
-    // Length=0 の削除: 当該パラメータ型全体 (全 SetID / Property Type) を削除
-    for (const type of removedTypes) {
-      for (const key of next.keys()) {
-        if (key.startsWith(`${type}:`)) {
-          next.delete(key);
-        }
-      }
-    }
-
-    // 非ゼロ Length の置換: 当該パラメータ型全体を置き換える
-    for (const spec of replaceSpecs) {
-      for (const key of next.keys()) {
-        if (key.startsWith(`${spec.type}:`)) {
-          next.delete(key);
-        }
-      }
-    }
-    for (const spec of replaceSpecs) {
-      next.set(rangeFilterKey(spec), spec);
-    }
-
-    this.rangeFilters = [...next.values()];
+  /**
+   * 現在の Range Filters を取得する
+   *
+   * 送信前の MAX_FILTER_RANGES 検証 (マージ後状態) で利用する。内部配列の
+   * 参照を覗かせず、コピーを返す (配列の追加・削除による状態破壊を防ぐ。
+   * 要素オブジェクトと ranges 配列は参照共有のため、要素を mutate しない
+   * こと)。公開インターフェース (Subscriber) には追加しない (アプリの
+   * ニーズが確認された場合に別途検討)。
+   */
+  getRangeFilters(): RangeFilterSpec[] {
+    return [...this.rangeFilters];
   }
 
   /**
