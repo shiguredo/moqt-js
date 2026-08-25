@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] LOC Object Properties のエンコード / デコードを Key-Value-Pair delta encoding に追従させる
+  - draft-ietf-moq-transport-19 §11.2.1.2 / §1.4.3 に基づき、LOC Property 群を encodeProperties / decodeObjectPropertiesTolerant 経由の delta encoding (Figure 2) に変更する
+  - 複数 Property ではワイヤ形式が変わり、旧版 moqt-js (絶対 Type 連結) とは相互運用できない
+  - 受信側を寛容な抽出に変更し、不正な delta / Length で PROTOCOL_VIOLATION を送出せず抽出できたフィールドのみで配信を継続する
+  - @voluntas
 - [ADD] Range Filter の評価 (マッチング) ロジックを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY の評価関数 (SetID ごとの AND / OR 結合、両端含む判定、open-ended) を実装する
   - SubscriberImpl の handleObject / handleDatagram に Range Filter 再適用を追加し、不通過オブジェクトを破棄する
