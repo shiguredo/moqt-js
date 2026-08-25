@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-publish-forward-omitted-overwrite
 - Polished: 2026-08-20
 
@@ -41,4 +41,6 @@ draft-ietf-moq-transport-19 §10.2.17 の「If the parameter is omitted from REQ
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` (`bidiReadRequestStreamMessages` の role=publish REQUEST_UPDATE 分岐): FORWARD パラメータが存在する場合のみ `publisher.setForwardState(extractForwardState(...))` を呼ぶよう変更 (設計方針どおり、`bidiHandlePublishRequestUpdate` (受信 PUBLISH 側・0377 実装) と同パターン)。`extractForwardState` のデフォルト true 動作は変更しない (有意義な使用箇所があるため)。0377 の「全体拒否」の適用はスコープ外のため実施しない (非対称は残る)。
+- テスト (`src/session/bidi.test.ts`): FORWARD 省略 → Forward State 不変 (FORWARD=0 で停止した状態からの回帰ガード)、FORWARD=1 → true 反映、の 2 本を追加 (FORWARD=0 反映は 0409 で追加済みのテストが担保。0416 実装からの 0409 側アサーション更新は不要と判断)。
+- `CHANGES.md`: `[FIX]` を追記。

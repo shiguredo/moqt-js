@@ -1164,8 +1164,20 @@ export async function bidiReadRequestStreamMessages(
 
             const publisher = session.publishers.get(requestId);
             if (publisher) {
-              const forwardState = extractForwardState(decoded.parameters);
-              publisher.setForwardState(forwardState);
+              // draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter):
+              // "If the parameter is omitted from REQUEST_UPDATE, the value for
+              //  the subscription remains unchanged."
+              // FORWARD パラメータが存在する場合のみ反映する (省略時は不変。
+              // bidiHandlePublishRequestUpdate と同パターン)。extractForwardState
+              // は省略時にデフォルト true を返すため、無条件に反映すると
+              // false で送信を止めたアプリの送信が「true 上書き」で再開されて
+              // しまう。
+              const forwardParam = decoded.parameters.find(
+                (param) => param.type === MessageParameterType.FORWARD,
+              );
+              if (forwardParam !== undefined) {
+                publisher.setForwardState(extractForwardState(decoded.parameters));
+              }
 
               // REQUEST_OK を送信 (draft-ietf-moq-transport-19 §10.9 MUST)
               const okPayload = encodeRequestOkPayload({
