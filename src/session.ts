@@ -98,11 +98,7 @@ import {
   incomingSendRequestErrorAndClose,
   incomingValidateRequestId,
 } from "./session/incoming";
-import {
-  namespaceStartNamespaceStreamLoop,
-  namespaceStartTracksStreamLoop,
-  namespaceStartPublicationStreamLoop,
-} from "./session/namespaceLoops";
+import * as namespaceLoops from "./session/namespaceLoops";
 
 export type { MoqtObject } from "./dataStream";
 
@@ -2161,7 +2157,7 @@ export class SessionImpl implements Session {
     resolve: (subscription: NamespaceSubscription) => void,
     reject: (err: Error) => void,
   ): Promise<void> {
-    return namespaceStartNamespaceStreamLoop(
+    return namespaceLoops.namespaceStartNamespaceStreamLoop(
       this as unknown as SessionInternal,
       requestId,
       resolve,
@@ -2181,7 +2177,7 @@ export class SessionImpl implements Session {
     resolve: (subscription: TracksSubscription) => void,
     reject: (err: Error) => void,
   ): Promise<void> {
-    return namespaceStartTracksStreamLoop(
+    return namespaceLoops.namespaceStartTracksStreamLoop(
       this as unknown as SessionInternal,
       requestId,
       resolve,
@@ -2290,7 +2286,7 @@ export class SessionImpl implements Session {
     resolve: (publication: NamespacePublication) => void,
     reject: (err: Error) => void,
   ): Promise<void> {
-    return namespaceStartPublicationStreamLoop(
+    return namespaceLoops.namespaceStartPublicationStreamLoop(
       this as unknown as SessionInternal,
       requestId,
       resolve,
@@ -3011,8 +3007,14 @@ export class SessionImpl implements Session {
       await this.closeNamespaceSubscription(requestId);
     };
 
-    const update = async (options: NamespaceUpdateOptions): Promise<void> => {
-      await this.sendNamespaceRequestUpdate(requestId, "namespace", options);
+    // fire-and-forget で update() を呼び出しても、unsubscribe() / ピアの
+    // FIN 等による reject が unhandled rejection にならないよう、catch を
+    // 付けた promise を返す。async の wrapper 経由にすると wrapper 側の
+    // 無観測 reject が unhandled になるため、ここで必ず捕まえる。
+    const update = (options: NamespaceUpdateOptions): Promise<void> => {
+      const promise = this.sendNamespaceRequestUpdate(requestId, "namespace", options);
+      promise.catch(() => {});
+      return promise;
     };
 
     return {
@@ -3066,6 +3068,17 @@ export class SessionImpl implements Session {
 
     subscription.state = "closed";
 
+    // 保留中の REQUEST_UPDATE (update() の Promise) を失敗させ、pendingPrefix を
+    // クリアする。掃除しないと update() が未解決のまま残り、pendingRequestUpdate
+    // エントリがセッション close まで残留する (MAX_REQUEST_UPDATES のカウント
+    // 継続)。エラー文言は FIN 経路と共通の定数を使う。
+    namespaceLoops.rejectPendingNamespaceUpdates(
+      this as unknown as SessionInternal,
+      requestId,
+      subscription,
+      new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+    );
+
     // ストリームを閉じる（FIN を送信）
     try {
       if (subscription.writer) {
@@ -3093,8 +3106,12 @@ export class SessionImpl implements Session {
       await this.closeTracksSubscription(requestId);
     };
 
-    const update = async (options: NamespaceUpdateOptions): Promise<void> => {
-      await this.sendNamespaceRequestUpdate(requestId, "tracks", options);
+    // createNamespaceSubscription の update と同様に、fire-and-forget 時の
+    // 無観測 reject を抑制する (catch 付き promise を直接返す)。
+    const update = (options: NamespaceUpdateOptions): Promise<void> => {
+      const promise = this.sendNamespaceRequestUpdate(requestId, "tracks", options);
+      promise.catch(() => {});
+      return promise;
     };
 
     return {
@@ -3120,6 +3137,15 @@ export class SessionImpl implements Session {
     }
 
     subscription.state = "closed";
+
+    // 保留中の REQUEST_UPDATE (update() の Promise) を失敗させ、pendingPrefix を
+    // クリアする (closeNamespaceSubscription と同様の理由)。
+    namespaceLoops.rejectPendingNamespaceUpdates(
+      this as unknown as SessionInternal,
+      requestId,
+      subscription,
+      new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+    );
 
     try {
       if (subscription.writer) {

@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-08-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-unsubscribe-pending-update-cleanup
 - Polished: 2026-08-20
 
@@ -50,4 +50,9 @@
 
 ## 解決方法
 
-未着手。
+方式 (a) (state ガード) を主案として実装した。
+
+- `src/session.ts` (`closeNamespaceSubscription` / `closeTracksSubscription`): 保持中エントリの reject (保留中の REQUEST_UPDATE を失敗させる) + `pendingPrefix` クリアを、namespaceLoops.ts の共通ヘルパー `rejectPendingNamespaceUpdates` 経由で追加した。エラー文言は FIN 経路と共通の定数 `REQUEST_UPDATE_STREAM_CLOSED_MESSAGE` を使用。
+- `src/session/namespaceLoops.ts` (`namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop`): メッセージ処理 for ループ冒頭に `subscription.state !== "active"` のガードを追加し、unsubscribe 後の遅延応答 (REQUEST_OK / REQUEST_ERROR / NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED / GOAWAY) を無視する (「received second REQUEST_OK」等の誤検知による PROTOCOL_VIOLATION と callbacks の spurious 発火を防ぐ)。方式 (b) (streamReader.cancel() の併用) は完了条件で必須でないため、方式 (a) のみとした。
+- `src/session.ts` (namespace / tracks の `update()`): fire-and-forget 利用時の無観測 reject を捕まえるため、async の wrapper ではなく catch 付きの Promise を返す形に変更 (0406 のパターンは async wrapper 経由では抑制効果が無いことを Node 実機で確認)。`src/session/bidi.ts` (`bidiSendNamespaceRequestUpdate`) にも 0406 と同様の防御的 catch を追加。
+- テスト: `src/session.test.ts` に unsubscribe で in-flight update が reject され pending が掃除されるテスト (namespace / tracks) と fire-and-forget の unhandled rejection なしテスト (namespace / tracks) を追加。`src/session/namespaceLoops.test.ts` に unsubscribe 後の遅延 REQUEST_OK / REQUEST_ERROR / NAMESPACE / NAMESPACE_DONE / GOAWAY / PUBLISH_SKIPPED のガードを検証する実運用形式 (別フィード) のテストを追加。

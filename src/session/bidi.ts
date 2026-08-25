@@ -1557,6 +1557,12 @@ export async function bidiSendNamespaceRequestUpdate(
       targetRequestId: requestId,
     });
   });
+  // unsubscribe() / GOAWAY / REQUEST_ERROR / FIN 等の経路がこの pending を
+  // reject した場合、アプリが観測しないままの reject は unhandled rejection
+  // になり得る。呼び出し元の update() 側でも catch は付与されるが、本関数を
+  // 直接呼ぶ経路に備えた防御的措置としてここでも catch する
+  // (bidiSendRequestUpdate と同じ)。
+  promise.catch(() => {});
 
   if (!session.controlWriter) {
     // 登録済みの pending と pendingPrefix を掃除してから throw する
