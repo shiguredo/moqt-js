@@ -26,6 +26,11 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] unsubscribe() 時に応答待ちの REQUEST_UPDATE を掃除する
+  - draft-ietf-moq-transport-19 §10.9.1 / §10.9.2 に基づき、namespace / tracks の unsubscribe() が保留中の REQUEST_UPDATE を reject して pendingRequestUpdate エントリと pendingPrefix を掃除し、update() の Promise が未解決で残らないようにする
+  - unsubscribe 後に遅延して届く REQUEST_OK / REQUEST_ERROR / NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED / GOAWAY は受信ループの state ガードで無視し、セッションが PROTOCOL_VIOLATION で閉じるのと callbacks の spurious 発火を防ぐ
+  - update() を fire-and-forget で使っても unhandled rejection にならないよう、catch 付きの Promise を返す
+  - @voluntas
 - [FIX] 受信メッセージのデコード失敗でセッションが閉じないのを修正する
   - draft-ietf-moq-transport-19 §10 の MUST に基づき、toProtocolViolationSessionError が IncompleteDataError も PROTOCOL_VIOLATION の SessionError へ変換するようにし、制御メッセージ層のデコード失敗 (Length が揃った後の構造破損) で黙殺されずにセッションが閉じるようにする
   - publish ロールの受信 REQUEST_UPDATE、namespace 系ループ、受信応答読み取り、datagram デコードの失敗が潜んでいた経路を一括で塞ぐ

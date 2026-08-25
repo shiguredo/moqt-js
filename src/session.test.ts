@@ -428,6 +428,253 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUE
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
 });
 
+/**
+ * draft-ietf-moq-transport-19 §10.9.2 / §6.1:
+ * in-flight (REQUEST_OK 未受信) の更新がある状態で namespace の
+ * unsubscribe() を呼ぶと、update() の Promise が reject され、pending エントリと
+ * pendingPrefix が掃除されることを検証する。
+ */
+test("namespace の unsubscribe() で in-flight の update() が reject され pending が掃除される", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    namespaceSubscriptions: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        pendingPrefix?: string[];
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+    pendingRequestUpdate: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        targetRequestId: bigint;
+      }
+    >;
+  };
+
+  let closeCalled = false;
+  const writable = new WritableStream<Uint8Array>({
+    close() {
+      closeCalled = true;
+    },
+  });
+  const entry = {
+    callbacks: {},
+    state: "active" as "active" | "closed",
+    namespacePrefix: ["live"],
+    pendingPrefix: ["live", "sports"],
+    writer: writable.getWriter(),
+  };
+  sessionInternal.namespaceSubscriptions.set(1n, entry);
+
+  let rejected: Error | undefined;
+  sessionInternal.pendingRequestUpdate.set(200n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: 1n,
+  });
+
+  const subscription = session.createNamespaceSubscription(1n);
+  await subscription.unsubscribe();
+
+  // update() の Promise が reject され、pending エントリと pendingPrefix が掃除される
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, "stream closed before receiving update response");
+  assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+  assert.isUndefined(entry.pendingPrefix);
+  // ストリームが FIN (writer.close()) で閉じられ、エントリが削除される
+  assert.equal(entry.state, "closed");
+  assert.isTrue(closeCalled);
+  assert.isFalse(sessionInternal.namespaceSubscriptions.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9.2 / §6.1:
+ * tracks 側の unsubscribe() でも namespace 側と同様に、in-flight の update() の
+ * Promise が reject され、pending エントリと pendingPrefix が掃除されることを
+ * 検証する。
+ */
+test("tracks の unsubscribe() で in-flight の update() が reject され pending が掃除される", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    tracksSubscriptions: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        pendingPrefix?: string[];
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+    pendingRequestUpdate: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        targetRequestId: bigint;
+      }
+    >;
+  };
+
+  const writable = new WritableStream<Uint8Array>();
+  const entry = {
+    callbacks: {},
+    state: "active" as "active" | "closed",
+    namespacePrefix: ["live"],
+    pendingPrefix: ["live", "sports"],
+    writer: writable.getWriter(),
+  };
+  sessionInternal.tracksSubscriptions.set(1n, entry);
+
+  let rejected: Error | undefined;
+  sessionInternal.pendingRequestUpdate.set(200n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: 1n,
+  });
+
+  const subscription = session.createTracksSubscription(1n);
+  await subscription.unsubscribe();
+
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, "stream closed before receiving update response");
+  assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+  assert.isUndefined(entry.pendingPrefix);
+  assert.equal(entry.state, "closed");
+  assert.isFalse(sessionInternal.tracksSubscriptions.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9.2:
+ * update() を fire-and-forget (返り値を観測しない) で呼び、その後に
+ * unsubscribe() した場合、update() の reject が unhandled rejection に
+ * ならないことを検証する。
+ */
+test("namespace の update() を fire-and-forget で呼び出しても unsubscribe() による reject が未処理にならない", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    controlWriter: ControlStreamWriter;
+    namespaceSubscriptions: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        pendingPrefix?: string[];
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+    pendingRequestUpdate: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        targetRequestId: bigint;
+      }
+    >;
+  };
+  sessionInternal.controlWriter = new ControlStreamWriter();
+  const writable = new WritableStream<Uint8Array>();
+  sessionInternal.namespaceSubscriptions.set(1n, {
+    callbacks: {},
+    state: "active",
+    namespacePrefix: ["live"],
+    writer: writable.getWriter(),
+  });
+
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const subscription = session.createNamespaceSubscription(1n);
+    // fire-and-forget: 返り値の Promise を観測しない
+    void subscription.update({ trackNamespacePrefix: ["live", "sports"] });
+    // 応答が届かないまま unsubscribe() して update() の reject を発生させる。
+    // unhandledRejection は reject 後のマイクロタスクで発火するため、50ms の
+    // 壁時計待ちで確実に検出できる (CI 負荷を考慮した十分な余裕)。
+    await subscription.unsubscribe();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    assert.equal(unhandled.length, 0);
+    // reject が実際に発生したこと、および掃除が行われたことを併せて検証する
+    assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+    assert.equal(sessionInternal.namespaceSubscriptions.has(1n), false);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9.2:
+ * tracks 側の update() も namespace 側と同様に、fire-and-forget で呼び出して
+ * も unsubscribe() の reject が unhandled rejection にならないことを検証する。
+ */
+test("tracks の update() を fire-and-forget で呼び出しても unsubscribe() による reject が未処理にならない", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    controlWriter: ControlStreamWriter;
+    tracksSubscriptions: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        pendingPrefix?: string[];
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+    pendingRequestUpdate: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        targetRequestId: bigint;
+      }
+    >;
+  };
+  sessionInternal.controlWriter = new ControlStreamWriter();
+  const writable = new WritableStream<Uint8Array>();
+  sessionInternal.tracksSubscriptions.set(1n, {
+    callbacks: {},
+    state: "active",
+    namespacePrefix: ["live"],
+    writer: writable.getWriter(),
+  });
+
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const subscription = session.createTracksSubscription(1n);
+    // fire-and-forget: 返り値の Promise を観測しない
+    void subscription.update({ trackNamespacePrefix: ["live", "sports"] });
+    await subscription.unsubscribe();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    assert.equal(unhandled.length, 0);
+    assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+    assert.equal(sessionInternal.tracksSubscriptions.has(1n), false);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
 /** Uint8Array 配列を連結するヘルパー */
 function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
   const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
