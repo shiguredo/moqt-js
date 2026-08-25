@@ -2,7 +2,7 @@
 
 - Priority: Low
 - Created: 2026-08-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-25
 - Branch: feature/fix-subgroup-header-publisher-priority-required
 - Polished: 2026-08-20
 - Updated: 2026-08-15
@@ -40,4 +40,6 @@ draft-ietf-moq-transport-19 §11.4.2 の Subgroup Header で、DEFAULT_PRIORITY 
 
 ## 解決方法
 
-未着手。
+- `src/dataStream.ts` (`encodeSubgroupHeader`): `hasPriorityPresent` (DEFAULT_PRIORITY bit = 0、0x10-0x1D / 0x50-0x5D) の型で `publisherPriority` が undefined の場合、`encodeObjectDatagram` と同じ文言のエラーを throw するように変更 (エラーメッセージは共通定数 `ERR_PUBLISHER_PRIORITY_REQUIRED` に集約)。Priority Present なしの型 (0x30-0x3D) は従来どおり publisherPriority をワイヤに載せない。
+- テスト (`src/dataStream.subgroup.test.ts`): Priority Present 型での省略 throw を BASE / EXPLICIT (Subgroup ID フィールドを先にエンコード) の 2 型で検証。No Priority + firstObject (0x70 系) の roundtrip を追加し、publisherPriority なしでエンコードできることを回帰ガードにした。旧テスト「Priority なしをエンコード」(Priority Present 型でフィールドを黙って省略していた仕様違反ワイヤのテスト) は throw 検証へ置換。
+- `CHANGES.md`: `[FIX]` を追記。
