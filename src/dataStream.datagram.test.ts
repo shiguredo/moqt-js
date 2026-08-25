@@ -10,6 +10,7 @@ import {
   encodeObjectDatagram,
   decodeObjectDatagram,
 } from "./dataStream";
+import { IncompleteDataError } from "./error";
 import { ObjectStatus } from "./message/types";
 import { appendGreaseObjectProperty } from "./properties";
 import { isGreaseValue } from "./grease";
@@ -118,6 +119,20 @@ test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {
   assert.equal(datagram.publisherPriority, 50);
   assert.equal(datagram.status, ObjectStatus.END_OF_TRACK);
   assert.equal(consumed, 6);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §11.3.1:
+ * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
+ * 範囲外アクセス (undefined 取得) による誤配信を避け、IncompleteDataError を
+ * throw することを検証する (受信側では PROTOCOL_VIOLATION に変換されて
+ * セッションが閉じる。既存の varint 不足と同じ扱い)。
+ */
+test("ObjectDatagram: Priority バイトでバッファが切れていると IncompleteDataError", () => {
+  // type(0x00: PAYLOAD_OBJ, Priority Present) + trackAlias + groupId + objectId のみで
+  // Priority バイトが欠落している
+  const data = new Uint8Array([0x00, 0x05, 0x0a, 0x03]);
+  assert.throws(() => decodeObjectDatagram(data), IncompleteDataError);
 });
 
 const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }> = [

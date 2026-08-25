@@ -83,7 +83,7 @@ export function isPeerStreamError(error: unknown): boolean {
  * ため、IncompleteDataError はこの構造破損を意味する (draft-ietf-moq-
  *  transport-19 Section 10 の MUST「If the length does not match the
  *  length of the Message Body, the receiver MUST close the session with a
- *  PROTOCOL_VIOLATION.」)。datagram 経路 (handleIncomingDatagram) は
+ *  PROTOCOL_VIOLATION.」)。datagram 経路 (incomingHandleDatagram) は
  * Length フレーミングを持たないが、decodeObjectDatagram のデコード失敗は
  * 不完全なフィールド構造のみであり、同様に構造破損として扱う。
  * 一方 data stream (Section 11) では IncompleteDataError は「データ不足 =

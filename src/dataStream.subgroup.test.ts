@@ -152,6 +152,20 @@ test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () =>
   assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
 });
 
+/**
+ * draft-ietf-moq-transport-19 §11.4.2:
+ * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
+ * 範囲外アクセス (undefined 取得) による誤デコード (残りバイト列のフィールド
+ * ずれ) を避け、IncompleteDataError を throw して次のチャンクを待つことを
+ * 検証する。
+ */
+test("SubgroupHeader: Priority バイトでバッファが切れていると IncompleteDataError", () => {
+  // type(0x10: BASE, Priority Present) + trackAlias + groupId のみで
+  // Priority バイトが欠落している
+  const data = new Uint8Array([0x10, 0x05, 0x0a]);
+  assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
+});
+
 // draft-ietf-moq-transport-19 Section 11.4.2:
 // 0b0XX1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
 for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
