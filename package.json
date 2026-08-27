@@ -44,7 +44,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
-    "@types/node": "26.2.0",
+    "@types/node": "26.3.0",
     "@vitest/coverage-v8": "4.1.11",
     "fast-check": "4.9.0",
     "typescript": "7.0.2",
