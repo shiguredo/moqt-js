@@ -389,7 +389,10 @@ MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─
 高レベル API が自動処理する LOC Properties:
 
 - `TIMESTAMP`: フレームのタイムスタンプ
-- `VIDEO_FRAME_MARKING`: キーフレーム判定、破棄可能フラグ（映像のみ）
+- `VIDEO_FRAME_MARKING`: キーフレーム判定（映像のみ）
+  - 単一レイヤー前提のため `temporalLayerId` / `spatialLayerId` は 0 固定
+  - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダがワイヤ上 B=0 に抑圧する
+  - `isDiscardable` は WebCodecs が破棄可能性情報を提供しないため false 固定
 
 LOC モジュール自体は次も対応するが、高レベル API では未配線:
 
