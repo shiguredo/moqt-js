@@ -23,6 +23,8 @@ import {
   validateFetchOkEndLocation,
 } from "./params";
 import { encodeParameters, decodeParameters } from "../message/parameter";
+import { InvalidFilterError } from "../error";
+import { MAX_VARINT } from "../varint";
 import { MessageParameterType } from "../message/types";
 import { TrackPropertyId } from "../properties";
 import { isGreaseValue } from "../grease";
@@ -363,7 +365,7 @@ test("buildRangeFilterParameters: 追加と削除が混在してもパラメー�
 
 // ============================================================================
 // buildSubscribeParameters / buildFetchParameters (送信ガード)
-// draft-ietf-moq-transport-19 §5.1.3
+// draft-ietf-moq-transport-19 §5.1.2 / §5.1.3
 // ============================================================================
 
 test("buildSubscribeParameters: 削除指定で throw する", () => {
@@ -390,6 +392,38 @@ test("buildSubscribeParameters: 正常な rangeFilters はエンコードされ�
     rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
   });
   assert.isDefined(parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER));
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
+ * SUBSCRIBE 送信経路 (buildSubscribeParameters → encodeLocationFilterParameter)
+ * でも End Group の 2^64-1 超過検証が効き、InvalidFilterError が throw される
+ * ことを検証する。境界値 (ちょうど 2^64-1) は過剰拒否せず LOCATION_FILTER
+ * パラメータとしてエンコードされる。
+ */
+test("buildSubscribeParameters: AbsoluteRange の End Group が 2^64-1 を超えると InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      buildSubscribeParameters({
+        filter: {
+          type: "AbsoluteRange",
+          startLocation: { group: MAX_VARINT, object: 0n },
+          endGroupDelta: 1n,
+        },
+      }),
+    InvalidFilterError,
+  );
+});
+
+test("buildSubscribeParameters: AbsoluteRange の End Group がちょうど 2^64-1 は LOCATION_FILTER になる", () => {
+  const parameters = buildSubscribeParameters({
+    filter: {
+      type: "AbsoluteRange",
+      startLocation: { group: MAX_VARINT - 1n, object: 0n },
+      endGroupDelta: 1n,
+    },
+  });
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
 });
 
 test("buildFetchParameters: rangeFilters が FETCH パラメータになる", () => {
