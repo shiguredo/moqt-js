@@ -454,6 +454,109 @@ test("namespaceStartNamespaceStreamLoop: GOAWAY 受信後の REQUEST_ERROR で�
   assert.isUndefined(ctx.getClosedWithError());
 });
 
+test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY (resolved=false) で callbacks.goaway 通知 + Promise reject + セッション継続", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const notifiedUris: string[] = [];
+  let errorFired = false;
+  Object.assign(ctx.subscription.callbacks, {
+    goaway: (uri: string) => {
+      notifiedUris.push(uri);
+    },
+    error: () => {
+      errorFired = true;
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  await readPromise;
+
+  assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "request stream goaway: moqt://new.example.com");
+  assert.isUndefined(ctx.getClosedWithError());
+  // resolved=false 経路は catch 節に到達しないため callbacks.error は発火しない
+  assert.isFalse(errorFired);
+  // finally 経路で subscription が closed に遷移していること
+  assert.equal(ctx.subscription.state, "closed");
+  // 初回 GOAWAY は goawayReceivedOnRequestStreams に追加される (重複検出用)
+  assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
+});
+
+test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY で New Session URI が空文字の場合は fallback 文言で reject", async () => {
+  // draft-ietf-moq-transport-19 §10.4: "If the URI is zero bytes long, the current URI is reused instead"
+  // クライアントからサーバへの GOAWAY は必ず空 URI (「A client MUST send a zero-length New Session URI」)
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const notifiedUris: string[] = [];
+  Object.assign(ctx.subscription.callbacks, {
+    goaway: (uri: string) => {
+      notifiedUris.push(uri);
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  await readPromise;
+
+  assert.deepEqual(notifiedUris, [""]);
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "request stream goaway: no redirect URI");
+});
+
+test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAMESPACE) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 先頭に NAMESPACE (REQUEST_OK / REQUEST_ERROR / GOAWAY 以外) を注入する
+  const namespacePayload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  const err = ctx.getClosedWithError();
+  assert.isDefined(err);
+  assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.include(err!.message, "REQUEST_OK, REQUEST_ERROR, or GOAWAY");
+  assert.include(err!.message, "namespace stream");
+});
+
 // ============================================================================
 // namespaceStartTracksStreamLoop の REQUEST_UPDATE 応答処理
 // ============================================================================
@@ -583,6 +686,74 @@ test("namespaceStartTracksStreamLoop: 保留中の更新が無い REQUEST_ERROR 
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("received REQUEST_ERROR after REQUEST_OK"),
   );
+});
+
+test("namespaceStartTracksStreamLoop: 先頭 GOAWAY (resolved=false) で callbacks.goaway 通知 + Promise reject + セッション継続", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  const notifiedUris: string[] = [];
+  let errorFired = false;
+  Object.assign(ctx.subscription.callbacks, {
+    goaway: (uri: string) => {
+      notifiedUris.push(uri);
+    },
+    error: () => {
+      errorFired = true;
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  await readPromise;
+
+  assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "request stream goaway: moqt://new.example.com");
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(errorFired);
+  assert.equal(ctx.subscription.state, "closed");
+  assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
+});
+
+test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH_SKIPPED) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const skippedPayload = encodePublishSkippedPayload({
+    type: MessageType.PUBLISH_SKIPPED,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    trackName: new TextEncoder().encode("game"),
+  });
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.PUBLISH_SKIPPED, skippedPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  const err = ctx.getClosedWithError();
+  assert.isDefined(err);
+  assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.include(err!.message, "REQUEST_OK, REQUEST_ERROR, or GOAWAY");
+  assert.include(err!.message, "tracks stream");
 });
 
 // ============================================================================
@@ -1087,4 +1258,49 @@ test("namespaceStartPublicationStreamLoop: 破損 REQUEST_OK は PROTOCOL_VIOLAT
   assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
   // finally で publication が掃除される
   assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
+});
+
+test("namespaceStartPublicationStreamLoop: 先頭 GOAWAY (resolved=false) で callbacks.goaway 通知 + Promise reject + セッション継続", async () => {
+  const ctx = createPublicationLoopTestContext();
+  const publication = ctx.session.namespacePublications.get(ctx.requestId)! as unknown as {
+    callbacks: Record<string, unknown>;
+    state: string;
+  };
+  const notifiedUris: string[] = [];
+  let errorFired = false;
+  Object.assign(publication.callbacks, {
+    goaway: (uri: string) => {
+      notifiedUris.push(uri);
+    },
+    error: () => {
+      errorFired = true;
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  await readPromise;
+
+  assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "request stream goaway: moqt://new.example.com");
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(errorFired);
+  assert.equal(publication.state, "closed");
+  assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
+  assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
 });

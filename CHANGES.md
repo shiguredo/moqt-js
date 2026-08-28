@@ -727,6 +727,11 @@
   - draft-ietf-moq-transport-19 §5.1.2 に基づき、LargestObject の Start Location を {Largest Object.Group, Largest Object.Object + 1}、NextGroupStart を {Largest Object.Group + 1, 0} とし、LARGEST_OBJECT 未受信時は {0, 0} から開始するように修正する
   - LARGEST_OBJECT と同一 Location のオブジェクトが購読後に通過して重複配信される問題と、コンテンツ未配信時の subscribe で Group 0 が欠落する問題を解消する
   - @voluntas
+- [FIX] SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭に GOAWAY が届いてもセッションが閉じないようにする
+  - draft-ietf-moq-transport-19 §10.4 のリクエストストリーム GOAWAY マイグレーションを §10.18 / §10.19 の先頭メッセージ MUST に優先させ、確立前 (resolved=false) の GOAWAY を許可して callbacks.goaway 通知 → Promise reject → 受信方向 cancel → ループ終了で処理する
+  - 送信方向はアプリの再発行 (re-issue) に委ね、既存の PUBLISH_NAMESPACE ループと挙動を揃える (相互運用緩和)
+  - 確立前 GOAWAY 受理後は §10.4 の「単一リクエストストリーム上の 2 通目 GOAWAY を PROTOCOL_VIOLATION で検出する MUST」を放棄する既知のトレードオフを伴う
+  - @voluntas
 
 ### misc
 
