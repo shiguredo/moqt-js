@@ -158,7 +158,7 @@
 - [FIX] リクエストストリーム上の重複 GOAWAY を検出してセッションを閉じる
   - draft-ietf-moq-transport-19 §10.4 に基づき、GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を PROTOCOL_VIOLATION で検出する
   - GOAWAY 受信時に subscriber の送信方向を FIN で閉じ、publisher は done() による PUBLISH_DONE → FIN の経路を維持する
-  - namespace 系ループは GOAWAY 後も読み取りを継続し、callbacks.goaway 通知のみを行う
+  - namespace 系ループは GOAWAY 後も読み取りを継続する (送信方向 FIN は「namespace 系ストリーム ... の確立後 GOAWAY 受信時に送信方向を FIN で閉じる」[FIX] エントリで対応する)
   - @voluntas
 - [FIX] 未対応リクエストの受信時に NOT_SUPPORTED を応答してセッションを維持する
   - draft-ietf-moq-transport-19 §4 に基づき、受信 bidi ストリームの先頭が未対応の 6 種 (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の場合に REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じる
@@ -731,6 +731,10 @@
   - draft-ietf-moq-transport-19 §10.4 のリクエストストリーム GOAWAY マイグレーションを §10.18 / §10.19 の先頭メッセージ MUST に優先させ、確立前 (resolved=false) の GOAWAY を許可して callbacks.goaway 通知 → Promise reject → 受信方向 cancel → ループ終了で処理する
   - 送信方向はアプリの再発行 (re-issue) に委ね、既存の PUBLISH_NAMESPACE ループと挙動を揃える (相互運用緩和)
   - 確立前 GOAWAY 受理後は §10.4 の「単一リクエストストリーム上の 2 通目 GOAWAY を PROTOCOL_VIOLATION で検出する MUST」を放棄する既知のトレードオフを伴う
+  - @voluntas
+- [FIX] namespace 系ストリーム (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE) の確立後 GOAWAY 受信時に送信方向を FIN で閉じる
+  - draft-ietf-moq-transport-19 §10.4 SHOULD (「close the old request stream using the appropriate mechanism (e.g. FIN, stream reset, or PUBLISH_DONE)」) に従い、resolved=true の GOAWAY 受信時に writer.close() で送信方向を FIN する
+  - 受信方向は従来どおり読み取り継続し、2 通目 GOAWAY を PROTOCOL_VIOLATION で検出する挙動を維持する
   - @voluntas
 
 ### misc
