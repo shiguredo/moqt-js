@@ -1,7 +1,7 @@
 # 確立前の namespace / tracks ストリームで GOAWAY が先頭メッセージだと PROTOCOL_VIOLATION になる
 
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/fix-initial-goaway-on-namespace-stream
 - Polished: 2026-08-20
 
@@ -48,4 +48,11 @@ SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS ストリームの先頭メッセージ�
 
 ## 解決方法
 
-未着手。
+`src/session/namespaceLoops.ts` に helper 2 つ (`namespaceValidateFirstMessage` / `namespaceHandleGoawayMessage`) を導入し、3 ループ (namespace / tracks / publication) を helper 呼び出しで統一した。
+
+- `namespaceValidateFirstMessage` は namespace / tracks ループの先頭メッセージガードで REQUEST_OK / REQUEST_ERROR / GOAWAY のいずれかのみを許可する。想定外メッセージは PROTOCOL_VIOLATION でセッションを閉じる。
+- `namespaceHandleGoawayMessage` は 3 ループ共通の GOAWAY ケース処理を担う。resolved=false のときは §10.4 のリクエストストリーム GOAWAY マイグレーションに従い callbacks.goaway 通知 → Promise reject → 受信方向 cancel でループを終了する。resolved=true のときは従来どおり goawayReceived フラグを立てて読み取りを継続する。
+- 送信方向は §10.4 SHOULD の解釈としてアプリの再発行 (re-issue) に委ね、helper では閉じない (既存 publication ループと同挙動)。
+- 先頭 GOAWAY で reject + return する結果、以降に届く 2 通目 GOAWAY (§10.4 MUST) は検出されないトレードオフを許容判断済み (0372 のエッジケース (h) と同扱い)。
+- `src/session/namespaceLoops.test.ts` に新規テスト 5 件を追加した (namespace / tracks / publication の先頭 GOAWAY 経路、namespace / tracks の先頭想定外メッセージのガード、namespace の空 URI GOAWAY の fallback 挙動)。callbacks.goaway 通知、Promise reject、セッション継続、finally 経路の subscription/publication state=closed、callbacks.error 不発火、goawayReceivedOnRequestStreams の副作用を検証する。
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加し、§10.18 / §10.19 の MUST に対する相互運用緩和と §10.4 の 2 通目 GOAWAY 検出放棄のトレードオフを明記した。
