@@ -1,7 +1,7 @@
 # src/session/incoming.ts のモジュール doc から issue 番号参照を削除する
 
 - Created: 2026-08-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/fix-incoming-issue-reference
 - Polished: 2026-08-20
 
@@ -33,4 +33,4 @@
 
 ## 解決方法
 
-未着手。
+`src/session/incoming.ts` のモジュール doc から `。issue 0302 設計方針参照` を削除し、理由（状態結合が強いため）のみを残した。ロジック変更なし。`CHANGES.md` の `## develop` の既存 `### misc` サブセクションに `[UPDATE]` エントリを追加した。
