@@ -62,6 +62,16 @@ draft-ietf-moq-transport-19 §8 の MUST 要件（OBJECT_DELIVERY_TIMEOUT 超過
 - 関連: `0370-moqt-draft-19-publish-done-skipped-after-peer-fin.md`（`done()` 経路の `closePublisherStream` に SUBGROUP_DELIVERY_TIMEOUT による abort を追加しても PUBLISH_DONE 送信順序（0370 の前提）は変わらない）
 - 関連: `0395-fix-delivery-timeout-options-doc-comment.md`（`PublishOptions` / `SubscribeOptions` の deliveryTimeout doc コメント修正を分離）
 
+## pending にする理由
+
+本 issue の完了条件と設計方針には、自動対応（`/auto-resolve`）では扱えない実験的検証と設計分岐が含まれるため pending に退避する。手動で段階的に導入する。
+
+- 完了条件「closing 状態のストリームに対する abort() の挙動（RESET_STREAM_AT が送信されるか）の検証」は実ブラウザでの手動 e2e 検証（`TEST_MOQT_URI` 依存で常時実行されない）を明示的に要求している。abort が機能しない場合の「close() 完了を待つ」フォールバック採否は静的コードのみで確定できず、実装後にブラウザ挙動を測って決める分岐が残る。
+- 「commit() 相当の committedOffset 反映方法」の (a) `WebTransportWriter.commit()` 直接利用 / (b) 代替手段調査（不可能なら「チェック位置・リセット方式を見直す」）の分岐は、ブラウザ実装と型定義パッケージのバージョン確認、および (b) 不可のときの設計変更（Subgroup Header 書き込み後・オブジェクトデータ書き込み前という基本方針そのものの再検討）を伴う。
+- 変更対象範囲が広く（`src/session/publish.ts` / `src/session.ts` / `src/session/stream.ts`、タイマー実装・純粋関数モジュールの新設、e2e への追記）、単一 PR での自動レビュー・自動マージには適さない。
+
+以上の判断が確定するまで pending 退避とする。実装を再開するときは、(1) ブラウザで `WebTransportWriter.commit()` の可用性を確認し (a)/(b) の分岐を確定させる、(2) e2e で closing 状態の abort 挙動を測定してフォールバック採否を確定させる、(3) 上記結果を踏まえて本 issue の設計方針を確定させ直したうえで再オープンする、の順で進める。
+
 ## 解決方法
 
 未着手。
