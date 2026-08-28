@@ -39,7 +39,8 @@ import { isGreaseValue } from "./grease";
 import { buildPublishTrackProperties } from "./session/params";
 
 // キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, SID=0)
-// Value バイト列は [0xe8, 0x00] (S=1, E=1, I=1, B=1)
+// TID=0 では RFC 9626 §3.1 の MUST に従い encodeVideoFrameMarkingValue が B=0 に抑圧するため、
+// Value バイト列は [0xe0, 0x00] (S=1, E=1, I=1, B=0) となる。
 const keyFrameMarking: VideoFrameMarking = {
   isIndependent: true,
   isDiscardable: false,
@@ -235,9 +236,9 @@ test("encodeVideoProperties: timestamp + frameMarking のワイヤは delta 形�
     timestamp: 1234n,
     frameMarking: keyFrameMarking,
   });
-  // frameMarking: Delta Type 0x09, Length 2, Value [0xe8, 0x00]
+  // frameMarking: Delta Type 0x09, Length 2, Value [0xe0, 0x00] (TID=0 で B=0 抑圧)
   // timestamp:   Delta Type 0x07 (0x10 - 0x09), Value 1234 の varint [0x84, 0xd2]
-  assert.deepEqual(Array.from(encoded), [0x09, 0x02, 0xe8, 0x00, 0x07, 0x84, 0xd2]);
+  assert.deepEqual(Array.from(encoded), [0x09, 0x02, 0xe0, 0x00, 0x07, 0x84, 0xd2]);
 });
 
 test("encodeAudioProperties: timestamp + audioLevel のワイヤは delta 形式（Delta Type 0x0C, 0x04）になる", () => {
@@ -328,9 +329,11 @@ test("mergeDeliveryTimeoutObjectProperties: LOC バイト列を入力にして�
     decoded.properties.map((property) => property.id),
     [0x02n, 0x09n, 0x10n],
   );
-  // 合成後も LOC フィールドが復元できる
+  // 合成後も LOC フィールドが復元できる。
+  // keyFrameMarking は isBaseLayerSync=true だが TID=0 のため encode 時に B=0 に抑圧され、
+  // 復元後は isBaseLayerSync=false になる。
   const resolved = decodeVideoProperties(merged!);
-  assert.deepEqual(resolved.frameMarking, keyFrameMarking);
+  assert.deepEqual(resolved.frameMarking, { ...keyFrameMarking, isBaseLayerSync: false });
   assert.equal(resolved.timestamp, 1234n);
 });
 

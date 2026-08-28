@@ -607,12 +607,16 @@ class MediaPublisherImpl implements MediaPublisher {
       this.videoStats.keyFramesSent++;
     }
 
-    // LOC Properties をエンコード
+    // LOC Properties をエンコード。
+    // isDiscardable は WebCodecs が破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の
+    // 「the sender knows」を守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして
+    // 残すが、temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される (詳細は
+    // encodeVideoFrameMarking を参照)。
     const properties = LOC.encodeVideoProperties({
       timestamp: BigInt(chunk.timestamp),
       frameMarking: {
         isIndependent: chunk.type === "key",
-        isDiscardable: chunk.type !== "key",
+        isDiscardable: false,
         isBaseLayerSync: chunk.type === "key",
         temporalLayerId: 0,
         spatialLayerId: 0,

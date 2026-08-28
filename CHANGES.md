@@ -16,6 +16,13 @@
   - 複数 Property ではワイヤ形式が変わり、旧版 moqt-js (絶対 Type 連結) とは相互運用できない
   - 受信側を寛容な抽出に変更し、不正な delta / Length で PROTOCOL_VIOLATION を送出せず抽出できたフィールドのみで配信を継続する
   - @voluntas
+- [CHANGE] VIDEO_FRAME_MARKING の Value ビット配置を RFC 9626 §3.1 (Long Extension 2 オクテット形、L=1) に準拠させる
+  - draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 に合わせ、encode 側は byte2 = `spatialLayerId << 4` から byte2 = `spatialLayerId & 0x03` (LID 下位 2 bits に 8-bit LID としてマッピング、上位 6 bits は 0) に変更し、decode 側の byte2 の解釈も対応して変更する
+  - RFC 9626 §3.1 の MUST に従い、エンコーダは TID=0 のとき B ビットを 0 に抑圧する
+  - createMediaPublisher / usePublisher は WebCodecs が破棄可能性情報を提供しないため isDiscardable を false 固定にする
+  - 旧レイアウトで送受信していた moqt-js とは送信ワイヤ・受信解釈の両方が変わるため相互運用できない (旧実装の spatialLayerId=1 は byte2=0x10、新実装の spatialLayerId=1 は byte2=0x01)
+  - VP9 準拠の送信者は RFC 9626 §3.3.1 に従い SID を 8-bit LID の下位 3 bits (0-7) に載せるが、本実装は LID の下位 2 bits のみを spatialLayerId として復元するため、SID=4-7 は下位 2 bits で 0-3 に折り畳まれる (VideoFrameMarking.spatialLayerId の値域 0-3 の既存設計を維持)
+  - @voluntas
 - [ADD] Range Filter の評価 (マッチング) ロジックを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY の評価関数 (SetID ごとの AND / OR 結合、両端含む判定、open-ended) を実装する
   - SubscriberImpl の handleObject / handleDatagram に Range Filter 再適用を追加し、不通過オブジェクトを破棄する

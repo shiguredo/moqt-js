@@ -50,9 +50,10 @@ export const LOCPropertyId = {
    */
   TIMESCALE: 0x08n,
   /**
-   * Video Frame Marking (draft-ietf-moq-loc-04 Section 2.3.2.2 Video Frame Marking)
-   * length prefix 付きバイト列。Value のビット配置は独自レイアウトを維持する
-   * (I / D / B / TID / 2bit SID)。RFC9626 の 8-bit LID / TL0PICIDX までは未対応。
+   * Video Frame Marking (draft-ietf-moq-loc-04 §2.3.2.2)
+   * length prefix 付きバイト列で Length は 1-4 のみ受理する。RFC 9626 §3.1 の Long Extension
+   * 2 オクテット形 (L=1、TL0PICIDX 省略) 準拠。ビット配置・B 抑圧・TL0PICIDX の扱いは
+   * encodeVideoFrameMarkingValue / parseVideoFrameMarkingValue を参照。
    */
   VIDEO_FRAME_MARKING: 0x09n,
   /**
@@ -73,10 +74,10 @@ export const LOCPropertyId = {
 } as const;
 
 /**
- * Video Frame Marking
+ * Video Frame Marking (RFC 9626 §3.1 Long Extension 準拠)
  *
- * draft-ietf-moq-loc-04 §2.3.2.2 は RFC9626 を参照するが、
- * 本実装の Value ビット配置は既存の独自レイアウト (I / D / B / TID / 2bit SID) を維持する。
+ * フィールドの値域・ワイヤ意味論・B/D ビットの MUST 責務所在は
+ * encodeVideoFrameMarkingValue / parseVideoFrameMarkingValue の JSDoc に集約している。
  */
 export interface VideoFrameMarking {
   isIndependent: boolean;
@@ -116,7 +117,10 @@ export interface AudioProperties {
 
 /**
  * Video Frame Marking の Value バイトからフィールドを解釈する。
- * Length=1 は SID=0 扱い、Length>=2 は先頭 2 バイトから読む。
+ * Length=1 (RFC 9626 §3.2 short extension format 相当) は LID 暗黙 0 扱い
+ * (RFC 9626 §3.1 LID 定義「implicitly 0 in the short extension format or when omitted in the
+ * long extension format」)。Length>=3 の 3 バイト目以降 (TL0PICIDX / 余剰) は解釈せず消費のみ。
+ * decode 側は正規化せずワイヤの値を忠実に読み出す (準拠しないピアからの (TID=0, B=1) も受理する)。
  */
 function parseVideoFrameMarkingValue(value: Uint8Array): VideoFrameMarking {
   const byte1 = value[0] ?? 0;
@@ -127,7 +131,7 @@ function parseVideoFrameMarkingValue(value: Uint8Array): VideoFrameMarking {
     isDiscardable: (byte1 & 0x10) !== 0,
     isBaseLayerSync: (byte1 & 0x08) !== 0,
     temporalLayerId: byte1 & 0x07,
-    spatialLayerId: (byte2 >> 4) & 0x03,
+    spatialLayerId: byte2 & 0x03,
   };
 }
 
@@ -212,33 +216,47 @@ export function decodeTimescale(data: Uint8Array): bigint {
 }
 
 /**
- * Video Frame Marking の Value バイト列を生成する (length prefix を含まない)
+ * Video Frame Marking の Value バイト列を生成する (length prefix を含まない)。
+ *
+ * draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 の Long Extension 2 オクテット形
+ * (L=1、TL0PICIDX 省略) に準拠する。
+ *
+ * ビット配置 (byte1):
+ * - bit 7: S (常に 1、「1 フレーム = 1 オブジェクト」前提)
+ * - bit 6: E (常に 1、同上)
+ * - bit 5: I = isIndependent
+ * - bit 4: D = isDiscardable (§3.1 の MUST は呼び出し側が担保する。エンコーダは入力を忠実に反映する)
+ * - bit 3: B = isBaseLayerSync (§3.1 の MUST はエンコーダが担保する。TID=0 のとき入力の値に
+ *   よらず 0 に抑圧する。TID≠0 では呼び出し側の主張をそのまま反映する)
+ * - bits 2-0: TID = temporalLayerId (値域 0-7、値域外は暗黙に下位 3 bits へ折り畳む)
+ *
+ * ビット配置 (byte2):
+ * - LID (8 bit)。spatialLayerId (値域 0-3) を下位 2 bits にマッピングし上位 6 bits は 0。
+ *   値域外は暗黙に下位 2 bits へ折り畳む。コーデック別 LID マッピング規則 §3.3 (§3.3.1 の
+ *   VP9 含む) への完全準拠はスコープ外。
+ *
+ * TL0PICIDX は §3.1「If no scalability is used, or the cyclic counter is unknown, TL0PICIDX
+ * MUST be omitted to reduce length」に整合させて送信しない。
  */
 function encodeVideoFrameMarkingValue(marking: VideoFrameMarking): Uint8Array {
+  const temporalLayerId = marking.temporalLayerId & 0x07;
   let byte1 = 0;
   byte1 |= 0x80;
   byte1 |= 0x40;
   if (marking.isIndependent) byte1 |= 0x20;
   if (marking.isDiscardable) byte1 |= 0x10;
-  if (marking.isBaseLayerSync) byte1 |= 0x08;
-  byte1 |= marking.temporalLayerId & 0x07;
+  if (marking.isBaseLayerSync && temporalLayerId !== 0) byte1 |= 0x08;
+  byte1 |= temporalLayerId;
 
-  const byte2 = (marking.spatialLayerId & 0x03) << 4;
+  const byte2 = marking.spatialLayerId & 0x03;
   return new Uint8Array([byte1, byte2]);
 }
 
 /**
  * Video Frame Marking をエンコードする (ID: 0x09)
  *
- * draft-ietf-moq-loc-04 §2.3.2.2: 奇数 ID のため length + bytes 形式。
- * Value のビット配置は独自レイアウトを維持する:
- * - bit 7: Start of frame (S) — 常に 1
- * - bit 6: End of frame (E) — 常に 1
- * - bit 5: Independent (I)
- * - bit 4: Discardable (D)
- * - bit 3: Base layer sync (B)
- * - bits 2-0: Temporal layer ID (TID)
- * - bits 5-4 (次バイト): Spatial layer ID (SID, 2 bit)
+ * draft-ietf-moq-loc-04 §2.3.2.2: 奇数 ID のため length + bytes 形式。Value のビット配置と
+ * B 抑圧・TL0PICIDX 省略の詳細は encodeVideoFrameMarkingValue の JSDoc を参照。
  *
  * 単一 Property を絶対 Type でエンコードする。複数 Property の連結には
  * encodeVideoProperties を使うこと。

@@ -1,7 +1,7 @@
 # VIDEO_FRAME_MARKING を RFC 9626 §3.1（L=1 形）に準拠させる
 
 - Created: 2026-08-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/change-video-frame-marking-rfc9626
 - Polished: 2026-08-07
 
@@ -51,4 +51,13 @@ draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626（Video Frame Marking R
 
 ## 解決方法
 
-未着手。
+`src/loc.ts` の VIDEO_FRAME_MARKING の Value ビット配置を RFC 9626 §3.1 の Long Extension 2 オクテット形 (L=1、TL0PICIDX 省略) に準拠させた。
+
+- `encodeVideoFrameMarkingValue()` の byte2 生成を `(spatialLayerId & 0x03) << 4` から `spatialLayerId & 0x03` (LID 下位 2 bits マッピング、上位 6 bits は 0) に変更した。TID=0 のとき B ビットを 0 に抑圧するロジックを追加した (RFC 9626 §3.1 「When the TID is 0 or if no scalability is used, this MUST be 0」)。
+- `parseVideoFrameMarkingValue()` の byte2 解釈を `(byte2 >> 4) & 0x03` から `byte2 & 0x03` (LID 下位 2 bits) に変更した。VP9 準拠送信者の LID=4-7 は下位 2 bits で 0-3 に折り畳む。
+- `LOCPropertyId.VIDEO_FRAME_MARKING` / `VideoFrameMarking` / `encodeVideoFrameMarking` / `parseVideoFrameMarkingValue` の JSDoc を新レイアウトの記述に更新し、情報源を `encodeVideoFrameMarkingValue` / `parseVideoFrameMarkingValue` に集約した。
+- `src/createMediaPublisher.ts` と `devtools/src/hooks/usePublisher.ts` の `handleVideoEncodedChunk` / `usePublisher` で `isDiscardable` を `chunk.type !== "key"` から `false` 固定に変更した (WebCodecs が破棄可能性情報を提供しないため)。`isBaseLayerSync: chunk.type === "key"` はソース上のキーフレーム意図マーカとして残し、TID=0 固定のためワイヤ上 B=0 に抑圧される旨をコメントで明記した。
+- `src/loc.prop.ts` の `videoFrameMarkingArb` を TID=0 のとき `isBaseLayerSync=false` に制約する chain 形に変更した (round-trip 恒等維持のため)。既存の Length=3 / Length=4 の spatialLayerId 期待値とキーフレームの B=1 テスト、テスト名の「SID」表記を新レイアウトに更新した。新規テストとして LID 下位 2 bits マッピング (encode 側 byte2 検証、decode 側 LID=0x04 / 0xFF の折り畳み)、TID=0 + isBaseLayerSync=true の B=0 抑圧の固定バイト列検証、TID=0 で B=1 のワイヤの decode 忠実性、TID≠0 での B 反映を追加した。
+- `src/loc.test.ts` の `keyFrameMarking` の Value バイト列コメントと `mergeDeliveryTimeoutObjectProperties` テストの期待値を B 抑圧に合わせて更新した。
+- `docs/HIGH_LEVEL_API.md` の VIDEO_FRAME_MARKING の記述を高レベル API の固定値の実態 (temporalLayerId / spatialLayerId は 0 固定、isBaseLayerSync はエンコーダで B=0 抑圧、isDiscardable は false 固定) を反映した表現に更新した。
+- `CHANGES.md` の `## develop` に `[CHANGE]` エントリを追加し、ワイヤ非互換 (旧 moqt-js との相互運用不能、VP9 SID=4-7 の折り畳み) を明記した。
