@@ -235,9 +235,12 @@ export function encodeRequestUpdatePayload(msg: RequestUpdate): Uint8Array {
 /**
  * RequestUpdate のペイロードをデコード
  *
- * リレーサーバーおよび Publisher 実装用。
- * moqt-js はクライアント専用のため、現在ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * 以下の受信 REQUEST_UPDATE 経路で使用する:
+ * - 受信 PUBLISH ストリーム上での REQUEST_UPDATE (ピア Publisher からの update、
+ *   bidiHandlePublishRequestUpdate)
+ * - 送信 PUBLISH の bidi ストリーム上での REQUEST_UPDATE (ピア Subscriber からの update、
+ *   bidiReadRequestStreamMessages 内)
+ * PBT（Property-Based Testing）でのラウンドトリップテストでも使用。
  */
 export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): RequestUpdate {
   let totalConsumed = 0;

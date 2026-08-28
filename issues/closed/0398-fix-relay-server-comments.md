@@ -1,7 +1,7 @@
 # リレーサーバー実装用コメントの不正確な記述を修正する
 
 - Created: 2026-08-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/fix-relay-server-comments
 - Polished: 2026-08-20
 
@@ -38,4 +38,10 @@
 
 ## 解決方法
 
-未着手。
+以下 3 関数の doc コメントを、実際にランタイムで使用されている呼び出し経路を明記した内容に修正した。
+
+- `src/message/session.ts` の `encodeRequestOkPayload`: 受信 PUBLISH 受理時、受信 PUBLISH ストリーム上での REQUEST_UPDATE 応答 (bidiSendRequestOk 経由)、送信 PUBLISH の bidi ストリーム上での REQUEST_UPDATE 応答 (bidiReadRequestStreamMessages 内で直接エンコード) の 3 経路を明記。
+- `src/message/session.ts` の `encodeRequestErrorPayload`: 受信リクエストの拒否 (incomingSendRequestErrorAndClose)、受信 PUBLISH ストリーム上での REQUEST_UPDATE エラー応答 (GOING_AWAY / NOT_SUPPORTED)、送信 PUBLISH の bidi ストリーム上での REQUEST_UPDATE エラー応答 (bidiSendRequestError 経由の GOING_AWAY / INVALID_FILTER および直接エンコードの INTERNAL_ERROR) を明記。
+- `src/message/subscribe.ts` の `decodeRequestUpdatePayload`: 受信 PUBLISH ストリーム (bidiHandlePublishRequestUpdate) と送信 PUBLISH の bidi ストリーム (bidiReadRequestStreamMessages) の 2 経路を明記。
+- コメントが正しい他関数 (`decodeFetchPayload` / `encodeFetchOkPayload` / `decodeSubscribePayload` / `encodeSubscribeOkPayload` / `encodeFetchHeader` / `encodeFetchObjectFields`) は変更していない。
+- `CHANGES.md` の `## develop` セクション内の既存 `### misc` サブセクションに `[UPDATE]` エントリを追加した。
