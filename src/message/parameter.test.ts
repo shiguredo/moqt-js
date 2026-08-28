@@ -9,6 +9,9 @@ import {
   decodeLocationFilter,
   decodeLocationFilterParameter,
   decodeTrackNamespace,
+  encodeLocationFilter,
+  encodeLocationFilterParameter,
+  type LocationFilter,
   encodeParameters,
   decodeParameters,
   decodeKeyValuePairs,
@@ -37,6 +40,152 @@ test("無効なパラメータタイプでエラー", () => {
 test("無効なフィルタタイプで ProtocolViolationError", () => {
   const invalidData = new Uint8Array([0x10]);
   assert.throws(() => decodeLocationFilter(invalidData), ProtocolViolationError);
+});
+
+/**
+ * AbsoluteRange の End Group (Start Location の Group + End Group Delta) が
+ * 2^64-1 を超える受信データは draft-ietf-moq-transport-19 §5.1.2 の MUST
+ * 「If the resulting Group ID would be greater than 2^64 - 1, the endpoint
+ * MUST close the session with a PROTOCOL_VIOLATION.」に従い
+ * ProtocolViolationError で拒否される。
+ * End Group 計算自体は bigint のためオーバーフローせず、超過値がそのまま
+ * フィルタ解決へ流れ込むのをデコード段階で止めることを検証する。
+ */
+test("decodeLocationFilter: AbsoluteRange の End Group が 2^64-1 を超えると ProtocolViolationError", () => {
+  // Filter Type=0x04 (AbsoluteRange) + Group=MAX_VARINT + Object=0 + End Group Delta=1
+  // End Group = MAX_VARINT + 1 で 2^64-1 超過
+  const data = new Uint8Array([
+    ...encodeVarint(0x04n),
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+});
+
+/**
+ * End Group がちょうど 2^64-1 の AbsoluteRange は仕様上の有効値であり受理される。
+ * 「2^64-1 を超える場合」のみ拒否する境界の向きを検証する。
+ */
+test("decodeLocationFilter: AbsoluteRange の End Group がちょうど 2^64-1 は受理される", () => {
+  // Filter Type=0x04 (AbsoluteRange) + Group=MAX_VARINT-5 + Object=7 + End Group Delta=5
+  // End Group = MAX_VARINT-5+5 = 2^64-1 ちょうど
+  const data = new Uint8Array([
+    ...encodeVarint(0x04n),
+    ...encodeVarint(MAX_VARINT - 5n),
+    ...encodeVarint(7n),
+    ...encodeVarint(5n),
+  ]);
+  const [filter, consumed] = decodeLocationFilter(data);
+  assert.equal(filter.type, "AbsoluteRange");
+  if (filter.type === "AbsoluteRange") {
+    assert.equal(filter.startLocation.group, MAX_VARINT - 5n);
+    assert.equal(filter.startLocation.object, 7n);
+    assert.equal(filter.endGroupDelta, 5n);
+  }
+  assert.equal(consumed, data.length);
+});
+
+/**
+ * End Group Delta が単体で varint 域の最大値 (2^64-1。9 バイト表現) で
+ * Start Location の Group が 0 の場合、和はちょうど 2^64-1 であり受理される。
+ * delta 側から和の境界 (ちょうど 2^64-1 は有効) を検証する。
+ */
+test("decodeLocationFilter: AbsoluteRange の End Group Delta 単体が最大値でも Group が 0 なら受理される", () => {
+  // Filter Type=0x04 (AbsoluteRange) + Group=0 + Object=0 + End Group Delta=MAX_VARINT
+  const data = new Uint8Array([
+    ...encodeVarint(0x04n),
+    ...encodeVarint(0n),
+    ...encodeVarint(0n),
+    ...encodeVarint(MAX_VARINT),
+  ]);
+  const [filter] = decodeLocationFilter(data);
+  assert.equal(filter.type, "AbsoluteRange");
+});
+
+/**
+ * End Group Delta が単体で最大値でも Group が 1 以上の場合は和が 2^64-1 を
+ * 超えるため ProtocolViolationError で拒否される。超過判定が delta 単体で
+ * なく和であること (「End Group Delta だけを見る」実装誤りへのガード) を検証する。
+ */
+test("decodeLocationFilter: AbsoluteRange は Group が 1 以上で End Group Delta が単体最大なら ProtocolViolationError", () => {
+  // Filter Type=0x04 (AbsoluteRange) + Group=1 + Object=0 + End Group Delta=MAX_VARINT
+  // End Group = 1 + MAX_VARINT で 2^64-1 超過
+  const data = new Uint8Array([
+    ...encodeVarint(0x04n),
+    ...encodeVarint(1n),
+    ...encodeVarint(0n),
+    ...encodeVarint(MAX_VARINT),
+  ]);
+  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+});
+
+/**
+ * End Group Delta が 0 (Start Location の Group の残りが対象。§5.1.2) で
+ * Group 単体が 2^64-1 の場合、和も 2^64-1 ちょうどであり受理される。
+ * delta=0 と最大 Group の組合せにおける境界の向き (拒否は `>` であり `>=`
+ * ではないこと) を検証する。
+ */
+test("decodeLocationFilter: AbsoluteRange の Group が 2^64-1 で End Group Delta が 0 は受理される", () => {
+  // Filter Type=0x04 (AbsoluteRange) + Group=MAX_VARINT + Object=0 + End Group Delta=0
+  const data = new Uint8Array([
+    ...encodeVarint(0x04n),
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(0n),
+  ]);
+  const [filter] = decodeLocationFilter(data);
+  assert.equal(filter.type, "AbsoluteRange");
+});
+
+/**
+ * 送信側でも同一規則を適用する。End Group が 2^64-1 を超える AbsoluteRange は
+ * 受信した endpoint を PROTOCOL_VIOLATION でセッション終了させるため、
+ * encodeLocationFilter が InvalidFilterError で送信前に throw する (§5.1.2)。
+ */
+test("encodeLocationFilter: AbsoluteRange の End Group が 2^64-1 を超えると InvalidFilterError", () => {
+  // End Group = MAX_VARINT + 1 で 2^64-1 超過
+  const filter: LocationFilter = {
+    type: "AbsoluteRange",
+    startLocation: { group: MAX_VARINT, object: 0n },
+    endGroupDelta: 1n,
+  };
+  assert.throws(() => encodeLocationFilter(filter), InvalidFilterError);
+});
+
+/**
+ * LOCATION_FILTER パラメータとしてのエンコード経路
+ * (encodeLocationFilterParameter) でも同一の送信前検証が効くことを検証する。
+ */
+test("encodeLocationFilterParameter: AbsoluteRange の End Group が 2^64-1 を超えると InvalidFilterError", () => {
+  // End Group = MAX_VARINT + 1 で 2^64-1 超過
+  const filter: LocationFilter = {
+    type: "AbsoluteRange",
+    startLocation: { group: MAX_VARINT - 1n, object: 0n },
+    endGroupDelta: 2n,
+  };
+  assert.throws(() => encodeLocationFilterParameter(filter), InvalidFilterError);
+});
+
+/**
+ * End Group がちょうど 2^64-1 の AbsoluteRange は送信でき、受信側も受理する
+ * (送信前検証が境界値を過剰に拒否しないこと、および encode/decode の
+ * 検証条件が一致してラウンドトリップすることを検証する)。
+ */
+test("encodeLocationFilter: AbsoluteRange の End Group がちょうど 2^64-1 は round-trip する", () => {
+  // End Group = MAX_VARINT-3+3 = 2^64-1 ちょうど
+  const filter: LocationFilter = {
+    type: "AbsoluteRange",
+    startLocation: { group: MAX_VARINT - 3n, object: 0n },
+    endGroupDelta: 3n,
+  };
+  const encoded = encodeLocationFilter(filter);
+  const [decoded] = decodeLocationFilter(encoded);
+  assert.equal(decoded.type, "AbsoluteRange");
+  if (decoded.type === "AbsoluteRange") {
+    assert.equal(decoded.startLocation.group, MAX_VARINT - 3n);
+    assert.equal(decoded.endGroupDelta, 3n);
+  }
 });
 
 /**
