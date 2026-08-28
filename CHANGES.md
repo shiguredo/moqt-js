@@ -743,6 +743,8 @@
 - [UPDATE] PublishOptions / SubscribeOptions の deliveryTimeout doc コメントを moqt-js が値の比較・強制を行わない実態に合わせて修正する
   - 比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント（典型的にはリレー）の責務である旨に修正する (draft-ietf-moq-transport-19 §8)
   - @voluntas
+- [UPDATE] Publisher done 処理内部コメントを実態（データストリーム FIN 送信 → PUBLISH_DONE 送信 → リクエストストリーム FIN 送信）に合わせて修正する (draft-ietf-moq-transport-19 §10.11)
+  - @voluntas
 
 ## 2026.2.0
 
