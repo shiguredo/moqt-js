@@ -256,8 +256,11 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
  * Number of Parameters + Parameters
  * draft-ietf-moq-transport-19 Section 10.1
  *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * 以下の REQUEST_OK 送信経路で使用する:
+ * - 受信 PUBLISH 受理時 (SessionImpl.handleIncomingBidirectionalStream)
+ * - 受信 PUBLISH ストリーム上での REQUEST_UPDATE 応答 (bidiSendRequestOk 経由、bidiHandlePublishRequestUpdate)
+ * - 送信 PUBLISH の bidi ストリーム上での REQUEST_UPDATE 応答 (publisher 存在時。bidiReadRequestStreamMessages 内で直接エンコード)
+ * PBT（Property-Based Testing）でのラウンドトリップテストでも使用。
  */
 export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -304,8 +307,13 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
  *
  * - Redirect は msg.redirect が存在する場合のみエンコードする
  *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
+ * 以下の REQUEST_ERROR 送信経路で使用する:
+ * - 受信リクエストの拒否 (incomingSendRequestErrorAndClose)
+ * - 受信 PUBLISH ストリーム上での REQUEST_UPDATE エラー応答 (bidiSendRequestError 経由、
+ *   bidiHandlePublishRequestUpdate。GOING_AWAY / NOT_SUPPORTED)
+ * - 送信 PUBLISH の bidi ストリーム上での REQUEST_UPDATE エラー応答 (bidiReadRequestStreamMessages 内。
+ *   bidiSendRequestError 経由で GOING_AWAY / INVALID_FILTER、直接エンコードで INTERNAL_ERROR (publisher 不在時))
+ * PBT（Property-Based Testing）でのラウンドトリップテストでも使用。
  */
 export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
   const encoder = new TextEncoder();

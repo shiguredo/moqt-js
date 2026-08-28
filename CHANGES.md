@@ -745,6 +745,9 @@
   - @voluntas
 - [UPDATE] Publisher done 処理内部コメントを実態（データストリーム FIN 送信 → PUBLISH_DONE 送信 → リクエストストリーム FIN 送信）に合わせて修正する (draft-ietf-moq-transport-19 §10.11)
   - @voluntas
+- [UPDATE] encodeRequestOkPayload / encodeRequestErrorPayload / decodeRequestUpdatePayload のコメントを実際にランタイムで使用されている実態に合わせて修正する
+  - 「リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない」という誤った前置きを、実際にランタイムから呼ばれる経路を明記した内容に修正する
+  - @voluntas
 
 ## 2026.2.0
 
