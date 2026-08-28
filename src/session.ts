@@ -1569,9 +1569,9 @@ export class SessionImpl implements Session {
     };
 
     impl.onDoneInternal = async () => {
-      // まずストリームを閉じる（FIN を送信）
+      // まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）
       await this.closePublisherStream(impl.getTrackAlias());
-      // その後 PUBLISH_DONE を送信
+      // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-19 §10.11）
       await this.sendPublishDone(impl);
     };
 
