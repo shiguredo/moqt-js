@@ -270,8 +270,9 @@ export interface PublishOptions {
    * PUBLISH の Track Properties として送信される OBJECT_DELIVERY_TIMEOUT（Message Parameter の定義は Section 10.2.4）。
    *
    * オブジェクトを受信してから配信を試みる最大時間。
-   * Publisher と Subscriber の両方が指定した場合、小さい方の値が使用される。
-   * タイムアウトを超過したオブジェクトは配信されない。
+   * moqt-js はこの値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つ
+   * エンドポイント（典型的にはリレー）の責務であり、詳細は Section 8
+   * (Delivery Timeouts and Data Reliability) を参照。
    */
   deliveryTimeout?: bigint;
 
@@ -475,8 +476,9 @@ export interface SubscribeOptions {
    * draft-ietf-moq-transport-19 Section 10.2.4 (OBJECT_DELIVERY_TIMEOUT Parameter)
    *
    * オブジェクトを受信してから配信を試みる最大時間。
-   * Publisher と Subscriber の両方が指定した場合、小さい方の値が使用される。
-   * タイムアウトを超過したオブジェクトは配信されない。
+   * moqt-js はこの値を SUBSCRIBE の Message Parameter として送信するが、この値の強制は行わない。
+   * 比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント（典型的にはリレー）の
+   * 責務であり、詳細は Section 8 (Delivery Timeouts and Data Reliability) を参照。
    */
   deliveryTimeout?: bigint;
 
