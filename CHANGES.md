@@ -748,6 +748,9 @@
 - [UPDATE] encodeRequestOkPayload / encodeRequestErrorPayload / decodeRequestUpdatePayload のコメントを実際にランタイムで使用されている実態に合わせて修正する
   - 「リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない」という誤った前置きを、実際にランタイムから呼ばれる経路を明記した内容に修正する
   - @voluntas
+- [UPDATE] src/session/incoming.ts のモジュール doc から issue 番号参照を削除する
+  - issue 側を第一情報源としコード側に issue 番号参照を残さない方針に合わせ、「issue 0302 設計方針参照」を削除して理由（状態結合が強いため）のみをコメントに残す
+  - @voluntas
 
 ## 2026.2.0
 

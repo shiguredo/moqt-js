@@ -8,7 +8,7 @@
  * incomingHandleFirstBidiMessage) を free function として抽出する。
  *
  * handleIncomingStream / handleSubgroupStream は SessionImpl に残留する
- * （状態結合が強いため。issue 0302 設計方針参照）。
+ * （状態結合が強いため）。
  */
 
 import { decodeVarint } from "../varint";
