@@ -1,7 +1,7 @@
 # onDoneInternal の誤コメントを実体に合わせて修正する
 
 - Created: 2026-08-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/fix-on-done-internal-comment
 - Polished: 2026-08-20
 
@@ -36,4 +36,8 @@
 
 ## 解決方法
 
-未着手。
+`src/session.ts` の `SessionImpl.publish` 内で `impl.onDoneInternal` に設定するコールバックのコメント 2 行を、実態と一致するように修正した。
+
+- 1 つ目のコメントを「まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）」に修正した (`closePublisherStream` の対象がデータストリームであることを明示)。
+- 2 つ目のコメントに「リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-19 §10.11」を補足した (FIN 送出の責務所在と一次資料参照を明示)。
+- `CHANGES.md` の `## develop` セクションの既存 `### misc` サブセクションに `[UPDATE]` エントリを追加した。
