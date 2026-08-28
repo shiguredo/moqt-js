@@ -458,14 +458,16 @@ export interface JoiningFetchOptions {
 export interface SubscribeOptions {
   /**
    * Location Filter
-   * draft-ietf-moq-transport-19 Section 5.1.2, Section 10.2.16
+   * draft-ietf-moq-transport-19 Section 5.1.2, Section 10.2.9, Section 10.2.16
    *
    * どのオブジェクトを受信するかを指定するフィルタ。
    * - NextGroupStart: 配信済み時は LARGEST_OBJECT の次のグループから開始、
    *   未配信時は {0, 0} から開始
    * - LargestObject: 最新オブジェクトの次から開始、未配信時は {0, 0} から開始
    * - AbsoluteStart: 指定した位置から開始（終了なし）
-   * - AbsoluteRange: 指定した範囲のオブジェクトのみ
+   * - AbsoluteRange: 指定した範囲のオブジェクトのみ。End Group
+   *   (Start Location の Group + End Group Delta) が 2^64-1 を超えると
+   *   送信前に InvalidFilterError で throw する（§5.1.2）
    *
    * 指定しない場合、フィルタなし（全オブジェクト）
    */
@@ -1740,6 +1742,12 @@ export class SessionImpl implements Session {
       allowTrackProperty: false,
     });
 
+    // SUBSCRIBE の Message Parameters を構築する。
+    // buildSubscribeParameters (LOCATION_FILTER の End Group 2^64-1 超過検証を
+    // 含む) が throw する場合、pendingSubscribe.set より前で失敗させるため、
+    // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
+    const parameters = buildSubscribeParameters(options);
+
     // SUBSCRIBE_OK の Promise を作成
     const promise = new Promise<Subscriber>((resolve, reject) => {
       this.pendingSubscribe.set(requestId, {
@@ -1750,8 +1758,6 @@ export class SessionImpl implements Session {
         objectCallback: callbacks.object,
       });
     });
-
-    const parameters = buildSubscribeParameters(options);
 
     // SUBSCRIBE メッセージを双方向ストリームで送信
     // draft-ietf-moq-transport-19 Section 10.7 (SUBSCRIBE):

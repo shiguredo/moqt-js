@@ -12,7 +12,8 @@ import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl } from "./fetcher";
-import { MalformedTrackError, RequestError, RequestErrorCode } from "./error";
+import { InvalidFilterError, MalformedTrackError, RequestError, RequestErrorCode } from "./error";
+import { MAX_VARINT } from "./varint";
 import {
   FetchHeaderType,
   FetchSerializationFlags,
@@ -170,6 +171,43 @@ test("fetch: 削除指定の rangeFilters で throw する", async () => {
   assert.isDefined(thrown);
   assert.isTrue(thrown!.message.includes("cannot remove range filters in FETCH"));
   assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
+ * AbsoluteRange の End Group (Start Location の Group + End Group Delta) が
+ * 2^64-1 を超える filter を subscribe() に渡すと、送信前に InvalidFilterError
+ * で reject される。Message Parameters 構築は pendingSubscribe.set より前
+ * (Promise 作成前) に走するため、pending エントリが残らないことを検証する。
+ */
+test("subscribe: AbsoluteRange の End Group が 2^64-1 を超えると throw し pendingSubscribe が残らない", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        filter: {
+          type: "AbsoluteRange",
+          startLocation: { group: MAX_VARINT, object: 0n },
+          endGroupDelta: 1n,
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("end group exceeds maximum"));
+  // 送信前検証は pendingSubscribe.set より前に走るため、pending エントリが残らない
+  assert.equal(
+    (session as unknown as { pendingSubscribe: Map<bigint, unknown> }).pendingSubscribe.size,
+    0,
+  );
 });
 
 /**

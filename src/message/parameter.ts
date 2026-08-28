@@ -964,7 +964,11 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
  *
  * End Group Delta は Start Location の Group ID からの差分。
  * 0 の場合は Start Location の Group の残りが対象。
- * draft-ietf-moq-transport-19 Section 10.2
+ * End Group (= Start Location の Group + End Group Delta) は 2^64-1 以下で
+ * なければならない (§5.1.2)。各フィールドはワイヤ上 vi64 (0 以上 2^64-1)。
+ * 送信側は encodeLocationFilter が送信前に InvalidFilterError で、
+ * 受信デコード時は decodeLocationFilter が ProtocolViolationError で
+ * 超過を拒否する。
  */
 export type LocationFilter =
   | { type: "NextGroupStart" }
@@ -984,7 +988,15 @@ const FILTER_TYPE = {
 
 /**
  * Location Filter をエンコードする
- * draft-ietf-moq-transport-19 Section 10.2.9 (SUBSCRIPTION FILTER Parameter)
+ * draft-ietf-moq-transport-19 §10.2.9 (LOCATION FILTER Parameter)
+ *
+ * AbsoluteRange は End Group (Start Location の Group + End Group Delta) の
+ * 2^64-1 超過を送信前に検証し、InvalidFilterError で拒否する (§5.1.2)。
+ * 他フィールドが非負の限り、group / endGroupDelta が単体で 2^64-1 を超える
+ * 場合は和の検証で先に InvalidFilterError として検出する。負値 (group /
+ * object / endGroupDelta のいずれ) と、和の検証に捕捉されない
+ * startLocation.object の単体超過は encodeVarint 由来の Error として throw
+ * される。節番号は仕様将来版で変わる可能性がある。
  */
 export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -1001,6 +1013,16 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
       parts.push(encodeLocation(filter.startLocation));
       break;
     case "AbsoluteRange":
+      // draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
+      // "If the resulting Group ID would be greater than 2^64 - 1, the
+      //  endpoint MUST close the session with a PROTOCOL_VIOLATION."
+      // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じる
+      // ため、送信前に InvalidFilterError でローカル拒否する
+      if (filter.startLocation.group + filter.endGroupDelta > MAX_VARINT) {
+        throw new InvalidFilterError(
+          `absolute range end group exceeds maximum: ${filter.startLocation.group} + ${filter.endGroupDelta} > ${MAX_VARINT}`,
+        );
+      }
       parts.push(encodeVarint(FILTER_TYPE.ABSOLUTE_RANGE));
       parts.push(encodeLocation(filter.startLocation));
       parts.push(encodeVarint(filter.endGroupDelta));
@@ -1019,6 +1041,12 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
 
 /**
  * Location Filter をデコードする
+ *
+ * AbsoluteRange は End Group (Start Location の Group + End Group Delta) の
+ * 2^64-1 超過を ProtocolViolationError で throw する (§5.1.2 の MUST。
+ * 受信経路に載った場合は ProtocolViolationError → PROTOCOL_VIOLATION の
+ * セッション終了変換規則に乗る。節番号は仕様将来版で変わる可能性がある)。
+ *
  * @returns [filter, consumed bytes]
  */
 export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFilter, number] {
@@ -1043,6 +1071,20 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
       totalConsumed += locationConsumed;
       const [endGroupDelta, endGroupDeltaConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += endGroupDeltaConsumed;
+
+      // draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
+      // "If the resulting Group ID would be greater than 2^64 - 1, the
+      //  endpoint MUST close the session with a PROTOCOL_VIOLATION."
+      // この MUST は超過に対して PROTOCOL_VIOLATION を一択としており、
+      // §5.1.2 が Location Filter に対して定める REQUEST_ERROR は充足
+      // 不能範囲の INVALID_RANGE であるため、デコード段階では
+      // ProtocolViolationError で検出する
+      if (startLocation.group + endGroupDelta > MAX_VARINT) {
+        throw new ProtocolViolationError(
+          `absolute range end group exceeds maximum: ${startLocation.group} + ${endGroupDelta} > ${MAX_VARINT}`,
+        );
+      }
+
       return [{ type: "AbsoluteRange", startLocation, endGroupDelta }, totalConsumed];
     }
 

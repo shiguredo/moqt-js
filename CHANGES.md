@@ -736,6 +736,11 @@
   - draft-ietf-moq-transport-19 §10.4 SHOULD (「close the old request stream using the appropriate mechanism (e.g. FIN, stream reset, or PUBLISH_DONE)」) に従い、resolved=true の GOAWAY 受信時に writer.close() で送信方向を FIN する
   - 受信方向は従来どおり読み取り継続し、2 通目 GOAWAY を PROTOCOL_VIOLATION で検出する挙動を維持する
   - @voluntas
+- [FIX] AbsoluteRange の End Group が 2^64-1 を超える場合の検証を追加する
+  - draft-ietf-moq-transport-19 §5.1.2 に基づき、Start Location の Group と End Group Delta の和が 2^64-1 を超える AbsoluteRange を、decodeLocationFilter は ProtocolViolationError で、encodeLocationFilter は送信前に InvalidFilterError で拒否する
+  - 境界値 (ちょうど 2^64-1) は仕様上の有効値として受理する
+  - subscribe() の buildSubscribeParameters 呼び出しを pendingSubscribe.set より前へ移動し、送信前検証の throw で pending エントリと未解決 Promise が残らないようにする (Range Filter 系の構築時 throw による残留も同時に解消)
+  - @voluntas
 
 ### misc
 
