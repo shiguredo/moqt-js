@@ -38,16 +38,23 @@ const timestampArb = fc.bigInt({ min: 0n, max: MAX_VARINT });
 // Timescale 用の Arbitrary (1 秒あたりの Timestamp 単位数)
 const timescaleArb = fc.bigInt({ min: 1n, max: MAX_VARINT });
 
-// VideoFrameMarking 用の Arbitrary
-const videoFrameMarkingArb: fc.Arbitrary<VideoFrameMarking> = fc.record({
-  isIndependent: fc.boolean(),
-  isDiscardable: fc.boolean(),
-  isBaseLayerSync: fc.boolean(),
-  // 3 bits (0-7)
-  temporalLayerId: fc.integer({ min: 0, max: 7 }),
-  // 2 bits (0-3)
-  spatialLayerId: fc.integer({ min: 0, max: 3 }),
-});
+// VideoFrameMarking 用の Arbitrary。
+// TID=0 のとき isBaseLayerSync=true は encodeVideoFrameMarkingValue が
+// RFC 9626 §3.1「When the TID is 0 or if no scalability is used, this MUST be 0」
+// に従い B=0 に抑圧するため round-trip 恒等が崩れる。TID=0 では isBaseLayerSync=false に
+// 制約して round-trip 恒等を保つ。
+const videoFrameMarkingArb: fc.Arbitrary<VideoFrameMarking> = fc
+  .integer({ min: 0, max: 7 })
+  .chain((temporalLayerId) =>
+    fc.record({
+      isIndependent: fc.boolean(),
+      isDiscardable: fc.boolean(),
+      isBaseLayerSync: temporalLayerId === 0 ? fc.constant(false) : fc.boolean(),
+      temporalLayerId: fc.constant(temporalLayerId),
+      // 2 bits (0-3)
+      spatialLayerId: fc.integer({ min: 0, max: 3 }),
+    }),
+  );
 
 // AudioLevel 用の Arbitrary
 const audioLevelArb = fc.record({
@@ -386,8 +393,10 @@ test("VideoConfig / AudioConfig: 空 description のラウンドトリップが�
 // VIDEO_FRAME_MARKING Length 1–4 の decode
 // =============================================================================
 
-test("VideoFrameMarking: Length=1 は SID=0 として decodeVideoFrameMarking で解釈される", () => {
-  // I=1, D=0, B=1, TID=0 → byte1 = 0x80|0x40|0x20|0x08 = 0xE8
+test("VideoFrameMarking: Length=1 (§3.2 short extension format 相当、LID 暗黙 0) は spatialLayerId=0 として decodeVideoFrameMarking で解釈される", () => {
+  // I=1, D=0, B=1, TID=0 → byte1 = 0x80|0x40|0x20|0x08 = 0xE8。
+  // Length=1 (LID 省略) は LID 暗黙 0 扱い。B=1 の受理は「TID=0 で B=1 のワイヤは decode 側で
+  // isBaseLayerSync=true として忠実に読み出す」の別テストで検証している。
   const wire = buildVideoFrameMarkingWire(1, new Uint8Array([0xe8]));
   const decoded = decodeVideoFrameMarking(wire);
   assert.strictEqual(decoded.isIndependent, true);
@@ -397,7 +406,7 @@ test("VideoFrameMarking: Length=1 は SID=0 として decodeVideoFrameMarking �
   assert.strictEqual(decoded.spatialLayerId, 0);
 });
 
-test("VideoFrameMarking: Length=1 は SID=0 として decodeVideoProperties で解釈される", () => {
+test("VideoFrameMarking: Length=1 (§3.2 short extension format 相当、LID 暗黙 0) は spatialLayerId=0 として decodeVideoProperties で解釈される", () => {
   const wire = buildVideoFrameMarkingWire(1, new Uint8Array([0xe8]));
   const decoded = decodeVideoProperties(wire);
   assert.deepEqual(decoded.frameMarking, {
@@ -409,14 +418,15 @@ test("VideoFrameMarking: Length=1 は SID=0 として decodeVideoProperties で�
   });
 });
 
-test("VideoFrameMarking: Length=3 (余剰付き) は先頭 2 バイトを解釈し宣言 Length を消費する", () => {
-  // Length=3: byte1/byte2 がフィールド、3 バイト目は余剰
+test("VideoFrameMarking: Length=3 (Long Extension + TL0PICIDX) は先頭 2 バイトを解釈し宣言 Length を消費する", () => {
+  // Length=3: byte1 / byte2 (LID) がフィールド、3 バイト目は TL0PICIDX (消費のみで解釈しない)
+  // byte2=0x20 の下位 2 bits は 0 (LID=0x20 は VP9 準拠送信者の想定域外だが下位 2 bits で 0 に折り畳む)
   const value = new Uint8Array([0xe8, 0x20, 0xff]);
   const wire = buildVideoFrameMarkingWire(3, value);
   const decoded = decodeVideoFrameMarking(wire);
   assert.strictEqual(decoded.isIndependent, true);
   assert.strictEqual(decoded.isBaseLayerSync, true);
-  assert.strictEqual(decoded.spatialLayerId, 2);
+  assert.strictEqual(decoded.spatialLayerId, 0);
 
   // 余剰バイトを消費したうえで後続 TIMESTAMP が読めること。
   // Object Properties は delta encoding (Figure 2) のため、後続 TIMESTAMP (0x10) は
@@ -431,7 +441,8 @@ test("VideoFrameMarking: Length=3 (余剰付き) は先頭 2 バイトを解釈�
   assert.strictEqual(props.timestamp, 42n);
 });
 
-test("VideoFrameMarking: Length=4 (余剰付き) は decodeVideoProperties でも宣言 Length を消費する", () => {
+test("VideoFrameMarking: Length=4 (loc-04 §2.3.2.2 の受理範囲、余剰付き) は decodeVideoProperties でも宣言 Length を消費する", () => {
+  // byte2=0x10 の下位 2 bits は 0
   const value = new Uint8Array([0xe8, 0x10, 0xaa, 0xbb]);
   const wire = buildVideoFrameMarkingWire(4, value);
   // 後続 TIMESTAMP (0x10) は Delta Type 0x07 (0x10 - 0x09) で書く
@@ -445,7 +456,7 @@ test("VideoFrameMarking: Length=4 (余剰付き) は decodeVideoProperties で�
   const viaProps = decodeVideoProperties(combined);
   assert.deepEqual(viaProps.frameMarking, viaMarking);
   assert.strictEqual(viaProps.timestamp, 7n);
-  assert.strictEqual(viaMarking.spatialLayerId, 1);
+  assert.strictEqual(viaMarking.spatialLayerId, 0);
 });
 
 test("VideoFrameMarking: Length=0 は単体デコーダでは ProtocolViolationError、寛容デコーダでは frameMarking 未設定", () => {
@@ -471,6 +482,93 @@ test("VideoFrameMarking: Value バイト不足は単体デコーダでは Protoc
   const props = decodeVideoProperties(wire);
   assert.isUndefined(props.frameMarking);
   assert.isUndefined(props.timestamp);
+});
+
+// =============================================================================
+// VIDEO_FRAME_MARKING の RFC 9626 §3.1 準拠 (LID 下位 2 bits マッピング / B 抑圧)
+// =============================================================================
+
+test("VideoFrameMarking: encode は spatialLayerId を LID (byte2) の下位 2 bits に載せ上位 6 bits は 0 になる", () => {
+  // TID=1 は B 抑圧の対象外にするため。RFC 9626 §3.1 の Long Extension 2 オクテット形。
+  for (const spatialLayerId of [0, 1, 2, 3]) {
+    const marking: VideoFrameMarking = {
+      isIndependent: false,
+      isDiscardable: false,
+      isBaseLayerSync: false,
+      temporalLayerId: 1,
+      spatialLayerId,
+    };
+    const encoded = encodeVideoFrameMarking(marking);
+    // encoded = [ID(0x09), Length(2), byte1, byte2]
+    assert.strictEqual(encoded.length, 4);
+    assert.strictEqual(encoded[0], 0x09);
+    assert.strictEqual(encoded[1], 2);
+    // byte1: S=1, E=1, TID=1 → 0xC1 (I / D / B は全て false)
+    assert.strictEqual(encoded[2], 0xc1);
+    // byte2: spatialLayerId が下位 2 bits に載る、上位 6 bits は 0
+    assert.strictEqual(encoded[3], spatialLayerId);
+  }
+});
+
+test("VideoFrameMarking: decode は LID の下位 2 bits のみを spatialLayerId として復元する (VP9 準拠送信者の折り畳み)", () => {
+  // LID の上位ビットが非ゼロでも下位 2 bits のみを spatialLayerId (値域 0-3) に復元する。
+  // VP9 準拠送信者の LID=4-7 は 0-3 に折り畳まれる (仕様準拠のスコープ制限)。
+  const cases: Array<{ lid: number; expected: number }> = [
+    { lid: 0x00, expected: 0 },
+    { lid: 0x04, expected: 0 },
+    { lid: 0x05, expected: 1 },
+    { lid: 0x06, expected: 2 },
+    { lid: 0x07, expected: 3 },
+    { lid: 0xff, expected: 3 },
+  ];
+  for (const { lid, expected } of cases) {
+    // TID=1 で B=0 の byte1 = 0xC1
+    const wire = buildVideoFrameMarkingWire(2, new Uint8Array([0xc1, lid]));
+    const decoded = decodeVideoFrameMarking(wire);
+    assert.strictEqual(decoded.spatialLayerId, expected);
+  }
+});
+
+test("VideoFrameMarking: TID=0 かつ isBaseLayerSync=true の encode 入力は B=0 に抑圧されワイヤ [0x09, 0x02, 0xe0, 0x00] になる", () => {
+  // RFC 9626 §3.1「When the TID is 0 or if no scalability is used, this MUST be 0」
+  const marking: VideoFrameMarking = {
+    isIndependent: true,
+    isDiscardable: false,
+    isBaseLayerSync: true,
+    temporalLayerId: 0,
+    spatialLayerId: 0,
+  };
+  const encoded = encodeVideoFrameMarking(marking);
+  // byte1: S=1, E=1, I=1, D=0, B=0 (抑圧), TID=0 → 0xE0
+  // byte2: LID=0
+  assert.deepEqual(Array.from(encoded), [0x09, 0x02, 0xe0, 0x00]);
+});
+
+test("VideoFrameMarking: TID=0 で B=1 のワイヤは decode 側で isBaseLayerSync=true として忠実に読み出す", () => {
+  // decode 側は正規化しない。encode 出力としては (TID=0, B=1) の組み合わせは存在しないが、
+  // 準拠しないピアからのワイヤを decode するときはワイヤの値をそのまま反映する。
+  // byte1 = 0x80|0x40|0x20|0x08 = 0xE8 (S=1, E=1, I=1, D=0, B=1, TID=0)
+  const wire = buildVideoFrameMarkingWire(2, new Uint8Array([0xe8, 0x00]));
+  const decoded = decodeVideoFrameMarking(wire);
+  assert.strictEqual(decoded.isBaseLayerSync, true);
+  assert.strictEqual(decoded.temporalLayerId, 0);
+});
+
+test("VideoFrameMarking: TID≠0 のとき isBaseLayerSync は入力を忠実にワイヤに反映する", () => {
+  // TID=1 では抑圧されず、入力の isBaseLayerSync がそのまま B ビットに反映される。
+  const withSync: VideoFrameMarking = {
+    isIndependent: false,
+    isDiscardable: false,
+    isBaseLayerSync: true,
+    temporalLayerId: 1,
+    spatialLayerId: 0,
+  };
+  const encoded = encodeVideoFrameMarking(withSync);
+  // byte1: S=1, E=1, B=1, TID=1 → 0xC9
+  assert.strictEqual(encoded[2], 0xc9);
+  const decoded = decodeVideoFrameMarking(encoded);
+  assert.strictEqual(decoded.isBaseLayerSync, true);
+  assert.strictEqual(decoded.temporalLayerId, 1);
 });
 
 // =============================================================================
@@ -505,8 +603,10 @@ test("未知の奇数 ID は length + bytes としてスキップされる", () 
 // 代表値に基づくテスト (VideoFrameMarking のキーフレーム / レイヤー、AudioLevel の無音 / 有音)
 // =============================================================================
 
-test("VideoFrameMarking: キーフレーム (I=true, D=false, B=true) のエンコード", () => {
-  // キーフレームは独立 (I=true)、破棄不可 (D=false)、ベースレイヤー同期 (B=true)
+test("VideoFrameMarking: キーフレーム (I=true, D=false, B=true, TID=0) は encode で B=0 に抑圧される", () => {
+  // キーフレームは独立 (I=true)、破棄不可 (D=false)、ベースレイヤー同期 (B=true)。
+  // ただし TID=0 のとき RFC 9626 §3.1 の MUST に従い encodeVideoFrameMarkingValue が
+  // B=0 に抑圧するため、round-trip 後の isBaseLayerSync は false になる。
   const keyFrameMarking: VideoFrameMarking = {
     isIndependent: true,
     isDiscardable: false,
@@ -520,7 +620,7 @@ test("VideoFrameMarking: キーフレーム (I=true, D=false, B=true) のエン�
 
   assert.strictEqual(decoded.isIndependent, true);
   assert.strictEqual(decoded.isDiscardable, false);
-  assert.strictEqual(decoded.isBaseLayerSync, true);
+  assert.strictEqual(decoded.isBaseLayerSync, false);
   assert.strictEqual(decoded.temporalLayerId, 0);
   assert.strictEqual(decoded.spatialLayerId, 0);
 });
