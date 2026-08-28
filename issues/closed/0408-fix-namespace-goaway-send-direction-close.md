@@ -1,7 +1,7 @@
 # namespace ループが GOAWAY 受信後に送信方向を閉じない
 
 - Created: 2026-08-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/fix-namespace-goaway-send-direction-close
 - Polished: 2026-08-20
 
@@ -44,4 +44,10 @@ namespace 系ストリーム (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_N
 
 ## 解決方法
 
-未着手。
+0407 で導入した `namespaceHandleGoawayMessage` helper を async 化し、resolved=true (確立後) の GOAWAY で `writer.close()` を await + try/catch する経路を追加した (draft-ietf-moq-transport-19 §10.4 SHOULD「close the old request stream using the appropriate mechanism (e.g. FIN, stream reset, or PUBLISH_DONE)」に従い送信方向を FIN で閉じる)。
+
+- helper に `writer` 引数を追加し、3 ループ (namespace / tracks / publication) の呼び出し側を `await namespaceHandleGoawayMessage(..., subscription.writer, ...)` / `await namespaceHandleGoawayMessage(..., publication.writer, ...)` に更新した。
+- `writer.close()` は局所 try/catch で reject を握り潰し、ループ全体の catch に落ちて読み取り継続 (2 通目 GOAWAY 検出) が失われるのを防ぐ。二重 close (アプリ側の unsubscribe() / done() との競合) も try/catch で黙殺する。
+- `namespaceHandleGoaway` の `callbacks.goaway` 呼び出しを try/catch で保護し、コールバック例外で FIN 送信がスキップされないようにした (bidi の `closeOldRequestStreamOnGoaway` と同方針)。
+- `src/session/namespaceLoops.test.ts` にテストヘルパーの writer フィールドと `writerClosed()` を追加した。3 ループそれぞれで「REQUEST_OK → GOAWAY → writer.closed 到達 → 2 通目 GOAWAY を PROTOCOL_VIOLATION で検出」の経路を検証する新規テストを追加した。
+- `CHANGES.md` の既存 0372 由来 [FIX] エントリの子項目「namespace 系ループは GOAWAY 後も読み取りを継続し、callbacks.goaway 通知のみを行う」を「読み取りを継続する (送信方向 FIN は本 [FIX] エントリで対応する)」に修正し、本 issue の新規 [FIX] エントリへの cross-reference を明確化した。
