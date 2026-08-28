@@ -1,7 +1,7 @@
 # PublishOptions / SubscribeOptions の deliveryTimeout doc コメントを実態に合わせて修正する
 
 - Created: 2026-08-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-28
 - Branch: feature/fix-delivery-timeout-options-doc-comment
 - Polished: 2026-08-20
 
@@ -41,4 +41,8 @@
 
 ## 解決方法
 
-未着手。
+`src/session.ts` の `PublishOptions.deliveryTimeout` と `SubscribeOptions.deliveryTimeout` の doc コメントを、moqt-js が値の比較・強制を行わない実態に合わせて修正した。
+
+- 両方の doc コメントを「moqt-js はこの値を … として送信するが、この値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント（典型的にはリレー）の責務であり、詳細は Section 8 (Delivery Timeouts and Data Reliability) を参照。」の対称構造に統一した。
+- 旧文言「タイムアウトを超過したオブジェクトは配信されない。」は moqt-js が強制を実装していない現状と齟齬するため削除した (完了条件の「削除する」を採用)。
+- `CHANGES.md` の `## develop` セクション内の既存 `### misc` サブセクションに `[UPDATE]` エントリを追加した (misc 内の順序 CHANGE → UPDATE を維持)。
