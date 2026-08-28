@@ -59,17 +59,29 @@ function namespaceHandleGoaway(
     return null;
   }
   const decodedMsg = decodeGoawayPayload(messagePayload);
-  callbacks?.goaway?.(decodedMsg.newSessionUri);
+  // アプリのコールバック例外は握り潰す (後続の writer.close() など FIN 送信が
+  // ライブラリの責務として実行されるようにする。bidi の closeOldRequestStreamOnGoaway と同方針)。
+  try {
+    callbacks?.goaway?.(decodedMsg.newSessionUri);
+  } catch {
+    // ignore
+  }
   return decodedMsg.newSessionUri;
 }
 
 /**
  * namespace / tracks / publication ループで共通の GOAWAY ケース処理。
  *
- * `namespaceHandleGoaway` に加え、確立前 (resolved=false) の場合は §10.4 の
- * リクエストストリーム GOAWAY マイグレーションに従い Promise を reject して
- * 受信方向を cancel する (送信方向はアプリの再発行に委ねる)。呼び出し側は
- * 戻り値で以下を判別する:
+ * `namespaceHandleGoaway` に加え、以下を担う:
+ *
+ * - 確立前 (resolved=false): §10.4 のリクエストストリーム GOAWAY マイグレーションに従い
+ *   Promise を reject して受信方向を cancel する (送信方向はアプリの再発行に委ねる)。
+ * - 確立後 (resolved=true): §10.4 SHOULD「Upon receiving a GOAWAY on a request stream,
+ *   the endpoint SHOULD ... close the old request stream using the appropriate mechanism
+ *   (e.g. FIN, stream reset, or PUBLISH_DONE)」に従い送信方向を FIN (writer.close()) で閉じ
+ *   ピアのストリームクローズを促す。受信方向は読み取り継続 (2 通目 GOAWAY 検出のため)。
+ *
+ * 呼び出し側は戻り値で以下を判別する:
  *
  * - "terminate": 重複 GOAWAY による PROTOCOL_VIOLATION、または確立前 GOAWAY 処理後の
  *   即時ループ終了。呼び出し側は case 節から return する。
@@ -84,15 +96,16 @@ function namespaceHandleGoaway(
  * more than one GOAWAY on ... a single request stream」との齟齬。確立前経路の
  * トレードオフとして許容判断済み)。
  */
-function namespaceHandleGoawayMessage(
+async function namespaceHandleGoawayMessage(
   session: SessionInternal,
   requestId: bigint,
   messagePayload: Uint8Array,
   callbacks: { goaway?: (uri: string) => void } | undefined,
   streamReader: ReadableStreamDefaultReader<Uint8Array>,
+  writer: WritableStreamDefaultWriter<Uint8Array> | undefined,
   reject: (err: Error) => void,
   resolved: boolean,
-): "terminate" | "goaway-received" {
+): Promise<"terminate" | "goaway-received"> {
   const newSessionUri = namespaceHandleGoaway(session, requestId, messagePayload, callbacks);
   if (newSessionUri === null) {
     // 重複 GOAWAY: セッションは PROTOCOL_VIOLATION で閉じられる
@@ -108,6 +121,22 @@ function namespaceHandleGoawayMessage(
     // reject し得るため握り潰す。
     void streamReader.cancel("request stream goaway migration").catch(() => {});
     return "terminate";
+  }
+  // 確立後 (resolved=true) は §10.4 SHOULD に従い送信方向を FIN で閉じる。
+  // 局所 try/catch で close() の reject を握り潰すことで、ループ全体の catch に
+  // 落ちて読み取り継続が失われる (goawayReceived を立てても catch → finally で終了する)
+  // のを防ぐ。二重 close (アプリ側のストリームクローズ (unsubscribe() / done()) との
+  // 競合) も try/catch で黙殺する。
+  // writer は namespace / tracks 側の state 型定義で optional (NamespaceSubscriptionState /
+  // TracksSubscriptionState) だが、実行時はエントリ生成時 (subscribeNamespace / subscribeTracks) に
+  // 必ず設定される。publication (NamespacePublicationState) は型定義上も必須。
+  // undefined ガードは namespace / tracks 側の型 optional への防御であり、publication では常に taken される。
+  if (writer !== undefined) {
+    try {
+      await writer.close();
+    } catch {
+      // 既に閉じている / エラー状態は無視
+    }
   }
   return "goaway-received";
 }
@@ -508,12 +537,13 @@ export async function namespaceStartNamespaceStreamLoop(
             // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
             // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §10.4 の
             // マイグレーション扱いで reject + cancel してループ終了 (helper 参照)。
-            const action = namespaceHandleGoawayMessage(
+            const action = await namespaceHandleGoawayMessage(
               session,
               requestId,
               messagePayload,
               callbacks,
               streamReader,
+              subscription.writer,
               reject,
               resolved,
             );
@@ -736,12 +766,13 @@ export async function namespaceStartTracksStreamLoop(
             // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
             // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §10.4 の
             // マイグレーション扱いで reject + cancel してループ終了 (helper 参照)。
-            const action = namespaceHandleGoawayMessage(
+            const action = await namespaceHandleGoawayMessage(
               session,
               requestId,
               messagePayload,
               callbacks,
               streamReader,
+              subscription.writer,
               reject,
               resolved,
             );
@@ -919,29 +950,20 @@ export async function namespaceStartPublicationStreamLoop(
 
           case MessageType.GOAWAY: {
             // draft-ietf-moq-transport-19 §10.4:
-            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
-            // (§10.4 MUST)。callbacks.goaway 通知は namespaceHandleGoaway が行い、
-            // state 遷移 (closeState) はピアの FIN 検出時 (ループ自然終了時) に
-            // 遅延する。
-            const newSessionUri = namespaceHandleGoaway(
+            // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
+            // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §10.4 の
+            // マイグレーション扱いで reject + cancel してループ終了 (helper 参照)。
+            const action = await namespaceHandleGoawayMessage(
               session,
               requestId,
               messagePayload,
               callbacks,
+              streamReader,
+              publication.writer,
+              reject,
+              resolved,
             );
-            if (newSessionUri === null) {
-              // 重複 GOAWAY: セッションは PROTOCOL_VIOLATION で閉じられる
-              return;
-            }
-            if (!resolved) {
-              // REQUEST_OK 受信前 (resolved=false) の GOAWAY は reject 後に
-              // ループを終了する (reject 済みリクエストに後続メッセージが
-              // 発火しないようにする)。受信方向は cancel して閉じる
-              // (旧実装の STOP_SENDING 相当。ストリームが半開きで残らないようにする)。
-              reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
-              // 受信方向を cancel して閉じる。ストリームがエラー状態の場合に
-              // reject し得るため握り潰す。
-              void streamReader.cancel().catch(() => {});
+            if (action === "terminate") {
               return;
             }
             goawayReceived = true;
