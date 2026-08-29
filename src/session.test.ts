@@ -8,21 +8,33 @@ import { test, assert } from "vite-plus/test";
 import { SessionImpl, type TracksSubscriptionCallbacks } from "./session";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
 import { MessageType, encodeGoawayPayload } from "./message";
+import { ObjectStatus } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl } from "./fetcher";
-import { InvalidFilterError, MalformedTrackError, RequestError, RequestErrorCode } from "./error";
+import {
+  InvalidFilterError,
+  MalformedTrackError,
+  RequestError,
+  RequestErrorCode,
+  SessionError,
+  SessionErrorCode,
+} from "./error";
 import { MAX_VARINT } from "./varint";
 import {
   FetchHeaderType,
   FetchSerializationFlags,
   type FetchObjectFields,
+  SubgroupHeaderType,
   encodeFetchHeader,
   encodeFetchObjectFields,
+  encodeObjectFields,
+  encodeSubgroupHeader,
   createFirstFetchObjectFlags,
   decodeFetchObjectFields,
 } from "./dataStream";
+import { SubscriberImpl } from "./subscriber";
 import { bidiCancelFetch, type BidiSessionInternal } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 
@@ -1053,4 +1065,559 @@ test("FETCH 応答の Priority 不一致 (2 チャンク分割) でも FETCH が
   await handlePromise;
 
   assertFetchCancelledOnPriorityMismatch(ctx);
+});
+
+// ============================================================================
+// データストリームの FIN 時の未完成 Object 検証 (§11.4)
+// ============================================================================
+
+/** createDataStreamFinContext が返す検証用コンテキスト */
+interface DataStreamFinContext {
+  session: SessionImpl;
+  internal: {
+    fetchers: Map<bigint, FetcherImpl>;
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+  sessionError: { current: Error | undefined };
+  enqueue: (data: Uint8Array) => void;
+  fin: () => void;
+  /** peer 起点のセッション終了 (transport.closed) を再現する */
+  closeTransport: () => Promise<void>;
+  run: () => Promise<void>;
+}
+
+/**
+ * 受信データストリーム (Subgroup / Fetch) を handleIncomingStream で駆動し、
+ * 実 W3C ReadableStream への chunk 注入と close (FIN) でピアの graceful
+ * 終了を再現するためのコンテキストを構築する。
+ *
+ * セッションが閉じられたことは callbacks.error に記録された SessionError と
+ * session.state の両方で判定する (closeWithError は callbacks.error 通知後に
+ * close を呼び、close は同期先頭で sessionState を closed にする)。
+ */
+function createDataStreamFinContext(): DataStreamFinContext {
+  const sessionError: { current: Error | undefined } = { current: undefined };
+  let resolveClosed!: (info: WebTransportCloseInfo) => void;
+  const closedPromise = new Promise<WebTransportCloseInfo>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const transport = { closed: closedPromise } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: (error) => {
+      sessionError.current = error;
+    },
+  });
+  const internal = session as unknown as {
+    fetchers: Map<bigint, FetcherImpl>;
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+
+  return {
+    session,
+    internal,
+    sessionError,
+    enqueue: (data: Uint8Array) => {
+      controller.enqueue(data);
+    },
+    fin: () => {
+      controller.close();
+    },
+    // transport.closed ハンドラは close() を経ずに sessionState を closed へ
+    // 遷移させる (fetcher / subscriber は active のまま)。ハンドラの .then は
+    // resolve 時にマイクロタスク 1 回で走るため、await Promise.resolve() で
+    // 遷移完了を確定できる (直後の state アサートで前提も検証する)
+    closeTransport: async () => {
+      resolveClosed({});
+      await Promise.resolve();
+    },
+    run: () => internal.handleIncomingStream(stream),
+  };
+}
+
+/** データストリーム構成部品 (ヘッダー / Object フィールド / 宣言どおりの完成 payload) */
+interface StreamParts {
+  headerBytes: Uint8Array;
+  fieldsBytes: Uint8Array;
+  payload: Uint8Array;
+}
+
+/**
+ * Subgroup データストリーム (BASE 0x10, trackAlias 7, Group 1) の構成バイト列を
+ * 構築する。Object は payload 宣言長 10 バイトが 1 つ。
+ * テスト側は payload の切り分けと FIN のタイミングを制御して
+ * 未完成 FIN / 分割後に完成 FIN の両ケースを組み立てる。
+ */
+function buildSubgroupStreamParts(): StreamParts {
+  const headerBytes = encodeSubgroupHeader({
+    type: SubgroupHeaderType.BASE,
+    trackAlias: 7n,
+    groupId: 1n,
+    publisherPriority: 128,
+  });
+  const fieldsBytes = encodeObjectFields(0n, 10n, SubgroupHeaderType.BASE);
+  const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  return { headerBytes, fieldsBytes, payload };
+}
+
+/**
+ * Fetch データストリームの構成バイト列を構築する。Object は payload
+ * 宣言長 10 バイトが 1 つ。切り分けの制御方法は Subgroup と同じ。
+ */
+function buildFetchStreamParts(requestId: bigint): StreamParts {
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 10n,
+  };
+  const headerBytes = encodeFetchHeader({ type: FetchHeaderType, requestId });
+  const fieldsBytes = encodeFetchObjectFields(first);
+  const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  return { headerBytes, fieldsBytes, payload };
+}
+
+/** マクロタスク 1 回分待ち、ストリーム読み取りループを進行させる */
+async function yieldToMacrotask(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+/**
+ * draft-ietf-moq-transport-19 §11.4 (Streams):
+ * "If a stream ends gracefully (i.e., the stream terminates with a FIN) in
+ *  the middle of a serialized Object, the session SHOULD be closed with a
+ *  PROTOCOL_VIOLATION."
+ *
+ * Subgroup データストリームが未完成 Object の途中でピア FIN された場合、
+ * 黙殺せず PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 宣言 payloadLength (10) が実際の到達バイト数 (4) より大きい場合、
+ * processSubgroupObjects は Object 途中のバイト列を remainingBuffer と
+ * して返す (IncompleteDataError ではなく totalNeeded > buffer.length の
+ * break 経由)。未達 Object があるままの FIN は §11.4.3 の reset MUST に
+ * 反する違反ワイヤであり、FIN 検出時点で残バッファが非空になる。
+ */
+test("Subgroup データストリーム: 未完成 Object の途中でピア FIN されると PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  await handlePromise;
+
+  // PROTOCOL_VIOLATION の SessionError でセッションが閉じられる
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.match(
+    ctx.sessionError.current.message,
+    /subgroup data stream ended with incomplete object/,
+  );
+  assert.equal(ctx.session.state, "closed");
+  // 未完成 Object は配信されない
+  assert.equal(delivered, 0);
+});
+
+/**
+ * 回帰ガード: Object を 3 チャンクに分割配信する間 (FIN なし) は、
+ * Object が未完成のままでも「次チャンク待ち」でありセッションは閉じない
+ * ことを中間時点のアサートで固定する。完成後に FIN されたなら従来どおり
+ * 正常完了である。
+ */
+test("Subgroup データストリーム: チャンク分割中は閉じず Object 完成後の FIN で閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  // payload 2/10 (FIN なし): 次チャンク待ちのまま進行しない
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 2)]));
+  await yieldToMacrotask();
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(delivered, 0);
+  // payload 5/10 (依然未完成・FIN なし): ここでも閉じない
+  ctx.enqueue(parts.payload.slice(2, 5));
+  await yieldToMacrotask();
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(delivered, 0);
+  // 残りを配信して完成、その後に FIN
+  ctx.enqueue(parts.payload.slice(5));
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(delivered, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams):
+ * "If a sender has delivered all objects in a Subgroup ... it MUST close
+ *  the stream with a FIN."
+ * Object 0 個 (empty Subgroup) を含む全ストリームが対象であり、
+ * ヘッダーのみ FIN は未完成 Object を含まないため §11.4 の判定は
+ * 誤検出しないことを検証する。
+ */
+test("Subgroup データストリーム: ヘッダーのみの FIN はセッションを閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(parts.headerBytes);
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * Subgroup ヘッダーが途中で切れた FIN (done) は Object が開始する前であり、
+ * handleIncomingStream のヘッダーパース部で黙殺される (§11.4 の判定対象外)。
+ * この break が無いと解決済み read() の無限周回になるため、ハングしない
+ * (= handlePromise が解決する) こととセッションを閉じないことを固定する。
+ */
+test("Subgroup データストリーム: ヘッダー途中切れの FIN は黙殺され閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  // ヘッダーの最後の 1 バイトを欠落させて FIN
+  ctx.enqueue(parts.headerBytes.slice(0, -1));
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * Fetch ヘッダー途中切れの FIN も Subgroup と同じく黙殺経路
+ * (ヘッダーパース部の done break) であり、閉じないことを固定する。
+ */
+test("Fetch データストリーム: ヘッダー途中切れの FIN は黙殺され閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {},
+  );
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  // ヘッダーの最後の 1 バイトを欠落させて FIN
+  ctx.enqueue(parts.headerBytes.slice(0, -1));
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  // ヘッダー未確定のため fetchers の削除も handleEnd も行われない
+  assert.equal(ctx.internal.fetchers.size, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §11.4 (Streams):
+ * Fetch データストリームでも未完成 Object の途中のピア FIN は
+ * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 加えて fetcher.handleEnd() が呼ばれない (正常終了として扱われない) ことを
+ * end コールバックの未発火で検証し、fetcher が close() の markClosed で
+ * 閉じられること (fetchers の Map エントリは削除されない) を検証する。
+ */
+test("Fetch データストリーム: 未完成 Object の途中でピア FIN されると PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  let delivered = 0;
+  let ended = false;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {
+      delivered++;
+    },
+    () => {
+      ended = true;
+    },
+  );
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.match(ctx.sessionError.current.message, /fetch data stream ended with incomplete object/);
+  assert.equal(ctx.session.state, "closed");
+  // handleEnd() は呼ばれない (欠落を正常終了として通知しない)
+  assert.isFalse(ended);
+  assert.equal(delivered, 0);
+  // fetcher は close() の markClosed で閉じられる (Map エントリは残る)
+  assert.equal(fetcher.state, "closed");
+  assert.equal(ctx.internal.fetchers.size, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.12.3 (Fetch Handling):
+ * Object 0 件の FETCH 応答は FETCH_HEADER + FIN が正当な形
+ * ("If no Objects exist in the requested range, the publisher opens the
+ *  unidirectional stream, sends the FETCH_HEADER (see Section 11.4.4)
+ *  and closes the stream with a FIN.")。
+ * Fetch 側もヘッダーのみ FIN では handleEnd() による正常終了が通り、
+ * セッションが閉じられないことを検証する。
+ */
+test("Fetch データストリーム: ヘッダーのみの FIN は正常終了しセッションは閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  let ended = false;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {
+      ended = true;
+    },
+  );
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(parts.headerBytes);
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.isTrue(ended);
+  assert.equal(ctx.internal.fetchers.size, 0);
+});
+
+/**
+ * 回帰ガード: Fetch データストリームで Object を完成させた状態の FIN は
+ * 従来どおり正常終了 (handleEnd による end コールバック通知 + fetchers 削除)
+ * であり、セッションは閉じられない。
+ */
+test("Fetch データストリーム: Object 完成後の FIN は正常終了しセッションは閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  let delivered = 0;
+  let ended = false;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {
+      delivered++;
+    },
+    () => {
+      ended = true;
+    },
+  );
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  // 途中チャンク (FIN なし) を経由して Object を完成させる
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.enqueue(parts.payload.slice(4));
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(delivered, 1);
+  assert.isTrue(ended);
+  assert.equal(ctx.internal.fetchers.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §11.2.1.1 (Object Status):
+ * Subgroup の終わりは status ではなく FIN で通知される
+ * ("The end of a Subgroup is signaled by closing its stream with a FIN
+ *  (see Section 11.4.3).")。
+ * END_OF_GROUP status Object を最後に配信して FIN する形は status varint
+ * が decodeObjectFields で必ず消費されるため残バッファは空になり、
+ * §11.4 の判定は誤検出しない。先頭の完成 Object と合わせて両方配信される
+ * ことも固定する。
+ */
+test("Subgroup データストリーム: END_OF_GROUP status 配信後の FIN はセッションを閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  // 完成 Object の後に END_OF_GROUP status Object (payload 0 バイト) を続ける
+  const statusBytes = encodeObjectFields(
+    1n,
+    0n,
+    SubgroupHeaderType.BASE,
+    ObjectStatus.END_OF_GROUP,
+  );
+  const handlePromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload, statusBytes]),
+  );
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  // 完成 Object と status Object の両方配信される
+  assert.equal(delivered, 2);
+});
+
+/**
+ * §11.4 のもう一方の境界: status varint が途中で切れた FIN は
+ * 「シリアライズされた Object の途中」であり PROTOCOL_VIOLATION で閉じる。
+ * 上記テスト (status 配信済み + FIN) と対にすることで、status varint の
+ * 消費における誤検出 / 見逃しの双方を固定する。
+ */
+test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN は PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const statusBytes = encodeObjectFields(
+    1n,
+    0n,
+    SubgroupHeaderType.BASE,
+    ObjectStatus.END_OF_GROUP,
+  );
+  const handlePromise = ctx.run();
+  // status varint の最終 1 バイトを欠落させて FIN (IncompleteDataError 経由の break)
+  ctx.enqueue(
+    concatUint8Arrays([
+      parts.headerBytes,
+      parts.fieldsBytes,
+      parts.payload,
+      statusBytes.slice(0, -1),
+    ]),
+  );
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.match(
+    ctx.sessionError.current.message,
+    /subgroup data stream ended with incomplete object/,
+  );
+  assert.equal(ctx.session.state, "closed");
+  // 先頭の完成 Object は FIN 前に配信済み
+  assert.equal(delivered, 1);
+});
+
+/**
+ * セッション終了済み経路の抑制 (Subgroup): transport.closed ハンドラは
+ * close() を経ずに sessionState だけを closed へ遷移させるため、
+ * 未完成 Object の途中 FIN を検出しても closeWithError は呼ばれない
+ * (セッションは既に終了しており、ここでの PROTOCOL_VIOLATION 通知は
+ * spurious になる)。判定自体は通るため end 相当の進行は発生しないことも
+ * 併せて固定する。
+ */
+test("Subgroup データストリーム: セッション close 済み経路の未完成 Object FIN は通知しない", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  await ctx.closeTransport();
+  assert.equal(ctx.session.state, "closed");
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  await handlePromise;
+
+  // 新たな通知はしない (黙殺)。 subscriber も閉じられていない
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(delivered, 0);
+});
+
+/**
+ * セッション終了済み経路の抑制 (Fetch): transport.closed ハンドラ経由で
+ * sessionState だけが closed になった状態 (fetcher は active のまま) で
+ * 未完成 Object の途中 FIN を受け取ると、closeWithError (新たな
+ * PROTOCOL_VIOLATION 通知) はスキップされ、fetcher.handleEnd() で
+ * 正常終了も通知しないことを検証する。
+ */
+test("Fetch データストリーム: セッション close 済み経路でも未完成 Object の FIN は end を通知しない", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  let delivered = 0;
+  let ended = false;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {
+      delivered++;
+    },
+    () => {
+      ended = true;
+    },
+  );
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // peer 起点のセッション終了を再現し、sessionState を closed へ遷移させる
+  await ctx.closeTransport();
+  assert.equal(ctx.session.state, "closed");
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  await handlePromise;
+
+  // 通知は抑制されるが、handleEnd() も呼ばない (正常終了として扱わない)
+  assert.isUndefined(ctx.sessionError.current);
+  assert.isFalse(ended);
+  assert.equal(delivered, 0);
+  // transport.closed 由来の遷移では fetcher は active のまま Map に残る
+  // (close() 経由と違い markClosed が走らないため。セッション終了済みで実害なし)
+  assert.equal(fetcher.state, "active");
+  assert.equal(ctx.internal.fetchers.size, 1);
 });

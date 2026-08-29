@@ -741,6 +741,11 @@
   - 境界値 (ちょうど 2^64-1) は仕様上の有効値として受理する
   - subscribe() の buildSubscribeParameters 呼び出しを pendingSubscribe.set より前へ移動し、送信前検証の throw で pending エントリと未解決 Promise が残らないようにする (Range Filter 系の構築時 throw による残留も同時に解消)
   - @voluntas
+- [FIX] データストリームが未完成 Object の途中で FIN された場合に PROTOCOL_VIOLATION でセッションを閉じる
+  - draft-ietf-moq-transport-19 §11.4 の SHOULD に基づき、ピア FIN 検出時点で残バッファが非空 (シリアライズされた Object の途中) なら、Subgroup stream の subscriber mode と Fetch data stream の終了処理で黙殺せず PROTOCOL_VIOLATION で閉じる。失効範囲は Object 1 個ではなくセッション全体になる
+  - 違反検出経路では fetcher.handleEnd() も fetchers.delete も行わず、未完成 Object を正常終了として扱わない。sessionState が既に closed の経路で検出した違反は黙殺し、spurious な通知を行わない
+  - 早期終了が RESET_STREAM の場合と、pending mode (subscribers 未登録で payload を decode しない) は判定対象外で従来どおり
+  - @voluntas
 
 ### misc
 

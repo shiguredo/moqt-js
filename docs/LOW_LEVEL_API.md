@@ -360,6 +360,18 @@ MOQT / QUIC ではレスポンスとデータストリームの順序が保証�
 
 `waitForFetcher()` は最大 `5 秒` 待ち、対応する `FETCH_OK` が来なければそのストリームは処理しない。
 
+#### Graceful 終了 (FIN) と未完成 Object
+
+FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-19 §11.4 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+失効範囲は Object 1 個ではなくセッション全体 (全 Track・全 Fetch) であり、アプリは再接続が必要になる。
+早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.4.3 は配信途中での終了を reset と規定している)。
+
+- Subgroup stream: `handleSubgroupStream()` の subscriber mode ループで FIN 検出後に残バッファを検査する。pending mode (subscribers 未登録) は payload を decode していないため対象外
+- Fetch data stream: `handleIncomingStream()` の終了処理で残バッファが非空なら `fetcher.handleEnd()` を呼ばずにセッションを閉じる
+- sessionState が既に closed の経路 (transport.closed ハンドラ経由など) で検出した違反は黙殺し、通知しない (終了済みセッションへの通知は spurious になるため)
+
+残バッファが空の FIN は正常終了であり、セッションは閉じない (Subgroup は §11.4.3 が全 Object 配信後の FIN を MUST とし、Fetch data stream は §10.12.3 が Object 0 件の FETCH_HEADER + FIN を含めて正常終了を規定する)。
+
 ### `processSubgroupObjects()`
 
 Subgroup stream の各 Object について以下を行う。
@@ -376,7 +388,8 @@ Subgroup stream の各 Object について以下を行う。
 
 Fetch stream は `decodeFetchObjectFields()` が前回の context を使いながら復元する。Fetch Object Fields には `Object Status` が存在しないため、現在の実装では常に `ObjectStatus.NORMAL` として `Fetcher` に渡す。
 
-ストリーム末尾まで読んだら `fetcher.handleEnd()` を呼び、`fetchers` から外す。
+ストリーム末尾 (ピアの FIN) まで読んで残バッファが空なら `fetcher.handleEnd()` を呼び、`fetchers` から外す。
+未完成 Object の途中バイトが残る場合は `fetcher.handleEnd()` を呼ばず、§11.4 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
 
 ### `handleIncomingDatagram()`
 

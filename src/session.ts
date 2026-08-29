@@ -3999,6 +3999,9 @@ export class SessionImpl implements Session {
           } catch (err) {
             if (err instanceof IncompleteDataError) {
               // データ不足: 次のチャンクを待つ
+              // ヘッダー途中での FIN (done) は Object が開始する前のため、
+              // §11.4 の未完成 Object 判定 (FIN 直後の残バッファ検査) の
+              // 対象外として黙殺する
               if (done) break;
               continue;
             }
@@ -4023,7 +4026,7 @@ export class SessionImpl implements Session {
         if (headerParsed) {
           if (isFetchStream && fetcher && fetchHeader) {
             // Fetch オブジェクトをストリーミング処理
-            // draft-ietf-moq-transport-19 Section 11.4.3:
+            // draft-ietf-moq-transport-19 Section 11.4.4.1 (Flags):
             // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
             // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
             // context と isFirst を caller 側で永続化する必要がある
@@ -4042,16 +4045,37 @@ export class SessionImpl implements Session {
         if (done) break;
       }
 
-      // ストリーム終了処理
-      if (isFetchStream && fetcher) {
-        // 残りのバッファを処理
-        if (buffer.length > 0) {
-          this.processFetchObjects(buffer, fetcher, fetchContext, isFirstFetchObject);
+      // ストリーム終了処理 (条件はループ内のオブジェクト解析部と対称)
+      if (isFetchStream && fetcher && fetchHeader) {
+        // ループ最終反復で buffer は remainingBuffer に更新済みであり、
+        // ここに残る = FIN 時点で未完了 Object の途中バイト。
+        // draft-ietf-moq-transport-19 Section 11.4 (Streams):
+        // "If a stream ends gracefully (i.e., the stream terminates with a
+        //  FIN) in the middle of a serialized Object, the session SHOULD be
+        //  closed with a PROTOCOL_VIOLATION."
+        // fetcher.handleEnd() も fetchers.delete も行わず、セッションを
+        // PROTOCOL_VIOLATION で閉じる (fetcher の無効化はセッション終了側
+        // に委ねる)。
+        // close() を経ずに sessionState が closed へ遷移する経路
+        // (transport.closed ハンドラ、条件付きで遷移する
+        // notifyErrorIfActive) では fetcher が active のまま残るが、
+        // いずれの close 済み経路でも end を通知せず return する
+        // (未完成 Object を正常終了として扱わないため)。closeWithError は
+        // セッション終了済みだと呼ばない (終了済みセッションへの
+        // spurious な通知を防ぐため)
+        if (buffer.byteLength > 0) {
+          if (this.sessionState === "connected") {
+            this.closeWithError(
+              new SessionError(
+                `fetch data stream ended with incomplete object: requestId=${fetchHeader.requestId}, remaining ${buffer.byteLength} bytes`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+          }
+          return;
         }
         fetcher.handleEnd();
-        if (fetchHeader) {
-          this.fetchers.delete(fetchHeader.requestId);
-        }
+        this.fetchers.delete(fetchHeader.requestId);
       }
     } catch (err) {
       // デバッグ: ストリームエラーをログ
@@ -4301,6 +4325,30 @@ export class SessionImpl implements Session {
       previousObjectId = processResult.previousObjectId;
 
       if (result.done) break;
+    }
+
+    // ここに到達した時点でピアの FIN を検出している (上記ループは
+    // result.done でしか抜けない)。
+    // draft-ietf-moq-transport-19 Section 11.4 (Streams):
+    // "If a stream ends gracefully (i.e., the stream terminates with a
+    //  FIN) in the middle of a serialized Object, the session SHOULD be
+    //  closed with a PROTOCOL_VIOLATION."
+    // §11.4.3 (Closing Subgroup Streams) は全 Object を配信せずに閉じる場合
+    // の reset を MUST としており、残バッファ非空の FIN は違反ワイヤである。
+    // 黙殺して関数を抜けるとアプリはオブジェクト欠落を検知できないため、
+    // PROTOCOL_VIOLATION でセッションを閉じる (Fetch 側の判定は
+    // handleIncomingStream の終了処理にある)。
+    // pending mode (subscribers 未登録) は payload を decode しておらず
+    // 未完成 Object を機械的に判定できないため、subscriber mode だけの
+    // 対象とする。closeWithError はセッション終了済みだと呼ばない
+    // (終了済みセッションへの spurious な通知を防ぐため)
+    if (this.sessionState === "connected" && buffer.byteLength > 0) {
+      this.closeWithError(
+        new SessionError(
+          `subgroup data stream ended with incomplete object: trackAlias=${header.trackAlias}, groupId=${header.groupId}, remaining ${buffer.byteLength} bytes`,
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
     }
   }
 }
