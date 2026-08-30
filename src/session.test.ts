@@ -5,10 +5,15 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { SessionImpl, type TracksSubscriptionCallbacks } from "./session";
+import {
+  SessionImpl,
+  type SessionState,
+  type SubscribeCallbacks,
+  type TracksSubscriptionCallbacks,
+} from "./session";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
-import { MessageType, encodeGoawayPayload } from "./message";
-import { ObjectStatus } from "./message/types";
+import { MessageType, encodeGoawayPayload, encodePublishDonePayload } from "./message";
+import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
@@ -35,7 +40,11 @@ import {
   decodeFetchObjectFields,
 } from "./dataStream";
 import { SubscriberImpl } from "./subscriber";
-import { bidiCancelFetch, type BidiSessionInternal } from "./session/bidi";
+import {
+  bidiCancelFetch,
+  RESET_REQUEST_STREAM_MESSAGE,
+  type BidiSessionInternal,
+} from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 
 /**
@@ -562,6 +571,422 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUE
   assert.instanceOf(rejected, RequestError);
   assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * 受信 PUBLISH の後続メッセージループ (runPublishStreamSubLoop) を検証するための
+ * SessionImpl の内部メンバー
+ *
+ * handleIncomingBidirectionalStream は private のため、SessionImpl を
+ * `as unknown as` でキャストして駆動する (実 W3C ストリーム注入方式)。
+ */
+interface IncomingPublishStreamInternals {
+  tracksSubscriptions: Map<
+    bigint,
+    {
+      callbacks: TracksSubscriptionCallbacks;
+      state: "active" | "closed";
+      namespacePrefix: string[];
+      rangeFilters?: RangeFilterSpec[];
+    }
+  >;
+  subscribers: Map<bigint, SubscriberImpl>;
+  subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+  requestStreams: Map<bigint, unknown>;
+  sessionState: SessionState;
+  handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+}
+
+// 受信 PUBLISH ストリームのテストで使う Request ID。PUBLISH を注入する側と
+// subscribers / requestStreams を検証する側で同じ値を共有する
+const INCOMING_PUBLISH_REQUEST_ID = 1n;
+
+// createIncomingPublishStream が注入する PUBLISH の Track Alias
+const INCOMING_PUBLISH_TRACK_ALIAS = 1n;
+
+// createIncomingPublishStream が注入する PUBLISH の Track Namespace
+const INCOMING_PUBLISH_NAMESPACE = ["live"];
+
+/**
+ * 受信 PUBLISH を受け付ける状態のセッションを作る
+ *
+ * SUBSCRIBE_TRACKS 相当の namespace 登録だけ行う。PUBLISH の受信で onPublish から
+ * 返した SubscribeCallbacks を使って SubscriberImpl が内部生成される。
+ *
+ * 返り値の internal は SubscribeCallbacks のコールバック内から後で参照してよい
+ * (コールバックの発火は必ず handleIncomingBidirectionalStream の呼び出し以降)。
+ */
+function setupIncomingPublishStreamSession(
+  session: SessionImpl,
+  subscribeCallbacks: SubscribeCallbacks,
+): IncomingPublishStreamInternals {
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  internal.tracksSubscriptions.set(INCOMING_PUBLISH_REQUEST_ID, {
+    callbacks: {
+      onPublish: async () => subscribeCallbacks,
+    },
+    state: "active",
+    namespacePrefix: INCOMING_PUBLISH_NAMESPACE,
+  });
+  return internal;
+}
+
+/**
+ * 受信 PUBLISH メッセージ入りの双方向ストリームを作る
+ *
+ * readable は highWaterMark を 0 にして pull ごとに 1 チャンクを渡す (消費側の
+ * read() まで先行して feed しない)。これにより PUBLISH / 追加フレームが処理されて
+ * から終端操作が届くようになり、注入順序が決定論的になる
+ * (start() で enqueue 直後に error() を呼ぶとキューが破棄され PUBLISH が処理されない)。
+ *
+ * @param terminate - チャンクをすべて渡し終えた read() で呼ばれる終端操作。
+ *   RESET_STREAM なら source: "stream" を持つ reject、内部例外なら source なし reject、
+ *   セッション終了なら source: "session" を持つ reject、FIN なら close
+ * @param extraFrames - PUBLISH の後に enqueue する追加フレーム (GOAWAY / PUBLISH_DONE など)
+ */
+function createIncomingPublishStream(
+  terminate: (controller: ReadableStreamDefaultController<Uint8Array>) => void,
+  extraFrames: Uint8Array[] = [],
+): WebTransportBidirectionalStream {
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: INCOMING_PUBLISH_REQUEST_ID,
+    trackNamespace: createTrackNamespace(INCOMING_PUBLISH_NAMESPACE),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
+    parameters: [],
+    trackProperties: [],
+  });
+  const controlWriter = new ControlStreamWriter();
+  const chunks = [controlWriter.encode(MessageType.PUBLISH, publishPayload), ...extraFrames];
+  const readable = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk === undefined) {
+          // 渡すチャンクが無い = 前までの処理が consumer 側で終わった合図
+          terminate(controller);
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const writable = new WritableStream<Uint8Array>({});
+  return { readable, writable } as unknown as WebTransportBidirectionalStream;
+}
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * 受信 PUBLISH から生成された subscriber に対してピアが RESET_STREAM でストリームを
+ * エラー終了させた場合、error コールバックが呼ばれ state が closed になることを検証する。
+ * bidiReadRequestStreamMessages の subscribe ロールと同じ扱いに揃える対応であり、
+ * プロトコル違反ではないためセッションは閉じない。
+ */
+test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知され state が closed になる", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let notifyCount = 0;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifyCount += 1;
+      notifiedError = error;
+      // error コールバックは requestStreams / subscribers の削除より前に呼ばれるため、
+      // ここで引き取った SubscriberImpl の state を await 後 (markClosed 済み) に検証できる
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
+      controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+    }),
+  );
+
+  // 通知は subscribe ロール側と同一の固定文言が 1 回だけ (raw 通知との二重通知ではない)
+  assert.equal(notifyCount, 1);
+  assert.isDefined(notifiedError);
+  assert.equal(notifiedError!.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  // プロトコル違反ではないためセッションは閉じない
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * RESET_STREAM 通知でアプリの error コールバックが throw しても、例外がループ外へ
+ * 伝播せず state が closed になることを検証する。伝播すると呼び出し元の
+ * requestStreams / subscribers / subscribersByAlias のクリーンアップがスキップされる。
+ */
+test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コールバックが throw しても state は closed になる", async () => {
+  const session = createSessionImpl();
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+      throw new Error("error callback failed");
+    },
+  });
+
+  // コールバック例外が伝播して Promise が reject しないこと (await が解決する)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+    }),
+  );
+
+  // markClosed は notifySubscriberFailure 内の finally で実行される
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  // 後続のクリーンアップも通常どおり走っている
+  assert.isUndefined(internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID));
+  assert.isUndefined(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS));
+  assert.isUndefined(internal.requestStreams.get(INCOMING_PUBLISH_REQUEST_ID));
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * source を持たない内部エラーでは、従来どおり生のエラーが error コールバックへ
+ * 通知され、state は closed にならないことを検証する (RESET_STREAM 限定の回帰ガード)。
+ * 修正前の実装でも通る。
+ */
+test("受信 PUBLISH ストリーム上の source なしエラーでは error 通知されるが state は active のまま", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifiedError = error;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      // source プロパティを持たない内部例外を再現する
+      controller.error(new Error("internal error"));
+    }),
+  );
+
+  // 生のエラーがそのまま通知される
+  assert.isDefined(notifiedError);
+  assert.equal(notifiedError!.message, "internal error");
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "active");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3:
+ * source を持たない内部エラーでアプリの error コールバックが throw しても、例外が
+ * ループ外へ伝播せず後始末が走ることを検証する (RESET 経路と同じ理由で吸収する)。
+ * error 通知されるのに state が active のまま残るのは従来どおりであり、ここでは
+ * 後始末と伝播のみを検証する。
+ */
+test("受信 PUBLISH ストリーム上の source なしエラーで error コールバックが throw しても後始末は走る", async () => {
+  const session = createSessionImpl();
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+      throw new Error("error callback failed");
+    },
+  });
+
+  // コールバック例外が伝播して Promise が reject しないこと (await が解決する)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      controller.error(new Error("internal error"));
+    }),
+  );
+
+  assert.isDefined(subscriber);
+  // state は従来どおり active のまま、後続のクリーンアップは走る
+  assert.equal(subscriber!.state, "active");
+  assert.isUndefined(internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID));
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.5:
+ * WebTransport セッション終了起因 (source: "session") のエラーでは従来どおり
+ * error コールバックが呼ばれないことを検証する (修正前の実装でも通る回帰ガード)。
+ * Node 環境では WebTransportError グローバルが無いため、isSessionClosedError は
+ * メッセージ文字列のフォールバック判定で抑止される (source プロパティによる判定は
+ * src/session/errors.test.ts が FakeWebTransportError の注入で担保している)。
+ */
+test("受信 PUBLISH ストリーム上のセッション終了 (source: session) では error 通知されない", async () => {
+  const session = createSessionImpl();
+  let errorCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      errorCalled = true;
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      controller.error(Object.assign(new Error("session closed by peer"), { source: "session" }));
+    }),
+  );
+
+  assert.isFalse(errorCalled);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4 / §3.3.3:
+ * GOAWAY 受信済みの受信 PUBLISH ストリームで RESET_STREAM が起きても、error
+ * コールバックが呼ばれず state も変わらないことを検証する (GOAWAY は migration
+ * 通知であり失敗ではなく、subscription state に影響しない。通知経路の拡大を
+ * 防ぐ回帰ガードで、修正前の実装でも通る)。
+ * 抑止は外側の !goawayReceived と notifySubscriberFailure 内の
+ * goawayReceivedOnRequestStreams ガードの両方で成立する。source なしの raw 通知を
+ * 抑止するのは外側の goawayReceived だけであり、その専用部分は次テストで担保する。
+ */
+test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM では error 通知されず state も変わらない", async () => {
+  const session = createSessionImpl();
+  let errorCalled = false;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      errorCalled = true;
+    },
+    // goawayCallback は GOAWAY 受信時点 (subscriber 登録後・削除前) で呼ばれるため、
+    // ここで引き取った SubscriberImpl の state を await 後に検証できる
+    goaway: () => {
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+  const controlWriter = new ControlStreamWriter();
+  const goawayFramed = controlWriter.encode(
+    MessageType.GOAWAY,
+    encodeGoawayPayload({
+      type: MessageType.GOAWAY,
+      newSessionUri: "moqt://new.example.com",
+      timeout: 0n,
+    }),
+  );
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+      },
+      [goawayFramed],
+    ),
+  );
+
+  assert.isFalse(errorCalled);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "active");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4:
+ * GOAWAY 受信済みの受信 PUBLISH ストリームで source を持たない内部エラーが起きても、
+ * error コールバックが呼ばれないことを検証する。この抑止は外側の !goawayReceived に
+ * しかなく (notifySubscriberFailure 内の goawayReceivedOnRequestStreams ガードは
+ * RESET 分岐にしか効かない)、前テストの RESET 版と対をなす外側ガード専用の回帰
+ * ガードである (修正前の実装でも通る)。
+ */
+test("受信 PUBLISH ストリーム上の GOAWAY 受信後の source なしエラーでは error 通知されない", async () => {
+  const session = createSessionImpl();
+  let errorCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      errorCalled = true;
+    },
+    goaway: () => {},
+  });
+  const controlWriter = new ControlStreamWriter();
+  const goawayFramed = controlWriter.encode(
+    MessageType.GOAWAY,
+    encodeGoawayPayload({
+      type: MessageType.GOAWAY,
+      newSessionUri: "moqt://new.example.com",
+      timeout: 0n,
+    }),
+  );
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.error(new Error("internal error"));
+      },
+      [goawayFramed],
+    ),
+  );
+
+  assert.isFalse(errorCalled);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.11 / §5.1:
+ * 正常な PUBLISH_DONE (SUBSCRIPTION_ENDED) の処理が変わらないことを検証する回帰
+ * ガード。handleEnd が state を closed にした時点でループ条件 (while の state
+ * ガード) が偽になり、後続の読み取り (= ピア FIN 経路) 自体に入らない。よって
+ * error は飛ばず、end だけが通知される。
+ */
+test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end のみ通知され error は通知しない", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  let errorCalled = false;
+  let subscriber: SubscriberImpl | undefined;
+  // PUBLISH_DONE でループを抜けるため、終端操作 (read) には到達しない
+  let terminateCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+    error: () => {
+      errorCalled = true;
+    },
+  });
+  const controlWriter = new ControlStreamWriter();
+  const publishDoneFramed = controlWriter.encode(
+    MessageType.PUBLISH_DONE,
+    encodePublishDonePayload({
+      type: MessageType.PUBLISH_DONE,
+      statusCode: BigInt(PublishDoneStatusCode.SUBSCRIPTION_ENDED),
+      streamCount: 0n,
+      reasonPhrase: "",
+    }),
+  );
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        terminateCalled = true;
+        // PUBLISH_DONE 送信後のピア FIN 相当 (上記のとおり到達しない)
+        controller.close();
+      },
+      [publishDoneFramed],
+    ),
+  );
+
+  assert.isTrue(endCalled);
+  assert.isFalse(errorCalled);
+  assert.isFalse(terminateCalled);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
 });
 
 /**
