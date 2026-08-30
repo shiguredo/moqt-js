@@ -61,6 +61,34 @@ function createSessionImpl(): SessionImpl {
 }
 
 /**
+ * テストで `as unknown as` キャストを使う際の tracksSubscriptions エントリの部分ビュー
+ *
+ * 実エントリ (SessionImpl.tracksSubscriptions) は namespace / stream / writer 系の
+ * 全フィールドを持つが、フィルタ評価系と解除系のテストが読み書きする範囲だけを表す。
+ * インライン型の重複を避けるための共有型である。
+ */
+interface TracksSubscriptionEntryView {
+  callbacks: TracksSubscriptionCallbacks;
+  state: "active" | "closed";
+  namespacePrefix: string[];
+  rangeFilters?: RangeFilterSpec[];
+}
+
+/**
+ * 解除系テスト用の tracksSubscriptions エントリビュー
+ *
+ * unsubscribe() が writer を閉じ、pendingPrefix を掃除することを検証するため、
+ * writer を必須フィールドとして扱う。
+ */
+interface TracksWriterSubscriptionEntryView {
+  callbacks: TracksSubscriptionCallbacks;
+  state: "active" | "closed";
+  namespacePrefix: string[];
+  pendingPrefix?: string[];
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+}
+
+/**
  * draft-ietf-moq-transport-19 §10.12.3 (Fetch Handling):
  * "End Location MUST specify the same or a larger Location than Start
  *  Location for Standalone and Absolute Joining Fetches."
@@ -242,15 +270,7 @@ test("subscribe: AbsoluteRange の End Group が 2^64-1 を超えると throw �
 test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼ばれず UNINTERESTED 応答", async () => {
   const session = createSessionImpl();
   const sessionInternal = session as unknown as {
-    tracksSubscriptions: Map<
-      bigint,
-      {
-        callbacks: TracksSubscriptionCallbacks;
-        state: "active" | "closed";
-        namespacePrefix: string[];
-        rangeFilters?: RangeFilterSpec[];
-      }
-    >;
+    tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
     receivedRequestIds: Set<bigint>;
     subscribersByAlias: Map<bigint, unknown[]>;
     controlWriter: ControlStreamWriter | undefined;
@@ -328,15 +348,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
 test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ばれる", async () => {
   const session = createSessionImpl();
   const sessionInternal = session as unknown as {
-    tracksSubscriptions: Map<
-      bigint,
-      {
-        callbacks: TracksSubscriptionCallbacks;
-        state: "active" | "closed";
-        namespacePrefix: string[];
-        rangeFilters?: RangeFilterSpec[];
-      }
-    >;
+    tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
     receivedRequestIds: Set<bigint>;
     subscribersByAlias: Map<bigint, unknown[]>;
     handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
@@ -403,15 +415,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ば�
 test("受信 PUBLISH ストリーム上のピア FIN で応答待ちの REQUEST_UPDATE が reject されエントリが削除される", async () => {
   const session = createSessionImpl();
   const sessionInternal = session as unknown as {
-    tracksSubscriptions: Map<
-      bigint,
-      {
-        callbacks: TracksSubscriptionCallbacks;
-        state: "active" | "closed";
-        namespacePrefix: string[];
-        rangeFilters?: RangeFilterSpec[];
-      }
-    >;
+    tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
     receivedRequestIds: Set<bigint>;
     subscribersByAlias: Map<bigint, unknown[]>;
     pendingRequestUpdate: Map<
@@ -488,15 +492,7 @@ test("受信 PUBLISH ストリーム上のピア FIN で応答待ちの REQUEST_
 test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUEST_UPDATE が reject されエントリが削除される", async () => {
   const session = createSessionImpl();
   const sessionInternal = session as unknown as {
-    tracksSubscriptions: Map<
-      bigint,
-      {
-        callbacks: TracksSubscriptionCallbacks;
-        state: "active" | "closed";
-        namespacePrefix: string[];
-        rangeFilters?: RangeFilterSpec[];
-      }
-    >;
+    tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
     receivedRequestIds: Set<bigint>;
     subscribersByAlias: Map<bigint, unknown[]>;
     pendingRequestUpdate: Map<
@@ -581,15 +577,7 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUE
  * `as unknown as` でキャストして駆動する (実 W3C ストリーム注入方式)。
  */
 interface IncomingPublishStreamInternals {
-  tracksSubscriptions: Map<
-    bigint,
-    {
-      callbacks: TracksSubscriptionCallbacks;
-      state: "active" | "closed";
-      namespacePrefix: string[];
-      rangeFilters?: RangeFilterSpec[];
-    }
-  >;
+  tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
   subscribers: Map<bigint, SubscriberImpl>;
   subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   requestStreams: Map<bigint, unknown>;
@@ -1065,16 +1053,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
 test("tracks の unsubscribe() で in-flight の update() が reject され pending が掃除される", async () => {
   const session = createSessionImpl();
   const sessionInternal = session as unknown as {
-    tracksSubscriptions: Map<
-      bigint,
-      {
-        callbacks: object;
-        state: "active" | "closed";
-        namespacePrefix: string[];
-        pendingPrefix?: string[];
-        writer: WritableStreamDefaultWriter<Uint8Array>;
-      }
-    >;
+    tracksSubscriptions: Map<bigint, TracksWriterSubscriptionEntryView>;
     pendingRequestUpdate: Map<
       bigint,
       {
@@ -1187,16 +1166,7 @@ test("tracks の update() を fire-and-forget で呼び出しても unsubscribe(
   const session = createSessionImpl();
   const sessionInternal = session as unknown as {
     controlWriter: ControlStreamWriter;
-    tracksSubscriptions: Map<
-      bigint,
-      {
-        callbacks: object;
-        state: "active" | "closed";
-        namespacePrefix: string[];
-        pendingPrefix?: string[];
-        writer: WritableStreamDefaultWriter<Uint8Array>;
-      }
-    >;
+    tracksSubscriptions: Map<bigint, TracksWriterSubscriptionEntryView>;
     pendingRequestUpdate: Map<
       bigint,
       {

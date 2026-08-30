@@ -775,6 +775,10 @@
 - [UPDATE] src/session/incoming.ts のモジュール doc から issue 番号参照を削除する
   - issue 側を第一情報源としコード側に issue 番号参照を残さない方針に合わせ、「issue 0302 設計方針参照」を削除して理由（状態結合が強いため）のみをコメントに残す
   - @voluntas
+- [UPDATE] src/session.test.ts で重複していた tracksSubscriptions エントリのキャスト型を共有インターフェースに統一する
+  - `as unknown as` で使っていたインライン定義 7 箇所を、フィルタ評価系と解除系の 2 共有インターフェースへ集約する
+  - テストの挙動・名前は一切変えない (テスト名重複は macOS のロケール依存 sort/uniq による誤検出で実在せず)
+  - @voluntas
 
 ## 2026.2.0
 
