@@ -81,7 +81,11 @@ import {
 import * as bidi from "./session/bidi";
 import { concatChunks, cancelStreamQuiet } from "./session/stream";
 import { trackPropertyFiltersMatch } from "./filter";
-import { isSessionClosedError, toProtocolViolationSessionError } from "./session/errors";
+import {
+  isPeerStreamError,
+  isSessionClosedError,
+  toProtocolViolationSessionError,
+} from "./session/errors";
 import type { SessionInternal } from "./session/types";
 import {
   publishSendObject,
@@ -3476,9 +3480,51 @@ export class SessionImpl implements Session {
       // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
       // spurious error 通知を抑止する (namespace ループと同様)
       if (impl.state === "active" && !goawayReceived) {
+        // WebTransport セッション終了起因のエラーは購読者へ通知しない (従来どおり)
         const normalizedError = err instanceof Error ? err : new Error(String(err));
         if (!isSessionClosedError(normalizedError)) {
-          callbacks.error?.(normalizedError);
+          // bidiReadRequestStreamMessages の subscribe ロールと同じ判定になるよう、
+          // 正規化前の生のエラーを評価する
+          if (isPeerStreamError(err)) {
+            // draft-ietf-moq-transport-19 §3.3.3:
+            // ピアの RESET_STREAM で readable がエラー終了した場合 (source: "stream") は、
+            // subscribe ロール側と同じく error 通知 + state closed にする。仕様は
+            // ピアの RESET_STREAM を受けた側のアプリへの通知内容も subscription state
+            // の扱いも規定していない (§3.3.3 は RESET_STREAM / STOP_SENDING の手段と
+            // rejection 時の応答を定めるのみ) ため、subscribe ロール側と同じ実装上の
+            // 判断として揃える。
+            // 通知と markClosed は notifySubscriberFailure の内部契約 (try/finally) に
+            // 委ねるため、生の callbacks.error は呼ばない (二重通知になる)。
+            // notifySubscriberFailure は subscribers から引くため、unsubscribe 済みで
+            // エントリが削除された窓では通知しない (subscribe ロール側と同じ)。
+            // 通知メッセージは subscribe ロール側と同一の固定文言を使う。
+            // 内側に try/catch が必要なのは、catch ブロック内で throw すると戻り値の
+            // Promise が reject し、呼び出し元の requestStreams / subscribers の
+            // クリーンアップがスキップされるためである。ここが守るのはこの通知経路
+            // だけである (セッションレベルの error コールバック例外が伝播する経路は
+            // 別途対応)。
+            try {
+              bidi.notifySubscriberFailure(
+                this as unknown as bidi.BidiSessionInternal,
+                publishRequestId,
+                new Error(bidi.RESET_REQUEST_STREAM_MESSAGE),
+              );
+            } catch {
+              // アプリの error コールバック例外は吸収する (markClosed は
+              // notifySubscriberFailure 内の finally で実行済み)。
+            }
+          } else {
+            // source: "stream" 以外 (ProtocolViolationError 経由等の内部例外) は
+            // 従来どおり生のエラーを通知し、state は変更しない。アプリの error
+            // コールバック例外を吸収するのは、上記と同じく呼び出し元の後始末を
+            // スキップさせないため (FIN 経路の notifySubscriberFailure は外側 try 内
+            // で呼ばれるため元々吸収されている)。
+            try {
+              callbacks.error?.(normalizedError);
+            } catch {
+              // アプリの error コールバック例外は吸収する
+            }
+          }
         }
       }
       const sessionError = toProtocolViolationSessionError(err);

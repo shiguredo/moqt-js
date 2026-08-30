@@ -746,6 +746,11 @@
   - 違反検出経路では fetcher.handleEnd() も fetchers.delete も行わず、未完成 Object を正常終了として扱わない。sessionState が既に closed の経路で検出した違反は黙殺し、spurious な通知を行わない
   - 早期終了が RESET_STREAM の場合と、pending mode (subscribers 未登録で payload を decode しない) は判定対象外で従来どおり
   - @voluntas
+- [FIX] 受信 PUBLISH から生成された subscriber が RESET_STREAM で state を closed にしないのを修正する
+  - 受信 PUBLISH の後続メッセージループの catch でピアの RESET_STREAM (source: "stream") を検出した場合、bidiReadRequestStreamMessages の subscribe ロールと同じ失敗通知経路に統一して error 通知と markClosed を行う (draft-ietf-moq-transport-19 §3.3.3 は cancellation の手段を定めるのみで、アプリへの通知内容も subscription state の扱いも規定していないため、subscribe ロール側と同じ実装上の判断を揃える)
+  - 通知メッセージは subscribe ロール側と同一の固定文言を用いる
+  - source: "stream" 以外 (source を持たない内部例外) は従来どおり生のエラーを通知して state は変更しないが、アプリの error コールバック例外は呼び出し元の後始末を壊さないよう吸収する。セッション終了 (source: "session")、GOAWAY 受信済みの抑止は維持する
+  - @voluntas
 
 ### misc
 

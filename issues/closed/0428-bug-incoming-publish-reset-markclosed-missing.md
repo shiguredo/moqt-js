@@ -1,7 +1,7 @@
 # 受信 PUBLISH から生成された subscriber が RESET_STREAM 時に state を closed にしない
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-08-31
 - Branch: feature/fix-incoming-publish-reset-markclosed-missing
 - Polished: 2026-08-28
 
@@ -22,14 +22,14 @@
 ## 設計方針
 
 - RESET_STREAM 相当 (source: "stream" のエラー) に対象を絞り、error 通知 + markClosed を行う。判定は 0410 と同一に `isPeerStreamError(err)` で行い、それ以外 (ProtocolViolationError 経由・source: "session"・source 無し) では現行挙動を維持する。
-- 実装は 0410 の bidi 系 catch と同型の (a) 案に一本化する: catch 内で `!goawayReceived && isPeerStreamError(err) && !isSessionClosedError(err)` を満たす場合に `bidi.notifySubscriberFailure(this, publishRequestId, new Error(bidi.RESET_REQUEST_STREAM_MESSAGE))` を呼ぶ。error 通知 + markClosed は `notifySubscriberFailure` の内部契約 (try/finally) に委ねる。既存の raw error 通知パスは削除する (state==="active" の条件下では `notifySubscriberFailure` 側が同等の error 通知 + markClosed を担うため二重通知を避ける)。
+- 実装は 0410 の subscribe ロール側 catch と同型の (a) 案に一本化する: catch 内で `!goawayReceived && isPeerStreamError(err) && !isSessionClosedError(err)` を満たす場合に `bidi.notifySubscriberFailure(this, publishRequestId, new Error(bidi.RESET_REQUEST_STREAM_MESSAGE))` を呼ぶ。error 通知 + markClosed は `notifySubscriberFailure` の内部契約 (try/finally) に委ねる。RESET 分岐では生の `callbacks.error` を呼ばない (notifySubscriberFailure 側が同等の通知を担うため二重通知を避ける)。一方 source: "stream" 以外の raw error 通知パス (else 分岐) は維持する (完了条件の「source: "stream" 以外では現行挙動を維持」に必要)。
 - 通知メッセージは暫定的に `RESET_REQUEST_STREAM_MESSAGE` (0410 と同一固定文言) を使う。WebTransportError の errorCode を反映するかは 0429 のスコープで、そこで bidi 系と併せて文言を再検討する。
 - `toProtocolViolationSessionError(err)` が非 null の場合の `closeWithError` 呼び出しは現行どおり維持する (RESET 相当と PROTOCOL_VIOLATION は分岐が競合しない)。
-- 変更対象: `src/session.ts` (runPublishStreamSubLoop の catch)、`src/session/bidi.test.ts` (notifySubscriberFailure 経由の共通ロジックは既に free function 単体テストで担保されているため、必要なら固定文言や isPeerStreamError ガードの回帰テストのみ追加)、`CHANGES.md`。
+- 変更対象: `src/session.ts` (runPublishStreamSubLoop の catch)、`src/session.test.ts` (受信 PUBLISH ストリーム経路のテスト。private メソッドの catch 経路は `handleIncomingBidirectionalStream` を `as unknown as` でキャストし、実 W3C ストリームを注入して駆動できるため、自動テストで担保する)、`CHANGES.md`。
 
 ## 対象外 / 別 issue へ切り出し
 
-- セッション終了 (source: "session") 時に subscriber 個別の markClosed が行われず state が "active" のまま残る問題は本 issue のスコープ外とする。0374 の残余リスク (1) と同族の問題であり、本 issue 完了時に別 issue として起票し、追跡先を残す (0374 → 0428 で経緯が繰り返さないようにする)。
+- セッション終了 (source: "session") 時に subscriber 個別の markClosed が行われず state が "active" のまま残る問題は本 issue のスコープ外とする。0374 の残余リスク (1) と同族の問題であり、本 issue 完了時に `issues/0444-bug-peer-session-close-markclosed-missing.md` として起票し、追跡先を残した (0374 → 0428 で経緯が繰り返さないようにする)。
 - WebTransportError の errorCode を通知メッセージへ反映する対応は 0429 のスコープ。
 
 ## 完了条件
@@ -40,15 +40,26 @@
 - GOAWAY 受信済みでは通知されず state も変更されないこと (現行挙動の維持)。
 - セッション終了 (source: "session") では error コールバックが呼ばれないこと (現行挙動の維持)。
 - 正常な PUBLISH_DONE → FIN の既存処理が変わらないこと。
-- 上記のうちテスト可能な項目 (`bidi.test.ts` の `notifySubscriberFailure` free function 単体テストで担保できる範囲) にテストがあること。`runPublishStreamSubLoop` の catch 経路配線は private メソッドで自動テスト対象外のためコードレビューで担保する (0374 と同方針)。
+- 上記を検証するテストが `src/session.test.ts` にあること。`runPublishStreamSubLoop` の catch 経路は private メソッドだが、`handleIncomingBidirectionalStream` を `as unknown as` でキャストし実 W3C ストリームを注入して駆動できるため、自動テストで担保する (bidi.test.ts の free function 単体テストではなく経路配線ごと検証する)。
 - 別 issue (source: "session" 時の markClosed 欠落) の起票が完了していること。
 - `CHANGES.md` の `## develop` に `[FIX]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §3.3.3 (Request Cancellation and Rejection / RESET_STREAM)
-- draft-ietf-moq-transport-19 §5.1.1 (Subscription State Management)
-- 関連: `issues/closed/0410-bug-subscribe-error-end-not-notified.md` (bidi 系 subscribe の RESET 通知。本 issue は受信 PUBLISH 経路の間口を揃える)
-- 関連: `issues/closed/0374-moqt-draft-19-fin-without-publish-done-not-notified.md` (残余リスク (1) の記録箇所。private メソッドの catch 経路をコードレビューで担保する方針の先例)
-- 関連: `issues/0429-bug-reset-stream-error-code-not-notified.md` (RESET_STREAM の errorCode 通知。本 issue の通知メッセージは暫定的に 0410 と揃え、errorCode 反映は 0429 で bidi 系と一括対応)
+- draft-ietf-moq-transport-19 §3.3.3 (Request Cancellation and Rejection / RESET_STREAM): cancellation の手段を定めるのみで、受けた側の通知内容・subscription state の扱いは未規定
+- draft-ietf-moq-transport-19 §5.1 (Subscriptions): Either endpoint can terminate an Established subscription, moving it to the Terminated state
+- 関連: `issues/closed/0410-bug-subscribe-error-end-not-notified.md` (subscribe ロールの RESET 通知。本 issue は受信 PUBLISH 経路の間口を揃える)
+- 関連: `issues/closed/0374-moqt-draft-19-fin-without-publish-done-not-notified.md` (残余リスク (1) の記録箇所)
+- 関連: `issues/0429-bug-reset-stream-error-code-not-notified.md` (RESET_STREAM の errorCode 通知。本 issue の通知メッセージは暫定的に 0410 と揃え、errorCode 反映は 0429 で subscribe ロール側と一括対応)
+
+## 解決方法
+
+`src/session.ts` の `runPublishStreamSubLoop` の catch を、subscribe ロール側 (`bidiReadRequestStreamMessages`) と同型に揃えた。
+
+- source: "stream" のエラー (`isPeerStreamError(err)` が true、`!goawayReceived && !isSessionClosedError` かつ `impl.state === "active"`) では `bidi.notifySubscriberFailure(this, publishRequestId, new Error(bidi.RESET_REQUEST_STREAM_MESSAGE))` を呼び、error 通知と markClosed を `notifySubscriberFailure` の try/finally 内部契約に委ねる。この分岐では生の `callbacks.error` を呼ばない (二重通知回避)
+- source: "stream" 以外 (source を持たない内部例外・ProtocolViolationError 経由) は従来どおり raw の `callbacks.error` を通知し、state は変更しない。ただしアプリの error コールバック例外は内側 try/catch で吸収する (吸収しないと catch ブロック内 throw が Promise を reject させ、呼び出し元 `handleIncomingBidirectionalStream` の requestStreams / subscribers / subscribersByAlias の後始末がスキップされ unhandled rejection になる。FIN 経路は外側 try 内で呼ばれるため元々吸収されており、RESET 経路も同じ意味論に揃えた)
+- source: "session" と GOAWAY 受信済みの抑止、`toProtocolViolationSessionError(err)` による `closeWithError` は従来どおり維持
+- 語彙は既存コード (subscribe ロール / 受信 PUBLISH) に寄せ、新規テスト 6 本を `src/session.test.ts` に追加 (`handleIncomingBidirectionalStream` を `as unknown as` でキャストし、実 W3C ReadableStream を highWaterMark 0 + pull 方式で決定論的に注入)。修正前コードで落ちるのは RESET 通知系 2 本と source なし throw 吸収 1 本、他は回帰ガード
+
+本 issue のスコープ外として、`transport.closed` 由来のセッション終了時に request 系オブジェクトの markClosed が走らない問題は `issues/0444-bug-peer-session-close-markclosed-missing.md` に切り出した。
