@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-restructure-location-filter-wire
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-01
 
 ## 目的
 
@@ -18,24 +18,24 @@ draft-ietf-moq-transport-20 §5.1.2 / §10.2.9 で Location Filter のワイヤ�
   - 2 フィールド: StartGroup + StartObject
   - 3 フィールド: StartGroup + StartObject + EndGroupDelta
   - 4 フィールド: StartGroup + StartObject + EndGroupDelta + EndObject
-- `FilterType` (`src/message/types.ts`)、`filter.ts` の `resolveLocationFilter`、`buildSubscribeParameters` (`src/session/params.ts`)、公開型 `LocationFilter` (`src/index.ts`) が draft-19 形に依存している。
+- `FilterType` (`src/message/types.ts`)、`filter.ts` の `resolveFilter`、`buildSubscribeParameters` (`src/session/params.ts`)、公開型 `LocationFilter` (`src/index.ts`) が draft-19 形に依存している。
 - 後続の FETCH 再構成 (0449) と FILL_PARAMETERS (0450) は本変更が前提。
 
 ## 設計方針
 
 - `LocationFilter` の公開表現を draft-20 の意味論 (StartGroup / StartObject / EndGroupDelta / EndObject の有無) に合わせて再設計する。既存の `NextGroupStart` 等の別名は、同等意味を新表現で表せるなら移行ガイド付きで廃止する。
-- `encodeLocationFilter` / `decodeLocationFilter` は Length からフィールド数を決定する。未知 Length・不正組み合わせは PROTOCOL_VIOLATION (受信) / 送信前エラーに揃える。
+- `encodeLocationFilter` / `decodeLocationFilter` は Length (バイト長) を optional vi64 フィールドの区切りとし、Length が示す範囲内のフィールド数 (0〜4) を決定する。Length と実際の消費バイト数が一致しない場合、またはフィールド数が 4 超になる場合は PROTOCOL_VIOLATION (受信) / 送信前エラーに揃える。Length のバイト値はフィールド数と直接対応しないため、Length=2 を「2 フィールド」と解釈しないこと。
 - Length 0 を明示サポートする (REQUEST_UPDATE でのフィルタ除去)。
 - `filter.ts` の解決ロジックを新ワイヤ意味論に合わせて更新し、既存の AbsoluteRange End Group 超過検証 (§5.1.2) は維持する。
-- 破壊的変更として `CHANGES.md` に `[UPDATE]` を記載する。
+- 破壊的変更として `CHANGES.md` に `[CHANGE]` を記載する。
 
 ## 完了条件
 
 - Location Filter の encode / decode が draft-20 §5.1.2 の Length ベースと round-trip すること。
-- Length 0・1・2・3・4 フィールドの各ケースと不正 Length のテストがあること。
+- フィールド数 0 (Length 0)・1・2・3・4 の各ケースと、不正 Length (Length と消費バイト数の不一致など) のテストがあること。
 - `filter.ts` / SUBSCRIBE 送信経路 / 公開 API が新表現に追随していること。
 - `FilterType` 定数と draft-19 専用ワイヤパスが残っていないこと。
-- `CHANGES.md` の `## develop` に `[UPDATE]` があること。
+- `CHANGES.md` の `## develop` に `[CHANGE]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
