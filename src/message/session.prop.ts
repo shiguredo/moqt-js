@@ -19,7 +19,12 @@ import {
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
 } from "./session";
-import { type Parameter, createTrackNamespace, trackNamespaceToStrings } from "./parameter";
+import {
+  type Parameter,
+  createTrackNamespace,
+  trackNamespaceToStrings,
+  encodeLocationFilterParameter,
+} from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
 import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
@@ -70,16 +75,31 @@ const locationParameterArb = fc
 
 const lengthPrefixedParameterArb = fc
   .record({
-    type: fc.constantFrom(0x03, 0x21),
+    type: fc.constant(0x03),
     value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
   })
   .map(({ type, value }) => ({ type, value }));
+
+/**
+ * LOCATION_FILTER (0x21) パラメータの arbitrary
+ *
+ * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
+ * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
+ * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
+ */
+const locationFilterParameterArb = fc
+  .record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+  })
+  .map(({ startGroup, startObject }) => encodeLocationFilterParameter({ startGroup, startObject }));
 
 const messageParameterArb: fc.Arbitrary<Parameter> = fc.oneof(
   varintParameterArb,
   uint8ParameterArb,
   locationParameterArb,
   lengthPrefixedParameterArb,
+  locationFilterParameterArb,
 );
 
 // delta encoding では type は昇順かつ一意である必要がある

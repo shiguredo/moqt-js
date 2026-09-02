@@ -641,15 +641,16 @@ export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[],
  * - varint: 可変長整数
  * - location: 2 つの連続した varint (Group, Object)
  * - length-prefixed: varint 長 + バイト列 (外側に Length を付加する)
- * - range-filter: 内側 Length 込みのバイト列 (外側 Length は付加しない。
- *   draft-ietf-moq-transport-19 §5.1.3 の 1 Length 構造)
+ * - self-length-prefixed: 値が自ら Length (vi64) を内包する 1 Length 構造
+ *   (外側 Length は付加しない。draft-ietf-moq-transport-20 §5.1.2 / §5.1.4
+ *   の Range Filter と LOCATION_FILTER が該当)
  */
 type MessageParameterValueEncoding =
   | "uint8"
   | "varint"
   | "location"
   | "length-prefixed"
-  | "range-filter";
+  | "self-length-prefixed";
 
 /**
  * パラメータ型ごとの Value エンコーディング定義
@@ -678,21 +679,25 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   // SUBSCRIBER_PRIORITY (Section 10.2.7)
   0x20: "uint8",
   // LOCATION_FILTER (Section 10.2.9)
-  0x21: "length-prefixed",
+  // draft-ietf-moq-transport-20 §5.1.2: Value は Length (vi64) + optional
+  // vi64 フィールド (0〜4) の 1 Length 構造。外側 Length は付加しない
+  // (Range Filter と同一形式。Appendix A.1 #1809 で「match the other filter
+  //  parameters」と再構成された)
+  0x21: "self-length-prefixed",
   // GROUP_ORDER (Section 10.2.8)
   0x22: "uint8",
   // NEW_GROUP_REQUEST (Section 10.2.18)
   0x32: "varint",
   // TRACK_NAMESPACE_PREFIX (Section 10.2.19)
   0x34: "length-prefixed",
-  // Range Filters (draft-ietf-moq-transport-19 Section 5.1.3 / 10.2.10–10.2.14)
+  // Range Filters (draft-ietf-moq-transport-20 Section 5.1.4 / 10.2.10–10.2.14)
   // Value は Length (vi64) + [SetID + [Property Type] + Range 列] の 1 Length 構造。
   // 外側に Length を付加しない (length-prefixed から分離した専用種別)。
-  0x25: "range-filter", // SUBGROUP_FILTER
-  0x26: "range-filter", // OBJECTID_FILTER
-  0x27: "range-filter", // PRIORITY_FILTER
-  0x28: "range-filter", // OBJECT_PROPERTY_FILTER
-  0x29: "range-filter", // TRACK_PROPERTY_FILTER
+  0x25: "self-length-prefixed", // SUBGROUP_FILTER
+  0x26: "self-length-prefixed", // OBJECTID_FILTER
+  0x27: "self-length-prefixed", // PRIORITY_FILTER
+  0x28: "self-length-prefixed", // OBJECT_PROPERTY_FILTER
+  0x29: "self-length-prefixed", // TRACK_PROPERTY_FILTER
 };
 
 /**
@@ -742,9 +747,10 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
     return result;
   }
 
-  // uint8, varint, location, range-filter: Value をそのまま書き込む。
-  // range-filter の Value は encodeRangeFilter の出力 (内側 Length 込み) のため、
-  // 外側 Length は付加しない (1 Length 構造。draft-ietf-moq-transport-19 §5.1.3)
+  // uint8, varint, location, self-length-prefixed: Value をそのまま書き込む。
+  // self-length-prefixed の Value は self エンコードの出力 (自ら Length を含む
+  // 1 Length 構造) のため、外側 Length は付加しない
+  // (draft-ietf-moq-transport-20 §5.1.2 / §5.1.4)
   const result = new Uint8Array(deltaBytes.length + param.value.length);
   result.set(deltaBytes, 0);
   result.set(param.value, deltaBytes.length);
@@ -835,16 +841,17 @@ export function decodeMessageParameter(
       totalConsumed += Number(length);
       break;
     }
-    case "range-filter": {
-      // draft-ietf-moq-transport-19 Section 5.1.3:
-      // Range Filter の Value は Length (vi64) で始まり、その後に
-      // [SetID + [Property Type] + Range 列] が続く 1 Length 構造。
-      // 内側 Length を読んで全体を value として保持する (decodeRangeFilter の
-      // 入力形式に合わせる。Length を剥がすと SetID を Length と誤読する)。
+    case "self-length-prefixed": {
+      // draft-ietf-moq-transport-20 Section 5.1.4 / 5.1.2:
+      // Range Filter / LOCATION_FILTER の Value は Length (vi64) で始まり、
+      // その後にペイロードが続く 1 Length 構造。
+      // 内側 Length を読んで全体を value として保持する (decodeLocationFilter /
+      // decodeRangeFilter の入力形式に合わせる。Length を剥がすと先頭フィールド
+      // を Length と誤読する)。
       const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += lengthConsumed;
       // 既存 length-prefixed 分岐と同じ上限を維持する (防御的制限。
-      // Range Filter の Length は仕様で上限が明記されていないが、
+      // フィルタの Length は仕様で上限が明記されていないが、
       // 6 万バイト超のフィルタは実用上存在せず、過大宣言の DoS を防ぐ)
       if (Number(length) > MAX_KVP_VALUE_LENGTH) {
         throw new ProtocolViolationError(
@@ -855,7 +862,7 @@ export function decodeMessageParameter(
       // PROTOCOL_VIOLATION で扱う (長い slice を作らない)
       if (offset + totalConsumed + Number(length) > data.length) {
         throw new ProtocolViolationError(
-          `range filter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
+          `filter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
         );
       }
       value = data.slice(
@@ -1013,6 +1020,23 @@ function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigin
 }
 
 /**
+ * Next Object 形式の Location Filter かどうかを判定する
+ *
+ * draft-ietf-moq-transport-20 §5.1.2: 2 フィールドで StartGroup = StartObject = 0
+ * の場合は Start Location が Next Object (旧 LargestObject 相当) になる。
+ * endGroupDelta を持つ 3 / 4 フィールド表現は endGroupDelta による絶対指定の
+ * ため対象外。
+ */
+export function isNextObjectLocationFilter(filter: LocationFilter): boolean {
+  return (
+    "startObject" in filter &&
+    !("endGroupDelta" in filter) &&
+    filter.startGroup === 0n &&
+    filter.startObject === 0n
+  );
+}
+
+/**
  * Location Filter をエンコードする
  * draft-ietf-moq-transport-20 §10.2.9 (LOCATION FILTER Parameter)
  *
@@ -1108,7 +1132,23 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
   const fields: bigint[] = [];
   let current = start;
   while (current < end && fields.length < 4) {
-    const [value, consumed] = decodeVarint(data, current);
+    let value: bigint;
+    let consumed: number;
+    try {
+      [value, consumed] = decodeVarint(data, current);
+    } catch (error) {
+      // end <= data.length は検証済みであり、Length 境界内の varint が
+      // IncompleteDataError になるのは「境界内に収まらない vi64」の時のみ
+      // (次のフィールドが Length を跨ぎ、data 末尾側へはみ出す)。
+      // 構造不正として PROTOCOL_VIOLATION にする (decodeVarint の
+      // 不完全データ待ちではなく、宣言 Length との不一致)
+      if (error instanceof IncompleteDataError) {
+        throw new ProtocolViolationError(
+          `malformed location filter: field crosses length boundary: ${length}`,
+        );
+      }
+      throw error;
+    }
     fields.push(value);
     current += consumed;
   }

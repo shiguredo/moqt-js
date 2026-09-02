@@ -1,6 +1,6 @@
 /**
  * Location Filter マッチングの単体テスト
- * draft-ietf-moq-transport-19 Section 5.1.2 (Location Filter)
+ * draft-ietf-moq-transport-20 Section 5.1.2 (Location Filter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -13,6 +13,7 @@ import {
 import type { Location } from "./message/types";
 import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import { encodeProperties, type Property } from "./properties";
+import { MAX_VARINT } from "./varint";
 
 // ============================================================================
 // resolveFilter のテスト
@@ -135,6 +136,19 @@ test("resolveFilter: 1 フィールドの相対計算で負値は 0 にクラン
   const result = resolveFilter(filter, { group: 2n, object: 5n });
   assert.isDefined(result);
   assert.equal(result.start.group, 0n);
+  assert.equal(result.start.object, 0n);
+});
+
+/**
+ * 1 フィールドの相対計算で Start Group が 2^64-1 を超える場合は 2^64-1 に
+ * クランプされる (draft-ietf-moq-transport-20 Section 5.1.2 の上端クランプ)。
+ */
+test("resolveFilter: 1 フィールドの相対計算で 2^64-1 超過は 2^64-1 にクランプされる", () => {
+  // Largest = {MAX_VARINT, 0} のとき startGroup=0 は MAX_VARINT + 1 → 2^64-1 にクランプ
+  const filter: LocationFilter = { startGroup: 0n };
+  const result = resolveFilter(filter, { group: MAX_VARINT, object: 0n });
+  assert.isDefined(result);
+  assert.equal(result.start.group, MAX_VARINT);
   assert.equal(result.start.object, 0n);
 });
 

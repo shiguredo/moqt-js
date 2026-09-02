@@ -49,6 +49,7 @@ import {
   type Parameter,
   type LocationFilter,
   type RangeFilterSpec,
+  isNextObjectLocationFilter,
 } from "./message";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
@@ -1048,15 +1049,8 @@ export interface Session {
  * draft-ietf-moq-transport-20 §5.1.2: 2 フィールドで StartGroup = StartObject = 0
  * の場合は Start Location が Next Object (旧 LargestObject 相当) になる。
  * 3 フィールド以上は EndGroupDelta を持つため絶対指定として扱う。
+ * (isNextObjectLocationFilter は src/message/parameter.ts から import)
  */
-function isNextObjectLocationFilter(filter: LocationFilter): boolean {
-  return (
-    "startObject" in filter &&
-    !("endGroupDelta" in filter) &&
-    filter.startGroup === 0n &&
-    filter.startObject === 0n
-  );
-}
 
 /**
  * Location Filter をデバッグログ用の文字列に要約する
@@ -1068,16 +1062,17 @@ function describeLocationFilter(filter: LocationFilter | undefined): string | un
   if ("reset" in filter) {
     return "reset";
   }
-  if (!("startObject" in filter)) {
-    return `startGroup=${filter.startGroup}`;
+  const entries: string[] = [`startGroup=${filter.startGroup}`];
+  if ("startObject" in filter) {
+    entries.push(`startObject=${filter.startObject}`);
   }
-  if (!("endGroupDelta" in filter)) {
-    return `startGroup=${filter.startGroup}, startObject=${filter.startObject}`;
+  if ("endGroupDelta" in filter) {
+    entries.push(`endGroupDelta=${filter.endGroupDelta}`);
   }
-  if (!("endObject" in filter)) {
-    return `startGroup=${filter.startGroup}, startObject=${filter.startObject}, endGroupDelta=${filter.endGroupDelta}`;
+  if ("endObject" in filter) {
+    entries.push(`endObject=${filter.endObject}`);
   }
-  return `startGroup=${filter.startGroup}, startObject=${filter.startObject}, endGroupDelta=${filter.endGroupDelta}, endObject=${filter.endObject}`;
+  return entries.join(", ");
 }
 
 /**

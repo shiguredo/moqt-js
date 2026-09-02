@@ -15,8 +15,10 @@ import {
   type LocationFilter,
   type RangeFilterParam,
   type RangeFilterSpec,
+  isNextObjectLocationFilter,
 } from "./message/parameter";
 import { decodeObjectPropertiesTolerant, type Property } from "./properties";
+import { MAX_VARINT } from "./varint";
 
 /**
  * 解決済み Location Filter
@@ -63,50 +65,54 @@ export function resolveFilter(
     return undefined;
   }
 
+  // 2 フィールド限定で StartGroup = StartObject = 0 の場合は Next Object
+  // ({Largest Object.Group, Largest Object.Object + 1}) を意味する (§5.1.2)
+  if (isNextObjectLocationFilter(filter)) {
+    // Next GroupStart (旧) と同様に、未配信時は {0, 0} から開始する
+    if (largestLocation === null) {
+      return { start: { group: 0n, object: 0n }, endGroup: undefined };
+    }
+    // Section 5.1.2: {Largest Object.Group, Largest Object.Object + 1}
+    return {
+      start: { group: largestLocation.group, object: largestLocation.object + 1n },
+      endGroup: undefined,
+    };
+  }
+
   // 1 フィールド: StartGroup のみ。相対指定 (Next Group 基準)
   if (!("startObject" in filter)) {
     // 未配信時 (LARGEST_OBJECT 省略) は仕様どおり {0, 0} から開始する。
     // フォールバック値に +1 を適用すると未配信時に {0, 1} になる罠があるため、
     // null を先に分岐する
     if (largestLocation === null) {
-      return { start: { group: 0n, object: 0n }, endGroup: undefined, endObject: undefined };
+      return { start: { group: 0n, object: 0n }, endGroup: undefined };
     }
     // draft-ietf-moq-transport-20 Section 5.1.2:
     // start Location = {Largest Object.Group + 1 - StartGroup, 0}。
-    // 相対の計算結果が負値になる group は 0 にクランプする
+    // 相対の計算結果が負値になる group は 0、2^64-1 を超える group は 2^64-1
+    // にクランプする
     let group = largestLocation.group + 1n - filter.startGroup;
     if (group < 0n) {
       group = 0n;
     }
-    return { start: { group, object: 0n }, endGroup: undefined, endObject: undefined };
+    if (group > MAX_VARINT) {
+      group = MAX_VARINT;
+    }
+    return { start: { group, object: 0n }, endGroup: undefined };
   }
 
-  // 2 フィールド以上。
-  // 2 フィールド限定で StartGroup = StartObject = 0 の場合は Next Object
-  // ({Largest Object.Group, Largest Object.Object + 1}) を意味する (§5.1.2)
+  // 2 フィールド (絶対開始) または 3 / 4 フィールド
+  const start: Location = { group: filter.startGroup, object: filter.startObject };
   if (!("endGroupDelta" in filter)) {
-    let start: Location;
-    if (filter.startGroup === 0n && filter.startObject === 0n) {
-      // Next GroupStart と同様に、未配信時は {0, 0} から開始する
-      if (largestLocation === null) {
-        start = { group: 0n, object: 0n };
-      } else {
-        // Section 5.1.2: {Largest Object.Group, Largest Object.Object + 1}
-        start = { group: largestLocation.group, object: largestLocation.object + 1n };
-      }
-    } else {
-      // 絶対開始 (終端なし)
-      start = { group: filter.startGroup, object: filter.startObject };
-    }
-    return { start, endGroup: undefined, endObject: undefined };
+    // 2 フィールド: 絶対開始 (終端なし)
+    return { start, endGroup: undefined };
   }
 
   // 3 フィールド以上: 絶対開始 + End Group (StartGroup + EndGroupDelta)
-  const start: Location = { group: filter.startGroup, object: filter.startObject };
   const endGroup = filter.startGroup + filter.endGroupDelta;
   if (!("endObject" in filter)) {
     // 3 フィールド: End Object 省略は End Group 全件
-    return { start, endGroup, endObject: undefined };
+    return { start, endGroup };
   }
   // 4 フィールド: End Object 指定
   return { start, endGroup, endObject: filter.endObject };
@@ -148,8 +154,11 @@ export function objectMatchesFilter(
   }
   // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§5.1.2
   // "When EndObject is omitted, the filter includes all objects in the End Group.")
+  // endGroup が無いのに endObject だけ指定された ResolvedFilter に対しては
+  // 適用しない (endObject は endGroup に従属する設計。不変条件の防御)
   if (
     filter.endObject !== undefined &&
+    filter.endGroup !== undefined &&
     objectLocation.group === filter.endGroup &&
     objectLocation.object > filter.endObject
   ) {

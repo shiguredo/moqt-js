@@ -49,6 +49,7 @@ export {
   encodeLocationFilterParameter,
   encodeRangeFilter,
   encodeTrackName,
+  isNextObjectLocationFilter,
   encodeTrackNamespace,
   encodeUint8ParameterValue,
   getParameterLocationValue,

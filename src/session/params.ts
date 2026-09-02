@@ -463,12 +463,12 @@ export function buildRangeFilterParameters(rangeFilters: RangeFilterSpec[]): Par
 /**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-19 Section 10.2
+ * draft-ietf-moq-transport-20 Section 10.2
  */
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-19 Section 10.2.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-20 Section 10.2.9
   if (options?.filter !== undefined) {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }

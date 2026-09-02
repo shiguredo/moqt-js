@@ -295,7 +295,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 `Session.subscribe()` は以下を行う。
 
 1. `joiningFetch` がある場合に事前バリデーションする
-   - `filter` は `LargestObject` である必要がある
+   - `filter` は Next Object 形式 (`{ startGroup: 0n, startObject: 0n }`) である必要がある
    - `forward` は `false` にできない
 2. `SubscriberImpl` を仮の `trackAlias = 0n` で作る
 3. `SUBSCRIBE` を双方向ストリームで送る

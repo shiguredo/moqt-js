@@ -228,6 +228,51 @@ test("decodeLocationFilter: Length が data の末尾を超えると IncompleteD
 });
 
 /**
+ * Length 境界内の vi64 が data 末尾で切れるケース (Length は data 末尾まで
+ * 一致するが、varint が 2 バイト目を要求して足りない) は「次のチャンク待ち」
+ * ではなく Length との不一致による構造不正であり、ProtocolViolationError で
+ * 拒否される (IncompleteDataError をそのまま漏らさない)。
+ */
+test("decodeLocationFilter: Length 境界内の varint が data 末尾で切れると ProtocolViolationError", () => {
+  // Length=1 + 2 バイト必要な varint (0x80) が data 末尾で切れる
+  const data = new Uint8Array([1, 0x80]);
+  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2: LOCATION_FILTER のワイヤは
+ * [Type Delta=0x21][Length][fields...] の単一 Length 構造。
+ * Appendix A.1 (#1809) で「match the other filter parameters」と再構成されて
+ * おり、Range Filter (0x25-0x29) と同じ 1 Length 形式である。外側に Length を
+ * 付加して二重 Length にならないことをパラメータ全体のバイト列で固定する。
+ */
+test("LOCATION_FILTER パラメータはワイヤ上 1 Length 構造で round-trip する", () => {
+  const params = [encodeLocationFilterParameter({ startGroup: 3n })];
+  const encoded = encodeParameters(params);
+  // count=1, Type Delta=0x21, Length=1, StartGroup=3
+  assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x01, 0x03]));
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.deepEqual(decodeLocationFilterParameter(decoded[0]), { startGroup: 3n });
+});
+
+/**
+ * reset (Length 0) も同様に単一 Length 構造でワイヤ化される。
+ * [Type Delta=0x21][Length=0] (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
+ */
+test("LOCATION_FILTER reset はワイヤ上 Length=0 で round-trip する", () => {
+  const params = [encodeLocationFilterParameter({ reset: true })];
+  const encoded = encodeParameters(params);
+  // count=1, Type Delta=0x21, Length=0
+  assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x00]));
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.deepEqual(decodeLocationFilterParameter(decoded[0]), { reset: true });
+});
+
+/**
  * delta encoding のテスト
  * draft-ietf-moq-transport-19 Section 1.4.3 (Key-Value-Pair Structure):
  * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-1.4.3
