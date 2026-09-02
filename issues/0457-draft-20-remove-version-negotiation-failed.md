@@ -3,11 +3,11 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/remove-version-negotiation-failed
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
-draft-ietf-moq-transport-20 でセッションエラー `VERSION_NEGOTIATION_FAILED` が削除された (A.1 #1867)。未使用の定数を除去して仕様と揃える。
+draft-ietf-moq-transport-20 でセッションエラー `VERSION_NEGOTIATION_FAILED` が削除された (A.1 #1867)。公開 API にエクスポートされている `SessionErrorCode` から、使用箇所の無い当該メンバーを除去して仕様と揃える (破壊的変更)。
 
 ## 現状
 
@@ -22,8 +22,9 @@ draft-ietf-moq-transport-20 でセッションエラー `VERSION_NEGOTIATION_FAI
 ## 完了条件
 
 - `SessionErrorCode` に `VERSION_NEGOTIATION_FAILED` が無いこと。
+- 0x15 受信時の正規化挙動 (未知コード → INTERNAL_ERROR) が `normalizeSessionErrorCode` のコメントに反映され、テストされていること。
 - 参照漏れが無いこと (`rg` で確認)。
-- `CHANGES.md` の `## develop` に `[REMOVE]` があること。
+- `CHANGES.md` の `## develop` に `[CHANGE]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
