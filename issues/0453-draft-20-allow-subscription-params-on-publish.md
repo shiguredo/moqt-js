@@ -2,8 +2,8 @@
 
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
-- Branch: feature/change-allow-subscription-params-on-publish
-- Polished: {YYYY-MM-DD}
+- Branch: feature/update-allow-subscription-params-on-publish
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -19,13 +19,14 @@ draft-ietf-moq-transport-20 §10.11 / §10.20.1 では PUBLISH が Subscription 
 ## 設計方針
 
 - draft-20 §10.11 と各パラメータ定義を照合し、`PUBLISH_ALLOWED_PARAMS` を更新する。
-- 受信 PUBLISH 処理 (`src/session.ts`) で新たに許可したパラメータを必要なら状態に反映する (FORWARD / LOCATION_FILTER 等)。反映不要なものは受理のみでもよいが、仕様上 subscriber が使う値は反映する。
+- 受信 PUBLISH 処理 (`handleIncomingBidirectionalStream`) で新たに許可したパラメータのうち、subscription の状態に関わる LOCATION_FILTER は `SubscriberImpl.setLocationFilter` に反映する。OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY は publisher の初期値の通知であり状態反映はしない (受理のみ)。FORWARD は従来どおり Forward State に反映する。
 - 0452 (PUBLISH_OK から外す) と独立して進められるが、スコープ集合の意図が食い違わないよう両方の完了後に相互照合する。
 
 ## 完了条件
 
-- `PUBLISH_ALLOWED_PARAMS` が draft-20 の許可集合と一致すること。
+- `PUBLISH_ALLOWED_PARAMS` が draft-20 の許可集合と一致すること (既存 5 種 + OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER の 4 種追加。NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は含めない)。
 - draft-20 で許可される Subscription Parameters 付き PUBLISH を PROTOCOL_VIOLATION にせず受信できるテストがあること。
+- 受信 PUBLISH の LOCATION_FILTER が subscriber の Location Filter に反映されるテストがあること。
 - `CHANGES.md` の `## develop` に `[UPDATE]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
