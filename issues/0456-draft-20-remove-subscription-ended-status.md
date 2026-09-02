@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/remove-subscription-ended-status
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -24,8 +24,8 @@ draft-ietf-moq-transport-20 で PUBLISH_DONE の `SUBSCRIPTION_ENDED` (0x3) が�
 ## 完了条件
 
 - `PublishDoneStatusCode` に `SUBSCRIPTION_ENDED` が無いこと。
-- 0x3 受信時の正規化挙動が文書化・テストされていること。
-- `CHANGES.md` の `## develop` に `[REMOVE]` または `[UPDATE]` があること。
+- 0x3 受信時の正規化挙動 (未知コード → INTERNAL_ERROR) が `normalizePublishDoneCode` のコメントに反映され、テストされていること。
+- `CHANGES.md` の `## develop` に `[CHANGE]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
