@@ -1044,15 +1044,6 @@ export interface Session {
 }
 
 /**
- * Next Object 形式の Location Filter かどうかを判定する
- *
- * draft-ietf-moq-transport-20 §5.1.2: 2 フィールドで StartGroup = StartObject = 0
- * の場合は Start Location が Next Object (旧 LargestObject 相当) になる。
- * 3 フィールド以上は EndGroupDelta を持つため絶対指定として扱う。
- * (isNextObjectLocationFilter は src/message/parameter.ts から import)
- */
-
-/**
  * Location Filter をデバッグログ用の文字列に要約する
  */
 function describeLocationFilter(filter: LocationFilter | undefined): string | undefined {

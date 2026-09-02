@@ -90,13 +90,36 @@ const lengthPrefixedParameterArb = fc
  * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
  * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
+ * フィールド数 0 (reset) 〜 4 の全ケースを網羅する
+ * (parameter.prop.ts の locationFilterArb と同方針)。
  */
 const locationFilterParameterArb = fc
-  .record({
-    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
-    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
-  })
-  .map(({ startGroup, startObject }) => encodeLocationFilterParameter({ startGroup, startObject }));
+  .tuple(
+    fc.constantFrom(0, 1, 2, 3, 4),
+    fc.bigInt({ min: 0n, max: 1000000n }),
+    fc.bigInt({ min: 0n, max: 1000000n }),
+    fc.bigInt({ min: 0n, max: 1000000n }),
+    fc.bigInt({ min: 0n, max: 1000000n }),
+  )
+  .map(([count, startGroup, startObject, endGroupDelta, endObject]) => {
+    switch (count) {
+      case 0:
+        return encodeLocationFilterParameter({ reset: true });
+      case 1:
+        return encodeLocationFilterParameter({ startGroup });
+      case 2:
+        return encodeLocationFilterParameter({ startGroup, startObject });
+      case 3:
+        return encodeLocationFilterParameter({ startGroup, startObject, endGroupDelta });
+      default:
+        return encodeLocationFilterParameter({
+          startGroup,
+          startObject,
+          endGroupDelta,
+          endObject,
+        });
+    }
+  });
 
 const messageParameterArb: fc.Arbitrary<Parameter> = fc.oneof(
   varintParameterArb,
