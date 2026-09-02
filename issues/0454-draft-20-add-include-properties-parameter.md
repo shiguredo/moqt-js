@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-include-properties-parameter
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -17,15 +17,15 @@ draft-ietf-moq-transport-20 §10.2.21 の `INCLUDE_PROPERTIES` (0x35) を追加�
 
 ## 設計方針
 
-- `MessageParameterType.INCLUDE_PROPERTIES = 0x35` と encoding map、各メッセージの `build*Parameters` / スコープ集合を更新する。
-- 公開オプション (Subscribe / Fetch / Tracks 等) に `includeProperties?: boolean` を足し、0/1 をワイヤ化する。省略時はパラメータ自体を送らない (デフォルト 1 と同等)。
+- `MessageParameterType.INCLUDE_PROPERTIES = 0x35` を追加し、`MESSAGE_PARAMETER_VALUE_ENCODING` に uint8 として載せる。受信側の `*_ALLOWED_PARAMS` スコープ集合は、moqt-js が受信 SUBSCRIBE / FETCH / TRACK_STATUS / SUBSCRIBE_TRACKS を NOT_SUPPORTED で拒否するため存在せず、更新対象は送信側の `build*Parameters` のみ (既存スコープ集合へ誤って追加しないこと)。
+- 公開オプション (Subscribe / Fetch / Tracks / TrackStatus) に `includeProperties?: boolean` を足し、0/1 をワイヤ化する。省略時はパラメータ自体を送らない (デフォルト 1 と同等)。TRACK_STATUS は `trackStatus()` のオプションとして受け取る。
 - 受信側で 0/1 以外は PROTOCOL_VIOLATION。OK / PUBLISH 生成は、moqt-js が当該応答を生成する経路がある場合のみ空 Properties に従う。無い経路は送信オプションと受信検証まででよい。
 
 ## 完了条件
 
-- 0x35 の encode / decode / スコープ検証があること。
+- 0x35 の encode / decode があること。
 - 値 0/1 以外で PROTOCOL_VIOLATION になること。
-- SUBSCRIBE / FETCH / SUBSCRIBE_TRACKS (および TRACK_STATUS があれば) から送れること。
+- SUBSCRIBE / FETCH / SUBSCRIBE_TRACKS / TRACK_STATUS から送れること。
 - `CHANGES.md` の `## develop` に `[ADD]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
