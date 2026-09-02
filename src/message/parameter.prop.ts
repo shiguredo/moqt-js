@@ -159,7 +159,7 @@ const lengthPrefixedParameterArb = fc
 /**
  * LocationFilter の任意構築
  *
- * draft-ietf-moq-transport-20 §5.1.2: Length ベースのoptional フィールド
+ * draft-ietf-moq-transport-20 §5.1.2: Length ベースの optional フィールド
  * (フィールド数 0〜4) の union。
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(

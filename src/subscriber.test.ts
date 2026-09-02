@@ -412,13 +412,14 @@ test("setRangeFilters: 異なる Property Type は共存する", () => {
 
 // ============================================================================
 // Location Filter 再適用のテスト
-// draft-ietf-moq-transport-19 Section 5.1.2 (Location Filters)
+// draft-ietf-moq-transport-20 Section 5.1.2 (Location Filters)
 // ============================================================================
 
 /**
  * 実フローと同じ順序 (SUBSCRIBE 送信時の setLocationFilter → SUBSCRIBE_OK 受信時の
- * setLargestLocation) で、LargestObject フィルタの Start が
- * {Largest Object.Group, Largest Object.Object + 1} になることを検証する。
+ * setLargestLocation) で、Next Object 形式 ({ startGroup: 0n, startObject: 0n })
+ * フィルタの Start が {Largest Object.Group, Largest Object.Object + 1} になる
+ * ことを検証する。
  * LARGEST_OBJECT と同一 Location のオブジェクトがフィルタを通過して配信される
  * のは誤り (§5.1.2)。
  */
@@ -482,10 +483,10 @@ test("Location Filter 再適用: setLocationFilter 再適用後も LARGEST_OBJEC
 });
 
 /**
- * NextGroupStart フィルタの再適用: LARGEST_OBJECT の次の Group ({Group + 1, 0})
- * から配信されることを検証する。
+ * 1 フィールド (startGroup=0 のみ) の相対フィルタの再適用: LARGEST_OBJECT の
+ * 次の Group ({Group + 1, 0}) から配信されることを検証する。
  */
-test("Location Filter 再適用: NextGroupStart は LARGEST_OBJECT の次のグループから配信する", () => {
+test("Location Filter 再適用: startGroup=0 は LARGEST_OBJECT の次のグループから配信する", () => {
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
     delivered.push(obj),
