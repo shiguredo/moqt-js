@@ -7,7 +7,6 @@ export const RFC_FIELD_NAMES: Record<string, string> = {
   trackAlias: "Track Alias",
   trackNamespace: "Track Namespace",
   trackName: "Track Name",
-  filterType: "Filter Type",
   errorCode: "Error Code",
   reason: "Reason",
   statusCode: "Status Code",

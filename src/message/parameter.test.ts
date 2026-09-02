@@ -37,70 +37,119 @@ test("無効なパラメータタイプでエラー", () => {
   assert.throws(() => decodeLocationFilterParameter(invalidParam), "Invalid parameter type");
 });
 
-test("無効なフィルタタイプで ProtocolViolationError", () => {
-  const invalidData = new Uint8Array([0x10]);
-  assert.throws(() => decodeLocationFilter(invalidData), ProtocolViolationError);
+/**
+ * フィールド数 0 を表す Length 0 (バイト列 [0x00]) は reset としてデコードされ、
+ * エンコードも Length 0 に戻る (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
+ */
+test("decodeLocationFilter: Length 0 は reset として round-trip する", () => {
+  const encoded = encodeLocationFilter({ reset: true });
+  assert.deepEqual(encoded, new Uint8Array([0x00]));
+  const [filter, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(filter, { reset: true });
+  assert.equal(consumed, encoded.length);
 });
 
 /**
- * AbsoluteRange の End Group (Start Location の Group + End Group Delta) が
- * 2^64-1 を超える受信データは draft-ietf-moq-transport-19 §5.1.2 の MUST
- * 「If the resulting Group ID would be greater than 2^64 - 1, the endpoint
- * MUST close the session with a PROTOCOL_VIOLATION.」に従い
- * ProtocolViolationError で拒否される。
- * End Group 計算自体は bigint のためオーバーフローせず、超過値がそのまま
- * フィルタ解決へ流れ込むのをデコード段階で止めることを検証する。
+ * 1 フィールド (StartGroup のみ) は相対指定。Length は StartGroup のバイト長。
  */
-test("decodeLocationFilter: AbsoluteRange の End Group が 2^64-1 を超えると ProtocolViolationError", () => {
-  // Filter Type=0x04 (AbsoluteRange) + Group=MAX_VARINT + Object=0 + End Group Delta=1
+test("decodeLocationFilter: 1 フィールド (StartGroup) が round-trip する", () => {
+  const filter: LocationFilter = { startGroup: 3n };
+  const encoded = encodeLocationFilter(filter);
+  // 先頭バイトが Length = 1 (StartGroup は 1 バイトで表現可能)
+  assert.equal(encoded[0], 1);
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * 2 フィールド (StartGroup + StartObject) は絶対開始または Next Object。
+ * Length は 2 つの vi64 の合計バイト長であり、フィールド数そのものではない
+ * (Length=2 を「2 フィールド」と解釈しない)。
+ */
+test("decodeLocationFilter: 2 フィールド (StartGroup + StartObject) が round-trip する", () => {
+  const filter: LocationFilter = { startGroup: 5n, startObject: 7n };
+  const encoded = encodeLocationFilter(filter);
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * 3 フィールド (StartGroup + StartObject + EndGroupDelta) が round-trip する。
+ */
+test("decodeLocationFilter: 3 フィールド (EndGroupDelta あり) が round-trip する", () => {
+  const filter: LocationFilter = { startGroup: 5n, startObject: 7n, endGroupDelta: 3n };
+  const encoded = encodeLocationFilter(filter);
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * 4 フィールド (StartGroup + StartObject + EndGroupDelta + EndObject) が
+ * round-trip する。
+ */
+test("decodeLocationFilter: 4 フィールド (EndObject あり) が round-trip する", () => {
+  const filter: LocationFilter = {
+    startGroup: 5n,
+    startObject: 7n,
+    endGroupDelta: 3n,
+    endObject: 9n,
+  };
+  const encoded = encodeLocationFilter(filter);
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * 3/4 フィールドで End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える
+ * 受信データは draft-ietf-moq-transport-20 §5.1.2 の MUST
+ * 「If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close
+ *  the session with a PROTOCOL_VIOLATION.」に従い ProtocolViolationError で
+ * 拒否される。
+ */
+test("decodeLocationFilter: End Group が 2^64-1 を超えると ProtocolViolationError", () => {
+  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
-  const data = new Uint8Array([
-    ...encodeVarint(0x04n),
-    ...encodeVarint(MAX_VARINT),
-    ...encodeVarint(0n),
-    ...encodeVarint(1n),
-  ]);
+  const fields = [...encodeVarint(MAX_VARINT), ...encodeVarint(0n), ...encodeVarint(1n)];
+  const data = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
   assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
 });
 
 /**
- * End Group がちょうど 2^64-1 の AbsoluteRange は仕様上の有効値であり受理される。
+ * End Group がちょうど 2^64-1 の 3 フィールド表現は仕様上の有効値であり受理される。
  * 「2^64-1 を超える場合」のみ拒否する境界の向きを検証する。
  */
-test("decodeLocationFilter: AbsoluteRange の End Group がちょうど 2^64-1 は受理される", () => {
-  // Filter Type=0x04 (AbsoluteRange) + Group=MAX_VARINT-5 + Object=7 + End Group Delta=5
+test("decodeLocationFilter: End Group がちょうど 2^64-1 は受理される", () => {
+  // StartGroup=MAX_VARINT-5 + StartObject=7 + EndGroupDelta=5
   // End Group = MAX_VARINT-5+5 = 2^64-1 ちょうど
-  const data = new Uint8Array([
-    ...encodeVarint(0x04n),
-    ...encodeVarint(MAX_VARINT - 5n),
-    ...encodeVarint(7n),
-    ...encodeVarint(5n),
-  ]);
-  const [filter, consumed] = decodeLocationFilter(data);
-  assert.equal(filter.type, "AbsoluteRange");
-  if (filter.type === "AbsoluteRange") {
-    assert.equal(filter.startLocation.group, MAX_VARINT - 5n);
-    assert.equal(filter.startLocation.object, 7n);
-    assert.equal(filter.endGroupDelta, 5n);
-  }
-  assert.equal(consumed, data.length);
+  const filter: LocationFilter = {
+    startGroup: MAX_VARINT - 5n,
+    startObject: 7n,
+    endGroupDelta: 5n,
+  };
+  const encoded = encodeLocationFilter(filter);
+  const [decoded, consumed] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
+  assert.equal(consumed, encoded.length);
 });
 
 /**
  * End Group Delta が単体で varint 域の最大値 (2^64-1。9 バイト表現) で
- * Start Location の Group が 0 の場合、和はちょうど 2^64-1 であり受理される。
+ * Start Group が 0 の場合、和はちょうど 2^64-1 であり受理される。
  * delta 側から和の境界 (ちょうど 2^64-1 は有効) を検証する。
  */
-test("decodeLocationFilter: AbsoluteRange の End Group Delta 単体が最大値でも Group が 0 なら受理される", () => {
-  // Filter Type=0x04 (AbsoluteRange) + Group=0 + Object=0 + End Group Delta=MAX_VARINT
-  const data = new Uint8Array([
-    ...encodeVarint(0x04n),
-    ...encodeVarint(0n),
-    ...encodeVarint(0n),
-    ...encodeVarint(MAX_VARINT),
-  ]);
-  const [filter] = decodeLocationFilter(data);
-  assert.equal(filter.type, "AbsoluteRange");
+test("decodeLocationFilter: End Group Delta 単体が最大値でも Group が 0 なら受理される", () => {
+  const filter: LocationFilter = {
+    startGroup: 0n,
+    startObject: 0n,
+    endGroupDelta: MAX_VARINT,
+  };
+  const encoded = encodeLocationFilter(filter);
+  const [decoded] = decodeLocationFilter(encoded);
+  assert.deepEqual(decoded, filter);
 });
 
 /**
@@ -108,46 +157,24 @@ test("decodeLocationFilter: AbsoluteRange の End Group Delta 単体が最大値
  * 超えるため ProtocolViolationError で拒否される。超過判定が delta 単体で
  * なく和であること (「End Group Delta だけを見る」実装誤りへのガード) を検証する。
  */
-test("decodeLocationFilter: AbsoluteRange は Group が 1 以上で End Group Delta が単体最大なら ProtocolViolationError", () => {
-  // Filter Type=0x04 (AbsoluteRange) + Group=1 + Object=0 + End Group Delta=MAX_VARINT
+test("decodeLocationFilter: Group が 1 以上で End Group Delta が単体最大なら ProtocolViolationError", () => {
+  // StartGroup=1 + StartObject=0 + EndGroupDelta=MAX_VARINT
   // End Group = 1 + MAX_VARINT で 2^64-1 超過
-  const data = new Uint8Array([
-    ...encodeVarint(0x04n),
-    ...encodeVarint(1n),
-    ...encodeVarint(0n),
-    ...encodeVarint(MAX_VARINT),
-  ]);
+  const fields = [...encodeVarint(1n), ...encodeVarint(0n), ...encodeVarint(MAX_VARINT)];
+  const data = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
   assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
 });
 
 /**
- * End Group Delta が 0 (Start Location の Group の残りが対象。§5.1.2) で
- * Group 単体が 2^64-1 の場合、和も 2^64-1 ちょうどであり受理される。
- * delta=0 と最大 Group の組合せにおける境界の向き (拒否は `>` であり `>=`
- * ではないこと) を検証する。
- */
-test("decodeLocationFilter: AbsoluteRange の Group が 2^64-1 で End Group Delta が 0 は受理される", () => {
-  // Filter Type=0x04 (AbsoluteRange) + Group=MAX_VARINT + Object=0 + End Group Delta=0
-  const data = new Uint8Array([
-    ...encodeVarint(0x04n),
-    ...encodeVarint(MAX_VARINT),
-    ...encodeVarint(0n),
-    ...encodeVarint(0n),
-  ]);
-  const [filter] = decodeLocationFilter(data);
-  assert.equal(filter.type, "AbsoluteRange");
-});
-
-/**
- * 送信側でも同一規則を適用する。End Group が 2^64-1 を超える AbsoluteRange は
- * 受信した endpoint を PROTOCOL_VIOLATION でセッション終了させるため、
+ * 送信側でも同一規則を適用する。End Group が 2^64-1 を超える 3/4 フィールド
+ * 表現は受信した endpoint を PROTOCOL_VIOLATION でセッション終了させるため、
  * encodeLocationFilter が InvalidFilterError で送信前に throw する (§5.1.2)。
  */
-test("encodeLocationFilter: AbsoluteRange の End Group が 2^64-1 を超えると InvalidFilterError", () => {
+test("encodeLocationFilter: End Group が 2^64-1 を超えると InvalidFilterError", () => {
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
   const filter: LocationFilter = {
-    type: "AbsoluteRange",
-    startLocation: { group: MAX_VARINT, object: 0n },
+    startGroup: MAX_VARINT,
+    startObject: 0n,
     endGroupDelta: 1n,
   };
   assert.throws(() => encodeLocationFilter(filter), InvalidFilterError);
@@ -157,35 +184,92 @@ test("encodeLocationFilter: AbsoluteRange の End Group が 2^64-1 を超える�
  * LOCATION_FILTER パラメータとしてのエンコード経路
  * (encodeLocationFilterParameter) でも同一の送信前検証が効くことを検証する。
  */
-test("encodeLocationFilterParameter: AbsoluteRange の End Group が 2^64-1 を超えると InvalidFilterError", () => {
+test("encodeLocationFilterParameter: End Group が 2^64-1 を超えると InvalidFilterError", () => {
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
   const filter: LocationFilter = {
-    type: "AbsoluteRange",
-    startLocation: { group: MAX_VARINT - 1n, object: 0n },
+    startGroup: MAX_VARINT - 1n,
+    startObject: 0n,
     endGroupDelta: 2n,
   };
   assert.throws(() => encodeLocationFilterParameter(filter), InvalidFilterError);
 });
 
 /**
- * End Group がちょうど 2^64-1 の AbsoluteRange は送信でき、受信側も受理する
- * (送信前検証が境界値を過剰に拒否しないこと、および encode/decode の
- * 検証条件が一致してラウンドトリップすることを検証する)。
+ * Length が示す範囲に 4 つより多くの vi64 フィールドが含まれる場合
+ * (Length が 4 フィールドの消費バイト数を超えて余りが残る) は
+ * PROTOCOL_VIOLATION で拒否される。
+ * 例: Length=5 に 1 バイト varint を 5 個詰めたワイヤ (フィールド数 5)。
  */
-test("encodeLocationFilter: AbsoluteRange の End Group がちょうど 2^64-1 は round-trip する", () => {
-  // End Group = MAX_VARINT-3+3 = 2^64-1 ちょうど
-  const filter: LocationFilter = {
-    type: "AbsoluteRange",
-    startLocation: { group: MAX_VARINT - 3n, object: 0n },
-    endGroupDelta: 3n,
-  };
-  const encoded = encodeLocationFilter(filter);
-  const [decoded] = decodeLocationFilter(encoded);
-  assert.equal(decoded.type, "AbsoluteRange");
-  if (decoded.type === "AbsoluteRange") {
-    assert.equal(decoded.startLocation.group, MAX_VARINT - 3n);
-    assert.equal(decoded.endGroupDelta, 3n);
-  }
+test("decodeLocationFilter: フィールド数 4 超の Length は ProtocolViolationError", () => {
+  // Length=5 + 1 バイト varint × 5 = フィールド 5 個
+  const data = new Uint8Array([5, 0, 0, 0, 0, 0]);
+  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+});
+
+/**
+ * vi64 フィールドが Length 境界を跨ぐ場合 (Length が示すバイト数と実際の
+ * フィールド消費バイト数が不一致) は PROTOCOL_VIOLATION で拒否される。
+ * 例: Length=1 に対して 2 バイト必要な varint (0x80 0x00) を 1 個置いたワイヤ。
+ */
+test("decodeLocationFilter: Length と消費バイト数の不一致は ProtocolViolationError", () => {
+  // Length=1 + 2 バイト varint (0x80 0x00)。Length 境界を跨ぐ
+  const data = new Uint8Array([1, 0x80, 0x00]);
+  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+});
+
+/**
+ * Length が data の末尾を超える場合は不完全データとして扱う。
+ * (IncompleteDataError。decodeVarint と同じ「次のチャンクを待つ」意味論)
+ */
+test("decodeLocationFilter: Length が data の末尾を超えると IncompleteDataError", () => {
+  // Length=2 に対して StartGroup のみ (1 バイト) しか無い
+  const data = new Uint8Array([2, 0]);
+  assert.throws(() => decodeLocationFilter(data), "incomplete location filter");
+});
+
+/**
+ * Length 境界内の vi64 が data 末尾で切れるケース (Length は data 末尾まで
+ * 一致するが、varint が 2 バイト目を要求して足りない) は「次のチャンク待ち」
+ * ではなく Length との不一致による構造不正であり、ProtocolViolationError で
+ * 拒否される (IncompleteDataError をそのまま漏らさない)。
+ */
+test("decodeLocationFilter: Length 境界内の varint が data 末尾で切れると ProtocolViolationError", () => {
+  // Length=1 + 2 バイト必要な varint (0x80) が data 末尾で切れる
+  const data = new Uint8Array([1, 0x80]);
+  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2: LOCATION_FILTER のワイヤは
+ * [Type Delta=0x21][Length][fields...] の単一 Length 構造。
+ * Appendix A.1 (#1809) で「match the other filter parameters」と再構成されて
+ * おり、Range Filter (0x25-0x29) と同じ 1 Length 形式である。外側に Length を
+ * 付加して二重 Length にならないことをパラメータ全体のバイト列で固定する。
+ */
+test("LOCATION_FILTER パラメータはワイヤ上 1 Length 構造で round-trip する", () => {
+  const params = [encodeLocationFilterParameter({ startGroup: 3n })];
+  const encoded = encodeParameters(params);
+  // count=1, Type Delta=0x21, Length=1, StartGroup=3
+  assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x01, 0x03]));
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.deepEqual(decodeLocationFilterParameter(decoded[0]), { startGroup: 3n });
+});
+
+/**
+ * reset (Length 0) も同様に単一 Length 構造でワイヤ化される。
+ * [Type Delta=0x21][Length=0] (REQUEST_UPDATE でのフィルタ除去のワイヤ)。
+ */
+test("LOCATION_FILTER reset はワイヤ上 Length=0 で round-trip する", () => {
+  const params = [encodeLocationFilterParameter({ reset: true })];
+  const encoded = encodeParameters(params);
+  // count=1, Type Delta=0x21, Length=0
+  assert.deepEqual(encoded, new Uint8Array([1, 0x21, 0x00]));
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.length, 1);
+  assert.deepEqual(decodeLocationFilterParameter(decoded[0]), { reset: true });
 });
 
 /**

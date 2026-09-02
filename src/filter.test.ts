@@ -1,6 +1,6 @@
 /**
  * Location Filter マッチングの単体テスト
- * draft-ietf-moq-transport-19 Section 5.1.2 (Location Filter)
+ * draft-ietf-moq-transport-20 Section 5.1.2 (Location Filter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -13,6 +13,7 @@ import {
 import type { Location } from "./message/types";
 import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import { encodeProperties, type Property } from "./properties";
+import { MAX_VARINT } from "./varint";
 
 // ============================================================================
 // resolveFilter のテスト
@@ -27,43 +28,56 @@ test("resolveFilter: filter 省略時は undefined", () => {
 });
 
 /**
- * AbsoluteStart は指定された Location をそのまま start にする。
+ * reset (Length 0) はフィルタなし扱い (undefined) に解決される
+ * (REQUEST_UPDATE でのフィルタ除去)。
  */
-test("resolveFilter: AbsoluteStart は指定 Location を start にする", () => {
+test("resolveFilter: reset は undefined に解決される", () => {
+  const result = resolveFilter({ reset: true }, { group: 10n, object: 5n });
+  assert.isUndefined(result);
+});
+
+/**
+ * 2 フィールド (startGroup + startObject) は指定された絶対 Location を
+ * そのまま start にする (終端なし)。
+ */
+test("resolveFilter: 2 フィールドは絶対 Location を start にする", () => {
   const filter: LocationFilter = {
-    type: "AbsoluteStart",
-    startLocation: { group: 5n, object: 3n },
+    startGroup: 5n,
+    startObject: 3n,
   };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
   assert.equal(result.start.group, 5n);
   assert.equal(result.start.object, 3n);
   assert.isUndefined(result.endGroup);
+  assert.isUndefined(result.endObject);
 });
 
 /**
- * AbsoluteRange は End Group = Start.Group + EndGroupDelta。
+ * 3 フィールド (startGroup + startObject + endGroupDelta) は
+ * End Group = StartGroup + EndGroupDelta。
  * Delta = 0 は当該 Group のみが対象。
  */
-test("resolveFilter: AbsoluteRange の End Group は Start.Group + Delta", () => {
+test("resolveFilter: 3 フィールドの End Group は StartGroup + Delta", () => {
   const filter: LocationFilter = {
-    type: "AbsoluteRange",
-    startLocation: { group: 5n, object: 0n },
+    startGroup: 5n,
+    startObject: 0n,
     endGroupDelta: 3n,
   };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
   assert.equal(result.start.group, 5n);
   assert.equal(result.endGroup, 8n);
+  assert.isUndefined(result.endObject);
 });
 
 /**
- * AbsoluteRange で Delta = 0 は当該 Group のみ。
+ * 3 フィールドで Delta = 0 は当該 Group のみ。
  */
-test("resolveFilter: AbsoluteRange で Delta 0 は当該 Group のみ", () => {
+test("resolveFilter: 3 フィールドで Delta 0 は当該 Group のみ", () => {
   const filter: LocationFilter = {
-    type: "AbsoluteRange",
-    startLocation: { group: 5n, object: 2n },
+    startGroup: 5n,
+    startObject: 2n,
     endGroupDelta: 0n,
   };
   const result = resolveFilter(filter, null);
@@ -72,11 +86,28 @@ test("resolveFilter: AbsoluteRange で Delta 0 は当該 Group のみ", () => {
 });
 
 /**
- * NextGroupStart は LARGEST_OBJECT の Group + 1 から開始。
- * LARGEST_OBJECT 未受信（コンテンツ未配信）時は {0, 0} から開始する。
+ * 4 フィールド (endObject あり) は End Group に加えて End Object を保持する。
  */
-test("resolveFilter: NextGroupStart は LARGEST_OBJECT の Group + 1", () => {
-  const filter: LocationFilter = { type: "NextGroupStart" };
+test("resolveFilter: 4 フィールドは End Object を保持する", () => {
+  const filter: LocationFilter = {
+    startGroup: 5n,
+    startObject: 2n,
+    endGroupDelta: 3n,
+    endObject: 9n,
+  };
+  const result = resolveFilter(filter, null);
+  assert.isDefined(result);
+  assert.equal(result.endGroup, 8n);
+  assert.equal(result.endObject, 9n);
+});
+
+/**
+ * 1 フィールド (startGroup のみ) は相対指定。Start Group = LARGEST_OBJECT の
+ * Group + 1 - StartGroup。startGroup = 0 は Next Group (= LARGEST_OBJECT の
+ * Group + 1)。
+ */
+test("resolveFilter: 1 フィールド startGroup=0 は LARGEST_OBJECT の Group + 1", () => {
+  const filter: LocationFilter = { startGroup: 0n };
   const result = resolveFilter(filter, { group: 10n, object: 5n });
   assert.isDefined(result);
   assert.equal(result.start.group, 11n);
@@ -85,10 +116,10 @@ test("resolveFilter: NextGroupStart は LARGEST_OBJECT の Group + 1", () => {
 });
 
 /**
- * NextGroupStart で LARGEST_OBJECT 未受信時（コンテンツ未配信）は {0, 0} から開始する。
+ * 1 フィールドで LARGEST_OBJECT 未受信時（コンテンツ未配信）は {0, 0} から開始する。
  */
-test("resolveFilter: NextGroupStart で LARGEST_OBJECT 未受信時は {0, 0}", () => {
-  const filter: LocationFilter = { type: "NextGroupStart" };
+test("resolveFilter: 1 フィールドで LARGEST_OBJECT 未受信時は {0, 0}", () => {
+  const filter: LocationFilter = { startGroup: 0n };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
   assert.equal(result.start.group, 0n);
@@ -96,10 +127,37 @@ test("resolveFilter: NextGroupStart で LARGEST_OBJECT 未受信時は {0, 0}", 
 });
 
 /**
- * LargestObject は LARGEST_OBJECT の次のオブジェクト（{Group, Object + 1}）から開始する。
+ * 1 フィールドの相対計算で Start Group が負値になる場合は 0 にクランプされる
+ * (draft-ietf-moq-transport-20 Section 5.1.2)。
  */
-test("resolveFilter: LargestObject は LARGEST_OBJECT の次のオブジェクトから開始", () => {
-  const filter: LocationFilter = { type: "LargestObject" };
+test("resolveFilter: 1 フィールドの相対計算で負値は 0 にクランプされる", () => {
+  // Largest = {2, 5} のとき startGroup=5 は 2 + 1 - 5 = -2 → 0 にクランプ
+  const filter: LocationFilter = { startGroup: 5n };
+  const result = resolveFilter(filter, { group: 2n, object: 5n });
+  assert.isDefined(result);
+  assert.equal(result.start.group, 0n);
+  assert.equal(result.start.object, 0n);
+});
+
+/**
+ * 1 フィールドの相対計算で Start Group が 2^64-1 を超える場合は 2^64-1 に
+ * クランプされる (draft-ietf-moq-transport-20 Section 5.1.2 の上端クランプ)。
+ */
+test("resolveFilter: 1 フィールドの相対計算で 2^64-1 超過は 2^64-1 にクランプされる", () => {
+  // Largest = {MAX_VARINT, 0} のとき startGroup=0 は MAX_VARINT + 1 → 2^64-1 にクランプ
+  const filter: LocationFilter = { startGroup: 0n };
+  const result = resolveFilter(filter, { group: MAX_VARINT, object: 0n });
+  assert.isDefined(result);
+  assert.equal(result.start.group, MAX_VARINT);
+  assert.equal(result.start.object, 0n);
+});
+
+/**
+ * 2 フィールドで startGroup = startObject = 0 は Next Object
+ * （LARGEST_OBJECT の次のオブジェクト {Group, Object + 1}）から開始する。
+ */
+test("resolveFilter: 2 フィールド 0:0 は LARGEST_OBJECT の次のオブジェクトから開始", () => {
+  const filter: LocationFilter = { startGroup: 0n, startObject: 0n };
   const result = resolveFilter(filter, { group: 7n, object: 2n });
   assert.isDefined(result);
   assert.equal(result.start.group, 7n);
@@ -108,10 +166,10 @@ test("resolveFilter: LargestObject は LARGEST_OBJECT の次のオブジェク�
 });
 
 /**
- * LargestObject で LARGEST_OBJECT = {0, 0} 配信済み時は {0, 1} から開始する。
+ * 2 フィールド 0:0 で LARGEST_OBJECT = {0, 0} 配信済み時は {0, 1} から開始する。
  */
-test("resolveFilter: LargestObject で LARGEST_OBJECT {0, 0} 時は {0, 1}", () => {
-  const filter: LocationFilter = { type: "LargestObject" };
+test("resolveFilter: 2 フィールド 0:0 で LARGEST_OBJECT {0, 0} 時は {0, 1}", () => {
+  const filter: LocationFilter = { startGroup: 0n, startObject: 0n };
   const result = resolveFilter(filter, { group: 0n, object: 0n });
   assert.isDefined(result);
   assert.equal(result.start.group, 0n);
@@ -119,12 +177,12 @@ test("resolveFilter: LargestObject で LARGEST_OBJECT {0, 0} 時は {0, 1}", () 
 });
 
 /**
- * NextGroupStart で LARGEST_OBJECT = {0, 0} のときは {1, 0} から開始する。
+ * 1 フィールド startGroup=0 で LARGEST_OBJECT = {0, 0} のときは {1, 0} から開始する。
  * 未配信時 = {0, 0} と start が隣接する境界であり、未配信判定を値 ({0, 0}) で
  * 書く誤りを検出できる。
  */
-test("resolveFilter: NextGroupStart で LARGEST_OBJECT {0, 0} 時は {1, 0}", () => {
-  const filter: LocationFilter = { type: "NextGroupStart" };
+test("resolveFilter: 1 フィールド startGroup=0 で LARGEST_OBJECT {0, 0} 時は {1, 0}", () => {
+  const filter: LocationFilter = { startGroup: 0n };
   const result = resolveFilter(filter, { group: 0n, object: 0n });
   assert.isDefined(result);
   assert.equal(result.start.group, 1n);
@@ -132,10 +190,10 @@ test("resolveFilter: NextGroupStart で LARGEST_OBJECT {0, 0} 時は {1, 0}", ()
 });
 
 /**
- * LargestObject で LARGEST_OBJECT 未受信時は {0, 0}。
+ * 2 フィールド 0:0 で LARGEST_OBJECT 未受信時は {0, 0}。
  */
-test("resolveFilter: LargestObject で LARGEST_OBJECT 未受信時は {0, 0}", () => {
-  const filter: LocationFilter = { type: "LargestObject" };
+test("resolveFilter: 2 フィールド 0:0 で LARGEST_OBJECT 未受信時は {0, 0}", () => {
+  const filter: LocationFilter = { startGroup: 0n, startObject: 0n };
   const result = resolveFilter(filter, null);
   assert.isDefined(result);
   assert.equal(result.start.group, 0n);
@@ -206,6 +264,32 @@ test("objectMatchesFilter: End Group = Start.Group は当該 Group のみ", () =
   assert.isTrue(objectMatchesFilter({ group: 5n, object: 10n }, filter));
   assert.isFalse(objectMatchesFilter({ group: 6n, object: 0n }, filter));
   assert.isFalse(objectMatchesFilter({ group: 5n, object: 1n }, filter));
+});
+
+/**
+ * End Object があるとき、End Group 内で Object > End Object は不通過。
+ * (draft-ietf-moq-transport-20 §5.1.2 "When EndObject is omitted, the filter
+ *  includes all objects in the End Group." の対偶)
+ */
+test("objectMatchesFilter: End Object 超過は不通過", () => {
+  const filter = { start: { group: 5n, object: 0n }, endGroup: 8n, endObject: 9n };
+  // End Group 内で End Object 以下
+  assert.isTrue(objectMatchesFilter({ group: 8n, object: 9n }, filter));
+  assert.isTrue(objectMatchesFilter({ group: 7n, object: 100n }, filter));
+  // End Group 内で End Object 超過
+  assert.isFalse(objectMatchesFilter({ group: 8n, object: 10n }, filter));
+});
+
+/**
+ * End Object は End Group にのみ適用される。
+ * End Group より前の Group は End Object の影響を受けない。
+ */
+test("objectMatchesFilter: End Object は End Group のみに適用される", () => {
+  const filter = { start: { group: 5n, object: 0n }, endGroup: 8n, endObject: 9n };
+  // End Group より前の Group は全 Object 通過
+  assert.isTrue(objectMatchesFilter({ group: 6n, object: 500n }, filter));
+  // End Group 超過は従来どおり不通過
+  assert.isFalse(objectMatchesFilter({ group: 9n, object: 0n }, filter));
 });
 
 // ============================================================================

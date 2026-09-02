@@ -395,19 +395,19 @@ test("buildSubscribeParameters: 正常な rangeFilters はエンコードされ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
+ * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
  * SUBSCRIBE 送信経路 (buildSubscribeParameters → encodeLocationFilterParameter)
  * でも End Group の 2^64-1 超過検証が効き、InvalidFilterError が throw される
  * ことを検証する。境界値 (ちょうど 2^64-1) は過剰拒否せず LOCATION_FILTER
  * パラメータとしてエンコードされる。
  */
-test("buildSubscribeParameters: AbsoluteRange の End Group が 2^64-1 を超えると InvalidFilterError", () => {
+test("buildSubscribeParameters: 3 フィールドの End Group が 2^64-1 を超えると InvalidFilterError", () => {
   assert.throws(
     () =>
       buildSubscribeParameters({
         filter: {
-          type: "AbsoluteRange",
-          startLocation: { group: MAX_VARINT, object: 0n },
+          startGroup: MAX_VARINT,
+          startObject: 0n,
           endGroupDelta: 1n,
         },
       }),
@@ -415,11 +415,11 @@ test("buildSubscribeParameters: AbsoluteRange の End Group が 2^64-1 を超え
   );
 });
 
-test("buildSubscribeParameters: AbsoluteRange の End Group がちょうど 2^64-1 は LOCATION_FILTER になる", () => {
+test("buildSubscribeParameters: 3 フィールドの End Group がちょうど 2^64-1 は LOCATION_FILTER になる", () => {
   const parameters = buildSubscribeParameters({
     filter: {
-      type: "AbsoluteRange",
-      startLocation: { group: MAX_VARINT - 1n, object: 0n },
+      startGroup: MAX_VARINT - 1n,
+      startObject: 0n,
       endGroupDelta: 1n,
     },
   });

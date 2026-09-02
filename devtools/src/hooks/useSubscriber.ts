@@ -488,8 +488,9 @@ export function useSubscriber(
                 },
               },
               {
-                // draft-ietf-moq-transport-19: LargestObject フィルターで SUBSCRIBE
-                // joiningFetch を使用して、LARGEST_OBJECT がある場合は FETCH で取得
+                // Next Object 形式 ({ startGroup: 0n, startObject: 0n }) の
+                // Location Filter で SUBSCRIBE する。joiningFetch を使用して、
+                // LARGEST_OBJECT がある場合は FETCH で取得
                 // LARGEST_OBJECT がない場合は Joining FETCH は送信されず、リアルタイム配信を待つ
                 joiningFetch: {
                   type: "absolute",

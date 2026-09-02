@@ -5,7 +5,6 @@
 
 // 型定義
 export {
-  FilterType,
   GroupOrder,
   type Location,
   MessageParameterType,
@@ -50,6 +49,7 @@ export {
   encodeLocationFilterParameter,
   encodeRangeFilter,
   encodeTrackName,
+  isNextObjectLocationFilter,
   encodeTrackNamespace,
   encodeUint8ParameterValue,
   getParameterLocationValue,
