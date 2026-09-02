@@ -248,18 +248,6 @@ export const GroupOrder = {
 export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
 
 /**
- * Location Filter Types (Section 5.1.2 Location Filters)
- */
-export const FilterType = {
-  NEXT_GROUP_START: 0x01,
-  LARGEST_OBJECT: 0x02,
-  ABSOLUTE_START: 0x03,
-  ABSOLUTE_RANGE: 0x04,
-} as const;
-
-export type FilterType = (typeof FilterType)[keyof typeof FilterType];
-
-/**
  * Object Status (Section 11.2.1.1 Object Status)
  *
  * draft-ietf-moq-transport-19:

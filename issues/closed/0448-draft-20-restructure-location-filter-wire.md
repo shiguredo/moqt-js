@@ -1,7 +1,7 @@
 # Location Filter を draft-20 の Length ベースワイヤに合わせて再構成する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-02
 - Branch: feature/change-restructure-location-filter-wire
 - Polished: 2026-09-01
 
@@ -45,3 +45,17 @@ draft-ietf-moq-transport-20 §5.1.2 / §10.2.9 で Location Filter のワイヤ�
 - draft-ietf-moq-transport-20 Appendix A.1 (#1809)
 - 後続: `issues/0449-draft-20-change-fetch-to-location-filter-remove-joining.md`
 - 後続: `issues/0450-draft-20-add-fill-parameters-and-fill-fetch.md`
+
+## 解決方法
+
+draft-20 §5.1.2 の Length ベースワイヤ (フィールド数 0〜4) に合わせて Location Filter を再構成した。
+
+- `src/message/parameter.ts`: 公開型 `LocationFilter` をフィールド有無ベースの union (`{ reset: true }` / `{ startGroup }` / `{ startGroup, startObject }` / `+ endGroupDelta` / `+ endObject`) に再設計。`encodeLocationFilter` / `decodeLocationFilter` を Length (バイト長) プレフィックス方式に書き直し、Length 0 を `reset` として明示サポートした。不正 Length (フィールド数 4 超・Length 境界跨ぎ・境界内で varint が切れる) は ProtocolViolationError、送信側の End Group (StartGroup + EndGroupDelta) 2^64-1 超過は InvalidFilterError で拒否する。
+- `src/message/parameter.ts` の `MESSAGE_PARAMETER_VALUE_ENCODING`: `0x21` を Range Filter と同じ `self-length-prefixed` (単一 Length 構造) に変更し、外側 Length を付加しないワイヤに修正した (Appendix A.1 #1809 の「match the other filter parameters」)。
+- `src/filter.ts`: `ResolvedFilter` に `endObject` を追加し、`resolveFilter` を新意味論 (1 フィールド相対 / 2 フィールド 0:0 の Next Object / 3・4 フィールド絶対) に更新。相対計算の上下端 (0 / 2^64-1) クランプと `objectMatchesFilter` の End Object 評価を実装した。
+- `src/session.ts`: joiningFetch の旧 LargestObject 検証を Next Object 形式判定 (`isNextObjectLocationFilter`) に置き換え、デバッグログのフィールドを新表現に追随させた。`isNextObjectLocationFilter` は `src/message/parameter.ts` に共通ヘルパとして export した。
+- `src/message/types.ts` / `src/message/index.ts`: `FilterType` 定数と export を削除した。
+- テスト: `parameter.test.ts` に Length 0/1/2/3/4 の round-trip、ワイヤ固定バイト列 (単一 Length 構造)、不正 Length 4 種、End Group 境界 2^64-1 のテストを追加。`filter.test.ts` に新旧意味論・上下端クランプ・End Object 評価のテストを更新。プロパティテスト (`parameter.prop.ts` / `session.prop.ts` / メッセージ系 prop 6 ファイル) を新ワイヤ生成に追随させた。
+- `README.md` / `docs/LOW_LEVEL_API.md` / devtools の旧 Filter 表現・死んだフィールド名マッピングを新形式に更新した。
+- `CHANGES.md` の `## develop` に `[CHANGE]` を追記した。
+- `vp check` / `tsc --noEmit` / `vp test run` / `vp run build` すべて通過。

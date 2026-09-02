@@ -46,19 +46,23 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
  * LocationFilter の任意構築
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
-  fc.constant({ type: "NextGroupStart" as const }),
-  fc.constant({ type: "LargestObject" as const }),
-  locationArb.map((startLocation) => ({ type: "AbsoluteStart" as const, startLocation })),
-  fc
-    .record({
-      startLocation: locationArb,
-      endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
-    })
-    .map(({ startLocation, endGroupDelta }) => ({
-      type: "AbsoluteRange" as const,
-      startLocation,
-      endGroupDelta,
-    })),
+  fc.constant({ reset: true } as const),
+  fc.bigInt({ min: 0n, max: 1000000n }).map((startGroup) => ({ startGroup })),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+    endObject: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
 );
 
 /**

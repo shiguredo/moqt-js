@@ -151,10 +151,48 @@ const locationParameterArb = fc
 
 const lengthPrefixedParameterArb = fc
   .record({
-    type: fc.constantFrom(0x03, 0x21, 0x34),
+    type: fc.constantFrom(0x03, 0x34),
     value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
   })
   .map(({ type, value }) => ({ type, value }));
+
+/**
+ * LocationFilter の任意構築
+ *
+ * draft-ietf-moq-transport-20 §5.1.2: Length ベースの optional フィールド
+ * (フィールド数 0〜4) の union。
+ */
+const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
+  fc.constant({ reset: true } as const),
+  fc.bigInt({ min: 0n, max: 1000000n }).map((startGroup) => ({ startGroup })),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+    endObject: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
+);
+
+/**
+ * LOCATION_FILTER (0x21) パラメータの arbitrary
+ *
+ * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
+ * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
+ * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
+ * Range Filter と同様の生成方針 (rangeFilterParameterArb を参照)。
+ */
+const locationFilterParameterArb = locationFilterArb.map((filter) =>
+  encodeLocationFilterParameter(filter),
+);
 
 /**
  * Range Filter パラメータ (0x25-0x29) の arbitrary
@@ -234,6 +272,7 @@ const messageParameterArb = fc.oneof(
   uint8ParameterArb,
   locationParameterArb,
   lengthPrefixedParameterArb,
+  locationFilterParameterArb,
   rangeFilterParameterArb,
 );
 
@@ -304,42 +343,13 @@ test("Parameters リストのエンコード・デコードがラウンドトリ
   );
 });
 
-const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
-  fc.constant({ type: "NextGroupStart" as const }),
-  fc.constant({ type: "LargestObject" as const }),
-  fc.record({
-    type: fc.constant("AbsoluteStart" as const),
-    startLocation: fc.record({
-      group: fc.bigInt({ min: 0n, max: 1000000n }),
-      object: fc.bigInt({ min: 0n, max: 1000000n }),
-    }),
-  }),
-  fc.record({
-    type: fc.constant("AbsoluteRange" as const),
-    startLocation: fc.record({
-      group: fc.bigInt({ min: 0n, max: 1000000n }),
-      object: fc.bigInt({ min: 0n, max: 1000000n }),
-    }),
-    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
-  }),
-);
-
 test("LocationFilter のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(locationFilterArb, (filter) => {
       const encoded = encodeLocationFilter(filter);
       const [decoded, consumed] = decodeLocationFilter(encoded);
 
-      assert.equal(decoded.type, filter.type);
-      if (filter.type === "AbsoluteStart" && decoded.type === "AbsoluteStart") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-      }
-      if (filter.type === "AbsoluteRange" && decoded.type === "AbsoluteRange") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-        assert.equal(decoded.endGroupDelta, filter.endGroupDelta);
-      }
+      assert.deepEqual(decoded, filter);
       assert.equal(consumed, encoded.length);
     }),
   );
@@ -352,16 +362,7 @@ test("LocationFilter パラメータのエンコード・デコードがラウ�
       assert.equal(param.type, 0x21);
 
       const decoded = decodeLocationFilterParameter(param);
-      assert.equal(decoded.type, filter.type);
-      if (filter.type === "AbsoluteStart" && decoded.type === "AbsoluteStart") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-      }
-      if (filter.type === "AbsoluteRange" && decoded.type === "AbsoluteRange") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-        assert.equal(decoded.endGroupDelta, filter.endGroupDelta);
-      }
+      assert.deepEqual(decoded, filter);
     }),
   );
 });

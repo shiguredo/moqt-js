@@ -49,6 +49,7 @@ import {
   type Parameter,
   type LocationFilter,
   type RangeFilterSpec,
+  isNextObjectLocationFilter,
 } from "./message";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
@@ -392,9 +393,10 @@ export interface SubscribeCallbacks {
  * draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches)
  *
  * 重要な制約:
- * 1. Joining Fetch は Filter Type が LargestObject のサブスクリプションでのみ使用可能。
- *    他の Filter Type を使用すると PROTOCOL_VIOLATION でセッションが終了する。
- *    subscribe() の options.filter を { type: "LargestObject" } に設定する必要がある。
+ * 1. Joining Fetch は Next Object 形式の Location Filter を持つサブスクリプション
+ *    でのみ使用可能。他の形式を使用すると PROTOCOL_VIOLATION でセッションが終了する。
+ *    subscribe() の options.filter を { startGroup: 0n, startObject: 0n } に設定する
+ *    必要がある (draft-ietf-moq-transport-20 §5.1.2 の Next Object)。
  *
  * 2. SUBSCRIBE_OK に LARGEST_OBJECT パラメータがない場合（まだオブジェクトが
  *    発行されていない場合）、Joining Fetch は送信されず onError が呼び出される。
@@ -462,16 +464,20 @@ export interface JoiningFetchOptions {
 export interface SubscribeOptions {
   /**
    * Location Filter
-   * draft-ietf-moq-transport-19 Section 5.1.2, Section 10.2.9, Section 10.2.16
+   * draft-ietf-moq-transport-20 Section 5.1.2, Section 10.2.9
    *
-   * どのオブジェクトを受信するかを指定するフィルタ。
-   * - NextGroupStart: 配信済み時は LARGEST_OBJECT の次のグループから開始、
-   *   未配信時は {0, 0} から開始
-   * - LargestObject: 最新オブジェクトの次から開始、未配信時は {0, 0} から開始
-   * - AbsoluteStart: 指定した位置から開始（終了なし）
-   * - AbsoluteRange: 指定した範囲のオブジェクトのみ。End Group
-   *   (Start Location の Group + End Group Delta) が 2^64-1 を超えると
-   *   送信前に InvalidFilterError で throw する（§5.1.2）
+   * どのオブジェクトを受信するかを指定するフィルタ。フィールドの有無で意味が
+   * 変わる (Length ベースのワイヤに対応、§5.1.2):
+   * - { startGroup }: 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - startGroup
+   *   (startGroup = 0 は Next Group)。未配信時は {0, 0} から開始
+   * - { startGroup, startObject }: 絶対開始（終了なし）。両方 0 は Next Object
+   *   (LARGEST_OBJECT の次、未配信時は {0, 0})
+   * - { startGroup, startObject, endGroupDelta }: 絶対範囲。End Group =
+   *   StartGroup + endGroupDelta が 2^64-1 を超えると送信前に
+   *   InvalidFilterError で throw する（§5.1.2）
+   * - { startGroup, startObject, endGroupDelta, endObject }: 絶対範囲 +
+   *   End Object
+   * - { reset: true }: Length 0 (REQUEST_UPDATE でのフィルタ除去)
    *
    * 指定しない場合、フィルタなし（全オブジェクト）
    */
@@ -534,8 +540,9 @@ export interface SubscribeOptions {
    * SUBSCRIBE と同時に過去のデータを取得する。
    * Relay がキャッシュを持っていれば、過去のグループを取得できる。
    *
-   * 重要: Joining Fetch を使用する場合、filter を { type: "LargestObject" } に
-   * 設定する必要がある。他の Filter Type では PROTOCOL_VIOLATION エラーとなる。
+   * 重要: Joining Fetch を使用する場合、filter を { startGroup: 0n, startObject: 0n }
+   * (Next Object 形式) に設定する必要がある。他の形式では PROTOCOL_VIOLATION
+   * エラーとなる。
    */
   joiningFetch?: JoiningFetchOptions;
 
@@ -1034,6 +1041,29 @@ export interface Session {
    * セッションレベルの統計情報を取得する
    */
   getStatistics(): SessionStatistics;
+}
+
+/**
+ * Location Filter をデバッグログ用の文字列に要約する
+ */
+function describeLocationFilter(filter: LocationFilter | undefined): string | undefined {
+  if (filter === undefined) {
+    return undefined;
+  }
+  if ("reset" in filter) {
+    return "reset";
+  }
+  const entries: string[] = [`startGroup=${filter.startGroup}`];
+  if ("startObject" in filter) {
+    entries.push(`startObject=${filter.startObject}`);
+  }
+  if ("endGroupDelta" in filter) {
+    entries.push(`endGroupDelta=${filter.endGroupDelta}`);
+  }
+  if ("endObject" in filter) {
+    entries.push(`endObject=${filter.endObject}`);
+  }
+  return entries.join(", ");
 }
 
 /**
@@ -1656,7 +1686,8 @@ export class SessionImpl implements Session {
     // "A Joining Fetch is only permitted when the associated subscription
     //  has Forward State 1; otherwise the publisher MUST respond with a
     //  REQUEST_ERROR with error code INVALID_RANGE."
-    // joiningFetch が有効な場合、自動的に LargestObject フィルターを設定する
+    // joiningFetch が有効な場合、自動的に Next Object (旧 LargestObject 相当)
+    // フィルターを設定する
     if (options?.joiningFetch) {
       // draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches):
       // "A Joining Fetch is only permitted when the associated subscription
@@ -1670,11 +1701,13 @@ export class SessionImpl implements Session {
       }
 
       if (options.filter === undefined) {
-        options = { ...options, filter: { type: "LargestObject" } };
-      } else if (options.filter.type !== "LargestObject") {
+        // Next Object 形式 ({ startGroup: 0n, startObject: 0n }) は旧
+        // LargestObject と等価 (draft-ietf-moq-transport-20 §5.1.2)
+        options = { ...options, filter: { startGroup: 0n, startObject: 0n } };
+      } else if (!isNextObjectLocationFilter(options.filter)) {
         throw new Error(
-          "Joining Fetch requires filter type LargestObject. " +
-            'Remove options.filter or set options.filter = { type: "LargestObject" }',
+          "Joining Fetch requires filter of the Next Object form. " +
+            "Remove options.filter or set options.filter = { startGroup: 0n, startObject: 0n }",
         );
       }
     }
@@ -1784,7 +1817,7 @@ export class SessionImpl implements Session {
         requestId: requestId.toString(),
         trackNamespace: namespace,
         trackName,
-        filterType: options?.filter?.type,
+        filter: describeLocationFilter(options?.filter),
         OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
         SUBSCRIBER_PRIORITY: options?.subscriberPriority,
         GROUP_ORDER: options?.groupOrder,

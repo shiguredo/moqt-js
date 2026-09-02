@@ -280,8 +280,8 @@ export class MalformedTrackError extends Error {
  * 送信側 (encodeRangeFilter) ではローカル API 誤用 (SetID 範囲外・奇数 Property
  * Type・PRIORITY_FILTER 255 超・Range 絶対値 2^64-1 超過・空 ranges) を
  * 送信前に検出して throw する。
- * 送信側 (encodeLocationFilter) では §5.1.2 の End Group (Start Location の
- * Group + End Group Delta) が 2^64-1 を超える AbsoluteRange を送信前に検出して
+ * 送信側 (encodeLocationFilter) では §5.1.2 の End Group (StartGroup +
+ * EndGroupDelta) が 2^64-1 を超える 3 / 4 フィールド表現を送信前に検出して
  * throw する (本エラーの Location Filter 関連用途は送信前検証専用で、受信側の
  * デコード (decodeLocationFilter) は ProtocolViolationError を使う)。
  * 既存の ProtocolViolationError → PROTOCOL_VIOLATION 変換に自動で乗せず、
