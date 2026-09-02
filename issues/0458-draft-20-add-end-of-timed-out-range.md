@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-end-of-timed-out-range
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -19,11 +19,11 @@ draft-ietf-moq-transport-20 §11.4.4 で Fill Timeout 失効により放棄さ�
 
 - `FetchSerializationFlags.END_OF_TIMED_OUT_RANGE = 0x20C` を追加する。
 - `encodeFetchObjectFields` / `decodeFetchObjectFields` で 0x8C / 0x10C と同様の status オブジェクトとして扱う。
-- アプリ向け表現 (status 種別) を既存 End of * Range と揃えて公開する。
+- アプリ向け表現として、公開型 `EndOfRangeType` に `"timed_out"` を追加し、`decodeEndOfRange` を 0x8C / 0x10C / 0x20C の 3 値マッピングに変更する (両者とも `src/dataStream.ts`)。0x20C の round-trip ではアプリ向け status 種別が `"timed_out"` になることを検証する。
 
 ## 完了条件
 
-- 0x20C の encode / decode round-trip テストがあること。
+- 0x20C の encode / decode round-trip テストがあり、アプリ向け status 種別が `"timed_out"` になることを検証していること。
 - 不正な組み合わせ flags の既存検証を壊さないこと。
 - `CHANGES.md` の `## develop` に `[ADD]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
