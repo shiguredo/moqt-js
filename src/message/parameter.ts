@@ -955,83 +955,114 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
 /**
  * Location Filter (Section 5.1.2, Section 10.2.9)
  *
- * draft-ietf-moq-transport-19:
- * Location Filter {
- *   Filter Type (vi64),
- *   [Start Location (Location),]
- *   [End Group Delta (vi64),]
- * }
+ * draft-ietf-moq-transport-20:
+ * LOCATION_FILTER Parameter は Length (バイト長) と optional な vi64 フィールド
+ * で構成され、Length がフィールド数を決める。
+ * フィールド数 0 (Length 0) はフィルタなし (REQUEST_UPDATE での除去など)。
  *
- * End Group Delta は Start Location の Group ID からの差分。
- * 0 の場合は Start Location の Group の残りが対象。
- * End Group (= Start Location の Group + End Group Delta) は 2^64-1 以下で
- * なければならない (§5.1.2)。各フィールドはワイヤ上 vi64 (0 以上 2^64-1)。
- * 送信側は encodeLocationFilter が送信前に InvalidFilterError で、
- * 受信デコード時は decodeLocationFilter が ProtocolViolationError で
- * 超過を拒否する。
+ *   LOCATION_FILTER Parameter {
+ *     Parameter Type (vi64) = 0x21,
+ *     Length (vi64),
+ *     [StartGroup (vi64),]
+ *     [StartObject (vi64),]
+ *     [EndGroupDelta (vi64),]
+ *     [EndObject (vi64),]
+ *   }
+ *
+ * フィールドの有無による意味論:
+ * - 1 フィールド (startGroup): 相対指定。Next Group 基準
+ * - 2 フィールド (startGroup + startObject): 両方 0 は Next Object、
+ *   それ以外は絶対開始 (終端なし)
+ * - 3 フィールド (startGroup + startObject + endGroupDelta): 絶対開始 +
+ *   End Group Delta
+ * - 4 フィールド (+ endObject): 絶対開始 + End Group Delta + End Object
+ *
+ * EndGroupDelta は StartGroup からの差分であり、End Group = StartGroup +
+ * EndGroupDelta。End Group が 2^64-1 を超える場合は PROTOCOL_VIOLATION
+ * (§5.1.2 の MUST)。送信側は encodeLocationFilter が送信前に
+ * InvalidFilterError で、受信デコード時は decodeLocationFilter が
+ * ProtocolViolationError で超過を拒否する。
+ *
+ * 公開表現はフィールドの有無で場合分けし、draft-19 の Filter Type
+ * (NextGroupStart / LargestObject / AbsoluteStart / AbsoluteRange) は
+ * 以下の等価表現で置き換えた:
+ * - NextGroupStart → { startGroup: 0n }
+ * - LargestObject → { startGroup: 0n, startObject: 0n }
+ * - AbsoluteStart → { startGroup, startObject }
+ * - AbsoluteRange → { startGroup, startObject, endGroupDelta }
  */
 export type LocationFilter =
-  | { type: "NextGroupStart" }
-  | { type: "LargestObject" }
-  | { type: "AbsoluteStart"; startLocation: Location }
-  | { type: "AbsoluteRange"; startLocation: Location; endGroupDelta: bigint };
+  // Length 0: フィルタなし (REQUEST_UPDATE での除去など)
+  | { reset: true }
+  // 1 フィールド: StartGroup のみ。相対指定 (Next Group 基準)
+  | { startGroup: bigint }
+  // 2 フィールド: StartGroup + StartObject
+  | { startGroup: bigint; startObject: bigint }
+  // 3 フィールド: StartGroup + StartObject + EndGroupDelta
+  | { startGroup: bigint; startObject: bigint; endGroupDelta: bigint }
+  // 4 フィールド: StartGroup + StartObject + EndGroupDelta + EndObject
+  | { startGroup: bigint; startObject: bigint; endGroupDelta: bigint; endObject: bigint };
 
-/**
- * Filter Type 定数
- */
-const FILTER_TYPE = {
-  NEXT_GROUP_START: 0x01,
-  LARGEST_OBJECT: 0x02,
-  ABSOLUTE_START: 0x03,
-  ABSOLUTE_RANGE: 0x04,
-} as const;
+/** Location Filter の 3 / 4 フィールド表現の End Group 超過を検証する */
+function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigint): void {
+  if (startGroup + endGroupDelta > MAX_VARINT) {
+    throw new InvalidFilterError(
+      `absolute range end group exceeds maximum: ${startGroup} + ${endGroupDelta} > ${MAX_VARINT}`,
+    );
+  }
+}
 
 /**
  * Location Filter をエンコードする
- * draft-ietf-moq-transport-19 §10.2.9 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-20 §10.2.9 (LOCATION FILTER Parameter)
  *
- * AbsoluteRange は End Group (Start Location の Group + End Group Delta) の
- * 2^64-1 超過を送信前に検証し、InvalidFilterError で拒否する (§5.1.2)。
- * 他フィールドが非負の限り、group / endGroupDelta が単体で 2^64-1 を超える
- * 場合は和の検証で先に InvalidFilterError として検出する。負値 (group /
- * object / endGroupDelta のいずれ) と、和の検証に捕捉されない
- * startLocation.object の単体超過は encodeVarint 由来の Error として throw
+ * バイト Length プレフィックス付きでエンコードする。フィールド数は公開型の
+ * 場合分けで 0〜4 に静的に制約される (送信側で 4 超にはなり得ない)。
+ * フィールド数 0 (reset) は Length 0 のみで表現する (REQUEST_UPDATE での除去)。
+ *
+ * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
+ * 送信前に検証し、InvalidFilterError で拒否する (§5.1.2)。負値 (startGroup /
+ * startObject / endGroupDelta / endObject のいずれ) と、和の検証に捕捉されない
+ * startObject / EndObject の単体超過は encodeVarint 由来の Error として throw
  * される。節番号は仕様将来版で変わる可能性がある。
  */
 export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
+  // Length 0 (フィルタなし) は Length フィールドのみで表現する
+  if ("reset" in filter) {
+    return encodeVarint(0n);
+  }
+
   const parts: Uint8Array[] = [];
 
-  switch (filter.type) {
-    case "NextGroupStart":
-      parts.push(encodeVarint(FILTER_TYPE.NEXT_GROUP_START));
-      break;
-    case "LargestObject":
-      parts.push(encodeVarint(FILTER_TYPE.LARGEST_OBJECT));
-      break;
-    case "AbsoluteStart":
-      parts.push(encodeVarint(FILTER_TYPE.ABSOLUTE_START));
-      parts.push(encodeLocation(filter.startLocation));
-      break;
-    case "AbsoluteRange":
-      // draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
-      // "If the resulting Group ID would be greater than 2^64 - 1, the
-      //  endpoint MUST close the session with a PROTOCOL_VIOLATION."
+  if ("startObject" in filter) {
+    if ("endGroupDelta" in filter) {
+      // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+      //  close the session with a PROTOCOL_VIOLATION."
       // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じる
       // ため、送信前に InvalidFilterError でローカル拒否する
-      if (filter.startLocation.group + filter.endGroupDelta > MAX_VARINT) {
-        throw new InvalidFilterError(
-          `absolute range end group exceeds maximum: ${filter.startLocation.group} + ${filter.endGroupDelta} > ${MAX_VARINT}`,
-        );
-      }
-      parts.push(encodeVarint(FILTER_TYPE.ABSOLUTE_RANGE));
-      parts.push(encodeLocation(filter.startLocation));
+      validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
+      parts.push(encodeVarint(filter.startGroup));
+      parts.push(encodeVarint(filter.startObject));
       parts.push(encodeVarint(filter.endGroupDelta));
-      break;
+      if ("endObject" in filter) {
+        parts.push(encodeVarint(filter.endObject));
+      }
+    } else {
+      parts.push(encodeVarint(filter.startGroup));
+      parts.push(encodeVarint(filter.startObject));
+    }
+  } else {
+    // 1 フィールド: StartGroup のみ
+    parts.push(encodeVarint(filter.startGroup));
   }
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
+  const lengthBytes = encodeVarint(BigInt(totalLength));
+  const result = new Uint8Array(lengthBytes.length + totalLength);
   let offset = 0;
+  result.set(lengthBytes, offset);
+  offset += lengthBytes.length;
   for (const part of parts) {
     result.set(part, offset);
     offset += part.length;
@@ -1042,56 +1073,103 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
 /**
  * Location Filter をデコードする
  *
- * AbsoluteRange は End Group (Start Location の Group + End Group Delta) の
- * 2^64-1 超過を ProtocolViolationError で throw する (§5.1.2 の MUST。
- * 受信経路に載った場合は ProtocolViolationError → PROTOCOL_VIOLATION の
- * セッション終了変換規則に乗る。節番号は仕様将来版で変わる可能性がある)。
+ * Length (バイト) が示す範囲内の vi64 フィールド数を数えて 0〜4 の場合分けに
+ * 解決する。Length のバイト値はフィールド数と直接対応しない (Length=2 を
+ * 「2 フィールド」と解釈しない)。
+ *
+ * 以下の場合は PROTOCOL_VIOLATION (ProtocolViolationError) を throw する
+ * (§5.1.2 / §10.2.9。受信経路に載った場合は PROTOCOL_VIOLATION のセッション
+ * 終了変換規則に乗る):
+ * - Length が示す範囲に vi64 フィールドが 4 つより多く含まれる
+ * - vi64 フィールドが Length 境界を跨ぐ、または Length と消費バイト数が不一致
+ *
+ * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
+ * ProtocolViolationError で throw する (§5.1.2 の MUST。この MUST は超過に対して
+ * PROTOCOL_VIOLATION を一択としており、§5.1.2 が Location Filter に対して定める
+ * REQUEST_ERROR は充足不能範囲の INVALID_RANGE であるため、デコード段階では
+ * ProtocolViolationError で検出する)。
  *
  * @returns [filter, consumed bytes]
  */
 export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFilter, number] {
-  const [filterType, typeConsumed] = decodeVarint(data, offset);
-  let totalConsumed = typeConsumed;
+  const [length, lengthConsumed] = decodeVarint(data, offset);
+  const start = offset + lengthConsumed;
+  const end = start + Number(length);
 
-  switch (Number(filterType)) {
-    case FILTER_TYPE.NEXT_GROUP_START:
-      return [{ type: "NextGroupStart" }, totalConsumed];
+  // Length が示す範囲が data の末尾を超える場合は不完全データとして扱う
+  // (varint デコードと同じく、呼び出し側が全バイトを渡していない)
+  if (end > data.length) {
+    throw new IncompleteDataError(
+      `incomplete location filter: length ${length} exceeds available data`,
+    );
+  }
 
-    case FILTER_TYPE.LARGEST_OBJECT:
-      return [{ type: "LargestObject" }, totalConsumed];
+  // Length が示す範囲内の vi64 フィールドを読み取る (最大 4 個)
+  const fields: bigint[] = [];
+  let current = start;
+  while (current < end && fields.length < 4) {
+    const [value, consumed] = decodeVarint(data, current);
+    fields.push(value);
+    current += consumed;
+  }
 
-    case FILTER_TYPE.ABSOLUTE_START: {
-      const [startLocation, locationConsumed] = decodeLocation(data, offset + totalConsumed);
-      totalConsumed += locationConsumed;
-      return [{ type: "AbsoluteStart", startLocation }, totalConsumed];
-    }
+  // Length 境界を跨ぐ vi64 / 4 超のフィールド (Length が示す範囲に余りが残る)
+  // は構造不正として PROTOCOL_VIOLATION にする
+  if (current !== end) {
+    throw new ProtocolViolationError(
+      `malformed location filter: length ${length} does not match field boundaries`,
+    );
+  }
 
-    case FILTER_TYPE.ABSOLUTE_RANGE: {
-      const [startLocation, locationConsumed] = decodeLocation(data, offset + totalConsumed);
-      totalConsumed += locationConsumed;
-      const [endGroupDelta, endGroupDeltaConsumed] = decodeVarint(data, offset + totalConsumed);
-      totalConsumed += endGroupDeltaConsumed;
+  switch (fields.length) {
+    case 0:
+      // Length 0: フィルタなし (REQUEST_UPDATE での除去など)
+      return [{ reset: true }, lengthConsumed];
 
-      // draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
-      // "If the resulting Group ID would be greater than 2^64 - 1, the
-      //  endpoint MUST close the session with a PROTOCOL_VIOLATION."
-      // この MUST は超過に対して PROTOCOL_VIOLATION を一択としており、
-      // §5.1.2 が Location Filter に対して定める REQUEST_ERROR は充足
-      // 不能範囲の INVALID_RANGE であるため、デコード段階では
-      // ProtocolViolationError で検出する
-      if (startLocation.group + endGroupDelta > MAX_VARINT) {
+    case 1:
+      // 1 フィールド: StartGroup のみ (相対指定)
+      return [{ startGroup: fields[0] }, end - offset];
+
+    case 2:
+      return [{ startGroup: fields[0], startObject: fields[1] }, end - offset];
+
+    case 3:
+      // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+      //  close the session with a PROTOCOL_VIOLATION."
+      if (fields[0] + fields[2] > MAX_VARINT) {
         throw new ProtocolViolationError(
-          `absolute range end group exceeds maximum: ${startLocation.group} + ${endGroupDelta} > ${MAX_VARINT}`,
+          `absolute range end group exceeds maximum: ${fields[0]} + ${fields[2]} > ${MAX_VARINT}`,
         );
       }
+      return [
+        { startGroup: fields[0], startObject: fields[1], endGroupDelta: fields[2] },
+        end - offset,
+      ];
 
-      return [{ type: "AbsoluteRange", startLocation, endGroupDelta }, totalConsumed];
-    }
+    case 4:
+      if (fields[0] + fields[2] > MAX_VARINT) {
+        throw new ProtocolViolationError(
+          `absolute range end group exceeds maximum: ${fields[0]} + ${fields[2]} > ${MAX_VARINT}`,
+        );
+      }
+      return [
+        {
+          startGroup: fields[0],
+          startObject: fields[1],
+          endGroupDelta: fields[2],
+          endObject: fields[3],
+        },
+        end - offset,
+      ];
 
     default:
-      // draft-ietf-moq-transport-19 §5.1.2:
-      // 未知の Filter Type は PROTOCOL_VIOLATION でセッションを閉じる
-      throw new ProtocolViolationError(`Unknown filter type: ${filterType}`);
+      // ループの境界 (fields.length < 4) と current !== end の検証により
+      // 到達しない (フィールド数 5 以上は上で PROTOCOL_VIOLATION 済み)。
+      // 防御的に構造不正として PROTOCOL_VIOLATION にする
+      throw new ProtocolViolationError(
+        `malformed location filter: unexpected number of fields: ${fields.length}`,
+      );
   }
 }
 

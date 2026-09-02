@@ -1,11 +1,12 @@
 /**
  * Location Filter マッチング
  *
- * draft-ietf-moq-transport-19 Section 5.1.2 (Location Filter):
+ * draft-ietf-moq-transport-20 Section 5.1.2 (Location Filter):
  * Object の Location が Subscription の Location Filter にマッチするかどうかを判定する。
  *
  * 通過条件: Object Location >= Start Location。
  * End Group があるときは Object Group <= End Group。
+ * End Object があるときは End Group 内で Object <= End Object。
  */
 
 import type { Location } from "./message/types";
@@ -20,86 +21,103 @@ import { decodeObjectPropertiesTolerant, type Property } from "./properties";
 /**
  * 解決済み Location Filter
  *
- * 相対 Filter（NextGroupStart / LargestObject）は LARGEST_OBJECT から
- * 具体的な Start Location に解決される（詳細は resolveFilter を参照）。
+ * 相対指定 (1 フィールドの StartGroup、および 2 フィールドで StartGroup =
+ * StartObject = 0 の Next Object) は LARGEST_OBJECT から具体的な Start
+ * Location に解決される（詳細は resolveFilter を参照）。
  * LARGEST_OBJECT 未受信（コンテンツ未配信）時は {0, 0} から開始する
- * (draft-ietf-moq-transport-19 Section 5.1.2)。
+ * (draft-ietf-moq-transport-20 Section 5.1.2)。
  */
 export interface ResolvedFilter {
   /** 開始 Location（この Location 以上の Object が通過） */
   start: Location;
   /** 終了 Group（この Group 以下の Object が通過。undefined は無制限） */
   endGroup: bigint | undefined;
+  /** 終了 Group 内の終了 Object（指定時はこの Object 以下のみ通過。省略は End Group 全件） */
+  endObject?: bigint;
 }
 
 /**
  * LocationFilter を具体的な ResolvedFilter に解決する
  *
- * draft-ietf-moq-transport-19 Section 5.1.2:
- * - NextGroupStart: LARGEST_OBJECT の Group + 1 から開始。未配信時は {0, 0} から開始
- * - LargestObject: {LARGEST_OBJECT の Group, LARGEST_OBJECT の Object + 1} から開始。
- *   未配信時は {0, 0} から開始
- * - AbsoluteStart: 指定された Location から開始
- * - AbsoluteRange: 指定された Location から開始し、End Group = Start.Group + EndGroupDelta
+ * draft-ietf-moq-transport-20 Section 5.1.2:
+ * - 1 フィールド (startGroup): 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - StartGroup。
+ *   未配信時は {0, 0} から開始。負値は 0 にクランプ
+ * - 2 フィールドで startGroup = startObject = 0: Next Object
+ *   ({LARGEST_OBJECT の Group, LARGEST_OBJECT の Object + 1}、未配信時 {0, 0})
+ * - 2 フィールド (それ以外): 指定された絶対 Location から開始（終了なし）
+ * - 3 フィールド: 絶対開始。End Group = StartGroup + EndGroupDelta
+ * - 4 フィールド: 絶対開始。End Group = StartGroup + EndGroupDelta、End Object 指定
  *
- * @param filter - LocationFilter（省略時は全 Object 通過）
+ * reset (Length 0) はフィルタなし扱い (undefined) に解決する
+ * (REQUEST_UPDATE でのフィルタ除去)。
+ *
+ * @param filter - LocationFilter（undefined は全 Object 通過）
  * @param largestLocation - SUBSCRIBE_OK / REQUEST_UPDATE_OK の LARGEST_OBJECT（未受信時は null）
  */
 export function resolveFilter(
   filter: LocationFilter | undefined,
   largestLocation: Location | null,
 ): ResolvedFilter | undefined {
-  if (filter === undefined) {
+  if (filter === undefined || "reset" in filter) {
+    // reset (Length 0) はフィルタを除去した状態と同じくフィルタなし扱い
     return undefined;
   }
 
-  switch (filter.type) {
-    case "NextGroupStart":
-      // 未配信時 (LARGEST_OBJECT 省略) は仕様どおり {0, 0} から開始する。
-      // フォールバック値に +1 を適用すると未配信時に {0, 1} になる罠があるため、
-      // null を先に分岐する
-      if (largestLocation === null) {
-        return { start: { group: 0n, object: 0n }, endGroup: undefined };
-      }
-      return {
-        start: { group: largestLocation.group + 1n, object: 0n },
-        endGroup: undefined,
-      };
-    case "LargestObject":
-      // NextGroupStart と同様に、未配信時は {0, 0} から開始する
-      if (largestLocation === null) {
-        return { start: { group: 0n, object: 0n }, endGroup: undefined };
-      }
-      // Section 5.1.2: {Largest Object.Group, Largest Object.Object + 1}
-      // §10.12.2.1 の Joining Fetch は End Location を {Joining Location.Group,
-      // Joining Location.Object + 1} と定義し、Note では「the last Object included
-      // in the Joining FETCH response is the Object at the Joining Location」と
-      // 説明される。Fetch は {G, O} まで、Subscribe は {G, O+1} からとなり
-      // 連続・非重複になる
-      return {
-        start: { group: largestLocation.group, object: largestLocation.object + 1n },
-        endGroup: undefined,
-      };
-    case "AbsoluteStart":
-      return { start: filter.startLocation, endGroup: undefined };
-    case "AbsoluteRange":
-      return {
-        start: filter.startLocation,
-        endGroup: filter.startLocation.group + filter.endGroupDelta,
-      };
-    default: {
-      // 網羅性チェック: 未対応の filter type が追加された場合にコンパイルエラーにする
-      const _exhaustive: never = filter;
-      return _exhaustive;
+  // 1 フィールド: StartGroup のみ。相対指定 (Next Group 基準)
+  if (!("startObject" in filter)) {
+    // 未配信時 (LARGEST_OBJECT 省略) は仕様どおり {0, 0} から開始する。
+    // フォールバック値に +1 を適用すると未配信時に {0, 1} になる罠があるため、
+    // null を先に分岐する
+    if (largestLocation === null) {
+      return { start: { group: 0n, object: 0n }, endGroup: undefined, endObject: undefined };
     }
+    // draft-ietf-moq-transport-20 Section 5.1.2:
+    // start Location = {Largest Object.Group + 1 - StartGroup, 0}。
+    // 相対の計算結果が負値になる group は 0 にクランプする
+    let group = largestLocation.group + 1n - filter.startGroup;
+    if (group < 0n) {
+      group = 0n;
+    }
+    return { start: { group, object: 0n }, endGroup: undefined, endObject: undefined };
   }
+
+  // 2 フィールド以上。
+  // 2 フィールド限定で StartGroup = StartObject = 0 の場合は Next Object
+  // ({Largest Object.Group, Largest Object.Object + 1}) を意味する (§5.1.2)
+  if (!("endGroupDelta" in filter)) {
+    let start: Location;
+    if (filter.startGroup === 0n && filter.startObject === 0n) {
+      // Next GroupStart と同様に、未配信時は {0, 0} から開始する
+      if (largestLocation === null) {
+        start = { group: 0n, object: 0n };
+      } else {
+        // Section 5.1.2: {Largest Object.Group, Largest Object.Object + 1}
+        start = { group: largestLocation.group, object: largestLocation.object + 1n };
+      }
+    } else {
+      // 絶対開始 (終端なし)
+      start = { group: filter.startGroup, object: filter.startObject };
+    }
+    return { start, endGroup: undefined, endObject: undefined };
+  }
+
+  // 3 フィールド以上: 絶対開始 + End Group (StartGroup + EndGroupDelta)
+  const start: Location = { group: filter.startGroup, object: filter.startObject };
+  const endGroup = filter.startGroup + filter.endGroupDelta;
+  if (!("endObject" in filter)) {
+    // 3 フィールド: End Object 省略は End Group 全件
+    return { start, endGroup, endObject: undefined };
+  }
+  // 4 フィールド: End Object 指定
+  return { start, endGroup, endObject: filter.endObject };
 }
 
 /**
  * Object の Location が ResolvedFilter にマッチするかどうかを判定する
  *
- * draft-ietf-moq-transport-19 Section 5.1.2:
- * 通過条件: Object Location >= Start。End Group があるときは Group <= End Group。
+ * draft-ietf-moq-transport-20 Section 5.1.2:
+ * 通過条件: Object Location >= Start。End Group があるときは Group <= End Group、
+ * End Object があるときは End Group 内で Object <= EndObject。
  *
  * Location の比較は Group を先に比較し、同一 Group 内では Object を比較する。
  *
@@ -126,6 +144,15 @@ export function objectMatchesFilter(
 
   // End Group があるときは Object Group <= End Group
   if (filter.endGroup !== undefined && objectLocation.group > filter.endGroup) {
+    return false;
+  }
+  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§5.1.2
+  // "When EndObject is omitted, the filter includes all objects in the End Group.")
+  if (
+    filter.endObject !== undefined &&
+    objectLocation.group === filter.endGroup &&
+    objectLocation.object > filter.endObject
+  ) {
     return false;
   }
 

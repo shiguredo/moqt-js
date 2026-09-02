@@ -223,13 +223,14 @@ test("fetch: 削除指定の rangeFilters で throw する", async () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.2 (Location Filters):
- * AbsoluteRange の End Group (Start Location の Group + End Group Delta) が
- * 2^64-1 を超える filter を subscribe() に渡すと、送信前に InvalidFilterError
- * で reject される。Message Parameters 構築は pendingSubscribe.set より前
- * (Promise 作成前) に走するため、pending エントリが残らないことを検証する。
+ * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+ * 3 フィールド (startGroup + startObject + endGroupDelta) の End Group
+ * (StartGroup + EndGroupDelta) が 2^64-1 を超える filter を subscribe() に
+ * 渡すと、送信前に InvalidFilterError で reject される。Message Parameters
+ * 構築は pendingSubscribe.set より前 (Promise 作成前) に走するため、pending
+ * エントリが残らないことを検証する。
  */
-test("subscribe: AbsoluteRange の End Group が 2^64-1 を超えると throw し pendingSubscribe が残らない", async () => {
+test("subscribe: End Group が 2^64-1 を超えると throw し pendingSubscribe が残らない", async () => {
   const session = createSessionImpl();
 
   let thrown: Error | undefined;
@@ -240,8 +241,8 @@ test("subscribe: AbsoluteRange の End Group が 2^64-1 を超えると throw �
       { object: () => {} },
       {
         filter: {
-          type: "AbsoluteRange",
-          startLocation: { group: MAX_VARINT, object: 0n },
+          startGroup: MAX_VARINT,
+          startObject: 0n,
           endGroupDelta: 1n,
         },
       },

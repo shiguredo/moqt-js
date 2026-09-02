@@ -5,7 +5,6 @@
 
 // 型定義
 export {
-  FilterType,
   GroupOrder,
   type Location,
   MessageParameterType,

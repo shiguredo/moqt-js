@@ -305,22 +305,22 @@ test("Parameters リストのエンコード・デコードがラウンドトリ
 });
 
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
-  fc.constant({ type: "NextGroupStart" as const }),
-  fc.constant({ type: "LargestObject" as const }),
+  fc.constant({ reset: true } as const),
+  fc.bigInt({ min: 0n, max: 1000000n }).map((startGroup) => ({ startGroup })),
   fc.record({
-    type: fc.constant("AbsoluteStart" as const),
-    startLocation: fc.record({
-      group: fc.bigInt({ min: 0n, max: 1000000n }),
-      object: fc.bigInt({ min: 0n, max: 1000000n }),
-    }),
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
   }),
   fc.record({
-    type: fc.constant("AbsoluteRange" as const),
-    startLocation: fc.record({
-      group: fc.bigInt({ min: 0n, max: 1000000n }),
-      object: fc.bigInt({ min: 0n, max: 1000000n }),
-    }),
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
     endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+  }),
+  fc.record({
+    startGroup: fc.bigInt({ min: 0n, max: 1000000n }),
+    startObject: fc.bigInt({ min: 0n, max: 1000000n }),
+    endGroupDelta: fc.bigInt({ min: 0n, max: 1000000n }),
+    endObject: fc.bigInt({ min: 0n, max: 1000000n }),
   }),
 );
 
@@ -330,16 +330,7 @@ test("LocationFilter のエンコード・デコードがラウンドトリッ�
       const encoded = encodeLocationFilter(filter);
       const [decoded, consumed] = decodeLocationFilter(encoded);
 
-      assert.equal(decoded.type, filter.type);
-      if (filter.type === "AbsoluteStart" && decoded.type === "AbsoluteStart") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-      }
-      if (filter.type === "AbsoluteRange" && decoded.type === "AbsoluteRange") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-        assert.equal(decoded.endGroupDelta, filter.endGroupDelta);
-      }
+      assert.deepEqual(decoded, filter);
       assert.equal(consumed, encoded.length);
     }),
   );
@@ -352,16 +343,7 @@ test("LocationFilter パラメータのエンコード・デコードがラウ�
       assert.equal(param.type, 0x21);
 
       const decoded = decodeLocationFilterParameter(param);
-      assert.equal(decoded.type, filter.type);
-      if (filter.type === "AbsoluteStart" && decoded.type === "AbsoluteStart") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-      }
-      if (filter.type === "AbsoluteRange" && decoded.type === "AbsoluteRange") {
-        assert.equal(decoded.startLocation.group, filter.startLocation.group);
-        assert.equal(decoded.startLocation.object, filter.startLocation.object);
-        assert.equal(decoded.endGroupDelta, filter.endGroupDelta);
-      }
+      assert.deepEqual(decoded, filter);
     }),
   );
 });

@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] Location Filter のワイヤ形式を draft-20 の Length ベースに変更する
+  - draft-ietf-moq-transport-20 §5.1.2 / §10.2.9 に基づき、公開型 LocationFilter を Filter Type enum から Length で optional フィールド数 (0〜4) を決める形式に変更する (Length 0 はフィルタなし / REQUEST_UPDATE での除去)
+  - 旧表現 (NextGroupStart / LargestObject / AbsoluteStart / AbsoluteRange) は { startGroup } / { startGroup, startObject } / { startGroup, startObject, endGroupDelta } / (+ endObject) へ置き換え、FilterType 定数と draft-19 専用ワイヤパスを削除する
+  - 4 フィールド表現の End Object をフィルタ評価に反映し、End Group 内で End Object 以下を通過させる
+  - 旧ワイヤ (Filter Type 0x01–0x04) で送受信していた moqt-js とは相互運用できない
+  - @voluntas
 - [CHANGE] LOC Object Properties のエンコード / デコードを Key-Value-Pair delta encoding に追従させる
   - draft-ietf-moq-transport-19 §11.2.1.2 / §1.4.3 に基づき、LOC Property 群を encodeProperties / decodeObjectPropertiesTolerant 経由の delta encoding (Figure 2) に変更する
   - 複数 Property ではワイヤ形式が変わり、旧版 moqt-js (絶対 Type 連結) とは相互運用できない

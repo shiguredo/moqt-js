@@ -429,7 +429,7 @@ test("Location Filter 再適用: setLargestLocation 後に LARGEST_OBJECT と同
   );
 
   // SUBSCRIBE 送信時に Location Filter を設定
-  subscriber.setLocationFilter({ type: "LargestObject" });
+  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
   // SUBSCRIBE_OK 受信時に LARGEST_OBJECT = {7, 2} を設定
   subscriber.setLargestLocation({ group: 7n, object: 2n });
 
@@ -462,7 +462,7 @@ test("Location Filter 再適用: setLocationFilter 再適用後も LARGEST_OBJEC
 
   // setLargestLocation を先に設定してから、setLocationFilter を再適用する
   subscriber.setLargestLocation({ group: 7n, object: 2n });
-  subscriber.setLocationFilter({ type: "LargestObject" });
+  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
 
   subscriber.handleObject(createObject(7n, 2n));
   assert.equal(delivered.length, 0);
@@ -491,7 +491,7 @@ test("Location Filter 再適用: NextGroupStart は LARGEST_OBJECT の次のグ�
     delivered.push(obj),
   );
 
-  subscriber.setLocationFilter({ type: "NextGroupStart" });
+  subscriber.setLocationFilter({ startGroup: 0n });
   subscriber.setLargestLocation({ group: 7n, object: 2n });
 
   // 同一 Group で LARGEST_OBJECT 以下の Object、および前 Group のオブジェクトはブロックされる
