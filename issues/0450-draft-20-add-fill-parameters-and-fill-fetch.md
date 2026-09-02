@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-fill-parameters-and-fill-fetch
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -13,14 +13,14 @@ draft-ietf-moq-transport-20 で Joining FETCH の代替として導入された 
 
 - `MessageParameterType` (`src/message/types.ts`) に `FILL_PARAMETERS` (0x23) が無い。`FILL_TIMEOUT` (0x0a) はあるが FETCH / Joining 経路向け。
 - Joining FETCH (`bidiSendJoiningFetch`) は 0449 で削除予定のため、同等機能が無い状態になる。
-- 受信側の FETCH ストリーム処理 (`handleFetchStream` 等) は独立 FETCH の Request ID を前提としており、subscription Request ID / REQUEST_UPDATE Request ID を持つ fill fetch の関連付けが無い。
+- 受信側の FETCH ストリーム処理 (`handleIncomingStream` の FETCH 分岐) は独立 FETCH の Request ID (`fetchers` / `waitForFetcher`) を前提としており、subscription Request ID / REQUEST_UPDATE Request ID を持つ fill fetch の関連付けが無い。
 - 前提: 0448 (Location Filter)、0449 (FETCH / Joining 削除)。
 
 ## 設計方針
 
 - `MessageParameterType.FILL_PARAMETERS = 0x23` を追加し、値は内部 Parameters 列 (FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER / Range Filters) を length-prefixed で格納する (§10.2.15)。
 - SUBSCRIBE / subscription の REQUEST_UPDATE 送信経路 (`buildSubscribeParameters` / `bidiSendRequestUpdate`) で `FILL_PARAMETERS` を載せられる API を提供する。旧 `JoiningFetchOptions` の用途をここに寄せる。
-- 受信: FETCH_HEADER の Request ID が既存 subscription / pending REQUEST_UPDATE に一致する場合は fill fetch として扱い、購読に紐付ける (§5.1.3)。
+- 受信: FETCH_HEADER の Request ID が既存 subscription (初期 fill) または subscription 宛てに送った REQUEST_UPDATE の Request ID (後続 fill) に一致する場合は fill fetch として扱い、購読に紐付ける (§5.1.3)。REQUEST_UPDATE の Request ID は REQUEST_OK 受理で pending エントリが消えるため、後続 fill ストリームが到着するまで Request ID → subscription の関連付けを保持する (応答と fill ストリームの順序は保証されない)。
 - 送信側が SUBSCRIBE を受けて fill を開く義務は、moqt-js が SUBSCRIBE 受信を持たないため対象外。
 - fill と subscription の二重配送のアプリ向け扱い詳細は `issues/0459-draft-20-handle-fill-vs-subscription-delivery.md` に分離する。本 issue はパラメータ送出とストリーム関連付けまで。
 
@@ -28,7 +28,7 @@ draft-ietf-moq-transport-20 で Joining FETCH の代替として導入された 
 
 - `FILL_PARAMETERS` の encode / decode とスコープ検証があること。
 - SUBSCRIBE / REQUEST_UPDATE で fill を要求できる公開 API があること。
-- 対向が開いた fill fetch ストリームを subscription Request ID で関連付けて受信できること。
+- 対向が開いた fill fetch ストリームを、初期 fill (SUBSCRIBE Request ID) と後続 fill (REQUEST_UPDATE Request ID、応答済みを含む) の双方で subscription に紐付けて受信できること。
 - `CHANGES.md` の `## develop` に `[ADD]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
