@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-delivery-timeout-start-last-header-byte
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -17,19 +17,20 @@ draft-ietf-moq-transport-20 §8 では OBJECT_DELIVERY_TIMEOUT の経過時間�
 
 ## 設計方針
 
-- 0366 の設計文言・完了条件を 「last header byte」 起算に書き換えるか、本 issue で実装時に起算点を last header byte とする。
-- subgroup では Object Fields ヘッダー書き込み完了時点を起算に使う。datagram も同様にヘッダー相当の境界を定義する。
+- 0366 の設計文言・完了条件・参照節番号を「last header byte」起算に書き換える (完了条件「pending 0366 の本文が draft-20 起算と矛盾しないこと」を満たすため必須。書き換えずに実装だけで揃える選択肢では満たせない)。
+- 起算点は「Object の last header byte がアプリにより提供された時点」とし (draft-20 §8 の provided by the original publisher application / Table 4)、moqt-js ではオブジェクト提供の入口 (`publishSendObject` / `publishSendDatagram`) で記録する (0366 の既存設計と一致)。「書き込み完了時点」を起算にすると提供時点より遅れ、送信キュー滞留分を起算から外してしまうため使わない。
+- 0366 の更新は本文・設計方針・完了条件に加えて 0366 の参照節番号も対象とする (0461 は src/ のコメントのみ対象であり issue ファイルの参照欄はカバーしない)。0366 は pending のまま本文を更新し (閉めない・reopened にしない)、強制実装着手時は 0366 の pending 理由に従い再オープン手順を踏む。
 - コードコメントの draft-19 参照を draft-20 §8 に更新する (節番号の網羅更新は 0461 と重複しないよう本 issue は起算点のみ)。
 
 ## 完了条件
 
-- OBJECT_DELIVERY_TIMEOUT 強制の起算が last header byte であること (0366 実装と同時または本 issue 単独で検証可能であること)。
+- 0366 実装と同時の場合は、0366 のテストにより強制の起算が last header byte であることを検証できること。本 issue 単独の場合は、強制ロジックは 0366 の責務であるため、本 issue は 0366 本文と記録ロジック (オブジェクト提供入口での記録) が last header byte 起算と一致することを検証すること。
 - pending 0366 の本文が draft-20 起算と矛盾しないこと。
 - `CHANGES.md` への記載は強制実装が入るコミットに含めてよい。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
 
-- draft-ietf-moq-transport-20 §8 (Delivery Timeout Calculations)
+- draft-ietf-moq-transport-20 §8 (Delivery Timeouts and Data Reliability)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1844)
 - 関連: `issues/pending/0366-add-delivery-timeout-enforcement.md`
