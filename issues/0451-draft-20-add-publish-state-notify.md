@@ -3,7 +3,7 @@
 - Created: 2026-09-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-publish-state-notify
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-02
 
 ## 目的
 
@@ -18,14 +18,15 @@ draft-ietf-moq-transport-20 §10.10 で追加された `PUBLISH_STATE_NOTIFY` (T
 ## 設計方針
 
 - `MessageType.PUBLISH_STATE_NOTIFY = 0x22` と encode / decode / `getMessageTypeName` を追加する。
-- subscription bidi の受信ループ (`src/session/bidi.ts` 等) で publisher 発の本メッセージを受理し、パラメータ変更を subscriber 状態に反映する (少なくとも LARGEST_OBJECT / LOCATION_FILTER / FORWARD 等、仕様が許可するパラメータ)。
+- subscription bidi の受信ループで publisher 発の本メッセージを受理し、パラメータ変更を subscriber 状態に反映する (少なくとも LARGEST_OBJECT / LOCATION_FILTER / FORWARD 等、仕様が許可するパラメータ)。対象は SUBSCRIBE で確立した subscription の受信ループ (`bidiReadRequestStreamMessages`) と、受信 PUBLISH で確立した subscription の受信ループ (`runPublishStreamSubLoop`) の両方とする。両ループとも未知メッセージによる PROTOCOL_VIOLATION が防がれること。
 - subscriber 発、または非 subscription 文脈での受信は PROTOCOL_VIOLATION (§10.10)。
+- 受信パラメータは本メッセージに許可されたもの (LARGEST_OBJECT / LOCATION_FILTER / FORWARD) のみ受理し、許可外のパラメータは §10.2.1 の MUST に従い PROTOCOL_VIOLATION で拒否する。
 - 送信側 (自 publisher が対向 subscriber に送る) は、状態変更を能動通知する必要がある場合に後続で足す。本 issue の必須範囲は受信と型定義。送信が必要なら完了条件に明記して実装する。
 
 ## 完了条件
 
 - Type 0x22 の encode / decode と名前解決があること。
-- subscription bidi で受信でき、不正文脈では PROTOCOL_VIOLATION になること。
+- SUBSCRIBE で確立した subscription と受信 PUBLISH で確立した subscription の双方の bidi で受信でき、subscriber 発・非 subscription 文脈・許可外パラメータの各場合は PROTOCOL_VIOLATION になること。
 - 受信パラメータが subscriber の状態 (Largest Location 等) に反映されること。
 - `CHANGES.md` の `## develop` に `[ADD]` があること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
