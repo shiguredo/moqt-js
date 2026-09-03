@@ -11,6 +11,13 @@
 
 ## develop
 
+- [CHANGE] FETCH メッセージを draft-20 のワイヤ形式に変更し Joining FETCH を削除する
+  - draft-ietf-moq-transport-20 §10.13 に基づき、FETCH ペイロードを Request ID + Track Namespace / Track Name + Parameters のみに変更する (Fetch Type 0x01–0x03 と Standalone / Joining 構造を削除)
+  - 取得範囲は LOCATION_FILTER パラメータ (0x21) で表し、Session.fetch() のオプションを startLocation / endLocation から filter (LocationFilter) に変更する (省略時は {0, 0} から Largest Object までの全オブジェクト)
+  - FetchType / StandaloneFetch / JoiningFetch / bidiSendJoiningFetch / JoiningFetchOptions / SubscribeOptions.joiningFetch / MediaSubscriberOptions.joiningFetch / RequestErrorCode.INVALID_JOINING_REQUEST_ID を削除する
+  - createMediaSubscriber / devtools の catalog 取得を SUBSCRIBE (Next Object 形式の Location Filter) + FETCH (フィルタなし) に変更し、Joining FETCH 非依存で catalog 受信を完了できるようにする
+  - draft-19 の FETCH ワイヤ (Fetch Type + Start / End Location フィールド) と Joining FETCH は相互運用できない
+  - @voluntas
 - [CHANGE] Location Filter のワイヤ形式を draft-20 の Length ベースに変更する
   - draft-ietf-moq-transport-20 §5.1.2 / §10.2.9 に基づき、公開型 LocationFilter を Filter Type enum から Length で optional フィールド数 (0〜4) を決める形式に変更する (Length 0 はフィルタなし / REQUEST_UPDATE での除去)
   - 旧表現との対応: NextGroupStart → { startGroup } (0 は Next Group)、LargestObject → { startGroup, startObject } (両方 0 は Next Object)、AbsoluteStart → { startGroup, startObject }、AbsoluteRange → { startGroup, startObject, endGroupDelta }。4 フィールド表現 (+ endObject) と相対指定の上下端クランプは新規挙動として追加

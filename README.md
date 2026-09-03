@@ -88,9 +88,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
 - Pending Subgroup Buffer
-- FETCH メッセージ (Standalone)
-- FETCH メッセージ (Joining Relative)
-- FETCH メッセージ (Joining Absolute)
+- FETCH メッセージ
 - FETCH_OK メッセージ
 - Fetch Group Order (Ascending / Descending)
 - Location Filter (相対 startGroup / 絶対 startGroup+startObject / 絶対範囲 3・4 フィールド / Length 0 の除去)
@@ -396,7 +394,6 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - カタログ情報の表示
 - HTTP/2 / HTTP/3 接続判別表示
 - Forward State の表示
-- Joining Fetch 対応
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
 - 設定を URL クエリパラメータで共有
 

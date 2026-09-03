@@ -62,10 +62,11 @@ export interface Subscriber {
   readonly state: SubscriberState;
   /**
    * SUBSCRIBE_OK で受信した LARGEST_OBJECT パラメータ
-   * draft-ietf-moq-transport-19 Section 10.2.16 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-20 Section 10.2.17 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
-   * Joining Fetch でどこからデータを取得するか決める際に使用。
+   * 相対指定 (1 フィールド) の Location Filter と Next Object 形式の
+   * 解決に使用する (draft-ietf-moq-transport-20 §5.1.2)。
    */
   readonly largestLocation: Location | null;
   /**

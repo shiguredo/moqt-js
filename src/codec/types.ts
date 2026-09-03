@@ -124,7 +124,6 @@ export interface MediaSubscriberOptions {
   audio?: AudioSubscribeOptions;
   video?: VideoSubscribeOptions;
   useWorker?: boolean;
-  joiningFetch?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)

@@ -54,6 +54,7 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
  * - EXCESSIVE_LOAD (0x9) を追加
  * - DUPLICATE_SUBSCRIPTION を削除（draft-19 §5.1 で同一 Track への複数サブスクリプションが許可）
  * - NAMESPACE_TOO_LARGE (0x31) を追加
+ * - INVALID_JOINING_REQUEST_ID (0x32) を削除 (draft-20 で Joining FETCH 削除)
  * - UNKNOWN_STATUS_IN_RANGE を削除
  */
 export const RequestErrorCode = {
@@ -71,7 +72,6 @@ export const RequestErrorCode = {
   UNINTERESTED: 0x20,
   PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,
-  INVALID_JOINING_REQUEST_ID: 0x32,
   UNSUPPORTED_EXTENSION: 0x33,
   REDIRECT: 0x34,
   /**

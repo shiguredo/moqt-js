@@ -294,15 +294,11 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Session.subscribe()` は以下を行う。
 
-1. `joiningFetch` がある場合に事前バリデーションする
-   - `filter` は Next Object 形式 (`{ startGroup: 0n, startObject: 0n }`) である必要がある
-   - `forward` は `false` にできない
-2. `SubscriberImpl` を仮の `trackAlias = 0n` で作る
-3. `SUBSCRIBE` を双方向ストリームで送る
-4. `SUBSCRIBE_OK` を待つ
-5. `trackAlias` / `largestLocation` / `trackProperties` を反映する
-6. `subscribers` と `subscribersByAlias` に登録する
-7. 必要なら `bidiSendJoiningFetch()` を起動する
+1. `SubscriberImpl` を仮の `trackAlias = 0n` で作る
+2. `SUBSCRIBE` を双方向ストリームで送る
+3. `SUBSCRIBE_OK` を待つ
+4. `trackAlias` / `largestLocation` / `trackProperties` を反映する
+5. `subscribers` と `subscribersByAlias` に登録する
 
 #### `REQUEST_UPDATE`
 
@@ -314,9 +310,9 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 ### `fetch()` の流れ
 
-`Session.fetch()` は standalone の `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。
+`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。
 
-`FETCH_OK` 受信時には `endLocation >= startLocation` を検証し、矛盾していれば `PROTOCOL_VIOLATION` でセッションを閉じる。成功時は `FetcherImpl` に以下を保存する。
+`FETCH_OK` 受信時には、Start Location が確定できる場合 (フィルタなし / 絶対指定) に `endLocation >= startLocation` を検証し、矛盾していれば `PROTOCOL_VIOLATION` でセッションを閉じる。成功時は `FetcherImpl` に以下を保存する。
 
 - `endOfTrack`
 - `endLocation`
@@ -324,13 +320,9 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-### Joining Fetch
+draft-20 で Joining FETCH は削除された。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object 形式の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§5.1.3) である。
 
-Joining Fetch は `subscribe()` 成功後に別の `FETCH` を追加で送る実装になっている。
-
-- `Relative Joining` は `largestLocation.group - start` から開始する
-- `Absolute Joining` は `start` をそのまま開始 `groupId` として扱う
-- `FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する
+`FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
 ---
 
