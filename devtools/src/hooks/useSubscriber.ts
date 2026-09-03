@@ -9,7 +9,6 @@ import {
   type Catalog,
   type MoqtObject,
   type DebugMessage,
-  type JoiningFetchOptions,
   type CatalogTrack,
 } from "moqt-js";
 import { addLog } from "../components/DebugPanel";
@@ -18,27 +17,7 @@ import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import { useRef, useEffect } from "preact/hooks";
-import { batch } from "@preact/signals";
 import type { RefObject } from "preact";
-
-// 複数 Subgroup ストリーム / OBJECT_DATAGRAM の到着順を (groupId, objectId) 昇順へ揃える。
-// draft-ietf-moq-transport-19 §2.2 (Subgroups) では Subgroup ストリーム間の配送順は
-// 保証されない (個々のストリームは in-order だがストリーム間は publisher 側で
-// out of order に送出されうる) ため、バッファドレイン時に明示的にソートする必要がある。
-// テストで参照するため export している。
-export function toSortedByGroupObject(objects: MoqtObject[]): MoqtObject[] {
-  // 引数配列を破壊しないようコピーしてからソートする。
-  // signal の .value 配列が直接渡された場合に Preact の変更検知を壊さないため。
-  return [...objects].sort((a, b) => {
-    if (a.groupId !== b.groupId) {
-      return a.groupId < b.groupId ? -1 : 1;
-    }
-    if (a.objectId !== b.objectId) {
-      return a.objectId < b.objectId ? -1 : 1;
-    }
-    return 0;
-  });
-}
 
 /**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
@@ -66,7 +45,7 @@ function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): Vi
 
 /**
  * Subscriber インスタンスの統計フィールドを初期値へリセットする。
- * `startSubscribing` 開始時に Joining Fetch / decode カウンタや位置情報をクリアする。
+ * `startSubscribing` 開始時に decode カウンタや位置情報をクリアする。
  */
 function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.framesDecoded.value = 0;
@@ -80,7 +59,6 @@ function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.chunksDecoded.value = 0;
   instance.chunksSkipped.value = 0;
   instance.decodeErrors.value = 0;
-  instance.joiningFetchStats.value = null;
   instance.largestLocation.value = null;
 }
 
@@ -128,21 +106,15 @@ export function closeSubscriberResources(
 
 /**
  * `SubscriberInstance` の状態 signal 群を初期値にリセットし、フックローカル参照
- * (`chainRef` / 必要に応じて ref 群) を巻き戻す。
+ * (`chainRef`) を巻き戻す。
  *
  * `status` / `statusMessage` / `isStopping` は触らない (#0163 の責務境界に従う)。
  * `settingsDisabled` は `subscriber.value = null` の反映後に `hasActiveSubscriber`
  * computed で再計算されるため、本関数の末尾で再有効化判定を行う。
- *
- * 将来の ref 化に備えて引数を受け取り、未適用フィールドは `null` を渡す
- * (0164 適用後に joiningFetch 系 ref が埋まる)。
  */
 export function resetSubscriberState(
   instance: sub.SubscriberInstance,
   chainRef: { current: Promise<void> },
-  liveObjectBufferRef: { current: MoqtObject[] },
-  joiningFetchInProgressRef: { current: boolean },
-  joiningFetchLastLocationRef: { current: { group: bigint; object: bigint } | null },
   isOtherPublisherActive: () => boolean,
 ): void {
   instance.subscriber.value = null;
@@ -153,12 +125,7 @@ export function resetSubscriberState(
   instance.codec.value = "";
   instance.dynamicGroupsSupported.value = false;
 
-  instance.joiningFetchStats.value = null;
   instance.largestLocation.value = null;
-
-  joiningFetchInProgressRef.current = false;
-  joiningFetchLastLocationRef.current = null;
-  liveObjectBufferRef.current = [];
 
   chainRef.current = Promise.resolve();
 
@@ -215,12 +182,6 @@ export function useSubscriber(
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
-  // Joining Fetch 中のライブオブジェクトバッファ (UI 描画不要なため Signal ではなく ref で持つ)
-  const liveObjectBufferRef = useRef<MoqtObject[]>([]);
-  // Joining Fetch 中フラグ (UI / 外部参照なしのためフックローカル ref で持つ)
-  const joiningFetchInProgressRef = useRef<boolean>(false);
-  // Joining Fetch の最後の location (重複除去用、フックローカル ref で持つ)
-  const joiningFetchLastLocationRef = useRef<{ group: bigint; object: bigint } | null>(null);
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -420,14 +381,19 @@ export function useSubscriber(
       let actualTrackName = settings.trackName.value;
 
       try {
-        // draft-ietf-moq-transport-19 に準拠した Catalog 購読:
-        // 1. SUBSCRIBE_OK に LARGEST_OBJECT がある場合 → Joining FETCH で過去の Catalog を取得
-        // 2. SUBSCRIBE_OK に LARGEST_OBJECT がない場合 → リアルタイムで Catalog が配信されるのを待つ
-        //
-        // joiningFetch を使用すると:
-        // - LARGEST_OBJECT がある場合は自動的に Joining FETCH が送信される
-        // - LARGEST_OBJECT がない場合は onError が呼ばれ、リアルタイム配信を待つ
+        // draft-ietf-moq-transport-20 に準拠した Catalog 購読:
+        // 1. Next Object 形式の Location Filter で SUBSCRIBE し、live の Catalog 更新を受信
+        // 2. 独立した FETCH (フィルタなし) で過去の Catalog を取得
+        // FETCH が INVALID_RANGE で失敗する場合 (Catalog 未 publish) は
+        // live の SUBSCRIBE 経由で Catalog が届くのを待つ
         const catalogPromise = new Promise<CatalogTrack | undefined>((resolve, reject) => {
+          // SUBSCRIBE と FETCH は独立したリクエストであり、古いフルカタログが
+          // live の新しいフルカタログより後に届く可能性がある。instance.catalog を
+          // 巻き戻さないよう、適用済みの最大 Location を保持して単調性を保証する。
+          // (createMediaSubscriber の filterPendingCatalogObjects と異なり、ここでは
+          // 複数リクエスト間の「適用順序の単調性」だけを保証する。full catalog の
+          // 置換は冪等のため、重複オブジェクトの除去は不要)
+          let lastCatalogLocation: { group: bigint; object: bigint } | null = null;
           // Catalog オブジェクトを処理する共通関数
           const processCatalogObject = (obj: MoqtObject, source: string) => {
             try {
@@ -446,6 +412,22 @@ export function useSubscriber(
                 return;
               }
               const catalog = message;
+              const location: { group: bigint; object: bigint } = {
+                group: obj.groupId,
+                object: obj.objectId,
+              };
+              if (
+                lastCatalogLocation !== null &&
+                (location.group < lastCatalogLocation.group ||
+                  (location.group === lastCatalogLocation.group &&
+                    location.object <= lastCatalogLocation.object))
+              ) {
+                addLog("info", `[${subscriberId}] stale or duplicate catalog object skipped`, {
+                  source,
+                });
+                return;
+              }
+              lastCatalogLocation = location;
               // RECV OBJECT 自体は addLog 経由で残るのでここで重複ログは出さない。
               addLog("info", `[${subscriberId}] [RECV] OBJECT (${CATALOG_TRACK_NAME})`, {
                 source,
@@ -466,6 +448,13 @@ export function useSubscriber(
               });
               reject(error);
             }
+          };
+
+          // Catalog 未 publish 等の FETCH 失敗は live 待ちへフォールバックする
+          const onCatalogFetchFailed = (error: unknown): void => {
+            addLog("warn", `[${subscriberId}] catalog fetch failed`, {
+              message: error instanceof Error ? error.message : String(error),
+            });
           };
 
           void session
@@ -489,22 +478,9 @@ export function useSubscriber(
               },
               {
                 // Next Object 形式 ({ startGroup: 0n, startObject: 0n }) の
-                // Location Filter で SUBSCRIBE する。joiningFetch を使用して、
-                // LARGEST_OBJECT がある場合は FETCH で取得
-                // LARGEST_OBJECT がない場合は Joining FETCH は送信されず、リアルタイム配信を待つ
-                joiningFetch: {
-                  type: "absolute",
-                  start: 0n,
-                  onObject: (obj: MoqtObject) => {
-                    // Joining FETCH から受信した Catalog オブジェクト
-                    processCatalogObject(obj, "fetch");
-                  },
-                  onEnd: () => {
-                    addLog("info", `[${subscriberId}] Catalog Joining FETCH completed`, {
-                      trackName: CATALOG_TRACK_NAME,
-                    });
-                  },
-                } as JoiningFetchOptions,
+                // Location Filter で SUBSCRIBE する。live の Catalog 更新は
+                // この SUBSCRIBE で受信し、過去の Catalog は FETCH で取得する
+                filter: { startGroup: 0n, startObject: 0n },
               },
             )
             .then((catalogSubscriberInstance) => {
@@ -516,6 +492,32 @@ export function useSubscriber(
                 return;
               }
               instance.catalogSubscriber.value = catalogSubscriberInstance;
+
+              // 過去の Catalog を FETCH (フィルタなし = {0, 0} から Largest Object まで)
+              // で取得する。SUBSCRIBE_OK 受信後に FETCH を送ることで、Next Object の
+              // Largest (L1) が FETCH 処理時の Largest (L2) 以下になることを保証し、
+              // (L2, L1] の取りこぼしを防ぐ (createMediaSubscriber と同じ順序)。
+              void session
+                .fetch(
+                  namespaceArray,
+                  CATALOG_TRACK_NAME,
+                  {},
+                  {
+                    object: (obj: MoqtObject) => {
+                      // FETCH から受信した Catalog オブジェクト
+                      processCatalogObject(obj, "fetch");
+                    },
+                    end: () => {
+                      addLog("info", `[${subscriberId}] catalog fetch completed`, {
+                        trackName: CATALOG_TRACK_NAME,
+                      });
+                    },
+                    error: (error) => {
+                      onCatalogFetchFailed(error);
+                    },
+                  },
+                )
+                .catch(onCatalogFetchFailed);
             })
             .catch(reject);
         });
@@ -600,21 +602,15 @@ export function useSubscriber(
       instance.decoderState.value = decoderInstance.state;
       instance.codec.value = codecDisplay;
 
-      const joiningFetchEnabled = instance.joiningFetchEnabled.value;
       const newGroupRequestEnabled = instance.newGroupRequestEnabled.value;
 
       instance.status.value = "connected";
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance);
-      // ref のクリアは Signal カウンタリセットとは責務が異なるためフック側で実行する。
-      liveObjectBufferRef.current = [];
-      joiningFetchInProgressRef.current = joiningFetchEnabled;
-      joiningFetchLastLocationRef.current = null;
 
       // Subscriber オプションを構築する
       const subscribeOptions: {
         newGroupRequest?: bigint;
-        joiningFetch?: JoiningFetchOptions;
       } = {};
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
@@ -625,138 +621,11 @@ export function useSubscriber(
         subscribeOptions.newGroupRequest = 0n;
       }
 
-      // Joining Fetch 設定
-      if (joiningFetchEnabled) {
-        subscribeOptions.joiningFetch = {
-          type: "relative",
-          start: 0n,
-          onObject: (obj: MoqtObject) => {
-            const currentStats = instance.joiningFetchStats.value ?? {
-              objectsReceived: 0,
-              bytesReceived: 0,
-              completed: false,
-              bufferedLiveObjects: 0,
-            };
-
-            // LOC から keyframe 情報を取得（ログ用）
-            let isKeyFrame = false;
-            if (obj.properties && obj.properties.length > 0) {
-              const locProperties = LOC.decodeVideoProperties(obj.properties);
-              if (locProperties.frameMarking) {
-                isKeyFrame = locProperties.frameMarking.isIndependent;
-              }
-            }
-
-            // 最初のオブジェクトをログ出力（keyframe で始まるべき）
-            if (currentStats.objectsReceived === 0) {
-              console.log(
-                `[${subscriberId}] Joining Fetch: started - group=${obj.groupId}, object=${obj.objectId}, isKeyFrame=${isKeyFrame}`,
-              );
-            }
-
-            joiningFetchLastLocationRef.current = { group: obj.groupId, object: obj.objectId };
-            instance.joiningFetchStats.value = {
-              ...currentStats,
-              objectsReceived: currentStats.objectsReceived + 1,
-              bytesReceived:
-                currentStats.bytesReceived + obj.payload.length + (obj.properties?.length ?? 0),
-            };
-
-            // Joining Fetch から受信したオブジェクトは即座にデコード
-            void handleObject(obj);
-          },
-          onEnd: () => {
-            const currentStats = instance.joiningFetchStats.value ?? {
-              objectsReceived: 0,
-              bytesReceived: 0,
-              completed: false,
-              bufferedLiveObjects: 0,
-            };
-
-            // toSortedByGroupObject 内部で [...objects].sort(...) するため、ここでのスプレッドは省略する。
-            const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
-
-            // Joining Fetch で既に配信済みのオブジェクトをスキップ (重複除去)。
-            const lastFetch = joiningFetchLastLocationRef.current;
-            let objectsToProcess = bufferedObjects;
-            if (lastFetch && bufferedObjects.length > 0) {
-              const originalLength = bufferedObjects.length;
-              objectsToProcess = bufferedObjects.filter((obj) => {
-                if (obj.groupId === lastFetch.group && obj.objectId <= lastFetch.object) {
-                  return false;
-                }
-                if (obj.groupId < lastFetch.group) {
-                  return false;
-                }
-                return true;
-              });
-              const skippedCount = originalLength - objectsToProcess.length;
-              if (skippedCount > 0) {
-                console.log(
-                  `[${subscriberId}] Joining Fetch: skipped ${skippedCount} duplicate objects from live buffer`,
-                );
-              }
-            }
-
-            console.log(
-              `[${subscriberId}] Joining Fetch: completed, processing ${objectsToProcess.length} buffered live objects`,
-            );
-
-            // chainRef にバッファ済みオブジェクトのデコードを順次予約してから、
-            // joiningFetchInProgress / liveObjectBuffer / stats を同一 batch で更新する。
-            // ドレイン投入とフラグ立て下げを同期セクションでまとめることで、
-            // 「ドレイン中に object: コールバックが割り込んでバッファに積まれたまま
-            // 永久に放置される」race window を解消する。立て下げ後の object: は
-            // chainRef 経路へ直接流れるため、Promise チェーンで順序保証される。
-            for (const bufferedObj of objectsToProcess) {
-              chainRef.current = chainRef.current
-                .then(() => handleObject(bufferedObj))
-                .catch(() => {});
-            }
-
-            // ref のフラグ立て下げと buffer クリアは Signal 統計更新の前に行い、
-            // ドレイン投入と同じ同期セクション内で完了させる。
-            // 0164 適用後は joiningFetchInProgress / joiningFetchLastLocation が ref で
-            // batch の意味は無いため、joiningFetchStats のみ単純代入する。
-            joiningFetchInProgressRef.current = false;
-            joiningFetchLastLocationRef.current = null;
-            liveObjectBufferRef.current = [];
-            instance.joiningFetchStats.value = {
-              ...currentStats,
-              completed: true,
-              bufferedLiveObjects: objectsToProcess.length,
-            };
-          },
-          onError: (error: Error) => {
-            console.error(`[${subscriberId}] joiningFetch: error`, error);
-            // Joining Fetch (過去取得) が失敗しても SUBSCRIBE 経由のライブ配信は
-            // 独立して継続する。ライブバッファに溜まったオブジェクトを破棄せず、
-            // onEnd と同じ手順でドレインしてからフラグを下げる。バッファ内に
-            // keyframe が含まれていれば自然にデコードが再開する。
-            const bufferedObjects = toSortedByGroupObject(liveObjectBufferRef.current);
-            for (const bufferedObj of bufferedObjects) {
-              chainRef.current = chainRef.current
-                .then(() => handleObject(bufferedObj))
-                .catch(() => {});
-            }
-            joiningFetchInProgressRef.current = false;
-            joiningFetchLastLocationRef.current = null;
-            liveObjectBufferRef.current = [];
-          },
-        };
-      }
-
       const subscriberInstance = await session.subscribe(
         namespaceArray,
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // Joining Fetch 中はライブオブジェクトをバッファ。push で O(1) 追記する。
-            if (joiningFetchInProgressRef.current) {
-              liveObjectBufferRef.current.push(obj);
-              return;
-            }
-
             // Promise チェーンで到着順にデコードする。
             // 複数 Subgroup ストリームを並行使用する Publisher との接続では
             // (groupId, objectId) 順の保証がないが、現状はリオーダーバッファを持たない。
@@ -855,14 +724,7 @@ export function useSubscriber(
     abortControllerRef.current = null;
 
     closeSubscriberResources(instance, canvasRef.current);
-    resetSubscriberState(
-      instance,
-      chainRef,
-      liveObjectBufferRef,
-      joiningFetchInProgressRef,
-      joiningFetchLastLocationRef,
-      () => pub.pubSession.value !== null,
-    );
+    resetSubscriberState(instance, chainRef, () => pub.pubSession.value !== null);
   };
 
   const requestKeyframe = async (): Promise<void> => {

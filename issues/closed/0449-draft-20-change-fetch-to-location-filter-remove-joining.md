@@ -1,7 +1,7 @@
 # FETCH を Location Filter ベースに変更し Joining FETCH を削除する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-03
 - Branch: feature/change-fetch-to-location-filter-remove-joining
 - Polished: 2026-09-01
 
@@ -46,3 +46,18 @@ draft-ietf-moq-transport-20 §10.13 で FETCH ワイヤが Track Namespace / Tra
 - draft-ietf-moq-transport-20 Appendix A.1 (#1673, #1809)
 - 前提: `issues/0448-draft-20-restructure-location-filter-wire.md`
 - 後続: `issues/0450-draft-20-add-fill-parameters-and-fill-fetch.md`
+
+## 解決方法
+
+draft-20 §10.13 の FETCH ワイヤ (Request ID + Track Namespace / Track Name + Parameters のみ) に合わせて実装を再構成し、Joining FETCH を削除した。
+
+- `src/message/fetch.ts`: `Fetch` 型を `{ requestId, trackNamespace, trackName, parameters }` に再構成し、`encodeFetchPayload` / `decodeFetchPayload` を SUBSCRIBE と同型のエンコードに書き直した。`FetchType` / `StandaloneFetch` / `JoiningFetch` を削除し、`FetchOk` は §10.14 の参照に更新した。
+- `src/session.ts`: `FetchOptions` の `startLocation` / `endLocation` を `filter?: LocationFilter` に置換した。`fetch()` は LOCATION_FILTER パラメータで範囲を送り、FETCH_OK の End Location 検証用の Start Location を `resolveFetchStartLocation` で確定できる場合のみ保持する (相対指定・Next Object は Largest Object 依存のため検証スキップ)。`JoiningFetchOptions` / `SubscribeOptions.joiningFetch` と、subscribe 内の Joining Fetch 事前バリデーションを削除した。
+- `src/session/params.ts`: `buildFetchParameters` に LOCATION_FILTER (0x21) の載荷を追加し、`resolveFetchStartLocation` を追加した (§5.1.2 の形式別 Start Location 決定。3 / 4 フィールドの両方 0 は絶対表現として {0, 0} を返す)。
+- `src/session/bidi.ts`: `bidiSendJoiningFetch` と SUBSCRIBE_OK 経由の Joining FETCH 起動を削除した。
+- `src/error.ts`: `RequestErrorCode.INVALID_JOINING_REQUEST_ID` (0x32) を削除した (draft-20 §15.11.2 からも削除済み)。
+- `src/index.ts` / `src/message/index.ts`: `JoiningFetchOptions` / `FetchType` / `StandaloneFetch` / `JoiningFetch` の export を削除した。
+- `src/createMediaSubscriber.ts`: catalog 取得を SUBSCRIBE (Next Object 形式の Location Filter) + 独立 FETCH (フィルタなし = {0, 0} から Largest Object まで) に変更した。SUBSCRIBE_OK 後に FETCH を送ることで取りこぼしを防ぎ、live バッファのドレイン時に `filterPendingCatalogObjects` で FETCH との二重配信を除去する (delta の再適用は非冪等)。`MediaSubscriberOptions.joiningFetch` と映像トラックの Joining FETCH バッファリングを削除した。
+- devtools: `useSubscriber.ts` / `SubscriberPanel.tsx` / `DebugPanel.tsx` / `signals/subscriber.ts` / `testApi.ts` / `logFormatters.ts` から Joining Fetch の UI・統計・デバッグフィールドを除去し、catalog 取得を SUBSCRIBE + FETCH に変更した (full catalog の適用順序を単調性ガードで保証)。
+- テスト: `fetch.test.ts` / `fetch.prop.ts` を新ワイヤのラウンドトリップと固定バイト列 (Figure 16 突き合わせ) に書き換え、`session.test.ts` / `bidi.test.ts` / `params.test.ts` を追随させた。`filterPendingCatalogObjects` / `resolveFetchStartLocation` の単体テストを追加した。
+- `CHANGES.md` に `[CHANGE]` を追記した。`vp check` / `tsc --noEmit` / `vp test run` (1351 件) / `vp run build` すべて通過。

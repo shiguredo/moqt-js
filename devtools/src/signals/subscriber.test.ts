@@ -35,7 +35,6 @@ test("createSubscriberInstance initializes signals with expected defaults", () =
   assert.equal(instance.statusMessage.value, "Ready to subscribe");
   assert.equal(instance.codec.value, "");
   assert.equal(instance.isStopping.value, false);
-  assert.equal(instance.joiningFetchEnabled.value, true);
   assert.equal(instance.newGroupRequestEnabled.value, false);
   assert.equal(instance.framesDecoded.value, 0);
   assert.equal(instance.objectsReceived.value, 0);

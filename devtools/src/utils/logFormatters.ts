@@ -12,11 +12,6 @@ export const RFC_FIELD_NAMES: Record<string, string> = {
   statusCode: "Status Code",
   streamCount: "Stream Count",
   maxRequestId: "Max Request ID",
-  fetchType: "Fetch Type",
-  joiningRequestId: "Joining Request ID",
-  joiningStart: "Joining Start",
-  startLocation: "Start Location",
-  endLocation: "End Location",
   trackNamespacePrefix: "Track Namespace Prefix",
   subscriptionRequestId: "Subscription Request ID",
 };

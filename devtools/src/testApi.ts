@@ -15,7 +15,7 @@ import {
   pubStatus,
   objectsWithExtensions as pubObjectsWithExtensions,
 } from "./signals/publisher";
-import { subscriberInstances, type JoiningFetchStats } from "./signals/subscriber";
+import { subscriberInstances } from "./signals/subscriber";
 import { url, certificateHash } from "./signals/connectionSettings";
 import type { StatusType } from "./types";
 
@@ -48,7 +48,6 @@ export interface SubscriberStats {
   bytesReceived: number;
   objectsWithExtensions: number;
   decoderState: string;
-  joiningFetchStats: JoiningFetchStats | null;
   largestLocation: { group: string; object: string } | null;
 }
 
@@ -115,7 +114,6 @@ export function initTestApi(): void {
         bytesReceived: sub.bytesReceived.value,
         objectsWithExtensions: sub.objectsWithExtensions.value,
         decoderState: sub.decoderState.value,
-        joiningFetchStats: sub.joiningFetchStats.value,
         largestLocation: convertLargestLocation(sub.largestLocation.value),
       })),
 
@@ -135,7 +133,6 @@ export function initTestApi(): void {
         bytesReceived: sub.bytesReceived.value,
         objectsWithExtensions: sub.objectsWithExtensions.value,
         decoderState: sub.decoderState.value,
-        joiningFetchStats: sub.joiningFetchStats.value,
         largestLocation: convertLargestLocation(sub.largestLocation.value),
       };
     },

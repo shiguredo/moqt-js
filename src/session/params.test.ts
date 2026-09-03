@@ -21,6 +21,7 @@ import {
   validateTrackNamespaceForSend,
   compareLocations,
   validateFetchOkEndLocation,
+  resolveFetchStartLocation,
 } from "./params";
 import { encodeParameters, decodeParameters } from "../message/parameter";
 import { InvalidFilterError } from "../error";
@@ -221,8 +222,6 @@ test("buildSubscribeParameters: authorizationToken 未指定は AUTHORIZATION_TO
 test("buildFetchParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
   const parameters = buildFetchParameters({
     fillTimeout: 1000n,
-    startLocation: { group: 0n, object: 0n },
-    endLocation: { group: 1n, object: 0n },
     authorizationToken: useValueToken(),
   });
   const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
@@ -234,8 +233,6 @@ test("buildFetchParameters: authorizationToken が AUTHORIZATION_TOKEN パラメ
 test("buildFetchParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
   const parameters = buildFetchParameters({
     fillTimeout: 1000n,
-    startLocation: { group: 0n, object: 0n },
-    endLocation: { group: 1n, object: 0n },
   });
   assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
 });
@@ -426,10 +423,38 @@ test("buildSubscribeParameters: 3 フィールドの End Group がちょうど 2
   assert.isDefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
 });
 
+test("buildFetchParameters: filter が LOCATION_FILTER パラメータになる", () => {
+  const parameters = buildFetchParameters({
+    filter: { startGroup: 0n, startObject: 0n, endGroupDelta: 1n },
+  });
+  const locationFilter = parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER);
+  assert.isDefined(locationFilter);
+});
+
+test("buildFetchParameters: filter 指定なしのとき LOCATION_FILTER は付かない", () => {
+  // フィルタなしは {0, 0} から Largest Object までの全オブジェクト要求に相当し、
+  // §10.2.9「If omitted from FETCH ... the fetch ... is unfiltered.」に従い
+  // パラメータを送らない。
+  const parameters = buildFetchParameters({});
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
+});
+
+test("buildFetchParameters: 3 フィールドの End Group が 2^64-1 を超えると InvalidFilterError", () => {
+  assert.throws(
+    () =>
+      buildFetchParameters({
+        filter: {
+          startGroup: MAX_VARINT,
+          startObject: 0n,
+          endGroupDelta: 1n,
+        },
+      }),
+    InvalidFilterError,
+  );
+});
+
 test("buildFetchParameters: rangeFilters が FETCH パラメータになる", () => {
   const parameters = buildFetchParameters({
-    startLocation: { group: 0n, object: 0n },
-    endLocation: { group: 1n, object: 0n },
     rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
   });
   assert.isDefined(parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
@@ -439,8 +464,6 @@ test("buildFetchParameters: 削除指定で throw する", () => {
   assert.throws(
     () =>
       buildFetchParameters({
-        startLocation: { group: 0n, object: 0n },
-        endLocation: { group: 1n, object: 0n },
         rangeFilters: [{ type: "objectId", remove: true }],
       }),
     /cannot remove range filters in FETCH/,
@@ -451,8 +474,6 @@ test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
   assert.throws(
     () =>
       buildFetchParameters({
-        startLocation: { group: 0n, object: 0n },
-        endLocation: { group: 1n, object: 0n },
         rangeFilters: [
           { type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] },
         ],
@@ -842,4 +863,74 @@ test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセ�
   const message = validateFetchOkEndLocation({ group: 2n, object: 0n }, { group: 1n, object: 0n });
   assert.isDefined(message);
   assert.isTrue(message!.includes("is smaller than start location"));
+});
+
+// ============================================================================
+// resolveFetchStartLocation
+// ============================================================================
+
+test("resolveFetchStartLocation: filter 指定なしは {0, 0} を返す", () => {
+  assert.deepEqual(resolveFetchStartLocation(undefined), { group: 0n, object: 0n });
+});
+
+test("resolveFetchStartLocation: reset (Length 0) は {0, 0} を返す", () => {
+  assert.deepEqual(resolveFetchStartLocation({ reset: true }), { group: 0n, object: 0n });
+});
+
+test("resolveFetchStartLocation: 絶対開始 (2 フィールド) は {startGroup, startObject} を返す", () => {
+  assert.deepEqual(resolveFetchStartLocation({ startGroup: 3n, startObject: 2n }), {
+    group: 3n,
+    object: 2n,
+  });
+});
+
+test("resolveFetchStartLocation: 3 フィールドは {startGroup, startObject} を返す", () => {
+  assert.deepEqual(
+    resolveFetchStartLocation({ startGroup: 3n, startObject: 2n, endGroupDelta: 1n }),
+    { group: 3n, object: 2n },
+  );
+});
+
+test("resolveFetchStartLocation: 3 フィールドで両方 0 でも {0, 0} を返す", () => {
+  // 3 フィールドは絶対表現 (§5.1.2「Otherwise, all fields are absolute.」) のため、
+  // 2 フィールド両方 0 の Next Object 解釈は適用されない。
+  assert.deepEqual(
+    resolveFetchStartLocation({ startGroup: 0n, startObject: 0n, endGroupDelta: 1n }),
+    { group: 0n, object: 0n },
+  );
+});
+
+test("resolveFetchStartLocation: 4 フィールドは {startGroup, startObject} を返す", () => {
+  assert.deepEqual(
+    resolveFetchStartLocation({
+      startGroup: 3n,
+      startObject: 2n,
+      endGroupDelta: 1n,
+      endObject: 5n,
+    }),
+    { group: 3n, object: 2n },
+  );
+});
+
+test("resolveFetchStartLocation: 4 フィールドで両方 0 でも {0, 0} を返す", () => {
+  assert.deepEqual(
+    resolveFetchStartLocation({
+      startGroup: 0n,
+      startObject: 0n,
+      endGroupDelta: 1n,
+      endObject: 5n,
+    }),
+    { group: 0n, object: 0n },
+  );
+});
+
+test("resolveFetchStartLocation: 相対指定 (1 フィールド) は undefined を返す", () => {
+  // Start Group は Largest Object の Group + 1 - StartGroup の相対計算であり、
+  // クライアント側では Largest Object を確定できないため undefined。
+  assert.isUndefined(resolveFetchStartLocation({ startGroup: 0n }));
+});
+
+test("resolveFetchStartLocation: Next Object 形式 (0, 0) は undefined を返す", () => {
+  // Next Object は {Largest.Group, Largest.Object + 1} で、Largest Object 依存。
+  assert.isUndefined(resolveFetchStartLocation({ startGroup: 0n, startObject: 0n }));
 });

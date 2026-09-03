@@ -180,18 +180,11 @@ function generateSubscriberStatsText(subscriberId: string): string {
     `Keyframes Decoded: ${instance.keyFramesDecoded.value}`,
     `Decode Errors: ${instance.decodeErrors.value}`,
   ];
-  // Joining Fetch 情報
+  // Largest Location 情報
   const largestLocation = instance.largestLocation.value;
   if (largestLocation) {
     lines.push(`Largest Group: ${largestLocation.group}`);
     lines.push(`Largest Object: ${largestLocation.object}`);
-  }
-  const joiningFetchStats = instance.joiningFetchStats.value;
-  if (joiningFetchStats) {
-    lines.push(`Joining Fetch Objects: ${joiningFetchStats.objectsReceived}`);
-    lines.push(`Joining Fetch Bytes: ${formatBytes(joiningFetchStats.bytesReceived)}`);
-    lines.push(`Joining Fetch Completed: ${joiningFetchStats.completed}`);
-    lines.push(`Joining Fetch Buffered Live: ${joiningFetchStats.bufferedLiveObjects}`);
   }
   // セッション統計情報
   const session = instance.session.value;

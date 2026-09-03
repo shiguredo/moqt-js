@@ -89,12 +89,14 @@ interface TracksWriterSubscriptionEntryView {
 }
 
 /**
- * draft-ietf-moq-transport-19 §10.12.3 (Fetch Handling):
- * "End Location MUST specify the same or a larger Location than Start
- *  Location for Standalone and Absolute Joining Fetches."
- * 不正な範囲をワイヤに載せないよう送信前に throw することを検証する。
+ * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+ * FetchOptions.filter に 3 フィールド (startGroup + startObject + endGroupDelta) の
+ * End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える filter を渡すと、
+ * 送信前に InvalidFilterError で reject される。パラメータ構築は
+ * pendingFetch.set より前 (Promise 作成前) に走るため、pending エントリが
+ * 残らないことを検証する。
  */
-test("fetch: End Location の Group が Start Location より小さい場合は throw する", async () => {
+test("fetch: filter の End Group が 2^64-1 を超えると throw し pendingFetch が残らない", async () => {
   const session = createSessionImpl();
 
   let thrown: Error | undefined;
@@ -103,8 +105,11 @@ test("fetch: End Location の Group が Start Location より小さい場合は 
       ["live"],
       "video",
       {
-        startLocation: { group: 2n, object: 0n },
-        endLocation: { group: 1n, object: 0n },
+        filter: {
+          startGroup: MAX_VARINT,
+          startObject: 0n,
+          endGroupDelta: 1n,
+        },
       },
       { object: () => {} },
     );
@@ -113,51 +118,8 @@ test("fetch: End Location の Group が Start Location より小さい場合は 
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("is smaller than start location"));
-});
-
-test("fetch: 同一 Group 内で End Location の Object が小さい場合は throw する", async () => {
-  const session = createSessionImpl();
-
-  let thrown: Error | undefined;
-  try {
-    await session.fetch(
-      ["live"],
-      "video",
-      {
-        startLocation: { group: 1n, object: 5n },
-        endLocation: { group: 1n, object: 4n },
-      },
-      { object: () => {} },
-    );
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("is smaller than start location"));
-});
-
-test("fetch: End Location が Start Location と等しい場合は Location 検証で throw しない", async () => {
-  const session = createSessionImpl();
-
-  let thrown: Error | undefined;
-  try {
-    await session.fetch(
-      ["live"],
-      "video",
-      {
-        startLocation: { group: 1n, object: 0n },
-        endLocation: { group: 1n, object: 0n },
-      },
-      { object: () => {} },
-    );
-  } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
-  }
-
-  // Location 検証は通過する。後続の送信経路 (controlWriter 未初期化等) のエラーは対象外
-  assert.isNull(thrown?.message.match(/is smaller than start location/) ?? null);
+  assert.isTrue(thrown instanceof InvalidFilterError);
+  assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
 });
 
 /**
@@ -175,8 +137,6 @@ test("fetch: peer MAX_FILTER_RANGES が 0 のとき rangeFilters 指定で throw
       ["live"],
       "video",
       {
-        startLocation: { group: 0n, object: 0n },
-        endLocation: { group: 1n, object: 0n },
         rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
       },
       { object: () => {} },
@@ -207,8 +167,6 @@ test("fetch: 削除指定の rangeFilters で throw する", async () => {
       ["live"],
       "video",
       {
-        startLocation: { group: 0n, object: 0n },
-        endLocation: { group: 1n, object: 0n },
         rangeFilters: [{ type: "objectId", remove: true }],
       },
       { object: () => {} },
@@ -1420,11 +1378,12 @@ function assertFetchCancelledOnPriorityMismatch(ctx: FetchPriorityMismatchContex
  * - fetchers / requestStreams から削除される
  * - error コールバックが MalformedTrackError で呼ばれる
  *
- * この検証は fetch() / bidiSendJoiningFetch のどちらで登録された FETCH にも共通に
- * 適用される。両者は bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて
- * requestStreams に登録するため (§10.12「A subscriber sends FETCH as the first
- * message on a new bidi stream」)、Joining Fetch のデータストリームで検出した場合も
- * Standalone Fetch と同じく STOP_SENDING が送られる (この判断を本テストで固定する)。
+ * この検証は fetch() で登録された FETCH に適用される。fetch() は
+ * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
+ * 登録するため (§10.13「A subscriber sends FETCH as the first message on a new
+ * bidi stream」)、FETCH のデータストリームで検出した場合は
+ * §5.2 の MUST どおり bidi リクエストストリームへ STOP_SENDING が送られる
+ * (この判断を本テストで固定する)。
  */
 test("FETCH 応答の Priority 不一致でセッションは閉じず FETCH がキャンセルされ error コールバックが呼ばれる", async () => {
   const requestId = 1n;

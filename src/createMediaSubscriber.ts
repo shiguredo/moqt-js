@@ -6,16 +6,11 @@
 
 import { connect } from "./index";
 import { supportsDynamicGroups } from "./properties";
-import type {
-  ConnectCallbacks,
-  ConnectOptions,
-  Session,
-  JoiningFetchOptions,
-  SubscribeOptions,
-} from "./session";
+import { compareLocations } from "./session/params";
+import type { ConnectCallbacks, ConnectOptions, Session, SubscribeOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
-import type { AuthorizationToken } from "./message";
+import type { AuthorizationToken, Location } from "./message";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
@@ -96,6 +91,33 @@ type ProcessCatalogPayloadResult =
   | { kind: "delta"; catalog: Catalog }
   | { kind: "ignored"; catalog: Catalog | null }
   | { kind: "error"; catalog: Catalog | null; error: Error };
+
+/**
+ * FETCH フェーズ終了時に live バッファから適用すべきオブジェクトを抽出する
+ *
+ * SUBSCRIBE (Next Object 形式) と FETCH (フィルタなし) は独立して評価されるため、
+ * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
+ * FETCH の両方で届く (draft-ietf-moq-transport-20 §5.1.2。Fetch は「{0, 0} から
+ * Largest Object まで」、Next Object 購読は Largest の次から始まるため、処理時刻の
+ * ずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下のオブジェクトは
+ * 適用済みのため除去する (delta の再適用は非冪等であり、add の二重適用は
+ * トラックの重複追加になり catalog が破損し得る)。
+ *
+ * @param pending live SUBSCRIBE でバッファされたオブジェクト
+ * @param lastFetchedLocation FETCH で配信された最大 Location
+ * @returns 適用対象となるオブジェクト
+ */
+export function filterPendingCatalogObjects(
+  pending: MoqtObject[],
+  lastFetchedLocation: Location,
+): MoqtObject[] {
+  // Location 順序は §1.4.2 の定義に従う (compareLocations)。
+  // FETCH で配信済み (lastFetchedLocation 以下) のものだけを除外する。
+  return pending.filter(
+    (obj) =>
+      compareLocations({ group: obj.groupId, object: obj.objectId }, lastFetchedLocation) > 0,
+  );
+}
 
 /**
  * Catalog Object の payload を純関数で適用する
@@ -181,10 +203,11 @@ class MediaSubscriberImpl implements MediaSubscriber {
   // Catalog
   private receivedCatalog: Catalog | null = null;
   private catalogResolve: ((catalog: Catalog) => void) | null = null;
-  // Catalog Joining FETCH フェーズ中フラグと live SUBSCRIBE バッファ
-  // (映像の videoFetchInProgress / pendingVideoObjects に相当)
+  // Catalog FETCH フェーズ中フラグと live SUBSCRIBE バッファ
   private catalogFetchInProgress = false;
   private pendingCatalogObjects: MoqtObject[] = [];
+  // Catalog FETCH で配信された最大 Location (live バッファドレイン時の重複除去用)
+  private catalogFetchLastLocation: Location | null = null;
 
   // Catalog から取得したトラック情報
   private audioTrackInfo: CatalogTrack | null = null;
@@ -217,11 +240,6 @@ class MediaSubscriberImpl implements MediaSubscriber {
     keyFramesReceived: 0,
     bytesReceived: 0,
   };
-
-  // Joining Fetch 関連
-  // FETCH 完了まで SUBSCRIBE オブジェクトをバッファリング
-  private videoFetchInProgress = false;
-  private pendingVideoObjects: MoqtObject[] = [];
 
   constructor(
     url: string,
@@ -426,16 +444,21 @@ class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * Catalog を subscribe して受信を待つ
    *
-   * draft-ietf-moq-msf-01 §5: Subscribers accessing the catalog MUST use
-   * SUBSCRIBE with a Joining FETCH (offset = 0) in order to obtain the latest
-   * complete catalog along with all subsequent catalog objects, including
-   * delta updates, that follow.
+   * 既存の catalog と live の catalog 更新をまとめて受信する。draft-20 で
+   * Joining FETCH は削除された (draft-ietf-moq-transport-20 §10.13) ため、
+   * 本実装では以下の 2 リクエストで代替する (仕様上の正式な置換は
+   * FILL_PARAMETERS (§5.1.3) であり、実装は別途):
+   * 1. SUBSCRIBE (Next Object 形式の Location Filter) で live の catalog 更新を受信する
+   * 2. 独立した FETCH (フィルタなし = {0, 0} から Largest Object まで) で
+   *    既存の catalog を取得する
+   * FETCH フェーズ中の live オブジェクトはバッファし、FETCH の終了 (end / error)
+   * で順に適用する (delta が full より先に適用される順序逆転を防ぐ)。
+   * FETCH と live で二重に届いたオブジェクトは filterPendingCatalogObjects で除去する。
    *
-   * MSF offset = 0 は draft-ietf-moq-transport-19 §10.12.2.1 の Relative Joining
-   * Start = 0（Start Location = {Joining Location.Group, 0}）に対応する。
-   * Absolute Joining Start = 0（{0, 0}）とは別物であるため、`type: "relative"` を使う。
-   * §5 の precede-latest MUST ignore は Joining FETCH 正規経路で満たす想定とし、
-   * Location 比較ゲートは実装しない。
+   * SUBSCRIBE_OK 受信後に FETCH を送ることが重要: Next Object の Largest (L1) が
+   * FETCH 処理時の Largest (L2) 以下になることを保証し、どちらのリクエストにも
+   * 届かない (L2, L1] の取りこぼしを防ぐ。リレーが FETCH を先に処理すると
+   * L2 < L1 になり得るため、順序を入れ替えてはならない。
    */
   private async subscribeCatalog(): Promise<void> {
     if (!this.session) {
@@ -456,6 +479,7 @@ class MediaSubscriberImpl implements MediaSubscriber {
           // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
           this.catalogFetchInProgress = false;
           this.pendingCatalogObjects = [];
+          this.catalogFetchLastLocation = null;
           reject(new Error("catalog receive timeout"));
         }
       }, CATALOG_RECEIVE_TIMEOUT);
@@ -465,9 +489,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
     // (SUBSCRIBE_OK までの race で live がバッファを迂回するのを防ぐ)
     this.catalogFetchInProgress = true;
     this.pendingCatalogObjects = [];
+    this.catalogFetchLastLocation = null;
 
-    // Catalog サブスクライバー
-    // draft-ietf-moq-msf-01 §5: SUBSCRIBE with Joining FETCH (offset = 0) MUST
+    // Catalog サブスクライバー (live 更新用)
     this.catalogSubscriber = await this.session.subscribe(
       namespace,
       CATALOG_TRACK_NAME,
@@ -486,42 +510,69 @@ class MediaSubscriberImpl implements MediaSubscriber {
         error: (error) => this.callbacks.onError?.(error),
       },
       {
-        joiningFetch: {
-          type: "relative",
-          start: 0n,
-          // FETCH 経由は即時適用。live は object コールバック側でバッファする
-          onObject: (obj: MoqtObject) => this.handleCatalogObject(obj),
-          onEnd: () => {
-            this.finishCatalogFetchPhase();
-          },
-          onError: (_error: Error) => {
-            // FETCH 失敗時もバッファを破棄せずドレインする（Catalog は初回待ちのため）
-            this.finishCatalogFetchPhase();
-          },
-        } satisfies JoiningFetchOptions,
+        // Next Object 形式: live は現在の最新 catalog の次から受信する
+        filter: { startGroup: 0n, startObject: 0n },
       },
     );
 
-    // largestLocation 無し時は session 側が subscribe 完了前に onEnd を呼ぶ
-    // (draft-ietf-moq-transport-19 Joining FETCH 未開始相当)。追加の後処理は不要。
+    // 既存 catalog を FETCH (フィルタなし) で取得する。
+    // catalog が未 publish の場合は REQUEST_ERROR (INVALID_RANGE) で reject され、
+    // finishCatalogFetchPhase がフェーズを解除して live 待ちに切り替える。
+    void this.session
+      .fetch(
+        namespace,
+        CATALOG_TRACK_NAME,
+        {},
+        {
+          // FETCH 経由は即時適用。live は object コールバック側でバッファする
+          object: (obj: MoqtObject) => {
+            // FETCH で配信された最大 Location を記録する (ドレイン時の重複除去用)
+            const location: Location = { group: obj.groupId, object: obj.objectId };
+            const current = this.catalogFetchLastLocation;
+            if (current === null || compareLocations(location, current) > 0) {
+              this.catalogFetchLastLocation = location;
+            }
+            this.handleCatalogObject(obj);
+          },
+          end: () => {
+            this.finishCatalogFetchPhase();
+          },
+          error: (_error: Error) => {
+            // FETCH 失敗時もバッファを破棄せずドレインする（Catalog は初回待ちのため）
+            this.finishCatalogFetchPhase();
+          },
+        },
+      )
+      .catch(() => {
+        // fetch() 自体の reject も終了トリガとして扱う
+        this.finishCatalogFetchPhase();
+      });
 
     // Catalog を受信するまで待つ
     await catalogPromise;
   }
 
   /**
-   * Catalog Joining FETCH フェーズを終了する
+   * Catalog FETCH フェーズを終了する
    *
    * live バッファを順適用（ドレイン）してからフラグを下ろし、
    * その時点でフルカタログがあれば catalogResolve する。
+   * FETCH と live で二重に届いたオブジェクトは
+   * filterPendingCatalogObjects で除去してから適用する。
+   *
+   * catalog トラックは 1 Subgroup の in-order 送出 (draft-ietf-moq-msf-01 §5)
+   * を前提とし、live バッファは到着順のまま適用する。
    */
   private finishCatalogFetchPhase(): void {
     if (!this.catalogFetchInProgress) {
       return;
     }
 
-    const pending = this.pendingCatalogObjects;
+    let pending = this.pendingCatalogObjects;
     this.pendingCatalogObjects = [];
+    if (this.catalogFetchLastLocation !== null) {
+      pending = filterPendingCatalogObjects(pending, this.catalogFetchLastLocation);
+    }
     for (const pendingObj of pending) {
       this.handleCatalogObject(pendingObj);
     }
@@ -680,7 +731,6 @@ class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     const namespace = this.options.namespace;
-    const joiningFetchEnabled = this.options.joiningFetch ?? false;
 
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
@@ -711,46 +761,11 @@ class MediaSubscriberImpl implements MediaSubscriber {
         this.videoTrackInfo,
       );
 
-      if (joiningFetchEnabled) {
-        // Joining Fetch 有効時は FETCH 完了まで SUBSCRIBE オブジェクトをバッファリング
-        // SUBSCRIBE_OK に largestLocation があれば FETCH が送信される
-        subscribeOptions.joiningFetch = {
-          type: "relative",
-          start: 0n,
-          onObject: (obj: MoqtObject) => {
-            // FETCH から受信したオブジェクトは即座にデコード
-            this.handleVideoObject(obj);
-          },
-          onEnd: () => {
-            // FETCH 完了 → バッファリングしていた SUBSCRIBE オブジェクトを処理
-            this.videoFetchInProgress = false;
-            for (const pendingObj of this.pendingVideoObjects) {
-              this.handleVideoObject(pendingObj);
-            }
-            this.pendingVideoObjects = [];
-          },
-          onError: () => {
-            // FETCH エラー（LARGEST_OBJECT がない場合など）
-            // バッファリングを無効化してリアルタイム配信を待つ
-            this.videoFetchInProgress = false;
-            this.pendingVideoObjects = [];
-          },
-        };
-        // FETCH が送信されるかどうかは SUBSCRIBE_OK 後に確定
-        // 一旦バッファリングモードに入り、onError で解除される
-        this.videoFetchInProgress = true;
-      }
-
       this.videoSubscriber = await this.session.subscribe(
         namespace,
         trackName,
         {
           object: (obj) => {
-            // Joining Fetch 中は SUBSCRIBE オブジェクトをバッファリング
-            if (this.videoFetchInProgress) {
-              this.pendingVideoObjects.push(obj);
-              return;
-            }
             this.handleVideoObject(obj);
           },
           end: () => {
@@ -760,13 +775,6 @@ class MediaSubscriberImpl implements MediaSubscriber {
         },
         subscribeOptions,
       );
-
-      // SUBSCRIBE_OK に largestLocation がない場合は FETCH が送信されない
-      // この場合はバッファリングモードを解除
-      if (joiningFetchEnabled && this.videoSubscriber.largestLocation === null) {
-        this.videoFetchInProgress = false;
-        // onError が呼ばれるのでここでは何もしない
-      }
     }
   }
 

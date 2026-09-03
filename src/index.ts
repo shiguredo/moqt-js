@@ -25,7 +25,6 @@ export type {
   SubscribeCallbacks,
   SubscribeOptions,
   SubscribeTracksOptions,
-  JoiningFetchOptions,
   FetchCallbacks,
   FetchOptions,
   TrackStatusResult,

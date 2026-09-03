@@ -4,19 +4,6 @@ import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
 
 /**
- * Joining Fetch の統計情報
- */
-export interface JoiningFetchStats {
-  objectsReceived: number;
-  bytesReceived: number;
-  completed: boolean;
-  /**
-   * Joining Fetch 中にバッファされたライブオブジェクト数
-   */
-  bufferedLiveObjects: number;
-}
-
-/**
  * 個々の Subscriber インスタンスの状態。
  *
  * 各フィールドは Signal で保持し、フィールド単位で購読/更新する。
@@ -40,8 +27,6 @@ export interface SubscriberInstance {
   codec: Signal<string>;
   // 停止処理中フラグ (二重実行防止)
   isStopping: Signal<boolean>;
-  // Joining Fetch 設定
-  joiningFetchEnabled: Signal<boolean>;
   // NEW_GROUP_REQUEST 設定 (初回接続時に新しいグループを要求)
   newGroupRequestEnabled: Signal<boolean>;
   // 統計
@@ -58,8 +43,6 @@ export interface SubscriberInstance {
   chunksSkipped: Signal<number>;
   decodeErrors: Signal<number>;
   decoderState: Signal<string>;
-  // Joining Fetch 統計
-  joiningFetchStats: Signal<JoiningFetchStats | null>;
   // largestLocation
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Track Properties に DYNAMIC_GROUPS=1 が含まれているかどうか。
@@ -84,7 +67,6 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     statusMessage: signal("Ready to subscribe"),
     codec: signal(""),
     isStopping: signal(false),
-    joiningFetchEnabled: signal(true),
     newGroupRequestEnabled: signal(false),
     framesDecoded: signal(0),
     keyFramesDecoded: signal(0),
@@ -98,7 +80,6 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     chunksSkipped: signal(0),
     decodeErrors: signal(0),
     decoderState: signal("unconfigured"),
-    joiningFetchStats: signal<JoiningFetchStats | null>(null),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
     dynamicGroupsSupported: signal(false),
   };

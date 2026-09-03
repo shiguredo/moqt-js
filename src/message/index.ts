@@ -137,9 +137,6 @@ export {
 export {
   type Fetch,
   type FetchOk,
-  type JoiningFetch,
-  type StandaloneFetch,
-  FetchType,
   decodeFetchOkPayload,
   decodeFetchPayload,
   encodeFetchOkPayload,

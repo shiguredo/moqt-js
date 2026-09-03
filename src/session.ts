@@ -43,13 +43,11 @@ import {
   createSetup,
   getMessageTypeName,
   isRejectedReceiveNamespace,
-  FetchType,
   type AuthorizationToken,
   type Location,
   type Parameter,
   type LocationFilter,
   type RangeFilterSpec,
-  isNextObjectLocationFilter,
 } from "./message";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "./message/parameterScope";
 import { decodeVarint, encodeVarint } from "./varint";
@@ -72,9 +70,9 @@ import {
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
   clampTimeoutMs,
-  compareLocations,
   extractForwardState,
   matchNamespacePrefix,
+  resolveFetchStartLocation,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
@@ -389,76 +387,6 @@ export interface SubscribeCallbacks {
 }
 
 /**
- * Joining Fetch オプション
- * draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches)
- *
- * 重要な制約:
- * 1. Joining Fetch は Next Object 形式の Location Filter を持つサブスクリプション
- *    でのみ使用可能。他の形式を使用すると PROTOCOL_VIOLATION でセッションが終了する。
- *    subscribe() の options.filter を { startGroup: 0n, startObject: 0n } に設定する
- *    必要がある (draft-ietf-moq-transport-20 §5.1.2 の Next Object)。
- *
- * 2. SUBSCRIBE_OK に LARGEST_OBJECT パラメータがない場合（まだオブジェクトが
- *    発行されていない場合）、Joining Fetch は送信されず onError が呼び出される。
- *
- * 範囲の計算:
- * - End Location: {Subscribe Largest Location.Group, Subscribe Largest Location.Object + 1}
- * - Relative の場合の Start: {Subscribe Largest Location.Group - start, 0}
- * - Absolute の場合の Start: {start, 0}
- */
-export interface JoiningFetchOptions {
-  /**
-   * Fetch タイプ
-   * - "relative": 現在の位置から相対的にグループ数を指定
-   *   Start Location = {Largest Location.Group - start, 0}
-   * - "absolute": 絶対的なグループ ID を指定
-   *   Start Location = {start, 0}
-   */
-  type: "relative" | "absolute";
-
-  /**
-   * 取得開始位置
-   * - relative の場合: 何グループ前から取得するか（例: 3n → 3 グループ前から）
-   * - absolute の場合: 開始グループ ID
-   */
-  start: bigint;
-
-  /**
-   * Joining Fetch で受信したオブジェクトのコールバック
-   * 指定しない場合は subscribe のコールバックと同じものが使われる
-   */
-  onObject?: (object: MoqtObject) => void;
-
-  /**
-   * Joining Fetch 完了時のコールバック
-   */
-  onEnd?: () => void;
-
-  /**
-   * Joining Fetch エラー時のコールバック
-   * LARGEST_OBJECT がない場合や、サーバーからのエラーを受け取る
-   */
-  onError?: (error: Error) => void;
-
-  /**
-   * Fill Timeout（ミリ秒）
-   * draft-ietf-moq-transport-19 Section 10.2.5 (FILL TIMEOUT Parameter)
-   *
-   * relay が欠損 object の fill 待機に費やす最大時間。
-   * 0 は即座に利用可能な object のみを要求。
-   */
-  fillTimeout?: bigint;
-
-  /**
-   * Range Filters
-   * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
-   *
-   * ピアの MAX_FILTER_RANGES が 0 (未広告含む) の場合に指定すると throw する。
-   */
-  rangeFilters?: RangeFilterSpec[];
-}
-
-/**
  * サブスクライブオプション
  */
 export interface SubscribeOptions {
@@ -532,19 +460,6 @@ export interface SubscribeOptions {
    * Publisher が DYNAMIC_GROUPS をサポートしていない場合は無視される
    */
   newGroupRequest?: bigint;
-
-  /**
-   * Joining Fetch オプション
-   * draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches)
-   *
-   * SUBSCRIBE と同時に過去のデータを取得する。
-   * Relay がキャッシュを持っていれば、過去のグループを取得できる。
-   *
-   * 重要: Joining Fetch を使用する場合、filter を { startGroup: 0n, startObject: 0n }
-   * (Next Object 形式) に設定する必要がある。他の形式では PROTOCOL_VIOLATION
-   * エラーとなる。
-   */
-  joiningFetch?: JoiningFetchOptions;
 
   /**
    * Forward State
@@ -646,13 +561,26 @@ export interface FetchOptions {
   fillTimeout?: bigint;
 
   /**
-   * 開始位置
+   * Location Filter
+   * draft-ietf-moq-transport-20 Section 5.1.2 / Section 10.2.9
+   *
+   * 取得する範囲を指定する。フィールドの有無で意味が変わる (Length
+   * ベースのワイヤに対応、§5.1.2):
+   * - { startGroup }: 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - startGroup
+   * - { startGroup, startObject }: 絶対開始。両方 0 は Next Object
+   * - { startGroup, startObject, endGroupDelta }: 絶対範囲。End Group =
+   *   StartGroup + endGroupDelta が 2^64-1 を超えると送信前に
+   *   InvalidFilterError で throw する（§5.1.2 は超過時に PROTOCOL_VIOLATION
+   *   を要求するため、ワイヤに載せる前にローカルで拒否する）
+   * - { startGroup, startObject, endGroupDelta, endObject }: 絶対範囲 +
+   *   End Object
+   * - { reset: true }: Length 0 (フィルタなし。FETCH では省略と等価)
+   *
+   * 指定しない場合、フィルタなしとして {0, 0} から Largest Object までの
+   * 全オブジェクトを要求する (§5.1.2。Fetch では End Group / End Object を
+   * 省略した場合の終端が Largest Object になる)。
    */
-  startLocation: Location;
-  /**
-   * 終了位置
-   */
-  endLocation: Location;
+  filter?: LocationFilter;
 
   /**
    * Range Filters
@@ -971,7 +899,7 @@ export interface Session {
   ): Promise<Subscriber>;
   /**
    * 過去のデータを取得する
-   * draft-ietf-moq-transport-19 Section 10.12 (FETCH)
+   * draft-ietf-moq-transport-20 Section 10.13 (FETCH)
    */
   fetch(
     namespace: string[],
@@ -1171,7 +1099,6 @@ export class SessionImpl implements Session {
       resolve: (sub: Subscriber) => void;
       reject: (err: Error) => void;
       impl: SubscriberImpl;
-      joiningFetch?: JoiningFetchOptions;
       objectCallback: (object: MoqtObject) => void;
     }
   >();
@@ -1681,37 +1608,6 @@ export class SessionImpl implements Session {
       throw new Error("Cannot subscribe after receiving GOAWAY");
     }
 
-    // Joining Fetch は Forward State 1 の場合のみ許可
-    // draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches):
-    // "A Joining Fetch is only permitted when the associated subscription
-    //  has Forward State 1; otherwise the publisher MUST respond with a
-    //  REQUEST_ERROR with error code INVALID_RANGE."
-    // joiningFetch が有効な場合、自動的に Next Object (旧 LargestObject 相当)
-    // フィルターを設定する
-    if (options?.joiningFetch) {
-      // draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches):
-      // "A Joining Fetch is only permitted when the associated subscription
-      //  has Forward State 1; otherwise the publisher MUST respond with a
-      //  REQUEST_ERROR with error code INVALID_RANGE."
-      if (options.forward === false) {
-        throw new Error(
-          "Joining Fetch requires Forward State 1. " +
-            "Remove options.forward or set options.forward = true",
-        );
-      }
-
-      if (options.filter === undefined) {
-        // Next Object 形式 ({ startGroup: 0n, startObject: 0n }) は旧
-        // LargestObject と等価 (draft-ietf-moq-transport-20 §5.1.2)
-        options = { ...options, filter: { startGroup: 0n, startObject: 0n } };
-      } else if (!isNextObjectLocationFilter(options.filter)) {
-        throw new Error(
-          "Joining Fetch requires filter of the Next Object form. " +
-            "Remove options.filter or set options.filter = { startGroup: 0n, startObject: 0n }",
-        );
-      }
-    }
-
     const requestId = this.nextRequestId;
     // draft-ietf-moq-transport-19 Section 10.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
     this.nextRequestId += 2n;
@@ -1791,7 +1687,6 @@ export class SessionImpl implements Session {
         resolve,
         reject,
         impl,
-        joiningFetch: options?.joiningFetch,
         objectCallback: callbacks.object,
       });
     });
@@ -1832,10 +1727,11 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 過去のデータを取得する（Standalone Fetch）
+   * 過去のデータを取得する
    *
-   * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
-   * FETCH はトラックから Object の範囲を要求する
+   * draft-ietf-moq-transport-20 Section 10.13 (FETCH):
+   * FETCH はトラックから Object の範囲を要求する。範囲は
+   * LOCATION_FILTER パラメータで指定する。
    */
   async fetch(
     namespace: string[],
@@ -1857,22 +1753,12 @@ export class SessionImpl implements Session {
 
     const trackNamespace = createTrackNamespace(namespace);
     const trackNameBytes = encodeTrackName(trackName);
-    // draft-ietf-moq-transport-19 §2.4.1: Full Track Name 合計長検証
+    // draft-ietf-moq-transport-20 §2.4.1: Full Track Name 合計長検証
     validateFullTrackName(trackNamespace, trackName);
-    // draft-ietf-moq-transport-19 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
+    // draft-ietf-moq-transport-20 §3.2.1 / §3.2.2: 予約 namespace / .session の送信拒否
     validateTrackNamespaceForSend(namespace, trackName);
 
-    // draft-ietf-moq-transport-19 §10.12.3 (Fetch Handling):
-    // "End Location MUST specify the same or a larger Location than Start
-    //  Location for Standalone and Absolute Joining Fetches."
-    // 不正な範囲をワイヤに載せないよう送信前に検証する
-    if (compareLocations(options.endLocation, options.startLocation) < 0) {
-      throw new Error(
-        `FETCH end location (${options.endLocation.group}:${options.endLocation.object}) is smaller than start location (${options.startLocation.group}:${options.startLocation.object})`,
-      );
-    }
-
-    // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
+    // draft-ietf-moq-transport-20 §10.3.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
     // pendingFetch.set より前に配置し、throw 時に pending エントリが残らないようにする
     validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "FETCH");
 
@@ -1889,38 +1775,38 @@ export class SessionImpl implements Session {
     // GOAWAY コールバックを設定（セッション内部コールバック）
     impl.goawayCallback = callbacks.goaway;
 
-    // draft-ietf-moq-transport-19 Section 5.2:
+    // draft-ietf-moq-transport-20 Section 5.2:
     // キャンセルはストリームを閉じることで行う。
     impl.onCancel = async () => {
       await this.cancelFetch(impl);
     };
 
-    // FETCH メッセージを構築する（Standalone Fetch）
-    // draft-ietf-moq-transport-19 Section 10.12 (FETCH):
+    // FETCH メッセージを構築する
+    // draft-ietf-moq-transport-20 Section 10.13 (FETCH):
     // FETCH は新しい双方向ストリームで送信される。
-    // draft-ietf-moq-transport-19 Section 3.3
-    // buildFetchParameters (buildRangeFilterParameters を含む) が throw する場合、
-    // pendingFetch.set より前で失敗させるため、構築は Promise 作成より前に行う。
+    // draft-ietf-moq-transport-20 Section 3.3
+    // buildFetchParameters (buildRangeFilterParameters / encodeLocationFilter を含む)
+    // が throw する場合、pendingFetch.set より前で失敗させるため、
+    // 構築は Promise 作成より前に行う。
     const fetchMsg = {
       type: MessageType.FETCH,
       requestId,
-      fetchType: FetchType.STANDALONE,
-      standalone: {
-        trackNamespace,
-        trackName: trackNameBytes,
-        startLocation: options.startLocation,
-        endLocation: options.endLocation,
-      },
+      trackNamespace,
+      trackName: trackNameBytes,
       parameters: buildFetchParameters(options),
     };
 
-    // FETCH_OK を待つ Promise
+    // FETCH_OK を待つ Promise。
+    // startLocation は FETCH_OK の End Location 検証 (§10.14) に使う。
+    // 相対指定 (1 フィールド) と Next Object 形式は Largest Object 依存のため
+    // クライアント側では確定できず undefined になる。
+    const startLocation = resolveFetchStartLocation(options.filter);
     const promise = new Promise<Fetcher>((resolve, reject) => {
       this.pendingFetch.set(requestId, {
         resolve,
         reject,
         impl,
-        startLocation: options.startLocation,
+        startLocation,
       });
     });
 
@@ -1929,8 +1815,7 @@ export class SessionImpl implements Session {
       requestId: requestId.toString(),
       trackNamespace: namespace,
       trackName,
-      startLocation: `${options.startLocation.group}:${options.startLocation.object}`,
-      endLocation: `${options.endLocation.group}:${options.endLocation.object}`,
+      filter: describeLocationFilter(options.filter),
     });
 
     // 双方向ストリームからレスポンスを読み取る
@@ -4211,8 +4096,8 @@ export class SessionImpl implements Session {
    *
    * §2.4.2 の「fetches for that Track」は複数形だが、FETCH ごとにデータストリーム
    * と検出が独立するため、対象は該当 requestId の FETCH のみとする (同一 Track の
-   * 他 FETCH には波及しない)。Joining Fetch も bidiSendJoiningFetch が新規 bidi
-   * ストリームを開いて requestStreams に登録するため (§10.12「A subscriber sends
+   * 他 FETCH には波及しない)。fetch() は bidiSendRequestOnBidiStream で新規 bidi
+   * ストリームを開いて requestStreams に登録するため (§10.13「A subscriber sends
    * FETCH as the first message on a new bidi stream」)、同じく STOP_SENDING が送られる。
    *
    * アプリの error コールバックが throw した場合は握り潰してキャンセルを継続する。

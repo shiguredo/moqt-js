@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH) — 10.13 (FETCH_OK)
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH) — 10.14 (FETCH_OK)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -20,53 +20,38 @@ import {
 import { type Location, MessageType } from "./types";
 
 /**
- * Fetch Type (Section 10.12 FETCH)
- */
-export const FetchType = {
-  STANDALONE: 0x01,
-  RELATIVE_JOINING: 0x02,
-  ABSOLUTE_JOINING: 0x03,
-} as const;
-
-export type FetchType = (typeof FetchType)[keyof typeof FetchType];
-
-/**
- * Standalone Fetch structure (Section 10.12.1 Standalone Fetch)
- */
-export interface StandaloneFetch {
-  trackNamespace: TrackNamespace;
-  trackName: Uint8Array;
-  startLocation: Location;
-  endLocation: Location;
-}
-
-/**
- * Joining Fetch structure (Section 10.12.2 Joining Fetches)
- */
-export interface JoiningFetch {
-  joiningRequestId: bigint;
-  joiningStart: bigint;
-}
-
-/**
- * FETCH メッセージ (Section 10.12 FETCH)
+ * FETCH メッセージ (Section 10.13 FETCH)
+ *
+ * draft-ietf-moq-transport-20:
+ * FETCH Message {
+ *   Type (vi64) = 0x16,
+ *   Length (16),
+ *   Request ID (vi64),
+ *   Track Namespace (..),
+ *   Track Name Length (vi64),
+ *   Track Name (..),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
+ * }
+ *
+ * 取得する範囲は LOCATION_FILTER パラメータ (0x21) で指定する (§10.2.9)。
+ * パラメータを省略した場合、フィルタなしとして {0, 0} から Largest Object
+ * までの全オブジェクトを要求する (§5.1.2)。
  */
 export interface Fetch {
   type: typeof MessageType.FETCH;
   requestId: bigint;
-  fetchType: FetchType;
-  standalone?: StandaloneFetch;
-  joining?: JoiningFetch;
+  trackNamespace: TrackNamespace;
+  trackName: Uint8Array;
   parameters: Parameter[];
 }
 
 /**
- * FETCH_OK メッセージ (Section 10.13 FETCH_OK)
+ * FETCH_OK メッセージ (Section 10.14 FETCH_OK)
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * - 双方向ストリーム上で送信されるため Request ID は不要。
  * - Track Properties が追加された。
- * draft-ietf-moq-transport-19 Section 10 (Control Messages)
  */
 export interface FetchOk {
   type: typeof MessageType.FETCH_OK;
@@ -79,58 +64,17 @@ export interface FetchOk {
 /**
  * Fetch のペイロードをエンコード
  *
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
- * 不正な Fetch Type や Standalone / Joining 構造の不整合はエンコード前に
- * throw する (自コードの防御。decode 側の ProtocolViolationError とは区別)。
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH):
+ * FETCH は Track Namespace / Track Name + Parameters のみを持つ
+ * (draft-19 の Fetch Type / Start / End Location フィールドは削除された)。
  */
 export function encodeFetchPayload(msg: Fetch): Uint8Array {
-  // draft-ietf-moq-transport-19 Section 10.12 (FETCH):
-  // Fetch Type は 0x1 (STANDALONE) / 0x2 (RELATIVE_JOINING) / 0x3 (ABSOLUTE_JOINING) のみ
-  if (
-    msg.fetchType !== FetchType.STANDALONE &&
-    msg.fetchType !== FetchType.RELATIVE_JOINING &&
-    msg.fetchType !== FetchType.ABSOLUTE_JOINING
-  ) {
-    throw new Error(
-      `unknown fetch type: 0x${Number(msg.fetchType).toString(16)}, expected 0x1, 0x2, or 0x3`,
-    );
-  }
-
-  // draft-ietf-moq-transport-19 Section 10.12.1 / 10.12.2:
-  // Standalone は Fetch Type 0x1 のとき、Joining は 0x2 / 0x3 のときに含まれる。
-  // null も undefined と同様に構造未設定として拒否する (型外入力の防御)。
-  if (msg.fetchType === FetchType.STANDALONE) {
-    if (msg.standalone === undefined || msg.standalone === null) {
-      throw new Error("standalone fetch requires a standalone structure");
-    }
-    if (msg.joining !== undefined && msg.joining !== null) {
-      throw new Error("standalone fetch must not contain a joining structure");
-    }
-  } else {
-    if (msg.joining === undefined || msg.joining === null) {
-      throw new Error("joining fetch requires a joining structure");
-    }
-    if (msg.standalone !== undefined && msg.standalone !== null) {
-      throw new Error("joining fetch must not contain a standalone structure");
-    }
-  }
-
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(msg.requestId));
-  parts.push(encodeVarint(msg.fetchType));
-
-  if (msg.fetchType === FetchType.STANDALONE && msg.standalone) {
-    parts.push(encodeTrackNamespace(msg.standalone.trackNamespace));
-    parts.push(encodeVarint(msg.standalone.trackName.length));
-    parts.push(msg.standalone.trackName);
-    parts.push(encodeLocation(msg.standalone.startLocation));
-    parts.push(encodeLocation(msg.standalone.endLocation));
-  } else if (msg.joining) {
-    parts.push(encodeVarint(msg.joining.joiningRequestId));
-    parts.push(encodeVarint(msg.joining.joiningStart));
-  }
-
+  parts.push(encodeTrackNamespace(msg.trackNamespace));
+  parts.push(encodeVarint(msg.trackName.length));
+  parts.push(msg.trackName);
   parts.push(encodeParameters(msg.parameters));
 
   const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
@@ -155,74 +99,28 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   const [requestId, requestIdSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdSize;
 
-  const [fetchType, fetchTypeSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += fetchTypeSize;
+  const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+  totalConsumed += namespaceSize;
 
-  let standalone: StandaloneFetch | undefined;
-  let joining: JoiningFetch | undefined;
+  const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
+  totalConsumed += trackNameLenSize;
 
-  // draft-ietf-moq-transport-19 Section 10.12 (FETCH):
-  // "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
-  //  the session with a PROTOCOL_VIOLATION."
-  const fetchTypeValue = Number(fetchType);
-  switch (fetchTypeValue) {
-    case FetchType.STANDALONE: {
-      const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
-      totalConsumed += namespaceSize;
+  const trackName = data.slice(
+    offset + totalConsumed,
+    offset + totalConsumed + Number(trackNameLen),
+  );
+  totalConsumed += Number(trackNameLen);
 
-      const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
-      totalConsumed += trackNameLenSize;
-
-      const trackName = data.slice(
-        offset + totalConsumed,
-        offset + totalConsumed + Number(trackNameLen),
-      );
-      totalConsumed += Number(trackNameLen);
-
-      // draft-ietf-moq-transport-19 §2.4.1:
-      // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
-      // PROTOCOL_VIOLATION。ワイヤバイト長で計測する (不正 UTF-8 の置換による
-      // 誤計測を防ぐ)
-      validateFullTrackNameBytes(trackNamespace, trackName);
-
-      const [startLocation, startLocationSize] = decodeLocation(data, offset + totalConsumed);
-      totalConsumed += startLocationSize;
-
-      const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
-      totalConsumed += endLocationSize;
-
-      standalone = {
-        trackNamespace,
-        trackName,
-        startLocation,
-        endLocation,
-      };
-      break;
-    }
-    case FetchType.RELATIVE_JOINING:
-    case FetchType.ABSOLUTE_JOINING: {
-      const [joiningRequestId, joiningRequestIdSize] = decodeVarint(data, offset + totalConsumed);
-      totalConsumed += joiningRequestIdSize;
-
-      const [joiningStart, joiningStartSize] = decodeVarint(data, offset + totalConsumed);
-      totalConsumed += joiningStartSize;
-
-      joining = {
-        joiningRequestId,
-        joiningStart,
-      };
-      break;
-    }
-    default:
-      throw new ProtocolViolationError(
-        `unknown fetch type: 0x${fetchTypeValue.toString(16)}, expected 0x1, 0x2, or 0x3`,
-      );
-  }
+  // draft-ietf-moq-transport-20 §2.4.1:
+  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
+  // PROTOCOL_VIOLATION。ワイヤバイト長で計測する (不正 UTF-8 の置換による
+  // 誤計測を防ぐ)
+  validateFullTrackNameBytes(trackNamespace, trackName);
 
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Parameters は FETCH ペイロードの最後のフィールドであり、
@@ -236,9 +134,8 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   return {
     type: MessageType.FETCH,
     requestId,
-    fetchType: Number(fetchType) as FetchType,
-    standalone,
-    joining,
+    trackNamespace,
+    trackName,
     parameters,
   };
 }
@@ -249,7 +146,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
+ * draft-ietf-moq-transport-20 Section 10.14 (FETCH_OK):
  * FETCH_OK Message {
  *   Type (i) = 0x18,
  *   Length (16),
@@ -267,7 +164,7 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
   parts.push(encodeLocation(msg.endLocation));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
+  // draft-ietf-moq-transport-20 Section 10.14 (FETCH_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -296,7 +193,7 @@ export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
+  // draft-ietf-moq-transport-20 Section 10.14 (FETCH_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
   const trackProperties = decodeProperties(propertiesData);

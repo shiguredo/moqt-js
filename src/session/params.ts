@@ -6,7 +6,13 @@
  */
 
 import { FetchHeaderType } from "../dataStream";
-import type { Parameter, Location, AuthorizationToken, RangeFilterSpec } from "../message";
+import type {
+  Parameter,
+  Location,
+  LocationFilter,
+  AuthorizationToken,
+  RangeFilterSpec,
+} from "../message";
 import type { PublishOptions, SubscribeOptions, FetchOptions } from "../session";
 import {
   MessageParameterType,
@@ -576,12 +582,19 @@ export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Pa
 /**
  * 純粋関数: FETCH の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-19 Section 10.13 (FETCH)
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH):
+ * 取得範囲は LOCATION_FILTER パラメータで指定する (§10.2.9)。省略時は
+ * フィルタなし ({0, 0} から Largest Object まで) を要求する。
  */
 export function buildFetchParameters(options?: FetchOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-19 Section 10.2.5
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-20 Section 10.2.9
+  if (options?.filter !== undefined) {
+    parameters.push(encodeLocationFilterParameter(options.filter));
+  }
+
+  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-20 Section 10.2.5
   if (options?.fillTimeout !== undefined) {
     validateNonNegative(options.fillTimeout, "FILL_TIMEOUT");
     parameters.push({
@@ -590,7 +603,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-19 Section 5.1.3
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-20 Section 5.1.4
   // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "FETCH", {
@@ -724,7 +737,7 @@ export function extractForwardState(parameters: Parameter[]): boolean {
 /**
  * 純粋関数: Location の大小比較
  *
- * draft-ietf-moq-transport-19 §1.4.2 (Location Structure):
+ * draft-ietf-moq-transport-20 §1.4.2 (Location Structure):
  * "Location A < Location B if:
  *  A.Group < B.Group || (A.Group == B.Group && A.Object < B.Object)"
  *
@@ -743,7 +756,7 @@ export function compareLocations(a: Location, b: Location): number {
 /**
  * 純粋関数: FETCH_OK の End Location 検証
  *
- * draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK):
+ * draft-ietf-moq-transport-20 Section 10.14 (FETCH_OK):
  * "If End Location is smaller than the Start Location in the
  *  corresponding FETCH the receiver MUST close the session with
  *  a PROTOCOL_VIOLATION."
@@ -757,6 +770,43 @@ export function validateFetchOkEndLocation(
   if (compareLocations(endLocation, startLocation) < 0) {
     return `FETCH_OK end location (${endLocation.group}:${endLocation.object}) is smaller than start location (${startLocation.group}:${startLocation.object})`;
   }
+  return undefined;
+}
+
+/**
+ * 純粋関数: FETCH の Start Location を確定する
+ *
+ * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+ * FETCH_OK の End Location 検証 (§10.14) には対応する FETCH の Start
+ * Location が必要だが、次の形式は Largest Object 依存でクライアント側では
+ * 確定できないため undefined を返す:
+ * - 1 フィールド (相対指定): Start = {Largest.Object.Group + 1 - StartGroup, 0}
+ * - 2 フィールド両方 0 (Next Object): Start = {Largest.Group, Largest.Object + 1}
+ *
+ * 確定できる形式:
+ * - フィルタなし (undefined / reset): {0, 0} (§5.1.2「Fetch requests without
+ *   a filter include all Locations from {0, 0} up to Largest Object」)
+ * - 2 フィールド (両方 0 以外) / 3・4 フィールドの絶対開始:
+ *   {startGroup, startObject}。3・4 フィールドも両方 0 なら {0, 0} 開始の
+ *   絶対範囲 (§5.1.2「Otherwise, all fields are absolute.」)
+ *
+ * @returns 確定できた Start Location。確定できない場合は undefined。
+ */
+export function resolveFetchStartLocation(
+  filter: LocationFilter | undefined,
+): Location | undefined {
+  if (filter === undefined || "reset" in filter) {
+    return { group: 0n, object: 0n };
+  }
+  if ("startObject" in filter) {
+    // Next Object 形式 (両方 0) はフィールド数 2 のときだけ (§5.1.2)。
+    // 3 / 4 フィールドは絶対表現のため Largest Object 非依存で確定できる。
+    if (!("endGroupDelta" in filter) && filter.startGroup === 0n && filter.startObject === 0n) {
+      return undefined;
+    }
+    return { group: filter.startGroup, object: filter.startObject };
+  }
+  // 1 フィールド (相対指定) は Largest Object 依存
   return undefined;
 }
 

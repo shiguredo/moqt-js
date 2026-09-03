@@ -9,7 +9,7 @@ const PUBSUB_DURATION_MS = 5000;
 // createMediaSubscriber.start() は内部で catalog を 5 秒で待つので、
 // Subscriber が先に start すると Publisher の encoder 初期化と catalog publish が
 // 5 秒以内に間に合わない relay 構成で flaky になる。
-// Publisher を先に起動して joiningFetch 経由で Subscriber が catalog を取得する流れにする。
+// Publisher を先に起動して FETCH 経由で Subscriber が catalog を取得する流れにする。
 const SUBSCRIBER_START_DELAY_MS = 500;
 // Subscriber 起動までの待ち時間ぶん Publisher 側を多く走らせる必要がある
 const PUBLISHER_DURATION_MS = PUBSUB_DURATION_MS + SUBSCRIBER_START_DELAY_MS;
