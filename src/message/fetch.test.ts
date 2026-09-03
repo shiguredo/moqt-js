@@ -1,159 +1,119 @@
 /**
  * MOQT Fetch Messages Unit Tests
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH)
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH)
  *
- * encodeFetchPayload の構造検証 (Fetch Type と Standalone / Joining の整合) を
- * 検証する。整合の取れた値のみを生成する PBT ではエラーパスを生成できないため、
- * 固定の不正入力で単体テストする。
+ * ワイヤ形式を固定バイト列でピン留めする。ラウンドトリップは PBT
+ * (fetch.prop.ts) が担い、ここではエンコーダとデコーダが同時に
+ * 誤った形式へ移行しても気づけない「相互に一致しただけ」の状態を
+ * 防ぐため、仕様の Figure 16 (FETCH Message) と突き合わせる。
  */
 
 import { test, assert } from "vite-plus/test";
-import { type Fetch, FetchType, encodeFetchPayload } from "./fetch";
+import { type Fetch, decodeFetchPayload, encodeFetchPayload } from "./fetch";
 import { createTrackNamespace } from "./parameter";
 import { MessageType } from "./types";
 import { ProtocolViolationError } from "../error";
 
 /**
- * 正常な Standalone Fetch を構築する
+ * 正常な Fetch を構築する
  */
-function createStandaloneFetch(): Fetch {
+function createFetch(): Fetch {
   return {
     type: MessageType.FETCH,
-    requestId: 0n,
-    fetchType: FetchType.STANDALONE,
-    standalone: {
-      trackNamespace: createTrackNamespace(["test"]),
-      trackName: new TextEncoder().encode("track"),
-      startLocation: { group: 0n, object: 0n },
-      endLocation: { group: 10n, object: 0n },
-    },
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["test"]),
+    trackName: new TextEncoder().encode("track"),
     parameters: [],
   };
 }
 
 /**
- * 正常な Joining Fetch を構築する
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH):
+ * FETCH Message {
+ *   Type (vi64) = 0x16,
+ *   Length (16),
+ *   Request ID (vi64),
+ *   Track Namespace (..),
+ *   Track Name Length (vi64),
+ *   Track Name (..),
+ *   Number of Parameters (vi64),
+ *   Parameters (..) ...
+ * }
+ *
+ * Fetch Type / Start Location / End Location フィールドが存在しないことを
+ * 固定バイト列でピン留めする (draft-19 形式は Request ID の直後に Fetch Type
+ * が入るため、バイト列が一致すれば旧形式への回帰を検出できる)。
  */
-function createJoiningFetch(fetchType: FetchType): Fetch {
-  return {
-    type: MessageType.FETCH,
-    requestId: 0n,
-    fetchType,
-    joining: {
-      joiningRequestId: 1n,
-      joiningStart: 0n,
-    },
-    parameters: [],
-  };
-}
+test("encodeFetchPayload: draft-20 の固定バイト列を生成する", () => {
+  const msg = createFetch();
 
-/**
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
- * Fetch Type が 0x1 / 0x2 / 0x3 以外の場合はエンコード前に throw する。
- * エラーは自コードの防御であり、decode 側の ProtocolViolationError とは
- * 区別してプレーンな Error で throw する。
- */
-test("encodeFetchPayload: 不正な Fetch Type で throw する", () => {
-  const msg = createStandaloneFetch();
-  msg.fetchType = 0x04 as FetchType;
+  // Request ID = 1 (0x01)
+  // Track Namespace = ["test"] (1 要素、各要素は Length 付き)
+  // Track Name Length = 5, Track Name = "track"
+  // Number of Parameters = 0
+  const expected = new Uint8Array([
+    0x01, // Request ID
+    0x01, // Number of Namespace Tuples
+    0x04, // Tuple Length
+    0x74,
+    0x65,
+    0x73,
+    0x74, // "test"
+    0x05, // Track Name Length
+    0x74,
+    0x72,
+    0x61,
+    0x63,
+    0x6b, // "track"
+    0x00, // Number of Parameters
+  ]);
 
-  // 自コードの防御のため、decode 側の ProtocolViolationError ではない
-  // プレーンな Error で throw することを検証する
-  let thrown: unknown;
-  try {
-    encodeFetchPayload(msg);
-  } catch (error) {
-    thrown = error;
-  }
-  assert.isDefined(thrown);
-  assert.isFalse(thrown instanceof ProtocolViolationError);
-  assert.isTrue(thrown instanceof Error);
-  assert.isTrue(
-    (thrown as Error).message.includes("unknown fetch type: 0x4, expected 0x1, 0x2, or 0x3"),
-  );
+  assert.deepEqual(encodeFetchPayload(msg), expected);
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.12.1 (Standalone Fetch):
- * Fetch Type 0x1 (STANDALONE) は standalone 構造が必須。
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH):
+ * 固定バイト列をデコードすると Request ID / Track Namespace / Track Name /
+ * Parameters に復元されることを検証する。
  */
-test("encodeFetchPayload: STANDALONE で standalone がないと throw する", () => {
-  const msg = createStandaloneFetch();
-  delete msg.standalone;
+test("decodeFetchPayload: draft-20 の固定バイト列をデコードする", () => {
+  const data = new Uint8Array([
+    0x01, // Request ID
+    0x01, // Number of Namespace Tuples
+    0x04, // Tuple Length
+    0x74,
+    0x65,
+    0x73,
+    0x74, // "test"
+    0x05, // Track Name Length
+    0x74,
+    0x72,
+    0x61,
+    0x63,
+    0x6b, // "track"
+    0x00, // Number of Parameters
+  ]);
 
-  assert.throws(() => encodeFetchPayload(msg), /standalone fetch requires a standalone structure/);
+  const decoded = decodeFetchPayload(data);
+
+  assert.equal(decoded.type, MessageType.FETCH);
+  assert.equal(decoded.requestId, 1n);
+  assert.deepEqual(decoded.trackName, new TextEncoder().encode("track"));
+  assert.deepEqual(decoded.parameters, []);
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.12.1 (Standalone Fetch):
- * 型外入力の防御として、standalone が null の場合も構造未設定として拒否する。
+ * draft-ietf-moq-transport-20 Section 10:
+ * "If the length does not match the length of the Message Body, the receiver
+ *  MUST close the session with a PROTOCOL_VIOLATION."
+ * Parameters は FETCH ペイロードの最後のフィールドであり、その後ろに後続
+ * データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  */
-test("encodeFetchPayload: STANDALONE で standalone が null だと throw する", () => {
-  const msg = createStandaloneFetch();
-  (msg as { standalone: unknown }).standalone = null;
+test("decodeFetchPayload: 末尾に後続データがあると ProtocolViolationError を throw する", () => {
+  const encoded = encodeFetchPayload(createFetch());
+  const withTrailing = new Uint8Array(encoded.length + 1);
+  withTrailing.set(encoded, 0);
+  withTrailing[encoded.length] = 0xff;
 
-  assert.throws(() => encodeFetchPayload(msg), /standalone fetch requires a standalone structure/);
-});
-
-/**
- * draft-ietf-moq-transport-19 Section 10.12.1 (Standalone Fetch):
- * Fetch Type 0x1 (STANDALONE) に joining 構造を含めることはできない。
- */
-test("encodeFetchPayload: STANDALONE で joining があると throw する", () => {
-  const msg = createStandaloneFetch();
-  msg.joining = {
-    joiningRequestId: 1n,
-    joiningStart: 0n,
-  };
-
-  assert.throws(
-    () => encodeFetchPayload(msg),
-    /standalone fetch must not contain a joining structure/,
-  );
-});
-
-/**
- * draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches):
- * Fetch Type 0x2 / 0x3 (JOINING 系) は joining 構造が必須。
- */
-test("encodeFetchPayload: JOINING 系で joining がないと throw する", () => {
-  const msg = createJoiningFetch(FetchType.RELATIVE_JOINING);
-  delete msg.joining;
-
-  assert.throws(() => encodeFetchPayload(msg), /joining fetch requires a joining structure/);
-});
-
-/**
- * draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches):
- * 型外入力の防御として、joining が null の場合も構造未設定として拒否する。
- */
-test("encodeFetchPayload: JOINING 系で joining が null だと throw する", () => {
-  const msg = createJoiningFetch(FetchType.RELATIVE_JOINING);
-  (msg as { joining: unknown }).joining = null;
-
-  assert.throws(() => encodeFetchPayload(msg), /joining fetch requires a joining structure/);
-});
-
-/**
- * draft-ietf-moq-transport-19 Section 10.12.2 (Joining Fetches):
- * Fetch Type 0x2 / 0x3 (JOINING 系) に standalone 構造を含めることはできない。
- */
-test("encodeFetchPayload: JOINING 系で standalone があると throw する", () => {
-  const msg = createJoiningFetch(FetchType.ABSOLUTE_JOINING);
-  msg.standalone = createStandaloneFetch().standalone;
-
-  assert.throws(
-    () => encodeFetchPayload(msg),
-    /joining fetch must not contain a standalone structure/,
-  );
-});
-
-/**
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
- * 正常な 3 種の Fetch Type は従来どおりエンコードされる。
- */
-test("encodeFetchPayload: 正常な 3 種の Fetch Type はエンコードされる", () => {
-  assert.doesNotThrow(() => encodeFetchPayload(createStandaloneFetch()));
-  assert.doesNotThrow(() => encodeFetchPayload(createJoiningFetch(FetchType.RELATIVE_JOINING)));
-  assert.doesNotThrow(() => encodeFetchPayload(createJoiningFetch(FetchType.ABSOLUTE_JOINING)));
+  assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
 });

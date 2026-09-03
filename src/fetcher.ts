@@ -1,12 +1,12 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH) — 10.13 (FETCH_OK)
+ * draft-ietf-moq-transport-20 Section 10.13 (FETCH) — 10.14 (FETCH_OK)
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
  * "unknown range" として返すことができる (Section 11.4.4, Table 7)。
- * draft-ietf-moq-transport-19 Section 10.12, Section 11.4.4
+ * draft-ietf-moq-transport-20 Section 10.13, Section 11.4.4
  */
 
 import type { MoqtObject } from "./dataStream";

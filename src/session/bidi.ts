@@ -20,11 +20,9 @@ import {
 import { FetcherImpl, type Fetcher } from "../fetcher";
 import {
   MessageType,
-  FetchType,
   MessageParameterType,
   createTrackNamespace,
   encodeAuthorizationToken,
-  encodeFetchPayload,
   encodeParameterTrackNamespace,
   encodeRequestUpdatePayload,
   encodeRequestErrorPayload,
@@ -39,7 +37,6 @@ import {
   decodeSubscribeOkPayload,
   getParameterLocationValue,
   validateRangeFilterCombination,
-  type AuthorizationToken,
   type Location,
   type Parameter,
   type RangeFilterSpec,
@@ -58,13 +55,7 @@ import {
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
-import { encodeVarint } from "../varint";
-import type {
-  JoiningFetchOptions,
-  NamespaceUpdateOptions,
-  SessionState,
-  TrackStatusResult,
-} from "../session";
+import type { NamespaceUpdateOptions, SessionState, TrackStatusResult } from "../session";
 import {
   extractForwardState,
   extractLargestLocation,
@@ -99,7 +90,6 @@ interface PendingSubscribe {
   resolve: (sub: Subscriber) => void;
   reject: (err: Error) => void;
   impl: SubscriberImpl;
-  joiningFetch?: JoiningFetchOptions;
   objectCallback: (object: MoqtObject) => void;
 }
 
@@ -484,21 +474,6 @@ export async function bidiReadSubscribeResponse(
       }
 
       session.pendingSubgroupBuffer.notifyAlias(decoded.trackAlias, "subscriber");
-
-      if (pending.joiningFetch) {
-        if (largestLocation) {
-          void bidiSendJoiningFetch(
-            session,
-            requestId,
-            pending.joiningFetch,
-            pending.objectCallback,
-            largestLocation,
-            pending.impl.getAuthorizationToken(),
-          );
-        } else {
-          pending.joiningFetch.onEnd?.();
-        }
-      }
 
       pending.resolve(pending.impl);
 
@@ -1698,125 +1673,6 @@ export async function bidiSendNamespaceRequestUpdate(
   }
 
   return promise;
-}
-
-// ============================================================================
-// sendJoiningFetch
-// ============================================================================
-
-export async function bidiSendJoiningFetch(
-  session: BidiSessionInternal,
-  subscribeRequestId: bigint,
-  options: JoiningFetchOptions,
-  defaultObjectCallback: (object: MoqtObject) => void,
-  largestLocation: Location,
-  authorizationToken?: AuthorizationToken,
-): Promise<void> {
-  const requestId = session.nextRequestId;
-  session.nextRequestId += 2n;
-
-  const impl = new FetcherImpl(
-    [],
-    "",
-    requestId,
-    options.onObject ?? defaultObjectCallback,
-    options.onEnd,
-    options.onError,
-  );
-
-  impl.onCancel = async () => {
-    await bidiCancelFetch(session, impl);
-  };
-
-  const estimatedStartLocation: Location =
-    options.type === "relative"
-      ? { group: largestLocation.group - options.start, object: 0n }
-      : { group: options.start, object: 0n };
-
-  session.pendingFetch.set(requestId, {
-    resolve: () => {
-      session.fetchers.set(requestId, impl);
-    },
-    reject: (err) => {
-      options.onError?.(err);
-    },
-    impl,
-    startLocation: estimatedStartLocation,
-  });
-
-  const fetchType =
-    options.type === "relative" ? FetchType.RELATIVE_JOINING : FetchType.ABSOLUTE_JOINING;
-
-  const fetchMsg = {
-    type: MessageType.FETCH,
-    requestId,
-    fetchType,
-    joining: {
-      joiningRequestId: subscribeRequestId,
-      joiningStart: options.start,
-    },
-    parameters: [] as Parameter[],
-  };
-
-  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-19 Section 10.2.5
-  if (options.fillTimeout !== undefined) {
-    fetchMsg.parameters.push({
-      type: MessageParameterType.FILL_TIMEOUT,
-      value: encodeVarint(options.fillTimeout),
-    });
-  }
-
-  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-19 Section 5.1.3
-  // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ。
-  // この関数は fire-and-forget (void) で起動されるため、ガード・エンコードの throw は
-  // 未処理 rejection にならないよう catch で処理し、pendingFetch を削除して
-  // options.onError で通知する。
-  if (options.rangeFilters !== undefined) {
-    try {
-      validateRangeFilterLimits(options.rangeFilters, session.peerMaxFilterRanges, "Joining Fetch");
-      validateRangeFilterSpecs(options.rangeFilters, "Joining Fetch", {
-        allowRemove: false,
-        allowTrackProperty: false,
-      });
-      fetchMsg.parameters.push(...buildRangeFilterParameters(options.rangeFilters));
-    } catch (err) {
-      session.pendingFetch.delete(requestId);
-      const error = err instanceof Error ? err : new Error(String(err));
-      options.onError?.(error);
-      return;
-    }
-  }
-
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
-  // Joining Fetch は SUBSCRIBE に紐づく FETCH のため、SUBSCRIBE と同じトークンを MUST 付与。
-  if (authorizationToken !== undefined) {
-    fetchMsg.parameters.push({
-      type: MessageParameterType.AUTHORIZATION_TOKEN,
-      value: encodeAuthorizationToken(authorizationToken),
-    });
-  }
-
-  try {
-    const payload = encodeFetchPayload(fetchMsg);
-    const streamInfo = await bidiSendRequestOnBidiStream(
-      session,
-      requestId,
-      MessageType.FETCH,
-      payload,
-      {
-        requestId: requestId.toString(),
-        fetchType: options.type,
-        joiningRequestId: subscribeRequestId.toString(),
-        joiningStart: options.start.toString(),
-      },
-    );
-
-    void bidiReadFetchResponse(session, requestId, streamInfo.stream, streamInfo.controlReader);
-  } catch (err) {
-    session.pendingFetch.delete(requestId);
-    const error = err instanceof Error ? err : new Error(String(err));
-    options.onError?.(error);
-  }
 }
 
 // ============================================================================

@@ -171,7 +171,6 @@ interface MediaSubscriberOptions {
   };
   useWorker?: boolean; // default: true
   reorderTimeout?: number; // default: 50 (ms), 0 で無効
-  joiningFetch?: boolean; // default: false
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
 }
 ```
@@ -298,7 +297,6 @@ const subscriber = await createMediaSubscriber(
     namespace: ["live", "room1"],
     audio: { codec: "opus" },
     video: { codec: "h264" },
-    joiningFetch: true,
   },
   {
     onStateChange: (state) => console.log("Subscriber state:", state),

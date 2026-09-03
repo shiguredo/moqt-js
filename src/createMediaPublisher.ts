@@ -366,7 +366,7 @@ class MediaPublisherImpl implements MediaPublisher {
     const payload = encodeCatalog(catalog);
 
     // Catalog object が WebTransport stream に書き込み完了するまで await する。
-    // draft-ietf-moq-transport-19 §10.12.2: Joining Fetch は object が publish されていなければ
+    // draft-ietf-moq-transport-20 §10.13: FETCH は object が publish されていなければ
     // INVALID_RANGE で REQUEST_ERROR を返す MUST。fire-and-forget だと publisher.start() の
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。

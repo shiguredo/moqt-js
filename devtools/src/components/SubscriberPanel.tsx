@@ -139,18 +139,6 @@ export function SubscriberPanel({
             <label class="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={instance.joiningFetchEnabled.value}
-                onChange={(e) => {
-                  instance.joiningFetchEnabled.value = e.currentTarget.checked;
-                }}
-                disabled={isSubscribing}
-                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
-              />
-              <span class="text-sm text-slate-600">Joining Fetch</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
                 checked={instance.newGroupRequestEnabled.value}
                 onChange={(e) => {
                   instance.newGroupRequestEnabled.value = e.currentTarget.checked;
@@ -335,7 +323,7 @@ export function SubscriberPanel({
           </div>
 
           <h3 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
-            Joining Fetch
+            Largest Location
           </h3>
           <div class="grid grid-cols-4 gap-3 mb-4">
             <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
@@ -344,22 +332,10 @@ export function SubscriberPanel({
                 {instance.largestLocation.value?.group.toString() ?? "-"}
               </div>
             </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
+            <div class="bg-white rounded-lg p-3 border border-slate-200 col-span-2">
               <div class="text-xs text-slate-500">largestObject</div>
               <div class="text-xl font-bold text-blue-600">
                 {instance.largestLocation.value?.object.toString() ?? "-"}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">fetchObjects</div>
-              <div class="text-xl font-bold text-purple-600">
-                {instance.joiningFetchStats.value?.objectsReceived ?? 0}
-              </div>
-            </div>
-            <div class="bg-white rounded-lg p-3 border border-slate-200">
-              <div class="text-xs text-slate-500">fetchBytes</div>
-              <div class="text-xl font-bold text-purple-600">
-                {formatBytes(instance.joiningFetchStats.value?.bytesReceived ?? 0)}
               </div>
             </div>
           </div>

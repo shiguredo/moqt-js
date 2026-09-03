@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages Property-Based Tests
- * draft-ietf-moq-transport-19 Section 10.12-10.13
+ * draft-ietf-moq-transport-20 Section 10.13-10.14
  */
 
 import { test, assert } from "vite-plus/test";
@@ -8,7 +8,6 @@ import * as fc from "fast-check";
 import {
   type Fetch,
   type FetchOk,
-  FetchType,
   decodeFetchOkPayload,
   decodeFetchPayload,
   encodeFetchOkPayload,
@@ -28,7 +27,7 @@ import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -38,7 +37,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-19 §10.2.8 / §10.2.17: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-20 §10.2.18 / §10.2.7 / §10.2.8: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -131,9 +130,9 @@ const parametersArb = fc
 /**
  * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * FETCH_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-19 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-20 Section 10 (Control Messages)
  */
 // 値域制約のある Track Property は除外する (validateTrackPropertyValue で
 // ProtocolViolationError になりラウンドトリップが成立しないため)
@@ -169,9 +168,9 @@ const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropert
 const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
 
 /**
- * draft-ietf-moq-transport-19 Section 2.3:
+ * draft-ietf-moq-transport-20 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-19 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-20 Section 10 (Control Messages)
  */
 const namespaceArb = fc
   .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })
@@ -186,26 +185,19 @@ const locationArb = fc.record({
   object: fc.bigInt({ min: 0n, max: 1000000n }),
 });
 
-test("Fetch (Standalone) のエンコード・デコードがラウンドトリップする", () => {
+test("Fetch のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceArb,
       trackNameArb,
-      locationArb,
-      locationArb,
       parametersArb,
-      (requestId, trackNamespace, trackName, startLocation, endLocation, parameters) => {
+      (requestId, trackNamespace, trackName, parameters) => {
         const original: Fetch = {
           type: MessageType.FETCH,
           requestId,
-          fetchType: FetchType.STANDALONE,
-          standalone: {
-            trackNamespace,
-            trackName,
-            startLocation,
-            endLocation,
-          },
+          trackNamespace,
+          trackName,
           parameters,
         };
 
@@ -214,56 +206,11 @@ test("Fetch (Standalone) のエンコード・デコードがラウンドトリ�
 
         assert.equal(decoded.type, MessageType.FETCH);
         assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.fetchType, FetchType.STANDALONE);
-        assert.isDefined(decoded.standalone);
         assert.deepEqual(
-          trackNamespaceToStrings(decoded.standalone!.trackNamespace),
+          trackNamespaceToStrings(decoded.trackNamespace),
           trackNamespaceToStrings(trackNamespace),
         );
-        assert.deepEqual(decoded.standalone!.trackName, trackName);
-        assert.equal(decoded.standalone!.startLocation.group, startLocation.group);
-        assert.equal(decoded.standalone!.startLocation.object, startLocation.object);
-        assert.equal(decoded.standalone!.endLocation.group, endLocation.group);
-        assert.equal(decoded.standalone!.endLocation.object, endLocation.object);
-        assert.equal(decoded.parameters.length, parameters.length);
-        for (let i = 0; i < parameters.length; i++) {
-          assert.equal(decoded.parameters[i].type, parameters[i].type);
-          assert.deepEqual(decoded.parameters[i].value, parameters[i].value);
-        }
-      },
-    ),
-  );
-});
-
-test("Fetch (Joining) のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.constantFrom(FetchType.RELATIVE_JOINING, FetchType.ABSOLUTE_JOINING),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      parametersArb,
-      (requestId, fetchType, joiningRequestId, joiningStart, parameters) => {
-        const original: Fetch = {
-          type: MessageType.FETCH,
-          requestId,
-          fetchType,
-          joining: {
-            joiningRequestId,
-            joiningStart,
-          },
-          parameters,
-        };
-
-        const encoded = encodeFetchPayload(original);
-        const decoded = decodeFetchPayload(encoded);
-
-        assert.equal(decoded.type, MessageType.FETCH);
-        assert.equal(decoded.requestId, requestId);
-        assert.equal(decoded.fetchType, fetchType);
-        assert.isDefined(decoded.joining);
-        assert.equal(decoded.joining!.joiningRequestId, joiningRequestId);
-        assert.equal(decoded.joining!.joiningStart, joiningStart);
+        assert.deepEqual(decoded.trackName, trackName);
         assert.equal(decoded.parameters.length, parameters.length);
         for (let i = 0; i < parameters.length; i++) {
           assert.equal(decoded.parameters[i].type, parameters[i].type);
@@ -275,35 +222,28 @@ test("Fetch (Joining) のエンコード・デコードがラウンドトリッ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
- * Parameters は FETCH (Standalone) ペイロードの最後のフィールドであり、
+ * Parameters は FETCH ペイロードの最後のフィールドであり、
  * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
- * 正常な FETCH (Standalone) の後ろに後続バイト列を連結すると
+ * 正常な FETCH の後ろに後続バイト列を連結すると
  * ProtocolViolationError を throw することを検証する。
  */
-test("FETCH (Standalone) の末尾に後続データがあると ProtocolViolationError を throw する", () => {
+test("FETCH の末尾に後続データがあると ProtocolViolationError を throw する", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       namespaceArb,
       trackNameArb,
-      locationArb,
-      locationArb,
       parametersArb,
       fc.uint8Array({ minLength: 1, maxLength: 1000 }),
-      (requestId, trackNamespace, trackName, startLocation, endLocation, parameters, trailing) => {
+      (requestId, trackNamespace, trackName, parameters, trailing) => {
         const original: Fetch = {
           type: MessageType.FETCH,
           requestId,
-          fetchType: FetchType.STANDALONE,
-          standalone: {
-            trackNamespace,
-            trackName,
-            startLocation,
-            endLocation,
-          },
+          trackNamespace,
+          trackName,
           parameters,
         };
 
@@ -320,76 +260,8 @@ test("FETCH (Standalone) の末尾に後続データがあると ProtocolViolati
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
- * "If the length does not match the length of the Message Body,
- *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
- * Parameters は FETCH (Joining) ペイロードの最後のフィールドであり、
- * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
- * 正常な FETCH (Joining) の後ろに後続バイト列を連結すると
- * ProtocolViolationError を throw することを検証する。
- */
-test("FETCH (Joining) の末尾に後続データがあると ProtocolViolationError を throw する", () => {
-  fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.constantFrom(FetchType.RELATIVE_JOINING, FetchType.ABSOLUTE_JOINING),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      parametersArb,
-      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
-      (requestId, fetchType, joiningRequestId, joiningStart, parameters, trailing) => {
-        const original: Fetch = {
-          type: MessageType.FETCH,
-          requestId,
-          fetchType,
-          joining: {
-            joiningRequestId,
-            joiningStart,
-          },
-          parameters,
-        };
-
-        const encoded = encodeFetchPayload(original);
-        // 正常な FETCH の後ろに 1 バイト以上の後続データを連結する
-        const withTrailing = new Uint8Array(encoded.length + trailing.length);
-        withTrailing.set(encoded, 0);
-        withTrailing.set(trailing, encoded.length);
-
-        assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
-      },
-    ),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-19 Section 10.12 (FETCH):
- * "An endpoint that receives a Fetch Type other than 0x1, 0x2 or 0x3 MUST close
- *  the session with a PROTOCOL_VIOLATION."
- * decode 段階で ProtocolViolationError が投げられることを保証する。
- */
-test("Fetch Type が 0x1/0x2/0x3 以外なら decodeFetchPayload は ProtocolViolationError を throw する", () => {
-  fc.assert(
-    fc.property(
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      // 0x0 と 0x4 以上の不正値を混ぜる (0x1/0x2/0x3 だけ除外)
-      fc.bigInt({ min: 0n, max: 1024n }).filter((n) => n !== 1n && n !== 2n && n !== 3n),
-      (requestId, invalidFetchType) => {
-        const requestIdBytes = encodeVarint(requestId);
-        const fetchTypeBytes = encodeVarint(invalidFetchType);
-        const payload = new Uint8Array(requestIdBytes.length + fetchTypeBytes.length);
-        payload.set(requestIdBytes, 0);
-        payload.set(fetchTypeBytes, requestIdBytes.length);
-
-        assert.throws(() => decodeFetchPayload(payload), ProtocolViolationError);
-      },
-    ),
-  );
-});
-
-/**
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * FETCH_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-19 Section 10 (Control Messages)
  */
 test("FetchOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
