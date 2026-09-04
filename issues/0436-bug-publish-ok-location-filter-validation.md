@@ -1,7 +1,7 @@
 # PUBLISH_OK / REQUEST_UPDATE 受信時の LOCATION_FILTER が値検証されず §5.1.2 の受信 MUST が効かない
 
 - Created: 2026-08-29
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-publish-ok-location-filter-validation
 - Polished: 2026-09-01
 
@@ -43,6 +43,15 @@ draft-ietf-moq-transport-19 §5.1.2 の「AbsoluteRange の End Group が 2^64-1
 - 関連: `issues/0437-bug-request-update-raw-location-filter-bypass.md`（REQUEST_UPDATE 送信側の raw パラメータ経路の検証。本 issue は受信側）
 - 関連: `issues/0439-bug-location-filter-parameter-consumed-check.md`（`decodeLocationFilterParameter` の宣言 Length 消費検証。本 issue の値域検証と相補的）
 - 注: `refs/moq/` の一次資料は draft-20 に更新済みだが、現行実装は draft-19 ワイヤのままである（draft-20 移行は 0448 / 0452 等の open issue で計画中）。本 issue は現行 draft-19 実装に対する対応であり、draft-20 移行（0452 の PUBLISH_OK から LOCATION_FILTER を外す変更）で前提を更新する。
+
+## 解決方法
+
+`src/session/bidi.ts` に `validateLocationFilterParameters` を新設し、PUBLISH_OK 受信分岐と publish ロールの REQUEST_UPDATE 受信分岐の両方に接続した。
+
+- 0426 由来の `decodeLocationFilterParameter` (現行は draft-20 Length ベース) を呼び、超過は外側 catch の変換で PROTOCOL_VIOLATION にしてセッションを閉じる。REQUEST_OK の応答・解決・反映は検証通過後に限る
+- 値の状態への反映は行わない (0424 系の別論点)
+- テストは `src/session/bidi.test.ts` に 4 本追加する (両経路の超過検出と正常系 5 種の回帰)
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
 
 ## 解決方法
 
