@@ -1,7 +1,7 @@
 # bidi 系 unsubscribe() (bidiCancelSubscription) が in-flight の REQUEST_UPDATE を掃除しない
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-bidi-unsubscribe-pending-update-cleanup
 - Polished: 2026-08-28
 
@@ -47,3 +47,13 @@ bidi 系 SUBSCRIBE の `Subscriber.unsubscribe()` (`bidiCancelSubscription`、`s
 - 関連: `issues/closed/0406-fix-goaway-pending-request-update-cleanup.md` (GOAWAY 掃除。共通の rejectPendingRequestUpdates を利用。`bidiSendRequestUpdate` の `promise.catch(() => {})` を導入)
 - 関連: `issues/0432-bug-reset-path-pending-request-update-leak.md` (RESET_STREAM 経路の掃除。本 issue と独立トリガー。同一定数 `REQUEST_UPDATE_STREAM_CLOSED_MESSAGE` を採用)
 - 関連: `issues/0434-bug-unobserved-update-rejection-not-suppressed.md` (bidi 系 `SubscriberImpl.update()` の async wrapper 経路の整理。本 issue の新規 reject トリガーに対する async wrapper 側の受け皿)
+
+## 解決方法
+
+`src/session/bidi.ts` の `bidiCancelSubscription` で、ストリーム破棄より前に `rejectPendingRequestUpdates` を呼ぶようにした。
+
+- reject 文言は FIN / RESET 経路と同じ共通文言を採用する
+- 対象 requestId の複数件を掃除し、別対象は温存する。FETCH は対象とする送信経路が存在しないため掃除対象外である旨をコメントに明記する
+- fire-and-forget の wrapper 経路の抑制は 0434 の範囲であり、本 issue では送信関数の既存 catch を残すのみとする (実装中に内側 catch が外側 wrapper に及ばないことを確認し、0434 へ委ねる)
+- テストは `src/session/bidi.test.ts` に 2 本追加する (掃除とスコープ・保留なし時の no-op)
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
