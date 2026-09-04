@@ -1,7 +1,7 @@
 # SUBSCRIBE_TRACKS の REQUEST_UPDATE で FORWARD を送れるようにする
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/add-forward-on-subscribe-tracks-update
 - Polished: 2026-09-02
 
@@ -33,3 +33,12 @@ draft-ietf-moq-transport-20 §10.2.18 / A.1 #1812 で SUBSCRIBE_TRACKS の REQUE
 
 - draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1812)
+
+## 解決方法
+
+Tracks 更新専用のオプション型を新設し、FORWARD 送信に対応した。
+
+- `TracksUpdateOptions` を追加し `TracksSubscription.update` でのみ受け付ける
+- 0/1 明示送信と省略時不送でワイヤ化し、Namespace 系混入は送らない
+- 受信スコープ検証とは矛盾しないことを確認する
+- `CHANGES.md` の `## develop` に `[ADD]` を追記する

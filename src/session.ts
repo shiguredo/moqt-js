@@ -764,6 +764,25 @@ export interface NamespaceUpdateOptions {
 }
 
 /**
+ * Tracks 更新のオプション
+ * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+ * SUBSCRIBE_TRACKS の REQUEST_UPDATE に FORWARD が許可された。
+ * FORWARD は prefix に一致する将来の購読の Forwarding State を指定し、
+ * 既存購読には影響しない。省略時は不変。
+ */
+export interface TracksUpdateOptions extends NamespaceUpdateOptions {
+  /**
+   * 将来の購読の Forward State
+   * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter)
+   *
+   * true (1) / false (0) を明示送信する。省略時は不変。
+   * SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では許可されないため、
+   * NamespaceSubscription.update には露出させない。
+   */
+  forward?: boolean;
+}
+
+/**
  * Namespace サブスクリプション
  */
 export interface NamespaceSubscription {
@@ -853,11 +872,14 @@ export interface TracksSubscription {
    */
   unsubscribe(): Promise<void>;
   /**
-   * Track Namespace Prefix を更新する (REQUEST_UPDATE を送信)
+   * Track Namespace Prefix と Forward State を更新する (REQUEST_UPDATE を送信)
    *
    * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
    * "Updating the prefix of a SUBSCRIBE_TRACKS has no effect on existing
    *  subscriptions." (既存の確立済み SubscriberImpl には影響しない)
+   * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+   * SUBSCRIBE_TRACKS の REQUEST_UPDATE に FORWARD が許可された。
+   * 将来の購読の Forwarding State を指定し、既存購読には影響しない。
    *
    * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
    * クローズで reject する。
@@ -872,9 +894,9 @@ export interface TracksSubscription {
    * - 同一型のアクティブなサブスクリプション (更新対象自身を除く) と
    *   共通 prefix を持つ更新
    *
-   * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX)
+   * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX + FORWARD)
    */
-  update(options: NamespaceUpdateOptions): Promise<void>;
+  update(options: TracksUpdateOptions): Promise<void>;
 }
 
 /**
@@ -3109,12 +3131,14 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
    * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータを含めて送信する。
+   * Tracks 系では draft-ietf-moq-transport-20 §10.2.18 の FORWARD も送り得る。
    * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
+   * kind が namespace の場合、forward が混入しても送らない。
    */
   private async sendNamespaceRequestUpdate(
     requestId: bigint,
     kind: "namespace" | "tracks",
-    options: NamespaceUpdateOptions,
+    options: TracksUpdateOptions,
   ): Promise<void> {
     const subscription =
       kind === "namespace"
@@ -3186,7 +3210,7 @@ export class SessionImpl implements Session {
 
     // createNamespaceSubscription の update と同様に、fire-and-forget 時の
     // 無観測 reject を抑制する (catch 付き promise を直接返す)。
-    const update = (options: NamespaceUpdateOptions): Promise<void> => {
+    const update = (options: TracksUpdateOptions): Promise<void> => {
       const promise = this.sendNamespaceRequestUpdate(requestId, "tracks", options);
       promise.catch(() => {});
       return promise;

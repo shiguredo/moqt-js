@@ -63,7 +63,7 @@ import {
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
-import type { NamespaceUpdateOptions, SessionState, TrackStatusResult } from "../session";
+import type { TracksUpdateOptions, SessionState, TrackStatusResult } from "../session";
 import {
   extractForwardState,
   extractLargestLocation,
@@ -1777,14 +1777,14 @@ export async function bidiSendRequestUpdate(
  * @param session - セッション内部状態
  * @param requestId - 更新対象の SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の Request ID
  * @param streamWriter - サブスクリプションの双方向ストリーム writer
- * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX)
+ * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX + Tracks のみ FORWARD)
  * @returns REQUEST_OK 受信で resolve、REQUEST_ERROR / ストリームクローズで reject する Promise
  */
 export async function bidiSendNamespaceRequestUpdate(
   session: BidiSessionInternal,
   requestId: bigint,
   streamWriter: WritableStreamDefaultWriter<Uint8Array>,
-  options: NamespaceUpdateOptions,
+  options: TracksUpdateOptions,
 ): Promise<void> {
   // draft-ietf-moq-transport-19 §10.4:
   // GOAWAY を受信したリクエストストリームはマイグレーション対象のため、
@@ -1866,9 +1866,24 @@ export async function bidiSendNamespaceRequestUpdate(
   subscription.pendingPrefix = options.trackNamespacePrefix;
 
   const parameters: Parameter[] = [
-    // TRACK_NAMESPACE_PREFIX (0x34) - draft-ietf-moq-transport-19 Section 10.2.19
+    // TRACK_NAMESPACE_PREFIX (0x34) - draft-ietf-moq-transport-20 Section 10.2.20
     encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
   ];
+
+  // FORWARD (0x10) - draft-ietf-moq-transport-20 Section 10.2.18:
+  // SUBSCRIBE_TRACKS の REQUEST_UPDATE にのみ許可され、 prefix に一致する
+  // 将来の購読の Forwarding State を指定する (既存購読には影響しない)。
+  // SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では許可されないため送らない。
+  // 型上は TracksUpdateOptions のみが forward を持つが、実行時に
+  // namespace 系へ混入しても黙って落とす (誤送信による仕様違反を防ぐ)。
+  // 省略時は不変のため、指定時のみ 0/1 を明示送信する
+  // (bidiSendRequestUpdate の forward !== undefined → 0/1 表現に揃える)。
+  if (!isNamespaceSubscription && options.forward !== undefined) {
+    parameters.push({
+      type: MessageParameterType.FORWARD,
+      value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
+    });
+  }
 
   const requestUpdateMsg = {
     type: MessageType.REQUEST_UPDATE,
