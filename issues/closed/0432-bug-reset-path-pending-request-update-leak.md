@@ -1,7 +1,7 @@
 # RESET_STREAM 経路 (bidi 系・受信 PUBLISH 系) で応答待ちの REQUEST_UPDATE がクリーンアップされない
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-reset-path-pending-request-update-leak
 - Polished: 2026-08-28
 
@@ -50,3 +50,13 @@
 - 関連: `issues/closed/0410-bug-subscribe-error-end-not-notified.md` (RESET 通知の実装。「残余リスク (RESET 経路の pending リーク)」として記録)
 - 関連: `issues/closed/0406-fix-goaway-pending-request-update-cleanup.md` (GOAWAY 掃除の先例)
 - 関連: `issues/0428-bug-incoming-publish-reset-markclosed-missing.md` (受信 PUBLISH 経路の RESET markClosed 対称化。本 issue の実装順序の前提)
+
+## 解決方法
+
+`bidiReadRequestStreamMessages` (subscribe ロール) と `runPublishStreamSubLoop` の RESET_STREAM 分岐で、通知より先に `rejectPendingRequestUpdates` を呼ぶようにした。
+
+- reject 文言は FIN 経路と同じ共通文言を採用し、bidi 側のインライン文字列も同一定数に揃える
+- bidi 側は GOAWAY 受信済みを分岐条件で抑止し、セッション終了起因は `isPeerStreamError` で弾く。受信 PUBLISH 側は既存の GOAWAY・セッション終了ガードに委ねる
+- 共通文言の定義は循環参照を避けて `src/session/errors.ts` に移し、`namespaceLoops.ts` から再公開する (既存参照は維持)
+- テストは `src/session/bidi.test.ts` に 4 本、受信 PUBLISH 系は `src/session.test.ts` に 4 本追加する (正常掃除・throw 時の順序・GOAWAY 後と終了起因の非掃除)
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する

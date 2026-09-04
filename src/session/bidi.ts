@@ -69,7 +69,11 @@ import {
   validateNamespacePrefixUpdate,
   validateTrackNamespaceForSend,
 } from "./params";
-import { isPeerStreamError, toProtocolViolationSessionError } from "./errors";
+import {
+  REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
+  isPeerStreamError,
+  toProtocolViolationSessionError,
+} from "./errors";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 
 // ============================================================================
@@ -987,8 +991,8 @@ export async function bidiReadRequestStreamMessages(
             // handleNamespaceRequestUpdateStreamClosed と同じ)。未解決のまま
             // 残すと、アプリは FIN 後に update() の結果を待ち続ける。
             // 保留中の更新が無い場合は no-op。GOAWAY 受信済みの場合は GOAWAY
-            // 掃除でエントリ削除済みのため no-op になる (エラー文言は namespace
-            // ループの REQUEST_UPDATE_STREAM_CLOSED_MESSAGE と同じ)。reject の
+            // 掃除でエントリ削除済みのため no-op になる (エラー文言は errors の
+            // REQUEST_UPDATE_STREAM_CLOSED_MESSAGE と同じ)。reject の
             // 形式はトリガーごとに異なる (GOAWAY 掃除は RequestError
             // (GOING_AWAY)、本処理は Error) が、失敗の種類が異なるため許容する。
             // notifySubscriberFailure より先に実行することで、アプリの error
@@ -996,7 +1000,7 @@ export async function bidiReadRequestStreamMessages(
             rejectPendingRequestUpdates(
               session,
               requestId,
-              new Error("stream closed before receiving update response"),
+              new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
             );
             notifySubscriberFailure(
               session,
@@ -1258,13 +1262,32 @@ export async function bidiReadRequestStreamMessages(
     const sessionError = toProtocolViolationSessionError(error);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
-    } else if (role === "subscribe" && isPeerStreamError(error)) {
+    } else if (
+      role === "subscribe" &&
+      isPeerStreamError(error) &&
+      !session.goawayReceivedOnRequestStreams.has(requestId)
+    ) {
       // draft-ietf-moq-transport-19 §3.3.3:
       // ピアの RESET_STREAM により readable がエラー終了した場合、subscriber の
       // error コールバックを呼び state を closed にする (アプリが終了を検知
       // できるようにする実用上の対応。FIN 経路の notifySubscriberFailure と同じ)。
       // セッションは閉じない (プロトコル違反ではない)。source: "stream" 以外
       // (セッション終了・内部エラー等) では通知しない。
+      // GOAWAY 受信済みの旧ストリームは分岐条件で抑止し GOAWAY 掃除に委ねる
+      // (GOAWAY は migration 通知であり失敗ではない)。
+      // draft-ietf-moq-transport-19 §3.3.2 / §10.9.1:
+      // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
+      // FIN 経路と同様に失敗として reject する。応答 (REQUEST_OK / REQUEST_ERROR)
+      // は届かないため、残すとアプリは update() の結果を待ち続ける。
+      // 通知より先に実行することで、アプリの error コールバックが throw しても
+      // reject が実行される (順序の根拠。FIN 経路と同パターン)。
+      // FIN 経路は無条件 reject 後の no-op に委ねる形と抑止の段が異なるが、
+      // 実運用では GOAWAY 掃除でエントリ削除済みのため振る舞いは同じ。
+      rejectPendingRequestUpdates(
+        session,
+        requestId,
+        new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+      );
       // 内側に try/catch が必要なのは、FIN 経路は外側の try 内で呼ばれ throw が
       // この catch に落ちて吸収されるのに対し、ここは catch ブロックの内側で
       // throw すると戻り値の Promise が reject し、fire-and-forget の void 呼び出し

@@ -3425,11 +3425,21 @@ export class SessionImpl implements Session {
             // エントリが削除された窓では通知しない (subscribe ロール側と同じ)。
             // 通知メッセージは subscribe ロール側と同一の組み立てを使う
             // (ピアのエラーコード付き、取得不可時は固定文言)。
+            // draft-ietf-moq-transport-19 §3.3.2 / §10.9.1:
+            // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
+            // FIN 経路と同様に失敗として reject する。通知より先に実行することで、
+            // アプリの error コールバックが throw しても reject が実行される
+            // (順序の根拠。bidi 側の RESET 経路と同パターン)。
             // 内側に try/catch が必要なのは、catch ブロック内で throw すると戻り値の
             // Promise が reject し、呼び出し元の requestStreams / subscribers の
             // クリーンアップがスキップされるためである。ここが守るのはこの通知経路
             // だけである (セッションレベルの error コールバック例外が伝播する経路は
             // 別途対応)。
+            bidi.rejectPendingRequestUpdates(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+              new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+            );
             try {
               bidi.notifySubscriberFailure(
                 this as unknown as bidi.BidiSessionInternal,

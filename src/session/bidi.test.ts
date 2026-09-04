@@ -3612,6 +3612,222 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール
 });
 
 /**
+ * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.9.1:
+ * subscribe ロールでピアが RESET_STREAM でストリームをエラー終了させた場合、
+ * 応答待ちの REQUEST_UPDATE (update() の Promise) が reject され、エントリが
+ * 削除されることを検証する。FIN 経路と同じ文言で失敗として扱う。
+ */
+test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール) で応答待ちの REQUEST_UPDATE が reject される", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  // RESET 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  // 応答待ちの REQUEST_UPDATE が FIN 経路と同じ文言で reject され、
+  // エントリが削除される。error 通知も行われる
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.isDefined(errorCalled);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3:
+ * RESET_STREAM 通知でアプリの error コールバックが throw しても、
+ * 応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを検証する。
+ * 通知より reject を先に置く順序の根拠を固定する。
+ */
+test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバックが throw しても応答待ちの更新は reject される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    () => {
+      throw new Error("error callback failed");
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  // RESET 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  // コールバック例外があっても reject は実行済みでエントリは削除される
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4:
+ * GOAWAY 受信済みの subscribe ロールで RESET_STREAM が起きても、
+ * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
+ * 呼び出し自体が起きないため、注入したエントリが残る。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 受信後の RESET_STREAM では応答待ちの更新に触れない", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    () => {
+      errorCalled = true;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+
+  // GOAWAY 掃除をすり抜けた保留中の更新を模して注入する
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  // GOAWAY 後の破壊は migration の完了であり、reject も通知もしない
+  assert.isUndefined(rejected);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 1);
+  assert.isFalse(errorCalled);
+  assert.equal(subscriber.state, "active");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3 / §3.5:
+ * セッション終了起因 (source: "session") の読み取り失敗では、
+ * 保留中の REQUEST_UPDATE に触れないことを検証する。
+ */
+test("bidiReadRequestStreamMessages: セッション終了の読み取り失敗では応答待ちの更新に触れない", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    () => {
+      errorCalled = true;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("session closed by peer"), { source: "session" }),
+  );
+  await readPromise;
+
+  // セッション終了は購読者への通知対象外であり、保留中の更新にも触れない
+  assert.isUndefined(rejected);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 1);
+  assert.isFalse(errorCalled);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-20 §3.3.4:
  * ピアが RESET_STREAM にエラーコードを付けて終了した場合、通知される
  * エラーのメッセージにコード名が付加され、構造化されたコード値でも

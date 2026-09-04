@@ -65,6 +65,10 @@
   - draft-ietf-moq-transport-19 §2.4.2 条件 1 に基づき、FETCH 応答のデコードで Subgroup ID ごとの直近 Priority を追跡し、交互出現でも同一 Subgroup ID の直近オブジェクトと比較する
   - Group 変更時は追跡を捨て、Datagram では更新しない。追跡を持たない既存コンテキストは従来の単一比較に委ねる
   - @voluntas
+- [FIX] RESET_STREAM 時に応答待ちの REQUEST_UPDATE をクリーンアップする
+  - draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.9.1 に基づき、bidi 系 (subscribe ロール) と受信 PUBLISH 系の RESET_STREAM 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
+  - 通知より先に掃除し、FIN 経路と同じ文言で失敗として扱う。GOAWAY 受信済みとセッション終了起因では掃除しない
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)
