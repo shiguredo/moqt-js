@@ -69,6 +69,10 @@
   - draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.9.1 に基づき、bidi 系 (subscribe ロール) と受信 PUBLISH 系の RESET_STREAM 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - 通知より先に掃除し、FIN 経路と同じ文言で失敗として扱う。GOAWAY 受信済みとセッション終了起因では掃除しない
   - @voluntas
+- [FIX] bidi 系 unsubscribe() で応答待ちの REQUEST_UPDATE を掃除する
+  - draft-ietf-moq-transport-19 §10.9 / §10.9.1 に基づき、bidiCancelSubscription で当該 requestId の保留中 REQUEST_UPDATE を reject してエントリを削除する
+  - FIN / RESET 経路と同じ文言で失敗として扱う。unsubscribe の既存処理は変えない
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)
