@@ -665,6 +665,48 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
 });
 
 /**
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * 受信 PUBLISH 経路でもピアの RESET_STREAM に付いたエラーコードが通知内容に
+ * 反映されることを検証する。組み立ては subscribe ロール側と共用のため、
+ * 配線 (生の失敗値を渡していること) ごと検証する。
+ */
+test("受信 PUBLISH ストリーム上の RESET_STREAM のエラーコードが通知内容に反映される", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifiedError = error;
+      // error コールバックは requestStreams / subscribers の削除より前に呼ばれるため、
+      // ここで引き取った SubscriberImpl の state を await 後 (markClosed 済み) に検証できる
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      // ピアが TOO_FAR_BEHIND (0x5) でリセットした場合を再現する
+      controller.error(
+        Object.assign(new Error("stream reset by peer"), {
+          source: "stream",
+          streamErrorCode: 0x5,
+        }),
+      );
+    }),
+  );
+
+  // コード名付きの可変文言と正規化済みコード値の両方が伝わる
+  assert.isDefined(notifiedError);
+  assert.equal(notifiedError!.message, `${RESET_REQUEST_STREAM_MESSAGE}: TOO_FAR_BEHIND(0x5)`);
+  assert.equal((notifiedError as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x5);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  // プロトコル違反ではないためセッションは閉じない
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
  * draft-ietf-moq-transport-19 §3.3.3:
  * RESET_STREAM 通知でアプリの error コールバックが throw しても、例外がループ外へ
  * 伝播せず state が closed になることを検証する。伝播すると呼び出し元の

@@ -32,6 +32,7 @@ import {
   bidiSendRequestUpdate,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
+  createResetStreamError,
   notifySubscriberFailure,
   validateNoDuplicateGoawayOnRequestStream,
   type BidiSessionInternal,
@@ -3499,6 +3500,263 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール
   assert.equal(subscriber.state, "closed");
   assert.isFalse(endCalled);
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * ピアが RESET_STREAM にエラーコードを付けて終了した場合、通知される
+ * エラーのメッセージにコード名が付加され、構造化されたコード値でも
+ * 参照できることを検証する。アプリが終了理由を区別できるようにする
+ * ための振る舞いであり、セッションは閉じない。
+ */
+test("bidiReadRequestStreamMessages: ピアの RESET_STREAM のエラーコードが通知内容に反映される", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // ピアが TOO_FAR_BEHIND (0x5) でリセットした場合を再現する
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), {
+      source: "stream",
+      streamErrorCode: 0x5,
+    }),
+  );
+  await readPromise;
+
+  // コード名付きの可変文言と正規化済みコード値の両方が伝わる
+  assert.isDefined(errorCalled);
+  assert.equal(errorCalled!.message, `${RESET_REQUEST_STREAM_MESSAGE}: TOO_FAR_BEHIND(0x5)`);
+  assert.equal((errorCalled as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x5);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * ピアの実装がエラーコードを提供しない場合 (undefined) は、従来の固定文言
+ * のみで通知し、コード値のプロパティを付けないことを検証する。
+ * 仕様外の組み合わせに対する後方互換の振る舞いである。
+ */
+test("bidiReadRequestStreamMessages: RESET_STREAM のエラーコードが無い場合は固定文言のみで通知される", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // エラーコードを持たない実装からのリセットを再現する
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), {
+      source: "stream",
+      streamErrorCode: undefined,
+    }),
+  );
+  await readPromise;
+
+  // 固定文言のみで、コード値のプロパティは存在しない
+  assert.isDefined(errorCalled);
+  assert.equal(errorCalled!.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in errorCalled!);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * 仕様の列挙に無いエラーコードでリセットされた場合は内部エラーに正規化
+ * されることを検証する。未知値の扱いはデータストリーム系エラーコードの
+ * 共通規則に従う。
+ */
+test("bidiReadRequestStreamMessages: 未知の RESET_STREAM エラーコードは内部エラーに正規化される", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // 列挙に無いコード値でのリセットを再現する
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), {
+      source: "stream",
+      streamErrorCode: 0x99,
+    }),
+  );
+  await readPromise;
+
+  // 内部エラー名と 0x0 に正規化される
+  assert.isDefined(errorCalled);
+  assert.equal(errorCalled!.message, `${RESET_REQUEST_STREAM_MESSAGE}: INTERNAL_ERROR(0x0)`);
+  assert.equal((errorCalled as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x0);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * エラーコードが数値以外 (他実装の型差異など) の場合は固定文言のみで
+ * 通知することを検証する。文字列比較に依存せず構造化値の有無で判断
+ * できるようにするため、プロパティ自体を付けない。
+ */
+test("bidiReadRequestStreamMessages: 数値でない RESET_STREAM エラーコードは無視される", async () => {
+  const ctx = createPublishReadTestContext({});
+  let errorCalled: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    ctx.requestId,
+    1n,
+    () => {},
+    undefined,
+    undefined,
+    (e) => {
+      errorCalled = e;
+    },
+  );
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // 数値でないコード値でのリセットを再現する
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), {
+      source: "stream",
+      streamErrorCode: "1",
+    }),
+  );
+  await readPromise;
+
+  // 固定文言のみで、コード値のプロパティは存在しない
+  assert.isDefined(errorCalled);
+  assert.equal(errorCalled!.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in errorCalled!);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * 通知用エラー組み立ての単体検証。
+ * 読み取り失敗値の取り出し・正規化・文言付加の対応を、ストリーム駆動を
+ * 介さず直接確認する。受信 PUBLISH 経路も同じ組み立てを共用するため、
+ * 両経路の文言一致が構造的に保たれる。
+ */
+test("createResetStreamError: エラーコードの有無と未知値の扱いが仕様どおりになる", () => {
+  // 既知のコード値は名称付き文言とコード値を持つ
+  const known = createResetStreamError(
+    Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 0x1 }),
+  );
+  assert.equal(known.message, `${RESET_REQUEST_STREAM_MESSAGE}: CANCELLED(0x1)`);
+  assert.equal((known as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x1);
+
+  // 2 桁表示のコード値も仕様表記どおりに組み立てられる
+  const twoDigits = createResetStreamError(
+    Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 0x12 }),
+  );
+  assert.equal(twoDigits.message, `${RESET_REQUEST_STREAM_MESSAGE}: MALFORMED_TRACK(0x12)`);
+  assert.equal((twoDigits as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x12);
+
+  // コード値が無い場合は固定文言のみでプロパティを持たない
+  const missing = createResetStreamError(Object.assign(new Error("reset"), { source: "stream" }));
+  assert.equal(missing.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in missing);
+
+  // 未知値は内部エラーに正規化される
+  const unknownCode = createResetStreamError(
+    Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 0x99 }),
+  );
+  assert.equal(unknownCode.message, `${RESET_REQUEST_STREAM_MESSAGE}: INTERNAL_ERROR(0x0)`);
+  assert.equal((unknownCode as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x0);
+
+  // 数値だが列挙外の境界値も内部エラーに正規化される
+  for (const boundary of [Number.NaN, 1.5, -1, 2 ** 53]) {
+    const normalized = createResetStreamError(
+      Object.assign(new Error("reset"), { source: "stream", streamErrorCode: boundary }),
+    );
+    assert.equal(normalized.message, `${RESET_REQUEST_STREAM_MESSAGE}: INTERNAL_ERROR(0x0)`);
+    assert.equal((normalized as unknown as { streamErrorCode?: unknown }).streamErrorCode, 0x0);
+  }
+
+  // 数値以外 (文字列・bigint) は固定文言のみでプロパティを持たない
+  const stringCode = createResetStreamError(
+    Object.assign(new Error("reset"), { source: "stream", streamErrorCode: "1" }),
+  );
+  assert.equal(stringCode.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in stringCode);
+  const bigintCode = createResetStreamError(
+    Object.assign(new Error("reset"), { source: "stream", streamErrorCode: 1n }),
+  );
+  assert.equal(bigintCode.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in bigintCode);
+
+  // 非オブジェクトや null は固定文言のみで例外を投げない
+  const nullError = createResetStreamError(null);
+  assert.equal(nullError.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in nullError);
+  const undefinedError = createResetStreamError(undefined);
+  assert.equal(undefinedError.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isFalse("streamErrorCode" in undefinedError);
 });
 
 /**

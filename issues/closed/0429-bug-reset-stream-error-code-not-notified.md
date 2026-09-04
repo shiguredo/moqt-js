@@ -1,7 +1,7 @@
 # RESET_STREAM の error code が subscriber のエラー通知に反映されない
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-reset-stream-error-code-not-notified
 - Polished: 2026-08-28
 
@@ -48,3 +48,14 @@ subscribe ロールでピアの RESET_STREAM を検出した際、subscriber の
 - W3C WebTransport (https://w3c.github.io/webtransport/) の `WebTransportError` (`source` / `streamErrorCode`)
 - 関連: `issues/closed/0410-bug-subscribe-error-end-not-notified.md` (RESET 通知の実装。本 issue は通知内容の拡張)
 - 関連: `issues/0428-bug-incoming-publish-reset-markclosed-missing.md` (受信 PUBLISH 経路の RESET 通知 + markClosed。本 issue で同経路の文言拡張も行う)
+
+## 解決方法
+
+`src/session/bidi.ts` に通知用エラー組み立て `createResetStreamError` を新設し、bidi 系 (`bidiReadRequestStreamMessages`) と受信 PUBLISH 系 (`src/session.ts` の `runPublishStreamSubLoop`) の両 catch で共用した。
+
+- 読み取り失敗値の `streamErrorCode` が数値の場合は `normalizeDataStreamErrorCode` で正規化し、通知エラーの `streamErrorCode` プロパティに載せ、メッセージを可変文言に変更する (例: `publisher reset request stream: CANCELLED(0x1)`)
+- 数値でない場合 (未提供・型不一致・非オブジェクト) は従来の固定文言のみで通知し、プロパティを付けない
+- 未知値は内部エラーに正規化する
+- FIN 経路は変更しない
+- テストは `src/session/bidi.test.ts` に 5 本、`src/session.test.ts` に受信 PUBLISH 経路の 1 本を追加し、実ストリーム注入で検証する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
