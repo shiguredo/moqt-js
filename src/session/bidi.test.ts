@@ -1912,11 +1912,9 @@ async function readPublishOkWithParameters(
 }
 
 /**
- * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
- * "If the parameter is omitted from any other message, the default
- *  value is 1."
- * FORWARD を省略した PUBLISH_OK を受信した場合、Publisher の Forward State が
- * true になることを検証する (現行挙動の維持)。
+ * draft-ietf-moq-transport-20 §10.2.16:
+ * PUBLISH_OK に出現できるのは EXPIRES のみであり、空の PUBLISH_OK は
+ * 何も反映せず初期値のまま解決されることを検証する。
  */
 test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で Forward State が true になる", async () => {
   const { publisher, resolved } = await readPublishOkWithParameters([]);
@@ -1927,29 +1925,66 @@ test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で Forward State �
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
- * FORWARD=1 を含む PUBLISH_OK を受信した場合、Publisher の Forward State が
- * true になることを検証する (現行挙動の維持)。
+ * draft-ietf-moq-transport-20 §10.2.16:
+ * EXPIRES のみが PUBLISH_OK に出現できる。EXPIRES を含む PUBLISH_OK を
+ * 受信した場合、正常に解決されることを検証する。
  */
-test("bidiReadPublishResponse: FORWARD=1 の PUBLISH_OK で Forward State が true になる", async () => {
-  const { publisher } = await readPublishOkWithParameters([
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+test("bidiReadPublishResponse: EXPIRES の PUBLISH_OK は解決される", async () => {
+  const { publisher, resolved } = await readPublishOkWithParameters([
+    { type: MessageParameterType.EXPIRES, value: new Uint8Array([0x0a]) },
   ]);
 
+  assert.equal(resolved, publisher);
   assert.isTrue(publisher.forwardState);
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
- * FORWARD=0 を含む PUBLISH_OK を受信した場合、Publisher の Forward State が
- * false になることを検証する (現行挙動の維持)。
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * FORWARD は PUBLISH_OK に出現できない。FORWARD=1 を含む PUBLISH_OK を
+ * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
+ * 残さないことを検証する。
  */
-test("bidiReadPublishResponse: FORWARD=0 の PUBLISH_OK で Forward State が false になる", async () => {
-  const { publisher } = await readPublishOkWithParameters([
+test("bidiReadPublishResponse: FORWARD=1 の PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
+  const ctx = createPublishOkValidationContext([
+    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+  ]);
+  const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
+    stream: WebTransportBidirectionalStream;
+    controlReader: ControlStreamReader;
+  };
+
+  await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
+
+  assert.isDefined(ctx.closedWithError());
+  assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isDefined(ctx.rejected());
+  assert.isUndefined(ctx.resolved());
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * FORWARD=0 を含む PUBLISH_OK を受信した場合も、スコープ違反として
+ * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ */
+test("bidiReadPublishResponse: FORWARD=0 の PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
+  const ctx = createPublishOkValidationContext([
     { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
   ]);
+  const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
+    stream: WebTransportBidirectionalStream;
+    controlReader: ControlStreamReader;
+  };
 
-  assert.isFalse(publisher.forwardState);
+  await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
+
+  assert.isDefined(ctx.closedWithError());
+  assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isDefined(ctx.rejected());
+  assert.isUndefined(ctx.resolved());
 });
 
 /**
@@ -3016,9 +3051,9 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
- * 受信 PUBLISH_OK に不正な Range Filter (値域違反) が含まれる場合、
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * Range Filters は PUBLISH_OK に出現できない。許可外パラメータを含む
+ * PUBLISH_OK を受信した場合、PROTOCOL_VIOLATION でセッションが閉じることを検証する。
  */
 test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
   const requestId = 10n;
@@ -3249,9 +3284,9 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
 }
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2:
- * PUBLISH_OK に End Group が 2^64-1 を超える AbsoluteRange の LOCATION_FILTER が
- * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * LOCATION_FILTER は PUBLISH_OK に出現できない。値の正否に関わらず
+ * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * pendingPublish と requestStreams の該当エントリは残らない。
  */
 test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUBLISH_OK でセッションが閉じる", async () => {
@@ -3280,12 +3315,11 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2:
- * 正常な LOCATION_FILTER (除去 / 1 フィールド相対 / AbsoluteStart / 域内
- * AbsoluteRange / End Group = 2^64-1 ちょうどの境界値) を含む PUBLISH_OK では
- * セッションが閉じず、従来どおり解決されることを検証する (回帰ガード)。
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * 正常な値の LOCATION_FILTER であっても PUBLISH_OK ではスコープ違反になる。
+ * Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
  */
-test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK は解決される", async () => {
+test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK でセッションが閉じる", async () => {
   const validFilters = [
     encodeLocationFilterParameter({ reset: true }),
     encodeLocationFilterParameter({ startGroup: 3n }),
@@ -3306,12 +3340,13 @@ test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK �
 
     await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
 
-    // セッションは閉じず、pending が解決されて publisher が登録される
-    assert.isUndefined(ctx.closedWithError());
-    assert.isDefined(ctx.resolved());
-    assert.isUndefined(ctx.rejected());
+    // スコープ違反としてセッションが閉じ、解決されない
+    assert.isDefined(ctx.closedWithError());
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
-    assert.isTrue(ctx.session.publishers.has(ctx.requestId));
+    assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+    assert.isDefined(ctx.rejected());
+    assert.isUndefined(ctx.resolved());
   }
 });
 

@@ -1,7 +1,7 @@
 # Subscription Parameters を PUBLISH_OK から外し REQUEST_UPDATE 側に揃える
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/change-move-subscription-params-off-publish-ok
 - Polished: 2026-09-02
 
@@ -36,3 +36,13 @@ draft-ietf-moq-transport-20 では Subscription Parameters (LOCATION_FILTER / FO
 - draft-ietf-moq-transport-20 Appendix A.1 (#1790)
 - 関連: `issues/0436-bug-publish-ok-location-filter-validation.md`
 - 関連: `issues/0437-bug-request-update-raw-location-filter-bypass.md`
+
+## 解決方法
+
+`PUBLISH_OK_ALLOWED_PARAMS` を EXPIRES のみに縮小し、受信経路を draft-20 に揃えた。
+
+- PUBLISH_OK での Range Filter / LOCATION_FILTER 値検証と Forward State 反映をやめ、許可外はスコープ違反として PROTOCOL_VIOLATION で閉じる
+- スコープ違反時も保留中の発行を残さないよう、削除・reject・close の順序を Track Properties 違反と揃えた
+- Subscription Parameters の送受信は REQUEST_UPDATE 経路に寄せ、同集合の拡張は行わない
+- 関連 issue のうち 0436 は closed のため本文更新は不要であり、0437 は REQUEST_UPDATE 経路のため影響を受けない
+- `CHANGES.md` の `## develop` に `[CHANGE]` を追記する

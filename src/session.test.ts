@@ -680,13 +680,12 @@ test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が tru
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1 (Subscriptions) / §10.2.18 (FORWARD Parameter):
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.18 (FORWARD Parameter):
+ * PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD は運ばれない。
  * publish({ forward: false }) の後に FORWARD 省略の PUBLISH_OK を受信した場合、
- * 初期値 false が応答側の確定値 (省略時はデフォルト 1) で上書きされ true に
- * 戻ることを検証する。初期値は PUBLISH_OK 受信までの暫定値という位置づけであり、
- * PUBLISH_OK 経路の無条件反映 (省略時もデフォルト 1 で上書き) との結合を固定する。
+ * 初期値 false のまま維持され、更新は REQUEST_UPDATE 経路で扱うことを検証する。
  */
-test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で forwardState が true に戻る", async () => {
+test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で forwardState は false のまま", async () => {
   const { session, readableController } = createPublishSession();
   const forwardChanges: boolean[] = [];
 
@@ -715,22 +714,22 @@ test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で fo
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
   readableController.close();
 
-  // 解決された Publisher の状態は応答側の確定値 (true) になる
+  // PUBLISH_OK では Forward State を上書きせず、初期値 false のまま解決される
   const publisher = await promise;
-  assert.isTrue(publisher.forwardState);
-  // 初期設定の false と PUBLISH_OK による true の 2 回発火する
-  assert.deepEqual(forwardChanges, [false, true]);
+  assert.isFalse(publisher.forwardState);
+  // 発火は初期設定の 1 回のみになる
+  assert.deepEqual(forwardChanges, [false]);
 
   await session.close();
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1 (Subscriptions) / §10.2.18 (FORWARD Parameter):
- * publish({ forward: false }) の後に FORWARD=0 の PUBLISH_OK を受信した場合、
- * 初期値 false のまま変化しないことを検証する。無条件反映の経路でも変化検出で
- * 冗長な発火が抑えられ、コールバックは初期設定の 1 回のみになる。
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * FORWARD は PUBLISH_OK に出現できない。FORWARD=0 の PUBLISH_OK を受信した場合、
+ * スコープ違反として PROTOCOL_VIOLATION でセッションが閉じ、発行が
+ * 失敗することを検証する。
  */
-test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK で forwardState は false のまま", async () => {
+test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッションが閉じる", async () => {
   const { session, readableController } = createPublishSession();
   const forwardChanges: boolean[] = [];
 
@@ -749,7 +748,7 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK で forwar
   // PUBLISH_OK 受信前の観測では指定値が反映される
   assert.isFalse(getPendingPublisher(session).forwardState);
 
-  // FORWARD=0 の PUBLISH_OK を応答する
+  // FORWARD=0 の PUBLISH_OK を応答する (スコープ違反)
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -759,9 +758,19 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK で forwar
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
   readableController.close();
 
-  // 解決された Publisher の状態は false のままで、発火は初期設定の 1 回のみになる
-  const publisher = await promise;
-  assert.isFalse(publisher.forwardState);
+  // スコープ違反で発行は失敗し、セッションが閉じる
+  // 特定エラー (PROTOCOL_VIOLATION) が汎用 close エラーに上書きされず届く
+  let rejected: Error | undefined;
+  try {
+    await promise;
+    assert.fail("publish は reject されるべき");
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+  assert.isDefined(rejected);
+  assert.isTrue(rejected instanceof SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((session as unknown as { sessionState: string }).sessionState, "closed");
   assert.deepEqual(forwardChanges, [false]);
 
   await session.close();

@@ -1,7 +1,7 @@
 /**
  * Parameter Scope 検証
  *
- * draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
+ * draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
  * "An endpoint that receives a parameter in a context where it is not
  *  allowed MUST close the session with a PROTOCOL_VIOLATION."
  *
@@ -25,23 +25,13 @@ export const SUBSCRIBE_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (PUBLISH_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-19 §10.2.8: GROUP_ORDER は PUBLISH_OK から削除
- * draft-ietf-moq-transport-19 §5.1.3: Range Filters (0x25–0x28) は PUBLISH_OK に許可
+ * draft-ietf-moq-transport-20 §10.2.16 (EXPIRES Parameter):
+ * EXPIRES のみが PUBLISH_OK に出現できる。Subscription Parameters
+ * (LOCATION_FILTER / FORWARD / timeouts / SUBSCRIBER_PRIORITY /
+ * NEW_GROUP_REQUEST / Range Filters 等) は REQUEST_UPDATE 側で扱い、
+ * PUBLISH_OK では §10.2.1 に従い PROTOCOL_VIOLATION で拒否する。
  */
-export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([
-  MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
-  MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
-  MessageParameterType.SUBSCRIBER_PRIORITY,
-  MessageParameterType.LOCATION_FILTER,
-  MessageParameterType.FORWARD,
-  MessageParameterType.NEW_GROUP_REQUEST,
-  MessageParameterType.EXPIRES,
-  // draft-ietf-moq-transport-19 §5.1.3: Range Filters
-  MessageParameterType.SUBGROUP_FILTER,
-  MessageParameterType.OBJECTID_FILTER,
-  MessageParameterType.PRIORITY_FILTER,
-  MessageParameterType.OBJECT_PROPERTY_FILTER,
-]);
+export const PUBLISH_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType.EXPIRES]);
 
 /** REQUEST_OK (REQUEST_UPDATE_OK) の許可パラメータ */
 export const REQUEST_UPDATE_OK_ALLOWED_PARAMS = new Set<number>([

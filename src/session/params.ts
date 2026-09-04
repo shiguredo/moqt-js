@@ -457,7 +457,7 @@ export function buildPublishTrackProperties(
  * 純粋関数: Range Filter 指定を Message Parameter 配列に変換する
  *
  * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
- * SUBSCRIBE / SUBSCRIBE_TRACKS / PUBLISH_OK / REQUEST_UPDATE で共通のワイヤ形式。
+ * SUBSCRIBE / SUBSCRIBE_TRACKS / REQUEST_UPDATE で共通のワイヤ形式。
  *
  * @param rangeFilters - Range Filter 指定（追加または削除）
  */

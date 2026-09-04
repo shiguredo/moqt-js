@@ -103,8 +103,19 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION でセ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §10.2.8:
- * GROUP_ORDER は PUBLISH_OK から削除された。
+ * draft-ietf-moq-transport-20 §10.2.16:
+ * EXPIRES のみが PUBLISH_OK に出現できる。
+ * PUBLISH_OK_ALLOWED_PARAMS が EXPIRES のみを含むことを検証する。
+ */
+test("PUBLISH_OK_ALLOWED_PARAMS は EXPIRES のみを含む", () => {
+  assert.isTrue(PUBLISH_OK_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
+  assert.equal(PUBLISH_OK_ALLOWED_PARAMS.size, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * Subscription Parameters は PUBLISH_OK に出現できない。
+ * GROUP_ORDER / FORWARD / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
  */
 test("PUBLISH_OK_ALLOWED_PARAMS は GROUP_ORDER を含まない", () => {
   assert.isFalse(PUBLISH_OK_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
@@ -126,6 +137,55 @@ test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否される", 
   assert.isFalse(result);
   assert.equal(errors.length, 1);
   assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.16 / §10.2.1:
+ * FORWARD / LOCATION_FILTER 等の Subscription Parameters は PUBLISH_OK に
+ * 出現できない。代表として FORWARD / LOCATION_FILTER と Range Filter
+ * (SUBGROUP_FILTER) がスコープ検証で拒否されることを検証する。
+ */
+test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否される", () => {
+  for (const type of [
+    MessageParameterType.FORWARD,
+    MessageParameterType.LOCATION_FILTER,
+    MessageParameterType.SUBSCRIBER_PRIORITY,
+    MessageParameterType.NEW_GROUP_REQUEST,
+    MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBGROUP_FILTER,
+  ]) {
+    const errors: SessionError[] = [];
+    const result = validateParameterScope(
+      [{ type }],
+      PUBLISH_OK_ALLOWED_PARAMS,
+      "PUBLISH_OK",
+      (error) => {
+        errors.push(error);
+      },
+    );
+    assert.isFalse(result);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.16:
+ * EXPIRES 付き PUBLISH_OK はスコープ検証を通過する。
+ */
+test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
+  const errors: SessionError[] = [];
+  const result = validateParameterScope(
+    [{ type: MessageParameterType.EXPIRES }],
+    PUBLISH_OK_ALLOWED_PARAMS,
+    "PUBLISH_OK",
+    (error) => {
+      errors.push(error);
+    },
+  );
+  assert.isTrue(result);
+  assert.equal(errors.length, 0);
 });
 
 // ============================================================================

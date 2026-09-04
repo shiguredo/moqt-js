@@ -70,15 +70,15 @@ export interface Publisher {
   readonly state: PublisherState;
   /**
    * Forward State
-   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
    *
-   * PUBLISH_OK で受信した forwardState を返す。PUBLISH_OK 受信前は
-   * PUBLISH 送信時の options.forward (省略時は true) を暫定値として返す。
+   * PUBLISH 送信時の options.forward (省略時は true) を初期値として返す。
+   * PUBLISH_OK は EXPIRES のみを運び Forward State を変更しない。
    * - true (1): オブジェクトを転送する（Subscriber がいる）
    * - false (0): オブジェクトを転送しない（Subscriber がいない）
    *
    * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
-   * PUBLISH_OK 受信時と PUBLISH 送信時の初期設定による変化でも呼ばれる。
+   * PUBLISH 送信時の初期設定と REQUEST_UPDATE 受信時による変化でも呼ばれる。
    */
   readonly forwardState: boolean;
   /**
@@ -239,10 +239,11 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Internal: Set forward state (called by session)
-   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
    *
-   * PUBLISH_OK または REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
+   * REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
    * PUBLISH 送信時の options.forward による初期設定でも呼ぶ。
+   * PUBLISH_OK は EXPIRES のみを運び FORWARD を反映しない。
    * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。
    */
   setForwardState(forward: boolean): void {

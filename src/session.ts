@@ -279,9 +279,9 @@ export interface PublishCallbacks {
   error?: (error: Error) => void;
   /**
    * Forward State が変更された時のコールバック
-   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
    *
-   * PUBLISH_OK または REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
+   * REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
    * PUBLISH 送信時の options.forward による初期設定で変化した場合も呼ばれる。
    * - true (1): Subscriber がいる（オブジェクトを送信すべき）
    * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
@@ -376,7 +376,7 @@ export interface PublishOptions {
    * - false (0): オブジェクトを転送しない
    *
    * 省略した場合は 1（転送する）がデフォルト。
-   * Relay は Subscriber がいない間は forward=0 で PUBLISH_OK を返す可能性がある。
+   * 初期値は PUBLISH 送信時に宣言し、以後は REQUEST_UPDATE で更新する。
    */
   forward?: boolean;
 

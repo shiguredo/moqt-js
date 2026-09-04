@@ -91,13 +91,13 @@ export interface Subscriber {
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * Forward State
-   * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
+   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
    *
    * - SUBSCRIBE 送信時の options.forward の宣言値 (省略時は 1)
    * - 自 subscriber.update({ forward }) の REQUEST_OK 確認値
    *
-   * を反映したものであり、ピアの PUBLISH_OK 確認値である
-   * Publisher.forwardState とは意味論が異なる点に注意。
+   * を反映したものであり、PUBLISH 送信時初期値と REQUEST_UPDATE 受信値を
+   * 反映する Publisher.forwardState とは更新経路が異なる点に注意。
    * 受信 PUBLISH から生成される SubscriberImpl には、ピアが PUBLISH /
    * REQUEST_UPDATE で宣言した Forward State が設定される。
    */
