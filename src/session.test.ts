@@ -21,7 +21,7 @@ import {
 import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
-import { createTrackNamespace } from "./message/parameter";
+import { createTrackNamespace, encodeLocationFilterParameter } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl } from "./fetcher";
 import {
@@ -32,7 +32,7 @@ import {
   SessionError,
   SessionErrorCode,
 } from "./error";
-import { MAX_VARINT } from "./varint";
+import { MAX_VARINT, encodeVarint } from "./varint";
 import {
   FetchHeaderType,
   FetchSerializationFlags,
@@ -907,6 +907,7 @@ function setupIncomingPublishStreamSession(
 function createIncomingPublishStream(
   terminate: (controller: ReadableStreamDefaultController<Uint8Array>) => void,
   extraFrames: Uint8Array[] = [],
+  parameters: { type: number; value: Uint8Array }[] = [],
 ): WebTransportBidirectionalStream {
   const publishPayload = encodePublishPayload({
     type: MessageType.PUBLISH,
@@ -914,7 +915,7 @@ function createIncomingPublishStream(
     trackNamespace: createTrackNamespace(INCOMING_PUBLISH_NAMESPACE),
     trackName: new TextEncoder().encode("track"),
     trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
-    parameters: [],
+    parameters,
     trackProperties: [],
   });
   const controlWriter = new ControlStreamWriter();
@@ -2757,4 +2758,166 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
   );
 
   assert.equal(sessionInternal.sessionState, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.11:
+ * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
+ * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し
+ * セッションが閉じないことを検証する。
+ */
+test("受信 PUBLISH の Subscription Parameters は PROTOCOL_VIOLATION にならない", async () => {
+  const session = createSessionImpl();
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      // error コールバックは登録削除より前に呼ばれるため、ここで購読を引き取る
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  // FORWARD + 新規 4 種 (timeouts 2 種 / PRIORITY / LOCATION_FILTER) を
+  // 含む PUBLISH を注入し、その後 FIN する
+  const parameters = [
+    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: new Uint8Array([0x05]) },
+    { type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT, value: new Uint8Array([0x06]) },
+    { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([10]) },
+    encodeLocationFilterParameter({ startGroup: 3n }),
+  ];
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      parameters,
+    ),
+  );
+
+  // スコープ違反ではないためセッションは閉じず、購読が確立する
+  assert.isDefined(subscriber);
+  assert.isTrue(subscriber!.forwardState);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.11 / §5.1.2:
+ * 受信 PUBLISH の LOCATION_FILTER が subscriber の初期フィルタとして
+ * 反映されることを検証する。
+ */
+test("受信 PUBLISH の LOCATION_FILTER が subscriber に反映される", async () => {
+  const session = createSessionImpl();
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  const filter = encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n });
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [filter],
+    ),
+  );
+
+  // 初期フィルタとして反映される
+  // (LocationFilter の公開取得子がないため内部フィールドを直接確認する)
+  assert.isDefined(subscriber);
+  const locationFilter = (subscriber as unknown as { locationFilter: unknown }).locationFilter as {
+    startGroup?: bigint;
+    startObject?: bigint;
+  };
+  assert.isDefined(locationFilter);
+  assert.equal(locationFilter.startGroup, 10n);
+  assert.equal(locationFilter.startObject, 2n);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.11 / §10.2.1:
+ * 受信 PUBLISH に許可外パラメータ (NEW_GROUP_REQUEST / Range Filters /
+ * FILL_PARAMETERS) が含まれる場合、PROTOCOL_VIOLATION でセッションを
+ * 閉じることを検証する。
+ */
+test("受信 PUBLISH の許可外パラメータでセッションが閉じる", async () => {
+  const prohibited = [
+    [{ type: MessageParameterType.NEW_GROUP_REQUEST, value: new Uint8Array([0x01]) }],
+    [{ type: MessageParameterType.SUBGROUP_FILTER, value: new Uint8Array([0x00]) }],
+    [{ type: MessageParameterType.FILL_PARAMETERS, value: new Uint8Array([0x00]) }],
+  ];
+  for (const parameters of prohibited) {
+    const session = createSessionImpl();
+    const sessionInternal = session as unknown as {
+      sessionState: SessionState;
+    };
+    const internal = setupIncomingPublishStreamSession(session, {
+      object: () => {},
+    });
+
+    await internal.handleIncomingBidirectionalStream(
+      createIncomingPublishStream(
+        (controller) => {
+          controller.close();
+        },
+        [],
+        parameters,
+      ),
+    );
+
+    assert.equal(sessionInternal.sessionState, "closed");
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18 / §10.2.8 / §5.1.2:
+ * 受信 PUBLISH に値域外の FORWARD / GROUP_ORDER / End Group 超過の
+ * LOCATION_FILTER が含まれる場合、PROTOCOL_VIOLATION でセッションを
+ * 閉じることを検証する。FORWARD / GROUP_ORDER はデコード層で先に
+ * 検出され、LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
+ */
+test("受信 PUBLISH の値域外パラメータでセッションが閉じる", async () => {
+  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で End Group 超過
+  const overflowFields = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const overflowValue = new Uint8Array([
+    ...encodeVarint(BigInt(overflowFields.length)),
+    ...overflowFields,
+  ]);
+  const invalidCases = [
+    [{ type: MessageParameterType.FORWARD, value: new Uint8Array([2]) }],
+    [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x03]) }],
+    [{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }],
+  ];
+  for (const parameters of invalidCases) {
+    const session = createSessionImpl();
+    const sessionInternal = session as unknown as {
+      sessionState: SessionState;
+    };
+    const internal = setupIncomingPublishStreamSession(session, {
+      object: () => {},
+    });
+
+    await internal.handleIncomingBidirectionalStream(
+      createIncomingPublishStream(
+        (controller) => {
+          controller.close();
+        },
+        [],
+        parameters,
+      ),
+    );
+
+    assert.equal(sessionInternal.sessionState, "closed");
+  }
 });

@@ -1,7 +1,7 @@
 # 受信 PUBLISH で Subscription Parameters を許可する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/update-allow-subscription-params-on-publish
 - Polished: 2026-09-02
 
@@ -36,3 +36,12 @@ draft-ietf-moq-transport-20 §10.11 / §10.20.1 では PUBLISH が Subscription 
 - draft-ietf-moq-transport-20 §10.20.1 (Parameters on SUBSCRIBE_TRACKS)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1834, #1815, #1869)
 - 関連: `issues/0452-draft-20-move-subscription-params-off-publish-ok.md`
+
+## 解決方法
+
+`PUBLISH_ALLOWED_PARAMS` を既存 5 種から 9 種に拡大し、受信経路を draft-20 に揃えた。
+
+- OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER を追加し、NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は引き続き拒否する
+- 受信 PUBLISH の LOCATION_FILTER を初期フィルタとして反映し、FORWARD 値域外と End Group 超過はセッションを閉じる
+- 0452 と相互照合し、PUBLISH 許可と PUBLISH_OK 拒否に矛盾がないことを確認する
+- `CHANGES.md` の `## develop` に `[UPDATE]` を追記する
