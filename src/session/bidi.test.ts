@@ -1339,6 +1339,103 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
   assert.deepEqual(subscription.namespacePrefix, ["live"]);
 });
 
+/**
+ * draft-ietf-moq-transport-20 §10.2.18:
+ * SUBSCRIBE_TRACKS の REQUEST_UPDATE で FORWARD=0 / FORWARD=1 の両方が
+ * ワイヤに載ることを検証する。将来の購読向けであり既存購読には影響しない。
+ */
+test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD がワイヤに載る", async () => {
+  for (const forward of [false, true]) {
+    const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
+    const writer = {
+      write: async (data: Uint8Array): Promise<void> => {
+        written.push(data);
+      },
+    } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+    const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+      trackNamespacePrefix: ["live", "sports"],
+      forward,
+    });
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
+
+    // FORWARD パラメータが指定値どおりにエンコードされる
+    // 直前で isDefined を検証済みのため非 null アサーションで参照する
+    const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+    assert.equal(messages.length, 1, `forward=${forward}`);
+    const decoded = decodeRequestUpdatePayload(messages[0].payload);
+    const forwardParam = decoded.parameters.find((p) => p.type === MessageParameterType.FORWARD);
+    assert.isDefined(forwardParam, `forward=${forward}`);
+    assert.deepEqual(forwardParam!.value, new Uint8Array([forward ? 1 : 0]), `forward=${forward}`);
+    // 同梱の TRACK_NAMESPACE_PREFIX も新 prefix で存在する
+    const prefixParam = decoded.parameters.find(
+      (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
+    );
+    assert.isDefined(prefixParam, `forward=${forward}`);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18:
+ * FORWARD 省略時は不変のため送らないことを検証する。
+ */
+test("bidiSendNamespaceRequestUpdate: Tracks 更新の FORWARD 省略時は送らない", async () => {
+  const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
+  const writer = {
+    write: async (data: Uint8Array): Promise<void> => {
+      written.push(data);
+    },
+  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+  const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+    trackNamespacePrefix: ["live", "sports"],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  assert.isUndefined(decoded.parameters.find((p) => p.type === MessageParameterType.FORWARD));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18:
+ * SUBSCRIBE_NAMESPACE 向け REQUEST_UPDATE では FORWARD が許可されないため、
+ * Namespace 更新では実行時に混入しても送らないことを検証する。
+ */
+test("bidiSendNamespaceRequestUpdate: Namespace 更新では FORWARD を送らない", async () => {
+  const { session, written } = createNamespaceUpdateSession("namespace", ["live"]);
+  const writer = {
+    write: async (data: Uint8Array): Promise<void> => {
+      written.push(data);
+    },
+  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+  // 型上は露出させないが、実行時に混入しても黙って落とす
+  const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+    trackNamespacePrefix: ["live", "sports"],
+    forward: true,
+  } as unknown as { trackNamespacePrefix: string[] });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  assert.isUndefined(decoded.parameters.find((p) => p.type === MessageParameterType.FORWARD));
+  // FORWARD のみ落とし、TRACK_NAMESPACE_PREFIX は新 prefix で残る
+  const prefixParam = decoded.parameters.find(
+    (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
+  );
+  assert.isDefined(prefixParam);
+});
+
 test("bidiSendNamespaceRequestUpdate: MAX_REQUEST_UPDATES を超える更新は throw する", async () => {
   const { session, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
   // ピアの MAX_REQUEST_UPDATES を 1 に設定し、既に 1 件 outstanding の状態を作る。

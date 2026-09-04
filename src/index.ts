@@ -35,6 +35,7 @@ export type {
   NamespaceUpdateOptions,
   TracksSubscriptionCallbacks,
   TracksSubscription,
+  TracksUpdateOptions,
   MoqtObject,
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
