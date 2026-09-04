@@ -61,6 +61,10 @@
   - SUBSCRIBE 送信側と同パターンに揃え、PUBLISH_OK 受信前の期間も指定値が観測できるようにする
   - 初期値は PUBLISH_OK 受信までの暫定値であり、応答側の確定値で上書きされる。forward: false 指定時は publish() 時に onForwardStateChange(false) が発火し、PUBLISH_OK の確定値で再度発火しうる
   - @voluntas
+- [FIX] 交互に出現する Subgroup の Priority 不一致を検出する
+  - draft-ietf-moq-transport-19 §2.4.2 条件 1 に基づき、FETCH 応答のデコードで Subgroup ID ごとの直近 Priority を追跡し、交互出現でも同一 Subgroup ID の直近オブジェクトと比較する
+  - Group 変更時は追跡を捨て、Datagram では更新しない。追跡を持たない既存コンテキストは従来の単一比較に委ねる
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)

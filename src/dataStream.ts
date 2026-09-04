@@ -1128,6 +1128,19 @@ export interface FetchObjectContext {
    * 扱う (ハードコードされたテストコンテキストとの互換)。
    */
   hasPriorSubgroup?: boolean;
+  /**
+   * 現在の Group 内の Subgroup ID ごとの直近の Publisher Priority。
+   * draft-ietf-moq-transport-19 §2.4.2 の比較対象
+   * ("the previous Object with the same Subgroup ID") を Subgroup が
+   * 交互に出現する場合も追跡するために使う。Subgroup オブジェクトを
+   * デコードするたびに解決後の Priority で更新し、Datagram では更新しない
+   * (Subgroup に属さないため)。Group 変更時は捨てる。
+   * optional (undefined) は従来の単一コンテキスト比較
+   * (subgroupPublisherPriority / hasPriorSubgroup) に委ねる
+   * (ハードコードされたテストコンテキストとの互換。委譲はそのコンテキストを
+   * 通る最初の比較のみで、以後の更新で Map 追跡に移行する)。
+   */
+  subgroupPriorities?: Map<bigint, number>;
 }
 
 /**
@@ -1314,6 +1327,10 @@ function decodeEndOfRange(
     subgroupPublisherPriority:
       context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0,
     hasPriorSubgroup: sameGroup ? (context?.hasPriorSubgroup ?? true) : false,
+    // 同一 Group 内では Subgroup ごとの追跡を引き継ぎ、Group 変更時は捨てる。
+    // 引き継ぎは参照共有とし、更新時は decodeFetchObjectFields 側で
+    // コピーして置き換える (呼び出し元の再利用を壊さない)。
+    subgroupPriorities: sameGroup ? context?.subgroupPriorities : new Map<bigint, number>(),
   };
 
   return [
@@ -1407,6 +1424,10 @@ function decodeFetchSubgroupId(
  * オブジェクトを対象にする (Datagram は Subgroup に属さないため比較対象外。
  * Group が横断された場合 (hasPriorSubgroup = false) は比較対象が無いため
  * 比較しない)。
+ * Subgroup ID ごとの追跡 (subgroupPriorities) を持つコンテキストでは、
+ * 直前オブジェクトと異なる Subgroup ID の場合も同一 Subgroup ID の直近値と
+ * 比較する (Subgroup の交互出現に対応)。追跡を持たないコンテキストでは
+ * 従来どおり直前オブジェクトとの比較に委ねる。
  */
 function checkSubgroupPriorityMismatch(
   context: FetchObjectContext | null,
@@ -1415,21 +1436,62 @@ function checkSubgroupPriorityMismatch(
   subgroupId: bigint,
   publisherPriority: number,
 ): void {
-  if (
-    !isDatagram &&
-    context !== null &&
-    groupId === context.groupId &&
-    subgroupId === context.subgroupId &&
-    (context.hasPriorSubgroup ?? true)
-  ) {
-    const expected = context.subgroupPublisherPriority ?? context.publisherPriority;
-    if (publisherPriority !== expected) {
-      throw new MalformedTrackError(
-        `malformed track: different priorities in same subgroup ` +
-          `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
-      );
+  if (!isDatagram && context !== null && groupId === context.groupId) {
+    if (context.subgroupPriorities !== undefined) {
+      const expected = context.subgroupPriorities.get(subgroupId);
+      if (expected !== undefined && publisherPriority !== expected) {
+        throw new MalformedTrackError(
+          `malformed track: different priorities in same subgroup ` +
+            `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
+        );
+      }
+      return;
+    }
+    if (subgroupId === context.subgroupId && (context.hasPriorSubgroup ?? true)) {
+      const expected = context.subgroupPublisherPriority ?? context.publisherPriority;
+      if (publisherPriority !== expected) {
+        throw new MalformedTrackError(
+          `malformed track: different priorities in same subgroup ` +
+            `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
+        );
+      }
     }
   }
+}
+
+/**
+ * §2.4.2 条件 1 用に Subgroup ID ごとの直近 Priority の追跡を更新する
+ *
+ * draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+ * "An Object with a particular Subgroup ID is received, but its Publisher
+ *  Priority is different from that of the previous Object with the same
+ *  Subgroup ID."
+ * Group 変更時は追跡を捨て、Datagram では更新しない (Subgroup に属さない
+ * ため)。更新時はコピーして置き換え、呼び出し元が保持する旧コンテキストの
+ * 再利用を壊さない。
+ * PRIORITY_PRESENT 省略時は比較対象外とする (従来の寛容解釈を維持) が、
+ * 追跡自体は解決後の継承値で更新する (後続の明示値との比較基準にするため)。
+ */
+function updateSubgroupPriorities(
+  context: FetchObjectContext | null,
+  groupChanged: boolean,
+  isDatagram: boolean,
+  subgroupId: bigint,
+  publisherPriority: number,
+): Map<bigint, number> | undefined {
+  if (groupChanged) {
+    const fresh = new Map<bigint, number>();
+    if (!isDatagram) {
+      fresh.set(subgroupId, publisherPriority);
+    }
+    return fresh;
+  }
+  if (isDatagram) {
+    return context?.subgroupPriorities;
+  }
+  const updated = new Map(context?.subgroupPriorities);
+  updated.set(subgroupId, publisherPriority);
+  return updated;
 }
 
 /**
@@ -1612,6 +1674,13 @@ export function decodeFetchObjectFields(
   // (§11.4.4.1 Table 9 の 0x10 省略時の継承値)。§2.4.2 比較専用の
   // subgroupPublisherPriority は Subgroup オブジェクトでのみ更新する。
   const groupChanged = (flags & FetchSerializationFlags.GROUP_ID_PRESENT) !== 0 || context === null;
+  const subgroupPriorities = updateSubgroupPriorities(
+    context,
+    groupChanged,
+    isDatagram,
+    subgroupId,
+    publisherPriority,
+  );
   const newContext: FetchObjectContext = {
     groupId,
     subgroupId: isDatagram ? (context?.subgroupId ?? 0n) : subgroupId,
@@ -1630,6 +1699,7 @@ export function decodeFetchObjectFields(
         ? false
         : (context?.hasPriorSubgroup ?? true)
       : true,
+    subgroupPriorities,
   };
   return [
     {
