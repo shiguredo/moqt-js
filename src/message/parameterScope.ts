@@ -49,6 +49,21 @@ export const REQUEST_UPDATE_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.EXPIRES,
 ]);
 
+/**
+ * PUBLISH_STATE_NOTIFY の許可パラメータ
+ *
+ * draft-ietf-moq-transport-20 §10.10 (§10.2.17 LARGEST_OBJECT /
+ * §10.2.18 FORWARD / §10.2.9 LOCATION_FILTER の各定義):
+ * LARGEST_OBJECT (0x09) / FORWARD (0x10) / LOCATION_FILTER (0x21) のみ。
+ * 上記以外を受信した場合は §10.2.1 の MUST に従い PROTOCOL_VIOLATION で
+ * セッションを閉じる。
+ */
+export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.LARGEST_OBJECT,
+  MessageParameterType.FORWARD,
+  MessageParameterType.LOCATION_FILTER,
+]);
+
 /** REQUEST_OK (TRACK_STATUS_OK) の許可パラメータ */
 export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LARGEST_OBJECT,

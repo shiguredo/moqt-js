@@ -123,14 +123,17 @@ export {
 // Session メッセージ
 export {
   type Goaway,
+  type PublishStateNotify,
   type Redirect,
   type RequestError,
   type RequestOk,
   decodeGoawayPayload,
+  decodePublishStateNotifyPayload,
   decodeRedirect,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   encodeGoawayPayload,
+  encodePublishStateNotifyPayload,
   encodeRedirect,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
