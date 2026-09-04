@@ -32,6 +32,7 @@ import {
   encodeUint8ParameterValue,
   decodeFetchOkPayload,
   decodeGoawayPayload,
+  decodeLocationFilterParameter,
   decodePublishDonePayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
@@ -341,6 +342,16 @@ export async function bidiReadPublishResponse(
         }
         throw error;
       }
+      // LOCATION_FILTER の値検証
+      // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+      //  close the session with a PROTOCOL_VIOLATION."
+      // PUBLISH_OK では REQUEST_ERROR を送信できないため、違反は
+      // PROTOCOL_VIOLATION でセッションを閉じる。decode の失敗
+      // (ProtocolViolationError / IncompleteDataError) は関数外側の catch の
+      // toProtocolViolationSessionError で変換し、後始末もそちらに委ねる
+      // (破損ペイロードと同一手順の外側 catch)。
+      validateLocationFilterParameters(decoded.parameters);
       // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
@@ -1161,6 +1172,15 @@ export async function bidiReadRequestStreamMessages(
               throw error;
             }
 
+            // LOCATION_FILTER の値検証
+            // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+            // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+            //  close the session with a PROTOCOL_VIOLATION."
+            // decode の失敗は関数外側の catch の toProtocolViolationSessionError で
+            // PROTOCOL_VIOLATION にしてセッションを閉じる。検証通過後に限り
+            // REQUEST_OK を応答する。
+            validateLocationFilterParameters(decoded.parameters);
+
             const publisher = session.publishers.get(requestId);
             if (publisher) {
               // draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter):
@@ -1330,6 +1350,24 @@ export async function bidiReadRequestStreamMessages(
     // RESET_STREAM / セッション終了等) と subscribe ロールは従来どおり削除する。
     if (!(role === "publish" && receivedFin)) {
       session.requestStreams.delete(requestId);
+    }
+  }
+}
+
+/**
+ * 受信パラメータ群に含まれる LOCATION_FILTER の値を検証する
+ *
+ * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+ * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+ *  close the session with a PROTOCOL_VIOLATION."
+ * decode の失敗 (ProtocolViolationError / IncompleteDataError) は呼び出し元の
+ * 受信ループの catch で PROTOCOL_VIOLATION に変換される。
+ * PUBLISH_OK と publish ロールの REQUEST_UPDATE の両経路で共用する。
+ */
+function validateLocationFilterParameters(parameters: Parameter[]): void {
+  for (const param of parameters) {
+    if (param.type === MessageParameterType.LOCATION_FILTER) {
+      decodeLocationFilterParameter(param);
     }
   }
 }
