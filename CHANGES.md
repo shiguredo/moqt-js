@@ -56,6 +56,11 @@
   - draft-ietf-moq-transport-20 §3.3.4 に基づき、ピアの RESET_STREAM 検出時に読み取り失敗値の streamErrorCode を正規化して通知エラーの streamErrorCode プロパティに載せ、メッセージにコード名を付加する
   - コード値が無い場合や数値でない場合は従来の固定文言のみで通知し、未知値は内部エラーに正規化する
   - @voluntas
+- [FIX] publish({ forward: false }) の初期 Forward State を Publisher に反映する
+  - draft-ietf-moq-transport-20 §5.1 に基づき、PUBLISH 送信時に options.forward を生成直後の Publisher の Forward State に反映する (省略時はデフォルト 1)
+  - SUBSCRIBE 送信側と同パターンに揃え、PUBLISH_OK 受信前の期間も指定値が観測できるようにする
+  - 初期値は PUBLISH_OK 受信までの暫定値であり、応答側の確定値で上書きされる。forward: false 指定時は publish() 時に onForwardStateChange(false) が発火し、PUBLISH_OK の確定値で再度発火しうる
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)

@@ -1639,6 +1639,115 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
 });
 
 /**
+ * PUBLISH_OK 応答の FORWARD 反映を検証するためのセッションを構築する
+ *
+ * 応答ストリームに指定パラメータの PUBLISH_OK を 1 通だけ feed し、
+ * 解決された Publisher を返す。PUBLISH_OK 受信後の挙動の検証に使う。
+ */
+async function readPublishOkWithParameters(
+  parameters: { type: number; value: Uint8Array }[],
+): Promise<{ publisher: PublisherImpl; resolved: PublisherImpl }> {
+  const requestId = 10n;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const okPayload = encodeRequestOkPayload({
+        type: MessageType.REQUEST_OK,
+        parameters,
+        trackProperties: [],
+      });
+      const writer = new ControlStreamWriter();
+      controller.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const controlReader = new ControlStreamReader();
+
+  const publisher = new PublisherImpl(["test"], "track", requestId, 1n);
+  let resolved: PublisherImpl | undefined;
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter: new ControlStreamWriter(),
+    nextRequestId: 100n,
+    pendingPublish: new Map([
+      [
+        requestId,
+        {
+          impl: publisher,
+          resolve: (resolvedPublisher: PublisherImpl) => {
+            resolved = resolvedPublisher;
+          },
+          reject: () => {},
+        },
+      ],
+    ]),
+    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    tracksSubscriptions: new Map(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: () => {},
+  } as unknown as BidiSessionInternal;
+
+  await bidiReadPublishResponse(session, requestId, stream, controlReader);
+
+  assert.isDefined(resolved);
+  return { publisher, resolved: resolved as PublisherImpl };
+}
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+ * "If the parameter is omitted from any other message, the default
+ *  value is 1."
+ * FORWARD を省略した PUBLISH_OK を受信した場合、Publisher の Forward State が
+ * true になることを検証する (現行挙動の維持)。
+ */
+test("bidiReadPublishResponse: FORWARD 省略の PUBLISH_OK で Forward State が true になる", async () => {
+  const { publisher, resolved } = await readPublishOkWithParameters([]);
+
+  // 解決された Publisher は保留中のものと同一であり、状態は true になる
+  assert.equal(resolved, publisher);
+  assert.isTrue(publisher.forwardState);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+ * FORWARD=1 を含む PUBLISH_OK を受信した場合、Publisher の Forward State が
+ * true になることを検証する (現行挙動の維持)。
+ */
+test("bidiReadPublishResponse: FORWARD=1 の PUBLISH_OK で Forward State が true になる", async () => {
+  const { publisher } = await readPublishOkWithParameters([
+    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+  ]);
+
+  assert.isTrue(publisher.forwardState);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+ * FORWARD=0 を含む PUBLISH_OK を受信した場合、Publisher の Forward State が
+ * false になることを検証する (現行挙動の維持)。
+ */
+test("bidiReadPublishResponse: FORWARD=0 の PUBLISH_OK で Forward State が false になる", async () => {
+  const { publisher } = await readPublishOkWithParameters([
+    { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+  ]);
+
+  assert.isFalse(publisher.forwardState);
+});
+
+/**
  * draft-ietf-moq-transport-19 §3.3.2:
  * ピアが送信方向を FIN で閉じた (graceful closure) 場合でも、publisher は
  * done() で PUBLISH_DONE を送信してから自方向を FIN で閉じる必要がある (MUST)。

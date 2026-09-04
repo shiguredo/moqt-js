@@ -241,6 +241,7 @@ export interface PublishCallbacks {
    * draft-ietf-moq-transport-19 Section 10.2.17 (FORWARD Parameter)
    *
    * PUBLISH_OK または REQUEST_UPDATE で Forward State が変更された時に呼ばれる。
+   * PUBLISH 送信時の options.forward による初期設定で変化した場合も呼ばれる。
    * - true (1): Subscriber がいる（オブジェクトを送信すべき）
    * - false (0): Subscriber がいない（オブジェクト送信を止めても良い）
    */
@@ -1522,6 +1523,13 @@ export class SessionImpl implements Session {
 
     // GOAWAY コールバックを設定（セッション内部コールバック）
     impl.goawayCallback = callbacks?.goaway;
+
+    // draft-ietf-moq-transport-20 §5.1 (Subscriptions):
+    // "The initiator of the subscription sets the initial Forward State in
+    //  either PUBLISH or SUBSCRIBE."
+    // PUBLISH 送信時の options.forward (省略時は §10.2.18 のデフォルト 1)
+    // を Forward State として保持する。subscribe() と同パターン。
+    impl.setForwardState(options?.forward ?? true);
 
     // 送信コールバックを設定
     impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
