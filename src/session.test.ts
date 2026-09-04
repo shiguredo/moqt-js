@@ -12,7 +12,13 @@ import {
   type TracksSubscriptionCallbacks,
 } from "./session";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
-import { MessageType, encodeGoawayPayload, encodePublishDonePayload } from "./message";
+import {
+  MessageType,
+  MessageParameterType,
+  encodeGoawayPayload,
+  encodePublishDonePayload,
+} from "./message";
+import { encodeRequestOkPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
@@ -40,6 +46,7 @@ import {
   decodeFetchObjectFields,
 } from "./dataStream";
 import { SubscriberImpl } from "./subscriber";
+import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
   RESET_REQUEST_STREAM_MESSAGE,
@@ -526,6 +533,237 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUE
   assert.instanceOf(rejected, RequestError);
   assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * publish() を駆動するためのセッションを構築する
+ *
+ * 双方向ストリームは応答を返さない実物で構成し、PUBLISH_OK 受信前の
+ * 初期状態を観測できるようにする。controlWriter は初期化済みとして注入する。
+ * 検証後は session.close() で保留中の publish を片付ける。
+ */
+function createPublishSession(): {
+  session: SessionImpl;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+} {
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({});
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => {
+      return { readable, writable } as unknown as WebTransportBidirectionalStream;
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  return { session, readableController };
+}
+
+/**
+ * publish() の保留エントリから生成直後の Publisher を取り出す
+ *
+ * publish() は最初の await より前に PublisherImpl を生成して登録するため、
+ * 呼び出し直後に観測できる (PUBLISH_OK 受信前の初期値の検証に使う)。
+ */
+function getPendingPublisher(session: SessionImpl): PublisherImpl {
+  const internals = session as unknown as {
+    pendingPublish: Map<bigint, { impl: PublisherImpl }>;
+  };
+  assert.equal(internals.pendingPublish.size, 1, "保留中の publish が 1 件であること");
+  const [pending] = internals.pendingPublish.values();
+  return pending.impl;
+}
+
+/**
+ * draft-ietf-moq-transport-20 §5.1 (Subscriptions):
+ * "The initiator of the subscription sets the initial Forward State in
+ *  either PUBLISH or SUBSCRIBE."
+ * publish({ forward: false }) の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の Forward State が false になることを検証する。
+ */
+test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState が false になる", async () => {
+  const { session, readableController } = createPublishSession();
+  const forwardChanges: boolean[] = [];
+
+  // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
+  // unhandled rejection にならないよう catch を付ける
+  const promise = session.publish(
+    ["live"],
+    "track",
+    {
+      onForwardStateChange: (forward: boolean) => {
+        forwardChanges.push(forward);
+      },
+    },
+    { forward: false },
+  );
+  promise.catch(() => {});
+
+  // PUBLISH_OK 受信前の観測では指定値が反映される
+  assert.isFalse(getPendingPublisher(session).forwardState);
+  // 初期値 true からの変化のため、初期設定でもコールバックが発火する
+  assert.deepEqual(forwardChanges, [false]);
+
+  // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
+  readableController.close();
+  await session.close();
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1 (Subscriptions):
+ * publish({ forward: true }) の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の Forward State が true になることを検証する (回帰ガード)。
+ */
+test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
+  const { session, readableController } = createPublishSession();
+  const forwardChanges: boolean[] = [];
+
+  // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
+  // unhandled rejection にならないよう catch を付ける
+  const promise = session.publish(
+    ["live"],
+    "track",
+    {
+      onForwardStateChange: (forward: boolean) => {
+        forwardChanges.push(forward);
+      },
+    },
+    { forward: true },
+  );
+  promise.catch(() => {});
+
+  // PUBLISH_OK 受信前の観測では指定値が反映される
+  assert.isTrue(getPendingPublisher(session).forwardState);
+  // 初期値 true からの変化がないため、コールバックは発火しない
+  assert.deepEqual(forwardChanges, []);
+
+  // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
+  readableController.close();
+  await session.close();
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+ * "If the parameter is omitted from any other message, the default
+ *  value is 1."
+ * forward を省略した publish() の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の Forward State が true になることを検証する (回帰ガード)。
+ */
+test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
+  const { session, readableController } = createPublishSession();
+  const forwardChanges: boolean[] = [];
+
+  // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
+  // unhandled rejection にならないよう catch を付ける
+  const promise = session.publish(["live"], "track", {
+    onForwardStateChange: (forward: boolean) => {
+      forwardChanges.push(forward);
+    },
+  });
+  promise.catch(() => {});
+
+  // 省略時はデフォルト 1 (true) が反映される
+  assert.isTrue(getPendingPublisher(session).forwardState);
+  // 初期値 true からの変化がないため、コールバックは発火しない
+  assert.deepEqual(forwardChanges, []);
+
+  // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
+  readableController.close();
+  await session.close();
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1 (Subscriptions) / §10.2.18 (FORWARD Parameter):
+ * publish({ forward: false }) の後に FORWARD 省略の PUBLISH_OK を受信した場合、
+ * 初期値 false が応答側の確定値 (省略時はデフォルト 1) で上書きされ true に
+ * 戻ることを検証する。初期値は PUBLISH_OK 受信までの暫定値という位置づけであり、
+ * PUBLISH_OK 経路の無条件反映 (省略時もデフォルト 1 で上書き) との結合を固定する。
+ */
+test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で forwardState が true に戻る", async () => {
+  const { session, readableController } = createPublishSession();
+  const forwardChanges: boolean[] = [];
+
+  const promise = session.publish(
+    ["live"],
+    "track",
+    {
+      onForwardStateChange: (forward: boolean) => {
+        forwardChanges.push(forward);
+      },
+    },
+    { forward: false },
+  );
+  promise.catch(() => {});
+
+  // PUBLISH_OK 受信前の観測では指定値が反映される
+  assert.isFalse(getPendingPublisher(session).forwardState);
+
+  // FORWARD 省略の PUBLISH_OK を応答する
+  const writer = new ControlStreamWriter();
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
+  readableController.close();
+
+  // 解決された Publisher の状態は応答側の確定値 (true) になる
+  const publisher = await promise;
+  assert.isTrue(publisher.forwardState);
+  // 初期設定の false と PUBLISH_OK による true の 2 回発火する
+  assert.deepEqual(forwardChanges, [false, true]);
+
+  await session.close();
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1 (Subscriptions) / §10.2.18 (FORWARD Parameter):
+ * publish({ forward: false }) の後に FORWARD=0 の PUBLISH_OK を受信した場合、
+ * 初期値 false のまま変化しないことを検証する。無条件反映の経路でも変化検出で
+ * 冗長な発火が抑えられ、コールバックは初期設定の 1 回のみになる。
+ */
+test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK で forwardState は false のまま", async () => {
+  const { session, readableController } = createPublishSession();
+  const forwardChanges: boolean[] = [];
+
+  const promise = session.publish(
+    ["live"],
+    "track",
+    {
+      onForwardStateChange: (forward: boolean) => {
+        forwardChanges.push(forward);
+      },
+    },
+    { forward: false },
+  );
+  promise.catch(() => {});
+
+  // PUBLISH_OK 受信前の観測では指定値が反映される
+  assert.isFalse(getPendingPublisher(session).forwardState);
+
+  // FORWARD=0 の PUBLISH_OK を応答する
+  const writer = new ControlStreamWriter();
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+    trackProperties: [],
+  });
+  readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
+  readableController.close();
+
+  // 解決された Publisher の状態は false のままで、発火は初期設定の 1 回のみになる
+  const publisher = await promise;
+  assert.isFalse(publisher.forwardState);
+  assert.deepEqual(forwardChanges, [false]);
+
+  await session.close();
 });
 
 /**
