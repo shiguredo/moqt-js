@@ -1,7 +1,7 @@
 # FILL_PARAMETERS を追加し fill fetch ストリームを実装する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/add-fill-parameters-and-fill-fetch
 - Polished: 2026-09-02
 
@@ -42,3 +42,12 @@ draft-ietf-moq-transport-20 で Joining FETCH の代替として導入された 
 - 前提: `issues/0448-draft-20-restructure-location-filter-wire.md`
 - 前提: `issues/0449-draft-20-change-fetch-to-location-filter-remove-joining.md`
 - 関連: `issues/0459-draft-20-handle-fill-vs-subscription-delivery.md`
+
+## 解決方法
+
+`MessageParameterType.FILL_PARAMETERS` (0x23) を追加し、内外の符号化・検証と送受信の関連付けを実装した。
+
+- メッセージ層に内外符号化と内側 allowlist・値検証を追加し、REQUEST_UPDATE のスコープに載せる
+- 送信は SUBSCRIBE と subscription の REQUEST_UPDATE に fill API を載せ、内側値検証と上限合算と順序解決を行う
+- 受信は fill 要求元の Request ID を購読に関連付け、fill ストリームを購読に配信する。publisher 側は検証のみ行う
+- `CHANGES.md` の `## develop` に `[ADD]` を追記する

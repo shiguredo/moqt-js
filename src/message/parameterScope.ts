@@ -110,6 +110,8 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.NEW_GROUP_REQUEST,
   MessageParameterType.TRACK_NAMESPACE_PREFIX,
+  // draft-ietf-moq-transport-20 §10.2.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
+  MessageParameterType.FILL_PARAMETERS,
   // draft-ietf-moq-transport-19 §5.1.3: Range Filters (subscription の REQUEST_UPDATE)
   MessageParameterType.SUBGROUP_FILTER,
   MessageParameterType.OBJECTID_FILTER,

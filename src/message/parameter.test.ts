@@ -6,9 +6,11 @@
 import { test, assert } from "vite-plus/test";
 import {
   createTrackNamespace,
+  decodeFillParameters,
   decodeLocationFilter,
   decodeLocationFilterParameter,
   decodeTrackNamespace,
+  encodeFillParameters,
   encodeLocationFilter,
   encodeLocationFilterParameter,
   type LocationFilter,
@@ -1024,4 +1026,73 @@ test("isRejectedReceiveNamespace: .session の類似バイト列は拒否しな�
     isRejectedReceiveNamespace([new Uint8Array([0x2e, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e])]),
     false,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * FILL_PARAMETERS の encode / decode ラウンドトリップを検証する。
+ * 内側は別メッセージの Parameters 列 (count-prefixed) として扱う。
+ */
+test("encodeFillParameters / decodeFillParameters: ラウンドトリップする", () => {
+  const inner = [
+    { type: 0x0a, value: encodeVarint(100n) },
+    { type: 0x20, value: new Uint8Array([10]) },
+    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
+    { type: 0x22, value: new Uint8Array([0x01]) },
+  ];
+
+  const param = encodeFillParameters(inner);
+  assert.equal(param.type, 0x23);
+  // Value は count-prefixed の Parameters 列そのもの
+  // (外側 Length はワイヤエンコード時に付加される)
+  assert.deepEqual(param.value, encodeParameters(inner));
+
+  const decoded = decodeFillParameters(param);
+  assert.equal(decoded.length, 4);
+  assert.equal(decoded[0].type, 0x0a);
+  assert.equal(decoded[1].type, 0x20);
+  assert.equal(decoded[2].type, 0x21);
+  assert.equal(decoded[3].type, 0x22);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * Table 6 の一覧に無いパラメータを内側に含む FILL_PARAMETERS は
+ * PROTOCOL_VIOLATION で拒否される。
+ */
+test("decodeFillParameters: 一覧外のパラメータを含むと ProtocolViolationError", () => {
+  // FORWARD (0x10) は内側の一覧に無い
+  const param = encodeFillParameters([{ type: 0x10, value: new Uint8Array([1]) }]);
+  assert.throws(() => decodeFillParameters(param), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS 専用のため、fill の内側には
+ * 載せられず PROTOCOL_VIOLATION で拒否される。
+ */
+test("decodeFillParameters: TRACK_PROPERTY_FILTER を含むと ProtocolViolationError", () => {
+  const param = encodeFillParameters([{ type: 0x29, value: new Uint8Array([0x01, 0x00, 0x00]) }]);
+  assert.throws(() => decodeFillParameters(param), ProtocolViolationError);
+});
+
+/**
+ * FILL_PARAMETERS 以外の型のデコードは誤用であり Error で拒否される。
+ */
+test("decodeFillParameters: 型不一致は Error", () => {
+  assert.throws(
+    () => decodeFillParameters({ type: 0x21, value: new Uint8Array([0x00]) }),
+    "Invalid parameter type",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * 内側の除去 (Length=0) は一回限りの fill に意味を持たないため
+ * InvalidFilterError で拒否される。
+ */
+test("decodeFillParameters: 内側の除去を含むと InvalidFilterError", () => {
+  // SUBGROUP_FILTER の Length=0 (除去) を内側に含める
+  const param = encodeFillParameters([{ type: 0x25, value: new Uint8Array([0x00]) }]);
+  assert.throws(() => decodeFillParameters(param), InvalidFilterError);
 });

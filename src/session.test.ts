@@ -19,7 +19,7 @@ import {
   encodePublishDonePayload,
 } from "./message";
 import { encodeRequestOkPayload } from "./message/session";
-import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
+import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
@@ -37,6 +37,7 @@ import {
   FetchHeaderType,
   FetchSerializationFlags,
   type FetchObjectFields,
+  type MoqtObject,
   SubgroupHeaderType,
   encodeFetchHeader,
   encodeFetchObjectFields,
@@ -764,6 +765,71 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK で forwar
   assert.deepEqual(forwardChanges, [false]);
 
   await session.close();
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6:
+ * SUBSCRIBE の fill 内側に Range Filters を指定した場合も、ピア未広告では
+ * 送信前に throw することを検証する (購読単位の上限に含める)。
+ */
+test("subscribe: fill 内側の Range Filters があると peer 未広告では throw する", async () => {
+  // createSessionImpl の peerMaxFilterRanges は既定 0 (未広告) のため、
+  // Range 指定があると送信前に throw する
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        fill: {
+          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES is 0"));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3:
+ * SUBSCRIBE 送信に失敗した場合は fill 関連付けと保留中の SUBSCRIBE が残らない
+ * ことを検証する (送信失敗時の掃除)。
+ */
+test("subscribe: 送信失敗時は fill 関連付けと保留中の SUBSCRIBE が残らない", async () => {
+  // createSessionImpl の transport は双方向ストリームを開けないため、
+  // 送信は失敗する
+  const session = createSessionImpl();
+  const internals = session as unknown as {
+    fillFetchTargets: Map<bigint, unknown>;
+    pendingSubscribe: Map<bigint, unknown>;
+  };
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        fill: {
+          filter: { startGroup: 10n, startObject: 2n },
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.equal(internals.fillFetchTargets.size, 0);
+  assert.equal(internals.pendingSubscribe.size, 0);
 });
 
 /**
@@ -2309,6 +2375,133 @@ test("Fetch データストリーム: Object 完成後の FIN は正常終了し
   assert.equal(delivered, 1);
   assert.isTrue(ended);
   assert.equal(ctx.internal.fetchers.size, 0);
+});
+
+// ============================================================================
+// fill fetch ストリームの受信テスト
+// draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics)
+// ============================================================================
+
+/**
+ * fill fetch ストリームの受信駆動コンテキストを構築する
+ *
+ * 購読 (SubscriberImpl) と fill 関連付けを登録し、FETCH_HEADER 形式の
+ * fill ストリームを handleIncomingStream で駆動できるようにする。
+ */
+function createFillFetchStreamContext(): {
+  ctx: ReturnType<typeof createDataStreamFinContext>;
+  internals: {
+    subscribers: Map<bigint, SubscriberImpl>;
+    fillFetchTargets: Map<bigint, { subscriber: SubscriberImpl; groupOrder: GroupOrder }>;
+  };
+} {
+  const ctx = createDataStreamFinContext();
+  const internals = ctx.internal as unknown as {
+    subscribers: Map<bigint, SubscriberImpl>;
+    fillFetchTargets: Map<bigint, { subscriber: SubscriberImpl; groupOrder: GroupOrder }>;
+  };
+  return { ctx, internals };
+}
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3:
+ * SUBSCRIBE の Request ID を運ぶ fill fetch ストリーム (初期 fill) が、
+ * 購読に紐付けて受信できることを検証する。FIN は fill 完了であり、
+ * 関連付けが消え、購読自体は継続する。
+ */
+test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読に紐付けて受信される", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, (object) => {
+    received.push(object);
+  });
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  // fill オブジェクトが購読に配信され、関連付けが消える
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(received.length, 1);
+  assert.equal(received[0].groupId, 10n);
+  assert.equal(received[0].objectId, 0n);
+  assert.deepEqual(received[0].payload, parts.payload);
+  assert.equal(internals.fillFetchTargets.size, 0);
+  // 購読自体は継続する
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3:
+ * REQUEST_UPDATE の Request ID を運ぶ fill fetch ストリーム (後続 fill) が、
+ * 応答済み (pending なし) でも購読に紐付けて受信できることを検証する。
+ */
+test("fill fetch ストリーム: 後続 fill (REQUEST_UPDATE Request ID、応答済み) が購読に紐付けて受信される", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const subscribeRequestId = 2n;
+  const updateRequestId = 100n;
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", subscribeRequestId, 1n, (object) => {
+    received.push(object);
+  });
+  internals.subscribers.set(subscribeRequestId, subscriber);
+  // REQUEST_OK 受理済みを模して pending なしで関連付けだけを残す
+  internals.fillFetchTargets.set(updateRequestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(updateRequestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  // fill オブジェクトが購読に配信され、関連付けが消える
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(received.length, 1);
+  assert.equal(received[0].groupId, 10n);
+  assert.isTrue(internals.fillFetchTargets.size === 0);
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4 (Streams):
+ * fill fetch ストリームでも未完成 Object の途中の FIN は PROTOCOL_VIOLATION で
+ * セッションを閉じることを検証する (FETCH と同一の完全性規則)。
+ */
+test("fill fetch ストリーム: 未完成 Object の途中で FIN されるとセッションを閉じる", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {
+    delivered++;
+  });
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(delivered, 0);
 });
 
 /**

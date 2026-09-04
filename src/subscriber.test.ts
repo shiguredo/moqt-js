@@ -643,3 +643,18 @@ test("Location Filter 再適用: startGroup=0 は LARGEST_OBJECT の次のグル
   subscriber.handleObject(createObject(8n, 0n));
   assert.equal(delivered.length, 1);
 });
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.8:
+ * SUBSCRIBE 送信時の Group Order の保持と取得を検証する
+ * (fill 要求時の Group Order 解決に使う)。
+ */
+test("setGroupOrder / getGroupOrder: SUBSCRIBE 送信時の Group Order を保持する", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  // 初期値は未設定
+  assert.isUndefined(subscriber.getGroupOrder());
+
+  subscriber.setGroupOrder("Descending");
+  assert.equal(subscriber.getGroupOrder(), "Descending");
+});

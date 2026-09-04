@@ -686,6 +686,10 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x21: "self-length-prefixed",
   // GROUP_ORDER (Section 10.2.8)
   0x22: "uint8",
+  // FILL_PARAMETERS (Section 10.2.15)
+  // Value は Parameters 列 (count-prefixed) を格納する length-prefixed 構造。
+  // 内側は別メッセージの Parameters としてエンコードする (§10.2.15)。
+  0x23: "length-prefixed",
   // NEW_GROUP_REQUEST (Section 10.2.18)
   0x32: "varint",
   // TRACK_NAMESPACE_PREFIX (Section 10.2.19)
@@ -1234,6 +1238,89 @@ export function decodeLocationFilterParameter(param: Parameter): LocationFilter 
   }
   const [filter] = decodeLocationFilter(param.value, 0);
   return filter;
+}
+
+/**
+ * FILL_PARAMETERS の内側に出現可能なパラメータ型
+ *
+ * draft-ietf-moq-transport-20 §10.2.15 Table 6:
+ * FILL_TIMEOUT (0x0A) / SUBSCRIBER_PRIORITY (0x20) / LOCATION_FILTER (0x21) /
+ * GROUP_ORDER (0x22) / Range Filters (0x25-0x28)。TRACK_PROPERTY_FILTER (0x29)
+ * は SUBSCRIBE_TRACKS 専用のため含まない。
+ * 上記以外を受信した endpoint は PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+export const FILL_PARAMETERS_ALLOWED_TYPES: ReadonlySet<number> = new Set([
+  MessageParameterType.FILL_TIMEOUT,
+  MessageParameterType.SUBSCRIBER_PRIORITY,
+  MessageParameterType.LOCATION_FILTER,
+  MessageParameterType.GROUP_ORDER,
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
+]);
+
+/**
+ * FILL_PARAMETERS パラメータをエンコードする
+ *
+ * draft-ietf-moq-transport-20 §10.2.15 (FILL PARAMETERS Parameter):
+ * Parameter Type 0x23、length-prefixed encoding。値は fill fetch ストリームに
+ * 適用する Parameters 列を、別メッセージの Parameters としてエンコードした
+ * もの (count-prefixed の delta encoding 列)。
+ */
+export function encodeFillParameters(innerParameters: Parameter[]): Parameter {
+  return {
+    type: MessageParameterType.FILL_PARAMETERS,
+    value: encodeParameters(innerParameters),
+  };
+}
+
+/**
+ * FILL_PARAMETERS パラメータをデコードする
+ *
+ * draft-ietf-moq-transport-20 §10.2.15 (FILL PARAMETERS Parameter):
+ * 内側の Parameters 列をデコードし、Table 6 の一覧に無い型が含まれる場合は
+ * PROTOCOL_VIOLATION で拒否する ("An endpoint that receives a parameter
+ *  inside FILL_PARAMETERS that is not listed above MUST close the session
+ *  with a PROTOCOL_VIOLATION.")。
+ */
+export function decodeFillParameters(param: Parameter): Parameter[] {
+  if (param.type !== MessageParameterType.FILL_PARAMETERS) {
+    throw new Error(`Invalid parameter type: expected 0x23, got 0x${param.type.toString(16)}`);
+  }
+  const [innerParameters, consumed] = decodeParameters(param.value, 0);
+  if (consumed !== param.value.length) {
+    throw new ProtocolViolationError(
+      `malformed fill parameters: declared length does not match parameters: ${consumed} !== ${param.value.length}`,
+    );
+  }
+  // 内側 LOCATION_FILTER の値検証 (§5.1.2 MUST は内側にも適用される)。
+  // 内側 Range Filter の値・重複検証は外側と同一規則で行い、違反は
+  // InvalidFilterError として呼び出し側の経路別処理に委ねる
+  // (PUBLISH_OK では PROTOCOL_VIOLATION、REQUEST_UPDATE では
+  // REQUEST_ERROR (INVALID_FILTER))。
+  // 内側の除去 (Length=0) は一回限りの fill に意味を持たないため拒否する。
+  const innerRanges: Parameter[] = [];
+  for (const inner of innerParameters) {
+    if (!FILL_PARAMETERS_ALLOWED_TYPES.has(inner.type)) {
+      throw new ProtocolViolationError(
+        `unsupported parameter inside FILL_PARAMETERS: 0x${inner.type.toString(16)}`,
+      );
+    }
+    if (inner.type === MessageParameterType.LOCATION_FILTER) {
+      decodeLocationFilterParameter(inner);
+    } else if (inner.type >= 0x25 && inner.type <= 0x28) {
+      const [decodedRange] = decodeRangeFilter(rangeFilterTypeOf(inner.type), inner.value);
+      if ("remove" in decodedRange) {
+        throw new InvalidFilterError(
+          `remove is not allowed inside FILL_PARAMETERS: 0x${inner.type.toString(16)}`,
+        );
+      }
+      innerRanges.push(inner);
+    }
+  }
+  validateRangeFilterCombination(innerRanges);
+  return innerParameters;
 }
 
 /**
