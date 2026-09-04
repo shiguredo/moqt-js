@@ -1009,6 +1009,7 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
  * End of Range (Section 11.4.4.2):
  * | 0x8C  | End of Non-Existent Range |
  * | 0x10C | End of Unknown Range      |
+ * | 0x20C | End of Timed-Out Range    |
  */
 export const FetchSerializationFlags = {
   // Subgroup ID encoding
@@ -1049,6 +1050,16 @@ export const FetchSerializationFlags = {
    * draft-ietf-moq-transport-19 Section 11.4.4.2
    */
   END_OF_UNKNOWN_RANGE: 0x10c,
+  /**
+   * End of Timed-Out Range (Section 11.4.4.2)
+   *
+   * draft-ietf-moq-transport-20:
+   * Fill Timeout の失効により放棄された Object の範囲を示す。
+   * Group ID と Object ID フィールドが存在する。
+   * Subgroup ID, Priority, Properties は存在しない。
+   * draft-ietf-moq-transport-20 Section 11.4.4.2
+   */
+  END_OF_TIMED_OUT_RANGE: 0x20c,
 } as const;
 
 /**
@@ -1071,10 +1082,10 @@ export interface FetchObjectFields {
 /**
  * End of Range の種別
  *
- * draft-ietf-moq-transport-19 Section 11.4.4.2:
- * FETCH レスポンス内で Object が存在しない/不明な範囲を示す。
+ * draft-ietf-moq-transport-20 Section 11.4.4.2:
+ * FETCH レスポンス内で Object が存在しない/不明/タイムアウト失効した範囲を示す。
  */
-export type EndOfRangeType = "non_existent" | "unknown";
+export type EndOfRangeType = "non_existent" | "unknown" | "timed_out";
 
 /**
  * Decoded Fetch Object with resolved values
@@ -1144,6 +1155,21 @@ export interface FetchObjectContext {
 }
 
 /**
+ * Serialization Flags が End of Range (Section 11.4.4.2) かを判定する
+ *
+ * draft-ietf-moq-transport-20 §11.4.4 Table 7:
+ * 0x8C (End of Non-Existent Range) / 0x10C (End of Unknown Range) /
+ * 0x20C (End of Timed-Out Range) が定義されている。
+ */
+function isEndOfRangeFlags(flags: number): boolean {
+  return (
+    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
+    flags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE ||
+    flags === FetchSerializationFlags.END_OF_TIMED_OUT_RANGE
+  );
+}
+
+/**
  * Encode Fetch Object Fields
  * draft-ietf-moq-transport-19 Section 11.4.4 Figure 27
  *
@@ -1163,10 +1189,7 @@ export function encodeFetchObjectFields(
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
-  if (
-    fields.serializationFlags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
-    fields.serializationFlags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE
-  ) {
+  if (isEndOfRangeFlags(fields.serializationFlags)) {
     if (fields.groupId === undefined || fields.objectId === undefined) {
       throw new Error("Group ID and Object ID required for End of Range");
     }
@@ -1309,7 +1332,11 @@ function decodeEndOfRange(
   consumed += payloadLenConsumed;
 
   const endOfRange: EndOfRangeType =
-    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ? "non_existent" : "unknown";
+    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE
+      ? "non_existent"
+      : flags === FetchSerializationFlags.END_OF_TIMED_OUT_RANGE
+        ? "timed_out"
+        : "unknown";
 
   // End of Range は常に Group ID を明示する。Group が変更された場合は
   // 先行する Subgroup オブジェクトの存在をリセットし、同一 Group 内の
@@ -1520,10 +1547,7 @@ export function decodeFetchObjectFields(
   totalConsumed += flagsConsumed;
 
   // End of Range チェック (Section 11.4.4.2)
-  if (
-    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
-    flags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE
-  ) {
+  if (isEndOfRangeFlags(flags)) {
     const [result, consumed, newContext] = decodeEndOfRange(
       data,
       offset + totalConsumed,
@@ -1533,15 +1557,16 @@ export function decodeFetchObjectFields(
     return [result, totalConsumed + consumed, newContext];
   }
 
-  // draft-ietf-moq-transport-19 Section 11.4.4 Table 7:
+  // draft-ietf-moq-transport-20 Section 11.4.4 Table 7:
   // 「When less than 128, the bits represent flags described below.
   //  The following additional values are defined: 0x8C (End of Non-Existent Range),
-  //  0x10C (End of Unknown Range). Any other value is a PROTOCOL_VIOLATION.」
-  // 0x8C / 0x10C は上の End of Range チェックで処理済み。
+  //  0x10C (End of Unknown Range), 0x20C (End of Timed-Out Range).
+  //  Any other value is a PROTOCOL_VIOLATION.」
+  // 0x8C / 0x10C / 0x20C は上の End of Range チェックで処理済み。
   // それ以外の 128 以上の値は不正。
   if (flags >= 128) {
     throw new ProtocolViolationError(
-      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, or 0x10C`,
+      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, 0x10C, or 0x20C`,
     );
   }
 
