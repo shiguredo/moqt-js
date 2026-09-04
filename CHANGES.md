@@ -48,6 +48,10 @@
   - validateRangeFilterSpecs を追加し、削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止の送信ガードを SUBSCRIBE / SUBSCRIBE_TRACKS / FETCH / Joining Fetch / REQUEST_UPDATE に適用する
   - fetch() に peer MAX_FILTER_RANGES ガードを追加する
   - @voluntas
+- [ADD] FILL_PARAMETERS を追加し fill fetch ストリームを実装する
+  - draft-ietf-moq-transport-20 §5.1.3 / §10.2.15 に基づき、SUBSCRIBE / subscription の REQUEST_UPDATE で fill を要求できるようにする
+  - 対向が開いた fill fetch ストリームを購読に紐付けて受信する (初期 fill と後続 fill)
+  - @voluntas
 - [UPDATE] 依存ライブラリを最新版に更新する
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する

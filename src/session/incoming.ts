@@ -14,12 +14,14 @@
 import { decodeVarint } from "../varint";
 import { decodeObjectDatagram, type MoqtObject } from "../dataStream";
 import { ObjectStatus, MessageType, encodeRequestErrorPayload } from "../message";
+import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toProtocolViolationSessionError } from "./errors";
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
+  type FetchObjectSink,
 } from "./stream";
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
@@ -342,13 +344,16 @@ export function incomingWaitForFetcher(
  *
  * 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ。
  * SessionImpl.handleIncomingStream から呼ばれる。
+ * fill fetch ストリームのオブジェクトも FETCH ストリーム到着として
+ * fetch 側統計に計上する (購読配送との区別は別途整理する)。
  */
 export function incomingProcessFetchObjects(
   session: SessionInternal,
   buffer: Uint8Array,
-  fetcher: FetcherImpl,
+  sink: FetchObjectSink,
   context: import("../dataStream").FetchObjectContext | null,
   isFirst: boolean,
+  groupOrder: GroupOrder,
 ): {
   remainingBuffer: Uint8Array;
   context: import("../dataStream").FetchObjectContext | null;
@@ -356,7 +361,7 @@ export function incomingProcessFetchObjects(
 } {
   return streamProcessFetchObjects(
     buffer,
-    fetcher,
+    sink,
     context,
     isFirst,
     {
@@ -369,7 +374,7 @@ export function incomingProcessFetchObjects(
           bytes;
       },
     },
-    fetcher.getGroupOrder(),
+    groupOrder,
   );
 }
 

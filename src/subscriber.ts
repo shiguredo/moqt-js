@@ -16,6 +16,7 @@ import {
   rangeFiltersMatch,
 } from "./filter";
 import { mergeRangeFilters } from "./session/params";
+import type { FillRequestOptions } from "./session";
 
 /**
  * Subscriber state
@@ -53,6 +54,18 @@ export interface RequestUpdateOptions {
    * Length=0 で削除、省略で不変。
    */
   rangeFilters?: RangeFilterSpec[];
+
+  /**
+   * fill fetch の要求
+   * draft-ietf-moq-transport-20 Section 5.1.3 (Fill Semantics) /
+   * Section 10.2.15 (FILL PARAMETERS Parameter)
+   *
+   * FILL_PARAMETERS (0x23) として送信し、fill fetch ストリームを要求する。
+   * FILL_PARAMETERS は subscription 状態として保持されず、載せたメッセージに
+   * のみ適用される (載せない更新では fill ストリームは開かれない)。
+   * fill の受信関連付けは session が保持する。
+   */
+  fill?: FillRequestOptions;
 }
 
 /**
@@ -116,6 +129,10 @@ export class SubscriberImpl implements Subscriber {
   // Forward State。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
   // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
   private subscriberForwardState = true;
+  // draft-ietf-moq-transport-20 §10.2.8 (GROUP ORDER Parameter):
+  // SUBSCRIBE 送信時の宣言値。fill 要求時の Group Order 解決
+  // (FILL_PARAMETERS 内の指定が無ければ subscription の値) に使う。
+  private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
   // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter の再適用に使用
@@ -180,6 +197,23 @@ export class SubscriberImpl implements Subscriber {
    */
   setForwardState(forward: boolean): void {
     this.subscriberForwardState = forward;
+  }
+
+  /**
+   * SUBSCRIBE 送信時の Group Order を設定する (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-20 §10.2.8 (GROUP ORDER Parameter):
+   * fill 要求時の Group Order 解決に使う。
+   */
+  setGroupOrder(groupOrder: "Ascending" | "Descending" | undefined): void {
+    this.subscriberGroupOrder = groupOrder;
+  }
+
+  /**
+   * SUBSCRIBE 送信時の Group Order を取得する
+   */
+  getGroupOrder(): "Ascending" | "Descending" | undefined {
+    return this.subscriberGroupOrder;
   }
 
   get namespace(): string[] {
@@ -368,6 +402,22 @@ export class SubscriberImpl implements Subscriber {
    */
   hasDatagramCallback(): boolean {
     return this.datagramCallback !== undefined;
+  }
+
+  /**
+   * fill fetch ストリームから届いたオブジェクトを受け取る
+   *
+   * draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+   * fill-delivered のオブジェクトは fill 範囲に従属するため、subscription の
+   * Location Filter / Range Filter 再適用 (handleObject) を通さず、そのまま
+   * object コールバックに渡す。fill と subscription の二重配送の区別・扱いは
+   * 別途整理する。state が closed の場合は受け取らない。
+   */
+  handleFillObject(object: MoqtObject): void {
+    if (this.subscriberState === "closed") {
+      return;
+    }
+    this.objectCallback(object);
   }
 
   /**

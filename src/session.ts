@@ -73,6 +73,7 @@ import {
   extractForwardState,
   matchNamespacePrefix,
   resolveFetchStartLocation,
+  resolveFillGroupOrder,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
@@ -104,6 +105,46 @@ import {
 import * as namespaceLoops from "./session/namespaceLoops";
 
 export type { MoqtObject } from "./dataStream";
+
+/**
+ * fill fetch の要求内容
+ * draft-ietf-moq-transport-20 Section 5.1.3 (Fill Semantics) /
+ * Section 10.2.15 (FILL PARAMETERS Parameter)
+ *
+ * SUBSCRIBE / subscription の REQUEST_UPDATE に FILL_PARAMETERS (0x23) として
+ * 載せ、live 手前の範囲を fill fetch ストリームで取得する。内側に載せられる
+ * のは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER /
+ * Range Filters (0x25-0x28) のみ (§10.2.15 Table 6)。
+ */
+export interface FillRequestOptions {
+  /**
+   * fill 範囲の Location Filter
+   *
+   * 省略時は subscription の Location Filter、zero-length (reset) はトラック
+   * 全体 (Largest Object まで) が fill 範囲になる (§5.1.3)。
+   */
+  filter?: LocationFilter;
+  /**
+   * Fill Timeout（ミリ秒）
+   * draft-ietf-moq-transport-20 Section 10.2.5 (FILL TIMEOUT Parameter)
+   */
+  fillTimeout?: bigint;
+  /**
+   * Subscriber Priority（0-255）
+   * draft-ietf-moq-transport-20 Section 10.2.7 (SUBSCRIBER PRIORITY Parameter)
+   */
+  subscriberPriority?: number;
+  /**
+   * Group Order
+   * draft-ietf-moq-transport-20 Section 10.2.8 (GROUP ORDER Parameter)
+   */
+  groupOrder?: "Ascending" | "Descending";
+  /**
+   * Range Filters
+   * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters)
+   */
+  rangeFilters?: RangeFilterSpec[];
+}
 
 /**
  * セッション状態
@@ -500,6 +541,17 @@ export interface SubscribeOptions {
    * SETUP にトークンを載せていても免除されない。
    */
   authorizationToken?: AuthorizationToken;
+
+  /**
+   * fill fetch の要求
+   * draft-ietf-moq-transport-20 Section 5.1.3 (Fill Semantics) /
+   * Section 10.2.15 (FILL PARAMETERS Parameter)
+   *
+   * FILL_PARAMETERS (0x23) として送信し、live 手前の範囲を fill fetch
+   * ストリームで取得する。対向が開いた fill fetch ストリームは購読に紐付けて
+   * 受信する。fill と subscription の二重配送の扱いは別途整理する。
+   */
+  fill?: FillRequestOptions;
 }
 
 /**
@@ -1071,6 +1123,11 @@ export class SessionImpl implements Session {
   //  FETCH_OK message is sent."
   // FETCH_OK より先にデータストリームが到着する可能性がある
   private fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
+
+  // fill 要求元の Request ID から購読への関連付け
+  // draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+  // fill fetch ストリームの FETCH_HEADER が運ぶ Request ID で引く。
+  private fillFetchTargets = new Map<bigint, bidi.FillFetchTarget>();
 
   // リクエストごとの双方向ストリーム管理
   // draft-ietf-moq-transport-19 Section 3.3:
@@ -1651,6 +1708,11 @@ export class SessionImpl implements Session {
     // を Forward State として保持する。
     impl.setForwardState(options?.forward ?? true);
 
+    // draft-ietf-moq-transport-20 §10.2.8 / §10.2.15:
+    // SUBSCRIBE 送信時の options.groupOrder を保持する。fill 要求時の
+    // Group Order 解決 (FILL 内の指定が無ければ subscription の値) に使う。
+    impl.setGroupOrder(options?.groupOrder);
+
     // draft-ietf-moq-transport-19 Section 5.1.2: Location Filter を設定
     impl.setLocationFilter(options?.filter);
 
@@ -1672,7 +1734,12 @@ export class SessionImpl implements Session {
 
     // draft-ietf-moq-transport-19 §10.3.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
     // pendingSubscribe.set より前に配置し、throw 時に pending エントリが残らないようにする
-    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "SUBSCRIBE");
+    // fill 内側の Range Filters も購読単位の上限に含める (§10.3.1.6)。
+    validateRangeFilterLimits(
+      [...(options?.rangeFilters ?? []), ...(options?.fill?.rangeFilters ?? [])],
+      this.peerMaxFilterRanges,
+      "SUBSCRIBE",
+    );
 
     // draft-ietf-moq-transport-19 §5.1.3:
     // SUBSCRIBE の Range Filter 送信ガード (削除は REQUEST_UPDATE のみ・0x29 は
@@ -1711,12 +1778,20 @@ export class SessionImpl implements Session {
       parameters,
     };
 
+    // draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+    // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
+    // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
+    if (options?.fill !== undefined) {
+      this.fillFetchTargets.set(requestId, {
+        subscriber: impl,
+        groupOrder: resolveFillGroupOrder(options.fill.groupOrder, options.groupOrder),
+      });
+    }
+
     const payload = encodeSubscribePayload(subscribeMsg);
-    const streamInfo = await this.sendRequestOnBidiStream(
-      requestId,
-      MessageType.SUBSCRIBE,
-      payload,
-      {
+    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
+    try {
+      streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.SUBSCRIBE, payload, {
         requestId: requestId.toString(),
         trackNamespace: namespace,
         trackName,
@@ -1725,8 +1800,14 @@ export class SessionImpl implements Session {
         SUBSCRIBER_PRIORITY: options?.subscriberPriority,
         GROUP_ORDER: options?.groupOrder,
         NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
-      },
-    );
+      });
+    } catch (error) {
+      // 送信失敗時は fill 関連付けと保留中の SUBSCRIBE を削除して残留を防ぐ
+      // (bidiSendRequestUpdate の write 失敗時と同パターン)。
+      this.fillFetchTargets.delete(requestId);
+      this.pendingSubscribe.delete(requestId);
+      throw error;
+    }
 
     // 双方向ストリームからレスポンスを読み取る
     void this.readSubscribeResponse(requestId, streamInfo.stream, streamInfo.controlReader);
@@ -2375,6 +2456,9 @@ export class SessionImpl implements Session {
 
     // GOAWAY 受信追跡をクリア
     this.goawayReceivedOnRequestStreams.clear();
+
+    // fill 関連付けをクリア
+    this.fillFetchTargets.clear();
 
     // 受信済み Request ID の追跡をクリア
     this.receivedRequestIds.clear();
@@ -3328,6 +3412,11 @@ export class SessionImpl implements Session {
             // の Promise を未解決のまま残さない)。GOAWAY 後の読み取り継続中に
             // REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため
             // 二重解決しない。
+            // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+            bidi.deleteFillTargetsForPendingUpdates(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+            );
             bidi.rejectPendingRequestUpdates(
               this as unknown as bidi.BidiSessionInternal,
               publishRequestId,
@@ -3383,7 +3472,12 @@ export class SessionImpl implements Session {
               normalizeRequestErrorCode(Number(decoded.errorCode)),
             );
             // draft-ietf-moq-transport-19 §10.9: coalescing により単一 REQUEST_ERROR で
-            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する
+            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
+            // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+            bidi.deleteFillTargetsForPendingUpdates(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+            );
             bidi.rejectPendingRequestUpdates(
               this as unknown as bidi.BidiSessionInternal,
               publishRequestId,
@@ -3732,6 +3826,8 @@ export class SessionImpl implements Session {
 
     this.requestStreams.delete(publishRequestId);
     this.subscribers.delete(publishRequestId);
+    // 購読の終了に伴い fill 関連付けも不要になるため掃除する。
+    bidi.deleteFillTargetsForSubscriber(this as unknown as bidi.BidiSessionInternal, impl);
     // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
     const aliasSubscribers = this.subscribersByAlias.get(publishTrackAlias);
     if (aliasSubscribers !== undefined) {
@@ -3910,6 +4006,16 @@ export class SessionImpl implements Session {
               // FETCH_OK より先にデータストリームが到着する可能性がある
               fetcher = this.fetchers.get(header.requestId) ?? null;
               if (!fetcher) {
+                // draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+                // fill fetch ストリームの FETCH_HEADER は fill を要求した
+                // SUBSCRIBE / REQUEST_UPDATE の Request ID を運ぶ。購読に
+                // 紐付けて受信する。どちらにも該当しない Request ID は
+                // 不明な FETCH として従来どおり扱う。
+                const fillTarget = this.fillFetchTargets.get(header.requestId);
+                if (fillTarget) {
+                  await this.handleFillFetchStream(reader, header.requestId, fillTarget, buffer);
+                  return;
+                }
                 fetcher = await this.waitForFetcher(header.requestId);
                 if (!fetcher) {
                   // タイムアウトで Fetcher が登録されなかった場合は、
@@ -4077,6 +4183,96 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * fill fetch ストリームを受信する
+   *
+   * draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics) / §5.1.3.1:
+   * fill fetch ストリームは FETCH と同じオブジェクト framing で届き、
+   * FIN は fill 完了 (関連付けを消す)、reset は fill 失敗として扱う。
+   * オブジェクトは購読の object コールバックに渡す。fill と subscription の
+   * 二重配送の区別・扱いは別途整理する。
+   * Malformed Track 検出時はデータストリームを打ち切るのみとし、購読の
+   * bidi ストリームには触れない (fill の成否は購読に波及しない。§5.1.3.1)。
+   * エラー通知の扱いも別途整理する。
+   */
+  private async handleFillFetchStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    fillRequestId: bigint,
+    target: bidi.FillFetchTarget,
+    initialBuffer: Uint8Array,
+  ): Promise<void> {
+    let buffer = initialBuffer;
+    let context: import("./dataStream").FetchObjectContext | null = null;
+    let isFirst = true;
+    const sink = {
+      handleObject: (object: MoqtObject): void => {
+        target.subscriber.handleFillObject(object);
+      },
+    };
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+
+        if (value) {
+          const next = new Uint8Array(buffer.length + value.length);
+          next.set(buffer);
+          next.set(value, buffer.length);
+          buffer = next;
+        }
+
+        if (buffer.length > 0) {
+          const result = incomingProcessFetchObjects(
+            this as unknown as SessionInternal,
+            buffer,
+            sink,
+            context,
+            isFirst,
+            target.groupOrder,
+          );
+          buffer = result.remainingBuffer;
+          context = result.context;
+          isFirst = result.isFirst;
+        }
+
+        if (done) break;
+      }
+
+      // FIN 時に未完了 Object の途中バイトが残る場合は FETCH と同様に
+      // PROTOCOL_VIOLATION でセッションを閉じる (§11.4)。
+      if (buffer.byteLength > 0) {
+        if (this.sessionState === "connected") {
+          this.closeWithError(
+            new SessionError(
+              `fill fetch data stream ended with incomplete object: requestId=${fillRequestId}, remaining ${buffer.byteLength} bytes`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+        }
+        return;
+      }
+      // FIN は fill 完了であり、関連付けを消す。購読自体は継続する (§5.1.3.1)。
+      this.fillFetchTargets.delete(fillRequestId);
+    } catch (err) {
+      this.emitDataStreamErrorDebug(err, { type: FetchHeaderType, requestId: fillRequestId });
+      // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
+      // 購読自体は継続する (§5.1.3.1)。
+      this.fillFetchTargets.delete(fillRequestId);
+      const sessionError = toProtocolViolationSessionError(err);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+      } else if (err instanceof MalformedTrackError) {
+        // fill 失敗はデータストリームの打ち切りのみとし、購読の bidi
+        // ストリームには STOP_SENDING を送らない (§5.1.3.1)。
+        await cancelStreamQuiet(
+          reader,
+          `malformed fill track: requestId=${fillRequestId}, reason=${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    // 統計と reader ロックの後始末は呼び出し元の handleIncomingStream の
+    // finally に委ねる (Subgroup 経路と同パターン)。
+  }
+
+  /**
    * DATA_STREAM_ERROR のデバッグログを出力する
    *
    * FETCH データストリームの場合は対象の requestId を含めて追跡できるようにする。
@@ -4163,6 +4359,7 @@ export class SessionImpl implements Session {
       fetcher,
       context,
       isFirst,
+      fetcher.getGroupOrder(),
     );
   }
 

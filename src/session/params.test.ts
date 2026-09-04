@@ -22,11 +22,12 @@ import {
   compareLocations,
   validateFetchOkEndLocation,
   resolveFetchStartLocation,
+  resolveFillGroupOrder,
 } from "./params";
-import { encodeParameters, decodeParameters } from "../message/parameter";
+import { encodeParameters, decodeParameters, decodeFillParameters } from "../message/parameter";
 import { InvalidFilterError } from "../error";
 import { MAX_VARINT } from "../varint";
-import { MessageParameterType } from "../message/types";
+import { MessageParameterType, GroupOrder } from "../message/types";
 import { TrackPropertyId } from "../properties";
 import { isGreaseValue } from "../grease";
 import {
@@ -933,4 +934,99 @@ test("resolveFetchStartLocation: 相対指定 (1 フィールド) は undefined 
 test("resolveFetchStartLocation: Next Object 形式 (0, 0) は undefined を返す", () => {
   // Next Object は {Largest.Group, Largest.Object + 1} で、Largest Object 依存。
   assert.isUndefined(resolveFetchStartLocation({ startGroup: 0n, startObject: 0n }));
+});
+
+// ============================================================================
+// buildFillParameters / FILL_PARAMETERS
+// draft-ietf-moq-transport-20 §5.1.3 / §10.2.15
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * SUBSCRIBE に fill を指定すると FILL_PARAMETERS (0x23) が載り、
+ * 内側に指定内容が入ることを検証する。
+ */
+test("buildSubscribeParameters: fill が FILL_PARAMETERS パラメータになる", () => {
+  const parameters = buildSubscribeParameters({
+    fill: {
+      filter: { startGroup: 10n, startObject: 2n },
+      fillTimeout: 100n,
+      subscriberPriority: 10,
+      groupOrder: "Descending",
+    },
+  });
+
+  const fillParam = parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS);
+  assert.isDefined(fillParam);
+  const inner = decodeFillParameters(fillParam!);
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.FILL_TIMEOUT));
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY));
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.GROUP_ORDER));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * fill 未指定の SUBSCRIBE には FILL_PARAMETERS が付かないことを検証する。
+ */
+test("buildSubscribeParameters: fill 未指定は FILL_PARAMETERS を含まない", () => {
+  const parameters = buildSubscribeParameters({});
+
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
+ * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
+ */
+test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", () => {
+  let thrown: Error | undefined;
+  try {
+    buildSubscribeParameters({
+      fill: {
+        filter: { startGroup: MAX_VARINT, startObject: 0n, endGroupDelta: 1n },
+      },
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.instanceOf(thrown, InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.8:
+ * fill 内の GROUP_ORDER が不正値の場合は送信前に throw する。
+ */
+test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は throw する", () => {
+  let thrown: Error | undefined;
+  try {
+    buildSubscribeParameters({
+      fill: {
+        groupOrder: "Sideways" as unknown as "Ascending",
+      },
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("GROUP_ORDER"));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * fill の Group Order 解決は FILL 内の指定を優先し、無ければ subscription の
+ * 値を継承し、どちらも無ければ Ascending になることを検証する。
+ */
+test("resolveFillGroupOrder: fill・subscription・既定値の優先順位で解決する", () => {
+  // FILL 内の指定が最優先
+  assert.equal(resolveFillGroupOrder("Descending", "Ascending"), GroupOrder.DESCENDING);
+  assert.equal(resolveFillGroupOrder("Ascending", "Descending"), GroupOrder.ASCENDING);
+  // FILL 省略時は subscription の値を継承する
+  assert.equal(resolveFillGroupOrder(undefined, "Descending"), GroupOrder.DESCENDING);
+  assert.equal(resolveFillGroupOrder(undefined, "Ascending"), GroupOrder.ASCENDING);
+  // どちらも省略時は Ascending (対向既定は不明のため FETCH 既定と同一)
+  assert.equal(resolveFillGroupOrder(undefined, undefined), GroupOrder.ASCENDING);
 });

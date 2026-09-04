@@ -195,6 +195,15 @@ export const MessageParameterType = {
    */
   GROUP_ORDER: 0x22,
   /**
+   * FILL_PARAMETERS (Section 10.2.15 FILL PARAMETERS Parameter)
+   *
+   * SUBSCRIBE / REQUEST_UPDATE (for a subscription) で fill fetch ストリームを
+   * 要求する。値は fill fetch ストリームに適用する Parameters 列を
+   * length-prefixed で格納する。
+   * draft-ietf-moq-transport-20 Section 10.2.15 (FILL PARAMETERS Parameter)
+   */
+  FILL_PARAMETERS: 0x23,
+  /**
    * NEW_GROUP_REQUEST (Section 10.2.18 NEW GROUP REQUEST Parameter)
    */
   NEW_GROUP_REQUEST: 0x32,
