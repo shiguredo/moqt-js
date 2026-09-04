@@ -18,7 +18,7 @@ import {
   encodeGoawayPayload,
   encodePublishDonePayload,
 } from "./message";
-import { encodeRequestOkPayload } from "./message/session";
+import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { createTrackNamespace } from "./message/parameter";
@@ -2661,4 +2661,91 @@ test("Fetch データストリーム: セッション close 済み経路でも�
   // (close() 経由と違い markClosed が走らないため。セッション終了済みで実害なし)
   assert.equal(fetcher.state, "active");
   assert.equal(ctx.internal.fetchers.size, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.10:
+ * 受信 PUBLISH で確立した購読のストリーム上で publisher 発の
+ * PUBLISH_STATE_NOTIFY を受信した場合、subscriber 状態に反映されることを
+ * 検証する。応答は送信しない。
+ */
+test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber 状態が反映される", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifiedError = error;
+      // error コールバックは requestStreams / subscribers の削除より前に呼ばれるため、
+      // ここで引き取った SubscriberImpl の state を await 後に検証できる
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  // LARGEST_OBJECT ({7, 2}) + FORWARD=0 を通知し、その後 FIN する
+  const writer = new ControlStreamWriter();
+  const notifyFramed = writer.encode(
+    MessageType.PUBLISH_STATE_NOTIFY,
+    encodePublishStateNotifyPayload({
+      type: MessageType.PUBLISH_STATE_NOTIFY,
+      parameters: [
+        {
+          type: MessageParameterType.LARGEST_OBJECT,
+          value: new Uint8Array([0x07, 0x02]),
+        },
+        { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+      ],
+    }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [notifyFramed],
+    ),
+  );
+
+  // 通知内容が反映される。後続 FIN による error 通知は別経路の既存挙動
+  assert.isDefined(subscriber);
+  assert.deepEqual(subscriber!.largestLocation, { group: 7n, object: 2n });
+  assert.isFalse(subscriber!.forwardState);
+  assert.isDefined(notifiedError);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.10 / §10.2.1:
+ * 受信 PUBLISH ストリーム上で許可外パラメータを含む PUBLISH_STATE_NOTIFY を
+ * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ */
+test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    sessionState: SessionState;
+  };
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+
+  // SUBSCRIBER_PRIORITY (0x20) は本メッセージに許可されない
+  const writer = new ControlStreamWriter();
+  const notifyFramed = writer.encode(
+    MessageType.PUBLISH_STATE_NOTIFY,
+    encodePublishStateNotifyPayload({
+      type: MessageType.PUBLISH_STATE_NOTIFY,
+      parameters: [{ type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([10]) }],
+    }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [notifyFramed],
+    ),
+  );
+
+  assert.equal(sessionInternal.sessionState, "closed");
 });

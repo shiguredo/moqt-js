@@ -250,6 +250,57 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 }
 
 /**
+ * PUBLISH_STATE_NOTIFY メッセージ (Section 10.10)
+ *
+ * draft-ietf-moq-transport-20 Section 10.10 (PUBLISH_STATE_NOTIFY):
+ *
+ * PUBLISH_STATE_NOTIFY Message {
+ *   Type (vi64) = 0x22,
+ *   Length (16),
+ *   Number of Parameters (vi64),
+ *   Parameters (..),
+ * }
+ *
+ * publisher が subscription の bidi ストリーム上で送る片方向の状態通知。
+ * 受信側は REQUEST_OK / REQUEST_ERROR を応答しない。
+ */
+export interface PublishStateNotify {
+  type: typeof MessageType.PUBLISH_STATE_NOTIFY;
+  parameters: Parameter[];
+}
+
+/**
+ * PUBLISH_STATE_NOTIFY のペイロードをエンコードする
+ *
+ * draft-ietf-moq-transport-20 Section 10.10:
+ * Number of Parameters + Parameters (delta encoding の Parameters 列)。
+ */
+export function encodePublishStateNotifyPayload(msg: PublishStateNotify): Uint8Array {
+  return encodeParameters(msg.parameters);
+}
+
+/**
+ * PUBLISH_STATE_NOTIFY のペイロードをデコードする
+ *
+ * draft-ietf-moq-transport-20 Section 10.10 / Section 10:
+ * 消費バイト数が Message Body 長と一致しない場合は PROTOCOL_VIOLATION
+ * ("If the length does not match the length of the Message Body, the
+ *  receiver MUST close the session with a PROTOCOL_VIOLATION.")。
+ */
+export function decodePublishStateNotifyPayload(data: Uint8Array, offset = 0): PublishStateNotify {
+  const [parameters, consumed] = decodeParameters(data, offset);
+  if (offset + consumed !== data.length) {
+    throw new ProtocolViolationError(
+      `trailing data in PUBLISH_STATE_NOTIFY: expected ${data.length} bytes, consumed ${offset + consumed}`,
+    );
+  }
+  return {
+    type: MessageType.PUBLISH_STATE_NOTIFY,
+    parameters,
+  };
+}
+
+/**
  * RequestOk のペイロードをエンコード
  *
  * draft-ietf-moq-transport-19 Section 10.5:

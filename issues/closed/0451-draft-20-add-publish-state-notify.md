@@ -1,7 +1,7 @@
 # PUBLISH_STATE_NOTIFY メッセージを追加する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/add-publish-state-notify
 - Polished: 2026-09-02
 
@@ -22,6 +22,15 @@ draft-ietf-moq-transport-20 §10.10 で追加された `PUBLISH_STATE_NOTIFY` (T
 - subscriber 発、または非 subscription 文脈での受信は PROTOCOL_VIOLATION (§10.10)。
 - 受信パラメータは本メッセージに許可されたもの (LARGEST_OBJECT / LOCATION_FILTER / FORWARD) のみ受理し、許可外のパラメータは §10.2.1 の MUST に従い PROTOCOL_VIOLATION で拒否する。
 - 送信側 (自 publisher が対向 subscriber に送る) は、状態変更を能動通知する必要がある場合に後続で足す。本 issue の必須範囲は受信と型定義。送信が必要なら完了条件に明記して実装する。
+
+## 解決方法
+
+`MessageType.PUBLISH_STATE_NOTIFY` (0x22) と符号化・名前解決を追加し、両購読受信ループで受理するようにした。
+
+- 受信は presence のパラメータのみ subscriber 状態に反映し (省略時は不変)、応答は送信しない
+- 購読以外の文脈 (応答待ちリーダー・namespace 系) と subscriber 発と許可外パラメータではセッションを閉じる
+- 送信側は受信専用の範囲に留める
+- `CHANGES.md` の `## develop` に `[ADD]` を追記する
 
 ## 完了条件
 

@@ -52,6 +52,10 @@
   - draft-ietf-moq-transport-20 §5.1.3 / §10.2.15 に基づき、SUBSCRIBE / subscription の REQUEST_UPDATE で fill を要求できるようにする
   - 対向が開いた fill fetch ストリームを購読に紐付けて受信する (初期 fill と後続 fill)
   - @voluntas
+- [ADD] PUBLISH_STATE_NOTIFY メッセージを追加する
+  - draft-ietf-moq-transport-20 §10.10 に基づき、publisher 発の購読状態通知を受信して subscriber 状態に反映する
+  - 購読以外の文脈・subscriber 発・許可外パラメータではセッションを閉じる
+  - @voluntas
 - [UPDATE] 依存ライブラリを最新版に更新する
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する

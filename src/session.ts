@@ -3387,6 +3387,26 @@ export class SessionImpl implements Session {
             );
             continue;
           }
+          if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+            // draft-ietf-moq-transport-20 §10.10:
+            // 受信 PUBLISH で確立した購読への publisher 発の状態通知を受理する。
+            // 応答は送信しない。受信 PUBLISH 経路は subscriber 側のため
+            // ロールは subscribe として扱う。閉鎖後は打ち切る。
+            if (
+              !bidi.bidiHandlePublishStateNotify(
+                this as unknown as bidi.BidiSessionInternal,
+                msg.payload,
+                publishRequestId,
+                "subscribe",
+              )
+            ) {
+              return;
+            }
+            if (this.sessionState !== "connected") {
+              return;
+            }
+            continue;
+          }
           if (msg.type === MessageType.GOAWAY) {
             if (
               !bidi.validateNoDuplicateGoawayOnRequestStream(
@@ -3425,14 +3445,10 @@ export class SessionImpl implements Session {
             // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
             // (§10.4 MUST)。受信 PUBLISH の subscriber (impl) は送信方向を
             // FIN (writer.close()) で閉じ、受信方向は読み取りを継続する。
-            const streamInfo = this.requestStreams.get(publishRequestId);
-            if (streamInfo) {
-              try {
-                await streamInfo.writer.close();
-              } catch {
-                // ストリームが既に閉じている場合は無視
-              }
-            }
+            await bidi.closeRequestStreamWriter(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+            );
             continue;
           }
           if (msg.type === MessageType.REQUEST_UPDATE) {
