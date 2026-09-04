@@ -1,7 +1,7 @@
 # End of Timed-Out Range (0x20C) を FETCH オブジェクトに追加する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/add-end-of-timed-out-range
 - Polished: 2026-09-02
 
@@ -34,3 +34,10 @@ draft-ietf-moq-transport-20 §11.4.4 で Fill Timeout 失効により放棄さ�
 - draft-ietf-moq-transport-20 §10.2.5 (FILL TIMEOUT Parameter)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1822)
 - 関連: `issues/0450-draft-20-add-fill-parameters-and-fill-fetch.md`
+
+## 解決方法
+
+- FetchSerializationFlags に END_OF_TIMED_OUT_RANGE (0x20C) を追加し、encode / decode を既存 2 値と同様の status オブジェクトとして扱うようにした。
+- 公開型 EndOfRangeType に timed_out を追加し、decodeEndOfRange を 3 値マッピングに変更した。
+- End of Range 判定を isEndOfRangeFlags に抽出し、不正 flags の検証と回帰テストを追加した。
+- 変更履歴の develop に後方互換の追加を追記した。
