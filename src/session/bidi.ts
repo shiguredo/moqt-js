@@ -352,44 +352,40 @@ export async function bidiReadPublishResponse(
 
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodeRequestOkPayload(msg.payload);
-      // draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
-      // 許可されていないパラメータを受信した場合は PROTOCOL_VIOLATION
+      // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope) / §10.2.16:
+      // PUBLISH_OK に出現できるのは EXPIRES のみ。許可外パラメータを
+      // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+      // Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
+      // スコープ違反でも保留中の発行を残さないよう、Track Properties 違反と
+      // 同じ後始末 (削除・reject・close) を行う。
+      let scopeError: SessionError | undefined;
       if (
         !validateParameterScope(
           decoded.parameters,
           PUBLISH_OK_ALLOWED_PARAMS,
           "PUBLISH_OK",
-          (error) => session.closeWithError(error),
+          (error) => {
+            scopeError = error;
+          },
         )
       ) {
+        session.pendingPublish.delete(requestId);
+        session.requestStreams.delete(requestId);
+        // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+        // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+        // Track Properties 違反と同じ順序 (削除・reject・close) にし、
+        // 先に close すると close 側の汎用 reject で特定エラーが上書きされるのを防ぐ。
+        const violation =
+          scopeError ??
+          new SessionError(
+            "parameter not allowed in PUBLISH_OK",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          );
+        pending.reject(violation);
+        session.closeWithError(violation);
         return;
       }
-      // Range Filter の値域・構造・組み合わせ重複検証
-      // draft-ietf-moq-transport-19 §5.1.3:
-      // PUBLISH_OK では REQUEST_ERROR を送信できないため、違反は
-      // PROTOCOL_VIOLATION でセッションを閉じる。
-      // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反 (InvalidFilterError)
-      // も同一経路で変換する。
-      try {
-        validateRangeFilterCombination(decoded.parameters);
-        validateLocationAndFillParameters(decoded.parameters);
-      } catch (error) {
-        if (error instanceof InvalidFilterError) {
-          const sessionError = new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
-          session.pendingPublish.delete(requestId);
-          session.requestStreams.delete(requestId);
-          pending.reject(sessionError);
-          session.closeWithError(sessionError);
-          return;
-        }
-        throw error;
-      }
-      // LOCATION_FILTER / FILL_PARAMETERS の値検証は
-      // validateLocationAndFillParameters (上記 try 内) で行う。decode の失敗 (ProtocolViolationError /
-      // IncompleteDataError) は関数外側の catch の
-      // toProtocolViolationSessionError で変換し、後始末もそちらに委ねる
-      // (破損ペイロードと同一手順の外側 catch)。
-      // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
+      // draft-ietf-moq-transport-20 §10.5 (REQUEST_OK):
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
       //  If an endpoint receives Track Properties in one of these messages it MUST
@@ -408,8 +404,10 @@ export async function bidiReadPublishResponse(
       session.pendingPublish.delete(requestId);
       session.publishers.set(requestId, pending.impl);
 
-      const forwardState = extractForwardState(decoded.parameters);
-      pending.impl.setForwardState(forwardState);
+      // draft-ietf-moq-transport-20 §10.2.16:
+      // PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD 等の
+      // Subscription Parameters は運ばれない。Publisher の Forward State は
+      // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
       pending.resolve(pending.impl);
 
       void bidiReadRequestStreamMessages(session, requestId, stream, controlReader, "publish");
@@ -1498,7 +1496,8 @@ export async function bidiReadRequestStreamMessages(
  * セッションを閉じる。
  * decode の失敗 (ProtocolViolationError / IncompleteDataError) は呼び出し元の
  * 受信ループの catch で PROTOCOL_VIOLATION に変換される。
- * PUBLISH_OK と publish ロールの REQUEST_UPDATE の両経路で共用する。
+ * publish ロールの REQUEST_UPDATE 経路で使う。PUBLISH_OK は EXPIRES のみを
+ * 許可するため本検証は通さない (許可外はスコープ検証で拒否する)。
  */
 function validateLocationAndFillParameters(parameters: Parameter[]): void {
   for (const param of parameters) {
