@@ -425,15 +425,38 @@ export class SubscriberImpl implements Subscriber {
    *
    * draft-ietf-moq-transport-19 Section 10.9 (REQUEST_UPDATE):
    * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
+   *
+   * fire-and-forget で呼び出しても、GOAWAY / REQUEST_ERROR / FIN / RESET 等に
+   * よる reject が unhandled rejection にならないよう、同一インスタンスに
+   * catch ハンドラを登録した Promise を直接返す。async の wrapper 経由にすると
+   * wrapper 側の無観測 reject が unhandled になるため、ここで必ず捕まえる。
    */
-  async update(options?: RequestUpdateOptions): Promise<void> {
+  update(options?: RequestUpdateOptions): Promise<void> {
     if (this.subscriberState === "closed") {
-      throw new Error("Subscriber is closed");
+      // 非 async 化に伴い同期 throw ではなく rejected な Promise を返す
+      // (fire-and-forget 呼び出しの観測挙動を変えないため)。await する呼び出し
+      // には reject が伝播する。catch ハンドラは返却値と同一インスタンスに登録する
+      // (void ハンドラの catch 派生を返すと resolve 化して伝播しなくなる)。
+      const rejected = Promise.reject(new Error("Subscriber is closed"));
+      rejected.catch(() => {});
+      return rejected;
     }
 
     if (this.onUpdate) {
-      await this.onUpdate(options ?? {});
+      // onUpdate の同期 throw は旧 async 実装と等価に rejected な Promise と
+      // して返す。型違反の非 Promise 返却時は防御的に rejected 化する。
+      let promise: Promise<void>;
+      try {
+        const inner = this.onUpdate(options ?? {});
+        inner.catch(() => {});
+        promise = inner;
+      } catch (error) {
+        promise = Promise.reject(error);
+        promise.catch(() => {});
+      }
+      return promise;
     }
+    return Promise.resolve();
   }
 
   /**
