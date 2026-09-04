@@ -37,6 +37,11 @@
   - 旧レイアウトで送受信していた moqt-js とは送信ワイヤ・受信解釈の両方が変わるため相互運用できない (旧実装の spatialLayerId=1 は byte2=0x10、新実装の spatialLayerId=1 は byte2=0x01)
   - VP9 準拠の送信者は RFC 9626 §3.3.1 に従い SID を 8-bit LID の下位 3 bits (0-7) に載せるが、本実装は LID の下位 2 bits のみを spatialLayerId として復元するため、SID=4-7 は下位 2 bits で 0-3 に折り畳まれる (VideoFrameMarking.spatialLayerId の値域 0-3 の既存設計を維持)
   - @voluntas
+- [CHANGE] Subscription Parameters を PUBLISH_OK から外し REQUEST_UPDATE 側に揃える
+  - draft-ietf-moq-transport-20 §10.2.16 に基づき、PUBLISH_OK に出現できるパラメータを EXPIRES のみに変更する (LOCATION_FILTER / FORWARD 等はスコープ違反として PROTOCOL_VIOLATION で拒否する)
+  - PUBLISH_OK での Forward State 反映をやめ、初期値を維持する (更新は REQUEST_UPDATE 経路で扱う)
+  - 旧版 moqt-js が送る Subscription Parameters 付き PUBLISH_OK とは相互運用できない
+  - @voluntas
 - [ADD] Range Filter の評価 (マッチング) ロジックを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY の評価関数 (SetID ごとの AND / OR 結合、両端含む判定、open-ended) を実装する
   - SubscriberImpl の handleObject / handleDatagram に Range Filter 再適用を追加し、不通過オブジェクトを破棄する
