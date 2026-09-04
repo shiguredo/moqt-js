@@ -89,6 +89,16 @@ test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規�
   assert.equal(normalizePublishDoneCode(0x7f * 1 + 0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
 });
 
+/**
+ * draft-ietf-moq-transport-20 Appendix A.1:
+ * 削除された 0x3 SUBSCRIPTION_ENDED は未知コードとして
+ * INTERNAL_ERROR に正規化されることを検証する。
+ */
+test("normalizePublishDoneCode: 削除された 0x3 は INTERNAL_ERROR に正規化", () => {
+  assert.isFalse("SUBSCRIPTION_ENDED" in PublishDoneStatusCode);
+  assert.equal(normalizePublishDoneCode(0x3), PublishDoneStatusCode.INTERNAL_ERROR);
+});
+
 test("normalizeSessionErrorCode: 既知のコードはそのまま通す", () => {
   assert.equal(normalizeSessionErrorCode(0x0), SessionErrorCode.NO_ERROR);
   assert.equal(normalizeSessionErrorCode(0x1), SessionErrorCode.INTERNAL_ERROR);

@@ -298,25 +298,27 @@ export const ObjectStatus = {
 export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
 
 /**
- * PUBLISH_DONE Status Codes (Section 10.11 PUBLISH_DONE)
+ * PUBLISH_DONE Status Codes (Section 10.12 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * - 0x0: INTERNAL_ERROR
  * - 0x1: UNAUTHORIZED
  * - 0x2: TRACK_ENDED
- * - 0x3: SUBSCRIPTION_ENDED
  * - 0x4: GOING_AWAY
  * - 0x5: TOO_FAR_BEHIND
  * - 0x6: EXPIRED
  * - 0x8: UPDATE_FAILED
  * - 0x9: EXCESSIVE_LOAD
  * - 0x12: MALFORMED_TRACK
+ *
+ * draft-ietf-moq-transport-20 Appendix A.1 で 0x3
+ * SUBSCRIPTION_ENDED は削除された。Largest Object が Location Filter の
+ * 終端を過ぎても購読は終わらない。
  */
 export const PublishDoneStatusCode = {
   INTERNAL_ERROR: 0x0,
   UNAUTHORIZED: 0x1,
   TRACK_ENDED: 0x2,
-  SUBSCRIPTION_ENDED: 0x3,
   GOING_AWAY: 0x4,
   TOO_FAR_BEHIND: 0x5,
   EXPIRED: 0x6,
@@ -331,11 +333,10 @@ export type PublishDoneStatusCode =
 /**
  * PUBLISH_DONE の Status Code がエラー（アプリに Error として通知すべき）かどうか
  *
- * draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
  * INTERNAL_ERROR (0x0), UNAUTHORIZED (0x1), TOO_FAR_BEHIND (0x5), UPDATE_FAILED (0x8),
  * EXCESSIVE_LOAD (0x9), MALFORMED_TRACK (0x12) をエラーとみなす。
  * TRACK_ENDED (0x2) 等はエラーとみなさない。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-10.11
  */
 export function isPublishDoneErrorStatus(statusCode: bigint): boolean {
   switch (statusCode) {

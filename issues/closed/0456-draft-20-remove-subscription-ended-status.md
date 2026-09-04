@@ -1,7 +1,7 @@
 # PUBLISH_DONE の SUBSCRIPTION_ENDED を削除する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/remove-subscription-ended-status
 - Polished: 2026-09-02
 
@@ -33,3 +33,11 @@ draft-ietf-moq-transport-20 で PUBLISH_DONE の `SUBSCRIPTION_ENDED` (0x3) が�
 - draft-ietf-moq-transport-20 §10.12 (PUBLISH_DONE)
 - draft-ietf-moq-transport-20 §15.11.3 (PUBLISH_DONE Status Codes)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1833)
+
+## 解決方法
+
+`SUBSCRIPTION_ENDED` (0x3) を定数から削除し、未知扱いにした。
+
+- 正規化で INTERNAL_ERROR に倒し、受信時はエラーとして通知する
+- 正常系回帰を TRACK_ENDED に置き換え、0x3 受信の結合テストを追加する
+- `CHANGES.md` の `## develop` に `[CHANGE]` を追記する

@@ -1452,8 +1452,8 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の source なしエ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.11 / §5.1:
- * 正常な PUBLISH_DONE (SUBSCRIPTION_ENDED) の処理が変わらないことを検証する回帰
+ * draft-ietf-moq-transport-20 §10.12 / §5.1:
+ * 正常な PUBLISH_DONE (TRACK_ENDED) の処理が変わらないことを検証する回帰
  * ガード。handleEnd が state を closed にした時点でループ条件 (while の state
  * ガード) が偽になり、後続の読み取り (= ピア FIN 経路) 自体に入らない。よって
  * error は飛ばず、end だけが通知される。
@@ -1480,7 +1480,7 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
     MessageType.PUBLISH_DONE,
     encodePublishDonePayload({
       type: MessageType.PUBLISH_DONE,
-      statusCode: BigInt(PublishDoneStatusCode.SUBSCRIPTION_ENDED),
+      statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
       streamCount: 0n,
       reasonPhrase: "",
     }),
@@ -1500,6 +1500,55 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
   assert.isTrue(endCalled);
   assert.isFalse(errorCalled);
   assert.isFalse(terminateCalled);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.12 / §14:
+ * 削除された 0x3 SUBSCRIPTION_ENDED を受信した場合、未知コードとして
+ * INTERNAL_ERROR に正規化され、エラーとして通知されることを検証する。
+ * 旧版が送る 0x3 はエラー扱いになる。
+ */
+test("受信 PUBLISH_DONE の削除された 0x3 は end と error の両方が通知される", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  let errorCalled = false;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+    error: () => {
+      errorCalled = true;
+    },
+  });
+  const controlWriter = new ControlStreamWriter();
+  const publishDoneFramed = controlWriter.encode(
+    MessageType.PUBLISH_DONE,
+    encodePublishDonePayload({
+      type: MessageType.PUBLISH_DONE,
+      statusCode: 0x3n,
+      streamCount: 0n,
+      reasonPhrase: "",
+    }),
+  );
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [publishDoneFramed],
+    ),
+  );
+
+  // 正規化によりエラーと終端の両方が通知され、セッションは閉じない
+  assert.isTrue(endCalled);
+  assert.isTrue(errorCalled);
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
   assert.equal(internal.sessionState, "connected");
