@@ -16,8 +16,10 @@ import type {
 import type {
   PublishOptions,
   SubscribeOptions,
+  SubscribeTracksOptions,
   FetchOptions,
   FillRequestOptions,
+  TrackStatusOptions,
 } from "../session";
 import {
   MessageParameterType,
@@ -558,6 +560,25 @@ export function resolveFillGroupOrder(
 }
 
 /**
+ * 純粋関数: INCLUDE_PROPERTIES Message Parameter を構築する
+ *
+ * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter):
+ * Parameter Type 0x35、uint8。true は 1、false は 0。
+ * 省略時 (undefined) は送らない (デフォルト 1 と同等)。
+ */
+export function buildIncludePropertiesParameter(includeProperties?: boolean): Parameter[] {
+  if (includeProperties === undefined) {
+    return [];
+  }
+  return [
+    {
+      type: MessageParameterType.INCLUDE_PROPERTIES,
+      value: encodeUint8ParameterValue(includeProperties ? 1 : 0, "INCLUDE_PROPERTIES"),
+    },
+  ];
+}
+
+/**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
  * draft-ietf-moq-transport-20 Section 10.2
@@ -659,6 +680,9 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE")));
   }
 
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-20 Section 10.2.21
+  parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
+
   return parameters;
 }
 
@@ -716,6 +740,9 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
 
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-20 Section 10.2.21
+  parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
+
   return parameters;
 }
 
@@ -749,11 +776,7 @@ export function buildSubscribeNamespaceParameters(options?: {
  * "Range Filters Section 5.1.3 can be used in SUBSCRIBE_TRACKS to filter
  *  Tracks in a namespace using the Track Property Filter."
  */
-export function buildSubscribeTracksParameters(options?: {
-  groupOrder?: "Ascending" | "Descending";
-  forward?: boolean;
-  rangeFilters?: RangeFilterSpec[];
-}): Parameter[] {
+export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
   // GROUP_ORDER (0x22) - draft-ietf-moq-transport-19 Section 10.2.8 (uint8)
@@ -788,6 +811,24 @@ export function buildSubscribeTracksParameters(options?: {
     });
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
+
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-20 Section 10.2.21
+  parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
+
+  return parameters;
+}
+
+/**
+ * 純粋関数: TRACK_STATUS の Message Parameters を構築する
+ *
+ * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter):
+ * 省略時は送らない (デフォルト 1 と同等)。
+ */
+export function buildTrackStatusParameters(options?: TrackStatusOptions): Parameter[] {
+  const parameters: Parameter[] = [];
+
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-20 Section 10.2.21
+  parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
 
   return parameters;
 }

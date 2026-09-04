@@ -26,12 +26,14 @@ import {
   encodeTrackName,
   encodeTrackNamespace,
   validateTrackNameSize,
+  validateIncludePropertiesValue,
   MAX_TRACK_NAME_SIZE,
   MAX_TRACK_NAMESPACE_SIZE,
   MAX_FULL_TRACK_NAME_SIZE,
   isRejectedReceiveNamespace,
 } from "./parameter";
 import { InvalidFilterError, ProtocolViolationError } from "../error";
+import { MessageParameterType } from "./types";
 import { encodeVarint, MAX_VARINT } from "../varint";
 
 test("無効なパラメータタイプでエラー", () => {
@@ -1095,4 +1097,46 @@ test("decodeFillParameters: 内側の除去を含むと InvalidFilterError", () 
   // SUBGROUP_FILTER の Length=0 (除去) を内側に含める
   const param = encodeFillParameters([{ type: 0x25, value: new Uint8Array([0x00]) }]);
   assert.throws(() => decodeFillParameters(param), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * INCLUDE_PROPERTIES (0x35) は uint8 で 0/1 のみ有効であり、
+ * encode / decode のラウンドトリップができることを検証する。
+ */
+test("INCLUDE_PROPERTIES: 0/1 の encode / decode がラウンドトリップする", () => {
+  for (const value of [0, 1]) {
+    const encoded = encodeParameters([
+      { type: MessageParameterType.INCLUDE_PROPERTIES, value: new Uint8Array([value]) },
+    ]);
+    const [decoded] = decodeParameters(encoded, 0);
+    assert.equal(decoded.length, 1);
+    assert.equal(decoded[0].type, MessageParameterType.INCLUDE_PROPERTIES);
+    assert.deepEqual(decoded[0].value, new Uint8Array([value]));
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * "If an endpoint receives a value outside this range, it MUST close
+ *  the session with PROTOCOL_VIOLATION."
+ * 値 0/1 以外の INCLUDE_PROPERTIES を受信した場合、
+ * ProtocolViolationError になることを検証する。
+ */
+test("INCLUDE_PROPERTIES: 2 の decode で ProtocolViolationError", () => {
+  const encoded = encodeParameters([
+    { type: MessageParameterType.INCLUDE_PROPERTIES, value: new Uint8Array([2]) },
+  ]);
+  assert.throws(() => decodeParameters(encoded, 0), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * validateIncludePropertiesValue が 0/1 を受理し、範囲外を拒否することを検証する。
+ */
+test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolationError", () => {
+  validateIncludePropertiesValue(0);
+  validateIncludePropertiesValue(1);
+  assert.throws(() => validateIncludePropertiesValue(2), ProtocolViolationError);
+  assert.throws(() => validateIncludePropertiesValue(255), ProtocolViolationError);
 });

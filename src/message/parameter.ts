@@ -230,6 +230,21 @@ export function validateForwardValue(value: number): void {
 }
 
 /**
+ * INCLUDE_PROPERTIES パラメータの値を検証する
+ *
+ * draft-ietf-moq-transport-20 Section 10.2.21:
+ * "The allowed values are 0 (do not send Properties)
+ *  or 1 (send Properties), and the default is 1.
+ *  If an endpoint receives a value outside this range, it MUST close
+ *  the session with PROTOCOL_VIOLATION."
+ */
+export function validateIncludePropertiesValue(value: number): void {
+  if (value !== 0 && value !== 1) {
+    throw new ProtocolViolationError(`invalid INCLUDE_PROPERTIES value: ${value}, expected 0 or 1`);
+  }
+}
+
+/**
  * uint8 型の Message Parameter Value をエンコードする
  *
  * draft-ietf-moq-transport-19 Section 10.2.7 / 10.2.8 / 10.2.12:
@@ -694,6 +709,8 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   0x32: "varint",
   // TRACK_NAMESPACE_PREFIX (Section 10.2.19)
   0x34: "length-prefixed",
+  // INCLUDE_PROPERTIES (Section 10.2.21)
+  0x35: "uint8",
   // Range Filters (draft-ietf-moq-transport-20 Section 5.1.4 / 10.2.10–10.2.14)
   // Value は Length (vi64) + [SetID + [Property Type] + Range 列] の 1 Length 構造。
   // 外側に Length を付加しない (length-prefixed から分離した専用種別)。
@@ -807,10 +824,14 @@ export function decodeMessageParameter(
       totalConsumed += 1;
       // draft-ietf-moq-transport-19 §10.2.8 / §10.2.17:
       // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
+      // draft-ietf-moq-transport-20 §10.2.21:
+      // INCLUDE_PROPERTIES (0x35) も 0/1 以外は PROTOCOL_VIOLATION
       if (paramTypeNumber === 0x10) {
         validateForwardValue(value[0]);
       } else if (paramTypeNumber === 0x22) {
         validateGroupOrderValue(value[0]);
+      } else if (paramTypeNumber === 0x35) {
+        validateIncludePropertiesValue(value[0]);
       }
       break;
     }

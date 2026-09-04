@@ -28,6 +28,7 @@ export type {
   FillRequestOptions,
   FetchCallbacks,
   FetchOptions,
+  TrackStatusOptions,
   TrackStatusResult,
   NamespaceSubscriptionCallbacks,
   NamespaceSubscription,

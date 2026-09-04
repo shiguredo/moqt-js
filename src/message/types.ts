@@ -251,6 +251,15 @@ export const MessageParameterType = {
    * draft-ietf-moq-transport-19: Range Filter の一種。Property Type 付き。SUBSCRIBE_TRACKS 専用
    */
   TRACK_PROPERTY_FILTER: 0x29,
+  /**
+   * INCLUDE_PROPERTIES (Section 10.2.21 INCLUDE_PROPERTIES Parameter)
+   *
+   * draft-ietf-moq-transport-20:
+   * 応答 / PUBLISH に Track Properties を載せるかを要求する uint8。
+   * 0 (送らない) または 1 (送る)。デフォルト 1。
+   * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS に出現可能。
+   */
+  INCLUDE_PROPERTIES: 0x35,
 } as const;
 
 export type MessageParameterType = (typeof MessageParameterType)[keyof typeof MessageParameterType];
