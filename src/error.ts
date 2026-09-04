@@ -104,8 +104,9 @@ export function normalizeRequestErrorCode(code: number): RequestErrorCode {
 }
 
 /**
- * draft-ietf-moq-transport-19 §14 (Grease):
+ * draft-ietf-moq-transport-20 §14 (Grease):
  * 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う。
+ * 削除された 0x3 SUBSCRIPTION_ENDED も未知扱いで正規化される。
  */
 const PUBLISH_DONE_CODE_SET = new Set(Object.values(PublishDoneStatusCode));
 
