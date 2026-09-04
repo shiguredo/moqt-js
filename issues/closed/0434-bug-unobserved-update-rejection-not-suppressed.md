@@ -1,7 +1,7 @@
 # update() を fire-and-forget で呼び出した場合の unhandled rejection 抑制が効かない経路がある
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-unobserved-update-rejection-not-suppressed
 - Polished: 2026-08-28
 
@@ -45,3 +45,13 @@
 - 関連: `issues/closed/0422-bug-fin-path-pending-request-update-leak.md` (bidi 系 FIN 経路の pending 掃除。本 issue の抑制対象の 1 経路)
 - 関連: `issues/0432-bug-reset-path-pending-request-update-leak.md` (RESET 経路の pending 掃除。本 issue 実装後にテスト追加で最終確認)
 - 関連: `issues/0433-bug-bidi-unsubscribe-pending-update-cleanup.md` (bidi 系 unsubscribe 経路の pending 掃除。同 issue の fire-and-forget 抑制の完了条件は本 issue で担保)
+
+## 解決方法
+
+`src/subscriber.ts` の `SubscriberImpl.update` を非 async 化し、同一インスタンスに catch ハンドラを登録した Promise を直接返すようにした。
+
+- onUpdate ありの経路は返り値をそのまま返し、await する呼び出しには reject が伝播する
+- onUpdate の同期 throw は理由値そのままの rejected な Promise に変換する (旧 async 実装との等価性維持)
+- closed 時は同期 throw ではなく rejected な Promise を返し、onUpdate 未設定時は解決済み Promise を返す
+- テストは `src/session/bidi.test.ts` に 8 本 (5 経路の抑制と await 伝播 3 本)、`src/subscriber.test.ts` に 5 本 (同期非 throw・抑制・未設定・同期 throw 変換・同一インスタンス) を追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する

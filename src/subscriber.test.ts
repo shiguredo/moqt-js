@@ -102,6 +102,146 @@ test("update は closed 状態ではエラーになる", async () => {
   }
 });
 
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * 非 async 化に伴い、closed 状態の update() が同期 throw に化けず rejected な
+ * Promise を返すことを検証する。fire-and-forget 呼び出しの観測挙動を変えない
+ * ための振る舞いであり、await する呼び出しには reject が伝播する。
+ */
+test("update は closed 状態でも同期 throw せず rejected な Promise を返す", () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  subscriber.markClosed();
+
+  // 同期 throw ではなく Promise が返る
+  const promise = subscriber.update();
+  assert.instanceOf(promise, Promise);
+  return promise.then(
+    () => {
+      assert.fail("closed 状態での update は reject されるべき");
+    },
+    (error: unknown) => {
+      assert.match((error as Error).message, /closed/i);
+    },
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * closed 状態の update() を fire-and-forget で呼んでも unhandled rejection に
+ * ならないことを検証する (同一インスタンスに catch ハンドラを登録するため)。
+ */
+test("update は closed 状態の fire-and-forget でも unhandled rejection にならない", async () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  subscriber.markClosed();
+
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // fire-and-forget: 返り値の Promise を観測しない
+    void subscriber.update();
+    // unhandledRejection は reject 後のマイクロタスクで発火するため、50ms の
+    // 壁時計待ちで確実に検出できる (CI 負荷を考慮した十分な余裕)
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * onUpdate 未設定の update() は解決済み Promise を返すことを検証する
+ * (現行の暗黙 resolve 挙動の維持)。
+ */
+test("update は onUpdate 未設定時は解決済み Promise を返す", async () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+
+  const promise = subscriber.update();
+  assert.instanceOf(promise, Promise);
+  await promise;
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * onUpdate が同期 throw しても update() は同期 throw せず rejected な
+ * Promise を返すことを検証する (旧 async 実装と等価に吸収する)。
+ */
+test("update は onUpdate の同期 throw を rejected な Promise に変換する", async () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+  subscriber.onUpdate = () => {
+    throw new Error("sync failure");
+  };
+
+  // 同期 throw ではなく Promise が返る
+  const promise = subscriber.update();
+  assert.instanceOf(promise, Promise);
+  try {
+    await promise;
+    assert.fail("onUpdate の同期 throw は reject として伝播すべき");
+  } catch (error) {
+    assert.equal((error as Error).message, "sync failure");
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * onUpdate の同期 throw を fire-and-forget で呼んでも unhandled rejection に
+ * ならないことを検証する。
+ */
+test("update は onUpdate の同期 throw の fire-and-forget でも unhandled rejection にならない", async () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+  subscriber.onUpdate = () => {
+    throw new Error("sync failure");
+  };
+
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // fire-and-forget: 返り値の Promise を観測しない
+    void subscriber.update();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9:
+ * update() が onUpdate の返り値と同一インスタンスを返すことを検証する。
+ * 別インスタンス (catch 派生) を返すと await 側に reject が伝播しなくなるため、
+ * 同一性が抑制と伝播の両立の核になる。
+ */
+test("update は onUpdate の返り値と同一インスタンスを返す", async () => {
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
+  const inner = Promise.reject(new Error("inner failure"));
+  // 生成直後の未処理 reject による誤検出を避けるための事前ハンドラであり、
+  // 抑制自体は update() 内の登録と別テストで担保する
+  inner.catch(() => {});
+  subscriber.onUpdate = () => inner;
+
+  const returned = subscriber.update();
+  assert.strictEqual(returned, inner);
+  try {
+    await returned;
+    assert.fail("inner の reject が伝播すべき");
+  } catch (error) {
+    assert.equal((error as Error).message, "inner failure");
+  }
+});
+
 // draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
 // UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
 test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {

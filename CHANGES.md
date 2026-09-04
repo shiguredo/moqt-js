@@ -73,6 +73,10 @@
   - draft-ietf-moq-transport-19 §10.9 / §10.9.1 に基づき、bidiCancelSubscription で当該 requestId の保留中 REQUEST_UPDATE を reject してエントリを削除する
   - FIN / RESET 経路と同じ文言で失敗として扱う。unsubscribe の既存処理は変えない
   - @voluntas
+- [FIX] fire-and-forget の update() で unhandled rejection にならないようにする
+  - SubscriberImpl.update を非 async 化し、同一インスタンスに catch ハンドラを登録した Promise を直接返す。await する呼び出しには reject が伝播する
+  - onUpdate の同期 throw も rejected な Promise に変換する。closed 時の rejected な Promise にも抑制ハンドラを付け、onUpdate 未設定時は解決済み Promise を返す
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)
