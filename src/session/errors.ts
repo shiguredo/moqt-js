@@ -1,11 +1,14 @@
 /**
- * MOQT Session - エラー判定・変換ヘルパー（純関数）
+ * MOQT Session - エラー判定・変換ヘルパーと共有文言定数
  *
- * SessionImpl の read loop catch から利用する純関数群。
+ * SessionImpl の read loop catch から利用する純関数群と、各ループで共通に
+ * 使う文言定数。
  * - isSessionClosedError: WebTransport セッション終了起源のエラーかどうかを判定する
  * - isPeerStreamError: ピア起因のストリームエラー (source: "stream") かどうかを判定する
  * - toProtocolViolationSessionError: ProtocolViolationError / IncompleteDataError を
  *   PROTOCOL_VIOLATION の SessionError に変換する
+ * - REQUEST_UPDATE_STREAM_CLOSED_MESSAGE: 応答未達で閉じた保留中の更新を
+ *   reject する際の共通文言
  */
 
 import {
@@ -103,3 +106,17 @@ export function toProtocolViolationSessionError(error: unknown): SessionError | 
   }
   return null;
 }
+
+/**
+ * ストリームクローズ / RESET_STREAM 時に保留中の更新を失敗させるときの
+ * エラー文言
+ *
+ * draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+ * 応答を待たずにストリームが閉じた場合、保留中の更新は失敗として reject
+ * する。FIN 経路と RESET_STREAM 経路で共通の文言を使う。GOAWAY 掃除の
+ * RequestError (GOING_AWAY) とは失敗種別が異なるため使い分ける。
+ * bidi 系・受信 PUBLISH 系・namespace 系の各ループから参照されるため、
+ * 循環参照を避けてこのリーフモジュールに置く。
+ */
+export const REQUEST_UPDATE_STREAM_CLOSED_MESSAGE =
+  "stream closed before receiving update response";

@@ -903,6 +903,109 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
 });
 
 /**
+ * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.9.1:
+ * 受信 PUBLISH ストリームでピアが RESET_STREAM でストリームをエラー終了させた
+ * 場合、応答待ちの REQUEST_UPDATE が reject されエントリが削除されることを
+ * 検証する。FIN 経路と同じ文言で失敗として扱う。
+ */
+test("受信 PUBLISH ストリーム上の RESET_STREAM で応答待ちの REQUEST_UPDATE が reject される", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifiedError = error;
+      // error コールバックは requestStreams / subscribers の削除より前に呼ばれるため、
+      // ここで引き取った SubscriberImpl の state を await 後 (markClosed 済み) に検証できる
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  // RESET 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  internals.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
+      controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+    }),
+  );
+
+  // 応答待ちの REQUEST_UPDATE が FIN 経路と同じ文言で reject され、
+  // エントリが削除される。error 通知も行われる
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(internals.pendingRequestUpdate.size, 0);
+  assert.isDefined(notifiedError);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3:
+ * 受信 PUBLISH ストリームの RESET_STREAM 通知でアプリの error コールバックが
+ * throw しても、応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを
+ * 検証する。通知より reject を先に置く順序の根拠を固定する。
+ */
+test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コールバックが throw しても応答待ちの更新は reject される", async () => {
+  const session = createSessionImpl();
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+      throw new Error("error callback failed");
+    },
+  });
+
+  // RESET 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  internals.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+  });
+
+  // コールバック例外が伝播して Promise が reject しないこと (await が解決する)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+    }),
+  );
+
+  // コールバック例外があっても reject は実行済みでエントリは削除される
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(internals.pendingRequestUpdate.size, 0);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
  * draft-ietf-moq-transport-20 §3.3.4:
  * 受信 PUBLISH 経路でもピアの RESET_STREAM に付いたエラーコードが通知内容に
  * 反映されることを検証する。組み立ては subscribe ロール側と共用のため、
@@ -941,6 +1044,116 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM のエラーコードが
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
   // プロトコル違反ではないためセッションは閉じない
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.4:
+ * 受信 PUBLISH ストリームで GOAWAY 受信後に RESET_STREAM が起きても、
+ * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
+ * GOAWAY 掃除の reject が上書きされないことで呼び出し自体の不在を固定する。
+ */
+test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM では応答待ちの更新に触れない", async () => {
+  const session = createSessionImpl();
+  let notifyCount = 0;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      notifyCount += 1;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+
+  // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  // (GOAWAY 掃除で GOING_AWAY として reject される)
+  let rejected: Error | undefined;
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  internals.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+  });
+
+  // GOAWAY を feed してから RESET_STREAM 相当の reject で終端する
+  const writer = new ControlStreamWriter();
+  const goawayFramed = writer.encode(
+    MessageType.GOAWAY,
+    encodeGoawayPayload({
+      type: MessageType.GOAWAY,
+      newSessionUri: "moqt://new.example.com",
+      timeout: 0n,
+    }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+      },
+      [goawayFramed],
+    ),
+  );
+
+  // GOAWAY 掃除の reject が残り、RESET 経路の文言で上書きされない
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, RequestError);
+  assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
+  assert.equal(internals.pendingRequestUpdate.size, 0);
+  // GOAWAY 後は migration の完了であり、error 通知も state 遷移もしない
+  assert.equal(notifyCount, 0);
+  assert.isUndefined(subscriber);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-19 §3.3.3 / §3.5:
+ * 受信 PUBLISH ストリームでセッション終了起因 (source: "session") の読み取り
+ * 失敗が起きても、保留中の REQUEST_UPDATE に触れないことを検証する。
+ */
+test("受信 PUBLISH ストリーム上のセッション終了の読み取り失敗では応答待ちの更新に触れない", async () => {
+  const session = createSessionImpl();
+  let notifyCount = 0;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      notifyCount += 1;
+    },
+  });
+
+  // 応答待ちの REQUEST_UPDATE を注入する
+  let rejected: Error | undefined;
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  internals.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      // セッション終了起因の読み取り失敗を再現する
+      controller.error(Object.assign(new Error("session closed by peer"), { source: "session" }));
+    }),
+  );
+
+  // セッション終了は購読者への通知対象外であり、保留中の更新にも触れない
+  assert.isUndefined(rejected);
+  assert.equal(internals.pendingRequestUpdate.size, 1);
+  assert.equal(notifyCount, 0);
   assert.equal(internal.sessionState, "connected");
 });
 
