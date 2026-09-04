@@ -1,7 +1,7 @@
 # Subgroup が交互に出現する FETCH 応答で同一 Subgroup の Priority 不一致を検出できない
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-fetch-interleaved-subgroup-priority-miss
 - Polished: 2026-08-28
 
@@ -46,3 +46,13 @@ FETCH 応答のデコードで、Subgroup が交互に出現する場合 (S1 →
 
 - draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks / 条件 1)
 - 関連: `issues/closed/0420-bug-fetch-priority-mismatch-after-non-subgroup-object.md` (誤検出修正。同 issue の残りの無記録として本 issue を分離)
+
+## 解決方法
+
+`src/dataStream.ts` の `FetchObjectContext` に `subgroupPriorities?: Map<bigint, number>` を追加し、Subgroup ID ごとの直近 Publisher Priority を追跡するようにした。
+
+- `checkSubgroupPriorityMismatch` は追跡を持つコンテキストでは `Map.get(subgroupId)` で同一 Subgroup ID の直近値と比較し、持たない既存コンテキストでは従来の単一比較に委ねる (互換維持)
+- 追跡の更新は `updateSubgroupPriorities` に集約し、Subgroup オブジェクトの解決後 Priority で記録する。Datagram では更新せず、Group 変更時は捨てる。更新時はコピーして置き換える
+- `decodeEndOfRange` は同一 Group では追跡を引き継ぎ、Group 変更時は捨てる
+- テストは `src/dataStream.fetch.test.ts` に 7 本追加し (交互不一致・一致・EOR 挟み・Datagram 挟み・Descending・Subgroup 0・省略挟み)、既存の 0420 系テストで回帰を確認する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
