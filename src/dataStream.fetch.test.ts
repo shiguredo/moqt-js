@@ -1995,3 +1995,59 @@ test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過
     /computed object id out of range/,
   );
 });
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.4 Table 7 / §11.4.4.2:
+ * End of Timed-Out Range (0x20C) が encode / decode で round-trip し、
+ * アプリ向け status 種別が "timed_out" になることを検証する。
+ */
+test("FetchObjectFields: End of Timed-Out Range (0x20C) の round-trip で status 種別が timed_out になる", () => {
+  // ワイヤ値の確認 (Table 7)
+  assert.equal(FetchSerializationFlags.END_OF_TIMED_OUT_RANGE, 0x20c);
+
+  const timedOut: FetchObjectFields = {
+    serializationFlags: FetchSerializationFlags.END_OF_TIMED_OUT_RANGE,
+    groupId: 7n,
+    objectId: 3n,
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(timedOut);
+  const [decoded, , context] = decodeFetchObjectFields(encoded, null, 0, true);
+
+  // アプリ向け status 種別の検証
+  assert.equal(decoded.endOfRange, "timed_out");
+  assert.equal(decoded.groupId, 7n);
+  assert.equal(decoded.objectId, 3n);
+  // End of Range は後続デコードの prior として引き継がれる
+  assert.equal(context.groupId, 7n);
+  assert.equal(context.objectId, 3n);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.4 Table 7:
+ * End of Range (0x8C / 0x10C / 0x20C) 以外の 128 以上の値は
+ * PROTOCOL_VIOLATION として拒否されることを検証する
+ * (0x20C 追加後も不正値の検証が残っていることの回帰確認)。
+ */
+test("FetchObjectFields: End of Range 以外の 128 以上の flags は拒否される", () => {
+  const prior: FetchObjectContext = {
+    groupId: 5n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 128,
+  };
+
+  // 0x80: End of Range ではなく flags ビットとしても解釈できない不正値
+  const invalid = encodeVarint(0x80);
+  assert.throws(
+    () => decodeFetchObjectFields(invalid, prior, 0, false),
+    /invalid fetch serialization flags/,
+  );
+
+  // 0x30C: 0x20C と近傍だが未定義の不正値
+  const undefinedValue = encodeVarint(0x30c);
+  assert.throws(
+    () => decodeFetchObjectFields(undefinedValue, prior, 0, false),
+    /invalid fetch serialization flags/,
+  );
+});
