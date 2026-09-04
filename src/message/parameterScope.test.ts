@@ -8,6 +8,11 @@ import {
   NAMESPACE_OK_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_ALLOWED_PARAMS,
+  REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+  TRACK_STATUS_OK_ALLOWED_PARAMS,
+  SUBSCRIBE_OK_ALLOWED_PARAMS,
+  FETCH_OK_ALLOWED_PARAMS,
+  PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
   validateParameterScope,
 } from "./parameterScope";
 import { MessageParameterType } from "./types";
@@ -276,6 +281,37 @@ test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION で拒�
       [{ type }],
       PUBLISH_ALLOWED_PARAMS,
       "PUBLISH",
+      (error) => {
+        errors.push(error);
+      },
+    );
+    assert.isFalse(result);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21 / §10.2.1:
+ * INCLUDE_PROPERTIES (0x35) は SUBSCRIBE / TRACK_STATUS / FETCH /
+ * SUBSCRIBE_TRACKS にのみ出現でき、応答側の許可集合には含まれない。
+ * 応答文脈への混入は PROTOCOL_VIOLATION で拒否されることを検証する。
+ */
+test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION で拒否される", () => {
+  for (const allowed of [
+    NAMESPACE_OK_ALLOWED_PARAMS,
+    PUBLISH_OK_ALLOWED_PARAMS,
+    REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+    TRACK_STATUS_OK_ALLOWED_PARAMS,
+    SUBSCRIBE_OK_ALLOWED_PARAMS,
+    FETCH_OK_ALLOWED_PARAMS,
+    PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
+  ]) {
+    const errors: SessionError[] = [];
+    const result = validateParameterScope(
+      [{ type: MessageParameterType.INCLUDE_PROPERTIES }],
+      allowed,
+      "RESPONSE",
       (error) => {
         errors.push(error);
       },

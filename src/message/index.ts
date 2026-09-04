@@ -61,6 +61,7 @@ export {
   isRejectedReceiveNamespace,
   validateForwardValue,
   validateGroupOrderValue,
+  validateIncludePropertiesValue,
   validateRangeFilterCombination,
   trackNamespaceToStrings,
   validateTrackNameSize,

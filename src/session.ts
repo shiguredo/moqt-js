@@ -71,6 +71,7 @@ import {
   buildSubscribeTracksParameters,
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
+  buildTrackStatusParameters,
   clampTimeoutMs,
   extractForwardState,
   matchNamespacePrefix,
@@ -554,6 +555,16 @@ export interface SubscribeOptions {
    * 受信する。fill と subscription の二重配送の扱いは別途整理する。
    */
   fill?: FillRequestOptions;
+
+  /**
+   * Track Properties の受信要求
+   * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter)
+   *
+   * true (1) は応答に Track Properties を載せるよう要求し、
+   * false (0) は空にするよう要求する。省略時はパラメータ自体を送らず、
+   * 対向のデフォルト (1 と同等) に従う。
+   */
+  includeProperties?: boolean;
 }
 
 /**
@@ -585,6 +596,15 @@ export interface SubscribeTracksOptions {
    * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
    */
   rangeFilters?: RangeFilterSpec[];
+
+  /**
+   * Track Properties の受信要求
+   * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter)
+   *
+   * true (1) は結果 PUBLISH に Track Properties を載せるよう要求し、
+   * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
+   */
+  includeProperties?: boolean;
 }
 
 /**
@@ -652,6 +672,30 @@ export interface FetchOptions {
    * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
    */
   authorizationToken?: AuthorizationToken;
+
+  /**
+   * Track Properties の受信要求
+   * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter)
+   *
+   * true (1) は応答に Track Properties を載せるよう要求し、
+   * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
+   */
+  includeProperties?: boolean;
+}
+
+/**
+ * TRACK_STATUS のオプション
+ * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter)
+ */
+export interface TrackStatusOptions {
+  /**
+   * Track Properties の受信要求
+   * draft-ietf-moq-transport-20 Section 10.2.21 (INCLUDE_PROPERTIES Parameter)
+   *
+   * true (1) は応答に Track Properties を載せるよう要求し、
+   * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
+   */
+  includeProperties?: boolean;
 }
 
 /**
@@ -966,7 +1010,11 @@ export interface Session {
    * トラックの状態を問い合わせる
    * draft-ietf-moq-transport-19 Section 10.14 (TRACK_STATUS)
    */
-  trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult>;
+  trackStatus(
+    namespace: string[],
+    trackName: string,
+    options?: TrackStatusOptions,
+  ): Promise<TrackStatusResult>;
   /**
    * Namespace をサブスクライブする（namespace discovery 用）
    *
@@ -1922,7 +1970,11 @@ export class SessionImpl implements Session {
    * TRACK_STATUS は subscribe せずにトラックの情報を要求する
    * 応答は SUBSCRIBE_OK と同じパラメータを持つ REQUEST_OK である
    */
-  async trackStatus(namespace: string[], trackName: string): Promise<TrackStatusResult> {
+  async trackStatus(
+    namespace: string[],
+    trackName: string,
+    options?: TrackStatusOptions,
+  ): Promise<TrackStatusResult> {
     if (this.sessionState === "closed") {
       throw new Error("Session is closed");
     }
@@ -1951,12 +2003,14 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-19 Section 10.14 (TRACK_STATUS):
     // TRACK_STATUS は新しい双方向ストリームで送信される。
     // draft-ietf-moq-transport-19 Section 3.3
+    // draft-ietf-moq-transport-20 Section 10.2.21:
+    // INCLUDE_PROPERTIES は buildTrackStatusParameters で載せる (省略時は送らない)。
     const trackStatusMsg = {
       type: MessageType.TRACK_STATUS,
       requestId,
       trackNamespace,
       trackName: trackNameBytes,
-      parameters: [],
+      parameters: buildTrackStatusParameters(options),
     };
 
     const payload = encodeTrackStatusPayload(trackStatusMsg);
