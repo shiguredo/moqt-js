@@ -31,6 +31,7 @@ import {
   encodeRequestOkPayload,
   encodeUint8ParameterValue,
   decodeFetchOkPayload,
+  decodeFillParameters,
   decodeGoawayPayload,
   decodeLocationFilterParameter,
   decodePublishDonePayload,
@@ -38,8 +39,10 @@ import {
   decodeRequestOkPayload,
   decodeRequestUpdatePayload,
   decodeSubscribeOkPayload,
+  encodeFillParameters,
   getParameterLocationValue,
   validateRangeFilterCombination,
+  type GroupOrder,
   type Location,
   type Parameter,
   type RangeFilterSpec,
@@ -63,8 +66,10 @@ import {
   extractForwardState,
   extractLargestLocation,
   validateFetchOkEndLocation,
+  buildFillParameters,
   buildRangeFilterParameters,
   mergeRangeFilters,
+  resolveFillGroupOrder,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateNamespacePrefixUpdate,
@@ -132,6 +137,29 @@ interface PendingRequestUpdate {
    * 省略時 (undefined) は REQUEST_OK 受信時に Range Filters を更新しない。
    */
   rangeFilters?: RangeFilterSpec[];
+  /**
+   * REQUEST_UPDATE 送信時に fill 内側で指定された Range Filters。
+   * draft-ietf-moq-transport-19 §10.3.1.6:
+   * 購読単位の上限検証に含めるため保持する (fill 自体は保持されないが、
+   * in-flight 中の上限超過を見逃さない)。
+   */
+  fillRangeFilters?: RangeFilterSpec[];
+}
+
+/**
+ * fill fetch ストリームと購読の関連付け
+ *
+ * draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+ * fill fetch ストリームの FETCH_HEADER が運ぶ Request ID (初期 fill は
+ * SUBSCRIBE、後続 fill は REQUEST_UPDATE のもの) から購読を引くための記録。
+ */
+export interface FillFetchTarget {
+  subscriber: SubscriberImpl;
+  /**
+   * fill の Group Order。FILL_PARAMETERS 内の GROUP_ORDER が無ければ
+   * subscription の指定、どちらも無ければ Ascending。
+   */
+  groupOrder: GroupOrder;
 }
 
 export interface BidiSessionInternal {
@@ -155,6 +183,15 @@ export interface BidiSessionInternal {
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
+  /**
+   * fill 要求元の Request ID から購読への関連付け
+   *
+   * draft-ietf-moq-transport-20 §5.1.3:
+   * fill fetch ストリームの FETCH_HEADER が運ぶ Request ID で引く。
+   * REQUEST_OK 受理で pending が消えても、fill ストリーム到着まで保持する
+   * (応答と fill ストリームの順序は保証されない)。
+   */
+  readonly fillFetchTargets: Map<bigint, FillFetchTarget>;
 
   // draft-ietf-moq-transport-19 §10.3.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   readonly peerMaxRequestUpdates: number;
@@ -329,8 +366,11 @@ export async function bidiReadPublishResponse(
       // draft-ietf-moq-transport-19 §5.1.3:
       // PUBLISH_OK では REQUEST_ERROR を送信できないため、違反は
       // PROTOCOL_VIOLATION でセッションを閉じる。
+      // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反 (InvalidFilterError)
+      // も同一経路で変換する。
       try {
         validateRangeFilterCombination(decoded.parameters);
+        validateLocationAndFillParameters(decoded.parameters);
       } catch (error) {
         if (error instanceof InvalidFilterError) {
           const sessionError = new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
@@ -342,16 +382,11 @@ export async function bidiReadPublishResponse(
         }
         throw error;
       }
-      // LOCATION_FILTER の値検証
-      // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
-      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-      //  close the session with a PROTOCOL_VIOLATION."
-      // PUBLISH_OK では REQUEST_ERROR を送信できないため、違反は
-      // PROTOCOL_VIOLATION でセッションを閉じる。decode の失敗
-      // (ProtocolViolationError / IncompleteDataError) は関数外側の catch の
+      // LOCATION_FILTER / FILL_PARAMETERS の値検証は
+      // validateLocationAndFillParameters (上記 try 内) で行う。decode の失敗 (ProtocolViolationError /
+      // IncompleteDataError) は関数外側の catch の
       // toProtocolViolationSessionError で変換し、後始末もそちらに委ねる
       // (破損ペイロードと同一手順の外側 catch)。
-      validateLocationFilterParameters(decoded.parameters);
       // draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
@@ -499,6 +534,7 @@ export async function bidiReadSubscribeResponse(
       const decoded = decodeRequestErrorPayload(msg.payload);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
+      session.fillFetchTargets.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
         normalizeRequestErrorCode(Number(decoded.errorCode)),
@@ -509,11 +545,13 @@ export async function bidiReadSubscribeResponse(
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
+      session.fillFetchTargets.delete(requestId);
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
+      session.fillFetchTargets.delete(requestId);
       pending.reject(new Error(`unexpected response type ${msg.type} for SUBSCRIBE request`));
     }
   } catch (error) {
@@ -524,6 +562,7 @@ export async function bidiReadSubscribeResponse(
       // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
+      session.fillFetchTargets.delete(requestId);
       pending.reject(sessionError);
       session.closeWithError(sessionError);
       return;
@@ -956,6 +995,9 @@ async function closeOldRequestStreamOnGoaway(
   } catch {
     // アプリのコールバック例外は黙殺する
   }
+  // 失敗が確定した更新の fill 関連付けを消す。確定済み (REQUEST_OK 受理) の
+  // 更新の fill はまだ到着し得るため残す。pending 削除より先に実行する。
+  deleteFillTargetsForPendingUpdates(session, requestId);
   rejectPendingRequestUpdates(
     session,
     requestId,
@@ -1066,7 +1108,9 @@ export async function bidiReadRequestStreamMessages(
               normalizeRequestErrorCode(Number(decoded.errorCode)),
             );
             // draft-ietf-moq-transport-19 §10.9: coalescing により単一 REQUEST_ERROR で
-            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する
+            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
+            // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+            deleteFillTargetsForPendingUpdates(session, requestId);
             rejectPendingRequestUpdates(session, requestId, error);
             break;
           }
@@ -1157,8 +1201,11 @@ export async function bidiReadRequestStreamMessages(
             // 検証は状態変更 (setForwardState) より前に配置し、違反で
             // REQUEST_ERROR を応答したにも関わらず forward state が反映される
             // 不整合を防ぐ。
+            // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
+            // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
             try {
               validateRangeFilterCombination(decoded.parameters);
+              validateLocationAndFillParameters(decoded.parameters);
             } catch (error) {
               if (error instanceof InvalidFilterError) {
                 await bidiSendRequestError(
@@ -1172,14 +1219,14 @@ export async function bidiReadRequestStreamMessages(
               throw error;
             }
 
-            // LOCATION_FILTER の値検証
-            // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
-            // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-            //  close the session with a PROTOCOL_VIOLATION."
-            // decode の失敗は関数外側の catch の toProtocolViolationSessionError で
-            // PROTOCOL_VIOLATION にしてセッションを閉じる。検証通過後に限り
-            // REQUEST_OK を応答する。
-            validateLocationFilterParameters(decoded.parameters);
+            // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
+            // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
+            // toProtocolViolationSessionError で PROTOCOL_VIOLATION にして
+            // セッションを閉じる。検証通過後に限り REQUEST_OK を応答する。
+
+            // moqt-js は publisher として fill ストリームを開かないため、検証通過
+            // 後の FILL_PARAMETERS は他の更新パラメータと同様に受けて REQUEST_OK を
+            // 応答する (accept-then-ignore)。
 
             const publisher = session.publishers.get(requestId);
             if (publisher) {
@@ -1325,6 +1372,9 @@ export async function bidiReadRequestStreamMessages(
     const subscriber = session.subscribers.get(requestId);
     if (subscriber) {
       session.subscribers.delete(requestId);
+      // 購読の終了に伴い fill 関連付けも不要になるため掃除する
+      // (FIN / RESET / セッション終了のいずれの exit 経路でも共通)。
+      deleteFillTargetsForSubscriber(session, subscriber);
       // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
       const aliasSubscribers = session.subscribersByAlias.get(subscriber.getTrackAlias());
       if (aliasSubscribers !== undefined) {
@@ -1355,19 +1405,24 @@ export async function bidiReadRequestStreamMessages(
 }
 
 /**
- * 受信パラメータ群に含まれる LOCATION_FILTER の値を検証する
+ * 受信パラメータ群に含まれる LOCATION_FILTER / FILL_PARAMETERS の値を検証する
  *
  * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
  *  close the session with a PROTOCOL_VIOLATION."
+ * draft-ietf-moq-transport-20 §10.2.15 (FILL PARAMETERS Parameter):
+ * 内側の一覧に無いパラメータを受信した endpoint は PROTOCOL_VIOLATION で
+ * セッションを閉じる。
  * decode の失敗 (ProtocolViolationError / IncompleteDataError) は呼び出し元の
  * 受信ループの catch で PROTOCOL_VIOLATION に変換される。
  * PUBLISH_OK と publish ロールの REQUEST_UPDATE の両経路で共用する。
  */
-function validateLocationFilterParameters(parameters: Parameter[]): void {
+function validateLocationAndFillParameters(parameters: Parameter[]): void {
   for (const param of parameters) {
     if (param.type === MessageParameterType.LOCATION_FILTER) {
       decodeLocationFilterParameter(param);
+    } else if (param.type === MessageParameterType.FILL_PARAMETERS) {
+      decodeFillParameters(param);
     }
   }
 }
@@ -1405,6 +1460,29 @@ function computeMergedRangeFilters(
     merged = mergeRangeFilters(merged, pending.rangeFilters);
   }
   return mergeRangeFilters(merged, update);
+}
+
+/**
+ * 対象購読の in-flight 中の fill 内側 Range Filters を集める
+ *
+ * draft-ietf-moq-transport-19 §10.3.1.6:
+ * 購読単位の上限検証に fill 内側も含めるため、未応答の更新が運ぶ
+ * fill 内側分を列挙する。
+ */
+function inFlightFillRangeFilters(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+): RangeFilterSpec[] {
+  const collected: RangeFilterSpec[] = [];
+  for (const [, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId !== targetRequestId) {
+      continue;
+    }
+    if (pending.fillRangeFilters !== undefined) {
+      collected.push(...pending.fillRangeFilters);
+    }
+  }
+  return collected;
 }
 
 export async function bidiSendRequestUpdate(
@@ -1452,7 +1530,10 @@ export async function bidiSendRequestUpdate(
   //  for a given subscription or fetch」とある。
   // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみ
   // チェックする (マージ結果には remove エントリが含まれない)。
-  if (options.rangeFilters !== undefined && options.rangeFilters.length > 0) {
+  // fill 内側の Range Filters も購読単位の上限に含める。
+  const newOuterRanges = options.rangeFilters ?? [];
+  const newFillRanges = options.fill?.rangeFilters ?? [];
+  if (newOuterRanges.length > 0 || newFillRanges.length > 0) {
     // ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §10.3.1.6 により送信禁止。
     // 削除のみの update (マージ後が空) でも送信してはならないため、
     // マージ後検証 (空配列は no-op) とは別に options 単体でガードする。
@@ -1462,9 +1543,9 @@ export async function bidiSendRequestUpdate(
         "cannot send range filters in REQUEST_UPDATE: peer MAX_FILTER_RANGES is 0 (not advertised)",
       );
     }
-    const merged = computeMergedRangeFilters(session, subscriber, options.rangeFilters);
+    const merged = computeMergedRangeFilters(session, subscriber, newOuterRanges);
     validateRangeFilterLimits(
-      merged,
+      [...merged, ...inFlightFillRangeFilters(session, targetRequestId), ...newFillRanges],
       session.peerMaxFilterRanges,
       "REQUEST_UPDATE after merging current filters",
     );
@@ -1496,6 +1577,13 @@ export async function bidiSendRequestUpdate(
       type: MessageParameterType.FORWARD,
       value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
     });
+  }
+
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-20 Section 10.2.15:
+  // fill fetch ストリームを要求する。FILL_PARAMETERS は保持されないため、
+  // 載せた更新にのみ適用される。
+  if (options.fill !== undefined) {
+    parameters.push(encodeFillParameters(buildFillParameters(options.fill, "REQUEST_UPDATE")));
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
@@ -1539,6 +1627,9 @@ export async function bidiSendRequestUpdate(
       // REQUEST_OK 受信時に Range Filters へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
       rangeFilters: options.rangeFilters,
+      // draft-ietf-moq-transport-19 §10.3.1.6:
+      // 購読単位の上限検証に fill 内側も含めるため保持する。
+      fillRangeFilters: options.fill?.rangeFilters,
     });
   });
   // write in-flight 中に GOAWAY / REQUEST_ERROR / セッション close が
@@ -1547,6 +1638,17 @@ export async function bidiSendRequestUpdate(
   // return promise の adoption 経由で呼び出し元へ伝播するため、
   // ここでの catch は無観測 reject の抑制のみを担う。
   promise.catch(() => {});
+
+  // draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+  // fill を要求した更新の Request ID を購読に関連付ける。REQUEST_OK 受理で
+  // pending エントリが消えても、fill ストリーム到着まで保持する (応答と fill
+  // ストリームの順序は保証されない)。write 失敗時は pending と同様に削除する。
+  if (options.fill !== undefined) {
+    session.fillFetchTargets.set(updateRequestId, {
+      subscriber,
+      groupOrder: resolveFillGroupOrder(options.fill.groupOrder, subscriber.getGroupOrder()),
+    });
+  }
 
   const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
   session.statsControlMessagesSent++;
@@ -1561,6 +1663,7 @@ export async function bidiSendRequestUpdate(
     // GOAWAY 処理やセッション close が登録済みの reject を呼び、呼び出し元に
     // 返されていない Promise の unhandled rejection を生む。
     session.pendingRequestUpdate.delete(updateRequestId);
+    session.fillFetchTargets.delete(updateRequestId);
     throw err;
   }
 
@@ -1755,6 +1858,10 @@ export async function bidiCancelSubscription(
   // subscribers / requestStreams の Map 削除より先に実行する (後続の cancel /
   // abort の成否に関わらず reject を保証する。FIN / RESET 経路と同パターン)。
   rejectPendingRequestUpdates(session, requestId, new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));
+
+  // 購読の終了に伴い fill 関連付けも不要になるため掃除する
+  // (draft-ietf-moq-transport-20 §5.1.3.1: 購読キャンセル時は fill も終わる)。
+  deleteFillTargetsForSubscriber(session, subscriber);
 
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
@@ -2101,6 +2208,48 @@ export function rejectPendingRequestUpdates(
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.reject(error);
+    }
+  }
+}
+
+// ============================================================================
+// fill 関連付けヘルパー
+// ============================================================================
+
+/**
+ * 購読の fill 関連付けをすべて削除する
+ *
+ * draft-ietf-moq-transport-20 §5.1.3.1:
+ * 購読自体が終わる (unsubscribe / FIN / RESET / セッション終了) と fill fetch
+ * ストリームも終わるため、関連付けは不要になる。購読が生きている間の
+ * REQUEST_ERROR / GOAWAY では、まだ応答待ちの更新分のみを
+ * deleteFillTargetsForPendingUpdates で消し、確定済みの fill は残す。
+ */
+export function deleteFillTargetsForSubscriber(
+  session: BidiSessionInternal,
+  subscriber: SubscriberImpl,
+): void {
+  for (const [requestId, target] of session.fillFetchTargets) {
+    if (target.subscriber === subscriber) {
+      session.fillFetchTargets.delete(requestId);
+    }
+  }
+}
+
+/**
+ * まだ応答待ちの更新に紐づく fill 関連付けを削除する
+ *
+ * REQUEST_ERROR / GOAWAY で失敗が確定した更新の fill は開かれないため、
+ * 関連付けを消す。REQUEST_OK 受理済み (pending なし) の更新の fill は
+ * まだ到着し得るため残す (応答と fill ストリームの順序は保証されない)。
+ */
+export function deleteFillTargetsForPendingUpdates(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+): void {
+  for (const [updateId, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId === targetRequestId) {
+      session.fillFetchTargets.delete(updateId);
     }
   }
 }

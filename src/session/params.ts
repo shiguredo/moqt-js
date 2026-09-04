@@ -13,10 +13,17 @@ import type {
   AuthorizationToken,
   RangeFilterSpec,
 } from "../message";
-import type { PublishOptions, SubscribeOptions, FetchOptions } from "../session";
+import type {
+  PublishOptions,
+  SubscribeOptions,
+  FetchOptions,
+  FillRequestOptions,
+} from "../session";
 import {
   MessageParameterType,
+  GroupOrder,
   encodeAuthorizationToken,
+  encodeFillParameters,
   encodeLocationFilterParameter,
   encodeRangeFilter,
   encodeUint8ParameterValue,
@@ -467,6 +474,90 @@ export function buildRangeFilterParameters(rangeFilters: RangeFilterSpec[]): Par
 }
 
 /**
+ * 純粋関数: FILL_PARAMETERS の内側 Parameters 列を構築する
+ *
+ * draft-ietf-moq-transport-20 §10.2.15 Table 6:
+ * 内側に載せられるのは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER /
+ * GROUP_ORDER / Range Filters (0x25-0x28) のみ。TRACK_PROPERTY_FILTER は
+ * SUBSCRIBE_TRACKS 専用のため fill では許可しない。除去 (Length=0) は
+ * 一回限りの fill 要求に意味を持たないため許可しない。
+ *
+ * @param fill - fill 要求内容
+ * @param context - 外側メッセージ種別 (検証メッセージ用)
+ */
+export function buildFillParameters(
+  fill: FillRequestOptions,
+  context: "SUBSCRIBE" | "REQUEST_UPDATE",
+): Parameter[] {
+  const inner: Parameter[] = [];
+
+  // FILL_TIMEOUT (0x0A) - draft-ietf-moq-transport-20 Section 10.2.5
+  if (fill.fillTimeout !== undefined) {
+    validateNonNegative(fill.fillTimeout, "FILL_TIMEOUT");
+    inner.push({
+      type: MessageParameterType.FILL_TIMEOUT,
+      value: encodeVarint(fill.fillTimeout),
+    });
+  }
+
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-20 Section 10.2.7 (uint8)
+  if (fill.subscriberPriority !== undefined) {
+    inner.push({
+      type: MessageParameterType.SUBSCRIBER_PRIORITY,
+      value: encodeUint8ParameterValue(fill.subscriberPriority, "SUBSCRIBER_PRIORITY"),
+    });
+  }
+
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-20 Section 10.2.9
+  // End Group 超過は encodeLocationFilterParameter が InvalidFilterError で拒否する
+  if (fill.filter !== undefined) {
+    inner.push(encodeLocationFilterParameter(fill.filter));
+  }
+
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-20 Section 10.2.8 (uint8)
+  if (fill.groupOrder !== undefined) {
+    if (fill.groupOrder !== "Ascending" && fill.groupOrder !== "Descending") {
+      throw new Error(
+        `GROUP_ORDER must be "Ascending" or "Descending": ${fill.groupOrder as string}`,
+      );
+    }
+    const groupOrderValue = fill.groupOrder === "Ascending" ? 0x01 : 0x02;
+    inner.push({
+      type: MessageParameterType.GROUP_ORDER,
+      value: encodeUint8ParameterValue(groupOrderValue, "GROUP_ORDER"),
+    });
+  }
+
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-20 Section 5.1.4
+  if (fill.rangeFilters !== undefined) {
+    validateRangeFilterSpecs(fill.rangeFilters, context, {
+      allowRemove: false,
+      allowTrackProperty: false,
+    });
+    inner.push(...buildRangeFilterParameters(fill.rangeFilters));
+  }
+
+  return inner;
+}
+
+/**
+ * fill fetch ストリームのデコードに使う Group Order を解決する
+ *
+ * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * FILL_PARAMETERS 内の GROUP_ORDER が無ければ subscription の指定、
+ * どちらも無ければ Ascending。両省略時に publisher preference を使う規定は
+ * あるが、クライアント側は対向の既定値を知り得ないため Ascending に倒す
+ * (FETCH の既定値と同一。既知の制限)。
+ */
+export function resolveFillGroupOrder(
+  fillGroupOrder: "Ascending" | "Descending" | undefined,
+  subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+): GroupOrder {
+  const resolved = fillGroupOrder ?? subscriptionGroupOrder;
+  return resolved === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING;
+}
+
+/**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
  * draft-ietf-moq-transport-20 Section 10.2
@@ -560,6 +651,12 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-20 Section 10.2.15
+  // fill fetch ストリームを要求する。旧 Joining FETCH の用途をここに寄せる。
+  if (options?.fill !== undefined) {
+    parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE")));
   }
 
   return parameters;

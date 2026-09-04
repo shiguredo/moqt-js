@@ -16,8 +16,14 @@ import {
   encodeGoawayPayload,
 } from "../message/session";
 import { encodePublishDonePayload } from "../message/publish";
-import { MessageType, MessageParameterType } from "../message/types";
-import { trackNamespaceToStrings } from "../message";
+import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
+import {
+  trackNamespaceToStrings,
+  encodeParameters,
+  decodeFillParameters,
+  encodeFillParameters,
+} from "../message";
+import { buildFillParameters } from "./params";
 import { decodeRequestUpdatePayload, encodeRequestUpdatePayload } from "../message/subscribe";
 import { getParameterTrackNamespace, encodeLocationFilterParameter } from "../message/parameter";
 import { SessionError, SessionErrorCode, RequestErrorCode, RequestError } from "../error";
@@ -295,6 +301,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
     },
     subscribers: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     // BidiSessionInternal の他のフィールドは本関数のテストで未使用のため undefined
   } as unknown as BidiSessionInternal;
 
@@ -392,6 +399,7 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
     },
     subscribers: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -603,6 +611,7 @@ function createBidiSession(): {
     pendingFetch: new Map(),
     pendingTrackStatus: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     publishers: new Map(),
     subscribers: new Map(),
     subscribersByAlias: new Map(),
@@ -679,6 +688,195 @@ test("bidiSendRequestUpdate: rangeFilters が REQUEST_UPDATE にエンコード�
   const decoded = decodeRequestUpdatePayload(messages[0].payload);
   assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
   assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER));
+});
+
+// ============================================================================
+// bidiSendRequestUpdate の FILL_PARAMETERS テスト
+// draft-ietf-moq-transport-20 §5.1.3 / §10.2.15
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * update({ fill }) で FILL_PARAMETERS (0x23) が REQUEST_UPDATE に載り、
+ * 内側に指定内容が入ることを検証する。fill 要求元の Request ID は購読に
+ * 関連付けられる。
+ */
+test("bidiSendRequestUpdate: fill が FILL_PARAMETERS として REQUEST_UPDATE にエンコードされる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  // bidiSendRequestUpdate は REQUEST_OK 受信まで resolve しない Promise を返すため、
+  // 送信完了後に pendingRequestUpdate の Promise を解決してから await する
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    fill: {
+      filter: { startGroup: 10n, startObject: 2n },
+      fillTimeout: 100n,
+      subscriberPriority: 10,
+      groupOrder: "Descending",
+    },
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  // writer.write されたバイト列を ControlStreamReader でフレームに分解する
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_UPDATE);
+
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  const fillParam = decoded.parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS);
+  assert.isDefined(fillParam);
+  const inner = decodeFillParameters(fillParam!);
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.FILL_TIMEOUT));
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY));
+  assert.isDefined(inner.find((p) => p.type === MessageParameterType.GROUP_ORDER));
+
+  // fill 要求元の Request ID (100n) が購読に関連付けられる
+  const target = session.fillFetchTargets.get(100n);
+  assert.isDefined(target);
+  assert.equal(target!.subscriber, subscriber);
+  assert.equal(target!.groupOrder, GroupOrder.DESCENDING);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
+ * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
+ */
+test("bidiSendRequestUpdate: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      fill: {
+        filter: { startGroup: MAX_VARINT, startObject: 0n, endGroupDelta: 1n },
+      },
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("absolute range end group exceeds maximum"));
+  // 失敗時は fill 関連付けも残らない
+  assert.equal(session.fillFetchTargets.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6:
+ * fill 内側の Range Filters も購読単位の上限に含め、上限超過では送信前に
+ * throw することを検証する。
+ */
+test("bidiSendRequestUpdate: fill 内側の Range Filters が上限超過の場合は throw する", async () => {
+  // createBidiSession の peerMaxFilterRanges は 2 のため、3 Ranges で超過する
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      fill: {
+        rangeFilters: [
+          {
+            type: "subgroup",
+            setId: 0,
+            ranges: [
+              { start: 0n, end: 1n },
+              { start: 3n, end: 4n },
+              { start: 5n, end: 6n },
+            ],
+          },
+        ],
+      },
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  // 失敗時は fill 関連付けも残らない
+  assert.equal(session.fillFetchTargets.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.3.1.6:
+ * in-flight 中の fill 内側 Range Filters も上限合算に含め、合計超過では
+ * 送信前に throw することを検証する。
+ */
+test("bidiSendRequestUpdate: in-flight の fill と合計で上限超過の場合は throw する", async () => {
+  // createBidiSession の peerMaxFilterRanges は 2 のため、2 + 1 で超過する
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  // 1 件目の fill 更新を in-flight のまま残す (2 Ranges)
+  const firstPromise = bidiSendRequestUpdate(session, subscriber, {
+    fill: {
+      rangeFilters: [
+        {
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 3n, end: 4n },
+          ],
+        },
+      ],
+    },
+  });
+  firstPromise.catch(() => {});
+
+  // 2 件目の fill 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      fill: {
+        rangeFilters: [{ type: "subgroup", setId: 1, ranges: [{ start: 0n, end: 1n }] }],
+      },
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  // 1 件目の関連付けは残り、2 件目は登録されない
+  assert.equal(session.fillFetchTargets.size, 1);
+
+  // 後始末: 1 件目を解決して unhandled にしない
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await firstPromise;
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * update の fill で GROUP_ORDER を省略した場合、subscription の指定を継承して
+ * 関連付けられることを検証する。
+ */
+test("bidiSendRequestUpdate: fill の GROUP_ORDER 省略時は subscription の指定を継承する", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setGroupOrder("Descending");
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    fill: {
+      filter: { startGroup: 10n, startObject: 2n },
+    },
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const target = session.fillFetchTargets.get(100n);
+  assert.isDefined(target);
+  assert.equal(target!.groupOrder, GroupOrder.DESCENDING);
 });
 
 test("bidiSendRequestUpdate: Range Filters の Ranges 数が MAX_FILTER_RANGES を超えると throw する", async () => {
@@ -1541,6 +1739,7 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
     pendingFetch: new Map(),
     pendingTrackStatus: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     publishers: new Map([[requestId, publisher]]),
     subscribers: new Map(),
     subscribersByAlias: new Map(),
@@ -1616,6 +1815,7 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
     pendingFetch: new Map(),
     pendingTrackStatus: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     publishers: new Map(),
     subscribers: new Map(),
     subscribersByAlias: new Map(),
@@ -1694,6 +1894,7 @@ async function readPublishOkWithParameters(
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
@@ -2331,6 +2532,120 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
 });
 
 /**
+ * draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
+ * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 LOCATION_FILTER が
+ * End Group 超過の場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ */
+test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 内側の End Group = MAX_VARINT + 1 超過を手組みする
+  const fields = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const overflowValue = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      encodeFillParameters([{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }]),
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.4 / §10.2.15:
+ * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 Range Filter が
+ * 値違反の場合、外側と同様に REQUEST_ERROR (INVALID_FILTER) で応答されることを
+ * 検証する。
+ */
+test("bidiReadRequestStreamMessages: FILL 内側の Range Filter 値違反の REQUEST_UPDATE (publish ロール) で INVALID_FILTER が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // PRIORITY_FILTER (0x27) で 255 超の値を内側に含める
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      encodeFillParameters([{ type: 0x27, value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]) }]),
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR (INVALID_FILTER) が応答され、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側に除去が含まれる
+ * 場合、一回限りの fill に意味を持たないため REQUEST_ERROR (INVALID_FILTER)
+ * で応答されることを検証する。
+ */
+test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDATE (publish ロール) で INVALID_FILTER が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // SUBGROUP_FILTER の除去 (Length=0) を内側に含める
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [encodeFillParameters([{ type: 0x25, value: new Uint8Array([0x00]) }])],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR (INVALID_FILTER) が応答され、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * End Group が 2^64-1 を超える LOCATION_FILTER パラメータを組み立てる
  *
  * draft-ietf-moq-transport-20 §5.1.2 の Length ベース表現で、StartGroup +
@@ -2439,6 +2754,87 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
   for (const response of messages) {
     assert.equal(response.type, MessageType.REQUEST_OK);
   }
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * role=publish の受信 REQUEST_UPDATE に一覧外のパラメータを含む
+ * FILL_PARAMETERS が含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを
+ * 検証する。REQUEST_OK は応答されない。
+ */
+test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // FORWARD (0x10) は Table 6 の一覧に無いため、内側に含めると違反になる
+  const inner = encodeParameters([
+    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+  ]);
+  const lengthBytes = encodeVarint(BigInt(inner.length));
+  const fillValue = new Uint8Array([...lengthBytes, ...inner]);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: fillValue }],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.15:
+ * role=publish の受信 REQUEST_UPDATE に正常な FILL_PARAMETERS が含まれる場合、
+ * 検証を通過して REQUEST_OK が応答されることを検証する (回帰ガード)。
+ * moqt-js は publisher として fill ストリームを開かない。
+ */
+test("bidiReadRequestStreamMessages: 正常な FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      encodeFillParameters(
+        buildFillParameters(
+          {
+            filter: { startGroup: 10n, startObject: 2n },
+            fillTimeout: 100n,
+          },
+          "REQUEST_UPDATE",
+        ),
+      ),
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_OK が応答され、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
 });
 
@@ -2680,6 +3076,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
@@ -2747,6 +3144,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
@@ -2828,6 +3226,7 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,

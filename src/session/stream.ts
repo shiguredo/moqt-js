@@ -9,7 +9,6 @@ import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStre
 import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
 import { IncompleteDataError, ProtocolViolationError } from "../error";
 import { ObjectStatus } from "../message";
-import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
 import type { GroupOrder } from "../message/types";
 import { readDeliveryTimeoutObjectProperties } from "../properties";
@@ -27,6 +26,16 @@ interface StreamStatsUpdate {
   incrementBytesReceived(subscribePath: boolean, bytes: number): void;
 }
 
+/**
+ * Fetch オブジェクトの配送先
+ *
+ * 通常 FETCH は FetcherImpl、fill fetch ストリームは購読へのアダプタが入る。
+ * どちらも active でなければ受け取らない契約は受け側が持つ。
+ */
+export interface FetchObjectSink {
+  handleObject(object: MoqtObject): void;
+}
+
 // ============================================================================
 // processFetchObjects
 // ============================================================================
@@ -37,7 +46,7 @@ interface StreamStatsUpdate {
  */
 export function processFetchObjects(
   buffer: Uint8Array,
-  fetcher: FetcherImpl,
+  sink: FetchObjectSink,
   context: FetchObjectContext | null,
   isFirst: boolean,
   stats: StreamStatsUpdate,
@@ -99,7 +108,7 @@ export function processFetchObjects(
       stats.incrementObjectsReceived(false);
       stats.incrementBytesReceived(false, payload.byteLength);
 
-      fetcher.handleObject(object);
+      sink.handleObject(object);
     } catch (err) {
       if (err instanceof IncompleteDataError) {
         break;
