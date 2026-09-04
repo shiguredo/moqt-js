@@ -28,7 +28,11 @@ import {
 } from "../message/parameterScope";
 import { RequestError, SessionError, SessionErrorCode, normalizeRequestErrorCode } from "../error";
 import * as bidi from "./bidi";
-import { isSessionClosedError, toProtocolViolationSessionError } from "./errors";
+import {
+  REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
+  isSessionClosedError,
+  toProtocolViolationSessionError,
+} from "./errors";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 import type { SessionInternal } from "./types";
@@ -230,11 +234,11 @@ export function rejectPendingNamespaceUpdates(
 /**
  * ストリームクローズ / unsubscribe 時に保留中の更新を失敗させるときの
  * エラー文言。FIN 経路 (handleNamespaceRequestUpdateStreamClosed) と
- * unsubscribe 経路 (closeNamespaceSubscription / closeTracksSubscription) で
- * update() の reject 内容を統一する。
+ * unsubscribe 経路 (closeNamespaceSubscription / closeTracksSubscription) に
+ * 加え、bidi 系・受信 PUBLISH 系の RESET_STREAM 経路でも使う共通文言。
+ * 定義は循環参照を避けて errors.ts に置き、ここから再公開する。
  */
-export const REQUEST_UPDATE_STREAM_CLOSED_MESSAGE =
-  "stream closed before receiving update response";
+export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
 
 /**
  * 確立後の REQUEST_OK (REQUEST_UPDATE 応答) を処理する
