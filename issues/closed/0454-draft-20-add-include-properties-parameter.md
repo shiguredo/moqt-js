@@ -1,7 +1,7 @@
 # INCLUDE_PROPERTIES パラメータを追加する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/add-include-properties-parameter
 - Polished: 2026-09-02
 
@@ -33,3 +33,12 @@ draft-ietf-moq-transport-20 §10.2.21 の `INCLUDE_PROPERTIES` (0x35) を追加�
 
 - draft-ietf-moq-transport-20 §10.2.21 (INCLUDE_PROPERTIES Parameter)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1813, #1847)
+
+## 解決方法
+
+`INCLUDE_PROPERTIES` (0x35) を uint8 パラメータとして追加し、4 経路の送信に対応した。
+
+- 値 0/1 の符号化と範囲外の受信検証をデコード経路に接続する
+- SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS の公開オプションとビルダーに透過する (省略時は不送)
+- 受信側スコープ集合には追加せず、応答混入は既存機構で拒否する
+- `CHANGES.md` の `## develop` に `[ADD]` を追記する

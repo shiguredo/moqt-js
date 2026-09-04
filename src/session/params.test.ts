@@ -16,6 +16,7 @@ import {
   validateRangeFilterSpecs,
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
+  buildTrackStatusParameters,
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
   validateTrackNamespaceForSend,
@@ -1029,4 +1030,96 @@ test("resolveFillGroupOrder: fill・subscription・既定値の優先順位で�
   assert.equal(resolveFillGroupOrder(undefined, "Ascending"), GroupOrder.ASCENDING);
   // どちらも省略時は Ascending (対向既定は不明のため FETCH 既定と同一)
   assert.equal(resolveFillGroupOrder(undefined, undefined), GroupOrder.ASCENDING);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS から
+ * INCLUDE_PROPERTIES を送れることを検証する。true は 1、false は 0 になる。
+ */
+test("buildSubscribeParameters: includeProperties が INCLUDE_PROPERTIES になる", () => {
+  const truthy = buildSubscribeParameters({ includeProperties: true });
+  const truthyParam = truthy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
+  assert.isDefined(truthyParam);
+  assert.deepEqual(truthyParam!.value, new Uint8Array([1]));
+
+  const falsy = buildSubscribeParameters({ includeProperties: false });
+  const falsyParam = falsy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
+  assert.isDefined(falsyParam);
+  assert.deepEqual(falsyParam!.value, new Uint8Array([0]));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * includeProperties 省略時はパラメータ自体を送らない (デフォルト 1 と同等)。
+ */
+test("buildSubscribeParameters: includeProperties 省略時は INCLUDE_PROPERTIES を含まない", () => {
+  const parameters = buildSubscribeParameters({});
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * FETCH から INCLUDE_PROPERTIES を送れることを検証する。
+ * true / false / 省略の 3 状態を網羅する。
+ */
+test("buildFetchParameters: includeProperties が INCLUDE_PROPERTIES になる", () => {
+  const falsy = buildFetchParameters({
+    filter: { startGroup: 0n, startObject: 0n },
+    includeProperties: false,
+  });
+  const falsyParam = falsy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
+  assert.isDefined(falsyParam);
+  assert.deepEqual(falsyParam!.value, new Uint8Array([0]));
+
+  const truthy = buildFetchParameters({
+    filter: { startGroup: 0n, startObject: 0n },
+    includeProperties: true,
+  });
+  const truthyParam = truthy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
+  assert.isDefined(truthyParam);
+  assert.deepEqual(truthyParam!.value, new Uint8Array([1]));
+
+  const omitted = buildFetchParameters({ filter: { startGroup: 0n, startObject: 0n } });
+  assert.isUndefined(omitted.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * SUBSCRIBE_TRACKS から INCLUDE_PROPERTIES を送れることを検証する。
+ * true / false / 省略の 3 状態を網羅する。
+ */
+test("buildSubscribeTracksParameters: includeProperties が INCLUDE_PROPERTIES になる", () => {
+  const truthy = buildSubscribeTracksParameters({ includeProperties: true });
+  const truthyParam = truthy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
+  assert.isDefined(truthyParam);
+  assert.deepEqual(truthyParam!.value, new Uint8Array([1]));
+
+  const falsy = buildSubscribeTracksParameters({ includeProperties: false });
+  const falsyParam = falsy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
+  assert.isDefined(falsyParam);
+  assert.deepEqual(falsyParam!.value, new Uint8Array([0]));
+
+  const omitted = buildSubscribeTracksParameters({});
+  assert.isUndefined(omitted.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.21:
+ * TRACK_STATUS から INCLUDE_PROPERTIES を送れることを検証する。
+ * true / false / 省略の 3 状態を網羅する。
+ */
+test("buildTrackStatusParameters: includeProperties が INCLUDE_PROPERTIES になる", () => {
+  const truthy = buildTrackStatusParameters({ includeProperties: true });
+  assert.deepEqual(
+    truthy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES)?.value,
+    new Uint8Array([1]),
+  );
+  const falsy = buildTrackStatusParameters({ includeProperties: false });
+  assert.deepEqual(
+    falsy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES)?.value,
+    new Uint8Array([0]),
+  );
+  const omitted = buildTrackStatusParameters({});
+  assert.isUndefined(omitted.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES));
 });

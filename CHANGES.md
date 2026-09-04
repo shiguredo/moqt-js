@@ -61,6 +61,10 @@
   - draft-ietf-moq-transport-20 §10.10 に基づき、publisher 発の購読状態通知を受信して subscriber 状態に反映する
   - 購読以外の文脈・subscriber 発・許可外パラメータではセッションを閉じる
   - @voluntas
+- [ADD] INCLUDE_PROPERTIES パラメータを追加する
+  - draft-ietf-moq-transport-20 §10.2.21 に基づき、SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS から Track Properties の受信要求を送れるようにする
+  - 値 0/1 以外を受信した場合はセッションを閉じる
+  - @voluntas
 - [UPDATE] 受信 PUBLISH で Subscription Parameters を許可する
   - draft-ietf-moq-transport-20 §10.11 に基づき、FORWARD / GROUP_ORDER に加えて OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER を受信できるようにする
   - 受信 PUBLISH の LOCATION_FILTER を subscriber の初期フィルタとして反映する (timeouts / SUBSCRIBER_PRIORITY / GROUP_ORDER は受理のみ)
