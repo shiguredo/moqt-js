@@ -17,7 +17,9 @@ import {
 } from "./error";
 import {
   MessageType,
+  MessageParameterType,
   createTrackNamespace,
+  decodeLocationFilterParameter,
   encodeTrackName,
   validateFullTrackName,
   trackNamespaceToStrings,
@@ -3766,12 +3768,10 @@ export class SessionImpl implements Session {
     );
     impl.goawayCallback = subscribeCallbacks.goaway;
 
-    // draft-ietf-moq-transport-19 §5.1 (Subscriptions):
-    // "The initiator of the subscription sets the initial Forward State in
-    //  either PUBLISH or SUBSCRIBE."
-    // 受信 PUBLISH の FORWARD パラメータ (省略時は §10.2.17 のデフォルト 1)
-    // を Forward State として保持する。
-    impl.setForwardState(extractForwardState(decodedPublish.parameters));
+    // 受信 PUBLISH の初期パラメータを反映する。違反時はセッションを閉じ false を返す。
+    if (!this.applyIncomingPublishParameters(impl, decodedPublish.parameters)) {
+      return;
+    }
 
     // draft-ietf-moq-transport-19 §5.1.3:
     // SUBSCRIBE_TRACKS 由来のオブジェクトレベル Range Filter (0x25-0x28) を
@@ -3861,6 +3861,62 @@ export class SessionImpl implements Session {
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * 受信 PUBLISH の初期パラメータを購読に反映する
+   *
+   * draft-ietf-moq-transport-20 §10.11 (PUBLISH) / §10.2.18:
+   * FORWARD (省略時はデフォルト 1) を Forward State として保持する。
+   * 値域外は PROTOCOL_VIOLATION でセッションを閉じる。
+   * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
+   * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
+   * 受理のみで状態反映はしない。この関数では再検証しない
+   * (FORWARD / GROUP_ORDER の uint8 値域は decode 時に検証済み。
+   * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
+   * draft-ietf-moq-transport-20 §10.11 / §10.2.9 / §10.20.1:
+   * LOCATION_FILTER は購読の初期フィルタとして反映する
+   * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
+   * 反映前にすべての値をデコード・検証し、検証通過後にまとめて設定する
+   * (違反確定後の部分反映を防ぐ)。
+   *
+   * @returns 反映できた場合は true、違反でセッションを閉じた場合は false
+   */
+  private applyIncomingPublishParameters(impl: SubscriberImpl, parameters: Parameter[]): boolean {
+    let forwardState: boolean;
+    try {
+      forwardState = extractForwardState(parameters);
+    } catch (error) {
+      const sessionError = toProtocolViolationSessionError(error);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+        return false;
+      }
+      throw error;
+    }
+
+    const locationParam = parameters.find(
+      (param) => param.type === MessageParameterType.LOCATION_FILTER,
+    );
+    let locationFilter: LocationFilter | undefined;
+    if (locationParam !== undefined) {
+      try {
+        locationFilter = decodeLocationFilterParameter(locationParam);
+      } catch (error) {
+        const sessionError = toProtocolViolationSessionError(error);
+        if (sessionError !== null) {
+          this.closeWithError(sessionError);
+          return false;
+        }
+        throw error;
+      }
+    }
+
+    impl.setForwardState(forwardState);
+    if (locationFilter !== undefined) {
+      impl.setLocationFilter(locationFilter);
+    }
+    return true;
   }
 
   /**

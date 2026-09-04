@@ -61,6 +61,11 @@
   - draft-ietf-moq-transport-20 §10.10 に基づき、publisher 発の購読状態通知を受信して subscriber 状態に反映する
   - 購読以外の文脈・subscriber 発・許可外パラメータではセッションを閉じる
   - @voluntas
+- [UPDATE] 受信 PUBLISH で Subscription Parameters を許可する
+  - draft-ietf-moq-transport-20 §10.11 に基づき、FORWARD / GROUP_ORDER に加えて OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER を受信できるようにする
+  - 受信 PUBLISH の LOCATION_FILTER を subscriber の初期フィルタとして反映する (timeouts / SUBSCRIBER_PRIORITY / GROUP_ORDER は受理のみ)
+  - NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は引き続き拒否する
+  - @voluntas
 - [UPDATE] 依存ライブラリを最新版に更新する
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
