@@ -1710,6 +1710,14 @@ export async function bidiCancelSubscription(
 ): Promise<void> {
   const requestId = subscriber.getRequestId();
 
+  // draft-ietf-moq-transport-19 §10.9 / §10.9.1:
+  // unsubscribe により応答 (REQUEST_OK / REQUEST_ERROR) が届かなくなるため、
+  // 保留中の REQUEST_UPDATE は失敗として reject してエントリを削除する。
+  // 残すとアプリは update() の結果を待ち続ける。ストリーム破棄より前に置き、
+  // subscribers / requestStreams の Map 削除より先に実行する (後続の cancel /
+  // abort の成否に関わらず reject を保証する。FIN / RESET 経路と同パターン)。
+  rejectPendingRequestUpdates(session, requestId, new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));
+
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
     try {
@@ -1751,6 +1759,11 @@ export async function bidiCancelFetch(
   fetcher: FetcherImpl,
 ): Promise<void> {
   const requestId = fetcher.getRequestId();
+
+  // FETCH を対象とする REQUEST_UPDATE 送信経路は本実装に存在しない
+  // (bidiSendRequestUpdate は SubscriberImpl のみ受け付ける) ため、当該
+  // requestId を対象とする保留中の更新は登録され得ず、ここでの掃除は不要
+  // (bidiCancelSubscription との意図的な非対称)。
 
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {

@@ -24,6 +24,7 @@ import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
+  bidiCancelSubscription,
   bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
   bidiReadPublishResponse,
@@ -4584,4 +4585,82 @@ test("bidiReadRequestStreamMessages: error コールバックが throw しても
   // error コールバックが throw しても、try/finally により自方向の FIN
   // (writer.close()) が送信される
   assert.deepEqual(ctx.events, ["close"]);
+});
+
+// ============================================================================
+// bidiCancelSubscription の保留中 REQUEST_UPDATE 掃除テスト
+// draft-ietf-moq-transport-19 §10.9 / §10.9.1
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.9.1:
+ * in-flight の REQUEST_UPDATE がある状態で unsubscribe() すると、update() の
+ * Promise が共通文言で reject され、エントリが削除されることを検証する。
+ * 既存のストリーム破棄 (readable.cancel / writer.abort) と Map 削除も維持される。
+ */
+test("bidiCancelSubscription: 応答待ちの REQUEST_UPDATE がある状態で unsubscribe すると reject されてエントリが削除される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  // unsubscribe 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
+  // (同一対象の複数件と別対象の 1 件を混ぜ、requestId スコープを検証する)
+  const rejected: Error[] = [];
+  ctx.session.pendingRequestUpdate.set(90n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected.push(err);
+    },
+    targetRequestId: ctx.requestId,
+  });
+  ctx.session.pendingRequestUpdate.set(91n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected.push(err);
+    },
+    targetRequestId: ctx.requestId,
+  });
+  ctx.session.pendingRequestUpdate.set(92n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected.push(err);
+    },
+    targetRequestId: 999n,
+  });
+
+  await bidiCancelSubscription(ctx.session, subscriber);
+
+  // 同一対象の 2 件が共通文言で reject され、別対象は削除されずに残る
+  assert.equal(rejected.length, 2);
+  assert.equal(rejected[0].message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(rejected[1].message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 1);
+  assert.isTrue(ctx.session.pendingRequestUpdate.has(92n));
+  // 既存の破棄処理も維持される
+  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-19 §10.9 / §10.9.1:
+ * 保留中の更新が無い状態の unsubscribe では何も起きないことを検証する
+ * (回帰ガード。掃除対象が無い場合の no-op)。
+ */
+test("bidiCancelSubscription: 応答待ちの更新が無い状態の unsubscribe では保留中の掃除は何もしない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  await bidiCancelSubscription(ctx.session, subscriber);
+
+  // 掃除対象が無くても既存の破棄処理は行われる
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.closedWithError);
 });
