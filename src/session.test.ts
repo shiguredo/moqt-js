@@ -2480,6 +2480,10 @@ test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読�
     subscriber,
     groupOrder: GroupOrder.ASCENDING,
   });
+  // subscription では落とされる Location ({11, 0} 以降が通過し {10, 0} は不通過。
+  // fill 経由は再適用を通さないため届く)
+  subscriber.setLocationFilter({ startGroup: 0n });
+  subscriber.setLargestLocation({ group: 10n, object: 0n });
 
   const parts = buildFetchStreamParts(requestId);
   const handlePromise = ctx.run();
@@ -2494,6 +2498,8 @@ test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読�
   assert.equal(received[0].groupId, 10n);
   assert.equal(received[0].objectId, 0n);
   assert.deepEqual(received[0].payload, parts.payload);
+  // fill 配線 (handleFillObject 経由) の回帰ガード
+  assert.isTrue(received[0].fillDelivered);
   assert.equal(internals.fillFetchTargets.size, 0);
   // 購読自体は継続する
   assert.equal(subscriber.state, "active");
@@ -2530,6 +2536,8 @@ test("fill fetch ストリーム: 後続 fill (REQUEST_UPDATE Request ID、応�
   assert.equal(ctx.session.state, "connected");
   assert.equal(received.length, 1);
   assert.equal(received[0].groupId, 10n);
+  // fill 配線 (handleFillObject 経由) の回帰ガード
+  assert.isTrue(received[0].fillDelivered);
   assert.isTrue(internals.fillFetchTargets.size === 0);
   assert.equal(subscriber.state, "active");
 });

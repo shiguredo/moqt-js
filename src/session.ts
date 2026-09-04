@@ -552,7 +552,11 @@ export interface SubscribeOptions {
    *
    * FILL_PARAMETERS (0x23) として送信し、live 手前の範囲を fill fetch
    * ストリームで取得する。対向が開いた fill fetch ストリームは購読に紐付けて
-   * 受信する。fill と subscription の二重配送の扱いは別途整理する。
+   * 受信する。fill 経由のオブジェクトは fillDelivered を true にして渡すため、
+   * subscription 経由と区別できる。各 Object を一度だけ受け取りたい場合は、
+   * Next Object の subscription (StartGroup = 0 かつ StartObject = 0) と
+   * open-ended な fill を組み合わせる (publisher が fill を Largest Object で
+   * 終えるため重複なくつながる。§5.1.3 の exactly-once パターン)。
    */
   fill?: FillRequestOptions;
 
@@ -4338,8 +4342,8 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics) / §5.1.3.1:
    * fill fetch ストリームは FETCH と同じオブジェクト framing で届き、
    * FIN は fill 完了 (関連付けを消す)、reset は fill 失敗として扱う。
-   * オブジェクトは購読の object コールバックに渡す。fill と subscription の
-   * 二重配送の区別・扱いは別途整理する。
+   * オブジェクトは fillDelivered を true にして購読の object コールバックに
+   * 渡す (handleFillObject 経由。subscription のフィルタ再適用は通さない)。
    * Malformed Track 検出時はデータストリームを打ち切るのみとし、購読の
    * bidi ストリームには触れない (fill の成否は購読に波及しない。§5.1.3.1)。
    * エラー通知の扱いも別途整理する。

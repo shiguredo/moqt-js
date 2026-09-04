@@ -81,6 +81,10 @@
   - draft-ietf-moq-transport-20 §11.4.4 / §10.2.5 に基づき、Fill Timeout 失効で放棄された範囲を示す Serialization Flags 0x20C の encode / decode に対応し、アプリ向け status 種別として timed_out を追加する
   - 未定義の 128 以上の値は引き続き拒否する
   - @voluntas
+- [ADD] fill 経由と subscription 経由のオブジェクトを区別できるようにする
+  - draft-ietf-moq-transport-20 §5.1.2 / §5.1.3 に基づき、fill fetch 由来のオブジェクトは subscription の Location Filter / Range Filter 再適用を通さず fillDelivered を付けて渡す
+  - 同一 Location が両経路で届いても自動の重複排除は行わず、アプリが fillDelivered で区別する
+  - @voluntas
 - [UPDATE] 受信 PUBLISH で Subscription Parameters を許可する
   - draft-ietf-moq-transport-20 §10.11 に基づき、FORWARD / GROUP_ORDER に加えて OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER を受信できるようにする
   - 受信 PUBLISH の LOCATION_FILTER を subscriber の初期フィルタとして反映する (timeouts / SUBSCRIBER_PRIORITY / GROUP_ORDER は受理のみ)
