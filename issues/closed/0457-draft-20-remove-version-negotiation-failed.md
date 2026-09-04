@@ -1,7 +1,7 @@
 # VERSION_NEGOTIATION_FAILED セッションエラーを削除する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/remove-version-negotiation-failed
 - Polished: 2026-09-02
 
@@ -31,3 +31,9 @@ draft-ietf-moq-transport-20 でセッションエラー `VERSION_NEGOTIATION_FAI
 
 - draft-ietf-moq-transport-20 §15.11.1 (Session Errors)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1867)
+
+## 解決方法
+
+- 公開 API の SessionErrorCode から VERSION_NEGOTIATION_FAILED (0x15) を削除し、定義箇所に欠番注記を追加した。
+- normalizeSessionErrorCode のコメントに未知コードとしての正規化を明記し、0x15 の回帰テストを追加した。
+- 変更履歴の develop に破壊的変更を追記した。

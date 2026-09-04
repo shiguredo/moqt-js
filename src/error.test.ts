@@ -110,6 +110,16 @@ test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規�
   assert.equal(normalizeSessionErrorCode(0x9d), SessionErrorCode.INTERNAL_ERROR);
 });
 
+/**
+ * draft-ietf-moq-transport-20 §15.11.1 / §14 / Appendix A.1:
+ * 削除された 0x15 VERSION_NEGOTIATION_FAILED は未知コードとして
+ * INTERNAL_ERROR に正規化されることを検証する。
+ */
+test("normalizeSessionErrorCode: 削除された 0x15 は INTERNAL_ERROR に正規化", () => {
+  assert.isFalse("VERSION_NEGOTIATION_FAILED" in SessionErrorCode);
+  assert.equal(normalizeSessionErrorCode(0x15), SessionErrorCode.INTERNAL_ERROR);
+});
+
 test("normalizeDataStreamErrorCode: 既知のコードはそのまま通す", () => {
   assert.equal(normalizeDataStreamErrorCode(0x0), DataStreamErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeDataStreamErrorCode(0x1), DataStreamErrorCode.CANCELLED);

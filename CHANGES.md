@@ -46,6 +46,10 @@
   - draft-ietf-moq-transport-20 §10.12 / §15.11.3 / §14 に基づき、0x3 を未知コードとして INTERNAL_ERROR に正規化する
   - 旧版 moqt-js が送る SUBSCRIPTION_ENDED はエラーとして通知される
   - @voluntas
+- [CHANGE] VERSION_NEGOTIATION_FAILED セッションエラーを削除する
+  - draft-ietf-moq-transport-20 §15.11.1 / §14 に基づき、0x15 を SessionErrorCode から削除し未知コードとして INTERNAL_ERROR に正規化する
+  - 旧版 moqt-js が送る VERSION_NEGOTIATION_FAILED はエラーとして通知される
+  - @voluntas
 - [ADD] Range Filter の評価 (マッチング) ロジックを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY の評価関数 (SetID ごとの AND / OR 結合、両端含む判定、open-ended) を実装する
   - SubscriberImpl の handleObject / handleDatagram に Range Filter 再適用を追加し、不通過オブジェクトを破棄する

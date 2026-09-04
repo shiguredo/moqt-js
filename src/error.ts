@@ -13,6 +13,9 @@ export { PublishDoneStatusCode };
  * Session Termination Error Codes (Section 3.5 Termination)
  *
  * draft-ietf-moq-transport-19 Section 3.5 (Termination)
+ *
+ * draft-ietf-moq-transport-20 Appendix A.1 で 0x15
+ * VERSION_NEGOTIATION_FAILED は削除された。
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
@@ -29,7 +32,6 @@ export const SessionErrorCode = {
   DATA_STREAM_TIMEOUT: 0x12,
   AUTH_TOKEN_CACHE_OVERFLOW: 0x13,
   DUPLICATE_AUTH_TOKEN_ALIAS: 0x14,
-  VERSION_NEGOTIATION_FAILED: 0x15,
   MALFORMED_AUTH_TOKEN: 0x16,
   UNKNOWN_AUTH_TOKEN_ALIAS: 0x17,
   EXPIRED_AUTH_TOKEN: 0x18,
@@ -118,8 +120,9 @@ export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
 }
 
 /**
- * draft-ietf-moq-transport-19 §14 (Grease):
+ * draft-ietf-moq-transport-20 §14 (Grease):
  * 未知の Session Termination エラーコードは INTERNAL_ERROR として扱う。
+ * 削除された 0x15 VERSION_NEGOTIATION_FAILED も未知扱いで正規化される。
  */
 const SESSION_ERROR_CODE_SET = new Set(Object.values(SessionErrorCode));
 
