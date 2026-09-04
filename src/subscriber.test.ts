@@ -658,3 +658,70 @@ test("setGroupOrder / getGroupOrder: SUBSCRIBE 送信時の Group Order を保�
   subscriber.setGroupOrder("Descending");
   assert.equal(subscriber.getGroupOrder(), "Descending");
 });
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2 / §5.1.3:
+ * 同一 Location が fill 経由と subscription 経由の両方で届く場合に、
+ * アプリが両者を区別して受け取れることを検証する。
+ * fill 経由は subscription の Location Filter 再適用を通さないため、
+ * subscription では落とされる Location も fill では届く。
+ */
+test("handleFillObject: 同一 Location の fill 経由と subscription 経由を区別して受け取れる", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+
+  // subscription を Next Group 以降に絞る
+  // (Largest {7, 2} に対して {8, 0} 以降が通過する)
+  subscriber.setLocationFilter({ startGroup: 0n });
+  subscriber.setLargestLocation({ group: 7n, object: 2n });
+
+  // subscription 経由では Location Filter 再適用で落とされる
+  subscriber.handleObject(createObject(7n, 2n));
+  assert.equal(delivered.length, 0);
+
+  // fill 経由では再適用を通さず fillDelivered を付けて届く
+  subscriber.handleFillObject(createObject(7n, 2n));
+  assert.equal(delivered.length, 1);
+  assert.isTrue(delivered[0]?.fillDelivered);
+  assert.equal(delivered[0]?.groupId, 7n);
+  assert.equal(delivered[0]?.objectId, 2n);
+
+  // subscription 経由で届くものには fillDelivered が付かない
+  subscriber.handleObject(createObject(8n, 0n));
+  assert.equal(delivered.length, 2);
+  assert.isUndefined(delivered[1]?.fillDelivered);
+
+  // 同一 Location が両経路で届いても区別できる
+  subscriber.handleFillObject(createObject(8n, 0n));
+  assert.equal(delivered.length, 3);
+  assert.isTrue(delivered[2]?.fillDelivered);
+  assert.equal(delivered[1]?.groupId, delivered[2]?.groupId);
+  assert.equal(delivered[1]?.objectId, delivered[2]?.objectId);
+
+  // Range Filter を設定しても fill 経由は再適用を通さず届く
+  // (OBJECTID_FILTER 5-7: objectId 10 は subscription では不通過)
+  subscriber.setRangeFilters([{ type: "objectId", setId: 0, ranges: [{ start: 5n, end: 7n }] }]);
+  subscriber.handleObject(createObject(8n, 10n));
+  assert.equal(delivered.length, 3);
+  subscriber.handleFillObject(createObject(8n, 10n));
+  assert.equal(delivered.length, 4);
+  assert.isTrue(delivered[3]?.fillDelivered);
+  assert.equal(delivered[3]?.objectId, 10n);
+});
+
+/**
+ * handleObject と同様に、closed 状態の handleFillObject は配信しない。
+ */
+test("closed 状態では handleFillObject は配信しない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+
+  subscriber.markClosed();
+  subscriber.handleFillObject(createObject(0n, 0n));
+
+  assert.equal(delivered.length, 0);
+});

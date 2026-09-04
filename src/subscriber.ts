@@ -407,17 +407,23 @@ export class SubscriberImpl implements Subscriber {
   /**
    * fill fetch ストリームから届いたオブジェクトを受け取る
    *
-   * draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
-   * fill-delivered のオブジェクトは fill 範囲に従属するため、subscription の
-   * Location Filter / Range Filter 再適用 (handleObject) を通さず、そのまま
-   * object コールバックに渡す。fill と subscription の二重配送の区別・扱いは
-   * 別途整理する。state が closed の場合は受け取らない。
+   * draft-ietf-moq-transport-20 §5.1.2 / §5.1.3 (Fill Semantics):
+   * fill-delivered のオブジェクトは fill 範囲 (FILL_PARAMETERS 内のフィルタ)
+   * に従属するため、subscription の Location Filter / Range Filter 再適用
+   * (handleObject) を通さず、fillDelivered を true にして object
+   * コールバックに渡す。subscription-delivered (handleObject 経由) とは
+   * fillDelivered の値で区別できる。同一 Location が両経路で届いた場合の
+   * 二重処理の回避はアプリの責務であり、自動の重複排除は行わない。
+   * 各 Object を一度だけ受け取りたい場合は、Next Object の subscription
+   * (StartGroup = 0 かつ StartObject = 0) と open-ended な fill を組み合わせる
+   * (publisher が fill を Largest Object で終えるため重複なくつながる。
+   * §5.1.3 の exactly-once パターン)。state が closed の場合は受け取らない。
    */
   handleFillObject(object: MoqtObject): void {
     if (this.subscriberState === "closed") {
       return;
     }
-    this.objectCallback(object);
+    this.objectCallback({ ...object, fillDelivered: true });
   }
 
   /**

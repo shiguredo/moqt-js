@@ -1,7 +1,7 @@
 # fill-delivered と subscription-delivered の受信経路を分離して扱う
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/add-handle-fill-vs-subscription-delivery
 - Polished: 2026-09-02
 
@@ -34,3 +34,10 @@ draft-ietf-moq-transport-20 §5.1.2 / §5.1.3 は Object を subscription-delive
 - draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1673)
 - 前提: `issues/0450-draft-20-add-fill-parameters-and-fill-fetch.md`
+
+## 解決方法
+
+- 公開型 MoqtObject に fillDelivered を追加し、fill fetch 由来のオブジェクトに true を付けて渡すようにした。
+- handleFillObject は subscription の Location Filter / Range Filter 再適用を通さないことを維持し、区別可能性を回帰テストで固定した。
+- exactly-once パターン (Next Object の subscription と open-ended な fill の組み合わせ) を API コメントに記載した。
+- 変更履歴の develop に後方互換の追加を追記した。
