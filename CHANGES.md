@@ -52,6 +52,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] RESET_STREAM のエラーコードを subscriber のエラー通知に反映する
+  - draft-ietf-moq-transport-20 §3.3.4 に基づき、ピアの RESET_STREAM 検出時に読み取り失敗値の streamErrorCode を正規化して通知エラーの streamErrorCode プロパティに載せ、メッセージにコード名を付加する
+  - コード値が無い場合や数値でない場合は従来の固定文言のみで通知し、未知値は内部エラーに正規化する
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)

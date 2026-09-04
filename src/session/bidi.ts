@@ -9,11 +9,13 @@
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import type { MoqtObject } from "../dataStream";
 import {
+  DataStreamErrorCode,
   InvalidFilterError,
   RequestError,
   RequestErrorCode,
   SessionError,
   SessionErrorCode,
+  normalizeDataStreamErrorCode,
   normalizeRequestErrorCode,
   normalizePublishDoneCode,
 } from "../error";
@@ -1268,7 +1270,7 @@ export async function bidiReadRequestStreamMessages(
       // throw すると戻り値の Promise が reject し、fire-and-forget の void 呼び出し
       // で unhandled rejection になるためである。
       try {
-        notifySubscriberFailure(session, requestId, new Error(RESET_REQUEST_STREAM_MESSAGE));
+        notifySubscriberFailure(session, requestId, createResetStreamError(error));
       } catch {
         // アプリの error コールバック例外は吸収する (markClosed は
         // notifySubscriberFailure 内の finally で実行済み)。
@@ -1790,6 +1792,53 @@ export const FIN_WITHOUT_PUBLISH_DONE_MESSAGE =
 
 // ピアが RESET_STREAM でストリームをエラー終了させた際のエラーメッセージ
 export const RESET_REQUEST_STREAM_MESSAGE = "publisher reset request stream";
+
+/**
+ * ストリームリセットのエラーコード値からコード名を求める
+ *
+ * draft-ietf-moq-transport-20 §3.3.4 の名前付き列挙をメッセージ組み立てに使う。
+ * 正規化済みの値を前提とするため、一致なしは起きないはずだが、
+ * 念のため内部エラー名に倒す。
+ */
+function getDataStreamErrorCodeName(code: DataStreamErrorCode): string {
+  for (const [name, value] of Object.entries(DataStreamErrorCode)) {
+    if (value === code) {
+      return name;
+    }
+  }
+  return "INTERNAL_ERROR";
+}
+
+/**
+ * ピアの RESET_STREAM 由来のエラーを通知用の Error に変換する
+ *
+ * draft-ietf-moq-transport-20 §3.3.4:
+ * "The application SHOULD use a relevant error code when resetting or
+ *  sending STOP_SENDING on any stream."
+ * ピアが用いたエラーコードは読み取り失敗値の streamErrorCode
+ * (W3C WebTransport の WebTransportError が source === "stream" のときのみ
+ * 非 null で持つ) から取得できる。取得できた場合は正規化した値を
+ * streamErrorCode プロパティに載せ、メッセージにもコード名を付加して
+ * アプリが終了理由を区別できるようにする。未知値は draft-ietf-moq-transport-20
+ * §14 に従い内部エラーに正規化する。
+ * 取得できない場合 (未提供や型不一致) は従来の固定文言のみで通知し、
+ * プロパティも付けない。 FIN 由来のエラーはコードを持たない別イベントの
+ * ため本関数の対象外とする。
+ */
+export function createResetStreamError(rawError: unknown): Error {
+  if (typeof rawError !== "object" || rawError === null) {
+    return new Error(RESET_REQUEST_STREAM_MESSAGE);
+  }
+  const streamErrorCode = (rawError as { streamErrorCode?: unknown }).streamErrorCode;
+  if (typeof streamErrorCode !== "number") {
+    return new Error(RESET_REQUEST_STREAM_MESSAGE);
+  }
+  const normalized = normalizeDataStreamErrorCode(streamErrorCode);
+  const name = getDataStreamErrorCodeName(normalized);
+  const error = new Error(`${RESET_REQUEST_STREAM_MESSAGE}: ${name}(0x${normalized.toString(16)})`);
+  (error as Error & { streamErrorCode: DataStreamErrorCode }).streamErrorCode = normalized;
+  return error;
+}
 
 /**
  * ピアによる FIN (PUBLISH_DONE なし) または RESET_STREAM によるストリーム

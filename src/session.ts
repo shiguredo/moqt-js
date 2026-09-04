@@ -3415,7 +3415,8 @@ export class SessionImpl implements Session {
             // 委ねるため、生の callbacks.error は呼ばない (二重通知になる)。
             // notifySubscriberFailure は subscribers から引くため、unsubscribe 済みで
             // エントリが削除された窓では通知しない (subscribe ロール側と同じ)。
-            // 通知メッセージは subscribe ロール側と同一の固定文言を使う。
+            // 通知メッセージは subscribe ロール側と同一の組み立てを使う
+            // (ピアのエラーコード付き、取得不可時は固定文言)。
             // 内側に try/catch が必要なのは、catch ブロック内で throw すると戻り値の
             // Promise が reject し、呼び出し元の requestStreams / subscribers の
             // クリーンアップがスキップされるためである。ここが守るのはこの通知経路
@@ -3425,7 +3426,7 @@ export class SessionImpl implements Session {
               bidi.notifySubscriberFailure(
                 this as unknown as bidi.BidiSessionInternal,
                 publishRequestId,
-                new Error(bidi.RESET_REQUEST_STREAM_MESSAGE),
+                bidi.createResetStreamError(err),
               );
             } catch {
               // アプリの error コールバック例外は吸収する (markClosed は
