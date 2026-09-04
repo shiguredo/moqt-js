@@ -877,6 +877,437 @@ test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", ()
 });
 
 /**
+ * Subgroup が交互に出現する場合の Priority 不一致検出テスト
+ * draft-ietf-moq-transport-19 §2.4.2:
+ * "An Object with a particular Subgroup ID is received, but its Publisher
+ *  Priority is different from that of the previous Object with the same
+ *  Subgroup ID."
+ * S1 → S2 → S1 のように Subgroup が交互しても、同一 Subgroup ID の直近
+ * オブジェクトとの比較で不一致を検出する。
+ */
+test("FetchObjectFields: 交互に出現する Subgroup の Priority 不一致は検出される", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 2, Priority 200)
+  // S1 の Priority (100) とは比較されず、正常にデコードされる
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 2n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [secondDecoded, , secondContext] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+  );
+  assert.equal(secondDecoded.subgroupId, 2n);
+  assert.equal(secondDecoded.publisherPriority, 200);
+
+  // 3 番目のオブジェクト (Group 10, Subgroup 1, Priority 150)
+  // 直前の S2 ではなく同一 Subgroup ID の直近オブジェクト (S1 の 100) と
+  // 比較され、不一致として検出される
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 2n,
+    publisherPriority: 150,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext);
+
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, secondContext, 0, false),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
+ * Subgroup が交互に出現しても Priority が一致すれば検出されないテスト
+ * draft-ietf-moq-transport-19 §2.4.2:
+ * 同一 Subgroup ID の直近オブジェクトと Priority が一致する場合は合法であり、
+ * 直前オブジェクトと Subgroup ID が異なっても誤検出しない。
+ */
+test("FetchObjectFields: 交互に出現しても同一 Subgroup の Priority 一致は誤検出されない", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 2, Priority 200)
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 2n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [, , secondContext] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+
+  // 3 番目のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  // 同一 Subgroup ID の直近オブジェクト (S1 の 100) と一致するため、
+  // 正常にデコードされる
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 2n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext);
+
+  const [decoded] = decodeFetchObjectFields(thirdEncoded, secondContext, 0, false);
+  assert.equal(decoded.groupId, 10n);
+  assert.equal(decoded.subgroupId, 1n);
+  assert.equal(decoded.publisherPriority, 100);
+});
+
+/**
+ * 同一 Group 内の End of Range を挟んだ交互出現のテスト
+ * draft-ietf-moq-transport-19 §2.4.2 / §11.4.4.2:
+ * 同一 Group 内の End of Range では Subgroup ごとの追跡が維持されるため、
+ * 交互出現後の同一 Subgroup の不一致も検出される。
+ */
+test("FetchObjectFields: 同一 Group の End of Range を挟んだ交互出現の不一致は検出される", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 2, Priority 200)
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 2n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [, , secondContext] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+
+  // 同一 Group の End of Range (Group は変更されない)
+  const eor: FetchObjectFields = {
+    serializationFlags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE,
+    groupId: 10n,
+    objectId: 9n,
+    payloadLength: 0n,
+  };
+  const eorEncoded = encodeFetchObjectFields(eor);
+  const [, , eorContext] = decodeFetchObjectFields(eorEncoded, secondContext, 0, false);
+
+  // End of Range 後の Subgroup 1 (Priority 150: 直近の S1 の 100 と不一致)
+  // End of Range 後のコンテキストは直前の S2 を指すため、明示指定で S1 に戻る
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 10n,
+    publisherPriority: 150,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, eorContext);
+
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, eorContext, 0, false),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
+ * Datagram を挟んだ交互出現のテスト
+ * draft-ietf-moq-transport-19 §2.4.2:
+ * Datagram は Subgroup に属さないため追跡を更新しない。Datagram を挟んだ
+ * 交互出現後の同一 Subgroup の不一致も、同一 Subgroup ID の直近オブジェクト
+ * との比較で検出される。
+ */
+test("FetchObjectFields: Datagram を挟んだ交互出現の不一致は検出される", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 2, Priority 200)
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 2n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [, , secondContext] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+
+  // Datagram オブジェクト (Group 10, Priority 250)
+  // Subgroup に属さないため、Subgroup ごとの追跡は更新されない
+  const datagram: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.DATAGRAM |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 2n,
+    publisherPriority: 250,
+    payloadLength: 50n,
+  };
+  const datagramEncoded = encodeFetchObjectFields(datagram, false, secondContext);
+  const [, , datagramContext] = decodeFetchObjectFields(datagramEncoded, secondContext, 0, false);
+
+  // Datagram 後の Subgroup 1 (Priority 150: 直近の S1 の 100 と不一致)
+  // Datagram の 250 とは比較されない
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 3n,
+    publisherPriority: 150,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, datagramContext);
+
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, datagramContext, 0, false),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
+ * Descending Group Order での交互出現テスト
+ * draft-ietf-moq-transport-19 §2.4.2:
+ * 追跡更新は Group Order に依存しないため、Descending でも同一 Subgroup ID の
+ * 直近オブジェクトとの比較で不一致を検出する。
+ */
+test("FetchObjectFields: Descending でも交互に出現する Subgroup の不一致は検出される", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(
+    firstEncoded,
+    null,
+    0,
+    true,
+    GroupOrder.DESCENDING,
+  );
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 2, Priority 200)
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 2n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [, , secondContext] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+    GroupOrder.DESCENDING,
+  );
+
+  // 3 番目のオブジェクト (Group 10, Subgroup 1, Priority 150)
+  // 同一 Subgroup ID の直近オブジェクト (S1 の 100) と不一致のため検出される
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 2n,
+    publisherPriority: 150,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext);
+
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, secondContext, 0, false, GroupOrder.DESCENDING),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
+ * Subgroup ID 0 の交互出現テスト
+ * draft-ietf-moq-transport-19 §2.4.2:
+ * Subgroup ID 0 も Map のキーとして区別され、未登録 (undefined) と混同されずに
+ * 追跡される。S0 → S1 → S0 の交互でも同一 Subgroup ID の直近値と比較する。
+ */
+test("FetchObjectFields: Subgroup ID 0 の交互出現の不一致は検出される", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 0, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 1, Priority 200)
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 1n,
+    publisherPriority: 200,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [, , secondContext] = decodeFetchObjectFields(secondEncoded, firstContext, 0, false);
+
+  // 3 番目のオブジェクト (Group 10, Subgroup 0, Priority 150)
+  // 同一 Subgroup ID の直近オブジェクト (S0 の 100) と不一致のため検出される
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 0n,
+    objectId: 2n,
+    publisherPriority: 150,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext);
+
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, secondContext, 0, false),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
+ * Priority 省略を挟んだ同一 Subgroup の不一致検出テスト
+ * draft-ietf-moq-transport-19 §11.4.4.1 Table 9 / §2.4.2:
+ * Priority 省略のオブジェクト自体は比較対象外 (寛容解釈) とするが、
+ * 追跡は解決後の継承値で更新される。後続の明示値は更新後の基準と比較される。
+ */
+test("FetchObjectFields: Priority 省略を挟んだ同一 Subgroup の不一致は検出される", () => {
+  // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 50n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  // 2 番目のオブジェクト (Group 10, Subgroup 1, Priority 省略)
+  // 直近の実オブジェクト (100) を継承し、比較されずにデコードされる
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT,
+    objectId: 1n,
+    payloadLength: 50n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+  const [secondDecoded, , secondContext] = decodeFetchObjectFields(
+    secondEncoded,
+    firstContext,
+    0,
+    false,
+  );
+  assert.equal(secondDecoded.publisherPriority, 100);
+
+  // 3 番目のオブジェクト (Group 10, Subgroup 1, Priority 150)
+  // 追跡基準 (100) と不一致のため検出される
+  const third: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    objectId: 2n,
+    publisherPriority: 150,
+    payloadLength: 50n,
+  };
+  const thirdEncoded = encodeFetchObjectFields(third, false, secondContext);
+
+  assert.throws(
+    () => decodeFetchObjectFields(thirdEncoded, secondContext, 0, false),
+    MalformedTrackError,
+    /malformed track: different priorities in same subgroup/,
+  );
+});
+
+/**
  * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
  * "If the Group Order is Ascending (default), the Group ID is the prior
  *  Object's Group ID plus the Group ID Delta + 1."
