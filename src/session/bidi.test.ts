@@ -19,8 +19,9 @@ import { encodePublishDonePayload } from "../message/publish";
 import { MessageType, MessageParameterType } from "../message/types";
 import { trackNamespaceToStrings } from "../message";
 import { decodeRequestUpdatePayload, encodeRequestUpdatePayload } from "../message/subscribe";
-import { getParameterTrackNamespace } from "../message/parameter";
+import { getParameterTrackNamespace, encodeLocationFilterParameter } from "../message/parameter";
 import { SessionError, SessionErrorCode, RequestErrorCode, RequestError } from "../error";
+import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
@@ -2330,6 +2331,118 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
 });
 
 /**
+ * End Group が 2^64-1 を超える LOCATION_FILTER パラメータを組み立てる
+ *
+ * draft-ietf-moq-transport-20 §5.1.2 の Length ベース表現で、StartGroup +
+ * EndGroupDelta が超過する値を手組みする。encodeLocationFilterParameter
+ * は送信前に throw するためエンコーダでは組み立てられない。
+ * 4 フィールド表現 (EndObject 付き) も対象にする。
+ */
+function buildOverflowingLocationFilterParameter(withEndObject = false): {
+  type: number;
+  value: Uint8Array;
+} {
+  // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
+  // End Group = MAX_VARINT + 1 で 2^64-1 超過
+  const rawFields = [encodeVarint(MAX_VARINT), encodeVarint(0n), encodeVarint(1n)];
+  if (withEndObject) {
+    rawFields.push(encodeVarint(0n));
+  }
+  const fields = new Uint8Array(rawFields.flatMap((part) => [...part]));
+  const value = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
+  return { type: MessageParameterType.LOCATION_FILTER, value };
+}
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * role=publish の受信 REQUEST_UPDATE に End Group 超過の LOCATION_FILTER が
+ * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * REQUEST_OK は応答されない。
+ */
+test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含む REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
+  // 3 フィールド表現と 4 フィールド (EndObject 付き) 表現の両方で検証する
+  const overflowing = [
+    buildOverflowingLocationFilterParameter(),
+    buildOverflowingLocationFilterParameter(true),
+  ];
+  for (const parameter of overflowing) {
+    const ctx = createPublishReadTestContext({});
+
+    const readPromise = bidiReadRequestStreamMessages(
+      ctx.session,
+      ctx.requestId,
+      ctx.stream,
+      ctx.controlReader,
+      "publish",
+    );
+    const updatePayload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: ctx.requestId,
+      parameters: [parameter],
+    });
+    const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+    ctx.readableController.enqueue(message);
+    ctx.readableController.close();
+    await readPromise;
+
+    // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+    assert.isDefined(ctx.closedWithError);
+    assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.written.length, 0);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * role=publish の受信 REQUEST_UPDATE に正常な LOCATION_FILTER が含まれる場合、
+ * 従来どおり REQUEST_OK が応答されセッションが閉じないことを検証する
+ * (回帰ガード)。
+ */
+test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 除去 (Length 0) / 1 フィールド相対 / AbsoluteStart / 域内 AbsoluteRange /
+  // End Group = 2^64-1 ちょうどの境界値の 5 種はいずれも有効
+  const validFilters = [
+    encodeLocationFilterParameter({ reset: true }),
+    encodeLocationFilterParameter({ startGroup: 3n }),
+    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
+    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n, endGroupDelta: 5n }),
+    encodeLocationFilterParameter({
+      startGroup: MAX_VARINT - 5n,
+      startObject: 7n,
+      endGroupDelta: 5n,
+    }),
+  ];
+  for (const filter of validFilters) {
+    const updatePayload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: ctx.requestId,
+      parameters: [filter],
+    });
+    const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+    ctx.readableController.enqueue(message);
+  }
+  ctx.readableController.close();
+  await readPromise;
+
+  // 5 通とも REQUEST_OK が応答され、セッションは閉じない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 5);
+  for (const response of messages) {
+    assert.equal(response.type, MessageType.REQUEST_OK);
+  }
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-19 §5.1.3:
  * role=publish の受信 REQUEST_UPDATE に同一組み合わせの重複 Range Filter が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
@@ -2652,6 +2765,154 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
   assert.isFalse(session.pendingPublish.has(requestId));
   assert.isDefined(rejected);
   assert.equal(rejected!.message, closedWithError!.message);
+});
+
+/**
+ * PUBLISH_OK 応答の LOCATION_FILTER 検証を駆動するセッションを構築する
+ *
+ * 指定パラメータの PUBLISH_OK を ReadableStream に 1 通だけ enqueue し、
+ * 解決・拒否・セッション終了の観測点を返す。PUBLISH_OK 受信時の値検証に使う。
+ * 観測点はゲッター関数で返す (生成コンテキストごとの参照安定性のため)。
+ */
+function createPublishOkValidationContext(parameters: { type: number; value: Uint8Array }[]): {
+  session: BidiSessionInternal;
+  resolved: () => PublisherImpl | undefined;
+  rejected: () => Error | undefined;
+  closedWithError: () => SessionError | undefined;
+  requestId: bigint;
+} {
+  const requestId = 10n;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const okPayload = encodeRequestOkPayload({
+        type: MessageType.REQUEST_OK,
+        parameters,
+        trackProperties: [],
+      });
+      const writer = new ControlStreamWriter();
+      controller.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const controlReader = new ControlStreamReader();
+
+  let resolvedPublisher: PublisherImpl | undefined;
+  let rejectedError: Error | undefined;
+  let closedError: SessionError | undefined;
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter: new ControlStreamWriter(),
+    nextRequestId: 100n,
+    pendingPublish: new Map([
+      [
+        requestId,
+        {
+          impl: new PublisherImpl(["test"], "track", requestId, 1n),
+          resolve: (publisher: PublisherImpl) => {
+            resolvedPublisher = publisher;
+          },
+          reject: (error: Error) => {
+            rejectedError = error;
+          },
+        },
+      ],
+    ]),
+    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    tracksSubscriptions: new Map(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      closedError = error;
+    },
+  } as unknown as BidiSessionInternal;
+
+  return {
+    session,
+    resolved: () => resolvedPublisher,
+    rejected: () => rejectedError,
+    closedWithError: () => closedError,
+    requestId,
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * PUBLISH_OK に End Group が 2^64-1 を超える AbsoluteRange の LOCATION_FILTER が
+ * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * pendingPublish と requestStreams の該当エントリは残らない。
+ */
+test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUBLISH_OK でセッションが閉じる", async () => {
+  // 3 フィールド表現と 4 フィールド (EndObject 付き) 表現の両方で検証する
+  const overflowing = [
+    buildOverflowingLocationFilterParameter(),
+    buildOverflowingLocationFilterParameter(true),
+  ];
+  for (const parameter of overflowing) {
+    const ctx = createPublishOkValidationContext([parameter]);
+    const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
+      stream: WebTransportBidirectionalStream;
+      controlReader: ControlStreamReader;
+    };
+
+    await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
+
+    // PROTOCOL_VIOLATION でセッションが閉じ、該当エントリが残らない
+    assert.isDefined(ctx.closedWithError());
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+    assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+    assert.isDefined(ctx.rejected());
+    assert.isUndefined(ctx.resolved());
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * 正常な LOCATION_FILTER (除去 / 1 フィールド相対 / AbsoluteStart / 域内
+ * AbsoluteRange / End Group = 2^64-1 ちょうどの境界値) を含む PUBLISH_OK では
+ * セッションが閉じず、従来どおり解決されることを検証する (回帰ガード)。
+ */
+test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK は解決される", async () => {
+  const validFilters = [
+    encodeLocationFilterParameter({ reset: true }),
+    encodeLocationFilterParameter({ startGroup: 3n }),
+    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
+    encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n, endGroupDelta: 5n }),
+    encodeLocationFilterParameter({
+      startGroup: MAX_VARINT - 5n,
+      startObject: 7n,
+      endGroupDelta: 5n,
+    }),
+  ];
+  for (const filter of validFilters) {
+    const ctx = createPublishOkValidationContext([filter]);
+    const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
+      stream: WebTransportBidirectionalStream;
+      controlReader: ControlStreamReader;
+    };
+
+    await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
+
+    // セッションは閉じず、pending が解決されて publisher が登録される
+    assert.isUndefined(ctx.closedWithError());
+    assert.isDefined(ctx.resolved());
+    assert.isUndefined(ctx.rejected());
+    assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+    assert.isTrue(ctx.session.publishers.has(ctx.requestId));
+  }
 });
 
 /**

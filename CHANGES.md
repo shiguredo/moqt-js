@@ -77,6 +77,10 @@
   - SubscriberImpl.update を非 async 化し、同一インスタンスに catch ハンドラを登録した Promise を直接返す。await する呼び出しには reject が伝播する
   - onUpdate の同期 throw も rejected な Promise に変換する。closed 時の rejected な Promise にも抑制ハンドラを付け、onUpdate 未設定時は解決済み Promise を返す
   - @voluntas
+- [FIX] PUBLISH_OK / REQUEST_UPDATE 受信時の LOCATION_FILTER を値検証する
+  - draft-ietf-moq-transport-20 §5.1.2 に基づき、End Group が 2^64-1 を超えるフィルタを受信した場合は PROTOCOL_VIOLATION でセッションを閉じる
+  - 検証は両経路の既存 catch 変換に委ね、正常なフィルタでは従来どおり解決・応答する
+  - @voluntas
 - [FIX] ピアの FIN (GOAWAY なし) 時に応答待ちの REQUEST_UPDATE をクリーンアップする
   - draft-ietf-moq-transport-19 §10.9.1 / §3.3.2 に基づき、bidiReadRequestStreamMessages と runPublishStreamSubLoop の FIN 検出時に保留中の REQUEST_UPDATE を reject してエントリを削除する
   - update() の Promise が未解決のまま残らないようにする (GOAWAY 後の FIN はエントリ削除済みのため no-op)
