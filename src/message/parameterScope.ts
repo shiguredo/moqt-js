@@ -128,8 +128,11 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
 /**
  * PUBLISH メッセージの許可パラメータ
  *
- * draft-ietf-moq-transport-19 §10.19.1: SUBSCRIBE_TRACKS の結果 PUBLISH に
- * GROUP_ORDER が載るため許可する（Section 10.2.8 の MAY 列挙より 10.19.1 を優先）
+ * draft-ietf-moq-transport-20 §10.11 (PUBLISH):
+ * FORWARD / GROUP_ORDER / SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT /
+ * OBJECT_DELIVERY_TIMEOUT / LOCATION_FILTER を初期 Subscription Parameters
+ * として運べる。§10.20.1 により SUBSCRIBE_TRACKS 由来の PUBLISH でも明示される。
+ * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に出現できない。
  */
 export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
@@ -137,6 +140,10 @@ export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LARGEST_OBJECT,
   MessageParameterType.FORWARD,
   MessageParameterType.GROUP_ORDER,
+  MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+  MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+  MessageParameterType.SUBSCRIBER_PRIORITY,
+  MessageParameterType.LOCATION_FILTER,
 ]);
 
 /** FETCH_OK メッセージの許可パラメータ */

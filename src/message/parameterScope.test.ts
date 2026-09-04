@@ -216,3 +216,72 @@ test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
   assert.isTrue(result);
   assert.equal(errors.length, 0);
 });
+
+/**
+ * draft-ietf-moq-transport-20 §10.11:
+ * PUBLISH は初期 Subscription Parameters として FORWARD / GROUP_ORDER /
+ * SUBSCRIBER_PRIORITY / SUBGROUP_DELIVERY_TIMEOUT / OBJECT_DELIVERY_TIMEOUT /
+ * LOCATION_FILTER を運べる。既存 5 種に加えた 4 種が許可されることを検証する。
+ */
+test("PUBLISH_ALLOWED_PARAMS は Subscription Parameters 4 種を含む", () => {
+  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.OBJECT_DELIVERY_TIMEOUT));
+  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT));
+  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.SUBSCRIBER_PRIORITY));
+  assert.isTrue(PUBLISH_ALLOWED_PARAMS.has(MessageParameterType.LOCATION_FILTER));
+  assert.equal(PUBLISH_ALLOWED_PARAMS.size, 9);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.11:
+ * 新規 4 種付き PUBLISH はいずれもスコープ検証を通過する。
+ */
+test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
+  for (const type of [
+    MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBSCRIBER_PRIORITY,
+    MessageParameterType.LOCATION_FILTER,
+  ]) {
+    const errors: SessionError[] = [];
+    const result = validateParameterScope(
+      [{ type }],
+      PUBLISH_ALLOWED_PARAMS,
+      "PUBLISH",
+      (error) => {
+        errors.push(error);
+      },
+    );
+    assert.isTrue(result);
+    assert.equal(errors.length, 0);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.11:
+ * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に
+ * 出現できない。スコープ検証で拒否されることを検証する。
+ */
+test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION で拒否される", () => {
+  for (const type of [
+    MessageParameterType.NEW_GROUP_REQUEST,
+    MessageParameterType.SUBGROUP_FILTER,
+    MessageParameterType.OBJECTID_FILTER,
+    MessageParameterType.PRIORITY_FILTER,
+    MessageParameterType.OBJECT_PROPERTY_FILTER,
+    MessageParameterType.TRACK_PROPERTY_FILTER,
+    MessageParameterType.FILL_PARAMETERS,
+  ]) {
+    const errors: SessionError[] = [];
+    const result = validateParameterScope(
+      [{ type }],
+      PUBLISH_ALLOWED_PARAMS,
+      "PUBLISH",
+      (error) => {
+        errors.push(error);
+      },
+    );
+    assert.isFalse(result);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  }
+});
