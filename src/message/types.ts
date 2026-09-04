@@ -20,6 +20,15 @@ export const MessageType = {
   REQUEST_ERROR: 0x05,
   REQUEST_UPDATE: 0x02,
 
+  /**
+   * PUBLISH_STATE_NOTIFY (Section 10.10 PUBLISH_STATE_NOTIFY)
+   *
+   * draft-ietf-moq-transport-20:
+   * publisher が subscription の bidi ストリーム上で送る片方向の状態通知。
+   * 応答なし。購読以外の文脈・subscriber 発での受信は PROTOCOL_VIOLATION。
+   */
+  PUBLISH_STATE_NOTIFY: 0x22,
+
   // Subscribe
   SUBSCRIBE: 0x03,
   SUBSCRIBE_OK: 0x04,

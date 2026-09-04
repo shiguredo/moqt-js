@@ -35,6 +35,7 @@ import {
   decodeGoawayPayload,
   decodeLocationFilterParameter,
   decodePublishDonePayload,
+  decodePublishStateNotifyPayload,
   decodeRequestErrorPayload,
   decodeRequestOkPayload,
   decodeRequestUpdatePayload,
@@ -53,6 +54,7 @@ import type { Property } from "../properties";
 import {
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_REQUEST_UPDATE_OK_PARAMS,
+  PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
   SUBSCRIBE_OK_ALLOWED_PARAMS,
   FETCH_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
@@ -436,9 +438,24 @@ export async function bidiReadPublishResponse(
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
-      session.pendingPublish.delete(requestId);
-      session.requestStreams.delete(requestId);
-      pending.reject(new Error(`unexpected response type ${msg.type} for PUBLISH request`));
+      // draft-ietf-moq-transport-20 §10.10:
+      // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈 (PUBLISH / FETCH /
+      // TRACK_STATUS の応答待ち) で受信した場合は PROTOCOL_VIOLATION で
+      // セッションを閉じる。
+      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+        const sessionError = new SessionError(
+          "unexpected PUBLISH_STATE_NOTIFY for PUBLISH request",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+        session.pendingPublish.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(sessionError);
+        session.closeWithError(sessionError);
+      } else {
+        session.pendingPublish.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(new Error(`unexpected response type ${msg.type} for PUBLISH request`));
+      }
     }
   } catch (error) {
     // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
@@ -549,10 +566,25 @@ export async function bidiReadSubscribeResponse(
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
-      session.pendingSubscribe.delete(requestId);
-      session.requestStreams.delete(requestId);
-      session.fillFetchTargets.delete(requestId);
-      pending.reject(new Error(`unexpected response type ${msg.type} for SUBSCRIBE request`));
+      // draft-ietf-moq-transport-20 §10.10:
+      // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
+      // PROTOCOL_VIOLATION でセッションを閉じる。
+      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+        const sessionError = new SessionError(
+          "unexpected PUBLISH_STATE_NOTIFY for SUBSCRIBE request",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+        session.pendingSubscribe.delete(requestId);
+        session.requestStreams.delete(requestId);
+        session.fillFetchTargets.delete(requestId);
+        pending.reject(sessionError);
+        session.closeWithError(sessionError);
+      } else {
+        session.pendingSubscribe.delete(requestId);
+        session.requestStreams.delete(requestId);
+        session.fillFetchTargets.delete(requestId);
+        pending.reject(new Error(`unexpected response type ${msg.type} for SUBSCRIBE request`));
+      }
     }
   } catch (error) {
     // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
@@ -642,9 +674,23 @@ export async function bidiReadFetchResponse(
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
-      session.pendingFetch.delete(requestId);
-      session.requestStreams.delete(requestId);
-      pending.reject(new Error(`unexpected response type ${msg.type} for FETCH request`));
+      // draft-ietf-moq-transport-20 §10.10:
+      // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
+      // PROTOCOL_VIOLATION でセッションを閉じる。
+      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+        const sessionError = new SessionError(
+          "unexpected PUBLISH_STATE_NOTIFY for FETCH request",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+        session.pendingFetch.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(sessionError);
+        session.closeWithError(sessionError);
+      } else {
+        session.pendingFetch.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(new Error(`unexpected response type ${msg.type} for FETCH request`));
+      }
     }
   } catch (error) {
     // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
@@ -717,9 +763,23 @@ export async function bidiReadTrackStatusResponse(
         new Error(`request stream goaway: ${decoded.newSessionUri || "no redirect URI"}`),
       );
     } else {
-      session.pendingTrackStatus.delete(requestId);
-      session.requestStreams.delete(requestId);
-      pending.reject(new Error(`unexpected response type ${msg.type} for TRACK_STATUS request`));
+      // draft-ietf-moq-transport-20 §10.10:
+      // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
+      // PROTOCOL_VIOLATION でセッションを閉じる。
+      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+        const sessionError = new SessionError(
+          "unexpected PUBLISH_STATE_NOTIFY for TRACK_STATUS request",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+        session.pendingTrackStatus.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(sessionError);
+        session.closeWithError(sessionError);
+      } else {
+        session.pendingTrackStatus.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(new Error(`unexpected response type ${msg.type} for TRACK_STATUS request`));
+      }
     }
   } catch (error) {
     // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
@@ -958,6 +1018,53 @@ export async function bidiHandlePublishRequestUpdate(
 // ============================================================================
 
 /**
+ * 購読の登録を解除する (ストリーム終了時の後始末)
+ *
+ * requestId 単位で subscribers から削除し、alias に他 subscription が
+ * 無ければエントリ削除する。購読の終了に伴い fill 関連付けも不要になるため
+ * 掃除する (FIN / RESET / セッション終了のいずれの exit 経路でも共通)。
+ */
+function deleteSubscriber(session: BidiSessionInternal, requestId: bigint): void {
+  const subscriber = session.subscribers.get(requestId);
+  if (subscriber) {
+    session.subscribers.delete(requestId);
+    deleteFillTargetsForSubscriber(session, subscriber);
+    const aliasSubscribers = session.subscribersByAlias.get(subscriber.getTrackAlias());
+    if (aliasSubscribers !== undefined) {
+      const idx = aliasSubscribers.indexOf(subscriber);
+      if (idx !== -1) {
+        aliasSubscribers.splice(idx, 1);
+      }
+      if (aliasSubscribers.length === 0) {
+        session.subscribersByAlias.delete(subscriber.getTrackAlias());
+      }
+    }
+  }
+}
+
+/**
+ * 自方向の送信ストリームを FIN で閉じる
+ *
+ * draft-ietf-moq-transport-19 §3.3.2:
+ * ピアの FIN を受けた requester は自方向も FIN で閉じる (SHOULD)。
+ * GOAWAY 受信後の旧ストリームの送信方向の終了にも使う。
+ * 既に閉じている場合の reject は黙殺する。
+ */
+export async function closeRequestStreamWriter(
+  session: BidiSessionInternal,
+  requestId: bigint,
+): Promise<void> {
+  const streamInfo = session.requestStreams.get(requestId);
+  if (streamInfo) {
+    try {
+      await streamInfo.writer.close();
+    } catch {
+      // ストリームが既に閉じている場合は無視
+    }
+  }
+}
+
+/**
  * GOAWAY 受信時の旧リクエストストリームの終了処理
  *
  * draft-ietf-moq-transport-19 §10.4:
@@ -1004,14 +1111,7 @@ async function closeOldRequestStreamOnGoaway(
     new RequestError(REQUEST_GOING_AWAY_REASON, RequestErrorCode.GOING_AWAY),
   );
   if (subscriber) {
-    const streamInfo = session.requestStreams.get(requestId);
-    if (streamInfo) {
-      try {
-        await streamInfo.writer.close();
-      } catch {
-        // ストリームが既に閉じている場合は無視
-      }
-    }
+    await closeRequestStreamWriter(session, requestId);
   }
 }
 
@@ -1075,14 +1175,7 @@ export async function bidiReadRequestStreamMessages(
             // GOAWAY 受信済みの subscribe ロール (subscriber が存在する場合) では
             // GOAWAY ハンドラが既に writer.close() 済みのため、再度 close() する
             // と reject するが黙殺する。
-            const streamInfo = session.requestStreams.get(requestId);
-            if (streamInfo) {
-              try {
-                await streamInfo.writer.close();
-              } catch {
-                // ストリームが既に閉じている場合は無視
-              }
-            }
+            await closeRequestStreamWriter(session, requestId);
           }
         }
         break;
@@ -1095,6 +1188,13 @@ export async function bidiReadRequestStreamMessages(
         switch (msg.type) {
           case MessageType.PUBLISH_DONE: {
             bidiHandlePublishDone(session, msg.payload, requestId);
+            break;
+          }
+          case MessageType.PUBLISH_STATE_NOTIFY: {
+            // draft-ietf-moq-transport-20 §10.10: 受信と違反処理はハンドラ内。
+            if (!bidiHandlePublishStateNotify(session, msg.payload, requestId, role)) {
+              return;
+            }
             break;
           }
           case MessageType.REQUEST_OK: {
@@ -1369,24 +1469,7 @@ export async function bidiReadRequestStreamMessages(
     // それ以外（セッション終了・内部エラー等）は既存通り無視する
   } finally {
     reader.releaseLock();
-    const subscriber = session.subscribers.get(requestId);
-    if (subscriber) {
-      session.subscribers.delete(requestId);
-      // 購読の終了に伴い fill 関連付けも不要になるため掃除する
-      // (FIN / RESET / セッション終了のいずれの exit 経路でも共通)。
-      deleteFillTargetsForSubscriber(session, subscriber);
-      // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
-      const aliasSubscribers = session.subscribersByAlias.get(subscriber.getTrackAlias());
-      if (aliasSubscribers !== undefined) {
-        const idx = aliasSubscribers.indexOf(subscriber);
-        if (idx !== -1) {
-          aliasSubscribers.splice(idx, 1);
-        }
-        if (aliasSubscribers.length === 0) {
-          session.subscribersByAlias.delete(subscriber.getTrackAlias());
-        }
-      }
-    }
+    deleteSubscriber(session, requestId);
     // draft-ietf-moq-transport-19 §3.3.2 の MUST「the publisher of an
     // Established subscription MUST send PUBLISH_DONE, before sending a FIN」:
     // ピアが送信方向を FIN で閉じた場合でも、publisher はアプリの done() が
@@ -1961,6 +2044,100 @@ export function bidiHandlePublishDone(
     streamCount: msg.streamCount.toString(),
     reasonPhrase: msg.reasonPhrase,
   };
+}
+
+// ============================================================================
+// handlePublishStateNotify
+// ============================================================================
+
+/**
+ * 受信 PUBLISH_STATE_NOTIFY を処理する
+ *
+ * draft-ietf-moq-transport-20 §10.10 (PUBLISH_STATE_NOTIFY):
+ * publisher が subscription の bidi ストリーム上で送る片方向の状態通知。
+ * 応答は送信しない。presence のパラメータのみ変更として subscriber 状態に
+ * 反映する (省略時は不変)。
+ *
+ * subscribe ロール (自 subscriber の購読) のみ受理する。publish ロール
+ * (対向 subscriber 発) では §10.10 の MUST に従い PROTOCOL_VIOLATION で
+ * セッションを閉じる。
+ *
+ * 許可外パラメータは §10.2.1 の MUST に従い PROTOCOL_VIOLATION で
+ * セッションを閉じる。decode の失敗は呼び出し元の受信ループの catch で
+ * 変換される。
+ */
+export function bidiHandlePublishStateNotify(
+  session: BidiSessionInternal,
+  payload: Uint8Array,
+  requestId: bigint,
+  role: "publish" | "subscribe",
+): boolean {
+  // draft-ietf-moq-transport-20 §10.10:
+  // "PUBLISH_STATE_NOTIFY applies only to subscriptions, and is sent only
+  //  by the publisher."
+  if (role !== "subscribe") {
+    session.closeWithError(
+      new SessionError(
+        "unexpected PUBLISH_STATE_NOTIFY on publish stream",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return false;
+  }
+
+  const msg = decodePublishStateNotifyPayload(payload);
+
+  // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope)
+  // 違反時はセッションを閉じ、呼び出し元は後続メッセージの処理を打ち切る。
+  if (
+    !validateParameterScope(
+      msg.parameters,
+      PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
+      "PUBLISH_STATE_NOTIFY",
+      (error) => session.closeWithError(error),
+    )
+  ) {
+    return false;
+  }
+
+  const subscriber = session.subscribers.get(requestId);
+
+  // 反映前にすべての値をデコード・検証する。違反確定後の部分反映を防ぐため、
+  // subscriber への書き込みは検証通過後にまとめて行う。購読不在でも検証は
+  // 行い、不正ワイヤを見逃さない。
+  const largestParam = msg.parameters.find(
+    (param) => param.type === MessageParameterType.LARGEST_OBJECT,
+  );
+  const largestLocation =
+    largestParam !== undefined ? getParameterLocationValue(largestParam) : undefined;
+  const locationParam = msg.parameters.find(
+    (param) => param.type === MessageParameterType.LOCATION_FILTER,
+  );
+  // §5.1.2 の値検証 (End Group 超過は PROTOCOL_VIOLATION) も兼ねる。
+  // 失敗は呼び出し元の catch でセッションを閉じる。
+  const locationFilter =
+    locationParam !== undefined ? decodeLocationFilterParameter(locationParam) : undefined;
+  const forwardParam = msg.parameters.find((param) => param.type === MessageParameterType.FORWARD);
+  // draft-ietf-moq-transport-20 §10.2.18:
+  // PUBLISH_STATE_NOTIFY では報告値をそのまま反映する (省略時は不変)。
+  // extractForwardState は省略時にデフォルト true を返すため、存在時のみ呼ぶ。
+  // 値域検証は内部で行い、範囲外は ProtocolViolationError になる。
+  const forwardState = forwardParam !== undefined ? extractForwardState(msg.parameters) : undefined;
+
+  if (!subscriber) {
+    return true;
+  }
+
+  if (largestLocation !== undefined) {
+    subscriber.setLargestLocation(largestLocation);
+  }
+  if (locationFilter !== undefined) {
+    subscriber.setLocationFilter(locationFilter);
+  }
+  if (forwardState !== undefined) {
+    subscriber.setForwardState(forwardState);
+  }
+  return true;
 }
 
 // ============================================================================
