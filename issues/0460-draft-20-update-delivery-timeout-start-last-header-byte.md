@@ -1,7 +1,7 @@
 # OBJECT_DELIVERY_TIMEOUT の起算を last header byte に合わせる
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/update-delivery-timeout-start-last-header-byte
 - Polished: 2026-09-02
 
@@ -34,3 +34,10 @@ draft-ietf-moq-transport-20 §8 では OBJECT_DELIVERY_TIMEOUT の経過時間�
 - draft-ietf-moq-transport-20 §8 (Delivery Timeouts and Data Reliability)
 - draft-ietf-moq-transport-20 Appendix A.1 (#1844)
 - 関連: `issues/pending/0366-add-delivery-timeout-enforcement.md`
+
+## 解決方法
+
+- pending 0366 の目的・設計方針・完了条件・参照節番号を draft-20 の last header byte 起算に書き換えた。0366 は pending のまま維持する。
+- 0366 が規定する提供入口での時刻記録 (publishSendObject / publishSendDatagram) が、draft-20 §8 の provided by the original publisher application と一致することを確認した。記録コード自体は未実装であり 0366 の責務とする。
+- 起算点のコードコメントは src/ に存在しないため変更なし (節番号の網羅更新は 0461 の責務)。
+- 変更履歴への記載は強制実装時に行う (本 issue では不要)。
