@@ -1,7 +1,7 @@
 # publish({ forward: false }) の初期 Forward State が PublisherImpl に反映されない
 
 - Created: 2026-08-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-04
 - Branch: feature/fix-publish-initial-forward-state-not-reflected
 - Polished: 2026-08-28
 
@@ -45,3 +45,13 @@
 - draft-ietf-moq-transport-19 §5.1 (Subscriptions / 「The initiator of the subscription sets the initial Forward State in either PUBLISH or SUBSCRIBE. The subscriber can send PUBLISH_OK or REQUEST_UPDATE to update the Forward State.」)
 - draft-ietf-moq-transport-19 §10.2.17 (FORWARD Parameter / 「If the parameter is omitted from REQUEST_UPDATE, the value for the subscription remains unchanged. If the parameter is omitted from any other message, the default value is 1.」)
 - 関連: `issues/closed/0416-bug-publish-forward-omitted-overwrite.md` (受信 REQUEST_UPDATE 経路の FORWARD 反映を §10.2.17 の REQUEST_UPDATE 特則に基づき「FORWARD 存在時のみ反映」に修正した先例。本 issue の PUBLISH_OK ガード案を採らない根拠でもある)
+
+## 解決方法
+
+`src/session.ts` の `publish()` で PublisherImpl 生成直後に `impl.setForwardState(options?.forward ?? true)` を追加し、SUBSCRIBE 送信側と同パターンで初期 Forward State を反映した。
+
+- `options.forward` 省略時はデフォルト 1 (true) になり、ワイヤ生成 (`buildPublishParameters` は false のときのみ FORWARD=0 を載せる) と意味が一致する
+- PUBLISH_OK 受信後の無条件反映は現行のまま維持する (省略時はデフォルト 1 で上書きされ、初期値は受信までの暫定値という位置づけ)
+- 初期設定で変化した場合は `onForwardStateChange` が発火することを `PublishCallbacks` と `Publisher` のドキュメントに明記する
+- テストは `src/session.test.ts` に 5 本 (初期値 3 系統と結合 2 系統)、`src/session/bidi.test.ts` に PUBLISH_OK 反映 3 本を追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
