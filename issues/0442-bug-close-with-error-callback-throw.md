@@ -1,6 +1,7 @@
 # closeWithError が callbacks.error の throw で close() に到達せずセッションが開いたままになる
 
 - Created: 2026-08-29
+- Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-close-with-error-callback-throw
 - Polished: {YYYY-MM-DD}
@@ -19,7 +20,7 @@
 ## 設計方針
 
 - `closeWithError()` を `try { this.callbacks.error?.(error); } finally { void this.close(error.code, error.message); }` 構造に変更し、通知コールバックの throw に関わらず close を実行する。
-- コールバック由来の throw をこれ以上広げないため、通知は握り潰さず `emitDebug` (DATA_STREAM_ERROR 相当) に記録する。throw 自体を無音にしない (`handleMalformedFetchTrack` の「アプリの error コールバックの throw は握り潰す」方針との整合は、通知が必須の closeWithError 側では記録を追加する、という差異で説明する)。
+- コールバック由来の throw をこれ以上広げないため、通知は握り潰さず `emitDataStreamErrorDebug` 相当 (`typeName: "DATA_STREAM_ERROR"` の直構築。汎用の `emitDebug` ではない。`closeWithError` は Fetch ヘッダを持たないため `fetchHeader=null` で記録) に記録する。throw 自体を無音にしない (`handleMalformedFetchTrack` の「アプリの error コールバックの throw は握り潰す」方針との整合は、通知が必須の closeWithError 側では記録を追加する、という差異で説明する)。throw を swallow するか再 throw するかは実装時に確定する (再 throw する場合は外側 catch での INTERNAL_ERROR 化との関係に注意)。
 - `close()` 自体は既に完了済みチェック (sessionState === "closed" で即 return) を持つため、二重 close にはならない。
 - 呼び出し元側の catch (外側 catch での INTERNAL_ERROR 化) は本変更で到達不能にならないケース (close 中の別例外など) に備えて維持する。
 
@@ -32,7 +33,7 @@
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §3.5 (Session Termination)
+- draft-ietf-moq-transport-20 §3.5 (Termination)
 - 関連: `issues/closed/0427-bug-data-stream-fin-incomplete-object.md`（同経路での顕在化を実測。参考所見として記録）
 
 ## 解決方法
