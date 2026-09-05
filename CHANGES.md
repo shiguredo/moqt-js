@@ -273,6 +273,9 @@
   - pending mode で FIN を検出した時点で abandon を完結させ、無限ループにならないようにする
   - FIN と subscriber 登録の同時解決は合流を優先する
   - @voluntas
+- [FIX] 送信側が宣言 payload を欠落させた FIN を送出するのを修正する
+  - Object Fields と payload を連結して単一 write で送信し、close の割り込み窓を無くす
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
