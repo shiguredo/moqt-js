@@ -2726,10 +2726,29 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-20 Section 3.5:
    * プロトコル違反等のエラーが発生した場合、セッションを閉じる必要がある。
+   * アプリ登録の error コールバックが throw しても close() は必ず実行する
+   * (通知の成否で終了手順が止まると、違反を検出しながらセッションが開いた
+   * ままになる)。後続処理を継続する点はリクエストストリーム上の GOAWAY
+   * ハンドラや fetcher error 通知と同様だが、握り潰しっぱなしにせずデバッグ
+   * 記録に残す点は本メソッド固有の配慮である。コールバックの throw は再
+   * throw しない (呼び出し元 catch への再流入による誤変換・二重通知を避けるため)。
    */
   private closeWithError(error: SessionError): void {
-    this.callbacks.error?.(error);
-    void this.close(error.code, error.message);
+    try {
+      this.callbacks.error?.(error);
+    } catch (callbackError) {
+      // アプリの error コールバックの throw はデバッグ記録に残す。
+      // Fetch ヘッダを持たないため emitDataStreamErrorDebug(callbackError, null)
+      // で記録する (typeName は "DATA_STREAM_ERROR" になる)。
+      // 記録自体の throw (debug コールバックの throw) は呼び出し元へ伝播させない。
+      try {
+        this.emitDataStreamErrorDebug(callbackError, null);
+      } catch {
+        // デバッグ記録の失敗は無視する
+      }
+    } finally {
+      void this.close(error.code, error.message);
+    }
   }
 
   /**

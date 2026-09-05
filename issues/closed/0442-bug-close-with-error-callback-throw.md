@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-close-with-error-callback-throw
 - Polished: 2026-09-05
 
@@ -40,4 +40,6 @@
 
 ## 解決方法
 
-未着手。
+- `closeWithError()` を try/catch/finally 構造に変更し、通知コールバックの throw に関わらず `close()` を実行するようにした。throw は再 throw せず、デバッグ記録 (`emitDataStreamErrorDebug` 相当) に残す。記録自体の throw にも内側 try/catch で備えた。
+- テストは `src/session.test.ts` に 3 件追加した (throw 時の close 完遂・二重 throw 時の非伝播・正常時の順序)。
+- 触ったファイル: `src/session.ts`、`src/session.test.ts`、`CHANGES.md`。
