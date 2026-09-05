@@ -4,7 +4,7 @@
 - Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-pending-subgroup-fin-loop
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-05
 
 ## 目的
 
@@ -20,20 +20,21 @@
 
 ## 設計方針
 
-- chunk 分岐で `event.result.done` を検出した時点で、その場で abandon を完了させる (race の再登録を待たない)。`entry.notify("end-of-stream")` → `pendingSubgroupBuffer.remove(entry)` → return の順で、既存の abandon 経路と同じ後始末をする。pending mode は payload を decode しないため draft-ietf-moq-transport-20 §11.4 の SHOULD (FIN が Object 途中の場合の PROTOCOL_VIOLATION) の判定ができず、0427 の対象外とした判断を継承して abandon する。subscribers 未登録のためオブジェクト欠落は発生しない。FIN 済みストリームに対する `cancelStreamQuiet` は実質 no-op だが、notify 経由の既存 abandon と経路を統一するため同一 helper を使うかは実装時に既存フローとの一貫性で決める。
+- chunk 分岐で `event.result.done` を検出した時点で、その場で abandon を完了させる (race の再登録を待たない)。手順は既存の abandon 経路と同一とし、`entry.notify("end-of-stream")` → `pendingSubgroupBuffer.remove(entry)` → `cancelStreamQuiet(reader, ...)` → return の順で行う。FIN 済みストリームに対する `cancelStreamQuiet` は実質 no-op だが、経路統一のため省略せず必ず呼ぶ。pending mode は payload を decode しないため draft-ietf-moq-transport-20 §11.4 の SHOULD (FIN が Object 途中の場合の PROTOCOL_VIOLATION) の判定ができず、0427 の対象外とした判断を継承して abandon する。subscribers 未登録のためアプリへのオブジェクト欠落は発生しない。
+- FIN と subscriber 登録が同時解決した場合は subscriber 合流を優先する。chunk `done` 検出時も abandon 前に `subscribersByAlias` を再取得し、非空なら pending chunks を結合して subscriber mode へ合流し、空の場合のみ abandon する。同時解決時に chunk 分岐が常に勝つ飢餓を避けるための規則であり、`entry.notified` 側が先に勝つ既存経路の挙動は変えない。
 - `PendingSubgroupEntry.notify` が多重 resolve されない構造 (`notified` Promise 1 個) であることは現状で確認済み。修正後の notify 呼び出し順序が timeout / overflow / session-close 通知と競合しても idempotent に abandon 完結することを守る。
 - 修正の対称性として、`entry.notified` 側が先に勝つ既存経路 (subscriber 通知など) の挙動は変更しない。
 
 ## 完了条件
 
-- subscribers 未登録の Subgroup ストリームにヘッダー (および任意の payload) を流したあと FIN すると、無限ループにならず `handleIncomingStream` が解決すること (実 W3C ReadableStream 注入、`Promise.race` タイムアウト付きテストで検証する)。
+- subscribers 未登録の Subgroup ストリームにヘッダーのみを流したあと FIN すると、無限ループにならず `handleIncomingStream` が 5 秒以内に解決すること (実 W3C ReadableStream 注入、待機側は `Promise.race` で 5 秒タイムアウトを付けて検証する)。ヘッダー + 完全 Object 1 件 + FIN の形でも `end-of-stream` で abandon することを検証する。上限超過サイズは `overflow` 理由になるため本条件では扱わない。
 - FIN 時に pending entry が `pendingSubgroupBuffer` から削除されること。
-- FIN 以前に subscriber が登録された場合は従来どおり subscriber mode へ合流すること (既存テストで回帰確認)。
+- pending 中に subscriber が登録された場合は pending chunks を結合して subscriber mode へ合流すること（新規テストで検証する。既存の subscriber mode FIN テストだけでは合流パスを guard できないため）。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
 
-- draft-ietf-moq-transport-20 §11.4.2 (Subgroup Header / unknown Track Alias では abandon MAY。pending FIN の abandon は §11.4.1 により安全)
+- draft-ietf-moq-transport-20 §11.4.2 (Subgroup Header / unknown Track Alias では abandon MAY)
 - draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams)
 - 関連: `issues/closed/0427-bug-data-stream-fin-incomplete-object.md`（解決方法の「pending mode の FIN 処理の実態」項で発掘を記録）
 
