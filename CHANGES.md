@@ -266,6 +266,9 @@
   - publish() はパラメータ構築とエンコードを保留登録より前へ移動し、fetch() はエンコードを保留登録より前へ移動する
   - 双方向ストリームへの書き込み失敗時は、作成済みストリームを受信取消しと送信リセットで閉じてからエラーを伝播する
   - @voluntas
+- [FIX] LOCATION_FILTER パラメータの宣言 Length と消費バイト数の不一致を検出する
+  - 構造の消費バイト数が宣言 Length と一致しない場合は構造不正として PROTOCOL_VIOLATION で拒否する (制御メッセージの境界検証と同方針)
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
