@@ -2,7 +2,7 @@
 
 - Created: 2026-08-30
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-peer-session-close-markclosed-missing
 - Polished: 2026-09-05
 
@@ -43,3 +43,10 @@
 - draft-ietf-moq-transport-20 §3.5 (Termination): "The Transport Session can be terminated at any point."
 - 関連: `issues/closed/0428-bug-incoming-publish-reset-markclosed-missing.md` (受信 PUBLISH 経路の RESET_STREAM で state が closed にならない問題。本 issue はセッション終了経路の同族問題を扱う)
 - 関連: `issues/closed/0410-bug-subscribe-error-end-not-notified.md` (セッション終了時は subscriber に通知しない方針を明記した箇所。本 issue は state 遷移のみを追加し、通知方針を変えない)
+
+## 解決方法
+
+- `close()` の markClosed 群と namespace 系 state 閉鎖を `markRequestObjectsClosed()` に抽出し、`close()` と `transport.closed` ハンドラの両方から呼ぶようにした。通知は 1 回のままとし、request 系の終了通知や pending の reject は行わない。
+- 既存テストの fetcher state 断言を closed に追従させ、stale コメントを更新した。
+- テストは `src/session.test.ts` に 4 件追加した (resolve / reject / update 拒否 / 自前 close 回帰)。
+- 触ったファイル: `src/session.ts`、`src/session.test.ts`、`src/session/publish.ts` (stale コメント 1 件)、`CHANGES.md`。

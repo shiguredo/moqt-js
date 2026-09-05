@@ -347,11 +347,11 @@ export async function publishSendPublishDone(
   const requestId = publisher.getRequestId();
 
   // セッション終了後は送信を試行しない。
-  // アプリの session.close() では publishers が markClosed され done() が no-op に
-  // なるが、ピア起因のセッション終了では markClosed が実行されないため、
-  // ここでガードする。ガードしないと write / close がセッション終了起因の
-  // エラーで失敗し、誤って PROTOCOL_VIOLATION に昇格して callbacks.error に
-  // 通知される。
+  // アプリの session.close() でもピア起点の終了でも publishers は markClosed
+  // され done() が no-op になるが、ストリーム単位の終了とセッション終了の
+  // レースがあるため、ここでガードする。ガードしないと write / close が
+  // セッション終了起因のエラーで失敗し、誤って PROTOCOL_VIOLATION に昇格して
+  // callbacks.error に通知される。
   if (session.sessionState === "closed") {
     return;
   }

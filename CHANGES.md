@@ -280,6 +280,10 @@
   - closeWithError() が通知コールバックの throw に関わらず close() を実行する
   - コールバックの throw は再 throw せずデバッグ記録に残す
   - @voluntas
+- [FIX] ピア起点のセッション終了時に request 系の state が閉じないのを修正する
+  - transport.closed 時に Publisher / Subscriber / Fetcher を閉じ namespace 系も閉じる
+  - 終了通知は 1 回のままとし request 系の終了通知は送らない
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する

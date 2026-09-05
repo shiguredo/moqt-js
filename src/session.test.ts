@@ -2403,7 +2403,8 @@ function createDataStreamFinContext(): DataStreamFinContext {
       controller.close();
     },
     // transport.closed ハンドラは close() を経ずに sessionState を closed へ
-    // 遷移させる (fetcher / subscriber は active のまま)。ハンドラの .then は
+    // 遷移させ、request 系の state も閉じる (markRequestObjectsClosed)。
+    // pending の reject 等の終了処理は行わない。ハンドラの .then は
     // resolve 時にマイクロタスク 1 回で走るため、await Promise.resolve() で
     // 遷移完了を確定できる (直後の state アサートで前提も検証する)
     closeTransport: async () => {
@@ -2675,6 +2676,184 @@ test("closeWithError: 正常時は error 通知の後に close が実行され�
 
   assert.deepEqual(order, ["error", "transport-close"]);
   assert.equal(session.state, "closed");
+});
+
+// ============================================================================
+// ピア起点のセッション終了時の request 系オブジェクトの state 遷移
+// ============================================================================
+
+/**
+ * ピア起点のセッション終了 (transport.closed) で state を閉じるための
+ * セッションを構築する。closed Promise は呼び出し側で resolve / reject できる。
+ */
+function createPeerCloseSession(): {
+  session: SessionImpl;
+  closeCalls: WebTransportCloseInfo[];
+  resolveClosed: (info: WebTransportCloseInfo) => void;
+  rejectClosed: (reason?: unknown) => void;
+} {
+  const closeCalls: WebTransportCloseInfo[] = [];
+  let resolveClosed!: (info: WebTransportCloseInfo) => void;
+  let rejectClosed!: (reason?: unknown) => void;
+  const closedPromise = new Promise<WebTransportCloseInfo>((resolve, reject) => {
+    resolveClosed = resolve;
+    rejectClosed = reject;
+  });
+  const transport = {
+    closed: closedPromise,
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    close: (info) => {
+      closeCalls.push(info);
+    },
+  });
+  return { session, closeCalls, resolveClosed, rejectClosed };
+}
+
+/**
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
+ * ピア起点で transport.closed が resolve した場合、登録済みの Publisher /
+ * Subscriber / Fetcher の state が closed になることを検証する。
+ * Namespace 系の state も closed になる。ConnectCallbacks.close は 1 回だけ
+ * 呼ばれ、request 系の handleEnd / handleError は呼ばない。
+ */
+test("ピア起点の終了で Publisher / Subscriber / Fetcher の state が closed になる", async () => {
+  const { session, closeCalls, resolveClosed } = createPeerCloseSession();
+  const internal = session as unknown as {
+    publishers: Map<bigint, PublisherImpl>;
+    subscribers: Map<bigint, SubscriberImpl>;
+    fetchers: Map<bigint, FetcherImpl>;
+    namespaceSubscriptions: Map<bigint, { state: "active" | "closed" }>;
+    tracksSubscriptions: Map<bigint, { state: "active" | "closed" }>;
+    namespacePublications: Map<bigint, { state: "active" | "closed" }>;
+  };
+  const publisher = new PublisherImpl(["live"], "video", 0n, 1n);
+  internal.publishers.set(0n, publisher);
+  let notifiedError: Error | undefined;
+  let ended = false;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    2n,
+    3n,
+    () => {},
+    undefined,
+    () => {
+      ended = true;
+    },
+    (error) => {
+      notifiedError = error;
+    },
+  );
+  internal.subscribers.set(2n, subscriber);
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    4n,
+    () => {},
+    () => {},
+    () => {},
+  );
+  internal.fetchers.set(4n, fetcher);
+  internal.namespaceSubscriptions.set(5n, { state: "active" });
+  internal.tracksSubscriptions.set(6n, { state: "active" });
+  internal.namespacePublications.set(7n, { state: "active" });
+
+  resolveClosed({ closeCode: 0, reason: "" });
+  await Promise.resolve();
+
+  assert.equal(session.state, "closed");
+  assert.equal(publisher.state, "closed");
+  assert.equal(subscriber.state, "closed");
+  assert.equal(fetcher.state, "closed");
+  assert.equal(internal.namespaceSubscriptions.get(5n)?.state, "closed");
+  assert.equal(internal.tracksSubscriptions.get(6n)?.state, "closed");
+  assert.equal(internal.namespacePublications.get(7n)?.state, "closed");
+  // 通知は 1 回だけで、request 系の end / error は呼ばない
+  assert.equal(closeCalls.length, 1);
+  assert.isFalse(ended);
+  assert.isUndefined(notifiedError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
+ * transport.closed が reject した場合も同様に state が閉じることを検証する。
+ */
+test("ピア起点の終了 (reject) でも request 系の state が closed になる", async () => {
+  const { session, closeCalls, rejectClosed } = createPeerCloseSession();
+  const internal = session as unknown as {
+    subscribers: Map<bigint, SubscriberImpl>;
+  };
+  const subscriber = new SubscriberImpl(["live"], "video", 2n, 3n, () => {});
+  internal.subscribers.set(2n, subscriber);
+
+  rejectClosed(new Error("transport error"));
+  // reject 経路は then 素通し + catch の 2 ホップでハンドラに届くため 2 tick 待つ
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(session.state, "closed");
+  assert.equal(subscriber.state, "closed");
+  assert.equal(closeCalls.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
+ * ピア起点の終了後は Subscriber.update() が "Subscriber is closed" で
+ * reject すること (state ガードが効くこと) を検証する。
+ */
+test("ピア起点の終了後は Subscriber.update() が reject する", async () => {
+  const { session, resolveClosed } = createPeerCloseSession();
+  const internal = session as unknown as {
+    subscribers: Map<bigint, SubscriberImpl>;
+  };
+  const subscriber = new SubscriberImpl(["live"], "video", 2n, 3n, () => {});
+  internal.subscribers.set(2n, subscriber);
+
+  resolveClosed({ closeCode: 0, reason: "" });
+  await Promise.resolve();
+
+  let thrown: Error | undefined;
+  try {
+    await subscriber.update({ forward: false });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("Subscriber is closed"));
+});
+
+/**
+ * 回帰ガード: 自前起点の close() でも request 系の state が閉じることは
+ * 従来どおりである (抽出前後で挙動が変わらないこと)。
+ */
+test("自前起点の close() でも request 系の state が閉じる", async () => {
+  const { session } = createPeerCloseSession();
+  const internal = session as unknown as {
+    publishers: Map<bigint, PublisherImpl>;
+    subscribers: Map<bigint, SubscriberImpl>;
+    fetchers: Map<bigint, FetcherImpl>;
+  };
+  const publisher = new PublisherImpl(["live"], "video", 0n, 1n);
+  internal.publishers.set(0n, publisher);
+  const subscriber = new SubscriberImpl(["live"], "video", 2n, 3n, () => {});
+  internal.subscribers.set(2n, subscriber);
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    4n,
+    () => {},
+    () => {},
+    () => {},
+  );
+  internal.fetchers.set(4n, fetcher);
+
+  await session.close();
+
+  assert.equal(session.state, "closed");
+  assert.equal(publisher.state, "closed");
+  assert.equal(subscriber.state, "closed");
+  assert.equal(fetcher.state, "closed");
 });
 
 /**
@@ -3271,7 +3450,8 @@ test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN
 
 /**
  * セッション終了済み経路の抑制 (Subgroup): transport.closed ハンドラは
- * close() を経ずに sessionState だけを closed へ遷移させるため、
+ * close() を経ずに sessionState を closed へ遷移させ request 系の state も
+ * 閉じるが、close() の終了処理 (pending reject 等) は行わないため、
  * 未完成 Object の途中 FIN を検出しても closeWithError は呼ばれない
  * (セッションは既に終了しており、ここでの PROTOCOL_VIOLATION 通知は
  * spurious になる)。判定自体は通るため end 相当の進行は発生しないことも
@@ -3294,14 +3474,17 @@ test("Subgroup データストリーム: セッション close 済み経路の�
   ctx.fin();
   await handlePromise;
 
-  // 新たな通知はしない (黙殺)。 subscriber も閉じられていない
+  // 新たな通知はしない (黙殺)。subscriber は subscribersByAlias にのみ登録
+  // (subscribers Map には無い) ので markRequestObjectsClosed の対象外であり、
+  // state は変わらない
   assert.isUndefined(ctx.sessionError.current);
   assert.equal(delivered, 0);
+  assert.equal(subscriber.state, "active");
 });
 
 /**
  * セッション終了済み経路の抑制 (Fetch): transport.closed ハンドラ経由で
- * sessionState だけが closed になった状態 (fetcher は active のまま) で
+ * sessionState が closed になり fetcher も closed になった状態で
  * 未完成 Object の途中 FIN を受け取ると、closeWithError (新たな
  * PROTOCOL_VIOLATION 通知) はスキップされ、fetcher.handleEnd() で
  * 正常終了も通知しないことを検証する。
@@ -3338,9 +3521,9 @@ test("Fetch データストリーム: セッション close 済み経路でも�
   assert.isUndefined(ctx.sessionError.current);
   assert.isFalse(ended);
   assert.equal(delivered, 0);
-  // transport.closed 由来の遷移では fetcher は active のまま Map に残る
-  // (close() 経由と違い markClosed が走らないため。セッション終了済みで実害なし)
-  assert.equal(fetcher.state, "active");
+  // transport.closed 由来の遷移でも fetcher は closed になる
+  // (close() 経由と同じく markClosed が走る。 Map には残る)
+  assert.equal(fetcher.state, "closed");
   assert.equal(ctx.internal.fetchers.size, 1);
 });
 
