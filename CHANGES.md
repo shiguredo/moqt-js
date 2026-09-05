@@ -840,6 +840,10 @@
   - draft-ietf-moq-transport-20 §11.4.2 / §11.3.1 / §11.4.4.1 に基づき、Properties Length が宣言するバイト数にバッファが満たない場合に 3 つのデコーダが IncompleteDataError を throw するようにする (従来は切り詰めた Properties を返して `totalConsumed` を過剰に進め、後続フィールドを誤読した)
   - subgroup ストリーム / FETCH 経路では次のチャンクを待ち、datagram 経路では PROTOCOL_VIOLATION に変換されてセッションが閉じる (既存の varint 不足と同じ扱い)
   - @voluntas
+- [FIX] RequestUpdateOptions.parameters の生 LOCATION_FILTER に End Group 検証を追加する
+  - draft-ietf-moq-transport-20 §5.1.2 に基づき、`bidiSendRequestUpdate` でトップレベルの LOCATION_FILTER をデコード検証し、End Group 超過を含む不正値は InvalidFilterError で送信前に拒否する (従来は `parameters` の生値を無検証で送出し、型付き `fill.filter` 構築時の検証が掛からなかった)
+  - 検証は `pendingRequestUpdate` 登録より前で行い、throw 時にエントリを残さない。`FILL_PARAMETERS` 内側は対象外とする
+  - @voluntas
 
 ### misc
 

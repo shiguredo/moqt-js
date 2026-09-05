@@ -1643,6 +1643,30 @@ export async function bidiSendRequestUpdate(
     allowTrackProperty: false,
   });
 
+  // draft-ietf-moq-transport-20 §5.1.2:
+  // raw パラメータ経路の LOCATION_FILTER も型付き経路と同じデコード検証
+  // (End Group 超過を含む) の対象にする。対象はトップレベルの
+  // LOCATION_FILTER 全件とする
+  // (重複自体は別途仕様違反だが、2 件目以降の検証素通りを残さない)。
+  // デコード失敗はローカル API 誤用として InvalidFilterError に
+  // 変換する (受信側の ProtocolViolationError とは区別する)。
+  // FILL_PARAMETERS 内側は対象外とする。型付き fill 経路は構築時に検証済みで
+  // あり、手組みの raw FILL_PARAMETERS 内側は別対応とする。
+  // pendingRequestUpdate.set より前で失敗させる
+  // (登録後の throw はエントリ残留を生むため)。
+  const rawLocationFilters = (options.parameters ?? []).filter(
+    (param) => param.type === MessageParameterType.LOCATION_FILTER,
+  );
+  for (const rawLocationFilter of rawLocationFilters) {
+    try {
+      decodeLocationFilterParameter(rawLocationFilter);
+    } catch (error) {
+      throw new InvalidFilterError(
+        `invalid raw LOCATION_FILTER in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
   // Range Filters (0x25–0x29) - draft-ietf-moq-transport-20 Section 5.1.4:
