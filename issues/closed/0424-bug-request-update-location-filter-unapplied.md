@@ -2,7 +2,7 @@
 
 - Created: 2026-08-22
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-request-update-location-filter
 - Polished: 2026-09-05
 
@@ -39,4 +39,9 @@
 
 ## 解決方法
 
-未着手。
+- `PendingRequestUpdate` に送信時の LOCATION_FILTER 値 (`LocationFilter` 型、省略時 undefined) を保持するフィールドを追加した。
+- `bidiSendRequestUpdate` で `options.parameters` のトップレベル LOCATION_FILTER のうち配列順の先頭 1 件を `decodeLocationFilterParameter()` でデコードして保持する (全件検証は維持し、FILL_PARAMETERS 内側は対象外)。
+- `bidiHandleRequestUpdateOk` で LARGEST_OBJECT 反映の後に `subscriber.setLocationFilter()` で反映する。省略時は不変、除去指定 (Length 0) はフィルタなしとして反映する。
+- `resolvePendingRequestUpdate` の戻り値に `locationFilter` を含めた。
+- テストは `src/session/bidi.test.ts` に 5 件追加した (反映と再適用・省略時不変・除去・pending 保持・失敗時非反映)。
+- 触ったファイル: `src/session/bidi.ts`、`src/session/bidi.test.ts`、`CHANGES.md`。

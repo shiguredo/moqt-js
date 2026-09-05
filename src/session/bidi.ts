@@ -45,6 +45,7 @@ import {
   validateRangeFilterCombination,
   type GroupOrder,
   type Location,
+  type LocationFilter,
   type Parameter,
   type RangeFilterSpec,
 } from "../message";
@@ -146,6 +147,14 @@ interface PendingRequestUpdate {
    * in-flight 中の上限超過を見逃さない)。
    */
   fillRangeFilters?: RangeFilterSpec[];
+  /**
+   * REQUEST_UPDATE 送信時に指定された LOCATION_FILTER 値。
+   * draft-ietf-moq-transport-20 §10.2.9:
+   * "If omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY,
+   *  the value is unchanged."
+   * 省略時 (undefined) は REQUEST_OK 受信時に Location Filter を更新しない。
+   */
+  locationFilter?: LocationFilter;
 }
 
 /**
@@ -1648,6 +1657,8 @@ export async function bidiSendRequestUpdate(
   // (End Group 超過を含む) の対象にする。対象はトップレベルの
   // LOCATION_FILTER 全件とする
   // (重複自体は別途仕様違反だが、2 件目以降の検証素通りを残さない)。
+  // 保持するのは options.parameters 配列順の先頭 1 件のデコード値とする
+  // (受信側の find による抽出と同形)。
   // デコード失敗はローカル API 誤用として InvalidFilterError に
   // 変換する (受信側の ProtocolViolationError とは区別する)。
   // FILL_PARAMETERS 内側は対象外とする。型付き fill 経路は構築時に検証済みで
@@ -1657,9 +1668,11 @@ export async function bidiSendRequestUpdate(
   const rawLocationFilters = (options.parameters ?? []).filter(
     (param) => param.type === MessageParameterType.LOCATION_FILTER,
   );
+  let sendLocationFilter: LocationFilter | undefined;
   for (const rawLocationFilter of rawLocationFilters) {
     try {
-      decodeLocationFilterParameter(rawLocationFilter);
+      const decoded = decodeLocationFilterParameter(rawLocationFilter);
+      sendLocationFilter ??= decoded;
     } catch (error) {
       throw new InvalidFilterError(
         `invalid raw LOCATION_FILTER in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
@@ -1733,6 +1746,10 @@ export async function bidiSendRequestUpdate(
       // REQUEST_OK 受信時に Range Filters へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
       rangeFilters: options.rangeFilters,
+      // draft-ietf-moq-transport-20 §10.2.9:
+      // REQUEST_OK 受信時に Location Filter へ反映するため、送信時の値を保持する
+      // (省略時は undefined = 不変)。
+      locationFilter: sendLocationFilter,
       // draft-ietf-moq-transport-20 §10.3.1.6:
       // 購読単位の上限検証に fill 内側も含めるため保持する。
       fillRangeFilters: options.fill?.rangeFilters,
@@ -2338,13 +2355,21 @@ export function bidiHandleRequestUpdateOk(
   // draft-ietf-moq-transport-20 §10.2.18:
   // "If the parameter is omitted from REQUEST_UPDATE, the value for the
   //  subscription remains unchanged."
-  // 自 update({ forward }) の REQUEST_OK 受信時に、送信時の FORWARD 値
-  // (pendingRequestUpdate エントリに保持) を Forward State へ反映する。
+  // (§10.2.9 / §5.1.4 も同趣旨の規定を持つ。文言は各反映箇所のコメントを参照。)
+  // 自 update() の REQUEST_OK 受信時に、送信時の FORWARD / LOCATION_FILTER /
+  // Range Filters 値 (pendingRequestUpdate エントリに保持) を反映する。
   // 省略時 (undefined) は反映しない。
   const resolved = resolvePendingRequestUpdate(session, streamRequestId);
   if (resolved !== undefined) {
     const subscriber = session.subscribers.get(streamRequestId);
     if (subscriber) {
+      // draft-ietf-moq-transport-20 §10.2.9:
+      // 自 update() の REQUEST_OK 受信時に、送信時の LOCATION_FILTER 値を反映する
+      // (省略時は不変)。LARGEST_OBJECT 反映の後に行い、相対指定フィルタが
+      // Largest 依存で解決されるようにする。
+      if (resolved.locationFilter !== undefined) {
+        subscriber.setLocationFilter(resolved.locationFilter);
+      }
       if (resolved.forward !== undefined) {
         subscriber.setForwardState(resolved.forward);
       }
@@ -2388,17 +2413,23 @@ export function hasPendingRequestUpdate(
  * "The receiver MUST still send a REQUEST_OK for each successful update"
  * REQUEST_OK は各更新につき 1 通送られるため、1 件のみ解決する。
  *
- * @returns 解決した更新の FORWARD 送信値 (省略時は undefined = 反映しない)
+ * @returns 解決した更新の FORWARD / Range Filters / LOCATION_FILTER 送信値 (省略時は undefined = 反映しない)
  */
 export function resolvePendingRequestUpdate(
   session: BidiSessionInternal,
   targetRequestId: bigint,
-): { forward?: boolean; rangeFilters?: RangeFilterSpec[] } | undefined {
+):
+  | { forward?: boolean; rangeFilters?: RangeFilterSpec[]; locationFilter?: LocationFilter }
+  | undefined {
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.resolve();
-      return { forward: pending.forward, rangeFilters: pending.rangeFilters };
+      return {
+        forward: pending.forward,
+        rangeFilters: pending.rangeFilters,
+        locationFilter: pending.locationFilter,
+      };
     }
   }
   return undefined;
