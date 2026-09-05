@@ -226,6 +226,304 @@ test("subscribe: End Group が 2^64-1 を超えると throw し pendingSubscribe
   );
 });
 
+// ============================================================================
+// 送信失敗時の pending 掃除
+// ============================================================================
+
+/**
+ * controlWriter 未初期化のセッションで publish() を呼ぶと送信前に throw し、
+ * pendingPublish にエントリが残らないことを検証する。
+ *
+ * 送信失敗で pending が残ると、セッション終了時の reject がハンドラ不在で
+ * unhandled rejection の素になる。送信は pending 登録後のため try/catch で
+ * 掃除する (subscribe() と同パターン)。
+ */
+test("publish: 送信失敗時に throw し pendingPublish が残らない", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.publish(["live"], "track");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("Control writer not initialized"));
+  assert.equal(
+    (session as unknown as { pendingPublish: Map<bigint, unknown> }).pendingPublish.size,
+    0,
+  );
+});
+
+/**
+ * controlWriter 未初期化のセッションで fetch() を呼ぶと送信前に throw し、
+ * pendingFetch にエントリが残らないことを検証する。
+ */
+test("fetch: 送信失敗時に throw し pendingFetch が残らない", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(
+      ["live"],
+      "video",
+      { filter: { startGroup: 1n, startObject: 0n } },
+      {
+        object: () => {},
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("Control writer not initialized"));
+  assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
+});
+
+/**
+ * controlWriter 未初期化のセッションで trackStatus() を呼ぶと送信前に throw し、
+ * pendingTrackStatus にエントリが残らないことを検証する。
+ */
+test("trackStatus: 送信失敗時に throw し pendingTrackStatus が残らない", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.trackStatus(["live"], "video");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("Control writer not initialized"));
+  assert.equal(
+    (session as unknown as { pendingTrackStatus: Map<bigint, unknown> }).pendingTrackStatus.size,
+    0,
+  );
+});
+
+/**
+ * controlWriter 未初期化のセッションで subscribe() を呼んでも
+ * pendingSubscribe にエントリが残らないことを検証する (対応済みの回帰ガード)。
+ */
+test("subscribe: 送信失敗時に throw し pendingSubscribe が残らない", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(["live"], "video", { object: () => {} });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("Control writer not initialized"));
+  assert.equal(
+    (session as unknown as { pendingSubscribe: Map<bigint, unknown> }).pendingSubscribe.size,
+    0,
+  );
+});
+
+/**
+ * publish() のパラメータ構築が throw する場合 (負の EXPIRES)、
+ * pendingPublish.set より前で失敗するためエントリが残らないことを検証する。
+ */
+test("publish: パラメータ構築の失敗で throw し pendingPublish が残らない", async () => {
+  const session = createSessionImpl();
+
+  let thrown: Error | undefined;
+  try {
+    await session.publish(["live"], "track", undefined, { expires: -1n });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.equal(
+    (session as unknown as { pendingPublish: Map<bigint, unknown> }).pendingPublish.size,
+    0,
+  );
+});
+
+/**
+ * 送信失敗した publish() の呼び出し元がエラーを観測した後、セッションを
+ * close() しても孤児 Promise の reject による unhandled rejection が
+ * 発生しないことを検証する。
+ */
+test("publish: 送信失敗後に close() しても unhandled rejection が発生しない", async () => {
+  const session = createSessionImpl();
+
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // 呼び出し元のエラーは観測する (内部の孤児 Promise だけが未観測になる構造)
+    let thrown: Error | undefined;
+    try {
+      await session.publish(["live"], "track");
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+    assert.isDefined(thrown);
+    assert.equal(
+      (session as unknown as { pendingPublish: Map<bigint, unknown> }).pendingPublish.size,
+      0,
+    );
+    await session.close();
+    // unhandledRejection は reject 後のマイクロタスクで発火するため、50ms の
+    // 壁時計待ちで確実に検出できる (CI 負荷を考慮した十分な余裕)。
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+/**
+ * writer.write() が失敗する注入 transport で publish() を呼ぶためのセッションを構築する。
+ *
+ * 作成済みストリームの cancel / abort / releaseLock の呼び出しを観測できる。
+ */
+function createWriteFailureSession(): {
+  session: SessionImpl;
+  cancelled: unknown[];
+  aborted: unknown[];
+  isReleased: () => boolean;
+} {
+  const cancelled: unknown[] = [];
+  const aborted: unknown[] = [];
+  let released = false;
+  const writer = {
+    write: async (): Promise<void> => {
+      throw new Error("write failed");
+    },
+    abort: async (reason?: unknown): Promise<void> => {
+      aborted.push(reason);
+    },
+    releaseLock: (): void => {
+      released = true;
+    },
+  };
+  const stream = {
+    readable: {
+      cancel: async (reason?: unknown): Promise<void> => {
+        cancelled.push(reason);
+      },
+    },
+    writable: {
+      getWriter: (): unknown => writer,
+    },
+  };
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      stream as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  return { session, cancelled, aborted, isReleased: () => released };
+}
+
+/**
+ * writer.write() 失敗時に作成済みストリームが RESET で閉じられ、
+ * 呼び出し元に送信エラーが伝播し、pendingPublish が残らないことを検証する。
+ *
+ * RESET は readable.cancel() (STOP_SENDING 相当) と writer.abort() で行い、
+ * FIN である writer.close() は使わない (bidiCancelSubscription と同形)。
+ */
+test("publish: write 失敗時にストリームが RESET で閉じられ pendingPublish が残らない", async () => {
+  const { session, cancelled, aborted, isReleased } = createWriteFailureSession();
+
+  let thrown: Error | undefined;
+  try {
+    await session.publish(["live"], "track");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 呼び出し元には送信エラーが伝播する
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("write failed"));
+  // 作成済みストリームは RESET で閉じられる (固定 reason 文言を pin する)
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0], "request send failed");
+  assert.equal(aborted.length, 1);
+  assert.equal(aborted[0], "request send failed");
+  assert.isTrue(isReleased());
+  // pending エントリは残らず、requestStreams にも登録されない
+  assert.equal(
+    (session as unknown as { pendingPublish: Map<bigint, unknown> }).pendingPublish.size,
+    0,
+  );
+  assert.equal(
+    (session as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+});
+
+/**
+ * writer.write() 失敗時に fetch() の pendingFetch が残らず、
+ * requestStreams にも登録されないことを検証する。
+ */
+test("fetch: write 失敗時に pendingFetch が残らず requestStreams も空のまま", async () => {
+  const { session } = createWriteFailureSession();
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(
+      ["live"],
+      "video",
+      { filter: { startGroup: 1n, startObject: 0n } },
+      {
+        object: () => {},
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
+  assert.equal(
+    (session as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+});
+
+/**
+ * writer.write() 失敗時に trackStatus() の pendingTrackStatus が残らず、
+ * requestStreams にも登録されないことを検証する。
+ */
+test("trackStatus: write 失敗時に pendingTrackStatus が残らず requestStreams も空のまま", async () => {
+  const { session } = createWriteFailureSession();
+
+  let thrown: Error | undefined;
+  try {
+    await session.trackStatus(["live"], "video");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.equal(
+    (session as unknown as { pendingTrackStatus: Map<bigint, unknown> }).pendingTrackStatus.size,
+    0,
+  );
+  assert.equal(
+    (session as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+});
+
 /**
  * draft-ietf-moq-transport-20 §5.1.4:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致しない場合、

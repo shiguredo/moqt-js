@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-send-request-failure-pending-cleanup
 - Polished: 2026-09-05
 
@@ -38,4 +38,10 @@
 
 ## 解決方法
 
-未着手。
+- `publish()` は `buildPublishParameters` / `buildPublishTrackProperties` / `encodePublishPayload` を `pendingPublish.set` より前へ移動し、`sendRequestOnBidiStream` の呼び出しを try/catch で囲んで失敗時に `pendingPublish` の該当エントリを削除してから再 throw するようにした。
+- `fetch()` は `encodeFetchPayload` を `pendingFetch.set` より前へ移動し (構築は既に前倒し済み)、送信を try/catch で囲んで失敗時に `pendingFetch` の該当エントリを削除してから再 throw するようにした。
+- `trackStatus()` は `encodeTrackStatusPayload` 以降を同一 try 範囲に入れ、失敗時に `pendingTrackStatus` の該当エントリを削除してから再 throw するようにした。
+- `bidiSendRequestOnBidiStream` は `writer.write()` 失敗時に `stream.readable.cancel()` と `writer.abort()` で作成済みストリームを RESET で閉じ (`writer.close()` は使わない)、`writer.releaseLock()` してから再 throw するようにした。`requestStreams` 登録は成功経路のみのため掃除不要。
+- `subscribe()` は対応済みのため変更していない。
+- テストは `src/session.test.ts` に 9 件追加した (4 手法の送信失敗・構築失敗・unhandled なし・書き込み失敗 3 手法)。
+- 触ったファイル: `src/session.ts`、`src/session/bidi.ts`、`src/session.test.ts`、`CHANGES.md`。
