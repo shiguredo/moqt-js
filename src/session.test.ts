@@ -2566,6 +2566,150 @@ test("Subgroup データストリーム: ヘッダーのみの FIN はセッシ�
 });
 
 /**
+ * draft-ietf-moq-transport-20 §11.4.2 / §11.4.3:
+ * pending mode (subscribers 未登録) でヘッダーのみの Subgroup ストリームが
+ * FIN すると、その場で abandon して handleIncomingStream が解決する。
+ * FIN 済み read() は以後も即解決の done を返すため、race を再登録すると
+ * chunk 分岐が常に勝って無限ループになる (解決しない場合は 5 秒の
+ * タイムアウトで失敗させる)。
+ */
+test("Subgroup pending mode: ヘッダーのみの FIN で abandon しハングしない", async () => {
+  const ctx = createDataStreamFinContext();
+  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(parts.headerBytes);
+  ctx.fin();
+  // 解決しない場合はタイムアウトで失敗させる (成功時は即解決する)
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("handleIncomingStream がタイムアウトしました"));
+    }, 5000);
+  });
+  try {
+    await Promise.race([handlePromise, timeout]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  // pending entry は削除され、セッションは閉じない
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2 / §11.4.3:
+ * pending mode でヘッダー + 完全 Object 1 件 + FIN の場合も end-of-stream で
+ * abandon し、pending entry が残らずハングしないことを検証する。
+ * (pending mode は payload を decode しないため残バッファ判定は行わない)
+ */
+test("Subgroup pending mode: 完全 Object 付き FIN で abandon しハングしない", async () => {
+  const ctx = createDataStreamFinContext();
+  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("handleIncomingStream がタイムアウトしました"));
+    }, 5000);
+  });
+  try {
+    await Promise.race([handlePromise, timeout]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * pending mode は payload を decode しないため、未完成 Object の途中での FIN
+ * でも §11.4 の SHOULD 判定 (PROTOCOL_VIOLATION) を行わず abandon する。
+ * subscriber mode の未完成 FIN 検出とは意図的な非対称である。
+ */
+test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず abandon する", async () => {
+  const ctx = createDataStreamFinContext();
+  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("handleIncomingStream がタイムアウトしました"));
+    }, 5000);
+  });
+  try {
+    await Promise.race([handlePromise, timeout]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * pending 中に subscriber が登録された場合は pending chunks を結合して
+ * subscriber mode へ合流し、後続 Object が配信されることを検証する。
+ * 本テストは逐次登録の合流を検証する。同時解決時の合流優先は
+ * handleSubgroupStream の done 分岐による (chunk done 勝ちでも再取得する)。
+ */
+test("Subgroup pending mode: 待機中に subscriber 登録で合流し Object が配信される", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  const internals = ctx.session as unknown as {
+    pendingSubgroupBuffer: {
+      streamCount: number;
+      notifyAlias: (trackAlias: bigint, reason: "subscriber") => void;
+    };
+  };
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(parts.headerBytes);
+  await yieldToMacrotask();
+  // pending 到達を確認する (到達前の notifyAlias は no-op になるため)
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 1);
+  // pending 中に subscriber を登録して通知する (SUBSCRIBE_OK 到着の再現)
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  internals.pendingSubgroupBuffer.notifyAlias(7n, "subscriber");
+  // 残りの Object と FIN を流す
+  ctx.enqueue(concatUint8Arrays([parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  // 合流して Object 1 件が配信され、entry は削除される
+  assert.equal(delivered, 1);
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
  * Subgroup ヘッダーが途中で切れた FIN (done) は Object が開始する前であり、
  * handleIncomingStream のヘッダーパース部で黙殺される (§11.4 の判定対象外)。
  * この break が無いと解決済み read() の無限周回になるため、ハングしない

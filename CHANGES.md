@@ -269,6 +269,10 @@
 - [FIX] LOCATION_FILTER パラメータの宣言 Length と消費バイト数の不一致を検出する
   - 構造の消費バイト数が宣言 Length と一致しない場合は構造不正として PROTOCOL_VIOLATION で拒否する (制御メッセージの境界検証と同方針)
   - @voluntas
+- [FIX] subscribers 未登録の Subgroup ストリームの FIN でハングするのを修正する
+  - pending mode で FIN を検出した時点で abandon を完結させ、無限ループにならないようにする
+  - FIN と subscriber 登録の同時解決は合流を優先する
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
