@@ -1372,17 +1372,21 @@ export class SessionImpl implements Session {
     // peer 起点でセッションが閉じた場合、各ストリームの read は reject するが
     // これは正常な終了通知である。read loop の catch 側で正しくスキップできるよう
     // callbacks.close を呼ぶ前に sessionState を遷移させておく。
+    // request 系オブジェクトの state も close() と同じく閉じる
+    // (markRequestObjectsClosed)。通知 (callbacks.close) は 1 回だけ送る。
     this.transport.closed
       .then((closeInfo) => {
         if (this.sessionState !== "closed") {
           this.sessionState = "closed";
         }
+        this.markRequestObjectsClosed();
         this.callbacks.close?.(closeInfo);
       })
       .catch((error: unknown) => {
         if (this.sessionState !== "closed") {
           this.sessionState = "closed";
         }
+        this.markRequestObjectsClosed();
         this.callbacks.close?.({ closeCode: 0, reason: String(error) });
       });
   }
@@ -2532,19 +2536,8 @@ export class SessionImpl implements Session {
       this.goawayTimeoutId = null;
     }
 
-    // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
-    // 注意: セッションクローズはトラックレベルの PUBLISH_DONE ではなく
-    // セッションレベルの終了 (Section 3.5 Termination) であるため handleEnd() ではなく
-    // markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
-    for (const pub of this.publishers.values()) {
-      pub.markClosed();
-    }
-    for (const sub of this.subscribers.values()) {
-      sub.markClosed();
-    }
-    for (const fetcher of this.fetchers.values()) {
-      fetcher.markClosed();
-    }
+    // request 系オブジェクトの state を閉じる (自前起点・ピア起点で共通)
+    this.markRequestObjectsClosed();
 
     // Pending リクエストの Promise を reject する
     const sessionClosedError = new Error("session closed");
@@ -2629,8 +2622,8 @@ export class SessionImpl implements Session {
     };
 
     // SUBSCRIBE_NAMESPACE 用の双方向ストリーム
+    // (state の closed 化は markRequestObjectsClosed() 済み)
     for (const subscription of this.namespaceSubscriptions.values()) {
-      subscription.state = "closed";
       if (subscription.writer) {
         void abortWriterSafely(subscription.writer);
       }
@@ -2642,8 +2635,8 @@ export class SessionImpl implements Session {
 
     // SUBSCRIBE_TRACKS 用の双方向ストリーム
     // draft-ietf-moq-transport-20 §10.20 (SUBSCRIBE_TRACKS)
+    // (state の closed 化は markRequestObjectsClosed() 済み)
     for (const subscription of this.tracksSubscriptions.values()) {
-      subscription.state = "closed";
       if (subscription.writer) {
         void abortWriterSafely(subscription.writer);
       }
@@ -2654,8 +2647,8 @@ export class SessionImpl implements Session {
     this.tracksSubscriptions.clear();
 
     // PUBLISH_NAMESPACE 用の双方向ストリーム
+    // (state の closed 化は markRequestObjectsClosed() 済み)
     for (const publication of this.namespacePublications.values()) {
-      publication.state = "closed";
       void abortWriterSafely(publication.writer);
       void cancelReaderSafely(publication.streamReader);
     }
@@ -2720,6 +2713,44 @@ export class SessionImpl implements Session {
   }
 
   // プライベートメソッド
+
+  /**
+   * request 系オブジェクトの state を閉じる
+   *
+   * draft-ietf-moq-transport-20 Section 3.5:
+   * セッション終了 (自前起点の close() とピア起点の transport.closed) で
+   * 共通の後始末。ハンドラから close() を直接呼ぶことはできない
+   * (sessionState が既に "closed" のため冒頭ガードで早期 return する) ので、
+   * state 遷移だけを本ヘルパーに抽出して両方から呼ぶ。
+   * 注意: セッションクローズはトラックレベルの PUBLISH_DONE ではなく
+   * セッションレベルの終了 (Section 3.5 Termination) であるため handleEnd() ではなく
+   * markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
+   * request 系オブジェクトの handleEnd / handleError は呼ばない。
+   * 通知 (ConnectCallbacks.close) や pending の reject は本ヘルパーの範囲外
+   * (呼び出し元が担う。transport.closed 時の pending 掃除は現状は行わない)。
+   */
+  private markRequestObjectsClosed(): void {
+    // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
+    for (const pub of this.publishers.values()) {
+      pub.markClosed();
+    }
+    for (const sub of this.subscribers.values()) {
+      sub.markClosed();
+    }
+    for (const fetcher of this.fetchers.values()) {
+      fetcher.markClosed();
+    }
+    // namespace 系の購読・配信の state を閉じる
+    for (const subscription of this.namespaceSubscriptions.values()) {
+      subscription.state = "closed";
+    }
+    for (const subscription of this.tracksSubscriptions.values()) {
+      subscription.state = "closed";
+    }
+    for (const publication of this.namespacePublications.values()) {
+      publication.state = "closed";
+    }
+  }
 
   /**
    * セッションエラーを通知してセッションを閉じる
@@ -4354,10 +4385,11 @@ export class SessionImpl implements Session {
         // fetcher.handleEnd() も fetchers.delete も行わず、セッションを
         // PROTOCOL_VIOLATION で閉じる (fetcher の無効化はセッション終了側
         // に委ねる)。
-        // close() を経ずに sessionState が closed へ遷移する経路
-        // (transport.closed ハンドラ、条件付きで遷移する
-        // notifyErrorIfActive) では fetcher が active のまま残るが、
-        // いずれの close 済み経路でも end を通知せず return する
+        // close() を経ずに sessionState が closed へ遷移する経路では
+        // fetcher の扱いが分かれる。transport.closed ハンドラでは
+        // markRequestObjectsClosed により closed になるが、条件付きで遷移する
+        // notifyErrorIfActive では active のまま残る。いずれの close 済み経路でも
+        // end を通知せず return する
         // (未完成 Object を正常終了として扱わないため)。closeWithError は
         // セッション終了済みだと呼ばない (終了済みセッションへの
         // spurious な通知を防ぐため)
