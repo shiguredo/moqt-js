@@ -1201,17 +1201,24 @@ function setupIncomingPublishStreamSession(
  *   RESET_STREAM なら source: "stream" を持つ reject、内部例外なら source なし reject、
  *   セッション終了なら source: "session" を持つ reject、FIN なら close
  * @param extraFrames - PUBLISH の後に enqueue する追加フレーム (GOAWAY / PUBLISH_DONE など)
+ * @param parameters - PUBLISH の初期パラメータ (FORWARD 等の検証用)
+ * @param writable - PUBLISH_OK 書き込み先。失敗を再現する場合は reject する sink を渡す
+ * @param trackName - PUBLISH の Track Name (alias 再利用の検証用)
+ * @param requestId - PUBLISH の Request ID (受信 ID は使い捨てのため再利用時は別値を使う)
  */
 function createIncomingPublishStream(
   terminate: (controller: ReadableStreamDefaultController<Uint8Array>) => void,
   extraFrames: Uint8Array[] = [],
   parameters: { type: number; value: Uint8Array }[] = [],
+  writable: WritableStream<Uint8Array> = new WritableStream<Uint8Array>({}),
+  trackName = "track",
+  requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
 ): WebTransportBidirectionalStream {
   const publishPayload = encodePublishPayload({
     type: MessageType.PUBLISH,
-    requestId: INCOMING_PUBLISH_REQUEST_ID,
+    requestId,
     trackNamespace: createTrackNamespace(INCOMING_PUBLISH_NAMESPACE),
-    trackName: new TextEncoder().encode("track"),
+    trackName: new TextEncoder().encode(trackName),
     trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
     parameters,
     trackProperties: [],
@@ -1232,7 +1239,6 @@ function createIncomingPublishStream(
     },
     { highWaterMark: 0 },
   );
-  const writable = new WritableStream<Uint8Array>({});
   return { readable, writable } as unknown as WebTransportBidirectionalStream;
 }
 
@@ -1274,6 +1280,280 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
   assert.equal(subscriber!.state, "closed");
   // プロトコル違反ではないためセッションは閉じない
   assert.equal(internal.sessionState, "connected");
+});
+
+// ============================================================================
+// 受信 PUBLISH の PUBLISH_OK 書き込み失敗時の掃除
+// ============================================================================
+
+/**
+ * PUBLISH_OK 書き込みを失敗させる sink を作る。
+ *
+ * 失敗値の source 分類は src/session/errors.ts の既存判定に従う。
+ */
+function createFailingWritable(reason: unknown): WritableStream<Uint8Array> {
+  return new WritableStream<Uint8Array>({
+    write() {
+      throw reason;
+    },
+  });
+}
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.3:
+ * PUBLISH_OK の書き込みがピア起因 (source: "stream") で失敗した場合、
+ * subscriber に error 通知が入り state が closed になることを検証する。
+ * (§5.1 MUST の PUBLISH_OK を送れていないため subscription を残さない)
+ * 3 マップのエントリが残らずロックが解放されることも併せて検証する。
+ * handleIncomingBidirectionalStream は reject しない (unhandled rejection なし)。
+ */
+test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (stream) で通知され掃除される", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let notifyCount = 0;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifyCount += 1;
+      notifiedError = error;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+  const writable = createFailingWritable(
+    Object.assign(new Error("write failed"), { source: "stream" }),
+  );
+
+  // reject せず解決すること
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.equal(notifyCount, 1);
+  assert.isDefined(notifiedError);
+  // ピア起因の失敗は subloop 内の RESET 経路と同じ正規化文言で通知される
+  assert.equal(notifiedError!.message, RESET_REQUEST_STREAM_MESSAGE);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  // 後始末: 3 マップにエントリが残らない
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(
+    (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
+    0,
+  );
+  // ロックは解放される
+  assert.isFalse(writable.locked);
+  // プロトコル違反ではないためセッションは閉じない
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.3:
+ * PUBLISH_OK の書き込み失敗値に source が無い場合も、通知 + closed になることを検証する。
+ * (Node 環境では WebTransportError が無いため message fallback で分類される)
+ */
+test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知され掃除される", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let notifyCount = 0;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifyCount += 1;
+      notifiedError = error;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+  const writable = createFailingWritable(new Error("write failed"));
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.equal(notifyCount, 1);
+  assert.isDefined(notifiedError);
+  // source なしは正規化せず生の失敗値を通知する (stream 件との区別)
+  assert.equal(notifiedError!.message, "write failed");
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(
+    (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
+    0,
+  );
+  assert.isFalse(writable.locked);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.3.3:
+ * PUBLISH_OK の書き込み失敗値が Error でない場合 (文字列 throw) も、
+ * 通知 + closed になり掃除されることを検証する。
+ */
+test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (非 Error) で通知され掃除される", async () => {
+  const session = createSessionImpl();
+  let notifiedError: Error | undefined;
+  let notifyCount = 0;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifyCount += 1;
+      notifiedError = error;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+  });
+  const writable = createFailingWritable("boom");
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.equal(notifyCount, 1);
+  assert.isDefined(notifiedError);
+  assert.equal(notifiedError!.message, "boom");
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.subscribers.size, 0);
+  assert.isFalse(writable.locked);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.5:
+ * PUBLISH_OK の書き込み失敗がセッション終了起因 (source: "session") の場合、
+ * 通知はせず state だけ closed にすることを検証する。
+ * (通知なしのため subscriber 参照は取れず、session 分岐の実行は
+ * 後始末と非通知で確認する)
+ */
+test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (session) で通知なく掃除される", async () => {
+  const session = createSessionImpl();
+  let notifyCount = 0;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      notifyCount += 1;
+    },
+  });
+  const writable = createFailingWritable(
+    Object.assign(new Error("session closed by peer"), { source: "session" }),
+  );
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.equal(notifyCount, 0);
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(
+    (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
+    0,
+  );
+  assert.isFalse(writable.locked);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.1:
+ * PUBLISH_OK 失敗で掃除された後は、別 Track への同一 Track Alias の後続
+ * PUBLISH が DUPLICATE_TRACK_ALIAS で誤検出されないことを検証する。
+ */
+test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS にならない", async () => {
+  const session = createSessionImpl();
+  let notifyCount = 0;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      notifyCount += 1;
+    },
+  });
+  const failingWritable = createFailingWritable(
+    Object.assign(new Error("write failed"), { source: "stream" }),
+  );
+
+  // 1 件目の PUBLISH_OK が失敗し、残存なく掃除される (通知 1 回)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      failingWritable,
+    ),
+  );
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(notifyCount, 1);
+
+  // 別 Track に同一 alias を再割り当てしても誤検出されない
+  // (後続ストリームは FIN で終わり、FIN 由来の通知は別経路の既存挙動)
+  // Request ID は使い捨てのため別値 (奇数) を使う
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "other",
+      3n,
+    ),
+  );
+
+  // 2 件目も処理完遂 (FIN 通知) し、セッションは閉じない
+  assert.equal(notifyCount, 2);
+  assert.equal(internal.sessionState, "connected");
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(
+    (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
+    0,
+  );
 });
 
 /**
