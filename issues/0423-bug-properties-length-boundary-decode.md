@@ -3,7 +3,7 @@
 - Priority: Low
 - Created: 2026-08-21
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-properties-length-boundary-decode
 - Polished: 2026-09-05
 
@@ -44,4 +44,6 @@
 
 ## 解決方法
 
-未着手。
+- `src/dataStream.ts` の `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchObjectFields` に Properties 境界検査 (`offset + totalConsumed + 長さ > data.length` で `IncompleteDataError`) を追加し、切り詰め受理と `totalConsumed` 過剰進行をなくした
+- `src/dataStream.subgroup.test.ts` / `src/dataStream.datagram.test.ts` / `src/dataStream.fetch.test.ts` に不足・誤読形・オフセット形の境界テスト 5 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
