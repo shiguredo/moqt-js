@@ -1,18 +1,19 @@
 # close が割り込むと送信側が宣言 payload を欠落させた FIN を送出し得る
 
 - Created: 2026-08-29
+- Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publish-partial-object-fin
 - Polished: {YYYY-MM-DD}
 
 ## 目的
 
-draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams) の MUST「If a sender closes the stream before delivering all such objects to the QUIC stream, it MUST reset the stream.」を送信側で守る。現状の `sendObject` 経路は Object Fields と payload を別々の `write()` で送信するため、2 つの write の間にセッション close (またはストリーム abort) が割り込むと、受信側には「宣言 payloadLength を持つ Object の途中バイト + FIN」というワイヤが届く。0427 で受信側に導入した §11.4 判定の観点では、他端を PROTOCOL_VIOLATION で閉じ得る違反ワイヤを自らが送出する状態であり、相互運用上のリスクを排除する。
+draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams) の MUST「If a sender closes the stream before delivering all such objects to the QUIC stream, it MUST reset the stream.」を送信側で守る。現状の `publishSendObjectInternal` 経路 (`SessionImpl.sendObject` からの委譲先) は Object Fields と payload を別々の `write()` で送信するため、2 つの write の間にセッション close (FIN) が割り込むと、受信側には「宣言 payloadLength を持つ Object の途中バイト + FIN」というワイヤが届く。0427 で受信側に導入した §11.4 判定の観点では、他端を PROTOCOL_VIOLATION で閉じ得る違反ワイヤを自らが送出する状態であり、相互運用上のリスクを排除する。
 
 ## 現状
 
-- `src/session/publish.ts` の Object 送信部は `streamState.writer.write(data)` (Object Fields) と `streamState.writer.write(params.payload)` を separate な 2 回の await で行う。2 回目の write 前に `SessionImpl.close()` が `publisherStreams` の writer を `closeWriterSafely()` (FIN) すると、1 回目の write まで成功していれば FIN が payload より先に出る。
-- 実測 (0427 レビュー時のプローブ): fields write 成功 → payload write が `TypeError [ERR_INVALID_STATE]` で失敗、ワイヤは `[data:fields, FIN]` となる。エラーは `sendObject` の catch で `closedSubgroups.add` + throw されるが、すでに送信済みの partial ワイヤは取り消せない。
+- `src/session/publish.ts` の `publishSendObjectInternal` は `streamState.writer.write(data)` (Object Fields) と `streamState.writer.write(params.payload)` を separate な 2 回の await で行う。2 回目の write 前に `SessionImpl.close()` 内のローカル `closeWriterSafely` (`src/session.ts` 定義、呼び出しは publisherStreams に対してのみ) が writer を FIN で閉じる (fire-and-forget で `publisherSendQueues` の drain なし。他ストリームは `abortWriterSafely` で RESET) と、1 回目の write まで成功していれば FIN が payload より先に出る。
+- 実測 (0427 レビュー時のプローブ): fields write 成功 → payload write が write 失敗 (実測: TypeError。Node.js では `TypeError [ERR_INVALID_STATE]`) で失敗、ワイヤは `[data:fields, FIN]` となる。エラーは `publishSendObjectInternal` の catch で `closedSubgroups.add` + 再 throw され、外側 `publishSendObject` の catch で `publisher.handleError` に渡されるが、すでに送信済みの partial ワイヤは取り消せない。
 - `session.close()` は `publisherSendQueues` の残キューを待たず送信ストリームを閉じるため、delivery timeout や明示的 done() 以外でもこの窓が成立する。
 - 対向実装が §11.4 の SHOULD を実装している場合、自側のセッション終了処理だけで対向との会話を壊すことはない (自側は既に閉じている) が、リレー経由の第三者配信や将来の再接続後の挙動解析を混乱させる。
 
@@ -30,8 +31,8 @@ draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams) の MUST「If a 
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams / 配信途中での終了は reset MUST)
-- draft-ietf-moq-transport-19 §11.4 (Streams / FIN 時の未完成 Object は PROTOCOL_VIOLATION SHOULD)
+- draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams / 配信途中での終了は reset MUST)
+- draft-ietf-moq-transport-20 §11.4 (Streams / FIN 時の未完成 Object は PROTOCOL_VIOLATION SHOULD)
 - 関連: `issues/closed/0427-bug-data-stream-fin-incomplete-object.md`（受信側判定の導入。解決方法の「残課題」項で発掘を記録）
 
 ## 解決方法
