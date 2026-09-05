@@ -261,6 +261,11 @@
   - draft-ietf-moq-transport-20 §10.2.9 / §5.1.2 に基づき、update() で送信した LOCATION_FILTER を REQUEST_OK 受信時に Subscriber の Location Filter に反映し、以降のオブジェクト配信に再適用する
   - 送信時に LOCATION_FILTER を省略した場合は不変とし、除去指定 (Length 0) はフィルタなしとして反映する。REQUEST_ERROR / ストリーム終了時は反映しない
   - @voluntas
+- [FIX] リクエスト送信の失敗時に保留中の要求を掃除する
+  - publish() / fetch() / trackStatus() の送信が失敗した場合に、対応する保留中の要求を削除して孤児 Promise が残らないようにする (subscribe() と同パターン)
+  - publish() はパラメータ構築とエンコードを保留登録より前へ移動し、fetch() はエンコードを保留登録より前へ移動する
+  - 双方向ストリームへの書き込み失敗時は、作成済みストリームを受信取消しと送信リセットで閉じてからエラーを伝播する
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する

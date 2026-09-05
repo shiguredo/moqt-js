@@ -1679,15 +1679,11 @@ export class SessionImpl implements Session {
       await this.sendPublishDone(impl);
     };
 
-    // PUBLISH_OK の Promise を作成
-    const promise = new Promise<Publisher>((resolve, reject) => {
-      this.pendingPublish.set(requestId, {
-        resolve,
-        reject,
-        impl,
-      });
-    });
-
+    // PUBLISH メッセージを構築する。
+    // buildPublishParameters / buildPublishTrackProperties / encodePublishPayload
+    // が throw する場合、pendingPublish.set より前で失敗させるため、
+    // 構築・encode は Promise 作成より前に行う (subscribe() の
+    // buildSubscribeParameters / fetch() の buildFetchParameters と同じ手順)。
     const parameters = buildPublishParameters(options);
     const trackProperties = buildPublishTrackProperties(options, this.grease);
 
@@ -1707,18 +1703,36 @@ export class SessionImpl implements Session {
     };
 
     const payload = encodePublishPayload(publishMsg);
-    const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.PUBLISH, payload, {
-      requestId: requestId.toString(),
-      trackNamespace: namespace,
-      trackName,
-      trackAlias: trackAlias.toString(),
-      MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
-      OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-      DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
-      GROUP_ORDER: options?.groupOrder,
-      DYNAMIC_GROUPS: options?.dynamicGroups,
-      EXPIRES: options?.expires?.toString(),
+
+    // PUBLISH_OK の Promise を作成
+    const promise = new Promise<Publisher>((resolve, reject) => {
+      this.pendingPublish.set(requestId, {
+        resolve,
+        reject,
+        impl,
+      });
     });
+
+    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
+    try {
+      streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.PUBLISH, payload, {
+        requestId: requestId.toString(),
+        trackNamespace: namespace,
+        trackName,
+        trackAlias: trackAlias.toString(),
+        MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
+        OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
+        DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
+        GROUP_ORDER: options?.groupOrder,
+        DYNAMIC_GROUPS: options?.dynamicGroups,
+        EXPIRES: options?.expires?.toString(),
+      });
+    } catch (error) {
+      // 送信失敗時は保留中の PUBLISH を削除して残留を防ぐ
+      // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
+      this.pendingPublish.delete(requestId);
+      throw error;
+    }
 
     // 双方向ストリームからレスポンスを読み取る
     void this.readPublishResponse(requestId, streamInfo.stream, streamInfo.controlReader);
@@ -1961,6 +1975,11 @@ export class SessionImpl implements Session {
       parameters: buildFetchParameters(options),
     };
 
+    // FETCH メッセージのペイロードを構築する。
+    // encodeFetchPayload が throw する場合、pendingFetch.set より前で
+    // 失敗させるため、encode は Promise 作成より前に行う (publish() と同じ手順)。
+    const payload = encodeFetchPayload(fetchMsg);
+
     // FETCH_OK を待つ Promise。
     // startLocation は FETCH_OK の End Location 検証 (§10.14) に使う。
     // 相対指定 (1 フィールド) と Next Object 形式は Largest Object 依存のため
@@ -1975,13 +1994,20 @@ export class SessionImpl implements Session {
       });
     });
 
-    const payload = encodeFetchPayload(fetchMsg);
-    const streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
-      requestId: requestId.toString(),
-      trackNamespace: namespace,
-      trackName,
-      filter: describeLocationFilter(options.filter),
-    });
+    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
+    try {
+      streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
+        requestId: requestId.toString(),
+        trackNamespace: namespace,
+        trackName,
+        filter: describeLocationFilter(options.filter),
+      });
+    } catch (error) {
+      // 送信失敗時は保留中の FETCH を削除して残留を防ぐ
+      // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
+      this.pendingFetch.delete(requestId);
+      throw error;
+    }
 
     // 双方向ストリームからレスポンスを読み取る
     void this.readFetchResponse(requestId, streamInfo.stream, streamInfo.controlReader);
@@ -2039,17 +2065,27 @@ export class SessionImpl implements Session {
       parameters: buildTrackStatusParameters(options),
     };
 
-    const payload = encodeTrackStatusPayload(trackStatusMsg);
-    const streamInfo = await this.sendRequestOnBidiStream(
-      requestId,
-      MessageType.TRACK_STATUS,
-      payload,
-      {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-      },
-    );
+    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
+    try {
+      // buildTrackStatusParameters は throw しないが、encode 以降は共通化のため
+      // 同一 try 範囲に含める (publish() / fetch() と同じ手順)。
+      const payload = encodeTrackStatusPayload(trackStatusMsg);
+      streamInfo = await this.sendRequestOnBidiStream(
+        requestId,
+        MessageType.TRACK_STATUS,
+        payload,
+        {
+          requestId: requestId.toString(),
+          trackNamespace: namespace,
+          trackName,
+        },
+      );
+    } catch (error) {
+      // 送信失敗時は保留中の TRACK_STATUS を削除して残留を防ぐ
+      // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
+      this.pendingTrackStatus.delete(requestId);
+      throw error;
+    }
 
     // 双方向ストリームからレスポンスを読み取る
     void this.readTrackStatusResponse(requestId, streamInfo.stream, streamInfo.controlReader);
