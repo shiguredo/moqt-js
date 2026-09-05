@@ -232,6 +232,34 @@ test("FetchObjectFields: 最初のオブジェクトの roundtrip", () => {
   assert.equal(context.groupId, 100n);
 });
 
+/**
+ * draft-ietf-moq-transport-20 Section 11.4.4.1:
+ * Properties Length が宣言するバイト数にバッファが満たない場合、
+ * 切り詰めた Properties を返して後続フィールドを誤読せず、
+ * IncompleteDataError を throw して次のチャンクを待つ。
+ */
+test("FetchObjectFields: Properties バイト列途中でバッファが切れていると IncompleteDataError", () => {
+  const flags = createFirstFetchObjectFlags(true);
+  const original: FetchObjectFields = {
+    serializationFlags: flags,
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties: new Uint8Array([0xaa, 0xbb, 0xcc]),
+    payloadLength: 5n,
+  };
+  const encoded = encodeFetchObjectFields(original);
+  // Properties 末尾 1 バイトと Object Payload Length を落とし
+  // Properties 途中で切れた形にする
+  const truncated = encoded.slice(0, -2);
+  assert.throws(
+    () => decodeFetchObjectFields(truncated, null, 0, true),
+    IncompleteDataError,
+    "properties",
+  );
+});
+
 test("FetchObjectFields: 複数オブジェクトの連続デコード", () => {
   const firstFlags = createFirstFetchObjectFlags(false);
   const first: FetchObjectFields = {

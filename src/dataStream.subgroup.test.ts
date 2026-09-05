@@ -345,6 +345,32 @@ test("ObjectFields: Properties ありタイプ (0x11) をデコード", () => {
   assert.equal(consumed, 6);
 });
 
+/**
+ * draft-ietf-moq-transport-20 Section 11.4.2:
+ * Properties Length が宣言するバイト数にバッファが満たない場合、
+ * 切り詰めた Properties を返して後続フィールドを誤読せず、
+ * IncompleteDataError を throw して次のチャンクを待つ。
+ */
+test("ObjectFields: Properties バイト列途中でバッファが切れていると IncompleteDataError", () => {
+  // objectIdDelta(0x05) + Properties Length(0x03) までは揃うが
+  // Properties 本体が 2 バイトしかない
+  const data = new Uint8Array([0x05, 0x03, 0xaa, 0xbb]);
+  assert.throws(() => decodeObjectFields(data, 0x11), IncompleteDataError, "properties");
+});
+
+test("ObjectFields: Properties 不足時に後続バイトを盗まず IncompleteDataError", () => {
+  // 宣言 4 に対し実 2 バイト + 後続の Object Payload Length(0x0a) がある形。
+  // 境界検査なしでは 0x0a を Properties 3 バイト目として盗み
+  // totalConsumed を過剰に進めて後続を誤読する
+  const data = new Uint8Array([0x05, 0x04, 0xaa, 0xbb, 0x0a]);
+  assert.throws(() => decodeObjectFields(data, 0x11), IncompleteDataError, "properties");
+});
+
+test("ObjectFields: オフセット付きで Properties 不足の場合は IncompleteDataError", () => {
+  const data = new Uint8Array([0xff, 0xff, 0x05, 0x03, 0xaa, 0xbb]);
+  assert.throws(() => decodeObjectFields(data, 0x11, 2), IncompleteDataError, "properties");
+});
+
 test("ObjectFields: オフセット付きでデコード", () => {
   const data = new Uint8Array([0xff, 0xff, 0x0a, 0x14]);
   const [fields, consumed] = decodeObjectFields(data, 0x10, 2);

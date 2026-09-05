@@ -556,6 +556,15 @@ export function decodeObjectFields(
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
 
+    // Properties 本体が宣言バイト数に満たない場合は切り詰めず
+    // IncompleteDataError で次のチャンクを待つ (decodeSubgroupHeader の
+    // Priority バイト境界チェックと同方式。切り詰めると totalConsumed が
+    // 実バイト数を超えて後続フィールドを誤読する)。
+    // draft-ietf-moq-transport-20 Section 11.4.2:
+    // 節番号は仕様将来版で変わる可能性がある。
+    if (offset + totalConsumed + propertiesLength > data.length) {
+      throw new IncompleteDataError("incomplete object fields: properties");
+    }
     properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
     totalConsumed += propertiesLength;
   }
@@ -913,6 +922,16 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
       );
     }
 
+    // Properties 本体が宣言バイト数に満たない場合は切り詰めた不正 datagram を
+    // 配信せず IncompleteDataError を throw する (decodeSubgroupHeader の
+    // Priority バイト境界チェックと同方式)。
+    // 受信側 (incomingHandleDatagram) は IncompleteDataError を
+    // toProtocolViolationSessionError で PROTOCOL_VIOLATION に変換して
+    // セッションを閉じる (長さ検証後の構造破損 = プロトコル違反の
+    // リポジトリ共通解釈。既存の varint 不足と同じ扱い)。
+    if (offset + totalConsumed + propertiesLength > data.length) {
+      throw new IncompleteDataError("incomplete datagram: properties");
+    }
     properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
     totalConsumed += propertiesLength;
   }
@@ -1707,8 +1726,18 @@ export function decodeFetchObjectFields(
     totalConsumed += extLenConsumed;
 
     if (extLen > 0) {
-      properties = data.slice(offset + totalConsumed, offset + totalConsumed + Number(extLen));
-      totalConsumed += Number(extLen);
+      // Properties 本体が宣言バイト数に満たない場合は切り詰めず
+      // IncompleteDataError で次のチャンクを待つ (decodeSubgroupHeader の
+      // Priority バイト境界チェックと同方式。切り詰めると totalConsumed が
+      // 実バイト数を超えて後続フィールドを誤読する)。
+      // draft-ietf-moq-transport-20 Section 11.4.4.1:
+      // 節番号は仕様将来版で変わる可能性がある。
+      const propertiesLength = Number(extLen);
+      if (offset + totalConsumed + propertiesLength > data.length) {
+        throw new IncompleteDataError("incomplete fetch object fields: properties");
+      }
+      properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
+      totalConsumed += propertiesLength;
     }
   }
 
