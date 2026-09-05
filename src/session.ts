@@ -4625,7 +4625,27 @@ export class SessionImpl implements Session {
               this.pendingSubgroupBuffer.appendChunk(entry, chunk);
             }
             if (event.result.done) {
+              // FIN 検出時はその場で完結させる (race の再登録を待たない)。
+              // FIN 済み read() は以後も即解決の done を返すため、再 race すると
+              // chunk 分岐が常に勝って notified が発火せず無限ループになる。
+              // FIN と subscriber 登録の同時解決は合流を優先し、空の場合のみ
+              // abandon する (notified 側が先に勝つ既存経路は変えない)。
+              subscribers = this.subscribersByAlias.get(header.trackAlias) ?? [];
+              if (subscribers.length > 0) {
+                // pending chunks を 1 本に concat して subscriber mode へ合流する
+                buffer = concatChunks(entry.chunks);
+                this.pendingSubgroupBuffer.remove(entry);
+                entryRemoved = true;
+                break;
+              }
               entry.notify("end-of-stream");
+              this.pendingSubgroupBuffer.remove(entry);
+              entryRemoved = true;
+              await cancelStreamQuiet(
+                reader,
+                `pending subgroup end-of-stream: trackAlias=${header.trackAlias}`,
+              );
+              return;
             }
             continue;
           }
