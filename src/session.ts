@@ -3987,8 +3987,15 @@ export class SessionImpl implements Session {
 
     this.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
 
-    // PUBLISH_OK を送信 (draft-ietf-moq-transport-20 §5.1 MUST)
-    {
+    // PUBLISH_OK を送信 (draft-ietf-moq-transport-20 §5.1 MUST) して
+    // 後続メッセージのサブループを回す。
+    // 登録以後の一連の処理は try/finally で守り、PUBLISH_OK 書き込み失敗・
+    // サブループ脱出のいずれの exit 経路でも後始末 (3 マップの削除 + fill
+    // 関連付けの掃除 + ロック解放) を必ず行う。通知は Map 削除より前に行う
+    // (notifySubscriberFailure は subscribers.get で対象を引くため)。
+    // 本関数は throw しない (fire-and-forget 呼び出しのため。
+    // runPublishStreamSubLoop の catch と同形)。
+    try {
       const publishOkPayload = encodeRequestOkPayload({
         type: MessageType.REQUEST_OK,
         parameters: [],
@@ -3997,17 +4004,67 @@ export class SessionImpl implements Session {
       const controlWriter = new ControlStreamWriter();
       const framed = controlWriter.encode(MessageType.REQUEST_OK, publishOkPayload);
       await subWriter.write(framed);
+
+      // 後続メッセージのサブループ
+      await this.runPublishStreamSubLoop(
+        impl,
+        publishRequestId,
+        subReader,
+        subControlReader,
+        subscribeCallbacks,
+      );
+    } catch (error) {
+      // PUBLISH_OK 書き込み失敗時は失敗として扱う (§5.1 MUST の PUBLISH_OK を
+      // 送れていないため subscription を残さない)。いずれの source でも
+      // markClosed し、通知の有無は source で分ける。
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
+      if (error instanceof Error && isSessionClosedError(error)) {
+        // source が "session" の場合: 通知せず state closed とする
+        // (runPublishStreamSubLoop のセッション終了起因と同方針)
+        impl.markClosed();
+      } else {
+        // source が "stream" または source なしの場合:
+        // error 通知 + state closed とする。ピア起因 (source: "stream") の
+        // 場合は subloop 内の RESET 経路と同じ正規化文言で通知する。
+        // createResetStreamError は非 Error も吸収するため条件は source のみでよい。
+        const notifyError = isPeerStreamError(error)
+          ? bidi.createResetStreamError(error)
+          : normalizedError;
+        try {
+          bidi.notifySubscriberFailure(
+            this as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+            notifyError,
+          );
+        } catch {
+          // アプリの error コールバック例外は吸収する (markClosed は
+          // notifySubscriberFailure 内の finally で実行済み)。
+        }
+      }
+    } finally {
+      this.cleanupIncomingPublish(publishRequestId, publishTrackAlias, impl, subReader, subWriter);
     }
+  }
 
-    // 後続メッセージのサブループ
-    await this.runPublishStreamSubLoop(
-      impl,
-      publishRequestId,
-      subReader,
-      subControlReader,
-      subscribeCallbacks,
-    );
-
+  /**
+   * 受信 PUBLISH の後始末を行う
+   *
+   * subscribers / subscribersByAlias / requestStreams の削除と fill 関連付けの
+   * 掃除、ストリームのロック解放を、exit 経路に依らず必ず実行する。
+   *
+   * @param publishRequestId - 受信 PUBLISH の Request ID (3 マップの削除キー)
+   * @param publishTrackAlias - 受信 PUBLISH の Track Alias (alias 側の特定削除用)
+   * @param impl - 生成した SubscriberImpl (alias 側の特定要素削除用)
+   * @param subReader - 受信ストリームの reader (ロック解放用)
+   * @param subWriter - 応答ストリームの writer (ロック解放用)
+   */
+  private cleanupIncomingPublish(
+    publishRequestId: bigint,
+    publishTrackAlias: bigint,
+    impl: SubscriberImpl,
+    subReader: ReadableStreamDefaultReader<Uint8Array>,
+    subWriter: WritableStreamDefaultWriter<Uint8Array>,
+  ): void {
     this.requestStreams.delete(publishRequestId);
     this.subscribers.delete(publishRequestId);
     // 購読の終了に伴い fill 関連付けも不要になるため掃除する。
