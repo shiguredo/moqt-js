@@ -2506,6 +2506,178 @@ test("Subgroup データストリーム: 未完成 Object の途中でピア FIN
 });
 
 /**
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
+ * closeWithError() はアプリ登録の error コールバックが throw しても
+ * close() を必ず実行し、セッションを閉じることを検証する。
+ * Subgroup 未完成 FIN の PROTOCOL_VIOLATION 経路で駆動する。
+ */
+test("closeWithError: error コールバックが throw してもセッションが閉じる", async () => {
+  const notified: Error[] = [];
+  const debugRecords: { typeName: string; decoded?: Record<string, unknown> }[] = [];
+  const transportCloseCalls: unknown[] = [];
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: (info?: WebTransportCloseInfo) => {
+      transportCloseCalls.push(info);
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: (error) => {
+      notified.push(error);
+      throw new Error("callback boom");
+    },
+    debug: (message) => {
+      debugRecords.push(message);
+    },
+  });
+  const internal = session as unknown as {
+    subscribers: Map<bigint, SubscriberImpl>;
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    pendingPublish: Map<bigint, { resolve: () => void; reject: (error: Error) => void }>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  internal.subscribers.set(1n, subscriber);
+  internal.subscribersByAlias.set(7n, [subscriber]);
+  let rejected: Error | undefined;
+  internal.pendingPublish.set(0n, {
+    resolve: () => {},
+    reject: (error) => {
+      rejected = error;
+    },
+  });
+
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = internal.handleIncomingStream(stream);
+  controller.enqueue(
+    concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]),
+  );
+  controller.close();
+  await handlePromise;
+
+  // 通知コールバックの throw に関わらずセッションが閉じる
+  assert.equal(session.state, "closed");
+  // 本来の違反コードが通知される (INTERNAL_ERROR 化しない)
+  assert.equal(notified.length, 1);
+  assert.instanceOf(notified[0], SessionError);
+  assert.equal((notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  // close() の終了処理が実行される
+  assert.equal(transportCloseCalls.length, 1);
+  // 本来の違反コードで閉じる (INTERNAL_ERROR 化しない)
+  assert.equal(
+    (transportCloseCalls[0] as { closeCode?: unknown } | undefined)?.closeCode,
+    SessionErrorCode.PROTOCOL_VIOLATION,
+  );
+  assert.isDefined(rejected);
+  assert.equal(subscriber.state, "closed");
+  // 未完成 Object は配信されない
+  assert.equal(delivered, 0);
+  // throw の事実はデバッグ記録に残る
+  const dataStreamErrors = debugRecords.filter((record) => record.typeName === "DATA_STREAM_ERROR");
+  assert.equal(dataStreamErrors.length, 1);
+  assert.isTrue(String(dataStreamErrors[0].decoded?.error).includes("callback boom"));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
+ * error コールバックと debug コールバックの両方が throw しても、close() は
+ * 実行され、例外は呼び出し元へ伝播しないことを検証する。
+ */
+test("closeWithError: error と debug の両方が throw しても閉じて伝播しない", async () => {
+  const transportCloseCalls: unknown[] = [];
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: (info?: WebTransportCloseInfo) => {
+      transportCloseCalls.push(info);
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: () => {
+      throw new Error("callback boom");
+    },
+    debug: () => {
+      throw new Error("debug boom");
+    },
+  });
+  const internal = session as unknown as {
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  internal.subscribersByAlias.set(7n, [subscriber]);
+
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = internal.handleIncomingStream(stream);
+  controller.enqueue(
+    concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]),
+  );
+  controller.close();
+  // 例外が伝播せず解決する
+  await handlePromise;
+
+  assert.equal(session.state, "closed");
+  assert.equal(transportCloseCalls.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
+ * 正常系 (コールバックが throw しない) では先に callbacks.error、
+ * 後に close の順で実行されることを検証する (回帰ガード)。
+ */
+test("closeWithError: 正常時は error 通知の後に close が実行される", async () => {
+  const order: string[] = [];
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: () => {
+      order.push("transport-close");
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: () => {
+      order.push("error");
+    },
+  });
+  const internal = session as unknown as {
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  internal.subscribersByAlias.set(7n, [subscriber]);
+
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = internal.handleIncomingStream(stream);
+  controller.enqueue(
+    concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]),
+  );
+  controller.close();
+  await handlePromise;
+
+  assert.deepEqual(order, ["error", "transport-close"]);
+  assert.equal(session.state, "closed");
+});
+
+/**
  * 回帰ガード: Object を 3 チャンクに分割配信する間 (FIN なし) は、
  * Object が未完成のままでも「次チャンク待ち」でありセッションは閉じない
  * ことを中間時点のアサートで固定する。完成後に FIN されたなら従来どおり
