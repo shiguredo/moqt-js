@@ -4,11 +4,11 @@
 - Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publish-partial-object-fin
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-05
 
 ## 目的
 
-draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams) の MUST「If a sender closes the stream before delivering all such objects to the QUIC stream, it MUST reset the stream.」を送信側で守る。現状の `publishSendObjectInternal` 経路 (`SessionImpl.sendObject` からの委譲先) は Object Fields と payload を別々の `write()` で送信するため、2 つの write の間にセッション close (FIN) が割り込むと、受信側には「宣言 payloadLength を持つ Object の途中バイト + FIN」というワイヤが届く。0427 で受信側に導入した §11.4 判定の観点では、他端を PROTOCOL_VIOLATION で閉じ得る違反ワイヤを自らが送出する状態であり、相互運用上のリスクを排除する。
+draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams) の MUST「If a sender closes the stream before delivering all such objects to the QUIC stream, it MUST reset the stream.」のうち、1 オブジェクト内の Object Fields と payload の分割送信に起因する宣言 `payloadLength` 未達の FIN を送信側で排除する。現状の `publishSendObjectInternal` 経路 (`SessionImpl.sendObject` からの委譲先) は Object Fields と payload を別々の `write()` で送信するため、2 つの write の間にセッション close (FIN) が割り込むと、受信側には「宣言 payloadLength を持つ Object の途中バイト + FIN」というワイヤが届く。0427 で受信側に導入した §11.4 判定の観点では、他端を PROTOCOL_VIOLATION で閉じ得る違反ワイヤを自らが送出する状態であり、相互運用上のリスクを排除する。`publisherSendQueues` に残った未送信オブジェクト群を抱えたまま FIN する残キュー経路は本 issue の対象外とし、必要なら別途 issue 化する。
 
 ## 現状
 
@@ -25,8 +25,8 @@ draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams) の MUST「If a 
 
 ## 完了条件
 
-- `sendObject` の Object Fields + payload が単一 write で送信されること (ソース上の 1 write 化と、ワイヤバイト列が従来の 2 write と同一であることを示すテストで検証する)。
-- writer が close 済みの状態で `sendObject` を呼んだ場合、partial ワイヤが生成されず既存の catch 経路 (`closedSubgroups.add` + 元エラーの再 throw) で失敗することが確認できること。
+- `sendObject` の Object Fields + payload が単一 write で送信されること (ソース上の 1 write 化と、ワイヤバイト列が従来の 2 write と同一であることを示すテストで検証する。空 payload 時は従来から単一 write のため対象外)。
+- 1 回目の `write()` 成功後に `close()` が割り込む interleaving を実 W3C ストリーム注入で確定的に駆動し（deferred writer 等で 2 write 間に close を割り込ませる、モック不使用）、partial ワイヤが生成されないこと。writer が close 済みの状態で `sendObject` を呼ぶだけの事前 close では再現にならないため完了条件としない。失敗時は `publishSendObject` の catch 経路（`closedSubgroups.add` 後に `publisher.handleError` へ渡し、`sendObject` の返却 Promise は reject せず `error` コールバックで通知）で処理されることを確認する。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 参照
