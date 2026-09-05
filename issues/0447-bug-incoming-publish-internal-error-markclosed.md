@@ -1,6 +1,7 @@
 # 受信 PUBLISH ループの source なし内部エラーで subscriber が active のまま残る
 
 - Created: 2026-08-31
+- Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-incoming-publish-internal-error-markclosed
 - Polished: {YYYY-MM-DD}
@@ -13,7 +14,7 @@
 
 - `runPublishStreamSubLoop` の catch (`src/session.ts`) は、0428 の対応で source: "stream" (ピアの RESET_STREAM) を `bidi.notifySubscriberFailure` (error 通知 + markClosed) に統一したが、source を持たない内部例外の else 分岐は raw の `callbacks.error` を呼ぶだけで markClosed しない。ストリームはエラー終了しておりこれ以上の読み取りは起きないのに、subscriber は "active" のまま残る (セッション close まで state が誤ったまま)。
 - subscribe ロール側 (`bidiReadRequestStreamMessages` の catch、`src/session/bidi.ts`) は source: "stream" 以外の内部例外では通知も markClosed も行わない (握りつぶし)。受信 PUBLISH 側は通知する点でさらに非対称。
-- namespace ループ (`src/session/namespaceLoops.ts` の catch、SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE 用と SUBSCRIBE_TRACKS 用の 2 箇所) は source を見ず、`subscription.state === "active" && !goawayReceived` なら一律で `subscription.state = "closed"` にしてから通知する。3 経路中、内部エラーで state を閉じるのは namespace ループだけである。
+- namespace ループ (`src/session/namespaceLoops.ts` の catch、namespace / tracks / publication の 3 ループ) は source を見ず、`subscription.state === "active" && !goawayReceived` なら一律で `subscription.state = "closed"` にしてから通知する (セッション終了時は通知しない)。3 経路中、内部エラーで state を閉じるのは namespace ループだけである。
 - 影響: `Subscriber` の state が active のまま残ると、アプリは `update()` / `unsubscribe()` を継続できると誤認する (`update()` は送信部で別途失敗する)。`handleObject` / `handleDatagram` はロックされている reader からの配信が止まるため実害は出ないが、state の意味論としては不整合。
 - 変更対象: `src/session.ts` (`runPublishStreamSubLoop` の catch)、`src/session.test.ts` (既存テストの「source なしエラーでは state は active のまま」アサーションの追従を含む)、`CHANGES.md`。
 
@@ -35,7 +36,7 @@
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §3.5 (Termination: 「The Transport Session can be terminated at any point.」)
-- draft-ietf-moq-transport-19 §5.1 (Subscriptions: Terminated への遷移)
+- draft-ietf-moq-transport-20 §3.5 (Termination: 「The Transport Session can be terminated at any point.」)
+- draft-ietf-moq-transport-20 §5.1 (Subscriptions: Terminated への遷移。内部エラー → Terminated の写像は仕様の要請ではなく namespace ループとの対称化という実装上の判断)
 - 関連: `issues/closed/0428-bug-incoming-publish-reset-markclosed-missing.md` (RESET 経路の markClosed 対称化。本 issue は残った source なし / source: "session" 経路を扱う)
 - 関連: `issues/0444-bug-peer-session-close-markclosed-missing.md` (transport.closed 由来のセッション終了で markClosed が走らない問題。state を閉じる対象経路が重なるため実装順は本 issue → 0444 が自然)
