@@ -290,6 +290,9 @@
 - [FIX] 購読解除時にロック中のストリームへ STOP_SENDING が届かないのを修正する
   - 読み取りループ保持の reader 経由で cancel し abort も実行する
   - @voluntas
+- [FIX] 受信 PUBLISH の内部エラーで subscriber が active のまま残るのを修正する
+  - source なし内部エラーは通知したうえで閉じ、終了起因は通知せず閉じる
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
