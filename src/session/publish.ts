@@ -192,11 +192,26 @@ export async function publishSendObjectInternal(
     objectProperties,
   );
 
+  // Object Fields と payload は 1 回の write() で送信する。
+  // draft-ietf-moq-transport-20 §11.4 / §11.4.3:
+  // 2 回の write() の間に close (FIN) が割り込むと、宣言 payloadLength 未達の
+  // FIN を送出し得る (§11.4 の serialized Object 途中の FIN / §11.4.3 の
+  // 配信途中終了は reset MUST)。QUIC/WebTransport の write はセグメント境界を
+  // 保証しないため、連結して単一 write にすることで割り込みの窓を構造的に
+  // 無くす。
+  // 空 payload 時は fields のみの単一 write になる (従来どおり)。
+  // なお Subgroup Header の write と本 write の間には窓が残るが、header のみの
+  // FIN は Object 途中の FIN には当たらず、session 終了時の teardown 競合に
+  // 限定される。
+  let objectBytes = data;
+  if (params.payload.length > 0) {
+    objectBytes = new Uint8Array(data.length + params.payload.length);
+    objectBytes.set(data, 0);
+    objectBytes.set(params.payload, data.length);
+  }
+
   try {
-    await streamState.writer.write(data);
-    if (params.payload.length > 0) {
-      await streamState.writer.write(params.payload);
-    }
+    await streamState.writer.write(objectBytes);
   } catch (err) {
     try {
       streamState.writer.releaseLock();
