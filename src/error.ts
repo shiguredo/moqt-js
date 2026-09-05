@@ -1,7 +1,7 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-19 Section 15.11 (Error Codes)
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-15.10
+ * draft-ietf-moq-transport-20 Section 15.11 (Error Codes)
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-15.11
  */
 
 import { PublishDoneStatusCode } from "./message/types";
@@ -12,7 +12,7 @@ export { PublishDoneStatusCode };
 /**
  * Session Termination Error Codes (Section 3.5 Termination)
  *
- * draft-ietf-moq-transport-19 Section 3.5 (Termination)
+ * draft-ietf-moq-transport-20 Section 3.5 (Termination)
  *
  * draft-ietf-moq-transport-20 Appendix A.1 で 0x15
  * VERSION_NEGOTIATION_FAILED は削除された。
@@ -40,7 +40,7 @@ export const SessionErrorCode = {
   /**
    * TOO_MANY_REQUEST_UPDATES (Section 3.5)
    *
-   * draft-ietf-moq-transport-19:
+   * draft-ietf-moq-transport-20:
    * MAX_REQUEST_UPDATES で広告した上限を超える REQUEST_UPDATE を受信した。
    */
   TOO_MANY_REQUEST_UPDATES: 0x1b,
@@ -51,10 +51,10 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
 /**
  * REQUEST_ERROR Codes (Section 10.6 REQUEST_ERROR)
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * - GOING_AWAY (0x6) を追加
  * - EXCESSIVE_LOAD (0x9) を追加
- * - DUPLICATE_SUBSCRIPTION を削除（draft-19 §5.1 で同一 Track への複数サブスクリプションが許可）
+ * - DUPLICATE_SUBSCRIPTION を削除（draft-20 §5.1 で同一 Track への複数サブスクリプションが許可）
  * - NAMESPACE_TOO_LARGE (0x31) を追加
  * - INVALID_JOINING_REQUEST_ID (0x32) を削除 (draft-20 で Joining FETCH 削除)
  * - UNKNOWN_STATUS_IN_RANGE を削除
@@ -78,12 +78,12 @@ export const RequestErrorCode = {
   REDIRECT: 0x34,
   /**
    * CONFLICTING_FILTERS (Section 10.6)
-   * draft-ietf-moq-transport-19: SUBSCRIBE_TRACKS 応答専用
+   * draft-ietf-moq-transport-20: SUBSCRIBE_TRACKS 応答専用
    */
   CONFLICTING_FILTERS: 0x35,
   /**
    * INVALID_FILTER (Section 10.6)
-   * draft-ietf-moq-transport-19: フィルタ不正・上限超過
+   * draft-ietf-moq-transport-20: フィルタ不正・上限超過
    */
   INVALID_FILTER: 0x36,
 } as const;
@@ -91,7 +91,7 @@ export const RequestErrorCode = {
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode];
 
 /**
- * draft-ietf-moq-transport-19 §14 (Grease):
+ * draft-ietf-moq-transport-20 §14 (Grease):
  * 未知のエラーコードは INTERNAL_ERROR として扱う。
  * Receipt of an unknown error code MUST be treated as equivalent to
  * INTERNAL_ERROR for that context.
@@ -136,7 +136,7 @@ export function normalizeSessionErrorCode(code: number): SessionErrorCode {
 /**
  * Stream Reset Error Codes (Section 15.11.4)
  *
- * draft-ietf-moq-transport-19 Section 15.11.4 (Stream Reset Error Codes):
+ * draft-ietf-moq-transport-20 Section 15.11.4 (Stream Reset Error Codes):
  * - GOING_AWAY (0x4) を追加
  * - UNKNOWN_OBJECT_STATUS (0x6) を追加
  * - EXPIRED_AUTH_TOKEN (0x7) を追加
@@ -159,7 +159,7 @@ export const DataStreamErrorCode = {
 export type DataStreamErrorCode = (typeof DataStreamErrorCode)[keyof typeof DataStreamErrorCode];
 
 /**
- * draft-ietf-moq-transport-19 §14 (Grease):
+ * draft-ietf-moq-transport-20 §14 (Grease):
  * 未知の Data Stream Reset エラーコードは INTERNAL_ERROR として扱う。
  */
 const DATA_STREAM_ERROR_CODE_SET = new Set(Object.values(DataStreamErrorCode));
@@ -197,7 +197,7 @@ export class SessionError extends MoqtError {
 /**
  * Redirect 情報 (Section 10.6.1)
  *
- * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
+ * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure):
  * サーバーがクライアントに対して別の接続先への再接続を指示する。
  * Track Namespace は tuple 形式で保持する。
  */
@@ -230,7 +230,7 @@ export class RequestError extends MoqtError {
 /**
  * decode 関数がバッファ不足を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-19 のデータストリーム / 制御メッセージ decode は、
+ * draft-ietf-moq-transport-20 のデータストリーム / 制御メッセージ decode は、
  * バッファに必要なバイト数が揃っていない時点で例外を投げる。
  * 受信ループはこのエラーを受けて次のチャンクを待つ。
  */
@@ -244,7 +244,7 @@ export class IncompleteDataError extends Error {
 /**
  * プロトコル違反 (仕様で定められた値・形式に違反した受信データ) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-19 で MUST 要件として定められた受信データの妥当性検証
+ * draft-ietf-moq-transport-20 で MUST 要件として定められた受信データの妥当性検証
  * (ストリームヘッダーの予約値、Object Status の不正値、Properties Length の不整合等) で
  * 違反を検出した場合に投げる。受信ループはこのエラーを受けて
  * PROTOCOL_VIOLATION でセッションを閉じる。
@@ -259,7 +259,7 @@ export class ProtocolViolationError extends Error {
 /**
  * Malformed Track を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-19 §2.4.2 / §12.7 / §12.8 / §12.9:
+ * draft-ietf-moq-transport-20 §2.4.2 / §12.7 / §12.8 / §12.9:
  * Object 内で MUST 規定 (IMMUTABLE_PROPERTIES の再帰禁止、各 Property の Object 当たり
  * 1 つだけ、同一 Subgroup 内の Publisher Priority 不一致等) が違反された場合、
  * Track は malformed として扱われる。セッションは閉じず、データストリーム単位で
@@ -278,7 +278,7 @@ export class MalformedTrackError extends Error {
  * 不正な Range Filter および Location Filter (値域・Property Type 偶数・
  * 組み合わせ重複・構造不正・End Group の 2^64-1 超過) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-19 §5.1.2 / §5.1.3 / §10.2.12-14:
+ * draft-ietf-moq-transport-20 §5.1.2 / §5.1.4 / §10.2.12-14:
  * 受信側ではフィルタ不正は REQUEST_ERROR (INVALID_FILTER) で応答するか、応答不能な
  * 経路 (PUBLISH_OK 受信等) では PROTOCOL_VIOLATION でセッションを閉じる。
  * 送信側 (encodeRangeFilter) ではローカル API 誤用 (SetID 範囲外・奇数 Property
@@ -301,7 +301,7 @@ export class InvalidFilterError extends Error {
 /**
  * 閉じた Subgroup への送信を拒否するときに投げるエラー
  *
- * draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams):
  * "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
  *  attempt to open a new stream to deliver additional Objects in that Subgroup."
  *

@@ -119,7 +119,7 @@ test("matchNamespacePrefix: 両方空配列の場合は空 suffix を返す", ()
 
 // ============================================================================
 // namespacePrefixesOverlap / validateNamespacePrefixUpdate
-// draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions)
+// draft-ietf-moq-transport-20 §10.9.2 (Updating Namespace Subscriptions)
 // ============================================================================
 
 test("namespacePrefixesOverlap: 新 prefix が既存 prefix の sub-prefix なら true", () => {
@@ -183,7 +183,7 @@ test("validateNamespacePrefixUpdate: アクティブな既存 prefix が無け�
 // AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
 // ============================================================================
 
-// USE_VALUE スキームのトークン（draft-ietf-moq-transport-19 §10.2.2 Alias Type 0x3）
+// USE_VALUE スキームのトークン（draft-ietf-moq-transport-20 §10.2.2 Alias Type 0x3）
 function useValueToken(): AuthorizationToken {
   return {
     aliasType: AuthorizationTokenAliasType.USE_VALUE,
@@ -252,7 +252,7 @@ test("buildSubscribeNamespaceParameters: authorizationToken 未指定は空", ()
 
 // ============================================================================
 // buildPublishTrackProperties (GREASE)
-// draft-ietf-moq-transport-19 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
+// draft-ietf-moq-transport-20 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
 // ============================================================================
 
 test("buildPublishTrackProperties: grease 未指定は GREASE Property を含まない", () => {
@@ -290,7 +290,7 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
 
 // ============================================================================
 // buildSubscribeTracksParameters (Range Filters)
-// draft-ietf-moq-transport-19 §10.19.1 / §6.3 / §5.1.3
+// draft-ietf-moq-transport-20 §10.20.1 / §6.3 / §5.1.4
 // ============================================================================
 
 test("buildSubscribeTracksParameters: rangeFilters が SUBSCRIBE_TRACKS パラメータになる", () => {
@@ -338,7 +338,7 @@ test("buildSubscribeTracksParameters: rangeFilters 未指定は Range Filter を
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 削除 (Length=0) は REQUEST_UPDATE のみに定義されるため、
  * SUBSCRIBE_TRACKS で削除を指定すると throw することを検証する。
  */
@@ -364,7 +364,7 @@ test("buildRangeFilterParameters: 追加と削除が混在してもパラメー�
 
 // ============================================================================
 // buildSubscribeParameters / buildFetchParameters (送信ガード)
-// draft-ietf-moq-transport-19 §5.1.2 / §5.1.3
+// draft-ietf-moq-transport-20 §5.1.2 / §5.1.4
 // ============================================================================
 
 test("buildSubscribeParameters: 削除指定で throw する", () => {
@@ -486,7 +486,7 @@ test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 
 // ============================================================================
 // validateRangeFilterLimits
-// draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES)
+// draft-ietf-moq-transport-20 §10.3.1.6 (MAX FILTER RANGES)
 // ============================================================================
 
 test("validateRangeFilterLimits: undefined は throw しない", () => {
@@ -562,7 +562,7 @@ test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数え�
 
 // ============================================================================
 // mergeRangeFilters
-// draft-ietf-moq-transport-19 §5.1.3 (削除・置換・不変)
+// draft-ietf-moq-transport-20 §5.1.4 (削除・置換・不変)
 // ============================================================================
 
 test("mergeRangeFilters: remove で当該パラメータ型全体が削除される", () => {
@@ -622,7 +622,7 @@ test("mergeRangeFilters: update 内の同一型複数エントリ (異なる Set
 
 // ============================================================================
 // validateRangeFilterSpecs
-// draft-ietf-moq-transport-19 §5.1.3 (削除は REQUEST_UPDATE のみ / 0x29 のスコープ / 組み合わせ重複)
+// draft-ietf-moq-transport-20 §5.1.4 (削除は REQUEST_UPDATE のみ / 0x29 のスコープ / 組み合わせ重複)
 // ============================================================================
 
 test("validateRangeFilterSpecs: undefined / 空配列は throw しない", () => {
@@ -782,7 +782,7 @@ test("validateRangeFilterSpecs: 削除エントリは重複判定の対象外", 
 
 // ============================================================================
 // validateTrackNamespaceForSend
-// draft-ietf-moq-transport-19 §3.2.1 (Reserved Namespaces) / §3.2.2 (.session)
+// draft-ietf-moq-transport-20 §3.2.1 (Reserved Namespaces) / §3.2.2 (.session)
 // ============================================================================
 
 test("validateTrackNamespaceForSend: 通常の namespace は throw しない", () => {
@@ -803,7 +803,7 @@ test("validateTrackNamespaceForSend: .session namespace は throw する", () =>
 });
 
 test("validateTrackNamespaceForSend: 予約 namespace の判定は先頭フィールドのみ", () => {
-  // draft-ietf-moq-transport-19 §3.2.1: 判定は先頭フィールドのみ
+  // draft-ietf-moq-transport-20 §3.2.1: 判定は先頭フィールドのみ
   assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", ".session"], "track"));
 });
 
@@ -822,7 +822,7 @@ test("validateTrackNamespaceForSend: . で始まる予約 namespace は throw �
 });
 
 test("validateTrackNamespaceForSend: . 単体の namespace は throw する", () => {
-  // draft-ietf-moq-transport-19 §3.2.1: "." 単体は MUST NOT be used for any purpose
+  // draft-ietf-moq-transport-20 §3.2.1: "." 単体は MUST NOT be used for any purpose
   assert.throws(
     () => validateTrackNamespaceForSend(["."], "track"),
     /reserved namespace prefix \. is not allowed/,
@@ -831,7 +831,7 @@ test("validateTrackNamespaceForSend: . 単体の namespace は throw する", ()
 
 // ============================================================================
 // compareLocations
-// draft-ietf-moq-transport-19 §1.4.2 (Location Structure)
+// draft-ietf-moq-transport-20 §1.4.2 (Location Structure)
 // ============================================================================
 
 test("compareLocations: 同一 Location は 0 を返す", () => {

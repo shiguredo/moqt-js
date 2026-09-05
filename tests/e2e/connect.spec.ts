@@ -5,7 +5,7 @@ const MOQT_URI = process.env["TEST_MOQT_URI"];
 const AUTH_TOKEN = process.env["TEST_MOQT_AUTH_TOKEN"];
 
 // MOQT Session 接続成立まで (SETUP メッセージ交換完了) を検証する
-// draft-ietf-moq-transport-19 Section 10.3.1 (SETUP Message)
+// draft-ietf-moq-transport-20 Section 10.3 (SETUP Message)
 test.describe.skip("MOQT Session connection", () => {
   test.skip(!MOQT_URI, "TEST_MOQT_URI is not set");
 

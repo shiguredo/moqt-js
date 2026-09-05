@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages
- * draft-ietf-moq-transport-19 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_SKIPPED)
+ * draft-ietf-moq-transport-20 Section 10.16 (PUBLISH_NAMESPACE) — 10.21 (PUBLISH_SKIPPED)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -16,7 +16,7 @@ import {
 import { MessageType } from "./types";
 
 /**
- * PUBLISH_NAMESPACE メッセージ (Section 10.15 PUBLISH_NAMESPACE)
+ * PUBLISH_NAMESPACE メッセージ (Section 10.16 PUBLISH_NAMESPACE)
  *
  * パブリッシャーが Track Namespace 内にトラックがあることを通知する。
  */
@@ -28,7 +28,7 @@ export interface PublishNamespace {
 }
 
 /**
- * NAMESPACE メッセージ (Section 10.16 NAMESPACE)
+ * NAMESPACE メッセージ (Section 10.17 NAMESPACE)
  *
  * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -45,7 +45,7 @@ export interface Namespace {
 }
 
 /**
- * NAMESPACE_DONE メッセージ (Section 10.17 NAMESPACE_DONE)
+ * NAMESPACE_DONE メッセージ (Section 10.18 NAMESPACE_DONE)
  *
  * SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
@@ -62,9 +62,9 @@ export interface NamespaceDone {
 }
 
 /**
- * SUBSCRIBE_NAMESPACE メッセージ (Section 10.18 SUBSCRIBE_NAMESPACE)
+ * SUBSCRIBE_NAMESPACE メッセージ (Section 10.19 SUBSCRIBE_NAMESPACE)
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割された。Subscribe Options フィールドは
  * 廃止され、各メッセージの責務が明確化された。
@@ -84,7 +84,7 @@ export interface NamespaceDone {
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
  * 空のネームスペースはワイルドカードとして機能し、全てのネームスペースにマッチする。
  *
- * draft-ietf-moq-transport-19 §10.18
+ * draft-ietf-moq-transport-20 §10.19
  */
 export interface SubscribeNamespace {
   type: typeof MessageType.SUBSCRIBE_NAMESPACE;
@@ -94,9 +94,9 @@ export interface SubscribeNamespace {
 }
 
 /**
- * SUBSCRIBE_TRACKS メッセージ (Section 10.19 SUBSCRIBE_TRACKS)
+ * SUBSCRIBE_TRACKS メッセージ (Section 10.20 SUBSCRIBE_TRACKS)
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
  * SUBSCRIBE_TRACKS (0x51) に分割された。
  *
@@ -114,7 +114,7 @@ export interface SubscribeNamespace {
  *   Parameters (..) ...
  * }
  *
- * draft-ietf-moq-transport-19 §10.19
+ * draft-ietf-moq-transport-20 §10.20
  */
 export interface SubscribeTracks {
   type: typeof MessageType.SUBSCRIBE_TRACKS;
@@ -158,7 +158,7 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Parameters は PUBLISH_NAMESPACE ペイロードの最後のフィールドであり、
@@ -180,7 +180,7 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
 /**
  * Namespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-19 Section 10.16 (NAMESPACE):
+ * draft-ietf-moq-transport-20 Section 10.17 (NAMESPACE):
  * NAMESPACE Message {
  *   Type (i) = 0x8,
  *   Length (16),
@@ -197,7 +197,7 @@ export function encodeNamespacePayload(msg: Namespace): Uint8Array {
 export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace {
   const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Track Namespace Suffix は NAMESPACE ペイロードの最後のフィールドであり、
@@ -217,7 +217,7 @@ export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace 
 /**
  * NamespaceDone のペイロードをエンコード
  *
- * draft-ietf-moq-transport-19 Section 10.17 (NAMESPACE_DONE):
+ * draft-ietf-moq-transport-20 Section 10.18 (NAMESPACE_DONE):
  * NAMESPACE_DONE Message {
  *   Type (i) = 0xE,
  *   Length (16),
@@ -234,7 +234,7 @@ export function encodeNamespaceDonePayload(msg: NamespaceDone): Uint8Array {
 export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): NamespaceDone {
   const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Track Namespace Suffix は NAMESPACE_DONE ペイロードの最後のフィールドであり、
@@ -254,7 +254,7 @@ export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): Namesp
 /**
  * SubscribeNamespace のペイロードをエンコード
  *
- * draft-ietf-moq-transport-19 Section 10.18 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-20 Section 10.19 (SUBSCRIBE_NAMESPACE):
  * SUBSCRIBE_NAMESPACE Message {
  *   Type (vi64) = 0x50,
  *   Length (16),
@@ -284,7 +284,7 @@ export function encodeSubscribeNamespacePayload(msg: SubscribeNamespace): Uint8A
 /**
  * SubscribeNamespace のペイロードをデコード
  *
- * draft-ietf-moq-transport-19 Section 10.18 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-20 Section 10.19 (SUBSCRIBE_NAMESPACE)
  */
 export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): SubscribeNamespace {
   let totalConsumed = 0;
@@ -298,7 +298,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Parameters は SUBSCRIBE_NAMESPACE ペイロードの最後のフィールドであり、
@@ -320,7 +320,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
 /**
  * SubscribeTracks のペイロードをエンコード
  *
- * draft-ietf-moq-transport-19 Section 10.19 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-20 Section 10.20 (SUBSCRIBE_TRACKS):
  * SUBSCRIBE_TRACKS Message {
  *   Type (vi64) = 0x51,
  *   Length (16),
@@ -352,7 +352,7 @@ export function encodeSubscribeTracksPayload(msg: SubscribeTracks): Uint8Array {
 /**
  * SubscribeTracks のペイロードをデコード
  *
- * draft-ietf-moq-transport-19 Section 10.19 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-20 Section 10.20 (SUBSCRIBE_TRACKS)
  */
 export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): SubscribeTracks {
   let totalConsumed = 0;
@@ -366,7 +366,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Parameters は SUBSCRIBE_TRACKS ペイロードの最後のフィールドであり、
@@ -386,9 +386,9 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
 }
 
 /**
- * PUBLISH_SKIPPED メッセージ (Section 10.20 PUBLISH_SKIPPED)
+ * PUBLISH_SKIPPED メッセージ (Section 10.21 PUBLISH_SKIPPED)
  *
- * draft-ietf-moq-transport-19 Section 10.20 (PUBLISH_SKIPPED):
+ * draft-ietf-moq-transport-20 Section 10.21 (PUBLISH_SKIPPED):
  * Publisher が Track に対する PUBLISH を送信しないことを示す。
  *
  * PUBLISH_SKIPPED Message {
@@ -399,7 +399,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
  *   Track Name (..),
  * }
  *
- * draft-ietf-moq-transport-19 Section 6.1:
+ * draft-ietf-moq-transport-20 Section 6.1:
  * "or any other reason" — 理由はストリーム不足に限定されない。
  * MUST NOT send a PUBLISH for a Track after PUBLISH_SKIPPED, scoped to a single PUBLISH.
  */
@@ -443,7 +443,7 @@ export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): Publi
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-19 Section 10:
+  // draft-ietf-moq-transport-20 Section 10:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Track Name は PUBLISH_SKIPPED ペイロードの最後のフィールドであり、

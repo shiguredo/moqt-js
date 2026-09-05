@@ -25,7 +25,7 @@ import type { SessionInternal } from "./types";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §3.3:
+ * draft-ietf-moq-transport-20 §3.3:
  * 受信 bidi ストリームの先頭が PUBLISH の場合、従来の受信 PUBLISH 処理を
  * 継続する ("publish" 分類)。
  */
@@ -34,7 +34,7 @@ test("incomingClassifyFirstBidiMessage: PUBLISH は publish に分類される",
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3:
+ * draft-ietf-moq-transport-20 §3.3:
  * 先頭 7 種のうち moqt-js が未対応の 6 種 (SUBSCRIBE / FETCH / TRACK_STATUS /
  * PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) は
  * NOT_SUPPORTED 応答の対象 ("unsupported-request" 分類)。
@@ -58,7 +58,7 @@ test("incomingClassifyFirstBidiMessage: 未対応の 6 種は unsupported-reques
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3:
+ * draft-ietf-moq-transport-20 §3.3:
  * 「Bidirectional streams MUST NOT begin with any other message type unless
  * negotiated. If they do, the peer MUST close the Session with a
  * PROTOCOL_VIOLATION.」
@@ -75,7 +75,7 @@ test("incomingClassifyFirstBidiMessage: 7 種以外は protocol-violation に分
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3 / §10.19:
+ * draft-ietf-moq-transport-20 §3.3.3 / §10.19:
  * REQUEST_ERROR を送信し、送信方向を FIN (writer.close()) で閉じ、受信方向を
  * cancel() で閉じることを検証する。
  */
@@ -182,7 +182,7 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §4 (Extensibility):
+ * draft-ietf-moq-transport-20 §4 (Extensibility):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * 未対応リクエストに REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、
@@ -237,7 +237,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3:
+ * draft-ietf-moq-transport-20 §3.3:
  * 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
  * でセッションを閉じ、true を返すことを検証する。
  */
@@ -269,7 +269,7 @@ test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで PRO
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3:
+ * draft-ietf-moq-transport-20 §3.3:
  * 先頭が PUBLISH の場合、false を返して呼び出し側 (SessionImpl) の従来の
  * 受信 PUBLISH 処理を継続させることを検証する。
  */
@@ -308,11 +308,11 @@ function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
 
 // ============================================================================
 // incomingValidateRequestId のテスト
-// draft-ietf-moq-transport-19 §10.1 (Request ID)
+// draft-ietf-moq-transport-20 §10.1 (Request ID)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §10.1:
+ * draft-ietf-moq-transport-20 §10.1:
  * 「If an endpoint receives a Request ID where the least significant bit is
  *  incorrect for the sender, or a duplicate Request ID, it MUST close the
  *  session with INVALID_REQUEST_ID.」
@@ -336,7 +336,7 @@ test("incomingValidateRequestId: 偶数 Request ID で INVALID_REQUEST_ID", () =
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.1:
+ * draft-ietf-moq-transport-20 §10.1:
  * 正常な奇数 Request ID は検証を通過し、Set に記録される。
  */
 test("incomingValidateRequestId: 奇数 Request ID は通過して Set に記録される", () => {
@@ -353,7 +353,7 @@ test("incomingValidateRequestId: 奇数 Request ID は通過して Set に記録
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.1:
+ * draft-ietf-moq-transport-20 §10.1:
  * 同一 Request ID の再出現は INVALID_REQUEST_ID でセッションを閉じる。
  */
 test("incomingValidateRequestId: 重複 Request ID で INVALID_REQUEST_ID", () => {
@@ -371,7 +371,7 @@ test("incomingValidateRequestId: 重複 Request ID で INVALID_REQUEST_ID", () =
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.1:
+ * draft-ietf-moq-transport-20 §10.1:
  * パリティ検証を通過した Request ID は、その後の拒否経路 (予約 namespace 拒否 /
  * UNINTERESTED 等) で return されても Set に記録され、同一 ID の再送が検出
  * されることを検証する。
@@ -396,7 +396,7 @@ test("incomingValidateRequestId: 検証通過後に Set へ add され再送が�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.1:
+ * draft-ietf-moq-transport-20 §10.1:
  * 異なる奇数 Request ID はそれぞれ独立に検証を通過する。
  */
 test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", () => {
@@ -421,11 +421,11 @@ test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", ()
 
 // ============================================================================
 // incomingHandleDatagram のテスト
-// draft-ietf-moq-transport-19 §11.3.1 (Object Datagram)
+// draft-ietf-moq-transport-20 §11.3.1 (Object Datagram)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §11.3.1:
+ * draft-ietf-moq-transport-20 §11.3.1:
  * 不完全な Object Datagram (varint が途中終端する構造破損) は、黙殺せず
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。datagram は
  * Length フレーミングを持たないが、原子配信のため不完全なフィールド構造は

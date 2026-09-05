@@ -1,6 +1,6 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-19 Section 5 (Publishing and Retrieving Tracks)
+ * draft-ietf-moq-transport-20 Section 5 (Publishing and Retrieving Tracks)
  */
 
 import type { ObjectStatus } from "./message/types";
@@ -21,7 +21,7 @@ export interface SendObjectParams {
   priority?: number;
   /**
    * オブジェクトステータス
-   * draft-ietf-moq-transport-19 §11.2.1.1
+   * draft-ietf-moq-transport-20 §11.2.1.1
    *
    * - NORMAL (0x0): 通常のオブジェクト（デフォルト）
    * - END_OF_GROUP (0x3): グループの終端。payload は空でなければならない
@@ -31,7 +31,7 @@ export interface SendObjectParams {
   status?: ObjectStatus;
   /**
    * Object Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-19 Section 12.2 / Section 8
+   * draft-ietf-moq-transport-20 Section 12.2 / Section 8
    *
    * subgroup 先頭オブジェクトの Object Property として送信される。
    * 先頭以外で指定すると throw する。
@@ -39,7 +39,7 @@ export interface SendObjectParams {
   deliveryTimeout?: bigint;
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-19 Section 12.1 / Section 8
+   * draft-ietf-moq-transport-20 Section 12.1 / Section 8
    *
    * subgroup 先頭オブジェクトの Object Property として送信される。
    * 先頭以外で指定すると throw する。
@@ -49,7 +49,7 @@ export interface SendObjectParams {
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
+ * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
  */
 export interface SendDatagramParams {
   groupId: number;
@@ -93,19 +93,19 @@ export interface Publisher {
   sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
+   * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    *
-   * draft-ietf-moq-transport-19:
+   * draft-ietf-moq-transport-20:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
-   * draft-ietf-moq-transport-19 Section 2.2, Section 11.3
+   * draft-ietf-moq-transport-20 Section 2.2, Section 11.3
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
    * パブリッシングを終了し、PUBLISH_DONE を送信してストリームを閉じる
-   * draft-ietf-moq-transport-19 §10.11 (PUBLISH_DONE)
+   * draft-ietf-moq-transport-20 §10.12 (PUBLISH_DONE)
    *
    * 並行して呼ばれた場合も PUBLISH_DONE は 1 回だけ送信され、
    * 2 回目の呼び出しは 1 回目の完了まで待つ。
@@ -127,7 +127,7 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
-  // draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE):
+  // draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
 
@@ -140,7 +140,7 @@ export class PublisherImpl implements Publisher {
   /**
    * 進行中の done() の Promise
    *
-   * draft-ietf-moq-transport-19 §10.11:
+   * draft-ietf-moq-transport-20 §10.12:
    * 「A publisher sends a PUBLISH_DONE message as the final message before
    *  closing the subscription's bidi stream」の枠組みに反する二重 PUBLISH_DONE
    * 送信を防ぐため、並行 done() 呼び出しでは進行中の Promise を再利用する。
@@ -218,7 +218,7 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Send a datagram on this track
-   * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
+   * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {

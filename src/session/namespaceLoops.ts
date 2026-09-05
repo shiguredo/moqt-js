@@ -5,9 +5,9 @@
  * startNamespacePublicationStreamLoop / handleGoawayOnNamespaceStream
  * を free function として抽出する。
  *
- * draft-ietf-moq-transport-19 §10.18 (SUBSCRIBE_NAMESPACE)
- * draft-ietf-moq-transport-19 §10.19 (SUBSCRIBE_TRACKS)
- * draft-ietf-moq-transport-19 §10.15 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-20 §10.19 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-20 §10.20 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-20 §10.16 (PUBLISH_NAMESPACE)
  */
 
 import {
@@ -40,7 +40,7 @@ import type { SessionInternal } from "./types";
 /**
  * namespace 系ストリーム上の GOAWAY を処理する共通ヘルパー
  *
- * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * draft-ietf-moq-transport-20 §10.4 (GOAWAY):
  * 重複 GOAWAY は PROTOCOL_VIOLATION。
  * 重複なし (初回) の場合は `callbacks.goaway` を通知し、New Session URI を
  * 返す。受信方向のクローズや state 遷移は行わない (読み取り継続は呼び出し側
@@ -148,8 +148,8 @@ async function namespaceHandleGoawayMessage(
 /**
  * namespace / tracks ストリームの先頭メッセージガード。
  *
- * draft-ietf-moq-transport-19:
- * - §10.18 / §10.19「If the subscriber receives any message other than a REQUEST_OK
+ * draft-ietf-moq-transport-20:
+ * - §10.19 / §10.20「If the subscriber receives any message other than a REQUEST_OK
  *   or a REQUEST_ERROR as the first message on the response half of the stream, then
  *   it MUST close the session with a PROTOCOL_VIOLATION.」
  * - §10.4「A GOAWAY MAY also be sent on a request stream to initiate migration of
@@ -158,7 +158,7 @@ async function namespaceHandleGoawayMessage(
  * 前者の MUST に対し後者の GOAWAY マイグレーションを優先させ、確立前 (resolved=false) は
  * REQUEST_OK / REQUEST_ERROR / GOAWAY のいずれかのみを許可する。想定外メッセージは
  * PROTOCOL_VIOLATION でセッションを閉じ、false を返す。呼び出し側は false を受けたら return する。
- * PUBLISH_NAMESPACE (§10.15) には先頭メッセージ MUST が draft に無いため対象外
+ * PUBLISH_NAMESPACE (§10.16) には先頭メッセージ MUST が draft に無いため対象外
  * (publication ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
  *
  * @returns 読み取りを継続してよい場合は true、セッションが閉じられ中断する場合は false
@@ -243,7 +243,7 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
 /**
  * 確立後の REQUEST_OK (REQUEST_UPDATE 応答) を処理する
  *
- * draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-20 §10.9.2 (Updating Namespace Subscriptions):
  * 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK) であり、
  * 保留中の更新を解決して新 prefix をサブスクリプション状態へ反映する。
  *
@@ -255,7 +255,7 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
  *   更新も失敗として reject して掃除する (update() のハング防止)
  *
  * @param onPrefixApplied - 新 prefix を反映した直後に呼ばれるコールバック。
- *   draft-ietf-moq-transport-19 §10.9.2:
+ *   draft-ietf-moq-transport-20 §10.9.2:
  *   "NAMESPACE and NAMESPACE_DONE messages following the REQUEST_OK will contain
  *    Track Namespace suffixes relative to the updated prefix."
  *   SUBSCRIBE_NAMESPACE ループは NAMESPACE_DONE の重複検証キーを新 prefix 基準に
@@ -323,12 +323,12 @@ function handleNamespaceRequestUpdateOk(
 /**
  * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗応答) を処理する
  *
- * draft-ietf-moq-transport-19 §10.9.2:
+ * draft-ietf-moq-transport-20 §10.9.2:
  * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答 (例: PREFIX_OVERLAP) であり、
  * 保留中の更新をすべて reject する (coalescing 対応)。prefix は反映せず
  * pendingPrefix をクリアする。
  *
- * draft-ietf-moq-transport-19 §10.9.1:
+ * draft-ietf-moq-transport-20 §10.9.1:
  * "When a REQUEST_UPDATE fails for a SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS or
  *  PUBLISH_NAMESPACE, the responder MUST close the bidi stream"
  * に従い、ピアがストリームを閉じるまで読み取りを継続する (done 検出でループが
@@ -364,7 +364,7 @@ function handleNamespaceRequestUpdateError(
 /**
  * ストリームクローズ (done) 時の保留中 REQUEST_UPDATE を処理する
  *
- * draft-ietf-moq-transport-19 §10.9.1:
+ * draft-ietf-moq-transport-20 §10.9.1:
  * REQUEST_UPDATE 失敗時はピアが bidi ストリームを閉じるため、応答
  * (REQUEST_OK / REQUEST_ERROR) を待たずに閉じた場合は保留中の更新を
  * 暗黙の失敗として reject する。
@@ -385,7 +385,7 @@ function handleNamespaceRequestUpdateStreamClosed(
 /**
  * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-19 §10.18 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-20 §10.19 (SUBSCRIBE_NAMESPACE):
  * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
  */
 export async function namespaceStartNamespaceStreamLoop(
@@ -402,7 +402,7 @@ export async function namespaceStartNamespaceStreamLoop(
 
   const { streamReader, controlReader, callbacks } = subscription;
   let resolved = false;
-  // draft-ietf-moq-transport-19 §10.4:
+  // draft-ietf-moq-transport-20 §10.4:
   // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
   // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
   // まで遅延するため、メッセージ処理判断専用に使う。
@@ -417,7 +417,7 @@ export async function namespaceStartNamespaceStreamLoop(
         if (!resolved) {
           reject(new Error("stream closed before receiving response"));
         } else {
-          // draft-ietf-moq-transport-19 §10.9:
+          // draft-ietf-moq-transport-20 §10.9:
           // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
           handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
         }
@@ -455,7 +455,7 @@ export async function namespaceStartNamespaceStreamLoop(
           case MessageType.REQUEST_OK: {
             const requestOk = decodeRequestOkPayload(messagePayload);
             if (resolved) {
-              // draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+              // draft-ietf-moq-transport-20 §10.9.2 (Updating Namespace Subscriptions):
               // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
               if (
                 !handleNamespaceRequestUpdateOk(
@@ -497,12 +497,12 @@ export async function namespaceStartNamespaceStreamLoop(
           }
 
           case MessageType.REQUEST_ERROR: {
-            // draft-ietf-moq-transport-19 §10.4:
+            // draft-ietf-moq-transport-20 §10.4:
             // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
             // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
             // REQUEST_OK」を防ぐ)
             if (resolved && !goawayReceived) {
-              // draft-ietf-moq-transport-19 §10.9.2:
+              // draft-ietf-moq-transport-20 §10.9.2:
               // 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答
               if (
                 !handleNamespaceRequestUpdateError(
@@ -537,7 +537,7 @@ export async function namespaceStartNamespaceStreamLoop(
           }
 
           case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-19 §10.4:
+            // draft-ietf-moq-transport-20 §10.4:
             // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
             // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §10.4 の
             // マイグレーション扱いで reject + cancel してループ終了 (helper 参照)。
@@ -594,7 +594,7 @@ export async function namespaceStartNamespaceStreamLoop(
       }
     }
   } catch (error) {
-    // draft-ietf-moq-transport-19 §10.4:
+    // draft-ietf-moq-transport-20 §10.4:
     // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
     // spurious error 通知を抑止する
     const normalizedError = error instanceof Error ? error : new Error(String(error));
@@ -607,7 +607,7 @@ export async function namespaceStartNamespaceStreamLoop(
         reject(normalizedError);
       }
     }
-    // draft-ietf-moq-transport-19 §10.9.1:
+    // draft-ietf-moq-transport-20 §10.9.1:
     // RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
     // 一種として保留中の更新を暗黙の失敗として reject する。
     // goawayReceived の有無に関わらず実行する (reject しないと update() が
@@ -629,7 +629,7 @@ export async function namespaceStartNamespaceStreamLoop(
 /**
  * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-19 §10.19 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-20 §10.20 (SUBSCRIBE_TRACKS):
  * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
  */
 export async function namespaceStartTracksStreamLoop(
@@ -646,7 +646,7 @@ export async function namespaceStartTracksStreamLoop(
 
   const { streamReader, controlReader, callbacks } = subscription;
   let resolved = false;
-  // draft-ietf-moq-transport-19 §10.4:
+  // draft-ietf-moq-transport-20 §10.4:
   // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
   // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
   // まで遅延するため、メッセージ処理判断専用に使う。
@@ -659,7 +659,7 @@ export async function namespaceStartTracksStreamLoop(
         if (!resolved) {
           reject(new Error("stream closed before receiving response"));
         } else {
-          // draft-ietf-moq-transport-19 §10.9:
+          // draft-ietf-moq-transport-20 §10.9:
           // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
           handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
         }
@@ -694,7 +694,7 @@ export async function namespaceStartTracksStreamLoop(
           case MessageType.REQUEST_OK: {
             const requestOk = decodeRequestOkPayload(messagePayload);
             if (resolved) {
-              // draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions):
+              // draft-ietf-moq-transport-20 §10.9.2 (Updating Namespace Subscriptions):
               // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
               if (
                 !handleNamespaceRequestUpdateOk(
@@ -726,12 +726,12 @@ export async function namespaceStartTracksStreamLoop(
           }
 
           case MessageType.REQUEST_ERROR: {
-            // draft-ietf-moq-transport-19 §10.4:
+            // draft-ietf-moq-transport-20 §10.4:
             // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
             // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
             // REQUEST_OK」を防ぐ)
             if (resolved && !goawayReceived) {
-              // draft-ietf-moq-transport-19 §10.9.2:
+              // draft-ietf-moq-transport-20 §10.9.2:
               // 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答
               if (
                 !handleNamespaceRequestUpdateError(
@@ -766,7 +766,7 @@ export async function namespaceStartTracksStreamLoop(
           }
 
           case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-19 §10.4:
+            // draft-ietf-moq-transport-20 §10.4:
             // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
             // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §10.4 の
             // マイグレーション扱いで reject + cancel してループ終了 (helper 参照)。
@@ -807,7 +807,7 @@ export async function namespaceStartTracksStreamLoop(
       }
     }
   } catch (error) {
-    // draft-ietf-moq-transport-19 §10.4:
+    // draft-ietf-moq-transport-20 §10.4:
     // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
     // spurious error 通知を抑止する
     const normalizedError = error instanceof Error ? error : new Error(String(error));
@@ -820,7 +820,7 @@ export async function namespaceStartTracksStreamLoop(
         reject(normalizedError);
       }
     }
-    // draft-ietf-moq-transport-19 §10.9.1:
+    // draft-ietf-moq-transport-20 §10.9.1:
     // RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
     // 一種として保留中の更新を暗黙の失敗として reject する。
     // goawayReceived の有無に関わらず実行する (reject しないと update() が
@@ -842,7 +842,7 @@ export async function namespaceStartTracksStreamLoop(
 /**
  * PUBLISH_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-19 Section 10.15 (PUBLISH_NAMESPACE):
+ * draft-ietf-moq-transport-20 Section 10.16 (PUBLISH_NAMESPACE):
  * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
  */
 export async function namespaceStartPublicationStreamLoop(
@@ -859,7 +859,7 @@ export async function namespaceStartPublicationStreamLoop(
 
   const { streamReader, controlReader, callbacks } = publication;
   let resolved = false;
-  // draft-ietf-moq-transport-19 §10.4:
+  // draft-ietf-moq-transport-20 §10.4:
   // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
   // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
   // まで遅延するため、メッセージ処理判断専用に使う。
@@ -926,7 +926,7 @@ export async function namespaceStartPublicationStreamLoop(
           }
 
           case MessageType.REQUEST_ERROR: {
-            // draft-ietf-moq-transport-19 §10.4:
+            // draft-ietf-moq-transport-20 §10.4:
             // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
             if (goawayReceived) {
               break;
@@ -953,7 +953,7 @@ export async function namespaceStartPublicationStreamLoop(
           }
 
           case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-19 §10.4:
+            // draft-ietf-moq-transport-20 §10.4:
             // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
             // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §10.4 の
             // マイグレーション扱いで reject + cancel してループ終了 (helper 参照)。
@@ -986,7 +986,7 @@ export async function namespaceStartPublicationStreamLoop(
       }
     }
   } catch (error) {
-    // draft-ietf-moq-transport-19 §10.4:
+    // draft-ietf-moq-transport-20 §10.4:
     // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
     // spurious error 通知を抑止する
     if (publication.state !== "closed" && !goawayReceived) {

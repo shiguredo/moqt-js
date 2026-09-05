@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Unit Tests
- * draft-ietf-moq-transport-19 Section 10.2 (Message Parameter)
+ * draft-ietf-moq-transport-20 Section 10.2 (Message Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -278,8 +278,8 @@ test("LOCATION_FILTER reset はワイヤ上 Length=0 で round-trip する", () 
 
 /**
  * delta encoding のテスト
- * draft-ietf-moq-transport-19 Section 1.4.3 (Key-Value-Pair Structure):
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-1.4.3
+ * draft-ietf-moq-transport-20 Section 1.4.3 (Key-Value-Pair Structure):
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-1.4.3
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  */
@@ -359,9 +359,9 @@ test("uint8 Message Parameter Value は範囲外を拒否する", () => {
 
 /**
  * Track Namespace / Full Track Name のサイズ制限テスト
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-19 Section 10.2
+ * draft-ietf-moq-transport-20 Section 10.2
  */
 test("Track Namespace のサイズ制限定数が 4,096", () => {
   assert.equal(MAX_TRACK_NAMESPACE_SIZE, 4096);
@@ -411,7 +411,7 @@ test("decodeTrackNamespace で制限を超えるとエラー", () => {
 });
 
 test("decodeTrackNamespace で Field Length=0 のフィールドはエラー", () => {
-  // draft-ietf-moq-transport-19 §2.3:
+  // draft-ietf-moq-transport-20 §2.3:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   // 要素数 1、長さ 0 のデータを作成
   const countBytes = encodeVarint(1n);
@@ -469,7 +469,7 @@ test("validateTrackNameSize で制限内なら成功", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.1:
+ * draft-ietf-moq-transport-20 §2.4.1:
  * 「The length of a Full Track Name is computed as the sum of the Track
  *  Namespace Field Length fields and the Track Name Length field.」
  * Full Track Name の合計が 4,096 バイトを超えると ProtocolViolationError に
@@ -486,7 +486,7 @@ test("validateFullTrackNameBytes: 合計 4,097 バイトで ProtocolViolationErr
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.1:
+ * draft-ietf-moq-transport-20 §2.4.1:
  * Full Track Name の合計が 4,096 バイトちょうどは違反にならないことを検証する。
  */
 test("validateFullTrackNameBytes: 合計 4,096 バイトちょうどは違反にならない", () => {
@@ -497,7 +497,7 @@ test("validateFullTrackNameBytes: 合計 4,096 バイトちょうどは違反に
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.1:
+ * draft-ietf-moq-transport-20 §2.4.1:
  * 不正な UTF-8 バイト列を含む Track Name は、TextDecoder の置換 (U+FFFD) による
  * 水増しではなくワイヤバイト長で正確に計測されることを検証する。
  * 0xFF は単独では不正な UTF-8 であり、TextDecoder は U+FFFD (3 バイト) に置換する。
@@ -524,7 +524,7 @@ test("validateFullTrackNameBytes: 不正 UTF-8 バイト列がバイト長で計
 
 /**
  * 未知 Message Parameter 受信時の PROTOCOL_VIOLATION テスト
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * "An endpoint that receives an unknown Message Parameter MUST close
  *  the session with PROTOCOL_VIOLATION."
  */
@@ -543,7 +543,7 @@ test("未知のパラメータタイプで ProtocolViolationError", () => {
 
 /**
  * 重複 Message Parameter 検出の SHOULD テスト
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * "Receivers SHOULD check that there are no unexpected duplicate parameters
  *  and close the session with PROTOCOL_VIOLATION if found."
  */
@@ -577,7 +577,7 @@ test("重複パラメータで ProtocolViolationError", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than
  *  2^64 - 1. If a Delta Type is received that would be too large, the
  *  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -595,7 +595,7 @@ test("decodeKeyValuePairs: deltaType 単体が 2^64-1 は違反にならない",
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * 加算結果が 2^64-1 を超える (previousType=2^64-1 + deltaType=1) 場合は
  * ProtocolViolationError になることを検証する。
  */
@@ -612,7 +612,7 @@ test("decodeKeyValuePairs: 加算結果が 2^64-1 を超えると ProtocolViolat
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * Message Parameter の deltaType 加算でも 2^64-1 超過は ProtocolViolationError
  * になることを検証する。
  * decodeParameters は Number of Parameters プレフィックス付きのため、
@@ -637,7 +637,7 @@ test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると Protoco
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
  * Range Filter パラメータは「Type Delta + Length + SetID + [Property Type] + Range 列」の
  * 1 Length 構造である。encodeMessageParameter が外側に Length を二重に付加しないことを
  * 固定バイト列で検証する。
@@ -654,7 +654,7 @@ test("encodeParameters: Range Filter は 1 Length 構造でエンコードされ
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
  * 仕様準拠のワイヤバイト列 (1 Length 構造) をデコードできることを検証する。
  * decodeMessageParameter は count プレフィックスなしのパラメータ単体をデコードする。
  */
@@ -670,7 +670,7 @@ test("decodeMessageParameter: 1 Length 構造の Range Filter をデコードす
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
  * REQUEST_UPDATE での Range Filter 削除は「Type Delta + 0x00」の 1 Length 構造になる。
  */
 test("encodeParameters: Range Filter の削除は Length=0 の 1 Length 構造になる", () => {
@@ -682,7 +682,7 @@ test("encodeParameters: Range Filter の削除は Length=0 の 1 Length 構造�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
  * Range Filter の削除 (Length=0) をデコードできることを検証する。
  */
 test("decodeMessageParameter: Range Filter の削除 (Length=0) をデコードする", () => {
@@ -695,7 +695,7 @@ test("decodeMessageParameter: Range Filter の削除 (Length=0) をデコード�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
  * Range Filter の内側 Length が残りバイト数を超える不正ワイヤをデコードすると
  * ProtocolViolationError になることを検証する。
  */
@@ -706,7 +706,7 @@ test("decodeMessageParameter: Range Filter の内側 Length 超過で ProtocolVi
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.12 (PRIORITY FILTER Parameter):
+ * draft-ietf-moq-transport-20 §10.2.12 (PRIORITY FILTER Parameter):
  * "If a decoded value exceeds 255, the endpoint MUST reject this with
  *  REQUEST_ERROR with error code INVALID_FILTER since Publisher Priority
  *  is an 8-bit field."
@@ -720,7 +720,7 @@ test("decodeRangeFilter: PRIORITY_FILTER の 255 超の値で InvalidFilterError
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.12:
+ * draft-ietf-moq-transport-20 §10.2.12:
  * PRIORITY_FILTER の境界値 255 ちょうどは違反にならないことを検証する。
  */
 test("decodeRangeFilter: PRIORITY_FILTER の 255 ちょうどは違反にならない", () => {
@@ -734,7 +734,7 @@ test("decodeRangeFilter: PRIORITY_FILTER の 255 ちょうどは違反になら�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.13 (OBJECT PROPERTY FILTER Parameter):
+ * draft-ietf-moq-transport-20 §10.2.13 (OBJECT PROPERTY FILTER Parameter):
  * Property Type は偶数でなければならず、奇数の場合は InvalidFilterError。
  */
 test("decodeRangeFilter: OBJECT_PROPERTY_FILTER の奇数 Property Type で InvalidFilterError", () => {
@@ -744,7 +744,7 @@ test("decodeRangeFilter: OBJECT_PROPERTY_FILTER の奇数 Property Type で Inva
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * "Any delta encoding that results in a value that exceeds 2^64-1 MUST be
  *  rejected with REQUEST_ERROR with error code INVALID_FILTER."
  * Range delta の累積値 (Start) が 2^64-1 を超える場合に InvalidFilterError が
@@ -766,7 +766,7 @@ test("decodeRangeFilter: Range 累積値が 2^64-1 を超えると InvalidFilter
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * Range 列の varint が宣言 Length 内で途中終端する構造不正は、
  * IncompleteDataError ではなく InvalidFilterError になることを検証する。
  * (IncompleteDataError のまま流すと受信ループの
@@ -781,7 +781,7 @@ test("decodeRangeFilter: Range 列の varint 途中終端で InvalidFilterError"
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 構造不正 (Length > 0 なのに SetID / Property Type / Range 列の欠落) は
  * InvalidFilterError になることを検証する。
  */
@@ -792,7 +792,7 @@ test("decodeRangeFilter: SetID が欠落していると InvalidFilterError", () 
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 構造不正 (Length > 0 なのに Range 列が欠落) は InvalidFilterError になる
  * ことを検証する。SetID のみで Range が 1 つもない構成。
  */
@@ -803,7 +803,7 @@ test("decodeRangeFilter: Range 列が欠落していると InvalidFilterError", 
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 構造不正 (Property Type の欠落) は InvalidFilterError になることを検証する。
  */
 test("decodeRangeFilter: Property Type が欠落していると InvalidFilterError", () => {
@@ -813,7 +813,7 @@ test("decodeRangeFilter: Property Type が欠落していると InvalidFilterErr
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * "If the same combination of Parameter Type, SetID, and Property Type
  *  (only in the Track and Object Property Filters) repeat in any message,
  *  an endpoint MUST reject this with REQUEST_ERROR with error code
@@ -830,7 +830,7 @@ test("validateRangeFilterCombination: 同一組み合わせの重複で InvalidF
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * SetID が異なる同型 Range Filter は重複にならないことを検証する。
  */
 test("validateRangeFilterCombination: SetID 違いは重複にならない", () => {
@@ -846,7 +846,7 @@ test("validateRangeFilterCombination: SetID 違いは重複にならない", () 
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * Length=0 の削除エントリは SetID を持たないため重複判定の対象外であることを
  * 検証する。
  */
@@ -863,7 +863,7 @@ test("validateRangeFilterCombination: 削除エントリは重複判定の対象
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.13 / §10.2.14:
+ * draft-ietf-moq-transport-20 §10.2.13 / §10.2.14:
  * encodeRangeFilter は奇数 Property Type を送信前に拒否することを検証する。
  */
 test("encodeRangeFilter: 奇数 Property Type で InvalidFilterError", () => {
@@ -880,7 +880,7 @@ test("encodeRangeFilter: 奇数 Property Type で InvalidFilterError", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.12:
+ * draft-ietf-moq-transport-20 §10.2.12:
  * encodeRangeFilter は PRIORITY_FILTER の 255 超の値を送信前に拒否することを
  * 検証する。
  */
@@ -897,7 +897,7 @@ test("encodeRangeFilter: PRIORITY_FILTER の 255 超の値で InvalidFilterError
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * encodeRangeFilter は SetID 255 超を送信前に拒否することを検証する。
  */
 test("encodeRangeFilter: SetID 255 超で InvalidFilterError", () => {
@@ -913,7 +913,7 @@ test("encodeRangeFilter: SetID 255 超で InvalidFilterError", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * encodeRangeFilter は Range の絶対値 (Start / End) が 2^64-1 を超える場合に
  * 送信前に拒否することを検証する。
  */
@@ -930,7 +930,7 @@ test("encodeRangeFilter: Range 絶対値が 2^64-1 を超えると InvalidFilter
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * encodeRangeFilter は空の ranges を送信前に拒否することを検証する。
  * (デコード側が「no ranges」を InvalidFilterError で拒否するため、
  *  送受信不整合を防ぐ)
@@ -949,12 +949,12 @@ test("encodeRangeFilter: 空の ranges で InvalidFilterError", () => {
 
 /**
  * isRejectedReceiveNamespace のテスト
- * draft-ietf-moq-transport-19 Section 3.2.1 (Reserved Namespaces):
+ * draft-ietf-moq-transport-20 Section 3.2.1 (Reserved Namespaces):
  * "A Track Namespace whose first field is exactly . (a single period,
  *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
  *  MUST NOT publish tracks or namespaces under it and MUST reject
  *  requests referencing it with DOES_NOT_EXIST."
- * draft-ietf-moq-transport-19 Section 3.2.2 (Session-Level Tracks and Namespaces):
+ * draft-ietf-moq-transport-20 Section 3.2.2 (Session-Level Tracks and Namespaces):
  * "An endpoint that receives a request for an unrecognized session-level
  *  track or namespace MUST reject it with REQUEST_ERROR using error code
  *  DOES_NOT_EXIST rather than passing it to the Application."

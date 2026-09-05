@@ -28,12 +28,12 @@ export interface Fetcher {
   readonly endLocation: Location;
   /**
    * FETCH_OK で受信した Track Properties
-   * draft-ietf-moq-transport-19 Section 10.13 (FETCH_OK)
+   * draft-ietf-moq-transport-20 Section 10.14 (FETCH_OK)
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * Fetch をキャンセルする
-   * draft-ietf-moq-transport-19 Section 5.2 (Fetch State Management)
+   * draft-ietf-moq-transport-20 Section 5.2 (Fetch State Management)
    */
   cancel(): Promise<void>;
 }
@@ -55,7 +55,7 @@ export class FetcherImpl implements Fetcher {
 
   /**
    * Fetch リクエストの Group Order
-   * draft-ietf-moq-transport-19 Section 10.2.8 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-20 Section 10.2.8 (GROUP ORDER Parameter)
    * 省略時は Ascending (0x1)。
    */
   private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING;
@@ -177,7 +177,7 @@ export class FetcherImpl implements Fetcher {
   /**
    * Fetch をキャンセル
    *
-   * draft-ietf-moq-transport-19 Section 5.2 (Fetch State Management):
+   * draft-ietf-moq-transport-20 Section 5.2 (Fetch State Management):
    * "It MUST send STOP_SENDING for the bidi request stream."
    * FETCH_CANCEL は削除された。キャンセルはストリームを閉じることで行う。
    */

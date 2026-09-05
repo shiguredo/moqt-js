@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Subgroup テスト
- * draft-ietf-moq-transport-19 Section 11.4.2 (Subgroup Header)
+ * draft-ietf-moq-transport-20 Section 11.4.2 (Subgroup Header)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -67,7 +67,7 @@ test("SubgroupHeader: 大きな値をエンコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.2:
+ * draft-ietf-moq-transport-20 §11.4.2:
  * Priority Present (DEFAULT_PRIORITY bit = 0) の型で publisherPriority が
  * 省略された場合、エラーを throw することを検証する。
  * SUBGROUP_ID_MODE により Subgroup ID フィールドが先にエンコードされる
@@ -129,7 +129,7 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
   assert.equal(consumed, 4);
 });
 
-// draft-ietf-moq-transport-19 Section 11.4.2:
+// draft-ietf-moq-transport-20 Section 11.4.2:
 // SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
 // セッションを閉じなければならない
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
@@ -153,7 +153,7 @@ test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () =>
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.2:
+ * draft-ietf-moq-transport-20 §11.4.2:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤デコード (残りバイト列のフィールド
  * ずれ) を避け、IncompleteDataError を throw して次のチャンクを待つことを
@@ -166,7 +166,7 @@ test("SubgroupHeader: Priority バイトでバッファが切れていると Inc
   assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
 });
 
-// draft-ietf-moq-transport-19 Section 11.4.2:
+// draft-ietf-moq-transport-20 Section 11.4.2:
 // 0b0XX1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
 for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
   test(`SubgroupHeader: 不正タイプ 0x${invalidType.toString(16)} は decode でエラー`, () => {
@@ -250,7 +250,7 @@ for (const tc of subgroupHeaderTestCases) {
 }
 
 test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が undefined になる", () => {
-  // draft-ietf-moq-transport-19 Section 11.4.2:
+  // draft-ietf-moq-transport-20 Section 11.4.2:
   // Subgroup ID = First Object ID の場合、ヘッダーに Subgroup ID フィールドはなく、
   // 最初のオブジェクトの Object ID が Subgroup ID として使われる
   const header = {
@@ -417,9 +417,9 @@ test("createObject: 空ペイロードで作成", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
- * draft-ietf-moq-transport-19 Section 11.2.1.1
+ * draft-ietf-moq-transport-20 Section 11.2.1.1
  */
 test("ObjectStatus: すべてのステータス値が定義されている", () => {
   assert.equal(ObjectStatus.NORMAL, 0x0);
@@ -562,7 +562,7 @@ test("SubgroupHeaderType: No Priority + End of Group タイプの roundtrip テ�
 });
 
 test("SubgroupHeader: FIRST_OBJECT ビットを設定したエンコード", () => {
-  // draft-ietf-moq-transport-19 §11.4.2:
+  // draft-ietf-moq-transport-20 §11.4.2:
   // 新しい subgroup の最初のオブジェクトには FIRST_OBJECT ビット (0x40) を設定する (MUST)
   const header = {
     type: SubgroupHeaderType.FIRST_OBJ_EXT,
@@ -600,7 +600,7 @@ test("SubgroupHeader: FIRST_OBJECT ビット付きエンコードのデコード
 });
 
 test("encodeObjectFields: END_OF_GROUP ステータスをエンコードできる", () => {
-  // draft-ietf-moq-transport-19 §11.2.1.1:
+  // draft-ietf-moq-transport-20 §11.2.1.1:
   // END_OF_GROUP ステータスはペイロード長 0 の場合にエンコードされる
   const data = encodeObjectFields(
     0n,

@@ -286,7 +286,7 @@ test("SubscriberImpl: 二重 unsubscribe は no-op", async () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 Section 10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-20 Section 10.5 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
  *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
  *  If an endpoint receives Track Properties in one of these messages it MUST
@@ -322,11 +322,11 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 自 update({ rangeFilters }) の REQUEST_OK 受信時に、送信時の Range Filters が
  * SubscriberImpl に反映されることを検証する。
  * REQUEST_UPDATE で省略された型は不変 (「If a filter parameter is omitted from
- * REQUEST_UPDATE, the value is unchanged」§5.1.3)。
+ * REQUEST_UPDATE, the value is unchanged」§5.1.4)。
  */
 test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映される", () => {
   const delivered: MoqtObject[] = [];
@@ -415,7 +415,7 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.17:
+ * draft-ietf-moq-transport-20 §10.2.18:
  * "If the parameter is omitted from REQUEST_UPDATE, the value for the
  *  subscription remains unchanged."
  * 自 update({ forward: false }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
@@ -445,7 +445,7 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で Forw
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.17:
+ * draft-ietf-moq-transport-20 §10.2.18:
  * 自 update({ forward: true }) の REQUEST_OK 受信時に、送信時の FORWARD 値が
  * SubscriberImpl の Forward State に true として反映されることを検証する。
  */
@@ -473,7 +473,7 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.17:
+ * draft-ietf-moq-transport-20 §10.2.18:
  * 自 update() で FORWARD を省略した場合 (undefined)、REQUEST_OK 受信時に
  * Forward State は変化しないことを検証する。
  */
@@ -496,7 +496,7 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
 
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
-  // FORWARD 省略時は不変 (§10.2.17)
+  // FORWARD 省略時は不変 (§10.2.18)
   assert.equal(subscriber.forwardState, false);
   assert.equal(session.pendingRequestUpdate.size, 0);
 });
@@ -506,7 +506,7 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-20 §10.5 (REQUEST_OK):
  * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
  * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
  */
@@ -542,7 +542,7 @@ test("PUBLISH_OK: 空 Track Properties は正常にデコードされる", () =>
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY):
+ * draft-ietf-moq-transport-20 Section 10.4 (GOAWAY):
  * リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
  * 初回の Request ID は seenSet に追加され true を返す。
  */
@@ -574,7 +574,7 @@ test("validateNoDuplicateGoawayOnRequestStream: 2 回目は PROTOCOL_VIOLATION �
 
 // ============================================================================
 // bidiSendRequestUpdate の Range Filters テスト
-// draft-ietf-moq-transport-19 §5.1.3 / §10.3.1.6
+// draft-ietf-moq-transport-20 §5.1.4 / §10.3.1.6
 // ============================================================================
 
 /**
@@ -633,7 +633,7 @@ function createBidiSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * REQUEST_UPDATE では TRACK_PROPERTY_FILTER (0x29) は一律 throw する。
  * moqt-js が送信する REQUEST_UPDATE はすべて per-subscription の更新 (§10.9) であり、
  * 0x29 が許可される SUBSCRIBE_TRACKS リクエスト自身のストリーム上の REQUEST_UPDATE
@@ -660,7 +660,7 @@ test("bidiSendRequestUpdate: TRACK_PROPERTY_FILTER を含む rangeFilters で th
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * REQUEST_UPDATE の rangeFilters (0x29 以外) が REQUEST_UPDATE にエンコードされ、
  * 削除 (Length=0) も許可されることを検証する。
  */
@@ -768,7 +768,7 @@ test("bidiSendRequestUpdate: fill 内の LOCATION_FILTER が End Group 超過の
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6:
+ * draft-ietf-moq-transport-20 §10.3.1.6:
  * fill 内側の Range Filters も購読単位の上限に含め、上限超過では送信前に
  * throw することを検証する。
  */
@@ -805,7 +805,7 @@ test("bidiSendRequestUpdate: fill 内側の Range Filters が上限超過の場�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6:
+ * draft-ietf-moq-transport-20 §10.3.1.6:
  * in-flight 中の fill 内側 Range Filters も上限合算に含め、合計超過では
  * 送信前に throw することを検証する。
  */
@@ -938,7 +938,7 @@ test("bidiSendRequestUpdate: Range Filters が MAX_FILTER_RANGES 以内なら th
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6 / §5.1.3:
+ * draft-ietf-moq-transport-20 §10.3.1.6 / §5.1.4:
  * MAX_FILTER_RANGES は「マージ後のフィルタ状態」に対して適用される。
  * 既存フィルタ (2 Range) と update (1 Range) のマージ後 (3 Range) が
  * 上限 2 を超える場合、update 単体では合法でも送信前に throw することを
@@ -1002,7 +1002,7 @@ test("bidiSendRequestUpdate: マージ後の状態が上限以内なら throw �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.1:
+ * draft-ietf-moq-transport-20 §10.9.1:
  * 「Parameter values from later REQUEST_UPDATE messages override values from
  *  earlier ones.」により、in-flight の update (送信順) もマージに含めて
  * 検証する。in-flight の削除 update が反映されない場合は
@@ -1047,7 +1047,7 @@ test("bidiSendRequestUpdate: in-flight の削除 update がマージに反映さ
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.1:
+ * draft-ietf-moq-transport-20 §10.9.1:
  * in-flight の update は送信順 (挿入順) で適用され、後からの値が前の値を
  * 上書きする。同じ型を 3 → 2 に置換する 2 件の in-flight を登録し、
  * 最後の値 (2 Range) でマージされることを検証する (先発が勝つ順序なら
@@ -1154,7 +1154,7 @@ test("bidiSendRequestUpdate: in-flight の update でマージ後が上限超過
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6:
+ * draft-ietf-moq-transport-20 §10.3.1.6:
  * ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §10.3.1.6 により送信禁止。
  * マージ後が空になる削除のみの update でも throw することを検証する
  * (既存ガードの維持)。
@@ -1179,7 +1179,7 @@ test("bidiSendRequestUpdate: MAX_FILTER_RANGES が 0 のとき削除のみの up
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6:
+ * draft-ietf-moq-transport-20 §10.3.1.6:
  * 空配列の rangeFilters (フィルタ指定なしの no-op メッセージ) は、ピアの
  * MAX_FILTER_RANGES が 0 (未広告) でも送信できる (フィルタパラメータ自体が
  * 送信されないため。旧実装でも送信可能だった挙動の維持)。
@@ -1211,7 +1211,7 @@ test("bidiSendRequestUpdate: 空配列の rangeFilters は MAX_FILTER_RANGES が
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 削除を含む update は削除後の状態で検証される (既存の同型フィルタは
  * マージで取り除かれ、Ranges 数に数えられない)。本テストが検出するのは
  * 「update をマージせず連結する」誤実装のみである (削除後の Ranges 数と
@@ -1264,7 +1264,7 @@ function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
 
 // ============================================================================
 // bidiSendNamespaceRequestUpdate のテスト
-// draft-ietf-moq-transport-19 §10.9.2 (Updating Namespace Subscriptions)
+// draft-ietf-moq-transport-20 §10.9.2 (Updating Namespace Subscriptions)
 // ============================================================================
 
 /**
@@ -1770,7 +1770,7 @@ test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingR
 // ============================================================================
 // bidiReadRequestStreamMessages / publishSendPublishDone の統合テスト
 // (実 W3C ストリーム注入方式)
-// draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.11
+// draft-ietf-moq-transport-20 §3.3.2 / §3.3.3 / §10.11
 // ============================================================================
 
 /**
@@ -1872,7 +1872,7 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
 }
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * PUBLISH_OK 受信前 (Established 前) にピアが FIN を送った場合、リクエストは
  * 失敗として処理される。bidiReadResponseFromBidiStream の throw が
  * bidiReadPublishResponse の catch で処理され、pendingPublish の reject と
@@ -2085,7 +2085,7 @@ test("bidiReadPublishResponse: FORWARD=0 の PUBLISH_OK で PROTOCOL_VIOLATION",
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * ピアが送信方向を FIN で閉じた (graceful closure) 場合でも、publisher は
  * done() で PUBLISH_DONE を送信してから自方向を FIN で閉じる必要がある (MUST)。
  * requestStreams のエントリが FIN 後も保持され、PUBLISH_DONE → FIN の
@@ -2126,7 +2126,7 @@ test("bidiReadRequestStreamMessages: ピア FIN 後の done() で PUBLISH_DONE �
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * ピアが RESET_STREAM で自方向をリセットした場合、reader.read() は reject する。
  * RESET は FIN (graceful) ではないため requestStreams のエントリは保持されず、
  * その後の done() は PUBLISH_DONE を送信せずセッションも閉じないことを検証する。
@@ -2166,7 +2166,7 @@ function forceSessionClosed(session: BidiSessionInternal): void {
 }
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * ピア起因のセッション終了後 (sessionState: "closed") に done() を呼んだ場合、
  * publishSendPublishDone は write / close を試行しない。試行するとセッション
  * 終了起因のエラーで reject し、誤って PROTOCOL_VIOLATION に昇格して
@@ -2196,7 +2196,7 @@ test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionSta
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * subscribe ロールではピアの FIN は保持対象外であり、従来どおり
  * requestStreams / subscribers / subscribersByAlias から削除されることを
  * 検証する (publish ロールのみが done() 完了後まで保持される)。
@@ -2224,7 +2224,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN では従�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * subscribe ロールでピア (publisher) の FIN を検出した場合、自方向の FIN
  * (writer.close()) を送信して graceful closure を完了することを検証する。
  * 0374 で追加された notifySubscriberFailure (error 通知) に加えて、自方向 FIN が
@@ -2270,7 +2270,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * publish ロールでは requester の FIN は正常完了シグナルであり、自方向の
  * FIN は送信しない (アプリの done() に委ねる)。0370 の保持経路が維持される
  * ことを検証する。
@@ -2295,7 +2295,7 @@ test("bidiReadRequestStreamMessages: publish ロールのピア FIN では自方
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * 正常な PUBLISH_DONE → FIN 経路でも自方向の FIN (writer.close()) が送信され、
  * 通知挙動 (end コールバックのみ呼ばれ error コールバックは呼ばれず state が
  * closed) が変わらないことを検証する。
@@ -2353,7 +2353,7 @@ test("bidiReadRequestStreamMessages: 正常な PUBLISH_DONE → FIN で自方向
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * subscribe ロールのピア FIN で、同一 Track Alias に他 subscription が残っている
  * 場合は subscribersByAlias のエントリが保持される (該当 subscriber のみ除去)
  * ことを検証する。
@@ -2385,7 +2385,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で alias 
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 (GOAWAY) / §3.3.2:
+ * draft-ietf-moq-transport-20 §10.4 (GOAWAY) / §3.3.2:
  * GOAWAY 受信 (publish ロール) 後は読み取りを継続し、requestStreams が保持
  * される。その後ピアが FIN した場合、readRequestStreamMessages の finally の
  * 「publish ロール && receivedFin」経路に合流してエントリが保持され、アプリの
@@ -2428,7 +2428,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * draft-ietf-moq-transport-20 §10.4 (GOAWAY):
  * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 3.5)
  * if it receives more than one GOAWAY on the control stream or on a single
  * request stream.」
@@ -2468,7 +2468,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROT
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * draft-ietf-moq-transport-20 §10.4 (GOAWAY):
  * チャンク境界をまたぐ 2 通目の GOAWAY でも PROTOCOL_VIOLATION でセッションが
  * 閉じることを検証する。
  */
@@ -2505,7 +2505,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROT
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 (GOAWAY):
+ * draft-ietf-moq-transport-20 §10.4 (GOAWAY):
  * GOAWAY 受信 (subscribe ロール) で送信方向が FIN (writer.close()) で閉じられ、
  * 受信方向は読み取りが継続されることを検証する。1 通目 GOAWAY ではセッション
  * が閉じない。
@@ -2543,7 +2543,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (subscribe ロール) で送�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+ * draft-ietf-moq-transport-20 §10.4 / §3.3.4 / §10.9:
  * GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE は、publish ロールでは
  * REQUEST_ERROR (GOING_AWAY) で応答される (§10.9 MUST) ことを検証する。
  */
@@ -2580,7 +2580,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE に REQUEST_ER
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+ * draft-ietf-moq-transport-20 §10.4 / §3.3.4 / §10.9:
  * GOAWAY 受信後の REQUEST_UPDATE は subscribe ロールでは無視されることを
  * 検証する。subscribe ロールは GOAWAY 処理で送信方向を FIN (writer.close())
  * で閉じており、GOING_AWAY 応答を書き込むことができないためである。
@@ -2618,11 +2618,11 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
 
 // ============================================================================
 // bidiHandlePublishRequestUpdate のテスト
-// draft-ietf-moq-transport-19 §10.9 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
+// draft-ietf-moq-transport-20 §10.9 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  * 検証は forward state 反映より前に配置されるため、状態は変更されない。
@@ -2972,7 +2972,7 @@ test("bidiReadRequestStreamMessages: 正常な FILL_PARAMETERS の REQUEST_UPDAT
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * role=publish の受信 REQUEST_UPDATE に同一組み合わせの重複 Range Filter が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  */
@@ -3009,7 +3009,7 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10:
+ * draft-ietf-moq-transport-20 §10.9 / §10:
  * role=publish の受信 REQUEST_UPDATE のペイロードが不完全 (メッセージ構造の
  * 破損) な場合、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを
  * 検証する。ControlStreamReader が Length 分の完全なメッセージのみ渡す
@@ -3040,7 +3040,7 @@ test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * draft-ietf-moq-transport-20 §10.9 / §10.2.18:
  * role=publish の受信 REQUEST_UPDATE が正常な場合、FORWARD が publisher の
  * Forward State に反映され REQUEST_OK が応答されることを検証する (回帰
  * ガード)。IncompleteDataError の変換対象追加で既存処理が変わらないことを
@@ -3075,7 +3075,7 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * draft-ietf-moq-transport-20 §10.9 / §10.2.18:
  * role=publish の受信 REQUEST_UPDATE で FORWARD が省略された場合、Forward
  * State は変化しないことを検証する (extractForwardState のデフォルト true に
  * よる上書きを防ぐ)。FORWARD=0 を受けて送信を止めたアプリが、パラメータ無し
@@ -3112,7 +3112,7 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * draft-ietf-moq-transport-20 §10.9 / §10.2.18:
  * role=publish の受信 REQUEST_UPDATE で FORWARD=1 が明示された場合、Forward
  * State が true に反映されることを検証する (FORWARD 省略時は不変ではなく
  * 省略以外の本分岐が従来どおり動作することの回帰ガード)。
@@ -3230,7 +3230,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.5:
+ * draft-ietf-moq-transport-20 §10.5:
  * 受信 PUBLISH_OK のペイロードが不完全 (メッセージ構造の破損) な場合、
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。IncompleteDataError
  * は toProtocolViolationSessionError で変換され、閉鎖前に当該リクエストの
@@ -3448,7 +3448,7 @@ test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * 受信 PUBLISH ストリーム上で無限定 3 種 (AUTHORIZATION_TOKEN /
  * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT) のみを含む
  * REQUEST_UPDATE を受信した場合、REQUEST_OK が 1 通応答され、セッションが
@@ -3480,7 +3480,7 @@ test("bidiHandlePublishRequestUpdate: 受理パラメータのみの REQUEST_UPD
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * パラメータを含まない REQUEST_UPDATE でも REQUEST_OK が 1 通応答され、
  * セッションが閉じないことを検証する (§10.9 MUST)。パラメータ無しは
  * 文脈限定パラメータの判定を通過する空集合として扱われる。
@@ -3502,7 +3502,7 @@ test("bidiHandlePublishRequestUpdate: パラメータ無しの REQUEST_UPDATE �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.1 (Parameter Scope):
+ * draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
  * REQUEST_UPDATE に出現できないパラメータ (スコープ違反) を含む
  * REQUEST_UPDATE を受信した場合、§10.2.1 の MUST に従い REQUEST_ERROR で
  * 応答せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
@@ -3525,7 +3525,7 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.6:
+ * draft-ietf-moq-transport-20 §10.9 / §10.6:
  * 文脈限定パラメータ (例: SUBSCRIBER_PRIORITY) を含む REQUEST_UPDATE を
  * 受信した場合、REQUEST_ERROR (NOT_SUPPORTED) が応答されセッションが
  * 閉じないことを検証する (§10.6 の NOT_SUPPORTED 定義に基づく設計判断。
@@ -3551,7 +3551,7 @@ test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUE
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * draft-ietf-moq-transport-20 §10.9 / §10.2.18:
  * ケース 1 の REQUEST_UPDATE で FORWARD=1 が含まれる場合も REQUEST_OK で
  * 受理され、Forward State に true が反映されることを検証する。
  */
@@ -3576,7 +3576,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で For
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.6:
+ * draft-ietf-moq-transport-20 §10.9 / §10.6:
  * 無限定パラメータと文脈限定パラメータを混合して含む REQUEST_UPDATE は、
  * 1 つでも文脈限定パラメータを含む限り REQUEST_ERROR (NOT_SUPPORTED) が
  * 応答されることを検証する。
@@ -3603,7 +3603,7 @@ test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.2.17:
+ * draft-ietf-moq-transport-20 §10.9 / §10.2.18:
  * ケース 1 (受信 PUBLISH の publisher による REQUEST_UPDATE) で FORWARD
  * パラメータが含まれる場合、REQUEST_OK で受理され、受信 PUBLISH から生成
  * された SubscriberImpl の Forward State に反映されることを検証する。
@@ -3632,7 +3632,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUE
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.2.17:
+ * draft-ietf-moq-transport-20 §10.2.18:
  * "If the parameter is omitted from REQUEST_UPDATE, the value for the
  *  subscription remains unchanged."
  * FORWARD を含まないケース 1 の REQUEST_UPDATE は REQUEST_OK で受理されるが、
@@ -3655,12 +3655,12 @@ test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で Forwa
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // FORWARD 省略時は不変 (§10.2.17)
+  // FORWARD 省略時は不変 (§10.2.18)
   assert.equal(subscriber.forwardState, false);
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.6:
+ * draft-ietf-moq-transport-20 §10.9 / §10.6:
  * FORWARD と他の文脈限定パラメータ (例: SUBSCRIBER_PRIORITY) が混合した
  * REQUEST_UPDATE はメッセージ単位で全体拒否され、FORWARD の部分受理は
  * 行われないことを検証する。
@@ -3692,7 +3692,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD + 他の文脈限定パラメー�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §3.3.4 / §10.9:
+ * draft-ietf-moq-transport-20 §10.4 / §3.3.4 / §10.9:
  * GOAWAY 受信後 (writer オープン時) の REQUEST_UPDATE には REQUEST_ERROR
  * (GOING_AWAY) が応答され、セッションが閉じないことを検証する。
  */
@@ -3718,7 +3718,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後の REQUEST_UPDATE に REQ
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §10.2.1 / §10.9:
+ * draft-ietf-moq-transport-20 §10.4 / §10.2.1 / §10.9:
  * GOAWAY 受信後 + パラメータスコープ違反が同時に発生した REQUEST_UPDATE は、
  * GOING_AWAY 応答が優先され (PROTOCOL_VIOLATION で閉じずに)、セッションが
  * 閉じないことを検証する。
@@ -3745,7 +3745,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * 応答の書き込みに失敗した場合 (writer が閉じている等) は黙殺され、
  * PROTOCOL_VIOLATION への昇格も callbacks.error の発火も行われず、
  * セッションが閉じないことを検証する。
@@ -3769,7 +3769,7 @@ test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗は黙殺され
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * 判定順序 (1) の GOING_AWAY 応答の書き込みに失敗した場合も黙殺され、
  * セッションが閉じないことを検証する (production では GOAWAY 処理の
  * writer.close() により常にこの経路になる。テスト 8 は判定順序 (4) の
@@ -3796,7 +3796,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 後の GOING_AWAY 応答の書き�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * REQUEST_UPDATE のペイロードのデコードに失敗した場合 (メッセージ構造の
  * 破損)、本関数内で PROTOCOL_VIOLATION としてセッションが閉じることを
  * 検証する。ここで閉じることで、「invalid REQUEST_UPDATE payload」の文脈を
@@ -3817,7 +3817,7 @@ test("bidiHandlePublishRequestUpdate: デコード失敗は PROTOCOL_VIOLATION �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * requestStreams に存在しない requestId (エントリ削除後など) への REQUEST_UPDATE
  * は、応答の書き込み先が無いため黙殺され、セッションが閉じないことを
  * 検証する。
@@ -3839,7 +3839,7 @@ test("bidiHandlePublishRequestUpdate: requestStreams に存在しない requestI
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2 / §10.11:
+ * draft-ietf-moq-transport-20 §3.3.2 / §10.12:
  * ピアの FIN により requestStreams のエントリが保持された状態から、セッション
  * close 相当 (requestStreams.clear) で破棄された場合、その後の done() は
  * PUBLISH_DONE を送信せずセッションも閉じないことを検証する
@@ -3872,7 +3872,7 @@ test("bidiReadRequestStreamMessages: FIN 保持後のセッション close 相�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * ピアが STOP_SENDING で当方の送信方向をキャンセルした場合、write / close は
  * WebTransportError (source: "stream") で reject する (W3C WebTransport の
  * 実装挙動)。ピア起因のキャンセルは PROTOCOL_VIOLATION に昇格させないことを
@@ -3905,7 +3905,7 @@ test("publishSendPublishDone: STOP_SENDING (write 失敗 source: 'stream') で�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.4 (Stream Reset Error Codes):
+ * draft-ietf-moq-transport-20 §3.3.4 (Stream Reset Error Codes):
  * エラーコードは SHOULD 推奨であり、ピアが STOP_SENDING にどのコード
  * (CANCELLED 0x1 / DELIVERY_TIMEOUT 0x2 / その他) を載せるかは任意のため、
  * コード集合で判定すると合法的なキャンセルを再昇格し得る。
@@ -3935,7 +3935,7 @@ test("publishSendPublishDone: STOP_SENDING (DELIVERY_TIMEOUT 0x2) でも非昇�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * STOP_SENDING の到着は非同期のため、write() が成功した後に close() が失敗する
  * レースが実 WebTransport で起こり得る。close 失敗エラー自体の source が
  * "stream" の場合も PROTOCOL_VIOLATION に昇格させないことを検証する。
@@ -4025,7 +4025,7 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.11:
+ * draft-ietf-moq-transport-20 §10.12:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と close 失敗の
  * PROTOCOL_VIOLATION 昇格が起きないことを検証する。
  *
@@ -4053,7 +4053,7 @@ test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.5 (Termination):
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
  * session.close() と publisher.done() の並行実行で、セッションクローズに伴う
  * close 失敗 (source なし) が PROTOCOL_VIOLATION に誤昇格して
  * callbacks.error に誤報が流れるのを防ぐことを検証する。
@@ -4085,7 +4085,7 @@ test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessio
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.5 (Termination):
+ * draft-ietf-moq-transport-20 §3.5 (Termination):
  * ピア起因のセッション終了 (transport.closed) と done() の並行実行でも、
  * close 失敗が PROTOCOL_VIOLATION に誤昇格しないことを検証する。
  *
@@ -4125,11 +4125,11 @@ test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了
 
 // ============================================================================
 // notifySubscriberFailure のテスト
-// draft-ietf-moq-transport-19 §3.3.2 (FIN without PUBLISH_DONE は失敗扱い)
+// draft-ietf-moq-transport-20 §3.3.2 (FIN without PUBLISH_DONE は失敗扱い)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * active な subscriber に対して error 通知が行われ、state が closed になる
  * ことを検証する。
  */
@@ -4158,7 +4158,7 @@ test("notifySubscriberFailure: active な subscriber に error 通知し state �
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * error コールバックが throw した場合でも、finally で state が closed に
  * なることを検証する (error コールバックの例外で状態遷移が失われない)。
  */
@@ -4196,7 +4196,7 @@ test("notifySubscriberFailure: error コールバックが throw しても state
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * subscribers に存在しない requestId (unsubscribe 済み等) では何もしない
  * ことを検証する。
  */
@@ -4211,7 +4211,7 @@ test("notifySubscriberFailure: subscribers に存在しない requestId では�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * GOAWAY 受信済みの requestId (マイグレーション通知) では何もしないことを
  * 検証する (GOAWAY は subscription state に影響しない)。
  */
@@ -4242,7 +4242,7 @@ test("notifySubscriberFailure: GOAWAY 受信済みの requestId では何もし�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * state が active でない subscriber (正常な PUBLISH_DONE 済み等) では何も
  * しないことを検証する。
  */
@@ -4272,11 +4272,11 @@ test("notifySubscriberFailure: state が active でない subscriber では何�
 
 // ============================================================================
 // bidiReadRequestStreamMessages の FIN / RESET_STREAM 検出 (subscribe ロール) テスト
-// draft-ietf-moq-transport-19 §3.3.2 (FIN) / §3.3.3 (RESET_STREAM)
+// draft-ietf-moq-transport-20 §3.3.2 (FIN) / §3.3.3 (RESET_STREAM)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * subscribe ロールでピア (publisher) が PUBLISH_DONE なしに FIN した場合、
  * error コールバックが呼ばれ state が closed になることを検証する。
  */
@@ -4320,7 +4320,7 @@ test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で err
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+ * draft-ietf-moq-transport-20 §10.9.1 / §3.3.2:
  * subscribe ロールでピアが FIN した場合、応答待ちの REQUEST_UPDATE
  * (update() の Promise) が reject され、エントリが削除されることを検証する。
  * 未解決のまま残すとアプリは FIN 後に update() の結果を待ち続ける。
@@ -4358,7 +4358,7 @@ test("bidiReadRequestStreamMessages: ピアの FIN (subscribe ロール) で応�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * subscribe ロールでピアが RESET_STREAM でストリームをエラー終了させた場合、
  * error コールバックが呼ばれ state が closed になることを検証する。プロトコル
  * 違反ではないためセッションは閉じない。エラーメッセージは FIN 経路
@@ -4407,7 +4407,7 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.9.1:
+ * draft-ietf-moq-transport-20 §3.3.2 / §3.3.3 / §10.9.1:
  * subscribe ロールでピアが RESET_STREAM でストリームをエラー終了させた場合、
  * 応答待ちの REQUEST_UPDATE (update() の Promise) が reject され、エントリが
  * 削除されることを検証する。FIN 経路と同じ文言で失敗として扱う。
@@ -4464,7 +4464,7 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (subscribe ロール
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.2 / §3.3.3:
  * RESET_STREAM 通知でアプリの error コールバックが throw しても、
  * 応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを検証する。
  * 通知より reject を先に置く順序の根拠を固定する。
@@ -4517,7 +4517,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * GOAWAY 受信済みの subscribe ロールで RESET_STREAM が起きても、
  * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
  * 呼び出し自体が起きないため、注入したエントリが残る。
@@ -4572,7 +4572,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の RESET_STREAM では応�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3 / §3.5:
+ * draft-ietf-moq-transport-20 §3.3.3 / §3.5:
  * セッション終了起因 (source: "session") の読み取り失敗では、
  * 保留中の REQUEST_UPDATE に触れないことを検証する。
  */
@@ -4880,7 +4880,7 @@ test("createResetStreamError: エラーコードの有無と未知値の扱い�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §3.3.3:
+ * draft-ietf-moq-transport-20 §10.4 / §3.3.3:
  * GOAWAY 受信済みの subscribe ロールの RESET_STREAM では error 通知されない
  * ことを検証する (GOAWAY 後の旧ストリームの破壊は migration の完了であり、
  * GOAWAY 後の FIN と同じ扱い)。修正前の実装でも通る回帰ガードである
@@ -4924,7 +4924,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の RESET_STREAM (subscribe
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * publish ロールのピア (requester) の RESET_STREAM では error 通知されない
  * ことを検証する (対象ロール限定の回帰ガード。修正前の実装でも通る)。
  */
@@ -4964,7 +4964,7 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (publish ロール) 
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * error コールバックが throw しても、notification 経路で吸収され unhandled
  * rejection にならず、state が closed になることを検証する。
  */
@@ -5003,7 +5003,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3 / §3.5:
+ * draft-ietf-moq-transport-20 §3.3.3 / §3.5:
  * ピア起因のセッション終了 (source: "session") および source を持たない
  * 内部エラーでは error コールバックが呼ばれないことを検証する
  * (isPeerStreamError ガードの回帰ガード。修正前の実装でも通る)。
@@ -5047,7 +5047,7 @@ test("bidiReadRequestStreamMessages: セッション終了や source なしエ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * publish ロールではピア (requester) の FIN は正常完了シグナルであり、
  * error 通知されず state も変更されないことを検証する (対象ロール限定の
  * 回帰ガード)。
@@ -5086,7 +5086,7 @@ test("bidiReadRequestStreamMessages: ピアの FIN (publish ロール) では er
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §3.3.2:
+ * draft-ietf-moq-transport-20 §10.4 / §3.3.2:
  * GOAWAY 受信後の FIN (subscribe ロール) では error 通知されないことを
  * 検証する (GOAWAY は migration 通知であり失敗ではない)。
  */
@@ -5137,7 +5137,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後の FIN (subscribe ロー�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗として扱い、
  * update() の Promise を reject してエントリを削除することを検証する。
  * GOAWAY 後の読み取り継続中に REQUEST_OK が届いても、エントリ削除済みのため
@@ -5210,7 +5210,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * 正常な PUBLISH_DONE → FIN の経路では end コールバックのみが呼ばれ、
  * error コールバックは呼ばれないことを検証する (正常経路の温存ガード)。
  */
@@ -5261,7 +5261,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE 後の FIN (subscribe ロー�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2 / §10.11:
+ * draft-ietf-moq-transport-20 §3.3.2 / §10.12:
  * エラー statusCode の PUBLISH_DONE 後に FIN した場合、error 通知は
  * PUBLISH_DONE 由来の 1 回のみであり、FIN 検出で追加の error 通知が
  * 発生しないことを検証する (spurious 二重通知の回帰ガード)。
@@ -5315,7 +5315,7 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * subscribers に未登録の requestId で FIN した場合、通知は発生せず
  * セッションも閉じないことを検証する (統合レベル。free function 単体の
  * no-op ガードと対になる)。
@@ -5340,7 +5340,7 @@ test("bidiReadRequestStreamMessages: subscribers 未登録の requestId の FIN 
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * error コールバックが throw しても、セッションは閉じず state が closed に
  * なることを統合レベルで検証する (free function 単体の throw 伝播検証と
  * 対になる。本番経路の catch は throw を黙殺し、markClosed は finally で
@@ -5383,11 +5383,11 @@ test("bidiReadRequestStreamMessages: error コールバックが throw しても
 
 // ============================================================================
 // bidiCancelSubscription の保留中 REQUEST_UPDATE 掃除テスト
-// draft-ietf-moq-transport-19 §10.9 / §10.9.1
+// draft-ietf-moq-transport-20 §10.9 / §10.9.1
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.9.1:
+ * draft-ietf-moq-transport-20 §10.9 / §10.9.1:
  * in-flight の REQUEST_UPDATE がある状態で unsubscribe() すると、update() の
  * Promise が共通文言で reject され、エントリが削除されることを検証する。
  * 既存のストリーム破棄 (readable.cancel / writer.abort) と Map 削除も維持される。
@@ -5439,7 +5439,7 @@ test("bidiCancelSubscription: 応答待ちの REQUEST_UPDATE がある状態で 
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9 / §10.9.1:
+ * draft-ietf-moq-transport-20 §10.9 / §10.9.1:
  * 保留中の更新が無い状態の unsubscribe では何も起きないことを検証する
  * (回帰ガード。掃除対象が無い場合の no-op)。
  */
@@ -5461,7 +5461,7 @@ test("bidiCancelSubscription: 応答待ちの更新が無い状態の unsubscrib
 
 // ============================================================================
 // SubscriberImpl.update() の fire-and-forget 抑制テスト
-// draft-ietf-moq-transport-19 §10.9 / §10.9.1:
+// draft-ietf-moq-transport-20 §10.9 / §10.9.1:
 // SubscriberImpl.update を非 async 化し catch 付き Promise を直接返すことで、
 // 各 reject 経路でも unhandled rejection にならないことを検証する。
 // ============================================================================
@@ -5516,7 +5516,7 @@ async function assertNoUnhandledRejection(callback: () => Promise<void>): Promis
 }
 
 /**
- * draft-ietf-moq-transport-19 §10.9:
+ * draft-ietf-moq-transport-20 §10.9:
  * fire-and-forget の update() 後に REQUEST_ERROR が届いても unhandled
  * rejection にならず、保留中の更新が掃除されることを検証する。
  */
@@ -5551,7 +5551,7 @@ test("SubscriberImpl.update: fire-and-forget 後の REQUEST_ERROR で unhandled 
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * fire-and-forget の update() 後に GOAWAY が届いても unhandled rejection に
  * ならず、保留中の更新が掃除されることを検証する。
  */
@@ -5582,7 +5582,7 @@ test("SubscriberImpl.update: fire-and-forget 後の GOAWAY で unhandled rejecti
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2:
+ * draft-ietf-moq-transport-20 §3.3.2:
  * fire-and-forget の update() 後に FIN が届いても unhandled rejection に
  * ならず、保留中の更新が掃除されることを検証する。
  */
@@ -5608,7 +5608,7 @@ test("SubscriberImpl.update: fire-and-forget 後の FIN で unhandled rejection 
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * fire-and-forget の update() 後に RESET_STREAM が起きても unhandled
  * rejection にならず、保留中の更新が掃除されることを検証する。
  */
@@ -5636,7 +5636,7 @@ test("SubscriberImpl.update: fire-and-forget 後の RESET_STREAM で unhandled r
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1:
+ * draft-ietf-moq-transport-20 §5.1:
  * fire-and-forget の update() 後に unsubscribe() しても unhandled rejection に
  * ならず、保留中の更新が掃除されることを検証する。
  */

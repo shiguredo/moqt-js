@@ -5,7 +5,7 @@
  * closePublisherStreamInternal / sendDatagram / getDatagramWriter / sendPublishDone
  * を free function として抽出する。
  *
- * draft-ietf-moq-transport-19 §2.2 (Subgroups):
+ * draft-ietf-moq-transport-20 §2.2 (Subgroups):
  * "Objects from the same Subgroup MUST NOT be sent on different streams"
  * publisherSendQueues による Promise チェーン排他制御で同一トラックの逐次実行を保証する。
  */
@@ -44,7 +44,7 @@ function publishGetDatagramWriter(
 /**
  * オブジェクトを送信する（Promise チェーン排他制御付き）
  *
- * draft-ietf-moq-transport-19 §2.2:
+ * draft-ietf-moq-transport-20 §2.2:
  * "Objects from the same Subgroup MUST NOT be sent on different streams"
  */
 export function publishSendObject(
@@ -59,7 +59,7 @@ export function publishSendObject(
     .catch(() => {})
     .then(() => {
       // 閉じた Subgroup への送信を拒否する
-      // draft-ietf-moq-transport-19 §11.4.3
+      // draft-ietf-moq-transport-20 §11.4.3
       if (session.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
         throw new ClosedSubgroupError(
           `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
@@ -79,7 +79,7 @@ export function publishSendObject(
 /**
  * オブジェクト送信の内部実装
  *
- * draft-ietf-moq-transport-19 Section 11.4.2 (Subgroup Header)
+ * draft-ietf-moq-transport-20 Section 11.4.2 (Subgroup Header)
  */
 export async function publishSendObjectInternal(
   session: SessionInternal,
@@ -105,7 +105,7 @@ export async function publishSendObjectInternal(
     }
 
     // Subgroup Header をエンコードする
-    // draft-ietf-moq-transport-19 Section 11.4.2
+    // draft-ietf-moq-transport-20 Section 11.4.2
     // ストリーム生成前にエンコードする。trackAlias / groupId が 2^64-1 を
     // 超える等でエンコードが throw した場合、新規ストリーム生成という
     // 副作用なしで失敗させるためである (グループ切替時の前ストリームの
@@ -141,7 +141,7 @@ export async function publishSendObjectInternal(
   }
 
   // Object ID 上限検証
-  // draft-ietf-moq-transport-19 §11.4.2
+  // draft-ietf-moq-transport-20 §11.4.2
   if (objectId < 0n || objectId > (1n << 64n) - 1n) {
     session.closeWithError(
       new SessionError(
@@ -175,7 +175,7 @@ export async function publishSendObjectInternal(
     );
   }
 
-  // GREASE Object Property - draft-ietf-moq-transport-19 §14 (Grease)
+  // GREASE Object Property - draft-ietf-moq-transport-20 §14 (Grease)
   // opt-in 時、各オブジェクトに 1 つ追加する。§11.2.1.2 により Object Properties は
   // status Normal のオブジェクトにのみ許容される（非 Normal は PROTOCOL_VIOLATION）ため、
   // Normal のときだけ注入する。
@@ -258,7 +258,7 @@ async function publishClosePublisherStreamInternal(
 
 /**
  * datagram を送信する
- * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
+ * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
  */
 export function publishSendDatagram(
   session: SessionInternal,
@@ -270,7 +270,7 @@ export function publishSendDatagram(
     return;
   }
 
-  // GREASE Object Property - draft-ietf-moq-transport-19 §14 (Grease)
+  // GREASE Object Property - draft-ietf-moq-transport-20 §14 (Grease)
   // opt-in 時、datagram に 1 つ追加する。Datagram Type の Properties Present ビット
   // （bit 0）を正しく設定するため、hasProperties の判定より前に注入する。
   const properties = session.grease
@@ -323,7 +323,7 @@ export function publishSendDatagram(
 
 /**
  * PUBLISH_DONE を送信する
- * draft-ietf-moq-transport-19 Section 10.11 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE)
  */
 export async function publishSendPublishDone(
   session: SessionInternal,
@@ -373,12 +373,12 @@ export async function publishSendPublishDone(
       writeError = err;
     }
 
-    // draft-ietf-moq-transport-19 §10.11:
+    // draft-ietf-moq-transport-20 §10.12:
     // publisher は PUBLISH_DONE を最後のメッセージとして送信した後、bidi ストリームを閉じる
     try {
       await streamInfo.writer.close();
     } catch (err) {
-      // draft-ietf-moq-transport-19 §3.3.3:
+      // draft-ietf-moq-transport-20 §3.3.3:
       // 「An endpoint that has already sent a FIN on its sending direction and
       //  subsequently wishes to cancel sends STOP_SENDING on the receiving
       //  direction.」— ピアが FIN 後に STOP_SENDING で当方の送信方向を
