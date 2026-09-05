@@ -32,7 +32,7 @@ import {
   MAX_FULL_TRACK_NAME_SIZE,
   isRejectedReceiveNamespace,
 } from "./parameter";
-import { InvalidFilterError, ProtocolViolationError } from "../error";
+import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
 import { MessageParameterType } from "./types";
 import { encodeVarint, MAX_VARINT } from "../varint";
 
@@ -274,6 +274,60 @@ test("LOCATION_FILTER reset はワイヤ上 Length=0 で round-trip する", () 
   assert.equal(consumed, encoded.length);
   assert.equal(decoded.length, 1);
   assert.deepEqual(decodeLocationFilterParameter(decoded[0]), { reset: true });
+});
+
+/**
+ * 宣言 Length (param.value.length) に対して Location Filter 構造の消費バイト数が
+ * 短い (末尾残余バイトあり) 場合は構造不正として ProtocolViolationError で拒否する。
+ * 仕様に明示規定はないが、制御メッセージの Body 長と消費バイト数の不一致検出と
+ * 同方針の堅牢性検証である (decodeFillParameters の内側検証と同形)。
+ */
+test("decodeLocationFilterParameter: 末尾残余バイトありは ProtocolViolationError", () => {
+  const param = encodeLocationFilterParameter({ startGroup: 3n, startObject: 4n });
+  // 正常エンコードに残余 1 バイトを付加する
+  const trailing = new Uint8Array(param.value.length + 1);
+  trailing.set(param.value, 0);
+  trailing[param.value.length] = 0x00;
+  assert.throws(
+    () => decodeLocationFilterParameter({ type: 0x21, value: trailing }),
+    ProtocolViolationError,
+    "declared length does not match filter",
+  );
+});
+
+/**
+ * reset (Length 0) に残余バイトが付いた場合も同様に拒否する。
+ */
+test("decodeLocationFilterParameter: reset の末尾残余バイトありは ProtocolViolationError", () => {
+  const param = encodeLocationFilterParameter({ reset: true });
+  const trailing = new Uint8Array(param.value.length + 1);
+  trailing.set(param.value, 0);
+  trailing[param.value.length] = 0x00;
+  assert.throws(
+    () => decodeLocationFilterParameter({ type: 0x21, value: trailing }),
+    ProtocolViolationError,
+    "declared length does not match filter",
+  );
+});
+
+/**
+ * ちょうど一致する通常ケースは従来どおり受理される (回帰ガード)。
+ */
+test("decodeLocationFilterParameter: 宣言 Length と一致する場合は受理される", () => {
+  const param = encodeLocationFilterParameter({ startGroup: 3n, startObject: 4n });
+  assert.deepEqual(decodeLocationFilterParameter(param), { startGroup: 3n, startObject: 4n });
+});
+
+/**
+ * 内側 Length に対して value が短い (truncated) 場合は、従来どおり
+ * IncompleteDataError のまま伝搬し、ProtocolViolationError には変換しない。
+ * 受信経路では外側の変換規則で PROTOCOL_VIOLATION になる。
+ */
+test("decodeLocationFilterParameter: 短い value は IncompleteDataError のまま", () => {
+  assert.throws(
+    () => decodeLocationFilterParameter({ type: 0x21, value: new Uint8Array([2, 0]) }),
+    IncompleteDataError,
+  );
 });
 
 /**
