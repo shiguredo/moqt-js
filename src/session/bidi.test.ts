@@ -46,6 +46,7 @@ import {
   bidiReadRequestStreamMessages,
   bidiSendNamespaceRequestUpdate,
   bidiSendRequestUpdate,
+  rejectPendingRequestUpdates,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   createResetStreamError,
@@ -504,6 +505,181 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
 
   // FORWARD 省略時は不変 (§10.2.18)
   assert.equal(subscriber.forwardState, false);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.9:
+ * "If omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY,
+ *  the value is unchanged."
+ * 自 update() で送信した LOCATION_FILTER が REQUEST_OK 受信時に
+ * SubscriberImpl へ反映され、handleObject / handleDatagram が
+ * 新しい Start Location で再適用されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: 送信時の LOCATION_FILTER が反映され新しい Start Location で再適用される", () => {
+  const delivered: MoqtObject[] = [];
+  const deliveredDatagrams: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    1n,
+    (obj) => delivered.push(obj),
+    (obj) => deliveredDatagrams.push(obj),
+  );
+  // 初期フィルタは group 1 から開始
+  subscriber.setLocationFilter({ startGroup: 1n, startObject: 0n });
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          locationFilter: { startGroup: 5n, startObject: 0n },
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  // 旧 Start (group 1) 以降だが新 Start (group 5) 未満は届かない
+  subscriber.handleObject({
+    groupId: 3n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  // 新 Start 以降は届く
+  subscriber.handleObject({
+    groupId: 5n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].groupId, 5n);
+  // datagram 経路も同じ解決済みフィルタで再適用される
+  subscriber.handleDatagram({
+    groupId: 4n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  subscriber.handleDatagram({
+    groupId: 6n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(deliveredDatagrams.length, 1);
+  assert.equal(deliveredDatagrams[0].groupId, 6n);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.9:
+ * LOCATION_FILTER を送らなかった update() の REQUEST_OK では
+ * フィルタが不変であることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK でフィルタは不変", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
+  subscriber.setLocationFilter({ startGroup: 1n, startObject: 0n });
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // 省略時は不変 (§10.2.9) のため group 1 以降が従来どおり届く
+  subscriber.handleObject({
+    groupId: 0n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  subscriber.handleObject({
+    groupId: 1n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].groupId, 1n);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.9 / §5.1.2:
+ * { reset: true } (Length 0) は除去として反映され、
+ * 反映後はフィルタなしで全オブジェクトが通過することを検証する。
+ * (§5.1.2: "A length of 0 indicates no filter, for example to remove
+ *  the filter in REQUEST_UPDATE.")
+ */
+test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジェクトが通過する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
+  subscriber.setLocationFilter({ startGroup: 5n, startObject: 0n });
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          locationFilter: { reset: true },
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // 除去後は group 0 も通過する
+  subscriber.handleObject({
+    groupId: 0n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
   assert.equal(session.pendingRequestUpdate.size, 0);
 });
 
@@ -1082,6 +1258,73 @@ test("bidiSendRequestUpdate: 正常な raw LOCATION_FILTER は送信できる", 
   assert.isDefined(
     decoded.parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY),
   );
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.9:
+ * bidiSendRequestUpdate は送信時の LOCATION_FILTER (先頭 1 件のデコード値) を
+ * pending に保持し、REQUEST_OK 受信時の反映に使うことを検証する。
+ */
+test("bidiSendRequestUpdate: 送信時の LOCATION_FILTER が pending に保持される", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [encodeLocationFilterParameter({ startGroup: 2n, startObject: 3n })],
+  });
+  assert.equal(session.pendingRequestUpdate.size, 1);
+  for (const [, pending] of session.pendingRequestUpdate) {
+    assert.deepEqual(pending.locationFilter, { startGroup: 2n, startObject: 3n });
+    pending.resolve();
+  }
+  await updatePromise;
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.9.1:
+ * REQUEST_ERROR (coalescing による reject) では送信時の LOCATION_FILTER が
+ * 反映されないことを検証する。
+ */
+test("rejectPendingRequestUpdates: 失敗時は送信時の LOCATION_FILTER が反映されない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
+  subscriber.setLocationFilter({ startGroup: 1n, startObject: 0n });
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          locationFilter: { startGroup: 5n, startObject: 0n },
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  rejectPendingRequestUpdates(session, 0n, new Error("REQUEST_ERROR"));
+
+  // 失敗時は旧フィルタのまま (group 1 は通過、group 0 は不通過)
+  subscriber.handleObject({
+    groupId: 0n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  subscriber.handleObject({
+    groupId: 1n,
+    subgroupId: 0n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].groupId, 1n);
+  assert.equal(session.pendingRequestUpdate.size, 0);
 });
 
 test("bidiSendRequestUpdate: マージ後の状態が上限以内なら throw しない", async () => {
