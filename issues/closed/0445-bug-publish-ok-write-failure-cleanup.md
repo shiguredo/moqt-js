@@ -2,7 +2,7 @@
 
 - Created: 2026-08-31
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-publish-ok-write-failure-cleanup
 - Polished: 2026-09-05
 
@@ -40,3 +40,10 @@
 - draft-ietf-moq-transport-20 §11.1 (Track Alias: 同時使用の禁止。終了済み購読後の再使用は SHOULD NOT ... unless completely closed の条件付きで許容)
 - 関連: `issues/closed/0428-bug-incoming-publish-reset-markclosed-missing.md` (サブループ側の catch 経路でアプリ例外を吸収した対応。本 issue は同じ失敗モードの PUBLISH_OK 書き込み経路を扱う)
 - 関連: `issues/closed/0107-bug-session-close-leaks-streams.md` (セッション close 時のストリームリーク追跡の先例)
+
+## 解決方法
+
+- `handleIncomingBidirectionalStream` の登録以後 (PUBLISH_OK 送信 + サブループ + 後始末) を try/finally 化し、後始末を `cleanupIncomingPublish()` に抽出して exit 経路に依らず必ず実行するようにした。関数は throw しない。
+- PUBLISH_OK 書き込み失敗時は source 別に処理する (session は通知なし + markClosed、stream / なしは通知 + closed)。ピア stream エラーは subloop の RESET 経路と同じ文言に正規化する。
+- テストは `src/session.test.ts` に 5 件追加した (stream / なし / 非 Error / session / alias 再利用)。
+- 触ったファイル: `src/session.ts`、`src/session.test.ts`、`CHANGES.md`。
