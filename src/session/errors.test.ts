@@ -127,7 +127,7 @@ test("toProtocolViolationSessionError: Error を継承しないオブジェク�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。

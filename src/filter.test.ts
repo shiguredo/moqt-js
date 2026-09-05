@@ -294,7 +294,7 @@ test("objectMatchesFilter: End Object は End Group のみに適用される", (
 
 // ============================================================================
 // rangeFiltersMatch のテスト
-// draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters)
+// draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters)
 // ============================================================================
 
 /**
@@ -305,7 +305,7 @@ test("rangeFiltersMatch: フィルタなしは全通過", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3:
+ * draft-ietf-moq-transport-20 Section 5.1.4:
  * 「Each Range Filter is a sequence of Start/End (vi64) inclusive Range pairs」
  * 包含判定は両端含む (inclusive) ことを検証する。
  */
@@ -321,10 +321,10 @@ test("rangeFiltersMatch: 包含判定は両端含む (inclusive)", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3 の例:
+ * draft-ietf-moq-transport-20 §5.1.4 の例:
  * ranges 3-5 / 10-15。objectId 4 は通過、objectId 7 は不通過。
  */
-test("rangeFiltersMatch: §5.1.3 の例 (objectId 4 は通過 / 7 は不通過)", () => {
+test("rangeFiltersMatch: §5.1.4 の例 (objectId 4 は通過 / 7 は不通過)", () => {
   const filters: RangeFilterSpec[] = [
     {
       type: "objectId",
@@ -511,7 +511,7 @@ test("rangeFiltersMatch: IMMUTABLE_PROPERTIES の再帰深さ上限超過は不�
 
 // ============================================================================
 // trackPropertyFiltersMatch のテスト
-// draft-ietf-moq-transport-19 Section 5.1.3 (TRACK_PROPERTY_FILTER)
+// draft-ietf-moq-transport-20 Section 5.1.4 (TRACK_PROPERTY_FILTER)
 // ============================================================================
 
 /**

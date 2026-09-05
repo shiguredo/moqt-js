@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-19 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
+ * draft-ietf-moq-transport-20 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -33,7 +33,7 @@ import { ProtocolViolationError } from "../error";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -43,7 +43,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-19 §10.2.8 / §10.2.17: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-20 §10.2.8 / §10.2.18: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -134,7 +134,7 @@ const parametersArb = fc
   });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.4:
+ * draft-ietf-moq-transport-20 Section 10.4:
  * GOAWAY のワイヤフォーマットは New Session URI Length + New Session URI + Timeout。
  * draft-19 で Request ID フィールドが削除された。
  */
@@ -162,7 +162,7 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Timeout は GOAWAY ペイロードの最後のフィールドであり、
@@ -196,9 +196,9 @@ test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationE
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.5:
+ * draft-ietf-moq-transport-20 Section 10.5:
  * REQUEST_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-19 Section 10.5
+ * draft-ietf-moq-transport-20 Section 10.5
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする（空 Track Properties）", () => {
   fc.assert(
@@ -224,7 +224,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.5 (REQUEST_OK):
+ * draft-ietf-moq-transport-20 Section 10.5 (REQUEST_OK):
  * REQUEST_OK に Track Properties が追加された。
  * 非空 Track Properties のエンコード・デコードが正しくラウンドトリップすることを検証する。
  */
@@ -271,7 +271,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 /**
  * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.5:
+ * draft-ietf-moq-transport-20 Section 10.5:
  * REQUEST_OK は Track Properties を末尾に含む場合がある。
  */
 const evenPropertyArb = fc
@@ -304,7 +304,7 @@ const oddPropertyArb = fc
 const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 
 /**
- * draft-ietf-moq-transport-19 Section 10.6.2:
+ * draft-ietf-moq-transport-20 Section 10.6.2:
  * REQUEST_ERROR に Redirect が含まれる場合（REDIRECT エラーコード）
  */
 test("REQUEST_ERROR with Redirect のエンコード・デコードがラウンドトリップする", () => {
@@ -345,9 +345,9 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.6:
+ * draft-ietf-moq-transport-20 Section 10.6:
  * REQUEST_ERROR から Request ID が削除された。
- * draft-ietf-moq-transport-19 Section 10.1
+ * draft-ietf-moq-transport-20 Section 10.1
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない
@@ -380,7 +380,7 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.6.2:
+ * draft-ietf-moq-transport-20 Section 10.6.2:
  * Error Code が REDIRECT 以外だが Redirect バイト列が存在する場合は
  * ProtocolViolationError を throw する。
  */
@@ -411,7 +411,7 @@ test("REDIRECT 以外のエラーコードで Redirect バイトが存在する�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 10.6.2) であり、
@@ -457,7 +457,7 @@ test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolVi
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.4:
+ * draft-ietf-moq-transport-20 Section 1.4.4:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
  *  the session with a PROTOCOL_VIOLATION"
  * Reason Phrase Length が上限 (1024) を超える REQUEST_ERROR を受信すると
@@ -476,7 +476,7 @@ test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolation
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
+ * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure):
  * Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の New Session URI
  * §10.4 にのみ存在する)。8,192 バイトを超える Connect URI を含む Redirect が
  * デコードできることを固定バイト列で検証する。
@@ -499,7 +499,7 @@ test("Redirect の 8,192 バイト超 Connect URI がデコードできる", () 
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.1:
+ * draft-ietf-moq-transport-20 §2.4.1:
  * Full Track Name (Namespace + Track Name 合計) が 4,096 バイトを超える
  * Redirect (REQUEST_ERROR) がデコード時に ProtocolViolationError になることを
  * 検証する (decodeRedirect 経由の統合テスト)。
@@ -523,7 +523,7 @@ test("REQUEST_ERROR (REDIRECT) の Full Track Name 4,096 バイト超過で Prot
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.6.1 (Redirect Structure):
+ * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure):
  * 8,192 バイトを超える Connect URI を含む REQUEST_ERROR (REDIRECT) が
  * デコード経路 (encodeRequestErrorPayload → decodeRequestErrorPayload) で
  * ラウンドトリップし、trailing 検査と干渉しないことを検証する。

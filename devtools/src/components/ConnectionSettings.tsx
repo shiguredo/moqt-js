@@ -330,7 +330,7 @@ export function ConnectionSettings() {
         <div class="lg:col-span-2">
           <label for="fragment" class="block text-sm font-medium text-slate-600 mb-1">
             URI Fragment
-            <span class="ml-1 text-xs text-slate-400">type:value (draft-18 §3.1.2)</span>
+            <span class="ml-1 text-xs text-slate-400">type:value (draft-20 §3.1.2)</span>
           </label>
           <input
             type="text"
@@ -601,7 +601,7 @@ export function ConnectionSettings() {
       </div>
 
       {/* Authorization Token Settings */}
-      {/* draft-ietf-moq-transport-19 §10.3.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+      {/* draft-ietf-moq-transport-20 §10.3.1.4 (AUTHORIZATION TOKEN Setup Option) */}
       <div class="mt-4 pt-4 border-t border-slate-200">
         <h3 class="text-sm font-medium text-slate-600 mb-3">
           Authorization Token

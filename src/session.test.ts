@@ -131,7 +131,7 @@ test("fetch: filter の End Group が 2^64-1 を超えると throw し pendingFe
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-20 §10.3.1.6 (MAX FILTER RANGES):
  * ピアの MAX_FILTER_RANGES が 0 (未広告) の状態で FETCH の rangeFilters を
  * 指定すると throw することを検証する。
  * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
@@ -160,7 +160,7 @@ test("fetch: peer MAX_FILTER_RANGES が 0 のとき rangeFilters 指定で throw
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * FETCH で削除 (Length=0) を指定すると throw することを検証する。
  * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
  */
@@ -227,7 +227,7 @@ test("subscribe: End Group が 2^64-1 を超えると throw し pendingSubscribe
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致しない場合、
  * onPublish が呼ばれず REQUEST_ERROR (UNINTERESTED) で応答されることを検証する。
  *
@@ -308,7 +308,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
 });
 
 /**
- * draft-ietf-moq-transport-19 §5.1.3:
+ * draft-ietf-moq-transport-20 §5.1.4:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致する場合、
  * onPublish が呼ばれることを検証する。
  */
@@ -374,7 +374,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ば�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+ * draft-ietf-moq-transport-20 §10.9.1 / §3.3.2:
  * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) でピアが GOAWAY を送らずに
  * FIN した場合、応答待ちの REQUEST_UPDATE の update() の Promise が reject
  * され、エントリが削除されることを検証する。
@@ -451,7 +451,7 @@ test("受信 PUBLISH ストリーム上のピア FIN で応答待ちの REQUEST_
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) で GOAWAY を受信した場合、
  * 旧ストリーム上の未応答 REQUEST_UPDATE の update() の Promise が reject され、
  * エントリが削除されることを検証する。
@@ -777,7 +777,7 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.3.1.6:
+ * draft-ietf-moq-transport-20 §10.3.1.6:
  * SUBSCRIBE の fill 内側に Range Filters を指定した場合も、ピア未広告では
  * 送信前に throw することを検証する (購読単位の上限に含める)。
  */
@@ -939,7 +939,7 @@ function createIncomingPublishStream(
 }
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * 受信 PUBLISH から生成された subscriber に対してピアが RESET_STREAM でストリームを
  * エラー終了させた場合、error コールバックが呼ばれ state が closed になることを検証する。
  * bidiReadRequestStreamMessages の subscribe ロールと同じ扱いに揃える対応であり、
@@ -979,7 +979,7 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3 / §10.9.1:
+ * draft-ietf-moq-transport-20 §3.3.2 / §3.3.3 / §10.9.1:
  * 受信 PUBLISH ストリームでピアが RESET_STREAM でストリームをエラー終了させた
  * 場合、応答待ちの REQUEST_UPDATE が reject されエントリが削除されることを
  * 検証する。FIN 経路と同じ文言で失敗として扱う。
@@ -1033,7 +1033,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM で応答待ちの REQUE
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.2 / §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.2 / §3.3.3:
  * 受信 PUBLISH ストリームの RESET_STREAM 通知でアプリの error コールバックが
  * throw しても、応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを
  * 検証する。通知より reject を先に置く順序の根拠を固定する。
@@ -1124,7 +1124,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM のエラーコードが
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * 受信 PUBLISH ストリームで GOAWAY 受信後に RESET_STREAM が起きても、
  * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
  * GOAWAY 掃除の reject が上書きされないことで呼び出し自体の不在を固定する。
@@ -1189,7 +1189,7 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM で�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3 / §3.5:
+ * draft-ietf-moq-transport-20 §3.3.3 / §3.5:
  * 受信 PUBLISH ストリームでセッション終了起因 (source: "session") の読み取り
  * 失敗が起きても、保留中の REQUEST_UPDATE に触れないことを検証する。
  */
@@ -1234,7 +1234,7 @@ test("受信 PUBLISH ストリーム上のセッション終了の読み取り�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * RESET_STREAM 通知でアプリの error コールバックが throw しても、例外がループ外へ
  * 伝播せず state が closed になることを検証する。伝播すると呼び出し元の
  * requestStreams / subscribers / subscribersByAlias のクリーンアップがスキップされる。
@@ -1268,7 +1268,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * source を持たない内部エラーでは、従来どおり生のエラーが error コールバックへ
  * 通知され、state は closed にならないことを検証する (RESET_STREAM 限定の回帰ガード)。
  * 修正前の実装でも通る。
@@ -1301,7 +1301,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーでは error �
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.3.3:
+ * draft-ietf-moq-transport-20 §3.3.3:
  * source を持たない内部エラーでアプリの error コールバックが throw しても、例外が
  * ループ外へ伝播せず後始末が走ることを検証する (RESET 経路と同じ理由で吸収する)。
  * error 通知されるのに state が active のまま残るのは従来どおりであり、ここでは
@@ -1333,7 +1333,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーで error コ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §3.5:
+ * draft-ietf-moq-transport-20 §3.5:
  * WebTransport セッション終了起因 (source: "session") のエラーでは従来どおり
  * error コールバックが呼ばれないことを検証する (修正前の実装でも通る回帰ガード)。
  * Node 環境では WebTransportError グローバルが無いため、isSessionClosedError は
@@ -1361,7 +1361,7 @@ test("受信 PUBLISH ストリーム上のセッション終了 (source: session
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4 / §3.3.3:
+ * draft-ietf-moq-transport-20 §10.4 / §3.3.3:
  * GOAWAY 受信済みの受信 PUBLISH ストリームで RESET_STREAM が起きても、error
  * コールバックが呼ばれず state も変わらないことを検証する (GOAWAY は migration
  * 通知であり失敗ではなく、subscription state に影響しない。通知経路の拡大を
@@ -1411,7 +1411,7 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM で�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.4:
+ * draft-ietf-moq-transport-20 §10.4:
  * GOAWAY 受信済みの受信 PUBLISH ストリームで source を持たない内部エラーが起きても、
  * error コールバックが呼ばれないことを検証する。この抑止は外側の !goawayReceived に
  * しかなく (notifySubscriberFailure 内の goawayReceivedOnRequestStreams ガードは
@@ -1555,7 +1555,7 @@ test("受信 PUBLISH_DONE の削除された 0x3 は end と error の両方が�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.2 / §6.1:
+ * draft-ietf-moq-transport-20 §10.9.2 / §6.1:
  * in-flight (REQUEST_OK 未受信) の更新がある状態で namespace の
  * unsubscribe() を呼ぶと、update() の Promise が reject され、pending エントリと
  * pendingPrefix が掃除されることを検証する。
@@ -1622,7 +1622,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.2 / §6.1:
+ * draft-ietf-moq-transport-20 §10.9.2 / §6.1:
  * tracks 側の unsubscribe() でも namespace 側と同様に、in-flight の update() の
  * Promise が reject され、pending エントリと pendingPrefix が掃除されることを
  * 検証する。
@@ -1672,7 +1672,7 @@ test("tracks の unsubscribe() で in-flight の update() が reject され pend
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.2:
+ * draft-ietf-moq-transport-20 §10.9.2:
  * update() を fire-and-forget (返り値を観測しない) で呼び、その後に
  * unsubscribe() した場合、update() の reject が unhandled rejection に
  * ならないことを検証する。
@@ -1735,7 +1735,7 @@ test("namespace の update() を fire-and-forget で呼び出しても unsubscri
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.9.2:
+ * draft-ietf-moq-transport-20 §10.9.2:
  * tracks 側の update() も namespace 側と同様に、fire-and-forget で呼び出して
  * も unsubscribe() の reject が unhandled rejection にならないことを検証する。
  */
@@ -1821,10 +1821,10 @@ interface FetchPriorityMismatchContext {
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出した
  * 場合の処理を検証するためのコンテキストを構築する。
  *
- * draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+ * draft-ietf-moq-transport-20 §2.4.2 (Malformed Tracks):
  * Malformed Track 検出時は「cancel any corresponding subscription or fetches
  * for that Track from that publisher」であり、セッションを閉じない。
- * draft-ietf-moq-transport-19 §5.2 (Fetch State Management):
+ * draft-ietf-moq-transport-20 §5.2 (Fetch State Management):
  * キャンセル時は「It MUST send STOP_SENDING for the bidi request stream.」
  *
  * fetchers / requestStreams は FETCH 確立後の状態 (bidiSendRequestOnBidiStream が
@@ -1917,7 +1917,7 @@ function createFetchPriorityMismatchContext(requestId: bigint): FetchPriorityMis
  * 同一 Group・同一 Subgroup で Publisher Priority 不一致を含む FETCH データ
  * ストリームのチャンク列を構築する。
  *
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * 先頭オブジェクト (Priority 100) の後に、同一 Group・同一 Subgroup で異なる
  * Priority (200) のオブジェクトを続ける。
  *
@@ -1986,12 +1986,12 @@ function assertFetchCancelledOnPriorityMismatch(ctx: FetchPriorityMismatchContex
 }
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出しても
  * セッションが閉じず、対象 FETCH がキャンセルされることを検証する。
  *
  * - 受信データストリームは STOP_SENDING 相当 (cancelStreamQuiet) で打ち切られる
- * - draft-ietf-moq-transport-19 §5.2 の MUST に従い、bidi リクエストストリームへ
+ * - draft-ietf-moq-transport-20 §5.2 の MUST に従い、bidi リクエストストリームへ
  *   STOP_SENDING (readable.cancel) が送られる
  * - fetchers / requestStreams から削除される
  * - error コールバックが MalformedTrackError で呼ばれる
@@ -2017,7 +2017,7 @@ test("FETCH 応答の Priority 不一致でセッションは閉じず FETCH が
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * Priority 不一致のオブジェクトが 2 チャンク目 (fetchContext を永続化してから)
  * で検出される場合も、セッションは閉じず FETCH がキャンセルされることを検証する。
  *
@@ -2168,7 +2168,7 @@ async function yieldToMacrotask(): Promise<void> {
 }
 
 /**
- * draft-ietf-moq-transport-19 §11.4 (Streams):
+ * draft-ietf-moq-transport-20 §11.4 (Streams):
  * "If a stream ends gracefully (i.e., the stream terminates with a FIN) in
  *  the middle of a serialized Object, the session SHOULD be closed with a
  *  PROTOCOL_VIOLATION."
@@ -2245,7 +2245,7 @@ test("Subgroup データストリーム: チャンク分割中は閉じず Objec
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams):
  * "If a sender has delivered all objects in a Subgroup ... it MUST close
  *  the stream with a FIN."
  * Object 0 個 (empty Subgroup) を含む全ストリームが対象であり、
@@ -2319,7 +2319,7 @@ test("Fetch データストリーム: ヘッダー途中切れの FIN は黙殺�
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4 (Streams):
+ * draft-ietf-moq-transport-20 §11.4 (Streams):
  * Fetch データストリームでも未完成 Object の途中のピア FIN は
  * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  * 加えて fetcher.handleEnd() が呼ばれない (正常終了として扱われない) ことを
@@ -2363,7 +2363,7 @@ test("Fetch データストリーム: 未完成 Object の途中でピア FIN �
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.12.3 (Fetch Handling):
+ * draft-ietf-moq-transport-20 §10.13 (FETCH):
  * Object 0 件の FETCH 応答は FETCH_HEADER + FIN が正当な形
  * ("If no Objects exist in the requested range, the publisher opens the
  *  unidirectional stream, sends the FETCH_HEADER (see Section 11.4.4)
@@ -2572,7 +2572,7 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.2.1.1 (Object Status):
+ * draft-ietf-moq-transport-20 §11.2.1.1 (Object Status):
  * Subgroup の終わりは status ではなく FIN で通知される
  * ("The end of a Subgroup is signaled by closing its stream with a FIN
  *  (see Section 11.4.3).")。

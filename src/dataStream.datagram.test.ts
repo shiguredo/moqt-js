@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Datagram テスト
- * draft-ietf-moq-transport-19 Section 11.3 (Datagrams)
+ * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -122,7 +122,7 @@ test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.3.1:
+ * draft-ietf-moq-transport-20 §11.3.1:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤配信を避け、IncompleteDataError を
  * throw することを検証する (受信側では PROTOCOL_VIOLATION に変換されて
@@ -180,7 +180,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       payload: new Uint8Array([0xaa]),
     },
   },
-  // draft-ietf-moq-transport-19 Section 11.3.1:
+  // draft-ietf-moq-transport-20 Section 11.3.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // Priority Present なし (0x08-0x0F, 0x28-0x2D は Priority なし)。END_OF_TRACK status
   {
@@ -252,7 +252,7 @@ function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
   return ids;
 }
 
-// draft-ietf-moq-transport-19 §14 (Grease):
+// draft-ietf-moq-transport-20 §14 (Grease):
 // grease opt-in 時、Object Properties に GREASE Property を 1 つ注入する。
 // 元々 properties がない datagram でも Properties Present ビット（Datagram Type bit 0）が
 // 立った EXT 型となり、GREASE Property がラウンドトリップすることを検証する。

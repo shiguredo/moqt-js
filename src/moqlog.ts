@@ -143,7 +143,7 @@ export const MOQLOG_NAMESPACE_PREFIX = "moq://moq-syslog.arpa/logs-v1/";
 /**
  * Log track の Track Namespace タプルを構築する（[MOQLOG] Section 3、暫定対応）
  *
- * resourceID は非空であること。draft-ietf-moq-transport-19 §2.4.1 は各 namespace 要素に
+ * resourceID は非空であること。draft-ietf-moq-transport-20 §2.4.1 は各 namespace 要素に
  * 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで拒否される。
  */
 export function logTrackNamespace(resourceId: string): [string, string] {

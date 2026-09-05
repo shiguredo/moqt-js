@@ -46,7 +46,7 @@ export interface SubscriberInstance {
   // largestLocation
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Track Properties に DYNAMIC_GROUPS=1 が含まれているかどうか。
-  // draft-ietf-moq-transport-19 §10.2.18 により、true のときのみ
+  // draft-ietf-moq-transport-20 §10.2.19 により、true のときのみ
   // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信できる。
   dynamicGroupsSupported: Signal<boolean>;
 }

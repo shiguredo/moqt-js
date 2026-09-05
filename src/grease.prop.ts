@@ -1,6 +1,6 @@
 /**
  * GREASE 値 Property-Based Tests
- * draft-ietf-moq-transport-19 Section 14 (Grease)
+ * draft-ietf-moq-transport-20 Section 14 (Grease)
  *
  * GREASE 値のパターン 0x7f * N + 0x9D が任意の非負整数 N で成り立つ
  * 不変条件を検証する。

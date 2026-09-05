@@ -1,6 +1,6 @@
 /**
  * MOQT Data Stream Fetch Object Fields - Property-Based Tests
- * draft-ietf-moq-transport-19 Section 11.4.4
+ * draft-ietf-moq-transport-20 Section 11.4.4
  */
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";

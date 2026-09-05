@@ -1,6 +1,6 @@
 /**
  * Varint Property-Based Tests
- * draft-ietf-moq-transport-19 Section 1.4.1 に基づく MOQT 可変長整数のプロパティテスト
+ * draft-ietf-moq-transport-20 Section 1.4.1 に基づく MOQT 可変長整数のプロパティテスト
  */
 
 import { test, assert } from "vite-plus/test";
@@ -213,7 +213,7 @@ test("負の値はエラーになる", () => {
   );
 });
 
-// draft-ietf-moq-transport-19 Section 1.4.1:
+// draft-ietf-moq-transport-20 Section 1.4.1:
 // 9 バイト varint の Range は 0-2^64-1 であり、2^64 以上は仕様の範囲外。
 // 範囲外入力は無音で mod 2^64 にラップされるデータ破壊を防ぐため、
 // encodeVarint / varintSize の両方が例外を投げることを検証する。
