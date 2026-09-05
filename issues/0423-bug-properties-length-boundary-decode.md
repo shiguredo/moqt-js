@@ -5,7 +5,7 @@
 - Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-properties-length-boundary-decode
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-05
 
 ## 目的
 
