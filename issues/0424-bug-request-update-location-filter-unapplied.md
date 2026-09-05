@@ -4,7 +4,7 @@
 - Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-request-update-location-filter
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-05
 
 ## 目的
 
@@ -20,13 +20,13 @@
 
 ## 設計方針
 
-- `PendingRequestUpdate` に送信時の LOCATION_FILTER 値（型 `LocationFilter`、省略時 undefined）を保持し、`bidiHandleRequestUpdateOk` の REQUEST_OK 受信時に `subscriber.setLocationFilter()` で反映する。
-- 反映は `forward` / `rangeFilters` と同じタイミング・同じセマンティクスにする。省略時 (undefined) はフィルタを変更しない (draft-ietf-moq-transport-20 §10.9 および §10.2.9 に従う)。`{ reset: true }` (Length 0) は除去として `setLocationFilter({ reset: true })` で反映する。
-- 送信時の LOCATION_FILTER は `options.parameters` 内の `MessageParameterType.LOCATION_FILTER` パラメータから抽出する。
+- `PendingRequestUpdate` に送信時の LOCATION_FILTER 値（型 `LocationFilter`、省略時 undefined）を保持し、`bidiHandleRequestUpdateOk` の REQUEST_OK 受信時に `subscriber.setLocationFilter()` で反映する。`resolvePendingRequestUpdate` の戻り値にも `locationFilter` を含める。
+- 反映は `forward` / `rangeFilters` と同じタイミング・同じセマンティクスにする。省略時 (undefined) はフィルタを変更しない (draft-ietf-moq-transport-20 §10.9 および §10.2.9 に従う)。`{ reset: true }` (Length 0) は除去として `setLocationFilter({ reset: true })` で反映する。反映順序は LARGEST_OBJECT 反映の後とし、相対指定フィルタが Largest 依存で解決されること（受信 PUBLISH_STATE_NOTIFY 経路の `setLargestLocation` → `setLocationFilter` と同順）に合わせる。
+- 送信時の LOCATION_FILTER は `options.parameters` のトップレベルの `MessageParameterType.LOCATION_FILTER` のうち最初の 1 件を `decodeLocationFilterParameter()` でデコードした値とする（受信側の `find` による抽出と同形）。`FILL_PARAMETERS` 内側の LOCATION_FILTER は fill 範囲であり対象外とする。デコードは `pendingRequestUpdate.set` より前（0437 の送信前検証ガードと同じ位置）で行い、0437 のガードで検証済みの値を再利用する。不正値の throw 時は `pendingRequestUpdate` にエントリを残さない（ガードは登録前に配置の不変条件に従う）。
 
 ## 完了条件
 
-- REQUEST_OK 受信時に、送信時の LOCATION_FILTER が `SubscriberImpl.locationFilter` と `resolvedFilterCache` に反映されること（結合テストで検証する）。
+- REQUEST_OK 受信時に、送信時の LOCATION_FILTER が `SubscriberImpl.locationFilter` と `resolvedFilterCache` に反映されること（`src/session/bidi.test.ts` の `bidiHandleRequestUpdateOk` 単体テストパターンで検証する）。
 - 反映後の `handleObject` / `handleDatagram` が新しい Start Location で再適用されること。
 - LOCATION_FILTER を送らなかった `update()` ではフィルタが不変であること。
 - REQUEST_ERROR / セッション終了時には反映されないこと。
