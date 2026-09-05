@@ -54,7 +54,7 @@ hooks = [
 # rev は prek auto-update で更新する
 [[repos]]
 repo = "https://github.com/tombi-toml/tombi-pre-commit"
-rev = "v1.2.4"
+rev = "v1.5.1"
 hooks = [{ id = "tombi-lint" }, { id = "tombi-format" }]
 
 # プロジェクト固有のローカルフック
