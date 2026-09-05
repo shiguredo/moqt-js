@@ -309,7 +309,24 @@ export async function bidiSendRequestOnBidiStream(
   const message = session.controlWriter.encode(type, payload);
   session.statsControlMessagesSent++;
   session.emitDebug("send", type, payload, decoded);
-  await writer.write(message);
+  try {
+    await writer.write(message);
+  } catch (error) {
+    // 送信失敗時は作成済みストリームを RESET で閉じてから throw する。
+    // requestStreams への登録は成功経路でのみ行うため、Map 側の掃除は不要。
+    // bidiCancelSubscription / bidiCancelFetch と同形: readable.cancel() が
+    // STOP_SENDING 相当、writer.abort() が RESET 相当。FIN である
+    // writer.close() は使わない。
+    try {
+      await stream.readable.cancel("request send failed");
+      await writer.abort("request send failed");
+    } catch {
+      // 閉じかけのストリーム操作の失敗は無視する
+    } finally {
+      writer.releaseLock();
+    }
+    throw error;
+  }
 
   const streamInfo: RequestStreamInfo = { stream, writer, controlReader };
   session.requestStreams.set(requestId, streamInfo);
