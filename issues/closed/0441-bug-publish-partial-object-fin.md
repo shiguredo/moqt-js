@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-publish-partial-object-fin
 - Polished: 2026-09-05
 
@@ -37,4 +37,7 @@ draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams) の MUST「If a 
 
 ## 解決方法
 
-未着手。
+- `publishSendObjectInternal` で Object Fields と payload を連結して 1 回の `write()` で送信するようにした。空 payload 時は fields のみの単一 write のままである。
+- writer 閉鎖時の write 失敗は従来どおり `closedSubgroups.add` + 再 throw とし、外側で `handleError` へ渡す。残キュー経路は対象外のため触っていない。
+- テストは `src/session/publish.test.ts` に 6 件追加した (単一 write とワイヤ同一・空 payload・delivery timeout 付き・2 件目・close 割り込み・閉鎖後送信)。
+- 触ったファイル: `src/session/publish.ts`、`src/session/publish.test.ts`、`CHANGES.md`。
