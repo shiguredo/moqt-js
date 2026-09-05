@@ -93,6 +93,15 @@ interface RequestStreamInfo {
   stream: WebTransportBidirectionalStream;
   writer: WritableStreamDefaultWriter<Uint8Array>;
   controlReader: ControlStreamReader;
+  /**
+   * 読み取りループが保持中の reader。
+   *
+   * unsubscribe 時にロック保持者経由で cancel (STOP_SENDING 相当) するため、
+   * ループ開始時に登録し、ロック解放時にクリアする。ロック中の
+   * stream.cancel() は TypeError で reject するため、stream 経由では
+   * 解除できない。未登録 (ループ未開始・終了済み) の場合は undefined。
+   */
+  reader?: ReadableStreamDefaultReader<Uint8Array>;
 }
 
 interface PendingPublish {
@@ -1147,6 +1156,12 @@ export async function bidiReadRequestStreamMessages(
   role: "publish" | "subscribe",
 ): Promise<void> {
   const reader = stream.readable.getReader();
+  // 読み取りループがロックを保持するため、解除 (unsubscribe) 時に保持者経由で
+  // cancel できるよう登録する。エントリ削除済み (解除競合) の場合は登録しない。
+  const registeredEntry = session.requestStreams.get(requestId);
+  if (registeredEntry !== undefined) {
+    registeredEntry.reader = reader;
+  }
   // ピアの graceful FIN (reader.read() の { done: true }) を記録し、
   // publish ロールのみ削除を done() 完了後まで遅延する判定に使う。
   let receivedFin = false;
@@ -1492,6 +1507,12 @@ export async function bidiReadRequestStreamMessages(
     }
     // それ以外（セッション終了・内部エラー等）は既存通り無視する
   } finally {
+    // 解除側が古い reader で cancel しないよう、解放前に登録を外す
+    // (エントリ削除済みの場合は何もしない)。
+    const registeredEntry = session.requestStreams.get(requestId);
+    if (registeredEntry !== undefined && registeredEntry.reader === reader) {
+      registeredEntry.reader = undefined;
+    }
     reader.releaseLock();
     deleteSubscriber(session, requestId);
     // draft-ietf-moq-transport-20 §3.3.2 の MUST「the publisher of an
@@ -1802,8 +1823,14 @@ export async function bidiSendRequestUpdate(
     // write 失敗時はエントリを削除して残留を防ぐ。削除しないと、後続の
     // GOAWAY 処理やセッション close が登録済みの reject を呼び、呼び出し元に
     // 返されていない Promise の unhandled rejection を生む。
-    session.pendingRequestUpdate.delete(updateRequestId);
+    const hadPendingRequestUpdate = session.pendingRequestUpdate.delete(updateRequestId);
     session.fillFetchTargets.delete(updateRequestId);
+    if (!hadPendingRequestUpdate) {
+      // 解除・GOAWAY・FIN 等の競合で保留エントリが既に掃除されていた場合、
+      // update() の結果は既に settle 済みの内側 Promise に委ね、送信エラーを
+      // 上書きしない (原因のエラーを呼び出し元へ伝えるため)。
+      return promise;
+    }
     throw err;
   }
 
@@ -2019,23 +2046,11 @@ export async function bidiCancelSubscription(
   deleteFillTargetsForSubscriber(session, subscriber);
 
   const streamInfo = session.requestStreams.get(requestId);
-  if (streamInfo) {
-    try {
-      // draft-ietf-moq-transport-20 §5.1:
-      // 「The subscriber terminates a subscription ... by sending STOP_SENDING.」
-      // WebTransport では readable.cancel() が STOP_SENDING 相当。
-      // 両方向をリセットして subscription 解除を通知する。
-      await streamInfo.stream.readable.cancel("subscription cancelled");
-      // GOAWAY 受信で送信方向を FIN (writer.close()) 済みの場合、abort は
-      // reject する (閉じた writer への操作)。unhandled rejection を避けるため
-      // catch で握り潰す。
-      void streamInfo.writer.abort("subscription cancelled").catch(() => {});
-    } catch {
-      // ストリームが既に閉じている場合は無視
-    }
-    session.requestStreams.delete(requestId);
-  }
-
+  // 先に Map から外す。後続の cancel で読み取りループが FIN 分岐に入っても
+  // notifySubscriberFailure が対象を引けず no-op になる (自前解除のため
+  // error / end 通知は送らない。SubscriberImpl.unsubscribe の docstring と同じ解釈)。
+  // Map 削除と cancel の間は同期的であり割り込みの余地はない。
+  session.requestStreams.delete(requestId);
   session.subscribers.delete(requestId);
   // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
   const aliasSubscribers = session.subscribersByAlias.get(subscriber.getTrackAlias());
@@ -2046,6 +2061,35 @@ export async function bidiCancelSubscription(
     }
     if (aliasSubscribers.length === 0) {
       session.subscribersByAlias.delete(subscriber.getTrackAlias());
+    }
+  }
+
+  if (streamInfo) {
+    try {
+      // 送信方向のリセットを先に開始する。プロトコル上の送受信の順序に
+      // 意味はなく、後続の cancel で起きるループ終了処理との実装上の競合を
+      // 避けるために先にする。
+      // GOAWAY 受信で送信方向を FIN (writer.close()) 済みの場合、abort は
+      // reject する (閉じた writer への操作)。unhandled rejection を避けるため
+      // catch で握り潰す。
+      void streamInfo.writer.abort("subscription cancelled").catch(() => {});
+      // draft-ietf-moq-transport-20 §5.1:
+      // 「The subscriber terminates a subscription ... by sending STOP_SENDING.」
+      // WebTransport では readable.cancel() が STOP_SENDING 相当。
+      // 読み取りループがロックを保持しているため、保持中の reader 経由で
+      // cancel する (ロック中の stream.cancel() は TypeError で reject する)。
+      // reader 未登録の場合は stream 経由を試みる。通常は到達しない防御的
+      // フォールバックであり、失敗時は握り潰される。
+      // reader.cancel() で起きた読み取りは done 解決し、ループは FIN 分岐に
+      // 入るが、上記 Map 削除済みのため通知は no-op になる。
+      // 両方向をリセットして subscription 解除を通知する。
+      if (streamInfo.reader !== undefined) {
+        await streamInfo.reader.cancel("subscription cancelled");
+      } else {
+        await streamInfo.stream.readable.cancel("subscription cancelled");
+      }
+    } catch {
+      // ストリームが既に閉じている場合・ロック競合の場合は無視
     }
   }
 }

@@ -1215,6 +1215,9 @@ export class SessionImpl implements Session {
       stream: WebTransportBidirectionalStream;
       writer: WritableStreamDefaultWriter<Uint8Array>;
       controlReader: ControlStreamReader;
+      // 読み取りループが保持中の reader (解除時に保持者経由で cancel するため。
+      // bidi 側の RequestStreamInfo と同形)。
+      reader?: ReadableStreamDefaultReader<Uint8Array>;
     }
   >();
 
@@ -3976,6 +3979,9 @@ export class SessionImpl implements Session {
       stream,
       writer: subWriter,
       controlReader: subControlReader,
+      // 読み取りループ (runPublishStreamSubLoop) が保持する reader を登録し、
+      // 解除 (unsubscribe) 時に保持者経由で cancel できるようにする。
+      reader: subReader,
     });
 
     impl.onUnsubscribe = async () => {

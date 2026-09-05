@@ -287,6 +287,9 @@
 - [FIX] 受信 PUBLISH の PUBLISH_OK 書き込み失敗で後始末が漏れるのを修正する
   - 書き込み失敗時も 3 マップの削除とロック解放を必ず行い通知して閉じる
   - @voluntas
+- [FIX] 購読解除時にロック中のストリームへ STOP_SENDING が届かないのを修正する
+  - 読み取りループ保持の reader 経由で cancel し abort も実行する
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
