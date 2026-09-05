@@ -46,7 +46,7 @@ test("decodePublishStateNotifyPayload: 空パラメータをデコードでき�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10:
+ * draft-ietf-moq-transport-20 §10:
  * Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION。
  */
 test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViolationError", () => {

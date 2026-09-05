@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages Property-Based Tests
- * draft-ietf-moq-transport-19 Section 10.3
+ * draft-ietf-moq-transport-20 Section 10.3
  */
 
 import { test, assert } from "vite-plus/test";
@@ -18,7 +18,7 @@ import { AuthorizationTokenAliasType, type AuthorizationToken } from "./authoriz
 import { MessageType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 
-// draft-ietf-moq-transport-19 §10.3.1.1 / §10.3.1.2:
+// draft-ietf-moq-transport-20 §10.3.1.1 / §10.3.1.2:
 // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
 // moqt-js は WebTransport 専用クライアントのため createSetup から PATH / AUTHORITY が
 // 出てこないことを多数のラウンドトリップで保証する。
@@ -52,7 +52,7 @@ test("Setup ラウンドトリップで PATH / AUTHORITY は決して含まれ�
   );
 });
 
-// draft-ietf-moq-transport-19 §13.8 (Implementation Identification Fingerprinting):
+// draft-ietf-moq-transport-20 §13.8 (Implementation Identification Fingerprinting):
 // moqtImplementation の 3 分岐（未指定 / false / 文字列）のラウンドトリップを検証する。
 // 未指定は既定値、false は Option 欠落、文字列（空文字列・BMP 外文字を含む）はその値が復元される。
 // fast-check v4 の fc.string() 既定は printable ASCII のみのため、unit: "grapheme" で

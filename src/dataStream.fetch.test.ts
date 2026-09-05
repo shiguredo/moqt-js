@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Fetch テスト
- * draft-ietf-moq-transport-19 Section 11.4.4 (Fetch Header and Objects)
+ * draft-ietf-moq-transport-20 Section 11.4.4 (Fetch Header and Objects)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -119,7 +119,7 @@ test("FetchObjectFields: 最初のオブジェクトをエンコード", () => {
   assert.equal(encoded[5], 50);
 });
 
-// draft-ietf-moq-transport-19 Section 11.2.1.1:
+// draft-ietf-moq-transport-20 Section 11.2.1.1:
 // "The Object Status is a field that is only present in objects that are
 // delivered via a SUBSCRIPTION, and is absent in Objects delivered via a FETCH."
 test("FetchObjectFields: payload length = 0 でも Object Status を含めない", () => {
@@ -182,7 +182,7 @@ test("FetchObjectFields: 2番目のオブジェクトをデコード (差分エ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 11.4.4:
+ * draft-ietf-moq-transport-20 Section 11.4.4:
  * 0x40 は Datagram フラグとして定義された。
  * 不正な Serialization Flags 値はプロトコル違反。
  */
@@ -318,7 +318,7 @@ test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定",
 
 /**
  * 同一 Group・同一 Subgroup の Priority 一貫性検証テスト
- * draft-ietf-moq-transport-19 §2.4.2 (Malformed Tracks):
+ * draft-ietf-moq-transport-20 §2.4.2 (Malformed Tracks):
  * "An Object with a particular Subgroup ID is received, but its Publisher
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID." を malformed track と定義している。
@@ -366,7 +366,7 @@ test("FetchObjectFields: 同一 Subgroup で異なる Priority はエラー", ()
 
 /**
  * 異なる Group の同一 Subgroup ID は比較対象にならないテスト
- * draft-ietf-moq-transport-19 §2.2:
+ * draft-ietf-moq-transport-20 §2.2:
  * "The scope of a Subgroup ID is a Group, so Subgroups from different Groups
  *  MAY share a Subgroup ID without implying any relationship between them."
  * Group 跨ぎでは Subgroup ID が同じでも Priority が異なってよい。
@@ -410,7 +410,7 @@ test("FetchObjectFields: 異なる Group の同一 Subgroup ID で異なる Prio
 /**
  * Descending Group Order での Group スコープ比較テスト
  *
- * draft-ietf-moq-transport-19 §2.2:
+ * draft-ietf-moq-transport-20 §2.2:
  * Subgroup ID のスコープは Group 内のため、Group 跨ぎでは同一 Subgroup ID でも
  * Priority が異なってよい。Descending で Group ID が減少する場合も
  * Group スコープ比較により誤検出しないことを検証する。
@@ -460,7 +460,7 @@ test("FetchObjectFields: Descending で Group が変わる場合の同一 Subgro
 /**
  * Priority バイトでバッファが切れている場合のテスト
  *
- * draft-ietf-moq-transport-19 §11.4.4.1:
+ * draft-ietf-moq-transport-20 §11.4.4.1:
  * Publisher Priority は 8 bit 固定。チャンク境界が Priority バイトの直前と
  * 一致した場合、範囲外アクセス (undefined 取得) で Priority 不一致を誤検出せず、
  * IncompleteDataError を throw して次のチャンクを待つことを検証する。
@@ -488,7 +488,7 @@ test("FetchObjectFields: Priority バイトでバッファが切れていると 
  * Datagram 混在ケースの挙動テスト
  *
  * 前オブジェクトが Datagram の場合、Datagram は Subgroup に属さないため
- * 比較対象にしない (draft-ietf-moq-transport-19 §2.4.2 の比較対象は
+ * 比較対象にしない (draft-ietf-moq-transport-20 §2.4.2 の比較対象は
  * "the previous Object with the same Subgroup ID" である)。コンテキストの
  * publisherPriority は Datagram では更新されず、直近の Subgroup オブジェクト
  * の値が保持される。
@@ -544,7 +544,7 @@ test("FetchObjectFields: Datagram 直後の同一 Group・同一 Subgroup は直
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * Datagram を挟んだ場合でも、真の Priority 不一致 (直近の Subgroup オブジェクト
  * との比較) は従来どおり検出されることを検証する。
  */
@@ -594,7 +594,7 @@ test("FetchObjectFields: Datagram を挟んだ同一 Subgroup の真の Priority
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2 / §11.4.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2 / §11.4.4.2:
  * End of Range で Group が変わった後の同一 Subgroup ID のオブジェクトは、
  * 旧 Group の Priority (前オブジェクトの値) と比較されないことを検証する
  * (Subgroup ID のスコープは Group 内であり、Group 跨ぎは無関係)。
@@ -643,7 +643,7 @@ test("FetchObjectFields: End of Range で Group が変わった後の同一 Subg
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2 / §11.4.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2 / §11.4.4.2:
  * 同一 Group 内の End of Range を挟んだ後は、先行する Subgroup オブジェクトの
  * 存在が引き継がれるため、真の Priority 不一致が検出されることを検証する。
  */
@@ -689,7 +689,7 @@ test("FetchObjectFields: 同一 Group 内の End of Range 後の真の Priority 
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
  * Priority 省略 (0x10 未設定) のオブジェクトは直近の実オブジェクト (Datagram
  * を含む) の Priority を継承することを検証する (§2.4.2 比較用の値とは別に
  * 継承値は全オブジェクトで更新される)。
@@ -735,7 +735,7 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * hasPriorSubgroup 未指定 (undefined = 直近の Subgroup オブジェクトあり) の
  * ハードコードされたコンテキストでも、Datagram を挟んだ後の真の Priority
  * 不一致が検出されることを検証する (undefined の解釈の一貫性)。
@@ -787,7 +787,7 @@ test("FetchObjectFields: hasPriorSubgroup 未指定のコンテキストでも D
 });
 
 /**
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * Datagram が自前の Group ID で Group を変更した後の同一 Subgroup ID の
  * オブジェクトは、旧 Group の Priority と比較されないことを検証する
  * (Group 変更で比較対象の存在がリセットされる)。
@@ -878,7 +878,7 @@ test("FetchObjectFields: 異なる Subgroup で異なる Priority は許可", ()
 
 /**
  * Subgroup が交互に出現する場合の Priority 不一致検出テスト
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * "An Object with a particular Subgroup ID is received, but its Publisher
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID."
@@ -944,7 +944,7 @@ test("FetchObjectFields: 交互に出現する Subgroup の Priority 不一致�
 
 /**
  * Subgroup が交互に出現しても Priority が一致すれば検出されないテスト
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * 同一 Subgroup ID の直近オブジェクトと Priority が一致する場合は合法であり、
  * 直前オブジェクトと Subgroup ID が異なっても誤検出しない。
  */
@@ -998,7 +998,7 @@ test("FetchObjectFields: 交互に出現しても同一 Subgroup の Priority �
 
 /**
  * 同一 Group 内の End of Range を挟んだ交互出現のテスト
- * draft-ietf-moq-transport-19 §2.4.2 / §11.4.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2 / §11.4.4.2:
  * 同一 Group 内の End of Range では Subgroup ごとの追跡が維持されるため、
  * 交互出現後の同一 Subgroup の不一致も検出される。
  */
@@ -1062,7 +1062,7 @@ test("FetchObjectFields: 同一 Group の End of Range を挟んだ交互出現�
 
 /**
  * Datagram を挟んだ交互出現のテスト
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * Datagram は Subgroup に属さないため追跡を更新しない。Datagram を挟んだ
  * 交互出現後の同一 Subgroup の不一致も、同一 Subgroup ID の直近オブジェクト
  * との比較で検出される。
@@ -1133,7 +1133,7 @@ test("FetchObjectFields: Datagram を挟んだ交互出現の不一致は検出�
 
 /**
  * Descending Group Order での交互出現テスト
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * 追跡更新は Group Order に依存しないため、Descending でも同一 Subgroup ID の
  * 直近オブジェクトとの比較で不一致を検出する。
  */
@@ -1199,7 +1199,7 @@ test("FetchObjectFields: Descending でも交互に出現する Subgroup の不�
 
 /**
  * Subgroup ID 0 の交互出現テスト
- * draft-ietf-moq-transport-19 §2.4.2:
+ * draft-ietf-moq-transport-20 §2.4.2:
  * Subgroup ID 0 も Map のキーとして区別され、未登録 (undefined) と混同されずに
  * 追跡される。S0 → S1 → S0 の交互でも同一 Subgroup ID の直近値と比較する。
  */
@@ -1253,7 +1253,7 @@ test("FetchObjectFields: Subgroup ID 0 の交互出現の不一致は検出さ�
 
 /**
  * Priority 省略を挟んだ同一 Subgroup の不一致検出テスト
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9 / §2.4.2:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9 / §2.4.2:
  * Priority 省略のオブジェクト自体は比較対象外 (寛容解釈) とするが、
  * 追跡は解決後の継承値で更新される。後続の明示値は更新後の基準と比較される。
  */
@@ -1308,7 +1308,7 @@ test("FetchObjectFields: Priority 省略を挟んだ同一 Subgroup の不一致
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
  * "If the Group Order is Ascending (default), the Group ID is the prior
  *  Object's Group ID plus the Group ID Delta + 1."
  *
@@ -1362,7 +1362,7 @@ test("FetchObjectFields: 非先頭オブジェクトの Group ID Delta を正し
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
  * "When the Group ID Delta field is not present, the Object ID is the
  *  prior Object's ID plus the Object ID Delta if present."
  *
@@ -1403,7 +1403,7 @@ test("FetchObjectFields: 非先頭オブジェクトの Object ID Delta (Group �
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1:
+ * draft-ietf-moq-transport-20 §11.4.4.1:
  * encode → decode で複数オブジェクトの delta encoding が正しく roundtrip することを検証する。
  * オブジェクト 1: group=10, object=0  (先頭)
  * オブジェクト 2: group=10, object=3  (Group 不変, OBJECT_ID_PRESENT, delta エンコード)
@@ -1470,7 +1470,7 @@ test("FetchObjectFields: encode→decode roundtrip で delta encoding が正し�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
  * "If the Group Order is Descending, the Group ID is the prior Object's
  *  Group ID minus the (Group ID Delta + 1)."
  *
@@ -1527,7 +1527,7 @@ test("FetchObjectFields: Descending Group Order で Group ID を正しくデコ�
 });
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
  * "If the Group Order is Descending, the Group ID is the prior Object's
  *  Group ID minus the (Group ID Delta + 1)."
  *
@@ -1736,7 +1736,7 @@ test("FetchObjectFields: Descending で prior=0,delta=0 の場合は Group ID �
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1:
+ * draft-ietf-moq-transport-20 §11.4.4.1:
  * "the object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'."
  * "the subscriber MUST ignore the bits."
  *
@@ -1940,7 +1940,7 @@ test("FetchObjectFields: Datagram 先頭オブジェクトの encode→decode ro
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §11.4.4.1 Table 9:
+ * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
  * "If the computed Object ID would be greater than 2^64-1, the
  *  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
  *

@@ -1,6 +1,6 @@
 /**
  * MOQT Namespace Messages Property-Based Tests
- * draft-ietf-moq-transport-19 Section 10.15 (PUBLISH_NAMESPACE) — 10.20 (PUBLISH_SKIPPED)
+ * draft-ietf-moq-transport-20 Section 10.16 (PUBLISH_NAMESPACE) — 10.21 (PUBLISH_SKIPPED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -39,7 +39,7 @@ import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.2 (Message Parameter):
+ * draft-ietf-moq-transport-20 Section 10.2 (Message Parameter):
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -49,7 +49,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-19 §10.2.8 / §10.2.17: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-20 §10.2.8 / §10.2.18: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -140,9 +140,9 @@ const parametersArb = fc
   });
 
 /**
- * draft-ietf-moq-transport-19 Section 2.3:
+ * draft-ietf-moq-transport-20 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-19 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-20 Section 10 (Control Messages)
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -152,9 +152,9 @@ const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }),
 /**
  * SUBSCRIBE_NAMESPACE 用のネームスペース arbitrary
  *
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * Track Namespace Prefix は 0〜32 タプルを許可する（空のネームスペースも可）。
- * draft-ietf-moq-transport-19 Section 10.16
+ * draft-ietf-moq-transport-20 Section 10.19
  */
 const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -164,7 +164,7 @@ const namespacePrefixStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 
 /**
  * NAMESPACE/NAMESPACE_DONE 用の Track Namespace Suffix arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.16 (NAMESPACE):
+ * draft-ietf-moq-transport-20 Section 10.17 (NAMESPACE):
  * Track Namespace Suffix は Track Namespace Prefix を除いた残りの部分。
  * 空も許容される。
  */
@@ -204,7 +204,7 @@ test("PublishNamespace のエンコード・デコードがラウンドトリッ
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.15:
+ * draft-ietf-moq-transport-20 Section 10.16:
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
  * フレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で
@@ -244,7 +244,7 @@ test("PublishNamespace のフレーミングが ControlStreamReader で復元で
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は PUBLISH_NAMESPACE ペイロードの最後のフィールドであり、
@@ -280,7 +280,7 @@ test("PUBLISH_NAMESPACE の末尾に後続データがあると ProtocolViolatio
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.16:
+ * draft-ietf-moq-transport-20 Section 10.17:
  * NAMESPACE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */
@@ -302,7 +302,7 @@ test("Namespace のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Track Namespace Suffix は NAMESPACE ペイロードの最後のフィールドであり、
@@ -334,7 +334,7 @@ test("NAMESPACE の末尾に後続データがあると ProtocolViolationError �
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.17:
+ * draft-ietf-moq-transport-20 Section 10.18:
  * NAMESPACE_DONE は SUBSCRIBE_NAMESPACE への応答として専用ストリームで送信される。
  * Track Namespace Prefix を除いた Suffix のみを含む。
  */
@@ -356,7 +356,7 @@ test("NamespaceDone のエンコード・デコードがラウンドトリップ
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Track Namespace Suffix は NAMESPACE_DONE ペイロードの最後のフィールドであり、
@@ -388,7 +388,7 @@ test("NAMESPACE_DONE の末尾に後続データがあると ProtocolViolationEr
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.18:
+ * draft-ietf-moq-transport-20 Section 10.19:
  * SUBSCRIBE_NAMESPACE は新しい双方向ストリームで送信される (0x50)。
  * Subscribe Options フィールドは draft-18 で廃止された。
  * 空のネームスペース（ワイルドカード）も許可される。
@@ -424,7 +424,7 @@ test("SubscribeNamespace のエンコード・デコードがラウンドトリ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は SUBSCRIBE_NAMESPACE ペイロードの最後のフィールドであり、
@@ -460,7 +460,7 @@ test("SUBSCRIBE_NAMESPACE の末尾に後続データがあると ProtocolViolat
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.18:
+ * draft-ietf-moq-transport-20 Section 10.19:
  * SUBSCRIBE_NAMESPACE Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  * Length が可変長整数でエンコードされていると受信側で misparse されるため、
  * ControlStreamWriter でフレーミングしたバイト列が ControlStreamReader で正しくパースできることを検証する。
@@ -499,7 +499,7 @@ test("SubscribeNamespace のフレーミングが ControlStreamReader で復元�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.18:
+ * draft-ietf-moq-transport-20 §10.19:
  * encodeSubscribeNamespacePayload は Subscribe Options をエンコードしない。
  * 想定: requestId / trackNamespacePrefix / parameters のみが直列化される。
  */
@@ -544,7 +544,7 @@ test("encodeSubscribeNamespacePayload は Subscribe Options を含まない", ()
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.19:
+ * draft-ietf-moq-transport-20 Section 10.20:
  * SUBSCRIBE_TRACKS (0x51) は新しい双方向ストリームで送信される。
  * SUBSCRIBE_NAMESPACE と同構造で Subscribe Options を持たない。
  */
@@ -579,7 +579,7 @@ test("SubscribeTracks のエンコード・デコードがラウンドトリッ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は SUBSCRIBE_TRACKS ペイロードの最後のフィールドであり、
@@ -615,7 +615,7 @@ test("SUBSCRIBE_TRACKS の末尾に後続データがあると ProtocolViolation
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.19:
+ * draft-ietf-moq-transport-20 Section 10.20:
  * SUBSCRIBE_TRACKS Message のフレーミングは Type (vi64) + Length (16-bit big-endian) + Payload。
  */
 test("SubscribeTracks のフレーミングが ControlStreamReader で復元できる", () => {
@@ -652,7 +652,7 @@ test("SubscribeTracks のフレーミングが ControlStreamReader で復元で�
 });
 
 /**
- * draft-ietf-moq-transport-19 §10.19:
+ * draft-ietf-moq-transport-20 §10.20:
  * encodeSubscribeTracksPayload は Subscribe Options をエンコードしない。
  */
 test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () => {
@@ -690,7 +690,7 @@ test("encodeSubscribeTracksPayload は Subscribe Options を含まない", () =>
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10.20 (PUBLISH_SKIPPED):
+ * draft-ietf-moq-transport-20 Section 10.21 (PUBLISH_SKIPPED):
  * PUBLISH_SKIPPED のエンコード・デコードがラウンドトリップすることを検証する。
  * コードポイント 0x0f は不変。
  */
@@ -718,7 +718,7 @@ test("PublishSkipped のエンコード・デコードがラウンドトリッ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 10:
+ * draft-ietf-moq-transport-20 Section 10:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Track Name は PUBLISH_SKIPPED ペイロードの最後のフィールドであり、

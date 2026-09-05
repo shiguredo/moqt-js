@@ -1,6 +1,6 @@
 /**
  * MOQT Properties Unit Tests
- * draft-ietf-moq-transport-19 Section 12 (MOQT Properties)
+ * draft-ietf-moq-transport-20 Section 12 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -59,7 +59,7 @@ test("encodeProperty: 奇数 ID で data がない場合はエラー", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * delta encoding を使用するため、ID は前の ID からの差分としてエンコードされる。
  */
 test("encodeProperties: 複数の拡張を delta encoding でエンコードして結合", () => {
@@ -229,7 +229,7 @@ test("parseProperties: Immutable Properties を正しくパース", () => {
 });
 
 /**
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: Immutable Properties と他の拡張の組み合わせ", () => {
@@ -269,7 +269,7 @@ test("parseProperties: Immutable Properties が unknownProperties に含まれ�
 });
 
 /**
- * draft-ietf-moq-transport-19:
+ * draft-ietf-moq-transport-20:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  */
 test("parseProperties: 全ての MOQT Core Properties を正しくパース", () => {
@@ -311,7 +311,7 @@ test("parseProperties: 全ての MOQT Core Properties を正しくパース", ()
   assert.isUndefined(parsed.unknownProperties);
 });
 
-// draft-ietf-moq-transport-19 §12.4 / §12.5 / §12.6
+// draft-ietf-moq-transport-20 §12.4 / §12.5 / §12.6
 // Track Property の値域が MUST レベルで検証されない不具合の修正 (#0119)
 test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY は 0-255 を許容する", () => {
   validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 0n);
@@ -371,7 +371,7 @@ test("decodeProperties: 不正な DYNAMIC_GROUPS を含むデータで ProtocolV
   assert.throws(() => decodeProperties(data), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-19 §2.5.1: 未知の Mandatory Track Property (0x4000-0x7FFF)
+// draft-ietf-moq-transport-20 §2.5.1: 未知の Mandatory Track Property (0x4000-0x7FFF)
 test("decodeProperties: 未知の Mandatory Track Property (0x4000) で MalformedTrackError", () => {
   const data = encodeProperties([{ id: 0x4000n, value: 0n }]);
   assert.throws(() => decodeProperties(data), MalformedTrackError);
@@ -390,7 +390,7 @@ test("decodeProperties: 非 Mandatory 範囲の上限 (0x3FFF) は通過", () =>
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than
  *  2^64 - 1. If a Delta Type is received that would be too large, the
  *  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -410,7 +410,7 @@ test("decodeProperties: delta 加算結果が 2^64-1 を超えると ProtocolVio
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * deltaId 単体が 2^64-1 (previousId=0) は違反にならないことを検証する。
  * 2^64-1 は奇数 ID のため length-prefixed 形式で、length (0) + 空バイト列を付加する。
  */
@@ -425,7 +425,7 @@ test("decodeProperties: deltaId 単体が 2^64-1 は違反にならない", () =
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * 非自明な加算 (previousId=0x02 + deltaId=2^64-3) の結果が 2^64-1 ちょうどは
  * 違反にならないことを検証する。
  */
@@ -447,7 +447,7 @@ test("decodeProperties: 加算結果が 2^64-1 ちょうどは違反にならな
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * parseProperties の delta 加算でも 2^64-1 超過は ProtocolViolationError
  * になることを検証する。
  */
@@ -462,7 +462,7 @@ test("parseProperties: delta 加算結果が 2^64-1 を超えると ProtocolViol
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * decodeImmutableProperties の delta 加算でも 2^64-1 超過は
  * ProtocolViolationError になることを検証する。
  * IMMUTABLE_PROPERTIES は奇数 ID の length-prefixed 形式のため、
@@ -485,7 +485,7 @@ test("decodeImmutableProperties: delta 加算結果が 2^64-1 を超えると Pr
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * parseProperties の IMMUTABLE_PROPERTIES 内側 KVP でも 2^64-1 超過は
  * ProtocolViolationError になることを検証する。
  */
@@ -506,7 +506,7 @@ test("parseProperties: IMMUTABLE_PROPERTIES 内側の delta 加算超過で Prot
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 1.4.3:
+ * draft-ietf-moq-transport-20 Section 1.4.3:
  * decodeProperties の IMMUTABLE_PROPERTIES 内側 KVP 再帰走査でも
  * 2^64-1 超過は ProtocolViolationError になることを検証する。
  */
@@ -546,7 +546,7 @@ test("decodeImmutableProperties: 内部に不正な Track Property を含むと 
   assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-19 §12.7 / §12.8 / §12.9 (#0122)
+// draft-ietf-moq-transport-20 §12.7 / §12.8 / §12.9 (#0122)
 // IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止と PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP の
 // 「Object 当たり 1 つだけ」MUST を検証する
 test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと MalformedTrackError", () => {
@@ -586,7 +586,7 @@ test("parseProperties: Object 内に PRIOR_OBJECT_ID_GAP が 2 回現れると M
   assert.throws(() => parseProperties(encoded), MalformedTrackError);
 });
 
-// draft-ietf-moq-transport-19 §10.2.18 / §12.6
+// draft-ietf-moq-transport-20 §10.2.19 / §12.6
 test("supportsDynamicGroups: DYNAMIC_GROUPS=1 が mutable 側にあれば true", () => {
   const properties: Property[] = [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }];
   assert.equal(supportsDynamicGroups(properties), true);
@@ -637,7 +637,7 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-19 §12.7 (Immutable Properties):
+ * draft-ietf-moq-transport-20 §12.7 (Immutable Properties):
  * IMMUTABLE_PROPERTIES MUST NOT recursively contain an IMMUTABLE_PROPERTIES property.
  * 再帰的な IMMUTABLE_PROPERTIES を含むバイト列を decodeProperties に渡し、
  * MalformedTrackError が throw されることを検証する。
@@ -682,7 +682,7 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
 
 // ============================================================================
 // GREASE Property
-// draft-ietf-moq-transport-19 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
+// draft-ietf-moq-transport-20 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
 // ============================================================================
 
 // Object Properties の Key-Value-Pairs（Figure 2、delta encoding）から
@@ -753,7 +753,7 @@ test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Prope
 
 // ============================================================================
 // Object Properties の delta encoding ワイヤ形式検証
-// draft-ietf-moq-transport-19 §1.4.3 (Key-Value-Pair Structure) / §11.2.1.2
+// draft-ietf-moq-transport-20 §1.4.3 (Key-Value-Pair Structure) / §11.2.1.2
 // ============================================================================
 
 test("mergeDeliveryTimeoutObjectProperties: 単一の偶数 ID Property は [Type][Value] の 2 フィールドになる", () => {

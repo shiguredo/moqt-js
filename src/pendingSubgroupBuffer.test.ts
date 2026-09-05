@@ -1,6 +1,6 @@
 /**
  * Pending Subgroup Buffer Unit Tests
- * draft-ietf-moq-transport-19 §11.4.2
+ * draft-ietf-moq-transport-20 §11.4.2
  */
 
 import { test, assert } from "vite-plus/test";

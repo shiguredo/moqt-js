@@ -186,7 +186,7 @@ export const MOQMETRICS_NAMESPACE_PREFIX = "moq://metrics.moq.arpa/v1/";
 /**
  * Metrics track の Track Namespace タプルを構築する（[MOQMETRICS] Section 3、暫定対応）
  *
- * resourceID は非空であること。draft-ietf-moq-transport-19 §2.4.1 は各 namespace 要素に
+ * resourceID は非空であること。draft-ietf-moq-transport-20 §2.4.1 は各 namespace 要素に
  * 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで拒否される。
  */
 export function metricsTrackNamespace(resourceId: string): [string, string] {

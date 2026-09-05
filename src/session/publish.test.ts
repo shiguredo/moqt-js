@@ -46,7 +46,7 @@ function createSessionForPublish(): {
 }
 
 /**
- * draft-ietf-moq-transport-19 Section 11.4.2 (Subgroup Header):
+ * draft-ietf-moq-transport-20 Section 11.4.2 (Subgroup Header):
  * Subgroup Header の trackAlias / groupId は varint (最大 2^64-1) でエンコードされる。
  * 2^64 以上の値はエンコードできないため、ストリーム生成前に throw し、
  * ストリームが生成されないことを検証する。
@@ -77,7 +77,7 @@ test("publishSendObjectInternal: groupId が 2^64 以上の場合はストリー
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 11.4.2 (Subgroup Header):
+ * draft-ietf-moq-transport-20 Section 11.4.2 (Subgroup Header):
  * 正常範囲の groupId は従来どおりストリームを生成してヘッダを書き込むことを検証する。
  */
 test("publishSendObjectInternal: 正常範囲の groupId はストリームを生成する", async () => {

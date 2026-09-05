@@ -33,8 +33,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Publisher / Subscriber 対応
   - 高レベル API (WebCodecs / MediaStream 対応)
 - Media over QUIC Transport (MOQT) 対応
-  - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-19)
-  - `draft-19` 対応
+  - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-20)
+  - `draft-20` 対応
 - Low Overhead Media Container (LOC) 対応
   - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
   - `draft-04` 対応
@@ -48,7 +48,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Media over QUIC Transport
 
-[draft-ietf-moq-transport-19](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-19) の機能実装状況です。
+[draft-ietf-moq-transport-20](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-20) の機能実装状況です。
 
 #### MOQT URI
 

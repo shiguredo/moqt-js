@@ -19,7 +19,7 @@
  * そのまま流用しないこと。
  *
  * 注意: 本モジュールの encode*Properties / decode*Properties は Object Properties が
- * 要求する Key-Value-Pair delta 符号化 (draft-ietf-moq-transport-19 §1.4.3 / §11.2.1.2)
+ * 要求する Key-Value-Pair delta 符号化 (draft-ietf-moq-transport-20 §1.4.3 / §11.2.1.2)
  * に追従している。単体エンコーダ / デコーダは単一 Property 前提の絶対 Type ワイヤであり、
  * 複数 Property の連結・分解には使わないこと。
  */
@@ -34,7 +34,7 @@ import { encodeProperties, decodeObjectPropertiesTolerant, type Property } from 
  * ID が偶数の場合: Length 省略、Value は vi64
  * ID が奇数の場合: length (varint) + bytes
  *
- * 注意: draft-ietf-moq-transport-19 Table 15 の provisional 値は採用しない。
+ * 注意: draft-ietf-moq-transport-20 Table 15 の provisional 値は採用しない。
  * LOC Property ID は loc-04 Table 1 に従う。
  */
 export const LOCPropertyId = {
@@ -390,7 +390,7 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
 /**
  * Video Properties をエンコードする
  *
- * draft-ietf-moq-transport-19 §11.2.1.2 (Object Properties) は Key-Value-Pairs
+ * draft-ietf-moq-transport-20 §11.2.1.2 (Object Properties) は Key-Value-Pairs
  * (Figure 2、delta encoding) でシリアライズされる。LOC Property を Property[] として
  * 組み立て、encodeProperties() に委譲する。encodeProperties() は ID 昇順ソートするため、
  * ワイヤ上の並びは Property 入力順ではなく ID 昇順になる (例: timestamp (0x10) +
@@ -424,7 +424,7 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
 /**
  * Video Properties をデコードする
  *
- * draft-ietf-moq-transport-19 §11.2.1.2 / §1.4.3 の Key-Value-Pairs (delta encoding) を
+ * draft-ietf-moq-transport-20 §11.2.1.2 / §1.4.3 の Key-Value-Pairs (delta encoding) を
  * 寛容にデコードする。不正な delta / Length で PROTOCOL_VIOLATION を送出せず、
  * 抽出できたフィールドのみを設定して配信を継続する。delta 形式は Type が前 Property との
  * 差分で連鎖するため、途中で壊れた場合は後続 Property の抽出が全滅し、先行値のみが
@@ -565,7 +565,7 @@ function extractLocProperties(
 /**
  * Video の LOC Properties を Track Property と Object Property の両方から解決する。
  *
- * draft-ietf-moq-transport-19 §12.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
+ * draft-ietf-moq-transport-20 §12.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
  * 同一 Property が両方に存在する場合は Object Property を優先する。
  * trackProperties は decodeProperties() で delta 復元済みの Property[]、
  * objectProperties は delta encoding (Figure 2) の Object Properties バイト列。

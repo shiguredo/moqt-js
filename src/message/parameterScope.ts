@@ -62,7 +62,7 @@ export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
 /**
  * REQUEST_OK (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK) の許可パラメータ
  *
- * draft-ietf-moq-transport-19 §10.2.15 (EXPIRES Parameter):
+ * draft-ietf-moq-transport-20 §10.2.16 (EXPIRES Parameter):
  * "It MAY appear in SUBSCRIBE_OK, PUBLISH, PUBLISH_OK, SUBSCRIBE_NAMESPACE_OK,
  *  SUBSCRIBE_TRACKS_OK, PUBLISH_NAMESPACE_OK, or REQUEST_UPDATE_OK."
  */
@@ -72,29 +72,29 @@ export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE (ケース 1) で REQUEST_OK で
  * 受理するパラメータ
  *
- * draft-ietf-moq-transport-19 §10.9 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-20 §10.9 (REQUEST_UPDATE):
  * ケース 1「The sender of a request (SUBSCRIBE, PUBLISH, FETCH,
  * PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send a
  * REQUEST_UPDATE on the same bidi stream as the request to modify it.」の
  * うち publisher が自身の PUBLISH を更新する場合に REQUEST_OK で受理する。
  *
- * 受理基準は moqt-js 内部の PUBLISH_ALLOWED_PARAMS ではなく、draft-19 §10.2
+ * 受理基準は moqt-js 内部の PUBLISH_ALLOWED_PARAMS ではなく、draft-20 §10.2
  * の各パラメータ定義が REQUEST_UPDATE を無限定で許可するか否かである。
  * 無限定で許可されるのは AUTHORIZATION_TOKEN (§10.2.2) /
  * OBJECT_DELIVERY_TIMEOUT (§10.2.4) / SUBGROUP_DELIVERY_TIMEOUT (§10.2.3)
- * の 3 種。加えて FORWARD (§10.2.17「It MAY appear in ... REQUEST_UPDATE
+ * の 3 種。加えて FORWARD (§10.2.18「It MAY appear in ... REQUEST_UPDATE
  * (for a subscription) ...」) は「for a subscription」限定の文脈限定
  * パラメータだが、受信側で Forward State として反映する対象であるため、
  * publisher 発 (ケース 1) の FORWARD も REQUEST_OK で受理して反映する
  * (計 4 種)。
  *
  * その他の文脈限定パラメータ (SUBSCRIBER_PRIORITY (§10.2.7) /
- * LOCATION_FILTER (§10.2.9) / NEW_GROUP_REQUEST (§10.2.18) /
- * TRACK_NAMESPACE_PREFIX (§10.2.19) / Range Filters (SUBGROUP_FILTER /
+ * LOCATION_FILTER (§10.2.9) / NEW_GROUP_REQUEST (§10.2.19) /
+ * TRACK_NAMESPACE_PREFIX (§10.2.20) / Range Filters (SUBGROUP_FILTER /
  * OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER /
- * TRACK_PROPERTY_FILTER、§5.1.3)) は REQUEST_UPDATE 自体には出現可能なため
+ * TRACK_PROPERTY_FILTER、§5.1.4)) は REQUEST_UPDATE 自体には出現可能なため
  * スコープ検証は通過するが REQUEST_OK では受理せず、REQUEST_ERROR
- * (NOT_SUPPORTED) で応答する。特に Range Filters は §5.1.3「... in a
+ * (NOT_SUPPORTED) で応答する。特に Range Filters は §5.1.4「... in a
  * REQUEST_UPDATE (on a subscription, from the subscriber only) message」に
  * より、ケース 1 の送信者 (publisher) には出現できない。
  */
@@ -117,7 +117,7 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.TRACK_NAMESPACE_PREFIX,
   // draft-ietf-moq-transport-20 §10.2.15: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
   MessageParameterType.FILL_PARAMETERS,
-  // draft-ietf-moq-transport-19 §5.1.3: Range Filters (subscription の REQUEST_UPDATE)
+  // draft-ietf-moq-transport-20 §5.1.4: Range Filters (subscription の REQUEST_UPDATE)
   MessageParameterType.SUBGROUP_FILTER,
   MessageParameterType.OBJECTID_FILTER,
   MessageParameterType.PRIORITY_FILTER,
@@ -156,7 +156,7 @@ export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
 /**
  * パラメータスコープを検証する
  *
- * draft-ietf-moq-transport-19 §10.2.1:
+ * draft-ietf-moq-transport-20 §10.2.1:
  * "An endpoint that receives a parameter in a context where it is not
  *  allowed MUST close the session with a PROTOCOL_VIOLATION."
  *

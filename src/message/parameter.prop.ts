@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Property-Based Tests
- * draft-ietf-moq-transport-19 Section 10.2
+ * draft-ietf-moq-transport-20 Section 10.2
  */
 
 import { test, assert } from "vite-plus/test";
@@ -65,7 +65,7 @@ test("奇数タイプの Parameter のエンコード・デコードがラウン
 });
 
 test("TrackNamespace のエンコード・デコードがラウンドトリップする", () => {
-  // draft-ietf-moq-transport-19 §2.3:
+  // draft-ietf-moq-transport-20 §2.3:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   // 各フィールドは 1 バイト以上必要なため minLength: 1 とする
   fc.assert(
@@ -105,7 +105,7 @@ test("Location のエンコード・デコードがラウンドトリップす�
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  * - varint: 0x02, 0x04, 0x06, 0x08, 0x32
  * - uint8: 0x10, 0x20, 0x22
@@ -119,7 +119,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-19 §10.2.8 / §10.2.17: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-20 §10.2.8 / §10.2.18: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -197,7 +197,7 @@ const locationFilterParameterArb = locationFilterArb.map((filter) =>
 /**
  * Range Filter パラメータ (0x25-0x29) の arbitrary
  *
- * draft-ietf-moq-transport-19 Section 5.1.3:
+ * draft-ietf-moq-transport-20 Section 5.1.4:
  * Range Filter の Value は「Length + [SetID + [Property Type] + Range 列]」の
  * 1 Length 構造。encodeRangeFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
@@ -279,11 +279,11 @@ const messageParameterArb = fc.oneof(
 /**
  * Message Parameters リストの arbitrary
  *
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * パラメータは Type の昇順でソートされ、各 Type は一意である必要がある。
  * ただし Range Filters (0x25-0x29) は複数回出現が許可される (isRepeatable と同じ扱い)。
  * 同型の Range Filter が複数出現する場合、同一 SetID の重複は仕様違反
- * (draft-ietf-moq-transport-19 §5.1.3 の INVALID_FILTER MUST) のため、
+ * (draft-ietf-moq-transport-20 §5.1.4 の INVALID_FILTER MUST) のため、
  * SetID が重複するケースを生成から除外する。
  */
 const parametersArb = fc
@@ -323,7 +323,7 @@ const parametersArb = fc
 /**
  * Parameters リストのエンコード・デコードがラウンドトリップする
  *
- * draft-ietf-moq-transport-19 Section 10.2:
+ * draft-ietf-moq-transport-20 Section 10.2:
  * delta encoding を使用するため、type は昇順である必要がある。
  * テストでは生成されたパラメータを type でソートしてから使用する。
  */
@@ -368,7 +368,7 @@ test("LocationFilter パラメータのエンコード・デコードがラウ�
 });
 
 /**
- * draft-ietf-moq-transport-19 Section 5.1.3 (Range Filters):
+ * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
  * Range Filter の encode/decode がラウンドトリップすることを検証する。
  * delta エンコーディング（例: ranges 3–5 と 10–15 → Start=3, End=2, Start=5, End=5）。
  */

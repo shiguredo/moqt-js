@@ -16,7 +16,7 @@ export const RFC_FIELD_NAMES: Record<string, string> = {
   subscriptionRequestId: "Subscription Request ID",
 };
 
-// MOQT Parameter 名 (draft-ietf-moq-transport-19) は ALL_CAPS_WITH_UNDERSCORES。
+// MOQT Parameter 名 (draft-ietf-moq-transport-20) は ALL_CAPS_WITH_UNDERSCORES。
 // formatMessageData では Parameters セクションへ振り分けるために本関数で判定する。
 export function isParameter(key: string): boolean {
   return key === key.toUpperCase() && key.includes("_");

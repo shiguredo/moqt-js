@@ -21,7 +21,7 @@ import {
 /**
  * WebTransport セッション終了に伴って発生した read エラーかどうかを判定する
  *
- * draft-ietf-moq-transport-19 Section 3.5:
+ * draft-ietf-moq-transport-20 Section 3.5:
  * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
  *
@@ -45,7 +45,7 @@ export function isSessionClosedError(error: Error): boolean {
 /**
  * ピア起因のストリームエラーかどうかを判定する
  *
- * draft-ietf-moq-transport-19 Section 3.3.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-20 Section 3.3.3 (Request Cancellation and Rejection):
  * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
@@ -71,7 +71,7 @@ export function isPeerStreamError(error: unknown): boolean {
  * ProtocolViolationError / IncompleteDataError を PROTOCOL_VIOLATION の
  * SessionError に変換する
  *
- * draft-ietf-moq-transport-19 Section 3.5 (Termination):
+ * draft-ietf-moq-transport-20 Section 3.5 (Termination):
  * "PROTOCOL_VIOLATION (0x3): The remote endpoint performed an action that was
  *  disallowed by the specification."
  * 受信メッセージの妥当性検証で違反を検出した場合、各 decode 関数は
@@ -84,7 +84,7 @@ export function isPeerStreamError(error: unknown): boolean {
  * 経路に均一に適用するためである。ControlStreamReader 等のメッセージ
  * レイヤーでは宣言 Length 分の完全なバッファを読み切ってから decode する
  * ため、IncompleteDataError はこの構造破損を意味する (draft-ietf-moq-
- *  transport-19 Section 10 の MUST「If the length does not match the
+ *  transport-20 Section 10 の MUST「If the length does not match the
  *  length of the Message Body, the receiver MUST close the session with a
  *  PROTOCOL_VIOLATION.」)。datagram 経路 (incomingHandleDatagram) は
  * Length フレーミングを持たないが、decodeObjectDatagram のデコード失敗は
@@ -98,7 +98,7 @@ export function isPeerStreamError(error: unknown): boolean {
  * 上記以外（ストリームの正常終了・キャンセル等）は null を返し、catch 側で
  * 握り潰させる。
  *
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-19.html#section-3.5
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-3.5
  */
 export function toProtocolViolationSessionError(error: unknown): SessionError | null {
   if (error instanceof ProtocolViolationError || error instanceof IncompleteDataError) {
@@ -111,7 +111,7 @@ export function toProtocolViolationSessionError(error: unknown): SessionError | 
  * ストリームクローズ / RESET_STREAM 時に保留中の更新を失敗させるときの
  * エラー文言
  *
- * draft-ietf-moq-transport-19 §10.9.1 / §3.3.2:
+ * draft-ietf-moq-transport-20 §10.9.1 / §3.3.2:
  * 応答を待たずにストリームが閉じた場合、保留中の更新は失敗として reject
  * する。FIN 経路と RESET_STREAM 経路で共通の文言を使う。GOAWAY 掃除の
  * RequestError (GOING_AWAY) とは失敗種別が異なるため使い分ける。

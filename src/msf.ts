@@ -1724,7 +1724,7 @@ function toTemplateLocationBigInt(value: unknown, trackName: string, field: stri
 /**
  * MOQT Location 由来の JSON number を bigint に変換する共通 helper。
  *
- * draft-ietf-moq-transport-19 §1.4 で Group ID / Object ID は vi64 (unsigned 64bit) と
+ * draft-ietf-moq-transport-20 §1.4 で Group ID / Object ID は vi64 (unsigned 64bit) と
  * 規定される。JSON wire format で値を載せる場合、`Number.MAX_SAFE_INTEGER` を超える領域は
  * `JSON.parse` の段階で既に丸められているため、安全側に倒して reject する。負数も unsigned
  * 値域違反として reject する。

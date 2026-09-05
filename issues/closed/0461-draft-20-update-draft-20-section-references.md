@@ -1,7 +1,7 @@
 # コメントと節番号参照を draft-20 に更新する
 
 - Created: 2026-09-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/update-draft-20-section-references
 - Polished: 2026-09-02
 
@@ -42,3 +42,11 @@
 - 関連: `issues/0435-update-subgroup-delivery-timeout-options-doc-comment.md`
 - 先例: `issues/closed/0392-moqt-draft-19-comment-section-number.md`
 - 先例: `issues/closed/0343-draft-19-update-spec-reference-comments.md`
+
+## 解決方法
+
+- src / tests / devtools / README.md / .env.example の draft-19 参照を draft-20 に更新し、ずれた節番号 (Range Filters §5.1.4、FILL PARAMETERS 挿入による §10.2.15 以降、PUBLISH_STATE_NOTIFY 挿入による §10.10 以降、Figure 27→28 等) を直した。
+- OBJECT_DATAGRAM / SUBGROUP_HEADER の Type Flags bitfield 説明をコメントに追随させた。
+- polish-refs で全引用を検証し、不一致を修正した。
+- 0412 / 0435 と重なる箇所は参照更新のみ行い、意味論の修正は各 issue に委譲する。
+- 変更履歴への追記は不要 (コメントのみ)。

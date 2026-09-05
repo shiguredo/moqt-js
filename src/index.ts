@@ -2,14 +2,14 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-19
+ * draft-ietf-moq-transport-20
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 import { normalizeMoqtUri } from "./moqtUri";
 import { assertMsfConnectionSupported } from "./msf";
 
-// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-19 §3.1.1 / §3.1.2)
+// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-20 §3.1.1 / §3.1.2)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
 
 // 公開型の再エクスポート
@@ -40,7 +40,7 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-19 §11.4.2)
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-20 §11.4.2)
 export {
   type PendingSubgroupBufferOptions,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
@@ -49,7 +49,7 @@ export {
 // メッセージ型の再エクスポート
 export type { LocationFilter, Location, Parameter } from "./message";
 
-// Authorization Token の再エクスポート (draft-ietf-moq-transport-19 Section 10.2.2)
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-20 Section 10.2.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,
@@ -126,7 +126,7 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
-// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-19 Section 12 (MOQT Properties))
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-20 Section 12 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,
@@ -234,9 +234,9 @@ export async function connect(
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
-  // draft-ietf-moq-transport-19 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-20 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
-  // draft-ietf-moq-transport-19 §10.3.1.5 / §13.8
+  // draft-ietf-moq-transport-20 §10.3.1.5 / §13.8
   // grease: true は GREASE Setup Option (§14) を追加する
   await session.initialize({
     authorizationToken: options?.authorizationToken,
