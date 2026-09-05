@@ -1,6 +1,7 @@
 # PUBLISH_OK 書き込み失敗が無音で後始末をスキップし subscriber が残存する
 
 - Created: 2026-08-31
+- Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publish-ok-write-failure-cleanup
 - Polished: {YYYY-MM-DD}
@@ -19,7 +20,7 @@
 
 ## 設計方針
 
-- 登録以後の一連の処理 (`PUBLISH_OK 送信` + `runPublishStreamSubLoop` + 後始末) を try/finally に組み替え、後始末 (3 マップの削除、`subReader.releaseLock()`、`subWriter.releaseLock()`) を exit 経路に依らず必ず実行する。既に try/finally で守っている `runPublishStreamSubLoop` 側の通知意味論は変えない。
+- 登録以後の一連の処理 (`PUBLISH_OK 送信` + `runPublishStreamSubLoop` + 後始末) を try/finally に組み替え、後始末 (3 マップの削除 + fill 関連付けの掃除 (`deleteFillTargetsForSubscriber`)、`subReader.releaseLock()`、`subWriter.releaseLock()`) を exit 経路に依らず必ず実行する。既に `notifySubscriberFailure` の内部 try/finally で守っている RESET / FIN 通知意味論は変えない。
 - PUBLISH_OK の書き込みが失敗した場合は subscribe ロール側の RESET 通知と同じ扱い (source: "stream" のとき失敗通知経路 `bidi.notifySubscriberFailure` で error 通知 + state closed、それ以外は通知せず無音) に揃える。書き込みが失敗した以上 §5.1 MUST の PUBLISH_OK は送信できておらず、その subscription を active のまま残す意味がないため失敗として扱う。source 判定を伴わない構造的なリーク防止 (finally 化) が主目的で、通知の追加は従属的な判断としてレビューで確認する。
 - fire-and-forget 化された `void this.handleIncomingBidirectionalStream(stream)` の経路に残る例外を漏らさない (finally 化後も `handleIncomingBidirectionalStream` 自体は throw してよいのかを設計時に確定し、throw が残るなら呼び出し側で吸収する)。
 
@@ -35,7 +36,7 @@
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §5.1 (Subscriptions: PUBLISH_OK の MUST、subscriber による解除は STOP_SENDING)
-- draft-ietf-moq-transport-19 §11.1 (Track Alias: 同時使用の禁止)
+- draft-ietf-moq-transport-20 §5.1 (Subscriptions: PUBLISH_OK の MUST、subscriber による解除は STOP_SENDING)
+- draft-ietf-moq-transport-20 §11.1 (Track Alias: 同時使用の禁止。終了済み購読後の再使用は SHOULD NOT ... unless completely closed の条件付きで許容)
 - 関連: `issues/closed/0428-bug-incoming-publish-reset-markclosed-missing.md` (サブループ側の catch 経路でアプリ例外を吸収した対応。本 issue は同じ失敗モードの PUBLISH_OK 書き込み経路を扱う)
 - 関連: `issues/closed/0107-bug-session-close-leaks-streams.md` (セッション close 時のストリームリーク追跡の先例)
