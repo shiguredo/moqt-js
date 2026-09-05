@@ -1,6 +1,7 @@
 # pending mode で subscribers 未登録のピア FIN が無限ループになり abandon に到達しない
 
 - Created: 2026-08-29
+- Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-pending-subgroup-fin-loop
 - Polished: {YYYY-MM-DD}
@@ -19,8 +20,8 @@
 
 ## 設計方針
 
-- chunk 分岐で `event.result.done` を検出した時点で、その場で abandon を完了させる (race の再登録を待たない)。`entry.notify("end-of-stream")` → `pendingSubgroupBuffer.remove(entry)` → return の順で、既存の abandon 経路と同じ後始末をする。FIN 済みストリームに対する `cancelStreamQuiet` は実質 no-op だが、notify 経由の既存 abandon と経路を統一するため同一 helper を使うかは実装時に既存フローとの一貫性で決める。
-- `PendingSubgroupBuffer.notify` が多重 resolve されない構造 (`notified` Promise 1 個) であることは現状で確認済み。修正後の notify 呼び出し順序が timeout / overflow / session-close 通知と競合しても idempotent に abandon 完結することを守る。
+- chunk 分岐で `event.result.done` を検出した時点で、その場で abandon を完了させる (race の再登録を待たない)。`entry.notify("end-of-stream")` → `pendingSubgroupBuffer.remove(entry)` → return の順で、既存の abandon 経路と同じ後始末をする。pending mode は payload を decode しないため draft-ietf-moq-transport-20 §11.4 の SHOULD (FIN が Object 途中の場合の PROTOCOL_VIOLATION) の判定ができず、0427 の対象外とした判断を継承して abandon する。subscribers 未登録のためオブジェクト欠落は発生しない。FIN 済みストリームに対する `cancelStreamQuiet` は実質 no-op だが、notify 経由の既存 abandon と経路を統一するため同一 helper を使うかは実装時に既存フローとの一貫性で決める。
+- `PendingSubgroupEntry.notify` が多重 resolve されない構造 (`notified` Promise 1 個) であることは現状で確認済み。修正後の notify 呼び出し順序が timeout / overflow / session-close 通知と競合しても idempotent に abandon 完結することを守る。
 - 修正の対称性として、`entry.notified` 側が先に勝つ既存経路 (subscriber 通知など) の挙動は変更しない。
 
 ## 完了条件
@@ -32,8 +33,8 @@
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §11.4.2 (Subgroup Header Fields / unknown Track Alias では abandon MAY)
-- draft-ietf-moq-transport-19 §11.4.3 (Closing Subgroup Streams)
+- draft-ietf-moq-transport-20 §11.4.2 (Subgroup Header / unknown Track Alias では abandon MAY。pending FIN の abandon は §11.4.1 により安全)
+- draft-ietf-moq-transport-20 §11.4.3 (Closing Subgroup Streams)
 - 関連: `issues/closed/0427-bug-data-stream-fin-incomplete-object.md`（解決方法の「pending mode の FIN 処理の実態」項で発掘を記録）
 
 ## 解決方法
