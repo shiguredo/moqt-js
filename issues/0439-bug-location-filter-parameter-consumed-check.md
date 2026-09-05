@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-location-filter-parameter-consumed-check
 - Polished: 2026-09-05
 
@@ -38,4 +38,6 @@
 
 ## 解決方法
 
-未着手。
+- `decodeLocationFilterParameter()` で `decodeLocationFilter()` の返り値から `consumed` を受け取り、`consumed !== param.value.length` の場合に `ProtocolViolationError` を throw するようにした。短い value は従来どおり `IncompleteDataError` のまま伝搬する。
+- テストは `src/message/parameter.test.ts` に 4 件追加した (末尾残余拒否 2 件・一致時受理・短縮時素通し)。
+- 触ったファイル: `src/message/parameter.ts`、`src/message/parameter.test.ts`、`CHANGES.md`。
