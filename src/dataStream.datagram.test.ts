@@ -135,6 +135,20 @@ test("ObjectDatagram: Priority バイトでバッファが切れていると Inc
   assert.throws(() => decodeObjectDatagram(data), IncompleteDataError);
 });
 
+/**
+ * draft-ietf-moq-transport-20 Section 11.3.1:
+ * Properties Length が宣言するバイト数に datagram が満たない場合、
+ * 切り詰めた Properties と空ペイロードの不正 datagram を配信せず、
+ * IncompleteDataError を throw する (受信側では PROTOCOL_VIOLATION に
+ * 変換されてセッションが閉じる。既存の varint 不足と同じ扱い)。
+ */
+test("ObjectDatagram: Properties バイト列途中でバッファが切れていると IncompleteDataError", () => {
+  // type(0x01: PAYLOAD_OBJ_EXT, Properties Present) + trackAlias + groupId +
+  // objectId + Priority までは揃うが Properties 本体が 2 バイトしかない
+  const data = new Uint8Array([0x01, 0x05, 0x0a, 0x03, 0x80, 0x03, 0xaa, 0xbb]);
+  assert.throws(() => decodeObjectDatagram(data), IncompleteDataError, "properties");
+});
+
 const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }> = [
   {
     name: "PAYLOAD_OBJ",

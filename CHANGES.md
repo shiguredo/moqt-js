@@ -836,6 +836,10 @@
   - 通知メッセージは subscribe ロール側と同一の固定文言を用いる
   - source: "stream" 以外 (source を持たない内部例外) は従来どおり生のエラーを通知して state は変更しないが、アプリの error コールバック例外は呼び出し元の後始末を壊さないよう吸収する。セッション終了 (source: "session")、GOAWAY 受信済みの抑止は維持する
   - @voluntas
+- [FIX] データストリーム / Datagram デコーダの Properties フィールド境界不足を修正する
+  - draft-ietf-moq-transport-20 §11.4.2 / §11.3.1 / §11.4.4.1 に基づき、Properties Length が宣言するバイト数にバッファが満たない場合に 3 つのデコーダが IncompleteDataError を throw するようにする (従来は切り詰めた Properties を返して `totalConsumed` を過剰に進め、後続フィールドを誤読した)
+  - subgroup ストリーム / FETCH 経路では次のチャンクを待ち、datagram 経路では PROTOCOL_VIOLATION に変換されてセッションが閉じる (既存の varint 不足と同じ扱い)
+  - @voluntas
 
 ### misc
 
