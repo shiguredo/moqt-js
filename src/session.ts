@@ -3514,7 +3514,6 @@ export class SessionImpl implements Session {
     publishRequestId: bigint,
     subReader: ReadableStreamDefaultReader<Uint8Array>,
     subControlReader: ControlStreamReader,
-    callbacks: SubscribeCallbacks,
   ): Promise<void> {
     // draft-ietf-moq-transport-20 §10.4:
     // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
@@ -3689,61 +3688,73 @@ export class SessionImpl implements Session {
       // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
       // spurious error 通知を抑止する (namespace ループと同様)
       if (impl.state === "active" && !goawayReceived) {
-        // WebTransport セッション終了起因のエラーは購読者へ通知しない (従来どおり)
         const normalizedError = err instanceof Error ? err : new Error(String(err));
-        if (!isSessionClosedError(normalizedError)) {
-          // bidiReadRequestStreamMessages の subscribe ロールと同じ判定になるよう、
-          // 正規化前の生のエラーを評価する
-          if (isPeerStreamError(err)) {
-            // draft-ietf-moq-transport-20 §3.3.3:
-            // ピアの RESET_STREAM で readable がエラー終了した場合 (source: "stream") は、
-            // subscribe ロール側と同じく error 通知 + state closed にする。仕様は
-            // ピアの RESET_STREAM を受けた側のアプリへの通知内容も subscription state
-            // の扱いも規定していない (§3.3.3 は RESET_STREAM / STOP_SENDING の手段と
-            // rejection 時の応答を定めるのみ) ため、subscribe ロール側と同じ実装上の
-            // 判断として揃える。
-            // 通知と markClosed は notifySubscriberFailure の内部契約 (try/finally) に
-            // 委ねるため、生の callbacks.error は呼ばない (二重通知になる)。
-            // notifySubscriberFailure は subscribers から引くため、unsubscribe 済みで
-            // エントリが削除された窓では通知しない (subscribe ロール側と同じ)。
-            // 通知メッセージは subscribe ロール側と同一の組み立てを使う
-            // (ピアのエラーコード付き、取得不可時は固定文言)。
-            // draft-ietf-moq-transport-20 §3.3.2 / §10.9.1:
-            // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
-            // FIN 経路と同様に失敗として reject する。通知より先に実行することで、
-            // アプリの error コールバックが throw しても reject が実行される
-            // (順序の根拠。bidi 側の RESET 経路と同パターン)。
-            // 内側に try/catch が必要なのは、catch ブロック内で throw すると戻り値の
-            // Promise が reject し、呼び出し元の requestStreams / subscribers の
-            // クリーンアップがスキップされるためである。ここが守るのはこの通知経路
-            // だけである (セッションレベルの error コールバック例外が伝播する経路は
-            // 別途対応)。
-            bidi.rejectPendingRequestUpdates(
+        // 応答待ちの更新は失敗として reject する (source を問わない。兄弟分岐・
+        // namespace ループと同順。通知より先に実行することで、アプリの error
+        // コールバックが throw しても reject が実行される。reject しないと
+        // update() が永続ハングするため)。
+        bidi.rejectPendingRequestUpdates(
+          this as unknown as bidi.BidiSessionInternal,
+          publishRequestId,
+          new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+        );
+        if (isSessionClosedError(normalizedError)) {
+          // WebTransport セッション終了起因のエラーは購読者へ通知しないが、
+          // state は closed にする (namespace ループと同規則。仕様はセッション
+          // 終了時の購読単位の扱いを定めていないため、namespace ループと同じ
+          // 実装上の判断として揃える。セッション終了は ConnectCallbacks.close
+          // で検知されるが、request 単位の state を active に残す理由はない。
+          // ConnectCallbacks.close と購読通知は別チャネルのため二重の失敗通知
+          // にはならない)。
+          impl.markClosed();
+        } else if (isPeerStreamError(err)) {
+          // draft-ietf-moq-transport-20 §3.3.3:
+          // ピアの RESET_STREAM で readable がエラー終了した場合 (source: "stream") は、
+          // subscribe ロール側と同じく error 通知 + state closed にする。仕様は
+          // ピアの RESET_STREAM を受けた側のアプリへの通知内容も subscription state
+          // の扱いも規定していない (§3.3.3 は RESET_STREAM / STOP_SENDING の手段と
+          // rejection 時の応答を定めるのみ) ため、subscribe ロール側と同じ実装上の
+          // 判断として揃える。
+          // 通知と markClosed は notifySubscriberFailure の内部契約 (try/finally) に
+          // 委ねるため、impl 直結の通知は行わない (二重通知になる)。
+          // notifySubscriberFailure は subscribers から引くため、unsubscribe 済みで
+          // エントリが削除された窓では通知しない (subscribe ロール側と同じ)。
+          // 通知メッセージは subscribe ロール側と同一の組み立てを使う
+          // (ピアのエラーコード付き、取得不可時は固定文言)。
+          // draft-ietf-moq-transport-20 §3.3.2 / §10.9.1:
+          // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
+          // FIN 経路と同様に失敗として扱う (上記の先行 reject)。
+          // 内側に try/catch が必要なのは、catch ブロック内で throw すると戻り値の
+          // Promise が reject し、呼び出し元の requestStreams / subscribers の
+          // クリーンアップがスキップされるためである。ここが守るのはこの通知経路
+          // だけである (セッションレベルの error コールバック例外が伝播する経路は
+          // 別途対応)。
+          try {
+            bidi.notifySubscriberFailure(
               this as unknown as bidi.BidiSessionInternal,
               publishRequestId,
-              new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+              bidi.createResetStreamError(err),
             );
-            try {
-              bidi.notifySubscriberFailure(
-                this as unknown as bidi.BidiSessionInternal,
-                publishRequestId,
-                bidi.createResetStreamError(err),
-              );
-            } catch {
-              // アプリの error コールバック例外は吸収する (markClosed は
-              // notifySubscriberFailure 内の finally で実行済み)。
-            }
-          } else {
-            // source: "stream" 以外 (ProtocolViolationError 経由等の内部例外) は
-            // 従来どおり生のエラーを通知し、state は変更しない。アプリの error
-            // コールバック例外を吸収するのは、上記と同じく呼び出し元の後始末を
-            // スキップさせないため (FIN 経路の notifySubscriberFailure は外側 try 内
-            // で呼ばれるため元々吸収されている)。
-            try {
-              callbacks.error?.(normalizedError);
-            } catch {
-              // アプリの error コールバック例外は吸収する
-            }
+          } catch {
+            // アプリの error コールバック例外は吸収する (markClosed は
+            // notifySubscriberFailure 内の finally で実行済み)。
+          }
+        } else {
+          // source を持たない内部例外は、namespace ループと同規則で error 通知
+          // + state closed にする (従来は通知のみで state が active のまま残った。
+          // 仕様は内部エラー時の購読単位の扱いを定めていないため、namespace
+          // ループと同じ実装上の判断として揃える)。
+          // 通知と markClosed は stream 分岐と同じく notifySubscriberFailure の
+          // 内部契約に委ねる (応答待ちの更新は上記で先行 reject 済み)。
+          try {
+            bidi.notifySubscriberFailure(
+              this as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+              normalizedError,
+            );
+          } catch {
+            // アプリの error コールバック例外は吸収する (markClosed は
+            // notifySubscriberFailure 内の finally で実行済み)。
           }
         }
       }
@@ -4012,13 +4023,7 @@ export class SessionImpl implements Session {
       await subWriter.write(framed);
 
       // 後続メッセージのサブループ
-      await this.runPublishStreamSubLoop(
-        impl,
-        publishRequestId,
-        subReader,
-        subControlReader,
-        subscribeCallbacks,
-      );
+      await this.runPublishStreamSubLoop(impl, publishRequestId, subReader, subControlReader);
     } catch (error) {
       // PUBLISH_OK 書き込み失敗時は失敗として扱う (§5.1 MUST の PUBLISH_OK を
       // 送れていないため subscription を残さない)。いずれの source でも

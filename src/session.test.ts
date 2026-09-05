@@ -1847,11 +1847,12 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM で�
 });
 
 /**
- * draft-ietf-moq-transport-20 §3.3.3 / §3.5:
+ * draft-ietf-moq-transport-20 §3.3.3 / §3.5 / §10.9.1:
  * 受信 PUBLISH ストリームでセッション終了起因 (source: "session") の読み取り
- * 失敗が起きても、保留中の REQUEST_UPDATE に触れないことを検証する。
+ * 失敗が起きても、通知はせず、state は closed にし、保留中の REQUEST_UPDATE は
+ * 失敗として reject することを検証する (兄弟分岐・namespace ループと同順)。
  */
-test("受信 PUBLISH ストリーム上のセッション終了の読み取り失敗では応答待ちの更新に触れない", async () => {
+test("受信 PUBLISH ストリーム上のセッション終了の読み取り失敗では通知せず閉じて更新は reject される", async () => {
   const session = createSessionImpl();
   let notifyCount = 0;
   const internal = setupIncomingPublishStreamSession(session, {
@@ -1884,9 +1885,9 @@ test("受信 PUBLISH ストリーム上のセッション終了の読み取り�
     }),
   );
 
-  // セッション終了は購読者への通知対象外であり、保留中の更新にも触れない
-  assert.isUndefined(rejected);
-  assert.equal(internals.pendingRequestUpdate.size, 1);
+  // セッション終了は購読者への通知対象外だが、保留中の更新は失敗として reject する
+  assert.isDefined(rejected);
+  assert.equal(internals.pendingRequestUpdate.size, 0);
   assert.equal(notifyCount, 0);
   assert.equal(internal.sessionState, "connected");
 });
@@ -1927,11 +1928,10 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
 
 /**
  * draft-ietf-moq-transport-20 §3.3.3:
- * source を持たない内部エラーでは、従来どおり生のエラーが error コールバックへ
- * 通知され、state は closed にならないことを検証する (RESET_STREAM 限定の回帰ガード)。
- * 修正前の実装でも通る。
+ * source を持たない内部エラーでは、生のエラーが error コールバックへ
+ * 通知され、state も closed になることを検証する (namespace ループと同規則)。
  */
-test("受信 PUBLISH ストリーム上の source なしエラーでは error 通知されるが state は active のまま", async () => {
+test("受信 PUBLISH ストリーム上の source なしエラーでは error 通知され state も closed になる", async () => {
   const session = createSessionImpl();
   let notifiedError: Error | undefined;
   let subscriber: SubscriberImpl | undefined;
@@ -1943,6 +1943,22 @@ test("受信 PUBLISH ストリーム上の source なしエラーでは error �
     },
   });
 
+  // 応答待ちの REQUEST_UPDATE を注入する (通知より先に reject される)
+  let rejected: Error | undefined;
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  internals.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+  });
+
   await internal.handleIncomingBidirectionalStream(
     createIncomingPublishStream((controller) => {
       // source プロパティを持たない内部例外を再現する
@@ -1950,22 +1966,24 @@ test("受信 PUBLISH ストリーム上の source なしエラーでは error �
     }),
   );
 
-  // 生のエラーがそのまま通知される
+  // 生のエラーがそのまま通知され、state は closed になる
   assert.isDefined(notifiedError);
   assert.equal(notifiedError!.message, "internal error");
   assert.isDefined(subscriber);
-  assert.equal(subscriber!.state, "active");
+  assert.equal(subscriber!.state, "closed");
+  // 応答待ちの更新は通知より先に reject される
+  assert.isDefined(rejected);
+  assert.equal(internals.pendingRequestUpdate.size, 0);
   assert.equal(internal.sessionState, "connected");
 });
 
 /**
  * draft-ietf-moq-transport-20 §3.3.3:
  * source を持たない内部エラーでアプリの error コールバックが throw しても、例外が
- * ループ外へ伝播せず後始末が走ることを検証する (RESET 経路と同じ理由で吸収する)。
- * error 通知されるのに state が active のまま残るのは従来どおりであり、ここでは
- * 後始末と伝播のみを検証する。
+ * ループ外へ伝播せず state が closed になり後始末が走ることを検証する
+ * (RESET 経路と同じ理由で吸収する)。
  */
-test("受信 PUBLISH ストリーム上の source なしエラーで error コールバックが throw しても後始末は走る", async () => {
+test("受信 PUBLISH ストリーム上の source なしエラーで error コールバックが throw しても state は closed になる", async () => {
   const session = createSessionImpl();
   let subscriber: SubscriberImpl | undefined;
   const internal = setupIncomingPublishStreamSession(session, {
@@ -1984,21 +2002,23 @@ test("受信 PUBLISH ストリーム上の source なしエラーで error コ�
   );
 
   assert.isDefined(subscriber);
-  // state は従来どおり active のまま、後続のクリーンアップは走る
-  assert.equal(subscriber!.state, "active");
+  // state は closed になり、後続のクリーンアップも走る
+  assert.equal(subscriber!.state, "closed");
   assert.isUndefined(internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID));
   assert.equal(internal.sessionState, "connected");
 });
 
 /**
  * draft-ietf-moq-transport-20 §3.5:
- * WebTransport セッション終了起因 (source: "session") のエラーでは従来どおり
- * error コールバックが呼ばれないことを検証する (修正前の実装でも通る回帰ガード)。
+ * WebTransport セッション終了起因 (source: "session") のエラーでは
+ * error コールバックが呼ばれず、state が closed になることを検証する。
+ * エラー投入をゲートで遅延させ、subloop 待機中の subscriber 参照を確保して
+ * state を直接検証する。
  * Node 環境では WebTransportError グローバルが無いため、isSessionClosedError は
  * メッセージ文字列のフォールバック判定で抑止される (source プロパティによる判定は
  * src/session/errors.test.ts が FakeWebTransportError の注入で担保している)。
  */
-test("受信 PUBLISH ストリーム上のセッション終了 (source: session) では error 通知されない", async () => {
+test("受信 PUBLISH ストリーム上のセッション終了 (source: session) では error 通知されず state は closed になる", async () => {
   const session = createSessionImpl();
   let errorCalled = false;
   const internal = setupIncomingPublishStreamSession(session, {
@@ -2008,14 +2028,48 @@ test("受信 PUBLISH ストリーム上のセッション終了 (source: session
     },
   });
 
-  await internal.handleIncomingBidirectionalStream(
+  // 応答待ちの REQUEST_UPDATE を注入する (通知なしでも reject される)
+  let rejected: Error | undefined;
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  internals.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+  });
+
+  // エラー投入をゲートで遅延させ、subloop 待機中の subscriber を確保する
+  let releaseError!: () => void;
+  const errorGate = new Promise<void>((resolve) => {
+    releaseError = resolve;
+  });
+  const handlePromise = internal.handleIncomingBidirectionalStream(
     createIncomingPublishStream((controller) => {
-      controller.error(Object.assign(new Error("session closed by peer"), { source: "session" }));
+      void (async () => {
+        await errorGate;
+        controller.error(Object.assign(new Error("session closed by peer"), { source: "session" }));
+      })();
     }),
   );
+  await yieldToMacrotask();
+  await yieldToMacrotask();
+  const subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+  assert.isDefined(subscriber);
+  releaseError();
+  await handlePromise;
 
   assert.isFalse(errorCalled);
+  assert.equal(subscriber!.state, "closed");
+  assert.isDefined(rejected);
+  assert.equal(internals.pendingRequestUpdate.size, 0);
   assert.equal(internal.sessionState, "connected");
+  assert.equal(internal.subscribers.size, 0);
 });
 
 /**
