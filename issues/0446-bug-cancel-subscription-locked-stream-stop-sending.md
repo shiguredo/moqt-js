@@ -1,13 +1,14 @@
 # bidiCancelSubscription / bidiCancelFetch がロック中の readable.cancel() で STOP_SENDING を送出できない
 
 - Created: 2026-08-31
+- Updated: 2026-09-05
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-cancel-subscription-locked-stream-stop-sending
 - Polished: {YYYY-MM-DD}
 
 ## 目的
 
-購読・フェッチの解除 (`unsubscribe()` / FETCH キャンセル) が、読み取りループにロックされた `readable` に対して `cancel()` を試みて TypeError になるため、STOP_SENDING がワイヤに出ない状態を修正する。§5.1 / §5.2 の MUST が実質達成されていない。
+購読・フェッチの解除 (`unsubscribe()` / FETCH キャンセル) が、読み取りループにロックされた `readable` に対して `cancel()` を試みて TypeError になるため、STOP_SENDING がワイヤに出ない状態を修正する。§5.1 の手順 (STOP_SENDING による終了) / §5.2 の MUST が実質達成されていない。
 
 ## 現状
 
@@ -38,8 +39,8 @@
 
 ## 参照
 
-- draft-ietf-moq-transport-19 §5.1 (Subscriptions: 「The subscriber terminates a subscription in the Pending (Subscriber) or Established states by sending STOP_SENDING.」)
-- draft-ietf-moq-transport-19 §5.2 (Fetch State Management: FETCH 解除時の STOP_SENDING の MUST)
+- draft-ietf-moq-transport-20 §5.1 (Subscriptions: 「The subscriber terminates a subscription in the Pending (Subscriber) or Established states by sending STOP_SENDING.」)
+- draft-ietf-moq-transport-20 §5.2 (Fetch State Management: 「It MUST send STOP_SENDING for the bidi request stream.」なお data stream は MAY)
 - W3C Streams Standard (ReadableStream.cancel: locked 場合は TypeError で reject)
 - 関連: `issues/0445-bug-publish-ok-write-failure-cleanup.md` (受信 PUBLISH 処理の別経路の後始末。本 issue とは目的が異なる)
-- 関連: `issues/0433-bug-bidi-unsubscribe-pending-update-cleanup.md` (bidi unsubscribe の掃除。あれは応答待ち REQUEST_UPDATE の Promise 掃除が目的で、ワイヤへの STOP_SENDING 送出は扱っていないため別問題)
+- 関連: `issues/closed/0433-bug-bidi-unsubscribe-pending-update-cleanup.md` (bidi unsubscribe の掃除。あれは応答待ち REQUEST_UPDATE の Promise 掃除が目的で、ワイヤへの STOP_SENDING 送出は扱っていないため別問題)
