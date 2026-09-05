@@ -257,6 +257,10 @@
   - draft-ietf-moq-transport-19 §10.12.3 に基づき、End Location が Start Location 未満の FETCH を送信前に拒否する
   - Location 比較の純関数 compareLocations を追加し、FETCH_OK 応答検証 (validateFetchOkEndLocation) と共通化する
   - @voluntas
+- [FIX] REQUEST_UPDATE 経由の LOCATION_FILTER を REQUEST_OK 受信時に反映する
+  - draft-ietf-moq-transport-20 §10.2.9 / §5.1.2 に基づき、update() で送信した LOCATION_FILTER を REQUEST_OK 受信時に Subscriber の Location Filter に反映し、以降のオブジェクト配信に再適用する
+  - 送信時に LOCATION_FILTER を省略した場合は不変とし、除去指定 (Length 0) はフィルタなしとして反映する。REQUEST_ERROR / ストリーム終了時は反映しない
+  - @voluntas
 - [ADD] 予約 namespace / .session namespace の送信を拒否する
   - draft-ietf-moq-transport-19 §3.2.1 / §3.2.2 に基づき、先頭フィールドが "." で始まる namespace を publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否する
   - .session namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当のエラーメッセージで拒否する
