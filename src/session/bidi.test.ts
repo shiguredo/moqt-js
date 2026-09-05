@@ -27,7 +27,13 @@ import {
 import { buildFillParameters } from "./params";
 import { decodeRequestUpdatePayload, encodeRequestUpdatePayload } from "../message/subscribe";
 import { getParameterTrackNamespace, encodeLocationFilterParameter } from "../message/parameter";
-import { SessionError, SessionErrorCode, RequestErrorCode, RequestError } from "../error";
+import {
+  SessionError,
+  SessionErrorCode,
+  RequestErrorCode,
+  RequestError,
+  InvalidFilterError,
+} from "../error";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
@@ -978,6 +984,104 @@ test("bidiSendRequestUpdate: 既存フィルタとマージすると MAX_FILTER_
   assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
   // throw 時に pending エントリが残らない
   assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * End Group が 2^64-1 を超える 3 フィールド表現の LOCATION_FILTER 値を手組みする。
+ * 先頭 varint はバイト Length のため、フィールド部の実バイト長を指定する。
+ */
+function buildExceedingLocationFilterValue(): Uint8Array {
+  const exceedingFields = new Uint8Array([
+    ...encodeVarint(1n),
+    ...encodeVarint(0n),
+    ...encodeVarint(MAX_VARINT),
+  ]);
+  return new Uint8Array([...encodeVarint(BigInt(exceedingFields.length)), ...exceedingFields]);
+}
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * raw パラメータ経路の LOCATION_FILTER (0x21) も型付き経路と同じ
+ * End Group 検証の対象にする。超過時は InvalidFilterError で送信前に
+ * 拒否し、pending エントリを残さない。
+ */
+test("bidiSendRequestUpdate: raw LOCATION_FILTER の End Group 超過で InvalidFilterError", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  // StartGroup(1) + EndGroupDelta(2^64-1) が 2^64-1 を超える 3 フィールド表現を手組みする
+  const exceeding = buildExceedingLocationFilterValue();
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [{ type: MessageParameterType.LOCATION_FILTER, value: exceeding }],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("absolute range end group exceeds maximum"));
+  // throw 時に pending エントリが残らない
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * トップレベルの LOCATION_FILTER が複数ある場合も全件検証し、
+ * 2 件目以降の超過を見逃さない。
+ */
+test("bidiSendRequestUpdate: 2 件目の raw LOCATION_FILTER 超過も InvalidFilterError", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const exceeding = buildExceedingLocationFilterValue();
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [
+        encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+        { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("absolute range end group exceeds maximum"));
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * 正常な raw LOCATION_FILTER は従来どおり送信でき、
+ * LOCATION_FILTER 以外の raw パラメータは検証対象にしない。
+ */
+test("bidiSendRequestUpdate: 正常な raw LOCATION_FILTER は送信できる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [
+      encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+      { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([0x01]) },
+    ],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
+  // LOCATION_FILTER 以外の raw パラメータは検証対象にせず素通しする
+  assert.isDefined(
+    decoded.parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY),
+  );
 });
 
 test("bidiSendRequestUpdate: マージ後の状態が上限以内なら throw しない", async () => {

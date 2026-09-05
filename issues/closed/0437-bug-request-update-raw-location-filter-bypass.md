@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-request-update-raw-location-filter-bypass
 - Polished: 2026-09-05
 
@@ -41,4 +41,6 @@
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` の `bidiSendRequestUpdate` に raw LOCATION_FILTER ガードを追加し、トップレベル全件を `decodeLocationFilterParameter()` で検証して失敗時は InvalidFilterError に変換する。`pendingRequestUpdate.set` より前に配置し、throw 時にエントリを残さない
+- `src/session/bidi.test.ts` に超過・2 件目超過・正常送信のテスト 3 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
