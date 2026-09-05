@@ -2,7 +2,7 @@
 
 - Created: 2026-08-31
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-cancel-subscription-locked-stream-stop-sending
 - Polished: 2026-09-05
 
@@ -42,3 +42,12 @@
 - W3C Streams Standard (ReadableStream.cancel: locked 場合は TypeError で reject)
 - 関連: `issues/0445-bug-publish-ok-write-failure-cleanup.md` (受信 PUBLISH 処理の別経路の後始末。本 issue とは目的が異なる)
 - 関連: `issues/closed/0433-bug-bidi-unsubscribe-pending-update-cleanup.md` (bidi unsubscribe の掃除。あれは応答待ち REQUEST_UPDATE の Promise 掃除が目的で、ワイヤへの STOP_SENDING 送出は扱っていないため別問題)
+
+## 解決方法
+
+- (b) 方式を採用した。(a) のフラグ方式では read 待機中のループを起こせず STOP_SENDING が遅延・到達不能になるため不採用とした。
+- `RequestStreamInfo` に reader を追加し、読み取りループ開始時に登録・終了時に解除する。受信 PUBLISH 経路は entry 生成時に登録する。
+- `bidiCancelSubscription` は Map 削除を先に行い (wake したループの FIN 分岐を no-op 化)、writer.abort を先に実行してから reader 経由で cancel する。abort 先行はループ終了処理のロック解放との競合回避のためである。
+- `bidiSendRequestUpdate` の write 失敗 catch で、保留エントリが既に無い場合は内側 Promise を返して送信エラーの上書きを防ぐ (競合時の update 拒否値を保持するため)。
+- テストは 4 件追加した (bidi の解除到達・abort 失敗時・解除競合・受信 PUBLISH の解除到達)。
+- 触ったファイル: `src/session/bidi.ts`、`src/session.ts`、`src/session/bidi.test.ts`、`src/session.test.ts`、`CHANGES.md`。

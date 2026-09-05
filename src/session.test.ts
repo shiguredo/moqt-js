@@ -1556,6 +1556,86 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
   );
 });
 
+// ============================================================================
+// 受信 PUBLISH の購読解除時の STOP_SENDING 到達
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-20 §5.1:
+ * 受信 PUBLISH 由来の subscriber について、読み取りループ生存中に
+ * unsubscribe() を呼んだ場合、ロック保持者経由で cancel (STOP_SENDING 相当)
+ * が到達し、後続の writer.abort() も実行されることを検証する。
+ * 実 W3C ストリーム注入方式であり、ロック解除経路をまたぐことを検証する。
+ */
+test("受信 PUBLISH の購読解除で STOP_SENDING が到達し abort も実行される", async () => {
+  const session = createSessionImpl();
+  const notifiedErrors: Error[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      notifiedErrors.push(error);
+    },
+  });
+  const aborted: unknown[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write() {},
+    abort(reason) {
+      aborted.push(reason);
+    },
+  });
+
+  const handlePromise = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      // チャンク枯渇後も FIN せず開いたままにする (読み取りループを待機させる)
+      () => {},
+      [],
+      [],
+      writable,
+    ),
+  );
+  // PUBLISH 処理完了 (購読登録) を待つ。処理はマイクロタスク駆動のため
+  // マクロタスク待ちで確定する
+  await yieldToMacrotask();
+  await yieldToMacrotask();
+  const subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+  assert.isDefined(subscriber);
+
+  // 読み取りループ生存中に解除する
+  await subscriber!.unsubscribe();
+
+  // abort まで到達する (従来は cancel 失敗でスキップされた)
+  assert.equal(aborted.length, 1);
+  assert.equal(aborted[0], "subscription cancelled");
+  // 自前解除のため error 通知はなく、Map も掃除され、state は閉じる
+  assert.equal(notifiedErrors.length, 0);
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(
+    (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
+    0,
+  );
+  assert.equal(subscriber!.state, "closed");
+  assert.isFalse(writable.locked);
+  // 読み取りループが終了し、セッションは閉じない
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("受信ループがタイムアウトしました"));
+    }, 5000);
+  });
+  try {
+    await Promise.race([handlePromise, timeout]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+  assert.equal(internal.sessionState, "connected");
+});
+
 /**
  * draft-ietf-moq-transport-20 §3.3.2 / §3.3.3 / §10.9.1:
  * 受信 PUBLISH ストリームでピアが RESET_STREAM でストリームをエラー終了させた
