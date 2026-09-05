@@ -1252,12 +1252,26 @@ export function encodeLocationFilterParameter(filter: LocationFilter): Parameter
 
 /**
  * LOCATION_FILTER パラメータをデコードする
+ *
+ * 構造の消費バイト数が宣言 Length (param.value.length) と一致しない場合は
+ * 構造不正として PROTOCOL_VIOLATION (ProtocolViolationError) を throw する。
+ * 仕様は Length 内余剰バイトの扱いを規定しないが、制御メッセージの Body 長と
+ * 消費バイト数の不一致検出と同方針の堅牢性検証として拒否する
+ * (decodeFillParameters の内側 Parameters 列の検証と同形)。
+ * 送信側生成 (encodeLocationFilter() 経由) では encode 出力そのままが
+ * param.value になるため発火しない。raw 手組みの value では発火し得て、
+ * 送信ガードでは InvalidFilterError に変換される。
  */
 export function decodeLocationFilterParameter(param: Parameter): LocationFilter {
   if (param.type !== 0x21) {
     throw new Error(`Invalid parameter type: expected 0x21, got ${param.type}`);
   }
-  const [filter] = decodeLocationFilter(param.value, 0);
+  const [filter, consumed] = decodeLocationFilter(param.value, 0);
+  if (consumed !== param.value.length) {
+    throw new ProtocolViolationError(
+      `malformed location filter parameter: declared length does not match filter: ${consumed} !== ${param.value.length}`,
+    );
+  }
   return filter;
 }
 
