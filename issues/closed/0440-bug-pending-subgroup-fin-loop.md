@@ -2,7 +2,7 @@
 
 - Created: 2026-08-29
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-05
 - Branch: feature/fix-pending-subgroup-fin-loop
 - Polished: 2026-09-05
 
@@ -40,4 +40,6 @@
 
 ## 解決方法
 
-未着手。
+- `handleSubgroupStream` の pending mode で chunk の `done` を検出した時点で、その場で完結させるようにした。FIN 検出時に `subscribersByAlias` を再取得し、非空なら pending chunks を結合して subscriber mode へ合流し、空の場合のみ `entry.notify("end-of-stream")` → `remove` → `cancelStreamQuiet` → return で abandon する。
+- テストは `src/session.test.ts` に 4 件追加した (ヘッダーのみ FIN・完全 Object 付き FIN・未完成 FIN の abandon と待機中 subscriber 登録の合流)。
+- 触ったファイル: `src/session.ts`、`src/session.test.ts`、`CHANGES.md`。
