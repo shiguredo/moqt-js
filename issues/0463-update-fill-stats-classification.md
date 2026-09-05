@@ -4,10 +4,11 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-fill-stats-classification
 - Polished: {YYYY-MM-DD}
+- Updated: 2026-09-05
 
 ## 目的
 
-fill fetch ストリーム経由のオブジェクトが FETCH ストリーム到着として fetch 側統計に計上されており、購読配送と区別できない。fillDelivered 導入後の受信経路分離に合わせて統計分類も整理する。
+fill fetch ストリーム経由のオブジェクトが通常 FETCH と同じ fetch 側統計に計上されており、fill と通常 FETCH を区別できない。fillDelivered 導入後の受信経路分離に合わせて統計分類も整理する。
 
 ## 現状
 
@@ -18,7 +19,7 @@ fill fetch ストリーム経由のオブジェクトが FETCH ストリーム�
 ## 設計方針
 
 - 受信経路の区別 (fillDelivered) と統計の区別を一致させる。
-- fill を独立区分にするか購読側に寄せるかは、統計の利用目的 (デバッグ / moqmetrics 出力) に合わせて決める。
+- fill は仕様 (§5.1.2) 上 subscription-delivered とは別概念のため、原則として独立区分または fetch 側の内訳とする。購読側合算は採用しない。fill 範囲と subscription の Location Filter が重なる both の場合 (§5.1.3) の計上ルール (二重計上 / fill 優先 / 購読優先) も本 issue で定義する。
 - 通常 FETCH の計上は変えない。
 
 ## 完了条件
@@ -31,4 +32,4 @@ fill fetch ストリーム経由のオブジェクトが FETCH ストリーム�
 
 - draft-ietf-moq-transport-20 §5.1.2 (Location Filters: subscription-delivered / fill-delivered)
 - draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics)
-- 関連: fill と subscription の受信経路分離 (fillDelivered 導入) の後続課題
+- 関連: `issues/closed/0459-draft-20-handle-fill-vs-subscription-delivery.md` の後続 (fillDelivered 導入済み。本 issue は統計分類を扱う)。並列の後続として `issues/0462-add-fill-failure-notification.md` (失敗通知) があり、スコープは重ならない
