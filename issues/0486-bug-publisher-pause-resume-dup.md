@@ -3,7 +3,7 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-publisher-pause-resume
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
@@ -16,10 +16,13 @@
 
 ## 設計方針
 
-1. ループ世代ガード (generation counter 等) を導入し、旧世代ループを終了させる。
-2. `resume` 時の旧ループ終了待ちまたは多重起動防止を入れる。
+1. `pause` 時に `cancelFrameReaders` (stop / close と同形) で `read()` 待機を解除し、世代カウンタを加算する。
+2. 処理ループは `read()` 解決直後に世代を再確認し、不一致なら `encode` せず終了する。新ループは現世代で起動するため、旧ループの終了待ちは不要である。
+3. `resume` は現世代のまま `startProcessingLoops` する (`paused` からのみ到達し、旧ループは世代不一致で終了するため多重起動しない)。
+4. 世代判定は単体テスト可能な形にし、世代不一致時の終了を単体テストで検証する。
 
 ## 完了条件
 
-- 繰り返し pause / resume してもループが 1 系統であること。
+- 世代不一致の旧ループが `encode` せず終了すること (単体テスト)。
+- 繰り返し pause / resume しても `onError` が多重発火しないこと。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
