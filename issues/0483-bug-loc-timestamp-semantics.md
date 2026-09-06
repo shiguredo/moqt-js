@@ -3,11 +3,11 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-loc-timestamp-semantics
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
-timescale 不在時の timestamp は Unix epoch からのマイクロ秒と定義されるが、WebCodecs の単調時刻を載せている。自家 round-trip はするが他実装と相互運用できない。
+timescale 不在時の timestamp は Unix epoch からのマイクロ秒と定義されるが、WebCodecs の単調時刻を載せており、仕様に従う受信者と解釈がずれる。自家では送受が同一解釈のため動作するが、wire 値は仕様に反する。
 
 ## 現状
 
@@ -17,12 +17,14 @@ timescale 不在時の timestamp は Unix epoch からのマイクロ秒と定�
 
 ## 設計方針
 
-1. 送信側は壁時計基準の timestamp を送るか、`TIMESCALE` を付けてメディア時刻であることを明示する (いずれかに統一)。
-2. 受信側は `timescale` に応じて timestamp / duration を解釈する。
+1. 送信側は壁時計基準 (Unix epoch マイクロ秒、`performance.timeOrigin` 基準で換算) の timestamp を送り、`TIMESCALE` は付けない。`TIMESCALE` 付きメディア時刻への対応は本 issue では行わない。
+2. 受信側は `timescale` 不在時は値をそのまま渡す (現状維持)。`timescale` 有り時はマイクロ秒換算 (`timestamp * 1_000_000 / timescale`) して渡す。`duration` は LOC Properties に存在しないため対象外とし 0 を維持する。
+3. 送受の時刻語義テストを追加する (送信 TIMESTAMP の Unix epoch 範囲検証、`timescale` 有り時の換算検証)。
 
 ## 完了条件
 
-- 送受信の時刻語義が loc-04 §2.3.1.1 / §2.3.1.2 と一致すること。
+- 送信 TIMESTAMP が Unix epoch マイクロ秒範囲 (現在時刻前後の許容幅) に入ること。
+- `timescale` 有り受信で換算値がデコーダに渡ること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 関連
