@@ -418,6 +418,7 @@ WebTransport API の動作確認ツールです。moqt-js とは独立してい�
 - 自己署名証明書のハッシュ指定
 - WebTransport の接続状態とプロパティの表示
   - ready / closed / draining の Promise 状態
+  - closed が受け取った closeInfo (closeCode / reason) の表示 (切断後も保持)
   - reliability / congestionControl / supportsReliableOnly
   - protocol / responseHeaders
 - HTTP/2 / HTTP/3 接続判別表示

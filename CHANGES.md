@@ -50,6 +50,11 @@
   - draft-ietf-moq-transport-20 §15.11.1 / §14 に基づき、0x15 を SessionErrorCode から削除し未知コードとして INTERNAL_ERROR に正規化する
   - 旧版 moqt-js が送る VERSION_NEGOTIATION_FAILED はエラーとして通知される
   - @voluntas
+- [ADD] webtransport-devtools で WebTransport.closed が受け取った closeInfo を表示する
+  - W3C WebTransport §6.3 / §6.5 / §6.6 / §6.10 に基づき、closed Promise の fulfill 時の closeCode / reason と reject 時のエラーメッセージを記録する
+  - 切断 (disconnect) 後も表示を保持し、再接続時にクリアする
+  - data-testid (closed-outcome / closed-outcome-state / closed-outcome-code / closed-outcome-reason / closed-outcome-error) を付与し、Playwright などのブラウザ E2E からピア到着の close_code / reason を読み出せるようにする
+  - @voluntas
 - [ADD] Range Filter の評価 (マッチング) ロジックを実装する
   - draft-ietf-moq-transport-19 §5.1.3 に基づき、SUBGROUP / OBJECTID / PRIORITY / OBJECT_PROPERTY の評価関数 (SetID ごとの AND / OR 結合、両端含む判定、open-ended) を実装する
   - SubscriberImpl の handleObject / handleDatagram に Range Filter 再適用を追加し、不通過オブジェクトを破棄する

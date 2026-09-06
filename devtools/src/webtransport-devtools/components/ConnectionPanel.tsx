@@ -1,5 +1,6 @@
 import * as store from "../signals";
 import type { ApiSupportNode } from "../signals";
+import { formatClosedOutcomeField } from "../closedOutcome";
 import { SettingsIcon } from "./Icons";
 import { BCD_SOURCE, BCD_SOURCE_URL, BCD_CONFIRMED_DATE } from "../bcd";
 import { BcdBadges } from "./BcdBadges";
@@ -404,6 +405,59 @@ export function ConnectionPanel() {
           </button>
           <span class={`text-sm ${getStatusClass()}`}>{getStatusText()}</span>
         </div>
+        {/* WebTransport.closed Promise の最終結果 (W3C §6.5 / §6.6)
+            disconnect() 後も保持され、ピアから受け取った closeCode / reason を
+            セッション終了後に確認できる。クリアは次回の Connect が行う */}
+        {store.wtClosedOutcome.value !== null && (
+          <div
+            data-testid="closed-outcome"
+            class="mt-3 p-3 bg-slate-50 rounded-lg text-xs font-mono text-slate-600 space-y-1"
+          >
+            <div class="text-slate-400">Last closed outcome:</div>
+            <div>
+              <span class="text-slate-400">closed: </span>
+              <span
+                data-testid="closed-outcome-state"
+                class={
+                  store.wtClosedOutcome.value.state === "resolved"
+                    ? "text-green-600 font-semibold"
+                    : "text-red-600 font-semibold"
+                }
+              >
+                {store.wtClosedOutcome.value.state}
+              </span>
+            </div>
+            {store.wtClosedOutcome.value.state === "resolved" ? (
+              <>
+                <div>
+                  <span class="text-slate-400">closeCode: </span>
+                  <span data-testid="closed-outcome-code" class="font-semibold">
+                    {formatClosedOutcomeField(store.wtClosedOutcome.value.closeCode)}
+                  </span>
+                </div>
+                <div>
+                  <span class="text-slate-400">reason: </span>
+                  <span
+                    data-testid="closed-outcome-reason"
+                    class="font-semibold whitespace-pre-wrap break-all"
+                  >
+                    {formatClosedOutcomeField(store.wtClosedOutcome.value.reason)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div>
+                <span class="text-slate-400">error: </span>
+                <span
+                  data-testid="closed-outcome-error"
+                  class="font-semibold whitespace-pre-wrap break-all"
+                >
+                  {formatClosedOutcomeField(store.wtClosedOutcome.value.errorMessage)}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
         {store.connectionStatus.value !== "disconnected" && (
           <div class="mt-3 p-3 bg-slate-50 rounded-lg text-xs font-mono text-slate-600 space-y-1">
             <div>
