@@ -1,6 +1,11 @@
 import { signal, computed } from "@preact/signals";
 import { toHttpVersionLabel } from "moqt-js";
 import {
+  buildRejectedClosedOutcome,
+  buildResolvedClosedOutcome,
+  type ClosedOutcome,
+} from "./closedOutcome";
+import {
   parseSettingsQueryString,
   buildSettingsQueryString,
   parseHeadersText,
@@ -73,6 +78,13 @@ export const connectionError = signal("");
 export const wtReadyState = signal<string>("pending");
 export const wtClosedState = signal<string>("pending");
 export const wtDrainingState = signal<string>("pending");
+
+// WebTransport.closed Promise の最終結果 (切断後も保持し、再接続時にクリアする)
+// W3C §6.5 / §6.6: graceful close ではピア (またはローカルの close()) が渡した
+// WebTransportCloseInfo で fulfill され、異常終了では WebTransportError で reject される。
+// disconnect() は Promise 状態表示 (wtClosedState) をリセットするため、
+// セッション終了後に closeCode / reason を確認できるよう別に保持する
+export const wtClosedOutcome = signal<ClosedOutcome | null>(null);
 
 // WebTransport プロパティ
 export const wtReliability = signal<string>("");
@@ -670,6 +682,8 @@ export async function connect(): Promise<void> {
     wtReadyState.value = "pending";
     wtClosedState.value = "pending";
     wtDrainingState.value = "pending";
+    // 前回のセッションの close info をクリアする (新しい接続の結果だけを表示する)
+    wtClosedOutcome.value = null;
 
     wt.ready
       .then(() => {
@@ -680,12 +694,16 @@ export async function connect(): Promise<void> {
       });
 
     wt.closed
-      .then(() => {
+      .then((closeInfo) => {
         wtClosedState.value = "resolved";
+        // 受け取った closeInfo (closeCode / reason) を記録する。
+        // 直後の disconnect() が一時表示をリセットしても close info は残る
+        wtClosedOutcome.value = buildResolvedClosedOutcome(closeInfo);
         disconnect();
       })
       .catch((err: unknown) => {
         wtClosedState.value = `rejected: ${(err as Error).message}`;
+        wtClosedOutcome.value = buildRejectedClosedOutcome(err);
         connectionError.value = (err as Error).message;
         disconnect();
       });
@@ -822,6 +840,9 @@ export function disconnect(closeInfo?: WebTransportCloseInfo): void {
   closeCode.value = "";
   closeReason.value = "";
 
+  // wtClosedOutcome (closed Promise の close info) は意図的にリセットしない。
+  // セッション終了後もピアから受け取った closeCode / reason を UI と
+  // ブラウザ E2E から確認できるようにするため。クリアは次回の connect() が行う
   connectionStatus.value = "disconnected";
   wtReadyState.value = "pending";
   wtClosedState.value = "pending";
