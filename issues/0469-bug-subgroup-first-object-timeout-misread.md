@@ -3,7 +3,7 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-subgroup-timeout-first-object
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
