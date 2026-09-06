@@ -3,7 +3,7 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-channel-config-parse
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
@@ -17,12 +17,14 @@
 
 ## 設計方針
 
-1. 名前付き値 (`mono` / `stereo` 等) を数値に解決し、未知値は明示的に失敗させる。
-2. 仕様例値でのテストを追加する。
+1. `channelConfig` を解決関数で数値化する。対応表は `mono` → 1、`stereo` → 2、整数文字列 → その値 (1 以上の整数のみ受理) とする。照合は前後空白除去・小文字化して行う。一次資料 §4.1 の名前付き例は `mono` のみであり、`stereo` は慣用値として本 issue で定める。
+2. 上記以外 (未知の名前・非整数・0 以下・空文字列の明示値) は `setupDecoders` で `throw` し、`start()` を失敗させる (`onError` 通知後の再 `throw` が既定動作)。解決は `configure` 呼び出し前に行い、`NaN` をデコーダに渡さない。
+3. 解決前後の値のテストを追加する (`mono` / `stereo` / `1` / `2` / 未知値)。
 
 ## 完了条件
 
-- `"mono"` 等の名前付きカタログで購読開始できること。
+- `"mono"` / `"stereo"` / 整数文字列のカタログで `setupDecoders` が成功すること。
+- 未知値のカタログで `start()` が `throw` すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 関連
