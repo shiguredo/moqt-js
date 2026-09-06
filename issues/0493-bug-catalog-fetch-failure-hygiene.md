@@ -3,24 +3,24 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-catalog-fetch-hygiene
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
-`start()` が reject 済みでも遅延オブジェクトの処理が続き、`subscribe` 失敗時にフェーズ状態が残存する。失敗後の遷移を明示的にする必要がある。
+`start()` が reject 済みでも遅延 catalog オブジェクトが `receivedCatalog` 更新と `onCatalog` 発火を起こし、`subscribe` 失敗時にフェーズ状態とタイマーが残存する。失敗後の扱いを明示的にする必要がある。
 
 ## 現状
 
-- `src/createMediaSubscriber.ts` の 5 秒タイムアウトは解決待ちを null 化するが、その後の FETCH / live オブジェクトは処理され続け、`receivedCatalog` 更新と `onCatalog` 発火が起きる。
-- `session.subscribe` 自体の throw 時にフェーズフラグと空バッファがタイムアウトまで残る。
-- 無害化はされているが遷移が暗黙的である。
+- タイムアウト reject 後も FETCH / live の `object` コールバック登録は残り、`handleCatalogObject` に失敗後ガードがないため `receivedCatalog` 更新と `onCatalog` 発火が起きる。タイムアウト処理自体はフェーズ状態 (`catalogFetchInProgress` / `pendingCatalogObjects` / `catalogFetchLastLocation`) を掃除する。
+- `session.subscribe` の throw 時は `await` のため後続に進まず、フェーズフラグがタイムアウトまで残るうえ、タイマー解除がなく `catalogPromise` が後から reject する (未処理拒否になり得る)。
 
 ## 設計方針
 
-1. 失敗確定後の遅延オブジェクトを破棄し、フェーズ状態を即時掃除する。
-2. `subscribe` throw 時の巻き戻しを追加する。
+1. `handleCatalogObject` に失敗後ガードを追加し、タイムアウト reject 後の `receivedCatalog` 更新と `onCatalog` 発火を止める。FETCH / live のコールバック登録解除は行わない (解除手段がないためガードで無害化する)。
+2. `session.subscribe` throw 時に即時掃除する (`catalogFetchInProgress` の `false` 化、バッファ・Location のクリア、`catalogResolve` の null 化とタイマー解除)。`catalogSubscriber` は未登録のため `unsubscribe` 不要である。
 
 ## 完了条件
 
-- 失敗後に状態が残存せず、遅延処理が起きないこと。
+- タイムアウト reject 後に遅延オブジェクトが届いても `catalog` getter が更新されず、`onCatalog` が発火しないこと。
+- `session.subscribe` throw 後にタイマー発火待ちなく掃除され、後続のタイマー発火で副作用がないこと (検証は実時間の短い timeout で行い、モック / スタブは使わない)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
