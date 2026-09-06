@@ -3,29 +3,36 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-observability-validation
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
-必須フィールド欠落や非有限数が黙って通り、後段で静かに `NaN` になる。型契約どおりに検証する必要がある。
+moqmetrics の必須フィールド欠落や非有限数が黙って通り、型契約と wire 値がずれる。moqlog の既知フィールド型誤りも受理する。型契約どおりに検証する必要がある。
 
 ## 現状
 
-- `src/moqmetrics.ts` の `decodeCaptureObject` / `decodeMetricObject` は JSON object であることしか検証せず、`{}` や `value` 欠落が通る。型宣言は `capture_timestamp`・`value` を必須にしている。
-- `encodeMetricObject` 等は `NaN` を `null` 化して送出する (有限数検証なし)。
-- `src/moqlog.ts` の `decodeLogEntry` は既知フィールドの型誤り (`severity` 数値等) を受理する。`resourceId` 空文字も素通しする。
-- 共通の JSON object 検証は両モジュールで重複している。
+- `src/moqmetrics.ts` の `decodeCaptureObject` / `decodeMetricObject` は JSON object であることしか検証せず、`{}` や `value` 欠落が通る。型宣言は `capture_timestamp`・`value` を必須にしている (`metric_name` は optional)。`LogEntry` は一次資料どおり全フィールド optional のため必須化の対象外である。
+- `encodeCaptureObject` / `encodeMetricObject` / `encodeLogEntry` は `JSON.stringify` 素通しのため、非有限数 (`NaN` / `Infinity`) が `null` 化して送出される。デコード側は `null` をそのまま返す。
+- `src/moqlog.ts` の `decodeLogEntry` は既知フィールドの型誤り (`severity` 数値等) を受理する。
+- 空 `resourceId` は `logTrackNamespace` / `metricsTrackNamespace` で検査せず素通しする (下流の Track Namespace エンコードで拒否される)。transport §2.4.1 は各 namespace 要素に 1 バイト以上を MUST とする。
+- 共通の JSON object 検証は両モジュールで重複している (共通化は `0502` に寄せ、本 issue では行わない)。
 
 ## 設計方針
 
-1. 必須フィールド・有限数・既知フィールド型・空 `resourceId` を検証し、違反は `ProtocolViolationError` とする。
-2. 共通検証を共通化し、境界値テストを追加する。
+1. moqmetrics のデコード時に `capture_timestamp`・`value` の存在と数値型を検証し、違反は `ProtocolViolationError` とする。moqlog のデコード時に既知フィールドの型 (`severity` は string 等) を検証する。値列挙の厳格化 (severity 短縮形の可否等) はしない (§7 例との衝突を避ける)。
+2. エンコード時に非有限数を `Error` で失敗させる (fail-fast。既存ヘルパーと同一クラス)。
+3. `logTrackNamespace` / `metricsTrackNamespace` で空 `resourceId` を `Error` とする (transport §2.4.1)。
+4. 境界値テストを追加する。`0496` の pin は本 issue の変更後を対象とする (順序: 0489 → 0496)。
 
 ## 完了条件
 
-- 欠落・非有限数・型誤りがデコード / エンコード時に検出されること。
+- moqmetrics の欠落・型誤りがデコード時に `ProtocolViolationError` になること。moqlog の既知フィールド型誤りがデコード時に検出されること。
+- 非有限数のエンコードが `Error` になること。
+- 空 `resourceId` の namespace 構築が `Error` になること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
 
 ## 関連
 
-- draft-jennings-moq-log-03 §3 / §4、draft-jennings-moq-metrics-02 §3
+- draft-jennings-moq-log-03 §3 / §4、draft-jennings-moq-metrics-02 §3、draft-ietf-moq-transport-20 §2.4.1
+- `0502` (JSON object 検証の共通化。そちらに寄せる)
+- `0496` (境界値の pin。本 issue の変更後を対象とする)
