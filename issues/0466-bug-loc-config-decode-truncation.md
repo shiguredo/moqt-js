@@ -3,7 +3,7 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-loc-config-decode-truncation
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
