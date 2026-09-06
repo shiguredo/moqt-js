@@ -3,7 +3,7 @@
 - Created: 2026-09-06
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-devtools-catalog-unsubscribe
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-06
 
 ## 目的
 
@@ -11,14 +11,19 @@
 
 ## 現状
 
-- `devtools/src/hooks/useSubscriber.ts` の停止・破棄 4 経路はいずれも catalog 側の `unsubscribe` を呼ばない (本体のみ呼ぶ箇所あり)。
+- 定常停止・破棄経路 (`stopSubscribing` 本体、`teardownSubscriber` 経由 6 箇所、`removeSubscriber`) は catalog 側の `unsubscribe` を呼ばない。`stopSubscribing` は本体のみ解除し、`teardownSubscriber` は signal を null 化するだけである。例外的に `signal.aborted` 時の競合ガードのみ catalog を解除する。
 
 ## 設計方針
 
-1. 全停止経路で catalog 購読の `unsubscribe` を行う (既存のリソース集約に寄せる)。
-2. 二重解除の安全を確保する。
+1. catalog 解除を `closeSubscriberResources` に寄せる (`teardownSubscriber` 経由全 6 箇所と `stopSubscribing` の finally が対象になる)。`removeSubscriber` は同関数を経由しないため並行して追加する。`unsubscribe` は fire-and-forget し失敗を握り潰す (既存の `session.close` と同形)。
+2. 二重解除は解除前の null チェックと解除後の null 化で抑止し、逐次二重は `unsubscribe` 自体の冪等 (`closed` 早期 return) に委ねる。
 
 ## 完了条件
 
-- 停止時に catalog 購読が graceful に解除されること。
+- 停止時に catalog 購読へ `unsubscribe` が送出されること (`stopSubscribing` / `teardown` / `removeSubscriber` の各経路)。
+- 二重停止でも例外なく終わること (自動テストは `0513` に委ねる)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 関連
+
+- `0513` (devtools 側の停止経路テストの方針)
