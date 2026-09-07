@@ -1,7 +1,7 @@
 # ローカルの不正 objectId でセッションを閉じてしまう
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-local-object-id-validation
 - Polished: 2026-09-06
 
@@ -31,3 +31,10 @@
 
 - draft-ietf-moq-transport-20 §11.4.2
 - `0323` (現行動作の意図的決定。本 issue は `.catch()` 吸収への対応を含めて覆す)
+
+## 解決方法
+
+- `src/session/publish.ts` に ID 値域検証ヘルパーを新設し、公開 sendObject の先頭で groupId / objectId を fail-fast 検証する（通知 + 返値の reject、キュー未登録）。内部実装も lookup・FIN より前で再検証し、旧 closeWithError 経路を除去した
+- groupId も同一契約に揃え、datagram 経路は通知 + throw、エンコード失敗も通知契約に揃えた。公開 sendObject / sendDatagram の JSDoc に契約を記載した
+- `src/session/publish.test.ts` に境界値等のテスト 9 件を追加した。旧挙動の 4 件は新挙動で落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

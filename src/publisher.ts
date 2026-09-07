@@ -89,6 +89,10 @@ export interface Publisher {
    * オブジェクトは await することで、書き込み完了後に return できる。
    * リアルタイムの音声・映像フレームのように落としても良い (もしくは後続のオブジェクトで上書きされる)
    * ものは fire-and-forget で良いので、戻り値を `void` で破棄して構わない。
+   *
+   * 範囲外の Group / Object ID は fail-fast で error 通知 + 返値の reject になる
+   * (fire-and-forget でも `.catch` するか error 通知で処理すること)。
+   * その他の送信失敗 (書き込み失敗等) は error 通知のみで返値は resolve する。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
@@ -101,6 +105,9 @@ export interface Publisher {
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
    * draft-ietf-moq-transport-20 Section 2.2, Section 11.3
+   *
+   * 範囲外の Group / Object ID は error 通知 + throw する
+   * (セッションは閉じない)。closed 後は検証前に no-op で返す。
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
