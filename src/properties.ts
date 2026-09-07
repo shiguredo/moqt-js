@@ -489,6 +489,13 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
       `immutable properties value length exceeds maximum: ${length} > 65535`,
     );
   }
+  // Length 宣言が残りバイトを超える切り詰めは破損であり、
+  // 短い subarray を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+  if (idLen + lengthLen + Number(length) > data.length) {
+    throw new ProtocolViolationError(
+      `immutable properties value length exceeds remaining data: ${length} > ${data.length - (idLen + lengthLen)}`,
+    );
+  }
   const innerData = data.subarray(idLen + lengthLen, idLen + lengthLen + Number(length));
 
   const extensions: Property[] = [];
@@ -529,6 +536,13 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     } else {
       // 奇数 ID: length + bytes 形式
       const [extLength, extLengthLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
+      // Length 宣言が残りバイトを超える切り詰めは破損であり、
+      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+      if (offset + deltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
+        throw new ProtocolViolationError(
+          `immutable properties value length exceeds remaining data: ${extLength} > ${innerData.length - (offset + deltaIdLen + extLengthLen)}`,
+        );
+      }
       const extData = innerData.slice(
         offset + deltaIdLen + extLengthLen,
         offset + deltaIdLen + extLengthLen + Number(extLength),
@@ -644,6 +658,13 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
           `properties value length exceeds maximum: ${length} > 65535`,
         );
       }
+      // Length 宣言が残りバイトを超える切り詰めは破損であり、
+      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+      if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
+        throw new ProtocolViolationError(
+          `immutable properties value length exceeds remaining data: ${length} > ${data.length - (offset + deltaIdLen + lengthLen)}`,
+        );
+      }
       const innerData = data.subarray(
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
@@ -689,6 +710,13 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
           const [extLength, extLengthLen] = decodeVarint(
             innerData.subarray(innerOffset + innerDeltaIdLen),
           );
+          // Length 宣言が残りバイトを超える切り詰めは破損であり、
+          // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+          if (innerOffset + innerDeltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
+            throw new ProtocolViolationError(
+              `immutable properties value length exceeds remaining data: ${extLength} > ${innerData.length - (innerOffset + innerDeltaIdLen + extLengthLen)}`,
+            );
+          }
           const extData = innerData.slice(
             innerOffset + innerDeltaIdLen + extLengthLen,
             innerOffset + innerDeltaIdLen + extLengthLen + Number(extLength),
@@ -714,6 +742,13 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       if (id % 2n === 1n) {
         // 奇数 ID: length + bytes 形式
         const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        // Length 宣言が残りバイトを超える切り詰めは破損であり、
+        // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+        if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
+          throw new ProtocolViolationError(
+            `unknown property value length exceeds remaining data: ${length} > ${data.length - (offset + deltaIdLen + lengthLen)}`,
+          );
+        }
         // 注意: unknownProperties にはデコード後の ID と生データを保持
         const extData = data.slice(
           offset + deltaIdLen + lengthLen,
@@ -788,6 +823,13 @@ export function decodeProperties(data: Uint8Array): Property[] {
           `properties value length exceeds maximum: ${length} > 65535`,
         );
       }
+      // Length 宣言が残りバイトを超える切り詰めは破損であり、
+      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+      if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
+        throw new ProtocolViolationError(
+          `properties value length exceeds remaining data: ${length} > ${data.length - (offset + deltaIdLen + lengthLen)}`,
+        );
+      }
       const extData = data.slice(
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
@@ -828,6 +870,16 @@ export function decodeProperties(data: Uint8Array): Property[] {
               const [innerLength, innerLengthLen] = decodeVarint(
                 extData.subarray(innerOffset + deltaIdLen),
               );
+              // Length 宣言が残りバイトを超える切り詰めは破損であり、
+              // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+              if (
+                innerOffset + deltaIdLen + innerLengthLen + Number(innerLength) >
+                extData.length
+              ) {
+                throw new ProtocolViolationError(
+                  `immutable properties value length exceeds remaining data: ${innerLength} > ${extData.length - (innerOffset + deltaIdLen + innerLengthLen)}`,
+                );
+              }
               innerOffset += deltaIdLen + innerLengthLen + Number(innerLength);
             }
           } catch (err) {
