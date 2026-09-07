@@ -548,14 +548,34 @@ export async function bidiReadSubscribeResponse(
 
     if (msg.type === MessageType.SUBSCRIBE_OK) {
       const decoded = decodeSubscribeOkPayload(msg.payload);
+      // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+      // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
+      // 具体エラーを呼び出し元へ reject してから閉じる
+      // (PUBLISH 応答経路と同一パターン。順序固定)。
+      // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+      // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+      let scopeError: SessionError | undefined;
       if (
         !validateParameterScope(
           decoded.parameters,
           SUBSCRIBE_OK_ALLOWED_PARAMS,
           "SUBSCRIBE_OK",
-          (error) => session.closeWithError(error),
+          (error) => {
+            scopeError = error;
+          },
         )
       ) {
+        const violation =
+          scopeError ??
+          new SessionError(
+            "parameter not allowed in SUBSCRIBE_OK",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          );
+        session.pendingSubscribe.delete(requestId);
+        session.requestStreams.delete(requestId);
+        session.fillFetchTargets.delete(requestId);
+        pending.reject(violation);
+        session.closeWithError(violation);
         return;
       }
 
@@ -676,11 +696,33 @@ export async function bidiReadFetchResponse(
 
     if (msg.type === MessageType.FETCH_OK) {
       const decoded = decodeFetchOkPayload(msg.payload);
+      // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+      // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
+      // 具体エラーを呼び出し元へ reject してから閉じる
+      // (PUBLISH 応答経路と同一パターン。順序固定)。
+      // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+      // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+      let scopeError: SessionError | undefined;
       if (
-        !validateParameterScope(decoded.parameters, FETCH_OK_ALLOWED_PARAMS, "FETCH_OK", (error) =>
-          session.closeWithError(error),
+        !validateParameterScope(
+          decoded.parameters,
+          FETCH_OK_ALLOWED_PARAMS,
+          "FETCH_OK",
+          (error) => {
+            scopeError = error;
+          },
         )
       ) {
+        const violation =
+          scopeError ??
+          new SessionError(
+            "parameter not allowed in FETCH_OK",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          );
+        session.pendingFetch.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(violation);
+        session.closeWithError(violation);
         return;
       }
 
@@ -782,15 +824,33 @@ export async function bidiReadTrackStatusResponse(
     if (msg.type === MessageType.REQUEST_OK) {
       const decoded = decodeRequestOkPayload(msg.payload);
 
-      // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope)
+      // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+      // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
+      // 具体エラーを呼び出し元へ reject してから閉じる
+      // (PUBLISH 応答経路と同一パターン。順序固定)。
+      // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+      // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+      let scopeError: SessionError | undefined;
       if (
         !validateParameterScope(
           decoded.parameters,
           TRACK_STATUS_OK_ALLOWED_PARAMS,
           "TRACK_STATUS_OK",
-          (error) => session.closeWithError(error),
+          (error) => {
+            scopeError = error;
+          },
         )
       ) {
+        const violation =
+          scopeError ??
+          new SessionError(
+            "parameter not allowed in TRACK_STATUS_OK",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          );
+        session.pendingTrackStatus.delete(requestId);
+        session.requestStreams.delete(requestId);
+        pending.reject(violation);
+        session.closeWithError(violation);
         return;
       }
 

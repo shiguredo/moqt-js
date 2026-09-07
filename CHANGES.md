@@ -904,6 +904,9 @@
 - [FIX] processSubgroupObjects の先頭判定がバッチ全体に誤適用されるのを修正する
   - draft-ietf-moq-transport-20 §8 / §12.1 / §12.2 に基づき、1 回の feed で複数オブジェクトが届いた場合に 2 件目以降の delivery timeout が誤って抽出されるのを修正し、先頭オブジェクトのみ抽出する
   - @voluntas
+- [FIX] SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK のスコープ違反で具体エラーが失われるのを修正する
+  - draft-ietf-moq-transport-20 §10.2.1 に基づき、初期応答のスコープ違反で対応する保留（pendingSubscribe / pendingFetch / pendingTrackStatus）と requestStreams（SUBSCRIBE は fillFetchTargets も）を削除して具体エラーで reject してから閉じる（PUBLISH 応答経路と同一パターン）
+  - @voluntas
 
 ### misc
 
