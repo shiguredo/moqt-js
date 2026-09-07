@@ -353,11 +353,27 @@ export function encodeVideoConfig(description: Uint8Array): Uint8Array {
 
 /**
  * Video Config をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
+ *
+ * draft-ietf-moq-loc-04 §2.3.2.1:
+ * ID が奇数 (0x0D) のため length + bytes 形式。Length 宣言に満たない
+ * Value は不正ワイヤであり、正常値として扱わない。
+ * 仕様の将来版で形式が変わる可能性がある。
+ * 返却値は入力のビューであり、保持する場合は呼び出し側で複製すること。
+ *
+ * @throws ProtocolViolationError Length 宣言に対して Value バイトが不足する場合
+ * @throws IncompleteDataError ID / Length の varint が不完全な場合
  */
 export function decodeVideoConfig(data: Uint8Array): Uint8Array {
   const [_id, idLen] = decodeVarint(data);
   const [length, lengthLen] = decodeVarint(data.subarray(idLen));
-  return data.subarray(idLen + lengthLen, idLen + lengthLen + Number(length));
+  const lengthNum = Number(length);
+  const valueOffset = idLen + lengthLen;
+  if (data.length < valueOffset + lengthNum) {
+    throw new ProtocolViolationError(
+      `insufficient VIDEO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
+    );
+  }
+  return data.subarray(valueOffset, valueOffset + lengthNum);
 }
 
 /**
@@ -380,11 +396,27 @@ export function encodeAudioConfig(description: Uint8Array): Uint8Array {
 
 /**
  * Audio Config をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
+ *
+ * draft-ietf-moq-loc-04 §2.3.3.1:
+ * ID が奇数 (0x0F) のため length + bytes 形式。Length 宣言に満たない
+ * Value は不正ワイヤであり、正常値として扱わない。
+ * 仕様の将来版で形式が変わる可能性がある。
+ * 返却値は入力のビューであり、保持する場合は呼び出し側で複製すること。
+ *
+ * @throws ProtocolViolationError Length 宣言に対して Value バイトが不足する場合
+ * @throws IncompleteDataError ID / Length の varint が不完全な場合
  */
 export function decodeAudioConfig(data: Uint8Array): Uint8Array {
   const [_id, idLen] = decodeVarint(data);
   const [length, lengthLen] = decodeVarint(data.subarray(idLen));
-  return data.subarray(idLen + lengthLen, idLen + lengthLen + Number(length));
+  const lengthNum = Number(length);
+  const valueOffset = idLen + lengthLen;
+  if (data.length < valueOffset + lengthNum) {
+    throw new ProtocolViolationError(
+      `insufficient AUDIO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
+    );
+  }
+  return data.subarray(valueOffset, valueOffset + lengthNum);
 }
 
 /**

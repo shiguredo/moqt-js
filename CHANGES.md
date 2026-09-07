@@ -889,6 +889,10 @@
   - draft-ietf-moq-transport-20 §5.1.2 / §10.2.15 に基づき、従来対象外だった手組みの FILL_PARAMETERS 内側全件を内側全体のデコード検証で確認し、内側 LOCATION_FILTER の End Group 超過を含む不正値は InvalidFilterError で送信前に拒否する
   - 検証は `pendingRequestUpdate` 登録より前で行い、throw 時にエントリを残さない。型付き fill 経路の挙動は変えない
   - @voluntas
+- [FIX] LOC 単体 Config デコーダの切り詰め検出漏れを修正する
+  - draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1 に基づき、Length 宣言に対して Value バイトが不足する切り詰めワイヤを ProtocolViolationError で拒否する（従来は不足分の短い配列を正常値として返していた）
+  - ID / Length の varint 自体が不完全な入力は従来どおり IncompleteDataError になる。空 description の正常系は維持する
+  - @voluntas
 
 ### misc
 

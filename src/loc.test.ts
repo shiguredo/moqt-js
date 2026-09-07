@@ -21,6 +21,8 @@ import {
   encodeAudioLevel,
   encodeVideoConfig,
   encodeAudioConfig,
+  decodeVideoConfig,
+  decodeAudioConfig,
   decodeVideoProperties,
   decodeAudioProperties,
   resolveVideoProperties,
@@ -36,6 +38,7 @@ import {
   type Property,
 } from "./properties";
 import { isGreaseValue } from "./grease";
+import { IncompleteDataError, ProtocolViolationError } from "./error";
 import { buildPublishTrackProperties } from "./session/params";
 
 // キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, SID=0)
@@ -217,6 +220,101 @@ test("encodeAudioProperties: config 単体のワイヤは encodeAudioConfig と�
   const config = new Uint8Array([0xaa]);
   const viaProps = encodeAudioProperties({ config });
   assert.deepEqual(Array.from(viaProps), Array.from(encodeAudioConfig(config)));
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.1:
+// Length 宣言に満たない Value の切り詰めワイヤは ProtocolViolationError にする。
+// 短い配列を正常値として返してはならない。
+test("decodeVideoConfig: 切り詰めワイヤで ProtocolViolationError を送出する", () => {
+  // ID (0x0D) の後に Length 5 を宣言しながら Value を 2 バイトしか載せない
+  const truncated = new Uint8Array([0x0d, 0x05, 0xaa, 0xbb]);
+  // 不足内容が need / got で具体的に報告される
+  try {
+    decodeVideoConfig(truncated);
+    assert.fail("切り詰めワイヤで例外が発生すること");
+  } catch (error) {
+    assert.instanceOf(error, ProtocolViolationError);
+    assert.isTrue((error as Error).message.includes("need 5, got 2"));
+  }
+  // 最小不足 (need 2 に対して got 1) も送出する
+  assert.throws(
+    () => decodeVideoConfig(new Uint8Array([0x0d, 0x02, 0xaa])),
+    ProtocolViolationError,
+  );
+  // 多バイト Length (128 宣言で Value 1 バイト) の切り詰めも送出する
+  try {
+    decodeVideoConfig(new Uint8Array([0x0d, 0x80, 0x80, 0xaa]));
+    assert.fail("多バイト Length の切り詰めワイヤで例外が発生すること");
+  } catch (error) {
+    assert.instanceOf(error, ProtocolViolationError);
+    assert.isTrue((error as Error).message.includes("need 128, got 1"));
+  }
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.1:
+// ID / Length の varint 自体が不完全な切り詰めは IncompleteDataError になる。
+test("decodeVideoConfig: varint 不完全な切り詰めで IncompleteDataError を送出する", () => {
+  // 空入力・ID のみ・Length の varint 途中切断はいずれも不完全入力である
+  assert.throws(() => decodeVideoConfig(new Uint8Array([])), IncompleteDataError);
+  assert.throws(() => decodeVideoConfig(new Uint8Array([0x0d])), IncompleteDataError);
+  assert.throws(() => decodeVideoConfig(new Uint8Array([0x0d, 0x80])), IncompleteDataError);
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.1:
+// 正常なワイヤは従来どおりデコードでき、空 description も空配列で roundtrip する。
+test("decodeVideoConfig: 正常ワイヤと空 description をデコードできる", () => {
+  // 正常なワイヤは encode した内容をそのまま返す
+  const config = new Uint8Array([0x01, 0x02, 0x03]);
+  assert.deepEqual(Array.from(decodeVideoConfig(encodeVideoConfig(config))), Array.from(config));
+  // Length 0 で Value 0 バイトは正常として空配列を返す
+  assert.deepEqual(Array.from(decodeVideoConfig(encodeVideoConfig(new Uint8Array([])))), []);
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.1:
+// Length 宣言に満たない Value の切り詰めワイヤは ProtocolViolationError にする。
+test("decodeAudioConfig: 切り詰めワイヤで ProtocolViolationError を送出する", () => {
+  // ID (0x0F) の後に Length 5 を宣言しながら Value を 2 バイトしか載せない
+  const truncated = new Uint8Array([0x0f, 0x05, 0xaa, 0xbb]);
+  // 不足内容が need / got で具体的に報告される
+  try {
+    decodeAudioConfig(truncated);
+    assert.fail("切り詰めワイヤで例外が発生すること");
+  } catch (error) {
+    assert.instanceOf(error, ProtocolViolationError);
+    assert.isTrue((error as Error).message.includes("need 5, got 2"));
+  }
+  // 最小不足 (need 2 に対して got 1) も送出する
+  assert.throws(
+    () => decodeAudioConfig(new Uint8Array([0x0f, 0x02, 0xaa])),
+    ProtocolViolationError,
+  );
+  // 多バイト Length (128 宣言で Value 1 バイト) の切り詰めも送出する
+  try {
+    decodeAudioConfig(new Uint8Array([0x0f, 0x80, 0x80, 0xaa]));
+    assert.fail("多バイト Length の切り詰めワイヤで例外が発生すること");
+  } catch (error) {
+    assert.instanceOf(error, ProtocolViolationError);
+    assert.isTrue((error as Error).message.includes("need 128, got 1"));
+  }
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.1:
+// ID / Length の varint 自体が不完全な切り詰めは IncompleteDataError になる。
+test("decodeAudioConfig: varint 不完全な切り詰めで IncompleteDataError を送出する", () => {
+  // 空入力・ID のみ・Length の varint 途中切断はいずれも不完全入力である
+  assert.throws(() => decodeAudioConfig(new Uint8Array([])), IncompleteDataError);
+  assert.throws(() => decodeAudioConfig(new Uint8Array([0x0f])), IncompleteDataError);
+  assert.throws(() => decodeAudioConfig(new Uint8Array([0x0f, 0x80])), IncompleteDataError);
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.1:
+// 正常なワイヤは従来どおりデコードでき、空 description も空配列で roundtrip する。
+test("decodeAudioConfig: 正常ワイヤと空 description をデコードできる", () => {
+  // 正常なワイヤは encode した内容をそのまま返す
+  const config = new Uint8Array([0x04, 0x05]);
+  assert.deepEqual(Array.from(decodeAudioConfig(encodeAudioConfig(config))), Array.from(config));
+  // Length 0 で Value 0 バイトは正常として空配列を返す
+  assert.deepEqual(Array.from(decodeAudioConfig(encodeAudioConfig(new Uint8Array([])))), []);
 });
 
 test("encodeVideoProperties: timescale 単体のワイヤは encodeTimescale とビット一致する", () => {
