@@ -17,9 +17,11 @@ import {
   incomingHandleFirstBidiMessage,
   incomingSendRequestErrorAndClose,
   incomingValidateRequestId,
+  incomingWaitForFetcher,
 } from "./incoming";
 import type { SessionInternal } from "./types";
 import { SubscriberImpl } from "../subscriber";
+import { FetcherImpl } from "../fetcher";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
 
 // ============================================================================
@@ -809,4 +811,119 @@ test("incomingHandleDatagram: debug コールバックの throw でも配送を�
 
   assert.equal(secondDelivered, 1);
   assert.isUndefined(ctx.getClosedWithError());
+});
+
+// ============================================================================
+// incomingWaitForFetcher のタイマー解放
+// フォールバックタイマーは確定時に解放し、登録も解除する
+// ============================================================================
+
+/**
+ * 登録済みの待機コールバックをすべて発火させる。
+ *
+ * 本番の broadcast (FETCH_OK 到着・セッション close) と同形に、
+ * 登録解除しながら発火しても欠落しないよう複製して反復する。
+ */
+function fireAllFetcherCallbacks(session: SessionInternal): void {
+  for (const callbacks of session.fetcherReadyCallbacks.values()) {
+    for (const callback of callbacks.slice()) {
+      callback();
+    }
+  }
+}
+
+/**
+ * fetcher 待機用の最小 session を構築する。
+ *
+ * 実時間の短い timeout (30ms) を使い、モック / スタブなしで検証する。
+ */
+function createFetcherWaitTestContext(): {
+  session: SessionInternal;
+  requestId: bigint;
+} {
+  const requestId = 10n;
+  const session = {
+    fetchers: new Map(),
+    pendingFetch: new Map([[requestId, {}]]),
+    fetcherReadyCallbacks: new Map(),
+  } as unknown as SessionInternal;
+  return { session, requestId };
+}
+
+test("incomingWaitForFetcher: タイムアウト発火で登録を解除して null を返す", async () => {
+  // FETCH_OK が来ない場合は短い timeout で null になる。
+  // タイマー解放自体は直接観測できないため、登録解除を代理指標とする
+  const { session, requestId } = createFetcherWaitTestContext();
+
+  const result = await incomingWaitForFetcher(session, requestId, 30);
+
+  assert.isNull(result);
+  // タイムアウト先行発火時は登録を解除し、後続 FETCH_OK まで stale にしない
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("incomingWaitForFetcher: 早期解決で登録を解除する", async () => {
+  // FETCH_OK 到着相当でコールバック発火させると、タイマー確定前に解決する。
+  // タイマー解放自体は直接観測できないため、登録解除と解決値を代理指標とする
+  const { session, requestId } = createFetcherWaitTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
+
+  const waiting = incomingWaitForFetcher(session, requestId, 100);
+  session.fetchers.set(requestId, fetcher);
+  fireAllFetcherCallbacks(session);
+  const result = await waiting;
+
+  assert.strictEqual(result, fetcher);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+  // 発火予定時刻を過ぎても結果が変わらない (二重解決しない)
+  await new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), 120);
+  });
+  assert.strictEqual(await waiting, fetcher);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("incomingWaitForFetcher: 複数待機者は全員解決し登録が残らない", async () => {
+  // 1 件目の解決による登録解除で 2 件目が欠落しない。
+  // 2 件目の timer を長くし、コールバック発火 (即時) と timer 代替 (遅延) を
+  // 経過時間で区別する
+  const { session, requestId } = createFetcherWaitTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
+
+  const first = incomingWaitForFetcher(session, requestId, 100);
+  const second = incomingWaitForFetcher(session, requestId, 1000);
+  session.fetchers.set(requestId, fetcher);
+  const started = Date.now();
+  fireAllFetcherCallbacks(session);
+
+  assert.strictEqual(await first, fetcher);
+  assert.strictEqual(await second, fetcher);
+  // コールバック発火なら即時解決する (timer 代替なら 1000ms 掛かる)
+  assert.isBelow(Date.now() - started, 500);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("incomingWaitForFetcher: セッション close 相当の発火で全員解決し登録が残らない", async () => {
+  // close 処理と同形に全コールバックを発火させる。自前の clear() は行わず、
+  // 各待機の自己登録解除だけで空になることを断定する
+  const { session, requestId } = createFetcherWaitTestContext();
+
+  const first = incomingWaitForFetcher(session, requestId, 100);
+  const second = incomingWaitForFetcher(session, requestId, 100);
+  fireAllFetcherCallbacks(session);
+
+  assert.isNull(await first);
+  assert.isNull(await second);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("incomingWaitForFetcher: 不明なリクエストは即座に null を返す", async () => {
+  // pendingFetch にない場合は待機もタイマーも作らない
+  const { session } = createFetcherWaitTestContext();
+  session.pendingFetch.clear();
+
+  const result = await incomingWaitForFetcher(session, 99n, 30);
+
+  assert.isNull(result);
+  assert.isFalse(session.fetcherReadyCallbacks.has(99n));
 });

@@ -340,10 +340,19 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
  * "A publisher MAY send Objects in response to a FETCH before the
  *  FETCH_OK message is sent."
  * FETCH_OK より先にデータストリームが到着した場合に使用。
+ *
+ * フォールバックタイマーは確定時 (早期解決・タイムアウト発火・
+ * セッション close 時のコールバック発火) に必ず解放する。
+ * タイムアウト先行発火時は登録も解除し、後続 FETCH_OK まで
+ * stale な待機を残さない。
+ *
+ * @param timeoutMs - フォールバックまでのミリ秒 (テスト用の短縮のためにある。
+ * 本番呼び出しは既定値のままにする)
  */
 export function incomingWaitForFetcher(
   session: SessionInternal,
   requestId: bigint,
+  timeoutMs = 5000,
 ): Promise<FetcherImpl | null> {
   return new Promise<FetcherImpl | null>((resolve) => {
     // 既に登録されている場合は即座に返す
@@ -360,10 +369,28 @@ export function incomingWaitForFetcher(
     }
 
     let resolved = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const doResolve = () => {
       if (resolved) return;
       resolved = true;
+      // 確定したタイマーは残さない
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      // 自分の登録を解除する (タイムアウト先行発火時の stale 防止。
+      // FETCH_OK 到着時は呼び出し側がキーごと削除するため無害)
+      const registered = session.fetcherReadyCallbacks.get(requestId);
+      if (registered !== undefined) {
+        const index = registered.indexOf(doResolve);
+        if (index !== -1) {
+          registered.splice(index, 1);
+        }
+        if (registered.length === 0) {
+          session.fetcherReadyCallbacks.delete(requestId);
+        }
+      }
       resolve(session.fetchers.get(requestId) ?? null);
     };
 
@@ -372,8 +399,8 @@ export function incomingWaitForFetcher(
     callbacks.push(doResolve);
     session.fetcherReadyCallbacks.set(requestId, callbacks);
 
-    // タイムアウト: 5 秒以内に FETCH_OK が来なければ null
-    setTimeout(doResolve, 5000);
+    // タイムアウト: 指定時間以内に FETCH_OK が来なければ null
+    timer = setTimeout(doResolve, timeoutMs);
   });
 }
 
