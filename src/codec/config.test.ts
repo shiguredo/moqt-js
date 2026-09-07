@@ -11,6 +11,7 @@ import {
   getVideoDecoderConfig,
   getAudioEncoderConfig,
   getAudioDecoderConfig,
+  resolveAudioChannelCount,
   DEFAULT_AUDIO_SAMPLE_RATE,
   DEFAULT_AUDIO_CHANNELS,
 } from "./config";
@@ -170,4 +171,72 @@ test("getAudioDecoderConfig: sampleRate / channels を指定すると引数ど�
 test("getAudioDecoderConfig: 未知の codec は opus にフォールバックする", () => {
   const config = getAudioDecoderConfig("unknown" as AudioCodecType);
   assert.equal(config.codec, "opus");
+});
+
+// ============================================================================
+// resolveAudioChannelCount
+// カタログ channelConfig (名前付き値・整数文字列) をチャンネル数に解決する
+// ============================================================================
+
+test("resolveAudioChannelCount: mono は 1 になる", () => {
+  // draft-ietf-moq-loc-04 §4.1 の名前付き例である
+  assert.equal(resolveAudioChannelCount("mono"), 1);
+});
+
+test("resolveAudioChannelCount: stereo は 2 になる", () => {
+  // 慣用値として定める
+  assert.equal(resolveAudioChannelCount("stereo"), 2);
+});
+
+test("resolveAudioChannelCount: 前後空白・大文字小文字を問わない", () => {
+  // 照合は前後空白除去・小文字化して行う
+  assert.equal(resolveAudioChannelCount("  Mono  "), 1);
+  assert.equal(resolveAudioChannelCount("STEREO"), 2);
+});
+
+test("resolveAudioChannelCount: 整数文字列はその値になる", () => {
+  // 自 Publisher が書く数値文字列との互換である
+  assert.equal(resolveAudioChannelCount("1"), 1);
+  assert.equal(resolveAudioChannelCount("2"), 2);
+  assert.equal(resolveAudioChannelCount("6"), 6);
+});
+
+test("resolveAudioChannelCount: 未指定時は既定値になる", () => {
+  // channelConfig 欠落時は NaN ではなく既定チャンネル数である
+  assert.equal(resolveAudioChannelCount(undefined), DEFAULT_AUDIO_CHANNELS);
+});
+
+test("resolveAudioChannelCount: 未知の名前は throw する", () => {
+  // 解決不能な明示値は NaN をデコーダに渡さず throw する
+  assert.throws(() => resolveAudioChannelCount("quad"), /unsupported audio channelConfig/);
+});
+
+test("resolveAudioChannelCount: 非整数・0 以下・空文字列は throw する", () => {
+  // 1 以上の整数のみ受理する
+  assert.throws(() => resolveAudioChannelCount("1.5"), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("0"), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("-1"), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount(""), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("   "), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("2ch"), /unsupported audio channelConfig/);
+});
+
+test("resolveAudioChannelCount: safe integer 外は throw する", () => {
+  // 巨大桁はデコーダ側の不明瞭な拒否に委ねず解決層で throw する
+  assert.equal(resolveAudioChannelCount("9007199254740991"), 9007199254740991);
+  assert.throws(
+    () => resolveAudioChannelCount("9007199254740993"),
+    /unsupported audio channelConfig/,
+  );
+  assert.throws(
+    () => resolveAudioChannelCount("9999999999999999999999"),
+    /unsupported audio channelConfig/,
+  );
+});
+
+test("resolveAudioChannelCount と getAudioDecoderConfig の合成: mono は 1ch 設定になる", () => {
+  // 解決値をデコーダ設定に渡す配線 (setupDecoders と同形) を pin する
+  const config = getAudioDecoderConfig("opus", 48000, resolveAudioChannelCount("mono"));
+
+  assert.equal(config.numberOfChannels, 1);
 });

@@ -81,6 +81,38 @@ export function getVideoDecoderConfig(
 }
 
 /**
+ * カタログの channelConfig をチャンネル数に解決する
+ *
+ * draft-ietf-moq-loc-04 §4.1 の名前付き例 mono (→ 1) に対応し、
+ * stereo (→ 2) は慣用値として定める。整数文字列は 1 以上の整数
+ * (safe integer 範囲内) のみ受理する。
+ * 照合は前後空白除去・小文字化して行う。
+ * 未指定時は既定チャンネル数を返し、NaN をデコーダに渡さない。
+ * 未知の名前・非整数・0 以下・空文字列の明示値は throw する。
+ */
+export function resolveAudioChannelCount(channelConfig: string | undefined): number {
+  if (channelConfig === undefined) {
+    return DEFAULT_AUDIO_CHANNELS;
+  }
+  const normalized = channelConfig.trim().toLowerCase();
+  if (normalized === "mono") {
+    return 1;
+  }
+  if (normalized === "stereo") {
+    return 2;
+  }
+  if (/^\d+$/.test(normalized)) {
+    // 形状検査 (十進整数) を通過した値の範囲検査。safe integer 外は
+    // デコーダ側の不明瞭な拒否に委ねずここで throw する
+    const count = Number.parseInt(normalized, 10);
+    if (count >= 1 && Number.isSafeInteger(count)) {
+      return count;
+    }
+  }
+  throw new Error(`unsupported audio channelConfig: ${channelConfig}`);
+}
+
+/**
  * オーディオエンコーダー設定を取得する
  */
 export function getAudioEncoderConfig(

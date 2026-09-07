@@ -936,6 +936,9 @@
 - [FIX] LOC Timestamp に WebCodecs 時刻を載せ Timescale を無視しているのを修正する
   - draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2 に基づき、送信 TIMESTAMP を Unix epoch マイクロ秒 (TIMESCALE なし) で送り、受信は TIMESCALE 有り時のみマイクロ秒換算してデコーダに渡す。壁時計送信時は Track にも TIMESCALE を置かないこと
   - @voluntas
+- [FIX] channelConfig の名前付き値で NaN になり購読開始が失敗するのを修正する
+  - draft-ietf-moq-loc-04 §4.1 の mono 例に対応し、stereo (慣用値) と整数文字列もチャンネル数に解決する。解決不能な明示値は NaN を渡さず throw する
+  - @voluntas
 
 ### misc
 

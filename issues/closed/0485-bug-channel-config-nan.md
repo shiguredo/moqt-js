@@ -1,7 +1,7 @@
 # channelConfig の名前付き値で NaN になり購読開始が失敗する
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-channel-config-parse
 - Polished: 2026-09-06
 
@@ -26,6 +26,12 @@
 - `"mono"` / `"stereo"` / 整数文字列のカタログで `setupDecoders` が成功すること。
 - 未知値のカタログで `start()` が `throw` すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- カタログ channelConfig の解決関数を追加し、mono / stereo と 1 以上の整数文字列 (safe integer 範囲内) を数値化する。解決不能な明示値は NaN を渡さず throw する
+- 解決前後のテスト 9 件を追加した。旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
