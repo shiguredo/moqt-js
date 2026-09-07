@@ -1,7 +1,7 @@
 # RequestUpdateOptions.parameters の手組み FILL_PARAMETERS 内側 LOCATION_FILTER が End Group 検証を回避できる
 
 - Created: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-07
 - Branch: feature/fix-request-update-raw-fill-location-filter
 - Polished: 2026-09-06
 
@@ -40,4 +40,6 @@
 
 ## 解決方法
 
-未着手。
+- `src/session/bidi.ts` の `bidiSendRequestUpdate` に raw FILL_PARAMETERS ガードを追加し、`options.parameters` 内の 0x23 全件を `decodeFillParameters()` で検証して失敗時は `InvalidFilterError` に変換する。`pendingRequestUpdate.set` より前に配置し、throw 時にエントリを残さない
+- `src/session/bidi.test.ts` に超過・2 件目超過・4 フィールド超過・正常送信のテスト 4 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

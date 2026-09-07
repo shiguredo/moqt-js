@@ -1699,8 +1699,6 @@ export async function bidiSendRequestUpdate(
   // (受信側の find による抽出と同形)。
   // デコード失敗はローカル API 誤用として InvalidFilterError に
   // 変換する (受信側の ProtocolViolationError とは区別する)。
-  // FILL_PARAMETERS 内側は対象外とする。型付き fill 経路は構築時に検証済みで
-  // あり、手組みの raw FILL_PARAMETERS 内側は別対応とする。
   // pendingRequestUpdate.set より前で失敗させる
   // (登録後の throw はエントリ残留を生むため)。
   const rawLocationFilters = (options.parameters ?? []).filter(
@@ -1714,6 +1712,29 @@ export async function bidiSendRequestUpdate(
     } catch (error) {
       throw new InvalidFilterError(
         `invalid raw LOCATION_FILTER in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  // draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
+  // 手組みの raw FILL_PARAMETERS (0x23) 内側も型付き fill 経路と同じ
+  // デコード検証の対象にする。内側 LOCATION_FILTER の End Group 超過は
+  // §5.1.2 の MUST が内側にも適用されるため拒否する。対象は全件とし、
+  // 2 件目以降の検証素通りを残さない。内側全体のデコード検証のため、
+  // End Group 以外の内側不正も送信前に InvalidFilterError として拒否する
+  // 副作用を持つ。§10.2.15 の Table 6 に型が追加された場合は
+  // 内側デコーダ側の更新に追従する。
+  // pendingRequestUpdate.set より前で失敗させる
+  // (登録後の throw はエントリ残留を生むため)。
+  const rawFillParameters = (options.parameters ?? []).filter(
+    (param) => param.type === MessageParameterType.FILL_PARAMETERS,
+  );
+  for (const [index, rawFillParameter] of rawFillParameters.entries()) {
+    try {
+      decodeFillParameters(rawFillParameter);
+    } catch (error) {
+      throw new InvalidFilterError(
+        `invalid raw FILL_PARAMETERS[${index}] in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
