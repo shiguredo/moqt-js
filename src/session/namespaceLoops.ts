@@ -146,6 +146,23 @@ async function namespaceHandleGoawayMessage(
 }
 
 /**
+ * 確立前の検証失敗を呼び出し元へ返す共通ヘルパー。
+ *
+ * PUBLISH 応答経路と同一パターン (保留の reject 後に closeWithError する
+ * 順序) で、reject する SessionError と同一オブジェクトを
+ * closeWithError に渡す。先に close すると close 側の汎用 reject で
+ * 具体エラーが上書きされるのを防ぐ。
+ */
+function namespaceRejectAndCloseWithError(
+  session: SessionInternal,
+  reject: (err: Error) => void,
+  error: SessionError,
+): void {
+  reject(error);
+  session.closeWithError(error);
+}
+
+/**
  * namespace / tracks ストリームの先頭メッセージガード。
  *
  * draft-ietf-moq-transport-20:
@@ -157,33 +174,30 @@ async function namespaceHandleGoawayMessage(
  *
  * 前者の MUST に対し後者の GOAWAY マイグレーションを優先させ、確立前 (resolved=false) は
  * REQUEST_OK / REQUEST_ERROR / GOAWAY のいずれかのみを許可する。想定外メッセージは
- * PROTOCOL_VIOLATION でセッションを閉じ、false を返す。呼び出し側は false を受けたら return する。
+ * PROTOCOL_VIOLATION の SessionError を返す。呼び出し側は返されたエラーで
+ * reject してからセッションを閉じ、return する。
  * PUBLISH_NAMESPACE (§10.16) には先頭メッセージ MUST が draft に無いため対象外
  * (publication ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
  *
- * @returns 読み取りを継続してよい場合は true、セッションが閉じられ中断する場合は false
+ * @returns 読み取りを継続してよい場合は null、セッションを閉じて中断する場合はそのエラー
  */
 function namespaceValidateFirstMessage(
-  session: SessionInternal,
   resolved: boolean,
   messageType: number,
   streamKind: "namespace" | "tracks",
-): boolean {
+): SessionError | null {
   if (
     !resolved &&
     messageType !== MessageType.REQUEST_OK &&
     messageType !== MessageType.REQUEST_ERROR &&
     messageType !== MessageType.GOAWAY
   ) {
-    session.closeWithError(
-      new SessionError(
-        `expected REQUEST_OK, REQUEST_ERROR, or GOAWAY as first message on ${streamKind} stream, got 0x${messageType.toString(16)}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      ),
+    return new SessionError(
+      `expected REQUEST_OK, REQUEST_ERROR, or GOAWAY as first message on ${streamKind} stream, got 0x${messageType.toString(16)}`,
+      SessionErrorCode.PROTOCOL_VIOLATION,
     );
-    return false;
   }
-  return true;
+  return null;
 }
 
 /**
@@ -447,7 +461,9 @@ export async function namespaceStartNamespaceStreamLoop(
           timestamp: Date.now(),
         });
 
-        if (!namespaceValidateFirstMessage(session, resolved, messageType, "namespace")) {
+        const firstMessageError = namespaceValidateFirstMessage(resolved, messageType, "namespace");
+        if (firstMessageError !== null) {
+          namespaceRejectAndCloseWithError(session, reject, firstMessageError);
           return;
         }
 
@@ -471,23 +487,58 @@ export async function namespaceStartNamespaceStreamLoop(
               }
               break;
             }
+            // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+            // 初期 SUBSCRIBE_NAMESPACE_OK に出現できるパラメータ以外は
+            // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+            // 呼び出し元の Promise を reject してから閉じる
+            // (PUBLISH 応答経路と同一パターン)。
+            // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+            // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+            let scopeError: SessionError | undefined;
             if (
               !validateParameterScope(
                 requestOk.parameters,
                 NAMESPACE_OK_ALLOWED_PARAMS,
                 "SUBSCRIBE_NAMESPACE_OK",
-                (error) => session.closeWithError(error),
+                (error) => {
+                  scopeError = error;
+                },
               )
             ) {
+              namespaceRejectAndCloseWithError(
+                session,
+                reject,
+                scopeError ??
+                  new SessionError(
+                    "parameter not allowed in SUBSCRIBE_NAMESPACE_OK",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+              );
               return;
             }
+            // draft-ietf-moq-transport-20 §10.5 (REQUEST_OK):
+            // Track Properties は SUBSCRIBE_NAMESPACE_OK では空が必須であり、
+            // 非空は PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+            // 呼び出し元の Promise を reject してから閉じる。
+            let trackPropertiesError: SessionError | undefined;
             if (
               !bidi.validateRequestOkNoTrackProperties(
                 requestOk.trackProperties,
                 "SUBSCRIBE_NAMESPACE_OK",
-                (error) => session.closeWithError(error),
+                (error) => {
+                  trackPropertiesError = error;
+                },
               )
             ) {
+              namespaceRejectAndCloseWithError(
+                session,
+                reject,
+                trackPropertiesError ??
+                  new SessionError(
+                    "track properties must be empty in SUBSCRIBE_NAMESPACE_OK",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+              );
               return;
             }
             resolved = true;
@@ -686,7 +737,9 @@ export async function namespaceStartTracksStreamLoop(
           timestamp: Date.now(),
         });
 
-        if (!namespaceValidateFirstMessage(session, resolved, messageType, "tracks")) {
+        const firstMessageError = namespaceValidateFirstMessage(resolved, messageType, "tracks");
+        if (firstMessageError !== null) {
+          namespaceRejectAndCloseWithError(session, reject, firstMessageError);
           return;
         }
 
@@ -709,14 +762,33 @@ export async function namespaceStartTracksStreamLoop(
               }
               break;
             }
+            // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+            // 初期 SUBSCRIBE_TRACKS_OK に出現できるパラメータ以外は
+            // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+            // 呼び出し元の Promise を reject してから閉じる
+            // (PUBLISH 応答経路と同一パターン)。
+            // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+            // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+            let scopeError: SessionError | undefined;
             if (
               !validateParameterScope(
                 requestOk.parameters,
                 NAMESPACE_OK_ALLOWED_PARAMS,
                 "SUBSCRIBE_TRACKS_OK",
-                (error) => session.closeWithError(error),
+                (error) => {
+                  scopeError = error;
+                },
               )
             ) {
+              namespaceRejectAndCloseWithError(
+                session,
+                reject,
+                scopeError ??
+                  new SessionError(
+                    "parameter not allowed in SUBSCRIBE_TRACKS_OK",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+              );
               return;
             }
             resolved = true;
@@ -891,31 +963,68 @@ export async function namespaceStartPublicationStreamLoop(
         switch (messageType) {
           case MessageType.REQUEST_OK: {
             const requestOk = decodeRequestOkPayload(messagePayload);
-            if (
-              !validateParameterScope(
-                requestOk.parameters,
-                NAMESPACE_OK_ALLOWED_PARAMS,
-                "PUBLISH_NAMESPACE_OK",
-                (error) => session.closeWithError(error),
-              )
-            ) {
-              return;
-            }
-            if (
-              !bidi.validateRequestOkNoTrackProperties(
-                requestOk.trackProperties,
-                "PUBLISH_NAMESPACE_OK",
-                (error) => session.closeWithError(error),
-              )
-            ) {
-              return;
-            }
+            // 確立後の 2 通目 REQUEST_OK は重複として閉じる
+            // (namespace / tracks ループと同形で scope 検証より先に判定する)。
             if (resolved) {
               session.closeWithError(
                 new SessionError(
                   "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
                   SessionErrorCode.PROTOCOL_VIOLATION,
                 ),
+              );
+              return;
+            }
+            // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+            // 初期 PUBLISH_NAMESPACE_OK に出現できるパラメータ以外は
+            // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+            // 呼び出し元の Promise を reject してから閉じる
+            // (PUBLISH 応答経路と同一パターン)。
+            // validateParameterScope は違反時に必ずコールバックを呼ぶため、
+            // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
+            let scopeError: SessionError | undefined;
+            if (
+              !validateParameterScope(
+                requestOk.parameters,
+                NAMESPACE_OK_ALLOWED_PARAMS,
+                "PUBLISH_NAMESPACE_OK",
+                (error) => {
+                  scopeError = error;
+                },
+              )
+            ) {
+              namespaceRejectAndCloseWithError(
+                session,
+                reject,
+                scopeError ??
+                  new SessionError(
+                    "parameter not allowed in PUBLISH_NAMESPACE_OK",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+              );
+              return;
+            }
+            // draft-ietf-moq-transport-20 §10.5 (REQUEST_OK):
+            // Track Properties は PUBLISH_NAMESPACE_OK では空が必須であり、
+            // 非空は PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+            // 呼び出し元の Promise を reject してから閉じる。
+            let trackPropertiesError: SessionError | undefined;
+            if (
+              !bidi.validateRequestOkNoTrackProperties(
+                requestOk.trackProperties,
+                "PUBLISH_NAMESPACE_OK",
+                (error) => {
+                  trackPropertiesError = error;
+                },
+              )
+            ) {
+              namespaceRejectAndCloseWithError(
+                session,
+                reject,
+                trackPropertiesError ??
+                  new SessionError(
+                    "track properties must be empty in PUBLISH_NAMESPACE_OK",
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
               );
               return;
             }
@@ -974,14 +1083,21 @@ export async function namespaceStartPublicationStreamLoop(
             break;
           }
 
-          default:
-            session.closeWithError(
-              new SessionError(
-                `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
+          default: {
+            // 想定外メッセージは PROTOCOL_VIOLATION でセッションを閉じる。
+            // 確立前の検証失敗は呼び出し元の Promise を reject してから閉じる
+            // (確立後は Promise 解決済みのため閉じるのみにする)。
+            const error = new SessionError(
+              `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
             );
+            if (!resolved) {
+              namespaceRejectAndCloseWithError(session, reject, error);
+            } else {
+              session.closeWithError(error);
+            }
             return;
+          }
         }
       }
     }
