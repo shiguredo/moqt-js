@@ -26,6 +26,7 @@ import { isPeerStreamError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
 import type { SessionState } from "../session";
 import type { SessionInternal } from "./types";
+import type { BidiSessionInternal } from "./bidi";
 
 /**
  * datagram 送信用 writer を取得する
@@ -230,7 +231,7 @@ export async function publishSendObjectInternal(
  * Publisher のストリームを閉じる（Promise チェーン排他制御付き）
  */
 export function publishClosePublisherStream(
-  session: SessionInternal,
+  session: BidiSessionInternal,
   trackAlias: bigint,
 ): Promise<void> {
   const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
@@ -245,7 +246,7 @@ export function publishClosePublisherStream(
  * Publisher のストリームを閉じる内部実装
  */
 async function publishClosePublisherStreamInternal(
-  session: SessionInternal,
+  session: BidiSessionInternal,
   trackAlias: bigint,
 ): Promise<void> {
   const streamState = session.publisherStreams.get(trackAlias);
@@ -339,13 +340,48 @@ export function publishSendDatagram(
 /**
  * PUBLISH_DONE を送信する
  * draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE)
+ *
+ * status は必須引数とする (後方互換の既定値は付けない)。
+ * 正常終了は TRACK_ENDED、REQUEST_UPDATE 失敗時は UPDATE_FAILED を渡す。
  */
 export async function publishSendPublishDone(
-  session: SessionInternal,
+  session: BidiSessionInternal,
   publisher: PublisherImpl,
+  status: PublishDoneStatusCode,
 ): Promise<void> {
-  const requestId = publisher.getRequestId();
+  await publishSendPublishDoneCore(
+    session,
+    publisher.getRequestId(),
+    publisher.getDataStreamCount(),
+    status,
+  );
+}
 
+/**
+ * Publisher がない購読に PUBLISH_DONE を送信する
+ *
+ * draft-ietf-moq-transport-20 §10.12:
+ * 開設ストリーム数の正確数を確定できないため、Stream Count は
+ * 呼び出し側が決める (不明な場合は 2^64 - 1 の MUST 後段に従う)。
+ * Error Reason は空のまま変えない。
+ *
+ * @param streamCount - 開設ストリーム数。不明な場合は MAX_VARINT (2^64 - 1) を渡す
+ */
+export async function publishSendPublishDoneWithoutPublisher(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  streamCount: bigint,
+  status: PublishDoneStatusCode,
+): Promise<void> {
+  await publishSendPublishDoneCore(session, requestId, streamCount, status);
+}
+
+async function publishSendPublishDoneCore(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  streamCount: bigint,
+  status: PublishDoneStatusCode,
+): Promise<void> {
   // セッション終了後は送信を試行しない。
   // アプリの session.close() でもピア起点の終了でも publishers は markClosed
   // され done() が no-op になるが、ストリーム単位の終了とセッション終了の
@@ -356,9 +392,8 @@ export async function publishSendPublishDone(
     return;
   }
 
-  const streamCount = publisher.getDataStreamCount();
   const parts: Uint8Array[] = [];
-  parts.push(encodeVarint(PublishDoneStatusCode.TRACK_ENDED));
+  parts.push(encodeVarint(status));
   parts.push(encodeVarint(streamCount));
   parts.push(encodeVarint(0));
 
@@ -371,14 +406,22 @@ export async function publishSendPublishDone(
   }
 
   const streamInfo = session.requestStreams.get(requestId);
-  if (streamInfo) {
-    const message = session.controlWriter!.encode(MessageType.PUBLISH_DONE, payload);
+  // controlWriter 不在では何も送信できない (終了処理はベストエフォートのため
+  // 黙殺し、後段のマップ掃除は行う)。
+  if (streamInfo && session.controlWriter) {
+    const message = session.controlWriter.encode(MessageType.PUBLISH_DONE, payload);
     session.statsControlMessagesSent++;
-    session.emitDebug("send", MessageType.PUBLISH_DONE, payload, {
-      requestId: requestId.toString(),
-      statusCode: PublishDoneStatusCode.TRACK_ENDED,
-      streamCount: streamCount.toString(),
-    });
+    // アプリの debug コールバック例外で終了処理を壊さないよう隔離する
+    // (bidiSendRequestMessage 内の emitDebug は try 内にあるため同様に安全)。
+    try {
+      session.emitDebug("send", MessageType.PUBLISH_DONE, payload, {
+        requestId: requestId.toString(),
+        statusCode: status,
+        streamCount: streamCount.toString(),
+      });
+    } catch {
+      // アプリのコールバック例外は無視する
+    }
     // write 失敗は従来どおり黙殺し、失敗エラーは close 失敗の非昇格判定に
     // 併用するため保持する (詳細は close 失敗のコメント参照)。
     let writeError: unknown;

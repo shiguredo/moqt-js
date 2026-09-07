@@ -23,6 +23,7 @@ import { FetcherImpl, type Fetcher } from "../fetcher";
 import {
   MessageType,
   MessageParameterType,
+  PublishDoneStatusCode,
   createTrackNamespace,
   encodeAuthorizationToken,
   encodeParameterTrackNamespace,
@@ -83,7 +84,17 @@ import {
   isPeerStreamError,
   toProtocolViolationSessionError,
 } from "./errors";
-import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
+import { MAX_VARINT } from "../varint";
+import {
+  publishClosePublisherStream,
+  publishSendPublishDone,
+  publishSendPublishDoneWithoutPublisher,
+} from "./publish";
+import type {
+  NamespaceSubscriptionState,
+  PublisherStreamState,
+  TracksSubscriptionState,
+} from "./types";
 
 // ============================================================================
 // 内部インターフェース
@@ -223,6 +234,16 @@ export interface BidiSessionInternal {
 
   readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
+
+  /**
+   * publisher が開いたデータストリーム群と送信キュー・終了済み Subgroup 集合
+   *
+   * REQUEST_UPDATE 失敗時に PUBLISH_DONE 送信前にデータストリームを閉じる
+   * (`publishClosePublisherStream` 用) ため bidi 層でも参照する。
+   */
+  readonly publisherStreams: Map<bigint, PublisherStreamState>;
+  readonly publisherSendQueues: Map<bigint, Promise<void>>;
+  readonly closedSubgroups: Set<string>;
 
   emitDebug(
     direction: "send" | "recv",
@@ -897,6 +918,36 @@ async function bidiSendRequestError(
 }
 
 /**
+ * publish ロールの REQUEST_UPDATE 拒否後に購読を終了する
+ *
+ * draft-ietf-moq-transport-20 §10.9.1:
+ * REQUEST_UPDATE 失敗時に publisher は PUBLISH_DONE (UPDATE_FAILED) で
+ * 購読を終了する MUST。REQUEST_ERROR 応答後に送信するため順序固定
+ * (§10.12 で PUBLISH_DONE が最終メッセージ)。
+ * 送信前に当該 subscription のデータストリームを閉じる
+ * (done() 経路の closePublisherStream と同形。開設なしの場合は不要)。
+ * publisher がない場合は開設数を確定できないため Stream Count に
+ * 2^64 - 1 を入れる (§10.12 MUST 後段)。
+ */
+async function bidiTerminatePublishSubscriptionWithUpdateFailed(
+  session: BidiSessionInternal,
+  requestId: bigint,
+): Promise<void> {
+  const publisher = session.publishers.get(requestId);
+  if (publisher !== undefined) {
+    await publishClosePublisherStream(session, publisher.getTrackAlias());
+    await publishSendPublishDone(session, publisher, PublishDoneStatusCode.UPDATE_FAILED);
+  } else {
+    await publishSendPublishDoneWithoutPublisher(
+      session,
+      requestId,
+      MAX_VARINT,
+      PublishDoneStatusCode.UPDATE_FAILED,
+    );
+  }
+}
+
+/**
  * リクエストストリーム上に REQUEST_OK (空 parameters / 空 trackProperties) を送信する
  */
 async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint): Promise<void> {
@@ -1276,6 +1327,8 @@ export async function bidiReadRequestStreamMessages(
                   RequestErrorCode.GOING_AWAY,
                   REQUEST_GOING_AWAY_REASON,
                 );
+                // draft-ietf-moq-transport-20 §10.9.1: 拒否した更新の購読を終了する。
+                await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
               }
               break;
             }
@@ -1353,6 +1406,8 @@ export async function bidiReadRequestStreamMessages(
                   RequestErrorCode.INVALID_FILTER,
                   error.message,
                 );
+                // draft-ietf-moq-transport-20 §10.9.1: 拒否した更新の購読を終了する。
+                await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
                 break;
               }
               throw error;
@@ -1401,25 +1456,17 @@ export async function bidiReadRequestStreamMessages(
             } else {
               // publisher が存在しない場合は REQUEST_ERROR を送信
               // draft-ietf-moq-transport-20 §10.9: 更新失敗時は REQUEST_ERROR
-              const errorPayload = encodeRequestErrorPayload({
-                type: MessageType.REQUEST_ERROR,
-                errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
-                retryInterval: 0n,
-                reasonPhrase: "publisher not found for request update",
-              });
-              if (session.controlWriter) {
-                const message = session.controlWriter.encode(
-                  MessageType.REQUEST_ERROR,
-                  errorPayload,
-                );
-                const streamInfo = session.requestStreams.get(requestId);
-                if (streamInfo) {
-                  await streamInfo.writer.write(message);
-                }
-              }
-              session.emitDebug("send", MessageType.REQUEST_ERROR, errorPayload, {
-                errorCode: RequestErrorCode.INTERNAL_ERROR,
-              });
+              // 書き込み失敗は黙殺し、後続の PUBLISH_DONE 送信に進む
+              // (GOING_AWAY / INVALID_FILTER 経路と同一の回復力にする)。
+              await bidiSendRequestError(
+                session,
+                requestId,
+                RequestErrorCode.INTERNAL_ERROR,
+                "publisher not found for request update",
+              );
+              // draft-ietf-moq-transport-20 §10.9.1: 拒否した更新の購読を終了する。
+              // publisher がないため開設数は確定できず Stream Count は 2^64 - 1 とする。
+              await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
             }
             break;
           }
