@@ -918,6 +918,9 @@
 - [FIX] datagram 経路のアプリ例外が黙殺されるのを修正する
   - datagram 配送中のアプリ例外を当該購読の error コールバックへ通知し、残りの配送を継続する。subgroup とは異なりセッションは閉じない
   - @voluntas
+- [FIX] namespace 系 3 API の送信失敗時にストリームリソースがリークするのを修正する
+  - subscribeNamespace / subscribeTracks / publishNamespace の送信失敗時に取得済み reader / writer を cancel / abort (RESET 相当、FIN 不使用) で掃除してから throw する。Map 登録は成功時のみのため追加掃除は不要
+  - @voluntas
 
 ### misc
 
