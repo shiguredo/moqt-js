@@ -901,6 +901,9 @@
   - draft-ietf-moq-transport-20 §10.9.1 / §10.12 に基づき、publish ロールの REQUEST_UPDATE 拒否（GOING_AWAY / INVALID_FILTER / publisher 不在）で REQUEST_ERROR 応答後に PUBLISH_DONE (UPDATE_FAILED) を送信して購読を終了する
   - 送信前に publisher のデータストリーム (unidirectional) を閉じ、PUBLISH_DONE を最終メッセージにする。publisher がない場合は Stream Count に 2^64 - 1 を入れる
   - @voluntas
+- [FIX] processSubgroupObjects の先頭判定がバッチ全体に誤適用されるのを修正する
+  - draft-ietf-moq-transport-20 §8 / §12.1 / §12.2 に基づき、1 回の feed で複数オブジェクトが届いた場合に 2 件目以降の delivery timeout が誤って抽出されるのを修正し、先頭オブジェクトのみ抽出する
+  - @voluntas
 
 ### misc
 

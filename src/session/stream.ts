@@ -143,6 +143,14 @@ export function processSubgroupObjects(
   let resolvedSubgroupId = header.subgroupId;
 
   while (offset < buffer.length) {
+    // この subgroup で最初のオブジェクトかどうかをデコード直前に捕捉する。
+    // 同一 subgroup の 2 件目以降は currentPreviousObjectId が進むため false になる。
+    // 仮引数 previousObjectId (バッチ先頭値) を使うとバッチ全体が先頭扱いになる。
+    // 送信側 src/session/publish.ts の isFirstInSubgroup と対称。
+    // 呼び出し側が previousObjectId を feed 間で引き継ぐことが前提。
+    // draft-ietf-moq-transport-20 §8 / §12.1 / §12.2:
+    // 先頭オブジェクトのみ上書きし、先頭以外は無視する。
+    const isFirstInSubgroup = currentPreviousObjectId < 0n;
     try {
       const [fields, fieldsConsumed] = decodeObjectFields(buffer, header.type, offset);
 
@@ -156,7 +164,7 @@ export function processSubgroupObjects(
       offset += fieldsConsumed;
 
       let objectId: bigint;
-      if (currentPreviousObjectId < 0n) {
+      if (isFirstInSubgroup) {
         objectId = fields.objectIdDelta;
       } else {
         objectId = currentPreviousObjectId + fields.objectIdDelta + 1n;
@@ -188,10 +196,10 @@ export function processSubgroupObjects(
         payload,
       };
 
-      // draft-ietf-moq-transport-20 Section 8:
+      // draft-ietf-moq-transport-20 Section 8 / §12.1 / §12.2:
       // subgroup 先頭オブジェクトの Object Property から delivery timeout を抽出する。
       // 先頭以外に同 ID が付いていても ignore（PROTOCOL_VIOLATION にしない）。
-      if (previousObjectId < 0n && fields.properties.length > 0) {
+      if (isFirstInSubgroup && fields.properties.length > 0) {
         const timeouts = readDeliveryTimeoutObjectProperties(fields.properties);
         if (timeouts.objectDeliveryTimeout !== undefined) {
           object.objectDeliveryTimeout = timeouts.objectDeliveryTimeout;
