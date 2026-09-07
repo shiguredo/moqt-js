@@ -12,7 +12,7 @@
  */
 
 import { decodeVarint } from "../varint";
-import { decodeObjectDatagram, type MoqtObject } from "../dataStream";
+import { decodeObjectDatagram, type MoqtObject, type ObjectDatagram } from "../dataStream";
 import { ObjectStatus, MessageType, encodeRequestErrorPayload } from "../message";
 import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
@@ -239,8 +239,13 @@ export async function incomingHandleFirstBidiMessage(
  *
  * draft-ietf-moq-transport-20 §11.3.1 (Object Datagram):
  * Track Alias で Subscriber を検索し、filter 再適用して配送する。
+ *
+ * アプリ例外は当該 subscriber の error コールバックへ通知し、
+ * 残りの配送を継続する。セッションもストリームも閉じない
+ * (subgroup 経路は当該ストリーム処理を中断する点と異なる)。
  */
 export function incomingHandleDatagram(session: SessionInternal, data: Uint8Array): void {
+  let datagram: ObjectDatagram;
   try {
     // PADDING datagram (0x132b3e29) を varint type のデコードで判定する
     if (data.length > 0) {
@@ -250,47 +255,80 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       }
     }
 
-    const [datagram] = decodeObjectDatagram(data);
-
-    // Track Alias で Subscriber を検索（draft-20 §5.1: 同一 alias に複数 subscription あり得る）
-    const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
-    if (!subscribers || subscribers.length === 0) {
-      return;
+    [datagram] = decodeObjectDatagram(data);
+  } catch (err) {
+    // デバッグ記録自体の throw (debug コールバックの throw) は伝播させない。
+    try {
+      session.callbacks.debug?.({
+        direction: "recv",
+        type: 0,
+        typeName: "DATAGRAM_DECODE_ERROR",
+        payload: data,
+        decoded: {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        timestamp: Date.now(),
+      });
+    } catch {
+      // デバッグ記録の失敗は無視する
     }
+    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
+    const sessionError = toProtocolViolationSessionError(err);
+    if (sessionError !== null) {
+      session.closeWithError(sessionError);
+    }
+    return;
+  }
 
-    const object: MoqtObject = {
-      groupId: datagram.groupId,
-      subgroupId: undefined,
-      objectId: datagram.objectId,
-      publisherPriority: datagram.publisherPriority,
-      status: datagram.status ?? ObjectStatus.NORMAL,
-      properties: datagram.properties,
-      payload: datagram.payload ?? new Uint8Array(0),
-    };
+  // Track Alias で Subscriber を検索（draft-20 §5.1: 同一 alias に複数 subscription あり得る）
+  const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
+  if (!subscribers || subscribers.length === 0) {
+    return;
+  }
 
-    // 各 subscription に filter 再適用して配送
-    for (const subscriber of subscribers) {
+  const object: MoqtObject = {
+    groupId: datagram.groupId,
+    subgroupId: undefined,
+    objectId: datagram.objectId,
+    publisherPriority: datagram.publisherPriority,
+    status: datagram.status ?? ObjectStatus.NORMAL,
+    properties: datagram.properties,
+    payload: datagram.payload ?? new Uint8Array(0),
+  };
+
+  // 各 subscription に配送する (filter 再適用は各 handleDatagram/handleObject 内)。
+  // アプリ例外 (同期 throw のみ) は当該 subscriber の error コールバックへ通知し、
+  // 残りの配送を継続する。subgroup とは異なりセッションは閉じない。
+  // 反復前に複製する。error コールバック内の unsubscribe() が
+  // 配列を破壊的に変更しても、後続購読への配送が欠落しないようにする。
+  for (const subscriber of subscribers.slice()) {
+    try {
       if (subscriber.hasDatagramCallback()) {
         subscriber.handleDatagram(object);
       } else {
         subscriber.handleObject(object);
       }
-    }
-  } catch (err) {
-    session.callbacks.debug?.({
-      direction: "recv",
-      type: 0,
-      typeName: "DATAGRAM_DECODE_ERROR",
-      payload: data,
-      decoded: {
-        error: err instanceof Error ? err.message : String(err),
-      },
-      timestamp: Date.now(),
-    });
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(err);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
+    } catch (err) {
+      // error コールバック自体の throw はデバッグ記録に残し、残りの配送を継続する。
+      // 記録自体の throw (debug コールバックの throw) は伝播させない。
+      try {
+        subscriber.handleError(err instanceof Error ? err : new Error(String(err)));
+      } catch (callbackError) {
+        try {
+          session.callbacks.debug?.({
+            direction: "recv",
+            type: 0,
+            typeName: "DATAGRAM_CALLBACK_ERROR",
+            payload: data,
+            decoded: {
+              error: callbackError instanceof Error ? callbackError.message : String(callbackError),
+            },
+            timestamp: Date.now(),
+          });
+        } catch {
+          // デバッグ記録の失敗は無視する
+        }
+      }
     }
   }
 }

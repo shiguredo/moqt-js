@@ -915,6 +915,9 @@
   - draft-ietf-moq-transport-20 §11.2 / §11.3 / §11.4.2 / §11.4.4 に基づき、範囲外・非整数の priority を Uint8Array 化前に throw して丸め送信をなくす
   - 公開送信の 2 経路で副作用の前に fail-fast で返す (sendObject 系は通知 + reject、sendDatagram は通知 + throw)。encode 3 経路はいずれも throw する
   - @voluntas
+- [FIX] datagram 経路のアプリ例外が黙殺されるのを修正する
+  - datagram 配送中のアプリ例外を当該購読の error コールバックへ通知し、残りの配送を継続する。subgroup とは異なりセッションは閉じない
+  - @voluntas
 
 ### misc
 
