@@ -186,6 +186,31 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
 // ============================================================================
 
 /**
+ * 未対応リクエスト受信用のテストコンテキストを構築する。
+ *
+ * 実 incomingValidateRequestId に局所 Set を配線し、PUBLISH 経路と
+ * 同一の検証で ID 消費・記録を行う (モックなし)。
+ */
+function createUnsupportedRequestTestContext(receivedRequestIds = new Set<bigint>()): {
+  session: SessionInternal;
+  receivedRequestIds: Set<bigint>;
+  closed: { error?: SessionError };
+} {
+  const closed: { error?: SessionError } = {};
+  const session = {
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      closed.error = error;
+    },
+    validateIncomingRequestId: (requestId: bigint) =>
+      incomingValidateRequestId(requestId, receivedRequestIds, (error) => {
+        closed.error = error;
+      }),
+  } as unknown as SessionInternal;
+  return { session, receivedRequestIds, closed };
+}
+
+/**
  * draft-ietf-moq-transport-20 §4 (Extensibility):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
@@ -196,7 +221,6 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
   const events: string[] = [];
   const written: Uint8Array[] = [];
   let cancelReason: string | undefined;
-  let closedWithError: SessionError | undefined;
 
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
@@ -214,16 +238,12 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
   });
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
-  const session = {
-    emitDebug: () => {},
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
+  const ctx = createUnsupportedRequestTestContext();
+  const session = ctx.session;
 
   const firstMsg: ControlMessage = {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array(0),
+    payload: new Uint8Array([0x01]),
   };
 
   const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
@@ -231,13 +251,165 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
   assert.isTrue(result);
   // NOT_SUPPORTED 応答 → FIN (close)。セッションは閉じない
   assert.deepEqual(events, ["write", "close"]);
-  assert.isUndefined(closedWithError);
+  assert.isUndefined(ctx.closed.error);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   assert.equal(messages.length, 1);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
   // 受信方向がキャンセルされる (STOP_SENDING 相当)
   assert.equal(cancelReason, "request rejected");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 (Request ID):
+ * 未対応リクエストの先頭メッセージでもパリティを検証し、偶数 Request ID は
+ * INVALID_REQUEST_ID でセッションを閉じることを検証する。
+ * NOT_SUPPORTED 応答は行わない。
+ */
+test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request ID で INVALID_REQUEST_ID で閉じる", async () => {
+  // 先頭 varint に偶数 Request ID を持つ SUBSCRIBE を注入する
+  const events: string[] = [];
+  const written: Uint8Array[] = [];
+
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      events.push("write");
+      written.push(chunk);
+    },
+    close() {
+      events.push("close");
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const ctx = createUnsupportedRequestTestContext();
+  const session = ctx.session;
+
+  const result = await incomingHandleFirstBidiMessage(session, stream, {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x02]),
+  });
+
+  assert.isTrue(result);
+  // INVALID_REQUEST_ID で閉じ、NOT_SUPPORTED 応答は行わない
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.deepEqual(events, []);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 (Request ID):
+ * 未対応経路で消費済みの Request ID を持つ未対応リクエストで重複検出して
+ * INVALID_REQUEST_ID で閉じることを検証する (未対応→未対応)。
+ */
+test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リクエストで重複検出して閉じる", async () => {
+  // 1 件目で Request ID を消費し、2 件目の同一 ID で重複検出する
+  const makeStream = () =>
+    ({
+      readable: new ReadableStream<Uint8Array>({}),
+      writable: new WritableStream<Uint8Array>(),
+    }) as unknown as WebTransportBidirectionalStream;
+
+  const firstCtx = createUnsupportedRequestTestContext();
+  const firstResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x01]),
+  });
+
+  // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が記録される
+  assert.isTrue(firstResult);
+  // プロパティの型絞り込みを残さないよう局所変数で未定義を確認する
+  const errorAfterFirst: unknown = firstCtx.closed.error;
+  assert.isUndefined(errorAfterFirst);
+  assert.isTrue(firstCtx.receivedRequestIds.has(1n));
+
+  // 2 件目は同一セッションの別ストリーム受信で重複検出する
+  const secondResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x01]),
+  });
+
+  // 2 件目は重複で INVALID_REQUEST_ID で閉じる
+  assert.isTrue(secondResult);
+  assert.isDefined(firstCtx.closed.error);
+  assert.equal(firstCtx.closed.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 (Request ID):
+ * PUBLISH 経路相当として同一検証関数で消費した ID を未対応受信に当てると
+ * 重複検出することを検証する (同一関数・同一 Set の単位確認。
+ * 生産の Set 共有は session.test.ts の cross-path テストで検証する)。
+ */
+test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重複検出して閉じる", async () => {
+  // PUBLISH 経路相当として同一検証関数で Request ID を消費する
+  const receivedRequestIds = new Set<bigint>();
+  assert.isTrue(
+    incomingValidateRequestId(1n, receivedRequestIds, () => {
+      assert.fail("1 件目の消費で閉じてはならない");
+    }),
+  );
+  const ctx = createUnsupportedRequestTestContext(receivedRequestIds);
+  const stream = {
+    readable: new ReadableStream<Uint8Array>(),
+    writable: new WritableStream<Uint8Array>(),
+  } as unknown as WebTransportBidirectionalStream;
+
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x01]),
+  });
+
+  assert.isTrue(result);
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.INVALID_REQUEST_ID);
+});
+
+/**
+ * 未対応リクエストのペイロードが空で先頭 varint が取れない場合は、
+ * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
+ */
+test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエストで PROTOCOL_VIOLATION で閉じる", async () => {
+  // 未対応 6 種の先頭は Request ID のため、空は破損である
+  const ctx = createUnsupportedRequestTestContext();
+  const stream = {
+    readable: new ReadableStream<Uint8Array>(),
+    writable: new WritableStream<Uint8Array>(),
+  } as unknown as WebTransportBidirectionalStream;
+
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array(0),
+  });
+
+  assert.isTrue(result);
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 (Request ID):
+ * 未対応リクエストの先頭 varint が多バイト宣言の途中終端で取れない場合は、
+ * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
+ * 空ペイロード版と対称な独立ケースである。
+ */
+test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエストで PROTOCOL_VIOLATION で閉じる", async () => {
+  // 多バイト varint の途中終端もペイロード破損として閉じる
+  const ctx = createUnsupportedRequestTestContext();
+  const stream = {
+    readable: new ReadableStream<Uint8Array>(),
+    writable: new WritableStream<Uint8Array>(),
+  } as unknown as WebTransportBidirectionalStream;
+
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x80]),
+  });
+
+  assert.isTrue(result);
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
 });
 
 /**

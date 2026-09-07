@@ -3898,7 +3898,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-20 §10.1 (Request ID):
     // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
     // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
-    if (!this.validateIncomingPublishRequestId(publishRequestId)) {
+    if (!this.validateIncomingRequestId(publishRequestId)) {
       return;
     }
 
@@ -4278,21 +4278,25 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 受信 PUBLISH の Request ID のパリティ・重複検証を行う
+   * 受信リクエストの Request ID のパリティ・重複検証を行う
    *
    * draft-ietf-moq-transport-20 §10.1 (Request ID):
    * moqt-js はクライアントロールのため、受信 Request ID はサーバー発の奇数が
    * 期待値。違反時は INVALID_REQUEST_ID でセッションを閉じる。
    * 予約 namespace 拒否 / パラメータスコープ検証 / DUPLICATE_TRACK_ALIAS の
-   * 各既存検証より前に配置する (§10.1 の MUST は受信即時閉鎖のため)。
+   * 各既存検証より前に配置する (§10.1 の MUST は受信即時閉鎖のため。
+   * 未対応経路では検証後に NOT_SUPPORTED 応答が続く)。
    *
-   * 適用範囲は受信 PUBLISH のみ。受信リクエスト 6 種 (ペイロード非デコードの
-   * ため検証は発火しない) と受信 REQUEST_UPDATE (スコープ外) では適用されない
-   * (残余リスク)。
+   * 適用範囲は受信 PUBLISH と未対応リクエスト 6 種 (先頭メッセージ)。
+   * 受信 REQUEST_UPDATE は本差分の対象外とする (別途対応予定)。
+   *
+   * 注意: `Session` 公開インターフェースの一部ではないが、`SessionImpl` の
+   * public メンバーとして露出する。実体は free function の
+   * incomingValidateRequestId への純粋委譲である。
    *
    * @returns 検証に合格した場合は true、違反でセッションを閉じた場合は false
    */
-  private validateIncomingPublishRequestId(requestId: bigint): boolean {
+  validateIncomingRequestId(requestId: bigint): boolean {
     return incomingValidateRequestId(requestId, this.receivedRequestIds, (error) =>
       this.closeWithError(error),
     );

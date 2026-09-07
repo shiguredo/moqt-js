@@ -54,6 +54,8 @@ import {
   type BidiSessionInternal,
 } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
+import { incomingHandleFirstBidiMessage } from "./session/incoming";
+import type { SessionInternal } from "./session/types";
 
 /**
  * SessionImpl を構築するための WebTransport モック
@@ -4444,4 +4446,48 @@ test("publishNamespace: 送信前の throw でもストリームリソースを�
       .size,
     0,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 (Request ID):
+ * 実 SessionImpl で validateIncomingRequestId 消費後に未対応リクエストを処理すると、
+ * 同一 receivedRequestIds の共有により重複検出して INVALID_REQUEST_ID で
+ * 閉じることを検証する (validate 委譲と未対応経路の同一 Set 共有の配線ガード。
+ * 受信 PUBLISH ハンドラ自体の呼出しは含まない)。
+ */
+test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエストで重複検出して閉じる", async () => {
+  // 生産委譲 (SessionImpl.validateIncomingRequestId) で Request ID を消費する
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: () => {},
+  } as unknown as WebTransport;
+  const notified: Error[] = [];
+  const session = new SessionImpl(transport, {
+    error: (error) => {
+      notified.push(error);
+    },
+  });
+
+  assert.isTrue(session.validateIncomingRequestId(1n));
+
+  // 同一インスタンスに未対応 SUBSCRIBE (Request ID 1) を処理させる
+  const stream = {
+    readable: new ReadableStream<Uint8Array>({}),
+    writable: new WritableStream<Uint8Array>(),
+  } as unknown as WebTransportBidirectionalStream;
+  const result = await incomingHandleFirstBidiMessage(
+    session as unknown as SessionInternal,
+    stream,
+    {
+      type: MessageType.SUBSCRIBE,
+      payload: new Uint8Array([0x01]),
+    },
+  );
+
+  // 重複検出で INVALID_REQUEST_ID によりセッションが閉じる
+  assert.isTrue(result);
+  assert.equal(session.state, "closed");
+  assert.equal(notified.length, 1);
+  assert.instanceOf(notified[0], SessionError);
+  assert.equal((notified[0] as SessionError).code, SessionErrorCode.INVALID_REQUEST_ID);
 });
