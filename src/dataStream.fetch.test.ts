@@ -210,6 +210,87 @@ test("FetchObjectFields: 最初のオブジェクトで GROUP_ID_PRESENT なし�
   );
 });
 
+/**
+ * draft-ietf-moq-transport-20 §11.4.4.1:
+ * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
+ * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
+ */
+test("FetchObjectFields: 範囲外・非整数の publisherPriority は throw する", () => {
+  // 256 以上・負値・300 (丸めで 44 になる値) はいずれも拒否する
+  for (const priority of [256, -1, 300]) {
+    const fields: FetchObjectFields = {
+      serializationFlags:
+        FetchSerializationFlags.GROUP_ID_PRESENT |
+        FetchSerializationFlags.SUBGROUP_PRESENT |
+        FetchSerializationFlags.OBJECT_ID_PRESENT |
+        FetchSerializationFlags.PRIORITY_PRESENT,
+      groupId: 10n,
+      subgroupId: 1n,
+      objectId: 0n,
+      publisherPriority: priority,
+      payloadLength: 5n,
+    };
+    assert.throws(
+      () => encodeFetchObjectFields(fields),
+      /invalid publisher priority: .* expected integer 0 to 255/,
+    );
+  }
+  // 非整数も拒否する
+  for (const priority of [1.5, Number.NaN]) {
+    const fields: FetchObjectFields = {
+      serializationFlags:
+        FetchSerializationFlags.GROUP_ID_PRESENT |
+        FetchSerializationFlags.SUBGROUP_PRESENT |
+        FetchSerializationFlags.OBJECT_ID_PRESENT |
+        FetchSerializationFlags.PRIORITY_PRESENT,
+      groupId: 10n,
+      subgroupId: 1n,
+      objectId: 0n,
+      publisherPriority: priority,
+      payloadLength: 5n,
+    };
+    assert.throws(() => encodeFetchObjectFields(fields), /invalid publisher priority/);
+  }
+  // 境界値 0 / 255 は従来どおり通る
+  for (const priority of [0, 255]) {
+    const fields: FetchObjectFields = {
+      serializationFlags:
+        FetchSerializationFlags.GROUP_ID_PRESENT |
+        FetchSerializationFlags.SUBGROUP_PRESENT |
+        FetchSerializationFlags.OBJECT_ID_PRESENT |
+        FetchSerializationFlags.PRIORITY_PRESENT,
+      groupId: 10n,
+      subgroupId: 1n,
+      objectId: 0n,
+      publisherPriority: priority,
+      payloadLength: 5n,
+    };
+    const encoded = encodeFetchObjectFields(fields);
+    assert.isDefined(encoded);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.4.1:
+ * PRIORITY_PRESENT なしでは不正値が渡されても検証せず throw しないことを検証する。
+ * (検証は PRIORITY_PRESENT 分岐内でのみ行う)
+ */
+test("FetchObjectFields: PRIORITY_PRESENT なしでは範囲外 priority でも throw しない", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT,
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 300,
+    payloadLength: 5n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+  assert.isDefined(encoded);
+});
+
 test("FetchObjectFields: 最初のオブジェクトの roundtrip", () => {
   const flags = createFirstFetchObjectFlags(false);
   const original: FetchObjectFields = {

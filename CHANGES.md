@@ -911,6 +911,10 @@
   - draft-ietf-moq-transport-20 §11.4.2 / §11.3 の値域（0〜2^64-1）に基づき、ローカル API 誤用としてストリーム生成前に fail-fast で呼び出し元へ返す。groupId も objectId と同一契約に揃える
   - sendObject は error 通知 + 返値の reject、sendDatagram は error 通知 + throw とし、datagram のエンコード失敗も同一の通知契約に揃える。セッションは閉じない
   - @voluntas
+- [FIX] Publisher Priority の暗黙の丸めを修正する
+  - draft-ietf-moq-transport-20 §11.2 / §11.3 / §11.4.2 / §11.4.4 に基づき、範囲外・非整数の priority を Uint8Array 化前に throw して丸め送信をなくす
+  - 公開送信の 2 経路で副作用の前に fail-fast で返す (sendObject 系は通知 + reject、sendDatagram は通知 + throw)。encode 3 経路はいずれも throw する
+  - @voluntas
 
 ### misc
 
