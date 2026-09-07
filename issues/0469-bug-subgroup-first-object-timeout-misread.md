@@ -1,7 +1,7 @@
 # processSubgroupObjects の先頭判定がバッチ全体に誤適用される
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-subgroup-timeout-first-object
 - Polished: 2026-09-06
 
@@ -28,3 +28,9 @@
 ## 関連
 
 - draft-ietf-moq-transport-20 §8 / §12.1 / §12.2
+
+## 解決方法
+
+- `src/session/stream.ts` の `processSubgroupObjects` でデコード直前の `currentPreviousObjectId < 0n` を先頭フラグとして捕捉し、抽出条件に使う（送信側の `isFirstInSubgroup` と対称にする）
+- `src/session/stream.test.ts` にバッチ先頭・バッチ途中・バッチ跨ぎ・分割 feed 2 件のテスト 5 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
