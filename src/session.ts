@@ -2631,9 +2631,11 @@ export class SessionImpl implements Session {
     // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
     this.pendingSubgroupBuffer.notifyAll("session-close");
 
-    // Fetcher の登録待ちコールバックを解放
+    // Fetcher の登録待ちコールバックを解放する。
+    // incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
+    // 欠落しないよう複製して反復する。
     for (const callbacks of this.fetcherReadyCallbacks.values()) {
-      for (const cb of callbacks) {
+      for (const cb of callbacks.slice()) {
         cb();
       }
     }
