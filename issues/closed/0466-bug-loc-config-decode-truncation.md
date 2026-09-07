@@ -1,7 +1,7 @@
 # LOC 単体 Config デコーダの切り詰め検出漏れ
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-loc-config-decode-truncation
 - Polished: 2026-09-06
 
@@ -34,3 +34,9 @@
 - `refs/moq/draft-ietf-moq-loc-04.txt` の Video Config 節と Audio Config 節
 - `src/loc.ts` の `decodeVideoFrameMarkingAfterId` 関数の切り詰め検査
 - `src/loc.test.ts` の VideoConfig / AudioConfig に関する既存テスト
+
+## 解決方法
+
+- `src/loc.ts` の `decodeVideoConfig` と `decodeAudioConfig` に残量検査を追加し、Length 宣言に満たない Value は `ProtocolViolationError` で拒否する。ID / Length の varint 不完全は従来どおり `IncompleteDataError` になる
+- `src/loc.test.ts` に切り詰め・varint 不完全・正常系と空 roundtrip のテスト 6 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
