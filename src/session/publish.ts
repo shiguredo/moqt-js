@@ -19,7 +19,7 @@ import {
 } from "../dataStream";
 import { ClosedSubgroupError, SessionError, SessionErrorCode } from "../error";
 import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
-import { encodeVarint } from "../varint";
+import { encodeVarint, MAX_VARINT } from "../varint";
 import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } from "../publisher";
 import { calculateObjectIdDelta } from "./params";
 import { isPeerStreamError } from "./errors";
@@ -54,7 +54,20 @@ export function publishSendObject(
   params: SendObjectParams,
 ): Promise<void> {
   const trackAlias = publisher.getTrackAlias();
-  const groupId = BigInt(params.groupId);
+  // draft-ietf-moq-transport-20 §11.4.2 / §11.3:
+  // 不正 ID はローカル API 誤用のため、副作用 (ストリーム生成・統計加算・
+  // キュー登録) の前に fail-fast で呼び出し元へ返す。groupId も objectId と
+  // 同一契約に揃える (吸収して resolve する旧契約はやめる)。
+  // 通知契約のため handleError も呼び、返値 Promise は reject する (解決しない)。
+  let groupId: bigint;
+  try {
+    groupId = validateGroupAndObjectIdRange("group id", params.groupId);
+    validateGroupAndObjectIdRange("object id", params.objectId);
+  } catch (error) {
+    const rejection = error instanceof Error ? error : new Error(String(error));
+    publisher.handleError(rejection);
+    return Promise.reject(rejection);
+  }
   const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
   const currentPromise = previousPromise
     .catch(() => {})
@@ -78,6 +91,28 @@ export function publishSendObject(
 }
 
 /**
+ * Group ID / Object ID の値域を検証して bigint で返す
+ *
+ * draft-ietf-moq-transport-20 §11.4.2 / §11.3:
+ * Group ID / Object ID は 0 以上 2^64-1 以下の整数である
+ * (varint 上限と一致し、単一出所化のため MAX_VARINT を使う)。
+ * 不正値はローカル API 誤用のため throw で呼び出し元へ返す
+ * (セッションは閉じない)。
+ *
+ * @throws Error 非整数・範囲外の場合 (期待値と実際値を含む)
+ */
+function validateGroupAndObjectIdRange(kind: "group id" | "object id", value: number): bigint {
+  if (!Number.isInteger(value)) {
+    throw new Error(`invalid ${kind}: ${value}, expected integer 0 to ${MAX_VARINT}`);
+  }
+  const id = BigInt(value);
+  if (id < 0n || id > MAX_VARINT) {
+    throw new Error(`invalid ${kind}: ${value}, expected 0 to ${MAX_VARINT}`);
+  }
+  return id;
+}
+
+/**
  * オブジェクト送信の内部実装
  *
  * draft-ietf-moq-transport-20 Section 11.4.2 (Subgroup Header)
@@ -88,8 +123,11 @@ export async function publishSendObjectInternal(
   params: SendObjectParams,
 ): Promise<void> {
   const trackAlias = publisher.getTrackAlias();
-  const groupId = BigInt(params.groupId);
-  const objectId = BigInt(params.objectId);
+  // ID 範囲検証は lookup・FIN より前に行う。公開経路では publishSendObject の
+  // fail-fast が先に拒否するため、この throw が公開経路の handleError と
+  // 二重通知になることはない。
+  const groupId = validateGroupAndObjectIdRange("group id", params.groupId);
+  const objectId = validateGroupAndObjectIdRange("object id", params.objectId);
 
   let streamState = session.publisherStreams.get(trackAlias);
 
@@ -139,18 +177,6 @@ export async function publishSendObjectInternal(
 
     streamState = { groupId, writer, previousObjectId: -1n };
     session.publisherStreams.set(trackAlias, streamState);
-  }
-
-  // Object ID 上限検証
-  // draft-ietf-moq-transport-20 §11.4.2
-  if (objectId < 0n || objectId > (1n << 64n) - 1n) {
-    session.closeWithError(
-      new SessionError(
-        `object id exceeds maximum value: ${objectId}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      ),
-    );
-    return;
   }
 
   // Object ID Delta を計算
@@ -286,6 +312,20 @@ export function publishSendDatagram(
     return;
   }
 
+  // 不正 ID はローカル API 誤用のため、送信前に通知して throw する
+  // (戻り値が void のため throw 維持。sendObject の通知 + reject と対称)。
+  // closed 時は検証より先に no-op で返す (終了後の送信試行を抑止する)。
+  let groupId: bigint;
+  let objectId: bigint;
+  try {
+    groupId = validateGroupAndObjectIdRange("group id", params.groupId);
+    objectId = validateGroupAndObjectIdRange("object id", params.objectId);
+  } catch (error) {
+    const rejection = error instanceof Error ? error : new Error(String(error));
+    publisher.handleError(rejection);
+    throw rejection;
+  }
+
   // GREASE Object Property - draft-ietf-moq-transport-20 §14 (Grease)
   // opt-in 時、datagram に 1 つ追加する。Datagram Type の Properties Present ビット
   // （bit 0）を正しく設定するため、hasProperties の判定より前に注入する。
@@ -318,15 +358,24 @@ export function publishSendDatagram(
     }
   }
 
-  const datagram = encodeObjectDatagram({
-    type,
-    trackAlias: publisher.getTrackAlias(),
-    groupId: BigInt(params.groupId),
-    objectId: BigInt(params.objectId),
-    publisherPriority: params.priority ?? 128,
-    properties,
-    payload: params.payload,
-  });
+  // エンコード失敗もローカル誤用のため通知して throw する
+  // (ID 検証と同一の通知契約にする)。
+  let datagram: Uint8Array;
+  try {
+    datagram = encodeObjectDatagram({
+      type,
+      trackAlias: publisher.getTrackAlias(),
+      groupId,
+      objectId,
+      publisherPriority: params.priority ?? 128,
+      properties,
+      payload: params.payload,
+    });
+  } catch (error) {
+    const rejection = error instanceof Error ? error : new Error(String(error));
+    publisher.handleError(rejection);
+    throw rejection;
+  }
 
   const writer = publishGetDatagramWriter(session);
   writer.write(datagram).catch((err: unknown) => {

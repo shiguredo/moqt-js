@@ -907,6 +907,10 @@
 - [FIX] SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK のスコープ違反で具体エラーが失われるのを修正する
   - draft-ietf-moq-transport-20 §10.2.1 に基づき、初期応答のスコープ違反で対応する保留（pendingSubscribe / pendingFetch / pendingTrackStatus）と requestStreams（SUBSCRIBE は fillFetchTargets も）を削除して具体エラーで reject してから閉じる（PUBLISH 応答経路と同一パターン）
   - @voluntas
+- [FIX] ローカルの不正 Group / Object ID でセッションを閉じてしまうのを修正する
+  - draft-ietf-moq-transport-20 §11.4.2 / §11.3 の値域（0〜2^64-1）に基づき、ローカル API 誤用としてストリーム生成前に fail-fast で呼び出し元へ返す。groupId も objectId と同一契約に揃える
+  - sendObject は error 通知 + 返値の reject、sendDatagram は error 通知 + throw とし、datagram のエンコード失敗も同一の通知契約に揃える。セッションは閉じない
+  - @voluntas
 
 ### misc
 

@@ -1,14 +1,14 @@
 /**
- * session/publish.ts の publishSendObjectInternal の単体テスト
+ * session/publish.ts の publishSendObject 系の単体テスト
  *
- * Subgroup Header のエンコードをストリーム生成前に移動した方式 (b) の検証。
- * trackAlias / groupId が 2^64-1 を超える場合、エンコードが throw し、
- * ストリーム未生成・統計カウント不変のまま失敗することを検証する。
+ * ID 値域の fail-fast 検証 (不正 Group / Object ID で通知 + reject / throw し、
+ * ストリーム未生成・統計カウント不変のまま失敗する) と、単一 write 化の検証。
  */
 
 import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "../publisher";
-import { publishSendObject, publishSendObjectInternal } from "./publish";
+import { SessionError } from "../error";
+import { publishSendDatagram, publishSendObject, publishSendObjectInternal } from "./publish";
 import type { SessionInternal } from "./types";
 import { encodeObjectFields, encodeSubgroupHeader, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
@@ -24,6 +24,7 @@ import { mergeDeliveryTimeoutObjectProperties } from "../properties";
 function createSessionForPublish(): {
   session: SessionInternal;
   unidirectionalStreamCreated: () => number;
+  closedWithError: () => SessionError | undefined;
 } {
   let unidirectionalStreamCreatedCount = 0;
 
@@ -34,6 +35,7 @@ function createSessionForPublish(): {
     },
   } as unknown as WebTransport;
 
+  let closedWithError: SessionError | undefined;
   const session = {
     transport,
     publisherStreams: new Map(),
@@ -41,11 +43,15 @@ function createSessionForPublish(): {
     publisherSendQueues: new Map(),
     grease: false,
     statsUnidirectionalStreamsOpened: 0,
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
   } as unknown as SessionInternal;
 
   return {
     session,
     unidirectionalStreamCreated: () => unidirectionalStreamCreatedCount,
+    closedWithError: () => closedWithError,
   };
 }
 
@@ -73,6 +79,7 @@ test("publishSendObjectInternal: groupId が 2^64 以上の場合はストリー
   }
 
   assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid group id"));
   // 方式 (b): ヘッダエンコードをストリーム生成前に移動したため、throw 時点で
   // ストリームが未生成であり、統計カウントも増えない
   assert.equal(unidirectionalStreamCreated(), 0);
@@ -103,6 +110,328 @@ test("publishSendObjectInternal: 正常範囲の groupId はストリームを�
   assert.equal(unidirectionalStreamCreated(), 1);
   assert.equal(session.statsUnidirectionalStreamsOpened, 1);
   assert.equal(session.publisherStreams.size, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * Object ID が 2^64 以上の場合、ストリーム生成前に throw し、
+ * ストリームが生成されないことを検証する (groupId 検証と同位置)。
+ */
+test("publishSendObjectInternal: objectId が 2^64 以上の場合はストリーム未生成で throw する", async () => {
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  let thrown: Error | undefined;
+  try {
+    await publishSendObjectInternal(session, publisher, {
+      groupId: 0,
+      objectId: 2 ** 64,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid object id"));
+  // 検証はストリーム生成より前のため、副作用が残らない
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * Object ID が負の場合もストリーム生成前に throw することを検証する。
+ */
+test("publishSendObjectInternal: objectId が負の場合はストリーム未生成で throw する", async () => {
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  let thrown: Error | undefined;
+  try {
+    await publishSendObjectInternal(session, publisher, {
+      groupId: 0,
+      objectId: -1,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid object id"));
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に不正 objectId を渡すと、返値 Promise が reject し、
+ * セッションを閉じないことを検証する。通知契約のため error 通知も行う。
+ */
+test("publishSendObject: 不正 objectId (-1) で reject しセッションを閉じない", async () => {
+  // 不正値は fail-fast で呼び出し元へ返し、セッション全体は閉じない
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: 0,
+      objectId: -1,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 返値 Promise が reject し、通知契約のため error 通知も行う (同一オブジェクト)
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid object id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  // セッションは閉じない
+  assert.isUndefined(closedWithError());
+  // 新規 Group でもストリームが生成されず、統計も進まない
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に 2^64 以上の objectId を渡すと、返値 Promise が reject し、
+ * セッションを閉じないことを検証する。
+ */
+test("publishSendObject: objectId が 2^64 以上の場合に reject しセッションを閉じない", async () => {
+  // 上限超過も fail-fast で呼び出し元へ返す
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: 0,
+      objectId: 2 ** 64,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid object id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isUndefined(closedWithError());
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に 2^64 以上の groupId を渡すと、返値 Promise が reject し、
+ * セッションを閉じないことを検証する (objectId と同一契約)。
+ */
+test("publishSendObject: groupId が 2^64 以上の場合に reject しセッションを閉じない", async () => {
+  // groupId の範囲外も objectId と同じ fail-fast 契約に揃える
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: 2 ** 64,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid group id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isUndefined(closedWithError());
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * datagram 送信に不正 objectId を渡すと、通知して throw することを検証する
+ * (戻り値が void のため throw 維持。sendObject の通知 + reject と対称)。
+ */
+test("publishSendDatagram: 不正 objectId で通知して throw する", () => {
+  // 送信前に検証し、通知してから throw する
+  const { session, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let thrown: Error | undefined;
+  try {
+    publishSendDatagram(session, publisher, {
+      groupId: 0,
+      objectId: -1,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid object id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+  assert.isUndefined(closedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に負の groupId を渡すと、返値 Promise が reject することを検証する。
+ */
+test("publishSendObject: groupId が負の場合に reject しセッションを閉じない", async () => {
+  // 上限超過と同様に fail-fast で呼び出し元へ返す
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: -1,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid group id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isUndefined(closedWithError());
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に非整数の objectId を渡すと、返値 Promise が reject することを検証する。
+ */
+test("publishSendObject: 非整数の objectId で reject しセッションを閉じない", async () => {
+  // 非整数は整数チェックで弾き、同一の通知 + reject 経路で返す
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: 0,
+      objectId: 1.5,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid object id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isUndefined(closedWithError());
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に非整数の groupId を渡すと、返値 Promise が reject することを検証する。
+ */
+test("publishSendObject: 非整数の groupId で reject しセッションを閉じない", async () => {
+  // objectId と同じ整数チェックで弾く
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: 1.5,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid group id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isUndefined(closedWithError());
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * datagram 送信に不正 groupId を渡すと、通知して throw することを検証する。
+ */
+test("publishSendDatagram: 不正 groupId で通知して throw する", () => {
+  // objectId と同様に送信前に検証する
+  const { session, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let thrown: Error | undefined;
+  try {
+    publishSendDatagram(session, publisher, {
+      groupId: 2 ** 64,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid group id"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+  assert.isUndefined(closedWithError());
 });
 
 /** Uint8Array 配列を連結するヘルパー */
