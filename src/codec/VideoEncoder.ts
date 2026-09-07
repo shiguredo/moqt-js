@@ -6,6 +6,7 @@
 
 import type { VideoCodecType, VideoEncoderWrapperCallbacks } from "./types";
 import { getVideoEncoderConfig } from "./config";
+import { WorkerConfigureGate, disposeFailedWorker, toFailureMessage } from "./workerConfigure";
 
 /**
  * ビデオエンコーダーラッパークラス
@@ -52,12 +53,28 @@ export class VideoEncoderWrapper {
         return;
       }
 
+      // 初期化完了前の "error" は configure() の reject とし、
+      // 完了後の "error" は従来どおり通知する (二重解決ガード付き)
+      const gate = new WorkerConfigureGate();
+      const failConfigure = (error: Error) => {
+        if (gate.trySettle()) {
+          const failed = this.worker;
+          this.worker = null;
+          disposeFailedWorker(failed);
+          reject(error);
+        } else {
+          this.callbacks.error(error);
+        }
+      };
+
       this.worker.onmessage = (event: MessageEvent) => {
         const message = event.data;
 
         switch (message.type) {
           case "configured":
-            resolve();
+            if (gate.trySettle()) {
+              resolve();
+            }
             break;
           case "encoded":
             this.callbacks.output({
@@ -69,13 +86,13 @@ export class VideoEncoderWrapper {
             });
             break;
           case "error":
-            this.callbacks.error(new Error(message.message));
+            failConfigure(new Error(toFailureMessage(message.message)));
             break;
         }
       };
 
       this.worker.onerror = (event) => {
-        this.callbacks.error(new Error(event.message));
+        failConfigure(new Error(toFailureMessage(event.message)));
       };
 
       this.worker.postMessage({

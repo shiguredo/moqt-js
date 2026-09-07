@@ -2,8 +2,7 @@
  * ビデオデコーダー用 DedicatedWorker
  */
 
-// モジュールとして扱うための export
-export {};
+import { runWorkerInit } from "../workerConfigure";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -39,40 +38,41 @@ self.onmessage = (event: MessageEvent<WorkerMessage>) => {
 
   switch (message.type) {
     case "init": {
-      if (videoDecoder) {
-        if (videoDecoder.state !== "closed") {
-          videoDecoder.close();
+      // 初期化失敗時は "error" で応答し "configured" を送らない
+      // (Wrapper の configure() が reject してハングしない前提)
+      const result = runWorkerInit(() => {
+        if (videoDecoder) {
+          if (videoDecoder.state !== "closed") {
+            videoDecoder.close();
+          }
+          videoDecoder = null;
         }
-        videoDecoder = null;
-      }
 
-      // 新しいデコーダーはキーフレームを必要とする
-      needsKeyframe = true;
+        // 新しいデコーダーはキーフレームを必要とする
+        needsKeyframe = true;
 
-      videoDecoder = new VideoDecoder({
-        output: (frame: VideoFrame) => {
-          // VideoFrame は transferable
-          self.postMessage(
-            {
-              type: "decoded",
-              frame,
-            },
-            [frame] as unknown as StructuredSerializeOptions,
-          );
-        },
-        error: (error: DOMException) => {
-          self.postMessage({
-            type: "error",
-            message: error.message,
-          });
-        },
+        videoDecoder = new VideoDecoder({
+          output: (frame: VideoFrame) => {
+            // VideoFrame は transferable
+            self.postMessage(
+              {
+                type: "decoded",
+                frame,
+              },
+              [frame] as unknown as StructuredSerializeOptions,
+            );
+          },
+          error: (error: DOMException) => {
+            self.postMessage({
+              type: "error",
+              message: error.message,
+            });
+          },
+        });
+
+        videoDecoder.configure(message.config);
       });
-
-      videoDecoder.configure(message.config);
-
-      self.postMessage({
-        type: "configured",
-      });
+      self.postMessage(result);
       break;
     }
 
