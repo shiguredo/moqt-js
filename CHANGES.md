@@ -939,6 +939,9 @@
 - [FIX] channelConfig の名前付き値で NaN になり購読開始が失敗するのを修正する
   - draft-ietf-moq-loc-04 §4.1 の mono 例に対応し、stereo (慣用値) と整数文字列もチャンネル数に解決する。解決不能な明示値は NaN を渡さず throw する
   - @voluntas
+- [FIX] Publisher の pause / resume で処理ループが多重化するのを修正する
+  - 世代管理で旧ループの encode と onError 通知を抑止し、 resume は現世代で起動する。stop / close 時の旧ループ失敗の誤通知も抑止する
+  - @voluntas
 
 ### misc
 
