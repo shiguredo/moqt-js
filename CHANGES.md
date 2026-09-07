@@ -885,6 +885,10 @@
   - draft-ietf-moq-transport-20 §5.1.2 に基づき、`bidiSendRequestUpdate` でトップレベルの LOCATION_FILTER をデコード検証し、End Group 超過を含む不正値は InvalidFilterError で送信前に拒否する (従来は `parameters` の生値を無検証で送出し、型付き `fill.filter` 構築時の検証が掛からなかった)
   - 検証は `pendingRequestUpdate` 登録より前で行い、throw 時にエントリを残さない。`FILL_PARAMETERS` 内側は対象外とする
   - @voluntas
+- [FIX] RequestUpdateOptions.parameters の手組み FILL_PARAMETERS 内側に End Group 検証を追加する
+  - draft-ietf-moq-transport-20 §5.1.2 / §10.2.15 に基づき、従来対象外だった手組みの FILL_PARAMETERS 内側全件を内側全体のデコード検証で確認し、内側 LOCATION_FILTER の End Group 超過を含む不正値は InvalidFilterError で送信前に拒否する
+  - 検証は `pendingRequestUpdate` 登録より前で行い、throw 時にエントリを残さない。型付き fill 経路の挙動は変えない
+  - @voluntas
 
 ### misc
 
