@@ -1,7 +1,7 @@
 # namespace 系 3 API の送信失敗時にストリームリソースがリークする
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-namespace-send-cleanup
 - Polished: 2026-09-06
 
@@ -24,3 +24,9 @@
 
 - 送信失敗時に `writer.locked` が偽 (`releaseLock` 済み) で、対応する subscription Map に登録がないこと (3 API とも)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session.ts` の 3 API に取得済み資源の掃除ヘルパーを新設し、送信失敗時に cancel / abort (RESET 相当) してから throw する。登録は成功時のみのため Map 掃除は不要
+- `src/session.test.ts` に write 失敗と送信前失敗のテスト 6 件を追加し、RESET 実行・ロック解放・Map 未登録を検証した。旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
