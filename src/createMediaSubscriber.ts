@@ -24,7 +24,7 @@ import {
 } from "./msf";
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
-import { DEFAULT_AUDIO_CHANNELS, DEFAULT_AUDIO_SAMPLE_RATE } from "./codec/config";
+import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
   AudioReceiverStats,
@@ -698,9 +698,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
       }
 
       const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
-      const channels = this.audioTrackInfo.channelConfig
-        ? Number.parseInt(this.audioTrackInfo.channelConfig, 10)
-        : DEFAULT_AUDIO_CHANNELS;
+      // channelConfig は名前付き値 (mono / stereo) と整数文字列を受け付ける。
+      // 解決不能な明示値はここで throw し、NaN をデコーダに渡さない
+      const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
 
       await this.audioDecoder.configure(audioCodec, sampleRate, channels);
       this.audioDecoderConfigured = true;
