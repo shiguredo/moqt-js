@@ -19,6 +19,8 @@ import {
   incomingValidateRequestId,
 } from "./incoming";
 import type { SessionInternal } from "./types";
+import { SubscriberImpl } from "../subscriber";
+import { DatagramType, encodeObjectDatagram } from "../dataStream";
 
 // ============================================================================
 // incomingClassifyFirstBidiMessage のテスト
@@ -432,6 +434,25 @@ test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", ()
  * 構造破損の意味しか持たない (toProtocolViolationSessionError の変換対象)。
  */
 test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッションが閉じる", () => {
+  const ctx = createDatagramDeliveryTestContext();
+
+  // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * datagram 配送用のテストコンテキストを構築する。
+ *
+ * session は受信に必要な最小面 (コールバック・購読 Map・close 記録) の
+ * オブジェクトリテラルであり、Subscriber は実物を使う。
+ */
+function createDatagramDeliveryTestContext(): {
+  session: SessionInternal;
+  getClosedWithError: () => SessionError | undefined;
+} {
   let closedWithError: SessionError | undefined;
   const session = {
     callbacks: {
@@ -443,9 +464,349 @@ test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッ�
     },
   } as unknown as SessionInternal;
 
-  // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
-  incomingHandleDatagram(session, new Uint8Array([0x80]));
+  return {
+    session,
+    // 値コピーではなく getter で返す (closeWithError 呼び出し後の代入を反映する)
+    getClosedWithError: () => closedWithError,
+  };
+}
 
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+/** 配送観測用の datagram ワイヤを組み立てる */
+function objectDatagramWire(): Uint8Array {
+  return encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ,
+    trackAlias: 7n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    payload: new Uint8Array([0xaa]),
+  });
+}
+
+test("incomingHandleDatagram: datagram コールバックの例外は error 通知し残りの配送を継続する", () => {
+  // 1 件目の購読で例外が起きても 2 件目に配送し、セッションは閉じない
+  const ctx = createDatagramDeliveryTestContext();
+  const appError = new Error("アプリの配送失敗");
+  let notified: Error | undefined;
+  let secondDelivered = 0;
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {},
+    () => {
+      throw appError;
+    },
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    secondDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  // 当該購読の error コールバックに届き、残りの配送が継続される
+  assert.strictEqual(notified, appError);
+  assert.equal(secondDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
+  // 例外を出した購読も active のままである
+  assert.equal(throwing.state, "active");
+});
+
+test("incomingHandleDatagram: object コールバックの例外は error 通知し残りの配送を継続する", () => {
+  // datagram コールバックなし (handleObject 経路) でも同様に通知する
+  const ctx = createDatagramDeliveryTestContext();
+  const appError = new Error("アプリの配送失敗");
+  let notified: Error | undefined;
+  let secondDelivered = 0;
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw appError;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    secondDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  assert.strictEqual(notified, appError);
+  assert.equal(secondDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
+  // 例外を出した購読も active のままである
+  assert.equal(throwing.state, "active");
+});
+
+test("incomingHandleDatagram: デコード失敗では error コールバックに届かない", () => {
+  // デコード失敗の扱いは変えない (close のみで error 通知なし)
+  const ctx = createDatagramDeliveryTestContext();
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+
+  // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isUndefined(notified);
+});
+
+test("incomingHandleDatagram: デコード失敗で debug が throw しても閉じる処理を継続する", () => {
+  // デバッグ記録自体の失敗は無視し、違反時の close を行う
+  const ctx = createDatagramDeliveryTestContext();
+  ctx.session.callbacks.debug = () => {
+    throw new Error("debug の失敗");
+  };
+
+  // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("incomingHandleDatagram: error コールバックの throw でも残りの配送を継続する", () => {
+  // error コールバック自体の throw はデバッグ記録に残し、配送と受信を継続する
+  const ctx = createDatagramDeliveryTestContext();
+  const appError = new Error("アプリの配送失敗");
+  let secondDelivered = 0;
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw appError;
+    },
+    undefined,
+    undefined,
+    () => {
+      throw new Error("error 通知の失敗");
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    secondDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  // 例外なく完走し、残りの配送が継続され、セッションは閉じない
+  // (同一購読への再配送でも購読状態を壊さない)
+  assert.equal(secondDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
+  // 同一購読への再配送でも throw せず完走する
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+  assert.equal(secondDelivered, 2);
+});
+
+test("incomingHandleDatagram: error コールバックなしの例外は黙殺し残りの配送を継続する", () => {
+  // 通知先がない場合は例外が消え、残りの配送が継続される
+  const ctx = createDatagramDeliveryTestContext();
+  let secondDelivered = 0;
+  const throwing = new SubscriberImpl(["test"], "track", 0n, 7n, () => {
+    throw new Error("アプリの配送失敗");
+  });
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    secondDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  assert.equal(secondDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("incomingHandleDatagram: 複数購読の例外はそれぞれ通知する", () => {
+  // 複数が同時に throw しても両方に届き、セッションは閉じない
+  const ctx = createDatagramDeliveryTestContext();
+  const firstError = new Error("1 件目の失敗");
+  const secondError = new Error("2 件目の失敗");
+  let firstNotified: Error | undefined;
+  let secondNotified: Error | undefined;
+  const first = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw firstError;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      firstNotified = error;
+    },
+  );
+  const second = new SubscriberImpl(
+    ["test"],
+    "track",
+    1n,
+    7n,
+    () => {
+      throw secondError;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      secondNotified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [first, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  assert.strictEqual(firstNotified, firstError);
+  assert.strictEqual(secondNotified, secondError);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("incomingHandleDatagram: error 通知中の unsubscribe でも残りの配送が欠落しない", () => {
+  // error コールバック内で自購読を外しても (配列の破壊的変更)、
+  // 反復前のスナップショットにより後続へ配送される
+  const ctx = createDatagramDeliveryTestContext();
+  const appError = new Error("アプリの配送失敗");
+  let bDelivered = 0;
+  let cDelivered = 0;
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw appError;
+    },
+    undefined,
+    undefined,
+    () => {
+      // bidiCancelSubscription と同形の同期的 splice で自購読を外す
+      void throwing.unsubscribe();
+    },
+  );
+  // unsubscribe 時の購読解除を同期的 splice で再現する
+  throwing.onUnsubscribe = async () => {
+    const list = ctx.session.subscribersByAlias.get(7n);
+    if (list !== undefined) {
+      const index = list.indexOf(throwing);
+      if (index !== -1) {
+        list.splice(index, 1);
+      }
+    }
+  };
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    bDelivered++;
+  });
+  const third = new SubscriberImpl(["test"], "track", 2n, 7n, () => {
+    cDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second, third]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  // 外された購読より後の両方に配送され、セッションは閉じない
+  assert.equal(bDelivered, 1);
+  assert.equal(cDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("incomingHandleDatagram: error コールバックの throw はデバッグ記録に残る", () => {
+  // 通知失敗の内容を記録し、配送と受信を継続する
+  const ctx = createDatagramDeliveryTestContext();
+  const records: { typeName: string; decoded?: { error?: string } }[] = [];
+  ctx.session.callbacks.debug = (message) => {
+    records.push({
+      typeName: message.typeName,
+      decoded: message.decoded as { error?: string } | undefined,
+    });
+  };
+  const appError = new Error("アプリの配送失敗");
+  const callbackError = new Error("error 通知の失敗");
+  let secondDelivered = 0;
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw appError;
+    },
+    undefined,
+    undefined,
+    () => {
+      throw callbackError;
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    secondDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  assert.equal(secondDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(records.length, 1);
+  assert.equal(records[0].typeName, "DATAGRAM_CALLBACK_ERROR");
+  assert.isTrue(records[0].decoded?.error?.includes("error 通知の失敗") ?? false);
+});
+
+test("incomingHandleDatagram: debug コールバックの throw でも配送を継続する", () => {
+  // デバッグ記録自体の失敗は無視し、配送と受信を継続する
+  const ctx = createDatagramDeliveryTestContext();
+  ctx.session.callbacks.debug = () => {
+    throw new Error("debug の失敗");
+  };
+  const appError = new Error("アプリの配送失敗");
+  let secondDelivered = 0;
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw appError;
+    },
+    undefined,
+    undefined,
+    () => {
+      throw new Error("error 通知の失敗");
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    secondDelivered++;
+  });
+  ctx.session.subscribersByAlias.set(7n, [throwing, second]);
+
+  incomingHandleDatagram(ctx.session, objectDatagramWire());
+
+  assert.equal(secondDelivered, 1);
+  assert.isUndefined(ctx.getClosedWithError());
 });

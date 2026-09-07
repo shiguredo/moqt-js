@@ -1,7 +1,7 @@
 # datagram 経路のアプリ例外が黙殺される
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-datagram-error-propagation
 - Polished: 2026-09-06
 
@@ -24,3 +24,9 @@ datagram 配送中のアプリ例外が debug 記録のみで握り潰され、�
 - datagram 配送中のアプリ例外が当該購読の `error` コールバックに届き、他の購読への配送が継続されること。セッションは閉じないこと。
 - デコード失敗時は従来どおり `error` コールバックに届かないこと (区別の検証)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/incoming.ts` のデコードと配送の try を分離し、配送は subscriber ごとに try/catch して error 通知後に継続する。通知自体の throw と記録自体の throw も吸収し、配送集合は反復前に複製する
+- `src/session/incoming.test.ts` に配送等のテスト 10 件を追加した。旧コードで通知 2 件が落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
