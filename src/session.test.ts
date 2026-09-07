@@ -4189,3 +4189,259 @@ test("受信 PUBLISH の値域外パラメータでセッションが閉じる",
     assert.equal(sessionInternal.sessionState, "closed");
   }
 });
+
+// ============================================================================
+// namespace 系 3 API の送信失敗時の後始末
+// 取得済み streamReader / writer のロックを残さない (Map 登録は成功時のみ)
+// ============================================================================
+
+/**
+ * namespace 系送信テスト用の transport を構築する。
+ *
+ * 実ストリーム (ReadableStream / WritableStream) を使うため、
+ * ロックの残留は getReader / getWriter の再取得可否で検証できる。
+ */
+function createNamespaceSendFailureTransport(failWrites: boolean): {
+  transport: WebTransport;
+  readable: ReadableStream<Uint8Array>;
+  writable: WritableStream<Uint8Array>;
+  cancelled: unknown[];
+  aborted: unknown[];
+  closed: unknown[];
+} {
+  const cancelled: unknown[] = [];
+  const aborted: unknown[] = [];
+  // cancel / abort の呼び出しを記録し、実処理に委譲する。
+  // reader の cancel は readable 側の underlying で観測する。
+  // writer の abort は API 取得の writer をラップして観測する
+  // (エラー状態のストリームでは sink の abort が呼ばれないため)。
+  const readable = new ReadableStream<Uint8Array>({
+    cancel: (reason?: unknown) => {
+      cancelled.push(reason);
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write: async () => {
+      if (failWrites) {
+        throw new Error("write failed");
+      }
+    },
+  });
+  const closed: unknown[] = [];
+  const originalGetWriter = writable.getWriter.bind(writable);
+  writable.getWriter = () => {
+    const writer = originalGetWriter();
+    const originalAbort = writer.abort.bind(writer);
+    writer.abort = async (reason?: unknown) => {
+      aborted.push(reason);
+      return originalAbort(reason);
+    };
+    const originalClose = writer.close.bind(writer);
+    writer.close = async () => {
+      closed.push("close");
+      return originalClose();
+    };
+    return writer;
+  };
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      ({ readable, writable }) as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  return { transport, readable, writable, cancelled, aborted, closed };
+}
+
+test("subscribeNamespace: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
+  // 送信失敗時は reader / writer のロックを残さず、登録も行わない
+  const { transport, readable, writable, cancelled, aborted, closed } =
+    createNamespaceSendFailureTransport(true);
+  const session = new SessionImpl(transport, {});
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeNamespace(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 呼び出し元には送信エラーが伝播する
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("write failed"));
+  // reader / writer のロックは残らない (再取得できる)
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  assert.deepEqual(closed, []);
+  readable.getReader().releaseLock();
+  writable.getWriter().releaseLock();
+  // Map に登録されない
+  assert.equal(
+    (session as unknown as { namespaceSubscriptions: Map<bigint, unknown> }).namespaceSubscriptions
+      .size,
+    0,
+  );
+});
+
+test("subscribeTracks: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
+  // 送信失敗時は reader / writer のロックを残さず、登録も行わない
+  const { transport, readable, writable, cancelled, aborted, closed } =
+    createNamespaceSendFailureTransport(true);
+  const session = new SessionImpl(transport, {});
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  assert.deepEqual(closed, []);
+  readable.getReader().releaseLock();
+  writable.getWriter().releaseLock();
+  assert.equal(
+    (session as unknown as { tracksSubscriptions: Map<bigint, unknown> }).tracksSubscriptions.size,
+    0,
+  );
+});
+
+test("publishNamespace: write 失敗時にストリームリソースを掃除して Map に登録しない", async () => {
+  // 送信失敗時は reader / writer のロックを残さず、登録も行わない
+  const { transport, readable, writable, cancelled, aborted, closed } =
+    createNamespaceSendFailureTransport(true);
+  const session = new SessionImpl(transport, {});
+
+  let thrown: Error | undefined;
+  try {
+    await session.publishNamespace(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  assert.deepEqual(closed, []);
+  readable.getReader().releaseLock();
+  writable.getWriter().releaseLock();
+  assert.equal(
+    (session as unknown as { namespacePublications: Map<bigint, unknown> }).namespacePublications
+      .size,
+    0,
+  );
+});
+
+test("subscribeNamespace: 送信前の throw でもストリームリソースを掃除する", async () => {
+  // encode / build ではなく debug コールバックの throw で送信前失敗を起こす
+  const { transport, readable, writable, cancelled, aborted, closed } =
+    createNamespaceSendFailureTransport(false);
+  const session = new SessionImpl(transport, {
+    debug: () => {
+      throw new Error("debug boom");
+    },
+  });
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeNamespace(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 元のエラーが再 throw される
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  assert.deepEqual(closed, []);
+  readable.getReader().releaseLock();
+  writable.getWriter().releaseLock();
+  assert.equal(
+    (session as unknown as { namespaceSubscriptions: Map<bigint, unknown> }).namespaceSubscriptions
+      .size,
+    0,
+  );
+});
+
+test("subscribeTracks: 送信前の throw でもストリームリソースを掃除する", async () => {
+  // debug コールバックの throw で送信前失敗を起こす (encode / build 失敗の代理。
+  // catch はエラー種別で分岐しないため、代理経路で catch 全体が検証される)
+  const { transport, readable, writable, cancelled, aborted, closed } =
+    createNamespaceSendFailureTransport(false);
+  const session = new SessionImpl(transport, {
+    debug: () => {
+      throw new Error("debug boom");
+    },
+  });
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  assert.deepEqual(closed, []);
+  readable.getReader().releaseLock();
+  writable.getWriter().releaseLock();
+  assert.equal(
+    (session as unknown as { tracksSubscriptions: Map<bigint, unknown> }).tracksSubscriptions.size,
+    0,
+  );
+});
+
+test("publishNamespace: 送信前の throw でもストリームリソースを掃除する", async () => {
+  // debug コールバックの throw で送信前失敗を起こす (encode / build 失敗の代理)
+  const { transport, readable, writable, cancelled, aborted, closed } =
+    createNamespaceSendFailureTransport(false);
+  const session = new SessionImpl(transport, {
+    debug: () => {
+      throw new Error("debug boom");
+    },
+  });
+
+  let thrown: Error | undefined;
+  try {
+    await session.publishNamespace(["live"], {});
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isFalse(readable.locked);
+  assert.isFalse(writable.locked);
+  // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
+  assert.deepEqual(cancelled, ["namespace request send failed"]);
+  assert.deepEqual(aborted, ["namespace request send failed"]);
+  assert.deepEqual(closed, []);
+  readable.getReader().releaseLock();
+  writable.getWriter().releaseLock();
+  assert.equal(
+    (session as unknown as { namespacePublications: Map<bigint, unknown> }).namespacePublications
+      .size,
+    0,
+  );
+});

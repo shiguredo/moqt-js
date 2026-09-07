@@ -2102,6 +2102,37 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * 取得済み namespace 系ストリーム資源を掃除する
+   *
+   * 送信失敗時に呼び出す。登録は成功時のみ行うため Map 側の掃除は不要。
+   * 取得済み reader / writer の後始末として cancel / abort で RESET 相当とし
+   * (bidiSendRequestOnBidiStream の方針)、 FIN である close は使わない。
+   * readable は getReader 済みでロック中のため streamReader 経由で
+   * cancel + releaseLock する。 abort / cancel 自体の失敗は無視する。
+   * なお reader / writer の取得自体はストリーム生成直後のため
+   * 失敗を想定せず、呼び出し側で try 外に置く。
+   */
+  private async cleanupNamespaceSendFailure(
+    streamReader: ReadableStreamDefaultReader<Uint8Array>,
+    writer: WritableStreamDefaultWriter<Uint8Array>,
+  ): Promise<void> {
+    try {
+      await streamReader.cancel("namespace request send failed");
+    } catch {
+      // 閉じかけのストリーム操作の失敗は無視する
+    } finally {
+      streamReader.releaseLock();
+    }
+    try {
+      await writer.abort("namespace request send failed");
+    } catch {
+      // 閉じかけのストリーム操作の失敗は無視する
+    } finally {
+      writer.releaseLock();
+    }
+  }
+
+  /**
    * Namespace をサブスクライブする（namespace discovery 用）
    *
    * draft-ietf-moq-transport-20 §10.19 (SUBSCRIBE_NAMESPACE):
@@ -2143,37 +2174,43 @@ export class SessionImpl implements Session {
     const controlReader = new ControlStreamReader();
     const writer = stream.writable.getWriter();
 
-    // SUBSCRIBE_NAMESPACE メッセージを構築
-    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
-    const subscribeNamespaceMsg = {
-      type: MessageType.SUBSCRIBE_NAMESPACE,
-      requestId,
-      trackNamespacePrefix,
-      parameters: buildSubscribeNamespaceParameters(options),
-    };
+    try {
+      // SUBSCRIBE_NAMESPACE メッセージを構築
+      // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
+      const subscribeNamespaceMsg = {
+        type: MessageType.SUBSCRIBE_NAMESPACE,
+        requestId,
+        trackNamespacePrefix,
+        parameters: buildSubscribeNamespaceParameters(options),
+      };
 
-    // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-20 §10.19 (SUBSCRIBE_NAMESPACE):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-    // ControlStreamWriter に委譲する。
-    const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    const controlWriter = new ControlStreamWriter();
-    const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
+      // メッセージをエンコードして送信
+      // draft-ietf-moq-transport-20 §10.19 (SUBSCRIBE_NAMESPACE):
+      // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+      // ControlStreamWriter に委譲する。
+      const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
+      const controlWriter = new ControlStreamWriter();
+      const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
 
-    // デバッグコールバック
-    this.callbacks.debug?.({
-      direction: "send",
-      type: MessageType.SUBSCRIBE_NAMESPACE,
-      typeName: getMessageTypeName(MessageType.SUBSCRIBE_NAMESPACE),
-      payload,
-      decoded: {
-        requestId: requestId.toString(),
-        trackNamespacePrefix: namespacePrefix,
-      },
-      timestamp: Date.now(),
-    });
+      // デバッグコールバック
+      this.callbacks.debug?.({
+        direction: "send",
+        type: MessageType.SUBSCRIBE_NAMESPACE,
+        typeName: getMessageTypeName(MessageType.SUBSCRIBE_NAMESPACE),
+        payload,
+        decoded: {
+          requestId: requestId.toString(),
+          trackNamespacePrefix: namespacePrefix,
+        },
+        timestamp: Date.now(),
+      });
 
-    await writer.write(framed);
+      await writer.write(framed);
+    } catch (error) {
+      // 送信失敗時は取得済みリソースを掃除して throw する
+      await this.cleanupNamespaceSendFailure(streamReader, writer);
+      throw error;
+    }
 
     // REQUEST_OK/REQUEST_ERROR を待つ Promise
     return new Promise<NamespaceSubscription>((resolve, reject) => {
@@ -2237,37 +2274,43 @@ export class SessionImpl implements Session {
     const controlReader = new ControlStreamReader();
     const writer = stream.writable.getWriter();
 
-    // SUBSCRIBE_TRACKS メッセージを構築
-    // draft-ietf-moq-transport-20 §10.20.1: GROUP_ORDER / FORWARD / Range Filters を送信可能
-    const subscribeTracksMsg = {
-      type: MessageType.SUBSCRIBE_TRACKS,
-      requestId,
-      trackNamespacePrefix,
-      parameters: buildSubscribeTracksParameters(options),
-    };
+    try {
+      // SUBSCRIBE_TRACKS メッセージを構築
+      // draft-ietf-moq-transport-20 §10.20.1: GROUP_ORDER / FORWARD / Range Filters を送信可能
+      const subscribeTracksMsg = {
+        type: MessageType.SUBSCRIBE_TRACKS,
+        requestId,
+        trackNamespacePrefix,
+        parameters: buildSubscribeTracksParameters(options),
+      };
 
-    // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-20 §10.20 (SUBSCRIBE_TRACKS):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-    // ControlStreamWriter に委譲する。
-    const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
-    const controlWriter = new ControlStreamWriter();
-    const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
+      // メッセージをエンコードして送信
+      // draft-ietf-moq-transport-20 §10.20 (SUBSCRIBE_TRACKS):
+      // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+      // ControlStreamWriter に委譲する。
+      const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
+      const controlWriter = new ControlStreamWriter();
+      const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
 
-    // デバッグコールバック
-    this.callbacks.debug?.({
-      direction: "send",
-      type: MessageType.SUBSCRIBE_TRACKS,
-      typeName: getMessageTypeName(MessageType.SUBSCRIBE_TRACKS),
-      payload,
-      decoded: {
-        requestId: requestId.toString(),
-        trackNamespacePrefix: namespacePrefix,
-      },
-      timestamp: Date.now(),
-    });
+      // デバッグコールバック
+      this.callbacks.debug?.({
+        direction: "send",
+        type: MessageType.SUBSCRIBE_TRACKS,
+        typeName: getMessageTypeName(MessageType.SUBSCRIBE_TRACKS),
+        payload,
+        decoded: {
+          requestId: requestId.toString(),
+          trackNamespacePrefix: namespacePrefix,
+        },
+        timestamp: Date.now(),
+      });
 
-    await writer.write(framed);
+      await writer.write(framed);
+    } catch (error) {
+      // 送信失敗時は取得済みリソースを掃除して throw する
+      await this.cleanupNamespaceSendFailure(streamReader, writer);
+      throw error;
+    }
 
     // REQUEST_OK/REQUEST_ERROR を待つ Promise
     return new Promise<TracksSubscription>((resolve, reject) => {
@@ -2369,37 +2412,43 @@ export class SessionImpl implements Session {
     const controlReader = new ControlStreamReader();
     const writer = stream.writable.getWriter();
 
-    // PUBLISH_NAMESPACE メッセージを構築
-    const publishNamespaceMsg = {
-      type: MessageType.PUBLISH_NAMESPACE,
-      requestId,
-      trackNamespace,
-      parameters: [],
-    };
+    try {
+      // PUBLISH_NAMESPACE メッセージを構築
+      const publishNamespaceMsg = {
+        type: MessageType.PUBLISH_NAMESPACE,
+        requestId,
+        trackNamespace,
+        parameters: [],
+      };
 
-    // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-20 Section 10.16 (PUBLISH_NAMESPACE):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-    // ControlStreamWriter に委譲する。
-    // https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-10.16
-    const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-    const controlWriter = new ControlStreamWriter();
-    const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
+      // メッセージをエンコードして送信
+      // draft-ietf-moq-transport-20 Section 10.16 (PUBLISH_NAMESPACE):
+      // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+      // ControlStreamWriter に委譲する。
+      // https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-10.16
+      const payload = encodePublishNamespacePayload(publishNamespaceMsg);
+      const controlWriter = new ControlStreamWriter();
+      const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
 
-    // デバッグコールバック
-    this.callbacks.debug?.({
-      direction: "send",
-      type: MessageType.PUBLISH_NAMESPACE,
-      typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
-      payload,
-      decoded: {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-      },
-      timestamp: Date.now(),
-    });
+      // デバッグコールバック
+      this.callbacks.debug?.({
+        direction: "send",
+        type: MessageType.PUBLISH_NAMESPACE,
+        typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
+        payload,
+        decoded: {
+          requestId: requestId.toString(),
+          trackNamespace: namespace,
+        },
+        timestamp: Date.now(),
+      });
 
-    await writer.write(framed);
+      await writer.write(framed);
+    } catch (error) {
+      // 送信失敗時は取得済みリソースを掃除して throw する
+      await this.cleanupNamespaceSendFailure(streamReader, writer);
+      throw error;
+    }
 
     // REQUEST_OK / REQUEST_ERROR を待つ Promise
     return new Promise<NamespacePublication>((resolve, reject) => {
