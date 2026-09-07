@@ -52,8 +52,11 @@ const PRIORITY_VIDEO_DELTA = 128;
 
 /**
  * MediaPublisher の実装クラス
+ *
+ * 単体テストから処理ループを駆動するため export する
+ * (パッケージ公開 API には含めない)。
  */
-class MediaPublisherImpl implements MediaPublisher {
+export class MediaPublisherImpl implements MediaPublisher {
   private currentState: MediaPublisherState = "created";
   private readonly url: string;
   private readonly options: MediaPublisherOptions;
@@ -102,6 +105,10 @@ class MediaPublisherImpl implements MediaPublisher {
 
   // 処理ループの中断フラグ
   private processingActive = false;
+
+  // 処理ループの世代 (pause / stop / close で加算し、
+  // 旧ループの encode と onError 通知を抑止する)
+  private processingGeneration = 0;
 
   // 現在の Catalog
   private currentCatalog: Catalog | null = null;
@@ -162,6 +169,16 @@ class MediaPublisherImpl implements MediaPublisher {
 
   /**
    * 配信を一時停止する
+   *
+   * 世代を進めて旧ループを無効化する。 reader の cancel は行わない。
+   * cancel はストリームを閉じるため、 resume 時に処理を再開できなくなる
+   * (再開にはプロセッサ再構築というブラウザ専用機構が必要になる)。
+   * 同一 reader への並行 read() はフレームを排他的に分配するため、
+   * 旧ループの encode と onError は世代不一致で抑止される。
+   * ただし旧ループ自体の終了は次フレーム到着まで遅延し、その間に取得した
+   * 1 フレームは破棄される。また pause 中にキュー滞留した 2 フレーム目以降は
+   * resume 後に新ループが stale フレームとして encode する。
+   * フレーム到着がない間の待機は残留し、stop / close の cancel で回収される。
    */
   pause(): void {
     if (this.currentState !== "publishing") {
@@ -169,11 +186,18 @@ class MediaPublisherImpl implements MediaPublisher {
     }
 
     this.processingActive = false;
+    this.processingGeneration++;
     this.setState("paused");
   }
 
   /**
    * 配信を再開する
+   *
+   * 現世代のまま処理ループを起動する。 paused からのみ到達する。
+   * 旧ループは次フレーム到着時に世代不一致で encode せず終了し、
+   * 失敗通知も抑止されるため、 encode と onError の多重化は起きない
+   * (read() 待機自体の一時的な並行は残る)。
+   * reader は pause で破棄していないため再取得は不要である。
    */
   resume(): void {
     if (this.currentState !== "paused") {
@@ -194,6 +218,10 @@ class MediaPublisherImpl implements MediaPublisher {
     }
 
     this.processingActive = false;
+
+    // 世代を進める。 stop 後の cancel 解決と start 後の新ループが
+    // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
+    this.processingGeneration++;
 
     // フレームリーダーをキャンセル
     await this.cancelFrameReaders();
@@ -230,6 +258,10 @@ class MediaPublisherImpl implements MediaPublisher {
     }
 
     this.processingActive = false;
+
+    // 世代を進める。 close 後の cancel 解決と再 start 後の新ループが
+    // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
+    this.processingGeneration++;
 
     // フレームリーダーをキャンセル
     await this.cancelFrameReaders();
@@ -514,17 +546,28 @@ class MediaPublisherImpl implements MediaPublisher {
     const reader = this.audioFrameReader;
     const encoder = this.audioEncoder;
     if (!reader || !encoder) return;
+    const generation = this.processingGeneration;
 
     try {
-      while (this.processingActive && encoder.state === "configured") {
+      while (
+        this.processingActive &&
+        generation === this.processingGeneration &&
+        encoder.state === "configured"
+      ) {
         const { value: audioData, done } = await reader.read();
         if (done) break;
+        if (generation !== this.processingGeneration) {
+          // 旧世代ループは encode せず終了する (フレームは破棄前に閉じる)
+          audioData.close();
+          break;
+        }
 
         encoder.encode(audioData);
         audioData.close();
       }
     } catch (error) {
-      if (this.processingActive) {
+      // 旧世代ループの失敗は通知しない (多重発火の防止)
+      if (this.processingActive && generation === this.processingGeneration) {
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
     }
@@ -534,11 +577,21 @@ class MediaPublisherImpl implements MediaPublisher {
     const reader = this.videoFrameReader;
     const encoder = this.videoEncoder;
     if (!reader || !encoder) return;
+    const generation = this.processingGeneration;
 
     try {
-      while (this.processingActive && encoder.state === "configured") {
+      while (
+        this.processingActive &&
+        generation === this.processingGeneration &&
+        encoder.state === "configured"
+      ) {
         const { value: frame, done } = await reader.read();
         if (done) break;
+        if (generation !== this.processingGeneration) {
+          // 旧世代ループは encode せず終了する (フレームは破棄前に閉じる)
+          frame.close();
+          break;
+        }
 
         // キーフレーム判定
         const isKeyFrame = this.videoFrameCount % this.keyframeInterval === 0;
@@ -550,7 +603,8 @@ class MediaPublisherImpl implements MediaPublisher {
         frame.close();
       }
     } catch (error) {
-      if (this.processingActive) {
+      // 旧世代ループの失敗は通知しない (多重発火の防止)
+      if (this.processingActive && generation === this.processingGeneration) {
         this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       }
     }
