@@ -933,6 +933,9 @@
 - [FIX] codec Worker の configure 失敗で Promise が永久ハングするのを修正する
   - Worker 側 init 失敗を error 応答とし、Wrapper 側は初期化完了前の error メッセージ / error イベント受信で configure() を reject して失敗 Worker を破棄する。完了後の error は従来どおり通知する
   - @voluntas
+- [FIX] LOC Timestamp に WebCodecs 時刻を載せ Timescale を無視しているのを修正する
+  - draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2 に基づき、送信 TIMESTAMP を Unix epoch マイクロ秒 (TIMESCALE なし) で送り、受信は TIMESCALE 有り時のみマイクロ秒換算してデコーダに渡す。壁時計送信時は Track にも TIMESCALE を置かないこと
+  - @voluntas
 
 ### misc
 

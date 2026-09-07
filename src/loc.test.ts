@@ -27,6 +27,8 @@ import {
   decodeAudioProperties,
   resolveVideoProperties,
   resolveAudioProperties,
+  toUnixEpochMicroseconds,
+  toDecoderMicroseconds,
   type VideoFrameMarking,
 } from "./loc";
 import {
@@ -444,4 +446,106 @@ test("appendGreaseObjectProperty: LOC バイト列を入力にしても delta �
   assert.equal(decoded.properties.length, 2);
   assert.equal(decoded.properties[0].id, 0x10n);
   assert.ok(isGreaseValue(decoded.properties[1].id));
+});
+
+// ============================================================================
+// 時刻語義 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+// 送信 TIMESTAMP は Unix epoch マイクロ秒、受信は TIMESCALE に従い換算する
+// ============================================================================
+
+test("toUnixEpochMicroseconds: 明示 origin で壁時計換算する", () => {
+  // timeOrigin 1_700_000_000_000ms + WebCodecs 時刻 1 秒 → Unix epoch マイクロ秒
+  const result = toUnixEpochMicroseconds(1_000_000n, 1_700_000_000_000);
+
+  assert.equal(result, 1_700_000_001_000_000n);
+});
+
+test("toUnixEpochMicroseconds: ミリ秒原点の端数は丸めて換算する", () => {
+  // timeOrigin のミリ秒端数はマイクロ秒換算時に丸める (JSDoc の丸め仕様)
+  const result = toUnixEpochMicroseconds(0n, 1_700_000_000_000.567);
+
+  assert.equal(result, 1_700_000_000_000_567n);
+});
+
+test("toDecoderMicroseconds: TIMESCALE 不在時はそのまま渡す", () => {
+  // TIMESCALE 不在の TIMESTAMP は Unix epoch マイクロ秒のため換算しない
+  assert.equal(toDecoderMicroseconds(1_700_000_001_000_000n), 1_700_000_001_000_000n);
+});
+
+test("toDecoderMicroseconds: TIMESCALE 有り時はマイクロ秒換算する", () => {
+  // 48kHz 音声の 48000 単位と 90kHz 映像の 90000 単位はいずれも 1 秒になる
+  assert.equal(toDecoderMicroseconds(48000n, 48000n), 1_000_000n);
+  assert.equal(toDecoderMicroseconds(90000n, 90000n), 1_000_000n);
+  // 割り切れない換算は切り捨てる
+  assert.equal(toDecoderMicroseconds(1n, 3n), 333_333n);
+});
+
+test("toDecoderMicroseconds: 不正 TIMESCALE は換算せずそのまま渡す", () => {
+  // 0n が実ワイヤで到達可能な不正値 (0 除算を避ける)。
+  // 負値は varint 経路から到達不能な防御的通過である
+  assert.equal(toDecoderMicroseconds(48000n, 0n), 48000n);
+  assert.equal(toDecoderMicroseconds(48000n, -48000n), 48000n);
+});
+
+test("encodeAudioProperties: TIMESCALE なしで送信する", () => {
+  // 送信 TIMESTAMP は Unix epoch マイクロ秒のため TIMESCALE を付けない
+  const bytes = encodeAudioProperties({ timestamp: 1_700_000_001_000_000n });
+  const decoded = decodeAudioProperties(bytes);
+
+  assert.equal(decoded.timestamp, 1_700_000_001_000_000n);
+  assert.isUndefined(decoded.timescale);
+});
+
+test("encodeVideoProperties: TIMESCALE なしで送信する", () => {
+  // 送信 TIMESTAMP は Unix epoch マイクロ秒のため TIMESCALE を付けない
+  const bytes = encodeVideoProperties({ timestamp: 1_700_000_001_000_000n });
+  const decoded = decodeVideoProperties(bytes);
+
+  assert.equal(decoded.timestamp, 1_700_000_001_000_000n);
+  assert.isUndefined(decoded.timescale);
+});
+
+test("resolveAudioProperties と換算の合成: TIMESCALE 有りで換算値になる", () => {
+  // TIMESCALE 付き Object バイト列の解決結果を換算するとマイクロ秒になる
+  const bytes = encodeAudioProperties({ timestamp: 48000n, timescale: 48000n });
+  const resolved = resolveAudioProperties(undefined, bytes);
+
+  assert.equal(resolved.timestamp, 48000n);
+  assert.equal(resolved.timescale, 48000n);
+  if (resolved.timestamp === undefined) {
+    assert.fail("TIMESTAMP が解決されること");
+  }
+  assert.equal(toDecoderMicroseconds(resolved.timestamp, resolved.timescale), 1_000_000n);
+});
+
+test("resolveVideoProperties と換算の合成: TIMESCALE 有りで換算値になる", () => {
+  // TIMESCALE 付き Object バイト列の解決結果を換算するとマイクロ秒になる
+  const bytes = encodeVideoProperties({ timestamp: 90000n, timescale: 90000n });
+  const resolved = resolveVideoProperties(undefined, bytes);
+
+  assert.equal(resolved.timestamp, 90000n);
+  assert.equal(resolved.timescale, 90000n);
+  if (resolved.timestamp === undefined) {
+    assert.fail("TIMESTAMP が解決されること");
+  }
+  assert.equal(toDecoderMicroseconds(resolved.timestamp, resolved.timescale), 1_000_000n);
+});
+
+test("resolveAudioProperties と換算の合成: Track TIMESCALE 継承でも換算する", () => {
+  // Track の TIMESCALE を継承した壁時計 TIMESTAMP は換算される。
+  // 混在 (壁時計 + Track TIMESCALE) は送り手の規約違反であり、
+  // 受け側は解決値で換算する。送り手は Track にも TIMESCALE を置かないこと
+  const trackProperties: Property[] = [{ id: LOCPropertyId.TIMESCALE, value: 90000n }];
+  const objectBytes = encodeAudioProperties({ timestamp: 1_700_000_001_000_000n });
+  const resolved = resolveAudioProperties(trackProperties, objectBytes);
+
+  assert.equal(resolved.timestamp, 1_700_000_001_000_000n);
+  assert.equal(resolved.timescale, 90000n);
+  if (resolved.timestamp === undefined) {
+    assert.fail("TIMESTAMP が解決されること");
+  }
+  assert.equal(
+    toDecoderMicroseconds(resolved.timestamp, resolved.timescale),
+    (1_700_000_001_000_000n * 1_000_000n) / 90000n,
+  );
 });

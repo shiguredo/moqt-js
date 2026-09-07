@@ -216,6 +216,42 @@ export function decodeTimescale(data: Uint8Array): bigint {
 }
 
 /**
+ * WebCodecs 時刻を Unix epoch マイクロ秒に換算する
+ *
+ * draft-ietf-moq-loc-04 §2.3.1.1: TIMESCALE 不在の TIMESTAMP は
+ * Unix epoch からのマイクロ秒 (壁時計) である。
+ * WebCodecs の chunk.timestamp は timeOrigin 基準の単調時刻
+ * (マイクロ秒) のため、壁時計基準に換算して送る。
+ *
+ * @param monotonicMicros - 単調時刻 (マイクロ秒、bigint)
+ * @param timeOriginMs - 時刻原点の壁時計 (ミリ秒、number。呼び出し側が
+ * performance.timeOrigin を渡す。丸めはミリ秒→マイクロ秒換算時のみ。
+ * 現行 epoch 域は safe integer かつ varint 範囲内のため exact である)
+ */
+export function toUnixEpochMicroseconds(monotonicMicros: bigint, timeOriginMs: number): bigint {
+  return BigInt(Math.round(timeOriginMs * 1000)) + monotonicMicros;
+}
+
+/**
+ * TIMESTAMP をデコーダ渡しのマイクロ秒に換算する
+ *
+ * draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2:
+ * TIMESCALE 不在時は値をそのまま渡し、有る時はマイクロ秒換算する
+ * (timestamp * 1_000_000 / timescale、bigint 除算で 0 方向丸め。
+ * Unix epoch / メディア時間は非負前提のため floor と一致する)。
+ * TIMESCALE が 0 以下の不正値は換算不能のためそのまま渡す
+ * (decode*Properties の寛容方針に合わせ、0 除算を避けて通過させる)。
+ * 解決済み timescale が Track 由来でも換算するため、壁時計送信時は
+ * Track にも TIMESCALE を置かないこと (混在は受信換算を誤らせる)。
+ */
+export function toDecoderMicroseconds(timestamp: bigint, timescale?: bigint): bigint {
+  if (timescale === undefined || timescale <= 0n) {
+    return timestamp;
+  }
+  return (timestamp * 1_000_000n) / timescale;
+}
+
+/**
  * Video Frame Marking の Value バイト列を生成する (length prefix を含まない)。
  *
  * draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 の Long Extension 2 オクテット形
