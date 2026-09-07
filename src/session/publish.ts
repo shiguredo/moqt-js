@@ -15,6 +15,7 @@ import {
   SubgroupHeaderType,
   encodeObjectDatagram,
   encodeObjectFields,
+  validatePublisherPriority,
   DatagramType,
 } from "../dataStream";
 import { ClosedSubgroupError, SessionError, SessionErrorCode } from "../error";
@@ -59,10 +60,13 @@ export function publishSendObject(
   // キュー登録) の前に fail-fast で呼び出し元へ返す。groupId も objectId と
   // 同一契約に揃える (吸収して resolve する旧契約はやめる)。
   // 通知契約のため handleError も呼び、返値 Promise は reject する (解決しない)。
+  // priority の null は undefined 同様に既定値 (128) 扱いとする。
   let groupId: bigint;
   try {
     groupId = validateGroupAndObjectIdRange("group id", params.groupId);
     validateGroupAndObjectIdRange("object id", params.objectId);
+    // 不正 priority も FIN 等の副作用の前に fail-fast で返す (ID 検証と同位置)。
+    validatePublisherPriority(params.priority ?? 128);
   } catch (error) {
     const rejection = error instanceof Error ? error : new Error(String(error));
     publisher.handleError(rejection);
@@ -123,11 +127,12 @@ export async function publishSendObjectInternal(
   params: SendObjectParams,
 ): Promise<void> {
   const trackAlias = publisher.getTrackAlias();
-  // ID 範囲検証は lookup・FIN より前に行う。公開経路では publishSendObject の
+  // ID・priority 範囲検証は lookup・FIN より前に行う。公開経路では publishSendObject の
   // fail-fast が先に拒否するため、この throw が公開経路の handleError と
   // 二重通知になることはない。
   const groupId = validateGroupAndObjectIdRange("group id", params.groupId);
   const objectId = validateGroupAndObjectIdRange("object id", params.objectId);
+  validatePublisherPriority(params.priority ?? 128);
 
   let streamState = session.publisherStreams.get(trackAlias);
 
@@ -320,6 +325,8 @@ export function publishSendDatagram(
   try {
     groupId = validateGroupAndObjectIdRange("group id", params.groupId);
     objectId = validateGroupAndObjectIdRange("object id", params.objectId);
+    // 不正 priority も副作用の前に fail-fast で返す (ID 検証と同位置)。
+    validatePublisherPriority(params.priority ?? 128);
   } catch (error) {
     const rejection = error instanceof Error ? error : new Error(String(error));
     publisher.handleError(rejection);

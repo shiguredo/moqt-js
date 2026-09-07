@@ -1,7 +1,7 @@
 # Publisher Priority の未検証による黙示丸め
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-publisher-priority-range
 - Polished: 2026-09-06
 
@@ -30,3 +30,10 @@ subgroup / datagram 両経路で範囲外 priority が `Uint8Array` 化で黙っ
 
 - draft-ietf-moq-transport-20 §11.2 / §11.3 / §11.4.2
 - `0471` (subgroup 経路の `throw` 伝播の見直し)
+
+## 解決方法
+
+- `src/dataStream.ts` に値域検証ヘルパーを新設し、3 encode 経路で Uint8Array 化前に throw する。Priority なし型では検証しない
+- 公開 subgroup 経路は副作用の前に fail-fast で返す（通知 + reject）。datagram 経路は通知 + throw、内部実装も FIN より前で検証する
+- 境界値等のテスト 12 件を追加した。新規テストが旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

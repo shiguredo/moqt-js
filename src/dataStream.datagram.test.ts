@@ -297,3 +297,70 @@ test("ObjectDatagram: GREASE Object Properties が EXT 型でラウンドトリ�
     assert.isTrue(ids[0] < 0x4000n);
   }
 });
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
+ * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
+ */
+test("ObjectDatagram: 範囲外・非整数の publisherPriority は throw する", () => {
+  // 256 以上・負値・300 (丸めで 44 になる値) はいずれも拒否する
+  for (const priority of [256, -1, 300]) {
+    assert.throws(
+      () =>
+        encodeObjectDatagram({
+          type: DatagramType.PAYLOAD_OBJ,
+          trackAlias: 1n,
+          groupId: 2n,
+          objectId: 3n,
+          publisherPriority: priority,
+          payload: new Uint8Array([0xaa]),
+        }),
+      /invalid publisher priority: .* expected integer 0 to 255/,
+    );
+  }
+  // 非整数も拒否する
+  for (const priority of [1.5, Number.NaN]) {
+    assert.throws(
+      () =>
+        encodeObjectDatagram({
+          type: DatagramType.PAYLOAD_OBJ,
+          trackAlias: 1n,
+          groupId: 2n,
+          objectId: 3n,
+          publisherPriority: priority,
+          payload: new Uint8Array([0xaa]),
+        }),
+      /invalid publisher priority/,
+    );
+  }
+  // 境界値 0 / 255 は従来どおり通り、ワイヤ値と一致する
+  for (const priority of [0, 255]) {
+    const encoded = encodeObjectDatagram({
+      type: DatagramType.PAYLOAD_OBJ,
+      trackAlias: 1n,
+      groupId: 2n,
+      objectId: 3n,
+      publisherPriority: priority,
+      payload: new Uint8Array([0xaa]),
+    });
+    assert.equal(encoded[4], priority);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * Priority なし型では不正値が渡されても検証せず throw しないことを検証する。
+ * (検証は Priority Present 分岐内でのみ行う)
+ */
+test("ObjectDatagram: Priority なし型では範囲外 priority でも throw しない", () => {
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_NO_PRI,
+    trackAlias: 1n,
+    groupId: 2n,
+    objectId: 3n,
+    publisherPriority: 300,
+    payload: new Uint8Array([0xaa]),
+  });
+  assert.isDefined(encoded);
+});

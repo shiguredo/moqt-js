@@ -93,6 +93,7 @@ export interface Publisher {
    * 範囲外の Group / Object ID は fail-fast で error 通知 + 返値の reject になる
    * (fire-and-forget でも `.catch` するか error 通知で処理すること)。
    * その他の送信失敗 (書き込み失敗等) は error 通知のみで返値は resolve する。
+   * 範囲外・非整数の priority も fail-fast で error 通知 + 返値の reject になる。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
@@ -108,6 +109,7 @@ export interface Publisher {
    *
    * 範囲外の Group / Object ID は error 通知 + throw する
    * (セッションは閉じない)。closed 後は検証前に no-op で返す。
+   * 範囲外・非整数の priority も error 通知 + throw になる。
    */
   sendDatagram(params: SendDatagramParams): void;
   /**

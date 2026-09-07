@@ -95,6 +95,65 @@ test("SubgroupHeader: Priority Present の型で publisherPriority 省略は thr
   );
 });
 
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
+ * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
+ */
+test("SubgroupHeader: 範囲外・非整数の publisherPriority は throw する", () => {
+  // 256 以上・負値・300 (丸めで 44 になる値) はいずれも拒否する
+  for (const priority of [256, -1, 300]) {
+    assert.throws(
+      () =>
+        encodeSubgroupHeader({
+          type: SubgroupHeaderType.BASE,
+          trackAlias: 1n,
+          groupId: 1n,
+          publisherPriority: priority,
+        }),
+      /invalid publisher priority: .* expected integer 0 to 255/,
+    );
+  }
+  // 非整数も拒否する
+  for (const priority of [1.5, Number.NaN]) {
+    assert.throws(
+      () =>
+        encodeSubgroupHeader({
+          type: SubgroupHeaderType.BASE,
+          trackAlias: 1n,
+          groupId: 1n,
+          publisherPriority: priority,
+        }),
+      /invalid publisher priority/,
+    );
+  }
+  // 境界値 0 / 255 は従来どおり通る
+  for (const priority of [0, 255]) {
+    const encoded = encodeSubgroupHeader({
+      type: SubgroupHeaderType.BASE,
+      trackAlias: 1n,
+      groupId: 1n,
+      publisherPriority: priority,
+    });
+    assert.equal(encoded[encoded.length - 1], priority);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * Priority なし型では不正値が渡されても検証せず throw しないことを検証する。
+ * (検証は Priority Present 分岐内でのみ行う)
+ */
+test("SubgroupHeader: Priority なし型では範囲外 priority でも throw しない", () => {
+  const encoded = encodeSubgroupHeader({
+    type: SubgroupHeaderType.BASE_NO_PRIORITY,
+    trackAlias: 1n,
+    groupId: 1n,
+    publisherPriority: 300,
+  });
+  assert.isDefined(encoded);
+});
+
 test("SubgroupHeader: BASE タイプをデコード", () => {
   const data = new Uint8Array([0x10, 0x05, 0x0a, 0x80]);
   const [header, consumed] = decodeSubgroupHeader(data);

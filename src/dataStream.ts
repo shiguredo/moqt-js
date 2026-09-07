@@ -31,6 +31,22 @@ const ERR_PUBLISHER_PRIORITY_REQUIRED =
   "publisherPriority is required when Priority Present bit is set";
 
 /**
+ * Publisher Priority の値域を検証する
+ *
+ * draft-ietf-moq-transport-20 §11.2 / §11.3 / §11.4.2 / §11.4.4:
+ * Publisher Priority は 8 bit (0〜255) である。範囲外・非整数は
+ * Uint8Array 化で黙って丸められるため、変換前に throw する。
+ * 仕様の将来版で値域が変わる可能性がある。
+ *
+ * @throws Error 非整数または 0〜255 外の場合 (期待値と実際値を含む)
+ */
+export function validatePublisherPriority(priority: number): void {
+  if (!Number.isInteger(priority) || priority < 0 || priority > 255) {
+    throw new Error(`invalid publisher priority: ${priority}, expected integer 0 to 255`);
+  }
+}
+
+/**
  * Object Status の値を検証する
  *
  * draft-ietf-moq-transport-20 Section 11.2.1.1:
@@ -335,6 +351,7 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
     if (header.publisherPriority === undefined) {
       throw new Error(ERR_PUBLISHER_PRIORITY_REQUIRED);
     }
+    validatePublisherPriority(header.publisherPriority);
     parts.push(new Uint8Array([header.publisherPriority]));
   }
 
@@ -808,6 +825,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     if (datagram.publisherPriority === undefined) {
       throw new Error(ERR_PUBLISHER_PRIORITY_REQUIRED);
     }
+    validatePublisherPriority(datagram.publisherPriority);
     parts.push(new Uint8Array([datagram.publisherPriority]));
   }
 
@@ -1322,6 +1340,7 @@ export function encodeFetchObjectFields(
     if (fields.publisherPriority === undefined) {
       throw new Error("Publisher Priority required when PRIORITY_PRESENT flag is set");
     }
+    validatePublisherPriority(fields.publisherPriority);
     parts.push(new Uint8Array([fields.publisherPriority]));
   }
 

@@ -33,6 +33,9 @@ function createSessionForPublish(): {
       unidirectionalStreamCreatedCount++;
       return new WritableStream<Uint8Array>();
     },
+    datagrams: {
+      writable: new WritableStream<Uint8Array>(),
+    },
   } as unknown as WebTransport;
 
   let closedWithError: SessionError | undefined;
@@ -275,6 +278,143 @@ test("publishSendObject: groupId が 2^64 以上の場合に reject しセッシ
 });
 
 /**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に範囲外 priority を渡すと、返値 Promise が reject し、
+ * FIN 等の副作用なしに失敗することを検証する。
+ */
+test("publishSendObject: 範囲外 priority (300) で reject し副作用を残さない", async () => {
+  // 丸め送信せず fail-fast で呼び出し元へ返す
+  const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let rejected: Error | undefined;
+  try {
+    await publishSendObject(session, publisher, {
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+      priority: 300,
+    });
+  } catch (error) {
+    rejected = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(rejected);
+  assert.isTrue(rejected!.message.includes("invalid publisher priority"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], rejected);
+  assert.isUndefined(closedWithError());
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.equal(session.publisherSendQueues.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 内部実装に直接不正 priority を渡すと、既存ストリームの FIN なしに
+ * throw することを検証する (ID 検証と同位置のため副作用なし)。
+ */
+test("publishSendObjectInternal: 不正 priority で既存ストリームを FIN せず throw する", async () => {
+  // Group 切替で旧ストリームの FIN が走る配置にし、不正 priority で呼ぶ
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  let finCalled = false;
+  const oldWritable = new WritableStream<Uint8Array>({
+    close() {
+      finCalled = true;
+    },
+  });
+  session.publisherStreams.set(1n, {
+    groupId: 0n,
+    writer: oldWritable.getWriter(),
+    previousObjectId: 5n,
+  });
+
+  let thrown: Error | undefined;
+  try {
+    await publishSendObjectInternal(session, publisher, {
+      groupId: 1,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+      priority: 300,
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 検証は lookup・FIN より前のため、旧ストリームは閉じず新規も作らない
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid publisher priority"));
+  assert.isFalse(finCalled);
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.isTrue(session.publisherStreams.has(1n));
+  assert.equal(session.publisherStreams.get(1n)?.groupId, 0n);
+  assert.equal(session.publisherStreams.get(1n)?.previousObjectId, 5n);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject の境界値 0 / 255 は従来どおり送信できることを検証する。
+ */
+test("publishSendObject: 境界値 0 / 255 の priority は送信できる", async () => {
+  // 有効範囲の両端は fail-fast に掛からない
+  for (const priority of [0, 255]) {
+    const { session, unidirectionalStreamCreated } = createSessionForPublish();
+    const errors: Error[] = [];
+    const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+      errors.push(error);
+    });
+
+    await publishSendObject(session, publisher, {
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+      priority,
+    });
+
+    assert.equal(errors.length, 0);
+    assert.equal(unidirectionalStreamCreated(), 1);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.4.2:
+ * 公開 sendObject に -1 / 非整数の priority を渡すと reject することを検証する。
+ */
+test("publishSendObject: -1 / 非整数の priority で reject する", async () => {
+  // 代表値 300 以外の不正値も同一経路で拒否する
+  for (const priority of [-1, 1.5]) {
+    const { session, unidirectionalStreamCreated, closedWithError } = createSessionForPublish();
+    const errors: Error[] = [];
+    const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+      errors.push(error);
+    });
+
+    let rejected: Error | undefined;
+    try {
+      await publishSendObject(session, publisher, {
+        groupId: 0,
+        objectId: 0,
+        payload: new Uint8Array([1, 2, 3]),
+        priority,
+      });
+    } catch (error) {
+      rejected = error instanceof Error ? error : new Error(String(error));
+    }
+
+    assert.isDefined(rejected);
+    assert.isTrue(rejected!.message.includes("invalid publisher priority"));
+    assert.equal(errors.length, 1);
+    assert.isUndefined(closedWithError());
+    assert.equal(unidirectionalStreamCreated(), 0);
+  }
+});
+
+/**
  * draft-ietf-moq-transport-20 §11.3:
  * datagram 送信に不正 objectId を渡すと、通知して throw することを検証する
  * (戻り値が void のため throw 維持。sendObject の通知 + reject と対称)。
@@ -303,6 +443,98 @@ test("publishSendDatagram: 不正 objectId で通知して throw する", () => 
   assert.equal(errors.length, 1);
   assert.strictEqual(errors[0], thrown);
   assert.isUndefined(closedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * datagram 送信に範囲外 priority を渡すと、通知して throw することを検証する。
+ */
+test("publishSendDatagram: 範囲外 priority (300) で通知して throw する", () => {
+  // 丸め送信せず fail-fast で呼び出し元へ返す
+  const { session, closedWithError } = createSessionForPublish();
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+  });
+
+  let thrown: Error | undefined;
+  try {
+    publishSendDatagram(session, publisher, {
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+      priority: 300,
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("invalid publisher priority"));
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+  assert.isUndefined(closedWithError());
+  // 検証は writer 取得より前のため、datagram writer は生成されない
+  assert.isUndefined(session.datagramWriter);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * datagram 送信の境界値 0 / 255 は従来どおり送信できることを検証する。
+ */
+test("publishSendDatagram: 境界値 0 / 255 の priority は送信できる", () => {
+  // 有効範囲の両端は fail-fast に掛からず writer を取得する
+  for (const priority of [0, 255]) {
+    const { session, closedWithError } = createSessionForPublish();
+    const errors: Error[] = [];
+    const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+      errors.push(error);
+    });
+
+    publishSendDatagram(session, publisher, {
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1, 2, 3]),
+      priority,
+    });
+
+    assert.equal(errors.length, 0);
+    assert.isUndefined(closedWithError());
+    assert.isDefined(session.datagramWriter);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.3:
+ * datagram 送信に -1 / 非整数の priority を渡すと通知して throw することを検証する。
+ */
+test("publishSendDatagram: -1 / 非整数の priority で通知して throw する", () => {
+  // 代表値 300 以外の不正値も同一経路で拒否する
+  for (const priority of [-1, 1.5]) {
+    const { session, closedWithError } = createSessionForPublish();
+    const errors: Error[] = [];
+    const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+      errors.push(error);
+    });
+
+    let thrown: Error | undefined;
+    try {
+      publishSendDatagram(session, publisher, {
+        groupId: 0,
+        objectId: 0,
+        payload: new Uint8Array([1, 2, 3]),
+        priority,
+      });
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+
+    assert.isDefined(thrown);
+    assert.isTrue(thrown!.message.includes("invalid publisher priority"));
+    assert.equal(errors.length, 1);
+    assert.isUndefined(closedWithError());
+    assert.isUndefined(session.datagramWriter);
+  }
 });
 
 /**
