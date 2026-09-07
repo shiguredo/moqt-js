@@ -45,6 +45,7 @@ import {
   createSetup,
   getMessageTypeName,
   isRejectedReceiveNamespace,
+  PublishDoneStatusCode,
   type AuthorizationToken,
   type Location,
   type Parameter,
@@ -2913,7 +2914,11 @@ export class SessionImpl implements Session {
    * Request ID フィールドはない（bidi stream で特定可能）。
    */
   private async sendPublishDone(publisher: PublisherImpl): Promise<void> {
-    return publishSendPublishDone(this as unknown as SessionInternal, publisher);
+    return publishSendPublishDone(
+      this as unknown as SessionInternal,
+      publisher,
+      PublishDoneStatusCode.TRACK_ENDED,
+    );
   }
 
   /**

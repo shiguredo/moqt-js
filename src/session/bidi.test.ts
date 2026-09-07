@@ -16,8 +16,13 @@ import {
   decodeRequestErrorPayload,
   encodeGoawayPayload,
 } from "../message/session";
-import { encodePublishDonePayload } from "../message/publish";
-import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
+import { encodePublishDonePayload, decodePublishDonePayload } from "../message/publish";
+import {
+  MessageType,
+  MessageParameterType,
+  GroupOrder,
+  PublishDoneStatusCode,
+} from "../message/types";
 import {
   trackNamespaceToStrings,
   encodeParameters,
@@ -40,6 +45,7 @@ import { PublisherImpl } from "../publisher";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
   bidiCancelSubscription,
+  bidiHandlePublishDone,
   bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
   bidiReadPublishResponse,
@@ -55,7 +61,6 @@ import {
   type BidiSessionInternal,
 } from "./bidi";
 import { publishSendPublishDone } from "./publish";
-import type { SessionInternal } from "./types";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -806,6 +811,9 @@ function createBidiSession(): {
     peerMaxFilterRanges: 2,
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: () => {},
@@ -2308,7 +2316,7 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
 
   const publisher = new PublisherImpl(["test"], "track", requestId, 1n);
   publisher.onDoneInternal = () =>
-    publishSendPublishDone(session as unknown as SessionInternal, publisher);
+    publishSendPublishDone(session, publisher, PublishDoneStatusCode.TRACK_ENDED);
 
   const session = {
     sessionState: "connected",
@@ -2332,6 +2340,9 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
@@ -2408,6 +2419,9 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: () => {},
@@ -2481,6 +2495,9 @@ async function readPublishOkWithParameters(
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: () => {},
@@ -3056,11 +3073,275 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE に REQUEST_ER
 
   // REQUEST_ERROR (GOING_AWAY) が書き込まれ、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.GOING_AWAY));
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, 0n);
+  assert.equal(publishDone.reasonPhrase, "");
+  // 購読状態は掃除され、セッションは閉じない
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.9.1:
+ * publish ロールの REQUEST_UPDATE 拒否 (INVALID_FILTER) では、REQUEST_ERROR の
+ * 後に PUBLISH_DONE (UPDATE_FAILED) が送出される。
+ */
+test("bidiReadRequestStreamMessages: 不正 Range Filter の REQUEST_UPDATE 拒否で PUBLISH_DONE (UPDATE_FAILED) が送信される (publish ロール)", async () => {
+  // INVALID_FILTER 拒否の後続として PUBLISH_DONE が送出される
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // PRIORITY_FILTER (0x27) で 255 超の値を含む REQUEST_UPDATE を feed する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR (INVALID_FILTER) の後に PUBLISH_DONE (UPDATE_FAILED) が送出される
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(messages[0].payload).errorCode,
+    BigInt(RequestErrorCode.INVALID_FILTER),
+  );
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, 0n);
+  assert.equal(publishDone.reasonPhrase, "");
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.9.1 / §10.12:
+ * publisher がない REQUEST_UPDATE 拒否では、REQUEST_ERROR (INTERNAL_ERROR) の
+ * 後に PUBLISH_DONE (UPDATE_FAILED) が送出される。開設数を確定できないため
+ * Stream Count は 2^64 - 1 になる。
+ */
+test("bidiReadRequestStreamMessages: publisher がない REQUEST_UPDATE 拒否で Stream Count 2^64-1 の PUBLISH_DONE が送信される (publish ロール)", async () => {
+  // publisher なし経路で終了する
+  const ctx = createPublishReadTestContext({});
+  ctx.session.publishers.delete(ctx.requestId);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR (INTERNAL_ERROR) の後に PUBLISH_DONE (UPDATE_FAILED) が送出される
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(messages[0].payload).errorCode,
+    BigInt(RequestErrorCode.INTERNAL_ERROR),
+  );
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, MAX_VARINT);
+  assert.equal(publishDone.reasonPhrase, "");
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.9.1:
+ * REQUEST_ERROR の書き込みに失敗しても PUBLISH_DONE 送信に進み、
+ * 購読状態を掃除してセッションを閉じない
+ * (INVALID_FILTER 経路の回復力。他 2 経路と同一ヘルパー共有)。
+ */
+test("bidiReadRequestStreamMessages: 書き込み失敗でも購読を掃除してセッションを閉じない (publish ロール)", async () => {
+  // ピアのリセット相当 (source: stream) の書き込み失敗を注入しても終了処理が完走する
+  const peerResetError = () => Object.assign(new Error("reset by peer"), { source: "stream" });
+  const ctx = createPublishReadTestContext({
+    write: () => {
+      throw peerResetError();
+    },
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // PRIORITY_FILTER (0x27) で 255 超の値を含む REQUEST_UPDATE を feed する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // 書き込み失敗は黙殺され、購読状態は掃除され、セッションは閉じない
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.12:
+ * PUBLISH_DONE 送信前にデータストリームを閉じる (done() 経路と同形)。
+ * 書き込み順序でデータストリーム close 先行を検証する。
+ */
+test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリームを閉じてから PUBLISH_DONE が送信される (publish ロール)", async () => {
+  // データストリーム close が PUBLISH_DONE 送信より先に試行される
+  const ctx = createPublishReadTestContext({});
+  const dataWritable = new WritableStream<Uint8Array>({
+    close() {
+      ctx.events.push("data-close");
+    },
+  });
+  // テスト publisher (trackAlias 1n) の開設済みデータストリームを登録する
+  ctx.session.publisherStreams.set(1n, {
+    groupId: 0n,
+    writer: dataWritable.getWriter(),
+    previousObjectId: 0n,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // PRIORITY_FILTER (0x27) で 255 超の値を含む REQUEST_UPDATE を feed する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: ctx.requestId,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // REQUEST_ERROR 書き込み → データストリーム close → PUBLISH_DONE 書き込み → FIN の順序である
+  assert.deepEqual(ctx.events, ["write", "data-close", "write", "close"]);
+  // データストリームの登録は掃除される
+  assert.isFalse(ctx.session.publisherStreams.has(1n));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.9.1 / §10.12:
+ * 拒否で送出した PUBLISH_DONE (UPDATE_FAILED) のワイヤペイロードを
+ * 受信デコーダに流すと、購読側の errorCallback が呼ばれる
+ * (ワイヤペイロード単位の round-trip)。
+ */
+test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) のペイロード受信で errorCallback が呼ばれる", async () => {
+  // 送信側: INVALID_FILTER 拒否で PUBLISH_DONE を送出させる
+  const sender = createPublishReadTestContext({});
+
+  const senderPromise = bidiReadRequestStreamMessages(
+    sender.session,
+    sender.requestId,
+    sender.stream,
+    sender.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: sender.requestId,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  const updateMessage = sender.session.controlWriter!.encode(
+    MessageType.REQUEST_UPDATE,
+    updatePayload,
+  );
+  sender.readableController.enqueue(updateMessage);
+  sender.readableController.close();
+  await senderPromise;
+
+  const sent = new ControlStreamReader().feed(concatUint8Arrays(sender.written));
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].type, MessageType.PUBLISH_DONE);
+
+  // 受信側: 送出されたワイヤを実 SubscriberImpl に流す
+  let errorCalled: Error | undefined;
+  let endCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    1n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    (error) => {
+      errorCalled = error;
+    },
+  );
+  const receiver = createPublishReadTestContext({});
+  receiver.session.subscribers.set(0n, subscriber);
+  bidiHandlePublishDone(receiver.session, sent[1].payload, 0n);
+
+  // UPDATE_FAILED (0x8) がエラー通知され、終了も通知される
+  assert.isDefined(errorCalled);
+  assert.isTrue(errorCalled!.message.includes("0x8"));
+  assert.isTrue(endCalled);
+  assert.equal(subscriber.state, "closed");
 });
 
 /**
@@ -3139,10 +3420,14 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
 
   // REQUEST_ERROR (INVALID_FILTER) が書き込まれ、forward state は変更されない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, 0n);
   assert.isUndefined(ctx.closedWithError);
   // 検証は forward state 反映より前に配置されるため、状態は初期値 (true) のまま
   assert.isTrue(ctx.publisher.forwardState);
@@ -3219,10 +3504,14 @@ test("bidiReadRequestStreamMessages: FILL 内側の Range Filter 値違反の RE
 
   // REQUEST_ERROR (INVALID_FILTER) が応答され、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, 0n);
   assert.isUndefined(ctx.closedWithError);
 });
 
@@ -3255,10 +3544,14 @@ test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDAT
 
   // REQUEST_ERROR (INVALID_FILTER) が応答され、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, 0n);
   assert.isUndefined(ctx.closedWithError);
 });
 
@@ -3485,10 +3778,14 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
   await readPromise;
 
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  const publishDone = decodePublishDonePayload(messages[1].payload);
+  assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
+  assert.equal(publishDone.streamCount, 0n);
   assert.isUndefined(ctx.closedWithError);
 });
 
@@ -3698,6 +3995,9 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
@@ -3766,6 +4066,9 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
@@ -3848,6 +4151,9 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
