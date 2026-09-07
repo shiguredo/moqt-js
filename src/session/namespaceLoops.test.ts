@@ -1443,3 +1443,323 @@ test("namespaceStartPublicationStreamLoop: 確立後 (resolved=true) の GOAWAY 
   assert.isDefined(err);
   assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
 });
+
+// ============================================================================
+// 確立前の検証失敗で Promise が reject される
+// draft-ietf-moq-transport-20 §10.16 / §10.19 / §10.20:
+// ピアの初期応答が仕様違反でも呼び出し元の Promise を永久ハングさせず、
+// closeWithError に渡す SessionError と同一オブジェクトで reject する
+// (PUBLISH 応答経路と同一パターン)。
+// ============================================================================
+
+test("namespaceStartNamespaceStreamLoop: 先頭の想定外メッセージで reject し同一オブジェクトで閉じる", async () => {
+  // 先頭メッセージ検証の失敗は close だけでなく呼び出し元へ reject する
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // 先頭に NAMESPACE (REQUEST_OK / REQUEST_ERROR / GOAWAY 以外) を注入する
+  const namespacePayload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // reject される値は closeWithError に渡す値と同一オブジェクトである
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("namespaceStartNamespaceStreamLoop: 初期 REQUEST_OK のスコープ違反で reject し同一オブジェクトで閉じる", async () => {
+  // 初期応答のパラメータスコープ違反も呼び出し元へ reject する
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // FORWARD は SUBSCRIBE_NAMESPACE_OK (EXPIRES のみ許可) のスコープ違反である
+  ctx.readableController.enqueue(
+    requestOkMessageWithParameters(ctx.controlWriter, [
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    ]),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx.getClosedWithError()!.message.includes("not allowed in SUBSCRIBE_NAMESPACE_OK"),
+  );
+});
+
+test("namespaceStartNamespaceStreamLoop: 初期 REQUEST_OK の Track Properties 非空で reject し同一オブジェクトで閉じる", async () => {
+  // §10.5 の空必須違反も呼び出し元へ reject する
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx
+      .getClosedWithError()!
+      .message.includes("track properties must be empty in SUBSCRIBE_NAMESPACE_OK"),
+  );
+});
+
+test("namespaceStartTracksStreamLoop: 先頭の想定外メッセージで reject し同一オブジェクトで閉じる", async () => {
+  // 先頭メッセージ検証の失敗は close だけでなく呼び出し元へ reject する
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // 先頭に PUBLISH_SKIPPED (REQUEST_OK / REQUEST_ERROR / GOAWAY 以外) を注入する
+  const skippedPayload = encodePublishSkippedPayload({
+    type: MessageType.PUBLISH_SKIPPED,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+    trackName: new TextEncoder().encode("track"),
+  });
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.PUBLISH_SKIPPED, skippedPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // reject される値は closeWithError に渡す値と同一オブジェクトである
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("namespaceStartTracksStreamLoop: 初期 REQUEST_OK のスコープ違反で reject し同一オブジェクトで閉じる", async () => {
+  // 初期応答のパラメータスコープ違反も呼び出し元へ reject する
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // FORWARD は SUBSCRIBE_TRACKS_OK (EXPIRES のみ許可) のスコープ違反である
+  ctx.readableController.enqueue(
+    requestOkMessageWithParameters(ctx.controlWriter, [
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    ]),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("not allowed in SUBSCRIBE_TRACKS_OK"));
+});
+
+test("namespaceStartPublicationStreamLoop: 初期 REQUEST_OK のスコープ違反で reject し同一オブジェクトで閉じる", async () => {
+  // 初期応答のパラメータスコープ違反も呼び出し元へ reject する
+  const ctx = createPublicationLoopTestContext();
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // FORWARD は PUBLISH_NAMESPACE_OK (EXPIRES のみ許可) のスコープ違反である
+  ctx.readableController.enqueue(
+    requestOkMessageWithParameters(ctx.controlWriter, [
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    ]),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("not allowed in PUBLISH_NAMESPACE_OK"));
+});
+
+test("namespaceStartPublicationStreamLoop: 初期 REQUEST_OK の Track Properties 非空で reject し同一オブジェクトで閉じる", async () => {
+  // §10.5 の空必須違反も呼び出し元へ reject する
+  const ctx = createPublicationLoopTestContext();
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx
+      .getClosedWithError()!
+      .message.includes("track properties must be empty in PUBLISH_NAMESPACE_OK"),
+  );
+});
+
+test("namespaceStartPublicationStreamLoop: 想定外の先頭メッセージで reject し同一オブジェクトで閉じる", async () => {
+  // 想定外の先頭メッセージは close だけでなく呼び出し元へ reject する
+  const ctx = createPublicationLoopTestContext();
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // 先頭に NAMESPACE (REQUEST_OK / REQUEST_ERROR / GOAWAY 以外) を注入する
+  const namespacePayload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // reject される値は closeWithError に渡す値と同一オブジェクトである
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("namespaceStartPublicationStreamLoop: 確立後の想定外メッセージは reject せず閉じるのみにする", async () => {
+  // 確立後の未知メッセージは close のみで、解決済み Promise への二重 reject はない
+  const ctx = createPublicationLoopTestContext();
+
+  let resolvedCount = 0;
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolvedCount++;
+    },
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // 正常な REQUEST_OK で確立させてから想定外メッセージを注入する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  const namespacePayload = encodeNamespacePayload({
+    type: MessageType.NAMESPACE,
+    trackNamespaceSuffix: createTrackNamespace(["sports"]),
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.NAMESPACE, namespacePayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // Promise は 1 回解決され、reject は発火しないままセッションが閉じる
+  assert.equal(resolvedCount, 1);
+  assert.isUndefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK は重複として閉じ、reject しない", async () => {
+  // 確立後の 2 通目 REQUEST_OK は scope 検証より先に重複として閉じる
+  const ctx = createPublicationLoopTestContext();
+
+  let resolvedCount = 0;
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {
+      resolvedCount++;
+    },
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // 正常な REQUEST_OK で確立させてから、スコープ違反付きの 2 通目を注入する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    requestOkMessageWithParameters(ctx.controlWriter, [
+      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    ]),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 重複優先のため scope 違反ではなく重複として閉じ、reject は発火しない
+  assert.equal(resolvedCount, 1);
+  assert.isUndefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("received duplicate REQUEST_OK"));
+});

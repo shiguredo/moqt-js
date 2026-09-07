@@ -1,7 +1,7 @@
 # namespace 系の初期応答検証失敗で Promise が永久ハングする
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-namespace-first-response-hang
 - Polished: 2026-09-06
 
@@ -25,3 +25,9 @@
 - 確立前の検証失敗で呼び出し元の `Promise` が `reject` されること (3 API とも)。`reject` される値は `closeWithError` に渡す `SessionError` と同一オブジェクトであること。
 - 正常系の確立フローが変わらないこと。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/namespaceLoops.ts` に共通ヘルパーを新設し、3 ループの確立前検証失敗 8 経路で `reject` してから同一オブジェクトで `session.closeWithError` する。先頭メッセージ検証はエラーを返す純粋化で呼び出し側 2 箇所を統一した
+- `src/session/namespaceLoops.test.ts` に検証失敗 10 件のテストを追加し、同一オブジェクト性を固定した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

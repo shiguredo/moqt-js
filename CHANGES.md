@@ -893,6 +893,10 @@
   - draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1 に基づき、Length 宣言に対して Value バイトが不足する切り詰めワイヤを ProtocolViolationError で拒否する（従来は不足分の短い配列を正常値として返していた）
   - ID / Length の varint 自体が不完全な入力は従来どおり IncompleteDataError になる。空 description の正常系は維持する
   - @voluntas
+- [FIX] namespace 系の初期応答検証失敗で Promise が永久ハングするのを修正する
+  - draft-ietf-moq-transport-20 §10.19 / §10.20 / §10.16 / §10.5 / §10.2.1 に基づき、subscribeNamespace / subscribeTracks の先頭メッセージ MUST 違反、3 系統の初期応答スコープ違反、SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の Track Properties 非空を呼び出し元へ reject してからセッションを閉じる。publishNamespace の確立前未知メッセージも同一パターンで reject する
+  - reject する値と close に渡す値は同一オブジェクトにする（PUBLISH 応答経路と同一パターン）。正常系の確立フローは変えない
+  - @voluntas
 
 ### misc
 
