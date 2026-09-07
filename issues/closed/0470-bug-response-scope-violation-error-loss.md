@@ -1,7 +1,7 @@
 # SUBSCRIBE / FETCH / TRACK_STATUS の応答スコープ違反で具体エラーが失われる
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-response-scope-error-loss
 - Polished: 2026-09-06
 
@@ -28,3 +28,9 @@
 ## 関連
 
 - `0498` (4 応答読み取りの共通化。重複整理はそちらに委ねる)
+
+## 解決方法
+
+- `src/session/bidi.ts` の 3 応答読み取りでスコープ検証失敗時に削除集合を掃除し、同一 SessionError オブジェクトで reject してから閉じる（PUBLISH 経路と同一パターン）
+- `src/session/bidi.test.ts` に 3 経路のテストを追加し、具体エラー・同一オブジェクト・順序・削除集合を検証した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

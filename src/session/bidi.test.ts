@@ -16,6 +16,7 @@ import {
   decodeRequestErrorPayload,
   encodeGoawayPayload,
 } from "../message/session";
+import { encodeFetchOkPayload } from "../message/fetch";
 import { encodePublishDonePayload, decodePublishDonePayload } from "../message/publish";
 import {
   MessageType,
@@ -30,7 +31,11 @@ import {
   encodeFillParameters,
 } from "../message";
 import { buildFillParameters } from "./params";
-import { decodeRequestUpdatePayload, encodeRequestUpdatePayload } from "../message/subscribe";
+import {
+  decodeRequestUpdatePayload,
+  encodeRequestUpdatePayload,
+  encodeSubscribeOkPayload,
+} from "../message/subscribe";
 import { getParameterTrackNamespace, encodeLocationFilterParameter } from "../message/parameter";
 import {
   SessionError,
@@ -48,8 +53,11 @@ import {
   bidiHandlePublishDone,
   bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
+  bidiReadFetchResponse,
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
+  bidiReadSubscribeResponse,
+  bidiReadTrackStatusResponse,
   bidiSendNamespaceRequestUpdate,
   bidiSendRequestUpdate,
   rejectPendingRequestUpdates,
@@ -61,6 +69,7 @@ import {
   type BidiSessionInternal,
 } from "./bidi";
 import { publishSendPublishDone } from "./publish";
+import { FetcherImpl } from "../fetcher";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -7020,4 +7029,233 @@ test("bidiReadRequestStreamMessages: FORWARD の値域外の PUBLISH_STATE_NOTIF
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isNull(subscriber.largestLocation);
+});
+
+// ============================================================================
+// 応答スコープ違反で具体エラーが reject される
+// draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope)
+// PUBLISH 応答経路と同一パターン (削除・reject・close の順序と同一オブジェクト)
+// ============================================================================
+
+/**
+ * 応答読み取り用の session を構築する。ストリーム機構は実物であり、
+ * session はテスト用のオブジェクトリテラルを型キャストしたものである。
+ */
+function createOkResponseReadTestContext(): {
+  session: BidiSessionInternal;
+  stream: WebTransportBidirectionalStream;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+  controlReader: ControlStreamReader;
+  controlWriter: ControlStreamWriter;
+  getClosedWithError: () => SessionError | undefined;
+  order: string[];
+  requestId: bigint;
+} {
+  const requestId = 10n;
+
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>();
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const writer = writable.getWriter();
+  const controlReader = new ControlStreamReader();
+
+  let closedWithError: SessionError | undefined;
+  // reject → closeWithError の順序を記録する
+  const order: string[] = [];
+  const controlWriter = new ControlStreamWriter();
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter,
+    nextRequestId: 100n,
+    requestStreams: new Map([[requestId, { stream, writer, controlReader }]]),
+    pendingPublish: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
+    pendingTrackStatus: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    namespaceSubscriptions: new Map(),
+    tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      order.push("close");
+      closedWithError = error;
+    },
+  } as unknown as BidiSessionInternal;
+
+  return {
+    session,
+    stream,
+    readableController,
+    controlReader,
+    controlWriter,
+    // 値コピーではなく getter で返す (closeWithError 呼び出し後の代入を反映する)
+    getClosedWithError: () => closedWithError,
+    order,
+    requestId,
+  };
+}
+
+test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エラーが reject される", async () => {
+  // 初期応答のパラメータスコープ違反は汎用 close エラーに埋もれさせない
+  const ctx = createOkResponseReadTestContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+  // 実運用の鍵は更新の Request ID だが、削除対象の確認のため購読 ID で登録する
+  ctx.session.fillFetchTargets.set(ctx.requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // FORWARD は SUBSCRIBE_OK (EXPIRES / LARGEST_OBJECT のみ許可) のスコープ違反である
+  const okPayload = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 具体エラーで reject され、同一オブジェクトで閉じる
+  assert.isDefined(rejected);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  // reject してから閉じる順序である
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx.getClosedWithError()!.message.includes("parameter type 0x10 not allowed in SUBSCRIBE_OK"),
+  );
+  // 削除集合 (pendingSubscribe + requestStreams + fillFetchTargets) が掃除される
+  assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+});
+
+test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが reject される", async () => {
+  // 初期応答のパラメータスコープ違反は汎用 close エラーに埋もれさせない
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: fetcher,
+  });
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // FORWARD は FETCH_OK (許可なし) のスコープ違反である
+  const okPayload = encodeFetchOkPayload({
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 0n, object: 0n },
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 具体エラーで reject され、同一オブジェクトで閉じる
+  assert.isDefined(rejected);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  // reject してから閉じる順序である
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx.getClosedWithError()!.message.includes("parameter type 0x10 not allowed in FETCH_OK"),
+  );
+  // 削除集合 (pendingFetch + requestStreams) が掃除される
+  assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具体エラーが reject される", async () => {
+  // 初期応答のパラメータスコープ違反は汎用 close エラーに埋もれさせない
+  const ctx = createOkResponseReadTestContext();
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // FORWARD は TRACK_STATUS_OK (LARGEST_OBJECT のみ許可) のスコープ違反である
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 具体エラーで reject され、同一オブジェクトで閉じる
+  assert.isDefined(rejected);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  // reject してから閉じる順序である
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    ctx
+      .getClosedWithError()!
+      .message.includes("parameter type 0x10 not allowed in TRACK_STATUS_OK"),
+  );
+  // 削除集合 (pendingTrackStatus + requestStreams) が掃除される
+  assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });
