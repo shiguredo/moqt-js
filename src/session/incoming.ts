@@ -135,7 +135,7 @@ export async function incomingSendRequestErrorAndClose(
  *  session with INVALID_REQUEST_ID."
  *
  * moqt-js は WebTransport 専用クライアントであり常に client ロールのため、
- * 受信 PUBLISH の Request ID はサーバー発の奇数が期待値となる。
+ * 受信リクエストの Request ID はサーバー発の奇数が期待値となる。
  *
  * パリティ・重複検証と receivedRequestIds への add を同一の同期ブロックで
  * 行う。受信 bidi ストリーム処理は fire-and-forget で並行実行されるため、
@@ -166,7 +166,7 @@ export function incomingValidateRequestId(
 
   // draft-ietf-moq-transport-20 §10.1:
   // 同一 Request ID の再出現は INVALID_REQUEST_ID。
-  // add は検証と同じ同期ブロック内で行い、拒否経路で return される PUBLISH も
+  // add は検証と同じ同期ブロック内で行い、拒否経路で return されるリクエストも
   // Request ID を消費したものとして記録する (§10.1「Each SUBSCRIBE, PUBLISH,
   // FETCH, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE,
   // REQUEST_UPDATE, and TRACK_STATUS message consumes a Request ID」)。
@@ -185,8 +185,10 @@ export function incomingValidateRequestId(
  *
  * - 分類 1 (publish): false を返し、呼び出し側で従来の受信 PUBLISH 処理を
  *   継続させる。
- * - 分類 2 (unsupported-request): REQUEST_ERROR (NOT_SUPPORTED) を応答して
- *   FIN で閉じ、true を返す。セッションは閉じない (§4 SHOULD)。
+ * - 分類 2 (unsupported-request): 先頭 varint を Request ID として検証し、
+ *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
+ *   検証失敗は INVALID_REQUEST_ID、先頭欠落は PROTOCOL_VIOLATION で閉じる。
+ *   検証通過時はセッションを閉じない (§4 SHOULD)。
  * - 分類 3 (protocol-violation): PROTOCOL_VIOLATION でセッションを閉じ、
  *   true を返す (§3.3 MUST)。
  *
@@ -206,13 +208,31 @@ export async function incomingHandleFirstBidiMessage(
     // 受信メッセージをデバッグ出力する (moqlog / debug コールバックで
     // 未対応リクエストの受信を観測できるようにする)
     session.emitDebug("recv", firstMsg.type, firstMsg.payload);
+    // draft-ietf-moq-transport-20 §10.1 (Request ID):
+    // 未対応 6 種の先頭は Request ID であり、分類 3 (先頭許可 7 種外)
+    // は Request ID としては扱わない。PUBLISH 経路と同一の検証でパリティ・重複を検証し、
+    // NOT_SUPPORTED 応答でも ID を消費して記録する (検証→応答の順)。
+    // 先頭 varint が取れない空・切詰めはペイロード破損として閉じる。
+    let requestId: bigint;
+    try {
+      [requestId] = decodeVarint(firstMsg.payload, 0);
+    } catch (error) {
+      // 空・切詰めの詳細はメッセージに残す (デバッグ時の区別のため)
+      const detail = error instanceof Error ? error.message : String(error);
+      session.closeWithError(
+        new SessionError(
+          `malformed unsupported request: missing request ID (${detail})`,
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return true;
+    }
+    if (!session.validateIncomingRequestId(requestId)) {
+      return true;
+    }
     // draft-ietf-moq-transport-20 §4 (Extensibility):
     // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
     // incomingClassifyFirstBidiMessage の docstring 参照)。
-    // ペイロードをデコードしないため、各メッセージ節の MUST 検証
-    // (§10.1 の Request ID パリティ・重複、§10.19 の Track Namespace Prefix
-    // 32 フィールド上限等) は分類 2 では適用されない (残余リスク。
-    // Request ID 検証は受信 PUBLISH (分類 1) のみに適用される)。
     await incomingSendRequestErrorAndClose(
       stream,
       RequestErrorCode.NOT_SUPPORTED,

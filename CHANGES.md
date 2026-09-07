@@ -927,6 +927,9 @@
 - [FIX] Length 宣言 slice の境界検証欠落を修正する
   - Length 宣言が残りバイトを超える切り詰め入力を、短い slice のまま後段に流さず宣言時点で ProtocolViolationError とする
   - @voluntas
+- [FIX] 未対応リクエストで Request ID 検証を素通りするのを修正する
+  - draft-ietf-moq-transport-20 §10.1 に基づき、未対応 6 種の先頭メッセージでもパリティ・重複検証し、NOT_SUPPORTED 応答でも ID を消費して記録する。先頭 varint が取れない空・切詰めはペイロード破損として PROTOCOL_VIOLATION で閉じる
+  - @voluntas
 
 ### misc
 
