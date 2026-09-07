@@ -1,7 +1,7 @@
 # LOC Timestamp に WebCodecs 時刻を載せ Timescale を無視している
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-loc-timestamp-semantics
 - Polished: 2026-09-06
 
@@ -26,6 +26,12 @@ timescale 不在時の timestamp は Unix epoch からのマイクロ秒と定�
 - 送信 TIMESTAMP が Unix epoch マイクロ秒範囲 (現在時刻前後の許容幅) に入ること。
 - `timescale` 有り受信で換算値がデコーダに渡ること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- 送信側は WebCodecs 時刻を Unix epoch マイクロ秒に換算して送り、TIMESCALE は付けない。受信側は TIMESCALE 有り時のみマイクロ秒換算し、不在時と不正値はそのまま渡す
+- 送受の時刻語義テスト 10 件を追加した。旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

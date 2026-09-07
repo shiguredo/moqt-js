@@ -564,9 +564,11 @@ class MediaPublisherImpl implements MediaPublisher {
   }): void {
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
-    // LOC Properties をエンコード
+    // LOC Properties をエンコード。
+    // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
+    // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
     const properties = LOC.encodeAudioProperties({
-      timestamp: BigInt(chunk.timestamp),
+      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
     });
 
     // オーディオは一定間隔で新しいグループを開始（約1秒ごと）
@@ -608,12 +610,14 @@ class MediaPublisherImpl implements MediaPublisher {
     }
 
     // LOC Properties をエンコード。
+    // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
+    // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
     // isDiscardable は WebCodecs が破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の
     // 「the sender knows」を守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして
     // 残すが、temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される (詳細は
     // encodeVideoFrameMarking を参照)。
     const properties = LOC.encodeVideoProperties({
-      timestamp: BigInt(chunk.timestamp),
+      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
       frameMarking: {
         isIndependent: chunk.type === "key",
         isDiscardable: false,

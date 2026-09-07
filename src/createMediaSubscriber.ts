@@ -186,6 +186,32 @@ function parseVideoCodec(codec: string): VideoCodecType {
 }
 
 /**
+ * 時刻解決に必要な LOC の部分構造
+ *
+ * 音声・映像の両プロパティに存在する timestamp / timescale のみを抜き出す。
+ * ドメイン固有型 (Video / Audio) の混用を避けるための音声・映像共通の型である。
+ */
+interface TimestampSource {
+  timestamp?: bigint;
+  timescale?: bigint;
+}
+
+/**
+ * 解決済み LOC からデコーダ渡しの時刻 (マイクロ秒数値) を求める
+ *
+ * TIMESCALE 不在時はそのまま、有る時はマイクロ秒換算して渡す
+ * (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)。
+ * 音声・映像ハンドラで共有する。
+ * TIMESTAMP 欠損時はデコーダ API が number 必須のため 0 を返す (従来通り)。
+ */
+function decoderTimestampOf(resolved: TimestampSource): number {
+  if (resolved.timestamp === undefined) {
+    return 0;
+  }
+  return Number(LOC.toDecoderMicroseconds(resolved.timestamp, resolved.timescale));
+}
+
+/**
  * MediaSubscriber の実装クラス
  */
 class MediaSubscriberImpl implements MediaSubscriber {
@@ -807,14 +833,9 @@ class MediaSubscriberImpl implements MediaSubscriber {
 
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
-    let timestamp = 0;
-    const locProperties = LOC.resolveAudioProperties(
-      this.audioSubscriber?.trackProperties,
-      obj.properties,
+    const timestamp = decoderTimestampOf(
+      LOC.resolveAudioProperties(this.audioSubscriber?.trackProperties, obj.properties),
     );
-    if (locProperties.timestamp !== undefined) {
-      timestamp = Number(locProperties.timestamp);
-    }
 
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
@@ -826,14 +847,11 @@ class MediaSubscriberImpl implements MediaSubscriber {
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
     let isKeyFrame = false;
-    let timestamp = 0;
     const locProperties = LOC.resolveVideoProperties(
       this.videoSubscriber?.trackProperties,
       obj.properties,
     );
-    if (locProperties.timestamp !== undefined) {
-      timestamp = Number(locProperties.timestamp);
-    }
+    const timestamp = decoderTimestampOf(locProperties);
     if (locProperties.frameMarking) {
       isKeyFrame = locProperties.frameMarking.isIndependent;
     }
