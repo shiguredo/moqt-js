@@ -72,7 +72,7 @@ interface NamespacePublicationState {
   writer: WritableStreamDefaultWriter<Uint8Array>;
 }
 
-interface PublisherStreamState {
+export interface PublisherStreamState {
   groupId: bigint;
   writer: WritableStreamDefaultWriter<Uint8Array>;
   previousObjectId: bigint;
@@ -96,9 +96,8 @@ export interface SessionInternal extends BidiSessionInternal {
   // ============================================================
   // publish.ts 用
   // ============================================================
-  readonly publisherStreams: Map<bigint, PublisherStreamState>;
-  readonly publisherSendQueues: Map<bigint, Promise<void>>;
-  readonly closedSubgroups: Set<string>;
+  // publisherStreams / publisherSendQueues / closedSubgroups は
+  // BidiSessionInternal 側で宣言済み (REQUEST_UPDATE 失敗時の終了処理で使う)。
   // Writable である必要あり: getDatagramWriter が ??= で遅延代入するため
   datagramWriter: WritableStreamDefaultWriter<Uint8Array> | undefined;
   // 抽出先 free function からインクリメントされるため readonly 不可

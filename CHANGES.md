@@ -897,6 +897,10 @@
   - draft-ietf-moq-transport-20 §10.19 / §10.20 / §10.16 / §10.5 / §10.2.1 に基づき、subscribeNamespace / subscribeTracks の先頭メッセージ MUST 違反、3 系統の初期応答スコープ違反、SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の Track Properties 非空を呼び出し元へ reject してからセッションを閉じる。publishNamespace の確立前未知メッセージも同一パターンで reject する
   - reject する値と close に渡す値は同一オブジェクトにする（PUBLISH 応答経路と同一パターン）。正常系の確立フローは変えない
   - @voluntas
+- [FIX] REQUEST_UPDATE 失敗時に PUBLISH_DONE (UPDATE_FAILED) を送信する
+  - draft-ietf-moq-transport-20 §10.9.1 / §10.12 に基づき、publish ロールの REQUEST_UPDATE 拒否（GOING_AWAY / INVALID_FILTER / publisher 不在）で REQUEST_ERROR 応答後に PUBLISH_DONE (UPDATE_FAILED) を送信して購読を終了する
+  - 送信前に publisher のデータストリーム (unidirectional) を閉じ、PUBLISH_DONE を最終メッセージにする。publisher がない場合は Stream Count に 2^64 - 1 を入れる
+  - @voluntas
 
 ### misc
 

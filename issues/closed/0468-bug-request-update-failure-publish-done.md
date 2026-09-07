@@ -1,7 +1,7 @@
 # REQUEST_UPDATE 失敗時に PUBLISH_DONE (UPDATE_FAILED) を送信しない
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-request-update-publish-done
 - Polished: 2026-09-07
 
@@ -33,3 +33,10 @@ draft-ietf-moq-transport-20 §10.9.1 は REQUEST_UPDATE 失敗時に publisher �
 ## 関連
 
 - draft-ietf-moq-transport-20 §10.9.1 / §10.12
+
+## 解決方法
+
+- `src/session/publish.ts` の `publishSendPublishDone` に status 必須引数を追加し、publisher がない経路 `publishSendPublishDoneWithoutPublisher` を新設した（Stream Count 不明時は 2^64-1、Error Reason 空維持）
+- `src/session/bidi.ts` の publish ロール 3 拒否経路で REQUEST_ERROR 応答後にデータストリームを閉じて PUBLISH_DONE (UPDATE_FAILED) を送信する。not-found 経路の送信も書き込み失敗黙殺に統一した
+- `src/session/bidi.test.ts` に拒否 6 件のテストを追加し、順序・Stream Count・round-trip を検証した。旧挙動の既存 5 件を新挙動に更新した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
