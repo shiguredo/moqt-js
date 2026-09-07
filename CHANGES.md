@@ -921,6 +921,9 @@
 - [FIX] namespace 系 3 API の送信失敗時にストリームリソースがリークするのを修正する
   - subscribeNamespace / subscribeTracks / publishNamespace の送信失敗時に取得済み reader / writer を cancel / abort (RESET 相当、FIN 不使用) で掃除してから throw する。Map 登録は成功時のみのため追加掃除は不要
   - @voluntas
+- [FIX] fetcher 待機と publisher ストリーム close のタイマー解放漏れを修正する
+  - 確定時に待機と close のタイムアウト用タイマーを解放し、タイムアウト先行時は待機登録も解除する。FETCH_OK / close 時の複数待機者の一斉解決で欠落しないよう複製反復する。打ち切り時は FIN を諦め abort (RESET 相当) で後始末する
+  - @voluntas
 - [FIX] Length 宣言 slice の境界検証欠落を修正する
   - Length 宣言が残りバイトを超える切り詰め入力を、短い slice のまま後段に流さず宣言時点で ProtocolViolationError とする
   - @voluntas

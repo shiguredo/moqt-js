@@ -48,6 +48,8 @@ import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
+import { incomingWaitForFetcher } from "./incoming";
+import type { SessionInternal } from "./types";
 import {
   bidiCancelSubscription,
   bidiHandlePublishDone,
@@ -7258,4 +7260,45 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
   // 削除集合 (pendingTrackStatus + requestStreams) が掃除される
   assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する", async () => {
+  // broadcast 側の複製反復により、1 件目の登録解除で 2 件目が欠落しない。
+  // 2 件目の timer を長くし、コールバック発火 (即時) と timer 代替 (遅延) を
+  // 経過時間で区別する
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: fetcher,
+  });
+  const internal = ctx.session as unknown as SessionInternal;
+  const first = incomingWaitForFetcher(internal, ctx.requestId, 100);
+  const second = incomingWaitForFetcher(internal, ctx.requestId, 1000);
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = encodeFetchOkPayload({
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 0n, object: 0n },
+    parameters: [],
+    trackProperties: [],
+  });
+  const started = Date.now();
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.strictEqual(await first, fetcher);
+  assert.strictEqual(await second, fetcher);
+  // コールバック発火なら即時解決する (timer 代替なら 1000ms 掛かる)。
+  // 閾値 500ms は壁時計依存だが、即時と満了の中間で余裕を持つ
+  assert.isBelow(Date.now() - started, 500);
+  assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
 });

@@ -748,7 +748,9 @@ export async function bidiReadFetchResponse(
 
       const fetcherCallbacks = session.fetcherReadyCallbacks.get(requestId);
       if (fetcherCallbacks) {
-        for (const cb of fetcherCallbacks) {
+        // incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
+        // 欠落しないよう複製して反復する。
+        for (const cb of fetcherCallbacks.slice()) {
           cb();
         }
         session.fetcherReadyCallbacks.delete(requestId);

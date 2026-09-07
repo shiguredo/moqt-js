@@ -260,38 +260,55 @@ export async function publishSendObjectInternal(
 
 /**
  * Publisher のストリームを閉じる（Promise チェーン排他制御付き）
+ *
+ * @param timeoutMs - writer.close の打ち切りまでのミリ秒 (テスト用の短縮のためにある。
+ * 本番呼び出しは既定値のままにする)
  */
 export function publishClosePublisherStream(
   session: BidiSessionInternal,
   trackAlias: bigint,
+  timeoutMs = 5000,
 ): Promise<void> {
   const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
   const currentPromise = previousPromise
     .catch(() => {})
-    .then(() => publishClosePublisherStreamInternal(session, trackAlias));
+    .then(() => publishClosePublisherStreamInternal(session, trackAlias, timeoutMs));
   session.publisherSendQueues.set(trackAlias, currentPromise);
   return currentPromise;
 }
 
 /**
  * Publisher のストリームを閉じる内部実装
+ *
+ * writer.close のタイムアウトは確定時 (成功・タイムアウト発火) に
+ * 必ず解放する (残留タイマーを残さない)。
  */
 async function publishClosePublisherStreamInternal(
   session: BidiSessionInternal,
   trackAlias: bigint,
+  timeoutMs: number,
 ): Promise<void> {
   const streamState = session.publisherStreams.get(trackAlias);
   if (streamState) {
     session.publisherStreams.delete(trackAlias);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         streamState.writer.close(),
         new Promise<void>((_, reject) => {
-          setTimeout(() => reject(new Error("writer.close() timed out")), 5000);
+          timer = setTimeout(() => reject(new Error("writer.close() timed out")), timeoutMs);
         }),
       ]);
     } catch {
-      // タイムアウトまたは既にクローズされている場合は無視
+      // タイムアウトまたは既にクローズされている場合は無視する。
+      // 打ち切り時は graceful FIN を諦め RESET で後始末する。
+      // abort の完了は待たない (詰まった close と同様に終わらないため)。
+      // 失敗は黙殺する
+      void streamState.writer.abort("publisher stream cleanup").catch(() => {});
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 

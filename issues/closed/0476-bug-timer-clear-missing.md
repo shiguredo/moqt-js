@@ -1,7 +1,7 @@
 # fetcher 待機と publisher ストリーム close のタイマー解放漏れ
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-timer-cleanup
 - Polished: 2026-09-06
 
@@ -26,3 +26,9 @@
 
 - 確定時にタイマーが残存しないこと (早期解決・タイムアウト発火・close の各経路。検証は実時間の短い timeout で行い、モック / スタブは使わない)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- 両箇所でタイマーハンドルを保持し、確定時に解放する。タイムアウト先行発火時は登録も解除し、broadcast 側は複製反復で欠落を防ぐ。打ち切り時は abort で後始末する
+- 実時間の短い timeout のテスト 8 件を追加した。旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

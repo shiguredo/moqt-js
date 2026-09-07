@@ -8,7 +8,12 @@
 import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "../publisher";
 import { SessionError } from "../error";
-import { publishSendDatagram, publishSendObject, publishSendObjectInternal } from "./publish";
+import {
+  publishClosePublisherStream,
+  publishSendDatagram,
+  publishSendObject,
+  publishSendObjectInternal,
+} from "./publish";
 import type { SessionInternal } from "./types";
 import { encodeObjectFields, encodeSubgroupHeader, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
@@ -969,4 +974,63 @@ test("publishSendObject: 閉じたストリームへの送信は error 通知し
   assert.isTrue(session.closedSubgroups.has("1:0"));
   // 新しいバイトはワイヤに出ない
   assert.equal(written.length, countAfterFirst);
+});
+
+// ============================================================================
+// publishClosePublisherStream のタイマー解放
+// writer.close のタイムアウトは確定時に解放する
+// ============================================================================
+
+test("publishClosePublisherStream: 詰まった close は短い timeout で打ち切り掃除する", async () => {
+  // 終わらない close でも短い timeout で打ち切り、登録を掃除する
+  const { session } = createSessionForPublish();
+  // 実ストリームに書き込みを詰まらせ、close が終わらない状態を作る
+  const stuck = new WritableStream<Uint8Array>({
+    write: () => new Promise<void>(() => {}),
+  });
+  const stuckWriter = stuck.getWriter();
+  const aborted: unknown[] = [];
+  const originalAbort = stuckWriter.abort.bind(stuckWriter);
+  stuckWriter.abort = async (reason?: unknown) => {
+    aborted.push(reason);
+    return originalAbort(reason);
+  };
+  const payload = new Uint8Array([1, 2, 3]);
+  // 書き込みを詰まらせる (完了を待たず、close を終わらなくする)
+  void stuckWriter.write(payload).catch(() => {});
+  session.publisherStreams.set(1n, {
+    groupId: 0n,
+    writer: stuckWriter,
+    previousObjectId: 0n,
+  });
+  session.closedSubgroups.add("1:0");
+
+  const started = Date.now();
+  await publishClosePublisherStream(session, 1n, 30);
+  const elapsed = Date.now() - started;
+
+  // 短い timeout で打ち切られ、登録と終了済み記録が掃除される
+  assert.isBelow(elapsed, 2000);
+  // 打ち切り時は RESET のため abort を試みる (完了は待たない)
+  assert.deepEqual(aborted, ["publisher stream cleanup"]);
+  assert.isFalse(session.publisherStreams.has(1n));
+  assert.isFalse(session.closedSubgroups.has("1:0"));
+  stuckWriter.releaseLock();
+});
+
+test("publishClosePublisherStream: 正常 close で登録を掃除する", async () => {
+  // 成功時は待たずに掃除する
+  const { session } = createSessionForPublish();
+  const writable = new WritableStream<Uint8Array>();
+  session.publisherStreams.set(1n, {
+    groupId: 0n,
+    writer: writable.getWriter(),
+    previousObjectId: 0n,
+  });
+  session.closedSubgroups.add("1:0");
+
+  await publishClosePublisherStream(session, 1n, 30);
+
+  assert.isFalse(session.publisherStreams.has(1n));
+  assert.isFalse(session.closedSubgroups.has("1:0"));
 });
