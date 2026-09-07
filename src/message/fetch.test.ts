@@ -117,3 +117,27 @@ test("decodeFetchPayload: 末尾に後続データがあると ProtocolViolation
 
   assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
 });
+
+/**
+ * draft-ietf-moq-transport-20 §10.13:
+ * Track Name Length 宣言が残りバイトを超える切り詰めは破損であり、
+ * 短い slice を返さず宣言時点で ProtocolViolationError とする。
+ */
+test("decodeFetchPayload: Track Name Length 宣言超過で ProtocolViolationError", () => {
+  // requestId + 空 namespace + Track Name Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x01, 0x00, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeFetchPayload(truncated, 0),
+    /fetch track name length exceeds remaining data/,
+  );
+});
+
+test("decodeFetchPayload: offset 付きでも Track Name Length 宣言超過で ProtocolViolationError", () => {
+  // 先頭 1 バイトのダミーを付けて offset=1 で読む (offset 項の回帰ガード)。
+  // Length 3 + 2 バイトの境界ちょうどのため、offset 脱落式では検出できない
+  const truncated = new Uint8Array([0x00, 0x01, 0x00, 0x03, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeFetchPayload(truncated, 1),
+    /fetch track name length exceeds remaining data/,
+  );
+});

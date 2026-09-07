@@ -117,9 +117,9 @@ export function encodeRedirect(redirect: Redirect): Uint8Array {
  * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure)
  *
  * 注: Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の
- * New Session URI (§10.4) にのみ存在する)。宣言された URI Length が
- * 実データを超える過剰宣言は、後続フィールドのデコード時に
- * IncompleteDataError として検出される。
+ * New Session URI (§10.4) にのみ存在する)。宣言された Length が
+ * 実データを超える過剰宣言は破損であり、宣言時点で拒否する
+ * (外側でフレーミング済みのため)。
  *
  * @returns [redirect, consumed bytes]
  */
@@ -129,6 +129,13 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
   const [uriLength, uriLengthSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += uriLengthSize;
 
+  // Length 宣言が残りバイトを超える切り詰めは破損であり、
+  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+  if (offset + totalConsumed + Number(uriLength) > data.length) {
+    throw new ProtocolViolationError(
+      `redirect URI length exceeds remaining data: ${uriLength} > ${data.length - (offset + totalConsumed)}`,
+    );
+  }
   const uriBytes = data.slice(offset + totalConsumed, offset + totalConsumed + Number(uriLength));
   const connectUri = new TextDecoder().decode(uriBytes);
   totalConsumed += Number(uriLength);
@@ -139,6 +146,13 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
   const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackNameLenSize;
 
+  // Length 宣言が残りバイトを超える切り詰めは破損であり、
+  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+  if (offset + totalConsumed + Number(trackNameLen) > data.length) {
+    throw new ProtocolViolationError(
+      `redirect track name length exceeds remaining data: ${trackNameLen} > ${data.length - (offset + totalConsumed)}`,
+    );
+  }
   const trackName = data.slice(
     offset + totalConsumed,
     offset + totalConsumed + Number(trackNameLen),
@@ -224,6 +238,13 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
     throw new ProtocolViolationError(`GOAWAY URI length exceeds maximum: ${uriLength} > 8192`);
   }
 
+  // Length 宣言が残りバイトを超える切り詰めは破損であり、
+  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+  if (offset + Number(uriLength) > data.length) {
+    throw new ProtocolViolationError(
+      `GOAWAY URI length exceeds remaining data: ${uriLength} > ${data.length - offset}`,
+    );
+  }
   const uriBytes = data.slice(offset, offset + Number(uriLength));
   const newSessionUri = new TextDecoder().decode(uriBytes);
   offset += Number(uriLength);
@@ -419,6 +440,13 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
     );
   }
 
+  // Length 宣言が残りバイトを超える切り詰めは破損であり、
+  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+  if (offset + Number(reasonLen) > data.length) {
+    throw new ProtocolViolationError(
+      `reason phrase length exceeds remaining data: ${reasonLen} > ${data.length - offset}`,
+    );
+  }
   const decoder = new TextDecoder();
   const reasonPhrase = decoder.decode(data.slice(offset, offset + Number(reasonLen)));
   offset += Number(reasonLen);

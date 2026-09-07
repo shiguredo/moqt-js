@@ -851,3 +851,75 @@ test("parseProperties: GREASE Property は未知 Property として保持され�
     assert.isTrue(greaseId !== undefined && isGreaseValue(greaseId));
   }
 });
+
+/**
+ * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
+ *
+ * draft-ietf-moq-transport-20 §1.4.3 / §12.7:
+ * 外側でフレーミング済みのため、Length 宣言が残りバイトを超える
+ * 内側の不足は破損であり、短い subarray を返さず宣言時点で
+ * ProtocolViolationError とする。
+ */
+test("decodeImmutableProperties: Length 宣言超過で ProtocolViolationError", () => {
+  // IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeImmutableProperties(truncated),
+    /immutable properties value length exceeds remaining data/,
+  );
+});
+
+test("parseProperties: 未知奇数型の Length 宣言超過で ProtocolViolationError", () => {
+  // delta 0x0D (未知奇数) + Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0d, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => parseProperties(truncated),
+    /unknown property value length exceeds remaining data/,
+  );
+});
+
+test("decodeProperties: IMMUTABLE 内側走査の Length 宣言超過で ProtocolViolationError", () => {
+  // 外側 Length 正当 + 内側奇数型の Length 5 宣言 + 2 バイトの切り詰め。
+  // 外側ガードは通過し、内側走査ガードのみが発火する
+  const truncated = new Uint8Array([0x0b, 0x04, 0x0d, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeProperties(truncated),
+    /immutable properties value length exceeds remaining data/,
+  );
+});
+
+test("decodeProperties: 奇数型の Length 宣言超過で ProtocolViolationError", () => {
+  // delta 0x0D (未知奇数) + Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0d, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeProperties(truncated),
+    /properties value length exceeds remaining data/,
+  );
+});
+
+test("decodeImmutableProperties: 内側奇数型の Length 宣言超過で ProtocolViolationError", () => {
+  // 外側 IMMUTABLE_PROPERTIES (0x0B) の Length 正当 + 内側の奇数 extension が Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0b, 0x04, 0x0d, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeImmutableProperties(truncated),
+    /immutable properties value length exceeds remaining data/,
+  );
+});
+
+test("parseProperties: IMMUTABLE 外側の Length 宣言超過で ProtocolViolationError", () => {
+  // 外側 IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => parseProperties(truncated),
+    /immutable properties value length exceeds remaining data/,
+  );
+});
+
+test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で ProtocolViolationError", () => {
+  // 外側 IMMUTABLE_PROPERTIES (0x0B) の Length 正当 + 内側奇数型の Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0b, 0x04, 0x0d, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => parseProperties(truncated),
+    /immutable properties value length exceeds remaining data/,
+  );
+});
