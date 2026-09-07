@@ -930,6 +930,9 @@
 - [FIX] 未対応リクエストで Request ID 検証を素通りするのを修正する
   - draft-ietf-moq-transport-20 §10.1 に基づき、未対応 6 種の先頭メッセージでもパリティ・重複検証し、NOT_SUPPORTED 応答でも ID を消費して記録する。先頭 varint が取れない空・切詰めはペイロード破損として PROTOCOL_VIOLATION で閉じる
   - @voluntas
+- [FIX] codec Worker の configure 失敗で Promise が永久ハングするのを修正する
+  - Worker 側 init 失敗を error 応答とし、Wrapper 側は初期化完了前の error メッセージ / error イベント受信で configure() を reject して失敗 Worker を破棄する。完了後の error は従来どおり通知する
+  - @voluntas
 
 ### misc
 

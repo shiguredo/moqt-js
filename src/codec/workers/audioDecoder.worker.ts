@@ -2,8 +2,7 @@
  * オーディオデコーダー用 DedicatedWorker
  */
 
-// モジュールとして扱うための export
-export {};
+import { runWorkerInit } from "../workerConfigure";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -33,37 +32,38 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerMessage>) => {
 
   switch (message.type) {
     case "init": {
-      if (audioDecoder) {
-        if (audioDecoder.state !== "closed") {
-          audioDecoder.close();
+      // 初期化失敗時は "error" で応答し "configured" を送らない
+      // (Wrapper の configure() が reject してハングしない前提)
+      const result = runWorkerInit(() => {
+        if (audioDecoder) {
+          if (audioDecoder.state !== "closed") {
+            audioDecoder.close();
+          }
+          audioDecoder = null;
         }
-        audioDecoder = null;
-      }
 
-      audioDecoder = new AudioDecoder({
-        output: (audioData: AudioData) => {
-          // AudioData は transferable
-          self.postMessage(
-            {
-              type: "decoded",
-              data: audioData,
-            },
-            [audioData] as unknown as StructuredSerializeOptions,
-          );
-        },
-        error: (error: DOMException) => {
-          self.postMessage({
-            type: "error",
-            message: error.message,
-          });
-        },
+        audioDecoder = new AudioDecoder({
+          output: (audioData: AudioData) => {
+            // AudioData は transferable
+            self.postMessage(
+              {
+                type: "decoded",
+                data: audioData,
+              },
+              [audioData] as unknown as StructuredSerializeOptions,
+            );
+          },
+          error: (error: DOMException) => {
+            self.postMessage({
+              type: "error",
+              message: error.message,
+            });
+          },
+        });
+
+        audioDecoder.configure(message.config);
       });
-
-      audioDecoder.configure(message.config);
-
-      self.postMessage({
-        type: "configured",
-      });
+      self.postMessage(result);
       break;
     }
 

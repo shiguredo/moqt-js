@@ -2,8 +2,7 @@
  * オーディオエンコーダー用 DedicatedWorker
  */
 
-// モジュールとして扱うための export
-export {};
+import { runWorkerInit } from "../workerConfigure";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -30,39 +29,40 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerMessage>) => {
 
   switch (message.type) {
     case "init": {
-      if (audioEncoder) {
-        audioEncoder.close();
-      }
+      // 初期化失敗時は "error" で応答し "configured" を送らない
+      // (Wrapper の configure() が reject してハングしない前提)
+      const result = runWorkerInit(() => {
+        if (audioEncoder) {
+          audioEncoder.close();
+        }
 
-      audioEncoder = new AudioEncoder({
-        output: (chunk: EncodedAudioChunk) => {
-          const data = new Uint8Array(chunk.byteLength);
-          chunk.copyTo(data);
+        audioEncoder = new AudioEncoder({
+          output: (chunk: EncodedAudioChunk) => {
+            const data = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(data);
 
-          self.postMessage(
-            {
-              type: "encoded",
-              data: data.buffer,
-              chunkType: chunk.type,
-              timestamp: chunk.timestamp,
-              duration: chunk.duration,
-            },
-            [data.buffer] as unknown as StructuredSerializeOptions,
-          );
-        },
-        error: (error: DOMException) => {
-          self.postMessage({
-            type: "error",
-            message: error.message,
-          });
-        },
+            self.postMessage(
+              {
+                type: "encoded",
+                data: data.buffer,
+                chunkType: chunk.type,
+                timestamp: chunk.timestamp,
+                duration: chunk.duration,
+              },
+              [data.buffer] as unknown as StructuredSerializeOptions,
+            );
+          },
+          error: (error: DOMException) => {
+            self.postMessage({
+              type: "error",
+              message: error.message,
+            });
+          },
+        });
+
+        audioEncoder.configure(message.config);
       });
-
-      audioEncoder.configure(message.config);
-
-      self.postMessage({
-        type: "configured",
-      });
+      self.postMessage(result);
       break;
     }
 

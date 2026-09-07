@@ -1,7 +1,7 @@
 # codec Worker の configure 失敗で Promise が永久ハングする
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-worker-configure-hang
 - Polished: 2026-09-06
 
@@ -25,6 +25,13 @@
 
 - 実行環境未対応コーデックで Wrapper `configure()` が `reject` し、ハングしないこと (4 Wrapper とも)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- Worker 側 init 全体を共有ヘルパーで包み、失敗時は既存形 error で応答し configured を送らない。文言は DOMException 相当も欠落しないよう抽出し非空を保証する
+- Wrapper 側は初期化完了前の error 受信時のみ configure() を reject し、失敗 Worker を破棄する。運用中の error は従来どおり通知する
+- ブラウザ非依存の契約テスト 10 件を追加した。配線はレビューで確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
