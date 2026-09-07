@@ -1,7 +1,7 @@
 # 未対応リクエストで Request ID 検証を素通りする
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-unsupported-request-id-check
 - Polished: 2026-09-06
 
@@ -27,6 +27,12 @@ draft-ietf-moq-transport-20 §10.1 は Request ID のパリティ・重複違反
 - 未対応リクエスト (例: 先頭 varint に偶数 Request ID を持つ SUBSCRIBE) で `INVALID_REQUEST_ID` によりセッションが閉じること。
 - PUBLISH で消費済みの Request ID を持つ未対応リクエストで重複検出して閉じること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- 未対応 6 種の先頭メッセージでも同一検証関数でパリティ・重複検証し、NOT_SUPPORTED 応答でも ID を消費して記録する。空・切詰めは PROTOCOL_VIOLATION で閉じる
+- 検証等のテスト 7 件を追加した。旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
