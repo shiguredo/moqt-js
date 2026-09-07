@@ -1,7 +1,7 @@
 # Length 宣言 slice の境界検証欠落 (message 層・Properties 層)
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-07
 - Branch: feature/fix-message-slice-boundary
 - Polished: 2026-09-06
 
@@ -29,3 +29,9 @@ Length 宣言が残りバイトを超える切り詰め入力を、短い `slice
 - 列挙した全関数で切り詰め入力が `ProtocolViolationError` になること (内側不足を `IncompleteDataError` にしないこと)。
 - 既存テストが全て通ること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- message 層 6 ファイルと properties 層の Length 宣言 slice 箇所に残量検査を追加し、宣言時点で ProtocolViolationError とする。列挙外の同形 2 件（namespace / trackstatus の trackName）も対応した
+- 対象関数ごとのテスト 21 件を追加した。旧コードで落ちることを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

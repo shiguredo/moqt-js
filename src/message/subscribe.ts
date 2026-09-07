@@ -112,6 +112,13 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
 
   const [nameLen, nameLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += nameLenConsumed;
+  // Length 宣言が残りバイトを超える切り詰めは破損であり、
+  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+  if (offset + totalConsumed + Number(nameLen) > data.length) {
+    throw new ProtocolViolationError(
+      `subscribe track name length exceeds remaining data: ${nameLen} > ${data.length - (offset + totalConsumed)}`,
+    );
+  }
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 

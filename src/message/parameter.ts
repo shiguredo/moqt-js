@@ -168,6 +168,13 @@ export function decodeParameter(data: Uint8Array, offset = 0): [Parameter, numbe
         `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
       );
     }
+    // Length 宣言が残りバイトを超える切り詰めは破損であり、
+    // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+    if (offset + totalConsumed + Number(length) > data.length) {
+      throw new ProtocolViolationError(
+        `parameter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
+      );
+    }
     value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
     totalConsumed += Number(length);
   } else {
@@ -339,6 +346,13 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
     //  PROTOCOL_VIOLATION."
     if (elemLen === 0n) {
       throw new ProtocolViolationError("track namespace field length is zero");
+    }
+    // Length 宣言が残りバイトを超える切り詰めは破損であり、
+    // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+    if (offset + totalConsumed + Number(elemLen) > data.length) {
+      throw new ProtocolViolationError(
+        `track namespace field length exceeds remaining data: ${elemLen} > ${data.length - (offset + totalConsumed)}`,
+      );
     }
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
     elements.push(element);
@@ -575,6 +589,13 @@ function decodeKeyValuePair(
     if (Number(length) > MAX_KVP_VALUE_LENGTH) {
       throw new ProtocolViolationError(
         `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+      );
+    }
+    // Length 宣言が残りバイトを超える切り詰めは破損であり、
+    // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+    if (offset + totalConsumed + Number(length) > data.length) {
+      throw new ProtocolViolationError(
+        `parameter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
       );
     }
     value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
@@ -820,6 +841,13 @@ export function decodeMessageParameter(
 
   switch (encoding) {
     case "uint8": {
+      // 残り 1 バイトに満たない切り詰めは破損であり、
+      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+      if (offset + totalConsumed + 1 > data.length) {
+        throw new ProtocolViolationError(
+          `uint8 parameter value exceeds remaining data: 1 > ${data.length - (offset + totalConsumed)}`,
+        );
+      }
       value = data.slice(offset + totalConsumed, offset + totalConsumed + 1);
       totalConsumed += 1;
       // draft-ietf-moq-transport-20 §10.2.8 / §10.2.18:
@@ -862,6 +890,13 @@ export function decodeMessageParameter(
           `message parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
         );
       }
+      // Length 宣言が残りバイトを超える切り詰めは破損であり、
+      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
+      if (offset + totalConsumed + Number(length) > data.length) {
+        throw new ProtocolViolationError(
+          `message parameter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
+        );
+      }
       value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
       totalConsumed += Number(length);
       break;
@@ -884,7 +919,7 @@ export function decodeMessageParameter(
         );
       }
       // 内側 Length が残りバイト数を超える場合はフレーミング破損として
-      // PROTOCOL_VIOLATION で扱う (長い slice を作らない)
+      // PROTOCOL_VIOLATION で扱う (短い slice を作らない)
       if (offset + totalConsumed + Number(length) > data.length) {
         throw new ProtocolViolationError(
           `filter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
@@ -1146,7 +1181,10 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
   const end = start + Number(length);
 
   // Length が示す範囲が data の末尾を超える場合は不完全データとして扱う
-  // (varint デコードと同じく、呼び出し側が全バイトを渡していない)
+  // (varint デコードと同じく、呼び出し側が全バイトを渡していない)。
+  // 宣言時点拒否 (ProtocolViolationError) に変えない。直接呼び出しでは
+  // ストリーミング待ちの意味を保ち、制御メッセージ経路では
+  // decodeMessageParameter の self-length ガードが先に遮断するためである。
   if (end > data.length) {
     throw new IncompleteDataError(
       `incomplete location filter: length ${length} exceeds available data`,

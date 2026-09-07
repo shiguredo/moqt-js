@@ -18,6 +18,7 @@ import {
   decodeParameters,
   decodeKeyValuePairs,
   decodeMessageParameter,
+  decodeParameter,
   decodeRangeFilter,
   encodeRangeFilter,
   validateRangeFilterCombination,
@@ -1193,4 +1194,67 @@ test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolati
   validateIncludePropertiesValue(1);
   assert.throws(() => validateIncludePropertiesValue(2), ProtocolViolationError);
   assert.throws(() => validateIncludePropertiesValue(255), ProtocolViolationError);
+});
+
+/**
+ * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
+ *
+ * draft-ietf-moq-transport-20 §10.2:
+ * 制御ストリームは外側でフレーミング済みのため、Length 宣言が
+ * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
+ * 宣言時点で ProtocolViolationError とする。
+ */
+test("decodeParameter: 奇数型の Length 宣言超過で ProtocolViolationError", () => {
+  // type 0x21 (奇数) + Length 5 宣言 + Value 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x21, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeParameter(truncated, 0),
+    /parameter value length exceeds remaining data/,
+  );
+});
+
+test("decodeTrackNamespace: 要素 Length 宣言超過で ProtocolViolationError", () => {
+  // 要素数 1 + 要素 Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x01, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeTrackNamespace(truncated, 0),
+    /track namespace field length exceeds remaining data/,
+  );
+});
+
+test("decodeKeyValuePairs: 奇数型の Length 宣言超過で ProtocolViolationError", () => {
+  // delta 0x21 (奇数) + Length 5 宣言 + Value 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x21, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeKeyValuePairs(truncated, 0),
+    /parameter value length exceeds remaining data/,
+  );
+});
+
+test("decodeMessageParameter: uint8 分岐の残量不足で ProtocolViolationError", () => {
+  // FORWARD (0x10) の delta のみで Value 1 バイトが存在しない切り詰め。
+  // 宣言時点で拒否するため、値域検証由来ではない文言で固定する
+  const truncated = new Uint8Array([0x10]);
+  assert.throws(
+    () => decodeMessageParameter(truncated, 0, 0n),
+    /uint8 parameter value exceeds remaining data/,
+  );
+});
+
+test("decodeMessageParameter: length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {
+  // FILL_PARAMETERS (0x23) + Length 5 宣言 + Value 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x23, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeMessageParameter(truncated, 0, 0n),
+    /message parameter value length exceeds remaining data/,
+  );
+});
+
+test("decodeMessageParameter: self-length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {
+  // LOCATION_FILTER (0x21) + Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x21, 0x05, 0xaa, 0xbb]);
+  assert.throws(
+    () => decodeMessageParameter(truncated, 0, 0n),
+    /filter value length exceeds remaining data/,
+  );
 });
