@@ -1724,6 +1724,38 @@ function inFlightFillRangeFilters(
   return collected;
 }
 
+/**
+ * 単一の raw FILL_PARAMETERS の fill 要求を購読に関連付ける
+ *
+ * draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics) / §10.2.15:
+ * キーは新規採番の updateRequestId とし、型付き経路と同形にする。
+ * 内側の GROUP_ORDER (uint8 値) がなければ購読の指定を継承する
+ * (resolveFillGroupOrder と同規則。§10.2.15 の省略時継承)。
+ * 到達値は検証ループで 0x01 / 0x02 に限定される
+ * (validateGroupOrderValue による値域拒否と decodeParameters の
+ * 重複検査)。0x02 は Descending、0x01 は Ascending とする。
+ * 検証済みの内側配列を受け取り、throw しない。
+ */
+function registerRawFillFetchTarget(
+  session: BidiSessionInternal,
+  subscriber: SubscriberImpl,
+  updateRequestId: bigint,
+  inner: Parameter[],
+): void {
+  const innerGroupOrder = inner.find((param) => param.type === MessageParameterType.GROUP_ORDER);
+  session.fillFetchTargets.set(updateRequestId, {
+    subscriber,
+    groupOrder: resolveFillGroupOrder(
+      innerGroupOrder === undefined
+        ? undefined
+        : innerGroupOrder.value[0] === 0x02
+          ? "Descending"
+          : "Ascending",
+      subscriber.getGroupOrder(),
+    ),
+  });
+}
+
 export async function bidiSendRequestUpdate(
   session: BidiSessionInternal,
   subscriber: SubscriberImpl,
@@ -1851,9 +1883,11 @@ export async function bidiSendRequestUpdate(
   // 内側デコーダ側の更新に追従する。
   // pendingRequestUpdate.set より前で失敗させる
   // (登録後の throw はエントリ残留を生むため)。
+  // デコード結果は後段の関連付け登録で再利用する (二重デコード防止)。
+  const decodedRawFillInners: Parameter[][] = [];
   for (const [index, rawFillParameter] of rawFillParameters.entries()) {
     try {
-      decodeFillParameters(rawFillParameter);
+      decodedRawFillInners.push(decodeFillParameters(rawFillParameter));
     } catch (error) {
       throw new InvalidFilterError(
         `invalid raw FILL_PARAMETERS[${index}] in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
@@ -1974,6 +2008,15 @@ export async function bidiSendRequestUpdate(
       subscriber,
       groupOrder: resolveFillGroupOrder(options.fill.groupOrder, subscriber.getGroupOrder()),
     });
+  } else {
+    // draft-ietf-moq-transport-20 §5.1.3 (Fill Semantics):
+    // 単一の raw FILL_PARAMETERS の fill 要求も同一キーで関連付ける。
+    // 複数件・型付き併用時は重複検査が先に拒否するため、
+    // ここには単一のみ到達する。内側は検証済みのため再デコードしない。
+    const decodedSingle = rawFillParameters.length === 1 ? decodedRawFillInners[0] : undefined;
+    if (decodedSingle !== undefined) {
+      registerRawFillFetchTarget(session, subscriber, updateRequestId, decodedSingle);
+    }
   }
 
   const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);

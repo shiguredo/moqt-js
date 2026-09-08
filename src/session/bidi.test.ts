@@ -1385,7 +1385,8 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の 4 フィールド超�
  * ワイヤ上の parameters に FILL_PARAMETERS が残る (回帰ガード)。
  */
 test("bidiSendRequestUpdate: 正常な raw FILL_PARAMETERS は送信できる", async () => {
-  // 正常な内側 LOCATION_FILTER を包んだ raw FILL_PARAMETERS を渡す
+  // 正常な内側 LOCATION_FILTER を包んだ raw FILL_PARAMETERS を渡す。
+  // 購読への関連付け登録は別テストで検証する
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
   const normalInner = encodeParameters([
@@ -7501,4 +7502,139 @@ test("bidiSendRequestUpdate: 重複と内側不正の二重不正では重複エ
   assert.match((thrown as Error).message, /duplicate FILL_PARAMETERS/);
   assert.equal(session.pendingRequestUpdate.size, 0);
   assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * 単一の raw FILL_PARAMETERS の fill 要求が updateRequestId で購読に
+ * 関連付けられることを検証する。内側に GROUP_ORDER がなければ
+ * 購読の指定を継承する。
+ */
+test("bidiSendRequestUpdate: 単一 raw FILL は購読に関連付けられる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setGroupOrder("Descending");
+  const normalInner = encodeParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+  ]);
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: normalInner }],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  assert.equal(written.length, 1);
+  // ワイヤ上の REQUEST_UPDATE と map キーの対応付け (ワイヤ検証の詳細は別テスト)
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  assert.equal(decoded.requestId, 100n);
+  assert.isDefined(decoded.parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS));
+  const target = session.fillFetchTargets.get(100n);
+  assert.isDefined(target);
+  assert.strictEqual(target!.subscriber, subscriber);
+  assert.equal(target!.groupOrder, GroupOrder.DESCENDING);
+  // targetRequestId (購読の 0n) には登録しないこと
+  assert.isFalse(session.fillFetchTargets.has(0n));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * raw FILL 内側の GROUP_ORDER が登録に使われることを検証する。
+ */
+test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const innerWithOrder = encodeParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+    { type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x02]) },
+  ]);
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: innerWithOrder }],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const target = session.fillFetchTargets.get(100n);
+  assert.isDefined(target);
+  assert.equal(target!.groupOrder, GroupOrder.DESCENDING);
+  assert.equal(session.fillFetchTargets.size, 1);
+  assert.isFalse(session.fillFetchTargets.has(0n));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * raw FILL 内側の GROUP_ORDER 0x01 は Ascending として登録され、
+ * 内側指定が購読指定より優先されることを検証する。
+ */
+test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER 0x01 は Ascending になる", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  subscriber.setGroupOrder("Descending");
+  const innerWithAscending = encodeParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+    { type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x01]) },
+  ]);
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: innerWithAscending }],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const target = session.fillFetchTargets.get(100n);
+  assert.isDefined(target);
+  assert.equal(target!.groupOrder, GroupOrder.ASCENDING);
+  assert.equal(session.fillFetchTargets.size, 1);
+  assert.isFalse(session.fillFetchTargets.has(0n));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * 内側と購読の両方に GROUP_ORDER がなければ Ascending になることを検証する。
+ */
+test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const normalInner = encodeParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+  ]);
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: normalInner }],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const target = session.fillFetchTargets.get(100n);
+  assert.isDefined(target);
+  assert.equal(target!.groupOrder, GroupOrder.ASCENDING);
+  assert.equal(session.fillFetchTargets.size, 1);
+  assert.isFalse(session.fillFetchTargets.has(0n));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.3:
+ * FILL なしの update() では関連付けが登録されないことを検証する。
+ */
+test("bidiSendRequestUpdate: FILL なしでは関連付けを登録しない", async () => {
+  const { session } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {});
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  assert.equal(session.fillFetchTargets.size, 0);
 });

@@ -99,6 +99,9 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] 手組み FILL_PARAMETERS の fill 要求が購読に関連付けされない問題を修正する
+  - 単一の raw FILL を updateRequestId で購読に関連付ける
+  - @voluntas
 - [FIX] FILL_PARAMETERS の重複送信に送信前ガードを追加する
   - raw と型付きの合算で 2 件以上になる update() を送信前に拒否する
   - @voluntas
