@@ -1,13 +1,13 @@
 /**
- * Worker 初期化の応答契約と完了管理のテスト
+ * Worker 初期化の応答契約と完了管理と世代管理のテスト
  *
  * Wrapper と Worker はブラウザ依存 (Worker 生成・WebCodecs) のため、
- * ブラウザ非依存の純粋部分 (応答生成・完了管理) を pin する。
+ * ブラウザ非依存の純粋部分 (応答生成・完了管理・世代管理) を固定する。
  * 配線 (メッセージの送受信) はレビューで確認する。
  */
 
 import { test, assert } from "vite-plus/test";
-import { runWorkerInit, WorkerConfigureGate } from "./workerConfigure";
+import { runWorkerInit, WorkerConfigureGate, ConfigureGenerationTracker } from "./workerConfigure";
 
 // ============================================================================
 // runWorkerInit
@@ -156,4 +156,75 @@ test("WorkerConfigureGate: 複数インスタンスは独立する", () => {
 
   assert.isTrue(first.trySettle());
   assert.isTrue(second.trySettle());
+});
+
+// ============================================================================
+// ConfigureGenerationTracker
+// ============================================================================
+
+// 並行 configure() の世代所有権を固定する。
+// ブラウザ依存の配線自体は実行できないため、採番・判定・無効化の順序依存を
+// この形で固定し、破棄・公開の実行はレビューで確認する。
+
+test("ConfigureGenerationTracker: 採番は単調増加する", () => {
+  // 世代は発行順に増加し、後勝ち判定の基準になる
+  const tracker = new ConfigureGenerationTracker();
+
+  const firstGeneration = tracker.begin();
+  const secondGeneration = tracker.begin();
+
+  assert.isTrue(secondGeneration > firstGeneration);
+});
+
+test("ConfigureGenerationTracker: 最新世代のみ公開対象になる", () => {
+  // 先発世代は旧世代化し、後発世代のみ最新として残る
+  const tracker = new ConfigureGenerationTracker();
+  const firstGeneration = tracker.begin();
+  const secondGeneration = tracker.begin();
+
+  assert.isFalse(tracker.isLatest(firstGeneration));
+  assert.isTrue(tracker.isLatest(secondGeneration));
+});
+
+test("ConfigureGenerationTracker: 無効化で待機中の全世代が旧世代になる", () => {
+  // close() 時の中断用。待機中の遅延成功は破棄・reject される
+  const tracker = new ConfigureGenerationTracker();
+  const firstGeneration = tracker.begin();
+  const secondGeneration = tracker.begin();
+
+  tracker.invalidateAll();
+
+  assert.isFalse(tracker.isLatest(firstGeneration));
+  assert.isFalse(tracker.isLatest(secondGeneration));
+  const renewedGeneration = tracker.begin();
+  assert.isTrue(tracker.isLatest(renewedGeneration));
+});
+
+test("ConfigureGenerationTracker: 無効化後の再採番で新世代のみ最新になる", () => {
+  // reset() 相当の invalidateAll() → begin() 手順。
+  // 二重の採番は単調性を保つ無駄番であり順序は崩れない
+  const tracker = new ConfigureGenerationTracker();
+  const pendingGeneration = tracker.begin();
+
+  tracker.invalidateAll();
+  const renewedGeneration = tracker.begin();
+
+  assert.isFalse(tracker.isLatest(pendingGeneration));
+  assert.isTrue(tracker.isLatest(renewedGeneration));
+});
+
+test("ConfigureGenerationTracker: 複数インスタンスは独立する", () => {
+  // Wrapper ごとの世代管理は相互に影響しない。
+  // カウンタは実体ごとに進むため、相手の最新値は自器では旧世代になる
+  const firstTracker = new ConfigureGenerationTracker();
+  const secondTracker = new ConfigureGenerationTracker();
+
+  firstTracker.begin();
+  const firstGeneration = firstTracker.begin();
+  const secondGeneration = secondTracker.begin();
+
+  assert.isTrue(firstTracker.isLatest(firstGeneration));
+  assert.isTrue(secondTracker.isLatest(secondGeneration));
+  assert.isFalse(secondTracker.isLatest(firstGeneration));
+  assert.isFalse(firstTracker.isLatest(secondGeneration));
 });

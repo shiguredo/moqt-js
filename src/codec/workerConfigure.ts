@@ -11,9 +11,11 @@
  * 純粋部分は契約テストで pin し、破棄手順の実行はブラウザ依存のため
  * レビューで確認する (モックは使わない)。
  *
- * 対象外: タイムアウトは設けない。configure 待機中の close 競合、
- * 未知 type の到達、onmessage / onerror のどちらも発火しない Worker 死は
- * 本モジュールの対象外である (初期化失敗の error 応答 → reject のみ扱う)。
+ * 対象外: タイムアウトは設けない。未知 type の到達、onmessage / onerror の
+ * どちらも発火しない Worker 死は本モジュールの対象外である
+ * (初期化失敗の error 応答 → reject のみ扱う)。
+ * configure 待機中の close / reset は世代の無効化で中断する
+ * (待機世代の遅延成功は破棄・reject される)。
  */
 
 /**
@@ -96,12 +98,51 @@ export class WorkerConfigureGate {
 }
 
 /**
- * 失敗した Worker を破棄する
+ * configure() 発行ごとの世代管理
  *
- * 初期化失敗時の後始末の定義であり、4 ラッパーで共有する。
+ * 同一 Wrapper への並行 configure() の所有権分離に使う。
+ * 生成直後に世代を採番し、成功公開時に最新世代かを判定する。
+ * 最新世代なら旧公開を破棄して公開し (後勝ち)、旧世代の遅延成功なら
+ * 自世代を破棄する (先発破棄)。旧世代の遅延成功は reject する (中断扱い)。
+ * 失敗時は世代の新旧によらず自世代を破棄して個別エラーで reject する。
+ * close() / reset() 時は無効化して待機中の世代を旧世代化する (中断扱い)。
+ */
+export class ConfigureGenerationTracker {
+  private current = 0;
+
+  /**
+   * 新規 configure 世代を採番する
+   *
+   * @returns 採番した世代 (単調増加する)
+   */
+  begin(): number {
+    this.current += 1;
+    return this.current;
+  }
+
+  /**
+   * 指定世代が最新の公開対象かを判定する
+   */
+  isLatest(generation: number): boolean {
+    return generation === this.current;
+  }
+
+  /**
+   * 待機中の全世代を旧世代化する (close / reset 時の中断用)
+   */
+  invalidateAll(): void {
+    this.current += 1;
+  }
+}
+
+/**
+ * Worker を破棄する
+ *
+ * 初期化失敗時の後始末、後勝ち公開時の旧公開の破棄、旧世代の遅延成功時の
+ * 自世代の破棄で共有する。
  * 運用中の onmessage 配送に影響しないよう、破棄前に配送口を外す。
  */
-export function disposeFailedWorker(worker: Worker | null): void {
+export function disposeWorker(worker: Worker | null): void {
   if (worker) {
     worker.onmessage = null;
     worker.onerror = null;
