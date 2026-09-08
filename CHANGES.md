@@ -11,6 +11,10 @@
 
 ## develop
 
+- [CHANGE] TRACK_NAMESPACE_PREFIX の Value から外側 Length を削除する
+  - draft-ietf-moq-transport-20 §10.2.20 が参照する §2.4.1 の Track Namespace エンコーディング (Number of Track Namespace Fields + 各フィールドの Length + Value) は自己区切りのため、外側 Length を付与せず Value をそのまま書く
+  - 旧版 moqt-js が送る外側 Length 付きの TRACK_NAMESPACE_PREFIX とは相互運用できない
+  - @voluntas
 - [CHANGE] FETCH メッセージを draft-20 のワイヤ形式に変更し Joining FETCH を削除する
   - draft-ietf-moq-transport-20 §10.13 に基づき、FETCH ペイロードを Request ID + Track Namespace / Track Name + Parameters のみに変更する (Fetch Type 0x01–0x03 と Standalone / Joining 構造を削除)
   - 取得範囲は LOCATION_FILTER パラメータ (0x21) で表し、Session.fetch() のオプションを startLocation / endLocation から filter (LocationFilter) に変更する (省略時は {0, 0} から Largest Object までの全オブジェクト)

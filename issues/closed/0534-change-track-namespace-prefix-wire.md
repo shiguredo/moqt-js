@@ -1,7 +1,7 @@
 # TRACK_NAMESPACE_PREFIX のワイヤ形式から外側 Length を削除する
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/change-track-namespace-prefix-wire
 - Polished: 2026-09-08
 
@@ -41,3 +41,13 @@ draft-ietf-moq-transport-20 §10.2.20 に適合させ、TRACK_NAMESPACE_PREFIX (
 - `bidiSendNamespaceRequestUpdate`（`src/session/bidi.ts`）
 - `src/message/parameter.prop.ts` / `src/message/subscribe.prop.ts`
 - `issues/closed/0229-draft-18-add-track-namespace-prefix-parameter.md` / `issues/closed/0233-draft-18-add-track-namespace-prefix-parameter.md`
+
+## 解決方法
+
+- `src/message/parameter.ts` の `MessageParameterValueEncoding` に `"track-namespace"` を追加し、`MESSAGE_PARAMETER_VALUE_ENCODING` の 0x34 を `"length-prefixed"` から `"track-namespace"` に変更した。`encodeMessageParameter` は外側 Length を付与せず `encodeTrackNamespace` の出力をそのまま Value として書く。
+- `decodeMessageParameter` に `track-namespace` 分岐を追加し、`decodeTrackNamespace` の消費バイト数で次の Type Delta の位置を確定する。`getParameterTrackNamespace` は従来どおり `decodeTrackNamespace(param.value)` を使う。
+- `src/message/parameter.prop.ts` / `src/message/subscribe.prop.ts` の PBT arbitrary から 0x34 を `lengthPrefixedParameterArb` から外し、妥当な Track Namespace を生成する `trackNamespaceParameterArb` を追加した。`parameter.prop.ts` の 0x21 の分類誤記も直した。
+- `src/message/parameter.test.ts` に外側 Length なしの固定バイト列テスト（encode / decode）と、`track-namespace` 分岐の破損系テストを追加した。
+- `src/message/types.ts` と `encodeParameterTrackNamespace` / `getParameterTrackNamespace` の JSDoc に「外側 Length を付加しない」を明記した。
+- `CHANGES.md` の `## develop` に `[CHANGE]` を追記した。
+- 検証: `vp check` / `tsc --noEmit` / `vp test run`（1804 tests）が通る。

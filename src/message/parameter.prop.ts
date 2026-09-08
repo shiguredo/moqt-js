@@ -11,6 +11,7 @@ import {
   encodeTrackNamespace,
   decodeTrackNamespace,
   createTrackNamespace,
+  encodeParameterTrackNamespace,
   trackNamespaceToStrings,
   encodeLocation,
   decodeLocation,
@@ -110,7 +111,9 @@ test("Location のエンコード・デコードがラウンドトリップす�
  * - varint: 0x02, 0x04, 0x06, 0x08, 0x32
  * - uint8: 0x10, 0x20, 0x22
  * - location: 0x09
- * - length-prefixed: 0x03, 0x21, 0x34
+ * - length-prefixed: 0x03
+ * - self-length-prefixed: 0x21, 0x25-0x29
+ * - track-namespace: 0x34
  */
 const varintParameterArb = fc
   .record({
@@ -151,10 +154,22 @@ const locationParameterArb = fc
 
 const lengthPrefixedParameterArb = fc
   .record({
-    type: fc.constantFrom(0x03, 0x34),
+    type: fc.constant(0x03),
     value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
   })
   .map(({ type, value }) => ({ type, value }));
+
+/**
+ * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
+ *
+ * draft-ietf-moq-transport-20 §10.2.20:
+ * Value は §2.4.1 の Track Namespace エンコーディング (自己区切り)。
+ * encodeParameterTrackNamespace の出力で構築する
+ * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
+ */
+const trackNamespaceParameterArb = fc
+  .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })
+  .map((parts) => encodeParameterTrackNamespace(createTrackNamespace(parts)));
 
 /**
  * LocationFilter の任意構築
@@ -272,6 +287,7 @@ const messageParameterArb = fc.oneof(
   uint8ParameterArb,
   locationParameterArb,
   lengthPrefixedParameterArb,
+  trackNamespaceParameterArb,
   locationFilterParameterArb,
   rangeFilterParameterArb,
 );

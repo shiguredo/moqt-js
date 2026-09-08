@@ -680,13 +680,17 @@ export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[],
  * - self-length-prefixed: 値が自ら Length (vi64) を内包する 1 Length 構造
  *   (外側 Length は付加しない。draft-ietf-moq-transport-20 §5.1.2 / §5.1.4
  *   の Range Filter と LOCATION_FILTER が該当)
+ * - track-namespace: Track Namespace (Number of Track Namespace Fields + 各
+ *   フィールドの Length + Value) の自己区切り構造 (外側 Length は付加しない。
+ *   draft-ietf-moq-transport-20 §10.2.20 が参照する §2.4.1 のエンコーディング)
  */
 type MessageParameterValueEncoding =
   | "uint8"
   | "varint"
   | "location"
   | "length-prefixed"
-  | "self-length-prefixed";
+  | "self-length-prefixed"
+  | "track-namespace";
 
 /**
  * パラメータ型ごとの Value エンコーディング定義
@@ -729,7 +733,10 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
   // NEW_GROUP_REQUEST (Section 10.2.19)
   0x32: "varint",
   // TRACK_NAMESPACE_PREFIX (Section 10.2.20)
-  0x34: "length-prefixed",
+  // Value は §2.4.1 の Track Namespace エンコーディングそのもの。
+  // フィールド数 + 各フィールドの Length + Value で自己区切りになるため
+  // 外側 Length は付加しない (length-prefixed ではない)。
+  0x34: "track-namespace",
   // INCLUDE_PROPERTIES (Section 10.2.21)
   0x35: "uint8",
   // Range Filters (draft-ietf-moq-transport-20 Section 5.1.4 / 10.2.10–10.2.14)
@@ -789,10 +796,11 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
     return result;
   }
 
-  // uint8, varint, location, self-length-prefixed: Value をそのまま書き込む。
-  // self-length-prefixed の Value は self エンコードの出力 (自ら Length を含む
-  // 1 Length 構造) のため、外側 Length は付加しない
-  // (draft-ietf-moq-transport-20 §5.1.2 / §5.1.4)
+  // uint8, varint, location, self-length-prefixed, track-namespace:
+  // Value をそのまま書き込む。self-length-prefixed の Value は self エンコードの
+  // 出力 (自ら Length を含む 1 Length 構造)、track-namespace の Value は
+  // §2.4.1 の自己区切り構造のため、いずれも外側 Length は付加しない
+  // (draft-ietf-moq-transport-20 §5.1.2 / §5.1.4 / §10.2.20)
   const result = new Uint8Array(deltaBytes.length + param.value.length);
   result.set(deltaBytes, 0);
   result.set(param.value, deltaBytes.length);
@@ -930,6 +938,18 @@ export function decodeMessageParameter(
         offset + totalConsumed + Number(length),
       );
       totalConsumed += Number(length);
+      break;
+    }
+    case "track-namespace": {
+      // draft-ietf-moq-transport-20 §10.2.20:
+      // TRACK_NAMESPACE_PREFIX の Value は §2.4.1 の Track Namespace
+      // エンコーディング (Number of Track Namespace Fields + 各フィールドの
+      // Length + Value) の自己区切り構造。外側 Length は存在しないため、
+      // decodeTrackNamespace が返す消費バイト数で次の Type Delta の位置を
+      // 確定する (Length を読むと先頭フィールド数を Length と誤読する)。
+      const [, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
+      value = data.slice(offset + totalConsumed, offset + totalConsumed + namespaceConsumed);
+      totalConsumed += namespaceConsumed;
       break;
     }
   }
@@ -1404,6 +1424,7 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
  * draft-ietf-moq-transport-20 §10.2.20:
  * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
  *  Track Namespace encoding described in Section 2.4.1."
+ * Track Namespace は自己区切りのため、外側 Length は付加しない。
  */
 export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parameter {
   const value = encodeTrackNamespace(namespace);
@@ -1416,6 +1437,7 @@ export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parame
  * draft-ietf-moq-transport-20 §10.2.20:
  * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
  *  Track Namespace encoding described in Section 2.4.1."
+ * Track Namespace は自己区切りのため、外側 Length は付加しない。
  */
 export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
   if (param.type !== 0x34) {
