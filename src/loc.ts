@@ -183,10 +183,30 @@ export function encodeTimestamp(timestamp: bigint): Uint8Array {
 }
 
 /**
+ * 単体デコーダの先頭 ID が期待値と一致することを検証する
+ *
+ * @param id デコードした先頭 ID
+ * @param expected 期待する Property ID
+ * @param name エラー文言に埋める Property 名
+ * @throws ProtocolViolationError ID が一致しない場合 (期待値と実際値を含む)
+ */
+function assertLocPropertyId(id: bigint, expected: bigint, name: string): void {
+  if (id !== expected) {
+    throw new ProtocolViolationError(
+      `invalid LOC property id for ${name}: 0x${id.toString(16).padStart(2, "0")}, expected 0x${expected.toString(16).padStart(2, "0")}`,
+    );
+  }
+}
+
+/**
  * Timestamp をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
+ *
+ * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
+ * @throws IncompleteDataError ID / Value の varint が不完全な場合
  */
 export function decodeTimestamp(data: Uint8Array): bigint {
-  const [_id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeVarint(data);
+  assertLocPropertyId(id, LOCPropertyId.TIMESTAMP, "TIMESTAMP");
   const [value, _valueLen] = decodeVarint(data.subarray(idLen));
   return value;
 }
@@ -208,9 +228,13 @@ export function encodeTimescale(timescale: bigint): Uint8Array {
 
 /**
  * Timescale をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
+ *
+ * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
+ * @throws IncompleteDataError ID / Value の varint が不完全な場合
  */
 export function decodeTimescale(data: Uint8Array): bigint {
-  const [_id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeVarint(data);
+  assertLocPropertyId(id, LOCPropertyId.TIMESCALE, "TIMESCALE");
   const [value, _valueLen] = decodeVarint(data.subarray(idLen));
   return value;
 }
@@ -312,10 +336,13 @@ export function encodeVideoFrameMarking(marking: VideoFrameMarking): Uint8Array 
 /**
  * Video Frame Marking をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
  *
+ * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError Length が 1–4 以外、または Value バイトが不足する場合
+ * @throws IncompleteDataError ID / Length の varint が不完全な場合
  */
 export function decodeVideoFrameMarking(data: Uint8Array): VideoFrameMarking {
-  const [_id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeVarint(data);
+  assertLocPropertyId(id, LOCPropertyId.VIDEO_FRAME_MARKING, "VIDEO_FRAME_MARKING");
   return decodeVideoFrameMarkingAfterId(data, idLen).marking;
 }
 
@@ -362,9 +389,13 @@ function decodeAudioLevelValue(value: bigint): AudioLevel {
 
 /**
  * Audio Level をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
+ *
+ * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
+ * @throws IncompleteDataError ID / Value の varint が不完全な場合
  */
 export function decodeAudioLevel(data: Uint8Array): AudioLevel {
-  const [_id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeVarint(data);
+  assertLocPropertyId(id, LOCPropertyId.AUDIO_LEVEL, "AUDIO_LEVEL");
   const [value, _valueLen] = decodeVarint(data.subarray(idLen));
   return decodeAudioLevelValue(value);
 }
@@ -394,13 +425,16 @@ export function encodeVideoConfig(description: Uint8Array): Uint8Array {
  * ID が奇数 (0x0D) のため length + bytes 形式。Length 宣言に満たない
  * Value は不正ワイヤであり、正常値として扱わない。
  * 仕様の将来版で形式が変わる可能性がある。
- * 返却値は入力のビューであり、保持する場合は呼び出し側で複製すること。
+ * 返却値は入力から独立したコピーである。
+ * (decodeLocObjectPayload と同一方針)。
  *
+ * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError Length 宣言に対して Value バイトが不足する場合
  * @throws IncompleteDataError ID / Length の varint が不完全な場合
  */
 export function decodeVideoConfig(data: Uint8Array): Uint8Array {
-  const [_id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeVarint(data);
+  assertLocPropertyId(id, LOCPropertyId.VIDEO_CONFIG, "VIDEO_CONFIG");
   const [length, lengthLen] = decodeVarint(data.subarray(idLen));
   const lengthNum = Number(length);
   const valueOffset = idLen + lengthLen;
@@ -409,7 +443,7 @@ export function decodeVideoConfig(data: Uint8Array): Uint8Array {
       `insufficient VIDEO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
     );
   }
-  return data.subarray(valueOffset, valueOffset + lengthNum);
+  return new Uint8Array(data.subarray(valueOffset, valueOffset + lengthNum));
 }
 
 /**
@@ -437,13 +471,16 @@ export function encodeAudioConfig(description: Uint8Array): Uint8Array {
  * ID が奇数 (0x0F) のため length + bytes 形式。Length 宣言に満たない
  * Value は不正ワイヤであり、正常値として扱わない。
  * 仕様の将来版で形式が変わる可能性がある。
- * 返却値は入力のビューであり、保持する場合は呼び出し側で複製すること。
+ * 返却値は入力から独立したコピーである。
+ * (decodeLocObjectPayload と同一方針)。
  *
+ * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError Length 宣言に対して Value バイトが不足する場合
  * @throws IncompleteDataError ID / Length の varint が不完全な場合
  */
 export function decodeAudioConfig(data: Uint8Array): Uint8Array {
-  const [_id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeVarint(data);
+  assertLocPropertyId(id, LOCPropertyId.AUDIO_CONFIG, "AUDIO_CONFIG");
   const [length, lengthLen] = decodeVarint(data.subarray(idLen));
   const lengthNum = Number(length);
   const valueOffset = idLen + lengthLen;
@@ -452,7 +489,7 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
       `insufficient AUDIO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
     );
   }
-  return data.subarray(valueOffset, valueOffset + lengthNum);
+  return new Uint8Array(data.subarray(valueOffset, valueOffset + lengthNum));
 }
 
 /**
@@ -597,6 +634,7 @@ interface ExtractedLocProperties {
  *
  * 抽出不能・不正な Property は読み飛ばし、抽出できたフィールドのみを返す
  * (セッションを閉じない。寛容性は decodeVideoProperties / decodeAudioProperties と同じ)。
+ * 同一 ID の重複時は有効な後続値が上書きし、不正値は既存値を保持する (動作は変えない)。
  */
 function extractLocProperties(
   properties: ReadonlyArray<Property> | undefined,

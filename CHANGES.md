@@ -99,6 +99,11 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] LOC 単体デコーダの堅牢性を上げる
+  - 6 種の単体デコーダに期待 ID 照合を追加し、不一致は ProtocolViolationError とする
+  - Config デコーダの返却を入力から独立したコピーに統一する
+  - 重複 ID の後勝ちを注釈する
+  - @voluntas
 - [FIX] Subscriber の復号フレーム破棄時にリソースがリークする問題を修正する
   - 映像の書き込み失敗時に VideoFrame を閉じる。成功時は Generator 所有のため閉じない
   - 音声の変換失敗時は onError で通知し AudioData を必ず閉じる

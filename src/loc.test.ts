@@ -23,6 +23,10 @@ import {
   encodeAudioConfig,
   decodeVideoConfig,
   decodeAudioConfig,
+  decodeTimestamp,
+  decodeTimescale,
+  decodeVideoFrameMarking,
+  decodeAudioLevel,
   decodeVideoProperties,
   decodeAudioProperties,
   resolveVideoProperties,
@@ -548,4 +552,68 @@ test("resolveAudioProperties と換算の合成: Track TIMESCALE 継承でも換
     toDecoderMicroseconds(resolved.timestamp, resolved.timescale),
     (1_700_000_001_000_000n * 1_000_000n) / 90000n,
   );
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.1:
+// 期待 ID (0x10) と異なる先頭 ID の入力は ProtocolViolationError にする。
+test("decodeTimestamp: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+  // TIMESCALE (0x08) のワイヤを TIMESTAMP として読む
+  const wire = encodeTimescale(90000n);
+  assert.throws(() => decodeTimestamp(wire), ProtocolViolationError, /0x08, expected 0x10/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.2:
+// 期待 ID (0x08) と異なる先頭 ID の入力は ProtocolViolationError にする。
+test("decodeTimescale: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+  // TIMESTAMP (0x10) のワイヤを TIMESCALE として読む
+  const wire = encodeTimestamp(1720367991000000n);
+  assert.throws(() => decodeTimescale(wire), ProtocolViolationError, /0x10, expected 0x08/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.2:
+// 期待 ID (0x09) と異なる先頭 ID の入力は ProtocolViolationError にする。
+test("decodeVideoFrameMarking: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+  // AUDIO_LEVEL (0x0C) のワイヤを VIDEO_FRAME_MARKING として読む
+  const wire = encodeAudioLevel(100, true);
+  assert.throws(() => decodeVideoFrameMarking(wire), ProtocolViolationError, /0x0c, expected 0x09/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.2:
+// 期待 ID (0x0C) と異なる先頭 ID の入力は ProtocolViolationError にする。
+test("decodeAudioLevel: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+  // VIDEO_FRAME_MARKING (0x09) のワイヤを AUDIO_LEVEL として読む
+  const wire = encodeVideoFrameMarking(keyFrameMarking);
+  assert.throws(() => decodeAudioLevel(wire), ProtocolViolationError, /0x09, expected 0x0c/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.1:
+// 期待 ID (0x0D) と異なる先頭 ID の入力は ProtocolViolationError にする。
+test("decodeVideoConfig: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+  // AUDIO_CONFIG (0x0F) のワイヤを VIDEO_CONFIG として読む
+  const wire = encodeAudioConfig(new Uint8Array([0x01, 0x02]));
+  assert.throws(() => decodeVideoConfig(wire), ProtocolViolationError, /0x0f, expected 0x0d/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.1:
+// 期待 ID (0x0F) と異なる先頭 ID の入力は ProtocolViolationError にする。
+test("decodeAudioConfig: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+  // VIDEO_CONFIG (0x0D) のワイヤを AUDIO_CONFIG として読む
+  const wire = encodeVideoConfig(new Uint8Array([0x01, 0x02]));
+  assert.throws(() => decodeAudioConfig(wire), ProtocolViolationError, /0x0d, expected 0x0f/);
+});
+
+// decodeVideoConfig / decodeAudioConfig は入力から独立したコピーを返す
+// (decodeLocObjectPayload と同一方針。入力への view 返却はしない)。
+test("decodeVideoConfig: 返却値は入力から独立している", () => {
+  const videoWire = encodeVideoConfig(new Uint8Array([0x01, 0x02, 0x03]));
+  const videoDecoded = decodeVideoConfig(videoWire);
+  videoWire[videoWire.length - 1] = 0xff;
+  assert.equal(videoDecoded[videoDecoded.length - 1], 0x03);
+});
+
+test("decodeAudioConfig: 返却値は入力から独立している", () => {
+  const audioWire = encodeAudioConfig(new Uint8Array([0x04, 0x05]));
+  const audioDecoded = decodeAudioConfig(audioWire);
+  audioWire[audioWire.length - 1] = 0xff;
+  assert.equal(audioDecoded[audioDecoded.length - 1], 0x05);
 });
