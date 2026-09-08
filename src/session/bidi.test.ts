@@ -50,7 +50,7 @@ import { encodeVarint, decodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
-import { incomingWaitForFetcher } from "./incoming";
+import { incomingWaitForFetcher, incomingValidateRequestId } from "./incoming";
 import type { SessionInternal } from "./types";
 import {
   bidiCancelSubscription,
@@ -831,6 +831,7 @@ function createBidiSession(): {
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: () => {},
+    validateIncomingRequestId: (_requestId: bigint) => true,
   } as unknown as BidiSessionInternal;
 
   return { session, written };
@@ -2357,6 +2358,7 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
+    validateIncomingRequestId: (_requestId: bigint) => true,
   } as unknown as BidiSessionInternal;
 
   return {
@@ -3072,7 +3074,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE に REQUEST_ER
   // REQUEST_UPDATE を feed する
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3116,7 +3118,7 @@ test("bidiReadRequestStreamMessages: 不正 Range Filter の REQUEST_UPDATE 拒�
   // PRIORITY_FILTER (0x27) で 255 超の値を含む REQUEST_UPDATE を feed する
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       {
         type: 0x27,
@@ -3167,7 +3169,7 @@ test("bidiReadRequestStreamMessages: publisher がない REQUEST_UPDATE 拒否�
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3217,7 +3219,7 @@ test("bidiReadRequestStreamMessages: 書き込み失敗でも購読を掃除し�
   // PRIORITY_FILTER (0x27) で 255 超の値を含む REQUEST_UPDATE を feed する
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       {
         type: 0x27,
@@ -3266,7 +3268,7 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリ�
   // PRIORITY_FILTER (0x27) で 255 超の値を含む REQUEST_UPDATE を feed する
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       {
         type: 0x27,
@@ -3377,7 +3379,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
   // REQUEST_UPDATE を feed する
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3414,7 +3416,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
   // PRIORITY_FILTER (0x27) で 255 超の値 (Start=11266) を含む REQUEST_UPDATE を feed する
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       {
         type: 0x27,
@@ -3466,7 +3468,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
   const overflowValue = new Uint8Array([...encodeVarint(BigInt(fields.length)), ...fields]);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       encodeFillParameters([{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }]),
     ],
@@ -3501,7 +3503,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の Range Filter 値違反の RE
   // PRIORITY_FILTER (0x27) で 255 超の値を内側に含める
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       encodeFillParameters([{ type: 0x27, value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]) }]),
     ],
@@ -3543,7 +3545,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDAT
   // SUBGROUP_FILTER の除去 (Length=0) を内側に含める
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [encodeFillParameters([{ type: 0x25, value: new Uint8Array([0x00]) }])],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3700,7 +3702,7 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
   const fillValue = new Uint8Array([...lengthBytes, ...inner]);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: fillValue }],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3732,7 +3734,7 @@ test("bidiReadRequestStreamMessages: 正常な FILL_PARAMETERS の REQUEST_UPDAT
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       encodeFillParameters(
         buildFillParameters(
@@ -3775,7 +3777,7 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
   // 同一 (Type=0x25, SetID=1) の SUBGROUP_FILTER を 2 つ含む REQUEST_UPDATE
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [
       { type: 0x25, value: new Uint8Array([0x03, 0x01, 0x00, 0x00]) },
       { type: 0x25, value: new Uint8Array([0x03, 0x01, 0x00, 0x00]) },
@@ -3848,7 +3850,7 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3885,7 +3887,7 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish �
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -3921,7 +3923,7 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    requestId: 101n,
     parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -4012,6 +4014,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
+    validateIncomingRequestId: (_requestId: bigint) => true,
   } as unknown as BidiSessionInternal;
 
   await bidiReadPublishResponse(session, requestId, stream, controlReader);
@@ -4083,6 +4086,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
+    validateIncomingRequestId: (_requestId: bigint) => true,
   } as unknown as BidiSessionInternal;
 
   await bidiReadPublishResponse(session, requestId, stream, controlReader);
@@ -4259,7 +4263,7 @@ test("bidiHandlePublishRequestUpdate: 受理パラメータのみの REQUEST_UPD
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
       { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: new Uint8Array([2]) },
@@ -4288,7 +4292,7 @@ test("bidiHandlePublishRequestUpdate: パラメータ無しの REQUEST_UPDATE �
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4310,7 +4314,7 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     // EXPIRES は REQUEST_UPDATE に出現できない (REQUEST_UPDATE_ALLOWED_PARAMS 外)
     parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([1]) }],
   });
@@ -4334,7 +4338,7 @@ test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUE
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [{ type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) }],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4362,7 +4366,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で For
 
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4384,7 +4388,7 @@ test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
       { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) },
@@ -4415,7 +4419,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD を含む REQUEST_UPDATE で REQUE
 
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     // FORWARD=0: オブジェクトを送信しない宣言
     parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
   });
@@ -4445,7 +4449,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で Forwa
 
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4471,7 +4475,7 @@ test("bidiHandlePublishRequestUpdate: FORWARD + 他の文脈限定パラメー�
 
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [
       { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
       { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) },
@@ -4501,7 +4505,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後の REQUEST_UPDATE に REQ
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4528,7 +4532,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の�
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     // EXPIRES はスコープ違反パラメータだが、判定順序 (1) の GOING_AWAY が優先される
     parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([1]) }],
   });
@@ -4557,7 +4561,7 @@ test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗は黙殺され
   });
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4584,7 +4588,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 後の GOING_AWAY 応答の書き�
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -4627,7 +4631,7 @@ test("bidiHandlePublishRequestUpdate: requestStreams に存在しない requestI
   ctx.session.requestStreams.delete(ctx.requestId);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: 100n,
+    requestId: 101n,
     parameters: [],
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
@@ -8371,4 +8375,213 @@ test("bidiReadFetchResponse: FIN 先行で待機者が即時解決する", async
   assert.isNull(waiter);
   assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
   assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+/**
+ * 受信 REQUEST_UPDATE の ID 検証に実関数を配線する。
+ *
+ * 既存モックの無条件通過 (常に true) を実関数に差し替え、
+ * パリティ・重複を実際に検証する。received 集合
+ * (検証済み ID の記録) を返す。
+ * ストリーム紐付け ID (10n) と更新 ID (100n / 101n) を分離し、
+ * 一致照合なし仕様の裏付けにする。
+ */
+function useRealRequestIdValidation(ctx: { session: BidiSessionInternal }): Set<bigint> {
+  const received = new Set<bigint>();
+  ctx.session.validateIncomingRequestId = (requestId: bigint) =>
+    incomingValidateRequestId(requestId, received, (error) => {
+      ctx.session.closeWithError(error);
+    });
+  return received;
+}
+
+/**
+ * draft-ietf-moq-transport-20 §10.1:
+ * 受信 PUBLISH 上の REQUEST_UPDATE で偶数 Request ID を受けると
+ * INVALID_REQUEST_ID で閉じることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: 偶数 Request ID で INVALID_REQUEST_ID で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  useRealRequestIdValidation(ctx);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(ctx.closedWithError!.message.includes("parity"));
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1:
+ * 受信 PUBLISH 上の REQUEST_UPDATE で重複 Request ID を受けると
+ * INVALID_REQUEST_ID で閉じることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: 重複 Request ID で INVALID_REQUEST_ID で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const received = useRealRequestIdValidation(ctx);
+  received.add(101n);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(ctx.closedWithError!.message.includes("duplicate"));
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1:
+ * 新規の奇数 Request ID は検証を通過して REQUEST_OK が応答され、
+ * 同一 ID の 2 回目は重複として閉じることを検証する。
+ * 検証通過時の ID 消費 (received への記録) の裏付けになる。
+ */
+test("bidiHandlePublishRequestUpdate: 新規奇数 Request ID は受理し再送で重複として閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const received = useRealRequestIdValidation(ctx);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // 1 回目は REQUEST_OK が 1 通応答され、セッションは閉じない
+  // (assert.isUndefined は戻り値型のナローイングが以降の読み直しに残るため
+  // equal で比較する。vite-plus/test の isUndefined は asserts 付きである)
+  assert.equal(ctx.closedWithError, undefined);
+  assert.equal(ctx.written.length, 1);
+  assert.isTrue(received.has(101n));
+
+  // 同一 ID の 2 回目は重複として閉じ、余分な応答は送らない
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+  const secondError = ctx.closedWithError;
+  assert.isDefined(secondError);
+  assert.equal(secondError.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(secondError.message.includes("duplicate"));
+  assert.equal(ctx.written.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1:
+ * 送信 PUBLISH ストリーム上のピア更新受信で偶数 Request ID を受けると
+ * INVALID_REQUEST_ID で閉じることを検証する。
+ */
+test("bidiReadRequestStreamMessages: ピア更新の偶数 Request ID で INVALID_REQUEST_ID で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  useRealRequestIdValidation(ctx);
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(ctx.closedWithError!.message.includes("parity"));
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1:
+ * 送信 PUBLISH ストリーム上のピア更新受信で重複 Request ID を受けると
+ * INVALID_REQUEST_ID で閉じることを検証する。
+ */
+test("bidiReadRequestStreamMessages: ピア更新の重複 Request ID で INVALID_REQUEST_ID で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const received = useRealRequestIdValidation(ctx);
+  received.add(101n);
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(ctx.closedWithError!.message.includes("duplicate"));
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 / §10.6:
+ * GOAWAY 受信済みでも不正 ID は INVALID_REQUEST_ID で閉じることを検証する。
+ * §10.1 MUST が §10.6 MAY 適用より優先する。
+ */
+test("bidiHandlePublishRequestUpdate: GOAWAY 下の偶数 ID は INVALID_REQUEST_ID で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  useRealRequestIdValidation(ctx);
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(ctx.closedWithError!.message.includes("parity"));
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.1 / §10.9:
+ * subscribe ロールでも不正 ID は INVALID_REQUEST_ID で閉じることを検証する。
+ * §10.1 MUST が想定外更新の PROTOCOL_VIOLATION より優先する。
+ */
+test("bidiReadRequestStreamMessages: subscribe 側の偶数 ID は INVALID_REQUEST_ID で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  useRealRequestIdValidation(ctx);
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 100n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
+  assert.isTrue(ctx.closedWithError!.message.includes("parity"));
+  assert.equal(ctx.written.length, 0);
 });

@@ -108,6 +108,9 @@
 - [FIX] 応答読み取り失敗経路の削除集合を統一する
   - SUBSCRIBE は 3 件・FETCH / TRACK_STATUS は各 2 件に揃え孤児 entry を残さない
   - @voluntas
+- [FIX] 受信 REQUEST_UPDATE の Request ID が無検証である問題を修正する
+  - デコード結果 ID のパリティ・重複検証を 2 経路に追加する
+  - @voluntas
 - [FIX] FETCH 失敗確定時に待機中の fetcher 取得を起こす
   - 失敗確定時に待機を即時解決し、登録を削除する
   - @voluntas
