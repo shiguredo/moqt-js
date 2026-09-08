@@ -102,6 +102,9 @@
 - [FIX] LOC 単体デコーダの前段 varint 不完全のエラー型を統一する
   - 6 種の単体デコーダの前段不完全を ProtocolViolationError に統一する
   - @voluntas
+- [FIX] REQUEST_UPDATE_OK 検証違反の具体エラーが失われる問題を修正する
+  - パラメータスコープ検証と Track Properties 空検証のいずれの違反でも、当該購読の保留分全件を違反 SessionError 自体で reject してから閉じる
+  - @voluntas
 - [FIX] 応答読み取り失敗経路の削除集合を統一する
   - SUBSCRIBE は 3 件・FETCH / TRACK_STATUS は各 2 件に揃え孤児 entry を残さない
   - @voluntas

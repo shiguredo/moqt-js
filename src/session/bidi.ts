@@ -2640,23 +2640,55 @@ export function bidiHandleRequestUpdateOk(
   const msg = decodeRequestOkPayload(payload);
 
   // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
+  // 違反時は当該購読の保留分全件を違反 SessionError 自体で reject してから閉じる
+  // (初期応答 4 経路 = PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS と同一パターン)。
+  // 先に閉じると close 側の汎用 reject で特定エラーが上書きされるため、
+  // コールバックを遅延化する。validateParameterScope は違反時に必ず
+  // コールバックを呼ぶため、scopeError は通常必ず設定される
+  // (未設定時は汎用文言で reject する念のためのフォールバック)。
+  let scopeError: SessionError | undefined;
   if (
     !validateParameterScope(
       msg.parameters,
       REQUEST_UPDATE_OK_ALLOWED_PARAMS,
       "REQUEST_UPDATE_OK",
-      (error) => session.closeWithError(error),
+      (error) => {
+        scopeError = error;
+      },
     )
   ) {
+    const violation =
+      scopeError ??
+      new SessionError(
+        "parameter not allowed in REQUEST_UPDATE_OK",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    deleteFillTargetsForPendingUpdates(session, streamRequestId);
+    rejectPendingRequestUpdates(session, streamRequestId, violation);
+    session.closeWithError(violation);
     return;
   }
 
   // draft-ietf-moq-transport-20 §10.5 (REQUEST_OK):
+  // Track Properties 空検証の違反も同形に扱う。削除・reject・close の順序は
+  // 前ブロックと同一であり、先に閉じると汎用 reject で上書きされるため
+  // 固定する。validateRequestOkNoTrackProperties は違反時に必ず
+  // コールバックを呼ぶため、未設定時は汎用文言で reject する念のためのフォールバック。
+  let trackPropertiesError: SessionError | undefined;
   if (
-    !validateRequestOkNoTrackProperties(msg.trackProperties, "REQUEST_UPDATE_OK", (error) =>
-      session.closeWithError(error),
-    )
+    !validateRequestOkNoTrackProperties(msg.trackProperties, "REQUEST_UPDATE_OK", (error) => {
+      trackPropertiesError = error;
+    })
   ) {
+    const violation =
+      trackPropertiesError ??
+      new SessionError(
+        "track properties must be empty in REQUEST_UPDATE_OK",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+    deleteFillTargetsForPendingUpdates(session, streamRequestId);
+    rejectPendingRequestUpdates(session, streamRequestId, violation);
+    session.closeWithError(violation);
     return;
   }
 

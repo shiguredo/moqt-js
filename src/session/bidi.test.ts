@@ -318,6 +318,7 @@ test("SubscriberImpl: 二重 unsubscribe は no-op", async () => {
  *  close the session with a PROTOCOL_VIOLATION."
  * REQUEST_UPDATE_OK で非空 Track Properties を受信した場合の検証。
  */
+// 保留なし時の close 確認であり、reject 同一性は新規 2 件で検証する。
 test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が呼ばれる", () => {
   let closedWithError: SessionError | undefined;
 
@@ -8062,4 +8063,130 @@ test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除され
   assert.isUndefined(ctx.getClosedWithError());
   assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.1 / §10.9.1:
+ * REQUEST_UPDATE_OK のパラメータスコープ違反で、当該購読の保留分全件が
+ * 違反 SessionError 自体で reject され、fill 関連付けも掃除されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違反 SessionError 自体で reject される", () => {
+  const order: string[] = [];
+  let closedWithError: SessionError | undefined;
+  const session = {
+    closeWithError: (error: SessionError) => {
+      order.push("close");
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+  } as unknown as BidiSessionInternal;
+  const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
+  const rejected: Error[] = [];
+  session.pendingRequestUpdate.set(101n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      order.push("reject");
+      rejected.push(error);
+    },
+    targetRequestId: 7n,
+  });
+  session.pendingRequestUpdate.set(102n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      order.push("reject");
+      rejected.push(error);
+    },
+    targetRequestId: 7n,
+  });
+  session.pendingRequestUpdate.set(103n, {
+    resolve: () => {},
+    reject: () => {
+      order.push("other-reject");
+    },
+    targetRequestId: 8n,
+  });
+  session.fillFetchTargets.set(101n, { subscriber, groupOrder: GroupOrder.ASCENDING });
+  session.fillFetchTargets.set(102n, { subscriber, groupOrder: GroupOrder.ASCENDING });
+
+  // FORWARD は REQUEST_UPDATE_OK (LARGEST_OBJECT / EXPIRES のみ許可) のスコープ違反である
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    trackProperties: [],
+  });
+  bidiHandleRequestUpdateOk(session, payload, 7n);
+
+  // 違反 SessionError 自体で reject され、fill 関連付けも掃除される
+  assert.equal(rejected.length, 2);
+  assert.isDefined(closedWithError);
+  assert.strictEqual(rejected[0], closedWithError);
+  assert.strictEqual(rejected[1], closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    closedWithError!.message.includes("parameter type 0x10 not allowed in REQUEST_UPDATE_OK"),
+  );
+  assert.deepEqual(order, ["reject", "reject", "close"]);
+  assert.isFalse(session.pendingRequestUpdate.has(101n));
+  assert.isFalse(session.pendingRequestUpdate.has(102n));
+  assert.isTrue(session.pendingRequestUpdate.has(103n));
+  assert.isFalse(session.fillFetchTargets.has(101n));
+  assert.isFalse(session.fillFetchTargets.has(102n));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.5 / §10.9.1:
+ * REQUEST_UPDATE_OK の Track Properties 空検証違反でも同様に
+ * 違反 SessionError 自体で reject されることを検証する。
+ */
+test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が違反 SessionError 自体で reject される", () => {
+  const order: string[] = [];
+  let closedWithError: SessionError | undefined;
+  const session = {
+    closeWithError: (error: SessionError) => {
+      order.push("close");
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+  } as unknown as BidiSessionInternal;
+  const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
+  const rejected: Error[] = [];
+  session.pendingRequestUpdate.set(101n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      order.push("reject");
+      rejected.push(error);
+    },
+    targetRequestId: 7n,
+  });
+  session.pendingRequestUpdate.set(103n, {
+    resolve: () => {},
+    reject: () => {
+      order.push("other-reject");
+    },
+    targetRequestId: 8n,
+  });
+  session.fillFetchTargets.set(101n, { subscriber, groupOrder: GroupOrder.ASCENDING });
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0n, value: 1n }],
+  });
+  bidiHandleRequestUpdateOk(session, payload, 7n);
+
+  assert.equal(rejected.length, 1);
+  assert.isDefined(closedWithError);
+  assert.strictEqual(rejected[0], closedWithError);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
+  );
+  assert.deepEqual(order, ["reject", "close"]);
+  assert.isFalse(session.pendingRequestUpdate.has(101n));
+  assert.isTrue(session.pendingRequestUpdate.has(103n));
+  assert.isFalse(session.fillFetchTargets.has(101n));
 });

@@ -1,7 +1,7 @@
 # REQUEST_UPDATE_OK スコープ違反の具体エラーが失われる
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-request-update-ok-error
 - Polished: 2026-09-08
 
@@ -23,6 +23,12 @@
 
 - 検証違反で保留中の更新全件が違反 `SessionError` 自体で `reject` され、fill 関連付けも掃除されること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/bidi.ts` の `bidiHandleRequestUpdateOk` でパラメータスコープ検証と Track Properties 空検証の違反時に、当該購読の保留分全件を違反 `SessionError` 自体で `reject` してから閉じる。`deleteFillTargetsForPendingUpdates` と `rejectPendingRequestUpdates` の 2 点組で行い、順序は捕捉→削除→`reject`→`close` とする
+- `src/session/bidi.test.ts` に違反 2 経路のテストを追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
