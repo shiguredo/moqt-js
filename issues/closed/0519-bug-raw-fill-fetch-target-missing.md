@@ -1,7 +1,7 @@
 # 手組み FILL_PARAMETERS の fill 要求が購読に関連付けされない
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-raw-fill-fetch-target
 - Polished: 2026-09-08
 
@@ -26,6 +26,13 @@
 
 - 単一の raw FILL を載せた `update()` の fill 要求が購読に届くこと。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/bidi.ts` に `registerRawFillFetchTarget` を追加し、単一の raw FILL を新規採番の `updateRequestId` で `fillFetchTargets` に登録する。内側 `GROUP_ORDER` がなければ購読指定を継承する。複数件・型付き併用時は `0520` の重複ガードが先に拒否する
+- 内側デコード結果は検証と登録で共用し、再デコードしない
+- `src/session/bidi.test.ts` に関連付け 5 件のテストを追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
