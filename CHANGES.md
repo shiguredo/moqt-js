@@ -99,6 +99,9 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] FILL_PARAMETERS の重複送信に送信前ガードを追加する
+  - raw と型付きの合算で 2 件以上になる update() を送信前に拒否する
+  - @voluntas
 - [FIX] role なしトラックが購読対象から不可視になる問題を修正する
   - role 絞り込みが空の場合はカタログ全体から名前一致で探す
   - 未解決時は onError で通知し、他方メディアは継続する
