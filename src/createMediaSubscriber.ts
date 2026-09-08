@@ -17,6 +17,7 @@ import {
   applyCatalogDelta,
   decodeCatalogMessage,
   getAudioTracks,
+  getTrackByName,
   getVideoTracks,
   type AuthInfo,
   type Catalog,
@@ -673,25 +674,64 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * Catalog からトラック情報を取得する
    */
   private extractTrackInfo(): void {
-    if (!this.receivedCatalog) {
+    const catalog = this.receivedCatalog;
+    if (!catalog) {
       throw new Error("catalog not received");
     }
 
     // Audio トラック情報を取得
     if (this.options.audio) {
       const audioTrackName = this.options.audio.trackName ?? DEFAULT_AUDIO_TRACK_NAME;
-      const audioTracks = getAudioTracks(this.receivedCatalog);
-      this.audioTrackInfo =
-        audioTracks.find((t) => t.name === audioTrackName) ?? audioTracks[0] ?? null;
+      this.audioTrackInfo = this.resolveTrackInfo(
+        catalog,
+        getAudioTracks(catalog),
+        audioTrackName,
+        "audio",
+      );
     }
 
     // Video トラック情報を取得
     if (this.options.video) {
       const videoTrackName = this.options.video.trackName ?? DEFAULT_VIDEO_TRACK_NAME;
-      const videoTracks = getVideoTracks(this.receivedCatalog);
-      this.videoTrackInfo =
-        videoTracks.find((t) => t.name === videoTrackName) ?? videoTracks[0] ?? null;
+      this.videoTrackInfo = this.resolveTrackInfo(
+        catalog,
+        getVideoTracks(catalog),
+        videoTrackName,
+        "video",
+      );
     }
+  }
+
+  /**
+   * 要求メディアのトラック情報を解決する
+   *
+   * `candidates` (role 絞り込み結果) が空の場合のみカタログ全体から
+   * 名前一致で探す (role は draft-ietf-moq-msf-01 §5.2.6 の optional
+   * フィールド)。全体検索でも見つからなければ `null` のままにし、
+   * 先頭トラックは採用しない。`candidates` 非空時の名前不一致は
+   * 従来どおり先頭を採用する (後方互換維持)。
+   * 未解決時は onError で通知する (throw せず他方メディアは継続する)。
+   *
+   * @param catalog 解決対象のカタログ (candidates が空の場合の全体検索用)
+   * @param candidates role 絞り込み結果の候補配列
+   * @param trackName 要求トラック名 (未指定時は呼び出し側で既定名に解決済み)
+   * @param kind エラー文言用のメディア種別
+   * @returns 解決したトラック情報 (未解決時は null)
+   */
+  private resolveTrackInfo(
+    catalog: Catalog,
+    candidates: CatalogTrack[],
+    trackName: string,
+    kind: "audio" | "video",
+  ): CatalogTrack | null {
+    const found =
+      candidates.find((t) => t.name === trackName) ??
+      (candidates.length === 0 ? getTrackByName(catalog, trackName) : candidates[0]) ??
+      null;
+    if (found === null) {
+      this.callbacks.onError?.(new Error(`${kind} track '${trackName}' not found in catalog`));
+    }
+    return found;
   }
 
   private createOutputStream(): void {

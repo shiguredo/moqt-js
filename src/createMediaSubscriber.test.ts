@@ -3,7 +3,8 @@
  *
  * processCatalogPayload / filterPendingCatalogObjects / resolveAuthorizationToken の
  * 純関数ロジック、復号フレーム破棄の所有権 (handleVideoDecodedData /
- * handleAudioDecodedData)、Catalog 取得失敗後の hygiene を検証する。
+ * handleAudioDecodedData)、Catalog 取得失敗後の hygiene、extractTrackInfo の
+ * role なし解決と未解決通知を検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -13,7 +14,13 @@ import type { Subscriber, RequestUpdateOptions } from "./subscriber";
 import type { MediaSubscriberState } from "./codec/types";
 import { TrackPropertyId } from "./properties";
 import type { Fetcher } from "./fetcher";
-import { encodeCatalog, encodeCatalogDelta, type Catalog, type CatalogDelta } from "./msf";
+import {
+  encodeCatalog,
+  encodeCatalogDelta,
+  type Catalog,
+  type CatalogDelta,
+  type CatalogTrack,
+} from "./msf";
 import {
   filterPendingCatalogObjects,
   processCatalogPayload,
@@ -751,4 +758,115 @@ test("requestKeyframe は情報なし時は 0 を送信する", async () => {
   await control.requestKeyframe();
 
   assert.equal(sent?.newGroupRequest, 0n);
+});
+
+/**
+ * role なしトラック解決の検証用の制御口
+ */
+interface SubscriberTrackControl {
+  receivedCatalog: Catalog | null;
+  audioTrackInfo: CatalogTrack | null;
+  videoTrackInfo: CatalogTrack | null;
+  extractTrackInfo(): void;
+}
+
+function makeRoleLessCatalog(): Catalog {
+  return makeCatalog([
+    { name: "audio", packaging: "loc", isLive: true },
+    { name: "video", packaging: "loc", isLive: true },
+  ]);
+}
+
+test("extractTrackInfo: role 省略カタログで名前一致のトラックが特定される", () => {
+  // role 絞り込みが空でもカタログ全体の名前一致で解決することの検証
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    {
+      namespace: ["live"],
+      audio: { trackName: "audio" },
+      video: { trackName: "video" },
+    },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberTrackControl;
+  control.receivedCatalog = makeRoleLessCatalog();
+
+  control.extractTrackInfo();
+
+  assert.strictEqual(control.audioTrackInfo?.name, "audio");
+  assert.strictEqual(control.videoTrackInfo?.name, "video");
+  assert.equal(errors.length, 0);
+});
+
+test("extractTrackInfo: role 省略カタログでデフォルト名のトラックが特定される", () => {
+  // trackName 省略時はデフォルト名で探すことの検証
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: {}, video: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberTrackControl;
+  control.receivedCatalog = makeRoleLessCatalog();
+
+  control.extractTrackInfo();
+
+  assert.strictEqual(control.audioTrackInfo?.name, "audio");
+  assert.strictEqual(control.videoTrackInfo?.name, "video");
+  assert.equal(errors.length, 0);
+});
+
+test("extractTrackInfo: 未解決時は onError が呼ばれ他方メディアは継続する", () => {
+  // 名前不一致で null のまま残り、throw せず通知することの検証
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: { trackName: "missing-audio" }, video: { trackName: "video" } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberTrackControl;
+  control.receivedCatalog = makeRoleLessCatalog();
+
+  control.extractTrackInfo();
+
+  assert.isNull(control.audioTrackInfo);
+  assert.strictEqual(control.videoTrackInfo?.name, "video");
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /audio track 'missing-audio' not found in catalog/);
+});
+
+test("extractTrackInfo: role ありカタログの名前不一致は先頭を採用する", () => {
+  // 非空時の先頭採用残置 (後方互換) の明示的な pin
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], audio: { trackName: "missing" } },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberTrackControl;
+  control.receivedCatalog = makeCatalog([
+    { name: "audio", packaging: "loc", isLive: true, role: "audio" },
+  ]);
+
+  control.extractTrackInfo();
+
+  assert.strictEqual(control.audioTrackInfo?.name, "audio");
+  assert.equal(errors.length, 0);
 });

@@ -99,6 +99,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] role なしトラックが購読対象から不可視になる問題を修正する
+  - role 絞り込みが空の場合はカタログ全体から名前一致で探す
+  - 未解決時は onError で通知し、他方メディアは継続する
+  - @voluntas
 - [FIX] Catalog delta の適用意味を正す
   - 未知ルートフィールドを full 側と同様に保持し、round-trip させる
   - 存在しない remove は add 重複・clone 親不存在と同様に throw する
