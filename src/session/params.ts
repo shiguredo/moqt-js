@@ -44,7 +44,7 @@ import { LOCPropertyId } from "../loc";
  * 値が 0 以上であることを検証する
  * draft-ietf-moq-transport-20 §10.2.4, §10.2.6, §10.2.16, §10.2.19, §12.1, §12.2
  */
-function validateNonNegative(value: bigint, name: string): void {
+export function validateNonNegative(value: bigint, name: string): void {
   if (value < 0n) {
     throw new Error(`${name} must not be negative: ${value}`);
   }
