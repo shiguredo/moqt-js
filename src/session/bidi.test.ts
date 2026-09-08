@@ -7873,3 +7873,193 @@ test("bidiSendRequestUpdate: in-flight の型付き fill と raw 新規の合計
   // 既存の型付き in-flight テストは resolve するが、こちらは残留検証のため残す)
   await Promise.resolve();
 });
+
+/**
+ * draft-ietf-moq-transport-20 §11.1:
+ * DUPLICATE_TRACK_ALIAS 経路で pendingSubscribe + requestStreams +
+ * fillFetchTargets が掃除されることを検証する。
+ */
+test("bidiReadSubscribeResponse: DUPLICATE_TRACK_ALIAS で削除集合が掃除される", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+  ctx.session.fillFetchTargets.set(ctx.requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+  // 同一 alias の別トラック購読者を登録する
+  const other = new SubscriberImpl(["other"], "track", 5n, 1n, () => {});
+  ctx.session.subscribersByAlias.set(1n, [other]);
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejected);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  // reject してから閉じる順序である
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.DUPLICATE_TRACK_ALIAS);
+  assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.14:
+ * End Location 検証経路で pendingFetch + requestStreams が掃除されることを検証する。
+ */
+test("bidiReadFetchResponse: End Location 検証失敗で削除集合が掃除される", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: fetcher,
+    startLocation: { group: 5n, object: 0n },
+  });
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = encodeFetchOkPayload({
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 0n, object: 0n },
+    parameters: [],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejected);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  // reject してから閉じる順序である
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * 3 応答読み取りの汎用 catch の else 分岐 (非プロトコル違反時) で
+ * 同一関数の既存失敗経路と同じ削除集合になることを検証する。
+ */
+test("bidiReadSubscribeResponse: 非違反失敗で削除集合が掃除される", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+  ctx.session.fillFetchTargets.set(ctx.requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  ctx.readableController.error(new Error("stream broken"));
+  await readPromise;
+
+  assert.isDefined(rejected);
+  assert.strictEqual(rejected!.message, "stream broken");
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+});
+
+test("bidiReadFetchResponse: 非違反失敗で削除集合が掃除される", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: fetcher,
+  });
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  ctx.readableController.error(new Error("stream broken"));
+  await readPromise;
+
+  assert.isDefined(rejected);
+  assert.strictEqual(rejected!.message, "stream broken");
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除される", async () => {
+  const ctx = createOkResponseReadTestContext();
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  ctx.readableController.error(new Error("stream broken"));
+  await readPromise;
+
+  assert.isDefined(rejected);
+  assert.strictEqual(rejected!.message, "stream broken");
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
