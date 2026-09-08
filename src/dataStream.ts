@@ -13,6 +13,7 @@
 import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
+import { assertNoMandatoryTrackPropertyInObjectProperties } from "./properties";
 import { GroupOrder } from "./message/types";
 
 /**
@@ -609,6 +610,13 @@ export function decodeObjectFields(
     }
   }
 
+  // draft-ietf-moq-transport-20 §2.5.1:
+  // Mandatory Track Property を Object Property として含む Object は malformed
+  // (non-Normal status の properties 検証より後に判定する)
+  if (propertiesLength > 0) {
+    assertNoMandatoryTrackPropertyInObjectProperties(properties);
+  }
+
   return [
     {
       objectIdDelta,
@@ -973,6 +981,13 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   } else {
     payload = data.slice(offset + totalConsumed);
     totalConsumed = data.length - offset;
+  }
+
+  // draft-ietf-moq-transport-20 §2.5.1:
+  // Mandatory Track Property を Object Property として含む Object は malformed
+  // (non-Normal status の properties 検証より後に判定する)
+  if (properties !== undefined) {
+    assertNoMandatoryTrackPropertyInObjectProperties(properties);
   }
 
   return [
@@ -1754,6 +1769,10 @@ export function decodeFetchObjectFields(
       }
       properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
       totalConsumed += propertiesLength;
+
+      // draft-ietf-moq-transport-20 §2.5.1:
+      // Mandatory Track Property を Object Property として含む Object は malformed
+      assertNoMandatoryTrackPropertyInObjectProperties(properties);
     }
   }
 

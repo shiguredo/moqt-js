@@ -46,6 +46,7 @@ import {
   createFirstFetchObjectFlags,
   decodeFetchObjectFields,
 } from "./dataStream";
+import { encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
 import { PublisherImpl } from "./publisher";
 import {
@@ -2881,6 +2882,63 @@ async function yieldToMacrotask(): Promise<void> {
     setTimeout(resolve, 0);
   });
 }
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1 / §2.4.2:
+ * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む subgroup
+ * ストリームは malformed であり、当該購読を cancel してセッションは閉じないことを
+ * 検証する。
+ */
+test("Subgroup データストリーム: Mandatory Track Property で購読を cancel しセッションを閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const headerBytes = encodeSubgroupHeader({
+    type: SubgroupHeaderType.BASE_EXT,
+    trackAlias: 7n,
+    groupId: 1n,
+    publisherPriority: 128,
+  });
+  const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const fieldsBytes = encodeObjectFields(
+    0n,
+    10n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+    properties,
+  );
+  const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([headerBytes, fieldsBytes, payload]));
+  ctx.fin();
+  await handlePromise;
+
+  // 配送されず、error が通知され、セッションは閉じない
+  assert.equal(delivered, 0);
+  assert.isDefined(notified);
+  assert.isUndefined(ctx.sessionError.current);
+  // alias から購読が外れる
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  // 購読は closed になる
+  assert.equal(subscriber.state, "closed");
+});
 
 /**
  * draft-ietf-moq-transport-20 §11.4 (Streams):

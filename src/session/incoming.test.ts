@@ -25,6 +25,7 @@ import { SubscriberImpl } from "../subscriber";
 import { FetcherImpl } from "../fetcher";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
 import { encodeObjectFields, SubgroupHeaderType, type SubgroupHeader } from "../dataStream";
+import { encodeProperties } from "../properties";
 import { concatChunks } from "./stream";
 
 // ============================================================================
@@ -621,6 +622,54 @@ test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッ�
 });
 
 /**
+ * draft-ietf-moq-transport-20 §2.5.1 / §2.4.2:
+ * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む datagram は
+ * malformed であり、当該購読を cancel してセッションは閉じないことを検証する。
+ */
+test("incomingHandleDatagram: Mandatory Track Property で購読を cancel しセッションを閉じない", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  const wire = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 7n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties: encodeProperties([{ id: 0x4000n, value: 0n }]),
+    payload: new Uint8Array([0xaa]),
+  });
+
+  incomingHandleDatagram(ctx.session, wire);
+
+  // 配送されず、error が通知され、セッションは閉じない
+  assert.equal(delivered, 0);
+  assert.isDefined(notified);
+  assert.isUndefined(ctx.getClosedWithError());
+  // alias から購読が外れる
+  assert.equal((ctx.session.subscribersByAlias.get(7n) ?? []).length, 0);
+  // 購読は closed になる
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
  * datagram 配送用のテストコンテキストを構築する。
  *
  * session は受信に必要な最小面 (コールバック・購読 Map・close 記録) の
@@ -636,6 +685,10 @@ function createDatagramDeliveryTestContext(): {
       debug: () => {},
     },
     subscribersByAlias: new Map(),
+    subscribers: new Map(),
+    requestStreams: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },

@@ -20,6 +20,7 @@ import {
 import { GroupOrder } from "./message/types";
 import { encodeVarint } from "./varint";
 import { IncompleteDataError, MalformedTrackError } from "./error";
+import { encodeProperties } from "./properties";
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
   const header: FetchHeader = {
@@ -1898,6 +1899,28 @@ test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT で Subgroup ID を消費せ�
   assert.equal(decoded.payloadLength, 50n);
   // Subgroup ID フィールドを消費しないため、消費バイト数はワイヤ長と一致する
   assert.equal(consumed, data.length);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む FETCH Object は
+ * malformed であり、decodeFetchObjectFields が MalformedTrackError を throw する。
+ */
+test("FetchObjectFields: Mandatory Track Property を含む Object Property で MalformedTrackError", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT |
+      FetchSerializationFlags.PROPERTIES_PRESENT,
+    groupId: 10n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties: encodeProperties([{ id: 0x4000n, value: 0n }]),
+    payloadLength: 5n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), MalformedTrackError);
 });
 
 /**

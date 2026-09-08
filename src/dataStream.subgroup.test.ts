@@ -15,7 +15,9 @@ import {
   createObject,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
-import { IncompleteDataError, ProtocolViolationError } from "./error";
+import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
+import { encodeProperties } from "./properties";
+import { encodeVarint } from "./varint";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -402,6 +404,35 @@ test("ObjectFields: Properties ありタイプ (0x11) をデコード", () => {
   assert.deepEqual(fields.properties, new Uint8Array([0xaa, 0xbb, 0xcc]));
   assert.equal(fields.payloadLength, 10n);
   assert.equal(consumed, 6);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む Object は
+ * malformed であり、decodeObjectFields が MalformedTrackError を throw する。
+ */
+test("ObjectFields: Mandatory Track Property を含む Object Property で MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(() => decodeObjectFields(encoded, 0x11), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.2.1.2 / §2.5.1:
+ * non-Normal status の Object に properties がある場合は PROTOCOL_VIOLATION で
+ * セッションを閉じる MUST を優先し、Mandatory Track Property の検出より先に
+ * 検証することを検証する。
+ */
+test("ObjectFields: non-Normal status + properties は Mandatory 検出より先に ProtocolViolationError", () => {
+  const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const data = new Uint8Array([
+    0x00,
+    ...encodeVarint(properties.length),
+    ...properties,
+    0x00,
+    ...encodeVarint(ObjectStatus.END_OF_TRACK),
+  ]);
+  assert.throws(() => decodeObjectFields(data, 0x11), ProtocolViolationError);
 });
 
 /**
