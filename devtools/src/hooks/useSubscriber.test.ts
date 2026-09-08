@@ -123,3 +123,74 @@ test("resetSubscriberState keeps settingsDisabled when other publisher is active
   resetSubscriberState(instance, chainRef, () => true);
   assert.equal(settingsDisabled.value, true);
 });
+
+test("closeSubscriberResources sends catalog unsubscribe and clears the signal", () => {
+  // 停止時に catalog 購読へ unsubscribe が送出されることの検証
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("close-resources-catalog-1");
+  const calls: string[] = [];
+  instance.decoder.value = {
+    close: () => {
+      calls.push("decoder.close");
+    },
+  } as never;
+  instance.session.value = {
+    close: () => {
+      calls.push("session.close");
+      return Promise.resolve();
+    },
+  } as never;
+  let unsubscribeCalls = 0;
+  instance.catalogSubscriber.value = {
+    unsubscribe: () => {
+      calls.push("catalog.unsubscribe");
+      unsubscribeCalls += 1;
+      return Promise.resolve();
+    },
+  } as never;
+  closeSubscriberResources(instance, null);
+  assert.equal(unsubscribeCalls, 1);
+  assert.equal(instance.catalogSubscriber.value, null);
+  // decoder → catalog → session の順で送出されること
+  assert.deepEqual(calls, ["decoder.close", "catalog.unsubscribe", "session.close"]);
+});
+
+test("closeSubscriberResources tolerates repeated catalog cleanup", () => {
+  // 二重停止でも例外なく終わることの検証
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("close-resources-catalog-2");
+  let unsubscribeCalls = 0;
+  instance.catalogSubscriber.value = {
+    unsubscribe: () => {
+      unsubscribeCalls += 1;
+      return Promise.resolve();
+    },
+  } as never;
+  closeSubscriberResources(instance, null);
+  closeSubscriberResources(instance, null);
+  assert.equal(unsubscribeCalls, 1);
+  assert.equal(instance.catalogSubscriber.value, null);
+});
+
+test("closeSubscriberResources swallows catalog unsubscribe failure", async () => {
+  // unsubscribe 失敗を握り潰すことの検証 (session.close と同形)。
+  // 失敗後も session.close が継続すること。
+  // 拒否の捕捉を microtask の flush で待ってから検証する
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("close-resources-catalog-3");
+  let sessionCloseCalls = 0;
+  instance.session.value = {
+    close: () => {
+      sessionCloseCalls += 1;
+      return Promise.resolve();
+    },
+  } as never;
+  instance.catalogSubscriber.value = {
+    unsubscribe: () => Promise.reject(new Error("unsubscribe failed")),
+  } as never;
+  closeSubscriberResources(instance, null);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(instance.catalogSubscriber.value, null);
+  assert.equal(sessionCloseCalls, 1);
+});
