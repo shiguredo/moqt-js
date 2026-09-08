@@ -1,7 +1,7 @@
 # Publisher 送信側の status / payload 整合と END_OF_TRACK 後送信のガード欠落
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-publisher-send-guard
 - Polished: 2026-09-06
 
@@ -26,6 +26,14 @@
 
 - 不正な status / payload 組み合わせと `END_OF_TRACK` 後の送信が、呼び出し側への同期 `throw` (`ProtocolViolationError`) で失敗すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/publisher.ts` に `validateSendStatusPayload` を追加し、非 NORMAL + 非空 payload と properties 付き非 NORMAL を委譲前に `ProtocolViolationError` で失敗させる (`sendObject` は通知 + 返値 reject、`sendDatagram` は通知 + 同期 throw の `0471` 方式)
+- `END_OF_TRACK` 送信済み記録を `sendObject` / `sendDatagram` で共有し、記録後の両 API 呼び出しを拒否する。受け付け時記録 + 失敗時取消で、失敗した `END_OF_TRACK` は再送できる
+- `0320` の検証しない決定を覆し、`SendObjectParams` 注釈の MUST 表記を同節の EOT 定義による解釈に修正した
+- `src/publisher.test.ts` に組み合わせ・EOT 後・再送のテスト 9 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

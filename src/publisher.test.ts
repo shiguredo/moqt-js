@@ -4,6 +4,8 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { ProtocolViolationError } from "./error";
+import { ObjectStatus } from "./message/types";
 import { PublisherImpl } from "./publisher";
 
 test("closed 状態では sendObject がエラーになる", () => {
@@ -191,4 +193,271 @@ test("goawayCallback が設定できる", () => {
   assert.isDefined(publisher.goawayCallback);
   publisher.goawayCallback!("moqt://new.example.com");
   assert.equal(calledUri, "moqt://new.example.com");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2:
+ * status / payload 整合と END_OF_TRACK 後送信の検証。
+ * 違反は委譲前に検出し、通知と返値の reject (sendObject) または
+ * 通知と同期 throw (sendDatagram) で呼び出し側へ返す。
+ */
+
+test("非 NORMAL + 非空 payload の sendObject は失敗する", async () => {
+  // END_OF_GROUP と END_OF_TRACK の両方で検証する
+  for (const status of [ObjectStatus.END_OF_GROUP, ObjectStatus.END_OF_TRACK] as const) {
+    const errors: Error[] = [];
+    const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+      errors.push(error);
+    });
+    let sent = 0;
+    publisher.onSendObject = async () => {
+      sent++;
+    };
+
+    let thrown: unknown = null;
+    try {
+      await publisher.sendObject({
+        groupId: 0,
+        objectId: 0,
+        payload: new Uint8Array([1]),
+        status,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.isTrue(thrown instanceof ProtocolViolationError);
+    assert.equal(errors.length, 1);
+    assert.strictEqual(errors[0], thrown);
+    assert.equal(sent, 0);
+  }
+});
+
+test("properties 付き非 NORMAL の sendObject は失敗する", async () => {
+  // payload が空でも properties 付きの非 NORMAL は送れない。
+  // 非 NORMAL 値間では判定が同一のため両 status で検証する
+  for (const status of [ObjectStatus.END_OF_GROUP, ObjectStatus.END_OF_TRACK] as const) {
+    const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+    let sent = 0;
+    publisher.onSendObject = async () => {
+      sent++;
+    };
+
+    let thrown: unknown = null;
+    try {
+      await publisher.sendObject({
+        groupId: 0,
+        objectId: 0,
+        payload: new Uint8Array(0),
+        properties: new Uint8Array([1]),
+        status,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.isTrue(thrown instanceof ProtocolViolationError);
+    assert.equal(sent, 0);
+  }
+});
+
+test("NORMAL + 空 payload と status 省略の非空 payload は送信できる", async () => {
+  // 正常系の誤検出がないことの検証
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array(0) });
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 1,
+    payload: new Uint8Array([1]),
+  });
+
+  assert.equal(sent, 2);
+});
+
+test("END_OF_TRACK 送信後の sendObject は失敗する", async () => {
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  publisher.onSendObject = async () => {};
+
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+
+  let thrown: unknown = null;
+  try {
+    await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.isTrue(thrown instanceof ProtocolViolationError);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+});
+
+test("END_OF_TRACK 送信後の sendDatagram は同期 throw する", () => {
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  publisher.onSendObject = async () => {};
+  let datagramSent = 0;
+  publisher.onSendDatagram = () => {
+    datagramSent++;
+  };
+
+  // END_OF_TRACK 送信の受け付けで記録するため、await せずとも後続は塞がれる
+  void publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+
+  let thrown: unknown = null;
+  try {
+    publisher.sendDatagram({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.isTrue(thrown instanceof ProtocolViolationError);
+  assert.equal(datagramSent, 0);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+});
+
+test("END_OF_TRACK 送信の失敗時は記録せず再送できる", async () => {
+  // 失敗した END_OF_TRACK で後続が塞がれないことの検証。
+  // 委譲先の失敗は PublisherImpl 層で通知されない (呼び出し側への reject のみ)。
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let shouldFail = true;
+  publisher.onSendObject = async () => {
+    if (shouldFail) {
+      throw new Error("send failed");
+    }
+  };
+
+  let thrown: unknown = null;
+  try {
+    await publisher.sendObject({
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array(0),
+      status: ObjectStatus.END_OF_TRACK,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof Error);
+
+  // 再送できること
+  shouldFail = false;
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+
+  // 記録されているため後続は失敗すること
+  let second: unknown = null;
+  try {
+    await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
+  } catch (error) {
+    second = error;
+  }
+  assert.isTrue(second instanceof ProtocolViolationError);
+});
+
+test("明示 NORMAL の非空 payload と空 payload の END_OF_GROUP は送信できる", async () => {
+  // 誤検出防止の裏面の検証
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1]),
+    status: ObjectStatus.NORMAL,
+  });
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 1,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_GROUP,
+  });
+
+  assert.equal(sent, 2);
+});
+
+test("2 回目の END_OF_TRACK 自体が拒否される", async () => {
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  publisher.onSendObject = async () => {};
+
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+
+  let thrown: unknown = null;
+  try {
+    await publisher.sendObject({
+      groupId: 0,
+      objectId: 1,
+      payload: new Uint8Array(0),
+      status: ObjectStatus.END_OF_TRACK,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.isTrue(thrown instanceof ProtocolViolationError);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+});
+
+test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
+  // 受け付け時記録により、await せず連続呼び出ししても後続は失敗すること
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, (error) => {
+    errors.push(error);
+  });
+  publisher.onSendObject = async () => {};
+
+  const first = publisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+  let thrown: unknown = null;
+  try {
+    await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([1]) });
+  } catch (error) {
+    thrown = error;
+  }
+  await first;
+
+  assert.isTrue(thrown instanceof ProtocolViolationError);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
 });

@@ -99,6 +99,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] Publisher 送信側の status / payload 整合と END_OF_TRACK 後送信を検証する
+  - 非 NORMAL + 非空 payload を委譲前に ProtocolViolationError で失敗させる (§11.2.1.1)。非 NORMAL への properties 付与も失敗させる (§11.2.1.2)
+  - END_OF_TRACK 送信後の sendObject / sendDatagram を拒否する (§11.2.1.1 の EOT 定義による解釈)。組み合わせ違反は記録せず、EOT 受け付け後の委譲先の同期 throw・非同期 reject 時は記録を取り消して再送できる。queue 吸収で resolve する内部失敗時と EOT 記録後の拒否では記録を維持する
+  - @voluntas
 - [FIX] moqlog / moqmetrics の payload 検証を強化する
   - moqmetrics のデコード時に capture_timestamp・value の存在と有限数値型を検証し、違反は ProtocolViolationError とする。moqlog のデコード時に既知フィールドの型を検証する
   - 既知数値フィールドの非有限数のエンコードは Error で失敗させ、空 resourceId の namespace 構築は Error とする
