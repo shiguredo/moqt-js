@@ -117,6 +117,26 @@ function subgroupTestSetup(): {
   };
 }
 
+/** 指定型の単一オブジェクト 1 件分のワイヤを組み立てる */
+function subgroupObjectWire(
+  headerType: number,
+  objectIdDelta: bigint,
+  payload: number,
+): Uint8Array {
+  const fields = encodeObjectFields(objectIdDelta, 1n, headerType, ObjectStatus.NORMAL);
+  return concatChunks([fields, new Uint8Array([payload])]);
+}
+
+/** First-Object-ID 系の単一オブジェクト 1 件分のワイヤを組み立てる */
+function firstObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
+  return subgroupObjectWire(SubgroupHeaderType.FIRST_OBJ, objectIdDelta, payload);
+}
+
+/** 明示型の単一オブジェクト 1 件分のワイヤを組み立てる */
+function explicitObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
+  return subgroupObjectWire(SubgroupHeaderType.EXPLICIT, objectIdDelta, payload);
+}
+
 // 1 回の feed で複数オブジェクトが届いた場合、先頭のみ timeout を抽出し、
 // 2 件目以降は無視することを検証する。
 test("processSubgroupObjects: バッチ内 2 件目以降の timeout は抽出しない", () => {
@@ -264,4 +284,144 @@ test("processSubgroupObjects: fields 切断の分割 feed 完成時に timeout �
   assert.equal(second.remainingBuffer.byteLength, 0);
   assert.equal(stats.objectsReceived, 1);
   assert.equal(stats.bytesReceived, 1);
+});
+
+// First-Object-ID 系ヘッダで feed が分割されても、2 回目以降のオブジェクトに
+// 先頭 Object の ID が付くことを検証する。初回は非ゼロ値にして 0 既定との混同を避ける。
+test("processSubgroupObjects: First-Object-ID 系はバッチ跨ぎで先頭 Object ID を引き継ぐ", () => {
+  const { delivered, subscriber, stats } = subgroupTestSetup();
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: undefined,
+  };
+  const firstResult = processSubgroupObjects(
+    firstObjectWire(5n, 0xaa),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+  );
+  const secondResult = processSubgroupObjects(
+    firstObjectWire(0n, 0xbb),
+    [subscriber],
+    header,
+    firstResult.previousObjectId,
+    stats,
+    firstResult.resolvedSubgroupId,
+  );
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[0].objectId, 5n);
+  assert.equal(delivered[1].objectId, 6n);
+  assert.equal(delivered[0].subgroupId, 5n);
+  assert.equal(delivered[1].subgroupId, 5n);
+  assert.equal(secondResult.resolvedSubgroupId, 5n);
+  assert.equal(secondResult.remainingBuffer.byteLength, 0);
+  assert.equal(stats.objectsReceived, 2);
+  assert.equal(stats.bytesReceived, 2);
+});
+
+// 明示型はヘッダ由来値が優先され、引き継ぎで挙動が変わらないことの検証。
+test("processSubgroupObjects: 明示型はバッチ跨ぎでもヘッダ値を維持する", () => {
+  const { delivered, subscriber, stats } = subgroupTestSetup();
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.EXPLICIT,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: 5n,
+  };
+  const firstResult = processSubgroupObjects(
+    explicitObjectWire(0n, 0xaa),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+  );
+  const secondResult = processSubgroupObjects(
+    explicitObjectWire(0n, 0xbb),
+    [subscriber],
+    header,
+    firstResult.previousObjectId,
+    stats,
+    firstResult.resolvedSubgroupId,
+  );
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[0].subgroupId, 5n);
+  assert.equal(delivered[1].subgroupId, 5n);
+  assert.equal(secondResult.resolvedSubgroupId, 5n);
+  assert.equal(secondResult.remainingBuffer.byteLength, 0);
+  assert.equal(stats.objectsReceived, 2);
+  assert.equal(stats.bytesReceived, 2);
+});
+
+// Subgroup ID = 0 系は引き継ぎでも 0 を維持することの検証。
+// ?? と || の取り違えで 0 が消える回帰を検出する
+test("processSubgroupObjects: Subgroup ID = 0 系はバッチ跨ぎで 0 を維持する", () => {
+  const { delivered, subscriber, stats } = subgroupTestSetup();
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.BASE_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: 0n,
+  };
+  const firstResult = processSubgroupObjects(
+    subgroupObjectWire(SubgroupHeaderType.BASE_EXT, 0n, 0xaa),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+  );
+  const secondResult = processSubgroupObjects(
+    subgroupObjectWire(SubgroupHeaderType.BASE_EXT, 0n, 0xbb),
+    [subscriber],
+    header,
+    firstResult.previousObjectId,
+    stats,
+    firstResult.resolvedSubgroupId,
+  );
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[0].subgroupId, 0n);
+  assert.equal(delivered[1].subgroupId, 0n);
+  assert.equal(secondResult.resolvedSubgroupId, 0n);
+});
+
+// 先頭オブジェクトが未完成の feed では未解決のまま引き継がれ、
+// 完成時に先頭 Object ID で解決されることの検証。
+test("processSubgroupObjects: 未完成分割を挟んでも先頭 Object ID を維持する", () => {
+  const { delivered, subscriber, stats } = subgroupTestSetup();
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: undefined,
+  };
+  const fieldsOnly = encodeObjectFields(0n, 1n, SubgroupHeaderType.FIRST_OBJ, ObjectStatus.NORMAL);
+  const firstResult = processSubgroupObjects(
+    concatChunks([firstObjectWire(5n, 0xaa), fieldsOnly]),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+  );
+
+  assert.equal(delivered.length, 1);
+  assert.equal(firstResult.resolvedSubgroupId, 5n);
+
+  const secondResult = processSubgroupObjects(
+    concatChunks([firstResult.remainingBuffer, new Uint8Array([0xbb])]),
+    [subscriber],
+    header,
+    firstResult.previousObjectId,
+    stats,
+    firstResult.resolvedSubgroupId,
+  );
+
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[1].objectId, 6n);
+  assert.equal(delivered[1].subgroupId, 5n);
+  assert.equal(secondResult.resolvedSubgroupId, 5n);
 });

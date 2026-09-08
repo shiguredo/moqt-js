@@ -102,6 +102,9 @@
 - [FIX] LOC 単体デコーダの前段 varint 不完全のエラー型を統一する
   - 6 種の単体デコーダの前段不完全を ProtocolViolationError に統一する
   - @voluntas
+- [FIX] First-Object-ID 系ヘッダでバッチ跨ぎの subgroupId が誤る問題を修正する
+  - resolvedSubgroupId を戻り値に含め previousObjectId と同様に引き継ぐ
+  - @voluntas
 - [FIX] 手組み FILL 内側 Range が上限合算に入らない問題を修正する
   - raw FILL 内側 Range を型付き fill 内側と同様に上限検証に含める (仕様のみからは確定しないため一貫性で合算)
   - @voluntas
