@@ -1,7 +1,7 @@
 # FILL_PARAMETERS の重複送信に送信前ガードがない
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-fill-duplicate-send-guard
 - Polished: 2026-09-08
 
@@ -24,6 +24,12 @@
 - FILL_PARAMETERS が 2 件以上になる `update()` が送信前に拒否され、`pendingRequestUpdate` に entry が残らないこと。
 - 単一 FILL の正常送信は従来どおり行えること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/bidi.ts` の `bidiSendRequestUpdate` に raw と型付きの合算計数による重複検査を追加し、2 件以上なら `pendingRequestUpdate.set` と `fillFetchTargets.set` と内側検証より前で `InvalidFilterError` にする
+- 内側検証に到達しなくなった複数件テストを単一版に更新し、重複 3 件のテストを追加した。`0519` と `0521` が前提にする順序 (重複検査が先) を満たす
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
