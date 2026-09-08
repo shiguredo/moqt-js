@@ -2409,6 +2409,31 @@ export async function bidiCancelSubscription(
   }
 }
 
+/**
+ * malformed track の検出などで購読を error 通知付きで cancel する
+ *
+ * draft-ietf-moq-transport-20 §2.4.2:
+ * "it MUST cancel any corresponding subscription or fetches for that Track
+ *  from that publisher and SHOULD deliver an error to the application."
+ * アプリの error コールバックへ通知してから購読を closed にし、bidi ストリームを
+ * cancel する。通知は state が active のときだけ行い、二重通知を防ぐ。
+ */
+export async function bidiCancelSubscriptionWithError(
+  session: BidiSessionInternal,
+  subscriber: SubscriberImpl,
+  error: Error,
+): Promise<void> {
+  if (subscriber.state === "active") {
+    try {
+      subscriber.handleError(error);
+    } catch {
+      // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
+    }
+    subscriber.markClosed();
+  }
+  await bidiCancelSubscription(session, subscriber);
+}
+
 // ============================================================================
 // cancelFetch
 // ============================================================================

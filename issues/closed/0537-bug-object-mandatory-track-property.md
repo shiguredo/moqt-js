@@ -1,7 +1,7 @@
 # Object Property の Mandatory Track Property を malformed として検出する
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-09
 - Branch: feature/fix-object-mandatory-track-property
 - Polished: 2026-09-08
 
@@ -39,3 +39,12 @@ draft-ietf-moq-transport-20 §2.5.1 は「An Object received with a Mandatory Tr
 - `decodeObjectPropertiesTolerant` / `parseProperties` / `decodeProperties`
 - `bidiCancelSubscription` / `handleMalformedFetchTrack`
 - `issues/closed/0361-change-loc-object-properties-delta-encoding.md` / `issues/closed/0379-moqt-draft-19-delta-type-overflow-validation.md`（寛容契約の先行判断）
+
+## 解決方法
+
+- `src/properties.ts` に `assertNoMandatoryTrackPropertyInObjectProperties` を追加し、Object Property の KVP を `decodeObjectPropertiesTolerant` で走査して 0x4000-0x7FFF を検出したら `MalformedTrackError` とする。IMMUTABLE_PROPERTIES の内容も再帰的に検査し、深さ上限 8 でスタック枯渇を防ぐ。
+- `src/dataStream.ts` の `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchObjectFields` で Properties スライス後に検証を呼ぶ。non-Normal status の properties 検証 (§11.2.1.2) を先に行い、その後に mandatory 検証を行う。
+- `src/session/bidi.ts` に `bidiCancelSubscriptionWithError` を追加し、アプリへ error を通知してから購読を closed にして cancel する。
+- `src/session.ts` の `handleSubgroupStream` で `MalformedTrackError` を捕捉して購読を cancel し、セッションを閉じない。`src/session/incoming.ts` の datagram 経路も同様に cancel する。FETCH / fill は既存の malformed track 処理で cancel する。
+- 各経路のテストを追加した。
+- 検証: `vp check` / `tsc --noEmit` / `vp test run`（1824 tests）が通る。

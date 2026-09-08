@@ -103,6 +103,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] Object Property の Mandatory Track Property を malformed として検出する
+  - draft-ietf-moq-transport-20 §2.5.1 に基づき、Object Property の 0x4000-0x7FFF を検出したら MalformedTrackError とする
+  - §2.4.2 に従い当該購読を cancel し、セッションを閉じない (FETCH は既存の malformed track 処理で cancel する)
+  - @voluntas
 - [FIX] 相対 Location Filter を LARGEST_OBJECT 更新で再解決しないようにする
   - draft-ietf-moq-transport-20 §5.1.2 に基づき、相対フィルタの開始位置を購読確立時 (SUBSCRIBE_OK) またはフィルタ更新時に固定し、LARGEST_OBJECT 更新だけでは前進させない
   - SUBSCRIBE_OK で一度だけ resolveLocationFilter を呼び、REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の LARGEST_OBJECT 更新だけでは再解決しない (新規 LOCATION_FILTER はその時点の LARGEST_OBJECT で解決する)

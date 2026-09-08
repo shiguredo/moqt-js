@@ -15,9 +15,10 @@ import { decodeVarint } from "../varint";
 import { decodeObjectDatagram, type MoqtObject, type ObjectDatagram } from "../dataStream";
 import { ObjectStatus, MessageType, encodeRequestErrorPayload } from "../message";
 import type { GroupOrder } from "../message/types";
-import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toProtocolViolationSessionError } from "./errors";
+import { bidiCancelSubscriptionWithError } from "./bidi";
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
@@ -296,6 +297,18 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     const sessionError = toProtocolViolationSessionError(err);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
+      return;
+    }
+    if (err instanceof MalformedTrackError) {
+      // draft-ietf-moq-transport-20 §2.4.2:
+      // malformed track を検出した購読を cancel し、セッションは閉じない
+      const trackAlias = decodeDatagramTrackAlias(data);
+      if (trackAlias !== undefined) {
+        const subscribers = session.subscribersByAlias.get(trackAlias) ?? [];
+        for (const subscriber of subscribers.slice()) {
+          void bidiCancelSubscriptionWithError(session, subscriber, err);
+        }
+      }
     }
     return;
   }
@@ -350,6 +363,23 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
         }
       }
     }
+  }
+}
+
+/**
+ * Object Datagram の Track Alias をデコードする
+ *
+ * decodeObjectDatagram が Mandatory Track Property の検出で throw した場合に、
+ * cancel 対象の購読を引くための Track Alias を取り出す。Type Flags と Track Alias は
+ * 先頭に固定配置されているため、デコード失敗時でも取り出せる。
+ */
+function decodeDatagramTrackAlias(data: Uint8Array): bigint | undefined {
+  try {
+    const [, typeLen] = decodeVarint(data, 0);
+    const [trackAlias] = decodeVarint(data, typeLen);
+    return trackAlias;
+  } catch {
+    return undefined;
   }
 }
 
