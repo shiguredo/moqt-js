@@ -3693,6 +3693,16 @@ test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読�
   // fill 経由は再適用を通さないため届く)
   subscriber.setLocationFilter({ startGroup: 0n });
   subscriber.setLargestLocation({ group: 10n, object: 0n });
+  subscriber.resolveLocationFilter();
+
+  // subscription 経由では Location Filter 再適用で {10, 0} が落ちる
+  subscriber.handleObject({
+    groupId: 10n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.equal(received.length, 0);
 
   const parts = buildFetchStreamParts(requestId);
   const handlePromise = ctx.run();
