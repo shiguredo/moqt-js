@@ -689,6 +689,29 @@ export async function bidiReadSubscribeResponse(
 // readFetchResponse
 // ============================================================================
 
+/**
+ * 待機中の fetcher 取得を起こす
+ *
+ * FETCH_OK 成功時と失敗確定時 (REQUEST_ERROR / GOAWAY / 想定外型 2 分岐 /
+ * FIN 先行を含む catch 節の両経路) の両方で使う。incomingWaitForFetcher の
+ * doResolve が自己登録解除 (splice) するため、欠落しないよう複製して反復する。
+ * 失敗確定時は fetchers 不在のため待機は null で解決される
+ * (成功時は fetchers 登録後に発火するため Fetcher で解決される)。
+ * FETCH_OK 内の検証失敗 (スコープ違反・End Location 違反) では
+ * セッション終了時のブロードキャスト (SessionImpl の close 時解放) で
+ * 解決されるため起こさない。本関数復帰時点では登録が残り、
+ * 後の close 処理で解放される。
+ */
+function fireFetcherReadyCallbacks(session: BidiSessionInternal, requestId: bigint): void {
+  const fetcherCallbacks = session.fetcherReadyCallbacks.get(requestId);
+  if (fetcherCallbacks) {
+    for (const cb of fetcherCallbacks.slice()) {
+      cb();
+    }
+    session.fetcherReadyCallbacks.delete(requestId);
+  }
+}
+
 export async function bidiReadFetchResponse(
   session: BidiSessionInternal,
   requestId: bigint,
@@ -755,19 +778,12 @@ export async function bidiReadFetchResponse(
       session.fetchers.set(requestId, pending.impl);
       pending.resolve(pending.impl);
 
-      const fetcherCallbacks = session.fetcherReadyCallbacks.get(requestId);
-      if (fetcherCallbacks) {
-        // incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
-        // 欠落しないよう複製して反復する。
-        for (const cb of fetcherCallbacks.slice()) {
-          cb();
-        }
-        session.fetcherReadyCallbacks.delete(requestId);
-      }
+      fireFetcherReadyCallbacks(session, requestId);
     } else if (msg.type === MessageType.REQUEST_ERROR) {
       const decoded = decodeRequestErrorPayload(msg.payload);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
+      fireFetcherReadyCallbacks(session, requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
         normalizeRequestErrorCode(Number(decoded.errorCode)),
@@ -778,6 +794,7 @@ export async function bidiReadFetchResponse(
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
+      fireFetcherReadyCallbacks(session, requestId);
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
     } else {
@@ -791,11 +808,13 @@ export async function bidiReadFetchResponse(
         );
         session.pendingFetch.delete(requestId);
         session.requestStreams.delete(requestId);
+        fireFetcherReadyCallbacks(session, requestId);
         pending.reject(sessionError);
         session.closeWithError(sessionError);
       } else {
         session.pendingFetch.delete(requestId);
         session.requestStreams.delete(requestId);
+        fireFetcherReadyCallbacks(session, requestId);
         pending.reject(new Error(`unexpected response type ${msg.type} for FETCH request`));
       }
     }
@@ -807,12 +826,14 @@ export async function bidiReadFetchResponse(
       // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
+      fireFetcherReadyCallbacks(session, requestId);
       pending.reject(sessionError);
       session.closeWithError(sessionError);
       return;
     }
     session.pendingFetch.delete(requestId);
     session.requestStreams.delete(requestId);
+    fireFetcherReadyCallbacks(session, requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
