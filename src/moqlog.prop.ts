@@ -5,7 +5,14 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { encodeLogEntry, decodeLogEntry, logGroupId, logTrackName, type LogEntry } from "./moqlog";
+import {
+  encodeLogEntry,
+  decodeLogEntry,
+  logGroupId,
+  logTrackName,
+  LOG_ENTRY_FIELD_TYPES,
+  type LogEntry,
+} from "./moqlog";
 
 // JSON round-trip で壊れる値（undefined / NaN / Infinity）を除外した JSON 安全な値の arbitrary。
 const jsonValueArb: fc.Arbitrary<unknown> = fc.letrec((tie) => ({
@@ -19,13 +26,51 @@ const jsonValueArb: fc.Arbitrary<unknown> = fc.letrec((tie) => ({
   ),
 })).value;
 
-// LogEntry は全フィールド optional + 未知フィールド許容のため、任意の JSON object で生成する。
-const logEntryArb = fc.dictionary(fc.string({ minLength: 1, maxLength: 16 }), jsonValueArb, {
-  maxKeys: 8,
-}) as fc.Arbitrary<LogEntry>;
+// 既知フィールドは型適合のみ生成する (値列挙の厳格化はしない)。
+// 既知フィールド追加時は LOG_ENTRY_FIELD_TYPES と同期すること。
+// 未知フィールドは既知名と重ならない任意の JSON 安全値を生成する。
+const KNOWN_LOG_FIELD_NAMES: ReadonlySet<string> = new Set(Object.keys(LOG_ENTRY_FIELD_TYPES));
 
-// [MOQLOG] §4: payload は任意の JSON object。encode / decode の round-trip で内容が保持される。
-test("LogEntry round-trip: 任意の JSON object で内容が保持される", () => {
+// LogEntry は全フィールド optional + 未知フィールド許容のため、
+// 型適合の既知フィールドと既知名を避けた未知フィールドで生成する。
+const logEntryArb: fc.Arbitrary<LogEntry> = fc
+  .tuple(
+    fc.record({
+      severity: fc.option(fc.string(), { nil: undefined }),
+      timestamp: fc.option(fc.integer(), { nil: undefined }),
+      pri: fc.option(fc.integer(), { nil: undefined }),
+      hostname: fc.option(fc.string(), { nil: undefined }),
+      appname: fc.option(fc.string(), { nil: undefined }),
+      procid: fc.option(fc.string(), { nil: undefined }),
+      msgid: fc.option(fc.string(), { nil: undefined }),
+      msg: fc.option(fc.string(), { nil: undefined }),
+    }),
+    fc.dictionary(
+      // `__proto__` を除外する。代入結合で prototype 置換になり
+      // round-trip が flaky に壊れるため
+      fc.string({ minLength: 1, maxLength: 16 }).filter((key) => key !== "__proto__"),
+      jsonValueArb,
+      { maxKeys: 8 },
+    ),
+  )
+  .map(([known, extra]) => {
+    const entry: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(known)) {
+      if (value !== undefined) {
+        entry[key] = value;
+      }
+    }
+    for (const [key, value] of Object.entries(extra)) {
+      if (!KNOWN_LOG_FIELD_NAMES.has(key)) {
+        entry[key] = value;
+      }
+    }
+    return entry as LogEntry;
+  });
+
+// [MOQLOG] §4: payload は型適合の LogEntry。encode / decode の round-trip で内容が保持される。
+// 既知フィールドの型誤りは別途単体テストで拒否を検証する。
+test("LogEntry round-trip: 型適合の LogEntry で内容が保持される", () => {
   fc.assert(
     fc.property(logEntryArb, (entry) => {
       const decoded = decodeLogEntry(encodeLogEntry(entry));
