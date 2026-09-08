@@ -38,6 +38,29 @@ export function getEncoderConfig(
   }
 }
 
+/**
+ * Catalog 用の codec 文字列を返す
+ *
+ * getEncoderConfig / getCatalogCodec / getDecoderConfig と同一の対応表を使う。
+ * 対応表の変更は合わせて行うこと。
+ */
+export function getCatalogCodec(codec: CodecType): string {
+  switch (codec) {
+    case "vp8":
+      return "vp8";
+    case "vp9":
+      return "vp09.00.10.08";
+    case "av1":
+      return "av01.0.04M.08";
+    case "h264":
+      return "avc1.42001f";
+    case "h265":
+      return "hvc1.1.6.L93.B0";
+    default:
+      return "vp8";
+  }
+}
+
 export function getDecoderConfig(
   codec: CodecType,
   width: number,

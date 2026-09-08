@@ -10,7 +10,7 @@ import {
   type DebugMessage,
   type CertificateHash,
 } from "moqt-js";
-import { getEncoderConfig, parseResolution } from "../utils/codec";
+import { getCatalogCodec, getEncoderConfig, parseResolution } from "../utils/codec";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { addLog } from "../components/DebugPanel";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
@@ -327,8 +327,7 @@ export function usePublisher() {
           packaging: "loc",
           isLive: true,
           role: "video",
-          codec:
-            codecValue === "vp8" ? "vp8" : codecValue === "vp9" ? "vp09.00.10.08" : "av01.0.04M.08",
+          codec: getCatalogCodec(codecValue),
           width,
           height,
           framerate: framerateValue,
