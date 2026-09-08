@@ -1,7 +1,7 @@
 # codec Wrapper の並行 configure() で失敗処理が別世代の Worker を破棄し得る
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-codec-parallel-configure
 - Polished: 2026-09-08
 
@@ -25,6 +25,12 @@
 - 並行 `configure()` でも世代の取り違えが起きないこと（失敗世代のみ破棄し、成功世代を残す。成功同士は先発を破棄して後勝ちとする）。
 - 検証は `0495-test-codec-protocol-tests` の方針に従う契約テストまたはレビュー観点で確認すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/codec/workerConfigure.ts` に `ConfigureGenerationTracker` を追加し、4 ラッパーの `configureWorker` で生成直後の局所捕捉と世代別公開に変えた。成功同士は後勝ち、旧世代遅延成功は破棄・reject、close / reset 時は無効化で中断する
+- `src/codec/workerConfigure.test.ts` に世代管理の契約テスト 5 件を追加した。配線はレビューで確認する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

@@ -108,6 +108,9 @@
 - [FIX] 応答読み取り失敗経路の削除集合を統一する
   - SUBSCRIBE は 3 件・FETCH / TRACK_STATUS は各 2 件に揃え孤児 entry を残さない
   - @voluntas
+- [FIX] codec Wrapper の並行 configure() で失敗処理が別世代の Worker を破棄する問題を修正する
+  - Worker ハンドルを世代ごとに分離し、後勝ちで公開して待機中の旧世代は破棄する
+  - @voluntas
 - [FIX] 受信 REQUEST_UPDATE の Request ID が無検証である問題を修正する
   - デコード結果 ID のパリティ・重複検証を 2 経路に追加する
   - @voluntas
