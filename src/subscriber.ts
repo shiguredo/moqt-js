@@ -242,12 +242,29 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * SUBSCRIBE_OK から LARGEST_OBJECT パラメータを設定
+   * SUBSCRIBE_OK / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
+   * LARGEST_OBJECT パラメータを設定
    * draft-ietf-moq-transport-20 Section 10.2.17 (LARGEST OBJECT Parameter)
+   *
+   * LARGEST_OBJECT の更新だけでは解決済み Location Filter を再計算しない。
+   * 初回購読の相対フィルタ開始位置は購読確立時に固定する (§5.1.2)。
+   * 更新で新規に届く LOCATION_FILTER は setLocationFilter 時点の
+   * LARGEST_OBJECT で解決する。
    */
   setLargestLocation(location: Location): void {
     this.subscriberLargestLocation = location;
-    // LARGEST_OBJECT 更新時に解決済みフィルタを再計算
+  }
+
+  /**
+   * 保持済みの Location Filter を最新の LARGEST_OBJECT で再解決する
+   *
+   * draft-ietf-moq-transport-20 §5.1.2:
+   * SUBSCRIBE 送信時の setLocationFilter では LARGEST_OBJECT が未受信のため、
+   * SUBSCRIBE_OK で LARGEST_OBJECT を設定した直後に一度だけ呼ぶ。
+   * REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の LARGEST_OBJECT 更新では呼ばない
+   * (初回購読の相対フィルタ開始位置は購読確立時に固定する)。
+   */
+  resolveLocationFilter(): void {
     this.resolvedFilterCache = resolveFilter(this.locationFilter, this.subscriberLargestLocation);
   }
 

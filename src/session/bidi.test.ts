@@ -656,6 +656,104 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
 });
 
 /**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * LARGEST_OBJECT のみを含む REQUEST_UPDATE_OK では相対 Location Filter の
+ * 開始位置を再解決しないことを検証する。
+ */
+test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では相対フィルタの開始位置が前進しない", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
+  // SUBSCRIBE 送信時 + SUBSCRIBE_OK 相当で開始位置を {7, 3} に確定する
+  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  subscriber.setLargestLocation({ group: 7n, object: 2n });
+  subscriber.resolveLocationFilter();
+
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  // LARGEST_OBJECT = {9, 0} のみを含む REQUEST_OK (LOCATION_FILTER 更新なし)
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [
+      { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x09, 0x00]) },
+    ],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // 開始位置は {7, 3} のまま {8, 0} が配信される
+  subscriber.handleObject({
+    groupId: 8n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
+  // LARGEST_OBJECT 自体は反映される
+  assert.deepEqual(subscriber.largestLocation, { group: 9n, object: 0n });
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.1.2:
+ * REQUEST_UPDATE_OK が LARGEST_OBJECT と相対 LOCATION_FILTER を同時に運ぶ場合、
+ * 更新後の LARGEST_OBJECT でフィルタを解決することを検証する。
+ */
+test("bidiHandleRequestUpdateOk: 相対 LOCATION_FILTER が更新後の LARGEST_OBJECT で解決される", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
+  subscriber.setLocationFilter({ startGroup: 10n, startObject: 0n });
+  const session = {
+    closeWithError: () => {},
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {},
+          reject: () => {},
+          targetRequestId: 0n,
+          locationFilter: { startGroup: 0n, startObject: 0n },
+        },
+      ],
+    ]),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [
+      { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07, 0x02]) },
+    ],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  // 更新後の largest {7, 2} で Next Object フィルタが {7, 3} に解決される
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 2n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 0);
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 3n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array([1]),
+  });
+  assert.equal(delivered.length, 1);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+});
+
+/**
  * draft-ietf-moq-transport-20 §10.2.9 / §5.1.2:
  * { reset: true } (Length 0) は除去として反映され、
  * 反映後はフィルタなしで全オブジェクトが通過することを検証する。
@@ -7170,6 +7268,69 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
   assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
   assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+});
+
+test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で相対 Location Filter が一度だけ確定する", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, (object) => {
+    delivered.push(object);
+  });
+  // SUBSCRIBE 送信時: Next Object フィルタ (LARGEST_OBJECT 未受信)
+  subscriber.setLocationFilter({ startGroup: 0n, startObject: 0n });
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // SUBSCRIBE_OK に LARGEST_OBJECT = {7, 2} を載せる
+  const okPayload = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [
+      { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07, 0x02]) },
+    ],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // SUBSCRIBE_OK で開始位置が {7, 3} に確定する
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 2n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.equal(delivered.length, 0);
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 3n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.equal(delivered.length, 1);
+
+  // 以降の LARGEST_OBJECT 更新では開始位置が前進しない
+  subscriber.setLargestLocation({ group: 9n, object: 0n });
+  subscriber.handleObject({
+    groupId: 8n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.equal(delivered.length, 2);
+  // SUBSCRIBE_OK の正常系でセッションが閉じない
+  assert.isUndefined(ctx.getClosedWithError());
 });
 
 test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが reject される", async () => {

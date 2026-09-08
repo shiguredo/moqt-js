@@ -1,7 +1,7 @@
 # 相対 Location Filter を LARGEST_OBJECT 更新で再解決しない
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-relative-location-filter-reresolve
 - Polished: 2026-09-08
 
@@ -42,3 +42,13 @@ draft-ietf-moq-transport-20 §5.1.2 の Location Filter は購読開始位置を
 - `bidiHandleRequestUpdateOk` / `bidiHandlePublishStateNotify`（`src/session/bidi.ts`）
 - `src/subscriber.test.ts` / `src/session.test.ts`
 - `issues/closed/0365-bug-location-filter-resolution.md`（反転対象の先行テスト）
+
+## 解決方法
+
+- `src/subscriber.ts` の `setLargestLocation` から `resolvedFilterCache` の再計算を削除し、LARGEST_OBJECT の更新のみを行うようにした。
+- 保持済みの `locationFilter` と最新の `subscriberLargestLocation` で再解決する `resolveLocationFilter()` を追加した。
+- `src/session/bidi.ts` の SUBSCRIBE_OK で `setLargestLocation` の直後に `resolveLocationFilter()` を一度だけ呼ぶようにした。REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の LARGEST_OBJECT 更新だけでは再解決しない (新規 LOCATION_FILTER は `setLocationFilter` がその時点の LARGEST_OBJECT で解決する)。
+- `src/subscriber.test.ts` の現挙動を固定していたテストを新フローに更新し、setLargestLocation 単体では開始位置が前進しないこと、LARGEST_OBJECT 更新後も Object が配信されることを検証するテストを追加した。
+- `src/session/bidi.test.ts` に SUBSCRIBE_OK / REQUEST_UPDATE_OK 経由の結合テストを追加し、配線の回帰を検出できるようにした。
+- `src/session.test.ts` の該当ケースに subscription 経路のアサーションを追加した。
+- 検証: `vp check` / `tsc --noEmit` / `vp test run`（1811 tests）が通る。

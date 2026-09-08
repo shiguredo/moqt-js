@@ -54,7 +54,8 @@ export interface ResolvedFilter {
  * (REQUEST_UPDATE でのフィルタ除去)。
  *
  * @param filter - LocationFilter（undefined は全 Object 通過）
- * @param largestLocation - SUBSCRIBE_OK / REQUEST_UPDATE_OK の LARGEST_OBJECT（未受信時は null）
+ * @param largestLocation - SUBSCRIBE_OK / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の
+ *                          LARGEST_OBJECT（未受信時は null）
  */
 export function resolveFilter(
   filter: LocationFilter | undefined,
