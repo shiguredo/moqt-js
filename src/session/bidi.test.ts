@@ -73,7 +73,7 @@ import {
   type BidiSessionInternal,
 } from "./bidi";
 import { publishSendPublishDone } from "./publish";
-import { FetcherImpl } from "../fetcher";
+import { FetcherImpl, type Fetcher } from "../fetcher";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -8189,4 +8189,186 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
   assert.isFalse(session.pendingRequestUpdate.has(101n));
   assert.isTrue(session.pendingRequestUpdate.has(103n));
   assert.isFalse(session.fillFetchTargets.has(101n));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §5.2 / §10.13:
+ * 失敗確定時に待機中の fetcher 取得が即時解決することを検証する。
+ * 待機の解決値は fetchers 不在のため null になる。
+ */
+
+// 待機タイムアウトと即時性の判定閾値。
+// 閾値はタイムアウトの半分とし、自前タイマー満了との区別に余裕を持たせる
+const FETCH_WAITER_TIMEOUT_MS = 1000;
+const FETCH_WAITER_IMMEDIATE_THRESHOLD_MS = FETCH_WAITER_TIMEOUT_MS / 2;
+async function readFetchWithWaiter(
+  setup: () => ReturnType<typeof createOkResponseReadTestContext>,
+  feed: (ctx: ReturnType<typeof createOkResponseReadTestContext>) => void,
+): Promise<{
+  waiter: Fetcher | null;
+  elapsed: number;
+  session: BidiSessionInternal;
+  requestId: bigint;
+}> {
+  const ctx = setup();
+  const internal = ctx.session as unknown as SessionInternal;
+  const waiter = incomingWaitForFetcher(internal, ctx.requestId, FETCH_WAITER_TIMEOUT_MS);
+  const started = Date.now();
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  feed(ctx);
+  await readPromise;
+  const result = await waiter;
+  return {
+    waiter: result,
+    elapsed: Date.now() - started,
+    session: ctx.session,
+    requestId: ctx.requestId,
+  };
+}
+
+function createFetchWaiterContext(): ReturnType<typeof createOkResponseReadTestContext> {
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  // pendingFetch 不在では待機経路自体に入らず即時 null 解決するため、
+  // 登録は検証の前提であり削除してはならない
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: fetcher,
+  });
+  return ctx;
+}
+
+test("bidiReadFetchResponse: REQUEST_ERROR で待機者が即時解決する", async () => {
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      const errorPayload = encodeRequestErrorPayload({
+        type: MessageType.REQUEST_ERROR,
+        errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
+        retryInterval: 0n,
+        reasonPhrase: "request failed",
+      });
+      ctx.readableController.enqueue(
+        ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+      );
+      ctx.readableController.close();
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("bidiReadFetchResponse: GOAWAY で待機者が即時解決する", async () => {
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      const goawayPayload = encodeGoawayPayload({
+        type: MessageType.GOAWAY,
+        newSessionUri: "moqt://new.example.com",
+        timeout: 0n,
+      });
+      ctx.readableController.enqueue(
+        ctx.session.controlWriter!.encode(MessageType.GOAWAY, goawayPayload),
+      );
+      ctx.readableController.close();
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("bidiReadFetchResponse: 想定外型 (SUBSCRIBE_OK) で待機者が即時解決する", async () => {
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      const okPayload = encodeSubscribeOkPayload({
+        type: MessageType.SUBSCRIBE_OK,
+        trackAlias: 1n,
+        parameters: [],
+        trackProperties: [],
+      });
+      ctx.readableController.enqueue(
+        ctx.session.controlWriter!.encode(MessageType.SUBSCRIBE_OK, okPayload),
+      );
+      ctx.readableController.close();
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("bidiReadFetchResponse: 読み取り失敗で待機者が即時解決する", async () => {
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      ctx.readableController.error(new Error("stream broken"));
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("bidiReadFetchResponse: PUBLISH_STATE_NOTIFY で待機者が即時解決する", async () => {
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      const notifyPayload = encodePublishStateNotifyPayload({
+        type: MessageType.PUBLISH_STATE_NOTIFY,
+        parameters: [],
+      });
+      ctx.readableController.enqueue(
+        ctx.session.controlWriter!.encode(MessageType.PUBLISH_STATE_NOTIFY, notifyPayload),
+      );
+      ctx.readableController.close();
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("bidiReadFetchResponse: 不正ペイロードで待機者が即時解決する", async () => {
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      ctx.readableController.enqueue(
+        ctx.session.controlWriter!.encode(MessageType.FETCH_OK, new Uint8Array([0x00])),
+      );
+      ctx.readableController.close();
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+});
+
+test("bidiReadFetchResponse: FIN 先行で待機者が即時解決する", async () => {
+  // FIN 先行は enqueue なしの close のみで再現する。
+  // 読み取り失敗とは別経路だが同一 catch 節に合流することを直接検証する
+  const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
+    createFetchWaiterContext,
+    (ctx) => {
+      ctx.readableController.close();
+    },
+  );
+
+  assert.isNull(waiter);
+  assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
+  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
 });

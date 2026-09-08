@@ -108,6 +108,9 @@
 - [FIX] 応答読み取り失敗経路の削除集合を統一する
   - SUBSCRIBE は 3 件・FETCH / TRACK_STATUS は各 2 件に揃え孤児 entry を残さない
   - @voluntas
+- [FIX] FETCH 失敗確定時に待機中の fetcher 取得を起こす
+  - 失敗確定時に待機を即時解決し、登録を削除する
+  - @voluntas
 - [FIX] subgroup の fan-out に通知と継続の防御を追加する
   - 同一 alias の残りの購読への配送と同一ストリームの後続処理を継続する
   - @voluntas
