@@ -3,7 +3,8 @@
  * draft-ietf-moq-transport-20 Section 5 (Publishing and Retrieving Tracks)
  */
 
-import type { ObjectStatus } from "./message/types";
+import { ObjectStatus } from "./message/types";
+import { ProtocolViolationError } from "./error";
 
 /**
  * Publisher state
@@ -26,7 +27,9 @@ export interface SendObjectParams {
    * - NORMAL (0x0): 通常のオブジェクト（デフォルト）
    * - END_OF_GROUP (0x3): グループの終端。payload は空でなければならない
    * - END_OF_TRACK (0x4): トラックの終端。payload は空でなければならない。
-   *   END_OF_TRACK 送信後は同一トラックへの後続 sendObject() が禁止される（MUST）
+   *   END_OF_TRACK の定義上、以降の object は存在しないため同一トラックへの
+   *   後続 sendObject() を送らないこと (同節の EOT 定義による解釈であり、
+   *   明示の MUST 文はない)
    */
   status?: ObjectStatus;
   /**
@@ -94,6 +97,10 @@ export interface Publisher {
    * (fire-and-forget でも `.catch` するか error 通知で処理すること)。
    * その他の送信失敗 (書き込み失敗等) は error 通知のみで返値は resolve する。
    * 範囲外・非整数の priority も fail-fast で error 通知 + 返値の reject になる。
+   * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しも
+   * fail-fast で error 通知 + 返値の reject になる
+   * (組み合わせ規則は draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2、
+   * END_OF_TRACK 後は §11.2.1.1 の EOT 定義による解釈)。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
@@ -110,6 +117,8 @@ export interface Publisher {
    * 範囲外の Group / Object ID は error 通知 + throw する
    * (セッションは閉じない)。closed 後は検証前に no-op で返す。
    * 範囲外・非整数の priority も error 通知 + throw になる。
+   * END_OF_TRACK 送信後の呼び出しも error 通知 + throw になる
+   * (§11.2.1.1 の EOT 定義による解釈)。
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
@@ -121,6 +130,32 @@ export interface Publisher {
    * セッションが閉じられた後は PUBLISH_DONE を送信せず即 resolve する。
    */
   done(): Promise<void>;
+}
+
+/**
+ * status / payload の組み合わせを検証する
+ *
+ * draft-ietf-moq-transport-20 §11.2.1.1:
+ * 非 NORMAL ステータスは空 payload でなければならない。
+ * draft-ietf-moq-transport-20 §11.2.1.2:
+ * 非 NORMAL ステータスの Object に properties があってはならない。
+ * `status` 省略は NORMAL とみなす。
+ *
+ * @returns 違反時の ProtocolViolationError、正常時は null
+ */
+function validateSendStatusPayload(params: SendObjectParams): ProtocolViolationError | null {
+  const status = params.status ?? ObjectStatus.NORMAL;
+  if (status === ObjectStatus.NORMAL) {
+    return null;
+  }
+  const payloadSize = params.payload.byteLength;
+  const propertiesSize = params.properties?.byteLength ?? 0;
+  if (payloadSize > 0 || propertiesSize > 0) {
+    return new ProtocolViolationError(
+      `invalid status with payload: status ${status} requires empty payload without properties, got payload ${payloadSize} bytes and properties ${propertiesSize} bytes`,
+    );
+  }
+  return null;
 }
 
 /**
@@ -139,6 +174,11 @@ export class PublisherImpl implements Publisher {
   // draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
+
+  // draft-ietf-moq-transport-20 §11.2.1.1:
+  // END_OF_TRACK 送信済みか。sendObject / sendDatagram で共有し、
+  // 記録後の両 API 呼び出しを拒否する。
+  private endOfTrackSent = false;
 
   // セッションが利用する内部コールバック
   goawayCallback?: (newSessionUri: string) => void;
@@ -213,25 +253,90 @@ export class PublisherImpl implements Publisher {
    * 戻り値は object が WebTransport stream に書き込み完了した時点で resolve する Promise。
    * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
    * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
+   *
+   * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しは
+   * fail-fast で error 通知 + 返値の reject になる
+   * (組み合わせ規則は draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2、
+   * END_OF_TRACK 後は §11.2.1.1 の EOT 定義による解釈)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
 
-    if (this.onSendObject) {
-      return this.onSendObject(params);
+    // END_OF_TRACK 送信後は同一トラックへの後続送信を禁止する。
+    // ライフサイクル状態の検証をパラメータ形状より先に行う。
+    if (this.endOfTrackSent) {
+      const violation = new ProtocolViolationError(
+        "cannot send object after END_OF_TRACK was sent",
+      );
+      this.handleError(violation);
+      return Promise.reject(violation);
     }
-    return Promise.resolve();
+
+    // draft-ietf-moq-transport-20 §11.2.1.1:
+    // status / payload 規則は委譲前 (queue 登録前) に検証する。
+    // 違反は通知して返値の Promise を reject する (解決しない)。
+    const statusViolation = validateSendStatusPayload(params);
+    if (statusViolation) {
+      this.handleError(statusViolation);
+      return Promise.reject(statusViolation);
+    }
+
+    const isEndOfTrack = (params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_TRACK;
+    if (!this.onSendObject) {
+      // 委譲先がなくても END_OF_TRACK の意味論 (以降の object は存在しない) は保つ
+      if (isEndOfTrack) {
+        this.endOfTrackSent = true;
+      }
+      return Promise.resolve();
+    }
+
+    // END_OF_TRACK は受け付け時に記録する (送信成功時の記録と等価だが、
+    // 未 await の連続呼び出しも塞ぐ)。組み合わせ違反は記録しない。
+    // EOT 受け付け後の委譲先の同期 throw・非同期 reject 時は記録を取り消して
+    // 再送できる。queue 吸収で resolve する内部失敗時は記録が残る。
+    // EOT 記録後の拒否は記録を維持する。
+    // 受け付けから非同期失敗までの窓に割り込んだ後続は EOT 後違反になるが、
+    // 稀な並行であり塞ぐ方を優先する意図的な仕様である。
+    if (isEndOfTrack) {
+      this.endOfTrackSent = true;
+      let result: Promise<void>;
+      try {
+        result = this.onSendObject(params);
+      } catch (error) {
+        this.endOfTrackSent = false;
+        throw error;
+      }
+      result.then(
+        () => {},
+        () => {
+          this.endOfTrackSent = false;
+        },
+      );
+      return result;
+    }
+    return this.onSendObject(params);
   }
 
   /**
    * Send a datagram on this track
    * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
+   *
+   * END_OF_TRACK 送信後の呼び出しは fail-fast で error 通知 + throw になる
+   * (§11.2.1.1 の EOT 定義による解釈)。
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
+    }
+
+    if (this.endOfTrackSent) {
+      const violation = new ProtocolViolationError(
+        "cannot send datagram after END_OF_TRACK was sent",
+      );
+      this.handleError(violation);
+      throw violation;
     }
 
     if (this.onSendDatagram) {
