@@ -1,7 +1,7 @@
 # 同一 track の再 publish で Group ID が 0 に戻り MSF §6.1 に反する
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-group-id-restart
 - Polished: 2026-09-06
 
@@ -24,6 +24,13 @@ MSF §6.1 は再起動時に新しい開始 Group ID が同一 track の過去�
 - 新規インスタンス生成 (同一 track) の開始 Group ID が前回送信最大値を上回ること (初期値生成の単体テスト。時刻依存は注入または固定で検証する)。
 - 音声・映像とも初回送信値が初期値 `T` であること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` に `allocateInitialGroupId` を追加し、`createInitialGroupId` (Unix epoch ミリ秒起点) と同一プロセス内の前回 + 1 ガードで開始 Group ID を割り当てる。送信加算時も共有最大値を追随させ、前回送信最大値を上回る
+- 映像の初回 key での加算を `videoGroupStarted` で抑止し、音声・映像とも初回送信値を初期値に統一する。未使用 track 分は採番しない
+- `src/createMediaPublisher.test.ts` に単調性・非有限拒否・新規インスタンス・初回送信値・送信最大値追跡・未使用分岐のテスト 6 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
