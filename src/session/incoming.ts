@@ -467,6 +467,8 @@ export function incomingProcessFetchObjects(
  * Subgroup オブジェクトのストリーミング処理ラッパー
  *
  * 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ。
+ * resolvedSubgroupId を透過し、feed 間の解決値を引き継ぐ
+ * (明示型・0 系はヘッダ値のため透過しても no-op になる)。
  * SessionImpl.handleSubgroupStream から呼ばれる。
  */
 export function incomingProcessSubgroupObjects(
@@ -475,16 +477,28 @@ export function incomingProcessSubgroupObjects(
   subscribers: SubscriberImpl[],
   header: import("../dataStream").SubgroupHeader,
   previousObjectId: bigint,
-): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
-  return streamProcessSubgroupObjects(buffer, subscribers, header, previousObjectId, {
-    incrementObjectsReceived: () => {
-      (session as unknown as { statsObjectsReceivedViaSubscribe: number })
-        .statsObjectsReceivedViaSubscribe++;
+  resolvedSubgroupId?: bigint,
+): {
+  remainingBuffer: Uint8Array;
+  previousObjectId: bigint;
+  resolvedSubgroupId: bigint | undefined;
+} {
+  return streamProcessSubgroupObjects(
+    buffer,
+    subscribers,
+    header,
+    previousObjectId,
+    {
+      incrementObjectsReceived: () => {
+        (session as unknown as { statsObjectsReceivedViaSubscribe: number })
+          .statsObjectsReceivedViaSubscribe++;
+      },
+      incrementBytesReceived: (_subscribePath, bytes) => {
+        (
+          session as unknown as { statsBytesReceivedViaSubscribe: number }
+        ).statsBytesReceivedViaSubscribe += bytes;
+      },
     },
-    incrementBytesReceived: (_subscribePath, bytes) => {
-      (
-        session as unknown as { statsBytesReceivedViaSubscribe: number }
-      ).statsBytesReceivedViaSubscribe += bytes;
-    },
-  });
+    resolvedSubgroupId,
+  );
 }
