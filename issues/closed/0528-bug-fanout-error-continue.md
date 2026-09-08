@@ -1,7 +1,7 @@
 # subgroup の fan-out にも通知と継続の防御を入れる
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-fanout-error-continue
 - Polished: 2026-09-08
 
@@ -25,6 +25,13 @@
 - 同一 alias の複数購読への subgroup 配送で 1 件目のアプリ例外が `handleError` に通知され、残りの購読への配送と同一ストリームの後続処理が継続すること。
 - 単一 sink の fetch 配送の振る舞いが変わらないこと。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/stream.ts` の `processSubgroupObjects` に購読ごとの `try` / `catch` を追加し、`SubgroupDeliveryHooks` で通知と継続を行う。反復前に `slice()` 複製する
+- `src/session/incoming.ts` で本番フックを構築し、`incomingHandleDatagram` と同形の通知・継続・debug 記録にする。fetch 単一経路は対象外とした
+- `src/session/stream.test.ts` と `src/session/incoming.test.ts` に通知・継続のテスト 6 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

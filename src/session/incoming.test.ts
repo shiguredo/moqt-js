@@ -15,6 +15,7 @@ import {
   incomingClassifyFirstBidiMessage,
   incomingHandleDatagram,
   incomingHandleFirstBidiMessage,
+  incomingProcessSubgroupObjects,
   incomingSendRequestErrorAndClose,
   incomingValidateRequestId,
   incomingWaitForFetcher,
@@ -23,6 +24,8 @@ import type { SessionInternal } from "./types";
 import { SubscriberImpl } from "../subscriber";
 import { FetcherImpl } from "../fetcher";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
+import { encodeObjectFields, SubgroupHeaderType, type SubgroupHeader } from "../dataStream";
+import { concatChunks } from "./stream";
 
 // ============================================================================
 // incomingClassifyFirstBidiMessage のテスト
@@ -1098,4 +1101,158 @@ test("incomingWaitForFetcher: 不明なリクエストは即座に null を返�
 
   assert.isNull(result);
   assert.isFalse(session.fetcherReadyCallbacks.has(99n));
+});
+
+/**
+ * subgroup fan-out 配送用のテストコンテキストを構築する。
+ *
+ * session は受信に必要な最小面 (debug コールバック・統計カウンタ) の
+ * オブジェクトリテラルであり、Subscriber は実物を使う。
+ */
+function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): {
+  session: SessionInternal;
+  debugRecords: unknown[];
+} {
+  const debugRecords: unknown[] = [];
+  const session = {
+    callbacks: {
+      debug: (message: unknown) => {
+        if (hooks.debugError) {
+          throw hooks.debugError;
+        }
+        debugRecords.push(message);
+      },
+    },
+    statsObjectsReceivedViaSubscribe: 0,
+    statsBytesReceivedViaSubscribe: 0,
+  } as unknown as SessionInternal;
+  return { session, debugRecords };
+}
+
+/** subgroup 単一オブジェクト 1 件分のワイヤを組み立てる */
+function subgroupObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
+  const fields = encodeObjectFields(objectIdDelta, 1n, SubgroupHeaderType.FIRST_OBJ);
+  return concatChunks([fields, new Uint8Array([payload])]);
+}
+
+function subgroupTestHeader(): SubgroupHeader {
+  return { type: SubgroupHeaderType.FIRST_OBJ, trackAlias: 7n, groupId: 0n };
+}
+
+test("incomingProcessSubgroupObjects: 非 Error の throw を正規化して通知し継続する", () => {
+  // 本番フックの Error 正規化を直接検証する。
+  // 非 Error 値は変数経由で送出する (リテラル throw は lint 対象のため)
+  const nonError: unknown = "boom";
+  const { session, debugRecords } = createSubgroupDeliveryTestContext();
+  const notified: Error[] = [];
+  const delivered: number[] = [];
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw nonError;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified.push(error);
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    delivered.push(1);
+  });
+
+  incomingProcessSubgroupObjects(
+    session,
+    subgroupObjectWire(0n, 0xaa),
+    [throwing, second],
+    subgroupTestHeader(),
+    -1n,
+  );
+
+  assert.equal(notified.length, 1);
+  assert.isTrue(notified[0] instanceof Error);
+  assert.strictEqual(notified[0].message, "boom");
+  assert.equal(delivered.length, 1);
+  assert.equal(debugRecords.length, 0);
+});
+
+test("incomingProcessSubgroupObjects: error コールバックの throw を debug 記録し継続する", () => {
+  // 本番フックの debug 記録内容を直接検証する
+  const { session, debugRecords } = createSubgroupDeliveryTestContext();
+  const delivered: number[] = [];
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw new Error("app failed");
+    },
+    undefined,
+    undefined,
+    () => {
+      throw new Error("error callback failed");
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    delivered.push(1);
+  });
+
+  incomingProcessSubgroupObjects(
+    session,
+    subgroupObjectWire(0n, 0xaa),
+    [throwing, second],
+    subgroupTestHeader(),
+    -1n,
+  );
+
+  assert.equal(delivered.length, 1);
+  assert.equal(debugRecords.length, 1);
+  const record = debugRecords[0] as {
+    typeName: string;
+    decoded: { error: string };
+    payload: Uint8Array;
+  };
+  assert.strictEqual(record.typeName, "SUBGROUP_CALLBACK_ERROR");
+  assert.strictEqual(record.decoded.error, "error callback failed");
+  assert.deepEqual([...record.payload], [0xaa]);
+});
+
+test("incomingProcessSubgroupObjects: debug 自体の throw でも継続する", () => {
+  // デバッグ記録の失敗を握り潰すことの検証
+  const { session, debugRecords } = createSubgroupDeliveryTestContext({
+    debugError: new Error("debug failed"),
+  });
+  const delivered: number[] = [];
+  const throwing = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      throw new Error("app failed");
+    },
+    undefined,
+    undefined,
+    () => {
+      throw new Error("error callback failed");
+    },
+  );
+  const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
+    delivered.push(1);
+  });
+
+  incomingProcessSubgroupObjects(
+    session,
+    subgroupObjectWire(0n, 0xaa),
+    [throwing, second],
+    subgroupTestHeader(),
+    -1n,
+  );
+
+  assert.equal(delivered.length, 1);
+  assert.equal(debugRecords.length, 0);
 });

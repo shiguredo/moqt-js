@@ -262,7 +262,7 @@ export async function incomingHandleFirstBidiMessage(
  *
  * アプリ例外は当該 subscriber の error コールバックへ通知し、
  * 残りの配送を継続する。セッションもストリームも閉じない
- * (subgroup 経路は当該ストリーム処理を中断する点と異なる)。
+ * (subgroup 経路も同様に継続する)。
  */
 export function incomingHandleDatagram(session: SessionInternal, data: Uint8Array): void {
   let datagram: ObjectDatagram;
@@ -466,7 +466,7 @@ export function incomingProcessFetchObjects(
 /**
  * Subgroup オブジェクトのストリーミング処理ラッパー
  *
- * 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ。
+ * 統計カウンターと配送フックを stream.ts の純粋関数に注入する薄いブリッジ。
  * resolvedSubgroupId を透過し、feed 間の解決値を引き継ぐ
  * (明示型・0 系はヘッダ値のため透過しても no-op になる)。
  * SessionImpl.handleSubgroupStream から呼ばれる。
@@ -497,6 +497,27 @@ export function incomingProcessSubgroupObjects(
         (
           session as unknown as { statsBytesReceivedViaSubscribe: number }
         ).statsBytesReceivedViaSubscribe += bytes;
+      },
+    },
+    {
+      notifyError: (subscriber, error) => {
+        subscriber.handleError(error instanceof Error ? error : new Error(String(error)));
+      },
+      recordCallbackError: (payload, error) => {
+        try {
+          session.callbacks.debug?.({
+            direction: "recv",
+            type: 0,
+            typeName: "SUBGROUP_CALLBACK_ERROR",
+            payload,
+            decoded: {
+              error: error instanceof Error ? error.message : String(error),
+            },
+            timestamp: Date.now(),
+          });
+        } catch {
+          // デバッグ記録の失敗は無視する
+        }
       },
     },
     resolvedSubgroupId,

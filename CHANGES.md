@@ -108,6 +108,9 @@
 - [FIX] 応答読み取り失敗経路の削除集合を統一する
   - SUBSCRIBE は 3 件・FETCH / TRACK_STATUS は各 2 件に揃え孤児 entry を残さない
   - @voluntas
+- [FIX] subgroup の fan-out に通知と継続の防御を追加する
+  - 同一 alias の残りの購読への配送と同一ストリームの後続処理を継続する
+  - @voluntas
 - [FIX] First-Object-ID 系ヘッダでバッチ跨ぎの subgroupId が誤る問題を修正する
   - resolvedSubgroupId を戻り値に含め previousObjectId と同様に引き継ぐ
   - @voluntas

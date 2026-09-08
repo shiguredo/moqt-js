@@ -3,7 +3,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { concatChunks, processSubgroupObjects } from "./stream";
+import { concatChunks, processSubgroupObjects, type SubgroupDeliveryHooks } from "./stream";
 import {
   encodeObjectFields,
   SubgroupHeaderType,
@@ -117,6 +117,31 @@ function subgroupTestSetup(): {
   };
 }
 
+/** 通知を捨てる配送フック (エラー非発生経路用) */
+const silentDelivery: SubgroupDeliveryHooks = {
+  notifyError: () => {},
+  recordCallbackError: () => {},
+};
+
+/** 通知呼び出しを記録する配送フック (正規化は注入側の責務のため行わない) */
+function createRecordingDelivery(): {
+  hooks: SubgroupDeliveryHooks;
+  notified: { subscriber: SubscriberImpl; error: unknown }[];
+  records: { payload: Uint8Array; error: unknown }[];
+} {
+  const notified: { subscriber: SubscriberImpl; error: unknown }[] = [];
+  const records: { payload: Uint8Array; error: unknown }[] = [];
+  const hooks: SubgroupDeliveryHooks = {
+    notifyError: (subscriber, error) => {
+      notified.push({ subscriber, error });
+    },
+    recordCallbackError: (payload, error) => {
+      records.push({ payload, error });
+    },
+  };
+  return { hooks, notified, records };
+}
+
 /** 指定型の単一オブジェクト 1 件分のワイヤを組み立てる */
 function subgroupObjectWire(
   headerType: number,
@@ -146,7 +171,7 @@ test("processSubgroupObjects: バッチ内 2 件目以降の timeout は抽出�
     timeoutObjectWire(0n, 100n, 200n),
     timeoutObjectWire(0n, 300n, 400n),
   ]);
-  const result = processSubgroupObjects(buffer, [subscriber], header, -1n, stats);
+  const result = processSubgroupObjects(buffer, [subscriber], header, -1n, stats, silentDelivery);
 
   // 先頭のみ抽出され、2 件目は無視される
   assert.equal(delivered.length, 2);
@@ -176,6 +201,7 @@ test("processSubgroupObjects: バッチ途中開始では timeout を抽出し�
     header,
     5n,
     stats,
+    silentDelivery,
   );
 
   // timeout 付きでも抽出されず、Object ID は継続採番される
@@ -200,6 +226,7 @@ test("processSubgroupObjects: バッチ跨ぎの 2 件目では timeout を抽�
     header,
     -1n,
     stats,
+    silentDelivery,
   );
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].objectDeliveryTimeout, 100n);
@@ -212,6 +239,7 @@ test("processSubgroupObjects: バッチ跨ぎの 2 件目では timeout を抽�
     header,
     first.previousObjectId,
     stats,
+    silentDelivery,
   );
   assert.equal(delivered.length, 2);
   assert.isUndefined(delivered[1].objectDeliveryTimeout);
@@ -230,7 +258,7 @@ test("processSubgroupObjects: 分割 feed の先頭オブジェクト完成時�
   const { delivered, subscriber, header, stats } = subgroupTestSetup();
   const wire = timeoutObjectWire(0n, 100n, 200n);
   const head = wire.slice(0, -1);
-  const first = processSubgroupObjects(head, [subscriber], header, -1n, stats);
+  const first = processSubgroupObjects(head, [subscriber], header, -1n, stats, silentDelivery);
   // 未完成のため配信されず、先頭判定が保持される
   assert.equal(delivered.length, 0);
   assert.equal(first.previousObjectId, -1n);
@@ -243,6 +271,7 @@ test("processSubgroupObjects: 分割 feed の先頭オブジェクト完成時�
     header,
     first.previousObjectId,
     stats,
+    silentDelivery,
   );
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].objectDeliveryTimeout, 100n);
@@ -261,7 +290,7 @@ test("processSubgroupObjects: fields 切断の分割 feed 完成時に timeout �
   const { delivered, subscriber, header, stats } = subgroupTestSetup();
   const wire = timeoutObjectWire(0n, 100n, 200n);
   const head = wire.slice(0, 2);
-  const first = processSubgroupObjects(head, [subscriber], header, -1n, stats);
+  const first = processSubgroupObjects(head, [subscriber], header, -1n, stats, silentDelivery);
   // 未完成のため配信されず、先頭判定が保持される
   assert.equal(delivered.length, 0);
   assert.equal(first.previousObjectId, -1n);
@@ -274,6 +303,7 @@ test("processSubgroupObjects: fields 切断の分割 feed 完成時に timeout �
     header,
     first.previousObjectId,
     stats,
+    silentDelivery,
   );
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].objectDeliveryTimeout, 100n);
@@ -302,6 +332,7 @@ test("processSubgroupObjects: First-Object-ID 系はバッチ跨ぎで先頭 Obj
     header,
     -1n,
     stats,
+    silentDelivery,
   );
   const secondResult = processSubgroupObjects(
     firstObjectWire(0n, 0xbb),
@@ -309,6 +340,7 @@ test("processSubgroupObjects: First-Object-ID 系はバッチ跨ぎで先頭 Obj
     header,
     firstResult.previousObjectId,
     stats,
+    silentDelivery,
     firstResult.resolvedSubgroupId,
   );
 
@@ -338,6 +370,7 @@ test("processSubgroupObjects: 明示型はバッチ跨ぎでもヘッダ値を�
     header,
     -1n,
     stats,
+    silentDelivery,
   );
   const secondResult = processSubgroupObjects(
     explicitObjectWire(0n, 0xbb),
@@ -345,6 +378,7 @@ test("processSubgroupObjects: 明示型はバッチ跨ぎでもヘッダ値を�
     header,
     firstResult.previousObjectId,
     stats,
+    silentDelivery,
     firstResult.resolvedSubgroupId,
   );
 
@@ -373,6 +407,7 @@ test("processSubgroupObjects: Subgroup ID = 0 系はバッチ跨ぎで 0 を維�
     header,
     -1n,
     stats,
+    silentDelivery,
   );
   const secondResult = processSubgroupObjects(
     subgroupObjectWire(SubgroupHeaderType.BASE_EXT, 0n, 0xbb),
@@ -380,6 +415,7 @@ test("processSubgroupObjects: Subgroup ID = 0 系はバッチ跨ぎで 0 を維�
     header,
     firstResult.previousObjectId,
     stats,
+    silentDelivery,
     firstResult.resolvedSubgroupId,
   );
 
@@ -406,6 +442,7 @@ test("processSubgroupObjects: 未完成分割を挟んでも先頭 Object ID を
     header,
     -1n,
     stats,
+    silentDelivery,
   );
 
   assert.equal(delivered.length, 1);
@@ -417,6 +454,7 @@ test("processSubgroupObjects: 未完成分割を挟んでも先頭 Object ID を
     header,
     firstResult.previousObjectId,
     stats,
+    silentDelivery,
     firstResult.resolvedSubgroupId,
   );
 
@@ -424,4 +462,132 @@ test("processSubgroupObjects: 未完成分割を挟んでも先頭 Object ID を
   assert.equal(delivered[1].objectId, 6n);
   assert.equal(delivered[1].subgroupId, 5n);
   assert.equal(secondResult.resolvedSubgroupId, 5n);
+});
+
+// 同一 alias の複数購読への配送で 1 件目のアプリ例外を通知し、
+// 残りの配送と同一ストリームの後続処理を継続することの検証。
+// 層分離のため double は記録のみ行い、Error 正規化と handleError 配送は
+// 注入側 (incoming 層) の責務としてここでは検証しない。
+test("processSubgroupObjects: 1 件目のアプリ例外を通知して残りに配送を継続する", () => {
+  const { stats } = subgroupTestSetup();
+  const delivered2: MoqtObject[] = [];
+  const appError = new Error("app failed");
+  // 非 Error 値は変数経由で送出する (リテラル throw は lint 対象のため)
+  const nonError: unknown = "boom2";
+  const throwing1 = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
+    throw appError;
+  });
+  const throwing2 = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
+    throw nonError;
+  });
+  const second = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
+    delivered2.push(object);
+  });
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: undefined,
+  };
+  const { hooks, notified, records } = createRecordingDelivery();
+
+  // 1 バッチに 2 件載せて feed する
+  const result = processSubgroupObjects(
+    concatChunks([firstObjectWire(0n, 0xaa), firstObjectWire(0n, 0xbb)]),
+    [throwing1, throwing2, second],
+    header,
+    -1n,
+    stats,
+    hooks,
+  );
+
+  // 層をそのまま素通しすること (正規化は注入側の責務)
+  assert.equal(notified.length, 4);
+  assert.strictEqual(notified[0].subscriber, throwing1);
+  assert.strictEqual(notified[0].error, appError);
+  assert.strictEqual(notified[1].subscriber, throwing2);
+  assert.strictEqual(notified[1].error, "boom2");
+  assert.equal(delivered2.length, 2);
+  assert.equal(records.length, 0);
+  assert.equal(result.resolvedSubgroupId, 0n);
+  assert.equal(stats.objectsReceived, 2);
+  assert.equal(stats.bytesReceived, 2);
+  assert.equal(throwing1.state, "active");
+  assert.equal(throwing2.state, "active");
+  assert.equal(second.state, "active");
+});
+
+// 通知フック自体の throw は記録フックで受けて継続することの検証。
+test("processSubgroupObjects: 通知フックの throw を記録して継続する", () => {
+  const { stats } = subgroupTestSetup();
+  const delivered2: MoqtObject[] = [];
+  const throwing = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
+    throw new Error("app failed");
+  });
+  const second = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
+    delivered2.push(object);
+  });
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: undefined,
+  };
+  const records: { payload: Uint8Array; error: unknown }[] = [];
+  const hooks: SubgroupDeliveryHooks = {
+    notifyError: () => {
+      throw new Error("notify failed");
+    },
+    recordCallbackError: (payload, error) => {
+      records.push({ payload, error });
+    },
+  };
+
+  processSubgroupObjects(
+    concatChunks([firstObjectWire(0n, 0xaa), firstObjectWire(0n, 0xbb)]),
+    [throwing, second],
+    header,
+    -1n,
+    stats,
+    hooks,
+  );
+
+  assert.equal(delivered2.length, 2);
+  assert.equal(records.length, 2);
+  assert.deepEqual([...records[0].payload], [0xaa]);
+  assert.deepEqual([...records[1].payload], [0xbb]);
+});
+
+// 通知中の unsubscribe (配列の破壊的変更) でも後続に配送されることの検証。
+// 反復前の slice() 複製の回帰網である。
+test("processSubgroupObjects: 通知中の除去でも後続に配送される", () => {
+  const { stats } = subgroupTestSetup();
+  const delivered: MoqtObject[] = [];
+  const list: SubscriberImpl[] = [];
+  const first = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
+    throw new Error("app failed");
+  });
+  const second = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
+    delivered.push(object);
+  });
+  const third = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
+    delivered.push(object);
+  });
+  list.push(first, second, third);
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: undefined,
+  };
+  const hooks: SubgroupDeliveryHooks = {
+    notifyError: () => {
+      list.splice(0, 1);
+    },
+    recordCallbackError: () => {},
+  };
+
+  processSubgroupObjects(firstObjectWire(0n, 0xaa), list, header, -1n, stats, hooks);
+
+  assert.equal(delivered.length, 2);
 });

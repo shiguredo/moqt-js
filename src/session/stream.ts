@@ -128,12 +128,34 @@ export function processFetchObjects(
 // processSubgroupObjects
 // ============================================================================
 
+/**
+ * subgroup 配送時のアプリ例外の通知と継続のためのフック
+ *
+ * `incomingHandleDatagram` と同形の防御を `processSubgroupObjects` で行うため、
+ * 呼び出し側 (incoming 層) がセッション由来のコールバックを注入する。
+ * `recordCallbackError` は throw してはならない
+ * (incoming 層の実装がデバッグ記録の失敗を握り潰す)。
+ */
+export interface SubgroupDeliveryHooks {
+  /**
+   * アプリ例外を当該 subscriber の error コールバックへ通知する。
+   * Error 正規化は注入側の責務とする (datagram 経路と同形)。
+   */
+  notifyError: (subscriber: SubscriberImpl, error: unknown) => void;
+  /**
+   * error コールバック自体の throw をデバッグ記録する。
+   * payload は当該オブジェクト単位 (datagram 経路の data 全体と異なる)。
+   */
+  recordCallbackError: (payload: Uint8Array, error: unknown) => void;
+}
+
 export function processSubgroupObjects(
   buffer: Uint8Array,
   subscribers: SubscriberImpl[],
   header: SubgroupHeader,
   previousObjectId: bigint,
   stats: StreamStatsUpdate,
+  delivery: SubgroupDeliveryHooks,
   resolvedSubgroupId?: bigint,
 ): {
   remainingBuffer: Uint8Array;
@@ -219,9 +241,24 @@ export function processSubgroupObjects(
       stats.incrementObjectsReceived(true);
       stats.incrementBytesReceived(true, payload.byteLength);
 
-      // draft-ietf-moq-transport-20 §5.1: 同一 alias の全 subscription に配送（filter 再適用は各 handleObject 内）
-      for (const sub of subscribers) {
-        sub.handleObject(object);
+      // draft-ietf-moq-transport-20 §5.1: 同一 alias の全 subscription に配送
+      // (filter 再適用は各 handleObject 内)。
+      // アプリ例外は当該 subscriber の error コールバックへ通知し、
+      // 残りの配送と同一ストリームの後続処理を継続する。セッションは閉じない。
+      // 反復前に複製する (error コールバック内の unsubscribe() が
+      // 配列を破壊的に変更しても、後続購読への配送が欠落しないようにする)。
+      for (const sub of subscribers.slice()) {
+        try {
+          sub.handleObject(object);
+        } catch (err) {
+          // error コールバック自体の throw はデバッグ記録に残し、
+          // 残りの配送を継続する。
+          try {
+            delivery.notifyError(sub, err);
+          } catch (callbackError) {
+            delivery.recordCallbackError(payload, callbackError);
+          }
+        }
       }
     } catch (err) {
       if (err instanceof IncompleteDataError) {
