@@ -1092,7 +1092,7 @@ export const FetchSerializationFlags = {
   PROPERTIES_PRESENT: 0x20,
   /**
    * Datagram フラグ (0x40)
-   * Subgroup ID の 2 ビットを無視する
+   * Subgroup ID フィールドが存在しないため、下位 2 ビットを無視する
    */
   DATAGRAM: 0x40,
 
@@ -1444,9 +1444,11 @@ function decodeEndOfRange(
 /**
  * Fetch Object の Subgroup ID をデコードする
  *
- * draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
- * "When encoding an Object with a Forwarding Preference of 'Datagram',
- *  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
+ * draft-ietf-moq-transport-20 §11.4.4.1:
+ * "When encoding an Object with a Forwarding Preference of 'Datagram' ... the
+ *  object has no Subgroup ID. The publisher MUST SET bit 0x40 to '1'. When
+ *  0x40 is set, it SHOULD set the two least significant bits to zero and the
+ *  subscriber MUST ignore the bits."
  *
  * @returns subgroupId, isDatagram, and extra bytes consumed
  */
@@ -1458,38 +1460,32 @@ function decodeFetchSubgroupId(
   context: FetchObjectContext | null,
 ): { subgroupId: bigint; isDatagram: boolean; consumed: number } {
   const isDatagram = (flags & FetchSerializationFlags.DATAGRAM) !== 0;
-  let consumed = 0;
 
-  // DATAGRAM + SUBGROUP_PRESENT: wire 上の Subgroup ID vi64 を読み飛ばす
-  if (
-    isDatagram &&
-    (flags & FetchSerializationFlags.SUBGROUP_MASK) === FetchSerializationFlags.SUBGROUP_PRESENT
-  ) {
-    const [, skipConsumed] = decodeVarint(data, offset);
-    consumed += skipConsumed;
-  }
-
+  // draft-ietf-moq-transport-20 §11.4.4.1:
+  // DATAGRAM ビットが立つ Object は Subgroup ID を持たない。下位 2 ビットの値に
+  // 関わらず Subgroup ID フィールドは存在しないため、1 バイトも消費せず
+  // subgroupId = 0 を返す。
   if (isDatagram) {
-    return { subgroupId: 0n, isDatagram: true, consumed };
+    return { subgroupId: 0n, isDatagram: true, consumed: 0 };
   }
 
   const subgroupEncoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
   switch (subgroupEncoding) {
     case FetchSerializationFlags.SUBGROUP_ZERO:
-      return { subgroupId: 0n, isDatagram: false, consumed };
+      return { subgroupId: 0n, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_SAME:
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
       }
-      return { subgroupId: context.subgroupId, isDatagram: false, consumed };
+      return { subgroupId: context.subgroupId, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
       }
-      return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed };
+      return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_PRESENT: {
-      const [sid, sidConsumed] = decodeVarint(data, offset + consumed);
-      return { subgroupId: sid, isDatagram: false, consumed: consumed + sidConsumed };
+      const [sid, sidConsumed] = decodeVarint(data, offset);
+      return { subgroupId: sid, isDatagram: false, consumed: sidConsumed };
     }
     default:
       throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
@@ -1670,9 +1666,10 @@ export function decodeFetchObjectFields(
   }
 
   // Subgroup ID をデコード（DATAGRAM フラグの処理を含む）
-  // draft-ietf-moq-transport-20 §11.4.4.1 Table 9:
-  // "When encoding an Object with a Forwarding Preference of 'Datagram',
-  //  the object has no Subgroup ID. When 0x40 is set, the subscriber MUST ignore the bits."
+  // draft-ietf-moq-transport-20 §11.4.4.1:
+  // "When encoding an Object with a Forwarding Preference of 'Datagram' ... the
+  //  object has no Subgroup ID. ... When 0x40 is set, it SHOULD set the two
+  //  least significant bits to zero and the subscriber MUST ignore the bits."
   const {
     subgroupId,
     isDatagram,
