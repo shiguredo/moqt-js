@@ -99,6 +99,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] moqlog / moqmetrics の payload 検証を強化する
+  - moqmetrics のデコード時に capture_timestamp・value の存在と有限数値型を検証し、違反は ProtocolViolationError とする。moqlog のデコード時に既知フィールドの型を検証する
+  - 既知数値フィールドの非有限数のエンコードは Error で失敗させ、空 resourceId の namespace 構築は Error とする
+  - @voluntas
 - [FIX] 同一 track の再 publish で Group ID が 0 に戻る問題を修正する
   - draft-ietf-moq-msf-01 §6.1 に基づき、新規インスタンスの開始 Group ID に Unix epoch ミリ秒起点の単調割当てを使い、同一プロセス内の前回値を下回らないようにする
   - 映像の初回 key での加算を抑止し、音声・映像とも初回送信値を初期値に統一する

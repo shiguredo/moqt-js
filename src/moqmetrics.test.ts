@@ -7,6 +7,14 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { ProtocolViolationError } from "./error";
+
+/**
+ * JSON 値を UTF-8 バイト列にするテスト用ヘルパー
+ */
+function encodeJson(value: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(value));
+}
 import {
   METRICS_GRANULARITY_LEVELS,
   METRICS_CAPTURE_OBJECT_ID,
@@ -155,4 +163,67 @@ test("metricsTrackName: 0-7 の範囲外・非整数は throw", () => {
   assert.throws(() => metricsTrackName(8), /0-7/);
   assert.throws(() => metricsTrackName(1.5), /0-7/);
   assert.throws(() => metricsTrackName(Number.NaN), /0-7/);
+});
+
+// 必須フィールド欠落・型誤りはデコード時に ProtocolViolationError になる。
+test("MetricsCaptureObject: capture_timestamp 欠落・型誤りは throw", () => {
+  assert.throws(
+    () => decodeCaptureObject(encodeJson({})),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeCaptureObject(encodeJson({ capture_timestamp: "1720367991" })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeCaptureObject(encodeJson({ capture_timestamp: null })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+});
+
+test("MetricObject: value 欠落・型誤りは throw", () => {
+  assert.throws(
+    () => decodeMetricObject(encodeJson({})),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeMetricObject(encodeJson({ metric_name: "cpu" })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeMetricObject(encodeJson({ value: "1" })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeMetricObject(encodeJson({ value: null })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeMetricObject(encodeJson({ value: true })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  // metric_name 省略 (value のみ) は有効のままであること
+  assert.deepEqual(decodeMetricObject(encodeJson({ value: 1 })), { value: 1 });
+});
+
+// 非有限数は null 化して送出されるため、エンコード時に失敗させる。
+test("Metrics object: 非有限数のエンコードは throw", () => {
+  assert.throws(() => encodeCaptureObject({ capture_timestamp: Number.NaN }), /non-finite/);
+  assert.throws(
+    () => encodeCaptureObject({ capture_timestamp: Number.NEGATIVE_INFINITY }),
+    /non-finite/,
+  );
+  assert.throws(() => encodeMetricObject({ value: Number.POSITIVE_INFINITY }), /non-finite/);
+});
+
+test("metricsTrackNamespace: 空 resourceId は throw", () => {
+  assert.throws(() => metricsTrackNamespace(""), /resourceId/);
 });

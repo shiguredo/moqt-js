@@ -1,7 +1,7 @@
 # moqlog / moqmetrics の payload 検証を強化する
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-observability-validation
 - Polished: 2026-09-06
 
@@ -30,6 +30,14 @@ moqmetrics の必須フィールド欠落や非有限数が黙って通り、型
 - 非有限数のエンコードが `Error` になること。
 - 空 `resourceId` の namespace 構築が `Error` になること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/moqmetrics.ts` のデコード時に `capture_timestamp`・`value` の有限数値型を検証し、違反は `ProtocolViolationError` とする。`src/moqlog.ts` のデコード時に既知 8 フィールドの型を検証する。値列挙は厳格化しない
+- 既知数値フィールドの非有限数のエンコードは `Error` で失敗させ、空 `resourceId` の namespace 構築は `Error` とする
+- `src/moqlog.prop.ts` の生成器を型適合に絞り、未知キーの `__proto__` を除外する
+- `src/moqmetrics.test.ts` と `src/moqlog.test.ts` に境界値テスト 10 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
