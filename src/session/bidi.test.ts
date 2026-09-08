@@ -1312,16 +1312,13 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS 内側の End Group 超過で I
 
 /**
  * draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
- * raw FILL_PARAMETERS が複数ある場合も全件検証し、
- * 2 件目以降の内側超過を見逃さない。
+ * 単一の raw FILL_PARAMETERS の内側超過を InvalidFilterError で拒否する。
+ * 複数件の場合は重複検査が先に拒否するため、内側検証は単一の場合に到達する。
  */
-test("bidiSendRequestUpdate: 2 件目の raw FILL_PARAMETERS 内側超過も InvalidFilterError", async () => {
-  // 1 件目は正常、2 件目の内側が超過する組み合わせを手組みする
+test("bidiSendRequestUpdate: 単一の raw FILL_PARAMETERS 内側超過も InvalidFilterError", async () => {
+  // 内側が超過する単一の組み合わせを手組みする
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  const normalInner = encodeParameters([
-    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
-  ]);
   const exceeding = buildExceedingLocationFilterValue();
   const exceedingInner = encodeParameters([
     { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
@@ -1330,16 +1327,13 @@ test("bidiSendRequestUpdate: 2 件目の raw FILL_PARAMETERS 内側超過も Inv
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {
-      parameters: [
-        { type: MessageParameterType.FILL_PARAMETERS, value: normalInner },
-        { type: MessageParameterType.FILL_PARAMETERS, value: exceedingInner },
-      ],
+      parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: exceedingInner }],
     });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
-  // 2 件目の超過が InvalidFilterError に変換される
+  // 内側の超過が InvalidFilterError に変換される
   assert.instanceOf(thrown, InvalidFilterError);
   assert.isTrue(thrown!.message.includes("absolute range end group exceeds maximum"));
   assert.equal(session.pendingRequestUpdate.size, 0);
@@ -7419,6 +7413,92 @@ test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否され�
   }
   assert.isTrue(thrown instanceof Error);
   assert.match((thrown as Error).message, /must not be negative/);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2 / §10.2.15:
+ * raw FILL_PARAMETERS が 2 件の update() は送信前に拒否され、
+ * pendingRequestUpdate に entry が残らないことを検証する。
+ */
+test("bidiSendRequestUpdate: raw FILL_PARAMETERS の重複は送信前に拒否される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const normalInner = encodeParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+  ]);
+
+  let thrown: unknown = null;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [
+        { type: MessageParameterType.FILL_PARAMETERS, value: normalInner },
+        { type: MessageParameterType.FILL_PARAMETERS, value: normalInner },
+      ],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.match((thrown as Error).message, /duplicate FILL_PARAMETERS/);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2 / §10.2.15:
+ * 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否されることを検証する。
+ */
+test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const normalInner = encodeParameters([
+    encodeLocationFilterParameter({ startGroup: 1n, startObject: 2n }),
+  ]);
+
+  let thrown: unknown = null;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      fill: {},
+      parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: normalInner }],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.match((thrown as Error).message, /duplicate FILL_PARAMETERS/);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2 / §10.2.15:
+ * 重複検査は内側デコード検証より先に行われ、二重不正入力では
+ * 重複エラーが優先されることを検証する。
+ */
+test("bidiSendRequestUpdate: 重複と内側不正の二重不正では重複エラーが優先される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const exceeding = buildExceedingLocationFilterValue();
+  const exceedingInner = encodeParameters([
+    { type: MessageParameterType.LOCATION_FILTER, value: exceeding },
+  ]);
+
+  let thrown: unknown = null;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [
+        { type: MessageParameterType.FILL_PARAMETERS, value: exceedingInner },
+        { type: MessageParameterType.FILL_PARAMETERS, value: exceedingInner },
+      ],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.match((thrown as Error).message, /duplicate FILL_PARAMETERS/);
   assert.equal(session.pendingRequestUpdate.size, 0);
   assert.equal(written.length, 0);
 });

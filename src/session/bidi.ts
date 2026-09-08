@@ -1826,19 +1826,31 @@ export async function bidiSendRequestUpdate(
     }
   }
 
+  // draft-ietf-moq-transport-20 §10.2 / §10.2.15:
+  // FILL_PARAMETERS (0x23) の重複送信は送信側 MUST NOT 違反になるため、
+  // raw と型付き指定分を含めた合算で 2 件以上になる場合は送信前に拒否する。
+  // pendingRequestUpdate.set / fillFetchTargets.set より前、かつ
+  // raw 内側デコード検証より前に配置し、二重不正入力では重複エラーを優先する。
+  const rawFillParameters = (options.parameters ?? []).filter(
+    (param) => param.type === MessageParameterType.FILL_PARAMETERS,
+  );
+  const mergedFillCount = rawFillParameters.length + (options.fill !== undefined ? 1 : 0);
+  if (mergedFillCount >= 2) {
+    throw new InvalidFilterError(
+      `duplicate FILL_PARAMETERS in REQUEST_UPDATE: got ${mergedFillCount}, expected at most 1`,
+    );
+  }
+
   // draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
   // 手組みの raw FILL_PARAMETERS (0x23) 内側も型付き fill 経路と同じ
   // デコード検証の対象にする。内側 LOCATION_FILTER の End Group 超過は
-  // §5.1.2 の MUST が内側にも適用されるため拒否する。対象は全件とし、
-  // 2 件目以降の検証素通りを残さない。内側全体のデコード検証のため、
+  // §5.1.2 の MUST が内側にも適用されるため拒否する。重複検査で単一に
+  // 絞られるため、ここには高々 1 件が到達する。内側全体のデコード検証のため、
   // End Group 以外の内側不正も送信前に InvalidFilterError として拒否する
   // 副作用を持つ。§10.2.15 の Table 6 に型が追加された場合は
   // 内側デコーダ側の更新に追従する。
   // pendingRequestUpdate.set より前で失敗させる
   // (登録後の throw はエントリ残留を生むため)。
-  const rawFillParameters = (options.parameters ?? []).filter(
-    (param) => param.type === MessageParameterType.FILL_PARAMETERS,
-  );
   for (const [index, rawFillParameter] of rawFillParameters.entries()) {
     try {
       decodeFillParameters(rawFillParameter);
