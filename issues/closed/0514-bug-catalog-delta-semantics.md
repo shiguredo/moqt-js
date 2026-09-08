@@ -1,7 +1,7 @@
 # Catalog delta の適用意味を正す
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-catalog-delta-semantics
 - Polished: 2026-09-06
 
@@ -25,6 +25,13 @@ delta の未知ルートフィールドが decode で捨てられ round-trip (de
 - 未知ルートフィールドが decode → encode で round-trip すること。
 - 不存在 `remove` が throw すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/msf.ts` の `decodeCatalogDelta` と `encodeCatalogDelta` で未知ルートフィールドを full 側と同様に保持する。内部表現との衝突回避に既知集合を新設した
+- `applyCatalogDelta` の存在しない `remove` を `throw` する (add 重複・clone 親不存在と同一契約)
+- `src/msf.test.ts` に round-trip と不存在・境界のテスト 6 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
