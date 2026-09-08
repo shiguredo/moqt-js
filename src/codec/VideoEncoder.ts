@@ -6,7 +6,12 @@
 
 import type { VideoCodecType, VideoEncoderWrapperCallbacks } from "./types";
 import { getVideoEncoderConfig } from "./config";
-import { WorkerConfigureGate, disposeFailedWorker, toFailureMessage } from "./workerConfigure";
+import {
+  ConfigureGenerationTracker,
+  WorkerConfigureGate,
+  disposeWorker,
+  toFailureMessage,
+} from "./workerConfigure";
 
 /**
  * ビデオエンコーダーラッパークラス
@@ -17,6 +22,8 @@ export class VideoEncoderWrapper {
   private worker: Worker | null = null;
   private callbacks: VideoEncoderWrapperCallbacks;
   private configured = false;
+  // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
+  private readonly generationTracker = new ConfigureGenerationTracker();
 
   constructor(useWorker: boolean, callbacks: VideoEncoderWrapperCallbacks) {
     this.useWorker = useWorker;
@@ -44,11 +51,22 @@ export class VideoEncoderWrapper {
   }
 
   private async configureWorker(config: VideoEncoderConfig): Promise<void> {
+    // 世代採番は待機より前 (動的 import の解決順に依存させない)。
+    // 生成した worker と世代を対応付ける。
+    // import 失敗時は世代のみ消費する空番になるが、isLatest() は公開時のみ
+    // 参照するため無害である。
+    const generation = this.generationTracker.begin();
     const WorkerModule = await import("./workers/videoEncoder.worker?worker");
-    this.worker = new WorkerModule.default();
+    // 待機中に旧世代化した場合は Worker を生成せず離脱する (生成の無駄を省く)
+    if (!this.generationTracker.isLatest(generation)) {
+      throw new Error("worker configure superseded by newer generation");
+    }
+    // 生成直後に局所変数へ捕捉する (共有フィールドに置かない)。
+    // 並行 configure() の世代分離のため、以降は局所参照のみ使う。
+    const worker = new WorkerModule.default();
 
     return new Promise((resolve, reject) => {
-      if (!this.worker) {
+      if (!worker) {
         reject(new Error("worker not initialized"));
         return;
       }
@@ -58,22 +76,31 @@ export class VideoEncoderWrapper {
       const gate = new WorkerConfigureGate();
       const failConfigure = (error: Error) => {
         if (gate.trySettle()) {
-          const failed = this.worker;
-          this.worker = null;
-          disposeFailedWorker(failed);
+          // 失敗した自世代のみ破棄する (他世代の Worker には触らない)
+          disposeWorker(worker);
           reject(error);
         } else {
           this.callbacks.error(error);
         }
       };
 
-      this.worker.onmessage = (event: MessageEvent) => {
+      worker.onmessage = (event: MessageEvent) => {
         const message = event.data;
 
         switch (message.type) {
           case "configured":
             if (gate.trySettle()) {
-              resolve();
+              if (this.generationTracker.isLatest(generation)) {
+                // 最新世代: 旧公開を破棄して公開する (後勝ち)
+                const previous = this.worker;
+                this.worker = worker;
+                disposeWorker(previous);
+                resolve();
+              } else {
+                // 旧世代の遅延成功: 自世代を破棄する (先発破棄)
+                disposeWorker(worker);
+                reject(new Error("worker configure superseded by newer generation"));
+              }
             }
             break;
           case "encoded":
@@ -91,11 +118,11 @@ export class VideoEncoderWrapper {
         }
       };
 
-      this.worker.onerror = (event) => {
+      worker.onerror = (event) => {
         failConfigure(new Error(toFailureMessage(event.message)));
       };
 
-      this.worker.postMessage({
+      worker.postMessage({
         type: "init",
         config,
       });
@@ -143,6 +170,8 @@ export class VideoEncoderWrapper {
       return;
     }
 
+    // 公開中の最新世代に送る (待機中の未公開世代には送らない)。
+    // 再 configure() 待機中は旧公開が受け、公開切り替え後に新世代へ切り替わる。
     if (this.useWorker && this.worker) {
       // Worker モードでは frame を transfer する
       this.worker.postMessage(
@@ -183,9 +212,13 @@ export class VideoEncoderWrapper {
    * エンコーダーを閉じる
    */
   close(): void {
+    // 待機中の configure 世代を無効化する。
+    // 遅延成功した旧世代は破棄・reject される (中断扱い)。
+    this.generationTracker.invalidateAll();
     if (this.useWorker && this.worker) {
-      this.worker.terminate();
+      const closing = this.worker;
       this.worker = null;
+      disposeWorker(closing);
     } else if (this.encoder) {
       this.encoder.close();
       this.encoder = null;

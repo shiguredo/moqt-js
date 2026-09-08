@@ -6,7 +6,12 @@
 
 import type { VideoCodecType, VideoDecoderWrapperCallbacks } from "./types";
 import { getVideoDecoderConfig } from "./config";
-import { WorkerConfigureGate, disposeFailedWorker, toFailureMessage } from "./workerConfigure";
+import {
+  ConfigureGenerationTracker,
+  WorkerConfigureGate,
+  disposeWorker,
+  toFailureMessage,
+} from "./workerConfigure";
 
 /**
  * ビデオデコーダーラッパークラス
@@ -17,6 +22,8 @@ export class VideoDecoderWrapper {
   private worker: Worker | null = null;
   private callbacks: VideoDecoderWrapperCallbacks;
   private configured = false;
+  // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
+  private readonly generationTracker = new ConfigureGenerationTracker();
   // 直接モード用: キーフレーム待ちフラグ
   private needsKeyframe = true;
   private lastConfig: VideoDecoderConfig | null = null;
@@ -47,11 +54,22 @@ export class VideoDecoderWrapper {
   }
 
   private async configureWorker(config: VideoDecoderConfig): Promise<void> {
+    // 世代採番は待機より前 (動的 import の解決順に依存させない)。
+    // 生成した worker と世代を対応付ける。
+    // import 失敗時は世代のみ消費する空番になるが、isLatest() は公開時のみ
+    // 参照するため無害である。
+    const generation = this.generationTracker.begin();
     const WorkerModule = await import("./workers/videoDecoder.worker?worker");
-    this.worker = new WorkerModule.default();
+    // 待機中に旧世代化した場合は Worker を生成せず離脱する (生成の無駄を省く)
+    if (!this.generationTracker.isLatest(generation)) {
+      throw new Error("worker configure superseded by newer generation");
+    }
+    // 生成直後に局所変数へ捕捉する (共有フィールドに置かない)。
+    // 並行 configure() の世代分離のため、以降は局所参照のみ使う。
+    const worker = new WorkerModule.default();
 
     return new Promise((resolve, reject) => {
-      if (!this.worker) {
+      if (!worker) {
         reject(new Error("worker not initialized"));
         return;
       }
@@ -61,22 +79,31 @@ export class VideoDecoderWrapper {
       const gate = new WorkerConfigureGate();
       const failConfigure = (error: Error) => {
         if (gate.trySettle()) {
-          const failed = this.worker;
-          this.worker = null;
-          disposeFailedWorker(failed);
+          // 失敗した自世代のみ破棄する (他世代の Worker には触らない)
+          disposeWorker(worker);
           reject(error);
         } else {
           this.callbacks.error(error);
         }
       };
 
-      this.worker.onmessage = (event: MessageEvent) => {
+      worker.onmessage = (event: MessageEvent) => {
         const message = event.data;
 
         switch (message.type) {
           case "configured":
             if (gate.trySettle()) {
-              resolve();
+              if (this.generationTracker.isLatest(generation)) {
+                // 最新世代: 旧公開を破棄して公開する (後勝ち)
+                const previous = this.worker;
+                this.worker = worker;
+                disposeWorker(previous);
+                resolve();
+              } else {
+                // 旧世代の遅延成功: 自世代を破棄する (先発破棄)
+                disposeWorker(worker);
+                reject(new Error("worker configure superseded by newer generation"));
+              }
             }
             break;
           case "decoded":
@@ -93,11 +120,11 @@ export class VideoDecoderWrapper {
         }
       };
 
-      this.worker.onerror = (event) => {
+      worker.onerror = (event) => {
         failConfigure(new Error(toFailureMessage(event.message)));
       };
 
-      this.worker.postMessage({
+      worker.postMessage({
         type: "init",
         config,
       });
@@ -131,6 +158,8 @@ export class VideoDecoderWrapper {
       return;
     }
 
+    // 公開中の最新世代に送る (待機中の未公開世代には送らない)。
+    // 再 configure() 待機中は旧公開が受け、公開切り替え後に新世代へ切り替わる。
     if (this.useWorker && this.worker) {
       const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       this.worker.postMessage(
@@ -198,11 +227,17 @@ export class VideoDecoderWrapper {
       return;
     }
 
+    // 待機中の configure 世代を無効化する (close と同一の中断扱い)。
+    // 以降の begin() まで await を挟まず同期的連続とし、他 configure() の
+    // begin() が割り込めないようにする。
+    this.generationTracker.invalidateAll();
+
     // 現在のデコーダーをクリーンアップ
     if (this.useWorker && this.worker) {
       this.worker.postMessage({ type: "close" });
-      this.worker.terminate();
+      const closing = this.worker;
       this.worker = null;
+      disposeWorker(closing);
     } else if (this.decoder) {
       if (this.decoder.state !== "closed") {
         this.decoder.close();
@@ -225,9 +260,13 @@ export class VideoDecoderWrapper {
    * デコーダーを閉じる
    */
   close(): void {
+    // 待機中の configure 世代を無効化する。
+    // 遅延成功した旧世代は破棄・reject される (中断扱い)。
+    this.generationTracker.invalidateAll();
     if (this.useWorker && this.worker) {
-      this.worker.terminate();
+      const closing = this.worker;
       this.worker = null;
+      disposeWorker(closing);
     } else if (this.decoder) {
       if (this.decoder.state !== "closed") {
         this.decoder.close();
