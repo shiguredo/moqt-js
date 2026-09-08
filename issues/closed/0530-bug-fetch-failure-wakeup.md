@@ -1,7 +1,7 @@
 # FETCH 失敗確定時に待機中の fetcher 取得を起こす
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-fetch-failure-wakeup
 - Polished: 2026-09-08
 
@@ -23,6 +23,12 @@ FETCH が失敗確定しても待機中の取得が最大 5 秒停滞する。�
 
 - 失敗確定時に待機が `null` で即時解決し、`fetcherReadyCallbacks` の登録が残らないこと（対象は REQUEST_ERROR / GOAWAY / 想定外型 / FIN 先行）。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/bidi.ts` に `fireFetcherReadyCallbacks` を追加し、成功経路の発火を共通化して失敗 6 箇所で使う。`pendingFetch` / `requestStreams` の掃除は既存削除に従う
+- `src/session/bidi.test.ts` に待機即時解決 7 件のテストを追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
