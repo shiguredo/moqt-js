@@ -3687,10 +3687,10 @@ export class SessionImpl implements Session {
             // request to modify it.」
             // 受信 PUBLISH の publisher (ピア) による REQUEST_UPDATE を処理し、
             // REQUEST_OK / REQUEST_ERROR を 1 通応答する (§10.9 MUST)。
-            // GOAWAY 受信後 / パラメータスコープ検証 / 文脈限定パラメータの
-            // 判定は free function 内で行う (GOING_AWAY 応答も同関数の判定
-            // 順序 (1) が担う)。スコープ違反等でセッションが閉じた場合は、
-            // 同一チャンクの残りメッセージの処理を打ち切る。
+            // GOAWAY 受信後 / ID 検証 / パラメータスコープ検証 /
+            // 文脈限定パラメータの判定は free function 内で行う (GOING_AWAY
+            // 応答も同関数の判定順序 (2) が担う)。スコープ違反等でセッションが
+            // 閉じた場合は、同一チャンクの残りメッセージの処理を打ち切る。
             await bidi.bidiHandlePublishRequestUpdate(
               this as unknown as bidi.BidiSessionInternal,
               publishRequestId,
@@ -4287,8 +4287,9 @@ export class SessionImpl implements Session {
    * 各既存検証より前に配置する (§10.1 の MUST は受信即時閉鎖のため。
    * 未対応経路では検証後に NOT_SUPPORTED 応答が続く)。
    *
-   * 適用範囲は受信 PUBLISH と未対応リクエスト 6 種 (先頭メッセージ)。
-   * 受信 REQUEST_UPDATE は本差分の対象外とする (別途対応予定)。
+   * 適用範囲は受信 PUBLISH と未対応リクエスト 6 種 (先頭メッセージ)
+   * および受信 REQUEST_UPDATE の 2 経路 (`bidiHandlePublishRequestUpdate` と
+   * `bidiReadRequestStreamMessages` の `REQUEST_UPDATE` ケース)。
    *
    * 注意: `Session` 公開インターフェースの一部ではないが、`SessionImpl` の
    * public メンバーとして露出する。実体は free function の

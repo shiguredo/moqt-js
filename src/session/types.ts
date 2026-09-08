@@ -109,13 +109,8 @@ export interface SessionInternal extends BidiSessionInternal {
   // handleIncomingDatagram が statsUnidirectionalStreamsReceived をインクリメントする。
   statsUnidirectionalStreamsReceived: number;
 
-  /**
-   * 受信リクエストの Request ID のパリティ・重複検証を行う
-   * (draft-ietf-moq-transport-20 §10.1)。
-   *
-   * @returns 検証に合格した場合は true、違反でセッションを閉じた場合は false
-   */
-  validateIncomingRequestId(requestId: bigint): boolean;
+  // validateIncomingRequestId は BidiSessionInternal 側で宣言済み
+  // (SessionInternal extends BidiSessionInternal のため継承する)。
 
   // ============================================================
   // publish.ts 用（追加分）

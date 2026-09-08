@@ -1,7 +1,7 @@
 # 受信 REQUEST_UPDATE の Request ID が無検証である
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-request-update-id-validation
 - Polished: 2026-09-08
 
@@ -24,6 +24,12 @@ draft-ietf-moq-transport-20 §10.1 は Request ID のパリティ・重複違反
 
 - 受信 REQUEST_UPDATE の 2 経路でデコード結果の Request ID のパリティ・重複検証が行われ、違反時は `INVALID_REQUEST_ID` で閉じること（偶数 ID 受信時、重複 ID 受信時の振る舞いで確認する）。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `BidiSessionInternal` に `validateIncomingRequestId` を追加し、2 経路ともデコード直後に検証する。更新は新規 ID 消費のため一致照合なし。§10.1 MUST を GOAWAY 拒否と想定外更新より先に行う
+- 既存 fixture の更新 ID を奇数化し、偶数・重複・正常消費・優先順位のテスト 7 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

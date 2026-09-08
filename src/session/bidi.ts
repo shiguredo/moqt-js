@@ -255,6 +255,16 @@ export interface BidiSessionInternal {
     decoded?: Record<string, unknown>,
   ): void;
   closeWithError(error: SessionError): void;
+  /**
+   * 受信 Request ID のパリティ・重複検証を行う
+   *
+   * draft-ietf-moq-transport-20 §10.1 (Request ID):
+   * 違反時は INVALID_REQUEST_ID でセッションを閉じる。
+   *
+   * @param requestId 検証対象の受信 Request ID
+   * @returns 検証に合格した場合は true、違反でセッションを閉じた場合は false
+   */
+  validateIncomingRequestId(requestId: bigint): boolean;
 }
 
 // ============================================================================
@@ -1067,15 +1077,20 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  * REQUEST_ERROR を 1 通応答する (coalescing はスコープ外)。
  *
  * 判定順序:
- * (1) GOAWAY 受信済みなら GOING_AWAY で応答して終了 (GOAWAY 後 + スコープ
- *     違反の同時発生時は GOING_AWAY を優先)。
- * (2) パラメータスコープ検証。違反は §10.2.1 の MUST により
+ * (1) デコード結果の Request ID のパリティ・重複検証。違反は §10.1 の MUST
+ *     により INVALID_REQUEST_ID でセッションを閉じる。更新は新規 ID を
+ *     消費するため、ストリーム紐付け ID との一致照合は行わない。
+ *     §10.1 MUST を §10.6 MAY 適用 (GOAWAY 拒否) より先に行う。
+ * (2) GOAWAY 受信済みなら GOING_AWAY で応答して終了。正常 ID と
+ *     GOAWAY 受信済みの組み合わせがここに到達する (不正 ID の場合は
+ *     (1) で return するため到達しない)。
+ * (3) パラメータスコープ検証。違反は §10.2.1 の MUST により
  *     PROTOCOL_VIOLATION でセッションを閉じる。
- * (3) PUBLISH_REQUEST_UPDATE_OK_PARAMS (無限定 3 種 + FORWARD) 以外の
+ * (4) PUBLISH_REQUEST_UPDATE_OK_PARAMS (無限定 3 種 + FORWARD) 以外の
  *     文脈限定パラメータを含む場合は NOT_SUPPORTED で応答する。
  *     受理した FORWARD は受信 PUBLISH から生成された SubscriberImpl の
  *     Forward State に反映する (FORWARD 省略時は不変)。
- * (4) REQUEST_OK を応答する (ペイロードは空 parameters / 空 trackProperties)。
+ * (5) REQUEST_OK を応答する (ペイロードは空 parameters / 空 trackProperties)。
  *
  * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
  * デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる (詳細は
@@ -1092,24 +1107,7 @@ export async function bidiHandlePublishRequestUpdate(
   requestId: bigint,
   payload: Uint8Array,
 ): Promise<void> {
-  // 判定順序 (1): GOAWAY 受信済みの旧リクエストへの REQUEST_UPDATE は
-  // REQUEST_ERROR (GOING_AWAY) で拒否する (draft-ietf-moq-transport-20
-  // §10.6「GOING_AWAY: The endpoint has received a GOAWAY and MAY reject
-  // new requests.」の趣旨に基づく拡張適用)。受信 PUBLISH の subscriber は
-  // GOAWAY 処理で送信方向を FIN (writer.close()) で閉じているため、実際の
-  // production では書き込み失敗となり黙殺される (無応答は GOAWAY 後の
-  // マイグレーション対象リクエストに対する先行対応の「無視」と等価)。
-  if (session.goawayReceivedOnRequestStreams.has(requestId)) {
-    await bidiSendRequestError(
-      session,
-      requestId,
-      RequestErrorCode.GOING_AWAY,
-      REQUEST_GOING_AWAY_REASON,
-    );
-    return;
-  }
-
-  // 判定順序 (2) の前に REQUEST_UPDATE ペイロードをデコードする
+  // REQUEST_UPDATE ペイロードをデコードする
   // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。ControlStreamReader
   // は Length 分の完全なメッセージのみ渡すため、IncompleteDataError は
   // メッセージ構造の破損を意味する。呼び出し元ループの catch
@@ -1130,12 +1128,37 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
-  // 判定順序 (2): パラメータスコープ検証
+  // 判定順序 (1): デコード結果の Request ID のパリティ・重複検証
+  // draft-ietf-moq-transport-20 §10.1 (Request ID):
+  // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
+  // §10.1 MUST を §10.6 MAY 適用 (GOAWAY 拒否) より先に行う。
+  if (!session.validateIncomingRequestId(decoded.requestId)) {
+    return;
+  }
+
+  // 判定順序 (2): GOAWAY 受信済みの旧リクエストへの REQUEST_UPDATE は
+  // REQUEST_ERROR (GOING_AWAY) で拒否する (draft-ietf-moq-transport-20
+  // §10.6「GOING_AWAY: The endpoint has received a GOAWAY and MAY reject
+  // new requests.」の趣旨に基づく拡張適用)。受信 PUBLISH の subscriber は
+  // GOAWAY 処理で送信方向を FIN (writer.close()) で閉じているため、実際の
+  // production では書き込み失敗となり黙殺される (無応答は GOAWAY 後の
+  // マイグレーション対象リクエストに対する先行対応の「無視」と等価)。
+  if (session.goawayReceivedOnRequestStreams.has(requestId)) {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.GOING_AWAY,
+      REQUEST_GOING_AWAY_REASON,
+    );
+    return;
+  }
+
+  // 判定順序 (3): パラメータスコープ検証
   // draft-ietf-moq-transport-20 §10.2.1 (Parameter Scope):
   // "If it appears in some other type of message, the receiving endpoint
   //  MUST close the connection with a PROTOCOL_VIOLATION."
   // 検証はメッセージ型単位であり、「for a subscription」等の文脈 (ケース 1
-  // では publisher 送信) に違反するパラメータは判定順序 (3) で処理する。
+  // では publisher 送信) に違反するパラメータは判定順序 (4) で処理する。
   // REQUEST_UPDATE_ALLOWED_PARAMS (無限定 3 種 + 文脈限定 10 種) が
   // REQUEST_UPDATE に出現し得る全パラメータと完全一致する。
   if (
@@ -1149,7 +1172,7 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
-  // 判定順序 (3): 文脈限定パラメータの含有確認
+  // 判定順序 (4): 文脈限定パラメータの含有確認
   // REQUEST_OK で受理するのは PUBLISH_REQUEST_UPDATE_OK_PARAMS
   // (無限定 3 種 + FORWARD) のみ。それ以外の文脈限定パラメータ
   // (SUBSCRIBER_PRIORITY / LOCATION_FILTER / NEW_GROUP_REQUEST /
@@ -1185,7 +1208,7 @@ export async function bidiHandlePublishRequestUpdate(
     }
   }
 
-  // 判定順序 (4): REQUEST_OK を応答する
+  // 判定順序 (5): REQUEST_OK を応答する
   // draft-ietf-moq-transport-20 §10.9:
   // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
   //  or REQUEST_ERROR message indicating if the update was successful, ...」
@@ -1401,6 +1424,43 @@ export async function bidiReadRequestStreamMessages(
             break;
           }
           case MessageType.REQUEST_UPDATE: {
+            // draft-ietf-moq-transport-20 §10.9:
+            // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
+            //  subscription established with PUBLISH.」
+            // クライアントが Publisher の場合、サーバー (Subscriber 役) が
+            // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
+            //
+            // draft-ietf-moq-transport-20 §10.9:
+            // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
+            //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
+            //  successful, unless it is coalescing failed updates.」
+            // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
+            // ループ catch (toProtocolViolationSessionError) と同じだが、ここでは
+            // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
+            // 後続のパラメータ検証を実行しないよう早期 return する
+            // (bidiHandlePublishRequestUpdate と同パターン)。
+            let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
+            try {
+              decoded = decodeRequestUpdatePayload(msg.payload);
+            } catch (err) {
+              session.closeWithError(
+                new SessionError(
+                  `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              return;
+            }
+
+            // デコード結果の Request ID のパリティ・重複検証
+            // draft-ietf-moq-transport-20 §10.1 (Request ID):
+            // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
+            // §10.1 MUST を GOAWAY 拒否 (§10.6 MAY) と想定外更新 (§10.9) の
+            // PROTOCOL_VIOLATION より先に行う。
+            if (!session.validateIncomingRequestId(decoded.requestId)) {
+              return;
+            }
+
             // draft-ietf-moq-transport-20 §10.4 / §3.3.4 / §10.9:
             // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE の扱い。
             // - publish ロール: GOAWAY 処理で送信方向を閉じないため応答可能。
@@ -1436,34 +1496,6 @@ export async function bidiReadRequestStreamMessages(
               session.closeWithError(
                 new SessionError(
                   "unexpected REQUEST_UPDATE on subscribe stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
-
-            // draft-ietf-moq-transport-20 §10.9:
-            // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
-            //  subscription established with PUBLISH.」
-            // クライアントが Publisher の場合、サーバー (Subscriber 役) が
-            // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
-            //
-            // draft-ietf-moq-transport-20 §10.9:
-            // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
-            //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
-            //  successful, unless it is coalescing failed updates.」
-            // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
-            // ループ catch (toProtocolViolationSessionError) と同じだが、ここでは
-            // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
-            // 後続のパラメータ検証を実行しないよう早期 return する
-            // (bidiHandlePublishRequestUpdate と同パターン)。
-            let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
-            try {
-              decoded = decodeRequestUpdatePayload(msg.payload);
-            } catch (err) {
-              session.closeWithError(
-                new SessionError(
-                  `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
                   SessionErrorCode.PROTOCOL_VIOLATION,
                 ),
               );
