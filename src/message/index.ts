@@ -41,6 +41,7 @@ export {
   decodeFillParameters,
   FILL_PARAMETERS_ALLOWED_TYPES,
   decodeRangeFilter,
+  rangeFilterTypeOf,
   decodeTrackNamespace,
   encodeLocation,
   encodeParameter,
