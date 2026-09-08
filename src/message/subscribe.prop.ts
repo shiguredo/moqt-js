@@ -17,6 +17,7 @@ import {
   createTrackNamespace,
   trackNamespaceToStrings,
   encodeLocationFilterParameter,
+  encodeParameterTrackNamespace,
   type Parameter,
 } from "./parameter";
 import { MessageType } from "./types";
@@ -69,10 +70,22 @@ const locationParameterArb = fc
 
 const lengthPrefixedParameterArb = fc
   .record({
-    type: fc.constantFrom(0x03, 0x34),
+    type: fc.constant(0x03),
     value: fc.uint8Array({ minLength: 0, maxLength: 20 }),
   })
   .map(({ type, value }) => ({ type, value }));
+
+/**
+ * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
+ *
+ * draft-ietf-moq-transport-20 §10.2.20:
+ * Value は §2.4.1 の Track Namespace エンコーディング (自己区切り)。
+ * encodeParameterTrackNamespace の出力で構築する
+ * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
+ */
+const trackNamespaceParameterArb = fc
+  .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })
+  .map((parts) => encodeParameterTrackNamespace(createTrackNamespace(parts)));
 
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
@@ -116,6 +129,7 @@ const messageParameterArb: fc.Arbitrary<Parameter> = fc.oneof(
   uint8ParameterArb,
   locationParameterArb,
   lengthPrefixedParameterArb,
+  trackNamespaceParameterArb,
   locationFilterParameterArb,
 );
 
