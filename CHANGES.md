@@ -99,6 +99,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] 同一 track の再 publish で Group ID が 0 に戻る問題を修正する
+  - draft-ietf-moq-msf-01 §6.1 に基づき、新規インスタンスの開始 Group ID に Unix epoch ミリ秒起点の単調割当てを使い、同一プロセス内の前回値を下回らないようにする
+  - 映像の初回 key での加算を抑止し、音声・映像とも初回送信値を初期値に統一する
+  - @voluntas
 - [FIX] MediaPublisher の stop / 再 start と start 失敗時の後片付け漏れを修正する
   - stop を再 start 可能な完全停止にし、各 Publisher (catalog / audio / video) の done、encoder / VideoFrameSource / processor の破棄、session の close と参照 null 化を行う。close は同一破棄を内包する
   - start 失敗時は確保済みを逆順に巻き戻し、state を変えず再 start 可能にする

@@ -15,7 +15,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { MediaPublisherImpl } from "./createMediaPublisher";
+import { MediaPublisherImpl, allocateInitialGroupId } from "./createMediaPublisher";
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import type { MediaPublisherState } from "./codec/types";
@@ -579,4 +579,169 @@ test("直列の二重 close は単発で終わり onClose は 1 回だけ発火�
 
   assert.equal(publisher.state, "closed");
   assert.equal(closeCount, 1);
+});
+
+/**
+ * Group ID 初期値の検証用の制御口
+ */
+interface PublisherGroupControl {
+  audioGroupId: number;
+  videoGroupId: number;
+  audioPublisher: Publisher | null;
+  videoPublisher: Publisher | null;
+  handleAudioEncodedChunk(chunk: {
+    data: Uint8Array;
+    type: "key" | "delta";
+    timestamp: number;
+    duration: number | null;
+  }): void;
+  handleVideoEncodedChunk(chunk: {
+    data: Uint8Array;
+    type: "key" | "delta";
+    timestamp: number;
+    duration: number | null;
+    description?: Uint8Array;
+  }): void;
+}
+
+/**
+ * 送信 Group ID 記録用の最小 Publisher
+ */
+function createRecordingSendPublisher(): {
+  publisher: Publisher;
+  sent: { groupId: number; objectId: number }[];
+} {
+  const sent: { groupId: number; objectId: number }[] = [];
+  const publisher = {
+    state: "active",
+    sendObject: (params: { groupId: number; objectId: number }) => {
+      sent.push({ groupId: params.groupId, objectId: params.objectId });
+    },
+  } as unknown as Publisher;
+  return { publisher, sent };
+}
+
+test("初期 Group ID 生成は前回値を下回らない", () => {
+  // 時刻依存は固定値で検証する。実時刻由来の確保が先行しても単調性は保たれる
+  const first = allocateInitialGroupId(100);
+  const second = allocateInitialGroupId(50);
+  assert.equal(second, first + 1);
+});
+
+test("初期 Group ID 生成は非有限値を拒否する", () => {
+  // 共有カウンタの汚染を防ぐための検証。拒否後に正常割当てを行い、
+  // 単調性が壊れていないことも確認する
+  const before = allocateInitialGroupId(200);
+  for (const candidate of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    let thrown: unknown = null;
+    try {
+      allocateInitialGroupId(candidate);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.isTrue(thrown instanceof Error);
+  }
+  assert.equal(allocateInitialGroupId(100), before + 1);
+});
+
+test("新規インスタンスの開始 Group ID は前回を上回る", () => {
+  // 同一 track の再 publish が 0 に戻らないことの検証
+  const options = {
+    namespace: ["live"],
+    audio: { codec: "opus" as const, bitrate: 64000 },
+    video: { codec: "vp8" as const, bitrate: 1000000 },
+  };
+  const first = new MediaPublisherImpl("moqt://example.com/live", options);
+  const second = new MediaPublisherImpl("moqt://example.com/live", options);
+  const firstGroups = first as unknown as { audioGroupId: number; videoGroupId: number };
+  const secondGroups = second as unknown as { audioGroupId: number; videoGroupId: number };
+  assert.isTrue(firstGroups.audioGroupId > 1_000_000_000_000);
+  assert.isTrue(secondGroups.audioGroupId > firstGroups.audioGroupId);
+  assert.isTrue(secondGroups.videoGroupId > firstGroups.videoGroupId);
+});
+
+test("音声・映像とも初回送信値は初期値である", () => {
+  // 初回送信値が初期値 T に統一されることの検証。
+  // 割当てから送信までの結合を見るため audio / video 付きで構築する
+  const publisher = new MediaPublisherImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: { codec: "opus" as const, bitrate: 64000 },
+    video: { codec: "vp8" as const, bitrate: 1000000 },
+  });
+  const control = publisher as unknown as PublisherGroupControl;
+  const { publisher: audioPublisher, sent: audioSent } = createRecordingSendPublisher();
+  const { publisher: videoPublisher, sent: videoSent } = createRecordingSendPublisher();
+  control.audioPublisher = audioPublisher;
+  control.videoPublisher = videoPublisher;
+  const initialAudio = control.audioGroupId;
+  const initialVideo = control.videoGroupId;
+
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+
+  assert.equal(audioSent[0].groupId, initialAudio);
+  assert.equal(audioSent[0].objectId, 0);
+  assert.equal(videoSent[0].groupId, initialVideo);
+  assert.equal(videoSent[0].objectId, 0);
+
+  // 2 回目以降の key で加算されること
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([2]),
+    type: "key",
+    timestamp: 1,
+    duration: null,
+  });
+  assert.equal(videoSent[1].groupId, initialVideo + 1);
+  assert.equal(videoSent[1].objectId, 0);
+});
+
+test("新規割当ては送信済み最大値を上回る", () => {
+  // 送信加算を進めた後に新規割当てを行い、前回送信最大値を上回ることの検証
+  const publisher = new MediaPublisherImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: { codec: "vp8" as const, bitrate: 1000000 },
+  });
+  const control = publisher as unknown as PublisherGroupControl;
+  const { publisher: videoPublisher, sent: videoSent } = createRecordingSendPublisher();
+  control.videoPublisher = videoPublisher;
+  const initialVideo = control.videoGroupId;
+  // video のみの構成では audio 側を採番しないこと
+  assert.equal(control.audioGroupId, 0);
+
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([2]),
+    type: "key",
+    timestamp: 1,
+    duration: null,
+  });
+  assert.equal(videoSent[1].groupId, initialVideo + 1);
+
+  assert.equal(allocateInitialGroupId(1), initialVideo + 2);
+});
+
+test("未使用 track は Group ID を採番しない", () => {
+  // 条件付き割当ての分岐の検証。未使用 track は 0 のまま送信されない
+  const publisher = new MediaPublisherImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: { codec: "opus" as const, bitrate: 64000 },
+  });
+  const control = publisher as unknown as PublisherGroupControl;
+  assert.isTrue(control.audioGroupId > 0);
+  assert.equal(control.videoGroupId, 0);
 });

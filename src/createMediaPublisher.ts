@@ -11,6 +11,7 @@ import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
   createCatalog,
+  createInitialGroupId,
   encodeCatalog,
   type Catalog,
   type CatalogTrack,
@@ -49,6 +50,33 @@ const DEFAULT_VIDEO_TRACK_NAME = "video";
 const PRIORITY_AUDIO = 192;
 const PRIORITY_VIDEO_KEY = 255;
 const PRIORITY_VIDEO_DELTA = 128;
+
+// 同一プロセス内で割り当てた初期 Group ID の最大値
+// (draft-ietf-moq-msf-01 §6.1: 再起動時の開始 Group ID は
+// 同一 track の過去の全 Group ID を上回らなければならない)
+// 音声・映像の両 track で共有し、安全側 (大きめ) に倒す。
+let lastAllocatedInitialGroupId = 0;
+
+/**
+ * 初期 Group ID を割り当てる (MSF 生成に単調ガードを付けた Publisher 側の割当て)
+ *
+ * draft-ietf-moq-msf-01 §6.1 に基づき `createInitialGroupId` (Unix epoch
+ * ミリ秒起点) を使う。`Date.now()` は `MAX_SAFE_INTEGER` に収まるため
+ * Publisher 側の `number` 型に変換する。同一プロセス内の前回値を
+ * 下回らないよう前回 + 1 との最大値を取る。プロセス跨ぎは壁時計に委ねる。
+ * `candidate` は有限数のみ受け付け、非有限値は拒否する。
+ *
+ * 単体テストから固定値で駆動するため export する
+ * (パッケージ公開 API には含めない)。
+ */
+export function allocateInitialGroupId(candidate = Number(createInitialGroupId())): number {
+  if (!Number.isFinite(candidate)) {
+    throw new Error(`initial group id candidate must be finite, got ${candidate}`);
+  }
+  const next = Math.max(candidate, lastAllocatedInitialGroupId + 1);
+  lastAllocatedInitialGroupId = next;
+  return next;
+}
 
 /**
  * MediaPublisher の実装クラス
@@ -93,12 +121,14 @@ export class MediaPublisherImpl implements MediaPublisher {
   };
 
   // グループ/オブジェクト管理
-  private audioGroupId = 0;
+  private audioGroupId: number;
   private audioObjectId = 0;
-  private videoGroupId = 0;
+  private videoGroupId: number;
   private videoObjectId = 0;
   private audioFrameCount = 0;
   private videoFrameCount = 0;
+  // 映像の初回オブジェクト送信済みか (初回は加算せず初期値を送る)
+  private videoGroupStarted = false;
 
   // キーフレーム間隔
   private keyframeInterval: number;
@@ -121,6 +151,15 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.url = url;
     this.options = options;
     this.callbacks = callbacks;
+
+    // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の
+    // 過去の全 Group ID を上回る。新規インスタンスごとに割り当てる。
+    // 同一インスタンスの stop → start は値を引き継ぐ。
+    // 未使用 track 分は採番しない。
+    this.audioGroupId = options.audio ? allocateInitialGroupId() : 0;
+    this.videoGroupId = options.video ? allocateInitialGroupId() : 0;
+    this.audioStats.currentGroupId = this.audioGroupId;
+    this.videoStats.currentGroupId = this.videoGroupId;
 
     // キーフレーム間隔を計算
     const framerate = options.video?.framerate ?? DEFAULT_VIDEO_FRAMERATE;
@@ -622,6 +661,9 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.audioFrameCount % 50 === 0) {
       this.audioGroupId++;
       this.audioObjectId = 0;
+      // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
+      // 次インスタンスの開始 Group ID が上回るようにする
+      lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.audioGroupId);
     }
 
     const payload = chunk.data;
@@ -649,8 +691,15 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (!this.videoPublisher || this.videoPublisher.state !== "active") return;
 
     // キーフレームで新しいグループを開始
+    // (初回オブジェクトは加算せず初期値を送る。実運用経路は初回を
+    // key で要求するため、delta 先行時は初回 key が初期値 + 1 になる)
     if (chunk.type === "key") {
-      this.videoGroupId++;
+      if (this.videoGroupStarted) {
+        this.videoGroupId++;
+        // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
+        // 次インスタンスの開始 Group ID が上回るようにする
+        lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.videoGroupId);
+      }
       this.videoObjectId = 0;
       this.videoStats.keyFramesSent++;
     }
@@ -686,6 +735,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       properties,
       priority: chunk.type === "key" ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     });
+    this.videoGroupStarted = true;
   }
 
   /**
@@ -699,7 +749,8 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 最初の失敗は最後に再 throw する。
    * 二重破棄は冪等操作のみで行う
    * (Publisher の active ガード付き done、encoder・source・session の
-   * null 安全な close に依存する)。Catalog・統計・Group ID は
+   * null 安全な close に依存する)。Catalog・統計・Group ID・
+   * オブジェクト ID・フレーム数・映像開始済みフラグは
    * 再 start に引き継ぐため保持する。
    */
   private async disposeAllResources(): Promise<void> {
