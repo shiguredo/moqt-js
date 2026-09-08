@@ -2,11 +2,19 @@
  * MOQ Log (moqlog) の単体テスト
  * draft-jennings-moq-log-03 ([MOQLOG]) / draft-ietf-moq-msf-01 §9 (Log track)
  *
- * 任意の JSON object に対する round-trip は moqlog.prop.ts の PBT で検証する。
+ * 型適合の LogEntry に対する round-trip は moqlog.prop.ts の PBT で検証する。
  * 本ファイルは §7 ベクタ・空オブジェクト・エラーパス・各 helper の固有挙動を扱う。
  */
 
 import { test, assert } from "vite-plus/test";
+import { ProtocolViolationError } from "./error";
+
+/**
+ * JSON 値を UTF-8 バイト列にするテスト用ヘルパー
+ */
+function encodeJson(value: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(value));
+}
 import {
   LOG_SEVERITY_LEVELS,
   MOQLOG_NAMESPACE_PREFIX,
@@ -120,4 +128,51 @@ test("logTrackName: 0-7 の範囲外・非整数は throw", () => {
   assert.throws(() => logTrackName(8), /0-7/);
   assert.throws(() => logTrackName(1.5), /0-7/);
   assert.throws(() => logTrackName(Number.NaN), /0-7/);
+});
+
+// 既知フィールドの型誤りはデコード時に検出する。値列挙の厳格化はしない。
+test("LogEntry: 既知フィールドの型誤りは throw", () => {
+  assert.throws(
+    () => decodeLogEntry(encodeJson({ severity: 3 })),
+    ProtocolViolationError,
+    /must be a string/,
+  );
+  assert.throws(
+    () => decodeLogEntry(encodeJson({ timestamp: "3155587200" })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeLogEntry(encodeJson({ pri: "1" })),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+  assert.throws(
+    () => decodeLogEntry(encodeJson({ hostname: 42 })),
+    ProtocolViolationError,
+    /must be a string/,
+  );
+  assert.throws(
+    () => decodeLogEntry(encodeJson({ msg: 123 })),
+    ProtocolViolationError,
+    /must be a string/,
+  );
+  assert.throws(
+    () => decodeLogEntry(encodeJson({ severity: null })),
+    ProtocolViolationError,
+    /must be a string/,
+  );
+  // 未知フィールドの任意型は受理のままであること
+  assert.deepEqual(decodeLogEntry(encodeJson({ traceId: 42 })), { traceId: 42 });
+});
+
+// 非有限数は null 化して送出されるため、エンコード時に失敗させる。
+test("LogEntry: 非有限数のエンコードは throw", () => {
+  assert.throws(() => encodeLogEntry({ timestamp: Number.NaN }), /non-finite/);
+  assert.throws(() => encodeLogEntry({ pri: Number.POSITIVE_INFINITY }), /non-finite/);
+  assert.throws(() => encodeLogEntry({ timestamp: Number.NEGATIVE_INFINITY }), /non-finite/);
+});
+
+test("logTrackNamespace: 空 resourceId は throw", () => {
+  assert.throws(() => logTrackNamespace(""), /resourceId/);
 });

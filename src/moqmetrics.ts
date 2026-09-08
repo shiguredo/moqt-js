@@ -103,34 +103,68 @@ function decodeJsonObject(data: Uint8Array, what: string): Record<string, unknow
 
 /**
  * Object ID 0 の payload（capture timestamp + attributes）をエンコードする。
+ *
+ * 既知数値フィールドの非有限値のみ fail-fast する
+ * (型誤りはデコード側で拒否し、attributes・未知フィールド内の非有限は対象外とする)。
+ *
+ * @throws Error capture_timestamp が数値型の非有限数の場合
  */
 export function encodeCaptureObject(obj: MetricsCaptureObject): Uint8Array {
+  if (typeof obj.capture_timestamp === "number" && !Number.isFinite(obj.capture_timestamp)) {
+    throw new Error(
+      `cannot encode moqmetrics capture object with non-finite capture_timestamp: ${obj.capture_timestamp}`,
+    );
+  }
   return new TextEncoder().encode(JSON.stringify(obj));
 }
 
 /**
  * Object ID 0 の payload（capture timestamp + attributes）をデコードする。
  *
- * @throws ProtocolViolationError JSON が不正、または object でない場合
+ * @throws ProtocolViolationError JSON が不正、object でない場合、
+ * capture_timestamp が欠落または有限数でない場合
  */
 export function decodeCaptureObject(data: Uint8Array): MetricsCaptureObject {
-  return decodeJsonObject(data, "moqmetrics capture object") as MetricsCaptureObject;
+  const parsed = decodeJsonObject(data, "moqmetrics capture object");
+  const timestamp = parsed["capture_timestamp"];
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+    throw new ProtocolViolationError(
+      `invalid moqmetrics capture object: capture_timestamp must be a finite number, got ${JSON.stringify(timestamp)}`,
+    );
+  }
+  return parsed as MetricsCaptureObject;
 }
 
 /**
  * Object ID 1 以降の payload（metric name-value pair）をエンコードする。
+ *
+ * 既知数値フィールドの非有限値のみ fail-fast する
+ * (型誤りはデコード側で拒否し、未知フィールド内の非有限は対象外とする)。
+ *
+ * @throws Error value が数値型の非有限数の場合
  */
 export function encodeMetricObject(obj: MetricObject): Uint8Array {
+  if (typeof obj.value === "number" && !Number.isFinite(obj.value)) {
+    throw new Error(`cannot encode moqmetrics metric object with non-finite value: ${obj.value}`);
+  }
   return new TextEncoder().encode(JSON.stringify(obj));
 }
 
 /**
  * Object ID 1 以降の payload（metric name-value pair）をデコードする。
  *
- * @throws ProtocolViolationError JSON が不正、または object でない場合
+ * @throws ProtocolViolationError JSON が不正、object でない場合、
+ * value が欠落または有限数でない場合
  */
 export function decodeMetricObject(data: Uint8Array): MetricObject {
-  return decodeJsonObject(data, "moqmetrics metric object") as MetricObject;
+  const parsed = decodeJsonObject(data, "moqmetrics metric object");
+  const value = parsed["value"];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ProtocolViolationError(
+      `invalid moqmetrics metric object: value must be a finite number, got ${JSON.stringify(value)}`,
+    );
+  }
+  return parsed as MetricObject;
 }
 
 /**
@@ -188,8 +222,13 @@ export const MOQMETRICS_NAMESPACE_PREFIX = "moq://metrics.moq.arpa/v1/";
  *
  * resourceID は非空であること。draft-ietf-moq-transport-20 §2.4.1 は各 namespace 要素に
  * 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで拒否される。
+ *
+ * @throws Error resourceId が空の場合
  */
 export function metricsTrackNamespace(resourceId: string): [string, string] {
+  if (resourceId === "") {
+    throw new Error("moqmetrics resourceId must not be empty");
+  }
   return [MOQMETRICS_NAMESPACE_PREFIX, resourceId];
 }
 

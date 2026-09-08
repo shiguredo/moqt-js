@@ -66,9 +66,45 @@ export const LOG_SEVERITY_LEVELS: Readonly<Record<string, number>> = {
 };
 
 /**
+ * 既知フィールドの型定義（[MOQLOG] Section 4）
+ *
+ * 値列挙の厳格化はしない ([MOQLOG] §7 例との衝突を避ける)。
+ * `number` 項目はエンコード時の非有限検査にも使う。
+ */
+export const LOG_ENTRY_FIELD_TYPES: Readonly<Record<string, "string" | "number">> = Object.freeze({
+  severity: "string",
+  timestamp: "number",
+  pri: "number",
+  hostname: "string",
+  appname: "string",
+  procid: "string",
+  msgid: "string",
+  msg: "string",
+});
+
+/**
+ * 非有限検査の対象フィールド（`LOG_ENTRY_FIELD_TYPES` の `number` 項目）
+ */
+const FINITE_CHECK_FIELDS: Readonly<string[]> = Object.entries(LOG_ENTRY_FIELD_TYPES)
+  .filter((entry): entry is [string, "number"] => entry[1] === "number")
+  .map(([field]) => field);
+
+/**
  * Log entry を Object Payload バイト列にエンコードする（[MOQLOG] Section 4）
+ *
+ * 既知数値フィールドの非有限数のみ fail-fast する
+ * (未知フィールド内の非有限は対象外とする)。
+ *
+ * @throws Error timestamp / pri が非有限数の場合
  */
 export function encodeLogEntry(entry: LogEntry): Uint8Array {
+  const record = entry as Record<string, unknown>;
+  for (const field of FINITE_CHECK_FIELDS) {
+    const value = record[field];
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      throw new Error(`cannot encode moqlog entry with non-finite ${field}: ${value}`);
+    }
+  }
   return new TextEncoder().encode(JSON.stringify(entry));
 }
 
@@ -77,8 +113,10 @@ export function encodeLogEntry(entry: LogEntry): Uint8Array {
  *
  * payload は JSON object でなければならない（[MOQLOG] §4）。
  * 未知フィールドは structured data としてそのまま保持する。
+ * 既知フィールドは存在する場合のみ型を検証する。
  *
- * @throws ProtocolViolationError JSON が不正、または object でない場合
+ * @throws ProtocolViolationError JSON が不正、object でない場合、
+ * 既知フィールドの型が誤っている場合
  */
 export function decodeLogEntry(data: Uint8Array): LogEntry {
   let parsed: unknown;
@@ -91,6 +129,26 @@ export function decodeLogEntry(data: Uint8Array): LogEntry {
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new ProtocolViolationError("moqlog payload must be a JSON object");
+  }
+  const entry = parsed as Record<string, unknown>;
+  for (const [field, expected] of Object.entries(LOG_ENTRY_FIELD_TYPES)) {
+    const value = entry[field];
+    if (value === undefined) {
+      continue;
+    }
+    if (expected === "number") {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new ProtocolViolationError(
+          `invalid moqlog entry: ${field} must be a finite number, got ${JSON.stringify(value)}`,
+        );
+      }
+      continue;
+    }
+    if (typeof value !== "string") {
+      throw new ProtocolViolationError(
+        `invalid moqlog entry: ${field} must be a string, got ${JSON.stringify(value)}`,
+      );
+    }
   }
   return parsed as LogEntry;
 }
@@ -145,8 +203,13 @@ export const MOQLOG_NAMESPACE_PREFIX = "moq://moq-syslog.arpa/logs-v1/";
  *
  * resourceID は非空であること。draft-ietf-moq-transport-20 §2.4.1 は各 namespace 要素に
  * 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで拒否される。
+ *
+ * @throws Error resourceId が空の場合
  */
 export function logTrackNamespace(resourceId: string): [string, string] {
+  if (resourceId === "") {
+    throw new Error("moqlog resourceId must not be empty");
+  }
   return [MOQLOG_NAMESPACE_PREFIX, resourceId];
 }
 
