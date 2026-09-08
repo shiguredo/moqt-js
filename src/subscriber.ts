@@ -66,6 +66,15 @@ export interface RequestUpdateOptions {
    * fill の受信関連付けは session が保持する。
    */
   fill?: FillRequestOptions;
+
+  /**
+   * 新規 Group 開始の要求値
+   * draft-ietf-moq-transport-20 Section 10.2.19 (NEW_GROUP_REQUEST Parameter)
+   *
+   * subscriber が知る最大 Group ID + 1 (情報なし時は 0) を送る。
+   * NEW_GROUP_REQUEST (0x32) として送信する。
+   */
+  newGroupRequest?: bigint;
 }
 
 /**

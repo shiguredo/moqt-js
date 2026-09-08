@@ -77,6 +77,7 @@ import {
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateNamespacePrefixUpdate,
+  validateNonNegative,
   validateTrackNamespaceForSend,
 } from "./params";
 import {
@@ -84,7 +85,7 @@ import {
   isPeerStreamError,
   toProtocolViolationSessionError,
 } from "./errors";
-import { MAX_VARINT } from "../varint";
+import { MAX_VARINT, encodeVarint } from "../varint";
 import {
   publishClosePublisherStream,
   publishSendPublishDone,
@@ -1871,6 +1872,28 @@ export async function bidiSendRequestUpdate(
   // 載せた更新にのみ適用される。
   if (options.fill !== undefined) {
     parameters.push(encodeFillParameters(buildFillParameters(options.fill, "REQUEST_UPDATE")));
+  }
+
+  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-20 Section 10.2.19 (varint)
+  // draft-ietf-moq-transport-20 §10.2:
+  // Senders MUST NOT repeat the same Parameter Type のため、raw と型付きの
+  // 合算で 2 件以上になる重複は送信前に拒否する。重複組み合わせの先例
+  // (validateRangeFilterSpecs) と同様に汎用 Error を使う。
+  const rawNewGroupRequestCount = (options.parameters ?? []).filter(
+    (param) => param.type === MessageParameterType.NEW_GROUP_REQUEST,
+  ).length;
+  const typedNewGroupRequestCount = options.newGroupRequest !== undefined ? 1 : 0;
+  if (rawNewGroupRequestCount + typedNewGroupRequestCount >= 2) {
+    throw new Error(
+      "duplicate NEW_GROUP_REQUEST in REQUEST_UPDATE: use either newGroupRequest or raw parameters",
+    );
+  }
+  if (options.newGroupRequest !== undefined) {
+    validateNonNegative(options.newGroupRequest, "NEW_GROUP_REQUEST");
+    parameters.push({
+      type: MessageParameterType.NEW_GROUP_REQUEST,
+      value: encodeVarint(options.newGroupRequest),
+    });
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:

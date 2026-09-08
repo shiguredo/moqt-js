@@ -44,7 +44,7 @@ import {
   RequestError,
   InvalidFilterError,
 } from "../error";
-import { encodeVarint, MAX_VARINT } from "../varint";
+import { encodeVarint, decodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
@@ -7301,4 +7301,124 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
   // 閾値 500ms は壁時計依存だが、即時と満了の中間で余裕を持つ
   assert.isBelow(Date.now() - started, 500);
   assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.19:
+ * update({ newGroupRequest }) で NEW_GROUP_REQUEST (0x32) が REQUEST_UPDATE に
+ * varint 符号化で載ることを検証する。
+ */
+test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエンコードされる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    newGroupRequest: 42n,
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  const param = decoded.parameters.find((p) => p.type === MessageParameterType.NEW_GROUP_REQUEST);
+  assert.isDefined(param);
+  assert.equal(decodeVarint(param!.value)[0], 42n);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.19:
+ * 規定値 0 の NEW_GROUP_REQUEST が varint 単一バイトで載ることを検証する。
+ */
+test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    newGroupRequest: 0n,
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  const param = decoded.parameters.find((p) => p.type === MessageParameterType.NEW_GROUP_REQUEST);
+  assert.isDefined(param);
+  assert.equal(param!.value.length, 1);
+  assert.equal(decodeVarint(param!.value)[0], 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2:
+ * raw NEW_GROUP_REQUEST と型付きの併用は送信前に拒否されることを検証する。
+ */
+test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒否される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: unknown = null;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [{ type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(1n) }],
+      newGroupRequest: 2n,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof Error);
+  assert.match((thrown as Error).message, /duplicate NEW_GROUP_REQUEST/);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2:
+ * raw NEW_GROUP_REQUEST 同士の重複も送信前に拒否されることを検証する。
+ */
+test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: unknown = null;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [
+        { type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(1n) },
+        { type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(2n) },
+      ],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof Error);
+  assert.match((thrown as Error).message, /duplicate NEW_GROUP_REQUEST/);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.19:
+ * 負の newGroupRequest は送信前に拒否されることを検証する。
+ */
+test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: unknown = null;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      newGroupRequest: -1n,
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof Error);
+  assert.match((thrown as Error).message, /must not be negative/);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(written.length, 0);
 });
