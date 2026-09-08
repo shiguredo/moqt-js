@@ -237,6 +237,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private pendingCatalogObjects: MoqtObject[] = [];
   // Catalog FETCH で配信された最大 Location (live バッファドレイン時の重複除去用)
   private catalogFetchLastLocation: Location | null = null;
+  // Catalog 受信タイムアウトのタイマー (解除用に保持する)
+  private catalogTimer: ReturnType<typeof setTimeout> | null = null;
+  // Catalog 受信失敗済みか。失敗後の遅延オブジェクトを無害化するためのガード
+  private catalogReceiveFailed = false;
 
   // Catalog から取得したトラック情報
   private audioTrackInfo: CatalogTrack | null = null;
@@ -488,8 +492,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * FETCH 処理時の Largest (L2) 以下になることを保証し、どちらのリクエストにも
    * 届かない (L2, L1] の取りこぼしを防ぐ。リレーが FETCH を先に処理すると
    * L2 < L1 になり得るため、順序を入れ替えてはならない。
+   *
+   * 異常系契約: 受信タイムアウト後は catalogReceiveFailed で以降の
+   * オブジェクトを破棄する。session.subscribe 失敗時は即時掃除して
+   * throw する。成功時を含めタイマーは解除する。
+   *
+   * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)
    */
-  private async subscribeCatalog(): Promise<void> {
+  private async subscribeCatalog(timeoutMs: number = CATALOG_RECEIVE_TIMEOUT): Promise<void> {
     if (!this.session) {
       throw new Error("session not connected");
     }
@@ -502,16 +512,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const catalogPromise = new Promise<Catalog>((resolve, reject) => {
       this.catalogResolve = resolve;
 
-      setTimeout(() => {
+      this.catalogTimer = setTimeout(() => {
+        this.catalogTimer = null;
         if (this.catalogResolve !== null) {
           this.catalogResolve = null;
           // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
           this.catalogFetchInProgress = false;
           this.pendingCatalogObjects = [];
           this.catalogFetchLastLocation = null;
+          // 失敗後の遅延オブジェクトを無害化するため失敗を記録する
+          this.catalogReceiveFailed = true;
           reject(new Error("catalog receive timeout"));
         }
-      }, CATALOG_RECEIVE_TIMEOUT);
+      }, timeoutMs);
     });
 
     // FETCH フェーズ用フラグは session.subscribe 呼び出し前に立てる
@@ -519,30 +532,42 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.catalogFetchInProgress = true;
     this.pendingCatalogObjects = [];
     this.catalogFetchLastLocation = null;
+    this.catalogReceiveFailed = false;
 
     // Catalog サブスクライバー (live 更新用)
-    this.catalogSubscriber = await this.session.subscribe(
-      namespace,
-      CATALOG_TRACK_NAME,
-      {
-        object: (obj) => {
-          // FETCH フェーズ中の live SUBSCRIBE オブジェクトはバッファする
-          if (this.catalogFetchInProgress) {
-            this.pendingCatalogObjects.push(obj);
-            return;
-          }
-          this.handleCatalogObject(obj);
+    try {
+      this.catalogSubscriber = await this.session.subscribe(
+        namespace,
+        CATALOG_TRACK_NAME,
+        {
+          object: (obj) => {
+            // FETCH フェーズ中の live SUBSCRIBE オブジェクトはバッファする
+            if (this.catalogFetchInProgress) {
+              this.pendingCatalogObjects.push(obj);
+              return;
+            }
+            this.handleCatalogObject(obj);
+          },
+          end: () => {
+            // Catalog トラック終了
+          },
+          error: (error) => this.callbacks.onError?.(error),
         },
-        end: () => {
-          // Catalog トラック終了
+        {
+          // Next Object 形式: live は現在の最新 catalog の次から受信する
+          filter: { startGroup: 0n, startObject: 0n },
         },
-        error: (error) => this.callbacks.onError?.(error),
-      },
-      {
-        // Next Object 形式: live は現在の最新 catalog の次から受信する
-        filter: { startGroup: 0n, startObject: 0n },
-      },
-    );
+      );
+    } catch (error) {
+      // session.subscribe 失敗時はタイマー発火を待たず即時掃除する。
+      // catalogSubscriber は未登録のため unsubscribe 不要である。
+      this.clearCatalogTimer();
+      this.catalogResolve = null;
+      this.catalogFetchInProgress = false;
+      this.pendingCatalogObjects = [];
+      this.catalogFetchLastLocation = null;
+      throw error;
+    }
 
     // 既存 catalog を FETCH (フィルタなし) で取得する。
     // catalog が未 publish の場合は REQUEST_ERROR (INVALID_RANGE) で reject され、
@@ -555,6 +580,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         {
           // FETCH 経由は即時適用。live は object コールバック側でバッファする
           object: (obj: MoqtObject) => {
+            // 失敗後の遅延 FETCH は Location 記録も含めて破棄する
+            if (this.catalogReceiveFailed) {
+              return;
+            }
             // FETCH で配信された最大 Location を記録する (ドレイン時の重複除去用)
             const location: Location = { group: obj.groupId, object: obj.objectId };
             const current = this.catalogFetchLastLocation;
@@ -578,7 +607,21 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       });
 
     // Catalog を受信するまで待つ
-    await catalogPromise;
+    try {
+      await catalogPromise;
+    } finally {
+      this.clearCatalogTimer();
+    }
+  }
+
+  /**
+   * Catalog 受信タイマーを解除する
+   */
+  private clearCatalogTimer(): void {
+    if (this.catalogTimer !== null) {
+      clearTimeout(this.catalogTimer);
+      this.catalogTimer = null;
+    }
   }
 
   /**
@@ -809,8 +852,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
   /**
    * Catalog オブジェクトを処理する
+   *
+   * 受信失敗後の遅延オブジェクトは無害化のため破棄する
+   * (FETCH / live のコールバック登録に解除手段がないため。
+   * FETCH 側の明示ガードは Location 記録の抑止を担い、
+   * こちらは catalog 更新と onCatalog 発火の抑止を担う)。
    */
   private handleCatalogObject(obj: MoqtObject): void {
+    if (this.catalogReceiveFailed) {
+      return;
+    }
     const result = processCatalogPayload(this.receivedCatalog, obj.payload);
 
     if (result.kind === "error") {
