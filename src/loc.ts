@@ -136,17 +136,38 @@ function parseVideoFrameMarkingValue(value: Uint8Array): VideoFrameMarking {
 }
 
 /**
+ * 単体デコーダの前段 varint をデコードする
+ *
+ * decodeLocObjectPayload と同一方針で、前段 varint の不完全入力は
+ * IncompleteDataError のまま漏らさず ProtocolViolationError に変換する。
+ *
+ * @param data デコード対象バイト列
+ * @param offset varint 開始位置
+ * @param name エラー文言に埋める Property 名と位置
+ * @throws ProtocolViolationError varint が不完全な場合
+ */
+function decodeLeadingVarint(data: Uint8Array, offset: number, name: string): [bigint, number] {
+  try {
+    return decodeVarint(data, offset);
+  } catch (error) {
+    if (error instanceof IncompleteDataError) {
+      throw new ProtocolViolationError(`incomplete ${name} varint: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
  * Video Frame Marking の length + value をデコードする。
  * Length は 1–4 のみ受理。宣言 Length バイトは必ず消費する。
  *
- * @throws ProtocolViolationError Length が不正、または Value バイトが不足する場合
+ * @throws ProtocolViolationError Length が不正、Value 不足、または Length varint 不完全の場合
  */
 function decodeVideoFrameMarkingAfterId(
   data: Uint8Array,
   idLen: number,
 ): { marking: VideoFrameMarking; consumed: number } {
-  const afterId = data.subarray(idLen);
-  const [lengthBig, lengthLen] = decodeVarint(afterId);
+  const [lengthBig, lengthLen] = decodeLeadingVarint(data, idLen, "VIDEO_FRAME_MARKING length");
   const length = Number(lengthBig);
 
   if (length < 1 || length > 4) {
@@ -202,12 +223,12 @@ function assertLocPropertyId(id: bigint, expected: bigint, name: string): void {
  * Timestamp をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
- * @throws IncompleteDataError ID / Value の varint が不完全な場合
+ * @throws ProtocolViolationError ID / Value の varint が不完全な場合
  */
 export function decodeTimestamp(data: Uint8Array): bigint {
-  const [id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeLeadingVarint(data, 0, "TIMESTAMP id");
   assertLocPropertyId(id, LOCPropertyId.TIMESTAMP, "TIMESTAMP");
-  const [value, _valueLen] = decodeVarint(data.subarray(idLen));
+  const [value, _valueLen] = decodeLeadingVarint(data, idLen, "TIMESTAMP value");
   return value;
 }
 
@@ -230,12 +251,12 @@ export function encodeTimescale(timescale: bigint): Uint8Array {
  * Timescale をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
- * @throws IncompleteDataError ID / Value の varint が不完全な場合
+ * @throws ProtocolViolationError ID / Value の varint が不完全な場合
  */
 export function decodeTimescale(data: Uint8Array): bigint {
-  const [id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeLeadingVarint(data, 0, "TIMESCALE id");
   assertLocPropertyId(id, LOCPropertyId.TIMESCALE, "TIMESCALE");
-  const [value, _valueLen] = decodeVarint(data.subarray(idLen));
+  const [value, _valueLen] = decodeLeadingVarint(data, idLen, "TIMESCALE value");
   return value;
 }
 
@@ -338,10 +359,10 @@ export function encodeVideoFrameMarking(marking: VideoFrameMarking): Uint8Array 
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError Length が 1–4 以外、または Value バイトが不足する場合
- * @throws IncompleteDataError ID / Length の varint が不完全な場合
+ * @throws ProtocolViolationError ID / Length の varint が不完全な場合
  */
 export function decodeVideoFrameMarking(data: Uint8Array): VideoFrameMarking {
-  const [id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeLeadingVarint(data, 0, "VIDEO_FRAME_MARKING id");
   assertLocPropertyId(id, LOCPropertyId.VIDEO_FRAME_MARKING, "VIDEO_FRAME_MARKING");
   return decodeVideoFrameMarkingAfterId(data, idLen).marking;
 }
@@ -391,12 +412,12 @@ function decodeAudioLevelValue(value: bigint): AudioLevel {
  * Audio Level をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
- * @throws IncompleteDataError ID / Value の varint が不完全な場合
+ * @throws ProtocolViolationError ID / Value の varint が不完全な場合
  */
 export function decodeAudioLevel(data: Uint8Array): AudioLevel {
-  const [id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeLeadingVarint(data, 0, "AUDIO_LEVEL id");
   assertLocPropertyId(id, LOCPropertyId.AUDIO_LEVEL, "AUDIO_LEVEL");
-  const [value, _valueLen] = decodeVarint(data.subarray(idLen));
+  const [value, _valueLen] = decodeLeadingVarint(data, idLen, "AUDIO_LEVEL value");
   return decodeAudioLevelValue(value);
 }
 
@@ -430,12 +451,12 @@ export function encodeVideoConfig(description: Uint8Array): Uint8Array {
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError Length 宣言に対して Value バイトが不足する場合
- * @throws IncompleteDataError ID / Length の varint が不完全な場合
+ * @throws ProtocolViolationError ID / Length の varint が不完全な場合
  */
 export function decodeVideoConfig(data: Uint8Array): Uint8Array {
-  const [id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeLeadingVarint(data, 0, "VIDEO_CONFIG id");
   assertLocPropertyId(id, LOCPropertyId.VIDEO_CONFIG, "VIDEO_CONFIG");
-  const [length, lengthLen] = decodeVarint(data.subarray(idLen));
+  const [length, lengthLen] = decodeLeadingVarint(data, idLen, "VIDEO_CONFIG length");
   const lengthNum = Number(length);
   const valueOffset = idLen + lengthLen;
   if (data.length < valueOffset + lengthNum) {
@@ -476,12 +497,12 @@ export function encodeAudioConfig(description: Uint8Array): Uint8Array {
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError Length 宣言に対して Value バイトが不足する場合
- * @throws IncompleteDataError ID / Length の varint が不完全な場合
+ * @throws ProtocolViolationError ID / Length の varint が不完全な場合
  */
 export function decodeAudioConfig(data: Uint8Array): Uint8Array {
-  const [id, idLen] = decodeVarint(data);
+  const [id, idLen] = decodeLeadingVarint(data, 0, "AUDIO_CONFIG id");
   assertLocPropertyId(id, LOCPropertyId.AUDIO_CONFIG, "AUDIO_CONFIG");
-  const [length, lengthLen] = decodeVarint(data.subarray(idLen));
+  const [length, lengthLen] = decodeLeadingVarint(data, idLen, "AUDIO_CONFIG length");
   const lengthNum = Number(length);
   const valueOffset = idLen + lengthLen;
   if (data.length < valueOffset + lengthNum) {
