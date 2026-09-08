@@ -17,6 +17,7 @@ import {
   appendGreaseObjectProperty,
   mergeDeliveryTimeoutObjectProperties,
   readDeliveryTimeoutObjectProperties,
+  assertNoMandatoryTrackPropertyInObjectProperties,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -380,6 +381,89 @@ test("decodeProperties: 未知の Mandatory Track Property (0x4000) で Malforme
 test("decodeProperties: 未知の Mandatory Track Property (0x7FFF) で MalformedTrackError", () => {
   const data = encodeProperties([{ id: 0x7fffn, data: new Uint8Array([0x01]) }]);
   assert.throws(() => decodeProperties(data), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * Object Property に Mandatory Track Property (0x4000-0x7FFF) が含まれる場合、
+ * assertNoMandatoryTrackPropertyInObjectProperties が MalformedTrackError を
+ * 送出することを検証する。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: 0x4000 で MalformedTrackError", () => {
+  const data = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  assert.throws(() => assertNoMandatoryTrackPropertyInObjectProperties(data), MalformedTrackError);
+});
+
+test("assertNoMandatoryTrackPropertyInObjectProperties: 0x7FFF で MalformedTrackError", () => {
+  const data = encodeProperties([{ id: 0x7fffn, data: new Uint8Array([0x01]) }]);
+  assert.throws(() => assertNoMandatoryTrackPropertyInObjectProperties(data), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * delta 連鎖の 2 個目以降に Mandatory Track Property が現れる場合も検出することを
+ * 検証する (previousId の加算を経た ID で判定する)。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: delta 連鎖の途中の 0x4000 で MalformedTrackError", () => {
+  const data = encodeProperties([
+    { id: 0x02n, value: 10n },
+    { id: 0x4000n, value: 0n },
+  ]);
+  assert.throws(() => assertNoMandatoryTrackPropertyInObjectProperties(data), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1 / §12.7:
+ * IMMUTABLE_PROPERTIES (0x0B) の内容も Object Property として扱うため、
+ * ネストした Mandatory Track Property も検出することを検証する。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内の 0x4000 で MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const data = encodeProperties([{ id: 0x0bn, data: inner }]);
+  assert.throws(() => assertNoMandatoryTrackPropertyInObjectProperties(data), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §12.7:
+ * IMMUTABLE_PROPERTIES の再帰ネストは深さ上限で打ち切り、MalformedTrackError と
+ * することを検証する。最内を非 Mandatory にして深さ上限自体を検証する。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: 8 段のネストは通過し 9 段で MalformedTrackError", () => {
+  const buildNested = (levels: number): Uint8Array => {
+    let nested = encodeProperties([{ id: 0x02n, value: 1n }]);
+    for (let i = 0; i < levels; i++) {
+      nested = encodeProperties([{ id: 0x0bn, data: nested }]);
+    }
+    return nested;
+  };
+  assert.doesNotThrow(() => assertNoMandatoryTrackPropertyInObjectProperties(buildNested(8)));
+  assert.throws(
+    () => assertNoMandatoryTrackPropertyInObjectProperties(buildNested(9)),
+    MalformedTrackError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * Mandatory Track Property を含まない通常の Object Property では throw しないことを検証する。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: 通常の Object Property では throw しない", () => {
+  const data = encodeProperties([
+    { id: 0x02n, value: 10n },
+    { id: 0x0bn, data: new Uint8Array([0x01]) },
+  ]);
+  assert.doesNotThrow(() => assertNoMandatoryTrackPropertyInObjectProperties(data));
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * 不完全な Object Property では検出を打ち切り、PROTOCOL_VIOLATION を送出しない
+ * (寛容契約の維持) ことを検証する。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: 不完全データでは throw しない", () => {
+  // delta + length のみで Value が欠落した切り詰め
+  const truncated = new Uint8Array([0x03, 0x05, 0xaa]);
+  assert.doesNotThrow(() => assertNoMandatoryTrackPropertyInObjectProperties(truncated));
 });
 
 test("decodeProperties: 非 Mandatory 範囲の上限 (0x3FFF) は通過", () => {

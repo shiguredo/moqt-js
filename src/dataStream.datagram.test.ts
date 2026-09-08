@@ -10,9 +10,9 @@ import {
   encodeObjectDatagram,
   decodeObjectDatagram,
 } from "./dataStream";
-import { IncompleteDataError } from "./error";
+import { IncompleteDataError, MalformedTrackError } from "./error";
 import { ObjectStatus } from "./message/types";
-import { appendGreaseObjectProperty } from "./properties";
+import { appendGreaseObjectProperty, encodeProperties } from "./properties";
 import { isGreaseValue } from "./grease";
 import { decodeVarint } from "./varint";
 
@@ -147,6 +147,25 @@ test("ObjectDatagram: Properties バイト列途中でバッファが切れて�
   // objectId + Priority までは揃うが Properties 本体が 2 バイトしかない
   const data = new Uint8Array([0x01, 0x05, 0x0a, 0x03, 0x80, 0x03, 0xaa, 0xbb]);
   assert.throws(() => decodeObjectDatagram(data), IncompleteDataError, "properties");
+});
+
+/**
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む Object は
+ * malformed であり、decodeObjectDatagram が MalformedTrackError を throw する。
+ */
+test("ObjectDatagram: Mandatory Track Property を含む Object Property で MalformedTrackError", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    properties: encodeProperties([{ id: 0x4000n, value: 0n }]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const encoded = encodeObjectDatagram(datagram);
+  assert.throws(() => decodeObjectDatagram(encoded), MalformedTrackError);
 });
 
 const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }> = [

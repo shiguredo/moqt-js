@@ -1003,6 +1003,51 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
   return { properties, complete: true };
 }
 
+// IMMUTABLE_PROPERTIES の再帰ネストの許容深さ
+// draft-ietf-moq-transport-20 §12.7:
+// IMMUTABLE_PROPERTIES は再帰的に IMMUTABLE_PROPERTIES を含んではならない。
+// 悪意ある深いネストでスタックオーバーフロー (RangeError) に至らないよう上限を設ける
+// (filter.ts の MAX_PROPERTY_NESTING_DEPTH と同値)。
+const MAX_OBJECT_PROPERTY_NESTING_DEPTH = 8;
+
+/**
+ * Object Properties に Mandatory Track Property (0x4000-0x7FFF) が含まれないか検証する
+ *
+ * draft-ietf-moq-transport-20 §2.5.1:
+ * "An Object received with a Mandatory Track Property as an Object Property is
+ *  malformed (see Section 2.4.2)."
+ *
+ * decodeObjectPropertiesTolerant でデコードできた Property の ID を確認する。
+ * 不完全・不正な delta / Length では検出を打ち切り、PROTOCOL_VIOLATION は送出しない
+ * (寛容契約を維持する)。
+ *
+ * @throws MalformedTrackError 0x4000-0x7FFF の Mandatory Track Property を検出した場合
+ */
+export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Array): void {
+  assertNoMandatoryTrackPropertyInObjectPropertiesInternal(data, 0);
+}
+
+function assertNoMandatoryTrackPropertyInObjectPropertiesInternal(
+  data: Uint8Array,
+  depth: number,
+): void {
+  if (depth > MAX_OBJECT_PROPERTY_NESTING_DEPTH) {
+    throw new MalformedTrackError("object property nesting depth exceeds maximum");
+  }
+  for (const property of decodeObjectPropertiesTolerant(data).properties) {
+    if (property.id >= 0x4000n && property.id <= 0x7fffn) {
+      throw new MalformedTrackError(
+        `mandatory track property as object property: type 0x${property.id.toString(16)}`,
+      );
+    }
+    // draft-ietf-moq-transport-20 §12.7:
+    // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
+      assertNoMandatoryTrackPropertyInObjectPropertiesInternal(property.data, depth + 1);
+    }
+  }
+}
+
 /**
  * Object Properties バイト列から delivery timeout 値を寛容に抽出する
  *

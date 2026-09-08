@@ -4761,6 +4761,35 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * Malformed Track (Object Property の Mandatory Track Property) を検出した購読を
+   * §2.4.2 に従って cancel する
+   *
+   * draft-ietf-moq-transport-20 §2.4.2:
+   * "it MUST cancel any corresponding subscription or fetches for that Track
+   *  from that publisher"
+   * データストリームを打ち切り、購読の bidi リクエストストリームを cancel する。
+   * セッションは閉じない (購読単位の失敗として扱う)。
+   */
+  private async handleMalformedSubgroupTrack(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    header: import("./dataStream").SubgroupHeader,
+    subscribers: SubscriberImpl[],
+    error: MalformedTrackError,
+  ): Promise<void> {
+    for (const subscriber of subscribers.slice()) {
+      await bidi.bidiCancelSubscriptionWithError(
+        this as unknown as SessionInternal,
+        subscriber,
+        error,
+      );
+    }
+    await cancelStreamQuiet(
+      reader,
+      `malformed track: trackAlias=${header.trackAlias}, reason=${error.message}`,
+    );
+  }
+
+  /**
    * Subgroup ストリームを処理する
    *
    * draft-ietf-moq-transport-20 §11.4.2:
@@ -4894,16 +4923,26 @@ export class SessionImpl implements Session {
         buffer = next;
       }
 
-      const processResult = this.processSubgroupObjects(
-        buffer,
-        subscribers,
-        header,
-        previousObjectId,
-        resolvedSubgroupId,
-      );
-      buffer = processResult.remainingBuffer;
-      previousObjectId = processResult.previousObjectId;
-      resolvedSubgroupId = processResult.resolvedSubgroupId;
+      try {
+        const processResult = this.processSubgroupObjects(
+          buffer,
+          subscribers,
+          header,
+          previousObjectId,
+          resolvedSubgroupId,
+        );
+        buffer = processResult.remainingBuffer;
+        previousObjectId = processResult.previousObjectId;
+        resolvedSubgroupId = processResult.resolvedSubgroupId;
+      } catch (err) {
+        if (err instanceof MalformedTrackError) {
+          // draft-ietf-moq-transport-20 §2.4.2:
+          // malformed track を検出した購読を cancel し、セッションは閉じない
+          await this.handleMalformedSubgroupTrack(reader, header, subscribers, err);
+          return;
+        }
+        throw err;
+      }
 
       if (result.done) break;
     }
