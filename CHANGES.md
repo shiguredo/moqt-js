@@ -103,6 +103,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] FETCH の DATAGRAM フラグで Subgroup ID を消費しないようにする
+  - draft-ietf-moq-transport-20 §11.4.4.1 に基づき、DATAGRAM ビットが立つ Fetch Object は Subgroup ID フィールドを消費しない
+  - 旧挙動では下位 2 ビットが SUBGROUP_PRESENT のとき Subgroup ID vi64 を 1 個余分に消費し、後続フィールドがずれる
+  - @voluntas
 - [FIX] LOC 単体デコーダの前段 varint 不完全のエラー型を統一する
   - 6 種の単体デコーダの前段不完全を ProtocolViolationError に統一する
   - @voluntas
@@ -568,7 +572,7 @@
   - draft-ietf-moq-transport-18 §10.5 に基づき、`startTracksStreamLoop` で Track Properties 非空時に PROTOCOL_VIOLATION
   - @voluntas
 - [ADD] Fetch Object Fields の DATAGRAM ビット (0x40) 対応を実装する (#0242)
-  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、DATAGRAM フラグ時に Subgroup ID 下位ビットを無視し Subgroup ID vi64 を読み飛ばす
+  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、DATAGRAM フラグ時に Serialization Flags の下位 2 ビットを無視する
   - `encodeFetchObjectFields` で DATAGRAM 時に Subgroup ID フィールドをエンコードしない
   - `createFirstFetchObjectFlags` に Datagram 用パラメータを追加する
   - @voluntas

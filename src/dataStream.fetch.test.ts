@@ -1871,13 +1871,13 @@ test("FetchObjectFields: DATAGRAM (0x40) の先頭オブジェクトを正しく
 });
 
 /**
- * DATAGRAM + SUBGROUP_PRESENT (0x43): wire 上の Subgroup ID vi64 を読み飛ばし、
- * subgroupId = 0n を返すことを検証する。
+ * DATAGRAM + SUBGROUP_PRESENT (0x5F): DATAGRAM ビットが立つ Object は Subgroup ID を
+ * 持たないため、下位 2 ビットが SUBGROUP_PRESENT でも Subgroup ID vi64 を消費せず、
+ * 後続の Object ID / Priority / payload length が正しくデコードされることを検証する。
  *
- * ワイヤーフォーマット: flags, group_id, subgroup_id, object_id, priority, payload_length
- * DATAGRAM+SUBGROUP_PRESENT なので group_id の後の subgroup_id_vi64 は読み飛ばされる。
+ * ワイヤフォーマット: flags, group_id, object_id, priority, payload_length
  */
-test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT (0x43) で Subgroup ID vi64 を読み飛ばす", () => {
+test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT で Subgroup ID を消費せず後続フィールドを読む", () => {
   const flags =
     FetchSerializationFlags.DATAGRAM |
     FetchSerializationFlags.SUBGROUP_PRESENT |
@@ -1885,23 +1885,19 @@ test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT (0x43) で Subgroup ID vi64 �
     FetchSerializationFlags.OBJECT_ID_PRESENT |
     FetchSerializationFlags.PRIORITY_PRESENT;
 
-  // wire: [flags][groupId=5][subgroupId_vi64=99][objectId=10][priority=64][payloadLength=50]
-  const subgroupIdBytes = encodeVarint(99n);
-  const data = new Uint8Array(1 + 1 + subgroupIdBytes.length + 3);
-  data[0] = flags;
-  data[1] = 5; // groupId
-  data.set(subgroupIdBytes, 2);
-  data[2 + subgroupIdBytes.length] = 10; // objectId
-  data[2 + subgroupIdBytes.length + 1] = 64; // priority
-  data[2 + subgroupIdBytes.length + 2] = 50; // payloadLength
+  // wire: [flags][groupId=5][objectId=10][priority=64][payloadLength=50]
+  // DATAGRAM ビットが立つため Subgroup ID フィールドは存在しない
+  const data = new Uint8Array([flags, 5, 10, 64, 50]);
 
-  const [decoded] = decodeFetchObjectFields(data, null, 0, true);
+  const [decoded, consumed] = decodeFetchObjectFields(data, null, 0, true);
 
   assert.equal(decoded.groupId, 5n);
-  assert.equal(decoded.subgroupId, 0n); // 読み飛ばしたので 0n
+  assert.equal(decoded.subgroupId, 0n);
   assert.equal(decoded.objectId, 10n);
   assert.equal(decoded.publisherPriority, 64);
   assert.equal(decoded.payloadLength, 50n);
+  // Subgroup ID フィールドを消費しないため、消費バイト数はワイヤ長と一致する
+  assert.equal(consumed, data.length);
 });
 
 /**
