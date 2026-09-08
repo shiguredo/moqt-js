@@ -44,7 +44,7 @@ import {
   type Property,
 } from "./properties";
 import { isGreaseValue } from "./grease";
-import { IncompleteDataError, ProtocolViolationError } from "./error";
+import { ProtocolViolationError } from "./error";
 import { buildPublishTrackProperties } from "./session/params";
 
 // キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, SID=0)
@@ -258,12 +258,24 @@ test("decodeVideoConfig: 切り詰めワイヤで ProtocolViolationError を送�
 });
 
 // draft-ietf-moq-loc-04 §2.3.2.1:
-// ID / Length の varint 自体が不完全な切り詰めは IncompleteDataError になる。
-test("decodeVideoConfig: varint 不完全な切り詰めで IncompleteDataError を送出する", () => {
+// 前段 varint の不完全入力も ProtocolViolationError に統一する。
+test("decodeVideoConfig: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   // 空入力・ID のみ・Length の varint 途中切断はいずれも不完全入力である
-  assert.throws(() => decodeVideoConfig(new Uint8Array([])), IncompleteDataError);
-  assert.throws(() => decodeVideoConfig(new Uint8Array([0x0d])), IncompleteDataError);
-  assert.throws(() => decodeVideoConfig(new Uint8Array([0x0d, 0x80])), IncompleteDataError);
+  assert.throws(
+    () => decodeVideoConfig(new Uint8Array([])),
+    ProtocolViolationError,
+    /incomplete VIDEO_CONFIG id/,
+  );
+  assert.throws(
+    () => decodeVideoConfig(new Uint8Array([0x0d])),
+    ProtocolViolationError,
+    /incomplete VIDEO_CONFIG length/,
+  );
+  assert.throws(
+    () => decodeVideoConfig(new Uint8Array([0x0d, 0x80])),
+    ProtocolViolationError,
+    /incomplete VIDEO_CONFIG length/,
+  );
 });
 
 // draft-ietf-moq-loc-04 §2.3.2.1:
@@ -305,12 +317,24 @@ test("decodeAudioConfig: 切り詰めワイヤで ProtocolViolationError を送�
 });
 
 // draft-ietf-moq-loc-04 §2.3.3.1:
-// ID / Length の varint 自体が不完全な切り詰めは IncompleteDataError になる。
-test("decodeAudioConfig: varint 不完全な切り詰めで IncompleteDataError を送出する", () => {
+// 前段 varint の不完全入力も ProtocolViolationError に統一する。
+test("decodeAudioConfig: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   // 空入力・ID のみ・Length の varint 途中切断はいずれも不完全入力である
-  assert.throws(() => decodeAudioConfig(new Uint8Array([])), IncompleteDataError);
-  assert.throws(() => decodeAudioConfig(new Uint8Array([0x0f])), IncompleteDataError);
-  assert.throws(() => decodeAudioConfig(new Uint8Array([0x0f, 0x80])), IncompleteDataError);
+  assert.throws(
+    () => decodeAudioConfig(new Uint8Array([])),
+    ProtocolViolationError,
+    /incomplete AUDIO_CONFIG id/,
+  );
+  assert.throws(
+    () => decodeAudioConfig(new Uint8Array([0x0f])),
+    ProtocolViolationError,
+    /incomplete AUDIO_CONFIG length/,
+  );
+  assert.throws(
+    () => decodeAudioConfig(new Uint8Array([0x0f, 0x80])),
+    ProtocolViolationError,
+    /incomplete AUDIO_CONFIG length/,
+  );
 });
 
 // draft-ietf-moq-loc-04 §2.3.3.1:
@@ -600,6 +624,86 @@ test("decodeAudioConfig: 誤 ID 入力で ProtocolViolationError を送出する
   // VIDEO_CONFIG (0x0D) のワイヤを AUDIO_CONFIG として読む
   const wire = encodeVideoConfig(new Uint8Array([0x01, 0x02]));
   assert.throws(() => decodeAudioConfig(wire), ProtocolViolationError, /0x0d, expected 0x0f/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.1:
+// 前段 varint の不完全入力も ProtocolViolationError に統一する。
+test("decodeTimestamp: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
+  assert.throws(
+    () => decodeTimestamp(new Uint8Array([])),
+    ProtocolViolationError,
+    /incomplete TIMESTAMP/,
+  );
+  assert.throws(
+    () => decodeTimestamp(new Uint8Array([0x10])),
+    ProtocolViolationError,
+    /incomplete TIMESTAMP value/,
+  );
+  assert.throws(
+    () => decodeTimestamp(new Uint8Array([0x10, 0x80])),
+    ProtocolViolationError,
+    /incomplete TIMESTAMP value/,
+  );
+});
+
+// draft-ietf-moq-loc-04 §2.3.1.2:
+// 前段 varint の不完全入力も ProtocolViolationError に統一する。
+test("decodeTimescale: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
+  assert.throws(
+    () => decodeTimescale(new Uint8Array([])),
+    ProtocolViolationError,
+    /incomplete TIMESCALE/,
+  );
+  assert.throws(
+    () => decodeTimescale(new Uint8Array([0x08])),
+    ProtocolViolationError,
+    /incomplete TIMESCALE value/,
+  );
+  assert.throws(
+    () => decodeTimescale(new Uint8Array([0x08, 0x80])),
+    ProtocolViolationError,
+    /incomplete TIMESCALE value/,
+  );
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.2:
+// 前段 varint の不完全入力も ProtocolViolationError に統一する。
+test("decodeVideoFrameMarking: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
+  assert.throws(
+    () => decodeVideoFrameMarking(new Uint8Array([])),
+    ProtocolViolationError,
+    /incomplete VIDEO_FRAME_MARKING/,
+  );
+  assert.throws(
+    () => decodeVideoFrameMarking(new Uint8Array([0x09])),
+    ProtocolViolationError,
+    /incomplete VIDEO_FRAME_MARKING length/,
+  );
+  assert.throws(
+    () => decodeVideoFrameMarking(new Uint8Array([0x09, 0x80])),
+    ProtocolViolationError,
+    /incomplete VIDEO_FRAME_MARKING length/,
+  );
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.2:
+// 前段 varint の不完全入力も ProtocolViolationError に統一する。
+test("decodeAudioLevel: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
+  assert.throws(
+    () => decodeAudioLevel(new Uint8Array([])),
+    ProtocolViolationError,
+    /incomplete AUDIO_LEVEL/,
+  );
+  assert.throws(
+    () => decodeAudioLevel(new Uint8Array([0x0c])),
+    ProtocolViolationError,
+    /incomplete AUDIO_LEVEL value/,
+  );
+  assert.throws(
+    () => decodeAudioLevel(new Uint8Array([0x0c, 0x80])),
+    ProtocolViolationError,
+    /incomplete AUDIO_LEVEL value/,
+  );
 });
 
 // decodeVideoConfig / decodeAudioConfig は入力から独立したコピーを返す
