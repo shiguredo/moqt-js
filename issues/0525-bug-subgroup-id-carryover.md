@@ -3,7 +3,7 @@
 - Created: 2026-09-07
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-subgroup-id-carryover
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-08
 
 ## 目的
 
@@ -18,7 +18,7 @@ First-Object-ID 系ヘッダの subgroup で feed が分割されると、2 回�
 
 ## 設計方針
 
-1. `resolvedSubgroupId` を戻り値に含め、呼び出し側で `previousObjectId` と同様に引き継ぐ。
+1. `resolvedSubgroupId` を戻り値に含め、呼び出し側で `previousObjectId` と同様に引き継ぐ。変更対象は `src/session/stream.ts` の `processSubgroupObjects`（戻り値追加と引数受け）に加え、中継 2 層の `src/session/incoming.ts` の `incomingProcessSubgroupObjects` と `src/session.ts` の private ラッパーおよびループ内変数の保持とする。初期値は呼び出し側で保持した値を優先し、未保持時のみ `header.subgroupId` から初期化する（`passed ?? header.subgroupId` 形）。これにより First-Object-ID 系のみが引き継ぎの恩恵を受け、明示型と Subgroup ID = 0 系は従来どおりヘッダ値が優先される。
 
 ## 完了条件
 
