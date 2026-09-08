@@ -26,6 +26,9 @@ import {
   encodeUint8ParameterValue,
   encodeTrackName,
   encodeTrackNamespace,
+  encodeParameterTrackNamespace,
+  getParameterTrackNamespace,
+  trackNamespaceToStrings,
   validateTrackNameSize,
   validateIncludePropertiesValue,
   MAX_TRACK_NAME_SIZE,
@@ -761,6 +764,71 @@ test("decodeMessageParameter: Range Filter の内側 Length 超過で ProtocolVi
 });
 
 /**
+ * draft-ietf-moq-transport-20 §10.2.20 / §2.4.1:
+ * TRACK_NAMESPACE_PREFIX (0x34) の Value は Track Namespace エンコーディング
+ * (Number of Track Namespace Fields + 各フィールドの Length + Value) そのものであり、
+ * 外側 Length を付加しない。固定バイト列で確認する。
+ * 例: namespace = ["live", "sports"] のとき Value は
+ *   0x02 (フィールド数 2) + 0x04 "live" + 0x06 "sports"
+ * となり、ワイヤは Number of Parameters (0x01) + Type Delta (0x34) + Value。
+ */
+test("encodeParameters: TRACK_NAMESPACE_PREFIX は外側 Length なしでエンコードされる", () => {
+  const param = encodeParameterTrackNamespace(createTrackNamespace(["live", "sports"]));
+  const encoded = encodeParameters([param]);
+
+  assert.deepEqual(
+    encoded,
+    new Uint8Array([
+      0x01, // Number of Parameters
+      0x34, // Type Delta (TRACK_NAMESPACE_PREFIX)
+      0x02, // Number of Track Namespace Fields
+      0x04, // Track Namespace Field Length ("live")
+      0x6c,
+      0x69,
+      0x76,
+      0x65,
+      0x06, // Track Namespace Field Length ("sports")
+      0x73,
+      0x70,
+      0x6f,
+      0x72,
+      0x74,
+      0x73,
+    ]),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.2.20 / §2.4.1:
+ * 外側 Length を持たない TRACK_NAMESPACE_PREFIX のワイヤをデコードし、
+ * 消費バイト数がワイヤ長と一致することを検証する (外側 Length を要求しない)。
+ */
+test("decodeMessageParameter: TRACK_NAMESPACE_PREFIX を外側 Length なしでデコードする", () => {
+  const data = new Uint8Array([
+    0x34, // Type Delta (TRACK_NAMESPACE_PREFIX)
+    0x02, // Number of Track Namespace Fields
+    0x04,
+    0x6c,
+    0x69,
+    0x76,
+    0x65,
+    0x06,
+    0x73,
+    0x70,
+    0x6f,
+    0x72,
+    0x74,
+    0x73,
+  ]);
+  const [param, consumed, paramType] = decodeMessageParameter(data, 0, 0n);
+
+  assert.equal(param.type, 0x34);
+  assert.equal(paramType, 0x34n);
+  assert.equal(consumed, data.length);
+  assert.deepEqual(trackNamespaceToStrings(getParameterTrackNamespace(param)), ["live", "sports"]);
+});
+
+/**
  * draft-ietf-moq-transport-20 §10.2.12 (PRIORITY FILTER Parameter):
  * "If a decoded value exceeds 255, the endpoint MUST reject this with
  *  REQUEST_ERROR with error code INVALID_FILTER since Publisher Priority
@@ -1256,5 +1324,15 @@ test("decodeMessageParameter: self-length-prefixed 分岐の Length 宣言超過
   assert.throws(
     () => decodeMessageParameter(truncated, 0, 0n),
     /filter value length exceeds remaining data/,
+  );
+});
+
+test("decodeMessageParameter: track-namespace 分岐の Field Length 宣言超過で ProtocolViolationError", () => {
+  // TRACK_NAMESPACE_PREFIX (0x34) + フィールド数 2 宣言 + Field Length 4 宣言 +
+  // Value 1 バイトの切り詰め。残量検証は decodeTrackNamespace に委譲する
+  const truncated = new Uint8Array([0x34, 0x02, 0x04, 0xaa]);
+  assert.throws(
+    () => decodeMessageParameter(truncated, 0, 0n),
+    /track namespace field length exceeds remaining data/,
   );
 });

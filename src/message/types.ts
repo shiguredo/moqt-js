@@ -222,7 +222,8 @@ export const MessageParameterType = {
    * draft-ietf-moq-transport-20:
    * REQUEST_UPDATE で SUBSCRIBE_NAMESPACE または SUBSCRIBE_TRACKS の
    * Track Namespace Prefix を更新するために使用する。
-   * 値は Track Namespace エンコーディング。
+   * 値は §2.4.1 の Track Namespace エンコーディング (自己区切り) そのもので、
+   * 外側 Length は付加しない。
    * draft-ietf-moq-transport-20 Section 10.2.20
    */
   TRACK_NAMESPACE_PREFIX: 0x34,
