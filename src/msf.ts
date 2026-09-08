@@ -392,6 +392,10 @@ export type CatalogDeltaOperation =
  * wire format は `{"deltaUpdate": [{"op": "...", "tracks": [...]}, ...]}` の
  * array 形式。draft-00 の `deltaUpdate: true + addTracks/removeTracks/cloneTracks`
  * boolean 形式とは互換性が無い (破壊的変更)。
+ *
+ * 未知ルートフィールドは full 側 Catalog と同様に実行時に保持するが、
+ * 型宣言には含めない (full 側と同一の cast 運用)。
+ * 保持は decode → encode の round-trip に限り、apply 結果にはマージしない。
  */
 export interface CatalogDelta {
   /**
@@ -596,6 +600,14 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
   if (delta.generatedAt !== undefined) {
     obj["generatedAt"] = delta.generatedAt;
   }
+  // root level の未知フィールドを保持する（§5 保持解釈。full 側 encodeCatalog と同一方針）。
+  // 内部表現 (deltaUpdate マーカー・operations 配列) は除外する
+  const deltaRecord = delta as unknown as Record<string, unknown>;
+  for (const key of Object.keys(delta)) {
+    if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
+      obj[key] = deltaRecord[key];
+    }
+  }
 
   const json = JSON.stringify(obj);
   return new TextEncoder().encode(json);
@@ -693,6 +705,17 @@ function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
       );
     }
     delta.generatedAt = generatedAt;
+  }
+
+  // §5 parser MUST ignore unknown fields → 検証はしないが full 側と同様に保持する（§5 保持解釈）。
+  // 内部表現 (deltaUpdate マーカー・operations 配列) は wire 名と異なるため除外する。
+  // §5.3 が MUST NOT とするのは version / tracks のみのため、それ以外
+  // (publishTracks 等) は未知として保持する。
+  const deltaRecord = delta as unknown as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
+      deltaRecord[key] = obj[key];
+    }
   }
 
   return delta;
@@ -1179,6 +1202,23 @@ const KNOWN_CATALOG_ROOT_FIELDS: ReadonlySet<string> = new Set([
   "isComplete",
   "publishTracks",
   "initDataList",
+]);
+
+/**
+ * CatalogDelta の既知ルートフィールド名（wire 名・内部表現・防御対象の和集合）。
+ *
+ * wire 名の `deltaUpdate` 配列は内部で `operations` に読み替えるため、
+ * 両方を既知として扱い、未知フィールド保持の対象外にする。
+ * `generatedAt` は両方向の除外に必須である。
+ * `version` / `tracks` は decode で reject する MUST NOT のため、
+ * cast 混入時の wire 漏出も抑止する。
+ */
+const KNOWN_CATALOG_DELTA_ROOT_FIELDS: ReadonlySet<string> = new Set([
+  "deltaUpdate",
+  "operations",
+  "generatedAt",
+  "version",
+  "tracks",
 ]);
 
 /**
@@ -1773,6 +1813,10 @@ function toMsfLocationBigInt(value: unknown, label: string, context: string): bi
  * 未指定の場合のみ一致とする (従来挙動と互換)。
  *
  * §5.1.3: isComplete は一度設定したら削除禁止 (MUST NOT) のため引き継ぐ。
+ *
+ * 存在しない remove は throw する (add 重複・clone 親不存在と同一契約)。
+ * delta 側の未知ルートフィールドは結果にマージしない
+ * (ベース catalog 側の未知のみ引き継ぐ)。
  */
 export function applyCatalogDelta(
   current: Catalog,
@@ -1798,6 +1842,7 @@ export function applyCatalogDelta(
     if (operation.type === "remove") {
       for (const removeTrack of operation.tracks) {
         const targetNs = normalizeNamespace(removeTrack.namespace, catalogNamespace);
+        const before = tracks.length;
         tracks = tracks.filter((track) => {
           if (track.name !== removeTrack.name) {
             return true;
@@ -1805,6 +1850,14 @@ export function applyCatalogDelta(
           const trackNs = normalizeNamespace(track.namespace, catalogNamespace);
           return !namespaceMatches(trackNs, targetNs);
         });
+        // 存在しない remove は typo のため add 重複・clone 親不存在と同様に throw する
+        if (tracks.length === before) {
+          const target =
+            removeTrack.namespace === undefined
+              ? `name='${removeTrack.name}'`
+              : `name='${removeTrack.name}', namespace='${removeTrack.namespace}'`;
+          throw new Error(`invalid catalog delta: remove track not found, ${target}`);
+        }
       }
     } else if (operation.type === "add") {
       tracks = [...tracks, ...operation.tracks];
@@ -1881,7 +1934,9 @@ export function applyCatalogDelta(
     result.initDataList = current.initDataList;
   }
 
-  // root level の未知フィールドをベース catalog から引き継ぐ（§5 保持解釈）
+  // root level の未知フィールドをベース catalog から引き継ぐ（§5 保持解釈）。
+  // delta 側の未知は結果にマージしない (適用は tracks 中心であり、delta 未知の
+  // 引き継ぎ規則は未定義のため。decode → encode の round-trip では保持される)。
   const currentRecord = current as unknown as Record<string, unknown>;
   const resultRecord = result as unknown as Record<string, unknown>;
   for (const key of Object.keys(current)) {

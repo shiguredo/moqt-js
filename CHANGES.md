@@ -99,6 +99,10 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] Catalog delta の適用意味を正す
+  - 未知ルートフィールドを full 側と同様に保持し、round-trip させる
+  - 存在しない remove は add 重複・clone 親不存在と同様に throw する
+  - @voluntas
 - [FIX] devtools Subscriber の catalog 購読が unsubscribe されずに捨てられる問題を修正する
   - 停止・削除時に catalog 購読へ unsubscribe を送出する。二重停止でも例外なく終わる
   - @voluntas

@@ -724,6 +724,37 @@ test("CatalogDelta: clone の round-trip (parentName + parentNamespace)", () => 
   assert.deepStrictEqual(decoded, delta);
 });
 
+test("CatalogDelta: 未知ルートフィールドは decode → encode で round-trip する (§5)", () => {
+  // full 側と同一の保持解釈。未知フィールドは検証せず保持する
+  const raw = {
+    deltaUpdate: [{ op: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
+    generatedAt: 1720367991000,
+    publishTracks: [{ name: "p", packaging: "loc", isLive: true }],
+    customRootField: { foo: "bar" },
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(raw)) as CatalogDelta;
+  assert.deepEqual((decoded as unknown as Record<string, unknown>).customRootField, {
+    foo: "bar",
+  });
+  assert.deepEqual((decoded as unknown as Record<string, unknown>).publishTracks, [
+    { name: "p", packaging: "loc", isLive: true },
+  ]);
+  // 内部表現 operations が wire に漏れず、未知が wire に載ること
+  const wire = JSON.parse(new TextDecoder().decode(encodeCatalogDelta(decoded))) as Record<
+    string,
+    unknown
+  >;
+  assert.isFalse("operations" in wire);
+  assert.deepEqual(wire.customRootField, { foo: "bar" });
+  const redecoded = decodeCatalogMessage(encodeCatalogDelta(decoded)) as CatalogDelta;
+  assert.deepEqual((redecoded as unknown as Record<string, unknown>).customRootField, {
+    foo: "bar",
+  });
+  assert.isTrue(redecoded.deltaUpdate);
+  assert.strictEqual(redecoded.operations.length, 1);
+  assert.strictEqual(redecoded.generatedAt, 1720367991000);
+});
+
 test("CatalogDelta: 同一 op の複数出現を許可する (draft-01 §5.1.6)", () => {
   // draft-00 では JSON キー重複制約で禁止されていたが、draft-01 では配列形式のため許可。
   const delta: CatalogDelta = {
@@ -911,6 +942,63 @@ test("applyCatalogDelta: clone の parentName が見つからないと throw", (
     ],
   };
   assert.throws(() => applyCatalogDelta(current, delta), /clone track parent not found/);
+});
+
+test("applyCatalogDelta: 存在しない remove は throw する", () => {
+  // add 重複・clone 親不存在と同一契約 (plain Error)。typo を検出する
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "typo" }] }],
+  };
+  assert.throws(() => applyCatalogDelta(current, delta), /remove track not found/);
+});
+
+test("applyCatalogDelta: namespace 不一致の remove は throw する", () => {
+  // 正規化比較のため、名前一致でも namespace 不一致は不存在になる
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "v", namespace: "wrong" }] }],
+  };
+  assert.throws(() => applyCatalogDelta(current, delta), /remove track not found/);
+});
+
+test("applyCatalogDelta: 同名異 namespace は catalogNamespace 解決で削除する", () => {
+  // 既存の明示 namespace 削除と異なり、省略 namespace の解決経路を検証する
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [
+      { name: "v", packaging: "loc", isLive: true, namespace: "room1" },
+      { name: "v", packaging: "loc", isLive: true, namespace: "room2" },
+    ],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "v" }] }],
+  };
+  const result = applyCatalogDelta(current, delta, { catalogNamespace: "room1" });
+  assert.strictEqual(result.tracks.length, 1);
+  assert.strictEqual(result.tracks[0].namespace, "room2");
+});
+
+test("applyCatalogDelta: 同一 op 内の二重 remove は 2 回目で throw する", () => {
+  // 逐次適用のため、1 回目で消えた track の 2 回目は不存在になる
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "remove", tracks: [{ name: "v" }, { name: "v" }] }],
+  };
+  assert.throws(() => applyCatalogDelta(current, delta), /remove track not found/);
 });
 
 test("applyCatalogDelta: isComplete を引き継ぐ (§5.1.3 remove のみ許容)", () => {
@@ -1132,6 +1220,22 @@ test("applyCatalogDelta: 未知 root field をベース catalog から引き継�
   };
   const result = applyCatalogDelta(current, delta);
   assert.strictEqual((result as unknown as Record<string, unknown>).customRootField, "kept");
+  assert.strictEqual(result.tracks.length, 2);
+});
+
+test("applyCatalogDelta: delta 側の未知 root field は結果にマージしない", () => {
+  // ベース側の未知のみ引き継ぎ、delta 側の未知は decode → encode でのみ保持する
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+  };
+  const delta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
+    customRootField: { foo: "bar" },
+  } as unknown as CatalogDelta;
+  const result = applyCatalogDelta(current, delta);
+  assert.isFalse("customRootField" in result);
   assert.strictEqual(result.tracks.length, 2);
 });
 
