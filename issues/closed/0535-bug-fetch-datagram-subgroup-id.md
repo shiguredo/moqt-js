@@ -1,7 +1,7 @@
 # FETCH の DATAGRAM フラグで Subgroup ID を読み飛ばさない
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-fetch-datagram-subgroup-id
 - Polished: 2026-09-08
 
@@ -37,3 +37,12 @@ draft-ietf-moq-transport-20 §11.4.4.1 の MUST に適合させる。DATAGRAM �
 - `FetchSerializationFlags`
 - `issues/closed/0242-draft-18-add-fetch-datagram-flag-subgroup-id.md`（反転対象の先行判断）
 - `CHANGES.md` の 0242 エントリ
+
+## 解決方法
+
+- `src/dataStream.ts` の `decodeFetchSubgroupId` から「DATAGRAM + SUBGROUP_PRESENT で Subgroup ID vi64 を読み飛ばす」処理を削除し、DATAGRAM ビットが立つ場合は下位 2 ビットの値に関わらず 1 バイトも消費せず `subgroupId = 0n` を返すようにした。
+- `src/dataStream.fetch.test.ts` の旧挙動を固定していたテストを、DATAGRAM + SUBGROUP_PRESENT のワイヤで Subgroup ID を消費せず Object ID / Priority / payload length を復元できるテストに反転した。`consumed === data.length` も検証する。
+- `src/dataStream.prop.ts` に DATAGRAM 先頭オブジェクトの PBT を追加し、下位 2 ビットを 0〜3 で振って `subgroupId = 0n` とラウンドトリップを検証する。
+- `src/dataStream.ts` の JSDoc / コメントを §11.4.4.1 の原文に合わせ、`FetchSerializationFlags.DATAGRAM` のコメントを「Subgroup ID フィールドが存在しない」と正確化した。
+- `CHANGES.md` の `## develop` に `[FIX]` を追記し、0242 の `[ADD]` エントリの「Subgroup ID vi64 を読み飛ばす」を「Serialization Flags の下位 2 ビットを無視する」に修正した。
+- 検証: `vp check` / `tsc --noEmit` / `vp test run`（1805 tests）が通る。

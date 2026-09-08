@@ -74,6 +74,46 @@ test("FetchObjectFields: Ascending 先頭オブジェクトの encode→decode �
 });
 
 /**
+ * draft-ietf-moq-transport-20 §11.4.4.1:
+ * DATAGRAM ビットが立つ先頭オブジェクトの encode→decode がラウンドトリップし、
+ * Subgroup ID フィールドを消費しない (subgroupId = 0n) ことを検証する。
+ */
+test("FetchObjectFields: DATAGRAM 先頭オブジェクトの encode→decode がラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      firstFetchObjectFieldsArb,
+      fc.constantFrom(0, 1, 2, 3),
+      (original, subgroupBits) => {
+        // DATAGRAM では下位 2 ビットの値に関わらず Subgroup ID を持たない
+        const datagram: FetchObjectFields = {
+          ...original,
+          serializationFlags:
+            createFirstFetchObjectFlags(
+              (original.serializationFlags & FetchSerializationFlags.PROPERTIES_PRESENT) !== 0,
+              true,
+            ) | subgroupBits,
+        };
+        const encoded = encodeFetchObjectFields(datagram, false, null, GroupOrder.ASCENDING);
+        const [decoded, consumed] = decodeFetchObjectFields(
+          encoded,
+          null,
+          0,
+          true,
+          GroupOrder.ASCENDING,
+        );
+
+        assert.equal(consumed, encoded.length);
+        assert.equal(decoded.groupId, datagram.groupId);
+        assert.equal(decoded.subgroupId, 0n);
+        assert.equal(decoded.objectId, datagram.objectId);
+        assert.equal(decoded.publisherPriority, datagram.publisherPriority);
+        assert.equal(decoded.payloadLength, datagram.payloadLength);
+      },
+    ),
+  );
+});
+
+/**
  * Ascending Group Order で複数オブジェクトの encode→decode がラウンドトリップすることを検証する。
  * オブジェクト 1: 先頭オブジェクト
  * オブジェクト 2: Group ID が増加するオブジェクト
