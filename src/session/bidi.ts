@@ -35,6 +35,8 @@ import {
   decodeFillParameters,
   decodeGoawayPayload,
   decodeLocationFilterParameter,
+  decodeRangeFilter,
+  rangeFilterTypeOf,
   decodePublishDonePayload,
   decodePublishStateNotifyPayload,
   decodeRequestErrorPayload,
@@ -1756,6 +1758,69 @@ function registerRawFillFetchTarget(
   });
 }
 
+/**
+ * raw FILL_PARAMETERS の送信前検証と合算用データの準備
+ *
+ * - 重複検査: draft-ietf-moq-transport-20 §10.2 / §10.2.15
+ * - 内側デコード検証: §5.1.2 / §10.2.15
+ * - 上限合算用の内側 Range 取り出し: §10.3.1.6 / §5.1.4
+ * いずれも pendingRequestUpdate.set / fillFetchTargets.set より前で失敗させる
+ * (登録後の throw はエントリ残留を生むため)。重複検査を内側検証より前に置き、
+ * 二重不正入力では重複エラーを優先する。
+ * デコード結果は関連付け登録で再利用する。合算用の内側 Range 取り出しは
+ * decodeFillParameters がデコード済み Range を返さないため再デコードする
+ * (検証済みのため throw しない前提)。
+ *
+ * @throws InvalidFilterError 重複時・内側不正時
+ */
+function prepareRawFillForUpdate(options: RequestUpdateOptions): {
+  decodedRawFillInners: Parameter[][];
+  rawFillInnerRanges: RangeFilterSpec[];
+  mergedFillRanges: RangeFilterSpec[];
+} {
+  const rawFillParameters = (options.parameters ?? []).filter(
+    (param) => param.type === MessageParameterType.FILL_PARAMETERS,
+  );
+  const mergedFillCount = rawFillParameters.length + (options.fill !== undefined ? 1 : 0);
+  if (mergedFillCount >= 2) {
+    throw new InvalidFilterError(
+      `duplicate FILL_PARAMETERS in REQUEST_UPDATE: got ${mergedFillCount}, expected at most 1`,
+    );
+  }
+
+  const decodedRawFillInners: Parameter[][] = [];
+  for (const [index, rawFillParameter] of rawFillParameters.entries()) {
+    try {
+      decodedRawFillInners.push(decodeFillParameters(rawFillParameter));
+    } catch (error) {
+      throw new InvalidFilterError(
+        `invalid raw FILL_PARAMETERS[${index}] in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  // draft-ietf-moq-transport-20 §10.3.1.6:
+  // raw FILL 内側の Range Filters (0x25-0x28) を上限合算用に取り出す。
+  // 範囲は decodeFillParameters 側と一致させること
+  // (§10.2.15 の Table 6 に Range 系の型が追加された場合は両方を更新する)。
+  // 内側の除去は decodeFillParameters が拒否済みのため、ここでは数え上げのみ行う
+  const rawFillInnerRanges: RangeFilterSpec[] = [];
+  for (const inner of decodedRawFillInners) {
+    for (const param of inner) {
+      if (param.type >= 0x25 && param.type <= 0x28) {
+        rawFillInnerRanges.push(decodeRangeFilter(rangeFilterTypeOf(param.type), param.value)[0]);
+      }
+    }
+  }
+
+  // 型付き fill 内側と raw FILL 内側の合算 (購読単位の上限・in-flight 用)
+  const mergedFillRanges: RangeFilterSpec[] = [
+    ...(options.fill?.rangeFilters ?? []),
+    ...rawFillInnerRanges,
+  ];
+  return { decodedRawFillInners, rawFillInnerRanges, mergedFillRanges };
+}
+
 export async function bidiSendRequestUpdate(
   session: BidiSessionInternal,
   subscriber: SubscriberImpl,
@@ -1792,6 +1857,10 @@ export async function bidiSendRequestUpdate(
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
 
+  // raw FILL の重複検査・内側検証・合算準備は登録より前に行う。
+  const { decodedRawFillInners, rawFillInnerRanges, mergedFillRanges } =
+    prepareRawFillForUpdate(options);
+
   // draft-ietf-moq-transport-20 §10.3.1.6 (MAX FILTER RANGES):
   // 「limits the peer's total number of Ranges (Start/End pairs) allowed
   //  concurrently in all Range filter Section 5.1.4 parameters for a given
@@ -1801,9 +1870,11 @@ export async function bidiSendRequestUpdate(
   //  for a given subscription or fetch」とある。
   // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみ
   // チェックする (マージ結果には remove エントリが含まれない)。
-  // fill 内側の Range Filters も購読単位の上限に含める。
+  // fill 内側の Range Filters も購読単位の上限に含める
+  // (型付き fill 内側と raw FILL 内側の合算。仕様のみからは確定しないため、
+  // 型付き現行実装との一貫性で合算する保守的な加算である)。
   const newOuterRanges = options.rangeFilters ?? [];
-  const newFillRanges = options.fill?.rangeFilters ?? [];
+  const newFillRanges = mergedFillRanges;
   if (newOuterRanges.length > 0 || newFillRanges.length > 0) {
     // ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §10.3.1.6 により送信禁止。
     // 削除のみの update (マージ後が空) でも送信してはならないため、
@@ -1858,42 +1929,9 @@ export async function bidiSendRequestUpdate(
     }
   }
 
-  // draft-ietf-moq-transport-20 §10.2 / §10.2.15:
-  // FILL_PARAMETERS (0x23) の重複送信は送信側 MUST NOT 違反になるため、
-  // raw と型付き指定分を含めた合算で 2 件以上になる場合は送信前に拒否する。
-  // pendingRequestUpdate.set / fillFetchTargets.set より前、かつ
-  // raw 内側デコード検証より前に配置し、二重不正入力では重複エラーを優先する。
-  const rawFillParameters = (options.parameters ?? []).filter(
-    (param) => param.type === MessageParameterType.FILL_PARAMETERS,
-  );
-  const mergedFillCount = rawFillParameters.length + (options.fill !== undefined ? 1 : 0);
-  if (mergedFillCount >= 2) {
-    throw new InvalidFilterError(
-      `duplicate FILL_PARAMETERS in REQUEST_UPDATE: got ${mergedFillCount}, expected at most 1`,
-    );
-  }
-
-  // draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
-  // 手組みの raw FILL_PARAMETERS (0x23) 内側も型付き fill 経路と同じ
-  // デコード検証の対象にする。内側 LOCATION_FILTER の End Group 超過は
-  // §5.1.2 の MUST が内側にも適用されるため拒否する。重複検査で単一に
-  // 絞られるため、ここには高々 1 件が到達する。内側全体のデコード検証のため、
-  // End Group 以外の内側不正も送信前に InvalidFilterError として拒否する
-  // 副作用を持つ。§10.2.15 の Table 6 に型が追加された場合は
-  // 内側デコーダ側の更新に追従する。
-  // pendingRequestUpdate.set より前で失敗させる
-  // (登録後の throw はエントリ残留を生むため)。
-  // デコード結果は後段の関連付け登録で再利用する (二重デコード防止)。
-  const decodedRawFillInners: Parameter[][] = [];
-  for (const [index, rawFillParameter] of rawFillParameters.entries()) {
-    try {
-      decodedRawFillInners.push(decodeFillParameters(rawFillParameter));
-    } catch (error) {
-      throw new InvalidFilterError(
-        `invalid raw FILL_PARAMETERS[${index}] in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
+  // draft-ietf-moq-transport-20 §10.2 / §10.2.15 の重複検査と
+  // §5.1.2 / §10.2.15 の内側デコード検証は、上限検証より前の配置で
+  // 実行済みである (戻り値の decodedRawFillInners 等を再利用する)。
 
   const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
@@ -1988,8 +2026,10 @@ export async function bidiSendRequestUpdate(
       // (省略時は undefined = 不変)。
       locationFilter: sendLocationFilter,
       // draft-ietf-moq-transport-20 §10.3.1.6:
-      // 購読単位の上限検証に fill 内側も含めるため保持する。
-      fillRangeFilters: options.fill?.rangeFilters,
+      // 購読単位の上限検証に fill 内側も含めるため保持する
+      // (型付き fill 内側と raw FILL 内側の合算。raw なしでは従来どおり)。
+      fillRangeFilters:
+        rawFillInnerRanges.length === 0 ? options.fill?.rangeFilters : mergedFillRanges,
     });
   });
   // write in-flight 中に GOAWAY / REQUEST_ERROR / セッション close が
@@ -2013,7 +2053,7 @@ export async function bidiSendRequestUpdate(
     // 単一の raw FILL_PARAMETERS の fill 要求も同一キーで関連付ける。
     // 複数件・型付き併用時は重複検査が先に拒否するため、
     // ここには単一のみ到達する。内側は検証済みのため再デコードしない。
-    const decodedSingle = rawFillParameters.length === 1 ? decodedRawFillInners[0] : undefined;
+    const decodedSingle = decodedRawFillInners[0];
     if (decodedSingle !== undefined) {
       registerRawFillFetchTarget(session, subscriber, updateRequestId, decodedSingle);
     }

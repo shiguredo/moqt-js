@@ -29,6 +29,8 @@ import {
   encodeParameters,
   decodeFillParameters,
   encodeFillParameters,
+  encodeRangeFilter,
+  type Parameter,
 } from "../message";
 import { buildFillParameters } from "./params";
 import {
@@ -7637,4 +7639,237 @@ test("bidiSendRequestUpdate: FILL なしでは関連付けを登録しない", a
   await updatePromise;
 
   assert.equal(session.fillFetchTargets.size, 0);
+});
+
+/**
+ * raw FILL 内側の Range Filter を手組みするテスト用ヘルパー
+ */
+function buildRawFillWithRanges(ranges: { start: bigint; end: bigint }[]): Parameter {
+  const inner = encodeParameters([
+    {
+      type: MessageParameterType.SUBGROUP_FILTER,
+      value: encodeRangeFilter({ type: "subgroup", setId: 0, ranges }),
+    },
+  ]);
+  return { type: MessageParameterType.FILL_PARAMETERS, value: inner };
+}
+
+/**
+ * draft-ietf-moq-transport-20 §10.3.1.6:
+ * raw FILL 内側 Range が上限検証に含まれ、超過時は送信前に
+ * throw することを検証する。
+ */
+test("bidiSendRequestUpdate: raw FILL 内側 Range の上限超過は throw する", async () => {
+  // createBidiSession の peerMaxFilterRanges は 2 のため、3 Ranges で超過する
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [
+        buildRawFillWithRanges([
+          { start: 0n, end: 1n },
+          { start: 3n, end: 4n },
+          { start: 5n, end: 6n },
+        ]),
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.3.1.6:
+ * in-flight 中の raw FILL 内側 Range も上限合算に含めることを検証する。
+ */
+test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の場合は throw する", async () => {
+  // createBidiSession の peerMaxFilterRanges は 2 のため、2 + 1 で超過する
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  // 1 件目の raw FILL 更新を in-flight のまま残す (2 Ranges)
+  const firstPromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [
+      buildRawFillWithRanges([
+        { start: 0n, end: 1n },
+        { start: 3n, end: 4n },
+      ]),
+    ],
+  });
+  firstPromise.catch(() => {});
+
+  // 2 件目の型付き fill 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  const writtenBefore = written.length;
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      fill: {
+        rangeFilters: [{ type: "subgroup", setId: 1, ranges: [{ start: 0n, end: 1n }] }],
+      },
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  // 1 件目の関連付けは残り、2 件目は登録・送信されない
+  assert.equal(session.fillFetchTargets.size, 1);
+  assert.equal(session.pendingRequestUpdate.size, 1);
+  assert.equal(written.length, writtenBefore);
+
+  // 1 件目は未解決のまま残す (テスト終了時に破棄される。
+  // 既存の型付き in-flight テストは resolve するが、こちらは残留検証のため残す)
+  await Promise.resolve();
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.3.1.6:
+ * 上限以内の raw FILL 内側 Range は送信できることを検証する。
+ */
+test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信できる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [buildRawFillWithRanges([{ start: 0n, end: 1n }])],
+  });
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  assert.equal(written.length, 1);
+  assert.equal(session.fillFetchTargets.size, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.3.1.6:
+ * 複数種別の内側 Range Filter も合算されることを検証する。
+ */
+test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算される", async () => {
+  // SUBGROUP 2 件 + PRIORITY 1 件で合計 3 となり上限 2 を超える
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  const inner = encodeParameters([
+    {
+      type: MessageParameterType.SUBGROUP_FILTER,
+      value: encodeRangeFilter({
+        type: "subgroup",
+        setId: 0,
+        ranges: [
+          { start: 0n, end: 1n },
+          { start: 3n, end: 4n },
+        ],
+      }),
+    },
+    {
+      type: MessageParameterType.PRIORITY_FILTER,
+      value: encodeRangeFilter({ type: "priority", setId: 0, ranges: [{ start: 0n, end: 1n }] }),
+    },
+  ]);
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: inner }],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.3.1.6:
+ * 外側 Range と raw FILL 内側 Range の同一メッセージ合算で
+ * 上限超過の場合は throw することを検証する。
+ */
+test("bidiSendRequestUpdate: 外側と raw FILL 内側の合算で上限超過の場合は throw する", async () => {
+  // createBidiSession の peerMaxFilterRanges は 2 のため、外側 1 + 内側 2 で超過する
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+      parameters: [
+        buildRawFillWithRanges([
+          { start: 2n, end: 3n },
+          { start: 4n, end: 5n },
+        ]),
+      ],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-20 §10.3.1.6:
+ * in-flight 中の型付き fill と新規 raw FILL の合計で上限超過の場合は
+ * throw することを検証する (逆方向の合算)。
+ */
+test("bidiSendRequestUpdate: in-flight の型付き fill と raw 新規の合計超過は throw する", async () => {
+  // createBidiSession の peerMaxFilterRanges は 2 のため、2 + 1 で超過する
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  // 1 件目の型付き fill 更新を in-flight のまま残す (2 Ranges)
+  const firstPromise = bidiSendRequestUpdate(session, subscriber, {
+    fill: {
+      rangeFilters: [
+        {
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 3n, end: 4n },
+          ],
+        },
+      ],
+    },
+  });
+  firstPromise.catch(() => {});
+
+  // 2 件目の raw FILL 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  const writtenBefore = written.length;
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [buildRawFillWithRanges([{ start: 5n, end: 6n }])],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("exceeds peer MAX_FILTER_RANGES 2"));
+  assert.equal(session.fillFetchTargets.size, 1);
+  assert.equal(session.pendingRequestUpdate.size, 1);
+  assert.equal(written.length, writtenBefore);
+
+  // 1 件目は未解決のまま残す (テスト終了時に破棄される。
+  // 既存の型付き in-flight テストは resolve するが、こちらは残留検証のため残す)
+  await Promise.resolve();
 });
