@@ -1,7 +1,7 @@
 # devtools Publisher が h264 / h265 選択時に Catalog へ av1 用 codec 文字列を誤記する
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-devtools-catalog-codec
 - Polished: 2026-09-06
 
@@ -24,3 +24,10 @@ h264 で publish するとエンコーダ設定は `avc1.42001f` なのに Catal
 
 - h264 選択時に Catalog の `codec` が `avc1.42001f`、h265 選択時に `hvc1.1.6.L93.B0` になること (完全一致)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `devtools/src/utils/codec.ts` に `getCatalogCodec` を新設し、`getEncoderConfig` と同一の対応表にした
+- `devtools/src/hooks/usePublisher.ts` の Catalog 生成を `getCatalogCodec` に置き換えた
+- `devtools/src/utils/codec.test.ts` に完全一致と対応表不変のテスト 2 件を追加した。h264 / h265 の疎通確認は `0513` に委ねる
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

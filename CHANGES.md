@@ -99,6 +99,9 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] devtools Publisher の h264 / h265 選択時の Catalog codec 誤記を修正する
+  - Catalog の codec 文字列をエンコーダ設定と一致させる (h264 は avc1.42001f、h265 は hvc1.1.6.L93.B0)
+  - @voluntas
 - [FIX] Catalog 取得失敗後の状態 hygiene を正す
   - 受信失敗後の遅延オブジェクトを無害化し、 catalog 更新と onCatalog 発火を止める
   - session.subscribe 失敗時にフェーズ状態 (進行中フラグ・バッファ・Location) を即時掃除する
