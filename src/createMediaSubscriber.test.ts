@@ -2,12 +2,15 @@
  * MediaSubscriber の単体テスト
  *
  * processCatalogPayload / filterPendingCatalogObjects / resolveAuthorizationToken の
- * 純関数ロジックと、復号フレーム破棄の所有権 (handleVideoDecodedData /
- * handleAudioDecodedData) を検証する。
+ * 純関数ロジック、復号フレーム破棄の所有権 (handleVideoDecodedData /
+ * handleAudioDecodedData)、Catalog 取得失敗後の hygiene を検証する。
  */
 
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
+import type { Session } from "./session";
+import type { Subscriber } from "./subscriber";
+import type { Fetcher } from "./fetcher";
 import { encodeCatalog, encodeCatalogDelta, type Catalog, type CatalogDelta } from "./msf";
 import {
   filterPendingCatalogObjects,
@@ -15,6 +18,7 @@ import {
   resolveAuthorizationToken,
 } from "./createMediaSubscriber";
 import { type MoqtObject } from "./dataStream";
+import type { Location } from "./message";
 import { AuthorizationTokenAliasType, type AuthorizationToken } from "./message/authorizationToken";
 
 /** テスト用の最小フルカタログ */
@@ -500,4 +504,196 @@ test("handleAudioDecodedData: 音声再生開始の失敗時も onError 通知�
 
   assert.equal(errors.length, 1);
   assert.isTrue(closed);
+});
+
+/**
+ * Catalog 取得失敗後の hygiene 検証用の制御口
+ *
+ * subscribeCatalog を短い実時間 timeout で駆動し、失敗後の扱いを検証する。
+ */
+interface SubscriberCatalogControl {
+  session: Session | null;
+  catalogFetchInProgress: boolean;
+  pendingCatalogObjects: MoqtObject[];
+  catalogFetchLastLocation: Location | null;
+  catalogResolve: ((catalog: Catalog) => void) | null;
+  catalogTimer: ReturnType<typeof setTimeout> | null;
+  catalogReceiveFailed: boolean;
+  subscribeCatalog(timeoutMs?: number): Promise<void>;
+}
+
+/**
+ * Catalog 取得用の最小セッション
+ *
+ * live / FETCH の object コールバックを捕捉し、遅延オブジェクトを注入できる。
+ * subscribe / fetch の引数は実シグネチャで拘束し、返値のみ最小形状にする。
+ */
+function createCatalogTestSession(hooks: { subscribeError?: Error } = {}): {
+  session: Session;
+  liveObject: (obj: MoqtObject) => void;
+  fetchObject: (obj: MoqtObject) => void;
+  fetchEnd: () => void;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  let liveObject: (obj: MoqtObject) => void = () => {};
+  let fetchObject: (obj: MoqtObject) => void = () => {};
+  let fetchEnd: () => void = () => {};
+  const session = {
+    subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
+      calls.push("subscribe");
+      if (hooks.subscribeError) {
+        throw hooks.subscribeError;
+      }
+      liveObject = args[2].object;
+      return {} as Subscriber;
+    },
+    fetch: (...args: Parameters<Session["fetch"]>): Promise<Fetcher> => {
+      calls.push("fetch");
+      fetchObject = args[3].object;
+      const end = args[3].end;
+      if (end) {
+        fetchEnd = end;
+      }
+      // 未決着のままにして FETCH 終了競合を起こさない (意図的な放置)
+      return new Promise<never>(() => {});
+    },
+  } as unknown as Session;
+  return {
+    session,
+    liveObject: (obj) => liveObject(obj),
+    fetchObject: (obj) => fetchObject(obj),
+    fetchEnd: () => fetchEnd(),
+    calls,
+  };
+}
+
+/**
+ * 遅延注入テストと成功テストで共用する非空 catalog
+ */
+function makeVideoCatalog(): Catalog {
+  return makeCatalog([{ name: "video", packaging: "loc", isLive: true }]);
+}
+
+/**
+ * 実時間待機用のヘルパー (タイマー副作用待ち)
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), ms);
+  });
+}
+
+test("タイムアウト reject 後に遅延オブジェクトが届いても catalog は更新されない", async () => {
+  // 失敗後の遅延 catalog が receivedCatalog 更新と onCatalog 発火を起こさないこと。
+  // 10 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  const catalogs: Catalog[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onCatalog: (catalog) => {
+        catalogs.push(catalog);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchObject, calls } = createCatalogTestSession({});
+  control.session = session;
+
+  let thrown: unknown = null;
+  try {
+    await control.subscribeCatalog(10);
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof Error);
+  assert.match((thrown as Error).message, /catalog receive timeout/);
+  // SUBSCRIBE 後に FETCH の順序で呼ばれていること
+  assert.deepEqual(calls, ["subscribe", "fetch"]);
+  // フェーズ状態が掃除されていること
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.equal(control.pendingCatalogObjects.length, 0);
+  assert.isNull(control.catalogFetchLastLocation);
+  assert.isNull(control.catalogResolve);
+  assert.isNull(control.catalogTimer);
+  assert.isTrue(control.catalogReceiveFailed);
+
+  // 遅延オブジェクトが届いても更新・発火しないこと
+  const lateObject = { ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) };
+  liveObject(lateObject);
+  fetchObject(lateObject);
+  assert.isNull(subscriber.catalog);
+  assert.equal(catalogs.length, 0);
+  // FETCH 側の Location 記録も復活しないこと
+  assert.isNull(control.catalogFetchLastLocation);
+});
+
+test("session.subscribe throw 後に即時掃除されタイマー副作用がない", async () => {
+  // throw 直後にフェーズ状態が掃除され、後続のタイマー発火で副作用がないこと
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const subscribeError = new Error("subscribe failed");
+  const { session } = createCatalogTestSession({ subscribeError });
+  control.session = session;
+
+  let thrown: unknown = null;
+  try {
+    await control.subscribeCatalog(10);
+  } catch (error) {
+    thrown = error;
+  }
+  assert.strictEqual(thrown, subscribeError);
+  // 即時掃除されていること
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.equal(control.pendingCatalogObjects.length, 0);
+  assert.isNull(control.catalogFetchLastLocation);
+  assert.isNull(control.catalogResolve);
+  assert.isNull(control.catalogTimer);
+
+  // タイマー発火待ち後も副作用がないこと。
+  // 30 ms は timeout (10 ms) を上回る実時間待機 (fake timers 禁止のため実時間で駆動する)
+  await sleep(30);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.isFalse(control.catalogReceiveFailed);
+  assert.isNull(subscriber.catalog);
+});
+
+test("成功時は catalog が解決されタイマーが解除される", async () => {
+  // 成功パスで timer が残らないことと、非空 catalog 適用の陽性対照。
+  // 遅延注入テストのペイロードが適用可能であることの裏付けにもなる
+  const catalogs: Catalog[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onCatalog: (catalog) => {
+        catalogs.push(catalog);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchEnd } = createCatalogTestSession({});
+  control.session = session;
+
+  const pending = control.subscribeCatalog(1000);
+  // subscribe / fetch 登録の完了を microtask の flush で待つ (タイマー不使用)
+  for (let index = 0; index < 10; index++) {
+    await Promise.resolve();
+  }
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  fetchEnd();
+  await pending;
+
+  assert.isNotNull(subscriber.catalog);
+  assert.equal(subscriber.catalog?.tracks.length, 1);
+  assert.equal(catalogs.length, 1);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.equal(control.pendingCatalogObjects.length, 0);
+  assert.isNull(control.catalogResolve);
+  assert.isNull(control.catalogTimer);
+  assert.isFalse(control.catalogReceiveFailed);
 });
