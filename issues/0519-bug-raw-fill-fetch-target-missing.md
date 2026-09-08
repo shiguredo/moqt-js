@@ -18,6 +18,7 @@
 ## 設計方針
 
 - 原則として raw FILL の支援（下記 1）を採用する。既存テストが正常な raw FILL_PARAMETERS の送信を許容し、関連する `0520-bug-fill-duplicate-send-guard` と `0521-bug-raw-fill-range-limit-bypass` も raw 送信の継続を前提にしているため、送信自体の拒否（下記 2）は採用しない。
+
 1. raw FILL を正式に支援するため、`options.parameters` 内の raw FILL_PARAMETERS が単一の場合に `fillFetchTargets` へ登録する。キーは新規採番の `updateRequestId` とし（`targetRequestId` ではない）、型付き経路と同形にする。`groupOrder` は内側の `GROUP_ORDER`（`MessageParameterType.GROUP_ORDER`）を `decodeFillParameters` で取り出して解決し、内側に `GROUP_ORDER` がなければ購読の指定を継承する（`resolveFillGroupOrder` と同規則）。内側の filter / timeout / priority 等はワイヤ上の値のままとし、登録側で追加の保持はしない。複数件・型付き併用時は `0520-bug-fill-duplicate-send-guard` の重複ガードが先に拒否するため、本 issue の登録対象は単一 FILL の場合に限る。
 2. （不採用）支援しないなら、raw FILL 送信時に throw するか、少なくとも `RequestUpdateOptions.parameters` の説明に fill 配信の関連付けを行わない旨を明記する。
 
