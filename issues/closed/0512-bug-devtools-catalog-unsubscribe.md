@@ -1,7 +1,7 @@
 # devtools Subscriber の catalog 購読が unsubscribe されずに捨てられる
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-devtools-catalog-unsubscribe
 - Polished: 2026-09-06
 
@@ -23,6 +23,13 @@
 - 停止時に catalog 購読へ `unsubscribe` が送出されること (`stopSubscribing` / `teardown` / `removeSubscriber` の各経路)。
 - 二重停止でも例外なく終わること (自動テストは `0513` に委ねる)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `closeSubscriberResources` に catalog 解除を追加し、`teardownSubscriber` 経由全 6 箇所と `stopSubscribing` の finally を対象にした。`removeSubscriber` に並行して追加した。`unsubscribe` は fire-and-forget し失敗を握り潰す
+- 二重解除は解除前の null チェックと解除後の null 化で抑止し、逐次二重は `unsubscribe` 自体の冪等に委ねる
+- devtools のテスト 5 件を追加した。二重停止の自動テストは `0513` に委ねる
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

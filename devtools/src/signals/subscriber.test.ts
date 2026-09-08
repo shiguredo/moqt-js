@@ -255,3 +255,60 @@ test("hasActiveSubscriber notifies effect subscribers on change", () => {
   assert.ok(observed.includes(false));
   assert.ok(observed.includes(true));
 });
+
+test("removeSubscriber sends catalog unsubscribe", () => {
+  // 削除時に catalog 購読へ unsubscribe が送出されることの検証
+  resetSubscribers();
+  const id = addSubscriber();
+  const instance = getSubscriber(id);
+  assert.isDefined(instance);
+  const calls: string[] = [];
+  instance!.decoder.value = {
+    close: () => {
+      calls.push("decoder.close");
+    },
+  } as never;
+  instance!.session.value = {
+    close: () => {
+      calls.push("session.close");
+      return Promise.resolve();
+    },
+  } as never;
+  let unsubscribeCalls = 0;
+  instance!.catalogSubscriber.value = {
+    unsubscribe: () => {
+      calls.push("catalog.unsubscribe");
+      unsubscribeCalls += 1;
+      return Promise.resolve();
+    },
+  } as never;
+  removeSubscriber(id);
+  assert.equal(unsubscribeCalls, 1);
+  assert.equal(instance!.catalogSubscriber.value, null);
+  assert.deepEqual(calls, ["decoder.close", "catalog.unsubscribe", "session.close"]);
+});
+
+test("removeSubscriber swallows catalog unsubscribe failure", async () => {
+  // 削除時の unsubscribe 失敗を握り潰すことの検証。
+  // 拒否の捕捉を microtask の flush で待ってから検証する
+  resetSubscribers();
+  const id = addSubscriber();
+  const instance = getSubscriber(id);
+  assert.isDefined(instance);
+  let sessionCloseCalls = 0;
+  instance!.session.value = {
+    close: () => {
+      sessionCloseCalls += 1;
+      return Promise.resolve();
+    },
+  } as never;
+  instance!.catalogSubscriber.value = {
+    unsubscribe: () => Promise.reject(new Error("unsubscribe failed")),
+  } as never;
+  removeSubscriber(id);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(instance!.catalogSubscriber.value, null);
+  assert.equal(sessionCloseCalls, 1);
+  assert.isUndefined(getSubscriber(id));
+});

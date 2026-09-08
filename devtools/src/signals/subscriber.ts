@@ -140,11 +140,12 @@ export function addSubscriber(): string {
  * Subscriber を削除する。
  *
  * Map 削除契機での外部リソース close 責務を集約する。
- * `useSubscriber.ts:cleanupSubscriber` と順序を揃えて decoder → session の順で
- * fire-and-forget close する。close 完了は待たない。
+ * 停止経路の closeSubscriberResources (teardown 経由) と順序を揃えて
+ * decoder → catalog → session の順で fire-and-forget で解除する。
+ * close 完了は待たない。
  *
- * `Session.close` / `DecoderWrapper.close` は冪等で二重実行は no-op のため、
- * `cleanupSubscriber` 経由の close と二重発火しても実害はない。
+ * `Session.close` / `DecoderWrapper.close` / `Subscriber.unsubscribe` は
+ * 冪等で二重実行は no-op のため、停止経路との二重発火でも実害はない。
  */
 export function removeSubscriber(id: string): void {
   const instance = getSubscriber(id);
@@ -153,6 +154,17 @@ export function removeSubscriber(id: string): void {
       instance.decoder.value?.close();
     } catch {
       // 既にクローズ済みなら無視
+    }
+    // catalog 購読を graceful に解除する。 session.close 任せにしない。
+    // 制御メッセージのため session.close より先に行う。
+    // 二重解除は解除前の null チェックと解除後の null 化で抑止し、
+    // 逐次二重は unsubscribe 自体の冪等に委ねる。失敗は握り潰す。
+    const catalogSubscriberInstance = instance.catalogSubscriber.value;
+    instance.catalogSubscriber.value = null;
+    if (catalogSubscriberInstance) {
+      void catalogSubscriberInstance.unsubscribe().catch(() => {
+        // 送信失敗時は握り潰す (session.close と同形)
+      });
     }
     instance.session.value?.close().catch(() => {
       // 既にクローズ済みなら無視

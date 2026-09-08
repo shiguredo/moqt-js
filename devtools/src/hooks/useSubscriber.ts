@@ -63,8 +63,8 @@ function resetSubscriberStats(instance: sub.SubscriberInstance): void {
 }
 
 /**
- * `SubscriberInstance` が保持する外部リソース (`decoder` / `session`) を fire-and-forget で
- * close し、canvas を初期色で塗り潰す。
+ * `SubscriberInstance` が保持する外部リソース (`decoder` / `catalog` 購読 / `session`) を
+ * fire-and-forget で解除し、canvas を初期色で塗り潰す。
  *
  * WebTransport が close コールバックを同期 dispatch する実装で teardownSubscriber が
  * 再入する可能性があるため、`session.value = null` を `sessionInstance.close()` より
@@ -92,6 +92,18 @@ export function closeSubscriberResources(
       ctx.fillStyle = "#1e293b";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+  }
+
+  // catalog 購読を graceful に解除する。 session.close 任せにしない。
+  // 制御メッセージのため session.close より先に行う。
+  // 二重解除は解除前の null チェックと解除後の null 化で抑止し、
+  // 逐次二重は unsubscribe 自体の冪等に委ねる。失敗は握り潰す。
+  const catalogSubscriberInstance = instance.catalogSubscriber.value;
+  instance.catalogSubscriber.value = null;
+  if (catalogSubscriberInstance) {
+    void catalogSubscriberInstance.unsubscribe().catch(() => {
+      // 送信失敗時は握り潰す (session.close と同形)
+    });
   }
 
   // 再入時に sessionInstance が null になっているよう close() より先に立てる。

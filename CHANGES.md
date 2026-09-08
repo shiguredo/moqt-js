@@ -99,6 +99,9 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] devtools Subscriber の catalog 購読が unsubscribe されずに捨てられる問題を修正する
+  - 停止・削除時に catalog 購読へ unsubscribe を送出する。二重停止でも例外なく終わる
+  - @voluntas
 - [FIX] Request Keyframe の固定値送信で新規 Group が開始されない問題を修正する
   - draft-ietf-moq-transport-20 §10.2.19 に基づき、送信時点の最新 Group ID + 1 (情報なし時は 0) を NEW_GROUP_REQUEST で送る
   - @voluntas
