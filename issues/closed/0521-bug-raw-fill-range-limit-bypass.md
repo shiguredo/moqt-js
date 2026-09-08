@@ -1,7 +1,7 @@
 # 手組み FILL_PARAMETERS 内側 Range が MAX_FILTER_RANGES 合算に入らない
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-raw-fill-range-limit
 - Polished: 2026-09-08
 
@@ -23,6 +23,13 @@
 
 - raw FILL 内側 Range が上限検証（当該メッセージ分と in-flight 合算）に含まれ、超過時は送信前に拒否され `pendingRequestUpdate` に entry が残らないこと。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/bidi.ts` に `prepareRawFillForUpdate` を追加し、重複検査・内側検証・上限合算用の内側 Range 取り出しをまとめて上限検証より前に行う。型付き fill 内側と合算し、`pendingRequestUpdate` に保持して in-flight 合算に含める
+- `rangeFilterTypeOf` を `src/message` から再 export し、内側 Range の `RangeFilterSpec` 化に使う (公開 API への漏れなし)
+- `src/session/bidi.test.ts` に超過・in-flight 双方向・上限以内のテスト 6 件を追加した。複数件内側検証テストは重複先行に合わせて単一版に更新した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

@@ -1383,6 +1383,8 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
     if (inner.type === MessageParameterType.LOCATION_FILTER) {
       decodeLocationFilterParameter(inner);
     } else if (inner.type >= 0x25 && inner.type <= 0x28) {
+      // 範囲は上限合算側 (bidiSendRequestUpdate の prepareRawFillForUpdate) と
+      // 一致させること (§10.2.15 の Table 6 に Range 系の型が追加された場合は両方を更新する)
       const [decodedRange] = decodeRangeFilter(rangeFilterTypeOf(inner.type), inner.value);
       if ("remove" in decodedRange) {
         throw new InvalidFilterError(
@@ -1730,7 +1732,7 @@ export function validateRangeFilterCombination(parameters: Parameter[]): void {
 /**
  * パラメータタイプ (0x25-0x29) から Range Filter の種別名を返す
  */
-function rangeFilterTypeOf(
+export function rangeFilterTypeOf(
   type: number,
 ): "subgroup" | "objectId" | "priority" | "objectProperty" | "trackProperty" {
   switch (type) {
