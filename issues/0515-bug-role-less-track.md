@@ -1,7 +1,7 @@
 # role なしトラックが購読対象から不可視になる
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-role-less-track
 - Polished: 2026-09-06
 
@@ -25,3 +25,10 @@
 - `role` 省略カタログで名前一致のトラックが購読対象に特定されること。
 - 未解決時は `onError` が呼ばれること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/createMediaSubscriber.ts` に `resolveTrackInfo` を追加し、role 絞り込みが空の場合のみカタログ全体から名前一致で探す。見つからなければ `null` のまま先頭不採用とし、非空時の先頭採用は維持した
+- 未解決時は `onError` で通知し、throw せず他方メディアは継続する
+- `src/createMediaSubscriber.test.ts` に解決・通知のテスト 4 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
