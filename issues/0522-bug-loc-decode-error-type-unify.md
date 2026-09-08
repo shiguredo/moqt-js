@@ -1,7 +1,7 @@
 # LOC 単体デコーダの前段 varint 不完全のエラー型を統一する
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-loc-decode-error-type
 - Polished: 2026-09-08
 
@@ -25,6 +25,12 @@
 - 前段 varint 不完全の扱いが単体デコーダ間で `ProtocolViolationError` に統一されること。
 - `src/loc.test.ts` の前段不完全を `IncompleteDataError` で期待する既存テストと、`src/loc.ts` の `@throws IncompleteDataError` の JSDoc を更新すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/loc.ts` に `decodeLeadingVarint` を追加し、6 種の単体デコーダの前段 varint 不完全を `ProtocolViolationError` に変換する (`decodeLocObjectPayload` と同一方針)。`0466` の残存決定を覆す
+- 既存 2 件の期待を更新し、新規 4 件のテストを追加した。JSDoc の `@throws` を更新した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
