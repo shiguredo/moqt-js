@@ -9,7 +9,9 @@
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
 import type { Session } from "./session";
-import type { Subscriber } from "./subscriber";
+import type { Subscriber, RequestUpdateOptions } from "./subscriber";
+import type { MediaSubscriberState } from "./codec/types";
+import { TrackPropertyId } from "./properties";
 import type { Fetcher } from "./fetcher";
 import { encodeCatalog, encodeCatalogDelta, type Catalog, type CatalogDelta } from "./msf";
 import {
@@ -696,4 +698,57 @@ test("成功時は catalog が解決されタイマーが解除される", async
   assert.isNull(control.catalogResolve);
   assert.isNull(control.catalogTimer);
   assert.isFalse(control.catalogReceiveFailed);
+});
+
+/**
+ * requestKeyframe の値検証用の制御口
+ */
+interface SubscriberKeyframeControl {
+  currentState: MediaSubscriberState;
+  videoSubscriber: Subscriber | null;
+  requestKeyframe(): Promise<void>;
+}
+
+test("requestKeyframe は最新 Group ID + 1 を送信する", async () => {
+  // 固定値でなく largestLocation の live 値を参照することの検証。
+  // 送信間に値を書き換えて 2 回送り、snapshot でなく都度参照と分かるようにする
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberKeyframeControl;
+  control.currentState = "active";
+  const sent: (RequestUpdateOptions | undefined)[] = [];
+  const videoSubscriber = {
+    state: "active",
+    trackProperties: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
+    largestLocation: { group: 41n, object: 3n },
+    update: async (...args: Parameters<Subscriber["update"]>) => {
+      sent.push(args[0]);
+    },
+  };
+  control.videoSubscriber = videoSubscriber as unknown as Subscriber;
+
+  await control.requestKeyframe();
+  videoSubscriber.largestLocation = { group: 100n, object: 0n };
+  await control.requestKeyframe();
+
+  assert.equal(sent[0]?.newGroupRequest, 42n);
+  assert.equal(sent[1]?.newGroupRequest, 101n);
+});
+
+test("requestKeyframe は情報なし時は 0 を送信する", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberKeyframeControl;
+  control.currentState = "active";
+  let sent: RequestUpdateOptions | undefined;
+  control.videoSubscriber = {
+    state: "active",
+    trackProperties: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
+    largestLocation: null,
+    update: async (...args: Parameters<Subscriber["update"]>) => {
+      sent = args[0];
+    },
+  } as unknown as Subscriber;
+
+  await control.requestKeyframe();
+
+  assert.equal(sent?.newGroupRequest, 0n);
 });

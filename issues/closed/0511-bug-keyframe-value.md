@@ -1,7 +1,7 @@
 # Request Keyframe の固定値送信で新規 Group が開始されない
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-devtools-keyframe-value
 - Polished: 2026-09-06
 
@@ -26,6 +26,13 @@
 - 送信される `NEW_GROUP_REQUEST` 値が `0` または最新 Group ID + 1 であること (ライブラリ側は単体テスト、devtools 側は `0513` の方針に従う)。
 - 新規 Group 開始の実効は publisher 側 `SHOULD` のため手動確認に留める。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `RequestUpdateOptions` に型付き `newGroupRequest` を追加し、`bidiSendRequestUpdate` で `validateNonNegative` + `encodeVarint` + `0x32` に符号化する。raw 指定との重複は合算件数で送信前に拒否する。raw + `encodeVarint` 直書きから変えた理由は、devtools が公開 API 経由で `encodeVarint` を使えず、公開面拡大と varint 再実装のいずれも避けるためである
+- ライブラリ正規経路と devtools の両 `requestKeyframe` で送信時点の `largestLocation` の live 参照から値を決める (情報なし時は `0`)
+- ライブラリ側の値計算と `bidi` 層の符号化・拒否のテスト 6 件を追加した。devtools 側は `0513` に委ねる
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

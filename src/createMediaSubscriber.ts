@@ -382,14 +382,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
-    // draft-ietf-moq-transport-20 §10.2.19 (NEW_GROUP_REQUEST = 0x32)
+    // draft-ietf-moq-transport-20 §10.2.19 (NEW_GROUP_REQUEST = 0x32)。
+    // 値は送信時点の最新 Group ID + 1 (情報なし時は 0) とする。
+    // SUBSCRIBE 直後の snapshot は stale のため使わない。
+    const largestLocation = this.videoSubscriber.largestLocation;
+    const newGroupRequest = largestLocation === null ? 0n : largestLocation.group + 1n;
     await this.videoSubscriber.update({
-      parameters: [
-        {
-          type: 0x32,
-          value: new Uint8Array([0x01]),
-        },
-      ],
+      newGroupRequest,
     });
 
     // デコーダーをキーフレーム待ち状態にリセット
