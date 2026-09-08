@@ -595,6 +595,8 @@ export async function bidiReadSubscribeResponse(
             `duplicate track alias: ${decoded.trackAlias}`,
             SessionErrorCode.DUPLICATE_TRACK_ALIAS,
           );
+          session.requestStreams.delete(requestId);
+          session.fillFetchTargets.delete(requestId);
           pending.reject(error);
           session.closeWithError(error);
           return;
@@ -676,6 +678,9 @@ export async function bidiReadSubscribeResponse(
       session.closeWithError(sessionError);
       return;
     }
+    session.pendingSubscribe.delete(requestId);
+    session.requestStreams.delete(requestId);
+    session.fillFetchTargets.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
@@ -736,6 +741,7 @@ export async function bidiReadFetchResponse(
         if (errorMessage !== undefined) {
           const error = new SessionError(errorMessage, SessionErrorCode.PROTOCOL_VIOLATION);
           session.pendingFetch.delete(requestId);
+          session.requestStreams.delete(requestId);
           pending.reject(error);
           session.closeWithError(error);
           return;
@@ -805,6 +811,8 @@ export async function bidiReadFetchResponse(
       session.closeWithError(sessionError);
       return;
     }
+    session.pendingFetch.delete(requestId);
+    session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }
@@ -912,6 +920,8 @@ export async function bidiReadTrackStatusResponse(
       session.closeWithError(sessionError);
       return;
     }
+    session.pendingTrackStatus.delete(requestId);
+    session.requestStreams.delete(requestId);
     pending.reject(error instanceof Error ? error : new Error(String(error)));
   }
 }

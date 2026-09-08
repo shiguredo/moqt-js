@@ -1,7 +1,7 @@
 # 応答読み取り失敗経路の削除集合を統一する
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-response-cleanup-sets
 - Polished: 2026-09-08
 
@@ -24,6 +24,13 @@
 
 - 上記 5 箇所の失敗経路の削除集合が同一関数内の既存失敗経路と一致し、失敗後に当該要求の entry が各マップに残らないこと。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/session/bidi.ts` の DUPLICATE_TRACK_ALIAS 経路に `requestStreams` と `fillFetchTargets` の削除を追加し、End Location 検証経路に `requestStreams` の削除を追加した
+- 3 応答読み取りの汎用 catch の else 分岐に各関数の既存失敗経路と同じ削除集合を追加した
+- `src/session/bidi.test.ts` に削除集合 5 件のテストを追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 

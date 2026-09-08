@@ -102,6 +102,9 @@
 - [FIX] LOC 単体デコーダの前段 varint 不完全のエラー型を統一する
   - 6 種の単体デコーダの前段不完全を ProtocolViolationError に統一する
   - @voluntas
+- [FIX] 応答読み取り失敗経路の削除集合を統一する
+  - SUBSCRIBE は 3 件・FETCH / TRACK_STATUS は各 2 件に揃え孤児 entry を残さない
+  - @voluntas
 - [FIX] First-Object-ID 系ヘッダでバッチ跨ぎの subgroupId が誤る問題を修正する
   - resolvedSubgroupId を戻り値に含め previousObjectId と同様に引き継ぐ
   - @voluntas
