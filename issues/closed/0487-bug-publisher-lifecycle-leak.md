@@ -1,7 +1,7 @@
 # Publisher の stop / 再 start と start 失敗時の後片付け漏れ
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-publisher-lifecycle
 - Polished: 2026-09-06
 
@@ -25,3 +25,10 @@
 - start / stop 繰り返し後に encoder・source・reader・Publisher・session が残存しないこと (参照 null と `state` で検証)。
 - `start` 失敗時に確保済みリソースが巻き戻り、再 `start` できること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` に `disposeAllResources` を追加し、取得の逆順 (reader → source・processor・encoder → Publisher → session) で破棄して参照を null 化する。参照の切り離しは await の前に行い、一段階の失敗が後続破棄を止めない。最初の失敗は最後に再 throw する
+- `stop` と `close` を同一破棄の共用に書き換え、`start` の catch で巻き戻して state を変えず再 throw する。`mediaStream` も保持せず次回 `start()` で上書きする
+- `src/createMediaPublisher.test.ts` に完全性・終端性・巻き戻し・配線・失敗継続・二重 close のテスト 6 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

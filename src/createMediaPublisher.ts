@@ -162,6 +162,13 @@ export class MediaPublisherImpl implements MediaPublisher {
 
       this.setState("publishing");
     } catch (error) {
+      // 確保済みを逆順に巻き戻す。 state は変えず再 start 可能にする。
+      // 巻き戻し自体の失敗で元の失敗を隠さないよう握り潰す。
+      try {
+        await this.disposeAllResources();
+      } catch {
+        // 元のエラーを優先する
+      }
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
@@ -211,28 +218,23 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   /**
    * 配信を停止する
+   *
+   * 再 start 可能な完全停止であり、確保済みを残さない。
+   * session は閉じて再 start 時に再接続する (再利用しない)。
+   * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
+   * 失敗時は旧 state のまま残るが参照は切り離し済みのため再試行できる。
+   * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
   async stop(): Promise<void> {
     if (this.currentState !== "publishing" && this.currentState !== "paused") {
       throw new Error(`cannot stop in state: ${this.currentState}`);
     }
 
-    this.processingActive = false;
-
     // 世代を進める。 stop 後の cancel 解決と start 後の新ループが
     // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
     this.processingGeneration++;
 
-    // フレームリーダーをキャンセル
-    await this.cancelFrameReaders();
-
-    // Publisher を終了
-    if (this.audioPublisher && this.audioPublisher.state === "active") {
-      await this.audioPublisher.done();
-    }
-    if (this.videoPublisher && this.videoPublisher.state === "active") {
-      await this.videoPublisher.done();
-    }
+    await this.disposeAllResources();
 
     this.setState("stopped");
   }
@@ -251,33 +253,23 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   /**
    * リソースを解放する
+   *
+   * stop と同一破棄を内包し、以後 start 不可の終端とする。
+   * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
+   * 失敗時は旧 state のまま残るが参照は切り離し済みのため再試行できる。
+   * 並行呼び出しは未対応であり直列に呼ぶこと。
+   * (直列の二重 close は成功時に限り早期 return で単発性を保つ)。
    */
   async close(): Promise<void> {
     if (this.currentState === "closed") {
       return;
     }
 
-    this.processingActive = false;
-
     // 世代を進める。 close 後の cancel 解決と再 start 後の新ループが
     // 同一世代を共有しないようにする (旧ループ失敗の誤通知防止)
     this.processingGeneration++;
 
-    // フレームリーダーをキャンセル
-    await this.cancelFrameReaders();
-
-    // VideoFrameSource を解放する
-    this.videoFrameSource?.close();
-    this.videoFrameSource = null;
-
-    // エンコーダーを閉じる
-    this.audioEncoder?.close();
-    this.videoEncoder?.close();
-
-    // セッションを閉じる
-    if (this.session) {
-      await this.session.close();
-    }
+    await this.disposeAllResources();
 
     this.setState("closed");
     this.callbacks.onClose?.();
@@ -694,6 +686,90 @@ export class MediaPublisherImpl implements MediaPublisher {
       properties,
       priority: chunk.type === "key" ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     });
+  }
+
+  /**
+   * 確保済みリソースを逆順に巻き戻す
+   *
+   * stop / close / start 失敗時で共用する。取得の逆順
+   * (reader → source・processor・encoder → Publisher → session) で
+   * 破棄し参照を null 化する。reader の cancel は握り潰し内蔵のため
+   * guard の外で先行する。それ以外の各段階は参照の切り離しを
+   * await の前に行い、一段階の失敗が後続破棄を止めない。
+   * 最初の失敗は最後に再 throw する。
+   * 二重破棄は冪等操作のみで行う
+   * (Publisher の active ガード付き done、encoder・source・session の
+   * null 安全な close に依存する)。Catalog・統計・Group ID は
+   * 再 start に引き継ぐため保持する。
+   */
+  private async disposeAllResources(): Promise<void> {
+    this.processingActive = false;
+
+    // フレームリーダーをキャンセル
+    await this.cancelFrameReaders();
+
+    // 段階破棄の失敗を集め、後続を止めず最後に最初の失敗を投げる
+    let firstFailure: Error | null = null;
+    const guard = async (task: () => Promise<void> | void): Promise<void> => {
+      try {
+        await task();
+      } catch (error) {
+        firstFailure ??= error instanceof Error ? error : new Error(String(error));
+      }
+    };
+
+    // VideoFrameSource とプロセッサを解放する
+    const videoFrameSource = this.videoFrameSource;
+    this.videoFrameSource = null;
+    await guard(() => videoFrameSource?.close());
+    this.audioTrackProcessor = null;
+    // 次回 start() で上書きされるため保持しない
+    this.mediaStream = null;
+
+    // エンコーダーを閉じる
+    const audioEncoder = this.audioEncoder;
+    this.audioEncoder = null;
+    await guard(() => audioEncoder?.close());
+    const videoEncoder = this.videoEncoder;
+    this.videoEncoder = null;
+    await guard(() => videoEncoder?.close());
+
+    // Publisher を終了
+    const catalogPublisher = this.catalogPublisher;
+    this.catalogPublisher = null;
+    await guard(async () => {
+      if (catalogPublisher && catalogPublisher.state === "active") {
+        await catalogPublisher.done();
+      }
+    });
+    const audioPublisher = this.audioPublisher;
+    this.audioPublisher = null;
+    await guard(async () => {
+      if (audioPublisher && audioPublisher.state === "active") {
+        await audioPublisher.done();
+      }
+    });
+    const videoPublisher = this.videoPublisher;
+    this.videoPublisher = null;
+    await guard(async () => {
+      if (videoPublisher && videoPublisher.state === "active") {
+        await videoPublisher.done();
+      }
+    });
+
+    // セッションを閉じる
+    const session = this.session;
+    this.session = null;
+    await guard(async () => {
+      if (session) {
+        await session.close();
+      }
+    });
+
+    if (firstFailure !== null) {
+      const failure: Error = firstFailure;
+      throw failure;
+    }
   }
 
   private async cancelFrameReaders(): Promise<void> {
