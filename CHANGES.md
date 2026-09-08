@@ -99,6 +99,11 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] MediaPublisher の stop / 再 start と start 失敗時の後片付け漏れを修正する
+  - stop を再 start 可能な完全停止にし、各 Publisher (catalog / audio / video) の done、encoder / VideoFrameSource / processor の破棄、session の close と参照 null 化を行う。close は同一破棄を内包する
+  - start 失敗時は確保済みを逆順に巻き戻し、state を変えず再 start 可能にする
+  - stop / close 時の破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。失敗時は旧 state のまま残り再試行できる
+  - @voluntas
 - [FIX] RESET_STREAM のエラーコードを subscriber のエラー通知に反映する
   - draft-ietf-moq-transport-20 §3.3.4 に基づき、ピアの RESET_STREAM 検出時に読み取り失敗値の streamErrorCode を正規化して通知エラーの streamErrorCode プロパティに載せ、メッセージにコード名を付加する
   - コード値が無い場合や数値でない場合は従来の固定文言のみで通知し、未知値は内部エラーに正規化する

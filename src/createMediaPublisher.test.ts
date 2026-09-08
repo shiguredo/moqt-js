@@ -1,9 +1,12 @@
 /**
- * MediaPublisher の pause / resume 世代管理のテスト
+ * MediaPublisher の pause / resume 世代管理と stop / close / start 失敗時の
+ * ライフサイクル後片付けのテスト
  *
  * 実 ReadableStream をフレーム reader に注入し、世代不一致の旧ループが
  * encode せず終了することと、pause / resume 繰り返しで onError が
  * 多重発火しないことを検証する。
+ * 後片付けは全種リソースの参照 null 化と破棄呼び出し、失敗時の継続と
+ * 再 throw、終端後の再 start 拒否を検証する。
  * エンコーダーは WebCodecs が node にないため encode 呼び出し記録用の
  * 最小オブジェクトを注入する (モジュール置換は行わず、実ストリームの
  * 並行分配は実物で検証する)。
@@ -16,6 +19,9 @@ import { MediaPublisherImpl } from "./createMediaPublisher";
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import type { MediaPublisherState } from "./codec/types";
+import type { VideoFrameSource } from "./frameSource";
+import type { Publisher } from "./publisher";
+import type { Session } from "./session";
 
 /**
  * 破棄検出付きのテスト用フレーム
@@ -121,27 +127,29 @@ function createFrameStream(): {
 function injectAudioLoop(control: PublisherLoopControl): {
   encoded: unknown[];
   controller: ReadableStreamDefaultController<TestFrame>;
+  isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded } = createRecordingEncoder();
+  const { encoder, encoded, isClosed } = createRecordingEncoder();
   control.audioFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<AudioData>;
   control.audioEncoder = encoder as unknown as AudioEncoderWrapper;
   control.processingActive = true;
-  return { encoded, controller };
+  return { encoded, controller, isEncoderClosed: isClosed };
 }
 
 function injectVideoLoop(control: PublisherLoopControl): {
   encoded: unknown[];
   controller: ReadableStreamDefaultController<TestFrame>;
+  isEncoderClosed: () => boolean;
 } {
   const { stream, controller } = createFrameStream();
-  const { encoder, encoded } = createRecordingEncoder();
+  const { encoder, encoded, isClosed } = createRecordingEncoder();
   control.videoFrameReader =
     stream.getReader() as unknown as ReadableStreamDefaultReader<VideoFrame>;
   control.videoEncoder = encoder as unknown as VideoEncoderWrapper;
   control.processingActive = true;
-  return { encoded, controller };
+  return { encoded, controller, isEncoderClosed: isClosed };
 }
 
 test("processAudioFrames: pause 後の旧ループは encode せず終了する", async () => {
@@ -311,4 +319,264 @@ test("close は世代を進める", async () => {
   // エンコーダーの close まで到達すること
   assert.isTrue(isClosed());
   assert.equal(errors.length, 0);
+});
+
+/**
+ * ライフサイクル全体の後片付け検証用の制御口
+ *
+ * stop / close / 失敗巻き戻しで残留しないことを参照 null で検証する。
+ * start() 自体は接続を要するため、失敗巻き戻しは start 失敗時に
+ * 使う資源破棄ヘルパーを private 経由で直接駆動する
+ * (start() の catch 配線は別テストで検証する)。
+ */
+interface PublisherLifecycleControl extends PublisherLoopControl {
+  session: Session | null;
+  catalogPublisher: Publisher | null;
+  audioPublisher: Publisher | null;
+  videoPublisher: Publisher | null;
+  // {} 代入のための緩和であり検証対象外である (実装型はプロセッサ型)
+  audioTrackProcessor: unknown;
+  videoFrameSource: VideoFrameSource | null;
+  mediaStream: MediaStream | null;
+  disposeAllResources(): Promise<void>;
+}
+
+/**
+ * 破棄記録付きの最小 Publisher
+ */
+function createRecordingPublisher(): {
+  publisher: Publisher;
+  doneCount: () => number;
+} {
+  let count = 0;
+  const publisher = {
+    state: "active",
+    done: async () => {
+      count++;
+    },
+  } as unknown as Publisher;
+  return { publisher, doneCount: () => count };
+}
+
+/**
+ * 破棄記録付きの最小セッション
+ */
+function createRecordingSession(): {
+  session: Session;
+  isClosed: () => boolean;
+} {
+  let closed = false;
+  const session = {
+    close: async () => {
+      closed = true;
+    },
+  } as unknown as Session;
+  return { session, isClosed: () => closed };
+}
+
+/**
+ * 破棄記録付きの最小 VideoFrameSource
+ */
+function createRecordingFrameSource(): {
+  source: VideoFrameSource;
+  isClosed: () => boolean;
+} {
+  let closed = false;
+  const stream = new ReadableStream<VideoFrame>();
+  const source: VideoFrameSource = {
+    readable: stream,
+    close: () => {
+      closed = true;
+    },
+  };
+  return { source, isClosed: () => closed };
+}
+
+test("stop は encoder・source・processor・Publisher・session を残さない", async () => {
+  // start / stop 繰り返しでリークしないことの検証。全種のリソースを注入し、
+  // stop() 後に参照が null 化され破棄が呼ばれていることを確認する
+  const { publisher, control } = createLoopTestContext();
+  const lifecycle = control as unknown as PublisherLifecycleControl;
+  const { isEncoderClosed: isAudioEncoderClosed } = injectAudioLoop(control);
+  const { isEncoderClosed: isVideoEncoderClosed } = injectVideoLoop(control);
+  const { session, isClosed: isSessionClosed } = createRecordingSession();
+  const { publisher: catalogPublisher, doneCount: catalogDoneCount } = createRecordingPublisher();
+  const { publisher: audioPublisher, doneCount: audioDoneCount } = createRecordingPublisher();
+  const { publisher: videoPublisher, doneCount: videoDoneCount } = createRecordingPublisher();
+  const { source, isClosed: isSourceClosed } = createRecordingFrameSource();
+  lifecycle.session = session;
+  lifecycle.catalogPublisher = catalogPublisher;
+  lifecycle.audioPublisher = audioPublisher;
+  lifecycle.videoPublisher = videoPublisher;
+  lifecycle.videoFrameSource = source;
+  lifecycle.audioTrackProcessor = {};
+  lifecycle.mediaStream = {} as MediaStream;
+
+  await publisher.stop();
+
+  // 参照が残らないこと
+  assert.isNull(lifecycle.session);
+  assert.isNull(lifecycle.catalogPublisher);
+  assert.isNull(lifecycle.audioPublisher);
+  assert.isNull(lifecycle.videoPublisher);
+  assert.isNull(lifecycle.audioEncoder);
+  assert.isNull(lifecycle.videoEncoder);
+  assert.isNull(lifecycle.videoFrameSource);
+  assert.isNull(lifecycle.audioTrackProcessor);
+  assert.isNull(lifecycle.audioFrameReader);
+  assert.isNull(lifecycle.videoFrameReader);
+  // 破棄が呼ばれていること
+  assert.isTrue(isSessionClosed());
+  assert.equal(catalogDoneCount(), 1);
+  assert.equal(audioDoneCount(), 1);
+  assert.equal(videoDoneCount(), 1);
+  assert.isTrue(isSourceClosed());
+  assert.isTrue(isAudioEncoderClosed());
+  assert.isTrue(isVideoEncoderClosed());
+  assert.isNull(lifecycle.mediaStream);
+  assert.isFalse(control.processingActive);
+  assert.equal(publisher.state, "stopped");
+});
+
+test("close は stop と同一破棄を行い以後 start 不可の終端にする", async () => {
+  // close が stop を内包することと、終端後に再 start できないことの検証
+  const { publisher, control } = createLoopTestContext();
+  const lifecycle = control as unknown as PublisherLifecycleControl;
+  injectAudioLoop(control);
+  const { session, isClosed: isSessionClosed } = createRecordingSession();
+  const { publisher: catalogPublisher, doneCount: catalogDoneCount } = createRecordingPublisher();
+  lifecycle.session = session;
+  lifecycle.catalogPublisher = catalogPublisher;
+
+  await publisher.close();
+
+  assert.isNull(lifecycle.session);
+  assert.isNull(lifecycle.catalogPublisher);
+  assert.isNull(lifecycle.audioEncoder);
+  assert.isNull(lifecycle.audioFrameReader);
+  assert.isTrue(isSessionClosed());
+  assert.equal(catalogDoneCount(), 1);
+  assert.equal(publisher.state, "closed");
+
+  // 終端後の start は拒否されること
+  let startError: unknown = null;
+  try {
+    await publisher.start({} as MediaStream);
+  } catch (error) {
+    startError = error;
+  }
+  assert.instanceOf(startError, Error);
+});
+
+test("資源破棄ヘルパー直接駆動では確保済みを破棄し state を変えない", async () => {
+  // start() 自体は接続を要するため、start 失敗時に使う資源破棄ヘルパーを
+  // 部分確保状態で直接駆動し、巻き戻りと再 start 可能状態を検証する
+  // (start() の catch 配線は別テストで検証する)
+  const { publisher, control } = createLoopTestContext();
+  const lifecycle = control as unknown as PublisherLifecycleControl;
+  lifecycle.currentState = "stopped";
+  const { session, isClosed: isSessionClosed } = createRecordingSession();
+  const { publisher: catalogPublisher, doneCount: catalogDoneCount } = createRecordingPublisher();
+  const { encoder } = createRecordingEncoder();
+  lifecycle.session = session;
+  lifecycle.catalogPublisher = catalogPublisher;
+  lifecycle.audioEncoder = encoder as unknown as AudioEncoderWrapper;
+
+  await lifecycle.disposeAllResources();
+
+  assert.isNull(lifecycle.session);
+  assert.isNull(lifecycle.catalogPublisher);
+  assert.isNull(lifecycle.audioEncoder);
+  assert.isTrue(isSessionClosed());
+  assert.equal(catalogDoneCount(), 1);
+  // 失敗後の state は変わらず再 start 可能であること
+  assert.equal(publisher.state, "stopped");
+});
+
+test("start 失敗時は巻き戻し・通知・再 throw を行い state を変えない", async () => {
+  // start() の catch 配線自体の検証。node 環境に WebTransport がないため
+  // connect 失敗で catch に入り、巻き戻し・onError 通知・再 throw を通る
+  const errors: Error[] = [];
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+
+  let thrown: unknown = null;
+  try {
+    await publisher.start({} as MediaStream);
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.isTrue(thrown instanceof Error);
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], thrown);
+  assert.equal(publisher.state, "created");
+  // 巻き戻しを通ったこと (mediaStream の null 化で観測する)
+  const lifecycle = publisher as unknown as { mediaStream: MediaStream | null };
+  assert.isNull(lifecycle.mediaStream);
+});
+
+test("破棄段階の失敗は後続を止めず最初の失敗を throw し旧 state が残る", async () => {
+  // guard 集約パスの検証。catalog の done 失敗でも session 等の破棄は継続し、
+  // 参照は切り離され、state は旧来のまま残り再試行できることを確認する
+  const { publisher, control } = createLoopTestContext();
+  const lifecycle = control as unknown as PublisherLifecycleControl;
+  const catalogFailure = new Error("catalog done failure");
+  const rejectingCatalog = {
+    state: "active",
+    done: async () => {
+      throw catalogFailure;
+    },
+  } as unknown as Publisher;
+  const { publisher: audioPublisher, doneCount: audioDoneCount } = createRecordingPublisher();
+  const { session, isClosed: isSessionClosed } = createRecordingSession();
+  lifecycle.catalogPublisher = rejectingCatalog;
+  lifecycle.audioPublisher = audioPublisher;
+  lifecycle.session = session;
+
+  let thrown: unknown = null;
+  try {
+    await publisher.stop();
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.strictEqual(thrown, catalogFailure);
+  // 失敗段階以降も破棄が継続し参照が残らないこと
+  assert.equal(audioDoneCount(), 1);
+  assert.isTrue(isSessionClosed());
+  assert.isNull(lifecycle.catalogPublisher);
+  assert.isNull(lifecycle.audioPublisher);
+  assert.isNull(lifecycle.session);
+  // 旧 state のまま残るため再試行できること
+  assert.equal(publisher.state, "publishing");
+  await publisher.stop();
+  assert.equal(publisher.state, "stopped");
+});
+
+test("直列の二重 close は単発で終わり onClose は 1 回だけ発火する", async () => {
+  // 終端契約の検証。二重 close の早期 return と通知の単発性を確認する
+  let closeCount = 0;
+  const publisher = new MediaPublisherImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onClose: () => {
+        closeCount++;
+      },
+    },
+  );
+
+  await publisher.close();
+  await publisher.close();
+
+  assert.equal(publisher.state, "closed");
+  assert.equal(closeCount, 1);
 });
