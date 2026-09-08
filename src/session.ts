@@ -4734,20 +4734,28 @@ export class SessionImpl implements Session {
 
   /**
    * Subgroup オブジェクトをストリーミング処理
-   * パース可能なオブジェクトを全て処理し、残りのバッファと状態を返す
+   * パース可能なオブジェクトを全て処理し、残りのバッファと状態を返す。
+   * resolvedSubgroupId を透過し、feed 間の解決値を引き継ぐ
+   * (明示型・0 系はヘッダ値のため透過しても no-op になる)。
    */
   private processSubgroupObjects(
     buffer: Uint8Array,
     subscribers: SubscriberImpl[],
     header: import("./dataStream").SubgroupHeader,
     previousObjectId: bigint,
-  ): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
+    resolvedSubgroupId?: bigint,
+  ): {
+    remainingBuffer: Uint8Array;
+    previousObjectId: bigint;
+    resolvedSubgroupId: bigint | undefined;
+  } {
     return incomingProcessSubgroupObjects(
       this as unknown as SessionInternal,
       buffer,
       subscribers,
       header,
       previousObjectId,
+      resolvedSubgroupId,
     );
   }
 
@@ -4771,6 +4779,7 @@ export class SessionImpl implements Session {
   ): Promise<void> {
     let buffer = initialBuffer;
     let previousObjectId = -1n;
+    let resolvedSubgroupId: bigint | undefined;
     let subscribers: SubscriberImpl[] = this.subscribersByAlias.get(header.trackAlias) ?? [];
 
     // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
@@ -4889,9 +4898,11 @@ export class SessionImpl implements Session {
         subscribers,
         header,
         previousObjectId,
+        resolvedSubgroupId,
       );
       buffer = processResult.remainingBuffer;
       previousObjectId = processResult.previousObjectId;
+      resolvedSubgroupId = processResult.resolvedSubgroupId;
 
       if (result.done) break;
     }

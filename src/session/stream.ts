@@ -134,13 +134,20 @@ export function processSubgroupObjects(
   header: SubgroupHeader,
   previousObjectId: bigint,
   stats: StreamStatsUpdate,
-): { remainingBuffer: Uint8Array; previousObjectId: bigint } {
+  resolvedSubgroupId?: bigint,
+): {
+  remainingBuffer: Uint8Array;
+  previousObjectId: bigint;
+  resolvedSubgroupId: bigint | undefined;
+} {
   let offset = 0;
   let currentPreviousObjectId = previousObjectId;
   // draft-ietf-moq-transport-20 Section 11.4.2:
   // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
-  // Subgroup ID として使用する
-  let resolvedSubgroupId = header.subgroupId;
+  // Subgroup ID として使用する。呼び出し側で保持した値を優先し、
+  // 未保持時のみヘッダ由来値から初期化する (feed 間の状態引き継ぎ)。
+  // 同一ストリームの同一 header の連続 feed を前提とする。
+  let currentResolvedSubgroupId = resolvedSubgroupId ?? header.subgroupId;
 
   while (offset < buffer.length) {
     // この subgroup で最初のオブジェクトかどうかをデコード直前に捕捉する。
@@ -181,14 +188,14 @@ export function processSubgroupObjects(
         );
       }
 
-      resolvedSubgroupId ??= objectId;
+      currentResolvedSubgroupId ??= objectId;
 
       const payload = buffer.slice(offset, offset + payloadLength);
       offset += payloadLength;
 
       const object: MoqtObject = {
         groupId: header.groupId,
-        subgroupId: resolvedSubgroupId,
+        subgroupId: currentResolvedSubgroupId,
         objectId,
         publisherPriority: header.publisherPriority,
         status: fields.status,
@@ -227,6 +234,7 @@ export function processSubgroupObjects(
   return {
     remainingBuffer: buffer.slice(offset),
     previousObjectId: currentPreviousObjectId,
+    resolvedSubgroupId: currentResolvedSubgroupId,
   };
 }
 
