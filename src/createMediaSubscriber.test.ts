@@ -1,10 +1,13 @@
 /**
- * processCatalogPayload の単体テスト
+ * MediaSubscriber の単体テスト
  *
- * MediaSubscriber の Catalog Object 適用ロジックを純関数として検証する。
+ * processCatalogPayload / filterPendingCatalogObjects / resolveAuthorizationToken の
+ * 純関数ロジックと、復号フレーム破棄の所有権 (handleVideoDecodedData /
+ * handleAudioDecodedData) を検証する。
  */
 
 import { test, assert } from "vite-plus/test";
+import { MediaSubscriberImpl } from "./createMediaSubscriber";
 import { encodeCatalog, encodeCatalogDelta, type Catalog, type CatalogDelta } from "./msf";
 import {
   filterPendingCatalogObjects,
@@ -218,4 +221,283 @@ test("resolveAuthorizationToken: 非同期コールバックにも対応する",
   const token = useValueToken();
   const resolved = await resolveAuthorizationToken({ cat: {} }, async () => token);
   assert.equal(resolved, token);
+});
+
+/**
+ * 復号フレーム破棄の検証用の制御口
+ *
+ * 復号ハンドラを直接駆動し、所有権方針どおりに閉じられることを検証する。
+ * VideoFrame / AudioData / AudioContext はブラウザ専用 API であり
+ * node 環境に実物がないため、記録用の最小オブジェクトを注入する
+ * (モジュール置換は行わない)。
+ */
+interface SubscriberFrameControl {
+  videoWriter: { write: (frame: unknown) => Promise<void> } | null;
+  audioContext: AudioContext | null;
+  audioDestination: MediaStreamAudioDestinationNode | null;
+  handleVideoDecodedData(data: { frame: VideoFrame }): void;
+  handleAudioDecodedData(data: { data: AudioData }): void;
+}
+
+/**
+ * 破棄記録付きのテスト用フレーム
+ */
+function createRecordingFrame(): { frame: VideoFrame; isClosed: () => boolean } {
+  let closed = false;
+  const frame = {
+    close: () => {
+      closed = true;
+    },
+  } as unknown as VideoFrame;
+  return { frame, isClosed: () => closed };
+}
+
+test("handleVideoDecodedData: 書き込み失敗時に VideoFrame を閉じる", async () => {
+  // 書き込み失敗でリークしないことの検証。失敗の通知はしない
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  control.videoWriter = {
+    write: async () => {
+      throw new Error("write failed");
+    },
+  };
+  const { frame, isClosed } = createRecordingFrame();
+
+  control.handleVideoDecodedData({ frame });
+  // 非同期 catch の完了を microtask の flush で待つ (タイマー不使用)
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.isTrue(isClosed());
+  assert.equal(errors.length, 0);
+});
+
+test("handleVideoDecodedData: 書き込み成功時は VideoFrame を閉じない", async () => {
+  // 成功時は Generator 所有のため閉じない方針の検証。失敗の通知はしない
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  control.videoWriter = {
+    write: async () => {},
+  };
+  const { frame, isClosed } = createRecordingFrame();
+
+  control.handleVideoDecodedData({ frame });
+  // 非同期 catch の完了を microtask の flush で待つ (タイマー不使用)
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.isFalse(isClosed());
+  assert.equal(errors.length, 0);
+});
+
+test("handleAudioDecodedData: 音声変換失敗時に onError 通知し AudioData を閉じる", () => {
+  // 変換全体の throw でリークせず通知することの検証
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  control.audioContext = {
+    createBuffer: () => {
+      throw new Error("createBuffer failed");
+    },
+  } as unknown as AudioContext;
+  control.audioDestination = {} as MediaStreamAudioDestinationNode;
+  let closed = false;
+  const audioData = {
+    numberOfChannels: 1,
+    sampleRate: 48000,
+    numberOfFrames: 0,
+    close: () => {
+      closed = true;
+    },
+  } as unknown as AudioData;
+
+  control.handleAudioDecodedData({ data: audioData });
+
+  assert.equal(errors.length, 1);
+  assert.isTrue(closed);
+});
+
+test("handleVideoDecodedData: 出力先不在時はフレームを閉じる", () => {
+  // writer 不在の既存正常系が維持されることの検証。
+  // 早期 return 経路のため onError 通知はなく、write も呼ばれない
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  const { frame, isClosed } = createRecordingFrame();
+
+  control.handleVideoDecodedData({ frame });
+
+  assert.isTrue(isClosed());
+  assert.equal(errors.length, 0);
+});
+
+test("handleAudioDecodedData: 出力先不在時はフレームを閉じる", () => {
+  // context 不在の既存正常系が維持されることの検証。
+  // 早期 return 経路のため onError 通知はない
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  let audioClosed = false;
+  const audioData = {
+    close: () => {
+      audioClosed = true;
+    },
+  } as unknown as AudioData;
+
+  control.handleAudioDecodedData({ data: audioData });
+
+  assert.isTrue(audioClosed);
+  assert.equal(errors.length, 0);
+});
+
+test("handleVideoDecodedData: 書き込みの同期 throw 時も VideoFrame を閉じる", () => {
+  // write 自体の同期 throw では catch 節に届かないため、外側 try/catch で閉じる
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  control.videoWriter = {
+    write: () => {
+      throw new Error("sync write failed");
+    },
+  } as unknown as { write: (frame: unknown) => Promise<void> };
+  const { frame, isClosed } = createRecordingFrame();
+
+  control.handleVideoDecodedData({ frame });
+
+  assert.isTrue(isClosed());
+  assert.equal(errors.length, 0);
+});
+
+test("handleAudioDecodedData: 音声変換成功時は AudioData を閉じて通知しない", () => {
+  // 成功時も finally でちょうど 1 回閉じ、onError しないことの検証
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  control.audioContext = {
+    createBuffer: () => ({
+      copyToChannel: () => {},
+    }),
+    createBufferSource: () => ({
+      buffer: null,
+      connect: () => {},
+      start: () => {},
+    }),
+  } as unknown as AudioContext;
+  control.audioDestination = {} as MediaStreamAudioDestinationNode;
+  let closeCount = 0;
+  const audioData = {
+    numberOfChannels: 1,
+    sampleRate: 48000,
+    numberOfFrames: 1,
+    copyTo: () => {},
+    close: () => {
+      closeCount++;
+    },
+  } as unknown as AudioData;
+
+  control.handleAudioDecodedData({ data: audioData });
+
+  assert.equal(closeCount, 1);
+  assert.equal(errors.length, 0);
+});
+
+test("handleAudioDecodedData: 音声再生開始の失敗時も onError 通知し AudioData を閉じる", () => {
+  // 変換全体 (createBuffer〜start) の裏付けとして start 失敗経路を検証する
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"] },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberFrameControl;
+  control.audioContext = {
+    createBuffer: () => ({
+      copyToChannel: () => {},
+    }),
+    createBufferSource: () => ({
+      buffer: null,
+      connect: () => {},
+      start: () => {
+        throw new Error("start failed");
+      },
+    }),
+  } as unknown as AudioContext;
+  control.audioDestination = {} as MediaStreamAudioDestinationNode;
+  let closed = false;
+  const audioData = {
+    numberOfChannels: 1,
+    sampleRate: 48000,
+    numberOfFrames: 1,
+    copyTo: () => {},
+    close: () => {
+      closed = true;
+    },
+  } as unknown as AudioData;
+
+  control.handleAudioDecodedData({ data: audioData });
+
+  assert.equal(errors.length, 1);
+  assert.isTrue(closed);
 });

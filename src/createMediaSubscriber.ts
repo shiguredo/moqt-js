@@ -213,8 +213,11 @@ function decoderTimestampOf(resolved: TimestampSource): number {
 
 /**
  * MediaSubscriber の実装クラス
+ *
+ * 単体テストから復号ハンドラを駆動するため export する
+ * (パッケージ公開 API には含めない)。
  */
-class MediaSubscriberImpl implements MediaSubscriber {
+export class MediaSubscriberImpl implements MediaSubscriber {
   private currentState: MediaSubscriberState = "created";
   private readonly url: string;
   private readonly options: MediaSubscriberOptions;
@@ -874,30 +877,34 @@ class MediaSubscriberImpl implements MediaSubscriber {
 
     // AudioData を AudioBuffer に変換して再生
     const audioData = data.data;
-    const numberOfChannels = audioData.numberOfChannels;
-    const sampleRate = audioData.sampleRate;
-    const numberOfFrames = audioData.numberOfFrames;
+    try {
+      const numberOfChannels = audioData.numberOfChannels;
+      const sampleRate = audioData.sampleRate;
+      const numberOfFrames = audioData.numberOfFrames;
 
-    const audioBuffer = this.audioContext.createBuffer(
-      numberOfChannels,
-      numberOfFrames,
-      sampleRate,
-    );
+      const audioBuffer = this.audioContext.createBuffer(
+        numberOfChannels,
+        numberOfFrames,
+        sampleRate,
+      );
 
-    // 各チャンネルのデータをコピー
-    for (let channel = 0; channel < numberOfChannels; channel++) {
-      const channelData = new Float32Array(numberOfFrames);
-      audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
-      audioBuffer.copyToChannel(channelData, channel);
+      // 各チャンネルのデータをコピー
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const channelData = new Float32Array(numberOfFrames);
+        audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
+        audioBuffer.copyToChannel(channelData, channel);
+      }
+
+      // AudioBufferSourceNode で再生
+      const source = this.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.audioDestination);
+      source.start();
+    } catch (error) {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      audioData.close();
     }
-
-    // AudioBufferSourceNode で再生
-    const source = this.audioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(this.audioDestination);
-    source.start();
-
-    audioData.close();
   }
 
   private handleVideoDecodedData(data: { frame: VideoFrame }): void {
@@ -906,10 +913,17 @@ class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // VideoFrame を MediaStreamTrackGenerator に書き込む
-    this.videoWriter.write(data.frame).catch(() => {
-      // 書き込みエラーは無視
-    });
+    // VideoFrame を MediaStreamTrackGenerator に書き込む。
+    // 成功時は Generator 所有のため閉じない。
+    // 失敗時は本ハンドラで閉じる (書き込み失敗の通知はしない)。
+    const frame = data.frame;
+    try {
+      this.videoWriter.write(frame).catch(() => {
+        frame.close();
+      });
+    } catch {
+      frame.close();
+    }
   }
 }
 

@@ -1,7 +1,7 @@
 # Subscriber の復号フレーム破棄時にリソースがリークする
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-subscriber-frame-close
 - Polished: 2026-09-06
 
@@ -23,3 +23,11 @@
 
 - 書き込み失敗時に `frame.closed` が真であること。音声変換失敗時に `onError` が呼ばれ、`audioData` が閉じられること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/createMediaSubscriber.ts` の `handleVideoDecodedData` で書き込み失敗時に `frame.close()` する (同期 throw と非同期 reject の両方)。成功時は Generator 所有のため閉じない
+- `handleAudioDecodedData` の変換全体を `try/finally` 化し、`audioData.close()` を保証して `catch` で `onError` へ通知する
+- `MediaSubscriberImpl` を単体テスト駆動用に export した (公開 API には含めない)
+- `src/createMediaSubscriber.test.ts` に所有権のテスト 8 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
