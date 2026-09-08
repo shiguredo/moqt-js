@@ -1,7 +1,7 @@
 # Catalog 取得失敗後の状態 hygiene を正す
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-catalog-fetch-hygiene
 - Polished: 2026-09-06
 
@@ -24,3 +24,10 @@
 - タイムアウト reject 後に遅延オブジェクトが届いても `catalog` getter が更新されず、`onCatalog` が発火しないこと。
 - `session.subscribe` throw 後にタイマー発火待ちなく掃除され、後続のタイマー発火で副作用がないこと (検証は実時間の短い timeout で行い、モック / スタブは使わない)。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/createMediaSubscriber.ts` に失敗記録とタイマー保持を追加し、`handleCatalogObject` 先頭と FETCH コールバックで失敗後の遅延オブジェクトを破棄する
+- `session.subscribe` throw 時にフェーズ状態を即時掃除してタイマーを解除し、成功時を含め `finally` でタイマーを解除する
+- `subscribeCatalog` に timeout 引数 (既定は定数) を追加し、短い実時間で駆動するテスト 3 件を追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

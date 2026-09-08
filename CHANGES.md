@@ -99,6 +99,11 @@
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
+- [FIX] Catalog 取得失敗後の状態 hygiene を正す
+  - 受信失敗後の遅延オブジェクトを無害化し、 catalog 更新と onCatalog 発火を止める
+  - session.subscribe 失敗時にフェーズ状態 (進行中フラグ・バッファ・Location) を即時掃除する
+  - 成功時を含めタイマーを解除する
+  - @voluntas
 - [FIX] LOC 単体デコーダの堅牢性を上げる
   - 6 種の単体デコーダに期待 ID 照合を追加し、不一致は ProtocolViolationError とする
   - Config デコーダの返却を入力から独立したコピーに統一する
