@@ -618,6 +618,10 @@ export async function bidiReadSubscribeResponse(
       if (largestLocation) {
         pending.impl.setLargestLocation(largestLocation);
       }
+      // draft-ietf-moq-transport-20 §5.1.2:
+      // SUBSCRIBE 送信時は LARGEST_OBJECT 未受信のため、SUBSCRIBE_OK で
+      // LARGEST_OBJECT を設定した直後に相対 Location Filter を一度だけ再解決する。
+      pending.impl.resolveLocationFilter();
 
       if (decoded.trackProperties.length > 0) {
         pending.impl.setTrackProperties(decoded.trackProperties);
