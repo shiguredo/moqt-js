@@ -1,7 +1,7 @@
 # LOC 単体デコーダの堅牢性を上げる
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-08
 - Branch: feature/fix-loc-decoder-robustness
 - Polished: 2026-09-06
 
@@ -27,6 +27,13 @@
 - 6 種の誤 ID 入力が `ProtocolViolationError` になること。
 - view 返却がなく、重複時後勝ちが注釈されること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## 解決方法
+
+- `src/loc.ts` に `assertLocPropertyId` を追加し、6 種の単体デコーダで期待 ID 照合を行う。不一致は期待値と実際値を含む `ProtocolViolationError` とする。切詰め検出 (`0466`) との順序は ID 先・Length 後とした
+- `decodeVideoConfig` / `decodeAudioConfig` の view 返却を独立コピーに統一し (`decodeLocObjectPayload` と同一方針)、JSDoc を更新した。重複 ID は有効な後続値が上書きする旨を注釈した
+- `src/loc.test.ts` に誤 ID 6 件と独立コピー 2 件のテストを追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
 
 ## 関連
 
