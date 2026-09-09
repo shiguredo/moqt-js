@@ -3,11 +3,11 @@
 - Created: 2026-09-08
 - Completed: YYYY-MM-DD
 - Branch: feature/fix-track-namespace-fields-limit
-- Polished: YYYY-MM-DD
+- Polished: 2026-09-09
 
 ## 目的
 
-draft-ietf-moq-transport-20 §2.4.1 は「If an endpoint receives a Track Namespace consisting of greater than 32 Track Namespace Fields, it MUST close the session with a PROTOCOL_VIOLATION.」と定める。送信側で 33 フィールド以上の Track Namespace を組み立てられると、仕様準拠のピアがセッションを閉じてしまい、アプリケーションの入力ミスがプロトコル違反として伝播する。
+draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure) は「If an endpoint receives a Track Namespace consisting of greater than 32 Track Namespace Fields, it MUST close the session with a PROTOCOL_VIOLATION.」と定める (draft-ietf-moq-transport-21 §2.4.1 (Track Naming) も Track Namespace を「between 0 and 32 Track Namespace Fields」と定める)。送信側で 33 フィールド以上の Track Namespace を組み立てられると、仕様準拠のピアがセッションを閉じてしまい、アプリケーションの入力ミスがプロトコル違反として伝播する。
 
 ## 現状
 
@@ -18,8 +18,8 @@ draft-ietf-moq-transport-20 §2.4.1 は「If an endpoint receives a Track Namesp
 
 ## 設計方針
 
-1. `createTrackNamespace` でフィールド数が `MAX_TRACK_NAMESPACE_FIELDS` を超える場合にエラーを投げる。
-2. 送信検証 `validateTrackNamespaceForSend` にもフィールド数上限を追加し、公開 API 経由の送信を拒否する。
+1. `createTrackNamespace` でフィールド数が `MAX_TRACK_NAMESPACE_FIELDS` を超える場合にエラーを投げる。エラーは既存の 4,096 バイト超過と同じく `Error` とし、受信したワイヤの違反用 `ProtocolViolationError` は使わない。
+2. 送信検証 `validateTrackNamespaceForSend` にもフィールド数上限を追加し、公開 API 経由の送信を拒否する。エラーは既存の予約 namespace 拒否と同じく `Error` とし、`ProtocolViolationError` は使わない。
 3. 受信側 `decodeTrackNamespace` の既存検証は変更しない。
 4. 32 フィールドは許可、33 フィールドは拒否するテストを追加する。
 
@@ -32,7 +32,7 @@ draft-ietf-moq-transport-20 §2.4.1 は「If an endpoint receives a Track Namesp
 
 ## 関連
 
-- draft-ietf-moq-transport-20 §2.4.1
+- draft-ietf-moq-transport-21 §8.7 / §2.4.1
 - `createTrackNamespace` / `decodeTrackNamespace` / `MAX_TRACK_NAMESPACE_FIELDS`
 - `validateTrackNamespaceForSend`
 - `bidiSendNamespaceRequestUpdate`
