@@ -132,7 +132,9 @@ test("toProtocolViolationSessionError: Error を継承しないオブジェク�
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
  * source === "stream" の失敗はピア起因のキャンセルであり、
- * PROTOCOL_VIOLATION に昇格させない。
+ * PROTOCOL_VIOLATION に昇格させない。例外として制御ストリームの
+ * RESET_STREAM は §6.3 の MUST により呼び出し側 (startControlMessageLoop) が
+ * PROTOCOL_VIOLATION でセッションを閉じる。
  */
 test("isPeerStreamError: source: 'stream' を持つ Error は true", () => {
   const error = Object.assign(new Error("peer cancel"), { source: "stream" });
