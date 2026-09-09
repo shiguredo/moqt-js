@@ -1119,6 +1119,10 @@
   - `as unknown as` で使っていたインライン定義 7 箇所を、フィルタ評価系と解除系の 2 共有インターフェースへ集約する
   - テストの挙動・名前は一切変えない (テスト名重複は macOS のロケール依存 sort/uniq による誤検出で実在せず)
   - @voluntas
+- [UPDATE] FILL_PARAMETERS / LOCATION_FILTER の再デコードを一本化する
+  - validateLocationAndFillParameters のデコード結果を上限合算と fill 範囲評価で再利用し、同一 REQUEST_UPDATE の重複デコードを除去する
+  - 挙動は変えない (既存テストは変更なしで通る)
+  - @voluntas
 
 ## 2026.2.0
 
