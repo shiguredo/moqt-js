@@ -5,7 +5,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
-import { ObjectStatus } from "./message/types";
+import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import { PublisherImpl } from "./publisher";
 
 test("closed 状態では sendObject がエラーになる", () => {
@@ -688,4 +688,50 @@ test("sendDatagram: 購読の Location Filter の範囲外は送信せず Larges
 
   assert.deepEqual(sentGroups, [5]);
   assert.equal(publisher.getLargestLocation()?.group, 5n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.9 / §9.5.1:
+ * done() (TRACK_ENDED) と REQUEST_UPDATE 拒否経路 (UPDATE_FAILED) が並行しても、
+ * 同じ donePromise 排他を通るため PUBLISH_DONE は 1 回だけ送られる。
+ * 先に排他を取得した done() の TRACK_ENDED が勝つ。
+ */
+test("terminate: done() が先なら TRACK_ENDED を 1 回だけ送る", async () => {
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  const statuses: PublishDoneStatusCode[] = [];
+  let resolveSend!: () => void;
+  const sendPromise = new Promise<void>((resolve) => {
+    resolveSend = resolve;
+  });
+  publisher.onDoneInternal = async (status) => {
+    statuses.push(status);
+    await sendPromise;
+  };
+
+  // done() が排他を先に取得し、その後で拒否経路が並行する
+  const donePromise = publisher.done();
+  const terminatePromise = publisher.terminate(PublishDoneStatusCode.UPDATE_FAILED);
+  resolveSend();
+  await Promise.all([donePromise, terminatePromise]);
+
+  assert.deepEqual(statuses, [PublishDoneStatusCode.TRACK_ENDED]);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.9 / §9.5.1:
+ * 拒否経路が排他を先に取得した場合は UPDATE_FAILED を 1 回だけ送り、
+ * 並行する done() は何も送らない。
+ */
+test("terminate: 拒否経路が先なら UPDATE_FAILED を 1 回だけ送る", async () => {
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  const statuses: PublishDoneStatusCode[] = [];
+  publisher.onDoneInternal = async (status) => {
+    statuses.push(status);
+  };
+
+  const terminatePromise = publisher.terminate(PublishDoneStatusCode.UPDATE_FAILED);
+  const donePromise = publisher.done();
+  await Promise.all([terminatePromise, donePromise]);
+
+  assert.deepEqual(statuses, [PublishDoneStatusCode.UPDATE_FAILED]);
 });

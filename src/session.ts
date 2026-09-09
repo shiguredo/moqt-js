@@ -1818,11 +1818,11 @@ export class SessionImpl implements Session {
       this.sendDatagram(impl, params);
     };
 
-    impl.onDoneInternal = async () => {
+    impl.onDoneInternal = async (status) => {
       // まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）
       await this.closePublisherStream(impl.getTrackAlias());
       // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-21 §9.9）
-      await this.sendPublishDone(impl);
+      await this.sendPublishDone(impl, status);
       // draft-ietf-moq-transport-21 §6.6.1:
       // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
       this.onRequestDrained();
@@ -3200,12 +3200,11 @@ export class SessionImpl implements Session {
    * PUBLISH_DONE は双方向ストリーム上で送信される。
    * Request ID フィールドはない（bidi stream で特定可能）。
    */
-  private async sendPublishDone(publisher: PublisherImpl): Promise<void> {
-    return publishSendPublishDone(
-      this as unknown as SessionInternal,
-      publisher,
-      PublishDoneStatusCode.TRACK_ENDED,
-    );
+  private async sendPublishDone(
+    publisher: PublisherImpl,
+    status: PublishDoneStatusCode,
+  ): Promise<void> {
+    return publishSendPublishDone(this as unknown as SessionInternal, publisher, status);
   }
 
   /**
