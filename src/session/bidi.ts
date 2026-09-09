@@ -1425,9 +1425,10 @@ export async function bidiHandlePublishRequestUpdate(
   // 不整合を防ぐ。
   try {
     validateRangeFilterCombination(decoded.parameters);
-    validateLocationAndFillParameters(decoded.parameters);
+    const decodedFill = validateLocationAndFillParameters(decoded.parameters);
     validateIncomingRangeFilterLimits(
       decoded.parameters,
+      decodedFill.fillInnerParameters,
       session.localMaxFilterRanges ?? 0,
       "REQUEST_UPDATE",
     );
@@ -1859,14 +1860,23 @@ export async function bidiReadRequestStreamMessages(
             // 不整合を防ぐ。
             // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
             // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
+            // validateLocationAndFillParameters のデコード結果を上限合算と
+            // fill 範囲評価で再利用する (catch で break / throw するため、
+            // 検証通過時は必ず値が入る)。
+            let decodedFill: DecodedLocationAndFill = {
+              locationFilter: undefined,
+              fillInnerParameters: undefined,
+              fillInnerLocationFilter: undefined,
+            };
             try {
               validateRangeFilterCombination(decoded.parameters);
-              validateLocationAndFillParameters(decoded.parameters);
+              decodedFill = validateLocationAndFillParameters(decoded.parameters);
               // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
               // 自 endpoint が広告した上限 (未広告時 0) を超える Range Filter は
               // REQUEST_ERROR (INVALID_FILTER) で拒否する。
               validateIncomingRangeFilterLimits(
                 decoded.parameters,
+                decodedFill.fillInnerParameters,
                 session.localMaxFilterRanges ?? 0,
                 "REQUEST_UPDATE",
               );
@@ -1900,7 +1910,7 @@ export async function bidiReadRequestStreamMessages(
               // fill fetch ストリームを開けないため、必要な場合は
               // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
               // applyPublishRequestUpdate を参照。
-              if (applyPublishRequestUpdate(publisher, decoded.parameters)) {
+              if (applyPublishRequestUpdate(publisher, decoded.parameters, decodedFill)) {
                 await bidiSendRequestError(
                   session,
                   requestId,
@@ -2026,6 +2036,21 @@ export async function bidiReadRequestStreamMessages(
 }
 
 /**
+ * 受信した LOCATION_FILTER / FILL_PARAMETERS のデコード結果
+ *
+ * 検証と利用で重複デコードしないよう、デコード済みの値を上限合算と fill 範囲
+ * 評価へ受け渡す。
+ */
+interface DecodedLocationAndFill {
+  /** top-level の LOCATION_FILTER (未受信時 undefined) */
+  locationFilter: LocationFilter | undefined;
+  /** FILL_PARAMETERS 内側の Parameter[] (未受信時 undefined) */
+  fillInnerParameters: Parameter[] | undefined;
+  /** FILL_PARAMETERS 内側の LOCATION_FILTER (未指定時 undefined) */
+  fillInnerLocationFilter: LocationFilter | undefined;
+}
+
+/**
  * 受信パラメータ群に含まれる LOCATION_FILTER / FILL_PARAMETERS の値を検証する
  *
  * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
@@ -2039,15 +2064,27 @@ export async function bidiReadRequestStreamMessages(
  * REQUEST_UPDATE を受信する両経路 (bidiHandlePublishRequestUpdate /
  * bidiReadRequestStreamMessages) で使う。PUBLISH_OK は EXPIRES のみを
  * 許可するため本検証は通さない (許可外はスコープ検証で拒否する)。
+ *
+ * @returns 検証済みのデコード結果。上限合算と fill 範囲評価で再利用する
  */
-function validateLocationAndFillParameters(parameters: Parameter[]): void {
+function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLocationAndFill {
+  let locationFilter: LocationFilter | undefined;
+  let fillInnerParameters: Parameter[] | undefined;
+  let fillInnerLocationFilter: LocationFilter | undefined;
   for (const param of parameters) {
     if (param.type === MessageParameterType.LOCATION_FILTER) {
-      decodeLocationFilterParameter(param);
+      locationFilter = decodeLocationFilterParameter(param);
     } else if (param.type === MessageParameterType.FILL_PARAMETERS) {
-      decodeFillParameters(param);
+      fillInnerParameters = decodeFillParameters(param);
+      const innerLocationFilter = fillInnerParameters.find(
+        (inner) => inner.type === MessageParameterType.LOCATION_FILTER,
+      );
+      if (innerLocationFilter !== undefined) {
+        fillInnerLocationFilter = decodeLocationFilterParameter(innerLocationFilter);
+      }
     }
   }
+  return { locationFilter, fillInnerParameters, fillInnerLocationFilter };
 }
 
 /**
@@ -2065,10 +2102,11 @@ function validateLocationAndFillParameters(parameters: Parameter[]): void {
  *
  * @returns FILL_PARAMETERS を理由に REQUEST_ERROR で拒否すべきなら true
  */
-function applyPublishRequestUpdate(publisher: PublisherImpl, parameters: Parameter[]): boolean {
-  const locationFilterParam = parameters.find(
-    (param) => param.type === MessageParameterType.LOCATION_FILTER,
-  );
+function applyPublishRequestUpdate(
+  publisher: PublisherImpl,
+  parameters: Parameter[],
+  decodedFill: DecodedLocationAndFill,
+): boolean {
   const forwardParam = parameters.find((param) => param.type === MessageParameterType.FORWARD);
   const fillParam = parameters.find((param) => param.type === MessageParameterType.FILL_PARAMETERS);
 
@@ -2077,10 +2115,7 @@ function applyPublishRequestUpdate(publisher: PublisherImpl, parameters: Paramet
   // 終了処理中の publisher へ送信を再開させてしまう。反映は受理が確定してから
   // 行う (検証を状態変更より先に行う既存方針と同じ)。
   const largestLocation = publisher.getLargestLocation();
-  const decodedLocationFilter =
-    locationFilterParam !== undefined
-      ? decodeLocationFilterParameter(locationFilterParam)
-      : undefined;
+  const decodedLocationFilter = decodedFill.locationFilter;
   // 同一更新の LOCATION_FILTER は受信時点の Largest Object で解決する (§3.3.1)。
   // 省略時は受理済みの解決済みフィルタをそのまま使う (再解決しない)。
   const effectiveSubscriptionFilter =
@@ -2093,7 +2128,7 @@ function applyPublishRequestUpdate(publisher: PublisherImpl, parameters: Paramet
   let rejectForFill = false;
   if (fillParam !== undefined && effectiveForwardState) {
     const fillFilter = resolveFillRangeFilter(
-      fillParam,
+      decodedFill.fillInnerLocationFilter,
       effectiveSubscriptionFilter,
       largestLocation,
     );
@@ -2122,24 +2157,20 @@ function applyPublishRequestUpdate(publisher: PublisherImpl, parameters: Paramet
  *  inside FILL_PARAMETERS, or the subscription's Location filter if it is
  *  omitted.」
  * 内側の LOCATION_FILTER は fill 要求時点の Largest Object で解決し、省略時は
- * 購読の解決済み Location Filter をそのまま使う。呼び出し前に
- * validateLocationAndFillParameters で内側を検証しておくこと。
+ * 購読の解決済み Location Filter をそのまま使う。内側の LOCATION_FILTER は
+ * validateLocationAndFillParameters のデコード結果を再利用する。
  *
- * @param fillParam - 検証済みの FILL_PARAMETERS パラメータ
+ * @param innerLocationFilter - FILL_PARAMETERS 内側の LOCATION_FILTER (未指定時 undefined)
  * @param subscriptionResolvedFilter - 購読の解決済み Location Filter
  * @param largestLocation - publisher が送信済みの最大 Location (未送信時 null)
  */
 function resolveFillRangeFilter(
-  fillParam: Parameter,
+  innerLocationFilter: LocationFilter | undefined,
   subscriptionResolvedFilter: ResolvedFilter | undefined,
   largestLocation: Location | null,
 ): ResolvedFilter | undefined {
-  const innerParameters = decodeFillParameters(fillParam);
-  const innerLocationFilter = innerParameters.find(
-    (param) => param.type === MessageParameterType.LOCATION_FILTER,
-  );
   if (innerLocationFilter !== undefined) {
-    return resolveFilter(decodeLocationFilterParameter(innerLocationFilter), largestLocation);
+    return resolveFilter(innerLocationFilter, largestLocation);
   }
   return subscriptionResolvedFilter;
 }
@@ -2193,10 +2224,13 @@ function isFillRangeEmpty(
  * 内側の Range Filter (0x25-0x28) も購読単位の合計に含める (§9.20.16 は
  * 内側を独立した parameter scope とするが、購読単位の上限は fill を含む)。
  * 除去 (Length=0) は Ranges を消費しないため数えない。
- * 呼び出し前に validateLocationAndFillParameters で内側を検証しておくこと
- * (本関数は検証済みの値を前提に decode する)。
+ * FILL_PARAMETERS 内側の Parameter[] は validateLocationAndFillParameters の
+ * デコード結果を再利用する。
  */
-function countIncomingRangeFilterRanges(parameters: Parameter[]): {
+function countIncomingRangeFilterRanges(
+  parameters: Parameter[],
+  fillInnerParameters: Parameter[] | undefined,
+): {
   hasRangeFilter: boolean;
   totalRanges: number;
 } {
@@ -2215,10 +2249,8 @@ function countIncomingRangeFilterRanges(parameters: Parameter[]): {
     }
   };
   addRanges(parameters);
-  for (const param of parameters) {
-    if (param.type === MessageParameterType.FILL_PARAMETERS) {
-      addRanges(decodeFillParameters(param));
-    }
+  if (fillInnerParameters !== undefined) {
+    addRanges(fillInnerParameters);
   }
   return { hasRangeFilter, totalRanges };
 }
@@ -2239,10 +2271,14 @@ function countIncomingRangeFilterRanges(parameters: Parameter[]): {
  */
 function validateIncomingRangeFilterLimits(
   parameters: Parameter[],
+  fillInnerParameters: Parameter[] | undefined,
   localMaxFilterRanges: number,
   contextName: string,
 ): void {
-  const { hasRangeFilter, totalRanges } = countIncomingRangeFilterRanges(parameters);
+  const { hasRangeFilter, totalRanges } = countIncomingRangeFilterRanges(
+    parameters,
+    fillInnerParameters,
+  );
   if (!hasRangeFilter) {
     return;
   }
