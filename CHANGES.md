@@ -1083,6 +1083,10 @@
   - draft-ietf-moq-transport-21 §12.1 の MUST に従い、subgroup / datagram / fetch / fill の各検出経路で同一 Full Track Name の全購読と全 FETCH を cancel する
   - 従来は検出した経路の片方のみを cancel し、同一 Track の他方や他 FETCH が残留していた
   - @voluntas
+- [FIX] Publisher が購読の Location Filter を送信 Object に適用する
+  - draft-ietf-moq-transport-21 §3.3.1 の MUST に従い、publisher は購読の Location Filter の範囲外 Object を sendObject / sendDatagram で送信しない
+  - 従来は範囲外 Object も配信していた
+  - @voluntas
 
 ### misc
 
