@@ -356,7 +356,10 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 test("RequestError のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
-      fc.bigInt({ min: 0n, max: 1000n }),
+      // draft-ietf-moq-transport-21 Section 9.4.2:
+      // REDIRECT (0x34) は Redirect 構造を必ず伴うため、Redirect なしの一般
+      // ラウンドトリップ対象から除外する (Redirect 付きは専用のプロパティで検証する)
+      fc.bigInt({ min: 0n, max: 1000n }).filter((n) => n !== 0x34n),
       fc.bigInt({ min: 0n, max: 1000000n }),
       fc.string({ minLength: 0, maxLength: 200 }),
       (errorCode, retryInterval, reasonPhrase) => {
