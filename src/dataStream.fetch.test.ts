@@ -19,7 +19,7 @@ import {
 } from "./dataStream";
 import { GroupOrder } from "./message/types";
 import { encodeVarint } from "./varint";
-import { IncompleteDataError, MalformedTrackError } from "./error";
+import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
 import { encodeProperties } from "./properties";
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
@@ -273,10 +273,9 @@ test("FetchObjectFields: 範囲外・非整数の publisherPriority は throw �
 
 /**
  * draft-ietf-moq-transport-21 §11.4.1.1:
- * PRIORITY_PRESENT なしでは不正値が渡されても検証せず throw しないことを検証する。
- * (検証は PRIORITY_PRESENT 分岐内でのみ行う)
+ * PRIORITY_PRESENT なしの encode では priority を検証しないことを確認する。
  */
-test("FetchObjectFields: PRIORITY_PRESENT なしでは範囲外 priority でも throw しない", () => {
+test("FetchObjectFields: PRIORITY_PRESENT なしの encode は priority を検証しない", () => {
   const fields: FetchObjectFields = {
     serializationFlags:
       FetchSerializationFlags.GROUP_ID_PRESENT |
@@ -290,6 +289,31 @@ test("FetchObjectFields: PRIORITY_PRESENT なしでは範囲外 priority でも 
   };
   const encoded = encodeFetchObjectFields(fields);
   assert.isDefined(encoded);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * 0x10 未設定は prior Object の Priority を参照することを意味する。先頭 Object
+ * には prior Object が無いため、仕様の MUST により PROTOCOL_VIOLATION となる。
+ */
+test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は ProtocolViolationError", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT,
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 128,
+    payloadLength: 5n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    /first object must have PRIORITY_PRESENT flag set/,
+  );
 });
 
 test("FetchObjectFields: 最初のオブジェクトの roundtrip", () => {

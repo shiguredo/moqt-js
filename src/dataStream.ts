@@ -387,6 +387,8 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // draft-ietf-moq-transport-21 Section 11.3.1:
   // 不正なタイプ値を検証する
   // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
+  // 加えて "Values of 128 or greater ... MUST close the session with a
+  // PROTOCOL_VIOLATION" のため、bit 7 だけでなく 128 以上をすべて拒否する
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
   // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
   // 0b0XX1XXXX の形式でないタイプ値は不正
@@ -396,7 +398,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
     );
   }
-  if ((typeNum & 0x10) === 0 || (typeNum & 0x80) !== 0) {
+  if ((typeNum & 0x10) === 0 || typeNum > 0x7f) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
     );
@@ -1739,15 +1741,14 @@ export function decodeFetchObjectFields(
     checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
   } else {
     // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
-    // 先頭オブジェクトに MUST なのは Group ID Delta と Object ID Delta のみ。
-    // PRIORITY_PRESENT は任意であり、省略時は直近の実オブジェクト (Datagram
-    // を含む) の Priority を継承する。先頭オブジェクト (context null) のみ
-    // デフォルト値 128 を使用する。
+    // 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
+    // 継承する」ことを意味する。先頭オブジェクト (context null) には継承元が
+    // 無いため prior Object 参照となり、仕様の MUST により PROTOCOL_VIOLATION
+    // となる。
     if (context === null) {
-      publisherPriority = 128;
-    } else {
-      publisherPriority = context.publisherPriority;
+      throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
     }
+    publisherPriority = context.publisherPriority;
   }
 
   // Properties

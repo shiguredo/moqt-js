@@ -848,6 +848,9 @@
   - `sendPublishDone` で PUBLISH_DONE 送信後に writer.close() する
   - `bidiHandlePublishDone` の状態破棄をストリーム close 時に移動する
   - @voluntas
+- [FIX] Subgroup Header の型 128 以上と Fetch 先頭 Object の Priority 未設定を PROTOCOL_VIOLATION として拒否する
+  - draft-ietf-moq-transport-21 §11.3.1 の "Values of 128 or greater" と §11.4.1.1 Table 9 の prior Object 参照禁止に合わせる
+  - @voluntas
 
 ### misc
 

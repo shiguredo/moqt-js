@@ -201,6 +201,33 @@ for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
   });
 }
 
+// draft-ietf-moq-transport-21 Section 11.3.1:
+// "Values of 128 or greater ... MUST close the session with a PROTOCOL_VIOLATION"
+// のため、bit 7 の有無に関わらず 128 以上はすべて拒否する
+for (const invalidType of [0x80, 0x100, 0x110]) {
+  test(`SubgroupHeader: 128 以上の型 0x${invalidType.toString(16)} は ProtocolViolationError`, () => {
+    const bytes: number[] = [];
+    if (invalidType < 0x40) {
+      bytes.push(invalidType);
+    } else if (invalidType < 0x4000) {
+      // QUIC varint 2 バイト形式
+      bytes.push(0x40 | (invalidType >> 8), invalidType & 0xff);
+    } else {
+      // QUIC varint 4 バイト形式
+      bytes.push(
+        0x80 | (invalidType >>> 24),
+        (invalidType >> 16) & 0xff,
+        (invalidType >> 8) & 0xff,
+        invalidType & 0xff,
+      );
+    }
+    // trackAlias と groupId を続け、型検証まで到達させる
+    bytes.push(0x01, 0x02);
+    const data = new Uint8Array(bytes);
+    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
+  });
+}
+
 test("SubgroupHeader: バッファ不足は IncompleteDataError", () => {
   // 空のバッファを decode に渡すとデータ不足
   const data = new Uint8Array(0);
