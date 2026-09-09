@@ -18,7 +18,7 @@ import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toProtocolViolationSessionError } from "./errors";
-import { bidiCancelSubscriptionWithError } from "./bidi";
+import { cancelMalformedTrackPeers } from "./bidi";
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
@@ -301,12 +301,14 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     }
     if (err instanceof MalformedTrackError) {
       // draft-ietf-moq-transport-21 §12.1:
-      // malformed track を検出した購読を cancel し、セッションは閉じない
+      // malformed track を検出したら同一 Track の全購読と全 FETCH を cancel し、
+      // セッションは閉じない。Full Track Name は trackAlias から購読を特定して得る。
       const trackAlias = decodeDatagramTrackAlias(data);
       if (trackAlias !== undefined) {
         const subscribers = session.subscribersByAlias.get(trackAlias) ?? [];
-        for (const subscriber of subscribers.slice()) {
-          void bidiCancelSubscriptionWithError(session, subscriber, err);
+        const fullTrackName = subscribers[0]?.getFullTrackName();
+        if (fullTrackName !== undefined) {
+          cancelMalformedTrackPeers(session, fullTrackName, err);
         }
       }
     }

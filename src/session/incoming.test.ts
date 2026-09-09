@@ -686,6 +686,7 @@ function createDatagramDeliveryTestContext(): {
     },
     subscribersByAlias: new Map(),
     subscribers: new Map(),
+    fetchers: new Map(),
     requestStreams: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),

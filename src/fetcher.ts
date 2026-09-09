@@ -92,6 +92,14 @@ export class FetcherImpl implements Fetcher {
     return this.fetcherTrackName;
   }
 
+  /**
+   * Full Track Name を取得する（Track 同一性判定用）
+   * draft-ietf-moq-transport-21 §2.4.1: Track の同一性は Full Track Name で判定
+   */
+  getFullTrackName(): string {
+    return `${this.fetcherNamespace.join("/")}/${this.fetcherTrackName}`;
+  }
+
   get endOfTrack(): boolean {
     return this.fetchEndOfTrack;
   }

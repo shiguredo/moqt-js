@@ -1079,6 +1079,10 @@
   - draft-ietf-moq-transport-21 §8.7 / §2.4.1 に従い、33 フィールド以上の Track Namespace を createTrackNamespace / validateTrackNamespaceForSend で拒否する
   - 従来は送信できてしまい、仕様準拠のピアがセッションを閉じていた
   - @voluntas
+- [FIX] malformed track 検出時に同一 Track の購読と FETCH を相互に cancel する
+  - draft-ietf-moq-transport-21 §12.1 の MUST に従い、subgroup / datagram / fetch / fill の各検出経路で同一 Full Track Name の全購読と全 FETCH を cancel する
+  - 従来は検出した経路の片方のみを cancel し、同一 Track の他方や他 FETCH が残留していた
+  - @voluntas
 
 ### misc
 

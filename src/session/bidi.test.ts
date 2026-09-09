@@ -71,6 +71,7 @@ import {
   bidiReadTrackStatusResponse,
   bidiSendNamespaceRequestUpdate,
   bidiSendRequestUpdate,
+  cancelMalformedTrackPeers,
   rejectPendingRequestUpdates,
   FILL_NOT_SUPPORTED_REASON,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
@@ -10148,4 +10149,76 @@ test("bidiReadRequestStreamMessages: localMaxFilterRanges 0 の Range Filter で
   );
   assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1:
+ * 「it MUST cancel any corresponding subscription or fetches for that Track」
+ * 同一 Full Track Name の全購読と全 FETCH を cancel し、別 Track は触らない。
+ */
+test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を cancel する", async () => {
+  const subErrors: Error[] = [];
+  const fetchErrors: Error[] = [];
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      subErrors.push(error);
+    },
+  );
+  // 同一 alias に同一 Full Track Name の購読を 2 件ぶら下げ、cancel 中の
+  // splice で 2 件目が取りこぼされないことを検証する
+  const secondSubscriber = new SubscriberImpl(["live"], "video", 5n, 7n, () => {});
+  const otherSubscriber = new SubscriberImpl(["live"], "other", 2n, 8n, () => {});
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    3n,
+    () => {},
+    undefined,
+    (error) => {
+      fetchErrors.push(error);
+    },
+  );
+  const otherFetcher = new FetcherImpl(["live"], "other", 4n, () => {});
+  const session = {
+    sessionState: "connected",
+    subscribersByAlias: new Map([
+      [7n, [subscriber, secondSubscriber]],
+      [8n, [otherSubscriber]],
+    ]),
+    subscribers: new Map(),
+    fetchers: new Map([
+      [3n, fetcher],
+      [4n, otherFetcher],
+    ]),
+    requestStreams: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    onRequestDrained: () => {},
+    closeWithError: () => {},
+  } as unknown as BidiSessionInternal;
+
+  const error = new MalformedTrackError("malformed track");
+  cancelMalformedTrackPeers(session, "live/video", error);
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // 同一 Track の購読 (同一 alias の 2 件目を含む) と FETCH が closed になり、
+  // error が通知される
+  assert.equal(subscriber.state, "closed");
+  assert.equal(secondSubscriber.state, "closed");
+  assert.equal(fetcher.state, "closed");
+  assert.equal(subErrors.length, 1);
+  assert.equal(fetchErrors.length, 1);
+  // 別 Track の購読 / FETCH は触らない
+  assert.equal(otherSubscriber.state, "active");
+  assert.equal(otherFetcher.state, "active");
 });

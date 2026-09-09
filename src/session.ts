@@ -4817,9 +4817,9 @@ export class SessionImpl implements Session {
    * FIN は fill 完了 (関連付けを消す)、reset は fill 失敗として扱う。
    * オブジェクトは fillDelivered を true にして購読の object コールバックに
    * 渡す (handleFillObject 経由。subscription のフィルタ再適用は通さない)。
-   * Malformed Track 検出時はデータストリームを打ち切るのみとし、購読の
-   * bidi ストリームには触れない (fill の成否は購読に波及しない。§3.4.1)。
-   * エラー通知の扱いも別途整理する。
+   * fill ストリームの reset / STOP_SENDING による通常の失敗は購読に波及しない
+   * (§3.4.1)。ただし malformed track の検出は §12.1 が優先し、同一 Track の
+   * 全購読と全 FETCH を cancel する。
    */
   private async handleFillFetchStream(
     reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -4887,8 +4887,14 @@ export class SessionImpl implements Session {
       if (sessionError !== null) {
         this.closeWithError(sessionError);
       } else if (err instanceof MalformedTrackError) {
-        // fill 失敗はデータストリームの打ち切りのみとし、購読の bidi
-        // ストリームには STOP_SENDING を送らない (§3.4.1)。
+        // draft-ietf-moq-transport-21 §12.1:
+        // malformed track の検出は §3.4.1 の「fill 失敗は購読に波及しない」
+        // より優先し、同一 Track の全購読と全 FETCH を cancel する。
+        bidi.cancelMalformedTrackPeers(
+          this as unknown as SessionInternal,
+          target.subscriber.getFullTrackName(),
+          err,
+        );
         await cancelStreamQuiet(
           reader,
           `malformed fill track: requestId=${fillRequestId}, reason=${err instanceof Error ? err.message : String(err)}`,
@@ -4936,11 +4942,11 @@ export class SessionImpl implements Session {
    * the bidi request stream.」に従い bidi リクエストストリームへ STOP_SENDING
    * を送り、fetchers Map から削除する。
    *
-   * §12.1 の「fetches for that Track」は複数形だが、FETCH ごとにデータストリーム
-   * と検出が独立するため、対象は該当 requestId の FETCH のみとする (同一 Track の
-   * 他 FETCH には波及しない)。fetch() は bidiSendRequestOnBidiStream で新規 bidi
-   * ストリームを開いて requestStreams に登録するため (§9.11「A subscriber sends
-   * FETCH as the first message on a new bidi stream」)、同じく STOP_SENDING が送られる。
+   * §12.1 の「fetches for that Track」に従い、同一 Full Track Name の全購読と
+   * 全 FETCH を cancel する (cancelMalformedTrackPeers)。fetch() は
+   * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
+   * 登録するため (§9.11「A subscriber sends FETCH as the first message on a new
+   * bidi stream」)、同じく STOP_SENDING が送られる。
    *
    * アプリの error コールバックが throw した場合は握り潰してキャンセルを継続する。
    * 呼び出し元の handleIncomingStream は fire-and-forget で起動されるため、throw を
@@ -4956,13 +4962,14 @@ export class SessionImpl implements Session {
       `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${error.message}`,
     );
     if (fetcher) {
-      try {
-        fetcher.handleError(error);
-      } catch {
-        // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
-      } finally {
-        await fetcher.cancel();
-      }
+      // draft-ietf-moq-transport-21 §12.1:
+      // 同一 Track の全購読と全 FETCH を cancel する (該当 requestId の FETCH の
+      // みではない)。Full Track Name で引く。
+      bidi.cancelMalformedTrackPeers(
+        this as unknown as SessionInternal,
+        fetcher.getFullTrackName(),
+        error,
+      );
     }
   }
 
@@ -4970,7 +4977,7 @@ export class SessionImpl implements Session {
    * 受信データストリームの読み取りループで発生したエラーの処理
    *
    * - ProtocolViolationError は PROTOCOL_VIOLATION でセッションを閉じる
-   * - MalformedTrackError は対象 FETCH をキャンセルする
+   * - MalformedTrackError は同一 Track の全購読と全 FETCH をキャンセルする
    * - FETCH データストリームの peer RESET_STREAM は fetcher state を破棄する
    */
   private async handleIncomingStreamError(
@@ -5087,14 +5094,14 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Malformed Track (Object Property の Mandatory Track Property) を検出した購読を
-   * §12.1 に従って cancel する
+   * Malformed Track (Object Property の Mandatory Track Property) を検出した
+   * 同一 Track の全購読と全 FETCH を §12.1 に従って cancel する
    *
    * draft-ietf-moq-transport-21 §12.1:
    * "it MUST cancel any corresponding subscription or fetches for that Track
    *  from that publisher"
-   * データストリームを打ち切り、購読の bidi リクエストストリームを cancel する。
-   * セッションは閉じない (購読単位の失敗として扱う)。
+   * データストリームを打ち切り、同一 Full Track Name の購読 / FETCH を cancel する。
+   * セッションは閉じない (Track 単位の失敗として扱う)。
    */
   private async handleMalformedSubgroupTrack(
     reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -5102,12 +5109,12 @@ export class SessionImpl implements Session {
     subscribers: SubscriberImpl[],
     error: MalformedTrackError,
   ): Promise<void> {
-    for (const subscriber of subscribers.slice()) {
-      await bidi.bidiCancelSubscriptionWithError(
-        this as unknown as SessionInternal,
-        subscriber,
-        error,
-      );
+    // draft-ietf-moq-transport-21 §12.1:
+    // 同一 Track の全購読と全 FETCH を cancel する。Full Track Name は
+    // trackAlias から購読を特定して得る (購読が未特定なら cancel 対象が無い)。
+    const fullTrackName = subscribers[0]?.getFullTrackName();
+    if (fullTrackName !== undefined) {
+      bidi.cancelMalformedTrackPeers(this as unknown as SessionInternal, fullTrackName, error);
     }
     await cancelStreamQuiet(
       reader,
