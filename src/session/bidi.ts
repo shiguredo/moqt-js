@@ -94,12 +94,7 @@ import {
   toProtocolViolationSessionError,
 } from "./errors";
 import { MAX_VARINT, encodeVarint } from "../varint";
-import {
-  publishClosePublisherStream,
-  publishResetPublisherStream,
-  publishSendPublishDone,
-  publishSendPublishDoneWithoutPublisher,
-} from "./publish";
+import { publishResetPublisherStream, publishSendPublishDoneWithoutPublisher } from "./publish";
 import type {
   NamespaceSubscriptionState,
   PublisherStreamState,
@@ -1226,13 +1221,11 @@ async function bidiTerminatePublishSubscriptionWithUpdateFailed(
 ): Promise<void> {
   const publisher = session.publishers.get(requestId);
   if (publisher !== undefined) {
-    // 先に closed にする。以降に呼ばれるアプリの done() を早期 return させ、
-    // 新たな PUBLISH_DONE 送信 (close 失敗の PROTOCOL_VIOLATION 昇格) を防ぐ。
-    // 既に in-flight の done() は中断できないが、本変更前からの既知のレース。
-    // 後続の sendObject / sendDatagram は closed ガードで fail-fast 拒否される。
-    publisher.markClosed();
-    await publishClosePublisherStream(session, publisher.getTrackAlias());
-    await publishSendPublishDone(session, publisher, PublishDoneStatusCode.UPDATE_FAILED);
+    // PUBLISH_DONE は done() と同じ排他経路 (donePromise) で送る。並行する
+    // done() があっても 1 回だけ送られ、二重送信による close 失敗の
+    // PROTOCOL_VIOLATION 昇格を防ぐ。排他を先に取得した側 (done() の
+    // TRACK_ENDED か本経路の UPDATE_FAILED) が送信する (§9.9 / §9.5.1)。
+    await publisher.terminate(PublishDoneStatusCode.UPDATE_FAILED);
   } else {
     await publishSendPublishDoneWithoutPublisher(
       session,

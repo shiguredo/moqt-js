@@ -1087,6 +1087,10 @@
   - draft-ietf-moq-transport-21 §3.3.1 の MUST に従い、publisher は購読の Location Filter の範囲外 Object を sendObject / sendDatagram で送信しない
   - 従来は範囲外 Object も配信していた
   - @voluntas
+- [FIX] done() と拒否経路の並行で PUBLISH_DONE が二重送信されるレースを解消する
+  - done() と REQUEST_UPDATE 拒否経路が同じ donePromise 排他を通り、PUBLISH_DONE を 1 回だけ送る (§9.9 / §9.5.1)
+  - 従来は並行時に二重送信し、close 失敗が PROTOCOL_VIOLATION に昇格し得た
+  - @voluntas
 
 ### misc
 

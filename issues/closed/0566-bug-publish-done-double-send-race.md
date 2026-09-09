@@ -1,7 +1,7 @@
 # done() と拒否経路の並行で PUBLISH_DONE が二重送信されるレースを解消する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/fix-publish-done-double-send
 - Polished: 2026-09-09
 
@@ -40,3 +40,14 @@
 - `publishSendPublishDone` / `publishSendPublishDoneCore`（`src/session/publish.ts`）
 - `issues/closed/0403-bug-parallel-done-race.md`（done 同士の排他 `donePromise` 導入）
 - `issues/closed/0541-bug-fill-parameters-no-fill-stream.md`（拒否経路の `markClosed` 追加元）
+
+## 解決方法
+
+`done()` と REQUEST_UPDATE 拒否経路が同じ `donePromise` 排他を通り、PUBLISH_DONE を 1 回だけ送るようにした。
+
+- `src/publisher.ts` に `terminate(status)` を追加し、`done()` は `TRACK_ENDED`、拒否経路は `UPDATE_FAILED` を渡して同じ排他を通る。後着は同じ Promise を await して何もしない
+- `onDoneInternal` を status 引数付きに一般化し、`doneInternal` が status を渡す
+- `src/session.ts` の `onDoneInternal` / `sendPublishDone` を status 対応にし、`SessionImpl` はデータストリーム FIN → PUBLISH_DONE の順で送る
+- `bidiTerminatePublishSubscriptionWithUpdateFailed` は `markClosed()` + 直接送信ではなく `publisher.terminate(UPDATE_FAILED)` を使う
+- `src/publisher.test.ts` に done() / 拒否経路の両順序で PUBLISH_DONE が 1 回だけ送られるテストを追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
