@@ -1,13 +1,13 @@
 # FETCH データストリームの reset で fetcher state を破棄する
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-09
 - Branch: feature/fix-fetch-reset-state-cleanup
 - Polished: 2026-09-08
 
 ## 目的
 
-draft-ietf-moq-transport-20 §5.2 は「A subscriber keeps FETCH state until it cancels the request ..., receives REQUEST_ERROR, or the FETCH data stream receives a FIN or is reset.」と定める。現状はピアの RESET_STREAM で fetcher state が破棄されず、アプリに終了も通知されない。
+draft-ietf-moq-transport-21 §3.2.1 は「A subscriber keeps FETCH state until it cancels the request ..., receives REQUEST_ERROR, or the FETCH data stream receives a FIN or is reset.」と定める。現状はピアの RESET_STREAM で fetcher state が破棄されず、アプリに終了も通知されない。
 
 ## 現状
 
@@ -32,7 +32,17 @@ draft-ietf-moq-transport-20 §5.2 は「A subscriber keeps FETCH state until it 
 
 ## 関連
 
-- draft-ietf-moq-transport-20 §5.2 / §3.3.3 / §3.3.4
+- draft-ietf-moq-transport-21 §3.2.1 / §6.4.2.3 / §12.5
 - `FetcherImpl` / `handleMalformedFetchTrack`（`src/session.ts`）
 - `fetchers` / `isPeerStreamError` / `normalizeDataStreamErrorCode`
 - `createResetStreamError`（`src/session/bidi.ts`、文言流用の可否）
+
+## 解決方法
+
+FETCH データストリームの peer RESET_STREAM を検出したとき、アプリへ error を通知してから fetcher を closed にし、`fetchers` から削除するようにした。
+
+- `src/session.ts` の `handleIncomingStream` の catch を `handleIncomingStreamError` に抽出し、`isPeerStreamError` の分岐で `handlePeerFetchStreamReset` を呼ぶ
+- `handlePeerFetchStreamReset` は `fetcher.handleError(...)` を `markClosed` より先に呼び、`fetchers.delete` と `onRequestDrained` を行う（FIN 経路の `handleEnd` + `fetchers.delete` と state 破棄の集合を揃える。`requestStreams` は FIN 経路と同じく削除しない）
+- `src/session/bidi.ts` に FETCH データストリーム用の `createFetchDataStreamResetError` と `RESET_FETCH_DATA_STREAM_MESSAGE` を追加し、`createResetStreamError` と正規化・メッセージ組み立てを共有する
+- `src/session.test.ts` に、peer reset で error が 1 回だけ呼ばれ、正規化済み `streamErrorCode` と FETCH 用文言が載り、`fetcher.state` が closed になり `fetchers` から削除され、end は通知されないことを検証するテストを追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する

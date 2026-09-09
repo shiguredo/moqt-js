@@ -61,6 +61,7 @@ import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
   RESET_REQUEST_STREAM_MESSAGE,
+  RESET_FETCH_DATA_STREAM_MESSAGE,
   type BidiSessionInternal,
 } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
@@ -2719,6 +2720,72 @@ function assertFetchCancelledOnPriorityMismatch(ctx: FetchPriorityMismatchContex
     /malformed track: different priorities in same subgroup/,
   );
 }
+
+/**
+ * draft-ietf-moq-transport-21 §3.2.1:
+ * 「A subscriber keeps FETCH state until it cancels the request (see
+ *  Section 6.4.2.3), receives REQUEST_ERROR, or the FETCH data stream
+ *  receives a FIN or is reset.」
+ * FETCH データストリームの peer RESET_STREAM で、アプリの error コールバックが
+ * 1 回だけ呼ばれ、正規化済み streamErrorCode が載り、fetcher が closed になって
+ * fetchers から削除されることを検証する。セッションは閉じない。
+ */
+test("handleIncomingStream: FETCH データストリームの RESET_STREAM で fetcher が error 通知され state が破棄される", async () => {
+  const requestId = 7n;
+  const sessionError: { current: Error | undefined } = { current: undefined };
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: (error) => {
+      sessionError.current = error;
+    },
+  });
+  const internal = session as unknown as {
+    fetchers: Map<bigint, FetcherImpl>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+  const receivedErrors: Error[] = [];
+  let ended = false;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {
+      ended = true;
+    },
+    (error) => {
+      receivedErrors.push(error);
+    },
+  );
+  internal.fetchers.set(requestId, fetcher);
+
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const runPromise = internal.handleIncomingStream(dataStream);
+  controller.enqueue(encodeFetchHeader({ type: FetchHeaderType, requestId }));
+  // peer の RESET_STREAM 相当: reader.read() を reject させる (CANCELLED = 0x1)
+  controller.error(
+    Object.assign(new Error("reset by peer"), { source: "stream", streamErrorCode: 0x1 }),
+  );
+  await runPromise;
+
+  // error コールバックが 1 回だけ呼ばれ、FETCH データストリームの reset と分かる
+  assert.equal(receivedErrors.length, 1);
+  assert.include(receivedErrors[0].message, RESET_FETCH_DATA_STREAM_MESSAGE);
+  assert.match(receivedErrors[0].message, /CANCELLED\(0x1\)/);
+  assert.equal((receivedErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode, 0x1);
+  // reset では正常終了 (end) を通知しない
+  assert.isFalse(ended);
+  assert.equal(fetcher.state, "closed");
+  assert.isFalse(internal.fetchers.has(requestId));
+  assert.isUndefined(sessionError.current);
+});
 
 /**
  * draft-ietf-moq-transport-21 §12.1:

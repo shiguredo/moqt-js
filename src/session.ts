@@ -4783,15 +4783,7 @@ export class SessionImpl implements Session {
         this.onRequestDrained();
       }
     } catch (err) {
-      // デバッグ: ストリームエラーをログ
-      this.emitDataStreamErrorDebug(err, fetchHeader);
-      // ProtocolViolationError は仕様違反のため PROTOCOL_VIOLATION でセッションを閉じる
-      const sessionError = toProtocolViolationSessionError(err);
-      if (sessionError !== null) {
-        this.closeWithError(sessionError);
-      } else if (err instanceof MalformedTrackError) {
-        await this.handleMalformedFetchTrack(reader, err, fetcher);
-      }
+      await this.handleIncomingStreamError(err, reader, fetchHeader, fetcher);
     } finally {
       this.statsSubscriberStreamsActive--;
       reader.releaseLock();
@@ -4952,6 +4944,75 @@ export class SessionImpl implements Session {
       } finally {
         await fetcher.cancel();
       }
+    }
+  }
+
+  /**
+   * 受信データストリームの読み取りループで発生したエラーの処理
+   *
+   * - ProtocolViolationError は PROTOCOL_VIOLATION でセッションを閉じる
+   * - MalformedTrackError は対象 FETCH をキャンセルする
+   * - FETCH データストリームの peer RESET_STREAM は fetcher state を破棄する
+   */
+  private async handleIncomingStreamError(
+    err: unknown,
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    fetchHeader: import("./dataStream").FetchHeader | null,
+    fetcher: FetcherImpl | null,
+  ): Promise<void> {
+    // デバッグ: ストリームエラーをログ
+    this.emitDataStreamErrorDebug(err, fetchHeader);
+    const sessionError = toProtocolViolationSessionError(err);
+    if (sessionError !== null) {
+      this.closeWithError(sessionError);
+      return;
+    }
+    if (err instanceof MalformedTrackError) {
+      await this.handleMalformedFetchTrack(reader, err, fetcher);
+      return;
+    }
+    if (fetchHeader !== null && isPeerStreamError(err)) {
+      // draft-ietf-moq-transport-21 §3.2.1:
+      // FETCH データストリームの reset で subscriber は FETCH state を破棄する。
+      // fetchHeader が無い場合 (FETCH_HEADER 読取前の reset) は fetcher を
+      // 特定できないため何もしない。
+      this.handlePeerFetchStreamReset(err, fetchHeader, fetcher);
+    }
+  }
+
+  /**
+   * peer の RESET_STREAM で FETCH データストリームが終了したときの後始末
+   *
+   * draft-ietf-moq-transport-21 §3.2.1:
+   * 「A subscriber keeps FETCH state until it cancels the request (see
+   *  Section 6.4.2.3), receives REQUEST_ERROR, or the FETCH data stream
+   *  receives a FIN or is reset.」
+   * アプリへ error を通知してから fetcher を closed にし、fetchers から削除する
+   * (handleMalformedFetchTrack と同じ順序。handleError を markClosed より先に
+   * 呼ばないと通知が握り潰される)。FIN 経路 (handleEnd + fetchers.delete) と
+   * state 破棄の集合を揃える。エラーには正規化済みの streamErrorCode を載せる。
+   * bidi リクエストストリーム (requestStreams) は FIN 経路と同じく削除しない
+   * (セッション終了時にまとめて解放される)。
+   */
+  private handlePeerFetchStreamReset(
+    err: unknown,
+    fetchHeader: import("./dataStream").FetchHeader | null,
+    fetcher: FetcherImpl | null,
+  ): void {
+    if (fetcher) {
+      try {
+        fetcher.handleError(bidi.createFetchDataStreamResetError(err));
+      } catch {
+        // アプリの error コールバックの throw は握り潰す (後始末は継続する)
+      } finally {
+        fetcher.markClosed();
+      }
+    }
+    if (fetchHeader !== null) {
+      this.fetchers.delete(fetchHeader.requestId);
+      // draft-ietf-moq-transport-21 §6.6.1:
+      // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
+      this.onRequestDrained();
     }
   }
 

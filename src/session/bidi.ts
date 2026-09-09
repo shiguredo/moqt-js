@@ -3147,6 +3147,9 @@ export const FIN_WITHOUT_PUBLISH_DONE_MESSAGE =
 // ピアが RESET_STREAM でストリームをエラー終了させた際のエラーメッセージ
 export const RESET_REQUEST_STREAM_MESSAGE = "publisher reset request stream";
 
+// ピアが RESET_STREAM で FETCH データストリームをエラー終了させた際のエラーメッセージ
+export const RESET_FETCH_DATA_STREAM_MESSAGE = "publisher reset fetch data stream";
+
 /**
  * ストリームリセットのエラーコード値からコード名を求める
  *
@@ -3180,16 +3183,34 @@ function getDataStreamErrorCodeName(code: DataStreamErrorCode): string {
  * ため本関数の対象外とする。
  */
 export function createResetStreamError(rawError: unknown): Error {
+  return createResetStreamErrorWithMessage(rawError, RESET_REQUEST_STREAM_MESSAGE);
+}
+
+/**
+ * ピアの RESET_STREAM 由来のエラーを FETCH データストリーム用の Error に変換する
+ *
+ * bidi リクエストストリーム用の `createResetStreamError` と正規化・
+ * メッセージ組み立てを共有し、対象が FETCH データストリームであることが
+ * 分かる文言にする (§3.2.1)。
+ */
+export function createFetchDataStreamResetError(rawError: unknown): Error {
+  return createResetStreamErrorWithMessage(rawError, RESET_FETCH_DATA_STREAM_MESSAGE);
+}
+
+/**
+ * ピアの RESET_STREAM 由来のエラーを指定メッセージの Error に変換する共通実装
+ */
+function createResetStreamErrorWithMessage(rawError: unknown, message: string): Error {
   if (typeof rawError !== "object" || rawError === null) {
-    return new Error(RESET_REQUEST_STREAM_MESSAGE);
+    return new Error(message);
   }
   const streamErrorCode = (rawError as { streamErrorCode?: unknown }).streamErrorCode;
   if (typeof streamErrorCode !== "number") {
-    return new Error(RESET_REQUEST_STREAM_MESSAGE);
+    return new Error(message);
   }
   const normalized = normalizeDataStreamErrorCode(streamErrorCode);
   const name = getDataStreamErrorCodeName(normalized);
-  const error = new Error(`${RESET_REQUEST_STREAM_MESSAGE}: ${name}(0x${normalized.toString(16)})`);
+  const error = new Error(`${message}: ${name}(0x${normalized.toString(16)})`);
   (error as Error & { streamErrorCode: DataStreamErrorCode }).streamErrorCode = normalized;
   return error;
 }
