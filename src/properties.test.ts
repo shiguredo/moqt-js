@@ -18,12 +18,19 @@ import {
   mergeDeliveryTimeoutObjectProperties,
   readDeliveryTimeoutObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
+  assertPriorIdGapInObjectProperties,
   resolveDefaultPublisherPriority,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
 } from "./properties";
-import { MalformedTrackError, ProtocolViolationError } from "./error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionError,
+  SessionErrorCode,
+} from "./error";
 import { isGreaseValue } from "./grease";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "./varint";
 
@@ -1087,5 +1094,115 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
   assert.throws(
     () => parseProperties(truncated),
     /immutable properties value length exceeds remaining data/,
+  );
+});
+
+// ============================================================================
+// draft-21 適合監査 改善-1: 既知 Type の Value / Length 不一致
+// draft-ietf-moq-transport-21 §8.3
+// ============================================================================
+
+/** KEY_VALUE_FORMATTING_ERROR の SessionError が throw されたことを検証する */
+function assertKeyValueFormattingError(fn: () => void): void {
+  let thrown: unknown;
+  try {
+    fn();
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isTrue(thrown instanceof SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+}
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知の偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
+ * 完結しない場合は KEY_VALUE_FORMATTING_ERROR。
+ */
+test("decodeProperties: 既知偶数 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+  // delta 0x02 + 2 バイト varint の先頭のみ (0x80) で Value が欠落
+  assertKeyValueFormattingError(() => decodeProperties(new Uint8Array([0x02, 0x80])));
+});
+
+/**
+ * 既知の奇数 Type (IMMUTABLE_PROPERTIES 0x0B) の Length が varint として
+ * 完結しない場合も KEY_VALUE_FORMATTING_ERROR。
+ */
+test("decodeImmutableProperties: 既知奇数 Type の Length 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+  assertKeyValueFormattingError(() => decodeImmutableProperties(new Uint8Array([0x0b, 0x80])));
+});
+
+/**
+ * parseProperties でも既知 Type の Value 不一致は KEY_VALUE_FORMATTING_ERROR。
+ */
+test("parseProperties: 既知偶数 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+  assertKeyValueFormattingError(() => parseProperties(new Uint8Array([0x02, 0x80])));
+});
+
+/**
+ * 未知 Type の Value 欠落は受信者が理解しないため、従来どおり
+ * IncompleteDataError (フレーミング破損) のままとする。
+ */
+test("decodeProperties: 未知偶数 Type の Value 欠落は IncompleteDataError のまま", () => {
+  // delta 0x0A (LOC TIMESTAMP、MOQT 本体の既知 Type ではない) + 欠落
+  assert.throws(() => decodeProperties(new Uint8Array([0x0a, 0x80])), IncompleteDataError);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-7: assertPriorIdGapInObjectProperties
+// draft-ietf-moq-transport-21 §10.8 / §10.9
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object has a Prior Group ID Gap larger than the Group ID."
+ */
+test("assertPriorIdGapInObjectProperties: Prior Group ID Gap が Group ID 超過で MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]);
+  assert.throws(
+    () => assertPriorIdGapInObjectProperties(0n, 0n, properties),
+    MalformedTrackError,
+    /prior group id gap exceeds group id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ */
+test("assertPriorIdGapInObjectProperties: Prior Object ID Gap が Object ID 超過で MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 1n }]);
+  assert.throws(
+    () => assertPriorIdGapInObjectProperties(0n, 0n, properties),
+    MalformedTrackError,
+    /prior object id gap exceeds object id/,
+  );
+});
+
+/**
+ * gap が Group ID / Object ID 以下なら throw しない (誤検出防止)。
+ */
+test("assertPriorIdGapInObjectProperties: gap が ID 以下なら throw しない", () => {
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 5n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 7n },
+  ]);
+  assert.doesNotThrow(() => assertPriorIdGapInObjectProperties(5n, 7n, properties));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * IMMUTABLE_PROPERTIES 配下の Prior Group ID Gap も検索対象である。
+ */
+test("assertPriorIdGapInObjectProperties: IMMUTABLE_PROPERTIES 内の gap も検出する", () => {
+  const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 2n }]);
+  const properties = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  assert.throws(
+    () => assertPriorIdGapInObjectProperties(0n, 0n, properties),
+    MalformedTrackError,
+    /prior group id gap exceeds group id/,
   );
 });

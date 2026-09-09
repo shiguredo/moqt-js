@@ -191,7 +191,19 @@ export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
 export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
   let totalConsumed = 0;
 
-  const endOfTrack = data[offset + totalConsumed] === 1;
+  // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+  // "End Of Track: 1 if all Objects have been published on this Track ...
+  //  0 if not."
+  // 0 / 1 以外の値はワイヤ上に存在し得ないため PROTOCOL_VIOLATION とする。
+  // バイト自体が無い場合は IncompleteDataError を後続の decodeLocation に
+  // 委ねる (undefined は値の不正ではない)。
+  const endOfTrackByte = data[offset + totalConsumed];
+  if (endOfTrackByte !== undefined && endOfTrackByte !== 0 && endOfTrackByte !== 1) {
+    throw new ProtocolViolationError(
+      `invalid End Of Track in FETCH_OK: ${endOfTrackByte}, expected 0 or 1`,
+    );
+  }
+  const endOfTrack = endOfTrackByte === 1;
   totalConsumed += 1;
 
   const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);

@@ -11,8 +11,14 @@ import {
   type SubgroupHeader,
 } from "../dataStream";
 import { ObjectStatus } from "../message/types";
-import { mergeDeliveryTimeoutObjectProperties, TrackPropertyId } from "../properties";
+import {
+  encodeProperties,
+  mergeDeliveryTimeoutObjectProperties,
+  MOQTPropertyId,
+  TrackPropertyId,
+} from "../properties";
 import { SubscriberImpl } from "../subscriber";
+import { MalformedTrackError } from "../error";
 
 // ============================================================================
 // concatChunks
@@ -111,8 +117,16 @@ function subgroupTestSetup(): {
   return {
     delivered,
     subscriber,
-    // BASE_EXT (Subgroup ID = 0) の実デコーダ出力と一致させる
-    header: { type: SubgroupHeaderType.BASE_EXT, trackAlias: 1n, groupId: 0n, subgroupId: 0n },
+    // BASE_EXT (Subgroup ID = 0) の実デコーダ出力と一致させる。
+    // delivery timeout の上書きは FIRST_OBJECT ビットが立つ subgroup にのみ
+    // 適用されるため、timeout 抽出を検証するテスト用に true を設定する。
+    header: {
+      type: SubgroupHeaderType.BASE_EXT,
+      trackAlias: 1n,
+      groupId: 0n,
+      subgroupId: 0n,
+      firstObject: true,
+    },
     stats,
   };
 }
@@ -617,4 +631,183 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
   processSubgroupObjects(firstObjectWire(0n, 0xaa), list, header, -1n, stats, hooks);
 
   assert.equal(delivered.length, 2);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-9: delivery timeout 上書きは FIRST_OBJECT ビット時のみ
+// draft-ietf-moq-transport-21 §5.2 / §2.2
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §2.2:
+ * "When the Original Publisher opens a new subgroup, it MUST set the
+ *  FIRST_OBJECT bit ... to indicate that the first object in the subgroup
+ *  stream is the first object ever published in that subgroup."
+ * draft-ietf-moq-transport-21 §5.2:
+ * "Either timeout value can also be set as an Object Property on the first
+ *  object in a subgroup ... If either timeout is set as an Object Property on
+ *  any object other than the first in a subgroup, it is ignored."
+ * FIRST_OBJECT ビットが立たないストリーム (中継が subgroup 途中から転送した
+ * 場合) では、ストリーム先頭 Object であっても Object Property による
+ * delivery timeout の上書きを適用しないことを検証する。
+ */
+test("processSubgroupObjects: FIRST_OBJECT ビットなしでは timeout を抽出しない", () => {
+  const { delivered, subscriber, stats } = subgroupTestSetup();
+  // subgroupTestSetup の header から firstObject を外し、中継転送相当にする
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.BASE_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: 0n,
+  };
+  processSubgroupObjects(
+    timeoutObjectWire(0n, 100n, 200n),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+    silentDelivery,
+  );
+
+  // ストリーム先頭でも上書きは適用されない (Track Property が使われる)
+  assert.equal(delivered.length, 1);
+  assert.isUndefined(delivered[0].objectDeliveryTimeout);
+  assert.isUndefined(delivered[0].subgroupDeliveryTimeout);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// draft-ietf-moq-transport-21 §10.8 / §10.9
+// ============================================================================
+
+/** 単一 Object の fields + payload 1 バイトを組み立てる */
+function objectWireWithProperties(objectIdDelta: bigint, properties: Uint8Array): Uint8Array {
+  const fields = encodeObjectFields(
+    objectIdDelta,
+    1n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+    properties,
+  );
+  return concatChunks([fields, new Uint8Array([0xaa])]);
+}
+
+/**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object has a Prior Group ID Gap larger than the Group ID."
+ * Group 0 の Object に Prior Group ID Gap = 1 を付けると malformed となる。
+ */
+test("processSubgroupObjects: Prior Group ID Gap が Group ID より大きいと MalformedTrackError", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]);
+
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        objectWireWithProperties(0n, properties),
+        [subscriber],
+        header,
+        -1n,
+        stats,
+        silentDelivery,
+      ),
+    MalformedTrackError,
+    /prior group id gap exceeds group id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ * Object 0 に Prior Object ID Gap = 1 を付けると malformed となる。
+ */
+test("processSubgroupObjects: Prior Object ID Gap が Object ID より大きいと MalformedTrackError", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 1n }]);
+
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        objectWireWithProperties(0n, properties),
+        [subscriber],
+        header,
+        -1n,
+        stats,
+        silentDelivery,
+      ),
+    MalformedTrackError,
+    /prior object id gap exceeds object id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * gap が Group ID / Object ID 以下なら malformed ではない (誤検出しない)。
+ */
+test("processSubgroupObjects: gap が Group ID / Object ID 以下なら配信する", () => {
+  const { delivered, subscriber, header, stats } = subgroupTestSetup();
+  // Group 0 / Object 0 に対して gap 0 は許容される
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  processSubgroupObjects(
+    objectWireWithProperties(0n, properties),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+    silentDelivery,
+  );
+
+  assert.equal(delivered.length, 1);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-8: END_OF_GROUP による Group 最終 Object の検出
+// draft-ietf-moq-transport-21 §12.1
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 条件 4:
+ * "An Object is received in a Group whose Object ID is larger than the final
+ *  Object in the Group. The final Object in a Group is the Object with Status
+ *  END_OF_GROUP ..."
+ * END_OF_GROUP ステータスの Object の後に同一 Subgroup の Object が続くと
+ * malformed となる。
+ */
+test("processSubgroupObjects: END_OF_GROUP ステータス後の Object は MalformedTrackError", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  const endOfGroupFields = encodeObjectFields(
+    0n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.END_OF_GROUP,
+  );
+  const nextFields = encodeObjectFields(0n, 1n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  const wire = concatChunks([endOfGroupFields, nextFields, new Uint8Array([0xbb])]);
+
+  assert.throws(
+    () => processSubgroupObjects(wire, [subscriber], header, -1n, stats, silentDelivery),
+    MalformedTrackError,
+    /exceeds final object/,
+  );
+});
+
+/**
+ * END_OF_GROUP ステータスの Object 自体は配信され、後続が無ければ
+ * malformed にならないことを検証する (誤検出防止)。
+ */
+test("processSubgroupObjects: END_OF_GROUP ステータス単独は配信する", () => {
+  const { delivered, subscriber, header, stats } = subgroupTestSetup();
+  const endOfGroupFields = encodeObjectFields(
+    0n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.END_OF_GROUP,
+  );
+  processSubgroupObjects(endOfGroupFields, [subscriber], header, -1n, stats, silentDelivery);
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].status, ObjectStatus.END_OF_GROUP);
 });

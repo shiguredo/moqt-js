@@ -860,6 +860,10 @@
   - REQUEST_UPDATE_OK への LARGEST_OBJECT 付与、MAX_FILTER_RANGES の受信側強制、SETUP の上限広告
   - DEFAULT_PUBLISHER_PRIORITY の継承、Immutable Properties 配下の Mandatory 検出、Object Property の duplicate / 再帰ネスト検出
   - @voluntas
+- [FIX] セッションライフサイクルとデータプレーンの draft-21 不適合を修正する
+  - データストリーム先着時の制御ストリーム特定、WebTransport protocols、namespace 購読解除の RESET/STOP_SENDING、NAMESPACE_DONE 補完、FIN 送信、TRACK_STATUS FIN、確立前 GOAWAY 重複検出
+  - Prior Gap 検証、END_OF_GROUP 公開、Delivery Timeout 上書き条件、Forward State = 0 の送信抑止、End of Range の prior 参照拒否、KVP の KEY_VALUE_FORMATTING_ERROR
+  - @voluntas
 
 ### misc
 

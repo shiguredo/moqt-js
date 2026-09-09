@@ -525,6 +525,10 @@ test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY (resolved=false) で call
     timeout: 0n,
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  // draft-ietf-moq-transport-21 §9.2:
+  // 確立前 GOAWAY 後も読み取りを継続する (2 通目 GOAWAY 検出のため)。
+  // ピアの FIN でループが終了する。
+  ctx.readableController.close();
   await readPromise;
 
   assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
@@ -566,6 +570,8 @@ test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY で New Session URI が�
     timeout: 0n,
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  // 確立前 GOAWAY 後も読み取りを継続するため、ピアの FIN で終了させる。
+  ctx.readableController.close();
   await readPromise;
 
   assert.deepEqual(notifiedUris, [""]);
@@ -614,6 +620,162 @@ test("namespaceStartNamespaceStreamLoop: 確立後 (resolved=true) の GOAWAY �
   const err = ctx.getClosedWithError();
   assert.isDefined(err);
   assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("namespaceStartNamespaceStreamLoop: ピア FIN で active namespace に NAMESPACE_DONE を補完し自方向も FIN する", async () => {
+  // draft-ietf-moq-transport-21 §9.15:
+  // FIN / RESET 受信時は各 active namespace に NAMESPACE_DONE を補完したものと扱う。
+  // §6.4.2.2: ピアの FIN 後、requester は自方向も FIN で閉じる (SHOULD)。
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const doneSuffixes: string[][] = [];
+  Object.assign(ctx.subscription.callbacks, {
+    onNamespaceDone: (suffix: string[]) => {
+      doneSuffixes.push(suffix);
+    },
+  });
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await ctx.writerClosed();
+  await readPromise;
+
+  assert.deepEqual(doneSuffixes, [["sports"]]);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartNamespaceStreamLoop: RESET_STREAM でも active namespace に NAMESPACE_DONE を補完する", async () => {
+  // draft-ietf-moq-transport-21 §9.15: stream reset も FIN と同様に扱う。
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const doneSuffixes: string[][] = [];
+  Object.assign(ctx.subscription.callbacks, {
+    onNamespaceDone: (suffix: string[]) => {
+      doneSuffixes.push(suffix);
+    },
+  });
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+      }),
+    ),
+  );
+  // キュー済みメッセージが処理されてから RESET を注入する
+  // (controller.error() は未読チャンクを破棄するため)
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  // ピアの RESET_STREAM 相当 (WebTransportError 相当の reason で reject)
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  assert.deepEqual(doneSuffixes, [["sports"]]);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartNamespaceStreamLoop: NAMESPACE_DONE 済みの namespace は FIN で重複補完しない", async () => {
+  // draft-ietf-moq-transport-21 §9.15:
+  // 既に NAMESPACE_DONE を受けた namespace は active ではないため補完しない。
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const doneSuffixes: string[][] = [];
+  Object.assign(ctx.subscription.callbacks, {
+    onNamespaceDone: (suffix: string[]) => {
+      doneSuffixes.push(suffix);
+    },
+  });
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({
+        type: MessageType.NAMESPACE,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+      }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 明示的な NAMESPACE_DONE の 1 回だけ
+  assert.deepEqual(doneSuffixes, [["sports"]]);
+});
+
+test("namespaceStartNamespaceStreamLoop: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
+  // draft-ietf-moq-transport-21 §9.2:
+  // "The endpoint MUST close the session with a PROTOCOL_VIOLATION ... if it
+  //  receives more than one GOAWAY ... on a single request stream."
+  // 確立前 GOAWAY 後も読み取りを継続し、同一チャンクの 2 通目を検出する。
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "",
+    timeout: 0n,
+  });
+  const goaway = ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload);
+  const concatenated = new Uint8Array(goaway.length * 2);
+  concatenated.set(goaway, 0);
+  concatenated.set(goaway, goaway.length);
+  ctx.readableController.enqueue(concatenated);
+  ctx.readableController.close();
+  await readPromise;
+
+  const error = ctx.getClosedWithError();
+  assert.isDefined(error);
+  assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(error!.message.includes("received duplicate goaway on request stream"));
 });
 
 test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAMESPACE) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
@@ -802,6 +964,8 @@ test("namespaceStartTracksStreamLoop: 先頭 GOAWAY (resolved=false) で callbac
     timeout: 0n,
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  // 確立前 GOAWAY 後も読み取りを継続するため、ピアの FIN で終了させる。
+  ctx.readableController.close();
   await readPromise;
 
   assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
@@ -811,6 +975,56 @@ test("namespaceStartTracksStreamLoop: 先頭 GOAWAY (resolved=false) で callbac
   assert.isFalse(errorFired);
   assert.equal(ctx.subscription.state, "closed");
   assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
+});
+
+test("namespaceStartTracksStreamLoop: ピア FIN で自方向を FIN する", async () => {
+  // draft-ietf-moq-transport-21 §6.4.2.2:
+  // ピアの FIN 後、requester は自方向も FIN で閉じる (SHOULD)。
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.close();
+  await ctx.writerClosed();
+  await readPromise;
+
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartTracksStreamLoop: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
+  // draft-ietf-moq-transport-21 §9.2: 同一リクエストストリームの重複 GOAWAY は違反。
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "",
+    timeout: 0n,
+  });
+  const goaway = ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload);
+  const concatenated = new Uint8Array(goaway.length * 2);
+  concatenated.set(goaway, 0);
+  concatenated.set(goaway, goaway.length);
+  ctx.readableController.enqueue(concatenated);
+  ctx.readableController.close();
+  await readPromise;
+
+  const error = ctx.getClosedWithError();
+  assert.isDefined(error);
+  assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(error!.message.includes("received duplicate goaway on request stream"));
 });
 
 test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH_SKIPPED) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
@@ -1423,6 +1637,8 @@ test("namespaceStartPublicationStreamLoop: 先頭 GOAWAY (resolved=false) で ca
     timeout: 0n,
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
+  // 確立前 GOAWAY 後も読み取りを継続するため、ピアの FIN で終了させる。
+  ctx.readableController.close();
   await readPromise;
 
   assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
@@ -1433,6 +1649,56 @@ test("namespaceStartPublicationStreamLoop: 先頭 GOAWAY (resolved=false) で ca
   assert.equal(publication.state, "closed");
   assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
   assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
+});
+
+test("namespaceStartPublicationStreamLoop: ピア FIN で自方向を FIN する", async () => {
+  // draft-ietf-moq-transport-21 §6.4.2.2:
+  // ピアの FIN 後、requester は自方向も FIN で閉じる (SHOULD)。
+  const ctx = createPublicationLoopTestContext();
+
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.close();
+  await ctx.writerClosed();
+  await readPromise;
+
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("namespaceStartPublicationStreamLoop: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
+  // draft-ietf-moq-transport-21 §9.2: 同一リクエストストリームの重複 GOAWAY は違反。
+  const ctx = createPublicationLoopTestContext();
+
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "",
+    timeout: 0n,
+  });
+  const goaway = ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload);
+  const concatenated = new Uint8Array(goaway.length * 2);
+  concatenated.set(goaway, 0);
+  concatenated.set(goaway, goaway.length);
+  ctx.readableController.enqueue(concatenated);
+  ctx.readableController.close();
+  await readPromise;
+
+  const error = ctx.getClosedWithError();
+  assert.isDefined(error);
+  assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(error!.message.includes("received duplicate goaway on request stream"));
 });
 
 test("namespaceStartPublicationStreamLoop: 確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) される", async () => {

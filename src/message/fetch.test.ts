@@ -9,7 +9,14 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { type Fetch, decodeFetchPayload, encodeFetchPayload } from "./fetch";
+import {
+  type Fetch,
+  type FetchOk,
+  decodeFetchOkPayload,
+  decodeFetchPayload,
+  encodeFetchOkPayload,
+  encodeFetchPayload,
+} from "./fetch";
 import { createTrackNamespace } from "./parameter";
 import { MessageType } from "./types";
 import { ProtocolViolationError } from "../error";
@@ -140,4 +147,40 @@ test("decodeFetchPayload: offset 付きでも Track Name Length 宣言超過で 
     () => decodeFetchPayload(truncated, 1),
     /fetch track name length exceeds remaining data/,
   );
+});
+
+/**
+ * 正常な FetchOk を構築する
+ */
+function createFetchOk(endOfTrack: boolean): FetchOk {
+  return {
+    type: MessageType.FETCH_OK,
+    endOfTrack,
+    endLocation: { group: 1n, object: 2n },
+    parameters: [],
+    trackProperties: [],
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+ * End Of Track は 0 / 1 のみが定義される。0 / 1 は復元され、
+ * 2 以上の値は PROTOCOL_VIOLATION となることを検証する。
+ */
+test("decodeFetchOkPayload: End Of Track は 0 / 1 のみ受理し、それ以外は ProtocolViolationError", () => {
+  // 0 / 1 は正常にデコードされる
+  assert.isFalse(decodeFetchOkPayload(encodeFetchOkPayload(createFetchOk(false))).endOfTrack);
+  assert.isTrue(decodeFetchOkPayload(encodeFetchOkPayload(createFetchOk(true))).endOfTrack);
+
+  // End Of Track は先頭 1 バイト。2 は未定義値のため拒否する
+  const invalid = encodeFetchOkPayload(createFetchOk(true));
+  invalid[0] = 2;
+  let thrown: unknown;
+  try {
+    decodeFetchOkPayload(invalid);
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.isTrue((thrown as Error).message.includes("invalid End Of Track"));
 });

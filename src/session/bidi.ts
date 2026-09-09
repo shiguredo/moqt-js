@@ -263,6 +263,15 @@ export interface BidiSessionInternal {
   ): void;
   closeWithError(error: SessionError): void;
   /**
+   * 確立済みの購読・fetch が 1 つ終了したことを通知する
+   *
+   * draft-ietf-moq-transport-21 §6.6.1:
+   * GOAWAY 受信後は Established 購読が無くなった時点で NO_ERROR で閉じる。
+   * 購読・fetch の終了経路から呼び、SessionImpl 側で閉じるか判断する。
+   * テスト用の部分 session では未定義のため optional とする。
+   */
+  onRequestDrained?: () => void;
+  /**
    * 受信 Request ID のパリティ・重複検証を行う
    *
    * draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
@@ -388,10 +397,17 @@ export async function bidiSendRequestOnBidiStream(
 // readResponseFromBidiStream
 // ============================================================================
 
+/**
+ * リクエストストリームの最初の応答チャンクを読み取る
+ *
+ * 同一チャンクに複数の制御メッセージが連結されている場合は、それらを
+ * すべて返す。確立前 GOAWAY の直後に 2 通目 GOAWAY が連結されていても
+ * 検出できるようにするため (§9.2 MUST)。
+ */
 async function bidiReadResponseFromBidiStream(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
-): Promise<ControlMessage> {
+): Promise<ControlMessage[]> {
   const reader = stream.readable.getReader();
   try {
     while (true) {
@@ -401,11 +417,78 @@ async function bidiReadResponseFromBidiStream(
       }
       const messages = controlReader.feed(value);
       if (messages.length > 0) {
-        return messages[0];
+        return messages;
       }
     }
   } finally {
     reader.releaseLock();
+  }
+}
+
+/**
+ * 確立前に GOAWAY を受けたリクエストストリームの読み取りを継続する
+ *
+ * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+ * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
+ *  more than one GOAWAY on the control stream or on a single request stream."
+ * 確立前 (最初の応答が GOAWAY) にマイグレーションした後も読み取りを継続し、
+ * 同一ストリーム上の 2 通目 GOAWAY を検出して PROTOCOL_VIOLATION で閉じる。
+ * それ以外のメッセージは無視する (リクエストは既に reject 済み)。
+ *
+ * @param initialMessages - 最初の応答チャンクで既に読み取り済みの残りメッセージ。
+ *   同一チャンク内の 2 通目 GOAWAY を検出するために先頭から走査する。
+ */
+export async function bidiContinueReadingForDuplicateGoaway(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  stream: WebTransportBidirectionalStream,
+  controlReader: ControlStreamReader,
+  initialMessages: ControlMessage[] = [],
+): Promise<void> {
+  const hasDuplicateGoaway = (messages: ControlMessage[]): boolean => {
+    for (const message of messages) {
+      if (message.type !== MessageType.GOAWAY) {
+        continue;
+      }
+      // 1 通目は呼び出し元が既に処理済みで seenSet に登録されている。
+      // 2 通目は validateNoDuplicateGoawayOnRequestStream が
+      // PROTOCOL_VIOLATION でセッションを閉じ false を返す。
+      if (
+        !validateNoDuplicateGoawayOnRequestStream(
+          requestId,
+          session.goawayReceivedOnRequestStreams,
+          (error) => session.closeWithError(error),
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (hasDuplicateGoaway(initialMessages)) {
+    return;
+  }
+
+  const reader = stream.readable.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (hasDuplicateGoaway(controlReader.feed(value))) {
+        return;
+      }
+    }
+  } catch {
+    // セッション終了 / RESET_STREAM は重複検出の対象外として読み取りを終える
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // 既に解放済みの場合は無視
+    }
   }
 }
 
@@ -423,7 +506,8 @@ export async function bidiReadPublishResponse(
   if (!pending) return;
 
   try {
-    const msg = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const msg = messages[0];
     session.emitDebug("recv", msg.type, msg.payload);
 
     if (msg.type === MessageType.REQUEST_OK) {
@@ -511,6 +595,16 @@ export async function bidiReadPublishResponse(
       session.requestStreams.delete(requestId);
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
+      // draft-ietf-moq-transport-21 §9.2:
+      // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
+      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      void bidiContinueReadingForDuplicateGoaway(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        messages.slice(1),
+      );
     } else {
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈 (PUBLISH / FETCH /
@@ -563,7 +657,8 @@ export async function bidiReadSubscribeResponse(
   if (!pending) return;
 
   try {
-    const msg = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const msg = messages[0];
     session.emitDebug("recv", msg.type, msg.payload);
 
     if (msg.type === MessageType.SUBSCRIBE_OK) {
@@ -665,6 +760,16 @@ export async function bidiReadSubscribeResponse(
       session.fillFetchTargets.delete(requestId);
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
+      // draft-ietf-moq-transport-21 §9.2:
+      // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
+      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      void bidiContinueReadingForDuplicateGoaway(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        messages.slice(1),
+      );
     } else {
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
@@ -743,7 +848,8 @@ export async function bidiReadFetchResponse(
   if (!pending) return;
 
   try {
-    const msg = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const msg = messages[0];
     session.emitDebug("recv", msg.type, msg.payload);
 
     if (msg.type === MessageType.FETCH_OK) {
@@ -818,6 +924,16 @@ export async function bidiReadFetchResponse(
       fireFetcherReadyCallbacks(session, requestId);
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
+      // draft-ietf-moq-transport-21 §9.2:
+      // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
+      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      void bidiContinueReadingForDuplicateGoaway(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        messages.slice(1),
+      );
     } else {
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
@@ -873,7 +989,8 @@ export async function bidiReadTrackStatusResponse(
   if (!pending) return;
 
   try {
-    const msg = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const msg = messages[0];
     session.emitDebug("recv", msg.type, msg.payload);
 
     if (msg.type === MessageType.REQUEST_OK) {
@@ -910,17 +1027,25 @@ export async function bidiReadTrackStatusResponse(
       }
 
       session.pendingTrackStatus.delete(requestId);
-      session.requestStreams.delete(requestId);
       pending.resolve({ parameters: decoded.parameters });
+      // draft-ietf-moq-transport-21 §9.13 / §6.4.2.2:
+      // "The bidi stream is closed with a FIN after TRACK_STATUS_OK or
+      //  REQUEST_ERROR are sent." レスポンスを受けた requester も自方向を
+      // FIN で閉じ、ストリームを graceful に完了させる。requestStreams の
+      // エントリから writer を引くため削除より先に実行する。
+      await closeRequestStreamWriter(session, requestId);
+      session.requestStreams.delete(requestId);
     } else if (msg.type === MessageType.REQUEST_ERROR) {
       const decoded = decodeRequestErrorPayload(msg.payload);
       session.pendingTrackStatus.delete(requestId);
-      session.requestStreams.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
         normalizeRequestErrorCode(Number(decoded.errorCode)),
       );
       pending.reject(error);
+      // REQUEST_OK 経路と同じく自方向を FIN で閉じる (§9.13 / §6.4.2.2)。
+      await closeRequestStreamWriter(session, requestId);
+      session.requestStreams.delete(requestId);
     } else if (msg.type === MessageType.GOAWAY) {
       // TRACK_STATUS は単発リクエストであり ongoing loop を持たないため
       // goawayCallback は不要。newSessionUri は Error.message 経由で通知する。
@@ -930,6 +1055,16 @@ export async function bidiReadTrackStatusResponse(
       session.requestStreams.delete(requestId);
       pending.reject(
         new Error(`request stream goaway: ${decoded.newSessionUri || "no redirect URI"}`),
+      );
+      // draft-ietf-moq-transport-21 §9.2:
+      // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
+      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      void bidiContinueReadingForDuplicateGoaway(
+        session,
+        requestId,
+        stream,
+        controlReader,
+        messages.slice(1),
       );
     } else {
       // draft-ietf-moq-transport-21 §9.10:
@@ -1062,6 +1197,8 @@ async function bidiTerminatePublishSubscriptionWithUpdateFailed(
       PublishDoneStatusCode.UPDATE_FAILED,
     );
   }
+  // 購読を終了したため、GOAWAY 受信後に残りの購読が無くなれば閉じる (§6.6.1)。
+  session.onRequestDrained?.();
 }
 
 /**
@@ -1275,6 +1412,9 @@ function deleteSubscriber(session: BidiSessionInternal, requestId: bigint): void
         session.subscribersByAlias.delete(subscriber.getTrackAlias());
       }
     }
+    // draft-ietf-moq-transport-21 §6.6.1:
+    // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
+    session.onRequestDrained?.();
   }
 }
 
@@ -2556,6 +2696,10 @@ export async function bidiCancelSubscription(
       // ストリームが既に閉じている場合・ロック競合の場合は無視
     }
   }
+
+  // draft-ietf-moq-transport-21 §6.6.1:
+  // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
+  session.onRequestDrained?.();
 }
 
 /**
@@ -2617,6 +2761,9 @@ export async function bidiCancelFetch(
   }
 
   session.fetchers.delete(requestId);
+  // draft-ietf-moq-transport-21 §6.6.1:
+  // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
+  session.onRequestDrained?.();
 }
 
 // ============================================================================

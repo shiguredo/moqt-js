@@ -54,6 +54,14 @@ export function publishSendObject(
   publisher: PublisherImpl,
   params: SendObjectParams,
 ): Promise<void> {
+  // draft-ietf-moq-transport-21 §3.1:
+  // "The publisher does not send Objects if the Forward State is 0"
+  // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
+  // 防御としてここでも参照する。
+  if (!publisher.forwardState) {
+    return Promise.resolve();
+  }
+
   const trackAlias = publisher.getTrackAlias();
   // draft-ietf-moq-transport-21 §11.3.1 / §11.2:
   // 不正 ID はローカル API 誤用のため、副作用 (ストリーム生成・統計加算・
@@ -331,6 +339,14 @@ export function publishSendDatagram(
 ): void {
   // セッションクローズ後は datagram を送らない
   if (session.sessionState === "closed") {
+    return;
+  }
+
+  // draft-ietf-moq-transport-21 §3.1:
+  // "The publisher does not send Objects if the Forward State is 0"
+  // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
+  // 防御としてここでも参照する。
+  if (!publisher.forwardState) {
     return;
   }
 

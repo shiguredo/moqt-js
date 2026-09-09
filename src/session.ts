@@ -1155,6 +1155,45 @@ function describeLocationFilter(filter: LocationFilter | undefined): string | un
 }
 
 /**
+ * 読み取り済みの先頭バイト列をストリームの先頭に戻す
+ *
+ * initialize() が制御ストリームを探すためにデータストリームの先頭
+ * (ストリームタイプ varint を含む) を消費する。SETUP 完了後に
+ * handleIncomingStream が通常のストリームとして処理できるよう、
+ * 消費済みバイトを先頭に持つ ReadableStream を作り直す
+ * (draft-ietf-moq-transport-21 §6.3 のデータストリーム先着バッファリング)。
+ */
+function prependBytesToStream(
+  prefix: Uint8Array,
+  source: ReadableStream<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let prefixSent = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!prefixSent) {
+        prefixSent = true;
+        if (prefix.byteLength > 0) {
+          controller.enqueue(prefix);
+        }
+        return;
+      }
+      const { value, done } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      if (value) {
+        controller.enqueue(value);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+/**
  * 内部セッション実装
  */
 export class SessionImpl implements Session {
@@ -1417,6 +1456,10 @@ export class SessionImpl implements Session {
           this.sessionState = "closed";
         }
         this.markRequestObjectsClosed();
+        // draft-ietf-moq-transport-21 §6.6 / §6.6.1:
+        // ピア起点でセッションが閉じた場合も、保留中のリクエスト Promise を
+        // reject してアプリを待たせ続けない (自前 close() と同じ後始末)。
+        this.rejectPendingRequests(new Error("session closed by peer"));
         // draft-ietf-moq-transport-21 §13 (Grease):
         // 未知の Session Termination コードは INTERNAL_ERROR として扱う
         this.callbacks.close?.({
@@ -1429,6 +1472,7 @@ export class SessionImpl implements Session {
           this.sessionState = "closed";
         }
         this.markRequestObjectsClosed();
+        this.rejectPendingRequests(error instanceof Error ? error : new Error(String(error)));
         this.callbacks.close?.({ closeCode: 0, reason: String(error) });
       });
   }
@@ -1537,67 +1581,93 @@ export class SessionImpl implements Session {
     writer.releaseLock();
 
     // サーバーからの単方向ストリームを受信する
+    // draft-ietf-moq-transport-21 §6.3 (Session initialization):
+    // "Unidirectional streams containing Objects or bidirectional stream(s)
+    //  beginning with a request message could arrive prior to the control
+    //  streams, in which case the data SHOULD be buffered until both control
+    //  streams arrive and setup is complete."
+    // 先頭のストリームタイプを確認し、0x2F00 (SETUP) でなければデータストリーム
+    // としてバッファリングし、制御ストリームが到着するまで読み進める。
     const incomingReader = this.transport.incomingUnidirectionalStreams.getReader();
-    const { value: incomingStream, done: streamDone } = await incomingReader.read();
-    incomingReader.releaseLock();
+    let controlStream: ReadableStream<Uint8Array> | undefined;
+    let controlBuffer: Uint8Array = new Uint8Array(0);
+    const bufferedDataStreams: ReadableStream<Uint8Array>[] = [];
+    try {
+      while (controlStream === undefined) {
+        const { value: incomingStream, done: streamDone } = await incomingReader.read();
+        if (streamDone || !incomingStream) {
+          throw new SessionError(
+            "Connection closed before receiving control stream",
+            SessionErrorCode.NO_ERROR,
+          );
+        }
 
-    if (streamDone || !incomingStream) {
+        // draft-ietf-moq-transport-21 Section 6.4.1:
+        // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
+        // WebTransport の read() はチャンク境界を保証しないため、
+        // タイプ varint が揃うまで read + 連結を繰り返す。
+        const dataReader = incomingStream.getReader();
+        let buffer: Uint8Array = new Uint8Array(0);
+        let streamType: bigint | undefined;
+        let streamTypeConsumed = 0;
+        try {
+          for (;;) {
+            const { value, done } = await dataReader.read();
+            if (done || !value) {
+              // タイプが揃う前に FIN した空ストリームは読み飛ばす
+              break;
+            }
+            buffer = concatChunks([buffer, value]);
+            try {
+              [streamType, streamTypeConsumed] = decodeVarint(buffer, 0);
+              break;
+            } catch (error) {
+              // varint がまだ揃っていない場合は次の read() で続きを読む。
+              // それ以外のエラーは再 throw する。
+              if (!(error instanceof IncompleteDataError)) {
+                throw error;
+              }
+            }
+          }
+        } finally {
+          dataReader.releaseLock();
+        }
+
+        if (streamType === undefined) {
+          continue;
+        }
+        if (Number(streamType) === MessageType.SETUP) {
+          controlStream = incomingStream;
+          controlBuffer = buffer.slice(streamTypeConsumed);
+          break;
+        }
+        // データストリーム先着: 読み取り済みバイト列 (タイプ varint を含む) を
+        // 先頭に戻したストリームを作り、SETUP 完了後に handleIncomingStream へ渡す。
+        bufferedDataStreams.push(prependBytesToStream(buffer, incomingStream));
+      }
+    } finally {
+      incomingReader.releaseLock();
+    }
+
+    if (controlStream === undefined) {
       throw new SessionError(
         "Connection closed before receiving control stream",
         SessionErrorCode.NO_ERROR,
       );
     }
+    this.controlReceiveStream = controlStream;
 
-    this.controlReceiveStream = incomingStream;
-
-    // draft-ietf-moq-transport-21 Section 6.4.1:
-    // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
-    // 制御ストリームのストリームタイプ 0x2F00 を読み取って検証する。
-    // WebTransport の read() はチャンク境界を保証しないため、ストリームタイプ varint も
-    // SETUP メッセージ本体も複数チャンクに分割されて届きうる。揃うまで読み続ける。
+    // draft-ietf-moq-transport-21 Section 9.1 (SETUP):
+    // SETUP は制御ストリーム上で最初に送られる制御メッセージである。
+    // SETUP メッセージが揃うまで read + feed を繰り返す。
+    // ControlStreamReader.feed は部分データを内部バッファに蓄積し、
+    // 揃ったメッセージだけを返す。
     // reader は 1 つだけ保持し、後続の制御ストリーム読み取り (startControlMessageLoop)
     // が getReader() で再取得できるよう finally で必ず releaseLock する。
-    const reader = incomingStream.getReader();
+    const reader = controlStream.getReader();
     let messages: ControlMessage[] = [];
     try {
-      // ストリームタイプ varint を読み切るまで read + 連結を繰り返す
-      let buffer: Uint8Array = new Uint8Array(0);
-      let streamType: bigint;
-      let streamTypeConsumed: number;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done || !value) {
-          throw new SessionError(
-            "Connection closed before control stream type",
-            SessionErrorCode.NO_ERROR,
-          );
-        }
-        buffer = concatChunks([buffer, value]);
-        try {
-          [streamType, streamTypeConsumed] = decodeVarint(buffer, 0);
-          break;
-        } catch (error) {
-          // varint がまだ揃っていない場合は次の read() で続きを読む。
-          // それ以外のエラーは再 throw する。
-          if (!(error instanceof IncompleteDataError)) {
-            throw error;
-          }
-        }
-      }
-
-      if (Number(streamType) !== MessageType.SETUP) {
-        throw new SessionError(
-          `expected control stream type 0x2F00, got 0x${streamType.toString(16)}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        );
-      }
-
-      // draft-ietf-moq-transport-21 Section 9.1 (SETUP):
-      // SETUP は制御ストリーム上で最初に送られる制御メッセージである。
-      // SETUP メッセージが揃うまで read + feed を繰り返す。
-      // ControlStreamReader.feed は部分データを内部バッファに蓄積し、
-      // 揃ったメッセージだけを返す。
-      messages = this.controlReader.feed(buffer.slice(streamTypeConsumed));
+      messages = this.controlReader.feed(controlBuffer);
       while (messages.length === 0) {
         const { value: chunk, done } = await reader.read();
         if (done || !chunk) {
@@ -1670,6 +1740,14 @@ export class SessionImpl implements Session {
 
     // 受信データストリームの受け入れを開始
     this.startIncomingStreamLoop();
+
+    // SETUP 完了前に到着したデータストリームを処理する
+    // draft-ietf-moq-transport-21 §6.3:
+    // 制御ストリーム確立までバッファリングした Object ストリームを、
+    // 読み取り済みバイト列 (ストリームタイプ varint を含む) ごと渡す。
+    for (const buffered of bufferedDataStreams) {
+      void this.handleIncomingStream(buffered);
+    }
 
     // データグラムの受信を開始
     this.startDatagramLoop();
@@ -1745,6 +1823,9 @@ export class SessionImpl implements Session {
       await this.closePublisherStream(impl.getTrackAlias());
       // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-21 §9.9）
       await this.sendPublishDone(impl);
+      // draft-ietf-moq-transport-21 §6.6.1:
+      // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
+      this.onRequestDrained();
     };
 
     // PUBLISH メッセージを構築する。
@@ -2193,6 +2274,37 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * namespace 系ストリームを RESET / STOP_SENDING で解除する
+   *
+   * draft-ietf-moq-transport-21 §4.1 / §4.2 / §6.4.2.3:
+   * リクエストのキャンセルは送信方向の RESET_STREAM (writer.abort()) と
+   * 受信方向の STOP_SENDING (reader.cancel()) で行う。FIN (writer.close()) は
+   * graceful 完了の通知であり、キャンセルには使わない。
+   * reader のロック解放は読み取りループの finally に委ねる (ここで解放すると
+   * ループ側の releaseLock と二重になる)。
+   */
+  private async cancelNamespaceStream(
+    streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+    writer: WritableStreamDefaultWriter<Uint8Array> | undefined,
+    reason: string,
+  ): Promise<void> {
+    if (streamReader !== undefined) {
+      try {
+        await streamReader.cancel(reason);
+      } catch {
+        // 既に閉じている / 解放済みの場合は無視
+      }
+    }
+    if (writer !== undefined) {
+      try {
+        await writer.abort(reason);
+      } catch {
+        // 既に閉じている / abort 済みの場合は無視
+      }
+    }
+  }
+
+  /**
    * Namespace をサブスクライブする（namespace discovery 用）
    *
    * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
@@ -2590,7 +2702,9 @@ export class SessionImpl implements Session {
     // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
     // the indicated timeout if there are still open subscriptions or
     // fetches on a connection."
-    if (goawayTimeout > 0n) {
+    // 未完了の購読・fetch が無い場合は期限を待たずに閉じる必要がないため
+    // タイマーを張らない。
+    if (goawayTimeout > 0n && this.hasOpenSubscriptionsOrFetches()) {
       this.goawayTimeoutId = setTimeout(() => {
         if (this.sessionState === "connected") {
           this.closeWithError(
@@ -2653,27 +2767,7 @@ export class SessionImpl implements Session {
     this.markRequestObjectsClosed();
 
     // Pending リクエストの Promise を reject する
-    const sessionClosedError = new Error("session closed");
-    for (const [, pending] of this.pendingPublish) {
-      pending.reject(sessionClosedError);
-    }
-    this.pendingPublish.clear();
-    for (const [, pending] of this.pendingSubscribe) {
-      pending.reject(sessionClosedError);
-    }
-    this.pendingSubscribe.clear();
-    for (const [, pending] of this.pendingFetch) {
-      pending.reject(sessionClosedError);
-    }
-    this.pendingFetch.clear();
-    for (const [, pending] of this.pendingRequestUpdate) {
-      pending.reject(sessionClosedError);
-    }
-    this.pendingRequestUpdate.clear();
-    for (const [, pending] of this.pendingTrackStatus) {
-      pending.reject(sessionClosedError);
-    }
-    this.pendingTrackStatus.clear();
+    this.rejectPendingRequests(new Error("session closed"));
 
     // 閉じた Subgroup の追跡をクリア
     this.closedSubgroups.clear();
@@ -2865,6 +2959,88 @@ export class SessionImpl implements Session {
     for (const publication of this.namespacePublications.values()) {
       publication.state = "closed";
     }
+  }
+
+  /**
+   * 保留中のリクエスト Promise をすべて reject してエントリを削除する
+   *
+   * draft-ietf-moq-transport-21 §6.6 (Termination):
+   * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
+   * アプリが未解決の Promise を待ち続けないようにする共通後始末。
+   */
+  private rejectPendingRequests(error: Error): void {
+    for (const [, pending] of this.pendingPublish) {
+      pending.reject(error);
+    }
+    this.pendingPublish.clear();
+    for (const [, pending] of this.pendingSubscribe) {
+      pending.reject(error);
+    }
+    this.pendingSubscribe.clear();
+    for (const [, pending] of this.pendingFetch) {
+      pending.reject(error);
+    }
+    this.pendingFetch.clear();
+    for (const [, pending] of this.pendingRequestUpdate) {
+      pending.reject(error);
+    }
+    this.pendingRequestUpdate.clear();
+    for (const [, pending] of this.pendingTrackStatus) {
+      pending.reject(error);
+    }
+    this.pendingTrackStatus.clear();
+  }
+
+  /**
+   * 未完了の購読・fetch が残っているかを返す
+   *
+   * draft-ietf-moq-transport-21 §6.6.1 (Graceful Session Migration):
+   * "The sender SHOULD close the session with GOAWAY_TIMEOUT after the indicated
+   *  timeout if there are still open subscriptions or fetches on a connection."
+   * pending なリクエストも未完了として含める。
+   */
+  private hasOpenSubscriptionsOrFetches(): boolean {
+    return (
+      this.publishers.size > 0 ||
+      this.subscribers.size > 0 ||
+      this.fetchers.size > 0 ||
+      this.pendingPublish.size > 0 ||
+      this.pendingSubscribe.size > 0 ||
+      this.pendingFetch.size > 0
+    );
+  }
+
+  /**
+   * GOAWAY 受信後に Established 購読・fetch が無くなっていれば NO_ERROR で閉じる
+   *
+   * draft-ietf-moq-transport-21 §6.6.1:
+   * "After the client receives a GOAWAY, it's RECOMMENDED that the client waits
+   *  until there are no more Established subscriptions before closing the
+   *  session with NO_ERROR."
+   * 購読・fetch の終了通知 (onRequestDrained) から呼ばれる。
+   */
+  private closeIfGoawayDrained(): void {
+    if (this.sessionState !== "connected") {
+      return;
+    }
+    if (!this.receivedGoaway) {
+      return;
+    }
+    if (this.hasOpenSubscriptionsOrFetches()) {
+      return;
+    }
+    void this.close();
+  }
+
+  /**
+   * 確立済みの購読・fetch が 1 つ終了したことを受けて、
+   * GOAWAY 後の NO_ERROR クローズ条件を満たすか確認する
+   *
+   * free function (bidi / publish 系) から `session.onRequestDrained?.()` で
+   * 呼ばれる。SessionInternal 経由で参照されるため public とする。
+   */
+  onRequestDrained(): void {
+    this.closeIfGoawayDrained();
   }
 
   /**
@@ -3282,18 +3458,14 @@ export class SessionImpl implements Session {
     this.callbacks.goaway?.(msg.newSessionUri);
 
     // draft-ietf-moq-transport-21 Section 6.6.1:
-    // サーバーが指定した timeout 内にセッションを閉じなければ、
-    // サーバーが GOAWAY_TIMEOUT でセッションを切断する。
-    // クライアント側でもタイムアウトを設定し、期限内にグレースフルシャットダウンを試みる。
+    // "After the client receives a GOAWAY, it's RECOMMENDED that the client
+    //  waits until there are no more Established subscriptions before closing
+    //  the session with NO_ERROR."
+    // 期限到達時に Established 購読・fetch が残っていれば閉じず、購読終了時の
+    // onRequestDrained に NO_ERROR クローズを委ねる。残っていなければ閉じる。
     if (msg.timeout > 0n) {
       this.goawayTimeoutId = setTimeout(() => {
-        if (this.sessionState === "connected") {
-          void this.close();
-          this.transport.close({
-            closeCode: SessionErrorCode.NO_ERROR,
-            reason: "graceful shutdown after receiving GOAWAY",
-          });
-        }
+        this.closeIfGoawayDrained();
       }, clampTimeoutMs(msg.timeout));
     }
 
@@ -3390,14 +3562,14 @@ export class SessionImpl implements Session {
       new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
     );
 
-    // ストリームを閉じる（FIN を送信）
-    try {
-      if (subscription.writer) {
-        await subscription.writer.close();
-      }
-    } catch {
-      // ストリームが既に閉じられている場合は無視
-    }
+    // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+    // SUBSCRIBE_NAMESPACE の解除は RESET_STREAM (writer.abort()) と
+    // STOP_SENDING (reader.cancel()) で行う。
+    await this.cancelNamespaceStream(
+      subscription.streamReader,
+      subscription.writer,
+      "namespace subscription cancelled",
+    );
 
     this.namespaceSubscriptions.delete(requestId);
   }
@@ -3458,13 +3630,14 @@ export class SessionImpl implements Session {
       new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
     );
 
-    try {
-      if (subscription.writer) {
-        await subscription.writer.close();
-      }
-    } catch {
-      // ストリームが既に閉じられている場合は無視
-    }
+    // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+    // SUBSCRIBE_TRACKS の解除は RESET_STREAM (writer.abort()) と
+    // STOP_SENDING (reader.cancel()) で行う。
+    await this.cancelNamespaceStream(
+      subscription.streamReader,
+      subscription.writer,
+      "tracks subscription cancelled",
+    );
 
     this.tracksSubscriptions.delete(requestId);
   }
@@ -3516,12 +3689,14 @@ export class SessionImpl implements Session {
 
     publication.state = "closed";
 
-    // ストリームを閉じる（FIN を送信）
-    try {
-      await publication.writer.close();
-    } catch {
-      // ストリームが既に閉じられている場合は無視
-    }
+    // draft-ietf-moq-transport-21 §4.2 / §6.4.2.3:
+    // PUBLISH_NAMESPACE の撤回は RESET_STREAM (writer.abort()) と
+    // STOP_SENDING (reader.cancel()) で行う。
+    await this.cancelNamespaceStream(
+      publication.streamReader,
+      publication.writer,
+      "namespace publication cancelled",
+    );
 
     this.namespacePublications.delete(requestId);
   }
@@ -4218,6 +4393,9 @@ export class SessionImpl implements Session {
     } catch {
       /* ignore */
     }
+    // draft-ietf-moq-transport-21 §6.6.1:
+    // GOAWAY 受信後に受信 PUBLISH の購読が無くなった時点で NO_ERROR で閉じる。
+    this.onRequestDrained();
   }
 
   /**
@@ -4600,6 +4778,9 @@ export class SessionImpl implements Session {
         }
         fetcher.handleEnd();
         this.fetchers.delete(fetchHeader.requestId);
+        // draft-ietf-moq-transport-21 §6.6.1:
+        // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
+        this.onRequestDrained();
       }
     } catch (err) {
       // デバッグ: ストリームエラーをログ

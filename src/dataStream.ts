@@ -13,7 +13,10 @@
 import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
-import { assertNoMandatoryTrackPropertyInObjectProperties } from "./properties";
+import {
+  assertNoMandatoryTrackPropertyInObjectProperties,
+  assertPriorIdGapInObjectProperties,
+} from "./properties";
 import { GroupOrder } from "./message/types";
 
 /**
@@ -295,6 +298,18 @@ export interface SubgroupHeader {
    * draft-ietf-moq-transport-21 Section 11.3.1
    */
   firstObject?: boolean;
+  /**
+   * END_OF_GROUP bit (0x08) がセットされている場合に true。
+   *
+   * draft-ietf-moq-transport-21 §11.3.1:
+   * "The END_OF_GROUP bit (0x08) indicates that this subgroup contains the
+   *  largest Object in the Group. When set to 1, the subscriber can infer the
+   *  final Object in the Group when the data stream is terminated by a FIN."
+   * 受信側はこのビットとストリームの FIN から Group の最終 Object を推定できる。
+   * Object Status が END_OF_GROUP の Object も Group の最終 Object を明示する
+   * (§11.1.2)。
+   */
+  endOfGroup?: boolean;
 }
 
 /**
@@ -339,8 +354,14 @@ export function hasContainsEndOfGroup(headerType: number): boolean {
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
 
-  // FIRST_OBJECT bit (0x40) がセットされている場合、Type に OR する
-  const type = header.firstObject ? header.type | 0x40 : header.type;
+  // FIRST_OBJECT bit (0x40) / END_OF_GROUP bit (0x08) がセットされている場合、
+  // Type に OR する。両ビットはフィールドの有無 (Subgroup ID / Priority /
+  // Properties) を決めるビットではないため、後続の判定は header.type のままで
+  // 結果が変わらない (0x08 は bit 3、0x40 は bit 6)。
+  let type = header.firstObject ? header.type | 0x40 : header.type;
+  if (header.endOfGroup) {
+    type |= 0x08;
+  }
   parts.push(encodeVarint(type));
   parts.push(encodeVarint(header.trackAlias));
   parts.push(encodeVarint(header.groupId));
@@ -454,6 +475,11 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // FIRST_OBJECT bit (0x40) の抽出
   const firstObject = (typeNum & 0x40) !== 0 ? true : undefined;
 
+  // END_OF_GROUP bit (0x08) の抽出
+  // draft-ietf-moq-transport-21 §11.3.1: この Subgroup が Group の最大 Object を
+  // 含むことを示す。FIN と組み合わせて Group の最終 Object を推定できる。
+  const endOfGroup = hasContainsEndOfGroup(typeNum) ? true : undefined;
+
   return [
     {
       type: typeNum,
@@ -462,6 +488,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       subgroupId,
       publisherPriority,
       firstObject,
+      endOfGroup,
     },
     totalConsumed,
   ];
@@ -1005,6 +1032,11 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     assertNoMandatoryTrackPropertyInObjectProperties(properties);
   }
 
+  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
+  // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
+  assertPriorIdGapInObjectProperties(groupId, objectId, properties);
+
   return [
     {
       type: typeNum,
@@ -1236,6 +1268,23 @@ export interface FetchObjectContext {
    */
   hasPriorSubgroup?: boolean;
   /**
+   * 直前 (End of Range indicator を含む) までに実 Object が 1 つ以上あるか。
+   *
+   * draft-ietf-moq-transport-21 §11.4.1.2 (End of Range):
+   * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
+   *  End of Range indicator. If there was no prior Object, using a flag that
+   *  references the prior Subgroup ID is a PROTOCOL_VIOLATION."
+   * "Prior Priority: The Priority from the last actual Object before the End
+   *  of Range indicator. If there was no prior Object, using a flag that
+   *  references the prior Priority is a PROTOCOL_VIOLATION."
+   * End of Range indicator 自体は実 Object ではないため、先頭レコードが
+   * End of Range の場合は false を引き継ぎ、後続 Object が prior Subgroup ID /
+   * prior Priority を参照したら PROTOCOL_VIOLATION とする。
+   * optional (undefined) は「先行する実 Object あり」として扱う
+   * (ハードコードされたテストコンテキストとの互換)。
+   */
+  hasPriorActualObject?: boolean;
+  /**
    * 現在の Group 内の Subgroup ID ごとの直近の Publisher Priority。
    * draft-ietf-moq-transport-21 §12.1 の比較対象
    * ("the previous Object with the same Subgroup ID") を Subgroup が
@@ -1451,6 +1500,10 @@ function decodeEndOfRange(
     subgroupPublisherPriority:
       context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0,
     hasPriorSubgroup: sameGroup ? (context?.hasPriorSubgroup ?? true) : false,
+    // draft-ietf-moq-transport-21 §11.4.1.2:
+    // End of Range indicator は実 Object ではないため、先行する実 Object の
+    // 有無を引き継ぐ (先頭レコードが End of Range なら false)。
+    hasPriorActualObject: context === null ? false : (context.hasPriorActualObject ?? true),
     // 同一 Group 内では Subgroup ごとの追跡を引き継ぎ、Group 変更時は捨てる。
     // 引き継ぎは参照共有とし、更新時は decodeFetchObjectFields 側で
     // コピーして置き換える (呼び出し元の再利用を壊さない)。
@@ -1507,10 +1560,24 @@ function decodeFetchSubgroupId(
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
       }
+      // draft-ietf-moq-transport-21 §11.4.1.2:
+      // 先頭レコードが End of Range indicator の場合、参照できる prior Subgroup ID
+      // (最後の実 Object の Subgroup ID) が存在しないため PROTOCOL_VIOLATION。
+      if (context.hasPriorActualObject === false) {
+        throw new ProtocolViolationError(
+          "cannot reference prior subgroup id before any actual object",
+        );
+      }
       return { subgroupId: context.subgroupId, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
+      }
+      // draft-ietf-moq-transport-21 §11.4.1.2: 同上 (prior Subgroup ID 参照)。
+      if (context.hasPriorActualObject === false) {
+        throw new ProtocolViolationError(
+          "cannot reference prior subgroup id before any actual object",
+        );
       }
       return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_PRESENT: {
@@ -1612,6 +1679,31 @@ function updateSubgroupPriorities(
   const updated = new Map(context?.subgroupPriorities);
   updated.set(subgroupId, publisherPriority);
   return updated;
+}
+
+/**
+ * PRIORITY_PRESENT が未設定の Fetch Object の Priority を解決する
+ *
+ * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+ * 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
+ * 継承する」ことを意味する。
+ *
+ * draft-ietf-moq-transport-21 §11.4.1.2 (End of Range):
+ * "Prior Priority: The Priority from the last actual Object before the End of
+ *  Range indicator. If there was no prior Object, using a flag that references
+ *  the prior Priority is a PROTOCOL_VIOLATION."
+ * 先頭オブジェクト (context null) と、先頭レコードが End of Range indicator で
+ * 実 Object が 1 つも無い場合 (hasPriorActualObject === false) は継承元が無い
+ * ため PROTOCOL_VIOLATION とする。
+ */
+function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null): number {
+  if (context === null) {
+    throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
+  }
+  if (context.hasPriorActualObject === false) {
+    throw new ProtocolViolationError("cannot reference prior priority before any actual object");
+  }
+  return context.publisherPriority;
 }
 
 /**
@@ -1755,13 +1847,8 @@ export function decodeFetchObjectFields(
   } else {
     // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
     // 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
-    // 継承する」ことを意味する。先頭オブジェクト (context null) には継承元が
-    // 無いため prior Object 参照となり、仕様の MUST により PROTOCOL_VIOLATION
-    // となる。
-    if (context === null) {
-      throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
-    }
-    publisherPriority = context.publisherPriority;
+    // 継承する」ことを意味する。
+    publisherPriority = resolvePriorFetchPublisherPriority(context);
   }
 
   // Properties
@@ -1787,6 +1874,11 @@ export function decodeFetchObjectFields(
       // draft-ietf-moq-transport-21 §3.6:
       // Mandatory Track Property を Object Property として含む Object は malformed
       assertNoMandatoryTrackPropertyInObjectProperties(properties);
+
+      // draft-ietf-moq-transport-21 §10.8 / §10.9:
+      // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
+      // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
+      assertPriorIdGapInObjectProperties(groupId, objectId, properties);
     }
   }
 
@@ -1831,6 +1923,9 @@ export function decodeFetchObjectFields(
         ? false
         : (context?.hasPriorSubgroup ?? true)
       : true,
+    // このオブジェクト自身が実 Object であるため、後続の prior Subgroup ID /
+    // prior Priority 参照は常に有効になる (§11.4.1.2)。
+    hasPriorActualObject: true,
     subgroupPriorities,
   };
   return [

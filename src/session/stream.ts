@@ -7,11 +7,14 @@
 
 import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStream";
 import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
-import { IncompleteDataError, ProtocolViolationError } from "../error";
+import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "../error";
 import { ObjectStatus } from "../message";
 import type { SubscriberImpl } from "../subscriber";
 import type { GroupOrder } from "../message/types";
-import { readDeliveryTimeoutObjectProperties } from "../properties";
+import {
+  assertPriorIdGapInObjectProperties,
+  readDeliveryTimeoutObjectProperties,
+} from "../properties";
 
 /**
  * Object ID の最大値 (2^64 - 1)
@@ -170,6 +173,12 @@ export function processSubgroupObjects(
   // 未保持時のみヘッダ由来値から初期化する (feed 間の状態引き継ぎ)。
   // 同一ストリームの同一 header の連続 feed を前提とする。
   let currentResolvedSubgroupId = resolvedSubgroupId ?? header.subgroupId;
+  // draft-ietf-moq-transport-21 §12.1 条件 4:
+  // Object Status が END_OF_GROUP の Object は Group の最終 Object である。
+  // 同一呼び出し内でその後により大きい Object ID を観測したら malformed。
+  // (feed をまたぐ追跡は呼び出し側が状態を保持しないため、この関数内に
+  //  限定する。詳細は下の検出箇所のコメント参照)
+  let endOfGroupFinalObjectId: bigint | undefined;
 
   while (offset < buffer.length) {
     // この subgroup で最初のオブジェクトかどうかをデコード直前に捕捉する。
@@ -210,6 +219,33 @@ export function processSubgroupObjects(
         );
       }
 
+      // draft-ietf-moq-transport-21 §10.8 / §10.9:
+      // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
+      // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
+      assertPriorIdGapInObjectProperties(header.groupId, objectId, fields.properties);
+
+      // draft-ietf-moq-transport-21 §12.1 条件 4:
+      // "An Object is received in a Group whose Object ID is larger than the
+      //  final Object in the Group. The final Object in a Group is the Object
+      //  with Status END_OF_GROUP, or the last Object before a FIN in a
+      //  Subgroup which has the END_OF_GROUP bit set."
+      // Object Status が END_OF_GROUP の Object を検出済みなら、それより大きい
+      // Object ID を持つ後続 Object は malformed である。同一 Subgroup 内の
+      // Object ID は昇順に採番されるため、後続 Object は必ずこれに該当する。
+      // Subgroup Header の END_OF_GROUP ビットによる「FIN 前の最後の Object が
+      // Group 最終 Object」の判定は、FIN を processSubgroupObjects から観測できず、
+      // 複数 Subgroup / 複数ストリームをまたぐ Group 単位の追跡はセッション状態を
+      // 必要とするため実装しない (endOfGroup ビット自体は SubgroupHeader で公開
+      // 済み)。
+      if (endOfGroupFinalObjectId !== undefined && objectId > endOfGroupFinalObjectId) {
+        throw new MalformedTrackError(
+          `malformed track: object id ${objectId} exceeds final object ${endOfGroupFinalObjectId} in group ${header.groupId}`,
+        );
+      }
+      if (fields.status === ObjectStatus.END_OF_GROUP) {
+        endOfGroupFinalObjectId = objectId;
+      }
+
       currentResolvedSubgroupId ??= objectId;
 
       const payload = buffer.slice(offset, offset + payloadLength);
@@ -226,9 +262,14 @@ export function processSubgroupObjects(
       };
 
       // draft-ietf-moq-transport-21 Section 5.2 / §10.1 / §10.2:
-      // subgroup 先頭オブジェクトの Object Property から delivery timeout を抽出する。
-      // 先頭以外に同 ID が付いていても ignore（PROTOCOL_VIOLATION にしない）。
-      if (isFirstInSubgroup && fields.properties.length > 0) {
+      // Object Property による delivery timeout の上書きは「subgroup の最初の
+      // Object」にのみ適用され、それ以外の Object では ignore する
+      // (PROTOCOL_VIOLATION にはしない)。§2.2 の FIRST_OBJECT ビット (0x40) は
+      // ストリーム先頭 Object が「その subgroup で最初に publish された Object」
+      // であることを示すため、中継が subgroup 途中から転送したストリームでは
+      // ビットが立たず、上書きは適用されない。isFirstInSubgroup (ストリーム先頭)
+      // だけでは中継転送を区別できないため、両方を要求する。
+      if (isFirstInSubgroup && header.firstObject === true && fields.properties.length > 0) {
         const timeouts = readDeliveryTimeoutObjectProperties(fields.properties);
         if (timeouts.objectDeliveryTimeout !== undefined) {
           object.objectDeliveryTimeout = timeouts.objectDeliveryTimeout;

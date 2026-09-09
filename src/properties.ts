@@ -10,7 +10,13 @@
  */
 
 import { encodeVarint, decodeVarint, MAX_VARINT } from "./varint";
-import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
+import {
+  MalformedTrackError,
+  ProtocolViolationError,
+  IncompleteDataError,
+  SessionError,
+  SessionErrorCode,
+} from "./error";
 import { generateGreaseValue } from "./grease";
 
 /**
@@ -165,6 +171,45 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
 }
 
 /**
+ * 受信者が理解する (既知の) MOQT Property Type の集合
+ *
+ * draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure):
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * MOQT 本体で定義された Track / Object Property (MOQTPropertyId /
+ * TrackPropertyId) を既知 Type として扱う。未知 Type は受信者が理解しない
+ * ため、この検証の対象外とする。
+ */
+const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
+  ...Object.values(MOQTPropertyId),
+  ...Object.values(TrackPropertyId),
+]);
+
+/**
+ * 既知 Type の Value (偶数 Type) / Length (奇数 Type) を varint としてデコードする
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * 既知 Type の Value / Length が仕様の serialization に一致しない場合
+ * (varint がバッファ内で完結しない場合) は KEY_VALUE_FORMATTING_ERROR で
+ * セッションを閉じる。未知 Type は受信者が理解しないため、通常の
+ * IncompleteDataError (フレーミング破損) 経路に委ねる。
+ */
+function decodeKnownPropertyVarint(id: bigint, data: Uint8Array, offset: number): [bigint, number] {
+  try {
+    return decodeVarint(data, offset);
+  } catch (error) {
+    if (error instanceof IncompleteDataError && KNOWN_PROPERTY_TYPES.has(id)) {
+      throw new SessionError(
+        `key-value-pair value does not match serialization for known type 0x${id.toString(16)}: ${error.message}`,
+        SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * Prior Group ID Gap
  *
  * draft-ietf-moq-transport-21 Section 10.8 (Prior Group ID Gap):
@@ -248,7 +293,7 @@ export function encodePriorGroupIdGap(gap: PriorGroupIdGap): Uint8Array {
  */
 export function decodePriorGroupIdGap(data: Uint8Array): PriorGroupIdGap {
   const [_id, idLen] = decodeVarint(data);
-  const [gap, _gapLen] = decodeVarint(data.subarray(idLen));
+  const [gap, _gapLen] = decodeKnownPropertyVarint(MOQTPropertyId.PRIOR_GROUP_ID_GAP, data, idLen);
   return { gap };
 }
 
@@ -274,7 +319,7 @@ export function encodePriorObjectIdGap(gap: PriorObjectIdGap): Uint8Array {
  */
 export function decodePriorObjectIdGap(data: Uint8Array): PriorObjectIdGap {
   const [_id, idLen] = decodeVarint(data);
-  const [gap, _gapLen] = decodeVarint(data.subarray(idLen));
+  const [gap, _gapLen] = decodeKnownPropertyVarint(MOQTPropertyId.PRIOR_OBJECT_ID_GAP, data, idLen);
   return { gap };
 }
 
@@ -483,7 +528,11 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
  */
 export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties {
   const [_id, idLen] = decodeVarint(data);
-  const [length, lengthLen] = decodeVarint(data.subarray(idLen));
+  const [length, lengthLen] = decodeKnownPropertyVarint(
+    MOQTPropertyId.IMMUTABLE_PROPERTIES,
+    data,
+    idLen,
+  );
   if (Number(length) > 65535) {
     throw new ProtocolViolationError(
       `immutable properties value length exceeds maximum: ${length} > 65535`,
@@ -539,13 +588,17 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
 
     if (extId % 2n === 0n) {
       // 偶数 ID: varint value 形式
-      const [value, valueLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
+      const [value, valueLen] = decodeKnownPropertyVarint(extId, innerData, offset + deltaIdLen);
       validateTrackPropertyValue(extId, value);
       extensions.push({ id: extId, value });
       offset += deltaIdLen + valueLen;
     } else {
       // 奇数 ID: length + bytes 形式
-      const [extLength, extLengthLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
+      const [extLength, extLengthLen] = decodeKnownPropertyVarint(
+        extId,
+        innerData,
+        offset + deltaIdLen,
+      );
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
       if (offset + deltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
@@ -680,7 +733,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
           "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
         );
       }
-      const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [gap, gapLen] = decodeKnownPropertyVarint(
+        MOQTPropertyId.PRIOR_GROUP_ID_GAP,
+        data,
+        offset + deltaIdLen,
+      );
       result.priorGroupIdGap = { gap };
       offset += deltaIdLen + gapLen;
     } else if (id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP) {
@@ -690,7 +747,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
           "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
         );
       }
-      const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [gap, gapLen] = decodeKnownPropertyVarint(
+        MOQTPropertyId.PRIOR_OBJECT_ID_GAP,
+        data,
+        offset + deltaIdLen,
+      );
       result.priorObjectIdGap = { gap };
       offset += deltaIdLen + gapLen;
     } else if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
@@ -702,7 +763,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         );
       }
       // Immutable Properties は奇数 ID なので length + bytes 形式
-      const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [length, lengthLen] = decodeKnownPropertyVarint(
+        MOQTPropertyId.IMMUTABLE_PROPERTIES,
+        data,
+        offset + deltaIdLen,
+      );
       if (Number(length) > 65535) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
@@ -760,14 +825,20 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
 
         if (extId % 2n === 0n) {
           // 偶数 ID: varint value 形式
-          const [value, valueLen] = decodeVarint(innerData.subarray(innerOffset + innerDeltaIdLen));
+          const [value, valueLen] = decodeKnownPropertyVarint(
+            extId,
+            innerData,
+            innerOffset + innerDeltaIdLen,
+          );
           validateTrackPropertyValue(extId, value);
           extensions.push({ id: extId, value });
           innerOffset += innerDeltaIdLen + valueLen;
         } else {
           // 奇数 ID: length + bytes 形式
-          const [extLength, extLengthLen] = decodeVarint(
-            innerData.subarray(innerOffset + innerDeltaIdLen),
+          const [extLength, extLengthLen] = decodeKnownPropertyVarint(
+            extId,
+            innerData,
+            innerOffset + innerDeltaIdLen,
           );
           // Length 宣言が残りバイトを超える切り詰めは破損であり、
           // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
@@ -817,7 +888,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         offset += deltaIdLen + lengthLen + Number(length);
       } else {
         // 偶数 ID: varint value 形式
-        const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
         validateTrackPropertyValue(id, value);
         const extData = encodeVarint(value);
         unknownProperties.push({ id, data: extData });
@@ -870,13 +941,13 @@ export function decodeProperties(data: Uint8Array): Property[] {
 
     if (id % 2n === 0n) {
       // 偶数 ID: varint value 形式
-      const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
       validateTrackPropertyValue(id, value);
       extensions.push({ id, value });
       offset += deltaIdLen + valueLen;
     } else {
       // 奇数 ID: length + bytes 形式
-      const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [length, lengthLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
       if (Number(length) > 65535) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
@@ -931,11 +1002,17 @@ export function decodeProperties(data: Uint8Array): Property[] {
               );
             }
             if (innerId % 2n === 0n) {
-              const [, valueLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
+              const [, valueLen] = decodeKnownPropertyVarint(
+                innerId,
+                extData,
+                innerOffset + deltaIdLen,
+              );
               innerOffset += deltaIdLen + valueLen;
             } else {
-              const [innerLength, innerLengthLen] = decodeVarint(
-                extData.subarray(innerOffset + deltaIdLen),
+              const [innerLength, innerLengthLen] = decodeKnownPropertyVarint(
+                innerId,
+                extData,
+                innerOffset + deltaIdLen,
               );
               // Length 宣言が残りバイトを超える切り詰めは破損であり、
               // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
@@ -1134,6 +1211,80 @@ function assertObjectPropertyList(data: Uint8Array, nested: boolean): void {
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
     if (property.data !== undefined) {
       assertObjectPropertyList(property.data, true);
+    }
+  }
+}
+
+/**
+ * Object Properties 内の Prior Group ID Gap / Prior Object ID Gap を検証する
+ *
+ * draft-ietf-moq-transport-21 §10.8 (Prior Group ID Gap):
+ * "A Track is considered malformed (see Section 12.1) if any of the following
+ *  conditions are detected: ... An Object has a Prior Group ID Gap larger than
+ *  the Group ID."
+ * draft-ietf-moq-transport-21 §10.9 (Prior Object ID Gap):
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ *
+ * 単一 Object の情報だけで判定できる上記条件のみを検証する。以下は同一 Track
+ * の複数 Object と過去の受信状態を追跡する必要があるため実装しない:
+ * - §10.8: 同一 Group 内で異なる値の Prior Group ID Gap を持つ Object の受信
+ * - §10.8: 過去に受信した Object を覆う Prior Group ID Gap を持つ Object の受信
+ * - §10.8: 過去に通知された gap 内の Group ID を持つ Object の受信
+ * - §10.9: 過去に受信した Object を覆う Prior Object ID Gap を持つ Object の受信
+ * - §10.9: 過去に通知された gap 内の Object ID を持つ Object の受信
+ * (追跡には Track 単位の受信履歴が必要であり、Object デコード関数の引数に
+ *  存在しないため未実装とする。§10.7 により IMMUTABLE_PROPERTIES 配下も
+ *  検索する。不完全・不正な KVP は decodeObjectPropertiesTolerant の契約どおり
+ *  読み飛ばす)
+ *
+ * @throws MalformedTrackError gap が Group ID / Object ID より大きい場合
+ */
+export function assertPriorIdGapInObjectProperties(
+  groupId: bigint,
+  objectId: bigint,
+  properties: Uint8Array | undefined,
+): void {
+  if (properties === undefined || properties.length === 0) {
+    return;
+  }
+  assertPriorIdGapInProperties(
+    decodeObjectPropertiesTolerant(properties).properties,
+    groupId,
+    objectId,
+  );
+}
+
+/**
+ * Property 列 (IMMUTABLE_PROPERTIES 配下を含む) の Prior ID Gap を再帰的に検証する
+ *
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ */
+function assertPriorIdGapInProperties(
+  properties: ReadonlyArray<Property>,
+  groupId: bigint,
+  objectId: bigint,
+): void {
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
+      if (property.value > groupId) {
+        throw new MalformedTrackError(
+          `prior group id gap exceeds group id: gap=${property.value}, group=${groupId}`,
+        );
+      }
+    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
+      if (property.value > objectId) {
+        throw new MalformedTrackError(
+          `prior object id gap exceeds object id: gap=${property.value}, object=${objectId}`,
+        );
+      }
+    } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
+      assertPriorIdGapInProperties(
+        decodeObjectPropertiesTolerant(property.data).properties,
+        groupId,
+        objectId,
+      );
     }
   }
 }

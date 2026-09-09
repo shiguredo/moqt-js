@@ -12,7 +12,7 @@ import {
 } from "./dataStream";
 import { IncompleteDataError, MalformedTrackError } from "./error";
 import { ObjectStatus } from "./message/types";
-import { appendGreaseObjectProperty, encodeProperties } from "./properties";
+import { appendGreaseObjectProperty, encodeProperties, MOQTPropertyId } from "./properties";
 import { isGreaseValue } from "./grease";
 import { decodeVarint } from "./varint";
 
@@ -407,4 +407,81 @@ test("ObjectDatagram: Priority なし型では範囲外 priority でも throw �
     payload: new Uint8Array([0xaa]),
   });
   assert.isDefined(encoded);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// draft-ietf-moq-transport-21 §10.8 / §10.9
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object has a Prior Group ID Gap larger than the Group ID."
+ * Group 0 の datagram に Prior Group ID Gap = 1 を付けると malformed。
+ */
+test("ObjectDatagram: Prior Group ID Gap が Group ID より大きいと MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    /prior group id gap exceeds group id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ * Object 0 の datagram に Prior Object ID Gap = 1 を付けると malformed。
+ */
+test("ObjectDatagram: Prior Object ID Gap が Object ID より大きいと MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 1n }]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    /prior object id gap exceeds object id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * gap が Group ID / Object ID 以下なら malformed ではない (誤検出しない)。
+ */
+test("ObjectDatagram: gap が Group ID / Object ID 以下ならデコードできる", () => {
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  const [decoded] = decodeObjectDatagram(encoded);
+  assert.equal(decoded.groupId, 0n);
+  assert.equal(decoded.objectId, 0n);
 });

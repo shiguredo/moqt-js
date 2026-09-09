@@ -742,6 +742,58 @@ test("SubgroupHeader: FIRST_OBJECT ビット付きエンコードのデコード
   assert.equal(consumed, encoded.length);
 });
 
+// draft-ietf-moq-transport-21 §11.3.1 (END_OF_GROUP bit 0x08):
+// "The END_OF_GROUP bit (0x08) indicates that this subgroup contains the
+//  largest Object in the Group."
+// デコード時に endOfGroup を公開し、エンコードでも指定できることを検証する。
+test("SubgroupHeader: END_OF_GROUP ビットを公開する", () => {
+  // BASE_END_GROUP (0x18) は END_OF_GROUP ビットを含む
+  const data = new Uint8Array([0x18, 0x05, 0x0a, 0x80]);
+  const [header, consumed] = decodeSubgroupHeader(data);
+
+  assert.equal(header.type, SubgroupHeaderType.BASE_END_GROUP);
+  assert.equal(header.endOfGroup, true);
+  assert.equal(header.firstObject, undefined);
+  assert.equal(consumed, 4);
+
+  // END_OF_GROUP ビットを含まない型では undefined
+  const [plain] = decodeSubgroupHeader(new Uint8Array([0x10, 0x05, 0x0a, 0x80]));
+  assert.isUndefined(plain.endOfGroup);
+});
+
+test("SubgroupHeader: endOfGroup 指定で END_OF_GROUP ビットが OR される", () => {
+  const encoded = encodeSubgroupHeader({
+    type: SubgroupHeaderType.FIRST_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    publisherPriority: 128,
+    firstObject: true,
+    endOfGroup: true,
+  });
+
+  // FIRST_OBJ_EXT (0x13) | FIRST_OBJECT (0x40) | END_OF_GROUP (0x08) = 0x5B
+  assert.equal(encoded[0], 0x5b);
+
+  const [decoded, consumed] = decodeSubgroupHeader(encoded);
+  assert.equal(decoded.endOfGroup, true);
+  assert.equal(decoded.firstObject, true);
+  assert.equal(consumed, encoded.length);
+});
+
+test("SubgroupHeader: endOfGroup 未指定では END_OF_GROUP ビットが OR されない", () => {
+  const encoded = encodeSubgroupHeader({
+    type: SubgroupHeaderType.FIRST_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    publisherPriority: 128,
+    firstObject: true,
+  });
+
+  assert.equal(encoded[0], 0x53);
+  const [decoded] = decodeSubgroupHeader(encoded);
+  assert.isUndefined(decoded.endOfGroup);
+});
+
 test("encodeObjectFields: END_OF_GROUP ステータスをエンコードできる", () => {
   // draft-ietf-moq-transport-21 §11.1.2:
   // END_OF_GROUP ステータスはペイロード長 0 の場合にエンコードされる

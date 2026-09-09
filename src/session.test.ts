@@ -11,6 +11,7 @@ import {
   type SubscribeCallbacks,
   type TracksSubscriptionCallbacks,
 } from "./session";
+import { connect } from "./index";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
 import {
   MessageType,
@@ -65,6 +66,16 @@ import {
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
 import type { SessionInternal } from "./session/types";
+
+// vp check は node の型を解決しないため globalThis 経由で process を参照する
+const nodeProcess = (
+  globalThis as unknown as {
+    process: {
+      on(event: string, listener: (reason: unknown) => void): void;
+      off(event: string, listener: (reason: unknown) => void): void;
+    };
+  }
+).process;
 
 /**
  * SessionImpl を構築するための WebTransport モック
@@ -370,7 +381,7 @@ test("publish: 送信失敗後に close() しても unhandled rejection が発�
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason);
   };
-  process.on("unhandledRejection", onUnhandled);
+  nodeProcess.on("unhandledRejection", onUnhandled);
   try {
     // 呼び出し元のエラーは観測する (内部の孤児 Promise だけが未観測になる構造)
     let thrown: Error | undefined;
@@ -392,7 +403,7 @@ test("publish: 送信失敗後に close() しても unhandled rejection が発�
     });
     assert.equal(unhandled.length, 0);
   } finally {
-    process.off("unhandledRejection", onUnhandled);
+    nodeProcess.off("unhandledRejection", onUnhandled);
   }
 });
 
@@ -2306,10 +2317,10 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
     >;
   };
 
-  let closeCalled = false;
+  let abortCalled = false;
   const writable = new WritableStream<Uint8Array>({
-    close() {
-      closeCalled = true;
+    abort() {
+      abortCalled = true;
     },
   });
   const entry = {
@@ -2338,9 +2349,10 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
   assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
   assert.isUndefined(entry.pendingPrefix);
-  // ストリームが FIN (writer.close()) で閉じられ、エントリが削除される
+  // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+  // ストリームが RESET (writer.abort()) で解除され、エントリが削除される
   assert.equal(entry.state, "closed");
-  assert.isTrue(closeCalled);
+  assert.isTrue(abortCalled);
   assert.isFalse(sessionInternal.namespaceSubscriptions.has(1n));
 });
 
@@ -2436,7 +2448,7 @@ test("namespace の update() を fire-and-forget で呼び出しても unsubscri
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason);
   };
-  process.on("unhandledRejection", onUnhandled);
+  nodeProcess.on("unhandledRejection", onUnhandled);
   try {
     const subscription = session.createNamespaceSubscription(1n);
     // fire-and-forget: 返り値の Promise を観測しない
@@ -2453,7 +2465,7 @@ test("namespace の update() を fire-and-forget で呼び出しても unsubscri
     assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
     assert.equal(sessionInternal.namespaceSubscriptions.has(1n), false);
   } finally {
-    process.off("unhandledRejection", onUnhandled);
+    nodeProcess.off("unhandledRejection", onUnhandled);
   }
 });
 
@@ -2489,7 +2501,7 @@ test("tracks の update() を fire-and-forget で呼び出しても unsubscribe(
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason);
   };
-  process.on("unhandledRejection", onUnhandled);
+  nodeProcess.on("unhandledRejection", onUnhandled);
   try {
     const subscription = session.createTracksSubscription(1n);
     // fire-and-forget: 返り値の Promise を観測しない
@@ -2502,7 +2514,7 @@ test("tracks の update() を fire-and-forget で呼び出しても unsubscribe(
     assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
     assert.equal(sessionInternal.tracksSubscriptions.has(1n), false);
   } finally {
-    process.off("unhandledRejection", onUnhandled);
+    nodeProcess.off("unhandledRejection", onUnhandled);
   }
 });
 
@@ -4662,6 +4674,374 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
   assert.equal(getSetupMaxAuthTokenCacheSize(setup), 1024);
   assert.equal(getSetupMaxRequestUpdates(setup), 8);
   assert.equal(getSetupMaxFilterRanges(setup), 4);
+});
+
+// ============================================================================
+// draft-21 適合修正の回帰テスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §6.3 (Session initialization):
+ * データストリーム (Object) が制御ストリームより先に到着しても
+ * PROTOCOL_VIOLATION で閉じず、SETUP 完了後にバッファリングして処理する。
+ */
+test("initialize: 制御ストリームより先にデータストリームが到着しても PROTOCOL_VIOLATION にしない", async () => {
+  const clientWritable = new WritableStream<Uint8Array>();
+  const serverSetup = encodeSetupPayload(createSetup({ moqtImplementation: false }));
+  const serverControlWriter = new ControlStreamWriter();
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        new Uint8Array([
+          ...encodeVarint(MessageType.SETUP),
+          ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
+        ]),
+      );
+    },
+  });
+
+  let dataController!: ReadableStreamDefaultController<Uint8Array>;
+  const headerBytes = encodeSubgroupHeader({
+    type: SubgroupHeaderType.BASE,
+    trackAlias: 7n,
+    groupId: 1n,
+    publisherPriority: 128,
+  });
+  const fieldsBytes = encodeObjectFields(0n, 0n, SubgroupHeaderType.BASE);
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      dataController = controller;
+      controller.enqueue(concatUint8ArraysForTest([headerBytes, fieldsBytes]));
+    },
+  });
+
+  const incomingUnidirectionalStreams = new ReadableStream<ReadableStream<Uint8Array>>({
+    start(controller) {
+      // データストリームを制御ストリームより先に流す
+      controller.enqueue(dataStream);
+      controller.enqueue(serverControlStream);
+    },
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientWritable,
+    incomingUnidirectionalStreams,
+    incomingBidirectionalStreams: new ReadableStream<WebTransportBidirectionalStream>({
+      start() {},
+    }),
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+  } as unknown as WebTransport;
+
+  const errors: Error[] = [];
+  const session = new SessionImpl(transport, {
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  await session.initialize();
+
+  // データストリーム先着でも制御ストリームを特定して SETUP を処理する
+  assert.equal(session.state, "connected");
+  assert.equal(errors.length, 0);
+
+  // バッファリングしたデータストリームが handleIncomingStream へ渡される
+  await yieldToMacrotask();
+  const stats = session.getStatistics();
+  assert.equal(stats.unidirectionalStreamsReceived, 1);
+  assert.equal(stats.subgroupHeadersReceived, 1);
+
+  // 開いたストリームを閉じて後始末する
+  dataController.close();
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.2 / §6.2.1:
+ * WebTransport では WT-Available-Protocols に MOQT プロトコル識別子を提示する。
+ * draft-21 は "moqt-21"。
+ */
+test("connect: WebTransport に protocols ['moqt-21'] を渡す", async () => {
+  const originalWebTransport = (globalThis as { WebTransport?: unknown }).WebTransport;
+  const recordedOptions: WebTransportOptions[] = [];
+  class RecordingWebTransport {
+    readonly ready: Promise<void>;
+    constructor(_url: string, options?: WebTransportOptions) {
+      recordedOptions.push(options ?? {});
+      // initialize まで進めないよう ready を reject させる
+      this.ready = Promise.reject(new Error("stop before initialize"));
+    }
+  }
+  (globalThis as { WebTransport?: unknown }).WebTransport = RecordingWebTransport;
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    (globalThis as { WebTransport?: unknown }).WebTransport = originalWebTransport;
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("stop before initialize"));
+  assert.equal(recordedOptions.length, 1);
+  assert.deepEqual(recordedOptions[0].protocols, ["moqt-21"]);
+});
+
+/** namespace 系解除テスト用のストリームを構築する (cancel / abort を観測する) */
+function createCancelObservingStream(): {
+  streamReader: ReadableStreamDefaultReader<Uint8Array>;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  cancelled: unknown[];
+  aborted: unknown[];
+} {
+  const cancelled: unknown[] = [];
+  const aborted: unknown[] = [];
+  const readable = new ReadableStream<Uint8Array>({
+    cancel: (reason?: unknown) => {
+      cancelled.push(reason);
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    abort: (reason?: unknown) => {
+      aborted.push(reason);
+    },
+  });
+  return { streamReader: readable.getReader(), writer: writable.getWriter(), cancelled, aborted };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+ * SUBSCRIBE_NAMESPACE の解除は送信方向 RESET (writer.abort()) と
+ * 受信方向 STOP_SENDING (reader.cancel()) で行う (FIN ではない)。
+ */
+test("namespace の unsubscribe() は送信方向 abort と受信方向 cancel で解除する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as {
+    namespaceSubscriptions: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        streamReader: ReadableStreamDefaultReader<Uint8Array>;
+        controlReader: ControlStreamReader;
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+  };
+  const { streamReader, writer, cancelled, aborted } = createCancelObservingStream();
+  internal.namespaceSubscriptions.set(1n, {
+    callbacks: {},
+    state: "active",
+    namespacePrefix: ["live"],
+    streamReader,
+    controlReader: new ControlStreamReader(),
+    writer,
+  });
+
+  await session.createNamespaceSubscription(1n).unsubscribe();
+
+  assert.deepEqual(cancelled, ["namespace subscription cancelled"]);
+  assert.deepEqual(aborted, ["namespace subscription cancelled"]);
+  assert.isFalse(internal.namespaceSubscriptions.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
+ * SUBSCRIBE_TRACKS の解除も namespace と同様に RESET / STOP_SENDING で行う。
+ */
+test("tracks の unsubscribe() は送信方向 abort と受信方向 cancel で解除する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as {
+    tracksSubscriptions: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "active" | "closed";
+        namespacePrefix: string[];
+        streamReader: ReadableStreamDefaultReader<Uint8Array>;
+        controlReader: ControlStreamReader;
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+  };
+  const { streamReader, writer, cancelled, aborted } = createCancelObservingStream();
+  internal.tracksSubscriptions.set(1n, {
+    callbacks: {},
+    state: "active",
+    namespacePrefix: ["live"],
+    streamReader,
+    controlReader: new ControlStreamReader(),
+    writer,
+  });
+
+  await session.createTracksSubscription(1n).unsubscribe();
+
+  assert.deepEqual(cancelled, ["tracks subscription cancelled"]);
+  assert.deepEqual(aborted, ["tracks subscription cancelled"]);
+  assert.isFalse(internal.tracksSubscriptions.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §4.2 / §6.4.2.3:
+ * PUBLISH_NAMESPACE の撤回も RESET / STOP_SENDING で行う。
+ */
+test("publishNamespace の done() は送信方向 abort と受信方向 cancel で撤回する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as {
+    namespacePublications: Map<
+      bigint,
+      {
+        callbacks: object;
+        state: "pending" | "active" | "closed";
+        namespace: string[];
+        stream: WebTransportBidirectionalStream;
+        streamReader: ReadableStreamDefaultReader<Uint8Array>;
+        controlReader: ControlStreamReader;
+        writer: WritableStreamDefaultWriter<Uint8Array>;
+      }
+    >;
+  };
+  const { streamReader, writer, cancelled, aborted } = createCancelObservingStream();
+  internal.namespacePublications.set(1n, {
+    callbacks: {},
+    state: "active",
+    namespace: ["live"],
+    stream: {} as WebTransportBidirectionalStream,
+    streamReader,
+    controlReader: new ControlStreamReader(),
+    writer,
+  });
+
+  await session.createNamespacePublication(1n).done();
+
+  assert.deepEqual(cancelled, ["namespace publication cancelled"]);
+  assert.deepEqual(aborted, ["namespace publication cancelled"]);
+  assert.isFalse(internal.namespacePublications.has(1n));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.6.1:
+ * GOAWAY_TIMEOUT は未完了の購読・fetch がある場合のみ張る。
+ */
+test("goaway: 未完了の購読・fetch が無い場合は GOAWAY_TIMEOUT タイマーを張らない", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as {
+    controlSendStream?: WritableStream<Uint8Array>;
+    controlWriter?: ControlStreamWriter;
+    goawayTimeoutId: ReturnType<typeof setTimeout> | null;
+  };
+  internal.controlSendStream = new WritableStream<Uint8Array>();
+  internal.controlWriter = new ControlStreamWriter();
+
+  await session.goaway(undefined, 1000n);
+
+  assert.isNull(internal.goawayTimeoutId);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.6.1:
+ * 未完了の購読がある場合は GOAWAY_TIMEOUT タイマーを張る。
+ */
+test("goaway: 未完了の購読がある場合は GOAWAY_TIMEOUT タイマーを張る", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as {
+    controlSendStream?: WritableStream<Uint8Array>;
+    controlWriter?: ControlStreamWriter;
+    goawayTimeoutId: ReturnType<typeof setTimeout> | null;
+    subscribers: Map<bigint, SubscriberImpl>;
+  };
+  internal.controlSendStream = new WritableStream<Uint8Array>();
+  internal.controlWriter = new ControlStreamWriter();
+  internal.subscribers.set(1n, new SubscriberImpl(["live"], "video", 1n, 1n, () => {}));
+
+  await session.goaway(undefined, 1000n);
+
+  assert.isNotNull(internal.goawayTimeoutId);
+  // テスト後にタイマーを残さない
+  clearTimeout(internal.goawayTimeoutId as ReturnType<typeof setTimeout>);
+  internal.goawayTimeoutId = null;
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.6.1:
+ * GOAWAY 受信後は Established 購読が無くなるまで NO_ERROR クローズを待つ。
+ */
+test("handleGoaway: Established 購読が残っている間は閉じず、購読終了後に閉じる", async () => {
+  let closeCalled = false;
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: () => {
+      closeCalled = true;
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  const internal = session as unknown as {
+    subscribers: Map<bigint, SubscriberImpl>;
+    handleGoaway(payload: Uint8Array): Record<string, unknown>;
+  };
+  internal.subscribers.set(1n, new SubscriberImpl(["live"], "video", 1n, 1n, () => {}));
+
+  const payload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "",
+    timeout: 0n,
+  });
+  internal.handleGoaway(payload);
+
+  // 購読が残っている間は閉じない
+  assert.equal(session.state, "connected");
+  assert.isFalse(closeCalled);
+
+  // 購読を除去して drain 通知すると NO_ERROR で閉じる
+  internal.subscribers.clear();
+  session.onRequestDrained();
+  assert.equal(session.state, "closed");
+  assert.isTrue(closeCalled);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.6 (Termination):
+ * ピア起点で transport.closed が解決した場合も、保留中のリクエスト Promise を
+ * reject してアプリを待たせ続けない。
+ */
+test("transport.closed で保留中のリクエスト Promise を reject する", async () => {
+  let resolveClosed!: (info: WebTransportCloseInfo) => void;
+  const closedPromise = new Promise<WebTransportCloseInfo>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const transport = { closed: closedPromise } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  const internal = session as unknown as {
+    pendingSubscribe: Map<
+      bigint,
+      {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        impl: SubscriberImpl;
+        objectCallback: () => void;
+      }
+    >;
+  };
+  let rejected: Error | undefined;
+  internal.pendingSubscribe.set(1n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: new SubscriberImpl(["live"], "video", 1n, 0n, () => {}),
+    objectCallback: () => {},
+  });
+
+  resolveClosed({ closeCode: 0, reason: "peer closed" });
+  await yieldToMacrotask();
+
+  assert.isDefined(rejected);
+  assert.equal(rejected!.message, "session closed by peer");
+  assert.equal(session.state, "closed");
+  assert.equal(internal.pendingSubscribe.size, 0);
 });
 
 /**

@@ -223,6 +223,14 @@ export async function connect(
     transportOptions.serverCertificateHashes = options.serverCertificateHashes;
   }
 
+  // draft-ietf-moq-transport-21 §6.2 / §6.2.1:
+  // "MOQT uses ALPN in QUIC and "WT-Available-Protocols" in WebTransport to
+  //  perform version negotiation." / "The client includes MOQT protocol
+  //  identifiers in the WT-Available-Protocols header."
+  // draft 版の ALPN は "moqt-" + draft 番号であり、draft-21 は "moqt-21"。
+  // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
+  transportOptions.protocols = ["moqt-21"];
+
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
 

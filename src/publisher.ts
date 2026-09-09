@@ -15,10 +15,36 @@ export type PublisherState = "active" | "closed";
  * Parameters for sending an object
  */
 export interface SendObjectParams {
+  /**
+   * Group ID
+   *
+   * draft-ietf-moq-transport-21 §11.3.1:
+   * 仕様上は 0〜2^64-1 の varint だが、公開 API は number のため精度を保証
+   * できる安全整数の範囲 (0〜2^53-1) を対応範囲とする。2^53 以上の値は
+   * Number.isInteger が true でも double の丸めで意図と異なる値になり得るため
+   * 使用しないこと (範囲外は送信前に fail-fast で拒否される)。
+   */
   groupId: number;
+  /**
+   * Object ID
+   *
+   * draft-ietf-moq-transport-21 §11.3.1:
+   * Group ID と同じく number の安全整数の範囲 (0〜2^53-1) を対応範囲とする。
+   */
   objectId: number;
   payload: Uint8Array;
   properties?: Uint8Array;
+  /**
+   * Publisher Priority (0-255)
+   *
+   * draft-ietf-moq-transport-21 §5.1.1:
+   * "A single subgroup or datagram has a single publisher priority."
+   * Subgroup では、この値は新しい Subgroup (moqt-js の実装では新しい Group) を
+   * 開く最初の sendObject で Subgroup Header に固定される。同一 Subgroup の
+   * 2 件目以降で指定した値は wire に載らず無視される。Object ごとに優先度を
+   * 変える場合は sendDatagram を使うか、Group を切り替えて新しい Subgroup を
+   * 開くこと。
+   */
   priority?: number;
   /**
    * オブジェクトステータス
@@ -55,10 +81,26 @@ export interface SendObjectParams {
  * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
  */
 export interface SendDatagramParams {
+  /**
+   * Group ID
+   *
+   * draft-ietf-moq-transport-21 §11.2.1:
+   * number の安全整数の範囲 (0〜2^53-1) を対応範囲とする (§11.3.1 と同じ制約)。
+   */
   groupId: number;
+  /**
+   * Object ID
+   *
+   * draft-ietf-moq-transport-21 §11.2.1:
+   * Group ID と同じく number の安全整数の範囲 (0〜2^53-1) を対応範囲とする。
+   */
   objectId: number;
   payload: Uint8Array;
   properties?: Uint8Array;
+  /**
+   * Publisher Priority (0-255)
+   * draft-ietf-moq-transport-21 §5.1.1: Datagram は 1 つで 1 つの priority を持つ。
+   */
   priority?: number;
   /**
    * このオブジェクトがグループの最後かどうか
@@ -310,6 +352,17 @@ export class PublisherImpl implements Publisher {
       throw new Error("Publisher is closed");
     }
 
+    // draft-ietf-moq-transport-21 §3.1:
+    // "The publisher does not send Objects if the Forward State is 0, and does
+    //  send them if the Forward State is 1. ... Control messages, such as
+    //  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
+    // Forward State = 0 の間は Object を送信せず、LARGEST_OBJECT の記録や
+    // END_OF_TRACK の記録も行わない (送信していない Object を記録しない)。
+    // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
+    if (!this.publisherForwardState) {
+      return Promise.resolve();
+    }
+
     // END_OF_TRACK 送信後は同一トラックへの後続送信を禁止する。
     // ライフサイクル状態の検証をパラメータ形状より先に行う。
     if (this.endOfTrackSent) {
@@ -379,6 +432,13 @@ export class PublisherImpl implements Publisher {
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
+    }
+
+    // draft-ietf-moq-transport-21 §3.1:
+    // "The publisher does not send Objects if the Forward State is 0"
+    // Datagram も Object であるため、Forward State = 0 では送信しない。
+    if (!this.publisherForwardState) {
+      return;
     }
 
     if (this.endOfTrackSent) {

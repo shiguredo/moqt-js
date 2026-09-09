@@ -524,3 +524,86 @@ test("getLargestLocation: 非整数 ID は記録しない", async () => {
   await publisher.sendObject({ groupId: 1.5, objectId: 0, payload: new Uint8Array() });
   assert.isNull(publisher.getLargestLocation());
 });
+
+// ============================================================================
+// draft-21 適合監査 D-10: Forward State = 0 では Object を送信しない
+// draft-ietf-moq-transport-21 §3.1
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * "The publisher does not send Objects if the Forward State is 0, and does
+ *  send them if the Forward State is 1. ... Control messages, such as
+ *  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
+ * Forward State = 0 のとき sendObject は委譲先を呼ばず resolve する。
+ */
+test("forwardState=false の sendObject は送信しない", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+  publisher.setForwardState(false);
+
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+
+  assert.equal(sent, 0);
+  // 送信していないため LARGEST_OBJECT も更新しない
+  assert.isNull(publisher.getLargestLocation());
+});
+
+/**
+ * Forward State を 1 に戻すと再び送信されることを検証する。
+ */
+test("forwardState=false から true に戻すと sendObject は送信する", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+  publisher.setForwardState(false);
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  publisher.setForwardState(true);
+  await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
+
+  assert.equal(sent, 1);
+  assert.deepEqual(publisher.getLargestLocation(), { group: 0n, object: 1n });
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * Datagram も Object であるため、Forward State = 0 では送信しない。
+ */
+test("forwardState=false の sendDatagram は送信しない", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendDatagram = () => {
+    sent++;
+  };
+  publisher.setForwardState(false);
+
+  publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+
+  assert.equal(sent, 0);
+  assert.isNull(publisher.getLargestLocation());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * "Control messages, such as PUBLISH_DONE ... are sent regardless of the
+ *  forward state."
+ * Forward State = 0 でも done() は onDoneInternal を呼ぶ。
+ */
+test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let doneCalled = false;
+  publisher.onDoneInternal = async () => {
+    doneCalled = true;
+  };
+  publisher.setForwardState(false);
+
+  await publisher.done();
+
+  assert.isTrue(doneCalled);
+  assert.equal(publisher.state, "closed");
+});

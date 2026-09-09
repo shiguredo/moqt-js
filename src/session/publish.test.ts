@@ -1034,3 +1034,47 @@ test("publishClosePublisherStream: 正常 close で登録を掃除する", async
   assert.isFalse(session.publisherStreams.has(1n));
   assert.isFalse(session.closedSubgroups.has("1:0"));
 });
+
+// ============================================================================
+// draft-21 適合監査 D-10: 送信関数の forward state 参照
+// draft-ietf-moq-transport-21 §3.1
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * "The publisher does not send Objects if the Forward State is 0"
+ * 内部送信関数を直接呼んでも Forward State = 0 ではストリームを生成しない。
+ */
+test("publishSendObject: forwardState=false ではストリームを生成しない", async () => {
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  publisher.setForwardState(false);
+
+  await publishSendObject(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1]),
+  });
+
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.publisherStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * Datagram も Object であるため、Forward State = 0 では送信経路に入らない。
+ */
+test("publishSendDatagram: forwardState=false では datagram writer を取得しない", () => {
+  const { session } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  publisher.setForwardState(false);
+
+  publishSendDatagram(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1]),
+  });
+
+  // 送信経路に入っていれば datagramWriter が取得されるため、未取得を検証する
+  assert.isUndefined(session.datagramWriter);
+});

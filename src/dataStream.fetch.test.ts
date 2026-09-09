@@ -20,7 +20,7 @@ import {
 import { GroupOrder } from "./message/types";
 import { encodeVarint } from "./varint";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
-import { encodeProperties } from "./properties";
+import { encodeProperties, MOQTPropertyId } from "./properties";
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
   const header: FetchHeader = {
@@ -2201,5 +2201,173 @@ test("FetchObjectFields: End of Range 以外の 128 以上の flags は拒否さ
   assert.throws(
     () => decodeFetchObjectFields(undefinedValue, prior, 0, false),
     /invalid fetch serialization flags/,
+  );
+});
+
+// ============================================================================
+// draft-21 適合監査 D-13: End of Range が先頭レコードのときの prior 参照
+// draft-ietf-moq-transport-21 §11.4.1.2
+// ============================================================================
+
+/**
+ * 先頭レコードが End of Range indicator のコンテキストを作る。
+ * End of Range 自体は実 Object ではないため hasPriorActualObject は false。
+ */
+function firstRecordEndOfRangeContext(): FetchObjectContext {
+  const eor: FetchObjectFields = {
+    serializationFlags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE,
+    groupId: 10n,
+    objectId: 5n,
+    payloadLength: 0n,
+  };
+  const [, , context] = decodeFetchObjectFields(encodeFetchObjectFields(eor), null, 0, true);
+  return context;
+}
+
+/**
+ * draft-ietf-moq-transport-21 §11.4.1.2:
+ * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
+ *  End of Range indicator. If there was no prior Object, using a flag that
+ *  references the prior Subgroup ID is a PROTOCOL_VIOLATION."
+ */
+test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_SAME は ProtocolViolationError", () => {
+  const context = firstRecordEndOfRangeContext();
+  const next: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    objectId: 6n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(next, false, context);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, context, 0, false),
+    ProtocolViolationError,
+    /cannot reference prior subgroup id before any actual object/,
+  );
+});
+
+test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_PLUS_ONE は ProtocolViolationError", () => {
+  const context = firstRecordEndOfRangeContext();
+  const next: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PLUS_ONE |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    objectId: 6n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(next, false, context);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, context, 0, false),
+    ProtocolViolationError,
+    /cannot reference prior subgroup id before any actual object/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.4.1.2:
+ * "Prior Priority: The Priority from the last actual Object before the End of
+ *  Range indicator. If there was no prior Object, using a flag that references
+ *  the prior Priority is a PROTOCOL_VIOLATION."
+ */
+test("FetchObjectFields: 先頭レコードが End of Range の後の PRIORITY 省略は ProtocolViolationError", () => {
+  const context = firstRecordEndOfRangeContext();
+  const next: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT | FetchSerializationFlags.OBJECT_ID_PRESENT,
+    subgroupId: 1n,
+    objectId: 6n,
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(next, false, context);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, context, 0, false),
+    ProtocolViolationError,
+    /cannot reference prior priority before any actual object/,
+  );
+});
+
+/**
+ * prior Subgroup ID / prior Priority を参照しないフラグ (SUBGROUP_PRESENT +
+ * PRIORITY_PRESENT) は、先頭レコードが End of Range でも正常にデコードできる
+ * ことを検証する (誤検出防止)。
+ */
+test("FetchObjectFields: 先頭レコードが End of Range でも明示指定ならデコードできる", () => {
+  const context = firstRecordEndOfRangeContext();
+  const next: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
+    objectId: 6n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(next, false, context);
+
+  const [decoded, , nextContext] = decodeFetchObjectFields(encoded, context, 0, false);
+  assert.equal(decoded.publisherPriority, 100);
+  assert.equal(decoded.subgroupId, 1n);
+  // 実 Object をデコードしたため、以後は prior 参照が可能になる
+  assert.equal(nextContext.hasPriorActualObject, true);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// draft-ietf-moq-transport-21 §10.8 / §10.9
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object has a Prior Group ID Gap larger than the Group ID."
+ * Fetch Object でも単一 Object で判定できる malformed 条件を検出する。
+ */
+test("FetchObjectFields: Prior Group ID Gap が Group ID より大きいと MalformedTrackError", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(true),
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    properties: encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]),
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    MalformedTrackError,
+    /prior group id gap exceeds group id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ */
+test("FetchObjectFields: Prior Object ID Gap が Object ID より大きいと MalformedTrackError", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(true),
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    properties: encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 1n }]),
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    MalformedTrackError,
+    /prior object id gap exceeds object id/,
   );
 });

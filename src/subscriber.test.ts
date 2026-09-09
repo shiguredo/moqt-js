@@ -10,6 +10,16 @@ import { ObjectStatus } from "./message/types";
 import type { Property } from "./properties";
 import { encodeProperties, TrackPropertyId } from "./properties";
 
+// vp check は node の型を解決しないため globalThis 経由で process を参照する
+const nodeProcess = (
+  globalThis as unknown as {
+    process: {
+      on(event: string, listener: (reason: unknown) => void): void;
+      off(event: string, listener: (reason: unknown) => void): void;
+    };
+  }
+).process;
+
 function createObject(groupId: bigint, objectId: bigint): MoqtObject {
   return {
     groupId,
@@ -140,7 +150,7 @@ test("update は closed 状態の fire-and-forget でも unhandled rejection に
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason);
   };
-  process.on("unhandledRejection", onUnhandled);
+  nodeProcess.on("unhandledRejection", onUnhandled);
   try {
     // fire-and-forget: 返り値の Promise を観測しない
     void subscriber.update();
@@ -151,7 +161,7 @@ test("update は closed 状態の fire-and-forget でも unhandled rejection に
     });
     assert.equal(unhandled.length, 0);
   } finally {
-    process.off("unhandledRejection", onUnhandled);
+    nodeProcess.off("unhandledRejection", onUnhandled);
   }
 });
 
@@ -205,7 +215,7 @@ test("update は onUpdate の同期 throw の fire-and-forget でも unhandled r
   const onUnhandled = (reason: unknown) => {
     unhandled.push(reason);
   };
-  process.on("unhandledRejection", onUnhandled);
+  nodeProcess.on("unhandledRejection", onUnhandled);
   try {
     // fire-and-forget: 返り値の Promise を観測しない
     void subscriber.update();
@@ -214,7 +224,7 @@ test("update は onUpdate の同期 throw の fire-and-forget でも unhandled r
     });
     assert.equal(unhandled.length, 0);
   } finally {
-    process.off("unhandledRejection", onUnhandled);
+    nodeProcess.off("unhandledRejection", onUnhandled);
   }
 });
 
