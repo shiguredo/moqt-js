@@ -1067,6 +1067,10 @@
   - draft-ietf-moq-transport-21 §3.1.1 の MUST に従い、publish ロールで peer の STOP_SENDING / RESET_STREAM を検出したとき、開いている Subgroup データストリームを abort で reset し、購読状態を削除する
   - 従来はデータストリームを reset せず、購読状態も残留していた
   - @voluntas
+- [FIX] FETCH データストリームの reset で fetcher state を破棄する
+  - draft-ietf-moq-transport-21 §3.2.1 に従い、FETCH データストリームの peer RESET_STREAM でアプリへ error を通知し、fetcher を closed にして fetchers から削除する
+  - 従来は通知も state 破棄も行われず、アプリは fetch の終了を検知できなかった
+  - @voluntas
 
 ### misc
 
