@@ -9,9 +9,11 @@ import {
   decodePublishStateNotifyPayload,
   decodeRedirect,
   decodeGoawayPayload,
+  encodeRequestErrorPayload,
   decodeRequestErrorPayload,
 } from "./session";
 import { MessageType, MessageParameterType } from "./types";
+import { createTrackNamespace } from "./parameter";
 import { getMessageTypeName } from "./debug";
 import { ProtocolViolationError } from "../error";
 
@@ -123,4 +125,45 @@ test("decodeRedirect: offset 付きでも Track Name Length 宣言超過で Prot
     () => decodeRedirect(truncated, 1),
     /redirect track name length exceeds remaining data/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4.2 (REQUEST_ERROR Message Format):
+ * "Redirect: Present only when Error Code is REDIRECT."
+ * Error Code が REDIRECT (0x34) なのに Redirect 構造が無い場合は
+ * PROTOCOL_VIOLATION とする。
+ */
+test("decodeRequestErrorPayload: REDIRECT コードで Redirect 欠落は ProtocolViolationError", () => {
+  // Error Code 0x34 + Retry Interval 0 + Reason Length 0 (Redirect なし)
+  const payload = new Uint8Array([0x34, 0x00, 0x00]);
+  assert.throws(
+    () => decodeRequestErrorPayload(payload, 0),
+    /missing redirect structure in REQUEST_ERROR/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4.1 / §9.4.2:
+ * Error Code が REDIRECT (0x34) で Redirect 構造が続く場合は正常に
+ * デコードされることを検証する (欠落検出の回帰ガード)。
+ */
+test("decodeRequestErrorPayload: REDIRECT コードと Redirect 構造の roundtrip", () => {
+  const redirect = {
+    connectUri: "moqt://new.example.com/session",
+    trackNamespace: createTrackNamespace(["live", "room"]),
+    trackName: new TextEncoder().encode("video"),
+  };
+
+  const payload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0x34n,
+    retryInterval: 0n,
+    reasonPhrase: "",
+    redirect,
+  });
+
+  const decoded = decodeRequestErrorPayload(payload);
+  assert.equal(decoded.errorCode, 0x34n);
+  assert.isDefined(decoded.redirect);
+  assert.equal(decoded.redirect!.connectUri, "moqt://new.example.com/session");
 });

@@ -461,3 +461,66 @@ test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
   assert.equal(errors.length, 1);
   assert.strictEqual(errors[0], thrown);
 });
+
+// ============================================================================
+// draft-21 適合監査: LARGEST_OBJECT 用の最大 Location 追跡 (F-1)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+ * 未送信の Publisher の最大 Location は null であることを検証する。
+ */
+test("getLargestLocation: 未送信は null", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  assert.isNull(publisher.getLargestLocation());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * sendObject で送信した最大 Location を保持することを検証する。
+ * Group が大きい方、同一 Group では Object が大きい方を最大とする。
+ */
+test("getLargestLocation: sendObject で最大 Location を更新する", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onSendObject = async () => {};
+
+  await publisher.sendObject({ groupId: 1, objectId: 2, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 2n });
+
+  // 同一 Group のより大きい Object で更新される
+  await publisher.sendObject({ groupId: 1, objectId: 5, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 5n });
+
+  // より小さい Location では後退しない
+  await publisher.sendObject({ groupId: 0, objectId: 9, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 5n });
+
+  // より大きい Group で更新される
+  await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 3n, object: 0n });
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * sendDatagram でも最大 Location を更新することを検証する。
+ */
+test("getLargestLocation: sendDatagram で最大 Location を更新する", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onSendDatagram = () => {};
+
+  publisher.sendDatagram({ groupId: 2, objectId: 7, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 2n, object: 7n });
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * 非整数の Group / Object ID は送信経路で fail-fast 拒否されるため、
+ * 最大 Location には記録しないことを検証する。
+ */
+test("getLargestLocation: 非整数 ID は記録しない", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onSendObject = async () => {};
+
+  await publisher.sendObject({ groupId: 1.5, objectId: 0, payload: new Uint8Array() });
+  assert.isNull(publisher.getLargestLocation());
+});

@@ -8,7 +8,7 @@ import { SubscriberImpl } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import type { Property } from "./properties";
-import { encodeProperties } from "./properties";
+import { encodeProperties, TrackPropertyId } from "./properties";
 
 function createObject(groupId: bigint, objectId: bigint): MoqtObject {
   return {
@@ -429,10 +429,11 @@ test("handleObject: SUBGROUP_FILTER で subgroupId 未指定は配信しない",
 });
 
 /**
- * PRIORITY_FILTER で publisherPriority 未指定のオブジェクトは handleDatagram で
- * 不通過になる (0 のダミー値は評価値として使わない)。
+ * draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.2.1:
+ * Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY (省略時 128) を継承し、
+ * PRIORITY_FILTER の評価とコールバックの publisherPriority に反映される。
  */
-test("handleDatagram: PRIORITY_FILTER で publisherPriority 未指定は配信しない", () => {
+test("handleDatagram: publisherPriority 未指定は購読の DEFAULT_PUBLISHER_PRIORITY を継承する", () => {
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(
     ["namespace"],
@@ -442,15 +443,63 @@ test("handleDatagram: PRIORITY_FILTER で publisherPriority 未指定は配信�
     () => {},
     (obj) => delivered.push(obj),
   );
-  subscriber.setRangeFilters([{ type: "priority", setId: 0, ranges: [{ start: 0n, end: 255n }] }]);
+  // Track Property で既定 64 を指定する
+  subscriber.setTrackProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 64n }]);
+  subscriber.setRangeFilters([{ type: "priority", setId: 0, ranges: [{ start: 64n, end: 64n }] }]);
 
-  // publisherPriority 未指定 (undefined) は不通過
-  subscriber.handleDatagram(createObject(0n, 0n));
-  assert.equal(delivered.length, 0);
-
-  // publisherPriority 明示 (0) は通過 (明示された 0 は評価値として有効)
-  subscriber.handleDatagram({ ...createObject(0n, 0n), publisherPriority: 0 });
+  // publisherPriority 未指定 (undefined) は既定 64 を継承して通過する
+  const inherited = createObject(0n, 0n);
+  subscriber.handleDatagram(inherited);
   assert.equal(delivered.length, 1);
+  assert.equal(inherited.publisherPriority, 64);
+  assert.equal(delivered[0].publisherPriority, 64);
+
+  // 既定の範囲外のフィルタでは通過しない (継承値で評価されている)
+  subscriber.setRangeFilters([{ type: "priority", setId: 0, ranges: [{ start: 65n, end: 255n }] }]);
+  subscriber.handleDatagram(createObject(0n, 1n));
+  assert.equal(delivered.length, 1);
+
+  // 明示値 (0) は既定より優先される
+  subscriber.setRangeFilters([{ type: "priority", setId: 0, ranges: [{ start: 0n, end: 0n }] }]);
+  subscriber.handleDatagram({ ...createObject(0n, 2n), publisherPriority: 0 });
+  assert.equal(delivered.length, 2);
+  assert.equal(delivered[1].publisherPriority, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.4 / §11.3.1:
+ * Subgroup 経由 (handleObject) でも Priority 省略時は購読の既定値を継承する。
+ */
+test("handleObject: publisherPriority 未指定は購読の DEFAULT_PUBLISHER_PRIORITY を継承する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+  subscriber.setTrackProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 200n }]);
+
+  const object = createObject(0n, 0n);
+  subscriber.handleObject(object);
+
+  assert.equal(delivered.length, 1);
+  assert.equal(object.publisherPriority, 200);
+  assert.equal(delivered[0].publisherPriority, 200);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.4:
+ * Track Properties が未受信の場合の既定値は 128 である。
+ */
+test("handleObject: Track Properties 未設定時は既定 128 を継承する", () => {
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, (obj) =>
+    delivered.push(obj),
+  );
+
+  const object = createObject(0n, 0n);
+  subscriber.handleObject(object);
+
+  assert.equal(delivered.length, 1);
+  assert.equal(object.publisherPriority, 128);
 });
 
 /**

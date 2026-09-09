@@ -8,7 +8,7 @@ import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import type { AuthorizationToken } from "./message/authorizationToken";
 import { isPublishDoneErrorStatus, type Location } from "./message/types";
 import type { MoqtObject } from "./dataStream";
-import type { Property } from "./properties";
+import { resolveDefaultPublisherPriority, type Property } from "./properties";
 import {
   type ResolvedFilter,
   resolveFilter,
@@ -134,6 +134,11 @@ export class SubscriberImpl implements Subscriber {
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
+  // draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER_PRIORITY):
+  // Subgroup Header / Object Datagram で Priority が省略された場合に継承する
+  // 購読の既定 Publisher Priority。Track Properties 未受信時は 128。
+  // setTrackProperties で再解決する。
+  private subscriberDefaultPublisherPriority = 128;
   // draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
   // Forward State。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
   // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
@@ -274,6 +279,9 @@ export class SubscriberImpl implements Subscriber {
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
+    // draft-ietf-moq-transport-21 §10.4:
+    // Priority 省略時の継承値を Track Properties から再解決する
+    this.subscriberDefaultPublisherPriority = resolveDefaultPublisherPriority(properties);
   }
 
   /**
@@ -349,6 +357,25 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
+   * Priority 省略時の Publisher Priority を解決して Object に設定する
+   *
+   * draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER PRIORITY):
+   * "Subgroups and Datagrams for this subscription inherit this priority, unless
+   *  they specifically override it." / "If omitted, the Default Publisher Priority
+   *  is 128."
+   * draft-ietf-moq-transport-21 §11.3.1 / §11.2.1:
+   * DEFAULT_PRIORITY ビットが 1 のとき Priority フィールドは省略され、購読を
+   * 確立した control message の Publisher Priority を継承する。
+   *
+   * 明示値 (0 を含む) は上書きしない。PRIORITY_FILTER の評価とアプリへの
+   * コールバックの双方で継承値が見えるよう、配送前に object へ設定する。
+   */
+  private applyDefaultPublisherPriority(object: MoqtObject): void {
+    // 明示値 (0 を含む) は上書きしない。undefined のときのみ継承値で埋める。
+    object.publisherPriority ??= this.subscriberDefaultPublisherPriority;
+  }
+
+  /**
    * Handle incoming object from data stream
    *
    * draft-ietf-moq-transport-21 Section 3.1:
@@ -361,6 +388,9 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
+    // draft-ietf-moq-transport-21 §10.4 / §11.3.1:
+    // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
+    this.applyDefaultPublisherPriority(object);
     // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
     if (
       !objectMatchesFilter(
@@ -397,6 +427,9 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
+    // draft-ietf-moq-transport-21 §10.4 / §11.2.1:
+    // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
+    this.applyDefaultPublisherPriority(object);
     // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
     if (
       !objectMatchesFilter(

@@ -11,7 +11,7 @@ import {
   type SubgroupHeader,
 } from "../dataStream";
 import { ObjectStatus } from "../message/types";
-import { mergeDeliveryTimeoutObjectProperties } from "../properties";
+import { mergeDeliveryTimeoutObjectProperties, TrackPropertyId } from "../properties";
 import { SubscriberImpl } from "../subscriber";
 
 // ============================================================================
@@ -161,6 +161,33 @@ function firstObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
 function explicitObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
   return subgroupObjectWire(SubgroupHeaderType.EXPLICIT, objectIdDelta, payload);
 }
+
+// draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.3.1:
+// Subgroup Header で Priority が省略された場合 (DEFAULT_PRIORITY ビットが 1)、
+// 購読の DEFAULT_PUBLISHER_PRIORITY を継承した値が配送されることを検証する。
+test("processSubgroupObjects: Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する", () => {
+  const { delivered, subscriber, stats } = subgroupTestSetup();
+  subscriber.setTrackProperties([{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 42n }]);
+  // BASE_NO_PRIORITY (0x30) は Priority Present なしの型
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.BASE_NO_PRIORITY,
+    trackAlias: 1n,
+    groupId: 0n,
+    subgroupId: 0n,
+  };
+  const result = processSubgroupObjects(
+    subgroupObjectWire(SubgroupHeaderType.BASE_NO_PRIORITY, 0n, 0xaa),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+    silentDelivery,
+  );
+
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].publisherPriority, 42);
+  assert.equal(result.remainingBuffer.byteLength, 0);
+});
 
 // 1 回の feed で複数オブジェクトが届いた場合、先頭のみ timeout を抽出し、
 // 2 件目以降は無視することを検証する。

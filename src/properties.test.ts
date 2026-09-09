@@ -18,6 +18,7 @@ import {
   mergeDeliveryTimeoutObjectProperties,
   readDeliveryTimeoutObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
+  resolveDefaultPublisherPriority,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -384,6 +385,35 @@ test("decodeProperties: 未知の Mandatory Track Property (0x7FFF) で Malforme
 });
 
 /**
+ * draft-ietf-moq-transport-21 §3.6 / §10.7:
+ * IMMUTABLE_PROPERTIES (0x0B) 配下の Key-Value-Pair も Track Property であるため、
+ * 未知の Mandatory Track Property (0x4000-0x7FFF) を検出したら malformed とする。
+ * PUBLISH / SUBSCRIBE_OK / FETCH_OK の Track Properties は decodeProperties で
+ * デコードされるため、この経路で検出される。
+ */
+test("decodeProperties: IMMUTABLE_PROPERTIES 内の Mandatory Track Property (0x4000) で MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const data = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  assert.throws(() => decodeProperties(data), MalformedTrackError);
+});
+
+test("decodeProperties: IMMUTABLE_PROPERTIES 内の Mandatory Track Property (0x7FFF) で MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: 0x7fffn, data: new Uint8Array([0x01]) }]);
+  const data = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  assert.throws(() => decodeProperties(data), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.6 / §10.7:
+ * decodeImmutableProperties (ID + length + body の完全ワイヤ形式) でも
+ * 内部の未知 Mandatory Track Property を malformed とする。
+ */
+test("decodeImmutableProperties: 内部に Mandatory Track Property (0x4000) を含むと MalformedTrackError", () => {
+  const immutable = encodeImmutableProperties({ extensions: [{ id: 0x4000n, value: 0n }] });
+  assert.throws(() => decodeImmutableProperties(immutable), MalformedTrackError);
+});
+
+/**
  * draft-ietf-moq-transport-21 §3.6:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) が含まれる場合、
  * assertNoMandatoryTrackPropertyInObjectProperties が MalformedTrackError を
@@ -425,21 +455,32 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
 
 /**
  * draft-ietf-moq-transport-21 §10.7:
- * IMMUTABLE_PROPERTIES の再帰ネストは深さ上限で打ち切り、MalformedTrackError と
- * することを検証する。最内を非 Mandatory にして深さ上限自体を検証する。
+ * IMMUTABLE_PROPERTIES が別の IMMUTABLE_PROPERTIES を内包する再帰ネストは
+ * malformed である。1 段のネストでも MalformedTrackError とする。
  */
-test("assertNoMandatoryTrackPropertyInObjectProperties: 8 段のネストは通過し 9 段で MalformedTrackError", () => {
-  const buildNested = (levels: number): Uint8Array => {
-    let nested = encodeProperties([{ id: 0x02n, value: 1n }]);
-    for (let i = 0; i < levels; i++) {
-      nested = encodeProperties([{ id: 0x0bn, data: nested }]);
-    }
-    return nested;
-  };
-  assert.doesNotThrow(() => assertNoMandatoryTrackPropertyInObjectProperties(buildNested(8)));
+test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES の再帰ネストで MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: 0x02n, value: 1n }]);
+  const nested = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const outer = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: nested }]);
   assert.throws(
-    () => assertNoMandatoryTrackPropertyInObjectProperties(buildNested(9)),
+    () => assertNoMandatoryTrackPropertyInObjectProperties(outer),
     MalformedTrackError,
+    "immutable properties must not recursively contain another immutable properties key",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "An Object MUST NOT contain more than one instance of this property."
+ * IMMUTABLE_PROPERTIES が Object Property に 2 回現れる場合は malformed とする。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES の複数出現で MalformedTrackError", () => {
+  // [0x0b, 0x00, 0x00, 0x00] = (deltaId=0x0B, length=0), (deltaId=0x00, length=0)
+  const data = new Uint8Array([0x0b, 0x00, 0x00, 0x00]);
+  assert.throws(
+    () => assertNoMandatoryTrackPropertyInObjectProperties(data),
+    MalformedTrackError,
+    "Object contains more than one instance of IMMUTABLE_PROPERTIES",
   );
 });
 
@@ -714,6 +755,47 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
     ...immutableProperties,
   ];
   assert.equal(supportsDynamicGroups(properties), true);
+});
+
+// ============================================================================
+// resolveDefaultPublisherPriority
+// draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER PRIORITY)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §10.4:
+ * mutable list の DEFAULT_PUBLISHER_PRIORITY を解決する。
+ */
+test("resolveDefaultPublisherPriority: mutable の値を返す", () => {
+  assert.equal(
+    resolveDefaultPublisherPriority([
+      { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 64n },
+    ]),
+    64,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.4 / §10.7:
+ * IMMUTABLE_PROPERTIES 配下の DEFAULT_PUBLISHER_PRIORITY も検索対象である。
+ */
+test("resolveDefaultPublisherPriority: Immutable Properties 内の値を返す", () => {
+  const encoded = encodeImmutableProperties({
+    extensions: [{ id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 200n }],
+  });
+  assert.equal(resolveDefaultPublisherPriority(decodeProperties(encoded)), 200);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.4:
+ * "If omitted, the Default Publisher Priority is 128."
+ */
+test("resolveDefaultPublisherPriority: 未指定は 128", () => {
+  assert.equal(resolveDefaultPublisherPriority([]), 128);
+  assert.equal(
+    resolveDefaultPublisherPriority([{ id: TrackPropertyId.MAX_CACHE_DURATION, value: 1000n }]),
+    128,
+  );
 });
 
 // ============================================================================

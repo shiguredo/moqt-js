@@ -40,6 +40,12 @@ export interface Setup {
  * として Option Type 0x03 に積む。Section 9.1.4 より SETUP では Alias Type
  * DELETE / USE_ALIAS は禁止されているため、事前に検証する。
  *
+ * maxAuthTokenCacheSize / maxRequestUpdates / maxFilterRanges を指定すると
+ * それぞれ Section 9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) /
+ * Section 9.1.7 (MAX_REQUEST_UPDATES) / Section 9.1.6 (MAX FILTER RANGES) を
+ * 広告する。未指定時は Option を送信せず、各節の既定値を用いる
+ * (順に 0 = Alias 禁止 / 0 = 無制限 / 0 = Range Filter 受信拒否)。
+ *
  * moqtImplementation で Section 9.1.5 (MOQT IMPLEMENTATION) の送信を制御する。
  * draft-ietf-moq-transport-21 §15.8 (Implementation Identification Fingerprinting)
  * のプライバシー緩和策に対応する。
@@ -54,6 +60,8 @@ export interface Setup {
 export function createSetup(options?: {
   authorizationToken?: AuthorizationToken;
   maxAuthTokenCacheSize?: number;
+  maxRequestUpdates?: number;
+  maxFilterRanges?: number;
   moqtImplementation?: string | false;
   grease?: boolean;
 }): Setup {
@@ -74,6 +82,24 @@ export function createSetup(options?: {
     parameters.push({
       type: SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE,
       value: encodeVarint(BigInt(options.maxAuthTokenCacheSize)),
+    });
+  }
+
+  // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+  // 送信しない場合のデフォルトは 0（無制限）
+  if (options?.maxRequestUpdates !== undefined) {
+    parameters.push({
+      type: SetupOptionType.MAX_REQUEST_UPDATES,
+      value: encodeVarint(BigInt(options.maxRequestUpdates)),
+    });
+  }
+
+  // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+  // 送信しない場合のデフォルトは 0（Range Filter の受信拒否）
+  if (options?.maxFilterRanges !== undefined) {
+    parameters.push({
+      type: SetupOptionType.MAX_FILTER_RANGES,
+      value: encodeVarint(BigInt(options.maxFilterRanges)),
     });
   }
 

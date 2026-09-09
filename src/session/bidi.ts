@@ -11,6 +11,7 @@ import type { MoqtObject } from "../dataStream";
 import {
   DataStreamErrorCode,
   InvalidFilterError,
+  ProtocolViolationError,
   RequestError,
   RequestErrorCode,
   SessionError,
@@ -30,6 +31,7 @@ import {
   encodeRequestUpdatePayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
+  encodeLocation,
   encodeUint8ParameterValue,
   decodeFetchOkPayload,
   decodeFillParameters,
@@ -56,14 +58,15 @@ import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
 import type { Property } from "../properties";
 import {
+  NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
-  PUBLISH_REQUEST_UPDATE_OK_PARAMS,
   PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
   SUBSCRIBE_OK_ALLOWED_PARAMS,
   FETCH_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_ALLOWED_PARAMS,
   TRACK_STATUS_OK_ALLOWED_PARAMS,
+  assertParametersAllowedForSend,
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
@@ -232,6 +235,10 @@ export interface BidiSessionInternal {
 
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
   readonly peerMaxFilterRanges: number;
+
+  // draft-ietf-moq-transport-21 §9.1.6: 自 endpoint が SETUP で広告した
+  // MAX_FILTER_RANGES（未広告時は 0 = Range Filter 受信拒否）
+  readonly localMaxFilterRanges: number;
 
   statsControlMessagesSent: number;
 
@@ -1089,12 +1096,20 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  *     GOAWAY 受信済みの組み合わせがここに到達する (不正 ID の場合は
  *     (1) で return するため到達しない)。
  * (3) パラメータスコープ検証。違反は §9.20.1 の MUST により
- *     PROTOCOL_VIOLATION でセッションを閉じる。
- * (4) PUBLISH_REQUEST_UPDATE_OK_PARAMS (無限定 3 種 + FORWARD) 以外の
- *     文脈限定パラメータを含む場合は NOT_SUPPORTED で応答する。
- *     受理した FORWARD は受信 PUBLISH から生成された SubscriberImpl の
- *     Forward State に反映する (FORWARD 省略時は不変)。
- * (5) REQUEST_OK を応答する (ペイロードは空 parameters / 空 trackProperties)。
+ *     PROTOCOL_VIOLATION でセッションを閉じる。REQUEST_UPDATE_ALLOWED_PARAMS
+ *     は TRACK_NAMESPACE_PREFIX (§9.20.21、namespace 系 REQUEST_UPDATE 専用)
+ *     と TRACK_PROPERTY_FILTER (§3.3.2、SUBSCRIBE_TRACKS 専用) を含まないため、
+ *     通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で受信したこれらは
+ *     NOT_SUPPORTED ではなく PROTOCOL_VIOLATION で閉じる。
+ * (4) Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証。不正は
+ *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.20.13-15)。
+ *     自 endpoint が広告した MAX_FILTER_RANGES (未広告時 0) を超える
+ *     Range Filter も同じく INVALID_FILTER で拒否する (§9.1.6)。
+ *     許可パラメータ (SUBSCRIBER_PRIORITY / LOCATION_FILTER /
+ *     NEW_GROUP_REQUEST / FILL_PARAMETERS / Range Filters 等) は受理する。
+ * (5) 受理した FORWARD を受信 PUBLISH から生成された SubscriberImpl の
+ *     Forward State に反映し (FORWARD 省略時は不変)、REQUEST_OK を応答する
+ *     (ペイロードは空 parameters / 空 trackProperties)。
  *
  * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
  * デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる (詳細は
@@ -1102,7 +1117,7 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  * (応答は同一 bidi ストリーム上に書き込まれることでリクエストが特定される。
  * 既存 role=publish ハンドラと同様)。
  *
- * 受理した FORWARD 以外のパラメータ (無限定 3 種) は状態として保持しない
+ * 受理した FORWARD 以外のパラメータは状態として保持しない
  * (accept-then-ignore。更新の反映を前提とするピアと意味論が乖離する点は
  * 残余リスクとして残る)。
  */
@@ -1161,10 +1176,11 @@ export async function bidiHandlePublishRequestUpdate(
   // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
   // "If it appears in some other type of message, the receiving endpoint
   //  MUST close the connection with a PROTOCOL_VIOLATION."
-  // 検証はメッセージ型単位であり、「for a subscription」等の文脈 (ケース 1
-  // では publisher 送信) に違反するパラメータは判定順序 (4) で処理する。
-  // REQUEST_UPDATE_ALLOWED_PARAMS (無限定 3 種 + 文脈限定 10 種) が
-  // REQUEST_UPDATE に出現し得る全パラメータと完全一致する。
+  // REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系 REQUEST_UPDATE に
+  // 出現し得る型の集合であり、TRACK_NAMESPACE_PREFIX (§9.20.21、
+  // namespace 系 REQUEST_UPDATE 専用) と TRACK_PROPERTY_FILTER (§3.3.2、
+  // SUBSCRIBE_TRACKS 専用) を含まない。これらを受信した場合は
+  // NOT_SUPPORTED ではなく §9.20.1 の MUST に従い PROTOCOL_VIOLATION で閉じる。
   if (
     !validateParameterScope(
       decoded.parameters,
@@ -1176,25 +1192,38 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
-  // 判定順序 (4): 文脈限定パラメータの含有確認
-  // REQUEST_OK で受理するのは PUBLISH_REQUEST_UPDATE_OK_PARAMS
-  // (無限定 3 種 + FORWARD) のみ。それ以外の文脈限定パラメータ
-  // (SUBSCRIBER_PRIORITY / LOCATION_FILTER / NEW_GROUP_REQUEST /
-  // TRACK_NAMESPACE_PREFIX / Range Filters。列挙は
-  // PUBLISH_REQUEST_UPDATE_OK_PARAMS の JSDoc を参照) を含む REQUEST_UPDATE
-  // は REQUEST_ERROR (NOT_SUPPORTED) で応答する (draft-ietf-moq-transport-21
-  // §9.4「NOT_SUPPORTED: The endpoint does not support the type of
-  // request.」に基づく設計判断)。FORWARD と他の文脈限定パラメータが混合した
-  // REQUEST_UPDATE もメッセージ単位で全体拒否する (FORWARD の部分受理は
-  // しない)。
-  if (decoded.parameters.some((param) => !PUBLISH_REQUEST_UPDATE_OK_PARAMS.has(param.type))) {
-    await bidiSendRequestError(
-      session,
-      requestId,
-      RequestErrorCode.NOT_SUPPORTED,
-      "parameter not supported for request update",
+  // 判定順序 (4): Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証と
+  // 自 endpoint の MAX_FILTER_RANGES (未広告時 0) の上限検証。
+  // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15 / §9.1.6:
+  // 不正なフィルタ・上限超過は REQUEST_ERROR (INVALID_FILTER) で応答する。
+  // LOCATION_FILTER / FILL_PARAMETERS 内側の一覧外・値違反
+  // (ProtocolViolationError) は §9.20.1 / §9.20.16 の MUST に従い
+  // PROTOCOL_VIOLATION でセッションを閉じる。検証は状態変更
+  // (setForwardState) より前に配置し、拒否時に Forward State が反映される
+  // 不整合を防ぐ。
+  try {
+    validateRangeFilterCombination(decoded.parameters);
+    validateLocationAndFillParameters(decoded.parameters);
+    validateIncomingRangeFilterLimits(
+      decoded.parameters,
+      session.localMaxFilterRanges ?? 0,
+      "REQUEST_UPDATE",
     );
-    return;
+  } catch (error) {
+    if (error instanceof InvalidFilterError) {
+      await bidiSendRequestError(
+        session,
+        requestId,
+        RequestErrorCode.INVALID_FILTER,
+        error.message,
+      );
+      return;
+    }
+    if (error instanceof ProtocolViolationError) {
+      session.closeWithError(new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      return;
+    }
+    throw error;
   }
 
   // draft-ietf-moq-transport-21 §9.5 / §9.20.19:
@@ -1530,6 +1559,14 @@ export async function bidiReadRequestStreamMessages(
             try {
               validateRangeFilterCombination(decoded.parameters);
               validateLocationAndFillParameters(decoded.parameters);
+              // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+              // 自 endpoint が広告した上限 (未広告時 0) を超える Range Filter は
+              // REQUEST_ERROR (INVALID_FILTER) で拒否する。
+              validateIncomingRangeFilterLimits(
+                decoded.parameters,
+                session.localMaxFilterRanges ?? 0,
+                "REQUEST_UPDATE",
+              );
             } catch (error) {
               if (error instanceof InvalidFilterError) {
                 await bidiSendRequestError(
@@ -1572,9 +1609,23 @@ export async function bidiReadRequestStreamMessages(
               }
 
               // REQUEST_OK を送信 (draft-ietf-moq-transport-21 §9.5 MUST)
+              // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+              // "If Objects have been published on this Track the Publisher MUST
+              //  include this parameter." 自 endpoint が Publisher として
+              // 受理する REQUEST_UPDATE の REQUEST_OK には、publish 済みの
+              // 最大 Location を LARGEST_OBJECT として必ず含める (§9.5.1 が
+              // 増加した End Location との隙間を FETCH で補う前提を定める)。
+              const okParameters: Parameter[] = [];
+              const largestLocation = publisher.getLargestLocation();
+              if (largestLocation !== null) {
+                okParameters.push({
+                  type: MessageParameterType.LARGEST_OBJECT,
+                  value: encodeLocation(largestLocation),
+                });
+              }
               const okPayload = encodeRequestOkPayload({
                 type: MessageType.REQUEST_OK,
-                parameters: [],
+                parameters: okParameters,
                 trackProperties: [],
               });
               if (session.controlWriter) {
@@ -1722,7 +1773,8 @@ export async function bidiReadRequestStreamMessages(
  * セッションを閉じる。
  * decode の失敗 (ProtocolViolationError / IncompleteDataError) は呼び出し元の
  * 受信ループの catch で PROTOCOL_VIOLATION に変換される。
- * publish ロールの REQUEST_UPDATE 経路で使う。PUBLISH_OK は EXPIRES のみを
+ * REQUEST_UPDATE を受信する両経路 (bidiHandlePublishRequestUpdate /
+ * bidiReadRequestStreamMessages) で使う。PUBLISH_OK は EXPIRES のみを
  * 許可するため本検証は通さない (許可外はスコープ検証で拒否する)。
  */
 function validateLocationAndFillParameters(parameters: Parameter[]): void {
@@ -1732,6 +1784,82 @@ function validateLocationAndFillParameters(parameters: Parameter[]): void {
     } else if (param.type === MessageParameterType.FILL_PARAMETERS) {
       decodeFillParameters(param);
     }
+  }
+}
+
+/**
+ * 受信パラメータに含まれる Range Filter の合計 Ranges 数を数える
+ *
+ * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * 「limits the peer's total number of Ranges (Start/End pairs) allowed
+ *  concurrently in all Range filter Section 3.3.2 parameters for a given
+ *  subscription or fetch」
+ * トップレベルの Range Filter (0x25-0x29) に加え、FILL_PARAMETERS (0x23)
+ * 内側の Range Filter (0x25-0x28) も購読単位の合計に含める (§9.20.16 は
+ * 内側を独立した parameter scope とするが、購読単位の上限は fill を含む)。
+ * 除去 (Length=0) は Ranges を消費しないため数えない。
+ * 呼び出し前に validateLocationAndFillParameters で内側を検証しておくこと
+ * (本関数は検証済みの値を前提に decode する)。
+ */
+function countIncomingRangeFilterRanges(parameters: Parameter[]): {
+  hasRangeFilter: boolean;
+  totalRanges: number;
+} {
+  let hasRangeFilter = false;
+  let totalRanges = 0;
+  const addRanges = (rangeParameters: Parameter[]): void => {
+    for (const param of rangeParameters) {
+      if (param.type < 0x25 || param.type > 0x29) {
+        continue;
+      }
+      hasRangeFilter = true;
+      const [decoded] = decodeRangeFilter(rangeFilterTypeOf(param.type), param.value);
+      if (!("remove" in decoded)) {
+        totalRanges += decoded.ranges.length;
+      }
+    }
+  };
+  addRanges(parameters);
+  for (const param of parameters) {
+    if (param.type === MessageParameterType.FILL_PARAMETERS) {
+      addRanges(decodeFillParameters(param));
+    }
+  }
+  return { hasRangeFilter, totalRanges };
+}
+
+/**
+ * 自 endpoint が広告した MAX_FILTER_RANGES に対する受信 Range Filter を検証する
+ *
+ * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * "The default value is 0, so if not specified, the peer MUST NOT send any
+ *  such filter parameters. If this limit is exceeded, an endpoint MUST
+ *  reject this with REQUEST_ERROR with error code INVALID_FILTER."
+ * 自 endpoint の上限 (未広告時は 0) を超える Range Filter を InvalidFilterError
+ * として通知し、呼び出し元が REQUEST_ERROR (INVALID_FILTER) に変換する。
+ *
+ * @param localMaxFilterRanges - 自 endpoint が SETUP で広告した MAX_FILTER_RANGES
+ *                               (未広告時は 0)
+ * @throws InvalidFilterError 上限が 0 で Range Filter が含まれる、または合計が超過した場合
+ */
+function validateIncomingRangeFilterLimits(
+  parameters: Parameter[],
+  localMaxFilterRanges: number,
+  contextName: string,
+): void {
+  const { hasRangeFilter, totalRanges } = countIncomingRangeFilterRanges(parameters);
+  if (!hasRangeFilter) {
+    return;
+  }
+  if (localMaxFilterRanges === 0) {
+    throw new InvalidFilterError(
+      `cannot receive range filters in ${contextName}: local MAX_FILTER_RANGES is 0 (not advertised)`,
+    );
+  }
+  if (totalRanges > localMaxFilterRanges) {
+    throw new InvalidFilterError(
+      `range filters in ${contextName} exceed local MAX_FILTER_RANGES: total ranges ${totalRanges} > ${localMaxFilterRanges}`,
+    );
   }
 }
 
@@ -1920,6 +2048,18 @@ export async function bidiSendRequestUpdate(
       );
     }
   }
+
+  // draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+  // 各パラメータ定義が示す出現可能メッセージに反する型を raw parameters に
+  // 混入させたまま送信すると、受信側は §9.20.1 の MUST により
+  // PROTOCOL_VIOLATION でセッションを閉じる。ローカル API 誤用として
+  // 送信前に拒否する (例: GROUP_ORDER / EXPIRES は REQUEST_UPDATE に出現
+  // できず、TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用)。
+  assertParametersAllowedForSend(
+    options.parameters ?? [],
+    REQUEST_UPDATE_ALLOWED_PARAMS,
+    "REQUEST_UPDATE",
+  );
 
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
@@ -2284,6 +2424,15 @@ export async function bidiSendNamespaceRequestUpdate(
       value: encodeUint8ParameterValue(options.forward ? 1 : 0, "FORWARD"),
     });
   }
+
+  // draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+  // namespace 系 REQUEST_UPDATE に出現できる型だけであることを送信前に検証する
+  // (TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用)。
+  assertParametersAllowedForSend(
+    parameters,
+    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
+    "SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS REQUEST_UPDATE",
+  );
 
   const requestUpdateMsg = {
     type: MessageType.REQUEST_UPDATE,

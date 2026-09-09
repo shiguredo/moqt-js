@@ -474,6 +474,17 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
         `trailing data after Redirect in REQUEST_ERROR: expected ${data.length} bytes, consumed ${offset}`,
       );
     }
+  } else if (Number(errorCode) === 0x34) {
+    // draft-ietf-moq-transport-21 Section 9.4.2:
+    // "Redirect: Present only when Error Code is REDIRECT."
+    // REDIRECT (0x34) は Redirect 構造を必ず伴うため、欠落はメッセージ構造の
+    // 違反として PROTOCOL_VIOLATION でセッションを閉じる
+    // (draft-21 §9「If the length does not match the length of the Message
+    //  Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」
+    // と同じく、構造不正はセッション終了で扱う)。
+    throw new ProtocolViolationError(
+      "missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)",
+    );
   }
 
   return {

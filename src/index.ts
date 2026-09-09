@@ -242,6 +242,9 @@ export async function connect(
     authorizationToken: options?.authorizationToken,
     moqtImplementation: options?.moqtImplementation,
     grease: options?.grease,
+    maxAuthTokenCacheSize: options?.maxAuthTokenCacheSize,
+    maxRequestUpdates: options?.maxRequestUpdates,
+    maxFilterRanges: options?.maxFilterRanges,
   });
 
   return session;

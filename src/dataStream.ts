@@ -234,6 +234,17 @@ export interface MoqtObject {
   groupId: bigint;
   subgroupId?: bigint;
   objectId: bigint;
+  /**
+   * Publisher Priority
+   * draft-ietf-moq-transport-21 §10.4 / §11.3.1 / §11.2.1
+   *
+   * Subgroup Header / Object Datagram で Priority が省略された場合 (DEFAULT_PRIORITY
+   * ビットが 1) は、購読を確立した control message の DEFAULT_PUBLISHER_PRIORITY
+   * Track Property (省略時 128) を継承する。受信経路 (SubscriberImpl) が配送前に
+   * 解決して設定するため、フィルタ評価とアプリのコールバックでは継承値が見える。
+   * FETCH オブジェクトは §11.4.1.1 Table 9 の継承規則 (直近オブジェクトの
+   * Priority) で解決される。
+   */
   publisherPriority?: number;
   status: ObjectStatus;
   properties?: Uint8Array;
@@ -750,8 +761,9 @@ export interface ObjectDatagram {
   /**
    * Publisher Priority。Priority Present のない datagram では undefined
    * (draft-ietf-moq-transport-21 Section 11.2.1: 0x08-0x0F, 0x28-0x2D は
-   * Priority なし)。PRIORITY_FILTER の評価では明示値のみを使うため、
-   * 0 のダミー値は使わない。
+   * Priority なし)。デコード時点では 0 のダミー値を入れず、受信経路
+   * (SubscriberImpl) が購読の DEFAULT_PUBLISHER_PRIORITY (省略時 128) を
+   * 継承させてから PRIORITY_FILTER を評価する (§10.4)。
    */
   publisherPriority?: number;
   properties?: Uint8Array;
@@ -915,8 +927,9 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   }
 
   // Priority Present の有無を判定 (Section 11.2.1: 0x08-0x0F, 0x28-0x2D は Priority なし)
-  // Priority が明示されていない場合は undefined を設定する (PRIORITY_FILTER の
-  // 評価では明示値のみを使い、0 のダミー値は使わないため)
+  // Priority が明示されていない場合は undefined を設定する。0 のダミー値は
+  // 入れず、受信経路 (SubscriberImpl) が購読の DEFAULT_PUBLISHER_PRIORITY
+  // (省略時 128) を継承させてから PRIORITY_FILTER を評価する (§10.4)。
   let publisherPriority: number | undefined;
   if (datagramHasPriority(typeNum)) {
     // Priority は 8 bit 固定のため、バッファが Priority バイトで切れている

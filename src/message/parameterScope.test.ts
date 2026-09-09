@@ -6,13 +6,16 @@
 import { test, assert } from "vite-plus/test";
 import {
   NAMESPACE_OK_ALLOWED_PARAMS,
+  NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_ALLOWED_PARAMS,
+  REQUEST_UPDATE_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
   TRACK_STATUS_OK_ALLOWED_PARAMS,
   SUBSCRIBE_OK_ALLOWED_PARAMS,
   FETCH_OK_ALLOWED_PARAMS,
   PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
+  assertParametersAllowedForSend,
   validateParameterScope,
 } from "./parameterScope";
 import { MessageParameterType } from "./types";
@@ -320,4 +323,112 @@ test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION で拒否�
     assert.equal(errors.length, 1);
     assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
   }
+});
+
+// ============================================================================
+// REQUEST_UPDATE_ALLOWED_PARAMS のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
+ * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。
+ * subscription 系 REQUEST_UPDATE の許可集合には含まれないことを検証する。
+ */
+test("REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含まない", () => {
+  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_NAMESPACE_PREFIX));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.9 / §9.20.17:
+ * GROUP_ORDER と EXPIRES は REQUEST_UPDATE に出現できない。
+ */
+test("REQUEST_UPDATE_ALLOWED_PARAMS は GROUP_ORDER / EXPIRES を含まない", () => {
+  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.GROUP_ORDER));
+  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.2:
+ * TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS とその REQUEST_UPDATE にのみ
+ * 出現できる。subscription 系 REQUEST_UPDATE の許可集合には含まれない。
+ */
+test("REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_PROPERTY_FILTER を含まない", () => {
+  assert.isFalse(REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_PROPERTY_FILTER));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.8 / §9.20.10 / §9.20.20 / §9.20.16 / §3.3.2:
+ * SUBSCRIBER_PRIORITY / LOCATION_FILTER / NEW_GROUP_REQUEST / FILL_PARAMETERS /
+ * Range Filters (0x25-0x28) は subscription 系 REQUEST_UPDATE に出現できる。
+ */
+test("REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系の許可パラメータを含む", () => {
+  for (const type of [
+    MessageParameterType.AUTHORIZATION_TOKEN,
+    MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+    MessageParameterType.SUBSCRIBER_PRIORITY,
+    MessageParameterType.FORWARD,
+    MessageParameterType.LOCATION_FILTER,
+    MessageParameterType.NEW_GROUP_REQUEST,
+    MessageParameterType.FILL_PARAMETERS,
+    MessageParameterType.SUBGROUP_FILTER,
+    MessageParameterType.OBJECTID_FILTER,
+    MessageParameterType.PRIORITY_FILTER,
+    MessageParameterType.OBJECT_PROPERTY_FILTER,
+  ]) {
+    assert.isTrue(REQUEST_UPDATE_ALLOWED_PARAMS.has(type));
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * TRACK_NAMESPACE_PREFIX を subscription 系 REQUEST_UPDATE のスコープ検証に
+ * かけると PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ */
+test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は PROTOCOL_VIOLATION", () => {
+  const errors: SessionError[] = [];
+  const result = validateParameterScope(
+    [{ type: MessageParameterType.TRACK_NAMESPACE_PREFIX }],
+    REQUEST_UPDATE_ALLOWED_PARAMS,
+    "REQUEST_UPDATE",
+    (error) => {
+      errors.push(error);
+    },
+  );
+  assert.isFalse(result);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21:
+ * NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含む。
+ */
+test("NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS は TRACK_NAMESPACE_PREFIX を含む", () => {
+  assert.isTrue(
+    NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS.has(MessageParameterType.TRACK_NAMESPACE_PREFIX),
+  );
+});
+
+/**
+ * 送信前検証: 許可集合に無い型は throw し、許可済みの型は通過することを検証する。
+ */
+test("assertParametersAllowedForSend: 許可外の型は throw し許可済みは通過する", () => {
+  assert.doesNotThrow(() =>
+    assertParametersAllowedForSend(
+      [{ type: MessageParameterType.SUBSCRIBER_PRIORITY }],
+      REQUEST_UPDATE_ALLOWED_PARAMS,
+      "REQUEST_UPDATE",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertParametersAllowedForSend(
+        [{ type: MessageParameterType.EXPIRES }],
+        REQUEST_UPDATE_ALLOWED_PARAMS,
+        "REQUEST_UPDATE",
+      ),
+    /not allowed in REQUEST_UPDATE/,
+  );
 });

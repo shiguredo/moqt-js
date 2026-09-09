@@ -228,6 +228,35 @@ export interface ConnectOptions {
   authorizationToken?: AuthorizationToken;
 
   /**
+   * SETUP Option (Option Type 0x04) として広告する MAX_AUTH_TOKEN_CACHE_SIZE
+   * draft-ietf-moq-transport-21 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE)
+   *
+   * ピアが保持してよい Authorization Token Alias の最大バイト数。
+   * 省略時は SETUP Option を送信せず、既定値 0（Alias 使用禁止）となる。
+   */
+  maxAuthTokenCacheSize?: number;
+
+  /**
+   * SETUP Option (Option Type 0x08) として広告する MAX_REQUEST_UPDATES
+   * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES)
+   *
+   * リクエストストリームごとに未応答で許可する REQUEST_UPDATE の最大数。
+   * 0 は無制限。省略時は SETUP Option を送信せず、既定値 0（無制限）となる。
+   */
+  maxRequestUpdates?: number;
+
+  /**
+   * SETUP Option (Option Type 0x06) として広告する MAX_FILTER_RANGES
+   * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES)
+   *
+   * ピアが購読・FETCH ごとに送信できる Range Filter の合計 Ranges 数。
+   * 省略時は SETUP Option を送信せず、既定値 0（Range Filter 受信拒否）となり、
+   * ピアから REQUEST_UPDATE 等で Range Filter を受信した場合は
+   * REQUEST_ERROR (INVALID_FILTER) で拒否する。
+   */
+  maxFilterRanges?: number;
+
+  /**
    * Pending Subgroup Stream の buffer 設定
    * draft-ietf-moq-transport-21 §11.3.1 の "MAY ... choose to buffer it for a brief
    * period to handle reordering with the control message that establishes the Track
@@ -1176,6 +1205,9 @@ export class SessionImpl implements Session {
   peerMaxRequestUpdates = 0;
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
   peerMaxFilterRanges = 0;
+  // draft-ietf-moq-transport-21 §9.1.6: 自 endpoint が SETUP で広告した
+  // MAX_FILTER_RANGES（未広告時は 0 = Range Filter 受信拒否）
+  localMaxFilterRanges = 0;
   // draft-ietf-moq-transport-21 §13 (Grease): true のとき Track / Object Properties に
   // GREASE Property を 1 つ注入する。initialize() で ConnectOptions.grease を受け渡す。
   grease = false;
@@ -1442,6 +1474,21 @@ export class SessionImpl implements Session {
     authorizationToken?: AuthorizationToken;
     moqtImplementation?: string | false;
     grease?: boolean;
+    /**
+     * SETUP で広告する MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3)。
+     * 省略時は送信しない (既定値 0)。
+     */
+    maxAuthTokenCacheSize?: number;
+    /**
+     * SETUP で広告する MAX_REQUEST_UPDATES (§9.1.7)。
+     * 省略時は送信しない (既定値 0 = 無制限)。
+     */
+    maxRequestUpdates?: number;
+    /**
+     * SETUP で広告する MAX_FILTER_RANGES (§9.1.6)。
+     * 省略時は送信しない (既定値 0 = Range Filter 受信拒否)。
+     */
+    maxFilterRanges?: number;
   }): Promise<void> {
     // draft-ietf-moq-transport-21 Section 1.5 (Extensibility):
     // 制御ストリームは単方向ストリームのペアに変更された。
@@ -1467,10 +1514,17 @@ export class SessionImpl implements Session {
     // grease は SETUP 送信だけでなく、Track / Object Properties への注入にも使うため
     // セッション状態として保持する。
     this.grease = options?.grease === true;
+    // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+    // 自 endpoint が広告する上限を保持し、受信 Range Filter の検証に使う。
+    // 未広告 (undefined) の既定値は 0（Range Filter 受信拒否）。
+    this.localMaxFilterRanges = options?.maxFilterRanges ?? 0;
     const setup = createSetup({
       authorizationToken: options?.authorizationToken,
       moqtImplementation: options?.moqtImplementation,
       grease: options?.grease,
+      maxAuthTokenCacheSize: options?.maxAuthTokenCacheSize,
+      maxRequestUpdates: options?.maxRequestUpdates,
+      maxFilterRanges: options?.maxFilterRanges,
     });
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);
@@ -4011,6 +4065,11 @@ export class SessionImpl implements Session {
       subscribeCallbacks.error,
     );
     impl.goawayCallback = subscribeCallbacks.goaway;
+
+    // draft-ietf-moq-transport-21 §10.4:
+    // 受信 PUBLISH の Track Properties から DEFAULT_PUBLISHER_PRIORITY を解決し、
+    // Priority 省略時の Subgroup / Datagram に継承させる
+    impl.setTrackProperties(decodedPublish.trackProperties);
 
     // 受信 PUBLISH の初期パラメータを反映する。違反時はセッションを閉じ false を返す。
     if (!this.applyIncomingPublishParameters(impl, decodedPublish.parameters)) {

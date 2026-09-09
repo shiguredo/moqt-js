@@ -12,6 +12,9 @@ import {
   getSetupAuthority,
   getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
+  getSetupMaxAuthTokenCacheSize,
+  getSetupMaxRequestUpdates,
+  getSetupMaxFilterRanges,
 } from "./setup";
 import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
@@ -236,4 +239,56 @@ test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると thro
 
 test("Setup: AUTHORIZATION_TOKEN の Setup Option Type は 0x03", () => {
   assert.equal(SetupOptionType.AUTHORIZATION_TOKEN, 0x03);
+});
+
+// ============================================================================
+// draft-21 適合監査: SETUP の上限広告 (A-5)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.3 / §9.1.7 / §9.1.6:
+ * MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES を
+ * SETUP で広告でき、ラウンドトリップ後に各ゲッターで取得できることを検証する。
+ */
+test("Setup: MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES を広告して roundtrip する", () => {
+  const setup = createSetup({
+    maxAuthTokenCacheSize: 1024,
+    maxRequestUpdates: 8,
+    maxFilterRanges: 4,
+  });
+
+  // 3 つの Option と MOQT_IMPLEMENTATION が含まれる
+  assert.isDefined(
+    setup.parameters.find((p) => p.type === SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE),
+  );
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_REQUEST_UPDATES));
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_FILTER_RANGES));
+
+  const decoded = decodeSetupPayload(encodeSetupPayload(setup));
+  assert.equal(getSetupMaxAuthTokenCacheSize(decoded), 1024);
+  assert.equal(getSetupMaxRequestUpdates(decoded), 8);
+  assert.equal(getSetupMaxFilterRanges(decoded), 4);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.3 / §9.1.7 / §9.1.6:
+ * 各 Option を省略した場合の既定値は 0 であることを検証する
+ * (MAX_REQUEST_UPDATES の 0 は無制限、MAX_FILTER_RANGES の 0 は受信拒否)。
+ */
+test("Setup: 上限 Option を省略すると既定値 0 になる", () => {
+  const setup = createSetup();
+  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 0);
+  assert.equal(getSetupMaxRequestUpdates(setup), 0);
+  assert.equal(getSetupMaxFilterRanges(setup), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 / §9.1.7:
+ * 明示的に 0 を指定した場合も Option 自体は送信されることを検証する
+ * (未指定と 0 はゲッター上では同じ 0 だが、ワイヤ上は区別される)。
+ */
+test("Setup: 上限に 0 を明示すると Option を送信する", () => {
+  const setup = createSetup({ maxRequestUpdates: 0, maxFilterRanges: 0 });
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_REQUEST_UPDATES));
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_FILTER_RANGES));
 });

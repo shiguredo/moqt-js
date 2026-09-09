@@ -32,7 +32,15 @@ import {
   SessionError,
   SessionErrorCode,
 } from "./error";
-import { MAX_VARINT, encodeVarint } from "./varint";
+import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
+import {
+  createSetup,
+  decodeSetupPayload,
+  encodeSetupPayload,
+  getSetupMaxAuthTokenCacheSize,
+  getSetupMaxFilterRanges,
+  getSetupMaxRequestUpdates,
+} from "./message/setup";
 import {
   FetchHeaderType,
   FetchSerializationFlags,
@@ -4574,3 +4582,98 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
   assert.instanceOf(notified[0], SessionError);
   assert.equal((notified[0] as SessionError).code, SessionErrorCode.INVALID_REQUEST_ID);
 });
+
+// ============================================================================
+// draft-21 適合監査: SETUP の上限広告と localMaxFilterRanges (A-5 / I-1)
+// ============================================================================
+
+/**
+ * SessionImpl の localMaxFilterRanges の既定値は 0 (未広告 = Range Filter
+ * 受信拒否) であることを検証する (draft-ietf-moq-transport-21 §9.1.6)。
+ */
+test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
+  const session = createSessionImpl();
+  assert.equal(session.localMaxFilterRanges, 0);
+});
+
+/**
+ * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
+ * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
+ * localMaxFilterRanges に保持することを検証する
+ * (draft-ietf-moq-transport-21 §9.1.3 / §9.1.6 / §9.1.7)。
+ */
+test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持する", async () => {
+  const sentChunks: Uint8Array[] = [];
+  const clientWritable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      sentChunks.push(chunk);
+    },
+  });
+  // サーバー制御ストリーム: ストリームタイプ + フレーミング済み SETUP を 1 回だけ流す
+  const serverSetup = encodeSetupPayload(createSetup({ moqtImplementation: false }));
+  const serverControlWriter = new ControlStreamWriter();
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const framed = new Uint8Array([
+        ...encodeVarint(MessageType.SETUP),
+        ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
+      ]);
+      controller.enqueue(framed);
+    },
+  });
+  const incomingUnidirectionalStreams = new ReadableStream<ReadableStream<Uint8Array>>({
+    start(controller) {
+      controller.enqueue(serverControlStream);
+    },
+  });
+  const incomingBidirectionalStreams = new ReadableStream<WebTransportBidirectionalStream>({
+    start() {},
+  });
+  const datagramsReadable = new ReadableStream<Uint8Array>({ start() {} });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientWritable,
+    incomingUnidirectionalStreams,
+    incomingBidirectionalStreams,
+    datagrams: {
+      readable: datagramsReadable,
+      writable: new WritableStream<Uint8Array>(),
+    },
+  } as unknown as WebTransport;
+
+  const session = new SessionImpl(transport, {});
+  await session.initialize({
+    maxAuthTokenCacheSize: 1024,
+    maxRequestUpdates: 8,
+    maxFilterRanges: 4,
+  });
+
+  // 自 endpoint の上限を保持する
+  assert.equal(session.localMaxFilterRanges, 4);
+
+  // 送信した SETUP から広告値を取得する
+  const sent = concatUint8ArraysForTest(sentChunks);
+  const [streamType, consumed] = decodeVarint(sent, 0);
+  assert.equal(Number(streamType), MessageType.SETUP);
+  const messages = new ControlStreamReader().feed(sent.slice(consumed));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.SETUP);
+  const setup = decodeSetupPayload(messages[0].payload);
+  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 1024);
+  assert.equal(getSetupMaxRequestUpdates(setup), 8);
+  assert.equal(getSetupMaxFilterRanges(setup), 4);
+});
+
+/**
+ * テスト用に Uint8Array チャンクを連結する
+ */
+function concatUint8ArraysForTest(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}

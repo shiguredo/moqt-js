@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-21 Section 3 (Publishing and Retrieving Tracks)
  */
 
-import { ObjectStatus } from "./message/types";
+import { ObjectStatus, type Location } from "./message/types";
 import { ProtocolViolationError } from "./error";
 
 /**
@@ -180,6 +180,13 @@ export class PublisherImpl implements Publisher {
   // 記録後の両 API 呼び出しを拒否する。
   private endOfTrackSent = false;
 
+  // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+  // この Publisher が送信した最大 Location。
+  // "If Objects have been published on this Track the Publisher MUST include
+  //  this parameter." を満たすため、REQUEST_UPDATE 受理時の REQUEST_OK に
+  // LARGEST_OBJECT として含める。未送信時は null。
+  private largestLocation: Location | null = null;
+
   // セッションが利用する内部コールバック
   goawayCallback?: (newSessionUri: string) => void;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
@@ -239,6 +246,45 @@ export class PublisherImpl implements Publisher {
     return this.trackAlias;
   }
 
+  /**
+   * この Publisher が送信した最大 Location を返す
+   *
+   * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+   * "If Objects have been published on this Track the Publisher MUST include
+   *  this parameter." 未送信時は null を返し、呼び出し側は LARGEST_OBJECT を
+   * 含めない ("If omitted from a message, the sending endpoint has not
+   *  published or received any Objects in the Track.")。
+   */
+  getLargestLocation(): Location | null {
+    return this.largestLocation;
+  }
+
+  /**
+   * 送信した Location で最大 Location を更新する
+   *
+   * sendObject / sendDatagram の受け付け時に呼ぶ。Group が大きい方、同一
+   * Group では Object が大きい方を最大とする (§8.2 の Location 比較)。
+   */
+  private recordLargestLocation(groupId: number, objectId: number): void {
+    // 非整数・負値は publishSendObject / publishSendDatagram 側で fail-fast
+    // 拒否されるため、記録対象にしない (未送信の値を最大と誤認しない)。
+    if (!Number.isInteger(groupId) || !Number.isInteger(objectId)) {
+      return;
+    }
+    if (groupId < 0 || objectId < 0) {
+      return;
+    }
+    const group = BigInt(groupId);
+    const object = BigInt(objectId);
+    if (
+      this.largestLocation === null ||
+      group > this.largestLocation.group ||
+      (group === this.largestLocation.group && object > this.largestLocation.object)
+    ) {
+      this.largestLocation = { group, object };
+    }
+  }
+
   incrementDataStreamCount(): void {
     this.dataStreamCount++;
   }
@@ -282,6 +328,10 @@ export class PublisherImpl implements Publisher {
       this.handleError(statusViolation);
       return Promise.reject(statusViolation);
     }
+
+    // draft-ietf-moq-transport-21 §9.20.18:
+    // 送信を受け付けた Location で最大 Location を更新する。
+    this.recordLargestLocation(params.groupId, params.objectId);
 
     const isEndOfTrack = (params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_TRACK;
     if (!this.onSendObject) {
@@ -338,6 +388,10 @@ export class PublisherImpl implements Publisher {
       this.handleError(violation);
       throw violation;
     }
+
+    // draft-ietf-moq-transport-21 §9.20.18:
+    // 送信を受け付けた Location で最大 Location を更新する。
+    this.recordLargestLocation(params.groupId, params.objectId);
 
     if (this.onSendDatagram) {
       this.onSendDatagram(params);

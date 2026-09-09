@@ -168,6 +168,31 @@ test("ObjectDatagram: Mandatory Track Property を含む Object Property で Mal
   assert.throws(() => decodeObjectDatagram(encoded), MalformedTrackError);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "An Object MUST NOT contain more than one instance of this property."
+ * Object Property に IMMUTABLE_PROPERTIES (0x0B) が 2 回現れる datagram は
+ * malformed であり、decodeObjectDatagram が MalformedTrackError を throw する。
+ */
+test("ObjectDatagram: IMMUTABLE_PROPERTIES が重複する Object Property で MalformedTrackError", () => {
+  // [0x0b, 0x00, 0x00, 0x00] = (deltaId=0x0B, length=0), (deltaId=0x00, length=0)
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    properties: new Uint8Array([0x0b, 0x00, 0x00, 0x00]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const encoded = encodeObjectDatagram(datagram);
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    "Object contains more than one instance of IMMUTABLE_PROPERTIES",
+  );
+});
+
 const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }> = [
   {
     name: "PAYLOAD_OBJ",

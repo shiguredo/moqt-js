@@ -518,6 +518,16 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
 
     previousId = extId;
 
+    // draft-ietf-moq-transport-21 §3.6:
+    // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+    // 処理・転送してはならない (MUST NOT process or forward)。
+    // Immutable Properties 配下でも同様に malformed とする。
+    if (extId >= 0x4000n && extId <= 0x7fffn) {
+      throw new MalformedTrackError(
+        `unknown mandatory track property: type 0x${extId.toString(16)}`,
+      );
+    }
+
     // draft-ietf-moq-transport-21 §10.7:
     // "An Object contains an Immutable Properties property that contains another
     //  Immutable Properties key." → Track is malformed
@@ -589,6 +599,46 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
     }
   }
   return false;
+}
+
+/**
+ * Track Properties から DEFAULT_PUBLISHER_PRIORITY (0x0E) を解決する
+ *
+ * draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER PRIORITY):
+ * "Subgroups and Datagrams for this subscription inherit this priority, unless
+ *  they specifically override it." / "If omitted, the Default Publisher Priority
+ *  is 128."
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ *
+ * mutable list を優先し、無ければ IMMUTABLE_PROPERTIES (0x0B) 配下を検索する。
+ * 値域は decodeProperties の validateTrackPropertyValue で検証済みのため、
+ * Number 変換は安全である。
+ *
+ * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ * @returns 解決した Publisher Priority (0-255)。未指定は 128
+ */
+export function resolveDefaultPublisherPriority(properties: ReadonlyArray<Property>): number {
+  for (const property of properties) {
+    if (
+      property.id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+      property.value !== undefined
+    ) {
+      return Number(property.value);
+    }
+  }
+  // draft-ietf-moq-transport-21 §10.7: Immutable Properties の内容も検索する
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      for (const inner of decodeProperties(property.data)) {
+        if (inner.id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY && inner.value !== undefined) {
+          return Number(inner.value);
+        }
+      }
+    }
+  }
+  return 128;
 }
 
 /**
@@ -689,6 +739,15 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         }
 
         innerPreviousId = extId;
+
+        // draft-ietf-moq-transport-21 §3.6:
+        // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+        // 処理・転送してはならない。Immutable Properties 配下でも malformed。
+        if (extId >= 0x4000n && extId <= 0x7fffn) {
+          throw new MalformedTrackError(
+            `unknown mandatory track property: type 0x${extId.toString(16)}`,
+          );
+        }
 
         // draft-ietf-moq-transport-21 §10.7:
         // "An Object contains an Immutable Properties property that contains another
@@ -858,6 +917,14 @@ export function decodeProperties(data: Uint8Array): Property[] {
             }
 
             innerPreviousId = innerId;
+            // draft-ietf-moq-transport-21 §3.6:
+            // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+            // 処理・転送してはならない。Immutable Properties 配下でも malformed。
+            if (innerId >= 0x4000n && innerId <= 0x7fffn) {
+              throw new MalformedTrackError(
+                `unknown mandatory track property: type 0x${innerId.toString(16)}`,
+              );
+            }
             if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
               throw new MalformedTrackError(
                 "immutable properties must not recursively contain another immutable properties key",
@@ -1003,47 +1070,70 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
   return { properties, complete: true };
 }
 
-// IMMUTABLE_PROPERTIES の再帰ネストの許容深さ
-// draft-ietf-moq-transport-21 §10.7:
-// IMMUTABLE_PROPERTIES は再帰的に IMMUTABLE_PROPERTIES を含んではならない。
-// 悪意ある深いネストでスタックオーバーフロー (RangeError) に至らないよう上限を設ける
-// (filter.ts の MAX_PROPERTY_NESTING_DEPTH と同値)。
-const MAX_OBJECT_PROPERTY_NESTING_DEPTH = 8;
-
 /**
- * Object Properties に Mandatory Track Property (0x4000-0x7FFF) が含まれないか検証する
+ * Object Properties を検証する
  *
  * draft-ietf-moq-transport-21 §3.6:
  * "An Object received with a Mandatory Track Property as an Object Property is
  *  malformed (see Section 12.1)."
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "An Object MUST NOT contain more than one instance of this property."
+ * "An Object contains an Immutable Properties property that contains another
+ *  Immutable Properties key." → malformed
  *
  * decodeObjectPropertiesTolerant でデコードできた Property の ID を確認する。
  * 不完全・不正な delta / Length では検出を打ち切り、PROTOCOL_VIOLATION は送出しない
  * (寛容契約を維持する)。
  *
- * @throws MalformedTrackError 0x4000-0x7FFF の Mandatory Track Property を検出した場合
+ * @throws MalformedTrackError 以下のいずれかを検出した場合
+ *   - 0x4000-0x7FFF の Mandatory Track Property
+ *   - IMMUTABLE_PROPERTIES の複数出現
+ *   - IMMUTABLE_PROPERTIES の再帰ネスト
  */
 export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Array): void {
-  assertNoMandatoryTrackPropertyInObjectPropertiesInternal(data, 0);
+  assertObjectPropertyList(data, false);
 }
 
-function assertNoMandatoryTrackPropertyInObjectPropertiesInternal(
-  data: Uint8Array,
-  depth: number,
-): void {
-  if (depth > MAX_OBJECT_PROPERTY_NESTING_DEPTH) {
-    throw new MalformedTrackError("object property nesting depth exceeds maximum");
-  }
+/**
+ * Object Properties の KVP 列を検証する
+ *
+ * IMMUTABLE_PROPERTIES の再帰ネストは §10.7 で malformed とされるため、
+ * 内側は 1 段だけ検査し、内側に現れる IMMUTABLE_PROPERTIES は検出時点で
+ * MalformedTrackError とする (深いネストによるスタック枯渇も同時に防ぐ)。
+ *
+ * @param data - KVP 列のバイト列
+ * @param nested - IMMUTABLE_PROPERTIES の内側なら true
+ */
+function assertObjectPropertyList(data: Uint8Array, nested: boolean): void {
+  let immutableCount = 0;
   for (const property of decodeObjectPropertiesTolerant(data).properties) {
     if (property.id >= 0x4000n && property.id <= 0x7fffn) {
       throw new MalformedTrackError(
         `mandatory track property as object property: type 0x${property.id.toString(16)}`,
       );
     }
+    if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+      continue;
+    }
+    // draft-ietf-moq-transport-21 §10.7:
+    // IMMUTABLE_PROPERTIES は再帰的に IMMUTABLE_PROPERTIES を含んではならない
+    if (nested) {
+      throw new MalformedTrackError(
+        "immutable properties must not recursively contain another immutable properties key",
+      );
+    }
+    // draft-ietf-moq-transport-21 §10.7:
+    // "An Object MUST NOT contain more than one instance of this property."
+    immutableCount++;
+    if (immutableCount > 1) {
+      throw new MalformedTrackError(
+        "Object contains more than one instance of IMMUTABLE_PROPERTIES",
+      );
+    }
     // draft-ietf-moq-transport-21 §10.7:
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
-    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      assertNoMandatoryTrackPropertyInObjectPropertiesInternal(property.data, depth + 1);
+    if (property.data !== undefined) {
+      assertObjectPropertyList(property.data, true);
     }
   }
 }

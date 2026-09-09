@@ -69,43 +69,34 @@ export const TRACK_STATUS_OK_ALLOWED_PARAMS = new Set<number>([
 export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType.EXPIRES]);
 
 /**
- * 受信 PUBLISH ストリーム上の REQUEST_UPDATE (ケース 1) で REQUEST_OK で
- * 受理するパラメータ
+ * subscription 系 REQUEST_UPDATE の許可パラメータ
  *
- * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
- * ケース 1「The sender of a request (SUBSCRIBE, PUBLISH, FETCH,
- * PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send a
- * REQUEST_UPDATE on the same bidi stream as the request to modify it.」の
- * うち publisher が自身の PUBLISH を更新する場合に REQUEST_OK で受理する。
+ * draft-ietf-moq-transport-21 §9.20 の各パラメータ定義が、通常の
+ * subscription (SUBSCRIBE / PUBLISH / FETCH) を対象とする REQUEST_UPDATE で
+ * 出現を許可する型の集合である。
  *
- * 受理基準は moqt-js 内部の PUBLISH_ALLOWED_PARAMS ではなく、draft-21 §9.20
- * の各パラメータ定義が REQUEST_UPDATE を無限定で許可するか否かである。
- * 無限定で許可されるのは AUTHORIZATION_TOKEN (§9.20.3) /
- * OBJECT_DELIVERY_TIMEOUT (§9.20.5) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.4)
- * の 3 種。加えて FORWARD (§9.20.19「It MAY appear in ... REQUEST_UPDATE
- * (for a subscription) ...」) は「for a subscription」限定の文脈限定
- * パラメータだが、受信側で Forward State として反映する対象であるため、
- * publisher 発 (ケース 1) の FORWARD も REQUEST_OK で受理して反映する
- * (計 4 種)。
+ * - AUTHORIZATION_TOKEN (§9.20.3): REQUEST_UPDATE に出現可能。
+ * - OBJECT_DELIVERY_TIMEOUT (§9.20.5) / SUBGROUP_DELIVERY_TIMEOUT (§9.20.4):
+ *   REQUEST_UPDATE に出現可能。
+ * - SUBSCRIBER_PRIORITY (§9.20.8): REQUEST_UPDATE (for a subscription or FETCH)。
+ * - FORWARD (§9.20.19): REQUEST_UPDATE (for a subscription or a
+ *   SUBSCRIBE_TRACKS request)。
+ * - LOCATION_FILTER (§9.20.10): REQUEST_UPDATE (for a subscription)。
+ * - NEW_GROUP_REQUEST (§9.20.20): REQUEST_UPDATE for a subscription。
+ * - FILL_PARAMETERS (§9.20.16): REQUEST_UPDATE (for a subscription)。
+ * - Range Filters (§3.3.2): SUBGROUP_FILTER / OBJECTID_FILTER /
+ *   PRIORITY_FILTER / OBJECT_PROPERTY_FILTER は REQUEST_UPDATE (on a
+ *   subscription, from the subscriber only)。
  *
- * その他の文脈限定パラメータ (SUBSCRIBER_PRIORITY (§9.20.8) /
- * LOCATION_FILTER (§9.20.10) / NEW_GROUP_REQUEST (§9.20.20) /
- * TRACK_NAMESPACE_PREFIX (§9.20.21) / Range Filters (SUBGROUP_FILTER /
- * OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER /
- * TRACK_PROPERTY_FILTER、§3.3.2)) は REQUEST_UPDATE 自体には出現可能なため
- * スコープ検証は通過するが REQUEST_OK では受理せず、REQUEST_ERROR
- * (NOT_SUPPORTED) で応答する。特に Range Filters は §3.3.2「... in a
- * REQUEST_UPDATE (on a subscription, from the subscriber only) message」に
- * より、ケース 1 の送信者 (publisher) には出現できない。
+ * TRACK_NAMESPACE_PREFIX (§9.20.21) は namespace 系
+ * (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現可能な
+ * ため、本集合には含めない。通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で
+ * 受信した場合は §9.20.1 の MUST により PROTOCOL_VIOLATION でセッションを
+ * 閉じる (NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS を参照)。
+ *
+ * TRACK_PROPERTY_FILTER (0x29) も SUBSCRIBE_TRACKS とその REQUEST_UPDATE に
+ * のみ出現可能なため、本集合には含めない。
  */
-export const PUBLISH_REQUEST_UPDATE_OK_PARAMS = new Set<number>([
-  MessageParameterType.AUTHORIZATION_TOKEN,
-  MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
-  MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
-  MessageParameterType.FORWARD,
-]);
-
-/** REQUEST_UPDATE メッセージの許可パラメータ */
 export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.AUTHORIZATION_TOKEN,
   MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
@@ -114,7 +105,6 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.FORWARD,
   MessageParameterType.LOCATION_FILTER,
   MessageParameterType.NEW_GROUP_REQUEST,
-  MessageParameterType.TRACK_NAMESPACE_PREFIX,
   // draft-ietf-moq-transport-21 §9.20.16: FILL_PARAMETERS (subscription の REQUEST_UPDATE)
   MessageParameterType.FILL_PARAMETERS,
   // draft-ietf-moq-transport-21 §3.3.2: Range Filters (subscription の REQUEST_UPDATE)
@@ -122,7 +112,23 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.OBJECTID_FILTER,
   MessageParameterType.PRIORITY_FILTER,
   MessageParameterType.OBJECT_PROPERTY_FILTER,
-  MessageParameterType.TRACK_PROPERTY_FILTER,
+]);
+
+/**
+ * namespace 系 REQUEST_UPDATE の許可パラメータ
+ *
+ * draft-ietf-moq-transport-21 §9.20.21 (TRACK_NAMESPACE_PREFIX Parameter):
+ * "It MAY appear in REQUEST_UPDATE for a SUBSCRIBE_NAMESPACE or
+ *  SUBSCRIBE_TRACKS request."
+ * 併せて §9.20.3 (AUTHORIZATION_TOKEN) は REQUEST_UPDATE に出現可能であり、
+ * §9.20.19 (FORWARD) は REQUEST_UPDATE (for a SUBSCRIBE_TRACKS request) で
+ * 出現可能である。moqt-js は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を送信
+ * するため、送信経路 (bidiSendNamespaceRequestUpdate) の防御的検証に使う。
+ */
+export const NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.TRACK_NAMESPACE_PREFIX,
+  MessageParameterType.AUTHORIZATION_TOKEN,
+  MessageParameterType.FORWARD,
 ]);
 
 /**
@@ -184,4 +190,29 @@ export function validateParameterScope(
     }
   }
   return true;
+}
+
+/**
+ * 送信パラメータがメッセージ種別で許可されていることを検証する
+ *
+ * draft-ietf-moq-transport-21 §9.20 の各パラメータ定義が示す出現可能
+ * メッセージに反する型を送信前に拒否する。受信側では §9.20.1 の MUST により
+ * PROTOCOL_VIOLATION でセッションが閉じられるため、送信側のローカル API 誤用
+ * としてセッションを閉じず throw で呼び出し元へ返す。
+ *
+ * @param params - 検証するパラメータ配列
+ * @param allowed - 許可パラメータ集合
+ * @param contextName - コンテキスト名（エラーメッセージ用）
+ * @throws Error 許可されない型が含まれる場合
+ */
+export function assertParametersAllowedForSend(
+  params: Array<{ type: number }>,
+  allowed: Set<number>,
+  contextName: string,
+): void {
+  for (const param of params) {
+    if (!allowed.has(param.type)) {
+      throw new Error(`parameter type 0x${param.type.toString(16)} not allowed in ${contextName}`);
+    }
+  }
 }

@@ -855,6 +855,11 @@
   - draft-ietf-moq-transport-21 §13 に従い未知の終了コードを INTERNAL_ERROR として通知する
   - §9.4.1 に従い namespace 系 Redirect の非空 Track Name を PROTOCOL_VIOLATION で拒否する
   - @voluntas
+- [FIX] draft-21 適合監査で見つかった制御プレーンとデータプレーンの不適合を修正する
+  - TRACK_NAMESPACE_PREFIX のスコープ検証、送信 REQUEST_UPDATE のパラメータ検証、文脈外パラメータの PROTOCOL_VIOLATION 化
+  - REQUEST_UPDATE_OK への LARGEST_OBJECT 付与、MAX_FILTER_RANGES の受信側強制、SETUP の上限広告
+  - DEFAULT_PUBLISHER_PRIORITY の継承、Immutable Properties 配下の Mandatory 検出、Object Property の duplicate / 再帰ネスト検出
+  - @voluntas
 
 ### misc
 

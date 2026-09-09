@@ -30,6 +30,8 @@ import {
   decodeFillParameters,
   encodeFillParameters,
   encodeRangeFilter,
+  createTrackNamespace,
+  encodeParameterTrackNamespace,
   type Parameter,
 } from "../message";
 import { buildFillParameters } from "./params";
@@ -38,7 +40,11 @@ import {
   encodeRequestUpdatePayload,
   encodeSubscribeOkPayload,
 } from "../message/subscribe";
-import { getParameterTrackNamespace, encodeLocationFilterParameter } from "../message/parameter";
+import {
+  getParameterTrackNamespace,
+  getParameterLocationValue,
+  encodeLocationFilterParameter,
+} from "../message/parameter";
 import {
   SessionError,
   SessionErrorCode,
@@ -4426,13 +4432,12 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.4:
- * 文脈限定パラメータ (例: SUBSCRIBER_PRIORITY) を含む REQUEST_UPDATE を
- * 受信した場合、REQUEST_ERROR (NOT_SUPPORTED) が応答されセッションが
- * 閉じないことを検証する (§9.4 の NOT_SUPPORTED 定義に基づく設計判断。
- * FORWARD は受理対象のため例から除外する)。
+ * draft-ietf-moq-transport-21 §9.20.1 / §9.20.8:
+ * SUBSCRIBER_PRIORITY は REQUEST_UPDATE (for a subscription) に出現できるため、
+ * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受理され REQUEST_OK が応答される
+ * ことを検証する (accept-then-ignore。NOT_SUPPORTED で拒否しない)。
  */
-test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUEST_UPDATE で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
+test("bidiHandlePublishRequestUpdate: SUBSCRIBER_PRIORITY を含む REQUEST_UPDATE で REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -4441,13 +4446,10 @@ test("bidiHandlePublishRequestUpdate: 文脈限定パラメータを含む REQUE
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // REQUEST_ERROR (NOT_SUPPORTED) が 1 通書き込まれ、セッションは閉じない
+  // REQUEST_OK が 1 通書き込まれ、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
-  assert.equal(decoded.reasonPhrase, "parameter not supported for request update");
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
 });
 
@@ -4477,12 +4479,12 @@ test("bidiHandlePublishRequestUpdate: FORWARD=1 を含む REQUEST_UPDATE で For
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.4:
- * 無限定パラメータと文脈限定パラメータを混合して含む REQUEST_UPDATE は、
- * 1 つでも文脈限定パラメータを含む限り REQUEST_ERROR (NOT_SUPPORTED) が
+ * draft-ietf-moq-transport-21 §9.20.1 / §9.20.3 / §9.20.8:
+ * REQUEST_UPDATE に出現可能な複数パラメータ (AUTHORIZATION_TOKEN +
+ * SUBSCRIBER_PRIORITY) の混合はメッセージ単位で受理され、REQUEST_OK が
  * 応答されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_UPDATE で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
+test("bidiHandlePublishRequestUpdate: 許可パラメータの混合 REQUEST_UPDATE で REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -4494,12 +4496,10 @@ test("bidiHandlePublishRequestUpdate: 無限定 + 文脈限定の混合 REQUEST_
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // REQUEST_ERROR (NOT_SUPPORTED) が 1 通書き込まれ、セッションは閉じない
+  // REQUEST_OK が 1 通書き込まれ、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
 });
 
@@ -4561,12 +4561,12 @@ test("bidiHandlePublishRequestUpdate: FORWARD 省略の REQUEST_UPDATE で Forwa
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.5 / §9.4:
- * FORWARD と他の文脈限定パラメータ (例: SUBSCRIBER_PRIORITY) が混合した
- * REQUEST_UPDATE はメッセージ単位で全体拒否され、FORWARD の部分受理は
- * 行われないことを検証する。
+ * draft-ietf-moq-transport-21 §9.20.1 / §9.20.19:
+ * FORWARD と他の許可パラメータ (例: SUBSCRIBER_PRIORITY) の混合
+ * REQUEST_UPDATE もメッセージ単位で受理され、FORWARD が Forward State に
+ * 反映されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: FORWARD + 他の文脈限定パラメータの混合は NOT_SUPPORTED で全体拒否される", async () => {
+test("bidiHandlePublishRequestUpdate: FORWARD + 他の許可パラメータの混合で REQUEST_OK が応答され FORWARD が反映される", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -4581,15 +4581,13 @@ test("bidiHandlePublishRequestUpdate: FORWARD + 他の文脈限定パラメー�
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // REQUEST_ERROR (NOT_SUPPORTED) が 1 通書き込まれ、セッションは閉じない
+  // REQUEST_OK が 1 通書き込まれ、セッションは閉じない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
-  // 全体拒否のため FORWARD は反映されない
-  assert.equal(subscriber.forwardState, true);
+  // FORWARD=0 が反映される
+  assert.equal(subscriber.forwardState, false);
 });
 
 /**
@@ -8745,4 +8743,403 @@ test("bidiReadRequestStreamMessages: subscribe 側の偶数 ID は INVALID_REQUE
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
   assert.isTrue(ctx.closedWithError!.message.includes("parity"));
   assert.equal(ctx.written.length, 0);
+});
+
+// ============================================================================
+// draft-21 適合監査: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
+ * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。受信 PUBLISH
+ * ストリーム上の通常 REQUEST_UPDATE で受信した場合は NOT_SUPPORTED ではなく
+ * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [encodeParameterTrackNamespace(createTrackNamespace(["namespace"]))],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  assert.equal(ctx.written.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.1 / §9.20.9:
+ * GROUP_ORDER は REQUEST_UPDATE に出現できない (FILL_PARAMETERS 内側を除く)。
+ * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受信した場合は
+ * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: GROUP_ORDER で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x01]) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  assert.equal(ctx.written.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.1 / §9.20.20:
+ * NEW_GROUP_REQUEST は REQUEST_UPDATE (for a subscription) に出現できる。
+ * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受理され REQUEST_OK が
+ * 応答されることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: NEW_GROUP_REQUEST を含む REQUEST_UPDATE で REQUEST_OK が応答される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [{ type: MessageParameterType.NEW_GROUP_REQUEST, value: encodeVarint(1n) }],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * 自 endpoint が MAX_FILTER_RANGES を広告していない (既定値 0) 場合、
+ * ピアから REQUEST_UPDATE で Range Filter を受信したら
+ * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 0 の Range Filter で REQUEST_ERROR (INVALID_FILTER)", async () => {
+  const ctx = createPublishReadTestContext({});
+  // 既定 (未広告) は 0 のため、明示せずに既定値の挙動を検証する
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.SUBGROUP_FILTER,
+        value: encodeRangeFilter({
+          type: "subgroup",
+          setId: 0,
+          ranges: [{ start: 0n, end: 1n }],
+        }),
+      },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+  assert.isTrue(decoded.reasonPhrase.includes("local MAX_FILTER_RANGES is 0"));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * 自 endpoint の上限以内の Range Filter は受理し、超過は
+ * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 以内の Range Filter は受理し超過は拒否する", async () => {
+  // 上限 2 で 2 Ranges は受理
+  const accepted = createPublishReadTestContext({});
+  (accepted.session as unknown as { localMaxFilterRanges: number }).localMaxFilterRanges = 2;
+  const acceptedPayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.SUBGROUP_FILTER,
+        value: encodeRangeFilter({
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 10n, end: 11n },
+          ],
+        }),
+      },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(accepted.session, accepted.requestId, acceptedPayload);
+  const acceptedMessages = new ControlStreamReader().feed(concatUint8Arrays(accepted.written));
+  assert.equal(acceptedMessages.length, 1);
+  assert.equal(acceptedMessages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(accepted.closedWithError);
+
+  // 上限 2 で 3 Ranges は超過として拒否
+  const rejected = createPublishReadTestContext({});
+  (rejected.session as unknown as { localMaxFilterRanges: number }).localMaxFilterRanges = 2;
+  const rejectedPayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.SUBGROUP_FILTER,
+        value: encodeRangeFilter({
+          type: "subgroup",
+          setId: 0,
+          ranges: [
+            { start: 0n, end: 1n },
+            { start: 10n, end: 11n },
+            { start: 20n, end: 21n },
+          ],
+        }),
+      },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(rejected.session, rejected.requestId, rejectedPayload);
+  const rejectedMessages = new ControlStreamReader().feed(concatUint8Arrays(rejected.written));
+  assert.equal(rejectedMessages.length, 1);
+  assert.equal(rejectedMessages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(rejectedMessages[0].payload).errorCode,
+    BigInt(RequestErrorCode.INVALID_FILTER),
+  );
+  assert.isUndefined(rejected.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters) / §9.20.1:
+ * 送信 REQUEST_UPDATE の raw parameters に、その文脈で許可されない型
+ * (GROUP_ORDER / EXPIRES) が混ざった場合は送信前に拒否することを検証する。
+ */
+test("bidiSendRequestUpdate: raw の GROUP_ORDER / EXPIRES は送信前に拒否される", async () => {
+  for (const parameter of [
+    { type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x01]) },
+    { type: MessageParameterType.EXPIRES, value: new Uint8Array([0x01]) },
+  ]) {
+    const { session, written } = createBidiSession();
+    const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+    let thrown: Error | undefined;
+    try {
+      await bidiSendRequestUpdate(session, subscriber, { parameters: [parameter] });
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+
+    assert.isDefined(thrown);
+    assert.isTrue(thrown!.message.includes("not allowed in REQUEST_UPDATE"));
+    // 送信前に拒否するためワイヤには何も書かれない
+    assert.equal(written.length, 0);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用のため、
+ * subscription 系 REQUEST_UPDATE の raw parameters では送信前に拒否する
+ * ことを検証する。
+ */
+test("bidiSendRequestUpdate: raw の TRACK_NAMESPACE_PREFIX は送信前に拒否される", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  let thrown: Error | undefined;
+  try {
+    await bidiSendRequestUpdate(session, subscriber, {
+      parameters: [encodeParameterTrackNamespace(createTrackNamespace(["namespace"]))],
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("not allowed in REQUEST_UPDATE"));
+  assert.equal(written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.8:
+ * SUBSCRIBER_PRIORITY は REQUEST_UPDATE に出現できるため、raw parameters でも
+ * 送信できることを検証する。
+ */
+test("bidiSendRequestUpdate: raw の SUBSCRIBER_PRIORITY は送信できる", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+
+  const updatePromise = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [{ type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([0x01]) }],
+  });
+  // bidiSendRequestUpdate は REQUEST_OK 受信まで resolve しないため、
+  // 送信完了後に pending を解決してから await する (既存テストと同形)。
+  for (const [, pending] of session.pendingRequestUpdate) {
+    pending.resolve();
+  }
+  await updatePromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestUpdatePayload(messages[0].payload);
+  assert.isDefined(
+    decoded.parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter) / §9.5.1:
+ * 自 endpoint が Publisher として REQUEST_UPDATE を受理し REQUEST_OK を返す
+ * 場合、Object を publish 済みなら LARGEST_OBJECT を必ず含めることを検証する。
+ */
+test("bidiReadRequestStreamMessages: publish 済み Object がある REQUEST_OK に LARGEST_OBJECT が含まれる (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+  // 最大 Location {groupId: 5, objectId: 3} を publish 済みにする
+  await ctx.publisher.sendObject({ groupId: 1, objectId: 0, payload: new Uint8Array() });
+  await ctx.publisher.sendObject({ groupId: 5, objectId: 3, payload: new Uint8Array([1]) });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  const decoded = decodeRequestOkPayload(messages[0].payload);
+  const largest = decoded.parameters.find((p) => p.type === MessageParameterType.LARGEST_OBJECT);
+  assert.isDefined(largest);
+  const location = getParameterLocationValue(largest!);
+  assert.equal(location.group, 5n);
+  assert.equal(location.object, 3n);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * "If omitted from a message, the sending endpoint has not published or
+ *  received any Objects in the Track."
+ * Object 未 publish の Publisher が返す REQUEST_OK には LARGEST_OBJECT を
+ * 含めないことを検証する。
+ */
+test("bidiReadRequestStreamMessages: 未 publish の REQUEST_OK に LARGEST_OBJECT は含まれない (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  const decoded = decodeRequestOkPayload(messages[0].payload);
+  assert.isUndefined(
+    decoded.parameters.find((p) => p.type === MessageParameterType.LARGEST_OBJECT),
+  );
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
+ * role=publish の受信 REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX が含まれる場合、
+ * namespace 系 REQUEST_UPDATE 専用のため PROTOCOL_VIOLATION でセッションを
+ * 閉じることを検証する。
+ */
+test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE で PROTOCOL_VIOLATION (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [encodeParameterTrackNamespace(createTrackNamespace(["namespace"]))],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+ * role=publish の受信 REQUEST_UPDATE で、自 endpoint が MAX_FILTER_RANGES を
+ * 広告していない (既定値 0) 場合に Range Filter を受信したら
+ * REQUEST_ERROR (INVALID_FILTER) と PUBLISH_DONE (UPDATE_FAILED) で拒否する
+ * ことを検証する。
+ */
+test("bidiReadRequestStreamMessages: localMaxFilterRanges 0 の Range Filter で INVALID_FILTER (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.SUBGROUP_FILTER,
+        value: encodeRangeFilter({
+          type: "subgroup",
+          setId: 0,
+          ranges: [{ start: 0n, end: 1n }],
+        }),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(messages[0].payload).errorCode,
+    BigInt(RequestErrorCode.INVALID_FILTER),
+  );
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+  assert.isUndefined(ctx.closedWithError);
 });
