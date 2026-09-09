@@ -46,6 +46,7 @@ import {
   encodeLocationFilterParameter,
 } from "../message/parameter";
 import {
+  MalformedTrackError,
   SessionError,
   SessionErrorCode,
   RequestErrorCode,
@@ -8903,6 +8904,207 @@ test("bidiReadFetchResponse: 非違反失敗で削除集合が掃除される", 
   assert.isUndefined(ctx.getClosedWithError());
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * SUBSCRIBE_OK / FETCH_OK の MalformedTrackError 経路で bidi ストリームが
+ * cancel されることを観測するためのセッションを構築する。
+ *
+ * readable の cancel (STOP_SENDING 相当) と writable の abort (RESET_STREAM
+ * 相当) の到達理由を記録する。
+ */
+function createCancelObservableResponseContext(): {
+  session: BidiSessionInternal;
+  stream: WebTransportBidirectionalStream;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+  controlReader: ControlStreamReader;
+  controlWriter: ControlStreamWriter;
+  requestId: bigint;
+  cancelled: unknown[];
+  aborted: unknown[];
+  getClosedWithError: () => SessionError | undefined;
+} {
+  const requestId = 10n;
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const cancelled: unknown[] = [];
+  const aborted: unknown[] = [];
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+    cancel(reason) {
+      cancelled.push(reason);
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    abort(reason) {
+      aborted.push(reason);
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const writer = writable.getWriter();
+  const controlReader = new ControlStreamReader();
+  let closedWithError: SessionError | undefined;
+  const controlWriter = new ControlStreamWriter();
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter,
+    nextRequestId: 100n,
+    requestStreams: new Map([[requestId, { stream, writer, controlReader }]]),
+    pendingPublish: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
+    pendingTrackStatus: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    namespaceSubscriptions: new Map(),
+    tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+  } as unknown as BidiSessionInternal;
+  return {
+    session,
+    stream,
+    readableController,
+    controlReader,
+    controlWriter,
+    requestId,
+    cancelled,
+    aborted,
+    getClosedWithError: () => closedWithError,
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties) / §6.4.2.3:
+ * 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した subscriber は
+ * 購読を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
+ * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
+ */
+test("bidiReadSubscribeResponse: 未知 Mandatory Track Property で購読が cancel される", async () => {
+  const ctx = createCancelObservableResponseContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+  ctx.session.fillFetchTargets.set(ctx.requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 未知 Mandatory Track Property (0x4000-0x7FFF) を 1 つ含む SUBSCRIBE_OK
+  const okPayload = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [{ id: 0x4000n, value: 1n }],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  // readable を close すると cancel が発火しないため、開いたまま cancel の到達を観測する
+  await readPromise;
+  // writer.abort は fire-and-forget のため到達を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.instanceOf(rejected, MalformedTrackError);
+  // 進行中の fill 配信を止めるため購読が closed になる
+  assert.equal(subscriber.state, "closed");
+  // 送信方向 RESET_STREAM / 受信方向 STOP_SENDING の両方が到達する
+  assert.deepEqual(ctx.aborted, ["subscription cancelled"]);
+  assert.deepEqual(ctx.cancelled, ["subscription cancelled"]);
+  assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties) / §6.4.2.3:
+ * 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
+ * fetch を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
+ * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
+ */
+test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cancel される", async () => {
+  const ctx = createCancelObservableResponseContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: fetcher,
+  });
+
+  // 開いている FETCH データストリーム相当の待機者を登録し、cancel 時に
+  // fetcher 不在で即時解決 (STOP_SENDING 相当の reader.cancel に至る経路) する
+  // ことを検証する。待機タイムアウトは 1000ms とし、即時性で判別する。
+  const internal = ctx.session as unknown as SessionInternal;
+  const waiter = incomingWaitForFetcher(internal, ctx.requestId, 1000);
+  const started = Date.now();
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 未知 Mandatory Track Property (0x4000-0x7FFF) を 1 つ含む FETCH_OK
+  const okPayload = encodeFetchOkPayload({
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 0n, object: 0n },
+    parameters: [],
+    trackProperties: [{ id: 0x4000n, value: 1n }],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  // readable を close すると cancel が発火しないため、開いたまま cancel の到達を観測する
+  await readPromise;
+  // writer.abort は fire-and-forget のため到達を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  const waiterResult = await waiter;
+
+  assert.instanceOf(rejected, MalformedTrackError);
+  assert.deepEqual(ctx.cancelled, ["fetch cancelled"]);
+  assert.deepEqual(ctx.aborted, ["fetch cancelled"]);
+  // 待機者は fetcher 不在のため null で即時解決する (タイムアウト待ちでない)
+  assert.isNull(waiterResult);
+  assert.isBelow(Date.now() - started, 500);
+  assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
+  assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.getClosedWithError());
 });
 
 test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除される", async () => {

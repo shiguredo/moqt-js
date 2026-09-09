@@ -1059,6 +1059,10 @@
 - [FIX] Publisher の pause / resume で処理ループが多重化するのを修正する
   - 世代管理で旧ループの encode と onError 通知を抑止し、 resume は現世代で起動する。stop / close 時の旧ループ失敗の誤通知も抑止する
   - @voluntas
+- [FIX] SUBSCRIBE_OK / FETCH_OK の未知 Mandatory Track Property で購読 / fetch を cancel する
+  - draft-ietf-moq-transport-21 §3.6 の MUST に従い、未知 Mandatory Track Property を含む SUBSCRIBE_OK / FETCH_OK で bidi リクエストストリームを RESET_STREAM / STOP_SENDING で cancel する
+  - 従来は Promise を reject して state を削除するだけでストリームを cancel していなかった
+  - @voluntas
 
 ### misc
 

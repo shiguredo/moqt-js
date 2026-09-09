@@ -11,6 +11,7 @@ import type { MoqtObject } from "../dataStream";
 import {
   DataStreamErrorCode,
   InvalidFilterError,
+  MalformedTrackError,
   ProtocolViolationError,
   RequestError,
   RequestErrorCode,
@@ -806,6 +807,23 @@ export async function bidiReadSubscribeResponse(
       session.closeWithError(sessionError);
       return;
     }
+    // draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
+    // 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した
+    // subscriber は購読を cancel する MUST (cancel は §6.4.2.3 の
+    // RESET_STREAM / STOP_SENDING で行う)。
+    // requestStreams は手動削除せず bidiCancelSubscription に委譲する
+    // (手動削除後では cancel が発火しない)。reject は cancel の完了を
+    // 待たずに先に行い、ストリーム後始末が遅延してもアプリへ失敗を届ける。
+    if (error instanceof MalformedTrackError) {
+      session.pendingSubscribe.delete(requestId);
+      pending.reject(error);
+      // 進行中の fill fetch ストリームの sink は subscriberState が closed の
+      // ときだけ Object を破棄するため、cancel 前に closed にして
+      // malformed track の Object をアプリへ配信し続けないようにする (§3.6)。
+      pending.impl.markClosed();
+      await bidiCancelSubscription(session, pending.impl);
+      return;
+    }
     session.pendingSubscribe.delete(requestId);
     session.requestStreams.delete(requestId);
     session.fillFetchTargets.delete(requestId);
@@ -821,8 +839,9 @@ export async function bidiReadSubscribeResponse(
  * 待機中の fetcher 取得を起こす
  *
  * FETCH_OK 成功時と失敗確定時 (REQUEST_ERROR / GOAWAY / 想定外型 2 分岐 /
- * FIN 先行を含む catch 節の両経路) の両方で使う。incomingWaitForFetcher の
- * doResolve が自己登録解除 (splice) するため、欠落しないよう複製して反復する。
+ * MalformedTrackError / FIN 先行を含む catch 節の各経路) の両方で使う。
+ * incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
+ * 欠落しないよう複製して反復する。
  * 失敗確定時は fetchers 不在のため待機は null で解決される
  * (成功時は fetchers 登録後に発火するため Fetcher で解決される)。
  * FETCH_OK 内の検証失敗 (スコープ違反・End Location 違反) では
@@ -968,6 +987,20 @@ export async function bidiReadFetchResponse(
       fireFetcherReadyCallbacks(session, requestId);
       pending.reject(sessionError);
       session.closeWithError(sessionError);
+      return;
+    }
+    // draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
+    // 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
+    // fetch を cancel する MUST (cancel は §6.4.2.3 の RESET_STREAM /
+    // STOP_SENDING で行う)。requestStreams は手動削除せず bidiCancelFetch に
+    // 委譲する。開いている FETCH データストリームは fireFetcherReadyCallbacks で
+    // 待機を起こし、fetcher 不在の待機が reader.cancel (STOP_SENDING 相当) に
+    // 至る既存経路で打ち切られる。reject は cancel の完了を待たずに先に行う。
+    if (error instanceof MalformedTrackError) {
+      session.pendingFetch.delete(requestId);
+      pending.reject(error);
+      await bidiCancelFetch(session, pending.impl);
+      fireFetcherReadyCallbacks(session, requestId);
       return;
     }
     session.pendingFetch.delete(requestId);
