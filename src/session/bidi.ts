@@ -96,6 +96,7 @@ import {
 import { MAX_VARINT, encodeVarint } from "../varint";
 import {
   publishClosePublisherStream,
+  publishResetPublisherStream,
   publishSendPublishDone,
   publishSendPublishDoneWithoutPublisher,
 } from "./publish";
@@ -1245,6 +1246,47 @@ async function bidiTerminatePublishSubscriptionWithUpdateFailed(
 }
 
 /**
+ * publish ロールで peer のキャンセル (STOP_SENDING / RESET_STREAM) を検出した
+ * ときの後始末
+ *
+ * draft-ietf-moq-transport-21 §3.1.1:
+ * 「The Publisher can remove subscription state as soon as it has received
+ *  STOP_SENDING.  It MUST reset any open streams associated with the
+ *  SUBSCRIBE.」
+ * 開いている Subgroup データストリームを reset (abort) し、購読状態を削除して
+ * PublisherImpl を closed にする。peer が購読をキャンセル済みで送信方向も
+ * reset されているため PUBLISH_DONE は送らない。二重呼び出しは publisher も
+ * requestStreams も不在の場合に no-op になる。
+ */
+function handlePublishPeerCancel(session: BidiSessionInternal, requestId: bigint): void {
+  const publisher = session.publishers.get(requestId);
+  const streamInfo = session.requestStreams.get(requestId);
+  // publisher も requestStreams も無ければ後始末済み (writer.closed 監視と
+  // RESET_STREAM 経路の二重発火) であり、何もしない。
+  if (publisher === undefined && streamInfo === undefined) {
+    return;
+  }
+  if (publisher !== undefined) {
+    publishResetPublisherStream(session, publisher.getTrackAlias());
+    publisher.markClosed();
+    session.publishers.delete(requestId);
+  }
+  // RESET_STREAM 経路では当方の送信方向がまだ開いているため、request stream も
+  // reset して完全に cancel する (§6.4.2.3)。STOP_SENDING 経路では既に reset
+  // 済みであり、abort は黙殺される。
+  if (streamInfo !== undefined) {
+    try {
+      void streamInfo.writer.abort("peer cancelled subscription").catch(() => {});
+    } catch {
+      // 既に閉じている場合は無視
+    }
+  }
+  session.requestStreams.delete(requestId);
+  // GOAWAY 受信後に残りの購読が無くなれば閉じる (§6.6.1)。
+  session.onRequestDrained?.();
+}
+
+/**
  * リクエストストリーム上に REQUEST_OK (空 parameters / 空 trackProperties) を送信する
  */
 async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint): Promise<void> {
@@ -1534,6 +1576,60 @@ async function closeOldRequestStreamOnGoaway(
   }
 }
 
+/**
+ * リクエストストリームの読み取りループで発生したエラーの処理
+ *
+ * - ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
+ *   セッションを閉じる
+ * - ピアの RESET_STREAM (isPeerStreamError) は role ごとに後始末する
+ * - それ以外 (セッション終了・内部エラー等) と GOAWAY 受信済みの旧ストリームは
+ *   何もしない
+ */
+function handleRequestStreamReadError(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  error: unknown,
+  role: "publish" | "subscribe",
+): void {
+  const sessionError = toProtocolViolationSessionError(error);
+  if (sessionError !== null) {
+    session.closeWithError(sessionError);
+    return;
+  }
+  if (!isPeerStreamError(error) || session.goawayReceivedOnRequestStreams.has(requestId)) {
+    return;
+  }
+  if (role === "publish") {
+    // draft-ietf-moq-transport-21 §3.1.1:
+    // ピアの RESET_STREAM で readable がエラー終了した場合、開いている
+    // Subgroup データストリームを reset し、購読状態を削除する。
+    handlePublishPeerCancel(session, requestId);
+    return;
+  }
+  // draft-ietf-moq-transport-21 §6.4.2.3:
+  // ピアの RESET_STREAM により readable がエラー終了した場合、subscriber の
+  // error コールバックを呼び state を closed にする (アプリが終了を検知
+  // できるようにする実用上の対応。FIN 経路の notifySubscriberFailure と同じ)。
+  // セッションは閉じない (プロトコル違反ではない)。
+  // draft-ietf-moq-transport-21 §6.4.2.2 / §9.5.1:
+  // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
+  // FIN 経路と同様に失敗として reject する。応答 (REQUEST_OK / REQUEST_ERROR)
+  // は届かないため、残すとアプリは update() の結果を待ち続ける。
+  // 通知より先に実行することで、アプリの error コールバックが throw しても
+  // reject が実行される (順序の根拠。FIN 経路と同パターン)。
+  rejectPendingRequestUpdates(session, requestId, new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));
+  // 内側に try/catch が必要なのは、FIN 経路は外側の try 内で呼ばれ throw が
+  // この catch に落ちて吸収されるのに対し、ここは catch ブロックの内側で
+  // throw すると戻り値の Promise が reject し、fire-and-forget の void 呼び出し
+  // で unhandled rejection になるためである。
+  try {
+    notifySubscriberFailure(session, requestId, createResetStreamError(error));
+  } catch {
+    // アプリの error コールバック例外は吸収する (markClosed は
+    // notifySubscriberFailure 内の finally で実行済み)。
+  }
+}
+
 export async function bidiReadRequestStreamMessages(
   session: BidiSessionInternal,
   requestId: bigint,
@@ -1547,6 +1643,19 @@ export async function bidiReadRequestStreamMessages(
   const registeredEntry = session.requestStreams.get(requestId);
   if (registeredEntry !== undefined) {
     registeredEntry.reader = reader;
+  }
+  // draft-ietf-moq-transport-21 §3.1.1:
+  // publish ロールでピアが STOP_SENDING を送ると当方の送信方向が reset され、
+  // writer.closed が reject する。reader.read() では検出できないため、送信方向
+  // の終了を監視して開いている Subgroup データストリームを reset する。
+  if (role === "publish" && registeredEntry !== undefined) {
+    void registeredEntry.writer.closed.catch((error: unknown) => {
+      // セッション終了やローカル abort ではなく、ピアの STOP_SENDING /
+      // RESET_STREAM による送信方向の終了だけを対象にする。
+      if (isPeerStreamError(error)) {
+        handlePublishPeerCancel(session, requestId);
+      }
+    });
   }
   // ピアの graceful FIN (reader.read() の { done: true }) を記録し、
   // publish ロールのみ削除を done() 完了後まで遅延する判定に使う。
@@ -1878,48 +1987,7 @@ export async function bidiReadRequestStreamMessages(
       }
     }
   } catch (error) {
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(error);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
-    } else if (
-      role === "subscribe" &&
-      isPeerStreamError(error) &&
-      !session.goawayReceivedOnRequestStreams.has(requestId)
-    ) {
-      // draft-ietf-moq-transport-21 §6.4.2.3:
-      // ピアの RESET_STREAM により readable がエラー終了した場合、subscriber の
-      // error コールバックを呼び state を closed にする (アプリが終了を検知
-      // できるようにする実用上の対応。FIN 経路の notifySubscriberFailure と同じ)。
-      // セッションは閉じない (プロトコル違反ではない)。source: "stream" 以外
-      // (セッション終了・内部エラー等) では通知しない。
-      // GOAWAY 受信済みの旧ストリームは分岐条件で抑止し GOAWAY 掃除に委ねる
-      // (GOAWAY は migration 通知であり失敗ではない)。
-      // draft-ietf-moq-transport-21 §6.4.2.2 / §9.5.1:
-      // RESET_STREAM は FIN よりも強い終了であり、応答未達の REQUEST_UPDATE は
-      // FIN 経路と同様に失敗として reject する。応答 (REQUEST_OK / REQUEST_ERROR)
-      // は届かないため、残すとアプリは update() の結果を待ち続ける。
-      // 通知より先に実行することで、アプリの error コールバックが throw しても
-      // reject が実行される (順序の根拠。FIN 経路と同パターン)。
-      // FIN 経路は無条件 reject 後の no-op に委ねる形と抑止の段が異なるが、
-      // 実運用では GOAWAY 掃除でエントリ削除済みのため振る舞いは同じ。
-      rejectPendingRequestUpdates(
-        session,
-        requestId,
-        new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
-      );
-      // 内側に try/catch が必要なのは、FIN 経路は外側の try 内で呼ばれ throw が
-      // この catch に落ちて吸収されるのに対し、ここは catch ブロックの内側で
-      // throw すると戻り値の Promise が reject し、fire-and-forget の void 呼び出し
-      // で unhandled rejection になるためである。
-      try {
-        notifySubscriberFailure(session, requestId, createResetStreamError(error));
-      } catch {
-        // アプリの error コールバック例外は吸収する (markClosed は
-        // notifySubscriberFailure 内の finally で実行済み)。
-      }
-    }
-    // それ以外（セッション終了・内部エラー等）は既存通り無視する
+    handleRequestStreamReadError(session, requestId, error, role);
   } finally {
     // 解除側が古い reader で cancel しないよう、解放前に登録を外す
     // (エントリ削除済みの場合は何もしない)。

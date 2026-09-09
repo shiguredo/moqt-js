@@ -125,6 +125,17 @@ function validateGroupAndObjectIdRange(kind: "group id" | "object id", value: nu
 }
 
 /**
+ * Publisher が closed かどうかを返す
+ *
+ * `publisher.state` を直接比較すると TypeScript が最初の分岐で "active" に
+ * 絞り込み、await 中に markClosed され得ることを表現できない。関数経由で
+ * 参照して絞り込みを避ける。
+ */
+function isPublisherClosed(publisher: PublisherImpl): boolean {
+  return publisher.state === "closed";
+}
+
+/**
  * オブジェクト送信の内部実装
  *
  * draft-ietf-moq-transport-21 Section 11.3.1 (Subgroup Header)
@@ -134,6 +145,13 @@ export async function publishSendObjectInternal(
   publisher: PublisherImpl,
   params: SendObjectParams,
 ): Promise<void> {
+  // draft-ietf-moq-transport-21 §3.1.1:
+  // peer のキャンセル後は新しい Subgroup ストリームを開かない。キュー済みの
+  // 送信は handlePublishPeerCancel の markClosed 後に実行され得るため、
+  // 副作用 (ストリーム生成・統計加算) の前に closed を確認する。
+  if (isPublisherClosed(publisher)) {
+    return;
+  }
   const trackAlias = publisher.getTrackAlias();
   // ID・priority 範囲検証は lookup・FIN より前に行う。公開経路では publishSendObject の
   // fail-fast が先に拒否するため、この throw が公開経路の handleError と
@@ -172,8 +190,16 @@ export async function publishSendObjectInternal(
 
     // 新しいストリームを開く
     const stream = await session.transport.createUnidirectionalStream();
-    session.statsUnidirectionalStreamsOpened++;
-    publisher.incrementDataStreamCount();
+    // draft-ietf-moq-transport-21 §3.1.1:
+    // createUnidirectionalStream の await 中に peer キャンセルで closed に
+    // なり得る。その場合は統計・登録を行わず、開いたストリームを reset する。
+    if (isPublisherClosed(publisher)) {
+      void stream
+        .getWriter()
+        .abort("peer cancelled subscription")
+        .catch(() => {});
+      return;
+    }
     const writer = stream.getWriter();
 
     try {
@@ -184,10 +210,26 @@ export async function publishSendObjectInternal(
       } catch {
         // releaseLock の失敗は無視し、元の write エラーを優先する
       }
-      session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+      if (!isPublisherClosed(publisher)) {
+        session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+      }
       throw err;
     }
 
+    // write の await 中にも peer キャンセルで closed になり得るため、
+    // 登録直前に再確認して closed なら登録せず reset する。
+    if (isPublisherClosed(publisher)) {
+      try {
+        void writer.abort("peer cancelled subscription").catch(() => {});
+      } catch {
+        // 既に閉じている場合は無視
+      }
+      return;
+    }
+
+    // 登録が確定してから統計を加算する (closed による abort と対称にする)
+    session.statsUnidirectionalStreamsOpened++;
+    publisher.incrementDataStreamCount();
     streamState = { groupId, writer, previousObjectId: -1n };
     session.publisherStreams.set(trackAlias, streamState);
   }
@@ -258,7 +300,11 @@ export async function publishSendObjectInternal(
     } catch {
       // releaseLock の失敗は無視し、元の write エラーを優先する
     }
-    session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+    // peer キャンセル起因の write 失敗では closedSubgroups を再登録しない
+    // (publishResetPublisherStream のクリア後にエントリが復活するのを防ぐ)。
+    if (!isPublisherClosed(publisher)) {
+      session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+    }
     throw err;
   }
 
@@ -283,6 +329,48 @@ export function publishClosePublisherStream(
     .then(() => publishClosePublisherStreamInternal(session, trackAlias, timeoutMs));
   session.publisherSendQueues.set(trackAlias, currentPromise);
   return currentPromise;
+}
+
+/**
+ * Publisher のストリームを reset (abort) で閉じる (peer キャンセル時の後始末)
+ *
+ * draft-ietf-moq-transport-21 §3.1.1:
+ * 「The Publisher can remove subscription state as soon as it has received
+ *  STOP_SENDING.  It MUST reset any open streams associated with the
+ *  SUBSCRIBE.」
+ * FIN ではなく reset にするため、publishClosePublisherStreamInternal の
+ * FIN 経路とは別に abort 専用の後始末を提供する。二重 reset / 既に閉じた
+ * ストリームへの操作は黙殺する。
+ */
+export function publishResetPublisherStream(
+  session: BidiSessionInternal,
+  trackAlias: bigint,
+): void {
+  const streamState = session.publisherStreams.get(trackAlias);
+  if (streamState) {
+    session.publisherStreams.delete(trackAlias);
+    try {
+      // peer キャンセル後の後始末であり abort の完了は待たない。失敗は黙殺する。
+      void streamState.writer.abort("peer cancelled subscription").catch(() => {});
+    } catch {
+      // 既に閉じている場合は無視
+    }
+  }
+  clearClosedSubgroupsForTrack(session, trackAlias);
+  // 送信キューの Map エントリを削除する。既にチェーンへ登録済みの送信は
+  // publishSendObjectInternal の closed ガードで抑止される。
+  session.publisherSendQueues.delete(trackAlias);
+}
+
+/**
+ * 当該 trackAlias の closedSubgroups エントリを削除する
+ */
+function clearClosedSubgroupsForTrack(session: BidiSessionInternal, trackAlias: bigint): void {
+  for (const key of session.closedSubgroups) {
+    if (key.startsWith(`${trackAlias}:`)) {
+      session.closedSubgroups.delete(key);
+    }
+  }
 }
 
 /**
@@ -321,11 +409,7 @@ async function publishClosePublisherStreamInternal(
   }
 
   // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
-  for (const key of session.closedSubgroups) {
-    if (key.startsWith(`${trackAlias}:`)) {
-      session.closedSubgroups.delete(key);
-    }
-  }
+  clearClosedSubgroupsForTrack(session, trackAlias);
 }
 
 /**
@@ -553,7 +637,14 @@ async function publishSendPublishDoneCore(
         // close() 並行テスト / ピア起因テストを参照)。
         // なお、入り口ガードにより sessionState は "connected" に絞り込まれる
         // ため、絞り込みを解除して実状態を再確認する。
-        if ((session.sessionState as SessionState) !== "closed") {
+        // また peer キャンセル (STOP_SENDING / RESET_STREAM) で購読が既に終了して
+        // いる場合、handlePublishPeerCancel が request stream をローカル abort
+        // するため close が source なし TypeError で失敗し得る。publishers から
+        // 削除済みなら当該購読は終了済みであり、ピアの違反ではないため昇格しない。
+        if (
+          session.publishers.has(requestId) &&
+          (session.sessionState as SessionState) !== "closed"
+        ) {
           session.closeWithError(
             new SessionError(
               `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,

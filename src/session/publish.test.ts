@@ -121,6 +121,70 @@ test("publishSendObjectInternal: 正常範囲の groupId はストリームを�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §3.1.1:
+ * peer のキャンセル (STOP_SENDING / RESET_STREAM) で closed になった publisher は、
+ * キャンセル後に実行されたキュー済みの送信で新しい Subgroup ストリームを開かない。
+ */
+test("publishSendObjectInternal: closed の publisher は新しいストリームを生成しない", async () => {
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  publisher.markClosed();
+
+  await publishSendObjectInternal(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1.1:
+ * createUnidirectionalStream の await 中に peer キャンセルで closed になった場合、
+ * 開いたストリームを reset し、統計・publisherStreams に登録しない。
+ */
+test("publishSendObjectInternal: createUnidirectionalStream の await 中に closed になった場合は登録しない", async () => {
+  const aborted: unknown[] = [];
+  let resolveStream!: (stream: WritableStream<Uint8Array>) => void;
+  const streamPromise = new Promise<WritableStream<Uint8Array>>((resolve) => {
+    resolveStream = resolve;
+  });
+  const session = {
+    transport: { createUnidirectionalStream: () => streamPromise },
+    publisherStreams: new Map(),
+    closedSubgroups: new Set<string>(),
+    publisherSendQueues: new Map(),
+    grease: false,
+    statsUnidirectionalStreamsOpened: 0,
+    closeWithError: () => {},
+  } as unknown as SessionInternal;
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  const sendPromise = publishSendObjectInternal(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+  // createUnidirectionalStream の await 中に peer キャンセル相当で closed にする
+  publisher.markClosed();
+  resolveStream(
+    new WritableStream<Uint8Array>({
+      abort(reason) {
+        aborted.push(reason);
+      },
+    }),
+  );
+  await sendPromise;
+
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.deepEqual(aborted, ["peer cancelled subscription"]);
+});
+
+/**
  * draft-ietf-moq-transport-21 §11.3.1:
  * Object ID が 2^64 以上の場合、ストリーム生成前に throw し、
  * ストリームが生成されないことを検証する (groupId 検証と同位置)。

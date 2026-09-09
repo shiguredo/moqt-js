@@ -1063,6 +1063,10 @@
   - draft-ietf-moq-transport-21 §3.6 の MUST に従い、未知 Mandatory Track Property を含む SUBSCRIBE_OK / FETCH_OK で bidi リクエストストリームを RESET_STREAM / STOP_SENDING で cancel する
   - 従来は Promise を reject して state を削除するだけでストリームを cancel していなかった
   - @voluntas
+- [FIX] Publisher が STOP_SENDING / RESET_STREAM 受信時に購読のデータストリームを reset する
+  - draft-ietf-moq-transport-21 §3.1.1 の MUST に従い、publish ロールで peer の STOP_SENDING / RESET_STREAM を検出したとき、開いている Subgroup データストリームを abort で reset し、購読状態を削除する
+  - 従来はデータストリームを reset せず、購読状態も残留していた
+  - @voluntas
 
 ### misc
 
