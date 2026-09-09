@@ -98,7 +98,7 @@ type ProcessCatalogPayloadResult =
  *
  * SUBSCRIBE (Next Object 形式) と FETCH (フィルタなし) は独立して評価されるため、
  * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
- * FETCH の両方で届く (draft-ietf-moq-transport-20 §5.1.2。Fetch は「{0, 0} から
+ * FETCH の両方で届く (draft-ietf-moq-transport-21 §3.3.1。Fetch は「{0, 0} から
  * Largest Object まで」、Next Object 購読は Largest の次から始まるため、処理時刻の
  * ずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下のオブジェクトは
  * 適用済みのため除去する (delta の再適用は非冪等であり、add の二重適用は
@@ -112,7 +112,7 @@ export function filterPendingCatalogObjects(
   pending: MoqtObject[],
   lastFetchedLocation: Location,
 ): MoqtObject[] {
-  // Location 順序は §1.4.2 の定義に従う (compareLocations)。
+  // Location 順序は §8.2 の定義に従う (compareLocations)。
   // FETCH で配信済み (lastFetchedLocation 以下) のものだけを除外する。
   return pending.filter(
     (obj) =>
@@ -372,7 +372,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // draft-ietf-moq-transport-20 §10.2.19:
+    // draft-ietf-moq-transport-21 §9.20.20:
     // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
     //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
     //  Property with value 1."
@@ -383,7 +383,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
-    // draft-ietf-moq-transport-20 §10.2.19 (NEW_GROUP_REQUEST = 0x32)。
+    // draft-ietf-moq-transport-21 §9.20.20 (NEW_GROUP_REQUEST = 0x32)。
     // 値は送信時点の最新 Group ID + 1 (情報なし時は 0) とする。
     // SUBSCRIBE 直後の snapshot は stale のため使わない。
     const largestLocation = this.videoSubscriber.largestLocation;
@@ -477,10 +477,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * Catalog を subscribe して受信を待つ
    *
-   * 既存の catalog と live の catalog 更新をまとめて受信する。draft-20 で
-   * Joining FETCH は削除された (draft-ietf-moq-transport-20 §10.13) ため、
+   * 既存の catalog と live の catalog 更新をまとめて受信する。draft-21 で
+   * Joining FETCH は削除された (draft-ietf-moq-transport-21 §9.11) ため、
    * 本実装では以下の 2 リクエストで代替する (仕様上の正式な置換は
-   * FILL_PARAMETERS (§5.1.3) であり、実装は別途):
+   * FILL_PARAMETERS (§3.4) であり、実装は別途):
    * 1. SUBSCRIBE (Next Object 形式の Location Filter) で live の catalog 更新を受信する
    * 2. 独立した FETCH (フィルタなし = {0, 0} から Largest Object まで) で
    *    既存の catalog を取得する

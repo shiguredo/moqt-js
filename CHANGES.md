@@ -848,6 +848,22 @@
   - `sendPublishDone` で PUBLISH_DONE 送信後に writer.close() する
   - `bidiHandlePublishDone` の状態破棄をストリーム close 時に移動する
   - @voluntas
+- [FIX] Subgroup Header の型 128 以上と Fetch 先頭 Object の Priority 未設定を PROTOCOL_VIOLATION として拒否する
+  - draft-ietf-moq-transport-21 §11.3.1 の "Values of 128 or greater" と §11.4.1.1 Table 9 の prior Object 参照禁止に合わせる
+  - @voluntas
+- [FIX] 未知の Session Termination コードの正規化と namespace 系 Redirect の Track Name 検証を追加する
+  - draft-ietf-moq-transport-21 §13 に従い未知の終了コードを INTERNAL_ERROR として通知する
+  - §9.4.1 に従い namespace 系 Redirect の非空 Track Name を PROTOCOL_VIOLATION で拒否する
+  - @voluntas
+- [FIX] draft-21 適合監査で見つかった制御プレーンとデータプレーンの不適合を修正する
+  - TRACK_NAMESPACE_PREFIX のスコープ検証、送信 REQUEST_UPDATE のパラメータ検証、文脈外パラメータの PROTOCOL_VIOLATION 化
+  - REQUEST_UPDATE_OK への LARGEST_OBJECT 付与、MAX_FILTER_RANGES の受信側強制、SETUP の上限広告
+  - DEFAULT_PUBLISHER_PRIORITY の継承、Immutable Properties 配下の Mandatory 検出、Object Property の duplicate / 再帰ネスト検出
+  - @voluntas
+- [FIX] セッションライフサイクルとデータプレーンの draft-21 不適合を修正する
+  - データストリーム先着時の制御ストリーム特定、WebTransport protocols、namespace 購読解除の RESET/STOP_SENDING、NAMESPACE_DONE 補完、FIN 送信、TRACK_STATUS FIN、確立前 GOAWAY 重複検出
+  - Prior Gap 検証、END_OF_GROUP 公開、Delivery Timeout 上書き条件、Forward State = 0 の送信抑止、End of Range の prior 参照拒否、KVP の KEY_VALUE_FORMATTING_ERROR
+  - @voluntas
 
 ### misc
 
@@ -1051,6 +1067,10 @@
   - @voluntas
 - [CHANGE] 未使用の export (calculateAuthTokenSize / fallbackRegisterToUseValue / ObjectForwardingPreference) を削除する
   - リポジトリ全体から参照されていないデッドコードを削除する
+  - @voluntas
+- [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
+  - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
+  - ワイヤ形式・ロジック・公開 API は変更しない
   - @voluntas
 - [UPDATE] PublishOptions / SubscribeOptions の deliveryTimeout doc コメントを moqt-js が値の比較・強制を行わない実態に合わせて修正する
   - 比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント（典型的にはリレー）の責務である旨に修正する (draft-ietf-moq-transport-19 §8)

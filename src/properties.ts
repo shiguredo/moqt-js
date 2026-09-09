@@ -1,16 +1,22 @@
 /**
  * MOQT Properties
- * draft-ietf-moq-transport-20 Section 12 (MOQT Properties)
+ * draft-ietf-moq-transport-21 Section 10 (MOQT Properties)
  *
  * Object Properties として定義されている拡張。
  * LOC (draft-ietf-moq-loc) とは別の、MOQT 本体で定義された拡張。
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Properties は Key-Value-Pair 形式を使用し、delta encoding を適用する。
  */
 
 import { encodeVarint, decodeVarint, MAX_VARINT } from "./varint";
-import { MalformedTrackError, ProtocolViolationError, IncompleteDataError } from "./error";
+import {
+  MalformedTrackError,
+  ProtocolViolationError,
+  IncompleteDataError,
+  SessionError,
+  SessionErrorCode,
+} from "./error";
 import { generateGreaseValue } from "./grease";
 
 /**
@@ -37,24 +43,24 @@ export const MsfCompressionAlgorithm = {
 } as const;
 
 /**
- * MOQT Property ID (Section 12)
+ * MOQT Property ID (Section 10)
  *
  * ID が偶数の場合: varint value
  * ID が奇数の場合: length (varint) + bytes
  */
 export const MOQTPropertyId = {
   /**
-   * Immutable Properties (Section 12.7 Immutable Properties)
+   * Immutable Properties (Section 10.7 Immutable Properties)
    * Relay が変更・削除できない拡張のコンテナ
    */
   IMMUTABLE_PROPERTIES: 0x0bn,
   /**
-   * Prior Group ID Gap (Section 12.8 Prior Group ID Gap)
+   * Prior Group ID Gap (Section 10.8 Prior Group ID Gap)
    * 現在の Group より前のスキップされた Group 数
    */
   PRIOR_GROUP_ID_GAP: 0x3cn,
   /**
-   * Prior Object ID Gap (Section 12.9 Prior Object ID Gap)
+   * Prior Object ID Gap (Section 10.9 Prior Object ID Gap)
    * 現在の Object より前のスキップされた Object 数
    */
   PRIOR_OBJECT_ID_GAP: 0x3en,
@@ -63,9 +69,9 @@ export const MOQTPropertyId = {
 /**
  * MOQT Track Property ID
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Track Properties は end-to-end で送信され、Relay が転送する。
- * draft-ietf-moq-transport-20 Section 12
+ * draft-ietf-moq-transport-21 Section 10
  *
  * PUBLISH, SUBSCRIBE_OK, FETCH_OK の Track Properties で使用。
  *
@@ -74,52 +80,52 @@ export const MOQTPropertyId = {
  */
 export const TrackPropertyId = {
   /**
-   * Object Delivery Timeout (Section 12.2 OBJECT_DELIVERY_TIMEOUT)
+   * Object Delivery Timeout (Section 10.2 OBJECT_DELIVERY_TIMEOUT)
    * オブジェクトの配信タイムアウト（ミリ秒）
    *
-   * draft-ietf-moq-transport-20:
+   * draft-ietf-moq-transport-21:
    * Message Parameter から Track Property に移動。
    */
   OBJECT_DELIVERY_TIMEOUT: 0x02n,
   /**
-   * Max Cache Duration (Section 12.3 MAX CACHE DURATION)
+   * Max Cache Duration (Section 10.3 MAX CACHE DURATION)
    * オブジェクトの最大キャッシュ期間（ミリ秒）
    */
   MAX_CACHE_DURATION: 0x04n,
   /**
-   * Subgroup Delivery Timeout (Section 12.1 SUBGROUP_DELIVERY_TIMEOUT)
+   * Subgroup Delivery Timeout (Section 10.1 SUBGROUP_DELIVERY_TIMEOUT)
    *
-   * draft-ietf-moq-transport-20:
+   * draft-ietf-moq-transport-21:
    * SUBGROUP_DELIVERY_TIMEOUT (Property Type 0x06) は varint。
    * Publisher が Subgroup の配信タイムアウト（ミリ秒）として設定する。
    * 0 はタイムアウトなしを意味する。
-   * draft-ietf-moq-transport-20 Section 12.1
+   * draft-ietf-moq-transport-21 Section 10.1
    */
   SUBGROUP_DELIVERY_TIMEOUT: 0x06n,
   /**
-   * Publisher Priority (Section 12.4 DEFAULT PUBLISHER PRIORITY)
+   * Publisher Priority (Section 10.4 DEFAULT PUBLISHER PRIORITY)
    * Publisher が設定する優先度（0-255）
    */
   DEFAULT_PUBLISHER_PRIORITY: 0x0en,
   /**
-   * Publisher Group Order Preference (Section 12.5 DEFAULT PUBLISHER GROUP ORDER)
+   * Publisher Group Order Preference (Section 10.5 DEFAULT PUBLISHER GROUP ORDER)
    *
-   * draft-ietf-moq-transport-20:
+   * draft-ietf-moq-transport-21:
    * GROUP_ORDER パラメータから分割された Publisher 向けの設定。
-   * draft-ietf-moq-transport-20 Section 12
+   * draft-ietf-moq-transport-21 Section 10
    */
   DEFAULT_PUBLISHER_GROUP_ORDER: 0x22n,
   /**
-   * Dynamic Groups (Section 12.6 DYNAMIC GROUPS)
+   * Dynamic Groups (Section 10.6 DYNAMIC GROUPS)
    * トラックが動的グループ作成をサポートするかどうか
    */
   DYNAMIC_GROUPS: 0x30n,
 } as const;
 
 /**
- * Property Type の値範囲 (Section 15.8)
+ * Property Type の値範囲 (Section 16.8)
  *
- * draft-ietf-moq-transport-20 Section 15.8:
+ * draft-ietf-moq-transport-21 Section 16.8:
  * - 0x00 - 0x77: Standards Action or IESG Approval (1-byte encoding)
  * - 0x78 - 0x7F: アプリケーション固有 (1-byte encoding, 登録不要)
  * - 0x80 - 0x37FF: Specification Required (2-byte encoding)
@@ -130,17 +136,17 @@ export const TrackPropertyId = {
  * アプリケーション固有の範囲は IANA に登録する必要がない。
  * 異なるソースからのトラックを消費するアプリケーションでは
  * 同じコードポイントに異なるセマンティクスが存在する可能性がある。
- * draft-ietf-moq-transport-20 Section 12
+ * draft-ietf-moq-transport-21 Section 10
  */
 /**
  * Track Property の値域を検証する
  *
- * draft-ietf-moq-transport-20 §12 で MUST レベルの値域制約がある Track Property を検証する。
+ * draft-ietf-moq-transport-21 §10 で MUST レベルの値域制約がある Track Property を検証する。
  * 不正値は ProtocolViolationError を throw する (上位ループで PROTOCOL_VIOLATION でセッションを閉じる)。
  *
- * - §12.4 DEFAULT_PUBLISHER_PRIORITY (0x0E): "The value is from 0 to 255 ... Priorities above 255 are invalid."
- * - §12.5 DEFAULT_PUBLISHER_GROUP_ORDER (0x22): "The allowed values are Ascending (0x1) or Descending (0x2). If an endpoint receives a value outside this range, it MUST close the session with PROTOCOL_VIOLATION."
- * - §12.6 DYNAMIC_GROUPS (0x30): "The allowed values are 0 or 1. ... If an endpoint receives a value larger than 1, it MUST close the session with PROTOCOL_VIOLATION."
+ * - §10.4 DEFAULT_PUBLISHER_PRIORITY (0x0E): "The value is from 0 to 255 ... Priorities above 255 are invalid."
+ * - §10.5 DEFAULT_PUBLISHER_GROUP_ORDER (0x22): "The allowed values are Ascending (0x1) or Descending (0x2). If an endpoint receives a value outside this range, it MUST close the session with PROTOCOL_VIOLATION."
+ * - §10.6 DYNAMIC_GROUPS (0x30): "The allowed values are 0 or 1. ... If an endpoint receives a value larger than 1, it MUST close the session with PROTOCOL_VIOLATION."
  */
 export function validateTrackPropertyValue(id: bigint, value: bigint): void {
   if (id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY) {
@@ -165,9 +171,48 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
 }
 
 /**
+ * 受信者が理解する (既知の) MOQT Property Type の集合
+ *
+ * draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure):
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * MOQT 本体で定義された Track / Object Property (MOQTPropertyId /
+ * TrackPropertyId) を既知 Type として扱う。未知 Type は受信者が理解しない
+ * ため、この検証の対象外とする。
+ */
+const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
+  ...Object.values(MOQTPropertyId),
+  ...Object.values(TrackPropertyId),
+]);
+
+/**
+ * 既知 Type の Value (偶数 Type) / Length (奇数 Type) を varint としてデコードする
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * 既知 Type の Value / Length が仕様の serialization に一致しない場合
+ * (varint がバッファ内で完結しない場合) は KEY_VALUE_FORMATTING_ERROR で
+ * セッションを閉じる。未知 Type は受信者が理解しないため、通常の
+ * IncompleteDataError (フレーミング破損) 経路に委ねる。
+ */
+function decodeKnownPropertyVarint(id: bigint, data: Uint8Array, offset: number): [bigint, number] {
+  try {
+    return decodeVarint(data, offset);
+  } catch (error) {
+    if (error instanceof IncompleteDataError && KNOWN_PROPERTY_TYPES.has(id)) {
+      throw new SessionError(
+        `key-value-pair value does not match serialization for known type 0x${id.toString(16)}: ${error.message}`,
+        SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * Prior Group ID Gap
  *
- * draft-ietf-moq-transport-20 Section 12.8 (Prior Group ID Gap):
+ * draft-ietf-moq-transport-21 Section 10.8 (Prior Group ID Gap):
  * 現在の Group より前の、存在しない Group の数を示す。
  *
  * 例: Group 10 で gap = 2 の場合、Group 8 と 9 は存在しない。
@@ -179,7 +224,7 @@ export interface PriorGroupIdGap {
 /**
  * Prior Object ID Gap
  *
- * draft-ietf-moq-transport-20 Section 12.9 (Prior Object ID Gap):
+ * draft-ietf-moq-transport-21 Section 10.9 (Prior Object ID Gap):
  * 現在の Object より前の、存在しない Object の数を示す。
  *
  * 例: Object 10 で gap = 2 の場合、Object 8 と 9 は存在しない。
@@ -203,7 +248,7 @@ export interface Property {
 /**
  * Immutable Properties
  *
- * draft-ietf-moq-transport-20 Section 12.7 (Immutable Properties):
+ * draft-ietf-moq-transport-21 Section 10.7 (Immutable Properties):
  * Relay が変更・削除できない拡張のコンテナ。
  * 内部に Key-Value-Pair をネストできる。
  *
@@ -229,7 +274,7 @@ export interface ParsedProperties {
 /**
  * Prior Group ID Gap をエンコードする
  *
- * draft-ietf-moq-transport-20 Section 12.8 (Prior Group ID Gap):
+ * draft-ietf-moq-transport-21 Section 10.8 (Prior Group ID Gap):
  * ID (0x3C) は偶数なので varint value 形式
  */
 export function encodePriorGroupIdGap(gap: PriorGroupIdGap): Uint8Array {
@@ -248,14 +293,14 @@ export function encodePriorGroupIdGap(gap: PriorGroupIdGap): Uint8Array {
  */
 export function decodePriorGroupIdGap(data: Uint8Array): PriorGroupIdGap {
   const [_id, idLen] = decodeVarint(data);
-  const [gap, _gapLen] = decodeVarint(data.subarray(idLen));
+  const [gap, _gapLen] = decodeKnownPropertyVarint(MOQTPropertyId.PRIOR_GROUP_ID_GAP, data, idLen);
   return { gap };
 }
 
 /**
  * Prior Object ID Gap をエンコードする
  *
- * draft-ietf-moq-transport-20 Section 12.9 (Prior Object ID Gap):
+ * draft-ietf-moq-transport-21 Section 10.9 (Prior Object ID Gap):
  * ID (0x3E) は偶数なので varint value 形式
  */
 export function encodePriorObjectIdGap(gap: PriorObjectIdGap): Uint8Array {
@@ -274,7 +319,7 @@ export function encodePriorObjectIdGap(gap: PriorObjectIdGap): Uint8Array {
  */
 export function decodePriorObjectIdGap(data: Uint8Array): PriorObjectIdGap {
   const [_id, idLen] = decodeVarint(data);
-  const [gap, _gapLen] = decodeVarint(data.subarray(idLen));
+  const [gap, _gapLen] = decodeKnownPropertyVarint(MOQTPropertyId.PRIOR_OBJECT_ID_GAP, data, idLen);
   return { gap };
 }
 
@@ -313,7 +358,7 @@ export function encodeProperty(header: Property): Uint8Array {
 
 // ============================================================================
 // GREASE Property
-// draft-ietf-moq-transport-20 Section 14 (Grease) / Section 15.8 (MOQ Properties)
+// draft-ietf-moq-transport-21 Section 13 (Grease) / Section 16.8 (MOQ Properties)
 // ============================================================================
 
 /**
@@ -326,13 +371,13 @@ const GREASE_PROPERTY_N_CHOICES = 64;
 /**
  * GREASE Property を生成する
  *
- * draft-ietf-moq-transport-20 §14 (Grease): GREASE 値は 0x7f * N + 0x9D（N は非負整数）。
- * Properties は §2.5 / §11.2.1.2 の Key-Value-Pairs（Figure 2）に従い、奇数 ID は
+ * draft-ietf-moq-transport-21 §13 (Grease): GREASE 値は 0x7f * N + 0x9D（N は非負整数）。
+ * Properties は §8.4 / §11.1.3 の Key-Value-Pairs（Figure 2）に従い、奇数 ID は
  * Length プレフィックス付きバイト列、偶数 ID は varint 値としてエンコードされる。
  * 任意のバイト列を安全に送信するため、N を偶数に固定して Property ID を奇数にする
  * （0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。値は空バイト列とする。
  *
- * draft-ietf-moq-transport-20 §2.5.1 (Mandatory Track Properties): 0x4000-0x7FFF は
+ * draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties): 0x4000-0x7FFF は
  * Mandatory Track Property 範囲。0x7f * N + 0x9D は N ∈ [128, 256] でこの範囲に落入し、
  * 受信側は未知の Mandatory Track Property として Track Properties では track を拒否
  * （REQUEST_ERROR UNSUPPORTED_EXTENSION）、Object Properties では malformed と判定する。
@@ -349,8 +394,8 @@ export function generateGreaseProperty(): Property {
 /**
  * 既存の Object Properties バイト列に GREASE Property を 1 つ追加する
  *
- * draft-ietf-moq-transport-20 §11.2.1.2 (Object Properties): Object Properties は
- * "length in bytes followed by Key-Value-Pairs (see Figure 2)" であり、§1.4.3 の
+ * draft-ietf-moq-transport-21 §11.1.3 (Object Properties): Object Properties は
+ * "length in bytes followed by Key-Value-Pairs (see Figure 2)" であり、§8.3 の
  * Key-Value-Pairs（delta encoding）に従う。delta は前 Property との差分で Type を
  * エンコードするため末尾追記ができず、既存バイト列をデコードして Property[] に
  * 分解し、GREASE Property を合成して ID 昇順で再エンコードする（再構成方式）。
@@ -376,7 +421,7 @@ export function appendGreaseObjectProperty(existing: Uint8Array | undefined): Ui
 /**
  * 単一の Property を delta encoding でエンコードする
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *
@@ -421,7 +466,7 @@ function encodePropertyWithDelta(header: Property, previousId: bigint): Uint8Arr
 /**
  * 複数の Property をエンコードして結合する
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * delta encoding を使用するため、拡張ヘッダーは ID の昇順でソートしてからエンコードする。
  */
 export function encodeProperties(headers: Property[]): Uint8Array {
@@ -449,7 +494,7 @@ export function encodeProperties(headers: Property[]): Uint8Array {
 /**
  * Immutable Properties をエンコードする
  *
- * draft-ietf-moq-transport-20 Section 12.7 (Immutable Properties):
+ * draft-ietf-moq-transport-21 Section 10.7 (Immutable Properties):
  * ID (0x0B) は奇数なので length + bytes 形式
  *
  * 内部には複数の Key-Value-Pair (Property) をネストできる。
@@ -476,14 +521,18 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
 /**
  * Immutable Properties をデコードする
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * delta encoding を使用して内部の拡張をデコードする。
  *
  * @param data - ID を含む完全な Immutable Properties データ
  */
 export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties {
   const [_id, idLen] = decodeVarint(data);
-  const [length, lengthLen] = decodeVarint(data.subarray(idLen));
+  const [length, lengthLen] = decodeKnownPropertyVarint(
+    MOQTPropertyId.IMMUTABLE_PROPERTIES,
+    data,
+    idLen,
+  );
   if (Number(length) > 65535) {
     throw new ProtocolViolationError(
       `immutable properties value length exceeds maximum: ${length} > 65535`,
@@ -506,7 +555,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     const [deltaId, deltaIdLen] = decodeVarint(innerData.subarray(offset));
     const extId = previousId + deltaId;
 
-    // draft-ietf-moq-transport-20 Section 1.4.3:
+    // draft-ietf-moq-transport-21 Section 8.3:
     // "The previous Type value plus the Delta Type MUST NOT be greater than
     //  2^64 - 1. If a Delta Type is received that would be too large, the
     //  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -518,7 +567,17 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
 
     previousId = extId;
 
-    // draft-ietf-moq-transport-20 §12.7:
+    // draft-ietf-moq-transport-21 §3.6:
+    // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+    // 処理・転送してはならない (MUST NOT process or forward)。
+    // Immutable Properties 配下でも同様に malformed とする。
+    if (extId >= 0x4000n && extId <= 0x7fffn) {
+      throw new MalformedTrackError(
+        `unknown mandatory track property: type 0x${extId.toString(16)}`,
+      );
+    }
+
+    // draft-ietf-moq-transport-21 §10.7:
     // "An Object contains an Immutable Properties property that contains another
     //  Immutable Properties key." → Track is malformed
     if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
@@ -529,13 +588,17 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
 
     if (extId % 2n === 0n) {
       // 偶数 ID: varint value 形式
-      const [value, valueLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
+      const [value, valueLen] = decodeKnownPropertyVarint(extId, innerData, offset + deltaIdLen);
       validateTrackPropertyValue(extId, value);
       extensions.push({ id: extId, value });
       offset += deltaIdLen + valueLen;
     } else {
       // 奇数 ID: length + bytes 形式
-      const [extLength, extLengthLen] = decodeVarint(innerData.subarray(offset + deltaIdLen));
+      const [extLength, extLengthLen] = decodeKnownPropertyVarint(
+        extId,
+        innerData,
+        offset + deltaIdLen,
+      );
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
       if (offset + deltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
@@ -558,12 +621,12 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
 /**
  * Track Properties に DYNAMIC_GROUPS=1 が含まれているかを判定する。
  *
- * draft-ietf-moq-transport-20 §12.7:
+ * draft-ietf-moq-transport-21 §10.7:
  * "When looking for the value of a property, processors MUST search both the
  * mutable properties and the contents of Immutable Properties."
  *
  * mutable list と Immutable Properties (Type 0x0B) 配下の両方を検索する。
- * DYNAMIC_GROUPS の値域は §12.6 により 0 / 1 のみで、受信時に
+ * DYNAMIC_GROUPS の値域は §10.6 により 0 / 1 のみで、受信時に
  * validateTrackPropertyValue が PROTOCOL_VIOLATION 検証済みのため、複数値や
  * 範囲外は考慮不要。
  *
@@ -592,12 +655,52 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
 }
 
 /**
+ * Track Properties から DEFAULT_PUBLISHER_PRIORITY (0x0E) を解決する
+ *
+ * draft-ietf-moq-transport-21 §10.4 (DEFAULT PUBLISHER PRIORITY):
+ * "Subgroups and Datagrams for this subscription inherit this priority, unless
+ *  they specifically override it." / "If omitted, the Default Publisher Priority
+ *  is 128."
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ *
+ * mutable list を優先し、無ければ IMMUTABLE_PROPERTIES (0x0B) 配下を検索する。
+ * 値域は decodeProperties の validateTrackPropertyValue で検証済みのため、
+ * Number 変換は安全である。
+ *
+ * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ * @returns 解決した Publisher Priority (0-255)。未指定は 128
+ */
+export function resolveDefaultPublisherPriority(properties: ReadonlyArray<Property>): number {
+  for (const property of properties) {
+    if (
+      property.id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+      property.value !== undefined
+    ) {
+      return Number(property.value);
+    }
+  }
+  // draft-ietf-moq-transport-21 §10.7: Immutable Properties の内容も検索する
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      for (const inner of decodeProperties(property.data)) {
+        if (inner.id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY && inner.value !== undefined) {
+          return Number(inner.value);
+        }
+      }
+    }
+  }
+  return 128;
+}
+
+/**
  * Properties をパースする
  *
  * 複数の Property が含まれるデータから、MOQT Core Properties を抽出する。
  * 未知の拡張はスキップされるが、unknownProperties に保持される。
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * delta encoding を使用して ID をデコードする。
  *
  * @param data - Properties データ（複数の Property を含む可能性あり）
@@ -612,7 +715,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
     const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
     const id = previousId + deltaId;
 
-    // draft-ietf-moq-transport-20 Section 1.4.3:
+    // draft-ietf-moq-transport-21 Section 8.3:
     // "The previous Type value plus the Delta Type MUST NOT be greater than
     //  2^64 - 1. If a Delta Type is received that would be too large, the
     //  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -623,28 +726,36 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
     previousId = id;
 
     if (id === MOQTPropertyId.PRIOR_GROUP_ID_GAP) {
-      // draft-ietf-moq-transport-20 §12.8:
+      // draft-ietf-moq-transport-21 §10.8:
       // "An Object MUST NOT contain more than one instance of this property."
       if (result.priorGroupIdGap !== undefined) {
         throw new MalformedTrackError(
           "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
         );
       }
-      const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [gap, gapLen] = decodeKnownPropertyVarint(
+        MOQTPropertyId.PRIOR_GROUP_ID_GAP,
+        data,
+        offset + deltaIdLen,
+      );
       result.priorGroupIdGap = { gap };
       offset += deltaIdLen + gapLen;
     } else if (id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP) {
-      // draft-ietf-moq-transport-20 §12.9: 同上
+      // draft-ietf-moq-transport-21 §10.9: 同上
       if (result.priorObjectIdGap !== undefined) {
         throw new MalformedTrackError(
           "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
         );
       }
-      const [gap, gapLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [gap, gapLen] = decodeKnownPropertyVarint(
+        MOQTPropertyId.PRIOR_OBJECT_ID_GAP,
+        data,
+        offset + deltaIdLen,
+      );
       result.priorObjectIdGap = { gap };
       offset += deltaIdLen + gapLen;
     } else if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
-      // draft-ietf-moq-transport-20 §12.7:
+      // draft-ietf-moq-transport-21 §10.7:
       // "An Object MUST NOT contain more than one instance of this property."
       if (result.immutableProperties !== undefined) {
         throw new MalformedTrackError(
@@ -652,7 +763,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         );
       }
       // Immutable Properties は奇数 ID なので length + bytes 形式
-      const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [length, lengthLen] = decodeKnownPropertyVarint(
+        MOQTPropertyId.IMMUTABLE_PROPERTIES,
+        data,
+        offset + deltaIdLen,
+      );
       if (Number(length) > 65535) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
@@ -678,7 +793,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         const [innerDeltaId, innerDeltaIdLen] = decodeVarint(innerData.subarray(innerOffset));
         const extId = innerPreviousId + innerDeltaId;
 
-        // draft-ietf-moq-transport-20 Section 1.4.3:
+        // draft-ietf-moq-transport-21 Section 8.3:
         // "The previous Type value plus the Delta Type MUST NOT be greater than
         //  2^64 - 1. If a Delta Type is received that would be too large, the
         //  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -690,7 +805,16 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
 
         innerPreviousId = extId;
 
-        // draft-ietf-moq-transport-20 §12.7:
+        // draft-ietf-moq-transport-21 §3.6:
+        // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+        // 処理・転送してはならない。Immutable Properties 配下でも malformed。
+        if (extId >= 0x4000n && extId <= 0x7fffn) {
+          throw new MalformedTrackError(
+            `unknown mandatory track property: type 0x${extId.toString(16)}`,
+          );
+        }
+
+        // draft-ietf-moq-transport-21 §10.7:
         // "An Object contains an Immutable Properties property that contains another
         //  Immutable Properties key." → Track is malformed
         if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
@@ -701,14 +825,20 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
 
         if (extId % 2n === 0n) {
           // 偶数 ID: varint value 形式
-          const [value, valueLen] = decodeVarint(innerData.subarray(innerOffset + innerDeltaIdLen));
+          const [value, valueLen] = decodeKnownPropertyVarint(
+            extId,
+            innerData,
+            innerOffset + innerDeltaIdLen,
+          );
           validateTrackPropertyValue(extId, value);
           extensions.push({ id: extId, value });
           innerOffset += innerDeltaIdLen + valueLen;
         } else {
           // 奇数 ID: length + bytes 形式
-          const [extLength, extLengthLen] = decodeVarint(
-            innerData.subarray(innerOffset + innerDeltaIdLen),
+          const [extLength, extLengthLen] = decodeKnownPropertyVarint(
+            extId,
+            innerData,
+            innerOffset + innerDeltaIdLen,
           );
           // Length 宣言が残りバイトを超える切り詰めは破損であり、
           // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
@@ -730,7 +860,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       offset += deltaIdLen + lengthLen + Number(length);
     } else {
       // 未知の拡張
-      // draft-ietf-moq-transport-20 §2.5.1:
+      // draft-ietf-moq-transport-21 §3.6:
       // Mandatory Track Property (0x4000-0x7FFF) かつ未知の場合は
       // トラックを処理してはならない (MUST NOT process or forward)
       if (id >= 0x4000n && id <= 0x7fffn) {
@@ -758,7 +888,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         offset += deltaIdLen + lengthLen + Number(length);
       } else {
         // 偶数 ID: varint value 形式
-        const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
         validateTrackPropertyValue(id, value);
         const extData = encodeVarint(value);
         unknownProperties.push({ id, data: extData });
@@ -777,7 +907,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
 /**
  * Properties をデコードする
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * delta encoding を使用して ID をデコードする。
  *
  * @param data - Properties データ（複数の Property を含む可能性あり）
@@ -792,7 +922,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
     const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
     const id = previousId + deltaId;
 
-    // draft-ietf-moq-transport-20 Section 1.4.3:
+    // draft-ietf-moq-transport-21 Section 8.3:
     // "The previous Type value plus the Delta Type MUST NOT be greater than
     //  2^64 - 1. If a Delta Type is received that would be too large, the
     //  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -802,7 +932,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
 
     previousId = id;
 
-    // draft-ietf-moq-transport-20 §2.5.1:
+    // draft-ietf-moq-transport-21 §3.6:
     // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
     // 処理・転送してはならない (MUST NOT process or forward)
     if (id >= 0x4000n && id <= 0x7fffn) {
@@ -811,13 +941,13 @@ export function decodeProperties(data: Uint8Array): Property[] {
 
     if (id % 2n === 0n) {
       // 偶数 ID: varint value 形式
-      const [value, valueLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
       validateTrackPropertyValue(id, value);
       extensions.push({ id, value });
       offset += deltaIdLen + valueLen;
     } else {
       // 奇数 ID: length + bytes 形式
-      const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+      const [length, lengthLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
       if (Number(length) > 65535) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
@@ -834,7 +964,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
       );
-      // draft-ietf-moq-transport-20 §12.7 (Immutable Properties):
+      // draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
       // IMMUTABLE_PROPERTIES MUST NOT recursively contain an
       // IMMUTABLE_PROPERTIES property. 早期検出のため、内側の KVP を走査して
       // IMMUTABLE_PROPERTIES (0x0B) が再度現れないか検証する。
@@ -847,7 +977,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
             const [deltaId, deltaIdLen] = decodeVarint(extData.subarray(innerOffset));
             const innerId = innerPreviousId + deltaId;
 
-            // draft-ietf-moq-transport-20 Section 1.4.3:
+            // draft-ietf-moq-transport-21 Section 8.3:
             // "The previous Type value plus the Delta Type MUST NOT be greater
             //  than 2^64 - 1. If a Delta Type is received that would be too large,
             //  the Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -858,17 +988,31 @@ export function decodeProperties(data: Uint8Array): Property[] {
             }
 
             innerPreviousId = innerId;
+            // draft-ietf-moq-transport-21 §3.6:
+            // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
+            // 処理・転送してはならない。Immutable Properties 配下でも malformed。
+            if (innerId >= 0x4000n && innerId <= 0x7fffn) {
+              throw new MalformedTrackError(
+                `unknown mandatory track property: type 0x${innerId.toString(16)}`,
+              );
+            }
             if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
               throw new MalformedTrackError(
                 "immutable properties must not recursively contain another immutable properties key",
               );
             }
             if (innerId % 2n === 0n) {
-              const [, valueLen] = decodeVarint(extData.subarray(innerOffset + deltaIdLen));
+              const [, valueLen] = decodeKnownPropertyVarint(
+                innerId,
+                extData,
+                innerOffset + deltaIdLen,
+              );
               innerOffset += deltaIdLen + valueLen;
             } else {
-              const [innerLength, innerLengthLen] = decodeVarint(
-                extData.subarray(innerOffset + deltaIdLen),
+              const [innerLength, innerLengthLen] = decodeKnownPropertyVarint(
+                innerId,
+                extData,
+                innerOffset + deltaIdLen,
               );
               // Length 宣言が残りバイトを超える切り詰めは破損であり、
               // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
@@ -943,23 +1087,23 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
 
 // ============================================================================
 // Object Property: Delivery Timeout ヘルパー
-// draft-ietf-moq-transport-20 Section 8 / 12.1 / 12.2
+// draft-ietf-moq-transport-21 Section 5.2 / 10.1 / 10.2
 // ============================================================================
 
 /**
  * Object Properties バイト列を Key-Value-Pairs（Figure 2、delta encoding）で
  * 寛容にデコードする
  *
- * draft-ietf-moq-transport-20 §1.4.3:
+ * draft-ietf-moq-transport-21 §8.3:
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *
  * 寛容なデコード: 不完全・不正なデータではそこで停止し、complete=false で
  * 途中まで読めた Property 列を返す。Delta Type オーバーフロー / Length 上限など
- * の §1.4.3 の MUST 検証は行わない（Track 向け decodeProperties の厳密検証は
+ * の §8.3 の MUST 検証は行わない（Track 向け decodeProperties の厳密検証は
  * 流用しない。Object バイト列に適用すると誤って MalformedTrackError になり得る）。
  *
- * OBJECT_PROPERTY_FILTER の評価 (draft-ietf-moq-transport-20 §5.1.4) でも
+ * OBJECT_PROPERTY_FILTER の評価 (draft-ietf-moq-transport-21 §3.3.2) でも
  * 同じ寛容経路を使用する (Object バイト列には Track 向けの検証を適用しない)。
  *
  * @returns complete=false のとき、properties は途中までデコードできた Property 列
@@ -1003,47 +1147,144 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
   return { properties, complete: true };
 }
 
-// IMMUTABLE_PROPERTIES の再帰ネストの許容深さ
-// draft-ietf-moq-transport-20 §12.7:
-// IMMUTABLE_PROPERTIES は再帰的に IMMUTABLE_PROPERTIES を含んではならない。
-// 悪意ある深いネストでスタックオーバーフロー (RangeError) に至らないよう上限を設ける
-// (filter.ts の MAX_PROPERTY_NESTING_DEPTH と同値)。
-const MAX_OBJECT_PROPERTY_NESTING_DEPTH = 8;
-
 /**
- * Object Properties に Mandatory Track Property (0x4000-0x7FFF) が含まれないか検証する
+ * Object Properties を検証する
  *
- * draft-ietf-moq-transport-20 §2.5.1:
+ * draft-ietf-moq-transport-21 §3.6:
  * "An Object received with a Mandatory Track Property as an Object Property is
- *  malformed (see Section 2.4.2)."
+ *  malformed (see Section 12.1)."
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "An Object MUST NOT contain more than one instance of this property."
+ * "An Object contains an Immutable Properties property that contains another
+ *  Immutable Properties key." → malformed
  *
  * decodeObjectPropertiesTolerant でデコードできた Property の ID を確認する。
  * 不完全・不正な delta / Length では検出を打ち切り、PROTOCOL_VIOLATION は送出しない
  * (寛容契約を維持する)。
  *
- * @throws MalformedTrackError 0x4000-0x7FFF の Mandatory Track Property を検出した場合
+ * @throws MalformedTrackError 以下のいずれかを検出した場合
+ *   - 0x4000-0x7FFF の Mandatory Track Property
+ *   - IMMUTABLE_PROPERTIES の複数出現
+ *   - IMMUTABLE_PROPERTIES の再帰ネスト
  */
 export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Array): void {
-  assertNoMandatoryTrackPropertyInObjectPropertiesInternal(data, 0);
+  assertObjectPropertyList(data, false);
 }
 
-function assertNoMandatoryTrackPropertyInObjectPropertiesInternal(
-  data: Uint8Array,
-  depth: number,
-): void {
-  if (depth > MAX_OBJECT_PROPERTY_NESTING_DEPTH) {
-    throw new MalformedTrackError("object property nesting depth exceeds maximum");
-  }
+/**
+ * Object Properties の KVP 列を検証する
+ *
+ * IMMUTABLE_PROPERTIES の再帰ネストは §10.7 で malformed とされるため、
+ * 内側は 1 段だけ検査し、内側に現れる IMMUTABLE_PROPERTIES は検出時点で
+ * MalformedTrackError とする (深いネストによるスタック枯渇も同時に防ぐ)。
+ *
+ * @param data - KVP 列のバイト列
+ * @param nested - IMMUTABLE_PROPERTIES の内側なら true
+ */
+function assertObjectPropertyList(data: Uint8Array, nested: boolean): void {
+  let immutableCount = 0;
   for (const property of decodeObjectPropertiesTolerant(data).properties) {
     if (property.id >= 0x4000n && property.id <= 0x7fffn) {
       throw new MalformedTrackError(
         `mandatory track property as object property: type 0x${property.id.toString(16)}`,
       );
     }
-    // draft-ietf-moq-transport-20 §12.7:
+    if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+      continue;
+    }
+    // draft-ietf-moq-transport-21 §10.7:
+    // IMMUTABLE_PROPERTIES は再帰的に IMMUTABLE_PROPERTIES を含んではならない
+    if (nested) {
+      throw new MalformedTrackError(
+        "immutable properties must not recursively contain another immutable properties key",
+      );
+    }
+    // draft-ietf-moq-transport-21 §10.7:
+    // "An Object MUST NOT contain more than one instance of this property."
+    immutableCount++;
+    if (immutableCount > 1) {
+      throw new MalformedTrackError(
+        "Object contains more than one instance of IMMUTABLE_PROPERTIES",
+      );
+    }
+    // draft-ietf-moq-transport-21 §10.7:
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
-    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      assertNoMandatoryTrackPropertyInObjectPropertiesInternal(property.data, depth + 1);
+    if (property.data !== undefined) {
+      assertObjectPropertyList(property.data, true);
+    }
+  }
+}
+
+/**
+ * Object Properties 内の Prior Group ID Gap / Prior Object ID Gap を検証する
+ *
+ * draft-ietf-moq-transport-21 §10.8 (Prior Group ID Gap):
+ * "A Track is considered malformed (see Section 12.1) if any of the following
+ *  conditions are detected: ... An Object has a Prior Group ID Gap larger than
+ *  the Group ID."
+ * draft-ietf-moq-transport-21 §10.9 (Prior Object ID Gap):
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ *
+ * 単一 Object の情報だけで判定できる上記条件のみを検証する。以下は同一 Track
+ * の複数 Object と過去の受信状態を追跡する必要があるため実装しない:
+ * - §10.8: 同一 Group 内で異なる値の Prior Group ID Gap を持つ Object の受信
+ * - §10.8: 過去に受信した Object を覆う Prior Group ID Gap を持つ Object の受信
+ * - §10.8: 過去に通知された gap 内の Group ID を持つ Object の受信
+ * - §10.9: 過去に受信した Object を覆う Prior Object ID Gap を持つ Object の受信
+ * - §10.9: 過去に通知された gap 内の Object ID を持つ Object の受信
+ * (追跡には Track 単位の受信履歴が必要であり、Object デコード関数の引数に
+ *  存在しないため未実装とする。§10.7 により IMMUTABLE_PROPERTIES 配下も
+ *  検索する。不完全・不正な KVP は decodeObjectPropertiesTolerant の契約どおり
+ *  読み飛ばす)
+ *
+ * @throws MalformedTrackError gap が Group ID / Object ID より大きい場合
+ */
+export function assertPriorIdGapInObjectProperties(
+  groupId: bigint,
+  objectId: bigint,
+  properties: Uint8Array | undefined,
+): void {
+  if (properties === undefined || properties.length === 0) {
+    return;
+  }
+  assertPriorIdGapInProperties(
+    decodeObjectPropertiesTolerant(properties).properties,
+    groupId,
+    objectId,
+  );
+}
+
+/**
+ * Property 列 (IMMUTABLE_PROPERTIES 配下を含む) の Prior ID Gap を再帰的に検証する
+ *
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ */
+function assertPriorIdGapInProperties(
+  properties: ReadonlyArray<Property>,
+  groupId: bigint,
+  objectId: bigint,
+): void {
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
+      if (property.value > groupId) {
+        throw new MalformedTrackError(
+          `prior group id gap exceeds group id: gap=${property.value}, group=${groupId}`,
+        );
+      }
+    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
+      if (property.value > objectId) {
+        throw new MalformedTrackError(
+          `prior object id gap exceeds object id: gap=${property.value}, object=${objectId}`,
+        );
+      }
+    } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
+      assertPriorIdGapInProperties(
+        decodeObjectPropertiesTolerant(property.data).properties,
+        groupId,
+        objectId,
+      );
     }
   }
 }
@@ -1051,12 +1292,12 @@ function assertNoMandatoryTrackPropertyInObjectPropertiesInternal(
 /**
  * Object Properties バイト列から delivery timeout 値を寛容に抽出する
  *
- * draft-ietf-moq-transport-20 Section 8:
+ * draft-ietf-moq-transport-21 Section 5.2:
  * subgroup 先頭オブジェクトの Object Property で Track 値を上書きできる。
  * Track 向け decodeProperties とは異なり、Mandatory Track Property 検証や
  * validateTrackPropertyValue は行わない（Object バイト列に載せると誤るため）。
  *
- * §1.4.3 の Key-Value-Pairs（delta encoding）でデコードする。delta 形式は Type が
+ * §8.3 の Key-Value-Pairs（delta encoding）でデコードする。delta 形式は Type が
  * 前 Property との差分で連鎖するため、途中で壊れた場合は後続 Property の抽出が
  * 全滅し、抽出済みの先行値のみが保持される（absolute 形式より寛容性が低下する
  * 既知の制約）。
@@ -1090,10 +1331,10 @@ export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | und
 /**
  * 既存の Object Properties バイト列に型付き delivery timeout 値を合成する
  *
- * draft-ietf-moq-transport-20 Section 8:
+ * draft-ietf-moq-transport-21 Section 5.2:
  * 同一 ID が既存 properties にある場合、型付き値を優先して上書きする。
  *
- * §1.4.3 の Key-Value-Pairs（delta encoding）に従い、既存バイト列をデコードして
+ * §8.3 の Key-Value-Pairs（delta encoding）に従い、既存バイト列をデコードして
  * Property[] に分解し、上書き ID（0x02 / 0x06）の全出現を除外して型付き値を 1 つ
  * 追加し、ID 昇順で再エンコードする（再構成方式）。delta は前 Property との差分で
  * Type をエンコードするため、既存バイト列のスライスコピーや末尾追記はできない。

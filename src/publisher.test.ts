@@ -1,6 +1,6 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-20 Section 5.2
+ * draft-ietf-moq-transport-21 Section 3.2.1
  */
 
 import { test, assert } from "vite-plus/test";
@@ -55,7 +55,7 @@ test("done は closed 状態では onDoneInternal を呼ばない", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.12:
+ * draft-ietf-moq-transport-21 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信が起きないよう、
  * 進行中の done() を再利用して onDoneInternal を 1 回だけ実行することを検証する。
  */
@@ -178,7 +178,7 @@ test("done 実行中に markClosed されても onDoneInternal は 1 回だけ�
   assert.equal(publisher.state, "closed");
 });
 
-// draft-ietf-moq-transport-20 §10.4 (GOAWAY):
+// draft-ietf-moq-transport-21 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -196,7 +196,7 @@ test("goawayCallback が設定できる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2:
+ * draft-ietf-moq-transport-21 §11.1.2 / §11.1.3:
  * status / payload 整合と END_OF_TRACK 後送信の検証。
  * 違反は委譲前に検出し、通知と返値の reject (sendObject) または
  * 通知と同期 throw (sendDatagram) で呼び出し側へ返す。
@@ -460,4 +460,150 @@ test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
   assert.isTrue(thrown instanceof ProtocolViolationError);
   assert.equal(errors.length, 1);
   assert.strictEqual(errors[0], thrown);
+});
+
+// ============================================================================
+// draft-21 適合監査: LARGEST_OBJECT 用の最大 Location 追跡 (F-1)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+ * 未送信の Publisher の最大 Location は null であることを検証する。
+ */
+test("getLargestLocation: 未送信は null", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  assert.isNull(publisher.getLargestLocation());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * sendObject で送信した最大 Location を保持することを検証する。
+ * Group が大きい方、同一 Group では Object が大きい方を最大とする。
+ */
+test("getLargestLocation: sendObject で最大 Location を更新する", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onSendObject = async () => {};
+
+  await publisher.sendObject({ groupId: 1, objectId: 2, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 2n });
+
+  // 同一 Group のより大きい Object で更新される
+  await publisher.sendObject({ groupId: 1, objectId: 5, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 5n });
+
+  // より小さい Location では後退しない
+  await publisher.sendObject({ groupId: 0, objectId: 9, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 5n });
+
+  // より大きい Group で更新される
+  await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 3n, object: 0n });
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * sendDatagram でも最大 Location を更新することを検証する。
+ */
+test("getLargestLocation: sendDatagram で最大 Location を更新する", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onSendDatagram = () => {};
+
+  publisher.sendDatagram({ groupId: 2, objectId: 7, payload: new Uint8Array() });
+  assert.deepEqual(publisher.getLargestLocation(), { group: 2n, object: 7n });
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * 非整数の Group / Object ID は送信経路で fail-fast 拒否されるため、
+ * 最大 Location には記録しないことを検証する。
+ */
+test("getLargestLocation: 非整数 ID は記録しない", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onSendObject = async () => {};
+
+  await publisher.sendObject({ groupId: 1.5, objectId: 0, payload: new Uint8Array() });
+  assert.isNull(publisher.getLargestLocation());
+});
+
+// ============================================================================
+// draft-21 適合監査 D-10: Forward State = 0 では Object を送信しない
+// draft-ietf-moq-transport-21 §3.1
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * "The publisher does not send Objects if the Forward State is 0, and does
+ *  send them if the Forward State is 1. ... Control messages, such as
+ *  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
+ * Forward State = 0 のとき sendObject は委譲先を呼ばず resolve する。
+ */
+test("forwardState=false の sendObject は送信しない", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+  publisher.setForwardState(false);
+
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+
+  assert.equal(sent, 0);
+  // 送信していないため LARGEST_OBJECT も更新しない
+  assert.isNull(publisher.getLargestLocation());
+});
+
+/**
+ * Forward State を 1 に戻すと再び送信されることを検証する。
+ */
+test("forwardState=false から true に戻すと sendObject は送信する", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendObject = async () => {
+    sent++;
+  };
+  publisher.setForwardState(false);
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  publisher.setForwardState(true);
+  await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
+
+  assert.equal(sent, 1);
+  assert.deepEqual(publisher.getLargestLocation(), { group: 0n, object: 1n });
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * Datagram も Object であるため、Forward State = 0 では送信しない。
+ */
+test("forwardState=false の sendDatagram は送信しない", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let sent = 0;
+  publisher.onSendDatagram = () => {
+    sent++;
+  };
+  publisher.setForwardState(false);
+
+  publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+
+  assert.equal(sent, 0);
+  assert.isNull(publisher.getLargestLocation());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1:
+ * "Control messages, such as PUBLISH_DONE ... are sent regardless of the
+ *  forward state."
+ * Forward State = 0 でも done() は onDoneInternal を呼ぶ。
+ */
+test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  let doneCalled = false;
+  publisher.onDoneInternal = async () => {
+    doneCalled = true;
+  };
+  publisher.setForwardState(false);
+
+  await publisher.done();
+
+  assert.isTrue(doneCalled);
+  assert.equal(publisher.state, "closed");
 });

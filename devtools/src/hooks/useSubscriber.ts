@@ -393,7 +393,7 @@ export function useSubscriber(
       let actualTrackName = settings.trackName.value;
 
       try {
-        // draft-ietf-moq-transport-20 に準拠した Catalog 購読:
+        // draft-ietf-moq-transport-21 に準拠した Catalog 購読:
         // 1. Next Object 形式の Location Filter で SUBSCRIBE し、live の Catalog 更新を受信
         // 2. 独立した FETCH (フィルタなし) で過去の Catalog を取得
         // FETCH が INVALID_RANGE で失敗する場合 (Catalog 未 publish) は
@@ -626,7 +626,7 @@ export function useSubscriber(
       } = {};
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
-      // draft-ietf-moq-transport-20 §10.2.19: SUBSCRIBE では MAY (foreknowledge 不要、
+      // draft-ietf-moq-transport-21 §9.20.20: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestKeyframe では DYNAMIC_GROUPS=1 を確認する。
       if (newGroupRequestEnabled) {
@@ -747,7 +747,7 @@ export function useSubscriber(
       return;
     }
 
-    // draft-ietf-moq-transport-20 §10.2.19:
+    // draft-ietf-moq-transport-21 §9.20.20:
     // "A subscriber MUST NOT send this parameter in
     //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
     //  Property with value 1."
@@ -762,7 +762,7 @@ export function useSubscriber(
 
     try {
       // NEW_GROUP_REQUEST パラメータを含む REQUEST_UPDATE を送信
-      // draft-ietf-moq-transport-20 §10.2.19
+      // draft-ietf-moq-transport-21 §9.20.20
       // NEW_GROUP_REQUEST = 0x32。値は送信時点の最新 Group ID + 1
       // (情報なし時は 0) とし、SUBSCRIBE 直後の snapshot は使わない。
       const largestLocation = subscriberInstance.largestLocation;

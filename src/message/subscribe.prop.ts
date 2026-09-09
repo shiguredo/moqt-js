@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages Property-Based Tests
- * draft-ietf-moq-transport-20 Section 10.7-10.9
+ * draft-ietf-moq-transport-21 Section 9.5-9.7
  */
 
 import { test, assert } from "vite-plus/test";
@@ -28,7 +28,7 @@ import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -38,7 +38,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-20 §10.2.8 / §10.2.18: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-21 §9.20.9 / §9.20.19: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -78,8 +78,8 @@ const lengthPrefixedParameterArb = fc
 /**
  * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-20 §10.2.20:
- * Value は §2.4.1 の Track Namespace エンコーディング (自己区切り)。
+ * draft-ietf-moq-transport-21 §9.20.21:
+ * Value は §8.7 の Track Namespace エンコーディング (自己区切り)。
  * encodeParameterTrackNamespace の出力で構築する
  * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
  */
@@ -90,7 +90,7 @@ const trackNamespaceParameterArb = fc
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
+ * draft-ietf-moq-transport-21 §9.20.10: Value は「Length + optional vi64 フィールド」の
  * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
  * フィールド数 0 (reset) 〜 4 の全ケースを網羅する
@@ -144,9 +144,9 @@ const parametersArb = fc
 /**
  * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * SUBSCRIBE_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 // 値域制約のある Track Property は除外する (validateTrackPropertyValue で
 // ProtocolViolationError になりラウンドトリップが成立しないため)
@@ -182,9 +182,9 @@ const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropert
 const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
 
 /**
- * draft-ietf-moq-transport-20 Section 2.3:
+ * draft-ietf-moq-transport-21 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -229,9 +229,9 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * SUBSCRIBE_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 test("SubscribeOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -277,7 +277,7 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 10:
+ * draft-ietf-moq-transport-21 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は SUBSCRIBE ペイロードの最後のフィールドであり、
@@ -315,7 +315,7 @@ test("SUBSCRIBE の末尾に後続データがあると ProtocolViolationError �
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 10.9:
+ * draft-ietf-moq-transport-21 Section 9.5:
  * REQUEST_UPDATE は既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
  * 更新対象のリクエストは同じ bidi stream で特定される。
@@ -344,7 +344,7 @@ test("RequestUpdate のエンコード・デコードがラウンドトリップ
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 10:
+ * draft-ietf-moq-transport-21 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は REQUEST_UPDATE ペイロードの最後のフィールドであり、

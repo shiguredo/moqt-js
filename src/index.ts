@@ -2,14 +2,14 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-20
+ * draft-ietf-moq-transport-21
  */
 
 import { type Session, type ConnectCallbacks, type ConnectOptions, SessionImpl } from "./session";
 import { normalizeMoqtUri } from "./moqtUri";
 import { assertMsfConnectionSupported } from "./msf";
 
-// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-20 §3.1.1 / §3.1.2)
+// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-21 §6.1 / §6.1.1)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
 
 // 公開型の再エクスポート
@@ -40,7 +40,7 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-20 §11.4.2)
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-21 §11.3.1)
 export {
   type PendingSubgroupBufferOptions,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
@@ -49,7 +49,7 @@ export {
 // メッセージ型の再エクスポート
 export type { LocationFilter, Location, Parameter } from "./message";
 
-// Authorization Token の再エクスポート (draft-ietf-moq-transport-20 Section 10.2.2)
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-21 Section 9.20.3)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,
@@ -126,7 +126,7 @@ export {
   type VideoFrameSource,
 } from "./frameSource";
 
-// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-20 Section 12 (MOQT Properties))
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-21 Section 10 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,
@@ -223,6 +223,15 @@ export async function connect(
     transportOptions.serverCertificateHashes = options.serverCertificateHashes;
   }
 
+  // draft-ietf-moq-transport-21 §6.2 / §6.2.1:
+  // "MOQT uses ALPN in QUIC and "WT-Available-Protocols" in WebTransport to
+  //  perform version negotiation." / "The client includes MOQT protocol
+  //  identifiers in the WT-Available-Protocols header."
+  // draft 版の ALPN は "moqt-" + draft 番号であり、draft-21 は "moqt-21"。
+  // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
+  // protocols は TypeScript 6.0 の DOM 型で追加されたため、5.x でも通るようキャストする。
+  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-21"];
+
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
 
@@ -234,14 +243,17 @@ export async function connect(
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
-  // draft-ietf-moq-transport-20 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
-  // draft-ietf-moq-transport-20 §10.3.1.5 / §13.8
-  // grease: true は GREASE Setup Option (§14) を追加する
+  // draft-ietf-moq-transport-21 §9.1.5 / §15.8
+  // grease: true は GREASE Setup Option (§13) を追加する
   await session.initialize({
     authorizationToken: options?.authorizationToken,
     moqtImplementation: options?.moqtImplementation,
     grease: options?.grease,
+    maxAuthTokenCacheSize: options?.maxAuthTokenCacheSize,
+    maxRequestUpdates: options?.maxRequestUpdates,
+    maxFilterRanges: options?.maxFilterRanges,
   });
 
   return session;

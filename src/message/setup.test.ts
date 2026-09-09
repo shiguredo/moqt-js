@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages Unit Tests
- * draft-ietf-moq-transport-20 Section 10.3
+ * draft-ietf-moq-transport-21 Section 9.1
  */
 
 import { test, assert } from "vite-plus/test";
@@ -12,6 +12,9 @@ import {
   getSetupAuthority,
   getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
+  getSetupMaxAuthTokenCacheSize,
+  getSetupMaxRequestUpdates,
+  getSetupMaxFilterRanges,
 } from "./setup";
 import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
@@ -29,7 +32,7 @@ test("Setup: パラメータなしで作成", () => {
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-// draft-ietf-moq-transport-20 §10.3.1.1 / §10.3.1.2:
+// draft-ietf-moq-transport-21 §9.1.1 / §9.1.2:
 // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
 // moqt-js は WebTransport 専用クライアントのため createSetup には PATH / AUTHORITY を
 // 受け付ける引数を持たない (送信不可) ことを確認する。
@@ -49,7 +52,7 @@ test("Setup: 存在しないパラメータは undefined", () => {
   assert.isDefined(getSetupMoqtImplementation(setup));
 });
 
-// draft-ietf-moq-transport-20 §13.8 (Implementation Identification Fingerprinting):
+// draft-ietf-moq-transport-21 §15.8 (Implementation Identification Fingerprinting):
 // プライバシー緩和策として「オプションを完全に省略する」「汎用的な値を送る」
 // 「利用者が設定・無効化できるようにする」が MAY として提示されている。
 // moqtImplementation: false で opt-out（省略）、文字列で override（任意の値）を送信する。
@@ -90,7 +93,7 @@ test("Setup: moqtImplementation: false でも AUTHORIZATION_TOKEN は送信さ�
   assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
 });
 
-// draft-ietf-moq-transport-20 §14 (Grease):
+// draft-ietf-moq-transport-21 §13 (Grease):
 // GREASE 値は 0x7f * N + 0x9D パターンの予約値。grease: true で SETUP に 1 つ追加する。
 // Option Type はランダム生成のため、isGreaseValue() で予約値であることを検証する。
 test("Setup: grease 未指定は GREASE Option を含まない", () => {
@@ -139,7 +142,7 @@ test("Setup: grease: true でも MOQT_IMPLEMENTATION は送信される", () => 
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-// draft-ietf-moq-transport-20 Section 10.3:
+// draft-ietf-moq-transport-21 Section 9.1:
 // Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
 // カウントプレフィックスを持たない。Length フィールドで終端が決まる。
 test("Setup: エンコード結果にカウントプレフィックスがない", () => {
@@ -154,7 +157,7 @@ test("Setup: エンコード結果にカウントプレフィックスがない"
   assert.equal(Number(firstVarint), SetupOptionType.MOQT_IMPLEMENTATION);
 });
 
-// draft-ietf-moq-transport-20 Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
+// draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
 test("Setup: AUTHORIZATION_TOKEN (USE_VALUE) 付きで roundtrip", () => {
   const tokenValue = new TextEncoder().encode("jwt-payload");
   const setup = createSetup({
@@ -205,7 +208,7 @@ test("Setup: AUTHORIZATION_TOKEN (REGISTER) 付きで roundtrip", () => {
   }
 });
 
-// draft-ietf-moq-transport-20 Section 10.2.2:
+// draft-ietf-moq-transport-21 Section 9.20.3:
 // "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
 //  it MUST close the session with a PROTOCOL_VIOLATION."
 test("Setup: SETUP で DELETE の Authorization Token を指定すると throw", () => {
@@ -236,4 +239,56 @@ test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると thro
 
 test("Setup: AUTHORIZATION_TOKEN の Setup Option Type は 0x03", () => {
   assert.equal(SetupOptionType.AUTHORIZATION_TOKEN, 0x03);
+});
+
+// ============================================================================
+// draft-21 適合監査: SETUP の上限広告 (A-5)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.3 / §9.1.7 / §9.1.6:
+ * MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES を
+ * SETUP で広告でき、ラウンドトリップ後に各ゲッターで取得できることを検証する。
+ */
+test("Setup: MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES を広告して roundtrip する", () => {
+  const setup = createSetup({
+    maxAuthTokenCacheSize: 1024,
+    maxRequestUpdates: 8,
+    maxFilterRanges: 4,
+  });
+
+  // 3 つの Option と MOQT_IMPLEMENTATION が含まれる
+  assert.isDefined(
+    setup.parameters.find((p) => p.type === SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE),
+  );
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_REQUEST_UPDATES));
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_FILTER_RANGES));
+
+  const decoded = decodeSetupPayload(encodeSetupPayload(setup));
+  assert.equal(getSetupMaxAuthTokenCacheSize(decoded), 1024);
+  assert.equal(getSetupMaxRequestUpdates(decoded), 8);
+  assert.equal(getSetupMaxFilterRanges(decoded), 4);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.3 / §9.1.7 / §9.1.6:
+ * 各 Option を省略した場合の既定値は 0 であることを検証する
+ * (MAX_REQUEST_UPDATES の 0 は無制限、MAX_FILTER_RANGES の 0 は受信拒否)。
+ */
+test("Setup: 上限 Option を省略すると既定値 0 になる", () => {
+  const setup = createSetup();
+  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 0);
+  assert.equal(getSetupMaxRequestUpdates(setup), 0);
+  assert.equal(getSetupMaxFilterRanges(setup), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 / §9.1.7:
+ * 明示的に 0 を指定した場合も Option 自体は送信されることを検証する
+ * (未指定と 0 はゲッター上では同じ 0 だが、ワイヤ上は区別される)。
+ */
+test("Setup: 上限に 0 を明示すると Option を送信する", () => {
+  const setup = createSetup({ maxRequestUpdates: 0, maxFilterRanges: 0 });
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_REQUEST_UPDATES));
+  assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_FILTER_RANGES));
 });

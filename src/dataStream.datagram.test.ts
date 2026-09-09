@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Datagram テスト
- * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
+ * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -12,7 +12,7 @@ import {
 } from "./dataStream";
 import { IncompleteDataError, MalformedTrackError } from "./error";
 import { ObjectStatus } from "./message/types";
-import { appendGreaseObjectProperty, encodeProperties } from "./properties";
+import { appendGreaseObjectProperty, encodeProperties, MOQTPropertyId } from "./properties";
 import { isGreaseValue } from "./grease";
 import { decodeVarint } from "./varint";
 
@@ -122,7 +122,7 @@ test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-20 §11.3.1:
+ * draft-ietf-moq-transport-21 §11.2.1:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤配信を避け、IncompleteDataError を
  * throw することを検証する (受信側では PROTOCOL_VIOLATION に変換されて
@@ -136,7 +136,7 @@ test("ObjectDatagram: Priority バイトでバッファが切れていると Inc
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 11.3.1:
+ * draft-ietf-moq-transport-21 Section 11.2.1:
  * Properties Length が宣言するバイト数に datagram が満たない場合、
  * 切り詰めた Properties と空ペイロードの不正 datagram を配信せず、
  * IncompleteDataError を throw する (受信側では PROTOCOL_VIOLATION に
@@ -150,7 +150,7 @@ test("ObjectDatagram: Properties バイト列途中でバッファが切れて�
 });
 
 /**
- * draft-ietf-moq-transport-20 §2.5.1:
+ * draft-ietf-moq-transport-21 §3.6:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む Object は
  * malformed であり、decodeObjectDatagram が MalformedTrackError を throw する。
  */
@@ -166,6 +166,31 @@ test("ObjectDatagram: Mandatory Track Property を含む Object Property で Mal
   };
   const encoded = encodeObjectDatagram(datagram);
   assert.throws(() => decodeObjectDatagram(encoded), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "An Object MUST NOT contain more than one instance of this property."
+ * Object Property に IMMUTABLE_PROPERTIES (0x0B) が 2 回現れる datagram は
+ * malformed であり、decodeObjectDatagram が MalformedTrackError を throw する。
+ */
+test("ObjectDatagram: IMMUTABLE_PROPERTIES が重複する Object Property で MalformedTrackError", () => {
+  // [0x0b, 0x00, 0x00, 0x00] = (deltaId=0x0B, length=0), (deltaId=0x00, length=0)
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    properties: new Uint8Array([0x0b, 0x00, 0x00, 0x00]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const encoded = encodeObjectDatagram(datagram);
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    "Object contains more than one instance of IMMUTABLE_PROPERTIES",
+  );
 });
 
 const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }> = [
@@ -213,7 +238,7 @@ const objectDatagramTestCases: Array<{ name: string; datagram: ObjectDatagram }>
       payload: new Uint8Array([0xaa]),
     },
   },
-  // draft-ietf-moq-transport-20 Section 11.3.1:
+  // draft-ietf-moq-transport-21 Section 11.2.1:
   // 0x2C = STATUS(0x20) + DEFAULT_PRIORITY(0x08) + ZERO_OBJECT_ID(0x04)
   // Priority Present なし (0x08-0x0F, 0x28-0x2D は Priority なし)。END_OF_TRACK status
   {
@@ -285,7 +310,7 @@ function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
   return ids;
 }
 
-// draft-ietf-moq-transport-20 §14 (Grease):
+// draft-ietf-moq-transport-21 §13 (Grease):
 // grease opt-in 時、Object Properties に GREASE Property を 1 つ注入する。
 // 元々 properties がない datagram でも Properties Present ビット（Datagram Type bit 0）が
 // 立った EXT 型となり、GREASE Property がラウンドトリップすることを検証する。
@@ -318,7 +343,7 @@ test("ObjectDatagram: GREASE Object Properties が EXT 型でラウンドトリ�
 });
 
 /**
- * draft-ietf-moq-transport-20 §11.3:
+ * draft-ietf-moq-transport-21 §11.2:
  * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
  * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
  */
@@ -368,7 +393,7 @@ test("ObjectDatagram: 範囲外・非整数の publisherPriority は throw す�
 });
 
 /**
- * draft-ietf-moq-transport-20 §11.3:
+ * draft-ietf-moq-transport-21 §11.2:
  * Priority なし型では不正値が渡されても検証せず throw しないことを検証する。
  * (検証は Priority Present 分岐内でのみ行う)
  */
@@ -382,4 +407,81 @@ test("ObjectDatagram: Priority なし型では範囲外 priority でも throw �
     payload: new Uint8Array([0xaa]),
   });
   assert.isDefined(encoded);
+});
+
+// ============================================================================
+// draft-21 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// draft-ietf-moq-transport-21 §10.8 / §10.9
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object has a Prior Group ID Gap larger than the Group ID."
+ * Group 0 の datagram に Prior Group ID Gap = 1 を付けると malformed。
+ */
+test("ObjectDatagram: Prior Group ID Gap が Group ID より大きいと MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    /prior group id gap exceeds group id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * "An Object has a Prior Object ID Gap larger than the Object ID."
+ * Object 0 の datagram に Prior Object ID Gap = 1 を付けると malformed。
+ */
+test("ObjectDatagram: Prior Object ID Gap が Object ID より大きいと MalformedTrackError", () => {
+  const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 1n }]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    /prior object id gap exceeds object id/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * gap が Group ID / Object ID 以下なら malformed ではない (誤検出しない)。
+ */
+test("ObjectDatagram: gap が Group ID / Object ID 以下ならデコードできる", () => {
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  const [decoded] = decodeObjectDatagram(encoded);
+  assert.equal(decoded.groupId, 0n);
+  assert.equal(decoded.objectId, 0n);
 });

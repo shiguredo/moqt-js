@@ -3,7 +3,7 @@
  * (subscribe / publish / namespace / trackstatus 用。fetch / parameter /
  * session / properties は各 test にある)。
  *
- * draft-ietf-moq-transport-20 §10:
+ * draft-ietf-moq-transport-21 §9:
  * 制御ストリームは外側でフレーミング済みのため、Length 宣言が
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。
