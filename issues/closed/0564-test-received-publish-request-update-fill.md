@@ -1,7 +1,7 @@
 # 受信 PUBLISH 経路の REQUEST_UPDATE に含まれる FILL_PARAMETERS の受理挙動を固定する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/refactor-received-publish-fill
 - Polished: 2026-09-09
 
@@ -37,3 +37,11 @@
 - `registerRawFillFetchTarget` / `bidiSendRequestUpdate` / `applyPublishRequestUpdate`（`src/session/bidi.ts`）
 - `issues/closed/0450-draft-20-add-fill-parameters-and-fill-fetch.md`
 - `issues/closed/0541-bug-fill-parameters-no-fill-stream.md`
+
+## 解決方法
+
+受信 PUBLISH 経路の FILL_PARAMETERS 受理挙動を仕様根拠つきで固定した。
+
+- `src/session/bidi.ts` の `bidiHandlePublishRequestUpdate` に、§3.4.1 の fill 開設主体の定義と、送信 PUBLISH 側 (`applyPublishRequestUpdate`) が REQUEST_ERROR (NOT_SUPPORTED) で拒否する役割差による正当な非対称であることをコメントする
+- `src/session/bidi.test.ts` に、受信 PUBLISH 経路の FILL_PARAMETERS を含む REQUEST_UPDATE で REQUEST_OK が返り、`fillFetchTargets` に登録されないことを検証するテストを追加する
+- `vp check` / `tsc --noEmit` / `vp test run` が通ることを確認する

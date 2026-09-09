@@ -1463,6 +1463,17 @@ export async function bidiHandlePublishRequestUpdate(
     }
   }
 
+  // draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+  // 「A publisher opens a fill fetch stream when it processes a SUBSCRIBE or
+  //  REQUEST_UPDATE that carries FILL_PARAMETERS while Forward State is 1.」
+  // 受信 PUBLISH 経路で REQUEST_UPDATE を処理するのは moqt-js (subscriber) で
+  // あり、fill fetch ストリームを開く主体 (publisher) ではない。この方向では
+  // fill ストリームは開かれないため、FILL_PARAMETERS は検証後に受理して
+  // REQUEST_OK を返し、fillFetchTargets へは登録しない。
+  // 送信 PUBLISH 側 (moqt-js が publisher) は applyPublishRequestUpdate が
+  // fill を開けないため REQUEST_ERROR (NOT_SUPPORTED) で拒否する。役割差による
+  // 正当な非対称である。
+
   // 判定順序 (5): REQUEST_OK を応答する
   // draft-ietf-moq-transport-21 §9.5:
   // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
