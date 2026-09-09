@@ -1,8 +1,8 @@
 # Publisher が FILL_PARAMETERS を受理したら fill fetch ストリームを開くか拒否する
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
-- Branch: feature/fix-fill-parameters-publisher
+- Completed: 2026-09-09
+- Branch: feature/change-fill-parameters-publisher
 - Polished: 2026-09-08
 
 ## 目的
@@ -43,3 +43,15 @@ draft-ietf-moq-transport-20 §5.1.3.1 は「A publisher opens a fill fetch strea
 - `resolveFilter`（`src/filter.ts`）
 - `src/session/bidi.test.ts`
 - `issues/closed/0450-draft-20-add-fill-parameters-and-fill-fetch.md`（SUBSCRIBE 対象外の先行判断）
+
+## 解決方法
+
+publisher ロールの REQUEST_UPDATE で、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を受理して REQUEST_OK を返していた挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了するようにした。
+
+- `PublisherImpl` に購読の Location Filter を解決済みで保持する `setLocationFilter` / `getResolvedLocationFilter` を追加し、相対指定を設定時点の LARGEST_OBJECT で固定する
+- `bidiReadRequestStreamMessages` の publish ロール REQUEST_UPDATE で `applyPublishRequestUpdate` を呼び、LOCATION_FILTER / FORWARD の反映と fill 範囲の空判定を行う
+- fill 範囲は FILL_PARAMETERS 内の LOCATION_FILTER（要求時点で解決）または購読の解決済み Location Filter を `resolveFilter` で解決し、空・Largest Object より後・Forward State=0 の場合は REQUEST_OK で受理する
+- FILL_PARAMETERS 内側パラメータの検証は既存ブロックのまま拒否判定より先に行う
+- 拒否経路では `bidiTerminatePublishSubscriptionWithUpdateFailed` で PUBLISH_DONE を送り、`PublisherImpl` を closed にする
+- `src/session/bidi.test.ts` に fill 拒否 / Forward State=0 / Largest Object 未受信 / Largest Object より後 / フィルタ自己空 / Next Object / 内側 LOCATION_FILTER 優先 / 購読フィルタ保持 / 相対フィルタ再解決防止 / FORWARD 併載の各テストを追加する
+- `CHANGES.md` の `## develop` に `[CHANGE]` を追記する

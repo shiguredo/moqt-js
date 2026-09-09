@@ -54,6 +54,7 @@ import {
   type Parameter,
   type RangeFilterSpec,
 } from "../message";
+import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "../filter";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
 import type { Property } from "../properties";
@@ -72,6 +73,7 @@ import {
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
 import type { TracksUpdateOptions, SessionState, TrackStatusResult } from "../session";
 import {
+  compareLocations,
   extractForwardState,
   extractLargestLocation,
   validateFetchOkEndLocation,
@@ -1116,6 +1118,9 @@ export async function bidiReadTrackStatusResponse(
 // GOAWAY 受信後の旧リクエストへの REQUEST_UPDATE を拒否する際の reasonPhrase
 export const REQUEST_GOING_AWAY_REASON = "request stream is being migrated";
 
+// publisher が fill fetch ストリームを開けないことを示す REQUEST_ERROR の reasonPhrase
+export const FILL_NOT_SUPPORTED_REASON = "publisher does not support fill fetch streams";
+
 /**
  * リクエストストリーム上にメッセージを送信する
  *
@@ -1187,6 +1192,11 @@ async function bidiTerminatePublishSubscriptionWithUpdateFailed(
 ): Promise<void> {
   const publisher = session.publishers.get(requestId);
   if (publisher !== undefined) {
+    // 先に closed にする。以降に呼ばれるアプリの done() を早期 return させ、
+    // 新たな PUBLISH_DONE 送信 (close 失敗の PROTOCOL_VIOLATION 昇格) を防ぐ。
+    // 既に in-flight の done() は中断できないが、本変更前からの既知のレース。
+    // 後続の sendObject / sendDatagram は closed ガードで fail-fast 拒否される。
+    publisher.markClosed();
     await publishClosePublisherStream(session, publisher.getTrackAlias());
     await publishSendPublishDone(session, publisher, PublishDoneStatusCode.UPDATE_FAILED);
   } else {
@@ -1725,27 +1735,28 @@ export async function bidiReadRequestStreamMessages(
             // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
             // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
             // toProtocolViolationSessionError で PROTOCOL_VIOLATION にして
-            // セッションを閉じる。検証通過後に限り REQUEST_OK を応答する。
-
-            // moqt-js は publisher として fill ストリームを開かないため、検証通過
-            // 後の FILL_PARAMETERS は他の更新パラメータと同様に受けて REQUEST_OK を
-            // 応答する (accept-then-ignore)。
+            // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
+            // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
+            // 除いて REQUEST_OK を応答する。
 
             const publisher = session.publishers.get(requestId);
             if (publisher) {
-              // draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
-              // "If the parameter is omitted from REQUEST_UPDATE, the value for
-              //  the subscription remains unchanged."
-              // FORWARD パラメータが存在する場合のみ反映する (省略時は不変。
-              // bidiHandlePublishRequestUpdate と同パターン)。extractForwardState
-              // は省略時にデフォルト true を返すため、無条件に反映すると
-              // false で送信を止めたアプリの送信が「true 上書き」で再開されて
-              // しまう。
-              const forwardParam = decoded.parameters.find(
-                (param) => param.type === MessageParameterType.FORWARD,
-              );
-              if (forwardParam !== undefined) {
-                publisher.setForwardState(extractForwardState(decoded.parameters));
+              // draft-ietf-moq-transport-21 §3.4 / §3.4.1 / §9.5 / §9.20.19:
+              // LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が
+              // fill fetch ストリームを必要とするかを判定する。moqt-js は
+              // fill fetch ストリームを開けないため、必要な場合は
+              // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
+              // applyPublishRequestUpdate を参照。
+              if (applyPublishRequestUpdate(publisher, decoded.parameters)) {
+                await bidiSendRequestError(
+                  session,
+                  requestId,
+                  RequestErrorCode.NOT_SUPPORTED,
+                  FILL_NOT_SUPPORTED_REASON,
+                );
+                // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
+                await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+                break;
               }
 
               // REQUEST_OK を送信 (draft-ietf-moq-transport-21 §9.5 MUST)
@@ -1925,6 +1936,138 @@ function validateLocationAndFillParameters(parameters: Parameter[]): void {
       decodeFillParameters(param);
     }
   }
+}
+
+/**
+ * publish ロールの REQUEST_UPDATE を購読状態へ反映する
+ *
+ * draft-ietf-moq-transport-21 §9.5:
+ * 「If a parameter previously set on the request is not present in
+ *  REQUEST_UPDATE, its value remains unchanged.」
+ * - LOCATION_FILTER が存在する場合のみ購読の Location Filter を更新する。
+ * - FORWARD が存在する場合のみ Forward State を更新する (省略時に
+ *   extractForwardState がデフォルト true を返すため無条件反映はしない)。
+ * - FILL_PARAMETERS を含み Forward State が 1 で fill 範囲が空でない場合、
+ *   publisher は fill fetch ストリームを開く必要がある。moqt-js は開けない
+ *   ため拒否対象として true を返す。
+ *
+ * @returns FILL_PARAMETERS を理由に REQUEST_ERROR で拒否すべきなら true
+ */
+function applyPublishRequestUpdate(publisher: PublisherImpl, parameters: Parameter[]): boolean {
+  const locationFilterParam = parameters.find(
+    (param) => param.type === MessageParameterType.LOCATION_FILTER,
+  );
+  const forwardParam = parameters.find((param) => param.type === MessageParameterType.FORWARD);
+  const fillParam = parameters.find((param) => param.type === MessageParameterType.FILL_PARAMETERS);
+
+  // 更新適用後の有効値 (省略時は現在値) で fill 範囲を判定する。拒否する更新を
+  // 先に状態へ反映すると、アプリの onForwardStateChange が誤って呼ばれ、
+  // 終了処理中の publisher へ送信を再開させてしまう。反映は受理が確定してから
+  // 行う (検証を状態変更より先に行う既存方針と同じ)。
+  const largestLocation = publisher.getLargestLocation();
+  const decodedLocationFilter =
+    locationFilterParam !== undefined
+      ? decodeLocationFilterParameter(locationFilterParam)
+      : undefined;
+  // 同一更新の LOCATION_FILTER は受信時点の Largest Object で解決する (§3.3.1)。
+  // 省略時は受理済みの解決済みフィルタをそのまま使う (再解決しない)。
+  const effectiveSubscriptionFilter =
+    decodedLocationFilter !== undefined
+      ? resolveFilter(decodedLocationFilter, largestLocation)
+      : publisher.getResolvedLocationFilter();
+  const effectiveForwardState =
+    forwardParam !== undefined ? extractForwardState(parameters) : publisher.forwardState;
+
+  let rejectForFill = false;
+  if (fillParam !== undefined && effectiveForwardState) {
+    const fillFilter = resolveFillRangeFilter(
+      fillParam,
+      effectiveSubscriptionFilter,
+      largestLocation,
+    );
+    rejectForFill = !isFillRangeEmpty(fillFilter, largestLocation);
+  }
+
+  if (rejectForFill) {
+    return true;
+  }
+
+  // 受理した更新のみ購読状態へ反映する
+  if (decodedLocationFilter !== undefined) {
+    publisher.setLocationFilter(decodedLocationFilter);
+  }
+  if (forwardParam !== undefined) {
+    publisher.setForwardState(effectiveForwardState);
+  }
+  return false;
+}
+
+/**
+ * FILL_PARAMETERS の fill 範囲を解決する
+ *
+ * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * 「The fill range is the range of Locations selected by the Location filter
+ *  inside FILL_PARAMETERS, or the subscription's Location filter if it is
+ *  omitted.」
+ * 内側の LOCATION_FILTER は fill 要求時点の Largest Object で解決し、省略時は
+ * 購読の解決済み Location Filter をそのまま使う。呼び出し前に
+ * validateLocationAndFillParameters で内側を検証しておくこと。
+ *
+ * @param fillParam - 検証済みの FILL_PARAMETERS パラメータ
+ * @param subscriptionResolvedFilter - 購読の解決済み Location Filter
+ * @param largestLocation - publisher が送信済みの最大 Location (未送信時 null)
+ */
+function resolveFillRangeFilter(
+  fillParam: Parameter,
+  subscriptionResolvedFilter: ResolvedFilter | undefined,
+  largestLocation: Location | null,
+): ResolvedFilter | undefined {
+  const innerParameters = decodeFillParameters(fillParam);
+  const innerLocationFilter = innerParameters.find(
+    (param) => param.type === MessageParameterType.LOCATION_FILTER,
+  );
+  if (innerLocationFilter !== undefined) {
+    return resolveFilter(decodeLocationFilterParameter(innerLocationFilter), largestLocation);
+  }
+  return subscriptionResolvedFilter;
+}
+
+/**
+ * fill 範囲が空かどうかを判定する
+ *
+ * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * 「If the fill range is empty, or starts after Largest Object, the publisher
+ *  does not open a fill fetch stream.」
+ * fill 範囲は Largest Object を超えられないため、Largest Object 未受信
+ * (largestLocation === null) の場合は常に空とする。フィルタなし (undefined)
+ * はトラック全体が範囲であり空でない。フィルタの最小 Location (start) が
+ * 自身の End 系上限を超える場合、または Largest Object より後を指す場合は、
+ * 配信できる Object が無いため空とする。
+ *
+ * @param filter - resolveFilter で解決済みの fill 範囲
+ * @param largestLocation - publisher が送信済みの最大 Location (未送信時 null)
+ */
+function isFillRangeEmpty(
+  filter: ResolvedFilter | undefined,
+  largestLocation: Location | null,
+): boolean {
+  // Largest Object 未受信 (まだ Object を送信していない) 場合は、fill 範囲が
+  // Largest Object を超えられないため常に空 (§3.4)
+  if (largestLocation === null) {
+    return true;
+  }
+  if (filter === undefined) {
+    return false;
+  }
+  // フィルタの最小 Location が End Group / End Object の上限を超える場合は空
+  if (!objectMatchesFilter(filter.start, filter)) {
+    return true;
+  }
+  // Largest Object より後の開始は fill できる Object が無い
+  if (compareLocations(filter.start, largestLocation) > 0) {
+    return true;
+  }
+  return false;
 }
 
 /**
