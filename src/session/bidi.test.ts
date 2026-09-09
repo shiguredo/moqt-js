@@ -6450,6 +6450,107 @@ test("bidiReadRequestStreamMessages: ピアの RESET_STREAM (publish ロール) 
 });
 
 /**
+ * publish ロールの検証用に、開いている Subgroup データストリームと送信キューを
+ * 登録する。abort の到達理由を記録する。
+ */
+function setOpenPublisherStream(ctx: ReturnType<typeof createPublishReadTestContext>): {
+  trackAlias: bigint;
+  dataAborted: unknown[];
+} {
+  const trackAlias = ctx.publisher.getTrackAlias();
+  const dataAborted: unknown[] = [];
+  const dataWritable = new WritableStream<Uint8Array>({
+    abort(reason) {
+      dataAborted.push(reason);
+    },
+  });
+  ctx.session.publisherStreams.set(trackAlias, {
+    groupId: 0n,
+    writer: dataWritable.getWriter(),
+    previousObjectId: -1n,
+  });
+  ctx.session.publisherSendQueues.set(trackAlias, Promise.resolve());
+  ctx.session.closedSubgroups.add(`${trackAlias}:0`);
+  return { trackAlias, dataAborted };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §3.1.1:
+ * 「The Publisher can remove subscription state as soon as it has received
+ *  STOP_SENDING.  It MUST reset any open streams associated with the
+ *  SUBSCRIBE.」
+ * publish ロールでピアの STOP_SENDING (送信方向 reset) を検出したとき、
+ * 開いている Subgroup データストリームを reset (abort) し、購読状態を削除して
+ * PublisherImpl を closed にする。
+ */
+test("bidiReadRequestStreamMessages: publish ロールで STOP_SENDING を検出してデータストリームを reset する", async () => {
+  const ctx = createPublishReadTestContext({});
+  const { trackAlias, dataAborted } = setOpenPublisherStream(ctx);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // ピアの STOP_SENDING 相当: 当方の送信方向を reset して writer.closed を
+  // reject させ、送信方向の終了監視を発火させる
+  const streamInfo = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
+    writer: WritableStreamDefaultWriter<Uint8Array>;
+  };
+  // ピア起因 (source: "stream") の送信方向終了として writer.closed を reject させる
+  await streamInfo.writer.abort(Object.assign(new Error("stop sending"), { source: "stream" }));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.deepEqual(dataAborted, ["peer cancelled subscription"]);
+  assert.isFalse(ctx.session.publisherStreams.has(trackAlias));
+  assert.isFalse(ctx.session.publisherSendQueues.has(trackAlias));
+  assert.isFalse(ctx.session.closedSubgroups.has(`${trackAlias}:0`));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+  assert.equal(ctx.publisher.state, "closed");
+  // 読み取りループを終わらせる
+  ctx.readableController.close();
+  await readPromise;
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1.1:
+ * publish ロールでピアの RESET_STREAM (reader.read() の reject) を検出した
+ * ときも、開いている Subgroup データストリームを reset (abort) し、購読状態を
+ * 削除して PublisherImpl を closed にする。
+ */
+test("bidiReadRequestStreamMessages: publish ロールで RESET_STREAM を検出してデータストリームを reset する", async () => {
+  const ctx = createPublishReadTestContext({});
+  const { trackAlias, dataAborted } = setOpenPublisherStream(ctx);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.deepEqual(dataAborted, ["peer cancelled subscription"]);
+  assert.isFalse(ctx.session.publisherStreams.has(trackAlias));
+  assert.isFalse(ctx.session.publisherSendQueues.has(trackAlias));
+  assert.isFalse(ctx.session.closedSubgroups.has(`${trackAlias}:0`));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+  assert.equal(ctx.publisher.state, "closed");
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-21 §6.4.2.3:
  * error コールバックが throw しても、notification 経路で吸収され unhandled
  * rejection にならず、state が closed になることを検証する。
