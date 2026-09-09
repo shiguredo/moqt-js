@@ -1,7 +1,7 @@
 # コメントと節番号参照を draft-21 に更新する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/update-draft-21-section-references
 - Polished: {YYYY-MM-DD}
 
@@ -182,3 +182,11 @@
 | §15.5       | Authorization Token Alias Type               | 16.5                          | Authorization Token Alias Type                                     |        1 |                                                                       |
 | §15.11.2    | REQUEST_ERROR Codes                          | 16.11.2                       | REQUEST_ERROR Codes                                                |        1 | bare 参照のみ。定義本文は §12.3                                       |
 | §15.11.3    | PUBLISH_DONE Codes                           | 16.11.3                       | PUBLISH_DONE Codes                                                 |        1 | bare 参照のみ。定義本文は §12.4                                       |
+
+## 解決方法
+
+- `draft-ietf-moq-transport-20` の節番号・図表番号・付録番号の参照を draft-21 の対応表に従って更新した (付録に 128 節の対応表を収録)。
+- draft 名なしの裸の節参照、分割節の用途別飛び先、Figure 5→3 / Figure 16→15 / Table 3→2、Appendix A.1→A.2 も更新した。
+- 適合監査で見つかった MUST 違反 (Subgroup Header 型 128 以上、Fetch 先頭 Priority、未知終了コード、namespace Redirect、TRACK_NAMESPACE_PREFIX スコープ、送信 REQUEST_UPDATE 検証、REQUEST_UPDATE_OK の LARGEST_OBJECT、MAX_FILTER_RANGES、DEFAULT_PUBLISHER_PRIORITY 継承、Immutable Properties 配下の Mandatory、Object Property の duplicate / 再帰、データストリーム先着、WebTransport protocols、namespace ライフサイクル、GOAWAY 重複、Delivery Timeout 上書き、Forward State=0、End of Range prior 参照、KVP 形式エラー) を修正した。
+- 大きめの残項目は issue 0559〜0562 と既存の 0366 / 0551 / 0541 / 0478 に分離した。
+- `vp check` / `tsc --noEmit` / `pnpm test run` (1924 tests) が通る。
