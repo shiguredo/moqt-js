@@ -14,6 +14,7 @@ import {
   SessionError,
   SessionErrorCode,
   normalizeRequestErrorCode,
+  normalizeSessionErrorCode,
 } from "./error";
 import {
   MessageType,
@@ -1384,7 +1385,12 @@ export class SessionImpl implements Session {
           this.sessionState = "closed";
         }
         this.markRequestObjectsClosed();
-        this.callbacks.close?.(closeInfo);
+        // draft-ietf-moq-transport-21 §13 (Grease):
+        // 未知の Session Termination コードは INTERNAL_ERROR として扱う
+        this.callbacks.close?.({
+          ...closeInfo,
+          closeCode: normalizeSessionErrorCode(closeInfo.closeCode ?? 0),
+        });
       })
       .catch((error: unknown) => {
         if (this.sessionState !== "closed") {

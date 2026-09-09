@@ -3250,6 +3250,21 @@ test("ピア起点の終了で Publisher / Subscriber / Fetcher の state が cl
 });
 
 /**
+ * draft-ietf-moq-transport-21 §13 (Grease):
+ * 未知の Session Termination コードは INTERNAL_ERROR として通知する。
+ */
+test("ピア起点の終了で未知の closeCode は INTERNAL_ERROR に正規化される", async () => {
+  const { session, closeCalls, resolveClosed } = createPeerCloseSession();
+
+  resolveClosed({ closeCode: 0x99, reason: "grease" });
+  await Promise.resolve();
+
+  assert.equal(session.state, "closed");
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0].closeCode, SessionErrorCode.INTERNAL_ERROR);
+});
+
+/**
  * draft-ietf-moq-transport-21 §6.6 (Termination):
  * transport.closed が reject した場合も同様に state が閉じることを検証する。
  */

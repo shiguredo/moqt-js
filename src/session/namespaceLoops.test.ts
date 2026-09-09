@@ -158,6 +158,39 @@ function requestErrorMessage(controlWriter: ControlStreamWriter, code: number): 
   return controlWriter.encode(MessageType.REQUEST_ERROR, payload);
 }
 
+/**
+ * draft-ietf-moq-transport-21 §9.4.1:
+ * namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
+ * SUBSCRIBE_TRACKS) への Redirect で Track Name が非空なら
+ * PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROTOCOL_VIOLATION", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const payload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "redirect",
+    retryInterval: 0n,
+    redirect: {
+      connectUri: "https://example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      trackName: new TextEncoder().encode("video"),
+    },
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_ERROR, payload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
 /** 保留中の REQUEST_UPDATE を登録する */
 function registerPendingUpdate(
   session: SessionInternal,

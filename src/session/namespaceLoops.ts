@@ -26,7 +26,13 @@ import {
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
   validateParameterScope,
 } from "../message/parameterScope";
-import { RequestError, SessionError, SessionErrorCode, normalizeRequestErrorCode } from "../error";
+import {
+  ProtocolViolationError,
+  RequestError,
+  SessionError,
+  SessionErrorCode,
+  normalizeRequestErrorCode,
+} from "../error";
 import * as bidi from "./bidi";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
@@ -208,6 +214,13 @@ function namespaceValidateFirstMessage(
  */
 function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestError {
   const decodedMsg = decodeRequestErrorPayload(messagePayload);
+  // draft-ietf-moq-transport-21 §9.4.1:
+  // namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
+  // SUBSCRIBE_TRACKS) への Redirect は Track Name を空にしなければならず、
+  // 非空の場合は PROTOCOL_VIOLATION でセッションを閉じる
+  if (decodedMsg.redirect && decodedMsg.redirect.trackName.length > 0) {
+    throw new ProtocolViolationError("namespace-scoped redirect must have an empty track name");
+  }
   return new RequestError(
     decodedMsg.reasonPhrase,
     normalizeRequestErrorCode(Number(decodedMsg.errorCode)),

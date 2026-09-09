@@ -851,6 +851,10 @@
 - [FIX] Subgroup Header の型 128 以上と Fetch 先頭 Object の Priority 未設定を PROTOCOL_VIOLATION として拒否する
   - draft-ietf-moq-transport-21 §11.3.1 の "Values of 128 or greater" と §11.4.1.1 Table 9 の prior Object 参照禁止に合わせる
   - @voluntas
+- [FIX] 未知の Session Termination コードの正規化と namespace 系 Redirect の Track Name 検証を追加する
+  - draft-ietf-moq-transport-21 §13 に従い未知の終了コードを INTERNAL_ERROR として通知する
+  - §9.4.1 に従い namespace 系 Redirect の非空 Track Name を PROTOCOL_VIOLATION で拒否する
+  - @voluntas
 
 ### misc
 
