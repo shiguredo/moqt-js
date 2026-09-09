@@ -1,7 +1,7 @@
 # FILL_PARAMETERS / LOCATION_FILTER の再デコードを一本化する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/refactor-fill-location-decode
 - Polished: 2026-09-09
 
@@ -35,3 +35,13 @@
 - `validateLocationAndFillParameters` / `countIncomingRangeFilterRanges` / `validateIncomingRangeFilterLimits` / `applyPublishRequestUpdate` / `resolveFillRangeFilter`（`src/session/bidi.ts`）
 - `decodeFillParameters` / `decodeLocationFilterParameter`（`src/message/parameter.ts`）
 - `issues/closed/0541-bug-fill-parameters-no-fill-stream.md`（`applyPublishRequestUpdate` / `resolveFillRangeFilter` の追加元）
+
+## 解決方法
+
+FILL_PARAMETERS / LOCATION_FILTER のデコード結果を検証・上限合算・fill 評価で再利用し、重複デコードを除去した。
+
+- `src/session/bidi.ts` に `DecodedLocationAndFill` を追加し、`validateLocationAndFillParameters` が top-level の `LocationFilter`・FILL_PARAMETERS 内側の `Parameter[]`・内側の `LocationFilter` を返すようにする
+- `countIncomingRangeFilterRanges` / `validateIncomingRangeFilterLimits` はデコード済みの内側配列を受け取る
+- `applyPublishRequestUpdate` / `resolveFillRangeFilter` は `validateLocationAndFillParameters` のデコード結果を再利用する
+- 外部挙動は変えず、既存テストを変更せずに通ることを確認する
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追記する
