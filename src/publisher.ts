@@ -4,6 +4,8 @@
  */
 
 import { ObjectStatus, type Location } from "./message/types";
+import type { LocationFilter } from "./message/parameter";
+import { resolveFilter, type ResolvedFilter } from "./filter";
 import { ProtocolViolationError } from "./error";
 
 /**
@@ -229,6 +231,17 @@ export class PublisherImpl implements Publisher {
   // LARGEST_OBJECT として含める。未送信時は null。
   private largestLocation: Location | null = null;
 
+  // draft-ietf-moq-transport-21 §3.3.1 (Location Filters) / §3.4 (Fill Semantics):
+  // REQUEST_UPDATE で受信した購読の Location Filter を、受理時点の
+  // LARGEST_OBJECT で解決した状態で保持する (相対指定を後から再解決しない。
+  // SubscriberImpl.resolveLocationFilter と同じ規則)。
+  // fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は購読の
+  // Location Filter」で決まるため、その評価に使う。現状の用途は fill 範囲の
+  // 評価のみであり、送信 Object への Location Filter 適用 (§3.3.1 の
+  // publisher MUST) は未実装 (別 issue)。
+  // 未受信時は undefined (フィルタなし = トラック全体)。
+  private subscriptionLocationFilter: ResolvedFilter | undefined;
+
   // セッションが利用する内部コールバック
   goawayCallback?: (newSessionUri: string) => void;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
@@ -299,6 +312,27 @@ export class PublisherImpl implements Publisher {
    */
   getLargestLocation(): Location | null {
     return this.largestLocation;
+  }
+
+  /**
+   * Internal: 購読の Location Filter を設定する (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-21 §9.5:
+   * 「If a parameter previously set on the request is not present in
+   *  REQUEST_UPDATE, its value remains unchanged.」に従い、REQUEST_UPDATE に
+   * LOCATION_FILTER が含まれる場合のみ呼ぶ (省略時は従来値を保持する)。
+   * 相対指定は設定時点の LARGEST_OBJECT で解決して固定する (§3.3.1。
+   * SubscriberImpl と同じ規則)。解決結果は fill 範囲の評価 (§3.4) で使う。
+   */
+  setLocationFilter(filter: LocationFilter): void {
+    this.subscriptionLocationFilter = resolveFilter(filter, this.largestLocation);
+  }
+
+  /**
+   * Internal: 解決済みの購読 Location Filter を取得する (セッションからのみ呼ぶ)
+   */
+  getResolvedLocationFilter(): ResolvedFilter | undefined {
+    return this.subscriptionLocationFilter;
   }
 
   /**

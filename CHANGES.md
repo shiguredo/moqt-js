@@ -54,6 +54,10 @@
   - draft-ietf-moq-transport-20 §15.11.1 / §14 に基づき、0x15 を SessionErrorCode から削除し未知コードとして INTERNAL_ERROR に正規化する
   - 旧版 moqt-js が送る VERSION_NEGOTIATION_FAILED はエラーとして通知される
   - @voluntas
+- [CHANGE] publisher が fill 範囲を持つ FILL_PARAMETERS を含む REQUEST_UPDATE を REQUEST_ERROR (NOT_SUPPORTED) で拒否する
+  - draft-ietf-moq-transport-21 §3.4 / §3.4.1 に基づき、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を含む REQUEST_UPDATE を受理して黙殺する挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了する (moqt-js は fill fetch ストリームを開けないため)
+  - fill fetch ストリームを開く仕様準拠のピアとは相互運用できない (moqt-js publisher は fill を提供しない)
+  - @voluntas
 - [ADD] webtransport-devtools で WebTransport.closed が受け取った closeInfo を表示する
   - W3C WebTransport §6.3 / §6.5 / §6.6 / §6.10 に基づき、closed Promise の fulfill 時の closeCode / reason と reject 時のエラーメッセージを記録する
   - 切断 (disconnect) 後も表示を保持し、再接続時にクリアする
