@@ -229,7 +229,8 @@ export async function connect(
   //  identifiers in the WT-Available-Protocols header."
   // draft 版の ALPN は "moqt-" + draft 番号であり、draft-21 は "moqt-21"。
   // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
-  transportOptions.protocols = ["moqt-21"];
+  // protocols は TypeScript 6.0 の DOM 型で追加されたため、5.x でも通るようキャストする。
+  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-21"];
 
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
