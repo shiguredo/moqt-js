@@ -1071,6 +1071,10 @@
   - draft-ietf-moq-transport-21 §3.2.1 に従い、FETCH データストリームの peer RESET_STREAM でアプリへ error を通知し、fetcher を closed にして fetchers から削除する
   - 従来は通知も state 破棄も行われず、アプリは fetch の終了を検知できなかった
   - @voluntas
+- [FIX] 制御ストリームの RESET_STREAM でセッションを PROTOCOL_VIOLATION で閉じる
+  - draft-ietf-moq-transport-21 §6.3 の MUST に従い、制御ストリームの RESET_STREAM を検出したときセッションを PROTOCOL_VIOLATION で閉じる
+  - 従来は error コールバックを呼ぶだけでセッションが connected のまま残っていた
+  - @voluntas
 
 ### misc
 

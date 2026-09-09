@@ -54,6 +54,10 @@ export function isSessionClosedError(error: Error): boolean {
  * これらはいずれもピア起因のキャンセルであり、セッション終了
  * (PROTOCOL_VIOLATION) には昇格させない。受信 READ_FAILURE 検出 (subscriber
  * エラー通知) の判定にも使用する。
+ * 例外: 制御ストリームの RESET_STREAM は §6.3 の MUST (「A control stream
+ * MUST NOT be closed at the underlying transport layer during the session's
+ * lifetime.」) により PROTOCOL_VIOLATION でセッションを閉じる。この判定は
+ * 呼び出し側の startControlMessageLoop が行う。
  *
  * source プロパティは WebTransportError の instanceof 成否に関わらず直接読む
  * (テスト環境の Node には WebTransportError グローバルが存在しないため)。

@@ -3343,18 +3343,7 @@ export class SessionImpl implements Session {
         while (this.sessionState === "connected") {
           const { value, done } = await reader.read();
           if (done) {
-            // draft-ietf-moq-transport-21 Section 6.3:
-            // "A control stream MUST NOT be closed at the underlying transport layer
-            // during the session's lifetime. Doing so results in the session being
-            // closed as a PROTOCOL_VIOLATION."
-            if (this.sessionState === "connected") {
-              this.closeWithError(
-                new SessionError(
-                  "control stream closed unexpectedly",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-            }
+            this.closeControlStreamViolation("control stream closed unexpectedly");
             break;
           }
 
@@ -3364,11 +3353,41 @@ export class SessionImpl implements Session {
           }
         }
       } catch (err) {
-        this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+        // draft-ietf-moq-transport-21 §6.3:
+        // 制御ストリームの RESET_STREAM (ピア起因の stream error) は
+        // PROTOCOL_VIOLATION でセッションを閉じる。セッション終了起源
+        // (source: "session") の read 失敗は正常な終了通知であり通知しない。
+        // それ以外 (アプリコールバックの throw 等) は notifyErrorIfActive に
+        // 委ね、セッションを閉じない。
+        if (isPeerStreamError(err)) {
+          this.closeControlStreamViolation(
+            `control stream reset by peer: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        } else if ((err as { source?: unknown } | null)?.source !== "session") {
+          this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+        }
       } finally {
         reader.releaseLock();
       }
     })();
+  }
+
+  /**
+   * 制御ストリームの閉鎖を PROTOCOL_VIOLATION として扱う
+   *
+   * draft-ietf-moq-transport-21 §6.3:
+   * 「A control stream MUST NOT be closed at the underlying transport layer
+   *  during the session's lifetime.  Doing so results in the session being
+   *  closed as a PROTOCOL_VIOLATION.」
+   * FIN 経路 (done) と RESET_STREAM 経路 (isPeerStreamError) で
+   * sessionState === "connected" のガードを共通化し、片方だけの修正漏れと
+   * 既に閉じたセッションへの誤通知を防ぐ。
+   */
+  private closeControlStreamViolation(message: string): void {
+    if (this.sessionState !== "connected") {
+      return;
+    }
+    this.closeWithError(new SessionError(message, SessionErrorCode.PROTOCOL_VIOLATION));
   }
 
   /**

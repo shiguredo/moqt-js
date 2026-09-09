@@ -2788,6 +2788,156 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
 });
 
 /**
+ * 制御ストリーム読み取りループ (startControlMessageLoop) を検証するための
+ * セッションを構築する。
+ */
+function createControlLoopContext(): {
+  sessionError: { current: Error | undefined };
+  errorControl: (error: unknown) => void;
+  start: () => void;
+  setSessionState: (state: string) => void;
+} {
+  const sessionError: { current: Error | undefined } = { current: undefined };
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: (error) => {
+      sessionError.current = error;
+    },
+  });
+  const internal = session as unknown as {
+    sessionState: string;
+    controlReceiveStream?: ReadableStream<Uint8Array>;
+    controlReader?: ControlStreamReader;
+    startControlMessageLoop(): void;
+  };
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  internal.controlReceiveStream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  internal.controlReader = new ControlStreamReader();
+  internal.sessionState = "connected";
+  return {
+    sessionError,
+    errorControl: (error) => {
+      controller.error(error);
+    },
+    start: () => internal.startControlMessageLoop(),
+    setSessionState: (state) => {
+      internal.sessionState = state;
+    },
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §6.3:
+ * 「A control stream MUST NOT be closed at the underlying transport layer
+ *  during the session's lifetime.  Doing so results in the session being
+ *  closed as a PROTOCOL_VIOLATION.」
+ * 制御ストリームの RESET_STREAM でセッションが PROTOCOL_VIOLATION で閉じる。
+ */
+test("startControlMessageLoop: 制御ストリームの RESET_STREAM で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+  const ctx = createControlLoopContext();
+  ctx.start();
+  ctx.errorControl(Object.assign(new Error("reset by peer"), { source: "stream" }));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.isDefined(ctx.sessionError.current);
+  assert.equal(
+    (ctx.sessionError.current as SessionError).code,
+    SessionErrorCode.PROTOCOL_VIOLATION,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.3:
+ * 既に閉じたセッションで制御ストリームの read が reject しても誤って
+ * callbacks.error を呼ばない。
+ */
+test("startControlMessageLoop: 既に閉じたセッションでは RESET_STREAM で callbacks.error を呼ばない", async () => {
+  const ctx = createControlLoopContext();
+  ctx.start();
+  ctx.setSessionState("closed");
+  ctx.errorControl(Object.assign(new Error("reset by peer"), { source: "stream" }));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.isUndefined(ctx.sessionError.current);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.3 / §6.6:
+ * セッション終了起源 (source: "session") の read 失敗は PROTOCOL_VIOLATION に
+ * 昇格せず、callbacks.error も呼ばない。
+ */
+test('startControlMessageLoop: source: "session" の read 失敗では昇格も通知も行わない', async () => {
+  const ctx = createControlLoopContext();
+  ctx.start();
+  ctx.errorControl(Object.assign(new Error("transport closed"), { source: "session" }));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.isUndefined(ctx.sessionError.current);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.3:
+ * アプリコールバック (callbacks.goaway 等) の throw ではセッションを閉じない。
+ * 制御メッセージ処理は読み取りループの try 内にあるため throw は catch に
+ * 到達するが、ピア起因ではないため PROTOCOL_VIOLATION に昇格させない。
+ */
+test("startControlMessageLoop: アプリコールバックの throw ではセッションを閉じない", async () => {
+  const sessionError: { current: Error | undefined } = { current: undefined };
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    goaway: () => {
+      throw new Error("goaway callback failed");
+    },
+    error: (error) => {
+      sessionError.current = error;
+    },
+  });
+  const internal = session as unknown as {
+    sessionState: SessionState;
+    controlReceiveStream?: ReadableStream<Uint8Array>;
+    controlReader?: ControlStreamReader;
+    startControlMessageLoop(): void;
+  };
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  internal.controlReceiveStream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  internal.controlReader = new ControlStreamReader();
+  internal.sessionState = "connected";
+  internal.startControlMessageLoop();
+
+  // GOAWAY を流して goaway コールバックの throw を制御ループの catch に到達させる
+  const goawayPayload = encodeGoawayPayload({
+    type: MessageType.GOAWAY,
+    newSessionUri: "moqt://new.example.com",
+    timeout: 0n,
+  });
+  controller.enqueue(new ControlStreamWriter().encode(MessageType.GOAWAY, goawayPayload));
+  await yieldToMacrotask();
+
+  // セッションは PROTOCOL_VIOLATION で閉じない (callbacks.error にはアプリ例外が渡る)
+  assert.isDefined(sessionError.current);
+  assert.equal(sessionError.current.message, "goaway callback failed");
+  assert.notEqual((sessionError.current as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
  * draft-ietf-moq-transport-21 §12.1:
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出しても
  * セッションが閉じず、対象 FETCH がキャンセルされることを検証する。
