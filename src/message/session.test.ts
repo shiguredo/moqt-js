@@ -1,6 +1,6 @@
 /**
  * MOQT PUBLISH_STATE_NOTIFY Unit Tests
- * draft-ietf-moq-transport-20 Section 10.10 (PUBLISH_STATE_NOTIFY)
+ * draft-ietf-moq-transport-21 Section 9.10 (PUBLISH_STATE_NOTIFY)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -16,7 +16,7 @@ import { getMessageTypeName } from "./debug";
 import { ProtocolViolationError } from "../error";
 
 /**
- * draft-ietf-moq-transport-20 §10.10:
+ * draft-ietf-moq-transport-21 §9.10:
  * PUBLISH_STATE_NOTIFY の encode / decode ラウンドトリップを検証する。
  * ペイロードは Number of Parameters + Parameters のみ (Request ID なし)。
  */
@@ -38,7 +38,7 @@ test("encodePublishStateNotifyPayload / decodePublishStateNotifyPayload: ラウ�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.10:
+ * draft-ietf-moq-transport-21 §9.10:
  * 空パラメータの PUBLISH_STATE_NOTIFY も正当な通知として扱う。
  */
 test("decodePublishStateNotifyPayload: 空パラメータをデコードできる", () => {
@@ -52,7 +52,7 @@ test("decodePublishStateNotifyPayload: 空パラメータをデコードでき�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10:
+ * draft-ietf-moq-transport-21 §9:
  * Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION。
  */
 test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViolationError", () => {
@@ -66,7 +66,7 @@ test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViola
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.10:
+ * draft-ietf-moq-transport-21 §9.10:
  * Type 0x22 が PUBLISH_STATE_NOTIFY として名前解決される。
  */
 test("getMessageTypeName: 0x22 は PUBLISH_STATE_NOTIFY", () => {
@@ -77,7 +77,7 @@ test("getMessageTypeName: 0x22 は PUBLISH_STATE_NOTIFY", () => {
 /**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
- * draft-ietf-moq-transport-20 §10.6.1 / §10.4 / §10.6.2:
+ * draft-ietf-moq-transport-21 §9.4.1 / §9.2 / §9.4.2:
  * 制御ストリームは外側でフレーミング済みのため、Length 宣言が
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。

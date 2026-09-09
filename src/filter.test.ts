@@ -1,6 +1,6 @@
 /**
  * Location Filter マッチングの単体テスト
- * draft-ietf-moq-transport-20 Section 5.1.2 (Location Filter)
+ * draft-ietf-moq-transport-21 Section 3.3.1 (Location Filter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -128,7 +128,7 @@ test("resolveFilter: 1 フィールドで LARGEST_OBJECT 未受信時は {0, 0}"
 
 /**
  * 1 フィールドの相対計算で Start Group が負値になる場合は 0 にクランプされる
- * (draft-ietf-moq-transport-20 Section 5.1.2)。
+ * (draft-ietf-moq-transport-21 Section 9.20.10)。
  */
 test("resolveFilter: 1 フィールドの相対計算で負値は 0 にクランプされる", () => {
   // Largest = {2, 5} のとき startGroup=5 は 2 + 1 - 5 = -2 → 0 にクランプ
@@ -141,7 +141,7 @@ test("resolveFilter: 1 フィールドの相対計算で負値は 0 にクラン
 
 /**
  * 1 フィールドの相対計算で Start Group が 2^64-1 を超える場合は 2^64-1 に
- * クランプされる (draft-ietf-moq-transport-20 Section 5.1.2 の上端クランプ)。
+ * クランプされる (draft-ietf-moq-transport-21 Section 9.20.10 の上端クランプ)。
  */
 test("resolveFilter: 1 フィールドの相対計算で 2^64-1 超過は 2^64-1 にクランプされる", () => {
   // Largest = {MAX_VARINT, 0} のとき startGroup=0 は MAX_VARINT + 1 → 2^64-1 にクランプ
@@ -268,7 +268,7 @@ test("objectMatchesFilter: End Group = Start.Group は当該 Group のみ", () =
 
 /**
  * End Object があるとき、End Group 内で Object > End Object は不通過。
- * (draft-ietf-moq-transport-20 §5.1.2 "When EndObject is omitted, the filter
+ * (draft-ietf-moq-transport-21 §9.20.10 "When EndObject is omitted, the filter
  *  includes all objects in the End Group." の対偶)
  */
 test("objectMatchesFilter: End Object 超過は不通過", () => {
@@ -294,7 +294,7 @@ test("objectMatchesFilter: End Object は End Group のみに適用される", (
 
 // ============================================================================
 // rangeFiltersMatch のテスト
-// draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters)
+// draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
 // ============================================================================
 
 /**
@@ -305,7 +305,7 @@ test("rangeFiltersMatch: フィルタなしは全通過", () => {
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 8.6:
  * 「Each Range Filter is a sequence of Start/End (vi64) inclusive Range pairs」
  * 包含判定は両端含む (inclusive) ことを検証する。
  */
@@ -321,10 +321,10 @@ test("rangeFiltersMatch: 包含判定は両端含む (inclusive)", () => {
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.4 の例:
+ * draft-ietf-moq-transport-21 §8.6 の例:
  * ranges 3-5 / 10-15。objectId 4 は通過、objectId 7 は不通過。
  */
-test("rangeFiltersMatch: §5.1.4 の例 (objectId 4 は通過 / 7 は不通過)", () => {
+test("rangeFiltersMatch: §8.6 の例 (objectId 4 は通過 / 7 は不通過)", () => {
   const filters: RangeFilterSpec[] = [
     {
       type: "objectId",
@@ -511,7 +511,7 @@ test("rangeFiltersMatch: IMMUTABLE_PROPERTIES の再帰深さ上限超過は不�
 
 // ============================================================================
 // trackPropertyFiltersMatch のテスト
-// draft-ietf-moq-transport-20 Section 5.1.4 (TRACK_PROPERTY_FILTER)
+// draft-ietf-moq-transport-21 Section 3.3.2 (TRACK_PROPERTY_FILTER)
 // ============================================================================
 
 /**

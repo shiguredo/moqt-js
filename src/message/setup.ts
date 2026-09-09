@@ -1,8 +1,8 @@
 /**
  * MOQT Setup Messages
- * draft-ietf-moq-transport-20 Section 10.3 (SETUP)
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP)
  *
- * draft-ietf-moq-transport-20 Section 3.3 (Session initialization):
+ * draft-ietf-moq-transport-21 Section 6.3 (Session initialization):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
  */
 
@@ -21,7 +21,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 /**
  * SETUP メッセージ
  *
- * draft-ietf-moq-transport-20 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP):
  * CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
  */
 export interface Setup {
@@ -32,22 +32,22 @@ export interface Setup {
 /**
  * Setup を作成
  *
- * draft-ietf-moq-transport-20 §10.3.1.1 / §10.3.1.2:
+ * draft-ietf-moq-transport-21 §9.1.1 / §9.1.2:
  * AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
  * moqt-js は WebTransport 専用クライアントのため、これらは作成手段を持たない。
  *
- * authorizationToken を指定すると Section 10.3.1.4 (AUTHORIZATION TOKEN Setup Option)
- * として Option Type 0x03 に積む。Section 10.2.2 より SETUP では Alias Type
+ * authorizationToken を指定すると Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+ * として Option Type 0x03 に積む。Section 9.1.4 より SETUP では Alias Type
  * DELETE / USE_ALIAS は禁止されているため、事前に検証する。
  *
- * moqtImplementation で Section 10.3.1.5 (MOQT IMPLEMENTATION) の送信を制御する。
- * draft-ietf-moq-transport-20 §13.8 (Implementation Identification Fingerprinting)
+ * moqtImplementation で Section 9.1.5 (MOQT IMPLEMENTATION) の送信を制御する。
+ * draft-ietf-moq-transport-21 §15.8 (Implementation Identification Fingerprinting)
  * のプライバシー緩和策に対応する。
  * - 未指定（既定）: MOQT_IMPLEMENTATION_VALUE（`moqt-js/${version}`）を送信する。
  * - false: MOQT_IMPLEMENTATION Option を送信しない（opt-out）。
  * - 文字列: その値をそのまま送信する（override。空文字列も指定どおり送信する）。
  *
- * grease: true で Section 14 (Grease) の GREASE Setup Option を 1 つ追加する。
+ * grease: true で Section 13 (Grease) の GREASE Setup Option を 1 つ追加する。
  * 未知の Option を gracefully に扱えることを対向に保証するための予約値（RFC 9170 §3.3 由来の
  * SHOULD 推奨）を送信する。既定（未指定 / false）では送信しない。
  */
@@ -68,7 +68,7 @@ export function createSetup(options?: {
     });
   }
 
-  // draft-ietf-moq-transport-20 §10.3.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+  // draft-ietf-moq-transport-21 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
   // 送信しない場合のデフォルトは 0（Alias の使用禁止）
   if (options?.maxAuthTokenCacheSize !== undefined) {
     parameters.push({
@@ -77,8 +77,8 @@ export function createSetup(options?: {
     });
   }
 
-  // MOQT_IMPLEMENTATION (0x07) - Section 10.3.1.5 (MOQT IMPLEMENTATION)
-  // draft-ietf-moq-transport-20 §13.8 のプライバシー緩和策として opt-out / override を受け付ける。
+  // MOQT_IMPLEMENTATION (0x07) - Section 9.1.5 (MOQT IMPLEMENTATION)
+  // draft-ietf-moq-transport-21 §15.8 のプライバシー緩和策として opt-out / override を受け付ける。
   // false のときは送信を抑止する。文字列のときはその値を、未指定のときは既定値を送信する。
   if (options?.moqtImplementation !== false) {
     const moqtImplementation =
@@ -91,7 +91,7 @@ export function createSetup(options?: {
     });
   }
 
-  // GREASE Setup Option - draft-ietf-moq-transport-20 §14 (Grease)
+  // GREASE Setup Option - draft-ietf-moq-transport-21 §13 (Grease)
   // 0x7f * N + 0x9D パターンの予約値を送信し、対向が未知の Option を gracefully に
   // 扱えることを保証する（RFC 9170 §3.3 由来の SHOULD 推奨）。opt-in のとき 1 つ追加する。
   if (options?.grease) {
@@ -110,7 +110,7 @@ export function createSetup(options?: {
 /**
  * GREASE Setup Option の Option Type を生成する
  *
- * draft-ietf-moq-transport-20 §14: GREASE 値は 0x7f * N + 0x9D（N は非負整数）のパターン。
+ * draft-ietf-moq-transport-21 §13: GREASE 値は 0x7f * N + 0x9D（N は非負整数）のパターン。
  * Key-Value-Pairs 規則（parameter.ts）では奇数 Type は Length プレフィックス付きバイト列、
  * 偶数 Type は varint 値としてエンコードされる。任意のバイト列を安全に送信するため、
  * N を偶数に固定して Option Type を奇数にする（0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。
@@ -126,7 +126,7 @@ function generateGreaseSetupOptionType(): number {
 /**
  * Setup のペイロードをエンコード
  *
- * draft-ietf-moq-transport-20 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
@@ -140,10 +140,10 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
 /**
  * Setup のペイロードをデコード
  *
- * draft-ietf-moq-transport-20 Section 10.3 (SETUP), Section 15.4 (IANA registry):
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP), Section 16.4 (IANA registry):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
- * 未知の Setup Option は MUST ignore（§10.3）。
+ * 未知の Setup Option は MUST ignore（§9.1）。
  */
 export function decodeSetupPayload(data: Uint8Array, offset = 0): Setup {
   const [parameters] = decodeKeyValuePairs(data, offset);
@@ -189,9 +189,9 @@ export function getSetupMoqtImplementation(msg: Setup): string | undefined {
 
 /**
  * Setup メッセージから AUTHORIZATION_TOKEN を取得する
- * draft-ietf-moq-transport-20 Section 10.3.1.4 (AUTHORIZATION TOKEN)
+ * draft-ietf-moq-transport-21 Section 9.1.4 (AUTHORIZATION TOKEN)
  *
- * Setup Option の値は Section 10.2.2 の Token 構造。
+ * Setup Option の値は Section 8.9 の Token 構造。
  * 複数の Authorization Token を一つの SETUP に載せられるため、配列で返す。
  */
 export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
@@ -202,7 +202,7 @@ export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
 
 /**
  * Setup メッセージから MAX_AUTH_TOKEN_CACHE_SIZE を取得する
- * draft-ietf-moq-transport-20 §10.3.1.3
+ * draft-ietf-moq-transport-21 §9.1.3
  *
  * デフォルト値は 0（Alias の使用禁止）。
  */
@@ -216,7 +216,7 @@ export function getSetupMaxAuthTokenCacheSize(msg: Setup): number {
 /**
  * SETUP メッセージから MAX_REQUEST_UPDATES を取得する
  *
- * draft-ietf-moq-transport-20 Section 10.3.1.7:
+ * draft-ietf-moq-transport-21 Section 9.1.7:
  * 欠落時のデフォルトは 0（無制限）。
  */
 export function getSetupMaxRequestUpdates(msg: Setup): number {
@@ -229,7 +229,7 @@ export function getSetupMaxRequestUpdates(msg: Setup): number {
 /**
  * SETUP メッセージから MAX_FILTER_RANGES を取得する
  *
- * draft-ietf-moq-transport-20 Section 10.3.1.6:
+ * draft-ietf-moq-transport-21 Section 9.1.6:
  * 欠落時のデフォルトは 0（Range Filter 送信禁止）。
  */
 export function getSetupMaxFilterRanges(msg: Setup): number {

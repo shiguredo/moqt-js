@@ -1,6 +1,6 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-20 Section 5.2
+ * draft-ietf-moq-transport-21 Section 3.2.1
  */
 
 import { test, assert } from "vite-plus/test";
@@ -55,7 +55,7 @@ test("done は closed 状態では onDoneInternal を呼ばない", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.12:
+ * draft-ietf-moq-transport-21 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信が起きないよう、
  * 進行中の done() を再利用して onDoneInternal を 1 回だけ実行することを検証する。
  */
@@ -178,7 +178,7 @@ test("done 実行中に markClosed されても onDoneInternal は 1 回だけ�
   assert.equal(publisher.state, "closed");
 });
 
-// draft-ietf-moq-transport-20 §10.4 (GOAWAY):
+// draft-ietf-moq-transport-21 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -196,7 +196,7 @@ test("goawayCallback が設定できる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2:
+ * draft-ietf-moq-transport-21 §11.1.2 / §11.1.3:
  * status / payload 整合と END_OF_TRACK 後送信の検証。
  * 違反は委譲前に検出し、通知と返値の reject (sendObject) または
  * 通知と同期 throw (sendDatagram) で呼び出し側へ返す。

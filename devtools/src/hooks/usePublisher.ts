@@ -398,7 +398,7 @@ export function usePublisher() {
             pub.pubStatus.value = "error";
             pub.pubStatusMessage.value = `Publish error: ${error.message}`;
           },
-          // draft-ietf-moq-transport-20 Section 5.1:
+          // draft-ietf-moq-transport-21 Section 3.1:
           // Forward State の変化を追跡する
           onForwardStateChange: (forward) => {
             pub.forwardState.value = forward;

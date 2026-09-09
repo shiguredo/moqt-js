@@ -119,7 +119,7 @@ test("matchNamespacePrefix: 両方空配列の場合は空 suffix を返す", ()
 
 // ============================================================================
 // namespacePrefixesOverlap / validateNamespacePrefixUpdate
-// draft-ietf-moq-transport-20 §10.9.2 (Updating Namespace Subscriptions)
+// draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions)
 // ============================================================================
 
 test("namespacePrefixesOverlap: 新 prefix が既存 prefix の sub-prefix なら true", () => {
@@ -183,7 +183,7 @@ test("validateNamespacePrefixUpdate: アクティブな既存 prefix が無け�
 // AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
 // ============================================================================
 
-// USE_VALUE スキームのトークン（draft-ietf-moq-transport-20 §10.2.2 Alias Type 0x3）
+// USE_VALUE スキームのトークン（draft-ietf-moq-transport-21 §8.9 Alias Type 0x3）
 function useValueToken(): AuthorizationToken {
   return {
     aliasType: AuthorizationTokenAliasType.USE_VALUE,
@@ -252,7 +252,7 @@ test("buildSubscribeNamespaceParameters: authorizationToken 未指定は空", ()
 
 // ============================================================================
 // buildPublishTrackProperties (GREASE)
-// draft-ietf-moq-transport-20 §14 (Grease) / §2.5.1 (Mandatory Track Properties)
+// draft-ietf-moq-transport-21 §13 (Grease) / §3.6 (Mandatory Track Properties)
 // ============================================================================
 
 test("buildPublishTrackProperties: grease 未指定は GREASE Property を含まない", () => {
@@ -271,7 +271,7 @@ test("buildPublishTrackProperties: grease: true は GREASE Property を 1 つ含
     const properties = buildPublishTrackProperties({}, true);
     const greaseProperties = properties.filter((p) => isGreaseValue(p.id));
     assert.equal(greaseProperties.length, 1);
-    // §2.5.1 の Mandatory Track Property 範囲 0x4000-0x7FFF に落入しないこと
+    // §3.6 の Mandatory Track Property 範囲 0x4000-0x7FFF に落入しないこと
     assert.isTrue(greaseProperties[0].id < 0x4000n);
     // 奇数 ID（Length プレフィックス付きバイト列形式）であること
     assert.equal(greaseProperties[0].id % 2n, 1n);
@@ -290,7 +290,7 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
 
 // ============================================================================
 // buildSubscribeTracksParameters (Range Filters)
-// draft-ietf-moq-transport-20 §10.20.1 / §6.3 / §5.1.4
+// draft-ietf-moq-transport-21 §9.18.1 / §4.3 / §3.3.2
 // ============================================================================
 
 test("buildSubscribeTracksParameters: rangeFilters が SUBSCRIBE_TRACKS パラメータになる", () => {
@@ -338,7 +338,7 @@ test("buildSubscribeTracksParameters: rangeFilters 未指定は Range Filter を
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.4:
+ * draft-ietf-moq-transport-21 §3.3.2:
  * 削除 (Length=0) は REQUEST_UPDATE のみに定義されるため、
  * SUBSCRIBE_TRACKS で削除を指定すると throw することを検証する。
  */
@@ -364,7 +364,7 @@ test("buildRangeFilterParameters: 追加と削除が混在してもパラメー�
 
 // ============================================================================
 // buildSubscribeParameters / buildFetchParameters (送信ガード)
-// draft-ietf-moq-transport-20 §5.1.2 / §5.1.4
+// draft-ietf-moq-transport-21 §3.3.1 / §3.3.2
 // ============================================================================
 
 test("buildSubscribeParameters: 削除指定で throw する", () => {
@@ -394,7 +394,7 @@ test("buildSubscribeParameters: 正常な rangeFilters はエンコードされ�
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+ * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
  * SUBSCRIBE 送信経路 (buildSubscribeParameters → encodeLocationFilterParameter)
  * でも End Group の 2^64-1 超過検証が効き、InvalidFilterError が throw される
  * ことを検証する。境界値 (ちょうど 2^64-1) は過剰拒否せず LOCATION_FILTER
@@ -435,7 +435,7 @@ test("buildFetchParameters: filter が LOCATION_FILTER パラメータになる"
 
 test("buildFetchParameters: filter 指定なしのとき LOCATION_FILTER は付かない", () => {
   // フィルタなしは {0, 0} から Largest Object までの全オブジェクト要求に相当し、
-  // §10.2.9「If omitted from FETCH ... the fetch ... is unfiltered.」に従い
+  // §9.20.10「If omitted from FETCH ... the fetch ... is unfiltered.」に従い
   // パラメータを送らない。
   const parameters = buildFetchParameters({});
   assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
@@ -486,7 +486,7 @@ test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 
 // ============================================================================
 // validateRangeFilterLimits
-// draft-ietf-moq-transport-20 §10.3.1.6 (MAX FILTER RANGES)
+// draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES)
 // ============================================================================
 
 test("validateRangeFilterLimits: undefined は throw しない", () => {
@@ -562,7 +562,7 @@ test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数え�
 
 // ============================================================================
 // mergeRangeFilters
-// draft-ietf-moq-transport-20 §5.1.4 (削除・置換・不変)
+// draft-ietf-moq-transport-21 §3.3.2 (削除・置換・不変)
 // ============================================================================
 
 test("mergeRangeFilters: remove で当該パラメータ型全体が削除される", () => {
@@ -622,7 +622,7 @@ test("mergeRangeFilters: update 内の同一型複数エントリ (異なる Set
 
 // ============================================================================
 // validateRangeFilterSpecs
-// draft-ietf-moq-transport-20 §5.1.4 (削除は REQUEST_UPDATE のみ / 0x29 のスコープ / 組み合わせ重複)
+// draft-ietf-moq-transport-21 §3.3.2 (削除は REQUEST_UPDATE のみ / 0x29 のスコープ / 組み合わせ重複)
 // ============================================================================
 
 test("validateRangeFilterSpecs: undefined / 空配列は throw しない", () => {
@@ -782,7 +782,7 @@ test("validateRangeFilterSpecs: 削除エントリは重複判定の対象外", 
 
 // ============================================================================
 // validateTrackNamespaceForSend
-// draft-ietf-moq-transport-20 §3.2.1 (Reserved Namespaces) / §3.2.2 (.session)
+// draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5 (.session)
 // ============================================================================
 
 test("validateTrackNamespaceForSend: 通常の namespace は throw しない", () => {
@@ -803,7 +803,7 @@ test("validateTrackNamespaceForSend: .session namespace は throw する", () =>
 });
 
 test("validateTrackNamespaceForSend: 予約 namespace の判定は先頭フィールドのみ", () => {
-  // draft-ietf-moq-transport-20 §3.2.1: 判定は先頭フィールドのみ
+  // draft-ietf-moq-transport-21 §2.4.2: 判定は先頭フィールドのみ
   assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", ".session"], "track"));
 });
 
@@ -822,7 +822,7 @@ test("validateTrackNamespaceForSend: . で始まる予約 namespace は throw �
 });
 
 test("validateTrackNamespaceForSend: . 単体の namespace は throw する", () => {
-  // draft-ietf-moq-transport-20 §3.2.1: "." 単体は MUST NOT be used for any purpose
+  // draft-ietf-moq-transport-21 §2.4.2: "." 単体は MUST NOT be used for any purpose
   assert.throws(
     () => validateTrackNamespaceForSend(["."], "track"),
     /reserved namespace prefix \. is not allowed/,
@@ -831,7 +831,7 @@ test("validateTrackNamespaceForSend: . 単体の namespace は throw する", ()
 
 // ============================================================================
 // compareLocations
-// draft-ietf-moq-transport-20 §1.4.2 (Location Structure)
+// draft-ietf-moq-transport-21 §8.2 (Location Structure)
 // ============================================================================
 
 test("compareLocations: 同一 Location は 0 を返す", () => {
@@ -894,7 +894,7 @@ test("resolveFetchStartLocation: 3 フィールドは {startGroup, startObject} 
 });
 
 test("resolveFetchStartLocation: 3 フィールドで両方 0 でも {0, 0} を返す", () => {
-  // 3 フィールドは絶対表現 (§5.1.2「Otherwise, all fields are absolute.」) のため、
+  // 3 フィールドは絶対表現 (§9.20.10「Otherwise, all fields are absolute.」) のため、
   // 2 フィールド両方 0 の Next Object 解釈は適用されない。
   assert.deepEqual(
     resolveFetchStartLocation({ startGroup: 0n, startObject: 0n, endGroupDelta: 1n }),
@@ -939,11 +939,11 @@ test("resolveFetchStartLocation: Next Object 形式 (0, 0) は undefined を返�
 
 // ============================================================================
 // buildFillParameters / FILL_PARAMETERS
-// draft-ietf-moq-transport-20 §5.1.3 / §10.2.15
+// draft-ietf-moq-transport-21 §3.4 / §9.20.16
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-20 §10.2.15:
+ * draft-ietf-moq-transport-21 §9.20.16:
  * SUBSCRIBE に fill を指定すると FILL_PARAMETERS (0x23) が載り、
  * 内側に指定内容が入ることを検証する。
  */
@@ -967,7 +967,7 @@ test("buildSubscribeParameters: fill が FILL_PARAMETERS パラメータにな�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.15:
+ * draft-ietf-moq-transport-21 §9.20.16:
  * fill 未指定の SUBSCRIBE には FILL_PARAMETERS が付かないことを検証する。
  */
 test("buildSubscribeParameters: fill 未指定は FILL_PARAMETERS を含まない", () => {
@@ -977,7 +977,7 @@ test("buildSubscribeParameters: fill 未指定は FILL_PARAMETERS を含まな�
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2 / §10.2.15:
+ * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
  * fill 内の LOCATION_FILTER が End Group 超過の場合は送信前に throw する。
  */
 test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過の場合は throw する", () => {
@@ -997,7 +997,7 @@ test("buildSubscribeParameters: fill 内の LOCATION_FILTER が End Group 超過
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.8:
+ * draft-ietf-moq-transport-21 §9.20.9:
  * fill 内の GROUP_ORDER が不正値の場合は送信前に throw する。
  */
 test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は throw する", () => {
@@ -1017,7 +1017,7 @@ test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.3 / §10.2.15:
+ * draft-ietf-moq-transport-21 §3.4 / §9.20.16:
  * fill の Group Order 解決は FILL 内の指定を優先し、無ければ subscription の
  * 値を継承し、どちらも無ければ Ascending になることを検証する。
  */
@@ -1033,7 +1033,7 @@ test("resolveFillGroupOrder: fill・subscription・既定値の優先順位で�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.21:
+ * draft-ietf-moq-transport-21 §9.20.22:
  * SUBSCRIBE / TRACK_STATUS / FETCH / SUBSCRIBE_TRACKS から
  * INCLUDE_PROPERTIES を送れることを検証する。true は 1、false は 0 になる。
  */
@@ -1050,7 +1050,7 @@ test("buildSubscribeParameters: includeProperties が INCLUDE_PROPERTIES にな�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.21:
+ * draft-ietf-moq-transport-21 §9.20.22:
  * includeProperties 省略時はパラメータ自体を送らない (デフォルト 1 と同等)。
  */
 test("buildSubscribeParameters: includeProperties 省略時は INCLUDE_PROPERTIES を含まない", () => {
@@ -1059,7 +1059,7 @@ test("buildSubscribeParameters: includeProperties 省略時は INCLUDE_PROPERTIE
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.21:
+ * draft-ietf-moq-transport-21 §9.20.22:
  * FETCH から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -1085,7 +1085,7 @@ test("buildFetchParameters: includeProperties が INCLUDE_PROPERTIES になる",
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.21:
+ * draft-ietf-moq-transport-21 §9.20.22:
  * SUBSCRIBE_TRACKS から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */
@@ -1105,7 +1105,7 @@ test("buildSubscribeTracksParameters: includeProperties が INCLUDE_PROPERTIES �
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.21:
+ * draft-ietf-moq-transport-21 §9.20.22:
  * TRACK_STATUS から INCLUDE_PROPERTIES を送れることを検証する。
  * true / false / 省略の 3 状態を網羅する。
  */

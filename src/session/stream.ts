@@ -15,7 +15,7 @@ import { readDeliveryTimeoutObjectProperties } from "../properties";
 
 /**
  * Object ID の最大値 (2^64 - 1)
- * draft-ietf-moq-transport-20 §11.4.2:
+ * draft-ietf-moq-transport-21 §11.3.1:
  * "If the resulting Object ID would be greater than 2^64 - 1,
  *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
  */
@@ -42,7 +42,7 @@ export interface FetchObjectSink {
 
 /**
  * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
- *   draft-ietf-moq-transport-20 §11.4.4.1 / §10.2.8
+ *   draft-ietf-moq-transport-21 §11.4.1.1 / §9.20.9
  */
 export function processFetchObjects(
   buffer: Uint8Array,
@@ -85,14 +85,14 @@ export function processFetchObjects(
       currentContext = newContext;
       currentIsFirst = false;
 
-      // draft-ietf-moq-transport-20 Section 11.4.4.2:
+      // draft-ietf-moq-transport-21 Section 11.4.1.2:
       // End of Range レコードは実際のオブジェクトデータを含まないためスキップする。
       // コンテキスト (Group ID, Object ID 等) は既に newContext で更新済み。
       if (fields.endOfRange) {
         continue;
       }
 
-      // draft-ietf-moq-transport-20 Section 11.2.1.1:
+      // draft-ietf-moq-transport-21 Section 11.1.2:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
       const object: MoqtObject = {
         groupId: fields.groupId,
@@ -164,7 +164,7 @@ export function processSubgroupObjects(
 } {
   let offset = 0;
   let currentPreviousObjectId = previousObjectId;
-  // draft-ietf-moq-transport-20 Section 11.4.2:
+  // draft-ietf-moq-transport-21 Section 11.3.1:
   // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
   // Subgroup ID として使用する。呼び出し側で保持した値を優先し、
   // 未保持時のみヘッダ由来値から初期化する (feed 間の状態引き継ぎ)。
@@ -177,7 +177,7 @@ export function processSubgroupObjects(
     // 仮引数 previousObjectId (バッチ先頭値) を使うとバッチ全体が先頭扱いになる。
     // 送信側 src/session/publish.ts の isFirstInSubgroup と対称。
     // 呼び出し側が previousObjectId を feed 間で引き継ぐことが前提。
-    // draft-ietf-moq-transport-20 §8 / §12.1 / §12.2:
+    // draft-ietf-moq-transport-21 §5.2 / §10.1 / §10.2:
     // 先頭オブジェクトのみ上書きし、先頭以外は無視する。
     const isFirstInSubgroup = currentPreviousObjectId < 0n;
     try {
@@ -201,7 +201,7 @@ export function processSubgroupObjects(
       currentPreviousObjectId = objectId;
 
       // Object ID の範囲検証: 0 以上 2^64-1 以下
-      // draft-ietf-moq-transport-20 §11.4.2:
+      // draft-ietf-moq-transport-21 §11.3.1:
       // "If the resulting Object ID would be greater than 2^64 - 1,
       //  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
       if (objectId > maxObjectId) {
@@ -225,7 +225,7 @@ export function processSubgroupObjects(
         payload,
       };
 
-      // draft-ietf-moq-transport-20 Section 8 / §12.1 / §12.2:
+      // draft-ietf-moq-transport-21 Section 5.2 / §10.1 / §10.2:
       // subgroup 先頭オブジェクトの Object Property から delivery timeout を抽出する。
       // 先頭以外に同 ID が付いていても ignore（PROTOCOL_VIOLATION にしない）。
       if (isFirstInSubgroup && fields.properties.length > 0) {
@@ -241,7 +241,7 @@ export function processSubgroupObjects(
       stats.incrementObjectsReceived(true);
       stats.incrementBytesReceived(true, payload.byteLength);
 
-      // draft-ietf-moq-transport-20 §5.1: 同一 alias の全 subscription に配送
+      // draft-ietf-moq-transport-21 §3.1: 同一 alias の全 subscription に配送
       // (filter 再適用は各 handleObject 内)。
       // アプリ例外は当該 subscriber の error コールバックへ通知し、
       // 残りの配送と同一ストリームの後続処理を継続する。セッションは閉じない。

@@ -1052,6 +1052,10 @@
 - [CHANGE] 未使用の export (calculateAuthTokenSize / fallbackRegisterToUseValue / ObjectForwardingPreference) を削除する
   - リポジトリ全体から参照されていないデッドコードを削除する
   - @voluntas
+- [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
+  - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
+  - ワイヤ形式・ロジック・公開 API は変更しない
+  - @voluntas
 - [UPDATE] PublishOptions / SubscribeOptions の deliveryTimeout doc コメントを moqt-js が値の比較・強制を行わない実態に合わせて修正する
   - 比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント（典型的にはリレー）の責務である旨に修正する (draft-ietf-moq-transport-19 §8)
   - @voluntas

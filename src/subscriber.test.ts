@@ -1,6 +1,6 @@
 /**
  * Subscriber Unit Tests
- * draft-ietf-moq-transport-20 Section 5.1 (Subscriptions)
+ * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -103,7 +103,7 @@ test("update は closed 状態ではエラーになる", async () => {
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.9:
+ * draft-ietf-moq-transport-21 §9.5:
  * 非 async 化に伴い、closed 状態の update() が同期 throw に化けず rejected な
  * Promise を返すことを検証する。fire-and-forget 呼び出しの観測挙動を変えない
  * ための振る舞いであり、await する呼び出しには reject が伝播する。
@@ -127,7 +127,7 @@ test("update は closed 状態でも同期 throw せず rejected な Promise を
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.9:
+ * draft-ietf-moq-transport-21 §9.5:
  * closed 状態の update() を fire-and-forget で呼んでも unhandled rejection に
  * ならないことを検証する (同一インスタンスに catch ハンドラを登録するため)。
  */
@@ -156,7 +156,7 @@ test("update は closed 状態の fire-and-forget でも unhandled rejection に
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.9:
+ * draft-ietf-moq-transport-21 §9.5:
  * onUpdate 未設定の update() は解決済み Promise を返すことを検証する
  * (現行の暗黙 resolve 挙動の維持)。
  */
@@ -169,7 +169,7 @@ test("update は onUpdate 未設定時は解決済み Promise を返す", async 
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.9:
+ * draft-ietf-moq-transport-21 §9.5:
  * onUpdate が同期 throw しても update() は同期 throw せず rejected な
  * Promise を返すことを検証する (旧 async 実装と等価に吸収する)。
  */
@@ -191,7 +191,7 @@ test("update は onUpdate の同期 throw を rejected な Promise に変換す�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.9:
+ * draft-ietf-moq-transport-21 §9.5:
  * onUpdate の同期 throw を fire-and-forget で呼んでも unhandled rejection に
  * ならないことを検証する。
  */
@@ -219,7 +219,7 @@ test("update は onUpdate の同期 throw の fire-and-forget でも unhandled r
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.9:
+ * draft-ietf-moq-transport-21 §9.5:
  * update() が onUpdate の返り値と同一インスタンスを返すことを検証する。
  * 別インスタンス (catch 派生) を返すと await 側に reject が伝播しなくなるため、
  * 同一性が抑制と伝播の両立の核になる。
@@ -242,7 +242,7 @@ test("update は onUpdate の返り値と同一インスタンスを返す", asy
   }
 });
 
-// draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
+// draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
 // UPDATE_FAILED (0x8) 等のエラー・ステータスでは errorCallback を呼ぶ
 test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -270,7 +270,7 @@ test("handleEnd は statusCode がエラーの場合 errorCallback を呼ぶ", (
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
+// draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
 // TRACK_ENDED (0x2) は正常終了。errorCallback は呼ばない
 test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ばない", () => {
   let endCalled = false;
@@ -295,7 +295,7 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
   assert.isFalse(errorCalled);
 });
 
-// draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
+// draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
 // INTERNAL_ERROR (0x0) はエラー。errorCallback を呼ぶ
 test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼ぶ", () => {
   let endCalled = false;
@@ -321,7 +321,7 @@ test("handleEnd は statusCode が INTERNAL_ERROR の場合 errorCallback を呼
   assert.equal(subscriber.state, "closed");
 });
 
-// draft-ietf-moq-transport-20 Section 10.8 (SUBSCRIBE_OK):
+// draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
 // SUBSCRIBE_OK の Track Properties が Subscriber に設定される
 test("setTrackProperties で Track Properties が設定される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -339,7 +339,7 @@ test("setTrackProperties で Track Properties が設定される", () => {
   assert.equal(subscriber.trackProperties[1].id, 0x04n);
 });
 
-// draft-ietf-moq-transport-20 Section 10.2.17 (LARGEST OBJECT Parameter):
+// draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter):
 // setLargestLocation で largestLocation が更新される
 test("setLargestLocation で largestLocation が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -354,7 +354,7 @@ test("setLargestLocation で largestLocation が更新される", () => {
   assert.deepEqual(subscriber.largestLocation, { group: 10n, object: 7n });
 });
 
-// draft-ietf-moq-transport-20 §10.4 (GOAWAY):
+// draft-ietf-moq-transport-21 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -371,7 +371,7 @@ test("goawayCallback が設定できる", () => {
   assert.equal(calledUri, "moqt://new.example.com");
 });
 
-// draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+// draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
 // setForwardState で Forward State が更新され、forwardState で取得できることを検証する。
 test("setForwardState で Forward State が更新される", () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
@@ -388,7 +388,7 @@ test("setForwardState で Forward State が更新される", () => {
 
 // ============================================================================
 // Range Filters の再適用テスト
-// draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters)
+// draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
 // ============================================================================
 
 /**
@@ -478,7 +478,7 @@ test("setRangeFilters: 削除エントリは当該型全体を削除する", () 
 
 /**
  * setRangeFilters: 同型の異なる SetID が共存することを検証する。
- * (§5.1.4「The final result is SetID=0 OR SetID=1 OR ... SetID=255」)
+ * (§3.3.2「The final result is SetID=0 OR SetID=1 OR ... SetID=255」)
  */
 test("setRangeFilters: 同型の異なる SetID は共存する", () => {
   const delivered: MoqtObject[] = [];
@@ -500,7 +500,7 @@ test("setRangeFilters: 同型の異なる SetID は共存する", () => {
 /**
  * setRangeFilters: REQUEST_UPDATE で他種のフィルタが不変であることを検証する。
  * (「If a filter parameter is omitted from REQUEST_UPDATE, the value is
- *  unchanged」§5.1.4)
+ *  unchanged」§3.3.2)
  */
 test("setRangeFilters: REQUEST_UPDATE で省略された型は不変", () => {
   const delivered: MoqtObject[] = [];
@@ -552,7 +552,7 @@ test("setRangeFilters: 異なる Property Type は共存する", () => {
 
 // ============================================================================
 // Location Filter 再適用のテスト
-// draft-ietf-moq-transport-20 Section 5.1.2 (Location Filters)
+// draft-ietf-moq-transport-21 Section 3.3.1 (Location Filters)
 // ============================================================================
 
 /**
@@ -561,7 +561,7 @@ test("setRangeFilters: 異なる Property Type は共存する", () => {
  * ({ startGroup: 0n, startObject: 0n }) フィルタの Start が
  * {Largest Object.Group, Largest Object.Object + 1} になることを検証する。
  * LARGEST_OBJECT と同一 Location のオブジェクトがフィルタを通過して配信される
- * のは誤り (§5.1.2)。
+ * のは誤り (§9.20.10)。
  */
 test("Location Filter 再適用: setLargestLocation 後に LARGEST_OBJECT と同一 Location は配信しない", () => {
   const delivered: MoqtObject[] = [];
@@ -648,7 +648,7 @@ test("Location Filter 再適用: startGroup=0 は LARGEST_OBJECT の次のグル
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2:
+ * draft-ietf-moq-transport-21 §3.3.1:
  * setLargestLocation だけでは相対 Location Filter の開始位置を前進させない。
  * 開始位置は SUBSCRIBE_OK 相当の resolveLocationFilter で一度だけ確定する。
  */
@@ -668,7 +668,7 @@ test("Location Filter 再適用: setLargestLocation だけでは相対フィル�
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2:
+ * draft-ietf-moq-transport-21 §3.3.1:
  * Next Object フィルタの開始位置は SUBSCRIBE_OK で確定し、その後の
  * LARGEST_OBJECT 更新 (PUBLISH_STATE_NOTIFY) では前進しない。
  */
@@ -699,7 +699,7 @@ test("Location Filter 再適用: SUBSCRIBE_OK 後の LARGEST_OBJECT 更新で Ne
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2:
+ * draft-ietf-moq-transport-21 §3.3.1:
  * 1 フィールド相対フィルタ (Next Group) の開始位置も SUBSCRIBE_OK で確定し、
  * その後の LARGEST_OBJECT 更新では前進しない。
  */
@@ -726,7 +726,7 @@ test("Location Filter 再適用: SUBSCRIBE_OK 後の LARGEST_OBJECT 更新で Ne
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.2.8:
+ * draft-ietf-moq-transport-21 §9.20.9:
  * SUBSCRIBE 送信時の Group Order の保持と取得を検証する
  * (fill 要求時の Group Order 解決に使う)。
  */
@@ -741,7 +741,7 @@ test("setGroupOrder / getGroupOrder: SUBSCRIBE 送信時の Group Order を保�
 });
 
 /**
- * draft-ietf-moq-transport-20 §5.1.2 / §5.1.3:
+ * draft-ietf-moq-transport-21 §3.3.1 / §3.4:
  * 同一 Location が fill 経由と subscription 経由の両方で届く場合に、
  * アプリが両者を区別して受け取れることを検証する。
  * fill 経由は subscription の Location Filter 再適用を通さないため、

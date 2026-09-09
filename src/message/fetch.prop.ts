@@ -1,6 +1,6 @@
 /**
  * MOQT Fetch Messages Property-Based Tests
- * draft-ietf-moq-transport-20 Section 10.13-10.14
+ * draft-ietf-moq-transport-21 Section 9.11-9.12
  */
 
 import { test, assert } from "vite-plus/test";
@@ -27,7 +27,7 @@ import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -37,7 +37,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-20 §10.2.18 / §10.2.7 / §10.2.8: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-21 §9.20.19 / §9.20.8 / §9.20.9: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -77,7 +77,7 @@ const lengthPrefixedParameterArb = fc
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
+ * draft-ietf-moq-transport-21 §9.20.10: Value は「Length + optional vi64 フィールド」の
  * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
  * フィールド数 0 (reset) 〜 4 の全ケースを網羅する
@@ -130,9 +130,9 @@ const parametersArb = fc
 /**
  * Track Properties arbitrary
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * FETCH_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 // 値域制約のある Track Property は除外する (validateTrackPropertyValue で
 // ProtocolViolationError になりラウンドトリップが成立しないため)
@@ -168,9 +168,9 @@ const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropert
 const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
 
 /**
- * draft-ietf-moq-transport-20 Section 2.3:
+ * draft-ietf-moq-transport-21 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 const namespaceArb = fc
   .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })
@@ -222,7 +222,7 @@ test("Fetch のエンコード・デコードがラウンドトリップする",
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 10:
+ * draft-ietf-moq-transport-21 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は FETCH ペイロードの最後のフィールドであり、
@@ -260,7 +260,7 @@ test("FETCH の末尾に後続データがあると ProtocolViolationError を t
 });
 
 /**
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * FETCH_OK に Track Properties が追加された。
  */
 test("FetchOk のエンコード・デコードがラウンドトリップする", () => {

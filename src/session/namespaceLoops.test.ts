@@ -8,10 +8,10 @@
  * および長さ検証後メッセージデコード破損 (IncompleteDataError) 時の
  * PROTOCOL_VIOLATION でセッションが閉じる挙動。
  *
- * draft-ietf-moq-transport-20 §10.4 (GOAWAY) / §10.5 (REQUEST_OK) /
- * §10.9.2 (Updating Namespace Subscriptions) / §10.16 (PUBLISH_NAMESPACE) /
- * §10.17 (NAMESPACE) / §10.18 (NAMESPACE_DONE) / §10.20 (SUBSCRIBE_TRACKS) /
- * §10.21 (PUBLISH_SKIPPED)
+ * draft-ietf-moq-transport-21 §9.2 (GOAWAY) / §9.3 (REQUEST_OK) /
+ * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
+ * §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) / §9.18 (SUBSCRIBE_TRACKS) /
+ * §9.19 (PUBLISH_SKIPPED)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -228,7 +228,7 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の REQUEST_ERROR 
   ctx.readableController.enqueue(
     requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
   );
-  // §10.9.1 により失敗時はピアがストリームを閉じる
+  // §9.5.1 により失敗時はピアがストリームを閉じる
   ctx.readableController.close();
   await readPromise;
 
@@ -256,7 +256,7 @@ test("namespaceStartNamespaceStreamLoop: 応答を待たずにストリームが
   );
 
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  // REQUEST_UPDATE 失敗時にピアがストリームを閉じるケース (§10.9.1) を再現する
+  // REQUEST_UPDATE 失敗時にピアがストリームを閉じるケース (§9.5.1) を再現する
   ctx.readableController.close();
   await readPromise;
 
@@ -369,7 +369,7 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の REQUEST_OK で
   );
 
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  // §10.5: REQUEST_UPDATE_OK の Track Properties は空でなければならない
+  // §9.3: REQUEST_UPDATE_OK の Track Properties は空でなければならない
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0n, value: 1n }]));
   ctx.readableController.close();
   await readPromise;
@@ -459,7 +459,7 @@ test("namespaceStartNamespaceStreamLoop: GOAWAY 受信後の REQUEST_ERROR で�
   assert.equal(pending.rejected!.message, "prefix overlap");
   assert.deepEqual(ctx.subscription.namespacePrefix, ["live"]);
   assert.isUndefined(ctx.subscription.pendingPrefix);
-  // GOAWAY 受信後はセッションを閉じない (§10.4)
+  // GOAWAY 受信後はセッションを閉じない (§9.2)
   assert.isUndefined(ctx.getClosedWithError());
 });
 
@@ -507,7 +507,7 @@ test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY (resolved=false) で call
 });
 
 test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY で New Session URI が空文字の場合は fallback 文言で reject", async () => {
-  // draft-ietf-moq-transport-20 §10.4: "If the URI is zero bytes long, the current URI is reused instead"
+  // draft-ietf-moq-transport-21 §9.2: "If the URI is zero bytes long, the current URI is reused instead"
   // クライアントからサーバへの GOAWAY は必ず空 URI (「A client MUST send a zero-length New Session URI」)
   const ctx = createNamespaceLoopTestContext("namespace");
   const notifiedUris: string[] = [];
@@ -541,7 +541,7 @@ test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY で New Session URI が�
 });
 
 test("namespaceStartNamespaceStreamLoop: 確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) され、読み取り継続 (2 通目 GOAWAY 検出) が維持される", async () => {
-  // draft-ietf-moq-transport-20 §10.4:
+  // draft-ietf-moq-transport-21 §9.2:
   // 「the endpoint SHOULD ... close the old request stream using the appropriate mechanism
   //  (e.g. FIN, stream reset, or PUBLISH_DONE)」に従い、送信方向を FIN で閉じる。
   // 受信方向は読み取り継続し 2 通目 GOAWAY は PROTOCOL_VIOLATION として検出する。
@@ -577,7 +577,7 @@ test("namespaceStartNamespaceStreamLoop: 確立後 (resolved=true) の GOAWAY �
   await readPromise;
 
   assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
-  // 2 通目 GOAWAY 検出でセッションが閉じる (§10.4 MUST)
+  // 2 通目 GOAWAY 検出でセッションが閉じる (§9.2 MUST)
   const err = ctx.getClosedWithError();
   assert.isDefined(err);
   assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
@@ -680,7 +680,7 @@ test("namespaceStartTracksStreamLoop: 応答を待たずにストリームが閉
   );
 
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  // REQUEST_UPDATE 失敗時にピアがストリームを閉じるケース (§10.9.1) を再現する
+  // REQUEST_UPDATE 失敗時にピアがストリームを閉じるケース (§9.5.1) を再現する
   ctx.readableController.close();
   await readPromise;
 
@@ -809,7 +809,7 @@ test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH
 });
 
 test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) され、読み取り継続が維持される", async () => {
-  // draft-ietf-moq-transport-20 §10.4:
+  // draft-ietf-moq-transport-21 §9.2:
   // 送信方向は FIN で閉じる。受信方向は読み取り継続して 2 通目 GOAWAY を検出する。
   const ctx = createNamespaceLoopTestContext("tracks");
   const notifiedUris: string[] = [];
@@ -847,11 +847,11 @@ test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で�
 
 // ============================================================================
 // namespace 系ループ共通: メッセージデコード破損と確立後メッセージのテスト
-// draft-ietf-moq-transport-20 §10 (Control Messages) / §10.5 / §10.17-10.21
+// draft-ietf-moq-transport-21 §9 (Control Messages) / §9.3 / §9.15-9.19
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-20 §10 / §10.5:
+ * draft-ietf-moq-transport-21 §9 / §9.3:
  * ループ内のメッセージデコードが IncompleteDataError (Length が揃った後の
  * フィールド構造の破損) の場合、黙殺されず PROTOCOL_VIOLATION でセッションが
  * 閉じることを検証する。変換は toProtocolViolationSessionError
@@ -1241,7 +1241,7 @@ test("namespaceStartTracksStreamLoop: 正常な PUBLISH_SKIPPED でセッショ�
 
 // ============================================================================
 // namespaceStartPublicationStreamLoop のテスト
-// draft-ietf-moq-transport-20 §10.16 (PUBLISH_NAMESPACE、応答は §10.5 / §10.6)
+// draft-ietf-moq-transport-21 §9.14 (PUBLISH_NAMESPACE、応答は §9.3 / §9.4)
 // ============================================================================
 
 /**
@@ -1403,10 +1403,10 @@ test("namespaceStartPublicationStreamLoop: 先頭 GOAWAY (resolved=false) で ca
 });
 
 test("namespaceStartPublicationStreamLoop: 確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) される", async () => {
-  // draft-ietf-moq-transport-20 §10.4:
+  // draft-ietf-moq-transport-21 §9.2:
   // publication ループも namespace / tracks と同様、送信方向を FIN で閉じる。
-  // §3.3.2 の PUBLISH_DONE MUST は Established subscription 限定であり
-  // namespace publication は対象外 (§10.4 の FIN 選択肢が妥当)。
+  // §6.4.2.2 の PUBLISH_DONE MUST は Established subscription 限定であり
+  // namespace publication は対象外 (§9.2 の FIN 選択肢が妥当)。
   const ctx = createPublicationLoopTestContext();
   const publication = ctx.session.namespacePublications.get(ctx.requestId)! as unknown as {
     callbacks: Record<string, unknown>;
@@ -1446,7 +1446,7 @@ test("namespaceStartPublicationStreamLoop: 確立後 (resolved=true) の GOAWAY 
 
 // ============================================================================
 // 確立前の検証失敗で Promise が reject される
-// draft-ietf-moq-transport-20 §10.16 / §10.19 / §10.20:
+// draft-ietf-moq-transport-21 §9.14 / §9.15 / §9.18:
 // ピアの初期応答が仕様違反でも呼び出し元の Promise を永久ハングさせず、
 // closeWithError に渡す SessionError と同一オブジェクトで reject する
 // (PUBLISH 応答経路と同一パターン)。
@@ -1515,7 +1515,7 @@ test("namespaceStartNamespaceStreamLoop: 初期 REQUEST_OK のスコープ違反
 });
 
 test("namespaceStartNamespaceStreamLoop: 初期 REQUEST_OK の Track Properties 非空で reject し同一オブジェクトで閉じる", async () => {
-  // §10.5 の空必須違反も呼び出し元へ reject する
+  // §9.3 の空必須違反も呼び出し元へ reject する
   const ctx = createNamespaceLoopTestContext("namespace");
 
   let rejectedError: Error | undefined;
@@ -1637,7 +1637,7 @@ test("namespaceStartPublicationStreamLoop: 初期 REQUEST_OK のスコープ違�
 });
 
 test("namespaceStartPublicationStreamLoop: 初期 REQUEST_OK の Track Properties 非空で reject し同一オブジェクトで閉じる", async () => {
-  // §10.5 の空必須違反も呼び出し元へ reject する
+  // §9.3 の空必須違反も呼び出し元へ reject する
   const ctx = createPublicationLoopTestContext();
 
   let rejectedError: Error | undefined;

@@ -1,6 +1,6 @@
 /**
  * MOQT エラー型テスト
- * draft-ietf-moq-transport-20 Section 15.11 (Error Codes)
+ * draft-ietf-moq-transport-21 Section 16.11 (Error Codes)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -72,7 +72,7 @@ test("normalizeRequestErrorCode: 既知のコードはそのまま通す", () =>
 test("normalizeRequestErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizeRequestErrorCode(0x99), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0xff), RequestErrorCode.INTERNAL_ERROR);
-  // draft-ietf-moq-transport-20 §14: Grease REQUEST_ERROR codes
+  // draft-ietf-moq-transport-21 §13: Grease REQUEST_ERROR codes
   assert.equal(normalizeRequestErrorCode(0x9d), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0x7f * 1 + 0x9d), RequestErrorCode.INTERNAL_ERROR);
 });
@@ -84,13 +84,13 @@ test("normalizePublishDoneCode: 既知のコードはそのまま通す", () => 
 
 test("normalizePublishDoneCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizePublishDoneCode(0x99), PublishDoneStatusCode.INTERNAL_ERROR);
-  // draft-ietf-moq-transport-20 §14: Grease PUBLISH_DONE codes
+  // draft-ietf-moq-transport-21 §13: Grease PUBLISH_DONE codes
   assert.equal(normalizePublishDoneCode(0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
   assert.equal(normalizePublishDoneCode(0x7f * 1 + 0x9d), PublishDoneStatusCode.INTERNAL_ERROR);
 });
 
 /**
- * draft-ietf-moq-transport-20 Appendix A.1:
+ * draft-ietf-moq-transport-21 Appendix A.2:
  * 削除された 0x3 SUBSCRIPTION_ENDED は未知コードとして
  * INTERNAL_ERROR に正規化されることを検証する。
  */
@@ -111,7 +111,7 @@ test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規�
 });
 
 /**
- * draft-ietf-moq-transport-20 §15.11.1 / §14 / Appendix A.1:
+ * draft-ietf-moq-transport-21 §16.11.1 / §13 / Appendix A.2:
  * 削除された 0x15 VERSION_NEGOTIATION_FAILED は未知コードとして
  * INTERNAL_ERROR に正規化されることを検証する。
  */

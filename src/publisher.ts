@@ -1,6 +1,6 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-20 Section 5 (Publishing and Retrieving Tracks)
+ * draft-ietf-moq-transport-21 Section 3 (Publishing and Retrieving Tracks)
  */
 
 import { ObjectStatus } from "./message/types";
@@ -22,7 +22,7 @@ export interface SendObjectParams {
   priority?: number;
   /**
    * オブジェクトステータス
-   * draft-ietf-moq-transport-20 §11.2.1.1
+   * draft-ietf-moq-transport-21 §11.1.2
    *
    * - NORMAL (0x0): 通常のオブジェクト（デフォルト）
    * - END_OF_GROUP (0x3): グループの終端。payload は空でなければならない
@@ -34,7 +34,7 @@ export interface SendObjectParams {
   status?: ObjectStatus;
   /**
    * Object Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-20 Section 12.2 / Section 8
+   * draft-ietf-moq-transport-21 Section 10.2 / Section 5.2
    *
    * subgroup 先頭オブジェクトの Object Property として送信される。
    * 先頭以外で指定すると throw する。
@@ -42,7 +42,7 @@ export interface SendObjectParams {
   deliveryTimeout?: bigint;
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-20 Section 12.1 / Section 8
+   * draft-ietf-moq-transport-21 Section 10.1 / Section 5.2
    *
    * subgroup 先頭オブジェクトの Object Property として送信される。
    * 先頭以外で指定すると throw する。
@@ -52,7 +52,7 @@ export interface SendObjectParams {
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
+ * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
  */
 export interface SendDatagramParams {
   groupId: number;
@@ -73,7 +73,7 @@ export interface Publisher {
   readonly state: PublisherState;
   /**
    * Forward State
-   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
    *
    * PUBLISH 送信時の options.forward (省略時は true) を初期値として返す。
    * PUBLISH_OK は EXPIRES のみを運び Forward State を変更しない。
@@ -99,31 +99,31 @@ export interface Publisher {
    * 範囲外・非整数の priority も fail-fast で error 通知 + 返値の reject になる。
    * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しも
    * fail-fast で error 通知 + 返値の reject になる
-   * (組み合わせ規則は draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2、
-   * END_OF_TRACK 後は §11.2.1.1 の EOT 定義による解釈)。
+   * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
+   * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
+   * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    *
-   * draft-ietf-moq-transport-20:
+   * draft-ietf-moq-transport-21:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Publisher は sendObject() と sendDatagram() を同じトラックで併用できる。
-   * draft-ietf-moq-transport-20 Section 2.2, Section 11.3
+   * draft-ietf-moq-transport-21 Section 2.2, Section 11.2
    *
    * 範囲外の Group / Object ID は error 通知 + throw する
    * (セッションは閉じない)。closed 後は検証前に no-op で返す。
    * 範囲外・非整数の priority も error 通知 + throw になる。
    * END_OF_TRACK 送信後の呼び出しも error 通知 + throw になる
-   * (§11.2.1.1 の EOT 定義による解釈)。
+   * (§11.1.2 の EOT 定義による解釈)。
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
    * パブリッシングを終了し、PUBLISH_DONE を送信してストリームを閉じる
-   * draft-ietf-moq-transport-20 §10.12 (PUBLISH_DONE)
+   * draft-ietf-moq-transport-21 §9.9 (PUBLISH_DONE)
    *
    * 並行して呼ばれた場合も PUBLISH_DONE は 1 回だけ送信され、
    * 2 回目の呼び出しは 1 回目の完了まで待つ。
@@ -135,9 +135,9 @@ export interface Publisher {
 /**
  * status / payload の組み合わせを検証する
  *
- * draft-ietf-moq-transport-20 §11.2.1.1:
+ * draft-ietf-moq-transport-21 §11.1.2:
  * 非 NORMAL ステータスは空 payload でなければならない。
- * draft-ietf-moq-transport-20 §11.2.1.2:
+ * draft-ietf-moq-transport-21 §11.1.3:
  * 非 NORMAL ステータスの Object に properties があってはならない。
  * `status` 省略は NORMAL とみなす。
  *
@@ -171,11 +171,11 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
-  // draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
+  // draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
 
-  // draft-ietf-moq-transport-20 §11.2.1.1:
+  // draft-ietf-moq-transport-21 §11.1.2:
   // END_OF_TRACK 送信済みか。sendObject / sendDatagram で共有し、
   // 記録後の両 API 呼び出しを拒否する。
   private endOfTrackSent = false;
@@ -189,7 +189,7 @@ export class PublisherImpl implements Publisher {
   /**
    * 進行中の done() の Promise
    *
-   * draft-ietf-moq-transport-20 §10.12:
+   * draft-ietf-moq-transport-21 §9.9:
    * 「A publisher sends a PUBLISH_DONE message as the final message before
    *  closing the subscription's bidi stream」の枠組みに反する二重 PUBLISH_DONE
    * 送信を防ぐため、並行 done() 呼び出しでは進行中の Promise を再利用する。
@@ -256,8 +256,8 @@ export class PublisherImpl implements Publisher {
    *
    * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しは
    * fail-fast で error 通知 + 返値の reject になる
-   * (組み合わせ規則は draft-ietf-moq-transport-20 §11.2.1.1 / §11.2.1.2、
-   * END_OF_TRACK 後は §11.2.1.1 の EOT 定義による解釈)。
+   * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
+   * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
     if (this.publisherState === "closed") {
@@ -274,7 +274,7 @@ export class PublisherImpl implements Publisher {
       return Promise.reject(violation);
     }
 
-    // draft-ietf-moq-transport-20 §11.2.1.1:
+    // draft-ietf-moq-transport-21 §11.1.2:
     // status / payload 規則は委譲前 (queue 登録前) に検証する。
     // 違反は通知して返値の Promise を reject する (解決しない)。
     const statusViolation = validateSendStatusPayload(params);
@@ -321,10 +321,10 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Send a datagram on this track
-   * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
+   * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    *
    * END_OF_TRACK 送信後の呼び出しは fail-fast で error 通知 + throw になる
-   * (§11.2.1.1 の EOT 定義による解釈)。
+   * (§11.1.2 の EOT 定義による解釈)。
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
@@ -353,7 +353,7 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Internal: Set forward state (called by session)
-   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
    *
    * REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
    * PUBLISH 送信時の options.forward による初期設定でも呼ぶ。

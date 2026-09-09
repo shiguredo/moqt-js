@@ -1,6 +1,6 @@
 /**
  * MOQT TrackStatus Messages Property-Based Tests
- * draft-ietf-moq-transport-20 Section 10.15
+ * draft-ietf-moq-transport-21 Section 9.13
  */
 
 import { test, assert } from "vite-plus/test";
@@ -21,9 +21,9 @@ import { encodeVarint } from "../varint";
 import { ProtocolViolationError } from "../error";
 
 /**
- * draft-ietf-moq-transport-20 Section 2.3:
+ * draft-ietf-moq-transport-21 Section 2.3:
  * ゼロ要素 (空) のネームスペースを許可する。
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
   minLength: 0,
@@ -37,7 +37,7 @@ const trackNameArb = fc
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const varintParameterArb = fc
@@ -47,7 +47,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-20 §10.2.8 / §10.2.18: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-21 §9.20.9 / §9.20.19: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -87,7 +87,7 @@ const lengthPrefixedParameterArb = fc
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
+ * draft-ietf-moq-transport-21 §9.20.10: Value は「Length + optional vi64 フィールド」の
  * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
  * フィールド数 0 (reset) 〜 4 の全ケースを網羅する
@@ -171,7 +171,7 @@ test("TrackStatus のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 10:
+ * draft-ietf-moq-transport-21 Section 9:
  * "If the length does not match the length of the Message Body,
  *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
  * Parameters は TRACK_STATUS ペイロードの最後のフィールドであり、

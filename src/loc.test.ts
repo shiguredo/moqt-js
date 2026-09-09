@@ -4,8 +4,8 @@
  * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F)
  *
  * LOC Properties を Track Property と Object Property の両方で扱う経路、および
- * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-20
- * §1.4.3 / §11.2.1.2）のワイヤ形式・寛容デコード・合成経路を検証する。
+ * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-21
+ * §8.3 / §11.1.3）のワイヤ形式・寛容デコード・合成経路を検証する。
  * 単体エンコーダ / デコーダ（encodeTimestamp 等）は単一 Property 用の絶対 Type ワイヤであり、
  * 複数 Property のワイヤは encode*Properties / decode*Properties が担う。
  */
@@ -102,7 +102,7 @@ test("resolveVideoProperties: Track のみ", () => {
 });
 
 // resolveVideoProperties: 両方。同一 Property は Object が Track を上書きする
-// （draft-ietf-moq-transport-20 §12.1 の SUBGROUP_DELIVERY_TIMEOUT 先例）。
+// （draft-ietf-moq-transport-21 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例）。
 test("resolveVideoProperties: 両方（Object 優先）", () => {
   const trackProperties: Property[] = [
     { id: LOCPropertyId.TIMESCALE, value: 90000n },
@@ -189,7 +189,7 @@ test("resolveVideoProperties: Object と Track の両方が config を持つ場�
 });
 
 // ==========================================================================
-// 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-20 §1.4.3 / §11.2.1.2)
+// 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-21 §8.3 / §11.1.3)
 // ==========================================================================
 
 // 単一 Property のワイヤは「先頭の Delta Type = 0 からの絶対値」と同一であり、

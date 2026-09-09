@@ -1,6 +1,6 @@
 /**
  * MOQT Subscriber
- * draft-ietf-moq-transport-20 Section 5.1 (Subscriptions)
+ * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions)
  */
 
 import type { Parameter } from "./message/parameter";
@@ -25,11 +25,11 @@ export type SubscriberState = "active" | "closed";
 
 /**
  * REQUEST_UPDATE のオプション
- * draft-ietf-moq-transport-20 Section 10.9 (REQUEST_UPDATE)
+ * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE)
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Start Location は任意の値に減少可能（以前は増加のみ許可されていた）。
- * draft-ietf-moq-transport-20 Section 10.9
+ * draft-ietf-moq-transport-21 Section 9.5
  */
 export interface RequestUpdateOptions {
   /**
@@ -39,7 +39,7 @@ export interface RequestUpdateOptions {
 
   /**
    * Forward State を変更する
-   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
    *
    * - true: オブジェクトの転送を開始する（Subscriber がいることを通知）
    * - false: オブジェクトの転送を停止する
@@ -49,7 +49,7 @@ export interface RequestUpdateOptions {
 
   /**
    * Range Filters
-   * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters)
+   * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
    *
    * Length=0 で削除、省略で不変。
    */
@@ -57,8 +57,8 @@ export interface RequestUpdateOptions {
 
   /**
    * fill fetch の要求
-   * draft-ietf-moq-transport-20 Section 5.1.3 (Fill Semantics) /
-   * Section 10.2.15 (FILL PARAMETERS Parameter)
+   * draft-ietf-moq-transport-21 Section 3.4 (Fill Semantics) /
+   * Section 9.20.16 (FILL PARAMETERS Parameter)
    *
    * FILL_PARAMETERS (0x23) として送信し、fill fetch ストリームを要求する。
    * FILL_PARAMETERS は subscription 状態として保持されず、載せたメッセージに
@@ -69,7 +69,7 @@ export interface RequestUpdateOptions {
 
   /**
    * 新規 Group 開始の要求値
-   * draft-ietf-moq-transport-20 Section 10.2.19 (NEW_GROUP_REQUEST Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.20 (NEW_GROUP_REQUEST Parameter)
    *
    * subscriber が知る最大 Group ID + 1 (情報なし時は 0) を送る。
    * NEW_GROUP_REQUEST (0x32) として送信する。
@@ -84,23 +84,23 @@ export interface Subscriber {
   readonly state: SubscriberState;
   /**
    * SUBSCRIBE_OK で受信した LARGEST_OBJECT パラメータ
-   * draft-ietf-moq-transport-20 Section 10.2.17 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
    * 相対指定 (1 フィールド) の Location Filter と Next Object 形式の
-   * 解決に使用する (draft-ietf-moq-transport-20 §5.1.2)。
+   * 解決に使用する (draft-ietf-moq-transport-21 §3.3.1)。
    */
   readonly largestLocation: Location | null;
   /**
    * SUBSCRIBE_OK で受信した Track Properties
-   * draft-ietf-moq-transport-20 Section 10.8 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
    * OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
    * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
    * Forward State
-   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
    *
    * - SUBSCRIBE 送信時の options.forward の宣言値 (省略時は 1)
    * - 自 subscriber.update({ forward }) の REQUEST_OK 確認値
@@ -113,7 +113,7 @@ export interface Subscriber {
   readonly forwardState: boolean;
   /**
    * サブスクリプションを更新する（REQUEST_UPDATE を送信）
-   * draft-ietf-moq-transport-20 Section 10.9 (REQUEST_UPDATE)
+   * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE)
    */
   update(options?: RequestUpdateOptions): Promise<void>;
   unsubscribe(): Promise<void>;
@@ -134,20 +134,20 @@ export class SubscriberImpl implements Subscriber {
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
   private subscriberTrackProperties: Property[] = [];
-  // draft-ietf-moq-transport-20 §10.2.18 (FORWARD Parameter):
+  // draft-ietf-moq-transport-21 §9.20.19 (FORWARD Parameter):
   // Forward State。SUBSCRIBE 送信時の宣言値・受信 PUBLISH / ケース 1 の
   // REQUEST_UPDATE / 自 update() の REQUEST_OK で更新される。
   private subscriberForwardState = true;
-  // draft-ietf-moq-transport-20 §10.2.8 (GROUP ORDER Parameter):
+  // draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
   // SUBSCRIBE 送信時の宣言値。fill 要求時の Group Order 解決
   // (FILL_PARAMETERS 内の指定が無ければ subscription の値) に使う。
   private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
-  // draft-ietf-moq-transport-20 Section 5.1.2: Location Filter の再適用に使用
+  // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
   private resolvedFilterCache: ResolvedFilter | undefined;
-  // draft-ietf-moq-transport-20 Section 5.1.4: Range Filter の再適用に使用
+  // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter の再適用に使用
   private rangeFilters: RangeFilterSpec[] = [];
 
   // セッションが利用する内部コールバック
@@ -189,7 +189,7 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * Forward State
-   * draft-ietf-moq-transport-20 Section 10.2.18 (FORWARD Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
    */
   get forwardState(): boolean {
     return this.subscriberForwardState;
@@ -198,7 +198,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Forward State を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-20 §10.2.18:
+   * draft-ietf-moq-transport-21 §9.20.19:
    * SUBSCRIBE 送信時 (options.forward) / 受信 PUBLISH / ケース 1 の
    * REQUEST_UPDATE / 自 update() の REQUEST_OK の各経路から設定される。
    * アプリケーションへの変化通知コールバックは持たない (Publisher の
@@ -211,7 +211,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE 送信時の Group Order を設定する (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-20 §10.2.8 (GROUP ORDER Parameter):
+   * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
    * fill 要求時の Group Order 解決に使う。
    */
   setGroupOrder(groupOrder: "Ascending" | "Descending" | undefined): void {
@@ -244,10 +244,10 @@ export class SubscriberImpl implements Subscriber {
   /**
    * SUBSCRIBE_OK / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
    * LARGEST_OBJECT パラメータを設定
-   * draft-ietf-moq-transport-20 Section 10.2.17 (LARGEST OBJECT Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
    *
    * LARGEST_OBJECT の更新だけでは解決済み Location Filter を再計算しない。
-   * 初回購読の相対フィルタ開始位置は購読確立時に固定する (§5.1.2)。
+   * 初回購読の相対フィルタ開始位置は購読確立時に固定する (§3.3.1)。
    * 更新で新規に届く LOCATION_FILTER は setLocationFilter 時点の
    * LARGEST_OBJECT で解決する。
    */
@@ -258,7 +258,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 保持済みの Location Filter を最新の LARGEST_OBJECT で再解決する
    *
-   * draft-ietf-moq-transport-20 §5.1.2:
+   * draft-ietf-moq-transport-21 §3.3.1:
    * SUBSCRIBE 送信時の setLocationFilter では LARGEST_OBJECT が未受信のため、
    * SUBSCRIBE_OK で LARGEST_OBJECT を設定した直後に一度だけ呼ぶ。
    * REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の LARGEST_OBJECT 更新では呼ばない
@@ -270,7 +270,7 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * SUBSCRIBE_OK から Track Properties を設定
-   * draft-ietf-moq-transport-20 Section 10.8 (SUBSCRIBE_OK)
+   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK)
    */
   setTrackProperties(properties: Property[]): void {
     this.subscriberTrackProperties = properties;
@@ -294,7 +294,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Set track alias (called when SUBSCRIBE_OK is received)
    *
-   * draft-ietf-moq-transport-20 Section 10.8 (SUBSCRIBE_OK):
+   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
    * Track Alias is returned by the publisher in SUBSCRIBE_OK.
    */
   setTrackAlias(alias: bigint): void {
@@ -304,7 +304,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Location Filter を設定する
    *
-   * draft-ietf-moq-transport-20 Section 5.1.2:
+   * draft-ietf-moq-transport-21 Section 3.3.1:
    * SUBSCRIBE 送信時の options.filter または REQUEST_UPDATE 成功後の更新で設定される。
    */
   setLocationFilter(filter: LocationFilter | undefined): void {
@@ -342,7 +342,7 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * Full Track Name を取得する（Track 同一性判定用）
-   * draft-ietf-moq-transport-20 Section 2.4.1: Track の同一性は Full Track Name で判定
+   * draft-ietf-moq-transport-21 Section 2.4.1: Track の同一性は Full Track Name で判定
    */
   getFullTrackName(): string {
     return `${this.subscriberNamespace.join("/")}/${this.subscriberTrackName}`;
@@ -351,7 +351,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle incoming object from data stream
    *
-   * draft-ietf-moq-transport-20 Section 5.1:
+   * draft-ietf-moq-transport-21 Section 3.1:
    * 同一 Track の複数 subscription に対して、各 subscription の filter を再適用する。
    *
    * 1 Group = 1 Subgroup = 1 Stream のため、QUIC がストリーム内の順序を保証する。
@@ -361,7 +361,7 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
-    // draft-ietf-moq-transport-20 Section 5.1.2: Location Filter 再適用
+    // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
     if (
       !objectMatchesFilter(
         { group: object.groupId, object: object.objectId },
@@ -370,7 +370,7 @@ export class SubscriberImpl implements Subscriber {
     ) {
       return;
     }
-    // draft-ietf-moq-transport-20 Section 5.1.4: Range Filter 再適用
+    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter 再適用
     if (
       !rangeFiltersMatch(this.rangeFilters, {
         subgroupId: object.subgroupId,
@@ -386,18 +386,18 @@ export class SubscriberImpl implements Subscriber {
 
   /**
    * Handle incoming datagram
-   * draft-ietf-moq-transport-20 Section 11.3 (Datagrams)
+   * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    *
-   * draft-ietf-moq-transport-20:
+   * draft-ietf-moq-transport-21:
    * 同一トラック内で Datagram と Subgroup (Stream) の混在が許可される。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
-   * draft-ietf-moq-transport-20 Section 2.2, Section 11.3
+   * draft-ietf-moq-transport-21 Section 2.2, Section 11.2
    */
   handleDatagram(object: MoqtObject): void {
     if (this.subscriberState === "closed") {
       return;
     }
-    // draft-ietf-moq-transport-20 Section 5.1.2: Location Filter 再適用
+    // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
     if (
       !objectMatchesFilter(
         { group: object.groupId, object: object.objectId },
@@ -406,7 +406,7 @@ export class SubscriberImpl implements Subscriber {
     ) {
       return;
     }
-    // draft-ietf-moq-transport-20 Section 5.1.4: Range Filter 再適用
+    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter 再適用
     // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
     // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
     // 不通過になる (publisherPriority = 0 は評価値として使わない)
@@ -433,7 +433,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * fill fetch ストリームから届いたオブジェクトを受け取る
    *
-   * draft-ietf-moq-transport-20 §5.1.2 / §5.1.3 (Fill Semantics):
+   * draft-ietf-moq-transport-21 §3.3.1 / §3.4 (Fill Semantics):
    * fill-delivered のオブジェクトは fill 範囲 (FILL_PARAMETERS 内のフィルタ)
    * に従属するため、subscription の Location Filter / Range Filter 再適用
    * (handleObject) を通さず、fillDelivered を true にして object
@@ -443,7 +443,7 @@ export class SubscriberImpl implements Subscriber {
    * 各 Object を一度だけ受け取りたい場合は、Next Object の subscription
    * (StartGroup = 0 かつ StartObject = 0) と open-ended な fill を組み合わせる
    * (publisher が fill を Largest Object で終えるため重複なくつながる。
-   * §5.1.3 の exactly-once パターン)。state が closed の場合は受け取らない。
+   * §3.4 の exactly-once パターン)。state が closed の場合は受け取らない。
    */
   handleFillObject(object: MoqtObject): void {
     if (this.subscriberState === "closed") {
@@ -455,10 +455,10 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Handle track end (from PUBLISH_DONE)
    *
-   * draft-ietf-moq-transport-20 Section 5.1 (Subscriptions):
+   * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions):
    * "the publisher terminates a subscription using PUBLISH_DONE"
    *
-   * draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
+   * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
    * PUBLISH_DONE Status Code がエラーを示す場合（INTERNAL_ERROR, UPDATE_FAILED 等）、
    * errorCallback で通知する。
    */
@@ -468,7 +468,7 @@ export class SubscriberImpl implements Subscriber {
     }
     this.subscriberState = "closed";
 
-    // draft-ietf-moq-transport-20 Section 10.12 (PUBLISH_DONE):
+    // draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
     // INTERNAL_ERROR (0x0) 等はエラー。TRACK_ENDED (0x2) 等はエラーとみなさない。
     if (statusCode !== undefined && isPublishDoneErrorStatus(statusCode)) {
       this.errorCallback?.(
@@ -491,7 +491,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Mark as closed (called by session on session close)
    *
-   * draft-ietf-moq-transport-20 Section 3.5:
+   * draft-ietf-moq-transport-21 Section 6.6:
    * "The Transport Session can be terminated at any point."
    *
    * Note: endCallback is NOT called here because session close is
@@ -505,7 +505,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * サブスクリプションを更新する
    *
-   * draft-ietf-moq-transport-20 Section 10.9 (REQUEST_UPDATE):
+   * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE):
    * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
    *
    * fire-and-forget で呼び出しても、GOAWAY / REQUEST_ERROR / FIN / RESET 等に
@@ -544,7 +544,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * Unsubscribe from the track
    *
-   * draft-ietf-moq-transport-20 Section 5.1 (Subscriptions):
+   * draft-ietf-moq-transport-21 Section 3.1 (Subscriptions):
    * "The subscriber terminates a subscription in the Pending (Subscriber) or Established states
    * by sending STOP_SENDING."
    *
