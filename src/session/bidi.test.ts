@@ -81,7 +81,7 @@ import {
   validateNoDuplicateGoawayOnRequestStream,
   type BidiSessionInternal,
 } from "./bidi";
-import { publishSendPublishDone } from "./publish";
+import { publishClosePublisherStream, publishSendPublishDone } from "./publish";
 import { FetcherImpl, type Fetcher } from "../fetcher";
 
 // ============================================================================
@@ -2432,8 +2432,11 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
   const controlReader = new ControlStreamReader();
 
   const publisher = new PublisherImpl(["test"], "track", requestId, 1n);
-  publisher.onDoneInternal = () =>
-    publishSendPublishDone(session, publisher, PublishDoneStatusCode.TRACK_ENDED);
+  // SessionImpl の onDoneInternal と同じ後始末 (データストリーム FIN → PUBLISH_DONE)
+  publisher.onDoneInternal = async (status) => {
+    await publishClosePublisherStream(session, publisher.getTrackAlias());
+    await publishSendPublishDone(session, publisher, status);
+  };
 
   const session = {
     sessionState: "connected",

@@ -3,7 +3,7 @@
  * draft-ietf-moq-transport-21 Section 3 (Publishing and Retrieving Tracks)
  */
 
-import { ObjectStatus, type Location } from "./message/types";
+import { ObjectStatus, PublishDoneStatusCode, type Location } from "./message/types";
 import type { LocationFilter } from "./message/parameter";
 import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "./filter";
 import { ProtocolViolationError } from "./error";
@@ -251,7 +251,7 @@ export class PublisherImpl implements Publisher {
   goawayCallback?: (newSessionUri: string) => void;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
-  onDoneInternal?: () => Promise<void>;
+  onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
 
   /**
    * 進行中の done() の Promise
@@ -577,6 +577,20 @@ export class PublisherImpl implements Publisher {
    * "active" のままの意味論を維持する)。
    */
   async done(): Promise<void> {
+    return this.terminate(PublishDoneStatusCode.TRACK_ENDED);
+  }
+
+  /**
+   * Internal: PUBLISH_DONE を指定 status で 1 回だけ送信する (セッションからのみ呼ぶ)
+   *
+   * done() と REQUEST_UPDATE 拒否経路 (UPDATE_FAILED) が同じ donePromise 排他を
+   * 通ることで、並行しても PUBLISH_DONE は 1 回だけ送られる。排他を先に取得した
+   * 側が勝ち、後着は同じ Promise を await して何もしない (§9.9「PUBLISH_DONE は
+   * 最終メッセージ」のため後着が別 status を重ねて送ることはしない)。done() が
+   * 先に完了した場合に §9.5.1 の UPDATE_FAILED が送られないのは、購読がアプリ
+   * 起点で既に正常終了しているためである。
+   */
+  async terminate(status: PublishDoneStatusCode): Promise<void> {
     if (this.publisherState === "closed") {
       return;
     }
@@ -585,7 +599,7 @@ export class PublisherImpl implements Publisher {
       return this.donePromise;
     }
 
-    this.donePromise = this.doneInternal();
+    this.donePromise = this.doneInternal(status);
     try {
       await this.donePromise;
     } finally {
@@ -597,9 +611,9 @@ export class PublisherImpl implements Publisher {
    * onDoneInternal (PUBLISH_DONE 送信) を実行してから publisherState を
    * "closed" に遷移する
    */
-  private async doneInternal(): Promise<void> {
+  private async doneInternal(status: PublishDoneStatusCode): Promise<void> {
     if (this.onDoneInternal) {
-      await this.onDoneInternal();
+      await this.onDoneInternal(status);
     }
 
     this.publisherState = "closed";
