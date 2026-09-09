@@ -372,15 +372,27 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
 /**
  * string[] から TrackNamespace を作成
  *
- * draft-ietf-moq-transport-21:
- * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-21 Section 8.7
+ * draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
+ * Track Namespace は最大 32 フィールド・最大 4,096 バイト。
+ * 各フィールドは 1 バイト以上。
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
 
-  // draft-ietf-moq-transport-21 Section 2.4.1:
+  // draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
+  // "If an endpoint receives a Track Namespace consisting of greater than
+  //  32 Track Namespace Fields, it MUST close the session with a
+  //  PROTOCOL_VIOLATION." 送信側でも 33 フィールド以上を組み立てられない
+  // よう fail-fast で拒否する (受信したワイヤの違反ではないため
+  // ProtocolViolationError は使わない)。
+  if (parts.length > MAX_TRACK_NAMESPACE_FIELDS) {
+    throw new Error(
+      `track namespace fields exceeds maximum: ${parts.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+    );
+  }
+
+  // draft-ietf-moq-transport-21 §8.7:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   let dataSize = 0;
   for (const element of tuple) {
