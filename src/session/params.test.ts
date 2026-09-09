@@ -807,6 +807,20 @@ test("validateTrackNamespaceForSend: 予約 namespace の判定は先頭フィ�
   assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", ".session"], "track"));
 });
 
+/**
+ * draft-ietf-moq-transport-21 §8.7 / §2.4.1:
+ * Track Namespace は 0〜32 フィールド。33 フィールド以上は送信前に拒否する。
+ */
+test("validateTrackNamespaceForSend: 32 フィールドは throw せず 33 フィールドは throw する", () => {
+  const fields32 = Array.from({ length: 32 }, (_, i) => `f${i}`);
+  const fields33 = Array.from({ length: 33 }, (_, i) => `f${i}`);
+  assert.doesNotThrow(() => validateTrackNamespaceForSend(fields32, "track"));
+  assert.throws(
+    () => validateTrackNamespaceForSend(fields33, "track"),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
 test("validateTrackNamespaceForSend: .session + 空 Track Name は DOES_NOT_EXIST で throw する", () => {
   assert.throws(
     () => validateTrackNamespaceForSend([".session"], ""),

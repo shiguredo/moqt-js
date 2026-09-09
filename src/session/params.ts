@@ -22,6 +22,7 @@ import type {
   TrackStatusOptions,
 } from "../session";
 import {
+  MAX_TRACK_NAMESPACE_FIELDS,
   MessageParameterType,
   GroupOrder,
   encodeAuthorizationToken,
@@ -274,9 +275,18 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
  * @param namespace - 送信対象の Track Namespace (string[])
  * @param trackName - Track Name。namespace スコープ外のリクエスト (SUBSCRIBE_NAMESPACE /
  *                    SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE) では省略する
- * @throws Error 予約 namespace / session-level namespace の場合
+ * @throws Error 予約 namespace / session-level namespace / 33 フィールド以上の場合
  */
 export function validateTrackNamespaceForSend(namespace: string[], trackName?: string): void {
+  // draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure) / §2.4.1:
+  // Track Namespace は 0〜32 フィールド。33 フィールド以上は仕様準拠のピアが
+  // セッションを閉じるため、送信側で fail-fast で拒否する (受信したワイヤの
+  // 違反ではないため ProtocolViolationError は使わない)。
+  if (namespace.length > MAX_TRACK_NAMESPACE_FIELDS) {
+    throw new Error(
+      `track namespace fields exceeds maximum: ${namespace.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+    );
+  }
   if (namespace.length === 0) {
     return;
   }

@@ -32,6 +32,7 @@ import {
   validateTrackNameSize,
   validateIncludePropertiesValue,
   MAX_TRACK_NAME_SIZE,
+  MAX_TRACK_NAMESPACE_FIELDS,
   MAX_TRACK_NAMESPACE_SIZE,
   MAX_FULL_TRACK_NAME_SIZE,
   isRejectedReceiveNamespace,
@@ -443,6 +444,21 @@ test("createTrackNamespace で制限内なら成功", () => {
   const mediumPart = "a".repeat(1000);
   const ns = createTrackNamespace([mediumPart, mediumPart, mediumPart, mediumPart]);
   assert.equal(ns.tuple.length, 4);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.7 / §2.4.1:
+ * Track Namespace は 0〜32 フィールド。33 フィールド以上は送信側で拒否する。
+ */
+test("createTrackNamespace: 32 フィールドは成功し 33 フィールドはエラー", () => {
+  const fields32 = Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS }, (_, i) => `f${i}`);
+  const fields33 = Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS + 1 }, (_, i) => `f${i}`);
+  const ns = createTrackNamespace(fields32);
+  assert.equal(ns.tuple.length, MAX_TRACK_NAMESPACE_FIELDS);
+  assert.throws(
+    () => createTrackNamespace(fields33),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
 });
 
 test("encodeTrackNamespace で制限を超えるとエラー", () => {
