@@ -1,7 +1,7 @@
 # Track Namespace の送信時に 32 フィールド上限を検証する
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-09
 - Branch: feature/fix-track-namespace-fields-limit
 - Polished: 2026-09-09
 
@@ -36,3 +36,13 @@ draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure) は「If an endpoi
 - `createTrackNamespace` / `decodeTrackNamespace` / `MAX_TRACK_NAMESPACE_FIELDS`
 - `validateTrackNamespaceForSend`
 - `bidiSendNamespaceRequestUpdate`
+
+## 解決方法
+
+Track Namespace の送信時に 32 フィールド上限を検証するようにした。
+
+- `src/message/parameter.ts` の `createTrackNamespace` でフィールド数が `MAX_TRACK_NAMESPACE_FIELDS` (32) を超える場合に `Error` を投げる（受信したワイヤの違反ではないため `ProtocolViolationError` は使わない）
+- `src/session/params.ts` の `validateTrackNamespaceForSend` にもフィールド数上限を追加し、公開 API 経由の送信を拒否する
+- 受信側 `decodeTrackNamespace` の既存検証は変更しない
+- `src/message/parameter.test.ts` と `src/session/params.test.ts` に 32 フィールド許可 / 33 フィールド拒否の境界テストを追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する

@@ -1075,6 +1075,10 @@
   - draft-ietf-moq-transport-21 §6.3 の MUST に従い、制御ストリームの RESET_STREAM を検出したときセッションを PROTOCOL_VIOLATION で閉じる
   - 従来は error コールバックを呼ぶだけでセッションが connected のまま残っていた
   - @voluntas
+- [FIX] Track Namespace の送信時に 32 フィールド上限を検証する
+  - draft-ietf-moq-transport-21 §8.7 / §2.4.1 に従い、33 フィールド以上の Track Namespace を createTrackNamespace / validateTrackNamespaceForSend で拒否する
+  - 従来は送信できてしまい、仕様準拠のピアがセッションを閉じていた
+  - @voluntas
 
 ### misc
 
