@@ -4975,6 +4975,33 @@ test("bidiHandlePublishRequestUpdate: 受理パラメータのみの REQUEST_UPD
 });
 
 /**
+ * draft-ietf-moq-transport-21 §3.4.1:
+ * 受信 PUBLISH 経路で FILL_PARAMETERS を処理するのは moqt-js (subscriber) で
+ * あり、fill fetch ストリームを開く主体 (publisher) ではない。FILL_PARAMETERS は
+ * 検証後に受理して REQUEST_OK を返し、fillFetchTargets へは登録しない。
+ */
+test("bidiHandlePublishRequestUpdate: FILL_PARAMETERS は受理して REQUEST_OK を返し fillFetchTargets に登録しない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      encodeFillParameters(
+        buildFillParameters({ filter: { startGroup: 10n, startObject: 2n } }, "REQUEST_UPDATE"),
+      ),
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // REQUEST_OK が 1 通応答され、fillFetchTargets には登録されない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.5:
  * パラメータを含まない REQUEST_UPDATE でも REQUEST_OK が 1 通応答され、
  * セッションが閉じないことを検証する (§9.5 MUST)。パラメータ無しは
