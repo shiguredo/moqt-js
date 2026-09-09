@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages
- * draft-ietf-moq-transport-20 Section 10.4 (GOAWAY) — 10.6 (REQUEST_ERROR)
+ * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY) — 9.4 (REQUEST_ERROR)
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -19,9 +19,9 @@ import { ProtocolViolationError } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 
 /**
- * GOAWAY メッセージ (Section 10.4)
+ * GOAWAY メッセージ (Section 9.2)
  *
- * draft-ietf-moq-transport-20 Section 10.4 (GOAWAY):
+ * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
  *
  * GOAWAY Message {
  *   Type (vi64) = 0x10,
@@ -45,12 +45,12 @@ export interface Goaway {
 }
 
 /**
- * REQUEST_OK メッセージ (Section 10.5)
+ * REQUEST_OK メッセージ (Section 9.3)
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * リクエストへの成功応答。双方向ストリーム上で送信されるため、
  * ストリーム自体がリクエストを特定し、Request ID は不要。
- * draft-ietf-moq-transport-20 Section 10.1
+ * draft-ietf-moq-transport-21 Section 6.4.2.1
  *
  * REQUEST_OK Message {
  *   Type (vi64) = 0x7,
@@ -67,9 +67,9 @@ export interface RequestOk {
 }
 
 /**
- * Redirect Structure (Section 10.6.1)
+ * Redirect Structure (Section 9.4.1)
  *
- * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure):
+ * draft-ietf-moq-transport-21 Section 9.4.1 (Redirect Structure):
  *
  * Redirect {
  *   Connect URI Length (vi64),
@@ -88,7 +88,7 @@ export interface Redirect {
 /**
  * Redirect のペイロードをエンコード
  *
- * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure)
+ * draft-ietf-moq-transport-21 Section 9.4.1 (Redirect Structure)
  */
 export function encodeRedirect(redirect: Redirect): Uint8Array {
   const uriBytes = new TextEncoder().encode(redirect.connectUri);
@@ -114,10 +114,10 @@ export function encodeRedirect(redirect: Redirect): Uint8Array {
 /**
  * Redirect のペイロードをデコード
  *
- * draft-ietf-moq-transport-20 Section 10.6.1 (Redirect Structure)
+ * draft-ietf-moq-transport-21 Section 9.4.1 (Redirect Structure)
  *
  * 注: Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の
- * New Session URI (§10.4) にのみ存在する)。宣言された Length が
+ * New Session URI (§9.2) にのみ存在する)。宣言された Length が
  * 実データを超える過剰宣言は破損であり、宣言時点で拒否する
  * (外側でフレーミング済みのため)。
  *
@@ -159,7 +159,7 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
   );
   totalConsumed += Number(trackNameLen);
 
-  // draft-ietf-moq-transport-20 §2.4.1:
+  // draft-ietf-moq-transport-21 §8.7:
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
   validateFullTrackNameBytes(trackNamespace, trackName);
@@ -168,9 +168,9 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
 }
 
 /**
- * REQUEST_ERROR メッセージ (Section 10.6.2)
+ * REQUEST_ERROR メッセージ (Section 9.4.2)
  *
- * draft-ietf-moq-transport-20 Section 10.6.2 (REQUEST_ERROR Message Format):
+ * draft-ietf-moq-transport-21 Section 9.4.2 (REQUEST_ERROR Message Format):
  *
  * REQUEST_ERROR Message {
  *   Type (vi64) = 0x5,
@@ -181,7 +181,7 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
  *   [Redirect (Redirect),]
  * }
  *
- * - Redirect: Present only when Error Code is REDIRECT. See Section 10.6.1.
+ * - Redirect: Present only when Error Code is REDIRECT. See Section 9.4.1.
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない
@@ -198,7 +198,7 @@ export interface RequestError {
 /**
  * Goaway のペイロードをエンコード
  *
- * draft-ietf-moq-transport-20 Section 10.4:
+ * draft-ietf-moq-transport-21 Section 9.2:
  * New Session URI Length + New Session URI + Timeout
  */
 export function encodeGoawayPayload(msg: Goaway): Uint8Array {
@@ -222,7 +222,7 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
 /**
  * Goaway のペイロードをデコード
  *
- * draft-ietf-moq-transport-20 Section 10.4:
+ * draft-ietf-moq-transport-21 Section 9.2:
  * New Session URI Length + New Session URI + Timeout
  * Timeout 消費後に余剰バイトがあれば PROTOCOL_VIOLATION
  */
@@ -230,7 +230,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
   offset += uriLengthSize;
 
-  // draft-ietf-moq-transport-20 Section 10.4:
+  // draft-ietf-moq-transport-21 Section 9.2:
   // "The maximum length of the New Session URI is 8,192 bytes.
   //  If an endpoint receives a length exceeding the maximum,
   //  it MUST close the session with a PROTOCOL_VIOLATION."
@@ -252,7 +252,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [timeout, timeoutSize] = decodeVarint(data, offset);
   offset += timeoutSize;
 
-  // draft-ietf-moq-transport-20 Section 10:
+  // draft-ietf-moq-transport-21 Section 9:
   // "If the length does not match the length of the Message Body,
   //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
   // Timeout は GOAWAY ペイロードの最後のフィールドであり、
@@ -271,9 +271,9 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 }
 
 /**
- * PUBLISH_STATE_NOTIFY メッセージ (Section 10.10)
+ * PUBLISH_STATE_NOTIFY メッセージ (Section 9.10)
  *
- * draft-ietf-moq-transport-20 Section 10.10 (PUBLISH_STATE_NOTIFY):
+ * draft-ietf-moq-transport-21 Section 9.10 (PUBLISH_STATE_NOTIFY):
  *
  * PUBLISH_STATE_NOTIFY Message {
  *   Type (vi64) = 0x22,
@@ -293,7 +293,7 @@ export interface PublishStateNotify {
 /**
  * PUBLISH_STATE_NOTIFY のペイロードをエンコードする
  *
- * draft-ietf-moq-transport-20 Section 10.10:
+ * draft-ietf-moq-transport-21 Section 9.10:
  * Number of Parameters + Parameters (delta encoding の Parameters 列)。
  */
 export function encodePublishStateNotifyPayload(msg: PublishStateNotify): Uint8Array {
@@ -303,7 +303,7 @@ export function encodePublishStateNotifyPayload(msg: PublishStateNotify): Uint8A
 /**
  * PUBLISH_STATE_NOTIFY のペイロードをデコードする
  *
- * draft-ietf-moq-transport-20 Section 10.10 / Section 10:
+ * draft-ietf-moq-transport-21 Section 9.10 / Section 9:
  * 消費バイト数が Message Body 長と一致しない場合は PROTOCOL_VIOLATION
  * ("If the length does not match the length of the Message Body, the
  *  receiver MUST close the session with a PROTOCOL_VIOLATION.")。
@@ -324,9 +324,9 @@ export function decodePublishStateNotifyPayload(data: Uint8Array, offset = 0): P
 /**
  * RequestOk のペイロードをエンコード
  *
- * draft-ietf-moq-transport-20 Section 10.5:
+ * draft-ietf-moq-transport-21 Section 9.3:
  * Number of Parameters + Parameters
- * draft-ietf-moq-transport-20 Section 10.1
+ * draft-ietf-moq-transport-21 Section 6.4.2.1
  *
  * 以下の REQUEST_OK 送信経路で使用する:
  * - 受信 PUBLISH 受理時 (SessionImpl.handleIncomingBidirectionalStream)
@@ -353,7 +353,7 @@ export function encodeRequestOkPayload(msg: RequestOk): Uint8Array {
 /**
  * RequestOk のペイロードをデコード
  *
- * draft-ietf-moq-transport-20 Section 10.5:
+ * draft-ietf-moq-transport-21 Section 9.3:
  * Number of Parameters + Parameters + Track Properties
  * - Track Properties は残りバイトすべて
  */
@@ -374,7 +374,7 @@ export function decodeRequestOkPayload(data: Uint8Array, offset = 0): RequestOk 
 /**
  * RequestError のペイロードをエンコード
  *
- * draft-ietf-moq-transport-20 Section 10.6.2:
+ * draft-ietf-moq-transport-21 Section 9.4.2:
  * Error Code + Retry Interval + Error Reason + [Redirect]
  *
  * - Redirect は msg.redirect が存在する場合のみエンコードする
@@ -414,7 +414,7 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
 /**
  * RequestError のペイロードをデコード
  *
- * draft-ietf-moq-transport-20 Section 10.6.2:
+ * draft-ietf-moq-transport-21 Section 9.4.2:
  * Error Code + Retry Interval + Error Reason + [Redirect]
  *
  * - Error Reason の後、残りバイトがあれば Redirect をデコードする
@@ -430,7 +430,7 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
   const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
   offset += reasonLenSize;
 
-  // draft-ietf-moq-transport-20 Section 1.4.4:
+  // draft-ietf-moq-transport-21 Section 8.5:
   // Reason Phrase の最大長は 1,024 バイト。
   // "If an endpoint receives a length exceeding the maximum, it MUST close
   //  the session with a PROTOCOL_VIOLATION"
@@ -453,7 +453,7 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
 
   let redirect: Redirect | undefined;
   if (offset < data.length) {
-    // draft-ietf-moq-transport-20 Section 10.6.2:
+    // draft-ietf-moq-transport-21 Section 9.4.2:
     // "Redirect: Present only when Error Code is REDIRECT."
     // それ以外のエラーコードで Redirect が存在する場合はプロトコル違反
     if (Number(errorCode) !== 0x34) {
@@ -464,16 +464,27 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
     const [decodedRedirect, redirectSize] = decodeRedirect(data, offset);
     redirect = decodedRedirect;
     offset += redirectSize;
-    // draft-ietf-moq-transport-20 Section 10:
+    // draft-ietf-moq-transport-21 Section 9:
     // "If the length does not match the length of the Message Body,
     //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
-    // Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 10.6.2) であり、
+    // Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 9.4.2) であり、
     // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
     if (offset !== data.length) {
       throw new ProtocolViolationError(
         `trailing data after Redirect in REQUEST_ERROR: expected ${data.length} bytes, consumed ${offset}`,
       );
     }
+  } else if (Number(errorCode) === 0x34) {
+    // draft-ietf-moq-transport-21 Section 9.4.2:
+    // "Redirect: Present only when Error Code is REDIRECT."
+    // REDIRECT (0x34) は Redirect 構造を必ず伴うため、欠落はメッセージ構造の
+    // 違反として PROTOCOL_VIOLATION でセッションを閉じる
+    // (draft-21 §9「If the length does not match the length of the Message
+    //  Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」
+    // と同じく、構造不正はセッション終了で扱う)。
+    throw new ProtocolViolationError(
+      "missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)",
+    );
   }
 
   return {

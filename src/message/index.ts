@@ -1,6 +1,6 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  */
 
 // 型定義
@@ -86,7 +86,7 @@ export {
   getSetupPath,
 } from "./setup";
 
-// Authorization Token (Section 10.2.2)
+// Authorization Token (Section 9.20.3)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,

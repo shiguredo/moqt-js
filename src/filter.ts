@@ -1,7 +1,7 @@
 /**
  * Location Filter マッチング
  *
- * draft-ietf-moq-transport-20 Section 5.1.2 (Location Filter):
+ * draft-ietf-moq-transport-21 Section 3.3.1 (Location Filter):
  * Object の Location が Subscription の Location Filter にマッチするかどうかを判定する。
  *
  * 通過条件: Object Location >= Start Location。
@@ -27,7 +27,7 @@ import { MAX_VARINT } from "./varint";
  * StartObject = 0 の Next Object) は LARGEST_OBJECT から具体的な Start
  * Location に解決される（詳細は resolveFilter を参照）。
  * LARGEST_OBJECT 未受信（コンテンツ未配信）時は {0, 0} から開始する
- * (draft-ietf-moq-transport-20 Section 5.1.2)。
+ * (draft-ietf-moq-transport-21 Section 3.3.1)。
  */
 export interface ResolvedFilter {
   /** 開始 Location（この Location 以上の Object が通過） */
@@ -41,7 +41,7 @@ export interface ResolvedFilter {
 /**
  * LocationFilter を具体的な ResolvedFilter に解決する
  *
- * draft-ietf-moq-transport-20 Section 5.1.2:
+ * draft-ietf-moq-transport-21 Section 9.20.10:
  * - 1 フィールド (startGroup): 相対指定。Start Group = LARGEST_OBJECT の Group + 1 - StartGroup。
  *   未配信時は {0, 0} から開始。負値は 0 にクランプ
  * - 2 フィールドで startGroup = startObject = 0: Next Object
@@ -67,13 +67,13 @@ export function resolveFilter(
   }
 
   // 2 フィールド限定で StartGroup = StartObject = 0 の場合は Next Object
-  // ({Largest Object.Group, Largest Object.Object + 1}) を意味する (§5.1.2)
+  // ({Largest Object.Group, Largest Object.Object + 1}) を意味する (§9.20.10)
   if (isNextObjectLocationFilter(filter)) {
     // Next GroupStart (旧) と同様に、未配信時は {0, 0} から開始する
     if (largestLocation === null) {
       return { start: { group: 0n, object: 0n }, endGroup: undefined };
     }
-    // Section 5.1.2: {Largest Object.Group, Largest Object.Object + 1}
+    // Section 9.20.10: {Largest Object.Group, Largest Object.Object + 1}
     return {
       start: { group: largestLocation.group, object: largestLocation.object + 1n },
       endGroup: undefined,
@@ -88,7 +88,7 @@ export function resolveFilter(
     if (largestLocation === null) {
       return { start: { group: 0n, object: 0n }, endGroup: undefined };
     }
-    // draft-ietf-moq-transport-20 Section 5.1.2:
+    // draft-ietf-moq-transport-21 Section 9.20.10:
     // start Location = {Largest Object.Group + 1 - StartGroup, 0}。
     // 相対の計算結果が負値になる group は 0、2^64-1 を超える group は 2^64-1
     // にクランプする
@@ -122,7 +122,7 @@ export function resolveFilter(
 /**
  * Object の Location が ResolvedFilter にマッチするかどうかを判定する
  *
- * draft-ietf-moq-transport-20 Section 5.1.2:
+ * draft-ietf-moq-transport-21 Section 3.3.1:
  * 通過条件: Object Location >= Start。End Group があるときは Group <= End Group、
  * End Object があるときは End Group 内で Object <= EndObject。
  *
@@ -153,7 +153,7 @@ export function objectMatchesFilter(
   if (filter.endGroup !== undefined && objectLocation.group > filter.endGroup) {
     return false;
   }
-  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§5.1.2
+  // End Object があるときは、End Group 内で Object <= End Object のみ通過 (§9.20.10
   // "When EndObject is omitted, the filter includes all objects in the End Group.")
   // endGroup が無いのに endObject だけ指定された ResolvedFilter に対しては
   // 適用しない (endObject は endGroup に従属する設計。不変条件の防御)
@@ -171,7 +171,7 @@ export function objectMatchesFilter(
 
 // ============================================================================
 // Range Filter マッチング
-// draft-ietf-moq-transport-20 Section 5.1.4
+// draft-ietf-moq-transport-21 Section 3.3.2
 // ============================================================================
 
 /**
@@ -195,7 +195,7 @@ export interface RangeFilterValues {
 /**
  * Range Filter の評価 (マッチング) を行う
  *
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 3.3.2:
  * - 同一 SetID のフィルタは AND、異なる SetID の結果は OR で結合する
  * - Range の包含判定は両端含む (inclusive)
  * - 終端省略 (End なし) は open-ended (上限なし)
@@ -203,7 +203,7 @@ export interface RangeFilterValues {
  *
  * フィルタなし (空配列) は全通過。評価値が明示されていないオブジェクト
  * (subgroupId / publisherPriority が undefined) は不通過。
- * TRACK_PROPERTY_FILTER は track 単位の評価 (§5.1.4) であり、オブジェクト受信
+ * TRACK_PROPERTY_FILTER は track 単位の評価 (§3.3.2) であり、オブジェクト受信
  * 経路では評価しない (常に通過扱い)。
  *
  * @param rangeFilters - デコード済みの Range Filter 指定
@@ -308,7 +308,7 @@ function rangeContainsValue(ranges: FilterRange[], value: bigint): boolean {
 /**
  * Object Properties バイト列から対象 Property Type の値を寛容デコードで抽出する
  *
- * draft-ietf-moq-transport-20 §12.7:
+ * draft-ietf-moq-transport-21 §10.7:
  * 「When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties.」
  * IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する。
@@ -329,7 +329,7 @@ function extractObjectPropertyValue(
 /**
  * Property 列から対象 Type の varint 値を検索する (IMMUTABLE_PROPERTIES ネスト内も含む)
  *
- * draft-ietf-moq-transport-20 §12.7:
+ * draft-ietf-moq-transport-21 §10.7:
  * 「When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties.」
  * IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する。
@@ -353,7 +353,7 @@ function findPropertyValueRecursive(
   targetType: bigint,
   depth: number,
 ): bigint | undefined {
-  // 再帰深さの上限 (IMMUTABLE_PROPERTIES ネスト)。§12.7 はネストを禁止しており、
+  // 再帰深さの上限 (IMMUTABLE_PROPERTIES ネスト)。§10.7 はネストを禁止しており、
   // 上限超過は不正データとして undefined (不通過) を返す
   if (depth > MAX_PROPERTY_NESTING_DEPTH) {
     return undefined;
@@ -365,7 +365,7 @@ function findPropertyValueRecursive(
       }
       return undefined;
     }
-    // draft-ietf-moq-transport-20 §12.7: IMMUTABLE_PROPERTIES のネスト内も検索する
+    // draft-ietf-moq-transport-21 §10.7: IMMUTABLE_PROPERTIES のネスト内も検索する
     if (property.id === 0x0bn && property.data !== undefined) {
       const inner = decodeObjectPropertiesTolerant(property.data);
       const innerValue = findPropertyValueRecursive(inner.properties, targetType, depth + 1);
@@ -383,7 +383,7 @@ const MAX_PROPERTY_NESTING_DEPTH = 8;
 /**
  * TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)
  *
- * draft-ietf-moq-transport-20 §5.1.4:
+ * draft-ietf-moq-transport-21 §3.3.2:
  * 「The Track Property Filter can be used in SUBSCRIBE_TRACKS to filter
  *  PUBLISH messages with required Track Property types and values. PUBLISH
  *  messages which pass the filter will be forwarded」
@@ -391,7 +391,7 @@ const MAX_PROPERTY_NESTING_DEPTH = 8;
  * 同一 SetID のフィルタは AND、異なる SetID の結果は OR で結合する (Range Filter
  * 共通の規則)。Length=0 の削除エントリは評価対象から除外する。
  *
- * 対象 Property の検索は §12.7「When looking for the value of a property,
+ * 対象 Property の検索は §10.7「When looking for the value of a property,
  * processors MUST search both the mutable properties and the contents of
  * Immutable Properties.」に従い、IMMUTABLE_PROPERTIES ネスト内も含める。
  *
@@ -454,7 +454,7 @@ function trackPropertyFilterParamMatches(
 /**
  * Track Properties から対象 Type の varint 値を検索する
  *
- * draft-ietf-moq-transport-20 §12.7:
+ * draft-ietf-moq-transport-21 §10.7:
  * IMMUTABLE_PROPERTIES のネスト内も検索する (共通ヘルパ findPropertyValueInList を使用)。
  */
 function findTrackPropertyValue(properties: Property[], targetType: bigint): bigint | undefined {

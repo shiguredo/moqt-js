@@ -35,17 +35,17 @@ import type { SessionInternal } from "./types";
 /**
  * 受信 bidi ストリームの先頭メッセージを 3 分類する
  *
- * draft-ietf-moq-transport-20 §3.3 (Session initialization):
+ * draft-ietf-moq-transport-21 §6.3 (Session initialization):
  * リクエストストリームの先頭として許可されるメッセージは 7 種
  * (TRACK_STATUS / SUBSCRIBE / PUBLISH / FETCH / PUBLISH_NAMESPACE /
  * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS)。
  * - "publish": 対応済み (moqt-js はクライアントのため受信 PUBLISH のみ処理する)
  * - "unsupported-request": 7 種のうち未対応の 6 種。
- *   draft-ietf-moq-transport-20 §4 (Extensibility):
+ *   draft-ietf-moq-transport-21 §1.5 (Extensibility):
  *   「Limited endpoints SHOULD respond to any unsupported messages with the
  *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * - "protocol-violation": 7 種以外 (未知タイプ等)。
- *   draft-ietf-moq-transport-20 §3.3:
+ *   draft-ietf-moq-transport-21 §6.3:
  *   「Bidirectional streams MUST NOT begin with any other message type unless
  *   negotiated. If they do, the peer MUST close the Session with a
  *   PROTOCOL_VIOLATION.」
@@ -71,10 +71,10 @@ export function incomingClassifyFirstBidiMessage(
 /**
  * REQUEST_ERROR を送信し、送信方向を FIN で閉じた後に受信方向をキャンセルする
  *
- * draft-ietf-moq-transport-20 §3.3.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-21 §6.4.2.3 (Request Cancellation and Rejection):
  * 「When an endpoint rejects a request without performing any application
  * processing, it SHOULD send a REQUEST_ERROR and FIN the stream.」
- * draft-ietf-moq-transport-20 §10.20 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
  * 「If it is an error, the stream will be closed via FIN after REQUEST_ERROR
  * is sent.」
  *
@@ -82,7 +82,7 @@ export function incomingClassifyFirstBidiMessage(
  * releaseLock 後の close() は WHATWG Streams 仕様上、ロック非保持時に
  * TypeError で reject する Promise を返すため、try ブロック内で await し
  * catch で吸収する。受信方向 (readable) は FIN 送信後に cancel() で閉じる
- * (draft-ietf-moq-transport-20 §3.3.3 の STOP_SENDING 相当)。
+ * (draft-ietf-moq-transport-21 §6.4.2.3 の STOP_SENDING 相当)。
  */
 export async function incomingSendRequestErrorAndClose(
   stream: WebTransportBidirectionalStream,
@@ -127,7 +127,7 @@ export async function incomingSendRequestErrorAndClose(
 /**
  * 受信 Request ID のパリティ・重複検証を行う
  *
- * draft-ietf-moq-transport-20 §10.1 (Request ID):
+ * draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
  * "The client generates even numbered Request IDs, starting at 0, and the
  *  server generates odd numbered Request IDs, starting at 1. Each endpoint
  *  increments its Request ID by 2 for each new request."
@@ -141,7 +141,7 @@ export async function incomingSendRequestErrorAndClose(
  * パリティ・重複検証と receivedRequestIds への add を同一の同期ブロックで
  * 行う。受信 bidi ストリーム処理は fire-and-forget で並行実行されるため、
  * 検証と add の間に await を挟むと同一 ID の 2 本が同時に検証を通過し得る。
- * Set には add のみ行い、リクエスト完了後も削除しない (§10.1 の重複禁止は
+ * Set には add のみ行い、リクエスト完了後も削除しない (§6.4.2.1 の重複禁止は
  * セッション内での再出現の禁止であり、Map エントリの削除後も検出できる
  * 必要がある)。
  *
@@ -152,7 +152,7 @@ export function incomingValidateRequestId(
   receivedRequestIds: Set<bigint>,
   closeSession: (error: SessionError) => void,
 ): boolean {
-  // draft-ietf-moq-transport-20 §10.1:
+  // draft-ietf-moq-transport-21 §6.4.2.1:
   // moqt-js はクライアントロールのため、受信 Request ID は奇数 (サーバー発) が期待値。
   // LSB が 0 (偶数) はパリティ違反。
   if ((requestId & 1n) === 0n) {
@@ -165,10 +165,10 @@ export function incomingValidateRequestId(
     return false;
   }
 
-  // draft-ietf-moq-transport-20 §10.1:
+  // draft-ietf-moq-transport-21 §6.4.2.1:
   // 同一 Request ID の再出現は INVALID_REQUEST_ID。
   // add は検証と同じ同期ブロック内で行い、拒否経路で return されるリクエストも
-  // Request ID を消費したものとして記録する (§10.1「Each SUBSCRIBE, PUBLISH,
+  // Request ID を消費したものとして記録する (§6.4.2.1「Each SUBSCRIBE, PUBLISH,
   // FETCH, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE,
   // REQUEST_UPDATE, and TRACK_STATUS message consumes a Request ID」)。
   if (receivedRequestIds.has(requestId)) {
@@ -189,9 +189,9 @@ export function incomingValidateRequestId(
  * - 分類 2 (unsupported-request): 先頭 varint を Request ID として検証し、
  *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
  *   検証失敗は INVALID_REQUEST_ID、先頭欠落は PROTOCOL_VIOLATION で閉じる。
- *   検証通過時はセッションを閉じない (§4 SHOULD)。
+ *   検証通過時はセッションを閉じない (§1.5 SHOULD)。
  * - 分類 3 (protocol-violation): PROTOCOL_VIOLATION でセッションを閉じ、
- *   true を返す (§3.3 MUST)。
+ *   true を返す (§6.3 MUST)。
  *
  * @returns 先頭メッセージの処理を完了した場合は true、従来の PUBLISH 処理を
  *          継続する場合は false
@@ -209,7 +209,7 @@ export async function incomingHandleFirstBidiMessage(
     // 受信メッセージをデバッグ出力する (moqlog / debug コールバックで
     // 未対応リクエストの受信を観測できるようにする)
     session.emitDebug("recv", firstMsg.type, firstMsg.payload);
-    // draft-ietf-moq-transport-20 §10.1 (Request ID):
+    // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
     // 未対応 6 種の先頭は Request ID であり、分類 3 (先頭許可 7 種外)
     // は Request ID としては扱わない。PUBLISH 経路と同一の検証でパリティ・重複を検証し、
     // NOT_SUPPORTED 応答でも ID を消費して記録する (検証→応答の順)。
@@ -231,7 +231,7 @@ export async function incomingHandleFirstBidiMessage(
     if (!session.validateIncomingRequestId(requestId)) {
       return true;
     }
-    // draft-ietf-moq-transport-20 §4 (Extensibility):
+    // draft-ietf-moq-transport-21 §1.5 (Extensibility):
     // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
     // incomingClassifyFirstBidiMessage の docstring 参照)。
     await incomingSendRequestErrorAndClose(
@@ -242,7 +242,7 @@ export async function incomingHandleFirstBidiMessage(
     return true;
   }
   // 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
-  // draft-ietf-moq-transport-20 §3.3
+  // draft-ietf-moq-transport-21 §6.3
   session.closeWithError(
     new SessionError(
       `expected a request message as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
@@ -255,10 +255,10 @@ export async function incomingHandleFirstBidiMessage(
 /**
  * 受信した datagram を処理する
  *
- * draft-ietf-moq-transport-20 §11.5.2 (Padding Datagrams):
+ * draft-ietf-moq-transport-21 §11.5.2 (Padding Datagrams):
  * "The receiver MUST discard all data received in a padding datagram."
  *
- * draft-ietf-moq-transport-20 §11.3.1 (Object Datagram):
+ * draft-ietf-moq-transport-21 §11.2.1 (Object Datagram):
  * Track Alias で Subscriber を検索し、filter 再適用して配送する。
  *
  * アプリ例外は当該 subscriber の error コールバックへ通知し、
@@ -300,7 +300,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       return;
     }
     if (err instanceof MalformedTrackError) {
-      // draft-ietf-moq-transport-20 §2.4.2:
+      // draft-ietf-moq-transport-21 §12.1:
       // malformed track を検出した購読を cancel し、セッションは閉じない
       const trackAlias = decodeDatagramTrackAlias(data);
       if (trackAlias !== undefined) {
@@ -313,7 +313,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     return;
   }
 
-  // Track Alias で Subscriber を検索（draft-20 §5.1: 同一 alias に複数 subscription あり得る）
+  // Track Alias で Subscriber を検索（draft-21 §3.1: 同一 alias に複数 subscription あり得る）
   const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
   if (!subscribers || subscribers.length === 0) {
     return;
@@ -386,7 +386,7 @@ function decodeDatagramTrackAlias(data: Uint8Array): bigint | undefined {
 /**
  * Fetcher の登録を待つ
  *
- * draft-ietf-moq-transport-20 Section 10.14 (FETCH_OK):
+ * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
  * "A publisher MAY send Objects in response to a FETCH before the
  *  FETCH_OK message is sent."
  * FETCH_OK より先にデータストリームが到着した場合に使用。

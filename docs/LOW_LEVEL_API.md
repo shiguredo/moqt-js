@@ -320,7 +320,7 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-draft-20 で Joining FETCH は削除された。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object 形式の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§5.1.3) である。
+draft-21 で Joining FETCH は削除された。過去データの取得と live 購読の組み合わせは、`subscribe()` (Next Object 形式の Location Filter) + `fetch()` (フィルタなし) の 2 リクエストで実現する (`createMediaSubscriber` の catalog 取得が該当)。仕様上の正式な置換は `FILL_PARAMETERS` (§3.4) である。
 
 `FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
@@ -354,15 +354,15 @@ MOQT / QUIC ではレスポンスとデータストリームの順序が保証�
 
 #### Graceful 終了 (FIN) と未完成 Object
 
-FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-19 §11.4 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つまりシリアライズされた Object の途中なら、draft-ietf-moq-transport-21 §11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
 失効範囲は Object 1 個ではなくセッション全体 (全 Track・全 Fetch) であり、アプリは再接続が必要になる。
-早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.4.3 は配信途中での終了を reset と規定している)。
+早期終了が RESET_STREAM で行われた場合は read が reject されるだけで本判定には該当しない (§11.3.2 は配信途中での終了を reset と規定している)。
 
 - Subgroup stream: `handleSubgroupStream()` の subscriber mode ループで FIN 検出後に残バッファを検査する。pending mode (subscribers 未登録) は payload を decode していないため対象外
 - Fetch data stream: `handleIncomingStream()` の終了処理で残バッファが非空なら `fetcher.handleEnd()` を呼ばずにセッションを閉じる
 - sessionState が既に closed の経路 (transport.closed ハンドラ経由など) で検出した違反は黙殺し、通知しない (終了済みセッションへの通知は spurious になるため)
 
-残バッファが空の FIN は正常終了であり、セッションは閉じない (Subgroup は §11.4.3 が全 Object 配信後の FIN を MUST とし、Fetch data stream は §10.12.3 が Object 0 件の FETCH_HEADER + FIN を含めて正常終了を規定する)。
+残バッファが空の FIN は正常終了であり、セッションは閉じない (Subgroup は §11.3.2 が全 Object 配信後の FIN を MUST とし、Fetch data stream は §9.11 が Object 0 件の FETCH_HEADER + FIN を含めて正常終了を規定する)。
 
 ### `processSubgroupObjects()`
 
@@ -381,7 +381,7 @@ Subgroup stream の各 Object について以下を行う。
 Fetch stream は `decodeFetchObjectFields()` が前回の context を使いながら復元する。Fetch Object Fields には `Object Status` が存在しないため、現在の実装では常に `ObjectStatus.NORMAL` として `Fetcher` に渡す。
 
 ストリーム末尾 (ピアの FIN) まで読んで残バッファが空なら `fetcher.handleEnd()` を呼び、`fetchers` から外す。
-未完成 Object の途中バイトが残る場合は `fetcher.handleEnd()` を呼ばず、§11.4 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
+未完成 Object の途中バイトが残る場合は `fetcher.handleEnd()` を呼ばず、§11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
 
 ### `handleIncomingDatagram()`
 
@@ -400,7 +400,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 
 `startControlMessageLoop()` はセッション期間中ずっと制御ストリームを読み続ける。制御ストリームが途中で閉じた場合は `PROTOCOL_VIOLATION` とする。
 
-制御ストリームで処理するメッセージは `GOAWAY` のみである (draft-19 §3.3 でリクエスト / レスポンスは双方向ストリームに移動した)。
+制御ストリームで処理するメッセージは `GOAWAY` のみである (draft-ietf-moq-transport-21 §6.3 でリクエスト / レスポンスは双方向ストリームに移動した)。
 
 - `PUBLISH_DONE` を制御ストリームで受け取った場合は仕様違反としてセッションを閉じる。`PUBLISH_DONE` は request 双方向ストリーム側でのみ処理する。
 - `PUBLISH_NAMESPACE` / `REQUEST_OK` / `REQUEST_ERROR` は制御ストリーム上で受け取った場合も仕様違反としてセッションを閉じる。これらは専用の双方向ストリームで送受信される。

@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter encoding/decoding
- * draft-ietf-moq-transport-20 Section 10.2 (Message Parameter)
+ * draft-ietf-moq-transport-21 Section 9.20 (Message Parameter)
  *
  * https://datatracker.ietf.org/doc/draft-ietf-moq-transport/
  *
@@ -12,7 +12,7 @@
  * Type Delta は前のパラメータの Type との差分。
  * 偶数型: varint 値
  * 奇数型: Length プレフィックス付きバイト列
- * draft-ietf-moq-transport-20 Section 1.4.3
+ * draft-ietf-moq-transport-21 Section 8.3
  */
 
 import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
@@ -22,10 +22,10 @@ import { MessageParameterType, type Location } from "./types";
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
  * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
- * draft-ietf-moq-transport-20 Section 2.4.1
+ * draft-ietf-moq-transport-21 Section 8.7
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
@@ -34,7 +34,7 @@ export const MAX_FULL_TRACK_NAME_SIZE = 4096;
 /**
  * Full Track Name の合計長を検証する
  *
- * draft-ietf-moq-transport-20 §2.4.1:
+ * draft-ietf-moq-transport-21 §8.7:
  * Namespace 全フィールド長 + Track Name 長の合計が 4096 バイトを
  * 超えてはならない (MUST NOT)。
  *
@@ -57,7 +57,7 @@ export function validateFullTrackName(namespace: TrackNamespace, trackName: stri
 /**
  * Full Track Name の合計長をワイヤバイト長で検証する
  *
- * draft-ietf-moq-transport-20 §2.4.1:
+ * draft-ietf-moq-transport-21 §8.7:
  * 「The length of a Full Track Name is computed as the sum of the Track
  *  Namespace Field Length fields and the Track Name Length field.」
  * Length フィールドの値のみを加算し、varint エンコードサイズは含まない。
@@ -90,7 +90,7 @@ export function validateFullTrackNameBytes(
 /**
  * Track Namespace の最大フィールド数
  *
- * draft-ietf-moq-transport-20 Section 10.19 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-21 Section 9.15 (SUBSCRIBE_NAMESPACE):
  * "receives a Track Namespace Prefix consisting of greater than
  *  32 Track Namespace Fields, it MUST close the session with a
  *  PROTOCOL_VIOLATION."
@@ -99,7 +99,7 @@ export const MAX_TRACK_NAMESPACE_FIELDS = 32;
 /**
  * Reason Phrase の最大長 (バイト)
  *
- * draft-ietf-moq-transport-20 Section 1.4.4:
+ * draft-ietf-moq-transport-21 Section 8.5:
  * "The reason phrase length has a maximum value of 1024 bytes.
  *  If an endpoint receives a length exceeding the maximum,
  *  it MUST close the session with a PROTOCOL_VIOLATION"
@@ -108,7 +108,7 @@ export const MAX_REASON_PHRASE_LENGTH = 1024;
 /**
  * Key-Value-Pair の Value 最大長（バイト）
  *
- * draft-ietf-moq-transport-20 §1.4.3:
+ * draft-ietf-moq-transport-21 §8.3:
  * 「The maximum length of a value is 2^16-1 bytes. If an endpoint receives
  *  a length larger than the maximum, it MUST close the session with a
  *  PROTOCOL_VIOLATION.」
@@ -199,7 +199,7 @@ export function getParameterVarintValue(param: Parameter): bigint {
  * パラメータから Location 値を取得
  *
  * LARGEST_OBJECT (0x09) パラメータなど、Location を含むパラメータ用
- * draft-ietf-moq-transport-20 Section 10.2.17 (LARGEST OBJECT Parameter)
+ * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
  */
 export function getParameterLocationValue(param: Parameter): Location {
   const [location] = decodeLocation(param.value, 0);
@@ -209,7 +209,7 @@ export function getParameterLocationValue(param: Parameter): Location {
 /**
  * GROUP_ORDER パラメータの値を検証する
  *
- * draft-ietf-moq-transport-20 Section 10.2.8:
+ * draft-ietf-moq-transport-21 Section 9.20.9:
  * "The allowed values are Ascending (0x1) or Descending (0x2).
  *  If an endpoint receives a value outside this range, it MUST close
  *  the session with PROTOCOL_VIOLATION."
@@ -225,7 +225,7 @@ export function validateGroupOrderValue(value: number): void {
 /**
  * FORWARD パラメータの値を検証する
  *
- * draft-ietf-moq-transport-20 Section 10.2.18:
+ * draft-ietf-moq-transport-21 Section 9.20.19:
  * "The allowed values are 0 (don't forward) or 1 (forward).
  *  If an endpoint receives a value outside this range, it MUST close
  *  the session with PROTOCOL_VIOLATION."
@@ -239,7 +239,7 @@ export function validateForwardValue(value: number): void {
 /**
  * INCLUDE_PROPERTIES パラメータの値を検証する
  *
- * draft-ietf-moq-transport-20 Section 10.2.21:
+ * draft-ietf-moq-transport-21 Section 9.20.22:
  * "The allowed values are 0 (do not send Properties)
  *  or 1 (send Properties), and the default is 1.
  *  If an endpoint receives a value outside this range, it MUST close
@@ -254,7 +254,7 @@ export function validateIncludePropertiesValue(value: number): void {
 /**
  * uint8 型の Message Parameter Value をエンコードする
  *
- * draft-ietf-moq-transport-20 Section 10.2.7 / 10.2.8 / 10.2.18:
+ * draft-ietf-moq-transport-21 Section 9.20.8 / 9.20.9 / 9.20.19:
  * SUBSCRIBER_PRIORITY / GROUP_ORDER / FORWARD は varint ではなく uint8。
  */
 export function encodeUint8ParameterValue(
@@ -278,9 +278,9 @@ export interface TrackNamespace {
 /**
  * Track Namespace をエンコードする
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-20 Section 2.4.1
+ * draft-ietf-moq-transport-21 Section 8.7
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
   // 先にサイズをチェック
@@ -315,9 +315,9 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 /**
  * Track Namespace をデコードする
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-20 Section 2.4.1
+ * draft-ietf-moq-transport-21 Section 8.7
  *
  * @returns [namespace, consumed bytes]
  */
@@ -325,7 +325,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
 
-  // draft-ietf-moq-transport-20 Section 10.19 (SUBSCRIBE_NAMESPACE):
+  // draft-ietf-moq-transport-21 Section 9.15 (SUBSCRIBE_NAMESPACE):
   // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
   if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
     throw new ProtocolViolationError(
@@ -339,7 +339,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
-    // draft-ietf-moq-transport-20 Section 2.4.1:
+    // draft-ietf-moq-transport-21 Section 2.4.1:
     // "Each Track Namespace Field Value MUST contain at least one byte.
     //  If an endpoint receives a Track Namespace Field with a Track
     //  Namespace Field Length of 0, it MUST close the session with a
@@ -372,15 +372,15 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
 /**
  * string[] から TrackNamespace を作成
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-20 Section 2.4.1
+ * draft-ietf-moq-transport-21 Section 8.7
  */
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
 
-  // draft-ietf-moq-transport-20 Section 2.4.1:
+  // draft-ietf-moq-transport-21 Section 2.4.1:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   let dataSize = 0;
   for (const element of tuple) {
@@ -409,7 +409,7 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
 /**
  * Track Namespace が session-level かを判定する
  *
- * draft-ietf-moq-transport-20 §3.2.2 (Session-Level Tracks):
+ * draft-ietf-moq-transport-21 §6.5 (Session-Level Tracks):
  * "MOQT defines the .session namespace ... in the first position of
  *  the Track Namespace for session-level tracks and namespaces."
  */
@@ -423,33 +423,33 @@ function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
 /**
  * 受信した Track Namespace を DOES_NOT_EXIST で拒否すべきかを判定する
  *
- * draft-ietf-moq-transport-20 §3.2.1 (Reserved Namespaces):
+ * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces):
  * "A Track Namespace whose first field is exactly . (a single period,
  *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
  *  MUST NOT publish tracks or namespaces under it and MUST reject
  *  requests referencing it with DOES_NOT_EXIST."
- * draft-ietf-moq-transport-20 §3.2.2 (Session-Level Tracks and Namespaces):
+ * draft-ietf-moq-transport-21 §6.5 (Session-Level Tracks and Namespaces):
  * "An endpoint that receives a request for an unrecognized session-level
  *  track or namespace MUST reject it with REQUEST_ERROR using error code
  *  DOES_NOT_EXIST rather than passing it to the Application."
  *
  * 拒否対象は "." 単体と ".session" のみに限定する。それ以外の予約
- * 名前空間 (例: ".foo") は §3.2.1 の "an endpoint that receives a
+ * 名前空間 (例: ".foo") は §2.4.2 の "an endpoint that receives a
  * request for an unrecognized reserved namespace MUST pass it to the
  * Application" により拒否せずアプリへ渡す (送信側の ". で始まる
  * すべてを拒否する方針 (validateTrackNamespaceForSend) は受信側には
  * 持ち込まない)。
  *
- * 将来 .session 配下の既知の track を実装する場合、§3.2.2 の拒否 MUST
+ * 将来 .session 配下の既知の track を実装する場合、§6.5 の拒否 MUST
  * は "unrecognized" な session-level track / namespace に限定される
  * ため、本関数を namespace 単位の全拒否から track 単位の認識判定へ
  * 緩和すること。
  */
 export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
   if (tuple.length === 0) return false;
-  // "." 単体 (0x2e 1 バイトのみ) は §3.2.1 により MUST 拒否
+  // "." 単体 (0x2e 1 バイトのみ) は §2.4.2 により MUST 拒否
   if (tuple[0].length === 1 && tuple[0][0] === 0x2e) return true;
-  // 先頭フィールドが .session なら §3.2.2 により MUST 拒否。
+  // 先頭フィールドが .session なら §6.5 により MUST 拒否。
   // 本関数は namespace のみで判定し、Track Name は判定に使わないため、
   // Track Name が空でも非空でも拒否対象になる (空 Track Name の MUST 拒否を包含)。
   return isSessionLevelNamespace(tuple);
@@ -458,9 +458,9 @@ export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
 /**
  * Track Name をエンコードする（サイズ検証付き）
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-20 Section 2.4.1
+ * draft-ietf-moq-transport-21 Section 8.7
  */
 export function encodeTrackName(trackName: string): Uint8Array {
   const encoder = new TextEncoder();
@@ -476,9 +476,9 @@ export function encodeTrackName(trackName: string): Uint8Array {
 /**
  * Track Name のサイズを検証する
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-20 Section 2.4.1
+ * draft-ietf-moq-transport-21 Section 8.7
  */
 export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
   if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
@@ -513,8 +513,8 @@ export function decodeLocation(data: Uint8Array, offset = 0): [Location, number]
 /**
  * 単一のパラメータを delta encoding でエンコードする
  *
- * draft-ietf-moq-transport-20 Section 1.4.3 (Key-Value-Pair Structure):
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-1.4.3
+ * draft-ietf-moq-transport-21 Section 8.3 (Key-Value-Pair Structure):
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-8.3
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *
@@ -568,7 +568,7 @@ function decodeKeyValuePair(
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
   const paramType = previousType + deltaType;
 
-  // draft-ietf-moq-transport-20 Section 1.4.3:
+  // draft-ietf-moq-transport-21 Section 8.3:
   // "The previous Type value plus the Delta Type MUST NOT be greater than
   //  2^64 - 1. If a Delta Type is received that would be too large, the
   //  Session MUST be closed with a PROTOCOL_VIOLATION."
@@ -613,7 +613,7 @@ function decodeKeyValuePair(
 /**
  * Key-Value-Pairs をカウントプレフィックスなしでエンコードする
  *
- * draft-ietf-moq-transport-20 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  *
@@ -643,7 +643,7 @@ export function encodeKeyValuePairs(params: Parameter[]): Uint8Array {
 /**
  * Key-Value-Pairs をカウントプレフィックスなしでデコードする
  *
- * draft-ietf-moq-transport-20 Section 10.3 (SETUP):
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP):
  * Setup Options は Key-Value-Pairs (Figure 2) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  *
@@ -671,18 +671,18 @@ export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[],
 /**
  * Message Parameter の Value エンコーディング種別
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * Value のエンコーディングはパラメータ定義ごとに異なる。
  * - uint8: 1 バイトの符号なし整数
  * - varint: 可変長整数
  * - location: 2 つの連続した varint (Group, Object)
  * - length-prefixed: varint 長 + バイト列 (外側に Length を付加する)
  * - self-length-prefixed: 値が自ら Length (vi64) を内包する 1 Length 構造
- *   (外側 Length は付加しない。draft-ietf-moq-transport-20 §5.1.2 / §5.1.4
+ *   (外側 Length は付加しない。draft-ietf-moq-transport-21 §9.20.10 / §8.6
  *   の Range Filter と LOCATION_FILTER が該当)
  * - track-namespace: Track Namespace (Number of Track Namespace Fields + 各
  *   フィールドの Length + Value) の自己区切り構造 (外側 Length は付加しない。
- *   draft-ietf-moq-transport-20 §10.2.20 が参照する §2.4.1 のエンコーディング)
+ *   draft-ietf-moq-transport-21 §9.20.21 が参照する §8.7 のエンコーディング)
  */
 type MessageParameterValueEncoding =
   | "uint8"
@@ -695,51 +695,51 @@ type MessageParameterValueEncoding =
 /**
  * パラメータ型ごとの Value エンコーディング定義
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * Message Parameters は Key-Value-Pair (Figure 2) とは異なり、
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEncoding> = {
-  // OBJECT_DELIVERY_TIMEOUT (Section 10.2.4)
+  // OBJECT_DELIVERY_TIMEOUT (Section 9.20.5)
   0x02: "varint",
-  // AUTHORIZATION_TOKEN (Section 10.2.2)
+  // AUTHORIZATION_TOKEN (Section 9.20.3)
   0x03: "length-prefixed",
-  // RENDEZVOUS_TIMEOUT (Section 10.2.6)
+  // RENDEZVOUS_TIMEOUT (Section 9.20.7)
   0x04: "varint",
-  // SUBGROUP_DELIVERY_TIMEOUT (Section 10.2.3)
+  // SUBGROUP_DELIVERY_TIMEOUT (Section 9.20.4)
   0x06: "varint",
-  // EXPIRES (Section 10.2.16)
+  // EXPIRES (Section 9.20.17)
   0x08: "varint",
-  // LARGEST_OBJECT (Section 10.2.17)
+  // LARGEST_OBJECT (Section 9.20.18)
   0x09: "location",
-  // FILL_TIMEOUT (Section 10.2.5)
+  // FILL_TIMEOUT (Section 9.20.6)
   0x0a: "varint",
-  // FORWARD (Section 10.2.18)
+  // FORWARD (Section 9.20.19)
   0x10: "uint8",
-  // SUBSCRIBER_PRIORITY (Section 10.2.7)
+  // SUBSCRIBER_PRIORITY (Section 9.20.8)
   0x20: "uint8",
-  // LOCATION_FILTER (Section 10.2.9)
-  // draft-ietf-moq-transport-20 §5.1.2: Value は Length (vi64) + optional
+  // LOCATION_FILTER (Section 9.20.10)
+  // draft-ietf-moq-transport-21 §9.20.10: Value は Length (vi64) + optional
   // vi64 フィールド (0〜4) の 1 Length 構造。外側 Length は付加しない
-  // (Range Filter と同一形式。Appendix A.1 #1809 で「match the other filter
+  // (Range Filter と同一形式。Appendix A.2 #1809 で「match the other filter
   //  parameters」と再構成された)
   0x21: "self-length-prefixed",
-  // GROUP_ORDER (Section 10.2.8)
+  // GROUP_ORDER (Section 9.20.9)
   0x22: "uint8",
-  // FILL_PARAMETERS (Section 10.2.15)
+  // FILL_PARAMETERS (Section 9.20.16)
   // Value は Parameters 列 (count-prefixed) を格納する length-prefixed 構造。
-  // 内側は別メッセージの Parameters としてエンコードする (§10.2.15)。
+  // 内側は別メッセージの Parameters としてエンコードする (§9.20.16)。
   0x23: "length-prefixed",
-  // NEW_GROUP_REQUEST (Section 10.2.19)
+  // NEW_GROUP_REQUEST (Section 9.20.20)
   0x32: "varint",
-  // TRACK_NAMESPACE_PREFIX (Section 10.2.20)
-  // Value は §2.4.1 の Track Namespace エンコーディングそのもの。
+  // TRACK_NAMESPACE_PREFIX (Section 9.20.21)
+  // Value は §8.7 の Track Namespace エンコーディングそのもの。
   // フィールド数 + 各フィールドの Length + Value で自己区切りになるため
   // 外側 Length は付加しない (length-prefixed ではない)。
   0x34: "track-namespace",
-  // INCLUDE_PROPERTIES (Section 10.2.21)
+  // INCLUDE_PROPERTIES (Section 9.20.22)
   0x35: "uint8",
-  // Range Filters (draft-ietf-moq-transport-20 Section 5.1.4 / 10.2.10–10.2.14)
+  // Range Filters (draft-ietf-moq-transport-21 Section 3.3.2 / 9.20.11–9.20.15)
   // Value は Length (vi64) + [SetID + [Property Type] + Range 列] の 1 Length 構造。
   // 外側に Length を付加しない (length-prefixed から分離した専用種別)。
   0x25: "self-length-prefixed", // SUBGROUP_FILTER
@@ -752,10 +752,10 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
 /**
  * パラメータ型から Value エンコーディングを取得する
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * "An endpoint that receives an unknown Message Parameter MUST close
  *  the session with PROTOCOL_VIOLATION."
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-20.html#section-10.2
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-9.20
  *
  * 未知のパラメータ型の場合はエラーをスローする。
  */
@@ -770,7 +770,7 @@ function getMessageParameterValueEncoding(paramType: number): MessageParameterVa
 /**
  * 単一の Message Parameter をエンコードする (delta encoding)
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * Message Parameter {
  *   Type Delta (vi64),
  *   Value (..)
@@ -799,8 +799,8 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
   // uint8, varint, location, self-length-prefixed, track-namespace:
   // Value をそのまま書き込む。self-length-prefixed の Value は self エンコードの
   // 出力 (自ら Length を含む 1 Length 構造)、track-namespace の Value は
-  // §2.4.1 の自己区切り構造のため、いずれも外側 Length は付加しない
-  // (draft-ietf-moq-transport-20 §5.1.2 / §5.1.4 / §10.2.20)
+  // §8.7 の自己区切り構造のため、いずれも外側 Length は付加しない
+  // (draft-ietf-moq-transport-21 §9.20.10 / §8.6 / §9.20.21)
   const result = new Uint8Array(deltaBytes.length + param.value.length);
   result.set(deltaBytes, 0);
   result.set(param.value, deltaBytes.length);
@@ -810,7 +810,7 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
 /**
  * 単一の Message Parameter をデコードする (delta encoding)
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * Message Parameter {
  *   Type Delta (vi64),
  *   Value (..)
@@ -832,7 +832,7 @@ export function decodeMessageParameter(
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
   const paramType = previousType + deltaType;
 
-  // draft-ietf-moq-transport-20 Section 10.2 (Message Parameters):
+  // draft-ietf-moq-transport-21 Section 9.20 (Message Parameters):
   // "If the resulting Type would be greater than 2^64 - 1, the endpoint MUST
   //  close the session with a PROTOCOL_VIOLATION."
   if (paramType > MAX_VARINT) {
@@ -858,9 +858,9 @@ export function decodeMessageParameter(
       }
       value = data.slice(offset + totalConsumed, offset + totalConsumed + 1);
       totalConsumed += 1;
-      // draft-ietf-moq-transport-20 §10.2.8 / §10.2.18:
+      // draft-ietf-moq-transport-21 §9.20.9 / §9.20.19:
       // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
-      // draft-ietf-moq-transport-20 §10.2.21:
+      // draft-ietf-moq-transport-21 §9.20.22:
       // INCLUDE_PROPERTIES (0x35) も 0/1 以外は PROTOCOL_VIOLATION
       if (paramTypeNumber === 0x10) {
         validateForwardValue(value[0]);
@@ -910,7 +910,7 @@ export function decodeMessageParameter(
       break;
     }
     case "self-length-prefixed": {
-      // draft-ietf-moq-transport-20 Section 5.1.4 / 5.1.2:
+      // draft-ietf-moq-transport-21 Section 8.6 / 9.20.10:
       // Range Filter / LOCATION_FILTER の Value は Length (vi64) で始まり、
       // その後にペイロードが続く 1 Length 構造。
       // 内側 Length を読んで全体を value として保持する (decodeLocationFilter /
@@ -941,8 +941,8 @@ export function decodeMessageParameter(
       break;
     }
     case "track-namespace": {
-      // draft-ietf-moq-transport-20 §10.2.20:
-      // TRACK_NAMESPACE_PREFIX の Value は §2.4.1 の Track Namespace
+      // draft-ietf-moq-transport-21 §9.20.21:
+      // TRACK_NAMESPACE_PREFIX の Value は §8.7 の Track Namespace
       // エンコーディング (Number of Track Namespace Fields + 各フィールドの
       // Length + Value) の自己区切り構造。外側 Length は存在しないため、
       // decodeTrackNamespace が返す消費バイト数で次の Type Delta の位置を
@@ -960,7 +960,7 @@ export function decodeMessageParameter(
 /**
  * Message Parameter リストをエンコードする
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * Message Parameters はカウントプレフィックス付きでエンコードする。
  * delta encoding を使用して Type を効率的にエンコードする。
  * パラメータは Type の昇順でソートされる。
@@ -994,7 +994,7 @@ export function encodeParameters(params: Parameter[]): Uint8Array {
 /**
  * Message Parameter リストをデコードする
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * Message Parameters はカウントプレフィックス付きでデコードする。
  * delta encoding を使用して Type をデコードする。
  * Value のエンコーディングはパラメータ型ごとに異なる。
@@ -1015,12 +1015,12 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
       previousType,
     );
 
-    // draft-ietf-moq-transport-20 Section 10.2:
+    // draft-ietf-moq-transport-21 Section 9.20:
     // "Receivers SHOULD check that there are no unexpected duplicate parameters
     //  and close the session with PROTOCOL_VIOLATION if found."
     // AUTHORIZATION_TOKEN と Range Filter (0x25–0x29) は複数回出現が許可されているため
     // 重複チェックから除外する
-    // draft-ietf-moq-transport-20 Section 5.1.4: Range Filters は複数回 MAY
+    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filters は複数回 MAY
     const isRepeatable =
       param.type === MessageParameterType.AUTHORIZATION_TOKEN ||
       (param.type >= 0x25 && param.type <= 0x29);
@@ -1040,9 +1040,9 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
 }
 
 /**
- * Location Filter (Section 5.1.2, Section 10.2.9)
+ * Location Filter (Section 3.3.1, Section 9.20.10)
  *
- * draft-ietf-moq-transport-20:
+ * draft-ietf-moq-transport-21:
  * LOCATION_FILTER Parameter は Length (バイト長) と optional な vi64 フィールド
  * で構成され、Length がフィールド数を決める。
  * フィールド数 0 (Length 0) はフィルタなし (REQUEST_UPDATE での除去など)。
@@ -1066,7 +1066,7 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
  *
  * EndGroupDelta は StartGroup からの差分であり、End Group = StartGroup +
  * EndGroupDelta。End Group が 2^64-1 を超える場合は PROTOCOL_VIOLATION
- * (§5.1.2 の MUST)。送信側は encodeLocationFilter が送信前に
+ * (§9.20.10 の MUST)。送信側は encodeLocationFilter が送信前に
  * InvalidFilterError で、受信デコード時は decodeLocationFilter が
  * ProtocolViolationError で超過を拒否する。
  *
@@ -1102,7 +1102,7 @@ function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigin
 /**
  * Next Object 形式の Location Filter かどうかを判定する
  *
- * draft-ietf-moq-transport-20 §5.1.2: 2 フィールドで StartGroup = StartObject = 0
+ * draft-ietf-moq-transport-21 §9.20.10: 2 フィールドで StartGroup = StartObject = 0
  * の場合は Start Location が Next Object (旧 LargestObject 相当) になる。
  * endGroupDelta を持つ 3 / 4 フィールド表現は endGroupDelta による絶対指定の
  * ため対象外。
@@ -1118,14 +1118,14 @@ export function isNextObjectLocationFilter(filter: LocationFilter): boolean {
 
 /**
  * Location Filter をエンコードする
- * draft-ietf-moq-transport-20 §10.2.9 (LOCATION FILTER Parameter)
+ * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter)
  *
  * バイト Length プレフィックス付きでエンコードする。フィールド数は公開型の
  * 場合分けで 0〜4 に静的に制約される (送信側で 4 超にはなり得ない)。
  * フィールド数 0 (reset) は Length 0 のみで表現する (REQUEST_UPDATE での除去)。
  *
  * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
- * 送信前に検証し、InvalidFilterError で拒否する (§5.1.2)。負値 (startGroup /
+ * 送信前に検証し、InvalidFilterError で拒否する (§9.20.10)。負値 (startGroup /
  * startObject / endGroupDelta / endObject のいずれ) と、和の検証に捕捉されない
  * startObject / EndObject の単体超過は encodeVarint 由来の Error として throw
  * される。節番号は仕様将来版で変わる可能性がある。
@@ -1140,7 +1140,7 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
 
   if ("startObject" in filter) {
     if ("endGroupDelta" in filter) {
-      // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+      // draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
       // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
       //  close the session with a PROTOCOL_VIOLATION."
       // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じる
@@ -1182,14 +1182,14 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
  * 「2 フィールド」と解釈しない)。
  *
  * 以下の場合は PROTOCOL_VIOLATION (ProtocolViolationError) を throw する
- * (§5.1.2 / §10.2.9。受信経路に載った場合は PROTOCOL_VIOLATION のセッション
+ * (§3.3.1 / §9.20.10。受信経路に載った場合は PROTOCOL_VIOLATION のセッション
  * 終了変換規則に乗る):
  * - Length が示す範囲に vi64 フィールドが 4 つより多く含まれる
  * - vi64 フィールドが Length 境界を跨ぐ、または Length と消費バイト数が不一致
  *
  * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
- * ProtocolViolationError で throw する (§5.1.2 の MUST。この MUST は超過に対して
- * PROTOCOL_VIOLATION を一択としており、§5.1.2 が Location Filter に対して定める
+ * ProtocolViolationError で throw する (§9.20.10 の MUST。この MUST は超過に対して
+ * PROTOCOL_VIOLATION を一択としており、§3.3.1 が Location Filter に対して定める
  * REQUEST_ERROR は充足不能範囲の INVALID_RANGE であるため、デコード段階では
  * ProtocolViolationError で検出する)。
  *
@@ -1257,7 +1257,7 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
       return [{ startGroup: fields[0], startObject: fields[1] }, end - offset];
 
     case 3:
-      // draft-ietf-moq-transport-20 §5.1.2 (Location Filters):
+      // draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
       // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
       //  close the session with a PROTOCOL_VIOLATION."
       if (fields[0] + fields[2] > MAX_VARINT) {
@@ -1336,7 +1336,7 @@ export function decodeLocationFilterParameter(param: Parameter): LocationFilter 
 /**
  * FILL_PARAMETERS の内側に出現可能なパラメータ型
  *
- * draft-ietf-moq-transport-20 §10.2.15 Table 6:
+ * draft-ietf-moq-transport-21 §9.20.16 Table 6:
  * FILL_TIMEOUT (0x0A) / SUBSCRIBER_PRIORITY (0x20) / LOCATION_FILTER (0x21) /
  * GROUP_ORDER (0x22) / Range Filters (0x25-0x28)。TRACK_PROPERTY_FILTER (0x29)
  * は SUBSCRIBE_TRACKS 専用のため含まない。
@@ -1356,7 +1356,7 @@ export const FILL_PARAMETERS_ALLOWED_TYPES: ReadonlySet<number> = new Set([
 /**
  * FILL_PARAMETERS パラメータをエンコードする
  *
- * draft-ietf-moq-transport-20 §10.2.15 (FILL PARAMETERS Parameter):
+ * draft-ietf-moq-transport-21 §9.20.16 (FILL PARAMETERS Parameter):
  * Parameter Type 0x23、length-prefixed encoding。値は fill fetch ストリームに
  * 適用する Parameters 列を、別メッセージの Parameters としてエンコードした
  * もの (count-prefixed の delta encoding 列)。
@@ -1371,7 +1371,7 @@ export function encodeFillParameters(innerParameters: Parameter[]): Parameter {
 /**
  * FILL_PARAMETERS パラメータをデコードする
  *
- * draft-ietf-moq-transport-20 §10.2.15 (FILL PARAMETERS Parameter):
+ * draft-ietf-moq-transport-21 §9.20.16 (FILL PARAMETERS Parameter):
  * 内側の Parameters 列をデコードし、Table 6 の一覧に無い型が含まれる場合は
  * PROTOCOL_VIOLATION で拒否する ("An endpoint that receives a parameter
  *  inside FILL_PARAMETERS that is not listed above MUST close the session
@@ -1387,7 +1387,7 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
       `malformed fill parameters: declared length does not match parameters: ${consumed} !== ${param.value.length}`,
     );
   }
-  // 内側 LOCATION_FILTER の値検証 (§5.1.2 MUST は内側にも適用される)。
+  // 内側 LOCATION_FILTER の値検証 (§9.20.10 MUST は内側にも適用される)。
   // 内側 Range Filter の値・重複検証は外側と同一規則で行い、違反は
   // InvalidFilterError として呼び出し側の経路別処理に委ねる
   // (PUBLISH_OK では PROTOCOL_VIOLATION、REQUEST_UPDATE では
@@ -1404,7 +1404,7 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
       decodeLocationFilterParameter(inner);
     } else if (inner.type >= 0x25 && inner.type <= 0x28) {
       // 範囲は上限合算側 (bidiSendRequestUpdate の prepareRawFillForUpdate) と
-      // 一致させること (§10.2.15 の Table 6 に Range 系の型が追加された場合は両方を更新する)
+      // 一致させること (§9.20.16 の Table 6 に Range 系の型が追加された場合は両方を更新する)
       const [decodedRange] = decodeRangeFilter(rangeFilterTypeOf(inner.type), inner.value);
       if ("remove" in decodedRange) {
         throw new InvalidFilterError(
@@ -1421,9 +1421,9 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
 /**
  * TRACK_NAMESPACE_PREFIX パラメータをエンコードする
  *
- * draft-ietf-moq-transport-20 §10.2.20:
+ * draft-ietf-moq-transport-21 §9.20.21:
  * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
- *  Track Namespace encoding described in Section 2.4.1."
+ *  Track Namespace encoding described in Section 8.7."
  * Track Namespace は自己区切りのため、外側 Length は付加しない。
  */
 export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parameter {
@@ -1434,9 +1434,9 @@ export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parame
 /**
  * TRACK_NAMESPACE_PREFIX パラメータから Track Namespace を取得する
  *
- * draft-ietf-moq-transport-20 §10.2.20:
+ * draft-ietf-moq-transport-21 §9.20.21:
  * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
- *  Track Namespace encoding described in Section 2.4.1."
+ *  Track Namespace encoding described in Section 8.7."
  * Track Namespace は自己区切りのため、外側 Length は付加しない。
  */
 export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
@@ -1448,13 +1448,13 @@ export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
 }
 
 // ============================================================================
-// Range Filters (draft-ietf-moq-transport-20 Section 5.1.4)
+// Range Filters (draft-ietf-moq-transport-21 Section 3.3.2)
 // ============================================================================
 
 /**
  * Range Filter の単一 Range
  *
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 8.6:
  * Start は直前 Range の End からの delta（先頭は 0 から）。
  * End は当該 Start からの delta。末尾 Range のみ End 省略可（open-ended）。
  */
@@ -1466,7 +1466,7 @@ export interface FilterRange {
 /**
  * Range Filter パラメータ
  *
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 3.3.2:
  * 同一 SetID 内は AND、異なる SetID 間は OR。
  */
 export interface RangeFilterParam {
@@ -1491,7 +1491,7 @@ export type RangeFilterSpec = RangeFilterParam | RangeFilterRemove;
 /**
  * Range Filter のワイヤエンコーディング
  *
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 8.6:
  * Value = Length (vi64) + [SetID (8 bit) + [Property Type (vi64)] + Range 列]
  * Length = 0 は削除を意味する。
  */
@@ -1504,7 +1504,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
   const param = spec as RangeFilterParam;
   const parts: Uint8Array[] = [];
 
-  // draft-ietf-moq-transport-20 Section 5.1.4:
+  // draft-ietf-moq-transport-21 Section 3.3.2:
   // Range Filter は 1 つ以上の Range を持つ。空の ranges はデコード側
   // (decodeRangeFilter の「no ranges」検証) が InvalidFilterError で拒否する
   // ため、送信前に検出する。
@@ -1512,7 +1512,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     throw new InvalidFilterError("range filter must have at least one range");
   }
 
-  // draft-ietf-moq-transport-20 Section 5.1.4:
+  // draft-ietf-moq-transport-21 §9.20.11–§9.20.15:
   // SetID は 8 bit (0-255) のため、範囲外の値は送信できない
   if (!Number.isInteger(param.setId) || param.setId < 0 || param.setId > 255) {
     throw new InvalidFilterError(`set id out of range: ${param.setId}, expected 0-255`);
@@ -1526,7 +1526,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     if (param.propertyType === undefined) {
       throw new Error("propertyType is required for objectProperty/trackProperty filter");
     }
-    // draft-ietf-moq-transport-20 §10.2.13 / §10.2.14:
+    // draft-ietf-moq-transport-21 §9.20.14 / §9.20.15:
     // Property Type は偶数でなければならない
     if (param.propertyType % 2n !== 0n) {
       throw new InvalidFilterError(`property type must be even: ${param.propertyType}`);
@@ -1542,7 +1542,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     if (startDelta < 0n) {
       throw new Error("range start must be >= previous end");
     }
-    // draft-ietf-moq-transport-20 §5.1.4:
+    // draft-ietf-moq-transport-21 §8.6:
     // "Any delta encoding that results in a value that exceeds 2^64-1
     //  MUST be rejected with REQUEST_ERROR with error code INVALID_FILTER."
     if (range.start > MAX_VARINT) {
@@ -1568,7 +1568,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     }
   }
 
-  // draft-ietf-moq-transport-20 §10.2.12:
+  // draft-ietf-moq-transport-21 §9.20.13:
   // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
   if (param.type === "priority") {
     for (const range of param.ranges) {
@@ -1592,7 +1592,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
 /**
  * Range Filter のワイヤデコード
  *
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 8.6:
  * 値域・構造の不正は InvalidFilterError で検出する (REQUEST_ERROR
  * (INVALID_FILTER) 応答または PROTOCOL_VIOLATION セッション閉鎖は
  * 受信経路の責務)。
@@ -1632,7 +1632,7 @@ export function decodeRangeFilter(
       throw new InvalidFilterError("range filter is missing property type");
     }
     const [pt, ptSize] = decodeRangeFilterVarint(data, pos);
-    // draft-ietf-moq-transport-20 §10.2.13 / §10.2.14:
+    // draft-ietf-moq-transport-21 §9.20.14 / §9.20.15:
     // Property Type は偶数でなければならない
     if (pt % 2n !== 0n) {
       throw new InvalidFilterError(`property type must be even: ${pt}`);
@@ -1649,7 +1649,7 @@ export function decodeRangeFilter(
     pos += startDeltaSize;
     const start = prevEnd + startDelta;
 
-    // draft-ietf-moq-transport-20 §5.1.4:
+    // draft-ietf-moq-transport-21 §8.6:
     // "Any delta encoding that results in a value that exceeds 2^64-1
     //  MUST be rejected with REQUEST_ERROR with error code INVALID_FILTER."
     if (start > MAX_VARINT) {
@@ -1677,7 +1677,7 @@ export function decodeRangeFilter(
     throw new InvalidFilterError("range filter has no ranges");
   }
 
-  // draft-ietf-moq-transport-20 §10.2.12:
+  // draft-ietf-moq-transport-21 §9.20.13:
   // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
   if (type === "priority") {
     for (const range of ranges) {
@@ -1697,7 +1697,7 @@ export function decodeRangeFilter(
 /**
  * Range Filter 内部の varint デコード
  *
- * draft-ietf-moq-transport-20 §5.1.4:
+ * draft-ietf-moq-transport-21 §8.6:
  * 宣言 Length 内で varint が途中終端するケース (構造不正) は、そのまま流すと
  * 受信ループの toProtocolViolationSessionError で PROTOCOL_VIOLATION の
  * セッション終了になるため、Range Filter の値違反として扱える
@@ -1720,7 +1720,7 @@ function decodeRangeFilterVarint(data: Uint8Array, offset: number): [bigint, num
 /**
  * Range Filter パラメータの組み合わせ重複を検証する
  *
- * draft-ietf-moq-transport-20 §5.1.4:
+ * draft-ietf-moq-transport-21 §3.3.2:
  * "If the same combination of Parameter Type, SetID, and Property Type
  *  (only in the Track and Object Property Filters) repeat in any message,
  *  an endpoint MUST reject this with REQUEST_ERROR with error code

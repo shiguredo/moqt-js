@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter Property-Based Tests
- * draft-ietf-moq-transport-20 Section 10.2
+ * draft-ietf-moq-transport-21 Section 9.20
  */
 
 import { test, assert } from "vite-plus/test";
@@ -66,7 +66,7 @@ test("奇数タイプの Parameter のエンコード・デコードがラウン
 });
 
 test("TrackNamespace のエンコード・デコードがラウンドトリップする", () => {
-  // draft-ietf-moq-transport-20 §2.3:
+  // draft-ietf-moq-transport-21 §2.3:
   // "Each Track Namespace Field Value MUST contain at least one byte."
   // 各フィールドは 1 バイト以上必要なため minLength: 1 とする
   fc.assert(
@@ -106,7 +106,7 @@ test("Location のエンコード・デコードがラウンドトリップす�
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  * - varint: 0x02, 0x04, 0x06, 0x08, 0x32
  * - uint8: 0x10, 0x20, 0x22
@@ -122,7 +122,7 @@ const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-20 §10.2.8 / §10.2.18: 値域制約に従う arbitrary
+// draft-ietf-moq-transport-21 §9.20.9 / §9.20.19: 値域制約に従う arbitrary
 //   - FORWARD (0x10): 0 / 1
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
@@ -162,8 +162,8 @@ const lengthPrefixedParameterArb = fc
 /**
  * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-20 §10.2.20:
- * Value は §2.4.1 の Track Namespace エンコーディング (自己区切り)。
+ * draft-ietf-moq-transport-21 §9.20.21:
+ * Value は §8.7 の Track Namespace エンコーディング (自己区切り)。
  * encodeParameterTrackNamespace の出力で構築する
  * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
  */
@@ -174,7 +174,7 @@ const trackNamespaceParameterArb = fc
 /**
  * LocationFilter の任意構築
  *
- * draft-ietf-moq-transport-20 §5.1.2: Length ベースの optional フィールド
+ * draft-ietf-moq-transport-21 §9.20.10: Length ベースの optional フィールド
  * (フィールド数 0〜4) の union。
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
@@ -200,7 +200,7 @@ const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-20 §5.1.2: Value は「Length + optional vi64 フィールド」の
+ * draft-ietf-moq-transport-21 §9.20.10: Value は「Length + optional vi64 フィールド」の
  * 1 Length 構造。encodeLocationFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
  * Range Filter と同様の生成方針 (rangeFilterParameterArb を参照)。
@@ -212,7 +212,7 @@ const locationFilterParameterArb = locationFilterArb.map((filter) =>
 /**
  * Range Filter パラメータ (0x25-0x29) の arbitrary
  *
- * draft-ietf-moq-transport-20 Section 5.1.4:
+ * draft-ietf-moq-transport-21 Section 8.6:
  * Range Filter の Value は「Length + [SetID + [Property Type] + Range 列]」の
  * 1 Length 構造。encodeRangeFilter の出力 (内部 Length と整合したバイト列) で
  * 構築する (生バイト列の任意生成は内部 Length 検証と衝突する)。
@@ -266,7 +266,7 @@ const rangeFilterParameterArb = fc
       // OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER は propertyType 必須
       ((filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
         propertyType !== undefined) &&
-      // PRIORITY_FILTER は 255 以下の値のみ (§10.2.12)
+      // PRIORITY_FILTER は 255 以下の値のみ (§9.20.13)
       (filter.filterType !== "priority" ||
         ranges.every((r) => r.start <= 255n && (r.end === undefined || r.end <= 255n))),
   )
@@ -295,11 +295,11 @@ const messageParameterArb = fc.oneof(
 /**
  * Message Parameters リストの arbitrary
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * パラメータは Type の昇順でソートされ、各 Type は一意である必要がある。
  * ただし Range Filters (0x25-0x29) は複数回出現が許可される (isRepeatable と同じ扱い)。
  * 同型の Range Filter が複数出現する場合、同一 SetID の重複は仕様違反
- * (draft-ietf-moq-transport-20 §5.1.4 の INVALID_FILTER MUST) のため、
+ * (draft-ietf-moq-transport-21 §3.3.2 の INVALID_FILTER MUST) のため、
  * SetID が重複するケースを生成から除外する。
  */
 const parametersArb = fc
@@ -339,7 +339,7 @@ const parametersArb = fc
 /**
  * Parameters リストのエンコード・デコードがラウンドトリップする
  *
- * draft-ietf-moq-transport-20 Section 10.2:
+ * draft-ietf-moq-transport-21 Section 9.20:
  * delta encoding を使用するため、type は昇順である必要がある。
  * テストでは生成されたパラメータを type でソートしてから使用する。
  */
@@ -384,7 +384,7 @@ test("LocationFilter パラメータのエンコード・デコードがラウ�
 });
 
 /**
- * draft-ietf-moq-transport-20 Section 5.1.4 (Range Filters):
+ * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters):
  * Range Filter の encode/decode がラウンドトリップすることを検証する。
  * delta エンコーディング（例: ranges 3–5 と 10–15 → Start=3, End=2, Start=5, End=5）。
  */

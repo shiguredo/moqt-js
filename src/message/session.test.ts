@@ -1,6 +1,6 @@
 /**
  * MOQT PUBLISH_STATE_NOTIFY Unit Tests
- * draft-ietf-moq-transport-20 Section 10.10 (PUBLISH_STATE_NOTIFY)
+ * draft-ietf-moq-transport-21 Section 9.10 (PUBLISH_STATE_NOTIFY)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -9,14 +9,16 @@ import {
   decodePublishStateNotifyPayload,
   decodeRedirect,
   decodeGoawayPayload,
+  encodeRequestErrorPayload,
   decodeRequestErrorPayload,
 } from "./session";
 import { MessageType, MessageParameterType } from "./types";
+import { createTrackNamespace } from "./parameter";
 import { getMessageTypeName } from "./debug";
 import { ProtocolViolationError } from "../error";
 
 /**
- * draft-ietf-moq-transport-20 §10.10:
+ * draft-ietf-moq-transport-21 §9.10:
  * PUBLISH_STATE_NOTIFY の encode / decode ラウンドトリップを検証する。
  * ペイロードは Number of Parameters + Parameters のみ (Request ID なし)。
  */
@@ -38,7 +40,7 @@ test("encodePublishStateNotifyPayload / decodePublishStateNotifyPayload: ラウ�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.10:
+ * draft-ietf-moq-transport-21 §9.10:
  * 空パラメータの PUBLISH_STATE_NOTIFY も正当な通知として扱う。
  */
 test("decodePublishStateNotifyPayload: 空パラメータをデコードできる", () => {
@@ -52,7 +54,7 @@ test("decodePublishStateNotifyPayload: 空パラメータをデコードでき�
 });
 
 /**
- * draft-ietf-moq-transport-20 §10:
+ * draft-ietf-moq-transport-21 §9:
  * Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION。
  */
 test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViolationError", () => {
@@ -66,7 +68,7 @@ test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViola
 });
 
 /**
- * draft-ietf-moq-transport-20 §10.10:
+ * draft-ietf-moq-transport-21 §9.10:
  * Type 0x22 が PUBLISH_STATE_NOTIFY として名前解決される。
  */
 test("getMessageTypeName: 0x22 は PUBLISH_STATE_NOTIFY", () => {
@@ -77,7 +79,7 @@ test("getMessageTypeName: 0x22 は PUBLISH_STATE_NOTIFY", () => {
 /**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
- * draft-ietf-moq-transport-20 §10.6.1 / §10.4 / §10.6.2:
+ * draft-ietf-moq-transport-21 §9.4.1 / §9.2 / §9.4.2:
  * 制御ストリームは外側でフレーミング済みのため、Length 宣言が
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。
@@ -123,4 +125,45 @@ test("decodeRedirect: offset 付きでも Track Name Length 宣言超過で Prot
     () => decodeRedirect(truncated, 1),
     /redirect track name length exceeds remaining data/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4.2 (REQUEST_ERROR Message Format):
+ * "Redirect: Present only when Error Code is REDIRECT."
+ * Error Code が REDIRECT (0x34) なのに Redirect 構造が無い場合は
+ * PROTOCOL_VIOLATION とする。
+ */
+test("decodeRequestErrorPayload: REDIRECT コードで Redirect 欠落は ProtocolViolationError", () => {
+  // Error Code 0x34 + Retry Interval 0 + Reason Length 0 (Redirect なし)
+  const payload = new Uint8Array([0x34, 0x00, 0x00]);
+  assert.throws(
+    () => decodeRequestErrorPayload(payload, 0),
+    /missing redirect structure in REQUEST_ERROR/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4.1 / §9.4.2:
+ * Error Code が REDIRECT (0x34) で Redirect 構造が続く場合は正常に
+ * デコードされることを検証する (欠落検出の回帰ガード)。
+ */
+test("decodeRequestErrorPayload: REDIRECT コードと Redirect 構造の roundtrip", () => {
+  const redirect = {
+    connectUri: "moqt://new.example.com/session",
+    trackNamespace: createTrackNamespace(["live", "room"]),
+    trackName: new TextEncoder().encode("video"),
+  };
+
+  const payload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0x34n,
+    retryInterval: 0n,
+    reasonPhrase: "",
+    redirect,
+  });
+
+  const decoded = decodeRequestErrorPayload(payload);
+  assert.equal(decoded.errorCode, 0x34n);
+  assert.isDefined(decoded.redirect);
+  assert.equal(decoded.redirect!.connectUri, "moqt://new.example.com/session");
 });

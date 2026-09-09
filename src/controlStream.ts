@@ -1,6 +1,6 @@
 /**
  * MOQT Control Stream
- * draft-ietf-moq-transport-20 Section 10 (Control Messages)
+ * draft-ietf-moq-transport-21 Section 9 (Control Messages)
  *
  * Control Message Format: Type (varint) + Length (16-bit) + Payload
  */
