@@ -5,7 +5,7 @@
 
 import { ObjectStatus, type Location } from "./message/types";
 import type { LocationFilter } from "./message/parameter";
-import { resolveFilter, type ResolvedFilter } from "./filter";
+import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "./filter";
 import { ProtocolViolationError } from "./error";
 
 /**
@@ -145,6 +145,9 @@ export interface Publisher {
    * fail-fast で error 通知 + 返値の reject になる
    * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
    * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
+   *
+   * 購読の Location Filter の範囲外 Object は送信せず、error 通知もなく
+   * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-21 §3.3.1)。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
@@ -163,6 +166,8 @@ export interface Publisher {
    * 範囲外・非整数の priority も error 通知 + throw になる。
    * END_OF_TRACK 送信後の呼び出しも error 通知 + throw になる
    * (§11.1.2 の EOT 定義による解釈)。
+   * 購読の Location Filter の範囲外 Datagram は送信せず、何もせず return する
+   * (draft-ietf-moq-transport-21 §3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void;
   /**
@@ -235,10 +240,10 @@ export class PublisherImpl implements Publisher {
   // REQUEST_UPDATE で受信した購読の Location Filter を、受理時点の
   // LARGEST_OBJECT で解決した状態で保持する (相対指定を後から再解決しない。
   // SubscriberImpl.resolveLocationFilter と同じ規則)。
-  // fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は購読の
-  // Location Filter」で決まるため、その評価に使う。現状の用途は fill 範囲の
-  // 評価のみであり、送信 Object への Location Filter 適用 (§3.3.1 の
-  // publisher MUST) は未実装 (別 issue)。
+  // 用途は 2 つ。fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は
+  // 購読の Location Filter」で決まるためその評価に使い、送信 Object は
+  // §3.3.1 の publisher MUST「A publisher MUST NOT send subscription-delivered
+  // objects from outside the requested range.」に従い範囲外を送信しない。
   // 未受信時は undefined (フィルタなし = トラック全体)。
   private subscriptionLocationFilter: ResolvedFilter | undefined;
 
@@ -361,6 +366,31 @@ export class PublisherImpl implements Publisher {
     }
   }
 
+  /**
+   * 送信対象の Location が購読の Location Filter の範囲外かどうかを返す
+   *
+   * draft-ietf-moq-transport-21 §3.3.1:
+   * 「A publisher MUST NOT send subscription-delivered objects from outside
+   *  the requested range.」
+   * フィルタ未保持 (undefined) は全 Object 通過。groupId / objectId は number の
+   * ため、recordLargestLocation と同じ「非整数・負値は対象外」ガードの後で
+   * bigint 化する。非整数・負値は既存の送信経路の fail-fast に委ね、
+   * フィルタ判定はスキップする。
+   */
+  private isOutsideLocationFilter(groupId: number, objectId: number): boolean {
+    const filter = this.subscriptionLocationFilter;
+    if (filter === undefined) {
+      return false;
+    }
+    if (!Number.isInteger(groupId) || !Number.isInteger(objectId)) {
+      return false;
+    }
+    if (groupId < 0 || objectId < 0) {
+      return false;
+    }
+    return !objectMatchesFilter({ group: BigInt(groupId), object: BigInt(objectId) }, filter);
+  }
+
   incrementDataStreamCount(): void {
     this.dataStreamCount++;
   }
@@ -380,6 +410,9 @@ export class PublisherImpl implements Publisher {
    * fail-fast で error 通知 + 返値の reject になる
    * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
    * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
+   *
+   * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
+   * Promise<void> を返す (§3.3.1)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
     if (this.publisherState === "closed") {
@@ -414,6 +447,13 @@ export class PublisherImpl implements Publisher {
     if (statusViolation) {
       this.handleError(statusViolation);
       return Promise.reject(statusViolation);
+    }
+
+    // draft-ietf-moq-transport-21 §3.3.1:
+    // 購読の Location Filter の範囲外 Object は送信しない (Forward State = 0 と
+    // 同様に送信も記録もしない。範囲外は正常なフィルタ動作であり通知しない)。
+    if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
+      return Promise.resolve();
     }
 
     // draft-ietf-moq-transport-21 §9.20.18:
@@ -461,7 +501,8 @@ export class PublisherImpl implements Publisher {
    * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    *
    * END_OF_TRACK 送信後の呼び出しは fail-fast で error 通知 + throw になる
-   * (§11.1.2 の EOT 定義による解釈)。
+   * (§11.1.2 の EOT 定義による解釈)。購読の Location Filter の範囲外 Datagram は
+   * 送信しない (§3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void {
     if (this.publisherState === "closed") {
@@ -481,6 +522,12 @@ export class PublisherImpl implements Publisher {
       );
       this.handleError(violation);
       throw violation;
+    }
+
+    // draft-ietf-moq-transport-21 §3.3.1:
+    // 購読の Location Filter の範囲外 Datagram は送信しない。
+    if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
+      return;
     }
 
     // draft-ietf-moq-transport-21 §9.20.18:

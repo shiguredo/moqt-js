@@ -607,3 +607,85 @@ test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => 
   assert.isTrue(doneCalled);
   assert.equal(publisher.state, "closed");
 });
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * 「A publisher MUST NOT send subscription-delivered objects from outside the
+ *  requested range.」
+ * 購読の Location Filter の範囲外 Object は送信せず、Largest Object も更新しない。
+ * 範囲外に大きい Location を先に送ることで、フィルタ判定より前に
+ * recordLargestLocation が走る退行を検出する。
+ */
+test("sendObject: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", async () => {
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  const sentGroups: number[] = [];
+  publisher.onSendObject = async (params) => {
+    sentGroups.push(params.groupId);
+  };
+  // 絶対指定 {5, 0}〜{5, 5} のフィルタ
+  publisher.setLocationFilter({
+    startGroup: 5n,
+    startObject: 0n,
+    endGroupDelta: 0n,
+    endObject: 5n,
+  });
+
+  // 範囲外だが大きい Location {6, 0} を先に送る
+  await publisher.sendObject({ groupId: 6, objectId: 0, payload: new Uint8Array() });
+  // 範囲内 {5, 0}
+  await publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
+
+  // 範囲外は送信も Largest Object 記録もされない
+  assert.deepEqual(sentGroups, [5]);
+  assert.equal(publisher.getLargestLocation()?.group, 5n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * 範囲外の END_OF_TRACK は送信も記録もされないため、後続の送信が可能なままになる。
+ */
+test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可する", async () => {
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  const sentGroups: number[] = [];
+  publisher.onSendObject = async (params) => {
+    sentGroups.push(params.groupId);
+  };
+  publisher.setLocationFilter({ startGroup: 5n, startObject: 0n });
+
+  // 範囲外の END_OF_TRACK は送信も記録もされない
+  await publisher.sendObject({
+    groupId: 4,
+    objectId: 0,
+    payload: new Uint8Array(),
+    status: ObjectStatus.END_OF_TRACK,
+  });
+  // 後続の範囲内送信が可能 (endOfTrackSent が立っていない)
+  await publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
+
+  assert.deepEqual(sentGroups, [5]);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * 購読の Location Filter の範囲外 Datagram は送信せず、Largest Object も更新しない。
+ */
+test("sendDatagram: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", () => {
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+  const sentGroups: number[] = [];
+  publisher.onSendDatagram = (params) => {
+    sentGroups.push(params.groupId);
+  };
+  publisher.setLocationFilter({
+    startGroup: 5n,
+    startObject: 0n,
+    endGroupDelta: 0n,
+    endObject: 5n,
+  });
+
+  // 範囲外だが大きい Location {6, 0} を先に送る
+  publisher.sendDatagram({ groupId: 6, objectId: 0, payload: new Uint8Array() });
+  publisher.sendDatagram({ groupId: 5, objectId: 0, payload: new Uint8Array() });
+
+  assert.deepEqual(sentGroups, [5]);
+  assert.equal(publisher.getLargestLocation()?.group, 5n);
+});

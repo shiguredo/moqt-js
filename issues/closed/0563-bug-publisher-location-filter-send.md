@@ -1,7 +1,7 @@
 # Publisher が購読の Location Filter を送信 Object に適用する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-09
 - Branch: feature/fix-publisher-location-filter
 - Polished: 2026-09-09
 
@@ -42,3 +42,14 @@ draft-ietf-moq-transport-21 §3.3.1 は publisher に対し「A publisher MUST N
 - `objectMatchesFilter` / `ResolvedFilter`（`src/filter.ts`）
 - `applyPublishRequestUpdate`（`src/session/bidi.ts`）
 - `publishSendObject` / `publishSendDatagram`（`src/session/publish.ts`）
+
+## 解決方法
+
+publisher が購読の Location Filter の範囲外 Object を送信しないようにした。
+
+- `src/publisher.ts` に `isOutsideLocationFilter` を追加し、`objectMatchesFilter` で範囲外を判定する。非整数・負値は `recordLargestLocation` と同じガードで除外し、フィルタ未保持時は全通過とする
+- `PublisherImpl.sendObject` / `sendDatagram` で、`endOfTrackSent` の検証後・`recordLargestLocation` と送信委譲の前に範囲外をスキップする（`sendObject` は解決済み Promise、`sendDatagram` は return。エラー通知はしない）
+- 範囲外 Object では Largest Object / END_OF_TRACK を記録しない
+- `Publisher` インターフェースと実装の JSDoc、`subscriptionLocationFilter` のコメントを実装に合わせて更新する
+- `src/publisher.test.ts` に範囲内 / 範囲外の送信有無・Largest Object 非更新・範囲外 END_OF_TRACK 非記録のテストを追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
