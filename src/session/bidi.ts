@@ -3011,6 +3011,51 @@ export async function bidiCancelFetch(
 }
 
 // ============================================================================
+// cancelMalformedTrackPeers
+// ============================================================================
+
+/**
+ * 同一 Track の全購読と全 FETCH を malformed track として cancel する
+ *
+ * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * 「it MUST cancel any corresponding subscription or fetches for that Track
+ *  from that publisher」
+ * 同一 Track の判定は Full Track Name (trackNamespace + trackName) で行う。
+ * fetcher は trackAlias を持たないため Full Track Name で引く。
+ * セッションは閉じない。アプリの error コールバックの throw は握り潰す。
+ */
+export function cancelMalformedTrackPeers(
+  session: BidiSessionInternal,
+  fullTrackName: string,
+  error: Error,
+): void {
+  // 購読は alias 索引 (subscribersByAlias) を走査する。bidiCancelSubscription
+  // は同期区間で当該配列から購読を splice するため、走査前に複製して取りこぼし
+  // を防ぐ。同一 alias に複数の同一 Track 購読がぶら下がり得る。
+  const seen = new Set<SubscriberImpl>();
+  for (const subscribers of session.subscribersByAlias.values()) {
+    for (const subscriber of subscribers.slice()) {
+      if (seen.has(subscriber) || subscriber.getFullTrackName() !== fullTrackName) {
+        continue;
+      }
+      seen.add(subscriber);
+      void bidiCancelSubscriptionWithError(session, subscriber, error);
+    }
+  }
+  for (const fetcher of session.fetchers.values()) {
+    if (fetcher.getFullTrackName() !== fullTrackName) {
+      continue;
+    }
+    try {
+      fetcher.handleError(error);
+    } catch {
+      // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
+    }
+    void fetcher.cancel().catch(() => {});
+  }
+}
+
+// ============================================================================
 // handlePublishDone
 // ============================================================================
 
