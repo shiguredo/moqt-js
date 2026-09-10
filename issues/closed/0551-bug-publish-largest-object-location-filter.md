@@ -1,7 +1,7 @@
 # 受信 PUBLISH の LARGEST_OBJECT を抽出して相対 Location Filter を解決する
 
 - Created: 2026-09-09
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-11
 - Branch: feature/fix-publish-largest-object-location-filter
 - Polished: 2026-09-11
 
@@ -36,3 +36,11 @@ draft-ietf-moq-transport-21 §9.20.18 は LARGEST_OBJECT が PUBLISH に出現�
 - draft-ietf-moq-transport-21 §3.3.1 / §3.4 / §9.20.10 / §9.20.18
 - `applyIncomingPublishParameters` / `setLocationFilter` / `setLargestLocation` / `resolveLocationFilter`
 - `extractLargestLocation`（`src/session/params.ts`）/ `PUBLISH_ALLOWED_PARAMS`（`src/message/parameterScope.ts`）
+
+## 解決方法
+
+- `src/session.ts` の `applyIncomingPublishParameters` で受信 PUBLISH の LARGEST_OBJECT を抽出し、LOCATION_FILTER より先に `SubscriberImpl.setLargestLocation` で反映するようにした。相対 Location Filter は `setLocationFilter` 時の一度の解決で PUBLISH の LARGEST_OBJECT 基準に確定する
+- `extractLargestLocation` の JSDoc、`Subscriber.largestLocation` / `setLargestLocation`、`resolveFilter` の基準値説明、`docs/LOW_LEVEL_API.md` の更新元一覧を実装に合わせて更新した
+- `src/session.test.ts` に Next Object フィルタ / 1 フィールド相対フィルタが PUBLISH の LARGEST_OBJECT で解決されること、LARGEST_OBJECT 単独の反映、不正な LARGEST_OBJECT でセッションが閉じることを検証するテストを追加した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
+- 検証: `vp check` / `tsc --noEmit` / `vp test run`（1952 tests）が通る

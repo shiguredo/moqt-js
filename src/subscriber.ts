@@ -83,7 +83,8 @@ export interface RequestUpdateOptions {
 export interface Subscriber {
   readonly state: SubscriberState;
   /**
-   * SUBSCRIBE_OK で受信した LARGEST_OBJECT パラメータ
+   * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY で
+   * 受信した LARGEST_OBJECT パラメータ
    * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
    *
    * Publisher/Relay が知っている最大の Location を示す。
@@ -247,7 +248,7 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * SUBSCRIBE_OK / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
+   * SUBSCRIBE_OK / PUBLISH / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY から
    * LARGEST_OBJECT パラメータを設定
    * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
    *

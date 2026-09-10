@@ -22,7 +22,11 @@ import {
 import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
-import { createTrackNamespace, encodeLocationFilterParameter } from "./message/parameter";
+import {
+  createTrackNamespace,
+  encodeLocation,
+  encodeLocationFilterParameter,
+} from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl } from "./fetcher";
 import {
@@ -1210,6 +1214,31 @@ function setupIncomingPublishStreamSession(
     namespacePrefix: INCOMING_PUBLISH_NAMESPACE,
   });
   return internal;
+}
+
+/**
+ * 受信 PUBLISH の処理完了 (SubscriberImpl の登録) を待つ
+ *
+ * createIncomingPublishStream の終端を保留したまま PUBLISH を処理させ、
+ * 購読が active の間に handleObject でフィルタ適用を検証できるようにする。
+ */
+async function waitForIncomingPublishSubscriber(
+  internal: IncomingPublishStreamInternals,
+): Promise<SubscriberImpl> {
+  // 購読登録は PUBLISH 処理の同一マイクロタスク連鎖で完了する。上限は
+  // 実装が壊れて登録されない場合に無限ループしないための安全弁として設ける
+  for (
+    let i = 0;
+    i < 10 && internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID) === undefined;
+    i++
+  ) {
+    await yieldToMacrotask();
+  }
+  const subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+  if (subscriber === undefined) {
+    throw new Error("受信 PUBLISH の SubscriberImpl が登録されていない");
+  }
+  return subscriber;
 }
 
 /**
@@ -4432,6 +4461,176 @@ test("受信 PUBLISH の LOCATION_FILTER が subscriber に反映される", asy
 });
 
 /**
+ * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1 / §9.20.10:
+ * 受信 PUBLISH が LARGEST_OBJECT と Next Object 形式の相対 LOCATION_FILTER を
+ * 同時に運ぶ場合、フィルタは PUBLISH の LARGEST_OBJECT 基準で一度だけ解決される。
+ * LARGEST_OBJECT {7, 2} のとき開始位置は {7, 3} になる。
+ */
+test("受信 PUBLISH の Next Object フィルタが PUBLISH の LARGEST_OBJECT で解決される", async () => {
+  const session = createSessionImpl();
+  const delivered: Array<[bigint, bigint]> = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push([object.groupId, object.objectId]);
+    },
+  });
+
+  // 購読が active の間に handleObject を検証するため、PUBLISH 後の終端を保持する
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const parameters = [
+    encodeLocationFilterParameter({ startGroup: 0n, startObject: 0n }),
+    { type: MessageParameterType.LARGEST_OBJECT, value: encodeLocation({ group: 7n, object: 2n }) },
+  ];
+  const handlePromise = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        streamController = controller;
+      },
+      [],
+      parameters,
+    ),
+  );
+
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  // LARGEST_OBJECT が購読へ反映される
+  assert.deepEqual(subscriber.largestLocation, { group: 7n, object: 2n });
+
+  // 開始位置 {7, 3} より前の {7, 2} は不通過、{7, 3} は配信される
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 2n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 3n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.deepEqual(delivered, [[7n, 3n]]);
+
+  // 後始末: FIN でストリームを閉じ、ハンドリングを完了させる
+  if (streamController === undefined) {
+    throw new Error("受信 PUBLISH ストリームの終端操作が取得できていない");
+  }
+  streamController.close();
+  await handlePromise;
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1 / §9.20.10:
+ * 1 フィールドの相対 LOCATION_FILTER も PUBLISH の LARGEST_OBJECT 基準で解決される。
+ * LARGEST_OBJECT {7, 2} のとき開始位置は {8, 0} になる。
+ */
+test("受信 PUBLISH の相対 LOCATION_FILTER が PUBLISH の LARGEST_OBJECT で解決される", async () => {
+  const session = createSessionImpl();
+  const delivered: Array<[bigint, bigint]> = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push([object.groupId, object.objectId]);
+    },
+  });
+
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const parameters = [
+    encodeLocationFilterParameter({ startGroup: 0n }),
+    { type: MessageParameterType.LARGEST_OBJECT, value: encodeLocation({ group: 7n, object: 2n }) },
+  ];
+  const handlePromise = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        streamController = controller;
+      },
+      [],
+      parameters,
+    ),
+  );
+
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  assert.deepEqual(subscriber.largestLocation, { group: 7n, object: 2n });
+
+  // 開始位置 {8, 0} より前の {7, 3} は不通過、{8, 0} は配信される
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 3n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  subscriber.handleObject({
+    groupId: 8n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.deepEqual(delivered, [[8n, 0n]]);
+
+  // 後始末: FIN でストリームを閉じ、ハンドリングを完了させる
+  if (streamController === undefined) {
+    throw new Error("受信 PUBLISH ストリームの終端操作が取得できていない");
+  }
+  streamController.close();
+  await handlePromise;
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.18:
+ * 受信 PUBLISH が LARGEST_OBJECT のみを運ぶ場合 (LOCATION_FILTER なし)、
+ * 購読の largestLocation に反映され、フィルタ未指定のため全 Object が配信される。
+ */
+test("受信 PUBLISH の LARGEST_OBJECT のみが購読に反映される", async () => {
+  const session = createSessionImpl();
+  const delivered: Array<[bigint, bigint]> = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push([object.groupId, object.objectId]);
+    },
+  });
+
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const parameters = [
+    { type: MessageParameterType.LARGEST_OBJECT, value: encodeLocation({ group: 7n, object: 2n }) },
+  ];
+  const handlePromise = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        streamController = controller;
+      },
+      [],
+      parameters,
+    ),
+  );
+
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  assert.deepEqual(subscriber.largestLocation, { group: 7n, object: 2n });
+
+  // LOCATION_FILTER が無いため、LARGEST_OBJECT 以前の Object も含めて全通過する
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 0n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  subscriber.handleObject({
+    groupId: 7n,
+    objectId: 2n,
+    status: ObjectStatus.NORMAL,
+    payload: new Uint8Array(),
+  });
+  assert.deepEqual(delivered, [
+    [7n, 0n],
+    [7n, 2n],
+  ]);
+
+  // 後始末: FIN でストリームを閉じ、ハンドリングを完了させる
+  if (streamController === undefined) {
+    throw new Error("受信 PUBLISH ストリームの終端操作が取得できていない");
+  }
+  streamController.close();
+  await handlePromise;
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.8 / §9.20.1:
  * 受信 PUBLISH に許可外パラメータ (NEW_GROUP_REQUEST / Range Filters /
  * FILL_PARAMETERS) が含まれる場合、PROTOCOL_VIOLATION でセッションを
@@ -4467,13 +4666,14 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 / §9.20.9 / §3.3.1:
- * 受信 PUBLISH に値域外の FORWARD / GROUP_ORDER / End Group 超過の
- * LOCATION_FILTER が含まれる場合、PROTOCOL_VIOLATION でセッションを
- * 閉じることを検証する。FORWARD / GROUP_ORDER はデコード層で先に
- * 検出され、LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
+ * draft-ietf-moq-transport-21 §9.20.19 / §9.20.9 / §9.20.18 / §3.3.1:
+ * 受信 PUBLISH に値域外の FORWARD / GROUP_ORDER、End Group 超過の
+ * LOCATION_FILTER、Location 構造が不正な LARGEST_OBJECT が含まれる場合、
+ * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * FORWARD / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
+ * LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
  */
-test("受信 PUBLISH の値域外パラメータでセッションが閉じる", async () => {
+test("受信 PUBLISH の不正なパラメータでセッションが閉じる", async () => {
   // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で End Group 超過
   const overflowFields = new Uint8Array([
     ...encodeVarint(MAX_VARINT),
@@ -4488,6 +4688,8 @@ test("受信 PUBLISH の値域外パラメータでセッションが閉じる",
     [{ type: MessageParameterType.FORWARD, value: new Uint8Array([2]) }],
     [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x03]) }],
     [{ type: MessageParameterType.LOCATION_FILTER, value: overflowValue }],
+    // Location の 2 つ目の varint (Object) が欠落した LARGEST_OBJECT
+    [{ type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07]) }],
   ];
   for (const parameters of invalidCases) {
     const session = createSessionImpl();

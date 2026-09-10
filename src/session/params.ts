@@ -847,7 +847,7 @@ export function buildTrackStatusParameters(options?: TrackStatusOptions): Parame
 // ============================================================================
 
 /**
- * 純粋関数: SUBSCRIBE_OK のパラメータから LARGEST_OBJECT を抽出する
+ * 純粋関数: SUBSCRIBE_OK / PUBLISH のパラメータから LARGEST_OBJECT を抽出する
  *
  * draft-ietf-moq-transport-21 Section 9.20.18 (LARGEST OBJECT Parameter)
  */
