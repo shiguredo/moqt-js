@@ -16,7 +16,7 @@ export {
 } from "./types";
 
 // デバッグ
-export { getMessageTypeName, getRequestOkAliasName } from "./debug";
+export { getMessageTypeName } from "./debug";
 
 // パラメータ
 export {
@@ -33,7 +33,6 @@ export {
   MAX_TRACK_NAMESPACE_SIZE,
   createTrackNamespace,
   decodeLocation,
-  decodeParameter,
   decodeKeyValuePairs,
   decodeParameters,
   decodeLocationFilter,
@@ -44,7 +43,6 @@ export {
   rangeFilterTypeOf,
   decodeTrackNamespace,
   encodeLocation,
-  encodeParameter,
   encodeKeyValuePairs,
   encodeParameters,
   encodeParameterTrackNamespace,
@@ -57,15 +55,12 @@ export {
   encodeTrackNamespace,
   encodeUint8ParameterValue,
   getParameterLocationValue,
-  getParameterTrackNamespace,
-  getParameterVarintValue,
   isRejectedReceiveNamespace,
   validateForwardValue,
   validateGroupOrderValue,
   validateIncludePropertiesValue,
   validateRangeFilterCombination,
   trackNamespaceToStrings,
-  validateTrackNameSize,
   validateFullTrackName,
   validateFullTrackNameBytes,
 } from "./parameter";

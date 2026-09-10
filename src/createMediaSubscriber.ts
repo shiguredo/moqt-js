@@ -4,7 +4,7 @@
  * MediaStream を使用した簡単なメディア受信機能を提供する
  */
 
-import { connect } from "./index";
+import { connect } from "./connect";
 import { supportsDynamicGroups } from "./properties";
 import { compareLocations } from "./session/params";
 import type { ConnectCallbacks, ConnectOptions, Session, SubscribeOptions } from "./session";
@@ -827,7 +827,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
    * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
    */
-  private async resolveTrackAuthorizationToken(
+  private resolveTrackAuthorizationToken(
     track: CatalogTrack | null,
   ): Promise<AuthorizationToken | undefined> {
     return resolveAuthorizationToken(track?.authInfo, this.options.getAuthorizationToken);

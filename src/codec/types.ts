@@ -9,13 +9,7 @@ export type AudioCodecType = "opus" | "aac";
 export type VideoCodecType = "h264" | "h265" | "vp8" | "vp9" | "av1";
 
 // MediaPublisher の状態
-export type MediaPublisherState =
-  | "created"
-  | "ready"
-  | "publishing"
-  | "paused"
-  | "stopped"
-  | "closed";
+export type MediaPublisherState = "created" | "publishing" | "paused" | "stopped" | "closed";
 
 // MediaSubscriber の状態
 export type MediaSubscriberState = "created" | "subscribing" | "active" | "stopped" | "closed";
