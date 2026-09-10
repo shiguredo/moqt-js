@@ -74,15 +74,67 @@ export {
 } from "./error";
 
 // LOC の再エクスポート (draft-ietf-moq-loc)
+// モジュール全体を名前空間付きで公開する (公開 API として導入済み)
 export * as LOC from "./loc";
 
 // MSF の再エクスポート (draft-ietf-moq-msf)
-export * from "./msf";
+// 公開するのは Catalog / Timeline と関連する型・定数のみ。
+// 検証・fragment・range などの内部ヘルパーはモジュール内に留める。
+export {
+  // Catalog
+  encodeCatalog,
+  encodeCatalogDelta,
+  decodeCatalogMessage,
+  applyCatalogDelta,
+  createCatalog,
+  createCompleteCatalog,
+  // Timeline
+  encodeMediaTimeline,
+  decodeMediaTimeline,
+  encodeEventTimeline,
+  decodeEventTimeline,
+  // トラック検索
+  resolveInitData,
+  getVideoTracks,
+  getAudioTracks,
+  getTrackByName,
+  getTracksByAltGroup,
+  getTracksByRenderGroup,
+  selectTrackByMaxBitrate,
+  selectTrackByMaxResolution,
+  selectHighestBitrateTrack,
+  selectLowestBitrateTrack,
+  // 定数
+  MSF_VERSION,
+  CATALOG_TRACK_NAME,
+  RESERVED_TRACK_ROLES,
+  // 型
+  type MsfVersion,
+  type PackagingType,
+  type TrackRole,
+  type CipherSuite,
+  type Buffers,
+  type InitDataEntry,
+  type AccessibilityDescriptor,
+  type AuthInfo,
+  type MediaTimelineTemplate,
+  type CatalogTrack,
+  type PublishTrack,
+  type RemoveTrack,
+  type Catalog,
+  type CatalogDeltaOperation,
+  type CatalogDelta,
+  type CatalogMessage,
+  type MediaTimelineEntry,
+  type EventTimelineEntry,
+} from "./msf";
 
 // MOQ Log の再エクスポート (draft-jennings-moq-log / draft-ietf-moq-msf §9)
+// モジュール全体を名前空間付きで公開する (公開 API として導入済み)
 export * as MOQLOG from "./moqlog";
 
 // MOQ Metrics の再エクスポート (draft-jennings-moq-metrics / draft-ietf-moq-msf §10)
+// モジュール全体を名前空間付きで公開する (公開 API として導入済み)
 export * as MOQMETRICS from "./moqmetrics";
 
 // バージョン
