@@ -1,7 +1,7 @@
 # 公開 API 境界を整理する
 
 - Created: 2026-09-06
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-11
 - Branch: feature/change-public-api-boundary
 - Polished: YYYY-MM-DD
 
@@ -31,3 +31,12 @@
 ## 関連
 
 - `0499` / `0501` / `0503` (分割側と連携する)
+
+## 解決方法
+
+- 未使用実装 (createObject / DataStreamObject / encodeParameter / decodeParameter / isXxxSupported 等) を削除した
+- `MediaPublisherState` の死に `"ready"` を削除し、`hasContainsEndOfGroup` を `hasEndOfGroup` に改名し、不要な `async` を除去した
+- `connect` を `src/connect.ts` に分離して `createMedia*` との循環 import を解消した
+- MSF の `export *` を Catalog / Timeline / トラック検索と関連する型・定数の明示リストに置き換え、検証・fragment・range・Group ID などの内部ヘルパーを非公開にした
+- LOC / MOQLOG / MOQMETRICS は公開 API として導入済みのため、名前空間付き公開を維持した
+- 確認: PR #276 / #277 の CI (lint / build / typecheck / e2e) がすべて pass
