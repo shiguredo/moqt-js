@@ -76,6 +76,7 @@ import {
   buildTrackStatusParameters,
   clampTimeoutMs,
   extractForwardState,
+  extractLargestLocation,
   matchNamespacePrefix,
   resolveFetchStartLocation,
   resolveFillGroupOrder,
@@ -4427,6 +4428,10 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 §9.8 / §9.20.10 / §9.18.1:
    * LOCATION_FILTER は購読の初期フィルタとして反映する
    * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
+   * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1:
+   * LARGEST_OBJECT は LOCATION_FILTER より先に設定する。相対 Location Filter は
+   * 「フィルタ適用時点の LARGEST_OBJECT」で解決されるため、この順序で
+   * 受信 PUBLISH が運ぶ LARGEST_OBJECT 基準の開始位置に一度だけ確定する。
    * 反映前にすべての値をデコード・検証し、検証通過後にまとめて設定する
    * (違反確定後の部分反映を防ぐ)。
    *
@@ -4436,6 +4441,18 @@ export class SessionImpl implements Session {
     let forwardState: boolean;
     try {
       forwardState = extractForwardState(parameters);
+    } catch (error) {
+      const sessionError = toProtocolViolationSessionError(error);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+        return false;
+      }
+      throw error;
+    }
+
+    let largestLocation: Location | undefined;
+    try {
+      largestLocation = extractLargestLocation(parameters);
     } catch (error) {
       const sessionError = toProtocolViolationSessionError(error);
       if (sessionError !== null) {
@@ -4463,6 +4480,10 @@ export class SessionImpl implements Session {
     }
 
     impl.setForwardState(forwardState);
+    // LARGEST_OBJECT を先に設定し、setLocationFilter 内の解決に反映させる
+    if (largestLocation !== undefined) {
+      impl.setLargestLocation(largestLocation);
+    }
     if (locationFilter !== undefined) {
       impl.setLocationFilter(locationFilter);
     }
