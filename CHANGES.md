@@ -1136,6 +1136,13 @@
   - MediaPublisherState の未使用 "ready" を削除し、hasContainsEndOfGroup を hasEndOfGroup に改名する
   - 不要な async を除去し、connect を src/connect.ts に分離して循環 import を解消する
   - @voluntas
+- [CHANGE] MSF の公開 API を明示的な export リストにする
+  - index.ts の export * from "./msf" を Catalog / Timeline / トラック検索と関連する型・定数のみに絞る
+  - 検証・fragment・range・Group ID などの内部ヘルパーを非公開にする
+  - @voluntas
+- [CHANGE] 未使用の devtools/main.ts を削除する
+  - どの HTML / ビルド入力からも参照されず、存在しない LOC.packVideo / LOC.unpackVideo を呼んでいた
+  - @voluntas
 
 ## 2026.2.0
 
