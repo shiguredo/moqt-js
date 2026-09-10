@@ -11,7 +11,7 @@ import {
   encodeObjectFields,
   decodeObjectFields,
   hasPropertiesPresent,
-  hasContainsEndOfGroup,
+  hasEndOfGroup,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
@@ -579,15 +579,15 @@ test("SubgroupHeaderType: Priority Present フラグが正しく判定される"
 });
 
 test("SubgroupHeaderType: Contains End of Group フラグが正しく判定される", () => {
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE), false);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT), false);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE_NO_PRIORITY), false);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT_NO_PRIORITY), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE_NO_PRIORITY), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT_NO_PRIORITY), false);
 
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE_END_GROUP), true);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP), true);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE_END_GROUP_NO_PRIORITY), true);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP_NO_PRIORITY), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE_END_GROUP), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE_END_GROUP_NO_PRIORITY), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP_NO_PRIORITY), true);
 });
 
 test("SubgroupHeaderType: No Priority タイプの roundtrip テスト", () => {

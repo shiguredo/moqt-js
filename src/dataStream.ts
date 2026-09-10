@@ -342,7 +342,7 @@ function hasPriorityPresent(headerType: number): boolean {
  * Types with bit 3 set (0x08) contain End of Group:
  * 0x18-0x1D (Priority Present) and 0x38-0x3D (No Priority)
  */
-export function hasContainsEndOfGroup(headerType: number): boolean {
+export function hasEndOfGroup(headerType: number): boolean {
   const lowNibble = headerType & 0x0f;
   return lowNibble >= 0x08 && lowNibble <= 0x0d;
 }
@@ -478,7 +478,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // END_OF_GROUP bit (0x08) の抽出
   // draft-ietf-moq-transport-21 §11.3.1: この Subgroup が Group の最大 Object を
   // 含むことを示す。FIN と組み合わせて Group の最終 Object を推定できる。
-  const endOfGroup = hasContainsEndOfGroup(typeNum) ? true : undefined;
+  const endOfGroup = hasEndOfGroup(typeNum) ? true : undefined;
 
   return [
     {

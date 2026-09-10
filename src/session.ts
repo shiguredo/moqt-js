@@ -2512,7 +2512,7 @@ export class SessionImpl implements Session {
    * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
    * PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答ストリーム側 (startTracksStreamLoop) で扱う。
    */
-  private async startNamespaceStreamLoop(
+  private startNamespaceStreamLoop(
     requestId: bigint,
     resolve: (subscription: NamespaceSubscription) => void,
     reject: (err: Error) => void,
@@ -2532,7 +2532,7 @@ export class SessionImpl implements Session {
    * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
    * PUBLISH メッセージは別の新規双方向ストリームで到着するためここでは扱わない。
    */
-  private async startTracksStreamLoop(
+  private startTracksStreamLoop(
     requestId: bigint,
     resolve: (subscription: TracksSubscription) => void,
     reject: (err: Error) => void,
@@ -2647,7 +2647,7 @@ export class SessionImpl implements Session {
    * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
    * それ以外のメッセージを受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
    */
-  private async startNamespacePublicationStreamLoop(
+  private startNamespacePublicationStreamLoop(
     requestId: bigint,
     resolve: (publication: NamespacePublication) => void,
     reject: (err: Error) => void,
@@ -3143,7 +3143,7 @@ export class SessionImpl implements Session {
    * @param decoded - デバッグ用のデコード済みメッセージ
    * @returns 双方向ストリームの情報
    */
-  private async sendRequestOnBidiStream(
+  private sendRequestOnBidiStream(
     requestId: bigint,
     type: number,
     payload: Uint8Array,
@@ -3200,10 +3200,7 @@ export class SessionImpl implements Session {
    * PUBLISH_DONE は双方向ストリーム上で送信される。
    * Request ID フィールドはない（bidi stream で特定可能）。
    */
-  private async sendPublishDone(
-    publisher: PublisherImpl,
-    status: PublishDoneStatusCode,
-  ): Promise<void> {
+  private sendPublishDone(publisher: PublisherImpl, status: PublishDoneStatusCode): Promise<void> {
     return publishSendPublishDone(this as unknown as SessionInternal, publisher, status);
   }
 
@@ -3213,7 +3210,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 Section 6.4.2.3:
    * subscription のキャンセルは双方向ストリームの close で行う。
    */
-  private async cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
+  private cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
     return bidi.bidiCancelSubscription(this as unknown as bidi.BidiSessionInternal, subscriber);
   }
 
@@ -3223,7 +3220,7 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 Section 3.2.1:
    * "It MUST send STOP_SENDING for the bidi request stream."
    */
-  private async cancelFetch(fetcher: FetcherImpl): Promise<void> {
+  private cancelFetch(fetcher: FetcherImpl): Promise<void> {
     return bidi.bidiCancelFetch(this as unknown as bidi.BidiSessionInternal, fetcher);
   }
 
@@ -3240,7 +3237,7 @@ export class SessionImpl implements Session {
    *   Parameters (..) ...
    * }
    */
-  private async sendRequestUpdate(
+  private sendRequestUpdate(
     subscriber: SubscriberImpl,
     options: RequestUpdateOptions,
   ): Promise<void> {
@@ -3259,7 +3256,7 @@ export class SessionImpl implements Session {
    * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private async readPublishResponse(
+  private readPublishResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
@@ -3279,7 +3276,7 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private async readSubscribeResponse(
+  private readSubscribeResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
@@ -3299,7 +3296,7 @@ export class SessionImpl implements Session {
    * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private async readFetchResponse(
+  private readFetchResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
@@ -3319,7 +3316,7 @@ export class SessionImpl implements Session {
    * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private async readTrackStatusResponse(
+  private readTrackStatusResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
@@ -4309,10 +4306,10 @@ export class SessionImpl implements Session {
       reader: subReader,
     });
 
-    impl.onUnsubscribe = async () => {
+    impl.onUnsubscribe = () => {
       return bidi.bidiCancelSubscription(this as unknown as bidi.BidiSessionInternal, impl);
     };
-    impl.onUpdate = async (options: RequestUpdateOptions) => {
+    impl.onUpdate = (options: RequestUpdateOptions) => {
       return bidi.bidiSendRequestUpdate(this as unknown as bidi.BidiSessionInternal, impl, options);
     };
 

@@ -41,7 +41,7 @@ export class AudioDecoderWrapper {
     if (this.useWorker) {
       await this.configureWorker(config);
     } else {
-      await this.configureDirect(config);
+      this.configureDirect(config);
     }
     this.configured = true;
   }
@@ -121,7 +121,7 @@ export class AudioDecoderWrapper {
     });
   }
 
-  private async configureDirect(config: AudioDecoderConfig): Promise<void> {
+  private configureDirect(config: AudioDecoderConfig): void {
     this.decoder = new AudioDecoder({
       output: (audioData: AudioData) => {
         this.callbacks.output({
@@ -217,7 +217,7 @@ export class AudioDecoderWrapper {
     if (this.useWorker) {
       await this.configureWorker(this.lastConfig);
     } else {
-      await this.configureDirect(this.lastConfig);
+      this.configureDirect(this.lastConfig);
     }
     this.configured = true;
   }

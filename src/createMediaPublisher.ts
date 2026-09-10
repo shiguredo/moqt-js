@@ -4,7 +4,7 @@
  * MediaStream を使用した簡単なメディア配信機能を提供する
  */
 
-import { connect } from "./index";
+import { connect } from "./connect";
 import type { ConnectCallbacks, ConnectOptions, Session } from "./session";
 import type { Publisher } from "./publisher";
 import * as LOC from "./loc";
