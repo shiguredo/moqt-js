@@ -96,7 +96,7 @@ const session = await connect(url, callbacks?, options?)
 | プロパティ / メソッド | 説明                                                                                                                              |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `state`               | `"active"` / `"closed"`                                                                                                           |
-| `largestLocation`     | `SUBSCRIBE_OK` または `REQUEST_OK` で更新される `LARGEST_OBJECT`                                                                  |
+| `largestLocation`     | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                           |
 | `trackProperties`     | `SUBSCRIBE_OK` で受信した Track Properties                                                                                        |
 | `forwardState`        | `SUBSCRIBE` 送信時・受信 `PUBLISH`・ケース 1 の `REQUEST_UPDATE`・自 `REQUEST_UPDATE` の `REQUEST_OK` で更新される `FORWARD` 状態 |
 | `update(options?)`    | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                    |

@@ -1091,6 +1091,10 @@
   - done() と REQUEST_UPDATE 拒否経路が同じ donePromise 排他を通り、PUBLISH_DONE を 1 回だけ送る (§9.9 / §9.5.1)
   - 従来は並行時に二重送信し、close 失敗が PROTOCOL_VIOLATION に昇格し得た
   - @voluntas
+- [FIX] 受信 PUBLISH の LARGEST_OBJECT で相対 Location Filter を解決する
+  - draft-ietf-moq-transport-21 §9.20.18 / §3.3.1 に基づき、受信 PUBLISH の LARGEST_OBJECT を LOCATION_FILTER より先に反映し、相対フィルタの開始位置を購読確立時に確定する
+  - 従来は相対フィルタが {0, 0} のまま固定され、fill 併用時に同一 Object が両経路で重複配信され得た
+  - @voluntas
 
 ### misc
 

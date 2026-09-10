@@ -24,9 +24,9 @@ import { MAX_VARINT } from "./varint";
  * 解決済み Location Filter
  *
  * 相対指定 (1 フィールドの StartGroup、および 2 フィールドで StartGroup =
- * StartObject = 0 の Next Object) は LARGEST_OBJECT から具体的な Start
+ * StartObject = 0 の Next Object) は Largest Object から具体的な Start
  * Location に解決される（詳細は resolveFilter を参照）。
- * LARGEST_OBJECT 未受信（コンテンツ未配信）時は {0, 0} から開始する
+ * Largest Object 未確定（コンテンツ未配信）時は {0, 0} から開始する
  * (draft-ietf-moq-transport-21 Section 3.3.1)。
  */
 export interface ResolvedFilter {
@@ -54,8 +54,9 @@ export interface ResolvedFilter {
  * (REQUEST_UPDATE でのフィルタ除去)。
  *
  * @param filter - LocationFilter（undefined は全 Object 通過）
- * @param largestLocation - SUBSCRIBE_OK / REQUEST_UPDATE_OK / PUBLISH_STATE_NOTIFY の
- *                          LARGEST_OBJECT（未受信時は null）
+ * @param largestLocation - 相対フィルタの基準となる Largest Object。Subscriber では
+ *                          受信した LARGEST_OBJECT、Publisher では送信済みの最大 Location。
+ *                          未確定時は null
  */
 export function resolveFilter(
   filter: LocationFilter | undefined,
