@@ -44,7 +44,7 @@ export class AudioEncoderWrapper {
     if (this.useWorker) {
       await this.configureWorker(config);
     } else {
-      await this.configureDirect(config);
+      this.configureDirect(config);
     }
     this.configured = true;
   }
@@ -127,7 +127,7 @@ export class AudioEncoderWrapper {
     });
   }
 
-  private async configureDirect(config: AudioEncoderConfig): Promise<void> {
+  private configureDirect(config: AudioEncoderConfig): void {
     this.encoder = new AudioEncoder({
       output: (chunk: EncodedAudioChunk) => {
         const data = new Uint8Array(chunk.byteLength);

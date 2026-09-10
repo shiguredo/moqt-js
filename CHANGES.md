@@ -1127,6 +1127,15 @@
   - validateLocationAndFillParameters のデコード結果を上限合算と fill 範囲評価で再利用し、同一 REQUEST_UPDATE の重複デコードを除去する
   - 挙動は変えない (既存テストは変更なしで通る)
   - @voluntas
+- [CHANGE] 未使用の実装を削除する
+  - リポジトリ全体から参照されていない createObject / DataStreamObject / getRequestOkAliasName / encodeParameter / decodeParameter / getParameterVarintValue / getParameterTrackNamespace / validateTrackNameSize を削除する
+  - createObject / DataStreamObject は公開 API (src/index.ts) からも削除する
+  - @voluntas
+- [CHANGE] 未使用コードを削除し、内部構造を整理する
+  - 未使用の isVideoEncoderSupported / isVideoDecoderSupported / isAudioEncoderSupported / isAudioDecoderSupported を削除する
+  - MediaPublisherState の未使用 "ready" を削除し、hasContainsEndOfGroup を hasEndOfGroup に改名する
+  - 不要な async を除去し、connect を src/connect.ts に分離して循環 import を解消する
+  - @voluntas
 
 ## 2026.2.0
 

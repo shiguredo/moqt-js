@@ -127,75 +127,6 @@ export interface Parameter {
 }
 
 /**
- * パラメータをエンコードする
- */
-export function encodeParameter(param: Parameter): Uint8Array {
-  const typeBytes = encodeVarint(param.type);
-
-  if (param.type % 2 === 1) {
-    // 奇数型: Length プレフィックス付き
-    const lengthBytes = encodeVarint(param.value.length);
-    const result = new Uint8Array(typeBytes.length + lengthBytes.length + param.value.length);
-    result.set(typeBytes, 0);
-    result.set(lengthBytes, typeBytes.length);
-    result.set(param.value, typeBytes.length + lengthBytes.length);
-    return result;
-  }
-
-  // 偶数型: 値のみ
-  const result = new Uint8Array(typeBytes.length + param.value.length);
-  result.set(typeBytes, 0);
-  result.set(param.value, typeBytes.length);
-  return result;
-}
-
-/**
- * パラメータをデコードする
- * @returns [parameter, consumed bytes]
- */
-export function decodeParameter(data: Uint8Array, offset = 0): [Parameter, number] {
-  const [paramType, typeConsumed] = decodeVarint(data, offset);
-  let totalConsumed = typeConsumed;
-
-  let value: Uint8Array;
-
-  if (Number(paramType) % 2 === 1) {
-    // 奇数型: Length プレフィックス付き
-    const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += lengthConsumed;
-    if (Number(length) > MAX_KVP_VALUE_LENGTH) {
-      throw new ProtocolViolationError(
-        `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
-      );
-    }
-    // Length 宣言が残りバイトを超える切り詰めは破損であり、
-    // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-    if (offset + totalConsumed + Number(length) > data.length) {
-      throw new ProtocolViolationError(
-        `parameter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
-      );
-    }
-    value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
-    totalConsumed += Number(length);
-  } else {
-    // 偶数型: varint 値
-    const [val, valConsumed] = decodeVarint(data, offset + totalConsumed);
-    value = encodeVarint(val);
-    totalConsumed += valConsumed;
-  }
-
-  return [{ type: Number(paramType), value }, totalConsumed];
-}
-
-/**
- * パラメータの varint 値を取得
- */
-export function getParameterVarintValue(param: Parameter): bigint {
-  const [value] = decodeVarint(param.value, 0);
-  return value;
-}
-
-/**
  * パラメータから Location 値を取得
  *
  * LARGEST_OBJECT (0x09) パラメータなど、Location を含むパラメータ用
@@ -483,21 +414,6 @@ export function encodeTrackName(trackName: string): Uint8Array {
   }
 
   return bytes;
-}
-
-/**
- * Track Name のサイズを検証する
- *
- * draft-ietf-moq-transport-21:
- * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-21 Section 8.7
- */
-export function validateTrackNameSize(trackNameBytes: Uint8Array): void {
-  if (trackNameBytes.length > MAX_TRACK_NAME_SIZE) {
-    throw new Error(
-      `track name exceeds maximum size: ${trackNameBytes.length} > ${MAX_TRACK_NAME_SIZE}`,
-    );
-  }
 }
 
 /**
@@ -1441,22 +1357,6 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
 export function encodeParameterTrackNamespace(namespace: TrackNamespace): Parameter {
   const value = encodeTrackNamespace(namespace);
   return { type: 0x34, value };
-}
-
-/**
- * TRACK_NAMESPACE_PREFIX パラメータから Track Namespace を取得する
- *
- * draft-ietf-moq-transport-21 §9.20.21:
- * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
- *  Track Namespace encoding described in Section 8.7."
- * Track Namespace は自己区切りのため、外側 Length は付加しない。
- */
-export function getParameterTrackNamespace(param: Parameter): TrackNamespace {
-  if (param.type !== 0x34) {
-    throw new Error(`Invalid parameter type: expected 0x34, got ${param.type}`);
-  }
-  const [namespace] = decodeTrackNamespace(param.value);
-  return namespace;
 }
 
 // ============================================================================

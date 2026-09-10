@@ -11,8 +11,7 @@ import {
   encodeObjectFields,
   decodeObjectFields,
   hasPropertiesPresent,
-  hasContainsEndOfGroup,
-  createObject,
+  hasEndOfGroup,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
@@ -526,39 +525,6 @@ test("ObjectFields: Properties 付き roundtrip (0x11 タイプ)", () => {
   assert.equal(consumed, encoded.length);
 });
 
-test("createObject: 基本的な MoqtObject を作成", () => {
-  const payload = new Uint8Array([0x01, 0x02, 0x03]);
-  const obj = createObject(1n, 2n, payload);
-
-  assert.equal(obj.groupId, 1n);
-  assert.equal(obj.objectId, 2n);
-  assert.deepEqual(obj.payload, payload);
-  assert.equal(obj.status, ObjectStatus.NORMAL);
-  assert.isUndefined(obj.subgroupId);
-  assert.isUndefined(obj.publisherPriority);
-});
-
-test("createObject: オプション付きで作成", () => {
-  const payload = new Uint8Array([0xaa, 0xbb]);
-  const obj = createObject(10n, 20n, payload, {
-    subgroupId: 5n,
-    publisherPriority: 200,
-  });
-
-  assert.equal(obj.groupId, 10n);
-  assert.equal(obj.objectId, 20n);
-  assert.equal(obj.subgroupId, 5n);
-  assert.equal(obj.publisherPriority, 200);
-  assert.equal(obj.status, ObjectStatus.NORMAL);
-});
-
-test("createObject: 空ペイロードで作成", () => {
-  const obj = createObject(0n, 0n, new Uint8Array(0));
-
-  assert.equal(obj.payload.length, 0);
-  assert.equal(obj.status, ObjectStatus.NORMAL);
-});
-
 /**
  * draft-ietf-moq-transport-21:
  * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
@@ -613,15 +579,15 @@ test("SubgroupHeaderType: Priority Present フラグが正しく判定される"
 });
 
 test("SubgroupHeaderType: Contains End of Group フラグが正しく判定される", () => {
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE), false);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT), false);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE_NO_PRIORITY), false);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT_NO_PRIORITY), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE_NO_PRIORITY), false);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT_NO_PRIORITY), false);
 
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE_END_GROUP), true);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP), true);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.BASE_END_GROUP_NO_PRIORITY), true);
-  assert.equal(hasContainsEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP_NO_PRIORITY), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE_END_GROUP), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.BASE_END_GROUP_NO_PRIORITY), true);
+  assert.equal(hasEndOfGroup(SubgroupHeaderType.EXPLICIT_END_GROUP_NO_PRIORITY), true);
 });
 
 test("SubgroupHeaderType: No Priority タイプの roundtrip テスト", () => {

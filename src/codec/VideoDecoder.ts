@@ -48,7 +48,7 @@ export class VideoDecoderWrapper {
     if (this.useWorker) {
       await this.configureWorker(config);
     } else {
-      await this.configureDirect(config);
+      this.configureDirect(config);
     }
     this.configured = true;
   }
@@ -131,7 +131,7 @@ export class VideoDecoderWrapper {
     });
   }
 
-  private async configureDirect(config: VideoDecoderConfig): Promise<void> {
+  private configureDirect(config: VideoDecoderConfig): void {
     // 新しいデコーダーはキーフレームを必要とする
     this.needsKeyframe = true;
 
@@ -251,7 +251,7 @@ export class VideoDecoderWrapper {
     if (this.useWorker) {
       await this.configureWorker(this.lastConfig);
     } else {
-      await this.configureDirect(this.lastConfig);
+      this.configureDirect(this.lastConfig);
     }
     this.configured = true;
   }

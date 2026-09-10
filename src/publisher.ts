@@ -576,7 +576,7 @@ export class PublisherImpl implements Publisher {
    * 失敗時は以後の done() で再試行を許す (reject 後も publisherState が
    * "active" のままの意味論を維持する)。
    */
-  async done(): Promise<void> {
+  done(): Promise<void> {
     return this.terminate(PublishDoneStatusCode.TRACK_ENDED);
   }
 

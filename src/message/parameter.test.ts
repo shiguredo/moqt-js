@@ -18,7 +18,6 @@ import {
   decodeParameters,
   decodeKeyValuePairs,
   decodeMessageParameter,
-  decodeParameter,
   decodeRangeFilter,
   encodeRangeFilter,
   validateRangeFilterCombination,
@@ -27,9 +26,7 @@ import {
   encodeTrackName,
   encodeTrackNamespace,
   encodeParameterTrackNamespace,
-  getParameterTrackNamespace,
   trackNamespaceToStrings,
-  validateTrackNameSize,
   validateIncludePropertiesValue,
   MAX_TRACK_NAME_SIZE,
   MAX_TRACK_NAMESPACE_FIELDS,
@@ -531,17 +528,6 @@ test("encodeTrackName で制限内なら成功", () => {
   assert.equal(bytes.length, 4000);
 });
 
-test("validateTrackNameSize で制限を超えるとエラー", () => {
-  const largeBytes = new Uint8Array(5000);
-  assert.throws(() => validateTrackNameSize(largeBytes), /track name exceeds maximum size/);
-});
-
-test("validateTrackNameSize で制限内なら成功", () => {
-  const normalBytes = new Uint8Array(4000);
-  // エラーが投げられなければ成功
-  validateTrackNameSize(normalBytes);
-});
-
 /**
  * draft-ietf-moq-transport-21 §8.7:
  * 「The length of a Full Track Name is computed as the sum of the Track
@@ -841,7 +827,8 @@ test("decodeMessageParameter: TRACK_NAMESPACE_PREFIX を外側 Length なしで�
   assert.equal(param.type, 0x34);
   assert.equal(paramType, 0x34n);
   assert.equal(consumed, data.length);
-  assert.deepEqual(trackNamespaceToStrings(getParameterTrackNamespace(param)), ["live", "sports"]);
+  const [trackNamespace] = decodeTrackNamespace(param.value, 0);
+  assert.deepEqual(trackNamespaceToStrings(trackNamespace), ["live", "sports"]);
 });
 
 /**
@@ -1288,15 +1275,6 @@ test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolati
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。
  */
-test("decodeParameter: 奇数型の Length 宣言超過で ProtocolViolationError", () => {
-  // type 0x21 (奇数) + Length 5 宣言 + Value 2 バイトの切り詰め
-  const truncated = new Uint8Array([0x21, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeParameter(truncated, 0),
-    /parameter value length exceeds remaining data/,
-  );
-});
-
 test("decodeTrackNamespace: 要素 Length 宣言超過で ProtocolViolationError", () => {
   // 要素数 1 + 要素 Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x01, 0x05, 0xaa, 0xbb]);

@@ -45,7 +45,7 @@ export class VideoEncoderWrapper {
     if (this.useWorker) {
       await this.configureWorker(config);
     } else {
-      await this.configureDirect(config);
+      this.configureDirect(config);
     }
     this.configured = true;
   }
@@ -129,7 +129,7 @@ export class VideoEncoderWrapper {
     });
   }
 
-  private async configureDirect(config: VideoEncoderConfig): Promise<void> {
+  private configureDirect(config: VideoEncoderConfig): void {
     this.encoder = new VideoEncoder({
       output: (chunk: EncodedVideoChunk, metadata?: EncodedVideoChunkMetadata) => {
         const data = new Uint8Array(chunk.byteLength);

@@ -6,8 +6,6 @@
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import {
-  encodeParameter,
-  decodeParameter,
   encodeTrackNamespace,
   decodeTrackNamespace,
   createTrackNamespace,
@@ -23,47 +21,9 @@ import {
   decodeLocationFilterParameter,
   encodeRangeFilter,
   decodeRangeFilter,
-  getParameterVarintValue,
   type LocationFilter,
 } from "./parameter";
 import { encodeVarint } from "../varint";
-
-test("偶数タイプの Parameter のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.integer({ min: 0, max: 100 }).map((n) => n * 2),
-      fc.bigInt({ min: 0n, max: 1000000n }),
-      (type, varintValue) => {
-        const value = encodeVarint(varintValue);
-        const param = { type, value };
-        const encoded = encodeParameter(param);
-        const [decoded, consumed] = decodeParameter(encoded);
-
-        assert.equal(decoded.type, type);
-        assert.equal(getParameterVarintValue(decoded), varintValue);
-        assert.equal(consumed, encoded.length);
-      },
-    ),
-  );
-});
-
-test("奇数タイプの Parameter のエンコード・デコードがラウンドトリップする", () => {
-  fc.assert(
-    fc.property(
-      fc.integer({ min: 0, max: 100 }).map((n) => n * 2 + 1),
-      fc.uint8Array({ minLength: 0, maxLength: 100 }),
-      (type, value) => {
-        const param = { type, value };
-        const encoded = encodeParameter(param);
-        const [decoded, consumed] = decodeParameter(encoded);
-
-        assert.equal(decoded.type, type);
-        assert.deepEqual(decoded.value, value);
-        assert.equal(consumed, encoded.length);
-      },
-    ),
-  );
-});
 
 test("TrackNamespace のエンコード・デコードがラウンドトリップする", () => {
   // draft-ietf-moq-transport-21 §2.3:
