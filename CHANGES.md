@@ -1127,6 +1127,10 @@
   - validateLocationAndFillParameters のデコード結果を上限合算と fill 範囲評価で再利用し、同一 REQUEST_UPDATE の重複デコードを除去する
   - 挙動は変えない (既存テストは変更なしで通る)
   - @voluntas
+- [CHANGE] 未使用の実装を削除する
+  - リポジトリ全体から参照されていない createObject / DataStreamObject / getRequestOkAliasName / encodeParameter / decodeParameter / getParameterVarintValue / getParameterTrackNamespace / validateTrackNameSize を削除する
+  - createObject / DataStreamObject は公開 API (src/index.ts) からも削除する
+  - @voluntas
 
 ## 2026.2.0
 

@@ -152,9 +152,6 @@ export {
   type DecodedObjectFields,
   encodeObjectFields,
   decodeObjectFields,
-  // MoqtObject
-  type MoqtObject as DataStreamObject,
-  createObject,
   // Object Datagram
   DatagramType,
   type ObjectDatagram,

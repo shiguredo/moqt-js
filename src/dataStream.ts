@@ -670,28 +670,6 @@ export function decodeObjectFields(
 }
 
 /**
- * Create a simple MoqtObject with payload
- */
-export function createObject(
-  groupId: bigint,
-  objectId: bigint,
-  payload: Uint8Array,
-  options?: {
-    subgroupId?: bigint;
-    publisherPriority?: number;
-  },
-): MoqtObject {
-  return {
-    groupId,
-    objectId,
-    subgroupId: options?.subgroupId,
-    publisherPriority: options?.publisherPriority,
-    status: ObjectStatus.NORMAL,
-    payload,
-  };
-}
-
-/**
  * Object Datagram Type Flags (Section 11.2.1)
  *
  * draft-ietf-moq-transport-21 Section 11.2.1 (Appendix A.2 #1774 で

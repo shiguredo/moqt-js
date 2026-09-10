@@ -12,7 +12,6 @@ import {
   decodeObjectFields,
   hasPropertiesPresent,
   hasContainsEndOfGroup,
-  createObject,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
@@ -524,39 +523,6 @@ test("ObjectFields: Properties 付き roundtrip (0x11 タイプ)", () => {
   assert.equal(decoded.propertiesLength, 5);
   assert.deepEqual(decoded.properties, properties);
   assert.equal(consumed, encoded.length);
-});
-
-test("createObject: 基本的な MoqtObject を作成", () => {
-  const payload = new Uint8Array([0x01, 0x02, 0x03]);
-  const obj = createObject(1n, 2n, payload);
-
-  assert.equal(obj.groupId, 1n);
-  assert.equal(obj.objectId, 2n);
-  assert.deepEqual(obj.payload, payload);
-  assert.equal(obj.status, ObjectStatus.NORMAL);
-  assert.isUndefined(obj.subgroupId);
-  assert.isUndefined(obj.publisherPriority);
-});
-
-test("createObject: オプション付きで作成", () => {
-  const payload = new Uint8Array([0xaa, 0xbb]);
-  const obj = createObject(10n, 20n, payload, {
-    subgroupId: 5n,
-    publisherPriority: 200,
-  });
-
-  assert.equal(obj.groupId, 10n);
-  assert.equal(obj.objectId, 20n);
-  assert.equal(obj.subgroupId, 5n);
-  assert.equal(obj.publisherPriority, 200);
-  assert.equal(obj.status, ObjectStatus.NORMAL);
-});
-
-test("createObject: 空ペイロードで作成", () => {
-  const obj = createObject(0n, 0n, new Uint8Array(0));
-
-  assert.equal(obj.payload.length, 0);
-  assert.equal(obj.status, ObjectStatus.NORMAL);
 });
 
 /**

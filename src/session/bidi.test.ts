@@ -41,7 +41,7 @@ import {
   encodeSubscribeOkPayload,
 } from "../message/subscribe";
 import {
-  getParameterTrackNamespace,
+  decodeTrackNamespace,
   getParameterLocationValue,
   encodeLocationFilterParameter,
 } from "../message/parameter";
@@ -1939,7 +1939,7 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
     (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
   );
   assert.isDefined(trackNamespaceParam);
-  const trackNamespace = getParameterTrackNamespace(trackNamespaceParam!);
+  const [trackNamespace] = decodeTrackNamespace(trackNamespaceParam!.value, 0);
   assert.deepEqual(trackNamespaceToStrings(trackNamespace), ["live", "sports"]);
 
   // 送信後、REQUEST_OK 受信待ちの間は pendingPrefix に新 prefix が保持される
@@ -2225,7 +2225,7 @@ test("bidiSendNamespaceRequestUpdate: SUBSCRIBE_TRACKS の更新でも TRACK_NAM
     (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
   );
   assert.isDefined(trackNamespaceParam);
-  const trackNamespace = getParameterTrackNamespace(trackNamespaceParam!);
+  const [trackNamespace] = decodeTrackNamespace(trackNamespaceParam!.value, 0);
   assert.deepEqual(trackNamespaceToStrings(trackNamespace), ["live", "news"]);
   assert.deepEqual(subscription.pendingPrefix, ["live", "news"]);
 });
