@@ -3,7 +3,7 @@
 - Created: 2026-09-10
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-prior-gap-duplicate-detection
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-11
 
 ## 目的
 
@@ -11,7 +11,7 @@ draft-ietf-moq-transport-21 §10.8 / §10.9 は「An Object contains more than o
 
 ## 現状
 
-- 受信経路 (`src/dataStream.ts` の `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchObjectFields`) は `assertNoMandatoryTrackPropertyInObjectProperties` と `assertPriorIdGapInObjectProperties` を呼ぶ。
+- 受信経路は `assertNoMandatoryTrackPropertyInObjectProperties` と `assertPriorIdGapInObjectProperties` を呼ぶ。内訳は `src/dataStream.ts` の `decodeObjectDatagram` と `decodeFetchObjectFields` が両方を呼び、subgroup 経路は `decodeObjectFields` が前者を、`src/session/stream.ts` の `processSubgroupObjects` が後者を分担して呼ぶ。
 - `assertNoMandatoryTrackPropertyInObjectProperties` は内部で `assertObjectPropertyList` を呼び、Mandatory Track Property の混入と IMMUTABLE_PROPERTIES の複数出現・再帰のみを検証する。Prior Gap の出現回数は見ない。
 - `assertPriorIdGapInObjectProperties` は `assertPriorIdGapInProperties` で「gap が Group ID / Object ID より大きい」ことだけを検証し、出現回数は見ない。
 - 同一 Object 内の Prior Gap の複数出現を検出するコードは `parseProperties` にあるが、`parseProperties` は `src/properties.prop.ts` / `src/properties.test.ts` からのみ参照され、ランタイムの受信経路からは呼ばれない。
@@ -20,9 +20,9 @@ draft-ietf-moq-transport-21 §10.8 / §10.9 は「An Object contains more than o
 
 ## 設計方針
 
-1. 受信経路の検証関数に Prior Gap の出現回数の検証を追加する。`assertObjectPropertyList` が IMMUTABLE_PROPERTIES 配下を再帰的に走査しているため、ここに PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP のカウントを追加し、2 個目で `MalformedTrackError` を投げる。mutable list と IMMUTABLE_PROPERTIES 配下を合算して数える (§10.7)。
+1. 受信経路の検証関数に Prior Gap の出現回数の検証を追加する。`assertObjectPropertyList` が IMMUTABLE_PROPERTIES 配下を再帰的に走査しているため、ここに PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP のカウントを追加し、2 個目で `MalformedTrackError` を投げる。カウントは再帰呼び出しを跨いで共有する (引数または戻り値で受け渡す。既存の `immutableCount` のようなローカル変数では内側と外側の合算ができない)。mutable list と IMMUTABLE_PROPERTIES 配下を合算して数える (§10.7 / §10.8 / §10.9)。
 2. 受信経路の呼び出し構造は変更しない (`assertNoMandatoryTrackPropertyInObjectProperties` が subgroup / datagram / FETCH の全経路から呼ばれている)。
-3. `parseProperties` の重複検出はテスト専用のため、ランタイムの検出は受信経路に一本化する。`parseProperties` 側の扱い (残す / 削除する) は実装時に判断する。
+3. `parseProperties` はテスト専用 (`src/properties.prop.ts` / `src/properties.test.ts` からのみ参照され、`src/index.ts` で再エクスポートされない) のため、本 issue では変更しない。ランタイムの出現回数検出は受信経路の検証関数に追加し、`parseProperties` 側はテスト専用の厳密パーサとして現状維持する (テスト 18 件の改修を伴う削除・統合は本 issue の範囲外)。
 
 ## 完了条件
 
@@ -36,6 +36,6 @@ draft-ietf-moq-transport-21 §10.8 / §10.9 は「An Object contains more than o
 
 - `refs/moq/draft-ietf-moq-transport-21.txt` §10.8 / §10.9 (Prior Group ID Gap / Prior Object ID Gap) / §10.7 (Immutable Properties) / §12.1 (Malformed Tracks)
 - `assertObjectPropertyList` / `assertNoMandatoryTrackPropertyInObjectProperties` / `assertPriorIdGapInObjectProperties` / `parseProperties` (`src/properties.ts`)
-- `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchObjectFields` (`src/dataStream.ts`)
+- `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchObjectFields` (`src/dataStream.ts`) / `processSubgroupObjects` (`src/session/stream.ts`)
 - `issues/closed/0122-bug-immutable-properties-malformed-track-detection.md` (同一 Object 内の単一出現検証を追加した先行 issue)
 - `issues/0569-add-prior-gap-track-tracking.md` (Track 横断の追跡検証。本 issue は単一 Object 内の出現回数)
