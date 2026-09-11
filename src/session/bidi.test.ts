@@ -2492,8 +2492,9 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
  * draft-ietf-moq-transport-21 §6.4.2.2:
  * PUBLISH_OK 受信前 (Established 前) にピアが FIN を送った場合、リクエストは
  * 失敗として処理される。bidiReadResponseFromBidiStream の throw が
- * bidiReadPublishResponse の catch で処理され、pendingPublish の reject と
- * requestStreams からの削除が行われることを検証する。
+ * bidiReadPublishResponse の内部で使う共有リーダ bidiReadResponse の catch で
+ * 処理され、pendingPublish の reject と requestStreams からの削除が行われる
+ * ことを検証する。
  */
 test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエストが失敗として処理される", async () => {
   const requestId = 20n;
@@ -8012,6 +8013,57 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN �
   assert.isDefined(rejected);
   assert.isDefined(writer);
   await writer!.closed;
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9 (Message Length) / §8.5 (Reason Phrase):
+ * Reason Phrase Length が残りバイトを超える不完全な REQUEST_ERROR を受信した
+ * 場合、共通リーダの catch が PROTOCOL_VIOLATION の SessionError に変換し、
+ * pending を reject してからセッションを閉じる。TRACK_STATUS の
+ * handleRequestError は closeRequestStreamWriter を await する非同期処理の
+ * ため、共通リーダが awaiting せずに握り潰さないことを検証する。
+ */
+test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLATION として閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 正常な REQUEST_ERROR の Reason Phrase の一部を切り詰め、
+  // Reason Phrase Length が残りバイトを超える状態を作る
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.DOES_NOT_EXIST),
+    retryInterval: 0n,
+    reasonPhrase: "not found",
+  });
+  const truncatedPayload = errorPayload.slice(0, -3);
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, truncatedPayload),
+  );
+  await readPromise;
+
+  // 不完全な payload は PROTOCOL_VIOLATION に変換され、同一オブジェクトで
+  // reject と close が行われる
+  const closedError = ctx.getClosedWithError();
+  assert.instanceOf(closedError, SessionError);
+  if (closedError === undefined) {
+    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが undefined だった");
+  }
+  assert.strictEqual(rejected, closedError);
+  assert.equal(closedError.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });
 

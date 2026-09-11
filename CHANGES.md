@@ -1160,6 +1160,10 @@
   - 全呼び出し元 (bidi / namespaceLoops / session) を新 API に追随させる
   - テストを返却値検証に更新し、`validateRequestOkNoTrackProperties` の単体テストを追加する
   - @voluntas
+- [UPDATE] bidi.ts の 4 種の応答読み取りを共通リーダとハンドラ表に畳む
+  - PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS の応答読み取りを `bidiReadResponse` に集約し、経路固有の処理をハンドラとして注入する
+  - 挙動は変えず、削除集合・reject と close の順序・同一 SessionError オブジェクト性を維持する
+  - @voluntas
 
 ## 2026.2.0
 
