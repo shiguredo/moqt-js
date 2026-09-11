@@ -1,5 +1,10 @@
 import { test, assert } from "vite-plus/test";
-import { isSessionClosedError, isPeerStreamError, toProtocolViolationSessionError } from "./errors";
+import {
+  isSessionClosedError,
+  isPeerStreamError,
+  toProtocolViolationSessionError,
+  toSessionCloseError,
+} from "./errors";
 import {
   IncompleteDataError,
   ProtocolViolationError,
@@ -120,6 +125,57 @@ test("toProtocolViolationSessionError: Error を継承しないオブジェク�
   // ProtocolViolationError ではないため null になることを検証する
   const domExceptionLike = { name: "AbortError", message: "aborted" };
   assert.isNull(toProtocolViolationSessionError(domExceptionLike));
+});
+
+// ============================================================================
+// toSessionCloseError のテスト
+// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * KEY_VALUE_FORMATTING_ERROR の SessionError はコードを保持したまま、
+ * 同一オブジェクトでセッションを閉じるために必要である。
+ */
+test("toSessionCloseError: SessionError は同一オブジェクトのまま返る", () => {
+  const original = new SessionError(
+    "key-value-pair value does not match serialization for known type 0x2: insufficient data",
+    SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+  );
+  assert.strictEqual(toSessionCloseError(original), original);
+});
+
+test("toSessionCloseError: ProtocolViolationError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
+  // 従来の変換対象は toProtocolViolationSessionError と同じ挙動を維持する
+  const original = new ProtocolViolationError("invalid value");
+  const sessionError = toSessionCloseError(original);
+  assert.instanceOf(sessionError, SessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(sessionError?.message, "invalid value");
+});
+
+test("toSessionCloseError: IncompleteDataError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
+  // Length が揃った後のメッセージ構造の破損は PROTOCOL_VIOLATION で閉じる
+  const original = new IncompleteDataError("incomplete fields");
+  const sessionError = toSessionCloseError(original);
+  assert.instanceOf(sessionError, SessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(sessionError?.message, "incomplete fields");
+});
+
+test("toSessionCloseError: 通常の Error は null を返す", () => {
+  // ストリームの正常終了・キャンセル等は従来どおり握り潰し対象なので null
+  assert.isNull(toSessionCloseError(new Error("stream reset by peer")));
+});
+
+test("toSessionCloseError: undefined / null / Error を継承しないオブジェクトは null を返す", () => {
+  // reject が値を持たない / 非オブジェクトのケースでも安全に null を返す
+  assert.isNull(toSessionCloseError(undefined));
+  assert.isNull(toSessionCloseError(null));
+  assert.isNull(toSessionCloseError({ name: "AbortError", message: "aborted" }));
 });
 
 // ============================================================================

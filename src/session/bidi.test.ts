@@ -4724,7 +4724,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
  * draft-ietf-moq-transport-21 §9.3:
  * 受信 PUBLISH_OK のペイロードが不完全 (メッセージ構造の破損) な場合、
  * PROTOCOL_VIOLATION でセッションが閉じることを検証する。IncompleteDataError
- * は toProtocolViolationSessionError で変換され、閉鎖前に当該リクエストの
+ * は toSessionCloseError で変換され、閉鎖前に当該リクエストの
  * pending にも具体エラーで reject される (Range Filter 違反の既存経路と
  * 同パターン)。
  */
@@ -9237,6 +9237,266 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
   assert.isUndefined(ctx.getClosedWithError());
+});
+
+// ============================================================================
+// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
+// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// ============================================================================
+
+/**
+ * payload 末尾に malformed な Track Properties を連結する
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value を 2 バイト varint の
+ * 先頭 1 バイト (0x80) だけで終端し、varint がバッファ内で完結しない状態を作る。
+ * Track Properties はメッセージ payload の末尾を占めるため、正常な
+ * エンコード結果への連結で malformed な受信メッセージを再現できる。
+ */
+function appendMalformedTrackProperties(payload: Uint8Array): Uint8Array {
+  const malformed = new Uint8Array([0x02, 0x80]);
+  const result = new Uint8Array(payload.length + malformed.length);
+  result.set(payload, 0);
+  result.set(malformed, payload.length);
+  return result;
+}
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * malformed な Track Properties を含む PUBLISH_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。pending には close と同一の
+ * SessionError オブジェクトが reject され、削除集合 (pendingPublish +
+ * requestStreams) が掃除される。
+ */
+test("bidiReadPublishResponse: malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: publisher,
+  });
+
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 具体エラー (KEY_VALUE_FORMATTING_ERROR) で reject され、同一オブジェクトで閉じる
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  // reject してから閉じる順序である
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.7:
+ * malformed な Track Properties を含む SUBSCRIBE_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。削除集合 (pendingSubscribe +
+ * requestStreams + fillFetchTargets) が掃除される。
+ */
+test("bidiReadSubscribeResponse: malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+  ctx.session.fillFetchTargets.set(ctx.requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = appendMalformedTrackProperties(
+    encodeSubscribeOkPayload({
+      type: MessageType.SUBSCRIBE_OK,
+      trackAlias: 1n,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.fillFetchTargets.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.12:
+ * malformed な Track Properties を含む FETCH_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。待機中の fetcher 取得も
+ * 起こし、削除集合 (pendingFetch + requestStreams) が掃除される。
+ */
+test("bidiReadFetchResponse: malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+    impl: fetcher,
+  });
+  // 待機中の fetcher 取得が起こされることを検証する
+  let fetcherReadyFired = false;
+  ctx.session.fetcherReadyCallbacks.set(ctx.requestId, [
+    () => {
+      fetcherReadyFired = true;
+    },
+  ]);
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = appendMalformedTrackProperties(
+    encodeFetchOkPayload({
+      type: MessageType.FETCH_OK,
+      endOfTrack: false,
+      endLocation: { group: 0n, object: 0n },
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.isTrue(fetcherReadyFired);
+  assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
+  assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.13:
+ * malformed な Track Properties を含む TRACK_STATUS_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。削除集合
+ * (pendingTrackStatus + requestStreams) が掃除される。
+ */
+test("bidiReadTrackStatusResponse: malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      ctx.order.push("reject");
+      rejected = error;
+    },
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  assert.deepEqual(ctx.order, ["reject", "close"]);
+  assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * subscribe ロールのリクエストストリームで malformed な Track Properties を
+ * 含む REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
+ * 閉じる (bidiReadRequestStreamMessages の catch 経由。handleRequestStreamReadError
+ * の SessionError 分岐は既存どおり close のみとし、pending の後始末は close に
+ * 委ねる)。
+ */
+test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, okPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.isTrue(
+    ctx.closedWithError!.message.includes("key-value-pair value does not match serialization"),
+  );
 });
 
 test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除される", async () => {

@@ -91,6 +91,7 @@ import {
   isPeerStreamError,
   isSessionClosedError,
   toProtocolViolationSessionError,
+  toSessionCloseError,
 } from "./session/errors";
 import type { SessionInternal } from "./session/types";
 import {
@@ -4065,7 +4066,8 @@ export class SessionImpl implements Session {
           }
         }
       }
-      const sessionError = toProtocolViolationSessionError(err);
+      // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+      const sessionError = toSessionCloseError(err);
       if (sessionError !== null) {
         this.closeWithError(sessionError);
       }
@@ -4127,7 +4129,8 @@ export class SessionImpl implements Session {
         );
         return;
       }
-      const sessionError = toProtocolViolationSessionError(err);
+      // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+      const sessionError = toSessionCloseError(err);
       if (sessionError !== null) {
         this.closeWithError(sessionError);
       }

@@ -37,7 +37,7 @@ import * as bidi from "./bidi";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   isSessionClosedError,
-  toProtocolViolationSessionError,
+  toSessionCloseError,
 } from "./errors";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
@@ -849,7 +849,8 @@ export async function namespaceStartNamespaceStreamLoop(
     if (resolved) {
       handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
     }
-    const sessionError = toProtocolViolationSessionError(error);
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
     }
@@ -1083,7 +1084,8 @@ export async function namespaceStartTracksStreamLoop(
     if (resolved) {
       handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
     }
-    const sessionError = toProtocolViolationSessionError(error);
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
     }
@@ -1315,7 +1317,8 @@ export async function namespaceStartPublicationStreamLoop(
         reject(wrapped);
       }
     }
-    const sessionError = toProtocolViolationSessionError(error);
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
     }

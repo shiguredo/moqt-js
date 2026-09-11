@@ -1,7 +1,7 @@
 # KEY_VALUE_FORMATTING_ERROR でセッションを閉じる経路を実装する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-11
 - Branch: feature/fix-key-value-formatting-error-session-close
 - Polished: 2026-09-11
 
@@ -44,3 +44,11 @@ draft-ietf-moq-transport-21 §8.3 は、既知 Type の Value / Length が仕様
 - 監査: issue 0558 の適合監査 (改善-1)
 - `issues/closed/0470-bug-response-scope-violation-error-loss.md` (pending reject → close の順序契約)
 - `issues/closed/0409-bug-publish-stream-request-update-decode-failure.md` (受信経路の decode 失敗の対応方式)
+
+## 解決方法
+
+- `src/session/errors.ts` に `toSessionCloseError` を追加した。`SessionError` は同一オブジェクトのまま返し、`ProtocolViolationError` / `IncompleteDataError` は `PROTOCOL_VIOLATION` の `SessionError` に変換し、それ以外は null を返す。既存の `toProtocolViolationSessionError` の意味は変えていない
+- 現状に列挙した受信 8 経路の catch を新ヘルパーに置き換え、既知 Type の Value / Length が varint として完結しない Track Properties を受信したら `KEY_VALUE_FORMATTING_ERROR` でセッションを閉じるようにした
+- 受信応答読み取り 4 経路 (`bidiReadPublishResponse` / `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `bidiReadTrackStatusResponse`) は、`closeWithError` に渡す `SessionError` と同一オブジェクトで pending を reject してから閉じる順序契約を維持した。`handleRequestStreamReadError` は既存どおり close のみとした
+- 上記を検証するテストを 15 件追加した (`src/session/errors.test.ts` / `src/session/bidi.test.ts` / `src/session/namespaceLoops.test.ts` / `src/session.test.ts`)
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

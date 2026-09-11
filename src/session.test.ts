@@ -7,6 +7,7 @@
 import { test, assert } from "vite-plus/test";
 import {
   SessionImpl,
+  type ConnectCallbacks,
   type SessionState,
   type SubscribeCallbacks,
   type TracksSubscriptionCallbacks,
@@ -88,11 +89,11 @@ const nodeProcess = (
  * 検証が throw する経路のテストでは、それより後 (createBidirectionalStream 等) に
  * 到達しないため、transport は最小限のプロパティのみでよい。
  */
-function createSessionImpl(): SessionImpl {
+function createSessionImpl(callbacks: ConnectCallbacks = {}): SessionImpl {
   const transport = {
     closed: new Promise<WebTransportCloseInfo>(() => {}),
   } as unknown as WebTransport;
-  return new SessionImpl(transport, {});
+  return new SessionImpl(transport, callbacks);
 }
 
 /**
@@ -1241,6 +1242,28 @@ async function waitForIncomingPublishSubscriber(
   return subscriber;
 }
 
+// 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
+// 完結しない malformed Track Properties。draft-ietf-moq-transport-21 §8.3 の
+// KEY_VALUE_FORMATTING_ERROR 対象である。
+const MALFORMED_TRACK_PROPERTIES = new Uint8Array([0x02, 0x80]);
+
+/**
+ * payload 末尾に生バイト列を連結する
+ *
+ * Track Properties はメッセージ payload の末尾を占めるため、正常な
+ * エンコード結果への連結で malformed な受信メッセージを再現できる。
+ * 空の suffix は payload をそのまま返す。
+ */
+function appendPayloadSuffix(payload: Uint8Array, suffix: Uint8Array): Uint8Array {
+  if (suffix.length === 0) {
+    return payload;
+  }
+  const result = new Uint8Array(payload.length + suffix.length);
+  result.set(payload, 0);
+  result.set(suffix, payload.length);
+  return result;
+}
+
 /**
  * 受信 PUBLISH メッセージ入りの双方向ストリームを作る
  *
@@ -1257,6 +1280,8 @@ async function waitForIncomingPublishSubscriber(
  * @param writable - PUBLISH_OK 書き込み先。失敗を再現する場合は reject する sink を渡す
  * @param trackName - PUBLISH の Track Name (alias 再利用の検証用)
  * @param requestId - PUBLISH の Request ID (受信 ID は使い捨てのため再利用時は別値を使う)
+ * @param trackPropertiesSuffix - Track Properties の末尾に連結する生バイト列
+ *   (malformed Track Properties の再現用。正常系は空)
  */
 function createIncomingPublishStream(
   terminate: (controller: ReadableStreamDefaultController<Uint8Array>) => void,
@@ -1265,6 +1290,7 @@ function createIncomingPublishStream(
   writable: WritableStream<Uint8Array> = new WritableStream<Uint8Array>({}),
   trackName = "track",
   requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
+  trackPropertiesSuffix: Uint8Array = new Uint8Array(0),
 ): WebTransportBidirectionalStream {
   const publishPayload = encodePublishPayload({
     type: MessageType.PUBLISH,
@@ -1275,8 +1301,10 @@ function createIncomingPublishStream(
     parameters,
     trackProperties: [],
   });
+  // Track Properties は payload 末尾を占めるため、生バイト列の連結で malformed を再現できる
+  const payload = appendPayloadSuffix(publishPayload, trackPropertiesSuffix);
   const controlWriter = new ControlStreamWriter();
-  const chunks = [controlWriter.encode(MessageType.PUBLISH, publishPayload), ...extraFrames];
+  const chunks = [controlWriter.encode(MessageType.PUBLISH, payload), ...extraFrames];
   const readable = new ReadableStream<Uint8Array>(
     {
       pull(controller) {
@@ -1332,6 +1360,90 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
   assert.equal(subscriber!.state, "closed");
   // プロトコル違反ではないためセッションは閉じない
   assert.equal(internal.sessionState, "connected");
+});
+
+// ============================================================================
+// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
+// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知 Type の Value が serialization に一致しない Track Properties を含む
+ * 受信 PUBLISH はセッションを閉じる (handleIncomingBidirectionalStream の
+ * decodePublishPayload catch 経由)。
+ */
+test("受信 PUBLISH の malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      closedError = error;
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      MALFORMED_TRACK_PROPERTIES,
+    ),
+  );
+
+  // 具体エラー (KEY_VALUE_FORMATTING_ERROR) でセッションが閉じる
+  assert.isDefined(closedError);
+  assert.instanceOf(closedError, SessionError);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(internal.sessionState, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * 受信 PUBLISH ストリーム上で malformed な Track Properties を含む
+ * REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
+ * 閉じる (runPublishStreamSubLoop の catch 経由)。
+ */
+test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      closedError = error;
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+
+  const requestOkPayload = appendPayloadSuffix(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+    MALFORMED_TRACK_PROPERTIES,
+  );
+  const requestOkFrame = new ControlStreamWriter().encode(MessageType.REQUEST_OK, requestOkPayload);
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [requestOkFrame],
+    ),
+  );
+
+  assert.isDefined(closedError);
+  assert.instanceOf(closedError, SessionError);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(internal.sessionState, "closed");
 });
 
 // ============================================================================
