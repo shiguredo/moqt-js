@@ -1103,6 +1103,10 @@
   - draft-ietf-moq-transport-21 §12.1 の MUST に従い、SUBSCRIBE_OK / FETCH_OK の malformed 検出 (Mandatory Track Property 検証失敗など) で pending と合わせて同一 Full Track Name の既存購読 / FETCH も cancel する
   - 従来は pending のみを cancel し、同一 Track の既存購読 / FETCH が残留していた
   - @voluntas
+- [FIX] namespace 確立後の REQUEST_UPDATE_OK 検証失敗で違反エラーが汎用エラーに上書きされる問題を修正する
+  - draft-ietf-moq-transport-21 §9.20.1 / §9.3 に基づき、保留中の更新を違反 SessionError 自体で reject してからセッションを閉じる
+  - 従来は closeWithError が先行し、close 側の汎用 reject で update() が "session closed" で失敗していた
+  - @voluntas
 
 ### misc
 

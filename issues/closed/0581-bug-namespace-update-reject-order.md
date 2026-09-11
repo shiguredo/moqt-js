@@ -1,7 +1,7 @@
 # namespace 確立後 REQUEST_UPDATE_OK の検証失敗で reject が汎用エラーになる
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-namespace-update-reject-order
 - Polished: 2026-09-12
 
@@ -35,3 +35,11 @@
 - `createNamespaceLoopTestContext` (`src/session/namespaceLoops.test.ts`)
 - `SessionImpl.closeWithError` / `rejectPendingRequests` (`src/session.ts`)
 - `issues/closed/0523-refactor-namespace-validation-error.md`
+
+## 解決方法
+
+検証失敗時の順序を reject → close に変更し、違反 `SessionError` 自体を保留中の更新へ渡すようにした。
+
+- `handleNamespaceRequestUpdateOk` のスコープ違反・Track Properties 違反の両分岐で、`rejectPendingNamespaceUpdates` を `closeWithError` より先に呼び、違反 `SessionError` を reject に渡すようにした。`closeWithError` の遅延による他の挙動 (`pendingPrefix` のクリア、セッションクローズ通知、他経路の pending) への影響はない
+- `src/session/namespaceLoops.test.ts` の `createNamespaceLoopTestContext` の `closeWithError` を本番相当 (保留中の更新を `new Error("session closed")` で reject) に変更し、既存 2 テストの期待値を違反 `SessionError` 自体 (同一オブジェクト) に更新した。同一性・メッセージ・`pendingPrefix` のクリアを検証する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した

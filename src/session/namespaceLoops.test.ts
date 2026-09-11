@@ -90,6 +90,12 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     callbacks: { debug: undefined },
     closeWithError: (error: SessionError) => {
       closedWithError = error;
+      // 本番の SessionImpl.closeWithError は close() 内で保留中の更新を
+      // 汎用エラーで reject する。テストでも同じ順序を再現する。
+      for (const pendingUpdate of session.pendingRequestUpdate.values()) {
+        pendingUpdate.reject(new Error("session closed"));
+      }
+      session.pendingRequestUpdate.clear();
     },
     createNamespaceSubscription: () => ({
       get state() {
@@ -369,7 +375,7 @@ test("namespaceStartNamespaceStreamLoop: 保留中の更新が無い REQUEST_ERR
   );
 });
 
-test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の REQUEST_OK でスコープ違反パラメータは PROTOCOL_VIOLATION で閉じる", async () => {
+test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答のスコープ違反で保留中の更新が違反 SessionError 自体で reject される", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");
 
   const pending = registerPendingUpdate(ctx.session, ctx.requestId);
@@ -395,20 +401,15 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の REQUEST_OK で
   assert.isDefined(ctx.getClosedWithError());
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("not allowed in REQUEST_UPDATE_OK"));
-  // スコープ違反時はセッションが閉じられるため、保留中の更新は失敗として
-  // reject され (update() のハング防止)、prefix は反映されない
+  // スコープ違反時は保留中の更新が違反 SessionError 自体で reject され
+  // (update() のハング防止)、prefix は反映されない
   assert.isFalse(pending.resolved);
-  assert.isDefined(pending.rejected);
-  assert.isTrue(
-    pending.rejected!.message.includes(
-      "session closed with PROTOCOL_VIOLATION in REQUEST_UPDATE_OK",
-    ),
-  );
+  assert.strictEqual(pending.rejected, ctx.getClosedWithError());
   assert.deepEqual(ctx.subscription.namespacePrefix, ["live"]);
   assert.isUndefined(ctx.subscription.pendingPrefix);
 });
 
-test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の REQUEST_OK で Track Properties 非空は PROTOCOL_VIOLATION で閉じる", async () => {
+test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の Track Properties 非空で保留中の更新が違反 SessionError 自体で reject される", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");
 
   const pending = registerPendingUpdate(ctx.session, ctx.requestId);
@@ -434,15 +435,10 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の REQUEST_OK で
       .getClosedWithError()!
       .message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
   );
-  // 検証失敗時はセッションが閉じられるため、保留中の更新は失敗として
-  // reject され (update() のハング防止)、prefix は反映されない
+  // 検証失敗時は保留中の更新が違反 SessionError 自体で reject され
+  // (update() のハング防止)、prefix は反映されない
   assert.isFalse(pending.resolved);
-  assert.isDefined(pending.rejected);
-  assert.isTrue(
-    pending.rejected!.message.includes(
-      "session closed with PROTOCOL_VIOLATION in REQUEST_UPDATE_OK",
-    ),
-  );
+  assert.strictEqual(pending.rejected, ctx.getClosedWithError());
   assert.deepEqual(ctx.subscription.namespacePrefix, ["live"]);
   assert.isUndefined(ctx.subscription.pendingPrefix);
 });
