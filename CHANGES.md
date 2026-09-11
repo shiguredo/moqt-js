@@ -1095,6 +1095,10 @@
   - draft-ietf-moq-transport-21 §9.20.18 / §3.3.1 に基づき、受信 PUBLISH の LARGEST_OBJECT を LOCATION_FILTER より先に反映し、相対フィルタの開始位置を購読確立時に確定する
   - 従来は相対フィルタが {0, 0} のまま固定され、fill 併用時に同一 Object が両経路で重複配信され得た
   - @voluntas
+- [FIX] KEY_VALUE_FORMATTING_ERROR でセッションを閉じる経路を実装する
+  - draft-ietf-moq-transport-21 §8.3 の MUST に従い、既知 Type の Value / Length が serialization に一致しない Track Properties を受信したら、受信経路 (PUBLISH / PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK) で KEY_VALUE_FORMATTING_ERROR の SessionError によりセッションを閉じる
+  - 従来は SessionError が受信経路のエラー変換の対象外で、エラーが握り潰されセッションが connected のまま残っていた
+  - @voluntas
 
 ### misc
 

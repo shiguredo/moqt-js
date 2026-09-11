@@ -91,7 +91,7 @@ import {
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   isPeerStreamError,
-  toProtocolViolationSessionError,
+  toSessionCloseError,
 } from "./errors";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { publishResetPublisherStream, publishSendPublishDoneWithoutPublisher } from "./publish";
@@ -625,9 +625,9 @@ export async function bidiReadPublishResponse(
       }
     }
   } catch (error) {
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(error);
-    if (sessionError) {
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
+    if (sessionError !== null) {
       // セッション閉鎖前に当該リクエストにも具体エラーを渡す
       // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
       session.pendingPublish.delete(requestId);
@@ -791,9 +791,9 @@ export async function bidiReadSubscribeResponse(
       }
     }
   } catch (error) {
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(error);
-    if (sessionError) {
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
+    if (sessionError !== null) {
       // セッション閉鎖前に当該リクエストにも具体エラーを渡す
       // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
       session.pendingSubscribe.delete(requestId);
@@ -973,9 +973,9 @@ export async function bidiReadFetchResponse(
       }
     }
   } catch (error) {
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(error);
-    if (sessionError) {
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
+    if (sessionError !== null) {
       // セッション閉鎖前に当該リクエストにも具体エラーを渡す
       // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
       session.pendingFetch.delete(requestId);
@@ -1117,9 +1117,9 @@ export async function bidiReadTrackStatusResponse(
       }
     }
   } catch (error) {
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(error);
-    if (sessionError) {
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
+    if (sessionError !== null) {
       // セッション閉鎖前に当該リクエストにも具体エラーを渡す
       // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
       session.pendingTrackStatus.delete(requestId);
@@ -1345,7 +1345,7 @@ export async function bidiHandlePublishRequestUpdate(
   // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。ControlStreamReader
   // は Length 分の完全なメッセージのみ渡すため、IncompleteDataError は
   // メッセージ構造の破損を意味する。呼び出し元ループの catch
-  // (toProtocolViolationSessionError) でも IncompleteDataError は
+  // (toSessionCloseError) でも IncompleteDataError は
   // PROTOCOL_VIOLATION に変換されるが、ここでは「invalid REQUEST_UPDATE
   // payload」の文脈を付与したメッセージで閉じ、後続のパラメータ検証を
   // 実行しないよう早期 return する。
@@ -1584,7 +1584,8 @@ async function closeOldRequestStreamOnGoaway(
 /**
  * リクエストストリームの読み取りループで発生したエラーの処理
  *
- * - ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
+ * - SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
+ *   ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
  *   セッションを閉じる
  * - ピアの RESET_STREAM (isPeerStreamError) は role ごとに後始末する
  * - それ以外 (セッション終了・内部エラー等) と GOAWAY 受信済みの旧ストリームは
@@ -1596,7 +1597,7 @@ function handleRequestStreamReadError(
   error: unknown,
   role: "publish" | "subscribe",
 ): void {
-  const sessionError = toProtocolViolationSessionError(error);
+  const sessionError = toSessionCloseError(error);
   if (sessionError !== null) {
     session.closeWithError(sessionError);
     return;
@@ -1765,7 +1766,7 @@ export async function bidiReadRequestStreamMessages(
             //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
             //  successful, unless it is coalescing failed updates.」
             // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
-            // ループ catch (toProtocolViolationSessionError) と同じだが、ここでは
+            // ループ catch (toSessionCloseError) と同じだが、ここでは
             // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
             // 後続のパラメータ検証を実行しないよう早期 return する
             // (bidiHandlePublishRequestUpdate と同パターン)。
@@ -1890,7 +1891,7 @@ export async function bidiReadRequestStreamMessages(
 
             // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
             // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
-            // toProtocolViolationSessionError で PROTOCOL_VIOLATION にして
+            // toSessionCloseError で PROTOCOL_VIOLATION にして
             // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
             // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
             // 除いて REQUEST_OK を応答する。
