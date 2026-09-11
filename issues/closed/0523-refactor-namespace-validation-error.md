@@ -1,7 +1,7 @@
 # 検証関数のコールバック API をエラー返却に変えて到達不能フォールバックの複製を解消する
 
 - Created: 2026-09-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/refactor-namespace-validation-error
 - Polished: 2026-09-12
 
@@ -41,3 +41,13 @@
 - `namespaceValidateInitialOk` / `namespaceStartPublicationStreamLoop` (`src/session/namespaceLoops.ts`)
 - `issues/0498-refactor-bidi-namespace-dedup.md` / `issues/0577-refactor-namespace-loop-dedup.md` (本 issue で API を確定させた後に実施する)
 - `issues/0572-bug-empty-message-track-properties-close.md` (同じ検証関数群を扱う。本 issue の API 確定後に実施する)
+
+## 解決方法
+
+検証関数 2 つをコールバック方式からエラー返却方式に変更し、呼び出し側の到達不能フォールバック式 10 箇所を削除した。
+
+- `src/message/parameterScope.ts` の `validateParameterScope` を `(params, allowed, contextName) => SessionError | null` に変更し、`closeSession` コールバックと boolean 戻り値を削除した
+- `src/session/bidi.ts` の `validateRequestOkNoTrackProperties` を `(trackProperties, contextName) => SessionError | null` に変更した
+- 全 16 呼び出し元 (`src/session/bidi.ts` / `src/session/namespaceLoops.ts` / `src/session.ts`) を新 API に追随させ、`scopeError ?? new SessionError(...)` 形式の到達不能フォールバック式 10 箇所を削除した。reject と close の順序・同一 `SessionError` オブジェクト性は維持した
+- `src/message/parameterScope.test.ts` を返却値検証に書き換え、`src/session/bidi.test.ts` に `validateRequestOkNoTrackProperties` の単体テストを追加した
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追記した

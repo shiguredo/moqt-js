@@ -4177,14 +4177,13 @@ export class SessionImpl implements Session {
 
     // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
     // PUBLISH に許可されていないパラメータは PROTOCOL_VIOLATION
-    if (
-      !validateParameterScope(
-        decodedPublish.parameters,
-        PUBLISH_ALLOWED_PARAMS,
-        "PUBLISH",
-        (error) => this.closeWithError(error),
-      )
-    ) {
+    const scopeError = validateParameterScope(
+      decodedPublish.parameters,
+      PUBLISH_ALLOWED_PARAMS,
+      "PUBLISH",
+    );
+    if (scopeError !== null) {
+      this.closeWithError(scopeError);
       return;
     }
 

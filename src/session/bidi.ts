@@ -326,23 +326,22 @@ export function validateNoDuplicateGoawayOnRequestStream(
  *  If an endpoint receives Track Properties in one of these messages it MUST
  *  close the session with a PROTOCOL_VIOLATION."
  *
- * @returns バリデーション通過時は true、違反時は false
+ * @param trackProperties - 検証する Track Properties 配列
+ * @param contextName - コンテキスト名（エラーメッセージ用）
+ * @returns バリデーション通過時は null、違反時は PROTOCOL_VIOLATION の SessionError。
+ *   呼び出し元は null でない場合、対象 pending の reject と closeWithError を行うこと
  */
 export function validateRequestOkNoTrackProperties(
   trackProperties: Property[],
   contextName: string,
-  closeSession: (error: SessionError) => void,
-): boolean {
+): SessionError | null {
   if (trackProperties.length > 0) {
-    closeSession(
-      new SessionError(
-        `track properties must be empty in ${contextName}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      ),
+    return new SessionError(
+      `track properties must be empty in ${contextName}`,
+      SessionErrorCode.PROTOCOL_VIOLATION,
     );
-    return false;
   }
-  return true;
+  return null;
 }
 
 // ============================================================================
@@ -515,33 +514,18 @@ export async function bidiReadPublishResponse(
       // PUBLISH_OK に出現できるのは EXPIRES のみ。許可外パラメータを
       // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
       // Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
-      // スコープ違反でも保留中の発行を残さないよう、Track Properties 違反と
-      // 同じ後始末 (削除・reject・close) を行う。
-      let scopeError: SessionError | undefined;
-      if (
-        !validateParameterScope(
-          decoded.parameters,
-          PUBLISH_OK_ALLOWED_PARAMS,
-          "PUBLISH_OK",
-          (error) => {
-            scopeError = error;
-          },
-        )
-      ) {
+      const scopeError = validateParameterScope(
+        decoded.parameters,
+        PUBLISH_OK_ALLOWED_PARAMS,
+        "PUBLISH_OK",
+      );
+      if (scopeError !== null) {
         session.pendingPublish.delete(requestId);
         session.requestStreams.delete(requestId);
-        // validateParameterScope は違反時に必ずコールバックを呼ぶため、
-        // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
         // Track Properties 違反と同じ順序 (削除・reject・close) にし、
         // 先に close すると close 側の汎用 reject で特定エラーが上書きされるのを防ぐ。
-        const violation =
-          scopeError ??
-          new SessionError(
-            "parameter not allowed in PUBLISH_OK",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          );
-        pending.reject(violation);
-        session.closeWithError(violation);
+        pending.reject(scopeError);
+        session.closeWithError(scopeError);
         return;
       }
       // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
@@ -666,30 +650,17 @@ export async function bidiReadSubscribeResponse(
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
-      // validateParameterScope は違反時に必ずコールバックを呼ぶため、
-      // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
-      let scopeError: SessionError | undefined;
-      if (
-        !validateParameterScope(
-          decoded.parameters,
-          SUBSCRIBE_OK_ALLOWED_PARAMS,
-          "SUBSCRIBE_OK",
-          (error) => {
-            scopeError = error;
-          },
-        )
-      ) {
-        const violation =
-          scopeError ??
-          new SessionError(
-            "parameter not allowed in SUBSCRIBE_OK",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          );
+      const scopeError = validateParameterScope(
+        decoded.parameters,
+        SUBSCRIBE_OK_ALLOWED_PARAMS,
+        "SUBSCRIBE_OK",
+      );
+      if (scopeError !== null) {
         session.pendingSubscribe.delete(requestId);
         session.requestStreams.delete(requestId);
         session.fillFetchTargets.delete(requestId);
-        pending.reject(violation);
-        session.closeWithError(violation);
+        pending.reject(scopeError);
+        session.closeWithError(scopeError);
         return;
       }
 
@@ -879,29 +850,16 @@ export async function bidiReadFetchResponse(
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
-      // validateParameterScope は違反時に必ずコールバックを呼ぶため、
-      // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
-      let scopeError: SessionError | undefined;
-      if (
-        !validateParameterScope(
-          decoded.parameters,
-          FETCH_OK_ALLOWED_PARAMS,
-          "FETCH_OK",
-          (error) => {
-            scopeError = error;
-          },
-        )
-      ) {
-        const violation =
-          scopeError ??
-          new SessionError(
-            "parameter not allowed in FETCH_OK",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          );
+      const scopeError = validateParameterScope(
+        decoded.parameters,
+        FETCH_OK_ALLOWED_PARAMS,
+        "FETCH_OK",
+      );
+      if (scopeError !== null) {
         session.pendingFetch.delete(requestId);
         session.requestStreams.delete(requestId);
-        pending.reject(violation);
-        session.closeWithError(violation);
+        pending.reject(scopeError);
+        session.closeWithError(scopeError);
         return;
       }
 
@@ -1039,29 +997,16 @@ export async function bidiReadTrackStatusResponse(
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
-      // validateParameterScope は違反時に必ずコールバックを呼ぶため、
-      // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
-      let scopeError: SessionError | undefined;
-      if (
-        !validateParameterScope(
-          decoded.parameters,
-          TRACK_STATUS_OK_ALLOWED_PARAMS,
-          "TRACK_STATUS_OK",
-          (error) => {
-            scopeError = error;
-          },
-        )
-      ) {
-        const violation =
-          scopeError ??
-          new SessionError(
-            "parameter not allowed in TRACK_STATUS_OK",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          );
+      const scopeError = validateParameterScope(
+        decoded.parameters,
+        TRACK_STATUS_OK_ALLOWED_PARAMS,
+        "TRACK_STATUS_OK",
+      );
+      if (scopeError !== null) {
         session.pendingTrackStatus.delete(requestId);
         session.requestStreams.delete(requestId);
-        pending.reject(violation);
-        session.closeWithError(violation);
+        pending.reject(scopeError);
+        session.closeWithError(scopeError);
         return;
       }
 
@@ -1404,14 +1349,13 @@ export async function bidiHandlePublishRequestUpdate(
   // namespace 系 REQUEST_UPDATE 専用) と TRACK_PROPERTY_FILTER (§3.3.2、
   // SUBSCRIBE_TRACKS 専用) を含まない。これらを受信した場合は
   // NOT_SUPPORTED ではなく §9.20.1 の MUST に従い PROTOCOL_VIOLATION で閉じる。
-  if (
-    !validateParameterScope(
-      decoded.parameters,
-      REQUEST_UPDATE_ALLOWED_PARAMS,
-      "REQUEST_UPDATE",
-      (error) => session.closeWithError(error),
-    )
-  ) {
+  const scopeError = validateParameterScope(
+    decoded.parameters,
+    REQUEST_UPDATE_ALLOWED_PARAMS,
+    "REQUEST_UPDATE",
+  );
+  if (scopeError !== null) {
+    session.closeWithError(scopeError);
     return;
   }
 
@@ -1843,14 +1787,13 @@ export async function bidiReadRequestStreamMessages(
 
             // パラメータスコープ検証
             // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
-            if (
-              !validateParameterScope(
-                decoded.parameters,
-                REQUEST_UPDATE_ALLOWED_PARAMS,
-                "REQUEST_UPDATE",
-                (error) => session.closeWithError(error),
-              )
-            ) {
+            const scopeError = validateParameterScope(
+              decoded.parameters,
+              REQUEST_UPDATE_ALLOWED_PARAMS,
+              "REQUEST_UPDATE",
+            );
+            if (scopeError !== null) {
+              session.closeWithError(scopeError);
               return;
             }
 
@@ -3179,14 +3122,13 @@ export function bidiHandlePublishStateNotify(
 
   // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
   // 違反時はセッションを閉じ、呼び出し元は後続メッセージの処理を打ち切る。
-  if (
-    !validateParameterScope(
-      msg.parameters,
-      PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
-      "PUBLISH_STATE_NOTIFY",
-      (error) => session.closeWithError(error),
-    )
-  ) {
+  const scopeError = validateParameterScope(
+    msg.parameters,
+    PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
+    "PUBLISH_STATE_NOTIFY",
+  );
+  if (scopeError !== null) {
+    session.closeWithError(scopeError);
     return false;
   }
 
@@ -3380,52 +3322,30 @@ export function bidiHandleRequestUpdateOk(
   // 違反時は当該購読の保留分全件を違反 SessionError 自体で reject してから閉じる
   // (初期応答 4 経路 = PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS と同一パターン)。
   // 先に閉じると close 側の汎用 reject で特定エラーが上書きされるため、
-  // コールバックを遅延化する。validateParameterScope は違反時に必ず
-  // コールバックを呼ぶため、scopeError は通常必ず設定される
-  // (未設定時は汎用文言で reject する念のためのフォールバック)。
-  let scopeError: SessionError | undefined;
-  if (
-    !validateParameterScope(
-      msg.parameters,
-      REQUEST_UPDATE_OK_ALLOWED_PARAMS,
-      "REQUEST_UPDATE_OK",
-      (error) => {
-        scopeError = error;
-      },
-    )
-  ) {
-    const violation =
-      scopeError ??
-      new SessionError(
-        "parameter not allowed in REQUEST_UPDATE_OK",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      );
+  // reject と close の順序を固定する。
+  const scopeError = validateParameterScope(
+    msg.parameters,
+    REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+    "REQUEST_UPDATE_OK",
+  );
+  if (scopeError !== null) {
     deleteFillTargetsForPendingUpdates(session, streamRequestId);
-    rejectPendingRequestUpdates(session, streamRequestId, violation);
-    session.closeWithError(violation);
+    rejectPendingRequestUpdates(session, streamRequestId, scopeError);
+    session.closeWithError(scopeError);
     return;
   }
 
   // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
   // Track Properties 空検証の違反も同形に扱う。削除・reject・close の順序は
-  // 前ブロックと同一であり、先に閉じると汎用 reject で上書きされるため
-  // 固定する。validateRequestOkNoTrackProperties は違反時に必ず
-  // コールバックを呼ぶため、未設定時は汎用文言で reject する念のためのフォールバック。
-  let trackPropertiesError: SessionError | undefined;
-  if (
-    !validateRequestOkNoTrackProperties(msg.trackProperties, "REQUEST_UPDATE_OK", (error) => {
-      trackPropertiesError = error;
-    })
-  ) {
-    const violation =
-      trackPropertiesError ??
-      new SessionError(
-        "track properties must be empty in REQUEST_UPDATE_OK",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      );
+  // 前ブロックと同一であり、先に閉じると汎用 reject で上書きされるため固定する。
+  const trackPropertiesError = validateRequestOkNoTrackProperties(
+    msg.trackProperties,
+    "REQUEST_UPDATE_OK",
+  );
+  if (trackPropertiesError !== null) {
     deleteFillTargetsForPendingUpdates(session, streamRequestId);
-    rejectPendingRequestUpdates(session, streamRequestId, violation);
-    session.closeWithError(violation);
+    rejectPendingRequestUpdates(session, streamRequestId, trackPropertiesError);
+    session.closeWithError(trackPropertiesError);
     return;
   }
 

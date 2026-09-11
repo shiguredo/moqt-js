@@ -22,6 +22,21 @@ import { MessageParameterType } from "./types";
 import { SessionError, SessionErrorCode } from "../error";
 
 /**
+ * 検証違反の戻り値が PROTOCOL_VIOLATION の SessionError であることを検証する
+ *
+ * expectedMessage を指定した場合はエラーメッセージも検証する。
+ */
+function assertProtocolViolation(error: SessionError | null, expectedMessage?: string): void {
+  if (error === null) {
+    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが null だった");
+  }
+  assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  if (expectedMessage !== undefined) {
+    assert.equal(error.message, expectedMessage);
+  }
+}
+
+/**
  * draft-ietf-moq-transport-21 §9.20.17:
  * EXPIRES は SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK で許可される。
  * NAMESPACE_OK_ALLOWED_PARAMS が EXPIRES のみを含むことを検証する。
@@ -37,73 +52,48 @@ test("NAMESPACE_OK_ALLOWED_PARAMS は EXPIRES のみを含む", () => {
  * EXPIRES のみを含むパラメータ配列が NAMESPACE_OK_ALLOWED_PARAMS で通過することを検証する。
  */
 test("EXPIRES パラメータは NAMESPACE_OK_ALLOWED_PARAMS で検証を通過する", () => {
-  let closed = false;
-  const result = validateParameterScope(
+  const error = validateParameterScope(
     [{ type: MessageParameterType.EXPIRES }],
     NAMESPACE_OK_ALLOWED_PARAMS,
     "SUBSCRIBE_NAMESPACE_OK",
-    () => {
-      closed = true;
-    },
   );
-  assert.isTrue(result);
-  assert.isFalse(closed);
+  assert.isNull(error);
 });
 
 /**
  * 空パラメータ配列は常に検証を通過する。
  */
 test("空パラメータ配列は NAMESPACE_OK_ALLOWED_PARAMS で検証を通過する", () => {
-  let closed = false;
-  const result = validateParameterScope(
-    [],
-    NAMESPACE_OK_ALLOWED_PARAMS,
-    "SUBSCRIBE_TRACKS_OK",
-    () => {
-      closed = true;
-    },
-  );
-  assert.isTrue(result);
-  assert.isFalse(closed);
+  const error = validateParameterScope([], NAMESPACE_OK_ALLOWED_PARAMS, "SUBSCRIBE_TRACKS_OK");
+  assert.isNull(error);
 });
 
 /**
  * draft-ietf-moq-transport-21 §9.20.1:
- * "An endpoint that receives a parameter in a context where it is not
- *  allowed MUST close the session with a PROTOCOL_VIOLATION."
- * 許可外パラメータが PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * "Each Message Parameter definition indicates the message types in which
+ *  it can appear. If it appears in some other type of message, the receiving
+ *  endpoint MUST close the connection with a PROTOCOL_VIOLATION."
+ * 許可外パラメータが PROTOCOL_VIOLATION の SessionError を返すことを検証する。
  */
-test("許可外パラメータは PROTOCOL_VIOLATION でセッションを閉じる", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
+test("許可外パラメータは PROTOCOL_VIOLATION のエラーを返す", () => {
+  const error = validateParameterScope(
     [{ type: MessageParameterType.LARGEST_OBJECT }],
     NAMESPACE_OK_ALLOWED_PARAMS,
     "PUBLISH_NAMESPACE_OK",
-    (error) => {
-      errors.push(error);
-    },
   );
-  assert.isFalse(result);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assertProtocolViolation(error, "parameter type 0x9 not allowed in PUBLISH_NAMESPACE_OK");
 });
 
 /**
  * 複数パラメータのうち 1 つでも許可外が含まれれば PROTOCOL_VIOLATION になる。
  */
-test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION でセッションを閉じる", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
+test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION のエラーを返す", () => {
+  const error = validateParameterScope(
     [{ type: MessageParameterType.EXPIRES }, { type: MessageParameterType.SUBSCRIBER_PRIORITY }],
     NAMESPACE_OK_ALLOWED_PARAMS,
     "SUBSCRIBE_NAMESPACE_OK",
-    (error) => {
-      errors.push(error);
-    },
   );
-  assert.isFalse(result);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assertProtocolViolation(error);
 });
 
 // ============================================================================
@@ -132,19 +122,13 @@ test("PUBLISH_OK_ALLOWED_PARAMS は GROUP_ORDER を含まない", () => {
 /**
  * GROUP_ORDER 付き PUBLISH_OK はスコープ検証で拒否される。
  */
-test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否される", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
+test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
+  const error = validateParameterScope(
     [{ type: MessageParameterType.GROUP_ORDER }],
     PUBLISH_OK_ALLOWED_PARAMS,
     "PUBLISH_OK",
-    (error) => {
-      errors.push(error);
-    },
   );
-  assert.isFalse(result);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assertProtocolViolation(error);
 });
 
 /**
@@ -153,7 +137,7 @@ test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否される", 
  * 出現できない。代表として FORWARD / LOCATION_FILTER と Range Filter
  * (SUBGROUP_FILTER) がスコープ検証で拒否されることを検証する。
  */
-test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否される", () => {
+test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
   for (const type of [
     MessageParameterType.FORWARD,
     MessageParameterType.LOCATION_FILTER,
@@ -163,18 +147,8 @@ test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否
     MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
     MessageParameterType.SUBGROUP_FILTER,
   ]) {
-    const errors: SessionError[] = [];
-    const result = validateParameterScope(
-      [{ type }],
-      PUBLISH_OK_ALLOWED_PARAMS,
-      "PUBLISH_OK",
-      (error) => {
-        errors.push(error);
-      },
-    );
-    assert.isFalse(result);
-    assert.equal(errors.length, 1);
-    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+    const error = validateParameterScope([{ type }], PUBLISH_OK_ALLOWED_PARAMS, "PUBLISH_OK");
+    assertProtocolViolation(error);
   }
 });
 
@@ -183,17 +157,12 @@ test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION で拒否
  * EXPIRES 付き PUBLISH_OK はスコープ検証を通過する。
  */
 test("EXPIRES 付き PUBLISH_OK は検証を通過する", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
+  const error = validateParameterScope(
     [{ type: MessageParameterType.EXPIRES }],
     PUBLISH_OK_ALLOWED_PARAMS,
     "PUBLISH_OK",
-    (error) => {
-      errors.push(error);
-    },
   );
-  assert.isTrue(result);
-  assert.equal(errors.length, 0);
+  assert.isNull(error);
 });
 
 // ============================================================================
@@ -212,17 +181,12 @@ test("PUBLISH_ALLOWED_PARAMS は GROUP_ORDER を含む", () => {
  * GROUP_ORDER 付き PUBLISH はスコープ検証で受理される。
  */
 test("GROUP_ORDER 付き PUBLISH は検証を通過する", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
+  const error = validateParameterScope(
     [{ type: MessageParameterType.GROUP_ORDER }],
     PUBLISH_ALLOWED_PARAMS,
     "PUBLISH",
-    (error) => {
-      errors.push(error);
-    },
   );
-  assert.isTrue(result);
-  assert.equal(errors.length, 0);
+  assert.isNull(error);
 });
 
 /**
@@ -250,17 +214,8 @@ test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
     MessageParameterType.SUBSCRIBER_PRIORITY,
     MessageParameterType.LOCATION_FILTER,
   ]) {
-    const errors: SessionError[] = [];
-    const result = validateParameterScope(
-      [{ type }],
-      PUBLISH_ALLOWED_PARAMS,
-      "PUBLISH",
-      (error) => {
-        errors.push(error);
-      },
-    );
-    assert.isTrue(result);
-    assert.equal(errors.length, 0);
+    const error = validateParameterScope([{ type }], PUBLISH_ALLOWED_PARAMS, "PUBLISH");
+    assert.isNull(error);
   }
 });
 
@@ -269,7 +224,7 @@ test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
  * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に
  * 出現できない。スコープ検証で拒否されることを検証する。
  */
-test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION で拒否される", () => {
+test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION のエラーを返す", () => {
   for (const type of [
     MessageParameterType.NEW_GROUP_REQUEST,
     MessageParameterType.SUBGROUP_FILTER,
@@ -279,18 +234,8 @@ test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION で拒�
     MessageParameterType.TRACK_PROPERTY_FILTER,
     MessageParameterType.FILL_PARAMETERS,
   ]) {
-    const errors: SessionError[] = [];
-    const result = validateParameterScope(
-      [{ type }],
-      PUBLISH_ALLOWED_PARAMS,
-      "PUBLISH",
-      (error) => {
-        errors.push(error);
-      },
-    );
-    assert.isFalse(result);
-    assert.equal(errors.length, 1);
-    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+    const error = validateParameterScope([{ type }], PUBLISH_ALLOWED_PARAMS, "PUBLISH");
+    assertProtocolViolation(error);
   }
 });
 
@@ -300,7 +245,7 @@ test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION で拒�
  * SUBSCRIBE_TRACKS にのみ出現でき、応答側の許可集合には含まれない。
  * 応答文脈への混入は PROTOCOL_VIOLATION で拒否されることを検証する。
  */
-test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION で拒否される", () => {
+test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION のエラーを返す", () => {
   for (const allowed of [
     NAMESPACE_OK_ALLOWED_PARAMS,
     PUBLISH_OK_ALLOWED_PARAMS,
@@ -310,18 +255,12 @@ test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION で拒否�
     FETCH_OK_ALLOWED_PARAMS,
     PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
   ]) {
-    const errors: SessionError[] = [];
-    const result = validateParameterScope(
+    const error = validateParameterScope(
       [{ type: MessageParameterType.INCLUDE_PROPERTIES }],
       allowed,
       "RESPONSE",
-      (error) => {
-        errors.push(error);
-      },
     );
-    assert.isFalse(result);
-    assert.equal(errors.length, 1);
-    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assertProtocolViolation(error);
   }
 });
 
@@ -384,21 +323,15 @@ test("REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系の許可パラメータ
 /**
  * draft-ietf-moq-transport-21 §9.20.21 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX を subscription 系 REQUEST_UPDATE のスコープ検証に
- * かけると PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * かけると PROTOCOL_VIOLATION の SessionError が返ることを検証する。
  */
-test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は PROTOCOL_VIOLATION", () => {
-  const errors: SessionError[] = [];
-  const result = validateParameterScope(
+test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は PROTOCOL_VIOLATION のエラーを返す", () => {
+  const error = validateParameterScope(
     [{ type: MessageParameterType.TRACK_NAMESPACE_PREFIX }],
     REQUEST_UPDATE_ALLOWED_PARAMS,
     "REQUEST_UPDATE",
-    (error) => {
-      errors.push(error);
-    },
   );
-  assert.isFalse(result);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assertProtocolViolation(error);
 });
 
 /**
