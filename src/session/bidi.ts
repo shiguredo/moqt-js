@@ -818,6 +818,10 @@ export async function bidiReadSubscribeResponse(
       // malformed track の Object をアプリへ配信し続けないようにする (§3.6)。
       pending.impl.markClosed();
       await bidiCancelSubscription(session, pending.impl);
+      // draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+      // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
+      // Name の既存購読 / FETCH も cancel する。
+      cancelMalformedTrackPeers(session, pending.impl.getFullTrackName(), error);
       return;
     }
     session.pendingSubscribe.delete(requestId);
@@ -997,6 +1001,10 @@ export async function bidiReadFetchResponse(
       pending.reject(error);
       await bidiCancelFetch(session, pending.impl);
       fireFetcherReadyCallbacks(session, requestId);
+      // draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+      // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
+      // Name の既存購読 / FETCH も cancel する。
+      cancelMalformedTrackPeers(session, pending.impl.getFullTrackName(), error);
       return;
     }
     session.pendingFetch.delete(requestId);

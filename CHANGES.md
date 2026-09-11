@@ -1099,6 +1099,10 @@
   - draft-ietf-moq-transport-21 §8.3 の MUST に従い、既知 Type の Value / Length が serialization に一致しない Track Properties を受信したら、受信経路 (PUBLISH / PUBLISH_OK / SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK) で KEY_VALUE_FORMATTING_ERROR の SessionError によりセッションを閉じる
   - 従来は SessionError が受信経路のエラー変換の対象外で、エラーが握り潰されセッションが connected のまま残っていた
   - @voluntas
+- [FIX] SUBSCRIBE_OK / FETCH_OK の malformed 検出で同一 Track の購読と FETCH を相互に cancel する
+  - draft-ietf-moq-transport-21 §12.1 の MUST に従い、SUBSCRIBE_OK / FETCH_OK の malformed 検出 (Mandatory Track Property 検証失敗など) で pending と合わせて同一 Full Track Name の既存購読 / FETCH も cancel する
+  - 従来は pending のみを cancel し、同一 Track の既存購読 / FETCH が残留していた
+  - @voluntas
 
 ### misc
 
