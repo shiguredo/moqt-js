@@ -7,6 +7,8 @@
  * - isPeerStreamError: ピア起因のストリームエラー (source: "stream") かどうかを判定する
  * - toProtocolViolationSessionError: ProtocolViolationError / IncompleteDataError を
  *   PROTOCOL_VIOLATION の SessionError に変換する
+ * - toSessionCloseError: SessionError はそのまま、ProtocolViolationError /
+ *   IncompleteDataError は PROTOCOL_VIOLATION の SessionError として返す
  * - REQUEST_UPDATE_STREAM_CLOSED_MESSAGE: 応答未達で閉じた保留中の更新を
  *   reject する際の共通文言
  */
@@ -100,7 +102,14 @@ export function isPeerStreamError(error: unknown): boolean {
  * ない。
  *
  * 上記以外（ストリームの正常終了・キャンセル等）は null を返し、catch 側で
- * 握り潰させる。
+ * 握り潰させる。SessionError もそのコードのまま閉じたい受信経路の catch では、
+ * SessionError をそのまま返す toSessionCloseError を使う。
+ *
+ * 本関数を使い続ける経路は、SessionError を送出しないデコードのみを行うもの
+ * である (データストリーム / datagram の寛容デコード
+ * decodeObjectPropertiesTolerant、GOAWAY、パラメータ抽出等)。これらの経路に
+ * SessionError を送出し得るデコードを持ち込む場合は toSessionCloseError への
+ * 切り替えが必要になる。
  *
  * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-12.2
  */
@@ -109,6 +118,31 @@ export function toProtocolViolationSessionError(error: unknown): SessionError | 
     return new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
   }
   return null;
+}
+
+/**
+ * 受信経路の catch からセッションを閉じるための SessionError を取り出す
+ *
+ * SessionError はエラーコードを保持したまま同一オブジェクトをそのまま返す。
+ * 既知 Type の Value / Length が仕様の serialization に一致しない場合、
+ * decode 関数は KEY_VALUE_FORMATTING_ERROR の SessionError を throw する
+ * (draft-ietf-moq-transport-21 §8.3)。受信経路の catch は本関数でそれを
+ * 取り出し、そのコードでセッションを閉じる。
+ *
+ * ProtocolViolationError / IncompleteDataError は toProtocolViolationSessionError
+ * と同じく PROTOCOL_VIOLATION の SessionError に変換する。それ以外
+ * (ストリームの正常終了・ピア起因のキャンセル等) は null を返し、catch 側で
+ * 従来どおり握り潰させる。
+ *
+ * 同一オブジェクトを返す点は、pending を具体エラーで reject してから
+ * セッションを閉じる経路で「reject される値 = closeWithError に渡す値」の
+ * 契約を守るために必要である。
+ */
+export function toSessionCloseError(error: unknown): SessionError | null {
+  if (error instanceof SessionError) {
+    return error;
+  }
+  return toProtocolViolationSessionError(error);
 }
 
 /**

@@ -159,6 +159,26 @@ function requestErrorMessage(controlWriter: ControlStreamWriter, code: number): 
 }
 
 /**
+ * payload 末尾に malformed な Track Properties を連結する
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value を 2 バイト varint の
+ * 先頭 1 バイト (0x80) だけで終端し、varint がバッファ内で完結しない状態を作る。
+ * Track Properties はメッセージ payload の末尾を占めるため、正常な
+ * エンコード結果への連結で malformed な受信メッセージを再現できる。
+ */
+function appendMalformedTrackProperties(payload: Uint8Array): Uint8Array {
+  const malformed = new Uint8Array([0x02, 0x80]);
+  const result = new Uint8Array(payload.length + malformed.length);
+  result.set(payload, 0);
+  result.set(malformed, payload.length);
+  return result;
+}
+
+/**
  * draft-ietf-moq-transport-21 §9.4.1:
  * namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
  * SUBSCRIBE_TRACKS) への Redirect で Track Name が非空なら
@@ -1101,7 +1121,7 @@ test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で�
  * draft-ietf-moq-transport-21 §9 / §9.3:
  * ループ内のメッセージデコードが IncompleteDataError (Length が揃った後の
  * フィールド構造の破損) の場合、黙殺されず PROTOCOL_VIOLATION でセッションが
- * 閉じることを検証する。変換は toProtocolViolationSessionError
+ * 閉じることを検証する。変換は toSessionCloseError
  * (受信メッセージのデコード失敗は PROTOCOL_VIOLATION として扱うリポジトリ
  * 共通解釈) が行うため、デコーダの短縮ペイロードを feed すればよい。
  */
@@ -2061,4 +2081,125 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK は�
   assert.isDefined(ctx.getClosedWithError());
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("received duplicate REQUEST_OK"));
+});
+
+// ============================================================================
+// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
+// draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * malformed な Track Properties を含む SUBSCRIBE_NAMESPACE_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。確立前の失敗は
+ * 呼び出し元へ close と同一オブジェクトで reject してから閉じる。
+ */
+test("namespaceStartNamespaceStreamLoop: malformed な REQUEST_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  let rejectedError: Error | undefined;
+  // reject が close より先であることを、reject 時点でまだ閉じていないことで検証する
+  let rejectedBeforeClose = false;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+      rejectedBeforeClose = ctx.getClosedWithError() === undefined;
+    },
+  );
+
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.isTrue(rejectedBeforeClose);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * malformed な Track Properties を含む SUBSCRIBE_TRACKS_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。
+ */
+test("namespaceStartTracksStreamLoop: malformed な REQUEST_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * malformed な Track Properties を含む PUBLISH_NAMESPACE_OK を受信したら
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。
+ */
+test("namespaceStartPublicationStreamLoop: malformed な REQUEST_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createPublicationLoopTestContext();
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // finally で publication が掃除される
+  assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
 });
