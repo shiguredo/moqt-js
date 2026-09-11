@@ -79,6 +79,7 @@ import {
   createResetStreamError,
   notifySubscriberFailure,
   validateNoDuplicateGoawayOnRequestStream,
+  validateRequestOkNoTrackProperties,
   type BidiSessionInternal,
 } from "./bidi";
 import { publishClosePublisherStream, publishSendPublishDone } from "./publish";
@@ -10794,4 +10795,30 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
   // 別 Track の購読 / FETCH は触らない
   assert.equal(otherSubscriber.state, "active");
   assert.equal(otherFetcher.state, "active");
+});
+
+// ============================================================================
+// validateRequestOkNoTrackProperties のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * Track Properties が空の場合は検証を通過し null を返す。
+ */
+test("validateRequestOkNoTrackProperties: 空の Track Properties は検証を通過する", () => {
+  const error = validateRequestOkNoTrackProperties([], "PUBLISH_OK");
+  assert.isNull(error);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * 非空の Track Properties は PROTOCOL_VIOLATION の SessionError を返す。
+ */
+test("validateRequestOkNoTrackProperties: 非空の Track Properties は PROTOCOL_VIOLATION のエラーを返す", () => {
+  const error = validateRequestOkNoTrackProperties([{ id: 0x1n, value: 0n }], "PUBLISH_OK");
+  if (error === null) {
+    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが null だった");
+  }
+  assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(error.message, "track properties must be empty in PUBLISH_OK");
 });

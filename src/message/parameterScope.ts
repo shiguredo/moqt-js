@@ -1,10 +1,7 @@
 /**
  * Parameter Scope 検証
  *
- * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
- * "An endpoint that receives a parameter in a context where it is not
- *  allowed MUST close the session with a PROTOCOL_VIOLATION."
- *
+ * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope) に基づき、
  * 各メッセージ種別ごとに許可パラメータ集合を定義し、
  * 受信時にパラメータ型をチェックする。
  */
@@ -163,33 +160,31 @@ export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
  * パラメータスコープを検証する
  *
  * draft-ietf-moq-transport-21 §9.20.1:
- * "An endpoint that receives a parameter in a context where it is not
- *  allowed MUST close the session with a PROTOCOL_VIOLATION."
+ * "Each Message Parameter definition indicates the message types in which
+ *  it can appear. If it appears in some other type of message, the receiving
+ *  endpoint MUST close the connection with a PROTOCOL_VIOLATION."
  *
  * @param params - 検証するパラメータ配列
  * @param allowed - 許可パラメータ集合
  * @param contextName - コンテキスト名（エラーメッセージ用）
- * @param closeSession - セッションを閉じるコールバック
- * @returns バリデーション通過時は true、違反時は false
+ * @returns バリデーション通過時は null、違反時は PROTOCOL_VIOLATION の SessionError。
+ *   呼び出し元は null でない場合、その文脈の保留中リクエストを reject したうえで
+ *   closeWithError すること (保留が無い経路は closeWithError のみ)
  */
 export function validateParameterScope(
   params: Array<{ type: number }>,
   allowed: Set<number>,
   contextName: string,
-  closeSession: (error: SessionError) => void,
-): boolean {
+): SessionError | null {
   for (const param of params) {
     if (!allowed.has(param.type)) {
-      closeSession(
-        new SessionError(
-          `parameter type 0x${param.type.toString(16)} not allowed in ${contextName}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
+      return new SessionError(
+        `parameter type 0x${param.type.toString(16)} not allowed in ${contextName}`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
       );
-      return false;
     }
   }
-  return true;
+  return null;
 }
 
 /**

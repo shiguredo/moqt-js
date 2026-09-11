@@ -1155,6 +1155,11 @@
 - [CHANGE] 未使用の devtools/main.ts を削除する
   - どの HTML / ビルド入力からも参照されず、存在しない LOC.packVideo / LOC.unpackVideo を呼んでいた
   - @voluntas
+- [UPDATE] パラメータスコープ検証をエラー返却型に変更する
+  - `validateParameterScope` / `validateRequestOkNoTrackProperties` を `SessionError | null` 返却に変更し、到達不能なフォールバック分岐を削除する
+  - 全呼び出し元 (bidi / namespaceLoops / session) を新 API に追随させる
+  - テストを返却値検証に更新し、`validateRequestOkNoTrackProperties` の単体テストを追加する
+  - @voluntas
 
 ## 2026.2.0
 

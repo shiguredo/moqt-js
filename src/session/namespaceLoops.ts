@@ -259,44 +259,22 @@ function namespaceValidateInitialOk(
   contextName: "SUBSCRIBE_NAMESPACE_OK" | "SUBSCRIBE_TRACKS_OK",
   checkTrackProperties: boolean,
 ): boolean {
-  let scopeError: SessionError | undefined;
-  if (
-    !validateParameterScope(
-      requestOk.parameters,
-      NAMESPACE_OK_ALLOWED_PARAMS,
-      contextName,
-      (error) => {
-        scopeError = error;
-      },
-    )
-  ) {
-    namespaceRejectAndCloseWithError(
-      session,
-      reject,
-      scopeError ??
-        new SessionError(
-          `parameter not allowed in ${contextName}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        ),
-    );
+  const scopeError = validateParameterScope(
+    requestOk.parameters,
+    NAMESPACE_OK_ALLOWED_PARAMS,
+    contextName,
+  );
+  if (scopeError !== null) {
+    namespaceRejectAndCloseWithError(session, reject, scopeError);
     return false;
   }
   if (checkTrackProperties) {
-    let trackPropertiesError: SessionError | undefined;
-    if (
-      !bidi.validateRequestOkNoTrackProperties(requestOk.trackProperties, contextName, (error) => {
-        trackPropertiesError = error;
-      })
-    ) {
-      namespaceRejectAndCloseWithError(
-        session,
-        reject,
-        trackPropertiesError ??
-          new SessionError(
-            `track properties must be empty in ${contextName}`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-      );
+    const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
+      requestOk.trackProperties,
+      contextName,
+    );
+    if (trackPropertiesError !== null) {
+      namespaceRejectAndCloseWithError(session, reject, trackPropertiesError);
       return false;
     }
   }
@@ -482,14 +460,13 @@ function handleNamespaceRequestUpdateOk(
     );
     return false;
   }
-  if (
-    !validateParameterScope(
-      requestOk.parameters,
-      REQUEST_UPDATE_OK_ALLOWED_PARAMS,
-      "REQUEST_UPDATE_OK",
-      (error) => session.closeWithError(error),
-    )
-  ) {
+  const scopeError = validateParameterScope(
+    requestOk.parameters,
+    REQUEST_UPDATE_OK_ALLOWED_PARAMS,
+    "REQUEST_UPDATE_OK",
+  );
+  if (scopeError !== null) {
+    session.closeWithError(scopeError);
     rejectPendingNamespaceUpdates(
       session,
       requestId,
@@ -498,13 +475,12 @@ function handleNamespaceRequestUpdateOk(
     );
     return false;
   }
-  if (
-    !bidi.validateRequestOkNoTrackProperties(
-      requestOk.trackProperties,
-      "REQUEST_UPDATE_OK",
-      (error) => session.closeWithError(error),
-    )
-  ) {
+  const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
+    requestOk.trackProperties,
+    "REQUEST_UPDATE_OK",
+  );
+  if (trackPropertiesError !== null) {
+    session.closeWithError(trackPropertiesError);
     rejectPendingNamespaceUpdates(
       session,
       requestId,
@@ -1179,53 +1155,25 @@ export async function namespaceStartPublicationStreamLoop(
             // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
             // 呼び出し元の Promise を reject してから閉じる
             // (PUBLISH 応答経路と同一パターン)。
-            // validateParameterScope は違反時に必ずコールバックを呼ぶため、
-            // scopeError は通常必ず設定される。念のため未設定時は汎用文言で reject する。
-            let scopeError: SessionError | undefined;
-            if (
-              !validateParameterScope(
-                requestOk.parameters,
-                NAMESPACE_OK_ALLOWED_PARAMS,
-                "PUBLISH_NAMESPACE_OK",
-                (error) => {
-                  scopeError = error;
-                },
-              )
-            ) {
-              namespaceRejectAndCloseWithError(
-                session,
-                reject,
-                scopeError ??
-                  new SessionError(
-                    "parameter not allowed in PUBLISH_NAMESPACE_OK",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-              );
+            const scopeError = validateParameterScope(
+              requestOk.parameters,
+              NAMESPACE_OK_ALLOWED_PARAMS,
+              "PUBLISH_NAMESPACE_OK",
+            );
+            if (scopeError !== null) {
+              namespaceRejectAndCloseWithError(session, reject, scopeError);
               return;
             }
             // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
             // Track Properties は PUBLISH_NAMESPACE_OK では空が必須であり、
             // 非空は PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
             // 呼び出し元の Promise を reject してから閉じる。
-            let trackPropertiesError: SessionError | undefined;
-            if (
-              !bidi.validateRequestOkNoTrackProperties(
-                requestOk.trackProperties,
-                "PUBLISH_NAMESPACE_OK",
-                (error) => {
-                  trackPropertiesError = error;
-                },
-              )
-            ) {
-              namespaceRejectAndCloseWithError(
-                session,
-                reject,
-                trackPropertiesError ??
-                  new SessionError(
-                    "track properties must be empty in PUBLISH_NAMESPACE_OK",
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-              );
+            const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
+              requestOk.trackProperties,
+              "PUBLISH_NAMESPACE_OK",
+            );
+            if (trackPropertiesError !== null) {
+              namespaceRejectAndCloseWithError(session, reject, trackPropertiesError);
               return;
             }
             publication.state = "active";
