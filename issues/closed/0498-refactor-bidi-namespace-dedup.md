@@ -1,7 +1,7 @@
 # bidi.ts の 4 種の応答読み取りを共通リーダとハンドラ表に畳む
 
 - Created: 2026-09-06
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/refactor-bidi-response-reader
 - Polished: 2026-09-12
 
@@ -42,3 +42,14 @@
 - `issues/0523-refactor-namespace-validation-error.md` (scope 検証フォールバックの整理。`validateParameterScope` の API を先に確定させるため、本 issue より先に実施する)
 - `issues/0576-refactor-bidi-test-split.md` (bidi.test.ts の分割。本 issue の入口を残す前提)
 - `issues/0577-refactor-namespace-loop-dedup.md` (分割前の 0498 が扱っていた namespace ループの共通化)
+
+## 解決方法
+
+4 種の応答読み取りを共通リーダ `bidiReadResponse` + ハンドラ (`BidiResponseHandlers`) に畳み、各関数を薄いラッパーにした。
+
+- `bidiReadResponse` を追加し、pending の取得・レスポンスの読み取り・メッセージ型の分岐・受信失敗のエラー種別ごとの委譲を集約した
+- `bidiReadPublishResponse` / `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `bidiReadTrackStatusResponse` は、経路固有の処理をハンドラとして渡す薄いラッパーに変更した
+- 経路固有の挙動 (OK 受理後の処理・REQUEST_ERROR の `retryInterval` / `redirect`・GOAWAY コールバック・`MalformedTrackError` の特別処理・TRACK_STATUS の writer FIN・経路別の削除集合・reject と close の順序) はハンドラ側に残して維持した
+- 全ハンドラの型を `void | Promise<void>` に統一し、共通リーダで await することで、非同期ハンドラの reject が握り潰されないようにした
+- `src/session/bidi.test.ts` に不完全な REQUEST_ERROR の回帰テストを追加した (既存テストの検証内容は変更なし)
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追記した
