@@ -1,7 +1,7 @@
 # SUBSCRIBE_OK / FETCH_OK の malformed 検出で同一 Track の購読と FETCH を相互に cancel する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-subscribe-ok-fetch-ok-cross-cancel
 - Polished: 2026-09-11
 
@@ -39,3 +39,12 @@ draft-ietf-moq-transport-21 §12.1 は「it MUST cancel any corresponding subscr
 - `FetcherImpl.getFullTrackName`（`src/fetcher.ts`）
 - `issues/closed/0557-bug-malformed-track-cross-cancel.md`（データストリーム経路の cross-cancel）
 - `issues/closed/0538-bug-subscribe-ok-mandatory-property-cancel.md`（SUBSCRIBE_OK / FETCH_OK の単一 cancel）
+
+## 解決方法
+
+SUBSCRIBE_OK / FETCH_OK のデコードで MalformedTrackError を捕捉したとき、pending の購読 / FETCH の cancel 後に同一 Full Track Name の既存購読 / FETCH も cancel するようにした。
+
+- `bidiReadSubscribeResponse` の MalformedTrackError 分岐で、`bidiCancelSubscription` の後に `cancelMalformedTrackPeers` を呼ぶ
+- `bidiReadFetchResponse` の MalformedTrackError 分岐で、`bidiCancelFetch` と `fireFetcherReadyCallbacks` の後に `cancelMalformedTrackPeers` を呼ぶ
+- `src/session/bidi.test.ts` に SUBSCRIBE_OK / FETCH_OK それぞれで同一 Track の既存購読 / FETCH が cancel され、別 Track が cancel されず、セッションを閉じないことを検証するテストを追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追記する
