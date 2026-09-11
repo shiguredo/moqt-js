@@ -491,6 +491,119 @@ export async function bidiContinueReadingForDuplicateGoaway(
 }
 
 // ============================================================================
+// 応答読み取りの共通リーダ
+// ============================================================================
+
+/**
+ * 応答読み取りの経路コンテキスト
+ */
+interface BidiResponseContext<TPending> {
+  session: BidiSessionInternal;
+  requestId: bigint;
+  stream: WebTransportBidirectionalStream;
+  controlReader: ControlStreamReader;
+  pending: TPending;
+  /** 最初の応答チャンクで読み取り済みの残りメッセージ (2 通目 GOAWAY の検出用) */
+  remainingMessages: ControlMessage[];
+}
+
+/**
+ * 応答読み取りの経路ハンドラ
+ *
+ * 共通リーダが担う骨格 (pending の取得・読み取り・メッセージ分岐・
+ * 受信失敗のエラー種別ごとの委譲) に対し、経路固有の処理を注入する。
+ * 削除集合は経路ごとに異なるため各ハンドラが維持し、reject と close の
+ * 順序・同一 SessionError オブジェクト性は全経路共通の不変条件として守る。
+ */
+interface BidiResponseHandlers<TPending> {
+  getPending: (session: BidiSessionInternal, requestId: bigint) => TPending | undefined;
+  okType: MessageType;
+  handleOk: (context: BidiResponseContext<TPending>, payload: Uint8Array) => void | Promise<void>;
+  handleRequestError: (
+    context: BidiResponseContext<TPending>,
+    payload: Uint8Array,
+  ) => void | Promise<void>;
+  handleGoaway: (
+    context: BidiResponseContext<TPending>,
+    payload: Uint8Array,
+  ) => void | Promise<void>;
+  handleUnexpected: (context: BidiResponseContext<TPending>, type: number) => void | Promise<void>;
+  handleCloseError: (
+    context: BidiResponseContext<TPending>,
+    error: SessionError,
+  ) => void | Promise<void>;
+  /**
+   * MalformedTrackError の処理
+   * 未指定の経路は handleError にフォールバックする
+   */
+  handleMalformedTrack?: (
+    context: BidiResponseContext<TPending>,
+    error: MalformedTrackError,
+  ) => void | Promise<void>;
+  handleError: (context: BidiResponseContext<TPending>, error: unknown) => void | Promise<void>;
+}
+
+/**
+ * 4 種の応答読み取りの共通リーダ
+ *
+ * 応答読み取り (PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS) について、
+ * pending の取得・レスポンスの読み取り・メッセージ型の分岐・
+ * 受信失敗のエラー種別ごとの委譲を担い、経路固有の処理をハンドラへ委譲する。
+ * メッセージ型ごとの経路固有の扱い (削除集合・reject と close の順序・
+ * §3.6 / §12.1 の cancel) はハンドラ側に残す。
+ */
+async function bidiReadResponse<TPending>(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  stream: WebTransportBidirectionalStream,
+  controlReader: ControlStreamReader,
+  handlers: BidiResponseHandlers<TPending>,
+): Promise<void> {
+  const pending = handlers.getPending(session, requestId);
+  if (pending === undefined) return;
+
+  const context: BidiResponseContext<TPending> = {
+    session,
+    requestId,
+    stream,
+    controlReader,
+    pending,
+    remainingMessages: [],
+  };
+
+  try {
+    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const msg = messages[0];
+    session.emitDebug("recv", msg.type, msg.payload);
+    context.remainingMessages = messages.slice(1);
+
+    if (msg.type === handlers.okType) {
+      await handlers.handleOk(context, msg.payload);
+    } else if (msg.type === MessageType.REQUEST_ERROR) {
+      await handlers.handleRequestError(context, msg.payload);
+    } else if (msg.type === MessageType.GOAWAY) {
+      await handlers.handleGoaway(context, msg.payload);
+    } else {
+      await handlers.handleUnexpected(context, msg.type);
+    }
+  } catch (error) {
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
+    if (sessionError !== null) {
+      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
+      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+      await handlers.handleCloseError(context, sessionError);
+      return;
+    }
+    if (error instanceof MalformedTrackError && handlers.handleMalformedTrack !== undefined) {
+      await handlers.handleMalformedTrack(context, error);
+      return;
+    }
+    await handlers.handleError(context, error);
+  }
+}
+
+// ============================================================================
 // readPublishResponse
 // ============================================================================
 
@@ -500,16 +613,12 @@ export async function bidiReadPublishResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  const pending = session.pendingPublish.get(requestId);
-  if (!pending) return;
-
-  try {
-    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
-    const msg = messages[0];
-    session.emitDebug("recv", msg.type, msg.payload);
-
-    if (msg.type === MessageType.REQUEST_OK) {
-      const decoded = decodeRequestOkPayload(msg.payload);
+  await bidiReadResponse(session, requestId, stream, controlReader, {
+    getPending: (session, requestId) => session.pendingPublish.get(requestId),
+    okType: MessageType.REQUEST_OK,
+    handleOk: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeRequestOkPayload(payload);
       // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope) / §9.20.17:
       // PUBLISH_OK に出現できるのは EXPIRES のみ。許可外パラメータを
       // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
@@ -533,15 +642,15 @@ export async function bidiReadPublishResponse(
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
       //  If an endpoint receives Track Properties in one of these messages it MUST
       //  close the session with a PROTOCOL_VIOLATION."
-      if (decoded.trackProperties.length > 0) {
-        const error = new SessionError(
-          "track properties must be empty in PUBLISH_OK",
-          SessionErrorCode.PROTOCOL_VIOLATION,
-        );
+      const trackPropertiesError = validateRequestOkNoTrackProperties(
+        decoded.trackProperties,
+        "PUBLISH_OK",
+      );
+      if (trackPropertiesError !== null) {
         session.pendingPublish.delete(requestId);
         session.requestStreams.delete(requestId);
-        pending.reject(error);
-        session.closeWithError(error);
+        pending.reject(trackPropertiesError);
+        session.closeWithError(trackPropertiesError);
         return;
       }
       session.pendingPublish.delete(requestId);
@@ -553,9 +662,17 @@ export async function bidiReadPublishResponse(
       // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
       pending.resolve(pending.impl);
 
-      void bidiReadRequestStreamMessages(session, requestId, stream, controlReader, "publish");
-    } else if (msg.type === MessageType.REQUEST_ERROR) {
-      const decoded = decodeRequestErrorPayload(msg.payload);
+      void bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        context.stream,
+        context.controlReader,
+        "publish",
+      );
+    },
+    handleRequestError: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeRequestErrorPayload(payload);
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
       const error = new RequestError(
@@ -571,8 +688,10 @@ export async function bidiReadPublishResponse(
           : undefined,
       );
       pending.reject(error);
-    } else if (msg.type === MessageType.GOAWAY) {
-      const decoded = decodeGoawayPayload(msg.payload);
+    },
+    handleGoaway: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeGoawayPayload(payload);
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -584,16 +703,18 @@ export async function bidiReadPublishResponse(
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
-        stream,
-        controlReader,
-        messages.slice(1),
+        context.stream,
+        context.controlReader,
+        context.remainingMessages,
       );
-    } else {
+    },
+    handleUnexpected: (context, type) => {
+      const { session, requestId, pending } = context;
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈 (PUBLISH / FETCH /
       // TRACK_STATUS の応答待ち) で受信した場合は PROTOCOL_VIOLATION で
       // セッションを閉じる。
-      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+      if (type === MessageType.PUBLISH_STATE_NOTIFY) {
         const sessionError = new SessionError(
           "unexpected PUBLISH_STATE_NOTIFY for PUBLISH request",
           SessionErrorCode.PROTOCOL_VIOLATION,
@@ -605,25 +726,23 @@ export async function bidiReadPublishResponse(
       } else {
         session.pendingPublish.delete(requestId);
         session.requestStreams.delete(requestId);
-        pending.reject(new Error(`unexpected response type ${msg.type} for PUBLISH request`));
+        pending.reject(new Error(`unexpected response type ${type} for PUBLISH request`));
       }
-    }
-  } catch (error) {
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
-      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+    },
+    handleCloseError: (context, error) => {
+      const { session, requestId, pending } = context;
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
-      pending.reject(sessionError);
-      session.closeWithError(sessionError);
-      return;
-    }
-    session.pendingPublish.delete(requestId);
-    session.requestStreams.delete(requestId);
-    pending.reject(error instanceof Error ? error : new Error(String(error)));
-  }
+      pending.reject(error);
+      session.closeWithError(error);
+    },
+    handleError: (context, error) => {
+      const { session, requestId, pending } = context;
+      session.pendingPublish.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    },
+  });
 }
 
 // ============================================================================
@@ -636,16 +755,12 @@ export async function bidiReadSubscribeResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  const pending = session.pendingSubscribe.get(requestId);
-  if (!pending) return;
-
-  try {
-    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
-    const msg = messages[0];
-    session.emitDebug("recv", msg.type, msg.payload);
-
-    if (msg.type === MessageType.SUBSCRIBE_OK) {
-      const decoded = decodeSubscribeOkPayload(msg.payload);
+  await bidiReadResponse(session, requestId, stream, controlReader, {
+    getPending: (session, requestId) => session.pendingSubscribe.get(requestId),
+    okType: MessageType.SUBSCRIBE_OK,
+    handleOk: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeSubscribeOkPayload(payload);
       // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
@@ -711,9 +826,17 @@ export async function bidiReadSubscribeResponse(
 
       pending.resolve(pending.impl);
 
-      void bidiReadRequestStreamMessages(session, requestId, stream, controlReader, "subscribe");
-    } else if (msg.type === MessageType.REQUEST_ERROR) {
-      const decoded = decodeRequestErrorPayload(msg.payload);
+      void bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        context.stream,
+        context.controlReader,
+        "subscribe",
+      );
+    },
+    handleRequestError: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeRequestErrorPayload(payload);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       session.fillFetchTargets.delete(requestId);
@@ -722,8 +845,10 @@ export async function bidiReadSubscribeResponse(
         normalizeRequestErrorCode(Number(decoded.errorCode)),
       );
       pending.reject(error);
-    } else if (msg.type === MessageType.GOAWAY) {
-      const decoded = decodeGoawayPayload(msg.payload);
+    },
+    handleGoaway: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeGoawayPayload(payload);
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -736,15 +861,17 @@ export async function bidiReadSubscribeResponse(
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
-        stream,
-        controlReader,
-        messages.slice(1),
+        context.stream,
+        context.controlReader,
+        context.remainingMessages,
       );
-    } else {
+    },
+    handleUnexpected: (context, type) => {
+      const { session, requestId, pending } = context;
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
       // PROTOCOL_VIOLATION でセッションを閉じる。
-      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+      if (type === MessageType.PUBLISH_STATE_NOTIFY) {
         const sessionError = new SessionError(
           "unexpected PUBLISH_STATE_NOTIFY for SUBSCRIBE request",
           SessionErrorCode.PROTOCOL_VIOLATION,
@@ -758,30 +885,26 @@ export async function bidiReadSubscribeResponse(
         session.pendingSubscribe.delete(requestId);
         session.requestStreams.delete(requestId);
         session.fillFetchTargets.delete(requestId);
-        pending.reject(new Error(`unexpected response type ${msg.type} for SUBSCRIBE request`));
+        pending.reject(new Error(`unexpected response type ${type} for SUBSCRIBE request`));
       }
-    }
-  } catch (error) {
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
-      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+    },
+    handleCloseError: (context, error) => {
+      const { session, requestId, pending } = context;
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       session.fillFetchTargets.delete(requestId);
-      pending.reject(sessionError);
-      session.closeWithError(sessionError);
-      return;
-    }
-    // draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
-    // 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した
-    // subscriber は購読を cancel する MUST (cancel は §6.4.2.3 の
-    // RESET_STREAM / STOP_SENDING で行う)。
-    // requestStreams は手動削除せず bidiCancelSubscription に委譲する
-    // (手動削除後では cancel が発火しない)。reject は cancel の完了を
-    // 待たずに先に行い、ストリーム後始末が遅延してもアプリへ失敗を届ける。
-    if (error instanceof MalformedTrackError) {
+      pending.reject(error);
+      session.closeWithError(error);
+    },
+    handleMalformedTrack: async (context, error) => {
+      const { session, requestId, pending } = context;
+      // draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
+      // 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した
+      // subscriber は購読を cancel する MUST (cancel は §6.4.2.3 の
+      // RESET_STREAM / STOP_SENDING で行う)。
+      // requestStreams は手動削除せず bidiCancelSubscription に委譲する
+      // (手動削除後では cancel が発火しない)。reject は cancel の完了を
+      // 待たずに先に行い、ストリーム後始末が遅延してもアプリへ失敗を届ける。
       session.pendingSubscribe.delete(requestId);
       pending.reject(error);
       // 進行中の fill fetch ストリームの sink は subscriberState が closed の
@@ -793,13 +916,15 @@ export async function bidiReadSubscribeResponse(
       // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
       // Name の既存購読 / FETCH も cancel する。
       cancelMalformedTrackPeers(session, pending.impl.getFullTrackName(), error);
-      return;
-    }
-    session.pendingSubscribe.delete(requestId);
-    session.requestStreams.delete(requestId);
-    session.fillFetchTargets.delete(requestId);
-    pending.reject(error instanceof Error ? error : new Error(String(error)));
-  }
+    },
+    handleError: (context, error) => {
+      const { session, requestId, pending } = context;
+      session.pendingSubscribe.delete(requestId);
+      session.requestStreams.delete(requestId);
+      session.fillFetchTargets.delete(requestId);
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    },
+  });
 }
 
 // ============================================================================
@@ -836,16 +961,12 @@ export async function bidiReadFetchResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  const pending = session.pendingFetch.get(requestId);
-  if (!pending) return;
-
-  try {
-    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
-    const msg = messages[0];
-    session.emitDebug("recv", msg.type, msg.payload);
-
-    if (msg.type === MessageType.FETCH_OK) {
-      const decoded = decodeFetchOkPayload(msg.payload);
+  await bidiReadResponse(session, requestId, stream, controlReader, {
+    getPending: (session, requestId) => session.pendingFetch.get(requestId),
+    okType: MessageType.FETCH_OK,
+    handleOk: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeFetchOkPayload(payload);
       // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
@@ -885,8 +1006,10 @@ export async function bidiReadFetchResponse(
       pending.resolve(pending.impl);
 
       fireFetcherReadyCallbacks(session, requestId);
-    } else if (msg.type === MessageType.REQUEST_ERROR) {
-      const decoded = decodeRequestErrorPayload(msg.payload);
+    },
+    handleRequestError: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeRequestErrorPayload(payload);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       fireFetcherReadyCallbacks(session, requestId);
@@ -895,8 +1018,10 @@ export async function bidiReadFetchResponse(
         normalizeRequestErrorCode(Number(decoded.errorCode)),
       );
       pending.reject(error);
-    } else if (msg.type === MessageType.GOAWAY) {
-      const decoded = decodeGoawayPayload(msg.payload);
+    },
+    handleGoaway: (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeGoawayPayload(payload);
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -909,15 +1034,17 @@ export async function bidiReadFetchResponse(
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
-        stream,
-        controlReader,
-        messages.slice(1),
+        context.stream,
+        context.controlReader,
+        context.remainingMessages,
       );
-    } else {
+    },
+    handleUnexpected: (context, type) => {
+      const { session, requestId, pending } = context;
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
       // PROTOCOL_VIOLATION でセッションを閉じる。
-      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+      if (type === MessageType.PUBLISH_STATE_NOTIFY) {
         const sessionError = new SessionError(
           "unexpected PUBLISH_STATE_NOTIFY for FETCH request",
           SessionErrorCode.PROTOCOL_VIOLATION,
@@ -931,30 +1058,26 @@ export async function bidiReadFetchResponse(
         session.pendingFetch.delete(requestId);
         session.requestStreams.delete(requestId);
         fireFetcherReadyCallbacks(session, requestId);
-        pending.reject(new Error(`unexpected response type ${msg.type} for FETCH request`));
+        pending.reject(new Error(`unexpected response type ${type} for FETCH request`));
       }
-    }
-  } catch (error) {
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
-      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+    },
+    handleCloseError: (context, error) => {
+      const { session, requestId, pending } = context;
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       fireFetcherReadyCallbacks(session, requestId);
-      pending.reject(sessionError);
-      session.closeWithError(sessionError);
-      return;
-    }
-    // draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
-    // 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
-    // fetch を cancel する MUST (cancel は §6.4.2.3 の RESET_STREAM /
-    // STOP_SENDING で行う)。requestStreams は手動削除せず bidiCancelFetch に
-    // 委譲する。開いている FETCH データストリームは fireFetcherReadyCallbacks で
-    // 待機を起こし、fetcher 不在の待機が reader.cancel (STOP_SENDING 相当) に
-    // 至る既存経路で打ち切られる。reject は cancel の完了を待たずに先に行う。
-    if (error instanceof MalformedTrackError) {
+      pending.reject(error);
+      session.closeWithError(error);
+    },
+    handleMalformedTrack: async (context, error) => {
+      const { session, requestId, pending } = context;
+      // draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
+      // 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
+      // fetch を cancel する MUST (cancel は §6.4.2.3 の RESET_STREAM /
+      // STOP_SENDING で行う)。requestStreams は手動削除せず bidiCancelFetch に
+      // 委譲する。開いている FETCH データストリームは fireFetcherReadyCallbacks で
+      // 待機を起こし、fetcher 不在の待機が reader.cancel (STOP_SENDING 相当) に
+      // 至る既存経路で打ち切られる。reject は cancel の完了を待たずに先に行う。
       session.pendingFetch.delete(requestId);
       pending.reject(error);
       await bidiCancelFetch(session, pending.impl);
@@ -963,13 +1086,15 @@ export async function bidiReadFetchResponse(
       // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
       // Name の既存購読 / FETCH も cancel する。
       cancelMalformedTrackPeers(session, pending.impl.getFullTrackName(), error);
-      return;
-    }
-    session.pendingFetch.delete(requestId);
-    session.requestStreams.delete(requestId);
-    fireFetcherReadyCallbacks(session, requestId);
-    pending.reject(error instanceof Error ? error : new Error(String(error)));
-  }
+    },
+    handleError: (context, error) => {
+      const { session, requestId, pending } = context;
+      session.pendingFetch.delete(requestId);
+      session.requestStreams.delete(requestId);
+      fireFetcherReadyCallbacks(session, requestId);
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    },
+  });
 }
 
 // ============================================================================
@@ -982,16 +1107,12 @@ export async function bidiReadTrackStatusResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  const pending = session.pendingTrackStatus.get(requestId);
-  if (!pending) return;
-
-  try {
-    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
-    const msg = messages[0];
-    session.emitDebug("recv", msg.type, msg.payload);
-
-    if (msg.type === MessageType.REQUEST_OK) {
-      const decoded = decodeRequestOkPayload(msg.payload);
+  await bidiReadResponse(session, requestId, stream, controlReader, {
+    getPending: (session, requestId) => session.pendingTrackStatus.get(requestId),
+    okType: MessageType.REQUEST_OK,
+    handleOk: async (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeRequestOkPayload(payload);
 
       // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
@@ -1019,8 +1140,10 @@ export async function bidiReadTrackStatusResponse(
       // エントリから writer を引くため削除より先に実行する。
       await closeRequestStreamWriter(session, requestId);
       session.requestStreams.delete(requestId);
-    } else if (msg.type === MessageType.REQUEST_ERROR) {
-      const decoded = decodeRequestErrorPayload(msg.payload);
+    },
+    handleRequestError: async (context, payload) => {
+      const { session, requestId, pending } = context;
+      const decoded = decodeRequestErrorPayload(payload);
       session.pendingTrackStatus.delete(requestId);
       const error = new RequestError(
         decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
@@ -1030,10 +1153,12 @@ export async function bidiReadTrackStatusResponse(
       // REQUEST_OK 経路と同じく自方向を FIN で閉じる (§9.13 / §6.4.2.2)。
       await closeRequestStreamWriter(session, requestId);
       session.requestStreams.delete(requestId);
-    } else if (msg.type === MessageType.GOAWAY) {
+    },
+    handleGoaway: (context, payload) => {
+      const { session, requestId, pending } = context;
       // TRACK_STATUS は単発リクエストであり ongoing loop を持たないため
       // goawayCallback は不要。newSessionUri は Error.message 経由で通知する。
-      const decoded = decodeGoawayPayload(msg.payload);
+      const decoded = decodeGoawayPayload(payload);
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingTrackStatus.delete(requestId);
       session.requestStreams.delete(requestId);
@@ -1046,15 +1171,17 @@ export async function bidiReadTrackStatusResponse(
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
-        stream,
-        controlReader,
-        messages.slice(1),
+        context.stream,
+        context.controlReader,
+        context.remainingMessages,
       );
-    } else {
+    },
+    handleUnexpected: (context, type) => {
+      const { session, requestId, pending } = context;
       // draft-ietf-moq-transport-21 §9.10:
       // PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
       // PROTOCOL_VIOLATION でセッションを閉じる。
-      if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+      if (type === MessageType.PUBLISH_STATE_NOTIFY) {
         const sessionError = new SessionError(
           "unexpected PUBLISH_STATE_NOTIFY for TRACK_STATUS request",
           SessionErrorCode.PROTOCOL_VIOLATION,
@@ -1066,25 +1193,23 @@ export async function bidiReadTrackStatusResponse(
       } else {
         session.pendingTrackStatus.delete(requestId);
         session.requestStreams.delete(requestId);
-        pending.reject(new Error(`unexpected response type ${msg.type} for TRACK_STATUS request`));
+        pending.reject(new Error(`unexpected response type ${type} for TRACK_STATUS request`));
       }
-    }
-  } catch (error) {
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      // セッション閉鎖前に当該リクエストにも具体エラーを渡す
-      // (Range Filter 違反・Track Properties 違反の既存経路と同パターン)
+    },
+    handleCloseError: (context, error) => {
+      const { session, requestId, pending } = context;
       session.pendingTrackStatus.delete(requestId);
       session.requestStreams.delete(requestId);
-      pending.reject(sessionError);
-      session.closeWithError(sessionError);
-      return;
-    }
-    session.pendingTrackStatus.delete(requestId);
-    session.requestStreams.delete(requestId);
-    pending.reject(error instanceof Error ? error : new Error(String(error)));
-  }
+      pending.reject(error);
+      session.closeWithError(error);
+    },
+    handleError: (context, error) => {
+      const { session, requestId, pending } = context;
+      session.pendingTrackStatus.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    },
+  });
 }
 
 // ============================================================================
