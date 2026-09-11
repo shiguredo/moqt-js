@@ -393,7 +393,8 @@ function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestEr
  * 保留中の REQUEST_UPDATE をすべて失敗させ、pendingPrefix をクリアする
  *
  * REQUEST_ERROR 受信 (goawayReceived を含む) / ストリームクローズ /
- * セッションクローズ検出 / unsubscribe の各経路で共通の後始末。
+ * セッションクローズ検出 / unsubscribe / REQUEST_UPDATE_OK 検証失敗の
+ * 各経路で共通の後始末。
  * 保留中の更新が無い場合は何もしない (pendingPrefix が残ることは無い。
  * pendingPrefix の設定と pending エントリの登録は同一 tick 内の対であり、
  * 失敗経路でも対で掃除されるため、pendingPrefix が undefined でない場合は
@@ -432,8 +433,9 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
  * - 更新応答は REQUEST_UPDATE_OK_ALLOWED_PARAMS でスコープ検証する
  *   (初期 REQUEST_OK が NAMESPACE_OK_ALLOWED_PARAMS を使うのとは区別する)
  * - Track Properties は REQUEST_UPDATE_OK では空であること (§9.3)
- * - 検証失敗時はセッションが PROTOCOL_VIOLATION で閉じられるため、保留中の
- *   更新も失敗として reject して掃除する (update() のハング防止)
+ * - 検証失敗時は違反 SessionError 自体で保留中の更新を reject してから
+ *   セッションを閉じる (update() のハング防止。先に閉じると close 側の
+ *   汎用 reject で違反エラーが上書きされる)
  *
  * @param onPrefixApplied - 新 prefix を反映した直後に呼ばれるコールバック。
  *   draft-ietf-moq-transport-21 §9.5.2:
@@ -466,13 +468,13 @@ function handleNamespaceRequestUpdateOk(
     "REQUEST_UPDATE_OK",
   );
   if (scopeError !== null) {
+    // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+    // 許可外パラメータは PROTOCOL_VIOLATION で接続を閉じる MUST。
+    // 先に closeWithError すると close 側の汎用 reject で違反エラーが
+    // 上書きされ update() が汎用エラーで失敗するため、reject を先に行い、
+    // 違反 SessionError 自体を保留中の更新へ渡す。
+    rejectPendingNamespaceUpdates(session, requestId, subscription, scopeError);
     session.closeWithError(scopeError);
-    rejectPendingNamespaceUpdates(
-      session,
-      requestId,
-      subscription,
-      new Error("update failed: session closed with PROTOCOL_VIOLATION in REQUEST_UPDATE_OK"),
-    );
     return false;
   }
   const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
@@ -480,13 +482,11 @@ function handleNamespaceRequestUpdateOk(
     "REQUEST_UPDATE_OK",
   );
   if (trackPropertiesError !== null) {
+    // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+    // REQUEST_UPDATE_OK の Track Properties は空が必須であり、非空は
+    // PROTOCOL_VIOLATION でセッションを閉じる MUST。スコープ違反と同じ順序に揃える。
+    rejectPendingNamespaceUpdates(session, requestId, subscription, trackPropertiesError);
     session.closeWithError(trackPropertiesError);
-    rejectPendingNamespaceUpdates(
-      session,
-      requestId,
-      subscription,
-      new Error("update failed: session closed with PROTOCOL_VIOLATION in REQUEST_UPDATE_OK"),
-    );
     return false;
   }
   // 更新応答を解決し、保留中の新 prefix を反映する
