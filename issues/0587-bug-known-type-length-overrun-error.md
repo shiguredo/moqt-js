@@ -1,7 +1,7 @@
 # 既知 Type の Length 宣言超過が §8.3 の KEY_VALUE_FORMATTING_ERROR にならない
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-known-type-length-overrun-error
 - Polished: 2026-09-12
 
@@ -42,3 +42,12 @@ draft-ietf-moq-transport-21 §8.3 は、受信者が理解する (既知の) Typ
 - `issues/closed/0475-bug-message-slice-boundary-checks.md` (Length 宣言超過を ProtocolViolationError に統一した先行判断)
 - `issues/closed/0562-bug-key-value-formatting-error-session-close.md` (varint 不完結を KEY_VALUE_FORMATTING_ERROR で閉じる経路)
 - `issues/closed/0586-bug-object-property-known-type-kvf.md` (Object Properties の既知 Type 検証を追加した先行 issue。本 issue はその残量検査を拡張する)
+
+## 解決方法
+
+- `src/properties.ts` に `MAX_PROPERTY_VALUE_LENGTH` (2^16-1)、判定 `isKnownPropertyLengthOverrun`、`SessionError` 生成 `knownPropertyLengthOverrunError`、送出 `throwLengthOverrunError` を追加した。Length の varint は完結したが宣言値が残りバイトを超える場合、既知 Type は `SessionError(KEY_VALUE_FORMATTING_ERROR)`、未知 Type は `ProtocolViolationError` とし、Length が最大値を超える場合は最大値超過の MUST を優先して既知 Type でも `ProtocolViolationError` とする。
+- 厳密デコーダの残量検査 7 箇所 (`decodeImmutableProperties` の外側と内側、`parseProperties` の外側・内側・未知奇数、`decodeProperties` の本体と入れ子走査) を `throwLengthOverrunError` に置き換えた。未知 Type のメッセージは従来どおり。
+- Object Properties 経路の `assertKnownPropertyValueInObjectProperties` の残量検査を、既知 Type なら `KEY_VALUE_FORMATTING_ERROR`、未知 Type と上限超過なら寛容打ち切りに変更した。あわせて JSDoc を実態に合わせ、Object Properties 経路では上限超過を検証しないこと (上限超過の MUST は Track Properties の厳密デコーダのみ) を明記した。
+- `src/session.ts` の fill fetch ストリーム受信 catch が `toProtocolViolationSessionError` を使っており `SessionError` を握り潰していたため、`toSessionCloseError` に変更し、他の受信経路と同じくエラーコードを保持して閉じるようにした。
+- テスト: `src/properties.test.ts` に宣言超過 (既知 Type × 厳密デコーダ 3 種 / Object Properties 経路)、未知 Type の寛容打ち切り、最大値超過の回帰、境界値 (Length が残りバイトちょうど) を追加。`src/dataStream.datagram.test.ts` / `src/dataStream.subgroup.test.ts` / `src/dataStream.fetch.test.ts` に各デコーダ経由の宣言超過を追加。受信経路の終了コードは `src/session.test.ts` (fill fetch / Subgroup) と `src/session/incoming.test.ts` (datagram) で検証する。
+- `CHANGES.md` の `## develop` に [FIX] を 2 件追加した。
