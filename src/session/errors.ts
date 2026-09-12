@@ -15,6 +15,7 @@
 
 import {
   IncompleteDataError,
+  MalformedTrackError,
   ProtocolViolationError,
   SessionError,
   SessionErrorCode,
@@ -143,6 +144,27 @@ export function toSessionCloseError(error: unknown): SessionError | null {
     return error;
   }
   return toProtocolViolationSessionError(error);
+}
+
+/**
+ * 空必須メッセージの Track Properties 違反を PROTOCOL_VIOLATION の SessionError に変換する
+ *
+ * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * 「Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
+ *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.  If an endpoint
+ *  receives Track Properties in one of these messages it MUST close the session with a
+ *  PROTOCOL_VIOLATION.」
+ * 未知 Mandatory Track Property (0x4000-0x7FFF) は decodeProperties が
+ * MalformedTrackError を throw する。MalformedTrackError は SessionError ではなく
+ * code を持たないため、closeWithError が要求する SessionError へ変換する。
+ *
+ * MalformedTrackError は SUBSCRIBE_OK / FETCH_OK / データストリームでは
+ * §3.6 / §12.1 の cancel (セッションは閉じない) を意味するため、共有の
+ * toSessionCloseError / toProtocolViolationSessionError は変更せず、空必須
+ * メッセージの経路だけが本関数を使う。
+ */
+export function toTrackPropertiesViolationSessionError(error: MalformedTrackError): SessionError {
+  return new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
 }
 
 /**

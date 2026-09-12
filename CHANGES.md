@@ -872,6 +872,10 @@
   - draft-ietf-moq-transport-21 §2.4.1 に基づき、Track Namespace を "/" で連結していた比較キーを各フィールド長付き (`${length}:${value}`) の形式に変更する
   - namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c" が同じキーになり、malformed 検出時の cross-cancel が無関係な Track を巻き込む問題を修正する
   - @voluntas
+- [FIX] 空必須メッセージの未知 Mandatory Track Property でセッションを閉じない問題を修正する
+  - draft-ietf-moq-transport-21 §9.3 に基づき、PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の Track Properties に未知 Mandatory Track Property を検出したら PROTOCOL_VIOLATION でセッションを閉じる
+  - decodeProperties の MalformedTrackError を閉じる経路へ変換し、SUBSCRIBE_OK / FETCH_OK / データストリームの cancel (セッションは閉じない) は従来どおり維持する
+  - @voluntas
 
 ### misc
 
