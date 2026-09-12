@@ -1328,15 +1328,8 @@ export class SessionImpl implements Session {
       startLocation?: Location;
     }
   >();
-  private pendingTrackStatus = new Map<
-    bigint,
-    {
-      resolve: (result: TrackStatusResult) => void;
-      reject: (err: Error) => void;
-      // malformed 検出時の cross-cancel 用に対象 Track の比較キーを保持する (§12.1)
-      trackKey: string;
-    }
-  >();
+  // 型は bidi.PendingTrackStatus に集約する (trackKey の追加が片側だけにならないようにする)
+  private pendingTrackStatus = new Map<bigint, bidi.PendingTrackStatus>();
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *

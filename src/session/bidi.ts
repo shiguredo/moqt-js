@@ -141,7 +141,7 @@ interface PendingFetch {
   startLocation?: Location;
 }
 
-interface PendingTrackStatus {
+export interface PendingTrackStatus {
   resolve: (result: TrackStatusResult) => void;
   reject: (err: Error) => void;
   /**
