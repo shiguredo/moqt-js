@@ -20,8 +20,8 @@ draft-ietf-moq-transport-21 §12.1 は「When a subscriber detects a Malformed T
 
 ## 設計方針
 
-1. `cancelMalformedTrackPeers` の fetcher ループを購読側 (`bidiCancelSubscriptionWithError`) と同形にする: `fetcher.handleError(error)` → `fetcher.markClosed()` → `void bidiCancelFetch(session, fetcher).catch(() => {})`。`fetcher.cancel()` は closed で早期 return するため使わない (`markClosed()` の後に `cancel()` を呼ぶと §3.2.1 の STOP_SENDING が送られない)。既に `state === "closed"` の fetcher はループ先頭でスキップし、通知もストリーム後始末も 1 回目のみで行う (`bidiCancelFetch` を重複して呼ばない)。
-2. `bidiCancelFetch` は fetcher の state を変更しない現行のままとする (state の更新は呼び出し元の責務)。キャンセルに伴うストリーム後始末 (`readable.cancel` / `writer.abort` / `requestStreams` と `session.fetchers` の削除 / `onRequestDrained`) は従来どおり `bidiCancelFetch` が行う。
+1. `FetcherImpl.cancel` が `await this.onCancel()` の前に state を closed にする (キャンセル開始と同時に `handleError` / `handleObject` / `handleEnd` が抑止される)。`cancelMalformedTrackPeers` の fetcher ループは `fetcher.handleError(error)` → `void fetcher.cancel()` のままとし、ループ先頭で `state === "closed"` の fetcher をスキップする。`cancel()` を経由することで `onCancel` (実運用は `bidiCancelFetch`) のストリーム後始末と §3.2.1 の STOP_SENDING が従来どおり行われる。`bidiCancelFetch` を直接呼ぶ案は `onCancel` フック (session の配線とテストの観測点) をバイパスするため採らない。
+2. `bidiCancelFetch` は fetcher の state を変更しない現行のままとする (state の更新は `FetcherImpl.cancel` の責務)。キャンセルに伴うストリーム後始末 (`readable.cancel` / `writer.abort` / `requestStreams` と `session.fetchers` の削除 / `onRequestDrained`) は従来どおり `bidiCancelFetch` が行う。
 3. 新しい state ("cancelling" 等) は追加しない。`FetcherState` は公開インターフェース `Fetcher` の `state` として公開されており、値の追加は利用者の `state` 判定の意味を変える後方互換の破壊になる。
 4. pending fetch のループは現行のまま (`session.pendingFetch.delete` → `pending.reject(error)` → `bidiCancelFetch`) とする。pending は reject 経由で `markClosed` されるため二重通知しない。
 5. 重複する malformed 検出でも error コールバックが 1 回だけ呼ばれることを検証するテストを追加する。テストは `requestStreams` に実ストリームを登録して 1 回目のキャンセルが await で保留される状況を作り、その間に同一 `trackKey` で `cancelMalformedTrackPeers` をもう一度呼ぶ (変更前の実装では error コールバックが 2 回呼ばれる)。
