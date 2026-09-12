@@ -11301,23 +11301,32 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
     },
   );
   // キャンセルが完了しない stream を用意し、bidiCancelFetch の await で窓を開く
-  const pendingCancel = new Promise<void>(() => {});
+  // 実 W3C ストリームを使い、underlying source / sink で cancel / abort の到達を
+  // 観測する。cancel が完了しないようにして bidiCancelFetch の await で窓を開く
+  let resolveCancel: (() => void) | undefined;
+  const pendingCancel = new Promise<void>((resolve) => {
+    resolveCancel = resolve;
+  });
   const cancelReasons: unknown[] = [];
-  const stream = {
-    readable: {
-      cancel: (reason?: unknown) => {
-        cancelReasons.push(reason);
-        return pendingCancel;
-      },
+  const abortReasons: unknown[] = [];
+  const readable = new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      cancelReasons.push(reason);
+      return pendingCancel;
     },
-    writable: { abort: () => Promise.resolve() },
-  };
+  });
+  const writable = new WritableStream<Uint8Array>({
+    abort(reason) {
+      abortReasons.push(reason);
+    },
+  });
+  const writer = writable.getWriter();
   const session = {
     sessionState: "connected",
     subscribersByAlias: new Map(),
     subscribers: new Map(),
     fetchers: new Map([[3n, fetcher]]),
-    requestStreams: new Map([[3n, { stream, writer: stream.writable, reader: undefined }]]),
+    requestStreams: new Map([[3n, { stream: { readable, writable }, writer, reader: undefined }]]),
     pendingSubscribe: new Map(),
     pendingFetch: new Map(),
     pendingRequestUpdate: new Map(),
@@ -11339,7 +11348,16 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
   // error コールバックは 1 回だけ呼ばれる
   assert.equal(fetchErrors.length, 1);
   assert.strictEqual(fetchErrors[0], error);
-  // §3.2.1 の STOP_SENDING 相当は従来どおり送られ、二重には送らない
-  assert.deepEqual(cancelReasons, ["fetch cancelled"]);
   assert.equal(fetcher.state, "closed");
+
+  // キャンセルを完了させ、後始末も 1 回だけであることを確認する
+  resolveCancel?.();
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  // §3.2.1 の STOP_SENDING 相当 (readable.cancel) と RESET_STREAM 相当 (writer.abort)
+  assert.deepEqual(cancelReasons, ["fetch cancelled"]);
+  assert.deepEqual(abortReasons, ["fetch cancelled"]);
+  assert.isFalse(session.requestStreams.has(3n));
+  assert.isFalse(session.fetchers.has(3n));
 });

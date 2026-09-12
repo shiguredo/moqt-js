@@ -40,6 +40,8 @@ export interface Fetcher {
    * キャンセル開始と同時に state は closed になり、Object の配信と end / error の
    * 通知は止まる。ストリームの後始末 (STOP_SENDING 相当の cancel と RESET_STREAM) は
    * 返り値の Promise が完了するまで継続する。
+   * 既にキャンセル中 / closed の場合は何もせず即座に解決する Promise を返すため、
+   * その Promise は進行中の後始末の完了を保証しない。
    */
   cancel(): Promise<void>;
 }
