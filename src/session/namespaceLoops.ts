@@ -41,6 +41,7 @@ import {
   toSessionCloseError,
   toTrackPropertiesViolationSessionError,
 } from "./errors";
+import { cancelStreamQuiet } from "./stream";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 import type { SessionInternal } from "./types";
@@ -225,6 +226,33 @@ async function namespaceCloseWriterQuiet(
   } catch {
     // 既に閉じている / abort 済みの場合は無視
   }
+}
+
+/**
+ * 確立前に要求が失敗したとき、専用ストリームの両方向を閉じる
+ *
+ * draft-ietf-moq-transport-21 §6.4.2.2 (Graceful Request Stream Closure):
+ * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
+ *  further to send on that direction and will not need to respond to a future
+ *  REQUEST_UPDATE."
+ * draft-ietf-moq-transport-21 §6.4.2.3 (Request Cancellation and Rejection):
+ * "Implementations cancel a request by abruptly terminating any directions of
+ *  the stream that are still open, using RESET_STREAM for a direction they are
+ *  sending and STOP_SENDING for a direction they are receiving."
+ *
+ * 確立前は subscription / publication をアプリへ渡さないため、アプリからは
+ * 閉じられない。送信方向を FIN し、受信方向を cancel (STOP_SENDING 相当) する。
+ * どちらの失敗も無視し、reader の releaseLock は finally に委ねる。
+ *
+ * @param writer - 送信方向の writer (未指定なら FIN しない)
+ * @param reader - 受信方向の reader
+ */
+async function namespaceCloseRequestStreamQuiet(
+  writer: WritableStreamDefaultWriter<Uint8Array> | undefined,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  await namespaceCloseWriterQuiet(writer);
+  await cancelStreamQuiet(reader, "request rejected before establishment");
 }
 
 /**
@@ -874,6 +902,10 @@ export async function namespaceStartNamespaceStreamLoop(
             subscription.state = "closed";
             namespaceNotifyError(callbacks, error);
             reject(error);
+            // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+            // 確立前は subscription をアプリへ渡さないため、送信方向の FIN と
+            // 受信方向の cancel をライブラリ側で行う。
+            await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
             return;
           }
 
@@ -980,7 +1012,11 @@ export async function namespaceStartNamespaceStreamLoop(
     }
   } finally {
     subscription.state = "closed";
-    streamReader.releaseLock();
+    try {
+      streamReader.releaseLock();
+    } catch {
+      // 既に解放済みの場合は無視
+    }
     session.namespaceSubscriptions.delete(requestId);
   }
 }
@@ -1130,6 +1166,10 @@ export async function namespaceStartTracksStreamLoop(
             subscription.state = "closed";
             namespaceNotifyError(callbacks, error);
             reject(error);
+            // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+            // 確立前は subscription をアプリへ渡さないため、送信方向の FIN と
+            // 受信方向の cancel をライブラリ側で行う。
+            await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
             return;
           }
 
@@ -1209,7 +1249,11 @@ export async function namespaceStartTracksStreamLoop(
     }
   } finally {
     subscription.state = "closed";
-    streamReader.releaseLock();
+    try {
+      streamReader.releaseLock();
+    } catch {
+      // 既に解放済みの場合は無視
+    }
     session.tracksSubscriptions.delete(requestId);
   }
 }
@@ -1358,6 +1402,10 @@ export async function namespaceStartPublicationStreamLoop(
             namespaceNotifyError(callbacks, error);
             if (!resolved) {
               reject(error);
+              // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+              // 確立前は publication をアプリへ渡さないため、送信方向の FIN と
+              // 受信方向の cancel をライブラリ側で行う。
+              await namespaceCloseRequestStreamQuiet(publication.writer, streamReader);
             }
             return;
           }
