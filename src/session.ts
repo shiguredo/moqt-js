@@ -4913,7 +4913,10 @@ export class SessionImpl implements Session {
       // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
       // 購読自体は継続する (§3.4.1)。
       this.fillFetchTargets.delete(fillRequestId);
-      const sessionError = toProtocolViolationSessionError(err);
+      // draft-ietf-moq-transport-21 §8.3:
+      // 既知 Type の serialization 不一致は SessionError (KEY_VALUE_FORMATTING_ERROR)
+      // として届くため、エラーコードを保持したまま閉じる (他の受信経路と同じ)。
+      const sessionError = toSessionCloseError(err);
       if (sessionError !== null) {
         this.closeWithError(sessionError);
       } else if (err instanceof MalformedTrackError) {

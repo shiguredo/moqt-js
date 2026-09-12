@@ -633,6 +633,42 @@ test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 不一�
 
 /**
  * draft-ietf-moq-transport-21 §8.3:
+ * 既知 odd Type の Length 宣言が残りバイトを超える場合も serialization 不一致
+ * として KEY_VALUE_FORMATTING_ERROR とする。
+ */
+test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 宣言超過で SessionError", () => {
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
+  const data = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof SessionError)) {
+    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
+  }
+  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 受信者が理解しない未知 Type の Length 宣言超過は serialization の一致を
+ * 要求できないため、寛容契約どおり打ち切って throw しない。
+ */
+test("assertKnownPropertyValueInObjectProperties: 未知 Type の Length 宣言超過では throw しない", () => {
+  // deltaId=0x0D (未知 odd Type), length=5 宣言 + 2 バイトの切り詰め
+  const data = new Uint8Array([0x0d, 0x05, 0xaa, 0xbb]);
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(data));
+});
+
+/**
+ * 宣言 Length が残りバイト数とちょうど一致する場合は超過ではないため throw しない
+ * (境界のオフバイワン検出)。
+ */
+test("assertKnownPropertyValueInObjectProperties: Length が残りバイトちょうどなら throw しない", () => {
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=2 + 2 バイト
+  const data = new Uint8Array([0x0b, 0x02, 0xaa, 0xbb]);
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(data));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
  * serialization に一致する Object Properties では throw しない (誤検出防止)。
  */
 test("assertKnownPropertyValueInObjectProperties: 正常な Object Properties では throw しない", () => {
@@ -1180,18 +1216,76 @@ test("parseProperties: GREASE Property は未知 Property として保持され�
 /**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
- * draft-ietf-moq-transport-21 §8.3 / §10.7:
- * 外側でフレーミング済みのため、Length 宣言が残りバイトを超える
- * 内側の不足は破損であり、短い subarray を返さず宣言時点で
- * ProtocolViolationError とする。
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
+ *  length larger than the maximum, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *
+ * 外側でフレーミング済みのため、Length 宣言が残りバイトを超える内側の不足は
+ * 破損であり、短い subarray を返さず宣言時点で拒否する。既知 Type は
+ * serialization 不一致として KEY_VALUE_FORMATTING_ERROR、未知 Type は
+ * 受信者が理解しないためフレーミング破損として PROTOCOL_VIOLATION とする。
  */
-test("decodeImmutableProperties: Length 宣言超過で ProtocolViolationError", () => {
+test("decodeImmutableProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
   // IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
+  assertKeyValueFormattingError(() => decodeImmutableProperties(truncated));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * Length が最大値 (2^16-1) を超える場合は、既知 Type でも最大値超過の MUST を
+ * 優先して PROTOCOL_VIOLATION とする (既存の上限検査が残量検査より先に発火する
+ * ことの回帰テスト)。
+ */
+test("decodeImmutableProperties: Length が最大値超過なら既知 Type でも PROTOCOL_VIOLATION", () => {
+  // IMMUTABLE_PROPERTIES (0x0B) + Length 65536 (4 バイト varint)
+  const oversized = new Uint8Array([0x0b, 0xe0, 0x01, 0x00, 0x00]);
   assert.throws(
-    () => decodeImmutableProperties(truncated),
-    /immutable properties value length exceeds remaining data/,
+    () => decodeImmutableProperties(oversized),
+    ProtocolViolationError,
+    /immutable properties value length exceeds maximum: 65536 > 65535/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 厳密デコーダ (decodeProperties) でも既知 Type の Length 宣言超過は
+ * KEY_VALUE_FORMATTING_ERROR とする。
+ */
+test("decodeProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+  // delta 0x0B (IMMUTABLE_PROPERTIES) + Length 5 宣言 + 2 バイトの切り詰め
+  const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
+  assertKeyValueFormattingError(() => decodeProperties(truncated));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * Length が最大値 (2^16-1) を超える場合は未知 Type でも最大値超過の MUST に
+ * 従い PROTOCOL_VIOLATION とする (既存の上限検査が残量検査より先に発火することの
+ * 回帰テスト)。
+ */
+test("decodeProperties: 未知 Type でも Length が最大値超過なら PROTOCOL_VIOLATION", () => {
+  // delta 0x0D (未知奇数) + Length 65536 (4 バイト varint)
+  const oversized = new Uint8Array([0x0d, 0xe0, 0x01, 0x00, 0x00]);
+  assert.throws(
+    () => decodeProperties(oversized),
+    ProtocolViolationError,
+    /properties value length exceeds maximum: 65536 > 65535/,
+  );
+});
+
+/**
+ * 宣言 Length が残りバイト数とちょうど一致する場合は超過ではないため throw しない
+ * (境界のオフバイワン検出)。
+ */
+test("decodeProperties: Length が残りバイトちょうどなら throw しない", () => {
+  // delta 0x0B (IMMUTABLE_PROPERTIES) + Length 2 + 2 バイト
+  const exact = new Uint8Array([0x0b, 0x02, 0xaa, 0xbb]);
+  assert.doesNotThrow(() => decodeProperties(exact));
 });
 
 test("parseProperties: 未知奇数型の Length 宣言超過で ProtocolViolationError", () => {
@@ -1231,13 +1325,10 @@ test("decodeImmutableProperties: 内側奇数型の Length 宣言超過で Proto
   );
 });
 
-test("parseProperties: IMMUTABLE 外側の Length 宣言超過で ProtocolViolationError", () => {
+test("parseProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
   // 外側 IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => parseProperties(truncated),
-    /immutable properties value length exceeds remaining data/,
-  );
+  assertKeyValueFormattingError(() => parseProperties(truncated));
 });
 
 test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で ProtocolViolationError", () => {

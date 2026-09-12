@@ -187,6 +187,63 @@ const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
 ]);
 
 /**
+ * Length に書ける値の最大値 (2^16-1)
+ *
+ * draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure):
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
+ *  length larger than the maximum, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ */
+const MAX_PROPERTY_VALUE_LENGTH = 65535n;
+
+/**
+ * 既知 Type の Length 宣言超過が serialization 不一致に当たるか判定する
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * Length が最大値 (2^16-1) を超える場合は最大値超過の MUST を優先するため、
+ * 上限内の既知 Type だけを KEY_VALUE_FORMATTING_ERROR の対象とする。
+ * 上限超過は Track Properties の厳密デコーダでは事前の検査が
+ * PROTOCOL_VIOLATION として弾き、Object Properties 経路
+ * (assertKnownPropertyValueInObjectProperties) では寛容契約どおり打ち切るため、
+ * 本条件が偽になるのは Object Properties 経路の上限超過だけである。
+ * なお IMMUTABLE_PROPERTIES の内側で現れる既知 odd Type は 0x0B のみだが、
+ * §10.7 の再帰禁止が MalformedTrackError として先に発火するため、内側の
+ * 残量検査で本条件が真になることはない (将来の既知 odd Type 追加への備え)。
+ *
+ * @param id - Property Type
+ * @param length - 宣言された Length
+ */
+function isKnownPropertyLengthOverrun(id: bigint, length: bigint): boolean {
+  return KNOWN_PROPERTY_TYPES.has(id) && length <= MAX_PROPERTY_VALUE_LENGTH;
+}
+
+/**
+ * 既知 Type の Length 宣言超過に対応する SessionError を生成する
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *
+ * メッセージは decodeKnownPropertyVarint と同じ「既知 Type の前置き + 詳細」の
+ * 形に揃える (対象の説明は Type が示すため重ねない)。
+ *
+ * @param id - Property Type
+ * @param length - 宣言された Length
+ * @param remaining - Length の varint を読んだ直後の残りバイト数
+ */
+function knownPropertyLengthOverrunError(
+  id: bigint,
+  length: bigint,
+  remaining: number,
+): SessionError {
+  return new SessionError(
+    `key-value-pair value does not match serialization for known type 0x${id.toString(16)}: length exceeds remaining data: ${length} > ${remaining}`,
+    SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+  );
+}
+
+/**
  * 既知 Type の Value (偶数 Type) / Length (奇数 Type) を varint としてデコードする
  *
  * draft-ietf-moq-transport-21 §8.3:
@@ -207,6 +264,44 @@ function decodeKnownPropertyVarint(id: bigint, data: Uint8Array, offset: number)
     }
     throw error;
   }
+}
+
+/**
+ * Length 宣言超過のエラーを送出する
+ *
+ * draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure):
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
+ *  length larger than the maximum, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *
+ * Length の varint は完結したが宣言値が残りバイトを超えて Value を読めない場合、
+ * 既知 Type は serialization 不一致として KEY_VALUE_FORMATTING_ERROR、未知 Type は
+ * 受信者が理解しないためフレーミング破損として PROTOCOL_VIOLATION とする。
+ * Length が最大値を超える場合は最大値超過の MUST を優先し、既知 Type でも
+ * PROTOCOL_VIOLATION とする。
+ *
+ * @param id - Property Type
+ * @param length - 宣言された Length
+ * @param remaining - Length の varint を読んだ直後の残りバイト数
+ * @param label - 未知 Type のエラーメッセージに含める対象の説明 (呼び出し元の文脈)
+ * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type かつ Length が最大値以下の場合
+ * @throws ProtocolViolationError 未知 Type、または Length が最大値を超える場合
+ */
+function throwLengthOverrunError(
+  id: bigint,
+  length: bigint,
+  remaining: number,
+  label: string,
+): never {
+  if (isKnownPropertyLengthOverrun(id, length)) {
+    throw knownPropertyLengthOverrunError(id, length, remaining);
+  }
+  throw new ProtocolViolationError(
+    `${label} length exceeds remaining data: ${length} > ${remaining}`,
+  );
 }
 
 /**
@@ -541,8 +636,11 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
   // Length 宣言が残りバイトを超える切り詰めは破損であり、
   // 短い subarray を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
   if (idLen + lengthLen + Number(length) > data.length) {
-    throw new ProtocolViolationError(
-      `immutable properties value length exceeds remaining data: ${length} > ${data.length - (idLen + lengthLen)}`,
+    throwLengthOverrunError(
+      MOQTPropertyId.IMMUTABLE_PROPERTIES,
+      length,
+      data.length - (idLen + lengthLen),
+      "immutable properties value",
     );
   }
   const innerData = data.subarray(idLen + lengthLen, idLen + lengthLen + Number(length));
@@ -602,8 +700,11 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
       if (offset + deltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
-        throw new ProtocolViolationError(
-          `immutable properties value length exceeds remaining data: ${extLength} > ${innerData.length - (offset + deltaIdLen + extLengthLen)}`,
+        throwLengthOverrunError(
+          extId,
+          extLength,
+          innerData.length - (offset + deltaIdLen + extLengthLen),
+          "immutable properties value",
         );
       }
       const extData = innerData.slice(
@@ -776,8 +877,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
       if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
-        throw new ProtocolViolationError(
-          `immutable properties value length exceeds remaining data: ${length} > ${data.length - (offset + deltaIdLen + lengthLen)}`,
+        throwLengthOverrunError(
+          MOQTPropertyId.IMMUTABLE_PROPERTIES,
+          length,
+          data.length - (offset + deltaIdLen + lengthLen),
+          "immutable properties value",
         );
       }
       const innerData = data.subarray(
@@ -843,8 +947,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
           // Length 宣言が残りバイトを超える切り詰めは破損であり、
           // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
           if (innerOffset + innerDeltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
-            throw new ProtocolViolationError(
-              `immutable properties value length exceeds remaining data: ${extLength} > ${innerData.length - (innerOffset + innerDeltaIdLen + extLengthLen)}`,
+            throwLengthOverrunError(
+              extId,
+              extLength,
+              innerData.length - (innerOffset + innerDeltaIdLen + extLengthLen),
+              "immutable properties value",
             );
           }
           const extData = innerData.slice(
@@ -875,8 +982,11 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         // Length 宣言が残りバイトを超える切り詰めは破損であり、
         // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
         if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
-          throw new ProtocolViolationError(
-            `unknown property value length exceeds remaining data: ${length} > ${data.length - (offset + deltaIdLen + lengthLen)}`,
+          throwLengthOverrunError(
+            id,
+            length,
+            data.length - (offset + deltaIdLen + lengthLen),
+            "unknown property value",
           );
         }
         // 注意: unknownProperties にはデコード後の ID と生データを保持
@@ -956,8 +1066,11 @@ export function decodeProperties(data: Uint8Array): Property[] {
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
       if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
-        throw new ProtocolViolationError(
-          `properties value length exceeds remaining data: ${length} > ${data.length - (offset + deltaIdLen + lengthLen)}`,
+        throwLengthOverrunError(
+          id,
+          length,
+          data.length - (offset + deltaIdLen + lengthLen),
+          "properties value",
         );
       }
       const extData = data.slice(
@@ -1020,8 +1133,11 @@ export function decodeProperties(data: Uint8Array): Property[] {
                 innerOffset + deltaIdLen + innerLengthLen + Number(innerLength) >
                 extData.length
               ) {
-                throw new ProtocolViolationError(
-                  `immutable properties value length exceeds remaining data: ${innerLength} > ${extData.length - (innerOffset + deltaIdLen + innerLengthLen)}`,
+                throwLengthOverrunError(
+                  innerId,
+                  innerLength,
+                  extData.length - (innerOffset + deltaIdLen + innerLengthLen),
+                  "immutable properties value",
                 );
               }
               innerOffset += deltaIdLen + innerLengthLen + Number(innerLength);
@@ -1158,13 +1274,15 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *
  * decodeObjectPropertiesTolerant は失敗を吸収して読めた分だけを返すため、
  * 生バイト列を走査して既知 Type (KNOWN_PROPERTY_TYPES) の Value / Length が
- * varint として完結しない場合に SessionError を送出する。未知 Type は
- * 受信者が理解しないため対象外とし、不完全データでの打ち切りも寛容契約どおり
- * 維持する。delta のオーバーフロー・Length 上限 (2^16-1 超)・Length 宣言超過の
- * 検証は本関数の対象外とする。
+ * varint として完結しない場合、および Length の varint は完結したが宣言値が
+ * 残りバイトを超える場合に SessionError を送出する。未知 Type は受信者が
+ * 理解しないため対象外とし、不完全データでの打ち切りも寛容契約どおり維持する。
+ * delta のオーバーフローと Length 上限 (2^16-1 超) の検証は本関数の対象外と
+ * する。Object Properties 経路は厳密デコーダを通らないため上限超過は誰も
+ * 検証せず、上限超過の宣言は残りバイト内に収まる限り受理される。
  *
  * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type の Value / Length が
- *   varint として完結しない場合
+ *   varint として完結しない場合、または宣言 Length が残りバイトを超える場合
  */
 export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
   let offset = 0;
@@ -1215,7 +1333,15 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
     }
     offset += lengthLen;
     if (offset + Number(length) > data.length) {
-      // Length 宣言超過は別途扱うため、ここでは寛容契約どおり打ち切る
+      // draft-ietf-moq-transport-21 §8.3:
+      // 既知 Type の Length 宣言が残りバイトを超える場合は serialization 不一致
+      // として KEY_VALUE_FORMATTING_ERROR。それ以外 (未知 Type、および Length が
+      // 最大値 2^16-1 を超える場合) は寛容契約どおり打ち切る。上限超過の検証は
+      // 本関数の対象外であり、Object Properties 経路では誰も検証しない
+      // (Track Properties の厳密デコーダだけが PROTOCOL_VIOLATION とする)。
+      if (isKnownPropertyLengthOverrun(id, length)) {
+        throw knownPropertyLengthOverrunError(id, length, data.length - offset);
+      }
       return;
     }
     offset += Number(length);
