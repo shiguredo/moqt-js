@@ -1157,6 +1157,10 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * "An Object MUST NOT contain more than one instance of this property."
  * "An Object contains an Immutable Properties property that contains another
  *  Immutable Properties key." → malformed
+ * draft-ietf-moq-transport-21 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap):
+ * "An Object MUST NOT contain more than one instance of this property."
+ * "An Object contains more than one instance of Prior Group ID Gap." /
+ * "An Object contains more than one instance of Prior Object ID Gap." → malformed
  *
  * decodeObjectPropertiesTolerant でデコードできた Property の ID を確認する。
  * 不完全・不正な delta / Length では検出を打ち切り、PROTOCOL_VIOLATION は送出しない
@@ -1166,6 +1170,8 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *   - 0x4000-0x7FFF の Mandatory Track Property
  *   - IMMUTABLE_PROPERTIES の複数出現
  *   - IMMUTABLE_PROPERTIES の再帰ネスト
+ *   - PRIOR_GROUP_ID_GAP の複数出現 (mutable list と IMMUTABLE_PROPERTIES 配下の合算)
+ *   - PRIOR_OBJECT_ID_GAP の複数出現 (mutable list と IMMUTABLE_PROPERTIES 配下の合算)
  */
 export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Array): void {
   assertObjectPropertyList(data, false);
@@ -1178,16 +1184,46 @@ export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Arra
  * 内側は 1 段だけ検査し、内側に現れる IMMUTABLE_PROPERTIES は検出時点で
  * MalformedTrackError とする (深いネストによるスタック枯渇も同時に防ぐ)。
  *
+ * §10.8 / §10.9 の Prior Gap の出現回数は mutable list と
+ * IMMUTABLE_PROPERTIES 配下を合算して数える (§10.7 の「双方を検索する」) ため、
+ * カウンタを再帰呼び出しで共有する。
+ *
  * @param data - KVP 列のバイト列
  * @param nested - IMMUTABLE_PROPERTIES の内側なら true
+ * @param priorGapCounts - Prior Gap の出現回数 (再帰呼び出しで持ち回る共有カウンタ)
  */
-function assertObjectPropertyList(data: Uint8Array, nested: boolean): void {
+function assertObjectPropertyList(
+  data: Uint8Array,
+  nested: boolean,
+  priorGapCounts?: { priorGroupIdGap: number; priorObjectIdGap: number },
+): void {
+  // mutable list と IMMUTABLE_PROPERTIES 配下を合算するため、
+  // カウンタは再帰呼び出しで共有する (未指定なら新規に作る)
+  const gapCounts = priorGapCounts ?? { priorGroupIdGap: 0, priorObjectIdGap: 0 };
   let immutableCount = 0;
   for (const property of decodeObjectPropertiesTolerant(data).properties) {
     if (property.id >= 0x4000n && property.id <= 0x7fffn) {
       throw new MalformedTrackError(
         `mandatory track property as object property: type 0x${property.id.toString(16)}`,
       );
+    }
+    // draft-ietf-moq-transport-21 §10.8 / §10.9:
+    // "An Object MUST NOT contain more than one instance of this property."
+    // mutable list と IMMUTABLE_PROPERTIES 配下を合わせて数える。
+    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP) {
+      gapCounts.priorGroupIdGap++;
+      if (gapCounts.priorGroupIdGap > 1) {
+        throw new MalformedTrackError(
+          "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
+        );
+      }
+    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP) {
+      gapCounts.priorObjectIdGap++;
+      if (gapCounts.priorObjectIdGap > 1) {
+        throw new MalformedTrackError(
+          "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
+        );
+      }
     }
     if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       continue;
@@ -1210,7 +1246,7 @@ function assertObjectPropertyList(data: Uint8Array, nested: boolean): void {
     // draft-ietf-moq-transport-21 §10.7:
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
     if (property.data !== undefined) {
-      assertObjectPropertyList(property.data, true);
+      assertObjectPropertyList(property.data, true, gapCounts);
     }
   }
 }
