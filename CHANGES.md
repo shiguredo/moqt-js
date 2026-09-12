@@ -9,7 +9,9 @@
 - FIX
   - バグ修正
 
-## develop
+## 2026.3.0
+
+**リリース日**: 2026-09-12
 
 - [CHANGE] TRACK_NAMESPACE_PREFIX の Value から外側 Length を削除する
   - draft-ietf-moq-transport-20 §10.2.20 が参照する §2.4.1 の Track Namespace エンコーディング (Number of Track Namespace Fields + 各フィールドの Length + Value) は自己区切りのため、外側 Length を付与せず Value をそのまま書く
