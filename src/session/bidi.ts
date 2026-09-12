@@ -835,8 +835,8 @@ export async function bidiReadSubscribeResponse(
       const existingSubscribers = session.subscribersByAlias.get(decoded.trackAlias);
       if (existingSubscribers && existingSubscribers.length > 0) {
         // draft-ietf-moq-transport-21 §3.1.2: 同一 Track Alias が異なる Track に使われている場合のみ DUPLICATE_TRACK_ALIAS
-        const fullTrackName = pending.impl.getFullTrackName();
-        if (existingSubscribers[0].getFullTrackName() !== fullTrackName) {
+        const trackKey = pending.impl.getFullTrackName();
+        if (existingSubscribers[0].getFullTrackName() !== trackKey) {
           const error = new SessionError(
             `duplicate track alias: ${decoded.trackAlias}`,
             SessionErrorCode.DUPLICATE_TRACK_ALIAS,
@@ -3194,11 +3194,14 @@ export async function bidiCancelFetch(
  *  from that publisher」
  * 同一 Track の判定は Full Track Name (trackNamespace + trackName) で行う。
  * fetcher は trackAlias を持たないため Full Track Name で引く。
+ * trackKey は getFullTrackName() が返す比較キー (fullTrackNameKey が生成する
+ * 長さ付きキー) を渡す。区切り文字の曖昧さで別 Track を巻き込まないよう、
+ * 生の Full Track Name を組み立てて渡さない。
  * セッションは閉じない。アプリの error コールバックの throw は握り潰す。
  */
 export function cancelMalformedTrackPeers(
   session: BidiSessionInternal,
-  fullTrackName: string,
+  trackKey: string,
   error: Error,
 ): void {
   // 購読は alias 索引 (subscribersByAlias) を走査する。bidiCancelSubscription
@@ -3207,7 +3210,7 @@ export function cancelMalformedTrackPeers(
   const seen = new Set<SubscriberImpl>();
   for (const subscribers of session.subscribersByAlias.values()) {
     for (const subscriber of subscribers.slice()) {
-      if (seen.has(subscriber) || subscriber.getFullTrackName() !== fullTrackName) {
+      if (seen.has(subscriber) || subscriber.getFullTrackName() !== trackKey) {
         continue;
       }
       seen.add(subscriber);
@@ -3215,7 +3218,7 @@ export function cancelMalformedTrackPeers(
     }
   }
   for (const fetcher of session.fetchers.values()) {
-    if (fetcher.getFullTrackName() !== fullTrackName) {
+    if (fetcher.getFullTrackName() !== trackKey) {
       continue;
     }
     try {
@@ -3230,7 +3233,7 @@ export function cancelMalformedTrackPeers(
   // pending 中も active のため、state ガードでは reject と error コールバックの
   // 二重通知を防げない)。Map から外してから reject し、ストリームを cancel する。
   for (const [requestId, pending] of session.pendingSubscribe) {
-    if (pending.impl.getFullTrackName() !== fullTrackName) {
+    if (pending.impl.getFullTrackName() !== trackKey) {
       continue;
     }
     session.pendingSubscribe.delete(requestId);
@@ -3239,7 +3242,7 @@ export function cancelMalformedTrackPeers(
     void bidiCancelSubscription(session, pending.impl).catch(() => {});
   }
   for (const [requestId, pending] of session.pendingFetch) {
-    if (pending.impl.getFullTrackName() !== fullTrackName) {
+    if (pending.impl.getFullTrackName() !== trackKey) {
       continue;
     }
     session.pendingFetch.delete(requestId);

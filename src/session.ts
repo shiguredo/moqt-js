@@ -64,6 +64,7 @@ import {
 import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
 import { decodeFetchHeader, FetchHeaderType } from "./dataStream";
+import { fullTrackNameKey } from "./fullTrackName";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
 import {
@@ -4202,8 +4203,12 @@ export class SessionImpl implements Session {
     // alias 重複というセッション違反が検出されず隠れるため)。
     const existingSubscribers = this.subscribersByAlias.get(publishTrackAlias);
     if (existingSubscribers !== undefined && existingSubscribers.length > 0) {
-      const fullTrackName = `${publishTrackNamespace.join("/")}/${publishTrackName}`;
-      if (existingSubscribers[0].getFullTrackName() !== fullTrackName) {
+      // 比較キーは SubscriberImpl.getFullTrackName と同じ生成規則
+      // (fullTrackNameKey) に揃える。受信 PUBLISH 側だけ別形式で組み立てると
+      // 同一 Track への複数 PUBLISH が不一致になり、DUPLICATE_TRACK_ALIAS で
+      // 誤ってセッションを閉じる。
+      const trackKey = fullTrackNameKey(publishTrackNamespace, publishTrackName);
+      if (existingSubscribers[0].getFullTrackName() !== trackKey) {
         this.closeWithError(
           new SessionError(
             `track alias 0x${publishTrackAlias.toString(16)} used for different tracks`,
@@ -5129,11 +5134,11 @@ export class SessionImpl implements Session {
     error: MalformedTrackError,
   ): Promise<void> {
     // draft-ietf-moq-transport-21 §12.1:
-    // 同一 Track の全購読と全 FETCH を cancel する。Full Track Name は
+    // 同一 Track の全購読と全 FETCH を cancel する。比較キーは
     // trackAlias から購読を特定して得る (購読が未特定なら cancel 対象が無い)。
-    const fullTrackName = subscribers[0]?.getFullTrackName();
-    if (fullTrackName !== undefined) {
-      bidi.cancelMalformedTrackPeers(this as unknown as SessionInternal, fullTrackName, error);
+    const trackKey = subscribers[0]?.getFullTrackName();
+    if (trackKey !== undefined) {
+      bidi.cancelMalformedTrackPeers(this as unknown as SessionInternal, trackKey, error);
     }
     await cancelStreamQuiet(
       reader,

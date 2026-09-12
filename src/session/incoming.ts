@@ -302,13 +302,13 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     if (err instanceof MalformedTrackError) {
       // draft-ietf-moq-transport-21 §12.1:
       // malformed track を検出したら同一 Track の全購読と全 FETCH を cancel し、
-      // セッションは閉じない。Full Track Name は trackAlias から購読を特定して得る。
+      // セッションは閉じない。比較キーは trackAlias から購読を特定して得る。
       const trackAlias = decodeDatagramTrackAlias(data);
       if (trackAlias !== undefined) {
         const subscribers = session.subscribersByAlias.get(trackAlias) ?? [];
-        const fullTrackName = subscribers[0]?.getFullTrackName();
-        if (fullTrackName !== undefined) {
-          cancelMalformedTrackPeers(session, fullTrackName, err);
+        const trackKey = subscribers[0]?.getFullTrackName();
+        if (trackKey !== undefined) {
+          cancelMalformedTrackPeers(session, trackKey, err);
         }
       }
     }

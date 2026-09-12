@@ -15,6 +15,7 @@ import {
   objectMatchesFilter,
   rangeFiltersMatch,
 } from "./filter";
+import { fullTrackNameKey } from "./fullTrackName";
 import { mergeRangeFilters } from "./session/params";
 import type { FillRequestOptions } from "./session";
 
@@ -350,11 +351,15 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * Full Track Name を取得する（Track 同一性判定用）
-   * draft-ietf-moq-transport-21 Section 2.4.1: Track の同一性は Full Track Name で判定
+   * Full Track Name の比較キーを取得する（Track 同一性判定用）
+   *
+   * draft-ietf-moq-transport-21 Section 2.4.1: Track の同一性は Full Track Name
+   * (Track Namespace + Track Name) で判定する。
+   * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
+   * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
   getFullTrackName(): string {
-    return `${this.subscriberNamespace.join("/")}/${this.subscriberTrackName}`;
+    return fullTrackNameKey(this.subscriberNamespace, this.subscriberTrackName);
   }
 
   /**
