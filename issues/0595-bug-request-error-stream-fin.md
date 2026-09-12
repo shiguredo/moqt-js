@@ -1,7 +1,7 @@
 # 確立前 REQUEST_ERROR で bidi ストリームの送信方向が閉じない
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-request-error-stream-fin
 - Polished: 2026-09-12
 
@@ -40,3 +40,12 @@
 - `cancelStreamQuiet` (`src/session/stream.ts`。reader.cancel の失敗を無視するヘルパー)
 - `src/session/namespaceLoops.test.ts` (`writerClosed` / `readableController` で検証するハーネス)
 - `refs/moq/draft-ietf-moq-transport-21.txt` §6.4.2.2 (Graceful Request Stream Closure) / §6.4.2.3 (Request Cancellation and Rejection) / §9.2 (GOAWAY 受信後の REQUEST_ERROR は対象外である根拠)
+
+## 解決方法
+
+- `src/session/namespaceLoops.ts` に `namespaceCloseRequestStreamQuiet` を追加した。`namespaceCloseWriterQuiet` で送信方向を FIN し、`cancelStreamQuiet` で受信方向を cancel (STOP_SENDING 相当) する。どちらの失敗も無視する。
+- namespace / tracks / publication の各ループで、確立前 (`resolved === false`) の REQUEST_ERROR 受信時に `reject` した後で本ヘルパーを呼ぶようにした。順序は `reject` → FIN → cancel。確立前は subscription / publication をアプリへ渡さないため、ライブラリ側で両方向を閉じる。
+- namespace / tracks の `finally` の `releaseLock()` を try/catch で包み、cancel 失敗時も Map の掃除と reject が従来どおり完了するようにした (publication は既に同様の防御があった)。
+- テスト: `src/session/namespaceLoops.test.ts` のハーネスに `isReadableCancelled` を追加し (ReadableStream の cancel コールバックで観測)、3 ループそれぞれで確立前 REQUEST_ERROR の後に writer が閉じ reader が cancel されることを検証するテストを追加した。3 件とも修正前は失敗することを実測した。
+- レビュー指摘の反映: cancel reason を `REQUEST_ERROR received before establishment` に変更し、呼び出し側の重複コメントを 1 行に短縮、publication のテストにも readable を close しない理由を追記した。
+- `CHANGES.md` の `## develop` に [FIX] を追加した。
