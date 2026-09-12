@@ -1520,6 +1520,10 @@ function createPublicationLoopTestContext(): {
   requestId: bigint;
   readableController: ReadableStreamDefaultController<Uint8Array>;
   controlWriter: ControlStreamWriter;
+  publication: {
+    callbacks: Record<string, unknown>;
+    state: string;
+  };
   writerClosed: () => Promise<void>;
   getClosedWithError: () => SessionError | undefined;
 } {
@@ -1571,6 +1575,9 @@ function createPublicationLoopTestContext(): {
     requestId,
     readableController,
     controlWriter: new ControlStreamWriter(),
+    // テストから publication の callbacks / state を直接参照できるようにする
+    // (session の内部 Map から取り出すキャストを不要にする)
+    publication,
     writerClosed: () => writer.closed,
     getClosedWithError: () => closedWithError,
   };
@@ -2380,4 +2387,394 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の�
   assert.isDefined(ctx.getClosedWithError());
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
+});
+
+// ============================================================================
+// error コールバックの例外で後始末が止まらないこと
+//
+// 購読単位の callbacks.error が throw しても、通知の失敗で後始末
+// (確立前 Promise の reject・保留中 REQUEST_UPDATE の reject・
+// 該当時の session.closeWithError) が中断されないこと。
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * error コールバックが throw しても、malformed な Track Properties の通知後に
+ * 確立前 Promise の reject とセッションクローズが実行されることを検証する。
+ */
+test("namespaceStartNamespaceStreamLoop: error コールバックの throw を無視して reject とセッションクローズが実行される", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const notifiedMessages: string[] = [];
+  Object.assign(ctx.subscription.callbacks, {
+    error: (error: Error): void => {
+      notifiedMessages.push(error.message);
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // malformed な Track Properties を注入して KEY_VALUE_FORMATTING_ERROR を発生させる
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 通知は 1 回だけ (コールバックの throw で二重通知にならない)
+  assert.equal(notifiedMessages.length, 1);
+  // throw しても reject が実行され、close に渡す値と同一オブジェクトである
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // 通知されたエラーは close に渡した SessionError と同じである
+  assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * 破損した REQUEST_OK (宣言 Length に対し本体が不足) を catch で受けた場合も、
+ * error コールバックの throw にかかわらず reject とセッションクローズ
+ * (IncompleteDataError は PROTOCOL_VIOLATION に変換される) が実行されることを検証する。
+ */
+test("namespaceStartNamespaceStreamLoop: error コールバックの throw を無視して破損メッセージでセッションが閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  Object.assign(ctx.subscription.callbacks, {
+    error: (): void => {
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を注入する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(MessageType.REQUEST_OK, new Uint8Array([0x01])),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // reject は受信した IncompleteDataError のまま、close は PROTOCOL_VIOLATION へ変換される
+  assert.isDefined(rejectedError);
+  assert.isTrue(rejectedError!.message.includes("insufficient data"));
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.5.1:
+ * resolved 後の read 失敗 (RESET_STREAM 相当) でも、error コールバックの throw に
+ * かかわらず保留中 REQUEST_UPDATE が reject されることを検証する。
+ */
+test("namespaceStartNamespaceStreamLoop: error コールバックの throw を無視して保留中の更新が reject される", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let notifyCount = 0;
+  Object.assign(ctx.subscription.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+      throw new Error("app error callback failure");
+    },
+  });
+
+  const pending = registerPendingUpdate(ctx.session, ctx.requestId);
+  ctx.subscription.pendingPrefix = ["live", "sports"];
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  // 確立後にピアの RESET_STREAM 相当でストリームが失敗する
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  assert.equal(notifyCount, 1);
+  assert.isFalse(pending.resolved);
+  assert.isDefined(pending.rejected);
+  assert.isTrue(
+    pending.rejected!.message.includes("stream closed before receiving update response"),
+  );
+  // RESET_STREAM (read 例外) はセッションを閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * 確立前 REQUEST_ERROR の通知で error コールバックが throw しても、
+ * 確立前 Promise が reject されることを検証する。
+ */
+test("namespaceStartNamespaceStreamLoop: 確立前 REQUEST_ERROR で error コールバックの throw を無視して reject する", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let notifyCount = 0;
+  Object.assign(ctx.subscription.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // REQUEST_OK を挟まずに REQUEST_ERROR (リクエスト失敗) を受信する
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(notifyCount, 1);
+  // リクエスト失敗はセッションを閉じず、確立前 Promise を reject する
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "prefix overlap");
+  assert.isUndefined(ctx.getClosedWithError());
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * tracks ループでも error コールバックの throw で reject とセッションクローズが
+ * 止まらないことを検証する。
+ */
+test("namespaceStartTracksStreamLoop: error コールバックの throw を無視して reject とセッションクローズが実行される", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  const notifiedMessages: string[] = [];
+  Object.assign(ctx.subscription.callbacks, {
+    error: (error: Error): void => {
+      notifiedMessages.push(error.message);
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(notifiedMessages.length, 1);
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // 通知されたエラーは close に渡した SessionError と同じである
+  assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.5.1:
+ * tracks ループでも resolved 後の read 失敗で error コールバックが throw しても
+ * 保留中 REQUEST_UPDATE が reject されることを検証する。
+ */
+test("namespaceStartTracksStreamLoop: error コールバックの throw を無視して保留中の更新が reject される", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let notifyCount = 0;
+  Object.assign(ctx.subscription.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+      throw new Error("app error callback failure");
+    },
+  });
+
+  const pending = registerPendingUpdate(ctx.session, ctx.requestId);
+  ctx.subscription.pendingPrefix = ["live", "sports"];
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.error(
+    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+  );
+  await readPromise;
+
+  assert.equal(notifyCount, 1);
+  assert.isFalse(pending.resolved);
+  assert.isDefined(pending.rejected);
+  assert.isTrue(
+    pending.rejected!.message.includes("stream closed before receiving update response"),
+  );
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * 確立前 REQUEST_ERROR の通知で error コールバックが throw しても、
+ * tracks ループの確立前 Promise が reject されることを検証する。
+ */
+test("namespaceStartTracksStreamLoop: 確立前 REQUEST_ERROR で error コールバックの throw を無視して reject する", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let notifyCount = 0;
+  Object.assign(ctx.subscription.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(notifyCount, 1);
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "prefix overlap");
+  assert.isUndefined(ctx.getClosedWithError());
+  // finally で subscription が掃除される
+  assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3 / §9.3:
+ * publication ループでも error コールバックの throw で reject とセッションクローズが
+ * 止まらないことを検証する。
+ */
+test("namespaceStartPublicationStreamLoop: error コールバックの throw を無視して reject とセッションクローズが実行される", async () => {
+  const ctx = createPublicationLoopTestContext();
+  const notifiedMessages: string[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedMessages.push(error.message);
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  const okPayload = appendMalformedTrackProperties(
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(notifiedMessages.length, 1);
+  assert.isDefined(rejectedError);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // 通知されたエラーは close に渡した SessionError と同じである
+  assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
+  // finally で publication が掃除される
+  assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
+});
+
+/**
+ * 確立前 REQUEST_ERROR の通知で error コールバックが throw しても、
+ * publication ループの確立前 Promise が reject されることを検証する。
+ */
+test("namespaceStartPublicationStreamLoop: 確立前 REQUEST_ERROR で error コールバックの throw を無視して reject する", async () => {
+  const ctx = createPublicationLoopTestContext();
+  let notifyCount = 0;
+  Object.assign(ctx.publication.callbacks, {
+    error: (): void => {
+      notifyCount += 1;
+      throw new Error("app error callback failure");
+    },
+  });
+
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(notifyCount, 1);
+  assert.isDefined(rejectedError);
+  assert.equal(rejectedError!.message, "prefix overlap");
+  assert.isUndefined(ctx.getClosedWithError());
+  // finally で publication が掃除される
+  assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
 });

@@ -1,7 +1,7 @@
 # namespace 系ループで error コールバックの例外が reject とセッションクローズを中断する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-namespace-callback-throw-skip-close
 - Polished: 2026-09-12
 
@@ -47,3 +47,10 @@
 - `src/session/namespaceLoops.test.ts` (実ストリーム・実 Map のテストハーネス)
 - `issues/0577-refactor-namespace-loop-dedup.md` (3 ループ共通化)
 - `issues/closed/0442-bug-close-with-error-callback-throw.md` (closeWithError のコールバック throw 吸収を追加した先行 issue)
+
+## 解決方法
+
+- `src/session/namespaceLoops.ts` に `namespaceNotifyError` を追加し、リクエスト単位の `callbacks.error` の throw を握り潰すようにした。3 ループの catch 3 箇所と確立前 `case MessageType.REQUEST_ERROR:` 3 箇所の計 6 箇所を置き換え、通知の失敗で確立前 Promise の reject・`handleNamespaceRequestUpdateStreamClosed` による保留中 REQUEST_UPDATE の reject・`session.closeWithError` が中断されないようにした。
+- 通知の実行条件 (`subscription.state === "active"` / `!goawayReceived` / `!resolved && !requestMigrated` / `resolved` / `toSessionCloseError(error) !== null` / `isSessionClosedError` による抑止) と `finally` の後始末は変更していない。握り潰した例外は再 throw もデバッグ記録もせず、`createNamespaceActiveTracker.emitAll` / `namespaceHandleGoaway` と同方針に揃えた。
+- `src/session/namespaceLoops.test.ts` に回帰テストを 9 件追加した。3 ループ × (catch での malformed な Track Properties による KEY_VALUE_FORMATTING_ERROR の reject とセッションクローズ / 確立前 REQUEST_ERROR の reject)、Namespace / Tracks の resolved 後の read 失敗での保留中 REQUEST_UPDATE の reject、catch で IncompleteDataError を PROTOCOL_VIOLATION に変換して閉じる経路を、throw する `callbacks.error` を注入して検証する。修正前のコードでは 9 件すべてが失敗する。
+- 触ったファイル: `src/session/namespaceLoops.ts`、`src/session/namespaceLoops.test.ts`、`CHANGES.md`。

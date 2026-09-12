@@ -886,6 +886,9 @@
   - PendingTrackStatus に比較キーを保持させ、TRACK_STATUS 要求時の Full Track Name で同一性を判定する
   - 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) は従来どおりセッションを閉じる (未知 Mandatory の経路とは分けたまま)
   - @voluntas
+- [FIX] namespace 系ループで error コールバックの例外が後始末を止める問題を修正する
+  - 3 ループの catch と確立前 REQUEST_ERROR で通知の throw を握り潰し、通知の失敗で後始末 (確立前 Promise の reject・保留中 REQUEST_UPDATE の reject・閉じるべきエラーの session.closeWithError) が中断されないようにする
+  - @voluntas
 
 ### misc
 
