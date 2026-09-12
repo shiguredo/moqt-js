@@ -3278,6 +3278,9 @@ export function cancelMalformedTrackPeers(
     } catch {
       // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
     }
+    // FetcherImpl.cancel は onCancel の await 前に state を closed にするため、
+    // キャンセル中の重複した malformed 検出では handleError も cancel も
+    // 抑止される (error コールバックは 1 回だけ呼ばれる)。
     void fetcher.cancel().catch(() => {});
   }
   // 応答待ちの pending も §12.1 の対象に含める。pending には

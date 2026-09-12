@@ -876,6 +876,11 @@
   - draft-ietf-moq-transport-21 §9.3 に基づき、PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK の Track Properties に未知 Mandatory Track Property を検出したら PROTOCOL_VIOLATION でセッションを閉じる
   - decodeProperties の MalformedTrackError を閉じる経路へ変換し、SUBSCRIBE_OK / FETCH_OK / データストリームの cancel (セッションは閉じない) は従来どおり維持する
   - @voluntas
+- [FIX] malformed 検出の重複で fetcher の error コールバックが二重発火する問題を修正する
+  - draft-ietf-moq-transport-21 §12.1 に基づき、FetcherImpl.cancel が onCancel の await 前に state を closed にして、キャンセル中の重複した malformed 検出による二重通知と Object 配信を止める
+  - cancelMalformedTrackPeers は closed の fetcher をスキップし、§3.2.1 の STOP_SENDING は従来どおり onCancel 経由で送る
+  - Fetcher.cancel はキャンセル開始と同時に state が closed になり、既にキャンセル中の場合は即座に解決する Promise を返す (進行中の後始末の完了は保証しない)
+  - @voluntas
 
 ### misc
 
