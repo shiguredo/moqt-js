@@ -1,7 +1,7 @@
 # namespace 系ループの通知コールバックの throw がループを終了させる
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-namespace-notify-callback-throw
 - Polished: 2026-09-12
 
@@ -38,3 +38,11 @@
 - `createNamespaceActiveTracker` (`src/session/namespaceLoops.ts`。握り潰しの先例)
 - `namespaceNotifyError` (`src/session/namespaceLoops.ts`。error コールバック用の握り潰しヘルパー)
 - `src/session/namespaceLoops.test.ts`
+
+## 解決方法
+
+- `src/session/namespaceLoops.ts` に通知系コールバックの例外を握り潰すヘルパー `namespaceInvokeCallbackQuiet` を追加し、`namespaceStartNamespaceStreamLoop` の `onNamespace` / `onNamespaceDone` と `namespaceStartTracksStreamLoop` の `onPublishSkipped` を経由させた。`namespaceNotifyError` と `createNamespaceActiveTracker.emitAll` の補完通知と同じ「アプリのコールバック例外で後始末を止めない」方針に揃え、通知の呼び出し順序と追跡状態の更新位置は変更していない。
+- 握り潰すことで通知の直後の `activeTracker.remove` も必ず実行され、`onNamespace` の throw が catch の `activeTracker.emitAll()` を誘発する二重通知と、`onNamespaceDone` の throw で追跡状態が更新されず FIN 補完時に重複通知される経路の両方を解消した。
+- セッション単位の `session.callbacks.debug` (3 ループで直接呼び出し) は本 issue の対象外とし、issue 本文に明記した。
+- テスト: `src/session/namespaceLoops.test.ts` に 4 件追加 (onNamespace / onNamespaceDone / onPublishSkipped の throw で購読が終了しないこと、onNamespaceDone の throw 後も FIN で二重通知しないこと)。4 件とも修正前は失敗することを実測した。
+- `CHANGES.md` の `## develop` に [FIX] を追加した。
