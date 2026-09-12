@@ -17,7 +17,7 @@ import { ObjectStatus, MessageType, encodeRequestErrorPayload } from "../message
 import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
-import { toProtocolViolationSessionError } from "./errors";
+import { toSessionCloseError } from "./errors";
 import { cancelMalformedTrackPeers } from "./bidi";
 import {
   processFetchObjects as streamProcessFetchObjects,
@@ -293,8 +293,10 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     } catch {
       // デバッグ記録の失敗は無視する
     }
-    // ProtocolViolationError / IncompleteDataError は仕様違反として PROTOCOL_VIOLATION でセッションを閉じる
-    const sessionError = toProtocolViolationSessionError(err);
+    // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
+    // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
+    // セッションを閉じる
+    const sessionError = toSessionCloseError(err);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
       return;

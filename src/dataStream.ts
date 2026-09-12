@@ -14,6 +14,7 @@ import { decodeVarint, encodeVarint } from "./varint";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
 import {
+  assertKnownPropertyValueInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
   assertPriorIdGapInObjectProperties,
 } from "./properties";
@@ -655,6 +656,10 @@ export function decodeObjectFields(
   // (non-Normal status の properties 検証より後に判定する)
   if (propertiesLength > 0) {
     assertNoMandatoryTrackPropertyInObjectProperties(properties);
+    // draft-ietf-moq-transport-21 §8.3:
+    // 既知 Type の Value が serialization に一致しない場合は
+    // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
+    assertKnownPropertyValueInObjectProperties(properties);
   }
 
   return [
@@ -1008,6 +1013,10 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   // (non-Normal status の properties 検証より後に判定する)
   if (properties !== undefined) {
     assertNoMandatoryTrackPropertyInObjectProperties(properties);
+    // draft-ietf-moq-transport-21 §8.3:
+    // 既知 Type の Value が serialization に一致しない場合は
+    // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
+    assertKnownPropertyValueInObjectProperties(properties);
   }
 
   // draft-ietf-moq-transport-21 §10.8 / §10.9:
@@ -1852,6 +1861,10 @@ export function decodeFetchObjectFields(
       // draft-ietf-moq-transport-21 §3.6:
       // Mandatory Track Property を Object Property として含む Object は malformed
       assertNoMandatoryTrackPropertyInObjectProperties(properties);
+      // draft-ietf-moq-transport-21 §8.3:
+      // 既知 Type の Value が serialization に一致しない場合は
+      // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
+      assertKnownPropertyValueInObjectProperties(properties);
 
       // draft-ietf-moq-transport-21 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる

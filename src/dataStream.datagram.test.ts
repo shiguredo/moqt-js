@@ -10,7 +10,7 @@ import {
   encodeObjectDatagram,
   decodeObjectDatagram,
 } from "./dataStream";
-import { IncompleteDataError, MalformedTrackError } from "./error";
+import { IncompleteDataError, MalformedTrackError, SessionError } from "./error";
 import { ObjectStatus } from "./message/types";
 import { appendGreaseObjectProperty, encodeProperties, MOQTPropertyId } from "./properties";
 import { isGreaseValue } from "./grease";
@@ -537,5 +537,32 @@ test("ObjectDatagram: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError
     () => decodeObjectDatagram(encoded),
     MalformedTrackError,
     /more than one instance of PRIOR_OBJECT_ID_GAP/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知 Type の Value が varint として完結しない datagram を検出する。
+ */
+test("ObjectDatagram: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+  // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
+  const properties = new Uint8Array([0x02, 0x80]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    SessionError,
+    /key-value-pair value does not match serialization/,
   );
 });

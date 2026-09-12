@@ -892,6 +892,9 @@
 - [FIX] 同一 Object 内の Prior Group ID Gap / Prior Object ID Gap の複数出現を malformed として検出する
   - draft-ietf-moq-transport-21 §10.8 / §10.9 に基づき、受信経路の検証で出現回数を mutable list と IMMUTABLE_PROPERTIES 配下の合算で数え、2 個目で MalformedTrackError を送出する
   - @voluntas
+- [FIX] Object Properties の既知 Type の serialization 不一致を §8.3 の KEY_VALUE_FORMATTING_ERROR として扱う
+  - draft-ietf-moq-transport-21 §8.3 に基づき、既知 Type の Value / Length が varint として完結しない場合はセッションを閉じる (未知 Type と不完全データの寛容継続は維持する)
+  - @voluntas
 
 ### misc
 

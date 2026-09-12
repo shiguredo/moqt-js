@@ -4753,9 +4753,11 @@ export class SessionImpl implements Session {
               if (done) break;
               continue;
             }
-            const sessionError = toProtocolViolationSessionError(err);
+            // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
+            // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+            const sessionError = toSessionCloseError(err);
             if (sessionError !== null) {
-              // 仕様違反: PROTOCOL_VIOLATION でセッションを閉じる
+              // 仕様違反: セッションを閉じる
               this.closeWithError(sessionError);
               break;
             }
@@ -5016,7 +5018,9 @@ export class SessionImpl implements Session {
   ): Promise<void> {
     // デバッグ: ストリームエラーをログ
     this.emitDataStreamErrorDebug(err, fetchHeader);
-    const sessionError = toProtocolViolationSessionError(err);
+    // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
+    // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(err);
     if (sessionError !== null) {
       this.closeWithError(sessionError);
       return;

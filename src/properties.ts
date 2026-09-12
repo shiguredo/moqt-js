@@ -1148,6 +1148,81 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
 }
 
 /**
+ * Object Properties の既知 Type の Value / Length を検証する
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * "Key-Value-Pair is used in both the data plane and control plane" であり、
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *
+ * decodeObjectPropertiesTolerant は失敗を吸収して読めた分だけを返すため、
+ * 生バイト列を走査して既知 Type (KNOWN_PROPERTY_TYPES) の Value / Length が
+ * varint として完結しない場合に SessionError を送出する。未知 Type は
+ * 受信者が理解しないため対象外とし、不完全データでの打ち切りも寛容契約どおり
+ * 維持する。delta のオーバーフロー・Length 上限 (2^16-1 超)・Length 宣言超過の
+ * 検証は本関数の対象外とする。
+ *
+ * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type の Value / Length が
+ *   varint として完結しない場合
+ */
+export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
+  let offset = 0;
+  let previousId = 0n;
+  while (offset < data.length) {
+    let deltaId: bigint;
+    let deltaIdLen: number;
+    try {
+      [deltaId, deltaIdLen] = decodeVarint(data, offset);
+    } catch {
+      // 不完全データは寛容契約どおりそこで打ち切る
+      return;
+    }
+    const id = previousId + deltaId;
+    previousId = id;
+    offset += deltaIdLen;
+
+    if (id % 2n === 0n) {
+      // 偶数 Type: Value (varint)
+      try {
+        const [, valueLen] = decodeVarint(data, offset);
+        offset += valueLen;
+      } catch {
+        if (KNOWN_PROPERTY_TYPES.has(id)) {
+          throw new SessionError(
+            `key-value-pair value does not match serialization for known type 0x${id.toString(16)}`,
+            SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+          );
+        }
+        return;
+      }
+      continue;
+    }
+
+    // 奇数 Type: Length (varint) + Value
+    let length: bigint;
+    let lengthLen: number;
+    try {
+      [length, lengthLen] = decodeVarint(data, offset);
+    } catch {
+      if (KNOWN_PROPERTY_TYPES.has(id)) {
+        throw new SessionError(
+          `key-value-pair length does not match serialization for known type 0x${id.toString(16)}`,
+          SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+        );
+      }
+      return;
+    }
+    offset += lengthLen;
+    if (offset + Number(length) > data.length) {
+      // Length 宣言超過は別途扱うため、ここでは寛容契約どおり打ち切る
+      return;
+    }
+    offset += Number(length);
+  }
+}
+
+/**
  * Object Properties を検証する
  *
  * draft-ietf-moq-transport-21 §3.6:
