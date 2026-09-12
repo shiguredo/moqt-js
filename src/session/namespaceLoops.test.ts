@@ -3099,6 +3099,7 @@ test("namespaceStartPublicationStreamLoop: 確立前 REQUEST_ERROR で送信方�
     },
   );
 
+  // readable を close すると cancel を観測できないため FIN はしない
   ctx.readableController.enqueue(
     requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
   );

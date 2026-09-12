@@ -252,7 +252,7 @@ async function namespaceCloseRequestStreamQuiet(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<void> {
   await namespaceCloseWriterQuiet(writer);
-  await cancelStreamQuiet(reader, "request rejected before establishment");
+  await cancelStreamQuiet(reader, "REQUEST_ERROR received before establishment");
 }
 
 /**
@@ -902,9 +902,7 @@ export async function namespaceStartNamespaceStreamLoop(
             subscription.state = "closed";
             namespaceNotifyError(callbacks, error);
             reject(error);
-            // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
-            // 確立前は subscription をアプリへ渡さないため、送信方向の FIN と
-            // 受信方向の cancel をライブラリ側で行う。
+            // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
             await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
             return;
           }
@@ -1166,9 +1164,7 @@ export async function namespaceStartTracksStreamLoop(
             subscription.state = "closed";
             namespaceNotifyError(callbacks, error);
             reject(error);
-            // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
-            // 確立前は subscription をアプリへ渡さないため、送信方向の FIN と
-            // 受信方向の cancel をライブラリ側で行う。
+            // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
             await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
             return;
           }
@@ -1402,9 +1398,7 @@ export async function namespaceStartPublicationStreamLoop(
             namespaceNotifyError(callbacks, error);
             if (!resolved) {
               reject(error);
-              // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
-              // 確立前は publication をアプリへ渡さないため、送信方向の FIN と
-              // 受信方向の cancel をライブラリ側で行う。
+              // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
               await namespaceCloseRequestStreamQuiet(publication.writer, streamReader);
             }
             return;
