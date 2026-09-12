@@ -144,6 +144,13 @@ interface PendingFetch {
 interface PendingTrackStatus {
   resolve: (result: TrackStatusResult) => void;
   reject: (err: Error) => void;
+  /**
+   * 対象 Track の比較キー (fullTrackNameKey が生成する長さ付きキー)
+   *
+   * draft-ietf-moq-transport-21 §12.1: malformed Track を検出したら同一 Track の購読 /
+   * FETCH を cross-cancel するため、TRACK_STATUS 要求時の Full Track Name を保持する。
+   */
+  trackKey: string;
 }
 
 interface PendingRequestUpdate {
@@ -1267,6 +1274,21 @@ export async function bidiReadTrackStatusResponse(
       session.requestStreams.delete(requestId);
       pending.reject(error);
       session.closeWithError(error);
+    },
+    handleMalformedTrack: async (context, error) => {
+      const { session, requestId, pending } = context;
+      // draft-ietf-moq-transport-21 §9.13 / §12.1:
+      // TRACK_STATUS_OK は SUBSCRIBE_OK と同じ Track Properties を運ぶため、未知 Mandatory
+      // Track Property の受信は malformed Track の検出に当たる。reject を先に行い
+      // (後始末の完了にアプリの失敗通知を依存させない)、自方向を FIN で閉じてから
+      // 同一 Track の購読 / FETCH を cross-cancel する (§12.1 の MUST)。セッションは閉じない。
+      session.pendingTrackStatus.delete(requestId);
+      pending.reject(error);
+      // requestStreams のエントリから writer を引くため削除より先に FIN する
+      // (成功経路 / REQUEST_ERROR 経路と同じ順序)。
+      await closeRequestStreamWriter(session, requestId);
+      session.requestStreams.delete(requestId);
+      cancelMalformedTrackPeers(session, pending.trackKey, error);
     },
     handleError: (context, error) => {
       const { session, requestId, pending } = context;

@@ -1330,7 +1330,12 @@ export class SessionImpl implements Session {
   >();
   private pendingTrackStatus = new Map<
     bigint,
-    { resolve: (result: TrackStatusResult) => void; reject: (err: Error) => void }
+    {
+      resolve: (result: TrackStatusResult) => void;
+      reject: (err: Error) => void;
+      // malformed 検出時の cross-cancel 用に対象 Track の比較キーを保持する (§12.1)
+      trackKey: string;
+    }
   >();
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
@@ -2199,8 +2204,14 @@ export class SessionImpl implements Session {
     validateTrackNamespaceForSend(namespace, trackName);
 
     // REQUEST_OK を待つ Promise
+    // draft-ietf-moq-transport-21 §12.1: malformed Track の検出時に同一 Track の
+    // 購読 / FETCH を cross-cancel するため、比較キーを pending に保持する。
     const promise = new Promise<TrackStatusResult>((resolve, reject) => {
-      this.pendingTrackStatus.set(requestId, { resolve, reject });
+      this.pendingTrackStatus.set(requestId, {
+        resolve,
+        reject,
+        trackKey: fullTrackNameKey(namespace, trackName),
+      });
     });
 
     // TRACK_STATUS メッセージを双方向ストリームで送信
