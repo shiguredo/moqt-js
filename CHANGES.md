@@ -907,6 +907,10 @@
   - 握り潰しで通知直後の追跡状態の更新も実行され、FIN 補完時の NAMESPACE_DONE 二重通知も解消する
   - アプリのコールバック例外でセッションも閉じない (従来はライブラリのエラー型を throw するとセッションが閉じる場合があった)
   - @voluntas
+- [FIX] 確立前 REQUEST_ERROR で bidi ストリームの送信方向が閉じないのを修正する
+  - draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3 に基づき、namespace / tracks / publication の各ループで確立前に REQUEST_ERROR を受信したら、送信方向を FIN し受信方向を cancel (STOP_SENDING 相当) する
+  - 確立前は subscription / publication をアプリへ渡さないためライブラリ側で閉じる。cancel の失敗は無視し、確立前 Promise の reject と Map の掃除は従来どおり行う
+  - @voluntas
 
 ### misc
 

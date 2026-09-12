@@ -41,6 +41,7 @@ import {
   toSessionCloseError,
   toTrackPropertiesViolationSessionError,
 } from "./errors";
+import { cancelStreamQuiet } from "./stream";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
 import type { SessionInternal } from "./types";
@@ -122,6 +123,9 @@ async function namespaceHandleGoawayMessage(
     // REQUEST_OK 受信前 (resolved=false) の GOAWAY はマイグレーション扱いで
     // reject する。読み取りは継続して 2 通目 GOAWAY を検出する (§9.2 MUST)。
     // 送信方向・受信方向はここでは閉じない (アプリの再発行に委ねる)。
+    // 受信方向を開けたままにするのは 2 通目 GOAWAY の検出に読み取り継続が
+    // 必要なためであり、確立前に REQUEST_ERROR を受けた経路 (両方向を閉じる)
+    // とは意図的に非対称である (namespaceCloseRequestStreamQuiet 参照)。
     reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
     return "goaway-received";
   }
@@ -225,6 +229,37 @@ async function namespaceCloseWriterQuiet(
   } catch {
     // 既に閉じている / abort 済みの場合は無視
   }
+}
+
+/**
+ * 確立前に要求が失敗したとき、専用ストリームの両方向を閉じる
+ *
+ * draft-ietf-moq-transport-21 §6.4.2.2 (Graceful Request Stream Closure):
+ * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
+ *  further to send on that direction and will not need to respond to a future
+ *  REQUEST_UPDATE."
+ * draft-ietf-moq-transport-21 §6.4.2.3 (Request Cancellation and Rejection):
+ * "Implementations cancel a request by abruptly terminating any directions of
+ *  the stream that are still open, using RESET_STREAM for a direction they are
+ *  sending and STOP_SENDING for a direction they are receiving."
+ *
+ * §6.4.2.3 の「アプリケーション処理なしで要求を拒否する側は REQUEST_ERROR と FIN を
+ * 送る」SHOULD は responder 側のものである。requester 側の FIN は §6.4.2.2 の
+ * 一般則 (送るものが無く将来の REQUEST_UPDATE にも応答しない) に従う。
+ *
+ * 確立前は subscription / publication をアプリへ渡さないため、アプリからは
+ * 閉じられない。送信方向を FIN し、受信方向を cancel (STOP_SENDING 相当) する。
+ * どちらの失敗も無視し、reader の releaseLock は finally に委ねる。
+ *
+ * @param writer - 送信方向の writer (未指定なら FIN しない)
+ * @param reader - 受信方向の reader
+ */
+async function namespaceCloseRequestStreamQuiet(
+  writer: WritableStreamDefaultWriter<Uint8Array> | undefined,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  await namespaceCloseWriterQuiet(writer);
+  await cancelStreamQuiet(reader, "REQUEST_ERROR received before establishment");
 }
 
 /**
@@ -874,6 +909,8 @@ export async function namespaceStartNamespaceStreamLoop(
             subscription.state = "closed";
             namespaceNotifyError(callbacks, error);
             reject(error);
+            // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
+            await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
             return;
           }
 
@@ -980,7 +1017,11 @@ export async function namespaceStartNamespaceStreamLoop(
     }
   } finally {
     subscription.state = "closed";
-    streamReader.releaseLock();
+    try {
+      streamReader.releaseLock();
+    } catch {
+      // 既に解放済みの場合は無視
+    }
     session.namespaceSubscriptions.delete(requestId);
   }
 }
@@ -1130,6 +1171,8 @@ export async function namespaceStartTracksStreamLoop(
             subscription.state = "closed";
             namespaceNotifyError(callbacks, error);
             reject(error);
+            // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
+            await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
             return;
           }
 
@@ -1209,7 +1252,11 @@ export async function namespaceStartTracksStreamLoop(
     }
   } finally {
     subscription.state = "closed";
-    streamReader.releaseLock();
+    try {
+      streamReader.releaseLock();
+    } catch {
+      // 既に解放済みの場合は無視
+    }
     session.tracksSubscriptions.delete(requestId);
   }
 }
@@ -1358,6 +1405,8 @@ export async function namespaceStartPublicationStreamLoop(
             namespaceNotifyError(callbacks, error);
             if (!resolved) {
               reject(error);
+              // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
+              await namespaceCloseRequestStreamQuiet(publication.writer, streamReader);
             }
             return;
           }
