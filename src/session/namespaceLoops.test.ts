@@ -2199,3 +2199,185 @@ test("namespaceStartPublicationStreamLoop: malformed な REQUEST_OK で KEY_VALU
   // finally で publication が掃除される
   assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
 });
+
+// ============================================================================
+// 空必須メッセージの未知 Mandatory Track Property
+// draft-ietf-moq-transport-21 §9.3 (REQUEST_OK) / §3.6 (Mandatory Track Properties)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.3:
+ * 「they are empty in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
+ *  PUBLISH_NAMESPACE_OK.  If an endpoint receives Track Properties in one of
+ *  these messages it MUST close the session with a PROTOCOL_VIOLATION.」
+ * 未知 Mandatory Track Property (0x4000-0x7FFF) は decodeProperties が
+ * MalformedTrackError を throw するため、初期 SUBSCRIBE_NAMESPACE_OK では
+ * PROTOCOL_VIOLATION へ変換して閉じ、購読の Promise を reject する。
+ */
+test("namespaceStartNamespaceStreamLoop: 初期 SUBSCRIBE_NAMESPACE_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let rejectedError: Error | undefined;
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0x4000n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 確立前の違反は呼び出し元の Promise を reject してから閉じる
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.3:
+ * 確立後の REQUEST_UPDATE_OK に未知 Mandatory Track Property を含めた場合も
+ * PROTOCOL_VIOLATION で閉じ、保留中の更新を違反 SessionError 自体で reject する
+ * (update() のハング防止)。prefix は反映しない。
+ */
+test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+
+  const pending = registerPendingUpdate(ctx.session, ctx.requestId);
+  ctx.subscription.pendingPrefix = ["live", "sports"];
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0x4000n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(pending.resolved);
+  assert.strictEqual(pending.rejected, ctx.getClosedWithError());
+  assert.deepEqual(ctx.subscription.namespacePrefix, ["live"]);
+  assert.isUndefined(ctx.subscription.pendingPrefix);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.3:
+ * tracks ストリームの確立後 REQUEST_UPDATE_OK も空必須であり、未知 Mandatory
+ * Track Property では PROTOCOL_VIOLATION で閉じる。
+ */
+test("namespaceStartTracksStreamLoop: REQUEST_UPDATE 応答の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+
+  const pending = registerPendingUpdate(ctx.session, ctx.requestId);
+  ctx.subscription.pendingPrefix = ["live", "sports"];
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0x4000n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isFalse(pending.resolved);
+  assert.strictEqual(pending.rejected, ctx.getClosedWithError());
+  assert.deepEqual(ctx.subscription.namespacePrefix, ["live"]);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.3:
+ * SUBSCRIBE_TRACKS_OK は空必須の列挙に含まれず Track Properties を運べるため、
+ * 未知 Mandatory Track Property を含んでいてもセッションは閉じない (非退行)。
+ * 読み取り失敗として購読の Promise が reject される既存挙動を維持する。
+ */
+test("namespaceStartTracksStreamLoop: 初期 SUBSCRIBE_TRACKS_OK の未知 Mandatory Track Property ではセッションを閉じない", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let rejectedError: Error | undefined;
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0x4000n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isDefined(rejectedError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.3:
+ * 初期 PUBLISH_NAMESPACE_OK も Track Properties が空必須であり、未知 Mandatory
+ * Track Property では PROTOCOL_VIOLATION で閉じる。確立前の検証失敗は呼び出し元の
+ * Promise を reject してから閉じる。
+ */
+test("namespaceStartPublicationStreamLoop: 初期 PUBLISH_NAMESPACE_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createPublicationLoopTestContext();
+  let rejectedError: Error | undefined;
+
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0x4000n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
+  assert.strictEqual(rejectedError, ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.3:
+ * publication ストリームの確立後 (2 通目) REQUEST_OK に未知 Mandatory Track Property を
+ * 含めた場合も PROTOCOL_VIOLATION で閉じる。重複 REQUEST_OK の違反と同じコードであり、
+ * 未知 Mandatory の検出は decode 時点で先に成立する。
+ */
+test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createPublicationLoopTestContext();
+
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter, [{ id: 0x4000n, value: 1n }]));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
+});

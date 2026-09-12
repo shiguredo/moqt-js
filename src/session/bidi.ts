@@ -92,6 +92,7 @@ import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   isPeerStreamError,
   toSessionCloseError,
+  toTrackPropertiesViolationSessionError,
 } from "./errors";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { publishResetPublisherStream, publishSendPublishDoneWithoutPublisher } from "./publish";
@@ -784,6 +785,21 @@ export async function bidiReadPublishResponse(
       session.requestStreams.delete(requestId);
       pending.reject(error);
       session.closeWithError(error);
+    },
+    handleMalformedTrack: (context, error) => {
+      const { session, requestId, pending } = context;
+      // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+      // PUBLISH_OK の Track Properties は空が必須であり、受信したら PROTOCOL_VIOLATION で
+      // セッションを閉じる MUST。未知 Mandatory Track Property (0x4000-0x7FFF) は
+      // decodeRequestOkPayload が MalformedTrackError を throw するため、既知 Type の
+      // 非空を検出する validateRequestOkNoTrackProperties には到達しない。
+      // 削除 → reject → close の順序と、reject と close に同一の SessionError を
+      // 渡す契約は既存の違反経路に揃える。
+      const sessionError = toTrackPropertiesViolationSessionError(error);
+      session.pendingPublish.delete(requestId);
+      session.requestStreams.delete(requestId);
+      pending.reject(sessionError);
+      session.closeWithError(sessionError);
     },
     handleError: (context, error) => {
       const { session, requestId, pending } = context;
@@ -1762,6 +1778,37 @@ function handleRequestStreamReadError(
   }
 }
 
+/**
+ * 確立後の REQUEST_OK (REQUEST_UPDATE_OK) を処理する
+ *
+ * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * REQUEST_UPDATE_OK の Track Properties は空必須であり、受信したら PROTOCOL_VIOLATION で
+ * セッションを閉じる MUST。未知 Mandatory Track Property (0x4000-0x7FFF) は decode が
+ * MalformedTrackError を throw するため、保留中の更新を reject してから閉じる
+ * (既知 Type の非空を検出する bidiHandleRequestUpdateOk と同じ順序)。
+ *
+ * @returns 読み取りを継続するなら true、違反で閉じたなら false (呼び出し側は return する)
+ */
+function handleRequestUpdateOkMessage(
+  session: BidiSessionInternal,
+  payload: Uint8Array,
+  requestId: bigint,
+): boolean {
+  try {
+    bidiHandleRequestUpdateOk(session, payload, requestId);
+    return true;
+  } catch (err) {
+    if (!(err instanceof MalformedTrackError)) {
+      throw err;
+    }
+    const sessionError = toTrackPropertiesViolationSessionError(err);
+    deleteFillTargetsForPendingUpdates(session, requestId);
+    rejectPendingRequestUpdates(session, requestId, sessionError);
+    session.closeWithError(sessionError);
+    return false;
+  }
+}
+
 export async function bidiReadRequestStreamMessages(
   session: BidiSessionInternal,
   requestId: bigint,
@@ -1864,7 +1911,12 @@ export async function bidiReadRequestStreamMessages(
             break;
           }
           case MessageType.REQUEST_OK: {
-            bidiHandleRequestUpdateOk(session, msg.payload, requestId);
+            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+            // 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、Track Properties は
+            // 空が必須 (違反処理はヘルパー内で行う)。
+            if (!handleRequestUpdateOkMessage(session, msg.payload, requestId)) {
+              return;
+            }
             break;
           }
           case MessageType.REQUEST_ERROR: {
