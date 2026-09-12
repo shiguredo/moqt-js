@@ -1,7 +1,7 @@
 # TRACK_STATUS_OK の malformed 応答で cross-cancel とストリーム後始末が行われない
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-track-status-malformed-handling
 - Polished: 2026-09-12
 
@@ -49,3 +49,14 @@ draft-ietf-moq-transport-21 §9.13 は「A potential subscriber sends TRACK_STAT
 - `issues/closed/0571-bug-pending-track-cross-cancel-missing.md` / `issues/closed/0574-bug-full-track-name-collision.md` (cross-cancel の走査対象と Full Track Name の比較キー)
 - `issues/0578-refactor-bidi-response-handler-dedup.md` / `issues/0579-test-bidi-response-missing-branches.md` (応答リーダーのハンドラ表の共通化と未テスト分岐。本 issue を先に処理し、共通化の際は TRACK_STATUS 経路の malformed も同じ形で表現できるようにする)
 - 対象外: `bidiReadTrackStatusResponse` の `handleGoaway` / `handleUnexpected` が writer を閉じない点は本 issue の対象外とする (malformed 検出の経路ではない)
+
+## 解決方法
+
+TRACK_STATUS_OK の未知 Mandatory Track Property を malformed Track の検出として扱い、bidi ストリームの後始末と §12.1 の cross-cancel を行うようにした。
+
+- `src/session/bidi.ts` の `bidiReadTrackStatusResponse` に `handleMalformedTrack` を追加し、pending の reject → 自方向の FIN (`closeRequestStreamWriter`) → `pendingTrackStatus` / `requestStreams` の削除 → `cancelMalformedTrackPeers` の順で処理する (セッションは閉じない)
+- `PendingTrackStatus` に比較キー `trackKey` を追加し、`SessionImpl.trackStatus()` の pending 登録時に `fullTrackNameKey(namespace, trackName)` を設定する。cross-cancel はこのキーで同一 Full Track Name の購読 / FETCH を判定する
+- 既知 Type の serialization 不一致 (`KEY_VALUE_FORMATTING_ERROR`) は `toSessionCloseError` 経由の `handleCloseError` のままとし、未知 Mandatory の経路とは分けたままにする
+- `src/session/bidi.test.ts` に、同一 Full Track Name の購読 / FETCH と別 Track の購読 / FETCH を登録した状態で未知 Mandatory Track Property を含む TRACK_STATUS_OK を注入し、reject・FIN (`await writer.closed`)・cross-cancel・別 Track 非 cancel・内部マップに残留なしを検証するテストを追加した (変更前の実装では FIN が行われず失敗する)
+- 既存の TRACK_STATUS テスト 6 件に `trackKey` を追随させた
+- `CHANGES.md` の `## develop` に `[FIX]` を追加した
