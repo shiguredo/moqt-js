@@ -61,7 +61,9 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
   const requestId = 10n;
 
   let readableController!: ReadableStreamDefaultController<Uint8Array>;
-  // reader.cancel() による受信方向のクローズを観測する
+  // reader.cancel() による受信方向のクローズを観測する。
+  // stream が既に closed / errored の場合は source の cancel は呼ばれないため、
+  // cancel を観測するテストは readable を close せずに検証する。
   let readableCancelled = false;
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -1764,7 +1766,9 @@ function createPublicationLoopTestContext(): {
   const requestId = 10n;
 
   let readableController!: ReadableStreamDefaultController<Uint8Array>;
-  // reader.cancel() による受信方向のクローズを観測する
+  // reader.cancel() による受信方向のクローズを観測する。
+  // stream が既に closed / errored の場合は source の cancel は呼ばれないため、
+  // cancel を観測するテストは readable を close せずに検証する。
   let readableCancelled = false;
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {

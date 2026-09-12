@@ -123,6 +123,9 @@ async function namespaceHandleGoawayMessage(
     // REQUEST_OK 受信前 (resolved=false) の GOAWAY はマイグレーション扱いで
     // reject する。読み取りは継続して 2 通目 GOAWAY を検出する (§9.2 MUST)。
     // 送信方向・受信方向はここでは閉じない (アプリの再発行に委ねる)。
+    // 受信方向を開けたままにするのは 2 通目 GOAWAY の検出に読み取り継続が
+    // 必要なためであり、確立前に REQUEST_ERROR を受けた経路 (両方向を閉じる)
+    // とは意図的に非対称である (namespaceCloseRequestStreamQuiet 参照)。
     reject(new Error(`request stream goaway: ${newSessionUri || "no redirect URI"}`));
     return "goaway-received";
   }
@@ -239,6 +242,10 @@ async function namespaceCloseWriterQuiet(
  * "Implementations cancel a request by abruptly terminating any directions of
  *  the stream that are still open, using RESET_STREAM for a direction they are
  *  sending and STOP_SENDING for a direction they are receiving."
+ *
+ * §6.4.2.3 の「アプリケーション処理なしで要求を拒否する側は REQUEST_ERROR と FIN を
+ * 送る」SHOULD は responder 側のものである。requester 側の FIN は §6.4.2.2 の
+ * 一般則 (送るものが無く将来の REQUEST_UPDATE にも応答しない) に従う。
  *
  * 確立前は subscription / publication をアプリへ渡さないため、アプリからは
  * 閉じられない。送信方向を FIN し、受信方向を cancel (STOP_SENDING 相当) する。
