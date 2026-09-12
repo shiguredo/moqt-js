@@ -162,6 +162,28 @@ function namespaceRejectAndCloseWithError(
 }
 
 /**
+ * リクエスト (購読 / 公開) 単位の error コールバックを通知する
+ *
+ * アプリのコールバック例外は握り潰す (後始末を止めない)。
+ * createNamespaceActiveTracker.emitAll / namespaceHandleGoaway と同じ方針で、
+ * 確立前の失敗も含めて同じ callbacks へ通知する。
+ * 通知先は NamespaceSubscriptionCallbacks / TracksSubscriptionCallbacks /
+ * NamespacePublicationCallbacks の callbacks.error であり、
+ * SessionImpl.closeWithError が debug 記録に残すセッション単位の
+ * ConnectCallbacks.error とは別系統である。ここで握り潰した throw は記録しない。
+ */
+function namespaceNotifyError(
+  callbacks: { error?: (error: Error) => void } | undefined,
+  error: Error,
+): void {
+  try {
+    callbacks?.error?.(error);
+  } catch {
+    // 通知の失敗で後始末を止めない
+  }
+}
+
+/**
  * namespace 系ストリームの送信方向を FIN で閉じる (失敗は無視)
  *
  * draft-ietf-moq-transport-21 §6.4.2.2:
@@ -830,7 +852,7 @@ export async function namespaceStartNamespaceStreamLoop(
             }
             const error = decodeRequestErrorToRequestError(messagePayload);
             subscription.state = "closed";
-            callbacks.error?.(error);
+            namespaceNotifyError(callbacks, error);
             reject(error);
             return;
           }
@@ -914,7 +936,7 @@ export async function namespaceStartNamespaceStreamLoop(
     if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
       if (!isSessionClosedError(normalizedError)) {
-        callbacks.error?.(normalizedError);
+        namespaceNotifyError(callbacks, normalizedError);
       }
       // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
       if (!resolved && !requestMigrated) {
@@ -1084,7 +1106,7 @@ export async function namespaceStartTracksStreamLoop(
             }
             const error = decodeRequestErrorToRequestError(messagePayload);
             subscription.state = "closed";
-            callbacks.error?.(error);
+            namespaceNotifyError(callbacks, error);
             reject(error);
             return;
           }
@@ -1141,7 +1163,7 @@ export async function namespaceStartTracksStreamLoop(
     if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
       if (!isSessionClosedError(normalizedError)) {
-        callbacks.error?.(normalizedError);
+        namespaceNotifyError(callbacks, normalizedError);
       }
       // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
       if (!resolved && !requestMigrated) {
@@ -1309,7 +1331,7 @@ export async function namespaceStartPublicationStreamLoop(
                 : undefined,
             );
             publication.state = "closed";
-            callbacks?.error?.(error);
+            namespaceNotifyError(callbacks, error);
             if (!resolved) {
               reject(error);
             }
@@ -1366,7 +1388,7 @@ export async function namespaceStartPublicationStreamLoop(
     if (publication.state !== "closed" && !goawayReceived) {
       publication.state = "closed";
       const wrapped = error instanceof Error ? error : new Error(String(error));
-      callbacks?.error?.(wrapped);
+      namespaceNotifyError(callbacks, wrapped);
       // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
       if (!resolved && !requestMigrated) {
         reject(wrapped);
