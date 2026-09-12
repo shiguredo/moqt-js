@@ -7953,6 +7953,8 @@ test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN す�
   const ctx = createOkResponseReadTestContext();
   let resolved = false;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
     resolve: () => {
       resolved = true;
     },
@@ -7988,6 +7990,8 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN �
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
     resolve: () => {},
     reject: (error: Error) => {
       rejected = error;
@@ -8030,6 +8034,8 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
     resolve: () => {},
     reject: (error: Error) => {
       rejected = error;
@@ -8274,6 +8280,8 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
     resolve: () => {},
     reject: (error: Error) => {
       ctx.order.push("reject");
@@ -9765,6 +9773,8 @@ test("bidiReadTrackStatusResponse: malformed Track Properties で KEY_VALUE_FORM
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
     resolve: () => {},
     reject: (error: Error) => {
       ctx.order.push("reject");
@@ -9841,6 +9851,8 @@ test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除され
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
     resolve: () => {},
     reject: (error: Error) => {
       rejected = error;
@@ -11360,4 +11372,83 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
   assert.deepEqual(abortReasons, ["fetch cancelled"]);
   assert.isFalse(session.requestStreams.has(3n));
   assert.isFalse(session.fetchers.has(3n));
+});
+
+// ============================================================================
+// bidiReadTrackStatusResponse の malformed 検出 (未知 Mandatory Track Property)
+// draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS) / §12.1 (Malformed Tracks)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.13 / §12.1:
+ * TRACK_STATUS_OK は SUBSCRIBE_OK と同じ Track Properties を運ぶため、未知 Mandatory
+ * Track Property (0x4000-0x7FFF) の受信は malformed Track の検出に当たる。pending を
+ * reject して自方向を FIN し、同一 Full Track Name の購読 / FETCH を cross-cancel する。
+ * 別 Track は cancel せず、セッションも閉じない。
+ */
+test("bidiReadTrackStatusResponse: 未知 Mandatory Track Property で FIN と cross-cancel を行う", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const targetSubscriber = new SubscriberImpl(["live"], "video", 20n, 7n, () => {});
+  const otherSubscriber = new SubscriberImpl(["live"], "other", 21n, 8n, () => {});
+  const targetFetcher = new FetcherImpl(["live"], "video", 30n, () => {});
+  const otherFetcher = new FetcherImpl(["live"], "other", 31n, () => {});
+  ctx.session.subscribersByAlias.set(7n, [targetSubscriber]);
+  ctx.session.subscribersByAlias.set(8n, [otherSubscriber]);
+  ctx.session.fetchers.set(30n, targetFetcher);
+  ctx.session.fetchers.set(31n, otherFetcher);
+  // FETCH は onCancel 経由でストリームの cancel に到達することを観測する
+  const cancelledFetchers: string[] = [];
+  targetFetcher.onCancel = async () => {
+    cancelledFetchers.push("target");
+  };
+  otherFetcher.onCancel = async () => {
+    cancelledFetchers.push("other");
+  };
+
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    trackKey: fullTrackNameKey(["live"], "video"),
+  });
+  const writer = ctx.session.requestStreams.get(ctx.requestId)?.writer;
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 未知 Mandatory Track Property (0x4000-0x7FFF) を含む TRACK_STATUS_OK
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0x4000n, value: 1n }],
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, okPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+  // cross-cancel は fire-and-forget のため到達を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // pending は malformed エラーで reject され、セッションは閉じない
+  assert.instanceOf(rejected, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  // 自方向は FIN され、requestStreams / pendingTrackStatus から削除される
+  assert.isDefined(writer);
+  await writer!.closed;
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
+  // 同一 Track の購読 / FETCH だけが cancel される
+  assert.equal(targetSubscriber.state, "closed");
+  assert.equal(targetFetcher.state, "closed");
+  assert.deepEqual(cancelledFetchers, ["target"]);
+  assert.equal(otherSubscriber.state, "active");
+  assert.equal(otherFetcher.state, "active");
 });
