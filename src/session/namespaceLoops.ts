@@ -193,15 +193,11 @@ function namespaceNotifyError(
  * 扱いにし、createNamespaceActiveTracker.emitAll の補完通知とも揃える。
  * 握り潰した例外は再 throw もデバッグ記録も行わない。
  *
- * @param callback - 呼び出すコールバック (未指定なら何もしない)
- * @param args - コールバックへ渡す引数
+ * @param invoke - コールバック呼び出し (レシーバを保つため呼び出し側で組み立てる)
  */
-function namespaceInvokeCallbackQuiet<T extends unknown[]>(
-  callback: ((...args: T) => void) | undefined,
-  ...args: T
-): void {
+function namespaceInvokeCallbackQuiet(invoke: () => void): void {
   try {
-    callback?.(...args);
+    invoke();
   } catch {
     // 通知の失敗で後始末を止めない
   }
@@ -913,7 +909,9 @@ export async function namespaceStartNamespaceStreamLoop(
             const suffixKey = namespaceSuffixKey(suffixStrings);
             seenNamespaceSuffixes.add(suffixKey);
             activeTracker.add(suffixStrings);
-            namespaceInvokeCallbackQuiet(callbacks.onNamespace, suffixStrings);
+            // 通知の throw を握り潰しても追跡状態は更新済みのため、
+            // 対応する NAMESPACE_DONE は onNamespaceDone として届き得る
+            namespaceInvokeCallbackQuiet(() => callbacks.onNamespace?.(suffixStrings));
             break;
           }
 
@@ -929,7 +927,7 @@ export async function namespaceStartNamespaceStreamLoop(
               );
               return;
             }
-            namespaceInvokeCallbackQuiet(callbacks.onNamespaceDone, suffixStrings);
+            namespaceInvokeCallbackQuiet(() => callbacks.onNamespaceDone?.(suffixStrings));
             // NAMESPACE_DONE 済みは FIN / RESET 時の補完対象から外す。
             activeTracker.remove(suffixStrings);
             break;
@@ -1164,7 +1162,9 @@ export async function namespaceStartTracksStreamLoop(
             const decodedMsg = decodePublishSkippedPayload(messagePayload);
             const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
             const trackName = new TextDecoder().decode(decodedMsg.trackName);
-            namespaceInvokeCallbackQuiet(callbacks.onPublishSkipped, suffixStrings, trackName);
+            namespaceInvokeCallbackQuiet(() =>
+              callbacks.onPublishSkipped?.(suffixStrings, trackName),
+            );
             break;
           }
 

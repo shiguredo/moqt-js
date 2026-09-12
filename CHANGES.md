@@ -903,8 +903,9 @@
   - draft-ietf-moq-transport-21 §8.3 の KEY_VALUE_FORMATTING_ERROR はエラーコードを保持して閉じる必要があるため、fill fetch ストリームの受信 catch を他の受信経路と同じ変換に揃える
   - @voluntas
 - [FIX] namespace 系ループの通知コールバックの throw で購読が終了するのを修正する
-  - NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED の通知を namespaceNotifyError と同じ握り潰しヘルパー経由にし、アプリのコールバック例外で購読が終了しないようにする
+  - NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED の通知を namespaceNotifyError と同じ方針のヘルパー経由にし、アプリのコールバック例外で購読が終了しないようにする
   - 握り潰しで通知直後の追跡状態の更新も実行され、FIN 補完時の NAMESPACE_DONE 二重通知も解消する
+  - アプリのコールバック例外でセッションも閉じない (従来はライブラリのエラー型を throw するとセッションが閉じる場合があった)
   - @voluntas
 
 ### misc

@@ -1294,6 +1294,42 @@ test("namespaceStartNamespaceStreamLoop: onNamespace の throw で購読が終�
 });
 
 /**
+ * 通知コールバックが callbacks をレシーバとして呼ばれる (`this` が保たれる)
+ * ことを検証する。関数参照だけを取り出して呼ぶとオブジェクトリテラルの
+ * メソッドで `this` が失われ、握り潰しにより無言でハンドラが動かなくなる。
+ */
+test("namespaceStartNamespaceStreamLoop: onNamespace の this が callbacks を指す", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  // `this` を参照するオブジェクトリテラルのメソッドを注入する
+  ctx.subscription.callbacks.onNamespace = function onNamespace(
+    this: Record<string, unknown>,
+  ): void {
+    this.invokedWithReceiver = true;
+  };
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const suffix = createTrackNamespace(["live", "sports"]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isTrue(ctx.subscription.callbacks.invokedWithReceiver === true);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
  * onNamespaceDone の throw を握り潰し、購読 (ループ) を継続することを検証する。
  * throw の後に届く NAMESPACE が処理されることを観測する。
  */
