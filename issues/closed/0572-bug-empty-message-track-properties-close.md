@@ -1,7 +1,7 @@
 # 空必須メッセージの未知 Mandatory Track Property でセッションを閉じない
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-empty-message-track-properties-close
 - Polished: 2026-09-12
 
@@ -24,10 +24,10 @@ draft-ietf-moq-transport-21 §9.3 は「Track Properties are populated in TRACK_
 3. Track Properties のデコード自体は現行どおり行う。既知 Type の serialization 不一致は §8.3 の MUST により KEY_VALUE_FORMATTING_ERROR で閉じる現行挙動を維持し、デコード前の残りバイト検査で置き換えない (置き換えると §8.3 の MUST を破り、Track Properties を運べる TRACK_STATUS_OK / SUBSCRIBE_TRACKS_OK まで巻き込む)。
 4. 変更対象は、空必須メッセージの Track Properties をデコードする次の地点とする (Track Properties のデコードは各ループ / 応答リーダー内で行われるため、変換も decode の呼び出し元で行う)。
    - PUBLISH_OK: `bidiReadPublishResponse` (`src/session/bidi.ts`) の応答リーダーに `handleMalformedTrack` を定義して閉じる
-   - 送信側 REQUEST_UPDATE_OK: `bidiReadRequestStreamMessages` / `handleRequestStreamReadError` の経路 (`src/session/bidi.ts`)。`rejectPendingRequestUpdates` で保留中の更新を reject してから閉じる
+   - bidi リクエストストリームの確立後 REQUEST_UPDATE_OK: `bidiReadRequestStreamMessages` の `MessageType.REQUEST_OK` 処理 (`src/session/bidi.ts`)。`rejectPendingRequestUpdates` で保留中の更新を reject してから閉じる (`handleRequestStreamReadError` は REQUEST_OK 以外の読み取りエラー用であり、そちらでは閉じない)
    - namespace ストリームの SUBSCRIBE_NAMESPACE_OK / 確立後の REQUEST_UPDATE_OK: `namespaceStartNamespaceStreamLoop` の `decodeRequestOkPayload` 呼び出し (`src/session/namespaceLoops.ts`)。保留中の更新には `rejectPendingNamespaceUpdates` を使う
-   - tracks ストリームの確立後の REQUEST_UPDATE_OK: `namespaceStartTracksStreamLoop` の `decodeRequestOkPayload` 呼び出し (SUBSCRIBE_TRACKS_OK 自体は対象外)
-   - publication ストリームの PUBLISH_NAMESPACE_OK / 確立後の REQUEST_UPDATE_OK: `namespaceStartPublicationStreamLoop` の `decodeRequestOkPayload` 呼び出し
+   - tracks ストリームの確立後の REQUEST_UPDATE_OK: `namespaceStartTracksStreamLoop` の `decodeRequestOkPayload` 呼び出し。保留中の更新には `rejectPendingNamespaceUpdates` を使う (SUBSCRIBE_TRACKS_OK 自体は対象外)
+   - publication ストリームの PUBLISH_NAMESPACE_OK: `namespaceStartPublicationStreamLoop` の `decodeRequestOkPayload` 呼び出し (publication ストリームは REQUEST_UPDATE を扱わず、確立後の 2 通目 REQUEST_OK は既存の重複違反として閉じる)
 5. SUBSCRIBE_TRACKS_OK は §9.3 の空必須リストに含まれず Track Properties を運べるため対象外とする (`namespaceValidateInitialOk` の `checkTrackProperties = false` を維持する)。
 6. 経路ごとの後始末は既存パターンに揃える: pending / requestStreams / fillFetchTargets の削除 → pending の reject → `closeWithError` の順とし、reject と close には同一の `SessionError` を渡す。
 7. 未知 Mandatory Track Property を含む各メッセージで close されるテストを追加する。
@@ -52,3 +52,15 @@ draft-ietf-moq-transport-21 §9.3 は「Track Properties are populated in TRACK_
 - `MalformedTrackError` / `SessionError` / `SessionErrorCode` (`src/error.ts`)
 - `toSessionCloseError` (`src/session/errors.ts`)
 - `issues/closed/0567-bug-subscribe-ok-fetch-ok-cross-cancel.md` (MalformedTrackError の cancel 経路。SUBSCRIBE_OK / FETCH_OK でセッションを閉じない非退行条件の根拠)
+
+## 解決方法
+
+空必須メッセージ (PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK) で Track Properties を受信したら PROTOCOL_VIOLATION でセッションを閉じるようにした (draft-ietf-moq-transport-21 §9.3 の MUST)。
+
+- `src/session/errors.ts` に `toTrackPropertiesViolationSessionError` を追加し、未知 Mandatory Track Property (0x4000-0x7FFF) で `decodeProperties` が throw する `MalformedTrackError` を `SessionError(PROTOCOL_VIOLATION)` に変換する。共有の `toSessionCloseError` / `toProtocolViolationSessionError` は変更せず、SUBSCRIBE_OK / FETCH_OK / データストリームの cancel (セッションは閉じない) を維持する
+- `src/session/bidi.ts` の `bidiReadPublishResponse` に `handleMalformedTrack` を追加し、PUBLISH_OK で pendingPublish / requestStreams を削除 → reject → close する
+- `src/session/bidi.ts` に `handleRequestUpdateOkMessage` を追加し、bidi リクエストストリームの確立後 REQUEST_UPDATE_OK で fill 関連付けを削除 → 保留中の更新を reject → close する (`MalformedTrackError` 以外は再 throw し、既知 Type の serialization 不一致は §8.3 の KEY_VALUE_FORMATTING_ERROR のまま)
+- `src/session/namespaceLoops.ts` に `namespaceHandleRequestOkMessage` を追加し、namespace / tracks ループの初期 OK と確立後 REQUEST_UPDATE_OK を処理する (確立後は `rejectPendingNamespaceUpdates` → close)。SUBSCRIBE_TRACKS_OK は §9.3 の空必須一覧に含まれないため対象外とし、従来どおりセッションを閉じない
+- `src/session/namespaceLoops.ts` に `namespaceDecodeRequestOkWithoutTrackProperties` を追加し、publication ループの初期 PUBLISH_NAMESPACE_OK を処理する
+- テストを 8 件追加した (bidi.test.ts 2 件 / namespaceLoops.test.ts 6 件)。7 件は変更前の実装では失敗し、残り 1 件は SUBSCRIBE_TRACKS_OK の非退行を検証する
+- `CHANGES.md` の `## develop` に `[FIX]` を追加した

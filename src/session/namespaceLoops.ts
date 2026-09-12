@@ -27,6 +27,7 @@ import {
   validateParameterScope,
 } from "../message/parameterScope";
 import {
+  MalformedTrackError,
   ProtocolViolationError,
   RequestError,
   SessionError,
@@ -38,6 +39,7 @@ import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   isSessionClosedError,
   toSessionCloseError,
+  toTrackPropertiesViolationSessionError,
 } from "./errors";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
 import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
@@ -414,6 +416,121 @@ export function rejectPendingNamespaceUpdates(
 }
 
 /**
+ * namespace 系ループの REQUEST_OK を処理する
+ *
+ * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * Track Properties が空必須のメッセージ (PUBLISH_OK / REQUEST_UPDATE_OK /
+ * SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK) で Track Properties を受信したら
+ * PROTOCOL_VIOLATION でセッションを閉じる MUST。未知 Mandatory Track Property
+ * (0x4000-0x7FFF) は decodeRequestOkPayload が MalformedTrackError を throw するため、
+ * その違反をここで処理する。
+ * 確立後 (requestUpdate) は §9.5.2 の REQUEST_UPDATE_OK として
+ * handleNamespaceRequestUpdateOk に委譲する。
+ *
+ * @param streamKind namespace / tracks のどちらのループか。初期 OK が Track Properties を
+ *   運べるのは SUBSCRIBE_TRACKS_OK (tracks) だけで、§9.3 の空必須一覧に含まれない。
+ *   確立後 REQUEST_UPDATE_OK はどちらも空必須であり、確立前の違反は従来どおり
+ *   ループの catch に委ねる。
+ * @returns "closed" = 違反で閉じた (呼び出し側は return)、"established" = 初期 OK を
+ *   受理した (呼び出し側は resolved を立てて購読を確立する)、"continue" = 確立後の
+ *   REQUEST_UPDATE_OK を処理した (呼び出し側は読み取りを継続する)
+ */
+function namespaceHandleRequestOkMessage(
+  session: SessionInternal,
+  requestId: bigint,
+  payload: Uint8Array,
+  subscription: NamespaceSubscriptionState | TracksSubscriptionState,
+  resolved: boolean,
+  reject: (err: Error) => void,
+  streamKind: "namespace" | "tracks",
+  onPrefixApplied?: () => void,
+): "closed" | "established" | "continue" {
+  // 初期 OK が Track Properties を運べるのは SUBSCRIBE_TRACKS_OK だけである
+  // (§9.3 の空必須一覧に含まれない)。
+  const initialAllowsTrackProperties = streamKind === "tracks";
+  let requestOk: ReturnType<typeof decodeRequestOkPayload>;
+  try {
+    requestOk = decodeRequestOkPayload(payload);
+  } catch (err) {
+    if (!(err instanceof MalformedTrackError) || (initialAllowsTrackProperties && !resolved)) {
+      throw err;
+    }
+    // 確立後は保留中の更新を reject してから閉じる (既知 Type の非空を検出する
+    // handleNamespaceRequestUpdateOk と同じ順序)。確立前は呼び出し元の Promise を
+    // reject してから閉じる。
+    const sessionError = toTrackPropertiesViolationSessionError(err);
+    if (resolved) {
+      rejectPendingNamespaceUpdates(session, requestId, subscription, sessionError);
+      session.closeWithError(sessionError);
+    } else {
+      namespaceRejectAndCloseWithError(session, reject, sessionError);
+    }
+    return "closed";
+  }
+  if (resolved) {
+    // draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+    // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
+    if (
+      !handleNamespaceRequestUpdateOk(
+        session,
+        requestId,
+        requestOk,
+        subscription,
+        streamKind,
+        onPrefixApplied,
+      )
+    ) {
+      return "closed";
+    }
+    return "continue";
+  }
+  // 初期 OK のパラメータスコープ / Track Properties 検証
+  // (draft-ietf-moq-transport-21 §9.20.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
+  // 空必須一覧に含まれないため Track Properties を検証しない。
+  const contextName = streamKind === "namespace" ? "SUBSCRIBE_NAMESPACE_OK" : "SUBSCRIBE_TRACKS_OK";
+  if (
+    !namespaceValidateInitialOk(
+      session,
+      reject,
+      requestOk,
+      contextName,
+      !initialAllowsTrackProperties,
+    )
+  ) {
+    return "closed";
+  }
+  return "established";
+}
+
+/**
+ * Track Properties が空必須の REQUEST_OK をデコードする (確立前の経路用)
+ *
+ * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+ * Track Properties が空必須のメッセージで Track Properties を受信したら
+ * PROTOCOL_VIOLATION でセッションを閉じる MUST。未知 Mandatory Track Property
+ * (0x4000-0x7FFF) は decodeRequestOkPayload が MalformedTrackError を throw するため、
+ * 違反 SessionError へ変換し、呼び出し元の Promise を reject してから閉じる。
+ * 確立後の REQUEST_UPDATE_OK も扱うループは namespaceHandleRequestOkMessage を使う。
+ *
+ * @returns デコード結果。違反で閉じた場合は null (呼び出し側は return する)
+ */
+function namespaceDecodeRequestOkWithoutTrackProperties(
+  session: SessionInternal,
+  payload: Uint8Array,
+  reject: (err: Error) => void,
+): ReturnType<typeof decodeRequestOkPayload> | null {
+  try {
+    return decodeRequestOkPayload(payload);
+  } catch (err) {
+    if (!(err instanceof MalformedTrackError)) {
+      throw err;
+    }
+    namespaceRejectAndCloseWithError(session, reject, toTrackPropertiesViolationSessionError(err));
+    return null;
+  }
+}
+
+/**
  * ストリームクローズ / unsubscribe 時に保留中の更新を失敗させるときの
  * エラー文言。FIN 経路 (handleNamespaceRequestUpdateStreamClosed) と
  * unsubscribe 経路 (closeNamespaceSubscription / closeTracksSubscription) に
@@ -654,40 +771,27 @@ export async function namespaceStartNamespaceStreamLoop(
 
         switch (messageType) {
           case MessageType.REQUEST_OK: {
-            const requestOk = decodeRequestOkPayload(messagePayload);
-            if (resolved) {
-              // draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
-              // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
-              if (
-                !handleNamespaceRequestUpdateOk(
-                  session,
-                  requestId,
-                  requestOk,
-                  subscription,
-                  "namespace",
-                  () => seenNamespaceSuffixes.clear(),
-                )
-              ) {
-                return;
-              }
-              break;
-            }
-            // 初期 SUBSCRIBE_NAMESPACE_OK のパラメータスコープ / Track Properties
-            // 検証 (draft-ietf-moq-transport-21 §9.20.1 / §9.3)。
-            if (
-              !namespaceValidateInitialOk(
-                session,
-                reject,
-                requestOk,
-                "SUBSCRIBE_NAMESPACE_OK",
-                true,
-              )
-            ) {
+            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK) / §9.5.2:
+            // SUBSCRIBE_NAMESPACE_OK と確立後の REQUEST_UPDATE_OK は Track Properties が
+            // 空必須であり、未知 Mandatory Track Property を受信したら PROTOCOL_VIOLATION で
+            // セッションを閉じる MUST (処理はヘルパーに集約する)。
+            const requestOkResult = namespaceHandleRequestOkMessage(
+              session,
+              requestId,
+              messagePayload,
+              subscription,
+              resolved,
+              reject,
+              "namespace",
+              () => seenNamespaceSuffixes.clear(),
+            );
+            if (requestOkResult === "closed") {
               return;
             }
-            resolved = true;
-            const namespaceSubscription = session.createNamespaceSubscription(requestId);
-            resolve(namespaceSubscription);
+            if (requestOkResult === "established") {
+              resolved = true;
+              resolve(session.createNamespaceSubscription(requestId));
+            }
             break;
           }
 
@@ -922,34 +1026,26 @@ export async function namespaceStartTracksStreamLoop(
 
         switch (messageType) {
           case MessageType.REQUEST_OK: {
-            const requestOk = decodeRequestOkPayload(messagePayload);
-            if (resolved) {
-              // draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
-              // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
-              if (
-                !handleNamespaceRequestUpdateOk(
-                  session,
-                  requestId,
-                  requestOk,
-                  subscription,
-                  "tracks",
-                )
-              ) {
-                return;
-              }
-              break;
-            }
-            // 初期 SUBSCRIBE_TRACKS_OK のパラメータスコープ検証
-            // (draft-ietf-moq-transport-21 §9.20.1)。§9.3 の空 Track Properties
-            // 必須一覧に SUBSCRIBE_TRACKS_OK は含まれないため検証しない。
-            if (
-              !namespaceValidateInitialOk(session, reject, requestOk, "SUBSCRIBE_TRACKS_OK", false)
-            ) {
+            // 初期 SUBSCRIBE_TRACKS_OK は §9.3 の空必須一覧に含まれず Track Properties を
+            // 運べる。確立後の REQUEST_UPDATE_OK は空必須であり、未知 Mandatory Track
+            // Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
+            // (処理はヘルパーに集約する)。
+            const requestOkResult = namespaceHandleRequestOkMessage(
+              session,
+              requestId,
+              messagePayload,
+              subscription,
+              resolved,
+              reject,
+              "tracks",
+            );
+            if (requestOkResult === "closed") {
               return;
             }
-            resolved = true;
-            const tracksSubscription = session.createTracksSubscription(requestId);
-            resolve(tracksSubscription);
+            if (requestOkResult === "established") {
+              resolved = true;
+              resolve(session.createTracksSubscription(requestId));
+            }
             break;
           }
 
@@ -1138,7 +1234,18 @@ export async function namespaceStartPublicationStreamLoop(
 
         switch (messageType) {
           case MessageType.REQUEST_OK: {
-            const requestOk = decodeRequestOkPayload(messagePayload);
+            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+            // PUBLISH_NAMESPACE_OK は Track Properties が空必須であり、未知 Mandatory
+            // Track Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
+            // (publication ストリームは REQUEST_UPDATE を扱わないため確立前のみ)。
+            const requestOk = namespaceDecodeRequestOkWithoutTrackProperties(
+              session,
+              messagePayload,
+              reject,
+            );
+            if (requestOk === null) {
+              return;
+            }
             // 確立後の 2 通目 REQUEST_OK は重複として閉じる
             // (namespace / tracks ループと同形で scope 検証より先に判定する)。
             if (resolved) {
