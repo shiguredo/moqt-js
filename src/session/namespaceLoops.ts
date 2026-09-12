@@ -184,6 +184,30 @@ function namespaceNotifyError(
 }
 
 /**
+ * 通知系コールバックの例外を握り潰して呼び出す
+ *
+ * draft-ietf-moq-transport-21 §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
+ * §9.19 (PUBLISH_SKIPPED) の通知はアプリへの配信である。仕様はアプリ
+ * コールバックの例外を規定しないため、ライブラリの方針として
+ * namespaceNotifyError と同じく「アプリのコールバック例外で後始末を止めない」
+ * 扱いにし、createNamespaceActiveTracker.emitAll の補完通知とも揃える。
+ * 握り潰した例外は再 throw もデバッグ記録も行わない。
+ *
+ * @param callback - 呼び出すコールバック (未指定なら何もしない)
+ * @param args - コールバックへ渡す引数
+ */
+function namespaceInvokeCallbackQuiet<T extends unknown[]>(
+  callback: ((...args: T) => void) | undefined,
+  ...args: T
+): void {
+  try {
+    callback?.(...args);
+  } catch {
+    // 通知の失敗で後始末を止めない
+  }
+}
+
+/**
  * namespace 系ストリームの送信方向を FIN で閉じる (失敗は無視)
  *
  * draft-ietf-moq-transport-21 §6.4.2.2:
@@ -889,7 +913,7 @@ export async function namespaceStartNamespaceStreamLoop(
             const suffixKey = namespaceSuffixKey(suffixStrings);
             seenNamespaceSuffixes.add(suffixKey);
             activeTracker.add(suffixStrings);
-            callbacks.onNamespace?.(suffixStrings);
+            namespaceInvokeCallbackQuiet(callbacks.onNamespace, suffixStrings);
             break;
           }
 
@@ -905,7 +929,7 @@ export async function namespaceStartNamespaceStreamLoop(
               );
               return;
             }
-            callbacks.onNamespaceDone?.(suffixStrings);
+            namespaceInvokeCallbackQuiet(callbacks.onNamespaceDone, suffixStrings);
             // NAMESPACE_DONE 済みは FIN / RESET 時の補完対象から外す。
             activeTracker.remove(suffixStrings);
             break;
@@ -1140,7 +1164,7 @@ export async function namespaceStartTracksStreamLoop(
             const decodedMsg = decodePublishSkippedPayload(messagePayload);
             const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
             const trackName = new TextDecoder().decode(decodedMsg.trackName);
-            callbacks.onPublishSkipped?.(suffixStrings, trackName);
+            namespaceInvokeCallbackQuiet(callbacks.onPublishSkipped, suffixStrings, trackName);
             break;
           }
 
