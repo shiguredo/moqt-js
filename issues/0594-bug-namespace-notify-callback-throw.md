@@ -3,7 +3,7 @@
 - Created: 2026-09-12
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-namespace-notify-callback-throw
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-12
 
 ## 目的
 
