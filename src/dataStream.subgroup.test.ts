@@ -488,6 +488,21 @@ test("ObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERRO
   );
 });
 
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 既知 Type の Length 宣言が残りバイトを超える Object を検出する。
+ */
+test("ObjectFields: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
+  const properties = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(
+    () => decodeObjectFields(encoded, 0x11),
+    SessionError,
+    /key-value-pair value does not match serialization/,
+  );
+});
+
 test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GROUP_ID_GAP で MalformedTrackError", () => {
   const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n }]);
   const properties = encodeProperties([

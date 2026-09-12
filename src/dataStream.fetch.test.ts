@@ -2436,6 +2436,30 @@ test("FetchObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING
   );
 });
 
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 既知 Type の Length 宣言が残りバイトを超える Fetch Object を検出する。
+ */
+test("FetchObjectFields: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(true),
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
+    properties: new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]),
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    SessionError,
+    /key-value-pair value does not match serialization/,
+  );
+});
+
 test("FetchObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_OBJECT_ID_GAP で MalformedTrackError", () => {
   const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n }]);
   const fields: FetchObjectFields = {

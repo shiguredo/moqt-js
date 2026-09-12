@@ -895,6 +895,13 @@
 - [FIX] Object Properties の既知 Type の serialization 不一致を §8.3 の KEY_VALUE_FORMATTING_ERROR として扱う
   - draft-ietf-moq-transport-21 §8.3 に基づき、既知 Type の Value / Length が varint として完結しない場合はセッションを閉じる (未知 Type と不完全データの寛容継続は維持する)
   - @voluntas
+- [FIX] 既知 Type の Length 宣言超過を §8.3 の KEY_VALUE_FORMATTING_ERROR として扱う
+  - draft-ietf-moq-transport-21 §8.3 に基づき、Length の varint は完結したが宣言値が残りバイトを超えて Value を読めない場合、既知 Type は serialization 不一致としてセッションを閉じる (未知 Type は Object Properties では寛容に打ち切り、厳密デコーダでは従来どおり PROTOCOL_VIOLATION)
+  - Length が最大値 (2^16-1) を超える場合は最大値超過の MUST を優先し、既知 Type でも PROTOCOL_VIOLATION のままとする
+  - @voluntas
+- [FIX] fill fetch ストリームで既知 Type の serialization 不一致がセッションを閉じない問題を修正する
+  - draft-ietf-moq-transport-21 §8.3 の KEY_VALUE_FORMATTING_ERROR はエラーコードを保持して閉じる必要があるため、fill fetch ストリームの受信 catch を他の受信経路と同じ変換に揃える
+  - @voluntas
 
 ### misc
 
