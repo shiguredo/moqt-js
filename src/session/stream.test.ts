@@ -763,6 +763,36 @@ test("processSubgroupObjects: gap が Group ID / Object ID 以下なら配信す
   assert.equal(delivered.length, 1);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §10.7 / §10.8:
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も
+ * malformed として扱う。
+ */
+test("processSubgroupObjects: mutable と IMMUTABLE_PROPERTIES の合算 2 回の Prior Group ID Gap で MalformedTrackError", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n }]);
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        objectWireWithProperties(0n, properties),
+        [subscriber],
+        header,
+        -1n,
+        stats,
+        silentDelivery,
+      ),
+    MalformedTrackError,
+    /more than one instance of PRIOR_GROUP_ID_GAP/,
+  );
+});
+
 // ============================================================================
 // draft-21 適合監査 D-8: END_OF_GROUP による Group 最終 Object の検出
 // draft-ietf-moq-transport-21 §12.1

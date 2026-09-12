@@ -15,7 +15,7 @@ import {
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
-import { encodeProperties } from "./properties";
+import { encodeProperties, MOQTPropertyId } from "./properties";
 import { encodeVarint } from "./varint";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
@@ -441,6 +441,42 @@ test("ObjectFields: Mandatory Track Property を含む Object Property で Malfo
   const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
   assert.throws(() => decodeObjectFields(encoded, 0x11), MalformedTrackError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object contains more than one instance of Prior Group ID Gap." → malformed
+ * 同一 Object に PRIOR_GROUP_ID_GAP が 2 回現れる場合も decodeObjectFields で検出する。
+ */
+test("ObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", () => {
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(
+    () => decodeObjectFields(encoded, 0x11),
+    MalformedTrackError,
+    "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7 / §10.8:
+ * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
+ */
+test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GROUP_ID_GAP で MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n }]);
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(
+    () => decodeObjectFields(encoded, 0x11),
+    MalformedTrackError,
+    "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
+  );
 });
 
 /**

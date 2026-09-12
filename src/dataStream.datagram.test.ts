@@ -485,3 +485,57 @@ test("ObjectDatagram: gap が Group ID / Object ID 以下ならデコードで�
   assert.equal(decoded.groupId, 0n);
   assert.equal(decoded.objectId, 0n);
 });
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * "An Object contains more than one instance of Prior Group ID Gap." /
+ * "An Object contains more than one instance of Prior Object ID Gap." → malformed
+ * 同一 datagram に 2 回現れる場合も検出する。
+ */
+test("ObjectDatagram: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", () => {
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    /more than one instance of PRIOR_GROUP_ID_GAP/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * 同一 datagram に PRIOR_OBJECT_ID_GAP が 2 回現れる場合も検出する。
+ */
+test("ObjectDatagram: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError", () => {
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  const encoded = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 1n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties,
+    payload: new Uint8Array([0xaa]),
+  });
+
+  assert.throws(
+    () => decodeObjectDatagram(encoded),
+    MalformedTrackError,
+    /more than one instance of PRIOR_OBJECT_ID_GAP/,
+  );
+});

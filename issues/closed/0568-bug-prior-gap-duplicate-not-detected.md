@@ -1,7 +1,7 @@
 # 同一 Object 内の Prior Group ID Gap / Prior Object ID Gap の複数出現が受信経路で検出されない
 
 - Created: 2026-09-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-prior-gap-duplicate-detection
 - Polished: 2026-09-11
 
@@ -39,3 +39,10 @@ draft-ietf-moq-transport-21 §10.8 / §10.9 は「An Object contains more than o
 - `decodeObjectFields` / `decodeObjectDatagram` / `decodeFetchObjectFields` (`src/dataStream.ts`) / `processSubgroupObjects` (`src/session/stream.ts`)
 - `issues/closed/0122-bug-immutable-properties-malformed-track-detection.md` (同一 Object 内の単一出現検証を追加した先行 issue)
 - `issues/0569-add-prior-gap-track-tracking.md` (Track 横断の追跡検証。本 issue は単一 Object 内の出現回数)
+
+## 解決方法
+
+- `src/properties.ts` の `assertObjectPropertyList` に Prior Gap の出現回数の検証を追加した。`PRIOR_GROUP_ID_GAP` / `PRIOR_OBJECT_ID_GAP` を数え、2 個目で `MalformedTrackError` を送出する。カウントは省略可能な引数 (`priorGapCounts`) で再帰呼び出しに持ち回り、mutable list と `IMMUTABLE_PROPERTIES` 配下を合算する (§10.7 の「双方を検索する」)。トップレベルの呼び出しでは新しいカウンタを作るため Object をまたいで持ち越さない。
+- 受信経路の呼び出し構造 (`assertNoMandatoryTrackPropertyInObjectProperties` を subgroup / datagram / FETCH から呼ぶ) と、テスト専用の `parseProperties` 側の実装は変更していない。
+- テストを 11 件追加した。`assertNoMandatoryTrackPropertyInObjectProperties` の単体 5 件 (mutable list の複数出現 × 2 / mutable と `IMMUTABLE_PROPERTIES` の合算 / `IMMUTABLE_PROPERTIES` 内の 2 回 / 各 1 回は誤検出しない) と、経路別 6 件 (`decodeObjectFields` / `processSubgroupObjects` / `decodeObjectDatagram` / `decodeFetchObjectFields`) である。修正前のコードでは 11 件すべてが失敗する。
+- 触ったファイル: `src/properties.ts`、`src/properties.test.ts`、`src/dataStream.subgroup.test.ts`、`src/dataStream.datagram.test.ts`、`src/dataStream.fetch.test.ts`、`src/session/stream.test.ts`、`CHANGES.md`。

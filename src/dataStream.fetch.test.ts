@@ -2371,3 +2371,58 @@ test("FetchObjectFields: Prior Object ID Gap が Object ID より大きいと Ma
     /prior object id gap exceeds object id/,
   );
 });
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * "An Object contains more than one instance of Prior Group ID Gap." /
+ * "An Object contains more than one instance of Prior Object ID Gap." → malformed
+ * Fetch Object でも同一 Object 内の複数出現を検出する。
+ */
+test("FetchObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(true),
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    properties: encodeProperties([
+      { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+      { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    ]),
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    MalformedTrackError,
+    /more than one instance of PRIOR_GROUP_ID_GAP/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7 / §10.9:
+ * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
+ */
+test("FetchObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_OBJECT_ID_GAP で MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n }]);
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(true),
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    properties: encodeProperties([
+      { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+      { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+    ]),
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    MalformedTrackError,
+    /more than one instance of PRIOR_OBJECT_ID_GAP/,
+  );
+});

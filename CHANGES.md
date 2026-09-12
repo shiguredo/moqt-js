@@ -889,6 +889,9 @@
 - [FIX] namespace 系ループで error コールバックの例外が後始末を止める問題を修正する
   - 3 ループの catch と確立前 REQUEST_ERROR で通知の throw を握り潰し、通知の失敗で後始末 (確立前 Promise の reject・保留中 REQUEST_UPDATE の reject・閉じるべきエラーの session.closeWithError) が中断されないようにする
   - @voluntas
+- [FIX] 同一 Object 内の Prior Group ID Gap / Prior Object ID Gap の複数出現を malformed として検出する
+  - draft-ietf-moq-transport-21 §10.8 / §10.9 に基づき、受信経路の検証で出現回数を mutable list と IMMUTABLE_PROPERTIES 配下の合算で数え、2 個目で MalformedTrackError を送出する
+  - @voluntas
 
 ### misc
 
