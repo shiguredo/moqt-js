@@ -881,6 +881,11 @@
   - cancelMalformedTrackPeers は closed の fetcher をスキップし、§3.2.1 の STOP_SENDING は従来どおり onCancel 経由で送る
   - Fetcher.cancel はキャンセル開始と同時に state が closed になり、既にキャンセル中の場合は即座に解決する Promise を返す (進行中の後始末の完了は保証しない)
   - @voluntas
+- [FIX] TRACK_STATUS_OK の malformed 応答で bidi ストリームの後始末と cross-cancel が行われない問題を修正する
+  - draft-ietf-moq-transport-21 §9.13 / §12.1 に基づき、TRACK_STATUS_OK の未知 Mandatory Track Property を malformed Track の検出として扱い、pending を reject して自方向を FIN し、同一 Full Track Name の購読 / FETCH を cancelMalformedTrackPeers で cross-cancel する
+  - PendingTrackStatus に比較キーを保持させ、TRACK_STATUS 要求時の Full Track Name で同一性を判定する
+  - 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) は従来どおりセッションを閉じる (未知 Mandatory の経路とは分けたまま)
+  - @voluntas
 
 ### misc
 

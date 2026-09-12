@@ -1328,10 +1328,8 @@ export class SessionImpl implements Session {
       startLocation?: Location;
     }
   >();
-  private pendingTrackStatus = new Map<
-    bigint,
-    { resolve: (result: TrackStatusResult) => void; reject: (err: Error) => void }
-  >();
+  // 型は bidi.PendingTrackStatus に集約する (trackKey の追加が片側だけにならないようにする)
+  private pendingTrackStatus = new Map<bigint, bidi.PendingTrackStatus>();
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *
@@ -2199,8 +2197,14 @@ export class SessionImpl implements Session {
     validateTrackNamespaceForSend(namespace, trackName);
 
     // REQUEST_OK を待つ Promise
+    // draft-ietf-moq-transport-21 §12.1: malformed Track の検出時に同一 Track の
+    // 購読 / FETCH を cross-cancel するため、比較キーを pending に保持する。
     const promise = new Promise<TrackStatusResult>((resolve, reject) => {
-      this.pendingTrackStatus.set(requestId, { resolve, reject });
+      this.pendingTrackStatus.set(requestId, {
+        resolve,
+        reject,
+        trackKey: fullTrackNameKey(namespace, trackName),
+      });
     });
 
     // TRACK_STATUS メッセージを双方向ストリームで送信
