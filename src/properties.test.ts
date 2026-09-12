@@ -18,6 +18,7 @@ import {
   mergeDeliveryTimeoutObjectProperties,
   readDeliveryTimeoutObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
+  assertKnownPropertyValueInObjectProperties,
   assertPriorIdGapInObjectProperties,
   resolveDefaultPublisherPriority,
   MOQTPropertyId,
@@ -572,6 +573,74 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
     MalformedTrackError,
     "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
   );
+});
+
+/**
+ * 例外を捕捉して返す (assert.throws では SessionError のコードまで検証できないため)
+ */
+function captureThrownError(run: () => void): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知 even Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
+ * 完結しない場合は KEY_VALUE_FORMATTING_ERROR とする。
+ */
+test("assertKnownPropertyValueInObjectProperties: 既知 Type の Value 不一致で SessionError", () => {
+  // deltaId=0x02, value=0x80 (varint が途中で終端している)
+  const data = new Uint8Array([0x02, 0x80]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof SessionError)) {
+    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
+  }
+  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 受信者が理解しない未知 Type は serialization の一致を要求できないため、
+ * 未知 Type の不完全 Value では throw しない (寛容契約)。
+ */
+test("assertKnownPropertyValueInObjectProperties: 未知 Type の不完全 Value では throw しない", () => {
+  // deltaId=0x7F00 (未知の even Type), value=0x80
+  const data = new Uint8Array([0xff, 0x00, 0x80]);
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(data));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 既知 odd Type の Length が varint として完結しない場合も
+ * KEY_VALUE_FORMATTING_ERROR とする。
+ */
+test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 不一致で SessionError", () => {
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=0x80 (varint が途中で終端している)
+  const data = new Uint8Array([0x0b, 0x80]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof SessionError)) {
+    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
+  }
+  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * serialization に一致する Object Properties では throw しない (誤検出防止)。
+ */
+test("assertKnownPropertyValueInObjectProperties: 正常な Object Properties では throw しない", () => {
+  const data = encodeProperties([
+    { id: 0x02n, value: 10n },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**

@@ -14,7 +14,12 @@ import {
   hasEndOfGroup,
 } from "./dataStream";
 import { ObjectStatus } from "./message/types";
-import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionError,
+} from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
 import { encodeVarint } from "./varint";
 
@@ -465,6 +470,24 @@ test("ObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", 
  * draft-ietf-moq-transport-21 §10.7 / §10.8:
  * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
  */
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知 Type の Value が varint として完結しない Object を検出する。
+ */
+test("ObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+  // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
+  const properties = new Uint8Array([0x02, 0x80]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(
+    () => decodeObjectFields(encoded, 0x11),
+    SessionError,
+    /key-value-pair value does not match serialization/,
+  );
+});
+
 test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GROUP_ID_GAP で MalformedTrackError", () => {
   const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n }]);
   const properties = encodeProperties([

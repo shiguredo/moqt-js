@@ -19,7 +19,12 @@ import {
 } from "./dataStream";
 import { GroupOrder } from "./message/types";
 import { encodeVarint } from "./varint";
-import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionError,
+} from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
@@ -2404,6 +2409,33 @@ test("FetchObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackErr
  * draft-ietf-moq-transport-21 §10.7 / §10.9:
  * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
  */
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * 既知 Type の Value が varint として完結しない Fetch Object を検出する。
+ */
+test("FetchObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(true),
+    groupId: 0n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
+    properties: new Uint8Array([0x02, 0x80]),
+    payloadLength: 0n,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+
+  assert.throws(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    SessionError,
+    /key-value-pair value does not match serialization/,
+  );
+});
+
 test("FetchObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_OBJECT_ID_GAP で MalformedTrackError", () => {
   const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n }]);
   const fields: FetchObjectFields = {

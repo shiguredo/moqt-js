@@ -1,7 +1,7 @@
 # Object Properties の既知 Type serialization 不一致が §8.3 の KEY_VALUE_FORMATTING_ERROR にならない
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-object-property-known-type-kvf
 - Polished: 2026-09-12
 
@@ -45,3 +45,12 @@ draft-ietf-moq-transport-21 §8.3 は「Key-Value-Pair is used in both the data 
 - `issues/closed/0360-change-object-properties-delta-encoding.md` / `issues/closed/0361-change-loc-object-properties-delta-encoding.md` / `issues/closed/0379-moqt-draft-19-delta-type-overflow-validation.md` (寛容契約の先行判断)
 - `issues/0568-bug-prior-gap-duplicate-not-detected.md` (同じ Object Properties 検証関数の拡張)
 - `issues/0587-bug-known-type-length-overrun-error.md` (Length 宣言超過。本 issue の検証関数に追加する)
+
+## 解決方法
+
+- `src/properties.ts` に `assertKnownPropertyValueInObjectProperties` を追加した。生バイト列を走査し、既知 Type (`KNOWN_PROPERTY_TYPES`) の Value (偶数 Type) / Length (奇数 Type) が varint として完結しない場合に `SessionError(KEY_VALUE_FORMATTING_ERROR)` を送出する。未知 Type と不完全データは寛容契約どおり打ち切る。
+- `src/dataStream.ts` の `decodeObjectDatagram` / `decodeObjectFields` / `decodeFetchObjectFields` で `assertNoMandatoryTrackPropertyInObjectProperties` の直後に呼び、subgroup / datagram / FETCH の全受信経路で同一の判定にした。
+- データプレーンの catch が `SessionError` をそのコードで扱うように、`src/session/incoming.ts` の `incomingHandleDatagram` と `src/session.ts` の `handleIncomingStreamError` / `handleIncomingStream` の変換を `toProtocolViolationSessionError` から `toSessionCloseError` に変更した (SessionError はそのコードのまま閉じ、ProtocolViolationError / IncompleteDataError は従来どおり PROTOCOL_VIOLATION)。
+- テストを 7 件追加した。検証関数の単体 4 件 (既知 Type の Value 不一致 / 既知 Type の Length 不一致 / 未知 Type の不完全 Value では throw しない / 正常時は throw しない) と、経路別 3 件 (`decodeObjectDatagram` / `decodeObjectFields` / `decodeFetchObjectFields` が `SessionError` を送出すること) である。
+- 触ったファイル: `src/properties.ts`、`src/dataStream.ts`、`src/session.ts`、`src/session/incoming.ts`、`src/properties.test.ts`、`src/dataStream.datagram.test.ts`、`src/dataStream.subgroup.test.ts`、`src/dataStream.fetch.test.ts`、`CHANGES.md`。
+- 未対応: セッションが実際に閉じることを検証するセッションレベルのテストは追加していない (受信経路の catch が `SessionError` をそのコードで閉じる既存経路に乗ることはコードで確認済み)。Length 宣言超過は `issues/0587-bug-known-type-length-overrun-error.md` で扱う。
