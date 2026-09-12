@@ -3320,14 +3320,17 @@ interface StreamParts {
  * テスト側は payload の切り分けと FIN のタイミングを制御して
  * 未完成 FIN / 分割後に完成 FIN の両ケースを組み立てる。
  */
-function buildSubgroupStreamParts(): StreamParts {
+function buildSubgroupStreamParts(properties?: Uint8Array): StreamParts {
+  // Property を含める場合は Properties Present のヘッダタイプを使う
+  const headerType =
+    properties === undefined ? SubgroupHeaderType.BASE : SubgroupHeaderType.BASE_EXT;
   const headerBytes = encodeSubgroupHeader({
-    type: SubgroupHeaderType.BASE,
+    type: headerType,
     trackAlias: 7n,
     groupId: 1n,
     publisherPriority: 128,
   });
-  const fieldsBytes = encodeObjectFields(0n, 10n, SubgroupHeaderType.BASE);
+  const fieldsBytes = encodeObjectFields(0n, 10n, headerType, ObjectStatus.NORMAL, properties);
   const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   return { headerBytes, fieldsBytes, payload };
 }
@@ -3336,13 +3339,14 @@ function buildSubgroupStreamParts(): StreamParts {
  * Fetch データストリームの構成バイト列を構築する。Object は payload
  * 宣言長 10 バイトが 1 つ。切り分けの制御方法は Subgroup と同じ。
  */
-function buildFetchStreamParts(requestId: bigint): StreamParts {
+function buildFetchStreamParts(requestId: bigint, properties?: Uint8Array): StreamParts {
   const first: FetchObjectFields = {
-    serializationFlags: createFirstFetchObjectFlags(),
+    serializationFlags: createFirstFetchObjectFlags(properties !== undefined),
     groupId: 10n,
     subgroupId: 1n,
     objectId: 0n,
     publisherPriority: 100,
+    properties,
     payloadLength: 10n,
   };
   const headerBytes = encodeFetchHeader({ type: FetchHeaderType, requestId });
@@ -3413,6 +3417,33 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
   assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
   // 購読は closed になる
   assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * Subgroup データストリームの Object Properties でも既知 Type の Length 宣言超過は
+ * エラーコードを保持してセッションを閉じる。
+ */
+test("Subgroup データストリーム: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts(new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]));
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(delivered, 0);
 });
 
 /**
@@ -4335,6 +4366,39 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
   assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(delivered, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * fill fetch ストリームの Object Properties でも既知 Type の Length 宣言超過は
+ * セッションを閉じる (エラーコードを保持する)。
+ */
+test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {
+    delivered++;
+  });
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
+  const parts = buildFetchStreamParts(requestId, new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]));
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
   assert.equal(delivered, 0);
 });
 

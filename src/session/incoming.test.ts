@@ -670,6 +670,34 @@ test("incomingHandleDatagram: Mandatory Track Property で購読を cancel し�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ * datagram の Object Properties でも既知 Type の Length 宣言超過はエラーコードを
+ * 保持してセッションを閉じる。
+ */
+test("incomingHandleDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+  const ctx = createDatagramDeliveryTestContext();
+
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
+  const wire = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 7n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties: new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]),
+    payload: new Uint8Array([0xaa]),
+  });
+
+  incomingHandleDatagram(ctx.session, wire);
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+/**
  * datagram 配送用のテストコンテキストを構築する。
  *
  * session は受信に必要な最小面 (コールバック・購読 Map・close 記録) の
