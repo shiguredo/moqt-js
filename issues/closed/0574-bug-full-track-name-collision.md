@@ -1,7 +1,7 @@
 # getFullTrackName の文字列連結が非単射で無関係な Track を cross-cancel し得る
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-full-track-name-collision
 - Polished: 2026-09-12
 
@@ -49,3 +49,15 @@ Track の同一性判定は Full Track Name (trackNamespace + trackName) で行�
 - `issues/closed/0571-bug-pending-track-cross-cancel-missing.md` (pending の cross-cancel 追加)
 - `issues/0575-bug-track-status-malformed-handling.md` (TRACK_STATUS_OK の malformed で本キー方式に追随する)
 - `issues/closed/0557-bug-malformed-track-cross-cancel.md` (Full Track Name 比較の導入)
+
+## 解決方法
+
+Full Track Name の比較キーを、フィールド境界が一意に定まる長さ付きキーに統一し、区切り文字の曖昧さによる無関係な Track の cross-cancel を解消した。
+
+- `src/fullTrackName.ts` に `fullTrackNameKey` を追加し、各 Track Namespace Field と Track Name を `${length}:${value}` の形で `"|"` 連結する比較キーを生成する (`draft-ietf-moq-transport-21` §2.4.1 のバイト列完全一致を JS 文字列表現で単射に写す)
+- `SubscriberImpl.getFullTrackName` / `FetcherImpl.getFullTrackName` の戻り値を `fullTrackNameKey` が生成する比較キーに変更する (戻り値が Full Track Name そのものではないことを JSDoc に明記)
+- 受信 PUBLISH の Track Alias 重複判定がインラインで `"/"` 連結していたのを `fullTrackNameKey` 経由に統一し、`getFullTrackName` と形式がずれて同一 Track への複数 PUBLISH が DUPLICATE_TRACK_ALIAS で閉じる退行を防ぐ
+- `cancelMalformedTrackPeers` の引数名を `trackKey` に変更し、比較キーを渡すこと (生の Full Track Name を組み立てて渡さないこと) を JSDoc に明記する
+- `src/fullTrackName.prop.ts` に同一性と単射性の PBT を追加し、`src/fullTrackName.test.ts` に旧実装が衝突していた具体例と空フィールド境界の回帰テストを追加する
+- `src/session/bidi.test.ts` に区切り文字が衝突する別 Track を cross-cancel しないテストを、`src/session.test.ts` に同一 Track への複数 PUBLISH が DUPLICATE_TRACK_ALIAS にならないテストと衝突する別 Track が DUPLICATE_TRACK_ALIAS になるテストを追加する
+- `CHANGES.md` の `## develop` に `[FIX]` を追加した

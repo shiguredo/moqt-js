@@ -868,6 +868,10 @@
   - データストリーム先着時の制御ストリーム特定、WebTransport protocols、namespace 購読解除の RESET/STOP_SENDING、NAMESPACE_DONE 補完、FIN 送信、TRACK_STATUS FIN、確立前 GOAWAY 重複検出
   - Prior Gap 検証、END_OF_GROUP 公開、Delivery Timeout 上書き条件、Forward State = 0 の送信抑止、End of Range の prior 参照拒否、KVP の KEY_VALUE_FORMATTING_ERROR
   - @voluntas
+- [FIX] Full Track Name の比較キーを長さ付きにして無関係な Track の cross-cancel を防ぐ
+  - draft-ietf-moq-transport-21 §2.4.1 に基づき、Track Namespace を "/" で連結していた比較キーを各フィールド長付き (`${length}:${value}`) の形式に変更する
+  - namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c" が同じキーになり、malformed 検出時の cross-cancel が無関係な Track を巻き込む問題を修正する
+  - @voluntas
 
 ### misc
 

@@ -84,6 +84,7 @@ import {
 } from "./bidi";
 import { publishClosePublisherStream, publishSendPublishDone } from "./publish";
 import { FetcherImpl, type Fetcher } from "../fetcher";
+import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -10834,7 +10835,7 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
   } as unknown as BidiSessionInternal;
 
   const error = new MalformedTrackError("malformed track");
-  cancelMalformedTrackPeers(session, "live/video", error);
+  cancelMalformedTrackPeers(session, fullTrackNameKey(["live"], "video"), error);
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
@@ -10939,7 +10940,7 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
   } as unknown as BidiSessionInternal;
 
   const error = new MalformedTrackError("malformed track");
-  cancelMalformedTrackPeers(session, "live/video", error);
+  cancelMalformedTrackPeers(session, fullTrackNameKey(["live"], "video"), error);
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
@@ -10959,6 +10960,64 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
   assert.isUndefined(otherSubRejected);
   assert.isUndefined(otherFetchRejected);
   assert.equal(otherPendingSubscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1 / §12.1:
+ * Full Track Name の比較キーはフィールド境界が一意なため、区切り文字の曖昧さで
+ * 無関係な Track が cross-cancel されない。namespace ["a"] + trackName "b/c" と
+ * namespace ["a","b"] + trackName "c" は "/" 連結では同じ "a/b/c" になっていた。
+ */
+test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を cancel しない", async () => {
+  const collidingSubscriber = new SubscriberImpl(["a"], "b/c", 1n, 7n, () => {});
+  const targetSubscriber = new SubscriberImpl(["a", "b"], "c", 2n, 8n, () => {});
+  const targetFetchErrors: Error[] = [];
+  const targetFetcher = new FetcherImpl(
+    ["a", "b"],
+    "c",
+    3n,
+    () => {},
+    undefined,
+    (error) => {
+      targetFetchErrors.push(error);
+    },
+  );
+  const collidingFetcher = new FetcherImpl(["a"], "b/c", 4n, () => {});
+  const session = {
+    sessionState: "connected",
+    subscribersByAlias: new Map([
+      [7n, [collidingSubscriber]],
+      [8n, [targetSubscriber]],
+    ]),
+    subscribers: new Map(),
+    fetchers: new Map([
+      [3n, targetFetcher],
+      [4n, collidingFetcher],
+    ]),
+    requestStreams: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    onRequestDrained: () => {},
+    closeWithError: () => {},
+  } as unknown as BidiSessionInternal;
+
+  const error = new MalformedTrackError("malformed track");
+  // namespace ["a","b"] + trackName "c" の malformed 検出を通知する
+  cancelMalformedTrackPeers(session, targetSubscriber.getFullTrackName(), error);
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // 対象 Track の購読と FETCH だけが cancel される
+  assert.equal(targetSubscriber.state, "closed");
+  assert.equal(targetFetcher.state, "closed");
+  assert.equal(targetFetchErrors.length, 1);
+  // 旧実装で同じキー ("a/b/c") になっていた別 Track は cancel されない
+  assert.equal(collidingSubscriber.state, "active");
+  assert.equal(collidingFetcher.state, "active");
 });
 
 /**
@@ -10989,7 +11048,11 @@ test("bidiReadSubscribeResponse: 応答待ちの cross-cancel がロック保持
   });
   assert.isDefined(ctx.session.requestStreams.get(ctx.requestId)?.reader);
 
-  cancelMalformedTrackPeers(ctx.session, "test/track", new MalformedTrackError("malformed track"));
+  cancelMalformedTrackPeers(
+    ctx.session,
+    fullTrackNameKey(["test"], "track"),
+    new MalformedTrackError("malformed track"),
+  );
   await readPromise;
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
@@ -11035,7 +11098,7 @@ test("bidiReadSubscribeResponse: cancel 済み pending への遅延応答で購�
   });
 
   const error = new MalformedTrackError("malformed track");
-  cancelMalformedTrackPeers(ctx.session, "test/track", error);
+  cancelMalformedTrackPeers(ctx.session, fullTrackNameKey(["test"], "track"), error);
 
   // cancel 済み pending に遅延して well-formed な SUBSCRIBE_OK が届く
   const okPayload = encodeSubscribeOkPayload({

@@ -10,6 +10,7 @@
  */
 
 import type { MoqtObject } from "./dataStream";
+import { fullTrackNameKey } from "./fullTrackName";
 import type { Location } from "./message/types";
 import { GroupOrder } from "./message/types";
 import type { Property } from "./properties";
@@ -93,11 +94,15 @@ export class FetcherImpl implements Fetcher {
   }
 
   /**
-   * Full Track Name を取得する（Track 同一性判定用）
-   * draft-ietf-moq-transport-21 §2.4.1: Track の同一性は Full Track Name で判定
+   * Full Track Name の比較キーを取得する（Track 同一性判定用）
+   *
+   * draft-ietf-moq-transport-21 §2.4.1: Track の同一性は Full Track Name
+   * (Track Namespace + Track Name) で判定する。
+   * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
+   * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
   getFullTrackName(): string {
-    return `${this.fetcherNamespace.join("/")}/${this.fetcherTrackName}`;
+    return fullTrackNameKey(this.fetcherNamespace, this.fetcherTrackName);
   }
 
   get endOfTrack(): boolean {
