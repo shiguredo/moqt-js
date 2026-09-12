@@ -403,10 +403,18 @@ export async function bidiSendRequestOnBidiStream(
  * 検出できるようにするため (§9.2 MUST)。
  */
 async function bidiReadResponseFromBidiStream(
+  session: BidiSessionInternal,
+  requestId: bigint,
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<ControlMessage[]> {
   const reader = stream.readable.getReader();
+  // 応答待ちの reader を登録し、cancel 時にロック保持者経由で
+  // reader.cancel (STOP_SENDING 相当) できるようにする。
+  const streamInfo = session.requestStreams.get(requestId);
+  if (streamInfo !== undefined) {
+    streamInfo.reader = reader;
+  }
   try {
     while (true) {
       const { value, done } = await reader.read();
@@ -419,6 +427,9 @@ async function bidiReadResponseFromBidiStream(
       }
     }
   } finally {
+    if (streamInfo !== undefined) {
+      streamInfo.reader = undefined;
+    }
     reader.releaseLock();
   }
 }
@@ -560,7 +571,25 @@ async function bidiReadResponse<TPending>(
   handlers: BidiResponseHandlers<TPending>,
 ): Promise<void> {
   const pending = handlers.getPending(session, requestId);
-  if (pending === undefined) return;
+  if (pending === undefined) {
+    // pending 登録から送信完了までの間に malformed track の cross-cancel を
+    // 受けた場合、pending は削除済みだが requestStreams には登録されている。
+    // 登録済みストリームを放置すると STOP_SENDING / RESET_STREAM が届かず
+    // エントリも残留するため、ここで後始末する。
+    const streamInfo = session.requestStreams.get(requestId);
+    if (streamInfo !== undefined) {
+      try {
+        await streamInfo.stream.readable.cancel("request cancelled");
+        // abort は送信方向のリセット (RESET_STREAM 相当)。GOAWAY 受信で
+        // writer を閉じ済みの場合に reject するため catch で握り潰す。
+        void streamInfo.writer.abort("request cancelled").catch(() => {});
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+      session.requestStreams.delete(requestId);
+    }
+    return;
+  }
 
   const context: BidiResponseContext<TPending> = {
     session,
@@ -572,10 +601,30 @@ async function bidiReadResponse<TPending>(
   };
 
   try {
-    const messages = await bidiReadResponseFromBidiStream(stream, controlReader);
+    const messages = await bidiReadResponseFromBidiStream(
+      session,
+      requestId,
+      stream,
+      controlReader,
+    );
     const msg = messages[0];
     session.emitDebug("recv", msg.type, msg.payload);
     context.remainingMessages = messages.slice(1);
+
+    // cancel 済みの pending に遅延した応答が届いた場合は確立しない。
+    // cancelMalformedTrackPeers が pending を削除した後でも、捕捉済みの
+    // pending を保持した読み取りループはここに到達する。
+    if (handlers.getPending(session, requestId) !== pending) {
+      // 読み取り後はロックが解放されているため、stream 経由で
+      // STOP_SENDING 相当の cancel を送る
+      try {
+        await stream.readable.cancel("response cancelled");
+      } catch {
+        // ストリームが既に閉じている場合は無視
+      }
+      session.requestStreams.delete(requestId);
+      return;
+    }
 
     if (msg.type === handlers.okType) {
       await handlers.handleOk(context, msg.payload);
@@ -3109,8 +3158,14 @@ export async function bidiCancelFetch(
       // draft-ietf-moq-transport-21 §3.2.1:
       // 「It MUST send STOP_SENDING for the bidi request stream.」
       // WebTransport では readable.cancel() が STOP_SENDING 相当。
+      // 読み取りループがロックを保持している場合は保持中の reader 経由で
+      // cancel する (ロック中の stream.cancel() は TypeError で reject する)。
       // 両方向をリセットして fetch 解除を通知する。
-      await streamInfo.stream.readable.cancel("fetch cancelled");
+      if (streamInfo.reader !== undefined) {
+        await streamInfo.reader.cancel("fetch cancelled");
+      } else {
+        await streamInfo.stream.readable.cancel("fetch cancelled");
+      }
       // GOAWAY 受信で送信方向を FIN (writer.close()) 済みの場合、abort は
       // reject する (閉じた writer への操作)。unhandled rejection を避けるため
       // catch で握り潰す。
@@ -3169,6 +3224,29 @@ export function cancelMalformedTrackPeers(
       // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
     }
     void fetcher.cancel().catch(() => {});
+  }
+  // 応答待ちの pending も §12.1 の対象に含める。pending には
+  // bidiCancelSubscriptionWithError を使わない (SubscriberImpl.state は
+  // pending 中も active のため、state ガードでは reject と error コールバックの
+  // 二重通知を防げない)。Map から外してから reject し、ストリームを cancel する。
+  for (const [requestId, pending] of session.pendingSubscribe) {
+    if (pending.impl.getFullTrackName() !== fullTrackName) {
+      continue;
+    }
+    session.pendingSubscribe.delete(requestId);
+    pending.reject(error);
+    pending.impl.markClosed();
+    void bidiCancelSubscription(session, pending.impl).catch(() => {});
+  }
+  for (const [requestId, pending] of session.pendingFetch) {
+    if (pending.impl.getFullTrackName() !== fullTrackName) {
+      continue;
+    }
+    session.pendingFetch.delete(requestId);
+    pending.reject(error);
+    void bidiCancelFetch(session, pending.impl).catch(() => {});
+    // FETCH_OK 先行でデータストリーム受信が待機中の場合は即座に解決する
+    fireFetcherReadyCallbacks(session, requestId);
   }
 }
 

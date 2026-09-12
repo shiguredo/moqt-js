@@ -57,3 +57,13 @@ draft-ietf-moq-transport-21 §12.1 は「it MUST cancel any corresponding subscr
 - `issues/0576-refactor-bidi-test-split.md` (テスト総数の記載が古くなるため、実施後に更新する)
 - `issues/closed/0567-bug-subscribe-ok-fetch-ok-cross-cancel.md` (Established の cross-cancel)
 - `issues/closed/0557-bug-malformed-track-cross-cancel.md` (データストリーム経路の Established cross-cancel)
+
+## 解決方法
+
+- `cancelMalformedTrackPeers` の走査対象に `session.pendingSubscribe` / `session.pendingFetch` を追加し、同一 Full Track Name の pending を Map 削除 → reject → markClosed → cancel するようにした
+- 応答待ちの reader を `RequestStreamInfo.reader` に登録し、`bidiCancelFetch` も reader 経由の cancel に対応させた
+- `bidiReadResponse` に pending の在否再確認を追加し、cancel 済み pending への遅延応答では購読 / FETCH を確立しないようにした
+- 送信準備中の cross-cancel に備え、pending 不在で早期 return する経路でもストリームを cancel / abort して `requestStreams` から削除するようにした
+- pending FETCH の cross-cancel 後に `fireFetcherReadyCallbacks` を呼び、`incomingWaitForFetcher` の待機を即時解決するようにした
+- テストを 3 件追加し、既存テストの部分セッションに `pendingSubscribe` / `pendingFetch` / `fetcherReadyCallbacks` を追加した
+- `CHANGES.md` の `## develop` に [FIX] を追加した
