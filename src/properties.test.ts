@@ -492,6 +492,89 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES の
 });
 
 /**
+ * draft-ietf-moq-transport-21 §10.8:
+ * "An Object MUST NOT contain more than one instance of this property."
+ * PRIOR_GROUP_ID_GAP が Object Property に 2 回現れる場合は malformed とする。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", () => {
+  const data = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+  assert.throws(
+    () => assertNoMandatoryTrackPropertyInObjectProperties(data),
+    MalformedTrackError,
+    "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.9:
+ * "An Object MUST NOT contain more than one instance of this property."
+ * PRIOR_OBJECT_ID_GAP が Object Property に 2 回現れる場合は malformed とする。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError", () => {
+  const data = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  assert.throws(
+    () => assertNoMandatoryTrackPropertyInObjectProperties(data),
+    MalformedTrackError,
+    "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties) / §10.8:
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: mutable と IMMUTABLE_PROPERTIES の合算 2 回で MalformedTrackError", () => {
+  const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n }]);
+  const data = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+  ]);
+  assert.throws(
+    () => assertNoMandatoryTrackPropertyInObjectProperties(data),
+    MalformedTrackError,
+    "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * それぞれ 1 回ずつの出現は malformed ではない (誤検出しない)。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: Prior Gap が各 1 回なら throw しない", () => {
+  const data = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  assert.doesNotThrow(() => assertNoMandatoryTrackPropertyInObjectProperties(data));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7 / §10.9:
+ * IMMUTABLE_PROPERTIES 配下に同じ Prior Object ID Gap が 2 回現れる場合も
+ * 再帰呼び出しを跨いだ合算で検出する。
+ */
+test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内の 2 回で MalformedTrackError", () => {
+  const inner = encodeProperties([
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+    { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 0n },
+  ]);
+  const data = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  assert.throws(
+    () => assertNoMandatoryTrackPropertyInObjectProperties(data),
+    MalformedTrackError,
+    "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
+  );
+});
+
+/**
  * draft-ietf-moq-transport-21 §3.6:
  * Mandatory Track Property を含まない通常の Object Property では throw しないことを検証する。
  */
