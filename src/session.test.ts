@@ -1222,20 +1222,20 @@ function setupIncomingPublishStreamSession(
  *
  * createIncomingPublishStream の終端を保留したまま PUBLISH を処理させ、
  * 購読が active の間に handleObject でフィルタ適用を検証できるようにする。
+ *
+ * @param internal - 受信 PUBLISH の内部状態ビュー
+ * @param requestId - 待機対象の Request ID (既定は INCOMING_PUBLISH_REQUEST_ID)
  */
 async function waitForIncomingPublishSubscriber(
   internal: IncomingPublishStreamInternals,
+  requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
 ): Promise<SubscriberImpl> {
   // 購読登録は PUBLISH 処理の同一マイクロタスク連鎖で完了する。上限は
   // 実装が壊れて登録されない場合に無限ループしないための安全弁として設ける
-  for (
-    let i = 0;
-    i < 10 && internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID) === undefined;
-    i++
-  ) {
+  for (let i = 0; i < 10 && internal.subscribers.get(requestId) === undefined; i++) {
     await yieldToMacrotask();
   }
-  const subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+  const subscriber = internal.subscribers.get(requestId);
   if (subscriber === undefined) {
     throw new Error("受信 PUBLISH の SubscriberImpl が登録されていない");
   }
@@ -1282,6 +1282,7 @@ function appendPayloadSuffix(payload: Uint8Array, suffix: Uint8Array): Uint8Arra
  * @param requestId - PUBLISH の Request ID (受信 ID は使い捨てのため再利用時は別値を使う)
  * @param trackPropertiesSuffix - Track Properties の末尾に連結する生バイト列
  *   (malformed Track Properties の再現用。正常系は空)
+ * @param trackNamespace - PUBLISH の Track Namespace (区切り文字の衝突検証用)
  */
 function createIncomingPublishStream(
   terminate: (controller: ReadableStreamDefaultController<Uint8Array>) => void,
@@ -1291,11 +1292,12 @@ function createIncomingPublishStream(
   trackName = "track",
   requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
   trackPropertiesSuffix: Uint8Array = new Uint8Array(0),
+  trackNamespace: string[] = INCOMING_PUBLISH_NAMESPACE,
 ): WebTransportBidirectionalStream {
   const publishPayload = encodePublishPayload({
     type: MessageType.PUBLISH,
     requestId,
-    trackNamespace: createTrackNamespace(INCOMING_PUBLISH_NAMESPACE),
+    trackNamespace: createTrackNamespace(trackNamespace),
     trackName: new TextEncoder().encode(trackName),
     trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
     parameters,
@@ -1718,6 +1720,101 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
     (internal as unknown as { subscribersByAlias: Map<bigint, unknown[]> }).subscribersByAlias.size,
     0,
   );
+});
+
+// ============================================================================
+// 受信 PUBLISH の Track Alias 重複判定 (Full Track Name の比較キー)
+// draft-ietf-moq-transport-21 §2.4.1 / §3.1.2
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §3.1 / §3.1.2:
+ * 同一 Track への複数 PUBLISH は許容されるため、同一 Track に同一 Track Alias を
+ * 使う 2 件目の PUBLISH を DUPLICATE_TRACK_ALIAS として拒否しない。
+ * 受信 PUBLISH の重複判定と SubscriberImpl.getFullTrackName が同じ比較キーを
+ * 使っていることを検証する (片方だけ形式が変わると同一 Track が不一致になる)。
+ */
+test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならない", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      closedError = error;
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+
+  // 1 件目を確立させ、ストリームは開いたままにする (alias 索引に残す)
+  const firstHandle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}),
+  );
+  await waitForIncomingPublishSubscriber(internal);
+  assert.equal(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS)?.length, 1);
+
+  // 2 件目は同一 Track (namespace ["live"] + trackName "track") + 同一 alias
+  const secondHandle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [], new WritableStream<Uint8Array>({}), "track", 3n),
+  );
+  await waitForIncomingPublishSubscriber(internal, 3n);
+
+  // 2 件とも同一 alias に登録され、セッションは閉じない
+  assert.isUndefined(closedError);
+  assert.equal(internal.sessionState, "connected");
+  assert.equal(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS)?.length, 2);
+
+  // 後始末: 両ストリームを解除して読み取りループを終わらせる
+  await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();
+  await internal.subscribers.get(3n)?.unsubscribe();
+  await firstHandle;
+  await secondHandle;
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1 / §3.1.2:
+ * namespace ["live"] + trackName "track/x" と namespace ["live","track"] +
+ * trackName "x" は "/" 連結では同じ "live/track/x" になっていた別 Track である。
+ * 別 Track に同一 Track Alias が使われた場合は DUPLICATE_TRACK_ALIAS で閉じる。
+ */
+test("区切り文字が衝突する別 Track への同一 alias PUBLISH で DUPLICATE_TRACK_ALIAS になる", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      closedError = error;
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+
+  // 先行して namespace ["live"] + trackName "track/x" の購読が同一 alias で確立済み
+  const existingSubscriber = new SubscriberImpl(
+    ["live"],
+    "track/x",
+    INCOMING_PUBLISH_REQUEST_ID,
+    INCOMING_PUBLISH_TRACK_ALIAS,
+    () => {},
+  );
+  internal.subscribers.set(INCOMING_PUBLISH_REQUEST_ID, existingSubscriber);
+  internal.subscribersByAlias.set(INCOMING_PUBLISH_TRACK_ALIAS, [existingSubscriber]);
+
+  // 衝突する別 Track (namespace ["live","track"] + trackName "x") の PUBLISH を受信する
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "x",
+      3n,
+      new Uint8Array(0),
+      ["live", "track"],
+    ),
+  );
+
+  // 旧実装で同じキーになっていた別 Track のため、alias 重複としてセッションを閉じる
+  assert.isDefined(closedError);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.DUPLICATE_TRACK_ALIAS);
+  assert.equal(internal.sessionState, "closed");
 });
 
 // ============================================================================
