@@ -55,14 +55,22 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     writer: WritableStreamDefaultWriter<Uint8Array>;
   };
   writerClosed: () => Promise<void>;
+  isReadableCancelled: () => boolean;
   getClosedWithError: () => SessionError | undefined;
 } {
   const requestId = 10n;
 
   let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  // reader.cancel() による受信方向のクローズを観測する。
+  // stream が既に closed / errored の場合は source の cancel は呼ばれないため、
+  // cancel を観測するテストは readable を close せずに検証する。
+  let readableCancelled = false;
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {
       readableController = controller;
+    },
+    cancel() {
+      readableCancelled = true;
     },
   });
   const streamReader = readable.getReader();
@@ -123,6 +131,7 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     controlWriter: new ControlStreamWriter(),
     subscription,
     writerClosed: () => writer.closed,
+    isReadableCancelled: () => readableCancelled,
     getClosedWithError: () => closedWithError,
   };
 }
@@ -1751,14 +1760,22 @@ function createPublicationLoopTestContext(): {
     state: string;
   };
   writerClosed: () => Promise<void>;
+  isReadableCancelled: () => boolean;
   getClosedWithError: () => SessionError | undefined;
 } {
   const requestId = 10n;
 
   let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  // reader.cancel() による受信方向のクローズを観測する。
+  // stream が既に closed / errored の場合は source の cancel は呼ばれないため、
+  // cancel を観測するテストは readable を close せずに検証する。
+  let readableCancelled = false;
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {
       readableController = controller;
+    },
+    cancel() {
+      readableCancelled = true;
     },
   });
   const streamReader = readable.getReader();
@@ -1805,6 +1822,7 @@ function createPublicationLoopTestContext(): {
     // (session の内部 Map から取り出すキャストを不要にする)
     publication,
     writerClosed: () => writer.closed,
+    isReadableCancelled: () => readableCancelled,
     getClosedWithError: () => closedWithError,
   };
 }
@@ -2796,6 +2814,39 @@ test("namespaceStartNamespaceStreamLoop: 確立前 REQUEST_ERROR で error コ�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+ * 確立前に REQUEST_ERROR を受信したら、送信方向を FIN し、受信方向を cancel
+ * (STOP_SENDING 相当) してストリームをライブラリの管理外に残さない。
+ */
+test("namespaceStartNamespaceStreamLoop: 確立前 REQUEST_ERROR で送信方向を FIN し受信方向を cancel する", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // REQUEST_OK を挟まずに REQUEST_ERROR (リクエスト失敗) を受信する。
+  // readable を close すると cancel を観測できないため FIN はしない。
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  // 送信方向が FIN され、受信方向が cancel されている
+  await ctx.writerClosed();
+  assert.isTrue(ctx.isReadableCancelled());
+  // セッションは閉じず、finally で subscription が掃除される
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+});
+
+/**
  * draft-ietf-moq-transport-21 §8.3 / §9.3:
  * tracks ループでも error コールバックの throw で reject とセッションクローズが
  * 止まらないことを検証する。
@@ -2921,6 +2972,36 @@ test("namespaceStartTracksStreamLoop: 確立前 REQUEST_ERROR で error コー�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+ * tracks ループでも確立前 REQUEST_ERROR で送信方向を FIN し、受信方向を
+ * cancel する。
+ */
+test("namespaceStartTracksStreamLoop: 確立前 REQUEST_ERROR で送信方向を FIN し受信方向を cancel する", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // readable を close すると cancel を観測できないため FIN はしない
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  await ctx.writerClosed();
+  assert.isTrue(ctx.isReadableCancelled());
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+});
+
+/**
  * draft-ietf-moq-transport-21 §8.3 / §9.3:
  * publication ループでも error コールバックの throw で reject とセッションクローズが
  * 止まらないことを検証する。
@@ -3002,5 +3083,35 @@ test("namespaceStartPublicationStreamLoop: 確立前 REQUEST_ERROR で error コ
   assert.equal(rejectedError!.message, "prefix overlap");
   assert.isUndefined(ctx.getClosedWithError());
   // finally で publication が掃除される
+  assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3:
+ * publication ループでも確立前 REQUEST_ERROR で送信方向を FIN し、受信方向を
+ * cancel する。
+ */
+test("namespaceStartPublicationStreamLoop: 確立前 REQUEST_ERROR で送信方向を FIN し受信方向を cancel する", async () => {
+  const ctx = createPublicationLoopTestContext();
+  let rejectedError: Error | undefined;
+  const readPromise = namespaceStartPublicationStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (err) => {
+      rejectedError = err;
+    },
+  );
+
+  // readable を close すると cancel を観測できないため FIN はしない
+  ctx.readableController.enqueue(
+    requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+  );
+  await readPromise;
+
+  assert.isDefined(rejectedError);
+  await ctx.writerClosed();
+  assert.isTrue(ctx.isReadableCancelled());
+  assert.isUndefined(ctx.getClosedWithError());
   assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
 });
