@@ -688,6 +688,8 @@ function createDatagramDeliveryTestContext(): {
     subscribers: new Map(),
     fetchers: new Map(),
     requestStreams: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     closeWithError: (error: SessionError) => {

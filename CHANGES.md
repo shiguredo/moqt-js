@@ -1107,6 +1107,11 @@
   - draft-ietf-moq-transport-21 §9.20.1 / §9.3 に基づき、保留中の更新を違反 SessionError 自体で reject してからセッションを閉じる
   - 従来は closeWithError が先行し、close 側の汎用 reject で update() が "session closed" で失敗していた
   - @voluntas
+- [FIX] malformed track 検出時に同一 Track の保留中の購読 / FETCH も cancel する
+  - draft-ietf-moq-transport-21 §12.1 / §3.1 に基づき、cancelMalformedTrackPeers の走査対象を確立済みから応答待ちの pending にも広げる
+  - 応答待ちの reader を RequestStreamInfo.reader に登録し、ロック中の cancel でも STOP_SENDING が届くようにする
+  - cancel 済みの pending に遅延した応答が届いても購読 / FETCH を確立しない
+  - @voluntas
 
 ### misc
 

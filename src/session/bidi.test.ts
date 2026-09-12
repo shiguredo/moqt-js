@@ -10824,6 +10824,8 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
       [4n, otherFetcher],
     ]),
     requestStreams: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
@@ -10847,6 +10849,235 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
   // 別 Track の購読 / FETCH は触らない
   assert.equal(otherSubscriber.state, "active");
   assert.equal(otherFetcher.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 / §3.1:
+ * 応答待ちの pending 購読 / FETCH も同一 Full Track Name で cancel され、
+ * reject される。pending 中の SubscriberImpl.state は active のため、
+ * error コールバックは呼ばれない (reject との二重通知なし)。
+ */
+test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も cancel する", async () => {
+  const pendingSubErrors: Error[] = [];
+  const pendingSubscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    10n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      pendingSubErrors.push(error);
+    },
+  );
+  let subRejected: Error | undefined;
+  const otherPendingSubscriber = new SubscriberImpl(["live"], "other", 11n, 8n, () => {});
+  let otherSubRejected: Error | undefined;
+  const pendingFetcher = new FetcherImpl(["live"], "video", 12n, () => {});
+  let fetchRejected: Error | undefined;
+  const otherPendingFetcher = new FetcherImpl(["live"], "other", 13n, () => {});
+  let otherFetchRejected: Error | undefined;
+  const session = {
+    sessionState: "connected",
+    subscribersByAlias: new Map(),
+    subscribers: new Map(),
+    fetchers: new Map(),
+    pendingSubscribe: new Map([
+      [
+        10n,
+        {
+          resolve: () => {},
+          reject: (error: Error) => {
+            subRejected = error;
+          },
+          impl: pendingSubscriber,
+          objectCallback: () => {},
+        },
+      ],
+      [
+        11n,
+        {
+          resolve: () => {},
+          reject: (error: Error) => {
+            otherSubRejected = error;
+          },
+          impl: otherPendingSubscriber,
+          objectCallback: () => {},
+        },
+      ],
+    ]),
+    pendingFetch: new Map([
+      [
+        12n,
+        {
+          resolve: () => {},
+          reject: (error: Error) => {
+            fetchRejected = error;
+          },
+          impl: pendingFetcher,
+        },
+      ],
+      [
+        13n,
+        {
+          resolve: () => {},
+          reject: (error: Error) => {
+            otherFetchRejected = error;
+          },
+          impl: otherPendingFetcher,
+        },
+      ],
+    ]),
+    requestStreams: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    fetcherReadyCallbacks: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    onRequestDrained: () => {},
+    closeWithError: () => {},
+  } as unknown as BidiSessionInternal;
+
+  const error = new MalformedTrackError("malformed track");
+  cancelMalformedTrackPeers(session, "live/video", error);
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // 同一 Track の pending が Map から削除され、同一 error で reject される
+  assert.isFalse(session.pendingSubscribe.has(10n));
+  assert.isFalse(session.pendingFetch.has(12n));
+  assert.strictEqual(subRejected, error);
+  assert.strictEqual(fetchRejected, error);
+  // pending の購読は closed になる
+  assert.equal(pendingSubscriber.state, "closed");
+  // pending 自身への error コールバックは呼ばれない (reject との二重通知なし)
+  assert.equal(pendingSubErrors.length, 0);
+  // 別 Track の pending は触らない
+  assert.isTrue(session.pendingSubscribe.has(11n));
+  assert.isTrue(session.pendingFetch.has(13n));
+  assert.isUndefined(otherSubRejected);
+  assert.isUndefined(otherFetchRejected);
+  assert.equal(otherPendingSubscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 / §3.1:
+ * 応答待ちの読み取りループが保持する reader は RequestStreamInfo に登録され、
+ * malformed track の cross-cancel はロック保持者経由の STOP_SENDING
+ * (reader.cancel) として届く。
+ */
+test("bidiReadSubscribeResponse: 応答待ちの cross-cancel がロック保持中の reader に届く", async () => {
+  const ctx = createCancelObservableResponseContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 読み取りループが reader を RequestStreamInfo に登録するまで待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assert.isDefined(ctx.session.requestStreams.get(ctx.requestId)?.reader);
+
+  cancelMalformedTrackPeers(ctx.session, "test/track", new MalformedTrackError("malformed track"));
+  await readPromise;
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // ロック保持中の reader 経由の cancel でも STOP_SENDING / RESET_STREAM が届く
+  assert.deepEqual(ctx.cancelled, ["subscription cancelled"]);
+  assert.deepEqual(ctx.aborted, ["subscription cancelled"]);
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1:
+ * cancel 済みの pending に遅延して well-formed な応答が届いても購読を
+ * 確立しない。送信準備中に cross-cancel され requestStreams が未登録の
+ * まま読み取りループが動き続ける状況でも、応答受信時に pending の在否を
+ * 再確認して破棄する。
+ */
+test("bidiReadSubscribeResponse: cancel 済み pending への遅延応答で購読が確立しない", async () => {
+  const ctx = createCancelObservableResponseContext();
+  // 送信準備中の cross-cancel で requestStreams 未登録のまま読み取りが始まった状況
+  ctx.session.requestStreams.clear();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  const error = new MalformedTrackError("malformed track");
+  cancelMalformedTrackPeers(ctx.session, "test/track", error);
+
+  // cancel 済み pending に遅延して well-formed な SUBSCRIBE_OK が届く
+  const okPayload = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  await readPromise;
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.strictEqual(rejected, error);
+  // 購読は確立せず、購読 Map にも残らない
+  assert.isFalse(ctx.session.subscribers.has(ctx.requestId));
+  assert.isFalse(ctx.session.subscribersByAlias.has(1n));
+  assert.equal(subscriber.state, "closed");
+  // 遅延応答の破棄で STOP_SENDING を送る
+  assert.deepEqual(ctx.cancelled, ["response cancelled"]);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1:
+ * pending 登録から送信完了までの間に cross-cancel された場合でも、
+ * 登録済みストリームを STOP_SENDING / RESET_STREAM で後始末し、
+ * requestStreams にエントリを残さない。
+ */
+test("bidiReadSubscribeResponse: 送信準備中の cross-cancel でストリームを後始末する", async () => {
+  const ctx = createCancelObservableResponseContext();
+  // pending が cross-cancel で削除済み、requestStreams の登録だけが残った状況
+  await bidiReadSubscribeResponse(ctx.session, ctx.requestId, ctx.stream, ctx.controlReader);
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.deepEqual(ctx.cancelled, ["request cancelled"]);
+  assert.deepEqual(ctx.aborted, ["request cancelled"]);
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.getClosedWithError());
 });
 
 // ============================================================================
