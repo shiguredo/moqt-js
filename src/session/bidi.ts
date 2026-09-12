@@ -3273,21 +3273,14 @@ export function cancelMalformedTrackPeers(
     if (fetcher.getFullTrackName() !== trackKey) {
       continue;
     }
-    // 既にキャンセル開始済み (closed) なら、error 通知もストリーム後始末も
-    // 1 回目で行っている。FetcherImpl.cancel は await の前に state を closed に
-    // するため、bidiCancelFetch の await 中に重複した malformed 検出が届いても
-    // error コールバックを二重に呼ばない (§12.1 の SHOULD は 1 回で満たす)。
-    if (fetcher.state === "closed") {
-      continue;
-    }
     try {
       fetcher.handleError(error);
     } catch {
       // アプリの error コールバックの throw は握り潰す (キャンセルは継続する)
     }
-    // キャンセルは onCancel (実運用は bidiCancelFetch) に委譲する。§3.2.1 の
-    // MUST「It MUST send STOP_SENDING for the bidi request stream.」は
-    // bidiCancelFetch の readable.cancel で満たされる。
+    // FetcherImpl.cancel は onCancel の await 前に state を closed にするため、
+    // キャンセル中の重複した malformed 検出では handleError も cancel も
+    // 抑止される (error コールバックは 1 回だけ呼ばれる)。
     void fetcher.cancel().catch(() => {});
   }
   // 応答待ちの pending も §12.1 の対象に含める。pending には

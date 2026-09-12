@@ -35,6 +35,11 @@ export interface Fetcher {
   /**
    * Fetch をキャンセルする
    * draft-ietf-moq-transport-21 Section 3.2.1 (Fetch State Management)
+   *
+   * 「It MUST send STOP_SENDING for the bidi request stream.」
+   * キャンセル開始と同時に state は closed になり、Object の配信と end / error の
+   * 通知は止まる。ストリームの後始末 (STOP_SENDING 相当の cancel と RESET_STREAM) は
+   * 返り値の Promise が完了するまで継続する。
    */
   cancel(): Promise<void>;
 }
