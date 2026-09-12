@@ -199,10 +199,15 @@ export class FetcherImpl implements Fetcher {
       return;
     }
 
+    // キャンセル開始と同時に closed にして、onCancel の await 中の重複した
+    // malformed 検出による error コールバックの二重通知と Object 配信を止める
+    // (handleError / handleObject / handleEnd は closed で抑止される)。
+    // ストリームの後始末 (bidi リクエストストリームへの STOP_SENDING 等) は
+    // 従来どおり onCancel が行う。
+    this.fetcherState = "closed";
+
     if (this.onCancel) {
       await this.onCancel();
     }
-
-    this.fetcherState = "closed";
   }
 }

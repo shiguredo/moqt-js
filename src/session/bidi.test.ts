@@ -60,6 +60,7 @@ import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import { incomingWaitForFetcher, incomingValidateRequestId } from "./incoming";
 import type { SessionInternal } from "./types";
 import {
+  bidiCancelFetch,
   bidiCancelSubscription,
   bidiHandlePublishDone,
   bidiHandlePublishRequestUpdate,
@@ -11271,4 +11272,74 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE_OK の未知 Mandatory Track
   assert.strictEqual(rejected, ctx.closedWithError);
   assert.isFalse(ctx.session.pendingRequestUpdate.has(90n));
   assert.isFalse(ctx.session.fillFetchTargets.has(90n));
+});
+
+// ============================================================================
+// cancelMalformedTrackPeers の二重通知防止
+// draft-ietf-moq-transport-21 §12.1 (Malformed Tracks) / §3.2.1 (Fetch State Management)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 / §3.2.1:
+ * 最初の malformed 検出のキャンセルが await で保留されている間に同一 Track の
+ * 2 回目の検出が届いても、error コールバックは 1 回だけ呼ばれる。state を
+ * キャンセル開始と同期に closed にするため、bidiCancelFetch の完了を待たずに
+ * 二重通知が止まる。
+ * §3.2.1 の MUST (bidi リクエストストリームへの STOP_SENDING) は維持され、
+ * キャンセルも重複して送らない。
+ */
+test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コールバックが 1 回だけ呼ばれる", async () => {
+  const fetchErrors: Error[] = [];
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    3n,
+    () => {},
+    undefined,
+    (error) => {
+      fetchErrors.push(error);
+    },
+  );
+  // キャンセルが完了しない stream を用意し、bidiCancelFetch の await で窓を開く
+  const pendingCancel = new Promise<void>(() => {});
+  const cancelReasons: unknown[] = [];
+  const stream = {
+    readable: {
+      cancel: (reason?: unknown) => {
+        cancelReasons.push(reason);
+        return pendingCancel;
+      },
+    },
+    writable: { abort: () => Promise.resolve() },
+  };
+  const session = {
+    sessionState: "connected",
+    subscribersByAlias: new Map(),
+    subscribers: new Map(),
+    fetchers: new Map([[3n, fetcher]]),
+    requestStreams: new Map([[3n, { stream, writer: stream.writable, reader: undefined }]]),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    onRequestDrained: () => {},
+    closeWithError: () => {},
+  } as unknown as BidiSessionInternal;
+  fetcher.onCancel = () => bidiCancelFetch(session, fetcher);
+
+  const trackKey = fullTrackNameKey(["live"], "video");
+  const error = new MalformedTrackError("malformed track");
+  cancelMalformedTrackPeers(session, trackKey, error);
+  // 1 回目のキャンセルが await で保留されている間に 2 回目の検出が重なる
+  await Promise.resolve();
+  cancelMalformedTrackPeers(session, trackKey, error);
+  await Promise.resolve();
+
+  // error コールバックは 1 回だけ呼ばれる
+  assert.equal(fetchErrors.length, 1);
+  assert.strictEqual(fetchErrors[0], error);
+  // §3.2.1 の STOP_SENDING 相当は従来どおり送られ、二重には送らない
+  assert.deepEqual(cancelReasons, ["fetch cancelled"]);
+  assert.equal(fetcher.state, "closed");
 });
