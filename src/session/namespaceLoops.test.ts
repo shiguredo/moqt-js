@@ -1071,6 +1071,46 @@ test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH
   assert.include(err!.message, "tracks stream");
 });
 
+/**
+ * onPublishSkipped の throw を握り潰し、購読 (ループ) を継続することを検証する。
+ * throw の後に届く PUBLISH_SKIPPED が処理されることを観測する。
+ */
+test("namespaceStartTracksStreamLoop: onPublishSkipped の throw で購読が終了しない", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  let skippedCalls = 0;
+  ctx.subscription.callbacks.onPublishSkipped = () => {
+    skippedCalls++;
+    throw new Error("app onPublishSkipped failure");
+  };
+
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const skippedMessage = (): Uint8Array =>
+    ctx.controlWriter.encode(
+      MessageType.PUBLISH_SKIPPED,
+      encodePublishSkippedPayload({
+        type: MessageType.PUBLISH_SKIPPED,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+        trackName: new TextEncoder().encode("game"),
+      }),
+    );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(skippedMessage());
+  ctx.readableController.enqueue(skippedMessage());
+  ctx.readableController.close();
+  await readPromise;
+
+  // 2 件目の PUBLISH_SKIPPED も処理されており、throw でループが終了していない
+  assert.equal(skippedCalls, 2);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
 test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) され、読み取り継続が維持される", async () => {
   // draft-ietf-moq-transport-21 §9.2:
   // 送信方向は FIN で閉じる。受信方向は読み取り継続して 2 通目 GOAWAY を検出する。
@@ -1206,6 +1246,192 @@ test("namespaceStartNamespaceStreamLoop: 正常な NAMESPACE / NAMESPACE_DONE �
   // 確立応答が反映され、正常な NAMESPACE / NAMESPACE_DONE はセッションを
   // 閉じない (回帰ガード)
   assert.isTrue(resolved);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * onNamespace の throw を握り潰し、購読 (ループ) を継続することを検証する。
+ *
+ * createNamespaceActiveTracker.emitAll / namespaceNotifyError と同じ
+ * 「アプリのコールバック例外で後始末を止めない」方針。後続の NAMESPACE が
+ * 処理されることでループが終了していないことを観測する。
+ */
+test("namespaceStartNamespaceStreamLoop: onNamespace の throw で購読が終了しない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let namespaceCalls = 0;
+  ctx.subscription.callbacks.onNamespace = () => {
+    namespaceCalls++;
+    throw new Error("app onNamespace failure");
+  };
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const suffix = createTrackNamespace(["live", "sports"]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 2 件目の NAMESPACE も処理されており、throw でループが終了していない
+  assert.equal(namespaceCalls, 2);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * 通知コールバックが callbacks をレシーバとして呼ばれる (`this` が保たれる)
+ * ことを検証する。関数参照だけを取り出して呼ぶとオブジェクトリテラルの
+ * メソッドで `this` が失われ、握り潰しにより無言でハンドラが動かなくなる。
+ */
+test("namespaceStartNamespaceStreamLoop: onNamespace の this が callbacks を指す", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  // `this` を参照するオブジェクトリテラルのメソッドを注入する
+  ctx.subscription.callbacks.onNamespace = function onNamespace(
+    this: Record<string, unknown>,
+  ): void {
+    this.invokedWithReceiver = true;
+  };
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const suffix = createTrackNamespace(["live", "sports"]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isTrue(ctx.subscription.callbacks.invokedWithReceiver === true);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * onNamespaceDone の throw を握り潰し、購読 (ループ) を継続することを検証する。
+ * throw の後に届く NAMESPACE が処理されることを観測する。
+ */
+test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw で購読が終了しない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let namespaceCalls = 0;
+  let namespaceDoneCalls = 0;
+  ctx.subscription.callbacks.onNamespace = () => {
+    namespaceCalls++;
+  };
+  ctx.subscription.callbacks.onNamespaceDone = () => {
+    namespaceDoneCalls++;
+    throw new Error("app onNamespaceDone failure");
+  };
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const suffix = createTrackNamespace(["live", "sports"]);
+  const nextSuffix = createTrackNamespace(["live", "news"]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: suffix,
+      }),
+    ),
+  );
+  // NAMESPACE_DONE の throw 後も次の NAMESPACE を処理する
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: nextSuffix }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // 2 件目の NAMESPACE (別 suffix) も処理されており、throw でループが終了していない
+  assert.equal(namespaceCalls, 2);
+  // 明示的な NAMESPACE_DONE (1 回目) と、FIN 時の補完通知 (2 件目の suffix)
+  assert.equal(namespaceDoneCalls, 2);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * onNamespaceDone の throw を握り潰した後も、NAMESPACE_DONE 済みの追跡状態が
+ * 更新され、FIN 時の補完通知で同じ suffix が二重通知されないことを検証する。
+ *
+ * 握り潰さずに catch へ抜けると activeTracker.remove が飛び、catch の
+ * emitAll() が同じ suffix を onNamespaceDone として再通知する。
+ */
+test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw 後も FIN で二重通知しない", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  let namespaceDoneCalls = 0;
+  ctx.subscription.callbacks.onNamespaceDone = () => {
+    namespaceDoneCalls++;
+    throw new Error("app onNamespaceDone failure");
+  };
+
+  const readPromise = namespaceStartNamespaceStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const suffix = createTrackNamespace(["live", "sports"]);
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE,
+      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
+    ),
+  );
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.NAMESPACE_DONE,
+      encodeNamespaceDonePayload({
+        type: MessageType.NAMESPACE_DONE,
+        trackNamespaceSuffix: suffix,
+      }),
+    ),
+  );
+  // FIN で emitAll() の補完通知経路に入る
+  ctx.readableController.close();
+  await readPromise;
+
+  // 明示的な NAMESPACE_DONE の 1 回だけで、FIN の補完通知は発生しない
+  assert.equal(namespaceDoneCalls, 1);
   assert.isUndefined(ctx.getClosedWithError());
 });
 
