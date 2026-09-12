@@ -4207,12 +4207,12 @@ export class SessionImpl implements Session {
     // alias 重複というセッション違反が検出されず隠れるため)。
     const existingSubscribers = this.subscribersByAlias.get(publishTrackAlias);
     if (existingSubscribers !== undefined && existingSubscribers.length > 0) {
-      // 比較キーは SubscriberImpl.getFullTrackName と同じ生成規則
+      // 比較キーは SubscriberImpl.getFullTrackNameKey と同じ生成規則
       // (fullTrackNameKey) に揃える。受信 PUBLISH 側だけ別形式で組み立てると
       // 同一 Track への複数 PUBLISH が不一致になり、DUPLICATE_TRACK_ALIAS で
       // 誤ってセッションを閉じる。
       const trackKey = fullTrackNameKey(publishTrackNamespace, publishTrackName);
-      if (existingSubscribers[0].getFullTrackName() !== trackKey) {
+      if (existingSubscribers[0].getFullTrackNameKey() !== trackKey) {
         this.closeWithError(
           new SessionError(
             `track alias 0x${publishTrackAlias.toString(16)} used for different tracks`,
@@ -4920,7 +4920,7 @@ export class SessionImpl implements Session {
         // より優先し、同一 Track の全購読と全 FETCH を cancel する。
         bidi.cancelMalformedTrackPeers(
           this as unknown as SessionInternal,
-          target.subscriber.getFullTrackName(),
+          target.subscriber.getFullTrackNameKey(),
           err,
         );
         await cancelStreamQuiet(
@@ -4995,7 +4995,7 @@ export class SessionImpl implements Session {
       // みではない)。Full Track Name で引く。
       bidi.cancelMalformedTrackPeers(
         this as unknown as SessionInternal,
-        fetcher.getFullTrackName(),
+        fetcher.getFullTrackNameKey(),
         error,
       );
     }
@@ -5140,7 +5140,7 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-21 §12.1:
     // 同一 Track の全購読と全 FETCH を cancel する。比較キーは
     // trackAlias から購読を特定して得る (購読が未特定なら cancel 対象が無い)。
-    const trackKey = subscribers[0]?.getFullTrackName();
+    const trackKey = subscribers[0]?.getFullTrackNameKey();
     if (trackKey !== undefined) {
       bidi.cancelMalformedTrackPeers(this as unknown as SessionInternal, trackKey, error);
     }

@@ -1191,6 +1191,10 @@
   - PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS の応答読み取りを `bidiReadResponse` に集約し、経路固有の処理をハンドラとして注入する
   - 挙動は変えず、削除集合・reject と close の順序・同一 SessionError オブジェクト性を維持する
   - @voluntas
+- [UPDATE] getFullTrackName を getFullTrackNameKey に改名する
+  - 戻り値が Full Track Name そのものではなく fullTrackNameKey が生成する比較キーになったため、名前を実体に合わせる
+  - 公開 API に変更なし (内部リファクタのみ)
+  - @voluntas
 
 ## 2026.2.0
 

@@ -306,7 +306,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       const trackAlias = decodeDatagramTrackAlias(data);
       if (trackAlias !== undefined) {
         const subscribers = session.subscribersByAlias.get(trackAlias) ?? [];
-        const trackKey = subscribers[0]?.getFullTrackName();
+        const trackKey = subscribers[0]?.getFullTrackNameKey();
         if (trackKey !== undefined) {
           cancelMalformedTrackPeers(session, trackKey, err);
         }

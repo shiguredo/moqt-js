@@ -11019,7 +11019,7 @@ test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を can
 
   const error = new MalformedTrackError("malformed track");
   // namespace ["a","b"] + trackName "c" の malformed 検出を通知する
-  cancelMalformedTrackPeers(session, targetSubscriber.getFullTrackName(), error);
+  cancelMalformedTrackPeers(session, targetSubscriber.getFullTrackNameKey(), error);
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });

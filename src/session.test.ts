@@ -1731,7 +1731,7 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
  * draft-ietf-moq-transport-21 §3.1 / §3.1.2:
  * 同一 Track への複数 PUBLISH は許容されるため、同一 Track に同一 Track Alias を
  * 使う 2 件目の PUBLISH を DUPLICATE_TRACK_ALIAS として拒否しない。
- * 受信 PUBLISH の重複判定と SubscriberImpl.getFullTrackName が同じ比較キーを
+ * 受信 PUBLISH の重複判定と SubscriberImpl.getFullTrackNameKey が同じ比較キーを
  * 使っていることを検証する (片方だけ形式が変わると同一 Track が不一致になる)。
  */
 test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならない", async () => {

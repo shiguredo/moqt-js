@@ -108,7 +108,7 @@ export class FetcherImpl implements Fetcher {
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
-  getFullTrackName(): string {
+  getFullTrackNameKey(): string {
     return fullTrackNameKey(this.fetcherNamespace, this.fetcherTrackName);
   }
 
