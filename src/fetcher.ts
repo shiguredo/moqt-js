@@ -35,6 +35,13 @@ export interface Fetcher {
   /**
    * Fetch をキャンセルする
    * draft-ietf-moq-transport-21 Section 3.2.1 (Fetch State Management)
+   *
+   * 「It MUST send STOP_SENDING for the bidi request stream.」
+   * キャンセル開始と同時に state は closed になり、Object の配信と end / error の
+   * 通知は止まる。ストリームの後始末 (STOP_SENDING 相当の cancel と RESET_STREAM) は
+   * 返り値の Promise が完了するまで継続する。
+   * 既にキャンセル中 / closed の場合は何もせず即座に解決する Promise を返すため、
+   * その Promise は進行中の後始末の完了を保証しない。
    */
   cancel(): Promise<void>;
 }
@@ -199,10 +206,15 @@ export class FetcherImpl implements Fetcher {
       return;
     }
 
+    // キャンセル開始と同時に closed にして、onCancel の await 中の重複した
+    // malformed 検出による error コールバックの二重通知と Object 配信を止める
+    // (handleError / handleObject / handleEnd は closed で抑止される)。
+    // ストリームの後始末 (bidi リクエストストリームへの STOP_SENDING 等) は
+    // 従来どおり onCancel が行う。
+    this.fetcherState = "closed";
+
     if (this.onCancel) {
       await this.onCancel();
     }
-
-    this.fetcherState = "closed";
   }
 }
