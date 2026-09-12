@@ -1,7 +1,7 @@
 # malformed 検出の重複で fetcher の error コールバックが二重発火する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/fix-fetcher-double-error-notify
 - Polished: 2026-09-12
 
@@ -43,3 +43,14 @@ draft-ietf-moq-transport-21 §12.1 は「When a subscriber detects a Malformed T
 - `FetcherImpl.handleError` / `FetcherImpl.cancel` / `FetcherImpl.markClosed` / `FetcherState` (`src/fetcher.ts`。`markClosed` は公開インターフェース `Fetcher` には無い内部メソッド)
 - `issues/closed/0557-bug-malformed-track-cross-cancel.md` (cross-cancel の導入)
 - `issues/0575-bug-track-status-malformed-handling.md` (TRACK_STATUS_OK の malformed で cross-cancel を適用するかという別の論点。本 issue は fetcher のキャンセル中の二重通知のみを扱い、対象が異なる)
+
+## 解決方法
+
+fetcher のキャンセル開始と同時に state を closed にし、キャンセル完了を待つ間に重複した malformed 検出が届いても error コールバックを二重に呼ばないようにした。
+
+- `src/fetcher.ts` の `FetcherImpl.cancel` が `await this.onCancel()` の前に `fetcherState` を closed にする (`handleError` / `handleObject` / `handleEnd` は closed で抑止される)。`onCancel` は従来どおり必ず await し、§3.2.1 の MUST (bidi リクエストストリームへの STOP_SENDING) を維持する。公開インターフェース `Fetcher.cancel` の JSDoc に「キャンセル開始と同時に state は closed になる」ことを明記した
+- `src/session/bidi.ts` の `cancelMalformedTrackPeers` は、fetcher ループの先頭で `state === "closed"` の fetcher をスキップし、通知もストリーム後始末も 1 回目のみで行う
+- `bidiCancelFetch` を直接呼ぶ案は `onCancel` フック (session の配線とテストの観測点) をバイパスし、既存テスト 2 件が落ちるため採らない
+- 新しい state は追加しない (`FetcherState` は公開インターフェース `Fetcher` の `state` の型であり、値の追加は利用者の state 判定の意味を変えるため)
+- `src/session/bidi.test.ts` に、未解決の `readable.cancel` で窓を開き、キャンセル中の 2 回目の検出でも error コールバックが 1 回だけ呼ばれ、STOP_SENDING 相当の cancel も 1 回だけであることを検証するテストを追加した (変更前の実装では error が 2 回呼ばれる)
+- `CHANGES.md` の `## develop` に `[FIX]` を追加した
