@@ -49,7 +49,7 @@ const fullTrackNameArb = fc.tuple(fc.array(fieldArb, { maxLength: 4 }), fieldArb
 /**
  * draft-ietf-moq-transport-21 §2.4.1:
  * 同じ Full Track Name は常に同じ比較キーになる。配列の参照や生成経路に依存せず、
- * getFullTrackName と受信 PUBLISH の比較キーが一致する前提を保証する。
+ * getFullTrackNameKey と受信 PUBLISH の比較キーが一致する前提を保証する。
  */
 test("fullTrackNameKey: 同じ Full Track Name は同じキーになる", () => {
   fc.assert(

@@ -1,7 +1,7 @@
 # getFullTrackName の戻り値が比較キーになったため名前を揃える
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-12
 - Branch: feature/refactor-rename-full-track-name-key
 - Polished: 2026-09-12
 
@@ -38,3 +38,14 @@
 
 - `src/fullTrackName.ts` / `src/subscriber.ts` / `src/fetcher.ts` / `src/session/bidi.ts` / `src/session.ts` / `src/session/incoming.ts`
 - `issues/closed/0574-bug-full-track-name-collision.md` (Full Track Name の比較キーを導入した issue)
+
+## 解決方法
+
+`SubscriberImpl` / `FetcherImpl` の内部メソッド `getFullTrackName` を `getFullTrackNameKey` に改名し、名前と実体 (Full Track Name ではなく `fullTrackNameKey` が生成する比較キーを返す) を一致させた。挙動の変更はなく、公開 API への影響もない。
+
+- `src/subscriber.ts` の `SubscriberImpl` と `src/fetcher.ts` の `FetcherImpl` のメソッドを `getFullTrackNameKey` に改名した (JSDoc は「比較キーを返す」「生成規則の正本は `fullTrackNameKey`」を維持)
+- 呼び出し元を改名に追随させた (`src/session/bidi.ts` の `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `cancelMalformedTrackPeers`、`src/session.ts` の `handleIncomingBidirectionalStream` / `handleFillFetchStream` / `handleMalformedFetchTrack` / `handleMalformedSubgroupTrack`、`src/session/incoming.ts` の `incomingHandleDatagram`)
+- テストとコメントの旧名参照を追随させた (`src/session/bidi.test.ts` / `src/session.test.ts` / `src/fullTrackName.prop.ts`)。`cancelMalformedTrackPeers` の JSDoc は、TRACK_STATUS 経路が session 側で生成した比較キーを渡すことも読み取れる記述に整えた
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した
+- 比較キーを生成する経路 (受信 PUBLISH の重複判定 / SUBSCRIBE_OK の重複判定 / malformed 検出時の cross-cancel 6 経路) がすべて `fullTrackNameKey` 由来のままであること、`rg -n "getFullTrackName\b" src` が 0 件であること、`vp check` / `tsc --noEmit` / `vp test run` (69 files / 1996 tests) が通ることを確認した
+- 既存テストは無変更で通り、比較キーの期待値 (長さ付きキー) も変わっていない
