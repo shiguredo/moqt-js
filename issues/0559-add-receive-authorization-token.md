@@ -3,7 +3,7 @@
 - Created: 2026-09-09
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-receive-authorization-token
-- Polished: 2026-09-12
+- Polished: 2026-09-13
 
 ## 目的
 
