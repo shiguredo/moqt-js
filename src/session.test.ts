@@ -3229,6 +3229,9 @@ interface DataStreamFinContext {
   internal: {
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    // malformed 検出時の cross-cancel (STOP_SENDING 相当) を検証するテストが
+    // 登録する。登録が無いテストでは空 Map のまま使われない。
+    requestStreams: Map<bigint, RequestStreamEntry>;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   sessionError: { current: Error | undefined };
@@ -3271,6 +3274,7 @@ function createDataStreamFinContext(): DataStreamFinContext {
   const internal = session as unknown as {
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+    requestStreams: Map<bigint, RequestStreamEntry>;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
 
@@ -3390,6 +3394,29 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
   );
   ctx.internal.subscribersByAlias.set(7n, [subscriber]);
 
+  // bidi リクエストストリームを登録し、cross-cancel が STOP_SENDING 相当
+  // (readable.cancel) と RESET_STREAM 相当 (writer.abort) を送ることを観測する
+  const bidiCancelReasons: unknown[] = [];
+  const bidiAbortReasons: unknown[] = [];
+  const bidiReadable = new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      bidiCancelReasons.push(reason);
+    },
+  });
+  const bidiWritable = new WritableStream<Uint8Array>({
+    abort(reason) {
+      bidiAbortReasons.push(reason);
+    },
+  });
+  ctx.internal.requestStreams.set(1n, {
+    stream: {
+      readable: bidiReadable,
+      writable: bidiWritable,
+    } as unknown as WebTransportBidirectionalStream,
+    writer: bidiWritable.getWriter(),
+    controlReader: new ControlStreamReader(),
+  });
+
   const headerBytes = encodeSubgroupHeader({
     type: SubgroupHeaderType.BASE_EXT,
     trackAlias: 7n,
@@ -3419,6 +3446,11 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
   assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
   // 購読は closed になる
   assert.equal(subscriber.state, "closed");
+  // bidi リクエストストリームの両方向が cancel される
+  // (draft-ietf-moq-transport-21 §12.1 の MUST cancel / §3.1 の STOP_SENDING 相当)
+  assert.deepEqual(bidiCancelReasons, ["subscription cancelled"]);
+  assert.deepEqual(bidiAbortReasons, ["subscription cancelled"]);
+  assert.isFalse(ctx.internal.requestStreams.has(1n));
 });
 
 /**
