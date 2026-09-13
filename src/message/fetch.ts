@@ -4,6 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { assertLengthWithinData } from "../length";
 import { ProtocolViolationError } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
@@ -105,13 +106,7 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackNameLenSize;
 
-  // Length 宣言が残りバイトを超える切り詰めは破損であり、
-  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-  if (offset + totalConsumed + Number(trackNameLen) > data.length) {
-    throw new ProtocolViolationError(
-      `fetch track name length exceeds remaining data: ${trackNameLen} > ${data.length - (offset + totalConsumed)}`,
-    );
-  }
+  assertLengthWithinData("fetch track name", trackNameLen, offset + totalConsumed, data.length);
   const trackName = data.slice(
     offset + totalConsumed,
     offset + totalConsumed + Number(trackNameLen),

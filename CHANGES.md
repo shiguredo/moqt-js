@@ -1352,6 +1352,11 @@
 
 ### misc
 
+- [UPDATE] Length 宣言境界のガードを共通ヘルパーに集約する
+  - `src/message/*` と `src/properties.ts` に同じ形で複製されていた「宣言 Length が残りバイト数を超えていないか」の検査を `src/length.ts` の `isLengthWithinData` (述語) と `assertLengthWithinData` (ProtocolViolationError を投げる) に集約する
+  - 収まらない場合の扱いが経路ごとに異なる箇所 (寛容に打ち切る経路、既知 Type だけエラーにする経路、IncompleteDataError として扱う経路) は述語のみを使い、従来の分岐を維持する
+  - uint8 parameter の切り詰めメッセージを `uint8 parameter value length exceeds remaining data` に統一する (他のガードと同じ `{label} length exceeds remaining data` 形式になる)
+  - 挙動は変えない
 - [UPDATE] SessionInternal の重複宣言と見出し分裂を解消する
   - `peerMaxFilterRanges` / `localMaxFilterRanges` / `receivedEndOfGroupFinalObjectIds` が基底 (`BidiSessionInternal`) と派生 (`SessionInternal`) の両方で宣言されていたため、派生側の再宣言を削除して基底に一本化する
   - `publish.ts 用` と `publish.ts 用（追加分）` に分裂していた見出しを整理し、実際の利用モジュールに合わせて `incoming.ts 用` と `その他` に分ける

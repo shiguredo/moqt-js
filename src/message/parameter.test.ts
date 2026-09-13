@@ -1300,7 +1300,7 @@ test("decodeMessageParameter: uint8 分岐の残量不足で ProtocolViolationEr
   const truncated = new Uint8Array([0x10]);
   assert.throws(
     () => decodeMessageParameter(truncated, 0, 0n),
-    /uint8 parameter value exceeds remaining data/,
+    /uint8 parameter value length exceeds remaining data/,
   );
 });
 
