@@ -4,7 +4,7 @@
 
 `moqt-js` の低レベル API は、MOQT の制御メッセージ、データストリーム、データグラムをアプリケーションから直接扱うための層である。高レベル API のような `MediaStream` / `WebCodecs` の抽象化は行わず、`MoqtObject` の `payload` と `properties` をそのまま受け渡す。
 
-公開 API の入口は `connect()` で、返された `Session` から `publish()` / `subscribe()` / `fetch()` / `trackStatus()` / `subscribeNamespace()` / `publishNamespace()` を呼び出す。バイナリの encode / decode は `src/message/*`、`src/controlStream.ts`、`src/dataStream.ts` に分離され、`SessionImpl` がそれらを束ねている。
+公開 API の入口は `connect()` で、返された `Session` から `publish()` / `subscribe()` / `fetch()` / `trackStatus()` / `subscribeNamespace()` / `subscribeTracks()` / `publishNamespace()` を呼び出す。バイナリの encode / decode は `src/message/*`、`src/controlStream.ts`、`src/dataStream.ts` に分離され、`SessionImpl` がそれらを束ねている。
 
 ## API 階層
 
@@ -74,7 +74,8 @@ const session = await connect(url, callbacks?, options?)
 | `fetch(namespace, trackName, options, callbacks)`          | 新しい双方向ストリームで `FETCH` を送る                 |
 | `trackStatus(namespace, trackName)`                        | `TRACK_STATUS` を送り `REQUEST_OK` を待つ               |
 | `subscribeNamespace(namespacePrefix, callbacks, options?)` | 専用双方向ストリームで Namespace 発見を行う             |
-| `publishNamespace(namespace, callbacks?)`                  | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る       |
+| `subscribeTracks(namespacePrefix, callbacks, options?)`    | 専用双方向ストリームで `SUBSCRIBE_TRACKS` を送る        |
+| `publishNamespace(namespace, callbacks?, options?)`        | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る       |
 | `goaway(newSessionUri?, timeout?)`                         | 制御ストリームで `GOAWAY` を送る                        |
 | `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする |
 | `getStatistics()`                                          | セッション統計を取得する                                |
@@ -222,6 +223,7 @@ interface MoqtObject {
 
 - `publishNamespace()` は専用双方向ストリームで `PUBLISH_NAMESPACE` を送り、専用ループで `REQUEST_OK` / `REQUEST_ERROR` を待つ
 - `subscribeNamespace()` は専用双方向ストリームを別実装で開き、`REQUEST_OK` の後も `NAMESPACE` / `NAMESPACE_DONE` を受け続ける
+- `subscribeTracks()` も専用双方向ストリームを別実装で開き、`REQUEST_OK` の後は prefix に一致する `PUBLISH` / `PUBLISH_SKIPPED` を受け続ける
 - `PUBLISH_NAMESPACE_DONE` は draft-17 で削除されたため、公開終了はローカル状態の cleanup のみで表現している
 
 ---
