@@ -1352,6 +1352,12 @@
 
 ### misc
 
+- [UPDATE] 非先頭 DATAGRAM + SUBGROUP_PRESENT のデコードテストを追加する
+  - draft-ietf-moq-transport-21 §11.4.1.1 の「DATAGRAM ビットが立つ Object は Subgroup ID を持たない」は先頭・非先頭を問わないため、非先頭 (context あり) で Subgroup ID vi64 を消費せず Object ID / Publisher Priority / payload length が復元されることを固定する
+  - `newContext.subgroupId` が直前の実 Object の Subgroup ID を保持することも固定する (0 に落ちると後続の SUBGROUP_SAME が別 Subgroup を参照する)
+  - DATAGRAM の早期 return を先頭限定に変える退行を入れると 2 件が落ちることを実測した
+  - 実装は変えない (テスト追加のみ)
+  - @voluntas
 - [UPDATE] スコープ違反テストの検証内容を全経路で揃える
   - PUBLISH_OK / PUBLISH_STATE_NOTIFY / 受信 PUBLISH のスコープ違反テストが code のみを検証していたのをやめ、reject と close の同一オブジェクト性・順序・エラーメッセージまで検証する
   - PUBLISH_OK のテストコンテキストに reject / close の順序記録を追加した
