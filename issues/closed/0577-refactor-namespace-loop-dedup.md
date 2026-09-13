@@ -56,14 +56,14 @@
 
 ### 注入した差分
 
-| 差分 | 注入先 |
-| --- | --- |
-| ループ条件 (`active` の間 / `closed` 以外の間) | `isActive` |
-| unsubscribe 後の遅延応答を無視するか | `skipMessagesWhenInactive` |
-| 先頭メッセージガード (Publication は未注入) | `validateFirstMessage` |
-| done 時の後始末 | `onStreamDone` |
-| REQUEST_OK / REQUEST_ERROR / 追加メッセージ | `onRequestOk` / `onRequestError` / `onMessage` |
-| 読み取り失敗時の後始末 | `onReadError` |
+| 差分                                           | 注入先                                         |
+| ---------------------------------------------- | ---------------------------------------------- |
+| ループ条件 (`active` の間 / `closed` 以外の間) | `isActive`                                     |
+| unsubscribe 後の遅延応答を無視するか           | `skipMessagesWhenInactive`                     |
+| 先頭メッセージガード (Publication は未注入)    | `validateFirstMessage`                         |
+| done 時の後始末                                | `onStreamDone`                                 |
+| REQUEST_OK / REQUEST_ERROR / 追加メッセージ    | `onRequestOk` / `onRequestError` / `onMessage` |
+| 読み取り失敗時の後始末                         | `onReadError`                                  |
 
 namespace / tracks で同一だった REQUEST_ERROR 処理は `namespaceHandleSubscriptionRequestError`、読み取り失敗時の後始末は `namespaceHandleSubscriptionReadError` に集約した。Publication の REQUEST_OK / REQUEST_ERROR は §9.14 固有の検証順序 (重複 OK → Parameter Scope → Track Properties) をそのまま残している。
 
