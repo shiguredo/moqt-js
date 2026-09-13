@@ -1523,6 +1523,15 @@ export class SessionImpl implements Session {
   // sendObject 時にこの Set をチェックし、閉じた Subgroup への送信を拒否する。
   private closedSubgroups = new Set<string>();
 
+  /**
+   * Group 単位の END_OF_GROUP 既知最終 Object ID
+   *
+   * draft-ietf-moq-transport-21 §12.1 条件 4 の検出に使う。キーは
+   * `${trackAlias}:${groupId}`。closedSubgroups と同じ粒度で、Subgroup ストリームを
+   * またいで「この Group の最終 Object はこれ」という既知情報を保持する。
+   */
+  private receivedEndOfGroupFinalObjectIds = new Map<string, bigint>();
+
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
   private statsObjectsReceivedViaSubscribe = 0;
@@ -2908,6 +2917,9 @@ export class SessionImpl implements Session {
 
     // 閉じた Subgroup の追跡をクリア
     this.closedSubgroups.clear();
+
+    // END_OF_GROUP の Group 単位追跡をクリア
+    this.receivedEndOfGroupFinalObjectIds.clear();
 
     // GOAWAY 受信追跡をクリア
     this.goawayReceivedOnRequestStreams.clear();
@@ -5301,6 +5313,7 @@ export class SessionImpl implements Session {
     remainingBuffer: Uint8Array;
     previousObjectId: bigint;
     resolvedSubgroupId: bigint | undefined;
+    updatedEndOfGroupFinalObjectId: bigint | undefined;
   } {
     return incomingProcessSubgroupObjects(
       this as unknown as SessionInternal,
@@ -5486,6 +5499,15 @@ export class SessionImpl implements Session {
         buffer = processResult.remainingBuffer;
         previousObjectId = processResult.previousObjectId;
         resolvedSubgroupId = processResult.resolvedSubgroupId;
+        // draft-ietf-moq-transport-21 §12.1 条件 4:
+        // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
+        // またいだ後続 Object の malformed 検出に使う。
+        if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
+          this.receivedEndOfGroupFinalObjectIds.set(
+            `${header.trackAlias}:${header.groupId}`,
+            processResult.updatedEndOfGroupFinalObjectId,
+          );
+        }
       } catch (err) {
         if (err instanceof MalformedTrackError) {
           // draft-ietf-moq-transport-21 §12.1:

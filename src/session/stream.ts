@@ -160,10 +160,12 @@ export function processSubgroupObjects(
   stats: StreamStatsUpdate,
   delivery: SubgroupDeliveryHooks,
   resolvedSubgroupId?: bigint,
+  endOfGroup?: { finalObjectId?: bigint },
 ): {
   remainingBuffer: Uint8Array;
   previousObjectId: bigint;
   resolvedSubgroupId: bigint | undefined;
+  updatedEndOfGroupFinalObjectId: bigint | undefined;
 } {
   let offset = 0;
   let currentPreviousObjectId = previousObjectId;
@@ -175,10 +177,10 @@ export function processSubgroupObjects(
   let currentResolvedSubgroupId = resolvedSubgroupId ?? header.subgroupId;
   // draft-ietf-moq-transport-21 §12.1 条件 4:
   // Object Status が END_OF_GROUP の Object は Group の最終 Object である。
-  // 同一呼び出し内でその後により大きい Object ID を観測したら malformed。
-  // (feed をまたぐ追跡は呼び出し側が状態を保持しないため、この関数内に
-  //  限定する。詳細は下の検出箇所のコメント参照)
-  let endOfGroupFinalObjectId: bigint | undefined;
+  // 既知の最終 Object ID はセッションが Group 単位で保持し、呼び出し側から
+  // 受け取る。これにより Subgroup ストリーム (呼び出し) をまたいだ追跡ができる。
+  // 新たに確定した値は戻り値で返し、呼び出し側が更新する。
+  let endOfGroupFinalObjectId = endOfGroup?.finalObjectId;
 
   while (offset < buffer.length) {
     // この subgroup で最初のオブジェクトかどうかをデコード直前に捕捉する。
@@ -229,20 +231,31 @@ export function processSubgroupObjects(
       //  final Object in the Group. The final Object in a Group is the Object
       //  with Status END_OF_GROUP, or the last Object before a FIN in a
       //  Subgroup which has the END_OF_GROUP bit set."
-      // Object Status が END_OF_GROUP の Object を検出済みなら、それより大きい
-      // Object ID を持つ後続 Object は malformed である。同一 Subgroup 内の
-      // Object ID は昇順に採番されるため、後続 Object は必ずこれに該当する。
-      // Subgroup Header の END_OF_GROUP ビットによる「FIN 前の最後の Object が
-      // Group 最終 Object」の判定は、FIN を processSubgroupObjects から観測できず、
-      // 複数 Subgroup / 複数ストリームをまたぐ Group 単位の追跡はセッション状態を
-      // 必要とするため実装しない (endOfGroup ビット自体は SubgroupHeader で公開
-      // 済み)。
+      // Group の最終 Object が既知 (他 Subgroup で END_OF_GROUP を検出済み) なら、
+      // それより大きい Object ID を持つ Object は malformed である。この既知情報は
+      // セッションが `${trackAlias}:${groupId}` 単位で保持するため、Subgroup
+      // ストリームをまたいでも検出できる。
+      //
+      // 対象範囲: Object Status が END_OF_GROUP の Object による確定だけを扱う。
+      // Subgroup Header の END_OF_GROUP ビットは「FIN 前の最後の Object が Group
+      // 最終 Object」を意味し、FIN を観測して初めて確定する。FIN は
+      // processSubgroupObjects の外 (呼び出し側のループ) で観測されるため、
+      // この経路は対象外とする (endOfGroup ビット自体は SubgroupHeader で公開済み)。
       if (endOfGroupFinalObjectId !== undefined && objectId > endOfGroupFinalObjectId) {
         throw new MalformedTrackError(
           `malformed track: object id ${objectId} exceeds final object ${endOfGroupFinalObjectId} in group ${header.groupId}`,
         );
       }
       if (fields.status === ObjectStatus.END_OF_GROUP) {
+        if (endOfGroupFinalObjectId !== undefined && objectId < endOfGroupFinalObjectId) {
+          // 同じ Group について既知の最終 Object より小さい Object が
+          // END_OF_GROUP を主張した。§12.1 条件 3 が禁じる
+          // 「同一 Subgroup が複数のストリームで異なる最終 Object を持つ」状態と
+          // 同じく、Group の最終 Object が二者に分かれる矛盾である。
+          throw new MalformedTrackError(
+            `malformed track: end of group object id ${objectId} is smaller than known final object ${endOfGroupFinalObjectId} in group ${header.groupId}`,
+          );
+        }
         endOfGroupFinalObjectId = objectId;
       }
 
@@ -313,6 +326,7 @@ export function processSubgroupObjects(
     remainingBuffer: buffer.slice(offset),
     previousObjectId: currentPreviousObjectId,
     resolvedSubgroupId: currentResolvedSubgroupId,
+    updatedEndOfGroupFinalObjectId: endOfGroupFinalObjectId,
   };
 }
 
