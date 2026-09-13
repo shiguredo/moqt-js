@@ -111,6 +111,12 @@ import {
   incomingValidateRequestId,
 } from "./session/incoming";
 import * as namespaceLoops from "./session/namespaceLoops";
+import {
+  AuthTokenCache,
+  type AuthTokenProcessResult,
+  processMessageAuthorizationTokens,
+  processSetupAuthorizationTokens,
+} from "./session/authTokenCache";
 
 export type { MoqtObject } from "./dataStream";
 
@@ -1250,6 +1256,17 @@ export class SessionImpl implements Session {
   // draft-ietf-moq-transport-21 §9.1.6: 自 endpoint が SETUP で広告した
   // MAX_FILTER_RANGES（未広告時は 0 = Range Filter 受信拒否）
   localMaxFilterRanges = 0;
+  // draft-ietf-moq-transport-21 §9.1.3: 自 endpoint が SETUP で広告した
+  // MAX_AUTH_TOKEN_CACHE_SIZE（未広告時は 0 = Alias 使用禁止）
+  localMaxAuthTokenCacheSize = 0;
+  /**
+   * ピアが REGISTER した Authorization Token のキャッシュ
+   *
+   * draft-ietf-moq-transport-21 §8.9 (Authorization Token Compression):
+   * Alias 空間は送信元ごとに独立するため、ピアが登録した Alias だけを保持する。
+   * 上限は自 endpoint が SETUP で広告した MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3)。
+   */
+  receivedAuthTokens = new AuthTokenCache(0);
   // draft-ietf-moq-transport-21 §13 (Grease): true のとき Track / Object Properties に
   // GREASE Property を 1 つ注入する。initialize() で ConnectOptions.grease を受け渡す。
   grease = false;
@@ -1563,6 +1580,11 @@ export class SessionImpl implements Session {
     // 自 endpoint が広告する上限を保持し、受信 Range Filter の検証に使う。
     // 未広告 (undefined) の既定値は 0（Range Filter 受信拒否）。
     this.localMaxFilterRanges = options?.maxFilterRanges ?? 0;
+    // draft-ietf-moq-transport-21 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
+    // 自 endpoint が広告する上限を保持し、受信 REGISTER の上限判定に使う。
+    // 未広告 (undefined) の既定値は 0（Alias の使用禁止）。
+    this.localMaxAuthTokenCacheSize = options?.maxAuthTokenCacheSize ?? 0;
+    this.receivedAuthTokens = new AuthTokenCache(this.localMaxAuthTokenCacheSize);
     const setup = createSetup({
       authorizationToken: options?.authorizationToken,
       moqtImplementation: options?.moqtImplementation,
@@ -1711,6 +1733,24 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-21 §9.1.3:
     // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
     const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
+
+    // draft-ietf-moq-transport-21 §9.1.4 / §8.9:
+    // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
+    // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION、登録済み Alias の
+    // 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の
+    // REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない。
+    // Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR になる。
+    try {
+      processSetupAuthorizationTokens(this.receivedAuthTokens, decodedSetup.parameters);
+    } catch (error) {
+      // draft-ietf-moq-transport-21 §8.9 / §9.1.4 の MUST は「セッションを閉じる」
+      // であるため、initialize() を失敗させるだけでなく WebTransport セッションも
+      // 閉じてピアへコードを伝える。
+      if (error instanceof SessionError) {
+        this.closeWithError(error);
+      }
+      throw error;
+    }
 
     // draft-ietf-moq-transport-21 §9.1.7:
     // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）
@@ -2787,6 +2827,11 @@ export class SessionImpl implements Session {
 
     // 受信済み Request ID の追跡をクリア
     this.receivedRequestIds.clear();
+
+    // draft-ietf-moq-transport-21 §8.9:
+    // 受信 Authorization Token キャッシュは Session に紐付くため、終了時に破棄する。
+    // 上限値は広告値であり Session の構成を表すため維持する。
+    this.receivedAuthTokens.clear();
 
     // Pending Subgroup ストリームの buffer を解放
     // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
@@ -4080,6 +4125,44 @@ export class SessionImpl implements Session {
   }
 
   /**
+   * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータを処理する
+   *
+   * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+   * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
+   * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
+   * 未登録 Alias の参照は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) でメッセージを
+   * 拒否する。デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再
+   * REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
+   * セッションを閉じる。
+   *
+   * @returns 処理を継続してよい場合は true、拒否・セッション終了で中断すべき場合は false
+   */
+  private async processIncomingPublishAuthorizationTokens(
+    stream: WebTransportBidirectionalStream,
+    parameters: Array<{ type: number; value: Uint8Array }>,
+  ): Promise<boolean> {
+    let result: AuthTokenProcessResult;
+    try {
+      result = processMessageAuthorizationTokens(this.receivedAuthTokens, parameters);
+    } catch (err) {
+      const sessionError = toSessionCloseError(err);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+      }
+      return false;
+    }
+    if (result.status === "unknown-alias") {
+      await incomingSendRequestErrorAndClose(
+        stream,
+        RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
+        "unknown authorization token alias",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * 受信した双方向ストリームを処理する
    *
    * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
@@ -4158,6 +4241,17 @@ export class SessionImpl implements Session {
     // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
     // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
     if (!this.validateIncomingRequestId(publishRequestId)) {
+      return;
+    }
+
+    // draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+    // PUBLISH の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
+    // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
+    // であるため、セッションエラーにならない拒否 (予約 namespace による
+    // DOES_NOT_EXIST 応答等) より前に処理する。
+    if (
+      !(await this.processIncomingPublishAuthorizationTokens(stream, decodedPublish.parameters))
+    ) {
       return;
     }
 
