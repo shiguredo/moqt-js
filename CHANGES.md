@@ -1185,6 +1185,9 @@
   - 複数のテストファイルに同じ実装が置かれていた `concatUint8Arrays` / `nodeProcess` / `createObject` / `appendMalformedTrackProperties` / `parseObjectPropertyIds` / `assertRejectsWithMessage` / `encodeJson` / `useValueToken` を `src/testSupport/helpers.ts` に集約する
   - `src/message/*.prop.ts` の 7 ファイルがそれぞれ再定義していた Message Parameter / Track Property / 名前系の arbitrary を `src/message/parameterArb.ts` に集約する。テストを含むファイルを共有元にすると import したテストが重複実行されるため、テストを含まない名前にする
   - Track Namespace のフィールド列を生成する条件が `namespaceStringsArb` と `trackNamespaceParameterArb` で重複していたため、`namespacePartsArb` に集約して両者から参照する
+- [UPDATE] Mandatory Track Property の範囲判定を述語に集約する
+  - `src/properties.ts` の 6 箇所に重複していた `id >= 0x4000n && id <= 0x7fffn` の判定を `isMandatoryTrackPropertyId` に集約し、値域の定義を 1 箇所にする (draft-ietf-moq-transport-21 §3.6)
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
