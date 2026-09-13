@@ -961,6 +961,11 @@
 
 ### misc
 
+- [UPDATE] codec Wrapper と Worker プロトコルの実ブラウザテストを追加する
+  - `tests/e2e/codec-wrappers.spec.ts` を追加し、実 Chromium の WebCodecs で 4 ラッパー (Video / Audio の Encoder / Decoder) の直接モードと Worker モードの状態遷移・chunk / frame の往復・未設定時の挙動を検証する
+  - テストページは devtools 配下 (`devtools/codec-test.html` / `devtools/src/codec-test/`) に置き、ライブラリのソースを直接 import する (ビルド入力には追加しない)
+  - ライブラリの挙動に変更なし
+  - @voluntas
 - [UPDATE] MOQLOG と MOQMETRICS の重複ヘルパーを共通化する
   - syslog severity と granularity level の 8 段階表、62-bit Group ID への truncate、Track Namespace / Track Name の組み立て、payload の JSON object デコードが `src/moqlog.ts` と `src/moqmetrics.ts` に同型で並立していたため `src/observability.ts` に集約する
   - 公開名 (`LOG_SEVERITY_LEVELS` / `METRICS_GRANULARITY_LEVELS` 等) とエラー文言は変えない
