@@ -4,8 +4,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { objectMatchesFilter, rangeFiltersMatch, trackPropertyFiltersMatch } from "./filter";
-import type { Location } from "./message/types";
+import { rangeFiltersMatch, trackPropertyFiltersMatch } from "./filter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { encodeProperties, type Property } from "./properties";
 
@@ -19,95 +18,10 @@ import { encodeProperties, type Property } from "./properties";
 
 // ============================================================================
 // objectMatchesFilter のテスト
+//
+// objectMatchesFilter(resolveFilter(...)) の通過条件は、任意の Location に対する
+// 単調性・境界として src/filter.prop.ts の PBT で検証している。
 // ============================================================================
-
-/**
- * filter undefined は全 Object 通過。
- */
-test("objectMatchesFilter: filter なしは全 Object 通過", () => {
-  const loc: Location = { group: 0n, object: 0n };
-  assert.isTrue(objectMatchesFilter(loc, undefined));
-});
-
-/**
- * Object Location >= Start で通過。
- */
-test("objectMatchesFilter: Start 以上の Object は通過", () => {
-  const filter = { start: { group: 5n, object: 3n }, endGroup: undefined };
-  // 同一 Group で Object が大きい
-  assert.isTrue(objectMatchesFilter({ group: 5n, object: 3n }, filter));
-  assert.isTrue(objectMatchesFilter({ group: 5n, object: 4n }, filter));
-  // 後の Group
-  assert.isTrue(objectMatchesFilter({ group: 6n, object: 0n }, filter));
-});
-
-/**
- * Object Location < Start で不通過。
- */
-test("objectMatchesFilter: Start 未満の Object は不通過", () => {
-  const filter = { start: { group: 5n, object: 3n }, endGroup: undefined };
-  // 前の Group
-  assert.isFalse(objectMatchesFilter({ group: 4n, object: 100n }, filter));
-  // 同一 Group で Object が小さい
-  assert.isFalse(objectMatchesFilter({ group: 5n, object: 2n }, filter));
-});
-
-/**
- * End Group があるとき、Object Group > End Group は不通過。
- */
-test("objectMatchesFilter: End Group 超過は不通過", () => {
-  const filter = { start: { group: 5n, object: 0n }, endGroup: 8n };
-  // End Group 以内
-  assert.isTrue(objectMatchesFilter({ group: 8n, object: 100n }, filter));
-  // End Group 超過
-  assert.isFalse(objectMatchesFilter({ group: 9n, object: 0n }, filter));
-});
-
-/**
- * End Group があるとき、Start 未満かつ End Group 以内でも不通過。
- */
-test("objectMatchesFilter: Start 未満は End Group 以内でも不通過", () => {
-  const filter = { start: { group: 5n, object: 3n }, endGroup: 8n };
-  assert.isFalse(objectMatchesFilter({ group: 5n, object: 2n }, filter));
-  assert.isFalse(objectMatchesFilter({ group: 4n, object: 0n }, filter));
-});
-
-/**
- * End Group = Start.Group（Delta 0）は当該 Group の Start 以上のみ通過。
- */
-test("objectMatchesFilter: End Group = Start.Group は当該 Group のみ", () => {
-  const filter = { start: { group: 5n, object: 2n }, endGroup: 5n };
-  assert.isTrue(objectMatchesFilter({ group: 5n, object: 2n }, filter));
-  assert.isTrue(objectMatchesFilter({ group: 5n, object: 10n }, filter));
-  assert.isFalse(objectMatchesFilter({ group: 6n, object: 0n }, filter));
-  assert.isFalse(objectMatchesFilter({ group: 5n, object: 1n }, filter));
-});
-
-/**
- * End Object があるとき、End Group 内で Object > End Object は不通過。
- * (draft-ietf-moq-transport-21 §9.20.10 "When EndObject is omitted, the filter
- *  includes all objects in the End Group." の対偶)
- */
-test("objectMatchesFilter: End Object 超過は不通過", () => {
-  const filter = { start: { group: 5n, object: 0n }, endGroup: 8n, endObject: 9n };
-  // End Group 内で End Object 以下
-  assert.isTrue(objectMatchesFilter({ group: 8n, object: 9n }, filter));
-  assert.isTrue(objectMatchesFilter({ group: 7n, object: 100n }, filter));
-  // End Group 内で End Object 超過
-  assert.isFalse(objectMatchesFilter({ group: 8n, object: 10n }, filter));
-});
-
-/**
- * End Object は End Group にのみ適用される。
- * End Group より前の Group は End Object の影響を受けない。
- */
-test("objectMatchesFilter: End Object は End Group のみに適用される", () => {
-  const filter = { start: { group: 5n, object: 0n }, endGroup: 8n, endObject: 9n };
-  // End Group より前の Group は全 Object 通過
-  assert.isTrue(objectMatchesFilter({ group: 6n, object: 500n }, filter));
-  // End Group 超過は従来どおり不通過
-  assert.isFalse(objectMatchesFilter({ group: 9n, object: 0n }, filter));
-});
 
 // ============================================================================
 // rangeFiltersMatch のテスト

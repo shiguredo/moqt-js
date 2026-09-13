@@ -11,9 +11,16 @@
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { resolveFilter } from "./filter";
+import {
+  objectMatchesFilter,
+  rangeFiltersMatch,
+  resolveFilter,
+  type RangeFilterValues,
+} from "./filter";
 import type { Location } from "./message/types";
+import type { FilterRange, LocationFilter, RangeFilterSpec } from "./message/parameter";
 import { locationFilterArb } from "./message/parameterArb";
+import { compareLocations } from "./session/params";
 import { MAX_VARINT } from "./varint";
 
 // ============================================================================
@@ -112,7 +119,13 @@ const absoluteRangeWithEndObjectArb: fc.Arbitrary<AbsoluteRangeWithEndObjectFilt
     endGroupDelta: fc.bigInt({ min: 0n, max: 1_000_000n }),
     endObject: fc.bigInt({ min: 0n, max: 1_000_000n }),
   })
-  .filter((filter) => filter.startGroup !== 0n || filter.startObject !== 0n);
+  // 空の範囲 (End Object < Start Object) を作らない。空範囲では Start 自身が
+  // 不通過になり、「Start は通過する」という不変条件を検証できないため
+  .filter(
+    (filter) =>
+      (filter.startGroup !== 0n || filter.startObject !== 0n) &&
+      filter.endObject >= filter.startObject,
+  );
 
 // ============================================================================
 // フィルタなしに解決される種別
@@ -325,5 +338,364 @@ test("resolveFilter: 任意のフィルタで解決結果の Start が 0〜2^64-
         assert.equal(resolved!.endObject, filter.endObject);
       }
     }),
+  );
+});
+
+// ============================================================================
+// objectMatchesFilter のテスト
+// ============================================================================
+
+/** 終端を持たない (endGroup なし) に解決されるフィルタ */
+const noEndGroupFilterArb: fc.Arbitrary<{
+  filter: LocationFilter;
+  largestLocation: Location | null;
+}> = fc.oneof(
+  // 2 フィールド (絶対開始・終端なし)
+  absoluteStartArb.map((filter) => ({ filter: filter as LocationFilter, largestLocation: null })),
+  // 1 フィールド (相対指定・終端なし)
+  fc.record({ filter: relativeGroupFilterArb, largestLocation: locationArb }),
+);
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * フィルタ未指定は全 Object 通過。任意の Location で成り立つ。
+ */
+test("objectMatchesFilter: filter 未指定は任意の Location を通過する (PBT)", () => {
+  fc.assert(
+    fc.property(boundaryLocationArb, (objectLocation) => {
+      assert.isTrue(objectMatchesFilter(objectLocation, undefined));
+    }),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * "Start Location 以上" が通過条件である。Start より小さい Location は
+ * 終端の内側でも不通過になる。
+ */
+test("objectMatchesFilter: Start より小さい Location は不通過 (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        absoluteStartArb,
+        absoluteRangeArb,
+        absoluteRangeWithEndObjectArb,
+        relativeGroupFilterArb,
+      ),
+      largestLocationArb,
+      (filter, largestLocation) => {
+        const resolved = resolveFilter(filter as LocationFilter, largestLocation);
+        assert.isDefined(resolved);
+        const { start } = resolved!;
+        // Start ちょうどは通過する
+        assert.isTrue(objectMatchesFilter(start, resolved));
+        // Start より小さい Location は不通過。Start が {0, 0} のときは
+        // これより小さい Location が存在しない
+        if (start.object > 0n) {
+          assert.isFalse(
+            objectMatchesFilter({ group: start.group, object: start.object - 1n }, resolved),
+          );
+        } else if (start.group > 0n) {
+          assert.isFalse(objectMatchesFilter({ group: start.group - 1n, object: 0n }, resolved));
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * End Group を持つフィルタは End Group より大きい Group を不通過にする。
+ * End Object を持つ場合は End Group 内で End Object より大きい Object も不通過。
+ */
+test("objectMatchesFilter: End Group / End Object の外側は不通過 (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(absoluteRangeArb, absoluteRangeWithEndObjectArb),
+      largestLocationArb,
+      locationArb,
+      (filter, largestLocation, offset) => {
+        const resolved = resolveFilter(filter as LocationFilter, largestLocation);
+        assert.isDefined(resolved);
+        assert.isDefined(resolved!.endGroup);
+        // End Group より大きい Group は不通過
+        assert.isFalse(
+          objectMatchesFilter(
+            { group: resolved!.endGroup! + 1n + offset.group, object: offset.object },
+            resolved,
+          ),
+        );
+        if (resolved!.endObject !== undefined) {
+          // End Group 内で End Object より大きい Object は不通過
+          assert.isFalse(
+            objectMatchesFilter(
+              { group: resolved!.endGroup!, object: resolved!.endObject + 1n + offset.object },
+              resolved,
+            ),
+          );
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * 終端を持たないフィルタは Start 以降で単調である。通過した Location より
+ * 大きい Location も必ず通過する (上限が無いため)。
+ */
+test("objectMatchesFilter: 終端なしフィルタは Start 以降で単調 (PBT)", () => {
+  fc.assert(
+    fc.property(
+      noEndGroupFilterArb,
+      locationArb,
+      locationArb,
+      ({ filter, largestLocation }, a, b) => {
+        const resolved = resolveFilter(filter, largestLocation);
+        assert.isDefined(resolved);
+        assert.isUndefined(resolved!.endGroup);
+        if (!objectMatchesFilter(a, resolved)) {
+          return;
+        }
+        if (compareLocations(a, b) > 0) {
+          return;
+        }
+        assert.isTrue(objectMatchesFilter(b, resolved));
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.1:
+ * Group が Start Group より大きければ、Object の値に関わらず通過する
+ * (End Group がある場合は End Group まで)。
+ */
+test("objectMatchesFilter: Start Group より大きい Group は通過する (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        absoluteStartArb,
+        absoluteRangeArb,
+        absoluteRangeWithEndObjectArb,
+        relativeGroupFilterArb,
+      ),
+      largestLocationArb,
+      locationArb,
+      (filter, largestLocation, offset) => {
+        const resolved = resolveFilter(filter as LocationFilter, largestLocation);
+        assert.isDefined(resolved);
+        const group = resolved!.start.group + 1n + offset.group;
+        if (resolved!.endGroup !== undefined && group > resolved!.endGroup) {
+          return;
+        }
+        assert.isTrue(objectMatchesFilter({ group, object: 0n }, resolved));
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.10:
+ * "When EndObject is omitted, the filter includes all objects in the End Group."
+ * End Object は End Group 内でのみ上限として働き、End Group より前の Group は
+ * Object の値に関わらず通過する。
+ */
+test("objectMatchesFilter: End Object は End Group 内でのみ上限になる (PBT)", () => {
+  fc.assert(
+    fc.property(
+      absoluteRangeWithEndObjectArb,
+      largestLocationArb,
+      locationArb,
+      (filter, largestLocation, offset) => {
+        const resolved = resolveFilter(filter as LocationFilter, largestLocation);
+        assert.isDefined(resolved);
+        assert.isDefined(resolved!.endGroup);
+        const { start, endGroup, endObject } = resolved!;
+        assert.isDefined(endObject);
+        // End Group より前の Group は Object の値に関わらず通過する
+        const beforeEndGroup = start.group + 1n + offset.group;
+        if (beforeEndGroup >= endGroup!) {
+          return;
+        }
+        assert.isTrue(
+          objectMatchesFilter(
+            { group: beforeEndGroup, object: endObject! + 1n + offset.object },
+            resolved,
+          ),
+        );
+      },
+    ),
+  );
+});
+
+// ============================================================================
+// rangeFiltersMatch のテスト
+// ============================================================================
+
+/** 単一 Range (open-ended または閉区間) */
+const filterRangeArb: fc.Arbitrary<FilterRange> = fc
+  .record({
+    start: fc.bigInt({ min: 0n, max: 100n }),
+    delta: fc.option(fc.bigInt({ min: 0n, max: 20n }), { nil: undefined }),
+  })
+  .map(({ start, delta }) => (delta === undefined ? { start } : { start, end: start + delta }));
+
+/** Range Filter の種別 */
+const rangeFilterTypeArb = fc.constantFrom(
+  "subgroup",
+  "objectId",
+  "priority",
+  "objectProperty",
+  "trackProperty",
+) as fc.Arbitrary<RangeFilterSpec["type"]>;
+
+/**
+ * Range Filter 指定の arbitrary
+ *
+ * SetID は 0〜3 に絞り、可換性と結合則のテストで「既存 SetID」と
+ * 「新規 SetID」を作り分けられるようにする。
+ */
+const rangeFilterSpecArb: fc.Arbitrary<RangeFilterSpec> = fc.oneof(
+  rangeFilterTypeArb.map((type) => ({ type, remove: true }) as RangeFilterSpec),
+  fc.record({
+    type: rangeFilterTypeArb,
+    setId: fc.integer({ min: 0, max: 3 }),
+    propertyType: fc.constant(0n),
+    ranges: fc.array(filterRangeArb, { minLength: 1, maxLength: 3 }),
+  }) as fc.Arbitrary<RangeFilterSpec>,
+);
+
+/** Range Filter の評価値 */
+const rangeFilterValuesArb: fc.Arbitrary<RangeFilterValues> = fc.record({
+  subgroupId: fc.option(fc.bigInt({ min: 0n, max: 100n }), { nil: undefined }),
+  objectId: fc.bigInt({ min: 0n, max: 100n }),
+  publisherPriority: fc.option(fc.integer({ min: 0, max: 255 }), { nil: undefined }),
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.2:
+ * フィルタなし (空配列) と削除エントリのみは全通過。
+ */
+test("rangeFiltersMatch: フィルタなしと削除のみは全通過 (PBT)", () => {
+  fc.assert(
+    fc.property(
+      rangeFilterValuesArb,
+      fc.array(
+        rangeFilterTypeArb.map((type) => ({ type, remove: true }) as RangeFilterSpec),
+        {
+          maxLength: 3,
+        },
+      ),
+      (values, removes) => {
+        assert.isTrue(rangeFiltersMatch([], values));
+        assert.isTrue(rangeFiltersMatch(removes, values));
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.2:
+ * SetID ごとの AND / 異なる SetID 間の OR は順序に依存しない。
+ */
+test("rangeFiltersMatch: 指定の並び順を変えても結果が変わらない (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.array(rangeFilterSpecArb, { maxLength: 4 }),
+      rangeFilterValuesArb,
+      (specs, values) => {
+        const expected = rangeFiltersMatch(specs, values);
+        assert.equal(rangeFiltersMatch([...specs].reverse(), values), expected);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.2:
+ * Length=0 の削除エントリは評価対象から除外されるため、加えても結果が変わらない。
+ */
+test("rangeFiltersMatch: 削除エントリを加えても結果が変わらない (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.array(rangeFilterSpecArb, { maxLength: 4 }),
+      rangeFilterTypeArb,
+      rangeFilterValuesArb,
+      (specs, type, values) => {
+        const expected = rangeFiltersMatch(specs, values);
+        assert.equal(rangeFiltersMatch([...specs, { type, remove: true }], values), expected);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.2:
+ * 同一 SetID は AND で結合するため、同じ SetID の指定を足しても
+ * 不通過が通過に変わることはない (単調)。
+ */
+test("rangeFiltersMatch: 同一 SetID の追加で通過に変わらない (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.record({
+        first: fc.record({
+          type: rangeFilterTypeArb,
+          setId: fc.integer({ min: 0, max: 3 }),
+          propertyType: fc.constant(0n),
+          ranges: fc.array(filterRangeArb, { minLength: 1, maxLength: 3 }),
+        }),
+        rest: fc.array(rangeFilterSpecArb, { maxLength: 3 }),
+        extra: fc.record({
+          type: rangeFilterTypeArb,
+          propertyType: fc.constant(0n),
+          ranges: fc.array(filterRangeArb, { minLength: 1, maxLength: 3 }),
+        }),
+      }),
+      rangeFilterValuesArb,
+      ({ first, rest, extra }, values) => {
+        const specs: RangeFilterSpec[] = [first as RangeFilterSpec, ...rest];
+        const extended: RangeFilterSpec[] = [
+          ...specs,
+          { ...extra, setId: first.setId } as RangeFilterSpec,
+        ];
+        if (rangeFiltersMatch(extended, values)) {
+          assert.isTrue(rangeFiltersMatch(specs, values));
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.3.2:
+ * 異なる SetID 間は OR で結合するため、新しい SetID の指定を足しても
+ * 通過が不通過に変わることはない (単調)。
+ */
+test("rangeFiltersMatch: 新しい SetID の追加で不通過に変わらない (PBT)", () => {
+  fc.assert(
+    fc.property(
+      fc.array(rangeFilterSpecArb, { maxLength: 4 }),
+      fc.record({
+        type: rangeFilterTypeArb,
+        propertyType: fc.constant(0n),
+        ranges: fc.array(filterRangeArb, { minLength: 1, maxLength: 3 }),
+      }),
+      rangeFilterValuesArb,
+      (specs, extra, values) => {
+        // 削除エントリしかない場合は「評価対象なし = 全通過」であり、
+        // 実フィルタを足すと結果が変わり得るため単調性の対象外とする
+        if (!specs.some((spec) => !("remove" in spec))) {
+          return;
+        }
+        if (!rangeFiltersMatch(specs, values)) {
+          return;
+        }
+        // SetID 99 は specs の生成範囲 (0〜3) と重ならないため必ず新しい SetID になる
+        assert.isTrue(
+          rangeFiltersMatch([...specs, { ...extra, setId: 99 } as RangeFilterSpec], values),
+        );
+      },
+    ),
   );
 });

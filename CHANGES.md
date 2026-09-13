@@ -1352,6 +1352,12 @@
 
 ### misc
 
+- [UPDATE] filter のマッチング解決を Property-Based Testing で検証する
+  - `src/filter.prop.ts` に `objectMatchesFilter` と `rangeFiltersMatch` のプロパティを追加する
+  - `objectMatchesFilter`: 未指定は全通過 / Start ちょうどは通過し Start 未満は不通過 / End Group・End Object の外側は不通過 / End Object は End Group 内でのみ上限になる / 終端なしフィルタは Start 以降で単調 / Start Group より大きい Group は通過する
+  - `rangeFiltersMatch`: 空配列と削除エントリのみは全通過 / 指定の並び順に依存しない (可換) / 削除エントリを足しても結果が変わらない / 同一 SetID の追加で通過に変わらない (AND の単調性) / 新しい SetID の追加で不通過に変わらない (OR の単調性)
+  - PBT で網羅できるようになった `objectMatchesFilter` の固定値単体テスト 8 件を `src/filter.test.ts` から削除する (`rangeFiltersMatch` / `trackPropertyFiltersMatch` の値評価テストは PBT の対象外として残す)
+  - @voluntas
 - [UPDATE] resolveFilter の解決結果を Property-Based Testing で検証する
   - `src/filter.prop.ts` を新設し、Filter 種別 (未指定 / reset / 1〜4 フィールド) × LARGEST_OBJECT の有無 × 任意の Location に対して不変条件を検証する
   - 未配信時の {0, 0} (1 フィールドと 2 フィールド 0:0)、Next Object の `Largest Object + 1`、1 フィールドの Next Group 基準と上下端クランプ、絶対系の LARGEST_OBJECT 非依存、3 / 4 フィールドの End Group / End Object を固定する
