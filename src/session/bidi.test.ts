@@ -860,32 +860,24 @@ test("PUBLISH_OK: 空 Track Properties は正常にデコードされる", () =>
 /**
  * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
  * リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
- * 初回の Request ID は seenSet に追加され true を返す。
+ * 初回の Request ID は seenSet に追加され null を返す。
  */
-test("validateNoDuplicateGoawayOnRequestStream: 初回は true で seenSet に追加される", () => {
+test("validateNoDuplicateGoawayOnRequestStream: 初回は null で seenSet に追加される", () => {
   const seen = new Set<bigint>();
-  let closed: SessionError | undefined;
-  const result = validateNoDuplicateGoawayOnRequestStream(0n, seen, (error) => {
-    closed = error;
-  });
-  assert.isTrue(result);
+  const error = validateNoDuplicateGoawayOnRequestStream(0n, seen);
+  assert.isNull(error);
   assert.isTrue(seen.has(0n));
-  assert.isUndefined(closed);
 });
 
 /**
- * 2 回目の同一 Request ID は重複として PROTOCOL_VIOLATION で closeSession を呼び false を返す。
+ * 2 回目の同一 Request ID は重複として PROTOCOL_VIOLATION の SessionError を返す。
  */
-test("validateNoDuplicateGoawayOnRequestStream: 2 回目は PROTOCOL_VIOLATION で false を返す", () => {
+test("validateNoDuplicateGoawayOnRequestStream: 2 回目は PROTOCOL_VIOLATION を返す", () => {
   const seen = new Set<bigint>([0n]);
-  let closed: SessionError | undefined;
-  const result = validateNoDuplicateGoawayOnRequestStream(0n, seen, (error) => {
-    closed = error;
-  });
-  assert.isFalse(result);
-  assert.isDefined(closed);
-  assert.equal(closed!.code, SessionErrorCode.PROTOCOL_VIOLATION);
-  assert.isTrue(closed!.message.includes("received duplicate goaway on request stream"));
+  const error = validateNoDuplicateGoawayOnRequestStream(0n, seen);
+  assert.isNotNull(error);
+  assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(error.message.includes("received duplicate goaway on request stream"));
 });
 
 // ============================================================================
@@ -946,7 +938,7 @@ function createBidiSession(): {
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: () => {},
-    validateIncomingRequestId: (_requestId: bigint) => true,
+    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
 
   return { session, written };
@@ -2485,7 +2477,7 @@ function createPublishReadTestContext(
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
-    validateIncomingRequestId: (_requestId: bigint) => true,
+    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
 
   return {
@@ -4727,7 +4719,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
-    validateIncomingRequestId: (_requestId: bigint) => true,
+    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
 
   await bidiReadPublishResponse(session, requestId, stream, controlReader);
@@ -4799,7 +4791,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
-    validateIncomingRequestId: (_requestId: bigint) => true,
+    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
 
   await bidiReadPublishResponse(session, requestId, stream, controlReader);
@@ -10449,9 +10441,7 @@ test("bidiReadFetchResponse: FIN 先行で待機者が即時解決する", async
 function useRealRequestIdValidation(ctx: { session: BidiSessionInternal }): Set<bigint> {
   const received = new Set<bigint>();
   ctx.session.validateIncomingRequestId = (requestId: bigint) =>
-    incomingValidateRequestId(requestId, received, (error) => {
-      ctx.session.closeWithError(error);
-    });
+    incomingValidateRequestId(requestId, received);
   return received;
 }
 

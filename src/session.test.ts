@@ -5612,7 +5612,7 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
     },
   });
 
-  assert.isTrue(session.validateIncomingRequestId(1n));
+  assert.isNull(session.validateIncomingRequestId(1n));
 
   // 同一インスタンスに未対応 SUBSCRIBE (Request ID 1) を処理させる
   const stream = {
