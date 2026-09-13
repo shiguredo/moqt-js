@@ -1350,6 +1350,13 @@
   - 公開 API に変更なし (内部リファクタのみ)
   - @voluntas
 
+### misc
+
+- [UPDATE] PublishOptions / SubscribeOptions の subgroupDeliveryTimeout doc コメントを実態に合わせる
+  - SUBGROUP_DELIVERY_TIMEOUT の強制 (Subgroup 完了後のタイマー開始とストリームリセット) を moqt-js が実装していないことを明記する。比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント (典型的にはリレー) の責務である
+  - 同じ枠組みを規定する draft-ietf-moq-transport-21 §5.2 (Delivery Timeouts and Data Reliability) を参照先に加え、OBJECT_DELIVERY_TIMEOUT の doc コメントと対称の構造に揃える
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13
