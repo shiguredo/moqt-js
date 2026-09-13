@@ -1192,6 +1192,10 @@
   - MessageParameterType のヘッダコメントを「Track Properties へ移動」から「タイムアウトは両 namespace に併存する」に修正する (§5.2)
   - CLIENT_SETUP / SERVER_SETUP の統合メモ、旧 SUBSCRIBE_NAMESPACE (0x11) の分割メモ、draft-16 の削除メモを削除する
   - @voluntas
+- [CHANGE] 未使用の Track アクセサ (namespace / trackName) を削除する
+  - `SubscriberImpl` / `FetcherImpl` / `PublisherImpl` の `get namespace()` / `get trackName()` はリポジトリ全体から読み取られておらず、公開インターフェースにも宣言されていないため削除する
+  - `PublisherImpl` の private フィールド `publisherNamespace` / `publisherTrackName` とコンストラクタでの代入も削除する (コンストラクタの引数は呼び出し側の引数順を変えないため残し、未使用引数として扱う)
+  - @voluntas
 - [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
   - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
   - ワイヤ形式・ロジック・公開 API は変更しない
