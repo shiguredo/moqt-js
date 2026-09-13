@@ -1352,6 +1352,13 @@
 
 ### misc
 
+- [UPDATE] resolveFilter の解決結果を Property-Based Testing で検証する
+  - `src/filter.prop.ts` を新設し、Filter 種別 (未指定 / reset / 1〜4 フィールド) × LARGEST_OBJECT の有無 × 任意の Location に対して不変条件を検証する
+  - 未配信時の {0, 0} (1 フィールドと 2 フィールド 0:0)、Next Object の `Largest Object + 1`、1 フィールドの Next Group 基準と上下端クランプ、絶対系の LARGEST_OBJECT 非依存、3 / 4 フィールドの End Group / End Object を固定する
+  - 一様乱数では 2^64-1 や {0, 0} が生成されないため、クランプと未配信判定の境界値を定数で混ぜた arbitrary を使う
+  - PBT で網羅できるようになった `resolveFilter` の固定値単体テスト 14 件を `src/filter.test.ts` から削除する (`objectMatchesFilter` / `rangeFiltersMatch` / `trackPropertyFiltersMatch` のテストは残す)
+  - 未配信時の {0, 1} / Next Object の +1 漏れ / 1 フィールドの未配信判定漏れの 3 退行を PBT が検出することを実測した
+  - @voluntas
 - [UPDATE] bidi 応答読み取りのハンドラ表から経路共通の定型を既定実装に抽出する
   - `handleCloseError` / `handleError` / `handleUnexpected` の 4 経路分 (約 90 行) は経路名と削除集合を除けば同一だったため、`cleanup` (経路別の削除と `fireFetcherReadyCallbacks`) と `requestLabel` (リクエスト種別名) をハンドラ表に追加し、3 つを既定実装に集約する
   - 既定実装は「cleanup → reject → close」の順序と、reject と close に同一 `SessionError` を渡す契約を守る。経路固有の後始末が必要な場合だけハンドラを上書きする
