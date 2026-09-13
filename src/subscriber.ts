@@ -161,6 +161,12 @@ export class SubscriberImpl implements Subscriber {
   goawayCallback?: (newSessionUri: string) => void;
   onUnsubscribe?: () => Promise<void>;
   onUpdate?: (options: RequestUpdateOptions) => Promise<void>;
+  /**
+   * fill fetch ストリームの失敗通知 (セッション内部コールバック)
+   *
+   * 購読の error コールバックとは別系統である理由は handleFillError を参照。
+   */
+  fillErrorCallback?: (error: Error) => void;
 
   constructor(
     namespace: string[],
@@ -481,6 +487,34 @@ export class SubscriberImpl implements Subscriber {
       return;
     }
     this.objectCallback({ ...object, fillDelivered: true });
+  }
+
+  /**
+   * fill fetch ストリームの失敗をアプリへ通知する
+   *
+   * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+   * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
+   *  publisher signals a fill failure by resetting the stream" および
+   * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
+   *  affect the subscription, which continues to deliver objects using
+   *  subscribe subgroups and datagrams."
+   * 購読は継続するため、購読の終了を意味する handleError (error コールバック)
+   * ではなく fill 専用の fillErrorCallback へ通知する。アプリはこれで fill が
+   * 欠けたことを検知し、再取得を判断できる。
+   *
+   * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks) の
+   * "SHOULD deliver an error to the application" は Malformed Track 検出が
+   * 購読自体の cancel を伴うため handleError 側で満たす。ここでは通知しない
+   * (cancelMalformedTrackPeers と二重にならないようにする)。
+   *
+   * state が closed の場合は通知しない。unsubscribe 済みの購読に対する
+   * 遅延した reset (§3.4.1 の MUST reset) で通知しないためである。
+   */
+  handleFillError(error: Error): void {
+    if (this.subscriberState === "closed") {
+      return;
+    }
+    this.fillErrorCallback?.(error);
   }
 
   /**

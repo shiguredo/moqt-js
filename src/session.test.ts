@@ -3232,8 +3232,12 @@ interface DataStreamFinContext {
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   sessionError: { current: Error | undefined };
+  /** debug コールバックが受け取った記録 (fill 失敗通知などの検証用) */
+  debugRecords: { typeName: string; decoded?: Record<string, unknown> }[];
   enqueue: (data: Uint8Array) => void;
   fin: () => void;
+  /** peer 起点のストリーム reset (RESET_STREAM 相当) を再現する */
+  reset: (error: Error) => void;
   /** peer 起点のセッション終了 (transport.closed) を再現する */
   closeTransport: () => Promise<void>;
   run: () => Promise<void>;
@@ -3255,9 +3259,13 @@ function createDataStreamFinContext(): DataStreamFinContext {
     resolveClosed = resolve;
   });
   const transport = { closed: closedPromise } as unknown as WebTransport;
+  const debugRecords: { typeName: string; decoded?: Record<string, unknown> }[] = [];
   const session = new SessionImpl(transport, {
     error: (error) => {
       sessionError.current = error;
+    },
+    debug: (message) => {
+      debugRecords.push(message);
     },
   });
   const internal = session as unknown as {
@@ -3277,11 +3285,16 @@ function createDataStreamFinContext(): DataStreamFinContext {
     session,
     internal,
     sessionError,
+    debugRecords,
     enqueue: (data: Uint8Array) => {
       controller.enqueue(data);
     },
     fin: () => {
       controller.close();
+    },
+    // ピアの RESET_STREAM は readable の read() を reject させる
+    reset: (error: Error) => {
+      controller.error(error);
     },
     // transport.closed ハンドラは close() を経ずに sessionState を closed へ
     // 遷移させ、request 系の state も閉じる (markRequestObjectsClosed)。
@@ -4228,12 +4241,14 @@ function createFillFetchStreamContext(): {
   ctx: ReturnType<typeof createDataStreamFinContext>;
   internals: {
     subscribers: Map<bigint, SubscriberImpl>;
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
     fillFetchTargets: Map<bigint, { subscriber: SubscriberImpl; groupOrder: GroupOrder }>;
   };
 } {
   const ctx = createDataStreamFinContext();
   const internals = ctx.internal as unknown as {
     subscribers: Map<bigint, SubscriberImpl>;
+    subscribersByAlias: Map<bigint, SubscriberImpl[]>;
     fillFetchTargets: Map<bigint, { subscriber: SubscriberImpl; groupOrder: GroupOrder }>;
   };
   return { ctx, internals };
@@ -4389,6 +4404,225 @@ test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VAL
   assert.instanceOf(ctx.sessionError.current, SessionError);
   assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
   assert.equal(delivered, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+ * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
+ *  publisher signals a fill failure by resetting the stream" および
+ * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
+ *  affect the subscription, which continues to deliver objects using
+ *  subscribe subgroups and datagrams."
+ * fill の失敗は購読の終了ではないため、購読の error ではなく fillError で通知し、
+ * 購読とセッションが継続することを検証する。reset 前に受信したオブジェクトは
+ * 配信される。
+ */
+test("fill fetch ストリーム: reset で fillError に通知し購読は継続する", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  let delivered = 0;
+  const fillErrors: Error[] = [];
+  let subscriptionErrors = 0;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    requestId,
+    1n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    () => {
+      subscriptionErrors++;
+    },
+  );
+  subscriber.fillErrorCallback = (error) => {
+    fillErrors.push(error);
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  // handleFillFetchStream はチャンク到着ごとにバッファを処理するため、
+  // ヘッダー + Object フィールドと payload を別チャンクで送り、
+  // reset の前にオブジェクトを完成させる
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes]));
+  await yieldToMacrotask();
+  ctx.enqueue(parts.payload);
+  await yieldToMacrotask();
+  // ピアが fill fetch ストリームを reset する (RESET_STREAM 相当)
+  ctx.reset(Object.assign(new Error("fill reset by publisher"), { source: "stream" }));
+  await handlePromise;
+
+  // fill 失敗は fillError で通知され、購読終了の通知は出ない
+  assert.equal(fillErrors.length, 1);
+  assert.equal(fillErrors[0].message, "fill reset by publisher");
+  assert.equal(subscriptionErrors, 0);
+  // セッションは閉じず、reset 前のオブジェクトは配信されている
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(delivered, 1);
+  // fill 関連付けは消え、購読は継続する
+  assert.equal(internals.fillFetchTargets.size, 0);
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.4.1:
+ * "The publisher signals that the fill is complete by closing the stream with
+ *  a FIN once all objects in the fill range have been delivered."
+ * FIN は fill の正常完了であるため fillError を通知しない。
+ */
+test("fill fetch ストリーム: FIN 正常完了では fillError を通知しない", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  const fillErrors: Error[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
+  subscriber.fillErrorCallback = (error) => {
+    fillErrors.push(error);
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.equal(fillErrors.length, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * Malformed Track の検出は購読自体の cancel を伴うため、アプリへの通知は
+ * 購読の error コールバックが担う。fill の失敗通知 (fillError) は購読の継続を
+ * 前提とするため呼ばない (二重通知を防ぐ)。
+ */
+test("fill fetch ストリーム: Malformed Track は fillError ではなく購読の error で通知する", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  const trackAlias = 1n;
+  let subscriptionError: Error | undefined;
+  let fillNotified = 0;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    requestId,
+    trackAlias,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      subscriptionError = error;
+    },
+  );
+  subscriber.fillErrorCallback = () => {
+    fillNotified++;
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.subscribersByAlias.set(trackAlias, [subscriber]);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  // Mandatory Track Property (0x4000-0x7FFF) を含む Object Property は malformed
+  const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const parts = buildFetchStreamParts(requestId, properties);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(subscriptionError, MalformedTrackError);
+  assert.equal(fillNotified, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * fillError コールバックの throw は後始末を止めないが、無音にはしない。
+ * 握り潰した例外をデバッグ記録に残すことを検証する。
+ */
+test("fill fetch ストリーム: fillError コールバックの throw は握り潰して記録する", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
+  subscriber.fillErrorCallback = () => {
+    throw new Error("app fillError callback failure");
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes]));
+  ctx.reset(Object.assign(new Error("fill reset by publisher"), { source: "stream" }));
+  await handlePromise;
+
+  // throw しても購読は継続し、セッションも閉じない
+  assert.equal(subscriber.state, "active");
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(internals.fillFetchTargets.size, 0);
+  // 握り潰した例外はデバッグ記録に残る
+  const records = ctx.debugRecords.filter(
+    (record) => record.typeName === "FILL_ERROR_CALLBACK_ERROR",
+  );
+  assert.equal(records.length, 1);
+  assert.equal(records[0].decoded?.error, "app fillError callback failure");
+});
+
+/**
+ * アプリの object コールバックの throw を fill ストリーム自体の失敗と誤認しない
+ * ことを検証する。subgroup 経路が SUBGROUP_CALLBACK_ERROR として記録しつつ配送を
+ * 継続するのと同じ扱いにし、fillError は通知しない。
+ */
+test("fill fetch ストリーム: object コールバックの throw でも受信を継続し fillError を通知しない", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  let delivered = 0;
+  let fillNotified = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {
+    delivered++;
+    throw new Error("app object callback failure");
+  });
+  subscriber.fillErrorCallback = () => {
+    fillNotified++;
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  // オブジェクトは配信され (コールバックの throw は記録のみ)、fill は正常完了する
+  assert.equal(delivered, 1);
+  assert.equal(fillNotified, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(internals.fillFetchTargets.size, 0);
+  const records = ctx.debugRecords.filter((record) => record.typeName === "FILL_CALLBACK_ERROR");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].decoded?.error, "app object callback failure");
 });
 
 /**

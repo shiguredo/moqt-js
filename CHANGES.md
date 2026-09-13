@@ -58,6 +58,12 @@
   - draft-ietf-moq-transport-21 §3.4 / §3.4.1 に基づき、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を含む REQUEST_UPDATE を受理して黙殺する挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了する (moqt-js は fill fetch ストリームを開けないため)
   - fill fetch ストリームを開く仕様準拠のピアとは相互運用できない (moqt-js publisher は fill を提供しない)
   - @voluntas
+- [ADD] fill fetch ストリームの失敗を SubscribeCallbacks.fillError で通知する
+  - draft-ietf-moq-transport-21 §3.4.1 に基づき、fill fetch ストリームには REQUEST_ERROR が無く publisher は reset で失敗を伝えるが、これまでアプリへの通知手段が無かった
+  - reset / cancel は購読に波及しないため、購読終了を意味する error ではなく fill 専用の SubscribeCallbacks.fillError で通知する。FIN の正常完了、Malformed Track 検出 (購読の error で通知)、セッション終了起源の失敗では呼ばない
+  - アプリの object コールバックの throw を fill ストリーム自体の失敗と誤認しないようにし、FILL_CALLBACK_ERROR として debug コールバックに記録して fill の受信を継続する
+  - fillError コールバックの throw は握り潰し、FILL_ERROR_CALLBACK_ERROR として debug コールバックに記録する
+  - @voluntas
 - [ADD] リクエスト単位 error コールバックの throw をデバッグ記録に残す
   - SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE の error コールバックが throw した場合、従来は握り潰すだけで記録していなかった
   - セッション単位の error コールバック (SessionImpl.closeWithError) と同じく、握り潰した例外を debug コールバックへ typeName `REQUEST_CALLBACK_ERROR` で記録する (decoded.error と decoded.requestId)
