@@ -1352,6 +1352,12 @@
 
 ### misc
 
+- [CHANGE] 到達不能な e2e ハーネスと plan 外のテストスクリプトを削除する
+  - `tests/e2e/connect.spec.ts` / `tests/e2e/pubsub.spec.ts` は `test.describe.skip` で無条件にスキップされており、テストとして機能していなかったため削除する
+  - その 2 本だけが使っていた `tests/e2e/main.ts` (`window.__moqtE2E`) / `tests/e2e/helpers.ts` / `tests/e2e/index.html` と、専用 Vite アプリの `tests/e2e/vite.config.ts` / `package.json` / `tsconfig.json` を削除する (`pnpm-workspace.yaml` から `tests/e2e` を外す)
+  - `playwright.config.ts` から不要になった moqt-js-e2e の `webServer` と `.env` 読み込みを削除し、`baseURL` を実際に使う devtools dev サーバーに合わせる。あわせて未使用になった `.env.example` を削除する
+  - `.github/workflows/ci.yml` の e2e job から `TEST_MOQT_URI` / `TEST_MOQT_AUTH_TOKEN` の注入を削除し、`package.json` から存在しない Playwright project を指定していた `e2e-test-chrome` / `e2e-test-edge` / `e2e-test-webkit` を削除する
+  - `vp run e2e-test` で実行されるテストは削除前と同じ 3 件 (`webtransport-devtools.spec.ts`)
 - [UPDATE] Track Namespace の 32 / 33 フィールド境界テストを追加する
   - draft-ietf-moq-transport-21 §2.4.1 / §8.7 の上限 32 について、上限ちょうどの 32 フィールドが encode / decode をラウンドトリップし、33 フィールドが PROTOCOL_VIOLATION で拒否されることを固定する
   - 同じ境界を TRACK_NAMESPACE_PREFIX (0x34) パラメータ経路でも検証する (`decodeTrackNamespace` へ委譲されるため)
