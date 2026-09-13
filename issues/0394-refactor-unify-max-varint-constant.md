@@ -2,7 +2,7 @@
 
 - Created: 2026-08-07
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/refactor-unify-max-varint-constant
 - Polished: {YYYY-MM-DD}
 
@@ -37,4 +37,28 @@
 
 ## 解決方法
 
-未着手。
+実装した。
+
+### 生産コードの統一
+
+`src/session/stream.ts` と `src/dataStream.ts` がそれぞれ定義していたモジュールローカル定数 `maxObjectId = (1n << 64n) - 1n` を削除し、使用箇所を `src/varint.ts` の `MAX_VARINT` 参照に置き換えた (`src/dataStream.ts` は `encodeSubgroupHeader` 側と `encodeObjectDatagram` 側の 2 箇所、`src/session/stream.ts` は `processSubgroupObjects` 内の 1 箇所)。
+
+定数の別名 (`const maxObjectId = MAX_VARINT`) は残さず、使用箇所で直接 `MAX_VARINT` を参照する形にした。重複していたのは値の定義そのものであり、別名を残すと同じ値を持つ名前が 2 つ残るためである。`maxObjectId` の doc コメントが持っていた「Object ID / Group ID の上限が 2^64-1 である根拠」(§11.3.1 / §11.4.1.1 Table 9) は、いずれも各使用箇所に既に同じ引用があったため、上限が varint の最大値と同一である旨の 1 行を足して使用箇所側に残した。
+
+`src/session/publish.ts` は既に `MAX_VARINT` を import 参照しており (objectId / groupId の検証)、変更していない。
+
+### テストファイルの扱い
+
+issue の設計方針どおり、テストファイルの `(1n << 64n) - 1n` (`src/moqlog.prop.ts` / `src/moqmetrics.prop.ts` / `src/dataStream.prop.ts` / `src/dataStream.fetch.test.ts`) は値生成の上限であり対象外とした。
+
+`src/message/authorizationToken.prop.ts` のコメントを修正した。元の「varint は 62bit まで表現可能なので、フィールドは 2^53-1 で打ち切り」は varint の上限 (9 バイトで 2^64-1) を誤って説明していた。同ファイルの `MAX_VARINT` はテストの値生成上限であることを明記し、実装の上限ではないと分かるようにした。定数の名前と値は issue の指示どおり変更していない。
+
+### 完了条件の `[REFACTOR]` について
+
+完了条件は `CHANGES.md` の `## develop` に `[REFACTOR]` を求めているが、`shiguredo-changelog` スキルが定める変更種別は `[CHANGE]` / `[ADD]` / `[UPDATE]` / `[FIX]` の 4 種で `[REFACTOR]` は存在しない。既存の refactor 作業 (テストヘルパー集約) も `[UPDATE]` で記録されているため、本 issue も `[UPDATE]` で記録した。
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,122 テスト全通過
+- `rg "1n << 64n" src/` の生産コード側の一致が 0 件であること (`src/**/*.prop.ts` と `*.test.ts` の値生成のみ残る)
