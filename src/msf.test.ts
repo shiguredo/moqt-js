@@ -45,7 +45,6 @@ import {
   validateCatalogTrack,
 } from "./msf";
 import { MsfCompressionAlgorithm } from "./properties";
-import { assertRejectsWithMessage } from "./testSupport/helpers";
 
 // =============================================================================
 // テスト用ヘルパー
@@ -1337,59 +1336,50 @@ test("validateCatalogTrack: root source で必須欠落を reject", () => {
 // Media Timeline
 // =============================================================================
 
-test("Media Timeline: 空配列の round-trip", async () => {
+test("Media Timeline: 空配列の round-trip", () => {
   const entries: MediaTimelineEntry[] = [];
-  const encoded = await encodeMediaTimeline(entries);
-  const decoded = await decodeMediaTimeline(encoded);
+  const encoded = encodeMediaTimeline(entries);
+  const decoded = decodeMediaTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 通常の round-trip (gzip 撤廃後)", async () => {
+test("Media Timeline: 通常の round-trip (gzip 撤廃後)", () => {
   // draft-01 では options.gzip は撤廃され、無圧縮 JSON のみ
   const entries: MediaTimelineEntry[] = [
     [0, [0n, 0n], 1759924158381],
     [2002, [1n, 0n], 1759924160383],
   ];
-  const encoded = await encodeMediaTimeline(entries);
-  const decoded = await decodeMediaTimeline(encoded);
+  const encoded = encodeMediaTimeline(entries);
+  const decoded = decodeMediaTimeline(encoded);
   // 先頭バイトが gzip magic (0x1f 0x8b) ではなく JSON `[` (0x5b) であることを確認
   assert.strictEqual(encoded[0], 0x5b);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正な形式は reject", async () => {
+test("Media Timeline: 不正な形式は throw", () => {
   const invalid = new TextEncoder().encode('{"not": "an array"}');
-  await assertRejectsWithMessage(
-    () => decodeMediaTimeline(invalid),
-    /invalid media timeline format/,
-  );
+  assert.throws(() => decodeMediaTimeline(invalid), /invalid media timeline format/);
 });
 
 // =============================================================================
 // Event Timeline
 // =============================================================================
 
-test("Event Timeline: 空配列の round-trip", async () => {
+test("Event Timeline: 空配列の round-trip", () => {
   const entries: EventTimelineEntry[] = [];
-  const encoded = await encodeEventTimeline(entries);
-  const decoded = await decodeEventTimeline(encoded);
+  const encoded = encodeEventTimeline(entries);
+  const decoded = decodeEventTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: data 欠落は reject (§8.1)", async () => {
+test("Event Timeline: data 欠落は throw (§8.1)", () => {
   const invalid = new TextEncoder().encode('[{"t": 123}]');
-  await assertRejectsWithMessage(
-    () => decodeEventTimeline(invalid),
-    /invalid event timeline entry/,
-  );
+  assert.throws(() => decodeEventTimeline(invalid), /invalid event timeline entry/);
 });
 
-test("Event Timeline: t/l/m 複数指定は reject (§8.1)", async () => {
+test("Event Timeline: t/l/m 複数指定は throw (§8.1)", () => {
   const invalid = new TextEncoder().encode('[{"t": 1, "m": 2, "data": "x"}]');
-  await assertRejectsWithMessage(
-    () => decodeEventTimeline(invalid),
-    /invalid event timeline entry/,
-  );
+  assert.throws(() => decodeEventTimeline(invalid), /invalid event timeline entry/);
 });
 
 // =============================================================================

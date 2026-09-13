@@ -8,7 +8,6 @@
  * 到達しないため、配布物には含まれない。
  */
 
-import { assert } from "vite-plus/test";
 import { decodeVarint } from "../varint";
 import type { MoqtObject } from "../dataStream";
 import { ObjectStatus } from "../message/types";
@@ -95,21 +94,6 @@ export function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
     }
   }
   return ids;
-}
-
-/**
- * Promise が reject し、その message が正規表現に一致することを検証する
- */
-export async function assertRejectsWithMessage(
-  factory: () => Promise<unknown>,
-  messagePattern: RegExp,
-): Promise<void> {
-  try {
-    await factory();
-    assert.fail("expected promise to reject");
-  } catch (error) {
-    assert.match((error as Error).message, messagePattern);
-  }
 }
 
 /**
