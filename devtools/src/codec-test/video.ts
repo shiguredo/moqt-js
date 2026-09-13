@@ -27,6 +27,7 @@ import type {
   StateTransition,
   UnconfiguredOperationResult,
   VideoDecoderTestResult,
+  VideoEncoderReconfigureTestResult,
   VideoEncoderTestResult,
 } from "./types.ts";
 
@@ -41,6 +42,13 @@ const FORCED_KEY_FRAME_INDEX = 3;
 
 // デコーダーテストで使う参照 chunk の数 (key 1 件 + delta 2 件)
 const REFERENCE_FRAME_COUNT = 3;
+
+// 再 configure テストで 1 つの設定あたりに投入するフレーム数
+const RECONFIGURE_FRAME_COUNT = 2;
+
+// 再 configure テストで 1 回目に使う解像度 (2 回目は VIDEO_WIDTH / VIDEO_HEIGHT)
+const RECONFIGURE_FIRST_WIDTH = 160;
+const RECONFIGURE_FIRST_HEIGHT = 120;
 
 /**
  * VideoEncoderWrapper の状態遷移と chunk 出力を検証する
@@ -149,6 +157,94 @@ export async function runVideoEncoderTest(useWorker: boolean): Promise<VideoEnco
     forcedKeyFrameChunkType: forcedKeyFrameChunk ? forcedKeyFrameChunk.type : null,
     outputTimestamps: observedChunks.map((chunk) => chunk.timestamp),
     encodeAfterClose,
+    errorMessages,
+  };
+}
+
+/**
+ * VideoEncoderWrapper の再 configure テスト
+ *
+ * 同じ Wrapper に対して解像度を変えて configure() を 2 回呼び、
+ * 旧コーデックを閉じて差し替えたうえで encode が継続することを確認する。
+ * 直接モードは旧 VideoEncoder の close() を通り、Worker モードは
+ * 旧 Worker の破棄と新しい Worker の init を通る。
+ */
+export async function runVideoEncoderReconfigureTest(
+  useWorker: boolean,
+): Promise<VideoEncoderReconfigureTestResult> {
+  const observedChunks: ObservedEncodedChunk[] = [];
+  const errorMessages: string[] = [];
+  const stateHistory: StateTransition[] = [];
+
+  const wrapper = new VideoEncoderWrapper(useWorker, {
+    output: (chunk) => {
+      observedChunks.push(summarizeEncodedChunk(chunk));
+    },
+    error: (error) => {
+      errorMessages.push(error.message);
+    },
+  });
+
+  const recordState = (step: string): void => {
+    stateHistory.push({ step, state: wrapper.state });
+  };
+
+  const encodeFrames = (width: number, height: number, timestampOffset: number): void => {
+    for (let index = 0; index < RECONFIGURE_FRAME_COUNT; index += 1) {
+      const frame = createTestVideoFrame(
+        width,
+        height,
+        FRAME_COLORS[index % FRAME_COLORS.length],
+        timestampOffset + index * VIDEO_FRAME_DURATION,
+      );
+      wrapper.encode(frame, { keyFrame: index === 0 });
+      if (!useWorker) {
+        // 直接モードでは encode() が frame を消費しないためテスト側で閉じる
+        frame.close();
+      }
+    }
+  };
+
+  recordState("initial");
+
+  await wrapper.configure(
+    "vp8",
+    RECONFIGURE_FIRST_WIDTH,
+    RECONFIGURE_FIRST_HEIGHT,
+    VIDEO_BITRATE,
+    VIDEO_FRAMERATE,
+  );
+  recordState("afterFirstConfigure");
+
+  encodeFrames(RECONFIGURE_FIRST_WIDTH, RECONFIGURE_FIRST_HEIGHT, 0);
+  await waitForCondition(
+    () => observedChunks.length >= RECONFIGURE_FRAME_COUNT,
+    `${RECONFIGURE_FRAME_COUNT} encoded video chunks for the first configure`,
+  );
+  const firstConfigChunkCount = observedChunks.length;
+
+  // 解像度を変えて再 configure する (旧コーデック / 旧 Worker は破棄される)
+  await wrapper.configure("vp8", VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_BITRATE, VIDEO_FRAMERATE);
+  recordState("afterSecondConfigure");
+
+  encodeFrames(VIDEO_WIDTH, VIDEO_HEIGHT, RECONFIGURE_FRAME_COUNT * VIDEO_FRAME_DURATION);
+  await waitForCondition(
+    () => observedChunks.length >= RECONFIGURE_FRAME_COUNT * 2,
+    `${RECONFIGURE_FRAME_COUNT * 2} encoded video chunks after the second configure`,
+  );
+
+  const queueSize = wrapper.encodeQueueSize;
+  wrapper.close();
+  recordState("afterClose");
+
+  return {
+    test: useWorker ? "videoEncoderReconfigureWorker" : "videoEncoderReconfigureDirect",
+    useWorker,
+    stateHistory,
+    firstConfigChunkCount,
+    secondConfigChunkCount: observedChunks.length - firstConfigChunkCount,
+    outputTimestamps: observedChunks.map((chunk) => chunk.timestamp),
+    queueSizeIsNonNegativeInteger: Number.isInteger(queueSize) && queueSize >= 0,
     errorMessages,
   };
 }

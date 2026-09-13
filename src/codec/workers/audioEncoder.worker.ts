@@ -2,29 +2,25 @@
  * オーディオエンコーダー用 DedicatedWorker
  */
 
-import { runWorkerInit } from "../workerConfigure";
+import { runWorkerInit, workerErrorResponse } from "../workerConfigure";
+import { closeCodecQuiet, isCodecConfigured, replaceCodec } from "../codecLifecycle";
+import {
+  ignoreUnknownWorkerRequest,
+  type AudioEncoderWorkerEncodeRequest,
+  type WorkerCloseRequest,
+  type WorkerInitRequest,
+} from "../workerMessages";
 
 declare const self: DedicatedWorkerGlobalScope;
 
-interface InitMessage {
-  type: "init";
-  config: AudioEncoderConfig;
-}
-
-interface EncodeMessage {
-  type: "encode";
-  data: AudioData;
-}
-
-interface CloseMessage {
-  type: "close";
-}
-
-type AudioEncoderWorkerMessage = InitMessage | EncodeMessage | CloseMessage;
+type AudioEncoderWorkerRequest =
+  | WorkerInitRequest<AudioEncoderConfig>
+  | AudioEncoderWorkerEncodeRequest
+  | WorkerCloseRequest;
 
 let audioEncoder: AudioEncoder | null = null;
 
-self.onmessage = (event: MessageEvent<AudioEncoderWorkerMessage>) => {
+self.onmessage = (event: MessageEvent<AudioEncoderWorkerRequest>) => {
   const message = event.data;
 
   switch (message.type) {
@@ -32,33 +28,30 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerMessage>) => {
       // 初期化失敗時は "error" で応答し "configured" を送らない
       // (Wrapper の configure() が reject してハングしない前提)
       const result = runWorkerInit(() => {
-        if (audioEncoder) {
-          audioEncoder.close();
-        }
+        // 再 init では旧コーデックを閉じてから差し替える (解放漏れを防ぐ)
+        audioEncoder = replaceCodec(
+          audioEncoder,
+          new AudioEncoder({
+            output: (chunk: EncodedAudioChunk) => {
+              const data = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(data);
 
-        audioEncoder = new AudioEncoder({
-          output: (chunk: EncodedAudioChunk) => {
-            const data = new Uint8Array(chunk.byteLength);
-            chunk.copyTo(data);
-
-            self.postMessage(
-              {
-                type: "encoded",
-                data: data.buffer,
-                chunkType: chunk.type,
-                timestamp: chunk.timestamp,
-                duration: chunk.duration,
-              },
-              [data.buffer] as unknown as StructuredSerializeOptions,
-            );
-          },
-          error: (error: DOMException) => {
-            self.postMessage({
-              type: "error",
-              message: error.message,
-            });
-          },
-        });
+              self.postMessage(
+                {
+                  type: "encoded",
+                  data: data.buffer,
+                  chunkType: chunk.type,
+                  timestamp: chunk.timestamp,
+                  duration: chunk.duration,
+                },
+                [data.buffer] as unknown as StructuredSerializeOptions,
+              );
+            },
+            error: (error: DOMException) => {
+              self.postMessage(workerErrorResponse(error));
+            },
+          }),
+        );
 
         audioEncoder.configure(message.config);
       });
@@ -67,7 +60,7 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerMessage>) => {
     }
 
     case "encode": {
-      if (audioEncoder && audioEncoder.state === "configured") {
+      if (isCodecConfigured(audioEncoder)) {
         audioEncoder.encode(message.data);
       }
       message.data.close();
@@ -75,11 +68,12 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerMessage>) => {
     }
 
     case "close": {
-      if (audioEncoder) {
-        audioEncoder.close();
-        audioEncoder = null;
-      }
+      closeCodecQuiet(audioEncoder);
+      audioEncoder = null;
       break;
     }
+
+    default:
+      ignoreUnknownWorkerRequest(message);
   }
 };

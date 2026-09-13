@@ -961,6 +961,15 @@
 
 ### misc
 
+- [UPDATE] codec ラッパーと Worker の重複を共通化し、再 configure で旧コーデックを破棄する
+  - 4 ラッパーで同一だった `configureWorker` の Worker 初期化フロー (世代採番・二重解決ガード・後勝ち公開・先発破棄・旧 Worker の破棄) を `configureWrapperWorker` に集約する
+  - Worker と Wrapper のメッセージ型を `src/codec/workerMessages.ts` に集約し、`switch` の網羅性を `never` 型で型検査する (契約外の応答は無視する)
+  - 直接実行モードの再 configure で旧コーデックを `close()` する (`replaceCodec`)。従来は旧インスタンスが解放されずに残っていた
+  - 4 Worker の init / encode / decode / close の後始末 (旧コーデックの破棄、`state` ガード、エラー応答の生成) を `src/codec/codecLifecycle.ts` と `workerConfigure.ts` に集約する
+  - 未設定時の警告文言を 1 箇所に集約する (未設定時は warn のみで error コールバックは呼ばない契約を明示)
+  - デコーダー Wrapper に `state` ゲッターを追加する (エンコーダーとの非対称を解消)
+  - 再 configure が実ブラウザで動作し続けることを e2e テストで検証する
+  - @voluntas
 - [UPDATE] codec Wrapper と Worker プロトコルの実ブラウザテストを追加する
   - `tests/e2e/codec-wrappers.spec.ts` を追加し、実 Chromium の WebCodecs で 4 ラッパー (Video / Audio の Encoder / Decoder) の直接モードと Worker モードの状態遷移・chunk / frame の往復・未設定時の挙動を検証する
   - テストページは devtools 配下 (`devtools/codec-test.html` / `devtools/src/codec-test/`) に置き、ライブラリのソースを直接 import する (ビルド入力には追加しない)
