@@ -1214,6 +1214,10 @@
   - Subgroup Header の END_OF_GROUP ビットによる確定は FIN の観測が必要なため対象外とし、コメントで明記する
   - 購読が尽きた alias の追跡は削除し、無制限な増加を防ぐ
   - @voluntas
+- [UPDATE] カバレッジ計測を復旧するため @vitest/coverage-v8 を 4.1.11 に合わせる
+  - `vite-plus@0.3.0` が同梱する vitest は 4.1.11 であり、`@vitest/coverage-v8@5.0.0` では `vp test --coverage` がバージョン不整合の Startup Error で起動しない
+  - bundled vitest と単一版数を担保するため `@vitest/coverage-v8` を 4.1.11 に固定する (vite-plus の更新時は同梱 vitest に追随させる)
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
