@@ -1,7 +1,7 @@
 # Track 同一性判定の区切り文字衝突ケースを SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK / Datagram 経路にも追加する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/test-track-alias-collision-cases
 - Polished: {YYYY-MM-DD}
 
@@ -37,3 +37,24 @@ Track の同一性判定は `fullTrackNameKey` が生成する比較キーの完
 - `incomingHandleDatagram` (`src/session/incoming.ts`) / `fullTrackNameKey` (`src/fullTrackName.ts`)
 - `issues/closed/0574-bug-full-track-name-collision.md` (比較キーを長さ付きにした issue)
 - `issues/0579-test-bidi-response-missing-branches.md` (bidi 応答読み取りの未カバー分岐のテスト追加)
+
+## 解決方法
+
+テストを 4 件追加した。判定の実装は変えていない。
+
+### 追加したテスト
+
+- `src/session/bidi.test.ts`: `bidiReadSubscribeResponse` の Track Alias 重複判定。同一 alias 1n を持つ既存購読を namespace ["a"] + trackName "b/c"、受信する SUBSCRIBE_OK の対象を namespace ["a","b"] + trackName "c" にし、`DUPLICATE_TRACK_ALIAS` で拒否されることを固定した
+- `src/session/bidi.test.ts`: `bidiReadFetchResponse` の malformed cross-cancel。対象 Track を namespace ["a","b"] + trackName "c"、衝突する別 Track を namespace ["a"] + trackName "b/c" にし、対象の購読 / FETCH だけが closed になり衝突する側は state / error 通知 / alias 登録のすべてで不変であることを固定した
+- `src/session/bidi.test.ts`: `bidiReadTrackStatusResponse` の malformed cross-cancel。同じ 2 Track の組み合わせで、`cancelMalformedTrackPeers` の対象判定が衝突しないことを固定した (`onCancel` の到達で対象 FETCH だけが cancel されることも確認)
+- `src/session/incoming.test.ts`: `incomingHandleDatagram` の malformed 検出。同一 alias 7n に 2 件の購読 (対象 = namespace ["a","b"] + trackName "c"、衝突 = namespace ["a"] + trackName "b/c") をぶら下げ、先頭の比較キーで決まる対象 Track だけが cancel されることを固定した
+
+### 退行検出の裏付け
+
+`fullTrackNameKey` を一時的に `fields.join("/")` に差し替えて実行し、追加した 4 件と既存の `cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を cancel しない` の計 5 件が失敗することを実測した。差し替えは元に戻している。
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,130 テスト全通過 (4 件増)
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した

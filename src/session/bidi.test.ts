@@ -9192,6 +9192,55 @@ test("bidiSendRequestUpdate: in-flight の型付き fill と raw 新規の合計
 });
 
 /**
+ * draft-ietf-moq-transport-21 §3.1.2 / §2.4.1:
+ * Track Alias の重複判定は Full Track Name の比較キーで行う。namespace ["a"] +
+ * trackName "b/c" と namespace ["a","b"] + trackName "c" は "/" 連結では同じ
+ * "a/b/c" になるため、区切り文字の曖昧さで別 Track を同一とみなすと
+ * DUPLICATE_TRACK_ALIAS を見逃す。比較キーがフィールド境界を保つことで
+ * 別 Track として検出されることを固定する。
+ */
+test("bidiReadSubscribeResponse: 区切り文字が衝突する別 Track の同一 alias で DUPLICATE_TRACK_ALIAS になる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  // 同一 alias 1n を持つ既存購読 (namespace ["a"] + trackName "b/c")
+  const colliding = new SubscriberImpl(["a"], "b/c", 5n, 1n, () => {});
+  ctx.session.subscribersByAlias.set(1n, [colliding]);
+  // 受信する SUBSCRIBE_OK の対象は namespace ["a","b"] + trackName "c"
+  const subscriber = new SubscriberImpl(["a", "b"], "c", ctx.requestId, 0n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const okPayload = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 別 Track への同一 alias は DUPLICATE_TRACK_ALIAS で拒否される
+  assert.isDefined(rejected);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.DUPLICATE_TRACK_ALIAS);
+  assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
+});
+
+/**
  * draft-ietf-moq-transport-21 §3.1.2:
  * DUPLICATE_TRACK_ALIAS 経路で pendingSubscribe + requestStreams +
  * fillFetchTargets が掃除されることを検証する。
@@ -9699,6 +9748,68 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
   assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 / §2.4.1:
+ * FETCH_OK の malformed 検出による cross-cancel は Full Track Name の比較キーで
+ * 対象を決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] +
+ * trackName "c" は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで
+ * 無関係な Track を巻き込む退行が起き得る。対象 Track だけが cancel され、
+ * 衝突する別 Track は活性のまま残ることを固定する。
+ */
+test("bidiReadFetchResponse: 区切り文字が衝突する別 Track を cross-cancel しない", async () => {
+  const ctx = createCancelObservableResponseContext();
+  const fetcher = new FetcherImpl(["a", "b"], "c", ctx.requestId, () => {});
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: () => {},
+    impl: fetcher,
+  });
+  // 対象 Track (namespace ["a","b"] + trackName "c") の既存購読 / FETCH
+  const targetSubscriber = new SubscriberImpl(["a", "b"], "c", 90n, 50n, () => {});
+  const targetFetcher = new FetcherImpl(["a", "b"], "c", 91n, () => {});
+  // 旧実装で同じキー ("a/b/c") になっていた別 Track (namespace ["a"] + trackName "b/c")
+  const collidingSubscriber = new SubscriberImpl(["a"], "b/c", 92n, 51n, () => {});
+  const collidingFetcher = new FetcherImpl(["a"], "b/c", 93n, () => {});
+  const collidingFetchErrors: Error[] = [];
+  collidingFetcher.onCancel = async () => {};
+  ctx.session.subscribersByAlias.set(50n, [targetSubscriber]);
+  ctx.session.subscribersByAlias.set(51n, [collidingSubscriber]);
+  ctx.session.fetchers.set(91n, targetFetcher);
+  ctx.session.fetchers.set(93n, collidingFetcher);
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 未知 Mandatory Track Property (0x4000-0x7FFF) を 1 つ含む FETCH_OK
+  const okPayload = encodeFetchOkPayload({
+    type: MessageType.FETCH_OK,
+    endOfTrack: false,
+    endLocation: { group: 0n, object: 0n },
+    parameters: [],
+    trackProperties: [{ id: 0x4000n, value: 1n }],
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  await readPromise;
+  // cross-cancel は fire-and-forget のため到達を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // 対象 Track の既存購読 / FETCH だけが cancel される
+  assert.equal(targetSubscriber.state, "closed");
+  assert.equal(targetFetcher.state, "closed");
+  // 区切り文字が衝突する別 Track は活性のまま
+  assert.equal(collidingSubscriber.state, "active");
+  assert.equal(collidingFetcher.state, "active");
+  assert.equal(collidingFetchErrors.length, 0);
+  assert.equal(ctx.session.subscribersByAlias.get(51n)?.length, 1);
+  // セッションは閉じない
   assert.isUndefined(ctx.getClosedWithError());
 });
 
@@ -11622,6 +11733,76 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
 // bidiReadTrackStatusResponse の malformed 検出 (未知 Mandatory Track Property)
 // draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS) / §12.1 (Malformed Tracks)
 // ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.13 / §12.1 / §2.4.1:
+ * TRACK_STATUS_OK の malformed 検出による cross-cancel も Full Track Name の比較
+ * キーで対象を決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] +
+ * trackName "c" は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで
+ * 無関係な Track を巻き込む退行が起き得る。対象 Track だけが cancel されることを
+ * 固定する。
+ */
+test("bidiReadTrackStatusResponse: 区切り文字が衝突する別 Track を cross-cancel しない", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const targetSubscriber = new SubscriberImpl(["a", "b"], "c", 20n, 7n, () => {});
+  const collidingSubscriber = new SubscriberImpl(["a"], "b/c", 21n, 8n, () => {});
+  const targetFetcher = new FetcherImpl(["a", "b"], "c", 30n, () => {});
+  const collidingFetcher = new FetcherImpl(["a"], "b/c", 31n, () => {});
+  ctx.session.subscribersByAlias.set(7n, [targetSubscriber]);
+  ctx.session.subscribersByAlias.set(8n, [collidingSubscriber]);
+  ctx.session.fetchers.set(30n, targetFetcher);
+  ctx.session.fetchers.set(31n, collidingFetcher);
+  // FETCH の cancel 到達を観測する (対象だけが cancel される)
+  const cancelledFetchers: string[] = [];
+  targetFetcher.onCancel = async () => {
+    cancelledFetchers.push("target");
+  };
+  collidingFetcher.onCancel = async () => {
+    cancelledFetchers.push("colliding");
+  };
+
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    trackKey: fullTrackNameKey(["a", "b"], "c"),
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // 未知 Mandatory Track Property (0x4000-0x7FFF) を含む TRACK_STATUS_OK
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [{ id: 0x4000n, value: 1n }],
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, okPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+  // cross-cancel は fire-and-forget のため到達を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assert.instanceOf(rejected, MalformedTrackError);
+  // 対象 Track だけが cancel され、衝突する別 Track は活性のまま
+  assert.equal(targetSubscriber.state, "closed");
+  assert.equal(targetFetcher.state, "closed");
+  assert.deepEqual(cancelledFetchers, ["target"]);
+  assert.equal(collidingSubscriber.state, "active");
+  assert.equal(collidingFetcher.state, "active");
+  assert.equal(ctx.session.subscribersByAlias.get(8n)?.length, 1);
+  // セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
 
 /**
  * draft-ietf-moq-transport-21 §9.13 / §12.1:
