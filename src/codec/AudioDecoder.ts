@@ -40,9 +40,17 @@ export class AudioDecoderWrapper {
 
   /**
    * デコーダーを設定する
+   *
+   * @param description - AAC の AudioSpecificConfig (draft-ietf-moq-loc-04 §2.3.3.1)。
+   *   opus では不要。
    */
-  async configure(codec: AudioCodecType, sampleRate?: number, channels?: number): Promise<void> {
-    const config = getAudioDecoderConfig(codec, sampleRate, channels);
+  async configure(
+    codec: AudioCodecType,
+    sampleRate?: number,
+    channels?: number,
+    description?: Uint8Array,
+  ): Promise<void> {
+    const config = getAudioDecoderConfig(codec, sampleRate, channels, description);
 
     if (this.useWorker) {
       await this.configureWorker(config);

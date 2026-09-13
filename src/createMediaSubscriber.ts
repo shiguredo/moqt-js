@@ -266,6 +266,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 直前に VideoDecoder へ渡した description。
   // draft-ietf-moq-loc-04 §2.3.2.1: config が変化したらデコーダを再構成する。
   private lastAppliedVideoConfig: Uint8Array | null = null;
+  // 直前に AudioDecoder へ渡した description (AAC の AudioSpecificConfig)。
+  // draft-ietf-moq-loc-04 §2.3.3.1: config が変化したらデコーダを再構成する。
+  private lastAppliedAudioConfig: Uint8Array | null = null;
 
   // 統計情報
   private audioStats: AudioReceiverStats = {
@@ -790,7 +793,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 解決不能な明示値はここで throw し、NaN をデコーダに渡さない
       const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
 
-      await this.audioDecoder.configure(audioCodec, sampleRate, channels);
+      // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+      // SUBSCRIBE_OK の Track Property に AUDIO_CONFIG があれば description として渡す。
+      // AAC の復号に必要 (opus では未設定)。
+      const initialAudioConfig = LOC.resolveAudioProperties(
+        this.audioSubscriber?.trackProperties,
+        undefined,
+      ).config;
+
+      await this.audioDecoder.configure(audioCodec, sampleRate, channels, initialAudioConfig);
+      this.lastAppliedAudioConfig =
+        initialAudioConfig !== undefined ? new Uint8Array(initialAudioConfig) : null;
       this.audioDecoderConfigured = true;
     }
 
@@ -934,14 +947,33 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private handleAudioObject(obj: MoqtObject): void {
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
 
+    // LOC から情報を取得
+    // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
+    const locProperties = LOC.resolveAudioProperties(
+      this.audioSubscriber?.trackProperties,
+      obj.properties,
+    );
+
+    // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+    // Object Property の AUDIO_CONFIG が直前と変わったらデコーダを再構成する
+    // (映像経路と同じ扱い)。再構成は非同期のため、完了までは decode に渡さない。
+    if (
+      locProperties.config !== undefined &&
+      !this.isSameAppliedAudioConfig(locProperties.config)
+    ) {
+      this.audioDecoderConfigured = false;
+      void this.reconfigureAudioDecoder(new Uint8Array(locProperties.config));
+    }
+
+    // 再構成中は decode に渡さない (AudioDecoder の configure は非同期)
+    if (!this.audioDecoderConfigured) {
+      return;
+    }
+
     this.audioStats.framesReceived++;
     this.audioStats.bytesReceived += obj.payload.length + (obj.properties?.length ?? 0);
 
-    // LOC から情報を取得
-    // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
-    const timestamp = decoderTimestampOf(
-      LOC.resolveAudioProperties(this.audioSubscriber?.trackProperties, obj.properties),
-    );
+    const timestamp = decoderTimestampOf(locProperties);
 
     // デコード
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
@@ -961,6 +993,54 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       }
     }
     return true;
+  }
+
+  /**
+   * 直前に AudioDecoder へ渡した description と同じかを判定する
+   */
+  private isSameAppliedAudioConfig(description: Uint8Array): boolean {
+    const previous = this.lastAppliedAudioConfig;
+    if (previous === null || previous.length !== description.length) {
+      return false;
+    }
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i] !== description[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Audio Config の変化に合わせてデコーダを再構成する
+   *
+   * draft-ietf-moq-loc-04 §2.3.3.1: description が変わったら新しい設定で構成し直す。
+   * codec / sampleRate / channels はカタログの値を引き続き使う (config のみ更新する)。
+   */
+  private async reconfigureAudioDecoder(description: Uint8Array): Promise<void> {
+    if (!this.audioDecoder || !this.audioTrackInfo) return;
+
+    let audioCodec: AudioCodecType;
+    if (this.options.audio?.codec) {
+      audioCodec = this.options.audio.codec;
+    } else if (this.audioTrackInfo.codec) {
+      audioCodec = parseAudioCodec(this.audioTrackInfo.codec);
+    } else {
+      return;
+    }
+
+    const sampleRate = this.audioTrackInfo.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+    const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
+
+    try {
+      await this.audioDecoder.configure(audioCodec, sampleRate, channels, description);
+      // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
+      // 同じ config を持つ後続 Object で再試行できるようにする。
+      this.lastAppliedAudioConfig = description;
+      this.audioDecoderConfigured = true;
+    } catch (error) {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   /**

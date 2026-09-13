@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] AAC の AudioSpecificConfig を送受信できるようにする
+  - `AudioEncoderWrapper` が `EncodedAudioChunkMetadata.decoderConfig.description` を捨てていたため、AAC を選択しても受信側が復号できなかった。映像の `VIDEO_CONFIG` と同じく、AAC のときだけ `AudioEncodedChunkData.description` として運び、`createMediaPublisher` が `AUDIO_CONFIG` (draft-ietf-moq-loc-04 §2.3.3.1) として送る
+  - `AudioDecoderWrapper.configure` に description を追加し、`AudioDecoderConfig.description` へ渡す (Worker モードの init メッセージにも載る)。`createMediaSubscriber` は Track Property / Object Property の `AUDIO_CONFIG` を解決して初期設定と変化時に渡す
+  - opus は description を運ばない。Chromium の opus encoder は OpusHead を返すが、デコーダーへ渡すと codec delay の適用で復号 timestamp が変わるため、既存挙動を維持する
+  - @voluntas
 - [CHANGE] Timeline 系の 4 関数を同期関数にする
   - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` は内部に await を持たない (無圧縮 JSON の変換と検証のみ) ため `async` を外し、戻り値を `Promise<T>` から `T` に変更する
   - 不正な入力は Promise の reject ではなく同期の throw になる
