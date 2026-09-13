@@ -312,6 +312,12 @@ const subscriber = await session.subscribe(["live"], "video", {
 await subscriber.unsubscribe();
 ```
 
+## ドキュメント
+
+- [高レベル API](docs/HIGH_LEVEL_API.md): `createMediaPublisher` / `createMediaSubscriber` の仕様
+- [低レベル API](docs/LOW_LEVEL_API.md): `connect()` と `Session` の仕様
+- [MOQT Streaming Format](docs/MSF.md): Catalog / Timeline / LOC の公開 API
+
 ## 動作環境
 
 以下のブラウザで動作確認済みです。

@@ -1214,6 +1214,13 @@
   - `examples/high-level-api/main.ts` のログ描画を `innerHTML` から `textContent` に変更する (URL やエラーメッセージなど外部入力の混入を避ける)
   - `getCertificateHashes()` に出力先を渡すようにし、購読側の証明書エラーが publisher のログに出る問題を修正する
   - @voluntas
+- [UPDATE] コメント・メッセージの規約適合を修正する
+  - ソースコードとテストに残っていた issue 番号参照 (`#0316` / `#0149` など 11 箇所) を、理由そのものの記述に置き換える (§「issue 番号をソースコードに持ち込まないこと」)
+  - `src/msf.ts` の旧文書言及 (`CLAUDE.md`) を現行の書き方に直す
+  - `src/msf.ts` の `createCompleteCatalog` の節引用を §9.2 (Log track namespace and name) から §5.1.3 (Is Complete) に修正する
+  - `devtools/src` の英語のみのコメントを日本語化する
+  - `README.md` に「ドキュメント」節を追加し、`docs/` の 3 仕様書へリンクする (README から一度もリンクされていなかった)
+  - @voluntas
 - [ADD] channelConfig のサラウンド複合表記に対応する
   - draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義しないため、業界慣用の "5.1" (6 チャンネル) と "7.1" (8 チャンネル) を対応表で解決する
   - 対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり throw する (非標準表記を暗黙に数値化しない)

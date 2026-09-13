@@ -10,7 +10,7 @@ import { isDebugPanelOpen } from "./debug";
 
 export { toHttpVersionLabel };
 
-// Connection settings
+// 接続設定
 export const url = signal("moqt://127.0.0.1:4443/moqt");
 // moqt URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
@@ -19,10 +19,10 @@ export const namespace = signal("room/123");
 export const trackName = signal("video");
 export const codec = signal<CodecType>("vp8");
 
-// Certificate hash for self-signed certificates (base64 encoded SHA-256 hash)
+// 自己署名証明書用の証明書ハッシュ (Base64 でエンコードした SHA-256 ハッシュ)
 export const certificateHash = signal("");
 
-// Video settings
+// 映像設定
 export const videoSource = signal<VideoSourceType>("dummy");
 export const cameraDevices = signal<CameraDevice[]>([]);
 export const selectedCameraDeviceId = signal<string>("");
@@ -31,30 +31,30 @@ export const framerate = signal(30);
 export const bitrate = signal(2000000);
 export const keyframeInterval = signal(3600);
 
-// Publish settings
+// 配信設定
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
 // draft-ietf-moq-transport-21 Section 10.3 (MAX CACHE DURATION)
 // デフォルト: 600000ms (10分)
 export const maxCacheDuration = signal(600000);
 
-// Subscribe settings
+// 購読設定
 // Catalog 取得時のタイムアウト（ミリ秒）
 // デフォルト: 5000ms (5秒)
 export const catalogSubscriptionTimeout = signal(5000);
 
-// WebCodecs Worker settings
+// WebCodecs Worker 設定
 // true: Dedicated Worker で Encoder/Decoder を実行（デフォルト）
 // false: メインスレッドで実行
 export const useDedicatedWorker = signal(true);
 
-// Settings disabled state
+// 設定の無効化状態
 export const settingsDisabled = signal(false);
 
 // 現在のセッションの WebTransport.reliability。初期値は "pending"。
 // 接続確立時に Session.reliability を反映する。
 export const reliability = signal<string>("pending");
 
-// Authorization Token (SETUP Option 0x03)
+// Authorization Token (SETUP オプション 0x03)
 // draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
 // SETUP では DELETE / USE_ALIAS は仕様上禁止 (§9.1.4)。
 // REGISTER (0x1) または USE_VALUE (0x3) のみ。
@@ -201,7 +201,7 @@ export function buildConnectOptions(): {
 }
 
 /**
- * Base64 encoded string to ArrayBuffer
+ * Base64 文字列を ArrayBuffer に変換する
  */
 export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = atob(base64);

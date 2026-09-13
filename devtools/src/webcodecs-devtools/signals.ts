@@ -99,7 +99,7 @@ let decoderWorker: Worker | null = null;
 // ダミー映像ジェネレーター
 let dummyVideoGenerator: DummyVideoGenerator | null = null;
 
-// MediaStream
+// 映像ストリーム (MediaStream)
 export const mediaStream = signal<MediaStream | null>(null);
 export const isCapturing = signal(false);
 

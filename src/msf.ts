@@ -776,8 +776,8 @@ function decodeCatalogDeltaOperation(value: unknown, index: number): CatalogDelt
  * §5: A parser MUST ignore fields it does not understand.
  * 未知フィールド (root level) は ignore する。
  *
- * MUST 違反のみ throw する。`Error` メッセージは CLAUDE.md「先頭小文字、末尾
- * ピリオドなし、期待値と実際値を含む」に従う。
+ * MUST 違反のみ throw する。`Error` メッセージは「先頭小文字、末尾ピリオドなし、
+ * 期待値と実際値を含む」方針に従う。
  */
 export function validateCatalog(value: unknown): Catalog {
   if (typeof value !== "object" || value === null) {
@@ -2013,7 +2013,7 @@ export async function encodeMediaTimeline(entries: MediaTimelineEntry[]): Promis
  * JSON バイト列を Media Timeline にデコードする (draft-ietf-moq-msf-01 §7.1)
  *
  * gzip 自動検出は draft-01 §12.1 で MSF_COMPRESSION 経由に統一される予定のため
- * 撤廃 (#0316)。入力は無圧縮 JSON のみ受理する。Location は MOQT GroupID / ObjectID
+ * 撤廃した。入力は無圧縮 JSON のみ受理する。Location は MOQT GroupID / ObjectID
  * 由来の unsigned 整数で、JSON 安全範囲外の値は precision loss として reject する。
  */
 export async function decodeMediaTimeline(data: Uint8Array): Promise<MediaTimelineEntry[]> {
@@ -2105,7 +2105,7 @@ export async function encodeEventTimeline(entries: EventTimelineEntry[]): Promis
 /**
  * JSON バイト列を Event Timeline にデコードする (draft-ietf-moq-msf-01 §8.1)
  *
- * gzip 自動検出は撤廃 (#0316、MSF_COMPRESSION 経由に統一予定)。
+ * gzip 自動検出は撤廃した (MSF_COMPRESSION 経由に統一予定)。
  */
 export async function decodeEventTimeline(data: Uint8Array): Promise<EventTimelineEntry[]> {
   const json = new TextDecoder().decode(data);
@@ -2892,7 +2892,12 @@ export function createCatalog(
 
 /**
  * 配信完了を示す Catalog を作成する
- * (draft-ietf-moq-msf-01 §5.1.3 / §9.2)
+ *
+ * draft-ietf-moq-msf-01 §5.1.3 (Is Complete):
+ * "A catalog-level indication that the broadcast is complete. This is a
+ *  commitment that all tracks are complete, no new tracks will be added to the
+ *  catalog, and no new content will be published on any track."
+ * isComplete は true のときのみ含める (FALSE は MUST NOT)。
  */
 export function createCompleteCatalog(): Catalog {
   return {

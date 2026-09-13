@@ -233,7 +233,7 @@ const evenPropertyArb = fc
  * 奇数 ID の Property を生成する Arbitrary
  *
  * IMMUTABLE_PROPERTIES (0x0B, 奇数) は内部に同 ID を入れると malformed-track 扱いに
- * なるためテスト対象から除外する (#0122)。
+ * なるためテスト対象から除外する。
  */
 const oddPropertyArb = fc
   .record({
