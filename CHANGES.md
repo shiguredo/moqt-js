@@ -58,6 +58,11 @@
   - draft-ietf-moq-transport-21 §3.4 / §3.4.1 に基づき、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を含む REQUEST_UPDATE を受理して黙殺する挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了する (moqt-js は fill fetch ストリームを開けないため)
   - fill fetch ストリームを開く仕様準拠のピアとは相互運用できない (moqt-js publisher は fill を提供しない)
   - @voluntas
+- [ADD] リクエスト単位 error コールバックの throw をデバッグ記録に残す
+  - SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE の error コールバックが throw した場合、従来は握り潰すだけで記録していなかった
+  - セッション単位の error コールバック (SessionImpl.closeWithError) と同じく、握り潰した例外を debug コールバックへ typeName `REQUEST_CALLBACK_ERROR` で記録する (decoded.error と decoded.requestId)
+  - 記録は throw した場合のみで、正常な通知では増えない。後始末 (確立前 Promise の reject・保留中 REQUEST_UPDATE の reject・セッションクローズ) は従来どおり実行する
+  - @voluntas
 - [ADD] webtransport-devtools で WebTransport.closed が受け取った closeInfo を表示する
   - W3C WebTransport §6.3 / §6.5 / §6.6 / §6.10 に基づき、closed Promise の fulfill 時の closeCode / reason と reject 時のエラーメッセージを記録する
   - 切断 (disconnect) 後も表示を保持し、再接続時にクリアする

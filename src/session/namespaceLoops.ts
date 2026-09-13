@@ -174,16 +174,46 @@ function namespaceRejectAndCloseWithError(
  * 通知先は NamespaceSubscriptionCallbacks / TracksSubscriptionCallbacks /
  * NamespacePublicationCallbacks の callbacks.error であり、
  * SessionImpl.closeWithError が debug 記録に残すセッション単位の
- * ConnectCallbacks.error とは別系統である。ここで握り潰した throw は記録しない。
+ * ConnectCallbacks.error とは別系統である。
+ *
+ * 握り潰した throw は SessionImpl.closeWithError と同じくデバッグ記録に残す。
+ * 記録しないとアプリのコールバックが例外を投げ続けても開発者が気づけない。
+ * typeName は incomingHandleDatagram の DATAGRAM_CALLBACK_ERROR に倣い、
+ * リクエスト単位の error コールバック由来であることを示す
+ * REQUEST_CALLBACK_ERROR を使う。正常な通知では記録を増やさない。
+ *
+ * @param session - デバッグ記録の出力先を持つセッション
+ * @param requestId - 失敗したリクエストの ID (デバッグ記録の追跡用)
+ * @param callbacks - リクエスト単位のコールバック
+ * @param error - 通知するエラー
  */
 function namespaceNotifyError(
+  session: SessionInternal,
+  requestId: bigint,
   callbacks: { error?: (error: Error) => void } | undefined,
   error: Error,
 ): void {
   try {
     callbacks?.error?.(error);
-  } catch {
-    // 通知の失敗で後始末を止めない
+  } catch (callbackError) {
+    // アプリの error コールバックの throw はデバッグ記録に残す。
+    // 受信メッセージに対応しない記録のため payload は空にする。
+    // 記録自体の throw (debug コールバックの throw) は後始末を止めない。
+    try {
+      session.callbacks.debug?.({
+        direction: "recv",
+        type: 0,
+        typeName: "REQUEST_CALLBACK_ERROR",
+        payload: new Uint8Array(0),
+        decoded: {
+          error: callbackError instanceof Error ? callbackError.message : String(callbackError),
+          requestId: requestId.toString(),
+        },
+        timestamp: Date.now(),
+      });
+    } catch {
+      // デバッグ記録の失敗は無視する
+    }
   }
 }
 
@@ -907,7 +937,7 @@ export async function namespaceStartNamespaceStreamLoop(
             }
             const error = decodeRequestErrorToRequestError(messagePayload);
             subscription.state = "closed";
-            namespaceNotifyError(callbacks, error);
+            namespaceNotifyError(session, requestId, callbacks, error);
             reject(error);
             // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
             await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
@@ -995,7 +1025,7 @@ export async function namespaceStartNamespaceStreamLoop(
     if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
       if (!isSessionClosedError(normalizedError)) {
-        namespaceNotifyError(callbacks, normalizedError);
+        namespaceNotifyError(session, requestId, callbacks, normalizedError);
       }
       // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
       if (!resolved && !requestMigrated) {
@@ -1169,7 +1199,7 @@ export async function namespaceStartTracksStreamLoop(
             }
             const error = decodeRequestErrorToRequestError(messagePayload);
             subscription.state = "closed";
-            namespaceNotifyError(callbacks, error);
+            namespaceNotifyError(session, requestId, callbacks, error);
             reject(error);
             // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
             await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
@@ -1230,7 +1260,7 @@ export async function namespaceStartTracksStreamLoop(
     if (subscription.state === "active" && !goawayReceived) {
       subscription.state = "closed";
       if (!isSessionClosedError(normalizedError)) {
-        namespaceNotifyError(callbacks, normalizedError);
+        namespaceNotifyError(session, requestId, callbacks, normalizedError);
       }
       // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
       if (!resolved && !requestMigrated) {
@@ -1402,7 +1432,7 @@ export async function namespaceStartPublicationStreamLoop(
                 : undefined,
             );
             publication.state = "closed";
-            namespaceNotifyError(callbacks, error);
+            namespaceNotifyError(session, requestId, callbacks, error);
             if (!resolved) {
               reject(error);
               // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
@@ -1461,7 +1491,7 @@ export async function namespaceStartPublicationStreamLoop(
     if (publication.state !== "closed" && !goawayReceived) {
       publication.state = "closed";
       const wrapped = error instanceof Error ? error : new Error(String(error));
-      namespaceNotifyError(callbacks, wrapped);
+      namespaceNotifyError(session, requestId, callbacks, wrapped);
       // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
       if (!resolved && !requestMigrated) {
         reject(wrapped);
