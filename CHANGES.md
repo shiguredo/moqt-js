@@ -1352,6 +1352,10 @@
 
 ### misc
 
+- [UPDATE] bidi 応答読み取りのハンドラ表から経路共通の定型を既定実装に抽出する
+  - `handleCloseError` / `handleError` / `handleUnexpected` の 4 経路分 (約 90 行) は経路名と削除集合を除けば同一だったため、`cleanup` (経路別の削除と `fireFetcherReadyCallbacks`) と `requestLabel` (リクエスト種別名) をハンドラ表に追加し、3 つを既定実装に集約する
+  - 既定実装は「cleanup → reject → close」の順序と、reject と close に同一 `SessionError` を渡す契約を守る。経路固有の後始末が必要な場合だけハンドラを上書きする
+  - 削除集合・エラー文言・順序・同一オブジェクト性は変えず、既存テスト 2,136 件が無変更で通る
 - [UPDATE] bidi 応答読み取りの未カバー分岐 (REQUEST_ERROR / GOAWAY の 4 本) のテストを追加する
   - PUBLISH の REQUEST_ERROR で Retry Interval と Redirect が `RequestError` に載ること、SUBSCRIBE の REQUEST_ERROR で `fillFetchTargets` も削除されることを固定する
   - SUBSCRIBE の確立前 GOAWAY で `goawayCallback` に新しい URI が渡り、削除集合と `goawayReceivedOnRequestStreams` が処理されることを固定する
