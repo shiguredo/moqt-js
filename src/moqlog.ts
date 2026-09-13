@@ -19,6 +19,13 @@
  */
 
 import { ProtocolViolationError } from "./error";
+import {
+  decodeObservabilityJson,
+  observabilityGroupId,
+  observabilityTrackName,
+  observabilityTrackNamespace,
+  SYSLOG_LEVELS,
+} from "./observability";
 
 /**
  * Log entry ([MOQLOG] Section 4)
@@ -51,19 +58,9 @@ export interface LogEntry {
  * syslog severity の文字列 ↔ 優先度（0-7）の対応
  * draft-ietf-moq-msf-01 §9.2 / [RFC5424] の規約に従う。
  *
- * 注意: [MOQLOG] §7 の例は "Info" という短縮形を使うが、§4 本文の正規形は
- * "Informational" である。本表は §4 本文の正規形（フルスペル）を正とする。
+ * 実体は MOQMETRICS の granularity level と共通の表 (./observability)。
  */
-export const LOG_SEVERITY_LEVELS: Readonly<Record<string, number>> = {
-  Emergency: 0,
-  Alert: 1,
-  Critical: 2,
-  Error: 3,
-  Warning: 4,
-  Notice: 5,
-  Informational: 6,
-  Debug: 7,
-};
+export const LOG_SEVERITY_LEVELS: Readonly<Record<string, number>> = SYSLOG_LEVELS;
 
 /**
  * 既知フィールドの型定義（[MOQLOG] Section 4）
@@ -119,18 +116,7 @@ export function encodeLogEntry(entry: LogEntry): Uint8Array {
  * 既知フィールドの型が誤っている場合
  */
 export function decodeLogEntry(data: Uint8Array): LogEntry {
-  let parsed: unknown;
-  try {
-    // 不正 UTF-8 を U+FFFD に置換せず throw させ、ProtocolViolationError 経路に載せる
-    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new ProtocolViolationError(`invalid moqlog payload JSON: ${message}`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new ProtocolViolationError("moqlog payload must be a JSON object");
-  }
-  const entry = parsed as Record<string, unknown>;
+  const entry = decodeObservabilityJson(data, "moqlog");
   for (const [field, expected] of Object.entries(LOG_ENTRY_FIELD_TYPES)) {
     const value = entry[field];
     if (value === undefined) {
@@ -150,13 +136,8 @@ export function decodeLogEntry(data: Uint8Array): LogEntry {
       );
     }
   }
-  return parsed as LogEntry;
+  return entry;
 }
-
-/**
- * Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §9.3）
- */
-const GROUP_ID_MASK_62 = (1n << 62n) - 1n;
 
 /**
  * Log entry の Group ID を計算する（draft-ietf-moq-msf-01 §9.3）
@@ -168,10 +149,7 @@ const GROUP_ID_MASK_62 = (1n << 62n) - 1n;
  * @throws Error timestampMicros が負の場合
  */
 export function logGroupId(timestampMicros: bigint): bigint {
-  if (timestampMicros < 0n) {
-    throw new Error(`log group timestamp must be non-negative: ${timestampMicros}`);
-  }
-  return timestampMicros & GROUP_ID_MASK_62;
+  return observabilityGroupId(timestampMicros, "log group");
 }
 
 /**
@@ -207,10 +185,7 @@ export const MOQLOG_NAMESPACE_PREFIX = "moq://moq-syslog.arpa/logs-v1/";
  * @throws Error resourceId が空の場合
  */
 export function logTrackNamespace(resourceId: string): [string, string] {
-  if (resourceId === "") {
-    throw new Error("moqlog resourceId must not be empty");
-  }
-  return [MOQLOG_NAMESPACE_PREFIX, resourceId];
+  return observabilityTrackNamespace(MOQLOG_NAMESPACE_PREFIX, resourceId, "moqlog");
 }
 
 /**
@@ -222,8 +197,5 @@ export function logTrackNamespace(resourceId: string): [string, string] {
  * @throws Error severityLevel が 0-7 の整数でない場合
  */
 export function logTrackName(severityLevel: number): Uint8Array {
-  if (!Number.isInteger(severityLevel) || severityLevel < 0 || severityLevel > 7) {
-    throw new Error(`log priority level must be an integer 0-7: ${severityLevel}`);
-  }
-  return new Uint8Array([severityLevel]);
+  return observabilityTrackName(severityLevel, "log priority");
 }
