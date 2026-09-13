@@ -1202,6 +1202,11 @@
   - `SubscribeTracksOptions` に `subscriberPriority` / `filter` / `fill` / `authorizationToken` を追加する (§9.18.1 が SUBSCRIBE の全パラメータと Location Filter / FILL_PARAMETERS を認めている)
   - `publishNamespace(namespace, callbacks, options?)` に第 3 引数を追加する
   - @voluntas
+- [ADD] channelConfig のサラウンド複合表記に対応する
+  - draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義しないため、業界慣用の "5.1" (6 チャンネル) と "7.1" (8 チャンネル) を対応表で解決する
+  - 対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり throw する (非標準表記を暗黙に数値化しない)
+  - 自 PBT が生成する channelConfig ("1" / "2" / "5.1" / "7.1") が購読層で拒否される不整合を解消する
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
