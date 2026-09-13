@@ -1186,6 +1186,12 @@
   - `src/message/*.prop.ts` の 7 ファイルがそれぞれ再定義していた Message Parameter / Track Property / 名前系の arbitrary を `src/message/parameterArb.ts` に集約する。テストを含むファイルを共有元にすると import したテストが重複実行されるため、テストを含まない名前にする
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
+- [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
+  - `src/fetcher.ts` のモジュールヘッダの FETCH_OK を §9.12 に、不明範囲 (End of Range) を §11.4.1.2 に修正する
+  - `src/message/types.ts` の SUBGROUP_DELIVERY_TIMEOUT と OBJECT_DELIVERY_TIMEOUT の出現メッセージを draft-21 (§9.20.4 / §9.20.5 の SUBSCRIBE / PUBLISH / REQUEST_UPDATE) に合わせる
+  - MessageParameterType のヘッダコメントを「Track Properties へ移動」から「タイムアウトは両 namespace に併存する」に修正する (§5.2)
+  - CLIENT_SETUP / SERVER_SETUP の統合メモ、旧 SUBSCRIBE_NAMESPACE (0x11) の分割メモ、draft-16 の削除メモを削除する
+  - @voluntas
 - [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
   - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
   - ワイヤ形式・ロジック・公開 API は変更しない
