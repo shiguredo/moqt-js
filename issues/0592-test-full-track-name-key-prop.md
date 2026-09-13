@@ -1,7 +1,7 @@
 # fullTrackNameKey の同一性 PBT が恒真で getFullTrackNameKey との一致を検証していない
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/test-full-track-name-key-prop
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,17 @@
 
 - `src/fullTrackName.prop.ts` / `src/fullTrackName.ts` / `SubscriberImpl` (`src/subscriber.ts`) / `FetcherImpl` (`src/fetcher.ts`)
 - `issues/closed/0574-bug-full-track-name-collision.md` (比較キーと PBT を導入した issue)
+
+## 解決方法
+
+JSDoc の主張と実装を一致させた。比較キーの生成経路が一致することを実際に検証するテストを追加している。
+
+- `src/fullTrackName.prop.ts` の「同じ Full Track Name は同じキーになる」テストの JSDoc から「getFullTrackNameKey と受信 PUBLISH の比較キーが一致する前提を保証する」を削除し、このテストが確かめる範囲 (配列の参照に依存せず、内容が同じ別配列から生成してもキーが一致すること) に限定した。生成経路の一致は別のテストで検証する旨を明記した。
+- 比較キーの生成経路の一致を検証するテスト「getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す」を追加した。`fullTrackNameArb` で生成した Full Track Name について、`new SubscriberImpl(...).getFullTrackNameKey()` と `new FetcherImpl(...).getFullTrackNameKey()` が free 関数 `fullTrackNameKey(namespace, trackName)` と一致することを検証する。cross-cancel は各 Impl の `getFullTrackNameKey()` を、受信 PUBLISH の重複判定は free 関数を使うため、片方だけ形式が変わると同一 Track が不一致になり cross-cancel が空振りする。この回帰を検出できる。
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した (0591 と同じエントリに含めた)。
+
+## 検証
+
+- 追加したテストは `new SubscriberImpl(namespace, trackName, 0n, 0n, () => {})` と `new FetcherImpl(namespace, trackName, 0n, () => {})` を生成して比較する。`subscriber.prop.ts` / `publisher.prop.ts` に Impl を直接生成する前例があり、新規ハーネスは不要だった。
+- `pnpm test run`: 70 ファイル / 2,091 テスト全通過 (追加した 1 件を含む)。`src/fullTrackName.prop.ts` は 3 件から 4 件になった。
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
