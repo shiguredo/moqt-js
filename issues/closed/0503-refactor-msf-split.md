@@ -33,21 +33,21 @@
 
 ### 分割
 
-| ファイル | 行数 | 内容 |
-| --- | --- | --- |
-| `src/msf.ts` | 99 | 公開名の再輸出のみ (既存の import パス維持) |
-| `src/msf/version.ts` | 90 | バージョン / Packaging / Track Role / Cipher Suite の定数 |
-| `src/msf/types.ts` | 392 | Catalog / Track / Timeline の型 |
-| `src/msf/catalogCodec.ts` | 314 | Catalog / Catalog Delta の encode / decode |
-| `src/msf/catalogValidation.ts` | 477 | Catalog / Remove Track / Init Data の検証 |
-| `src/msf/catalogTrackValidation.ts` | 559 | Track のフィールド検証と packaging 別 MUST |
-| `src/msf/json.ts` | 65 | JSON number ↔ bigint の共通ヘルパー |
-| `src/msf/catalogDelta.ts` | 181 | Catalog Delta の適用 |
-| `src/msf/timeline.ts` | 220 | Media / Event Timeline の encode / decode |
-| `src/msf/variables.ts` | 219 | Catalog 変数の置換 |
-| `src/msf/fragment.ts` | 195 | MSF Fragment と Connection パラメータ |
-| `src/msf/c4m.ts` | 219 | C4M の時間 / Location 範囲 |
-| `src/msf/tracks.ts` | 217 | Track 取得・Catalog 生成・Track 選択 |
+| ファイル                            | 行数 | 内容                                                      |
+| ----------------------------------- | ---- | --------------------------------------------------------- |
+| `src/msf.ts`                        | 99   | 公開名の再輸出のみ (既存の import パス維持)               |
+| `src/msf/version.ts`                | 90   | バージョン / Packaging / Track Role / Cipher Suite の定数 |
+| `src/msf/types.ts`                  | 392  | Catalog / Track / Timeline の型                           |
+| `src/msf/catalogCodec.ts`           | 314  | Catalog / Catalog Delta の encode / decode                |
+| `src/msf/catalogValidation.ts`      | 477  | Catalog / Remove Track / Init Data の検証                 |
+| `src/msf/catalogTrackValidation.ts` | 559  | Track のフィールド検証と packaging 別 MUST                |
+| `src/msf/json.ts`                   | 65   | JSON number ↔ bigint の共通ヘルパー                       |
+| `src/msf/catalogDelta.ts`           | 181  | Catalog Delta の適用                                      |
+| `src/msf/timeline.ts`               | 220  | Media / Event Timeline の encode / decode                 |
+| `src/msf/variables.ts`              | 219  | Catalog 変数の置換                                        |
+| `src/msf/fragment.ts`               | 195  | MSF Fragment と Connection パラメータ                     |
+| `src/msf/c4m.ts`                    | 219  | C4M の時間 / Location 範囲                                |
+| `src/msf/tracks.ts`                 | 217  | Track 取得・Catalog 生成・Track 選択                      |
 
 全ファイル 800 行以下。モジュール間の依存は一方向で循環 import は無い。モジュール間で共有する非公開ヘルパー 9 件には `export` を付けたが、`src/msf.ts` からは再輸出していないため外部から見た公開面は変わらない。
 
