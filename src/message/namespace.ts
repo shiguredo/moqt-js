@@ -4,6 +4,7 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
+import { assertLengthWithinData } from "../length";
 import { ProtocolViolationError } from "../error";
 import {
   type Parameter,
@@ -440,13 +441,12 @@ export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): Publi
 
   const [nameLen, nameLenSize] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += nameLenSize;
-  // Length 宣言が残りバイトを超える切り詰めは破損であり、
-  // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-  if (offset + totalConsumed + Number(nameLen) > data.length) {
-    throw new ProtocolViolationError(
-      `publish skipped track name length exceeds remaining data: ${nameLen} > ${data.length - (offset + totalConsumed)}`,
-    );
-  }
+  assertLengthWithinData(
+    "publish skipped track name",
+    nameLen,
+    offset + totalConsumed,
+    data.length,
+  );
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 

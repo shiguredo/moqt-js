@@ -23,6 +23,7 @@
 
 import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
+import { assertLengthWithinData } from "../length";
 import { MessageParameterType, type Location } from "./types";
 
 /**
@@ -287,13 +288,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
     if (elemLen === 0n) {
       throw new ProtocolViolationError("track namespace field length is zero");
     }
-    // Length 宣言が残りバイトを超える切り詰めは破損であり、
-    // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-    if (offset + totalConsumed + Number(elemLen) > data.length) {
-      throw new ProtocolViolationError(
-        `track namespace field length exceeds remaining data: ${elemLen} > ${data.length - (offset + totalConsumed)}`,
-      );
-    }
+    assertLengthWithinData("track namespace field", elemLen, offset + totalConsumed, data.length);
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
     elements.push(element);
     totalConsumed += Number(elemLen);
@@ -528,13 +523,7 @@ function decodeKeyValuePair(
         `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
       );
     }
-    // Length 宣言が残りバイトを超える切り詰めは破損であり、
-    // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-    if (offset + totalConsumed + Number(length) > data.length) {
-      throw new ProtocolViolationError(
-        `parameter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
-      );
-    }
+    assertLengthWithinData("parameter value", length, offset + totalConsumed, data.length);
     value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
     totalConsumed += Number(length);
   } else {
@@ -786,13 +775,7 @@ export function decodeMessageParameter(
 
   switch (encoding) {
     case "uint8": {
-      // 残り 1 バイトに満たない切り詰めは破損であり、
-      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-      if (offset + totalConsumed + 1 > data.length) {
-        throw new ProtocolViolationError(
-          `uint8 parameter value exceeds remaining data: 1 > ${data.length - (offset + totalConsumed)}`,
-        );
-      }
+      assertLengthWithinData("uint8 parameter value", 1n, offset + totalConsumed, data.length);
       value = data.slice(offset + totalConsumed, offset + totalConsumed + 1);
       totalConsumed += 1;
       // draft-ietf-moq-transport-21 §9.20.9 / §9.20.19:
@@ -835,13 +818,12 @@ export function decodeMessageParameter(
           `message parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
         );
       }
-      // Length 宣言が残りバイトを超える切り詰めは破損であり、
-      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-      if (offset + totalConsumed + Number(length) > data.length) {
-        throw new ProtocolViolationError(
-          `message parameter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
-        );
-      }
+      assertLengthWithinData(
+        "message parameter value",
+        length,
+        offset + totalConsumed,
+        data.length,
+      );
       value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
       totalConsumed += Number(length);
       break;
@@ -865,11 +847,7 @@ export function decodeMessageParameter(
       }
       // 内側 Length が残りバイト数を超える場合はフレーミング破損として
       // PROTOCOL_VIOLATION で扱う (短い slice を作らない)
-      if (offset + totalConsumed + Number(length) > data.length) {
-        throw new ProtocolViolationError(
-          `filter value length exceeds remaining data: ${length} > ${data.length - (offset + totalConsumed)}`,
-        );
-      }
+      assertLengthWithinData("filter value", length, offset + totalConsumed, data.length);
       value = data.slice(
         offset + totalConsumed - lengthConsumed,
         offset + totalConsumed + Number(length),
