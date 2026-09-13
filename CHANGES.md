@@ -1352,6 +1352,12 @@
 
 ### misc
 
+- [UPDATE] bidi 応答読み取りの未カバー分岐 (REQUEST_ERROR / GOAWAY の 4 本) のテストを追加する
+  - PUBLISH の REQUEST_ERROR で Retry Interval と Redirect が `RequestError` に載ること、SUBSCRIBE の REQUEST_ERROR で `fillFetchTargets` も削除されることを固定する
+  - SUBSCRIBE の確立前 GOAWAY で `goawayCallback` に新しい URI が渡り、削除集合と `goawayReceivedOnRequestStreams` が処理されることを固定する
+  - TRACK_STATUS の確立前 GOAWAY は `goawayCallback` を呼ばず、新しい URI を reject する Error のメッセージで通知することを固定する
+  - 実装は変えない (テスト追加のみ)
+  - @voluntas
 - [UPDATE] 応答読み取りの共通リーダを bidiDispatchResponse に改名する
   - `bidiReadResponse` (ハンドラへ委譲するディスパッチャ) と `bidiReadResponseFromBidiStream` (最初の応答チャンクを返す低レベル読み取り) の名前が類似し、どちらが何を担うか判別しにくかった
   - ディスパッチャ側を `bidiDispatchResponse` に改名し、呼び出し 4 箇所とテストのコメントを追随させた。挙動は変えない
