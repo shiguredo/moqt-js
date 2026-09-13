@@ -595,6 +595,7 @@ interface PublisherGroupControl {
     type: "key" | "delta";
     timestamp: number;
     duration: number | null;
+    description?: Uint8Array;
   }): void;
   handleVideoEncodedChunk(chunk: {
     data: Uint8Array;
@@ -848,4 +849,91 @@ test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を�
   sendVideoChunk(control);
 
   assert.isUndefined(LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0)).config);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+ * encoder が返す description (AAC の AudioSpecificConfig) が AUDIO_CONFIG として
+ * 送られることを検証する。映像の VIDEO_CONFIG と同じ扱いで、同じ値は再送しない。
+ */
+function sendAudioChunk(control: PublisherLifecycleControl, description?: Uint8Array): void {
+  const handler = (
+    control as unknown as {
+      handleAudioEncodedChunk(chunk: {
+        data: Uint8Array;
+        type: "key" | "delta";
+        timestamp: number;
+        duration: number | null;
+        description?: Uint8Array;
+      }): void;
+    }
+  ).handleAudioEncodedChunk.bind(control);
+  handler({
+    data: new Uint8Array([0xbb]),
+    type: "key",
+    timestamp: 1000,
+    duration: null,
+    description,
+  });
+}
+
+test("handleAudioEncodedChunk: description が AUDIO_CONFIG として送られる", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  // AAC の AudioSpecificConfig 相当 (2 バイト)
+  const description = new Uint8Array([0x11, 0x90]);
+  sendAudioChunk(control, description);
+
+  assert.equal(sent.length, 1);
+  const decoded = LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0));
+  assert.deepEqual(decoded.config, description);
+});
+
+test("handleAudioEncodedChunk: 同じ description は再送しない", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  const description = new Uint8Array([0x11, 0x90]);
+  sendAudioChunk(control, description);
+  sendAudioChunk(control, new Uint8Array(description));
+
+  assert.equal(sent.length, 2);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isUndefined(LOC.decodeAudioProperties(sent[1].properties ?? new Uint8Array(0)).config);
+});
+
+test("handleAudioEncodedChunk: description が変わったら再送する", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  const first = new Uint8Array([0x11, 0x90]);
+  const second = new Uint8Array([0x11, 0x88]);
+  sendAudioChunk(control, first);
+  sendAudioChunk(control, second);
+
+  assert.deepEqual(
+    LOC.decodeAudioProperties(sent[1].properties ?? new Uint8Array(0)).config,
+    second,
+  );
+});
+
+test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を載せない", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  sendAudioChunk(control);
+
+  assert.isUndefined(LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0)).config);
 });

@@ -5,7 +5,7 @@
  */
 
 import type { AudioCodecType, AudioEncoderWrapperCallbacks } from "./types";
-import { getAudioEncoderConfig } from "./config";
+import { getAudioEncoderConfig, requiresAudioSpecificConfig } from "./config";
 import {
   ConfigureGenerationTracker,
   configureWrapperWorker,
@@ -30,6 +30,8 @@ export class AudioEncoderWrapper {
   private worker: Worker | null = null;
   private callbacks: AudioEncoderWrapperCallbacks;
   private configured = false;
+  // configure() で指定されたコーデック (description を運ぶかの判断に使う)
+  private codec: AudioCodecType | null = null;
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
   private readonly generationTracker = new ConfigureGenerationTracker();
 
@@ -47,6 +49,7 @@ export class AudioEncoderWrapper {
     sampleRate?: number,
     channels?: number,
   ): Promise<void> {
+    this.codec = codec;
     const config = getAudioEncoderConfig(codec, bitrate, sampleRate, channels);
 
     if (this.useWorker) {
@@ -77,6 +80,11 @@ export class AudioEncoderWrapper {
           type: message.chunkType,
           timestamp: message.timestamp,
           duration: message.duration,
+          // Worker は metadata をそのまま返すため、運ぶかの判断は Wrapper 側で行う
+          description:
+            this.codec !== null && requiresAudioSpecificConfig(this.codec) && message.description
+              ? new Uint8Array(message.description)
+              : undefined,
         });
       },
       notifyError: (error) => this.callbacks.error(error),
@@ -87,15 +95,34 @@ export class AudioEncoderWrapper {
     this.encoder = replaceCodec(
       this.encoder,
       new AudioEncoder({
-        output: (chunk: EncodedAudioChunk) => {
+        output: (chunk: EncodedAudioChunk, metadata?: EncodedAudioChunkMetadata) => {
           const data = new Uint8Array(chunk.byteLength);
           chunk.copyTo(data);
+
+          // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+          // AAC は decoderConfig.description (AudioSpecificConfig) を必要とする。
+          // 映像と同じく、metadata に現れたときだけ運ぶ。opus では運ばない
+          // (既存の復号 timestamp 挙動を変えないため)。
+          let description: Uint8Array | undefined;
+          if (
+            this.codec !== null &&
+            requiresAudioSpecificConfig(this.codec) &&
+            metadata?.decoderConfig?.description
+          ) {
+            const desc = metadata.decoderConfig.description;
+            if (desc instanceof ArrayBuffer) {
+              description = new Uint8Array(desc);
+            } else if (ArrayBuffer.isView(desc)) {
+              description = new Uint8Array(desc.buffer, desc.byteOffset, desc.byteLength);
+            }
+          }
 
           this.callbacks.output({
             data,
             type: chunk.type,
             timestamp: chunk.timestamp,
             duration: chunk.duration,
+            description,
           });
         },
         error: (error: DOMException) => {

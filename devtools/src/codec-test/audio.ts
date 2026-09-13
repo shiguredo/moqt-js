@@ -233,6 +233,8 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     errorCount: errorMessages.length,
   };
 
+  // opus は description を必要としないため渡さない (渡すと復号 timestamp が変わる)。
+  // AAC の AudioSpecificConfig 経路は Chromium に AAC エンコーダーが無く e2e では作れない。
   await decoder.configure(codec, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS);
 
   for (const chunk of referenceChunks) {

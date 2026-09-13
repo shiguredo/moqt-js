@@ -17,6 +17,7 @@ import {
   type CatalogTrack,
 } from "./msf";
 import { AudioEncoderWrapper } from "./codec/AudioEncoder";
+import type { AudioEncodedChunkData } from "./codec/types";
 import { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import {
   DEFAULT_AUDIO_CHANNELS,
@@ -97,6 +98,8 @@ export class MediaPublisherImpl implements MediaPublisher {
   // draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe でのみ encoder から渡るため、
   // 変化したときだけ載せて全 keyframe への重複送出を避ける。
   private lastSentVideoConfig: Uint8Array | null = null;
+  // 直前に AUDIO_CONFIG として送った description (同じ値を繰り返し送らないため)
+  private lastSentAudioConfig: Uint8Array | null = null;
   private audioPublisher: Publisher | null = null;
   private videoPublisher: Publisher | null = null;
 
@@ -645,19 +648,25 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
   }
 
-  private handleAudioEncodedChunk(chunk: {
-    data: Uint8Array;
-    type: "key" | "delta";
-    timestamp: number;
-    duration: number | null;
-  }): void {
+  private handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
+
+    // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+    // encoder が返す description (AAC の AudioSpecificConfig) を AUDIO_CONFIG として送る。
+    // description はエンコーダーの metadata に現れたときだけ載せ、同じ値は送らない
+    // (映像の VIDEO_CONFIG と同じ扱い)。
+    let audioConfig: Uint8Array | undefined;
+    if (chunk.description !== undefined && !this.isSameAudioConfig(chunk.description)) {
+      audioConfig = chunk.description;
+      this.lastSentAudioConfig = new Uint8Array(chunk.description);
+    }
 
     // LOC Properties をエンコード。
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
     // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
     const properties = LOC.encodeAudioProperties({
       timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+      config: audioConfig,
     });
 
     // オーディオは一定間隔で新しいグループを開始（約1秒ごと）
@@ -693,6 +702,25 @@ export class MediaPublisherImpl implements MediaPublisher {
    */
   private isSameVideoConfig(description: Uint8Array): boolean {
     const previous = this.lastSentVideoConfig;
+    if (previous === null || previous.length !== description.length) {
+      return false;
+    }
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i] !== description[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * 直前に送った Audio Config と同じ description かを判定する
+   *
+   * 映像の isSameVideoConfig と同じ扱い。同じ値を毎チャンク送ると無駄になるため、
+   * 変化したときだけ AUDIO_CONFIG を載せる。
+   */
+  private isSameAudioConfig(description: Uint8Array): boolean {
+    const previous = this.lastSentAudioConfig;
     if (previous === null || previous.length !== description.length) {
       return false;
     }

@@ -11,6 +11,7 @@ import {
   getVideoDecoderConfig,
   getAudioEncoderConfig,
   getAudioDecoderConfig,
+  requiresAudioSpecificConfig,
   resolveAudioChannelCount,
   DEFAULT_AUDIO_SAMPLE_RATE,
   DEFAULT_AUDIO_CHANNELS,
@@ -171,6 +172,30 @@ test("getAudioDecoderConfig: sampleRate / channels を指定すると引数ど�
 test("getAudioDecoderConfig: 未知の codec は opus にフォールバックする", () => {
   const config = getAudioDecoderConfig("unknown" as AudioCodecType);
   assert.equal(config.codec, "opus");
+});
+
+test("getAudioDecoderConfig: aac は description を AudioDecoderConfig へ渡す", () => {
+  // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+  // AAC の AudioSpecificConfig はデコードに必須のため、そのまま渡す
+  const description = new Uint8Array([0x11, 0x90]);
+  const config = getAudioDecoderConfig("aac", 48_000, 2, description);
+  assert.deepEqual(config.description, description);
+});
+
+test("getAudioDecoderConfig: opus は description を渡さない", () => {
+  // opus に description を渡すと codec delay の適用で復号 timestamp が変わるため無視する
+  const config = getAudioDecoderConfig("opus", 48_000, 2, new Uint8Array([0x4f, 0x70, 0x75, 0x73]));
+  assert.isUndefined(config.description);
+});
+
+test("getAudioDecoderConfig: description 省略時は config に載せない", () => {
+  assert.isUndefined(getAudioDecoderConfig("opus", 48_000, 2).description);
+  assert.isUndefined(getAudioDecoderConfig("aac", 48_000, 2).description);
+});
+
+test("requiresAudioSpecificConfig: aac のみ true", () => {
+  assert.isTrue(requiresAudioSpecificConfig("aac"));
+  assert.isFalse(requiresAudioSpecificConfig("opus"));
 });
 
 // ============================================================================

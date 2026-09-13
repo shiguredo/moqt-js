@@ -32,9 +32,30 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerRequest>) => {
         audioEncoder = replaceCodec(
           audioEncoder,
           new AudioEncoder({
-            output: (chunk: EncodedAudioChunk) => {
+            output: (chunk: EncodedAudioChunk, metadata?: EncodedAudioChunkMetadata) => {
               const data = new Uint8Array(chunk.byteLength);
               chunk.copyTo(data);
+
+              // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+              // AAC は decoderConfig.description (AudioSpecificConfig) を必要とする。
+              // 映像と同じく、metadata に現れたときだけ運ぶ。
+              let description: ArrayBuffer | undefined;
+              if (metadata?.decoderConfig?.description) {
+                const desc = metadata.decoderConfig.description;
+                if (desc instanceof ArrayBuffer) {
+                  description = desc.slice(0);
+                } else if (ArrayBuffer.isView(desc)) {
+                  description = desc.buffer.slice(
+                    desc.byteOffset,
+                    desc.byteOffset + desc.byteLength,
+                  ) as ArrayBuffer;
+                }
+              }
+
+              const transferList: Transferable[] = [data.buffer];
+              if (description) {
+                transferList.push(description);
+              }
 
               self.postMessage(
                 {
@@ -43,8 +64,9 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerRequest>) => {
                   chunkType: chunk.type,
                   timestamp: chunk.timestamp,
                   duration: chunk.duration,
+                  description,
                 },
-                [data.buffer] as unknown as StructuredSerializeOptions,
+                transferList as unknown as StructuredSerializeOptions,
               );
             },
             error: (error: DOMException) => {

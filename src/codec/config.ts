@@ -170,12 +170,24 @@ export function getAudioEncoderConfig(
 }
 
 /**
+ * コーデックが description (AudioSpecificConfig) を必要とするかを返す
+ *
+ * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+ * AAC の復号には AudioSpecificConfig が必須である。opus は不要で、渡すと
+ * codec delay の適用により復号 timestamp が変わるため運ばない。
+ */
+export function requiresAudioSpecificConfig(codec: AudioCodecType): boolean {
+  return codec === "aac";
+}
+
+/**
  * オーディオデコーダー設定を取得する
  */
 export function getAudioDecoderConfig(
   codec: AudioCodecType,
   sampleRate: number = DEFAULT_AUDIO_SAMPLE_RATE,
   channels: number = DEFAULT_AUDIO_CHANNELS,
+  description?: Uint8Array,
 ): AudioDecoderConfig {
   switch (codec) {
     case "opus":
@@ -183,12 +195,17 @@ export function getAudioDecoderConfig(
         codec: "opus",
         sampleRate,
         numberOfChannels: channels,
+        // opus は description (OpusHead) を必要としない。渡すと codec delay の適用で
+        // 復号 timestamp が変わるため、受け取っても使わない (既存挙動を維持する)
       };
     case "aac":
       return {
         codec: "mp4a.40.2",
         sampleRate,
         numberOfChannels: channels,
+        // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+        // AAC の復号には AudioSpecificConfig (AudioDecoderConfig.description) が必須
+        description,
       };
     default:
       return {
