@@ -109,33 +109,13 @@ export interface SessionInternal extends BidiSessionInternal {
   // handleIncomingDatagram が statsUnidirectionalStreamsReceived をインクリメントする。
   statsUnidirectionalStreamsReceived: number;
 
-  /**
-   * Group 単位の END_OF_GROUP 既知最終 Object ID
-   *
-   * draft-ietf-moq-transport-21 §12.1 条件 4:
-   * "An Object is received in a Group whose Object ID is larger than the final
-   *  Object in the Group. The final Object in a Group is the Object with Status
-   *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the
-   *  END_OF_GROUP bit set."
-   *
-   * キーは `${trackAlias}:${groupId}`。ストリーム (Subgroup) をまたいだ追跡に
-   * 使うためセッションに保持する。free function から読み書きするため readonly 不可。
-   */
-  receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
-
-  // validateIncomingRequestId は BidiSessionInternal 側で宣言済み
+  // receivedEndOfGroupFinalObjectIds は BidiSessionInternal 側で宣言済み
   // (SessionInternal extends BidiSessionInternal のため継承する)。
+  // validateIncomingRequestId も同様に BidiSessionInternal 側で宣言済み。
 
   // ============================================================
-  // publish.ts 用（追加分）
+  // その他 (incoming.ts / namespaceLoops.ts / publish.ts / session.ts)
   // ============================================================
-  // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
-  peerMaxFilterRanges: number;
-
-  // draft-ietf-moq-transport-21 §9.1.6: 自 endpoint が SETUP で広告した
-  // MAX_FILTER_RANGES（未広告時は 0 = Range Filter 受信拒否）
-  localMaxFilterRanges: number;
-
   // draft-ietf-moq-transport-21 §13 (Grease): true のとき Track / Object Properties に
   // GREASE Property を 1 つ注入する。ConnectOptions.grease を initialize() で受け渡す。
   readonly grease: boolean;

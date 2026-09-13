@@ -1352,6 +1352,10 @@
 
 ### misc
 
+- [UPDATE] SessionInternal の重複宣言と見出し分裂を解消する
+  - `peerMaxFilterRanges` / `localMaxFilterRanges` / `receivedEndOfGroupFinalObjectIds` が基底 (`BidiSessionInternal`) と派生 (`SessionInternal`) の両方で宣言されていたため、派生側の再宣言を削除して基底に一本化する
+  - `publish.ts 用` と `publish.ts 用（追加分）` に分裂していた見出しを整理し、実際の利用モジュールに合わせて `incoming.ts 用` と `その他` に分ける
+  - 挙動は変えない (型宣言のみの整理)
 - [UPDATE] PublishOptions / SubscribeOptions の subgroupDeliveryTimeout doc コメントを実態に合わせる
   - SUBGROUP_DELIVERY_TIMEOUT の強制 (Subgroup 完了後のタイマー開始とストリームリセット) を moqt-js が実装していないことを明記する。比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント (典型的にはリレー) の責務である
   - 同じ枠組みを規定する draft-ietf-moq-transport-21 §5.2 (Delivery Timeouts and Data Reliability) を参照先に加え、OBJECT_DELIVERY_TIMEOUT の doc コメントと対称の構造に揃える
