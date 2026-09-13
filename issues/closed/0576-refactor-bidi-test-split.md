@@ -43,31 +43,31 @@
 
 ### 分割後のファイル
 
-| ファイル | 行数 | テスト数 |
-| --- | --- | --- |
-| `bidiPublishDone.test.ts` | 88 | 3 |
-| `bidiSubscriberObject.test.ts` | 165 | 8 |
-| `bidiRequestUpdateOk.test.ts` | 546 | 13 |
-| `bidiGoawayValidation.test.ts` | 38 | 2 |
-| `bidiSendRequestUpdateFilters.test.ts` | 80 | 2 |
-| `bidiSendRequestUpdateFill.test.ts` | 870 | 24 |
-| `bidiSendNamespaceRequestUpdate.test.ts` | 529 | 16 |
-| `bidiReadRequestStreamMessages.test.ts` | 1,052 | 24 |
-| `bidiHandlePublishRequestUpdate.test.ts` | 1,096 | 32 |
-| `bidiPublishRequestUpdateConditions.test.ts` | 1,131 | 26 |
-| `bidiNotifySubscriberFailure.test.ts` | 159 | 5 |
-| `bidiSubscribeFinReset.test.ts` | 1,234 | 25 |
-| `bidiCancelSubscription.test.ts` | 333 | 5 |
-| `bidiSubscriberUpdateSuppression.test.ts` | 329 | 8 |
-| `bidiPublishStateNotify.test.ts` | 390 | 8 |
-| `bidiResponseUncoveredBranches.test.ts` | 233 | 4 |
-| `bidiResponseScopeViolation.test.ts` | 1,039 | 28 |
-| `bidiResponseCrossCancel.test.ts` | 697 | 10 |
-| `bidiKeyValueFormattingError.test.ts` | 834 | 22 |
-| `bidiRequestUpdateScopeAudit.test.ts` | 802 | 18 |
-| `bidiTrackPropertiesValidation.test.ts` | 150 | 4 |
-| `bidiCancelMalformedTrackPeers.test.ts` | 100 | 1 |
-| `bidiReadTrackStatusResponse.test.ts` | 166 | 2 |
+| ファイル                                     | 行数  | テスト数 |
+| -------------------------------------------- | ----- | -------- |
+| `bidiPublishDone.test.ts`                    | 88    | 3        |
+| `bidiSubscriberObject.test.ts`               | 165   | 8        |
+| `bidiRequestUpdateOk.test.ts`                | 546   | 13       |
+| `bidiGoawayValidation.test.ts`               | 38    | 2        |
+| `bidiSendRequestUpdateFilters.test.ts`       | 80    | 2        |
+| `bidiSendRequestUpdateFill.test.ts`          | 870   | 24       |
+| `bidiSendNamespaceRequestUpdate.test.ts`     | 529   | 16       |
+| `bidiReadRequestStreamMessages.test.ts`      | 1,052 | 24       |
+| `bidiHandlePublishRequestUpdate.test.ts`     | 1,096 | 32       |
+| `bidiPublishRequestUpdateConditions.test.ts` | 1,131 | 26       |
+| `bidiNotifySubscriberFailure.test.ts`        | 159   | 5        |
+| `bidiSubscribeFinReset.test.ts`              | 1,234 | 25       |
+| `bidiCancelSubscription.test.ts`             | 333   | 5        |
+| `bidiSubscriberUpdateSuppression.test.ts`    | 329   | 8        |
+| `bidiPublishStateNotify.test.ts`             | 390   | 8        |
+| `bidiResponseUncoveredBranches.test.ts`      | 233   | 4        |
+| `bidiResponseScopeViolation.test.ts`         | 1,039 | 28       |
+| `bidiResponseCrossCancel.test.ts`            | 697   | 10       |
+| `bidiKeyValueFormattingError.test.ts`        | 834   | 22       |
+| `bidiRequestUpdateScopeAudit.test.ts`        | 802   | 18       |
+| `bidiTrackPropertiesValidation.test.ts`      | 150   | 4        |
+| `bidiCancelMalformedTrackPeers.test.ts`      | 100   | 1        |
+| `bidiReadTrackStatusResponse.test.ts`        | 166   | 2        |
 
 最大は `bidiSubscribeFinReset.test.ts` の 1,234 行で、全ファイルが完了条件の 1,500 行以下を満たす。
 
