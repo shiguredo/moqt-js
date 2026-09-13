@@ -956,6 +956,11 @@
 
 ### misc
 
+- [UPDATE] bidi.test.ts をメッセージ種別ごとの 23 ファイルに分割する
+  - 12,115 行 / 290 テストの単一ファイルを機能単位 (PUBLISH 応答 / SUBSCRIBE 応答 / FETCH 応答 / TRACK_STATUS 応答 / REQUEST_UPDATE / namespace 購読 / cancel 系) に分割し、各ファイルを 1,500 行以下 (最大 1,234 行) にする
+  - 複数ファイルで使うテストヘルパー 9 件を `src/testSupport/bidi.ts` に抽出する
+  - テストの本文・タイトル・アサーションは変更せず、移動と抽出のみ (テスト数は 290 件のまま)
+  - @voluntas
 - [UPDATE] namespace 系 3 ループの鏡写しテストをループ種別でパラメータ化する
   - `src/session/namespaceLoops.test.ts` のテストハーネスを `createNamespaceLoopTestContext(kind)` に統一し、3 ループ共通の 22 シナリオをケース表 + `forEach` で生成する
   - ループ固有の挙動 (NAMESPACE / NAMESPACE_DONE、PUBLISH_SKIPPED、PUBLISH_NAMESPACE_OK の重複検出、確立後の想定外メッセージなど) は個別テストのまま残す
