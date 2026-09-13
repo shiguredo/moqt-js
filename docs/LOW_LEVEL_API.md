@@ -391,6 +391,8 @@ Subgroup stream の各 Object について以下を行う。
 
 Fetch stream は `decodeFetchObjectFields()` が前回の context を使いながら復元する。Fetch Object Fields には `Object Status` が存在しないため、現在の実装では常に `ObjectStatus.NORMAL` として `Fetcher` に渡す。
 
+統計は受信したストリームの種別で分ける。通常 FETCH のデータストリームは `objectsReceivedViaFetch` / `bytesReceivedViaFetch`、fill fetch ストリームは `objectsReceivedViaFill` / `bytesReceivedViaFill` に加算し、購読側へは合算しない。fill 範囲と購読の Location Filter が重なる Object は publisher が両経路で送るため、受信したストリームの種別どおりに 1 回ずつ計上する。
+
 ストリーム末尾 (ピアの FIN) まで読んで残バッファが空なら `fetcher.handleEnd()` を呼び、`fetchers` から外す。
 未完成 Object の途中バイトが残る場合は `fetcher.handleEnd()` を呼ばず、§11.3 に従い `PROTOCOL_VIOLATION` でセッションを閉じる。
 
@@ -456,9 +458,11 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
 `getStatistics()` は以下のカテゴリのカウンターを返す。
 
 - 受信 Object 数 / 受信バイト数
-  - `objectsReceivedViaFetch`
+  - `objectsReceivedViaFetch` (通常 FETCH のデータストリーム経由。fill 経由は含まない)
+  - `objectsReceivedViaFill` (fill fetch ストリーム経由)
   - `objectsReceivedViaSubscribe`
-  - `bytesReceivedViaFetch`
+  - `bytesReceivedViaFetch` (通常 FETCH のデータストリーム経由。fill 経由は含まない)
+  - `bytesReceivedViaFill` (fill fetch ストリーム経由)
   - `bytesReceivedViaSubscribe`
 - Pending Subgroup バッファ
   - `pendingSubgroupStreamsCount`

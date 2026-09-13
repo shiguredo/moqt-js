@@ -4406,6 +4406,132 @@ test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VAL
   assert.equal(delivered, 0);
 });
 
+// ============================================================================
+// 統計の受信経路別区分のテスト
+// draft-ietf-moq-transport-21 §3.4 (Fill Semantics)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * "An object delivered on the fill fetch stream is *fill-delivered*."
+ * fill-delivered は通常 FETCH とも subscription-delivered とも別経路であるため、
+ * 統計も fill 側の区分に計上し、fetch 側 / subscribe 側には計上しない。
+ */
+test("統計: fill fetch ストリームのオブジェクトは fill 側に計上する", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  const stats = ctx.session.getStatistics();
+  assert.equal(stats.objectsReceivedViaFill, 1);
+  assert.equal(stats.bytesReceivedViaFill, parts.payload.byteLength);
+  // fill は通常 FETCH でも購読でもない
+  assert.equal(stats.objectsReceivedViaFetch, 0);
+  assert.equal(stats.bytesReceivedViaFetch, 0);
+  assert.equal(stats.objectsReceivedViaSubscribe, 0);
+  assert.equal(stats.bytesReceivedViaSubscribe, 0);
+});
+
+/**
+ * 通常 FETCH のデータストリームのオブジェクトは fetch 側の区分に計上し、
+ * fill 側には計上しない (回帰ガード)。fill 側区分の追加で通常 FETCH の
+ * 計上先が変わっていないことを固定する。
+ */
+test("統計: 通常 FETCH のオブジェクトは fetch 側に計上し fill 側には計上しない", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {},
+  );
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  const stats = ctx.session.getStatistics();
+  assert.equal(stats.objectsReceivedViaFetch, 1);
+  assert.equal(stats.bytesReceivedViaFetch, parts.payload.byteLength);
+  assert.equal(stats.objectsReceivedViaFill, 0);
+  assert.equal(stats.bytesReceivedViaFill, 0);
+  assert.equal(stats.objectsReceivedViaSubscribe, 0);
+  assert.equal(stats.bytesReceivedViaSubscribe, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+ * "When the fill range overlaps the subscription's Location filter, an object
+ *  can be both fill-delivered and subscription-delivered."
+ * 重なった範囲のオブジェクトは publisher が fill fetch ストリームと
+ * Subgroup / Datagram の両方で送るため、受信側は受信したストリームの種別
+ * どおりに 1 回ずつ計上する (片方に寄せない)。
+ */
+test("統計: fill と subscription の両経路で届いたオブジェクトは経路ごとに計上する", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  const trackAlias = 7n;
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, trackAlias, () => {});
+  internals.subscribers.set(requestId, subscriber);
+  internals.subscribersByAlias.set(trackAlias, [subscriber]);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  // fill fetch ストリームで 1 オブジェクト届ける
+  const fillParts = buildFetchStreamParts(requestId);
+  const fillPromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([fillParts.headerBytes, fillParts.fieldsBytes, fillParts.payload]));
+  ctx.fin();
+  await fillPromise;
+
+  // subscription の Subgroup ストリームでも 1 オブジェクト届ける
+  const subgroupParts = buildSubgroupStreamParts();
+  let subgroupController!: ReadableStreamDefaultController<Uint8Array>;
+  const subgroupStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      subgroupController = controller;
+    },
+  });
+  const subgroupPromise = ctx.internal.handleIncomingStream(subgroupStream);
+  subgroupController.enqueue(
+    concatUint8Arrays([
+      subgroupParts.headerBytes,
+      subgroupParts.fieldsBytes,
+      subgroupParts.payload,
+    ]),
+  );
+  subgroupController.close();
+  await subgroupPromise;
+
+  const stats = ctx.session.getStatistics();
+  // 受信ストリームの種別ごとに 1 回ずつ計上する
+  assert.equal(stats.objectsReceivedViaFill, 1);
+  assert.equal(stats.bytesReceivedViaFill, fillParts.payload.byteLength);
+  assert.equal(stats.objectsReceivedViaSubscribe, 1);
+  assert.equal(stats.bytesReceivedViaSubscribe, subgroupParts.payload.byteLength);
+  // 通常 FETCH は 1 件も受信していない
+  assert.equal(stats.objectsReceivedViaFetch, 0);
+  assert.equal(stats.bytesReceivedViaFetch, 0);
+});
+
 /**
  * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
  * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
