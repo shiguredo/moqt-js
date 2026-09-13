@@ -76,6 +76,22 @@ export const lengthPrefixedParameterArb = fc
   .map(({ type, value }) => ({ type, value }));
 
 /**
+ * Track Namespace のフィールド列を生成する共通 arbitrary
+ *
+ * draft-ietf-moq-transport-21 §2.3:
+ * "Each Track Namespace Field Value MUST contain at least one byte."
+ * 各フィールドは 1 バイト以上必要なため minLength: 1 とする。
+ *
+ * メッセージの `trackNamespace` 用 (namespaceStringsArb) と
+ * TRACK_NAMESPACE_PREFIX (0x34) パラメータの Value 用
+ * (trackNamespaceParameterArb) で生成条件を共有する。
+ */
+export const namespacePartsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
+  minLength: 0,
+  maxLength: 5,
+});
+
+/**
  * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
  *
  * draft-ietf-moq-transport-21 §9.20.21:
@@ -83,9 +99,9 @@ export const lengthPrefixedParameterArb = fc
  * encodeParameterTrackNamespace の出力で構築する
  * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
  */
-export const trackNamespaceParameterArb = fc
-  .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })
-  .map((parts) => encodeParameterTrackNamespace(createTrackNamespace(parts)));
+export const trackNamespaceParameterArb = namespacePartsArb.map((parts) =>
+  encodeParameterTrackNamespace(createTrackNamespace(parts)),
+);
 
 /**
  * LocationFilter の任意構築
@@ -288,10 +304,7 @@ export const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLengt
 // メッセージ間で共有する名前系の arbitrary
 // ============================================================================
 
-export const namespaceStringsArb = fc.array(fc.string({ minLength: 1, maxLength: 20 }), {
-  minLength: 0,
-  maxLength: 5,
-});
+export const namespaceStringsArb = namespacePartsArb;
 
 export const trackNameArb = fc
   .string({ minLength: 1, maxLength: 50 })
