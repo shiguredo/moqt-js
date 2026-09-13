@@ -956,6 +956,11 @@
 
 ### misc
 
+- [UPDATE] namespace 系 3 ループを共通ループとハンドラ注入に畳む
+  - `src/session/namespaceLoops.ts` の Namespace / Tracks / Publication ループが複製していた読み取り骨格・done 節・REQUEST_OK / REQUEST_ERROR / GOAWAY の分岐・catch / finally を `runNamespaceStreamLoop` に集約する
+  - ループごとの差 (ループ条件・追加メッセージ・先頭メッセージガード・done 時と読み取り失敗時の後始末) は `createNamespaceStreamHandlers` / `createTracksStreamHandlers` / `createPublicationStreamHandlers` から注入し、公開関数は対象の取得と共通ループの呼び出しだけにする
+  - 公開 API と挙動に変更なし (内部リファクタのみ)
+  - @voluntas
 - [UPDATE] devtools の重複ヘルパとデバッグログを整理する
   - `formatBytes` / `formatBitrate` を `devtools/src/utils/logFormatters.ts` に一本化し、`base64ToArrayBuffer` を `devtools/src/utils/base64.ts`、DebugMessage のログ出力を `devtools/src/hooks/debugMessageLog.ts` に共通化する
   - `usePublisher` / `useSubscriber` に残っていた `console.log` を削除し、DebugPanel 経由のログに寄せる
