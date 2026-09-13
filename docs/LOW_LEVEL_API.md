@@ -310,6 +310,15 @@ Safari 系の `WebTransport` では `writer.close()` が resolve しない場合
 
 `UNSUBSCRIBE` メッセージは使わず、双方向ストリームの close で購読終了を表す。`cancelSubscription()` が `requestStreams` から該当ストリームを取り出して閉じ、Map から購読状態を削除する。
 
+#### fill 失敗の通知
+
+`SubscribeOptions.fill` で fill を要求した購読では、publisher が開いた fill fetch ストリームを購読に紐付けて受信する。fill fetch ストリームには `REQUEST_ERROR` が無く、publisher は reset で fill の失敗を伝える (§3.4.1)。reset / cancel は購読に波及しない (§3.4.1) ため、購読の `error` コールバックではなく `SubscribeCallbacks.fillError` で通知する。
+
+- FIN による fill の正常完了では通知しない
+- Malformed Track の検出時は購読自体を cancel するため、購読の `error` コールバックで通知する (`fillError` は呼ばない)
+- セッション終了起源の失敗はセッション単位の `error` コールバックで通知する (`fillError` は呼ばない)
+- `fillError` コールバックの throw は握り潰し、`FILL_ERROR_CALLBACK_ERROR` として debug コールバックに記録する
+
 ### `fetch()` の流れ
 
 `Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。

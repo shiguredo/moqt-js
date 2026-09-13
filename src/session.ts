@@ -465,6 +465,20 @@ export interface SubscribeCallbacks {
   end?: () => void;
   error?: (error: Error) => void;
   /**
+   * fill fetch ストリームが失敗した時のコールバック
+   *
+   * draft-ietf-moq-transport-21 §3.4.1 (Opening and Closing Fill Fetch Streams):
+   * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
+   *  publisher signals a fill failure by resetting the stream" および
+   * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
+   *  affect the subscription, which continues to deliver objects using
+   *  subscribe subgroups and datagrams."
+   * fill の失敗は購読の継続を妨げないため、購読の終了を意味する error とは
+   * 別のコールバックで通知する。アプリは fill が欠けたことを検知して
+   * 再取得を判断できる。FIN による正常完了では呼ばない。
+   */
+  fillError?: (error: Error) => void;
+  /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
    * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
    * 当該リクエストのマイグレーション先 URI を通知する。
@@ -2074,6 +2088,8 @@ export class SessionImpl implements Session {
 
     // GOAWAY コールバックを設定（セッション内部コールバック）
     impl.goawayCallback = callbacks.goaway;
+    // fill 失敗コールバックを設定（セッション内部コールバック）
+    impl.fillErrorCallback = callbacks.fillError;
 
     // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
     // "The initiator of the subscription sets the initial Forward State in
@@ -4463,6 +4479,7 @@ export class SessionImpl implements Session {
       subscribeCallbacks.error,
     );
     impl.goawayCallback = subscribeCallbacks.goaway;
+    impl.fillErrorCallback = subscribeCallbacks.fillError;
 
     // draft-ietf-moq-transport-21 §10.4:
     // 受信 PUBLISH の Track Properties から DEFAULT_PUBLISHER_PRIORITY を解決し、
@@ -5056,9 +5073,18 @@ export class SessionImpl implements Session {
     let buffer = initialBuffer;
     let context: import("./dataStream").FetchObjectContext | null = null;
     let isFirst = true;
+    // アプリの object コールバックの throw を fill ストリーム自体の失敗と
+    // 誤認しないよう、ここで受けてデバッグ記録に残す。subgroup 経路が
+    // SUBGROUP_CALLBACK_ERROR として記録しつつ配送を継続するのと同じ扱いで、
+    // fill の受信も継続する。ここで受けなければ下の catch がストリームの
+    // エラーとして扱い、fill 失敗の通知 (fillError) まで誤って発火する。
     const sink = {
       handleObject: (object: MoqtObject): void => {
-        target.subscriber.handleFillObject(object);
+        try {
+          target.subscriber.handleFillObject(object);
+        } catch (callbackError) {
+          this.emitCallbackErrorDebug("FILL_CALLBACK_ERROR", callbackError);
+        }
       },
     };
     try {
@@ -5113,12 +5139,15 @@ export class SessionImpl implements Session {
       // 既知 Type の serialization 不一致は SessionError (KEY_VALUE_FORMATTING_ERROR)
       // として届くため、エラーコードを保持したまま閉じる (他の受信経路と同じ)。
       const sessionError = toSessionCloseError(err);
+      const normalizedError = err instanceof Error ? err : new Error(String(err));
       if (sessionError !== null) {
         this.closeWithError(sessionError);
       } else if (err instanceof MalformedTrackError) {
         // draft-ietf-moq-transport-21 §12.1:
         // malformed track の検出は §3.4.1 の「fill 失敗は購読に波及しない」
         // より優先し、同一 Track の全購読と全 FETCH を cancel する。
+        // アプリへの通知は cancelMalformedTrackPeers が購読の error
+        // コールバック経由で行うため、fillError は呼ばない (二重通知を防ぐ)。
         bidi.cancelMalformedTrackPeers(
           this as unknown as SessionInternal,
           target.subscriber.getFullTrackNameKey(),
@@ -5128,10 +5157,52 @@ export class SessionImpl implements Session {
           reader,
           `malformed fill track: requestId=${fillRequestId}, reason=${err instanceof Error ? err.message : String(err)}`,
         );
+      } else if (!isSessionClosedError(normalizedError)) {
+        // draft-ietf-moq-transport-21 §3.4.1:
+        // "Because there is no REQUEST_ERROR associated with a fill fetch
+        //  stream, the publisher signals a fill failure by resetting the
+        //  stream" および "Resetting or cancelling a fill fetch stream, by
+        //  either endpoint, does not affect the subscription, which continues
+        //  to deliver objects using subscribe subgroups and datagrams."
+        // 購読は継続するため終了通知 (error) は出さず、fill 専用の
+        // fillError でアプリに失敗を伝える。アプリはこれで再取得を判断できる。
+        // セッション終了起源の失敗 (isSessionClosedError) はセッション単位の
+        // error コールバックが通知するため、ここでは通知しない。
+        try {
+          target.subscriber.handleFillError(normalizedError);
+        } catch (callbackError) {
+          // アプリの fillError コールバックの throw は握り潰す
+          // (fill の後始末を止めない)。
+          this.emitCallbackErrorDebug("FILL_ERROR_CALLBACK_ERROR", callbackError);
+        }
       }
     }
     // 統計と reader ロックの後始末は呼び出し元の handleIncomingStream の
     // finally に委ねる (Subgroup 経路と同パターン)。
+  }
+
+  /**
+   * アプリのコールバック例外をデバッグ記録に残す
+   *
+   * 握り潰した例外を無音にしないための記録である。受信メッセージに対応しない
+   * 記録のため payload は空にし、typeName でどのコールバックかを示す。
+   * 記録自体の throw (debug コールバックの throw) は呼び出し元へ伝播させない。
+   */
+  private emitCallbackErrorDebug(typeName: string, error: unknown): void {
+    try {
+      this.callbacks.debug?.({
+        direction: "recv",
+        type: 0,
+        typeName,
+        payload: new Uint8Array(0),
+        decoded: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        timestamp: Date.now(),
+      });
+    } catch {
+      // デバッグ記録の失敗は無視する
+    }
   }
 
   /**
