@@ -956,6 +956,11 @@
 
 ### misc
 
+- [UPDATE] namespace 系 3 ループの鏡写しテストをループ種別でパラメータ化する
+  - `src/session/namespaceLoops.test.ts` のテストハーネスを `createNamespaceLoopTestContext(kind)` に統一し、3 ループ共通の 22 シナリオをケース表 + `forEach` で生成する
+  - ループ固有の挙動 (NAMESPACE / NAMESPACE_DONE、PUBLISH_SKIPPED、PUBLISH_NAMESPACE_OK の重複検出、確立後の想定外メッセージなど) は個別テストのまま残す
+  - 検証内容は変えず、ファイルは 3,198 行から 2,434 行になる (テスト件数は 81 から 86)
+  - @voluntas
 - [UPDATE] namespace 系 3 ループを共通ループとハンドラ注入に畳む
   - `src/session/namespaceLoops.ts` の Namespace / Tracks / Publication ループが複製していた読み取り骨格・done 節・REQUEST_OK / REQUEST_ERROR / GOAWAY の分岐・catch / finally を `runNamespaceStreamLoop` に集約する
   - ループごとの差 (ループ条件・追加メッセージ・先頭メッセージガード・done 時と読み取り失敗時の後始末) は `createNamespaceStreamHandlers` / `createTracksStreamHandlers` / `createPublicationStreamHandlers` から注入し、公開関数は対象の取得と共通ループの呼び出しだけにする
