@@ -43,7 +43,7 @@ export interface SubscriberInstance {
   chunksSkipped: Signal<number>;
   decodeErrors: Signal<number>;
   decoderState: Signal<string>;
-  // largestLocation
+  // 最大の Location
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Track Properties に DYNAMIC_GROUPS=1 が含まれているかどうか。
   // draft-ietf-moq-transport-21 §9.20.20 により、true のときのみ
@@ -64,7 +64,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decoder: signal<DecoderWrapper | null>(null),
     decoderConfigured: signal(false),
     status: signal<StatusType>("disconnected"),
-    statusMessage: signal("Ready to subscribe"),
+    statusMessage: signal("購読開始待ち"),
     codec: signal(""),
     isStopping: signal(false),
     newGroupRequestEnabled: signal(false),

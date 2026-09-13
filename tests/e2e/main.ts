@@ -2,7 +2,7 @@
  * Playwright E2E 用のエントリポイント
  *
  * window.__moqtE2E にヘルパーを露出する。
- * - connectSession: SETUP までを検証する低レベル接続チェック (issue 0114)
+ * - connectSession: SETUP までを検証する低レベル接続チェック
  * - publishCanvas: Canvas captureStream で生成した MediaStream を VP8 で publish する
  * - subscribeCanvas: 同一 namespace に subscribe して MediaStream を受信する
  *

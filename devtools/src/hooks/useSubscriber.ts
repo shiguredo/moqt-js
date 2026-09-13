@@ -68,7 +68,7 @@ function resetSubscriberStats(instance: sub.SubscriberInstance): void {
  *
  * WebTransport が close コールバックを同期 dispatch する実装で teardownSubscriber が
  * 再入する可能性があるため、`session.value = null` を `sessionInstance.close()` より
- * 先に立てる順序を維持する (#0150)。
+ * 先に立てる順序を維持する (session.value が残ったまま再入すると teardown が二重に走る)。
  *
  * canvas 塗り潰しは decoder の停止と一体で行うことで「停止した decoder の最終フレームが
  * 残る」表示不整合を避けるため本関数内に置く。
@@ -120,7 +120,7 @@ export function closeSubscriberResources(
  * `SubscriberInstance` の状態 signal 群を初期値にリセットし、フックローカル参照
  * (`chainRef`) を巻き戻す。
  *
- * `status` / `statusMessage` / `isStopping` は触らない (#0163 の責務境界に従う)。
+ * `status` / `statusMessage` / `isStopping` は触らない (停止操作の表示は呼び出し側の責務)。
  * `settingsDisabled` は `subscriber.value = null` の反映後に `hasActiveSubscriber`
  * computed で再計算されるため、本関数の末尾で再有効化判定を行う。
  */
@@ -330,7 +330,7 @@ export function useSubscriber(
 
     try {
       instance.status.value = "disconnected";
-      instance.statusMessage.value = "Connecting...";
+      instance.statusMessage.value = "接続中...";
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
@@ -351,7 +351,7 @@ export function useSubscriber(
             // teardownSubscriber は abort 経路を維持するため常に呼ぶ。
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "disconnected";
-              instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+              instance.statusMessage.value = `切断: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             }
             teardownSubscriber();
           },
@@ -362,7 +362,7 @@ export function useSubscriber(
             });
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "error";
-              instance.statusMessage.value = `Error: ${error.message}`;
+              instance.statusMessage.value = `エラー: ${error.message}`;
             }
             teardownSubscriber();
           },
@@ -386,7 +386,7 @@ export function useSubscriber(
 
       // status は subscribe 完了時にのみ "connected" へ遷移する。
       // Catalog 購読中 (最大 5 秒) の途中で "connected" にしないこと。
-      instance.statusMessage.value = "Connected, subscribing to catalog...";
+      instance.statusMessage.value = "接続完了、Catalog を購読中...";
 
       // Catalog を購読してコーデック情報を取得
       let videoTrackFromCatalog: CatalogTrack | undefined;
@@ -567,7 +567,7 @@ export function useSubscriber(
       // .then 内側で catalogSubscriber の遅延代入レースは解消済み。
       if (checkAborted(signal, () => {})) return;
 
-      instance.statusMessage.value = "Setting up decoder...";
+      instance.statusMessage.value = "Decoder を準備中...";
 
       // デコーダラッパーを生成する
       const useWorker = settings.useDedicatedWorker.value;
@@ -617,7 +617,7 @@ export function useSubscriber(
       const newGroupRequestEnabled = instance.newGroupRequestEnabled.value;
 
       instance.status.value = "connected";
-      instance.statusMessage.value = "Subscribing...";
+      instance.statusMessage.value = "購読中...";
       resetSubscriberStats(instance);
 
       // Subscriber オプションを構築する
@@ -647,7 +647,7 @@ export function useSubscriber(
           end: () => {
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "disconnected";
-              instance.statusMessage.value = "Stream ended";
+              instance.statusMessage.value = "ストリーム終了";
             }
             teardownSubscriber();
           },
@@ -655,7 +655,7 @@ export function useSubscriber(
             console.error(`[${subscriberId}] Subscriber error:`, error);
             if (shouldApplyStatusUpdate()) {
               instance.status.value = "error";
-              instance.statusMessage.value = `Subscribe error: ${error.message}`;
+              instance.statusMessage.value = `購読エラー: ${error.message}`;
             }
           },
         },
@@ -683,7 +683,7 @@ export function useSubscriber(
         subscriberInstance.trackProperties,
       );
       instance.status.value = "connected";
-      instance.statusMessage.value = `Subscribed to ${namespaceArray.join("/")}/${actualTrackName}`;
+      instance.statusMessage.value = `購読中: ${namespaceArray.join("/")}/${actualTrackName}`;
       instance.largestLocation.value = largestLocation ?? null;
     } catch (error) {
       // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。
@@ -691,7 +691,7 @@ export function useSubscriber(
       if (signal.aborted) return;
       console.error(`[${subscriberId}] Connection error:`, error);
       instance.status.value = "error";
-      instance.statusMessage.value = `Failed: ${(error as Error).message}`;
+      instance.statusMessage.value = `失敗: ${(error as Error).message}`;
       // teardownSubscriber 内の resetSubscriberState が settingsDisabled 再有効化判定を含むため
       // 重複した再有効化処理は不要。
       teardownSubscriber();
@@ -709,7 +709,7 @@ export function useSubscriber(
     // controller の null 化は teardownSubscriber 側で行う。
     abortControllerRef.current?.abort();
     instance.status.value = "disconnected";
-    instance.statusMessage.value = "Disconnecting...";
+    instance.statusMessage.value = "切断中...";
 
     try {
       const subscriberInstance = instance.subscriber.value;
@@ -720,7 +720,7 @@ export function useSubscriber(
       teardownSubscriber();
       instance.isStopping.value = false;
       instance.status.value = "disconnected";
-      instance.statusMessage.value = "Ready to subscribe";
+      instance.statusMessage.value = "購読開始待ち";
     }
   };
 

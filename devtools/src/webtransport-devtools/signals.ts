@@ -28,7 +28,7 @@ function getInitialParams(): ConnectionSettings {
 
 const initialParams = getInitialParams();
 
-// Connection settings
+// 接続設定
 export const url = signal(initialParams.url);
 export const certificateHash = signal(initialParams.certificateHash);
 export const allowPooling = signal(initialParams.allowPooling);
@@ -67,7 +67,7 @@ export function buildQueryString(): string {
   return buildSettingsQueryString(settings);
 }
 
-// Connection state
+// 接続状態
 export const transport = signal<WebTransport | null>(null);
 export const connectionStatus = signal<"disconnected" | "connecting" | "connected" | "error">(
   "disconnected",
@@ -438,14 +438,14 @@ function detectStaticApiSupport(): StaticApiGroup[] {
 // ページロード時に 1 回評価する
 export const wtStaticApiSupport = signal<StaticApiGroup[]>(detectStaticApiSupport());
 
-// Message type
+// メッセージ種別
 export interface StreamMessage {
   direction: "send" | "recv";
   data: string;
   timestamp: number;
 }
 
-// Bidirectional streams
+// 双方向ストリーム
 export interface BidiStreamInfo {
   id: number;
   stream: WebTransportBidirectionalStream;
@@ -455,7 +455,7 @@ export interface BidiStreamInfo {
 }
 export const bidiStreams = signal<BidiStreamInfo[]>([]);
 
-// Outgoing unidirectional streams
+// 送信側の単方向ストリーム
 export interface UniSendStreamInfo {
   id: number;
   stream: WebTransportSendStream;
@@ -465,7 +465,7 @@ export interface UniSendStreamInfo {
 }
 export const uniSendStreams = signal<UniSendStreamInfo[]>([]);
 
-// Incoming unidirectional streams
+// 受信側の単方向ストリーム
 export interface UniRecvStreamInfo {
   id: number;
   messages: StreamMessage[];
@@ -473,15 +473,15 @@ export interface UniRecvStreamInfo {
 }
 export const uniRecvStreams = signal<UniRecvStreamInfo[]>([]);
 
-// Datagram
+// データグラム
 export const datagramMessages = signal<StreamMessage[]>([]);
 
-// Stream counters
+// ストリーム採番用のカウンタ
 let bidiStreamCounter = 0;
 let uniSendStreamCounter = 0;
 let uniRecvStreamCounter = 0;
 
-// Settings disabled when connected
+// 接続中は設定を無効化する
 export const settingsDisabled = computed(() => connectionStatus.value !== "disconnected");
 
 // 接続後設定 (接続中のみ適用可能)
@@ -547,7 +547,7 @@ export function applyDatagramSettings(): void {
 }
 
 /**
- * Base64 encoded string to ArrayBuffer
+ * Base64 文字列を ArrayBuffer に変換する
  */
 export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = atob(base64);
@@ -559,7 +559,7 @@ export function base64ToArrayBuffer(base64: string): ArrayBuffer {
 }
 
 /**
- * Format timestamp for display
+ * 表示用にタイムスタンプを整形する
  */
 export function formatTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
@@ -572,7 +572,7 @@ export function formatTimestamp(timestamp: number): string {
 }
 
 /**
- * Connect to WebTransport server
+ * WebTransport サーバーへ接続する
  */
 export async function connect(): Promise<void> {
   if (transport.value) {
@@ -801,7 +801,7 @@ export async function connect(): Promise<void> {
       void receiveDatagrams(wt);
     }
 
-    // Start receiving incoming unidirectional streams
+    // 受信側の単方向ストリームの受信を開始する
     void receiveIncomingStreams(wt);
   } catch (err) {
     connectionStatus.value = "error";
@@ -810,7 +810,7 @@ export async function connect(): Promise<void> {
 }
 
 /**
- * Disconnect from WebTransport server
+ * WebTransport サーバーから切断する
  * ユーザー操作による切断の場合のみ closeInfo を渡す（サーバー起因の切断では渡さない）
  */
 export function disconnect(closeInfo?: WebTransportCloseInfo): void {
@@ -818,12 +818,12 @@ export function disconnect(closeInfo?: WebTransportCloseInfo): void {
     try {
       transport.value.close(closeInfo);
     } catch {
-      // ignore
+      // 無視する
     }
     transport.value = null;
   }
 
-  // Clear streams
+  // ストリーム一覧をクリアする
   bidiStreams.value = [];
   uniSendStreams.value = [];
   uniRecvStreams.value = [];
@@ -878,7 +878,7 @@ export function buildCloseInfo(): WebTransportCloseInfo | null {
 }
 
 /**
- * Receive datagrams
+ * データグラムを受信する
  */
 async function receiveDatagrams(wt: WebTransport): Promise<void> {
   const reader = wt.datagrams.readable.getReader();
@@ -897,21 +897,21 @@ async function receiveDatagrams(wt: WebTransport): Promise<void> {
       ];
     }
   } catch {
-    // Stream closed
+    // ストリームが閉じられた
   } finally {
     reader.releaseLock();
   }
 }
 
 /**
- * Clear datagram messages
+ * データグラムメッセージをクリアする
  */
 export function clearDatagramMessages(): void {
   datagramMessages.value = [];
 }
 
 /**
- * Receive incoming unidirectional streams
+ * 受信側の単方向ストリームを受信する
  */
 async function receiveIncomingStreams(wt: WebTransport): Promise<void> {
   const reader = wt.incomingUnidirectionalStreams.getReader();
@@ -932,14 +932,14 @@ async function receiveIncomingStreams(wt: WebTransport): Promise<void> {
       void readIncomingStream(id, stream);
     }
   } catch {
-    // Closed
+    // 閉じられた
   } finally {
     reader.releaseLock();
   }
 }
 
 /**
- * Read from incoming unidirectional stream
+ * 受信側の単方向ストリームから読み出す
  */
 async function readIncomingStream(
   streamId: number,
@@ -969,10 +969,10 @@ async function readIncomingStream(
       });
     }
   } catch {
-    // Stream closed
+    // ストリームが閉じられた
   } finally {
     reader.releaseLock();
-    // Mark as closed
+    // 閉じたものとして記録する
     uniRecvStreams.value = uniRecvStreams.value.map((s) => {
       if (s.id === streamId) {
         return { ...s, closed: true };
@@ -983,7 +983,7 @@ async function readIncomingStream(
 }
 
 /**
- * Remove incoming unidirectional stream from list
+ * 受信側の単方向ストリームを一覧から削除する
  */
 export function removeUniRecvStream(streamId: number): void {
   uniRecvStreams.value = uniRecvStreams.value.filter((s) => s.id !== streamId);
@@ -995,7 +995,7 @@ export const streamSendOrder = signal("");
 export const streamWaitUntilAvailable = signal(false);
 
 /**
- * Create a bidirectional stream
+ * 双方向ストリームを作成する
  */
 export async function createBidiStream(): Promise<void> {
   const wt = transport.value;
@@ -1035,7 +1035,7 @@ export async function createBidiStream(): Promise<void> {
 
     bidiStreams.value = [...bidiStreams.value, streamInfo];
 
-    // Start reading from this stream
+    // このストリームからの読み出しを開始する
     void readBidiStream(id, stream.readable);
   } catch (err) {
     console.error("Failed to create bidi stream:", err);
@@ -1043,7 +1043,7 @@ export async function createBidiStream(): Promise<void> {
 }
 
 /**
- * Read from bidirectional stream
+ * 双方向ストリームから読み出す
  */
 async function readBidiStream(
   streamId: number,
@@ -1073,14 +1073,14 @@ async function readBidiStream(
       });
     }
   } catch {
-    // Stream closed
+    // ストリームが閉じられた
   } finally {
     reader.releaseLock();
   }
 }
 
 /**
- * Send message on bidirectional stream
+ * 双方向ストリームへメッセージを送信する
  */
 export async function sendBidiMessage(streamId: number, message: string): Promise<void> {
   const streamInfo = bidiStreams.value.find((s) => s.id === streamId);
@@ -1110,7 +1110,7 @@ export async function sendBidiMessage(streamId: number, message: string): Promis
 }
 
 /**
- * Close bidirectional stream
+ * 双方向ストリームを閉じる
  */
 export async function closeBidiStream(streamId: number): Promise<void> {
   const streamInfo = bidiStreams.value.find((s) => s.id === streamId);
@@ -1119,7 +1119,7 @@ export async function closeBidiStream(streamId: number): Promise<void> {
   try {
     await streamInfo.writer.close();
   } catch {
-    // ignore
+    // 無視する
   }
 
   bidiStreams.value = bidiStreams.value.map((s) => {
@@ -1131,14 +1131,14 @@ export async function closeBidiStream(streamId: number): Promise<void> {
 }
 
 /**
- * Remove bidirectional stream from list
+ * 双方向ストリームを一覧から削除する
  */
 export function removeBidiStream(streamId: number): void {
   bidiStreams.value = bidiStreams.value.filter((s) => s.id !== streamId);
 }
 
 /**
- * Clear messages in bidirectional stream
+ * 双方向ストリームのメッセージをクリアする
  */
 export function clearBidiMessages(streamId: number): void {
   bidiStreams.value = bidiStreams.value.map((s) => {
@@ -1150,7 +1150,7 @@ export function clearBidiMessages(streamId: number): void {
 }
 
 /**
- * Create a unidirectional stream
+ * 単方向ストリームを作成する
  */
 export async function createUniStream(): Promise<void> {
   const wt = transport.value;
@@ -1195,7 +1195,7 @@ export async function createUniStream(): Promise<void> {
 }
 
 /**
- * Send message on unidirectional stream
+ * 単方向ストリームへメッセージを送信する
  */
 export async function sendUniMessage(streamId: number, message: string): Promise<void> {
   const streamInfo = uniSendStreams.value.find((s) => s.id === streamId);
@@ -1225,7 +1225,7 @@ export async function sendUniMessage(streamId: number, message: string): Promise
 }
 
 /**
- * Close unidirectional stream
+ * 単方向ストリームを閉じる
  */
 export async function closeUniStream(streamId: number): Promise<void> {
   const streamInfo = uniSendStreams.value.find((s) => s.id === streamId);
@@ -1234,7 +1234,7 @@ export async function closeUniStream(streamId: number): Promise<void> {
   try {
     await streamInfo.writer.close();
   } catch {
-    // ignore
+    // 無視する
   }
 
   uniSendStreams.value = uniSendStreams.value.map((s) => {
@@ -1246,14 +1246,14 @@ export async function closeUniStream(streamId: number): Promise<void> {
 }
 
 /**
- * Remove unidirectional stream from list
+ * 単方向ストリームを一覧から削除する
  */
 export function removeUniStream(streamId: number): void {
   uniSendStreams.value = uniSendStreams.value.filter((s) => s.id !== streamId);
 }
 
 /**
- * Clear messages in unidirectional stream
+ * 単方向ストリームのメッセージをクリアする
  */
 export function clearUniMessages(streamId: number): void {
   uniSendStreams.value = uniSendStreams.value.map((s) => {
@@ -1265,7 +1265,7 @@ export function clearUniMessages(streamId: number): void {
 }
 
 /**
- * Send datagram
+ * データグラムを送信する
  */
 export async function sendDatagram(message: string): Promise<void> {
   const wt = transport.value;
