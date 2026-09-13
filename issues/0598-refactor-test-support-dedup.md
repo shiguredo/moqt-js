@@ -75,14 +75,27 @@
 
 ## 進捗
 
-テストヘルパーの統合は完了した。
+テストヘルパーと PBT arbitrary の統合が完了した。
+
+### テストヘルパー (完了)
 
 - `src/testSupport/helpers.ts` を新設し、`concatUint8Arrays` / `nodeProcess` / `createObject` / `appendMalformedTrackProperties` / `parseObjectPropertyIds` / `assertRejectsWithMessage` / `encodeJson` / `useValueToken` を集約した。21 ファイルから重複定義を削除し、18 ファイルで +163 / -217 行。
 - `useValueToken` は `tokenValue` の文字列だけが違っていたため引数化した。
-- テストの検証内容と件数は変えていない (70 ファイル / 2,090 テスト全通過)。
 
-残りは `src/message/*.prop.ts` の 7 ファイルに散在する PBT arbitrary の重複 15 ブロック / 507 行である。着手時に次の統合上の罠が判明しているため、別の作業単位として扱う。
+### PBT arbitrary (完了)
 
-- `varintParameterArb` の型リストがファイル間で非対称 (`parameter.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` は `0x06` を含み、`fetch.prop.ts` / `trackstatus.prop.ts` / `session.prop.ts` / `namespace.prop.ts` は含まない)。広い側に寄せると PBT の探索空間が広がるため、統合後にテストが通るかを実行して確認する必要がある。
-- `parametersArb` は `parameter.prop.ts` 版だけが Range Filter の重複 SetID を除去する強化版で、他 6 ファイルは type 重複除去のみの単純版である。同名で中身が違うため、どちらを正とするかを決める必要がある。
-- `src/properties.prop.ts` の `evenPropertyArb` / `oddPropertyArb` は生成方法が message 側と異なる (ID の作り方が `fc.bigInt({ min: 0n, max: 0xfen })` と `fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n)` で違う)。
+- `src/message/parameterArb.ts` を新設し、`src/message/*.prop.ts` の 7 ファイルがそれぞれ再定義していた Message Parameter / Track Property / 名前系の arbitrary を集約した。9 ファイルで +335 / -1,129 行。
+- 統合時に判明した非対称は次のとおり処理した。
+  - `varintParameterArb` は `parameter.prop.ts` 版 (0x06 を含む広い型リスト) を正とした。探索空間は広がる方向であり、テストは通る。
+  - `parametersArb` は `parameter.prop.ts` 版 (Range Filter の重複 SetID を除去する強化版) を正とした。
+  - `src/properties.prop.ts` の `evenPropertyArb` / `oddPropertyArb` は生成方法が異なる (`fc.bigInt({ min: 0n, max: 0xfen })` と `fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n)`) ため、統合対象から外した。message 側の 4 ファイルは同一だったのでそちらだけを共有化した。
+
+### 実装中に判明した重要な点
+
+**テストを含むファイルを共有元にしてはならない。** 最初は `src/message/parameter.prop.ts` から arbitrary を export して 6 ファイルが import する形にしたところ、`parameter.prop.ts` の 7 テストが import 元ごとに重複登録され、テスト総数が 2,090 から 2,132 に増えた (7 × 6 = 42)。arbitrary をテストを含まない `src/message/parameterArb.ts` に分離して解消した。共有モジュールは vitest の `test.include` (`src/**/*.{test,prop}.ts`) に一致しない名前にする必要がある。
+
+### 検証
+
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過 (着手前と同数。統合で検証内容は変えていない)
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
+- 合計: 27 ファイル、+498 / -1,346 行 (純 -848 行)
