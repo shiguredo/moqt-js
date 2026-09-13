@@ -1352,6 +1352,11 @@
 
 ### misc
 
+- [UPDATE] Track 同一性判定の区切り文字衝突ケースを 4 経路に追加する
+  - namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c" が区切り文字の曖昧さで衝突しないことを、SUBSCRIBE_OK の Track Alias 重複判定 / FETCH_OK の malformed cross-cancel / TRACK_STATUS_OK の malformed cross-cancel / datagram の malformed 検出の 4 経路で固定する
+  - いずれも比較キー生成を "/" 連結に戻すと落ちることを実測した (別 Track を同一とみなす退行を検出できる)
+  - 判定の実装は変えない (テスト追加のみ)
+  - @voluntas
 - [UPDATE] 残る検証関数のコールバック API をエラー返却型に統一する
   - `validateNoDuplicateGoawayOnRequestStream` (`src/session/bidi.ts`) と `incomingValidateRequestId` (`src/session/incoming.ts`) が `closeSession` コールバックを受け取り boolean を返していたのをやめ、`SessionError | null` を返すようにする
   - セッションを閉じるのは呼び出し側の責務にし、`validateParameterScope` / `validateRequestOkNoTrackProperties` / `namespaceValidateFirstMessage` と同じ形に揃える

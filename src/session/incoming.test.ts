@@ -634,6 +634,71 @@ test("incomingHandleDatagram: Mandatory Track Property で購読を cancel し�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §3.6 / §12.1 / §2.4.1:
+ * datagram の malformed 検出は trackAlias から得た購読の比較キーで対象 Track を
+ * 決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c"
+ * は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで同一 alias に
+ * ぶら下がる別 Track を巻き込む退行が起き得る。対象 Track だけが cancel される
+ * ことを固定する。
+ */
+test("incomingHandleDatagram: 同一 alias の区切り文字が衝突する別 Track を cancel しない", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let targetNotified: Error | undefined;
+  let collidingNotified: Error | undefined;
+  // 対象 Track (namespace ["a","b"] + trackName "c")。実装は先頭の購読の
+  // 比較キーで対象 Track を決めるため、先頭に置く。
+  const target = new SubscriberImpl(
+    ["a", "b"],
+    "c",
+    0n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      targetNotified = error;
+    },
+  );
+  // 旧実装で同じキー ("a/b/c") になっていた別 Track (namespace ["a"] + trackName "b/c")
+  const colliding = new SubscriberImpl(
+    ["a"],
+    "b/c",
+    1n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      collidingNotified = error;
+    },
+  );
+  // 同一 alias に別 Track の購読がぶら下がる状態を作る
+  ctx.session.subscribersByAlias.set(7n, [target, colliding]);
+  ctx.session.subscribers.set(0n, target);
+  ctx.session.subscribers.set(1n, colliding);
+
+  const wire = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 7n,
+    groupId: 0n,
+    objectId: 0n,
+    publisherPriority: 128,
+    properties: encodeProperties([{ id: 0x4000n, value: 0n }]),
+    payload: new Uint8Array([0xaa]),
+  });
+
+  incomingHandleDatagram(ctx.session, wire);
+
+  // 対象 Track だけが cancel され、衝突する別 Track は活性のまま
+  assert.isDefined(targetNotified);
+  assert.equal(target.state, "closed");
+  assert.isUndefined(collidingNotified);
+  assert.equal(colliding.state, "active");
+  // セッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
  * draft-ietf-moq-transport-21 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
