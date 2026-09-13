@@ -1352,6 +1352,12 @@
 
 ### misc
 
+- [UPDATE] subgroup malformed テストで bidi リクエストストリームの cancel を検証する
+  - subgroup の malformed track 検出時に `bidiCancelSubscription` が bidi リクエストストリームへ STOP_SENDING 相当 (readable.cancel) と RESET_STREAM 相当 (writer.abort) を送ることを固定する
+  - 従来のテストは `requestStreams` を登録しておらず、Map 削除と error 通知しか検証していなかった (FETCH Priority 不一致テストとは非対称)
+  - 登録先の Request ID を変えると落ちることを実測した (cancel 経路を通ることの裏付け)
+  - 実装は変えない (テスト追加のみ)
+  - @voluntas
 - [CHANGE] 到達不能な e2e ハーネスと plan 外のテストスクリプトを削除する
   - `tests/e2e/connect.spec.ts` / `tests/e2e/pubsub.spec.ts` は `test.describe.skip` で無条件にスキップされており、テストとして機能していなかったため削除する
   - その 2 本だけが使っていた `tests/e2e/main.ts` (`window.__moqtE2E`) / `tests/e2e/helpers.ts` / `tests/e2e/index.html` と、専用 Vite アプリの `tests/e2e/vite.config.ts` / `package.json` / `tsconfig.json` を削除する (`pnpm-workspace.yaml` から `tests/e2e` を外す)
