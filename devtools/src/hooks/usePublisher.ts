@@ -66,7 +66,7 @@ async function getVideoStream(
     };
   }
 
-  // Camera (getUserMedia)
+  // カメラ (getUserMedia)
   const videoConstraints: MediaTrackConstraints = {
     width: { ideal: width },
     height: { ideal: height },
@@ -107,9 +107,9 @@ export function usePublisher() {
       const source = settings.videoSource.value;
       const deviceId = source === "camera" ? settings.selectedCameraDeviceId.value : undefined;
 
-      const sourceLabel = source === "dummy" ? "Dummy" : "Camera";
+      const sourceLabel = source === "dummy" ? "ダミー" : "カメラ";
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = `Preview: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
+      pub.pubStatusMessage.value = `プレビュー: ${sourceLabel} ${width}x${height} @ ${framerate}fps`;
 
       const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
       pub.mediaStream.value = videoStreamResult.stream;
@@ -118,7 +118,7 @@ export function usePublisher() {
     } catch (error) {
       console.error("Preview error:", error);
       pub.pubStatus.value = "error";
-      pub.pubStatusMessage.value = `Preview failed: ${(error as Error).message}`;
+      pub.pubStatusMessage.value = `プレビュー失敗: ${(error as Error).message}`;
     }
   };
 
@@ -130,7 +130,7 @@ export function usePublisher() {
     pub.mediaStream.value = null;
     pub.isPreviewActive.value = false;
     pub.pubStatus.value = "disconnected";
-    pub.pubStatusMessage.value = "Ready to publish";
+    pub.pubStatusMessage.value = "配信開始待ち";
   };
 
   const togglePreview = (): void => {
@@ -181,7 +181,7 @@ export function usePublisher() {
 
     pub.chunksEncoded.value++;
 
-    // New group on keyframe
+    // キーフレームで新しいグループを開始する
     if (chunk.type === "key") {
       pub.pubCurrentGroup.value++;
       pub.pubCurrentObjectId.value = 0;
@@ -217,7 +217,7 @@ export function usePublisher() {
 
     pub.bytesSent.value += payload.length + properties.length;
 
-    // Send object
+    // Object を送信する
     publisherInstance.sendObject({
       groupId: pub.pubCurrentGroup.value,
       objectId: pub.pubCurrentObjectId.value++,
@@ -233,7 +233,7 @@ export function usePublisher() {
     try {
       console.log("startPublishing: begin");
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = "Connecting...";
+      pub.pubStatusMessage.value = "接続中...";
       settings.settingsDisabled.value = true;
 
       const namespaceArray = settings.namespace.value.split("/").filter((s) => s.length > 0);
@@ -252,7 +252,7 @@ export function usePublisher() {
         resolution: `${width}x${height}`,
       });
 
-      // Build connect options
+      // 接続オプションを組み立てる
       const connectOptions: {
         serverCertificateHashes?: CertificateHash[];
         authorizationToken?: AuthorizationToken;
@@ -270,7 +270,7 @@ export function usePublisher() {
         connectOptions.authorizationToken = authToken;
       }
 
-      // Connect to MOQT server
+      // MOQT サーバーへ接続する
       const connectUrl = settings.buildConnectUrl();
       console.log("startPublishing: connecting to", connectUrl);
       const session = await connect(
@@ -282,7 +282,7 @@ export function usePublisher() {
               reason: closeInfo.reason.slice(0, 1024),
             });
             pub.pubStatus.value = "disconnected";
-            pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+            pub.pubStatusMessage.value = `切断: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
             cleanupPublisher();
           },
           error: (error) => {
@@ -291,7 +291,7 @@ export function usePublisher() {
               message: error.message ?? String(error),
             });
             pub.pubStatus.value = "error";
-            pub.pubStatusMessage.value = `Error: ${error.message}`;
+            pub.pubStatusMessage.value = `エラー: ${error.message}`;
             cleanupPublisher();
           },
           debug: handleDebugMessage,
@@ -303,7 +303,7 @@ export function usePublisher() {
       settings.reliability.value = session.reliability;
 
       pub.pubStatus.value = "connected";
-      pub.pubStatusMessage.value = "Connected, publishing catalog...";
+      pub.pubStatusMessage.value = "接続完了、Catalog を配信中...";
 
       // Catalog を publish
       const catalogPublisherInstance = await session.publish(
@@ -346,9 +346,9 @@ export function usePublisher() {
         catalog: createdCatalog,
       });
 
-      pub.pubStatusMessage.value = "Connected, setting up encoder...";
+      pub.pubStatusMessage.value = "接続完了、Encoder を準備中...";
 
-      // Use existing preview stream or create new one
+      // 既存のプレビューストリームがあれば再利用し、無ければ新規作成する
       let actualWidth: number;
       let actualHeight: number;
 
@@ -378,7 +378,7 @@ export function usePublisher() {
         console.log("startPublishing: video stream created", { actualWidth, actualHeight });
       }
 
-      // Get video track
+      // 映像トラックを取得する
       const videoTrack = pub.mediaStream.value?.getVideoTracks()[0];
       if (!videoTrack) {
         throw new Error("Failed to get video track");
@@ -387,7 +387,7 @@ export function usePublisher() {
 
       pub.isPreviewActive.value = false;
 
-      // Create publisher
+      // Publisher を作成する
       console.log("startPublishing: sending PUBLISH, waiting for PUBLISH_OK...");
       const publisherInstance = await session.publish(
         namespaceArray,
@@ -396,7 +396,7 @@ export function usePublisher() {
           error: (error) => {
             console.error("Publisher error:", error);
             pub.pubStatus.value = "error";
-            pub.pubStatusMessage.value = `Publish error: ${error.message}`;
+            pub.pubStatusMessage.value = `配信エラー: ${error.message}`;
           },
           // draft-ietf-moq-transport-21 Section 3.1:
           // Forward State の変化を追跡する
@@ -413,9 +413,9 @@ export function usePublisher() {
       pub.publisher.value = publisherInstance;
 
       pub.pubStatus.value = "connected";
-      pub.pubStatusMessage.value = `Publishing to ${namespaceArray.join("/")}/${trackNameValue}`;
+      pub.pubStatusMessage.value = `配信中: ${namespaceArray.join("/")}/${trackNameValue}`;
 
-      // Create encoder config and check support
+      // Encoder 設定を作成し、対応状況を確認する
       const encoderConfig = getEncoderConfig(
         codecValue,
         actualWidth,
@@ -430,7 +430,7 @@ export function usePublisher() {
       }
       console.log("Encoder config supported:", support.config);
 
-      // Create encoder wrapper
+      // EncoderWrapper を作成する
       const useWorker = settings.useDedicatedWorker.value;
       console.log("Creating encoder with Worker mode:", useWorker);
 
@@ -443,22 +443,22 @@ export function usePublisher() {
           pub.encodeErrors.value++;
           pub.encoderState.value = encoderInstance.state;
           pub.pubStatus.value = "error";
-          pub.pubStatusMessage.value = `Encoder error: ${error.message}`;
+          pub.pubStatusMessage.value = `Encoder エラー: ${error.message}`;
         },
       });
       pub.encoder.value = encoderInstance;
 
-      // Configure encoder
+      // Encoder を設定する
       await encoderInstance.configure(encoderConfig);
       pub.encoderState.value = encoderInstance.state;
 
-      // Verify encoder state after configure
+      // configure 後の Encoder 状態を検証する
       if (encoderInstance.state !== "configured") {
         throw new Error(`Encoder failed to configure. State: ${encoderInstance.state}`);
       }
       console.log("Encoder configured successfully. State:", encoderInstance.state);
 
-      // Show codec badge
+      // codec バッジを表示する
       pub.pubCodec.value = `${codecValue.toUpperCase()} ${actualWidth}x${actualHeight}`;
 
       // VideoFrame ソースを作成する
@@ -468,7 +468,7 @@ export function usePublisher() {
       pub.frameReader.value = videoFrameSource.readable.getReader();
       console.log("Frame reader created");
 
-      // Reset stats
+      // 統計値をリセットする
       pub.framesEncoded.value = 0;
       pub.keyFramesEncoded.value = 0;
       pub.objectsSent.value = 0;
@@ -479,12 +479,12 @@ export function usePublisher() {
       pub.encodeErrors.value = 0;
       pub.objectsWithExtensions.value = 0;
 
-      // Read and encode frames
+      // フレームを読み出してエンコードする
       void processFrames();
     } catch (error) {
       console.error("Connection error:", error);
       pub.pubStatus.value = "error";
-      pub.pubStatusMessage.value = `Failed: ${(error as Error).message}`;
+      pub.pubStatusMessage.value = `失敗: ${(error as Error).message}`;
       cleanupPublisher();
       settings.settingsDisabled.value = false;
     }
@@ -498,7 +498,7 @@ export function usePublisher() {
     pub.isStopping.value = true;
 
     pub.pubStatus.value = "disconnected";
-    pub.pubStatusMessage.value = "Disconnecting...";
+    pub.pubStatusMessage.value = "切断中...";
 
     try {
       // Complete catalog を送信
@@ -524,36 +524,36 @@ export function usePublisher() {
       cleanupPublisher();
       pub.isStopping.value = false;
       pub.pubStatus.value = "disconnected";
-      pub.pubStatusMessage.value = "Ready to publish";
+      pub.pubStatusMessage.value = "配信開始待ち";
     }
   };
 
   const cleanupPublisher = (): void => {
-    // Cancel frame reader
+    // フレームリーダーをキャンセルする
     if (pub.frameReader.value) {
       void pub.frameReader.value.cancel();
       pub.frameReader.value = null;
     }
 
-    // Close encoder
+    // Encoder を閉じる
     if (pub.encoder.value) {
       try {
         pub.encoder.value.close();
       } catch {
-        // Ignore
+        // 無視する
       }
       pub.encoder.value = null;
     }
     pub.encoderState.value = "unconfigured";
 
-    // Cleanup video stream
+    // 映像ストリームを解放する
     if (pub.videoStreamCleanup.value) {
       pub.videoStreamCleanup.value();
       pub.videoStreamCleanup.value = null;
     }
     pub.mediaStream.value = null;
 
-    // Close session
+    // セッションを閉じる
     if (pub.pubSession.value) {
       pub.pubSession.value.close().catch(() => {
         // 既にクローズされている場合は無視
@@ -567,7 +567,7 @@ export function usePublisher() {
     pub.pubCodec.value = "";
     pub.forwardState.value = null;
 
-    // Enable settings if no subscriber is active
+    // アクティブな Subscriber が居なければ設定を有効化する
     if (!sub.hasActiveSubscriber.value) {
       settings.settingsDisabled.value = false;
     }

@@ -3,7 +3,7 @@ import type { Session, Publisher, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
 
-// Publisher state
+// Publisher の状態
 export const pubSession = signal<Session | null>(null);
 export const publisher = signal<Publisher | null>(null);
 export const catalogPublisher = signal<Publisher | null>(null);
@@ -14,28 +14,28 @@ export const isPreviewActive = signal(false);
 // 停止処理中フラグ（二重実行防止）
 export const isStopping = signal(false);
 
-// Forward State (draft-ietf-moq-transport-21 Section 3.1)
+// Forward State の追跡 (draft-ietf-moq-transport-21 Section 3.1)
 export const forwardState = signal<boolean | null>(null);
 
-// Publisher status
+// Publisher のステータス
 export const pubStatus = signal<StatusType>("disconnected");
-export const pubStatusMessage = signal("Ready to publish");
+export const pubStatusMessage = signal("配信開始待ち");
 export const pubCodec = signal("");
 
-// Publisher statistics
+// Publisher の統計値
 export const framesEncoded = signal(0);
 export const keyFramesEncoded = signal(0);
 export const objectsSent = signal(0);
 export const pubCurrentGroup = signal(Date.now());
 export const bytesSent = signal(0);
 
-// Encoding pipeline statistics
+// エンコードパイプラインの統計値
 export const chunksEncoded = signal(0);
 export const encodeErrors = signal(0);
 export const encoderState = signal("unconfigured");
 export const objectsWithExtensions = signal(0);
 
-// Internal state
+// 内部状態
 export const frameReader = signal<ReadableStreamDefaultReader<VideoFrame> | null>(null);
 export const videoStreamCleanup = signal<(() => void) | null>(null);
 export const keyframeInterval = signal(3600);

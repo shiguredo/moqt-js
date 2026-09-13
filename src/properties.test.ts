@@ -323,7 +323,7 @@ test("parseProperties: 全ての MOQT Core Properties を正しくパース", ()
 });
 
 // draft-ietf-moq-transport-21 §10.4 / §10.5 / §10.6
-// Track Property の値域が MUST レベルで検証されない不具合の修正 (#0119)
+// Track Property の値域 (MUST) を送受信とも検証する
 test("validateTrackPropertyValue: DEFAULT_PUBLISHER_PRIORITY は 0-255 を許容する", () => {
   validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 0n);
   validateTrackPropertyValue(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, 255n);
@@ -867,7 +867,7 @@ test("decodeImmutableProperties: 内部に不正な Track Property を含むと 
   assert.throws(() => decodeImmutableProperties(immutable), ProtocolViolationError);
 });
 
-// draft-ietf-moq-transport-21 §10.7 / §10.8 / §10.9 (#0122)
+// draft-ietf-moq-transport-21 §10.7 / §10.8 / §10.9
 // IMMUTABLE_PROPERTIES の再帰禁止・複数出現禁止と PRIOR_GROUP_ID_GAP / PRIOR_OBJECT_ID_GAP の
 // 「Object 当たり 1 つだけ」MUST を検証する
 test("decodeImmutableProperties: 内部に IMMUTABLE_PROPERTIES を含むと MalformedTrackError", () => {

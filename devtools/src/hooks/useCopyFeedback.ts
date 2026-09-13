@@ -11,7 +11,8 @@ export interface UseCopyFeedbackResult {
   feedback: Signal<string | null>;
   /**
    * クリップボードへ書き込み、成功時のみ marker をセットして duration 経過後に null に戻す。
-   * 失敗時は #0149 の方針に従い `console.error` のみで feedback は変更しない。
+   * 失敗時は `console.error` のみで feedback は変更しない
+   * (利用者に「Failed」表示を出さない方針)。
    * @returns クリップボード書き込みの成否
    */
   copy: (text: string, markerKey: string) => Promise<boolean>;
@@ -22,7 +23,7 @@ export interface UseCopyFeedbackResult {
  *
  * 連続クリック時の早消えとアンマウント後の signal 書き込みを防ぐため、
  * setTimeout ID を ref で保持し、再コピー時 / アンマウント時に clearTimeout する。
- * 失敗時は feedback を変更しない (#0149) ことで「Failed」表示は出さない方針を踏襲する。
+ * 失敗時は feedback を変更しないことで「Failed」表示は出さない方針を踏襲する。
  */
 export function useCopyFeedback(durationMs: number = DEFAULT_DURATION_MS): UseCopyFeedbackResult {
   const feedback = useSignal<string | null>(null);
