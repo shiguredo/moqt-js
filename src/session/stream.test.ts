@@ -828,6 +828,101 @@ test("processSubgroupObjects: END_OF_GROUP ステータス後の Object は Malf
  * END_OF_GROUP ステータスの Object 自体は配信され、後続が無ければ
  * malformed にならないことを検証する (誤検出防止)。
  */
+/**
+ * draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位追跡:
+ * 既知の最終 Object (他 Subgroup で確定済み) を `endOfGroup.finalObjectId` で
+ * 受け取り、それより大きい Object ID を持つ Object を malformed として検出する。
+ * Subgroup ストリーム (呼び出し) をまたいだ検出を検証する。
+ */
+test("processSubgroupObjects: 既知の Group 最終 Object を超える Object は MalformedTrackError", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  // 別 Subgroup でこの Group の最終 Object が Object ID 1 として確定済みとする。
+  // この Subgroup の先頭 Object ID delta を 5 にすると Object ID 5 になり、
+  // 既知の最終 Object 1 を超えるため malformed になる。
+  const fields = encodeObjectFields(5n, 1n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  const wire = concatChunks([fields, new Uint8Array([0x01])]);
+
+  assert.throws(
+    () =>
+      processSubgroupObjects(wire, [subscriber], header, -1n, stats, silentDelivery, undefined, {
+        finalObjectId: 1n,
+      }),
+    MalformedTrackError,
+    /exceeds final object 1/,
+  );
+});
+
+/**
+ * 既知の最終 Object と同じ Object ID までは malformed にしない (誤検出防止)。
+ */
+test("processSubgroupObjects: 既知の Group 最終 Object ちょうどまでは配信する", () => {
+  const { delivered, subscriber, header, stats } = subgroupTestSetup();
+  const nextFields = encodeObjectFields(0n, 1n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  const wire = concatChunks([nextFields, new Uint8Array([0x01])]);
+
+  processSubgroupObjects(wire, [subscriber], header, -1n, stats, silentDelivery, undefined, {
+    finalObjectId: 0n,
+  });
+
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.1 条件 3 / 条件 4:
+ * 同じ Group について既知の最終 Object より小さい Object が END_OF_GROUP を
+ * 主張したら malformed とする。Group の最終 Object が二者に分かれる矛盾である。
+ */
+test("processSubgroupObjects: 既知の最終 Object より小さい END_OF_GROUP は MalformedTrackError", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  const endOfGroupFields = encodeObjectFields(
+    0n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.END_OF_GROUP,
+  );
+
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        endOfGroupFields,
+        [subscriber],
+        header,
+        -1n,
+        stats,
+        silentDelivery,
+        undefined,
+        { finalObjectId: 5n },
+      ),
+    MalformedTrackError,
+    /smaller than known final object 5/,
+  );
+});
+
+/**
+ * 戻り値の updatedEndOfGroupFinalObjectId で確定値が呼び出し側へ返ることを検証する。
+ * 呼び出し側 (セッション) はこれを Group 単位で保持し、後続 Subgroup の検証に使う。
+ */
+test("processSubgroupObjects: END_OF_GROUP の確定値を戻り値で返す", () => {
+  const { subscriber, header, stats } = subgroupTestSetup();
+  const endOfGroupFields = encodeObjectFields(
+    0n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.END_OF_GROUP,
+  );
+
+  const result = processSubgroupObjects(
+    endOfGroupFields,
+    [subscriber],
+    header,
+    -1n,
+    stats,
+    silentDelivery,
+  );
+
+  assert.equal(result.updatedEndOfGroupFinalObjectId, 0n);
+});
+
 test("processSubgroupObjects: END_OF_GROUP ステータス単独は配信する", () => {
   const { delivered, subscriber, header, stats } = subgroupTestSetup();
   const endOfGroupFields = encodeObjectFields(

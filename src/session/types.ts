@@ -109,6 +109,20 @@ export interface SessionInternal extends BidiSessionInternal {
   // handleIncomingDatagram が statsUnidirectionalStreamsReceived をインクリメントする。
   statsUnidirectionalStreamsReceived: number;
 
+  /**
+   * Group 単位の END_OF_GROUP 既知最終 Object ID
+   *
+   * draft-ietf-moq-transport-21 §12.1 条件 4:
+   * "An Object is received in a Group whose Object ID is larger than the final
+   *  Object in the Group. The final Object in a Group is the Object with Status
+   *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the
+   *  END_OF_GROUP bit set."
+   *
+   * キーは `${trackAlias}:${groupId}`。ストリーム (Subgroup) をまたいだ追跡に
+   * 使うためセッションに保持する。free function から読み書きするため readonly 不可。
+   */
+  receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+
   // validateIncomingRequestId は BidiSessionInternal 側で宣言済み
   // (SessionInternal extends BidiSessionInternal のため継承する)。
 
