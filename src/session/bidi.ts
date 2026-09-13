@@ -48,6 +48,7 @@ import {
   decodeSubscribeOkPayload,
   encodeFillParameters,
   getParameterLocationValue,
+  isSameLocationFilter,
   validateRangeFilterCombination,
   type GroupOrder,
   type Location,
@@ -3611,7 +3612,17 @@ export function bidiHandlePublishStateNotify(
   if (largestLocation !== undefined) {
     subscriber.setLargestLocation(largestLocation);
   }
-  if (locationFilter !== undefined) {
+  // draft-ietf-moq-transport-21 §9.10:
+  // "If a parameter is not present, its value is unchanged."
+  // 適合 peer は値の変化したパラメータのみを運ぶため、同じ内容の
+  // LOCATION_FILTER は再報告されない。再報告された場合に無条件で
+  // setLocationFilter を呼ぶと、直前で反映した LARGEST_OBJECT により相対指定が
+  // 再評価されて開始位置が前進し、受信済み範囲の Object を破棄し得る。
+  // 保持値と等価なら再解決しない (防御的措置)。
+  if (
+    locationFilter !== undefined &&
+    !isSameLocationFilter(subscriber.getLocationFilter(), locationFilter)
+  ) {
     subscriber.setLocationFilter(locationFilter);
   }
   if (forwardState !== undefined) {
