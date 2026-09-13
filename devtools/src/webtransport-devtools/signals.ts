@@ -1,5 +1,6 @@
 import { signal, computed } from "@preact/signals";
 import { toHttpVersionLabel } from "moqt-js";
+import { base64ToArrayBuffer } from "../utils/base64";
 import {
   buildRejectedClosedOutcome,
   buildResolvedClosedOutcome,
@@ -544,18 +545,6 @@ export function applyDatagramSettings(): void {
   if (outgoingMaxBufferedResult.value !== undefined) {
     datagrams.outgoingMaxBufferedDatagrams = outgoingMaxBufferedResult.value;
   }
-}
-
-/**
- * Base64 文字列を ArrayBuffer に変換する
- */
-export function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
 }
 
 /**

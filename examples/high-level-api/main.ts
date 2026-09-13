@@ -67,18 +67,20 @@ let subscriber: MediaSubscriber | null = null;
 let localStream: MediaStream | null = null;
 let statsIntervalId: number | null = null;
 
-// バイト数をフォーマット
+// バイト数を表示用にフォーマットする。
+// devtools (devtools/src/utils/logFormatters.ts) の同名関数と同じ規則に揃える
+// (examples は別ワークスペースのため import はできず、規則を共有する)。
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-// ビットレートをフォーマット
+// ビットレートを表示用にフォーマットする (1000 進)。
 function formatBitrate(bps: number): string {
   if (bps < 1000) return `${bps} bps`;
-  if (bps < 1000000) return `${(bps / 1000).toFixed(0)} kbps`;
-  return `${(bps / 1000000).toFixed(1)} Mbps`;
+  if (bps < 1000 * 1000) return `${(bps / 1000).toFixed(0)} kbps`;
+  return `${(bps / 1000 / 1000).toFixed(1)} Mbps`;
 }
 
 // Catalog を見やすくフォーマット

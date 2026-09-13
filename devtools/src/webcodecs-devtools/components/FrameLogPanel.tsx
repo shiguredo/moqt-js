@@ -1,4 +1,5 @@
 import * as store from "../signals";
+import { formatBytes } from "../../utils/logFormatters";
 import { ListIcon, ClearIcon } from "./Icons";
 import { ActionButton } from "./ActionButton";
 import { useAutoScroll } from "../hooks";
@@ -53,7 +54,7 @@ export function FrameLogPanel() {
                       {frame.type === "key" ? "KEY" : "DELTA"}
                     </span>
                   </td>
-                  <td class="px-2 py-1 text-slate-600">{store.formatBytes(frame.size)}</td>
+                  <td class="px-2 py-1 text-slate-600">{formatBytes(frame.size)}</td>
                 </tr>
               ))}
             </tbody>

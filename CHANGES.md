@@ -956,6 +956,12 @@
 
 ### misc
 
+- [UPDATE] devtools の重複ヘルパとデバッグログを整理する
+  - `formatBytes` / `formatBitrate` を `devtools/src/utils/logFormatters.ts` に一本化し、`base64ToArrayBuffer` を `devtools/src/utils/base64.ts`、DebugMessage のログ出力を `devtools/src/hooks/debugMessageLog.ts` に共通化する
+  - `usePublisher` / `useSubscriber` に残っていた `console.log` を削除し、DebugPanel 経由のログに寄せる
+  - `parseResolution` と接続設定の解像度クエリに検証を追加し、不正値を接続前に弾く
+  - devtools の内部整理のみでライブラリの公開 API に変更なし
+  - @voluntas
 - [UPDATE] session.ts をさらにモジュール分割する
   - namespaceLoops.ts / publish.ts / incoming.ts / types.ts を src/session/ 配下に新規作成し、SessionImpl のメソッドを free function として抽出する
   - 公開 API に変更なし（内部リファクタのみ）
