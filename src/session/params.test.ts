@@ -25,7 +25,12 @@ import {
   resolveFetchStartLocation,
   resolveFillGroupOrder,
 } from "./params";
-import { encodeParameters, decodeParameters, decodeFillParameters } from "../message/parameter";
+import {
+  encodeParameters,
+  decodeParameters,
+  decodeFillParameters,
+  type Parameter,
+} from "../message/parameter";
 import { InvalidFilterError } from "../error";
 import { MAX_VARINT } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
@@ -229,6 +234,119 @@ test("buildFetchParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN 
     fillTimeout: 1000n,
   });
   assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
+});
+
+// ============================================================================
+// 0478: リクエスト種別ごとの送信可能パラメータ
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.9 (SUBSCRIBER PRIORITY Parameter):
+ * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
+ * FETCH でも送信できることを検証する。
+ */
+test("buildFetchParameters: subscriberPriority が SUBSCRIBER_PRIORITY パラメータになる", () => {
+  const parameters = buildFetchParameters({ subscriberPriority: 42 });
+  const priority = parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY);
+
+  assert.isDefined(priority);
+  assert.deepEqual(priority?.value, new Uint8Array([42]));
+});
+
+test("buildFetchParameters: subscriberPriority 未指定は SUBSCRIBER_PRIORITY を含まない", () => {
+  const parameters = buildFetchParameters({});
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.19 (GROUP ORDER Parameter):
+ * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
+ * FETCH の応答順序を要求できることを検証する。
+ */
+test("buildFetchParameters: groupOrder が GROUP_ORDER パラメータになる", () => {
+  const ascending = buildFetchParameters({ groupOrder: "Ascending" });
+  assert.deepEqual(
+    ascending.find((p) => p.type === MessageParameterType.GROUP_ORDER)?.value,
+    new Uint8Array([0x01]),
+  );
+
+  const descending = buildFetchParameters({ groupOrder: "Descending" });
+  assert.deepEqual(
+    descending.find((p) => p.type === MessageParameterType.GROUP_ORDER)?.value,
+    new Uint8Array([0x02]),
+  );
+});
+
+test("buildFetchParameters: 不正な groupOrder で throw する", () => {
+  assert.throws(
+    () => buildFetchParameters({ groupOrder: "ascending" as never }),
+    /GROUP_ORDER must be/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.3 (AUTHORIZATION TOKEN Parameter):
+ * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
+ *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
+ */
+test("buildTrackStatusParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
+  const parameters = buildTrackStatusParameters({ authorizationToken: useValueToken() });
+  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+
+  assert.equal(authParams.length, 1);
+});
+
+test("buildTrackStatusParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
+  const parameters = buildTrackStatusParameters({ includeProperties: true });
+  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.18.1:
+ * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
+ *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
+ * "To join Tracks initiated via the resulting PUBLISHes, the subscriber can
+ *  specify a Location Filter and optionally include FILL_PARAMETERS"
+ */
+test("buildSubscribeTracksParameters: subscriberPriority が SUBSCRIBER_PRIORITY パラメータになる", () => {
+  const parameters = buildSubscribeTracksParameters({ subscriberPriority: 7 });
+  const priority = parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY);
+
+  assert.isDefined(priority);
+  assert.deepEqual(priority?.value, new Uint8Array([7]));
+});
+
+test("buildSubscribeTracksParameters: filter が LOCATION_FILTER パラメータになる", () => {
+  const parameters = buildSubscribeTracksParameters({ filter: { startGroup: 3n } });
+  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
+});
+
+test("buildSubscribeTracksParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
+  const parameters = buildSubscribeTracksParameters({ authorizationToken: useValueToken() });
+  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
+
+  assert.equal(authParams.length, 1);
+});
+
+test("buildSubscribeTracksParameters: fill が FILL_PARAMETERS パラメータになる", () => {
+  const parameters = buildSubscribeTracksParameters({ fill: { fillTimeout: 500n } });
+  const fill = parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS);
+
+  assert.isDefined(fill);
+  // 内側の FILL_TIMEOUT がデコードできる
+  const inner = decodeFillParameters(fill as Parameter);
+  const timeout = inner.find((p) => p.type === MessageParameterType.FILL_TIMEOUT);
+  assert.deepEqual(timeout?.value, new Uint8Array([0x81, 0xf4]));
+});
+
+test("buildSubscribeTracksParameters: 新パラメータ未指定は従来どおりの構成になる", () => {
+  const parameters = buildSubscribeTracksParameters({ groupOrder: "Ascending" });
+  const types = parameters.map((p) => p.type);
+
+  assert.notInclude(types, MessageParameterType.LOCATION_FILTER);
+  assert.notInclude(types, MessageParameterType.SUBSCRIBER_PRIORITY);
+  assert.notInclude(types, MessageParameterType.AUTHORIZATION_TOKEN);
+  assert.notInclude(types, MessageParameterType.FILL_PARAMETERS);
 });
 
 test("buildSubscribeNamespaceParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {

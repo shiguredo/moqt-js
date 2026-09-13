@@ -498,7 +498,7 @@ export function buildRangeFilterParameters(rangeFilters: RangeFilterSpec[]): Par
  */
 export function buildFillParameters(
   fill: FillRequestOptions,
-  context: "SUBSCRIBE" | "REQUEST_UPDATE",
+  context: "SUBSCRIBE" | "SUBSCRIBE_TRACKS" | "REQUEST_UPDATE",
 ): Parameter[] {
   const inner: Parameter[] = [];
 
@@ -724,6 +724,31 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-21 Section 9.20.9 (uint8)
+  // "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"
+  if (options?.subscriberPriority !== undefined) {
+    parameters.push({
+      type: MessageParameterType.SUBSCRIBER_PRIORITY,
+      value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
+    });
+  }
+
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 Section 9.20.19 (uint8)
+  // "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"
+  // FETCH_OK には出現できないため、送信側で指定できるのは要求時のみ
+  if (options?.groupOrder !== undefined) {
+    if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
+      throw new Error(
+        `GROUP_ORDER must be "Ascending" or "Descending": ${options.groupOrder as string}`,
+      );
+    }
+    const groupOrderValue = options.groupOrder === "Ascending" ? 0x01 : 0x02;
+    parameters.push({
+      type: MessageParameterType.GROUP_ORDER,
+      value: encodeUint8ParameterValue(groupOrderValue, "GROUP_ORDER"),
+    });
+  }
+
   // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-21 Section 9.20.6
   if (options?.fillTimeout !== undefined) {
     validateNonNegative(options.fillTimeout, "FILL_TIMEOUT");
@@ -788,6 +813,20 @@ export function buildSubscribeNamespaceParameters(options?: {
 export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-21 Section 9.20.10
+  // §9.18.1: 結果 PUBLISH で開始する Track に join するためのフィルタ
+  if (options?.filter !== undefined) {
+    parameters.push(encodeLocationFilterParameter(options.filter));
+  }
+
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-21 Section 9.20.8 (uint8)
+  if (options?.subscriberPriority !== undefined) {
+    parameters.push({
+      type: MessageParameterType.SUBSCRIBER_PRIORITY,
+      value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
+    });
+  }
+
   // GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 Section 9.20.9 (uint8)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
@@ -821,6 +860,19 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-21 Section 9.20.3
+  // §9.20.3: "This Parameter MUST NOT be copied from a SUBSCRIBE_TRACKS to the
+  //  resulting PUBLISH message Parameters." (受信側で PUBLISH へ複製しない)
+  if (options?.authorizationToken !== undefined) {
+    parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-21 Section 9.20.16
+  // §9.18.1: 結果 PUBLISH の購読で fill fetch を要求する
+  if (options?.fill !== undefined) {
+    parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE_TRACKS")));
+  }
+
   // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-21 Section 9.20.22
   parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
 
@@ -835,6 +887,11 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
  */
 export function buildTrackStatusParameters(options?: TrackStatusOptions): Parameter[] {
   const parameters: Parameter[] = [];
+
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-21 Section 9.20.3
+  if (options?.authorizationToken !== undefined) {
+    parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
 
   // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-21 Section 9.20.22
   parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
