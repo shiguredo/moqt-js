@@ -197,9 +197,20 @@ function log(target: "pub" | "sub", message: string, isError = false): void {
   const time = new Date().toLocaleTimeString();
   const className = isError ? "log-error" : target === "pub" ? "log-pub" : "log-sub";
 
+  // ログ本文は外部入力 (URL・エラーメッセージ) を含み得るため textContent で組み立てる
   const entry = document.createElement("div");
   entry.className = "log-entry";
-  entry.innerHTML = `<span class="log-time">${time}</span><span class="${className}">${message}</span>`;
+
+  const timeSpan = document.createElement("span");
+  timeSpan.className = "log-time";
+  timeSpan.textContent = time;
+
+  const messageSpan = document.createElement("span");
+  messageSpan.className = className;
+  messageSpan.textContent = message;
+
+  entry.appendChild(timeSpan);
+  entry.appendChild(messageSpan);
   logDiv.appendChild(entry);
   logDiv.scrollTop = logDiv.scrollHeight;
 }
@@ -212,7 +223,8 @@ function updateStatus(target: "pub" | "sub", status: string): void {
 }
 
 // 証明書ハッシュの取得
-function getCertificateHashes(): ArrayBuffer[] | undefined {
+// target は失敗ログの出力先 (pub / sub)。呼び出し元の操作に対応させる
+function getCertificateHashes(target: "pub" | "sub"): ArrayBuffer[] | undefined {
   const hash = certHashInput.value.trim();
   if (!hash) return undefined;
 
@@ -224,7 +236,7 @@ function getCertificateHashes(): ArrayBuffer[] | undefined {
     }
     return [bytes.buffer as ArrayBuffer];
   } catch {
-    log("pub", "invalid certificate hash format", true);
+    log(target, "invalid certificate hash format", true);
     return undefined;
   }
 }
@@ -256,7 +268,7 @@ async function startPublishing(): Promise<void> {
     log("pub", "user media acquired");
 
     const url = urlInput.value;
-    const certHashes = getCertificateHashes();
+    const certHashes = getCertificateHashes("pub");
 
     // UI から設定を取得
     const audioCodec = pubAudioCodecSelect.value as AudioCodecType;
@@ -356,7 +368,7 @@ async function stopPublishing(): Promise<void> {
 async function startSubscribing(): Promise<void> {
   try {
     const url = urlInput.value;
-    const certHashes = getCertificateHashes();
+    const certHashes = getCertificateHashes("sub");
 
     log("sub", `connecting to ${url}...`);
 

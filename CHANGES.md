@@ -1202,6 +1202,18 @@
   - `SubscribeTracksOptions` に `subscriberPriority` / `filter` / `fill` / `authorizationToken` を追加する (§9.18.1 が SUBSCRIBE の全パラメータと Location Filter / FILL_PARAMETERS を認めている)
   - `publishNamespace(namespace, callbacks, options?)` に第 3 引数を追加する
   - @voluntas
+- [UPDATE] HIGH_LEVEL_API.md を現コードに合わせる
+  - 存在しない `setStream()` と `"ready"` 状態、幽霊オプション `reorderTimeout` を削除し、`start(stream)` と実際の状態遷移に修正する
+  - 受信側の `codec` は任意 (省略時は Catalog から自動取得) であり、必須と書いていた記述を逆に修正する
+  - 欠落していた `getCatalog` / `catalog` / `onCatalog` / `authorizationToken` / `getAuthorizationToken` / `pendingSubgroup` を追加する
+  - 受信側統計の型名を `AudioStats` / `VideoStats` (送信側の型) から `AudioReceiverStats` / `VideoReceiverStats` に修正する
+  - @voluntas
+- [UPDATE] LOW_LEVEL_API.md と examples を現コードに合わせる
+  - `docs/LOW_LEVEL_API.md` に欠落していた `subscribeTracks()` をメソッド表と入口の列挙に追加し、`publishNamespace` の引数に `options?` を補う
+  - `examples/high-level-api/index.html` の既定 URL を `https://...` から `moqt://localhost:4433/moqt` に修正する (現コードは `moqt://` 以外を throw するため既定値のままでは動かない)
+  - `examples/high-level-api/main.ts` のログ描画を `innerHTML` から `textContent` に変更する (URL やエラーメッセージなど外部入力の混入を避ける)
+  - `getCertificateHashes()` に出力先を渡すようにし、購読側の証明書エラーが publisher のログに出る問題を修正する
+  - @voluntas
 - [ADD] channelConfig のサラウンド複合表記に対応する
   - draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義しないため、業界慣用の "5.1" (6 チャンネル) と "7.1" (8 チャンネル) を対応表で解決する
   - 対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり throw する (非標準表記を暗黙に数値化しない)
