@@ -404,30 +404,47 @@ export class PublisherImpl implements Publisher {
    * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
    * Promise<void> を返す (§3.3.1)。
    */
-  sendObject(params: SendObjectParams): Promise<void> {
+  /**
+   * Object / Datagram の送信前ガード
+   *
+   * draft-ietf-moq-transport-21 §3.1:
+   * "The publisher does not send Objects if the Forward State is 0, and does
+   *  send them if the Forward State is 1. ... Control messages, such as
+   *  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
+   * Forward State = 0 の間は送信せず、LARGEST_OBJECT の記録や END_OF_TRACK の
+   * 記録も行わない (送信していない Object を記録しない)。
+   * END_OF_TRACK 送信後の後続送信は禁止する。ライフサイクル状態の検証を
+   * パラメータ形状より先に行う。
+   *
+   * @param kind - エラーメッセージに使う送信種別
+   * @returns 送信してよければ null、Forward State = 0 で送信しない場合は "skip"、
+   *          違反の場合は ProtocolViolationError (error コールバック通知済み)
+   */
+  private guardSend(kind: "object" | "datagram"): ProtocolViolationError | "skip" | null {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
-
-    // draft-ietf-moq-transport-21 §3.1:
-    // "The publisher does not send Objects if the Forward State is 0, and does
-    //  send them if the Forward State is 1. ... Control messages, such as
-    //  PUBLISH_DONE (Section 9.9) are sent regardless of the forward state."
-    // Forward State = 0 の間は Object を送信せず、LARGEST_OBJECT の記録や
-    // END_OF_TRACK の記録も行わない (送信していない Object を記録しない)。
-    // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     if (!this.publisherForwardState) {
-      return Promise.resolve();
+      return "skip";
     }
-
-    // END_OF_TRACK 送信後は同一トラックへの後続送信を禁止する。
-    // ライフサイクル状態の検証をパラメータ形状より先に行う。
     if (this.endOfTrackSent) {
       const violation = new ProtocolViolationError(
-        "cannot send object after END_OF_TRACK was sent",
+        `cannot send ${kind} after END_OF_TRACK was sent`,
       );
       this.handleError(violation);
-      return Promise.reject(violation);
+      return violation;
+    }
+    return null;
+  }
+
+  sendObject(params: SendObjectParams): Promise<void> {
+    // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
+    const guard = this.guardSend("object");
+    if (guard === "skip") {
+      return Promise.resolve();
+    }
+    if (guard !== null) {
+      return Promise.reject(guard);
     }
 
     // draft-ietf-moq-transport-21 §11.1.2:
@@ -495,23 +512,12 @@ export class PublisherImpl implements Publisher {
    * 送信しない (§3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void {
-    if (this.publisherState === "closed") {
-      throw new Error("Publisher is closed");
-    }
-
-    // draft-ietf-moq-transport-21 §3.1:
-    // "The publisher does not send Objects if the Forward State is 0"
-    // Datagram も Object であるため、Forward State = 0 では送信しない。
-    if (!this.publisherForwardState) {
+    const guard = this.guardSend("datagram");
+    if (guard === "skip") {
       return;
     }
-
-    if (this.endOfTrackSent) {
-      const violation = new ProtocolViolationError(
-        "cannot send datagram after END_OF_TRACK was sent",
-      );
-      this.handleError(violation);
-      throw violation;
+    if (guard !== null) {
+      throw guard;
     }
 
     // draft-ietf-moq-transport-21 §3.3.1:
