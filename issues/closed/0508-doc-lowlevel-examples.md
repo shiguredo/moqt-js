@@ -60,3 +60,11 @@
 - `tsc -p examples/tsconfig.json --noEmit` が通る (examples は root の typecheck 対象外のため個別に確認)
 - `pnpm test run`: 70 ファイル / 2,110 テスト全通過 (テストコードの変更なし)
 - 差分: 3 ファイル、+22 / -8 行
+
+## 追記 (2026-09-14): `Session.fragment` の記載漏れ
+
+closed にした後の点検で、`docs/LOW_LEVEL_API.md` の `Session` 表に `fragment` の行が無く、コード上の公開メンバー 13 件と文書の列挙が一致していないことが分かった。issue の目的「文書間と現コードの API 列挙を一致させる」は本項目について未達だったため、`fragment` の行と draft-ietf-moq-transport-21 §6.1.1 の引用 (サーバーへ送信せずクライアント側でのみ解釈すること、未指定時は `null`) を追記した。
+
+あわせて、`issues/0508-doc-lowlevel-examples.md` が `issues/closed/0508-doc-lowlevel-examples.md` と重複して `issues/` 直下に残っていた (先行 PR のクローズ後に再生成されたもの) ため、重複した open 側を削除した。
+
+検証: `Session` インターフェースの全公開メンバーが `docs/LOW_LEVEL_API.md` に記載されていることをスクリプトで確認し、差分 0 件であること。`vp check` (markdownlint 含む) 通過。`.md` のみの変更のため `CHANGES.md` へのエントリは追加していない。

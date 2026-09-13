@@ -65,20 +65,30 @@ const session = await connect(url, callbacks?, options?)
 
 ### `Session`
 
-| API                                                        | 役割                                                    |
-| ---------------------------------------------------------- | ------------------------------------------------------- |
-| `state`                                                    | `"connected"` / `"closed"`                              |
-| `goawayReceived`                                           | peer から `GOAWAY` を受信済みかどうか                   |
-| `publish(namespace, trackName, callbacks?, options?)`      | 新しい双方向ストリームで `PUBLISH` を送る               |
-| `subscribe(namespace, trackName, callbacks, options?)`     | 新しい双方向ストリームで `SUBSCRIBE` を送る             |
-| `fetch(namespace, trackName, options, callbacks)`          | 新しい双方向ストリームで `FETCH` を送る                 |
-| `trackStatus(namespace, trackName)`                        | `TRACK_STATUS` を送り `REQUEST_OK` を待つ               |
-| `subscribeNamespace(namespacePrefix, callbacks, options?)` | 専用双方向ストリームで Namespace 発見を行う             |
-| `subscribeTracks(namespacePrefix, callbacks, options?)`    | 専用双方向ストリームで `SUBSCRIBE_TRACKS` を送る        |
-| `publishNamespace(namespace, callbacks?, options?)`        | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る       |
-| `goaway(newSessionUri?, timeout?)`                         | 制御ストリームで `GOAWAY` を送る                        |
-| `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする |
-| `getStatistics()`                                          | セッション統計を取得する                                |
+| API                                                        | 役割                                                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `state`                                                    | `"connected"` / `"closed"`                                                      |
+| `goawayReceived`                                           | peer から `GOAWAY` を受信済みかどうか                                           |
+| `fragment`                                                 | 接続時に渡した `moqt` URI の Fragment Identifier (`MoqtFragment` または `null`) |
+| `publish(namespace, trackName, callbacks?, options?)`      | 新しい双方向ストリームで `PUBLISH` を送る                                       |
+| `subscribe(namespace, trackName, callbacks, options?)`     | 新しい双方向ストリームで `SUBSCRIBE` を送る                                     |
+| `fetch(namespace, trackName, options, callbacks)`          | 新しい双方向ストリームで `FETCH` を送る                                         |
+| `trackStatus(namespace, trackName)`                        | `TRACK_STATUS` を送り `REQUEST_OK` を待つ                                       |
+| `subscribeNamespace(namespacePrefix, callbacks, options?)` | 専用双方向ストリームで Namespace 発見を行う                                     |
+| `subscribeTracks(namespacePrefix, callbacks, options?)`    | 専用双方向ストリームで `SUBSCRIBE_TRACKS` を送る                                |
+| `publishNamespace(namespace, callbacks?, options?)`        | 専用双方向ストリームで `PUBLISH_NAMESPACE` を送る                               |
+| `goaway(newSessionUri?, timeout?)`                         | 制御ストリームで `GOAWAY` を送る                                                |
+| `close()`                                                  | セッション内部状態と保留中 Promise をクリーンアップする                         |
+| `getStatistics()`                                          | セッション統計を取得する                                                        |
+
+`fragment` は draft-ietf-moq-transport-21 §6.1.1 の Fragment Identifier である。
+
+> Fragment identifiers MAY be used with moqt URIs. The fragment is not
+> transmitted to the server; it is processed locally by the client
+> after establishing the MOQT session.
+
+サーバーへは送信されず、`connect()` に渡した URI から `{ type, value }` として
+クライアント側でのみ解釈する。指定が無ければ `null`。
 
 ### `Publisher`
 
