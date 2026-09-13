@@ -956,6 +956,11 @@
 
 ### misc
 
+- [UPDATE] dataStream と message/parameter を機能単位のモジュールに分割する
+  - `src/dataStream.ts` (2,025 行) を `src/dataStream/` の common / subgroup / datagram / fetch に、`src/message/parameter.ts` (1,734 行) を `src/message/parameter/` の common / kvp / messageParameter / locationFilter / rangeFilter / trackNamespace に分割する
+  - 元の 2 モジュールは既存の import パスを維持するための再輸出のみにし、公開 API と挙動は変更しない
+  - Uint8Array の連結 18 箇所を `src/bytes.ts` の `concatUint8Arrays` に集約し、テスト専用ヘルパーの重複実装も同ヘルパーの再公開にする
+  - @voluntas
 - [UPDATE] bidi.test.ts をメッセージ種別ごとの 23 ファイルに分割する
   - 12,115 行 / 290 テストの単一ファイルを機能単位 (PUBLISH 応答 / SUBSCRIBE 応答 / FETCH 応答 / TRACK_STATUS 応答 / REQUEST_UPDATE / namespace 購読 / cancel 系) に分割し、各ファイルを 1,500 行以下 (最大 1,234 行) にする
   - 複数ファイルで使うテストヘルパー 9 件を `src/testSupport/bidi.ts` に抽出する
