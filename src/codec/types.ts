@@ -203,6 +203,8 @@ export interface AudioEncodedChunkData {
   type: "key" | "delta";
   timestamp: number;
   duration: number | null;
+  // AAC の AudioSpecificConfig など、デコーダーへ渡す設定 (opus では未設定)
+  description?: Uint8Array;
 }
 
 // オーディオエンコーダーコールバック

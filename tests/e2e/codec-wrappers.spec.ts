@@ -339,6 +339,10 @@ function expectAudioEncoderContract(result: AudioEncoderTestResult): void {
     expect(chunk.byteLength).toBeGreaterThan(0);
     expect(chunk.duration).not.toBeNull();
     expect(chunk.firstByte).toBeGreaterThanOrEqual(0);
+    // opus は AudioSpecificConfig を運ばない (Chromium の opus encoder は OpusHead を
+    // 返すが、Wrapper が運ばない判断をする)。AAC の description 経路は Chromium に
+    // AAC エンコーダーが無いため e2e では検証できない (単体テストで検証する)
+    expect(chunk.descriptionByteLength).toBeNull();
   }
   expect(result.outputTimestamps[0]).toBe(0);
   expectMonotonicIncrease(result.outputTimestamps);

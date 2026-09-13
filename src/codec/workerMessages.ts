@@ -78,6 +78,8 @@ export interface AudioEncoderWorkerEncodedResponse {
   chunkType: "key" | "delta";
   timestamp: number;
   duration: number | null;
+  /** AAC の AudioSpecificConfig など、デコーダーへ渡す設定 */
+  description?: ArrayBuffer;
 }
 
 /** Worker → Wrapper: デコード済み映像フレーム */
