@@ -6,17 +6,8 @@
 import { test, assert } from "vite-plus/test";
 import { FetcherImpl } from "./fetcher";
 import type { MoqtObject } from "./dataStream";
-import { ObjectStatus } from "./message/types";
 import type { Property } from "./properties";
-
-function createObject(groupId: bigint, objectId: bigint): MoqtObject {
-  return {
-    groupId,
-    objectId,
-    status: ObjectStatus.NORMAL,
-    payload: new Uint8Array([1, 2, 3]),
-  };
-}
+import { createObject } from "./testSupport/helpers";
 
 test("closed 状態では handleObject は配信しない", () => {
   const delivered: MoqtObject[] = [];

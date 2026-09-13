@@ -8,6 +8,7 @@
 import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "../publisher";
 import { SessionError } from "../error";
+import { concatUint8Arrays } from "../testSupport/helpers";
 import {
   publishClosePublisherStream,
   publishSendDatagram,
@@ -736,17 +737,6 @@ test("publishSendDatagram: 不正 groupId で通知して throw する", () => {
 });
 
 /** Uint8Array 配列を連結するヘルパー */
-function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
-
 /**
  * 書き込まれたチャンクを記録するセッションを構築する。
  *

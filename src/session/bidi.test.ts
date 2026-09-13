@@ -56,6 +56,7 @@ import {
   RequestError,
   InvalidFilterError,
 } from "../error";
+import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint, decodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
@@ -89,6 +90,7 @@ import {
 import { publishClosePublisherStream, publishSendPublishDone } from "./publish";
 import { FetcherImpl, type Fetcher } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
+import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 // ============================================================================
 // bidiHandlePublishDone のテスト
@@ -1866,17 +1868,6 @@ test("bidiSendRequestUpdate: 削除を含む update は削除後の状態で検�
 });
 
 /** Uint8Array 配列を連結するヘルパー */
-function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
-
 // ============================================================================
 // bidiSendNamespaceRequestUpdate のテスト
 // draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions)
@@ -9733,14 +9724,6 @@ test("bidiReadFetchResponse: malformed 検出で同一 Track の既存購読 / F
  * Track Properties はメッセージ payload の末尾を占めるため、正常な
  * エンコード結果への連結で malformed な受信メッセージを再現できる。
  */
-function appendMalformedTrackProperties(payload: Uint8Array): Uint8Array {
-  const malformed = new Uint8Array([0x02, 0x80]);
-  const result = new Uint8Array(payload.length + malformed.length);
-  result.set(payload, 0);
-  result.set(malformed, payload.length);
-  return result;
-}
-
 /**
  * draft-ietf-moq-transport-21 §8.3 / §9.3:
  * malformed な Track Properties を含む PUBLISH_OK を受信したら

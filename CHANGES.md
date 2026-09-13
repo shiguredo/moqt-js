@@ -1181,6 +1181,10 @@
   - `ControlStreamReader.feed()` の `fin` 引数は `finReceived` を設定するためだけにあり、その値を読む経路が無いため削除する
   - 書き込み専用だった `PendingSubgroupEntry.header` と `ValidationContext.catalogNamespace`、到達しない `ValidationContext.source` の `"remove"` を削除する (`remove` operation は `validateRemoveTrack` で検証する)
   - @voluntas
+- [UPDATE] テストの重複ヘルパーを共有モジュールに集約する
+  - 複数のテストファイルに同じ実装が置かれていた `concatUint8Arrays` / `nodeProcess` / `createObject` / `appendMalformedTrackProperties` / `parseObjectPropertyIds` / `assertRejectsWithMessage` / `encodeJson` / `useValueToken` を `src/testSupport/helpers.ts` に集約する
+  - テストの検証内容と件数は変えない
+  - @voluntas
 - [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
   - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
   - ワイヤ形式・ロジック・公開 API は変更しない

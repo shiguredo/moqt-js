@@ -45,6 +45,7 @@ import {
   validateCatalogTrack,
 } from "./msf";
 import { MsfCompressionAlgorithm } from "./properties";
+import { assertRejectsWithMessage } from "./testSupport/helpers";
 
 // =============================================================================
 // テスト用ヘルパー
@@ -55,18 +56,6 @@ import { MsfCompressionAlgorithm } from "./properties";
  */
 function encodeRaw(obj: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(obj));
-}
-
-async function assertRejectsWithMessage(
-  factory: () => Promise<unknown>,
-  messagePattern: RegExp,
-): Promise<void> {
-  try {
-    await factory();
-    assert.fail("expected promise to reject");
-  } catch (error) {
-    assert.match((error as Error).message, messagePattern);
-  }
 }
 
 // =============================================================================
