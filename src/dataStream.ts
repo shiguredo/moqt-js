@@ -897,14 +897,25 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 }
 
 /**
- * Decode an Object Datagram
- * draft-ietf-moq-transport-21 Section 11.2.1
+ * Object Datagram の先頭固定フィールド (Type Flags → Track Alias) を読む
+ *
+ * draft-ietf-moq-transport-21 Section 11.2.1:
+ * Type Flags と Track Alias は Datagram の先頭に固定配置される。
+ *
+ * この配置知識を 1 箇所に集約する。`decodeObjectDatagram` の本体と、
+ * デコード失敗時に cancel 対象を引くための Track Alias の取り出し
+ * (`decodeDatagramTrackAlias`) が同じ実装を共有する。片方だけがワイヤ配置を
+ * 変わると、誤った alias を引いて無関係な購読を cancel し得る。
+ *
+ * @param data - Datagram のバイト列
+ * @param offset - 読み取り開始位置
+ * @returns Type Flags (数値) と Track Alias、消費したバイト数
  */
-export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
-  let totalConsumed = 0;
-
-  const [type, typeConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += typeConsumed;
+export function decodeDatagramTypeAndTrackAlias(
+  data: Uint8Array,
+  offset = 0,
+): { type: number; trackAlias: bigint; consumed: number } {
+  const [type, typeConsumed] = decodeVarint(data, offset);
 
   const typeNum = Number(type);
 
@@ -923,8 +934,20 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     );
   }
 
-  const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += trackAliasConsumed;
+  const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + typeConsumed);
+
+  return { type: typeNum, trackAlias, consumed: typeConsumed + trackAliasConsumed };
+}
+
+/**
+ * Decode an Object Datagram
+ * draft-ietf-moq-transport-21 Section 11.2.1
+ */
+export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
+  const head = decodeDatagramTypeAndTrackAlias(data, offset);
+  const typeNum = head.type;
+  const trackAlias = head.trackAlias;
+  let totalConsumed = head.consumed;
 
   const [groupId, groupIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += groupIdConsumed;

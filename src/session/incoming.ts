@@ -12,7 +12,12 @@
  */
 
 import { decodeVarint } from "../varint";
-import { decodeObjectDatagram, type MoqtObject, type ObjectDatagram } from "../dataStream";
+import {
+  decodeDatagramTypeAndTrackAlias,
+  decodeObjectDatagram,
+  type MoqtObject,
+  type ObjectDatagram,
+} from "../dataStream";
 import { ObjectStatus, MessageType, encodeRequestErrorPayload } from "../message";
 import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
@@ -379,9 +384,10 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
  */
 function decodeDatagramTrackAlias(data: Uint8Array): bigint | undefined {
   try {
-    const [, typeLen] = decodeVarint(data, 0);
-    const [trackAlias] = decodeVarint(data, typeLen);
-    return trackAlias;
+    // 先頭固定フィールドの配置知識は decodeObjectDatagram と共有する
+    // (decodeDatagramTypeAndTrackAlias)。片方だけが配置を変わると誤った
+    // alias を引いて無関係な購読を cancel し得る。
+    return decodeDatagramTypeAndTrackAlias(data, 0).trackAlias;
   } catch {
     return undefined;
   }
