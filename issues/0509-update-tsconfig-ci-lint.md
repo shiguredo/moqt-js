@@ -22,5 +22,19 @@
 
 ## 完了条件
 
-- 設定が規約と一致し、CI で出荷標準が検証されること。
+- tsconfig が規約の必須チェックを満たすこと。
+- lint 対象が devtools / examples / tests に広がっていること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
+
+## スコープ縮小 (2026-09-14)
+
+CI 側の 3 項目 (typecheck 行列への出荷標準 7.0.2 追加、`lint` ジョブの `vp check` 化、`paths-ignore` の `**.md` / `**.txt` 除外撤廃) は、独立した issue `0603` として切り出して先に実施する。本 issue は tsconfig の厳格化と lint 対象の拡大を扱う。
+
+現状の実測値 (本 issue の残作業量の目安):
+
+- `noUncheckedIndexedAccess: true` を有効にすると型エラーが 73 件出る (`src/varint.ts` など)
+- `exactOptionalPropertyTypes: true` を有効にすると型エラーが 62 件出る
+- `esModuleInterop: false` にすると型エラーが 1 件出る
+- `lint.ignorePatterns` から `devtools/**` / `examples/**` / `tests/**` を外すと、それらのディレクトリの型エラー (devtools は既知で 11 件) と lint 違反が gate 対象になる
+
+これらを一度に直すと変更が広範囲になるため、着手時は「tsconfig の厳格化」と「lint 対象の拡大」をさらに分けることを検討する。

@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
+    # ドキュメント (**.md / **.txt) は vp check の整形検証対象であるため除外しない。
+    # LICENSE / NOTICE は体裁を持たない法務文書のため除外する。
     paths-ignore:
-      - "**.md"
-      - "**.txt"
       - "LICENSE"
       - "NOTICE"
 
@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: "22"
           cache: true
-      - run: vp lint
+      # vp check は整形・lint・型をまとめて検証する。整形崩れも CI で止めるため
+      # vp lint ではなく vp check を使う (型は別 job で複数バージョンを検証する)。
+      - run: vp check
 
   build:
     runs-on: ubuntu-slim
@@ -50,10 +52,14 @@ jobs:
         # WebCodecs Audio 型 (AudioDecoder 等) は TypeScript 5.7 の lib.dom.d.ts で追加
         typescript:
           # - "@typescript/native-preview@beta"
+          # 出荷標準 (package.json の devDependencies.typescript) を先頭に置く
+          - "7.0.2"
           - "next"
           - "6.0"
           - "5.9"
           - "5.8"
+          # 5.7 は WebCodecs Audio 型 (AudioDecoder 等) が lib.dom.d.ts に
+          # 追加された下限であり、対応可能な最小バージョンとして残す
           - "5.7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
