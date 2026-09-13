@@ -81,14 +81,33 @@ export function getVideoDecoderConfig(
 }
 
 /**
+ * サラウンド表記のチャンネル数対応表
+ *
+ * draft-ietf-moq-msf-01 §5.2.29 は channelConfig を「複雑なチャンネル構成を
+ * 記述する柔軟性のために文字列を使う」と定めるだけで、値語彙を定義していない。
+ * そのため業界慣用の表記を製品判断でマッピングする。
+ *
+ * - "5.1": 前方 3 (L/C/R) + 後方 2 (Ls/Rs) + LFE 1 = 6 チャンネル
+ * - "7.1": 前方 3 + 側方 2 + 後方 2 + LFE 1 = 8 チャンネル
+ *
+ * 表に無い複合表記は解決不能として throw する ("quad" や "1.5" のような
+ * 非標準表記を暗黙に数値化しない)。
+ */
+const SURROUND_CHANNEL_COUNTS: ReadonlyMap<string, number> = new Map([
+  ["5.1", 6],
+  ["7.1", 8],
+]);
+
+/**
  * カタログの channelConfig をチャンネル数に解決する
  *
  * draft-ietf-moq-loc-04 §4.1 の名前付き例 mono (→ 1) に対応し、
- * stereo (→ 2) は慣用値として定める。整数文字列は 1 以上の整数
+ * stereo (→ 2) は慣用値として定める。サラウンド系の複合表記は
+ * SURROUND_CHANNEL_COUNTS の対応表で解決する。整数文字列は 1 以上の整数
  * (safe integer 範囲内) のみ受理する。
  * 照合は前後空白除去・小文字化して行う。
  * 未指定時は既定チャンネル数を返し、NaN をデコーダに渡さない。
- * 未知の名前・非整数・0 以下・空文字列の明示値は throw する。
+ * 未知の名前・非対応の複合表記・非整数・0 以下・空文字列の明示値は throw する。
  */
 export function resolveAudioChannelCount(channelConfig: string | undefined): number {
   if (channelConfig === undefined) {
@@ -100,6 +119,10 @@ export function resolveAudioChannelCount(channelConfig: string | undefined): num
   }
   if (normalized === "stereo") {
     return 2;
+  }
+  const surroundCount = SURROUND_CHANNEL_COUNTS.get(normalized);
+  if (surroundCount !== undefined) {
+    return surroundCount;
   }
   if (/^\d+$/.test(normalized)) {
     // 形状検査 (十進整数) を通過した値の範囲検査。safe integer 外は
