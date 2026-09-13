@@ -51,6 +51,7 @@ class PendingSubgroupEntry {
   readonly chunks: Uint8Array[] = [];
   totalBytes = 0;
   private resolved = false;
+  private resolvedReason: PendingNotifyReason | null = null;
   private resolveNotify!: (reason: PendingNotifyReason) => void;
   readonly notified: Promise<PendingNotifyReason>;
   /** @internal PendingSubgroupBuffer が timeout 解除に使う */
@@ -63,6 +64,23 @@ class PendingSubgroupEntry {
   }
 
   /**
+   * 上限超過で破棄された entry かどうか
+   *
+   * 破棄後に受け取ったチャンクを加算し続けると、この entry のバイトが
+   * per-session の集計に積み上がり、無関係な他ストリームを巻き添えで
+   * overflow させる。破棄済みなら受け取らない。
+   *
+   * "subscriber" (購読確立) や "timeout" は所有者がまだ保持中のチャンクを
+   * 引き取る可能性があるため破棄扱いにしない (所有者の remove に委ねる)。
+   */
+  get abandoned(): boolean {
+    return (
+      this.resolvedReason === "overflow-per-stream" ||
+      this.resolvedReason === "overflow-per-session"
+    );
+  }
+
+  /**
    * 通知を発火する
    * 複数回呼ばれても resolve は最初の 1 回のみ反映される (idempotent)
    * 戻り値: 実際に resolve したか (重複呼び出しでは false)
@@ -70,6 +88,7 @@ class PendingSubgroupEntry {
   notify(reason: PendingNotifyReason): boolean {
     if (this.resolved) return false;
     this.resolved = true;
+    this.resolvedReason = reason;
     if (this.timeoutHandle !== null) {
       clearTimeout(this.timeoutHandle);
       this.timeoutHandle = null;
@@ -112,10 +131,17 @@ export class PendingSubgroupBuffer {
   /**
    * チャンクを entry に追加する
    * per-stream / per-session の上限を超えたら entry.notify を発火する
-   * 受け取ったチャンクは entry.totalBytes / 集計バイト数の両方に必ず加算する
-   * (上限超過後も加算しておかないと remove 時の減算が合わなくなる)
+   *
+   * 上限超過で破棄済みの entry には加算しない。加算を続けると破棄したはずの
+   * バイトが per-session の集計に残り、無関係な他ストリームを巻き添えで
+   * overflow させる (この場合チャンクを保持しないので remove 時の減算もずれない)。
+   * 上限判定の前後で必ず entry.totalBytes と集計バイト数が一致する。
    */
   appendChunk(entry: PendingSubgroupEntry, chunk: Uint8Array): void {
+    if (entry.abandoned) {
+      return;
+    }
+
     entry.chunks.push(chunk);
     entry.totalBytes += chunk.byteLength;
     this.totalBytesValue += chunk.byteLength;

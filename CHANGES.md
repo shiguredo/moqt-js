@@ -73,6 +73,11 @@
   - `SessionStatistics` に `objectsReceivedViaFill` / `bytesReceivedViaFill` を追加し、配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる
   - `objectsReceivedViaFetch` / `bytesReceivedViaFetch` は通常 FETCH のデータストリーム経由のみを数えるようになり、fill 経由のぶんだけ値が減る (fill を使わない場合は従来と同じ)
   - fill 範囲と購読の Location Filter が重なる Object は publisher が両経路で送るため、受信したストリームの種別どおりに 1 回ずつ計上する (購読側への合算はしない)
+- [ADD] 制御メッセージとデータストリームの受信タイムアウトを実装する
+  - draft-ietf-moq-transport-21 §12.2 の CONTROL_MESSAGE_TIMEOUT (0x11) / DATA_STREAM_TIMEOUT (0x12) に対応し、半端な制御メッセージまたは Subgroup / Fetch のヘッダー・Object の途中バイトを保持したまま送信を止めたピアを期限で打ち切る
+  - `ConnectOptions.controlMessageTimeoutMs` (既定 10,000 ms) / `ConnectOptions.dataStreamTimeoutMs` (既定 30,000 ms) で指定する。0 以下でタイムアウトしない
+  - 期限切れではセッションを当該コードで閉じ、当該ストリームの reader を cancel する。バッファを消費しきった時点で期限は解除するため、Object の合間に時間がかかるだけの正常なピアは切らない
+  - @voluntas
 - [ADD] fill fetch ストリームの失敗を SubscribeCallbacks.fillError で通知する
   - draft-ietf-moq-transport-21 §3.4.1 に基づき、fill fetch ストリームには REQUEST_ERROR が無く publisher は reset で失敗を伝えるが、これまでアプリへの通知手段が無かった
   - reset / cancel は購読に波及しないため、購読終了を意味する error ではなく fill 専用の SubscribeCallbacks.fillError で通知する。FIN の正常完了、Malformed Track 検出 (購読の error で通知)、セッション終了起源の失敗では呼ばない
@@ -139,6 +144,10 @@
 - [UPDATE] 依存ライブラリを最新版に更新する
   - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
   - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
+  - @voluntas
+- [FIX] 上限超過で破棄した pending Subgroup の後続チャンクが他ストリームを巻き添え overflow させないようにする
+  - draft-ietf-moq-transport-21 §11.3.1 の "brief period" バッファで per-stream / per-session の上限超過により破棄した entry が、以後のチャンクも加算し続けていた
+  - 破棄したバイトが per-session の集計に残るため、無関係な他ストリームが続けて overflow 通知を受けていた。破棄済み entry への appendChunk を no-op にし、entry.totalBytes と集計バイト数の一致を保つ
   - @voluntas
 - [FIX] Object Property の Mandatory Track Property を malformed として検出する
   - draft-ietf-moq-transport-20 §2.5.1 に基づき、Object Property の 0x4000-0x7FFF を検出したら MalformedTrackError とする

@@ -97,6 +97,67 @@ test("per-session 上限超過で overflow-per-session が通知される", asyn
   assert.equal(reason, "overflow-per-session");
 });
 
+/**
+ * draft-ietf-moq-transport-21 §11.3.1:
+ * 上限超過で破棄した entry に以後のチャンクを加算しない。加算を続けると
+ * 破棄したバイトが per-session の集計に残り、無関係な他ストリームを
+ * 巻き添えで overflow させる。
+ */
+test("per-stream 上限超過で破棄した entry は以後のチャンクを加算しない", async () => {
+  const buffer = new PendingSubgroupBuffer(
+    makeOptions({ perStreamMaxBytes: 8, perSessionMaxBytes: 1024, timeoutMs: 10_000 }),
+  );
+  const abandoned = buffer.add(1n);
+  buffer.appendChunk(abandoned, new Uint8Array(5));
+  buffer.appendChunk(abandoned, new Uint8Array(5));
+  assert.equal(await abandoned.notified, "overflow-per-stream");
+  const bytesAfterAbandon = buffer.totalBytes;
+
+  // 破棄後のチャンクは保持も加算もしない
+  buffer.appendChunk(abandoned, new Uint8Array(100));
+  assert.equal(buffer.totalBytes, bytesAfterAbandon);
+  assert.equal(abandoned.totalBytes, 10);
+  assert.equal(abandoned.chunks.length, 2);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.3.1:
+ * 破棄した entry が加算を続けないため、健在な他ストリームが巻き添えで
+ * per-session 上限を超えることはない。
+ */
+test("破棄した entry の後続チャンクが他ストリームを巻き添え overflow させない", async () => {
+  const buffer = new PendingSubgroupBuffer(
+    makeOptions({ perStreamMaxBytes: 64, perSessionMaxBytes: 100, timeoutMs: 10_000 }),
+  );
+  const abandoned = buffer.add(1n);
+  const healthy = buffer.add(2n);
+
+  // 1 本目が per-stream 上限 (64) を超えて破棄される
+  buffer.appendChunk(abandoned, new Uint8Array(40));
+  buffer.appendChunk(abandoned, new Uint8Array(40));
+  assert.equal(await abandoned.notified, "overflow-per-stream");
+  assert.equal(buffer.totalBytes, 80);
+
+  // 破棄された entry へ大量のチャンクが届いても集計は増えない
+  for (let i = 0; i < 10; i++) {
+    buffer.appendChunk(abandoned, new Uint8Array(100));
+  }
+  assert.equal(buffer.totalBytes, 80);
+
+  // 健在なストリームは per-session 上限 (100) 内で受け取り続けられる
+  buffer.appendChunk(healthy, new Uint8Array(15));
+  assert.equal(buffer.totalBytes, 95);
+  const healthyResult = await Promise.race([
+    healthy.notified.then((reason) => reason),
+    new Promise<null>((resolve) => {
+      setTimeout(() => {
+        resolve(null);
+      }, 10);
+    }),
+  ]);
+  assert.isNull(healthyResult);
+});
+
 test("remove で集計から減算される", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions());
   const entry = buffer.add(1n);

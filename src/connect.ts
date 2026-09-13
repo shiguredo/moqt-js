@@ -90,6 +90,8 @@ export async function connect(
     maxAuthTokenCacheSize: options?.maxAuthTokenCacheSize,
     maxRequestUpdates: options?.maxRequestUpdates,
     maxFilterRanges: options?.maxFilterRanges,
+    controlMessageTimeoutMs: options?.controlMessageTimeoutMs,
+    dataStreamTimeoutMs: options?.dataStreamTimeoutMs,
   });
 
   return session;
