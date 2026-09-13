@@ -1196,6 +1196,12 @@
   - `src/dataStream.fetch.test.ts` の「Datagram 先頭オブジェクトの encode→decode roundtrip」は、`src/dataStream.prop.ts` の PBT が下位 2 ビット (0〜3) と Properties 有無の組み合わせを網羅しているため削除する (shiguredo-typescript の「PBT でカバーできるものを単体テストで書かないこと」)
   - PBT 側に役割分担 (roundtrip は PBT、単体テストは overflow や timed_out などの意図的なエラーパス) をコメントで明記する
   - @voluntas
+- [ADD] リクエスト種別ごとに送信可能なパラメータを追加する
+  - `FetchOptions` に `subscriberPriority` と `groupOrder` を追加する (draft-ietf-moq-transport-21 §9.20.9 / §9.20.19 が FETCH での出現を認めている)
+  - `TrackStatusOptions` と `PublishNamespaceOptions` (新設) に `authorizationToken` を追加する (§9.20.3 が TRACK_STATUS / PUBLISH_NAMESPACE での出現を認めている)
+  - `SubscribeTracksOptions` に `subscriberPriority` / `filter` / `fill` / `authorizationToken` を追加する (§9.18.1 が SUBSCRIBE の全パラメータと Location Filter / FILL_PARAMETERS を認めている)
+  - `publishNamespace(namespace, callbacks, options?)` に第 3 引数を追加する
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる

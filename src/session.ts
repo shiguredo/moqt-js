@@ -76,6 +76,7 @@ import {
   buildSubscribeNamespaceParameters,
   buildTrackStatusParameters,
   clampTimeoutMs,
+  encodeAuthorizationTokenParameter,
   extractForwardState,
   extractLargestLocation,
   matchNamespacePrefix,
@@ -649,6 +650,42 @@ export interface SubscribeTracksOptions {
    * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
    */
   includeProperties?: boolean;
+
+  /**
+   * Subscriber Priority
+   * draft-ietf-moq-transport-21 Section 9.20.8 (SUBSCRIBER PRIORITY Parameter)
+   *
+   * 結果 PUBLISH の初期 Subscription Parameter になる (0-255、小さいほど高優先)。
+   * 省略時は送らない。
+   */
+  subscriberPriority?: number;
+
+  /**
+   * Location Filter
+   * draft-ietf-moq-transport-21 Section 9.18.1 (Parameters on SUBSCRIBE_TRACKS):
+   * "To join Tracks initiated via the resulting PUBLISHes, the subscriber can
+   *  specify a Location Filter and optionally include FILL_PARAMETERS, as
+   *  described in Section 3.5."
+   *
+   * 結果 PUBLISH の初期 Location Filter になる。
+   */
+  filter?: LocationFilter;
+
+  /**
+   * Fill Parameters
+   * draft-ietf-moq-transport-21 Section 9.20.16 (FILL_PARAMETERS Parameter)
+   *
+   * 結果 PUBLISH の購読で fill fetch を要求する。省略時は送らない。
+   */
+  fill?: FillRequestOptions;
+
+  /**
+   * 認可トークン
+   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   *
+   * 省略時は送らない。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -678,6 +715,27 @@ export interface FetchOptions {
    * 0 は即座に利用可能な object のみを要求。
    */
   fillTimeout?: bigint;
+
+  /**
+   * Subscriber Priority
+   * draft-ietf-moq-transport-21 Section 9.20.9 (SUBSCRIBER PRIORITY Parameter)
+   *
+   * FETCH 応答の優先度 (0-255、小さいほど高優先)。
+   * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
+   * 省略時は送らない (受信側は既定値として扱う)。
+   */
+  subscriberPriority?: number;
+
+  /**
+   * Group Order
+   * draft-ietf-moq-transport-21 Section 9.20.19 (GROUP ORDER Parameter)
+   *
+   * FETCH 応答で Object を Group 順に並べる順序を要求する。
+   * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
+   * 省略時は送らない (FETCH_OK に出現できるパラメータではないため、
+   * 応答でエコーされることはない)。
+   */
+  groupOrder?: "Ascending" | "Descending";
 
   /**
    * Location Filter
@@ -740,6 +798,16 @@ export interface TrackStatusOptions {
    * false (0) は空にするよう要求する。省略時は送らない (デフォルト 1 と同等)。
    */
   includeProperties?: boolean;
+
+  /**
+   * 認可トークン
+   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   *
+   * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
+   *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
+   * 省略時は送らない。
+   */
+  authorizationToken?: AuthorizationToken;
 }
 
 /**
@@ -964,6 +1032,22 @@ export interface NamespacePublicationCallbacks {
 }
 
 /**
+ * Namespace 公開のオプション
+ * draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE)
+ */
+export interface PublishNamespaceOptions {
+  /**
+   * 認可トークン
+   * draft-ietf-moq-transport-21 Section 9.20.3 (AUTHORIZATION TOKEN Parameter)
+   *
+   * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
+   *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
+   * 省略時は送らない。
+   */
+  authorizationToken?: AuthorizationToken;
+}
+
+/**
  * Namespace 公開
  * draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE)
  */
@@ -1125,6 +1209,7 @@ export interface Session {
   publishNamespace(
     namespace: string[],
     callbacks?: NamespacePublicationCallbacks,
+    options?: PublishNamespaceOptions,
   ): Promise<NamespacePublication>;
   /**
    * GOAWAY を送信してセッション終了を通知する
@@ -2607,6 +2692,7 @@ export class SessionImpl implements Session {
   async publishNamespace(
     namespace: string[],
     callbacks?: NamespacePublicationCallbacks,
+    options?: PublishNamespaceOptions,
   ): Promise<NamespacePublication> {
     if (this.sessionState === "closed") {
       throw new Error("session is closed");
@@ -2637,7 +2723,11 @@ export class SessionImpl implements Session {
         type: MessageType.PUBLISH_NAMESPACE,
         requestId,
         trackNamespace,
-        parameters: [],
+        // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-21 Section 9.20.3
+        parameters:
+          options?.authorizationToken !== undefined
+            ? [encodeAuthorizationTokenParameter(options.authorizationToken)]
+            : [],
       };
 
       // メッセージをエンコードして送信
