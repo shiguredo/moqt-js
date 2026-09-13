@@ -1352,6 +1352,10 @@
 
 ### misc
 
+- [UPDATE] 応答読み取りの共通リーダを bidiDispatchResponse に改名する
+  - `bidiReadResponse` (ハンドラへ委譲するディスパッチャ) と `bidiReadResponseFromBidiStream` (最初の応答チャンクを返す低レベル読み取り) の名前が類似し、どちらが何を担うか判別しにくかった
+  - ディスパッチャ側を `bidiDispatchResponse` に改名し、呼び出し 4 箇所とテストのコメントを追随させた。挙動は変えない
+  - @voluntas
 - [UPDATE] Mandatory Track Property の FETCH session レベル回帰テストを追加する
   - `decodeFetchObjectFields` の Mandatory Track Property 検出が session レベルの `handleMalformedFetchTrack` 経路に到達し、fetcher を cancel してセッションを閉じないことを結合テストで固定する
   - 受信データストリームの打ち切り / bidi リクエストストリームへの STOP_SENDING / fetchers・requestStreams からの削除 / error コールバックへの MalformedTrackError 通知まで、既存の Priority 不一致テストと同じ検証項目を確認する

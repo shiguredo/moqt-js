@@ -2500,7 +2500,7 @@ function createPublishReadTestContext(
  * draft-ietf-moq-transport-21 §6.4.2.2:
  * PUBLISH_OK 受信前 (Established 前) にピアが FIN を送った場合、リクエストは
  * 失敗として処理される。bidiReadResponseFromBidiStream の throw が
- * bidiReadPublishResponse の内部で使う共有リーダ bidiReadResponse の catch で
+ * bidiReadPublishResponse の内部で使う共通ディスパッチャ bidiDispatchResponse の catch で
  * 処理され、pendingPublish の reject と requestStreams からの削除が行われる
  * ことを検証する。
  */
