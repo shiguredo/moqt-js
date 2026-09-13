@@ -1352,6 +1352,12 @@
 
 ### misc
 
+- [UPDATE] Mandatory Track Property の FETCH session レベル回帰テストを追加する
+  - `decodeFetchObjectFields` の Mandatory Track Property 検出が session レベルの `handleMalformedFetchTrack` 経路に到達し、fetcher を cancel してセッションを閉じないことを結合テストで固定する
+  - 受信データストリームの打ち切り / bidi リクエストストリームへの STOP_SENDING / fetchers・requestStreams からの削除 / error コールバックへの MalformedTrackError 通知まで、既存の Priority 不一致テストと同じ検証項目を確認する
+  - Mandatory Track Property を含めないワイヤに変えると落ちることを実測した (malformed 検出が原因であることの裏付け)
+  - 実装は変えない (テスト追加のみ)
+  - @voluntas
 - [UPDATE] subgroup malformed テストで bidi リクエストストリームの cancel を検証する
   - subgroup の malformed track 検出時に `bidiCancelSubscription` が bidi リクエストストリームへ STOP_SENDING 相当 (readable.cancel) と RESET_STREAM 相当 (writer.abort) を送ることを固定する
   - 従来のテストは `requestStreams` を登録しておらず、Map 削除と error 通知しか検証していなかった (FETCH Priority 不一致テストとは非対称)

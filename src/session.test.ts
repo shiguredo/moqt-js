@@ -3219,6 +3219,44 @@ test("FETCH 応答の Priority 不一致 (2 チャンク分割) でも FETCH が
   assertFetchCancelledOnPriorityMismatch(ctx);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §3.6 / §12.1:
+ * Mandatory Track Property (0x4000-0x7FFF) を含む Object Property を持つ FETCH
+ * Object の受信は malformed Track の検出に当たる。decodeFetchObjectFields の
+ * 単体テストは存在するが、session レベルの handleMalformedFetchTrack 経路
+ * (fetcher の cancel・セッションは閉じない) を通す結合テストが無かった。
+ */
+test("FETCH データストリーム: Mandatory Track Property で FETCH を cancel しセッションを閉じない", async () => {
+  const requestId = 1n;
+  const ctx = createFetchPriorityMismatchContext(requestId);
+
+  // 先頭 Object の Object Property に Mandatory Track Property を含める
+  const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  const parts = buildFetchStreamParts(requestId, properties);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  await handlePromise;
+  // cross-cancel は fire-and-forget のため到達を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  // セッションは閉じない
+  assert.isUndefined(ctx.sessionError.current);
+  // 受信データストリームは STOP_SENDING 相当で打ち切られる
+  assert.isDefined(ctx.dataCancelledReason.current);
+  assert.isTrue(ctx.dataCancelledReason.current!.includes("malformed track"));
+  // draft-ietf-moq-transport-21 §3.2.1 の MUST に従い bidi リクエストストリームへ
+  // STOP_SENDING が送られる
+  assert.equal(ctx.bidiCancelledReason.current, "fetch cancelled");
+  // fetchers / requestStreams から削除される
+  assert.equal(ctx.internal.fetchers.size, 0);
+  assert.equal(ctx.internal.requestStreams.size, 0);
+  // error コールバックが MalformedTrackError で呼ばれる
+  assert.instanceOf(ctx.receivedError.current, MalformedTrackError);
+});
+
 // ============================================================================
 // データストリームの FIN 時の未完成 Object 検証 (§11.3)
 // ============================================================================
