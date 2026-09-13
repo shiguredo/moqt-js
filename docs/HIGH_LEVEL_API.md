@@ -62,6 +62,12 @@ interface MediaPublisherOptions {
   };
   useWorker?: boolean; // default: true
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
+  // SETUP Option (0x03) として送出する Authorization Token
+  // SETUP では DELETE / USE_ALIAS は禁止 (§9.1.4)
+  authorizationToken?: AuthorizationToken;
+  // Pending Subgroup Stream の buffer 設定 (§11.3.1)。
+  // 未指定のフィールドは既定値で補完される
+  pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
 }
 ```
 
@@ -77,16 +83,16 @@ interface MediaPublisherCallbacks {
 
 ### メソッド
 
-| メソッド                         | 説明                           |
-| -------------------------------- | ------------------------------ |
-| `setStream(stream: MediaStream)` | MediaStream を設定             |
-| `start(): Promise<void>`         | 配信開始                       |
-| `pause()`                        | 配信一時停止（エンコード停止） |
-| `resume()`                       | 配信再開                       |
-| `stop(): Promise<void>`          | 配信停止                       |
-| `requestKeyframe()`              | キーフレームを即座に送信       |
-| `close(): Promise<void>`         | リソース解放                   |
-| `getStats()`                     | 統計情報取得                   |
+| メソッド                                    | 説明                           |
+| ------------------------------------------- | ------------------------------ |
+| `start(stream: MediaStream): Promise<void>` | MediaStream を渡して配信開始   |
+| `pause()`                                   | 配信一時停止（エンコード停止） |
+| `resume()`                                  | 配信再開                       |
+| `stop(): Promise<void>`                     | 配信停止                       |
+| `requestKeyframe()`                         | キーフレームを即座に送信       |
+| `close(): Promise<void>`                    | リソース解放                   |
+| `getStats(): MediaStats`                    | 送信側の統計情報取得           |
+| `getCatalog(): Catalog \| null`             | 配信中に生成したカタログ取得   |
 
 ### プロパティ
 
@@ -99,8 +105,7 @@ interface MediaPublisherCallbacks {
 ```typescript
 type MediaPublisherState =
   | "created" // createMediaPublisher() 直後
-  | "ready" // setStream() 後
-  | "publishing" // start() 後
+  | "publishing" // start(stream) 後
   | "paused" // pause() 後
   | "stopped" // stop() 後
   | "closed"; // close() 後
@@ -109,15 +114,17 @@ type MediaPublisherState =
 ### 状態遷移
 
 ```
-created ──setStream()──► ready ──start()──► publishing
-                           ▲                    │ │
-                           │                    │ │
-                           └────stop()──────────┘ │
-                                                  │
-                           pause()◄───────────────┤
-                              │                   │
-                              ▼                   │
-                           paused ──resume()──────┘
+created ──start(stream)──► publishing
+                              │ │
+                              │ │
+                              │ └────stop()──────┐
+                              │                  │
+              pause()◄────────┘                  │
+                 │                               │
+                 ▼                               │
+              paused ──resume()──► publishing    │
+                                                 ▼
+                                             stopped
 
 * → close() → closed (どの状態からでも可能)
 ```
@@ -163,23 +170,38 @@ interface MediaSubscriberOptions {
   namespace: string[];
   audio?: {
     trackName?: string; // default: "audio"
-    codec: "opus" | "aac";
+    codec?: "opus" | "aac"; // 省略時は Catalog から自動取得
   };
   video?: {
     trackName?: string; // default: "video"
-    codec: "h264" | "h265" | "vp8" | "vp9" | "av1";
+    codec?: "h264" | "h265" | "vp8" | "vp9" | "av1"; // 省略時は Catalog から自動取得
   };
   useWorker?: boolean; // default: true
-  reorderTimeout?: number; // default: 50 (ms), 0 で無効
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
+  // SETUP Option (0x03) として送出する Authorization Token
+  // 受信側 (Subscriber) も送信できる。SETUP では DELETE / USE_ALIAS は禁止
+  authorizationToken?: AuthorizationToken;
+  // §5.2.42 authInfo を持つ track の購読時にトークンを供給するコールバック。
+  // authInfo があるのに undefined を返すと購読はエラーになる
+  getAuthorizationToken?: (
+    authInfo: AuthInfo,
+  ) => AuthorizationToken | undefined | Promise<AuthorizationToken | undefined>;
+  // Pending Subgroup Stream の buffer 設定 (§11.3.1)。
+  // 未指定のフィールドは既定値で補完される
+  pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
 }
 ```
+
+MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHashes` に加えて
+`authorizationToken` と `pendingSubgroup` を持つ (購読側と同じ形)。
 
 ### コールバック
 
 ```typescript
 interface MediaSubscriberCallbacks {
   onStateChange?: (state: MediaSubscriberState) => void;
+  // カタログを受信するたびに呼ばれる (更新時も呼ばれる)
+  onCatalog?: (catalog: Catalog) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
@@ -193,14 +215,15 @@ interface MediaSubscriberCallbacks {
 | `stop(): Promise<void>`            | 購読停止                                  |
 | `requestKeyframe(): Promise<void>` | キーフレーム要求（SUBSCRIBE_UPDATE 送信） |
 | `close(): Promise<void>`           | リソース解放                              |
-| `getStats()`                       | 統計情報取得                              |
+| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                      |
 
 ### プロパティ
 
-| プロパティ    | 型                     | 説明               |
-| ------------- | ---------------------- | ------------------ |
-| `state`       | `MediaSubscriberState` | 現在の状態         |
-| `mediaStream` | `MediaStream \| null`  | 再生用 MediaStream |
+| プロパティ    | 型                     | 説明                   |
+| ------------- | ---------------------- | ---------------------- |
+| `state`       | `MediaSubscriberState` | 現在の状態             |
+| `mediaStream` | `MediaStream \| null`  | 再生用 MediaStream     |
+| `catalog`     | `Catalog \| null`      | 受信した最新のカタログ |
 
 ### 状態
 
@@ -229,17 +252,25 @@ created ──start()──► subscribing ──(SUBSCRIBE_OK)──► active
 ### 統計情報
 
 ```typescript
-interface AudioStats {
+interface MediaReceiverStats {
+  audio: AudioReceiverStats | null;
+  video: VideoReceiverStats | null;
+}
+
+interface AudioReceiverStats {
   framesReceived: number;
   bytesReceived: number;
 }
 
-interface VideoStats {
+interface VideoReceiverStats {
   framesReceived: number;
   keyFramesReceived: number;
   bytesReceived: number;
 }
 ```
+
+`AudioStats` / `VideoStats` は送信側 (`MediaStats`) の型である。受信側は
+`AudioReceiverStats` / `VideoReceiverStats` を使う。
 
 ---
 
@@ -270,9 +301,8 @@ const stream = await navigator.mediaDevices.getUserMedia({
   video: true,
 });
 
-// 配信開始
-publisher.setStream(stream);
-await publisher.start();
+// 配信開始 (MediaStream は start() に渡す)
+await publisher.start(stream);
 
 // 統計情報取得
 setInterval(() => {
@@ -316,19 +346,6 @@ await subscriber.stop();
 await subscriber.close();
 ```
 
-### カメラ切り替え
-
-```typescript
-// 配信中にカメラを切り替え
-const newStream = await navigator.mediaDevices.getUserMedia({
-  audio: true,
-  video: { deviceId: { exact: newDeviceId } },
-});
-
-// setStream() で差し替え（内部でトラック更新）
-publisher.setStream(newStream);
-```
-
 ### 一時停止/再開
 
 ```typescript
@@ -344,6 +361,45 @@ publisher.resume();
 ```typescript
 // 品質回復などでキーフレームを要求
 await subscriber.requestKeyframe();
+```
+
+### カタログの受信
+
+```typescript
+// 購読側: コールバックで受け取る
+const subscriber = await createMediaSubscriber(
+  url,
+  { namespace: ["live", "room1"], video: { codec: "h264" } },
+  {
+    onCatalog: (catalog) => {
+      console.log("tracks:", catalog.tracks.length);
+    },
+  },
+);
+
+// 購読側: 最新のカタログをいつでも参照できる
+const latest = subscriber.catalog;
+
+// 配信側: 配信中に生成したカタログを参照できる
+const published = publisher.getCatalog();
+```
+
+### 認可トークン
+
+```typescript
+// SETUP Option (0x03) として送出する
+const publisher = await createMediaPublisher(url, {
+  namespace: ["live", "room1"],
+  video: { codec: "h264" },
+  authorizationToken: { aliasType: 0x03, tokenType: 0n, tokenValue },
+});
+
+// 購読側はカタログの authInfo に応じてトークンを供給する
+const subscriber = await createMediaSubscriber(url, {
+  namespace: ["live", "room1"],
+  video: { codec: "h264" },
+  getAuthorizationToken: (authInfo) => fetchTokenFor(authInfo),
+});
 ```
 
 ---
@@ -392,11 +448,18 @@ MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─
   - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダがワイヤ上 B=0 に抑圧する
   - `isDiscardable` は WebCodecs が破棄可能性情報を提供しないため false 固定
 
-LOC モジュール自体は次も対応するが、高レベル API では未配線:
+送信は `LOC.encodeAudioProperties` / `LOC.encodeVideoProperties` を通す。TIMESTAMP は
+Unix epoch マイクロ秒 (壁時計) で送り、TIMESCALE は付けない (draft-ietf-moq-loc-04 §2.3.1.1)。
+
+LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベル API は送信しない:
 
 - `VIDEO_CONFIG` / `AUDIO_CONFIG`: コーデック description
 - `AUDIO_LEVEL`: オーディオレベル
 - `TIMESCALE`: Timestamp の単位
+
+高レベル API の送信経路は `encodeVideoConfig` / `encodeAudioConfig` を呼ばないため、
+受信側は description (SPS/PPS など) を得られない。デコーダーの設定は
+`VideoDecoder.configure` に渡す `description` をアプリが別経路で用意する必要がある。
 
 ### groupId / objectId 管理
 
