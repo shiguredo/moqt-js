@@ -12,7 +12,9 @@ import {
   encodeAuthorizationToken,
 } from "./authorizationToken";
 
-// varint は 62bit まで表現可能なので、フィールドは 2^53-1 で打ち切り
+// テストの値生成上限。varint は 9 バイトで 2^64-1 まで表現できるが、
+// 生成値を JavaScript の number で厳密に表現できる範囲に収めるため、
+// Number.MAX_SAFE_INTEGER (2^53-1) を上限にする (実装の上限ではない)。
 const MAX_VARINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 const tokenAliasArb = fc.bigInt({ min: 0n, max: MAX_VARINT });

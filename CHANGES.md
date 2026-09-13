@@ -58,6 +58,11 @@
   - draft-ietf-moq-transport-21 §3.4 / §3.4.1 に基づき、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を含む REQUEST_UPDATE を受理して黙殺する挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了する (moqt-js は fill fetch ストリームを開けないため)
   - fill fetch ストリームを開く仕様準拠のピアとは相互運用できない (moqt-js publisher は fill を提供しない)
   - @voluntas
+- [UPDATE] 2^64-1 の重複定数を MAX_VARINT に統一する
+  - `src/session/stream.ts` の `maxObjectId` と `src/dataStream.ts` の `maxObjectId` が `(1n << 64n) - 1n` を個別に定義していたのをやめ、`src/varint.ts` の `MAX_VARINT` を参照する
+  - Object ID / Group ID の上限が varint の最大値と同一である根拠 (draft-ietf-moq-transport-21 §11.3.1 / §11.4.1.1 Table 9) は使用箇所のコメントに残す
+  - `src/message/authorizationToken.prop.ts` のコメントを修正する。varint の上限は 2^64-1 であり「62bit まで表現可能」は誤りで、同ファイルの定数はテストの値生成上限 (Number.MAX_SAFE_INTEGER) である
+  - @voluntas
 - [UPDATE] fill fetch ストリーム経由の受信を統計の独立区分に分ける
   - draft-ietf-moq-transport-21 §3.4 (Fill Semantics) の fill-delivered は通常 FETCH とも subscription-delivered とも別経路だが、従来は fill 経由のオブジェクトも通常 FETCH と同じ統計に計上していた
   - `SessionStatistics` に `objectsReceivedViaFill` / `bytesReceivedViaFill` を追加し、配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる

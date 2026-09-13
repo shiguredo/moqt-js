@@ -9,20 +9,13 @@ import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStre
 import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "../error";
 import { ObjectStatus } from "../message";
+import { MAX_VARINT } from "../varint";
 import type { SubscriberImpl } from "../subscriber";
 import type { GroupOrder } from "../message/types";
 import {
   assertPriorIdGapInObjectProperties,
   readDeliveryTimeoutObjectProperties,
 } from "../properties";
-
-/**
- * Object ID の最大値 (2^64 - 1)
- * draft-ietf-moq-transport-21 §11.3.1:
- * "If the resulting Object ID would be greater than 2^64 - 1,
- *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
- */
-const maxObjectId = (1n << 64n) - 1n;
 
 interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
@@ -215,7 +208,8 @@ export function processSubgroupObjects(
       // draft-ietf-moq-transport-21 §11.3.1:
       // "If the resulting Object ID would be greater than 2^64 - 1,
       //  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
-      if (objectId > maxObjectId) {
+      // 上限は varint の最大値と同一のため MAX_VARINT を使う。
+      if (objectId > MAX_VARINT) {
         throw new ProtocolViolationError(
           `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
         );
