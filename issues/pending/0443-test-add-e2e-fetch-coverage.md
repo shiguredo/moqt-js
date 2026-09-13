@@ -36,6 +36,18 @@ FETCH (draft-20 §10.13 の単一 FETCH。範囲は LOCATION_FILTER パラメー
 - draft-ietf-moq-transport-20 §11.4.4.2 (End of Range)
 - 関連: `issues/closed/0427-bug-data-stream-fin-incomplete-object.md`（Fetch 受信判定を合成 FIN のみで検証した旨を記載。0427 自体は draft-19 引用で書かれているが、§11.4 SHOULD は draft-20 に残存するため有効）
 
-## 解決方法
+## pending にする理由 (2026-09-14)
 
-未着手。
+本 issue は `tests/e2e/` の `window.__moqtE2E` ハーネスと `TEST_MOQT_URI` / `TEST_MOQT_AUTH_TOKEN` の env-gate を前提に `tests/e2e/fetch.spec.ts` を新設する計画だが、その前提が 0599 で削除された。
+
+0599 では `tests/e2e/connect.spec.ts` / `pubsub.spec.ts` が `test.describe.skip` で無条件にスキップされており、その 2 本だけが使うハーネス (`tests/e2e/main.ts` の `window.__moqtE2E` / `helpers.ts` / `index.html` / 専用 Vite アプリ `tests/e2e/package.json` ほか) が実行時に 1 度も呼ばれないことを確認し、到達しないコードとして削除した。CI の e2e job からも `TEST_MOQT_URI` / `TEST_MOQT_AUTH_TOKEN` の注入を外しており、現状これらの環境変数を読むコードはリポジトリに存在しない。
+
+「MOQT サーバーへ接続する e2e を復活させる判断は、接続先を CI で安定して用意できるようになった時点で別途行う」というのが 0599 の結論であり、本 issue はその判断 (実サーバーの用意と CI への組み込み) を待つ。
+
+再開する場合に必要な作業:
+
+1. 実 MOQT サーバーを CI で安定して用意する手段を決める (公開サーバー / コンテナ / モックサーバー)
+2. `tests/e2e/` に接続用ハーネスを再作成する (0599 で削除した `main.ts` / `helpers.ts` / 専用 Vite アプリのいずれかを、今度は CI で実際に走る形で)
+3. そのうえで本 issue の `fetch.spec.ts` を追加する
+
+サーバーを用意できない限り FETCH の実ワイヤ検証はできないため、pending とする。
