@@ -2,7 +2,7 @@
 
 - Created: 2026-08-22
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/refactor-resolve-filter-prop
 - Polished: {YYYY-MM-DD}
 
@@ -35,4 +35,42 @@
 
 ## 解決方法
 
-未着手。
+`src/filter.prop.ts` を新設し、`resolveFilter` の検証を PBT に移した。issue の参照は draft-20 の節番号だが、現在の一次資料 draft-ietf-moq-transport-21 では §3.3.1 (Location Filters) / §9.20.10 (LOCATION FILTER Parameter) に対応するため、コメントは draft-21 の節番号に合わせている。
+
+### 追加したプロパティ (10 件)
+
+- 未指定と reset は LARGEST_OBJECT に依存せず undefined になる
+- 絶対系 (2 / 3 / 4 フィールド) は LARGEST_OBJECT に依存しない (未配信 / 配信済み / 別の Location で同じ結果)
+- 2 フィールドは絶対 Location を start にし終端を持たない
+- 3 フィールドの End Group は StartGroup + EndGroupDelta
+- 4 フィールドは End Object を保持する
+- 1 フィールドは Next Group 基準で Object 0 から開始し、負値は 0、2^64-1 超過は 2^64-1 にクランプされる
+- 1 フィールドで未配信時は {0, 0} になる
+- 2 フィールド 0:0 は LARGEST_OBJECT の次 Object から開始する
+- 2 フィールド 0:0 で未配信時は {0, 0} になる
+- 任意の Filter で解決結果の Start が 0〜2^64-1 に収まり、種別に対応する終端だけを持つ
+
+### arbitrary の設計
+
+一様乱数の `fc.bigInt({ min: 0n, max: MAX_VARINT })` では 2^64-1 がほぼ生成されず、クランプ分岐を通らない。また {0, 0} は「配信済み」の境界であり、未配信 (null) との判定を書き分ける必要がある。そのため `boundaryLocationArb` で {0, 0} / {0, MAX_VARINT} / {MAX_VARINT, 0} / {MAX_VARINT, MAX_VARINT} / {MAX_VARINT - 1, 0} を定数として混ぜている。
+
+Filter 側は型を絞った arbitrary (`AbsoluteStartFilter` / `AbsoluteRangeFilter` / `AbsoluteRangeWithEndObjectFilter` / `RelativeGroupFilter`) を種別ごとに用意し、`filter.startGroup` などへのアクセスを型安全にした。
+
+### 単体テストの削除
+
+`resolveFilter` は例外を投げず (クランプで吸収する)、境界値も上記 arbitrary で到達するため、`src/filter.test.ts` の `resolveFilter` 固定値単体テスト 14 件を削除した。`objectMatchesFilter` / `rangeFiltersMatch` / `trackPropertyFiltersMatch` のテストは対象外として残している。
+
+### 退行検出の裏付け
+
+次の 3 退行を実際に注入し、PBT が検出することを実測した。注入は元に戻している。
+
+- 1 フィールドで未配信時に {0, 1} を返す (未配信フォールバックへの +1 適用) → `1 フィールドで未配信時は {0, 0} になる` が失敗
+- 2 フィールド 0:0 で Largest Object の +1 を落とす → `2 フィールド 0:0 は LARGEST_OBJECT の次 Object から開始する` が失敗
+- 1 フィールドの未配信判定を削除する → `1 フィールドで未配信時は {0, 0} になる` が失敗
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 71 ファイル / 2,136 テスト全通過 (resolveFilter 単体 14 件削除 + PBT 10 件追加)
+- `src/filter.prop.ts` 単体で `src/filter.ts` の `resolveFilter` が全行・全分岐カバーされることを確認した
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した
