@@ -318,7 +318,7 @@ export interface BidiSessionInternal {
    * @param requestId 検証対象の受信 Request ID
    * @returns 検証に合格した場合は true、違反でセッションを閉じた場合は false
    */
-  validateIncomingRequestId(requestId: bigint): boolean;
+  validateIncomingRequestId(requestId: bigint): SessionError | null;
 }
 
 // ============================================================================
@@ -333,27 +333,24 @@ export interface BidiSessionInternal {
  *  if it receives more than one GOAWAY on the control stream or on a single
  *  request stream."
  *
- * 重複なし（初回）の場合は seenSet に requestId を追加して true を返す。
- * 重複の場合は closeSession を PROTOCOL_VIOLATION で呼び false を返す。
+ * 重複なし（初回）の場合は seenSet に requestId を追加して null を返す。
+ * 重複の場合は PROTOCOL_VIOLATION の SessionError を返す。セッションを閉じるのは
+ * 呼び出し側の責務である (他の検証関数と同じエラー返却型)。
  *
- * @returns 重複なしなら true、重複なら false
+ * @returns 重複なしなら null、重複なら SessionError
  */
 export function validateNoDuplicateGoawayOnRequestStream(
   requestId: bigint,
   seenSet: Set<bigint>,
-  closeSession: (error: SessionError) => void,
-): boolean {
+): SessionError | null {
   if (seenSet.has(requestId)) {
-    closeSession(
-      new SessionError(
-        "received duplicate goaway on request stream",
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      ),
+    return new SessionError(
+      "received duplicate goaway on request stream",
+      SessionErrorCode.PROTOCOL_VIOLATION,
     );
-    return false;
   }
   seenSet.add(requestId);
-  return true;
+  return null;
 }
 
 /**
@@ -500,14 +497,13 @@ export async function bidiContinueReadingForDuplicateGoaway(
       }
       // 1 通目は呼び出し元が既に処理済みで seenSet に登録されている。
       // 2 通目は validateNoDuplicateGoawayOnRequestStream が
-      // PROTOCOL_VIOLATION でセッションを閉じ false を返す。
-      if (
-        !validateNoDuplicateGoawayOnRequestStream(
-          requestId,
-          session.goawayReceivedOnRequestStreams,
-          (error) => session.closeWithError(error),
-        )
-      ) {
+      // PROTOCOL_VIOLATION の SessionError を返すため、ここで閉じる。
+      const goawayError = validateNoDuplicateGoawayOnRequestStream(
+        requestId,
+        session.goawayReceivedOnRequestStreams,
+      );
+      if (goawayError !== null) {
+        session.closeWithError(goawayError);
         return true;
       }
     }
@@ -1689,7 +1685,9 @@ export async function bidiHandlePublishRequestUpdate(
   // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
   // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
   // §6.4.2.1 MUST を §9.4 MAY 適用 (GOAWAY 拒否) より先に行う。
-  if (!session.validateIncomingRequestId(decoded.requestId)) {
+  const requestIdError = session.validateIncomingRequestId(decoded.requestId);
+  if (requestIdError !== null) {
+    session.closeWithError(requestIdError);
     return;
   }
 
@@ -2189,7 +2187,9 @@ export async function bidiReadRequestStreamMessages(
             // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
             // §6.4.2.1 MUST を GOAWAY 拒否 (§9.4 MAY) と想定外更新 (§9.5) の
             // PROTOCOL_VIOLATION より先に行う。
-            if (!session.validateIncomingRequestId(decoded.requestId)) {
+            const requestIdError = session.validateIncomingRequestId(decoded.requestId);
+            if (requestIdError !== null) {
+              session.closeWithError(requestIdError);
               return;
             }
 
@@ -2338,13 +2338,12 @@ export async function bidiReadRequestStreamMessages(
             // "A GOAWAY MAY also be sent on a request stream to initiate
             //  migration of that individual request."
             // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
-            if (
-              !validateNoDuplicateGoawayOnRequestStream(
-                requestId,
-                session.goawayReceivedOnRequestStreams,
-                (error) => session.closeWithError(error),
-              )
-            ) {
+            const goawayError = validateNoDuplicateGoawayOnRequestStream(
+              requestId,
+              session.goawayReceivedOnRequestStreams,
+            );
+            if (goawayError !== null) {
+              session.closeWithError(goawayError);
               return;
             }
             const decoded = decodeGoawayPayload(msg.payload);

@@ -208,9 +208,7 @@ function createUnsupportedRequestTestContext(receivedRequestIds = new Set<bigint
       closed.error = error;
     },
     validateIncomingRequestId: (requestId: bigint) =>
-      incomingValidateRequestId(requestId, receivedRequestIds, (error) => {
-        closed.error = error;
-      }),
+      incomingValidateRequestId(requestId, receivedRequestIds),
   } as unknown as SessionInternal;
   return { session, receivedRequestIds, closed };
 }
@@ -350,11 +348,7 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
 test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重複検出して閉じる", async () => {
   // PUBLISH 経路相当として同一検証関数で Request ID を消費する
   const receivedRequestIds = new Set<bigint>();
-  assert.isTrue(
-    incomingValidateRequestId(1n, receivedRequestIds, () => {
-      assert.fail("1 件目の消費で閉じてはならない");
-    }),
-  );
+  assert.isNull(incomingValidateRequestId(1n, receivedRequestIds));
   const ctx = createUnsupportedRequestTestContext(receivedRequestIds);
   const stream = {
     readable: new ReadableStream<Uint8Array>(),
@@ -493,11 +487,8 @@ test("incomingValidateRequestId: 偶数 Request ID で INVALID_REQUEST_ID", () =
   const received = new Set<bigint>();
   let closedWithError: SessionError | undefined;
 
-  const result = incomingValidateRequestId(2n, received, (error) => {
-    closedWithError = error;
-  });
+  closedWithError = incomingValidateRequestId(2n, received) ?? undefined;
 
-  assert.isFalse(result);
   assert.isDefined(closedWithError);
   assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
   assert.isTrue(closedWithError!.message.includes("parity"));
@@ -513,11 +504,8 @@ test("incomingValidateRequestId: 奇数 Request ID は通過して Set に記録
   const received = new Set<bigint>();
   let closedWithError: SessionError | undefined;
 
-  const result = incomingValidateRequestId(1n, received, (error) => {
-    closedWithError = error;
-  });
+  closedWithError = incomingValidateRequestId(1n, received) ?? undefined;
 
-  assert.isTrue(result);
   assert.isUndefined(closedWithError);
   assert.isTrue(received.has(1n));
 });
@@ -530,11 +518,8 @@ test("incomingValidateRequestId: 重複 Request ID で INVALID_REQUEST_ID", () =
   const received = new Set<bigint>([1n]);
   let closedWithError: SessionError | undefined;
 
-  const result = incomingValidateRequestId(1n, received, (error) => {
-    closedWithError = error;
-  });
+  closedWithError = incomingValidateRequestId(1n, received) ?? undefined;
 
-  assert.isFalse(result);
   assert.isDefined(closedWithError);
   assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
   assert.isTrue(closedWithError!.message.includes("duplicate"));
@@ -551,16 +536,11 @@ test("incomingValidateRequestId: 検証通過後に Set へ add され再送が�
   let closedWithError: SessionError | undefined;
 
   // 1 回目: 検証通過 + add
-  const first = incomingValidateRequestId(1n, received, (error) => {
-    closedWithError = error;
-  });
-  assert.isTrue(first);
+  const first = incomingValidateRequestId(1n, received);
+  assert.isNull(first);
 
   // 2 回目: 同一 ID は重複として検出される
-  const second = incomingValidateRequestId(1n, received, (error) => {
-    closedWithError = error;
-  });
-  assert.isFalse(second);
+  closedWithError = incomingValidateRequestId(1n, received) ?? undefined;
   assert.isDefined(closedWithError);
   assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
 });
@@ -571,18 +551,12 @@ test("incomingValidateRequestId: 検証通過後に Set へ add され再送が�
  */
 test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", () => {
   const received = new Set<bigint>();
-  let closedWithError: SessionError | undefined;
 
-  const first = incomingValidateRequestId(1n, received, (error) => {
-    closedWithError = error;
-  });
-  const second = incomingValidateRequestId(3n, received, (error) => {
-    closedWithError = error;
-  });
+  const first = incomingValidateRequestId(1n, received);
+  const second = incomingValidateRequestId(3n, received);
 
-  assert.isTrue(first);
-  assert.isTrue(second);
-  assert.isUndefined(closedWithError);
+  assert.isNull(first);
+  assert.isNull(second);
   assert.deepEqual(
     [...received].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     [1n, 3n],

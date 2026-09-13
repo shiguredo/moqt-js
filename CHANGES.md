@@ -1352,6 +1352,11 @@
 
 ### misc
 
+- [UPDATE] 残る検証関数のコールバック API をエラー返却型に統一する
+  - `validateNoDuplicateGoawayOnRequestStream` (`src/session/bidi.ts`) と `incomingValidateRequestId` (`src/session/incoming.ts`) が `closeSession` コールバックを受け取り boolean を返していたのをやめ、`SessionError | null` を返すようにする
+  - セッションを閉じるのは呼び出し側の責務にし、`validateParameterScope` / `validateRequestOkNoTrackProperties` / `namespaceValidateFirstMessage` と同じ形に揃える
+  - `BidiSessionInternal.validateIncomingRequestId` と `SessionImpl` のメソッド、テストのスタブを追随させる。検証と `seenSet.add` / `receivedRequestIds.add` を同一同期ブロックで行う契約は変えない
+  - 検証失敗時の close 挙動と処理順序は変えない
 - [UPDATE] Full Track Name の比較キーを branded type にする
   - `fullTrackNameKey` が `string` を返していたため、生の Full Track Name (`"/"` 連結文字列) を比較キーとして渡してもコンパイルが通り、cross-cancel が無言で空振りし得た
   - `src/fullTrackName.ts` に `FullTrackNameKey` (`string & { readonly __brand: "FullTrackNameKey" }`) を追加し、`fullTrackNameKey` の戻り値・`SubscriberImpl.getFullTrackNameKey` / `FetcherImpl.getFullTrackNameKey` の戻り値・`PendingTrackStatus.trackKey`・`cancelMalformedTrackPeers` の引数を同じ型に揃える

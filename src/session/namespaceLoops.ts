@@ -62,13 +62,12 @@ function namespaceHandleGoaway(
   callbacks: { goaway?: (uri: string) => void } | undefined,
 ): string | null {
   // 重複 GOAWAY チェック
-  if (
-    !bidi.validateNoDuplicateGoawayOnRequestStream(
-      requestId,
-      session.goawayReceivedOnRequestStreams,
-      (error) => session.closeWithError(error),
-    )
-  ) {
+  const goawayError = bidi.validateNoDuplicateGoawayOnRequestStream(
+    requestId,
+    session.goawayReceivedOnRequestStreams,
+  );
+  if (goawayError !== null) {
+    session.closeWithError(goawayError);
     return null;
   }
   const decodedMsg = decodeGoawayPayload(messagePayload);

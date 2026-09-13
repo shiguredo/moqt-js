@@ -150,24 +150,23 @@ export async function incomingSendRequestErrorAndClose(
  * セッション内での再出現の禁止であり、Map エントリの削除後も検出できる
  * 必要がある)。
  *
- * @returns 検証に合格した場合は true、違反で closeSession を呼んだ場合は false
+ * 違反時は INVALID_REQUEST_ID の SessionError を返す。セッションを閉じるのは
+ * 呼び出し側の責務である (他の検証関数と同じエラー返却型)。
+ *
+ * @returns 検証に合格した場合は null、違反の場合は SessionError
  */
 export function incomingValidateRequestId(
   requestId: bigint,
   receivedRequestIds: Set<bigint>,
-  closeSession: (error: SessionError) => void,
-): boolean {
+): SessionError | null {
   // draft-ietf-moq-transport-21 §6.4.2.1:
   // moqt-js はクライアントロールのため、受信 Request ID は奇数 (サーバー発) が期待値。
   // LSB が 0 (偶数) はパリティ違反。
   if ((requestId & 1n) === 0n) {
-    closeSession(
-      new SessionError(
-        `invalid request id parity: ${requestId}, expected odd (server-generated)`,
-        SessionErrorCode.INVALID_REQUEST_ID,
-      ),
+    return new SessionError(
+      `invalid request id parity: ${requestId}, expected odd (server-generated)`,
+      SessionErrorCode.INVALID_REQUEST_ID,
     );
-    return false;
   }
 
   // draft-ietf-moq-transport-21 §6.4.2.1:
@@ -177,13 +176,13 @@ export function incomingValidateRequestId(
   // FETCH, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE,
   // REQUEST_UPDATE, and TRACK_STATUS message consumes a Request ID」)。
   if (receivedRequestIds.has(requestId)) {
-    closeSession(
-      new SessionError(`duplicate request id: ${requestId}`, SessionErrorCode.INVALID_REQUEST_ID),
+    return new SessionError(
+      `duplicate request id: ${requestId}`,
+      SessionErrorCode.INVALID_REQUEST_ID,
     );
-    return false;
   }
   receivedRequestIds.add(requestId);
-  return true;
+  return null;
 }
 
 /**
@@ -233,7 +232,10 @@ export async function incomingHandleFirstBidiMessage(
       );
       return true;
     }
-    if (!session.validateIncomingRequestId(requestId)) {
+    const requestIdError = session.validateIncomingRequestId(requestId);
+    if (requestIdError !== null) {
+      // 検証違反はセッションを閉じて打ち切る (NOT_SUPPORTED 応答は送らない)
+      session.closeWithError(requestIdError);
       return true;
     }
     // draft-ietf-moq-transport-21 §1.5 (Extensibility):
