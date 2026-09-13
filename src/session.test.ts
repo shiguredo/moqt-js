@@ -4972,7 +4972,12 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
  * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
  */
 test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
-  const session = createSessionImpl();
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
   const sessionInternal = session as unknown as {
     sessionState: SessionState;
   };
@@ -4999,6 +5004,13 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
   );
 
   assert.equal(sessionInternal.sessionState, "closed");
+  // スコープ違反の具体エラーで閉じていることが code とメッセージから分かる
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(
+    errors[0].message.includes("parameter type 0x20 not allowed in PUBLISH_STATE_NOTIFY"),
+  );
 });
 
 /**
@@ -5265,7 +5277,12 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
     [{ type: MessageParameterType.FILL_PARAMETERS, value: new Uint8Array([0x00]) }],
   ];
   for (const parameters of prohibited) {
-    const session = createSessionImpl();
+    const errors: Error[] = [];
+    const session = createSessionImpl({
+      error: (error) => {
+        errors.push(error);
+      },
+    });
     const sessionInternal = session as unknown as {
       sessionState: SessionState;
     };
@@ -5284,6 +5301,11 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
     );
 
     assert.equal(sessionInternal.sessionState, "closed");
+    // スコープ違反の具体エラーで閉じていることが code とメッセージから分かる
+    assert.equal(errors.length, 1);
+    assert.instanceOf(errors[0], SessionError);
+    assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.isTrue(errors[0].message.includes("not allowed in PUBLISH"));
   }
 });
 
