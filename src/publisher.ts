@@ -213,8 +213,6 @@ function validateSendStatusPayload(params: SendObjectParams): ProtocolViolationE
 export class PublisherImpl implements Publisher {
   private publisherState: PublisherState = "active";
   private publisherForwardState = true;
-  private readonly publisherNamespace: string[];
-  private readonly publisherTrackName: string;
   private readonly errorCallback?: (error: Error) => void;
   private readonly forwardStateChangeCallback?: (forward: boolean) => void;
   private readonly requestId: bigint;
@@ -267,15 +265,15 @@ export class PublisherImpl implements Publisher {
   private donePromise: Promise<void> | null = null;
 
   constructor(
-    namespace: string[],
-    trackName: string,
+    // namespace / trackName は PublisherImpl では使用しない。
+    // 呼び出し側の引数順を変えないため引数自体は残す。
+    _namespace: string[],
+    _trackName: string,
     requestId: bigint,
     trackAlias: bigint,
     onError?: (error: Error) => void,
     onForwardStateChange?: (forward: boolean) => void,
   ) {
-    this.publisherNamespace = namespace;
-    this.publisherTrackName = trackName;
     this.requestId = requestId;
     this.trackAlias = trackAlias;
     this.errorCallback = onError;
@@ -288,14 +286,6 @@ export class PublisherImpl implements Publisher {
 
   get forwardState(): boolean {
     return this.publisherForwardState;
-  }
-
-  get namespace(): string[] {
-    return this.publisherNamespace;
-  }
-
-  get trackName(): string {
-    return this.publisherTrackName;
   }
 
   getRequestId(): bigint {

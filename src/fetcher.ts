@@ -92,14 +92,6 @@ export class FetcherImpl implements Fetcher {
     return this.fetcherState;
   }
 
-  get namespace(): string[] {
-    return this.fetcherNamespace;
-  }
-
-  get trackName(): string {
-    return this.fetcherTrackName;
-  }
-
   /**
    * Full Track Name の比較キーを取得する（Track 同一性判定用）
    *
