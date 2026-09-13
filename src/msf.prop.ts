@@ -35,7 +35,6 @@ import {
   resolveCatalogVariables,
   parseMsfFragmentValue,
 } from "./msf";
-import { assertRejectsWithMessage } from "./testSupport/helpers";
 
 // =============================================================================
 // Arbitrary 定義 (draft-01 reserved 値を網羅)
@@ -371,26 +370,23 @@ test("Catalog: decode 後の version は常に draft-01", () => {
 test("Media Timeline: ラウンドトリップで同一値に戻る", async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(mediaTimelineEntryArb, { maxLength: 100 }), async (entries) => {
-      const encoded = await encodeMediaTimeline(entries);
-      const decoded = await decodeMediaTimeline(encoded);
+      const encoded = encodeMediaTimeline(entries);
+      const decoded = decodeMediaTimeline(encoded);
       assert.deepStrictEqual(decoded, entries);
     }),
   );
 });
 
-test("Media Timeline: 空配列 round-trip", async () => {
+test("Media Timeline: 空配列 round-trip", () => {
   const entries: MediaTimelineEntry[] = [];
-  const encoded = await encodeMediaTimeline(entries);
-  const decoded = await decodeMediaTimeline(encoded);
+  const encoded = encodeMediaTimeline(entries);
+  const decoded = decodeMediaTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Media Timeline: 不正な形式は reject", async () => {
+test("Media Timeline: 不正な形式は throw", () => {
   const invalid = new TextEncoder().encode('{"not": "an array"}');
-  await assertRejectsWithMessage(
-    () => decodeMediaTimeline(invalid),
-    /invalid media timeline format/,
-  );
+  assert.throws(() => decodeMediaTimeline(invalid), /invalid media timeline format/);
 });
 
 // =============================================================================
@@ -400,8 +396,8 @@ test("Media Timeline: 不正な形式は reject", async () => {
 test("Event Timeline: ラウンドトリップで同一値に戻る", async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(eventTimelineEntryArb, { maxLength: 100 }), async (entries) => {
-      const encoded = await encodeEventTimeline(entries);
-      const decoded = await decodeEventTimeline(encoded);
+      const encoded = encodeEventTimeline(entries);
+      const decoded = decodeEventTimeline(encoded);
 
       assert.strictEqual(decoded.length, entries.length);
       for (let i = 0; i < entries.length; i++) {
@@ -421,19 +417,16 @@ test("Event Timeline: ラウンドトリップで同一値に戻る", async () =
   );
 });
 
-test("Event Timeline: 空配列 round-trip", async () => {
+test("Event Timeline: 空配列 round-trip", () => {
   const entries: EventTimelineEntry[] = [];
-  const encoded = await encodeEventTimeline(entries);
-  const decoded = await decodeEventTimeline(encoded);
+  const encoded = encodeEventTimeline(entries);
+  const decoded = decodeEventTimeline(encoded);
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: data 欠落は reject", async () => {
+test("Event Timeline: data 欠落は throw", () => {
   const invalid = new TextEncoder().encode('[{"t": 123}]');
-  await assertRejectsWithMessage(
-    () => decodeEventTimeline(invalid),
-    /invalid event timeline entry/,
-  );
+  assert.throws(() => decodeEventTimeline(invalid), /invalid event timeline entry/);
 });
 
 // =============================================================================

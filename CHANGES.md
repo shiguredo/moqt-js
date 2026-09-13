@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] Timeline 系の 4 関数を同期関数にする
+  - `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline` は内部に await を持たない (無圧縮 JSON の変換と検証のみ) ため `async` を外し、戻り値を `Promise<T>` から `T` に変更する
+  - 不正な入力は Promise の reject ではなく同期の throw になる
+  - `await` を付けた呼び出しはそのまま動作する。`.then()` / `.catch()` で受けている呼び出しは動作しない
+  - @voluntas
 - [CHANGE] TRACK_NAMESPACE_PREFIX の Value から外側 Length を削除する
   - draft-ietf-moq-transport-20 §10.2.20 が参照する §2.4.1 の Track Namespace エンコーディング (Number of Track Namespace Fields + 各フィールドの Length + Value) は自己区切りのため、外側 Length を付与せず Value をそのまま書く
   - 旧版 moqt-js が送る外側 Length 付きの TRACK_NAMESPACE_PREFIX とは相互運用できない
@@ -956,6 +961,11 @@
 
 ### misc
 
+- [UPDATE] msf モジュールを機能単位に分割する
+  - `src/msf.ts` (3,016 行) を `src/msf/` の version / types / catalogCodec / catalogValidation / catalogTrackValidation / catalogDelta / timeline / variables / fragment / c4m / tracks / json に分割し、`src/msf.ts` は既存の import パスを維持する再輸出のみにする (99 行)
+  - 自明なラッパーだった `namespaceMatches` を呼び出し側の比較にインライン化する
+  - 公開 API の名前と挙動に変更なし
+  - @voluntas
 - [UPDATE] dataStream と message/parameter を機能単位のモジュールに分割する
   - `src/dataStream.ts` (2,025 行) を `src/dataStream/` の common / subgroup / datagram / fetch に、`src/message/parameter.ts` (1,734 行) を `src/message/parameter/` の common / kvp / messageParameter / locationFilter / rangeFilter / trackNamespace に分割する
   - 元の 2 モジュールは既存の import パスを維持するための再輸出のみにし、公開 API と挙動は変更しない
