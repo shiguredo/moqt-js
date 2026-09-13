@@ -167,6 +167,26 @@ export interface FillRequestOptions {
 export type SessionState = "connected" | "closed";
 
 /**
+ * 制御メッセージの受信タイムアウト既定値 (ミリ秒)
+ *
+ * draft-ietf-moq-transport-21 §12.2:
+ * CONTROL_MESSAGE_TIMEOUT (0x11) は「ピアが制御メッセージへの応答に時間を
+ * かけすぎた」ことを示す。制御メッセージは最大 65,535 バイトであり、
+ * 半端なメッセージを保持したまま 10 秒待たされるのは異常である。
+ */
+const DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS = 10_000;
+
+/**
+ * データストリームの受信タイムアウト既定値 (ミリ秒)
+ *
+ * draft-ietf-moq-transport-21 §12.2:
+ * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
+ * データを送るのに時間をかけすぎた」ことを示す。Subgroup / Object ヘッダーの
+ * 途中で止まったまま 30 秒経過したストリームは死んでいるものとして扱う。
+ */
+const DEFAULT_DATA_STREAM_TIMEOUT_MS = 30_000;
+
+/**
  * MOQT プロトコルメッセージをログ出力するためのデバッグメッセージ
  */
 export interface DebugMessage {
@@ -275,6 +295,26 @@ export interface ConnectOptions {
    * 指定しなかった field は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` の値が使われる。
    */
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+
+  /**
+   * 制御メッセージの受信タイムアウト (ミリ秒)
+   *
+   * draft-ietf-moq-transport-21 §12.2 の CONTROL_MESSAGE_TIMEOUT (0x11) に対応する。
+   * 制御ストリームで半端なメッセージを保持したままこの時間が経過したら、
+   * CONTROL_MESSAGE_TIMEOUT でセッションを閉じ、ストリームを打ち切る。
+   * 0 以下を指定するとタイムアウトしない (既定は 10,000)。
+   */
+  controlMessageTimeoutMs?: number;
+
+  /**
+   * データストリームの受信タイムアウト (ミリ秒)
+   *
+   * draft-ietf-moq-transport-21 §12.2 の DATA_STREAM_TIMEOUT (0x12) に対応する。
+   * Subgroup / Fetch のヘッダーまたは Object の途中バイトを保持したままこの
+   * 時間が経過したら、DATA_STREAM_TIMEOUT でセッションを閉じ、当該ストリームを
+   * 打ち切る。0 以下を指定するとタイムアウトしない (既定は 30,000)。
+   */
+  dataStreamTimeoutMs?: number;
 
   /**
    * MOQT_IMPLEMENTATION Setup Option (Option Type 0x07) の送信制御
@@ -1563,6 +1603,12 @@ export class SessionImpl implements Session {
    */
   private receivedEndOfGroupFinalObjectIds = new Map<string, bigint>();
 
+  // draft-ietf-moq-transport-21 §12.2:
+  // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
+  // 0 以下はタイムアウトしない。
+  private controlMessageTimeoutMs = DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
+  private dataStreamTimeoutMs = DEFAULT_DATA_STREAM_TIMEOUT_MS;
+
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
   private statsObjectsReceivedViaFill = 0;
@@ -1678,6 +1724,16 @@ export class SessionImpl implements Session {
      * 省略時は送信しない (既定値 0 = Range Filter 受信拒否)。
      */
     maxFilterRanges?: number;
+    /**
+     * 制御メッセージの受信タイムアウト (§12.2 CONTROL_MESSAGE_TIMEOUT)。
+     * 0 以下でタイムアウトしない。
+     */
+    controlMessageTimeoutMs?: number;
+    /**
+     * データストリームの受信タイムアウト (§12.2 DATA_STREAM_TIMEOUT)。
+     * 0 以下でタイムアウトしない。
+     */
+    dataStreamTimeoutMs?: number;
   }): Promise<void> {
     // draft-ietf-moq-transport-21 Section 1.5 (Extensibility):
     // 制御ストリームは単方向ストリームのペアに変更された。
@@ -1707,6 +1763,14 @@ export class SessionImpl implements Session {
     // 自 endpoint が広告する上限を保持し、受信 Range Filter の検証に使う。
     // 未広告 (undefined) の既定値は 0（Range Filter 受信拒否）。
     this.localMaxFilterRanges = options?.maxFilterRanges ?? 0;
+    // draft-ietf-moq-transport-21 §12.2:
+    // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
+    this.applyTimeoutOptions(options);
+    // draft-ietf-moq-transport-21 §12.2:
+    // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
+    this.controlMessageTimeoutMs =
+      options?.controlMessageTimeoutMs ?? DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
+    this.dataStreamTimeoutMs = options?.dataStreamTimeoutMs ?? DEFAULT_DATA_STREAM_TIMEOUT_MS;
     // draft-ietf-moq-transport-21 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
     // 自 endpoint が広告する上限を保持し、受信 REGISTER の上限判定に使う。
     // 未広告 (undefined) の既定値は 0（Alias の使用禁止）。
@@ -3520,11 +3584,107 @@ export class SessionImpl implements Session {
     );
   }
 
+  /**
+   * データストリームの受信待ちタイマーを作る
+   *
+   * draft-ietf-moq-transport-21 §12.2:
+   * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
+   * データを送るのに時間をかけすぎた」ことを示す。半端なヘッダー / Object を
+   * 保持したまま待ち続けるピアにメモリとコネクションを占有され続けないよう、
+   * 途中バイトが残っている間だけ期限を張る。
+   *
+   * 期限切れではセッションを閉じたうえで reader を cancel する。セッション終了で
+   * ストリームの読み取りが終わらない実装でも読み取りループが終わるようにするため
+   * である。
+   *
+   * @param reader - 対象ストリームの reader
+   * @param bufferedBytes - エラーメッセージに載せる残バッファ長
+   */
+  private createDataStreamTimeout(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    bufferedBytes: () => number,
+  ): { arm: () => void; clear: () => void } {
+    let handle: ReturnType<typeof setTimeout> | null = null;
+    const clear = (): void => {
+      if (handle !== null) {
+        clearTimeout(handle);
+        handle = null;
+      }
+    };
+    const arm = (): void => {
+      clear();
+      if (this.dataStreamTimeoutMs <= 0) {
+        return;
+      }
+      handle = setTimeout(() => {
+        handle = null;
+        if (this.sessionState === "connected") {
+          this.closeWithError(
+            new SessionError(
+              `data stream timed out waiting for the rest of a header or object: ${bufferedBytes()} bytes buffered`,
+              SessionErrorCode.DATA_STREAM_TIMEOUT,
+            ),
+          );
+        }
+        void reader.cancel("data stream timeout").catch(() => {});
+      }, this.dataStreamTimeoutMs);
+    };
+    return { arm, clear };
+  }
+
+  /**
+   * 受信タイムアウトの設定を反映する
+   *
+   * draft-ietf-moq-transport-21 §12.2:
+   * CONTROL_MESSAGE_TIMEOUT (0x11) / DATA_STREAM_TIMEOUT (0x12) は、ピアが
+   * 制御メッセージへの応答・データストリームの送信に時間をかけすぎたことを
+   * 示すコードである。半端なメッセージや Object を保持したまま待ち続ける
+   * ピアにメモリとコネクションを占有され続けないよう、期限を設ける。
+   * 0 以下を指定するとタイムアウトしない。
+   */
+  private applyTimeoutOptions(options?: {
+    controlMessageTimeoutMs?: number;
+    dataStreamTimeoutMs?: number;
+  }): void {
+    this.controlMessageTimeoutMs =
+      options?.controlMessageTimeoutMs ?? DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
+    this.dataStreamTimeoutMs = options?.dataStreamTimeoutMs ?? DEFAULT_DATA_STREAM_TIMEOUT_MS;
+  }
+
   private startControlMessageLoop(): void {
     void (async () => {
       if (!this.controlReceiveStream || !this.controlReader) return;
 
       const reader = this.controlReceiveStream.getReader();
+
+      // draft-ietf-moq-transport-21 §12.2 (CONTROL_MESSAGE_TIMEOUT):
+      // 半端な制御メッセージを保持したまま待ち続けるピアを期限で打ち切る。
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      const clearTimeoutHandle = (): void => {
+        if (timeoutHandle !== null) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+      };
+      const armTimeout = (): void => {
+        clearTimeoutHandle();
+        if (this.controlMessageTimeoutMs <= 0) {
+          return;
+        }
+        timeoutHandle = setTimeout(() => {
+          timeoutHandle = null;
+          if (this.sessionState === "connected") {
+            this.closeWithError(
+              new SessionError(
+                `control message timed out: ${this.controlReader?.bufferedBytes ?? 0} bytes buffered`,
+                SessionErrorCode.CONTROL_MESSAGE_TIMEOUT,
+              ),
+            );
+          }
+          // セッション終了でストリームの読み取りが終わらない実装でもループを終わらせる
+          void reader.cancel("control message timeout").catch(() => {});
+        }, this.controlMessageTimeoutMs);
+      };
 
       try {
         while (this.sessionState === "connected") {
@@ -3537,6 +3697,12 @@ export class SessionImpl implements Session {
           const messages = this.controlReader.feed(value);
           for (const msg of messages) {
             this.handleControlMessage(msg.type, msg.payload);
+          }
+          // 半端なメッセージが残っている間だけ期限を張る
+          if (this.controlReader.hasBufferedBytes) {
+            armTimeout();
+          } else {
+            clearTimeoutHandle();
           }
         }
       } catch (err) {
@@ -3554,6 +3720,7 @@ export class SessionImpl implements Session {
           this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
         }
       } finally {
+        clearTimeoutHandle();
         reader.releaseLock();
       }
     })();
@@ -4862,8 +5029,26 @@ export class SessionImpl implements Session {
     let fetchContext: import("./dataStream").FetchObjectContext | null = null;
     let isFirstFetchObject = true;
 
+    // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+    // ヘッダーまたは Object の途中バイトを保持したまま待ち続けるピアを期限で
+    // 打ち切る。バッファが空になった時点で期限を解除する。
+    const timeout = this.createDataStreamTimeout(reader, () => buffer.byteLength);
+    const armTimeout = timeout.arm;
+    const clearTimeoutHandle = timeout.clear;
+
     try {
       while (true) {
+        // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+        // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
+        // バッファを消費しきったら解除する。ループ先頭で行うのは、
+        // データ不足で continue する経路 (半端なヘッダー / Object) でも
+        // 必ず期限が張られるようにするためである。
+        if (buffer.byteLength > 0) {
+          armTimeout();
+        } else {
+          clearTimeoutHandle();
+        }
+
         const { value, done } = await reader.read();
 
         if (value) {
@@ -5067,6 +5252,7 @@ export class SessionImpl implements Session {
     } catch (err) {
       await this.handleIncomingStreamError(err, reader, fetchHeader, fetcher);
     } finally {
+      clearTimeoutHandle();
       this.statsSubscriberStreamsActive--;
       reader.releaseLock();
     }
@@ -5567,53 +5753,65 @@ export class SessionImpl implements Session {
 
     // subscriber mode: 通常の Subgroup ストリーム処理ループ
     // pendingRead が pending mode から持ち越されている場合はそれを最初の read として消費する
-    while (true) {
-      let result: ReadableStreamReadResult<Uint8Array>;
-      if (pendingRead !== null) {
-        result = await pendingRead;
-        pendingRead = null;
-      } else {
-        result = await reader.read();
-      }
+    // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+    // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
+    const timeout = this.createDataStreamTimeout(reader, () => buffer.byteLength);
+    try {
+      while (true) {
+        if (buffer.byteLength > 0) {
+          timeout.arm();
+        } else {
+          timeout.clear();
+        }
+        let result: ReadableStreamReadResult<Uint8Array>;
+        if (pendingRead !== null) {
+          result = await pendingRead;
+          pendingRead = null;
+        } else {
+          result = await reader.read();
+        }
 
-      if (result.value && result.value.byteLength > 0) {
-        const next = new Uint8Array(buffer.byteLength + result.value.byteLength);
-        next.set(buffer);
-        next.set(result.value, buffer.byteLength);
-        buffer = next;
-      }
+        if (result.value && result.value.byteLength > 0) {
+          const next = new Uint8Array(buffer.byteLength + result.value.byteLength);
+          next.set(buffer);
+          next.set(result.value, buffer.byteLength);
+          buffer = next;
+        }
 
-      try {
-        const processResult = this.processSubgroupObjects(
-          buffer,
-          subscribers,
-          header,
-          previousObjectId,
-          resolvedSubgroupId,
-        );
-        buffer = processResult.remainingBuffer;
-        previousObjectId = processResult.previousObjectId;
-        resolvedSubgroupId = processResult.resolvedSubgroupId;
-        // draft-ietf-moq-transport-21 §12.1 条件 4:
-        // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
-        // またいだ後続 Object の malformed 検出に使う。
-        if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
-          this.receivedEndOfGroupFinalObjectIds.set(
-            `${header.trackAlias}:${header.groupId}`,
-            processResult.updatedEndOfGroupFinalObjectId,
+        try {
+          const processResult = this.processSubgroupObjects(
+            buffer,
+            subscribers,
+            header,
+            previousObjectId,
+            resolvedSubgroupId,
           );
+          buffer = processResult.remainingBuffer;
+          previousObjectId = processResult.previousObjectId;
+          resolvedSubgroupId = processResult.resolvedSubgroupId;
+          // draft-ietf-moq-transport-21 §12.1 条件 4:
+          // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
+          // またいだ後続 Object の malformed 検出に使う。
+          if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
+            this.receivedEndOfGroupFinalObjectIds.set(
+              `${header.trackAlias}:${header.groupId}`,
+              processResult.updatedEndOfGroupFinalObjectId,
+            );
+          }
+        } catch (err) {
+          if (err instanceof MalformedTrackError) {
+            // draft-ietf-moq-transport-21 §12.1:
+            // malformed track を検出した購読を cancel し、セッションは閉じない
+            await this.handleMalformedSubgroupTrack(reader, header, subscribers, err);
+            return;
+          }
+          throw err;
         }
-      } catch (err) {
-        if (err instanceof MalformedTrackError) {
-          // draft-ietf-moq-transport-21 §12.1:
-          // malformed track を検出した購読を cancel し、セッションは閉じない
-          await this.handleMalformedSubgroupTrack(reader, header, subscribers, err);
-          return;
-        }
-        throw err;
-      }
 
-      if (result.done) break;
+        if (result.done) break;
+      }
+    } finally {
+      timeout.clear();
     }
 
     // ここに到達した時点でピアの FIN を検出している (上記ループは

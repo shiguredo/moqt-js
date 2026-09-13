@@ -3018,9 +3018,10 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
  * 制御ストリーム読み取りループ (startControlMessageLoop) を検証するための
  * セッションを構築する。
  */
-function createControlLoopContext(): {
+function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
   sessionError: { current: Error | undefined };
   errorControl: (error: unknown) => void;
+  enqueue: (data: Uint8Array) => void;
   start: () => void;
   setSessionState: (state: string) => void;
 } {
@@ -3037,8 +3038,11 @@ function createControlLoopContext(): {
     sessionState: string;
     controlReceiveStream?: ReadableStream<Uint8Array>;
     controlReader?: ControlStreamReader;
+    controlMessageTimeoutMs: number;
     startControlMessageLoop(): void;
   };
+  // initialize() を経由せずタイムアウト値だけを差し替える
+  internal.controlMessageTimeoutMs = controlMessageTimeoutMs;
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   internal.controlReceiveStream = new ReadableStream<Uint8Array>({
     start(c) {
@@ -3052,12 +3056,66 @@ function createControlLoopContext(): {
     errorControl: (error) => {
       controller.error(error);
     },
+    enqueue: (data) => {
+      controller.enqueue(data);
+    },
     start: () => internal.startControlMessageLoop(),
     setSessionState: (state) => {
       internal.sessionState = state;
     },
   };
 }
+
+/**
+ * draft-ietf-moq-transport-21 §12.2:
+ * CONTROL_MESSAGE_TIMEOUT (0x11) は「ピアが制御メッセージへの応答に時間を
+ * かけすぎた」ことを示す。制御メッセージの Length が宣言されたまま本体が
+ * 揃わない状態を保持し続けるピアを、期限で打ち切る。
+ */
+test("startControlMessageLoop: 半端な制御メッセージは CONTROL_MESSAGE_TIMEOUT で閉じる", async () => {
+  const ctx = createControlLoopContext(20);
+  ctx.start();
+  // Type (0x40) + Length 宣言 5 + 本体 1 バイトのみの半端なメッセージ
+  ctx.enqueue(new Uint8Array([0x40, 0x00, 0x05, 0xaa]));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 80);
+  });
+
+  assert.isDefined(ctx.sessionError.current);
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(
+    (ctx.sessionError.current as SessionError).code,
+    SessionErrorCode.CONTROL_MESSAGE_TIMEOUT,
+  );
+  assert.isTrue(ctx.sessionError.current!.message.includes("control message timed out"));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.2:
+ * 半端なメッセージが解消したら期限を解除する。後続で完結したメッセージは
+ * 通常どおり処理され、タイムアウトで閉じない。
+ */
+test("startControlMessageLoop: 分割到着した制御メッセージはタイムアウトしない", async () => {
+  const ctx = createControlLoopContext(60);
+  ctx.start();
+  // GOAWAY (0x10) + Length 宣言 2 + 本体を 1 バイトずつ分割して送る。
+  // 本体は New Session URI Length 0 + Timeout 0 の正当な GOAWAY payload。
+  ctx.enqueue(new Uint8Array([0x10, 0x00, 0x02]));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  ctx.enqueue(new Uint8Array([0x00]));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  ctx.enqueue(new Uint8Array([0x00]));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 80);
+  });
+
+  // バッファが空になった時点で期限が解除されているため閉じない
+  assert.isUndefined(ctx.sessionError.current);
+});
 
 /**
  * draft-ietf-moq-transport-21 §6.3:
@@ -3293,7 +3351,9 @@ interface DataStreamFinContext {
  * session.state の両方で判定する (closeWithError は callbacks.error 通知後に
  * close を呼び、close は同期先頭で sessionState を closed にする)。
  */
-function createDataStreamFinContext(): DataStreamFinContext {
+function createDataStreamFinContext(
+  options: { dataStreamTimeoutMs?: number } = {},
+): DataStreamFinContext {
   const sessionError: { current: Error | undefined } = { current: undefined };
   let resolveClosed!: (info: WebTransportCloseInfo) => void;
   const closedPromise = new Promise<WebTransportCloseInfo>((resolve) => {
@@ -3313,8 +3373,13 @@ function createDataStreamFinContext(): DataStreamFinContext {
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
     requestStreams: Map<bigint, RequestStreamEntry>;
+    dataStreamTimeoutMs: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
+  // initialize() を経由せずタイムアウト値だけを差し替える
+  if (options.dataStreamTimeoutMs !== undefined) {
+    internal.dataStreamTimeoutMs = options.dataStreamTimeoutMs;
+  }
 
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
@@ -4474,6 +4539,81 @@ test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VAL
   assert.instanceOf(ctx.sessionError.current, SessionError);
   assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
   assert.equal(delivered, 0);
+});
+
+// ============================================================================
+// データストリームの受信タイムアウト
+// draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §12.2:
+ * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
+ * データを送るのに時間をかけすぎた」ことを示す。Object の途中バイトを保持した
+ * ままピアが送信を止めた場合、期限でセッションを閉じる。
+ */
+test("データストリーム: 途中バイトを保持したままタイムアウトすると DATA_STREAM_TIMEOUT で閉じる", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamTimeoutMs: 20 });
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  // payload 宣言長 10 バイトに対し 4 バイトだけ送って止める
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 80);
+  });
+  // 期限切れで reader が cancel され読み取りループが終わる
+  await handlePromise;
+
+  assert.isDefined(ctx.sessionError.current);
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(
+    (ctx.sessionError.current as SessionError).code,
+    SessionErrorCode.DATA_STREAM_TIMEOUT,
+  );
+  assert.isTrue(ctx.sessionError.current!.message.includes("data stream timed out"));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.2:
+ * Object が完成してバッファが空になったら期限を解除する。FIN を待つ間も
+ * タイムアウトしない (ストリームは正常に開いたまま次の Object を待てる)。
+ */
+test("データストリーム: 完成した Object の処理後にタイムアウトしない", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamTimeoutMs: 20 });
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
+    delivered++;
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  // 読み取りループはチャンク到着ごとにバッファを処理するため、
+  // ヘッダー + Object フィールドと payload を別チャンクで送る
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes]));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  ctx.enqueue(parts.payload);
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  // 完成後も FIN を送らずに待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 80);
+  });
+
+  // バッファが空なので期限は解除されており、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.isUndefined(ctx.sessionError.current);
+
+  // 後始末のため FIN する
+  ctx.fin();
+  await handlePromise;
+  assert.isUndefined(ctx.sessionError.current);
 });
 
 // ============================================================================
