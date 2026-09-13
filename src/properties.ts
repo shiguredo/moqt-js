@@ -10,6 +10,7 @@
  */
 
 import { encodeVarint, decodeVarint, MAX_VARINT } from "./varint";
+import { isLengthWithinData } from "./length";
 import {
   MalformedTrackError,
   ProtocolViolationError,
@@ -658,7 +659,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
   }
   // Length 宣言が残りバイトを超える切り詰めは破損であり、
   // 短い subarray を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-  if (idLen + lengthLen + Number(length) > data.length) {
+  if (!isLengthWithinData(length, idLen + lengthLen, data.length)) {
     throwLengthOverrunError(
       MOQTPropertyId.IMMUTABLE_PROPERTIES,
       length,
@@ -899,7 +900,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       }
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-      if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
+      if (!isLengthWithinData(length, offset + deltaIdLen + lengthLen, data.length)) {
         throwLengthOverrunError(
           MOQTPropertyId.IMMUTABLE_PROPERTIES,
           length,
@@ -1004,7 +1005,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
         // Length 宣言が残りバイトを超える切り詰めは破損であり、
         // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-        if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
+        if (!isLengthWithinData(length, offset + deltaIdLen + lengthLen, data.length)) {
           throwLengthOverrunError(
             id,
             length,
@@ -1088,7 +1089,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
       }
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
       // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-      if (offset + deltaIdLen + lengthLen + Number(length) > data.length) {
+      if (!isLengthWithinData(length, offset + deltaIdLen + lengthLen, data.length)) {
         throwLengthOverrunError(
           id,
           length,
@@ -1271,7 +1272,7 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
         // 奇数 ID: length + bytes 形式
         const [length, lengthLen] = decodeVarint(data, offset);
         offset += lengthLen;
-        if (offset + Number(length) > data.length) {
+        if (!isLengthWithinData(length, offset, data.length)) {
           return { properties, complete: false };
         }
         properties.push({ id, data: data.slice(offset, offset + Number(length)) });
@@ -1355,7 +1356,7 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
       return;
     }
     offset += lengthLen;
-    if (offset + Number(length) > data.length) {
+    if (!isLengthWithinData(length, offset, data.length)) {
       // draft-ietf-moq-transport-21 §8.3:
       // 既知 Type の Length 宣言が残りバイトを超える場合は serialization 不一致
       // として KEY_VALUE_FORMATTING_ERROR。それ以外 (未知 Type、および Length が
