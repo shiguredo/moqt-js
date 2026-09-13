@@ -22,6 +22,7 @@ import type { MediaPublisherState } from "./codec/types";
 import type { VideoFrameSource } from "./frameSource";
 import type { Publisher } from "./publisher";
 import type { Session } from "./session";
+import * as LOC from "./loc";
 
 /**
  * 破棄検出付きのテスト用フレーム
@@ -744,4 +745,107 @@ test("未使用 track は Group ID を採番しない", () => {
   const control = publisher as unknown as PublisherGroupControl;
   assert.isTrue(control.audioGroupId > 0);
   assert.equal(control.videoGroupId, 0);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+ * encoder が返す description (avcC / hvcC などの extradata) が VIDEO_CONFIG として
+ * 送られることを検証する。description は keyframe の metadata にのみ現れるため、
+ * 同じ値は再送せず、変化したときだけ載せる。
+ */
+function createCapturingPublisher(): {
+  publisher: Publisher;
+  sent: Array<{ properties?: Uint8Array }>;
+} {
+  const sent: Array<{ properties?: Uint8Array }> = [];
+  const publisher = {
+    state: "active",
+    sendObject: async (params: { properties?: Uint8Array }) => {
+      sent.push(params);
+    },
+  } as unknown as Publisher;
+  return { publisher, sent };
+}
+
+/** Video Config の description を含む chunk を handleVideoEncodedChunk に流す */
+function sendVideoChunk(control: PublisherLifecycleControl, description?: Uint8Array): void {
+  const handler = (
+    control as unknown as {
+      handleVideoEncodedChunk(chunk: {
+        data: Uint8Array;
+        type: "key" | "delta";
+        timestamp: number;
+        duration: number | null;
+        description?: Uint8Array;
+      }): void;
+    }
+  ).handleVideoEncodedChunk.bind(control);
+  handler({
+    data: new Uint8Array([0xaa]),
+    type: "key",
+    timestamp: 1000,
+    duration: null,
+    description,
+  });
+}
+
+test("handleVideoEncodedChunk: description が VIDEO_CONFIG として送られる", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+
+  assert.equal(sent.length, 1);
+  const decoded = LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0));
+  assert.deepEqual(decoded.config, description);
+});
+
+test("handleVideoEncodedChunk: 同じ description は再送しない", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  sendVideoChunk(control, description);
+  sendVideoChunk(control, new Uint8Array(description));
+
+  assert.equal(sent.length, 2);
+  // 1 件目だけが VIDEO_CONFIG を持ち、2 件目は持たない
+  assert.deepEqual(
+    LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isUndefined(LOC.decodeVideoProperties(sent[1].properties ?? new Uint8Array(0)).config);
+});
+
+test("handleVideoEncodedChunk: description が変わったら再送する", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  const first = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  const second = new Uint8Array([0x01, 0x42, 0xc0, 0x2a]);
+  sendVideoChunk(control, first);
+  sendVideoChunk(control, second);
+
+  assert.deepEqual(
+    LOC.decodeVideoProperties(sent[1].properties ?? new Uint8Array(0)).config,
+    second,
+  );
+});
+
+test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を載せない", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  control.videoPublisher = videoPublisher;
+
+  sendVideoChunk(control);
+
+  assert.isUndefined(LOC.decodeVideoProperties(sent[0].properties ?? new Uint8Array(0)).config);
 });
