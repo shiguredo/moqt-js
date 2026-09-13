@@ -145,10 +145,20 @@ export class FetcherImpl implements Fetcher {
   }
 
   /**
+   * キャンセル済み / セッション終了済みかどうか
+   *
+   * handleObject / handleEnd / handleError / cancel が共通で使う受付判定。
+   * closed の fetcher には Object も終了もエラーも通知しない。
+   */
+  private get isClosed(): boolean {
+    return this.fetcherState === "closed";
+  }
+
+  /**
    * データストリームからオブジェクトを受信
    */
   handleObject(object: MoqtObject): void {
-    if (this.fetcherState === "closed") {
+    if (this.isClosed) {
       return;
     }
     this.objectCallback(object);
@@ -158,7 +168,7 @@ export class FetcherImpl implements Fetcher {
    * Fetch 完了（ストリーム終了）
    */
   handleEnd(): void {
-    if (this.fetcherState === "closed") {
+    if (this.isClosed) {
       return;
     }
     this.fetcherState = "closed";
@@ -173,7 +183,7 @@ export class FetcherImpl implements Fetcher {
    * MalformedTrackError 等が検出された場合の二重通知を防ぐ。
    */
   handleError(error: Error): void {
-    if (this.fetcherState === "closed") {
+    if (this.isClosed) {
       return;
     }
     this.errorCallback?.(error);
@@ -194,7 +204,7 @@ export class FetcherImpl implements Fetcher {
    * FETCH_CANCEL は削除された。キャンセルはストリームを閉じることで行う。
    */
   async cancel(): Promise<void> {
-    if (this.fetcherState === "closed") {
+    if (this.isClosed) {
       return;
     }
 
