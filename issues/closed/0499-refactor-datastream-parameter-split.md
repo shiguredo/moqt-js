@@ -38,23 +38,23 @@
 
 `src/dataStream.ts` (2,025 → 68 行。再輸出のみ)
 
-| ファイル | 行数 | 内容 |
-| --- | --- | --- |
-| `src/dataStream/common.ts` | 103 | `MoqtObject` / Priority・Object Status の検証 |
-| `src/dataStream/subgroup.ts` | 560 | Subgroup Header (§11.3.1) と Object fields |
-| `src/dataStream/datagram.ts` | 404 | Object Datagram (§11.2.1) |
-| `src/dataStream/fetch.ts` | 971 | Fetch Header と Fetch Object fields (§11.4.1) |
+| ファイル                     | 行数 | 内容                                          |
+| ---------------------------- | ---- | --------------------------------------------- |
+| `src/dataStream/common.ts`   | 103  | `MoqtObject` / Priority・Object Status の検証 |
+| `src/dataStream/subgroup.ts` | 560  | Subgroup Header (§11.3.1) と Object fields    |
+| `src/dataStream/datagram.ts` | 404  | Object Datagram (§11.2.1)                     |
+| `src/dataStream/fetch.ts`    | 971  | Fetch Header と Fetch Object fields (§11.4.1) |
 
 `src/message/parameter.ts` (1,734 → 99 行。再輸出のみ)
 
-| ファイル | 行数 | 内容 |
-| --- | --- | --- |
-| `src/message/parameter/common.ts` | 46 | `Parameter` と上限値 |
-| `src/message/parameter/kvp.ts` | 158 | Key-Value-Pair の encode / decode |
-| `src/message/parameter/messageParameter.ts` | 552 | Message Parameter と FILL_PARAMETERS |
-| `src/message/parameter/locationFilter.ts` | 349 | Location Filter |
-| `src/message/parameter/rangeFilter.ts` | 338 | Range Filter |
-| `src/message/parameter/trackNamespace.ts` | 309 | Track Namespace / Track Name |
+| ファイル                                    | 行数 | 内容                                 |
+| ------------------------------------------- | ---- | ------------------------------------ |
+| `src/message/parameter/common.ts`           | 46   | `Parameter` と上限値                 |
+| `src/message/parameter/kvp.ts`              | 158  | Key-Value-Pair の encode / decode    |
+| `src/message/parameter/messageParameter.ts` | 552  | Message Parameter と FILL_PARAMETERS |
+| `src/message/parameter/locationFilter.ts`   | 349  | Location Filter                      |
+| `src/message/parameter/rangeFilter.ts`      | 338  | Range Filter                         |
+| `src/message/parameter/trackNamespace.ts`   | 309  | Track Namespace / Track Name         |
 
 元の 2 モジュールは既存の import パス (`./dataStream` / `./message/parameter`) を維持するための再輸出のみとした。`parameter/index.ts` 化はせず、`parameter.ts` と `parameter/` を併存させている (既存 import を 1 文字も変えずに解決させるため)。
 
