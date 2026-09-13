@@ -38,6 +38,35 @@ import type { SessionInternal } from "./types";
 import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 /**
+ * テストで観測するデバッグ記録
+ *
+ * DebugMessage 全体は必要としないため、検証に使う typeName と decoded だけを
+ * 構造的に受け取る。実物の debug コールバックは DebugMessage を渡すため、
+ * 構造的部分型としてそのまま代入できる。
+ */
+interface DebugRecord {
+  typeName: string;
+  decoded?: Record<string, unknown>;
+}
+
+/**
+ * REQUEST_CALLBACK_ERROR のデバッグ記録が 1 件だけあることを検証する
+ *
+ * リクエスト単位の error コールバックが throw したときだけ記録される。
+ * 正常な通知では記録が増えないため、件数が 1 であることがそのまま
+ * 「throw した 1 回だけ記録した」ことの検証になる。
+ */
+function assertRequestCallbackErrorRecord(
+  debugRecords: DebugRecord[],
+  expected: { requestId: bigint; message: string },
+): void {
+  const records = debugRecords.filter((record) => record.typeName === "REQUEST_CALLBACK_ERROR");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].decoded?.error, expected.message);
+  assert.equal(records[0].decoded?.requestId, expected.requestId.toString());
+}
+
+/**
  * namespace 系ストリームループ用のテストコンテキストを構築する。
  *
  * ストリーム機構は実物 (ReadableStream + WritableStream) であり、テストは
@@ -58,6 +87,7 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
   writerClosed: () => Promise<void>;
   isReadableCancelled: () => boolean;
   getClosedWithError: () => SessionError | undefined;
+  debugRecords: DebugRecord[];
 } {
   const requestId = 10n;
 
@@ -90,13 +120,18 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
   };
 
   let closedWithError: SessionError | undefined;
+  const debugRecords: DebugRecord[] = [];
   const session = {
     namespaceSubscriptions: kind === "namespace" ? new Map([[requestId, subscription]]) : new Map(),
     tracksSubscriptions: kind === "tracks" ? new Map([[requestId, subscription]]) : new Map(),
     namespacePublications: new Map(),
     pendingRequestUpdate: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
-    callbacks: { debug: undefined },
+    callbacks: {
+      debug: (message: DebugRecord) => {
+        debugRecords.push(message);
+      },
+    },
     closeWithError: (error: SessionError) => {
       closedWithError = error;
       // 本番の SessionImpl.closeWithError は close() 内で保留中の更新を
@@ -134,6 +169,7 @@ function createNamespaceLoopTestContext(kind: "namespace" | "tracks"): {
     writerClosed: () => writer.closed,
     isReadableCancelled: () => readableCancelled,
     getClosedWithError: () => closedWithError,
+    debugRecords,
   };
 }
 
@@ -1755,6 +1791,7 @@ function createPublicationLoopTestContext(): {
   writerClosed: () => Promise<void>;
   isReadableCancelled: () => boolean;
   getClosedWithError: () => SessionError | undefined;
+  debugRecords: DebugRecord[];
 } {
   const requestId = 10n;
 
@@ -1788,13 +1825,18 @@ function createPublicationLoopTestContext(): {
   };
 
   let closedWithError: SessionError | undefined;
+  const debugRecords: DebugRecord[] = [];
   const session = {
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     namespacePublications: new Map([[requestId, publication]]),
     pendingRequestUpdate: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
-    callbacks: { debug: undefined },
+    callbacks: {
+      debug: (message: DebugRecord) => {
+        debugRecords.push(message);
+      },
+    },
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
@@ -1817,6 +1859,7 @@ function createPublicationLoopTestContext(): {
     writerClosed: () => writer.closed,
     isReadableCancelled: () => readableCancelled,
     getClosedWithError: () => closedWithError,
+    debugRecords,
   };
 }
 
@@ -2682,6 +2725,11 @@ test("namespaceStartNamespaceStreamLoop: error コールバックの throw を�
   assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
   // finally で subscription が掃除される
   assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -2722,6 +2770,11 @@ test("namespaceStartNamespaceStreamLoop: error コールバックの throw を�
   assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
   // finally で subscription が掃除される
   assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -2764,6 +2817,11 @@ test("namespaceStartNamespaceStreamLoop: error コールバックの throw を�
   );
   // RESET_STREAM (read 例外) はセッションを閉じない
   assert.isUndefined(ctx.getClosedWithError());
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -2804,6 +2862,11 @@ test("namespaceStartNamespaceStreamLoop: 確立前 REQUEST_ERROR で error コ�
   assert.isUndefined(ctx.getClosedWithError());
   // finally で subscription が掃除される
   assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -2884,6 +2947,11 @@ test("namespaceStartTracksStreamLoop: error コールバックの throw を無�
   assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
   // finally で subscription が掃除される
   assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -2924,6 +2992,11 @@ test("namespaceStartTracksStreamLoop: error コールバックの throw を無�
     pending.rejected!.message.includes("stream closed before receiving update response"),
   );
   assert.isUndefined(ctx.getClosedWithError());
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -2962,6 +3035,11 @@ test("namespaceStartTracksStreamLoop: 確立前 REQUEST_ERROR で error コー�
   assert.isUndefined(ctx.getClosedWithError());
   // finally で subscription が掃除される
   assert.isFalse(ctx.session.tracksSubscriptions.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -3039,6 +3117,11 @@ test("namespaceStartPublicationStreamLoop: error コールバックの throw を
   assert.equal(notifiedMessages[0], ctx.getClosedWithError()!.message);
   // finally で publication が掃除される
   assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
@@ -3077,6 +3160,11 @@ test("namespaceStartPublicationStreamLoop: 確立前 REQUEST_ERROR で error コ
   assert.isUndefined(ctx.getClosedWithError());
   // finally で publication が掃除される
   assert.isFalse(ctx.session.namespacePublications.has(ctx.requestId));
+  // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
+  assertRequestCallbackErrorRecord(ctx.debugRecords, {
+    requestId: ctx.requestId,
+    message: "app error callback failure",
+  });
 });
 
 /**
