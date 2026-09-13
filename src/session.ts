@@ -1083,12 +1083,23 @@ export interface NamespacePublication {
  */
 export interface SessionStatistics {
   // オブジェクト受信
-  /** FETCH 経由で受信したオブジェクト数 */
+  /**
+   * 通常 FETCH のデータストリーム経由で受信したオブジェクト数
+   *
+   * fill fetch ストリーム経由のオブジェクトは含まない (objectsReceivedViaFill を参照)。
+   * draft-ietf-moq-transport-21 §3.4 (Fill Semantics) の fill-delivered と
+   * 通常 FETCH は別経路のため、配送経路の区別 (MoqtObject.fillDelivered) と
+   * 統計区分を一致させている。
+   */
   objectsReceivedViaFetch: number;
+  /** fill fetch ストリーム経由で受信したオブジェクト数 */
+  objectsReceivedViaFill: number;
   /** SUBSCRIBE 経由で受信したオブジェクト数 */
   objectsReceivedViaSubscribe: number;
-  /** FETCH 経由で受信したバイト数 */
+  /** 通常 FETCH のデータストリーム経由で受信したバイト数 (fill 経由は含まない) */
   bytesReceivedViaFetch: number;
+  /** fill fetch ストリーム経由で受信したバイト数 */
+  bytesReceivedViaFill: number;
   /** SUBSCRIBE 経由で受信したバイト数 */
   bytesReceivedViaSubscribe: number;
 
@@ -1548,8 +1559,10 @@ export class SessionImpl implements Session {
 
   // 統計カウンター
   private statsObjectsReceivedViaFetch = 0;
+  private statsObjectsReceivedViaFill = 0;
   private statsObjectsReceivedViaSubscribe = 0;
   private statsBytesReceivedViaFetch = 0;
+  private statsBytesReceivedViaFill = 0;
   private statsBytesReceivedViaSubscribe = 0;
   private statsUnidirectionalStreamsOpened = 0;
   private statsUnidirectionalStreamsReceived = 0;
@@ -2883,8 +2896,10 @@ export class SessionImpl implements Session {
   getStatistics(): SessionStatistics {
     return {
       objectsReceivedViaFetch: this.statsObjectsReceivedViaFetch,
+      objectsReceivedViaFill: this.statsObjectsReceivedViaFill,
       objectsReceivedViaSubscribe: this.statsObjectsReceivedViaSubscribe,
       bytesReceivedViaFetch: this.statsBytesReceivedViaFetch,
+      bytesReceivedViaFill: this.statsBytesReceivedViaFill,
       bytesReceivedViaSubscribe: this.statsBytesReceivedViaSubscribe,
       pendingSubgroupStreamsCount: this.pendingSubgroupBuffer.streamCount,
       pendingSubgroupStreamsBytes: this.pendingSubgroupBuffer.totalBytes,
@@ -5106,6 +5121,8 @@ export class SessionImpl implements Session {
             context,
             isFirst,
             target.groupOrder,
+            // fill fetch ストリーム経由のため fill 側統計に計上する
+            true,
           );
           buffer = result.remainingBuffer;
           context = result.context;
@@ -5365,6 +5382,8 @@ export class SessionImpl implements Session {
       context,
       isFirst,
       fetcher.getGroupOrder(),
+      // 通常 FETCH のため fetch 側統計に計上する
+      false,
     );
   }
 

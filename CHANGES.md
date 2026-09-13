@@ -58,6 +58,11 @@
   - draft-ietf-moq-transport-21 §3.4 / §3.4.1 に基づき、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を含む REQUEST_UPDATE を受理して黙殺する挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了する (moqt-js は fill fetch ストリームを開けないため)
   - fill fetch ストリームを開く仕様準拠のピアとは相互運用できない (moqt-js publisher は fill を提供しない)
   - @voluntas
+- [UPDATE] fill fetch ストリーム経由の受信を統計の独立区分に分ける
+  - draft-ietf-moq-transport-21 §3.4 (Fill Semantics) の fill-delivered は通常 FETCH とも subscription-delivered とも別経路だが、従来は fill 経由のオブジェクトも通常 FETCH と同じ統計に計上していた
+  - `SessionStatistics` に `objectsReceivedViaFill` / `bytesReceivedViaFill` を追加し、配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる
+  - `objectsReceivedViaFetch` / `bytesReceivedViaFetch` は通常 FETCH のデータストリーム経由のみを数えるようになり、fill 経由のぶんだけ値が減る (fill を使わない場合は従来と同じ)
+  - fill 範囲と購読の Location Filter が重なる Object は publisher が両経路で送るため、受信したストリームの種別どおりに 1 回ずつ計上する (購読側への合算はしない)
 - [ADD] fill fetch ストリームの失敗を SubscribeCallbacks.fillError で通知する
   - draft-ietf-moq-transport-21 §3.4.1 に基づき、fill fetch ストリームには REQUEST_ERROR が無く publisher は reset で失敗を伝えるが、これまでアプリへの通知手段が無かった
   - reset / cancel は購読に波及しないため、購読終了を意味する error ではなく fill 専用の SubscribeCallbacks.fillError で通知する。FIN の正常完了、Malformed Track 検出 (購読の error で通知)、セッション終了起源の失敗では呼ばない

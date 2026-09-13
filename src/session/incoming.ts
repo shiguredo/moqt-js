@@ -469,8 +469,15 @@ export function incomingWaitForFetcher(
  *
  * 統計カウンターを stream.ts の純粋関数に注入する薄いブリッジ。
  * SessionImpl.handleIncomingStream から呼ばれる。
- * fill fetch ストリームのオブジェクトも FETCH ストリーム到着として
- * fetch 側統計に計上する (購読配送との区別は別途整理する)。
+ *
+ * 計上先は受信経路で分ける。fill fetch ストリームのオブジェクトは
+ * fill-delivered (§3.4)、通常 FETCH のオブジェクトは fetch 側であり、
+ * 配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる。
+ * 購読側 (subscribe) へは合算しない。購読の Location Filter と fill 範囲が
+ * 重なる Object は publisher が両経路で別々に送るため、受信したストリームの
+ * 種別どおりに 1 回ずつ計上する (同じ Location が 2 度届けば 2 回計上される)。
+ *
+ * @param viaFill - fill fetch ストリームからの受信なら true
  */
 export function incomingProcessFetchObjects(
   session: SessionInternal,
@@ -479,6 +486,7 @@ export function incomingProcessFetchObjects(
   context: import("../dataStream").FetchObjectContext | null,
   isFirst: boolean,
   groupOrder: GroupOrder,
+  viaFill: boolean,
 ): {
   remainingBuffer: Uint8Array;
   context: import("../dataStream").FetchObjectContext | null;
@@ -491,12 +499,26 @@ export function incomingProcessFetchObjects(
     isFirst,
     {
       incrementObjectsReceived: () => {
-        (session as unknown as { statsObjectsReceivedViaFetch: number })
-          .statsObjectsReceivedViaFetch++;
+        const stats = session as unknown as {
+          statsObjectsReceivedViaFetch: number;
+          statsObjectsReceivedViaFill: number;
+        };
+        if (viaFill) {
+          stats.statsObjectsReceivedViaFill++;
+        } else {
+          stats.statsObjectsReceivedViaFetch++;
+        }
       },
       incrementBytesReceived: (_subscribePath, bytes) => {
-        (session as unknown as { statsBytesReceivedViaFetch: number }).statsBytesReceivedViaFetch +=
-          bytes;
+        const stats = session as unknown as {
+          statsBytesReceivedViaFetch: number;
+          statsBytesReceivedViaFill: number;
+        };
+        if (viaFill) {
+          stats.statsBytesReceivedViaFill += bytes;
+        } else {
+          stats.statsBytesReceivedViaFetch += bytes;
+        }
       },
     },
     groupOrder,
