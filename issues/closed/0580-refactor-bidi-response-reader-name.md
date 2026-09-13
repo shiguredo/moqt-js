@@ -1,7 +1,7 @@
 # bidiReadResponse の名前を役割が判別できるものに変更する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/refactor-bidi-response-reader-name
 - Polished: {YYYY-MM-DD}
 
@@ -29,3 +29,22 @@
 
 - `bidiReadResponse` / `bidiReadResponseFromBidiStream` (`src/session/bidi.ts`)
 - `issues/closed/0498-refactor-bidi-namespace-dedup.md`
+
+## 解決方法
+
+`bidiReadResponse` を `bidiDispatchResponse` に改名した。issue の設計方針が例示した名前をそのまま採用している。
+
+### 変更内容
+
+- 定義 (`src/session/bidi.ts`) と JSDoc の見出しを「4 種の応答読み取りの共通ディスパッチャ」に変更し、`bidiReadResponseFromBidiStream` との役割の違い (最初の応答チャンクを制御メッセージ列として返す低レベル読み取り) を明記した
+- 呼び出し 4 箇所 (`bidiReadPublishResponse` / `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `bidiReadTrackStatusResponse`) を追随させた
+- `src/session/bidi.test.ts` のコメント 1 箇所を追随させた
+
+`bidiReadResponseFromBidiStream` は名前のとおり「bidi ストリームから応答チャンクを読み取る」役割であり、実体と一致しているため変更していない。旧名 `bidiReadResponse` の参照は残っていない。
+
+### 検証
+
+- `rg "bidiReadResponse\b"` の一致が 0 件であること (`bidiReadResponseFromBidiStream` は別名として残る)
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,136 テスト全通過 (挙動は変えていない)
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した (内部リファクタで機能に影響しないため)

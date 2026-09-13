@@ -590,15 +590,19 @@ interface BidiResponseHandlers<TPending> {
 }
 
 /**
- * 4 種の応答読み取りの共通リーダ
+ * 4 種の応答読み取りの共通ディスパッチャ
  *
  * 応答読み取り (PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS) について、
  * pending の取得・レスポンスの読み取り・メッセージ型の分岐・
  * 受信失敗のエラー種別ごとの委譲を担い、経路固有の処理をハンドラへ委譲する。
  * メッセージ型ごとの経路固有の扱い (削除集合・reject と close の順序・
  * §3.6 / §12.1 の cancel) はハンドラ側に残す。
+ *
+ * 低レベル読み取りの bidiReadResponseFromBidiStream (最初の応答チャンクを
+ * 制御メッセージ列として返す) とは役割が異なる。似た名前の関数が並ぶと
+ * どちらが何を担うか読めなくなるため、本関数は dispatch を含む名前にする。
  */
-async function bidiReadResponse<TPending>(
+async function bidiDispatchResponse<TPending>(
   session: BidiSessionInternal,
   requestId: bigint,
   stream: WebTransportBidirectionalStream,
@@ -697,7 +701,7 @@ export async function bidiReadPublishResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  await bidiReadResponse(session, requestId, stream, controlReader, {
+  await bidiDispatchResponse(session, requestId, stream, controlReader, {
     getPending: (session, requestId) => session.pendingPublish.get(requestId),
     okType: MessageType.REQUEST_OK,
     handleOk: (context, payload) => {
@@ -854,7 +858,7 @@ export async function bidiReadSubscribeResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  await bidiReadResponse(session, requestId, stream, controlReader, {
+  await bidiDispatchResponse(session, requestId, stream, controlReader, {
     getPending: (session, requestId) => session.pendingSubscribe.get(requestId),
     okType: MessageType.SUBSCRIBE_OK,
     handleOk: (context, payload) => {
@@ -1060,7 +1064,7 @@ export async function bidiReadFetchResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  await bidiReadResponse(session, requestId, stream, controlReader, {
+  await bidiDispatchResponse(session, requestId, stream, controlReader, {
     getPending: (session, requestId) => session.pendingFetch.get(requestId),
     okType: MessageType.FETCH_OK,
     handleOk: (context, payload) => {
@@ -1206,7 +1210,7 @@ export async function bidiReadTrackStatusResponse(
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
 ): Promise<void> {
-  await bidiReadResponse(session, requestId, stream, controlReader, {
+  await bidiDispatchResponse(session, requestId, stream, controlReader, {
     getPending: (session, requestId) => session.pendingTrackStatus.get(requestId),
     okType: MessageType.REQUEST_OK,
     handleOk: async (context, payload) => {
