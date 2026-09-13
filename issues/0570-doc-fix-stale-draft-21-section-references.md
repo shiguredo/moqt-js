@@ -1,7 +1,7 @@
 # fetcher.ts と types.ts に残る draft-21 の古い節番号・パラメータ表現を修正する
 
 - Created: 2026-09-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/fix-stale-draft-21-section-references
 - Polished: {YYYY-MM-DD}
 
@@ -35,3 +35,16 @@
 - `refs/moq/draft-ietf-moq-transport-21.txt` §9.12 (FETCH_OK) / §11.4.1 (Fetch Header / Table 7) / §11.4.1.2 (End of Range) / §9.20.4 (SUBGROUP_DELIVERY_TIMEOUT Parameter)
 - `issues/closed/0558-doc-update-draft-21-section-references.md` (節番号更新の先行 issue)
 - `issues/0412-doc-fix-message-parameter-type-header-comment.md` / `issues/0464-doc-remove-obsolete-spec-history-comments.md` (同じ `src/message/types.ts` を編集)
+
+## 解決方法
+
+起票時の 3 箇所を修正した。いずれもコメントのみで、コード・公開 API は変更していない。
+
+- `src/fetcher.ts` のモジュールヘッダ: 「Section 9.11 (FETCH) — 10.14 (FETCH_OK)」を「Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)」に、「(Section 11.4.4, Table 7)」を「(Section 11.4.1.2, Table 7)」に修正した。draft-21 は §9.12 が FETCH_OK、§11.4.1.2 が End of Range である (refs で確認)。
+- `src/message/types.ts` の `MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT`: 出現メッセージを「PUBLISH_OK / SUBSCRIBE / REQUEST_UPDATE」から「SUBSCRIBE / PUBLISH / REQUEST_UPDATE」に修正した。draft-21 §9.20.4 の明文が "It MAY appear in a SUBSCRIBE, PUBLISH, or REQUEST_UPDATE message." である。
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した。
+
+## 検証
+
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
