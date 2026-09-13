@@ -10,7 +10,7 @@
  */
 
 import type { MoqtObject } from "./dataStream";
-import { fullTrackNameKey } from "./fullTrackName";
+import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
 import type { Location } from "./message/types";
 import { GroupOrder } from "./message/types";
 import type { Property } from "./properties";
@@ -100,7 +100,7 @@ export class FetcherImpl implements Fetcher {
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
-  getFullTrackNameKey(): string {
+  getFullTrackNameKey(): FullTrackNameKey {
     return fullTrackNameKey(this.fetcherNamespace, this.fetcherTrackName);
   }
 

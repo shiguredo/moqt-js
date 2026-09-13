@@ -1352,6 +1352,11 @@
 
 ### misc
 
+- [UPDATE] Full Track Name の比較キーを branded type にする
+  - `fullTrackNameKey` が `string` を返していたため、生の Full Track Name (`"/"` 連結文字列) を比較キーとして渡してもコンパイルが通り、cross-cancel が無言で空振りし得た
+  - `src/fullTrackName.ts` に `FullTrackNameKey` (`string & { readonly __brand: "FullTrackNameKey" }`) を追加し、`fullTrackNameKey` の戻り値・`SubscriberImpl.getFullTrackNameKey` / `FetcherImpl.getFullTrackNameKey` の戻り値・`PendingTrackStatus.trackKey`・`cancelMalformedTrackPeers` の引数を同じ型に揃える
+  - 比較キーは等値比較と Set / Map のキーとしてのみ使うため、比較の実装と挙動は変えない。公開 API には出さない
+  - @voluntas
 - [UPDATE] Length 宣言境界のガードを共通ヘルパーに集約する
   - `src/message/*` と `src/properties.ts` に同じ形で複製されていた「宣言 Length が残りバイト数を超えていないか」の検査を `src/length.ts` の `isLengthWithinData` (述語) と `assertLengthWithinData` (ProtocolViolationError を投げる) に集約する
   - 収まらない場合の扱いが経路ごとに異なる箇所 (寛容に打ち切る経路、既知 Type だけエラーにする経路、IncompleteDataError として扱う経路) は述語のみを使い、従来の分岐を維持する

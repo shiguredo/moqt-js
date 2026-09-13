@@ -15,7 +15,7 @@ import {
   objectMatchesFilter,
   rangeFiltersMatch,
 } from "./filter";
-import { fullTrackNameKey } from "./fullTrackName";
+import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
 import { mergeRangeFilters } from "./session/params";
 import type { FillRequestOptions } from "./session";
 
@@ -370,7 +370,7 @@ export class SubscriberImpl implements Subscriber {
    * 戻り値は fullTrackNameKey が生成する長さ付きキーであり、Full Track Name
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
-  getFullTrackNameKey(): string {
+  getFullTrackNameKey(): FullTrackNameKey {
     return fullTrackNameKey(this.subscriberNamespace, this.subscriberTrackName);
   }
 
