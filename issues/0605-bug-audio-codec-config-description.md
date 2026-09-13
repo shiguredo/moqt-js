@@ -1,7 +1,7 @@
 # AAC の AudioSpecificConfig を運べるようにする
 
 - Created: 2026-09-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/fix-audio-codec-config-description
 - Polished: {YYYY-MM-DD}
 
@@ -36,3 +36,31 @@
 - `src/codec/AudioEncoder.ts` / `src/codec/AudioDecoder.ts` / `src/codec/workers/audioEncoder.worker.ts` / `src/codec/workers/audioDecoder.worker.ts` / `src/codec/types.ts`
 - `src/createMediaPublisher.ts` / `src/createMediaSubscriber.ts`
 - `tests/e2e/codec-wrappers.spec.ts` (0495 で追加した実ブラウザテスト)
+
+## 解決方法
+
+AAC の AudioSpecificConfig をエンコーダーの metadata から取り出し、`AUDIO_CONFIG` (draft-ietf-moq-loc-04 §2.3.3.1) として送り、受信側で `AudioDecoderConfig.description` に渡す経路を通した。
+
+### 送信側
+
+- `AudioEncodedChunkData` に `description?: Uint8Array` を追加した
+- `AudioEncoderWrapper` (直接 / Worker 両モード) が `EncodedAudioChunkMetadata.decoderConfig.description` を取り出して運ぶ。Worker の応答型 (`AudioEncoderWorkerEncodedResponse`) にも `description?: ArrayBuffer` を追加し、transfer list に載せる
+- `createMediaPublisher.handleAudioEncodedChunk` が `AUDIO_CONFIG` として送る。映像の `VIDEO_CONFIG` と同じく、同じ値は再送しない (`isSameAudioConfig`)
+
+### 受信側
+
+- `getAudioDecoderConfig` に description を追加し、AAC のときだけ `AudioDecoderConfig.description` に載せる
+- `AudioDecoderWrapper.configure(codec, sampleRate?, channels?, description?)` に追加 (Worker モードの init メッセージにも載る)
+- `createMediaSubscriber` が Track Property (`SUBSCRIBE_OK`) の `AUDIO_CONFIG` を初期設定として渡し、Object Property の `AUDIO_CONFIG` が変化したら映像経路と同じ手順 (`isSameAppliedAudioConfig` / `reconfigureAudioDecoder`) で再構成する。再構成中は decode に渡さない
+
+### opus の扱い (issue には無かった判断)
+
+Chromium の opus encoder は 19 バイトの OpusHead 相当を `description` として返す。実ブラウザで確認したところ、これをデコーダーへ渡すと **復号 timestamp が変わる** (codec delay / pre-skip の適用により 2 件目以降の timestamp が投入値と一致しなくなる) ため、opus では description を運ばない判断にした (`requiresAudioSpecificConfig`)。issue の完了条件「opus の既存挙動が変わらないこと」を満たすための措置であり、e2e テストで「opus の chunk は description を持たない」ことを pin している。受信側も、仮にピアが opus の `AUDIO_CONFIG` を送ってきても無視する。
+
+### 検証
+
+- `vp test run`: 98 ファイル / 2,185 テスト全通過 (追加 8 件: `getAudioDecoderConfig` の description 3 件、`handleAudioEncodedChunk` の `AUDIO_CONFIG` 4 件、`requiresAudioSpecificConfig` 1 件)
+- `npx playwright test`: 16 件全通過。opus の chunk が description を運ばないことと、音声の encode / decode が従来どおり動くことを実 Chromium で確認した
+- `vp check` / `tsc --noEmit` 通過、devtools の型エラーは既存の 11 件のまま
+- AAC の実エンコードは CI の Chromium に AAC エンコーダーが無いため e2e では検証できない (実測で `isConfigSupported` は true を返すが `encode()` は `EncodingError` になる)。送受信の経路は `config` / `createMediaPublisher` の単体テストで検証している
+- `CHANGES.md` の `## develop` に `[FIX]` を追加した
