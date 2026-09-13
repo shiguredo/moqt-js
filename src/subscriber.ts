@@ -232,14 +232,6 @@ export class SubscriberImpl implements Subscriber {
     return this.subscriberGroupOrder;
   }
 
-  get namespace(): string[] {
-    return this.subscriberNamespace;
-  }
-
-  get trackName(): string {
-    return this.subscriberTrackName;
-  }
-
   getRequestId(): bigint {
     return this.requestId;
   }
