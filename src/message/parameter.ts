@@ -1054,6 +1054,55 @@ export function isNextObjectLocationFilter(filter: LocationFilter): boolean {
 }
 
 /**
+ * Location Filter を比較用の正規形 (フィールド列) に変換する
+ *
+ * 公開型はフィールドの有無で表現が変わる (Length 0〜4) ため、
+ * フィールドの有無をそのまま列の長さと値に写す。写像は単射であり、
+ * 同じワイヤ表現になる Location Filter は必ず同じ列になる。
+ * `{ reset: true }` (Length 0) は空列になる。
+ */
+function locationFilterToFields(filter: LocationFilter): bigint[] {
+  if ("reset" in filter) {
+    return [];
+  }
+  const fields = [filter.startGroup];
+  if ("startObject" in filter) {
+    fields.push(filter.startObject);
+    if ("endGroupDelta" in filter) {
+      fields.push(filter.endGroupDelta);
+      if ("endObject" in filter) {
+        fields.push(filter.endObject);
+      }
+    }
+  }
+  return fields;
+}
+
+/**
+ * Location Filter の構造等価を判定する
+ *
+ * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+ * "If a parameter is not present, its value is unchanged."
+ * 値の変化したパラメータのみを運ぶため、同じ内容の LOCATION_FILTER が
+ * 再報告されることはない。しかし再報告された場合に再解決すると、
+ * 進んだ LARGEST_OBJECT で相対指定が再評価されて開始位置が前進し得る。
+ * 呼び出し側が再解決の要否を判断できるよう、等価判定をここに置く。
+ *
+ * 未設定 (undefined) 同士は等価、undefined と設定済みは非等価とする。
+ */
+export function isSameLocationFilter(
+  a: LocationFilter | undefined,
+  b: LocationFilter | undefined,
+): boolean {
+  if (a === undefined || b === undefined) {
+    return a === b;
+  }
+  const aFields = locationFilterToFields(a);
+  const bFields = locationFilterToFields(b);
+  return aFields.length === bFields.length && aFields.every((value, i) => value === bFields[i]);
+}
+
+/**
  * Location Filter をエンコードする
  * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter)
  *
