@@ -1,7 +1,7 @@
 # 未使用の Track アクセサ (namespace / trackName) を削除する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/remove-unused-track-accessors
 - Polished: {YYYY-MM-DD}
 
@@ -33,3 +33,20 @@
 ## 関連
 
 - `SubscriberImpl` (`src/subscriber.ts`) / `FetcherImpl` (`src/fetcher.ts`) / `PublisherImpl` (`src/publisher.ts`)
+
+## 解決方法
+
+設計方針のとおり、3 クラスから未使用のアクセサを削除した。挙動と公開 API は変えていない。
+
+- `src/subscriber.ts` の `SubscriberImpl` から `get namespace()` / `get trackName()` を削除した。private フィールド `subscriberNamespace` / `subscriberTrackName` は `getFullTrackNameKey()` の比較キー生成で使うため残した。
+- `src/fetcher.ts` の `FetcherImpl` から `get namespace()` / `get trackName()` を削除した。private フィールド `fetcherNamespace` / `fetcherTrackName` は同じく比較キー生成で使うため残した。
+- `src/publisher.ts` の `PublisherImpl` から `get namespace()` / `get trackName()` を削除し、これらからのみ参照されていた private フィールド `publisherNamespace` / `publisherTrackName` とコンストラクタでの代入も削除した。
+- `PublisherImpl` のコンストラクタ引数 `namespace` / `trackName` は、`PublisherImpl` を生成する箇所がリポジトリ全体で 74 箇所 (ほとんどがテスト) あり、引数順を変えると広範囲の書き換えになるため残し、未使用引数として `_namespace` / `_trackName` に改名した。`noUnusedParameters` は `_` 接頭辞を許容する。
+- `CHANGES.md` の `## develop` の `### misc` に `[CHANGE]` を追加した。
+
+## 検証
+
+- 削除後に `rg` で `get namespace()` / `get trackName()` の読み取りが残っていないことを確認した。
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
+- 差分: 4 ファイル、+8 / -30 行
