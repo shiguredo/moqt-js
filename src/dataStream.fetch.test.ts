@@ -2067,31 +2067,6 @@ test("FetchObjectFields: createFirstFetchObjectFlags で Datagram 用 flags を�
   );
 });
 
-/**
- * encode → decode roundtrip: Datagram つきの先頭オブジェクト
- */
-test("FetchObjectFields: Datagram 先頭オブジェクトの encode→decode roundtrip", () => {
-  const flags = createFirstFetchObjectFlags(false, true);
-  const original: FetchObjectFields = {
-    serializationFlags: flags,
-    groupId: 100n,
-    subgroupId: 0n, // Datagram 時は 0n
-    objectId: 50n,
-    publisherPriority: 200,
-    payloadLength: 1000n,
-  };
-
-  const encoded = encodeFetchObjectFields(original);
-  const [decoded, , context] = decodeFetchObjectFields(encoded, null, 0, true);
-
-  assert.equal(decoded.groupId, 100n);
-  assert.equal(decoded.subgroupId, 0n);
-  assert.equal(decoded.objectId, 50n);
-  assert.equal(decoded.publisherPriority, 200);
-  assert.equal(decoded.payloadLength, 1000n);
-  assert.equal(context.subgroupId, 0n);
-});
-
 // ============================================================================
 // Fetch Object Fields - Object ID オーバーフローチェックのテスト
 // ============================================================================

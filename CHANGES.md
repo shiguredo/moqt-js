@@ -1192,6 +1192,10 @@
   - `src/session/incoming.ts` の `decodeDatagramTrackAlias` が `decodeObjectDatagram` の先頭 2 varint 配置 (Type Flags → Track Alias) を再実装していたため、`src/dataStream.ts` の `decodeDatagramTypeAndTrackAlias` に集約して両者が共有する
   - 片方だけがワイヤ配置を変わると、デコード失敗時に誤った alias を引いて無関係な購読を cancel し得るため、配置知識と Type Flags の検証を 1 箇所にする
   - @voluntas
+- [UPDATE] DATAGRAM 先頭オブジェクトの roundtrip の重複テストを整理する
+  - `src/dataStream.fetch.test.ts` の「Datagram 先頭オブジェクトの encode→decode roundtrip」は、`src/dataStream.prop.ts` の PBT が下位 2 ビット (0〜3) と Properties 有無の組み合わせを網羅しているため削除する (shiguredo-typescript の「PBT でカバーできるものを単体テストで書かないこと」)
+  - PBT 側に役割分担 (roundtrip は PBT、単体テストは overflow や timed_out などの意図的なエラーパス) をコメントで明記する
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
