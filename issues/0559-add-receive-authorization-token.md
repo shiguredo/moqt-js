@@ -1,7 +1,7 @@
 # 受信 AUTHORIZATION TOKEN のデコードとトークンキャッシュを実装する
 
 - Created: 2026-09-09
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/add-receive-authorization-token
 - Polished: 2026-09-13
 
@@ -49,3 +49,30 @@ draft-ietf-moq-transport-21 §8.9 / §9.1.4 は、受信した AUTHORIZATION TOK
 - `SessionErrorCode` / `RequestErrorCode` (`src/error.ts`)
 - `issues/closed/0542-bug-setup-auth-token-alias-validation.md` (SETUP の DELETE / USE_ALIAS を client 側で検査しないと判断した先行 issue)
 - 監査: issue 0558 (draft-21 適合監査) の残項目として起票
+
+## 解決方法
+
+マージ済み PR #296 (`8d9cd9e`) で実装した。本節は実装内容を記録するために追記する。
+
+### 実装
+
+- `src/session/authTokenCache.ts` を新規追加した。
+  - `AuthTokenCache`: ピアが REGISTER した Alias のキャッシュ。`register` / `resolve` / `delete` / `clear` を持ち、§9.1.3 のサイズ計算 (1 トークンあたり 16 バイト + Token Value 長、合計は REGISTER の総和 − DELETE の総和) を実装した。
+  - `processSetupAuthorizationTokens`: 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は §9.1.4 に基づく防御的検査として PROTOCOL_VIOLATION、上限超過 REGISTER は §9.1.4 の MUST により USE_VALUE 扱い (セッションを閉じない)、再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS。
+  - `processMessageAuthorizationTokens`: 受信メッセージパラメータを処理する。上限超過 REGISTER は AUTH_TOKEN_CACHE_OVERFLOW、未登録 USE_ALIAS は unknown-alias を返す (セッションは閉じない)。
+- `src/session.ts` に `localMaxAuthTokenCacheSize` と `receivedAuthTokens` を追加し、`initialize` で広告値を設定した。受信 SETUP で `processSetupAuthorizationTokens`、受信 PUBLISH で `processIncomingPublishAuthorizationTokens` を呼び、`close()` でキャッシュを `clear()` する。
+- `src/session/bidi.ts` の受信 REQUEST_UPDATE 2 経路 (`bidiHandlePublishRequestUpdate` / `bidiReadRequestStreamMessages`) に `processIncomingRequestUpdateAuthorizationTokens` を追加した。unknown-alias は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) と §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) で扱う。
+- `src/error.ts` に `RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` (0x17) を追加した。§8.9 の MUST が指名するが §12.3 の登録表に未収載である根拠をコメントに残した。
+- `CHANGES.md` の `## develop` に `[ADD]` を 1 件追加した。
+
+### 完了条件に対する結果
+
+- 受信 SETUP の REGISTER 登録と再 REGISTER の DUPLICATE_AUTH_TOKEN_ALIAS、USE_ALIAS の解決、DELETE 後の UNKNOWN_AUTH_TOKEN_ALIAS、デコード不能の KEY_VALUE_FORMATTING_ERROR、SETUP の上限超過 USE_VALUE 降格、Message Parameter の上限超過 AUTH_TOKEN_CACHE_OVERFLOW、SETUP の DELETE / USE_ALIAS の PROTOCOL_VIOLATION を、`src/session/authTokenCache.test.ts` (新規 32 件) / `src/session.test.ts` (受信 SETUP 6 件 + 受信 PUBLISH 6 件) / `src/session/bidi.test.ts` (受信 REQUEST_UPDATE 3 件) で検証した。
+- 「テストは `connect()` で行う」という指定に対しては、`connect()` が `session.initialize()` へオプションを渡すラッパー (`src/connect.ts`) であるため、既存の initialize テストと同じく `session.initialize({ maxAuthTokenCacheSize: 1024 })` を直接呼ぶ形で 0 より大きい広告値の経路を検証した。`connect()` を最後まで進めるテストは既存に前例が無く、新規ハーネスは作っていない。
+- 実装中に判明した残余を `CHANGES.md` に明記した。§8.9 の「セッションエラーにならない拒否でも REGISTER を登録する」MUST は受信 SETUP / PUBLISH / REQUEST_UPDATE で満たすが、ペイロードのデコードに失敗する PUBLISH (未知の Mandatory Track Property) と未対応リクエスト (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の経路は未対応である。
+
+### 検証
+
+- `pnpm test run`: 70 ファイル / 2,092 テスト全通過 (実装前 69 ファイル / 2,045 テスト。+1 ファイル / +47 テスト)
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
+- CI (PR #296): build / e2e / lint / typecheck / slack-notify の全ジョブ success
