@@ -1196,6 +1196,10 @@
   - `SubscriberImpl` / `FetcherImpl` / `PublisherImpl` の `get namespace()` / `get trackName()` はリポジトリ全体から読み取られておらず、公開インターフェースにも宣言されていないため削除する
   - `PublisherImpl` の private フィールド `publisherNamespace` / `publisherTrackName` とコンストラクタでの代入も削除する (コンストラクタの引数は呼び出し側の引数順を変えないため残し、未使用引数として扱う)
   - @voluntas
+- [UPDATE] 比較キーを指すコメントとテストの記述を実態に合わせる
+  - `cancelMalformedTrackPeers` と TRACK_STATUS の `trackKey`、`src/session.ts` の FETCH cancel のコメントが「Full Track Name で引く」と書いている箇所を、実際に渡す `fullTrackNameKey` の比較キーであると明記する (生の Full Track Name を連結して渡すと一致せず cross-cancel が空振りする)
+  - `src/fullTrackName.prop.ts` の「同じ Full Track Name は同じキーになる」テストの JSDoc が主張していた生成経路の一致を、実際に検証するテストを追加する (`SubscriberImpl` / `FetcherImpl` の `getFullTrackNameKey()` と free 関数 `fullTrackNameKey` の一致)
+  - @voluntas
 - [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
   - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
   - ワイヤ形式・ロジック・公開 API は変更しない

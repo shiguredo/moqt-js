@@ -5091,7 +5091,7 @@ export class SessionImpl implements Session {
     if (fetcher) {
       // draft-ietf-moq-transport-21 §12.1:
       // 同一 Track の全購読と全 FETCH を cancel する (該当 requestId の FETCH の
-      // みではない)。Full Track Name で引く。
+      // みではない)。比較キー (fullTrackNameKey の戻り値) で引く。
       bidi.cancelMalformedTrackPeers(
         this as unknown as SessionInternal,
         fetcher.getFullTrackNameKey(),
