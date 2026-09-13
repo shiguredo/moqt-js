@@ -1,3 +1,5 @@
+import type { WorkerErrorResponse, WorkerInitResponse } from "./workerMessages";
+
 /**
  * Worker 初期化の応答契約と完了管理
  *
@@ -20,6 +22,8 @@
 
 /**
  * Worker 初期化の応答メッセージ
+ *
+ * 送受信の対応は ./workerMessages を正本とする。
  */
 export type WorkerInitResult = { type: "configured" } | { type: "error"; message: string };
 
@@ -56,6 +60,15 @@ export function toFailureMessage(error: unknown): string {
     // String 化自体が失敗する場合は固定文言に落とす
   }
   return "unknown worker init failure";
+}
+
+/**
+ * Worker 側の実行時エラーを応答メッセージへ変換する
+ *
+ * `"error"` 応答の message は常に非空 string である (WorkerInitResult と同じ契約)。
+ */
+export function workerErrorResponse(error: unknown): WorkerErrorResponse {
+  return { type: "error", message: toFailureMessage(error) };
 }
 
 /**
@@ -148,4 +161,149 @@ export function disposeWorker(worker: Worker | null): void {
     worker.onerror = null;
     worker.terminate();
   }
+}
+
+/**
+ * Wrapper 側の Worker 公開スロット
+ *
+ * `configureWrapperWorker` が「現在公開中の Worker」を読み書きするために使う。
+ * ラッパーは自分の `worker` フィールドを閉じ込めた実装を渡す。
+ */
+export interface WrapperWorkerSlot {
+  /** 現在公開中の Worker を返す (未公開なら null) */
+  get(): Worker | null;
+  /** 公開中の Worker を差し替え、旧 Worker を返す (呼び出し側が破棄する) */
+  swap(worker: Worker | null): Worker | null;
+}
+
+/**
+ * ラッパーの `worker` フィールドを読み書きするスロットを作る
+ *
+ * @param get - 現在のフィールド値を返す関数
+ * @param set - フィールドへ代入する関数
+ */
+export function wrapperWorkerSlot(
+  get: () => Worker | null,
+  set: (worker: Worker | null) => void,
+): WrapperWorkerSlot {
+  return {
+    get,
+    swap(worker: Worker | null): Worker | null {
+      const previous = get();
+      set(worker);
+      return previous;
+    },
+  };
+}
+
+/**
+ * Wrapper 側の Worker 初期化フロー
+ *
+ * 4 ラッパーで同一だった次を 1 箇所に集約する。
+ *
+ * 1. configure() 発行ごとに世代を採番する
+ * 2. Worker モジュールを読み込み、待機中に旧世代化したら生成せず離脱する
+ * 3. Worker を生成し、`{type: "init", config}` を送る
+ * 4. `"configured"` で resolve、`"error"` / onerror で reject (初期化完了後は通知)
+ * 5. 最新世代なら旧公開を破棄して公開 (後勝ち)、旧世代の遅延成功は自世代を破棄して reject
+ *
+ * データ応答 (`"encoded"` / `"decoded"` / `"skipped"` など) はラッパーごとに
+ * 異なるため `handleWorkerData` へ委譲する。
+ *
+ * @param options - 設定。`slot` は呼び出し元の Worker フィールドを読み書きする
+ */
+export async function configureWrapperWorker(options: {
+  /** Worker へ送る configure 設定 */
+  config: unknown;
+  /** 世代管理 (ラッパーが保持する) */
+  tracker: ConfigureGenerationTracker;
+  /** 公開中 Worker の読み書き */
+  slot: WrapperWorkerSlot;
+  /** Vite の `?worker` import で Worker モジュールを読み込む */
+  loadWorkerModule(): Promise<{ default: new () => Worker }>;
+  /** 委譲するデータ応答の `type` 一覧 (契約外の応答は無視する) */
+  dataTypes: readonly string[];
+  /**
+   * `"configured"` / `"error"` 以外の応答を処理する
+   *
+   * 応答の型は ./workerMessages を正本とし、`dataTypes` で絞った type だけが届く。
+   * 呼び出し側で具体的な応答型へ絞り込む。
+   */
+  handleWorkerData?(message: { type: string }): void;
+  /** 初期化完了後に届いた `"error"` / onerror の通知先 */
+  notifyError(error: Error): void;
+}): Promise<void> {
+  // 世代採番は待機より前 (動的 import の解決順に依存させない)。
+  // 生成した worker と世代を対応付ける。
+  // import 失敗時は世代のみ消費する空番になるが、isLatest() は公開時のみ
+  // 参照するため無害である。
+  const generation = options.tracker.begin();
+  const WorkerModule = await options.loadWorkerModule();
+  // 待機中に旧世代化した場合は Worker を生成せず離脱する (生成の無駄を省く)
+  if (!options.tracker.isLatest(generation)) {
+    throw new Error("worker configure superseded by newer generation");
+  }
+  // 生成直後に局所変数へ捕捉する (共有フィールドに置かない)。
+  // 並行 configure() の世代分離のため、以降は局所参照のみ使う。
+  const worker = new WorkerModule.default();
+
+  return new Promise((resolve, reject) => {
+    if (!worker) {
+      reject(new Error("worker not initialized"));
+      return;
+    }
+
+    // 初期化完了前の "error" は configure() の reject とし、
+    // 完了後の "error" は従来どおり通知する (二重解決ガード付き)
+    const gate = new WorkerConfigureGate();
+    const failConfigure = (error: Error) => {
+      if (gate.trySettle()) {
+        // 失敗した自世代のみ破棄する (他世代の Worker には触らない)
+        disposeWorker(worker);
+        reject(error);
+      } else {
+        options.notifyError(error);
+      }
+    };
+
+    worker.onmessage = (event: MessageEvent) => {
+      const message = event.data as WorkerInitResponse | { type: string };
+
+      switch (message.type) {
+        case "configured":
+          if (gate.trySettle()) {
+            if (options.tracker.isLatest(generation)) {
+              // 最新世代: 旧公開を破棄して公開する (後勝ち)
+              const previous = options.slot.swap(worker);
+              disposeWorker(previous);
+              resolve();
+            } else {
+              // 旧世代の遅延成功: 自世代を破棄する (先発破棄)
+              disposeWorker(worker);
+              reject(new Error("worker configure superseded by newer generation"));
+            }
+          }
+          break;
+        case "error":
+          failConfigure(new Error(toFailureMessage((message as { message?: unknown }).message)));
+          break;
+        default:
+          // 契約で定めたデータ応答のみ委譲する。未知の type は無視する
+          // (Worker 側の実装変更や別プロトコルの混入で誤動作させない)。
+          if (options.dataTypes.includes(message.type)) {
+            options.handleWorkerData?.(message);
+          }
+          break;
+      }
+    };
+
+    worker.onerror = (event) => {
+      failConfigure(new Error(toFailureMessage(event.message)));
+    };
+
+    worker.postMessage({
+      type: "init",
+      config: options.config,
+    });
+  });
 }

@@ -6,6 +6,7 @@ import type {
   CodecTestName,
   CodecTestResultMap,
   VideoDecoderTestResult,
+  VideoEncoderReconfigureTestResult,
   VideoEncoderTestResult,
 } from "../../devtools/src/codec-test/types";
 
@@ -497,3 +498,40 @@ test("AudioEncoderWrapper / AudioDecoderWrapper 未設定時: encode() / decode(
     });
   }
 });
+
+/**
+ * VideoEncoderWrapper の再 configure テスト
+ *
+ * 同じ Wrapper に解像度を変えて configure() を 2 回呼び、旧コーデック /
+ * 旧 Worker を破棄したうえで encode が継続することを検証する。
+ * 直接モードは旧 VideoEncoder の close()、Worker モードは旧 Worker の破棄と
+ * 新しい Worker の init を通る。
+ */
+for (const name of ["videoEncoderReconfigureDirect", "videoEncoderReconfigureWorker"] as const) {
+  test(`VideoEncoderWrapper 再 configure: 解像度を変えても encode が継続する (${name})`, async ({
+    page,
+  }) => {
+    await openCodecTestPage(page);
+
+    const result: VideoEncoderReconfigureTestResult = await runCodecTest(page, name);
+
+    // 1 回目と 2 回目でそれぞれ chunk が出力される
+    expect(result.firstConfigChunkCount).toBe(2);
+    expect(result.secondConfigChunkCount).toBe(2);
+
+    // 1 回目は 0 から、2 回目は続きの timestamp で出力される
+    expect(result.outputTimestamps).toEqual([0, 33333, 66666, 99999]);
+
+    // 状態は configure 済みのまま、encodeQueueSize は 0 以上の整数
+    expect(result.stateHistory.map((entry) => entry.state)).toEqual([
+      "unconfigured",
+      "configured",
+      "configured",
+      "unconfigured",
+    ]);
+    expect(result.queueSizeIsNonNegativeInteger).toBe(true);
+
+    // 旧コーデック / 旧 Worker の破棄で error は発生しない
+    expect(result.errorMessages).toEqual([]);
+  });
+}

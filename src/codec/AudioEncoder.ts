@@ -8,10 +8,18 @@ import type { AudioCodecType, AudioEncoderWrapperCallbacks } from "./types";
 import { getAudioEncoderConfig } from "./config";
 import {
   ConfigureGenerationTracker,
-  WorkerConfigureGate,
+  configureWrapperWorker,
   disposeWorker,
-  toFailureMessage,
+  wrapperWorkerSlot,
 } from "./workerConfigure";
+import {
+  closeCodecQuiet,
+  codecStateLabel,
+  isCodecConfigured,
+  replaceCodec,
+  warnCodecNotConfigured,
+} from "./codecLifecycle";
+import type { AudioEncoderWorkerData } from "./workerMessages";
 
 /**
  * オーディオエンコーダーラッパークラス
@@ -50,100 +58,51 @@ export class AudioEncoderWrapper {
   }
 
   private async configureWorker(config: AudioEncoderConfig): Promise<void> {
-    // 世代採番は待機より前 (動的 import の解決順に依存させない)。
-    // 生成した worker と世代を対応付ける。
-    // import 失敗時は世代のみ消費する空番になるが、isLatest() は公開時のみ
-    // 参照するため無害である。
-    const generation = this.generationTracker.begin();
-    const WorkerModule = await import("./workers/audioEncoder.worker?worker");
-    // 待機中に旧世代化した場合は Worker を生成せず離脱する (生成の無駄を省く)
-    if (!this.generationTracker.isLatest(generation)) {
-      throw new Error("worker configure superseded by newer generation");
-    }
-    // 生成直後に局所変数へ捕捉する (共有フィールドに置かない)。
-    // 並行 configure() の世代分離のため、以降は局所参照のみ使う。
-    const worker = new WorkerModule.default();
-
-    return new Promise((resolve, reject) => {
-      if (!worker) {
-        reject(new Error("worker not initialized"));
-        return;
-      }
-
-      // 初期化完了前の "error" は configure() の reject とし、
-      // 完了後の "error" は従来どおり通知する (二重解決ガード付き)
-      const gate = new WorkerConfigureGate();
-      const failConfigure = (error: Error) => {
-        if (gate.trySettle()) {
-          // 失敗した自世代のみ破棄する (他世代の Worker には触らない)
-          disposeWorker(worker);
-          reject(error);
-        } else {
-          this.callbacks.error(error);
-        }
-      };
-
-      worker.onmessage = (event: MessageEvent) => {
-        const message = event.data;
-
-        switch (message.type) {
-          case "configured":
-            if (gate.trySettle()) {
-              if (this.generationTracker.isLatest(generation)) {
-                // 最新世代: 旧公開を破棄して公開する (後勝ち)
-                const previous = this.worker;
-                this.worker = worker;
-                disposeWorker(previous);
-                resolve();
-              } else {
-                // 旧世代の遅延成功: 自世代を破棄する (先発破棄)
-                disposeWorker(worker);
-                reject(new Error("worker configure superseded by newer generation"));
-              }
-            }
-            break;
-          case "encoded":
-            this.callbacks.output({
-              data: new Uint8Array(message.data),
-              type: message.chunkType,
-              timestamp: message.timestamp,
-              duration: message.duration,
-            });
-            break;
-          case "error":
-            failConfigure(new Error(toFailureMessage(message.message)));
-            break;
-        }
-      };
-
-      worker.onerror = (event) => {
-        failConfigure(new Error(toFailureMessage(event.message)));
-      };
-
-      worker.postMessage({
-        type: "init",
-        config,
-      });
+    await configureWrapperWorker({
+      config,
+      tracker: this.generationTracker,
+      slot: wrapperWorkerSlot(
+        () => this.worker,
+        (worker) => {
+          this.worker = worker;
+        },
+      ),
+      dataTypes: ["encoded"],
+      loadWorkerModule: () => import("./workers/audioEncoder.worker?worker"),
+      // dataTypes で "encoded" のみを受け取るため、種別の分岐は不要
+      handleWorkerData: (response) => {
+        const message = response as AudioEncoderWorkerData;
+        this.callbacks.output({
+          data: new Uint8Array(message.data),
+          type: message.chunkType,
+          timestamp: message.timestamp,
+          duration: message.duration,
+        });
+      },
+      notifyError: (error) => this.callbacks.error(error),
     });
   }
 
   private configureDirect(config: AudioEncoderConfig): void {
-    this.encoder = new AudioEncoder({
-      output: (chunk: EncodedAudioChunk) => {
-        const data = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(data);
+    this.encoder = replaceCodec(
+      this.encoder,
+      new AudioEncoder({
+        output: (chunk: EncodedAudioChunk) => {
+          const data = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(data);
 
-        this.callbacks.output({
-          data,
-          type: chunk.type,
-          timestamp: chunk.timestamp,
-          duration: chunk.duration,
-        });
-      },
-      error: (error: DOMException) => {
-        this.callbacks.error(new Error(error.message));
-      },
-    });
+          this.callbacks.output({
+            data,
+            type: chunk.type,
+            timestamp: chunk.timestamp,
+            duration: chunk.duration,
+          });
+        },
+        error: (error: DOMException) => {
+          this.callbacks.error(new Error(error.message));
+        },
+      }),
+    );
 
     this.encoder.configure(config);
   }
@@ -153,7 +112,7 @@ export class AudioEncoderWrapper {
    */
   encode(audioData: AudioData): void {
     if (!this.configured) {
-      console.warn("AudioEncoderWrapper: not configured");
+      warnCodecNotConfigured("AudioEncoderWrapper");
       return;
     }
 
@@ -168,7 +127,7 @@ export class AudioEncoderWrapper {
         },
         [audioData],
       );
-    } else if (this.encoder && this.encoder.state === "configured") {
+    } else if (isCodecConfigured(this.encoder)) {
       this.encoder.encode(audioData);
     }
   }
@@ -177,10 +136,7 @@ export class AudioEncoderWrapper {
    * エンコーダーの状態を取得する
    */
   get state(): string {
-    if (this.useWorker) {
-      return this.configured ? "configured" : "unconfigured";
-    }
-    return this.encoder?.state ?? "unconfigured";
+    return codecStateLabel(this.useWorker, this.configured, this.encoder);
   }
 
   /**
@@ -195,7 +151,7 @@ export class AudioEncoderWrapper {
       this.worker = null;
       disposeWorker(closing);
     } else if (this.encoder) {
-      this.encoder.close();
+      closeCodecQuiet(this.encoder);
       this.encoder = null;
     }
     this.configured = false;

@@ -223,6 +223,29 @@ export interface AudioDecoderTestResult {
 /**
  * テスト名と結果型の対応
  */
+/**
+ * VideoEncoderWrapper の再 configure テスト結果
+ *
+ * 同じ Wrapper に対して解像度を変えて configure() を繰り返し、
+ * 旧コーデックの破棄と新しい設定での encode 継続を検証する。
+ */
+export interface VideoEncoderReconfigureTestResult {
+  test: string;
+  useWorker: boolean;
+  // 状態遷移の記録
+  stateHistory: StateTransition[];
+  // 1 回目の configure で出力された chunk 数
+  firstConfigChunkCount: number;
+  // 2 回目の configure 後に出力された chunk 数
+  secondConfigChunkCount: number;
+  // chunk の timestamp (到着順)
+  outputTimestamps: number[];
+  // 2 回目の configure 後の encodeQueueSize が 0 以上の整数であること
+  queueSizeIsNonNegativeInteger: boolean;
+  // error コールバックへ届いたメッセージ
+  errorMessages: string[];
+}
+
 export interface CodecTestResultMap {
   videoEncoderDirect: VideoEncoderTestResult;
   videoEncoderWorker: VideoEncoderTestResult;
@@ -232,6 +255,8 @@ export interface CodecTestResultMap {
   audioEncoderWorker: AudioEncoderTestResult;
   audioDecoderDirect: AudioDecoderTestResult;
   audioDecoderWorker: AudioDecoderTestResult;
+  videoEncoderReconfigureDirect: VideoEncoderReconfigureTestResult;
+  videoEncoderReconfigureWorker: VideoEncoderReconfigureTestResult;
 }
 
 /**

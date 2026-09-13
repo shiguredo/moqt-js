@@ -2,30 +2,25 @@
  * ビデオエンコーダー用 DedicatedWorker
  */
 
-import { runWorkerInit } from "../workerConfigure";
+import { runWorkerInit, workerErrorResponse } from "../workerConfigure";
+import { closeCodecQuiet, isCodecConfigured, replaceCodec } from "../codecLifecycle";
+import {
+  ignoreUnknownWorkerRequest,
+  type VideoEncoderWorkerEncodeRequest,
+  type WorkerCloseRequest,
+  type WorkerInitRequest,
+} from "../workerMessages";
 
 declare const self: DedicatedWorkerGlobalScope;
 
-interface InitMessage {
-  type: "init";
-  config: VideoEncoderConfig;
-}
-
-interface EncodeMessage {
-  type: "encode";
-  frame: VideoFrame;
-  keyFrame: boolean;
-}
-
-interface CloseMessage {
-  type: "close";
-}
-
-type VideoEncoderWorkerMessage = InitMessage | EncodeMessage | CloseMessage;
+type VideoEncoderWorkerRequest =
+  | WorkerInitRequest<VideoEncoderConfig>
+  | VideoEncoderWorkerEncodeRequest
+  | WorkerCloseRequest;
 
 let videoEncoder: VideoEncoder | null = null;
 
-self.onmessage = (event: MessageEvent<VideoEncoderWorkerMessage>) => {
+self.onmessage = (event: MessageEvent<VideoEncoderWorkerRequest>) => {
   const message = event.data;
 
   switch (message.type) {
@@ -33,53 +28,50 @@ self.onmessage = (event: MessageEvent<VideoEncoderWorkerMessage>) => {
       // 初期化失敗時は "error" で応答し "configured" を送らない
       // (Wrapper の configure() が reject してハングしない前提)
       const result = runWorkerInit(() => {
-        if (videoEncoder) {
-          videoEncoder.close();
-        }
+        // 再 init では旧コーデックを閉じてから差し替える (解放漏れを防ぐ)
+        videoEncoder = replaceCodec(
+          videoEncoder,
+          new VideoEncoder({
+            output: (chunk: EncodedVideoChunk, metadata?: EncodedVideoChunkMetadata) => {
+              const data = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(data);
 
-        videoEncoder = new VideoEncoder({
-          output: (chunk: EncodedVideoChunk, metadata?: EncodedVideoChunkMetadata) => {
-            const data = new Uint8Array(chunk.byteLength);
-            chunk.copyTo(data);
-
-            // metadata から description を取得
-            let description: ArrayBuffer | undefined;
-            if (metadata?.decoderConfig?.description) {
-              const desc = metadata.decoderConfig.description;
-              if (desc instanceof ArrayBuffer) {
-                description = desc.slice(0);
-              } else if (ArrayBuffer.isView(desc)) {
-                description = desc.buffer.slice(
-                  desc.byteOffset,
-                  desc.byteOffset + desc.byteLength,
-                ) as ArrayBuffer;
+              // metadata から description を取得
+              let description: ArrayBuffer | undefined;
+              if (metadata?.decoderConfig?.description) {
+                const desc = metadata.decoderConfig.description;
+                if (desc instanceof ArrayBuffer) {
+                  description = desc.slice(0);
+                } else if (ArrayBuffer.isView(desc)) {
+                  description = desc.buffer.slice(
+                    desc.byteOffset,
+                    desc.byteOffset + desc.byteLength,
+                  ) as ArrayBuffer;
+                }
               }
-            }
 
-            const transferList: Transferable[] = [data.buffer];
-            if (description) {
-              transferList.push(description);
-            }
+              const transferList: Transferable[] = [data.buffer];
+              if (description) {
+                transferList.push(description);
+              }
 
-            self.postMessage(
-              {
-                type: "encoded",
-                data: data.buffer,
-                chunkType: chunk.type,
-                timestamp: chunk.timestamp,
-                duration: chunk.duration,
-                description,
-              },
-              transferList as unknown as StructuredSerializeOptions,
-            );
-          },
-          error: (error: DOMException) => {
-            self.postMessage({
-              type: "error",
-              message: error.message,
-            });
-          },
-        });
+              self.postMessage(
+                {
+                  type: "encoded",
+                  data: data.buffer,
+                  chunkType: chunk.type,
+                  timestamp: chunk.timestamp,
+                  duration: chunk.duration,
+                  description,
+                },
+                transferList as unknown as StructuredSerializeOptions,
+              );
+            },
+            error: (error: DOMException) => {
+              self.postMessage(workerErrorResponse(error));
+            },
+          }),
+        );
 
         videoEncoder.configure(message.config);
       });
@@ -88,7 +80,7 @@ self.onmessage = (event: MessageEvent<VideoEncoderWorkerMessage>) => {
     }
 
     case "encode": {
-      if (videoEncoder && videoEncoder.state === "configured") {
+      if (isCodecConfigured(videoEncoder)) {
         videoEncoder.encode(message.frame, { keyFrame: message.keyFrame });
       }
       message.frame.close();
@@ -96,11 +88,12 @@ self.onmessage = (event: MessageEvent<VideoEncoderWorkerMessage>) => {
     }
 
     case "close": {
-      if (videoEncoder) {
-        videoEncoder.close();
-        videoEncoder = null;
-      }
+      closeCodecQuiet(videoEncoder);
+      videoEncoder = null;
       break;
     }
+
+    default:
+      ignoreUnknownWorkerRequest(message);
   }
 };
