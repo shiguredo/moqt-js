@@ -1,7 +1,7 @@
 # 比較キーを branded type にして生の Full Track Name の取り違えを型で防ぐ
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/refactor-brand-full-track-name-key
 - Polished: {YYYY-MM-DD}
 
@@ -37,3 +37,39 @@
 
 - `fullTrackNameKey` (`src/fullTrackName.ts`) / `getFullTrackNameKey` (`src/subscriber.ts` / `src/fetcher.ts`) / `cancelMalformedTrackPeers` / `PendingTrackStatus` (`src/session/bidi.ts`) / `handleIncomingBidirectionalStream` (`src/session.ts`) / `incomingHandleDatagram` (`src/session/incoming.ts`)
 - `issues/closed/0584-refactor-rename-full-track-name-key.md` (比較キーを返すメソッド名を実体に合わせた issue)
+
+## 解決方法
+
+実装した。
+
+### 型の定義
+
+`src/fullTrackName.ts` に `export type FullTrackNameKey = string & { readonly __brand: "FullTrackNameKey" }` を追加し、`fullTrackNameKey` の戻り値を `FullTrackNameKey` にした。brand は型のみで実行時表現を持たないため、生成は `fullTrackNameKey` の 1 箇所で `as FullTrackNameKey` を 1 回だけ使い、他のコードはブランド済みの値をそのまま受け渡す。実行時の値は従来と同じ文字列である。
+
+### 型を揃えた箇所
+
+- `src/subscriber.ts` の `SubscriberImpl.getFullTrackNameKey` の戻り値
+- `src/fetcher.ts` の `FetcherImpl.getFullTrackNameKey` の戻り値
+- `src/session/bidi.ts` の `PendingTrackStatus.trackKey`
+- `src/session/bidi.ts` の `cancelMalformedTrackPeers` の引数 `trackKey`
+
+`src/session.ts` の `handleIncomingBidirectionalStream` は `fullTrackNameKey` の戻り値と比較するため、生成関数の戻り値の型を変えるだけで両辺が branded になった。
+
+### 型で防げることの確認
+
+生の Full Track Name を渡すコードを一時的に置いて `vp check` を実行し、`TS2345: Argument of type 'string' is not assignable to parameter of type 'FullTrackNameKey'` になることを確認した。issue の設計方針どおり、テストファイルは `tsc` の対象外であるため恒久的な型テストは置いていない。
+
+### 公開 API への影響
+
+`vp pack` でビルドし、`dist/index.d.ts` に `FullTrackNameKey` が出現しないこと (0 件) を確認した。公開インターフェース `Subscriber` / `Fetcher` は `getFullTrackNameKey` を持たず、`src/index.ts` も `FullTrackNameKey` を export していない。
+
+### テスト
+
+挙動を変えないため新規テストは追加していない。比較キーの生成規則は既存の `src/fullTrackName.prop.ts` (Impl の `getFullTrackNameKey` と free 関数が同じキーを返すこと、異なるフィールド列が同じキーにならないこと) が引き続き検証している。
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,126 テスト全通過
+- `vp pack` 成功、`dist/index.d.ts` に型の変化なし
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した
