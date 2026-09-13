@@ -19,17 +19,11 @@ import {
 
 /**
  * Uint8Array の配列を 1 つに連結する
+ *
+ * ライブラリ本体の `src/bytes.ts` に同じ実装があるため、そちらを再公開する
+ * (テスト専用の重複実装を残さない)。
  */
-export function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
+export { concatUint8Arrays } from "../bytes";
 
 /**
  * Node.js の process を型付きで取り出す
