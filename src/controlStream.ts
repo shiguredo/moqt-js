@@ -21,22 +21,17 @@ export interface ControlMessage {
  */
 export class ControlStreamReader {
   private buffer: Uint8Array = new Uint8Array(0);
-  private finReceived = false;
 
   /**
    * データを供給してメッセージを取り出す
    * @returns 完全なメッセージの配列
    */
-  feed(data: Uint8Array, fin = false): ControlMessage[] {
+  feed(data: Uint8Array): ControlMessage[] {
     // バッファに追加
     const newBuffer = new Uint8Array(this.buffer.length + data.length);
     newBuffer.set(this.buffer, 0);
     newBuffer.set(data, this.buffer.length);
     this.buffer = newBuffer;
-
-    if (fin) {
-      this.finReceived = true;
-    }
 
     return this.processMessages();
   }
@@ -46,20 +41,6 @@ export class ControlStreamReader {
    */
   clear(): void {
     this.buffer = new Uint8Array(0);
-  }
-
-  /**
-   * バッファサイズ
-   */
-  get bufferSize(): number {
-    return this.buffer.length;
-  }
-
-  /**
-   * FIN を受信したか
-   */
-  get isFinReceived(): boolean {
-    return this.finReceived;
   }
 
   private processMessages(): ControlMessage[] {
@@ -136,12 +117,5 @@ export class ControlStreamWriter {
     result.set(payload, typeBytes.length + 2);
 
     return result;
-  }
-
-  /**
-   * ControlMessage をエンコード
-   */
-  encodeMessage(msg: ControlMessage): Uint8Array {
-    return this.encode(msg.type, msg.payload);
   }
 }

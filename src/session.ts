@@ -5280,7 +5280,7 @@ export class SessionImpl implements Session {
     let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
     if (subscribers.length === 0) {
-      const entry = this.pendingSubgroupBuffer.add(header.trackAlias, header);
+      const entry = this.pendingSubgroupBuffer.add(header.trackAlias);
       let entryRemoved = false;
 
       try {

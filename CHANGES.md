@@ -1175,6 +1175,12 @@
 - [CHANGE] 未使用の export (calculateAuthTokenSize / fallbackRegisterToUseValue / ObjectForwardingPreference) を削除する
   - リポジトリ全体から参照されていないデッドコードを削除する
   - @voluntas
+- [CHANGE] リポジトリ全体から参照されていない実装コードを削除する
+  - import 元が無い `src/codec/index.ts` を削除する (`src/index.ts` は `./codec/types` を直接参照しており公開 API に影響しない)
+  - 未参照の `ControlStreamWriter.encodeMessage` / `ControlStreamReader.bufferSize` / `ControlStreamReader.isFinReceived` / `VideoDecoderWrapper.state` / `AudioDecoderWrapper.state` / `AudioEncoderWrapper.encodeQueueSize` と、`AudioDecoderWrapper.reset()` の再構成用に保持していた `lastConfig` を削除する
+  - `ControlStreamReader.feed()` の `fin` 引数は `finReceived` を設定するためだけにあり、その値を読む経路が無いため削除する
+  - 書き込み専用だった `PendingSubgroupEntry.header` と `ValidationContext.catalogNamespace`、到達しない `ValidationContext.source` の `"remove"` を削除する (`remove` operation は `validateRemoveTrack` で検証する)
+  - @voluntas
 - [UPDATE] コメントとドキュメントの仕様参照を draft-21 に更新する
   - draft-ietf-moq-transport-20 の節番号・図表番号・付録番号を draft-21 の対応表に従って更新する
   - ワイヤ形式・ロジック・公開 API は変更しない
