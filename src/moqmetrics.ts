@@ -23,6 +23,13 @@
  */
 
 import { ProtocolViolationError } from "./error";
+import {
+  decodeObservabilityJson,
+  observabilityGroupId,
+  observabilityTrackName,
+  observabilityTrackNamespace,
+  SYSLOG_LEVELS,
+} from "./observability";
 
 /**
  * Object ID 0 の payload（[MOQMETRICS] Section 3 / msf-01 §10.3）
@@ -69,37 +76,10 @@ export interface MetricObject {
 /**
  * metrics granularity level の文字列 ↔ 優先度（0-7）の対応
  * draft-ietf-moq-msf-01 §10.2 / [MOQMETRICS] §3。syslog severity と同一規約。
- */
-export const METRICS_GRANULARITY_LEVELS: Readonly<Record<string, number>> = {
-  Emergency: 0,
-  Alert: 1,
-  Critical: 2,
-  Error: 3,
-  Warning: 4,
-  Notice: 5,
-  Informational: 6,
-  Debug: 7,
-};
-
-/**
- * payload バイト列を JSON object にデコードする共通処理。
  *
- * @throws ProtocolViolationError JSON が不正、または object でない場合
+ * 実体は MOQLOG の severity と共通の表 (./observability)。
  */
-function decodeJsonObject(data: Uint8Array, what: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    // 不正 UTF-8 を U+FFFD に置換せず throw させ、ProtocolViolationError 経路に載せる
-    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(data));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new ProtocolViolationError(`invalid ${what} payload JSON: ${message}`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new ProtocolViolationError(`${what} payload must be a JSON object`);
-  }
-  return parsed as Record<string, unknown>;
-}
+export const METRICS_GRANULARITY_LEVELS: Readonly<Record<string, number>> = SYSLOG_LEVELS;
 
 /**
  * Object ID 0 の payload（capture timestamp + attributes）をエンコードする。
@@ -125,7 +105,7 @@ export function encodeCaptureObject(obj: MetricsCaptureObject): Uint8Array {
  * capture_timestamp が欠落または有限数でない場合
  */
 export function decodeCaptureObject(data: Uint8Array): MetricsCaptureObject {
-  const parsed = decodeJsonObject(data, "moqmetrics capture object");
+  const parsed = decodeObservabilityJson(data, "moqmetrics capture object");
   const timestamp = parsed["capture_timestamp"];
   if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
     throw new ProtocolViolationError(
@@ -157,7 +137,7 @@ export function encodeMetricObject(obj: MetricObject): Uint8Array {
  * value が欠落または有限数でない場合
  */
 export function decodeMetricObject(data: Uint8Array): MetricObject {
-  const parsed = decodeJsonObject(data, "moqmetrics metric object");
+  const parsed = decodeObservabilityJson(data, "moqmetrics metric object");
   const value = parsed["value"];
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new ProtocolViolationError(
@@ -170,8 +150,6 @@ export function decodeMetricObject(data: Uint8Array): MetricObject {
 /**
  * Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §10.3）
  */
-const GROUP_ID_MASK_62 = (1n << 62n) - 1n;
-
 /**
  * Metrics track の Group ID を計算する（draft-ietf-moq-msf-01 §10.3）
  *
@@ -182,10 +160,7 @@ const GROUP_ID_MASK_62 = (1n << 62n) - 1n;
  * @throws Error timestampMs が負の場合
  */
 export function metricsGroupId(timestampMs: bigint): bigint {
-  if (timestampMs < 0n) {
-    throw new Error(`metrics group timestamp must be non-negative: ${timestampMs}`);
-  }
-  return timestampMs & GROUP_ID_MASK_62;
+  return observabilityGroupId(timestampMs, "metrics group");
 }
 
 /**
@@ -226,10 +201,7 @@ export const MOQMETRICS_NAMESPACE_PREFIX = "moq://metrics.moq.arpa/v1/";
  * @throws Error resourceId が空の場合
  */
 export function metricsTrackNamespace(resourceId: string): [string, string] {
-  if (resourceId === "") {
-    throw new Error("moqmetrics resourceId must not be empty");
-  }
-  return [MOQMETRICS_NAMESPACE_PREFIX, resourceId];
+  return observabilityTrackNamespace(MOQMETRICS_NAMESPACE_PREFIX, resourceId, "moqmetrics");
 }
 
 /**
@@ -241,8 +213,5 @@ export function metricsTrackNamespace(resourceId: string): [string, string] {
  * @throws Error granularityLevel が 0-7 の整数でない場合
  */
 export function metricsTrackName(granularityLevel: number): Uint8Array {
-  if (!Number.isInteger(granularityLevel) || granularityLevel < 0 || granularityLevel > 7) {
-    throw new Error(`metrics granularity level must be an integer 0-7: ${granularityLevel}`);
-  }
-  return new Uint8Array([granularityLevel]);
+  return observabilityTrackName(granularityLevel, "metrics granularity");
 }
