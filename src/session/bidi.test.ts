@@ -32,9 +32,12 @@ import {
   encodeRangeFilter,
   createTrackNamespace,
   encodeParameterTrackNamespace,
+  encodeAuthorizationToken,
+  AuthorizationTokenAliasType,
   type Parameter,
 } from "../message";
 import { buildFillParameters } from "./params";
+import { AuthTokenCache } from "./authTokenCache";
 import {
   decodeRequestUpdatePayload,
   encodeRequestUpdatePayload,
@@ -2392,7 +2395,10 @@ test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingR
  * 型キャストしたものであり、BidiSessionInternal の未使用フィールドは
  * 最小限のダミー値で満たす。
  */
-function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>): {
+function createPublishReadTestContext(
+  writableSink: UnderlyingSink<Uint8Array>,
+  authTokenCacheSize = 0,
+): {
   session: BidiSessionInternal;
   stream: WebTransportBidirectionalStream;
   readableController: ReadableStreamDefaultController<Uint8Array>;
@@ -2462,6 +2468,10 @@ function createPublishReadTestContext(writableSink: UnderlyingSink<Uint8Array>):
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+    // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止) で、
+    // Alias を使うテストは authTokenCacheSize を指定する。
+    receivedAuthTokens: new AuthTokenCache(authTokenCacheSize),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),
@@ -4964,7 +4974,17 @@ test("bidiHandlePublishRequestUpdate: 受理パラメータのみの REQUEST_UPD
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
     parameters: [
-      { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        // Alias を使わない USE_VALUE 形式にする。REGISTER 形式にすると
+        // テスト用セッションの MAX_AUTH_TOKEN_CACHE_SIZE (未広告 = 0) を
+        // 超えて AUTH_TOKEN_CACHE_OVERFLOW でセッションが閉じてしまう。
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_VALUE,
+          tokenType: 1n,
+          tokenValue: new Uint8Array([1]),
+        }),
+      },
       { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: new Uint8Array([2]) },
       { type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT, value: new Uint8Array([3]) },
     ],
@@ -5112,7 +5132,17 @@ test("bidiHandlePublishRequestUpdate: 許可パラメータの混合 REQUEST_UPD
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
     parameters: [
-      { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([1]) },
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        // Alias を使わない USE_VALUE 形式にする。REGISTER 形式にすると
+        // テスト用セッションの MAX_AUTH_TOKEN_CACHE_SIZE (未広告 = 0) を
+        // 超えて AUTH_TOKEN_CACHE_OVERFLOW でセッションが閉じてしまう。
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_VALUE,
+          tokenType: 1n,
+          tokenValue: new Uint8Array([1]),
+        }),
+      },
       { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([1]) },
     ],
   });
@@ -5123,6 +5153,107 @@ test("bidiHandlePublishRequestUpdate: 許可パラメータの混合 REQUEST_UPD
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN の REGISTER がトークンキャッシュへ
+ * 登録され、REQUEST_OK が応答されることを検証する。
+ */
+test("bidiHandlePublishRequestUpdate: AUTHORIZATION TOKEN の REGISTER がキャッシュへ登録される", async () => {
+  const ctx = createPublishReadTestContext({}, 1024);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 8n,
+          tokenType: 3n,
+          tokenValue: new Uint8Array([0x77]),
+        }),
+      },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // §9.1.3: エントリサイズは 16 バイト + Token Value 長
+  assert.deepEqual(ctx.session.receivedAuthTokens.resolve(8n), {
+    status: "resolved",
+    tokenType: 3n,
+    tokenValue: new Uint8Array([0x77]),
+  });
+  assert.equal(ctx.session.receivedAuthTokens.size, 17);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9:
+ * 未登録 Alias を参照する USE_ALIAS を含む REQUEST_UPDATE は REQUEST_ERROR
+ * (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否され、セッションは閉じない MUST を検証する
+ * (§9.5.1 により PUBLISH_DONE も送られる)。
+ */
+test("bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する", async () => {
+  const ctx = createPublishReadTestContext({}, 1024);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 55n,
+        }),
+      },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  // ケース 1 の moqt-js は受信 PUBLISH の subscriber であり、§3.1 / §9.5.1 の
+  // PUBLISH_DONE は publisher が送る。拒否は REQUEST_ERROR のみでなければならない。
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(Number(decoded.errorCode), RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  // §8.9: 未登録 Alias の参照ではセッションを閉じない
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+ * Message Parameter の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合は
+ * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる MUST を検証する。
+ * SETUP 経路 (§9.1.4) と異なり USE_VALUE へ降格しない。
+ */
+test("bidiHandlePublishRequestUpdate: 上限超過 REGISTER は AUTH_TOKEN_CACHE_OVERFLOW で閉じる", async () => {
+  // 上限 0 (未広告) では Alias を 1 つも登録できない
+  const ctx = createPublishReadTestContext({}, 0);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 1n,
+          tokenType: 1n,
+          tokenValue: new Uint8Array([0x88]),
+        }),
+      },
+    ],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError?.code, SessionErrorCode.AUTH_TOKEN_CACHE_OVERFLOW);
 });
 
 /**
