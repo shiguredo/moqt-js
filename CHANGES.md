@@ -1188,6 +1188,10 @@
 - [UPDATE] Mandatory Track Property の範囲判定を述語に集約する
   - `src/properties.ts` の 6 箇所に重複していた `id >= 0x4000n && id <= 0x7fffn` の判定を `isMandatoryTrackPropertyId` に集約し、値域の定義を 1 箇所にする (draft-ietf-moq-transport-21 §3.6)
   - @voluntas
+- [UPDATE] Datagram の先頭固定フィールドの配置知識を 1 箇所に集約する
+  - `src/session/incoming.ts` の `decodeDatagramTrackAlias` が `decodeObjectDatagram` の先頭 2 varint 配置 (Type Flags → Track Alias) を再実装していたため、`src/dataStream.ts` の `decodeDatagramTypeAndTrackAlias` に集約して両者が共有する
+  - 片方だけがワイヤ配置を変わると、デコード失敗時に誤った alias を引いて無関係な購読を cancel し得るため、配置知識と Type Flags の検証を 1 箇所にする
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
