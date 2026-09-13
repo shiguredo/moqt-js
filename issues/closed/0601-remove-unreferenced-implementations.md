@@ -1,7 +1,7 @@
 # リポジトリ全体から参照されていない実装コードを削除する
 
 - Created: 2026-09-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/remove-unreferenced-implementations
 - Polished: {YYYY-MM-DD}
 
@@ -52,7 +52,7 @@
 - 上記 9 箇所が削除され、リポジトリ全体で参照が残っていないこと。
 - `src/codec/index.ts` の削除後も `src/index.ts` の型 export が成立すること。
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること。
-- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加すること (未使用コードの削除のため)。
+- `CHANGES.md` の `## develop` の `### misc` に `[CHANGE]` を追加すること (未使用コードの削除のため)。
 
 ## 参照
 
@@ -62,3 +62,33 @@
 - `src/pendingSubgroupBuffer.ts`
 - `src/msf.ts` (`ValidationContext` / `validateCatalogTrack`)
 - `issues/0589-remove-unused-track-accessors.md` (同じく未使用コードの削除。対象は `SubscriberImpl` / `FetcherImpl` / `PublisherImpl` のアクセサで本 issue とは重複しない)
+
+## 解決方法
+
+起票時に挙げた 9 箇所を削除した。実装前の再検証で対象の誤りを 2 件見つけて修正したうえで着手している。
+
+### 実装前の再検証で修正した点
+
+- `VideoEncoderWrapper.state` / `AudioEncoderWrapper.state` は未使用ではなかった。`src/createMediaPublisher.ts` の `processVideoFrames` / `processAudioFrames` が `encoder.state === "configured"` として読む。削除対象を Decoder の 2 つに限定した。
+- `PublisherState` / `SubscriberState` / `FetcherState` は死にコードではなかった。`Publisher` / `Subscriber` / `Fetcher` インターフェースが `readonly state: <型>` を持ち、そのインターフェースは `src/index.ts` から公開されている。削除対象から外した。
+
+### 削除したもの
+
+- `src/codec/index.ts` をファイルごと削除した。このパスを import する箇所はリポジトリ全体で 0 件で、`src/index.ts` は `./codec/types` を直接参照している。
+- `src/controlStream.ts` から `ControlStreamWriter.encodeMessage` / `ControlStreamReader.bufferSize` / `ControlStreamReader.isFinReceived` を削除した。あわせて `finReceived` フィールドと `feed()` の `fin` 引数も削除した (`fin` は `finReceived` を設定するためだけにあり、その値を読む経路が無いため)。
+- `src/codec/VideoDecoder.ts` と `src/codec/AudioDecoder.ts` から `state` getter を削除した。
+- `src/codec/AudioEncoder.ts` から `encodeQueueSize` getter を削除した。
+- `src/codec/AudioDecoder.ts` から `reset()` と、その再構成用にのみ保持していた `lastConfig` フィールドと `configure()` での代入を削除した (音声側の `reset()` 呼び出しは 0 件)。
+- `src/pendingSubgroupBuffer.ts` から `PendingSubgroupEntry.header` と `PendingSubgroupBuffer.add()` の `header` 引数、不要になった `SubgroupHeader` の import を削除した。`src/session.ts` の呼び出しも追随させた。
+- `src/msf.ts` の `ValidationContext` から `catalogNamespace` を削除し、`source` の union から到達しない `"remove"` を削除した。あわせて `catalogNamespace` の実装と乖離した JSDoc を、`remove` operation は `validateRemoveTrack` で検証する旨の記述に置き換えた。
+
+### 追随して修正したテスト
+
+- `src/controlStream.test.ts`: `bufferSize` / `isFinReceived` / `encodeMessage` を使っていたテストを、`encode()` と `feed()` の戻り値で検証する形に書き換えた。`bufferSize` の数値検証は「メッセージが揃うまで取り出せない」という挙動検証に置き換え、`encodeMessage` の roundtrip は `encode(m.type, m.payload)` に変更した。
+- `src/pendingSubgroupBuffer.test.ts`: `add()` の呼び出し 17 箇所から `header` 引数を外し、不要になった `makeHeader` ヘルパーと `SubgroupHeader` の import を削除した。
+
+### 検証
+
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過 (着手前 2,093。削除した API 専用のテスト 3 件分が減り、既存の検証内容は維持している)
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
+- 削除後の差分は 11 ファイル、+39 / -177 行
