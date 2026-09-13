@@ -98,6 +98,13 @@
   - draft-ietf-moq-transport-20 §5.1.2 / §5.1.3 に基づき、fill fetch 由来のオブジェクトは subscription の Location Filter / Range Filter 再適用を通さず fillDelivered を付けて渡す
   - 同一 Location が両経路で届いても自動の重複排除は行わず、アプリが fillDelivered で区別する
   - @voluntas
+- [ADD] 受信 AUTHORIZATION TOKEN のデコードとトークンキャッシュを実装する
+  - draft-ietf-moq-transport-21 §8.9 / §9.1.4 / §9.20.3 に基づき、受信 SETUP の AUTHORIZATION TOKEN オプションと受信 PUBLISH / REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータをデコードし、REGISTER / USE_ALIAS / DELETE / USE_VALUE を処理する
+  - セッションに MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3) を上限とするトークンキャッシュを追加し、デコード不能は KEY_VALUE_FORMATTING_ERROR、登録済み Alias の再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS、Message Parameter の上限超過は AUTH_TOKEN_CACHE_OVERFLOW、未登録 Alias の参照は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で扱う
+  - SETUP の上限超過 REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない
+  - 受信 SETUP の DELETE / USE_ALIAS は §9.1.4 に基づく防御的検査として PROTOCOL_VIOLATION でセッションを閉じる
+  - §8.9 の「セッションエラーにならない拒否でも REGISTER を登録する」MUST は受信 SETUP / PUBLISH / REQUEST_UPDATE で満たすが、ペイロードのデコードに失敗する PUBLISH (未知の Mandatory Track Property) と未対応リクエスト (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の経路は未対応の残余である
+  - @voluntas
 - [UPDATE] 受信 PUBLISH で Subscription Parameters を許可する
   - draft-ietf-moq-transport-20 §10.11 に基づき、FORWARD / GROUP_ORDER に加えて OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER を受信できるようにする
   - 受信 PUBLISH の LOCATION_FILTER を subscriber の初期フィルタとして反映する (timeouts / SUBSCRIBER_PRIORITY / GROUP_ORDER は受理のみ)

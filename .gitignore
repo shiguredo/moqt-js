@@ -27,6 +27,10 @@ coverage/
 .cache/
 .turbo/
 
+# pnpm のローカルストア
+# リポジトリ直下に作られることがあるため無視する
+.pnpm-store/
+
 # image
 *.png
 *.jpg

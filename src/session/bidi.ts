@@ -96,6 +96,11 @@ import {
 } from "./errors";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { publishResetPublisherStream, publishSendPublishDoneWithoutPublisher } from "./publish";
+import {
+  type AuthTokenCache,
+  type AuthTokenProcessResult,
+  processMessageAuthorizationTokens,
+} from "./authTokenCache";
 import type {
   NamespaceSubscriptionState,
   PublisherStreamState,
@@ -246,6 +251,14 @@ export interface BidiSessionInternal {
   // draft-ietf-moq-transport-21 §9.1.6: 自 endpoint が SETUP で広告した
   // MAX_FILTER_RANGES（未広告時は 0 = Range Filter 受信拒否）
   readonly localMaxFilterRanges: number;
+
+  /**
+   * ピアが REGISTER した Authorization Token のキャッシュ
+   *
+   * draft-ietf-moq-transport-21 §8.9 / §9.20.3:
+   * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを解決・登録するために使う。
+   */
+  readonly receivedAuthTokens: AuthTokenCache;
 
   statsControlMessagesSent: number;
 
@@ -1457,6 +1470,133 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
 }
 
 /**
+ * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する
+ *
+ * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * §8.9 の MUST により REGISTER はメッセージが他の理由で失敗しても登録を維持する
+ * ため、後続の検証より前に処理する。未登録 Alias の参照は REQUEST_ERROR
+ * (UNKNOWN_AUTH_TOKEN_ALIAS) でメッセージを拒否する。デコード不能
+ * (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
+ * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
+ * セッションを閉じる。
+ *
+ * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が送る MUST であり、
+ * moqt-js が publisher となる経路 (自 PUBLISH ストリーム) でのみ必要となる。
+ * そのため本ヘルパーでは送信せず、呼び出し元がロールに応じて行う。
+ *
+ * @returns ok (継続可) / unknown-alias (REQUEST_ERROR 送信済み) /
+ *   closed (セッション終了済み)
+ */
+async function processIncomingRequestUpdateAuthorizationTokens(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  parameters: Array<{ type: number; value: Uint8Array }>,
+): Promise<"ok" | "unknown-alias" | "closed"> {
+  let result: AuthTokenProcessResult;
+  try {
+    // セッションを閉じる違反 (SessionError) だけを捕捉対象にする。
+    // 送信処理の例外までここで握ると §9.5 の「REQUEST_OK / REQUEST_ERROR を
+    // ちょうど 1 通返す MUST」が崩れる。
+    result = processMessageAuthorizationTokens(session.receivedAuthTokens, parameters);
+  } catch (err) {
+    const authError = toSessionCloseError(err);
+    if (authError !== null) {
+      session.closeWithError(authError);
+    }
+    return "closed";
+  }
+  if (result.status === "unknown-alias") {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
+      "unknown authorization token alias",
+    );
+    return "unknown-alias";
+  }
+  return "ok";
+}
+
+/**
+ * 受信 REQUEST_UPDATE の前置検証を行う
+ *
+ * draft-ietf-moq-transport-21 §9.5 / §9.2 / §9.20.3 / §8.9:
+ * - subscribe ロールの想定外 REQUEST_UPDATE はセッションエラー (PROTOCOL_VIOLATION)
+ *   であるため、§8.9 の登録 MUST の対象外として最初に判定する。GOAWAY 受信済みの
+ *   subscribe ロールは送信方向が FIN 済みで応答不能なため、既存どおり無視する。
+ * - AUTHORIZATION TOKEN は §8.9 の MUST「セッションエラーにならない限り REGISTER を
+ *   登録する」を満たすため、セッションエラーにならない拒否 (GOING_AWAY 応答) より
+ *   前に処理する。
+ * - GOAWAY 受信後の旧リクエストへの REQUEST_UPDATE は publish ロールでは
+ *   REQUEST_ERROR (GOING_AWAY) で応答し、subscribe ロールでは無視する。
+ *
+ * @returns continue (後続の検証へ進む) / break (このメッセージの処理を終える) /
+ *   return (読み取りループを終了する)
+ */
+async function bidiPreflightRequestUpdate(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  decoded: ReturnType<typeof decodeRequestUpdatePayload>,
+  role: "publish" | "subscribe",
+): Promise<"continue" | "break" | "return"> {
+  // draft-ietf-moq-transport-21 §9.5:
+  // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
+  // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
+  // Section 9.5 の 2 ケースに該当しない。
+  if (role === "subscribe" && !session.goawayReceivedOnRequestStreams.has(requestId)) {
+    session.closeWithError(
+      new SessionError(
+        "unexpected REQUEST_UPDATE on subscribe stream",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return "return";
+  }
+
+  // draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+  // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。
+  const authResult = await processIncomingRequestUpdateAuthorizationTokens(
+    session,
+    requestId,
+    decoded.parameters,
+  );
+  if (authResult !== "ok") {
+    if (authResult === "unknown-alias") {
+      // 本経路 (ケース 2) の publish ロールでは moqt-js が publisher であり、
+      // §9.5.1 の MUST に従い PUBLISH_DONE (UPDATE_FAILED) で購読を終了する。
+      await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+    }
+    return "break";
+  }
+
+  // draft-ietf-moq-transport-21 §9.2 / §12.5 / §9.5:
+  // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE の扱い。
+  // - publish ロール: GOAWAY 処理で送信方向を閉じないため応答可能。
+  //   §9.5 の MUST「The receiver of a REQUEST_UPDATE MUST respond with exactly
+  //   one REQUEST_OK or REQUEST_ERROR message」を満たすため、REQUEST_ERROR
+  //   (GOING_AWAY) で応答する。
+  // - subscribe ロール: GOAWAY 処理で送信方向を FIN (writer.close()) で閉じて
+  //   いるため GOING_AWAY 応答を書き込むことができない。§9.5 の MUST からは
+  //   逸脱するが、§6.4.2.2 によりピアは FIN 後に REQUEST_UPDATE を送るべきでは
+  //   ない (「will not need to respond to a future REQUEST_UPDATE」) ため無視する。
+  if (session.goawayReceivedOnRequestStreams.has(requestId)) {
+    if (role === "publish") {
+      await bidiSendRequestError(
+        session,
+        requestId,
+        RequestErrorCode.GOING_AWAY,
+        REQUEST_GOING_AWAY_REASON,
+      );
+      // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
+      await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+    }
+    return "break";
+  }
+
+  return "continue";
+}
+
+/**
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE (ケース 1) を処理する
  *
  * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
@@ -1549,6 +1689,25 @@ export async function bidiHandlePublishRequestUpdate(
       RequestErrorCode.GOING_AWAY,
       REQUEST_GOING_AWAY_REASON,
     );
+    return;
+  }
+
+  // draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+  // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
+  // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
+  // であるため、セッションエラーにならない拒否 (GOAWAY による GOING_AWAY 応答) より
+  // 前に処理する。
+  //
+  // 本経路 (ケース 1) の moqt-js は受信 PUBLISH の subscriber であり、
+  // §3.1 / §9.5.1 の PUBLISH_DONE は publisher が送る。拒否は
+  // REQUEST_ERROR のみとし、購読の終了は publisher (ピア) に委ねる。
+  if (
+    (await processIncomingRequestUpdateAuthorizationTokens(
+      session,
+      requestId,
+      decoded.parameters,
+    )) !== "ok"
+  ) {
     return;
   }
 
@@ -1992,45 +2151,15 @@ export async function bidiReadRequestStreamMessages(
               return;
             }
 
-            // draft-ietf-moq-transport-21 §9.2 / §12.5 / §9.5:
-            // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE の扱い。
-            // - publish ロール: GOAWAY 処理で送信方向を閉じないため応答可能。
-            //   §9.5 の MUST「The receiver of a REQUEST_UPDATE MUST respond
-            //   with exactly one REQUEST_OK or REQUEST_ERROR message」を満たす
-            //   ため、REQUEST_ERROR (GOING_AWAY) で応答する。
-            // - subscribe ロール: GOAWAY 処理で送信方向を FIN (writer.close())
-            //   で閉じているため GOING_AWAY 応答を書き込むことができない。
-            //   §9.5 の MUST からは逸脱するが、§6.4.2.2 によりピアは FIN 後に
-            //   REQUEST_UPDATE を送るべきではない (「will not need to respond
-            //   to a future REQUEST_UPDATE」) ため、無視する。
-            if (session.goawayReceivedOnRequestStreams.has(requestId)) {
-              // publish ロールは送信方向が開いているため GOING_AWAY で応答する
-              // (§9.5 MUST)。subscribe ロールは送信方向が FIN 済みのため応答
-              // 不能であり、無視する。
-              if (role === "publish") {
-                await bidiSendRequestError(
-                  session,
-                  requestId,
-                  RequestErrorCode.GOING_AWAY,
-                  REQUEST_GOING_AWAY_REASON,
-                );
-                // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
-                await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-              }
-              break;
-            }
-            // draft-ietf-moq-transport-21 §9.5:
-            // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
-            // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
-            // Section 9.5 の 2 ケースに該当しない。
-            if (role === "subscribe") {
-              session.closeWithError(
-                new SessionError(
-                  "unexpected REQUEST_UPDATE on subscribe stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
+            // draft-ietf-moq-transport-21 §9.5 / §9.20.3 / §8.9:
+            // subscribe ロールの想定外 REQUEST_UPDATE、AUTHORIZATION TOKEN、
+            // GOAWAY の判定を順に行う (詳細は bidiPreflightRequestUpdate を参照)。
+            const preflight = await bidiPreflightRequestUpdate(session, requestId, decoded, role);
+            if (preflight === "return") {
               return;
+            }
+            if (preflight === "break") {
+              break;
             }
 
             // パラメータスコープ検証

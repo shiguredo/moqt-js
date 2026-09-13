@@ -17,10 +17,18 @@ import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
 import {
   MessageType,
   MessageParameterType,
+  SetupOptionType,
+  AuthorizationTokenAliasType,
+  encodeAuthorizationToken,
   encodeGoawayPayload,
   encodePublishDonePayload,
+  type AuthorizationToken,
 } from "./message";
-import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
+import {
+  encodeRequestOkPayload,
+  encodePublishStateNotifyPayload,
+  decodeRequestErrorPayload,
+} from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import {
@@ -30,6 +38,7 @@ import {
 } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl } from "./fetcher";
+import { AuthTokenCache } from "./session/authTokenCache";
 import {
   InvalidFilterError,
   MalformedTrackError,
@@ -5749,3 +5758,481 @@ function concatUint8ArraysForTest(chunks: Uint8Array[]): Uint8Array {
   }
   return result;
 }
+
+// ============================================================================
+// draft-ietf-moq-transport-21 §8.9 / §9.1.4: 受信 SETUP の Authorization Token
+// ============================================================================
+
+/**
+ * 受信 SETUP に Authorization Token を載せて initialize() するためのセッションを作る
+ *
+ * §9.1.4 の DELETE / USE_ALIAS は送信側の createSetup が拒否するため、
+ * Setup Options を直接組み立ててサーバー制御ストリームに流す。
+ * 制御ストリームはストリームタイプ + フレーミング済み SETUP を 1 通だけ流す。
+ */
+function createIncomingSetupSession(
+  parameters: { type: number; value: Uint8Array }[],
+): SessionImpl {
+  const clientWritable = new WritableStream<Uint8Array>({});
+  const serverControlWriter = new ControlStreamWriter();
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        new Uint8Array([
+          ...encodeVarint(MessageType.SETUP),
+          ...serverControlWriter.encode(
+            MessageType.SETUP,
+            encodeSetupPayload({ type: MessageType.SETUP, parameters }),
+          ),
+        ]),
+      );
+    },
+  });
+  const incomingUnidirectionalStreams = new ReadableStream<ReadableStream<Uint8Array>>({
+    start(controller) {
+      controller.enqueue(serverControlStream);
+    },
+  });
+  const incomingBidirectionalStreams = new ReadableStream<WebTransportBidirectionalStream>({
+    start() {},
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientWritable,
+    incomingUnidirectionalStreams,
+    incomingBidirectionalStreams,
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+  } as unknown as WebTransport;
+  return new SessionImpl(transport, {});
+}
+
+/**
+ * SETUP の AUTHORIZATION TOKEN Setup Option を組み立てる
+ *
+ * draft-ietf-moq-transport-21 §9.1.4: オプション値は §8.9 の Token 構造。
+ */
+function authTokenSetupOption(token: AuthorizationToken): {
+  type: number;
+  value: Uint8Array;
+} {
+  return {
+    type: SetupOptionType.AUTHORIZATION_TOKEN,
+    value: encodeAuthorizationToken(token),
+  };
+}
+
+/**
+ * initialize() が指定コードの SessionError で失敗することを検証する
+ *
+ * 本テストランナーの assert には rejects が無いため、try/catch で捕捉して
+ * 未捕捉 (成功してしまった) 場合も失敗として検出する。
+ */
+async function assertInitializeFailsWith(
+  session: SessionImpl,
+  expectedCode: SessionErrorCode,
+): Promise<void> {
+  let thrown: unknown;
+  try {
+    await session.initialize({ maxAuthTokenCacheSize: 1024 });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, expectedCode);
+}
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.4 / §8.9:
+ * 受信 SETUP の REGISTER が自 endpoint のトークンキャッシュへ登録されることを
+ * 検証する。上限は広告した MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3)。
+ */
+test("initialize: 受信 SETUP の REGISTER がトークンキャッシュへ登録される", async () => {
+  const session = createIncomingSetupSession([
+    authTokenSetupOption({
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias: 3n,
+      tokenType: 7n,
+      tokenValue: new Uint8Array([0xaa, 0xbb]),
+    }),
+  ]);
+
+  await session.initialize({ maxAuthTokenCacheSize: 1024 });
+
+  // 自 endpoint が広告した上限を保持する
+  assert.equal(session.localMaxAuthTokenCacheSize, 1024);
+  // ピアが REGISTER した Alias を解決できる
+  assert.deepEqual(session.receivedAuthTokens.resolve(3n), {
+    status: "resolved",
+    tokenType: 7n,
+    tokenValue: new Uint8Array([0xaa, 0xbb]),
+  });
+  // §9.1.3: エントリサイズは 16 バイト + Token Value 長
+  assert.equal(session.receivedAuthTokens.size, 18);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.4 / §8.9:
+ * 受信 SETUP で登録済み Alias を再 REGISTER した場合は
+ * DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる MUST を検証する。
+ */
+test("initialize: 受信 SETUP の同一 Alias 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS で閉じる", async () => {
+  const registerToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 5n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([1]),
+  };
+  const session = createIncomingSetupSession([
+    authTokenSetupOption(registerToken),
+    authTokenSetupOption(registerToken),
+  ]);
+
+  await assertInitializeFailsWith(session, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.4:
+ * SETUP の DELETE は server 宛の MUST だが、client である moqt-js も
+ * 防御的検査として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ */
+test("initialize: 受信 SETUP の DELETE は PROTOCOL_VIOLATION で閉じる", async () => {
+  const session = createIncomingSetupSession([
+    authTokenSetupOption({ aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: 1n }),
+  ]);
+
+  await assertInitializeFailsWith(session, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.4:
+ * SETUP の USE_ALIAS も同様に PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * SETUP 時点で解決できる Alias は存在しないため、登録済みでも拒否する。
+ */
+test("initialize: 受信 SETUP の USE_ALIAS は PROTOCOL_VIOLATION で閉じる", async () => {
+  const session = createIncomingSetupSession([
+    authTokenSetupOption({
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias: 1n,
+      tokenType: 1n,
+      tokenValue: new Uint8Array([1]),
+    }),
+    authTokenSetupOption({ aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 1n }),
+  ]);
+
+  await assertInitializeFailsWith(session, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.4:
+ * 受信 SETUP の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合、
+ * AUTH_TOKEN_CACHE_OVERFLOW でセッションを失敗させず USE_VALUE として扱う MUST を
+ * 検証する。MAX_AUTH_TOKEN_CACHE_SIZE を広告しない既定 (0) が上限になる。
+ */
+test("initialize: 受信 SETUP の上限超過 REGISTER は USE_VALUE 扱いで閉じない", async () => {
+  const session = createIncomingSetupSession([
+    authTokenSetupOption({
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias: 1n,
+      tokenType: 1n,
+      tokenValue: new Uint8Array([1]),
+    }),
+  ]);
+
+  // 上限を広告しない (既定 0 = Alias 使用禁止)
+  await session.initialize();
+
+  // キャッシュへ登録されず、Alias は解決できない
+  assert.equal(session.receivedAuthTokens.size, 0);
+  assert.deepEqual(session.receivedAuthTokens.resolve(1n), { status: "unknown-alias" });
+  // セッションは閉じない
+  assert.equal(session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9:
+ * Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR で
+ * セッションを閉じる MUST を検証する。0x04 は未定義の Alias Type。
+ */
+test("initialize: 受信 SETUP のデコード不能 Token は KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const session = createIncomingSetupSession([
+    { type: SetupOptionType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x04]) },
+  ]);
+
+  await assertInitializeFailsWith(session, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-21 §8.9 / §9.20.3: 受信 PUBLISH の Authorization Token
+// ============================================================================
+
+/**
+ * 受信 PUBLISH に AUTHORIZATION TOKEN パラメータを載せて処理させるハーネス
+ *
+ * トークンキャッシュの上限は自 endpoint が広告した MAX_AUTH_TOKEN_CACHE_SIZE
+ * (§9.1.3) である。initialize() を経ずに SessionImpl を直接組み立てるテストでは
+ * 広告値とキャッシュを直接設定する。
+ *
+ * @param authTokenCacheSize - 自 endpoint が広告する上限 (0 = Alias 使用禁止)
+ */
+function createPublishAuthTokenContext(authTokenCacheSize: number): {
+  session: SessionImpl;
+  errors: Error[];
+  written: Uint8Array[];
+  handle: (parameters: { type: number; value: Uint8Array }[], requestId?: bigint) => Promise<void>;
+} {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const sessionInternal = session as unknown as {
+    tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
+    receivedRequestIds: Set<bigint>;
+    subscribersByAlias: Map<bigint, unknown[]>;
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  // 受信 PUBLISH を購読へマッチさせるため、namespace 前方一致する購読を登録する。
+  // §8.9 の MUST (REGISTER はメッセージが他の理由で失敗しても登録を維持する) を
+  // 検証できるよう、トークン処理はマッチングより前に走る。
+  sessionInternal.tracksSubscriptions.set(1n, {
+    callbacks: {
+      onPublish: async () => ({ object: () => {} }),
+      onNamespaceDone: () => {},
+      onPublishSkipped: () => {},
+    } as TracksSubscriptionCallbacks,
+    state: "active",
+    namespacePrefix: ["live"],
+    rangeFilters: [],
+  });
+  sessionInternal.receivedRequestIds = new Set();
+  sessionInternal.subscribersByAlias = new Map();
+
+  session.localMaxAuthTokenCacheSize = authTokenCacheSize;
+  session.receivedAuthTokens = new AuthTokenCache(authTokenCacheSize);
+
+  const written: Uint8Array[] = [];
+  return {
+    session,
+    errors,
+    written,
+    handle: async (parameters, requestId = 1n) => {
+      const publishPayload = encodePublishPayload({
+        type: MessageType.PUBLISH,
+        requestId,
+        trackNamespace: createTrackNamespace(["live"]),
+        trackName: new TextEncoder().encode("track"),
+        trackAlias: 1n,
+        parameters,
+        trackProperties: [],
+      });
+      const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+      const readable = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(framed);
+          controller.close();
+        },
+      });
+      const writable = new WritableStream<Uint8Array>({
+        write(chunk) {
+          written.push(chunk);
+        },
+      });
+      const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+      await sessionInternal.handleIncomingBidirectionalStream(stream);
+    },
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータの REGISTER が
+ * トークンキャッシュへ登録されることを検証する。
+ */
+test("受信 PUBLISH: AUTHORIZATION TOKEN の REGISTER がトークンキャッシュへ登録される", async () => {
+  const ctx = createPublishAuthTokenContext(1024);
+
+  await ctx.handle([
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.REGISTER,
+        tokenAlias: 2n,
+        tokenType: 9n,
+        tokenValue: new Uint8Array([0x11, 0x22]),
+      }),
+    },
+  ]);
+
+  // §9.1.3: エントリサイズは 16 バイト + Token Value 長
+  assert.deepEqual(ctx.session.receivedAuthTokens.resolve(2n), {
+    status: "resolved",
+    tokenType: 9n,
+    tokenValue: new Uint8Array([0x11, 0x22]),
+  });
+  assert.equal(ctx.session.receivedAuthTokens.size, 18);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.errors.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * 受信 PUBLISH の USE_ALIAS が登録済みの Token Type / Value を解決し、
+ * セッションを閉じないことを検証する。
+ */
+test("受信 PUBLISH: 登録済み Alias の USE_ALIAS は解決されセッションを閉じない", async () => {
+  const ctx = createPublishAuthTokenContext(1024);
+
+  await ctx.handle([
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.REGISTER,
+        tokenAlias: 4n,
+        tokenType: 5n,
+        tokenValue: new Uint8Array([0x33]),
+      }),
+    },
+  ]);
+  await ctx.handle(
+    [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 4n,
+        }),
+      },
+    ],
+    3n,
+  );
+
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.errors.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9:
+ * 未登録 Alias を参照する USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS
+ * 0x17) でメッセージを拒否し、セッションは閉じない MUST を検証する。
+ */
+test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する", async () => {
+  const ctx = createPublishAuthTokenContext(1024);
+
+  await ctx.handle([
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+        tokenAlias: 99n,
+      }),
+    },
+  ]);
+
+  const messages = new ControlStreamReader().feed(concatUint8ArraysForTest(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(Number(decoded.errorCode), RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  // セッションは閉じない
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.errors.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+ * Message Parameter の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合は
+ * AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する MUST を検証する。
+ * SETUP 経路 (§9.1.4) と異なり USE_VALUE へ降格しない。
+ */
+test("受信 PUBLISH: 上限超過 REGISTER は AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる", async () => {
+  // 上限 0 (未広告) では Alias を 1 つも登録できない
+  const ctx = createPublishAuthTokenContext(0);
+
+  await ctx.handle([
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.REGISTER,
+        tokenAlias: 1n,
+        tokenType: 1n,
+        tokenValue: new Uint8Array([0x44]),
+      }),
+    },
+  ]);
+
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.errors.length, 1);
+  assert.instanceOf(ctx.errors[0], SessionError);
+  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.AUTH_TOKEN_CACHE_OVERFLOW);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9:
+ * 1 通の PUBLISH 内で REGISTER → DELETE → USE_ALIAS の順に現れる場合、
+ * DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、
+ * REQUEST_ERROR でメッセージが拒否されることを検証する。
+ */
+test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias への USE_ALIAS は REQUEST_ERROR で拒否する", async () => {
+  const ctx = createPublishAuthTokenContext(1024);
+
+  await ctx.handle([
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.REGISTER,
+        tokenAlias: 6n,
+        tokenType: 1n,
+        tokenValue: new Uint8Array([0x55]),
+      }),
+    },
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.DELETE,
+        tokenAlias: 6n,
+      }),
+    },
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+        tokenAlias: 6n,
+      }),
+    },
+  ]);
+
+  // DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、メッセージが拒否される
+  assert.equal(ctx.session.receivedAuthTokens.size, 0);
+  const messages = new ControlStreamReader().feed(concatUint8ArraysForTest(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(Number(decoded.errorCode), RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  // §8.9: 未登録 Alias の参照ではセッションを閉じない
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(ctx.errors.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9:
+ * Token 構造がデコードできない AUTHORIZATION TOKEN パラメータは
+ * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる MUST を検証する。
+ */
+test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+  const ctx = createPublishAuthTokenContext(1024);
+
+  // 未知の Alias Type (0x04) は Token 構造としてデコードできない
+  await ctx.handle([
+    { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x04]) },
+  ]);
+
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.errors.length, 1);
+  assert.instanceOf(ctx.errors[0], SessionError);
+  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+});

@@ -71,6 +71,22 @@ export const RequestErrorCode = {
   DOES_NOT_EXIST: 0x10,
   INVALID_RANGE: 0x11,
   MALFORMED_TRACK: 0x12,
+  /**
+   * UNKNOWN_AUTH_TOKEN_ALIAS (0x17)
+   *
+   * draft-ietf-moq-transport-21 §8.9 は「登録されていない Alias を参照する
+   * メッセージを受信した場合は UNKNOWN_AUTH_TOKEN_ALIAS でそのメッセージを
+   * 拒否する MUST」を定めるが、§12.3 (Request Error Codes) の登録表には
+   * 0x17 が収載されていない。§8.9 の MUST を満たすため RequestErrorCode に
+   * 追加する。
+   *
+   * §13 (Grease) により、§12.3 の登録表に無いコードを受信したピアは
+   * INTERNAL_ERROR として扱う MUST があるため、本コードはピア側で
+   * UNKNOWN_AUTH_TOKEN_ALIAS として認識されない可能性がある (相互運用上の帰結)。
+   * また受理集合にも含まれるため、ピアから 0x17 を受信した場合は本コードとして
+   * 解釈する。
+   */
+  UNKNOWN_AUTH_TOKEN_ALIAS: 0x17,
   UNINTERESTED: 0x20,
   PREFIX_OVERLAP: 0x30,
   NAMESPACE_TOO_LARGE: 0x31,
