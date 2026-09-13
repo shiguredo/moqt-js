@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from "preact/hooks";
 import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import {
   formatAbsoluteTime,
+  formatBytes,
   formatDeltaTime,
   formatElapsedTime,
   formatHexDump,
@@ -105,17 +106,6 @@ function generateSettingsText(): string {
     lines.push(`Certificate Hash: ${settings.certificateHash.value}`);
   }
   return lines.join("\n");
-}
-
-// バイト数を読みやすい形式に変換
-function formatBytes(bytes: number): string {
-  if (bytes >= 1048576) {
-    return `${(bytes / 1048576).toFixed(2)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes} bytes`;
 }
 
 // Publisher 統計情報をテキストとして生成

@@ -6,6 +6,8 @@ import {
   toHttpVersionLabel,
 } from "moqt-js";
 import type { CameraDevice, CodecType, VideoSourceType } from "../types";
+import { base64ToArrayBuffer } from "../utils/base64";
+import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
 
 export { toHttpVersionLabel };
@@ -201,18 +203,6 @@ export function buildConnectOptions(): {
 }
 
 /**
- * Base64 文字列を ArrayBuffer に変換する
- */
-export function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
-
-/**
  * 現在の設定をクエリパラメータ文字列として生成する
  */
 export function buildQueryString(): string {
@@ -319,7 +309,9 @@ export function initFromUrl(): void {
   }
 
   const resolutionParam = params.get("resolution");
-  if (resolutionParam) {
+  // 解像度は "WIDTHxHEIGHT" のみ受け付ける。検証せずに保持すると
+  // parseResolution が例外を投げ、getUserMedia まで失敗理由が伝わらない。
+  if (resolutionParam !== null && isResolution(resolutionParam)) {
     resolution.value = resolutionParam;
   }
 

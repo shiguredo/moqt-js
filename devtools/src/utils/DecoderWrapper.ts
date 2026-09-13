@@ -158,25 +158,19 @@ export class DecoderWrapper {
       return;
     }
 
-    // 現在のデコーダーをクリーンアップ
-    if (this.useWorker && this.worker) {
-      this.worker.postMessage({ type: "close" });
-      this.worker.terminate();
-      this.worker = null;
-    } else if (this.decoder) {
-      if (this.decoder.state !== "closed") {
-        this.decoder.close();
-      }
-      this.decoder = null;
-    }
-
-    this.configured = false;
+    this.teardown();
 
     // 再初期化
     await this.configure(this.lastConfig);
   }
 
   close(): void {
+    this.teardown();
+  }
+
+  // Worker / デコーダーを破棄して未設定状態に戻す。
+  // reset と close で同じ後始末が必要なので 1 箇所にまとめる。
+  private teardown(): void {
     if (this.useWorker && this.worker) {
       this.worker.postMessage({ type: "close" });
       this.worker.terminate();

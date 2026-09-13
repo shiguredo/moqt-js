@@ -1,4 +1,5 @@
 import * as store from "../signals";
+import { formatBitrate, formatBytes } from "../../utils/logFormatters";
 import { ChartIcon } from "./Icons";
 
 export function StatsPanel() {
@@ -27,13 +28,13 @@ export function StatsPanel() {
             <div class="bg-slate-50 rounded p-2">
               <div class="text-slate-500">Total Bytes</div>
               <div class="font-mono text-slate-800">
-                {store.formatBytes(encoderStatsValue.totalBytes)}
+                {formatBytes(encoderStatsValue.totalBytes)}
               </div>
             </div>
             <div class="bg-slate-50 rounded p-2">
               <div class="text-slate-500">Avg Bitrate</div>
               <div class="font-mono text-slate-800">
-                {store.formatBitrate(encoderStatsValue.averageBitrate)}
+                {formatBitrate(encoderStatsValue.averageBitrate)}
               </div>
             </div>
           </div>
@@ -49,7 +50,7 @@ export function StatsPanel() {
             <div class="bg-slate-50 rounded p-2">
               <div class="text-slate-500">Total Bytes</div>
               <div class="font-mono text-slate-800">
-                {store.formatBytes(decoderStatsValue.totalBytes)}
+                {formatBytes(decoderStatsValue.totalBytes)}
               </div>
             </div>
           </div>
