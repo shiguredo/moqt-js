@@ -4077,13 +4077,12 @@ export class SessionImpl implements Session {
             continue;
           }
           if (msg.type === MessageType.GOAWAY) {
-            if (
-              !bidi.validateNoDuplicateGoawayOnRequestStream(
-                publishRequestId,
-                this.goawayReceivedOnRequestStreams,
-                (error) => this.closeWithError(error),
-              )
-            ) {
+            const goawayError = bidi.validateNoDuplicateGoawayOnRequestStream(
+              publishRequestId,
+              this.goawayReceivedOnRequestStreams,
+            );
+            if (goawayError !== null) {
+              this.closeWithError(goawayError);
               return;
             }
             const decodedMsg = decodeGoawayPayload(msg.payload);
@@ -4379,7 +4378,9 @@ export class SessionImpl implements Session {
     // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
     // 受信 PUBLISH の Request ID のパリティ (奇数) と重複を検証する。
     // 違反時は INVALID_REQUEST_ID でセッションを閉じる。
-    if (!this.validateIncomingRequestId(publishRequestId)) {
+    const requestIdError = this.validateIncomingRequestId(publishRequestId);
+    if (requestIdError !== null) {
+      this.closeWithError(requestIdError);
       return;
     }
 
@@ -4821,10 +4822,8 @@ export class SessionImpl implements Session {
    *
    * @returns 検証に合格した場合は true、違反でセッションを閉じた場合は false
    */
-  validateIncomingRequestId(requestId: bigint): boolean {
-    return incomingValidateRequestId(requestId, this.receivedRequestIds, (error) =>
-      this.closeWithError(error),
-    );
+  validateIncomingRequestId(requestId: bigint): SessionError | null {
+    return incomingValidateRequestId(requestId, this.receivedRequestIds);
   }
 
   /**
