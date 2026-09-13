@@ -10,7 +10,7 @@
  * draft-ietf-moq-transport-21 Section 11
  */
 
-import { decodeVarint, encodeVarint } from "./varint";
+import { decodeVarint, encodeVarint, MAX_VARINT } from "./varint";
 import { ObjectStatus } from "./message/types";
 import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
 import {
@@ -19,16 +19,6 @@ import {
   assertPriorIdGapInObjectProperties,
 } from "./properties";
 import { GroupOrder } from "./message/types";
-
-/**
- * Object ID および Group ID の最大値 (2^64 - 1)
- * draft-ietf-moq-transport-21 §11.3.1 / §11.4.1.1 Table 9:
- * "If the resulting Object ID would be greater than 2^64 - 1,
- *  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
- * "If the computed Group ID would be less than 0 or greater than 2^64-1,
- *  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
- */
-const maxObjectId = (1n << 64n) - 1n;
 
 // Priority Present の型で Publisher Priority が省略された場合のエラーメッセージ
 // (encodeSubgroupHeader と encodeObjectDatagram で共通)
@@ -1790,8 +1780,11 @@ export function decodeFetchObjectFields(
   }
 
   // Group ID の範囲検証: 0 以上 2^64-1 以下
-  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9
-  if (groupId < 0n || groupId > maxObjectId) {
+  // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
+  // "If the computed Group ID would be less than 0 or greater than 2^64-1,
+  //  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+  // 上限は varint の最大値と同一のため MAX_VARINT を使う。
+  if (groupId < 0n || groupId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed group id out of range: ${groupId}, expected 0 to 2^64-1`,
     );
@@ -1835,7 +1828,8 @@ export function decodeFetchObjectFields(
   // draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
   // "If the computed Object ID would be greater than 2^64-1, the
   //  Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
-  if (objectId > maxObjectId) {
+  // 上限は varint の最大値と同一のため MAX_VARINT を使う。
+  if (objectId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
     );
