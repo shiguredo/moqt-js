@@ -5,6 +5,11 @@
  * startNamespacePublicationStreamLoop / handleGoawayOnNamespaceStream
  * を free function として抽出する。
  *
+ * 3 ループは runNamespaceStreamLoop の共通骨格 (読み取り / done 節 /
+ * REQUEST_OK / REQUEST_ERROR / GOAWAY / catch / finally) を共有し、ループごとの
+ * 差 (ループ条件・追加メッセージ・先頭メッセージガード・done 時の後始末・
+ * 読み取り失敗時の後始末) だけを create*StreamHandlers から注入する。
+ *
  * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE)
  * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS)
  * draft-ietf-moq-transport-21 §9.14 (PUBLISH_NAMESPACE)
@@ -42,8 +47,13 @@ import {
   toTrackPropertiesViolationSessionError,
 } from "./errors";
 import { cancelStreamQuiet } from "./stream";
+import type { ControlStreamReader } from "../controlStream";
 import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
-import type { NamespaceSubscriptionState, TracksSubscriptionState } from "./types";
+import type {
+  NamespacePublicationState,
+  NamespaceSubscriptionState,
+  TracksSubscriptionState,
+} from "./types";
 import type { SessionInternal } from "./types";
 
 /**
@@ -784,6 +794,448 @@ function handleNamespaceRequestUpdateStreamClosed(
   );
 }
 
+// ============================================================
+// namespace 系 3 ループの共通骨格
+// ============================================================
+
+/**
+ * namespace 系 3 ループで共有する進行状態
+ *
+ * ループ本体とハンドラの双方が読み書きするため 1 つのオブジェクトにまとめる。
+ * ループ側のローカル変数のままだとハンドラから更新できない。
+ */
+interface NamespaceLoopProgress {
+  /** 初期 REQUEST_OK を受理して購読 / 公開を確立したか */
+  resolved: boolean;
+  /**
+   * draft-ietf-moq-transport-21 §9.2:
+   * GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
+   * フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
+   * まで遅延するため、メッセージ処理判断専用に使う。
+   */
+  goawayReceived: boolean;
+  /** 確立前 GOAWAY でマイグレーション扱いになったかどうか */
+  requestMigrated: boolean;
+}
+
+/** 共通ループがリクエスト単位で必要とするコールバック */
+interface NamespaceLoopCallbacks {
+  error?: (error: Error) => void;
+  goaway?: (uri: string) => void;
+}
+
+/** 共通ループが扱う対象 (購読 / 公開) と関連ストリーム */
+interface NamespaceLoopTarget<S> {
+  target: S;
+  streamReader: ReadableStreamDefaultReader<Uint8Array>;
+  controlReader: ControlStreamReader;
+  writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+  callbacks: NamespaceLoopCallbacks | undefined;
+  /** finally でセッションの Map からエントリを削除する */
+  cleanup(): void;
+}
+
+/** 共通ループがハンドラへ渡す文脈 */
+interface NamespaceLoopContext<S> extends NamespaceLoopTarget<S> {
+  session: SessionInternal;
+  requestId: bigint;
+  reject: (err: Error) => void;
+  progress: NamespaceLoopProgress;
+}
+
+/** メッセージ 1 件を処理した後の継続方法 */
+type NamespaceLoopStep = "continue" | "return";
+
+/**
+ * 3 ループの差分を注入するハンドラ群
+ *
+ * 共通ループが状態宣言・done 節・REQUEST_OK / REQUEST_ERROR / GOAWAY の骨格・
+ * catch / finally を持ち、ループ条件・追加メッセージ・先頭メッセージガード・
+ * done 時の後始末・読み取り失敗時の後始末をここから注入する。
+ */
+interface NamespaceLoopHandlers<S> {
+  /**
+   * ループ継続条件。
+   * namespace / tracks は "active" の間だけ継続し、publication は初期状態
+   * "pending" の間も読み続けるため "closed" 以外で継続する。
+   */
+  isActive(target: S): boolean;
+  /** ループ終了時に state を閉じる */
+  closeTarget(target: S): void;
+  /**
+   * unsubscribe 後に届いた遅延応答を無視するか。
+   * namespace / tracks は true。unsubscribe 側で保留中の更新を reject し掃除済みの
+   * ため、遅延 REQUEST_OK を「保留中の更新が無い 2 通目 REQUEST_OK」として
+   * PROTOCOL_VIOLATION で誤って閉じるのを防ぐ。
+   */
+  skipMessagesWhenInactive: boolean;
+  /** 先頭メッセージガード (publication は §9.14 に MUST が無いため未指定) */
+  validateFirstMessage?(ctx: NamespaceLoopContext<S>, messageType: number): SessionError | null;
+  /** ピアの FIN 検出時の後始末 */
+  onStreamDone(ctx: NamespaceLoopContext<S>): Promise<void>;
+  /** REQUEST_OK の処理 */
+  onRequestOk(ctx: NamespaceLoopContext<S>, payload: Uint8Array): Promise<NamespaceLoopStep>;
+  /** REQUEST_ERROR の処理 */
+  onRequestError(ctx: NamespaceLoopContext<S>, payload: Uint8Array): Promise<NamespaceLoopStep>;
+  /** REQUEST_OK / REQUEST_ERROR / GOAWAY 以外のメッセージの処理 */
+  onMessage(
+    ctx: NamespaceLoopContext<S>,
+    messageType: number,
+    payload: Uint8Array,
+  ): Promise<NamespaceLoopStep>;
+  /** 読み取り失敗時の後始末 (state を閉じ、通知し、確立前なら reject する) */
+  onReadError(ctx: NamespaceLoopContext<S>, error: Error): void;
+}
+
+/**
+ * namespace 系 3 ループ共通の受信ループ
+ *
+ * draft-ietf-moq-transport-21 §9.2:
+ * GOAWAY は 3 ループで完全に同一の処理 (確立前はマイグレーション扱いで reject し
+ * 読み取りを継続、確立後は送信方向を FIN して読み取りを継続、重複は
+ * PROTOCOL_VIOLATION) のため共通ループが受け持つ。REQUEST_OK / REQUEST_ERROR と
+ * 追加メッセージはループごとに異なるためハンドラへ委譲する。
+ */
+async function runNamespaceStreamLoop<S>(
+  session: SessionInternal,
+  requestId: bigint,
+  loaded: NamespaceLoopTarget<S>,
+  reject: (err: Error) => void,
+  handlers: NamespaceLoopHandlers<S>,
+): Promise<void> {
+  const { target, streamReader, controlReader } = loaded;
+  const progress: NamespaceLoopProgress = {
+    resolved: false,
+    goawayReceived: false,
+    requestMigrated: false,
+  };
+  const ctx: NamespaceLoopContext<S> = { ...loaded, session, requestId, reject, progress };
+
+  try {
+    while (handlers.isActive(target)) {
+      const { value, done } = await streamReader.read();
+      if (done) {
+        await handlers.onStreamDone(ctx);
+        break;
+      }
+
+      const messages = controlReader.feed(value);
+      for (const msg of messages) {
+        // unsubscribe 後の遅延応答 (REQUEST_OK / REQUEST_ERROR / 追加メッセージ /
+        // GOAWAY) は処理しない。unsubscribe 側で保留中の更新を reject し掃除済みの
+        // ため、遅延 REQUEST_OK は「保留中の更新が無い 2 通目 REQUEST_OK」として
+        // PROTOCOL_VIOLATION で誤って閉じる (ピアは §9.5 の応答必須規約に従い
+        // 応答しただけであり、誤検知である)。callbacks の spurious 発火も防ぐ。
+        if (handlers.skipMessagesWhenInactive && !handlers.isActive(target)) {
+          break;
+        }
+        const messageType = msg.type;
+        const messagePayload = msg.payload;
+
+        session.callbacks.debug?.({
+          direction: "recv",
+          type: messageType,
+          typeName: getMessageTypeName(messageType),
+          payload: messagePayload,
+          timestamp: Date.now(),
+        });
+
+        // 確立前 GOAWAY で reject 済みのリクエストは、2 通目 GOAWAY の検出のため
+        // 読み取りだけ継続し、他のメッセージは処理しない (§9.2 MUST)。
+        if (namespaceShouldSkipAfterMigration(progress.requestMigrated, messageType)) {
+          continue;
+        }
+
+        const firstMessageError = handlers.validateFirstMessage?.(ctx, messageType) ?? null;
+        if (firstMessageError !== null) {
+          namespaceRejectAndCloseWithError(session, reject, firstMessageError);
+          return;
+        }
+
+        let step: NamespaceLoopStep;
+        if (messageType === MessageType.GOAWAY) {
+          step = await namespaceHandleGoawayStep(ctx, messagePayload);
+        } else if (messageType === MessageType.REQUEST_OK) {
+          step = await handlers.onRequestOk(ctx, messagePayload);
+        } else if (messageType === MessageType.REQUEST_ERROR) {
+          step = await handlers.onRequestError(ctx, messagePayload);
+        } else {
+          step = await handlers.onMessage(ctx, messageType, messagePayload);
+        }
+        if (step === "return") {
+          return;
+        }
+      }
+    }
+  } catch (error) {
+    handlers.onReadError(ctx, error instanceof Error ? error : new Error(String(error)));
+    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は
+    // PROTOCOL_VIOLATION で閉じる
+    const sessionError = toSessionCloseError(error);
+    if (sessionError !== null) {
+      session.closeWithError(sessionError);
+    }
+  } finally {
+    handlers.closeTarget(target);
+    try {
+      streamReader.releaseLock();
+    } catch {
+      // 既に解放済みの場合は無視
+    }
+    loaded.cleanup();
+  }
+}
+
+/**
+ * 共通ループの GOAWAY ケース
+ *
+ * 3 ループで完全に同一の処理。受理したら goawayReceived を立て、確立前だった
+ * 場合は requestMigrated を立てて以降 GOAWAY 以外のメッセージを無視させる。
+ */
+async function namespaceHandleGoawayStep<S>(
+  ctx: NamespaceLoopContext<S>,
+  messagePayload: Uint8Array,
+): Promise<NamespaceLoopStep> {
+  const wasResolved = ctx.progress.resolved;
+  const action = await namespaceHandleGoawayMessage(
+    ctx.session,
+    ctx.requestId,
+    messagePayload,
+    ctx.callbacks,
+    ctx.writer,
+    ctx.reject,
+    ctx.progress.resolved,
+  );
+  if (action === "terminate") {
+    // 重複 GOAWAY による PROTOCOL_VIOLATION
+    return "return";
+  }
+  ctx.progress.goawayReceived = true;
+  if (!wasResolved) {
+    // 確立前 GOAWAY は reject 済み。以降は 2 通目 GOAWAY の検出のみ行う。
+    ctx.progress.requestMigrated = true;
+  }
+  return "continue";
+}
+
+/**
+ * namespace / tracks 共通の REQUEST_ERROR ケース
+ *
+ * draft-ietf-moq-transport-21 §9.2:
+ * GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する (spurious
+ * PROTOCOL_VIOLATION「received REQUEST_ERROR after REQUEST_OK」を防ぐ)。
+ * §9.5.2: 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答。
+ */
+async function namespaceHandleSubscriptionRequestError<
+  S extends NamespaceSubscriptionState | TracksSubscriptionState,
+>(
+  ctx: NamespaceLoopContext<S>,
+  messagePayload: Uint8Array,
+  streamKind: "namespace" | "tracks",
+): Promise<NamespaceLoopStep> {
+  if (ctx.progress.resolved && !ctx.progress.goawayReceived) {
+    if (
+      !handleNamespaceRequestUpdateError(
+        ctx.session,
+        ctx.requestId,
+        messagePayload,
+        ctx.target,
+        streamKind,
+      )
+    ) {
+      return "return";
+    }
+    return "continue";
+  }
+  if (ctx.progress.goawayReceived) {
+    // GOAWAY 前に送信済みの保留中更新は失敗として reject する
+    // (update() のハング防止)
+    rejectPendingNamespaceUpdates(
+      ctx.session,
+      ctx.requestId,
+      ctx.target,
+      decodeRequestErrorToRequestError(messagePayload),
+    );
+    return "continue";
+  }
+  const error = decodeRequestErrorToRequestError(messagePayload);
+  ctx.target.state = "closed";
+  namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
+  ctx.reject(error);
+  // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
+  await namespaceCloseRequestStreamQuiet(ctx.writer, ctx.streamReader);
+  return "return";
+}
+
+/**
+ * namespace / tracks 共通の読み取り失敗時の後始末
+ *
+ * draft-ietf-moq-transport-21 §9.2:
+ * GOAWAY 受信後 (goawayReceived) は state が active のままのため、
+ * spurious error 通知を抑止する。
+ *
+ * draft-ietf-moq-transport-21 §9.5.1:
+ * RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
+ * 一種として保留中の更新を暗黙の失敗として reject する。goawayReceived の
+ * 有無に関わらず実行する (reject しないと update() が永不解決になる。
+ * done 検出経路と同じ扱い)。
+ */
+function namespaceHandleSubscriptionReadError<
+  S extends NamespaceSubscriptionState | TracksSubscriptionState,
+>(ctx: NamespaceLoopContext<S>, error: Error): void {
+  if (ctx.target.state === "active" && !ctx.progress.goawayReceived) {
+    ctx.target.state = "closed";
+    if (!isSessionClosedError(error)) {
+      namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
+    }
+    // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
+    if (!ctx.progress.resolved && !ctx.progress.requestMigrated) {
+      ctx.reject(error);
+    }
+  }
+  if (ctx.progress.resolved) {
+    handleNamespaceRequestUpdateStreamClosed(ctx.session, ctx.requestId, ctx.target);
+  }
+}
+
+/**
+ * FIN 検出時に、確立前なら応答未達として reject する
+ *
+ * 確立前 GOAWAY でマイグレーション扱いになった場合は、既にマイグレーション
+ * 理由で reject 済みのため上書きしない。
+ */
+function namespaceRejectUnestablishedOnStreamDone<S>(ctx: NamespaceLoopContext<S>): void {
+  if (!ctx.progress.resolved && !ctx.progress.requestMigrated) {
+    ctx.reject(new Error("stream closed before receiving response"));
+  }
+}
+
+/**
+ * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
+ *
+ * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
+ * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
+ */
+/**
+ * SUBSCRIBE_NAMESPACE 専用ストリームのハンドラ群
+ *
+ * NAMESPACE / NAMESPACE_DONE の追加メッセージと、active namespace の追跡
+ * (NAMESPACE_DONE 補完) を担う。
+ */
+function createNamespaceStreamHandlers(
+  subscription: NamespaceSubscriptionState,
+  resolve: (subscription: NamespaceSubscription) => void,
+): NamespaceLoopHandlers<NamespaceSubscriptionState> {
+  const seenNamespaceSuffixes = new Set<string>();
+  const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
+  // 有効な名前空間 (NAMESPACE 受信済みで NAMESPACE_DONE 未受信) を追跡する。
+  // draft-ietf-moq-transport-21 §9.15:
+  // "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE
+  //  response stream, it SHOULD treat this as though each active namespace
+  //  received a NAMESPACE_DONE."
+  const activeTracker = createNamespaceActiveTracker(subscription.callbacks);
+
+  return {
+    isActive: (target) => target.state === "active",
+    closeTarget: (target) => {
+      target.state = "closed";
+    },
+    skipMessagesWhenInactive: true,
+    validateFirstMessage: (ctx, messageType) =>
+      namespaceValidateFirstMessage(ctx.progress.resolved, messageType, "namespace"),
+    onStreamDone: async (ctx) => {
+      // draft-ietf-moq-transport-21 §9.15 / §6.4.2.2:
+      // ピアの FIN を検出したら active namespace に NAMESPACE_DONE を補完し、
+      // 自方向も FIN で閉じて graceful closure を完了する。
+      await namespaceHandleNamespaceStreamDone(
+        ctx.session,
+        ctx.requestId,
+        ctx.target,
+        ctx.progress.resolved,
+        ctx.progress.requestMigrated,
+        ctx.reject,
+        activeTracker,
+      );
+    },
+    onRequestOk: async (ctx, payload) => {
+      // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK) / §9.5.2:
+      // SUBSCRIBE_NAMESPACE_OK と確立後の REQUEST_UPDATE_OK は Track Properties が
+      // 空必須であり、未知 Mandatory Track Property を受信したら PROTOCOL_VIOLATION で
+      // セッションを閉じる MUST (処理はヘルパーに集約する)。
+      const result = namespaceHandleRequestOkMessage(
+        ctx.session,
+        ctx.requestId,
+        payload,
+        ctx.target,
+        ctx.progress.resolved,
+        ctx.reject,
+        "namespace",
+        () => seenNamespaceSuffixes.clear(),
+      );
+      if (result === "closed") {
+        return "return";
+      }
+      if (result === "established") {
+        ctx.progress.resolved = true;
+        resolve(ctx.session.createNamespaceSubscription(ctx.requestId));
+      }
+      return "continue";
+    },
+    onRequestError: (ctx, payload) =>
+      namespaceHandleSubscriptionRequestError(ctx, payload, "namespace"),
+    onMessage: async (ctx, messageType, payload) => {
+      switch (messageType) {
+        case MessageType.NAMESPACE: {
+          const decodedMsg = decodeNamespacePayload(payload);
+          const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+          seenNamespaceSuffixes.add(namespaceSuffixKey(suffixStrings));
+          activeTracker.add(suffixStrings);
+          // 通知の throw を握り潰しても追跡状態は更新済みのため、
+          // 対応する NAMESPACE_DONE は onNamespaceDone として届き得る
+          namespaceInvokeCallbackQuiet(() => ctx.target.callbacks.onNamespace?.(suffixStrings));
+          return "continue";
+        }
+
+        case MessageType.NAMESPACE_DONE: {
+          const decodedMsg = decodeNamespaceDonePayload(payload);
+          const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+          if (!seenNamespaceSuffixes.has(namespaceSuffixKey(suffixStrings))) {
+            ctx.session.closeWithError(
+              new SessionError(
+                `received NAMESPACE_DONE before corresponding NAMESPACE: suffix=${JSON.stringify(suffixStrings)}`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+            return "return";
+          }
+          namespaceInvokeCallbackQuiet(() => ctx.target.callbacks.onNamespaceDone?.(suffixStrings));
+          // NAMESPACE_DONE 済みは FIN / RESET 時の補完対象から外す。
+          activeTracker.remove(suffixStrings);
+          return "continue";
+        }
+
+        default:
+          ctx.session.closeWithError(
+            new SessionError(
+              `unknown namespace stream message type: 0x${messageType.toString(16)}`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+          return "return";
+      }
+    },
+    onReadError: (ctx, error) => {
+      // draft-ietf-moq-transport-21 §9.15:
+      // RESET_STREAM 等の読み取り失敗も FIN と同様に、active namespace に
+      // NAMESPACE_DONE を補完したものとして扱う。
+      if (ctx.target.state === "active") {
+        activeTracker.emitAll();
+      }
+      namespaceHandleSubscriptionReadError(ctx, error);
+    },
+  };
+}
+
 /**
  * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
  *
@@ -802,257 +1254,105 @@ export async function namespaceStartNamespaceStreamLoop(
     return;
   }
 
-  const { streamReader, controlReader, callbacks } = subscription;
-  let resolved = false;
-  // draft-ietf-moq-transport-21 §9.2:
-  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
-  // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
-  // まで遅延するため、メッセージ処理判断専用に使う。
-  let goawayReceived = false;
-  // 確立前 GOAWAY でマイグレーション扱いになったかどうか。
-  // reject 済みのリクエストで後続メッセージを処理しないためのフラグ。
-  let requestMigrated = false;
-  const seenNamespaceSuffixes = new Set<string>();
-  const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
-  // 有効な名前空間 (NAMESPACE 受信済みで NAMESPACE_DONE 未受信) を追跡する。
-  // draft-ietf-moq-transport-21 §9.15:
-  // "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE
-  //  response stream, it SHOULD treat this as though each active namespace
-  //  received a NAMESPACE_DONE."
-  const activeTracker = createNamespaceActiveTracker(callbacks);
+  await runNamespaceStreamLoop(
+    session,
+    requestId,
+    {
+      target: subscription,
+      streamReader: subscription.streamReader,
+      controlReader: subscription.controlReader,
+      writer: subscription.writer,
+      callbacks: subscription.callbacks,
+      cleanup: () => {
+        session.namespaceSubscriptions.delete(requestId);
+      },
+    },
+    reject,
+    createNamespaceStreamHandlers(subscription, resolve),
+  );
+}
 
-  try {
-    while (subscription.state === "active") {
-      const { value, done } = await streamReader.read();
-      if (done) {
-        // draft-ietf-moq-transport-21 §9.15 / §6.4.2.2:
-        // ピアの FIN を検出したら active namespace に NAMESPACE_DONE を補完し、
-        // 自方向も FIN で閉じて graceful closure を完了する。
-        await namespaceHandleNamespaceStreamDone(
-          session,
-          requestId,
-          subscription,
-          resolved,
-          requestMigrated,
-          reject,
-          activeTracker,
-        );
-        break;
+/**
+ * SUBSCRIBE_TRACKS 専用ストリームのハンドラ群
+ *
+ * 追加メッセージは PUBLISH_SKIPPED のみ。
+ */
+function createTracksStreamHandlers(
+  resolve: (subscription: TracksSubscription) => void,
+): NamespaceLoopHandlers<TracksSubscriptionState> {
+  return {
+    isActive: (target) => target.state === "active",
+    closeTarget: (target) => {
+      target.state = "closed";
+    },
+    skipMessagesWhenInactive: true,
+    validateFirstMessage: (ctx, messageType) =>
+      namespaceValidateFirstMessage(ctx.progress.resolved, messageType, "tracks"),
+    onStreamDone: async (ctx) => {
+      if (ctx.progress.resolved) {
+        // draft-ietf-moq-transport-21 §9.5:
+        // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
+        handleNamespaceRequestUpdateStreamClosed(ctx.session, ctx.requestId, ctx.target);
+      } else {
+        namespaceRejectUnestablishedOnStreamDone(ctx);
       }
-
-      const messages = controlReader.feed(value);
-      for (const msg of messages) {
-        // unsubscribe() (closeNamespaceSubscription) により state が "closed" に
-        // なった後の遅延応答 (REQUEST_OK / REQUEST_ERROR / NAMESPACE /
-        // NAMESPACE_DONE / GOAWAY) は処理しない。unsubscribe 側で保留中の更新を
-        // reject し掃除済みのため、遅延 REQUEST_OK は「保留中の更新が無い 2 通目
-        // REQUEST_OK」として PROTOCOL_VIOLATION で誤って閉じる (ピアは §9.5 の
-        // 応答必須規約に従い応答しただけであり、誤検知である)。同様に
-        // callbacks.onNamespace / goaway の spurious 発火も防ぐ。
-        if (subscription.state !== "active") {
-          break;
-        }
-        const messageType = msg.type;
-        const messagePayload = msg.payload;
-
-        session.callbacks.debug?.({
-          direction: "recv",
-          type: messageType,
-          typeName: getMessageTypeName(messageType),
-          payload: messagePayload,
-          timestamp: Date.now(),
-        });
-
-        // 確立前 GOAWAY で reject 済みのリクエストは、2 通目 GOAWAY の検出のため
-        // 読み取りだけ継続し、他のメッセージは処理しない (§9.2 MUST)。
-        if (namespaceShouldSkipAfterMigration(requestMigrated, messageType)) {
-          continue;
-        }
-
-        const firstMessageError = namespaceValidateFirstMessage(resolved, messageType, "namespace");
-        if (firstMessageError !== null) {
-          namespaceRejectAndCloseWithError(session, reject, firstMessageError);
-          return;
-        }
-
-        switch (messageType) {
-          case MessageType.REQUEST_OK: {
-            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK) / §9.5.2:
-            // SUBSCRIBE_NAMESPACE_OK と確立後の REQUEST_UPDATE_OK は Track Properties が
-            // 空必須であり、未知 Mandatory Track Property を受信したら PROTOCOL_VIOLATION で
-            // セッションを閉じる MUST (処理はヘルパーに集約する)。
-            const requestOkResult = namespaceHandleRequestOkMessage(
-              session,
-              requestId,
-              messagePayload,
-              subscription,
-              resolved,
-              reject,
-              "namespace",
-              () => seenNamespaceSuffixes.clear(),
-            );
-            if (requestOkResult === "closed") {
-              return;
-            }
-            if (requestOkResult === "established") {
-              resolved = true;
-              resolve(session.createNamespaceSubscription(requestId));
-            }
-            break;
-          }
-
-          case MessageType.REQUEST_ERROR: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
-            // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
-            // REQUEST_OK」を防ぐ)
-            if (resolved && !goawayReceived) {
-              // draft-ietf-moq-transport-21 §9.5.2:
-              // 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答
-              if (
-                !handleNamespaceRequestUpdateError(
-                  session,
-                  requestId,
-                  messagePayload,
-                  subscription,
-                  "namespace",
-                )
-              ) {
-                return;
-              }
-              break;
-            }
-            if (goawayReceived) {
-              // GOAWAY 受信後の REQUEST_ERROR は spurious PROTOCOL_VIOLATION を
-              // 防ぐためセッションは閉じないが、GOAWAY 前に送信済みの保留中
-              // 更新は失敗として reject する (update() のハング防止)
-              rejectPendingNamespaceUpdates(
-                session,
-                requestId,
-                subscription,
-                decodeRequestErrorToRequestError(messagePayload),
-              );
-              break;
-            }
-            const error = decodeRequestErrorToRequestError(messagePayload);
-            subscription.state = "closed";
-            namespaceNotifyError(session, requestId, callbacks, error);
-            reject(error);
-            // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
-            await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
-            return;
-          }
-
-          case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
-            // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §9.2 の
-            // マイグレーション扱いで reject し、読み取りだけ継続する (helper 参照)。
-            const wasResolved = resolved;
-            const action = await namespaceHandleGoawayMessage(
-              session,
-              requestId,
-              messagePayload,
-              callbacks,
-              subscription.writer,
-              reject,
-              resolved,
-            );
-            if (action === "terminate") {
-              return;
-            }
-            goawayReceived = true;
-            if (!wasResolved) {
-              // 確立前 GOAWAY は reject 済み。以降は 2 通目 GOAWAY の検出のみ行う。
-              requestMigrated = true;
-            }
-            break;
-          }
-
-          case MessageType.NAMESPACE: {
-            const decodedMsg = decodeNamespacePayload(messagePayload);
-            const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-            const suffixKey = namespaceSuffixKey(suffixStrings);
-            seenNamespaceSuffixes.add(suffixKey);
-            activeTracker.add(suffixStrings);
-            // 通知の throw を握り潰しても追跡状態は更新済みのため、
-            // 対応する NAMESPACE_DONE は onNamespaceDone として届き得る
-            namespaceInvokeCallbackQuiet(() => callbacks.onNamespace?.(suffixStrings));
-            break;
-          }
-
-          case MessageType.NAMESPACE_DONE: {
-            const decodedMsg = decodeNamespaceDonePayload(messagePayload);
-            const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-            if (!seenNamespaceSuffixes.has(namespaceSuffixKey(suffixStrings))) {
-              session.closeWithError(
-                new SessionError(
-                  `received NAMESPACE_DONE before corresponding NAMESPACE: suffix=${JSON.stringify(suffixStrings)}`,
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
-            namespaceInvokeCallbackQuiet(() => callbacks.onNamespaceDone?.(suffixStrings));
-            // NAMESPACE_DONE 済みは FIN / RESET 時の補完対象から外す。
-            activeTracker.remove(suffixStrings);
-            break;
-          }
-
-          default:
-            session.closeWithError(
-              new SessionError(
-                `unknown namespace stream message type: 0x${messageType.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
-            );
-            return;
-        }
+      // draft-ietf-moq-transport-21 §6.4.2.2:
+      // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
+      if (ctx.target.state === "active") {
+        await namespaceCloseWriterQuiet(ctx.writer);
       }
-    }
-  } catch (error) {
-    // draft-ietf-moq-transport-21 §9.15:
-    // RESET_STREAM 等の読み取り失敗も FIN と同様に、active namespace に
-    // NAMESPACE_DONE を補完したものとして扱う。
-    if (subscription.state === "active") {
-      activeTracker.emitAll();
-    }
-    // draft-ietf-moq-transport-21 §9.2:
-    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
-    // spurious error 通知を抑止する
-    const normalizedError = error instanceof Error ? error : new Error(String(error));
-    if (subscription.state === "active" && !goawayReceived) {
-      subscription.state = "closed";
-      if (!isSessionClosedError(normalizedError)) {
-        namespaceNotifyError(session, requestId, callbacks, normalizedError);
+    },
+    onRequestOk: async (ctx, payload) => {
+      // 初期 SUBSCRIBE_TRACKS_OK は §9.3 の空必須一覧に含まれず Track Properties を
+      // 運べる。確立後の REQUEST_UPDATE_OK は空必須であり、未知 Mandatory Track
+      // Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
+      // (処理はヘルパーに集約する)。
+      const result = namespaceHandleRequestOkMessage(
+        ctx.session,
+        ctx.requestId,
+        payload,
+        ctx.target,
+        ctx.progress.resolved,
+        ctx.reject,
+        "tracks",
+      );
+      if (result === "closed") {
+        return "return";
       }
-      // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
-      if (!resolved && !requestMigrated) {
-        reject(normalizedError);
+      if (result === "established") {
+        ctx.progress.resolved = true;
+        resolve(ctx.session.createTracksSubscription(ctx.requestId));
       }
-    }
-    // draft-ietf-moq-transport-21 §9.5.1:
-    // RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
-    // 一種として保留中の更新を暗黙の失敗として reject する。
-    // goawayReceived の有無に関わらず実行する (reject しないと update() が
-    // 永不解決になる。done 検出経路と同じ扱い)。
-    if (resolved) {
-      handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
-    }
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
-    }
-  } finally {
-    subscription.state = "closed";
-    try {
-      streamReader.releaseLock();
-    } catch {
-      // 既に解放済みの場合は無視
-    }
-    session.namespaceSubscriptions.delete(requestId);
-  }
+      return "continue";
+    },
+    onRequestError: (ctx, payload) =>
+      namespaceHandleSubscriptionRequestError(ctx, payload, "tracks"),
+    onMessage: async (ctx, messageType, payload) => {
+      switch (messageType) {
+        case MessageType.PUBLISH_SKIPPED: {
+          const decodedMsg = decodePublishSkippedPayload(payload);
+          const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+          const trackName = new TextDecoder().decode(decodedMsg.trackName);
+          namespaceInvokeCallbackQuiet(() =>
+            ctx.target.callbacks.onPublishSkipped?.(suffixStrings, trackName),
+          );
+          return "continue";
+        }
+
+        default:
+          ctx.session.closeWithError(
+            new SessionError(
+              `unknown tracks stream message type: 0x${messageType.toString(16)}`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+          return "return";
+      }
+    },
+    onReadError: (ctx, error) => {
+      namespaceHandleSubscriptionReadError(ctx, error);
+    },
+  };
 }
 
 /**
@@ -1073,221 +1373,160 @@ export async function namespaceStartTracksStreamLoop(
     return;
   }
 
-  const { streamReader, controlReader, callbacks } = subscription;
-  let resolved = false;
-  // draft-ietf-moq-transport-21 §9.2:
-  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
-  // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
-  // まで遅延するため、メッセージ処理判断専用に使う。
-  let goawayReceived = false;
-  // 確立前 GOAWAY でマイグレーション扱いになったかどうか (namespace 側と同様)。
-  let requestMigrated = false;
+  await runNamespaceStreamLoop(
+    session,
+    requestId,
+    {
+      target: subscription,
+      streamReader: subscription.streamReader,
+      controlReader: subscription.controlReader,
+      writer: subscription.writer,
+      callbacks: subscription.callbacks,
+      cleanup: () => {
+        session.tracksSubscriptions.delete(requestId);
+      },
+    },
+    reject,
+    createTracksStreamHandlers(resolve),
+  );
+}
 
-  try {
-    while (subscription.state === "active") {
-      const { value, done } = await streamReader.read();
-      if (done) {
-        if (!resolved) {
-          // 確立前 GOAWAY でマイグレーション扱いになった場合は、既に
-          // マイグレーション理由で reject 済みのため上書きしない。
-          if (!requestMigrated) {
-            reject(new Error("stream closed before receiving response"));
-          }
-        } else {
-          // draft-ietf-moq-transport-21 §9.5:
-          // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
-          handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
-        }
-        // draft-ietf-moq-transport-21 §6.4.2.2:
-        // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
-        if (subscription.state === "active") {
-          await namespaceCloseWriterQuiet(subscription.writer);
-        }
-        break;
+/**
+ * PUBLISH_NAMESPACE 専用ストリームのハンドラ群
+ *
+ * 追加メッセージは無く、PUBLISH_NAMESPACE_OK / REQUEST_ERROR のみを扱う。
+ * 確立後も読み取りを継続する (ループ条件は "closed" 以外)。
+ */
+function createPublicationStreamHandlers(
+  resolve: (publication: NamespacePublication) => void,
+): NamespaceLoopHandlers<NamespacePublicationState> {
+  return {
+    // 初期状態は "pending" であり、確立前も応答を読む必要がある。
+    isActive: (target) => target.state !== "closed",
+    closeTarget: (target) => {
+      target.state = "closed";
+    },
+    // PUBLISH_NAMESPACE は §9.14 に先頭メッセージ MUST が無いため先頭メッセージ
+    // ガードを注入しない (unknown message type として default で閉じる)。
+    skipMessagesWhenInactive: false,
+    onStreamDone: async (ctx) => {
+      namespaceRejectUnestablishedOnStreamDone(ctx);
+      // draft-ietf-moq-transport-21 §6.4.2.2:
+      // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
+      await namespaceCloseWriterQuiet(ctx.writer);
+    },
+    onRequestOk: async (ctx, payload) => {
+      // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+      // PUBLISH_NAMESPACE_OK は Track Properties が空必須であり、未知 Mandatory
+      // Track Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
+      // (publication ストリームは REQUEST_UPDATE を扱わないため確立前のみ)。
+      const requestOk = namespaceDecodeRequestOkWithoutTrackProperties(
+        ctx.session,
+        payload,
+        ctx.reject,
+      );
+      if (requestOk === null) {
+        return "return";
       }
-
-      const messages = controlReader.feed(value);
-      for (const msg of messages) {
-        // namespaceStartNamespaceStreamLoop のガードと同様
-        // (unsubscribe 後の遅延応答 (REQUEST_OK / REQUEST_ERROR / PUBLISH_SKIPPED /
-        // GOAWAY) は無視し、PROTOCOL_VIOLATION で誤って閉じるのと
-        // callbacks.onPublishSkipped / goaway の spurious 発火を防ぐ)。
-        if (subscription.state !== "active") {
-          break;
-        }
-        const messageType = msg.type;
-        const messagePayload = msg.payload;
-
-        session.callbacks.debug?.({
-          direction: "recv",
-          type: messageType,
-          typeName: getMessageTypeName(messageType),
-          payload: messagePayload,
-          timestamp: Date.now(),
-        });
-
-        // 確立前 GOAWAY で reject 済みのリクエストは、2 通目 GOAWAY の検出のため
-        // 読み取りだけ継続し、他のメッセージは処理しない (§9.2 MUST)。
-        if (namespaceShouldSkipAfterMigration(requestMigrated, messageType)) {
-          continue;
-        }
-
-        const firstMessageError = namespaceValidateFirstMessage(resolved, messageType, "tracks");
-        if (firstMessageError !== null) {
-          namespaceRejectAndCloseWithError(session, reject, firstMessageError);
-          return;
-        }
-
-        switch (messageType) {
-          case MessageType.REQUEST_OK: {
-            // 初期 SUBSCRIBE_TRACKS_OK は §9.3 の空必須一覧に含まれず Track Properties を
-            // 運べる。確立後の REQUEST_UPDATE_OK は空必須であり、未知 Mandatory Track
-            // Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
-            // (処理はヘルパーに集約する)。
-            const requestOkResult = namespaceHandleRequestOkMessage(
-              session,
-              requestId,
-              messagePayload,
-              subscription,
-              resolved,
-              reject,
-              "tracks",
-            );
-            if (requestOkResult === "closed") {
-              return;
+      // 確立後の 2 通目 REQUEST_OK は重複として閉じる
+      // (namespace / tracks ループと同形で scope 検証より先に判定する)。
+      if (ctx.progress.resolved) {
+        ctx.session.closeWithError(
+          new SessionError(
+            "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return "return";
+      }
+      // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+      // 初期 PUBLISH_NAMESPACE_OK に出現できるパラメータ以外は
+      // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+      // 呼び出し元の Promise を reject してから閉じる
+      // (PUBLISH 応答経路と同一パターン)。
+      const scopeError = validateParameterScope(
+        requestOk.parameters,
+        NAMESPACE_OK_ALLOWED_PARAMS,
+        "PUBLISH_NAMESPACE_OK",
+      );
+      if (scopeError !== null) {
+        namespaceRejectAndCloseWithError(ctx.session, ctx.reject, scopeError);
+        return "return";
+      }
+      // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+      // Track Properties は PUBLISH_NAMESPACE_OK では空が必須であり、
+      // 非空は PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+      // 呼び出し元の Promise を reject してから閉じる。
+      const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
+        requestOk.trackProperties,
+        "PUBLISH_NAMESPACE_OK",
+      );
+      if (trackPropertiesError !== null) {
+        namespaceRejectAndCloseWithError(ctx.session, ctx.reject, trackPropertiesError);
+        return "return";
+      }
+      ctx.target.state = "active";
+      ctx.progress.resolved = true;
+      resolve(ctx.session.createNamespacePublication(ctx.requestId));
+      return "continue";
+    },
+    onRequestError: async (ctx, payload) => {
+      // draft-ietf-moq-transport-21 §9.2:
+      // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
+      if (ctx.progress.goawayReceived) {
+        return "continue";
+      }
+      const decodedMsg = decodeRequestErrorPayload(payload);
+      const error = new RequestError(
+        decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
+        normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
+        decodedMsg.retryInterval,
+        decodedMsg.redirect
+          ? {
+              connectUri: decodedMsg.redirect.connectUri,
+              trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
+              trackName: decodedMsg.redirect.trackName,
             }
-            if (requestOkResult === "established") {
-              resolved = true;
-              resolve(session.createTracksSubscription(requestId));
-            }
-            break;
-          }
-
-          case MessageType.REQUEST_ERROR: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
-            // (spurious PROTOCOL_VIOLATION「received REQUEST_ERROR after
-            // REQUEST_OK」を防ぐ)
-            if (resolved && !goawayReceived) {
-              // draft-ietf-moq-transport-21 §9.5.2:
-              // 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答
-              if (
-                !handleNamespaceRequestUpdateError(
-                  session,
-                  requestId,
-                  messagePayload,
-                  subscription,
-                  "tracks",
-                )
-              ) {
-                return;
-              }
-              break;
-            }
-            if (goawayReceived) {
-              // GOAWAY 受信後の REQUEST_ERROR は spurious PROTOCOL_VIOLATION を
-              // 防ぐためセッションは閉じないが、GOAWAY 前に送信済みの保留中
-              // 更新は失敗として reject する (update() のハング防止)
-              rejectPendingNamespaceUpdates(
-                session,
-                requestId,
-                subscription,
-                decodeRequestErrorToRequestError(messagePayload),
-              );
-              break;
-            }
-            const error = decodeRequestErrorToRequestError(messagePayload);
-            subscription.state = "closed";
-            namespaceNotifyError(session, requestId, callbacks, error);
-            reject(error);
-            // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
-            await namespaceCloseRequestStreamQuiet(subscription.writer, streamReader);
-            return;
-          }
-
-          case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
-            // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §9.2 の
-            // マイグレーション扱いで reject し、読み取りだけ継続する (helper 参照)。
-            const wasResolved = resolved;
-            const action = await namespaceHandleGoawayMessage(
-              session,
-              requestId,
-              messagePayload,
-              callbacks,
-              subscription.writer,
-              reject,
-              resolved,
-            );
-            if (action === "terminate") {
-              return;
-            }
-            goawayReceived = true;
-            if (!wasResolved) {
-              requestMigrated = true;
-            }
-            break;
-          }
-
-          case MessageType.PUBLISH_SKIPPED: {
-            const decodedMsg = decodePublishSkippedPayload(messagePayload);
-            const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-            const trackName = new TextDecoder().decode(decodedMsg.trackName);
-            namespaceInvokeCallbackQuiet(() =>
-              callbacks.onPublishSkipped?.(suffixStrings, trackName),
-            );
-            break;
-          }
-
-          default:
-            session.closeWithError(
-              new SessionError(
-                `unknown tracks stream message type: 0x${messageType.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
-            );
-            return;
+          : undefined,
+      );
+      ctx.target.state = "closed";
+      namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
+      if (!ctx.progress.resolved) {
+        ctx.reject(error);
+        // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
+        await namespaceCloseRequestStreamQuiet(ctx.writer, ctx.streamReader);
+      }
+      return "return";
+    },
+    onMessage: async (ctx, messageType) => {
+      // 想定外メッセージは PROTOCOL_VIOLATION でセッションを閉じる。
+      // 確立前の検証失敗は呼び出し元の Promise を reject してから閉じる
+      // (確立後は Promise 解決済みのため閉じるのみにする)。
+      const error = new SessionError(
+        `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      );
+      if (!ctx.progress.resolved) {
+        namespaceRejectAndCloseWithError(ctx.session, ctx.reject, error);
+      } else {
+        ctx.session.closeWithError(error);
+      }
+      return "return";
+    },
+    onReadError: (ctx, error) => {
+      // draft-ietf-moq-transport-21 §9.2:
+      // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
+      // spurious error 通知を抑止する
+      if (ctx.target.state !== "closed" && !ctx.progress.goawayReceived) {
+        ctx.target.state = "closed";
+        namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
+        // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
+        if (!ctx.progress.resolved && !ctx.progress.requestMigrated) {
+          ctx.reject(error);
         }
       }
-    }
-  } catch (error) {
-    // draft-ietf-moq-transport-21 §9.2:
-    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
-    // spurious error 通知を抑止する
-    const normalizedError = error instanceof Error ? error : new Error(String(error));
-    if (subscription.state === "active" && !goawayReceived) {
-      subscription.state = "closed";
-      if (!isSessionClosedError(normalizedError)) {
-        namespaceNotifyError(session, requestId, callbacks, normalizedError);
-      }
-      // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
-      if (!resolved && !requestMigrated) {
-        reject(normalizedError);
-      }
-    }
-    // draft-ietf-moq-transport-21 §9.5.1:
-    // RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
-    // 一種として保留中の更新を暗黙の失敗として reject する。
-    // goawayReceived の有無に関わらず実行する (reject しないと update() が
-    // 永不解決になる。done 検出経路と同じ扱い)。
-    if (resolved) {
-      handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
-    }
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
-    }
-  } finally {
-    subscription.state = "closed";
-    try {
-      streamReader.releaseLock();
-    } catch {
-      // 既に解放済みの場合は無視
-    }
-    session.tracksSubscriptions.delete(requestId);
-  }
+    },
+  };
 }
 
 /**
@@ -1308,206 +1547,20 @@ export async function namespaceStartPublicationStreamLoop(
     return;
   }
 
-  const { streamReader, controlReader, callbacks } = publication;
-  let resolved = false;
-  // draft-ietf-moq-transport-21 §9.2:
-  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
-  // フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
-  // まで遅延するため、メッセージ処理判断専用に使う。
-  let goawayReceived = false;
-  // 確立前 GOAWAY でマイグレーション扱いになったかどうか (namespace / tracks 側と同様)。
-  let requestMigrated = false;
-
-  try {
-    while (publication.state !== "closed") {
-      const { value, done } = await streamReader.read();
-      if (done) {
-        if (!resolved) {
-          // 確立前 GOAWAY でマイグレーション扱いになった場合は、既に
-          // マイグレーション理由で reject 済みのため上書きしない。
-          if (!requestMigrated) {
-            reject(new Error("stream closed before receiving response"));
-          }
-        }
-        // draft-ietf-moq-transport-21 §6.4.2.2:
-        // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
-        await namespaceCloseWriterQuiet(publication.writer);
-        break;
-      }
-
-      const messages = controlReader.feed(value);
-      for (const msg of messages) {
-        const messageType = msg.type;
-        const messagePayload = msg.payload;
-
-        session.callbacks.debug?.({
-          direction: "recv",
-          type: messageType,
-          typeName: getMessageTypeName(messageType),
-          payload: messagePayload,
-          timestamp: Date.now(),
-        });
-
-        // 確立前 GOAWAY で reject 済みのリクエストは、2 通目 GOAWAY の検出のため
-        // 読み取りだけ継続し、他のメッセージは処理しない (§9.2 MUST)。
-        if (namespaceShouldSkipAfterMigration(requestMigrated, messageType)) {
-          continue;
-        }
-
-        switch (messageType) {
-          case MessageType.REQUEST_OK: {
-            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
-            // PUBLISH_NAMESPACE_OK は Track Properties が空必須であり、未知 Mandatory
-            // Track Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
-            // (publication ストリームは REQUEST_UPDATE を扱わないため確立前のみ)。
-            const requestOk = namespaceDecodeRequestOkWithoutTrackProperties(
-              session,
-              messagePayload,
-              reject,
-            );
-            if (requestOk === null) {
-              return;
-            }
-            // 確立後の 2 通目 REQUEST_OK は重複として閉じる
-            // (namespace / tracks ループと同形で scope 検証より先に判定する)。
-            if (resolved) {
-              session.closeWithError(
-                new SessionError(
-                  "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-            }
-            // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
-            // 初期 PUBLISH_NAMESPACE_OK に出現できるパラメータ以外は
-            // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
-            // 呼び出し元の Promise を reject してから閉じる
-            // (PUBLISH 応答経路と同一パターン)。
-            const scopeError = validateParameterScope(
-              requestOk.parameters,
-              NAMESPACE_OK_ALLOWED_PARAMS,
-              "PUBLISH_NAMESPACE_OK",
-            );
-            if (scopeError !== null) {
-              namespaceRejectAndCloseWithError(session, reject, scopeError);
-              return;
-            }
-            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
-            // Track Properties は PUBLISH_NAMESPACE_OK では空が必須であり、
-            // 非空は PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
-            // 呼び出し元の Promise を reject してから閉じる。
-            const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
-              requestOk.trackProperties,
-              "PUBLISH_NAMESPACE_OK",
-            );
-            if (trackPropertiesError !== null) {
-              namespaceRejectAndCloseWithError(session, reject, trackPropertiesError);
-              return;
-            }
-            publication.state = "active";
-            resolved = true;
-            resolve(session.createNamespacePublication(requestId));
-            break;
-          }
-
-          case MessageType.REQUEST_ERROR: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
-            if (goawayReceived) {
-              break;
-            }
-            const decodedMsg = decodeRequestErrorPayload(messagePayload);
-            const error = new RequestError(
-              decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
-              normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-              decodedMsg.retryInterval,
-              decodedMsg.redirect
-                ? {
-                    connectUri: decodedMsg.redirect.connectUri,
-                    trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-                    trackName: decodedMsg.redirect.trackName,
-                  }
-                : undefined,
-            );
-            publication.state = "closed";
-            namespaceNotifyError(session, requestId, callbacks, error);
-            if (!resolved) {
-              reject(error);
-              // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
-              await namespaceCloseRequestStreamQuiet(publication.writer, streamReader);
-            }
-            return;
-          }
-
-          case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // resolved=true (確立後) は goawayReceived を立てて読み取りを継続し
-            // 2 通目 GOAWAY を検出する。resolved=false (確立前) は §9.2 の
-            // マイグレーション扱いで reject し、読み取りだけ継続する (helper 参照)。
-            const wasResolved = resolved;
-            const action = await namespaceHandleGoawayMessage(
-              session,
-              requestId,
-              messagePayload,
-              callbacks,
-              publication.writer,
-              reject,
-              resolved,
-            );
-            if (action === "terminate") {
-              return;
-            }
-            goawayReceived = true;
-            if (!wasResolved) {
-              requestMigrated = true;
-            }
-            break;
-          }
-
-          default: {
-            // 想定外メッセージは PROTOCOL_VIOLATION でセッションを閉じる。
-            // 確立前の検証失敗は呼び出し元の Promise を reject してから閉じる
-            // (確立後は Promise 解決済みのため閉じるのみにする)。
-            const error = new SessionError(
-              `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
-            );
-            if (!resolved) {
-              namespaceRejectAndCloseWithError(session, reject, error);
-            } else {
-              session.closeWithError(error);
-            }
-            return;
-          }
-        }
-      }
-    }
-  } catch (error) {
-    // draft-ietf-moq-transport-21 §9.2:
-    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
-    // spurious error 通知を抑止する
-    if (publication.state !== "closed" && !goawayReceived) {
-      publication.state = "closed";
-      const wrapped = error instanceof Error ? error : new Error(String(error));
-      namespaceNotifyError(session, requestId, callbacks, wrapped);
-      // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。
-      if (!resolved && !requestMigrated) {
-        reject(wrapped);
-      }
-    }
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
-    }
-  } finally {
-    publication.state = "closed";
-    try {
-      streamReader.releaseLock();
-    } catch {
-      // 既に解放済みの場合は無視
-    }
-    session.namespacePublications.delete(requestId);
-  }
+  await runNamespaceStreamLoop(
+    session,
+    requestId,
+    {
+      target: publication,
+      streamReader: publication.streamReader,
+      controlReader: publication.controlReader,
+      writer: publication.writer,
+      callbacks: publication.callbacks,
+      cleanup: () => {
+        session.namespacePublications.delete(requestId);
+      },
+    },
+    reject,
+    createPublicationStreamHandlers(resolve),
+  );
 }

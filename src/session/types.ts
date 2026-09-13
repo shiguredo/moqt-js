@@ -62,7 +62,7 @@ export interface TracksSubscriptionState {
   writer?: WritableStreamDefaultWriter<Uint8Array>;
 }
 
-interface NamespacePublicationState {
+export interface NamespacePublicationState {
   callbacks?: NamespacePublicationCallbacks;
   state: "pending" | "active" | "closed";
   namespace: string[];
