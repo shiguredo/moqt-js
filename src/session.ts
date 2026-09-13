@@ -369,8 +369,12 @@ export interface PublishOptions {
    * Subgroup Delivery Timeout（ミリ秒）
    * draft-ietf-moq-transport-21 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
    *
-   * Subgroup 内のオブジェクトを配信する最大時間。
-   * 0 はタイムアウトなしを意味する。
+   * PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.20.4）。
+   *
+   * Subgroup 内のオブジェクトを配信する最大時間。0 はタイムアウトなしを意味する。
+   * moqt-js はこの値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つ
+   * エンドポイント（典型的にはリレー）の責務であり、詳細は Section 5.2
+   * (Delivery Timeouts and Data Reliability) を参照。
    */
   subgroupDeliveryTimeout?: bigint;
 
@@ -524,10 +528,12 @@ export interface SubscribeOptions {
 
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-21 Section 9.20.4 (SUBGROUP_DELIVERY_TIMEOUT)
+   * draft-ietf-moq-transport-21 Section 9.20.4 (SUBGROUP_DELIVERY_TIMEOUT Parameter)
    *
-   * Subgroup 内のオブジェクトを配信する最大時間。
-   * 0 はタイムアウトなしを意味する。
+   * Subgroup 内のオブジェクトを配信する最大時間。0 はタイムアウトなしを意味する。
+   * moqt-js はこの値を SUBSCRIBE の Message Parameter として送信するが、この値の強制は行わない。
+   * 比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント（典型的にはリレー）の
+   * 責務であり、詳細は Section 5.2 (Delivery Timeouts and Data Reliability) を参照。
    */
   subgroupDeliveryTimeout?: bigint;
 
