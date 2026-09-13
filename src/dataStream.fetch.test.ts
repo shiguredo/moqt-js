@@ -1931,6 +1931,98 @@ test("FetchObjectFields: DATAGRAM+SUBGROUP_PRESENT で Subgroup ID を消費せ�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §11.4.1.1:
+ * "the object has no Subgroup ID" は先頭・非先頭を問わない。DATAGRAM ビットが立つ
+ * 非先頭オブジェクトでも Subgroup ID vi64 を消費せず、後続の Object ID /
+ * Publisher Priority / payload length が正しく復元されることを検証する。
+ *
+ * ワイヤフォーマット: flags, group_id_delta, object_id, priority, payload_length
+ */
+test("FetchObjectFields: 非先頭 DATAGRAM+SUBGROUP_PRESENT でも Subgroup ID を消費しない", () => {
+  // 1 件目: DATAGRAM の先頭オブジェクト (context を得る)
+  const firstFlags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const [first, , firstContext] = decodeFetchObjectFields(
+    new Uint8Array([firstFlags, 5, 10, 64, 50]),
+    null,
+    0,
+    true,
+  );
+  assert.equal(first.groupId, 5n);
+  assert.equal(firstContext.groupId, 5n);
+  assert.equal(firstContext.subgroupId, 0n);
+
+  // 2 件目: 非先頭 DATAGRAM + SUBGROUP_PRESENT。
+  // DATAGRAM ビットが立つため Subgroup ID フィールドは存在しない。
+  const flags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.SUBGROUP_PRESENT |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const data = new Uint8Array([flags, 0, 20, 80, 60]);
+
+  const [decoded, consumed, context] = decodeFetchObjectFields(data, firstContext, 0, false);
+
+  // Group ID は prior + delta + 1、Object ID は絶対値として復元される
+  assert.equal(decoded.groupId, 6n);
+  assert.equal(decoded.objectId, 20n);
+  assert.equal(decoded.publisherPriority, 80);
+  assert.equal(decoded.payloadLength, 60n);
+  assert.equal(decoded.subgroupId, 0n);
+  // Subgroup ID フィールドを消費しないため、消費バイト数はワイヤ長と一致する
+  assert.equal(consumed, data.length);
+  assert.equal(context.subgroupId, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.4.1.1:
+ * DATAGRAM ビットが立つオブジェクトは Subgroup ID を運ばないため、
+ * decodeFetchObjectFields は newContext.subgroupId に直前の実 Object の
+ * Subgroup ID を保持する。非先頭ケースでこれが保たれることを検証する
+ * (ここが 0 に落ちると、後続の SUBGROUP_SAME が別 Subgroup を参照する)。
+ */
+test("FetchObjectFields: 非先頭 DATAGRAM は直前の実 Subgroup ID を context に保持する", () => {
+  // 1 件目: Subgroup ID 7 を持つ通常 (非 DATAGRAM) の先頭オブジェクト
+  const firstFlags =
+    FetchSerializationFlags.SUBGROUP_PRESENT |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const [first, , firstContext] = decodeFetchObjectFields(
+    new Uint8Array([firstFlags, 5, 7, 10, 64, 50]),
+    null,
+    0,
+    true,
+  );
+  assert.equal(first.subgroupId, 7n);
+  assert.equal(firstContext.subgroupId, 7n);
+
+  // 2 件目: 非先頭 DATAGRAM + SUBGROUP_PRESENT
+  const flags =
+    FetchSerializationFlags.DATAGRAM |
+    FetchSerializationFlags.SUBGROUP_PRESENT |
+    FetchSerializationFlags.GROUP_ID_PRESENT |
+    FetchSerializationFlags.OBJECT_ID_PRESENT |
+    FetchSerializationFlags.PRIORITY_PRESENT;
+  const data = new Uint8Array([flags, 0, 20, 80, 60]);
+
+  const [decoded, consumed, context] = decodeFetchObjectFields(data, firstContext, 0, false);
+
+  assert.equal(decoded.groupId, 6n);
+  assert.equal(decoded.objectId, 20n);
+  assert.equal(decoded.publisherPriority, 80);
+  assert.equal(decoded.payloadLength, 60n);
+  // DATAGRAM 自身は Subgroup 0 として扱い、context は直前の実 Subgroup ID を保つ
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(consumed, data.length);
+  assert.equal(context.subgroupId, 7n);
+});
+
+/**
  * draft-ietf-moq-transport-21 §3.6:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む FETCH Object は
  * malformed であり、decodeFetchObjectFields が MalformedTrackError を throw する。
