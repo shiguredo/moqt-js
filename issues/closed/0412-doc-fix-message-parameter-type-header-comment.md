@@ -2,7 +2,7 @@
 
 - Created: 2026-08-12
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/fix-message-parameter-type-header-comment
 - Polished: {YYYY-MM-DD}
 
@@ -36,4 +36,14 @@
 
 ## 解決方法
 
-未着手。
+`src/message/types.ts` の `MessageParameterType` ヘッダコメントを draft-21 の実態に合わせて修正した。コメントのみで、コード・公開 API は変更していない。
+
+- ヘッダの「Track Properties (OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY, DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の Track Properties に移動」を、「MAX_CACHE_DURATION / DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER / DYNAMIC_GROUPS は Track Properties でのみ使用する」と「OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT は Track Properties と Message Parameters の両方に出現する」の 2 項目に分けた。「移動」ではなく両 namespace に併存するという draft-21 §5.2 の記述 ("The publisher communicates both timeout values as a Track Property; the subscriber communicates them as Message Parameters.") を根拠として引用した。
+- 続く注意書きを「SUBSCRIBE / PUBLISH / REQUEST_UPDATE では OBJECT_DELIVERY_TIMEOUT と SUBGROUP_DELIVERY_TIMEOUT が Message Parameter として出現する。GROUP_ORDER は SUBSCRIBE / PUBLISH / SUBSCRIBE_TRACKS / FETCH / FILL_PARAMETERS に出現する」に修正した。GROUP_ORDER の出現先は §9.20.19 の明文による。
+- あわせて `OBJECT_DELIVERY_TIMEOUT` のエントリコメントも「SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Property として使用。」から、§9.20.5 の出現メッセージと §5.2 の役割分担を明記する形に修正した。
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した (0570 と同じエントリに含めた)。
+
+## 検証
+
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功

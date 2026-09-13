@@ -7,8 +7,6 @@
  * Message Types (Section 9 Control Messages)
  */
 export const MessageType = {
-  // draft-ietf-moq-transport-21 Section 6.3:
-  // CLIENT_SETUP と SERVER_SETUP は単一の SETUP メッセージに統合された。
   // draft-ietf-moq-transport-21 Section 9.1
   SETUP: 0x2f00,
 
@@ -61,9 +59,7 @@ export const MessageType = {
    * SUBSCRIBE_NAMESPACE (Section 9.15 SUBSCRIBE_NAMESPACE)
    *
    * draft-ietf-moq-transport-21:
-   * 旧 SUBSCRIBE_NAMESPACE (0x11) が SUBSCRIBE_NAMESPACE (0x50) と
-   * SUBSCRIBE_TRACKS (0x51) に分割された。
-   * 0x50 は namespace discovery (NAMESPACE / NAMESPACE_DONE 受信) を担当する。
+   * namespace discovery (NAMESPACE / NAMESPACE_DONE 受信) を担当する。
    * draft-ietf-moq-transport-21 Section 9.15
    */
   SUBSCRIBE_NAMESPACE: 0x50,
@@ -127,20 +123,26 @@ export type SetupOptionType = (typeof SetupOptionType)[keyof typeof SetupOptionT
  * draft-ietf-moq-transport-21:
  * - Message Parameters は単一ホップにスコープされる
  * - 全ての Message Parameters は理解されなければならない（未知のものはエラー）
- * - Track Properties (OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
- *   DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS) は PUBLISH/SUBSCRIBE_OK/FETCH_OK の
- *   Track Properties に移動
+ * - MAX_CACHE_DURATION / DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER /
+ *   DYNAMIC_GROUPS は Track Properties でのみ使用する
+ * - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT は Track Properties と
+ *   Message Parameters の両方に出現する (§5.2: publisher は Track Property として、
+ *   subscriber は Message Parameter として同じタイムアウトを伝える)
  * draft-ietf-moq-transport-21 Section 9.20 (Message Parameters)
  *
- * 注意: SUBSCRIBE では OBJECT_DELIVERY_TIMEOUT, GROUP_ORDER は引き続き
- * Message Parameter として使用される（Subscriber の希望値）。
+ * 注意: SUBSCRIBE / PUBLISH / REQUEST_UPDATE では OBJECT_DELIVERY_TIMEOUT と
+ * SUBGROUP_DELIVERY_TIMEOUT が Message Parameter として出現する (Subscriber の希望値)。
+ * GROUP_ORDER は SUBSCRIBE / PUBLISH / SUBSCRIBE_TRACKS / FETCH / FILL_PARAMETERS
+ * に出現する。
  */
 export const MessageParameterType = {
   /**
    * OBJECT_DELIVERY_TIMEOUT (Section 9.20.5 OBJECT_DELIVERY_TIMEOUT Parameter)
    *
-   * SUBSCRIBE では Subscriber の希望値として Message Parameter で使用。
-   * PUBLISH/SUBSCRIBE_OK/FETCH_OK では Track Property として使用。
+   * draft-ietf-moq-transport-21 §9.20.5:
+   * SUBSCRIBE / PUBLISH / REQUEST_UPDATE に出現可能。
+   * Subscriber の希望値として Message Parameter で伝え、publisher は
+   * Track Property として同じタイムアウトを伝える (§5.2)。
    */
   OBJECT_DELIVERY_TIMEOUT: 0x02,
   /**
@@ -162,7 +164,7 @@ export const MessageParameterType = {
    *
    * draft-ietf-moq-transport-21:
    * SUBGROUP_DELIVERY_TIMEOUT パラメータは varint。
-   * PUBLISH_OK / SUBSCRIBE / REQUEST_UPDATE に出現可能。
+   * SUBSCRIBE / PUBLISH / REQUEST_UPDATE に出現可能。
    * 単位はミリ秒。0 はタイムアウトなしを意味する。
    * draft-ietf-moq-transport-21 Section 9.20.4
    */
@@ -287,7 +289,6 @@ export type GroupOrder = (typeof GroupOrder)[keyof typeof GroupOrder];
  *   Indicates that no objects with the location that is equal to or greater
  *   than the one specified exist.
  *
- * Note: 0x1 (Object Does Not Exist) was removed in draft-16.
  * draft-ietf-moq-transport-21 Section 11.1.2
  */
 export const ObjectStatus = {
