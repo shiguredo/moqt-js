@@ -1218,6 +1218,12 @@
   - `vite-plus@0.3.0` が同梱する vitest は 4.1.11 であり、`@vitest/coverage-v8@5.0.0` では `vp test --coverage` がバージョン不整合の Startup Error で起動しない
   - bundled vitest と単一版数を担保するため `@vitest/coverage-v8` を 4.1.11 に固定する (vite-plus の更新時は同梱 vitest に追随させる)
   - @voluntas
+- [UPDATE] HIGH_LEVEL_API.md を現コードに合わせる
+  - 存在しない `setStream()` と `"ready"` 状態、幽霊オプション `reorderTimeout` を削除し、`start(stream)` と実際の状態遷移に修正する
+  - 受信側の `codec` は任意 (省略時は Catalog から自動取得) であり、必須と書いていた記述を逆に修正する
+  - 欠落していた `getCatalog` / `catalog` / `onCatalog` / `authorizationToken` / `getAuthorizationToken` / `pendingSubgroup` を追加する
+  - 受信側統計の型名を `AudioStats` / `VideoStats` (送信側の型) から `AudioReceiverStats` / `VideoReceiverStats` に修正する
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる
