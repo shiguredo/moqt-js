@@ -1226,6 +1226,10 @@
   - 受信側: `setupDecoders` が SUBSCRIBE_OK の Track Property の `VIDEO_CONFIG` を `VideoDecoderConfig.description` として渡し、Object Property の config が変化したらデコーダを再構成する
   - これにより canonical 形式 (avc1 / hvc1) の解像度変更時の再構成が成立する
   - @voluntas
+- [UPDATE] parameter.ts の偶数型・奇数型コメントを Key-Value-Pair の説明に限定する
+  - Message Parameter の Value は各パラメータ定義が個別に定める (§9.20 "The encoding is specified by each parameter definition.") ため、偶数型 / 奇数型で一律には決まらない旨を明記する
+  - 「偶数型: varint 値 / 奇数型: Length プレフィックス付きバイト列」は §8.3 (Key-Value-Pair Structure) の規則であり、本ファイルでは Key-Value-Pair を扱う encodeKeyValuePair / decodeKeyValuePair / encodeKeyValuePairs / decodeKeyValuePairs が従うことを明記する
+  - @voluntas
 - [ADD] channelConfig のサラウンド複合表記に対応する
   - draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義しないため、業界慣用の "5.1" (6 チャンネル) と "7.1" (8 チャンネル) を対応表で解決する
   - 対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり throw する (非標準表記を暗黙に数値化しない)
