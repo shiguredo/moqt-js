@@ -72,3 +72,17 @@
 - `issues/0547-refactor-subscribe-prop-namespace-arb.md` (subscribe.prop.ts 内に閉じた namespace arbitrary の重複。本 issue はファイル横断の重複を扱う)
 - `issues/0576-refactor-bidi-test-split.md` (bidi.test.ts の分割と共通ヘルパー抽出。本 issue はテストファイル横断の重複を扱う)
 - `issues/0597-refactor-namespace-loop-test-parametrize.md` (namespaceLoops.test.ts の鏡写しテストのテーブル化。本 issue は共有ヘルパーを扱う)
+
+## 進捗
+
+テストヘルパーの統合は完了した。
+
+- `src/testSupport/helpers.ts` を新設し、`concatUint8Arrays` / `nodeProcess` / `createObject` / `appendMalformedTrackProperties` / `parseObjectPropertyIds` / `assertRejectsWithMessage` / `encodeJson` / `useValueToken` を集約した。21 ファイルから重複定義を削除し、18 ファイルで +163 / -217 行。
+- `useValueToken` は `tokenValue` の文字列だけが違っていたため引数化した。
+- テストの検証内容と件数は変えていない (70 ファイル / 2,090 テスト全通過)。
+
+残りは `src/message/*.prop.ts` の 7 ファイルに散在する PBT arbitrary の重複 15 ブロック / 507 行である。着手時に次の統合上の罠が判明しているため、別の作業単位として扱う。
+
+- `varintParameterArb` の型リストがファイル間で非対称 (`parameter.prop.ts` / `publish.prop.ts` / `subscribe.prop.ts` は `0x06` を含み、`fetch.prop.ts` / `trackstatus.prop.ts` / `session.prop.ts` / `namespace.prop.ts` は含まない)。広い側に寄せると PBT の探索空間が広がるため、統合後にテストが通るかを実行して確認する必要がある。
+- `parametersArb` は `parameter.prop.ts` 版だけが Range Filter の重複 SetID を除去する強化版で、他 6 ファイルは type 重複除去のみの単純版である。同名で中身が違うため、どちらを正とするかを決める必要がある。
+- `src/properties.prop.ts` の `evenPropertyArb` / `oddPropertyArb` は生成方法が message 側と異なる (ID の作り方が `fc.bigInt({ min: 0n, max: 0xfen })` と `fc.bigInt({ min: 0n, max: 100n }).map((n) => n * 2n)` で違う)。
