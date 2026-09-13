@@ -314,10 +314,24 @@ export class SubscriberImpl implements Subscriber {
    *
    * draft-ietf-moq-transport-21 Section 3.3.1:
    * SUBSCRIBE 送信時の options.filter または REQUEST_UPDATE 成功後の更新で設定される。
+   * 設定時点の LARGEST_OBJECT で解決した結果を保持するため、呼び出し側は
+   * 同じ内容のフィルタで再設定しないこと (同じ内容でも再解決で開始位置が
+   * 前進し得る)。等価判定には isSameLocationFilter を使う。
    */
   setLocationFilter(filter: LocationFilter | undefined): void {
     this.locationFilter = filter;
     this.resolvedFilterCache = resolveFilter(filter, this.subscriberLargestLocation);
+  }
+
+  /**
+   * 保持している Location Filter を取得する
+   *
+   * 受信した LOCATION_FILTER が保持値と等価かを呼び出し側で判定するために使う
+   * (isSameLocationFilter)。設定時の解決結果 (resolvedFilterCache) は
+   * LARGEST_OBJECT に依存するため、生のフィルタを返す。
+   */
+  getLocationFilter(): LocationFilter | undefined {
+    return this.locationFilter;
   }
 
   /**

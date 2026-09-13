@@ -33,6 +33,7 @@ import {
   MAX_TRACK_NAMESPACE_SIZE,
   MAX_FULL_TRACK_NAME_SIZE,
   isRejectedReceiveNamespace,
+  isSameLocationFilter,
 } from "./parameter";
 import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
 import { MessageParameterType } from "./types";
@@ -1328,5 +1329,64 @@ test("decodeMessageParameter: track-namespace 分岐の Field Length 宣言超�
   assert.throws(
     () => decodeMessageParameter(truncated, 0, 0n),
     /track namespace field length exceeds remaining data/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+ * 同じ内容の LOCATION_FILTER が再報告された場合に再解決を避けるための
+ * 等価判定を検証する。公開型はフィールドの有無で表現が変わるため、
+ * フィールドの有無と値を突き合わせる。
+ */
+test("isSameLocationFilter: 同じフィールド構成と値なら等価", () => {
+  assert.isTrue(isSameLocationFilter(undefined, undefined));
+  assert.isTrue(isSameLocationFilter({ reset: true }, { reset: true }));
+  assert.isTrue(isSameLocationFilter({ startGroup: 1n }, { startGroup: 1n }));
+  assert.isTrue(
+    isSameLocationFilter({ startGroup: 1n, startObject: 2n }, { startGroup: 1n, startObject: 2n }),
+  );
+  assert.isTrue(
+    isSameLocationFilter(
+      { startGroup: 1n, startObject: 2n, endGroupDelta: 3n },
+      { startGroup: 1n, startObject: 2n, endGroupDelta: 3n },
+    ),
+  );
+  assert.isTrue(
+    isSameLocationFilter(
+      { startGroup: 1n, startObject: 2n, endGroupDelta: 3n, endObject: 4n },
+      { startGroup: 1n, startObject: 2n, endGroupDelta: 3n, endObject: 4n },
+    ),
+  );
+});
+
+test("isSameLocationFilter: フィールドの有無または値が違えば非等価", () => {
+  // 未設定と設定済みは非等価
+  assert.isFalse(isSameLocationFilter(undefined, { startGroup: 1n }));
+  assert.isFalse(isSameLocationFilter({ startGroup: 1n }, undefined));
+  // reset (Length 0) とフィールドありは非等価
+  assert.isFalse(isSameLocationFilter({ reset: true }, { startGroup: 0n }));
+  assert.isFalse(isSameLocationFilter({ startGroup: 0n }, { reset: true }));
+  // 値の差
+  assert.isFalse(isSameLocationFilter({ startGroup: 1n }, { startGroup: 2n }));
+  // フィールド数の差 (2 フィールドと 3 フィールド)
+  assert.isFalse(
+    isSameLocationFilter(
+      { startGroup: 1n, startObject: 0n },
+      { startGroup: 1n, startObject: 0n, endGroupDelta: 0n },
+    ),
+  );
+  // 3 フィールドと 4 フィールド
+  assert.isFalse(
+    isSameLocationFilter(
+      { startGroup: 1n, startObject: 0n, endGroupDelta: 0n },
+      { startGroup: 1n, startObject: 0n, endGroupDelta: 0n, endObject: 0n },
+    ),
+  );
+  // endObject の値の差
+  assert.isFalse(
+    isSameLocationFilter(
+      { startGroup: 1n, startObject: 0n, endGroupDelta: 0n, endObject: 5n },
+      { startGroup: 1n, startObject: 0n, endGroupDelta: 0n, endObject: 6n },
+    ),
   );
 });

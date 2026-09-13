@@ -58,6 +58,11 @@
   - draft-ietf-moq-transport-21 §3.4 / §3.4.1 に基づき、Forward State=1 かつ fill 範囲が空でない FILL_PARAMETERS を含む REQUEST_UPDATE を受理して黙殺する挙動をやめ、REQUEST_ERROR (NOT_SUPPORTED) と PUBLISH_DONE (UPDATE_FAILED) で購読を終了する (moqt-js は fill fetch ストリームを開けないため)
   - fill fetch ストリームを開く仕様準拠のピアとは相互運用できない (moqt-js publisher は fill を提供しない)
   - @voluntas
+- [UPDATE] PUBLISH_STATE_NOTIFY の同じ LOCATION_FILTER で Location Filter を再解決しない
+  - draft-ietf-moq-transport-21 §9.10 は値の変化したパラメータのみを運ぶと定めるが、同じ内容の LOCATION_FILTER が届いた場合も無条件で再解決していた
+  - 直前で反映した LARGEST_OBJECT により相対指定が再評価され、開始位置が前進して受信済み範囲の Object を破棄し得るため、保持値と等価なら再解決しない (防御的措置)
+  - 等価判定は `src/message/parameter.ts` の `isSameLocationFilter` に集約し、フィールドの有無と値を突き合わせる
+  - 変化した LOCATION_FILTER の反映は従来どおり
 - [UPDATE] 2^64-1 の重複定数を MAX_VARINT に統一する
   - `src/session/stream.ts` の `maxObjectId` と `src/dataStream.ts` の `maxObjectId` が `(1n << 64n) - 1n` を個別に定義していたのをやめ、`src/varint.ts` の `MAX_VARINT` を参照する
   - Object ID / Group ID の上限が varint の最大値と同一である根拠 (draft-ietf-moq-transport-21 §11.3.1 / §11.4.1.1 Table 9) は使用箇所のコメントに残す
