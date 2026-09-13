@@ -1352,6 +1352,13 @@
 
 ### misc
 
+- [UPDATE] message 層 4 モジュールに異常系・境界値テストを追加する
+  - `src/message/subscribe.ts` / `publish.ts` / `trackstatus.ts` / `namespace.ts` に対応する `*.test.ts` を新設する
+  - draft-ietf-moq-transport-21 §9 の「Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION」を、SUBSCRIBE / REQUEST_UPDATE / TRACK_STATUS / PUBLISH_DONE / PUBLISH_NAMESPACE / NAMESPACE / NAMESPACE_DONE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_SKIPPED の 10 メッセージで固定する
+  - Reason Phrase の上限 (draft-ietf-moq-transport-21 §8.5、1,024 バイト) ちょうどは通過し 1 バイト超過は拒否されることを固定する
+  - PUBLISH は Track Properties が length プレフィックスを持たず残りバイトすべてを占めるため、末尾違反ではなく Track Properties として読み戻されることを固定する
+  - 正常系の round-trip は `*.prop.ts` の PBT、Length 宣言の超過は `decode-boundary.test.ts` が担い、重複しないよう役割を分けている
+  - @voluntas
 - [UPDATE] filter のマッチング解決を Property-Based Testing で検証する
   - `src/filter.prop.ts` に `objectMatchesFilter` と `rangeFiltersMatch` のプロパティを追加する
   - `objectMatchesFilter`: 未指定は全通過 / Start ちょうどは通過し Start 未満は不通過 / End Group・End Object の外側は不通過 / End Object は End Group 内でのみ上限になる / 終端なしフィルタは Start 以降で単調 / Start Group より大きい Group は通過する
