@@ -17,8 +17,6 @@
  * timeout / overflow / session-close / end-of-stream のいずれかで resolve する。
  */
 
-import type { SubgroupHeader } from "./dataStream";
-
 type PendingNotifyReason =
   | "subscriber"
   | "timeout"
@@ -58,10 +56,7 @@ class PendingSubgroupEntry {
   /** @internal PendingSubgroupBuffer が timeout 解除に使う */
   timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(
-    readonly trackAlias: bigint,
-    readonly header: SubgroupHeader,
-  ) {
+  constructor(readonly trackAlias: bigint) {
     this.notified = new Promise<PendingNotifyReason>((resolve) => {
       this.resolveNotify = resolve;
     });
@@ -97,8 +92,8 @@ export class PendingSubgroupBuffer {
    * 新しい pending entry を作成して Map に追加し、timeout を起動する
    * draft-ietf-moq-transport-21 §11.3.1 "brief period" の上限を timeoutMs で表現する
    */
-  add(trackAlias: bigint, header: SubgroupHeader): PendingSubgroupEntry {
-    const entry = new PendingSubgroupEntry(trackAlias, header);
+  add(trackAlias: bigint): PendingSubgroupEntry {
+    const entry = new PendingSubgroupEntry(trackAlias);
 
     let list = this.entriesByAlias.get(trackAlias);
     if (!list) {

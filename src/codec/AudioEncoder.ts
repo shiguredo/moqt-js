@@ -184,17 +184,6 @@ export class AudioEncoderWrapper {
   }
 
   /**
-   * エンコードキューのサイズを取得する
-   */
-  get encodeQueueSize(): number {
-    if (this.useWorker) {
-      // Worker モードでは直接取得できない
-      return 0;
-    }
-    return this.encoder?.encodeQueueSize ?? 0;
-  }
-
-  /**
    * エンコーダーを閉じる
    */
   close(): void {

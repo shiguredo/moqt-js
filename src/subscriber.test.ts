@@ -6,9 +6,9 @@
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
-import { ObjectStatus } from "./message/types";
 import type { Property } from "./properties";
 import { encodeProperties, TrackPropertyId } from "./properties";
+import { createObject } from "./testSupport/helpers";
 
 // vp check は node の型を解決しないため globalThis 経由で process を参照する
 const nodeProcess = (
@@ -19,15 +19,6 @@ const nodeProcess = (
     };
   }
 ).process;
-
-function createObject(groupId: bigint, objectId: bigint): MoqtObject {
-  return {
-    groupId,
-    objectId,
-    status: ObjectStatus.NORMAL,
-    payload: new Uint8Array([1, 2, 3]),
-  };
-}
 
 test("closed 状態では handleObject は配信しない", () => {
   const delivered: MoqtObject[] = [];

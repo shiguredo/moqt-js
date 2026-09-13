@@ -24,7 +24,6 @@ export class AudioDecoderWrapper {
   private configured = false;
   // configure() 発行ごとの世代管理 (並行 configure の所有権分離用)
   private readonly generationTracker = new ConfigureGenerationTracker();
-  private lastConfig: AudioDecoderConfig | null = null;
 
   constructor(useWorker: boolean, callbacks: AudioDecoderWrapperCallbacks) {
     this.useWorker = useWorker;
@@ -36,7 +35,6 @@ export class AudioDecoderWrapper {
    */
   async configure(codec: AudioCodecType, sampleRate?: number, channels?: number): Promise<void> {
     const config = getAudioDecoderConfig(codec, sampleRate, channels);
-    this.lastConfig = config;
 
     if (this.useWorker) {
       await this.configureWorker(config);
@@ -172,54 +170,6 @@ export class AudioDecoderWrapper {
         this.callbacks.error(error instanceof Error ? error : new Error(String(error)));
       }
     }
-  }
-
-  /**
-   * デコーダーの状態を取得する
-   */
-  get state(): string {
-    if (this.useWorker) {
-      return this.configured ? "configured" : "unconfigured";
-    }
-    return this.decoder?.state ?? "unconfigured";
-  }
-
-  /**
-   * エラー後にデコーダーをリセットする
-   */
-  async reset(): Promise<void> {
-    if (!this.lastConfig) {
-      console.warn("AudioDecoderWrapper: cannot reset without config");
-      return;
-    }
-
-    // 待機中の configure 世代を無効化する (close と同一の中断扱い)。
-    // 以降の begin() まで await を挟まず同期的連続とし、他 configure() の
-    // begin() が割り込めないようにする。
-    this.generationTracker.invalidateAll();
-
-    // 現在のデコーダーをクリーンアップ
-    if (this.useWorker && this.worker) {
-      this.worker.postMessage({ type: "close" });
-      const closing = this.worker;
-      this.worker = null;
-      disposeWorker(closing);
-    } else if (this.decoder) {
-      if (this.decoder.state !== "closed") {
-        this.decoder.close();
-      }
-      this.decoder = null;
-    }
-
-    this.configured = false;
-
-    // 再初期化
-    if (this.useWorker) {
-      await this.configureWorker(this.lastConfig);
-    } else {
-      this.configureDirect(this.lastConfig);
-    }
-    this.configured = true;
   }
 
   /**

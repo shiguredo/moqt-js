@@ -426,16 +426,13 @@ export type CatalogMessage = Catalog | CatalogDelta;
  * - `root`: full catalog の `tracks` 配列内エントリ
  * - `publishTracks`: full catalog の `publishTracks` 配列内エントリ
  * - `add`: delta update の `add` operation 内エントリ
- * - `remove`: delta update の `remove` operation 内エントリ
  * - `clone`: delta update の `clone` operation 内エントリ
  *
- * `catalogNamespace` は §5.2.2「If it is not declared within a track, then
- * each track MUST inherit the namespace of the catalog track」に従い、namespace
- * が未指定なエントリの正規化に使用する。
+ * `remove` operation のエントリは `validateRemoveTrack` で検証するため、この
+ * コンテキストには現れない。
  */
 export interface ValidationContext {
-  source: "root" | "publishTracks" | "add" | "remove" | "clone";
-  catalogNamespace?: string;
+  source: "root" | "publishTracks" | "add" | "clone";
 }
 
 // =============================================================================

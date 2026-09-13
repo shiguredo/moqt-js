@@ -8,16 +8,6 @@ import {
   PendingSubgroupBuffer,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
 } from "./pendingSubgroupBuffer";
-import type { SubgroupHeader } from "./dataStream";
-
-function makeHeader(trackAlias: bigint, groupId = 0n): SubgroupHeader {
-  return {
-    type: 0x10,
-    trackAlias,
-    groupId,
-    publisherPriority: 128,
-  };
-}
 
 function makeOptions(
   overrides: Partial<{
@@ -46,7 +36,7 @@ test("オプション省略時はデフォルトが適用される (1 MiB / 16 M
   assert.equal(DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS.timeoutMs, 5000);
   // コンストラクタ引数を省略してもエラーにならず、buffer が動作する
   const buffer = new PendingSubgroupBuffer();
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   assert.equal(buffer.streamCount, 1);
   buffer.remove(entry);
 });
@@ -54,7 +44,7 @@ test("オプション省略時はデフォルトが適用される (1 MiB / 16 M
 test("partial オプションは未指定 field がデフォルトで補完される", () => {
   // perStreamMaxBytes のみ上書きしてその他はデフォルトを期待する
   const buffer = new PendingSubgroupBuffer({ perStreamMaxBytes: 8 });
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   buffer.appendChunk(entry, new Uint8Array(10));
   // perStreamMaxBytes=8 を超えたので overflow-per-stream が即発火する
   // (デフォルト perSessionMaxBytes=16 MiB / timeoutMs=5000 は触れていない)
@@ -65,7 +55,7 @@ test("partial オプションは未指定 field がデフォルトで補完さ�
 
 test("add で entry が登録され、streamCount と参照が一致する", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions());
-  const entry = buffer.add(7n, makeHeader(7n));
+  const entry = buffer.add(7n);
   assert.equal(buffer.streamCount, 1);
   assert.equal(entry.trackAlias, 7n);
   assert.equal(entry.totalBytes, 0);
@@ -76,7 +66,7 @@ test("add で entry が登録され、streamCount と参照が一致する", () 
 
 test("appendChunk で totalBytes と chunks が更新される", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions());
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   buffer.appendChunk(entry, new Uint8Array([1, 2, 3]));
   buffer.appendChunk(entry, new Uint8Array([4, 5]));
   assert.equal(entry.totalBytes, 5);
@@ -88,7 +78,7 @@ test("per-stream 上限超過で overflow-per-stream が通知される", async 
   const buffer = new PendingSubgroupBuffer(
     makeOptions({ perStreamMaxBytes: 8, perSessionMaxBytes: 1024, timeoutMs: 10_000 }),
   );
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   buffer.appendChunk(entry, new Uint8Array(5));
   buffer.appendChunk(entry, new Uint8Array(5));
   const reason = await entry.notified;
@@ -99,8 +89,8 @@ test("per-session 上限超過で overflow-per-session が通知される", asyn
   const buffer = new PendingSubgroupBuffer(
     makeOptions({ perStreamMaxBytes: 1024, perSessionMaxBytes: 8, timeoutMs: 10_000 }),
   );
-  const entryA = buffer.add(1n, makeHeader(1n));
-  const entryB = buffer.add(2n, makeHeader(2n));
+  const entryA = buffer.add(1n);
+  const entryB = buffer.add(2n);
   buffer.appendChunk(entryA, new Uint8Array(5));
   buffer.appendChunk(entryB, new Uint8Array(5));
   const reason = await entryB.notified;
@@ -109,7 +99,7 @@ test("per-session 上限超過で overflow-per-session が通知される", asyn
 
 test("remove で集計から減算される", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions());
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   buffer.appendChunk(entry, new Uint8Array(10));
   assert.equal(buffer.totalBytes, 10);
   buffer.remove(entry);
@@ -119,8 +109,8 @@ test("remove で集計から減算される", () => {
 
 test("notifyAlias で該当 trackAlias の entry のみ通知される", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
-  const entryA = buffer.add(1n, makeHeader(1n));
-  const entryB = buffer.add(2n, makeHeader(2n));
+  const entryA = buffer.add(1n);
+  const entryB = buffer.add(2n);
   buffer.notifyAlias(1n, "subscriber");
   const reasonA = await entryA.notified;
   assert.equal(reasonA, "subscriber");
@@ -136,8 +126,8 @@ test("notifyAlias で該当 trackAlias の entry のみ通知される", async (
 
 test("notifyAll で全 entry が通知される (session close)", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
-  const entryA = buffer.add(1n, makeHeader(1n));
-  const entryB = buffer.add(2n, makeHeader(2n));
+  const entryA = buffer.add(1n);
+  const entryB = buffer.add(2n);
   buffer.notifyAll("session-close");
   assert.equal(await entryA.notified, "session-close");
   assert.equal(await entryB.notified, "session-close");
@@ -145,14 +135,14 @@ test("notifyAll で全 entry が通知される (session close)", async () => {
 
 test("timeout 経過で timeout が通知される", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 30 }));
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   const reason = await entry.notified;
   assert.equal(reason, "timeout");
 });
 
 test("notify は 1 回しか resolve しない", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   assert.isTrue(entry.notify("subscriber"));
   assert.isFalse(entry.notify("timeout"));
   assert.isFalse(entry.notify("session-close"));
@@ -162,7 +152,7 @@ test("notify は 1 回しか resolve しない", async () => {
 
 test("notify 後の remove で timeout が解除されている", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   entry.notify("subscriber");
   assert.isNull(entry.timeoutHandle);
   buffer.remove(entry);
@@ -171,8 +161,8 @@ test("notify 後の remove で timeout が解除されている", () => {
 
 test("同じ trackAlias で複数 entry を保持できる", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
-  const entryA = buffer.add(5n, makeHeader(5n, 0n));
-  const entryB = buffer.add(5n, makeHeader(5n, 1n));
+  const entryA = buffer.add(5n);
+  const entryB = buffer.add(5n);
   assert.equal(buffer.streamCount, 2);
   buffer.notifyAlias(5n, "subscriber");
   assert.equal(await entryA.notified, "subscriber");
@@ -181,7 +171,7 @@ test("同じ trackAlias で複数 entry を保持できる", async () => {
 
 test("remove 済みの entry に対する remove は no-op", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions());
-  const entry = buffer.add(1n, makeHeader(1n));
+  const entry = buffer.add(1n);
   buffer.appendChunk(entry, new Uint8Array(10));
   buffer.remove(entry);
   buffer.remove(entry);
