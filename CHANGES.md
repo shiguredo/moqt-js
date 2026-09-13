@@ -961,6 +961,10 @@
 
 ### misc
 
+- [UPDATE] MOQLOG と MOQMETRICS の重複ヘルパーを共通化する
+  - syslog severity と granularity level の 8 段階表、62-bit Group ID への truncate、Track Namespace / Track Name の組み立て、payload の JSON object デコードが `src/moqlog.ts` と `src/moqmetrics.ts` に同型で並立していたため `src/observability.ts` に集約する
+  - 公開名 (`LOG_SEVERITY_LEVELS` / `METRICS_GRANULARITY_LEVELS` 等) とエラー文言は変えない
+  - @voluntas
 - [UPDATE] msf モジュールを機能単位に分割する
   - `src/msf.ts` (3,016 行) を `src/msf/` の version / types / catalogCodec / catalogValidation / catalogTrackValidation / catalogDelta / timeline / variables / fragment / c4m / tracks / json に分割し、`src/msf.ts` は既存の import パスを維持する再輸出のみにする (99 行)
   - 自明なラッパーだった `namespaceMatches` を呼び出し側の比較にインライン化する
