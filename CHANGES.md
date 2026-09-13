@@ -1361,6 +1361,12 @@
 
 ### misc
 
+- [UPDATE] 低レベル送受信の定型処理重複を除去する
+  - `SubscriberImpl.handleObject` / `handleDatagram` が持っていた「Priority 継承 + Location Filter 再適用 + Range Filter 再適用」の同一 20 行を `passesObjectFilters` に集約する
+  - `FetcherImpl` の 5 箇所に散っていた `fetcherState === "closed"` ガードを `isClosed` getter に集約する
+  - `PublisherImpl.sendObject` / `sendDatagram` が持っていた「closed 例外 + Forward State ガード + END_OF_TRACK ガード」の同一処理を `guardSend` に集約する。sendObject は reject する Promise を返し sendDatagram は throw する従来の差は呼び出し側に残す
+  - 挙動は変えず、既存テスト 2,161 件が無変更で通る
+  - @voluntas
 - [UPDATE] message 層 4 モジュールに異常系・境界値テストを追加する
   - `src/message/subscribe.ts` / `publish.ts` / `trackstatus.ts` / `namespace.ts` に対応する `*.test.ts` を新設する
   - draft-ietf-moq-transport-21 §9 の「Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION」を、SUBSCRIBE / REQUEST_UPDATE / TRACK_STATUS / PUBLISH_DONE / PUBLISH_NAMESPACE / NAMESPACE / NAMESPACE_DONE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_SKIPPED の 10 メッセージで固定する

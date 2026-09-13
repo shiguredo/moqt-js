@@ -406,7 +406,24 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
-    // draft-ietf-moq-transport-21 §10.4 / §11.3.1:
+    if (!this.passesObjectFilters(object)) {
+      return;
+    }
+    this.objectCallback(object);
+  }
+
+  /**
+   * 受信 Object に購読のフィルタを再適用し、配送してよいかを判定する
+   *
+   * draft-ietf-moq-transport-21 Section 3.3.1 / Section 3.3.2:
+   * Subgroup 経路と Datagram 経路で同じ規則を適用する。判定の副作用として
+   * Priority 省略時の継承値を object へ設定するため、配送前に必ず通す。
+   *
+   * @param object - 受信 Object (Priority 省略時は継承値が設定される)
+   * @returns 配送してよければ true
+   */
+  private passesObjectFilters(object: MoqtObject): boolean {
+    // draft-ietf-moq-transport-21 §10.4 / §11.3.1 / §11.2.1:
     // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
     this.applyDefaultPublisherPriority(object);
     // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
@@ -416,20 +433,18 @@ export class SubscriberImpl implements Subscriber {
         this.resolvedFilterCache,
       )
     ) {
-      return;
+      return false;
     }
     // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter 再適用
-    if (
-      !rangeFiltersMatch(this.rangeFilters, {
-        subgroupId: object.subgroupId,
-        objectId: object.objectId,
-        publisherPriority: object.publisherPriority,
-        objectProperties: object.properties,
-      })
-    ) {
-      return;
-    }
-    this.objectCallback(object);
+    // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
+    // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
+    // 不通過になる (publisherPriority = 0 は評価値として使わない)
+    return rangeFiltersMatch(this.rangeFilters, {
+      subgroupId: object.subgroupId,
+      objectId: object.objectId,
+      publisherPriority: object.publisherPriority,
+      objectProperties: object.properties,
+    });
   }
 
   /**
@@ -445,30 +460,7 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
-    // draft-ietf-moq-transport-21 §10.4 / §11.2.1:
-    // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
-    this.applyDefaultPublisherPriority(object);
-    // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter 再適用
-    if (
-      !objectMatchesFilter(
-        { group: object.groupId, object: object.objectId },
-        this.resolvedFilterCache,
-      )
-    ) {
-      return;
-    }
-    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filter 再適用
-    // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
-    // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
-    // 不通過になる (publisherPriority = 0 は評価値として使わない)
-    if (
-      !rangeFiltersMatch(this.rangeFilters, {
-        subgroupId: object.subgroupId,
-        objectId: object.objectId,
-        publisherPriority: object.publisherPriority,
-        objectProperties: object.properties,
-      })
-    ) {
+    if (!this.passesObjectFilters(object)) {
       return;
     }
     this.datagramCallback?.(object);
