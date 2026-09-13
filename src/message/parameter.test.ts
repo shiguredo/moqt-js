@@ -38,6 +38,7 @@ import {
 import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
 import { MessageParameterType } from "./types";
 import { encodeVarint, MAX_VARINT } from "../varint";
+import { concatUint8Arrays } from "../testSupport/helpers";
 
 test("無効なパラメータタイプでエラー", () => {
   const invalidParam = { type: 0x20, value: new Uint8Array([0x01]) };
@@ -765,6 +766,85 @@ test("decodeMessageParameter: Range Filter の内側 Length 超過で ProtocolVi
   const data = new Uint8Array([0x25, 0x05, 0x01, 0x03]);
   assert.throws(() => decodeMessageParameter(data, 0, 0n), ProtocolViolationError);
 });
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1 / §8.7:
+ * Track Namespace は最大 32 フィールドである。上限ちょうどの 32 フィールドが
+ * encode / decode をラウンドトリップすることを固定する (境界の内側)。
+ */
+test("encodeTrackNamespace / decodeTrackNamespace: 32 フィールドはラウンドトリップする", () => {
+  // 各フィールドは 1 バイト以上でなければならないため "f0" 〜 "f31" を使う
+  const parts = Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS }, (_, i) => `f${i}`);
+  const namespace = createTrackNamespace(parts);
+
+  const encoded = encodeTrackNamespace(namespace);
+  const [decoded, consumed] = decodeTrackNamespace(encoded, 0);
+
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.tuple.length, MAX_TRACK_NAMESPACE_FIELDS);
+  assert.deepEqual(trackNamespaceToStrings(decoded), parts);
+  // 先頭のフィールド数 varint が上限値そのものである
+  assert.deepEqual(encoded.slice(0, 1), new Uint8Array([MAX_TRACK_NAMESPACE_FIELDS]));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1 / §8.7:
+ * "If an endpoint receives a Track Namespace consisting of greater than
+ *  32 Track Namespace Fields, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ * 上限を 1 つ超える 33 フィールドは decode 時に拒否する (境界の外側)。
+ */
+test("decodeTrackNamespace: 33 フィールドは PROTOCOL_VIOLATION で拒否する", () => {
+  // createTrackNamespace も 33 フィールドを組み立てられないため、ワイヤを直接作る
+  const wire = buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS + 1);
+
+  assert.throws(
+    () => decodeTrackNamespace(wire, 0),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.21:
+ * TRACK_NAMESPACE_PREFIX (0x34) としての 32 / 33 フィールドも同じ境界で判定する
+ * (decodeTrackNamespace へ委譲されるため、パラメータ経路でも境界が保たれる)。
+ */
+test("decodeMessageParameter: TRACK_NAMESPACE_PREFIX の 32 / 33 フィールド境界", () => {
+  // 32 フィールドは通過し、消費バイト数がワイヤ長と一致する
+  const maxWire = concatUint8Arrays([
+    new Uint8Array([0x34]),
+    buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS),
+  ]);
+  const [param, consumed] = decodeMessageParameter(maxWire, 0, 0n);
+  assert.equal(param.type, 0x34);
+  assert.equal(consumed, maxWire.length);
+
+  // 33 フィールドは PROTOCOL_VIOLATION
+  const overWire = concatUint8Arrays([
+    new Uint8Array([0x34]),
+    buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS + 1),
+  ]);
+  assert.throws(
+    () => decodeMessageParameter(overWire, 0, 0n),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
+/**
+ * Track Namespace のワイヤ (Number of Track Namespace Fields + 各フィールド) を
+ * 組み立てる。createTrackNamespace は 32 フィールド超を拒否するため、
+ * 上限外の入力を作るテストはこのヘルパーで直接ワイヤを作る。
+ *
+ * @param fieldCount - フィールド数 (各フィールドは 1 バイト)
+ */
+function buildTrackNamespaceWire(fieldCount: number): Uint8Array {
+  const parts: number[] = [...encodeVarint(BigInt(fieldCount))];
+  for (let i = 0; i < fieldCount; i++) {
+    // Track Namespace Field Length (1) + Value (i を 1 バイトで表す)
+    parts.push(0x01, i & 0xff);
+  }
+  return new Uint8Array(parts);
+}
 
 /**
  * draft-ietf-moq-transport-21 §9.20.21 / §8.7:

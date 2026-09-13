@@ -1352,6 +1352,11 @@
 
 ### misc
 
+- [UPDATE] Track Namespace の 32 / 33 フィールド境界テストを追加する
+  - draft-ietf-moq-transport-21 §2.4.1 / §8.7 の上限 32 について、上限ちょうどの 32 フィールドが encode / decode をラウンドトリップし、33 フィールドが PROTOCOL_VIOLATION で拒否されることを固定する
+  - 同じ境界を TRACK_NAMESPACE_PREFIX (0x34) パラメータ経路でも検証する (`decodeTrackNamespace` へ委譲されるため)
+  - 上限を 1 つ緩めると 33 フィールドのテストが落ちることを実測した (境界の回帰検出)
+  - 実装は変えない (テスト追加のみ)
 - [UPDATE] 非先頭 DATAGRAM + SUBGROUP_PRESENT のデコードテストを追加する
   - draft-ietf-moq-transport-21 §11.4.1.1 の「DATAGRAM ビットが立つ Object は Subgroup ID を持たない」は先頭・非先頭を問わないため、非先頭 (context あり) で Subgroup ID vi64 を消費せず Object ID / Publisher Priority / payload length が復元されることを固定する
   - `newContext.subgroupId` が直前の実 Object の Subgroup ID を保持することも固定する (0 に落ちると後続の SUBGROUP_SAME が別 Subgroup を参照する)
