@@ -1,7 +1,7 @@
 # @vitest/coverage-v8 を vite-plus 同梱 vitest に合わせてカバレッジ計測を復旧する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/update-coverage-provider-version
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,23 @@
 
 - `package.json` (`@vitest/coverage-v8` / `vite-plus` / `test:cov` スクリプト)
 - `issues/0509-update-tsconfig-ci-lint.md` (ツールチェーン整合の関連 issue)
+
+## 解決方法
+
+設計方針 1〜3 に従い、`@vitest/coverage-v8` を `vite-plus@0.3.0` が同梱する vitest と同一バージョンに固定した。
+
+- `package.json` の `@vitest/coverage-v8` を `5.0.0` から `4.1.11` に変更した。`node_modules/vite-plus/package.json` の `dependencies.vitest` が `4.1.11` であることを確認している。
+- lockfile の更新は `vp install --no-frozen-lockfile` で行った。CI 既定の frozen-lockfile では specifier 不一致で失敗するため明示的に解除した。lockfile 上も `@vitest/coverage-v8@4.1.11` に解決されていることを確認した。
+- 固定値の根拠は `CHANGES.md` の `## develop` の `### misc` に記載した («bundled vitest と単一版数を担保するため固定する (vite-plus の更新時は同梱 vitest に追随させる)»)。先行する同種の更新 (vite-plus 0.2.1 / vitest 4.1.9) と同じ書き方に揃えている。
+
+### package.json にコメントを残さなかった理由
+
+設計方針 3 は「固定値の根拠をコメントに残す」としているが、`package.json` は JSON でありコメントを書けない。既存の `package.json` にもコメントは無く、依存のバージョンを上げる際の根拠は `CHANGES.md` に書く運用が先行例 (vite-plus 0.2.1 の更新) で取られているため、それに従った。
+
+## 検証
+
+- `pnpm test:cov` (`vp test --coverage`) が Startup Error なしで完了し、カバレッジサマリが出力されることを確認した。
+  - Statements 75.46% (7248/9604) / Branches 69.05% (3686/5338) / Functions 72.96% (915/1254) / Lines 75.67% (7098/9379)
+- `pnpm test run`: 70 ファイル / 2,110 テスト全通過
+- `pnpm typecheck` / `pnpm lint` / `vp check` すべて成功 (フォーマット 798 ファイル / lint・型チェック 124 ファイル)
+- `@vitest/coverage-v8` のバージョンが `4.1.11` で、vite-plus 同梱 vitest と一致していることを lockfile と `node_modules` で確認した。
