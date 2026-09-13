@@ -263,6 +263,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // デコーダー設定状態
   private audioDecoderConfigured = false;
   private videoDecoderConfigured = false;
+  // 直前に VideoDecoder へ渡した description。
+  // draft-ietf-moq-loc-04 §2.3.2.1: config が変化したらデコーダを再構成する。
+  private lastAppliedVideoConfig: Uint8Array | null = null;
 
   // 統計情報
   private audioStats: AudioReceiverStats = {
@@ -815,7 +818,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const width = this.videoTrackInfo.width ?? 640;
       const height = this.videoTrackInfo.height ?? 480;
 
-      await this.videoDecoder.configure(videoCodec, width, height);
+      // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+      // SUBSCRIBE_OK の Track Property に VIDEO_CONFIG があれば description として渡す。
+      // canonical 形式 (avc1 / hvc1) のデコードに必要。
+      const initialConfig = LOC.resolveVideoProperties(
+        this.videoSubscriber?.trackProperties,
+        undefined,
+      ).config;
+
+      await this.videoDecoder.configure(videoCodec, width, height, initialConfig);
+      this.lastAppliedVideoConfig =
+        initialConfig !== undefined ? new Uint8Array(initialConfig) : null;
       this.videoDecoderConfigured = true;
     }
   }
@@ -934,6 +947,54 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.audioDecoder.decode(obj.payload, "key", timestamp, 0);
   }
 
+  /**
+   * 直前に VideoDecoder へ渡した description と同じかを判定する
+   */
+  private isSameAppliedVideoConfig(description: Uint8Array): boolean {
+    const previous = this.lastAppliedVideoConfig;
+    if (previous === null || previous.length !== description.length) {
+      return false;
+    }
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i] !== description[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Video Config の変化に合わせてデコーダを再構成する
+   *
+   * draft-ietf-moq-loc-04 §2.3.2.1: description が変わったら新しい設定で構成し直す。
+   * codec / 解像度はカタログの値を引き続き使う (config のみ更新する)。
+   */
+  private async reconfigureVideoDecoder(description: Uint8Array): Promise<void> {
+    if (!this.videoDecoder || !this.videoTrackInfo) return;
+
+    let videoCodec: VideoCodecType;
+    if (this.options.video?.codec) {
+      videoCodec = this.options.video.codec;
+    } else if (this.videoTrackInfo.codec) {
+      videoCodec = parseVideoCodec(this.videoTrackInfo.codec);
+    } else {
+      return;
+    }
+
+    const width = this.videoTrackInfo.width ?? 640;
+    const height = this.videoTrackInfo.height ?? 480;
+
+    try {
+      await this.videoDecoder.configure(videoCodec, width, height, description);
+      // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
+      // 同じ config を持つ後続 Object で再試行できるようにする。
+      this.lastAppliedVideoConfig = description;
+      this.videoDecoderConfigured = true;
+    } catch (error) {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
   private handleVideoObject(obj: MoqtObject): void {
     if (!this.videoDecoder || !this.videoDecoderConfigured) return;
 
@@ -947,6 +1008,25 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const timestamp = decoderTimestampOf(locProperties);
     if (locProperties.frameMarking) {
       isKeyFrame = locProperties.frameMarking.isIndependent;
+    }
+
+    // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+    // Object Property の VIDEO_CONFIG が直前と変わったらデコーダを再構成する。
+    // 解像度変更や canonical 形式への切替で description が変わった場合に必要。
+    // 再構成は非同期のため、失敗は error コールバックへ通知して以降のデコードを止める。
+    if (
+      locProperties.config !== undefined &&
+      !this.isSameAppliedVideoConfig(locProperties.config)
+    ) {
+      // 適用済みの更新は configure 成功後に行う。失敗時に更新すると
+      // 同じ config が再試行されず、以降の Object をデコードできなくなる。
+      this.videoDecoderConfigured = false;
+      void this.reconfigureVideoDecoder(new Uint8Array(locProperties.config));
+    }
+
+    // 再構成中は decode に渡さない (VideoDecoder の configure は非同期)
+    if (!this.videoDecoderConfigured) {
+      return;
     }
 
     this.videoStats.framesReceived++;
