@@ -14,8 +14,8 @@ moqt-js からの入口のみを示す。
 ## moqt-js での公開 API
 
 - 高レベル: [`createMediaPublisher`](HIGH_LEVEL_API.md) / [`createMediaSubscriber`](HIGH_LEVEL_API.md)
-- Catalog（主要エントリポイント）: `encodeCatalog` / `encodeCatalogDelta` / `decodeCatalogMessage` / `applyCatalogDelta` / `createCatalog` / `createCompleteCatalog` / `MSF_VERSION` / `CATALOG_TRACK_NAME`（`src/msf.ts`）
-- Timeline（いずれも `async`）: `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline`（`src/msf.ts`）
+- Catalog（主要エントリポイント）: `encodeCatalog` / `encodeCatalogDelta` / `decodeCatalogMessage` / `applyCatalogDelta` / `createCatalog` / `createCompleteCatalog` / `MSF_VERSION` / `CATALOG_TRACK_NAME`（`src/msf/`）
+- Timeline（いずれも同期関数）: `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline`（`src/msf/`）
 - 現行 Timeline encode/decode は無圧縮 JSON のみ。ペイロード圧縮のシグナリングは仕様の MSF_COMPRESSION（未実装）
 - draft-00 の Catalog wire 形式および Timeline 圧縮オプションとは非互換
 - 実装状況の詳細は [README の MOQT Streaming Format 節](../README.md#moqt-streaming-format) を参照
