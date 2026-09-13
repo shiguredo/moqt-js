@@ -1,11 +1,11 @@
 /**
  * MOQT Fetcher
- * draft-ietf-moq-transport-21 Section 9.11 (FETCH) — 10.14 (FETCH_OK)
+ * draft-ietf-moq-transport-21 Section 9.11 (FETCH) — Section 9.12 (FETCH_OK)
  *
  * draft-ietf-moq-transport-21:
  * FETCH レスポンスで不明な範囲を許可する。
  * Publisher がまだシリアライズしていないオブジェクトの範囲を
- * "unknown range" として返すことができる (Section 11.4.4, Table 7)。
+ * "unknown range" として返すことができる (Section 11.4.1.2, Table 7)。
  * draft-ietf-moq-transport-21 Section 9.11, Section 11.4.1
  */
 
