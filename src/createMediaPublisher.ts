@@ -4,8 +4,8 @@
  * MediaStream を使用した簡単なメディア配信機能を提供する
  */
 
-import { connect } from "./connect";
-import type { ConnectCallbacks, ConnectOptions, Session } from "./session";
+import { connectMediaSession } from "./createMedia/connect";
+import type { Session } from "./session";
 import type { Publisher } from "./publisher";
 import * as LOC from "./loc";
 import {
@@ -19,13 +19,13 @@ import {
 import { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { AudioEncodedChunkData } from "./codec/types";
 import { VideoEncoderWrapper } from "./codec/VideoEncoder";
+import { DEFAULT_VIDEO_FRAMERATE } from "./codec/config";
 import {
-  DEFAULT_AUDIO_CHANNELS,
-  DEFAULT_AUDIO_SAMPLE_RATE,
-  DEFAULT_VIDEO_FRAMERATE,
-  getAudioEncoderConfig,
-  getVideoEncoderConfig,
-} from "./codec/config";
+  resolveAudioPublishSettings,
+  resolveVideoPublishSettings,
+  type ResolvedAudioPublishSettings,
+  type ResolvedVideoPublishSettings,
+} from "./createMedia/settings";
 import type {
   AudioPublishOptions,
   AudioStats,
@@ -44,8 +44,6 @@ import {
 } from "./frameSource";
 
 // デフォルト設定
-const DEFAULT_AUDIO_TRACK_NAME = "audio";
-const DEFAULT_VIDEO_TRACK_NAME = "video";
 
 // Publisher Priority (ドキュメントに記載)
 const PRIORITY_AUDIO = 192;
@@ -89,6 +87,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   private currentState: MediaPublisherState = "created";
   private readonly url: string;
   private readonly options: MediaPublisherOptions;
+  // Catalog とエンコーダーで同じ値を使うための解決済み設定 (start() で 1 度だけ解決する)
+  private resolvedAudio: ResolvedAudioPublishSettings | null = null;
+  private resolvedVideo: ResolvedVideoPublishSettings | null = null;
   private readonly callbacks: MediaPublisherCallbacks;
 
   // 接続関連
@@ -191,6 +192,16 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     this.mediaStream = stream;
+
+    // Catalog とエンコーダーが同じ設定を使うように、ここで 1 度だけ解決する
+    // (トラック設定を 2 回読むと、その間に変わった値が Catalog とエンコーダーで
+    //  食い違う可能性がある)
+    this.resolvedAudio = this.options.audio
+      ? resolveAudioPublishSettings(this.options.audio)
+      : null;
+    this.resolvedVideo = this.options.video
+      ? resolveVideoPublishSettings(this.options.video, this.mediaStream.getVideoTracks()[0])
+      : null;
 
     try {
       // サーバーに接続
@@ -341,33 +352,19 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 内部メソッド
 
   private async connectToServer(): Promise<void> {
-    const connectCallbacks: ConnectCallbacks = {
-      close: (_closeInfo) => {
+    this.session = await connectMediaSession({
+      url: this.url,
+      serverCertificateHashes: this.options.serverCertificateHashes,
+      authorizationToken: this.options.authorizationToken,
+      pendingSubgroup: this.options.pendingSubgroup,
+      onSessionClose: () => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
         }
       },
-      error: (error) => {
-        this.callbacks.onError?.(error);
-      },
-    };
-
-    const connectOptions: ConnectOptions = {};
-    if (this.options.serverCertificateHashes && this.options.serverCertificateHashes.length > 0) {
-      connectOptions.serverCertificateHashes = this.options.serverCertificateHashes.map((hash) => ({
-        algorithm: "sha-256" as const,
-        value: hash,
-      }));
-    }
-    if (this.options.authorizationToken) {
-      connectOptions.authorizationToken = this.options.authorizationToken;
-    }
-    if (this.options.pendingSubgroup) {
-      connectOptions.pendingSubgroup = this.options.pendingSubgroup;
-    }
-
-    this.session = await connect(this.url, connectCallbacks, connectOptions);
+      onSessionError: (error) => this.callbacks.onError?.(error),
+    });
   }
 
   private async createPublishers(): Promise<void> {
@@ -391,17 +388,17 @@ export class MediaPublisherImpl implements MediaPublisher {
     );
 
     // 音声パブリッシャー
-    if (this.options.audio) {
-      const trackName = this.options.audio.trackName ?? DEFAULT_AUDIO_TRACK_NAME;
-      this.audioPublisher = await this.session.publish(namespace, trackName, {
+    const audio = this.resolvedAudio;
+    if (audio) {
+      this.audioPublisher = await this.session.publish(namespace, audio.trackName, {
         error: (error) => this.callbacks.onError?.(error),
       });
     }
 
     // 映像パブリッシャー
-    if (this.options.video) {
-      const trackName = this.options.video.trackName ?? DEFAULT_VIDEO_TRACK_NAME;
-      this.videoPublisher = await this.session.publish(namespace, trackName, {
+    const video = this.resolvedVideo;
+    if (video) {
+      this.videoPublisher = await this.session.publish(namespace, video.trackName, {
         error: (error) => this.callbacks.onError?.(error),
       });
     }
@@ -457,56 +454,33 @@ export class MediaPublisherImpl implements MediaPublisher {
     const tracks: CatalogTrack[] = [];
 
     // Audio トラック
-    if (this.options.audio) {
-      const audioOptions = this.options.audio;
-      const sampleRate = audioOptions.sampleRate ?? DEFAULT_AUDIO_SAMPLE_RATE;
-      const channels = audioOptions.channels ?? DEFAULT_AUDIO_CHANNELS;
-      const audioConfig = getAudioEncoderConfig(
-        audioOptions.codec,
-        audioOptions.bitrate,
-        sampleRate,
-        channels,
-      );
-
+    const audio = this.resolvedAudio;
+    if (audio) {
       tracks.push({
-        name: audioOptions.trackName ?? DEFAULT_AUDIO_TRACK_NAME,
+        name: audio.trackName,
         packaging: "loc",
         isLive: true,
         role: "audio",
-        codec: audioConfig.codec,
-        bitrate: audioOptions.bitrate,
-        samplerate: sampleRate,
-        channelConfig: String(channels),
+        codec: audio.codecString,
+        bitrate: audio.bitrate,
+        samplerate: audio.sampleRate,
+        channelConfig: String(audio.channels),
       });
     }
 
     // Video トラック
-    if (this.options.video && this.mediaStream) {
-      const videoOptions = this.options.video;
-      const videoTrack = this.mediaStream.getVideoTracks()[0];
-      const videoSettings = videoTrack?.getSettings();
-      const width = videoOptions.width ?? videoSettings?.width ?? 640;
-      const height = videoOptions.height ?? videoSettings?.height ?? 480;
-      const framerate = videoOptions.framerate ?? DEFAULT_VIDEO_FRAMERATE;
-
-      const videoConfig = getVideoEncoderConfig(
-        videoOptions.codec,
-        width,
-        height,
-        videoOptions.bitrate,
-        framerate,
-      );
-
+    const video = this.resolvedVideo;
+    if (video && this.mediaStream) {
       tracks.push({
-        name: videoOptions.trackName ?? DEFAULT_VIDEO_TRACK_NAME,
+        name: video.trackName,
         packaging: "loc",
         isLive: true,
         role: "video",
-        codec: videoConfig.codec,
-        bitrate: videoOptions.bitrate,
-        width,
-        height,
-        framerate,
+        codec: video.codecString,
+        bitrate: video.bitrate,
+        width: video.width,
+        height: video.height,
+        framerate: video.framerate,
       });
     }
 
@@ -525,12 +499,16 @@ export class MediaPublisherImpl implements MediaPublisher {
           error: (error) => this.callbacks.onError?.(error),
         });
 
-        const audioOptions = this.options.audio;
+        // Catalog と同じ解決済み設定を使う (start() で 1 度だけ解決している)
+        const audio = this.resolvedAudio;
+        if (!audio) {
+          throw new Error("audio settings not resolved");
+        }
         await this.audioEncoder.configure(
-          audioOptions.codec,
-          audioOptions.bitrate,
-          audioOptions.sampleRate ?? DEFAULT_AUDIO_SAMPLE_RATE,
-          audioOptions.channels ?? DEFAULT_AUDIO_CHANNELS,
+          audio.codec,
+          audio.bitrate,
+          audio.sampleRate,
+          audio.channels,
         );
 
         if (!isMediaStreamTrackProcessorAvailable()) {
@@ -547,10 +525,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.options.video && this.mediaStream) {
       const videoTrack = this.mediaStream.getVideoTracks()[0];
       if (videoTrack) {
-        const videoSettings = videoTrack.getSettings();
-        const width = this.options.video.width ?? videoSettings.width ?? 640;
-        const height = this.options.video.height ?? videoSettings.height ?? 480;
-        const framerate = this.options.video.framerate ?? DEFAULT_VIDEO_FRAMERATE;
+        // Catalog と同じ解決済み設定を使う (start() で 1 度だけ解決している)
+        const video = this.resolvedVideo;
+        if (!video) {
+          throw new Error("video settings not resolved");
+        }
 
         this.videoEncoder = new VideoEncoderWrapper(useWorker, {
           output: (chunk) => this.handleVideoEncodedChunk(chunk),
@@ -558,11 +537,11 @@ export class MediaPublisherImpl implements MediaPublisher {
         });
 
         await this.videoEncoder.configure(
-          this.options.video.codec,
-          width,
-          height,
-          this.options.video.bitrate,
-          framerate,
+          video.codec,
+          video.width,
+          video.height,
+          video.bitrate,
+          video.framerate,
         );
 
         this.videoFrameSource = createVideoFrameSource(videoTrack);

@@ -966,6 +966,11 @@
 
 ### misc
 
+- [UPDATE] createMedia の接続処理と配信設定解決を共通化する
+  - `createMediaPublisher` / `createMediaSubscriber` が一字一句同一だった接続処理 (証明書ハッシュ / 認可トークン / pending subgroup の組み立てと close / error の橋渡し) を `src/createMedia/connect.ts` に集約する
+  - Catalog に載せる値とエンコーダーへ渡す値の解決を `src/createMedia/settings.ts` に集約し、`start()` で 1 度だけ解決した値を両経路が使うようにする (トラック設定を 2 回読むことによる乖離を防ぐ)
+  - トラック名の既定値 `audio` / `video` の重複定義を 1 箇所にする
+  - @voluntas
 - [UPDATE] codec ラッパーと Worker の重複を共通化し、再 configure で旧コーデックを破棄する
   - 4 ラッパーで同一だった `configureWorker` の Worker 初期化フロー (世代採番・二重解決ガード・後勝ち公開・先発破棄・旧 Worker の破棄) を `configureWrapperWorker` に集約する
   - Worker と Wrapper のメッセージ型を `src/codec/workerMessages.ts` に集約し、`switch` の網羅性を `never` 型で型検査する (契約外の応答は無視する)

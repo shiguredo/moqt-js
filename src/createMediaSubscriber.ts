@@ -4,10 +4,11 @@
  * MediaStream を使用した簡単なメディア受信機能を提供する
  */
 
-import { connect } from "./connect";
+import { connectMediaSession } from "./createMedia/connect";
+import { DEFAULT_AUDIO_TRACK_NAME, DEFAULT_VIDEO_TRACK_NAME } from "./createMedia/settings";
 import { supportsDynamicGroups } from "./properties";
 import { compareLocations } from "./session/params";
-import type { ConnectCallbacks, ConnectOptions, Session, SubscribeOptions } from "./session";
+import type { Session, SubscribeOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import type { AuthorizationToken, Location } from "./message";
@@ -75,8 +76,6 @@ export async function resolveAuthorizationToken(
 }
 
 // デフォルト設定
-const DEFAULT_AUDIO_TRACK_NAME = "audio";
-const DEFAULT_VIDEO_TRACK_NAME = "video";
 const CATALOG_RECEIVE_TIMEOUT = 5000;
 
 /**
@@ -451,33 +450,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 内部メソッド
 
   private async connectToServer(): Promise<void> {
-    const connectCallbacks: ConnectCallbacks = {
-      close: (_closeInfo) => {
+    this.session = await connectMediaSession({
+      url: this.url,
+      serverCertificateHashes: this.options.serverCertificateHashes,
+      authorizationToken: this.options.authorizationToken,
+      pendingSubgroup: this.options.pendingSubgroup,
+      onSessionClose: () => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
         }
       },
-      error: (error) => {
-        this.callbacks.onError?.(error);
-      },
-    };
-
-    const connectOptions: ConnectOptions = {};
-    if (this.options.serverCertificateHashes && this.options.serverCertificateHashes.length > 0) {
-      connectOptions.serverCertificateHashes = this.options.serverCertificateHashes.map((hash) => ({
-        algorithm: "sha-256" as const,
-        value: hash,
-      }));
-    }
-    if (this.options.authorizationToken) {
-      connectOptions.authorizationToken = this.options.authorizationToken;
-    }
-    if (this.options.pendingSubgroup) {
-      connectOptions.pendingSubgroup = this.options.pendingSubgroup;
-    }
-
-    this.session = await connect(this.url, connectCallbacks, connectOptions);
+      onSessionError: (error) => this.callbacks.onError?.(error),
+    });
   }
 
   /**
