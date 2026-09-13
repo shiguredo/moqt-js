@@ -2,7 +2,7 @@
 
 - Created: 2026-08-28
 - Updated: 2026-09-05
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/update-subgroup-delivery-timeout-options-doc-comment
 - Polished: {YYYY-MM-DD}
 
@@ -42,4 +42,24 @@
 
 ## 解決方法
 
-未着手。
+実装した。issue の参照は draft-20 の節番号だが、現在の一次資料 draft-ietf-moq-transport-21 では §5.2 (Delivery Timeouts and Data Reliability) / §9.20.4 (SUBGROUP_DELIVERY_TIMEOUT Parameter) / §10.1 (SUBGROUP_DELIVERY_TIMEOUT) に対応するため、実装とコメントは draft-21 の節番号に合わせている。
+
+### 書き直した内容
+
+`PublishOptions.subgroupDeliveryTimeout` と `SubscribeOptions.subgroupDeliveryTimeout` の doc コメントを、0395 で `deliveryTimeout` に採用した対称構造へ揃えた。
+
+- Publisher 側: 「PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT (Message Parameter の定義は Section 9.20.4)」を冒頭に置き、強制しない旨と Section 5.2 参照を続ける
+- Subscriber 側: 「SUBSCRIBE の Message Parameter として送信するが、この値の強制は行わない」とロールに合わせて書き分ける
+- 双方で「0 はタイムアウトなしを意味する」を保持する (Section 5.2 の "a value of 0 means that there is no timeout set")
+
+Subscriber 側の節番号の見出しは `Section 9.20.4 (SUBGROUP_DELIVERY_TIMEOUT)` から `Section 9.20.4 (SUBGROUP_DELIVERY_TIMEOUT Parameter)` に直した。draft-21 の §9.20.4 は "SUBGROUP_DELIVERY_TIMEOUT Parameter" であり、Track Property 側の §10.1 と区別できるようにするためである。
+
+### pending の 0366 との関係
+
+`issues/pending/0366-add-delivery-timeout-enforcement.md` が強制実装を扱っており、実装後は「強制しない」記述の見直しが必要になる。本 issue では現状 (未実装) を正しく記述するところまでとし、0366 側で書き換える前提を残した。
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,126 テスト全通過
+- `CHANGES.md` の `## develop` に `### misc` サブセクションを新設し `[UPDATE]` を追加した (ドキュメントコメントのみで機能に影響しない変更のため)
