@@ -78,6 +78,15 @@ test("FetchObjectFields: Ascending 先頭オブジェクトの encode→decode �
  * DATAGRAM ビットが立つ先頭オブジェクトの encode→decode がラウンドトリップし、
  * Subgroup ID フィールドを消費しない (subgroupId = 0n) ことを検証する。
  */
+/**
+ * FetchObjectFields の roundtrip は本 PBT が担う。
+ *
+ * DATAGRAM 先頭オブジェクトは下位 2 ビットの値 (0〜3) と Properties の有無の
+ * 組み合わせを網羅する。単体テストには同じ往復を固定値 1 組で検証するものを
+ * 置かない (shiguredo-typescript の「PBT でカバーできるものを単体テストで
+ * 書かないこと」)。単体テストは PBT で表現できない意図的なエラーパス
+ * (Object ID の overflow、timed_out の status 種別など) に絞る。
+ */
 test("FetchObjectFields: DATAGRAM 先頭オブジェクトの encode→decode がラウンドトリップする", () => {
   fc.assert(
     fc.property(
