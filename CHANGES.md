@@ -591,9 +591,9 @@
   - draft-ietf-moq-transport-18 §10.5 に基づき、`startTracksStreamLoop` で Track Properties 非空時に PROTOCOL_VIOLATION
   - @voluntas
 - [ADD] Fetch Object Fields の DATAGRAM ビット (0x40) 対応を実装する (#0242)
-  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、DATAGRAM フラグ時に Serialization Flags の下位 2 ビットを無視する
-  - `encodeFetchObjectFields` で DATAGRAM 時に Subgroup ID フィールドをエンコードしない
+  - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、DATAGRAM フラグ時は Serialization Flags の下位 2 ビットが Subgroup ID の有無を表さないため無視する
   - `createFirstFetchObjectFlags` に Datagram 用パラメータを追加する
+  - Subgroup ID フィールドを消費しない最終挙動は後段の [FIX] (FETCH の DATAGRAM フラグで Subgroup ID を消費しないようにする) を参照
   - @voluntas
 - [ADD] Fetch Object Fields に Descending Group Order を実装する (#0241)
   - draft-ietf-moq-transport-18 §11.4.4.1 Table 9 に基づき、Group Order = Descending (0x02) 時の Group ID 計算式を追加する
@@ -1229,6 +1229,9 @@
 - [UPDATE] parameter.ts の偶数型・奇数型コメントを Key-Value-Pair の説明に限定する
   - Message Parameter の Value は各パラメータ定義が個別に定める (§9.20 "The encoding is specified by each parameter definition.") ため、偶数型 / 奇数型で一律には決まらない旨を明記する
   - 「偶数型: varint 値 / 奇数型: Length プレフィックス付きバイト列」は §8.3 (Key-Value-Pair Structure) の規則であり、本ファイルでは Key-Value-Pair を扱う encodeKeyValuePair / decodeKeyValuePair / encodeKeyValuePairs / decodeKeyValuePairs が従うことを明記する
+  - @voluntas
+- [UPDATE] CHANGES.md の DATAGRAM エントリの記述重複を整理する
+  - `## develop` の [ADD] (Fetch Object Fields の DATAGRAM ビット対応) と [FIX] (FETCH の DATAGRAM フラグで Subgroup ID を消費しない) が同じ Subgroup ID 挙動を二重に説明していたため、最終挙動を [FIX] に一本化し [ADD] からは参照する形にする
   - @voluntas
 - [ADD] channelConfig のサラウンド複合表記に対応する
   - draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義しないため、業界慣用の "5.1" (6 チャンネル) と "7.1" (8 チャンネル) を対応表で解決する
