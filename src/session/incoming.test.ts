@@ -1199,6 +1199,8 @@ function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): 
     },
     statsObjectsReceivedViaSubscribe: 0,
     statsBytesReceivedViaSubscribe: 0,
+    // draft-ietf-moq-transport-21 §12.1 条件 4: Group 単位の最終 Object 追跡
+    receivedEndOfGroupFinalObjectIds: new Map<string, bigint>(),
   } as unknown as SessionInternal;
   return { session, debugRecords };
 }

@@ -1207,6 +1207,13 @@
   - 対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり throw する (非標準表記を暗黙に数値化しない)
   - 自 PBT が生成する channelConfig ("1" / "2" / "5.1" / "7.1") が購読層で拒否される不整合を解消する
   - @voluntas
+- [ADD] END_OF_GROUP の Group 単位追跡を実装する
+  - draft-ietf-moq-transport-21 §12.1 条件 4 "An Object is received in a Group whose Object ID is larger than the final Object in the Group" を、Subgroup ストリームをまたいで検出する
+  - セッションに `${trackAlias}:${groupId}` をキーとする既知最終 Object ID の追跡を追加し、`processSubgroupObjects` が呼び出し側から既知値を受け取って更新値を返す形にする
+  - 同じ Group について既知の最終 Object より小さい Object が END_OF_GROUP を主張した場合も malformed とする (Group の最終 Object が二者に分かれる矛盾)
+  - Subgroup Header の END_OF_GROUP ビットによる確定は FIN の観測が必要なため対象外とし、コメントで明記する
+  - 購読が尽きた alias の追跡は削除し、無制限な増加を防ぐ
+  - @voluntas
   - テストの検証内容と件数は変えない (70 ファイル / 2,090 テスト)
   - @voluntas
 - [UPDATE] draft-21 の節番号・出現メッセージ・履歴メモを実態に合わせる

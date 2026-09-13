@@ -522,7 +522,12 @@ export function incomingProcessSubgroupObjects(
   remainingBuffer: Uint8Array;
   previousObjectId: bigint;
   resolvedSubgroupId: bigint | undefined;
+  updatedEndOfGroupFinalObjectId: bigint | undefined;
 } {
+  // draft-ietf-moq-transport-21 §12.1 条件 4:
+  // Group の最終 Object は Group 単位で既知になる。Subgroup ストリームをまたいだ
+  // 検出のためセッションが `${trackAlias}:${groupId}` で保持する。
+  const endOfGroupKey = `${header.trackAlias}:${header.groupId}`;
   return streamProcessSubgroupObjects(
     buffer,
     subscribers,
@@ -561,5 +566,6 @@ export function incomingProcessSubgroupObjects(
       },
     },
     resolvedSubgroupId,
+    { finalObjectId: session.receivedEndOfGroupFinalObjectIds.get(endOfGroupKey) },
   );
 }

@@ -217,6 +217,15 @@ export interface BidiSessionInternal {
   controlWriter: ControlStreamWriter | undefined;
   nextRequestId: bigint;
 
+  /**
+   * Group 単位の END_OF_GROUP 既知最終 Object ID
+   *
+   * draft-ietf-moq-transport-21 §12.1 条件 4 の検出に使う。キーは
+   * `${trackAlias}:${groupId}`。購読が尽きたら clearEndOfGroupTracking が
+   * 該当 alias のエントリを削除する。
+   */
+  receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+
   readonly requestStreams: Map<bigint, RequestStreamInfo>;
   readonly pendingPublish: Map<bigint, PendingPublish>;
   readonly pendingSubscribe: Map<bigint, PendingSubscribe>;
@@ -1823,11 +1832,35 @@ function deleteSubscriber(session: BidiSessionInternal, requestId: bigint): void
       }
       if (aliasSubscribers.length === 0) {
         session.subscribersByAlias.delete(subscriber.getTrackAlias());
+        // draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位追跡は
+        // 購読が尽きたら捨てる (無制限な増加を防ぐ)
+        clearEndOfGroupTracking(session, subscriber.getTrackAlias());
       }
     }
     // draft-ietf-moq-transport-21 §6.6.1:
     // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
     session.onRequestDrained?.();
+  }
+}
+
+/**
+ * Track Alias に紐づく Group 単位の END_OF_GROUP 追跡を捨てる
+ *
+ * draft-ietf-moq-transport-21 §12.1 条件 4 の検出用に
+ * `receivedEndOfGroupFinalObjectIds` を `${trackAlias}:${groupId}` で保持している。
+ * その alias の購読が尽きた時点でエントリを削除し、無制限な増加を防ぐ。
+ */
+function clearEndOfGroupTracking(session: BidiSessionInternal, trackAlias: bigint): void {
+  // テストのモックセッションは追跡マップを持たない場合がある
+  const tracking = session.receivedEndOfGroupFinalObjectIds;
+  if (tracking === undefined) {
+    return;
+  }
+  const prefix = `${trackAlias}:`;
+  for (const key of tracking.keys()) {
+    if (key.startsWith(prefix)) {
+      tracking.delete(key);
+    }
   }
 }
 
@@ -3278,6 +3311,9 @@ export async function bidiCancelSubscription(
     }
     if (aliasSubscribers.length === 0) {
       session.subscribersByAlias.delete(subscriber.getTrackAlias());
+      // draft-ietf-moq-transport-21 §12.1 条件 4 の Group 単位追跡は
+      // 購読が尽きたら捨てる (無制限な増加を防ぐ)
+      clearEndOfGroupTracking(session, subscriber.getTrackAlias());
     }
   }
 
