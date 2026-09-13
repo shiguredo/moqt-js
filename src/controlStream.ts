@@ -43,6 +43,23 @@ export class ControlStreamReader {
     this.buffer = new Uint8Array(0);
   }
 
+  /**
+   * 半端なメッセージのバイトが残っているか
+   *
+   * draft-ietf-moq-transport-21 §12.2 (CONTROL_MESSAGE_TIMEOUT):
+   * 受信側が半端なメッセージを保持したまま待ち続ける状態を検出するために使う。
+   */
+  get hasBufferedBytes(): boolean {
+    return this.buffer.length > 0;
+  }
+
+  /**
+   * 保持しているバイト数 (エラーメッセージ用)
+   */
+  get bufferedBytes(): number {
+    return this.buffer.length;
+  }
+
   private processMessages(): ControlMessage[] {
     const messages: ControlMessage[] = [];
 
