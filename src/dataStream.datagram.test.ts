@@ -9,6 +9,7 @@ import {
   type ObjectDatagram,
   encodeObjectDatagram,
   decodeObjectDatagram,
+  decodeDatagramTypeAndTrackAlias,
 } from "./dataStream";
 import { IncompleteDataError, MalformedTrackError, SessionError } from "./error";
 import { ObjectStatus } from "./message/types";
@@ -106,6 +107,42 @@ test("ObjectDatagram: PAYLOAD_OBJ タイプをデコード", () => {
   assert.equal(datagram.publisherPriority, 128);
   assert.deepEqual(datagram.payload, new Uint8Array([0xaa, 0xbb, 0xcc]));
   assert.equal(consumed, 8);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.2.1:
+ * Type Flags と Track Alias は Datagram の先頭に固定配置される。この配置知識は
+ * decodeObjectDatagram と decodeDatagramTrackAlias が共有しており、両者が同じ
+ * 結果を返すことを検証する。片方だけが配置を変わると、デコード失敗時に誤った
+ * alias を引いて無関係な購読を cancel し得る。
+ */
+test("ObjectDatagram: 先頭固定フィールドの共通ヘルパーが type と trackAlias を返す", () => {
+  const data = new Uint8Array([0x00, 0x05, 0x0a, 0x03, 0x80, 0xaa, 0xbb, 0xcc]);
+  const head = decodeDatagramTypeAndTrackAlias(data);
+
+  assert.equal(head.type, DatagramType.PAYLOAD_OBJ);
+  assert.equal(head.trackAlias, 5n);
+  // Type Flags (1) + Track Alias (1) のみを消費し、Group ID 以降は読まない
+  assert.equal(head.consumed, 2);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.2.1:
+ * 先頭フィールドの検証は共通ヘルパーが担う。不正な Type Flags では
+ * decodeObjectDatagram と同じく ProtocolViolationError を throw し、
+ * Track Alias を取り出せない (デコード失敗として扱える) ことを検証する。
+ */
+test("ObjectDatagram: 不正な Type Flags は共通ヘルパーで ProtocolViolationError", () => {
+  // 0x10 ビットが立つ型は形式 0b00X0XXXX に一致しない
+  assert.throws(
+    () => decodeDatagramTypeAndTrackAlias(new Uint8Array([0x10, 0x05])),
+    /invalid datagram type/,
+  );
+  // STATUS (0x20) と END_OF_GROUP (0x02) の同時設定は不正
+  assert.throws(
+    () => decodeDatagramTypeAndTrackAlias(new Uint8Array([0x22, 0x05])),
+    /invalid datagram type/,
+  );
 });
 
 test("ObjectDatagram: STATUS_OBJ タイプをデコード", () => {

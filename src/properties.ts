@@ -123,6 +123,29 @@ export const TrackPropertyId = {
 } as const;
 
 /**
+ * Mandatory Track Property の ID 範囲
+ *
+ * draft-ietf-moq-transport-21 §3.6 (Mandatory Track Properties):
+ * 0x4000-0x7FFF は Mandatory Track Properties 用に予約され、Track scope でのみ意味を持つ。
+ * 受信側が未知の Mandatory Track Property を含む Track を受け取った場合、Track Properties
+ * では track を拒否し (REQUEST_ERROR UNSUPPORTED_EXTENSION)、Object Properties では
+ * malformed と判定する。
+ */
+const MANDATORY_TRACK_PROPERTY_ID_MIN = 0x4000n;
+const MANDATORY_TRACK_PROPERTY_ID_MAX = 0x7fffn;
+
+/**
+ * ID が Mandatory Track Property の範囲 (0x4000-0x7FFF) にあるかを判定する
+ *
+ * draft-ietf-moq-transport-21 §3.6: この範囲は Track scope 専用であり、
+ * 受信側が未知なら track を拒否する (Track Properties) か malformed とする
+ * (Object Properties)。値域の定義を 1 箇所に集約する。
+ */
+export function isMandatoryTrackPropertyId(id: bigint): boolean {
+  return id >= MANDATORY_TRACK_PROPERTY_ID_MIN && id <= MANDATORY_TRACK_PROPERTY_ID_MAX;
+}
+
+/**
  * Property Type の値範囲 (Section 16.8)
  *
  * draft-ietf-moq-transport-21 Section 16.8:
@@ -669,7 +692,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
     // 処理・転送してはならない (MUST NOT process or forward)。
     // Immutable Properties 配下でも同様に malformed とする。
-    if (extId >= 0x4000n && extId <= 0x7fffn) {
+    if (isMandatoryTrackPropertyId(extId)) {
       throw new MalformedTrackError(
         `unknown mandatory track property: type 0x${extId.toString(16)}`,
       );
@@ -912,7 +935,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         // draft-ietf-moq-transport-21 §3.6:
         // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
         // 処理・転送してはならない。Immutable Properties 配下でも malformed。
-        if (extId >= 0x4000n && extId <= 0x7fffn) {
+        if (isMandatoryTrackPropertyId(extId)) {
           throw new MalformedTrackError(
             `unknown mandatory track property: type 0x${extId.toString(16)}`,
           );
@@ -970,7 +993,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       // draft-ietf-moq-transport-21 §3.6:
       // Mandatory Track Property (0x4000-0x7FFF) かつ未知の場合は
       // トラックを処理してはならない (MUST NOT process or forward)
-      if (id >= 0x4000n && id <= 0x7fffn) {
+      if (isMandatoryTrackPropertyId(id)) {
         throw new MalformedTrackError(
           `unknown mandatory track property: type 0x${id.toString(16)}`,
         );
@@ -1045,7 +1068,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
     // draft-ietf-moq-transport-21 §3.6:
     // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
     // 処理・転送してはならない (MUST NOT process or forward)
-    if (id >= 0x4000n && id <= 0x7fffn) {
+    if (isMandatoryTrackPropertyId(id)) {
       throw new MalformedTrackError(`unknown mandatory track property: type 0x${id.toString(16)}`);
     }
 
@@ -1104,7 +1127,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
             // draft-ietf-moq-transport-21 §3.6:
             // 未知の Mandatory Track Property (0x4000-0x7FFF) を含む Track は
             // 処理・転送してはならない。Immutable Properties 配下でも malformed。
-            if (innerId >= 0x4000n && innerId <= 0x7fffn) {
+            if (isMandatoryTrackPropertyId(innerId)) {
               throw new MalformedTrackError(
                 `unknown mandatory track property: type 0x${innerId.toString(16)}`,
               );
@@ -1403,7 +1426,7 @@ function assertObjectPropertyList(
   const gapCounts = priorGapCounts ?? { priorGroupIdGap: 0, priorObjectIdGap: 0 };
   let immutableCount = 0;
   for (const property of decodeObjectPropertiesTolerant(data).properties) {
-    if (property.id >= 0x4000n && property.id <= 0x7fffn) {
+    if (isMandatoryTrackPropertyId(property.id)) {
       throw new MalformedTrackError(
         `mandatory track property as object property: type 0x${property.id.toString(16)}`,
       );
