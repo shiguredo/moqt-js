@@ -1,6 +1,8 @@
 import { test, assert } from "vite-plus/test";
 import {
   formatAbsoluteTime,
+  formatBitrate,
+  formatBytes,
   formatDeltaTime,
   formatElapsedTime,
   formatHexDump,
@@ -145,4 +147,26 @@ test("isParameter matches uppercase keys with underscore", () => {
   assert.equal(isParameter("FOO"), false);
   assert.equal(isParameter("foo_bar"), false);
   assert.equal(isParameter("Foo_Bar"), false);
+});
+
+// formatBytes は devtools 内で唯一の実装であり、各パネルが同じ丸めを使う。
+test("formatBytes switches unit at 1024 and 1024*1024", () => {
+  assert.equal(formatBytes(0), "0 B");
+  assert.equal(formatBytes(1023), "1023 B");
+  assert.equal(formatBytes(1024), "1.0 KB");
+  assert.equal(formatBytes(1536), "1.5 KB");
+  assert.equal(formatBytes(1024 * 1024 - 1), "1024.0 KB");
+  assert.equal(formatBytes(1024 * 1024), "1.00 MB");
+  assert.equal(formatBytes(1024 * 1024 * 2.5), "2.50 MB");
+});
+
+// ビットレートは 1000 進 (通信速度の慣例)。
+test("formatBitrate switches unit at 1000 and 1000*1000", () => {
+  assert.equal(formatBitrate(0), "0 bps");
+  assert.equal(formatBitrate(999), "999 bps");
+  assert.equal(formatBitrate(1000), "1 kbps");
+  assert.equal(formatBitrate(1500), "2 kbps");
+  assert.equal(formatBitrate(1000 * 1000 - 1), "1000 kbps");
+  assert.equal(formatBitrate(1000 * 1000), "1.0 Mbps");
+  assert.equal(formatBitrate(2500 * 1000), "2.5 Mbps");
 });

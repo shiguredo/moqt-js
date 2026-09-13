@@ -12,7 +12,9 @@ import {
   type CatalogTrack,
 } from "moqt-js";
 import { addLog } from "../components/DebugPanel";
+import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
+import { base64ToArrayBuffer } from "../utils/base64";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -38,7 +40,7 @@ function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): Vi
   };
   const initData = resolveInitData(catalog, videoTrack);
   if (initData !== undefined) {
-    decoderConfig.description = settings.base64ToArrayBuffer(initData);
+    decoderConfig.description = base64ToArrayBuffer(initData);
   }
   return decoderConfig;
 }
@@ -163,24 +165,7 @@ export function checkAborted(signal: AbortSignal, cleanup: () => void): boolean 
 }
 
 export function handleDebugMessage(subscriberId: string, message: DebugMessage): void {
-  const direction = message.direction === "send" ? "SEND" : "RECV";
-  const logMessage = `[${subscriberId}] [${direction}] ${message.typeName}`;
-
-  const data: Record<string, unknown> = {
-    type: message.type,
-    payloadSize: message.payload.length,
-  };
-
-  if (message.decoded) {
-    Object.assign(data, message.decoded);
-  }
-
-  // moqt-js の DebugMessage.payload はライフタイム契約が JSDoc 上明文化されて
-  // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
-  // new Uint8Array(typedArray) は新規 ArrayBuffer を確保した独立コピーを返す
-  // (TC39 ECMA-262 %TypedArray%(typedArray) 抽象操作)。
-  const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
-  addLog("info", logMessage, data, payload);
+  logDebugMessage(`[${subscriberId}]`, message);
 }
 
 // preact 11 では useRef<T>(null) の戻り値が RefObject<T | null> になるため、
@@ -580,7 +565,6 @@ export function useSubscriber(
           console.error(`[${subscriberId}] Decoder error:`, error);
           instance.decodeErrors.value = instance.decodeErrors.value + 1;
           // デコーダーをリセットして次のキーフレームを待つ
-          console.log(`[${subscriberId}] Resetting decoder, waiting for next keyframe...`);
           void decoderInstance.reset();
         },
       });
@@ -594,7 +578,6 @@ export function useSubscriber(
       }
       const decoderConfig = buildVideoDecoderConfig(videoTrackFromCatalog, catalogValue);
       const codecDisplay = `${videoTrackFromCatalog.codec} ${videoTrackFromCatalog.width}x${videoTrackFromCatalog.height}`;
-      console.log(`[${subscriberId}] Decoder configured from catalog:`, decoderConfig);
 
       await decoderInstance.configure(decoderConfig);
 

@@ -157,32 +157,6 @@ export function formatTimestamp(timestamp: number): string {
 }
 
 /**
- * バイト数をフォーマットする
- */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(2)} KB`;
-  }
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-}
-
-/**
- * ビットレートをフォーマットする
- */
-export function formatBitrate(bps: number): string {
-  if (bps < 1000) {
-    return `${bps} bps`;
-  }
-  if (bps < 1_000_000) {
-    return `${(bps / 1000).toFixed(2)} kbps`;
-  }
-  return `${(bps / 1_000_000).toFixed(2)} Mbps`;
-}
-
-/**
  * Worker をクリーンアップする
  */
 function cleanupEncoderWorker(): void {

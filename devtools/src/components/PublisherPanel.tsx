@@ -1,7 +1,7 @@
 import { useRef } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { usePublisher } from "../hooks/usePublisher";
-import { formatBytes, formatBitrate } from "../utils/codec";
+import { formatBitrate, formatBytes } from "../utils/logFormatters";
 import * as pub from "../signals/publisher";
 
 function formatCatalogValue(key: string, value: unknown): string {

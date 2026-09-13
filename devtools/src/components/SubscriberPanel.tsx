@@ -1,6 +1,6 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
-import { formatBytes, formatBitrate } from "../utils/codec";
+import { formatBitrate, formatBytes } from "../utils/logFormatters";
 import * as sub from "../signals/subscriber";
 
 function formatCatalogValue(key: string, value: unknown): string {

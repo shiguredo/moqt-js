@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { getCatalogCodec, getEncoderConfig } from "./codec";
+import { getCatalogCodec, getEncoderConfig, isResolution, parseResolution } from "./codec";
 import type { CodecType } from "../types";
 
 // Catalog の codec 文字列はエンコーダ設定と一致させる。
@@ -26,4 +26,44 @@ test("getCatalogCodec matches getEncoderConfig codec strings", () => {
     getCatalogCodec(unknownCodec),
     getEncoderConfig(unknownCodec, 640, 480, 1000000, 30).codec,
   );
+});
+
+// 既定値と一般的な解像度が数値に変換される。
+test("parseResolution parses WIDTHxHEIGHT", () => {
+  assert.deepEqual(parseResolution("1280x720"), { width: 1280, height: 720 });
+  assert.deepEqual(parseResolution("640x480"), { width: 640, height: 480 });
+});
+
+// URL クエリ由来の不正値で例外にし、NaN を getUserMedia へ流さない。
+test("parseResolution throws on invalid values", () => {
+  // 区切り文字違い・欠落・全角・負数・単位付きはすべて拒否する。
+  for (const value of ["1280", "1280X720", "1280x", "x720", "1280x720px", "-1280x720", ""]) {
+    assert.throws(() => parseResolution(value), /invalid resolution/);
+  }
+});
+
+// 0 は幅・高さとして意味を持たないため拒否する。
+test("parseResolution throws on zero width or height", () => {
+  for (const value of ["0x720", "1280x0", "0x0", "01280x720"]) {
+    assert.throws(() => parseResolution(value), /invalid resolution/);
+  }
+});
+
+// 安全な整数の範囲外は Number の精度が落ちるため拒否する。
+test("parseResolution throws when the value exceeds safe integers", () => {
+  assert.throws(() => parseResolution("99999999999999999999x720"), /invalid resolution/);
+});
+
+// isResolution は parseResolution が受理する値だけを true にする。
+test("isResolution accepts exactly the values parseResolution accepts", () => {
+  for (const value of ["1280x720", "640x480", "1x1"]) {
+    assert.ok(isResolution(value));
+    assert.deepEqual(parseResolution(value), {
+      width: Number(value.split("x")[0]),
+      height: Number(value.split("x")[1]),
+    });
+  }
+  for (const value of ["0x720", "1280x0", "1280", "1280X720", "1280x720px", "", " 1280x720"]) {
+    assert.equal(isResolution(value), false);
+  }
 });

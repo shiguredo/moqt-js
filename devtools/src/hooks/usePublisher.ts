@@ -11,30 +11,17 @@ import {
   type CertificateHash,
 } from "moqt-js";
 import { getCatalogCodec, getEncoderConfig, parseResolution } from "../utils/codec";
+import { base64ToArrayBuffer } from "../utils/base64";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { addLog } from "../components/DebugPanel";
+import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
 
 export function handleDebugMessage(message: DebugMessage): void {
-  const direction = message.direction === "send" ? "SEND" : "RECV";
-  const logMessage = `[publisher] [${direction}] ${message.typeName}`;
-
-  const data: Record<string, unknown> = {
-    type: message.type,
-    payloadSize: message.payload.length,
-  };
-
-  if (message.decoded) {
-    Object.assign(data, message.decoded);
-  }
-
-  // moqt-js の DebugMessage.payload はライフタイム契約が JSDoc 上明文化されて
-  // いないため、ログ保持 (最大 MAX_LOGS 件) に備えて独立 Uint8Array へコピーする。
-  const payload = message.payload.length > 0 ? new Uint8Array(message.payload) : undefined;
-  addLog("info", logMessage, data, payload);
+  logDebugMessage("[publisher]", message);
 }
 
 interface VideoStreamResult {
@@ -149,14 +136,10 @@ export function usePublisher() {
       return;
     }
 
-    console.log("processFrames: starting frame processing loop");
-    console.log("Encoder state:", encoderInstance.state);
-
     try {
       while (encoderInstance.state === "configured") {
         const { value: frame, done } = await reader.read();
         if (done) {
-          console.log("processFrames: reader done");
           break;
         }
 
@@ -168,7 +151,6 @@ export function usePublisher() {
         }
         frame.close();
       }
-      console.log("processFrames: loop exited. Encoder state:", encoderInstance.state);
     } catch (error) {
       console.error("Frame processing error:", error);
       console.error("Encoder state at error:", encoderInstance.state);
@@ -231,7 +213,6 @@ export function usePublisher() {
 
   const startPublishing = async (): Promise<void> => {
     try {
-      console.log("startPublishing: begin");
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "接続中...";
       settings.settingsDisabled.value = true;
@@ -245,12 +226,6 @@ export function usePublisher() {
       const bitrateValue = settings.bitrate.value;
       const maxCacheDurationValue = settings.maxCacheDuration.value;
       pub.keyframeInterval.value = settings.keyframeInterval.value;
-      console.log("startPublishing: settings loaded", {
-        namespace: namespaceArray,
-        trackName: trackNameValue,
-        codec: codecValue,
-        resolution: `${width}x${height}`,
-      });
 
       // 接続オプションを組み立てる
       const connectOptions: {
@@ -261,7 +236,7 @@ export function usePublisher() {
         connectOptions.serverCertificateHashes = [
           {
             algorithm: "sha-256",
-            value: settings.base64ToArrayBuffer(settings.certificateHash.value),
+            value: base64ToArrayBuffer(settings.certificateHash.value),
           },
         ];
       }
@@ -272,7 +247,6 @@ export function usePublisher() {
 
       // MOQT サーバーへ接続する
       const connectUrl = settings.buildConnectUrl();
-      console.log("startPublishing: connecting to", connectUrl);
       const session = await connect(
         connectUrl,
         {
@@ -298,7 +272,6 @@ export function usePublisher() {
         },
         connectOptions,
       );
-      console.log("startPublishing: connected");
       pub.pubSession.value = session;
       settings.reliability.value = session.reliability;
 
@@ -352,16 +325,10 @@ export function usePublisher() {
       let actualWidth: number;
       let actualHeight: number;
 
-      console.log(
-        "startPublishing: getting video stream, isPreviewActive:",
-        pub.isPreviewActive.value,
-      );
       if (pub.isPreviewActive.value && pub.mediaStream.value) {
         actualWidth = width;
         actualHeight = height;
-        console.log("startPublishing: using existing preview stream");
       } else {
-        console.log("startPublishing: creating new video stream");
         const cameraDeviceId =
           videoSourceValue === "camera" ? settings.selectedCameraDeviceId.value : undefined;
         const videoStreamResult = await getVideoStream(
@@ -375,7 +342,6 @@ export function usePublisher() {
         pub.videoStreamCleanup.value = videoStreamResult.cleanup;
         actualWidth = videoStreamResult.width;
         actualHeight = videoStreamResult.height;
-        console.log("startPublishing: video stream created", { actualWidth, actualHeight });
       }
 
       // 映像トラックを取得する
@@ -383,12 +349,10 @@ export function usePublisher() {
       if (!videoTrack) {
         throw new Error("Failed to get video track");
       }
-      console.log("startPublishing: video track obtained", videoTrack.label);
 
       pub.isPreviewActive.value = false;
 
       // Publisher を作成する
-      console.log("startPublishing: sending PUBLISH, waiting for PUBLISH_OK...");
       const publisherInstance = await session.publish(
         namespaceArray,
         trackNameValue,
@@ -408,7 +372,6 @@ export function usePublisher() {
           maxCacheDuration: BigInt(maxCacheDurationValue),
         },
       );
-      console.log("startPublishing: PUBLISH_OK received");
       pub.forwardState.value = publisherInstance.forwardState;
       pub.publisher.value = publisherInstance;
 
@@ -428,11 +391,9 @@ export function usePublisher() {
       if (!support.supported) {
         throw new Error(`Codec not supported: ${encoderConfig.codec}`);
       }
-      console.log("Encoder config supported:", support.config);
 
       // EncoderWrapper を作成する
       const useWorker = settings.useDedicatedWorker.value;
-      console.log("Creating encoder with Worker mode:", useWorker);
 
       const encoderInstance = new EncoderWrapper(useWorker, {
         output: (chunk) => {
@@ -456,7 +417,6 @@ export function usePublisher() {
       if (encoderInstance.state !== "configured") {
         throw new Error(`Encoder failed to configure. State: ${encoderInstance.state}`);
       }
-      console.log("Encoder configured successfully. State:", encoderInstance.state);
 
       // codec バッジを表示する
       pub.pubCodec.value = `${codecValue.toUpperCase()} ${actualWidth}x${actualHeight}`;
@@ -466,7 +426,6 @@ export function usePublisher() {
       // 利用できない場合は requestVideoFrameCallback でフォールバックする
       const videoFrameSource = createVideoFrameSource(videoTrack);
       pub.frameReader.value = videoFrameSource.readable.getReader();
-      console.log("Frame reader created");
 
       // 統計値をリセットする
       pub.framesEncoded.value = 0;

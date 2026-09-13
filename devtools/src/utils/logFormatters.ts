@@ -167,3 +167,29 @@ export function formatDeltaTime(
   const delta = currentTimestamp - previousTimestamp;
   return `(+${delta}ms)`;
 }
+
+// バイト数を表示用にフォーマットする。
+// devtools 内で唯一の実装とし、各パネルはこれを import する
+// (以前は codec.ts / webcodecs-devtools/signals.ts / DebugPanel.tsx に
+//  丸めの異なる実装が並立していた)。
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+// ビットレートを表示用にフォーマットする。formatBytes と同じく唯一の実装。
+// 単位は 1000 進 (通信速度の慣例)、バイト数は 1024 進 (ストレージの慣例)。
+export function formatBitrate(bps: number): string {
+  if (bps < 1000) {
+    return `${bps} bps`;
+  }
+  if (bps < 1000 * 1000) {
+    return `${(bps / 1000).toFixed(0)} kbps`;
+  }
+  return `${(bps / 1000 / 1000).toFixed(1)} Mbps`;
+}
