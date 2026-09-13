@@ -1,7 +1,7 @@
 # テストコードの重複ヘルパーと PBT arbitrary を共有モジュールに集約する
 
 - Created: 2026-09-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/refactor-test-support-dedup
 - Polished: {YYYY-MM-DD}
 
@@ -99,3 +99,34 @@
 - `pnpm test run`: 70 ファイル / 2,090 テスト全通過 (着手前と同数。統合で検証内容は変えていない)
 - `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
 - 合計: 27 ファイル、+498 / -1,346 行 (純 -848 行)
+
+## 解決方法
+
+マージ済み PR #297 で対応した。テストの検証内容と件数は変えず、重複定義のみを除去した。
+
+### テストヘルパー
+
+`src/testSupport/helpers.ts` を新設し、21 ファイルに散在していた 8 個のヘルパーを集約した (18 ファイル、+163 / -217 行)。
+
+`concatUint8Arrays` (4 ファイル完全一致 + `session.test.ts` の改名コピー) / `nodeProcess` (2) / `createObject` (3) / `appendMalformedTrackProperties` (2) / `parseObjectPropertyIds` (2) / `assertRejectsWithMessage` (2) / `encodeJson` (2) / `useValueToken` (2、`tokenValue` の文字列のみ差 → 引数化)。
+
+### PBT arbitrary
+
+`src/message/parameterArb.ts` を新設し、`src/message/*.prop.ts` の 7 ファイルがそれぞれ再定義していた Message Parameter / Track Property / 名前系の arbitrary を集約した (9 ファイル、+335 / -1,129 行)。
+
+統合時に判明した非対称の扱い:
+
+- `varintParameterArb` は `parameter.prop.ts` 版 (0x06 を含む広い型リスト) を正とした。探索空間は広がる方向であり、テストは通る。
+- `parametersArb` は `parameter.prop.ts` 版 (Range Filter の重複 SetID を除去する強化版) を正とした。
+- `src/properties.prop.ts` の `evenPropertyArb` / `oddPropertyArb` は生成方法が異なるため統合対象から外した (message 側の 4 ファイルは同一だったのでそちらだけを共有化)。
+
+### 実装中に判明した重要な点
+
+**テストを含むファイルを共有元にしてはならない。** 最初は `src/message/parameter.prop.ts` から arbitrary を export して 6 ファイルが import する形にしたところ、同ファイルの 7 テストが import 元ごとに重複登録され、テスト総数が 2,090 から 2,132 に増えた (7 × 6 = 42)。arbitrary をテストを含まない `src/message/parameterArb.ts` に分離して解消した。共有モジュールは vitest の `test.include` (`src/**/*.{test,prop}.ts`) に一致しない名前にする必要がある。
+
+### 検証
+
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過 (着手前と同数)
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
+- 合計: 26 ファイル、+498 / -1,346 行 (純 -848 行)
+- CI (PR #297): 全ジョブ success
