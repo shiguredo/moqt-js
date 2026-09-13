@@ -986,6 +986,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     try {
       await this.videoDecoder.configure(videoCodec, width, height, description);
+      // 成功して初めて「適用済み」とする。失敗時は未適用のまま残し、
+      // 同じ config を持つ後続 Object で再試行できるようにする。
+      this.lastAppliedVideoConfig = description;
       this.videoDecoderConfigured = true;
     } catch (error) {
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
@@ -1015,10 +1018,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       locProperties.config !== undefined &&
       !this.isSameAppliedVideoConfig(locProperties.config)
     ) {
-      const next = new Uint8Array(locProperties.config);
-      this.lastAppliedVideoConfig = next;
+      // 適用済みの更新は configure 成功後に行う。失敗時に更新すると
+      // 同じ config が再試行されず、以降の Object をデコードできなくなる。
       this.videoDecoderConfigured = false;
-      void this.reconfigureVideoDecoder(next);
+      void this.reconfigureVideoDecoder(new Uint8Array(locProperties.config));
     }
 
     // 再構成中は decode に渡さない (VideoDecoder の configure は非同期)
