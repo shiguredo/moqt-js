@@ -194,6 +194,28 @@ test("resolveAudioChannelCount: 前後空白・大文字小文字を問わない
   assert.equal(resolveAudioChannelCount("STEREO"), 2);
 });
 
+/**
+ * draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義せず、
+ * 「複雑なチャンネル構成を記述する柔軟性のために文字列を使う」とのみ定める。
+ * 業界慣用のサラウンド表記を対応表で解決できることを検証する。
+ */
+test("resolveAudioChannelCount: サラウンド表記 (5.1 / 7.1) を解決する", () => {
+  // 5.1 = 前方 3 + 後方 2 + LFE 1
+  assert.equal(resolveAudioChannelCount("5.1"), 6);
+  // 7.1 = 前方 3 + 側方 2 + 後方 2 + LFE 1
+  assert.equal(resolveAudioChannelCount("7.1"), 8);
+});
+
+test("resolveAudioChannelCount: サラウンド表記も前後空白・大文字小文字を問わない", () => {
+  assert.equal(resolveAudioChannelCount("  5.1  "), 6);
+});
+
+test("resolveAudioChannelCount: 対応表に無い複合表記は throw する", () => {
+  // 非標準表記を暗黙に数値化しない (例: "1.5" を 6 と解釈しない)
+  assert.throws(() => resolveAudioChannelCount("1.5"), /unsupported audio channelConfig/);
+  assert.throws(() => resolveAudioChannelCount("5.1.2"), /unsupported audio channelConfig/);
+});
+
 test("resolveAudioChannelCount: 整数文字列はその値になる", () => {
   // 自 Publisher が書く数値文字列との互換である
   assert.equal(resolveAudioChannelCount("1"), 1);
