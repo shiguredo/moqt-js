@@ -4,6 +4,16 @@
  */
 
 /**
+ * Full Track Name の比較キー
+ *
+ * fullTrackNameKey が生成する長さ付きキー専用の型である。生の Full Track Name
+ * (`/` などで連結した文字列) を比較キーとして渡す取り違えを型で検出するため、
+ * string に brand を付ける。比較キーは `!==` による等値比較と Set / Map の
+ * キーとしてのみ使うため、brand を付けても比較の実装は変わらない。
+ */
+export type FullTrackNameKey = string & { readonly __brand: "FullTrackNameKey" };
+
+/**
  * Full Track Name の比較キーを生成する
  *
  * draft-ietf-moq-transport-21 §2.4.1:
@@ -22,9 +32,13 @@
  * length (UTF-16 コードユニット数) を使う。キーは等値比較にしか使わないため、
  * バイト列長ではなく文字列長で境界が一意になればよい。
  */
-export function fullTrackNameKey(trackNamespace: readonly string[], trackName: string): string {
+export function fullTrackNameKey(
+  trackNamespace: readonly string[],
+  trackName: string,
+): FullTrackNameKey {
   // Track Namespace の各フィールドの後ろに Track Name を並べ、同じ規則で
   // 長さ付きにする (Track Name が空文字列でも "0:" として境界が残る)。
   const fields = [...trackNamespace, trackName];
-  return fields.map((field) => `${field.length}:${field}`).join("|");
+  // brand は型のみで実行時表現を持たないため、生成はここで 1 回だけ行う
+  return fields.map((field) => `${field.length}:${field}`).join("|") as FullTrackNameKey;
 }

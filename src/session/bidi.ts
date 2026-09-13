@@ -57,6 +57,7 @@ import {
   type RangeFilterSpec,
 } from "../message";
 import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "../filter";
+import type { FullTrackNameKey } from "../fullTrackName";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
 import type { Property } from "../properties";
@@ -156,7 +157,7 @@ export interface PendingTrackStatus {
    * draft-ietf-moq-transport-21 §12.1: malformed Track を検出したら同一 Track の購読 /
    * FETCH を cross-cancel するため、TRACK_STATUS 要求時の比較キーを保持する。
    */
-  trackKey: string;
+  trackKey: FullTrackNameKey;
 }
 
 interface PendingRequestUpdate {
@@ -3448,7 +3449,7 @@ export async function bidiCancelFetch(
  */
 export function cancelMalformedTrackPeers(
   session: BidiSessionInternal,
-  trackKey: string,
+  trackKey: FullTrackNameKey,
   error: Error,
 ): void {
   // 購読は alias 索引 (subscribersByAlias) を走査する。bidiCancelSubscription
