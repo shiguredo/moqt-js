@@ -35,6 +35,7 @@ import {
   namespaceStartTracksStreamLoop,
 } from "./namespaceLoops";
 import type { SessionInternal } from "./types";
+import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 /**
  * namespace 系ストリームループ用のテストコンテキストを構築する。
@@ -185,14 +186,6 @@ function requestErrorMessage(controlWriter: ControlStreamWriter, code: number): 
  * Track Properties はメッセージ payload の末尾を占めるため、正常な
  * エンコード結果への連結で malformed な受信メッセージを再現できる。
  */
-function appendMalformedTrackProperties(payload: Uint8Array): Uint8Array {
-  const malformed = new Uint8Array([0x02, 0x80]);
-  const result = new Uint8Array(payload.length + malformed.length);
-  result.set(payload, 0);
-  result.set(malformed, payload.length);
-  return result;
-}
-
 /**
  * draft-ietf-moq-transport-21 §9.4.1:
  * namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /

@@ -35,6 +35,7 @@ import {
   resolveCatalogVariables,
   parseMsfFragmentValue,
 } from "./msf";
+import { assertRejectsWithMessage } from "./testSupport/helpers";
 
 // =============================================================================
 // Arbitrary 定義 (draft-01 reserved 値を網羅)
@@ -366,18 +367,6 @@ test("Catalog: decode 後の version は常に draft-01", () => {
 // =============================================================================
 // Media Timeline テスト
 // =============================================================================
-
-async function assertRejectsWithMessage(
-  factory: () => Promise<unknown>,
-  messagePattern: RegExp,
-): Promise<void> {
-  try {
-    await factory();
-    assert.fail("expected promise to reject");
-  } catch (error) {
-    assert.match((error as Error).message, messagePattern);
-  }
-}
 
 test("Media Timeline: ラウンドトリップで同一値に戻る", async () => {
   await fc.assert(

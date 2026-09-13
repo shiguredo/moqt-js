@@ -33,7 +33,8 @@ import {
   SessionErrorCode,
 } from "./error";
 import { isGreaseValue } from "./grease";
-import { decodeVarint, encodeVarint, MAX_VARINT } from "./varint";
+import { encodeVarint, MAX_VARINT } from "./varint";
+import { parseObjectPropertyIds } from "./testSupport/helpers";
 
 test("TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である", () => {
   assert.equal(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, 0x06n);
@@ -1049,29 +1050,6 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
 // Object Properties の Key-Value-Pairs（Figure 2、delta encoding）から
 // Property ID の一覧を抽出する。
 // mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties と同じ規約。
-function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
-  const ids: bigint[] = [];
-  let offset = 0;
-  let previousId = 0n;
-  while (offset < bytes.length) {
-    const [deltaType, typeLen] = decodeVarint(bytes, offset);
-    offset += typeLen;
-    const id = previousId + deltaType;
-    previousId = id;
-    ids.push(id);
-    if (id % 2n === 0n) {
-      // 偶数 ID: varint value 形式
-      const [, valueLen] = decodeVarint(bytes, offset);
-      offset += valueLen;
-    } else {
-      // 奇数 ID: length + bytes 形式
-      const [len, lenLen] = decodeVarint(bytes, offset);
-      offset += lenLen + Number(len);
-    }
-  }
-  return ids;
-}
-
 test("generateGreaseProperty: GREASE 予約値の奇数 ID で空バイト列を返す", () => {
   // N はランダム生成のため、複数回サンプリングして不変条件を検証する
   for (let i = 0; i < 100; i++) {

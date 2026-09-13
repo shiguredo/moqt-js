@@ -28,7 +28,7 @@ import {
 } from "./createMediaSubscriber";
 import { type MoqtObject } from "./dataStream";
 import type { Location } from "./message";
-import { AuthorizationTokenAliasType, type AuthorizationToken } from "./message/authorizationToken";
+import { useValueToken } from "./testSupport/helpers";
 
 /** テスト用の最小フルカタログ */
 function makeCatalog(tracks: Catalog["tracks"] = []): Catalog {
@@ -184,14 +184,6 @@ test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済みより新�
 // ============================================================================
 // resolveAuthorizationToken（draft-ietf-moq-msf-01 §5.2.42 / §11.4.2 / §11.4.4）
 // ============================================================================
-
-function useValueToken(): AuthorizationToken {
-  return {
-    aliasType: AuthorizationTokenAliasType.USE_VALUE,
-    tokenType: 0n,
-    tokenValue: new TextEncoder().encode("token"),
-  };
-}
 
 test("resolveAuthorizationToken: authInfo 未指定は認可不要で undefined", async () => {
   assert.equal(await resolveAuthorizationToken(undefined), undefined);

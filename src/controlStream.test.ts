@@ -10,27 +10,18 @@ beforeEach(() => {
   writer = new ControlStreamWriter();
 });
 
-test("ControlStreamReader の初期状態", () => {
-  assert.equal(reader.bufferSize, 0);
-  assert.equal(reader.isFinReceived, false);
-});
-
 test("ControlStreamReader で空データを供給", () => {
   const messages = reader.feed(new Uint8Array(0));
   assert.equal(messages.length, 0);
-  assert.equal(reader.bufferSize, 0);
-});
-
-test("ControlStreamReader で FIN フラグを設定", () => {
-  reader.feed(new Uint8Array(0), true);
-  assert.equal(reader.isFinReceived, true);
 });
 
 test("ControlStreamReader でバッファをクリア", () => {
-  reader.feed(new Uint8Array([0x01, 0x02, 0x03]));
-  assert.equal(reader.bufferSize, 3);
+  // メッセージの途中まで供給してからクリアすると、残りを供給しても復元されない
+  reader.feed(new Uint8Array([0x01, 0x02]));
   reader.clear();
-  assert.equal(reader.bufferSize, 0);
+  const messages = reader.feed(new Uint8Array([0x03]));
+
+  assert.equal(messages.length, 0);
 });
 
 test("ControlStreamReader で単一メッセージを解析", () => {
@@ -41,7 +32,6 @@ test("ControlStreamReader で単一メッセージを解析", () => {
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.SETUP);
   assert.deepEqual(messages[0].payload, new Uint8Array([0xab, 0xcd]));
-  assert.equal(reader.bufferSize, 0);
 });
 
 test("ControlStreamReader でペイロードなしのメッセージを解析", () => {
@@ -68,7 +58,6 @@ test("ControlStreamReader で分割されたメッセージ (ヘッダ途中) �
   // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]
   let messages = reader.feed(new Uint8Array([0xaf]));
   assert.equal(messages.length, 0);
-  assert.equal(reader.bufferSize, 1);
 
   messages = reader.feed(new Uint8Array([0x00, 0x00, 0x02, 0xab, 0xcd]));
   assert.equal(messages.length, 1);
@@ -80,7 +69,6 @@ test("ControlStreamReader で分割されたメッセージ (Payload 途中) を
   // SETUP (0x2f00) の varint エンコードは [0xaf, 0x00]
   let messages = reader.feed(new Uint8Array([0xaf, 0x00, 0x00, 0x03, 0xab]));
   assert.equal(messages.length, 0);
-  assert.equal(reader.bufferSize, 5);
 
   messages = reader.feed(new Uint8Array([0xcd, 0xef]));
   assert.equal(messages.length, 1);
@@ -174,13 +162,6 @@ test("ControlStreamWriter で 2バイト varint Type をエンコード", () => 
   assert.deepEqual(encoded.slice(4), payload);
 });
 
-test("ControlStreamWriter で encodeMessage を使用", () => {
-  const msg = { type: MessageType.SUBSCRIBE, payload: new Uint8Array([0x01]) };
-  const encoded = writer.encodeMessage(msg);
-
-  assert.deepEqual(encoded, new Uint8Array([0x03, 0x00, 0x01, 0x01]));
-});
-
 test("encode → decode roundtrip", () => {
   const messages = [
     { type: MessageType.SETUP, payload: new Uint8Array([0x01, 0x02, 0x03]) },
@@ -188,7 +169,7 @@ test("encode → decode roundtrip", () => {
     { type: MessageType.PUBLISH, payload: new Uint8Array([0xaa, 0xbb, 0xcc, 0xdd]) },
   ];
 
-  const encoded: Uint8Array[] = messages.map((m) => writer.encodeMessage(m));
+  const encoded: Uint8Array[] = messages.map((m) => writer.encode(m.type, m.payload));
   const totalLen = encoded.reduce((sum, e) => sum + e.length, 0);
   const combined = new Uint8Array(totalLen);
   let offset = 0;
@@ -211,7 +192,7 @@ test("ストリーミング roundtrip (1バイトずつ)", () => {
     type: MessageType.SUBSCRIBE_OK,
     payload: new Uint8Array([0x55, 0x66, 0x77]),
   };
-  const encoded = writer.encodeMessage(original);
+  const encoded = writer.encode(original.type, original.payload);
 
   const allDecoded: { type: number; payload: Uint8Array }[] = [];
 

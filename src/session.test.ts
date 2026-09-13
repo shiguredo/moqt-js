@@ -47,6 +47,7 @@ import {
   SessionError,
   SessionErrorCode,
 } from "./error";
+import { concatUint8Arrays, nodeProcess } from "./testSupport/helpers";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
 import {
   createSetup,
@@ -81,16 +82,6 @@ import {
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
 import type { SessionInternal } from "./session/types";
-
-// vp check は node の型を解決しないため globalThis 経由で process を参照する
-const nodeProcess = (
-  globalThis as unknown as {
-    process: {
-      on(event: string, listener: (reason: unknown) => void): void;
-      off(event: string, listener: (reason: unknown) => void): void;
-    };
-  }
-).process;
 
 /**
  * SessionImpl を構築するための WebTransport モック
@@ -2767,17 +2758,6 @@ test("tracks の update() を fire-and-forget で呼び出しても unsubscribe(
 });
 
 /** Uint8Array 配列を連結するヘルパー */
-function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
-
 /** SessionImpl.requestStreams のエントリ型 (テストから注入するための複製) */
 interface RequestStreamEntry {
   stream: WebTransportBidirectionalStream;
@@ -5365,7 +5345,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
   assert.equal(session.localMaxFilterRanges, 4);
 
   // 送信した SETUP から広告値を取得する
-  const sent = concatUint8ArraysForTest(sentChunks);
+  const sent = concatUint8Arrays(sentChunks);
   const [streamType, consumed] = decodeVarint(sent, 0);
   assert.equal(Number(streamType), MessageType.SETUP);
   const messages = new ControlStreamReader().feed(sent.slice(consumed));
@@ -5412,7 +5392,7 @@ test("initialize: 制御ストリームより先にデータストリームが�
   const dataStream = new ReadableStream<Uint8Array>({
     start(controller) {
       dataController = controller;
-      controller.enqueue(concatUint8ArraysForTest([headerBytes, fieldsBytes]));
+      controller.enqueue(concatUint8Arrays([headerBytes, fieldsBytes]));
     },
   });
 
@@ -5748,17 +5728,6 @@ test("transport.closed で保留中のリクエスト Promise を reject する"
 /**
  * テスト用に Uint8Array チャンクを連結する
  */
-function concatUint8ArraysForTest(chunks: Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
-}
-
 // ============================================================================
 // draft-ietf-moq-transport-21 §8.9 / §9.1.4: 受信 SETUP の Authorization Token
 // ============================================================================
@@ -6133,7 +6102,7 @@ test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_A
     },
   ]);
 
-  const messages = new ControlStreamReader().feed(concatUint8ArraysForTest(ctx.written));
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
@@ -6208,7 +6177,7 @@ test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias �
 
   // DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、メッセージが拒否される
   assert.equal(ctx.session.receivedAuthTokens.size, 0);
-  const messages = new ControlStreamReader().feed(concatUint8ArraysForTest(ctx.written));
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
   const decoded = decodeRequestErrorPayload(messages[0].payload);

@@ -9,12 +9,7 @@
 import { test, assert } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
 
-/**
- * JSON 値を UTF-8 バイト列にするテスト用ヘルパー
- */
-function encodeJson(value: unknown): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(value));
-}
+import { encodeJson } from "./testSupport/helpers";
 import {
   LOG_SEVERITY_LEVELS,
   MOQLOG_NAMESPACE_PREFIX,

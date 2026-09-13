@@ -34,8 +34,8 @@ import { isGreaseValue } from "../grease";
 import {
   AuthorizationTokenAliasType,
   decodeAuthorizationToken,
-  type AuthorizationToken,
 } from "../message/authorizationToken";
+import { useValueToken } from "../testSupport/helpers";
 
 // ============================================================================
 // clampTimeoutMs
@@ -184,14 +184,6 @@ test("validateNamespacePrefixUpdate: アクティブな既存 prefix が無け�
 // ============================================================================
 
 // USE_VALUE スキームのトークン（draft-ietf-moq-transport-21 §8.9 Alias Type 0x3）
-function useValueToken(): AuthorizationToken {
-  return {
-    aliasType: AuthorizationTokenAliasType.USE_VALUE,
-    tokenType: 0n,
-    tokenValue: new TextEncoder().encode("scheme-token"),
-  };
-}
-
 test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-trip する", () => {
   const param = encodeAuthorizationTokenParameter(useValueToken());
   assert.equal(param.type, MessageParameterType.AUTHORIZATION_TOKEN);

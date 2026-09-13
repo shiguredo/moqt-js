@@ -198,16 +198,6 @@ export class VideoDecoderWrapper {
   }
 
   /**
-   * デコーダーの状態を取得する
-   */
-  get state(): string {
-    if (this.useWorker) {
-      return this.configured ? "configured" : "unconfigured";
-    }
-    return this.decoder?.state ?? "unconfigured";
-  }
-
-  /**
    * キーフレーム待ち状態にリセットする
    */
   resetKeyframeWait(): void {

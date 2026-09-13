@@ -7,16 +7,7 @@ import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { SubscriberImpl } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
-import { ObjectStatus } from "./message/types";
-
-function createObject(groupId: bigint, objectId: bigint): MoqtObject {
-  return {
-    groupId,
-    objectId,
-    status: ObjectStatus.NORMAL,
-    payload: new Uint8Array([1, 2, 3]),
-  };
-}
+import { createObject } from "./testSupport/helpers";
 
 test("オブジェクトは即座に配信される", () => {
   fc.assert(

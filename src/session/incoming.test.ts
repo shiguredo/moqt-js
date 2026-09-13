@@ -10,6 +10,7 @@ import { test, assert } from "vite-plus/test";
 import { MessageType } from "../message";
 import { decodeRequestErrorPayload } from "../message/session";
 import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import { concatUint8Arrays } from "../testSupport/helpers";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
 import {
   incomingClassifyFirstBidiMessage,
@@ -475,17 +476,6 @@ test("incomingHandleFirstBidiMessage: PUBLISH は false を返し従来処理を
 });
 
 /** Uint8Array 配列を連結するヘルパー */
-function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
-
 // ============================================================================
 // incomingValidateRequestId のテスト
 // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID)
