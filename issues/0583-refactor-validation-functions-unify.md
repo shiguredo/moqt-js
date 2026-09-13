@@ -1,7 +1,7 @@
 # 残る検証関数のコールバック API をエラー返却型に統一する
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/refactor-validation-functions-unify
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,31 @@
 
 - `validateNoDuplicateGoawayOnRequestStream` (`src/session/bidi.ts`) / `incomingValidateRequestId` (`src/session/incoming.ts`) / `validateIncomingRequestId` (`src/session.ts`)
 - `issues/closed/0523-refactor-namespace-validation-error.md` (先行の統一)
+
+## 解決方法
+
+実装した。
+
+### 返却型の統一
+
+- `validateNoDuplicateGoawayOnRequestStream` (`src/session/bidi.ts`) を `(requestId, seenSet) => SessionError | null` に変更した。重複なしの場合は従来どおり `seenSet.add` して `null` を返し、重複の場合は PROTOCOL_VIOLATION の `SessionError` を返す。検証と `add` が同一の同期ブロックにある契約は維持している
+- `incomingValidateRequestId` (`src/session/incoming.ts`) を `(requestId, receivedRequestIds) => SessionError | null` に変更した。パリティ違反・重複はそれぞれ INVALID_REQUEST_ID の `SessionError` を返す。拒否経路で return されるリクエストも Request ID を消費したものとして `add` する契約は維持している
+
+`closeSession` コールバック引数と boolean 戻り値は両関数から完全に削除した。セッションを閉じるのは呼び出し側の責務になり、`validateParameterScope` / `validateRequestOkNoTrackProperties` / `namespaceValidateFirstMessage` と同じ形になった。
+
+### 追随させた箇所
+
+- `BidiSessionInternal.validateIncomingRequestId` (`src/session/bidi.ts`) の戻り値を `SessionError | null` にし、`SessionImpl.validateIncomingRequestId` (`src/session.ts`) は free function への純粋委譲にした (close 呼び出しを削除)
+- 呼び出し 7 箇所 (`src/session/bidi.ts` 3 / `src/session.ts` 2 / `src/session/incoming.ts` 1 / `src/session/namespaceLoops.ts` 1) を「返却された `SessionError` を `closeWithError` に渡して return」に書き換えた
+- テストのスタブ 4 箇所を `(): SessionError | null => null` に、`incomingValidateRequestId` を直接呼ぶ単体テスト 6 件と `validateNoDuplicateGoawayOnRequestStream` の単体テスト 2 件の期待値を返却値検証に更新した
+
+### 処理順序
+
+`close` してから return する順序、および `src/session/incoming.ts` の未対応リクエスト経路で「検証違反ならセッションを閉じて NOT_SUPPORTED 応答を送らない」順序は変えていない。テスト総数は 2,126 で変わらず、全通過する。
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,126 テスト全通過
+- `rg "closeSession" src/session/bidi.ts src/session/incoming.ts` の一致が 0 件であること
+- `CHANGES.md` の `## develop` の `### misc` に `[UPDATE]` を追加した
