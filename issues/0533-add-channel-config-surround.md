@@ -1,7 +1,7 @@
 # channelConfig のサラウンド複合表記に対応する
 
 - Created: 2026-09-07
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-13
 - Branch: feature/add-channel-config-surround
 - Polished: YYYY-MM-DD
 
@@ -29,3 +29,19 @@
 
 - draft-ietf-moq-msf-01 §5.2.29
 - draft-ietf-moq-loc-04 §4.1
+
+## 解決方法
+
+設計方針 1・2 に従い、サラウンド表記の対応表を `src/codec/config.ts` に追加した。
+
+- `SURROUND_CHANNEL_COUNTS` を定義し、"5.1" を 6 チャンネル、"7.1" を 8 チャンネルに解決する。根拠は draft-ietf-moq-msf-01 §5.2.29 が値語彙を定めず「複雑なチャンネル構成を記述する柔軟性のために文字列を使う」とのみ規定しているため、業界慣用の表記を製品判断でマッピングしたこと。各表記の内訳 (5.1 = 前方 3 + 後方 2 + LFE 1、7.1 = 前方 3 + 側方 2 + 後方 2 + LFE 1) もコメントに残した。
+- `resolveAudioChannelCount` は `mono` / `stereo` の判定の後、整数文字列の判定の前に対応表を引く。対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり `unsupported audio channelConfig` で throw する。非標準表記を暗黙に数値化しない方針を明示するため、一般則 (`X.Y` → `X + 1`) ではなく明示的な表にした。
+- これにより自 PBT (`src/msf.prop.ts` が生成する `"1"` / `"2"` / `"5.1"` / `"7.1"`) と購読層の受理範囲が一致した。
+- テスト: `src/codec/config.test.ts` に 3 件追加した (5.1 / 7.1 の解決、前後空白の許容、対応表に無い複合表記の拒否)。
+- `CHANGES.md` の `## develop` に `[ADD]` を追加した。
+
+## 検証
+
+- `pnpm test run`: 70 ファイル / 2,106 テスト全通過 (追加した 3 件を含む)
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
+- 差分: 3 ファイル、+52 / -2 行
