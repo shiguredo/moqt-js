@@ -10981,7 +10981,7 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
 
 /**
  * draft-ietf-moq-transport-21 §12.1 / §3.1:
- * 応答待ちの pending 購読 / FETCH も同一 Full Track Name で cancel され、
+ * 応答待ちの pending 購読 / FETCH も同一 Track の比較キーで cancel され、
  * reject される。pending 中の SubscriberImpl.state は active のため、
  * error コールバックは呼ばれない (reject との二重通知なし)。
  */
