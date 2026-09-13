@@ -1,7 +1,7 @@
 # リクエスト単位 error コールバックの throw をデバッグ記録に残す
 
 - Created: 2026-09-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/add-callback-throw-debug-record
 - Polished: {YYYY-MM-DD}
 
@@ -37,3 +37,26 @@
 - `SessionImpl.closeWithError` (`src/session.ts`。デバッグ記録の先例)
 - `incomingHandleDatagram` (`src/session/incoming.ts`。`DATAGRAM_CALLBACK_ERROR` の先例)
 - `src/session/namespaceLoops.test.ts`
+
+## 解決方法
+
+マージ済み PR #313 で対応した。issue の参照は `#5.1.3.1` などの draft-20 節番号だが、実装は現行の一次資料 draft-ietf-moq-transport-21 の節番号で記述している。
+
+### 実装
+
+`namespaceNotifyError` に `session` と `requestId` を渡すようにし、`callbacks.error` の throw を握り潰したうえで `session.callbacks.debug` へ記録するようにした。typeName は既存の `DATAGRAM_CALLBACK_ERROR` / `SUBGROUP_CALLBACK_ERROR` に倣い `REQUEST_CALLBACK_ERROR` とし、`decoded.error` にコールバックの例外メッセージ、`decoded.requestId` に失敗したリクエストの ID を入れた。受信メッセージに対応しない記録のため `payload` は空にした。
+
+- 記録自体の throw (debug コールバックの throw) は内側の try/catch で握り潰し、後始末を止めない
+- 記録は通知が throw した場合のみで、正常な通知では記録を増やさない
+- SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS / PUBLISH_NAMESPACE の 3 ループ 6 箇所すべてに適用した
+
+### テスト
+
+`src/session/namespaceLoops.test.ts` のテストコンテキスト 2 つ (`createNamespaceLoopTestContext` / `createPublicationLoopTestContext`) に debug 記録の採取を追加し、既存の「error コールバックの throw を無視して…」テスト 9 件へ `REQUEST_CALLBACK_ERROR` が 1 件だけ現れることの検証を足した。後始末 (確立前 Promise の reject・保留中 REQUEST_UPDATE の reject・セッションクローズ) の検証は既存のものをそのまま使っている。
+
+### 検証
+
+- `vp check` / `tsc --noEmit` 通過
+- `vp test run`: 70 ファイル / 2,114 テスト全通過
+- `src/session/namespaceLoops.ts` の Functions カバレッジ 100% (新規追加した catch 節を通ることを確認)
+- `CHANGES.md` の `## develop` に `[ADD]` を追加した
