@@ -9,10 +9,16 @@
  *   Value (..)
  * }
  *
- * Type Delta は前のパラメータの Type との差分。
- * 偶数型: varint 値
- * 奇数型: Length プレフィックス付きバイト列
- * draft-ietf-moq-transport-21 Section 8.3
+ * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * Type Delta は前のパラメータの Type との差分で、パラメータは Type の昇順に
+ * 並べる。Value のエンコーディングは各パラメータの定義が個別に定める
+ * ("The encoding is specified by each parameter definition.")。このファイルでは
+ * MESSAGE_PARAMETER_VALUE_ENCODING が型ごとのエンコーディングを持つ。
+ *
+ * 「偶数型: varint 値 / 奇数型: Length プレフィックス付きバイト列」という規則は
+ * §8.3 (Key-Value-Pair Structure) のものであり、Message Parameter には適用されない。
+ * 本ファイルでは Key-Value-Pair を扱う encodeKeyValuePair / decodeKeyValuePair /
+ * encodeKeyValuePairs / decodeKeyValuePairs が従う。
  */
 
 import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
@@ -116,10 +122,13 @@ export const MAX_REASON_PHRASE_LENGTH = 1024;
 const MAX_KVP_VALUE_LENGTH = 65535;
 
 /**
- * MOQT Parameter
+ * MOQT Parameter (Message Parameter)
  *
- * 偶数タイプ: varint 値として解釈
- * 奇数タイプ: Length プレフィックス付きバイト列
+ * draft-ietf-moq-transport-21 §9.20:
+ * Value のエンコーディングはパラメータ型ごとの定義で決まる
+ * (MESSAGE_PARAMETER_VALUE_ENCODING を参照)。偶数型 / 奇数型で一律には決まらない。
+ * 例えば 0x09 (location) / 0x21 (self-length-prefixed) / 0x34 (track-namespace) は
+ * 偶数・奇数規則に当てはまらない。
  */
 export interface Parameter {
   type: number;
