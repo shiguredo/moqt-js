@@ -93,6 +93,10 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 接続関連
   private session: Session | null = null;
   private catalogPublisher: Publisher | null = null;
+  // 直前に VIDEO_CONFIG として送信した description。
+  // draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe でのみ encoder から渡るため、
+  // 変化したときだけ載せて全 keyframe への重複送出を避ける。
+  private lastSentVideoConfig: Uint8Array | null = null;
   private audioPublisher: Publisher | null = null;
   private videoPublisher: Publisher | null = null;
 
@@ -681,6 +685,25 @@ export class MediaPublisherImpl implements MediaPublisher {
     });
   }
 
+  /**
+   * 直前に送った Video Config と同じ description かを判定する
+   *
+   * draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe の metadata にのみ現れる。
+   * 同じ値を毎 keyframe 送ると無駄になるため、変化したときだけ送る。
+   */
+  private isSameVideoConfig(description: Uint8Array): boolean {
+    const previous = this.lastSentVideoConfig;
+    if (previous === null || previous.length !== description.length) {
+      return false;
+    }
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i] !== description[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private handleVideoEncodedChunk(chunk: {
     data: Uint8Array;
     type: "key" | "delta";
@@ -711,6 +734,17 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 「the sender knows」を守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして
     // 残すが、temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される (詳細は
     // encodeVideoFrameMarking を参照)。
+    // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+    // encoder が返す description (avcC / hvcC などの extradata) を VIDEO_CONFIG として送る。
+    // 受信側は VideoDecoderConfig.description に渡して canonical 形式 (avc1 / hvc1) を
+    // 復元できる。description は keyframe の metadata にのみ現れるため、
+    // 変化したときだけ載せる。
+    let videoConfig: Uint8Array | undefined;
+    if (chunk.description !== undefined && !this.isSameVideoConfig(chunk.description)) {
+      videoConfig = chunk.description;
+      this.lastSentVideoConfig = new Uint8Array(chunk.description);
+    }
+
     const properties = LOC.encodeVideoProperties({
       timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
       frameMarking: {
@@ -720,6 +754,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         temporalLayerId: 0,
         spatialLayerId: 0,
       },
+      config: videoConfig,
     });
 
     const payload = chunk.data;

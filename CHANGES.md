@@ -1221,6 +1221,11 @@
   - `devtools/src` の英語のみのコメントを日本語化する
   - `README.md` に「ドキュメント」節を追加し、`docs/` の 3 仕様書へリンクする (README から一度もリンクされていなかった)
   - @voluntas
+- [ADD] 高レベル API で Video Config を送受信する
+  - 送信側: `handleVideoEncodedChunk` が encoder の `description` (avcC / hvcC などの extradata) を LOC の `VIDEO_CONFIG` として送る (draft-ietf-moq-loc-04 §2.3.2.1)。`description` は keyframe の metadata にのみ現れるため、変化したときだけ載せる
+  - 受信側: `setupDecoders` が SUBSCRIBE_OK の Track Property の `VIDEO_CONFIG` を `VideoDecoderConfig.description` として渡し、Object Property の config が変化したらデコーダを再構成する
+  - これにより canonical 形式 (avc1 / hvc1) の解像度変更時の再構成が成立する
+  - @voluntas
 - [ADD] channelConfig のサラウンド複合表記に対応する
   - draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義しないため、業界慣用の "5.1" (6 チャンネル) と "7.1" (8 チャンネル) を対応表で解決する
   - 対応表に無い複合表記 ("1.5" や "5.1.2" など) は従来どおり throw する (非標準表記を暗黙に数値化しない)
