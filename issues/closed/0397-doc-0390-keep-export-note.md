@@ -1,7 +1,7 @@
 # 0390 に bidiReadRequestStreamMessages の export 維持注記を追加する
 
 - Created: 2026-08-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-13
 - Branch: feature/doc-0390-keep-export-note
 - Polished: {YYYY-MM-DD}
 
@@ -39,4 +39,25 @@ issue 0370（PUBLISH_OK 後にピアが FIN すると PUBLISH_DONE が送信さ�
 
 ## 解決方法
 
-未着手。
+コード変更は不要だった。0390 は既に closed であり、その実装時に本 issue の要求がすべて反映済みであることを確認した。
+
+### 完了条件の検証
+
+| 要求                                                             | 状態                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (1) `bidiReadRequestStreamMessages` の export を維持する旨の注記 | `issues/closed/0390-...md` の「対象外」リストに「テストから import されているため対象外 (0371 の注記の原則『テストで使用する export は維持する』)」として明記済み                                                                                       |
+| (2) 0370 への相互参照                                            | 同じ項目に「0370 / 0374 の実装テストが同関数を駆動する」と明記済み (`rg -c "0370"` で 3 件)                                                                                                                                                             |
+| (3) 0375 新設 4 シンボルの扱い                                   | 注記 (0375 実装時) に対象リストとして記載済み。`isSessionLevelNamespace` / `isReservedNamespace` / `RESERVED_NAMESPACE_PREFIX` / `SESSION_LEVEL_NAMESPACE` を非公開化対象に含め、`src/message/index.ts` からの re-export も除去する方針が明記されている |
+
+0390 の解決方法には「注記 (0397 との調整)」の節があり、「0397 は 0390 に次の注記追加を要求している: (1)…(2)…(3)…。いずれも本 issue に反映済み」と、本 issue の要求を名指しで取り込み済みであることが記録されている。
+
+### コード側の確認
+
+`src/session/bidi.ts` の `bidiReadRequestStreamMessages` は今も `export async function` として公開されており、`src/session/bidi.test.ts` から import して駆動されている (0370 / 0374 の回帰テストが破綻していない)。
+
+0370 / 0374 / 0375 / 0390 はいずれも closed であり、本 issue が調整しようとしていた前提 (0370 を先に実装し 0390 を後に実施する) は完了している。よって追加の作業は無い。
+
+## 検証
+
+- `rg -n "^export async function bidiReadRequestStreamMessages" src/session/bidi.ts` で export が維持されていることを確認した。
+- `pnpm test run`: 70 ファイル / 2,114 テスト全通過 (テストコードの変更なし)
