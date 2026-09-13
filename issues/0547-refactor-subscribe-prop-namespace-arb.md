@@ -1,7 +1,7 @@
 # subscribe.prop.ts の Track Namespace arbitrary の重複を解消する
 
 - Created: 2026-09-08
-- Completed: YYYY-MM-DD
+- Completed: 2026-09-13
 - Branch: feature/refactor-subscribe-prop-namespace-arb
 - Polished: YYYY-MM-DD
 
@@ -30,3 +30,18 @@
 
 - `namespaceStringsArb` / `trackNamespaceParameterArb`
 - draft-ietf-moq-transport-20 §10.2 / §2.4.1
+
+## 解決方法
+
+`src/message/parameterArb.ts` に `namespacePartsArb` を定義し、`namespaceStringsArb` と `trackNamespaceParameterArb` の双方がそれを参照する形にした。
+
+- 起票時点では両 arbitrary が `src/message/subscribe.prop.ts` に並んでいたが、0598 の作業で `src/message/parameterArb.ts` に移動した。移動後も同じ生成条件 (`fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })`) を 2 箇所に書いたままだったため、本 issue で 1 箇所に集約した。
+- `namespacePartsArb` には draft-ietf-moq-transport-21 §2.3 の "Each Track Namespace Field Value MUST contain at least one byte." を根拠としてコメントし、用途の違い (メッセージの `trackNamespace` 用 / TRACK_NAMESPACE_PREFIX 0x34 の Value 用) も併記した。
+- `trackNamespaceParameterArb` は `namespacePartsArb.map((parts) => encodeParameterTrackNamespace(createTrackNamespace(parts)))` に、`namespaceStringsArb` は `namespacePartsArb` の別名にした。
+- `CHANGES.md` の `## develop` の `### misc` の既存エントリ (テストの重複ヘルパーと PBT arbitrary の集約) に項目を追加した。
+
+## 検証
+
+- `rg` で `fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })` が `parameterArb.ts` の `namespacePartsArb` の 1 箇所だけになっていることを確認した。
+- `pnpm test run`: 70 ファイル / 2,090 テスト全通過
+- `pnpm typecheck` / `pnpm lint` / `pnpm fmt` すべて成功
