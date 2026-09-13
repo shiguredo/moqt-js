@@ -153,7 +153,7 @@ export interface PendingTrackStatus {
    * 対象 Track の比較キー (fullTrackNameKey が生成する長さ付きキー)
    *
    * draft-ietf-moq-transport-21 §12.1: malformed Track を検出したら同一 Track の購読 /
-   * FETCH を cross-cancel するため、TRACK_STATUS 要求時の Full Track Name を保持する。
+   * FETCH を cross-cancel するため、TRACK_STATUS 要求時の比較キーを保持する。
    */
   trackKey: string;
 }
@@ -3395,11 +3395,11 @@ export async function bidiCancelFetch(
  * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
  * 「it MUST cancel any corresponding subscription or fetches for that Track
  *  from that publisher」
- * 同一 Track の判定は Full Track Name (trackNamespace + trackName) で行う。
- * fetcher は trackAlias を持たないため Full Track Name で引く。
- * trackKey は fullTrackNameKey が生成する比較キー (getFullTrackNameKey() の
- * 戻り値を含む) を渡す。区切り文字の曖昧さで別 Track を巻き込まないよう、
- * 生の Full Track Name を組み立てて渡さない。
+ * 同一 Track の判定は比較キー (fullTrackNameKey が生成する長さ付きキー) で行う。
+ * fetcher は trackAlias を持たないため比較キーで引く。
+ * trackKey には fullTrackNameKey の戻り値 (getFullTrackNameKey() を含む) を渡す。
+ * 区切り文字の曖昧さで別 Track を巻き込まないよう、生の Full Track Name を
+ * "/" などで連結して渡さない。
  * セッションは閉じない。アプリの error コールバックの throw は握り潰す。
  */
 export function cancelMalformedTrackPeers(

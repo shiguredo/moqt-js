@@ -6,6 +6,8 @@
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { fullTrackNameKey } from "./fullTrackName";
+import { SubscriberImpl } from "./subscriber";
+import { FetcherImpl } from "./fetcher";
 
 /**
  * フィールド境界の曖昧さを突く文字を含む Track Namespace Field / Track Name の Arbitrary
@@ -48,8 +50,11 @@ const fullTrackNameArb = fc.tuple(fc.array(fieldArb, { maxLength: 4 }), fieldArb
 
 /**
  * draft-ietf-moq-transport-21 §2.4.1:
- * 同じ Full Track Name は常に同じ比較キーになる。配列の参照や生成経路に依存せず、
- * getFullTrackNameKey と受信 PUBLISH の比較キーが一致する前提を保証する。
+ * 同じ Full Track Name は常に同じ比較キーになる。配列の参照に依存せず、
+ * 内容が同じ別配列から生成してもキーが一致することを確かめる。
+ *
+ * 比較キーの生成経路が一致していること (Impl の getFullTrackNameKey と free 関数) は
+ * 別のテストで検証する。
  */
 test("fullTrackNameKey: 同じ Full Track Name は同じキーになる", () => {
   fc.assert(
@@ -111,5 +116,24 @@ test("fullTrackNameKey: Track Name 内の区切り文字と namespace 分割が�
         assert.notEqual(inTrackName, splitNamespace);
       },
     ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.1:
+ * 比較キーの生成経路が一致していることを検証する。受信 PUBLISH の重複判定は
+ * free 関数 `fullTrackNameKey` を、cross-cancel は各 Impl の
+ * `getFullTrackNameKey()` を使うため、片方だけ形式が変わると同一 Track が
+ * 不一致になり cross-cancel が無言で空振りする。
+ */
+test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", () => {
+  fc.assert(
+    fc.property(fullTrackNameArb, ([namespace, trackName]) => {
+      const subscriber = new SubscriberImpl(namespace, trackName, 0n, 0n, () => {});
+      const fetcher = new FetcherImpl(namespace, trackName, 0n, () => {});
+
+      assert.equal(subscriber.getFullTrackNameKey(), fullTrackNameKey(namespace, trackName));
+      assert.equal(fetcher.getFullTrackNameKey(), fullTrackNameKey(namespace, trackName));
+    }),
   );
 });
