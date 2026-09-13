@@ -4815,6 +4815,8 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
   resolved: () => PublisherImpl | undefined;
   rejected: () => Error | undefined;
   closedWithError: () => SessionError | undefined;
+  /** reject と close の発生順 (同一オブジェクト性と順序の検証用) */
+  order: string[];
   requestId: bigint;
 } {
   const requestId = 10n;
@@ -4837,6 +4839,7 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
   let resolvedPublisher: PublisherImpl | undefined;
   let rejectedError: Error | undefined;
   let closedError: SessionError | undefined;
+  const order: string[] = [];
   const session = {
     sessionState: "connected",
     transport: {},
@@ -4851,6 +4854,7 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
             resolvedPublisher = publisher;
           },
           reject: (error: Error) => {
+            order.push("reject");
             rejectedError = error;
           },
         },
@@ -4875,6 +4879,7 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
     statsControlMessagesSent: 0,
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
+      order.push("close");
       closedError = error;
     },
   } as unknown as BidiSessionInternal;
@@ -4884,6 +4889,7 @@ function createPublishOkValidationContext(parameters: { type: number; value: Uin
     resolved: () => resolvedPublisher,
     rejected: () => rejectedError,
     closedWithError: () => closedError,
+    order,
     requestId,
   };
 }
@@ -4916,6 +4922,13 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
     assert.isUndefined(ctx.resolved());
+    // reject と close は同一オブジェクトで、reject してから閉じる順序である
+    assert.strictEqual(ctx.rejected(), ctx.closedWithError());
+    assert.deepEqual(ctx.order, ["reject", "close"]);
+    // スコープ違反の具体エラーであることがメッセージから分かる
+    assert.isTrue(
+      ctx.closedWithError()!.message.includes("parameter type 0x21 not allowed in PUBLISH_OK"),
+    );
   }
 });
 
@@ -4952,6 +4965,12 @@ test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK �
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
     assert.isUndefined(ctx.resolved());
+    // reject と close は同一オブジェクトで、reject してから閉じる順序である
+    assert.strictEqual(ctx.rejected(), ctx.closedWithError());
+    assert.deepEqual(ctx.order, ["reject", "close"]);
+    assert.isTrue(
+      ctx.closedWithError()!.message.includes("parameter type 0x21 not allowed in PUBLISH_OK"),
+    );
   }
 });
 
@@ -8000,6 +8019,12 @@ test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_N
 
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  // スコープ違反の具体エラーであることがメッセージから分かる
+  assert.isTrue(
+    ctx.closedWithError!.message.includes(
+      "parameter type 0x20 not allowed in PUBLISH_STATE_NOTIFY",
+    ),
+  );
 });
 
 /**
