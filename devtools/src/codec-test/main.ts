@@ -11,7 +11,11 @@
  */
 
 import { runAudioDecoderTest, runAudioEncoderTest } from "./audio.ts";
-import { runVideoDecoderTest, runVideoEncoderTest } from "./video.ts";
+import {
+  runVideoDecoderTest,
+  runVideoEncoderReconfigureTest,
+  runVideoEncoderTest,
+} from "./video.ts";
 import type { CodecTestName, CodecTestResult, CodecTestResultMap } from "./types.ts";
 
 declare global {
@@ -35,6 +39,8 @@ const CODEC_TESTS: { [Name in CodecTestName]: () => Promise<CodecTestResultMap[N
   audioEncoderWorker: () => runAudioEncoderTest(true),
   audioDecoderDirect: () => runAudioDecoderTest(false),
   audioDecoderWorker: () => runAudioDecoderTest(true),
+  videoEncoderReconfigureDirect: () => runVideoEncoderReconfigureTest(false),
+  videoEncoderReconfigureWorker: () => runVideoEncoderReconfigureTest(true),
 };
 
 /**

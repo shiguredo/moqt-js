@@ -2,32 +2,25 @@
  * オーディオデコーダー用 DedicatedWorker
  */
 
-import { runWorkerInit } from "../workerConfigure";
+import { runWorkerInit, workerErrorResponse } from "../workerConfigure";
+import { closeCodecQuiet, isCodecConfigured, replaceCodec } from "../codecLifecycle";
+import {
+  ignoreUnknownWorkerRequest,
+  type WorkerCloseRequest,
+  type WorkerDecodeRequest,
+  type WorkerInitRequest,
+} from "../workerMessages";
 
 declare const self: DedicatedWorkerGlobalScope;
 
-interface InitMessage {
-  type: "init";
-  config: AudioDecoderConfig;
-}
-
-interface DecodeMessage {
-  type: "decode";
-  data: ArrayBuffer;
-  chunkType: "key" | "delta";
-  timestamp: number;
-  duration: number;
-}
-
-interface CloseMessage {
-  type: "close";
-}
-
-type AudioDecoderWorkerMessage = InitMessage | DecodeMessage | CloseMessage;
+type AudioDecoderWorkerRequest =
+  | WorkerInitRequest<AudioDecoderConfig>
+  | WorkerDecodeRequest
+  | WorkerCloseRequest;
 
 let audioDecoder: AudioDecoder | null = null;
 
-self.onmessage = (event: MessageEvent<AudioDecoderWorkerMessage>) => {
+self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
   const message = event.data;
 
   switch (message.type) {
@@ -35,31 +28,25 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerMessage>) => {
       // 初期化失敗時は "error" で応答し "configured" を送らない
       // (Wrapper の configure() が reject してハングしない前提)
       const result = runWorkerInit(() => {
-        if (audioDecoder) {
-          if (audioDecoder.state !== "closed") {
-            audioDecoder.close();
-          }
-          audioDecoder = null;
-        }
-
-        audioDecoder = new AudioDecoder({
-          output: (audioData: AudioData) => {
-            // AudioData は transferable
-            self.postMessage(
-              {
-                type: "decoded",
-                data: audioData,
-              },
-              [audioData] as unknown as StructuredSerializeOptions,
-            );
-          },
-          error: (error: DOMException) => {
-            self.postMessage({
-              type: "error",
-              message: error.message,
-            });
-          },
-        });
+        // 再 init では旧コーデックを閉じてから差し替える (解放漏れを防ぐ)
+        audioDecoder = replaceCodec(
+          audioDecoder,
+          new AudioDecoder({
+            output: (audioData: AudioData) => {
+              // AudioData は transferable
+              self.postMessage(
+                {
+                  type: "decoded",
+                  data: audioData,
+                },
+                [audioData] as unknown as StructuredSerializeOptions,
+              );
+            },
+            error: (error: DOMException) => {
+              self.postMessage(workerErrorResponse(error));
+            },
+          }),
+        );
 
         audioDecoder.configure(message.config);
       });
@@ -68,7 +55,7 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerMessage>) => {
     }
 
     case "decode": {
-      if (audioDecoder && audioDecoder.state === "configured") {
+      if (isCodecConfigured(audioDecoder)) {
         const chunk = new EncodedAudioChunk({
           type: message.chunkType,
           timestamp: message.timestamp,
@@ -78,23 +65,19 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerMessage>) => {
         try {
           audioDecoder.decode(chunk);
         } catch (error) {
-          self.postMessage({
-            type: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
+          self.postMessage(workerErrorResponse(error));
         }
       }
       break;
     }
 
     case "close": {
-      if (audioDecoder) {
-        if (audioDecoder.state !== "closed") {
-          audioDecoder.close();
-        }
-        audioDecoder = null;
-      }
+      closeCodecQuiet(audioDecoder);
+      audioDecoder = null;
       break;
     }
+
+    default:
+      ignoreUnknownWorkerRequest(message);
   }
 };
