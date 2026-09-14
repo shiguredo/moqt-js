@@ -1586,7 +1586,12 @@ export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | und
     }
   }
 
-  return { objectDeliveryTimeout, subgroupDeliveryTimeout };
+  // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+  // 読み取れた値がある場合だけ載せる
+  return {
+    ...(objectDeliveryTimeout !== undefined ? { objectDeliveryTimeout } : {}),
+    ...(subgroupDeliveryTimeout !== undefined ? { subgroupDeliveryTimeout } : {}),
+  };
 }
 
 /**

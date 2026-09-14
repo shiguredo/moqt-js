@@ -129,9 +129,11 @@ export class SubscriberImpl implements Subscriber {
   private readonly subscriberNamespace: string[];
   private readonly subscriberTrackName: string;
   private readonly objectCallback: (object: MoqtObject) => void;
-  private readonly datagramCallback?: (object: MoqtObject) => void;
-  private readonly endCallback?: () => void;
-  private readonly errorCallback?: (error: Error) => void;
+  // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
+  // `| undefined` を付ける
+  private readonly datagramCallback?: ((object: MoqtObject) => void) | undefined;
+  private readonly endCallback?: (() => void) | undefined;
+  private readonly errorCallback?: ((error: Error) => void) | undefined;
   private readonly requestId: bigint;
   private trackAlias: bigint;
   private subscriberLargestLocation: Location | null = null;
@@ -158,7 +160,8 @@ export class SubscriberImpl implements Subscriber {
   private rangeFilters: RangeFilterSpec[] = [];
 
   // セッションが利用する内部コールバック
-  goawayCallback?: (newSessionUri: string) => void;
+  // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
+  goawayCallback?: ((newSessionUri: string) => void) | undefined;
   onUnsubscribe?: () => Promise<void>;
   onUpdate?: (options: RequestUpdateOptions) => Promise<void>;
   /**
@@ -166,7 +169,7 @@ export class SubscriberImpl implements Subscriber {
    *
    * 購読の error コールバックとは別系統である理由は handleFillError を参照。
    */
-  fillErrorCallback?: (error: Error) => void;
+  fillErrorCallback?: ((error: Error) => void) | undefined;
 
   constructor(
     namespace: string[],
@@ -439,12 +442,17 @@ export class SubscriberImpl implements Subscriber {
     // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
     // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
     // 不通過になる (publisherPriority = 0 は評価値として使わない)
-    return rangeFiltersMatch(this.rangeFilters, {
-      subgroupId: object.subgroupId,
+    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+    // 値がある場合だけ載せる
+    const filterValues = {
       objectId: object.objectId,
-      publisherPriority: object.publisherPriority,
-      objectProperties: object.properties,
-    });
+      ...(object.subgroupId !== undefined ? { subgroupId: object.subgroupId } : {}),
+      ...(object.publisherPriority !== undefined
+        ? { publisherPriority: object.publisherPriority }
+        : {}),
+      ...(object.properties !== undefined ? { objectProperties: object.properties } : {}),
+    };
+    return rangeFiltersMatch(this.rangeFilters, filterValues);
   }
 
   /**

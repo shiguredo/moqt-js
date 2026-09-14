@@ -352,18 +352,29 @@ export class MediaPublisherImpl implements MediaPublisher {
   // 内部メソッド
 
   private async connectToServer(): Promise<void> {
+    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+    // 値がある場合だけ載せる
     this.session = await connectMediaSession({
       url: this.url,
-      serverCertificateHashes: this.options.serverCertificateHashes,
-      authorizationToken: this.options.authorizationToken,
-      pendingSubgroup: this.options.pendingSubgroup,
+      ...(this.options.serverCertificateHashes !== undefined
+        ? { serverCertificateHashes: this.options.serverCertificateHashes }
+        : {}),
+      ...(this.options.authorizationToken !== undefined
+        ? { authorizationToken: this.options.authorizationToken }
+        : {}),
+      ...(this.options.pendingSubgroup !== undefined
+        ? { pendingSubgroup: this.options.pendingSubgroup }
+        : {}),
       onSessionClose: () => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
         }
       },
-      onSessionError: (error) => this.callbacks.onError?.(error),
+      // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
+      onSessionError: (error) => {
+        this.callbacks.onError?.(error);
+      },
     });
   }
 

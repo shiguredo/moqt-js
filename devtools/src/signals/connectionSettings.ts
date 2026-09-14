@@ -144,12 +144,15 @@ export async function fetchCameraDevices(): Promise<void> {
     cameraDevices.value = videoDevices;
 
     // 選択されたデバイスが一覧にない場合は最初のデバイスを選択
-    if (videoDevices.length > 0) {
+    // 分割代入で先頭要素を取り出す (noUncheckedIndexedAccess で index access は
+    // 型上 undefined を含むため、分割代入で回避する)
+    const [firstVideoDevice] = videoDevices;
+    if (firstVideoDevice !== undefined) {
       const selectedExists = videoDevices.some(
         (device) => device.deviceId === selectedCameraDeviceId.value,
       );
       if (!selectedExists) {
-        selectedCameraDeviceId.value = videoDevices[0].deviceId;
+        selectedCameraDeviceId.value = firstVideoDevice.deviceId;
       }
     }
   } catch (error) {

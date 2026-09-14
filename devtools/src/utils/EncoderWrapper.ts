@@ -58,7 +58,9 @@ export class EncoderWrapper {
               type: message.chunkType,
               timestamp: message.timestamp,
               duration: message.duration,
-              description: message.description ? new Uint8Array(message.description) : undefined,
+              // exactOptionalPropertyTypes では optional な description に undefined を
+              // 渡せないため、description がある場合だけ載せる
+              ...(message.description ? { description: new Uint8Array(message.description) } : {}),
             });
             break;
           case "error":
@@ -99,7 +101,9 @@ export class EncoderWrapper {
           type: chunk.type,
           timestamp: chunk.timestamp,
           duration: chunk.duration,
-          description,
+          // exactOptionalPropertyTypes では optional な description に undefined を
+          // 渡せないため、description がある場合だけ載せる
+          ...(description !== undefined ? { description } : {}),
         });
       },
       error: (error: DOMException) => {

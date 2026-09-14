@@ -124,8 +124,10 @@ interface RequestStreamInfo {
    * ループ開始時に登録し、ロック解放時にクリアする。ロック中の
    * stream.cancel() は TypeError で reject するため、stream 経由では
    * 解除できない。未登録 (ループ未開始・終了済み) の場合は undefined。
+   *
+   * 内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
    */
-  reader?: ReadableStreamDefaultReader<Uint8Array>;
+  reader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
 }
 
 interface PendingPublish {
@@ -170,30 +172,53 @@ interface PendingRequestUpdate {
    * "If the parameter is omitted from REQUEST_UPDATE, the value for the
    *  subscription remains unchanged."
    * 省略時 (undefined) は REQUEST_OK 受信時に Forward State を更新しない。
+   *
+   * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
+   * `| undefined` を付ける
    */
-  forward?: boolean;
+  forward?: boolean | undefined;
   /**
    * REQUEST_UPDATE 送信時に指定された Range Filters。
    * draft-ietf-moq-transport-21 §3.3.2:
    * "If a filter parameter is omitted from REQUEST_UPDATE, the value is
    *  unchanged."
    * 省略時 (undefined) は REQUEST_OK 受信時に Range Filters を更新しない。
+   *
+   * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
+   * `| undefined` を付ける
    */
-  rangeFilters?: RangeFilterSpec[];
+  rangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE 送信時に fill 内側で指定された Range Filters。
    * draft-ietf-moq-transport-21 §9.1.6:
    * 購読単位の上限検証に含めるため保持する (fill 自体は保持されないが、
    * in-flight 中の上限超過を見逃さない)。
+   *
+   * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
+   * `| undefined` を付ける
    */
-  fillRangeFilters?: RangeFilterSpec[];
+  fillRangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE 送信時に指定された LOCATION_FILTER 値。
    * draft-ietf-moq-transport-21 §9.20.10:
    * "If omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY,
    *  the value is unchanged."
    * 省略時 (undefined) は REQUEST_OK 受信時に Location Filter を更新しない。
+   *
+   * 内部の pending 状態オブジェクトで、省略を明示的に undefined として保持するため
+   * `| undefined` を付ける
    */
+  locationFilter?: LocationFilter | undefined;
+}
+
+/**
+ * resolvePendingRequestUpdate が返す、REQUEST_OK 受信時に反映する送信値
+ *
+ * 省略されたフィールドは載せない (呼び出し側は undefined を「反映しない」として扱う)。
+ */
+interface PendingRequestUpdateValues {
+  forward?: boolean;
+  rangeFilters?: RangeFilterSpec[];
   locationFilter?: LocationFilter;
 }
 
@@ -742,6 +767,13 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
       controlReader,
     );
     const msg = messages[0];
+    if (msg === undefined) {
+      // bidiReadResponseFromBidiStream は 1 件以上のメッセージを返すため到達しない
+      // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+      throw new ProtocolViolationError(
+        `request stream 0x${requestId.toString(16)} response is empty`,
+      );
+    }
     session.emitDebug("recv", msg.type, msg.payload);
     context.remainingMessages = messages.slice(1);
 
@@ -962,7 +994,14 @@ export async function bidiReadSubscribeResponse(
       if (existingSubscribers && existingSubscribers.length > 0) {
         // draft-ietf-moq-transport-21 §3.1.2: 同一 Track Alias が異なる Track に使われている場合のみ DUPLICATE_TRACK_ALIAS
         const trackKey = pending.impl.getFullTrackNameKey();
-        if (existingSubscribers[0].getFullTrackNameKey() !== trackKey) {
+        const firstSubscriber = existingSubscribers[0];
+        if (firstSubscriber === undefined) {
+          // 上の existingSubscribers.length > 0 により到達しない (型を絞るためのガード)
+          throw new ProtocolViolationError(
+            `track alias ${decoded.trackAlias} has no subscriber entry`,
+          );
+        }
+        if (firstSubscriber.getFullTrackNameKey() !== trackKey) {
           const error = new SessionError(
             `duplicate track alias: ${decoded.trackAlias}`,
             SessionErrorCode.DUPLICATE_TRACK_ALIAS,
@@ -3874,18 +3913,24 @@ export function hasPendingRequestUpdate(
 export function resolvePendingRequestUpdate(
   session: BidiSessionInternal,
   targetRequestId: bigint,
-):
-  | { forward?: boolean; rangeFilters?: RangeFilterSpec[]; locationFilter?: LocationFilter }
-  | undefined {
+): PendingRequestUpdateValues | undefined {
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.resolve();
-      return {
-        forward: pending.forward,
-        rangeFilters: pending.rangeFilters,
-        locationFilter: pending.locationFilter,
-      };
+      // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+      // 値がある場合だけ載せる
+      const resolved: PendingRequestUpdateValues = {};
+      if (pending.forward !== undefined) {
+        resolved.forward = pending.forward;
+      }
+      if (pending.rangeFilters !== undefined) {
+        resolved.rangeFilters = pending.rangeFilters;
+      }
+      if (pending.locationFilter !== undefined) {
+        resolved.locationFilter = pending.locationFilter;
+      }
+      return resolved;
     }
   }
   return undefined;

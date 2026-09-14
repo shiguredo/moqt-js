@@ -36,8 +36,11 @@ function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): Vi
   }
   const decoderConfig: VideoDecoderConfig = {
     codec: videoTrack.codec,
-    codedWidth: videoTrack.width,
-    codedHeight: videoTrack.height,
+    // width / height は Catalog の任意フィールドのため、値がある場合だけ載せる
+    // (exactOptionalPropertyTypes では optional な codedWidth / codedHeight に
+    //  undefined を代入できない)
+    ...(videoTrack.width !== undefined ? { codedWidth: videoTrack.width } : {}),
+    ...(videoTrack.height !== undefined ? { codedHeight: videoTrack.height } : {}),
   };
   const initData = resolveInitData(catalog, videoTrack);
   if (initData !== undefined) {

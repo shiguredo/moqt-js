@@ -45,9 +45,15 @@ export function parseMsfFragmentValue(value: string): MsfFragmentValue {
     throw new Error("invalid msf fragment value: '?' must be percent-encoded as %3F per §11.1");
   }
 
-  // `&` で track-identifier と parameter list を分離
+  // `&` で track-identifier と parameter list を分離する。
+  // value.length > 0 のため split の結果は必ず 1 件以上になるが、
+  // noUncheckedIndexedAccess で型上 undefined を含むためガードを置く。
   const segments = value.split("&");
   const trackIdentifier = segments[0];
+  if (trackIdentifier === undefined) {
+    // 上の value.length === 0 の検証により到達しない (型を絞るためのガード)
+    throw new Error("invalid msf fragment value: track identifier is missing");
+  }
   const parameterSegments = segments.slice(1);
 
   if (trackIdentifier.length === 0) {
@@ -115,6 +121,10 @@ function decodeMsfSegment(segment: string, role: "namespace" | "track name"): st
   let i = 0;
   while (i < segment.length) {
     const ch = segment[i];
+    if (ch === undefined) {
+      // i < segment.length のループ条件により到達しない (型を絞るためのガード)
+      throw new Error(`invalid msf fragment value: unexpected end of ${role} per §11.1.2`);
+    }
     if (ch === ".") {
       // .HH percent-encoding
       if (i + 2 >= segment.length) {

@@ -492,7 +492,9 @@ export function publishSendDatagram(
       groupId,
       objectId,
       publisherPriority: params.priority ?? 128,
-      properties,
+      // exactOptionalPropertyTypes では optional な properties に undefined を渡せないため、
+      // 値がある場合だけ載せる
+      ...(properties !== undefined ? { properties } : {}),
       payload: params.payload,
     });
   } catch (error) {

@@ -162,10 +162,10 @@ const rangeFilterRangesArb = fc
   .map((deltas) => {
     let current = 0n;
     const ranges: Array<{ start: bigint; end?: bigint }> = [];
-    for (let i = 0; i < deltas.length; i++) {
-      const start = current + deltas[i];
+    for (const [i, delta] of deltas.entries()) {
+      const start = current + delta;
       // 末尾以外は End を必ず付け、末尾は省略できる
-      const end = i < deltas.length - 1 ? start + deltas[i] : undefined;
+      const end = i < deltas.length - 1 ? start + delta : undefined;
       if (end !== undefined) {
         ranges.push({ start, end });
       } else {
@@ -198,14 +198,15 @@ export const rangeFilterParameterArb = fc
         ranges.every((r) => r.start <= 255n && (r.end === undefined || r.end <= 255n))),
   )
   .map(({ filter, setId, propertyType, ranges }) => {
+    // exactOptionalPropertyTypes では optional な propertyType に undefined を渡せないため、
+    // 値がある場合だけ載せる
+    const spec =
+      propertyType === undefined
+        ? { type: filter.filterType, setId, ranges }
+        : { type: filter.filterType, setId, propertyType, ranges };
     return {
       type: filter.type,
-      value: encodeRangeFilter({
-        type: filter.filterType,
-        setId,
-        propertyType,
-        ranges,
-      }),
+      value: encodeRangeFilter(spec),
     };
   });
 
@@ -236,7 +237,13 @@ export const parametersArb = fc
     // Range Filters は同型複数出現を許可する (SetID 違い)
     return sorted.filter((param, index) => {
       if (index === 0) return true;
-      if (param.type !== sorted[index - 1].type) return true;
+      const previous = sorted[index - 1];
+      if (previous === undefined) {
+        // index >= 1 かつ sorted.length === params.length のため到達しない
+        // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+        return true;
+      }
+      if (param.type !== previous.type) return true;
       return param.type >= 0x25 && param.type <= 0x29;
     });
   })

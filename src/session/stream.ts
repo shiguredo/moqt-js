@@ -90,15 +90,18 @@ export function processFetchObjects(
 
       // draft-ietf-moq-transport-21 Section 11.1.2:
       // Fetch Object には Object Status が存在しないため NORMAL として扱う
+      // exactOptionalPropertyTypes では optional な properties に undefined を渡せないため、
+      // 値がある場合だけ載せる
       const object: MoqtObject = {
         groupId: fields.groupId,
         subgroupId: fields.subgroupId,
         objectId: fields.objectId,
         publisherPriority: fields.publisherPriority,
         status: ObjectStatus.NORMAL,
-        properties:
-          fields.properties && fields.properties.length > 0 ? fields.properties : undefined,
         payload,
+        ...(fields.properties !== undefined && fields.properties.length > 0
+          ? { properties: fields.properties }
+          : {}),
       };
 
       stats.incrementObjectsReceived(false);
@@ -258,14 +261,18 @@ export function processSubgroupObjects(
       const payload = buffer.slice(offset, offset + payloadLength);
       offset += payloadLength;
 
+      // exactOptionalPropertyTypes では optional な publisherPriority / properties に
+      // undefined を渡せないため、値がある場合だけ載せる
       const object: MoqtObject = {
         groupId: header.groupId,
         subgroupId: currentResolvedSubgroupId,
         objectId,
-        publisherPriority: header.publisherPriority,
         status: fields.status,
-        properties: fields.properties.length > 0 ? fields.properties : undefined,
         payload,
+        ...(header.publisherPriority !== undefined
+          ? { publisherPriority: header.publisherPriority }
+          : {}),
+        ...(fields.properties.length > 0 ? { properties: fields.properties } : {}),
       };
 
       // draft-ietf-moq-transport-21 Section 5.2 / §10.1 / §10.2:

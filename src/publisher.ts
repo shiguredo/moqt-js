@@ -213,8 +213,10 @@ function validateSendStatusPayload(params: SendObjectParams): ProtocolViolationE
 export class PublisherImpl implements Publisher {
   private publisherState: PublisherState = "active";
   private publisherForwardState = true;
-  private readonly errorCallback?: (error: Error) => void;
-  private readonly forwardStateChangeCallback?: (forward: boolean) => void;
+  // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
+  // `| undefined` を付ける
+  private readonly errorCallback?: ((error: Error) => void) | undefined;
+  private readonly forwardStateChangeCallback?: ((forward: boolean) => void) | undefined;
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
@@ -246,7 +248,8 @@ export class PublisherImpl implements Publisher {
   private subscriptionLocationFilter: ResolvedFilter | undefined;
 
   // セッションが利用する内部コールバック
-  goawayCallback?: (newSessionUri: string) => void;
+  // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
+  goawayCallback?: ((newSessionUri: string) => void) | undefined;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;

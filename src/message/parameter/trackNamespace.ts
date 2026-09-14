@@ -236,10 +236,12 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
  *  the Track Namespace for session-level tracks and namespaces."
  */
 function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
-  if (tuple.length === 0 || tuple[0].length === 0) return false;
-  if (tuple[0][0] !== 0x2e) return false;
+  const [firstField] = tuple;
+  if (firstField === undefined) return false;
+  const [firstByte] = firstField;
+  if (firstByte !== 0x2e) return false;
   const decoder = new TextDecoder();
-  return decoder.decode(tuple[0]) === ".session";
+  return decoder.decode(firstField) === ".session";
 }
 
 /**
@@ -268,9 +270,11 @@ function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
  * 緩和すること。
  */
 export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
-  if (tuple.length === 0) return false;
+  const [firstField] = tuple;
+  if (firstField === undefined) return false;
   // "." 単体 (0x2e 1 バイトのみ) は §2.4.2 により MUST 拒否
-  if (tuple[0].length === 1 && tuple[0][0] === 0x2e) return true;
+  const [firstByte] = firstField;
+  if (firstField.length === 1 && firstByte === 0x2e) return true;
   // 先頭フィールドが .session なら §6.5 により MUST 拒否。
   // 本関数は namespace のみで判定し、Track Name は判定に使わないため、
   // Track Name が空でも非空でも拒否対象になる (空 Track Name の MUST 拒否を包含)。

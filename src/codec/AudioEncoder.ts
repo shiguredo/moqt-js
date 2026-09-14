@@ -75,16 +75,19 @@ export class AudioEncoderWrapper {
       // dataTypes で "encoded" のみを受け取るため、種別の分岐は不要
       handleWorkerData: (response) => {
         const message = response as AudioEncoderWorkerData;
+        // Worker は metadata をそのまま返すため、運ぶかの判断は Wrapper 側で行う。
+        // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        const description =
+          this.codec !== null && requiresAudioSpecificConfig(this.codec) && message.description
+            ? new Uint8Array(message.description)
+            : undefined;
         this.callbacks.output({
           data: new Uint8Array(message.data),
           type: message.chunkType,
           timestamp: message.timestamp,
           duration: message.duration,
-          // Worker は metadata をそのまま返すため、運ぶかの判断は Wrapper 側で行う
-          description:
-            this.codec !== null && requiresAudioSpecificConfig(this.codec) && message.description
-              ? new Uint8Array(message.description)
-              : undefined,
+          ...(description !== undefined ? { description } : {}),
         });
       },
       notifyError: (error) => this.callbacks.error(error),
@@ -117,12 +120,14 @@ export class AudioEncoderWrapper {
             }
           }
 
+          // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
+          // 値がある場合だけ載せる
           this.callbacks.output({
             data,
             type: chunk.type,
             timestamp: chunk.timestamp,
             duration: chunk.duration,
-            description,
+            ...(description !== undefined ? { description } : {}),
           });
         },
         error: (error: DOMException) => {

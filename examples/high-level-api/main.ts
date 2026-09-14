@@ -259,10 +259,12 @@ async function startPublishing(): Promise<void> {
     localStream = await navigator.mediaDevices.getUserMedia({
       audio: audioDeviceId ? { deviceId: { exact: audioDeviceId } } : true,
       video: {
-        deviceId: videoDeviceId ? { exact: videoDeviceId } : undefined,
         width: { ideal: videoWidth },
         height: { ideal: videoHeight },
         frameRate: { ideal: videoFramerate },
+        // exactOptionalPropertyTypes では optional な deviceId に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
       },
     });
 
@@ -304,7 +306,9 @@ async function startPublishing(): Promise<void> {
           framerate: videoFramerate,
           keyframeInterval,
         },
-        serverCertificateHashes: certHashes,
+        // exactOptionalPropertyTypes では optional な serverCertificateHashes に
+        // undefined を渡せないため、値がある場合だけ載せる
+        ...(certHashes !== undefined ? { serverCertificateHashes: certHashes } : {}),
       },
       {
         onStateChange: (state) => {
@@ -384,7 +388,9 @@ async function startSubscribing(): Promise<void> {
         video: {
           trackName: "video",
         },
-        serverCertificateHashes: certHashes,
+        // exactOptionalPropertyTypes では optional な serverCertificateHashes に
+        // undefined を渡せないため、値がある場合だけ載せる
+        ...(certHashes !== undefined ? { serverCertificateHashes: certHashes } : {}),
       },
       {
         onStateChange: (state) => {

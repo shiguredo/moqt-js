@@ -99,20 +99,24 @@ export interface AudioLevel {
  * Video Properties
  */
 export interface VideoProperties {
-  timestamp?: bigint;
-  timescale?: bigint;
-  frameMarking?: VideoFrameMarking;
-  config?: Uint8Array;
+  // 寛容なデコード (抽出できたフィールドのみ設定する) ため、
+  // 値が無い場合は明示的に undefined を設定する。exactOptionalPropertyTypes の
+  // もとでは `| undefined` を書かないと undefined を代入できない
+  timestamp?: bigint | undefined;
+  timescale?: bigint | undefined;
+  frameMarking?: VideoFrameMarking | undefined;
+  config?: Uint8Array | undefined;
 }
 
 /**
  * Audio Properties
  */
 export interface AudioProperties {
-  timestamp?: bigint;
-  timescale?: bigint;
-  audioLevel?: AudioLevel;
-  config?: Uint8Array;
+  // VideoProperties と同じく、値が無い場合は明示的に undefined を設定する
+  timestamp?: bigint | undefined;
+  timescale?: bigint | undefined;
+  audioLevel?: AudioLevel | undefined;
+  config?: Uint8Array | undefined;
 }
 
 /**

@@ -18,6 +18,8 @@
     "strict": true,
 
     // strict に含まれない追加の厳格チェック
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "noPropertyAccessFromIndexSignature": true,
     "noImplicitOverride": true,
 

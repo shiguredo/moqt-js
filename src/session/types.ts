@@ -33,11 +33,12 @@ export interface NamespaceSubscriptionState {
    * draft-ietf-moq-transport-21 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
-  pendingPrefix?: string[];
-  stream?: WebTransportBidirectionalStream;
-  streamReader?: ReadableStreamDefaultReader<Uint8Array>;
-  controlReader?: ControlStreamReader;
-  writer?: WritableStreamDefaultWriter<Uint8Array>;
+  // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+  pendingPrefix?: string[] | undefined;
+  stream?: WebTransportBidirectionalStream | undefined;
+  streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  controlReader?: ControlStreamReader | undefined;
+  writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
 }
 
 export interface TracksSubscriptionState {
@@ -49,21 +50,23 @@ export interface TracksSubscriptionState {
    * draft-ietf-moq-transport-21 §3.3.2:
    * TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用する。
    */
-  rangeFilters?: RangeFilterSpec[];
+  // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+  rangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
    * draft-ietf-moq-transport-21 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
-  pendingPrefix?: string[];
-  stream?: WebTransportBidirectionalStream;
-  streamReader?: ReadableStreamDefaultReader<Uint8Array>;
-  controlReader?: ControlStreamReader;
-  writer?: WritableStreamDefaultWriter<Uint8Array>;
+  pendingPrefix?: string[] | undefined;
+  stream?: WebTransportBidirectionalStream | undefined;
+  streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  controlReader?: ControlStreamReader | undefined;
+  writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
 }
 
 export interface NamespacePublicationState {
-  callbacks?: NamespacePublicationCallbacks;
+  // セッション内部の状態オブジェクトで、callbacks 未指定時に undefined を保持するため `| undefined` を付ける
+  callbacks?: NamespacePublicationCallbacks | undefined;
   state: "pending" | "active" | "closed";
   namespace: string[];
   stream: WebTransportBidirectionalStream;
