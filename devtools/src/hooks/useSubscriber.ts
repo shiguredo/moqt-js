@@ -10,6 +10,7 @@ import {
   type MoqtObject,
   type DebugMessage,
   type CatalogTrack,
+  type Subscriber,
 } from "moqt-js";
 import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
@@ -209,7 +210,7 @@ export function useSubscriber(
     ctx.drawImage(frame, 0, 0);
     frame.close();
 
-    instance.framesDecoded.value = instance.framesDecoded.value + 1;
+    instance.framesDecoded.value += 1;
   };
 
   const handleObject = async (obj: MoqtObject): Promise<void> => {
@@ -222,9 +223,8 @@ export function useSubscriber(
       return;
     }
 
-    instance.objectsReceived.value = instance.objectsReceived.value + 1;
-    instance.bytesReceived.value =
-      instance.bytesReceived.value + obj.payload.length + (obj.properties?.length ?? 0);
+    instance.objectsReceived.value += 1;
+    instance.bytesReceived.value += obj.payload.length + (obj.properties?.length ?? 0);
     instance.currentGroup.value = Number(obj.groupId);
     instance.currentSubGroup.value = Number(obj.subgroupId ?? 0n);
     instance.decoderState.value = decoderInstance.state;
@@ -235,7 +235,7 @@ export function useSubscriber(
       let timestamp = 0;
 
       if (obj.properties && obj.properties.length > 0) {
-        instance.objectsWithExtensions.value = instance.objectsWithExtensions.value + 1;
+        instance.objectsWithExtensions.value += 1;
 
         const locProperties = LOC.decodeVideoProperties(obj.properties);
 
@@ -257,15 +257,15 @@ export function useSubscriber(
         data: obj.payload,
       });
 
-      instance.chunksCreated.value = instance.chunksCreated.value + 1;
+      instance.chunksCreated.value += 1;
 
       if (!instance.decoderConfigured.value) {
-        instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
+        instance.chunksSkipped.value += 1;
         return;
       }
 
       if (isKeyFrame) {
-        instance.keyFramesDecoded.value = instance.keyFramesDecoded.value + 1;
+        instance.keyFramesDecoded.value += 1;
       }
 
       if (decoderInstance.state !== "configured") {
@@ -274,15 +274,15 @@ export function useSubscriber(
           decoderInstance.state,
         );
         instance.decoderState.value = decoderInstance.state;
-        instance.chunksSkipped.value = instance.chunksSkipped.value + 1;
+        instance.chunksSkipped.value += 1;
         return;
       }
 
       decoderInstance.decode(chunk);
-      instance.chunksDecoded.value = instance.chunksDecoded.value + 1;
+      instance.chunksDecoded.value += 1;
     } catch (error) {
       console.error(`[${subscriberId}] handleObject: failed to decode object:`, error);
-      instance.decodeErrors.value = instance.decodeErrors.value + 1;
+      instance.decodeErrors.value += 1;
     }
   };
 
@@ -330,7 +330,8 @@ export function useSubscriber(
             // DebugPanel にイベントを残す。reason は 1024 文字に切って UI 描画負荷を抑える。
             addLog("warn", `[${subscriberId}] webtransport closed`, {
               closeCode: closeInfo.closeCode,
-              reason: closeInfo.reason.slice(0, 1024),
+              // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
+              reason: (closeInfo.reason ?? "").slice(0, 1024),
             });
             // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
             // teardownSubscriber は abort 経路を維持するため常に呼ぶ。
@@ -454,6 +455,48 @@ export function useSubscriber(
             });
           };
 
+          // SUBSCRIBE 確立後の処理。
+          // startSubscribing 側で signal.aborted を見て return した後に
+          // マイクロタスクで .then が回り catalogSubscriber.value が再代入される
+          // レースをここで潰す。
+          // promise を .then のコールバック内で生成すると promise/no-nesting に
+          // 抵触するため、チェーンからは参照渡しで分離する。
+          const handleCatalogSubscribed = async (
+            catalogSubscriberInstance: Subscriber,
+          ): Promise<void> => {
+            if (signal.aborted) {
+              await catalogSubscriberInstance.unsubscribe().catch(() => {});
+              return;
+            }
+            instance.catalogSubscriber.value = catalogSubscriberInstance;
+
+            // 過去の Catalog を FETCH (フィルタなし = {0, 0} から Largest Object まで)
+            // で取得する。SUBSCRIBE_OK 受信後に FETCH を送ることで、Next Object の
+            // Largest (L1) が FETCH 処理時の Largest (L2) 以下になることを保証し、
+            // (L2, L1] の取りこぼしを防ぐ (createMediaSubscriber と同じ順序)。
+            await session
+              .fetch(
+                namespaceArray,
+                CATALOG_TRACK_NAME,
+                {},
+                {
+                  object: (obj: MoqtObject) => {
+                    // FETCH から受信した Catalog オブジェクト
+                    processCatalogObject(obj, "fetch");
+                  },
+                  end: () => {
+                    addLog("info", `[${subscriberId}] catalog fetch completed`, {
+                      trackName: CATALOG_TRACK_NAME,
+                    });
+                  },
+                  error: (error) => {
+                    onCatalogFetchFailed(error);
+                  },
+                },
+              )
+              .catch(onCatalogFetchFailed);
+          };
+
           void session
             .subscribe(
               namespaceArray,
@@ -480,42 +523,7 @@ export function useSubscriber(
                 filter: { startGroup: 0n, startObject: 0n },
               },
             )
-            .then((catalogSubscriberInstance) => {
-              // startSubscribing 側で signal.aborted を見て return した後に
-              // マイクロタスクで .then が回り catalogSubscriber.value が再代入される
-              // レースを .then 側で潰す。
-              if (signal.aborted) {
-                void catalogSubscriberInstance.unsubscribe().catch(() => {});
-                return;
-              }
-              instance.catalogSubscriber.value = catalogSubscriberInstance;
-
-              // 過去の Catalog を FETCH (フィルタなし = {0, 0} から Largest Object まで)
-              // で取得する。SUBSCRIBE_OK 受信後に FETCH を送ることで、Next Object の
-              // Largest (L1) が FETCH 処理時の Largest (L2) 以下になることを保証し、
-              // (L2, L1] の取りこぼしを防ぐ (createMediaSubscriber と同じ順序)。
-              void session
-                .fetch(
-                  namespaceArray,
-                  CATALOG_TRACK_NAME,
-                  {},
-                  {
-                    object: (obj: MoqtObject) => {
-                      // FETCH から受信した Catalog オブジェクト
-                      processCatalogObject(obj, "fetch");
-                    },
-                    end: () => {
-                      addLog("info", `[${subscriberId}] catalog fetch completed`, {
-                        trackName: CATALOG_TRACK_NAME,
-                      });
-                    },
-                    error: (error) => {
-                      onCatalogFetchFailed(error);
-                    },
-                  },
-                )
-                .catch(onCatalogFetchFailed);
-            })
+            .then(handleCatalogSubscribed)
             .catch(reject);
         });
 
@@ -545,7 +553,8 @@ export function useSubscriber(
         });
         actualTrackName = videoTrackFromCatalog.name;
       } catch (error) {
-        throw new Error(`failed to get catalog: ${(error as Error).message}`);
+        // 元のエラーを cause に保持し、スタックトレースを失わないようにする
+        throw new Error(`failed to get catalog: ${(error as Error).message}`, { cause: error });
       }
 
       // Catalog 取得経路は finally で clearTimeout 済みのため追加 cleanup は不要。
@@ -563,7 +572,7 @@ export function useSubscriber(
         },
         error: (error) => {
           console.error(`[${subscriberId}] Decoder error:`, error);
-          instance.decodeErrors.value = instance.decodeErrors.value + 1;
+          instance.decodeErrors.value += 1;
           // デコーダーをリセットして次のキーフレームを待つ
           void decoderInstance.reset();
         },

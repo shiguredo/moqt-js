@@ -210,7 +210,8 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
   // 読み出しと close をまとめて行う (AudioData を保持し続けない)
   const drainAudioData = (): ObservedAudioData[] => {
     const drained: ObservedAudioData[] = [];
-    const audioDataList = pendingAudioData.splice(0, pendingAudioData.length);
+    // 第 2 引数を省略すると start 以降の全要素を削除する
+    const audioDataList = pendingAudioData.splice(0);
     for (const audioData of audioDataList) {
       drained.push(summarizeAudioData(audioData));
       audioData.close();

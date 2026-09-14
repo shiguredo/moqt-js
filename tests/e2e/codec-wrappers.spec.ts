@@ -52,7 +52,8 @@ async function runCodecTest<Name extends CodecTestName>(
     if (typeof runner !== "function") {
       throw new Error("codec test page did not expose window.runCodecTest");
     }
-    return await runner(testName);
+    // runner が返す Promise をそのまま返し、Playwright 側で解決させる
+    return runner(testName);
   }, name);
   return result as CodecTestResultMap[Name];
 }
@@ -227,7 +228,7 @@ function expectVideoDecoderContract(result: VideoDecoderTestResult): void {
   }
 
   // 投入した chunk の timestamp がそのまま復号フレームに載る
-  expect(result.frameTimestamps).toEqual([0, 1 * VIDEO_FRAME_DURATION, 2 * VIDEO_FRAME_DURATION]);
+  expect(result.frameTimestamps).toEqual([0, VIDEO_FRAME_DURATION, VIDEO_FRAME_DURATION * 2]);
 
   // 先頭フレームは赤で塗った canvas 由来のため、左上ピクセルは赤が支配的になる
   const firstFrame = result.frames[0];

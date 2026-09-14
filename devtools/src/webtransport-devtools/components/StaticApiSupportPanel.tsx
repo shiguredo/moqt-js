@@ -38,7 +38,8 @@ function summaryBadgeClass(state: SummaryState): string {
       return "bg-green-100 text-green-700 border-green-300";
     case "partial":
       return "bg-yellow-100 text-yellow-700 border-yellow-300";
-    case "unsupported":
+    default:
+      // "unsupported" (WebTransport 自体が未対応) は赤で表示する
       return "bg-red-100 text-red-700 border-red-300";
   }
 }
@@ -53,7 +54,8 @@ function summaryBadgeText(
       return `All Supported (${totalCount} / ${totalCount})`;
     case "partial":
       return `Partially Supported (${totalCount - unsupportedCount} / ${totalCount})`;
-    case "unsupported":
+    default:
+      // "unsupported" は WebTransport 自体が未対応であることを示す
       return "WebTransport Not Supported";
   }
 }
