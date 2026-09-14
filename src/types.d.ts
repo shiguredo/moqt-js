@@ -1,15 +1,22 @@
 /**
  * Worker 用型宣言
  */
-interface DedicatedWorkerGlobalScope extends WorkerGlobalScope {
+/**
+ * DedicatedWorkerGlobalScope
+ *
+ * lib.dom には Worker の global scope が含まれない (lib.webworker 側) ため、
+ * Worker 実装が使う最小限のメンバーだけを宣言する。
+ * lib.webworker を lib に加えると DOM の宣言と衝突するため採用しない。
+ * `self` の型は各 Worker ファイルが `declare const self: DedicatedWorkerGlobalScope;`
+ * で宣言する (グローバルに宣言すると lib.dom の self と衝突する)。
+ */
+interface DedicatedWorkerGlobalScope {
   onmessage: ((this: DedicatedWorkerGlobalScope, ev: MessageEvent) => unknown) | null;
   onmessageerror: ((this: DedicatedWorkerGlobalScope, ev: MessageEvent) => unknown) | null;
   postMessage(message: unknown, transfer: Transferable[]): void;
   postMessage(message: unknown, options?: StructuredSerializeOptions): void;
   close(): void;
 }
-
-declare const self: DedicatedWorkerGlobalScope;
 
 /**
  * Vite Worker インポート用型宣言
@@ -67,11 +74,6 @@ interface HTMLVideoElement {
   requestVideoFrameCallback(callback: VideoFrameRequestCallback): number;
   cancelVideoFrameCallback(handle: number): void;
 }
-
-type VideoFrameRequestCallback = (
-  now: DOMHighResTimeStamp,
-  metadata: VideoFrameCallbackMetadata,
-) => void;
 
 interface VideoFrameCallbackMetadata {
   presentationTime: DOMHighResTimeStamp;

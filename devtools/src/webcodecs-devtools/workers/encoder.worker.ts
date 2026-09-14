@@ -48,7 +48,7 @@ self.onmessage = (e: MessageEvent<EncoderWorkerMessage>) => {
             }
           }
 
-          const transferList: Transferable[] = [data.buffer as ArrayBuffer];
+          const transferList: Transferable[] = [data.buffer];
           if (description) {
             transferList.push(description);
           }

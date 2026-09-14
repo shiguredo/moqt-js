@@ -1,24 +1,9 @@
-/// <reference types="vite/client" />
-
 // CSS import の型宣言
 declare module "*.css" {}
 
-// Vite Worker import の型宣言
-declare module "*?worker" {
-  const workerConstructor: new () => Worker;
-  export default workerConstructor;
-}
-
-// MediaStreamTrackProcessor の型宣言
-// https://w3c.github.io/mediacapture-transform/#mediastreamtrackprocessor
-interface MediaStreamTrackProcessor {
-  readonly readable: ReadableStream<VideoFrame>;
-}
-
-declare const MediaStreamTrackProcessor: {
-  prototype: MediaStreamTrackProcessor;
-  new (init: { track: MediaStreamTrack }): MediaStreamTrackProcessor;
-};
+// WebCodecs / Worker まわりの型宣言はライブラリの src/types.d.ts を共有する
+// (devtools/tsconfig.json が ../src/**/*.d.ts を取り込んでいる)。
+// vite-plus/client は参照しない: *?worker の宣言がライブラリ側と重複するため。
 
 // WebTransportSendStream の型宣言
 type WebTransportSendStream = WritableStream<Uint8Array>;

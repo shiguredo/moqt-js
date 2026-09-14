@@ -69,7 +69,7 @@ export function addLog(
   // 2 つの signal を同時更新するため batch で effect の二重発火を防ぐ。
   batch(() => {
     logCount.value = logBuffer.length;
-    logSequence.value = logSequence.value + 1;
+    logSequence.value += 1;
   });
 }
 
@@ -379,11 +379,11 @@ export function DebugPanel() {
     batch(() => {
       logCount.value = 0;
       // clear イベントを effect 側へ伝播させるため bump する。
-      logSequence.value = logSequence.value + 1;
+      logSequence.value += 1;
     });
   };
 
-  const getLevelColor = (level: LogEntry["level"]) => {
+  const getLevelColor = (level: LogEntry["level"]): string => {
     switch (level) {
       case "error":
         return "text-red-600 bg-red-50";
@@ -391,7 +391,8 @@ export function DebugPanel() {
         return "text-yellow-600 bg-yellow-50";
       case "info":
         return "text-blue-600 bg-blue-50";
-      case "debug":
+      default:
+        // "debug" および未知のレベルは灰色で表示する
         return "text-slate-600 bg-slate-50";
     }
   };

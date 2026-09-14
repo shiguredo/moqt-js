@@ -236,7 +236,7 @@ function getCertificateHashes(target: "pub" | "sub"): ArrayBuffer[] | undefined 
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return [bytes.buffer as ArrayBuffer];
+    return [bytes.buffer];
   } catch {
     log(target, "invalid certificate hash format", true);
     return undefined;
@@ -302,7 +302,7 @@ async function startPublishing(): Promise<void> {
           height: videoHeight,
           bitrate: videoBitrate,
           framerate: videoFramerate,
-          keyframeInterval: keyframeInterval,
+          keyframeInterval,
         },
         serverCertificateHashes: certHashes,
       },

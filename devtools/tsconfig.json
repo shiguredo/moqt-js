@@ -1,6 +1,10 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    // "moqt-js" はソースを直接解決する (dist 未生成でも型検査できるようにする)
+    "paths": {
+      "moqt-js": ["../src/index.ts"]
+    },
     // クラスフィールドの初期化に Object.defineProperty を使用
     "useDefineForClassFields": true,
     // .ts 拡張子付きインポートを許可（Vite で必要）
@@ -9,5 +13,6 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact"
   },
-  "include": ["src"]
+  // moqt-js のソースを解決するため、ライブラリ側のグローバル型宣言も取り込む
+  "include": ["src", "../src/**/*.d.ts"]
 }

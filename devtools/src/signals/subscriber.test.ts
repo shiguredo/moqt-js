@@ -138,7 +138,8 @@ test("getSubscriberInstanceSignal does not notify subscribers when other ids are
   const instanceSignal = getSubscriberInstanceSignal(id);
   let notifyCount = 0;
   const dispose = effect(() => {
-    instanceSignal.value;
+    // signal を参照して effect の依存として登録する (値自体は使わない)
+    void instanceSignal.value;
     notifyCount += 1;
   });
   try {
@@ -158,7 +159,8 @@ test("getSubscriberInstanceSignal does not notify subscribers when other ids are
   const instanceSignal = getSubscriberInstanceSignal(id);
   let notifyCount = 0;
   const dispose = effect(() => {
-    instanceSignal.value;
+    // signal を参照して effect の依存として登録する (値自体は使わない)
+    void instanceSignal.value;
     notifyCount += 1;
   });
   try {

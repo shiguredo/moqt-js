@@ -1,4 +1,14 @@
 {
   "extends": "../tsconfig.json",
-  "include": ["**/*.ts"]
+  "compilerOptions": {
+    // "moqt-js" はソースを直接解決する (dist 未生成でも型検査できるようにする)
+    "paths": {
+      "moqt-js": ["../src/index.ts"]
+    }
+  },
+  // moqt-js のソースを解決するため、ライブラリ側のグローバル型宣言も取り込む
+  "include": ["**/*.ts", "../src/**/*.d.ts"],
+  // vite.config.ts は vite-plus の型定義 (TS 7 の lib 変更に未追随の部分がある) を
+  // 取り込むため、アプリ本体の型検査対象から外す
+  "exclude": ["vite.config.ts"]
 }

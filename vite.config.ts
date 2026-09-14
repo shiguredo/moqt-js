@@ -75,10 +75,12 @@ export default defineConfig({
     ignorePatterns: ["dist/**", "devtools/dist/**"],
   },
   lint: {
-    ignorePatterns: ["dist/**", "devtools/**", "examples/**", "tests/**"],
+    ignorePatterns: ["dist/**"],
     options: {
       typeAware: true,
       typeCheck: true,
+      // 不要になった eslint-disable コメントの残留を防ぐ
+      reportUnusedDisableDirectives: "error",
     },
     plugins: ["typescript", "oxc", "unicorn", "import", "promise", "react", "vitest"],
     categories: {
@@ -638,7 +640,7 @@ export default defineConfig({
       "unicorn/new-for-builtins": "error",
 
       // ===== unicorn: 禁止パターン =====
-      // eslint-disable の乱用を禁止
+      // eslint の disable 指令の乱用を禁止
       "unicorn/no-abusive-eslint-disable": "error",
       // アクセサの再帰を禁止
       "unicorn/no-accessor-recursion": "error",
@@ -1047,6 +1049,31 @@ export default defineConfig({
           "unicorn/prefer-top-level-await": "off",
           // TSX コンポーネントの戻り値型は JSX.Element で推論可能
           "typescript/explicit-function-return-type": "off",
+        },
+      },
+      {
+        // devtools は Preact signals の signal.value を直接書き換えるスタイルで
+        // 状態を管理しており、React の immutability 前提 (hooks の返り値や
+        // コンポーネント外変数を変更しない) と本質的に衝突するため無効化する
+        files: ["devtools/**/*.ts", "devtools/**/*.tsx"],
+        rules: {
+          "react/immutability": "off",
+        },
+      },
+      {
+        // devtools のコンポーネントは arrow function で定義する既存スタイルのため、
+        // function 宣言を強制する react の規約は適用しない
+        files: ["devtools/**/*.tsx"],
+        rules: {
+          "react/function-component-definition": "off",
+        },
+      },
+      {
+        // tests/e2e/*.spec.ts は Playwright のスペックであり vitest のテストでは
+        // ないため、vitest のテストファイル名規約 (*.test.ts) は適用しない
+        files: ["tests/e2e/**/*.spec.ts"],
+        rules: {
+          "vitest/consistent-test-filename": "off",
         },
       },
       {

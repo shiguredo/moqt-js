@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] Session インターフェースに reliability を追加する
+  - 実装 (SessionImpl) は下位 WebTransport の reliability を返していたが、公開インターフェースに宣言が無く devtools から参照できなかった
+  - W3C WebTransport の "pending" / "reliable-only" / "supports-unreliable" をそのまま返す
+  - @voluntas
 - [FIX] AAC の AudioSpecificConfig を送受信できるようにする
   - `AudioEncoderWrapper` が `EncodedAudioChunkMetadata.decoderConfig.description` を捨てていたため、AAC を選択しても受信側が復号できなかった。映像の `VIDEO_CONFIG` と同じく、AAC のときだけ `AudioEncodedChunkData.description` として運び、`createMediaPublisher` が `AUDIO_CONFIG` (draft-ietf-moq-loc-04 §2.3.3.1) として送る
   - `AudioDecoderWrapper.configure` に description を追加し、`AudioDecoderConfig.description` へ渡す (Worker モードの init メッセージにも載る)。`createMediaSubscriber` は Track Property / Object Property の `AUDIO_CONFIG` を解決して初期設定と変化時に渡す
@@ -966,6 +970,13 @@
 
 ### misc
 
+- [UPDATE] lint 対象を devtools / examples / tests に広げ、tsconfig を規約に合わせる
+  - `vite.config.ts` の `lint.ignorePatterns` から devtools / examples / tests を外し、`reportUnusedDisableDirectives` を有効にする
+  - `tsconfig.json` に `types: []` と `skipLibCheck: false` を追加し、`esModuleInterop` を削除する。lib.dom と重複していた `src/types.d.ts` の宣言を整理する
+  - devtools / examples の tsconfig に `moqt-js` をソースへ解決する `paths` を追加し、ライブラリのグローバル型宣言を取り込む (dist 未生成でも型検査できるようにする)
+  - `pnpm-workspace.yaml` の overrides を vite-plus 同梱版 (`@voidzero-dev/vite-plus-core@0.3.0` / `vitest@4.1.11`) に揃える。版がずれると `@preact/preset-vite` 等が返すプラグイン型と vite-plus の型が別パッケージ由来になり型比較が破綻するため
+  - devtools / examples / tests の lint 違反を修正する (挙動は変えない)
+  - @voluntas
 - [UPDATE] createMedia の接続処理と配信設定解決を共通化する
   - `createMediaPublisher` / `createMediaSubscriber` が一字一句同一だった接続処理 (証明書ハッシュ / 認可トークン / pending subgroup の組み立てと close / error の橋渡し) を `src/createMedia/connect.ts` に集約する
   - Catalog に載せる値とエンコーダーへ渡す値の解決を `src/createMedia/settings.ts` に集約し、`start()` で 1 度だけ解決した値を両経路が使うようにする (トラック設定を 2 回読むことによる乖離を防ぐ)
