@@ -38,3 +38,23 @@ CI 側の 3 項目 (typecheck 行列への出荷標準 7.0.2 追加、`lint` ジ
 - `lint.ignorePatterns` から `devtools/**` / `examples/**` / `tests/**` を外すと、それらのディレクトリの型エラー (devtools は既知で 11 件) と lint 違反が gate 対象になる
 
 これらを一度に直すと変更が広範囲になるため、着手時は「tsconfig の厳格化」と「lint 対象の拡大」をさらに分けることを検討する。
+
+## 進捗 (2026-09-14)
+
+「lint 対象の拡大」と「tsconfig の記述を規約に合わせる部分」を先に実施した (ブランチ `feature/update-tsconfig-ci-lint`)。
+
+実施済み:
+
+- `lint.ignorePatterns` から devtools / examples / tests を外し、`reportUnusedDisableDirectives` を有効にした。あわせて devtools / examples / tests の lint 違反を修正した (挙動は変えない)
+- `tsconfig.json` に `types: []` と `skipLibCheck: false` を追加し、`esModuleInterop` を削除した
+- lib.dom と重複していた `src/types.d.ts` の宣言 (`self` / `VideoFrameRequestCallback`) を削除し、`DedicatedWorkerGlobalScope` を standalone 宣言に変更した
+- devtools / examples の tsconfig に `moqt-js` をソースへ解決する `paths` を追加した (dist 未生成でも型検査できるようにするため)
+- `pnpm-workspace.yaml` の overrides を vite-plus 同梱版 (`@voidzero-dev/vite-plus-core@0.3.0` / `vitest@4.1.11`) に揃えた。版がずれていると `@preact/preset-vite` / `@tailwindcss/vite` が返すプラグイン型が別パッケージ由来になり、型比較が破綻して TS2321 / TS2769 になる
+- devtools から参照していた `Session.reliability` を公開インターフェースに追加した (実装済みだったが宣言が無く devtools が型エラーになっていた)
+
+残り (未実施。厳格化フラグ 2 件):
+
+- `noUncheckedIndexedAccess: true` を有効にすると型エラーが 73 件 (`src/message/parameter/locationFilter.ts` 14 / `src/session/bidi.ts` 10 / `src/message/parameter/rangeFilter.ts` 10 / `src/varint.ts` 9 / `src/session.ts` 8 ほか)
+- `exactOptionalPropertyTypes: true` を有効にすると型エラーが 67 件 (`src/session.ts` 14 / `src/codec/config.ts` 7 / `src/session/bidi.ts` 6 ほか)
+
+どちらも 1 ファイルずつ判断が必要な修正 (ガード追加・条件付きスプレッド・型の見直し) になるため、別の作業単位として扱う。
