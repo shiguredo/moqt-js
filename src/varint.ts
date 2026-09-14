@@ -170,11 +170,10 @@ export function encodeVarint(value: number | bigint): Uint8Array {
  */
 export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
   const available = data.length - offset;
-  if (available < 1) {
+  const firstByte = data[offset];
+  if (firstByte === undefined) {
     throw new IncompleteDataError(`insufficient data: need 1 byte, got ${available}`);
   }
-
-  const firstByte = data[offset];
 
   // Leading 1-bits の数を数えてエンコード長を決定
   let length: number;
@@ -226,8 +225,10 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
   const mask = (1 << usableBitsInFirstByte) - 1;
   let value = BigInt(firstByte & mask);
 
-  for (let i = 1; i < length; i++) {
-    value = (value << 8n) | BigInt(data[offset + i]);
+  // 2 バイト目以降は subarray で切り出して走査する
+  // (index access を避け、要素が必ず存在することを型で表す)
+  for (const byte of data.subarray(offset + 1, offset + length)) {
+    value = (value << 8n) | BigInt(byte);
   }
 
   return [value, length];

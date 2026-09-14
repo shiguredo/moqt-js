@@ -34,6 +34,21 @@ import type {
 // フレームごとに異なる色で塗り、符号化対象が単調にならないようにする
 const FRAME_COLORS = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff", "#00ffff"] as const;
 
+/**
+ * フレーム番号に対応する塗りつぶし色を返す
+ *
+ * FRAME_COLORS を使い切ったら先頭へ戻る。noUncheckedIndexedAccess により
+ * 添字アクセスの結果は undefined になり得るため、値を取り出す箇所をここに集約する。
+ */
+function pickFrameColor(frameIndex: number): string {
+  const color = FRAME_COLORS[frameIndex % FRAME_COLORS.length];
+  if (color === undefined) {
+    // frameIndex は 0 以上でのみ呼ばれるため、ここでのガードは到達しない防御
+    throw new Error(`no frame color for index ${String(frameIndex)}`);
+  }
+  return color;
+}
+
 // エンコードするフレーム数 (先頭と index 3 の 2 件を keyFrame: true にする)
 const ENCODE_FRAME_COUNT = 6;
 
@@ -103,7 +118,7 @@ export async function runVideoEncoderTest(useWorker: boolean): Promise<VideoEnco
     const frame = createTestVideoFrame(
       VIDEO_WIDTH,
       VIDEO_HEIGHT,
-      FRAME_COLORS[index % FRAME_COLORS.length],
+      pickFrameColor(index),
       index * VIDEO_FRAME_DURATION,
     );
     wrapper.encode(frame, { keyFrame });
@@ -194,7 +209,7 @@ export async function runVideoEncoderReconfigureTest(
       const frame = createTestVideoFrame(
         width,
         height,
-        FRAME_COLORS[index % FRAME_COLORS.length],
+        pickFrameColor(index),
         timestampOffset + index * VIDEO_FRAME_DURATION,
       );
       wrapper.encode(frame, { keyFrame: index === 0 });
@@ -274,7 +289,7 @@ async function encodeReferenceChunks(): Promise<EncodedChunkData[]> {
     const frame = createTestVideoFrame(
       VIDEO_WIDTH,
       VIDEO_HEIGHT,
-      FRAME_COLORS[index % FRAME_COLORS.length],
+      pickFrameColor(index),
       index * VIDEO_FRAME_DURATION,
     );
     encoder.encode(frame, { keyFrame: index === 0 });
@@ -307,6 +322,12 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
   const deltaChunks = referenceChunks.slice(1);
   if (!keyChunk) {
     throw new Error("reference video encoding produced no key chunk");
+  }
+  // 参照 chunk は key 1 件 + delta 2 件を待ってから返るため delta も必ず存在する。
+  // ここでのガードは到達しない防御 (添字アクセスの結果を 1 度だけ検証して使い回す)
+  const firstDeltaChunk = deltaChunks[0];
+  if (firstDeltaChunk === undefined) {
+    throw new Error("reference video encoding produced no delta chunk");
   }
 
   const pendingFrames: VideoFrame[] = [];
@@ -354,9 +375,9 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
 
   // configure 直後はキーフレーム待ちであり、delta chunk は出力を生まない
   decoder.decode(
-    deltaChunks[0].data,
-    deltaChunks[0].type,
-    deltaChunks[0].timestamp,
+    firstDeltaChunk.data,
+    firstDeltaChunk.type,
+    firstDeltaChunk.timestamp,
     VIDEO_FRAME_DURATION,
   );
   await waitWithoutOutput(200);
@@ -379,9 +400,9 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
   // Worker モードでは resetKeyframeWait メッセージの往復になる
   decoder.resetKeyframeWait();
   decoder.decode(
-    deltaChunks[0].data,
-    deltaChunks[0].type,
-    deltaChunks[0].timestamp,
+    firstDeltaChunk.data,
+    firstDeltaChunk.type,
+    firstDeltaChunk.timestamp,
     VIDEO_FRAME_DURATION,
   );
   await waitWithoutOutput(200);

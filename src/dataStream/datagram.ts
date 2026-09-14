@@ -394,10 +394,12 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
       trackAlias,
       groupId,
       objectId,
-      publisherPriority,
-      properties,
-      status,
-      payload,
+      // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+      // 値がある場合だけ載せる (「未設定 = そのフィールドが wire に存在しない」を保つ)
+      ...(publisherPriority !== undefined ? { publisherPriority } : {}),
+      ...(properties !== undefined ? { properties } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(payload !== undefined ? { payload } : {}),
     },
     totalConsumed,
   ];

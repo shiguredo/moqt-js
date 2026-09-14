@@ -192,8 +192,10 @@ function parseVideoCodec(codec: string): VideoCodecType {
  * ドメイン固有型 (Video / Audio) の混用を避けるための音声・映像共通の型である。
  */
 interface TimestampSource {
-  timestamp?: bigint;
-  timescale?: bigint;
+  // 受け取る AudioProperties / VideoProperties は「値が無い場合は明示的に undefined」を
+  // 取る型のため、`| undefined` を付けて受け側でも同じ表現を許容する
+  timestamp?: bigint | undefined;
+  timescale?: bigint | undefined;
 }
 
 /**
@@ -450,18 +452,29 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 内部メソッド
 
   private async connectToServer(): Promise<void> {
+    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+    // 値がある場合だけ載せる
     this.session = await connectMediaSession({
       url: this.url,
-      serverCertificateHashes: this.options.serverCertificateHashes,
-      authorizationToken: this.options.authorizationToken,
-      pendingSubgroup: this.options.pendingSubgroup,
+      ...(this.options.serverCertificateHashes !== undefined
+        ? { serverCertificateHashes: this.options.serverCertificateHashes }
+        : {}),
+      ...(this.options.authorizationToken !== undefined
+        ? { authorizationToken: this.options.authorizationToken }
+        : {}),
+      ...(this.options.pendingSubgroup !== undefined
+        ? { pendingSubgroup: this.options.pendingSubgroup }
+        : {}),
       onSessionClose: () => {
         if (this.currentState !== "closed") {
           this.setState("closed");
           this.callbacks.onClose?.();
         }
       },
-      onSessionError: (error) => this.callbacks.onError?.(error),
+      // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
+      onSessionError: (error) => {
+        this.callbacks.onError?.(error);
+      },
     });
   }
 
@@ -869,19 +882,26 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           },
           error: (error) => this.callbacks.onError?.(error),
         },
-        { authorizationToken },
+        // exactOptionalPropertyTypes では optional な authorizationToken に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        authorizationToken === undefined ? {} : { authorizationToken },
       );
     }
 
     // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
-      const subscribeOptions: SubscribeOptions = {};
 
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
-      subscribeOptions.authorizationToken = await this.resolveTrackAuthorizationToken(
+      const videoAuthorizationToken = await this.resolveTrackAuthorizationToken(
         this.videoTrackInfo,
       );
+      // exactOptionalPropertyTypes では optional な authorizationToken に undefined を渡せないため、
+      // 値がある場合だけ載せる
+      const subscribeOptions: SubscribeOptions =
+        videoAuthorizationToken === undefined
+          ? {}
+          : { authorizationToken: videoAuthorizationToken };
 
       this.videoSubscriber = await this.session.subscribe(
         namespace,

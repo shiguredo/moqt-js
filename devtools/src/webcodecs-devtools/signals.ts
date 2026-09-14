@@ -32,14 +32,16 @@ export const encoderWorkerMode = signal<WorkerMode>("none");
 export const decoderWorkerMode = signal<WorkerMode>("none");
 
 // 解像度から幅と高さを取得する
+// "WxH" 形式。分割代入で取り出し、要素が無い場合は 0 を返す
+// (noUncheckedIndexedAccess で index access が undefined を含むため)
 export const width = computed(() => {
   const [w] = resolution.value.split("x").map(Number);
-  return w;
+  return w ?? 0;
 });
 
 export const height = computed(() => {
   const [, h] = resolution.value.split("x").map(Number);
-  return h;
+  return h ?? 0;
 });
 
 // エンコーダー/デコーダーの状態
@@ -134,7 +136,12 @@ export async function fetchDevices(): Promise<void> {
     videoDevices.value = videoInputs;
 
     if (videoInputs.length > 0 && !selectedVideoDeviceId.value) {
-      selectedVideoDeviceId.value = videoInputs[0].deviceId;
+      // 先頭要素は length > 0 の検証後は必ず存在するが、
+      // noUncheckedIndexedAccess で型上 undefined を含むため分割代入とガードを使う
+      const [firstVideoInput] = videoInputs;
+      if (firstVideoInput !== undefined) {
+        selectedVideoDeviceId.value = firstVideoInput.deviceId;
+      }
     }
   } catch (error) {
     const message = (error as Error).message;
@@ -501,12 +508,14 @@ export async function startCapture(): Promise<void> {
       // カメラを使用
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          deviceId: selectedVideoDeviceId.value
-            ? { exact: selectedVideoDeviceId.value }
-            : undefined,
           width: { ideal: width.value },
           height: { ideal: height.value },
           frameRate: { ideal: framerate.value },
+          // exactOptionalPropertyTypes では optional な deviceId に undefined を渡せないため、
+          // 値がある場合だけ載せる
+          ...(selectedVideoDeviceId.value
+            ? { deviceId: { exact: selectedVideoDeviceId.value } }
+            : {}),
         },
         audio: false,
       });

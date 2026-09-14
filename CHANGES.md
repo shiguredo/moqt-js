@@ -970,6 +970,11 @@
 
 ### misc
 
+- [UPDATE] tsconfig の厳格チェック (noUncheckedIndexedAccess / exactOptionalPropertyTypes) を有効にする
+  - 型エラー 159 件 (src 95 / devtools 61 / examples 3) を、到達しない防御としてのガード追加・index access の回避 (`for...of` / `entries()` / 分割代入)・値がある場合だけ載せる条件付き構築で修正する
+  - 明示的に undefined を保持する設計の内部状態 / 文脈オブジェクトと、寛容なデコード結果 (`VideoProperties` / `AudioProperties` / `FetchObjectContext`) は optional フィールドに `| undefined` を付ける (いずれも後方互換)
+  - `SessionImpl.initialize` はガード追加で複雑度が上限を超えたため `readSetupMessages` / `startPostSetupLoops` / `cancelIfNotConnected` を抽出する (呼び出し順は同一)
+  - @voluntas
 - [UPDATE] lint 対象を devtools / examples / tests に広げ、tsconfig を規約に合わせる
   - `vite.config.ts` の `lint.ignorePatterns` から devtools / examples / tests を外し、`reportUnusedDisableDirectives` を有効にする
   - `tsconfig.json` に `types: []` と `skipLibCheck: false` を追加し、`esModuleInterop` を削除する。lib.dom と重複していた `src/types.d.ts` の宣言を整理する

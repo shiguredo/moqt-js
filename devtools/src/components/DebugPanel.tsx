@@ -52,12 +52,14 @@ export function addLog(
   data?: unknown,
   payload?: Uint8Array,
 ) {
+  // exactOptionalPropertyTypes では optional な data / payload に undefined を渡せないため、
+  // 値がある場合だけ載せる
   const entry: LogEntry = {
     timestamp: Date.now(),
     level,
     message,
-    data,
-    payload,
+    ...(data !== undefined ? { data } : {}),
+    ...(payload !== undefined ? { payload } : {}),
   };
 
   logBuffer.push(entry);
@@ -306,7 +308,11 @@ export function DebugPanel() {
     if (isAllExpanded) {
       setExpandedRows(new Set());
     } else {
-      const allIndices = new Set(logBuffer.map((_, i) => i).filter((i) => logBuffer[i].data));
+      // index と要素を同時に取るため entries() を使う
+      // (noUncheckedIndexedAccess で index access が undefined を含むため)
+      const allIndices = new Set(
+        [...logBuffer.entries()].filter(([, entry]) => Boolean(entry.data)).map(([i]) => i),
+      );
       setExpandedRows(allIndices);
     }
   };
@@ -398,7 +404,8 @@ export function DebugPanel() {
   };
 
   // 最初のログのタイムスタンプ
-  const firstTimestamp = logBuffer.length > 0 ? logBuffer[0].timestamp : 0;
+  const [firstLog] = logBuffer;
+  const firstTimestamp = firstLog !== undefined ? firstLog.timestamp : 0;
 
   if (!isDebugPanelOpen.value) {
     return null;
@@ -519,6 +526,11 @@ export function DebugPanel() {
               const logsArray = logBuffer;
               for (let i = logsArray.length - 1; i >= 0; i--) {
                 const log = logsArray[i];
+                if (log === undefined) {
+                  // ループ境界 (0 <= i < logsArray.length) により到達しない
+                  // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+                  continue;
+                }
                 const originalIndex = i;
                 const nextLog = i < logsArray.length - 1 ? logsArray[i + 1] : null;
                 const previousTimestamp = nextLog ? nextLog.timestamp : null;

@@ -361,7 +361,13 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
     if (offset + totalConsumed >= data.length) {
       throw new IncompleteDataError("incomplete subgroup header: publisher priority");
     }
-    publisherPriority = data[offset + totalConsumed];
+    const priorityByte = data[offset + totalConsumed];
+    if (priorityByte === undefined) {
+      // 上の offset + totalConsumed >= data.length の検証により到達しない
+      // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+      throw new IncompleteDataError("incomplete subgroup header: publisher priority");
+    }
+    publisherPriority = priorityByte;
     totalConsumed += 1;
   }
 
@@ -378,10 +384,12 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       type: typeNum,
       trackAlias,
       groupId,
-      subgroupId,
-      publisherPriority,
-      firstObject,
-      endOfGroup,
+      // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+      // 値がある場合だけ載せる (「未設定 = そのフィールドが wire に存在しない」を保つ)
+      ...(subgroupId !== undefined ? { subgroupId } : {}),
+      ...(publisherPriority !== undefined ? { publisherPriority } : {}),
+      ...(firstObject !== undefined ? { firstObject } : {}),
+      ...(endOfGroup !== undefined ? { endOfGroup } : {}),
     },
     totalConsumed,
   ];

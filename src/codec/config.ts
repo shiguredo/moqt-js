@@ -61,22 +61,33 @@ export function getVideoDecoderConfig(
   const baseConfig = {
     codedWidth: width,
     codedHeight: height,
-    description,
   };
+  const codecString = videoDecoderCodecString(codec);
 
+  // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
+  // 値がある場合だけ載せる
+  return description === undefined
+    ? { codec: codecString, ...baseConfig }
+    : { codec: codecString, ...baseConfig, description };
+}
+
+/**
+ * 映像デコーダーの codec 文字列を返す
+ */
+function videoDecoderCodecString(codec: VideoCodecType): string {
   switch (codec) {
     case "vp8":
-      return { codec: "vp8", ...baseConfig };
+      return "vp8";
     case "vp9":
-      return { codec: "vp09.00.10.08", ...baseConfig };
+      return "vp09.00.10.08";
     case "av1":
-      return { codec: "av01.0.04M.08", ...baseConfig };
+      return "av01.0.04M.08";
     case "h264":
-      return { codec: "avc1.42001f", ...baseConfig };
+      return "avc1.42001f";
     case "h265":
-      return { codec: "hvc1.1.6.L93.B0", ...baseConfig };
+      return "hvc1.1.6.L93.B0";
     default:
-      return { codec: "vp8", ...baseConfig };
+      return "vp8";
   }
 }
 
@@ -199,14 +210,12 @@ export function getAudioDecoderConfig(
         // 復号 timestamp が変わるため、受け取っても使わない (既存挙動を維持する)
       };
     case "aac":
-      return {
-        codec: "mp4a.40.2",
-        sampleRate,
-        numberOfChannels: channels,
-        // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
-        // AAC の復号には AudioSpecificConfig (AudioDecoderConfig.description) が必須
-        description,
-      };
+      // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+      // AAC の復号には AudioSpecificConfig (AudioDecoderConfig.description) が必須。
+      // exactOptionalPropertyTypes では undefined を渡せないため、値がある場合だけ載せる
+      return description === undefined
+        ? { codec: "mp4a.40.2", sampleRate, numberOfChannels: channels }
+        : { codec: "mp4a.40.2", sampleRate, numberOfChannels: channels, description };
     default:
       return {
         codec: "opus",

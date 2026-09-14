@@ -54,8 +54,10 @@ export class FetcherImpl implements Fetcher {
   private readonly fetcherNamespace: string[];
   private readonly fetcherTrackName: string;
   private readonly objectCallback: (object: MoqtObject) => void;
-  private readonly endCallback?: () => void;
-  private readonly errorCallback?: (error: Error) => void;
+  // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
+  // `| undefined` を付ける
+  private readonly endCallback?: (() => void) | undefined;
+  private readonly errorCallback?: ((error: Error) => void) | undefined;
   private readonly requestId: bigint;
   private fetchEndOfTrack = false;
   private fetchEndLocation: Location = { group: 0n, object: 0n };
@@ -69,7 +71,8 @@ export class FetcherImpl implements Fetcher {
   private fetchGroupOrder: GroupOrder = GroupOrder.ASCENDING;
 
   // Session がストリームクローズ処理を差し込むためのコールバック
-  goawayCallback?: (newSessionUri: string) => void;
+  // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
+  goawayCallback?: ((newSessionUri: string) => void) | undefined;
   onCancel?: () => Promise<void>;
 
   constructor(

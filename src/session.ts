@@ -1391,13 +1391,17 @@ export class SessionImpl implements Session {
   private controlWriter?: ControlStreamWriter;
 
   // datagram 送信用 writer。保持して使い回す理由は getDatagramWriter を参照。
-  private datagramWriter?: WritableStreamDefaultWriter<Uint8Array>;
+  // close() 時に明示的に undefined を代入して解放するため `| undefined` を付ける
+  private datagramWriter?: WritableStreamDefaultWriter<Uint8Array> | undefined;
 
   // 受信双方向ストリームの reader。
   // draft-ietf-moq-transport-21 §9.18: SUBSCRIBE_TRACKS への応答として
   // サーバーが新規双方向ストリームを開き PUBLISH を送信する。
   // この reader で incomingBidirectionalStreams を監視する。
-  private incomingBidiStreamReader?: ReadableStreamDefaultReader<WebTransportBidirectionalStream>;
+  // close() 時に明示的に undefined を代入して解放するため `| undefined` を付ける
+  private incomingBidiStreamReader?:
+    | ReadableStreamDefaultReader<WebTransportBidirectionalStream>
+    | undefined;
 
   // リクエスト ID 管理
   private nextRequestId = 0n;
@@ -1528,11 +1532,12 @@ export class SessionImpl implements Session {
       callbacks: NamespaceSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
-      pendingPrefix?: string[];
-      stream?: WebTransportBidirectionalStream;
-      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
-      controlReader?: ControlStreamReader;
-      writer?: WritableStreamDefaultWriter<Uint8Array>;
+      // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+      pendingPrefix?: string[] | undefined;
+      stream?: WebTransportBidirectionalStream | undefined;
+      streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      controlReader?: ControlStreamReader | undefined;
+      writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
     }
   >();
   /**
@@ -1549,12 +1554,13 @@ export class SessionImpl implements Session {
       callbacks: TracksSubscriptionCallbacks;
       state: "active" | "closed";
       namespacePrefix: string[];
-      rangeFilters?: RangeFilterSpec[];
-      pendingPrefix?: string[];
-      stream?: WebTransportBidirectionalStream;
-      streamReader?: ReadableStreamDefaultReader<Uint8Array>;
-      controlReader?: ControlStreamReader;
-      writer?: WritableStreamDefaultWriter<Uint8Array>;
+      // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
+      rangeFilters?: RangeFilterSpec[] | undefined;
+      pendingPrefix?: string[] | undefined;
+      stream?: WebTransportBidirectionalStream | undefined;
+      streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      controlReader?: ControlStreamReader | undefined;
+      writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
     }
   >();
   /**
@@ -1568,7 +1574,8 @@ export class SessionImpl implements Session {
   private namespacePublications = new Map<
     bigint,
     {
-      callbacks?: NamespacePublicationCallbacks;
+      // セッション内部の状態オブジェクトで、callbacks 未指定時に undefined を保持するため `| undefined` を付ける
+      callbacks?: NamespacePublicationCallbacks | undefined;
       state: "pending" | "active" | "closed";
       namespace: string[];
       stream: WebTransportBidirectionalStream;
@@ -1788,13 +1795,25 @@ export class SessionImpl implements Session {
     // 未広告 (undefined) の既定値は 0（Alias の使用禁止）。
     this.localMaxAuthTokenCacheSize = options?.maxAuthTokenCacheSize ?? 0;
     this.receivedAuthTokens = new AuthTokenCache(this.localMaxAuthTokenCacheSize);
+    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+    // 値がある場合だけ載せた object を組み立てる (createSetup の型は公開 API のため広げない)
     const setup = createSetup({
-      authorizationToken: options?.authorizationToken,
-      moqtImplementation: options?.moqtImplementation,
-      grease: options?.grease,
-      maxAuthTokenCacheSize: options?.maxAuthTokenCacheSize,
-      maxRequestUpdates: options?.maxRequestUpdates,
-      maxFilterRanges: options?.maxFilterRanges,
+      ...(options?.authorizationToken !== undefined
+        ? { authorizationToken: options.authorizationToken }
+        : {}),
+      ...(options?.moqtImplementation !== undefined
+        ? { moqtImplementation: options.moqtImplementation }
+        : {}),
+      ...(options?.grease !== undefined ? { grease: options.grease } : {}),
+      ...(options?.maxAuthTokenCacheSize !== undefined
+        ? { maxAuthTokenCacheSize: options.maxAuthTokenCacheSize }
+        : {}),
+      ...(options?.maxRequestUpdates !== undefined
+        ? { maxRequestUpdates: options.maxRequestUpdates }
+        : {}),
+      ...(options?.maxFilterRanges !== undefined
+        ? { maxFilterRanges: options.maxFilterRanges }
+        : {}),
     });
     const setupPayload = encodeSetupPayload(setup);
     const setupMessage = this.controlWriter.encode(MessageType.SETUP, setupPayload);
@@ -1888,24 +1907,14 @@ export class SessionImpl implements Session {
     // SETUP メッセージが揃うまで read + feed を繰り返す。
     // ControlStreamReader.feed は部分データを内部バッファに蓄積し、
     // 揃ったメッセージだけを返す。
-    // reader は 1 つだけ保持し、後続の制御ストリーム読み取り (startControlMessageLoop)
-    // が getReader() で再取得できるよう finally で必ず releaseLock する。
-    const reader = controlStream.getReader();
-    let messages: ControlMessage[] = [];
-    try {
-      messages = this.controlReader.feed(controlBuffer);
-      while (messages.length === 0) {
-        const { value: chunk, done } = await reader.read();
-        if (done || !chunk) {
-          throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
-        }
-        messages = this.controlReader.feed(chunk);
-      }
-    } finally {
-      reader.releaseLock();
-    }
+    const messages = await this.readSetupMessages(controlStream, controlBuffer);
 
     const msg = messages[0];
+    if (msg === undefined) {
+      // 上の while (messages.length === 0) により messages は 1 件以上だが、
+      // noUncheckedIndexedAccess で型上 undefined を含むため到達しない防御を置く
+      throw new SessionError("No SETUP message received", SessionErrorCode.PROTOCOL_VIOLATION);
+    }
     if (msg.type !== MessageType.SETUP) {
       throw new SessionError(
         `Expected SETUP, got ${msg.type}`,
@@ -1969,14 +1978,66 @@ export class SessionImpl implements Session {
       peerMaxFilterRanges: this.peerMaxFilterRanges.toString(),
     });
 
-    // draft-ietf-moq-transport-21 Section 9.1 (SETUP) / Section 6.3 (Session initialization):
-    // SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
-    // チャンクに相乗りして届くことがある。ControlStreamReader.feed は揃った全メッセージを
-    // 返し内部バッファから削除するため、messages[0] (SETUP) 以外を処理しないと、後続の
-    // startControlMessageLoop は新規 read 分しか処理せず相乗りメッセージが恒久的に失われる。
-    // SETUP 確立後に messages[1..] を通常の制御メッセージ処理経路へ順次流す。
-    for (let i = 1; i < messages.length; i++) {
-      this.handleControlMessage(messages[i].type, messages[i].payload);
+    // SETUP 確立後の受信ループを開始する
+    this.startPostSetupLoops(messages, bufferedDataStreams);
+  }
+
+  /**
+   * 制御ストリームから SETUP を含む制御メッセージ列を読み取る
+   *
+   * reader は 1 つだけ保持し、後続の制御ストリーム読み取り (startControlMessageLoop)
+   * が getReader() で再取得できるよう finally で必ず releaseLock する。
+   *
+   * @param controlStream - サーバーが開いた制御ストリーム (単方向)
+   * @param controlBuffer - ストリームタイプ varint を読み飛ばした後の残りバイト列
+   * @returns 1 件以上の制御メッセージ列 (先頭が SETUP)
+   */
+  private async readSetupMessages(
+    controlStream: ReadableStream<Uint8Array>,
+    controlBuffer: Uint8Array,
+  ): Promise<ControlMessage[]> {
+    const controlReader = this.controlReader;
+    if (controlReader === undefined) {
+      // initialize() が SETUP 送信前に this.controlReader を生成しているため到達しない
+      // (このメソッドは initialize() からのみ呼ばれる)
+      throw new SessionError("Control reader not initialized", SessionErrorCode.PROTOCOL_VIOLATION);
+    }
+    const reader = controlStream.getReader();
+    try {
+      let messages = controlReader.feed(controlBuffer);
+      while (messages.length === 0) {
+        const { value: chunk, done } = await reader.read();
+        if (done || !chunk) {
+          throw new SessionError("Connection closed before SETUP", SessionErrorCode.NO_ERROR);
+        }
+        messages = controlReader.feed(chunk);
+      }
+      return messages;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
+   * SETUP 確立後に受信ループを開始する
+   *
+   * draft-ietf-moq-transport-21 Section 9.1 (SETUP) / Section 6.3 (Session initialization):
+   * SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
+   * チャンクに相乗りして届くことがある。ControlStreamReader.feed は揃った全メッセージを
+   * 返し内部バッファから削除するため、messages[0] (SETUP) 以外を処理しないと、後続の
+   * startControlMessageLoop は新規 read 分しか処理せず相乗りメッセージが恒久的に失われる。
+   * SETUP 確立後に messages[1..] を通常の制御メッセージ処理経路へ順次流す。
+   *
+   * @param messages - SETUP 受信時の read で揃った制御メッセージ列 (先頭が SETUP)
+   * @param bufferedDataStreams - SETUP 完了前に到着しバッファリングしたデータストリーム
+   */
+  private startPostSetupLoops(
+    messages: ControlMessage[],
+    bufferedDataStreams: ReadableStream<Uint8Array>[],
+  ): void {
+    // 先頭 (SETUP) 以外を index access せずに走査する
+    for (const trailingMessage of messages.slice(1)) {
+      this.handleControlMessage(trailingMessage.type, trailingMessage.payload);
     }
 
     // バックグラウンドで制御メッセージの読み取りを開始
@@ -2381,11 +2442,13 @@ export class SessionImpl implements Session {
     // クライアント側では確定できず undefined になる。
     const startLocation = resolveFetchStartLocation(options.filter);
     const promise = new Promise<Fetcher>((resolve, reject) => {
+      // exactOptionalPropertyTypes では optional な startLocation に undefined を渡せないため、
+      // 値がある場合だけ載せる
       this.pendingFetch.set(requestId, {
         resolve,
         reject,
         impl,
-        startLocation,
+        ...(startLocation !== undefined ? { startLocation } : {}),
       });
     });
 
@@ -3368,14 +3431,16 @@ export class SessionImpl implements Session {
   ): void {
     if (!this.callbacks.debug) return;
 
-    this.callbacks.debug({
+    // exactOptionalPropertyTypes では optional な decoded に undefined を渡せないため、
+    // 値がある場合だけ載せる
+    const debugMessage = {
       direction,
       type,
       typeName: getMessageTypeName(type),
       payload,
-      decoded,
       timestamp: Date.now(),
-    });
+    };
+    this.callbacks.debug(decoded === undefined ? debugMessage : { ...debugMessage, decoded });
   }
 
   private async sendControlMessage(
@@ -4489,18 +4554,37 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 §6.3:
    * 双方向ストリームは特定のメッセージタイプで開始されなければならない。
    */
+  /**
+   * セッションが connected でなければ受信 bidi ストリームを cancel する
+   *
+   * 接続確立前に届いた受信ストリームは処理せず、読み取りを打ち切る。
+   *
+   * @param stream - 受信した双方向ストリーム
+   * @returns cancel した (呼び出し側は即 return すべき) なら true
+   */
+  private async cancelIfNotConnected(stream: WebTransportBidirectionalStream): Promise<boolean> {
+    if (this.sessionState === "connected") {
+      return false;
+    }
+    try {
+      await stream.readable.cancel();
+    } catch {
+      /* ignore */
+    }
+    return true;
+  }
+
+  /**
+   * 受信 bidi ストリームを処理する
+   *
+   * @param stream - 受信した双方向ストリーム
+   */
   private async handleIncomingBidirectionalStream(
     stream: WebTransportBidirectionalStream,
   ): Promise<void> {
-    if (this.sessionState !== "connected") {
-      try {
-        await stream.readable.cancel();
-      } catch {
-        /* ignore */
-      }
+    if (await this.cancelIfNotConnected(stream)) {
       return;
     }
-
     const firstMsg = await this.readFirstBidiMessage(stream);
     if (firstMsg === null) {
       return;
@@ -4625,7 +4709,15 @@ export class SessionImpl implements Session {
       // 同一 Track への複数 PUBLISH が不一致になり、DUPLICATE_TRACK_ALIAS で
       // 誤ってセッションを閉じる。
       const trackKey = fullTrackNameKey(publishTrackNamespace, publishTrackName);
-      if (existingSubscribers[0].getFullTrackNameKey() !== trackKey) {
+      const firstSubscriber = existingSubscribers[0];
+      if (firstSubscriber === undefined) {
+        // 上の existingSubscribers.length > 0 により到達しない (型を絞るためのガード)
+        throw new SessionError(
+          `track alias 0x${publishTrackAlias.toString(16)} has no subscriber entry`,
+          SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+        );
+      }
+      if (firstSubscriber.getFullTrackNameKey() !== trackKey) {
         this.closeWithError(
           new SessionError(
             `track alias 0x${publishTrackAlias.toString(16)} used for different tracks`,
@@ -4931,11 +5023,12 @@ export class SessionImpl implements Session {
       }
       const suffix = matchNamespacePrefix(publishTrackNamespace, subscription.namespacePrefix);
       if (suffix !== null) {
-        return {
-          callbacks: subscription.callbacks,
-          suffix,
-          rangeFilters: subscription.rangeFilters,
-        };
+        // exactOptionalPropertyTypes では optional な rangeFilters に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        const matched = { callbacks: subscription.callbacks, suffix };
+        return subscription.rangeFilters === undefined
+          ? matched
+          : { ...matched, rangeFilters: subscription.rangeFilters };
       }
     }
     return null;
@@ -4969,7 +5062,12 @@ export class SessionImpl implements Session {
           if (done) return null;
           const messages = firstControlReader.feed(value);
           if (messages.length > 0) {
-            return messages[0];
+            const firstMessage = messages[0];
+            if (firstMessage === undefined) {
+              // 上の messages.length > 0 により到達しない (型を絞るためのガード)
+              return null;
+            }
+            return firstMessage;
           }
         }
       } finally {

@@ -330,14 +330,18 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     return;
   }
 
+  // datagram は Subgroup ID を持たないため subgroupId は載せない。
+  // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+  // 値がある場合だけ載せる (「未設定 = その経路では存在しない」を保つ)
   const object: MoqtObject = {
     groupId: datagram.groupId,
-    subgroupId: undefined,
     objectId: datagram.objectId,
-    publisherPriority: datagram.publisherPriority,
     status: datagram.status ?? ObjectStatus.NORMAL,
-    properties: datagram.properties,
     payload: datagram.payload ?? new Uint8Array(0),
+    ...(datagram.publisherPriority !== undefined
+      ? { publisherPriority: datagram.publisherPriority }
+      : {}),
+    ...(datagram.properties !== undefined ? { properties: datagram.properties } : {}),
   };
 
   // 各 subscription に配送する (filter 再適用は各 handleDatagram/handleObject 内)。
@@ -552,6 +556,7 @@ export function incomingProcessSubgroupObjects(
   // Group の最終 Object は Group 単位で既知になる。Subgroup ストリームをまたいだ
   // 検出のためセッションが `${trackAlias}:${groupId}` で保持する。
   const endOfGroupKey = `${header.trackAlias}:${header.groupId}`;
+  const endOfGroupFinalObjectId = session.receivedEndOfGroupFinalObjectIds.get(endOfGroupKey);
   return streamProcessSubgroupObjects(
     buffer,
     subscribers,
@@ -590,6 +595,8 @@ export function incomingProcessSubgroupObjects(
       },
     },
     resolvedSubgroupId,
-    { finalObjectId: session.receivedEndOfGroupFinalObjectIds.get(endOfGroupKey) },
+    // exactOptionalPropertyTypes では optional な finalObjectId に undefined を渡せないため、
+    // 既知の最終 Object ID がある場合だけ載せる
+    endOfGroupFinalObjectId === undefined ? {} : { finalObjectId: endOfGroupFinalObjectId },
   );
 }

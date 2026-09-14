@@ -69,8 +69,15 @@ test("formatHexDump wraps at 16-byte boundary", () => {
   for (let i = 0; i < 17; i++) data[i] = 0x41;
   const lines = formatHexDump(data).split("\n");
   assert.equal(lines.length, 2);
-  assert.ok(lines[0].startsWith("0000"));
-  assert.ok(lines[1].startsWith("0010"));
+  // 分割代入で各行を取り出す (noUncheckedIndexedAccess で index access は
+  // 型上 undefined を含むため、分割代入で回避する)
+  const [firstLine, secondLine] = lines;
+  if (firstLine === undefined || secondLine === undefined) {
+    // 上の lines.length === 2 により到達しない (型を絞るためのガード)
+    throw new Error("formatHexDump must return 2 lines for 17 bytes");
+  }
+  assert.ok(firstLine.startsWith("0000"));
+  assert.ok(secondLine.startsWith("0010"));
 });
 
 test("formatHexDump generates 3 lines for 33 bytes (verify loop steady state)", () => {
@@ -78,9 +85,14 @@ test("formatHexDump generates 3 lines for 33 bytes (verify loop steady state)", 
   for (let i = 0; i < 33; i++) data[i] = 0x42;
   const lines = formatHexDump(data).split("\n");
   assert.equal(lines.length, 3);
-  assert.ok(lines[0].startsWith("0000"));
-  assert.ok(lines[1].startsWith("0010"));
-  assert.ok(lines[2].startsWith("0020"));
+  const [firstLine, secondLine, thirdLine] = lines;
+  if (firstLine === undefined || secondLine === undefined || thirdLine === undefined) {
+    // 上の lines.length === 3 により到達しない (型を絞るためのガード)
+    throw new Error("formatHexDump must return 3 lines for 33 bytes");
+  }
+  assert.ok(firstLine.startsWith("0000"));
+  assert.ok(secondLine.startsWith("0010"));
+  assert.ok(thirdLine.startsWith("0020"));
 });
 
 test("formatHexDump replaces non-printable bytes with dot in ASCII column", () => {

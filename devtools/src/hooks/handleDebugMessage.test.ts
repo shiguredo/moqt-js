@@ -23,7 +23,14 @@ test("subscriber handleDebugMessage copies payload to independent ArrayBuffer", 
   handleSubscriberDebugMessage("subscriber-1", makeMessage(source));
   const entries = getLogBuffer();
   assert.equal(entries.length, 1);
-  const stored = entries[entries.length - 1].payload;
+  // 分割代入で唯一のエントリを取り出す (noUncheckedIndexedAccess で index access は
+  // 型上 undefined を含むため、分割代入で回避する)
+  const [entry] = entries;
+  if (entry === undefined) {
+    // 上の entries.length === 1 により到達しない (型を絞るためのガード)
+    throw new Error("expected exactly one log entry");
+  }
+  const stored = entry.payload;
   assert.ok(stored !== undefined);
   assert.notStrictEqual(stored.buffer, source.buffer);
   assert.deepEqual(Array.from(stored), [1, 2, 3, 4]);
@@ -33,7 +40,12 @@ test("subscriber handleDebugMessage stores undefined payload when source length 
   handleSubscriberDebugMessage("subscriber-1", makeMessage(new Uint8Array()));
   const entries = getLogBuffer();
   assert.equal(entries.length, 1);
-  assert.equal(entries[entries.length - 1].payload, undefined);
+  const [entry] = entries;
+  if (entry === undefined) {
+    // 上の entries.length === 1 により到達しない (型を絞るためのガード)
+    throw new Error("expected exactly one log entry");
+  }
+  assert.equal(entry.payload, undefined);
 });
 
 test("publisher handleDebugMessage copies payload to independent ArrayBuffer", () => {
@@ -41,7 +53,12 @@ test("publisher handleDebugMessage copies payload to independent ArrayBuffer", (
   handlePublisherDebugMessage(makeMessage(source));
   const entries = getLogBuffer();
   assert.equal(entries.length, 1);
-  const stored = entries[entries.length - 1].payload;
+  const [entry] = entries;
+  if (entry === undefined) {
+    // 上の entries.length === 1 により到達しない (型を絞るためのガード)
+    throw new Error("expected exactly one log entry");
+  }
+  const stored = entry.payload;
   assert.ok(stored !== undefined);
   assert.notStrictEqual(stored.buffer, source.buffer);
   assert.deepEqual(Array.from(stored), [0xaa, 0xbb]);
