@@ -11,6 +11,9 @@
 
 ## develop
 
+- [FIX] FETCH の End of Range から Object Payload Length を削除する
+  - draft-ietf-moq-transport-21 §11.4.1.2 の End of Range indicator は Serialization Flags + Group ID + Object ID のみで、Object Payload Length を持たない。余分な varint を読み書きしていたため、EOR の直後に通常 Object が続くストリームでフィールド境界がずれていた
+  - @voluntas
 - [ADD] Session インターフェースに reliability を追加する
   - 実装 (SessionImpl) は下位 WebTransport の reliability を返していたが、公開インターフェースに宣言が無く devtools から参照できなかった
   - W3C WebTransport の "pending" / "reliable-only" / "supports-unreliable" をそのまま返す

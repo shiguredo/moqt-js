@@ -2247,6 +2247,99 @@ test("FetchObjectFields: End of Timed-Out Range (0x20C) の round-trip で statu
   assert.equal(context.objectId, 3n);
 });
 
+const endOfRangeCases = [
+  { name: "non_existent", flags: FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE },
+  { name: "unknown", flags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE },
+  { name: "timed_out", flags: FetchSerializationFlags.END_OF_TIMED_OUT_RANGE },
+] as const;
+
+for (const { name, flags } of endOfRangeCases) {
+  /**
+   * draft-ietf-moq-transport-21 §11.4.1.2:
+   * End of Range indicator の wire は Serialization Flags + Group ID + Object ID のみ。
+   * Object Payload Length は通常 Object のフィールドであり、EOR では読み書きしない。
+   */
+  test(`FetchObjectFields: End of Range (${name}) は Group ID と Object ID のみをエンコードする`, () => {
+    const groupId = 0x1234n;
+    const objectId = 0x5678n;
+    const fields: FetchObjectFields = {
+      serializationFlags: flags,
+      groupId,
+      objectId,
+      // EOR では wire に書かれないことを確認するため 0 以外を指定する
+      payloadLength: 123n,
+    };
+    const encoded = encodeFetchObjectFields(fields);
+    const expected = new Uint8Array([
+      ...encodeVarint(flags),
+      ...encodeVarint(groupId),
+      ...encodeVarint(objectId),
+    ]);
+    assert.deepEqual(encoded, expected);
+
+    const [decoded, consumed] = decodeFetchObjectFields(encoded, null, 0, true);
+    assert.equal(decoded.endOfRange, name);
+    assert.equal(decoded.groupId, groupId);
+    assert.equal(decoded.objectId, objectId);
+    assert.equal(decoded.payloadLength, 0n);
+    assert.equal(consumed, expected.length);
+  });
+}
+
+/**
+ * draft-ietf-moq-transport-21 §11.4.1.2:
+ * End of Range indicator の直後に通常 Object が続く場合、EOR の 3 フィールドを
+ * 消費した残りバッファから次の Serialization Flags を読み始められることを確認する。
+ */
+test("FetchObjectFields: End of Range の直後の通常 Object を続けてデコードできる", () => {
+  const eorFields: FetchObjectFields = {
+    serializationFlags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE,
+    groupId: 10n,
+    objectId: 5n,
+    payloadLength: 0n,
+  };
+  const eorEncoded = encodeFetchObjectFields(eorFields);
+  const [decodedEor, eorConsumed, eorContext] = decodeFetchObjectFields(eorEncoded, null, 0, true);
+  assert.equal(decodedEor.endOfRange, "unknown");
+  assert.equal(decodedEor.payloadLength, 0n);
+  assert.equal(eorConsumed, eorEncoded.length);
+
+  const nextFields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 11n,
+    subgroupId: 1n,
+    objectId: 6n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const nextEncoded = encodeFetchObjectFields(nextFields, false, eorContext);
+
+  const combined = new Uint8Array(eorEncoded.length + nextEncoded.length);
+  combined.set(eorEncoded, 0);
+  combined.set(nextEncoded, eorEncoded.length);
+
+  const [combinedEor, combinedEorConsumed, combinedContext] = decodeFetchObjectFields(
+    combined,
+    null,
+    0,
+    true,
+  );
+  assert.equal(combinedEor.endOfRange, "unknown");
+  assert.equal(combinedEorConsumed, eorEncoded.length);
+
+  const [decodedNext, nextConsumed] = decodeFetchObjectFields(
+    combined,
+    combinedContext,
+    combinedEorConsumed,
+    false,
+  );
+  assert.equal(decodedNext.groupId, 11n);
+  assert.equal(decodedNext.subgroupId, 1n);
+  assert.equal(decodedNext.objectId, 6n);
+  assert.equal(decodedNext.publisherPriority, 100);
+  assert.equal(nextConsumed, nextEncoded.length);
+});
+
 /**
  * draft-ietf-moq-transport-21 §11.4.1 Table 7:
  * End of Range (0x8C / 0x10C / 0x20C) 以外の 128 以上の値は
