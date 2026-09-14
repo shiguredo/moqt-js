@@ -3,7 +3,7 @@
 - Created: 2026-09-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-fetch-end-of-range-payload-length
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-14
 
 ## 目的
 
