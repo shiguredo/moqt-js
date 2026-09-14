@@ -5,8 +5,11 @@ packages:
   - examples
 
 overrides:
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
-  vitest: 4.1.10
+  # vite-plus が同梱する core / vitest と同じ版に揃える。
+  # 版がずれると @preact/preset-vite 等が返すプラグイン型と vite-plus の型が
+  # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
+  vitest: 4.1.11
 
 allowBuilds:
   esbuild: true

@@ -40,7 +40,7 @@ export const AUDIO_CHUNK_DURATION = Math.round(
 export async function waitForCondition(
   condition: () => boolean,
   description: string,
-  timeoutMs: number = 10_000,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (!condition()) {
@@ -59,7 +59,7 @@ export async function waitForCondition(
  * skip されるべき入力 (キーフレーム待ちの delta chunk) のように
  * 「何も起きない」ことを検証する場合に使う。
  */
-export async function waitWithoutOutput(durationMs: number = 200): Promise<void> {
+export async function waitWithoutOutput(durationMs = 200): Promise<void> {
   await new Promise<void>((resolve) => {
     window.setTimeout(resolve, durationMs);
   });
@@ -75,8 +75,8 @@ export async function waitWithoutOutput(durationMs: number = 200): Promise<void>
 export async function waitForQuiet(
   getCount: () => number,
   description: string,
-  quietMs: number = 300,
-  timeoutMs: number = 10_000,
+  quietMs = 300,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   let lastCount = getCount();

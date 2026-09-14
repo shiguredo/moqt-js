@@ -199,8 +199,8 @@ export function usePublisher() {
 
     pub.bytesSent.value += payload.length + properties.length;
 
-    // Object を送信する
-    publisherInstance.sendObject({
+    // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)
+    void publisherInstance.sendObject({
       groupId: pub.pubCurrentGroup.value,
       objectId: pub.pubCurrentObjectId.value++,
       payload,
@@ -253,7 +253,8 @@ export function usePublisher() {
           close: (closeInfo) => {
             addLog("warn", `[publisher] webtransport closed`, {
               closeCode: closeInfo.closeCode,
-              reason: closeInfo.reason.slice(0, 1024),
+              // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
+              reason: (closeInfo.reason ?? "").slice(0, 1024),
             });
             pub.pubStatus.value = "disconnected";
             pub.pubStatusMessage.value = `切断: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
@@ -308,7 +309,8 @@ export function usePublisher() {
         },
       ]);
       const catalogPayload = encodeCatalog(createdCatalog);
-      catalogPublisherInstance.sendObject({
+      // Catalog の送信完了は待たず、stopPublishing の done() で待ち合わせる
+      void catalogPublisherInstance.sendObject({
         groupId: 0,
         objectId: 0,
         payload: catalogPayload,
@@ -464,7 +466,8 @@ export function usePublisher() {
       if (pub.catalogPublisher.value && pub.catalogPublisher.value.state === "active") {
         const completeCatalog = createCompleteCatalog();
         const completeCatalogPayload = encodeCatalog(completeCatalog);
-        pub.catalogPublisher.value.sendObject({
+        // Complete catalog の送信完了は直後の done() で待ち合わせる
+        void pub.catalogPublisher.value.sendObject({
           groupId: 1,
           objectId: 0,
           payload: completeCatalogPayload,

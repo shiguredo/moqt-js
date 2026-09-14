@@ -55,7 +55,7 @@ self.onmessage = (e: MessageEvent<DecoderWorkerMessage>) => {
               type: "decoded",
               frame,
             },
-            { transfer: [frame as unknown as Transferable] },
+            { transfer: [frame] },
           );
         },
         error: (error: DOMException) => {

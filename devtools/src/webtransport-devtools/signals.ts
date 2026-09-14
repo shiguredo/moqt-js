@@ -132,25 +132,29 @@ function detectStaticApiSupport(): StaticApiGroup[] {
 
   // biome-ignore lint/suspicious/noExplicitAny: 静的チェック対象の型定義が不完全
   const hasOnProto = (ctor: any, member: string): boolean => {
-    if (ctor == null) return false;
+    // null と undefined の双方を弾く (未実装ブラウザでは global 自体が存在しない)
+    if (ctor === null || ctor === undefined) return false;
     const proto = ctor.prototype;
-    if (proto == null) return false;
+    if (proto === null || proto === undefined) return false;
     return member in proto;
   };
 
   // biome-ignore lint/suspicious/noExplicitAny: 静的チェック対象の型定義が不完全
   const hasOnStatic = (ctor: any, member: string): boolean => {
-    if (ctor == null) return false;
+    // null と undefined の双方を弾く (未実装ブラウザでは global 自体が存在しない)
+    if (ctor === null || ctor === undefined) return false;
     return member in ctor;
   };
 
-  const WT = globalObj.WebTransport;
-  const DDuplex = globalObj.WebTransportDatagramDuplexStream;
-  const BidiStream = globalObj.WebTransportBidirectionalStream;
-  const SendStream = globalObj.WebTransportSendStream;
-  const RecvStream = globalObj.WebTransportReceiveStream;
-  const SendGroup = globalObj.WebTransportSendGroup;
-  const WTError = globalObj.WebTransportError;
+  // noPropertyAccessFromIndexSignature が有効なため、index signature 経由の
+  // アクセスはブラケット記法で行う
+  const WT = globalObj["WebTransport"];
+  const DDuplex = globalObj["WebTransportDatagramDuplexStream"];
+  const BidiStream = globalObj["WebTransportBidirectionalStream"];
+  const SendStream = globalObj["WebTransportSendStream"];
+  const RecvStream = globalObj["WebTransportReceiveStream"];
+  const SendGroup = globalObj["WebTransportSendGroup"];
+  const WTError = globalObj["WebTransportError"];
 
   return [
     // Global interfaces の存在確認
@@ -746,19 +750,20 @@ export async function connect(): Promise<void> {
       const valueType = typeof val;
       if (valueType === "string") return `"${val as string}"`;
       if (valueType === "object") {
-        const constructorName = (val as object).constructor?.name;
+        // typeof で object に絞り込まれているため、アサーションは不要
+        const constructorName = val?.constructor?.name;
         return constructorName ?? "object";
       }
       return valueType;
     };
     // 親オブジェクトから単一プロパティを取り出すノードを作る
     const makeLeaf = (parent: unknown, prop: string): ApiSupportNode => {
-      if (parent == null) return { value: "N/A (parent is null)" };
+      if (parent === null || parent === undefined) return { value: "N/A (parent is null)" };
       return { value: inspect((parent as Record<string, unknown>)[prop]) };
     };
     // object 型なら指定した子プロパティを再帰的に展開する
     const makeNode = (parent: unknown, prop: string, childProps?: string[]): ApiSupportNode => {
-      if (parent == null) return { value: "N/A (parent is null)" };
+      if (parent === null || parent === undefined) return { value: "N/A (parent is null)" };
       const val = (parent as Record<string, unknown>)[prop];
       const node: ApiSupportNode = { value: inspect(val) };
       if (childProps && val !== null && typeof val === "object") {

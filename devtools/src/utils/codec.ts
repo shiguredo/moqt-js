@@ -32,7 +32,7 @@ export function getEncoderConfig(
         bitrate,
         framerate,
         hevc: { format: "annexb" },
-      } as VideoEncoderConfig;
+      };
     default:
       return { codec: "vp8", width, height, bitrate, framerate };
   }

@@ -51,9 +51,10 @@ async function runCodecTest<Name extends CodecTestName>(
 ): Promise<CodecTestResultMap[Name]> {
   const codecTest = CODEC_TESTS[name];
   if (codecTest === undefined) {
-    throw new Error(`unknown codec test: ${String(name)}`);
+    throw new Error(`unknown codec test: ${name}`);
   }
-  return await codecTest();
+  // 戻り値の Promise をそのまま返す (await して返し直す必要はない)
+  return codecTest();
 }
 
 /**

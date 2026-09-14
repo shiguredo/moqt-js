@@ -13,7 +13,8 @@ test("useCopyFeedback is a function with single-arg signature", () => {
 
 // navigator.clipboard が利用可能な環境では copy() の挙動検証は
 // renderHook 等の Preact テストランタイム導入後に拡張する。
-test("test environment assumption: navigator.clipboard is unavailable in jsdom", () => {
+// テスト関数名 test と重複しないタイトルにする (vitest/valid-title)
+test("jsdom environment assumption: navigator.clipboard is unavailable", () => {
   // jsdom 経由のテスト環境では navigator.clipboard は基本的に未定義。
   // polyfill が混入した場合は明示的に失敗させて気付けるようにする。
   if (typeof navigator !== "undefined" && navigator.clipboard !== undefined) {

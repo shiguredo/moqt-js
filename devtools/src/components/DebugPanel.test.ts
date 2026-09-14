@@ -45,7 +45,8 @@ test("addLog logSequence monotonically increases past MAX_LOGS", () => {
 test("logSequence does not fire on autoScroll toggle but fires on addLog", () => {
   let fireCount = 0;
   const dispose = effect(() => {
-    logSequence.value;
+    // signal を参照して effect の依存として登録する (値自体は使わない)
+    void logSequence.value;
     fireCount += 1;
   });
   try {

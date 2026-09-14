@@ -326,7 +326,8 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
   // 読み出しと close をまとめて行う (VideoFrame を保持し続けない)
   const drainFrames = async (): Promise<ObservedVideoFrame[]> => {
     const drained: ObservedVideoFrame[] = [];
-    const frames = pendingFrames.splice(0, pendingFrames.length);
+    // 第 2 引数を省略すると start 以降の全要素を削除する
+    const frames = pendingFrames.splice(0);
     for (const frame of frames) {
       drained.push(await summarizeVideoFrame(frame));
       frame.close();

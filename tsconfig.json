@@ -31,14 +31,17 @@
     "forceConsistentCasingInFileNames": true,
 
     // モジュール
-    "esModuleInterop": true,
+    // esModuleInterop / allowSyntheticDefaultImports は TypeScript 7 で常時有効のため記述しない
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
 
     // 出力
     "noEmit": true,
-    "skipLibCheck": true
+    // 依存ライブラリの型エラーも検出する
+    "skipLibCheck": false,
+    // 暗黙的な @types/* の取り込みを禁止する (必要なものは明示的に import する)
+    "types": []
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.prop.ts"]
