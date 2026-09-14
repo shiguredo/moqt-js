@@ -464,11 +464,13 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
     );
   }
 
+  // exactOptionalPropertyTypes では optional な redirect に undefined を渡せないため、
+  // 値がある場合だけ載せる
   return {
     type: MessageType.REQUEST_ERROR,
     errorCode,
     retryInterval,
     reasonPhrase,
-    redirect,
+    ...(redirect !== undefined ? { redirect } : {}),
   };
 }

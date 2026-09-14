@@ -84,7 +84,14 @@ export class ControlStreamReader {
         break;
       }
 
-      const length = (this.buffer[typeConsumed] << 8) | this.buffer[typeConsumed + 1];
+      const lengthHighByte = this.buffer[typeConsumed];
+      const lengthLowByte = this.buffer[typeConsumed + 1];
+      if (lengthHighByte === undefined || lengthLowByte === undefined) {
+        // 上の this.buffer.length < typeConsumed + 2 の検証により到達しない
+        // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+        break;
+      }
+      const length = (lengthHighByte << 8) | lengthLowByte;
 
       // 全体の長さを計算
       const totalLength = typeConsumed + 2 + length;

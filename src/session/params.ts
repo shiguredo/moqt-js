@@ -36,6 +36,7 @@ import {
 import { encodeVarint } from "../varint";
 import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
 import { LOCPropertyId } from "../loc";
+import { ProtocolViolationError } from "../error";
 
 // ============================================================================
 // 値域検証ヘルパー
@@ -291,6 +292,10 @@ export function validateTrackNamespaceForSend(namespace: string[], trackName?: s
     return;
   }
   const first = namespace[0];
+  if (first === undefined) {
+    // 上の namespace.length === 0 の検証により到達しない (型を絞るためのガード)
+    return;
+  }
   if (!first.startsWith(".")) {
     return;
   }
@@ -927,6 +932,11 @@ export function extractForwardState(parameters: Parameter[]): boolean {
   for (const param of parameters) {
     if (param.type === MessageParameterType.FORWARD) {
       const forwardValue = param.value[0];
+      if (forwardValue === undefined) {
+        // FORWARD は uint8 のため値 1 バイトが必ず存在するが、
+        // noUncheckedIndexedAccess で型上 undefined を含むため防御する
+        throw new ProtocolViolationError("FORWARD parameter is missing its value");
+      }
       validateForwardValue(forwardValue);
       return forwardValue !== 0;
     }

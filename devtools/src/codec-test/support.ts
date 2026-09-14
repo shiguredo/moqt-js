@@ -157,10 +157,13 @@ export function summarizeEncodedChunk(chunk: {
   duration: number | null;
   description?: Uint8Array;
 }): ObservedEncodedChunk {
+  // 先頭バイトは index access を避けて分割代入で取り出す。
+  // byteLength が 0 の chunk には先頭バイトが無いため -1 にする
+  const [firstByte = -1] = chunk.data;
   return {
     type: chunk.type,
     byteLength: chunk.data.byteLength,
-    firstByte: chunk.data.byteLength > 0 ? chunk.data[0] : -1,
+    firstByte,
     timestamp: chunk.timestamp,
     duration: chunk.duration,
     descriptionByteLength: chunk.description ? chunk.description.byteLength : null,
@@ -182,6 +185,8 @@ export async function summarizeVideoFrame(frame: VideoFrame): Promise<ObservedVi
       rgbaNonZeroByteCount += 1;
     }
   }
+  // 左上 1 ピクセルは RGBA の 4 バイト。index access を避けて subarray から取り出す
+  const firstPixel = Array.from(rgba.subarray(0, 4));
   return {
     codedWidth: frame.codedWidth,
     codedHeight: frame.codedHeight,
@@ -192,7 +197,7 @@ export async function summarizeVideoFrame(frame: VideoFrame): Promise<ObservedVi
     duration: frame.duration,
     rgbaByteLength: rgba.byteLength,
     rgbaNonZeroByteCount,
-    firstPixel: [rgba[0], rgba[1], rgba[2], rgba[3]],
+    firstPixel,
   };
 }
 

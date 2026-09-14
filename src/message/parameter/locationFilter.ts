@@ -259,6 +259,9 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
     );
   }
 
+  // fields の要素は fields.length による分岐後は必ず存在するが、
+  // noUncheckedIndexedAccess により型上は undefined を含むため、
+  // 各 case で使う要素だけを helper で取り出す
   switch (fields.length) {
     case 0:
       // Length 0: フィルタなし (REQUEST_UPDATE での除去など)
@@ -266,40 +269,36 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
 
     case 1:
       // 1 フィールド: StartGroup のみ (相対指定)
-      return [{ startGroup: fields[0] }, end - offset];
+      return [{ startGroup: requireLocationField(fields[0], "start group") }, end - offset];
 
     case 2:
-      return [{ startGroup: fields[0], startObject: fields[1] }, end - offset];
-
-    case 3:
-      // draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
-      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-      //  close the session with a PROTOCOL_VIOLATION."
-      if (fields[0] + fields[2] > MAX_VARINT) {
-        throw new ProtocolViolationError(
-          `absolute range end group exceeds maximum: ${fields[0]} + ${fields[2]} > ${MAX_VARINT}`,
-        );
-      }
-      return [
-        { startGroup: fields[0], startObject: fields[1], endGroupDelta: fields[2] },
-        end - offset,
-      ];
-
-    case 4:
-      if (fields[0] + fields[2] > MAX_VARINT) {
-        throw new ProtocolViolationError(
-          `absolute range end group exceeds maximum: ${fields[0]} + ${fields[2]} > ${MAX_VARINT}`,
-        );
-      }
       return [
         {
-          startGroup: fields[0],
-          startObject: fields[1],
-          endGroupDelta: fields[2],
-          endObject: fields[3],
+          startGroup: requireLocationField(fields[0], "start group"),
+          startObject: requireLocationField(fields[1], "start object"),
         },
         end - offset,
       ];
+
+    case 3: {
+      // draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+      //  close the session with a PROTOCOL_VIOLATION."
+      const startGroup = requireLocationField(fields[0], "start group");
+      const startObject = requireLocationField(fields[1], "start object");
+      const endGroupDelta = requireLocationField(fields[2], "end group delta");
+      assertEndGroupWithinMaximum(startGroup, endGroupDelta);
+      return [{ startGroup, startObject, endGroupDelta }, end - offset];
+    }
+
+    case 4: {
+      const startGroup = requireLocationField(fields[0], "start group");
+      const startObject = requireLocationField(fields[1], "start object");
+      const endGroupDelta = requireLocationField(fields[2], "end group delta");
+      const endObject = requireLocationField(fields[3], "end object");
+      assertEndGroupWithinMaximum(startGroup, endGroupDelta);
+      return [{ startGroup, startObject, endGroupDelta, endObject }, end - offset];
+    }
 
     default:
       // ループの境界 (fields.length < 4) と current !== end の検証により
@@ -309,6 +308,40 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
         `malformed location filter: unexpected number of fields: ${fields.length}`,
       );
   }
+}
+
+/**
+ * StartGroup + EndGroupDelta が vi64 の上限を超えないことを検証する
+ *
+ * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+ * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close the
+ *  session with a PROTOCOL_VIOLATION."
+ *
+ * @param startGroup - Start Group
+ * @param endGroupDelta - End Group Delta
+ */
+function assertEndGroupWithinMaximum(startGroup: bigint, endGroupDelta: bigint): void {
+  if (startGroup + endGroupDelta > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `absolute range end group exceeds maximum: ${startGroup} + ${endGroupDelta} > ${MAX_VARINT}`,
+    );
+  }
+}
+
+/**
+ * 解析済みフィールドを 1 つ取り出す
+ *
+ * `fields.length` による分岐後は必ず存在するが、`noUncheckedIndexedAccess` により
+ * 型上は `undefined` を含む。到達しない防御として構造不正 (PROTOCOL_VIOLATION) にする。
+ *
+ * @param field - 取り出すフィールド
+ * @param label - エラー文言に使うフィールド名
+ */
+function requireLocationField(field: bigint | undefined, label: string): bigint {
+  if (field === undefined) {
+    throw new ProtocolViolationError(`malformed location filter: missing ${label}`);
+  }
+  return field;
 }
 
 /**

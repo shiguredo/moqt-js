@@ -255,8 +255,11 @@ export interface FetchObjectContext {
    * (subgroupPublisherPriority / hasPriorSubgroup) に委ねる
    * (ハードコードされたテストコンテキストとの互換。委譲はそのコンテキストを
    * 通る最初の比較のみで、以後の更新で Map 追跡に移行する)。
+   *
+   * 内部の状態オブジェクトで、Map 追跡なしを明示的に undefined として保持するため
+   * `| undefined` を付ける
    */
-  subgroupPriorities?: Map<bigint, number>;
+  subgroupPriorities?: Map<bigint, number> | undefined;
 }
 
 /**
@@ -628,6 +631,29 @@ function updateSubgroupPriorities(
 }
 
 /**
+ * PRIORITY_PRESENT が設定された Fetch Object の Publisher Priority バイトを読む
+ *
+ * Priority は 8 bit 固定 (draft-ietf-moq-transport-21 §11.4.1.1) のため、
+ * バッファが Priority バイトで切れている場合は範囲外アクセス (undefined 取得)
+ * による誤検出を避け、IncompleteDataError で次のチャンクを待つ。
+ *
+ * @param data - デコード対象のバイト列
+ * @param priorityOffset - Priority バイトの位置
+ */
+function readFetchObjectPublisherPriority(data: Uint8Array, priorityOffset: number): number {
+  if (priorityOffset >= data.length) {
+    throw new IncompleteDataError("incomplete fetch object fields: publisher priority");
+  }
+  const priorityByte = data[priorityOffset];
+  if (priorityByte === undefined) {
+    // 上の priorityOffset >= data.length の検証により到達しない
+    // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+    throw new IncompleteDataError("incomplete fetch object fields: publisher priority");
+  }
+  return priorityByte;
+}
+
+/**
  * PRIORITY_PRESENT が未設定の Fetch Object の Priority を解決する
  *
  * draft-ietf-moq-transport-21 §11.4.1.1 Table 9:
@@ -784,13 +810,7 @@ export function decodeFetchObjectFields(
   // Publisher Priority
   let publisherPriority: number;
   if (flags & FetchSerializationFlags.PRIORITY_PRESENT) {
-    // Priority は 8 bit 固定 (draft-ietf-moq-transport-21 §11.4.1.1) のため、
-    // バッファが Priority バイトで切れている場合は範囲外アクセス (undefined 取得)
-    // による誤検出を避け、IncompleteDataError で次のチャンクを待つ
-    if (offset + totalConsumed >= data.length) {
-      throw new IncompleteDataError("incomplete fetch object fields: publisher priority");
-    }
-    publisherPriority = data[offset + totalConsumed];
+    publisherPriority = readFetchObjectPublisherPriority(data, offset + totalConsumed);
     totalConsumed += 1;
 
     checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
@@ -888,7 +908,9 @@ export function decodeFetchObjectFields(
       subgroupId,
       objectId,
       publisherPriority,
-      properties,
+      // exactOptionalPropertyTypes では optional な properties に undefined を渡せないため、
+      // 値がある場合だけ載せる
+      ...(properties !== undefined ? { properties } : {}),
       payloadLength,
     },
     totalConsumed,

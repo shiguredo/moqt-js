@@ -72,8 +72,10 @@ export async function connect(
   await transport.ready;
 
   // Create session
+  // exactOptionalPropertyTypes では optional な pendingSubgroup に undefined を渡せないため、
+  // 値がある場合だけ載せる (fragment は null を取り得るため常に載せる)
   const session = new SessionImpl(transport, callbacks ?? {}, {
-    pendingSubgroup: options?.pendingSubgroup,
+    ...(options?.pendingSubgroup !== undefined ? { pendingSubgroup: options.pendingSubgroup } : {}),
     fragment,
   });
 
@@ -83,15 +85,29 @@ export async function connect(
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
   // draft-ietf-moq-transport-21 §9.1.5 / §15.8
   // grease: true は GREASE Setup Option (§13) を追加する
+  // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+  // 値がある場合だけ載せる
   await session.initialize({
-    authorizationToken: options?.authorizationToken,
-    moqtImplementation: options?.moqtImplementation,
-    grease: options?.grease,
-    maxAuthTokenCacheSize: options?.maxAuthTokenCacheSize,
-    maxRequestUpdates: options?.maxRequestUpdates,
-    maxFilterRanges: options?.maxFilterRanges,
-    controlMessageTimeoutMs: options?.controlMessageTimeoutMs,
-    dataStreamTimeoutMs: options?.dataStreamTimeoutMs,
+    ...(options?.authorizationToken !== undefined
+      ? { authorizationToken: options.authorizationToken }
+      : {}),
+    ...(options?.moqtImplementation !== undefined
+      ? { moqtImplementation: options.moqtImplementation }
+      : {}),
+    ...(options?.grease !== undefined ? { grease: options.grease } : {}),
+    ...(options?.maxAuthTokenCacheSize !== undefined
+      ? { maxAuthTokenCacheSize: options.maxAuthTokenCacheSize }
+      : {}),
+    ...(options?.maxRequestUpdates !== undefined
+      ? { maxRequestUpdates: options.maxRequestUpdates }
+      : {}),
+    ...(options?.maxFilterRanges !== undefined ? { maxFilterRanges: options.maxFilterRanges } : {}),
+    ...(options?.controlMessageTimeoutMs !== undefined
+      ? { controlMessageTimeoutMs: options.controlMessageTimeoutMs }
+      : {}),
+    ...(options?.dataStreamTimeoutMs !== undefined
+      ? { dataStreamTimeoutMs: options.dataStreamTimeoutMs }
+      : {}),
   });
 
   return session;

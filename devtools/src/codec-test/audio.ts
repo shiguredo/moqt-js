@@ -222,6 +222,10 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
   // 未設定時の decode() は例外を投げず、AudioData も error も出さない契約。
   // 設定済みなら復号される実 chunk を投入し、本当に何も起きないことを見る
   const firstChunk = referenceChunks[0];
+  if (firstChunk === undefined) {
+    // 参照 chunk は 1 秒分の入力から 1 件以上生成されるため到達しない防御
+    throw new Error("reference audio encoding produced no chunk");
+  }
   const unconfiguredReturnValue = decoder.decode(
     firstChunk.data,
     firstChunk.type,

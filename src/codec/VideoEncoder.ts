@@ -73,12 +73,15 @@ export class VideoEncoderWrapper {
       // dataTypes で "encoded" のみを受け取るため、種別の分岐は不要
       handleWorkerData: (response) => {
         const message = response as VideoEncoderWorkerData;
+        // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
+        // 値がある場合だけ載せる
+        const description = message.description ? new Uint8Array(message.description) : undefined;
         this.callbacks.output({
           data: new Uint8Array(message.data),
           type: message.chunkType,
           timestamp: message.timestamp,
           duration: message.duration,
-          description: message.description ? new Uint8Array(message.description) : undefined,
+          ...(description !== undefined ? { description } : {}),
         });
       },
       notifyError: (error) => this.callbacks.error(error),
@@ -103,12 +106,14 @@ export class VideoEncoderWrapper {
             }
           }
 
+          // exactOptionalPropertyTypes では optional な description に undefined を渡せないため、
+          // 値がある場合だけ載せる
           this.callbacks.output({
             data,
             type: chunk.type,
             timestamp: chunk.timestamp,
             duration: chunk.duration,
-            description,
+            ...(description !== undefined ? { description } : {}),
           });
         },
         error: (error: DOMException) => {

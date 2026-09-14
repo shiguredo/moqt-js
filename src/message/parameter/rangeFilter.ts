@@ -102,8 +102,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
 
   // Range 列（delta エンコーディング）
   let prevEnd = 0n;
-  for (let i = 0; i < param.ranges.length; i++) {
-    const range = param.ranges[i];
+  for (const [index, range] of param.ranges.entries()) {
     const startDelta = range.start - prevEnd;
     if (startDelta < 0n) {
       throw new Error("range start must be >= previous end");
@@ -128,7 +127,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
       prevEnd = range.end;
     } else {
       // 末尾 Range のみ End 省略可
-      if (i !== param.ranges.length - 1) {
+      if (index !== param.ranges.length - 1) {
         throw new Error("only the last range may omit end");
       }
     }
@@ -186,6 +185,10 @@ export function decodeRangeFilter(
 
   // SetID (8 bit)
   const setId = data[bodyStart];
+  if (setId === undefined) {
+    // 上の bodyStart >= data.length の検証で到達しない (型を絞るためのガード)
+    throw new InvalidFilterError("range filter is missing SetID");
+  }
   let pos = bodyStart + 1;
 
   // Property Type (vi64) - OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER のみ
@@ -255,7 +258,11 @@ export function decodeRangeFilter(
   }
 
   totalConsumed += Number(length);
-  return [{ type, setId, propertyType, ranges }, totalConsumed];
+  // exactOptionalPropertyTypes では optional な propertyType に undefined を渡せないため、
+  // 値がある場合だけ載せた object を組み立てる
+  const spec: RangeFilterSpec =
+    propertyType === undefined ? { type, setId, ranges } : { type, setId, propertyType, ranges };
+  return [spec, totalConsumed];
 }
 
 /**

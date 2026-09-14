@@ -304,16 +304,24 @@ export function decodeMessageParameter(
       assertLengthWithinData("uint8 parameter value", 1n, offset + totalConsumed, data.length);
       value = data.slice(offset + totalConsumed, offset + totalConsumed + 1);
       totalConsumed += 1;
+      const valueByte = value[0];
+      if (valueByte === undefined) {
+        // 上の assertLengthWithinData で 1 バイトの存在を検証済みのため到達しない
+        // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
+        throw new ProtocolViolationError(
+          `uint8 parameter value is missing: type 0x${paramTypeNumber.toString(16)}`,
+        );
+      }
       // draft-ietf-moq-transport-21 §9.20.9 / §9.20.19:
       // FORWARD (0x10) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
       // draft-ietf-moq-transport-21 §9.20.22:
       // INCLUDE_PROPERTIES (0x35) も 0/1 以外は PROTOCOL_VIOLATION
       if (paramTypeNumber === 0x10) {
-        validateForwardValue(value[0]);
+        validateForwardValue(valueByte);
       } else if (paramTypeNumber === 0x22) {
-        validateGroupOrderValue(value[0]);
+        validateGroupOrderValue(valueByte);
       } else if (paramTypeNumber === 0x35) {
-        validateIncludePropertiesValue(value[0]);
+        validateIncludePropertiesValue(valueByte);
       }
       break;
     }

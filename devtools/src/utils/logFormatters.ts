@@ -111,18 +111,19 @@ export function formatHexDump(data: Uint8Array): string {
     const offsetStr = offset.toString(16).padStart(4, "0");
 
     const hexParts: string[] = [];
-    for (let i = 0; i < bytesPerLine; i++) {
-      if (i < chunk.length) {
-        hexParts.push(chunk[i].toString(16).padStart(2, "0"));
-      } else {
-        hexParts.push("  ");
-      }
+    // for...of で各バイトを取り出す (noUncheckedIndexedAccess で index access は
+    // 型上 undefined を含むため、要素走査で回避する)
+    for (const byte of chunk) {
+      hexParts.push(byte.toString(16).padStart(2, "0"));
+    }
+    // 16 バイト未満の最終行は残りを空白で埋め、hex 列と ASCII 列の位置を揃える
+    for (let i = chunk.length; i < bytesPerLine; i++) {
+      hexParts.push("  ");
     }
     const hexStr = hexParts.slice(0, 8).join(" ") + "  " + hexParts.slice(8).join(" ");
 
     let asciiStr = "";
-    for (let i = 0; i < chunk.length; i++) {
-      const byte = chunk[i];
+    for (const byte of chunk) {
       if (byte >= 0x20 && byte <= 0x7e) {
         asciiStr += String.fromCharCode(byte);
       } else {

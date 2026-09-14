@@ -79,7 +79,16 @@ function substituteString(
   fieldPath: string,
 ): string {
   const replaced = value.replace(VARIABLE_REFERENCE_PATTERN, (_match, name: string) => {
-    return Object.hasOwn(variables, name) ? variables[name] : "";
+    if (!Object.hasOwn(variables, name)) {
+      return "";
+    }
+    const replacement = variables[name];
+    if (replacement === undefined) {
+      // Object.hasOwn の真偽と index signature の型が一致しないため undefined を含むが、
+      // OwnProperty がある場合は必ず string が入る。到達しない防御として空文字にする
+      return "";
+    }
+    return replacement;
   });
   // 置換後に残った `%` は literal とみなして reject (§5.4.1)
   if (replaced.includes("%")) {

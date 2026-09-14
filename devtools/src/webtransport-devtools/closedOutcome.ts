@@ -14,9 +14,12 @@ export interface ClosedOutcome {
   // closed の fulfill: "resolved" / reject: "rejected"
   state: "resolved" | "rejected";
   // fulfilled 時に受け取った closeCode (実装によっては undefined になり得る)
-  closeCode?: number;
+  // `| undefined` を明示するのは、closeInfo のフィールド欠落を「値が未指定」として
+  // そのまま記録する設計であり、キー自体を落とすのとは意味が異なるため
+  closeCode?: number | undefined;
   // fulfilled 時に受け取った reason (実装によっては undefined になり得る)
-  reason?: string;
+  // closeCode と同じ理由で `| undefined` を明示する
+  reason?: string | undefined;
   // rejected 時に受け取ったエラーメッセージ
   errorMessage?: string;
 }
