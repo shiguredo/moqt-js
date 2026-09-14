@@ -1,7 +1,7 @@
 # FETCH の End of Range に Object Payload Length を含めない
 
 - Created: 2026-09-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-14
 - Branch: feature/fix-fetch-end-of-range-payload-length
 - Polished: 2026-09-14
 
@@ -43,3 +43,12 @@
 - `src/dataStream.fetch.test.ts`
 - `refs/moq/draft-ietf-moq-transport-21.txt` §11.4.1.2 / Table 7 / Figure 28
 - `https://github.com/moq-wg/moq-transport/issues/1861` (End of Range に Object Payload Length を含めないことの上流での明確化)
+
+## 解決方法
+
+- `encodeFetchObjectFields` の End of Range 分岐から `encodeVarint(fields.payloadLength)` を削除し、`Serialization Flags + Group ID + Object ID` のみを書くようにした。
+- `decodeEndOfRange` から Object Payload Length の `decodeVarint` を削除した。返却する `DecodedFetchObject.payloadLength` は 0n 固定とし、`processFetchObjects` が payload 0 バイトとして扱えるようにした。
+- `FetchObjectFields.payloadLength` と `DecodedFetchObject.payloadLength` に、通常 Object / EOR それぞれの意味をコメントで明記した。
+- テストを追加した。0x8C / 0x10C / 0x20C の 3 値について固定バイト列のエンコードを検証し、decode が 3 フィールドで完結して `payloadLength` が 0n になることを確認した。さらに EOR の直後に通常 Object を連結し、EOR の消費バイト数で次の Serialization Flags からデコードできることを確認した。
+- `CHANGES.md` の `## develop` に `[FIX]` を追加した。
+- 検証: `vp check` / `tsc --noEmit` / `vp test run` (99 ファイル / 2193 テスト) が通ることを確認した。

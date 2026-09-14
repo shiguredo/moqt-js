@@ -163,6 +163,13 @@ export interface FetchObjectFields {
   objectId?: bigint;
   publisherPriority?: number;
   properties?: Uint8Array;
+  /**
+   * Object Payload Length。
+   *
+   * draft-ietf-moq-transport-21 §11.4.1:
+   * 通常 Object のフィールドであり、End of Range indicator の wire には存在しない。
+   * End of Range では無視される。
+   */
   payloadLength: bigint;
   payload?: Uint8Array;
 }
@@ -184,6 +191,12 @@ export interface DecodedFetchObject {
   objectId: bigint;
   publisherPriority: number;
   properties?: Uint8Array;
+  /**
+   * Object Payload Length。
+   *
+   * draft-ietf-moq-transport-21 §11.4.1:
+   * End of Range indicator は Object Payload Length を持たないため、EOR の場合は 0n。
+   */
   payloadLength: bigint;
   /**
    * End of Range indicator (Section 11.4.1.2)
@@ -297,13 +310,15 @@ export function encodeFetchObjectFields(
   parts.push(encodeVarint(fields.serializationFlags));
 
   // End of Range の場合は Group ID と Object ID のみ
+  // draft-ietf-moq-transport-21 §11.4.1.2: End of Range indicator は通常 Object と
+  // 異なり Object Payload Length / Object Payload を持たない。
+  // FetchObjectFields.payloadLength は通常 Object 用であり、ここでは wire に書かない。
   if (isEndOfRangeFlags(fields.serializationFlags)) {
     if (fields.groupId === undefined || fields.objectId === undefined) {
       throw new Error("Group ID and Object ID required for End of Range");
     }
     parts.push(encodeVarint(fields.groupId));
     parts.push(encodeVarint(fields.objectId));
-    parts.push(encodeVarint(fields.payloadLength));
 
     return concatUint8Arrays(parts);
   }
@@ -423,8 +438,10 @@ function decodeEndOfRange(
   const [objectId, oidConsumed] = decodeVarint(data, startOffset + consumed);
   consumed += oidConsumed;
 
-  const [payloadLength, payloadLenConsumed] = decodeVarint(data, startOffset + consumed);
-  consumed += payloadLenConsumed;
+  // draft-ietf-moq-transport-21 §11.4.1.2:
+  // End of Range indicator は Group ID と Object ID のみで、Object Payload Length を持たない。
+  // 呼び出し側 (processFetchObjects) が payload 0 バイトとして扱えるように 0n を返す。
+  const payloadLength = 0n;
 
   const endOfRange: EndOfRangeType =
     flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE
