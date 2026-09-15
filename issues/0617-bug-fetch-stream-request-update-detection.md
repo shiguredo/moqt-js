@@ -25,11 +25,11 @@ draft-ietf-moq-transport-21 §9.5:
 
 draft-ietf-moq-transport-21 §9.10:
 
-> PUBLISH_STATE_NOTIFY applies only to subscriptions, and is sent only by the publisher.  An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type, or from the subscriber, MUST close the session with a PROTOCOL_VIOLATION.
+> PUBLISH_STATE_NOTIFY applies only to subscriptions, and is sent only by the publisher. An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type, or from the subscriber, MUST close the session with a PROTOCOL_VIOLATION.
 
 draft-ietf-moq-transport-21 §9.11:
 
-> A publisher responds to a FETCH request with either a FETCH_OK or a REQUEST_ERROR message.  The publisher creates a new unidirectional stream that is used to send the Objects.  The FETCH_OK or REQUEST_ERROR can come at any time relative to object delivery.
+> A publisher responds to a FETCH request with either a FETCH_OK or a REQUEST_ERROR message. The publisher creates a new unidirectional stream that is used to send the Objects. The FETCH_OK or REQUEST_ERROR can come at any time relative to object delivery.
 
 ## 設計方針
 
