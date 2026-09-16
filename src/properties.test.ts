@@ -1207,6 +1207,71 @@ test("readDeliveryTimeoutObjectProperties: delta encoding の delivery timeout �
   assert.equal(result.subgroupDeliveryTimeout, 7000n);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "Unless specified by a particular Property specification, Properties MAY appear
+ *  either in the mutable property list or inside Immutable Properties. When looking
+ *  for the value of a property, processors MUST search both the mutable properties
+ *  and the contents of Immutable Properties."
+ * Immutable Properties (0x0B) の内側に置かれた delivery timeout も解決する。
+ */
+test("readDeliveryTimeoutObjectProperties: Immutable Properties 配下の delivery timeout を抽出する", () => {
+  const inner = encodeProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n },
+    { id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, value: 7000n },
+  ]);
+  const encoded = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, 5000n);
+  assert.equal(result.subgroupDeliveryTimeout, 7000n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * mutable list を先に検索し、そちらに値がある場合は mutable 側の値を使う。
+ */
+test("readDeliveryTimeoutObjectProperties: mutable 側の値が Immutable Properties 配下より優先される", () => {
+  const inner = encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n }]);
+  const encoded = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 9000n },
+  ]);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, 9000n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "An Object contains an Immutable Properties property that contains another
+ *  Immutable Properties key." は malformed であるため、内側の 0x0B は辿らない
+ * (探索は 1 段だけ)。
+ */
+test("readDeliveryTimeoutObjectProperties: Immutable Properties の内側の 0x0B は辿らない", () => {
+  const innermost = encodeProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n },
+  ]);
+  const inner = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innermost }]);
+  const encoded = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, undefined);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 内側の KVP が不完全でも decodeObjectPropertiesTolerant の寛容契約どおり
+ * 例外を送出せず、読めた分の値だけを保持する。
+ */
+test("readDeliveryTimeoutObjectProperties: Immutable Properties の内側が不完全でも throw しない", () => {
+  // 内側: 0x02 (OBJECT_DELIVERY_TIMEOUT) の varint value が途中で終端している
+  const inner = new Uint8Array([0x02, 0xff, 0xff]);
+  const encoded = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  let result: ReturnType<typeof readDeliveryTimeoutObjectProperties> | undefined;
+  assert.doesNotThrow(() => {
+    result = readDeliveryTimeoutObjectProperties(encoded);
+  });
+  assert.equal(result?.objectDeliveryTimeout, undefined);
+});
+
 test("encodeProperties/decodeProperties: GREASE Property を含む Track Properties がラウンドトリップする", () => {
   for (let i = 0; i < 20; i++) {
     const grease = generateGreaseProperty();
