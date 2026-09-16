@@ -1598,6 +1598,17 @@ function assertPriorIdGapInProperties(
  * 全滅し、抽出済みの先行値のみが保持される（absolute 形式より寛容性が低下する
  * 既知の制約）。
  *
+ * draft-ietf-moq-transport-21 §10.7 (Immutable Properties):
+ * "Unless specified by a particular Property specification, Properties MAY appear
+ *  either in the mutable property list or inside Immutable Properties. When looking
+ *  for the value of a property, processors MUST search both the mutable properties
+ *  and the contents of Immutable Properties."
+ * mutable list を先に走査し、そこで見つからなかった型だけ Immutable Properties
+ * (0x0B) の内側を 1 段だけ走査する (§10.7 は 0x0B の内側に 0x0B が現れる Object を
+ * malformed とするため、内側の 0x0B は辿らない)。内側も
+ * decodeObjectPropertiesTolerant の寛容契約どおり、不完全・不正な KVP ではそこで
+ * 打ち切る。
+ *
  * @returns 抽出できた値。不明・不完全なら undefined
  */
 export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | undefined): {
@@ -1613,11 +1624,26 @@ export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | und
 
   // 寛容にデコードし、読めた分の先行値のみを保持する
   const decoded = decodeObjectPropertiesTolerant(properties);
+  // mutable list を先に走査する (同じ型が mutable 側にあればそちらの値を使う)
   for (const property of decoded.properties) {
     if (property.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT) {
       objectDeliveryTimeout = property.value;
     } else if (property.id === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT) {
       subgroupDeliveryTimeout = property.value;
+    }
+  }
+
+  // mutable list で見つからなかった型だけ Immutable Properties の内側を走査する
+  for (const property of decoded.properties) {
+    if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES || property.data === undefined) {
+      continue;
+    }
+    for (const inner of decodeObjectPropertiesTolerant(property.data).properties) {
+      if (inner.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT) {
+        objectDeliveryTimeout ??= inner.value;
+      } else if (inner.id === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT) {
+        subgroupDeliveryTimeout ??= inner.value;
+      }
     }
   }
 
