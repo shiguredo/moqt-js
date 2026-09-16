@@ -24,7 +24,7 @@ draft-ietf-moq-transport-21 §6.5:
 
 - TRACK_STATUS_OK は §9.20.17 の出現先一覧を根拠に現状維持とし、その解釈をコードコメントに明記する。相互運用を優先する場合は EXPIRES を許容する
 - `.session` と `.` 単体は、未対応リクエスト経路でも先頭の Track Namespace を読んで判定し、該当時に DOES_NOT_EXIST を返す。デコードできない場合のみ NOT_SUPPORTED を維持する
-- 2 通目 REQUEST_OK は「pending がなく、自 endpoint が REQUEST_UPDATE を送っていない」場合に限り PROTOCOL_VIOLATION とする (§9.5 が認める coalescing は失敗した更新を 1 通の REQUEST_ERROR にまとめる規定であり、REQUEST_OK の重複受信を許さない)
+- 2 通目 REQUEST_OK は「pending がなく、自 endpoint が REQUEST_UPDATE を送っていない」場合に限り PROTOCOL_VIOLATION とする (§9.5 が認める coalescing は失敗した更新を 1 通の REQUEST_ERROR にまとめる規定であり、REQUEST_OK の重複受信を許さない)。ただし GOAWAY 受信済みの request stream は除く。GOAWAY 受信時に未応答の REQUEST_UPDATE は reject 済みで pendingRequestUpdate から削除されるため (§9.2)、その後届く REQUEST_OK は削除済みの更新への正当な応答でありうる
 - GOAWAY 後の subscribe ロールは、閉じる側に寄せるか逸脱を明記して維持するかを決める
 
 ## 完了条件

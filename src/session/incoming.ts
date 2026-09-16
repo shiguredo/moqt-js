@@ -225,9 +225,11 @@ export async function incomingHandleFirstBidiMessage(
     // NOT_SUPPORTED 応答でも ID を消費して記録する (検証→応答の順)。
     // 先頭 varint が取れない空・切詰めはペイロード破損として閉じる。
     let requestId: bigint;
-    let offsetAfterRequestId: number;
+    // decodeVarint の第 2 戻り値は varint が消費したバイト数。先頭 (offset 0) から
+    // 読むため、その値がそのまま Request ID 直後のオフセットになる。
+    let requestIdLength: number;
     try {
-      [requestId, offsetAfterRequestId] = decodeVarint(firstMsg.payload, 0);
+      [requestId, requestIdLength] = decodeVarint(firstMsg.payload, 0);
     } catch (error) {
       // 空・切詰めの詳細はメッセージに残す (デバッグ時の区別のため)
       const detail = error instanceof Error ? error.message : String(error);
@@ -252,9 +254,9 @@ export async function incomingHandleFirstBidiMessage(
     //  rather than passing it to the Application."
     // 未対応リクエストでも Request ID の直後にある Track Namespace を読み、先頭
     // フィールドが "." 単体または ".session" なら DOES_NOT_EXIST で拒否する (MUST)。
-    // 受信 PUBLISH 経路 (incomingHandlePublish) と同じ判定を使う。
+    // 受信 PUBLISH 経路 (SessionImpl の受信 PUBLISH 分岐) と同じ判定を使う。
     // Namespace をデコードできない場合は NOT_SUPPORTED を維持する。
-    if (incomingIsRejectedNamespaceRequest(firstMsg.payload, offsetAfterRequestId)) {
+    if (incomingIsRejectedNamespaceRequest(firstMsg.payload, requestIdLength)) {
       await incomingSendRequestErrorAndClose(
         stream,
         RequestErrorCode.DOES_NOT_EXIST,
@@ -292,8 +294,18 @@ export async function incomingHandleFirstBidiMessage(
  * Request ID の直後に Track Namespace を置くため、offset から Track Namespace を
  * 読んで判定する。
  *
- * Namespace をデコードできない場合 (未対応メッセージの本体が本実装の想定と異なる
- * 場合) は予約名前空間の判定を行わず、呼び出し側が NOT_SUPPORTED を返す。
+ * Namespace をデコードできない場合は予約名前空間の判定を行わず、呼び出し側が
+ * NOT_SUPPORTED を返す。デコード失敗には 2 種あるが、どちらも同じ扱いにする。
+ *
+ * - 切詰め (IncompleteDataError): 未対応メッセージの本体が本実装の想定と異なる
+ * - 構造違反 (ProtocolViolationError: フィールド長 0 / 32 フィールド超 /
+ *   4,096 バイト超。§2.4.1 / §8.7 は受信時に PROTOCOL_VIOLATION で閉じる MUST)
+ *
+ * 構造違反を閉じないのは、未対応リクエストの本文を本実装が解釈しないためである。
+ * §1.5 (Extensibility) は未対応メッセージへの NOT_SUPPORTED 応答を求めており、
+ * 本文の解釈結果でセッションを閉じると、将来のメッセージ定義が本実装の想定と
+ * 異なる場合に相互運用を壊す。予約名前空間の MUST 拒否 (§2.4.2 / §6.5) は
+ * Namespace が読めた場合に成立する。
  *
  * @param payload - 未対応リクエストのメッセージ本文
  * @param offset - Request ID (varint) の直後のオフセット

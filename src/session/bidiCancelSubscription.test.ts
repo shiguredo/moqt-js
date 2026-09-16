@@ -165,6 +165,7 @@ function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
@@ -304,6 +305,7 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):

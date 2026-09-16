@@ -69,6 +69,7 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     onRequestDrained: () => {},
     closeWithError: () => {},
   } as unknown as BidiSessionInternal;

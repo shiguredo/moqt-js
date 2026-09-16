@@ -8,10 +8,14 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
-import { encodeRequestOkPayload, encodeGoawayPayload } from "../message/session";
+import {
+  encodeRequestOkPayload,
+  encodeRequestErrorPayload,
+  encodeGoawayPayload,
+} from "../message/session";
 import { encodePublishDonePayload } from "../message/publish";
 import { MessageType } from "../message/types";
-import { RequestErrorCode, RequestError } from "../error";
+import { RequestErrorCode, RequestError, SessionErrorCode } from "../error";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
   bidiReadRequestStreamMessages,
@@ -1059,6 +1063,123 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_
   assert.isFalse(resolved);
   // 遅延 REQUEST_OK による Forward State の誤反映も起きない (false のまま)
   assert.isFalse(subscriber.forwardState);
+  // 遅延 REQUEST_OK は「2 通目の応答」ではないため PROTOCOL_VIOLATION で閉じない
+  // (GOAWAY 受信済みの request stream では違反判定を行わない)
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.5.1 (Updating Subscriptions):
+ * "If the coalesced REQUEST_UPDATE results in REQUEST_ERROR, only a single
+ *  REQUEST_ERROR will be sent and the sender of the REQUEST_UPDATEs will not
+ *  always be able to determine which caused an error."
+ * coalescing は失敗した更新を 1 通にまとめるだけであり、同時に in-flight だった
+ * 成功分の更新には §9.5 の MUST により REQUEST_OK が別途届く。
+ * REQUEST_ERROR で pending を消した後に届く REQUEST_OK を 2 通目の応答として
+ * セッションを閉じないことを検証する。
+ */
+test("bidiReadRequestStreamMessages: coalescing された REQUEST_ERROR 後の遅延 REQUEST_OK では閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  // in-flight の REQUEST_UPDATE を 1 件注入する
+  let rejected: Error | undefined;
+  ctx.session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  // coalescing された REQUEST_ERROR → 成功分の遅延 REQUEST_OK → FIN の順に feed する
+  const requestErrorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0x3n,
+    retryInterval: 0n,
+    reasonPhrase: "update failed",
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, requestErrorPayload),
+  );
+  const requestOkPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, requestOkPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // pending は REQUEST_ERROR で 1 件だけ reject され、遅延 REQUEST_OK は違反ではない
+  assert.isDefined(rejected);
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.isUndefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithErrorCount, 0);
+});
+
+/**
+ * 上の続き: coalescing で消えた 1 件分の許容枠を使い切った後に、さらに
+ * pending の無い REQUEST_OK を受信した場合は 2 通目の応答であり
+ * PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+test("bidiReadRequestStreamMessages: coalescing 後の許容枠を超えた REQUEST_OK で閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  ctx.session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: () => {},
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const requestErrorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0x3n,
+    retryInterval: 0n,
+    reasonPhrase: "update failed",
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, requestErrorPayload),
+  );
+  const requestOkPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  // 1 通目は許容枠 (REQUEST_ERROR で消した 1 件分) を消費し、2 通目で閉じる
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, requestOkPayload),
+  );
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, requestOkPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithErrorCount, 1);
 });
 
 /**

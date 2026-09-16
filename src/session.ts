@@ -1424,6 +1424,9 @@ export class SessionImpl implements Session {
   // draft-ietf-moq-transport-21 §9.2 (GOAWAY):
   // 単一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION
   private goawayReceivedOnRequestStreams = new Set<bigint>();
+  // pending の無い REQUEST_OK を許容する枠 (coalescing された REQUEST_ERROR で
+  // pending を消した件数)。詳細は BidiSessionInternal の同名フィールドの doc を参照
+  private unmatchedRequestOkAllowances = new Map<bigint, number>();
   // 受信済み Request ID の追跡 (重複検出用)
   // draft-ietf-moq-transport-21 §6.4.2.1:
   // 重複 Request ID の受信は INVALID_REQUEST_ID でセッションを閉じる。
@@ -3136,6 +3139,9 @@ export class SessionImpl implements Session {
     // GOAWAY 受信追跡をクリア
     this.goawayReceivedOnRequestStreams.clear();
 
+    // pending の無い REQUEST_OK の許容枠をクリア
+    this.unmatchedRequestOkAllowances.clear();
+
     // fill 関連付けをクリア
     this.fillFetchTargets.clear();
 
@@ -4456,10 +4462,16 @@ export class SessionImpl implements Session {
                 this as unknown as bidi.BidiSessionInternal,
                 publishRequestId,
               );
-              bidi.rejectPendingRequestUpdates(
+              // §9.5.1: coalescing は失敗分をまとめるだけであり、in-flight だった
+              // 成功分の更新への REQUEST_OK は別途届く。消した件数分を許容枠に積む。
+              bidi.allowUnmatchedRequestOks(
                 this as unknown as bidi.BidiSessionInternal,
                 publishRequestId,
-                error,
+                bidi.rejectPendingRequestUpdates(
+                  this as unknown as bidi.BidiSessionInternal,
+                  publishRequestId,
+                  error,
+                ),
               );
               continue;
             }

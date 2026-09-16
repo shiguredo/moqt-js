@@ -334,6 +334,8 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
     subscribers: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
   const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
   const rejected: Error[] = [];
@@ -404,6 +406,8 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
     subscribers: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
   const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
   const rejected: Error[] = [];

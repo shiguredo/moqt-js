@@ -303,6 +303,8 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
 
   assert.isTrue(result);
   assert.isUndefined(ctx.closed.error);
+  // REQUEST_ERROR を書いて FIN し、受信方向を cancel する (§6.4.2.3)
+  assert.deepEqual(events, ["write", "close", "cancel"]);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   assert.equal(messages.length, 1);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
@@ -314,13 +316,22 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
  * "." 単体の namespace も同じく DOES_NOT_EXIST で拒否する。
  */
 test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオド namespace は DOES_NOT_EXIST", async () => {
+  const events: string[] = [];
   const written: Uint8Array[] = [];
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
+      events.push("write");
       written.push(chunk);
     },
+    close() {
+      events.push("close");
+    },
   });
-  const readable = new ReadableStream<Uint8Array>({});
+  const readable = new ReadableStream<Uint8Array>({
+    cancel() {
+      events.push("cancel");
+    },
+  });
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
@@ -330,12 +341,75 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
   ]);
   const firstMsg: ControlMessage = { type: MessageType.TRACK_STATUS, payload };
 
-  await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
 
+  assert.isTrue(result);
+  assert.isUndefined(ctx.closed.error);
+  assert.deepEqual(events, ["write", "close", "cancel"]);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   assert.equal(messages.length, 1);
   const decoded = decodeRequestErrorPayload(messages[0].payload);
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.DOES_NOT_EXIST));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5
+ * (Session-Level Tracks and Namespaces):
+ * 未対応 6 種はいずれも Request ID の直後に Track Namespace (SUBSCRIBE_NAMESPACE /
+ * SUBSCRIBE_TRACKS は Track Namespace Prefix) を置く。種類によらず先頭の
+ * Namespace を読んで判定できることを、6 種すべてで検証する。
+ */
+test("incomingHandleFirstBidiMessage: 未対応 6 種すべてで予約名前空間は DOES_NOT_EXIST", async () => {
+  const types = [
+    MessageType.SUBSCRIBE,
+    MessageType.FETCH,
+    MessageType.TRACK_STATUS,
+    MessageType.PUBLISH_NAMESPACE,
+    MessageType.SUBSCRIBE_NAMESPACE,
+    MessageType.SUBSCRIBE_TRACKS,
+  ];
+  for (const type of types) {
+    const events: string[] = [];
+    const written: Uint8Array[] = [];
+    let cancelReason: string | undefined;
+    const writable = new WritableStream<Uint8Array>({
+      write(chunk) {
+        events.push("write");
+        written.push(chunk);
+      },
+      close() {
+        events.push("close");
+      },
+    });
+    const readable = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        events.push("cancel");
+        cancelReason = reason as string;
+      },
+    });
+    const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+    // ctx は種類ごとに作るため、Request ID は同じ値を使い回せる
+    const ctx = createUnsupportedRequestTestContext();
+    const payload = concatUint8Arrays([
+      new Uint8Array([0x01]),
+      encodeTrackNamespace(createTrackNamespace([".session"])),
+    ]);
+
+    const result = await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
+
+    assert.isTrue(result, `type=0x${type.toString(16)}`);
+    assert.isUndefined(ctx.closed.error, `type=0x${type.toString(16)}`);
+    assert.deepEqual(events, ["write", "close", "cancel"], `type=0x${type.toString(16)}`);
+    assert.equal(cancelReason, "request rejected");
+    const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+    assert.equal(messages.length, 1);
+    assert.equal(
+      decodeRequestErrorPayload(messages[0].payload).errorCode,
+      BigInt(RequestErrorCode.DOES_NOT_EXIST),
+      `type=0x${type.toString(16)}`,
+    );
+  }
 });
 
 /**
