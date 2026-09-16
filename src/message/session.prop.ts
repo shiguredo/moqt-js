@@ -243,6 +243,9 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
  * draft-ietf-moq-transport-21 Section 9.4.2:
  * Error Code が REDIRECT 以外だが Redirect バイト列が存在する場合は
  * ProtocolViolationError を throw する。
+ *
+ * 送信側 (encodeRequestErrorPayload) も同じ組み合わせを生成前に拒否するため、
+ * デコーダの検証は Redirect バイト列を手で連結したワイヤで検証する。
  */
 test("REDIRECT 以外のエラーコードで Redirect バイトが存在すると ProtocolViolationError を throw する", () => {
   fc.assert(
@@ -256,16 +259,69 @@ test("REDIRECT 以外のエラーコードで Redirect バイトが存在する�
           trackNamespace: createTrackNamespace(["test"]),
           trackName: new Uint8Array([1, 2, 3]),
         };
-        const original: RequestError = {
+        // Redirect なしの REQUEST_ERROR をエンコードし、Redirect バイト列を後置する
+        const encoded = encodeRequestErrorPayload({
           type: MessageType.REQUEST_ERROR,
           errorCode,
           retryInterval,
           reasonPhrase,
-          redirect,
-        };
-        const encoded = encodeRequestErrorPayload(original);
-        assert.throws(() => decodeRequestErrorPayload(encoded), ProtocolViolationError);
+        });
+        const redirectBytes = encodeRedirect(redirect);
+        const wire = new Uint8Array(encoded.length + redirectBytes.length);
+        wire.set(encoded, 0);
+        wire.set(redirectBytes, encoded.length);
+        assert.throws(() => decodeRequestErrorPayload(wire), ProtocolViolationError);
       },
+    ),
+  );
+});
+
+/**
+ * 送信側も REDIRECT 以外の Error Code に Redirect を付けた REQUEST_ERROR を
+ * 生成前に拒否する (デコーダと同じ規則)。
+ */
+test("REDIRECT 以外のエラーコードに Redirect を付けるとエンコードが拒否される", () => {
+  let thrown: unknown;
+  try {
+    encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: 0x0n,
+      retryInterval: 0n,
+      reasonPhrase: "internal error",
+      redirect: {
+        connectUri: "moqt://example.com",
+        trackNamespace: createTrackNamespace(["test"]),
+        trackName: new Uint8Array([1, 2, 3]),
+      },
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, Error);
+  assert.isTrue(
+    (thrown as Error).message.includes("unexpected redirect in REQUEST_ERROR with error code 0x0"),
+  );
+});
+
+/**
+ * REDIRECT (0x34) なのに Redirect が無い REQUEST_ERROR も生成前に拒否される。
+ */
+test("REDIRECT で Redirect が無いとエンコードが拒否される", () => {
+  let thrown: unknown;
+  try {
+    encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: 0x34n,
+      retryInterval: 0n,
+      reasonPhrase: "redirect",
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, Error);
+  assert.isTrue(
+    (thrown as Error).message.includes(
+      "missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)",
     ),
   );
 });

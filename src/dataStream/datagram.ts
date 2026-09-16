@@ -186,6 +186,21 @@ function datagramHasPriority(type: number): boolean {
  * draft-ietf-moq-transport-21 Section 11.2.1
  */
 export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
+  // draft-ietf-moq-transport-21 §11.2.1:
+  // 受信側が PROTOCOL_VIOLATION でセッションを閉じる Type Flags を生成しないよう、
+  // デコーダと同じ判定を入口で行う。ローカル API の誤用であるため汎用 Error を throw する
+  // (ProtocolViolationError は受信したワイヤの違反通知に使う)。
+  if (!isValidDatagramTypeForm(datagram.type)) {
+    throw new Error(
+      `invalid datagram type: 0x${datagram.type.toString(16)}, does not match form 0b00X0XXXX`,
+    );
+  }
+  if (hasConflictingDatagramStatusBits(datagram.type)) {
+    throw new Error(
+      `invalid datagram type: 0x${datagram.type.toString(16)}, STATUS and END_OF_GROUP bits are both set`,
+    );
+  }
+
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(datagram.type));
@@ -210,7 +225,8 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   }
 
   if (datagramHasProperties(datagram.type)) {
-    const extLen = datagram.properties?.length ?? 0;
+    const properties = datagram.properties;
+    const extLen = properties?.length ?? 0;
 
     // draft-ietf-moq-transport-21 Section 11.1.3:
     // Non-Normal status objects must not have properties
@@ -222,9 +238,20 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
       throw new Error("Protocol violation: properties on non-Normal status object");
     }
 
+    // draft-ietf-moq-transport-21 §11.2.1:
+    // "If an endpoint receives a datagram with the PROPERTIES bit set and an
+    //  Properties Length of 0, it MUST close the session with a PROTOCOL_VIOLATION."
+    // 受信側が閉じるワイヤを生成しないよう、PROPERTIES ビットが立っている場合は
+    // 空でない Properties を要求する (§11.1.3 は Properties を持たない Object に
+    // PROPERTIES ビットを立てないことを求める)。
+    if (extLen === 0) {
+      throw new Error(
+        "cannot encode datagram with PROPERTIES bit set but empty properties (Properties Length must not be 0)",
+      );
+    }
     parts.push(encodeVarint(extLen));
-    if (datagram.properties && datagram.properties.length > 0) {
-      parts.push(datagram.properties);
+    if (properties !== undefined) {
+      parts.push(properties);
     }
   }
 
@@ -263,13 +290,13 @@ export function decodeDatagramTypeAndTrackAlias(
   // draft-ietf-moq-transport-21 Section 11.2.1:
   // 不正なタイプ値を検証する
   // 0b00X0XXXX の形式でないタイプ値は不正
-  if ((typeNum & 0x10) !== 0 || typeNum > 0x2f) {
+  if (!isValidDatagramTypeForm(typeNum)) {
     throw new ProtocolViolationError(
       `invalid datagram type: 0x${typeNum.toString(16)}, does not match form 0b00X0XXXX`,
     );
   }
   // STATUS (0x20) と END_OF_GROUP (0x02) の両方が設定されたタイプ値は不正
-  if ((typeNum & 0x20) !== 0 && (typeNum & 0x02) !== 0) {
+  if (hasConflictingDatagramStatusBits(typeNum)) {
     throw new ProtocolViolationError(
       `invalid datagram type: 0x${typeNum.toString(16)}, STATUS and END_OF_GROUP bits are both set`,
     );
@@ -278,6 +305,30 @@ export function decodeDatagramTypeAndTrackAlias(
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + typeConsumed);
 
   return { type: typeNum, trackAlias, consumed: typeConsumed + trackAliasConsumed };
+}
+
+/**
+ * Object Datagram の Type Flags が形式 0b00X0XXXX に一致するか判定する
+ *
+ * draft-ietf-moq-transport-21 §11.2.1 (Object Datagram):
+ * "Bit 4 MUST be set to 0. ... Values of 0x30 or greater ... MUST close the session
+ *  with a PROTOCOL_VIOLATION."
+ * 受信側 (decodeDatagramTypeAndTrackAlias) と送信側 (encodeObjectDatagram) の双方から
+ * 使い、判定を 1 箇所に保つ。
+ */
+export function isValidDatagramTypeForm(type: number): boolean {
+  return (type & 0x10) === 0 && type <= 0x2f;
+}
+
+/**
+ * Object Datagram の Type Flags で STATUS (0x20) と END_OF_GROUP (0x02) が
+ * 同時に設定されているか判定する
+ *
+ * draft-ietf-moq-transport-21 §11.2.1: この組み合わせは不正であり、受信側は
+ * PROTOCOL_VIOLATION でセッションを閉じる。送信側も同じ判定で生成前に拒否する。
+ */
+export function hasConflictingDatagramStatusBits(type: number): boolean {
+  return (type & 0x20) !== 0 && (type & 0x02) !== 0;
 }
 
 /**

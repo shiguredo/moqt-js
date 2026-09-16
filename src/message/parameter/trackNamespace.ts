@@ -106,16 +106,7 @@ export interface TrackNamespace {
  * draft-ietf-moq-transport-21 Section 8.7
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
-  // 先にサイズをチェック
-  let dataSize = 0;
-  for (const element of namespace.tuple) {
-    dataSize += element.length;
-  }
-  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
-    throw new Error(
-      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
-    );
-  }
+  assertTrackNamespaceTuple(namespace.tuple);
 
   const parts: Uint8Array[] = [encodeVarint(namespace.tuple.length)];
 
@@ -126,6 +117,45 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 
   // 結合
   return concatUint8Arrays(parts);
+}
+
+/**
+ * Track Namespace の tuple が構造の制約を満たすか検証する (送信側)
+ *
+ * draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
+ * - "If an endpoint receives a Track Namespace consisting of greater than 32 Track
+ *    Namespace Fields, it MUST close the session with a PROTOCOL_VIOLATION."
+ * - "Each Track Namespace Field Value MUST contain at least one byte."
+ * - 合計サイズの上限 (MAX_TRACK_NAMESPACE_SIZE = 4,096) も併せて検証する。
+ *
+ * 0 フィールドの Track Namespace は §2.4.1 (Track Naming) の
+ * "between 0 and 32 Track Namespace Fields" により正当なため拒否しない。
+ *
+ * 受信したワイヤの違反ではないため ProtocolViolationError は使わない
+ * (`createTrackNamespace` と同じ契約)。検証順は
+ * フィールド数 → フィールド長 0 → 合計サイズとし、既存の期待文言を保つ。
+ *
+ * @throws Error 制約に違反する場合
+ */
+export function assertTrackNamespaceTuple(tuple: readonly Uint8Array[]): void {
+  if (tuple.length > MAX_TRACK_NAMESPACE_FIELDS) {
+    throw new Error(
+      `track namespace fields exceeds maximum: ${tuple.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+    );
+  }
+
+  let dataSize = 0;
+  for (const element of tuple) {
+    if (element.length === 0) {
+      throw new Error("track namespace field length is zero");
+    }
+    dataSize += element.length;
+  }
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+    throw new Error(
+      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    );
+  }
 }
 
 /**
@@ -189,33 +219,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
 export function createTrackNamespace(parts: string[]): TrackNamespace {
   const encoder = new TextEncoder();
   const tuple = parts.map((p) => encoder.encode(p));
-
-  // draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
-  // "If an endpoint receives a Track Namespace consisting of greater than
-  //  32 Track Namespace Fields, it MUST close the session with a
-  //  PROTOCOL_VIOLATION." 送信側でも 33 フィールド以上を組み立てられない
-  // よう fail-fast で拒否する (受信したワイヤの違反ではないため
-  // ProtocolViolationError は使わない)。
-  if (parts.length > MAX_TRACK_NAMESPACE_FIELDS) {
-    throw new Error(
-      `track namespace fields exceeds maximum: ${parts.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
-    );
-  }
-
-  // draft-ietf-moq-transport-21 §8.7:
-  // "Each Track Namespace Field Value MUST contain at least one byte."
-  let dataSize = 0;
-  for (const element of tuple) {
-    if (element.length === 0) {
-      throw new Error("track namespace field length is zero");
-    }
-    dataSize += element.length;
-  }
-  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
-    throw new Error(
-      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
-    );
-  }
+  assertTrackNamespaceTuple(tuple);
 
   return { tuple };
 }

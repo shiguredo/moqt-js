@@ -662,3 +662,81 @@ test("ObjectDatagram: Object Property の delta 累積が 2^64-1 を超えると
   const encoded = encodeObjectDatagram(datagram);
   assert.throws(() => decodeObjectDatagram(encoded), ProtocolViolationError);
 });
+
+// ============================================================================
+// エンコーダ入口の Type Flags / Properties Length 検証
+// draft-ietf-moq-transport-21 §11.2.1 (Object Datagram)
+//
+// 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
+// デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。
+// ============================================================================
+
+test("ObjectDatagram: bit 4 が立つ Type Flags はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeObjectDatagram({
+        type: 0x10,
+        trackAlias: 1n,
+        groupId: 0n,
+        objectId: 0n,
+        payload: new Uint8Array([1]),
+      }),
+    /invalid datagram type: 0x10, does not match form 0b00X0XXXX/,
+  );
+});
+
+test("ObjectDatagram: 0x2f を超える Type Flags はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeObjectDatagram({
+        type: 0x30,
+        trackAlias: 1n,
+        groupId: 0n,
+        objectId: 0n,
+        payload: new Uint8Array([1]),
+      }),
+    /invalid datagram type: 0x30, does not match form 0b00X0XXXX/,
+  );
+});
+
+test("ObjectDatagram: STATUS と END_OF_GROUP の同時設定はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeObjectDatagram({
+        type: 0x22,
+        trackAlias: 1n,
+        groupId: 0n,
+        objectId: 0n,
+        status: ObjectStatus.END_OF_GROUP,
+      }),
+    /invalid datagram type: 0x22, STATUS and END_OF_GROUP bits are both set/,
+  );
+});
+
+test("ObjectDatagram: PROPERTIES ビットありで Properties Length 0 はエンコードを拒否する", () => {
+  // properties 未指定 (PAYLOAD_OBJ_EXT_NO_PRI = 0x09 は Priority Present を持たない)
+  assert.throws(
+    () =>
+      encodeObjectDatagram({
+        type: DatagramType.PAYLOAD_OBJ_EXT_NO_PRI,
+        trackAlias: 1n,
+        groupId: 0n,
+        objectId: 1n,
+        payload: new Uint8Array([1]),
+      }),
+    /Properties Length must not be 0/,
+  );
+  // properties が空
+  assert.throws(
+    () =>
+      encodeObjectDatagram({
+        type: DatagramType.PAYLOAD_OBJ_EXT_NO_PRI,
+        trackAlias: 1n,
+        groupId: 0n,
+        objectId: 1n,
+        properties: new Uint8Array(0),
+        payload: new Uint8Array([1]),
+      }),
+    /Properties Length must not be 0/,
+  );
+});
