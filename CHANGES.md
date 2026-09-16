@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] Object Properties の Length 上限と Delta overflow を検証する
+  - draft-ietf-moq-transport-21 §8.3 の MUST (delta の累積が 2^64-1 超、奇数 Type の Length が 2^16-1 超) を Object Datagram / Subgroup Object / Fetch Object の 3 経路で検証する
+  - 上限判定を共有の述語に切り出し、厳密デコーダと Object Properties の検証で同じ判定を使う
+  - 不完全データと未知 Type を寛容に打ち切る既存の契約は変えない
+  - @voluntas
 - [FIX] MAX_REQUEST_UPDATES の受信側強制を実装する
   - draft-ietf-moq-transport-21 §9.1.7 の MUST に従い、広告した上限を超える未応答 REQUEST_UPDATE を受信したら TOO_MANY_REQUEST_UPDATES でセッションを閉じる
   - 未応答数は request stream 単位で数え、1 回の read で得たメッセージ列を処理し終えた時点で減算する (1 通ごとに減算すると pipelining を検出できない)

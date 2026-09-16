@@ -11,11 +11,17 @@ import {
   decodeObjectDatagram,
   decodeDatagramTypeAndTrackAlias,
 } from "./dataStream";
-import { IncompleteDataError, MalformedTrackError, SessionError } from "./error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionError,
+} from "./error";
 import { ObjectStatus } from "./message/types";
 import { appendGreaseObjectProperty, encodeProperties, MOQTPropertyId } from "./properties";
 import { isGreaseValue } from "./grease";
 import { parseObjectPropertyIds } from "./testSupport/helpers";
+import { encodeVarint, MAX_VARINT } from "./varint";
 
 test("ObjectDatagram: PAYLOAD_OBJ タイプ (0x00) をエンコード", () => {
   const datagram: ObjectDatagram = {
@@ -606,4 +612,53 @@ test("ObjectDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTIN
     SessionError,
     /key-value-pair value does not match serialization/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
+ *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ * 奇数 Type の Length が上限を超える Object Properties を含む datagram は
+ * ProtocolViolationError になる。上限超過は Type の既知 / 未知を問わない。
+ */
+test("ObjectDatagram: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    // deltaId=0x0D (未知 odd Type), length=65536
+    properties: new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const encoded = encodeObjectDatagram(datagram);
+  assert.throws(() => decodeObjectDatagram(encoded), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
+ *  If a Delta Type is received that would be too large, the Session MUST be closed
+ *  with a PROTOCOL_VIOLATION."
+ * delta の累積が 2^64-1 を超える Object Properties を含む datagram は
+ * ProtocolViolationError になる。
+ */
+test("ObjectDatagram: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+  const datagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    // delta=MAX_VARINT (奇数 Type、Length 0) + delta=1 で累積が 2^64 になる
+    properties: new Uint8Array([
+      ...encodeVarint(MAX_VARINT),
+      ...encodeVarint(0n),
+      ...encodeVarint(1n),
+    ]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const encoded = encodeObjectDatagram(datagram);
+  assert.throws(() => decodeObjectDatagram(encoded), ProtocolViolationError);
 });
