@@ -1,7 +1,7 @@
 # エンコーダがデコーダの検証規則を適用せず仕様違反のワイヤを生成しうる
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-encoder-wire-validation
 - Polished: 2026-09-15
 
@@ -62,3 +62,48 @@ draft-ietf-moq-transport-21 §11.2.1:
 - draft-ietf-moq-transport-21 §11.1.3 (Object Properties)
 - draft-ietf-moq-transport-21 §11.2.1 (Object Datagram)
 - draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header)
+
+## 解決方法
+
+### Object Datagram (`src/dataStream/datagram.ts`)
+
+- Type Flags の 2 条件を `isValidDatagramTypeForm` (bit 4 が 0 かつ 0x2f 以下) と
+  `hasConflictingDatagramStatusBits` (STATUS と END_OF_GROUP の同時設定) に抽出し、`decodeDatagramTypeAndTrackAlias` と
+  `encodeObjectDatagram` の双方から使う
+- `encodeObjectDatagram` の入口で両者を検査し、既存のデコーダと同じ文言で汎用 `Error` を throw する
+- PROPERTIES ビットが立っている場合は Properties Length 0 を拒否する (§11.2.1 の MUST。Properties を持たない Object は
+  ビットを立てない)。properties 未指定と空配列の双方を拒否する
+
+### Subgroup Header (`src/dataStream/subgroup.ts`)
+
+- Type Flags の 2 条件を `hasReservedSubgroupIdMode` (SUBGROUP_ID_MODE 0b11) と
+  `isValidSubgroupHeaderTypeForm` (bit 4 が 1 かつ 0x7f 以下) に抽出し、`decodeSubgroupHeader` と
+  `encodeSubgroupHeader` の双方から使う
+- `encodeSubgroupHeader` では FIRST_OBJECT / END_OF_GROUP を OR した後の値で検査する (両ビットはフィールドの有無を
+  決めないため判定結果は変わらない)
+
+### Track Namespace (`src/message/parameter/trackNamespace.ts`)
+
+- `assertTrackNamespaceTuple(tuple)` を新設し、フィールド数 32 以下 / 各フィールド 1 バイト以上 / 合計 4,096 バイト以下の
+  3 つを 1 箇所に集約した。検証順は既存の `createTrackNamespace` と同じ (フィールド数 → フィールド長 0 → 合計サイズ) とし、
+  既存の期待文言を変えない
+- `createTrackNamespace` のインライン検証を同関数の呼び出しに置き換え、`encodeTrackNamespace` も同関数を呼ぶようにした
+  (従来は合計サイズのみ検査していた)
+- 0 フィールドの Track Namespace は §2.4.1 の "between 0 and 32 Track Namespace Fields" により正当なため拒否しない
+
+### REQUEST_ERROR (`src/message/session.ts`)
+
+- `encodeRequestErrorPayload` に `decodeRequestErrorPayload` と同じ双方向の検証を追加した。REDIRECT (0x34) 以外の
+  Error Code に Redirect を付けた場合は `unexpected redirect in REQUEST_ERROR with error code 0x...`、
+  REDIRECT なのに Redirect が無い場合は `missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)`
+  で汎用 `Error` を throw する
+- `src/message/session.prop.ts` の「REDIRECT 以外のエラーコードで Redirect バイトが存在すると ProtocolViolationError」は、
+  エンコーダが同じ組み合わせを生成しなくなったため、Redirect バイト列を手で連結したワイヤでデコーダを検証する形に更新した。
+  あわせて送信側の拒否 2 件を新規テストとして追加した
+
+### テスト
+
+`src/dataStream.datagram.test.ts` (4 本) / `src/dataStream.subgroup.test.ts` (3 本) / `src/message/parameter.test.ts` (4 本) /
+`src/message/session.prop.ts` (2 本追加・1 本更新) を追加・更新し、正当な入力のエンコード結果が変わらないことは既存テストで確認した。
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2269 passed) の通過で確認した。

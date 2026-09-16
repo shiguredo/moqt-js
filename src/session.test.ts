@@ -27,6 +27,7 @@ import {
 import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
+import { encodeRequestUpdatePayload } from "./message/subscribe";
 import {
   createTrackNamespace,
   encodeLocation,
@@ -5441,6 +5442,106 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
 });
 
 /**
+ * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+ * "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
+ *  or REQUEST_ERROR message ..."
+ * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への
+ * 応答である。対応する未応答の REQUEST_UPDATE が無い REQUEST_OK は 2 通目以降の
+ * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOLATION で閉じる", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      errors.push(error);
+    },
+  });
+  const sessionInternal = session as unknown as {
+    sessionState: SessionState;
+  };
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+
+  // 自 endpoint は REQUEST_UPDATE を送っていないため、REQUEST_OK は対応が無い
+  const writer = new ControlStreamWriter();
+  const okFramed = writer.encode(
+    MessageType.REQUEST_OK,
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [okFramed],
+    ),
+  );
+
+  assert.equal(sessionInternal.sessionState, "closed");
+  // 同一チャンク内で閉じた後に残りのメッセージを処理しないため、通知は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
+});
+
+/**
+ * セッション終了後に同一チャンクの残りメッセージを処理しない検証。
+ * 1 通目の REQUEST_OK がパラメータスコープ違反でセッションを閉じた場合、
+ * 同一チャンクに連結された 2 通目を処理すると、そこでも違反が検出されて
+ * callbacks.error が二重に通知される。
+ */
+test("受信 PUBLISH ストリーム上の REQUEST_OK で閉じた後は同一チャンクの残りを処理しない", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      errors.push(error);
+    },
+  });
+  const sessionInternal = session as unknown as {
+    sessionState: SessionState;
+  };
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+
+  // REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への応答でなければならない。
+  // 未応答の REQUEST_UPDATE が無いため 1 通目はこの判定でセッションを閉じる
+  // (REQUEST_UPDATE_OK に SUBSCRIBER_PRIORITY が許可されないことも同時に成立するが、
+  // 判定は未応答チェックが先)。
+  const writer = new ControlStreamWriter();
+  const invalidOk = writer.encode(
+    MessageType.REQUEST_OK,
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [{ type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([10]) }],
+      trackProperties: [],
+    }),
+  );
+  // 2 通を 1 チャンクに連結する (同一チャンクの残りメッセージを再現する)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [concatUint8Arrays([invalidOk, invalidOk])],
+    ),
+  );
+
+  assert.equal(sessionInternal.sessionState, "closed");
+  // 1 通目で閉じた後に 2 通目を処理しないため、通知は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.8:
  * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し
@@ -6099,6 +6200,16 @@ test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
 });
 
 /**
+ * SessionImpl の localMaxRequestUpdates の既定値は 0 (未広告 = 無制限) である
+ * ことを検証する (draft-ietf-moq-transport-21 §9.1.7)。
+ * §9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆である。
+ */
+test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
+  const session = createSessionImpl();
+  assert.equal(session.localMaxRequestUpdates, 0);
+});
+
+/**
  * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
  * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
  * localMaxFilterRanges に保持することを検証する
@@ -6144,6 +6255,9 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
   } as unknown as WebTransport;
 
   const session = new SessionImpl(transport, {});
+  // 未広告の既定値は 0 (無制限)。§9.1.6 の MAX_FILTER_RANGES の 0 = 受信拒否とは
+  // 意味が逆であるため、受信側のガードでも 0 を拒否として扱わない
+  assert.equal(session.localMaxRequestUpdates, 0);
   await session.initialize({
     maxAuthTokenCacheSize: 1024,
     maxRequestUpdates: 8,
@@ -6152,6 +6266,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
 
   // 自 endpoint の上限を保持する
   assert.equal(session.localMaxFilterRanges, 4);
+  assert.equal(session.localMaxRequestUpdates, 8);
 
   // 送信した SETUP から広告値を取得する
   const sent = concatUint8Arrays(sentChunks);
@@ -6164,6 +6279,104 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
   assert.equal(getSetupMaxAuthTokenCacheSize(setup), 1024);
   assert.equal(getSetupMaxRequestUpdates(setup), 8);
   assert.equal(getSetupMaxFilterRanges(setup), 4);
+});
+
+// ============================================================================
+// draft-21 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
+// ============================================================================
+
+/**
+ * 受信 PUBLISH の REQUEST_UPDATE を連結した 1 チャンクを作る
+ *
+ * draft-ietf-moq-transport-21 §9.1.7 の上限超過は 1 回の read に上限 + 1 通が
+ * 含まれる場合に検出するため、テストでは複数通を 1 チャンクに連結して届ける。
+ */
+function encodeIncomingRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
+  const writer = new ControlStreamWriter();
+  return concatUint8Arrays(
+    requestIds.map((requestId) =>
+      writer.encode(
+        MessageType.REQUEST_UPDATE,
+        encodeRequestUpdatePayload({ type: MessageType.REQUEST_UPDATE, requestId, parameters: [] }),
+      ),
+    ),
+  );
+}
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 受信 PUBLISH ストリームのサブループ (SessionImpl.runPublishStreamSubLoop) で、
+ * 自 endpoint が広告した上限 N を超える N+1 通の REQUEST_UPDATE を 1 チャンクで
+ * 受信した場合、N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションが
+ * 閉じる MUST を検証する。上限は initialize() を経ないテストのため直接設定する。
+ */
+test("受信 PUBLISH ストリーム上の MAX_REQUEST_UPDATES 超過で TOO_MANY_REQUEST_UPDATES により閉じる", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+  // 自 endpoint が上限 2 を広告した状態にする
+  session.localMaxRequestUpdates = 2;
+
+  // 1 回の read に 3 通 (上限 2 + 1) を連結した 1 チャンクを届ける。
+  // update() ではなくピアが送る REQUEST_UPDATE のため Request ID は奇数を直接使う。
+  const updateChunk = encodeIncomingRequestUpdateChunk([101n, 103n, 105n]);
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [updateChunk],
+    ),
+  );
+
+  // 3 通目の処理でセッションが閉じ、error コールバックは 1 回だけ呼ばれる
+  assert.equal(internal.sessionState, "closed");
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.TOO_MANY_REQUEST_UPDATES);
+  // ストリーム終了時にストリーム単位の未応答数は破棄される
+  assert.equal(session.receivedRequestUpdateCounts.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
+ * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けてもセッションは閉じず、
+ * すべての REQUEST_UPDATE が処理されることを検証する。§9.1.6 の
+ * MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆である。
+ */
+test("受信 PUBLISH ストリーム上の REQUEST_UPDATE は未広告 (0 = 無制限) なら何通でも閉じない", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+  // 未広告 (既定値 0 = 無制限) のまま 4 通を 1 チャンクで届ける
+  const updateChunk = encodeIncomingRequestUpdateChunk([101n, 103n, 105n, 107n]);
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [updateChunk],
+    ),
+  );
+
+  // 上限判定を行わないためセッションは閉じず、エラーも通知されない
+  assert.equal(internal.sessionState, "connected");
+  assert.equal(errors.length, 0);
+  // 各チャンクの処理後とストリーム終了時に未応答数は破棄される
+  assert.equal(session.receivedRequestUpdateCounts.size, 0);
 });
 
 // ============================================================================
@@ -6588,6 +6801,79 @@ function createIncomingSetupSession(
 }
 
 /**
+ * 受信 SETUP の違反検証用セッションを作る
+ *
+ * transport.close の呼び出し (回数と closeCode) とアプリの error コールバックを記録する。
+ * `controlBytes` は制御ストリームの生バイト列 (ストリームタイプ varint + フレーミング済み
+ * メッセージ) で、SETUP のデコード失敗や先頭メッセージ違反も再現できる。
+ */
+function createSetupViolationSession(controlBytes: Uint8Array): {
+  session: SessionImpl;
+  closeCalls: { closeCode?: number; reason?: string }[];
+  notified: Error[];
+} {
+  const clientWritable = new WritableStream<Uint8Array>({});
+  const closeCalls: { closeCode?: number; reason?: string }[] = [];
+  const notified: Error[] = [];
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(controlBytes);
+    },
+  });
+  const incomingUnidirectionalStreams = new ReadableStream<ReadableStream<Uint8Array>>({
+    start(controller) {
+      controller.enqueue(serverControlStream);
+    },
+  });
+  const incomingBidirectionalStreams = new ReadableStream<WebTransportBidirectionalStream>({
+    start() {},
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientWritable,
+    incomingUnidirectionalStreams,
+    incomingBidirectionalStreams,
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+    // W3C WebTransport の close() は単一の WebTransportCloseInfo を取る
+    close: async (info?: WebTransportCloseInfo) => {
+      closeCalls.push({ closeCode: info?.closeCode, reason: info?.reason });
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: (error: Error) => {
+      notified.push(error);
+    },
+  });
+  return { session, closeCalls, notified };
+}
+
+/**
+ * closeWithError からの close() 完了を待つ
+ *
+ * closeWithError は close() を fire-and-forget で呼ぶため、initialize() の reject を
+ * await しただけでは transport.close が未実行のことがある。
+ */
+async function waitForTransportClose(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+}
+
+/**
+ * 制御ストリームの生バイト列 (ストリームタイプ varint + フレーミング済みメッセージ) を組み立てる
+ */
+function buildControlStreamBytes(
+  body: Uint8Array,
+  messageType: number = MessageType.SETUP,
+): Uint8Array {
+  const writer = new ControlStreamWriter();
+  return concatUint8Arrays([encodeVarint(MessageType.SETUP), writer.encode(messageType, body)]);
+}
+
+/**
  * SETUP の AUTHORIZATION TOKEN Setup Option を組み立てる
  *
  * draft-ietf-moq-transport-21 §9.1.4: オプション値は §8.9 の Token 構造。
@@ -6621,6 +6907,135 @@ async function assertInitializeFailsWith(
   assert.instanceOf(thrown, SessionError);
   assert.equal((thrown as SessionError).code, expectedCode);
 }
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.1 (AUTHORITY):
+ * "When an AUTHORITY option is received from a server, or when an AUTHORITY option
+ *  is received while WebTransport is used, ... the session MUST be closed with
+ *  INVALID_AUTHORITY."
+ * initialize() の失敗だけでなく、トランスポートも閉じてピアへコードを伝えることを検証する。
+ */
+test("initialize: 受信 SETUP の AUTHORITY で INVALID_AUTHORITY で閉じる", async () => {
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(
+      encodeSetupPayload({
+        type: MessageType.SETUP,
+        parameters: [
+          { type: SetupOptionType.AUTHORITY, value: new TextEncoder().encode("example.com") },
+        ],
+      }),
+    ),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.INVALID_AUTHORITY);
+  await waitForTransportClose();
+  // transport.close は 1 回だけ、同じコードで呼ばれる
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.INVALID_AUTHORITY);
+  // アプリの error 通知も 1 回だけ
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.INVALID_AUTHORITY);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.2 (PATH):
+ * "When a PATH setup option is received from a server, or when a PATH parameter is
+ *  received while WebTransport is used, ... the session MUST be closed with INVALID_PATH."
+ */
+test("initialize: 受信 SETUP の PATH で INVALID_PATH で閉じる", async () => {
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(
+      encodeSetupPayload({
+        type: MessageType.SETUP,
+        parameters: [{ type: SetupOptionType.PATH, value: new TextEncoder().encode("/moqt") }],
+      }),
+    ),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.INVALID_PATH);
+  await waitForTransportClose();
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.INVALID_PATH);
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.INVALID_PATH);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9 (Control Messages):
+ * メッセージ Length と Body 長の不一致は PROTOCOL_VIOLATION でセッションを閉じる MUST。
+ * KVP の宣言 Length が残りデータを超える SETUP でも、initialize() の失敗と同時に
+ * セッションが閉じられることを検証する。
+ */
+test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で閉じる", async () => {
+  // パラメータ数 1、Type 0x05、宣言 Length 10 に対して値が 2 バイトしかない
+  const malformedBody = new Uint8Array([0x01, 0x05, 0x00, 0x0a, 0x01, 0x02]);
+  const ctx = createSetupViolationSession(buildControlStreamBytes(malformedBody));
+
+  // initialize() は失敗を reject で伝える契約のため、正規化前の例外がそのまま伝播する
+  let thrown: unknown;
+  try {
+    await ctx.session.initialize({ maxAuthTokenCacheSize: 1024 });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isDefined(thrown);
+  // close() は closeWithError から fire-and-forget で呼ばれるため、完了を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  // セッションは PROTOCOL_VIOLATION で閉じられ、ピアにも同じコードが伝わる
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.notified.length, 1);
+  assert.instanceOf(ctx.notified[0], SessionError);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1 (SETUP):
+ * 制御ストリームの先頭メッセージが SETUP でない場合は PROTOCOL_VIOLATION で閉じる。
+ */
+test("initialize: 先頭メッセージが SETUP でない場合も PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(new Uint8Array(0), MessageType.GOAWAY),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await waitForTransportClose();
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * 既存の AUTHORIZATION TOKEN 経路 (DUPLICATE_AUTH_TOKEN_ALIAS) でも、
+ * reject する例外の code と
+ * transport.close / error 通知が 1 回ずつであることが変わらないことを検証する。
+ */
+test("initialize: 同一 Alias 再 REGISTER でトランスポートも 1 回だけ閉じる", async () => {
+  const registerToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 5n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([1]),
+  };
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(
+      encodeSetupPayload({
+        type: MessageType.SETUP,
+        parameters: [authTokenSetupOption(registerToken), authTokenSetupOption(registerToken)],
+      }),
+    ),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+  await waitForTransportClose();
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+});
 
 /**
  * draft-ietf-moq-transport-21 §9.1.4 / §8.9:

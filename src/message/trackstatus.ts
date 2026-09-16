@@ -1,16 +1,26 @@
 /**
  * MOQT Track Status Message
- * draft-ietf-moq-transport-21 Section 9.13 (TRACK_STATUS)
+ * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS)
  *
  * TRACK_STATUS のメッセージフォーマットは SUBSCRIBE と同一。
  * トラックの状態を問い合わせるために使用し、実際にサブスクライブはしない。
- * 応答は REQUEST_OK（SUBSCRIBE_OK と同じパラメータを含む）。
  *
- * draft-ietf-moq-transport-21:
- * - Subscriber は OBJECT_DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を送信しない
- *   draft-ietf-moq-transport-21 Section 9.13
- * - REQUEST_OK レスポンスに LARGEST_OBJECT パラメータを含めることが可能
- *   draft-ietf-moq-transport-21 Section 9.13
+ * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS):
+ * "The TRACK_STATUS message format is identical to the SUBSCRIBE message
+ *  (Section 9.6), but subscriber parameters related to Track delivery
+ *  (e.g. SUBSCRIBER_PRIORITY) are not included."
+ *
+ * 応答は REQUEST_OK であり、§9.3 (REQUEST_OK) の shorthand で TRACK_STATUS_OK と呼ぶ。
+ * "This document uses the shorthand PUBLISH_OK, REQUEST_UPDATE_OK, TRACK_STATUS_OK,
+ *  SUBSCRIBE_NAMESPACE_OK, SUBSCRIBE_TRACKS_OK and PUBLISH_NAMESPACE_OK to refer to a
+ *  REQUEST_OK sent in response to the corresponding request type."
+ *
+ * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS):
+ * "If successful, the publisher responds with a TRACK_STATUS_OK with the same
+ *  parameters and Track Properties it would have set in a SUBSCRIBE_OK."
+ * 応答に載りうる LARGEST_OBJECT は §9.20.18 (LARGEST OBJECT Parameter) が
+ * "It MAY appear in SUBSCRIBE_OK, PUBLISH, REQUEST_UPDATE_OK, TRACK_STATUS_OK, or
+ *  PUBLISH_STATE_NOTIFY." と定める。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -33,9 +43,12 @@ import { MessageType } from "./types";
  * SUBSCRIBE と同じフォーマットだが、トラックの状態照会用。
  * サブスクリプション状態を作成せず、オブジェクトも送信しない。
  *
- * draft-ietf-moq-transport-21:
- * Subscriber からの TRACK_STATUS には OBJECT_DELIVERY_TIMEOUT, DEFAULT_PUBLISHER_PRIORITY を
- * 含めてはならない（これらは Publisher からの REQUEST_OK レスポンスにのみ含まれる）。
+ * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS):
+ * "The TRACK_STATUS message format is identical to the SUBSCRIBE message
+ *  (Section 9.6), but subscriber parameters related to Track delivery
+ *  (e.g. SUBSCRIBER_PRIORITY) are not included."
+ * Track delivery に関わる subscriber パラメータを載せない点だけを定めており、
+ * 特定のパラメータ名を列挙して禁止しているわけではない。
  */
 export interface TrackStatus {
   type: typeof MessageType.TRACK_STATUS;

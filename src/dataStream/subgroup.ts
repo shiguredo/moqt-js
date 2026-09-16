@@ -2,9 +2,10 @@
  * MOQT Subgroup Stream
  * draft-ietf-moq-transport-21 Section 11.3 (Subgroup Streams)
  *
- * Subgroup Header (Section 11.3.1) と、その配下に並ぶ Object fields
- * (Figure 25: Object ID Delta / Properties / Object Payload Length /
- * Object Status / Object Payload) のエンコードとデコードを扱う。
+ * Subgroup Header (Section 11.3.1、Figure 25: MOQT SUBGROUP_HEADER) と、
+ * その配下に並ぶ Object fields (Figure 26: MOQT Subgroup Object Fields。
+ * Object ID Delta / Properties / Object Payload Length / Object Status /
+ * Object Payload) のエンコードとデコードを扱う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -36,7 +37,9 @@ import {
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
  *
- * Section 11.3.1 (Subgroup Header) type matrix from draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) の Type Flags ビット定義
+ * (Figure 25 は MOQT SUBGROUP_HEADER のワイヤ構造図であり型表は無い) から導出した
+ * 実装側の一覧:
  * | Type | Subgroup ID Field | Subgroup ID Value | Properties | End of Group | Priority |
  * |------|-------------------|-------------------|------------|--------------|----------|
  * | 0x10 | No                | 0                 | No         | No           | Yes      |
@@ -249,7 +252,8 @@ export function hasEndOfGroup(headerType: number): boolean {
 
 /**
  * Encode a Subgroup Header
- * draft-ietf-moq-transport-21 Section 11.3.1 Figure 25
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) Figure 25
+ * (MOQT SUBGROUP_HEADER)
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -261,6 +265,22 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   let type = header.firstObject ? header.type | 0x40 : header.type;
   if (header.endOfGroup) {
     type |= 0x08;
+  }
+  // draft-ietf-moq-transport-21 §11.3.1:
+  // 受信側が PROTOCOL_VIOLATION でセッションを閉じる Type Flags を生成しないよう、
+  // デコーダと同じ判定を入口で行う。ローカル API の誤用であるため汎用 Error を
+  // throw する (ProtocolViolationError は受信したワイヤの違反通知に使う)。
+  // 判定は OR 済みの type で行う (FIRST_OBJECT 0x40 / END_OF_GROUP 0x08 は
+  // SUBGROUP_ID_MODE と bit 4 / bit 7 の判定に影響しない)。
+  if (hasReservedSubgroupIdMode(type)) {
+    throw new Error(
+      `invalid subgroup header type: 0x${type.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
+    );
+  }
+  if (!isValidSubgroupHeaderTypeForm(type)) {
+    throw new Error(
+      `invalid subgroup header type: 0x${type.toString(16)}, does not match form 0b0XX1XXXX`,
+    );
   }
   parts.push(encodeVarint(type));
   parts.push(encodeVarint(header.trackAlias));
@@ -292,6 +312,29 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
 }
 
 /**
+ * Subgroup Header の SUBGROUP_ID_MODE が予約値 0b11 か判定する
+ *
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header):
+ * SUBGROUP_ID_MODE = 0b11 は予約済みであり、受信側は PROTOCOL_VIOLATION で
+ * セッションを閉じる。受信側 (decodeSubgroupHeader) と送信側
+ * (encodeSubgroupHeader) の双方から使い、判定を 1 箇所に保つ。
+ */
+export function hasReservedSubgroupIdMode(type: number): boolean {
+  return (type & 0x06) >> 1 === 0x03;
+}
+
+/**
+ * Subgroup Header の Type Flags が形式 0b0XX1XXXX に一致するか判定する
+ *
+ * draft-ietf-moq-transport-21 §11.3.1: "Bit 4 MUST be set to 1.  Bit 7 MUST be set
+ * to 0." に加え、"Values of 128 or greater ... MUST close the session with a
+ * PROTOCOL_VIOLATION" のため 128 以上も拒否する。
+ */
+export function isValidSubgroupHeaderTypeForm(type: number): boolean {
+  return (type & 0x10) !== 0 && type <= 0x7f;
+}
+
+/**
  * Decode a Subgroup Header
  */
 export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHeader, number] {
@@ -317,13 +360,12 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
   // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
   // 0b0XX1XXXX の形式でないタイプ値は不正
-  const subgroupIdMode = (typeNum & 0x06) >> 1;
-  if (subgroupIdMode === 0x03) {
+  if (hasReservedSubgroupIdMode(typeNum)) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
     );
   }
-  if ((typeNum & 0x10) === 0 || typeNum > 0x7f) {
+  if (!isValidSubgroupHeaderTypeForm(typeNum)) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
     );
@@ -406,7 +448,8 @@ export function hasPropertiesPresent(headerType: number): boolean {
 
 /**
  * Encode Object fields for Subgroup stream
- * draft-ietf-moq-transport-21 Section 11.3.1 Figure 25:
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) Figure 26
+ * (MOQT Subgroup Object Fields):
  * {
  *   Object ID Delta (i),
  *   [Properties (..),]          <-- Only if header type has Properties Present
@@ -483,7 +526,8 @@ export interface DecodedObjectFields {
 
 /**
  * Decode Object fields from Subgroup stream
- * draft-ietf-moq-transport-21 Section 11.3.1 Figure 25
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) Figure 26
+ * (MOQT Subgroup Object Fields)
  *
  * @param data - Data buffer
  * @param headerType - Subgroup header type to determine if properties are present

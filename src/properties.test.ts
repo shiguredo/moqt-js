@@ -659,6 +659,56 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の Length 宣言�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
+ *  If a Delta Type is received that would be too large, the Session MUST be closed
+ *  with a PROTOCOL_VIOLATION."
+ * delta の varint 単体は 2^64-1 を超えないため、累積の加算結果で判定する。
+ * MAX_VARINT (奇数 Type) に Length 0 を消費させた直後に delta 1 を置くと
+ * 累積が 2^64 になる。
+ */
+test("assertKnownPropertyValueInObjectProperties: delta の累積が 2^64-1 を超えると ProtocolViolationError", () => {
+  const data = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof ProtocolViolationError)) {
+    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
+ *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ * 上限超過は Type の既知 / 未知を問わず PROTOCOL_VIOLATION であり、宣言 Length が
+ * 残りバイト内に収まっていても拒否する。
+ */
+test("assertKnownPropertyValueInObjectProperties: 既知 odd Type の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=65536
+  const data = new Uint8Array([...encodeVarint(0x0bn), ...encodeVarint(65536n)]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof ProtocolViolationError)) {
+    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * Length の上限超過の MUST は Type の既知 / 未知に依存しない。
+ */
+test("assertKnownPropertyValueInObjectProperties: 未知 odd Type の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  // deltaId=0x0D (未知 odd Type), length=65536
+  const data = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof ProtocolViolationError)) {
+    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
+  }
+});
+
+/**
  * 宣言 Length が残りバイト数とちょうど一致する場合は超過ではないため throw しない
  * (境界のオフバイワン検出)。
  */
@@ -1155,6 +1205,71 @@ test("readDeliveryTimeoutObjectProperties: delta encoding の delivery timeout �
   const result = readDeliveryTimeoutObjectProperties(encoded);
   assert.equal(result.objectDeliveryTimeout, 5000n);
   assert.equal(result.subgroupDeliveryTimeout, 7000n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "Unless specified by a particular Property specification, Properties MAY appear
+ *  either in the mutable property list or inside Immutable Properties. When looking
+ *  for the value of a property, processors MUST search both the mutable properties
+ *  and the contents of Immutable Properties."
+ * Immutable Properties (0x0B) の内側に置かれた delivery timeout も解決する。
+ */
+test("readDeliveryTimeoutObjectProperties: Immutable Properties 配下の delivery timeout を抽出する", () => {
+  const inner = encodeProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n },
+    { id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, value: 7000n },
+  ]);
+  const encoded = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, 5000n);
+  assert.equal(result.subgroupDeliveryTimeout, 7000n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * mutable list を先に検索し、そちらに値がある場合は mutable 側の値を使う。
+ */
+test("readDeliveryTimeoutObjectProperties: mutable 側の値が Immutable Properties 配下より優先される", () => {
+  const inner = encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n }]);
+  const encoded = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 9000n },
+  ]);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, 9000n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.7:
+ * "An Object contains an Immutable Properties property that contains another
+ *  Immutable Properties key." は malformed であるため、内側の 0x0B は辿らない
+ * (探索は 1 段だけ)。
+ */
+test("readDeliveryTimeoutObjectProperties: Immutable Properties の内側の 0x0B は辿らない", () => {
+  const innermost = encodeProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n },
+  ]);
+  const inner = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: innermost }]);
+  const encoded = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const result = readDeliveryTimeoutObjectProperties(encoded);
+  assert.equal(result.objectDeliveryTimeout, undefined);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * 内側の KVP が不完全でも decodeObjectPropertiesTolerant の寛容契約どおり
+ * 例外を送出せず、読めた分の値だけを保持する。
+ */
+test("readDeliveryTimeoutObjectProperties: Immutable Properties の内側が不完全でも throw しない", () => {
+  // 内側: 0x02 (OBJECT_DELIVERY_TIMEOUT) の varint value が途中で終端している
+  const inner = new Uint8Array([0x02, 0xff, 0xff]);
+  const encoded = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  let result: ReturnType<typeof readDeliveryTimeoutObjectProperties> | undefined;
+  assert.doesNotThrow(() => {
+    result = readDeliveryTimeoutObjectProperties(encoded);
+  });
+  assert.equal(result?.objectDeliveryTimeout, undefined);
 });
 
 test("encodeProperties/decodeProperties: GREASE Property を含む Track Properties がラウンドトリップする", () => {

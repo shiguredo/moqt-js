@@ -1,7 +1,7 @@
 # MAX_REQUEST_UPDATES の受信側強制が無い
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-16
 - Branch: feature/fix-max-request-updates-receive
 - Polished: 2026-09-15
 - Updated: 2026-09-16
@@ -74,3 +74,41 @@ draft-ietf-moq-transport-21 §9.1.7:
 - draft-ietf-moq-transport-21 §12.2 (Session Termination Codes)
 - `issues/closed/0338-draft-19-add-max-request-updates.md` (自 endpoint の上限広告を追加した先行 issue。受信側の outstanding カウントと TOO_MANY_REQUEST_UPDATES でのセッション切断を別 issue 送りにしており、本 issue がその後続)
 - `issues/0618-change-receive-response-conformance.md` (GOAWAY 受信後に subscribe ロールで届いた REQUEST_UPDATE を無視する現在の意図的な逸脱を扱う。維持するか閉じる側に寄せるかは 0618 で決める途中であり、どちらになっても本 issue のチャンク単位の減算は成立する)
+
+## 解決方法
+
+確定事項のとおりに実装した。
+
+- `SessionImpl` に `localMaxRequestUpdates` (既定 0 = 無制限) を追加し、`initialize()` で
+  `options?.maxRequestUpdates ?? 0` を代入する。`close()` で `receivedRequestUpdateCounts` を
+  `clear()` する。
+- `SessionImpl` に `receivedRequestUpdateCounts: Map<bigint, number>` を追加し、
+  `BidiSessionInternal` に `readonly localMaxRequestUpdates` と
+  `readonly receivedRequestUpdateCounts` を公開して 2 経路から同じフィールドを更新する。
+- `src/session/bidi.ts` に `recordIncomingRequestUpdate` (加算と上限判定) と
+  `restoreIncomingRequestUpdateCount` (チャンク単位の減算) を追加した。加算は
+  `bidiHandlePublishRequestUpdate` と `bidiReadRequestStreamMessages` の REQUEST_UPDATE ケースで
+  `decodeRequestUpdatePayload` の直後 (await を挟まない位置) に行い、加算後の件数が
+  `localMaxRequestUpdates > 0` かつ上限を超える場合に `TOO_MANY_REQUEST_UPDATES` で閉じる。
+- 減算は 1 通ごとではなく、1 回の read で得たメッセージ列の処理を終える `finally` で
+  チャンク先頭の値へ戻す形にした。応答の書き込みを `await` してから次のメッセージへ進む構造の
+  ため、1 通ごとの減算では同じ read に含まれる N+1 通目を検出できない。
+- 受信 PUBLISH 経路は `runPublishStreamSubLoop` のメッセージ列、送信 PUBLISH 経路は
+  `bidiReadRequestStreamMessages` のメッセージ列を `try/finally` で包んだ。大きな差分は
+  この 2 つのループのインデント +2 によるもので、`git diff -w` で確認して範囲外の整形・
+  リファクタリングが無いことを確かめた。
+- ストリーム終了時は `cleanupIncomingPublish` と `bidiReadRequestStreamMessages` の外側
+  `finally` で、セッション終了時は `close()` でカウンタを破棄する。
+- `src/testSupport/bidi.ts` の 5 つのセッションオブジェクトリテラルと、既存テスト内の
+  2 つのインラインリテラルに既定値 (`localMaxRequestUpdates: 0` /
+  `receivedRequestUpdateCounts: new Map()`) を追加した。
+
+検証:
+
+- `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` が通ることを確認した
+  (99 test files / 2210 tests passed)。
+- 追加したテストは次のとおり。受信 PUBLISH 経路の超過・無制限 (`src/session.test.ts`)、
+  送信 PUBLISH 経路の超過・上限内・無制限と GOAWAY 後の無視で未応答数が残留しないこと
+  (`src/session/bidiRequestUpdateScopeAudit.test.ts`)、未応答数が上限に達した状態の受信と
+  上限と等しい受信 (`src/session/bidiHandlePublishRequestUpdate.test.ts`)、
+  `localMaxRequestUpdates` の既定値と保持 (`src/session.test.ts`)。

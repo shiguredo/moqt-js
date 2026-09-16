@@ -15,6 +15,53 @@
   - draft-ietf-moq-transport-21 §11.4.1.1 は Group Order によって Group ID の計算式が変わることを定めるが、FETCH 応答の復号が Ascending 固定だった。Descending を要求しても 2 件目以降の Object の Group ID が誤っていた
   - Session.fetch() が要求時の GROUP_ORDER を FetcherImpl に渡し、省略時は Ascending (§9.20.9) として復号する
   - @voluntas
+- [FIX] Forward State と END_OF_GROUP で省略した Subgroup を RESET で閉じる
+  - draft-ietf-moq-transport-21 §11.3.2 の MUST (Subgroup の全 Object を渡し切る前にストリームを閉じる場合は reset) に従い、Forward State 0 による送信見送りを Subgroup ストリーム単位で記録し、Group 変更 / done() / END_OF_GROUP 送信 / セッション終了で FIN ではなく RESET で閉じる
+  - END_OF_GROUP status の送信でストリームを FIN し、同一 Group への後続 sendObject / sendDatagram を ProtocolViolationError で拒否する (別の Group への送信は妨げない)
+  - FIN で閉じた Subgroup だけを closedSubgroups に登録する (RESET した Subgroup を FIN 済みとして扱わない)
+  - @voluntas
+- [FIX] エンコーダが受信側で PROTOCOL_VIOLATION になるワイヤを生成しないようにする
+  - Object Datagram: PROPERTIES ビットありで Properties Length 0、および不正な Type Flags (bit 4 / 0x2f 超 / STATUS と END_OF_GROUP の同時設定) を生成前に拒否する
+  - Subgroup Header: 不正な Type Flags (SUBGROUP_ID_MODE 0b11 / bit 4 が 0 / 0x7f 超) を生成前に拒否する
+  - Track Namespace: フィールド長 0 / 32 フィールド超の検査を `assertTrackNamespaceTuple` に集約し、`createTrackNamespace` と `encodeTrackNamespace` の双方で行う (0 フィールドと 32 フィールドは従来どおり許可)
+  - REQUEST_ERROR: REDIRECT (0x34) 以外の Error Code に Redirect を付けた場合と、REDIRECT なのに Redirect が無い場合を生成前に拒否する
+  - いずれも受信したワイヤの違反ではないため、汎用 Error を throw する
+  - @voluntas
+- [FIX] REQUEST_UPDATE の NEW_GROUP_REQUEST に DYNAMIC_GROUPS の検査を追加する
+  - draft-ietf-moq-transport-21 §9.20.20 の MUST NOT (DYNAMIC_GROUPS=1 を受けていない Track の REQUEST_UPDATE に NEW_GROUP_REQUEST を送ってはならない) を `bidiSendRequestUpdate` で型付き / raw の双方に対して検査する
+  - DYNAMIC_GROUPS は Immutable Properties (0x0B) 配下にも置けるため `supportsDynamicGroups` の二重検索を使う。SUBSCRIBE 経路は foreknowledge なしの送信が認められているため対象外
+  - @voluntas
+- [FIX] 同一 Parameter Type を重複させた制御メッセージを送信しない
+  - draft-ietf-moq-transport-21 §9.20 の MUST NOT に従い、`encodeParameters` で型ごとの出現回数を検査して重複を拒否する。REQUEST_UPDATE は `pendingRequestUpdate` / `fillFetchTargets` への登録前に拒否し、送信バイトとエントリを残さない
+  - AUTHORIZATION_TOKEN (0x03) と Range Filter (0x25-0x29) は型レベルの反復を引き続き許可する (判定は受信側と共通の `isRepeatableMessageParameterType`)
+  - @voluntas
+- [FIX] SETUP 受信時のプロトコル違反でトランスポートも閉じる
+  - AUTHORITY / PATH の受信 (§9.1.1 / §9.1.2 の MUST)、SETUP のデコード失敗 (§9 の MUST)、制御ストリームの先頭メッセージが SETUP でない場合に、initialize() を失敗させるだけでなく closeWithError でトランスポートを閉じ、ピアへ終了コードを伝える
+  - 例外の正規化は toSessionCloseError に統一し、AUTHORIZATION TOKEN 処理の個別 try/catch を統合する
+  - @voluntas
+- [FIX] セッション終了後に同一チャンクの残りメッセージを処理しない
+  - 受信 PUBLISH ストリーム上の REQUEST_OK 処理がセッションを閉じた場合と、REQUEST_UPDATE の拒否 (INVALID_FILTER / NOT_SUPPORTED / publisher 不在 / GOAWAY) に伴う PUBLISH_DONE 送出がセッションを閉じた場合に、読み取りループを終える
+  - 同一チャンクの後続メッセージが別のセッション終了を検出して error コールバックが二重に通知されるのを防ぐ
+  - @voluntas
+- [FIX] 受信応答の判定を仕様に合わせる
+  - 確立後の REQUEST_OK に対応する未応答の REQUEST_UPDATE が無い場合は PROTOCOL_VIOLATION でセッションを閉じる。GOAWAY 受信済みの request stream と、coalescing された REQUEST_ERROR で pending を消した件数分は遅延した正当な応答があり得るため対象外とする
+  - `.` と `.session` を参照する未対応リクエストを NOT_SUPPORTED ではなく DOES_NOT_EXIST で拒否する
+  - TRACK_STATUS_OK の EXPIRES は受理しない (§9.20.17 の出現先一覧を根拠とする解釈はコードコメントに記載)
+  - @voluntas
+- [FIX] Immutable Properties 配下の Property を検索する
+  - draft-ietf-moq-transport-21 §10.7 の MUST (mutable な Property 列と Immutable Properties の内容の双方を検索する) に従い、Object の delivery timeout を読む経路も 0x0B の内側を 1 段だけ検索する
+  - mutable 側に同じ型があればそちらを優先する
+  - @voluntas
+- [FIX] Object Properties の Length 上限と Delta overflow を検証する
+  - draft-ietf-moq-transport-21 §8.3 の MUST (delta の累積が 2^64-1 超、奇数 Type の Length が 2^16-1 超) を Object Datagram / Subgroup Object / Fetch Object の 3 経路で検証する
+  - 上限判定を共有の述語に切り出し、厳密デコーダと Object Properties の検証で同じ判定を使う
+  - 不完全データと未知 Type を寛容に打ち切る既存の契約は変えない
+  - @voluntas
+- [FIX] MAX_REQUEST_UPDATES の受信側強制を実装する
+  - draft-ietf-moq-transport-21 §9.1.7 の MUST に従い、広告した上限を超える未応答 REQUEST_UPDATE を受信したら TOO_MANY_REQUEST_UPDATES でセッションを閉じる
+  - 未応答数は request stream 単位で数え、1 回の read で得たメッセージ列を処理し終えた時点で減算する (1 通ごとに減算すると pipelining を検出できない)
+  - 未広告 (0) は無制限として扱う。`SessionImpl.localMaxRequestUpdates` で広告値を保持する
+  - @voluntas
 - [FIX] FETCH の End of Range から Object Payload Length を削除する
   - draft-ietf-moq-transport-21 §11.4.1.2 の End of Range indicator は Serialization Flags + Group ID + Object ID のみで、Object Payload Length を持たない。余分な varint を読み書きしていたため、EOR の直後に通常 Object が続くストリームでフィールド境界がずれていた
   - @voluntas

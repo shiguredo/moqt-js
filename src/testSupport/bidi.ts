@@ -61,8 +61,13 @@ export function createBidiSession(): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
@@ -186,8 +191,13 @@ export function createPublishReadTestContext(
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     // draft-ietf-moq-transport-21 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止) で、
     // Alias を使うテストは authTokenCacheSize を指定する。
@@ -201,6 +211,11 @@ export function createPublishReadTestContext(
     closeWithError: (error: SessionError) => {
       closedWithError = error;
       closedWithErrorCount++;
+      // SessionImpl.closeWithError と同じく状態を closed へ遷移させる。
+      // 遷移させないと、セッション終了後の読み取り打ち切り (sessionState ガード) を
+      // 検証できない。BidiSessionInternal の sessionState は readonly 宣言だが、
+      // 実装 (SessionImpl) は可変フィールドのため、テスト用の状態遷移として代入する。
+      (session as unknown as { sessionState: string }).sessionState = "closed";
     },
     validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
@@ -324,8 +339,13 @@ export function createPublishOkValidationContext(
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),
@@ -398,8 +418,13 @@ export function createOkResponseReadTestContext(): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
@@ -485,8 +510,13 @@ export function createCancelObservableResponseContext(): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),

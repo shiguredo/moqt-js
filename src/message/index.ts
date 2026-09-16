@@ -45,6 +45,8 @@ export {
   encodeLocation,
   encodeKeyValuePairs,
   encodeParameters,
+  isRepeatableMessageParameterType,
+  assertNoDuplicateMessageParameterTypes,
   encodeParameterTrackNamespace,
   encodeLocationFilter,
   encodeLocationFilterParameter,

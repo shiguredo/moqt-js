@@ -21,7 +21,7 @@ import {
   SessionError,
 } from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
-import { encodeVarint } from "./varint";
+import { encodeVarint, MAX_VARINT } from "./varint";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -886,5 +886,86 @@ test("encodeObjectFields: END_OF_GROUP + 非空 payload は ProtocolViolationErr
   assert.throws(
     () => encodeObjectFields(0n, 1n, SubgroupHeaderType.FIRST_OBJ_EXT, ObjectStatus.END_OF_GROUP),
     ProtocolViolationError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
+ *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ * 奇数 Type の Length が上限を超える Object Properties は Type の既知 / 未知を
+ * 問わず ProtocolViolationError になる。
+ */
+test("ObjectFields: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  // deltaId=0x0D (未知 odd Type), length=65536
+  const properties = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
+ *  If a Delta Type is received that would be too large, the Session MUST be closed
+ *  with a PROTOCOL_VIOLATION."
+ * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
+ */
+test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+  const properties = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+});
+
+// ============================================================================
+// エンコーダ入口の Type Flags 検証
+// draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header)
+//
+// 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
+// デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。
+// ============================================================================
+
+test("SubgroupHeader: SUBGROUP_ID_MODE 0b11 はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x16,
+        trackAlias: 1n,
+        groupId: 0n,
+        subgroupId: 0n,
+        publisherPriority: 1,
+      }),
+    /invalid subgroup header type: 0x16, SUBGROUP_ID_MODE 0b11 is reserved/,
+  );
+});
+
+test("SubgroupHeader: bit 4 が 0 の Type Flags はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x00,
+        trackAlias: 1n,
+        groupId: 0n,
+        subgroupId: 0n,
+        publisherPriority: 1,
+      }),
+    /invalid subgroup header type: 0x0, does not match form 0b0XX1XXXX/,
+  );
+});
+
+test("SubgroupHeader: 0x7f を超える Type Flags はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x80,
+        trackAlias: 1n,
+        groupId: 0n,
+        subgroupId: 0n,
+        publisherPriority: 1,
+      }),
+    /invalid subgroup header type: 0x80, does not match form 0b0XX1XXXX/,
   );
 });

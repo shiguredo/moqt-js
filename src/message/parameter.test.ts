@@ -16,6 +16,8 @@ import {
   type LocationFilter,
   encodeParameters,
   decodeParameters,
+  assertNoDuplicateMessageParameterTypes,
+  isRepeatableMessageParameterType,
   decodeKeyValuePairs,
   decodeMessageParameter,
   decodeRangeFilter,
@@ -387,6 +389,85 @@ test("Parameters の delta encoding で type が昇順でない場合もソー�
   assert.equal(consumed, encoded.length);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * "Senders MUST NOT repeat the same Parameter Type in a message unless the
+ *  parameter definition explicitly allows multiple instances of that type to be
+ *  sent in a single message."
+ * 同一 Type の重複はエンコード時にローカルの Error で拒否する
+ * (受信側の PROTOCOL_VIOLATION と区別する)。
+ */
+test("encodeParameters: 同一 Parameter Type の重複は Error になる", () => {
+  const params = [
+    { type: 0x10, value: new Uint8Array([0x01]) },
+    { type: 0x10, value: new Uint8Array([0x00]) },
+  ];
+
+  let thrown: unknown;
+  try {
+    encodeParameters(params);
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, Error);
+  assert.isTrue((thrown as Error).message.includes("duplicate message parameter type: 0x10"));
+});
+
+/**
+ * 反復が許可される型 (AUTHORIZATION_TOKEN 0x03 / Range Filter 0x25-0x29) は
+ * 同一メッセージ内に複数回出現できる (§9.20 / §3.3.2)。
+ */
+test("encodeParameters: 反復可能な型の重複は許可される", () => {
+  const subgroupFilter = encodeRangeFilter({
+    type: "subgroup",
+    setId: 1,
+    ranges: [{ start: 0n, end: 10n }],
+  });
+  const objectIdFilter = encodeRangeFilter({
+    type: "objectId",
+    setId: 1,
+    ranges: [{ start: 20n, end: 30n }],
+  });
+  const params = [
+    { type: 0x03, value: new Uint8Array([0x01, 0x02]) },
+    { type: 0x03, value: new Uint8Array([0x03, 0x04]) },
+    { type: 0x25, value: subgroupFilter },
+    { type: 0x25, value: objectIdFilter },
+  ];
+
+  const encoded = encodeParameters(params);
+  const [decoded, consumed] = decodeParameters(encoded);
+  assert.equal(decoded.length, 4);
+  assert.equal(consumed, encoded.length);
+});
+
+/**
+ * 反復可否の判定は送信側 (encodeParameters) と受信側 (decodeParameters) で
+ * 共通の isRepeatableMessageParameterType を使う。
+ */
+test("isRepeatableMessageParameterType: 0x03 と 0x25-0x29 のみ反復可能", () => {
+  for (const type of [0x03, 0x25, 0x26, 0x27, 0x28, 0x29]) {
+    assert.isTrue(isRepeatableMessageParameterType(type));
+    // 反復可能な型は重複しても throw しない
+    assertNoDuplicateMessageParameterTypes([{ type }, { type }]);
+  }
+  for (const type of [0x10, 0x20, 0x24, 0x2a]) {
+    assert.isFalse(isRepeatableMessageParameterType(type));
+    let thrown: unknown;
+    try {
+      assertNoDuplicateMessageParameterTypes([{ type }, { type }]);
+    } catch (error) {
+      thrown = error;
+    }
+    assert.instanceOf(thrown, Error);
+    assert.isTrue(
+      (thrown as Error).message.includes(
+        `duplicate message parameter type: 0x${type.toString(16)}`,
+      ),
+    );
+  }
+});
+
 test("空の Parameters リストのエンコード・デコード", () => {
   const params: { type: number; value: Uint8Array }[] = [];
   const encoded = encodeParameters(params);
@@ -458,6 +539,48 @@ test("createTrackNamespace: 32 フィールドは成功し 33 フィールドは
     () => createTrackNamespace(fields33),
     /track namespace fields exceeds maximum: 33 > 32/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
+ * 送信側も受信側と同じ制約 (フィールド数 32 以下 / 各フィールド 1 バイト以上 /
+ * 合計 4,096 バイト以下) を守る。`createTrackNamespace` と `encodeTrackNamespace` は
+ * 共通の `assertTrackNamespaceTuple` を使う。
+ */
+test("encodeTrackNamespace: フィールド長 0 のフィールドはエラー", () => {
+  assert.throws(
+    () => encodeTrackNamespace({ tuple: [new Uint8Array(0)] }),
+    /track namespace field length is zero/,
+  );
+  assert.throws(
+    () => encodeTrackNamespace({ tuple: [new Uint8Array([1]), new Uint8Array(0)] }),
+    /track namespace field length is zero/,
+  );
+});
+
+test("encodeTrackNamespace: 33 フィールドはエラー", () => {
+  const tuple = Array.from({ length: 33 }, () => new Uint8Array([1]));
+  assert.throws(
+    () => encodeTrackNamespace({ tuple }),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
+test("createTrackNamespace: 空フィールドはエラー", () => {
+  assert.throws(() => createTrackNamespace([""]), /track namespace field length is zero/);
+});
+
+test("encodeTrackNamespace: 0 フィールドと 32 フィールドはエンコードできる", () => {
+  // 0 フィールドは §2.4.1 の "between 0 and 32 Track Namespace Fields" により正当
+  const empty = encodeTrackNamespace({ tuple: [] });
+  const [decodedEmpty] = decodeTrackNamespace(empty);
+  assert.equal(decodedEmpty.tuple.length, 0);
+
+  // 32 フィールドは上限内
+  const tuple = Array.from({ length: 32 }, () => new Uint8Array([1]));
+  const encoded = encodeTrackNamespace({ tuple });
+  const [decoded] = decodeTrackNamespace(encoded);
+  assert.equal(decoded.tuple.length, 32);
 });
 
 test("encodeTrackNamespace で制限を超えるとエラー", () => {

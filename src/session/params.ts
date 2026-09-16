@@ -729,8 +729,11 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
-  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-21 Section 9.20.9 (uint8)
-  // "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-21 §9.20.8
+  // (SUBSCRIBER PRIORITY Parameter)
+  // "The SUBSCRIBER_PRIORITY parameter (Parameter Type 0x20) is a uint8.  It MAY
+  //  appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE (for a subscription
+  //  or FETCH)."
   if (options?.subscriberPriority !== undefined) {
     parameters.push({
       type: MessageParameterType.SUBSCRIBER_PRIORITY,
@@ -738,8 +741,11 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 Section 9.20.9 (uint8)
-  // "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 §9.20.9
+  // (GROUP ORDER Parameter)
+  // "The GROUP_ORDER parameter (Parameter Type 0x22) is a uint8.  It MAY appear in
+  //  a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH, or inside a FILL_PARAMETERS
+  //  parameter (see Section 9.20.16)."
   // FETCH_OK には出現できないため、送信側で指定できるのは要求時のみ
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {

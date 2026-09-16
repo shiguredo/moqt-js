@@ -448,8 +448,9 @@ async function namespaceHandleNamespaceStreamDone(
  * REQUEST_OK / REQUEST_ERROR / GOAWAY のいずれかのみを許可する。想定外メッセージは
  * PROTOCOL_VIOLATION の SessionError を返す。呼び出し側は返されたエラーで
  * reject してからセッションを閉じ、return する。
- * PUBLISH_NAMESPACE (§9.14) には先頭メッセージ MUST が draft に無いため対象外
- * (publication ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
+ * PUBLISH_NAMESPACE (§9.14) には応答側の先頭メッセージ MUST が draft に無いため対象外
+ * (要求側の先頭メッセージは Table 5 の "First" と §6.3 が MUST で定める。publication
+ *  ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
  *
  * 仕様衝突の注記: §9.15 / §9.18 は「REQUEST_OK / REQUEST_ERROR 以外の先頭メッセージは
  * PROTOCOL_VIOLATION」と MUST する一方、§9.2 は「GOAWAY をリクエストストリームに送って
@@ -869,7 +870,7 @@ interface NamespaceLoopHandlers<S> {
    * PROTOCOL_VIOLATION で誤って閉じるのを防ぐ。
    */
   skipMessagesWhenInactive: boolean;
-  /** 先頭メッセージガード (publication は §9.14 に MUST が無いため未指定) */
+  /** 先頭メッセージガード (publication は §9.14 に応答側の先頭メッセージ MUST が無いため未指定) */
   validateFirstMessage?(ctx: NamespaceLoopContext<S>, messageType: number): SessionError | null;
   /** ピアの FIN 検出時の後始末 */
   onStreamDone(ctx: NamespaceLoopContext<S>): Promise<void>;
@@ -1215,6 +1216,18 @@ function createNamespaceStreamHandlers(
         }
 
         default:
+          // draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+          // "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
+          //  SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send REQUEST_UPDATE on
+          //  the same bidi stream as the request to modify it. ... An endpoint that
+          //  receives a REQUEST_UPDATE other than in the two cases above MUST close
+          //  the session with a PROTOCOL_VIOLATION."
+          // 自側が SUBSCRIBE_NAMESPACE の送信者であるため、このストリームで
+          // ピアから REQUEST_UPDATE を受信することは 2 ケースのいずれにも該当しない。
+          // §9.5.2 (Updating Namespace Subscriptions) の TRACK_NAMESPACE_PREFIX 更新も
+          // subscriber (要求の送信者) が送るものであり、受信側の処理は不要である
+          // (自側送信は bidiSendNamespaceRequestUpdate が担う)。
+          // REQUEST_UPDATE を受理してトークン処理や応答を行う実装にしないこと。
           ctx.session.closeWithError(
             new SessionError(
               `unknown namespace stream message type: 0x${messageType.toString(16)}`,
@@ -1340,6 +1353,9 @@ function createTracksStreamHandlers(
         }
 
         default:
+          // SUBSCRIBE_TRACKS も自側が送信者であり、ピアからの REQUEST_UPDATE は
+          // §9.5 の 2 ケースに該当しない (PROTOCOL_VIOLATION で閉じる MUST)。
+          // 理由は namespace ループの同名分岐のコメントを参照する。
           ctx.session.closeWithError(
             new SessionError(
               `unknown tracks stream message type: 0x${messageType.toString(16)}`,
@@ -1406,7 +1422,7 @@ function createPublicationStreamHandlers(
     closeTarget: (target) => {
       target.state = "closed";
     },
-    // PUBLISH_NAMESPACE は §9.14 に先頭メッセージ MUST が無いため先頭メッセージ
+    // PUBLISH_NAMESPACE は §9.14 に応答側の先頭メッセージ MUST が無いため先頭メッセージ
     // ガードを注入しない (unknown message type として default で閉じる)。
     skipMessagesWhenInactive: false,
     onStreamDone: async (ctx) => {

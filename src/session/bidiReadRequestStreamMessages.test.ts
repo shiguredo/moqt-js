@@ -16,6 +16,7 @@ import {
 import { encodePublishDonePayload, decodePublishDonePayload } from "../message/publish";
 import { MessageType, MessageParameterType, PublishDoneStatusCode } from "../message/types";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
+import { createTrackNamespace, encodeParameterTrackNamespace } from "../message";
 import { encodeAuthorizationToken, AuthorizationTokenAliasType } from "../message";
 import { SessionErrorCode, RequestErrorCode } from "../error";
 import {
@@ -92,8 +93,13 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),
@@ -168,8 +174,13 @@ async function readPublishOkWithParameters(
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),
@@ -899,6 +910,123 @@ test("bidiReadRequestStreamMessages: 書き込み失敗でも購読を掃除し�
 });
 
 /**
+ * セッション終了後に同一チャンクの残りメッセージを処理しない検証。
+ * PUBLISH_DONE 送信後の close 失敗で PROTOCOL_VIOLATION のセッション終了が
+ * 起きた場合、同一チャンクに連結された 2 通目を処理すると、そこで別の
+ * セッション終了 (パラメータスコープ違反) が検出されて closeWithError が
+ * 二重に呼ばれる。
+ */
+test("bidiReadRequestStreamMessages: PUBLISH_DONE の close 失敗で閉じた後は同一チャンクの残りを処理しない (publish ロール)", async () => {
+  // PUBLISH_DONE 送信後の close をピア起因でない失敗にして PROTOCOL_VIOLATION へ昇格させる
+  const ctx = createPublishReadTestContext({
+    close: () => {
+      throw new Error("close failed");
+    },
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 1 通目: 不正 Range Filter (INVALID_FILTER) → PUBLISH_DONE (UPDATE_FAILED) → close 失敗
+  const invalidFilterPayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  // 2 通目: パラメータスコープ違反 (TRACK_NAMESPACE_PREFIX は通常の REQUEST_UPDATE に
+  // 許可されない)。処理されれば 2 回目の closeWithError が起きる
+  const scopeViolationPayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 103n,
+    parameters: [encodeParameterTrackNamespace(createTrackNamespace(["namespace"]))],
+  });
+  // 2 通を 1 チャンクに連結して feed する (同一チャンクの残りメッセージを再現する)
+  ctx.readableController.enqueue(
+    concatUint8Arrays([
+      ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, invalidFilterPayload),
+      ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, scopeViolationPayload),
+    ]),
+  );
+  await readPromise;
+
+  // 1 通目の処理で閉じたため、2 通目のスコープ違反は検出されない
+  assert.equal(ctx.closedWithErrorCount, 1);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
+  // 2 通目への応答も送信されない (REQUEST_ERROR と PUBLISH_DONE のみ)
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+});
+
+/**
+ * セッションが閉じない場合の温存ガード。
+ * INVALID_FILTER 応答と PUBLISH_DONE (UPDATE_FAILED) の送出ではセッションは
+ * 閉じないため、同一チャンクの残りメッセージは従来どおり処理される。
+ * 2 通目をパラメータスコープ違反にすると、処理された場合だけ
+ * closeWithError が呼ばれる (PUBLISH_DONE でストリームを閉じた後は書き込みが
+ * 失敗して黙殺されるため、書き込みの有無では判定できない)。
+ */
+test("bidiReadRequestStreamMessages: セッションが閉じない REQUEST_UPDATE 拒否では同一チャンクの残りを処理する (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const invalidFilterPayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: 0x27,
+        value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
+      },
+    ],
+  });
+  // 2 通目は TRACK_NAMESPACE_PREFIX (namespace 系専用) でスコープ違反
+  const scopeViolationPayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 103n,
+    parameters: [encodeParameterTrackNamespace(createTrackNamespace(["namespace"]))],
+  });
+  ctx.readableController.enqueue(
+    concatUint8Arrays([
+      ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, invalidFilterPayload),
+      ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, scopeViolationPayload),
+    ]),
+  );
+  // 同一チャンクを処理し終えた後に FIN で読み取りループを終える
+  ctx.readableController.close();
+  await readPromise;
+
+  // 1 通目ではセッションは閉じず、2 通目 (スコープ違反) まで処理される
+  assert.equal(ctx.closedWithErrorCount, 1);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
+  // 1 通目への応答 (REQUEST_ERROR + PUBLISH_DONE) は送出されている
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.9:
  * PUBLISH_DONE 送信前にデータストリームを閉じる (done() 経路と同形)。
  * 書き込み順序でデータストリーム close 先行を検証する。
@@ -916,6 +1044,7 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリ�
     groupId: 0n,
     writer: dataWritable.getWriter(),
     previousObjectId: 0n,
+    omittedObjects: false,
   });
 
   const readPromise = bidiReadRequestStreamMessages(
