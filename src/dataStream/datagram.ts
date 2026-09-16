@@ -33,7 +33,9 @@ import {
  * bit 4 (0x10) が立つ値や、意味の無いビットが立つ値は
  * PROTOCOL_VIOLATION で拒否する。
  *
- * Section 11.2.1 (Object Datagram) / Figure 24 from draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-21 §11.2.1 (Object Datagram) の Type Flags ビット定義
+ * (Figure 24 は MOQT OBJECT_DATAGRAM のワイヤ構造図であり型表は無い) から導出した
+ * 実装側の一覧:
  * | Type | End Of Group | Properties | Object ID | Priority | Status/Payload |
  * |------|--------------|------------|-----------|----------|----------------|
  * | 0x00 | No           | No         | Yes       | Yes      | Payload        |

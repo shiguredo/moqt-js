@@ -84,8 +84,8 @@ export function validateFullTrackNameBytes(
 /**
  * Track Namespace の最大フィールド数
  *
- * draft-ietf-moq-transport-21 Section 9.15 (SUBSCRIBE_NAMESPACE):
- * "receives a Track Namespace Prefix consisting of greater than
+ * draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
+ * "If an endpoint receives a Track Namespace consisting of greater than
  *  32 Track Namespace Fields, it MUST close the session with a
  *  PROTOCOL_VIOLATION."
  */
@@ -171,7 +171,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
 
-  // draft-ietf-moq-transport-21 Section 9.15 (SUBSCRIBE_NAMESPACE):
+  // draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
   // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
   if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
     throw new ProtocolViolationError(
