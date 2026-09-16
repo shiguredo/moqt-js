@@ -1,7 +1,7 @@
 # Immutable Properties 配下の Property を検索していない
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-16
 - Branch: feature/fix-immutable-properties-search
 - Polished: 2026-09-15
 
@@ -43,3 +43,27 @@ draft-ietf-moq-transport-21 §10.7:
 - draft-ietf-moq-transport-21 §10.2 (OBJECT_DELIVERY_TIMEOUT)
 - draft-ietf-moq-transport-21 §10.7 (Immutable Properties)
 - draft-ietf-moq-transport-21 §11.1.3 (Object Properties)
+
+## 解決方法
+
+設計方針のとおりに実装した。
+
+- `readDeliveryTimeoutObjectProperties` (`src/properties.ts`) は mutable list を先に走査し、
+  そこで見つからなかった型だけ Immutable Properties (0x0B) の内側を走査するようにした。
+  内側のデコードには `decodeObjectPropertiesTolerant` を使い、`assertPriorIdGapInProperties` と
+  同じ形の走査に揃えた (Track 向け `decodeProperties` は Mandatory Track Property の拒否や
+  Length 上限で throw するため寛容契約を壊す)。
+- 探索は 1 段だけとした。§10.7 は 0x0B の内側に 0x0B が現れる Object を malformed とするため、
+  内側に現れた 0x0B は辿らない。
+- mutable 側の値を `??=` で優先し、内側は mutable 側で見つからなかった型だけ埋める。
+- 内側が不完全・不正な KVP の場合は `decodeObjectPropertiesTolerant` の契約どおり打ち切り、
+  例外を送出しない。
+- JSDoc に §10.7 の MUST と探索が 1 段である理由を追記した。
+
+検証:
+
+- `src/properties.test.ts` に 4 件追加した。Immutable Properties 配下の
+  OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT の解決、mutable 側の値の優先、
+  内側の 0x0B を辿らないこと、内側が不完全でも throw せず読めた分だけを保持することを固定する。
+- `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` が通ることを確認した
+  (99 test files / 2223 tests passed)。
