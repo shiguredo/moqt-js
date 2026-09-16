@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] REQUEST_UPDATE の NEW_GROUP_REQUEST に DYNAMIC_GROUPS の検査を追加する
+  - draft-ietf-moq-transport-21 §9.20.20 の MUST NOT (DYNAMIC_GROUPS=1 を受けていない Track の REQUEST_UPDATE に NEW_GROUP_REQUEST を送ってはならない) を `bidiSendRequestUpdate` で型付き / raw の双方に対して検査する
+  - DYNAMIC_GROUPS は Immutable Properties (0x0B) 配下にも置けるため `supportsDynamicGroups` の二重検索を使う。SUBSCRIBE 経路は foreknowledge なしの送信が認められているため対象外
+  - @voluntas
 - [FIX] 同一 Parameter Type を重複させた制御メッセージを送信しない
   - draft-ietf-moq-transport-21 §9.20 の MUST NOT に従い、`encodeParameters` で型ごとの出現回数を検査して重複を拒否する。REQUEST_UPDATE は `pendingRequestUpdate` / `fillFetchTargets` への登録前に拒否し、送信バイトとエントリを残さない
   - AUTHORIZATION_TOKEN (0x03) と Range Filter (0x25-0x29) は型レベルの反復を引き続き許可する (判定は受信側と共通の `isRepeatableMessageParameterType`)

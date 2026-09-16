@@ -379,10 +379,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // draft-ietf-moq-transport-21 §9.20.20:
-    // "A subscriber MUST NOT send this parameter in PUBLISH_OK or
-    //  REQUEST_UPDATE if the Track did not include the DYNAMIC_GROUPS
-    //  Property with value 1."
+    // draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+    // "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track
+    //  did not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY
+    //  include this parameter in SUBSCRIBE without foreknowledge of support."
+    // MUST の本体は下位の bidiSendRequestUpdate が 1 箇所で担保する。ここは
+    // 従来どおりの文言で先にエラーを返すための防御であり、判定の根拠ではない。
     if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
       throw new Error(
         "cannot request keyframe: track did not include DYNAMIC_GROUPS property with value 1",
