@@ -1,7 +1,7 @@
 # コメントの節番号と引用のずれを修正する
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-comment-section-references
 - Polished: 2026-09-15
 
@@ -126,3 +126,33 @@ Table 5 (§9 Control Messages) の説明文:
 - draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header)
 - `src/message/parameter/messageParameter.ts` (§8.3 の偶数 / 奇数規則が Message Parameter に適用されないことの記述)
 - `issues/0610-bug-encoder-generates-invalid-wire.md` / `issues/0604-refactor-subgroup-first-object.md` (同じ `src/dataStream/datagram.ts` / `src/dataStream/subgroup.ts` / `src/message/parameter/trackNamespace.ts` を触る。対象行は本 issue のコメント行と重ならないが、先に実装された場合は現行文言を読み直す)
+
+## 解決方法
+
+「現状」の 8 件すべてで、`refs/moq/draft-ietf-moq-transport-21.txt` を照合した結果に合わせてコメントを直した。挙動の変更はなく、
+`src/` の差分はすべてコメント行である (コード・テストの期待値・テスト名に差分が無いことを `git diff` で確認)。
+
+1. `src/message/parameter/trackNamespace.ts`: 32 フィールド上限の根拠を §8.7 (Track Namespace Structure) に直し、逐語も
+   "If an endpoint receives a Track Namespace consisting of greater than 32 Track Namespace Fields, it MUST close the session
+   with a PROTOCOL_VIOLATION." に差し替えた (`MAX_TRACK_NAMESPACE_FIELDS` と `decodeTrackNamespace` の 2 箇所)
+2. `src/session/params.ts` の `buildFetchParameters`: SUBSCRIBER_PRIORITY を §9.20.8、GROUP_ORDER を §9.20.9 に直し、
+   逐語を末尾 ("(for a subscription or FETCH)" / ", or inside a FILL_PARAMETERS parameter (see Section 9.20.16)") まで含めた
+3. `src/session/bidi.ts` の `bidiReadRequestStreamMessages`: PUBLISH_DONE の MUST の節番号を §9.8 から §9.9 (PUBLISH_DONE) に直した
+4. `src/message/setup.test.ts`: SETUP の DELETE 禁止の引用を §9.1.4 (AUTHORIZATION TOKEN) に直した。
+   USE_ALIAS 側のテストには元々コメントが無く、`src/` に §9.20.3 の引用は残っていない
+5. `src/message/trackstatus.ts`: モジュールコメントと `TrackStatus` の doc を §9.13 の逐語 (SUBSCRIBER_PRIORITY の例示、
+   TRACK_STATUS_OK は REQUEST_OK の shorthand である旨) に書き直し、OBJECT_DELIVERY_TIMEOUT / DEFAULT_PUBLISHER_PRIORITY の
+   列挙を削除した。応答に載りうる LARGEST_OBJECT は §9.20.18 を根拠として明記した
+6. `src/session/namespaceLoops.ts`: 「§9.14 に先頭メッセージ MUST が無い」を「応答側の先頭メッセージ MUST が無い」に直し、
+   要求側の先頭メッセージは Table 5 の "First" と §6.3 が MUST で定めることを併記した (3 箇所)
+7. `src/message/parameter/locationFilter.ts`: 「奇数なので Length プレフィックス付き」を削除し、§9.20.10 (LOCATION FILTER
+   Parameter) の "A Location filter parameter has the following length-prefixed structure:" を根拠として書いた
+   (§8.3 の偶数 / 奇数規則は Message Parameter には適用されない)
+8. `src/dataStream/datagram.ts` / `src/dataStream/subgroup.ts`: 型表を draft-21 へ帰属させる記述を外し、「§11.2.1 / §11.3.1 の
+   Type Flags ビット定義から導出した実装側の一覧」と明示した。図表の引用は §11.2.1 の Figure 24 (MOQT OBJECT_DATAGRAM)、
+   §11.3.1 の Figure 25 (MOQT SUBGROUP_HEADER)、Object fields は Figure 26 (MOQT Subgroup Object Fields) に合わせた
+
+`issues/0617-bug-fetch-stream-request-update-detection.md` の整形ずれは develop 上で既に解消されており、リポジトリ全体の
+`vp check` が pass することを確認した (前提作業のコミットは不要だった)。
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2269 passed) の通過で確認した。
