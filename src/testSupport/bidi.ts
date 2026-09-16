@@ -61,6 +61,7 @@ export function createBidiSession(): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
@@ -190,6 +191,7 @@ export function createPublishReadTestContext(
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
@@ -332,6 +334,7 @@ export function createPublishOkValidationContext(
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
@@ -410,6 +413,7 @@ export function createOkResponseReadTestContext(): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
@@ -501,6 +505,7 @@ export function createCancelObservableResponseContext(): {
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):

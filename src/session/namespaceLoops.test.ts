@@ -174,6 +174,7 @@ function createNamespaceLoopTestContext(kind: LoopKind): {
     namespacePublications: new Map(kind === "publication" ? [[requestId, target]] : []),
     pendingRequestUpdate: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     callbacks: {
       debug: (message: DebugRecord) => {
         debugRecords.push(message);

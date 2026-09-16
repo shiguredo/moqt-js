@@ -36,9 +36,16 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
       closedWithError = error;
     },
     subscribers: new Map(),
-    pendingRequestUpdate: new Map(),
+    // 確立後の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への応答である
+    // 必要があるため、保留中の更新を 1 件用意する (無い場合は item 3 の検証で
+    // 別途 PROTOCOL_VIOLATION となる)
+    pendingRequestUpdate: new Map([
+      [1n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
+    ]),
     fillFetchTargets: new Map(),
     // BidiSessionInternal の他のフィールドは本関数のテストで未使用のため undefined
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -87,6 +94,8 @@ test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映され
         },
       ],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -134,8 +143,13 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
       closedWithError = error;
     },
     subscribers: new Map(),
-    pendingRequestUpdate: new Map(),
+    // 自 endpoint が送った REQUEST_UPDATE への応答という正常系にする
+    pendingRequestUpdate: new Map([
+      [1n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
+    ]),
     fillFetchTargets: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -147,6 +161,131 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
   assert.equal(closedWithError, undefined);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §3.1 (Subscriptions):
+ * "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in response
+ *  to a SUBSCRIBE. ... The peer SHOULD close the session with a protocol error
+ *  if it receives more than one."
+ * 確立済みの要求ストリーム上の REQUEST_OK は、自 endpoint が送った
+ * REQUEST_UPDATE への応答 (§9.5) でなければならない。
+ * 未応答の REQUEST_UPDATE が無いのに REQUEST_OK を受信した場合は 2 通目以降の
+ * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
+ * §9.5 の coalescing は複数の失敗を 1 通の REQUEST_ERROR にまとめる規定であり、
+ * REQUEST_OK の重複受信を許さない。
+ */
+test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_OK で PROTOCOL_VIOLATION となる", () => {
+  let closedWithError: SessionError | undefined;
+
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    // 確立済み (初期応答は処理済み) で、自 endpoint は REQUEST_UPDATE を送っていない
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
+    fillFetchTargets: new Map(),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.notEqual(closedWithError, undefined);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(closedWithError!.message.includes("no outstanding REQUEST_UPDATE"));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.2 (GOAWAY):
+ * GOAWAY 受信時点で未応答の REQUEST_UPDATE は失敗として reject され
+ * pendingRequestUpdate から削除される。その後に届く REQUEST_OK は削除済みの
+ * 更新への正当な応答でありうるため、違反としてセッションを閉じない
+ * (graceful migration 中にセッション全体をエラー終了させない)。
+ */
+test("bidiHandleRequestUpdateOk: GOAWAY 受信済み request stream の遅延 REQUEST_OK では閉じない", () => {
+  let closedWithError: SessionError | undefined;
+
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map(),
+    // GOAWAY 受信時に reject 済みで、エントリが削除されている状態
+    pendingRequestUpdate: new Map(),
+    goawayReceivedOnRequestStreams: new Set([0n]),
+    fillFetchTargets: new Map(),
+    unmatchedRequestOkAllowances: new Map(),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+
+  assert.isUndefined(closedWithError);
+});
+
+/**
+ * 2 通目の応答の検証。
+ * 1 通目の REQUEST_OK が保留中の REQUEST_UPDATE を解決した後に、同じ要求 ID で
+ * もう 1 通 REQUEST_OK を受信した場合は、未応答の REQUEST_UPDATE が残っていない
+ * ため PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION となる", () => {
+  let closedWithError: SessionError | undefined;
+  let resolveCount = 0;
+
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
+  const session = {
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+    },
+    subscribers: new Map([[0n, subscriber]]),
+    pendingRequestUpdate: new Map([
+      [
+        100n,
+        {
+          resolve: () => {
+            resolveCount += 1;
+          },
+          reject: () => {},
+          targetRequestId: 0n,
+          forward: false,
+        },
+      ],
+    ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
+  } as unknown as BidiSessionInternal;
+
+  const payload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  // 1 通目は保留中の REQUEST_UPDATE を解決するため正常
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+  assert.equal(closedWithError, undefined);
+  assert.equal(resolveCount, 1);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+
+  // 2 通目は応答すべき REQUEST_UPDATE が無いため PROTOCOL_VIOLATION
+  bidiHandleRequestUpdateOk(session, payload, 0n);
+  assert.notEqual(closedWithError, undefined);
+  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(resolveCount, 1);
 });
 
 /**
@@ -164,6 +303,8 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward }) の REQUEST_OK で Forw
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: false }],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -193,6 +334,8 @@ test("bidiHandleRequestUpdateOk: 自 update({ forward: true }) の REQUEST_OK �
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n, forward: true }],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -221,6 +364,8 @@ test("bidiHandleRequestUpdateOk: FORWARD 省略の update の REQUEST_OK で For
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -271,6 +416,8 @@ test("bidiHandleRequestUpdateOk: 送信時の LOCATION_FILTER が反映され新
         },
       ],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -334,6 +481,8 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -383,6 +532,8 @@ test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では相�
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   // LARGEST_OBJECT = {9, 0} のみを含む REQUEST_OK (LOCATION_FILTER 更新なし)
@@ -432,6 +583,8 @@ test("bidiHandleRequestUpdateOk: 相対 LOCATION_FILTER が更新後の LARGEST_
         },
       ],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({
@@ -487,6 +640,8 @@ test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジ�
         },
       ],
     ]),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
   } as unknown as BidiSessionInternal;
 
   const payload = encodeRequestOkPayload({

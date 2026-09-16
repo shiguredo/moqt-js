@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] 受信応答の判定を仕様に合わせる
+  - 確立後の REQUEST_OK に対応する未応答の REQUEST_UPDATE が無い場合は PROTOCOL_VIOLATION でセッションを閉じる。GOAWAY 受信済みの request stream と、coalescing された REQUEST_ERROR で pending を消した件数分は遅延した正当な応答があり得るため対象外とする
+  - `.` と `.session` を参照する未対応リクエストを NOT_SUPPORTED ではなく DOES_NOT_EXIST で拒否する
+  - TRACK_STATUS_OK の EXPIRES は受理しない (§9.20.17 の出現先一覧を根拠とする解釈はコードコメントに記載)
+  - @voluntas
 - [FIX] Immutable Properties 配下の Property を検索する
   - draft-ietf-moq-transport-21 §10.7 の MUST (mutable な Property 列と Immutable Properties の内容の双方を検索する) に従い、Object の delivery timeout を読む経路も 0x0B の内側を 1 段だけ検索する
   - mutable 側に同じ型があればそちらを優先する

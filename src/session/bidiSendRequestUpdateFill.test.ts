@@ -575,7 +575,8 @@ test("rejectPendingRequestUpdates: 失敗時は送信時の LOCATION_FILTER が�
     ]),
   } as unknown as BidiSessionInternal;
 
-  rejectPendingRequestUpdates(session, 0n, new Error("REQUEST_ERROR"));
+  // coalescing で reject した件数を返す (呼び出し側が遅延 REQUEST_OK の許容枠に使う)
+  assert.equal(rejectPendingRequestUpdates(session, 0n, new Error("REQUEST_ERROR")), 1);
 
   // 失敗時は旧フィルタのまま (group 1 は通過、group 0 は不通過)
   subscriber.handleObject({
