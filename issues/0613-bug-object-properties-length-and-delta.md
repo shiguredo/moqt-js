@@ -1,7 +1,7 @@
 # Object Properties の Length 上限と Delta overflow を検証しない
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-16
 - Branch: feature/fix-object-properties-length-and-delta
 - Polished: 2026-09-15
 
@@ -62,3 +62,37 @@ draft-ietf-moq-transport-21 §8.3:
 - 受信 3 経路のすべてが `assertKnownPropertyValueInObjectProperties` を呼ぶ。fill fetch は通常の FETCH と同じ `decodeFetchObjectFields` を通るため、検証は共有される
 - delta の累積超過を再現する入力は「delta = `MAX_VARINT` (2^64-1、奇数 Type) に Value を消費させた後に delta = 1 を置く」である。`MAX_VARINT` は奇数 Type のため Length を伴い、Length と Value を消費させないと次の delta が読まれない。`decodeVarint` が返す値は単体では 2^64-1 を超えないため、加算結果で判定する必要がある。既存の `decodeProperties` のテストは `encodeVarint(MAX_VARINT)` + `encodeVarint(0n)` + `encodeVarint(1n)` で同じ超過を再現している
 - 上限超過 Length の入力を作るテストでは、Value の内側バイト列が `assertNoMandatoryTrackPropertyInObjectProperties` の走査 (Mandatory Track Property / IMMUTABLE_PROPERTIES の再帰) に掛からないバイト列を選ぶ。掛かった場合は `MalformedTrackError` (セッションは閉じない) が先に発火する
+
+## 解決方法
+
+設計方針のとおりに実装した。
+
+- `src/properties.ts` に Type に依存しない上限判定 `isPropertyLengthOverLimit(length)` を追加し、
+  厳密デコーダ 3 箇所 (`decodeImmutableProperties` / `decodeProperties` / `parseProperties`) の
+  `Number(length) > 65535` 比較をこれに置き換えた。名前と意味が一致していなかった
+  `isKnownPropertyLengthOverrun` は、実際の意味 (既知 Type かつ上限内か) に合わせて
+  `isKnownPropertyWithinLengthLimit` へ改名した。
+- `assertKnownPropertyValueInObjectProperties` で §8.3 の Type に依存しない MUST を検証するように
+  した。delta の累積が `MAX_VARINT` (2^64-1) を超えたら `ProtocolViolationError`、奇数 Type の
+  宣言 Length が 2^16-1 を超えたら Type の既知 / 未知を問わず `ProtocolViolationError` とする。
+  上限超過の判定は残量検査より先に行うため、残りバイト内に収まる上限超過も拒否する。
+- `decodeObjectPropertiesTolerant` は変更していない。同関数は不正な delta / Length を
+  「不完全データ」として吸収する契約であり、送信経路や `OBJECT_PROPERTY_FILTER`、LOC 抽出が
+  その契約に依存している。上限超過は不完全データではないため、既存の呼び出し元が使う
+  検証関数側で仕様違反として区別した。
+- 同関数の JSDoc と内部コメントの「上限超過は本関数の対象外」という記述を、実装に合わせて
+  更新した。
+
+検証:
+
+- `src/properties.test.ts` に 3 件追加した。delta の累積超過 (`MAX_VARINT` + delta 1) と、
+  既知 / 未知の奇数 Type の Length 65536 (以前は素通りしていた入力) で
+  `ProtocolViolationError` になることを固定する。既知 Type の上限内 Length の残量超過が
+  `SessionError(KEY_VALUE_FORMATTING_ERROR)` になること、未知 Type の上限内 Length の残量超過が
+  throw しないことは既存テストが固定している。
+- 受信 3 経路のテストにそれぞれ 2 件ずつ追加した
+  (`src/dataStream.datagram.test.ts` / `src/dataStream.subgroup.test.ts` /
+  `src/dataStream.fetch.test.ts`)。上限超過 Length と delta 累積超過の入力で
+  `ProtocolViolationError` が送出されることを固定する。
+- `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` が通ることを確認した
+  (99 test files / 2219 tests passed)。
