@@ -264,6 +264,26 @@ test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION のエラ�
   }
 });
 
+/**
+ * draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS) / §9.20.17 (EXPIRES Parameter):
+ * §9.13 は TRACK_STATUS_OK を「SUBSCRIBE_OK で設定したのと同じ parameters と
+ * Track Properties を返す」と定め、§9.20.17 は EXPIRES を SUBSCRIBE_OK の
+ * 出現先に挙げるため、字義通りなら EXPIRES を受理すべきに見える。本実装は
+ * §9.20.17 の出現先一覧に TRACK_STATUS_OK が無いことを根拠に拒否する
+ * (判断の詳細は parameterScope.ts の TRACK_STATUS_OK_ALLOWED_PARAMS の doc を参照)。
+ * この解釈がコードに固定されていることを検証する。
+ */
+test("TRACK_STATUS_OK の EXPIRES は PROTOCOL_VIOLATION のエラーを返す", () => {
+  const error = validateParameterScope(
+    [{ type: MessageParameterType.EXPIRES }],
+    TRACK_STATUS_OK_ALLOWED_PARAMS,
+    "TRACK_STATUS_OK",
+  );
+  assertProtocolViolation(error);
+  // 相互運用を優先して許容する判断に変える場合は、この assert と doc を更新する
+  assert.isFalse(TRACK_STATUS_OK_ALLOWED_PARAMS.has(MessageParameterType.EXPIRES));
+});
+
 // ============================================================================
 // REQUEST_UPDATE_ALLOWED_PARAMS のテスト
 // ============================================================================

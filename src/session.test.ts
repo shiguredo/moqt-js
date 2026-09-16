@@ -5221,6 +5221,55 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
 });
 
 /**
+ * draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+ * "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
+ *  or REQUEST_ERROR message ..."
+ * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への
+ * 応答である。対応する未応答の REQUEST_UPDATE が無い REQUEST_OK は 2 通目以降の
+ * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
+ */
+test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOLATION で閉じる", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      errors.push(error);
+    },
+  });
+  const sessionInternal = session as unknown as {
+    sessionState: SessionState;
+  };
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+
+  // 自 endpoint は REQUEST_UPDATE を送っていないため、REQUEST_OK は対応が無い
+  const writer = new ControlStreamWriter();
+  const okFramed = writer.encode(
+    MessageType.REQUEST_OK,
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [okFramed],
+    ),
+  );
+
+  assert.equal(sessionInternal.sessionState, "closed");
+  // 同一チャンク内で閉じた後に残りのメッセージを処理しないため、通知は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.8:
  * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し

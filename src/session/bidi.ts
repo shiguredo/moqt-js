@@ -276,6 +276,20 @@ export interface BidiSessionInternal {
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
   /**
+   * coalescing された REQUEST_ERROR で pending を消した件数の残り
+   * (pending の無い REQUEST_OK を許容する枠)
+   *
+   * draft-ietf-moq-transport-21 §9.5.1 (Updating Subscriptions):
+   * "If the coalesced REQUEST_UPDATE results in REQUEST_ERROR, only a single
+   *  REQUEST_ERROR will be sent and the sender of the REQUEST_UPDATEs will not
+   *  always be able to determine which caused an error."
+   * coalescing は「失敗した更新を 1 通の REQUEST_ERROR にまとめる」ものであり、
+   * 同時に in-flight だった成功分の更新には §9.5 の MUST により REQUEST_OK が
+   * 別途届く。その REQUEST_OK は pending を消した後に届くため、消した件数分だけ
+   * 「pending が無くても違反としない REQUEST_OK」を許容する。
+   */
+  readonly unmatchedRequestOkAllowances: Map<bigint, number>;
+  /**
    * fill 要求元の Request ID から購読への関連付け
    *
    * draft-ietf-moq-transport-21 §3.4:
@@ -1689,6 +1703,15 @@ async function bidiPreflightRequestUpdate(
   // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
   // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
   // Section 9.5 の 2 ケースに該当しない。
+  //
+  // 例外: 同一 request stream で GOAWAY を受信済みの場合は無視して読み取りを
+  // 継続する (意図的な逸脱)。§9.5 の MUST だけを見れば閉じるべきだが、
+  // §6.4.2.2 (Graceful Request Stream Closure) は GOAWAY 後に responder が
+  // 応答と後続メッセージを送り終えて FIN することを前提としており、GOAWAY 受信で
+  // セッションを閉じると「応答を返してから FIN する」余地が無くなる。
+  // 実装間の相互運用では GOAWAY 後の REQUEST_UPDATE を無視する方が安全なため、
+  // 逸脱を維持する。閉じる側へ寄せる判断に変える場合は、下の条件から
+  // `!session.goawayReceivedOnRequestStreams.has(requestId)` を外す。
   if (role === "subscribe" && !session.goawayReceivedOnRequestStreams.has(requestId)) {
     session.closeWithError(
       new SessionError(
@@ -2316,7 +2339,13 @@ export async function bidiReadRequestStreamMessages(
               // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
               // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
               deleteFillTargetsForPendingUpdates(session, requestId);
-              rejectPendingRequestUpdates(session, requestId, error);
+              // §9.5.1: coalescing は失敗分をまとめるだけであり、in-flight だった
+              // 成功分の更新への REQUEST_OK は別途届く。消した件数分を許容枠に積む。
+              allowUnmatchedRequestOks(
+                session,
+                requestId,
+                rejectPendingRequestUpdates(session, requestId, error),
+              );
               break;
             }
             case MessageType.REQUEST_UPDATE: {
@@ -4005,6 +4034,45 @@ export function bidiHandleRequestUpdateOk(
 ): void {
   const msg = decodeRequestOkPayload(payload);
 
+  // draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+  // "The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK
+  //  or REQUEST_ERROR message indicating if the update was successful, unless it
+  //  is coalescing failed updates to produce just one REQUEST_ERROR for multiple
+  //  REQUEST_UPDATE messages."
+  // 確立後の REQUEST_OK はこの応答であり、自 endpoint が送った REQUEST_UPDATE に
+  // 1 対 1 で対応する。対応する更新が無い REQUEST_OK は 2 通目以降の応答である。
+  // 初回応答について §3.1 (Subscriptions) は
+  // "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in response
+  //  to a SUBSCRIBE.  A subscriber MUST send exactly one PUBLISH_OK ... in
+  //  response to a PUBLISH.  The peer SHOULD close the session with a protocol
+  //  error if it receives more than one."
+  // と定めており、確立済みストリームへの 2 通目の応答もこれに準じて
+  // PROTOCOL_VIOLATION でセッションを閉じる。
+  //
+  // pending が消えている場合でも、消え方によっては違反としない。
+  // - 同一 request stream で GOAWAY を受信済み: GOAWAY 受信時点で未応答の
+  //   REQUEST_UPDATE は失敗として reject 済みで削除されるため (§9.2)、その後に
+  //   届く REQUEST_OK は削除済みの更新への正当な応答でありうる。ここで閉じると
+  //   graceful migration 中にセッション全体をエラー終了させてしまう
+  //   (namespace 系ループが GOAWAY 後を明示的に無視するのと同じ判断)
+  // - coalescing された REQUEST_ERROR で pending を消した分: 失敗分をまとめた
+  //   だけで、in-flight だった成功分への REQUEST_OK は別途届く (§9.5.1)
+  if (
+    !session.goawayReceivedOnRequestStreams.has(streamRequestId) &&
+    !hasPendingRequestUpdate(session, streamRequestId)
+  ) {
+    // coalescing で消した件数分の遅延 REQUEST_OK は違反としない
+    if (!consumeUnmatchedRequestOk(session, streamRequestId)) {
+      session.closeWithError(
+        new SessionError(
+          "unexpected REQUEST_OK on established request stream: no outstanding REQUEST_UPDATE",
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        ),
+      );
+      return;
+    }
+  }
+
   // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
   // 違反時は当該購読の保留分全件を違反 SessionError 自体で reject してから閉じる
   // (初期応答 4 経路 = PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS と同一パターン)。
@@ -4150,13 +4218,62 @@ export function rejectPendingRequestUpdates(
   session: BidiSessionInternal,
   targetRequestId: bigint,
   error: Error,
-): void {
+): number {
+  let rejectedCount = 0;
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
       pending.reject(error);
+      rejectedCount += 1;
     }
   }
+  return rejectedCount;
+}
+
+// ============================================================================
+// unmatchedRequestOkAllowances ヘルパー
+// ============================================================================
+
+/**
+ * pending の無い REQUEST_OK を許容する枠を追加する
+ *
+ * draft-ietf-moq-transport-21 §9.5.1: coalescing された REQUEST_ERROR は
+ * 「失敗した更新を 1 通にまとめる」ものであり、同時に in-flight だった成功分の更新には
+ * REQUEST_OK が別途届く (§9.5 の MUST)。消した pending の件数分だけ遅延応答を許容する。
+ *
+ * @param count - 許容する件数 (rejectPendingRequestUpdates が返した件数)
+ */
+export function allowUnmatchedRequestOks(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+  count: number,
+): void {
+  if (count <= 0) {
+    return;
+  }
+  const current = session.unmatchedRequestOkAllowances.get(targetRequestId) ?? 0;
+  session.unmatchedRequestOkAllowances.set(targetRequestId, current + count);
+}
+
+/**
+ * pending の無い REQUEST_OK の許容枠を 1 つ消費する
+ *
+ * @returns 許容枠が残っていれば true (違反としない)、無ければ false
+ */
+export function consumeUnmatchedRequestOk(
+  session: BidiSessionInternal,
+  targetRequestId: bigint,
+): boolean {
+  const current = session.unmatchedRequestOkAllowances.get(targetRequestId) ?? 0;
+  if (current <= 0) {
+    return false;
+  }
+  if (current === 1) {
+    session.unmatchedRequestOkAllowances.delete(targetRequestId);
+  } else {
+    session.unmatchedRequestOkAllowances.set(targetRequestId, current - 1);
+  }
+  return true;
 }
 
 // ============================================================================

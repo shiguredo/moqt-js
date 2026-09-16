@@ -92,6 +92,7 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
     pendingSubgroupBuffer: {},
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
@@ -172,6 +173,7 @@ async function readPublishOkWithParameters(
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
     // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):

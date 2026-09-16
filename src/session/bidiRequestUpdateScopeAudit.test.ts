@@ -488,6 +488,7 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     onRequestDrained: () => {},
     closeWithError: () => {},
   } as unknown as BidiSessionInternal;
@@ -593,6 +594,7 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
     fillFetchTargets: new Map(),
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     onRequestDrained: () => {},
     closeWithError: () => {},
   } as unknown as BidiSessionInternal;
@@ -658,6 +660,7 @@ test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を can
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
     onRequestDrained: () => {},
     closeWithError: () => {},
   } as unknown as BidiSessionInternal;
