@@ -18,7 +18,7 @@ import {
   createFetchObjectFlags,
 } from "./dataStream";
 import { GroupOrder } from "./message/types";
-import { encodeVarint } from "./varint";
+import { encodeVarint, MAX_VARINT } from "./varint";
 import {
   IncompleteDataError,
   MalformedTrackError,
@@ -2641,4 +2641,51 @@ test("FetchObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRI
     MalformedTrackError,
     /more than one instance of PRIOR_OBJECT_ID_GAP/,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
+ *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ * Fetch Object の Object Properties でも同じ MUST が適用される。
+ */
+test("FetchObjectFields: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  const properties = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
+  const fields: FetchObjectFields = {
+    serializationFlags:
+      createFirstFetchObjectFlags(false) | FetchSerializationFlags.PROPERTIES_PRESENT,
+    groupId: 1n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+    properties,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
+ * Fetch Object でも同じ MUST が適用される。
+ */
+test("FetchObjectFields: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+  const properties = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const fields: FetchObjectFields = {
+    serializationFlags:
+      createFirstFetchObjectFlags(false) | FetchSerializationFlags.PROPERTIES_PRESENT,
+    groupId: 1n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+    properties,
+  };
+  const encoded = encodeFetchObjectFields(fields);
+  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
 });
