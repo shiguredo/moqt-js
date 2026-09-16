@@ -63,6 +63,12 @@ test("draft-18 の代表的なエラーコード値を保持する", () => {
   assert.equal(DataStreamErrorCode.MALFORMED_TRACK, 0x12);
 });
 
+test("UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は Session Termination のコードとして保持する", () => {
+  // draft-ietf-moq-transport-21 §16.11.1: 0x17 は Session Termination Error Codes に
+  // 収載されている。未登録 Alias の参照はこのコードの Session Termination で扱う。
+  assert.equal(SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS, 0x17);
+});
+
 test("normalizeRequestErrorCode: 既知のコードはそのまま通す", () => {
   assert.equal(normalizeRequestErrorCode(0x0), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0x6), RequestErrorCode.GOING_AWAY);
@@ -75,6 +81,16 @@ test("normalizeRequestErrorCode: 未知のコードは INTERNAL_ERROR に正規�
   // draft-ietf-moq-transport-21 §13: Grease REQUEST_ERROR codes
   assert.equal(normalizeRequestErrorCode(0x9d), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0x7f * 1 + 0x9d), RequestErrorCode.INTERNAL_ERROR);
+});
+
+test("normalizeRequestErrorCode: UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は INTERNAL_ERROR に正規化", () => {
+  // draft-ietf-moq-transport-21 §16.11.1 / §16.11.2:
+  // 0x17 UNKNOWN_AUTH_TOKEN_ALIAS は Session Termination Error Codes にのみ収載され、
+  // REQUEST_ERROR Codes には収載されていない。REQUEST_ERROR 文脈で受信した場合は
+  // §13 の MUST により INTERNAL_ERROR と等価に扱う。
+  assert.equal(normalizeRequestErrorCode(0x17), RequestErrorCode.INTERNAL_ERROR);
+  // 受理集合は RequestErrorCode の値だけで組み立てるため、0x17 は列挙に存在しない
+  assert.isFalse("UNKNOWN_AUTH_TOKEN_ALIAS" in RequestErrorCode);
 });
 
 test("normalizePublishDoneCode: 既知のコードはそのまま通す", () => {
@@ -103,6 +119,12 @@ test("normalizeSessionErrorCode: 既知のコードはそのまま通す", () =>
   assert.equal(normalizeSessionErrorCode(0x0), SessionErrorCode.NO_ERROR);
   assert.equal(normalizeSessionErrorCode(0x1), SessionErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeSessionErrorCode(0x3), SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+test("normalizeSessionErrorCode: UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は Session Termination のコードとして通す", () => {
+  // draft-ietf-moq-transport-21 §16.11.1: 0x17 は Session Termination Error Codes に
+  // 収載されているため、Session Termination 文脈では未知コードにならない。
+  assert.equal(normalizeSessionErrorCode(0x17), SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
 });
 
 test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {

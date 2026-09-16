@@ -148,7 +148,7 @@
   - @voluntas
 - [ADD] 受信 AUTHORIZATION TOKEN のデコードとトークンキャッシュを実装する
   - draft-ietf-moq-transport-21 §8.9 / §9.1.4 / §9.20.3 に基づき、受信 SETUP の AUTHORIZATION TOKEN オプションと受信 PUBLISH / REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータをデコードし、REGISTER / USE_ALIAS / DELETE / USE_VALUE を処理する
-  - セッションに MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3) を上限とするトークンキャッシュを追加し、デコード不能は KEY_VALUE_FORMATTING_ERROR、登録済み Alias の再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS、Message Parameter の上限超過は AUTH_TOKEN_CACHE_OVERFLOW、未登録 Alias の参照は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で扱う
+  - セッションに MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3) を上限とするトークンキャッシュを追加し、デコード不能は KEY_VALUE_FORMATTING_ERROR、登録済み Alias の再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS、Message Parameter の上限超過は AUTH_TOKEN_CACHE_OVERFLOW、未登録 Alias の参照は Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS で扱う (§16.11.2 に 0x17 が無いため REQUEST_ERROR では送らない)
   - SETUP の上限超過 REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない
   - 受信 SETUP の DELETE / USE_ALIAS は §9.1.4 に基づく防御的検査として PROTOCOL_VIOLATION でセッションを閉じる
   - §8.9 の「セッションエラーにならない拒否でも REGISTER を登録する」MUST は受信 SETUP / PUBLISH / REQUEST_UPDATE で満たすが、ペイロードのデコードに失敗する PUBLISH (未知の Mandatory Track Property) と未対応リクエスト (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の経路は未対応の残余である

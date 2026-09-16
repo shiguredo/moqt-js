@@ -24,11 +24,7 @@ import {
   encodePublishDonePayload,
   type AuthorizationToken,
 } from "./message";
-import {
-  encodeRequestOkPayload,
-  encodePublishStateNotifyPayload,
-  decodeRequestErrorPayload,
-} from "./message/session";
+import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import {
@@ -6677,11 +6673,13 @@ test("受信 PUBLISH: 登録済み Alias の USE_ALIAS は解決されセッシ�
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9:
- * 未登録 Alias を参照する USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS
- * 0x17) でメッセージを拒否し、セッションは閉じない MUST を検証する。
+ * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
+ * 未登録 Alias を参照する USE_ALIAS は Session Termination の
+ * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを検証する。
+ * 0x17 は §16.11.2 (REQUEST_ERROR Codes) に収載されていないため、
+ * REQUEST_ERROR では送らない。REQUEST_ERROR も PUBLISH_DONE も書かれない。
  */
-test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する", async () => {
+test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
   const ctx = createPublishAuthTokenContext(1024);
 
   await ctx.handle([
@@ -6694,14 +6692,13 @@ test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_A
     },
   ]);
 
+  // セッションを閉じるため REQUEST_ERROR も PUBLISH_DONE も送らない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(Number(decoded.errorCode), RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
-  // セッションは閉じない
-  assert.equal(ctx.session.state, "connected");
-  assert.equal(ctx.errors.length, 0);
+  assert.equal(messages.length, 0);
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.errors.length, 1);
+  assert.instanceOf(ctx.errors[0], SessionError);
+  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
 });
 
 /**
@@ -6733,12 +6730,13 @@ test("受信 PUBLISH: 上限超過 REGISTER は AUTH_TOKEN_CACHE_OVERFLOW でセ
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9:
+ * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
  * 1 通の PUBLISH 内で REGISTER → DELETE → USE_ALIAS の順に現れる場合、
  * DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、
- * REQUEST_ERROR でメッセージが拒否されることを検証する。
+ * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) の Session Termination でセッションが
+ * 閉じることを検証する。
  */
-test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias への USE_ALIAS は REQUEST_ERROR で拒否する", async () => {
+test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias への USE_ALIAS は Session Termination になる", async () => {
   const ctx = createPublishAuthTokenContext(1024);
 
   await ctx.handle([
@@ -6767,16 +6765,19 @@ test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias �
     },
   ]);
 
-  // DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、メッセージが拒否される
-  assert.equal(ctx.session.receivedAuthTokens.size, 0);
+  // セッションが閉じるため、REQUEST_OK / REQUEST_ERROR も PUBLISH_DONE も送らない。
+  // 受信トークンキャッシュはセッション終了時に破棄される (§8.9) ので size は 0 になる。
+  // DELETE が適用されたこと自体の検証は、セッションを閉じないキャッシュ層の
+  // authTokenCache.test.ts (DELETE → USE_ALIAS のテスト) が担う。
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(Number(decoded.errorCode), RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
-  // §8.9: 未登録 Alias の参照ではセッションを閉じない
-  assert.equal(ctx.session.state, "connected");
-  assert.equal(ctx.errors.length, 0);
+  assert.equal(messages.length, 0);
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.session.receivedAuthTokens.size, 0);
+  assert.equal(ctx.errors.length, 1);
+  assert.instanceOf(ctx.errors[0], SessionError);
+  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  // 原因の Alias 値が診断メッセージに含まれる
+  assert.match((ctx.errors[0] as SessionError).message, /alias=6/);
 });
 
 /**
