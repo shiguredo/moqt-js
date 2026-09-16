@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] Immutable Properties 配下の Property を検索する
+  - draft-ietf-moq-transport-21 §10.7 の MUST (mutable な Property 列と Immutable Properties の内容の双方を検索する) に従い、Object の delivery timeout を読む経路も 0x0B の内側を 1 段だけ検索する
+  - mutable 側に同じ型があればそちらを優先する
+  - @voluntas
 - [FIX] Object Properties の Length 上限と Delta overflow を検証する
   - draft-ietf-moq-transport-21 §8.3 の MUST (delta の累積が 2^64-1 超、奇数 Type の Length が 2^16-1 超) を Object Datagram / Subgroup Object / Fetch Object の 3 経路で検証する
   - 上限判定を共有の述語に切り出し、厳密デコーダと Object Properties の検証で同じ判定を使う
