@@ -4,6 +4,7 @@
 - Completed: 2026-09-16
 - Branch: feature/fix-max-request-updates-receive
 - Polished: 2026-09-15
+- Updated: 2026-09-16
 
 ## 目的
 
@@ -38,10 +39,10 @@ draft-ietf-moq-transport-21 §9.1.7:
 - 加算は 1 通の処理の先頭、`decodeRequestUpdatePayload` の直後で `await` を挟む前に行う。受信した時点で未応答数に数える
 - 判定は加算後の件数で行い、`localMaxRequestUpdates > 0` かつ件数が上限を超えるとき (`件数 > localMaxRequestUpdates`) に `SessionError(..., SessionErrorCode.TOO_MANY_REQUEST_UPDATES)` を `closeWithError` に渡す。§9.1.7 の MUST は「受信時点で既に MAX_REQUEST_UPDATES 件が未応答」を要件とするため、上限と等しいだけでは閉じない (N 件目までは受理し N+1 件目で閉じる)。加算前の件数で判定する形 (`>= localMaxRequestUpdates`) でも同じ意味になるが、どちらか一方に統一する
 - 減算は 1 通ごとではなく、1 回の read で得たメッセージ列の処理を終えた時点で行う。両受信ループ (`bidiReadRequestStreamMessages` の `for (const msg of messages)` と `SessionImpl.runPublishStreamSubLoop` の `for (const msg of messages)`) で、その read の先頭に当該ストリームの未応答数を記録し、メッセージ列の処理を包む `finally` で記録した値へ戻す (この read で加算した件数分の減算と等価)。応答の書き込みを `await` してから次のメッセージへ進む構造のため、1 通ごとに減算すると未応答数は常に 0 か 1 にしかならず N+1 通目を検出できない。チャンク単位の減算なら、同じ read に含まれる REQUEST_UPDATE が受信済み・未応答として同時に立つ
-- 応答を送らずに処理を終える経路でも減算は同じ `finally` が担い、分岐ごとに減算の有無を変えない。応答を送らないのは (a) `bidiPreflightRequestUpdate` の subscribe ロールで GOAWAY 受信済みの場合 (REQUEST_UPDATE を無視して読み取りを継続する) と、(b) セッションを閉じる経路 (デコード失敗、不正な Request ID、subscribe ストリームでの想定外 REQUEST_UPDATE、パラメータスコープ違反、`ProtocolViolationError`、AUTHORIZATION TOKEN のデコード不能・重複 Alias・上限超過) である。(a) はストリームが継続するため `finally` の減算が必要で、(b) は終了時にカウンタごと破棄されるため減算の結果は問題にならない
-- AUTHORIZATION TOKEN の `unknown-alias` は応答を送る経路である。`processIncomingRequestUpdateAuthorizationTokens` が `bidiSendRequestError` (`UNKNOWN_AUTH_TOKEN_ALIAS`) を送り、publish ロールではさらに `bidiTerminatePublishSubscriptionWithUpdateFailed` が `PUBLISH_DONE` (`UPDATE_FAILED`) を送る。`PUBLISH_DONE` は REQUEST_OK / REQUEST_ERROR ではないため応答の列挙には数えない
-- REQUEST_UPDATE への応答 (REQUEST_OK / REQUEST_ERROR) を送る箇所は 9 つある。内訳は `bidiSendRequestError` の呼び出し 7 箇所と REQUEST_OK の送信 2 箇所である。減算はチャンク単位の 1 箇所に固定するため、この列挙には依存しない (確認用)
-  - `bidiSendRequestError` の 7 箇所: `processIncomingRequestUpdateAuthorizationTokens` の `UNKNOWN_AUTH_TOKEN_ALIAS` (両経路から呼ばれる)、`bidiPreflightRequestUpdate` の `GOING_AWAY` (publish ロール)、`bidiHandlePublishRequestUpdate` の `GOING_AWAY` と `INVALID_FILTER`、`bidiReadRequestStreamMessages` の REQUEST_UPDATE ケースの `INVALID_FILTER` / `NOT_SUPPORTED` (fill fetch 非対応) / `INTERNAL_ERROR` (publisher 不在)
+- 応答を送らずに処理を終える経路でも減算は同じ `finally` が担い、分岐ごとに減算の有無を変えない。応答を送らないのは (a) `bidiPreflightRequestUpdate` の subscribe ロールで GOAWAY 受信済みの場合 (REQUEST_UPDATE を無視して読み取りを継続する) と、(b) セッションを閉じる経路 (デコード失敗、不正な Request ID、subscribe ストリームでの想定外 REQUEST_UPDATE、パラメータスコープ違反、`ProtocolViolationError`、AUTHORIZATION TOKEN のデコード不能・重複 Alias・上限超過・未登録 Alias の参照) である。(a) はストリームが継続するため `finally` の減算が必要で、(b) は終了時にカウンタごと破棄されるため減算の結果は問題にならない
+- AUTHORIZATION TOKEN の `unknown-alias` は REQUEST_ERROR を送らない。未登録 Alias の参照は Session Termination の `UNKNOWN_AUTH_TOKEN_ALIAS` でセッションを閉じる経路であり、上記 (b) に含まれる。`bidiTerminatePublishSubscriptionWithUpdateFailed` による `PUBLISH_DONE` (`UPDATE_FAILED`) も送らない (セッション終了により購読が終わるため)。したがって本 issue が数える「REQUEST_UPDATE への応答」には現れない
+- REQUEST_UPDATE への応答 (REQUEST_OK / REQUEST_ERROR) を送る箇所は 8 つある。内訳は `bidiSendRequestError` の呼び出し 6 箇所と REQUEST_OK の送信 2 箇所である。減算はチャンク単位の 1 箇所に固定するため、この列挙には依存しない (確認用)
+  - `bidiSendRequestError` の 6 箇所: `bidiPreflightRequestUpdate` の `GOING_AWAY` (publish ロール)、`bidiHandlePublishRequestUpdate` の `GOING_AWAY` と `INVALID_FILTER`、`bidiReadRequestStreamMessages` の REQUEST_UPDATE ケースの `INVALID_FILTER` / `NOT_SUPPORTED` (fill fetch 非対応) / `INTERNAL_ERROR` (publisher 不在)
   - REQUEST_OK の 2 箇所: `bidiHandlePublishRequestUpdate` の `bidiSendRequestOk`、`bidiReadRequestStreamMessages` の REQUEST_UPDATE ケースの直接書き込み
 - 応答送信ヘルパー (`bidiSendRequestError` / `bidiSendRequestOk`) の内部に減算を置かない。上記 (a) のように応答を送らない経路でも減算が必要であり、減算の単位も応答 1 通ではなく 1 回の read で加算した件数であるため、ヘルパー内では単位が合わない
 - 書き込み失敗の有無で減算を変えない。`bidiSendRequestMessage` は書き込み失敗を黙殺するが、チャンク単位の減算は書き込みの成否を見ないため失敗時も同じように戻る (セッション終了・ストリーム終了のいずれかであり、以後そのストリームの REQUEST_UPDATE は処理されない)
