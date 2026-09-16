@@ -259,7 +259,7 @@ test("buildFetchParameters: subscriberPriority 未指定は SUBSCRIBER_PRIORITY 
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.19 (GROUP ORDER Parameter):
+ * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
  * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
  * FETCH の応答順序を要求できることを検証する。
  */
