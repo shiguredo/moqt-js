@@ -1,7 +1,7 @@
 # セッション終了後に同一チャンクの残りメッセージを処理し続ける経路がある
 
 - Created: 2026-09-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-remaining-messages-after-session-close
 - Polished: {YYYY-MM-DD}
 
@@ -53,3 +53,33 @@ MOQT の制御メッセージは 1 回の read で複数メッセージがまと
 - draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE)
 - draft-ietf-moq-transport-21 §9.5.1 (Updating Subscriptions)
 - draft-ietf-moq-transport-21 §6.6 (Termination)
+
+## 解決方法
+
+### 1. 受信 PUBLISH ループの REQUEST_OK 分岐に sessionState ガードを追加
+
+`src/session.ts` の `runPublishStreamSubLoop` で、`bidiHandleRequestUpdateOk` の直後に `if (this.sessionState !== "connected") { return; }` を追加した。同関数は REQUEST_UPDATE_OK のパラメータスコープ違反、未知の Mandatory Track Property、未応答の REQUEST_UPDATE が無い REQUEST_OK の 3 箇所でセッションを閉じ得る (3 箇所目は別 issue の対応で追加されたもの)。PUBLISH_STATE_NOTIFY / REQUEST_UPDATE 分岐と同じ判定に揃えた。
+
+### 2. REQUEST_UPDATE 拒否に伴う PUBLISH_DONE 送出後の打ち切り
+
+`src/session/bidi.ts` の 4 経路で、`bidiTerminatePublishSubscriptionWithUpdateFailed` の後 (またはそれが呼ばれる `respondToPublishRequestUpdate` の後) に `session.sessionState !== "connected"` を確認し、閉じていれば読み取りループを終えるようにした。
+
+- `bidiPreflightRequestUpdate` の GOAWAY 経路: 閉じた場合は `"break"` ではなく `"return"` を返す (呼び出し側は `"return"` で読み取りループを終える)
+- publish ロールの INVALID_FILTER 経路: `return` する
+- `respondToPublishRequestUpdate` の publisher 不在 / fill fetch 非対応経路: 呼び出し直後に判定して `return` する
+
+セッションが閉じない通常ケース (INVALID_FILTER / NOT_SUPPORTED / GOING_AWAY 応答の後に読み取りを継続する) の挙動は変えていない。
+
+### 3. テスト用セッションの closeWithError を実装に合わせる
+
+`src/testSupport/bidi.ts` の `createPublishReadTestContext` の `closeWithError` が `sessionState` を遷移させていなかったため、SessionImpl と同じく `"closed"` へ遷移させるようにした。遷移しないと打ち切り判定 (sessionState ガード) を検証できない。
+
+### テスト
+
+- `src/session/bidiReadRequestStreamMessages.test.ts`: PUBLISH_DONE の close 失敗で閉じた後に同一チャンクの 2 通目 (スコープ違反) を処理しないこと、セッションが閉じない INVALID_FILTER 拒否では 2 通目まで処理されることを検証
+- `src/session.test.ts`: 受信 PUBLISH ストリーム上で同一チャンクに REQUEST_OK を 2 通連結し、1 通目で閉じた場合に `callbacks.error` が 1 回だけ通知されることを検証
+
+### 検証
+
+- `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2238 passed)
+- `CHANGES.md` の `## develop` に [FIX] エントリを追加
