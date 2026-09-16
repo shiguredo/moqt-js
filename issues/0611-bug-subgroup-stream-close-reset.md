@@ -1,7 +1,7 @@
 # Forward State と END_OF_GROUP で省略した Subgroup を reset せず FIN で閉じる
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-subgroup-stream-close-reset
 - Polished: 2026-09-15
 
@@ -59,3 +59,61 @@ draft-ietf-moq-transport-21 §11.3.2:
 - draft-ietf-moq-transport-21 §3.1 (Subscriptions)
 - draft-ietf-moq-transport-21 §5.2 (Delivery Timeouts and Data Reliability。強制は `issues/pending/0366-add-delivery-timeout-enforcement.md` が担当)
 - `issues/closed/0441-bug-publish-partial-object-fin.md` (同じ §11.3.2 の MUST のうち、Object 途中の FIN を解消した先行 issue。残キューを抱えたまま FIN する経路は対象外とされ、本 issue がその残りを扱う)
+
+## 解決方法
+
+### 省略の記録
+
+`src/session/types.ts` の `PublisherStreamState` に `omittedObjects: boolean` を追加し、`false` で初期化した。
+記録は次の 3 箇所で行う (閉じる時点だけの判定では、最後に送信した Object より後の見送りを検出できないため、
+見送りの時点で記録する)。
+
+- `src/publisher.ts`: `onSendObjectSkipped?: () => void` を追加し、`sendObject` の `guardSend` が `"skip"` を返した分岐で呼ぶ。
+  `guardSend` は `sendDatagram` とも共有しており Datagram の見送りは Subgroup の省略ではないため、`guardSend` 内では呼ばない。
+  `src/session.ts` の `publish()` が `impl.onSendObject` を設定している箇所で、`publisherStreams.get(trackAlias)` の
+  `omittedObjects` を立てる配線にした
+- `src/session/publish.ts` の `publishSendObject` の Forward State 0 early return (内部送信関数を直接呼ぶ経路の防御)
+- `publishSendObjectInternal` の先頭に Forward State 0 の early return を新設した (キュー投入時は 1 でも待機中に 0 へ変わり得る窓を塞ぐ)
+
+ストリームが未生成 (最初の Object から Forward State 0) の場合は記録先が無いため何もせず、従来どおり送信しない。
+
+### FIN / RESET の判定を 1 箇所へ集約
+
+`publishCloseSubgroupStream(session, trackAlias, timeoutMs = 5000): Promise<"fin" | "reset">` を追加し、
+`omittedObjects` が真なら `writer.abort("subgroup omitted objects")` (RESET)、偽なら `writer.close()` (FIN) を
+タイムアウト付きで実行する。FIN が打ち切られた場合は FIN を諦めて RESET で後始末する。
+ストリーム状態は Map から削除し、ストリームが無ければ何もせず `"fin"` を返す。
+
+呼び出し側は次のとおり。
+
+- Group 変更時: 前のストリームの Group ID を保持して呼び、`"fin"` のときだけ `closedSubgroups` に追加する
+  (RESET は「渡し切っていない」ため FIN 済みとして再送を拒否しない)
+- `publishClosePublisherStreamInternal`: ストリームが存在する場合だけ呼び、その後 `clearClosedSubgroupsForTrack` を
+  実行する現行順序を維持する。`publishClosePublisherStream` の `timeoutMs` はそのまま渡す
+- `SessionImpl.close`: `publisherStreams` の各 trackAlias について完了を待たずに呼ぶ (`closeWriterSafely` は不要になったため削除)
+
+### END_OF_GROUP
+
+`publishSendObjectInternal` の送信成功後に同じ判定関数でストリームを閉じ、`"fin"` のときだけ `closedSubgroups` に追加する。
+`PublisherImpl` に `endOfGroupSentGroupId: number | null` を追加し、`sendObject` が END_OF_GROUP を受理した時点で
+Group ID を記録 (委譲先の失敗時は取り消して再送可能)、`guardSend(kind, groupId)` で同一 Group への後続
+`sendObject` / `sendDatagram` を `ProtocolViolationError` として拒否する。`markClosed()` で `null` に戻す。
+
+### テスト
+
+`src/session/publishSubgroupClose.test.ts` を新設し、実 WritableStream の sink で `close` (FIN) と `abort` (RESET) を
+区別して 6 点を検証する。省略は公開経路 (`PublisherImpl.sendObject`) から駆動する。
+
+1. 省略した Subgroup は Group 変更で RESET (`abortReasons[0] === "subgroup omitted objects"`、`closedSubgroups` 未登録)
+2. 省略のない Subgroup は Group 変更で FIN (`closedSubgroups` 登録)
+3. 省略した Subgroup は `done()` で RESET
+4. END_OF_GROUP で FIN され、同一 Group への後続 `sendObject` が `ProtocolViolationError` で拒否され、別 Group へは送信できる
+5. 省略がある END_OF_GROUP は RESET
+6. peer cancel (`publishResetPublisherStream`) の RESET は不変
+
+`PublisherStreamState` の型変更に追随して `src/session/bidiReadRequestStreamMessages.test.ts` /
+`src/session/bidiSubscribeFinReset.test.ts` / `src/session/publish.test.ts` のストリーム状態リテラルに
+`omittedObjects: false` を追加した。あわせて `issues/pending/0366-add-delivery-timeout-enforcement.md` の
+「END_OF_GROUP 送信ではストリームを閉じない」前提を更新する注記を追加した。
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2275 passed) の通過で確認した。
