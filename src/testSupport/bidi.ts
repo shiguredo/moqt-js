@@ -211,6 +211,11 @@ export function createPublishReadTestContext(
     closeWithError: (error: SessionError) => {
       closedWithError = error;
       closedWithErrorCount++;
+      // SessionImpl.closeWithError と同じく状態を closed へ遷移させる。
+      // 遷移させないと、セッション終了後の読み取り打ち切り (sessionState ガード) を
+      // 検証できない。BidiSessionInternal の sessionState は readonly 宣言だが、
+      // 実装 (SessionImpl) は可変フィールドのため、テスト用の状態遷移として代入する。
+      (session as unknown as { sessionState: string }).sessionState = "closed";
     },
     validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;

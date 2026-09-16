@@ -5270,6 +5270,57 @@ test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOL
 });
 
 /**
+ * セッション終了後に同一チャンクの残りメッセージを処理しない検証。
+ * 1 通目の REQUEST_OK がパラメータスコープ違反でセッションを閉じた場合、
+ * 同一チャンクに連結された 2 通目を処理すると、そこでも違反が検出されて
+ * callbacks.error が二重に通知される。
+ */
+test("受信 PUBLISH ストリーム上の REQUEST_OK で閉じた後は同一チャンクの残りを処理しない", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      errors.push(error);
+    },
+  });
+  const sessionInternal = session as unknown as {
+    sessionState: SessionState;
+  };
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+
+  // REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への応答でなければならない。
+  // 未応答の REQUEST_UPDATE が無いため 1 通目はこの判定でセッションを閉じる
+  // (REQUEST_UPDATE_OK に SUBSCRIBER_PRIORITY が許可されないことも同時に成立するが、
+  // 判定は未応答チェックが先)。
+  const writer = new ControlStreamWriter();
+  const invalidOk = writer.encode(
+    MessageType.REQUEST_OK,
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [{ type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([10]) }],
+      trackProperties: [],
+    }),
+  );
+  // 2 通を 1 チャンクに連結する (同一チャンクの残りメッセージを再現する)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [concatUint8Arrays([invalidOk, invalidOk])],
+    ),
+  );
+
+  assert.equal(sessionInternal.sessionState, "closed");
+  // 1 通目で閉じた後に 2 通目を処理しないため、通知は 1 回だけ
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.8:
  * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し

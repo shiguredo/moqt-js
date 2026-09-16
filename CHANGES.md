@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] セッション終了後に同一チャンクの残りメッセージを処理しない
+  - 受信 PUBLISH ストリーム上の REQUEST_OK 処理がセッションを閉じた場合と、REQUEST_UPDATE の拒否 (INVALID_FILTER / NOT_SUPPORTED / publisher 不在 / GOAWAY) に伴う PUBLISH_DONE 送出がセッションを閉じた場合に、読み取りループを終える
+  - 同一チャンクの後続メッセージが別のセッション終了を検出して error コールバックが二重に通知されるのを防ぐ
+  - @voluntas
 - [FIX] 受信応答の判定を仕様に合わせる
   - 確立後の REQUEST_OK に対応する未応答の REQUEST_UPDATE が無い場合は PROTOCOL_VIOLATION でセッションを閉じる。GOAWAY 受信済みの request stream と、coalescing された REQUEST_ERROR で pending を消した件数分は遅延した正当な応答があり得るため対象外とする
   - `.` と `.session` を参照する未対応リクエストを NOT_SUPPORTED ではなく DOES_NOT_EXIST で拒否する

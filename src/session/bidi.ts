@@ -1765,6 +1765,14 @@ async function bidiPreflightRequestUpdate(
       );
       // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
       await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+      // 購読の終了は PUBLISH_DONE 送信の失敗 (PROTOCOL_VIOLATION) と、
+      // GOAWAY 受信済みで最後の購読だった場合の NO_ERROR クローズ
+      // (onRequestDrained) の 2 経路でセッションを閉じ得る。
+      // 同一チャンクの残りメッセージを処理し続けると error コールバックが
+      // 二重に通知されるため、閉じた場合は読み取りループを終える。
+      if (session.sessionState !== "connected") {
+        return "return";
+      }
     }
     return "break";
   }
@@ -2464,6 +2472,10 @@ export async function bidiReadRequestStreamMessages(
                   );
                   // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
                   await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+                  // セッションを閉じた場合は同一チャンクの残りメッセージを処理しない
+                  if (session.sessionState !== "connected") {
+                    return;
+                  }
                   break;
                 }
                 throw error;
@@ -2479,7 +2491,12 @@ export async function bidiReadRequestStreamMessages(
               // 受理した更新への応答 (REQUEST_OK、または publisher 不在・
               // fill fetch 非対応の REQUEST_ERROR) は respondToPublishRequestUpdate
               // が担う (§9.5 / §9.5.1 / §9.20.18)。
+              // 応答後の PUBLISH_DONE 送信失敗 (PROTOCOL_VIOLATION) と GOAWAY drain の
+              // NO_ERROR クローズでセッションを閉じ得るため、閉じた場合は残りを処理しない。
               await respondToPublishRequestUpdate(session, requestId, decoded, decodedFill);
+              if (session.sessionState !== "connected") {
+                return;
+              }
               break;
             }
             case MessageType.GOAWAY: {
