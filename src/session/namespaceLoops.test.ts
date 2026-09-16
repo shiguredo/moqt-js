@@ -24,6 +24,8 @@ import {
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { createTrackNamespace } from "../message/parameter";
+import { encodeParameterTrackNamespace } from "../message";
+import { encodeRequestUpdatePayload } from "../message/subscribe";
 import {
   encodeNamespaceDonePayload,
   encodeNamespacePayload,
@@ -382,6 +384,50 @@ test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROT
   await readPromise;
 
   assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+// ============================================================================
+// 自側が要求した namespace / tracks ストリームで受信する REQUEST_UPDATE
+// draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) / §9.5.2
+// (Updating Namespace Subscriptions)
+//
+// REQUEST_UPDATE を送れるのは要求の送信者 (自側) であり、ピアからの受信は
+// §9.5 の 2 ケースに該当しない。§9.5 の MUST により PROTOCOL_VIOLATION で
+// セッションを閉じる (受理してはならない)。
+// ============================================================================
+
+SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
+  test(`確立済み namespace ストリーム上の REQUEST_UPDATE で PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
+    const ctx = createNamespaceLoopTestContext(loop);
+
+    const readPromise = startLoop(
+      loop,
+      ctx.session,
+      ctx.requestId,
+      () => {},
+      () => {},
+    );
+
+    // 初期 REQUEST_OK (確立応答) を注入する
+    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+    // §9.5.2 の TRACK_NAMESPACE_PREFIX 更新をピアから受信した状況を再現する
+    const updatePayload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: ctx.requestId,
+      parameters: [encodeParameterTrackNamespace(createTrackNamespace(["live", "sports"]))],
+    });
+    ctx.readableController.enqueue(
+      ctx.controlWriter.encode(MessageType.REQUEST_UPDATE, updatePayload),
+    );
+    ctx.readableController.close();
+    await readPromise;
+
+    // 応答は送らず、PROTOCOL_VIOLATION でセッションを閉じる
+    assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.isTrue(ctx.getClosedWithError()!.message.includes("stream message type"));
+    // prefix は更新されない
+    assert.notDeepEqual(ctx.target.namespacePrefix, ["live", "sports"]);
+  });
 });
 
 // ============================================================================

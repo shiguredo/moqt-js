@@ -1,7 +1,7 @@
 # namespace / tracks サブスクリプションの REQUEST_UPDATE を受信すると PROTOCOL_VIOLATION でセッションを閉じる
 
 - Created: 2026-09-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-namespace-request-update-receive
 - Polished: {YYYY-MM-DD}
 
@@ -55,3 +55,27 @@ namespace ストリームと tracks ストリームの `onMessage` に REQUEST_U
 - draft-ietf-moq-transport-21 §9.20.21 (TRACK_NAMESPACE_PREFIX Parameter)
 - draft-ietf-moq-transport-21 §16.11.1 (Session Termination Error Codes)
 - draft-ietf-moq-transport-21 §16.11.2 (REQUEST_ERROR Codes)
+
+## 解決方法
+
+調査の結果、報告されている「ピアが namespace サブスクリプションを更新しようとすると PROTOCOL_VIOLATION でセッションが閉じる」は
+draft-ietf-moq-transport-21 の MUST に沿った動作であり、挙動の修正は不要と判断した。コードの変更は行わず、判断の根拠をコメントとテストで固定した。
+
+- §9.5 (REQUEST_UPDATE): REQUEST_UPDATE を送れるのは「要求の送信者」と「PUBLISH で確立した購読の subscriber」の 2 ケースのみで、
+  「An endpoint that receives a REQUEST_UPDATE other than in the two cases above MUST close the session with a PROTOCOL_VIOLATION.」。
+  SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の送信者は自側 (subscriber) であるため、ピアからの受信はこの MUST の対象になる
+- §9.5.2 (Updating Namespace Subscriptions): 「A subscriber can update the Track Namespace Prefix of an established
+  SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS by including the TRACK_NAMESPACE_PREFIX parameter ... in a REQUEST_UPDATE.」—
+  更新を送るのは subscriber (要求の送信者) である。自側の送信は `bidiSendNamespaceRequestUpdate`、その応答処理は
+  `namespaceHandleRequestOkMessage` が既に担っている
+- moqt-js は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を responder として受理しない
+  (`incomingClassifyFirstBidiMessage` が未対応リクエストとして REQUEST_ERROR を返す)。したがって自側が namespace ストリームの
+  responder になる経路が無く、REQUEST_UPDATE を受理してトークン処理や応答を行う必要はない
+- sora-moq relay も、上流 publisher からの REQUEST_UPDATE の下流転送は PUBLISH 起点の購読 (`pub_publishes`) のみを対象としており、
+  namespace 系ストリームへは送らない
+- 誤って「受理する」実装に変えないよう、`src/session/namespaceLoops.ts` の namespace / tracks 両ループの default 分岐に、
+  §9.5 の 2 ケースに該当しないことと §9.5.2 の送信者が subscriber であることをコメントで明記した
+- `src/session/namespaceLoops.test.ts` に、確立済みの namespace / tracks ストリームで TRACK_NAMESPACE_PREFIX 付き
+  REQUEST_UPDATE を受信すると PROTOCOL_VIOLATION で閉じ、prefix が更新されないことを検証するテストを追加した
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2245 passed) の通過で確認した。
