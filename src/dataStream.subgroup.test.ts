@@ -21,7 +21,7 @@ import {
   SessionError,
 } from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
-import { encodeVarint } from "./varint";
+import { encodeVarint, MAX_VARINT } from "./varint";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -887,4 +887,35 @@ test("encodeObjectFields: END_OF_GROUP + 非空 payload は ProtocolViolationErr
     () => encodeObjectFields(0n, 1n, SubgroupHeaderType.FIRST_OBJ_EXT, ObjectStatus.END_OF_GROUP),
     ProtocolViolationError,
   );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
+ *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ * 奇数 Type の Length が上限を超える Object Properties は Type の既知 / 未知を
+ * 問わず ProtocolViolationError になる。
+ */
+test("ObjectFields: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  // deltaId=0x0D (未知 odd Type), length=65536
+  const properties = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
+ *  If a Delta Type is received that would be too large, the Session MUST be closed
+ *  with a PROTOCOL_VIOLATION."
+ * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
+ */
+test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+  const properties = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
+  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
 });

@@ -221,15 +221,31 @@ const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
 const MAX_PROPERTY_VALUE_LENGTH = 65535n;
 
 /**
+ * 奇数 Type の Length が最大値 (2^16-1) を超えるか判定する
+ *
+ * draft-ietf-moq-transport-21 §8.3 (Key-Value-Pair Structure):
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
+ *  length larger than the maximum, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ *
+ * Type の既知 / 未知を問わない (MUST は Type に依存しない)。厳密デコーダ
+ * (decodeProperties / parseProperties / decodeImmutableProperties) と
+ * Object Properties の検証 (assertKnownPropertyValueInObjectProperties) の
+ * 双方から呼び、上限判定を 1 箇所に固定する。
+ *
+ * @param length - 宣言された Length
+ */
+function isPropertyLengthOverLimit(length: bigint): boolean {
+  return length > MAX_PROPERTY_VALUE_LENGTH;
+}
+
+/**
  * 既知 Type の Length 宣言超過が serialization 不一致に当たるか判定する
  *
  * draft-ietf-moq-transport-21 §8.3:
  * Length が最大値 (2^16-1) を超える場合は最大値超過の MUST を優先するため、
- * 上限内の既知 Type だけを KEY_VALUE_FORMATTING_ERROR の対象とする。
- * 上限超過は Track Properties の厳密デコーダでは事前の検査が
- * PROTOCOL_VIOLATION として弾き、Object Properties 経路
- * (assertKnownPropertyValueInObjectProperties) では寛容契約どおり打ち切るため、
- * 本条件が偽になるのは Object Properties 経路の上限超過だけである。
+ * 上限内の既知 Type だけを KEY_VALUE_FORMATTING_ERROR の対象とする
+ * (上限超過そのものは isPropertyLengthOverLimit が PROTOCOL_VIOLATION とする)。
  * なお IMMUTABLE_PROPERTIES の内側で現れる既知 odd Type は 0x0B のみだが、
  * §10.7 の再帰禁止が MalformedTrackError として先に発火するため、内側の
  * 残量検査で本条件が真になることはない (将来の既知 odd Type 追加への備え)。
@@ -237,8 +253,8 @@ const MAX_PROPERTY_VALUE_LENGTH = 65535n;
  * @param id - Property Type
  * @param length - 宣言された Length
  */
-function isKnownPropertyLengthOverrun(id: bigint, length: bigint): boolean {
-  return KNOWN_PROPERTY_TYPES.has(id) && length <= MAX_PROPERTY_VALUE_LENGTH;
+function isKnownPropertyWithinLengthLimit(id: bigint, length: bigint): boolean {
+  return KNOWN_PROPERTY_TYPES.has(id) && !isPropertyLengthOverLimit(length);
 }
 
 /**
@@ -320,7 +336,7 @@ function throwLengthOverrunError(
   remaining: number,
   label: string,
 ): never {
-  if (isKnownPropertyLengthOverrun(id, length)) {
+  if (isKnownPropertyWithinLengthLimit(id, length)) {
     throw knownPropertyLengthOverrunError(id, length, remaining);
   }
   throw new ProtocolViolationError(
@@ -652,7 +668,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     data,
     idLen,
   );
-  if (Number(length) > 65535) {
+  if (isPropertyLengthOverLimit(length)) {
     throw new ProtocolViolationError(
       `immutable properties value length exceeds maximum: ${length} > 65535`,
     );
@@ -893,7 +909,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         data,
         offset + deltaIdLen,
       );
-      if (Number(length) > 65535) {
+      if (isPropertyLengthOverLimit(length)) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
         );
@@ -1082,7 +1098,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
     } else {
       // 奇数 ID: length + bytes 形式
       const [length, lengthLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
-      if (Number(length) > 65535) {
+      if (isPropertyLengthOverLimit(length)) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
         );
@@ -1301,12 +1317,17 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * varint として完結しない場合、および Length の varint は完結したが宣言値が
  * 残りバイトを超える場合に SessionError を送出する。未知 Type は受信者が
  * 理解しないため対象外とし、不完全データでの打ち切りも寛容契約どおり維持する。
- * delta のオーバーフローと Length 上限 (2^16-1 超) の検証は本関数の対象外と
- * する。Object Properties 経路は厳密デコーダを通らないため上限超過は誰も
- * 検証せず、上限超過の宣言は残りバイト内に収まる限り受理される。
  *
+ * §8.3 の MUST のうち Type に依存しない 2 つも本関数で検証する。delta の累積が
+ * 2^64-1 を超える場合と、奇数 Type の Length が 2^16-1 を超える場合は、既知 /
+ * 未知を問わず PROTOCOL_VIOLATION とする。いずれも「不完全データ」ではないため
+ * 寛容契約の対象外である。上限超過の判定は残量検査より先に行い、残りバイト内に
+ * 収まる上限超過も拒否する。
+ *
+ * @throws ProtocolViolationError delta の累積が 2^64-1 を超える場合、または
+ *   奇数 Type の宣言 Length が 2^16-1 を超える場合
  * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type の Value / Length が
- *   varint として完結しない場合、または宣言 Length が残りバイトを超える場合
+ *   varint として完結しない場合、または上限内の宣言 Length が残りバイトを超える場合
  */
 export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
   let offset = 0;
@@ -1321,6 +1342,12 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
       return;
     }
     const id = previousId + deltaId;
+    // draft-ietf-moq-transport-21 §8.3: "The previous Type value plus the Delta
+    // Type MUST NOT be greater than 2^64 - 1. If a Delta Type is received that
+    // would be too large, the Session MUST be closed with a PROTOCOL_VIOLATION."
+    if (id > MAX_VARINT) {
+      throw new ProtocolViolationError(`delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`);
+    }
     previousId = id;
     offset += deltaIdLen;
 
@@ -1356,14 +1383,22 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
       return;
     }
     offset += lengthLen;
+    // draft-ietf-moq-transport-21 §8.3: "The maximum length of a value is
+    // 2^16-1 bytes. If an endpoint receives a length larger than the maximum, it
+    // MUST close the session with a PROTOCOL_VIOLATION."
+    // 上限超過は Type の既知 / 未知を問わず仕様違反であり、残量検査より先に判定する
+    // (残りバイト内に収まる上限超過も拒否する)。
+    if (isPropertyLengthOverLimit(length)) {
+      throw new ProtocolViolationError(
+        `properties value length exceeds maximum: ${length} > ${MAX_PROPERTY_VALUE_LENGTH}`,
+      );
+    }
     if (!isLengthWithinData(length, offset, data.length)) {
       // draft-ietf-moq-transport-21 §8.3:
       // 既知 Type の Length 宣言が残りバイトを超える場合は serialization 不一致
-      // として KEY_VALUE_FORMATTING_ERROR。それ以外 (未知 Type、および Length が
-      // 最大値 2^16-1 を超える場合) は寛容契約どおり打ち切る。上限超過の検証は
-      // 本関数の対象外であり、Object Properties 経路では誰も検証しない
-      // (Track Properties の厳密デコーダだけが PROTOCOL_VIOLATION とする)。
-      if (isKnownPropertyLengthOverrun(id, length)) {
+      // として KEY_VALUE_FORMATTING_ERROR。未知 Type は寛容契約どおり打ち切る
+      // (上限超過は上で PROTOCOL_VIOLATION として弾いている)。
+      if (isKnownPropertyWithinLengthLimit(id, length)) {
         throw knownPropertyLengthOverrunError(id, length, data.length - offset);
       }
       return;

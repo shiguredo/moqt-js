@@ -659,6 +659,56 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の Length 宣言�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
+ *  If a Delta Type is received that would be too large, the Session MUST be closed
+ *  with a PROTOCOL_VIOLATION."
+ * delta の varint 単体は 2^64-1 を超えないため、累積の加算結果で判定する。
+ * MAX_VARINT (奇数 Type) に Length 0 を消費させた直後に delta 1 を置くと
+ * 累積が 2^64 になる。
+ */
+test("assertKnownPropertyValueInObjectProperties: delta の累積が 2^64-1 を超えると ProtocolViolationError", () => {
+  const data = new Uint8Array([
+    ...encodeVarint(MAX_VARINT),
+    ...encodeVarint(0n),
+    ...encodeVarint(1n),
+  ]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof ProtocolViolationError)) {
+    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
+ *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ * 上限超過は Type の既知 / 未知を問わず PROTOCOL_VIOLATION であり、宣言 Length が
+ * 残りバイト内に収まっていても拒否する。
+ */
+test("assertKnownPropertyValueInObjectProperties: 既知 odd Type の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=65536
+  const data = new Uint8Array([...encodeVarint(0x0bn), ...encodeVarint(65536n)]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof ProtocolViolationError)) {
+    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.3:
+ * Length の上限超過の MUST は Type の既知 / 未知に依存しない。
+ */
+test("assertKnownPropertyValueInObjectProperties: 未知 odd Type の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+  // deltaId=0x0D (未知 odd Type), length=65536
+  const data = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
+  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
+  if (!(thrown instanceof ProtocolViolationError)) {
+    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
+  }
+});
+
+/**
  * 宣言 Length が残りバイト数とちょうど一致する場合は超過ではないため throw しない
  * (境界のオフバイワン検出)。
  */
