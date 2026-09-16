@@ -513,12 +513,14 @@ test("bidiHandlePublishRequestUpdate: AUTHORIZATION TOKEN の REGISTER がキャ
 });
 
 /**
- * draft-ietf-moq-transport-21 §8.9:
- * 未登録 Alias を参照する USE_ALIAS を含む REQUEST_UPDATE は REQUEST_ERROR
- * (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否され、セッションは閉じない MUST を検証する
- * (§9.5.1 により PUBLISH_DONE も送られる)。
+ * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
+ * 未登録 Alias を参照する USE_ALIAS を含む REQUEST_UPDATE は Session Termination の
+ * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを検証する。0x17 は
+ * §16.11.2 (REQUEST_ERROR Codes) に収載されていないため REQUEST_ERROR では送らない。
+ * 本経路は元から PUBLISH_DONE を送らないため、REQUEST_ERROR も PUBLISH_DONE も
+ * 書かれない。
  */
-test("bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する", async () => {
+test("bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
   const ctx = createPublishReadTestContext({}, 1024);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -536,14 +538,10 @@ test("bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は REQUEST_
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  // ケース 1 の moqt-js は受信 PUBLISH の subscriber であり、§3.1 / §9.5.1 の
-  // PUBLISH_DONE は publisher が送る。拒否は REQUEST_ERROR のみでなければならない。
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(Number(decoded.errorCode), RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
-  // §8.9: 未登録 Alias の参照ではセッションを閉じない
-  assert.isUndefined(ctx.closedWithError);
+  // セッションを閉じるため REQUEST_ERROR も PUBLISH_DONE も送らない
+  assert.equal(messages.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
 });
 
 /**

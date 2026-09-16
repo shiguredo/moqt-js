@@ -403,8 +403,9 @@ test("processMessageAuthorizationTokens: 登録済み Alias の再 REGISTER は 
   assert.equal((error as SessionError).code, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
 });
 
-test("processMessageAuthorizationTokens: 未登録 Alias の USE_ALIAS は unknown-alias を返しセッションは閉じない", () => {
-  // §8.9: 未登録 Alias の参照は UNKNOWN_AUTH_TOKEN_ALIAS でメッセージを拒否する
+test("processMessageAuthorizationTokens: 未登録 Alias の USE_ALIAS は unknown-alias を返す (セッションを閉じるのは呼び出し元)", () => {
+  // §8.9: 未登録 Alias の参照は UNKNOWN_AUTH_TOKEN_ALIAS で拒否する MUST。
+  // 本関数はセッションを閉じず、呼び出し元が Session Termination にする。
   const cache = new AuthTokenCache(1024);
 
   const result = processMessageAuthorizationTokens(cache, [
@@ -414,7 +415,7 @@ test("processMessageAuthorizationTokens: 未登録 Alias の USE_ALIAS は unkno
     }),
   ]);
 
-  assert.deepEqual(result, { status: "unknown-alias" });
+  assert.deepEqual(result, { status: "unknown-alias", tokenAlias: 42n });
 });
 
 test("processMessageAuthorizationTokens: 登録済み Alias の USE_ALIAS は ok になる", () => {
@@ -445,7 +446,7 @@ test("processMessageAuthorizationTokens: 同一メッセージ内の DELETE で�
     }),
   ]);
 
-  assert.deepEqual(result, { status: "unknown-alias" });
+  assert.deepEqual(result, { status: "unknown-alias", tokenAlias: 1n });
   assert.equal(cache.size, 0);
 });
 
@@ -505,7 +506,7 @@ test("processMessageAuthorizationTokens: 複数 Token のうち 1 つでも未�
     }),
   ]);
 
-  assert.deepEqual(result, { status: "unknown-alias" });
+  assert.deepEqual(result, { status: "unknown-alias", tokenAlias: 99n });
   // 先に処理した REGISTER は §8.9 の MUST により維持する
   assert.deepEqual(cache.resolve(1n), {
     status: "resolved",
@@ -552,4 +553,25 @@ test("processMessageAuthorizationTokens: REGISTER は Token Value の長さで�
 
   assert.deepEqual(result, { status: "ok" });
   assert.equal(cache.size, 116);
+});
+
+test("processMessageAuthorizationTokens: 未登録 Alias の参照を検出した時点で打ち切り、後続の違反で終了コードを上書きしない", () => {
+  const cache = new AuthTokenCache(1024);
+  // 先に Alias 1 を登録しておき、後続の REGISTER を重複違反にする
+  cache.register(1n, 1n, new Uint8Array([1]));
+
+  const result = processMessageAuthorizationTokens(cache, [
+    authorizationTokenParameter({
+      aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+      tokenAlias: 99n,
+    }),
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: registerToken(1n, 1n, new Uint8Array([1])),
+    },
+  ]);
+
+  // 最初の違反である未登録 Alias が報告される。後続を処理すると
+  // DUPLICATE_AUTH_TOKEN_ALIAS が送出されて診断コードがパラメータ順に依存する
+  assert.deepEqual(result, { status: "unknown-alias", tokenAlias: 99n });
 });

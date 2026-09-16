@@ -1,7 +1,7 @@
 # 未登録 Alias の参照を Session Termination の 0x17 UNKNOWN_AUTH_TOKEN_ALIAS に統一する
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-16
 - Branch: feature/change-unknown-auth-token-alias-scope
 - Polished: 2026-09-16
 
@@ -24,10 +24,10 @@ draft-ietf-moq-transport-21 §8.9 は「未登録の Alias を参照するメッ
   - `src/session.ts` の `processIncomingPublishAuthorizationTokens` が `incomingSendRequestErrorAndClose` で送る (受信 PUBLISH 経路)
   - `src/session/bidi.ts` の `processIncomingRequestUpdateAuthorizationTokens` が `bidiSendRequestError` で送る (REQUEST_UPDATE 経路)。このヘルパーは `bidiHandlePublishRequestUpdate` と `bidiPreflightRequestUpdate` の 2 箇所から呼ばれ、送信側は同じ 1 箇所に集約されている
 - REQUEST_UPDATE の受信経路は 3 つあり、いずれもこのヘルパーを通る
-  - `bidiHandlePublishRequestUpdate` (受信 PUBLISH ストリーム上の REQUEST_UPDATE)。moqt-js は受信 PUBLISH の subscriber だが、REQUEST_UPDATE を送ったのは moqt-js であり、REQUEST_UPDATE の文脈では moqt-js が publisher である
+  - `bidiHandlePublishRequestUpdate` (受信 PUBLISH ストリーム上の REQUEST_UPDATE)。moqt-js は受信 PUBLISH の subscriber であり、REQUEST_UPDATE を送ったのは publisher であるピアである (§9.5 の「The sender of a request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send a REQUEST_UPDATE on the same bidi stream as the request to modify it.」の受信側)
   - `bidiPreflightRequestUpdate` の publish ロール分岐。`bidiReadRequestStreamMessages` が `role: "publish"` で呼ぶ
   - `bidiPreflightRequestUpdate` の subscribe ロール分岐。`bidiReadRequestStreamMessages` が `role: "subscribe"` で呼ぶ
-- §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) を併送するのは `bidiHandlePublishRequestUpdate` と `bidiPreflightRequestUpdate` の publish ロール分岐の `unknown-alias` 処理だけである。`bidiPreflightRequestUpdate` の subscribe ロール分岐は moqt-js が subscriber であり §9.5.1 の publisher MUST の対象外であるため、REQUEST_ERROR のみを送る
+- §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) を併送するのは、`bidiHandlePublishRequestUpdate` を除く `bidiPreflightRequestUpdate` の `unknown-alias` 分岐である。この分岐はロール条件を持たないため、publish ロールだけでなく subscribe ロールでも送っていた。`bidiHandlePublishRequestUpdate` は元から PUBLISH_DONE を送らない
 - `src/error.ts` の `RequestErrorCode` のコメントは「§12.3 (Request Error Codes) の登録表には 0x17 が収載されていない」「§13 (Grease) により、§12.3 の登録表に無いコードを受信したピアは INTERNAL_ERROR として扱う MUST があるため、本コードはピア側で UNKNOWN_AUTH_TOKEN_ALIAS として認識されない可能性がある (相互運用上の帰結)」「受理集合にも含まれるため、ピアから 0x17 を受信した場合は本コードとして解釈する」と、相互運用上の帰結を認識している
 
 draft-ietf-moq-transport-21 §8.9:
@@ -58,7 +58,7 @@ draft-ietf-moq-transport-21 §13:
 セッションを閉じる場合、次の 2 つの MUST が定める応答は送らない。これは §6.6 の MAY に基づく意図的な選択である。§6.6 は続けて「Implementations need to consider the impact on other outstanding subscriptions before making this choice.」と留保するが、0x17 はトークンキャッシュがセッション単位の状態であり、未登録 Alias の参照はセッションの前提が崩れていることを意味するため、他購読への影響を許容してセッション終了を選ぶ。
 
 - §9.5「The receiver of a REQUEST_UPDATE MUST respond with exactly one REQUEST_OK or REQUEST_ERROR message indicating if the update was successful, unless it is coalescing failed updates to produce just one REQUEST_ERROR for multiple REQUEST_UPDATE messages.」の REQUEST_OK / REQUEST_ERROR を送らない。セッションを閉じるため、この応答を送っても解釈されない。この MUST は REQUEST_UPDATE を受信する両ロールに等しくかかるため、publish ロールと subscribe ロールの両方が対象外となる
-- §9.5.1「When a REQUEST_UPDATE is unsuccessful, the publisher MUST also terminate the subscription by sending a PUBLISH_DONE with error code UPDATE_FAILED.」の PUBLISH_DONE (UPDATE_FAILED) を送らない。セッションが閉じるため購読はセッションとともに終了し、購読単位の終了通知は不要である。この MUST は publisher が負うものであり、現行で該当するのは `bidiPreflightRequestUpdate` の publish ロール分岐だけである。`bidiHandlePublishRequestUpdate` は元から PUBLISH_DONE を送らず、`bidiPreflightRequestUpdate` の subscribe ロール分岐も対象外である
+- §9.5.1「When a REQUEST_UPDATE is unsuccessful, the publisher MUST also terminate the subscription by sending a PUBLISH_DONE with error code UPDATE_FAILED.」の PUBLISH_DONE (UPDATE_FAILED) を送らない。セッションが閉じるため購読はセッションとともに終了し、購読単位の終了通知は不要である。この MUST がかかるのは publisher である publish ロールだけで、subscribe ロールは対象外である。現行は `bidiPreflightRequestUpdate` の `unknown-alias` 分岐がロール条件を持たない共通コードであるため subscribe ロールでも送っていたが、本変更で送らなくなる。`bidiHandlePublishRequestUpdate` は元から PUBLISH_DONE を送らない
 
 §6.6 の原文は次のとおりである。MAY はすべて大文字であり §1.3 の「when, and only when, they appear in all capitals」の条件を満たす規範語である。後半の「need to」は大文字ではないため BCP 14 の規範語ではないが、この選択を行う前に他購読への影響を検討することを求めた留保であり、判断の根拠として扱う。
 
@@ -108,10 +108,10 @@ relay は 0x17 を Session Termination のコードとして定義し、未登�
 - 同関数の戻り値を `Promise<"ok" | "unknown-alias" | "closed">` から `Promise<"ok" | "closed">` に整理する。現行は「REQUEST_ERROR を送った (unknown-alias)」と「セッションを閉じた (closed)」を区別しているが、変更後はどちらもセッションを閉じるため区別が不要になる
 - 同関数の JSDoc にある「未登録 Alias の参照は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) でメッセージを拒否する」と `@returns` の「unknown-alias (REQUEST_ERROR 送信済み)」を Session Termination に更新する
 - `bidiPreflightRequestUpdate` の `authResult !== "ok"` 分岐から `bidiTerminatePublishSubscriptionWithUpdateFailed` の呼び出しを削除する
-- 同分岐の「§9.5.1 の MUST に従い PUBLISH_DONE (UPDATE_FAILED) で購読を終了する」というコメントを、セッション終了のため PUBLISH_DONE を送らない理由のコメントに置き換える。この分岐は publish ロールと subscribe ロールの共通コードであるため、publish ロールでは §9.5.1 の MUST をセッション終了で対象外にしたこと、subscribe ロールでは元から対象外であることを書き分ける
-- `bidiHandlePublishRequestUpdate` の AUTHORIZATION TOKEN 処理ブロックは、戻り値が `"ok"` 以外なら早期 return する現行構造のままでよい。変更後は `"ok"` 以外が `"closed"` だけになるため、`"closed"` のときはセッションが閉じているので読み取りを終える、という記述に置き換える。現行コメントの「本経路 (ケース 1) の moqt-js は受信 PUBLISH の subscriber であり、§3.1 / §9.5.1 の PUBLISH_DONE は publisher が送る。拒否は REQUEST_ERROR のみとし、購読の終了は publisher (ピア) に委ねる」は、受信ストリーム上のロールと REQUEST_UPDATE のロールが混ざった記述なので、REQUEST_UPDATE の文脈では moqt-js が publisher であることを踏まえて書き直す
-- `bidiPreflightRequestUpdate` の subscribe ロール分岐は元から PUBLISH_DONE を送らないため、削除する呼び出しは無い。コメントのみ Session Termination に合わせる
-- `bidiHandlePublishRequestUpdate` を書き直すときは、`src/session.ts` の受信 PUBLISH ループにある同関数の呼び出し元コメント (「受信 PUBLISH の publisher (ピア) による REQUEST_UPDATE を処理し」) も同じ混同を含む。同じ「受信ストリーム上のロールと REQUEST_UPDATE のロールの混ざり」なので、あわせて読み直す。なお本経路が PUBLISH_DONE を送らないのは現行からの挙動であり、セッション終了を選んだことによる変更ではない
+- 同分岐の「§9.5.1 の MUST に従い PUBLISH_DONE (UPDATE_FAILED) で購読を終了する」というコメントを、セッション終了のため PUBLISH_DONE を送らない理由のコメントに置き換える。この分岐は publish ロールと subscribe ロールの共通コードであり、現行はロール条件を持たない。publish ロールでは §9.5.1 の MUST をセッション終了により意図的に満たさないこと、subscribe ロールでは moqt-js が subscriber であり同 MUST の対象外であることを書き分ける
+- `bidiHandlePublishRequestUpdate` の AUTHORIZATION TOKEN 処理ブロックは、戻り値が `"ok"` 以外なら早期 return する現行構造のままでよい。変更後は `"ok"` 以外が `"closed"` だけになるため、`"closed"` のときはセッションが閉じているので読み取りを終える、という記述に置き換える。現行コメントの「本経路 (ケース 1) の moqt-js は受信 PUBLISH の subscriber であり、§3.1 / §9.5.1 の PUBLISH_DONE は publisher が送る。拒否は REQUEST_ERROR のみとし、購読の終了は publisher (ピア) に委ねる」は REQUEST_ERROR を送る前提の記述なので、Session Termination に合わせて書き直す。ロールの向き (moqt-js が subscriber、ピアが publisher) は現行コメントのままで正しい
+- `bidiPreflightRequestUpdate` の subscribe ロール分岐では、現行も PUBLISH_DONE (UPDATE_FAILED) を送っていた (分岐にロール条件が無い)。変更後は publish ロールと同じく送らなくなる。subscribe ロールは §9.5.1 の publisher MUST の対象外であり、この挙動変更は是正にあたる。コメントも Session Termination に合わせる
+- `src/session.ts` の受信 PUBLISH ループにある `bidiHandlePublishRequestUpdate` の呼び出し元コメント (「受信 PUBLISH の publisher (ピア) による REQUEST_UPDATE を処理し」) はロールの向きが正しいため変更しない。なお本経路が PUBLISH_DONE を送らないのは現行からの挙動であり、セッション終了を選んだことによる変更ではない
 
 ### `src/session.ts`
 
@@ -127,10 +127,10 @@ relay は 0x17 を Session Termination のコードとして定義し、未登�
 
 ### `src/session/authTokenCache.ts`
 
-- `AuthTokenProcessResult` の型 `{ status: "ok" } | { status: "unknown-alias" }` は維持する。未登録 Alias の検出はキャッシュ層の責務であり、セッションを閉じるかどうかは呼び出し元が決めるため、`status` の意味だけを「メッセージを拒否すべき」から「セッションを閉じるべき」に更新する
+- `AuthTokenProcessResult` の型の `unknown-alias` に `tokenAlias` を追加し、診断メッセージに該当 Alias 値を含められるようにする。未登録 Alias の検出はキャッシュ層の責務であり、セッションを閉じるかどうかは呼び出し元が決めるため、`status` の意味は「メッセージを拒否すべき」から「セッションを閉じるべき」に更新する
 - `AuthTokenProcessResult` の `unknown-alias` の説明「未登録 Alias を参照する USE_ALIAS があり、メッセージを拒否すべき」を、呼び出し元がセッションを閉じるべきことを表す記述に更新する
 - `processMessageAuthorizationToken` (単数、内部関数) の docstring「未登録 Alias の参照はセッションを閉じず、当該メッセージを REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する」を Session Termination に更新する。セッションを閉じるのは呼び出し元であり、本関数は `unknown-alias` を返して判断を委ねる形を維持する
-- `processMessageAuthorizationTokens` (複数、公開関数) の docstring は既に §8.9 の「An Authorization Token MAY be repeated within a message as long as the combination of Token Type and Token Value are unique after resolving any aliases.」を根拠に、全パラメータを順に処理することを述べている。変更後も `unknown-alias` を受け取った時点で打ち切らず、最初の非 `ok` を結果として返す現行挙動を変えない。コメントの理由付けは「USE_ALIAS の解決に失敗しても、同じメッセージ内でそれより後ろにある REGISTER を処理し続ける」に限定する。§8.9 の REGISTER 登録 MUST は「セッションエラーにならないメッセージ」を対象とするため、未登録 Alias を参照するメッセージは同 MUST の対象外であり、同 MUST が本関数の継続処理の根拠になるわけではない (benign な拒否経路の REGISTER 反映は別の責務である)
+- `processMessageAuthorizationTokens` (複数、公開関数) の docstring は §8.9 の「An Authorization Token MAY be repeated within a message as long as the combination of Token Type and Token Value are unique after resolving any aliases.」を根拠に、複数出現し得ることを述べている。未登録 Alias を検出した時点で打ち切り、その結果を返すように変える。同じメッセージに複数の違反がある場合に処理を続けると、後続の SessionError が送出されて診断コードがパラメータ順に依存するためである。§8.9 の REGISTER 登録 MUST は「セッションエラーにならないメッセージ」を対象とするため、未登録 Alias を参照するメッセージは同 MUST の対象外であり、打ち切っても同 MUST に反しない。この旨をコメントに残す
 
 ### `src/index.ts`
 
@@ -140,24 +140,31 @@ relay は 0x17 を Session Termination のコードとして定義し、未登�
 
 現行で 0x17 の REQUEST_ERROR 受理を前提にしている既存テストは次の 3 件である (`RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` を検証するアサーションはリポジトリ全体でこの 3 箇所だけである)。すべて Session Termination 0x17 の期待に更新する。
 
-- `src/session.test.ts` の「受信 PUBLISH: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する」(6701 行目のアサーション)。REQUEST_ERROR のワイヤ検証 (`ctx.written` に 1 通だけ REQUEST_ERROR が入る検証) を、`ctx.errors` に `SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` の `SessionError` が入り `ctx.session.state` が closed になる検証へ置き換える。`createPublishAuthTokenContext` は `createSessionImpl` に error コールバックを渡し、その記録先が `ctx.errors` であるため、`ctx.errors` を検証すること (同じ形の検証は AUTH_TOKEN_CACHE_OVERFLOW のテストが既に使っている)
-- `src/session.test.ts` の「受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias への USE_ALIAS は REQUEST_ERROR で拒否する」(6776 行目のアサーション)。このテストも `createPublishAuthTokenContext(1024)` を使うため、同じく `ctx.errors` と `ctx.session.state` の Session Termination 検証へ置き換える。あわせて「§8.9: 未登録 Alias の参照ではセッションを閉じない」というコメントと `ctx.session.state === "connected"` の検証 (6778 行目付近) を更新する
-- `src/session/bidiHandlePublishRequestUpdate.test.ts` の「bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する」(544 行目のアサーション)。このテストは `bidiHandlePublishRequestUpdate` を直接呼ぶ経路であり、REQUEST_UPDATE の文脈では moqt-js が publisher である。REQUEST_ERROR のワイヤ検証を `closedWithError` の検証へ置き換え、`ctx.closedWithError` (getter) が `SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` の `SessionError` になることを検証する。あわせて `ctx.written` に REQUEST_ERROR も PUBLISH_DONE も書かれないことを検証する (本経路は現行も PUBLISH_DONE を送らない)。テスト直前のヘッダコメント (516-519 行目) の「セッションは閉じない MUST を検証する (§9.5.1 により PUBLISH_DONE も送られる)」と、545 行目の「§8.9: 未登録 Alias の参照ではセッションを閉じない」は publish ロールの Session Termination に書き直す。546 行目の `assert.isUndefined(ctx.closedWithError)` は閉じることを検証する形に変える
+- `src/session.test.ts` の「受信 PUBLISH: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する」。`RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` を検証している REQUEST_ERROR のワイヤ検証 (`ctx.written` に 1 通だけ REQUEST_ERROR が入る検証) を、`ctx.errors` に `SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` の `SessionError` が入り `ctx.session.state` が closed になる検証へ置き換える。`createPublishAuthTokenContext` は `createSessionImpl` に error コールバックを渡し、その記録先が `ctx.errors` であるため、`ctx.errors` を検証すること (同じ形の検証は AUTH_TOKEN_CACHE_OVERFLOW のテストが既に使っている)
+- `src/session.test.ts` の「受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias への USE_ALIAS は REQUEST_ERROR で拒否する」。このテストも `createPublishAuthTokenContext(1024)` を使うため、同じく `ctx.errors` と `ctx.session.state` の Session Termination 検証へ置き換える。あわせて「§8.9: 未登録 Alias の参照ではセッションを閉じない」というコメントと `ctx.session.state === "connected"` の検証を更新する。なお `ctx.session.receivedAuthTokens.size` の検証は、セッション終了時にキャッシュが破棄されるため判別力を持たない。DELETE が適用されたことの検証はキャッシュ層の `src/session/authTokenCache.test.ts` に委ね、このテストでは「セッション終了でキャッシュが破棄される」性質として残す
+- `src/session/bidiHandlePublishRequestUpdate.test.ts` の「bidiHandlePublishRequestUpdate: 未登録 Alias の USE_ALIAS は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する」。このテストは `bidiHandlePublishRequestUpdate` を直接呼ぶ経路であり、moqt-js は subscriber、ピアが publisher である。`RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` を検証している REQUEST_ERROR のワイヤ検証を `ctx.closedWithError` (getter) の検証へ置き換え、`SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` の `SessionError` になることを検証する。あわせて `ctx.written` に REQUEST_ERROR も PUBLISH_DONE も書かれないことを検証する (本経路は現行も PUBLISH_DONE を送らない)。テスト直前のヘッダコメントの「セッションは閉じない MUST を検証する (§9.5.1 により PUBLISH_DONE も送られる)」と本文の「§8.9: 未登録 Alias の参照ではセッションを閉じない」は Session Termination に書き直す。`assert.isUndefined(ctx.closedWithError)` は閉じることを検証する形に変える
 
 あわせて次を追加・更新する。
 
 - `src/error.test.ts` の `normalizeRequestErrorCode` のテスト群に、REQUEST_ERROR 文脈の 0x17 が INTERNAL_ERROR に正規化される検証を追加する (新規。現行の `src/error.test.ts` に 0x17 を扱うテストは存在しない)
-- `src/session/authTokenCache.test.ts` の「未登録 Alias の USE_ALIAS は unknown-alias を返しセッションは閉じない」はキャッシュ層の戻り値だけを検証しており、送信側の変更と矛盾しない。テスト名と 407 行目のコメントを、キャッシュ層が「セッションを閉じるべき状態」を返すという記述に更新する
+- `src/session/authTokenCache.test.ts` の「processMessageAuthorizationTokens: 未登録 Alias の USE_ALIAS は unknown-alias を返しセッションは閉じない」はキャッシュ層の戻り値だけを検証しており、送信側の変更と矛盾しない。テスト名とテスト冒頭のコメントを、キャッシュ層が「セッションを閉じるべき状態」を返すという記述に更新する
 - `bidiPreflightRequestUpdate` の publish ロール分岐 (既存テストは `src/session/bidiPublishRequestUpdateConditions.test.ts` が `bidiReadRequestStreamMessages` を `role: "publish"` で駆動している) で未登録 Alias を参照したときに、REQUEST_ERROR と PUBLISH_DONE (UPDATE_FAILED) のどちらも送られず、`SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` でセッションが閉じる検証を追加する。現行はこの経路の未登録 Alias を検証するテストが無く、`bidiTerminatePublishSubscriptionWithUpdateFailed` の呼び出しを削除したことを裏付けるテストが存在しない
+- subscribe ロールの経路 (`bidiReadRequestStreamMessages` に `role: "subscribe"`) も同じく検証を追加する。この経路は GOAWAY 受信済みの旧リクエストでないと `bidiPreflightRequestUpdate` の先頭で PROTOCOL_VIOLATION になるため、テストではその状態を作る。現行は subscribe ロールでも PUBLISH_DONE (UPDATE_FAILED) を送っていたため、送らなくなったことも検証対象になる
+- セッション終了後に同一チャンクの残りメッセージを処理しない検証を追加する。`bidiPreflightRequestUpdate` がセッションを閉じた場合は読み取りループを終える (`"return"`) ため、REQUEST_UPDATE を 1 チャンクに 2 通連結し、`closeWithError` が 1 回だけ呼ばれることを検証する。判別力を持たせるため 2 通目も未登録 Alias を参照させる
+- `src/error.test.ts` に `normalizeSessionErrorCode(0x17)` が `SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` を返す検証と、`RequestErrorCode` に `UNKNOWN_AUTH_TOKEN_ALIAS` が存在しないことの検証を追加する (Session Termination 文脈では 0x17 が既知コードであり、REQUEST_ERROR 文脈では未知コードであることが本変更の前提)
+- `processMessageAuthorizationTokens` が未登録 Alias を検出した時点で打ち切り、後続の違反で終了コードが上書きされないことを検証する (未登録 Alias の USE_ALIAS の後ろに重複 REGISTER を置き、未登録 Alias が報告されることを確認する)
 
 ## 完了条件
 
 - `RequestErrorCode` に 0x17 が存在せず、`SessionErrorCode` に 0x17 が存在する
-- REQUEST_ERROR 文脈の 0x17 を `normalizeRequestErrorCode` に渡すと `RequestErrorCode.INTERNAL_ERROR` が返る
+- REQUEST_ERROR 文脈の 0x17 を `normalizeRequestErrorCode` に渡すと `RequestErrorCode.INTERNAL_ERROR` が返り、Session Termination 文脈の 0x17 を `normalizeSessionErrorCode` に渡すと `SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` が返る
 - 未登録 Alias を参照する PUBLISH / REQUEST_UPDATE の受信で、REQUEST_ERROR が送られず、`SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS` の Session Termination でセッションが閉じる
 - 0x17 を送る 3 経路 (受信 PUBLISH / `bidiHandlePublishRequestUpdate` の REQUEST_UPDATE / `bidiPreflightRequestUpdate` の REQUEST_UPDATE) のすべてが Session Termination になる。`bidiPreflightRequestUpdate` は publish ロールと subscribe ロールの両方で同じ分岐を通る
-- 上記を検証するテストが存在し、REQUEST_ERROR を期待する既存テストが残っていない。3 経路のうち `bidiPreflightRequestUpdate` の経路は現行テストが無いため新規に追加する
-- 決定理由 (§8.9 の MUST / §6.6 の MAY と留保 / §13 の MUST と MUST NOT / §12.2 の SHOULD / §9.5 の応答 MUST と §9.5.1 の PUBLISH_DONE MUST をセッション終了のために対象外としたこと / §9.1.4 の MUST NOT に抵触しないこと) がコードコメントに残る。§9.5.1 については、PUBLISH_DONE MUST がかかるのは publish ロール (moqt-js が publisher) であり、subscribe ロール (moqt-js が subscriber) は元から対象外であることを書き分ける
+- セッションを閉じた後に同一チャンクの残りメッセージを処理しない (`closeWithError` の呼び出しが 1 回だけである)
+- 同一メッセージに複数の違反がある場合、最初の違反のコードでセッションが閉じる (パラメータ順に依存しない)
+- 例外の伝播境界が既存の契約と整合する。`processIncomingPublishAuthorizationTokens` は `handleIncomingBidirectionalStream` の「throw しない」契約の下にあるため再 throw しない。SessionError 以外の例外は防御的に捨て、その旨をコメントに残す
+- 上記を検証するテストが存在し、REQUEST_ERROR を期待する既存テストが残っていない
+- 決定理由 (§8.9 の MUST / §6.6 の MAY と留保 / §13 の MUST と MUST NOT / §12.2 の SHOULD / §9.5 の応答 MUST と §9.5.1 の PUBLISH_DONE MUST をセッション終了により意図的に満たさないこと / §9.1.4 の MUST NOT に抵触しないこと) がコードコメントに残る。§9.5.1 については、PUBLISH_DONE MUST がかかるのは publish ロール (moqt-js が publisher) であり、subscribe ロール (moqt-js が subscriber) は元から対象外であることを書き分ける
 - 他実装 (moqt-rs など) と同じく、0x17 が Session Termination のコードとしてのみ存在する
 - `src/error.ts` / `src/session/bidi.ts` / `src/session.ts` / `src/session/authTokenCache.ts` の該当 docstring とコメントに、REQUEST_ERROR で拒否する旧挙動の記述が残っていない
 - `CHANGES.md` の `## develop` の既存エントリの記述が Session Termination に更新される
@@ -188,3 +195,14 @@ Issue を磨き上げる根拠として確認した他実装の解釈を記録�
 - relay: 0x17 を Session Termination のコードとして定義し、未登録 Alias を Session Termination とする方針である。トークンキャッシュの実装は未着手
 
 いずれも本 issue の「0x17 は Session Termination に統一する」と一致する。実装では、この解釈に合わせて `RequestErrorCode` から 0x17 を削除する。
+
+## 解決方法
+
+- `src/error.ts` の `RequestErrorCode` から `UNKNOWN_AUTH_TOKEN_ALIAS` (0x17) とそのコメントを削除した。`SessionErrorCode` の 0x17 は維持している。`normalizeRequestErrorCode` の受理集合は `RequestErrorCode` の値から組み立てているため、REQUEST_ERROR 文脈の 0x17 は自動的に `INTERNAL_ERROR` へ正規化される。この帰結を受理集合のコメントに残した
+- `src/session/bidi.ts` の `processIncomingRequestUpdateAuthorizationTokens` で REQUEST_ERROR を送っていた箇所を `session.closeWithError` による Session Termination に置き換え、戻り値を `"ok" | "closed"` に整理した。REQUEST_ERROR ではなく Session Termination を選ぶ理由、§6.6 の留保の判断、§9.1.4 の MUST NOT に抵触しないことを JSDoc に集約した
+- `src/session/bidi.ts` の `bidiPreflightRequestUpdate` から `bidiTerminatePublishSubscriptionWithUpdateFailed` の呼び出しを削除した。従来はロール条件を持たない共通分岐だったため subscribe ロールでも PUBLISH_DONE (UPDATE_FAILED) を送っていたが、§9.5.1 は publisher の MUST であり subscribe ロールは対象外である。セッション終了時は読み取りループを終える (`"return"`) ようにし、同一チャンクの残りメッセージを処理して error コールバックを二重通知しないようにした
+- `src/session.ts` の `processIncomingPublishAuthorizationTokens` を Session Termination に変更し、診断用に Request ID を受け取るようにした。`handleIncomingBidirectionalStream` の「throw しない」契約を守るため、SessionError 以外の例外は再 throw せず当該 PUBLISH の処理だけを打ち切る
+- `src/session/authTokenCache.ts` の `AuthTokenProcessResult` の `unknown-alias` に `tokenAlias` を追加し、診断メッセージに該当 Alias 値を含めた。`processMessageAuthorizationTokens` は未登録 Alias を検出した時点で打ち切り、後続の違反で終了コードがパラメータ順に依存しないようにした。docstring は §8.9 の REGISTER 登録 MUST がセッションエラーにならないメッセージを対象とすることを踏まえて書き直した
+- テストを更新・追加した。`src/session.test.ts` の 2 件、`src/session/bidiHandlePublishRequestUpdate.test.ts` の 1 件を Session Termination の期待に更新し、`src/session/bidiPublishRequestUpdateConditions.test.ts` に publish ロール経路と同一チャンク 2 通の回帰テスト、`src/session/bidiReadRequestStreamMessages.test.ts` に subscribe ロール経路、`src/session/authTokenCache.test.ts` に打ち切り挙動、`src/error.test.ts` に 0x17 の正規化と列挙の不在を追加した
+- `src/testSupport/bidi.ts` に `closedWithErrorCount` を追加し、セッション終了後に同一チャンクを処理し続けていないことを検証できるようにした
+- `CHANGES.md` の `## develop` にある「受信 AUTHORIZATION TOKEN のデコードとトークンキャッシュを実装する」エントリの記述を Session Termination に更新した

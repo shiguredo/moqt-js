@@ -1509,45 +1509,71 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  *
  * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
  * §8.9 の MUST により REGISTER はメッセージが他の理由で失敗しても登録を維持する
- * ため、後続の検証より前に処理する。未登録 Alias の参照は REQUEST_ERROR
- * (UNKNOWN_AUTH_TOKEN_ALIAS) でメッセージを拒否する。デコード不能
- * (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
- * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
- * セッションを閉じる。
+ * ため、後続の検証より前に処理する。デコード不能 (KEY_VALUE_FORMATTING_ERROR)・
+ * 登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過
+ * (AUTH_TOKEN_CACHE_OVERFLOW) はセッションを閉じる。
  *
- * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が送る MUST であり、
- * moqt-js が publisher となる経路 (自 PUBLISH ストリーム) でのみ必要となる。
- * そのため本ヘルパーでは送信せず、呼び出し元がロールに応じて行う。
+ * 未登録 Alias の参照も Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) で
+ * セッションを閉じる。§8.9 は「未登録 Alias を参照するメッセージを
+ * UNKNOWN_AUTH_TOKEN_ALIAS で拒否する MUST」を定め、コード値のみを指定して
+ * エラー文脈を指定しない。§6.6 はリクエスト固有のエラーをセッションエラーとして
+ * 扱うことを MAY で許容し、§12.2 はセッション終了時に relevant code を使う SHOULD を
+ * 定める。一方 0x17 は §16.11.2 (REQUEST_ERROR Codes) に収載されていないため、
+ * REQUEST_ERROR として送ると §13 の MUST によりピアは INTERNAL_ERROR と等価に
+ * 扱い、同 MUST NOT によりその未知コードを理由にセッションを閉じることもできない。
+ * §8.9 が伝えようとした理由を届けられるのは Session Termination 側だけである。
  *
- * @returns ok (継続可) / unknown-alias (REQUEST_ERROR 送信済み) /
- *   closed (セッション終了済み)
+ * §6.6 は MAY の直後に「Implementations need to consider the impact on other
+ * outstanding subscriptions before making this choice.」と留保する。0x17 は
+ * トークンキャッシュがセッション単位の状態であることに由来するエラーであり、
+ * 未登録 Alias の参照はセッションの前提が崩れていることを意味するため、他の購読への
+ * 影響を許容してセッション終了を選ぶ。
+ *
+ * この選択は §9.1.4 の MUST NOT に抵触しない。§9.1.4 は SETUP の AUTHORIZATION TOKEN で
+ * MAX_AUTH_TOKEN_CACHE_SIZE を超える REGISTER を AUTH_TOKEN_CACHE_OVERFLOW で
+ * 失敗させてはならないと定めるが、対象は REGISTER の成否であり、未登録 Alias の
+ * 「参照」の扱いではない。REGISTER の上限超過の扱いは現状どおり変更しない。
+ *
+ * §9.5 の「REQUEST_OK / REQUEST_ERROR をちょうど 1 通返す MUST」にはセッション終了時の
+ * 除外規定が無いため、セッションを閉じる場合はこの MUST を意図的に満たさない
+ * (§6.6 の MAY に基づく選択)。§9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が
+ * 送る MUST であり、未登録 Alias の参照ではセッションが閉じて購読もセッションと
+ * ともに終了するため、本ヘルパーでも呼び出し元でも送らない。
+ *
+ * @returns ok (継続可) / closed (セッション終了済み)
  */
 async function processIncomingRequestUpdateAuthorizationTokens(
   session: BidiSessionInternal,
   requestId: bigint,
   parameters: Array<{ type: number; value: Uint8Array }>,
-): Promise<"ok" | "unknown-alias" | "closed"> {
+): Promise<"ok" | "closed"> {
   let result: AuthTokenProcessResult;
   try {
-    // セッションを閉じる違反 (SessionError) だけを捕捉対象にする。
-    // 送信処理の例外までここで握ると §9.5 の「REQUEST_OK / REQUEST_ERROR を
-    // ちょうど 1 通返す MUST」が崩れる。
     result = processMessageAuthorizationTokens(session.receivedAuthTokens, parameters);
   } catch (err) {
+    // SessionError はそのコードのままセッションを閉じる。§8.9 が定める
+    // DUPLICATE_AUTH_TOKEN_ALIAS / AUTH_TOKEN_CACHE_OVERFLOW /
+    // KEY_VALUE_FORMATTING_ERROR がここに来る。
     const authError = toSessionCloseError(err);
-    if (authError !== null) {
-      session.closeWithError(authError);
+    if (authError === null) {
+      // SessionError 以外の例外はセッション終了を意味しない。再 throw しても
+      // 到達先の handleRequestStreamReadError は非 SessionError を無言で捨てる
+      // (bidi.ts の同関数を参照) ため、ここで当該メッセージの処理だけを打ち切る。
+      // processMessageAuthorizationTokens は SessionError しか投げないため、
+      // この分岐は防御的である。
+      return "closed";
     }
+    session.closeWithError(authError);
     return "closed";
   }
   if (result.status === "unknown-alias") {
-    await bidiSendRequestError(
-      session,
-      requestId,
-      RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
-      "unknown authorization token alias",
+    session.closeWithError(
+      new SessionError(
+        `unknown authorization token alias in REQUEST_UPDATE: streamRequestId=${requestId} alias=${result.tokenAlias}`,
+        SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
+      ),
     );
-    return "unknown-alias";
+    return "closed";
   }
   return "ok";
 }
@@ -1596,12 +1622,19 @@ async function bidiPreflightRequestUpdate(
     decoded.parameters,
   );
   if (authResult !== "ok") {
-    if (authResult === "unknown-alias") {
-      // 本経路 (ケース 2) の publish ロールでは moqt-js が publisher であり、
-      // §9.5.1 の MUST に従い PUBLISH_DONE (UPDATE_FAILED) で購読を終了する。
-      await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-    }
-    return "break";
+    // 未登録 Alias の参照は Session Termination になったため、ここに来るのは
+    // セッションを閉じた場合だけである。
+    //
+    // §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が負う MUST である。
+    // publish ロールでは moqt-js が publisher だが、セッションが閉じて購読も
+    // セッションとともに終了するため、購読単位の終了通知は送らない。subscribe
+    // ロールでは moqt-js が subscriber であり、そもそも publisher の MUST の
+    // 対象ではない。
+    //
+    // セッションを閉じた場合は読み取りループ自体を終える ("return")。同一チャンクに
+    // 後続メッセージが連結されていると、処理を続けた先で再びセッション終了を検出して
+    // error コールバックが二重に通知される。
+    return "return";
   }
 
   // draft-ietf-moq-transport-21 §9.2 / §12.5 / §9.5:
@@ -1736,8 +1769,13 @@ export async function bidiHandlePublishRequestUpdate(
   // 前に処理する。
   //
   // 本経路 (ケース 1) の moqt-js は受信 PUBLISH の subscriber であり、
-  // §3.1 / §9.5.1 の PUBLISH_DONE は publisher が送る。拒否は
-  // REQUEST_ERROR のみとし、購読の終了は publisher (ピア) に委ねる。
+  // REQUEST_UPDATE を送ったのは publisher であるピアである (§9.5「The sender of a
+  // request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE,
+  // SUBSCRIBE_TRACKS) can later send a REQUEST_UPDATE on the same bidi stream as
+  // the request to modify it.」の受信側)。§9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は
+  // publisher が負う MUST であり、本経路は元から PUBLISH_DONE を送らない。
+  // 未登録 Alias の参照は Session Termination になり、セッションが閉じるため
+  // 購読単位の終了通知も不要である。
   if (
     (await processIncomingRequestUpdateAuthorizationTokens(
       session,
