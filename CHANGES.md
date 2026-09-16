@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] Forward State と END_OF_GROUP で省略した Subgroup を RESET で閉じる
+  - draft-ietf-moq-transport-21 §11.3.2 の MUST (Subgroup の全 Object を渡し切る前にストリームを閉じる場合は reset) に従い、Forward State 0 による送信見送りを Subgroup ストリーム単位で記録し、Group 変更 / done() / END_OF_GROUP 送信 / セッション終了で FIN ではなく RESET で閉じる
+  - END_OF_GROUP status の送信でストリームを FIN し、同一 Group への後続 sendObject / sendDatagram を ProtocolViolationError で拒否する (別の Group への送信は妨げない)
+  - FIN で閉じた Subgroup だけを closedSubgroups に登録する (RESET した Subgroup を FIN 済みとして扱わない)
+  - @voluntas
 - [FIX] エンコーダが受信側で PROTOCOL_VIOLATION になるワイヤを生成しないようにする
   - Object Datagram: PROPERTIES ビットありで Properties Length 0、および不正な Type Flags (bit 4 / 0x2f 超 / STATUS と END_OF_GROUP の同時設定) を生成前に拒否する
   - Subgroup Header: 不正な Type Flags (SUBGROUP_ID_MODE 0b11 / bit 4 が 0 / 0x7f 超) を生成前に拒否する

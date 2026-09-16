@@ -402,6 +402,7 @@ test("publishSendObjectInternal: 不正 priority で既存ストリームを FIN
     groupId: 0n,
     writer: oldWritable.getWriter(),
     previousObjectId: 5n,
+    omittedObjects: false,
   });
 
   let thrown: Error | undefined;
@@ -1056,6 +1057,7 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
     groupId: 0n,
     writer: stuckWriter,
     previousObjectId: 0n,
+    omittedObjects: false,
   });
   session.closedSubgroups.add("1:0");
 
@@ -1080,6 +1082,7 @@ test("publishClosePublisherStream: 正常 close で登録を掃除する", async
     groupId: 0n,
     writer: writable.getWriter(),
     previousObjectId: 0n,
+    omittedObjects: false,
   });
   session.closedSubgroups.add("1:0");
 

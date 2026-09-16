@@ -228,6 +228,11 @@ export class PublisherImpl implements Publisher {
   // END_OF_TRACK 送信済みか。sendObject / sendDatagram で共有し、
   // 記録後の両 API 呼び出しを拒否する。
   private endOfTrackSent = false;
+  // draft-ietf-moq-transport-21 §11.1.2 / §11.3.2:
+  // END_OF_GROUP status を送信した Group。同一 Group への後続送信は拒否する
+  // (Group の終端を宣言済みのため)。購読終了で null に戻す。
+  // 公開 API の groupId は number (安全整数) のため number で保持する。
+  private endOfGroupSentGroupId: number | null = null;
 
   // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
   // この Publisher が送信した最大 Location。
@@ -251,6 +256,17 @@ export class PublisherImpl implements Publisher {
   // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
   goawayCallback?: ((newSessionUri: string) => void) | undefined;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
+  /**
+   * Forward State 0 で Object の送信を見送ったときに呼ばれる
+   *
+   * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+   * "Omitting a Subgroup Object due to the subscriber's Forward State" は
+   * ストリームを閉じる際に reset を MUST とする対象である。見送りの事実を
+   * Session 側のストリーム状態へ記録するために使う。
+   * `guardSend` は `sendDatagram` とも共有しており Datagram の見送りは Subgroup の
+   * 省略ではないため、`guardSend` ではなく `sendObject` の skip 分岐で呼ぶ。
+   */
+  onSendObjectSkipped?: () => void;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
 
@@ -423,7 +439,10 @@ export class PublisherImpl implements Publisher {
    * @returns 送信してよければ null、Forward State = 0 で送信しない場合は "skip"、
    *          違反の場合は ProtocolViolationError (error コールバック通知済み)
    */
-  private guardSend(kind: "object" | "datagram"): ProtocolViolationError | "skip" | null {
+  private guardSend(
+    kind: "object" | "datagram",
+    groupId: number,
+  ): ProtocolViolationError | "skip" | null {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
@@ -437,13 +456,26 @@ export class PublisherImpl implements Publisher {
       this.handleError(violation);
       return violation;
     }
+    // draft-ietf-moq-transport-21 §11.1.2 (Object Status):
+    // END_OF_GROUP は Group の最終 Object を宣言するため、同じ Group へ後続の
+    // Object / Datagram を送ることはできない (別の Group への送信は妨げない)。
+    if (this.endOfGroupSentGroupId !== null && groupId === this.endOfGroupSentGroupId) {
+      const violation = new ProtocolViolationError(
+        `cannot send ${kind} after END_OF_GROUP was sent for group ${groupId}`,
+      );
+      this.handleError(violation);
+      return violation;
+    }
     return null;
   }
 
   sendObject(params: SendObjectParams): Promise<void> {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
-    const guard = this.guardSend("object");
+    const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
+      // draft-ietf-moq-transport-21 §11.3.2: Forward State 0 で見送った Object が
+      // ある Subgroup は、閉じる時に FIN ではなく RESET が必要になる。
+      this.onSendObjectSkipped?.();
       return Promise.resolve();
     }
     if (guard !== null) {
@@ -471,10 +503,17 @@ export class PublisherImpl implements Publisher {
     this.recordLargestLocation(params.groupId, params.objectId);
 
     const isEndOfTrack = (params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_TRACK;
+    // draft-ietf-moq-transport-21 §11.1.2 (Object Status):
+    // END_OF_GROUP は Group の最終 Object を宣言するため、同一 Group への後続送信は
+    // guardSend で拒否する。受理した Group ID はここで記録する。
+    const isEndOfGroup = (params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP;
     if (!this.onSendObject) {
-      // 委譲先がなくても END_OF_TRACK の意味論 (以降の object は存在しない) は保つ
+      // 委譲先がなくても END_OF_TRACK / END_OF_GROUP の意味論は保つ
       if (isEndOfTrack) {
         this.endOfTrackSent = true;
+      }
+      if (isEndOfGroup) {
+        this.endOfGroupSentGroupId = params.groupId;
       }
       return Promise.resolve();
     }
@@ -503,6 +542,26 @@ export class PublisherImpl implements Publisher {
       );
       return result;
     }
+
+    // END_OF_GROUP も受け付け時に記録する (未 await の連続呼び出しを塞ぐ)。
+    // 委譲先の同期 throw・非同期 reject 時は記録を取り消して再送できる。
+    if (isEndOfGroup) {
+      this.endOfGroupSentGroupId = params.groupId;
+      let result: Promise<void>;
+      try {
+        result = this.onSendObject(params);
+      } catch (error) {
+        this.endOfGroupSentGroupId = null;
+        throw error;
+      }
+      result.then(
+        () => {},
+        () => {
+          this.endOfGroupSentGroupId = null;
+        },
+      );
+      return result;
+    }
     return this.onSendObject(params);
   }
 
@@ -515,7 +574,7 @@ export class PublisherImpl implements Publisher {
    * 送信しない (§3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void {
-    const guard = this.guardSend("datagram");
+    const guard = this.guardSend("datagram", params.groupId);
     if (guard === "skip") {
       return;
     }
@@ -623,5 +682,8 @@ export class PublisherImpl implements Publisher {
    */
   markClosed(): void {
     this.publisherState = "closed";
+    // 購読終了 (done / peer cancel / セッション終了) では END_OF_GROUP 済みの
+    // Group 記録も破棄する。
+    this.endOfGroupSentGroupId = null;
   }
 }
