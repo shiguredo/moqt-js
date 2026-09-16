@@ -94,6 +94,10 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),
@@ -170,6 +174,10 @@ async function readPublishOkWithParameters(
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),

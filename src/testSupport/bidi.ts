@@ -63,6 +63,10 @@ export function createBidiSession(): {
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
@@ -188,6 +192,10 @@ export function createPublishReadTestContext(
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     // draft-ietf-moq-transport-21 §8.9 / §9.1.3:
     // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止) で、
     // Alias を使うテストは authTokenCacheSize を指定する。
@@ -326,6 +334,10 @@ export function createPublishOkValidationContext(
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
     publisherSendQueues: new Map(),
@@ -400,6 +412,10 @@ export function createOkResponseReadTestContext(): {
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),
@@ -487,6 +503,10 @@ export function createCancelObservableResponseContext(): {
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     publisherStreams: new Map(),

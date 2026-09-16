@@ -11,6 +11,12 @@
 
 ## develop
 
+- [FIX] MAX_REQUEST_UPDATES の受信側強制を実装する
+  - draft-ietf-moq-transport-21 §9.1.7 の MUST に従い、広告した上限を超える未応答 REQUEST_UPDATE を受信したら TOO_MANY_REQUEST_UPDATES でセッションを閉じる
+  - 未応答数は request stream 単位で数え、1 回の read で得たメッセージ列を処理し終えた時点で減算する (1 通ごとに減算すると pipelining を検出できない)
+  - 未広告 (0) は無制限として扱う。`SessionImpl.localMaxRequestUpdates` で広告値を保持する
+  - @voluntas
+
 - [FIX] FETCH の End of Range から Object Payload Length を削除する
   - draft-ietf-moq-transport-21 §11.4.1.2 の End of Range indicator は Serialization Flags + Group ID + Object ID のみで、Object Payload Length を持たない。余分な varint を読み書きしていたため、EOR の直後に通常 Object が続くストリームでフィールド境界がずれていた
   - @voluntas
