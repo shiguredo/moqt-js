@@ -95,10 +95,11 @@ import {
   toProtocolViolationSessionError,
   toSessionCloseError,
 } from "./session/errors";
-import type { SessionInternal } from "./session/types";
+import type { PublisherStreamState, SessionInternal } from "./session/types";
 import {
   publishSendObject,
   publishClosePublisherStream,
+  publishCloseSubgroupStream,
   publishSendDatagram,
   publishSendPublishDone,
 } from "./session/publish";
@@ -1621,14 +1622,7 @@ export class SessionImpl implements Session {
   // Publisher ごとのストリーム状態
   // draft-ietf-moq-transport-21 Section 2.2:
   // "Objects in a subgroup ... are sent on a single stream whenever possible."
-  private publisherStreams = new Map<
-    bigint,
-    {
-      groupId: bigint;
-      writer: WritableStreamDefaultWriter<Uint8Array>;
-      previousObjectId: bigint;
-    }
-  >();
+  private publisherStreams = new Map<bigint, PublisherStreamState>();
 
   // Publisher ごとの送信キュー
   // sendObject は async だが fire-and-forget で呼ばれるため、
@@ -2189,6 +2183,16 @@ export class SessionImpl implements Session {
 
     // 送信コールバックを設定
     impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
+    // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+    // Forward State 0 で見送った Object がある Subgroup は、閉じる時に reset を MUST とする。
+    // 見送りの事実をストリーム状態へ記録する (閉じる時点では最後に送信した Object より後の
+    // 見送りを検出できないため、見送りの時点で記録する)。
+    impl.onSendObjectSkipped = () => {
+      const streamState = this.publisherStreams.get(impl.getTrackAlias());
+      if (streamState) {
+        streamState.omittedObjects = true;
+      }
+    };
 
     // データグラム送信コールバックを設定
     impl.onSendDatagram = (params: SendDatagramParams) => {
@@ -3221,15 +3225,6 @@ export class SessionImpl implements Session {
         // ストリームが既に閉じている / abort されている場合は無視
       }
     };
-    const closeWriterSafely = async (
-      writer: WritableStreamDefaultWriter<Uint8Array>,
-    ): Promise<void> => {
-      try {
-        await writer.close();
-      } catch {
-        // ストリームが既に閉じている / abort されている場合は無視
-      }
-    };
     const cancelReaderSafely = async (
       reader: ReadableStreamDefaultReader<Uint8Array>,
     ): Promise<void> => {
@@ -3280,8 +3275,14 @@ export class SessionImpl implements Session {
     this.requestStreams.clear();
 
     // Publisher 用の単方向ストリーム (Subgroup ストリーム)
-    for (const entry of this.publisherStreams.values()) {
-      void closeWriterSafely(entry.writer);
+    // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+    // 省略した Object がある Subgroup は FIN ではなく RESET で閉じる必要があるため、
+    // 判定を publishCloseSubgroupStream に任せる。終了処理を遅延させないため完了は待たない
+    // (判定結果はセッション終了時には使わない)。
+    // Map の反復中に publishCloseSubgroupStream が現在のエントリを削除するが、
+    // Map の反復は削除されたエントリを再訪しないため安全である。
+    for (const trackAlias of this.publisherStreams.keys()) {
+      void publishCloseSubgroupStream(this as unknown as SessionInternal, trackAlias);
     }
     this.publisherStreams.clear();
 

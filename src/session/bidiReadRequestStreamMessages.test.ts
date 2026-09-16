@@ -1044,6 +1044,7 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリ�
     groupId: 0n,
     writer: dataWritable.getWriter(),
     previousObjectId: 0n,
+    omittedObjects: false,
   });
 
   const readPromise = bidiReadRequestStreamMessages(
