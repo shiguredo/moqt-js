@@ -1,7 +1,7 @@
 # FETCH の GROUP_ORDER が復号に反映されない
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-16
 - Branch: feature/fix-fetch-group-order-decode
 - Polished: 2026-09-15
 
@@ -40,3 +40,14 @@ draft-ietf-moq-transport-21 §11.4.1.1:
 - draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter)
 - draft-ietf-moq-transport-21 §11.4.1.1 (Flags)
 - draft-ietf-moq-transport-21 §3.3.1 (Location Filters)
+
+## 解決方法
+
+- `FetcherImpl` に `setGroupOrder(groupOrder: GroupOrder)` を追加し、要求時の Group Order を保持できるようにした (`src/fetcher.ts`)。既定値は `GroupOrder.ASCENDING` のまま
+- `Session.fetch()` が `new FetcherImpl(...)` の直後 (GOAWAY コールバックの設定と同じ位置) に `options.groupOrder` を `GroupOrder` に解決して設定するようにした (`src/session.ts`)。`"Descending"` 以外は Ascending になり、§9.20.9 の "If omitted from FETCH, the receiver uses Ascending (0x1)" と一致する。`buildFetchParameters` が GROUP_ORDER を送るかどうかとは独立に、送信した値と同じ規則で復号する
+- 復号は既存の `SessionImpl.processFetchObjects` → `fetcher.getGroupOrder()` → `incomingProcessFetchObjects` → `decodeFetchObjectFields` の経路がそのまま使われ、`src/session/bidi.ts` の `handleOk` は変更していない。`setFetchOkInfo` の第 4 引数も設計方針どおり未使用のまま残した
+- Session 経由の配線テストを 2 件追加した (`src/session.test.ts`)。`session.fetch(..., { groupOrder: "Descending" })` に対して FETCH_HEADER と Group ID が減少する 2 件の Object を流し、2 件目の Group ID が Descending の式 (`10 - (2 + 1) = 7`) で復号されることを検証する。`groupOrder` 省略時は同一のワイヤが Ascending の式 (`10 + 2 + 1 = 13`) で復号される。どちらも送信した FETCH の GROUP_ORDER (0x22) の値 (Descending は 0x02、省略時は未送信) をあわせて検証し、ワイヤと復号規則が食い違わないことを固定する
+- ワイヤの Group ID Delta を 0 以外にしたため、符号の反転だけでなく `delta + 1` の計算そのものが誤った場合も検出できる。配線を外すと Descending のテストが Ascending の式の値 (13) になって失敗することを実際に確認した
+- レビューで判明した GROUP_ORDER の節番号の誤記 (`FetchOptions.groupOrder` / `buildFetchParameters` / `buildFetchParameters` のテストコメントが §9.20.19 = FORWARD Parameter を指していた) を §9.20.9 に修正した (`src/session.ts` / `src/session/params.ts` / `src/session/params.test.ts`)。同じ `buildFetchParameters` にある SUBSCRIBER_PRIORITY の節番号 (§9.20.9 → §9.20.8) と引用の切り詰めは `issues/0619-doc-comment-section-references.md` の対象のため変更していない
+- `CHANGES.md` の `## develop` に `[FIX]` のエントリを 1 件追記した
+- `vp check` / `tsc --noEmit` / `vp test run` (99 ファイル / 2202 件) / `vp run build` が通る
