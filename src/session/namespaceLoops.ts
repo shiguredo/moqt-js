@@ -448,8 +448,9 @@ async function namespaceHandleNamespaceStreamDone(
  * REQUEST_OK / REQUEST_ERROR / GOAWAY のいずれかのみを許可する。想定外メッセージは
  * PROTOCOL_VIOLATION の SessionError を返す。呼び出し側は返されたエラーで
  * reject してからセッションを閉じ、return する。
- * PUBLISH_NAMESPACE (§9.14) には先頭メッセージ MUST が draft に無いため対象外
- * (publication ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
+ * PUBLISH_NAMESPACE (§9.14) には応答側の先頭メッセージ MUST が draft に無いため対象外
+ * (要求側の先頭メッセージは Table 5 の "First" と §6.3 が MUST で定める。publication
+ *  ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
  *
  * 仕様衝突の注記: §9.15 / §9.18 は「REQUEST_OK / REQUEST_ERROR 以外の先頭メッセージは
  * PROTOCOL_VIOLATION」と MUST する一方、§9.2 は「GOAWAY をリクエストストリームに送って
@@ -869,7 +870,7 @@ interface NamespaceLoopHandlers<S> {
    * PROTOCOL_VIOLATION で誤って閉じるのを防ぐ。
    */
   skipMessagesWhenInactive: boolean;
-  /** 先頭メッセージガード (publication は §9.14 に MUST が無いため未指定) */
+  /** 先頭メッセージガード (publication は §9.14 に応答側の先頭メッセージ MUST が無いため未指定) */
   validateFirstMessage?(ctx: NamespaceLoopContext<S>, messageType: number): SessionError | null;
   /** ピアの FIN 検出時の後始末 */
   onStreamDone(ctx: NamespaceLoopContext<S>): Promise<void>;
@@ -1421,7 +1422,7 @@ function createPublicationStreamHandlers(
     closeTarget: (target) => {
       target.state = "closed";
     },
-    // PUBLISH_NAMESPACE は §9.14 に先頭メッセージ MUST が無いため先頭メッセージ
+    // PUBLISH_NAMESPACE は §9.14 に応答側の先頭メッセージ MUST が無いため先頭メッセージ
     // ガードを注入しない (unknown message type として default で閉じる)。
     skipMessagesWhenInactive: false,
     onStreamDone: async (ctx) => {

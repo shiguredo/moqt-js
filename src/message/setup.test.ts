@@ -208,7 +208,7 @@ test("Setup: AUTHORIZATION_TOKEN (REGISTER) 付きで roundtrip", () => {
   }
 });
 
-// draft-ietf-moq-transport-21 Section 9.20.3:
+// draft-ietf-moq-transport-21 §9.1.4 (AUTHORIZATION TOKEN):
 // "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
 //  it MUST close the session with a PROTOCOL_VIOLATION."
 test("Setup: SETUP で DELETE の Authorization Token を指定すると throw", () => {
