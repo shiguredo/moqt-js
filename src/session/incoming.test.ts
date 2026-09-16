@@ -7,7 +7,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { MessageType } from "../message";
+import { MessageType, encodeTrackNamespace, createTrackNamespace } from "../message";
 import { decodeRequestErrorPayload } from "../message/session";
 import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { concatUint8Arrays } from "../testSupport/helpers";
@@ -261,6 +261,139 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
   assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
   // 受信方向がキャンセルされる (STOP_SENDING 相当)
   assert.equal(cancelReason, "request rejected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5
+ * (Session-Level Tracks and Namespaces):
+ * "An endpoint that receives a request for an unrecognized session-level track or
+ *  namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
+ *  rather than passing it to the Application."
+ * 未対応リクエストでも先頭の Track Namespace を読み、"." 単体または ".session" なら
+ * DOES_NOT_EXIST で拒否する (NOT_SUPPORTED ではない)。
+ */
+test("incomingHandleFirstBidiMessage: 未対応リクエストの .session namespace は DOES_NOT_EXIST", async () => {
+  const events: string[] = [];
+  const written: Uint8Array[] = [];
+
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      events.push("write");
+      written.push(chunk);
+    },
+    close() {
+      events.push("close");
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({
+    cancel() {
+      events.push("cancel");
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  const ctx = createUnsupportedRequestTestContext();
+  const payload = concatUint8Arrays([
+    new Uint8Array([0x01]),
+    encodeTrackNamespace(createTrackNamespace([".session"])),
+  ]);
+  const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
+
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
+
+  assert.isTrue(result);
+  assert.isUndefined(ctx.closed.error);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.DOES_NOT_EXIST));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §2.4.2:
+ * "." 単体の namespace も同じく DOES_NOT_EXIST で拒否する。
+ */
+test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオド namespace は DOES_NOT_EXIST", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  const ctx = createUnsupportedRequestTestContext();
+  const payload = concatUint8Arrays([
+    new Uint8Array([0x01]),
+    encodeTrackNamespace(createTrackNamespace(["."])),
+  ]);
+  const firstMsg: ControlMessage = { type: MessageType.TRACK_STATUS, payload };
+
+  await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.DOES_NOT_EXIST));
+});
+
+/**
+ * 予約名前空間でない未対応リクエストは従来どおり NOT_SUPPORTED を返す
+ * (Namespace が読めても予約でなければ SHOULD の応答を変えない)。
+ */
+test("incomingHandleFirstBidiMessage: 未対応リクエストの通常 namespace は NOT_SUPPORTED", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  const ctx = createUnsupportedRequestTestContext();
+  const payload = concatUint8Arrays([
+    new Uint8Array([0x01]),
+    encodeTrackNamespace(createTrackNamespace(["live"])),
+  ]);
+  const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
+
+  await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+});
+
+/**
+ * Track Namespace をデコードできない未対応リクエスト (Request ID のみ) は、
+ * 予約名前空間の判定を行わず NOT_SUPPORTED を返す。
+ * 未対応メッセージの本体が本実装の想定と異なっていても、判定の例外で
+ * セッションを閉じたり応答を変えたりしない。
+ */
+test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リクエストは NOT_SUPPORTED", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  const ctx = createUnsupportedRequestTestContext();
+  // Request ID のみで Track Namespace が無い (切詰め)
+  const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload: new Uint8Array([0x01]) };
+
+  await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
+
+  assert.isUndefined(ctx.closed.error);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
 });
 
 /**

@@ -1689,6 +1689,15 @@ async function bidiPreflightRequestUpdate(
   // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
   // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
   // Section 9.5 の 2 ケースに該当しない。
+  //
+  // 例外: 同一 request stream で GOAWAY を受信済みの場合は無視して読み取りを
+  // 継続する (意図的な逸脱)。§9.5 の MUST だけを見れば閉じるべきだが、
+  // §6.4.2.2 (Graceful Request Stream Closure) は GOAWAY 後に responder が
+  // 応答と後続メッセージを送り終えて FIN することを前提としており、GOAWAY 受信で
+  // セッションを閉じると「応答を返してから FIN する」余地が無くなる。
+  // 実装間の相互運用では GOAWAY 後の REQUEST_UPDATE を無視する方が安全なため、
+  // 逸脱を維持する。閉じる側へ寄せる判断に変える場合は、下の条件から
+  // `!session.goawayReceivedOnRequestStreams.has(requestId)` を外す。
   if (role === "subscribe" && !session.goawayReceivedOnRequestStreams.has(requestId)) {
     session.closeWithError(
       new SessionError(
@@ -4004,6 +4013,31 @@ export function bidiHandleRequestUpdateOk(
   streamRequestId: bigint,
 ): void {
   const msg = decodeRequestOkPayload(payload);
+
+  // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
+  // "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in
+  //  response to a SUBSCRIBE.  A subscriber MUST send exactly one PUBLISH_OK
+  //  ... in response to a PUBLISH.  The peer SHOULD close the session with a
+  //  protocol error if it receives more than one."
+  // 確立後の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への応答 (§9.5)
+  // でなければならない。未応答の REQUEST_UPDATE が無いのに REQUEST_OK を受信した
+  // 場合は 2 通目以降の応答であるため、この SHOULD に従い PROTOCOL_VIOLATION で
+  // セッションを閉じる。FETCH も §3.2.1 が "exactly one FETCH_OK or
+  // REQUEST_ERROR" と定めるため同様に扱う (FETCH に REQUEST_UPDATE は無い)。
+  //
+  // §9.5 が認める coalescing は「複数の失敗した更新を 1 通の REQUEST_ERROR に
+  // まとめる」ものであり、REQUEST_OK の重複受信を許すものではない。また
+  // resolvePendingRequestUpdate は pending が無い場合に undefined を返すだけなので、
+  // この判定を先に行わないと 2 通目以降の応答を黙殺してしまう。
+  if (!hasPendingRequestUpdate(session, streamRequestId)) {
+    session.closeWithError(
+      new SessionError(
+        "unexpected REQUEST_OK on established request stream: no outstanding REQUEST_UPDATE",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return;
+  }
 
   // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
   // 違反時は当該購読の保留分全件を違反 SessionError 自体で reject してから閉じる

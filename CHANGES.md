@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] 受信応答の判定を仕様に合わせる
+  - draft-ietf-moq-transport-21 §3.1 / §3.2.1 の "exactly one" に従い、確立後の REQUEST_OK を未応答の REQUEST_UPDATE が無いまま受信したら PROTOCOL_VIOLATION でセッションを閉じる (§9.5 の coalescing は失敗した更新を 1 通の REQUEST_ERROR にまとめる規定であり、REQUEST_OK の重複受信を許さない)
+  - draft-ietf-moq-transport-21 §6.5 と §2.4.2 に従い、`.` と `.session` を参照する未対応リクエストを NOT_SUPPORTED ではなく DOES_NOT_EXIST で拒否する (受信 PUBLISH 経路と対称にする)
+  - TRACK_STATUS_OK の EXPIRES は §9.20.17 の出現先一覧を根拠に拒否を維持し、GOAWAY 後の subscribe ロールの REQUEST_UPDATE 無視は §6.4.2.2 の FIN 規則との衝突を理由に意図的な逸脱としてコメントに明記する
+  - @voluntas
 - [FIX] Immutable Properties 配下の Property を検索する
   - draft-ietf-moq-transport-21 §10.7 の MUST (mutable な Property 列と Immutable Properties の内容の双方を検索する) に従い、Object の delivery timeout を読む経路も 0x0B の内側を 1 段だけ検索する
   - mutable 側に同じ型があればそちらを優先する
