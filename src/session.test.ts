@@ -6580,6 +6580,79 @@ function createIncomingSetupSession(
 }
 
 /**
+ * 受信 SETUP の違反検証用セッションを作る
+ *
+ * transport.close の呼び出し (回数と closeCode) とアプリの error コールバックを記録する。
+ * `controlBytes` は制御ストリームの生バイト列 (ストリームタイプ varint + フレーミング済み
+ * メッセージ) で、SETUP のデコード失敗や先頭メッセージ違反も再現できる。
+ */
+function createSetupViolationSession(controlBytes: Uint8Array): {
+  session: SessionImpl;
+  closeCalls: { closeCode?: number; reason?: string }[];
+  notified: Error[];
+} {
+  const clientWritable = new WritableStream<Uint8Array>({});
+  const closeCalls: { closeCode?: number; reason?: string }[] = [];
+  const notified: Error[] = [];
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(controlBytes);
+    },
+  });
+  const incomingUnidirectionalStreams = new ReadableStream<ReadableStream<Uint8Array>>({
+    start(controller) {
+      controller.enqueue(serverControlStream);
+    },
+  });
+  const incomingBidirectionalStreams = new ReadableStream<WebTransportBidirectionalStream>({
+    start() {},
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientWritable,
+    incomingUnidirectionalStreams,
+    incomingBidirectionalStreams,
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+    // W3C WebTransport の close() は単一の WebTransportCloseInfo を取る
+    close: async (info?: WebTransportCloseInfo) => {
+      closeCalls.push({ closeCode: info?.closeCode, reason: info?.reason });
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {
+    error: (error: Error) => {
+      notified.push(error);
+    },
+  });
+  return { session, closeCalls, notified };
+}
+
+/**
+ * closeWithError からの close() 完了を待つ
+ *
+ * closeWithError は close() を fire-and-forget で呼ぶため、initialize() の reject を
+ * await しただけでは transport.close が未実行のことがある。
+ */
+async function waitForTransportClose(): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+}
+
+/**
+ * 制御ストリームの生バイト列 (ストリームタイプ varint + フレーミング済みメッセージ) を組み立てる
+ */
+function buildControlStreamBytes(
+  body: Uint8Array,
+  messageType: number = MessageType.SETUP,
+): Uint8Array {
+  const writer = new ControlStreamWriter();
+  return concatUint8Arrays([encodeVarint(MessageType.SETUP), writer.encode(messageType, body)]);
+}
+
+/**
  * SETUP の AUTHORIZATION TOKEN Setup Option を組み立てる
  *
  * draft-ietf-moq-transport-21 §9.1.4: オプション値は §8.9 の Token 構造。
@@ -6613,6 +6686,135 @@ async function assertInitializeFailsWith(
   assert.instanceOf(thrown, SessionError);
   assert.equal((thrown as SessionError).code, expectedCode);
 }
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.1 (AUTHORITY):
+ * "When an AUTHORITY option is received from a server, or when an AUTHORITY option
+ *  is received while WebTransport is used, ... the session MUST be closed with
+ *  INVALID_AUTHORITY."
+ * initialize() の失敗だけでなく、トランスポートも閉じてピアへコードを伝えることを検証する。
+ */
+test("initialize: 受信 SETUP の AUTHORITY で INVALID_AUTHORITY で閉じる", async () => {
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(
+      encodeSetupPayload({
+        type: MessageType.SETUP,
+        parameters: [
+          { type: SetupOptionType.AUTHORITY, value: new TextEncoder().encode("example.com") },
+        ],
+      }),
+    ),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.INVALID_AUTHORITY);
+  await waitForTransportClose();
+  // transport.close は 1 回だけ、同じコードで呼ばれる
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.INVALID_AUTHORITY);
+  // アプリの error 通知も 1 回だけ
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.INVALID_AUTHORITY);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.2 (PATH):
+ * "When a PATH setup option is received from a server, or when a PATH parameter is
+ *  received while WebTransport is used, ... the session MUST be closed with INVALID_PATH."
+ */
+test("initialize: 受信 SETUP の PATH で INVALID_PATH で閉じる", async () => {
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(
+      encodeSetupPayload({
+        type: MessageType.SETUP,
+        parameters: [{ type: SetupOptionType.PATH, value: new TextEncoder().encode("/moqt") }],
+      }),
+    ),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.INVALID_PATH);
+  await waitForTransportClose();
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.INVALID_PATH);
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.INVALID_PATH);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9 (Control Messages):
+ * メッセージ Length と Body 長の不一致は PROTOCOL_VIOLATION でセッションを閉じる MUST。
+ * KVP の宣言 Length が残りデータを超える SETUP でも、initialize() の失敗と同時に
+ * セッションが閉じられることを検証する。
+ */
+test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で閉じる", async () => {
+  // パラメータ数 1、Type 0x05、宣言 Length 10 に対して値が 2 バイトしかない
+  const malformedBody = new Uint8Array([0x01, 0x05, 0x00, 0x0a, 0x01, 0x02]);
+  const ctx = createSetupViolationSession(buildControlStreamBytes(malformedBody));
+
+  // initialize() は失敗を reject で伝える契約のため、正規化前の例外がそのまま伝播する
+  let thrown: unknown;
+  try {
+    await ctx.session.initialize({ maxAuthTokenCacheSize: 1024 });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.isDefined(thrown);
+  // close() は closeWithError から fire-and-forget で呼ばれるため、完了を待つ
+  await new Promise((resolve) => {
+    setTimeout(resolve, 20);
+  });
+  // セッションは PROTOCOL_VIOLATION で閉じられ、ピアにも同じコードが伝わる
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.notified.length, 1);
+  assert.instanceOf(ctx.notified[0], SessionError);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1 (SETUP):
+ * 制御ストリームの先頭メッセージが SETUP でない場合は PROTOCOL_VIOLATION で閉じる。
+ */
+test("initialize: 先頭メッセージが SETUP でない場合も PROTOCOL_VIOLATION で閉じる", async () => {
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(new Uint8Array(0), MessageType.GOAWAY),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await waitForTransportClose();
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * 既存の AUTHORIZATION TOKEN 経路 (DUPLICATE_AUTH_TOKEN_ALIAS) でも、
+ * reject する例外の code と
+ * transport.close / error 通知が 1 回ずつであることが変わらないことを検証する。
+ */
+test("initialize: 同一 Alias 再 REGISTER でトランスポートも 1 回だけ閉じる", async () => {
+  const registerToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 5n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array([1]),
+  };
+  const ctx = createSetupViolationSession(
+    buildControlStreamBytes(
+      encodeSetupPayload({
+        type: MessageType.SETUP,
+        parameters: [authTokenSetupOption(registerToken), authTokenSetupOption(registerToken)],
+      }),
+    ),
+  );
+
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+  await waitForTransportClose();
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+  assert.equal(ctx.notified.length, 1);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
+});
 
 /**
  * draft-ietf-moq-transport-21 §9.1.4 / §8.9:

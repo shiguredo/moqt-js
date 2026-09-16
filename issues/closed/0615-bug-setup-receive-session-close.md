@@ -1,7 +1,7 @@
 # SETUP 受信時にセッションを閉じない経路がある
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-setup-receive-close
 - Polished: 2026-09-15
 
@@ -60,3 +60,25 @@ draft-ietf-moq-transport-21 §9.1.2:
 - draft-ietf-moq-transport-21 §9.1.2 (PATH)
 - draft-ietf-moq-transport-21 §6.6 (Termination)
 - `issues/closed/0120-bug-setup-authority-path-not-restricted.md` (AUTHORITY / PATH の受信検証を追加した先行 issue。呼び出し元が閉じる前提が誤っていた)
+
+## 解決方法
+
+`src/session.ts` の `initialize()` から「先頭メッセージ種別の検証、SETUP のデコードと検証、AUTHORIZATION TOKEN の処理」を
+`decodeAndValidateSetupClosingOnViolation` として切り出し、その中で違反を検出したら `toSessionCloseError` で正規化した
+`SessionError` を `closeWithError` に渡してから元の例外を再送出するようにした。
+
+- AUTHORITY / PATH の受信は INVALID_AUTHORITY / INVALID_PATH、SETUP のデコード失敗 (ProtocolViolationError / IncompleteDataError /
+  KEY_VALUE_FORMATTING_ERROR) と制御ストリームの先頭が SETUP でない場合は PROTOCOL_VIOLATION で閉じる
+- 制御受信ストリームが確定する前の終了 (`Connection closed before receiving control stream` /
+  `Connection closed before SETUP` の NO_ERROR) はプロトコル違反ではないため、`readSetupMessages` の呼び出しは包まず既存挙動を維持する
+- 例外は元のものを再送出する (`initialize()` は失敗を reject で伝える契約であり、握ると初期化に失敗したセッションを成功として返す)。
+  正規化できない例外は閉じずにそのまま伝播させる
+- `processSetupAuthorizationTokens` を囲む個別 try/catch は削除し、同じ変換規則に統合した。`SessionError` はコードを保ったまま
+  1 回だけ `closeWithError` に渡り、`callbacks.error` の通知も 1 回のままである
+
+テストは `src/session.test.ts` の `createSetupViolationSession` (transport.close と error コールバックを記録する) を使い、
+AUTHORITY / PATH / SETUP デコード失敗 / 先頭非 SETUP / 既存の重複 Alias の 5 経路で `transport.close` の呼び出し回数と
+`closeCode`、`callbacks.error` の通知回数を検証する。`closeWithError` は `close()` を fire-and-forget で呼ぶため、
+待ち合わせ用の `waitForTransportClose` を挟んでいる。
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2243 passed) の通過で確認した。
