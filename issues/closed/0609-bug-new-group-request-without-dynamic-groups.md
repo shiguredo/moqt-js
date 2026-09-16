@@ -1,7 +1,7 @@
 # REQUEST_UPDATE の NEW_GROUP_REQUEST が DYNAMIC_GROUPS を検査しない
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-new-group-request-dynamic-groups
 - Polished: 2026-09-15
 
@@ -55,3 +55,25 @@ draft-ietf-moq-transport-21 §9.20.20:
 - draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter)
 - draft-ietf-moq-transport-21 §10.6 (DYNAMIC GROUPS)
 - draft-ietf-moq-transport-21 §10.7 (Immutable Properties)
+
+## 解決方法
+
+`src/session/bidi.ts` の `bidiSendRequestUpdate` で、NEW_GROUP_REQUEST の組み立てブロックの直後 (AUTHORIZATION_TOKEN を積む前) に
+draft-ietf-moq-transport-21 §9.20.20 の MUST NOT の検査を追加した。
+
+- 型付き (`options.newGroupRequest !== undefined`) と raw (`options.parameters` 内の 0x32) の合算で 1 件以上ある場合に
+  `supportsDynamicGroups(subscriber.trackProperties)` を検査し、偽なら汎用 `Error`
+  (`cannot send NEW_GROUP_REQUEST in REQUEST_UPDATE: track did not include DYNAMIC_GROUPS property with value 1`) を throw する
+- 値には依らず送信自体が禁止されるため、値 0 の NEW_GROUP_REQUEST も拒否する
+- DYNAMIC_GROUPS は Immutable Properties (0x0B) 配下にも置けるため、§10.7 の二重検索を行う `supportsDynamicGroups` をそのまま使う
+- SUBSCRIBE 経路 (`buildSubscribeParameters`) は §9.20.20 が foreknowledge なしの送信を認めるため変更していない
+- 既存の重複検査と `validateNonNegative` はそのまま残し、新しい検査はその後に走るため既存のエラー契約は変わらない
+- `src/createMediaSubscriber.ts` の `requestKeyframe` の検査は残し、MUST の本体は下位 1 箇所であることをコメントで明示した。
+  あわせて §9.20.20 の引用が旧ドラフトの "PUBLISH_OK or REQUEST_UPDATE" になっていたため draft-21 の文言に直した
+
+テストは `src/session/bidiSendRequestUpdateNewGroupRequest.test.ts` に 6 本追加した (DYNAMIC_GROUPS なし / 値 0 / raw の拒否、
+mutable と Immutable Properties 配下の DYNAMIC_GROUPS=1 での送信、0x32 を含まない更新の送信)。
+DYNAMIC_GROUPS を設定していなかった既存の 2 本 (`bidiResponseScopeViolation.test.ts` の newGroupRequest エンコード検証) は、
+検査の対象外だったエンコード検証が目的のため DYNAMIC_GROUPS=1 を設定する形に更新した。
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2256 passed) の通過で確認した。

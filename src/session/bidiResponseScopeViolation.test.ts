@@ -8,6 +8,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
+import { TrackPropertyId } from "../properties";
 import { type MoqtObject } from "../dataStream";
 import { ObjectStatus } from "../message";
 import {
@@ -472,6 +473,8 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
 test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  // §9.20.20 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
     newGroupRequest: 42n,
@@ -496,6 +499,8 @@ test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエ�
 test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
+  // §9.20.20 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
     newGroupRequest: 0n,
