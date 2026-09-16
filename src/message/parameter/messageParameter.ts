@@ -411,6 +411,14 @@ export function decodeMessageParameter(
  * パラメータは Type の昇順でソートされる。
  */
 export function encodeParameters(params: Parameter[]): Uint8Array {
+  // draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+  // "Senders MUST NOT repeat the same Parameter Type in a message unless the
+  //  parameter definition explicitly allows multiple instances of that type to be
+  //  sent in a single message."
+  // 送信側の違反はローカル API の誤用であるため、受信側の ProtocolViolationError とは
+  // 区別して汎用 Error で通知する。
+  assertNoDuplicateMessageParameterTypes(params);
+
   // Type 昇順でソート
   const sorted = [...params].sort((a, b) => a.type - b.type);
 
@@ -453,13 +461,8 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
     // draft-ietf-moq-transport-21 Section 9.20:
     // "Receivers SHOULD check that there are no unexpected duplicate parameters
     //  and close the session with PROTOCOL_VIOLATION if found."
-    // AUTHORIZATION_TOKEN と Range Filter (0x25–0x29) は複数回出現が許可されているため
-    // 重複チェックから除外する
-    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filters は複数回 MAY
-    const isRepeatable =
-      param.type === MessageParameterType.AUTHORIZATION_TOKEN ||
-      (param.type >= 0x25 && param.type <= 0x29);
-    if (seenTypes.has(param.type) && !isRepeatable) {
+    // 反復が許可される型の判定は送信側と共通の isRepeatableMessageParameterType を使う。
+    if (seenTypes.has(param.type) && !isRepeatableMessageParameterType(param.type)) {
       throw new ProtocolViolationError(
         `duplicate message parameter type: 0x${param.type.toString(16)}`,
       );
@@ -472,6 +475,54 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   }
 
   return [parameters, totalConsumed];
+}
+
+/**
+ * 1 つのメッセージ内で複数回出現できる Parameter Type か判定する
+ *
+ * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * "Senders MUST NOT repeat the same Parameter Type in a message unless the
+ *  parameter definition explicitly allows multiple instances of that type to be
+ *  sent in a single message."
+ * 型として反復が許可されるのは次の 2 種である。
+ *
+ * - AUTHORIZATION TOKEN (0x03): 複数のトークンを 1 メッセージに載せられる
+ * - Range Filter (0x25-0x29): §3.3.2 が複数回の出現を MAY とする
+ *
+ * 値レベルの一意性 (Alias 解決後の Token、Parameter Type と SetID と Property Type の
+ * 組み合わせ) は本判定の対象外であり、それぞれ §8.9 / §3.3.2 の規則として扱う。
+ */
+export function isRepeatableMessageParameterType(paramType: number): boolean {
+  return (
+    paramType === MessageParameterType.AUTHORIZATION_TOKEN ||
+    (paramType >= 0x25 && paramType <= 0x29)
+  );
+}
+
+/**
+ * 同一 Parameter Type の重複を検査する (送信側)
+ *
+ * draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+ * "Senders MUST NOT repeat the same Parameter Type in a message unless the
+ *  parameter definition explicitly allows multiple instances of that type to be
+ *  sent in a single message."
+ * 受信側 (decodeParameters) は違反を PROTOCOL_VIOLATION でセッションクローズするが、
+ * 送信側で生成したワイヤはピアのセッションを落とすため、エンコード前にローカルで
+ * 拒否する。エラーはローカル API の誤用を表す汎用 Error とする
+ * (受信側の ProtocolViolationError と区別する)。
+ *
+ * @throws Error 反復可能でない型が 2 件以上ある場合
+ */
+export function assertNoDuplicateMessageParameterTypes(params: readonly { type: number }[]): void {
+  const seenTypes = new Set<number>();
+  for (const param of params) {
+    if (seenTypes.has(param.type) && !isRepeatableMessageParameterType(param.type)) {
+      throw new Error(
+        `duplicate message parameter type: 0x${param.type.toString(16)} (senders MUST NOT repeat a Parameter Type)`,
+      );
+    }
+    seenTypes.add(param.type);
+  }
 }
 
 /**

@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] 同一 Parameter Type を重複させた制御メッセージを送信しない
+  - draft-ietf-moq-transport-21 §9.20 の MUST NOT に従い、`encodeParameters` で型ごとの出現回数を検査して重複を拒否する。REQUEST_UPDATE は `pendingRequestUpdate` / `fillFetchTargets` への登録前に拒否し、送信バイトとエントリを残さない
+  - AUTHORIZATION_TOKEN (0x03) と Range Filter (0x25-0x29) は型レベルの反復を引き続き許可する (判定は受信側と共通の `isRepeatableMessageParameterType`)
+  - @voluntas
 - [FIX] SETUP 受信時のプロトコル違反でトランスポートも閉じる
   - AUTHORITY / PATH の受信 (§9.1.1 / §9.1.2 の MUST)、SETUP のデコード失敗 (§9 の MUST)、制御ストリームの先頭メッセージが SETUP でない場合に、initialize() を失敗させるだけでなく closeWithError でトランスポートを閉じ、ピアへ終了コードを伝える
   - 例外の正規化は toSessionCloseError に統一し、AUTHORIZATION TOKEN 処理の個別 try/catch を統合する

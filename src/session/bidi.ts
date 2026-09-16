@@ -47,6 +47,7 @@ import {
   decodeRequestUpdatePayload,
   decodeSubscribeOkPayload,
   encodeFillParameters,
+  assertNoDuplicateMessageParameterTypes,
   getParameterLocationValue,
   isSameLocationFilter,
   validateRangeFilterCombination,
@@ -3258,6 +3259,16 @@ export async function bidiSendRequestUpdate(
     });
   }
 
+  // draft-ietf-moq-transport-21 §9.20 (Control Message Parameters):
+  // "Senders MUST NOT repeat the same Parameter Type in a message unless the parameter
+  //  definition explicitly allows multiple instances of that type to be sent in a single
+  //  message."
+  // 型付きオプションと raw パラメータの合算で重複が生じ得る (例: parameters の FORWARD と
+  // forward オプション)。FILL_PARAMETERS / NEW_GROUP_REQUEST は個別ガードを持つが、
+  // それ以外の型はここで送信前に拒否する。pendingRequestUpdate と fillFetchTargets への
+  // 登録より前に失敗させるため、エンコードの直前ではなくここで検査する。
+  assertNoDuplicateMessageParameterTypes(parameters);
+
   const requestUpdateMsg = {
     type: MessageType.REQUEST_UPDATE,
     requestId: updateRequestId,
@@ -3494,6 +3505,11 @@ export async function bidiSendNamespaceRequestUpdate(
     NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
     "SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS REQUEST_UPDATE",
   );
+
+  // §9.20 の MUST NOT (同一 Parameter Type の反復禁止) を送信前に検査する。
+  // raw パラメータと型付きオプションの合算で重複が生じ得る (AUTHORIZATION_TOKEN は
+  // 反復可能な型のため対象外)。詳細は subscription 系の同名呼び出しのコメントを参照する。
+  assertNoDuplicateMessageParameterTypes(parameters);
 
   const requestUpdateMsg = {
     type: MessageType.REQUEST_UPDATE,
