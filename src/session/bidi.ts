@@ -58,6 +58,7 @@ import {
   type RangeFilterSpec,
 } from "../message";
 import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "../filter";
+import { supportsDynamicGroups } from "../properties";
 import type { FullTrackNameKey } from "../fullTrackName";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
@@ -3247,6 +3248,24 @@ export async function bidiSendRequestUpdate(
       type: MessageParameterType.NEW_GROUP_REQUEST,
       value: encodeVarint(options.newGroupRequest),
     });
+  }
+  // draft-ietf-moq-transport-21 §9.20.20 (NEW GROUP REQUEST Parameter):
+  // "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track did
+  //  not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY include
+  //  this parameter in SUBSCRIBE without foreknowledge of support."
+  // SUBSCRIBE 経路は foreknowledge なしの送信が認められているため対象外であり、
+  // REQUEST_UPDATE 経路だけが判定を要する。DYNAMIC_GROUPS は Immutable Properties
+  // (0x0B) 配下にも置けるため、二重検索を行う supportsDynamicGroups を使う (§10.7)。
+  // 値には依らず送信自体が禁止されるため、値 0 の NEW_GROUP_REQUEST も拒否する。
+  // 送信側のローカル API 誤用であるため汎用 Error とする (受信側の
+  // ProtocolViolationError とは区別する)。
+  const sendsNewGroupRequest =
+    options.newGroupRequest !== undefined ||
+    parameters.some((param) => param.type === MessageParameterType.NEW_GROUP_REQUEST);
+  if (sendsNewGroupRequest && !supportsDynamicGroups(subscriber.trackProperties)) {
+    throw new Error(
+      "cannot send NEW_GROUP_REQUEST in REQUEST_UPDATE: track did not include DYNAMIC_GROUPS property with value 1",
+    );
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
