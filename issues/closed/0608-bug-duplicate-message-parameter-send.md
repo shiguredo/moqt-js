@@ -1,7 +1,7 @@
 # 送信側で同一 Parameter Type の重複を拒否していない
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-duplicate-message-parameter-send
 - Polished: 2026-09-15
 
@@ -44,3 +44,23 @@ draft-ietf-moq-transport-21 §9.20:
 - draft-ietf-moq-transport-21 §9.20 (Control Message Parameters)
 - draft-ietf-moq-transport-21 §3.3.2 (Range Filters)
 - draft-ietf-moq-transport-21 §8.9 (Authorization Token Compression)
+
+## 解決方法
+
+- `src/message/parameter/messageParameter.ts` の `decodeParameters` に埋まっていた反復許可判定を
+  `isRepeatableMessageParameterType` として抽出し、送信側と共通化した (AUTHORIZATION_TOKEN 0x03 と Range Filter 0x25-0x29 のみ true)
+- 同じファイルに `assertNoDuplicateMessageParameterTypes(params)` を追加した。反復可能でない型が 2 件以上ある場合は
+  汎用 `Error` を throw する (送信側はローカル API の誤用、受信側は `ProtocolViolationError` として区別する)
+- `encodeParameters` の先頭で同関数を呼び、全制御メッセージのエンコード経路でこの規則を適用する
+- `src/session/bidi.ts` の `bidiSendRequestUpdate` (subscription 系 / namespace 系) で、型付きパラメータを積み終えた後
+  `encodeRequestUpdatePayload` を呼ぶ前に同関数を呼ぶ。`pendingRequestUpdate` / `fillFetchTargets` への登録より前に
+  失敗させるため、エンコード直前ではなくこの位置に置いた
+- FILL_PARAMETERS / NEW_GROUP_REQUEST の既存の個別ガードは、型付き fill や raw 配列との合算を見る位置・例外型・メッセージを
+  既存テストが固定しているため変更していない
+- `src/message/parameter.ts` / `src/message/index.ts` に 2 関数を再エクスポートした
+
+テストは `src/message/parameter.test.ts` に 3 本 (重複拒否、反復可能な型の許可、`isRepeatableMessageParameterType` の判定)、
+`src/session/bidiRequestUpdateDuplicateParameter.test.ts` に 2 本 (raw FORWARD と forward オプションの合算が送信前に拒否され
+送信バイト 0・エントリ残留なし、重複が無ければ従来どおり送信される) を追加した。
+
+検証は `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2250 passed) の通過で確認した。
