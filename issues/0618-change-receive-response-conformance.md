@@ -1,7 +1,7 @@
 # 受信応答の判定を仕様に合わせる
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/change-receive-response-conformance
 - Polished: {YYYY-MM-DD}
 
@@ -45,3 +45,31 @@ draft-ietf-moq-transport-21 §6.5:
 - draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE)
 - draft-ietf-moq-transport-21 §9.13 (TRACK_STATUS)
 - draft-ietf-moq-transport-21 §9.20.17 (EXPIRES Parameter)
+
+## 解決方法
+
+### 1. TRACK_STATUS_OK の EXPIRES は受理しない (現状維持を明示)
+
+`src/message/parameterScope.ts` の `TRACK_STATUS_OK_ALLOWED_PARAMS` に、§9.20.17 の出現先一覧に TRACK_STATUS_OK が無いことを根拠に拒否を維持する判断と、採用しなかった解釈 (§9.13 の「SUBSCRIBE_OK と同じ parameters」を優先して許容する) とその理由をコメントで明記した。`src/message/parameterScope.test.ts` に EXPIRES が PROTOCOL_VIOLATION になることを固定するテストを追加した。
+
+### 2. `.` / `.session` の未対応リクエストは DOES_NOT_EXIST で拒否
+
+`src/session/incoming.ts` に `incomingIsRejectedNamespaceRequest` を追加し、未対応 6 種 (SUBSCRIBE / FETCH / TRACK_STATUS / PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) でも Request ID の直後の Track Namespace を読んで §2.4.2 / §6.5 の MUST 拒否を行うようにした。受信 PUBLISH 経路と同じ `isRejectedReceiveNamespace` を使う。Namespace をデコードできない場合 (切詰め・構造違反) は NOT_SUPPORTED を維持し、その理由 (未対応メッセージの本文を解釈しないため) をコメントに明記した。`src/session/incoming.test.ts` に 6 種すべての DOES_NOT_EXIST と、切詰め時に NOT_SUPPORTED を維持するテストを追加した。
+
+### 3. 確立後の 2 通目の REQUEST_OK を閉じる
+
+`src/session/bidi.ts` の `bidiHandleRequestUpdateOk` に、未応答の REQUEST_UPDATE が対応しない REQUEST_OK を PROTOCOL_VIOLATION で閉じる判定を追加した (§9.5 の「受信側は必ず 1 通の REQUEST_OK / REQUEST_ERROR で応答する」と、初回応答についての §3.1 の exactly one)。pending が消えている場合でも次の 2 つは違反としない。
+
+- GOAWAY 受信済みの request stream: GOAWAY 受信時に未応答の REQUEST_UPDATE は reject 済みで削除されるため (§9.2)、その後届く REQUEST_OK は削除済みの更新への正当な応答でありうる
+- coalescing された REQUEST_ERROR で pending を消した件数分: coalescing は失敗分をまとめるだけであり、in-flight だった成功分の更新への REQUEST_OK は別途届く (§9.5.1)。`rejectPendingRequestUpdates` が返す件数を `unmatchedRequestOkAllowances` に積み、遅延応答を 1 件ずつ消費する
+
+テストは `src/session/bidiRequestUpdateOk.test.ts` (違反・GOAWAY 例外・2 通目)、`src/session/bidiSubscribeFinReset.test.ts` (GOAWAY 後の遅延 REQUEST_OK、coalescing 後の許容枠と超過)、`src/session.test.ts` (受信 PUBLISH ストリーム経路) に追加した。
+
+### 4. GOAWAY 後の subscribe ロールの REQUEST_UPDATE 無視は意図的な逸脱として維持
+
+`src/session/bidi.ts` の `bidiPreflightRequestUpdate` に、§9.5 の MUST からは逸脱するが §6.4.2.2 の FIN 規則と衝突するため無視を維持する旨と、閉じる側へ寄せる場合の変更点をコメントで明記した。挙動は変えていない。
+
+### 検証
+
+- `pnpm exec tsc --noEmit` / `pnpm exec vp check` / `pnpm test --run` (2235 passed)
+- `CHANGES.md` の `## develop` に [FIX] エントリを追加
