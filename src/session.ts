@@ -1948,60 +1948,15 @@ export class SessionImpl implements Session {
     // 揃ったメッセージだけを返す。
     const messages = await this.readSetupMessages(controlStream, controlBuffer);
 
-    const msg = messages[0];
-    if (msg === undefined) {
-      // 上の while (messages.length === 0) により messages は 1 件以上だが、
-      // noUncheckedIndexedAccess で型上 undefined を含むため到達しない防御を置く
-      throw new SessionError("No SETUP message received", SessionErrorCode.PROTOCOL_VIOLATION);
-    }
-    if (msg.type !== MessageType.SETUP) {
-      throw new SessionError(
-        `Expected SETUP, got ${msg.type}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
-      );
-    }
-
-    // SETUP をデコードしてバリデーションする
-    const decodedSetup = decodeSetupPayload(msg.payload);
-
-    // draft-ietf-moq-transport-21 §9.1.1 / §9.1.2:
-    // AUTHORITY (0x05) / PATH (0x01) は server から送信されてはならない。
-    // また WebTransport 使用時には MUST NOT 送信されるため、moqt-js は受信したら
-    // INVALID_AUTHORITY / INVALID_PATH でセッションを閉じなければならない。
-    if (getSetupAuthority(decodedSetup) !== undefined) {
-      throw new SessionError(
-        "received AUTHORITY in SETUP from server (forbidden under WebTransport)",
-        SessionErrorCode.INVALID_AUTHORITY,
-      );
-    }
-    if (getSetupPath(decodedSetup) !== undefined) {
-      throw new SessionError(
-        "received PATH in SETUP from server (forbidden under WebTransport)",
-        SessionErrorCode.INVALID_PATH,
-      );
-    }
+    // 先頭メッセージ種別の検証・SETUP のデコードと検証・AUTHORIZATION TOKEN の処理で
+    // 検出した違反は「セッションを閉じる」MUST の対象である。詳細は
+    // decodeAndValidateSetupClosingOnViolation を参照する。
+    const { message: msg, decoded: decodedSetup } =
+      this.decodeAndValidateSetupClosingOnViolation(messages);
 
     // draft-ietf-moq-transport-21 §9.1.3:
     // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
     const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
-
-    // draft-ietf-moq-transport-21 §9.1.4 / §8.9:
-    // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
-    // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION、登録済み Alias の
-    // 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の
-    // REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない。
-    // Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR になる。
-    try {
-      processSetupAuthorizationTokens(this.receivedAuthTokens, decodedSetup.parameters);
-    } catch (error) {
-      // draft-ietf-moq-transport-21 §8.9 / §9.1.4 の MUST は「セッションを閉じる」
-      // であるため、initialize() を失敗させるだけでなく WebTransport セッションも
-      // 閉じてピアへコードを伝える。
-      if (error instanceof SessionError) {
-        this.closeWithError(error);
-      }
-      throw error;
-    }
 
     // draft-ietf-moq-transport-21 §9.1.7:
     // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）
@@ -2019,6 +1974,84 @@ export class SessionImpl implements Session {
 
     // SETUP 確立後の受信ループを開始する
     this.startPostSetupLoops(messages, bufferedDataStreams);
+  }
+
+  /**
+   * 受信 SETUP の先頭メッセージ検証・デコード・検証を行い、違反時はセッションを閉じる
+   *
+   * draft-ietf-moq-transport-21 §9 (Control Messages) は Length と Body 長の不一致に
+   * PROTOCOL_VIOLATION でのセッションクローズを MUST とし、§9.1.1 (AUTHORITY) /
+   * §9.1.2 (PATH) は WebTransport 使用中の受信に INVALID_AUTHORITY / INVALID_PATH での
+   * クローズを MUST、§9.1.4 (AUTHORIZATION TOKEN) は AUTHORIZATION TOKEN の処理失敗に
+   * クローズを MUST とする。また §9.1 (SETUP) は制御ストリームの先頭が SETUP であることを
+   * 要求する。
+   *
+   * initialize() を失敗させるだけではピアに終了コードが伝わらず、connect() は例外を
+   * 伝播するだけでトランスポートを閉じないため、セッションが開いたまま残る。
+   * toSessionCloseError で正規化した SessionError で closeWithError してから元の例外を
+   * 再送出する (initialize() は失敗を reject で伝える契約であり、ここで握ると初期化に
+   * 失敗したセッションを成功として返してしまう)。
+   * 正規化できない例外 (ピア起因の終了など) は閉じずにそのまま伝播させる。
+   *
+   * @param messages - readSetupMessages が返した制御メッセージ列 (先頭が SETUP)
+   * @returns 検証済みの先頭メッセージとデコード結果
+   */
+  private decodeAndValidateSetupClosingOnViolation(messages: ControlMessage[]): {
+    message: ControlMessage;
+    decoded: ReturnType<typeof decodeSetupPayload>;
+  } {
+    try {
+      const msg = messages[0];
+      if (msg === undefined) {
+        // readSetupMessages は 1 件以上を返す契約だが、noUncheckedIndexedAccess で
+        // 型上 undefined を含むため到達しない防御を置く
+        throw new SessionError("No SETUP message received", SessionErrorCode.PROTOCOL_VIOLATION);
+      }
+      if (msg.type !== MessageType.SETUP) {
+        throw new SessionError(
+          `Expected SETUP, got ${msg.type}`,
+          SessionErrorCode.PROTOCOL_VIOLATION,
+        );
+      }
+
+      // SETUP をデコードしてバリデーションする (Length と Body 長の不一致は
+      // ProtocolViolationError / IncompleteDataError になり、下の catch で
+      // PROTOCOL_VIOLATION へ正規化される)
+      const decoded = decodeSetupPayload(msg.payload);
+
+      // draft-ietf-moq-transport-21 §9.1.1 / §9.1.2:
+      // AUTHORITY (0x05) / PATH (0x01) は server から送信されてはならない。
+      // また WebTransport 使用時には MUST NOT 送信されるため、moqt-js は受信したら
+      // INVALID_AUTHORITY / INVALID_PATH でセッションを閉じなければならない。
+      if (getSetupAuthority(decoded) !== undefined) {
+        throw new SessionError(
+          "received AUTHORITY in SETUP from server (forbidden under WebTransport)",
+          SessionErrorCode.INVALID_AUTHORITY,
+        );
+      }
+      if (getSetupPath(decoded) !== undefined) {
+        throw new SessionError(
+          "received PATH in SETUP from server (forbidden under WebTransport)",
+          SessionErrorCode.INVALID_PATH,
+        );
+      }
+
+      // draft-ietf-moq-transport-21 §9.1.4 / §8.9:
+      // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
+      // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION、登録済み Alias の
+      // 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の
+      // REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない。
+      // Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR になる。
+      processSetupAuthorizationTokens(this.receivedAuthTokens, decoded.parameters);
+
+      return { message: msg, decoded };
+    } catch (error) {
+      const sessionError = toSessionCloseError(error);
+      if (sessionError !== null) {
+        this.closeWithError(sessionError);
+      }
+      throw error;
+    }
   }
 
   /**

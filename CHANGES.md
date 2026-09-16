@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] SETUP 受信時のプロトコル違反でトランスポートも閉じる
+  - AUTHORITY / PATH の受信 (§9.1.1 / §9.1.2 の MUST)、SETUP のデコード失敗 (§9 の MUST)、制御ストリームの先頭メッセージが SETUP でない場合に、initialize() を失敗させるだけでなく closeWithError でトランスポートを閉じ、ピアへ終了コードを伝える
+  - 例外の正規化は toSessionCloseError に統一し、AUTHORIZATION TOKEN 処理の個別 try/catch を統合する
+  - @voluntas
 - [FIX] セッション終了後に同一チャンクの残りメッセージを処理しない
   - 受信 PUBLISH ストリーム上の REQUEST_OK 処理がセッションを閉じた場合と、REQUEST_UPDATE の拒否 (INVALID_FILTER / NOT_SUPPORTED / publisher 不在 / GOAWAY) に伴う PUBLISH_DONE 送出がセッションを閉じた場合に、読み取りループを終える
   - 同一チャンクの後続メッセージが別のセッション終了を検出して error コールバックが二重に通知されるのを防ぐ
