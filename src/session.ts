@@ -4512,32 +4512,51 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
    * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
    * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
-   * 未登録 Alias の参照は REQUEST_ERROR (UNKNOWN_AUTH_TOKEN_ALIAS) でメッセージを
-   * 拒否する。デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再
-   * REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
+   * デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
+   * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
    * セッションを閉じる。
    *
-   * @returns 処理を継続してよい場合は true、拒否・セッション終了で中断すべき場合は false
+   * 未登録 Alias の参照も Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) で
+   * セッションを閉じる。REQUEST_ERROR ではなく Session Termination を選ぶ理由、
+   * §6.6 の留保の判断、§9.1.4 の MUST NOT に抵触しないことは
+   * `processIncomingRequestUpdateAuthorizationTokens` の JSDoc に集約している
+   * (同じ規範判断をこのファイルと bidi.ts で二重に保守しないため)。
+   *
+   * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は REQUEST_UPDATE に対する publisher の
+   * MUST であり、受信 PUBLISH の拒否には適用しない。
+   *
+   * @returns 処理を継続してよい場合は true、セッション終了または当該 PUBLISH の
+   *   打ち切りで中断すべき場合は false
    */
-  private async processIncomingPublishAuthorizationTokens(
-    stream: WebTransportBidirectionalStream,
+  private processIncomingPublishAuthorizationTokens(
+    requestId: bigint,
     parameters: Array<{ type: number; value: Uint8Array }>,
-  ): Promise<boolean> {
+  ): boolean {
     let result: AuthTokenProcessResult;
     try {
       result = processMessageAuthorizationTokens(this.receivedAuthTokens, parameters);
     } catch (err) {
+      // SessionError はそのコードのままセッションを閉じる。§8.9 が定める
+      // DUPLICATE_AUTH_TOKEN_ALIAS / AUTH_TOKEN_CACHE_OVERFLOW /
+      // KEY_VALUE_FORMATTING_ERROR がここに来る。
       const sessionError = toSessionCloseError(err);
-      if (sessionError !== null) {
-        this.closeWithError(sessionError);
+      if (sessionError === null) {
+        // SessionError 以外の例外はセッション終了を意味しない。本メソッドは
+        // fire-and-forget で呼ばれる handleIncomingBidirectionalStream の
+        // 「throw しない」契約の下にあるため再 throw せず、当該 PUBLISH の
+        // 処理だけを打ち切る。processMessageAuthorizationTokens は
+        // SessionError しか投げないため、この分岐は防御的である。
+        return false;
       }
+      this.closeWithError(sessionError);
       return false;
     }
     if (result.status === "unknown-alias") {
-      await incomingSendRequestErrorAndClose(
-        stream,
-        RequestErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
-        "unknown authorization token alias",
+      this.closeWithError(
+        new SessionError(
+          `unknown authorization token alias in PUBLISH: streamRequestId=${requestId} alias=${result.tokenAlias}`,
+          SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
+        ),
       );
       return false;
     }
@@ -4653,7 +4672,7 @@ export class SessionImpl implements Session {
     // であるため、セッションエラーにならない拒否 (予約 namespace による
     // DOES_NOT_EXIST 応答等) より前に処理する。
     if (
-      !(await this.processIncomingPublishAuthorizationTokens(stream, decodedPublish.parameters))
+      !this.processIncomingPublishAuthorizationTokens(publishRequestId, decodedPublish.parameters)
     ) {
       return;
     }

@@ -16,6 +16,7 @@ import {
 import { encodePublishDonePayload, decodePublishDonePayload } from "../message/publish";
 import { MessageType, MessageParameterType, PublishDoneStatusCode } from "../message/types";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
+import { encodeAuthorizationToken, AuthorizationTokenAliasType } from "../message";
 import { SessionErrorCode, RequestErrorCode } from "../error";
 import {
   createPublishReadTestContext,
@@ -1049,4 +1050,51 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
   // REQUEST_UPDATE は無視され、応答も送信されずセッションも閉じない
   assert.equal(ctx.written.length, 0);
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2 / §9.5.1:
+ * subscribe ロールの受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
+ * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
+ * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR は送らず、
+ * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) も subscriber 側なので対象外である。
+ */
+test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (subscribe ロール) は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
+  const ctx = createPublishReadTestContext({}, 1024);
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  // subscribe ロールの REQUEST_UPDATE は GOAWAY 受信済みの旧リクエストでのみ
+  // AUTHORIZATION TOKEN の判定に到達するため、その状態にする。
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 88n,
+        }),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // セッションを閉じるため REQUEST_OK / REQUEST_ERROR も PUBLISH_DONE も送らない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
 });

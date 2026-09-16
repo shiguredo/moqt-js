@@ -58,9 +58,12 @@ type AuthTokenResolveResult =
  * メッセージ 1 通分の AUTHORIZATION TOKEN パラメータ処理結果
  *
  * - ok: すべての Token を処理できた
- * - unknown-alias: 未登録 Alias を参照する USE_ALIAS があり、メッセージを拒否すべき
+ * - unknown-alias: 未登録 Alias を参照する USE_ALIAS があり、呼び出し元が
+ *   セッションを閉じるべきである。tokenAlias は該当する Alias 値
  */
-export type AuthTokenProcessResult = { status: "ok" } | { status: "unknown-alias" };
+export type AuthTokenProcessResult =
+  | { status: "ok" }
+  | { status: "unknown-alias"; tokenAlias: bigint };
 
 /**
  * 受信 Authorization Token キャッシュ
@@ -121,6 +124,9 @@ export class AuthTokenCache {
    * draft-ietf-moq-transport-21 §8.9:
    * "The receiver of a message referencing an Alias that is not currently
    *  registered MUST reject the message with UNKNOWN_AUTH_TOKEN_ALIAS."
+   *
+   * 未登録 Alias は unknown-alias として返す。セッションを閉じるかどうかは
+   * 呼び出し元が決める。
    */
   resolve(tokenAlias: bigint): AuthTokenResolveResult {
     const entry = this.entries.get(tokenAlias);
@@ -235,11 +241,12 @@ export function processSetupAuthorizationTokens(
  * "If a registration is attempted which would cause this limit to be exceeded,
  *  the receiver MUST terminate the Session with a AUTH_TOKEN_CACHE_OVERFLOW error."
  *
- * 未登録 Alias の参照はセッションを閉じず、当該メッセージを REQUEST_ERROR
- * (UNKNOWN_AUTH_TOKEN_ALIAS) で拒否する。呼び出し元が close するか reject するかを
- * 決められるよう、戻り値で unknown-alias を伝える。
+ * 未登録 Alias の参照は Session Termination になる。セッションを閉じるのは
+ * 呼び出し元であり、本関数はセッションを閉じずに戻り値で unknown-alias を伝える。
  *
- * @throws SessionError DUPLICATE_AUTH_TOKEN_ALIAS または AUTH_TOKEN_CACHE_OVERFLOW
+ * @throws SessionError Token 構造がデコード不能 (KEY_VALUE_FORMATTING_ERROR)、
+ *   登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)、
+ *   キャッシュ上限超過 (AUTH_TOKEN_CACHE_OVERFLOW)
  */
 function processMessageAuthorizationToken(
   cache: AuthTokenCache,
@@ -265,7 +272,7 @@ function processMessageAuthorizationToken(
     case AuthorizationTokenAliasType.USE_ALIAS: {
       const result = cache.resolve(token.tokenAlias);
       if (result.status === "unknown-alias") {
-        return { status: "unknown-alias" };
+        return { status: "unknown-alias", tokenAlias: token.tokenAlias };
       }
       return { status: "ok" };
     }
@@ -292,7 +299,24 @@ function processMessageAuthorizationToken(
  * draft-ietf-moq-transport-21 §8.9:
  * "An Authorization Token MAY be repeated within a message as long as the
  *  combination of Token Type and Token Value are unique after resolving any
- *  aliases." 複数出現し得るため、すべてを順に処理する。
+ *  aliases." 複数出現し得るため、順に処理する。
+ *
+ * 未登録 Alias の参照を検出した時点で打ち切り、その結果を返す。同じメッセージに
+ * 複数の違反 (未登録 Alias の参照と、登録済み Alias の再 REGISTER など) が含まれる
+ * 場合、処理を続けると後続の SessionError が送出されて診断コードがパラメータ順に
+ * 依存する。最初の違反を報告するため打ち切る。この結果、§9.1.3 の上限超過
+ * (AUTH_TOKEN_CACHE_OVERFLOW) を伴う REGISTER が未登録 Alias の参照より後ろにある
+ * 場合、報告されるコードは未登録 Alias 側の UNKNOWN_AUTH_TOKEN_ALIAS になる。
+ * どちらもセッションを終了させる §12.2 の relevant code であり、REGISTER は
+ * 「試行」の段階に達しないため §9.1.3 の MUST に反しない。
+ *
+ * §8.9 の REGISTER 登録 MUST
+ * ("The receiver of a message carrying an Authorization Token with Alias Type
+ *  REGISTER that does not result in a Session error MUST register the Token
+ *  Alias in the token cache, even if the message fails for other reasons.")
+ * はセッションエラーにならないメッセージを対象とする。未登録 Alias の参照は
+ * Session Termination を起こすため同 MUST の対象外であり、打ち切っても
+ * 同 MUST に反しない。
  *
  * @throws SessionError Token 構造がデコード不能 (KEY_VALUE_FORMATTING_ERROR)、
  *   登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)、
@@ -302,16 +326,15 @@ export function processMessageAuthorizationTokens(
   cache: AuthTokenCache,
   parameters: Array<{ type: number; value: Uint8Array }>,
 ): AuthTokenProcessResult {
-  let result: AuthTokenProcessResult = { status: "ok" };
   for (const parameter of parameters) {
     if (parameter.type !== MessageParameterType.AUTHORIZATION_TOKEN) {
       continue;
     }
     const token = decodeAuthorizationToken(parameter.value);
     const processed = processMessageAuthorizationToken(cache, token);
-    if (processed.status !== "ok" && result.status === "ok") {
-      result = processed;
+    if (processed.status !== "ok") {
+      return processed;
     }
   }
-  return result;
+  return { status: "ok" };
 }

@@ -121,6 +121,7 @@ export function createPublishReadTestContext(
   events: string[];
   written: Uint8Array[];
   closedWithError: SessionError | undefined;
+  closedWithErrorCount: number;
   publisher: PublisherImpl;
   requestId: bigint;
   controlReader: ControlStreamReader;
@@ -129,6 +130,9 @@ export function createPublishReadTestContext(
   const events: string[] = [];
   const written: Uint8Array[] = [];
   let closedWithError: SessionError | undefined;
+  // closeWithError の呼び出し回数。セッション終了後に同一チャンクの残りメッセージを
+  // 処理し続けていないこと (error の二重通知が無いこと) を検証するために数える。
+  let closedWithErrorCount = 0;
 
   let readableController!: ReadableStreamDefaultController<Uint8Array>;
   const readable = new ReadableStream<Uint8Array>({
@@ -196,6 +200,7 @@ export function createPublishReadTestContext(
     emitDebug: () => {},
     closeWithError: (error: SessionError) => {
       closedWithError = error;
+      closedWithErrorCount++;
     },
     validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
@@ -209,6 +214,9 @@ export function createPublishReadTestContext(
     // 値コピーではなく getter で返す (closeWithError 呼び出し後の代入を反映する)
     get closedWithError(): SessionError | undefined {
       return closedWithError;
+    },
+    get closedWithErrorCount(): number {
+      return closedWithErrorCount;
     },
     publisher,
     requestId,

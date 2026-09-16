@@ -10,7 +10,12 @@ import { test, assert } from "vite-plus/test";
 import { decodeRequestErrorPayload } from "../message/session";
 import { decodePublishDonePayload } from "../message/publish";
 import { MessageType, MessageParameterType, PublishDoneStatusCode } from "../message/types";
-import { encodeParameters, encodeFillParameters } from "../message";
+import {
+  encodeParameters,
+  encodeFillParameters,
+  encodeAuthorizationToken,
+  AuthorizationTokenAliasType,
+} from "../message";
 import { buildFillParameters } from "./params";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { encodeLocationFilterParameter } from "../message/parameter";
@@ -1128,4 +1133,108 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
   assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2 / §9.5.1:
+ * role=publish の受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
+ * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
+ * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR と
+ * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) はどちらも送らない。
+ */
+test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (publish ロール) は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
+  const ctx = createPublishReadTestContext({}, 1024);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 77n,
+        }),
+      },
+    ],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // セッションを閉じるため REQUEST_OK / REQUEST_ERROR も PUBLISH_DONE も送らない
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §8.9 / §6.6 / §12.2:
+ * 同一チャンクに REQUEST_UPDATE が 2 通連結され先頭が未登録 Alias を参照する場合、
+ * セッション終了後に残りのメッセージを処理しないことを検証する。処理を続けると
+ * 再びセッション終了を検出して error コールバックが二重に通知される。
+ */
+test("bidiReadRequestStreamMessages: 未登録 Alias で閉じた後は同一チャンクの残り REQUEST_UPDATE を処理しない (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({}, 1024);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const unknownAliasUpdate = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias: 78n,
+        }),
+      },
+    ],
+  });
+  const trailingUpdate = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 103n,
+    parameters: [
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          // 2 通目も未登録 Alias にする。処理を続けると closeWithError が 2 回
+          // 呼ばれるため、この assert が回帰を直接捕まえる。
+          tokenAlias: 79n,
+        }),
+      },
+    ],
+  });
+  // 2 通を 1 チャンクに連結して enqueue する
+  ctx.readableController.enqueue(
+    concatUint8Arrays([
+      ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, unknownAliasUpdate),
+      ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, trailingUpdate),
+    ]),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  // セッション終了は 1 回だけで、後続の REQUEST_UPDATE は処理されない
+  assert.equal(ctx.closedWithErrorCount, 1);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 0);
 });
