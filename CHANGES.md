@@ -11,6 +11,13 @@
 
 ## develop
 
+- [FIX] エンコーダが受信側で PROTOCOL_VIOLATION になるワイヤを生成しないようにする
+  - Object Datagram: PROPERTIES ビットありで Properties Length 0、および不正な Type Flags (bit 4 / 0x2f 超 / STATUS と END_OF_GROUP の同時設定) を生成前に拒否する
+  - Subgroup Header: 不正な Type Flags (SUBGROUP_ID_MODE 0b11 / bit 4 が 0 / 0x7f 超) を生成前に拒否する
+  - Track Namespace: フィールド長 0 / 32 フィールド超の検査を `assertTrackNamespaceTuple` に集約し、`createTrackNamespace` と `encodeTrackNamespace` の双方で行う (0 フィールドと 32 フィールドは従来どおり許可)
+  - REQUEST_ERROR: REDIRECT (0x34) 以外の Error Code に Redirect を付けた場合と、REDIRECT なのに Redirect が無い場合を生成前に拒否する
+  - いずれも受信したワイヤの違反ではないため、汎用 Error を throw する
+  - @voluntas
 - [FIX] REQUEST_UPDATE の NEW_GROUP_REQUEST に DYNAMIC_GROUPS の検査を追加する
   - draft-ietf-moq-transport-21 §9.20.20 の MUST NOT (DYNAMIC_GROUPS=1 を受けていない Track の REQUEST_UPDATE に NEW_GROUP_REQUEST を送ってはならない) を `bidiSendRequestUpdate` で型付き / raw の双方に対して検査する
   - DYNAMIC_GROUPS は Immutable Properties (0x0B) 配下にも置けるため `supportsDynamicGroups` の二重検索を使う。SUBSCRIBE 経路は foreknowledge なしの送信が認められているため対象外

@@ -16,7 +16,7 @@ import {
   validateFullTrackNameBytes,
 } from "./parameter";
 import { MessageType } from "./types";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, RequestErrorCode } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 
 /**
@@ -380,7 +380,22 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
   parts.push(encodeVarint(reasonBytes.length));
   parts.push(reasonBytes);
 
-  if (msg.redirect) {
+  // draft-ietf-moq-transport-21 §9.4.1 (Redirect Structure) / §9.4.2
+  // (REQUEST_ERROR Message Format):
+  // "Redirect: Present only when Error Code is REDIRECT."
+  // 受信側 (decodeRequestErrorPayload) が PROTOCOL_VIOLATION でセッションを閉じる
+  // 組み合わせを生成しないよう、デコーダと同じ双方向の検証を入口で行う。
+  // ローカル API の誤用であるため汎用 Error を throw する。
+  const redirectErrorCode = Number(msg.errorCode);
+  if (msg.redirect !== undefined && redirectErrorCode !== RequestErrorCode.REDIRECT) {
+    throw new Error(
+      `unexpected redirect in REQUEST_ERROR with error code 0x${redirectErrorCode.toString(16)}, expected REDIRECT (0x34)`,
+    );
+  }
+  if (msg.redirect === undefined && redirectErrorCode === RequestErrorCode.REDIRECT) {
+    throw new Error("missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)");
+  }
+  if (msg.redirect !== undefined) {
     parts.push(encodeRedirect(msg.redirect));
   }
 
