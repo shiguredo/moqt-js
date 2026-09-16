@@ -738,7 +738,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 Section 9.20.19 (uint8)
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-21 Section 9.20.9 (uint8)
   // "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"
   // FETCH_OK には出現できないため、送信側で指定できるのは要求時のみ
   if (options?.groupOrder !== undefined) {

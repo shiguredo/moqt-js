@@ -19,6 +19,7 @@ import {
 import {
   MessageType,
   MessageParameterType,
+  GroupOrder,
   createTrackNamespace,
   decodeLocationFilterParameter,
   encodeTrackName,
@@ -788,7 +789,7 @@ export interface FetchOptions {
 
   /**
    * Group Order
-   * draft-ietf-moq-transport-21 Section 9.20.19 (GROUP ORDER Parameter)
+   * draft-ietf-moq-transport-21 Section 9.20.9 (GROUP ORDER Parameter)
    *
    * FETCH 応答で Object を Group 順に並べる順序を要求する。
    * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
@@ -2409,6 +2410,15 @@ export class SessionImpl implements Session {
 
     // GOAWAY コールバックを設定（セッション内部コールバック）
     impl.goawayCallback = callbacks.goaway;
+
+    // draft-ietf-moq-transport-21 §9.20.9 / §11.4.1.1:
+    // FETCH 送信時の options.groupOrder を保持し、FETCH 応答の Group ID 復号に
+    // 使う。GROUP_ORDER は FETCH_OK に出現しないため、復号の根拠は要求時の値
+    // だけにする。省略時は Ascending (§9.20.9 の既定値であり、fill fetch の
+    // resolveFillGroupOrder と同じ扱い)。
+    impl.setGroupOrder(
+      options.groupOrder === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
+    );
 
     // draft-ietf-moq-transport-21 Section 3.2.1:
     // キャンセルはストリームを閉じることで行う。

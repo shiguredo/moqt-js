@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] FETCH 応答の Group ID を要求した Group Order で復号する
+  - draft-ietf-moq-transport-21 §11.4.1.1 は Group Order によって Group ID の計算式が変わることを定めるが、FETCH 応答の復号が Ascending 固定だった。Descending を要求しても 2 件目以降の Object の Group ID が誤っていた
+  - Session.fetch() が要求時の GROUP_ORDER を FetcherImpl に渡し、省略時は Ascending (§9.20.9) として復号する
+  - @voluntas
 - [FIX] FETCH の End of Range から Object Payload Length を削除する
   - draft-ietf-moq-transport-21 §11.4.1.2 の End of Range indicator は Serialization Flags + Group ID + Object ID のみで、Object Payload Length を持たない。余分な varint を読み書きしていたため、EOR の直後に通常 Object が続くストリームでフィールド境界がずれていた
   - @voluntas

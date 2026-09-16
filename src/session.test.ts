@@ -33,7 +33,7 @@ import {
   encodeLocationFilterParameter,
 } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
-import { FetcherImpl } from "./fetcher";
+import { FetcherImpl, type Fetcher } from "./fetcher";
 import { AuthTokenCache } from "./session/authTokenCache";
 import {
   InvalidFilterError,
@@ -44,6 +44,7 @@ import {
   SessionErrorCode,
 } from "./error";
 import { concatUint8Arrays, nodeProcess } from "./testSupport/helpers";
+import { waitForMacrotask } from "./testSupport/bidi";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
 import {
   createSetup,
@@ -66,6 +67,7 @@ import {
   createFirstFetchObjectFlags,
   decodeFetchObjectFields,
 } from "./dataStream";
+import { decodeFetchPayload, encodeFetchOkPayload, type Fetch } from "./message/fetch";
 import { encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
 import { PublisherImpl } from "./publisher";
@@ -3008,6 +3010,225 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
   assert.equal(fetcher.state, "closed");
   assert.isFalse(internal.fetchers.has(requestId));
   assert.isUndefined(sessionError.current);
+});
+
+/** createFetchGroupOrderContext が返す検証用コンテキスト */
+interface FetchGroupOrderContext {
+  sentFrames: Uint8Array[];
+  objects: MoqtObject[];
+  startFetch: () => Promise<Fetcher>;
+  enqueueFetchOk: () => void;
+  runFetchDataStream: (data: Uint8Array) => Promise<void>;
+}
+
+/**
+ * session.fetch() の Group Order 配線を検証するセッションを構築する
+ *
+ * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter) / §11.4.1.1 (Flags):
+ * FETCH 応答の Group ID は要求時に指定した Group Order で解釈する。GROUP_ORDER は
+ * FETCH_OK に出現しないため、要求時の値が復号まで届いているかを実ストリームで
+ * 確かめられるようにする。
+ *
+ * 送信した FETCH メッセージを取り出すため、双方向ストリームの writable は書き込みを
+ * 記録する偽 writer に差し替える。readable は FETCH_OK を注入するため実ストリームを使う。
+ * 受信データストリームは incomingUnidirectionalStreams の受信ループを経由せず、
+ * SessionImpl.handleIncomingStream を直接呼んで注入する。
+ */
+function createFetchGroupOrderContext(
+  groupOrder?: "Ascending" | "Descending",
+): FetchGroupOrderContext {
+  const sentFrames: Uint8Array[] = [];
+  const writer = {
+    write: async (data: Uint8Array): Promise<void> => {
+      sentFrames.push(data);
+    },
+    releaseLock: (): void => {},
+  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+  // ReadableStream の start はコンストラクタ内で同期的に呼ばれるため、
+  // この変数は以降の参照時点で必ず代入済みになる (型に伝えるための非 null アサーション)
+  let responseController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      responseController = controller;
+    },
+  });
+
+  const bidiStream = {
+    readable,
+    writable: { getWriter: (): unknown => writer },
+  } as unknown as WebTransportBidirectionalStream;
+
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => bidiStream,
+  } as unknown as WebTransport;
+
+  const session = new SessionImpl(transport, {});
+  const controlWriter = new ControlStreamWriter();
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter = controlWriter;
+
+  const objects: MoqtObject[] = [];
+  // exactOptionalPropertyTypes では optional な groupOrder に undefined を渡せないため、
+  // 指定がある場合だけ載せる
+  const options = groupOrder === undefined ? {} : { groupOrder };
+
+  return {
+    sentFrames,
+    objects,
+    startFetch: () =>
+      session.fetch(["live"], "video", options, {
+        object: (object) => {
+          objects.push(object);
+        },
+      }),
+    enqueueFetchOk: () => {
+      responseController.enqueue(
+        controlWriter.encode(
+          MessageType.FETCH_OK,
+          encodeFetchOkPayload({
+            type: MessageType.FETCH_OK,
+            endOfTrack: true,
+            endLocation: { group: 10n, object: 1n },
+            parameters: [],
+            trackProperties: [],
+          }),
+        ),
+      );
+    },
+    runFetchDataStream: async (data: Uint8Array): Promise<void> => {
+      const dataStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(data);
+          controller.close();
+        },
+      });
+      await (
+        session as unknown as {
+          handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+        }
+      ).handleIncomingStream(dataStream);
+    },
+  };
+}
+
+/**
+ * session.fetch() が送った FETCH メッセージをデコードする
+ *
+ * 制御メッセージと同一のフレーム形式 (Type + Length(16) + Payload) をほどいて
+ * FETCH ペイロードをデコードし、FETCH データストリームの FETCH_HEADER が運ぶ
+ * Request ID と、送信した GROUP_ORDER を検証できるようにする。
+ */
+function decodeSentFetch(frame: Uint8Array): Fetch {
+  const [type, typeConsumed] = decodeVarint(frame, 0);
+  assert.equal(Number(type), MessageType.FETCH);
+  const length = ((frame[typeConsumed] ?? 0) << 8) | (frame[typeConsumed + 1] ?? 0);
+  const payload = frame.slice(typeConsumed + 2, typeConsumed + 2 + length);
+  return decodeFetchPayload(payload);
+}
+
+/**
+ * session.fetch() が送った FETCH から GROUP_ORDER パラメータの値 (uint8) を取り出す
+ */
+function findSentGroupOrderValue(fetch: Fetch): Uint8Array | undefined {
+  return fetch.parameters.find((parameter) => parameter.type === MessageParameterType.GROUP_ORDER)
+    ?.value;
+}
+
+/**
+ * Group ID が減少する 2 件の Object を含む FETCH データストリームを構築する
+ *
+ * 先頭 Object は Group 10 を絶対値で書き、2 件目は Group 7 を Descending の式で
+ * 書く (delta = 10 - 7 - 1 = 2)。同じワイヤを Ascending の式で読むと 13、
+ * Descending の式で読むと 7 になるため、Group Order が復号まで配線されているかを
+ * 1 本のストリームで判定できる。delta を 0 以外にすることで、符号だけでなく
+ * 「delta + 1」の計算そのものも検証できる。
+ */
+function buildGroupOrderProbeFetchStream(requestId: bigint): Uint8Array {
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  // 2 件目の delta 計算に使うコンテキストを先頭 Object のワイヤから求める
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.GROUP_ID_PRESENT,
+    groupId: 7n,
+    payloadLength: 0n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext, GroupOrder.DESCENDING);
+
+  return concatUint8Arrays([
+    encodeFetchHeader({ type: FetchHeaderType, requestId }),
+    firstEncoded,
+    secondEncoded,
+  ]);
+}
+
+/**
+ * draft-ietf-moq-transport-21 §11.4.1.1 (Flags):
+ * FETCH 応答の Group ID は要求時の Group Order で解釈する。
+ * session.fetch() に Descending を指定した場合、同じワイヤでも 2 件目以降の
+ * Group ID が Descending の式 (prior - (delta + 1)) で復号されることを検証する。
+ */
+test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映される", async () => {
+  const context = createFetchGroupOrderContext("Descending");
+
+  const fetchPromise = context.startFetch();
+  // FETCH メッセージの送信を待ち、ワイヤに出た GROUP_ORDER と Request ID を取得する
+  await waitForMacrotask();
+  assert.equal(context.sentFrames.length, 1);
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  // 要求した Descending が GROUP_ORDER パラメータ (0x22) の値 0x02 として載る
+  assert.deepEqual(findSentGroupOrderValue(sentFetch), new Uint8Array([0x02]));
+  context.enqueueFetchOk();
+  await fetchPromise;
+
+  await context.runFetchDataStream(buildGroupOrderProbeFetchStream(sentFetch.requestId));
+
+  // 先頭 Object は絶対値で Group 10 / Object 0
+  assert.equal(context.objects.length, 2);
+  assert.equal(context.objects[0]?.groupId, 10n);
+  assert.equal(context.objects[0]?.objectId, 0n);
+  // 2 件目は Descending の式で 10 - (2 + 1) = 7
+  assert.equal(context.objects[1]?.groupId, 7n);
+  assert.equal(context.objects[1]?.objectId, 1n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
+ * GROUP_ORDER を省略した FETCH は Ascending として復号する。
+ * Descending の検証と同一のワイヤを流し、2 件目以降の Group ID が
+ * Ascending の式 (prior + delta + 1) で復号されることを検証する。
+ */
+test("fetch: groupOrder 省略時は Ascending として FETCH 応答の Group ID を復号する", async () => {
+  const context = createFetchGroupOrderContext();
+
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  assert.equal(context.sentFrames.length, 1);
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  // 省略時は GROUP_ORDER パラメータを送らない (ピアは Ascending で応答する)
+  assert.isUndefined(findSentGroupOrderValue(sentFetch));
+  context.enqueueFetchOk();
+  await fetchPromise;
+
+  await context.runFetchDataStream(buildGroupOrderProbeFetchStream(sentFetch.requestId));
+
+  // 先頭 Object は絶対値で Group 10 / Object 0
+  assert.equal(context.objects.length, 2);
+  assert.equal(context.objects[0]?.groupId, 10n);
+  assert.equal(context.objects[0]?.objectId, 0n);
+  // 2 件目は Ascending の式で 10 + 2 + 1 = 13
+  assert.equal(context.objects[1]?.groupId, 13n);
+  assert.equal(context.objects[1]?.objectId, 1n);
 });
 
 /**
