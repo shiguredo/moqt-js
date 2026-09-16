@@ -371,6 +371,89 @@ test("bidiHandlePublishRequestUpdate: パラメータ無しの REQUEST_UPDATE �
 });
 
 /**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 自 endpoint が広告した上限 (2) と同数の未応答 REQUEST_UPDATE が残っている状態で
+ * さらに 1 通受信した場合、加算後の件数 (3) が上限を超えるため
+ * TOO_MANY_REQUEST_UPDATES でセッションを閉じる MUST を検証する。
+ * 未応答数は実 Map で組み立て、上限は BidiSessionInternal では readonly のため
+ * 既存の localMaxFilterRanges と同じくテスト側でキャストして代入する。
+ */
+test("bidiHandlePublishRequestUpdate: 未応答数が上限に達した状態の受信で TOO_MANY_REQUEST_UPDATES により閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+  (ctx.session as unknown as { localMaxRequestUpdates: number }).localMaxRequestUpdates = 2;
+  // 上限と同数の 2 通が未応答のまま残っている状態を作る
+  ctx.session.receivedRequestUpdateCounts.set(ctx.requestId, 2);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  // 3 通目は受理せず、REQUEST_OK も応答しない
+  assert.equal(ctx.written.length, 0);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.TOO_MANY_REQUEST_UPDATES);
+  assert.isTrue(ctx.closedWithError!.message.includes("local MAX_REQUEST_UPDATES=2"));
+  // 受信した時点で数えるため、加算後の 3 が残る
+  // (減算は受信ループが 1 回の read 単位で行う)
+  assert.equal(ctx.session.receivedRequestUpdateCounts.get(ctx.requestId), 3);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 加算後の件数が上限と等しいだけでは閉じない (N 件目までは受理する) ことを
+ * 検証する。上限 2 に対して未応答数 1 の状態で受信すると加算後は 2 になり、
+ * REQUEST_OK が応答されてセッションは閉じない。
+ */
+test("bidiHandlePublishRequestUpdate: 加算後が上限と等しい受信は REQUEST_OK を応答し閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  (ctx.session as unknown as { localMaxRequestUpdates: number }).localMaxRequestUpdates = 2;
+  ctx.session.receivedRequestUpdateCounts.set(ctx.requestId, 1);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+  // 上限と等しい 2 まで加算される
+  assert.equal(ctx.session.receivedRequestUpdateCounts.get(ctx.requestId), 2);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
+ * 未広告 (既定値 0) では未応答数がいくつ残っていても上限判定を行わないことを
+ * 検証する。§9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆で
+ * あるため、0 を拒否として扱わない。
+ */
+test("bidiHandlePublishRequestUpdate: 未広告 (0 = 無制限) では未応答数が残っていても閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  // 既定は未広告 (0 = 無制限) のため、明示せずに既定値の挙動を検証する
+  ctx.session.receivedRequestUpdateCounts.set(ctx.requestId, 5);
+
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [],
+  });
+  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.isUndefined(ctx.closedWithError);
+  assert.equal(ctx.session.receivedRequestUpdateCounts.get(ctx.requestId), 6);
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
  * REQUEST_UPDATE に出現できないパラメータ (スコープ違反) を含む
  * REQUEST_UPDATE を受信した場合、§9.20.1 の MUST に従い REQUEST_ERROR で

@@ -25,7 +25,7 @@ import {
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint } from "../varint";
-import { ControlStreamReader } from "../controlStream";
+import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import {
   bidiHandlePublishRequestUpdate,
   bidiReadRequestStreamMessages,
@@ -799,4 +799,163 @@ test("bidiReadSubscribeResponse: 送信準備中の cross-cancel でストリー
   assert.deepEqual(ctx.aborted, ["request cancelled"]);
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
   assert.isUndefined(ctx.getClosedWithError());
+});
+
+// ============================================================================
+// draft-21 適合監査: MAX_REQUEST_UPDATES の受信側強制 (§9.1.7)
+// ============================================================================
+
+/**
+ * REQUEST_UPDATE を通し番号付きで連結し、1 回の read に含まれる 1 チャンクを作る
+ *
+ * draft-ietf-moq-transport-21 §9.1.7 の上限超過は「1 回の read に上限 + 1 通が
+ * 含まれる」場合にだけ検出できる (応答 1 通ごとに減算する実装では未応答数が
+ * 常に 0 か 1 になり検出できない)。そのためテストでは複数通を 1 チャンクに
+ * 連結して届ける。
+ */
+function encodeRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
+  const writer = new ControlStreamWriter();
+  return concatUint8Arrays(
+    requestIds.map((requestId) =>
+      writer.encode(
+        MessageType.REQUEST_UPDATE,
+        encodeRequestUpdatePayload({ type: MessageType.REQUEST_UPDATE, requestId, parameters: [] }),
+      ),
+    ),
+  );
+}
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 自 endpoint が上限 N を広告した状態で、1 回の read に N+1 通の
+ * REQUEST_UPDATE を含むチャンクを届けた場合、N 通目までは REQUEST_OK を応答し
+ * N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションを閉じる MUST を
+ * 検証する (N=2)。チャンク単位の減算により、N 通目の応答後も未応答数が
+ * 残った状態で N+1 通目を判定できる。
+ */
+test("bidiReadRequestStreamMessages: 上限 + 1 通の 1 チャンクで TOO_MANY_REQUEST_UPDATES により閉じる (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+  // 上限 2 を広告した状態にする
+  // (BidiSessionInternal では readonly のため既存の localMaxFilterRanges と同じくキャストする)
+  (ctx.session as unknown as { localMaxRequestUpdates: number }).localMaxRequestUpdates = 2;
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 1 回の read に 3 通 (上限 2 + 1) を連結して届ける
+  ctx.readableController.enqueue(encodeRequestUpdateChunk([101n, 103n, 105n]));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 1 通目と 2 通目は応答し、3 通目は応答せずにセッションが閉じる
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].type, MessageType.REQUEST_OK);
+  assert.equal(messages[1].type, MessageType.REQUEST_OK);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.TOO_MANY_REQUEST_UPDATES);
+  // セッションを閉じる分岐でも、チャンク単位の減算は同じ finally が担うため残留しない
+  assert.equal(ctx.session.receivedRequestUpdateCounts.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 上限以内のチャンクを応答ごとに繰り返し届ける限り閉じないことを検証する。
+ * 1 回の read のメッセージ列を処理し終えると、その read で加算した件数分が
+ * 未応答数から戻るため、チャンクをまたいで未応答数が積み上がらない。
+ */
+test("bidiReadRequestStreamMessages: 上限以内のチャンクを繰り返し届けても閉じない (publish ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+  (ctx.session as unknown as { localMaxRequestUpdates: number }).localMaxRequestUpdates = 2;
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 上限と同数の 2 通のチャンクを続けて 2 つ届ける (合計 4 通)
+  ctx.readableController.enqueue(encodeRequestUpdateChunk([101n, 103n]));
+  ctx.readableController.enqueue(encodeRequestUpdateChunk([105n, 107n]));
+  ctx.readableController.close();
+  await readPromise;
+
+  // どのチャンクも上限以内のため、4 通すべてに REQUEST_OK が応答される
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 4);
+  for (const message of messages) {
+    assert.equal(message.type, MessageType.REQUEST_OK);
+  }
+  assert.isUndefined(ctx.closedWithError);
+  // 各チャンクの処理後に未応答数が戻るため、エントリは残らない
+  assert.equal(ctx.session.receivedRequestUpdateCounts.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
+ * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けても閉じず、すべての
+ * REQUEST_UPDATE に応答することを検証する。§9.1.6 の MAX_FILTER_RANGES の 0 が
+ * 「受信拒否」なのとは意味が逆であるため、0 を拒否として扱わない。
+ */
+test("bidiReadRequestStreamMessages: 未広告 (0 = 無制限) では上限 + 1 通のチャンクでも閉じずすべて応答する (publish ロール)", async () => {
+  // 既定は未広告 (0 = 無制限) のため、明示せずに既定値の挙動を検証する
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  ctx.readableController.enqueue(encodeRequestUpdateChunk([101n, 103n, 105n, 107n]));
+  ctx.readableController.close();
+  await readPromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.equal(messages.length, 4);
+  for (const message of messages) {
+    assert.equal(message.type, MessageType.REQUEST_OK);
+  }
+  assert.isUndefined(ctx.closedWithError);
+  assert.equal(ctx.session.receivedRequestUpdateCounts.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 / §9.2 / §6.4.2.2:
+ * 応答を送らずに無視する分岐 (subscribe ロールで GOAWAY 受信済み) でも
+ * 未応答数が残留しないことを検証する。減算は応答の有無に依存せず、1 回の read の
+ * メッセージ列の処理を終えた時点の finally が担う。
+ */
+test("bidiReadRequestStreamMessages: GOAWAY 受信後に無視する REQUEST_UPDATE でも未応答数が残留しない (subscribe ロール)", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+  // GOAWAY を受信済みの subscribe ロールを作る (送信方向が FIN 済みで応答できない)
+  ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.enqueue(encodeRequestUpdateChunk([101n, 103n]));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 応答を送らず (§6.4.2.2 により FIN 後にピアは REQUEST_UPDATE を送るべきではない)、
+  // セッションも閉じない
+  assert.equal(ctx.written.length, 0);
+  assert.isUndefined(ctx.closedWithError);
+  // 応答を送らない分岐でもチャンク単位の減算が働き、エントリは残らない
+  assert.equal(ctx.session.receivedRequestUpdateCounts.size, 0);
 });
