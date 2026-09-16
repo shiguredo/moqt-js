@@ -295,6 +295,24 @@ export interface BidiSessionInternal {
   // MAX_FILTER_RANGES（未広告時は 0 = Range Filter 受信拒否）
   readonly localMaxFilterRanges: number;
 
+  // draft-ietf-moq-transport-21 §9.1.7: 自 endpoint が SETUP で広告した
+  // MAX_REQUEST_UPDATES（未広告時は 0 = 無制限。MAX_FILTER_RANGES の 0 が
+  // 「受信拒否」なのとは意味が逆である）
+  readonly localMaxRequestUpdates: number;
+
+  /**
+   * リクエストストリームごとの未応答 REQUEST_UPDATE 数
+   *
+   * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+   * キーは受信ループが持つ request stream の Request ID である。§6.4.2.1 により
+   * REQUEST_UPDATE 自身の Request ID は更新ごとに新規 ID を消費して対象リクエストを
+   * 識別しないため、メッセージの Request ID はキーに使わない。
+   * 加算は 1 通の受信時 (recordIncomingRequestUpdate)、減算は 1 回の read で得た
+   * メッセージ列の処理を終えた時点 (restoreIncomingRequestUpdateCount) に行う。
+   * 受信 REQUEST_UPDATE の 2 経路が同じフィールドを更新する。
+   */
+  readonly receivedRequestUpdateCounts: Map<bigint, number>;
+
   /**
    * ピアが REGISTER した Authorization Token のキャッシュ
    *
@@ -1579,6 +1597,73 @@ async function processIncomingRequestUpdateAuthorizationTokens(
 }
 
 /**
+ * 受信 REQUEST_UPDATE をストリーム単位の未応答数に加算し、上限超過を判定する
+ *
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 「If an endpoint receives a REQUEST_UPDATE on a stream that already has
+ *  MAX_REQUEST_UPDATES outstanding REQUEST_UPDATEs, it MUST close the session
+ *  with TOO_MANY_REQUEST_UPDATES.」
+ * 上限は自 endpoint が SETUP で広告した値で、0 は無制限を意味する
+ * (「A value of 0 means the endpoint does not limit REQUEST_UPDATE
+ *  concurrency.」)。§9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは
+ * 意味が逆であるため、0 を拒否として扱わない。
+ * 判定は加算後の件数で行い、上限と等しいだけでは閉じず、超えた時点 (N+1 通目) で
+ * 閉じる (§9.1.7 の MUST は「受信時点で既に MAX_REQUEST_UPDATES 件が未応答」を
+ * 要件とするため、N 件目までは受理する)。
+ * 加算は 1 通の処理の先頭、デコード直後の await を挟まない位置で行う。受信した
+ * 時点で数えることで、同じ read に含まれる後続の REQUEST_UPDATE も同じ基準で
+ * 判定できる (減算は呼び出し元ループが 1 回の read 単位で行う)。
+ *
+ * @returns 上限超過時に closeWithError へ渡す SessionError。上限内なら null
+ */
+function recordIncomingRequestUpdate(
+  session: BidiSessionInternal,
+  requestId: bigint,
+): SessionError | null {
+  const count = (session.receivedRequestUpdateCounts.get(requestId) ?? 0) + 1;
+  session.receivedRequestUpdateCounts.set(requestId, count);
+  const limit = session.localMaxRequestUpdates;
+  if (limit > 0 && count > limit) {
+    return new SessionError(
+      `too many outstanding REQUEST_UPDATEs on request stream: streamRequestId=${requestId} outstanding=${count} local MAX_REQUEST_UPDATES=${limit}`,
+      SessionErrorCode.TOO_MANY_REQUEST_UPDATES,
+    );
+  }
+  return null;
+}
+
+/**
+ * 1 回の read の先頭で記録した未応答数へ戻す (チャンク単位の減算)
+ *
+ * draft-ietf-moq-transport-21 §9.1.7:
+ * 広告した MAX_REQUEST_UPDATES は「未応答の REQUEST_UPDATE」の同時数を制限する。
+ * 受信ループは応答の書き込みを await してから次のメッセージへ進むため、減算を
+ * 応答 1 通ごとに行うと未応答数が常に 0 か 1 にしかならず、同じ read に含まれる
+ * N+1 通目を検出できない (§9.1.7 が「An implementation that processes and responds
+ * to a REQUEST_UPDATE immediately might not detect when a peer has pipelined
+ * messages exceeding its limit」と認める状態)。そのため減算は 1 回の read で
+ * 得たメッセージ列の処理を終えた時点でまとめて行う (この read で加算した件数分の
+ * 減算と等価)。応答を送らずに無視する分岐やセッションを閉じる分岐でも同じ経路を
+ * 通るため、分岐ごとに減算の有無を変えない。
+ * 0 になったエントリは削除し、記録値が 0 (この read で加算が無かった) 場合は
+ * エントリを作らない。
+ *
+ * @param requestId - 受信ループが持つ request stream の Request ID
+ * @param countBeforeRead - その read の先頭で記録した未応答数
+ */
+export function restoreIncomingRequestUpdateCount(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  countBeforeRead: number,
+): void {
+  if (countBeforeRead === 0) {
+    session.receivedRequestUpdateCounts.delete(requestId);
+    return;
+  }
+  session.receivedRequestUpdateCounts.set(requestId, countBeforeRead);
+}
+
+/**
  * 受信 REQUEST_UPDATE の前置検証を行う
  *
  * draft-ietf-moq-transport-21 §9.5 / §9.2 / §9.20.3 / §8.9:
@@ -1676,6 +1761,10 @@ async function bidiPreflightRequestUpdate(
  * REQUEST_ERROR を 1 通応答する (coalescing はスコープ外)。
  *
  * 判定順序:
+ * (0) 受信した REQUEST_UPDATE をストリーム単位の未応答数に加算し、自 endpoint が
+ *     SETUP で広告した MAX_REQUEST_UPDATES (§9.1.7) を超える場合は
+ *     TOO_MANY_REQUEST_UPDATES でセッションを閉じる。加算は 1 通の処理の先頭で
+ *     行うため、以降の検証より先に判定する。
  * (1) デコード結果の Request ID のパリティ・重複検証。違反は §6.4.2.1 の MUST
  *     により INVALID_REQUEST_ID でセッションを閉じる。更新は新規 ID を
  *     消費するため、ストリーム紐付け ID との一致照合は行わない。
@@ -1732,6 +1821,17 @@ export async function bidiHandlePublishRequestUpdate(
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
     );
+    return;
+  }
+
+  // 判定順序 (0): 未応答数の加算と MAX_REQUEST_UPDATES の上限判定
+  // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+  // 受信した時点 (await を挟む前) で数え、加算後の件数が広告した上限を
+  // 超えていれば TOO_MANY_REQUEST_UPDATES でセッションを閉じる。
+  // 上限 0 は無制限のため判定しない (詳細は recordIncomingRequestUpdate を参照)。
+  const requestUpdateLimitError = recordIncomingRequestUpdate(session, requestId);
+  if (requestUpdateLimitError !== null) {
+    session.closeWithError(requestUpdateLimitError);
     return;
   }
 
@@ -2175,258 +2275,224 @@ export async function bidiReadRequestStreamMessages(
       }
 
       const messages = controlReader.feed(value);
-      for (const msg of messages) {
-        session.emitDebug("recv", msg.type, msg.payload);
+      // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+      // この read の先頭の未応答数を記録し、メッセージ列の処理を終えた時点で
+      // 記録した値へ戻す (チャンク単位の減算)。1 通ごとに減算すると、応答の
+      // 書き込みを await してから次のメッセージへ進む構造のため未応答数が
+      // 常に 0 か 1 にしかならず、同じ read に含まれる N+1 通目を検出できない。
+      const requestUpdateCountBeforeRead = session.receivedRequestUpdateCounts.get(requestId) ?? 0;
+      try {
+        for (const msg of messages) {
+          session.emitDebug("recv", msg.type, msg.payload);
 
-        switch (msg.type) {
-          case MessageType.PUBLISH_DONE: {
-            bidiHandlePublishDone(session, msg.payload, requestId);
-            break;
-          }
-          case MessageType.PUBLISH_STATE_NOTIFY: {
-            // draft-ietf-moq-transport-21 §9.10: 受信と違反処理はハンドラ内。
-            if (!bidiHandlePublishStateNotify(session, msg.payload, requestId, role)) {
-              return;
+          switch (msg.type) {
+            case MessageType.PUBLISH_DONE: {
+              bidiHandlePublishDone(session, msg.payload, requestId);
+              break;
             }
-            break;
-          }
-          case MessageType.REQUEST_OK: {
-            // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
-            // 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、Track Properties は
-            // 空が必須 (違反処理はヘルパー内で行う)。
-            if (!handleRequestUpdateOkMessage(session, msg.payload, requestId)) {
-              return;
+            case MessageType.PUBLISH_STATE_NOTIFY: {
+              // draft-ietf-moq-transport-21 §9.10: 受信と違反処理はハンドラ内。
+              if (!bidiHandlePublishStateNotify(session, msg.payload, requestId, role)) {
+                return;
+              }
+              break;
             }
-            break;
-          }
-          case MessageType.REQUEST_ERROR: {
-            const decoded = decodeRequestErrorPayload(msg.payload);
-            const error = new RequestError(
-              decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-              normalizeRequestErrorCode(Number(decoded.errorCode)),
-            );
-            // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
-            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
-            // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
-            deleteFillTargetsForPendingUpdates(session, requestId);
-            rejectPendingRequestUpdates(session, requestId, error);
-            break;
-          }
-          case MessageType.REQUEST_UPDATE: {
-            // draft-ietf-moq-transport-21 §9.5:
-            // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
-            //  subscription established with PUBLISH.」
-            // クライアントが Publisher の場合、サーバー (Subscriber 役) が
-            // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
-            //
-            // draft-ietf-moq-transport-21 §9.5:
-            // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
-            //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
-            //  successful, unless it is coalescing failed updates.」
-            // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
-            // ループ catch (toSessionCloseError) と同じだが、ここでは
-            // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
-            // 後続のパラメータ検証を実行しないよう早期 return する
-            // (bidiHandlePublishRequestUpdate と同パターン)。
-            let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
-            try {
-              decoded = decodeRequestUpdatePayload(msg.payload);
-            } catch (err) {
+            case MessageType.REQUEST_OK: {
+              // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+              // 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、Track Properties は
+              // 空が必須 (違反処理はヘルパー内で行う)。
+              if (!handleRequestUpdateOkMessage(session, msg.payload, requestId)) {
+                return;
+              }
+              break;
+            }
+            case MessageType.REQUEST_ERROR: {
+              const decoded = decodeRequestErrorPayload(msg.payload);
+              const error = new RequestError(
+                decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
+                normalizeRequestErrorCode(Number(decoded.errorCode)),
+              );
+              // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
+              // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
+              // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+              deleteFillTargetsForPendingUpdates(session, requestId);
+              rejectPendingRequestUpdates(session, requestId, error);
+              break;
+            }
+            case MessageType.REQUEST_UPDATE: {
+              // draft-ietf-moq-transport-21 §9.5:
+              // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
+              //  subscription established with PUBLISH.」
+              // クライアントが Publisher の場合、サーバー (Subscriber 役) が
+              // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
+              //
+              // draft-ietf-moq-transport-21 §9.5:
+              // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
+              //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
+              //  successful, unless it is coalescing failed updates.」
+              // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
+              // ループ catch (toSessionCloseError) と同じだが、ここでは
+              // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
+              // 後続のパラメータ検証を実行しないよう早期 return する
+              // (bidiHandlePublishRequestUpdate と同パターン)。
+              let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
+              try {
+                decoded = decodeRequestUpdatePayload(msg.payload);
+              } catch (err) {
+                session.closeWithError(
+                  new SessionError(
+                    `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
+                    SessionErrorCode.PROTOCOL_VIOLATION,
+                  ),
+                );
+                return;
+              }
+
+              // 未応答数の加算と MAX_REQUEST_UPDATES の上限判定
+              // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+              // 受信した時点 (await を挟む前) で数え、加算後の件数が自 endpoint が
+              // SETUP で広告した上限を超えていれば TOO_MANY_REQUEST_UPDATES で
+              // セッションを閉じる。上限 0 は無制限のため判定しない (詳細は
+              // recordIncomingRequestUpdate を参照)。
+              // closeWithError は throw しないため、他のセッション終了検出と同じく
+              // return して読み取りループを抜け、同一チャンクの残りメッセージの処理を
+              // 打ち切る。
+              const requestUpdateLimitError = recordIncomingRequestUpdate(session, requestId);
+              if (requestUpdateLimitError !== null) {
+                session.closeWithError(requestUpdateLimitError);
+                return;
+              }
+
+              // デコード結果の Request ID のパリティ・重複検証
+              // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
+              // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
+              // §6.4.2.1 MUST を GOAWAY 拒否 (§9.4 MAY) と想定外更新 (§9.5) の
+              // PROTOCOL_VIOLATION より先に行う。
+              const requestIdError = session.validateIncomingRequestId(decoded.requestId);
+              if (requestIdError !== null) {
+                session.closeWithError(requestIdError);
+                return;
+              }
+
+              // draft-ietf-moq-transport-21 §9.5 / §9.20.3 / §8.9:
+              // subscribe ロールの想定外 REQUEST_UPDATE、AUTHORIZATION TOKEN、
+              // GOAWAY の判定を順に行う (詳細は bidiPreflightRequestUpdate を参照)。
+              const preflight = await bidiPreflightRequestUpdate(session, requestId, decoded, role);
+              if (preflight === "return") {
+                return;
+              }
+              if (preflight === "break") {
+                break;
+              }
+
+              // パラメータスコープ検証
+              // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
+              const scopeError = validateParameterScope(
+                decoded.parameters,
+                REQUEST_UPDATE_ALLOWED_PARAMS,
+                "REQUEST_UPDATE",
+              );
+              if (scopeError !== null) {
+                session.closeWithError(scopeError);
+                return;
+              }
+
+              // Range Filter の値域・構造・組み合わせ重複検証
+              // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15:
+              // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
+              // 検証は状態変更 (setForwardState) より前に配置し、違反で
+              // REQUEST_ERROR を応答したにも関わらず forward state が反映される
+              // 不整合を防ぐ。
+              // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
+              // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
+              // validateLocationAndFillParameters のデコード結果を上限合算と
+              // fill 範囲評価で再利用する (catch で break / throw するため、
+              // 検証通過時は必ず値が入る)。
+              let decodedFill: DecodedLocationAndFill = {
+                locationFilter: undefined,
+                fillInnerParameters: undefined,
+                fillInnerLocationFilter: undefined,
+              };
+              try {
+                validateRangeFilterCombination(decoded.parameters);
+                decodedFill = validateLocationAndFillParameters(decoded.parameters);
+                // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+                // 自 endpoint が広告した上限 (未広告時 0) を超える Range Filter は
+                // REQUEST_ERROR (INVALID_FILTER) で拒否する。
+                validateIncomingRangeFilterLimits(
+                  decoded.parameters,
+                  decodedFill.fillInnerParameters,
+                  session.localMaxFilterRanges ?? 0,
+                  "REQUEST_UPDATE",
+                );
+              } catch (error) {
+                if (error instanceof InvalidFilterError) {
+                  await bidiSendRequestError(
+                    session,
+                    requestId,
+                    RequestErrorCode.INVALID_FILTER,
+                    error.message,
+                  );
+                  // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
+                  await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+                  break;
+                }
+                throw error;
+              }
+
+              // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
+              // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
+              // toSessionCloseError で PROTOCOL_VIOLATION にして
+              // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
+              // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
+              // 除いて REQUEST_OK を応答する。
+
+              // 受理した更新への応答 (REQUEST_OK、または publisher 不在・
+              // fill fetch 非対応の REQUEST_ERROR) は respondToPublishRequestUpdate
+              // が担う (§9.5 / §9.5.1 / §9.20.18)。
+              await respondToPublishRequestUpdate(session, requestId, decoded, decodedFill);
+              break;
+            }
+            case MessageType.GOAWAY: {
+              // draft-ietf-moq-transport-21 §9.2:
+              // リクエストストリーム上の GOAWAY は当該リクエストの
+              // マイグレーションのみを目的とし、セッション全体は閉じない。
+              // "A GOAWAY MAY also be sent on a request stream to initiate
+              //  migration of that individual request."
+              // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
+              const goawayError = validateNoDuplicateGoawayOnRequestStream(
+                requestId,
+                session.goawayReceivedOnRequestStreams,
+              );
+              if (goawayError !== null) {
+                session.closeWithError(goawayError);
+                return;
+              }
+              const decoded = decodeGoawayPayload(msg.payload);
+              // draft-ietf-moq-transport-21 §9.2:
+              // 「Upon receiving a GOAWAY on a request stream, the endpoint SHOULD
+              //  re-issue that specific request ... and close the old request stream
+              //  using the appropriate mechanism (e.g. FIN, stream reset, or
+              //  PUBLISH_DONE).」
+              // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+              // (§9.2 MUST)。
+              // subscription state は変更しない (§9.2「The GOAWAY message does
+              // not impact subscription state.」)。
+              await closeOldRequestStreamOnGoaway(session, requestId, decoded.newSessionUri);
+              break;
+            }
+            default:
               session.closeWithError(
                 new SessionError(
-                  `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
+                  `unknown request stream message type: 0x${msg.type.toString(16)}`,
                   SessionErrorCode.PROTOCOL_VIOLATION,
                 ),
               );
               return;
-            }
-
-            // デコード結果の Request ID のパリティ・重複検証
-            // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
-            // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
-            // §6.4.2.1 MUST を GOAWAY 拒否 (§9.4 MAY) と想定外更新 (§9.5) の
-            // PROTOCOL_VIOLATION より先に行う。
-            const requestIdError = session.validateIncomingRequestId(decoded.requestId);
-            if (requestIdError !== null) {
-              session.closeWithError(requestIdError);
-              return;
-            }
-
-            // draft-ietf-moq-transport-21 §9.5 / §9.20.3 / §8.9:
-            // subscribe ロールの想定外 REQUEST_UPDATE、AUTHORIZATION TOKEN、
-            // GOAWAY の判定を順に行う (詳細は bidiPreflightRequestUpdate を参照)。
-            const preflight = await bidiPreflightRequestUpdate(session, requestId, decoded, role);
-            if (preflight === "return") {
-              return;
-            }
-            if (preflight === "break") {
-              break;
-            }
-
-            // パラメータスコープ検証
-            // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
-            const scopeError = validateParameterScope(
-              decoded.parameters,
-              REQUEST_UPDATE_ALLOWED_PARAMS,
-              "REQUEST_UPDATE",
-            );
-            if (scopeError !== null) {
-              session.closeWithError(scopeError);
-              return;
-            }
-
-            // Range Filter の値域・構造・組み合わせ重複検証
-            // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15:
-            // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
-            // 検証は状態変更 (setForwardState) より前に配置し、違反で
-            // REQUEST_ERROR を応答したにも関わらず forward state が反映される
-            // 不整合を防ぐ。
-            // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
-            // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
-            // validateLocationAndFillParameters のデコード結果を上限合算と
-            // fill 範囲評価で再利用する (catch で break / throw するため、
-            // 検証通過時は必ず値が入る)。
-            let decodedFill: DecodedLocationAndFill = {
-              locationFilter: undefined,
-              fillInnerParameters: undefined,
-              fillInnerLocationFilter: undefined,
-            };
-            try {
-              validateRangeFilterCombination(decoded.parameters);
-              decodedFill = validateLocationAndFillParameters(decoded.parameters);
-              // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
-              // 自 endpoint が広告した上限 (未広告時 0) を超える Range Filter は
-              // REQUEST_ERROR (INVALID_FILTER) で拒否する。
-              validateIncomingRangeFilterLimits(
-                decoded.parameters,
-                decodedFill.fillInnerParameters,
-                session.localMaxFilterRanges ?? 0,
-                "REQUEST_UPDATE",
-              );
-            } catch (error) {
-              if (error instanceof InvalidFilterError) {
-                await bidiSendRequestError(
-                  session,
-                  requestId,
-                  RequestErrorCode.INVALID_FILTER,
-                  error.message,
-                );
-                // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
-                await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-                break;
-              }
-              throw error;
-            }
-
-            // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
-            // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
-            // toSessionCloseError で PROTOCOL_VIOLATION にして
-            // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
-            // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
-            // 除いて REQUEST_OK を応答する。
-
-            const publisher = session.publishers.get(requestId);
-            if (publisher) {
-              // draft-ietf-moq-transport-21 §3.4 / §3.4.1 / §9.5 / §9.20.19:
-              // LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が
-              // fill fetch ストリームを必要とするかを判定する。moqt-js は
-              // fill fetch ストリームを開けないため、必要な場合は
-              // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
-              // applyPublishRequestUpdate を参照。
-              if (applyPublishRequestUpdate(publisher, decoded.parameters, decodedFill)) {
-                await bidiSendRequestError(
-                  session,
-                  requestId,
-                  RequestErrorCode.NOT_SUPPORTED,
-                  FILL_NOT_SUPPORTED_REASON,
-                );
-                // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
-                await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-                break;
-              }
-
-              // REQUEST_OK を送信 (draft-ietf-moq-transport-21 §9.5 MUST)
-              // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
-              // "If Objects have been published on this Track the Publisher MUST
-              //  include this parameter." 自 endpoint が Publisher として
-              // 受理する REQUEST_UPDATE の REQUEST_OK には、publish 済みの
-              // 最大 Location を LARGEST_OBJECT として必ず含める (§9.5.1 が
-              // 増加した End Location との隙間を FETCH で補う前提を定める)。
-              const okParameters: Parameter[] = [];
-              const largestLocation = publisher.getLargestLocation();
-              if (largestLocation !== null) {
-                okParameters.push({
-                  type: MessageParameterType.LARGEST_OBJECT,
-                  value: encodeLocation(largestLocation),
-                });
-              }
-              const okPayload = encodeRequestOkPayload({
-                type: MessageType.REQUEST_OK,
-                parameters: okParameters,
-                trackProperties: [],
-              });
-              if (session.controlWriter) {
-                const message = session.controlWriter.encode(MessageType.REQUEST_OK, okPayload);
-                const streamInfo = session.requestStreams.get(requestId);
-                if (streamInfo) {
-                  await streamInfo.writer.write(message);
-                }
-              }
-              session.emitDebug("send", MessageType.REQUEST_OK, okPayload);
-            } else {
-              // publisher が存在しない場合は REQUEST_ERROR を送信
-              // draft-ietf-moq-transport-21 §9.5: 更新失敗時は REQUEST_ERROR
-              // 書き込み失敗は黙殺し、後続の PUBLISH_DONE 送信に進む
-              // (GOING_AWAY / INVALID_FILTER 経路と同一の回復力にする)。
-              await bidiSendRequestError(
-                session,
-                requestId,
-                RequestErrorCode.INTERNAL_ERROR,
-                "publisher not found for request update",
-              );
-              // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
-              // publisher がないため開設数は確定できず Stream Count は 2^64 - 1 とする。
-              await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-            }
-            break;
           }
-          case MessageType.GOAWAY: {
-            // draft-ietf-moq-transport-21 §9.2:
-            // リクエストストリーム上の GOAWAY は当該リクエストの
-            // マイグレーションのみを目的とし、セッション全体は閉じない。
-            // "A GOAWAY MAY also be sent on a request stream to initiate
-            //  migration of that individual request."
-            // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
-            const goawayError = validateNoDuplicateGoawayOnRequestStream(
-              requestId,
-              session.goawayReceivedOnRequestStreams,
-            );
-            if (goawayError !== null) {
-              session.closeWithError(goawayError);
-              return;
-            }
-            const decoded = decodeGoawayPayload(msg.payload);
-            // draft-ietf-moq-transport-21 §9.2:
-            // 「Upon receiving a GOAWAY on a request stream, the endpoint SHOULD
-            //  re-issue that specific request ... and close the old request stream
-            //  using the appropriate mechanism (e.g. FIN, stream reset, or
-            //  PUBLISH_DONE).」
-            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
-            // (§9.2 MUST)。
-            // subscription state は変更しない (§9.2「The GOAWAY message does
-            // not impact subscription state.」)。
-            await closeOldRequestStreamOnGoaway(session, requestId, decoded.newSessionUri);
-            break;
-          }
-          default:
-            session.closeWithError(
-              new SessionError(
-                `unknown request stream message type: 0x${msg.type.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
-              ),
-            );
-            return;
         }
+      } finally {
+        restoreIncomingRequestUpdateCount(session, requestId, requestUpdateCountBeforeRead);
       }
     }
   } catch (error) {
@@ -2454,7 +2520,103 @@ export async function bidiReadRequestStreamMessages(
     if (!(role === "publish" && receivedFin)) {
       session.requestStreams.delete(requestId);
     }
+    // draft-ietf-moq-transport-21 §9.1.7:
+    // ストリーム終了時にストリーム単位の未応答 REQUEST_UPDATE 数を破棄する。
+    // 残すと、以後の REQUEST_UPDATE を古い件数で超過と誤判定する。
+    // publish ロールでピア FIN を受けた場合は requestStreams の削除が done() 完了後
+    // まで遅延するが、カウンタの削除はその条件分岐の外側で行う (この読み取りループ
+    // が終了した時点で、このストリームの REQUEST_UPDATE は二度と処理されない)。
+    session.receivedRequestUpdateCounts.delete(requestId);
   }
+}
+
+/**
+ * 受理した REQUEST_UPDATE に REQUEST_OK / REQUEST_ERROR を応答する
+ *
+ * draft-ietf-moq-transport-21 §9.5 / §9.5.1 / §9.20.18:
+ * 検証を通過した REQUEST_UPDATE について、購読状態への反映と応答送信を行う。
+ * - LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が fill fetch
+ *   ストリームを必要とする場合は REQUEST_ERROR (NOT_SUPPORTED) で拒否する。
+ *   moqt-js は fill fetch ストリームを開けないためである (詳細は
+ *   applyPublishRequestUpdate を参照)。拒否時は §9.5.1 の PUBLISH_DONE
+ *   (UPDATE_FAILED) で購読を終了する。
+ * - 受理時は REQUEST_OK を送信する (§9.5 MUST)。publish 済み Object がある場合は
+ *   LARGEST_OBJECT を必ず含める (§9.20.18 MUST)。
+ * - publisher が存在しない場合は REQUEST_ERROR (INTERNAL_ERROR) で拒否する。
+ *   書き込み失敗は黙殺し、後続の PUBLISH_DONE 送信に進む (GOING_AWAY /
+ *   INVALID_FILTER 経路と同一の回復力にする)。
+ *
+ * @param decoded - デコード済みの REQUEST_UPDATE ペイロード
+ * @param decodedFill - 検証済みの LOCATION_FILTER / FILL_PARAMETERS デコード結果
+ */
+async function respondToPublishRequestUpdate(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  decoded: ReturnType<typeof decodeRequestUpdatePayload>,
+  decodedFill: DecodedLocationAndFill,
+): Promise<void> {
+  const publisher = session.publishers.get(requestId);
+  if (!publisher) {
+    // publisher が存在しない場合は REQUEST_ERROR を送信
+    // draft-ietf-moq-transport-21 §9.5: 更新失敗時は REQUEST_ERROR
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.INTERNAL_ERROR,
+      "publisher not found for request update",
+    );
+    // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
+    // publisher がないため開設数は確定できず Stream Count は 2^64 - 1 とする。
+    await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+    return;
+  }
+
+  // draft-ietf-moq-transport-21 §3.4 / §3.4.1 / §9.5 / §9.20.19:
+  // LOCATION_FILTER / FORWARD を購読状態へ反映し、FILL_PARAMETERS が
+  // fill fetch ストリームを必要とするかを判定する。moqt-js は
+  // fill fetch ストリームを開けないため、必要な場合は
+  // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
+  // applyPublishRequestUpdate を参照。
+  if (applyPublishRequestUpdate(publisher, decoded.parameters, decodedFill)) {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.NOT_SUPPORTED,
+      FILL_NOT_SUPPORTED_REASON,
+    );
+    // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
+    await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+    return;
+  }
+
+  // REQUEST_OK を送信 (draft-ietf-moq-transport-21 §9.5 MUST)
+  // draft-ietf-moq-transport-21 §9.20.18 (LARGEST OBJECT Parameter):
+  // "If Objects have been published on this Track the Publisher MUST
+  //  include this parameter." 自 endpoint が Publisher として
+  // 受理する REQUEST_UPDATE の REQUEST_OK には、publish 済みの
+  // 最大 Location を LARGEST_OBJECT として必ず含める (§9.5.1 が
+  // 増加した End Location との隙間を FETCH で補う前提を定める)。
+  const okParameters: Parameter[] = [];
+  const largestLocation = publisher.getLargestLocation();
+  if (largestLocation !== null) {
+    okParameters.push({
+      type: MessageParameterType.LARGEST_OBJECT,
+      value: encodeLocation(largestLocation),
+    });
+  }
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: okParameters,
+    trackProperties: [],
+  });
+  if (session.controlWriter) {
+    const message = session.controlWriter.encode(MessageType.REQUEST_OK, okPayload);
+    const streamInfo = session.requestStreams.get(requestId);
+    if (streamInfo) {
+      await streamInfo.writer.write(message);
+    }
+  }
+  session.emitDebug("send", MessageType.REQUEST_OK, okPayload);
 }
 
 /**

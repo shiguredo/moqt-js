@@ -167,6 +167,10 @@ function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     statsControlMessagesSent: 0,
@@ -302,6 +306,10 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
     goawayReceivedOnRequestStreams: new Set(),
     peerMaxRequestUpdates: 0,
     peerMaxFilterRanges: 2,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
     namespaceSubscriptions: new Map(),
     tracksSubscriptions: new Map(),
     statsControlMessagesSent: 0,

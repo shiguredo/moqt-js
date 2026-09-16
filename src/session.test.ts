@@ -27,6 +27,7 @@ import {
 import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
+import { encodeRequestUpdatePayload } from "./message/subscribe";
 import {
   createTrackNamespace,
   encodeLocation,
@@ -5878,6 +5879,16 @@ test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
 });
 
 /**
+ * SessionImpl の localMaxRequestUpdates の既定値は 0 (未広告 = 無制限) である
+ * ことを検証する (draft-ietf-moq-transport-21 §9.1.7)。
+ * §9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆である。
+ */
+test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
+  const session = createSessionImpl();
+  assert.equal(session.localMaxRequestUpdates, 0);
+});
+
+/**
  * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
  * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
  * localMaxFilterRanges に保持することを検証する
@@ -5923,6 +5934,9 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
   } as unknown as WebTransport;
 
   const session = new SessionImpl(transport, {});
+  // 未広告の既定値は 0 (無制限)。§9.1.6 の MAX_FILTER_RANGES の 0 = 受信拒否とは
+  // 意味が逆であるため、受信側のガードでも 0 を拒否として扱わない
+  assert.equal(session.localMaxRequestUpdates, 0);
   await session.initialize({
     maxAuthTokenCacheSize: 1024,
     maxRequestUpdates: 8,
@@ -5931,6 +5945,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
 
   // 自 endpoint の上限を保持する
   assert.equal(session.localMaxFilterRanges, 4);
+  assert.equal(session.localMaxRequestUpdates, 8);
 
   // 送信した SETUP から広告値を取得する
   const sent = concatUint8Arrays(sentChunks);
@@ -5943,6 +5958,104 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
   assert.equal(getSetupMaxAuthTokenCacheSize(setup), 1024);
   assert.equal(getSetupMaxRequestUpdates(setup), 8);
   assert.equal(getSetupMaxFilterRanges(setup), 4);
+});
+
+// ============================================================================
+// draft-21 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
+// ============================================================================
+
+/**
+ * 受信 PUBLISH の REQUEST_UPDATE を連結した 1 チャンクを作る
+ *
+ * draft-ietf-moq-transport-21 §9.1.7 の上限超過は 1 回の read に上限 + 1 通が
+ * 含まれる場合に検出するため、テストでは複数通を 1 チャンクに連結して届ける。
+ */
+function encodeIncomingRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
+  const writer = new ControlStreamWriter();
+  return concatUint8Arrays(
+    requestIds.map((requestId) =>
+      writer.encode(
+        MessageType.REQUEST_UPDATE,
+        encodeRequestUpdatePayload({ type: MessageType.REQUEST_UPDATE, requestId, parameters: [] }),
+      ),
+    ),
+  );
+}
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 受信 PUBLISH ストリームのサブループ (SessionImpl.runPublishStreamSubLoop) で、
+ * 自 endpoint が広告した上限 N を超える N+1 通の REQUEST_UPDATE を 1 チャンクで
+ * 受信した場合、N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションが
+ * 閉じる MUST を検証する。上限は initialize() を経ないテストのため直接設定する。
+ */
+test("受信 PUBLISH ストリーム上の MAX_REQUEST_UPDATES 超過で TOO_MANY_REQUEST_UPDATES により閉じる", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+  // 自 endpoint が上限 2 を広告した状態にする
+  session.localMaxRequestUpdates = 2;
+
+  // 1 回の read に 3 通 (上限 2 + 1) を連結した 1 チャンクを届ける。
+  // update() ではなくピアが送る REQUEST_UPDATE のため Request ID は奇数を直接使う。
+  const updateChunk = encodeIncomingRequestUpdateChunk([101n, 103n, 105n]);
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [updateChunk],
+    ),
+  );
+
+  // 3 通目の処理でセッションが閉じ、error コールバックは 1 回だけ呼ばれる
+  assert.equal(internal.sessionState, "closed");
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.TOO_MANY_REQUEST_UPDATES);
+  // ストリーム終了時にストリーム単位の未応答数は破棄される
+  assert.equal(session.receivedRequestUpdateCounts.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
+ * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けてもセッションは閉じず、
+ * すべての REQUEST_UPDATE が処理されることを検証する。§9.1.6 の
+ * MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆である。
+ */
+test("受信 PUBLISH ストリーム上の REQUEST_UPDATE は未広告 (0 = 無制限) なら何通でも閉じない", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+  // 未広告 (既定値 0 = 無制限) のまま 4 通を 1 チャンクで届ける
+  const updateChunk = encodeIncomingRequestUpdateChunk([101n, 103n, 105n, 107n]);
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [updateChunk],
+    ),
+  );
+
+  // 上限判定を行わないためセッションは閉じず、エラーも通知されない
+  assert.equal(internal.sessionState, "connected");
+  assert.equal(errors.length, 0);
+  // 各チャンクの処理後とストリーム終了時に未応答数は破棄される
+  assert.equal(session.receivedRequestUpdateCounts.size, 0);
 });
 
 // ============================================================================
