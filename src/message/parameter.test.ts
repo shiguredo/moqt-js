@@ -541,6 +541,48 @@ test("createTrackNamespace: 32 フィールドは成功し 33 フィールドは
   );
 });
 
+/**
+ * draft-ietf-moq-transport-21 §8.7 (Track Namespace Structure):
+ * 送信側も受信側と同じ制約 (フィールド数 32 以下 / 各フィールド 1 バイト以上 /
+ * 合計 4,096 バイト以下) を守る。`createTrackNamespace` と `encodeTrackNamespace` は
+ * 共通の `assertTrackNamespaceTuple` を使う。
+ */
+test("encodeTrackNamespace: フィールド長 0 のフィールドはエラー", () => {
+  assert.throws(
+    () => encodeTrackNamespace({ tuple: [new Uint8Array(0)] }),
+    /track namespace field length is zero/,
+  );
+  assert.throws(
+    () => encodeTrackNamespace({ tuple: [new Uint8Array([1]), new Uint8Array(0)] }),
+    /track namespace field length is zero/,
+  );
+});
+
+test("encodeTrackNamespace: 33 フィールドはエラー", () => {
+  const tuple = Array.from({ length: 33 }, () => new Uint8Array([1]));
+  assert.throws(
+    () => encodeTrackNamespace({ tuple }),
+    /track namespace fields exceeds maximum: 33 > 32/,
+  );
+});
+
+test("createTrackNamespace: 空フィールドはエラー", () => {
+  assert.throws(() => createTrackNamespace([""]), /track namespace field length is zero/);
+});
+
+test("encodeTrackNamespace: 0 フィールドと 32 フィールドはエンコードできる", () => {
+  // 0 フィールドは §2.4.1 の "between 0 and 32 Track Namespace Fields" により正当
+  const empty = encodeTrackNamespace({ tuple: [] });
+  const [decodedEmpty] = decodeTrackNamespace(empty);
+  assert.equal(decodedEmpty.tuple.length, 0);
+
+  // 32 フィールドは上限内
+  const tuple = Array.from({ length: 32 }, () => new Uint8Array([1]));
+  const encoded = encodeTrackNamespace({ tuple });
+  const [decoded] = decodeTrackNamespace(encoded);
+  assert.equal(decoded.tuple.length, 32);
+});
+
 test("encodeTrackNamespace で制限を超えるとエラー", () => {
   // 直接 Uint8Array で 5,000 バイトの要素を作成
   const largeElement = new Uint8Array(5000);

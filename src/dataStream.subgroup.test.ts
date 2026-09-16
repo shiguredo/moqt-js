@@ -919,3 +919,53 @@ test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると P
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
   assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
 });
+
+// ============================================================================
+// エンコーダ入口の Type Flags 検証
+// draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header)
+//
+// 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
+// デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。
+// ============================================================================
+
+test("SubgroupHeader: SUBGROUP_ID_MODE 0b11 はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x16,
+        trackAlias: 1n,
+        groupId: 0n,
+        subgroupId: 0n,
+        publisherPriority: 1,
+      }),
+    /invalid subgroup header type: 0x16, SUBGROUP_ID_MODE 0b11 is reserved/,
+  );
+});
+
+test("SubgroupHeader: bit 4 が 0 の Type Flags はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x00,
+        trackAlias: 1n,
+        groupId: 0n,
+        subgroupId: 0n,
+        publisherPriority: 1,
+      }),
+    /invalid subgroup header type: 0x0, does not match form 0b0XX1XXXX/,
+  );
+});
+
+test("SubgroupHeader: 0x7f を超える Type Flags はエンコードを拒否する", () => {
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 0x80,
+        trackAlias: 1n,
+        groupId: 0n,
+        subgroupId: 0n,
+        publisherPriority: 1,
+      }),
+    /invalid subgroup header type: 0x80, does not match form 0b0XX1XXXX/,
+  );
+});
