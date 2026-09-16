@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] FETCH 応答の Group ID を要求した Group Order で復号する
+  - draft-ietf-moq-transport-21 §11.4.1.1 は Group Order によって Group ID の計算式が変わることを定めるが、FETCH 応答の復号が Ascending 固定だった。Descending を要求しても 2 件目以降の Object の Group ID が誤っていた
+  - Session.fetch() が要求時の GROUP_ORDER を FetcherImpl に渡し、省略時は Ascending (§9.20.9) として復号する
+  - @voluntas
 - [FIX] Forward State と END_OF_GROUP で省略した Subgroup を RESET で閉じる
   - draft-ietf-moq-transport-21 §11.3.2 の MUST (Subgroup の全 Object を渡し切る前にストリームを閉じる場合は reset) に従い、Forward State 0 による送信見送りを Subgroup ストリーム単位で記録し、Group 変更 / done() / END_OF_GROUP 送信 / セッション終了で FIN ではなく RESET で閉じる
   - END_OF_GROUP status の送信でストリームを FIN し、同一 Group への後続 sendObject / sendDatagram を ProtocolViolationError で拒否する (別の Group への送信は妨げない)
@@ -58,7 +62,6 @@
   - 未応答数は request stream 単位で数え、1 回の read で得たメッセージ列を処理し終えた時点で減算する (1 通ごとに減算すると pipelining を検出できない)
   - 未広告 (0) は無制限として扱う。`SessionImpl.localMaxRequestUpdates` で広告値を保持する
   - @voluntas
-
 - [FIX] FETCH の End of Range から Object Payload Length を削除する
   - draft-ietf-moq-transport-21 §11.4.1.2 の End of Range indicator は Serialization Flags + Group ID + Object ID のみで、Object Payload Length を持たない。余分な varint を読み書きしていたため、EOR の直後に通常 Object が続くストリームでフィールド境界がずれていた
   - @voluntas

@@ -141,6 +141,16 @@ export class FetcherImpl implements Fetcher {
   }
 
   /**
+   * Fetch リクエストの Group Order を設定する (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-21 §11.4.1.1 (Flags): FETCH 応答の Group ID の
+   * 計算式は Group Order で変わるため、要求時に確定した値を保持する。
+   */
+  setGroupOrder(groupOrder: GroupOrder): void {
+    this.fetchGroupOrder = groupOrder;
+  }
+
+  /**
    * Fetch リクエストの Group Order を取得
    */
   getGroupOrder(): GroupOrder {
