@@ -4447,6 +4447,17 @@ export class SessionImpl implements Session {
                 msg.payload,
                 publishRequestId,
               );
+              // draft-ietf-moq-transport-21 §9.5:
+              // bidiHandleRequestUpdateOk は REQUEST_UPDATE_OK のパラメータスコープ違反、
+              // 未知の Mandatory Track Property、未応答の REQUEST_UPDATE が無い
+              // REQUEST_OK の 3 箇所でセッションを閉じ得る。
+              // 同一チャンクの残りメッセージを処理し続けると、後続メッセージが
+              // 別のセッション終了を検出して error コールバックが二重に通知されるため、
+              // 閉じた場合は読み取りループを終える
+              // (PUBLISH_STATE_NOTIFY / REQUEST_UPDATE 分岐と同じ判定)。
+              if (this.sessionState !== "connected") {
+                return;
+              }
               continue;
             }
             if (msg.type === MessageType.REQUEST_ERROR) {
