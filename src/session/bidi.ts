@@ -2560,7 +2560,7 @@ export async function bidiReadRequestStreamMessages(
     // 呼ばれたときに PUBLISH_DONE を送信してから自方向を FIN で閉じる必要が
     // ある。ここで requestStreams のエントリを削除してしまうと
     // publishSendPublishDone が streamInfo を引けず、PUBLISH_DONE 送信と FIN の
-    // 両方をスキップする (§9.8 の MUST「A sender MUST NOT destroy subscription
+    // 両方をスキップする (§9.9 の MUST「A sender MUST NOT destroy subscription
     // state until it sends PUBLISH_DONE」にも抵触する)。
     // ピアの graceful FIN を受けた publisher ロールのみ削除を done() 完了後まで
     // 遅延する。それ以外の exit 経路 (GOAWAY / PROTOCOL_VIOLATION /

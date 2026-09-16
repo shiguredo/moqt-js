@@ -2,9 +2,10 @@
  * MOQT Subgroup Stream
  * draft-ietf-moq-transport-21 Section 11.3 (Subgroup Streams)
  *
- * Subgroup Header (Section 11.3.1) と、その配下に並ぶ Object fields
- * (Figure 25: Object ID Delta / Properties / Object Payload Length /
- * Object Status / Object Payload) のエンコードとデコードを扱う。
+ * Subgroup Header (Section 11.3.1、Figure 25: MOQT SUBGROUP_HEADER) と、
+ * その配下に並ぶ Object fields (Figure 26: MOQT Subgroup Object Fields。
+ * Object ID Delta / Properties / Object Payload Length / Object Status /
+ * Object Payload) のエンコードとデコードを扱う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -36,7 +37,9 @@ import {
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
  *
- * Section 11.3.1 (Subgroup Header) type matrix from draft-ietf-moq-transport-21:
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) の Type Flags ビット定義
+ * (Figure 25 は MOQT SUBGROUP_HEADER のワイヤ構造図であり型表は無い) から導出した
+ * 実装側の一覧:
  * | Type | Subgroup ID Field | Subgroup ID Value | Properties | End of Group | Priority |
  * |------|-------------------|-------------------|------------|--------------|----------|
  * | 0x10 | No                | 0                 | No         | No           | Yes      |
@@ -249,7 +252,8 @@ export function hasEndOfGroup(headerType: number): boolean {
 
 /**
  * Encode a Subgroup Header
- * draft-ietf-moq-transport-21 Section 11.3.1 Figure 25
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) Figure 25
+ * (MOQT SUBGROUP_HEADER)
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -444,7 +448,8 @@ export function hasPropertiesPresent(headerType: number): boolean {
 
 /**
  * Encode Object fields for Subgroup stream
- * draft-ietf-moq-transport-21 Section 11.3.1 Figure 25:
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) Figure 26
+ * (MOQT Subgroup Object Fields):
  * {
  *   Object ID Delta (i),
  *   [Properties (..),]          <-- Only if header type has Properties Present
@@ -521,7 +526,8 @@ export interface DecodedObjectFields {
 
 /**
  * Decode Object fields from Subgroup stream
- * draft-ietf-moq-transport-21 Section 11.3.1 Figure 25
+ * draft-ietf-moq-transport-21 §11.3.1 (Subgroup Header) Figure 26
+ * (MOQT Subgroup Object Fields)
  *
  * @param data - Data buffer
  * @param headerType - Subgroup header type to determine if properties are present

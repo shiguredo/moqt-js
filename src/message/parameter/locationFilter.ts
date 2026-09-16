@@ -346,7 +346,12 @@ function requireLocationField(field: bigint | undefined, label: string): bigint 
 
 /**
  * Location Filter を LOCATION_FILTER パラメータとしてエンコードする
- * Parameter Type: 0x21 (奇数なので Length プレフィックス付き)
+ *
+ * draft-ietf-moq-transport-21 §9.20.10 (LOCATION FILTER Parameter):
+ * "A Location filter parameter has the following length-prefixed structure:"
+ * Parameter Type 0x21 の値が Length プレフィックス付き構造を持つのは、§9.20.10 が
+ * 値の構造として定めているためである (§8.3 (Key-Value-Pair Structure) の
+ * 偶数 / 奇数規則は Message Parameter には適用されない)。
  */
 export function encodeLocationFilterParameter(filter: LocationFilter): Parameter {
   const value = encodeLocationFilter(filter);
