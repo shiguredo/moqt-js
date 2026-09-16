@@ -737,6 +737,7 @@ function setOpenPublisherStream(ctx: ReturnType<typeof createPublishReadTestCont
     groupId: 0n,
     writer: dataWritable.getWriter(),
     previousObjectId: -1n,
+    omittedObjects: false,
   });
   ctx.session.publisherSendQueues.set(trackAlias, Promise.resolve());
   ctx.session.closedSubgroups.add(`${trackAlias}:0`);

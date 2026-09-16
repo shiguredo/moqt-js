@@ -59,6 +59,14 @@ export function publishSendObject(
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
   // 防御としてここでも参照する。
   if (!publisher.forwardState) {
+    // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+    // 送信を見送った Object がある Subgroup は、閉じる時に FIN ではなく RESET が
+    // 必要になる。公開経路 (PublisherImpl.sendObject) は guardSend で止まるため
+    // ここへは到達しないが、内部送信関数を直接呼ぶ経路の防御として記録する。
+    const streamState = session.publisherStreams.get(publisher.getTrackAlias());
+    if (streamState) {
+      streamState.omittedObjects = true;
+    }
     return Promise.resolve();
   }
 
@@ -152,6 +160,18 @@ export async function publishSendObjectInternal(
   if (isPublisherClosed(publisher)) {
     return;
   }
+  // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
+  // "The publisher does not send Objects if the Forward State is 0"
+  // キュー投入時には Forward State 1 でも、待機中に 0 へ変わることがある。
+  // その場合は送信せず、§11.3.2 の省略として記録する (新しい Subgroup のストリームを
+  // Forward State 0 で開かない点でも §3.1 と整合する)。
+  if (!publisher.forwardState) {
+    const existing = session.publisherStreams.get(publisher.getTrackAlias());
+    if (existing) {
+      existing.omittedObjects = true;
+    }
+    return;
+  }
   const trackAlias = publisher.getTrackAlias();
   // ID・priority 範囲検証は lookup・FIN より前に行う。公開経路では publishSendObject の
   // fail-fast が先に拒否するため、この throw が公開経路の handleError と
@@ -164,13 +184,15 @@ export async function publishSendObjectInternal(
 
   // 新しい Group または最初のオブジェクト → 新しいストリームを開く
   if (!streamState || streamState.groupId !== groupId) {
-    // 前のストリームを FIN で閉じる
+    // 前の Subgroup を §11.3.2 の判定で閉じる。
+    // 省略 (Forward State 0 の見送り) がある場合は FIN ではなく RESET にする。
+    // FIN で閉じた場合だけ closedSubgroups へ追加する (RESET は「渡し切っていない」
+    // ため、購読者からの再送を FIN 済みとして拒否してはならない)。
     if (streamState) {
-      session.publisherStreams.delete(trackAlias);
-      try {
-        await streamState.writer.close();
-      } catch {
-        // 既に閉じられている場合は無視
+      const previousGroupId = streamState.groupId;
+      const outcome = await publishCloseSubgroupStream(session, trackAlias);
+      if (outcome === "fin") {
+        session.closedSubgroups.add(`${trackAlias}:${previousGroupId}`);
       }
     }
 
@@ -230,7 +252,7 @@ export async function publishSendObjectInternal(
     // 登録が確定してから統計を加算する (closed による abort と対称にする)
     session.statsUnidirectionalStreamsOpened++;
     publisher.incrementDataStreamCount();
-    streamState = { groupId, writer, previousObjectId: -1n };
+    streamState = { groupId, writer, previousObjectId: -1n, omittedObjects: false };
     session.publisherStreams.set(trackAlias, streamState);
   }
 
@@ -310,6 +332,17 @@ export async function publishSendObjectInternal(
 
   // 状態を更新
   streamState.previousObjectId = objectId;
+
+  // draft-ietf-moq-transport-21 §11.1.2 (Object Status) / §11.3.2 (Closing Subgroup Streams):
+  // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は
+  // FIN で通知する。省略 (Forward State 0 の見送り) がある場合は FIN ではなく RESET で
+  // 閉じる (§11.3.2 の MUST)。
+  if ((params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP) {
+    const outcome = await publishCloseSubgroupStream(session, trackAlias);
+    if (outcome === "fin") {
+      session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+    }
+  }
 }
 
 /**
@@ -384,32 +417,75 @@ async function publishClosePublisherStreamInternal(
   trackAlias: bigint,
   timeoutMs: number,
 ): Promise<void> {
-  const streamState = session.publisherStreams.get(trackAlias);
-  if (streamState) {
-    session.publisherStreams.delete(trackAlias);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        streamState.writer.close(),
-        new Promise<void>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("writer.close() timed out")), timeoutMs);
-        }),
-      ]);
-    } catch {
-      // タイムアウトまたは既にクローズされている場合は無視する。
-      // 打ち切り時は graceful FIN を諦め RESET で後始末する。
-      // abort の完了は待たない (詰まった close と同様に終わらないため)。
-      // 失敗は黙殺する
-      void streamState.writer.abort("publisher stream cleanup").catch(() => {});
-    } finally {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-    }
+  // ストリームが無いときに何もしない現行の挙動を維持する
+  if (session.publisherStreams.has(trackAlias)) {
+    await publishCloseSubgroupStream(session, trackAlias, timeoutMs);
   }
 
   // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
   clearClosedSubgroupsForTrack(session, trackAlias);
+}
+
+/**
+ * Subgroup ストリームを §11.3.2 の判定で閉じる
+ *
+ * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * "If a sender closes the stream before delivering all such objects to the QUIC
+ *  stream, it MUST reset the stream.  This includes, but is not limited to:
+ *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
+ * `Subscription::omittedObjects` が真 (Forward State 0 による見送りがあった) なら
+ * RESET、偽なら FIN で閉じる。FIN の打ち切り (timeoutMs) が発生した場合は graceful な
+ * FIN を諦めて RESET で後始末する (この場合は省略の有無によらず reset)。
+ *
+ * ストリーム状態は Map から削除する。ストリームが無い場合は何もせず `"fin"` を返す
+ * (閉じる対象が無いため、呼び出し側が closedSubgroups へ追加してよい)。
+ *
+ * @param timeoutMs - FIN の打ち切りまでのミリ秒 (テスト用の短縮のためにある)
+ * @returns FIN で閉じた場合は `"fin"`、RESET で閉じた場合は `"reset"`
+ */
+export async function publishCloseSubgroupStream(
+  session: BidiSessionInternal,
+  trackAlias: bigint,
+  timeoutMs = 5000,
+): Promise<"fin" | "reset"> {
+  const streamState = session.publisherStreams.get(trackAlias);
+  if (!streamState) {
+    return "fin";
+  }
+  session.publisherStreams.delete(trackAlias);
+
+  // §11.3.2: 全 Object を渡し切る前に閉じる場合は reset MUST
+  if (streamState.omittedObjects) {
+    try {
+      // reset の完了は待たない (詰まった close と同様に終わらないため)。失敗は黙殺する
+      void streamState.writer.abort("subgroup omitted objects").catch(() => {});
+    } catch {
+      // 既に閉じている場合は無視
+    }
+    return "reset";
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      streamState.writer.close(),
+      new Promise<void>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("writer.close() timed out")), timeoutMs);
+      }),
+    ]);
+    return "fin";
+  } catch {
+    // タイムアウトまたは既にクローズされている場合は無視する。
+    // 打ち切り時は graceful FIN を諦め RESET で後始末する。
+    // abort の完了は待たない (詰まった close と同様に終わらないため)。
+    // 失敗は黙殺する
+    void streamState.writer.abort("publisher stream cleanup").catch(() => {});
+    return "reset";
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /**
