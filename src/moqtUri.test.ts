@@ -111,6 +111,72 @@ test("moqt:// だけ (host なし) は Error になる", () => {
   assert.throws(() => normalizeMoqtUri("moqt://"), Error, /empty host/);
 });
 
+// ---- normalizeMoqtUri: IPv6 リテラル ----
+
+test("IPv6 リテラル (ポート付き) はそのまま保持される", () => {
+  const result = normalizeMoqtUri("moqt://[::1]:4443/moqt");
+  assert.equal(result.url, "https://[::1]:4443/moqt");
+  assert.equal(result.fragment, null);
+});
+
+test("IPv6 リテラル (ポートなし) はそのまま保持される", () => {
+  const result = normalizeMoqtUri("moqt://[2001:db8::1]/moqt");
+  assert.equal(result.url, "https://[2001:db8::1]/moqt");
+});
+
+test("IPv6 リテラル + クエリ + fragment は url 側から fragment のみ除去される", () => {
+  const result = normalizeMoqtUri("moqt://[2001:db8::1]:4443/app?x=1#track:v");
+  assert.equal(result.url, "https://[2001:db8::1]:4443/app?x=1");
+  assert.deepEqual(result.fragment, { type: "track", value: "v" });
+});
+
+test("閉じ括弧のない IPv6 リテラルは Error になる", () => {
+  assert.throws(() => normalizeMoqtUri("moqt://[::1/moqt"), Error, /unterminated ipv6 host/);
+  assert.throws(() => normalizeMoqtUri("moqt://[::1"), Error, /unterminated ipv6 host/);
+});
+
+// ---- normalizeMoqtUri: userinfo (RFC 3986 §3.2 の authority) ----
+
+test("userinfo は https URL の userinfo として保持される", () => {
+  const result = normalizeMoqtUri("moqt://user:pass@example.com/moqt");
+  assert.equal(result.url, "https://user:pass@example.com/moqt");
+});
+
+test("userinfo のパスワードに含まれる @ は最後の @ までが userinfo として扱われる", () => {
+  // authority の切り出しは lastIndexOf("@") のため、パスワード中の @ は userinfo に残り、
+  // URL 正規化でパーセントエンコードされる
+  const result = normalizeMoqtUri("moqt://user:p@ss@example.com/moqt");
+  assert.equal(result.url, "https://user:p%40ss@example.com/moqt");
+});
+
+test("user 名が空の userinfo は URL 正規化で除去される", () => {
+  const result = normalizeMoqtUri("moqt://@example.com/moqt");
+  assert.equal(result.url, "https://example.com/moqt");
+});
+
+test("userinfo の後ろに host が無い場合は Error になる", () => {
+  assert.throws(() => normalizeMoqtUri("moqt://user@/moqt"), Error, /empty host/);
+});
+
+// ---- normalizeMoqtUri: ポート ----
+
+test("範囲外のポートは Error になる", () => {
+  assert.throws(() => normalizeMoqtUri("moqt://example.com:99999/moqt"), Error, /invalid url/);
+});
+
+test("数値でないポートは Error になる", () => {
+  assert.throws(() => normalizeMoqtUri("moqt://example.com:abc/moqt"), Error, /invalid url/);
+});
+
+test("空ポートは URL 正規化で除去される", () => {
+  const result = normalizeMoqtUri("moqt://example.com:/moqt");
+  assert.equal(result.url, "https://example.com/moqt");
+});
+
+test("ポートのみ (host なし) は Error になる", () => {
+  assert.throws(() => normalizeMoqtUri("moqt://:4443/moqt"), Error, /empty host/);
+});
+
 // ---- parseFragment ----
 
 test("parseFragment: 正しい形式 type:value がパースされる", () => {

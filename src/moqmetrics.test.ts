@@ -210,13 +210,42 @@ test("MetricObject: value 欠落・型誤りは throw", () => {
 });
 
 // 非有限数は null 化して送出されるため、エンコード時に失敗させる。
-test("Metrics object: 非有限数のエンコードは throw", () => {
-  assert.throws(() => encodeCaptureObject({ capture_timestamp: Number.NaN }), /non-finite/);
+test("Metrics object: 非有限数 (NaN / 正負の Infinity) のエンコードは throw", () => {
+  // 対象は既知数値フィールドのみ (capture_timestamp / value)。JSON.stringify は
+  // 非有限数を null に落とすため、送出前に fail-fast する。
+  for (const nonFinite of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.throws(() => encodeCaptureObject({ capture_timestamp: nonFinite }), /non-finite/);
+    assert.throws(() => encodeMetricObject({ value: nonFinite }), /non-finite/);
+  }
+});
+
+// JSON は NaN / Infinity をリテラルで表現できない。指数表記の範囲外 (1e999) は
+// JSON.parse が Infinity を返すため、デコード側の有限数検査で拒否される。
+test("Metrics payload: 指数表記の範囲外 (1e999 → Infinity) は throw", () => {
   assert.throws(
-    () => encodeCaptureObject({ capture_timestamp: Number.NEGATIVE_INFINITY }),
-    /non-finite/,
+    () => decodeCaptureObject(new TextEncoder().encode('{"capture_timestamp":1e999}')),
+    ProtocolViolationError,
+    /must be a finite number/,
   );
-  assert.throws(() => encodeMetricObject({ value: Number.POSITIVE_INFINITY }), /non-finite/);
+  assert.throws(
+    () => decodeMetricObject(new TextEncoder().encode('{"value":-1e999}')),
+    ProtocolViolationError,
+    /must be a finite number/,
+  );
+});
+
+// NaN は JSON のリテラルではないため、payload 自体が不正な JSON として拒否される。
+test("Metrics payload: NaN リテラルは不正な JSON として throw", () => {
+  assert.throws(
+    () => decodeCaptureObject(new TextEncoder().encode('{"capture_timestamp":NaN}')),
+    ProtocolViolationError,
+    /invalid moqmetrics capture object payload JSON/,
+  );
+  assert.throws(
+    () => decodeMetricObject(new TextEncoder().encode('{"value":NaN}')),
+    ProtocolViolationError,
+    /invalid moqmetrics metric object payload JSON/,
+  );
 });
 
 test("metricsTrackNamespace: 空 resourceId は throw", () => {

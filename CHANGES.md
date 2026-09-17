@@ -1613,6 +1613,13 @@
   - SUBGROUP_DELIVERY_TIMEOUT の強制 (Subgroup 完了後のタイマー開始とストリームリセット) を moqt-js が実装していないことを明記する。比較と強制は Publisher 値と Subscriber 値の両方を持つエンドポイント (典型的にはリレー) の責務である
   - 同じ枠組みを規定する draft-ietf-moq-transport-21 §5.2 (Delivery Timeouts and Data Reliability) を参照先に加え、OBJECT_DELIVERY_TIMEOUT の doc コメントと対称の構造に揃える
   - @voluntas
+- [UPDATE] 境界値・値域外入力の挙動をテストで pin する
+  - LOC の VIDEO_FRAME_MARKING で temporalLayerId / spatialLayerId が定義域外のとき下位ビットに折り畳まれること、折り畳み後の TID で isBaseLayerSync の抑圧が判定されること、単体エンコーダと Properties 経由の 2 経路で結果が一致することを検証する (PBT の arbitrary は RFC 9626 §3.1 の定義域のみを生成するため未検証だった)
+  - moqlog の pri は 0-23 の値域と欠落時の既定値 1 を本実装が適用しないこと、severity の短縮形 "Info" が LOG_SEVERITY_LEVELS に無く受理後も正規化されないことを検証する
+  - moqmetrics は NaN / 正負の Infinity のエンコード拒否と、デコード時の指数表記の範囲外 (1e999 → Infinity) および NaN リテラルの拒否を検証する
+  - moqtUri の IPv6 リテラル・userinfo・不正ポート、grease の非整数インデックス、devtools の数値入力表記 (16 進数 / 2 進数 / 指数表記 / Infinity)、log 表示の underscore なし大文字キーを検証する
+  - frameSource のフォールバック経路は実ブラウザ基盤が必要なため単体テストの対象外とし、可用性判定のみを対象にする方針をテストに明記する
+  - @voluntas
 
 ## 2026.2.0
 
