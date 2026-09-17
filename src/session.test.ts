@@ -24,7 +24,11 @@ import {
   encodePublishDonePayload,
   type AuthorizationToken,
 } from "./message";
-import { encodeRequestOkPayload, encodePublishStateNotifyPayload } from "./message/session";
+import {
+  decodePublishStateNotifyPayload,
+  encodeRequestOkPayload,
+  encodePublishStateNotifyPayload,
+} from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { encodeRequestUpdatePayload } from "./message/subscribe";
@@ -32,6 +36,7 @@ import {
   createTrackNamespace,
   encodeLocation,
   encodeLocationFilterParameter,
+  getParameterLocationValue,
 } from "./message/parameter";
 import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl, type Fetcher } from "./fetcher";
@@ -875,10 +880,13 @@ test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUE
  * 双方向ストリームは応答を返さない実物で構成し、PUBLISH_OK 受信前の
  * 初期状態を観測できるようにする。controlWriter は初期化済みとして注入する。
  * 検証後は session.close() で保留中の publish を片付ける。
+ * 双方向ストリーム (PUBLISH のリクエストストリーム) へ write されたバイト列は
+ * written に蓄積し、PUBLISH_STATE_NOTIFY 等の送信メッセージの検証に使う。
  */
 function createPublishSession(): {
   session: SessionImpl;
   readableController: ReadableStreamDefaultController<Uint8Array>;
+  written: Uint8Array[];
 } {
   let readableController!: ReadableStreamDefaultController<Uint8Array>;
   const readable = new ReadableStream<Uint8Array>({
@@ -886,17 +894,26 @@ function createPublishSession(): {
       readableController = controller;
     },
   });
-  const writable = new WritableStream<Uint8Array>({});
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
   const transport = {
     closed: new Promise<WebTransportCloseInfo>(() => {}),
     createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => {
       return { readable, writable } as unknown as WebTransportBidirectionalStream;
     },
+    // Subgroup ストリーム (sendObject) は write のみを受け付ける実物で構成する
+    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+      return new WritableStream<Uint8Array>({});
+    },
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {});
   (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
     new ControlStreamWriter();
-  return { session, readableController };
+  return { session, readableController, written };
 }
 
 /**
@@ -1106,6 +1123,57 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッ�
   assert.equal((session as unknown as { sessionState: string }).sessionState, "closed");
   assert.deepEqual(forwardChanges, [false]);
 
+  await session.close();
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.18:
+ * Session.publish() が返す Publisher の notifyStateChange() が、確立した購読の
+ * 双方向ストリームへ PUBLISH_STATE_NOTIFY を送信し、送信済み Object がある
+ * 場合は LARGEST_OBJECT を必ず伴うことを検証する (公開 API から送信経路までの配線)。
+ */
+test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTIFY を送信する", async () => {
+  const { session, readableController, written } = createPublishSession();
+
+  const promise = session.publish(["live"], "track");
+  promise.catch(() => {});
+  // FORWARD 省略の PUBLISH_OK を応答して購読を確立する
+  const writer = new ControlStreamWriter();
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
+  const publisher = await promise;
+
+  // Object を送信して LARGEST_OBJECT を既知にする
+  await publisher.sendObject({ groupId: 3, objectId: 4, payload: new Uint8Array([1, 2, 3]) });
+  // 変化した Forward State を購読者へ通知する
+  await publisher.notifyStateChange({ forward: false });
+
+  // リクエストストリームへ write されたメッセージ列から PUBLISH_STATE_NOTIFY を取り出す
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  const notify = messages.find((message) => message.type === MessageType.PUBLISH_STATE_NOTIFY);
+  assert.isDefined(notify);
+  const decoded = decodePublishStateNotifyPayload(notify!.payload);
+
+  // 送信済み Object があるため LARGEST_OBJECT が必ず載る
+  const largestParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.LARGEST_OBJECT,
+  );
+  assert.isDefined(largestParam);
+  assert.deepEqual(getParameterLocationValue(largestParam!), { group: 3n, object: 4n });
+  // FORWARD は変化後の値 (0) を報告する
+  const forwardParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.FORWARD,
+  );
+  assert.isDefined(forwardParam);
+  assert.deepEqual([...forwardParam!.value], [0]);
+  // 送信できた変更は publisher の Forward State へ反映される
+  assert.isFalse(publisher.forwardState);
+
+  readableController.close();
   await session.close();
 });
 

@@ -34,6 +34,8 @@ import {
   encodeRequestOkPayload,
   encodeLocation,
   encodeUint8ParameterValue,
+  encodeLocationFilterParameter,
+  encodePublishStateNotifyPayload,
   decodeFetchOkPayload,
   decodeFillParameters,
   decodeGoawayPayload,
@@ -61,7 +63,7 @@ import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "../filt
 import { supportsDynamicGroups } from "../properties";
 import type { FullTrackNameKey } from "../fullTrackName";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
-import { PublisherImpl, type Publisher } from "../publisher";
+import { PublisherImpl, type Publisher, type PublishStateNotifyOptions } from "../publisher";
 import type { Property } from "../properties";
 import { clearPriorGapTracking, type PriorGapTracking } from "./priorGapTracking";
 import {
@@ -4203,6 +4205,126 @@ export function bidiHandlePublishStateNotify(
     subscriber.setForwardState(forwardState);
   }
   return true;
+}
+
+// ============================================================================
+// sendPublishStateNotify
+// ============================================================================
+
+/**
+ * PUBLISH_STATE_NOTIFY を購読の双方向ストリームへ送信する
+ *
+ * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+ * publisher が購読状態の変化を購読者へ片方向で通知する。購読者は REQUEST_OK /
+ * REQUEST_ERROR を返さないため、pending 登録も応答待ちも行わない。また
+ * §9.10 により MAX_REQUEST_UPDATES (§9.1.7) の対象外である。
+ *
+ * 載せるパラメータは §9.20.1 が本メッセージに許可する 3 種のみとする。
+ * - LARGEST_OBJECT (§9.20.18): 「The publisher MUST include the LARGEST_OBJECT
+ *   parameter ..., if known, in PUBLISH_STATE_NOTIFY so the subscriber can
+ *   determine the point in the Track at which the change took effect.」に従い、
+ *   送信済み Object がある場合は必ず載せる。
+ * - FORWARD (§9.20.19) / LOCATION_FILTER (§9.20.10): 「A PUBLISH_STATE_NOTIFY
+ *   carries the parameters whose values have changed.」に従い、現在値から
+ *   変化した場合のみ載せる。変化が無ければ送信しない (重複送信の抑止)。
+ *
+ * 購読状態 (Forward State / Location Filter) の反映は write 成功後に行う。
+ * 送信できなかった変更を反映すると、購読者が受け取った値と publisher が
+ * 実際に使う値が食い違うためである。
+ *
+ * @throws Error 送信できない場合 (controlWriter 未初期化 / request stream 不在 /
+ *   write 失敗)。ローカル API 誤用またはストリーム終了であり、セッションは
+ *   閉じない。
+ */
+export async function bidiSendPublishStateNotify(
+  session: BidiSessionInternal,
+  publisher: PublisherImpl,
+  options: PublishStateNotifyOptions,
+): Promise<void> {
+  const requestId = publisher.getRequestId();
+
+  // 変化したパラメータだけを集める。LARGEST_OBJECT は「変化したか」に依らず
+  // 既知なら必ず載せる (§9.20.18 の MUST) ため、変化の有無の判定には数えない。
+  const parameters: Parameter[] = [];
+  const largestLocation = publisher.getLargestLocation();
+  if (largestLocation !== null) {
+    parameters.push({
+      type: MessageParameterType.LARGEST_OBJECT,
+      value: encodeLocation(largestLocation),
+    });
+  }
+
+  const forward = options.forward;
+  let changedForward: boolean | undefined;
+  // draft-ietf-moq-transport-21 §9.20.19:
+  // PUBLISH_STATE_NOTIFY の FORWARD は「reports the Forwarding State now in
+  //  effect at the publisher」であり、省略時は不変である。現在値と同じ値は
+  // 変化していないため載せない。
+  if (forward !== undefined && forward !== publisher.forwardState) {
+    // 値域は 0 (転送しない) / 1 (転送する) のみであり、範囲外は受信側が
+    // PROTOCOL_VIOLATION で閉じるため送信前に検証する。
+    parameters.push({
+      type: MessageParameterType.FORWARD,
+      value: encodeUint8ParameterValue(forward ? 1 : 0, "FORWARD"),
+    });
+    changedForward = forward;
+  }
+
+  const filter = options.filter;
+  let changedFilter: LocationFilter | undefined;
+  if (filter !== undefined && !isSameLocationFilter(publisher.getLocationFilter(), filter)) {
+    // draft-ietf-moq-transport-21 §9.20.10:
+    // End Group の値域 (2^64-1 超過) は encodeLocationFilterParameter が
+    // 送信前に検証する。相対指定の解決は反映時 (setLocationFilter) に行う。
+    parameters.push(encodeLocationFilterParameter(filter));
+    changedFilter = filter;
+  }
+
+  // draft-ietf-moq-transport-21 §9.10:
+  // 値の変化したパラメータが無ければ購読者へ伝える情報が無いため送信しない。
+  if (changedForward === undefined && changedFilter === undefined) {
+    return;
+  }
+
+  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope):
+  // 許可外パラメータを載せたまま送信すると受信側は PROTOCOL_VIOLATION で
+  // セッションを閉じるため、送信前に拒否する
+  // (bidiSendRequestUpdate の assertParametersAllowedForSend と同じ方針)。
+  assertParametersAllowedForSend(
+    parameters,
+    PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
+    "PUBLISH_STATE_NOTIFY",
+  );
+
+  const streamInfo = session.requestStreams.get(requestId);
+  if (!streamInfo) {
+    throw new Error(`request stream not found for request ID ${requestId}`);
+  }
+  if (!session.controlWriter) {
+    throw new Error("Control writer not initialized");
+  }
+
+  const payload = encodePublishStateNotifyPayload({
+    type: MessageType.PUBLISH_STATE_NOTIFY,
+    parameters,
+  });
+  const message = session.controlWriter.encode(MessageType.PUBLISH_STATE_NOTIFY, payload);
+  session.statsControlMessagesSent++;
+  await streamInfo.writer.write(message);
+  // 抑止した通知を「送信済み」として記録しないよう、送信成功後にのみ通知する
+  // (bidiSendRequestMessage と同じ扱い)。
+  session.emitDebug("send", MessageType.PUBLISH_STATE_NOTIFY, payload, {
+    requestId: requestId.toString(),
+    parameters: parameters.map((param) => param.type),
+  });
+
+  // 送信できた変更のみ購読状態へ反映する
+  if (changedForward !== undefined) {
+    publisher.setForwardState(changedForward);
+  }
+  if (changedFilter !== undefined) {
+    publisher.setLocationFilter(changedFilter);
+  }
 }
 
 // ============================================================================
