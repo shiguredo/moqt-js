@@ -1,0 +1,903 @@
+/**
+ * 受信データストリーム処理の free function 群
+ *
+ * SessionImpl の startIncomingStreamLoop / startDatagramLoop /
+ * handleIncomingStream / handleFillFetchStream / handleSubgroupStream /
+ * handleIncomingStreamError / handleMalformedFetchTrack /
+ * handleMalformedSubgroupTrack / handlePeerFetchStreamReset /
+ * processFetchObjects / processSubgroupObjects / createDataStreamTimeout
+ * を free function として抽出する。
+ *
+ * draft-ietf-moq-transport-21 §11.3 (Subgroup Streams) / §11.4 (Fetch Streams) /
+ * §3.4 (Fill Semantics) の受信経路を 1 か所にまとめる。
+ * 受信 bidi ストリーム (受信 PUBLISH) の処理は incoming.ts と
+ * 受信専用モジュールに残す。
+ */
+
+import {
+  FetchHeaderType,
+  decodeFetchHeader,
+  decodeSubgroupHeader,
+  type FetchHeader,
+  type FetchObjectContext,
+  type MoqtObject,
+  type SubgroupHeader,
+} from "../dataStream";
+import {
+  DataStreamErrorCode,
+  IncompleteDataError,
+  MalformedTrackError,
+  SessionError,
+  SessionErrorCode,
+} from "../error";
+import { decodeVarint } from "../varint";
+import type { FetcherImpl } from "../fetcher";
+import type { SubscriberImpl } from "../subscriber";
+import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
+import * as bidi from "./bidi";
+import { incomingProcessFetchObjects, incomingProcessSubgroupObjects } from "./incoming";
+import { isPeerStreamError, isSessionClosedError, toSessionCloseError } from "./errors";
+import { cancelStreamQuiet, concatChunks } from "./stream";
+import type { SessionInternal } from "./types";
+import type { ConnectCallbacks, SessionState } from "../session";
+import type { PriorGapTracking } from "./priorGapTracking";
+import type { FullTrackNameKey } from "../fullTrackName";
+
+/**
+ * 受信データストリーム処理が必要とする SessionImpl のビュー
+ *
+ * SessionImpl は `as unknown as DataStreamSessionInternal` で渡す。
+ * private フィールドも実行時には存在するため、ここで宣言した形で読み書きできる。
+ */
+export interface DataStreamSessionInternal {
+  readonly transport: WebTransport;
+  sessionState: SessionState;
+  readonly callbacks: ConnectCallbacks;
+
+  // draft-ietf-moq-transport-21 §12.2: データストリームの受信タイムアウト
+  dataStreamTimeoutMs: number;
+
+  readonly fetchers: Map<bigint, FetcherImpl>;
+  readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
+  readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
+  readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
+  readonly receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+  readonly priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
+
+  statsUnidirectionalStreamsReceived: number;
+  statsSubscriberStreamsActive: number;
+  statsSubgroupHeadersReceived: number;
+  statsFetchHeadersReceived: number;
+
+  // 他モジュールが実装する処理 (SessionImpl の wrapper 経由で呼ぶ)
+  closeWithError(error: SessionError): void;
+  notifyErrorIfActive(error: Error): void;
+  emitCallbackErrorDebug(typeName: string, error: unknown): void;
+  emitDataStreamErrorDebug(err: unknown, fetchHeader: FetchHeader | null): void;
+  onRequestDrained(): void;
+  handleIncomingDatagram(data: Uint8Array): void;
+  waitForFetcher(requestId: bigint): Promise<FetcherImpl | null>;
+}
+export function dataStreamStartIncomingStreamLoop(session: DataStreamSessionInternal): void {
+  void (async () => {
+    const reader = session.transport.incomingUnidirectionalStreams.getReader();
+
+    try {
+      while (session.sessionState === "connected") {
+        const { value: stream, done } = await reader.read();
+        if (done) break;
+
+        void dataStreamHandleIncomingStream(session, stream);
+      }
+    } catch (err) {
+      // デバッグ: ストリームループエラー
+      session.callbacks.debug?.({
+        direction: "recv",
+        type: 0,
+        typeName: "STREAM_LOOP_ERROR",
+        payload: new Uint8Array(0),
+        decoded: {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        timestamp: Date.now(),
+      });
+      session.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+}
+
+export function dataStreamStartDatagramLoop(session: DataStreamSessionInternal): void {
+  void (async () => {
+    const reader = session.transport.datagrams.readable.getReader();
+
+    try {
+      while (session.sessionState === "connected") {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        if (value) {
+          session.handleIncomingDatagram(value);
+        }
+      }
+    } catch (err) {
+      session.callbacks.debug?.({
+        direction: "recv",
+        type: 0,
+        typeName: "DATAGRAM_LOOP_ERROR",
+        payload: new Uint8Array(0),
+        decoded: {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        timestamp: Date.now(),
+      });
+      session.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+}
+
+export async function dataStreamHandleIncomingStream(
+  session: DataStreamSessionInternal,
+  stream: ReadableStream<Uint8Array>,
+): Promise<void> {
+  // 統計カウンターを更新
+  session.statsUnidirectionalStreamsReceived++;
+  session.statsSubscriberStreamsActive++;
+
+  const reader = stream.getReader();
+
+  // ストリーミングパーサー状態
+  let buffer: Uint8Array = new Uint8Array(0);
+  let headerParsed = false;
+  let isFetchStream = false;
+
+  // Fetch ストリーム用の状態
+  let fetchHeader: FetchHeader | null = null;
+  let fetcher: FetcherImpl | null = null;
+  let fetchContext: FetchObjectContext | null = null;
+  let isFirstFetchObject = true;
+
+  // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+  // ヘッダーまたは Object の途中バイトを保持したまま待ち続けるピアを期限で
+  // 打ち切る。バッファが空になった時点で期限を解除する。
+  const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
+  const armTimeout = timeout.arm;
+  const clearTimeoutHandle = timeout.clear;
+
+  try {
+    while (true) {
+      // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+      // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
+      // バッファを消費しきったら解除する。ループ先頭で行うのは、
+      // データ不足で continue する経路 (半端なヘッダー / Object) でも
+      // 必ず期限が張られるようにするためである。
+      if (buffer.byteLength > 0) {
+        armTimeout();
+      } else {
+        clearTimeoutHandle();
+      }
+
+      const { value, done } = await reader.read();
+
+      if (value) {
+        // 新しいチャンクをバッファに追加
+        const newBuffer = new Uint8Array(buffer.length + value.length);
+        newBuffer.set(buffer);
+        newBuffer.set(value, buffer.length);
+        buffer = newBuffer;
+      }
+
+      // ヘッダーがまだパースされていない場合
+      if (!headerParsed && buffer.length > 0) {
+        try {
+          // 先頭のタイプを確認
+          const [streamType] = decodeVarint(buffer, 0);
+
+          const streamTypeNum = Number(streamType);
+
+          if (streamTypeNum === FetchHeaderType) {
+            // Fetch データストリーム
+            isFetchStream = true;
+            const [header, consumed] = decodeFetchHeader(buffer);
+            fetchHeader = header;
+            buffer = buffer.slice(consumed);
+            headerParsed = true;
+
+            // 統計カウンターを更新
+            session.statsFetchHeadersReceived++;
+
+            // Fetcher を検索
+            // draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+            // FETCH_OK より先にデータストリームが到着する可能性がある
+            fetcher = session.fetchers.get(header.requestId) ?? null;
+            if (!fetcher) {
+              // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
+              // fill fetch ストリームの FETCH_HEADER は fill を要求した
+              // SUBSCRIBE / REQUEST_UPDATE の Request ID を運ぶ。購読に
+              // 紐付けて受信する。どちらにも該当しない Request ID は
+              // 不明な FETCH として従来どおり扱う。
+              const fillTarget = session.fillFetchTargets.get(header.requestId);
+              if (fillTarget) {
+                await dataStreamHandleFillFetchStream(
+                  session,
+                  reader,
+                  header.requestId,
+                  fillTarget,
+                  buffer,
+                );
+                return;
+              }
+              fetcher = await session.waitForFetcher(header.requestId);
+              if (!fetcher) {
+                // タイムアウトで Fetcher が登録されなかった場合は、
+                // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
+                // draft-ietf-moq-transport-21 Section 3.2.1 (Fetch State Management) に倣ってストリームを reset する。
+                void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
+                break;
+              }
+            }
+          } else if (
+            (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
+            (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
+            (streamTypeNum >= 0x50 && streamTypeNum <= 0x5f) ||
+            (streamTypeNum >= 0x70 && streamTypeNum <= 0x7f)
+          ) {
+            // draft-ietf-moq-transport-21 Section 11.3.1:
+            // SUBGROUP_ID_MODE = 0b11 のタイプ値
+            // (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約値であり、
+            // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じなければならない
+            if ((streamTypeNum & 0x06) === 0x06) {
+              session.closeWithError(
+                new SessionError(
+                  `reserved subgroup header type: 0x${streamTypeNum.toString(16)}`,
+                  SessionErrorCode.PROTOCOL_VIOLATION,
+                ),
+              );
+              break;
+            }
+
+            // Subgroup ストリーム
+            isFetchStream = false;
+            const [header, consumed] = decodeSubgroupHeader(buffer);
+            const initialPayloadBuffer = buffer.slice(consumed);
+            buffer = new Uint8Array(0);
+            headerParsed = true;
+
+            // 統計カウンターを更新
+            session.statsSubgroupHeadersReceived++;
+
+            // Subgroup ストリーム本体は専用ハンドラに委譲する
+            // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
+            // draft-ietf-moq-transport-21 §11.3.1 の buffer 経路はこのハンドラ内に集約
+            await dataStreamHandleSubgroupStream(session, reader, header, initialPayloadBuffer);
+            return;
+          } else if (streamTypeNum === 0x132b3e28) {
+            // draft-ietf-moq-transport-21 §11.5.1 (Padding Streams):
+            // "The receiver MUST discard all data received on a padding stream."
+            // PADDING stream のデータはすべて読み捨てる
+            isFetchStream = false;
+            headerParsed = true;
+            buffer = new Uint8Array(0);
+            // 残りのデータを drain してストリームを読み切る
+            let streamDone = false;
+            while (!streamDone) {
+              const next = await reader.read();
+              streamDone = next.done;
+            }
+            return;
+          } else {
+            // draft-ietf-moq-transport-21 Section 6.4.1 (Unidirectional Stream Types):
+            // "An endpoint that receives an unknown stream type MUST close the session."
+            session.closeWithError(
+              new SessionError(
+                `unknown unidirectional stream type: 0x${streamTypeNum.toString(16)}`,
+                SessionErrorCode.PROTOCOL_VIOLATION,
+              ),
+            );
+            break;
+          }
+        } catch (err) {
+          if (err instanceof IncompleteDataError) {
+            // データ不足: 次のチャンクを待つ
+            // ヘッダー途中での FIN (done) は Object が開始する前のため、
+            // §11.3 / §11.4 の未完成 Object 判定 (FIN 直後の残バッファ検査) の
+            // 対象外として黙殺する
+            if (done) break;
+            continue;
+          }
+          // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
+          // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+          const sessionError = toSessionCloseError(err);
+          if (sessionError !== null) {
+            // 仕様違反: セッションを閉じる
+            session.closeWithError(sessionError);
+            break;
+          }
+          // 予期しないエラー: INTERNAL_ERROR でセッションを閉じる
+          session.closeWithError(
+            new SessionError(
+              err instanceof Error ? err.message : String(err),
+              SessionErrorCode.INTERNAL_ERROR,
+            ),
+          );
+          break;
+        }
+      }
+
+      // オブジェクトをパースして配信
+      if (headerParsed) {
+        if (isFetchStream && fetcher && fetchHeader) {
+          // Fetch オブジェクトをストリーミング処理
+          // draft-ietf-moq-transport-21 Section 11.4.1.1 (Flags):
+          // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
+          // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
+          // context と isFirst を caller 側で永続化する必要がある
+          const fetchResult = dataStreamProcessFetchObjects(
+            session,
+            buffer,
+            fetcher,
+            fetchContext,
+            isFirstFetchObject,
+          );
+          buffer = fetchResult.remainingBuffer;
+          fetchContext = fetchResult.context;
+          isFirstFetchObject = fetchResult.isFirst;
+        }
+      }
+
+      if (done) break;
+    }
+
+    // ストリーム終了処理 (条件はループ内のオブジェクト解析部と対称)
+    if (isFetchStream && fetcher && fetchHeader) {
+      // ループ最終反復で buffer は remainingBuffer に更新済みであり、
+      // ここに残る = FIN 時点で未完了 Object の途中バイト。
+      // draft-ietf-moq-transport-21 Section 11.3 (Streams):
+      // "If a stream ends gracefully (i.e., the stream terminates with a
+      //  FIN) in the middle of a serialized Object, the session SHOULD be
+      //  closed with a PROTOCOL_VIOLATION."
+      // fetcher.handleEnd() も fetchers.delete も行わず、セッションを
+      // PROTOCOL_VIOLATION で閉じる (fetcher の無効化はセッション終了側
+      // に委ねる)。
+      // close() を経ずに sessionState が closed へ遷移する経路では
+      // fetcher の扱いが分かれる。transport.closed ハンドラでは
+      // markRequestObjectsClosed により closed になるが、条件付きで遷移する
+      // notifyErrorIfActive では active のまま残る。いずれの close 済み経路でも
+      // end を通知せず return する
+      // (未完成 Object を正常終了として扱わないため)。closeWithError は
+      // セッション終了済みだと呼ばない (終了済みセッションへの
+      // spurious な通知を防ぐため)
+      if (buffer.byteLength > 0) {
+        if (session.sessionState === "connected") {
+          session.closeWithError(
+            new SessionError(
+              `fetch data stream ended with incomplete object: requestId=${fetchHeader.requestId}, remaining ${buffer.byteLength} bytes`,
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
+          );
+        }
+        return;
+      }
+      fetcher.handleEnd();
+      session.fetchers.delete(fetchHeader.requestId);
+      // draft-ietf-moq-transport-21 §10.8 / §10.9:
+      // FETCH の終了に伴い、購読も尽きた Track の Prior ID Gap 追跡を捨てる
+      // (bidiCancelFetch と同じ後始末)。
+      bidi.clearPriorGapTrackingIfUnused(
+        session as unknown as SessionInternal,
+        fetcher.getFullTrackNameKey(),
+      );
+      // draft-ietf-moq-transport-21 §6.6.1:
+      // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
+      session.onRequestDrained();
+    }
+  } catch (err) {
+    await dataStreamHandleIncomingStreamError(session, err, reader, fetchHeader, fetcher);
+  } finally {
+    clearTimeoutHandle();
+    session.statsSubscriberStreamsActive--;
+    reader.releaseLock();
+  }
+}
+
+export async function dataStreamHandleFillFetchStream(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  fillRequestId: bigint,
+  target: bidi.FillFetchTarget,
+  initialBuffer: Uint8Array,
+): Promise<void> {
+  let buffer = initialBuffer;
+  let context: FetchObjectContext | null = null;
+  let isFirst = true;
+  // アプリの object コールバックの throw を fill ストリーム自体の失敗と
+  // 誤認しないよう、ここで受けてデバッグ記録に残す。subgroup 経路が
+  // SUBGROUP_CALLBACK_ERROR として記録しつつ配送を継続するのと同じ扱いで、
+  // fill の受信も継続する。ここで受けなければ下の catch がストリームの
+  // エラーとして扱い、fill 失敗の通知 (fillError) まで誤って発火する。
+  const sink = {
+    handleObject: (object: MoqtObject): void => {
+      try {
+        target.subscriber.handleFillObject(object);
+      } catch (callbackError) {
+        session.emitCallbackErrorDebug("FILL_CALLBACK_ERROR", callbackError);
+      }
+    },
+  };
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+
+      if (value) {
+        const next = new Uint8Array(buffer.length + value.length);
+        next.set(buffer);
+        next.set(value, buffer.length);
+        buffer = next;
+      }
+
+      if (buffer.length > 0) {
+        const result = incomingProcessFetchObjects(
+          session as unknown as SessionInternal,
+          buffer,
+          sink,
+          context,
+          isFirst,
+          target.groupOrder,
+          // fill fetch ストリーム経由のため fill 側統計に計上する
+          true,
+          // fill fetch の追跡対象 Track は関連付けられた購読が持つ比較キーで決まる
+          target.subscriber.getFullTrackNameKey(),
+        );
+        buffer = result.remainingBuffer;
+        context = result.context;
+        isFirst = result.isFirst;
+      }
+
+      if (done) break;
+    }
+
+    // FIN 時に未完了 Object の途中バイトが残る場合は FETCH と同様に
+    // PROTOCOL_VIOLATION でセッションを閉じる (§11.3)。
+    if (buffer.byteLength > 0) {
+      if (session.sessionState === "connected") {
+        session.closeWithError(
+          new SessionError(
+            `fill fetch data stream ended with incomplete object: requestId=${fillRequestId}, remaining ${buffer.byteLength} bytes`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+      }
+      return;
+    }
+    // FIN は fill 完了であり、関連付けを消す。購読自体は継続する (§3.4.1)。
+    session.fillFetchTargets.delete(fillRequestId);
+  } catch (err) {
+    session.emitDataStreamErrorDebug(err, { type: FetchHeaderType, requestId: fillRequestId });
+    // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
+    // 購読自体は継続する (§3.4.1)。
+    session.fillFetchTargets.delete(fillRequestId);
+    // draft-ietf-moq-transport-21 §8.3:
+    // 既知 Type の serialization 不一致は SessionError (KEY_VALUE_FORMATTING_ERROR)
+    // として届くため、エラーコードを保持したまま閉じる (他の受信経路と同じ)。
+    const sessionError = toSessionCloseError(err);
+    const normalizedError = err instanceof Error ? err : new Error(String(err));
+    if (sessionError !== null) {
+      session.closeWithError(sessionError);
+    } else if (err instanceof MalformedTrackError) {
+      // draft-ietf-moq-transport-21 §12.1:
+      // malformed track の検出は §3.4.1 の「fill 失敗は購読に波及しない」
+      // より優先し、同一 Track の全購読と全 FETCH を cancel する。
+      // アプリへの通知は cancelMalformedTrackPeers が購読の error
+      // コールバック経由で行うため、fillError は呼ばない (二重通知を防ぐ)。
+      bidi.cancelMalformedTrackPeers(
+        session as unknown as SessionInternal,
+        target.subscriber.getFullTrackNameKey(),
+        err,
+      );
+      await cancelStreamQuiet(
+        reader,
+        `malformed fill track: requestId=${fillRequestId}, reason=${err instanceof Error ? err.message : String(err)}`,
+      );
+    } else if (!isSessionClosedError(normalizedError)) {
+      // draft-ietf-moq-transport-21 §3.4.1:
+      // "Because there is no REQUEST_ERROR associated with a fill fetch
+      //  stream, the publisher signals a fill failure by resetting the
+      //  stream" および "Resetting or cancelling a fill fetch stream, by
+      //  either endpoint, does not affect the subscription, which continues
+      //  to deliver objects using subscribe subgroups and datagrams."
+      // 購読は継続するため終了通知 (error) は出さず、fill 専用の
+      // fillError でアプリに失敗を伝える。アプリはこれで再取得を判断できる。
+      // セッション終了起源の失敗 (isSessionClosedError) はセッション単位の
+      // error コールバックが通知するため、ここでは通知しない。
+      try {
+        target.subscriber.handleFillError(normalizedError);
+      } catch (callbackError) {
+        // アプリの fillError コールバックの throw は握り潰す
+        // (fill の後始末を止めない)。
+        session.emitCallbackErrorDebug("FILL_ERROR_CALLBACK_ERROR", callbackError);
+      }
+    }
+  }
+  // 統計と reader ロックの後始末は呼び出し元の handleIncomingStream の
+  // finally に委ねる (Subgroup 経路と同パターン)。
+}
+
+export async function dataStreamHandleMalformedFetchTrack(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  error: MalformedTrackError,
+  fetcher: FetcherImpl | null,
+): Promise<void> {
+  await cancelStreamQuiet(
+    reader,
+    `malformed track: code=${DataStreamErrorCode.MALFORMED_TRACK}, reason=${error.message}`,
+  );
+  if (fetcher) {
+    // draft-ietf-moq-transport-21 §12.1:
+    // 同一 Track の全購読と全 FETCH を cancel する (該当 requestId の FETCH の
+    // みではない)。比較キー (fullTrackNameKey の戻り値) で引く。
+    bidi.cancelMalformedTrackPeers(
+      session as unknown as SessionInternal,
+      fetcher.getFullTrackNameKey(),
+      error,
+    );
+  }
+}
+
+export async function dataStreamHandleIncomingStreamError(
+  session: DataStreamSessionInternal,
+  err: unknown,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  fetchHeader: FetchHeader | null,
+  fetcher: FetcherImpl | null,
+): Promise<void> {
+  // デバッグ: ストリームエラーをログ
+  session.emitDataStreamErrorDebug(err, fetchHeader);
+  // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
+  // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+  const sessionError = toSessionCloseError(err);
+  if (sessionError !== null) {
+    session.closeWithError(sessionError);
+    return;
+  }
+  if (err instanceof MalformedTrackError) {
+    await dataStreamHandleMalformedFetchTrack(session, reader, err, fetcher);
+    return;
+  }
+  if (fetchHeader !== null && isPeerStreamError(err)) {
+    // draft-ietf-moq-transport-21 §3.2.1:
+    // FETCH データストリームの reset で subscriber は FETCH state を破棄する。
+    // fetchHeader が無い場合 (FETCH_HEADER 読取前の reset) は fetcher を
+    // 特定できないため何もしない。
+    dataStreamHandlePeerFetchStreamReset(session, err, fetchHeader, fetcher);
+  }
+}
+
+export function dataStreamHandlePeerFetchStreamReset(
+  session: DataStreamSessionInternal,
+  err: unknown,
+  fetchHeader: FetchHeader | null,
+  fetcher: FetcherImpl | null,
+): void {
+  if (fetcher) {
+    try {
+      fetcher.handleError(bidi.createFetchDataStreamResetError(err));
+    } catch {
+      // アプリの error コールバックの throw は握り潰す (後始末は継続する)
+    } finally {
+      fetcher.markClosed();
+    }
+  }
+  if (fetchHeader !== null) {
+    session.fetchers.delete(fetchHeader.requestId);
+    // draft-ietf-moq-transport-21 §10.8 / §10.9:
+    // peer の RESET_STREAM による FETCH の終了でも、購読も尽きた Track の
+    // Prior ID Gap 追跡を捨てる (FIN 経路と同じ後始末)。
+    if (fetcher) {
+      bidi.clearPriorGapTrackingIfUnused(
+        session as unknown as SessionInternal,
+        fetcher.getFullTrackNameKey(),
+      );
+    }
+    // draft-ietf-moq-transport-21 §6.6.1:
+    // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
+    session.onRequestDrained();
+  }
+}
+
+export function dataStreamProcessFetchObjects(
+  session: DataStreamSessionInternal,
+  buffer: Uint8Array,
+  fetcher: FetcherImpl,
+  context: FetchObjectContext | null,
+  isFirst: boolean,
+): {
+  remainingBuffer: Uint8Array;
+  context: FetchObjectContext | null;
+  isFirst: boolean;
+} {
+  return incomingProcessFetchObjects(
+    session as unknown as SessionInternal,
+    buffer,
+    fetcher,
+    context,
+    isFirst,
+    fetcher.getGroupOrder(),
+    // 通常 FETCH のため fetch 側統計に計上する
+    false,
+    // 追跡対象 Track は FETCH を発行した Fetcher が持つ比較キーで決まる
+    fetcher.getFullTrackNameKey(),
+  );
+}
+
+export function dataStreamProcessSubgroupObjects(
+  session: DataStreamSessionInternal,
+  buffer: Uint8Array,
+  subscribers: SubscriberImpl[],
+  header: SubgroupHeader,
+  previousObjectId: bigint,
+  resolvedSubgroupId?: bigint,
+): {
+  remainingBuffer: Uint8Array;
+  previousObjectId: bigint;
+  resolvedSubgroupId: bigint | undefined;
+  updatedEndOfGroupFinalObjectId: bigint | undefined;
+} {
+  return incomingProcessSubgroupObjects(
+    session as unknown as SessionInternal,
+    buffer,
+    subscribers,
+    header,
+    previousObjectId,
+    resolvedSubgroupId,
+  );
+}
+
+export async function dataStreamHandleMalformedSubgroupTrack(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  header: SubgroupHeader,
+  subscribers: SubscriberImpl[],
+  error: MalformedTrackError,
+): Promise<void> {
+  // draft-ietf-moq-transport-21 §12.1:
+  // 同一 Track の全購読と全 FETCH を cancel する。比較キーは
+  // trackAlias から購読を特定して得る (購読が未特定なら cancel 対象が無い)。
+  const trackKey = subscribers[0]?.getFullTrackNameKey();
+  if (trackKey !== undefined) {
+    bidi.cancelMalformedTrackPeers(session as unknown as SessionInternal, trackKey, error);
+  }
+  await cancelStreamQuiet(
+    reader,
+    `malformed track: trackAlias=${header.trackAlias}, reason=${error.message}`,
+  );
+}
+
+export async function dataStreamHandleSubgroupStream(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  header: SubgroupHeader,
+  initialBuffer: Uint8Array,
+): Promise<void> {
+  let buffer = initialBuffer;
+  let previousObjectId = -1n;
+  let resolvedSubgroupId: bigint | undefined;
+  let subscribers: SubscriberImpl[] = session.subscribersByAlias.get(header.trackAlias) ?? [];
+
+  // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
+  // ReadableStreamDefaultReader.read() は中断不能なため、Promise.race で別経路が
+  // 勝ったときに pendingRead を破棄せず保持し、subscriber mode の最初の read として消費する
+  let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+
+  if (subscribers.length === 0) {
+    const entry = session.pendingSubgroupBuffer.add(header.trackAlias);
+    let entryRemoved = false;
+
+    try {
+      // ヘッダパース直後に余っていた payload を pending entry に移し、ローカル buffer は空にする
+      // subscriber mode 復帰時に entry.chunks の concat 結果で buffer を作り直す
+      if (initialBuffer.byteLength > 0) {
+        session.pendingSubgroupBuffer.appendChunk(entry, initialBuffer);
+        buffer = new Uint8Array(0);
+      }
+
+      while (subscribers.length === 0) {
+        pendingRead ??= reader.read();
+        const event = await Promise.race([
+          pendingRead.then((result) => ({ kind: "chunk" as const, result })),
+          entry.notified.then((reason) => ({ kind: "notify" as const, reason })),
+        ]);
+
+        if (event.kind === "chunk") {
+          pendingRead = null;
+          const chunk = event.result.value;
+          if (chunk && chunk.byteLength > 0) {
+            session.pendingSubgroupBuffer.appendChunk(entry, chunk);
+          }
+          if (event.result.done) {
+            // FIN 検出時はその場で完結させる (race の再登録を待たない)。
+            // FIN 済み read() は以後も即解決の done を返すため、再 race すると
+            // chunk 分岐が常に勝って notified が発火せず無限ループになる。
+            // FIN と subscriber 登録の同時解決は合流を優先し、空の場合のみ
+            // abandon する (notified 側が先に勝つ既存経路は変えない)。
+            subscribers = session.subscribersByAlias.get(header.trackAlias) ?? [];
+            if (subscribers.length > 0) {
+              // pending chunks を 1 本に concat して subscriber mode へ合流する
+              buffer = concatChunks(entry.chunks);
+              session.pendingSubgroupBuffer.remove(entry);
+              entryRemoved = true;
+              break;
+            }
+            entry.notify("end-of-stream");
+            session.pendingSubgroupBuffer.remove(entry);
+            entryRemoved = true;
+            await cancelStreamQuiet(
+              reader,
+              `pending subgroup end-of-stream: trackAlias=${header.trackAlias}`,
+            );
+            return;
+          }
+          continue;
+        }
+
+        // event.kind === "notify"
+        if (event.reason === "subscriber") {
+          subscribers = session.subscribersByAlias.get(header.trackAlias) ?? [];
+          if (subscribers.length === 0) {
+            // 通知発火と subscribers 解放が race した稀なケース: abandon
+            session.pendingSubgroupBuffer.remove(entry);
+            entryRemoved = true;
+            await cancelStreamQuiet(
+              reader,
+              `inconsistent subscriber state: trackAlias=${header.trackAlias}`,
+            );
+            return;
+          }
+          // pending chunks を 1 本に concat して buffer に格納し subscriber mode へ遷移する
+          buffer = concatChunks(entry.chunks);
+          session.pendingSubgroupBuffer.remove(entry);
+          entryRemoved = true;
+          break;
+        }
+
+        // abandon (timeout / overflow-per-stream / overflow-per-session / session-close / end-of-stream)
+        session.pendingSubgroupBuffer.remove(entry);
+        entryRemoved = true;
+        await cancelStreamQuiet(
+          reader,
+          `pending subgroup ${event.reason}: trackAlias=${header.trackAlias}`,
+        );
+        return;
+      }
+    } finally {
+      if (!entryRemoved) {
+        // 例外脱出時の救済 cleanup (二重 remove は no-op で安全)
+        session.pendingSubgroupBuffer.remove(entry);
+      }
+    }
+  }
+
+  // subscriber mode: 通常の Subgroup ストリーム処理ループ
+  // pendingRead が pending mode から持ち越されている場合はそれを最初の read として消費する
+  // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+  // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
+  const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
+  try {
+    while (true) {
+      if (buffer.byteLength > 0) {
+        timeout.arm();
+      } else {
+        timeout.clear();
+      }
+      let result: ReadableStreamReadResult<Uint8Array>;
+      if (pendingRead !== null) {
+        result = await pendingRead;
+        pendingRead = null;
+      } else {
+        result = await reader.read();
+      }
+
+      if (result.value && result.value.byteLength > 0) {
+        const next = new Uint8Array(buffer.byteLength + result.value.byteLength);
+        next.set(buffer);
+        next.set(result.value, buffer.byteLength);
+        buffer = next;
+      }
+
+      try {
+        const processResult = dataStreamProcessSubgroupObjects(
+          session,
+          buffer,
+          subscribers,
+          header,
+          previousObjectId,
+          resolvedSubgroupId,
+        );
+        buffer = processResult.remainingBuffer;
+        previousObjectId = processResult.previousObjectId;
+        resolvedSubgroupId = processResult.resolvedSubgroupId;
+        // draft-ietf-moq-transport-21 §12.1 条件 4:
+        // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
+        // またいだ後続 Object の malformed 検出に使う。
+        if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
+          session.receivedEndOfGroupFinalObjectIds.set(
+            `${header.trackAlias}:${header.groupId}`,
+            processResult.updatedEndOfGroupFinalObjectId,
+          );
+        }
+      } catch (err) {
+        if (err instanceof MalformedTrackError) {
+          // draft-ietf-moq-transport-21 §12.1:
+          // malformed track を検出した購読を cancel し、セッションは閉じない
+          await dataStreamHandleMalformedSubgroupTrack(session, reader, header, subscribers, err);
+          return;
+        }
+        throw err;
+      }
+
+      if (result.done) break;
+    }
+  } finally {
+    timeout.clear();
+  }
+
+  // ここに到達した時点でピアの FIN を検出している (上記ループは
+  // result.done でしか抜けない)。
+  // draft-ietf-moq-transport-21 Section 11.3 (Streams):
+  // "If a stream ends gracefully (i.e., the stream terminates with a
+  //  FIN) in the middle of a serialized Object, the session SHOULD be
+  //  closed with a PROTOCOL_VIOLATION."
+  // §11.3.2 (Closing Subgroup Streams) は全 Object を配信せずに閉じる場合
+  // の reset を MUST としており、残バッファ非空の FIN は違反ワイヤである。
+  // 黙殺して関数を抜けるとアプリはオブジェクト欠落を検知できないため、
+  // PROTOCOL_VIOLATION でセッションを閉じる (Fetch 側の判定は
+  // handleIncomingStream の終了処理にある)。
+  // pending mode (subscribers 未登録) は payload を decode しておらず
+  // 未完成 Object を機械的に判定できないため、subscriber mode だけの
+  // 対象とする。closeWithError はセッション終了済みだと呼ばない
+  // (終了済みセッションへの spurious な通知を防ぐため)
+  if (session.sessionState === "connected" && buffer.byteLength > 0) {
+    session.closeWithError(
+      new SessionError(
+        `subgroup data stream ended with incomplete object: trackAlias=${header.trackAlias}, groupId=${header.groupId}, remaining ${buffer.byteLength} bytes`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+  }
+}
+
+export function dataStreamCreateDataStreamTimeout(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  bufferedBytes: () => number,
+): { arm: () => void; clear: () => void } {
+  let handle: ReturnType<typeof setTimeout> | null = null;
+  const clear = (): void => {
+    if (handle !== null) {
+      clearTimeout(handle);
+      handle = null;
+    }
+  };
+  const arm = (): void => {
+    clear();
+    if (session.dataStreamTimeoutMs <= 0) {
+      return;
+    }
+    handle = setTimeout(() => {
+      handle = null;
+      if (session.sessionState === "connected") {
+        session.closeWithError(
+          new SessionError(
+            `data stream timed out waiting for the rest of a header or object: ${bufferedBytes()} bytes buffered`,
+            SessionErrorCode.DATA_STREAM_TIMEOUT,
+          ),
+        );
+      }
+      void reader.cancel("data stream timeout").catch(() => {});
+    }, session.dataStreamTimeoutMs);
+  };
+  return { arm, clear };
+}
