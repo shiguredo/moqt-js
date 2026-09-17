@@ -4,8 +4,9 @@
  * bidi.ts の BidiSessionInternal を継承し、抽出先モジュール
  * (namespaceLoops.ts / publish.ts / incoming.ts) が必要とする追加フィールドを宣言する。
  *
- * session.ts → types.ts → bidi.ts → session.ts のチェーンは型レベルの循環を形成するが、
- * すべての辺が import type であるため TypeScript コンパイラは受理する。
+ * 公開型は publicTypes.ts に分離してあるため、types.ts から session.ts への
+ * 型参照は発生しない。bidi.ts とは型レベルで相互参照するが、すべての辺が
+ * import type であるため TypeScript コンパイラは受理する。
  * 値レベル（実行時）での循環依存は発生しない。
  */
 
@@ -20,7 +21,7 @@ import type {
   NamespaceSubscription,
   TracksSubscription,
   NamespacePublication,
-} from "../session";
+} from "./publicTypes";
 
 // namespaceLoops.ts / incoming.ts / publish.ts から参照される状態型
 

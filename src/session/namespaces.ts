@@ -59,7 +59,7 @@ import type {
   TracksSubscriptionCallbacks,
   NamespaceUpdateOptions,
   TracksUpdateOptions,
-} from "../session";
+} from "./publicTypes";
 
 /**
  * namespace 系リクエストが必要とする SessionImpl のビュー

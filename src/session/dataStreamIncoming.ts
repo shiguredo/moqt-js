@@ -39,7 +39,7 @@ import { incomingProcessFetchObjects, incomingProcessSubgroupObjects } from "./i
 import { isPeerStreamError, isSessionClosedError, toSessionCloseError } from "./errors";
 import { cancelStreamQuiet, concatChunks } from "./stream";
 import type { SessionInternal } from "./types";
-import type { ConnectCallbacks, SessionState } from "../session";
+import type { ConnectCallbacks, SessionState } from "./publicTypes";
 import type { PriorGapTracking } from "./priorGapTracking";
 import type { FullTrackNameKey } from "../fullTrackName";
 

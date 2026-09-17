@@ -68,7 +68,7 @@ import type {
   SubscribeOptions,
   TrackStatusOptions,
   TrackStatusResult,
-} from "../session";
+} from "./publicTypes";
 
 /**
  * 要求送信が必要とする SessionImpl のビュー

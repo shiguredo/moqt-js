@@ -29,7 +29,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 import { AuthTokenCache, processSetupAuthorizationTokens } from "./authTokenCache";
 import { toSessionCloseError } from "./errors";
 import { concatChunks } from "./stream";
-import type { SessionState } from "../session";
+import type { SessionState } from "./publicTypes";
 
 /**
  * draft-ietf-moq-transport-21 §12.2:

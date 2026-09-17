@@ -59,7 +59,7 @@ import type {
   SessionState,
   SubscribeCallbacks,
   TracksSubscriptionCallbacks,
-} from "../session";
+} from "./publicTypes";
 import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import type { AuthTokenCache } from "./authTokenCache";
 

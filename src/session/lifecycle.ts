@@ -25,7 +25,7 @@ import { clampTimeoutMs } from "./params";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import { publishCloseSubgroupStream } from "./publish";
 import type { SessionInternal } from "./types";
-import type { ConnectCallbacks, SessionState } from "../session";
+import type { ConnectCallbacks, SessionState } from "./publicTypes";
 import type { AuthTokenCache } from "./authTokenCache";
 import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import type { FetchHeader } from "../dataStream";

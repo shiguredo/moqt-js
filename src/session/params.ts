@@ -20,7 +20,7 @@ import type {
   FetchOptions,
   FillRequestOptions,
   TrackStatusOptions,
-} from "../session";
+} from "./publicTypes";
 import {
   MAX_TRACK_NAMESPACE_FIELDS,
   MessageParameterType,
