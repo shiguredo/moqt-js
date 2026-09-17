@@ -14,10 +14,7 @@ import {
 } from "./error";
 import {
   MessageType,
-  GroupOrder,
   createTrackNamespace,
-  encodeTrackName,
-  validateFullTrackName,
   decodeSetupPayload,
   getSetupAuthority,
   getSetupPath,
@@ -25,13 +22,9 @@ import {
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
   encodeSetupPayload,
-  encodeFetchPayload,
   encodePublishNamespacePayload,
-  encodePublishPayload,
   encodeSubscribeNamespacePayload,
   encodeSubscribeTracksPayload,
-  encodeSubscribePayload,
-  encodeTrackStatusPayload,
   createSetup,
   getMessageTypeName,
   PublishDoneStatusCode,
@@ -52,25 +45,36 @@ import {
 import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
 import type { FetchHeader } from "./dataStream";
-import { fullTrackNameKey } from "./fullTrackName";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
 import {
-  buildPublishParameters,
-  buildPublishTrackProperties,
-  buildSubscribeParameters,
   buildSubscribeTracksParameters,
-  buildFetchParameters,
   buildSubscribeNamespaceParameters,
-  buildTrackStatusParameters,
   encodeAuthorizationTokenParameter,
-  resolveFetchStartLocation,
-  resolveFillGroupOrder,
   validateRangeFilterLimits,
-  validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
 } from "./session/params";
 import * as bidi from "./session/bidi";
+import {
+  requestsCancelFetch,
+  requestsCancelSubscription,
+  requestsClosePublisherStream,
+  requestsFetch,
+  requestsPublish,
+  requestsReadFetchResponse,
+  requestsReadPublishResponse,
+  requestsReadSubscribeResponse,
+  requestsReadTrackStatusResponse,
+  requestsSendDatagram,
+  requestsSendObject,
+  requestsSendPublishDone,
+  requestsSendPublishStateNotify,
+  requestsSendRequestOnBidiStream,
+  requestsSendRequestUpdate,
+  requestsSubscribe,
+  requestsTrackStatus,
+  type RequestsSessionInternal,
+} from "./session/requests";
 import {
   incomingPublishApplyParameters,
   incomingPublishCancelIfNotConnected,
@@ -104,12 +108,6 @@ import type { FullTrackNameKey } from "./fullTrackName";
 import { toSessionCloseError } from "./session/errors";
 import type { PublisherStreamState, SessionInternal } from "./session/types";
 import {
-  publishSendObject,
-  publishClosePublisherStream,
-  publishSendDatagram,
-  publishSendPublishDone,
-} from "./session/publish";
-import {
   incomingHandleDatagram,
   incomingWaitForFetcher,
   incomingValidateRequestId,
@@ -135,11 +133,7 @@ import {
   sessionStartControlMessageLoop,
   type SessionLifecycleInternal,
 } from "./session/lifecycle";
-import {
-  sessionGetStatistics,
-  type SessionStatistics,
-  type SessionStatisticsSource,
-} from "./session/statistics";
+import { sessionGetStatistics, type SessionStatistics } from "./session/statistics";
 
 export type { MoqtObject } from "./dataStream";
 export type { SessionStatistics } from "./session/statistics";
@@ -1270,29 +1264,6 @@ export interface Session {
 }
 
 /**
- * Location Filter をデバッグログ用の文字列に要約する
- */
-function describeLocationFilter(filter: LocationFilter | undefined): string | undefined {
-  if (filter === undefined) {
-    return undefined;
-  }
-  if ("reset" in filter) {
-    return "reset";
-  }
-  const entries: string[] = [`startGroup=${filter.startGroup}`];
-  if ("startObject" in filter) {
-    entries.push(`startObject=${filter.startObject}`);
-  }
-  if ("endGroupDelta" in filter) {
-    entries.push(`endGroupDelta=${filter.endGroupDelta}`);
-  }
-  if ("endObject" in filter) {
-    entries.push(`endObject=${filter.endObject}`);
-  }
-  return entries.join(", ");
-}
-
-/**
  * 読み取り済みの先頭バイト列をストリームの先頭に戻す
  *
  * initialize() が制御ストリームを探すためにデータストリームの先頭
@@ -1377,7 +1348,7 @@ export class SessionImpl implements Session {
 
   // リクエスト ID 管理
   private nextRequestId = 0n;
-  private nextTrackAlias = 0n;
+  nextTrackAlias = 0n;
 
   // GOAWAY 状態
   private receivedGoaway = false;
@@ -1462,7 +1433,7 @@ export class SessionImpl implements Session {
   // fill 要求元の Request ID から購読への関連付け
   // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
   // fill fetch ストリームの FETCH_HEADER が運ぶ Request ID で引く。
-  private fillFetchTargets = new Map<bigint, bidi.FillFetchTarget>();
+  fillFetchTargets = new Map<bigint, bidi.FillFetchTarget>();
 
   // リクエストごとの双方向ストリーム管理
   // draft-ietf-moq-transport-21 Section 6.3:
@@ -1481,7 +1452,7 @@ export class SessionImpl implements Session {
   >();
 
   // 保留中のリクエスト
-  private pendingPublish = new Map<
+  pendingPublish = new Map<
     bigint,
     {
       resolve: (pub: Publisher) => void;
@@ -1489,7 +1460,7 @@ export class SessionImpl implements Session {
       impl: PublisherImpl;
     }
   >();
-  private pendingSubscribe = new Map<
+  pendingSubscribe = new Map<
     bigint,
     {
       resolve: (sub: Subscriber) => void;
@@ -1502,7 +1473,7 @@ export class SessionImpl implements Session {
     bigint,
     { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
   >();
-  private pendingFetch = new Map<
+  pendingFetch = new Map<
     bigint,
     {
       resolve: (fetcher: Fetcher) => void;
@@ -1512,7 +1483,7 @@ export class SessionImpl implements Session {
     }
   >();
   // 型は bidi.PendingTrackStatus に集約する (trackKey の追加が片側だけにならないようにする)
-  private pendingTrackStatus = new Map<bigint, bidi.PendingTrackStatus>();
+  pendingTrackStatus = new Map<bigint, bidi.PendingTrackStatus>();
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *
@@ -1582,7 +1553,7 @@ export class SessionImpl implements Session {
   // Publisher ごとのストリーム状態
   // draft-ietf-moq-transport-21 Section 2.2:
   // "Objects in a subgroup ... are sent on a single stream whenever possible."
-  private publisherStreams = new Map<bigint, PublisherStreamState>();
+  publisherStreams = new Map<bigint, PublisherStreamState>();
 
   // Publisher ごとの送信キュー
   // sendObject は async だが fire-and-forget で呼ばれるため、
@@ -2113,139 +2084,13 @@ export class SessionImpl implements Session {
     callbacks?: PublishCallbacks,
     options?: PublishOptions,
   ): Promise<Publisher> {
-    if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-21 Section 9.2 (GOAWAY)
-    if (this.receivedGoaway) {
-      throw new Error("Cannot publish after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    // draft-ietf-moq-transport-21 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
-    this.nextRequestId += 2n;
-
-    const trackAlias = this.nextTrackAlias++;
-
-    const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encodeTrackName(trackName);
-    // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
-    validateFullTrackName(trackNamespace, trackName);
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespace, trackName);
-
-    // パブリッシャー実装を作成
-    const impl = new PublisherImpl(
+    return requestsPublish(
+      this as unknown as RequestsSessionInternal,
       namespace,
       trackName,
-      requestId,
-      trackAlias,
-      callbacks?.error,
-      callbacks?.onForwardStateChange,
+      callbacks,
+      options,
     );
-
-    // GOAWAY コールバックを設定（セッション内部コールバック）
-    impl.goawayCallback = callbacks?.goaway;
-
-    // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
-    // "The initiator of the subscription sets the initial Forward State in
-    //  either PUBLISH or SUBSCRIBE."
-    // PUBLISH 送信時の options.forward (省略時は §9.20.19 のデフォルト 1)
-    // を Forward State として保持する。subscribe() と同パターン。
-    impl.setForwardState(options?.forward ?? true);
-
-    // 送信コールバックを設定
-    impl.onSendObject = (params: SendObjectParams) => this.sendObject(impl, params);
-    // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
-    // Forward State 0 で見送った Object がある Subgroup は、閉じる時に reset を MUST とする。
-    // 見送りの事実をストリーム状態へ記録する (閉じる時点では最後に送信した Object より後の
-    // 見送りを検出できないため、見送りの時点で記録する)。
-    impl.onSendObjectSkipped = () => {
-      const streamState = this.publisherStreams.get(impl.getTrackAlias());
-      if (streamState) {
-        streamState.omittedObjects = true;
-      }
-    };
-
-    // データグラム送信コールバックを設定
-    impl.onSendDatagram = (params: SendDatagramParams) => {
-      this.sendDatagram(impl, params);
-    };
-
-    // PUBLISH_STATE_NOTIFY 送信コールバックを設定
-    impl.onNotifyStateChange = (options) => this.sendPublishStateNotify(impl, options);
-
-    impl.onDoneInternal = async (status) => {
-      // まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）
-      await this.closePublisherStream(impl.getTrackAlias());
-      // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-21 §9.9）
-      await this.sendPublishDone(impl, status);
-      // draft-ietf-moq-transport-21 §6.6.1:
-      // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
-      this.onRequestDrained();
-    };
-
-    // PUBLISH メッセージを構築する。
-    // buildPublishParameters / buildPublishTrackProperties / encodePublishPayload
-    // が throw する場合、pendingPublish.set より前で失敗させるため、
-    // 構築・encode は Promise 作成より前に行う (subscribe() の
-    // buildSubscribeParameters / fetch() の buildFetchParameters と同じ手順)。
-    const parameters = buildPublishParameters(options);
-    const trackProperties = buildPublishTrackProperties(options, this.grease);
-
-    // PUBLISH メッセージを双方向ストリームで送信
-    // draft-ietf-moq-transport-21 Section 9.8 (PUBLISH):
-    // "The publisher sends PUBLISH as the first message on a new
-    //  bidirectional stream to initiate a subscription for a Track."
-    // draft-ietf-moq-transport-21 Section 6.3
-    const publishMsg = {
-      type: MessageType.PUBLISH,
-      requestId,
-      trackNamespace,
-      trackName: trackNameBytes,
-      trackAlias,
-      parameters,
-      trackProperties,
-    };
-
-    const payload = encodePublishPayload(publishMsg);
-
-    // PUBLISH_OK の Promise を作成
-    const promise = new Promise<Publisher>((resolve, reject) => {
-      this.pendingPublish.set(requestId, {
-        resolve,
-        reject,
-        impl,
-      });
-    });
-
-    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
-    try {
-      streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.PUBLISH, payload, {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-        trackAlias: trackAlias.toString(),
-        MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
-        OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-        DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
-        GROUP_ORDER: options?.groupOrder,
-        DYNAMIC_GROUPS: options?.dynamicGroups,
-        EXPIRES: options?.expires?.toString(),
-      });
-    } catch (error) {
-      // 送信失敗時は保留中の PUBLISH を削除して残留を防ぐ
-      // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
-      this.pendingPublish.delete(requestId);
-      throw error;
-    }
-
-    // 双方向ストリームからレスポンスを読み取る
-    void this.readPublishResponse(requestId, streamInfo.stream, streamInfo.controlReader);
-
-    return promise;
   }
 
   /**
@@ -2261,158 +2106,13 @@ export class SessionImpl implements Session {
     callbacks: SubscribeCallbacks,
     options?: SubscribeOptions,
   ): Promise<Subscriber> {
-    if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    // draft-ietf-moq-transport-21 Section 9.2 (GOAWAY)
-    if (this.receivedGoaway) {
-      throw new Error("Cannot subscribe after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    // draft-ietf-moq-transport-21 Section 6.4.2.1: クライアントは偶数の Request ID を使うため 2 ずつ加算する
-    this.nextRequestId += 2n;
-
-    const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encodeTrackName(trackName);
-    // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
-    validateFullTrackName(trackNamespace, trackName);
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespace, trackName);
-
-    // サブスクライバー実装を作成
-    // 注意: trackAlias は SUBSCRIBE_OK 受信時に設定される
-    // Track Alias のプレースホルダー。SUBSCRIBE_OK 受信時に更新する
-    const impl = new SubscriberImpl(
+    return requestsSubscribe(
+      this as unknown as RequestsSessionInternal,
       namespace,
       trackName,
-      requestId,
-      0n,
-      callbacks.object,
-      callbacks.datagram,
-      callbacks.end,
-      callbacks.error,
+      callbacks,
+      options,
     );
-
-    // GOAWAY コールバックを設定（セッション内部コールバック）
-    impl.goawayCallback = callbacks.goaway;
-    // fill 失敗コールバックを設定（セッション内部コールバック）
-    impl.fillErrorCallback = callbacks.fillError;
-
-    // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
-    // "The initiator of the subscription sets the initial Forward State in
-    //  either PUBLISH or SUBSCRIBE."
-    // SUBSCRIBE 送信時の options.forward (省略時は §9.20.19 のデフォルト 1)
-    // を Forward State として保持する。
-    impl.setForwardState(options?.forward ?? true);
-
-    // draft-ietf-moq-transport-21 §9.20.9 / §9.20.16:
-    // SUBSCRIBE 送信時の options.groupOrder を保持する。fill 要求時の
-    // Group Order 解決 (FILL 内の指定が無ければ subscription の値) に使う。
-    impl.setGroupOrder(options?.groupOrder);
-
-    // draft-ietf-moq-transport-21 Section 3.3.1: Location Filter を設定
-    impl.setLocationFilter(options?.filter);
-
-    // draft-ietf-moq-transport-21 Section 3.3.2: Range Filters を設定
-    impl.setRangeFilters(options?.rangeFilters);
-
-    // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
-    impl.setAuthorizationToken(options?.authorizationToken);
-
-    // サブスクリプションキャンセルのコールバック
-    impl.onUnsubscribe = async () => {
-      await this.cancelSubscription(impl);
-    };
-
-    // 更新コールバックを設定
-    impl.onUpdate = async (updateOptions: RequestUpdateOptions) => {
-      await this.sendRequestUpdate(impl, updateOptions);
-    };
-
-    // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
-    // pendingSubscribe.set より前に配置し、throw 時に pending エントリが残らないようにする
-    // fill 内側の Range Filters も購読単位の上限に含める (§9.1.6)。
-    validateRangeFilterLimits(
-      [...(options?.rangeFilters ?? []), ...(options?.fill?.rangeFilters ?? [])],
-      this.peerMaxFilterRanges,
-      "SUBSCRIBE",
-    );
-
-    // draft-ietf-moq-transport-21 §3.3.2:
-    // SUBSCRIBE の Range Filter 送信ガード (削除は REQUEST_UPDATE のみ・0x29 は
-    // SUBSCRIBE_TRACKS のみ・組み合わせ重複禁止)。buildSubscribeParameters 内でも
-    // 検証されるが、pendingSubscribe.set より前に throw させるため明示的に呼ぶ。
-    validateRangeFilterSpecs(options?.rangeFilters, "SUBSCRIBE", {
-      allowRemove: false,
-      allowTrackProperty: false,
-    });
-
-    // SUBSCRIBE の Message Parameters を構築する。
-    // buildSubscribeParameters (LOCATION_FILTER の End Group 2^64-1 超過検証を
-    // 含む) が throw する場合、pendingSubscribe.set より前で失敗させるため、
-    // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
-    const parameters = buildSubscribeParameters(options);
-
-    // SUBSCRIBE_OK の Promise を作成
-    const promise = new Promise<Subscriber>((resolve, reject) => {
-      this.pendingSubscribe.set(requestId, {
-        resolve,
-        reject,
-        impl,
-        objectCallback: callbacks.object,
-      });
-    });
-
-    // SUBSCRIBE メッセージを双方向ストリームで送信
-    // draft-ietf-moq-transport-21 Section 9.6 (SUBSCRIBE):
-    // SUBSCRIBE は新しい双方向ストリームで送信される。
-    // draft-ietf-moq-transport-21 Section 6.3
-    const subscribeMsg = {
-      type: MessageType.SUBSCRIBE,
-      requestId,
-      trackNamespace,
-      trackName: trackNameBytes,
-      parameters,
-    };
-
-    // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
-    // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
-    // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
-    if (options?.fill !== undefined) {
-      this.fillFetchTargets.set(requestId, {
-        subscriber: impl,
-        groupOrder: resolveFillGroupOrder(options.fill.groupOrder, options.groupOrder),
-      });
-    }
-
-    const payload = encodeSubscribePayload(subscribeMsg);
-    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
-    try {
-      streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.SUBSCRIBE, payload, {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-        filter: describeLocationFilter(options?.filter),
-        OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-        SUBSCRIBER_PRIORITY: options?.subscriberPriority,
-        GROUP_ORDER: options?.groupOrder,
-        NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
-      });
-    } catch (error) {
-      // 送信失敗時は fill 関連付けと保留中の SUBSCRIBE を削除して残留を防ぐ
-      // (bidiSendRequestUpdate の write 失敗時と同パターン)。
-      this.fillFetchTargets.delete(requestId);
-      this.pendingSubscribe.delete(requestId);
-      throw error;
-    }
-
-    // 双方向ストリームからレスポンスを読み取る
-    void this.readSubscribeResponse(requestId, streamInfo.stream, streamInfo.controlReader);
-
-    return promise;
   }
 
   /**
@@ -2428,112 +2128,13 @@ export class SessionImpl implements Session {
     options: FetchOptions,
     callbacks: FetchCallbacks,
   ): Promise<Fetcher> {
-    if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
-      throw new Error("Cannot fetch after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encodeTrackName(trackName);
-    // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
-    validateFullTrackName(trackNamespace, trackName);
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespace, trackName);
-
-    // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES を超える Range Filter 送信をガード
-    // pendingFetch.set より前に配置し、throw 時に pending エントリが残らないようにする
-    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "FETCH");
-
-    // Fetcher 実装を作成
-    const impl = new FetcherImpl(
+    return requestsFetch(
+      this as unknown as RequestsSessionInternal,
       namespace,
       trackName,
-      requestId,
-      callbacks.object,
-      callbacks.end,
-      callbacks.error,
+      options,
+      callbacks,
     );
-
-    // GOAWAY コールバックを設定（セッション内部コールバック）
-    impl.goawayCallback = callbacks.goaway;
-
-    // draft-ietf-moq-transport-21 §9.20.9 / §11.4.1.1:
-    // FETCH 送信時の options.groupOrder を保持し、FETCH 応答の Group ID 復号に
-    // 使う。GROUP_ORDER は FETCH_OK に出現しないため、復号の根拠は要求時の値
-    // だけにする。省略時は Ascending (§9.20.9 の既定値であり、fill fetch の
-    // resolveFillGroupOrder と同じ扱い)。
-    impl.setGroupOrder(
-      options.groupOrder === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
-    );
-
-    // draft-ietf-moq-transport-21 Section 3.2.1:
-    // キャンセルはストリームを閉じることで行う。
-    impl.onCancel = async () => {
-      await this.cancelFetch(impl);
-    };
-
-    // FETCH メッセージを構築する
-    // draft-ietf-moq-transport-21 Section 9.11 (FETCH):
-    // FETCH は新しい双方向ストリームで送信される。
-    // draft-ietf-moq-transport-21 Section 6.3
-    // buildFetchParameters (buildRangeFilterParameters / encodeLocationFilter を含む)
-    // が throw する場合、pendingFetch.set より前で失敗させるため、
-    // 構築は Promise 作成より前に行う。
-    const fetchMsg = {
-      type: MessageType.FETCH,
-      requestId,
-      trackNamespace,
-      trackName: trackNameBytes,
-      parameters: buildFetchParameters(options),
-    };
-
-    // FETCH メッセージのペイロードを構築する。
-    // encodeFetchPayload が throw する場合、pendingFetch.set より前で
-    // 失敗させるため、encode は Promise 作成より前に行う (publish() と同じ手順)。
-    const payload = encodeFetchPayload(fetchMsg);
-
-    // FETCH_OK を待つ Promise。
-    // startLocation は FETCH_OK の End Location 検証 (§9.12) に使う。
-    // 相対指定 (1 フィールド) と Next Object 形式は Largest Object 依存のため
-    // クライアント側では確定できず undefined になる。
-    const startLocation = resolveFetchStartLocation(options.filter);
-    const promise = new Promise<Fetcher>((resolve, reject) => {
-      // exactOptionalPropertyTypes では optional な startLocation に undefined を渡せないため、
-      // 値がある場合だけ載せる
-      this.pendingFetch.set(requestId, {
-        resolve,
-        reject,
-        impl,
-        ...(startLocation !== undefined ? { startLocation } : {}),
-      });
-    });
-
-    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
-    try {
-      streamInfo = await this.sendRequestOnBidiStream(requestId, MessageType.FETCH, payload, {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-        filter: describeLocationFilter(options.filter),
-      });
-    } catch (error) {
-      // 送信失敗時は保留中の FETCH を削除して残留を防ぐ
-      // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
-      this.pendingFetch.delete(requestId);
-      throw error;
-    }
-
-    // 双方向ストリームからレスポンスを読み取る
-    void this.readFetchResponse(requestId, streamInfo.stream, streamInfo.controlReader);
-
-    return promise;
   }
 
   /**
@@ -2548,76 +2149,12 @@ export class SessionImpl implements Session {
     trackName: string,
     options?: TrackStatusOptions,
   ): Promise<TrackStatusResult> {
-    if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
-      throw new Error("Cannot query track status after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    const trackNamespace = createTrackNamespace(namespace);
-    const trackNameBytes = encodeTrackName(trackName);
-    // draft-ietf-moq-transport-21 §8.7: Full Track Name 合計長検証
-    validateFullTrackName(trackNamespace, trackName);
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespace, trackName);
-
-    // REQUEST_OK を待つ Promise
-    // draft-ietf-moq-transport-21 §12.1: malformed Track の検出時に同一 Track の
-    // 購読 / FETCH を cross-cancel するため、比較キーを pending に保持する。
-    const promise = new Promise<TrackStatusResult>((resolve, reject) => {
-      this.pendingTrackStatus.set(requestId, {
-        resolve,
-        reject,
-        trackKey: fullTrackNameKey(namespace, trackName),
-      });
-    });
-
-    // TRACK_STATUS メッセージを双方向ストリームで送信
-    // draft-ietf-moq-transport-21 Section 9.13 (TRACK_STATUS):
-    // TRACK_STATUS は新しい双方向ストリームで送信される。
-    // draft-ietf-moq-transport-21 Section 6.3
-    // draft-ietf-moq-transport-21 Section 9.20.22:
-    // INCLUDE_PROPERTIES は buildTrackStatusParameters で載せる (省略時は送らない)。
-    const trackStatusMsg = {
-      type: MessageType.TRACK_STATUS,
-      requestId,
-      trackNamespace,
-      trackName: trackNameBytes,
-      parameters: buildTrackStatusParameters(options),
-    };
-
-    let streamInfo: Awaited<ReturnType<SessionImpl["sendRequestOnBidiStream"]>>;
-    try {
-      // buildTrackStatusParameters は throw しないが、encode 以降は共通化のため
-      // 同一 try 範囲に含める (publish() / fetch() と同じ手順)。
-      const payload = encodeTrackStatusPayload(trackStatusMsg);
-      streamInfo = await this.sendRequestOnBidiStream(
-        requestId,
-        MessageType.TRACK_STATUS,
-        payload,
-        {
-          requestId: requestId.toString(),
-          trackNamespace: namespace,
-          trackName,
-        },
-      );
-    } catch (error) {
-      // 送信失敗時は保留中の TRACK_STATUS を削除して残留を防ぐ
-      // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
-      this.pendingTrackStatus.delete(requestId);
-      throw error;
-    }
-
-    // 双方向ストリームからレスポンスを読み取る
-    void this.readTrackStatusResponse(requestId, streamInfo.stream, streamInfo.controlReader);
-
-    return promise;
+    return requestsTrackStatus(
+      this as unknown as RequestsSessionInternal,
+      namespace,
+      trackName,
+      options,
+    );
   }
 
   /**
@@ -3058,7 +2595,7 @@ export class SessionImpl implements Session {
    * セッションレベルの統計情報を取得する
    */
   getStatistics(): SessionStatistics {
-    return sessionGetStatistics(this as unknown as SessionStatisticsSource);
+    return sessionGetStatistics(this);
   }
 
   /**
@@ -3219,7 +2756,7 @@ export class SessionImpl implements Session {
    * @param decoded - デバッグ用のデコード済みメッセージ
    * @returns 双方向ストリームの情報
    */
-  private sendRequestOnBidiStream(
+  sendRequestOnBidiStream(
     requestId: bigint,
     type: number,
     payload: Uint8Array,
@@ -3229,8 +2766,8 @@ export class SessionImpl implements Session {
     writer: WritableStreamDefaultWriter<Uint8Array>;
     controlReader: ControlStreamReader;
   }> {
-    return bidi.bidiSendRequestOnBidiStream(
-      this as unknown as bidi.BidiSessionInternal,
+    return requestsSendRequestOnBidiStream(
+      this as unknown as RequestsSessionInternal,
       requestId,
       type,
       payload,
@@ -3251,24 +2788,24 @@ export class SessionImpl implements Session {
    * これにより createUnidirectionalStream() の await 中に
    * 次の呼び出しが割り込んでストリームを二重作成する問題を防ぐ。
    */
-  private sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
-    return publishSendObject(this as unknown as SessionInternal, publisher, params);
+  sendObject(publisher: PublisherImpl, params: SendObjectParams): Promise<void> {
+    return requestsSendObject(this as unknown as RequestsSessionInternal, publisher, params);
   }
 
   /**
    * Publisher のストリームを閉じる
    * 送信キューに入れて、進行中の sendObject が完了してから閉じる
    */
-  private closePublisherStream(trackAlias: bigint): Promise<void> {
-    return publishClosePublisherStream(this as unknown as SessionInternal, trackAlias);
+  closePublisherStream(trackAlias: bigint): Promise<void> {
+    return requestsClosePublisherStream(this as unknown as RequestsSessionInternal, trackAlias);
   }
 
   /**
    * datagram を送信する
    * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    */
-  private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
-    publishSendDatagram(this as unknown as SessionInternal, publisher, params);
+  sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
+    return requestsSendDatagram(this as unknown as RequestsSessionInternal, publisher, params);
   }
 
   /**
@@ -3277,12 +2814,12 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
    * 購読の双方向ストリーム上で送信し、応答は受け取らない。
    */
-  private sendPublishStateNotify(
+  sendPublishStateNotify(
     publisher: PublisherImpl,
     options: PublishStateNotifyOptions,
   ): Promise<void> {
-    return bidi.bidiSendPublishStateNotify(
-      this as unknown as bidi.BidiSessionInternal,
+    return requestsSendPublishStateNotify(
+      this as unknown as RequestsSessionInternal,
       publisher,
       options,
     );
@@ -3293,8 +2830,8 @@ export class SessionImpl implements Session {
    * PUBLISH_DONE は双方向ストリーム上で送信される。
    * Request ID フィールドはない（bidi stream で特定可能）。
    */
-  private sendPublishDone(publisher: PublisherImpl, status: PublishDoneStatusCode): Promise<void> {
-    return publishSendPublishDone(this as unknown as SessionInternal, publisher, status);
+  sendPublishDone(publisher: PublisherImpl, status: PublishDoneStatusCode): Promise<void> {
+    return requestsSendPublishDone(this as unknown as RequestsSessionInternal, publisher, status);
   }
 
   /**
@@ -3303,8 +2840,8 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 Section 6.4.2.3:
    * subscription のキャンセルは双方向ストリームの close で行う。
    */
-  private cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
-    return bidi.bidiCancelSubscription(this as unknown as bidi.BidiSessionInternal, subscriber);
+  cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
+    return requestsCancelSubscription(this as unknown as RequestsSessionInternal, subscriber);
   }
 
   /**
@@ -3313,8 +2850,8 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 Section 3.2.1:
    * "It MUST send STOP_SENDING for the bidi request stream."
    */
-  private cancelFetch(fetcher: FetcherImpl): Promise<void> {
-    return bidi.bidiCancelFetch(this as unknown as bidi.BidiSessionInternal, fetcher);
+  cancelFetch(fetcher: FetcherImpl): Promise<void> {
+    return requestsCancelFetch(this as unknown as RequestsSessionInternal, fetcher);
   }
 
   /**
@@ -3330,12 +2867,9 @@ export class SessionImpl implements Session {
    *   Parameters (..) ...
    * }
    */
-  private sendRequestUpdate(
-    subscriber: SubscriberImpl,
-    options: RequestUpdateOptions,
-  ): Promise<void> {
-    return bidi.bidiSendRequestUpdate(
-      this as unknown as bidi.BidiSessionInternal,
+  sendRequestUpdate(subscriber: SubscriberImpl, options: RequestUpdateOptions): Promise<void> {
+    return requestsSendRequestUpdate(
+      this as unknown as RequestsSessionInternal,
       subscriber,
       options,
     );
@@ -3349,13 +2883,13 @@ export class SessionImpl implements Session {
    * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private readPublishResponse(
+  readPublishResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
   ): Promise<void> {
-    return bidi.bidiReadPublishResponse(
-      this as unknown as bidi.BidiSessionInternal,
+    return requestsReadPublishResponse(
+      this as unknown as RequestsSessionInternal,
       requestId,
       stream,
       controlReader,
@@ -3369,13 +2903,13 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private readSubscribeResponse(
+  readSubscribeResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
   ): Promise<void> {
-    return bidi.bidiReadSubscribeResponse(
-      this as unknown as bidi.BidiSessionInternal,
+    return requestsReadSubscribeResponse(
+      this as unknown as RequestsSessionInternal,
       requestId,
       stream,
       controlReader,
@@ -3389,13 +2923,13 @@ export class SessionImpl implements Session {
    * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private readFetchResponse(
+  readFetchResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
   ): Promise<void> {
-    return bidi.bidiReadFetchResponse(
-      this as unknown as bidi.BidiSessionInternal,
+    return requestsReadFetchResponse(
+      this as unknown as RequestsSessionInternal,
       requestId,
       stream,
       controlReader,
@@ -3409,13 +2943,13 @@ export class SessionImpl implements Session {
    * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
    * draft-ietf-moq-transport-21 Section 6.3
    */
-  private readTrackStatusResponse(
+  readTrackStatusResponse(
     requestId: bigint,
     stream: WebTransportBidirectionalStream,
     controlReader: ControlStreamReader,
   ): Promise<void> {
-    return bidi.bidiReadTrackStatusResponse(
-      this as unknown as bidi.BidiSessionInternal,
+    return requestsReadTrackStatusResponse(
+      this as unknown as RequestsSessionInternal,
       requestId,
       stream,
       controlReader,
