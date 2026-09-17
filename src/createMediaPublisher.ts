@@ -45,10 +45,17 @@ import {
 
 // デフォルト設定
 
-// Publisher Priority (ドキュメントに記載)
-const PRIORITY_AUDIO = 192;
-const PRIORITY_VIDEO_KEY = 255;
-const PRIORITY_VIDEO_DELTA = 128;
+// Publisher Priority (docs/HIGH_LEVEL_API.md の Priority 表に記載)
+// 単体テストから値を固定するため export する (パッケージ公開 API には含めない)。
+
+/** 音声オブジェクトの優先度 (音声は途切れると違和感が大きいため高優先) */
+export const PRIORITY_AUDIO = 192;
+
+/** 映像キーフレームの優先度 (後続フレームのデコードに必須のため最高) */
+export const PRIORITY_VIDEO_KEY = 255;
+
+/** 映像差分フレームの優先度 (破棄されても次のキーフレームで回復可能) */
+export const PRIORITY_VIDEO_DELTA = 128;
 
 // 同一プロセス内で割り当てた初期 Group ID の最大値
 // (draft-ietf-moq-msf-01 §6.1: 再起動時の開始 Group ID は
@@ -75,6 +82,138 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
   const next = Math.max(candidate, lastAllocatedInitialGroupId + 1);
   lastAllocatedInitialGroupId = next;
   return next;
+}
+
+// グループ管理・キーフレーム判定
+//
+// 送信側の Group ID / Object ID の払い出しと、キーフレームのタイミング判定を
+// 状態を持たない関数に切り出したもの。MediaPublisherImpl は状態を保持して
+// これらを呼ぶだけになる。
+// 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
+
+/**
+ * 音声の Group 切り替え周期 (フレーム数)
+ *
+ * 音声は一定間隔で新しい Group を開始する (約 1 秒ごと、docs/HIGH_LEVEL_API.md の
+ * groupId 管理に記載)。一般的な音声フレーム長 (20 ms 前後) では 50 フレームで
+ * 約 1 秒になる。
+ */
+export const AUDIO_GROUP_FRAME_PERIOD = 50;
+
+/** 音声の Group / Object 管理状態 */
+export interface AudioGroupState {
+  /** 現在の Group ID */
+  groupId: number;
+  /** 次に送る Object ID */
+  objectId: number;
+  /** 送信済みフレーム数 (Group 切り替えの判定に使う) */
+  frameCount: number;
+}
+
+/** 映像の Group / Object 管理状態 */
+export interface VideoGroupState {
+  /** 現在の Group ID */
+  groupId: number;
+  /** 次に送る Object ID */
+  objectId: number;
+  /** Group を開始済みか (初回のキーフレームは Group を進めない) */
+  started: boolean;
+}
+
+/** Group / Object の払い出し結果 */
+export interface GroupObjectAllocation<State> {
+  /** 次のフレームへ引き継ぐ状態 */
+  state: State;
+  /** このオブジェクトを送る Group ID */
+  groupId: number;
+  /** このオブジェクトの Object ID */
+  objectId: number;
+  /** 新しい Group を開始したか (送信済み最大 Group ID の追跡に使う) */
+  groupAdvanced: boolean;
+}
+
+/**
+ * 音声フレーム 1 件分の Group / Object を払い出す純関数
+ *
+ * 送信済みフレーム数が周期 (既定 50 フレーム) に達したフレームで新しい Group を
+ * 開始し、Object ID を 0 に戻す。Group を進めたかを返し、呼び出し側が送信済みの
+ * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
+ *
+ * @param state - 現在の Group / Object 管理状態
+ * @param period - Group を切り替えるフレーム数
+ * @returns 払い出した Group ID / Object ID と次の状態
+ */
+export function allocateAudioObject(
+  state: AudioGroupState,
+  period: number = AUDIO_GROUP_FRAME_PERIOD,
+): GroupObjectAllocation<AudioGroupState> {
+  const frameCount = state.frameCount + 1;
+  const groupAdvanced = frameCount % period === 0;
+  // 新しい Group を開始したフレームは Object ID を 0 から振り直す
+  const groupId = groupAdvanced ? state.groupId + 1 : state.groupId;
+  const objectId = groupAdvanced ? 0 : state.objectId;
+  return {
+    state: { groupId, objectId: objectId + 1, frameCount },
+    groupId,
+    objectId,
+    groupAdvanced,
+  };
+}
+
+/**
+ * 映像フレーム 1 件分の Group / Object を払い出す純関数
+ *
+ * キーフレームで新しい Group を開始し、Object ID を 0 に戻す。初回のキーフレームは
+ * 割当て済みの初期 Group ID をそのまま使う (初回オブジェクトは加算せず初期値を送る)。
+ * 実運用経路は初回をキーフレームで要求するため、差分フレームが先行した場合の初回
+ * キーフレームは初期値 + 1 になる。Group を進めたかを返し、呼び出し側が送信済みの
+ * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
+ *
+ * @param state - 現在の Group / Object 管理状態
+ * @param isKeyFrame - 送信するフレームがキーフレームか
+ * @returns 払い出した Group ID / Object ID と次の状態
+ */
+export function allocateVideoObject(
+  state: VideoGroupState,
+  isKeyFrame: boolean,
+): GroupObjectAllocation<VideoGroupState> {
+  const groupAdvanced = isKeyFrame && state.started;
+  const groupId = groupAdvanced ? state.groupId + 1 : state.groupId;
+  const objectId = isKeyFrame ? 0 : state.objectId;
+  return {
+    // 差分フレームでも「Group を開始済み」にする (以降のキーフレームで Group を進める)
+    state: { groupId, objectId: objectId + 1, started: true },
+    groupId,
+    objectId,
+    groupAdvanced,
+  };
+}
+
+/**
+ * 映像のキーフレーム間隔を解決する純関数
+ *
+ * `keyframeInterval` 未指定時は framerate の 2 倍を使う (既定 framerate は 30)。
+ *
+ * @param video - 映像配信オプション (映像を配信しない場合は undefined)
+ * @returns キーフレームを送るフレーム間隔
+ */
+export function resolveKeyframeInterval(video: VideoPublishOptions | undefined): number {
+  const framerate = video?.framerate ?? DEFAULT_VIDEO_FRAMERATE;
+  return video?.keyframeInterval ?? framerate * 2;
+}
+
+/**
+ * 映像フレームがキーフレームのタイミングかを判定する純関数
+ *
+ * フレーム番号が間隔の倍数ならキーフレームにする。`requestKeyframe()` はフレーム
+ * 番号を 0 に戻すため、要求直後のフレームは必ずキーフレームになる。
+ *
+ * @param frameCount - キーフレーム判定に使うフレーム番号
+ * @param keyframeInterval - キーフレームを送るフレーム間隔
+ * @returns キーフレームのタイミングなら true
+ */
+export function shouldSendKeyFrame(frameCount: number, keyframeInterval: number): boolean {
+  return frameCount % keyframeInterval === 0;
 }
 
 /**
@@ -170,8 +309,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.videoStats.currentGroupId = this.videoGroupId;
 
     // キーフレーム間隔を計算
-    const framerate = options.video?.framerate ?? DEFAULT_VIDEO_FRAMERATE;
-    this.keyframeInterval = options.video?.keyframeInterval ?? framerate * 2;
+    this.keyframeInterval = resolveKeyframeInterval(options.video);
   }
 
   get state(): MediaPublisherState {
@@ -622,7 +760,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         }
 
         // キーフレーム判定
-        const isKeyFrame = this.videoFrameCount % this.keyframeInterval === 0;
+        const isKeyFrame = shouldSendKeyFrame(this.videoFrameCount, this.keyframeInterval);
         this.videoFrameCount++;
 
         if (encoder.encodeQueueSize <= 2) {
@@ -659,11 +797,16 @@ export class MediaPublisherImpl implements MediaPublisher {
       config: audioConfig,
     });
 
-    // オーディオは一定間隔で新しいグループを開始（約1秒ごと）
-    this.audioFrameCount++;
-    if (this.audioFrameCount % 50 === 0) {
-      this.audioGroupId++;
-      this.audioObjectId = 0;
+    // 音声は一定間隔で新しい Group を開始する (約 1 秒ごと)
+    const audioAllocation = allocateAudioObject({
+      groupId: this.audioGroupId,
+      objectId: this.audioObjectId,
+      frameCount: this.audioFrameCount,
+    });
+    this.audioGroupId = audioAllocation.state.groupId;
+    this.audioObjectId = audioAllocation.state.objectId;
+    this.audioFrameCount = audioAllocation.state.frameCount;
+    if (audioAllocation.groupAdvanced) {
       // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
       // 次インスタンスの開始 Group ID が上回るようにする
       lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.audioGroupId);
@@ -676,8 +819,8 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // 音声フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
     void this.audioPublisher.sendObject({
-      groupId: this.audioGroupId,
-      objectId: this.audioObjectId++,
+      groupId: audioAllocation.groupId,
+      objectId: audioAllocation.objectId,
       payload,
       properties,
       priority: PRIORITY_AUDIO,
@@ -734,14 +877,22 @@ export class MediaPublisherImpl implements MediaPublisher {
     // キーフレームで新しいグループを開始
     // (初回オブジェクトは加算せず初期値を送る。実運用経路は初回を
     // key で要求するため、delta 先行時は初回 key が初期値 + 1 になる)
+    const videoAllocation = allocateVideoObject(
+      {
+        groupId: this.videoGroupId,
+        objectId: this.videoObjectId,
+        started: this.videoGroupStarted,
+      },
+      chunk.type === "key",
+    );
+    this.videoGroupId = videoAllocation.state.groupId;
+    this.videoObjectId = videoAllocation.state.objectId;
+    if (videoAllocation.groupAdvanced) {
+      // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
+      // 次インスタンスの開始 Group ID が上回るようにする
+      lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.videoGroupId);
+    }
     if (chunk.type === "key") {
-      if (this.videoGroupStarted) {
-        this.videoGroupId++;
-        // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
-        // 次インスタンスの開始 Group ID が上回るようにする
-        lastAllocatedInitialGroupId = Math.max(lastAllocatedInitialGroupId, this.videoGroupId);
-      }
-      this.videoObjectId = 0;
       this.videoStats.keyFramesSent++;
     }
 
@@ -782,13 +933,15 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // 映像フレームは fire-and-forget。落としても良いし、後続のオブジェクトで上書きされる
     void this.videoPublisher.sendObject({
-      groupId: this.videoGroupId,
-      objectId: this.videoObjectId++,
+      groupId: videoAllocation.groupId,
+      objectId: videoAllocation.objectId,
       payload,
       properties,
       priority: chunk.type === "key" ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     });
-    this.videoGroupStarted = true;
+    // 送信を試みた時点で「Group を開始済み」にする
+    // (次に届くキーフレームから新しい Group を開始する)
+    this.videoGroupStarted = videoAllocation.state.started;
   }
 
   /**
