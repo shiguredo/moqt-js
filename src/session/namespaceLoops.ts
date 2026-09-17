@@ -48,7 +48,11 @@ import {
 } from "./errors";
 import { cancelStreamQuiet } from "./stream";
 import type { ControlStreamReader } from "../controlStream";
-import type { NamespaceSubscription, TracksSubscription, NamespacePublication } from "../session";
+import type {
+  NamespaceSubscription,
+  TracksSubscription,
+  NamespacePublication,
+} from "./publicTypes";
 import type {
   NamespacePublicationState,
   NamespaceSubscriptionState,

@@ -79,7 +79,7 @@ import {
   validateParameterScope,
 } from "../message/parameterScope";
 import { SubscriberImpl, type Subscriber, type RequestUpdateOptions } from "../subscriber";
-import type { TracksUpdateOptions, SessionState, TrackStatusResult } from "../session";
+import type { TracksUpdateOptions, SessionState, TrackStatusResult } from "./publicTypes";
 import {
   compareLocations,
   extractForwardState,

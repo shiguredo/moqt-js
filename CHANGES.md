@@ -1647,6 +1647,13 @@
   - PBT でカバーできた固定値テスト 136 件を対応する単体テストから削除する (エラーパス・境界値・仕様の MUST 検証・異常系は単体テストに残す)
   - @voluntas
 
+- [UPDATE] SessionImpl を責務単位のモジュールへ分割する
+  - `src/session.ts` の SessionImpl が接続・購読・発行・fetch・namespace 系・統計を同居させ 6,157 行になっていたため、責務ごとに `src/session/` 配下の 7 モジュール (statistics / lifecycle / dataStreamIncoming / incomingPublish / requests / namespaces / connection) へ free function として抽出する
+  - 公開 API (`src/index.ts` の export と `Session` インターフェース) と挙動は変えず、分割前後で `dist/index.d.ts` が同一であることを確認する
+  - 公開型定義は `src/session/publicTypes.ts` へ分離して session.ts から再エクスポートし、`src/session/` 配下から session.ts への型参照を無くして型レベルの循環を解消する
+  - `src/session.ts` は 6,157 行から 1,183 行になり、Session インターフェースと各モジュールへの委譲だけが残る
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13

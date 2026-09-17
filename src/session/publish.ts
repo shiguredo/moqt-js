@@ -25,7 +25,7 @@ import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } fr
 import { calculateObjectIdDelta } from "./params";
 import { isPeerStreamError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
-import type { SessionState } from "../session";
+import type { SessionState } from "./publicTypes";
 import type { SessionInternal } from "./types";
 import type { BidiSessionInternal } from "./bidi";
 
