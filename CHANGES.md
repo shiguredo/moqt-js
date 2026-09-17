@@ -11,6 +11,11 @@
 
 ## develop
 
+- [CHANGE] SubgroupHeader の firstObject を必須の boolean にする
+  - `SubgroupHeader.firstObject?: boolean` は wire 上の FIRST_OBJECT ビット (0x40) が無い場合に `undefined` を入れていたため、`false` と未設定の区別に意味が無く、消費側は `=== true` で判定する必要があった
+  - `SubgroupHeader.firstObject` を必須の `boolean` にし、wire 上でビットが無い場合は `false` を設定する。encode / decode の wire 表現は変えない
+  - `encodeSubgroupHeader` / `decodeSubgroupHeader` / `processSubgroupObjects` を新しい表現に追随させた。`SubgroupHeader` を組み立てる利用側は `firstObject` の指定が必要になる
+  - @voluntas
 - [FIX] FETCH 応答ストリーム上の REQUEST_UPDATE を検出する
   - draft-ietf-moq-transport-21 §9.5 の MUST (REQUEST_UPDATE を受け取れるのはリクエストの送信者と PUBLISH で確立した購読の subscriber のみ) に反する REQUEST_UPDATE を、FETCH_OK 受理後に双方向ストリームを読み続けていなかったため検出できなかった
   - FETCH_OK 受理後に `bidiReadRequestStreamMessages` を fetch ロールで起動し、REQUEST_UPDATE を PROTOCOL_VIOLATION で閉じる。FETCH_OK と同一チャンクに連結されたメッセージも初期メッセージとして処理する

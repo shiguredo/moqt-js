@@ -29,6 +29,8 @@ test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
     trackAlias: 5n,
     groupId: 10n,
     publisherPriority: 128,
+    // FIRST_OBJECT ビットを立てない場合でも必須フィールドとして false を取る
+    firstObject: false,
   };
 
   const encoded = encodeSubgroupHeader(header);
@@ -47,6 +49,7 @@ test("SubgroupHeader: EXPLICIT タイプ (0x14) - SubgroupId ありをエンコ�
     groupId: 7n,
     subgroupId: 2n,
     publisherPriority: 200,
+    firstObject: false,
   };
 
   const encoded = encodeSubgroupHeader(header);
@@ -65,6 +68,7 @@ test("SubgroupHeader: 大きな値をエンコード", () => {
     trackAlias: 1000n,
     groupId: 2000n,
     publisherPriority: 255,
+    firstObject: false,
   };
 
   const encoded = encodeSubgroupHeader(header);
@@ -86,6 +90,7 @@ test("SubgroupHeader: Priority Present の型で publisherPriority 省略は thr
         type: SubgroupHeaderType.BASE,
         trackAlias: 1n,
         groupId: 1n,
+        firstObject: false,
       }),
     /publisherPriority is required when Priority Present bit is set/,
   );
@@ -96,6 +101,7 @@ test("SubgroupHeader: Priority Present の型で publisherPriority 省略は thr
         trackAlias: 1n,
         groupId: 1n,
         subgroupId: 0n,
+        firstObject: false,
       }),
     /publisherPriority is required when Priority Present bit is set/,
   );
@@ -116,6 +122,7 @@ test("SubgroupHeader: 範囲外・非整数の publisherPriority は throw す�
           trackAlias: 1n,
           groupId: 1n,
           publisherPriority: priority,
+          firstObject: false,
         }),
       /invalid publisher priority: .* expected integer 0 to 255/,
     );
@@ -129,6 +136,7 @@ test("SubgroupHeader: 範囲外・非整数の publisherPriority は throw す�
           trackAlias: 1n,
           groupId: 1n,
           publisherPriority: priority,
+          firstObject: false,
         }),
       /invalid publisher priority/,
     );
@@ -140,6 +148,7 @@ test("SubgroupHeader: 範囲外・非整数の publisherPriority は throw す�
       trackAlias: 1n,
       groupId: 1n,
       publisherPriority: priority,
+      firstObject: false,
     });
     assert.equal(encoded[encoded.length - 1], priority);
   }
@@ -156,6 +165,7 @@ test("SubgroupHeader: Priority なし型では範囲外 priority でも throw �
     trackAlias: 1n,
     groupId: 1n,
     publisherPriority: 300,
+    firstObject: false,
   });
   assert.isDefined(encoded);
 });
@@ -169,6 +179,8 @@ test("SubgroupHeader: BASE タイプをデコード", () => {
   assert.equal(header.groupId, 10n);
   assert.equal(header.subgroupId, 0n);
   assert.equal(header.publisherPriority, 128);
+  // FIRST_OBJECT ビット (0x40) が立たない場合は undefined ではなく false になる
+  assert.equal(header.firstObject, false);
   assert.equal(consumed, 4);
 });
 
@@ -275,6 +287,7 @@ const subgroupHeaderTestCases = [
       trackAlias: 10n,
       groupId: 20n,
       publisherPriority: 100,
+      firstObject: false,
     },
   },
   {
@@ -284,6 +297,7 @@ const subgroupHeaderTestCases = [
       trackAlias: 0n,
       groupId: 0n,
       publisherPriority: 0,
+      firstObject: false,
     },
   },
   {
@@ -293,6 +307,7 @@ const subgroupHeaderTestCases = [
       trackAlias: 10n,
       groupId: 20n,
       publisherPriority: 100,
+      firstObject: false,
     },
   },
   {
@@ -302,6 +317,7 @@ const subgroupHeaderTestCases = [
       trackAlias: 10n,
       groupId: 20n,
       publisherPriority: 100,
+      firstObject: false,
     },
   },
   {
@@ -312,6 +328,7 @@ const subgroupHeaderTestCases = [
       groupId: 100n,
       subgroupId: 5n,
       publisherPriority: 255,
+      firstObject: false,
     },
   },
   {
@@ -321,6 +338,7 @@ const subgroupHeaderTestCases = [
       trackAlias: 10000n,
       groupId: 20000n,
       publisherPriority: 128,
+      firstObject: false,
     },
   },
 ];
@@ -337,6 +355,8 @@ for (const tc of subgroupHeaderTestCases) {
       assert.equal(decoded.subgroupId, tc.header.subgroupId);
     }
     assert.equal(decoded.publisherPriority, tc.header.publisherPriority);
+    // FIRST_OBJECT ビットを立てない入力は false のまま復元される
+    assert.equal(decoded.firstObject, tc.header.firstObject);
     assert.equal(consumed, encoded.length);
   });
 }
@@ -350,6 +370,7 @@ test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が un
     trackAlias: 10n,
     groupId: 20n,
     publisherPriority: 100,
+    firstObject: false,
   };
   const encoded = encodeSubgroupHeader(header);
   const [decoded, consumed] = decodeSubgroupHeader(encoded);
@@ -359,6 +380,7 @@ test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が un
   assert.equal(decoded.groupId, 20n);
   assert.isUndefined(decoded.subgroupId);
   assert.equal(decoded.publisherPriority, 100);
+  assert.equal(decoded.firstObject, false);
   assert.equal(consumed, encoded.length);
 });
 
@@ -669,6 +691,7 @@ test("SubgroupHeaderType: No Priority タイプの roundtrip テスト", () => {
     type: SubgroupHeaderType.BASE_NO_PRIORITY,
     trackAlias: 10n,
     groupId: 20n,
+    firstObject: false,
   };
 
   const encoded = encodeSubgroupHeader(header);
@@ -679,6 +702,7 @@ test("SubgroupHeaderType: No Priority タイプの roundtrip テスト", () => {
   assert.equal(decoded.groupId, 20n);
   assert.equal(decoded.subgroupId, 0n);
   assert.isUndefined(decoded.publisherPriority);
+  assert.equal(decoded.firstObject, false);
   assert.equal(consumed, encoded.length);
 });
 
@@ -712,6 +736,7 @@ test("SubgroupHeaderType: End of Group タイプの roundtrip テスト", () => 
     groupId: 100n,
     subgroupId: 3n,
     publisherPriority: 64,
+    firstObject: false,
   };
 
   const encoded = encodeSubgroupHeader(header);
@@ -722,6 +747,7 @@ test("SubgroupHeaderType: End of Group タイプの roundtrip テスト", () => 
   assert.equal(decoded.groupId, 100n);
   assert.equal(decoded.subgroupId, 3n);
   assert.equal(decoded.publisherPriority, 64);
+  assert.equal(decoded.firstObject, false);
   assert.equal(consumed, encoded.length);
 });
 
@@ -731,6 +757,7 @@ test("SubgroupHeaderType: No Priority + End of Group タイプの roundtrip テ�
     trackAlias: 1n,
     groupId: 50n,
     subgroupId: 7n,
+    firstObject: false,
   };
 
   const encoded = encodeSubgroupHeader(header);
@@ -741,6 +768,7 @@ test("SubgroupHeaderType: No Priority + End of Group タイプの roundtrip テ�
   assert.equal(decoded.groupId, 50n);
   assert.equal(decoded.subgroupId, 7n);
   assert.isUndefined(decoded.publisherPriority);
+  assert.equal(decoded.firstObject, false);
   assert.equal(consumed, encoded.length);
 });
 
@@ -793,12 +821,14 @@ test("SubgroupHeader: END_OF_GROUP ビットを公開する", () => {
 
   assert.equal(header.type, SubgroupHeaderType.BASE_END_GROUP);
   assert.equal(header.endOfGroup, true);
-  assert.equal(header.firstObject, undefined);
+  // FIRST_OBJECT ビット (0x40) が立たないため false (undefined ではない)
+  assert.equal(header.firstObject, false);
   assert.equal(consumed, 4);
 
   // END_OF_GROUP ビットを含まない型では undefined
   const [plain] = decodeSubgroupHeader(new Uint8Array([0x10, 0x05, 0x0a, 0x80]));
   assert.isUndefined(plain.endOfGroup);
+  assert.equal(plain.firstObject, false);
 });
 
 test("SubgroupHeader: endOfGroup 指定で END_OF_GROUP ビットが OR される", () => {
@@ -937,6 +967,7 @@ test("SubgroupHeader: SUBGROUP_ID_MODE 0b11 はエンコードを拒否する", 
         groupId: 0n,
         subgroupId: 0n,
         publisherPriority: 1,
+        firstObject: false,
       }),
     /invalid subgroup header type: 0x16, SUBGROUP_ID_MODE 0b11 is reserved/,
   );
@@ -951,6 +982,7 @@ test("SubgroupHeader: bit 4 が 0 の Type Flags はエンコードを拒否す�
         groupId: 0n,
         subgroupId: 0n,
         publisherPriority: 1,
+        firstObject: false,
       }),
     /invalid subgroup header type: 0x0, does not match form 0b0XX1XXXX/,
   );
@@ -965,6 +997,7 @@ test("SubgroupHeader: 0x7f を超える Type Flags はエンコードを拒否�
         groupId: 0n,
         subgroupId: 0n,
         publisherPriority: 1,
+        firstObject: false,
       }),
     /invalid subgroup header type: 0x80, does not match form 0b0XX1XXXX/,
   );

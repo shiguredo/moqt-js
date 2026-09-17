@@ -188,6 +188,8 @@ test("processSubgroupObjects: Priority 省略時は購読の DEFAULT_PUBLISHER_P
     trackAlias: 1n,
     groupId: 0n,
     subgroupId: 0n,
+    // wire に FIRST_OBJECT ビットが無いヘッダ相当
+    firstObject: false,
   };
   const result = processSubgroupObjects(
     subgroupObjectWire(SubgroupHeaderType.BASE_NO_PRIORITY, 0n, 0xaa),
@@ -365,7 +367,7 @@ test("processSubgroupObjects: First-Object-ID 系はバッチ跨ぎで先頭 Obj
     type: SubgroupHeaderType.FIRST_OBJ,
     trackAlias: 1n,
     groupId: 0n,
-    subgroupId: undefined,
+    firstObject: false,
   };
   const firstResult = processSubgroupObjects(
     firstObjectWire(5n, 0xaa),
@@ -404,6 +406,7 @@ test("processSubgroupObjects: 明示型はバッチ跨ぎでもヘッダ値を�
     trackAlias: 1n,
     groupId: 0n,
     subgroupId: 5n,
+    firstObject: false,
   };
   const firstResult = processSubgroupObjects(
     explicitObjectWire(0n, 0xaa),
@@ -441,6 +444,7 @@ test("processSubgroupObjects: Subgroup ID = 0 系はバッチ跨ぎで 0 を維�
     trackAlias: 1n,
     groupId: 0n,
     subgroupId: 0n,
+    firstObject: false,
   };
   const firstResult = processSubgroupObjects(
     subgroupObjectWire(SubgroupHeaderType.BASE_EXT, 0n, 0xaa),
@@ -474,7 +478,7 @@ test("processSubgroupObjects: 未完成分割を挟んでも先頭 Object ID を
     type: SubgroupHeaderType.FIRST_OBJ,
     trackAlias: 1n,
     groupId: 0n,
-    subgroupId: undefined,
+    firstObject: false,
   };
   const fieldsOnly = encodeObjectFields(0n, 1n, SubgroupHeaderType.FIRST_OBJ, ObjectStatus.NORMAL);
   const firstResult = processSubgroupObjects(
@@ -528,7 +532,7 @@ test("processSubgroupObjects: 1 件目のアプリ例外を通知して残りに
     type: SubgroupHeaderType.FIRST_OBJ,
     trackAlias: 1n,
     groupId: 0n,
-    subgroupId: undefined,
+    firstObject: false,
   };
   const { hooks, notified, records } = createRecordingDelivery();
 
@@ -572,7 +576,7 @@ test("processSubgroupObjects: 通知フックの throw を記録して継続す�
     type: SubgroupHeaderType.FIRST_OBJ,
     trackAlias: 1n,
     groupId: 0n,
-    subgroupId: undefined,
+    firstObject: false,
   };
   const records: { payload: Uint8Array; error: unknown }[] = [];
   const hooks: SubgroupDeliveryHooks = {
@@ -619,7 +623,7 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
     type: SubgroupHeaderType.FIRST_OBJ,
     trackAlias: 1n,
     groupId: 0n,
-    subgroupId: undefined,
+    firstObject: false,
   };
   const hooks: SubgroupDeliveryHooks = {
     notifyError: () => {
@@ -653,12 +657,13 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
  */
 test("processSubgroupObjects: FIRST_OBJECT ビットなしでは timeout を抽出しない", () => {
   const { delivered, subscriber, stats } = subgroupTestSetup();
-  // subgroupTestSetup の header から firstObject を外し、中継転送相当にする
+  // subgroupTestSetup の header の firstObject を false にし、中継転送相当にする
   const header: SubgroupHeader = {
     type: SubgroupHeaderType.BASE_EXT,
     trackAlias: 1n,
     groupId: 0n,
     subgroupId: 0n,
+    firstObject: false,
   };
   processSubgroupObjects(
     timeoutObjectWire(0n, 100n, 200n),

@@ -195,12 +195,14 @@ export interface SubgroupHeader {
   subgroupId?: bigint;
   publisherPriority?: number;
   /**
-   * FIRST_OBJECT bit (0x40) がセットされている場合に true。
+   * FIRST_OBJECT bit (0x40) がセットされている場合に true、セットされていない
+   * 場合に false。wire 上で bit が立たない場合も false を設定するため、
+   * 未設定 (optional) との区別は無い。
    * Subgroup 内の最初のオブジェクトが、その Subgroup で最初に publish された
    * オブジェクトであることを示す。
    * draft-ietf-moq-transport-21 Section 11.3.1
    */
-  firstObject?: boolean;
+  firstObject: boolean;
   /**
    * END_OF_GROUP bit (0x08) がセットされている場合に true。
    *
@@ -414,7 +416,9 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   }
 
   // FIRST_OBJECT bit (0x40) の抽出
-  const firstObject = (typeNum & 0x40) !== 0 ? true : undefined;
+  // bit が立たない場合も false を設定し、optional による「未設定」との
+  // 区別を不要にする (wire 表現は変えない)。
+  const firstObject = (typeNum & 0x40) !== 0;
 
   // END_OF_GROUP bit (0x08) の抽出
   // draft-ietf-moq-transport-21 §11.3.1: この Subgroup が Group の最大 Object を
@@ -426,11 +430,11 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
       type: typeNum,
       trackAlias,
       groupId,
+      firstObject,
       // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
       // 値がある場合だけ載せる (「未設定 = そのフィールドが wire に存在しない」を保つ)
       ...(subgroupId !== undefined ? { subgroupId } : {}),
       ...(publisherPriority !== undefined ? { publisherPriority } : {}),
-      ...(firstObject !== undefined ? { firstObject } : {}),
       ...(endOfGroup !== undefined ? { endOfGroup } : {}),
     },
     totalConsumed,
