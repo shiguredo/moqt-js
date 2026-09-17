@@ -1,9 +1,9 @@
 # Prior Group ID Gap / Prior Object ID Gap の Track 横断追跡検証を実装する
 
 - Created: 2026-09-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/add-prior-gap-track-tracking
-- Polished: 2026-09-16
+- Polished: 2026-09-17
 
 ## 目的
 
@@ -81,3 +81,33 @@ draft-ietf-moq-transport-21 §10.8 / §10.9 の malformed Track 条件のうち�
 - `getFullTrackNameKey` (`src/subscriber.ts` / `src/fetcher.ts`)、`fullTrackNameKey` (`src/fullTrackName.ts`)
 - `issues/closed/0568-bug-prior-gap-duplicate-not-detected.md` (closed。同一 Object 内の出現回数。本 issue は Track 横断)
 - `issues/closed/0561-add-end-of-group-tracking.md` (closed。同じく Track 横断の malformed 追跡。`receivedEndOfGroupFinalObjectIds` / `clearEndOfGroupTracking` の前例)
+
+## 解決方法
+
+設計方針 1〜8 に従い、Track 単位の追跡状態を追加して 5 条件を検出するようにした。
+
+### 追跡状態
+
+- `src/session/priorGapTracking.ts` を新設し、`PriorGapTracking` (受信済み Group ID、Group ごとの受信済み Object ID、通知済み Prior Group ID Gap / Prior Object ID Gap の範囲、Group ごとに最初に観測した Prior Group ID Gap 値) と `assertNoPriorIdGapTrackViolation` を実装した。判定はすべて bigint の範囲比較で行い、スキップされた ID を配列として実体化しない (`calculateSkippedGroups` / `calculateSkippedObjects` は受信値に対して呼ばない)。
+- 追跡は `SessionImpl` の `priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>` に置き、`BidiSessionInternal` へ宣言した (`SessionInternal` は継承する)。キーは `fullTrackNameKey` が生成する比較キーであり、購読単位ではなく Track 単位にした。
+- 上限は Group 1024 / Group ごとの Object 1024 / 通知済み範囲 1024 / Track エントリ 1024 とし、超過時は最古のエントリから破棄する。破棄した範囲では覆い判定 (条件 2) と同一 Group 内の gap 値の比較 (条件 1) ができないことをコメントで明記した。同じ範囲の再通知は集合として 1 件にまとめ、空の範囲 (gap = 0) は保持しない。
+- 破棄は購読と FETCH が尽きた時点で行う。`clearPriorGapTrackingIfUnused` が `subscribersByAlias` と `fetchers` の残存を確認し、`deleteSubscriber` / `bidiCancelSubscription` / `bidiCancelFetch` / FETCH の FIN 時 / peer RESET_STREAM 時から呼ぶ。セッション終了時は `close()` の `receivedEndOfGroupFinalObjectIds.clear()` の並びで全消しする。
+
+### 受信経路
+
+- subgroup: `incomingProcessSubgroupObjects` が `header.trackAlias` から `subscribersByAlias` を引いて先頭の購読の `getFullTrackNameKey()` を解決し、`processSubgroupObjects` のループ内で `assertPriorIdGapInObjectProperties` の直後・配送前に検証する。
+- datagram: `incomingHandleDatagram` で `decodeObjectDatagram` の前に `decodeDatagramTrackAlias` から比較キーを解決し、追跡検証を既存 try の内側 (`decodeObjectDatagram` の直後) に置いた。これにより `MalformedTrackError` が既存 catch で処理され、`cancelMalformedTrackPeers` まで到達する。alias 不明・購読 0 件の datagram は検証しない。
+- FETCH: `incomingProcessFetchObjects` に `trackKey` 引数を追加し、`SessionImpl.processFetchObjects` が `FetcherImpl.getFullTrackNameKey()`、`handleFillFetchStream` が `FillFetchTarget.subscriber.getFullTrackNameKey()` を渡す。検証は `processFetchObjects` のループ内で配送前に行う (End of Range は Object ではないため対象外)。
+- 単一 Object で判定できる条件 (同一 Object 内の複数出現、gap > Group ID / gap > Object ID) は既存のデコード経路の検証に任せ、追跡検証からは重複して呼ばない。`src/dataStream/` 配下の純粋デコーダは変更していない。
+
+### テスト
+
+- `src/session/priorGapTracking.test.ts` を新設し、5 条件の検出、malformed と判定した Object の gap 値を最初の観測値にしないこと、IMMUTABLE_PROPERTIES 配下の gap の取り出し、誤検出しないケース (Group をまたいだ Object ID の比較、gap = Group ID / gap = Object ID の境界値と gap = 0、gap を持たない Object の挿入、同じ gap 値の反復、別 Track)、上限 4 種の破棄を検証する 16 件を追加した。
+- `src/session/incoming.test.ts` のモックセッションへ追跡マップを追加し、datagram 経路の検出と購読 cancel / 購読の無い alias の対象外、subgroup 経路の比較キー解決と Subgroup ストリームをまたいだ検出、FETCH 経路の `trackKey` の受け渡しを検証する 4 件を追加した。
+- `src/session.test.ts` に、subgroup / FETCH / fill の 3 経路で検出時に同一 Track の購読と FETCH が cancel されセッションを閉じないこと、FETCH が残っている間は購読の終了で追跡状態を破棄しないことを検証する 4 件を追加した。
+
+## 検証
+
+- `vp check` / `tsc --noEmit` / `vp run build` すべて成功
+- `vp test run`: 104 ファイル / 2,318 テスト全通過 (追加した 24 件を含む)
+- 差分: 12 ファイル (本 issue ファイルを含む)、+1,678 / -7 行

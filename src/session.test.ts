@@ -44,7 +44,12 @@ import {
   SessionError,
   SessionErrorCode,
 } from "./error";
-import { concatUint8Arrays, nodeProcess } from "./testSupport/helpers";
+import {
+  concatUint8Arrays,
+  nodeProcess,
+  priorGroupIdGapProperties,
+  priorObjectIdGapProperties,
+} from "./testSupport/helpers";
 import { waitForMacrotask } from "./testSupport/bidi";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
 import {
@@ -74,12 +79,15 @@ import { SubscriberImpl } from "./subscriber";
 import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
+  bidiCancelSubscription,
   RESET_REQUEST_STREAM_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
   type BidiSessionInternal,
 } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
+import type { PriorGapTracking } from "./session/priorGapTracking";
+import type { FullTrackNameKey } from "./fullTrackName";
 import type { SessionInternal } from "./session/types";
 
 /**
@@ -3546,6 +3554,8 @@ interface DataStreamFinContext {
     // malformed 検出時の cross-cancel (STOP_SENDING 相当) を検証するテストが
     // 登録する。登録が無いテストでは空 Map のまま使われない。
     requestStreams: Map<bigint, RequestStreamEntry>;
+    // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
+    priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   sessionError: { current: Error | undefined };
@@ -3591,6 +3601,8 @@ function createDataStreamFinContext(
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
     requestStreams: Map<bigint, RequestStreamEntry>;
+    // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
+    priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
     dataStreamTimeoutMs: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
@@ -3774,6 +3786,335 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
   assert.deepEqual(bidiCancelReasons, ["subscription cancelled"]);
   assert.deepEqual(bidiAbortReasons, ["subscription cancelled"]);
   assert.isFalse(ctx.internal.requestStreams.has(1n));
+});
+
+// ============================================================================
+// Track 横断の Prior ID Gap 追跡 (§10.8 / §10.9)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §10.9 / §12.1:
+ * 同一 Group の受信済み Object を Prior Object ID Gap が覆う場合、malformed track
+ * として同一 Track の購読と FETCH を cancel する。セッションは閉じない。
+ * 追跡は Track 単位であり、購読も FETCH も尽きた時点で破棄される。
+ */
+test("Subgroup データストリーム: Prior Object ID Gap が受信済み Object を覆うと購読と FETCH を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 同一 Track の FETCH も §12.1 の cancel 対象である
+  const fetcherError: { current: Error | undefined } = { current: undefined };
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    3n,
+    () => {},
+    undefined,
+    (error) => {
+      fetcherError.current = error;
+    },
+  );
+  // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(ctx.internal as unknown as BidiSessionInternal, fetcher);
+  };
+  ctx.internal.fetchers.set(3n, fetcher);
+
+  // bidi リクエストストリームを登録し、cross-cancel が STOP_SENDING 相当
+  // (readable.cancel) と RESET_STREAM 相当 (writer.abort) を送ることを観測する
+  const bidiCancelReasons: unknown[] = [];
+  const bidiAbortReasons: unknown[] = [];
+  const bidiReadable = new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      bidiCancelReasons.push(reason);
+    },
+  });
+  const bidiWritable = new WritableStream<Uint8Array>({
+    abort(reason) {
+      bidiAbortReasons.push(reason);
+    },
+  });
+  ctx.internal.requestStreams.set(1n, {
+    stream: {
+      readable: bidiReadable,
+      writable: bidiWritable,
+    } as unknown as WebTransportBidirectionalStream,
+    writer: bidiWritable.getWriter(),
+    controlReader: new ControlStreamReader(),
+  });
+
+  // 同一 Group 3 の Object 8 (Gap 無し) の後に、Object 8 と 9 の不在を通知する
+  // Object 10 (Prior Object ID Gap = 2) を流す
+  const headerBytes = encodeSubgroupHeader({
+    type: SubgroupHeaderType.BASE_EXT,
+    trackAlias: 7n,
+    groupId: 3n,
+    publisherPriority: 128,
+    firstObject: false,
+  });
+  const firstFields = encodeObjectFields(8n, 1n, SubgroupHeaderType.BASE_EXT);
+  const secondFields = encodeObjectFields(
+    1n,
+    1n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+    priorObjectIdGapProperties(2n),
+  );
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      headerBytes,
+      firstFields,
+      new Uint8Array([1]),
+      secondFields,
+      new Uint8Array([2]),
+    ]),
+  );
+  ctx.fin();
+  await handlePromise;
+  // bidi ストリームの cancel 完了 (bidiCancelFetch の後始末) を待つ
+  await yieldToMacrotask();
+
+  // malformed の Object は配送されず、error が通知され、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  // 購読は cancel され alias から外れる
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  assert.deepEqual(bidiCancelReasons, ["subscription cancelled"]);
+  assert.deepEqual(bidiAbortReasons, ["subscription cancelled"]);
+  // 同一 Track の FETCH も cancel される
+  assert.instanceOf(fetcherError.current, MalformedTrackError);
+  assert.equal(fetcher.state, "closed");
+  assert.equal(ctx.internal.fetchers.size, 0);
+  // 購読も FETCH も尽きたため Track の追跡状態は破棄される
+  assert.equal(ctx.internal.priorGapTrackingByTrack.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §12.1:
+ * FETCH データストリームでも Track 横断の Prior ID Gap 条件を検出し、同一 Track の
+ * 購読と FETCH を cancel する。セッションは閉じない。
+ */
+test("Fetch データストリーム: Prior Group ID Gap が受信済み Group を覆うと購読と FETCH を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 3n;
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const fetcherError: { current: Error | undefined } = { current: undefined };
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {
+      delivered++;
+    },
+    undefined,
+    (error) => {
+      fetcherError.current = error;
+    },
+  );
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(ctx.internal as unknown as BidiSessionInternal, fetcher);
+  };
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // 先頭 Object は Group 9、2 件目は Group 10 (Prior Group ID Gap = 1 で
+  // Group 9 の不在を通知する) を流す。Group 9 は受信済みであり矛盾する
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 9n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 1n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  // コンテキスト (差分計算用) を先頭オブジェクトのデコード結果から求める
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PROPERTIES_PRESENT,
+    groupId: 10n,
+    objectId: 0n,
+    properties: priorGroupIdGapProperties(1n),
+    payloadLength: 1n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      encodeFetchHeader({ type: FetchHeaderType, requestId }),
+      firstEncoded,
+      new Uint8Array([1]),
+      secondEncoded,
+      new Uint8Array([2]),
+    ]),
+  );
+  ctx.fin();
+  await handlePromise;
+  await yieldToMacrotask();
+
+  // 1 件目だけが配送され、error が通知され、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(subscriber.state, "closed");
+  assert.instanceOf(fetcherError.current, MalformedTrackError);
+  assert.equal(fetcher.state, "closed");
+  assert.equal(ctx.internal.fetchers.size, 0);
+  assert.equal(ctx.internal.priorGapTrackingByTrack.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §12.1:
+ * fill fetch ストリームでも Track 横断の Prior ID Gap 条件を検出し、同一 Track の
+ * 購読を cancel する。セッションは閉じない。
+ */
+test("fill fetch ストリーム: Prior Group ID Gap が受信済み Group を覆うと購読を cancel しセッションを閉じない", async () => {
+  const { ctx, internals } = createFillFetchStreamContext();
+  const requestId = 2n;
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    requestId,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  internals.subscribers.set(requestId, subscriber);
+  internals.subscribersByAlias.set(7n, [subscriber]);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  // 先頭 Object は Group 9、2 件目は Group 10 (Prior Group ID Gap = 1 で
+  // Group 9 の不在を通知する) を流す
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 9n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 1n,
+  };
+  const firstEncoded = encodeFetchObjectFields(first);
+  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
+  const second: FetchObjectFields = {
+    serializationFlags:
+      FetchSerializationFlags.SUBGROUP_SAME |
+      FetchSerializationFlags.GROUP_ID_PRESENT |
+      FetchSerializationFlags.OBJECT_ID_PRESENT |
+      FetchSerializationFlags.PROPERTIES_PRESENT,
+    groupId: 10n,
+    objectId: 0n,
+    properties: priorGroupIdGapProperties(1n),
+    payloadLength: 1n,
+  };
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(
+    concatUint8Arrays([
+      encodeFetchHeader({ type: FetchHeaderType, requestId }),
+      firstEncoded,
+      new Uint8Array([1]),
+      secondEncoded,
+      new Uint8Array([2]),
+    ]),
+  );
+  ctx.fin();
+  await handlePromise;
+
+  // 1 件目だけが配送され、error が通知され、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  // 購読は cancel され fill の関連付けも消える
+  assert.equal(subscriber.state, "closed");
+  assert.equal((internals.subscribersByAlias.get(7n) ?? []).length, 0);
+  assert.equal(internals.fillFetchTargets.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * 追跡状態を破棄できるのは、その Track の購読と FETCH が 1 つも残っていない時点
+ * だけである。FETCH は Track Alias を持たないため、購読の消滅だけでは Track の
+ * 生存を判定できない。
+ */
+test("Prior ID Gap 追跡: 同一 Track の FETCH が残っている間は購読の終了で破棄しない", async () => {
+  const ctx = createDataStreamFinContext();
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 実ストリームで Object 1 件を受信し、Track の追跡状態を作る
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  const trackKey = subscriber.getFullTrackNameKey();
+  assert.isTrue(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+
+  // 同一 Track の FETCH を登録してから購読を終了する
+  const fetcher = new FetcherImpl(["live"], "video", 3n, () => {});
+  ctx.internal.fetchers.set(3n, fetcher);
+  await bidiCancelSubscription(ctx.session as unknown as BidiSessionInternal, subscriber);
+  // FETCH が残っているため破棄しない
+  assert.isTrue(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+
+  // FETCH を終了すると購読も FETCH も尽きるため破棄される
+  await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
 });
 
 /**

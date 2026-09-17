@@ -63,6 +63,7 @@ import type { FullTrackNameKey } from "../fullTrackName";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { PublisherImpl, type Publisher } from "../publisher";
 import type { Property } from "../properties";
+import { clearPriorGapTracking, type PriorGapTracking } from "./priorGapTracking";
 import {
   NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
@@ -275,6 +276,19 @@ export interface BidiSessionInternal {
    * readonly 不可。
    */
   receivedEndOfGroupFinalObjectIds: Map<string, bigint>;
+
+  /**
+   * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡
+   *
+   * draft-ietf-moq-transport-21 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
+   * ID Gap) の malformed 条件のうち、同一 Track の複数 Object と過去の受信状態を
+   * 必要とする条件の判定に使う。キーは fullTrackNameKey が生成する比較キー。
+   * 購読単位ではなく Track 単位で保持するのは、同一 Track の複数購読 / FETCH を
+   * またいで判定する必要があるためである。その Track の購読と FETCH が尽きた
+   * 時点で clearPriorGapTrackingIfUnused がエントリを削除する。free function から
+   * 読み書きするため readonly 不可。
+   */
+  priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
 
   readonly requestStreams: Map<bigint, RequestStreamInfo>;
   readonly pendingPublish: Map<bigint, PendingPublish>;
@@ -2096,6 +2110,10 @@ function deleteSubscriber(session: BidiSessionInternal, requestId: bigint): void
         clearEndOfGroupTracking(session, subscriber.getTrackAlias());
       }
     }
+    // draft-ietf-moq-transport-21 §10.8 / §10.9:
+    // Track の購読が尽きたら Prior ID Gap 追跡を捨てる。同一 Track の FETCH が
+    // 残っている場合は破棄しない (判定は clearPriorGapTrackingIfUnused が行う)。
+    clearPriorGapTrackingIfUnused(session, subscriber.getFullTrackNameKey());
     // draft-ietf-moq-transport-21 §6.6.1:
     // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
     session.onRequestDrained?.();
@@ -2121,6 +2139,41 @@ function clearEndOfGroupTracking(session: BidiSessionInternal, trackAlias: bigin
       tracking.delete(key);
     }
   }
+}
+
+/**
+ * Track の購読と FETCH が尽きた Prior ID Gap 追跡を破棄する
+ *
+ * draft-ietf-moq-transport-21 §10.8 / §10.9 の追跡状態は Track 単位で保持する
+ * ため、破棄できるのはその Track の購読と FETCH が 1 つも残っていない時点だけ
+ * である。購読の消滅だけでは Track の生存を判定できない (FETCH は Track Alias を
+ * 持たず、subscribersByAlias に現れない) ため、fetchers 側も確認する。
+ * セッション終了時は close() が全エントリを消す。
+ */
+export function clearPriorGapTrackingIfUnused(
+  session: BidiSessionInternal,
+  trackKey: FullTrackNameKey,
+): void {
+  // テストのモックセッションは追跡マップを持たない場合がある
+  const trackingByTrack = session.priorGapTrackingByTrack;
+  if (trackingByTrack === undefined || !trackingByTrack.has(trackKey)) {
+    return;
+  }
+  // 同一 Track の購読が残っていれば破棄しない
+  for (const subscribers of session.subscribersByAlias.values()) {
+    for (const subscriber of subscribers) {
+      if (subscriber.getFullTrackNameKey() === trackKey) {
+        return;
+      }
+    }
+  }
+  // 同一 Track の FETCH が残っていれば破棄しない
+  for (const fetcher of session.fetchers.values()) {
+    if (fetcher.getFullTrackNameKey() === trackKey) {
+      return;
+    }
+  }
+  clearPriorGapTracking(trackingByTrack, trackKey);
 }
 
 /**
@@ -3826,6 +3879,10 @@ export async function bidiCancelSubscription(
       clearEndOfGroupTracking(session, subscriber.getTrackAlias());
     }
   }
+  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // Track の購読が尽きたら Prior ID Gap 追跡を捨てる。同一 Track の FETCH が
+  // 残っている場合は破棄しない (判定は clearPriorGapTrackingIfUnused が行う)。
+  clearPriorGapTrackingIfUnused(session, subscriber.getFullTrackNameKey());
 
   if (streamInfo) {
     try {
@@ -3926,6 +3983,9 @@ export async function bidiCancelFetch(
   }
 
   session.fetchers.delete(requestId);
+  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // FETCH の終了に伴い、購読も尽きた Track の Prior ID Gap 追跡を捨てる。
+  clearPriorGapTrackingIfUnused(session, fetcher.getFullTrackNameKey());
   // draft-ietf-moq-transport-21 §6.6.1:
   // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
   session.onRequestDrained?.();
