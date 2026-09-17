@@ -78,6 +78,16 @@ test("LOG_SEVERITY_LEVELS: syslog severity の対応", () => {
   assert.equal(LOG_SEVERITY_LEVELS.Debug, 7);
 });
 
+// [MOQLOG] §7 の例は severity に短縮形 "Info" を使うが、§4 本文の正規形は "Informational"。
+// 本表は §4 本文の正規形のみを持ち、decode も値列挙を厳格化しないため "Info" はそのまま通る。
+test("severity 短縮形: LOG_SEVERITY_LEVELS には無く、受理しても正規形へ変換されない", () => {
+  assert.isUndefined(LOG_SEVERITY_LEVELS.Info);
+  assert.equal(LOG_SEVERITY_LEVELS.Informational, 6);
+
+  const decoded = decodeLogEntry(encodeJson({ severity: "Info" }));
+  assert.equal(decoded.severity, "Info");
+});
+
 // msf-01 §9.3: Group ID は Unix epoch マイクロ秒を 62-bit に truncate。
 test("logGroupId: Unix epoch マイクロ秒を 62-bit に truncate する", () => {
   // 62-bit 以内の値はそのまま
@@ -159,6 +169,27 @@ test("LogEntry: 既知フィールドの型誤りは throw", () => {
   );
   // 未知フィールドの任意型は受理のままであること
   assert.deepEqual(decodeLogEntry(encodeJson({ traceId: 42 })), { traceId: 42 });
+});
+
+// [MOQLOG] §4: pri は RFC5424 の 0-23。本実装は LOG_ENTRY_FIELD_TYPES で finite number の
+// みを検査し、値域は送信側の規約として検査しない。
+test("LogEntry: pri の値域 (0-23) は round-trip で保持される", () => {
+  for (const pri of [0, 1, 23]) {
+    assert.equal(decodeLogEntry(encodeLogEntry({ pri })).pri, pri);
+  }
+});
+
+test("LogEntry: pri の値域外 (負数・24 以上・非整数) も検査せず round-trip で保持される", () => {
+  for (const pri of [-1, 24, 1.5]) {
+    assert.equal(decodeLogEntry(encodeLogEntry({ pri })).pri, pri);
+  }
+});
+
+// [MOQLOG] §4 の "default is 1 if not present" は受信側の解釈であり、本実装は
+// 欠落を欠落のまま保持する (既定値の適用は呼び出し側の責務)。
+test("LogEntry: pri が欠落していても既定値 1 を補わない", () => {
+  const decoded = decodeLogEntry(encodeLogEntry({ msg: "hello" }));
+  assert.isUndefined(decoded.pri);
 });
 
 // 非有限数は null 化して送出されるため、エンコード時に失敗させる。

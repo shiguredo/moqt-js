@@ -161,6 +161,18 @@ test("isParameter matches uppercase keys with underscore", () => {
   assert.equal(isParameter("Foo_Bar"), false);
 });
 
+// isParameter は「大文字」と「underscore を含む」の AND 判定のため、underscore を含まない
+// 大文字キーは MOQT Parameter ではなく通常フィールドとして表示される。
+test("formatMessageData は underscore なしの大文字キーを Parameters ではなくフィールドに表示する", () => {
+  const result = formatMessageData({ FOO: 1, SOME_PARAM: 2 });
+  // SOME_PARAM だけが Parameters セクションに入る
+  assert.ok(result.includes("Parameters:"));
+  assert.ok(result.includes("SOME_PARAM: 2"));
+  // FOO はフィールドとして Parameters セクションより前に出る
+  assert.ok(result.includes("FOO: 1"));
+  assert.ok(result.indexOf("FOO: 1") < result.indexOf("Parameters:"));
+});
+
 // formatBytes は devtools 内で唯一の実装であり、各パネルが同じ丸めを使う。
 test("formatBytes switches unit at 1024 and 1024*1024", () => {
   assert.equal(formatBytes(0), "0 B");

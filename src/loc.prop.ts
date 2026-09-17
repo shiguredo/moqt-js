@@ -572,6 +572,113 @@ test("VideoFrameMarking: TID≠0 のとき isBaseLayerSync は入力を忠実に
 });
 
 // =============================================================================
+// VIDEO_FRAME_MARKING の値域外入力の折り畳み (encode 側マスク)
+// =============================================================================
+//
+// videoFrameMarkingArb は RFC 9626 §3.1 の定義域 (TID 0-7 / LID 0-3) のみを生成するため、
+// 値域外入力の折り畳みは PBT では検証されない。encodeVideoFrameMarkingValue が持つ
+// `& 0x07` / `& 0x03` マスクの挙動をここで pin する。
+
+test("VideoFrameMarking: temporalLayerId の値域外は下位 3 bits に折り畳まれる", () => {
+  // JS のビット演算は ToInt32 で整数化するため、非整数は 0 方向に切り捨てられる
+  const cases: Array<{ input: number; expected: number }> = [
+    { input: 8, expected: 0 },
+    { input: 9, expected: 1 },
+    { input: 15, expected: 7 },
+    { input: 255, expected: 7 },
+    { input: -1, expected: 7 },
+    { input: 3.7, expected: 3 },
+  ];
+  for (const { input, expected } of cases) {
+    const marking: VideoFrameMarking = {
+      isIndependent: false,
+      isDiscardable: false,
+      // B 抑圧の影響を排除するため isBaseLayerSync は false にする
+      isBaseLayerSync: false,
+      temporalLayerId: input,
+      spatialLayerId: 0,
+    };
+    const encoded = encodeVideoFrameMarking(marking);
+    // encoded = [ID(0x09), Length(2), byte1, byte2]
+    // byte1 = S(0x80) | E(0x40) | TID (I / D / B は全て false)
+    assert.strictEqual(
+      encoded[2],
+      0xc0 | expected,
+      `temporalLayerId=${input} は下位 3 bits に折り畳まれるはず`,
+    );
+    assert.strictEqual(decodeVideoFrameMarking(encoded).temporalLayerId, expected);
+  }
+});
+
+test("VideoFrameMarking: spatialLayerId の値域外は下位 2 bits に折り畳まれる", () => {
+  // 上位 6 bits は 0 のまま、下位 2 bits だけが LID になる
+  const cases: Array<{ input: number; expected: number }> = [
+    { input: 4, expected: 0 },
+    { input: 5, expected: 1 },
+    { input: 7, expected: 3 },
+    { input: 255, expected: 3 },
+    { input: -1, expected: 3 },
+    { input: 2.9, expected: 2 },
+  ];
+  for (const { input, expected } of cases) {
+    const marking: VideoFrameMarking = {
+      isIndependent: false,
+      isDiscardable: false,
+      isBaseLayerSync: false,
+      // TID=1 で B 抑圧の対象外にする
+      temporalLayerId: 1,
+      spatialLayerId: input,
+    };
+    const encoded = encodeVideoFrameMarking(marking);
+    assert.strictEqual(
+      encoded[3],
+      expected,
+      `spatialLayerId=${input} は下位 2 bits に折り畳まれるはず`,
+    );
+    assert.strictEqual(decodeVideoFrameMarking(encoded).spatialLayerId, expected);
+  }
+});
+
+test("VideoFrameMarking: temporalLayerId=8 は TID=0 に折り畳まれ isBaseLayerSync が抑圧される", () => {
+  // B 抑圧の判定はマスク後の TID で行われるため、値域外の 8 は TID=0 と同じ扱いになる
+  const marking: VideoFrameMarking = {
+    isIndependent: true,
+    isDiscardable: false,
+    isBaseLayerSync: true,
+    temporalLayerId: 8,
+    spatialLayerId: 0,
+  };
+  const encoded = encodeVideoFrameMarking(marking);
+  // byte1: S=1, E=1, I=1, B=0 (抑圧), TID=0 → 0xE0
+  assert.deepEqual(Array.from(encoded), [0x09, 0x02, 0xe0, 0x00]);
+});
+
+test("VideoFrameMarking: encodeVideoProperties 経由でも値域外は同じマスクで折り畳まれる", () => {
+  // encodeVideoProperties は encodeVideoFrameMarking を経由せず
+  // encodeVideoFrameMarkingValue を直接呼ぶ。単体エンコーダと Properties 経由の
+  // 2 経路で折り畳み結果が一致することを pin する
+  const properties: VideoProperties = {
+    frameMarking: {
+      isIndependent: false,
+      isDiscardable: false,
+      isBaseLayerSync: false,
+      temporalLayerId: 11,
+      spatialLayerId: 6,
+    },
+  };
+  const decoded = decodeVideoProperties(encodeVideoProperties(properties));
+  assert.deepEqual(decoded.frameMarking, {
+    isIndependent: false,
+    isDiscardable: false,
+    isBaseLayerSync: false,
+    // 11 & 0x07
+    temporalLayerId: 3,
+    // 6 & 0x03
+    spatialLayerId: 2,
+  });
+});
+
+// =============================================================================
 // 未知 ID のスキップ
 // =============================================================================
 

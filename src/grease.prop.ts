@@ -83,3 +83,17 @@ test("generateGreaseValue は負数のインデックスを拒否する", () => 
     }),
   );
 });
+
+// プロパティ 8: 非負の非整数・非有限のインデックスは BigInt 変換の RangeError になる
+// 非負検査 (n < 0) は通過するが、BigInt(n) が整数以外を拒否するため、
+// 専用のエラー文言ではなく RangeError が呼び出し側へ漏れる。
+test("generateGreaseValue は非負の非整数・非有限のインデックスを RangeError で拒否する", () => {
+  for (const n of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => generateGreaseValue(n), RangeError);
+  }
+});
+
+// プロパティ 9: 負の非整数は非負検査で拒否される (BigInt 変換まで到達しない)
+test("generateGreaseValue は負の非整数も非負検査で拒否する", () => {
+  assert.throws(() => generateGreaseValue(-0.5), /GREASE index must be non-negative/);
+});
