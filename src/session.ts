@@ -36,7 +36,6 @@ import {
   getSetupMaxRequestUpdates,
   encodeSetupPayload,
   encodeFetchPayload,
-  encodeGoawayPayload,
   encodePublishNamespacePayload,
   encodePublishPayload,
   encodeRequestOkPayload,
@@ -65,7 +64,7 @@ import {
 } from "./publisher";
 import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
-import { decodeFetchHeader, FetchHeaderType } from "./dataStream";
+import { decodeFetchHeader, FetchHeaderType, type FetchHeader } from "./dataStream";
 import { fullTrackNameKey } from "./fullTrackName";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
@@ -77,7 +76,6 @@ import {
   buildFetchParameters,
   buildSubscribeNamespaceParameters,
   buildTrackStatusParameters,
-  clampTimeoutMs,
   encodeAuthorizationTokenParameter,
   extractForwardState,
   extractLargestLocation,
@@ -103,7 +101,6 @@ import type { PublisherStreamState, SessionInternal } from "./session/types";
 import {
   publishSendObject,
   publishClosePublisherStream,
-  publishCloseSubgroupStream,
   publishSendDatagram,
   publishSendPublishDone,
 } from "./session/publish";
@@ -123,6 +120,25 @@ import {
   processMessageAuthorizationTokens,
   processSetupAuthorizationTokens,
 } from "./session/authTokenCache";
+import {
+  sessionClose,
+  sessionCloseControlStreamViolation,
+  sessionCloseIfGoawayDrained,
+  sessionCloseWithError,
+  sessionEmitCallbackErrorDebug,
+  sessionEmitDataStreamErrorDebug,
+  sessionEmitDebug,
+  sessionGoaway,
+  sessionHandleControlMessage,
+  sessionHandleGoaway,
+  sessionHasOpenSubscriptionsOrFetches,
+  sessionMarkRequestObjectsClosed,
+  sessionNotifyErrorIfActive,
+  sessionOnRequestDrained,
+  sessionRejectPendingRequests,
+  sessionStartControlMessageLoop,
+  type SessionLifecycleInternal,
+} from "./session/lifecycle";
 import {
   sessionGetStatistics,
   type SessionStatistics,
@@ -1346,20 +1362,20 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 Section 1.5
    */
   private controlSendStream?: WritableStream<Uint8Array>;
-  private controlReceiveStream?: ReadableStream<Uint8Array>;
+  controlReceiveStream?: ReadableStream<Uint8Array>;
   private controlReader?: ControlStreamReader;
   private controlWriter?: ControlStreamWriter;
 
   // datagram 送信用 writer。保持して使い回す理由は getDatagramWriter を参照。
   // close() 時に明示的に undefined を代入して解放するため `| undefined` を付ける
-  private datagramWriter?: WritableStreamDefaultWriter<Uint8Array> | undefined;
+  datagramWriter?: WritableStreamDefaultWriter<Uint8Array> | undefined;
 
   // 受信双方向ストリームの reader。
   // draft-ietf-moq-transport-21 §9.18: SUBSCRIBE_TRACKS への応答として
   // サーバーが新規双方向ストリームを開き PUBLISH を送信する。
   // この reader で incomingBidirectionalStreams を監視する。
   // close() 時に明示的に undefined を代入して解放するため `| undefined` を付ける
-  private incomingBidiStreamReader?:
+  incomingBidiStreamReader?:
     | ReadableStreamDefaultReader<WebTransportBidirectionalStream>
     | undefined;
 
@@ -1375,7 +1391,7 @@ export class SessionImpl implements Session {
   private goawayReceivedOnRequestStreams = new Set<bigint>();
   // pending の無い REQUEST_OK を許容する枠 (coalescing された REQUEST_ERROR で
   // pending を消した件数)。詳細は BidiSessionInternal の同名フィールドの doc を参照
-  private unmatchedRequestOkAllowances = new Map<bigint, number>();
+  unmatchedRequestOkAllowances = new Map<bigint, number>();
   // 受信済み Request ID の追跡 (重複検出用)
   // draft-ietf-moq-transport-21 §6.4.2.1:
   // 重複 Request ID の受信は INVALID_REQUEST_ID でセッションを閉じる。
@@ -1397,8 +1413,8 @@ export class SessionImpl implements Session {
    * ストリーム終了時にエントリを削除し、セッション終了時に clear する。
    */
   receivedRequestUpdateCounts = new Map<bigint, number>();
-  private sentGoaway = false;
-  private goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  sentGoaway = false;
+  goawayTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // draft-ietf-moq-transport-21 §9.1.7: ピアの MAX_REQUEST_UPDATES（0 = 無制限）
   peerMaxRequestUpdates = 0;
   // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES（0 = Range Filter 送信禁止）
@@ -1426,7 +1442,7 @@ export class SessionImpl implements Session {
   grease = false;
 
   // アクティブなパブリッシャー、サブスクライバー、フェッチャー
-  private publishers = new Map<bigint, PublisherImpl>();
+  publishers = new Map<bigint, PublisherImpl>();
   private subscribers = new Map<bigint, SubscriberImpl>();
   private subscribersByAlias = new Map<bigint, SubscriberImpl[]>();
   private fetchers = new Map<bigint, FetcherImpl>();
@@ -1445,7 +1461,7 @@ export class SessionImpl implements Session {
   // "A publisher MAY send Objects in response to a FETCH before the
   //  FETCH_OK message is sent."
   // FETCH_OK より先にデータストリームが到着する可能性がある
-  private fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
+  fetcherReadyCallbacks = new Map<bigint, Array<() => void>>();
 
   // fill 要求元の Request ID から購読への関連付け
   // draft-ietf-moq-transport-21 §3.4 (Fill Semantics):
@@ -1486,7 +1502,7 @@ export class SessionImpl implements Session {
       objectCallback: (object: MoqtObject) => void;
     }
   >();
-  private pendingRequestUpdate = new Map<
+  pendingRequestUpdate = new Map<
     bigint,
     { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
   >();
@@ -1586,7 +1602,7 @@ export class SessionImpl implements Session {
   // 1 Group = 1 Subgroup = 1 Stream モデルでは groupId が subgroupId を一意に決定するため、
   // キーは `${trackAlias}:${groupId}` で十分である。
   // sendObject 時にこの Set をチェックし、閉じた Subgroup への送信を拒否する。
-  private closedSubgroups = new Set<string>();
+  closedSubgroups = new Set<string>();
 
   /**
    * Group 単位の END_OF_GROUP 既知最終 Object ID
@@ -1607,12 +1623,12 @@ export class SessionImpl implements Session {
    * 購読と FETCH が尽きた Track のエントリは bidi 層が削除し、セッション終了時は
    * close() が全消しする。
    */
-  private priorGapTrackingByTrack = new Map<FullTrackNameKey, PriorGapTracking>();
+  priorGapTrackingByTrack = new Map<FullTrackNameKey, PriorGapTracking>();
 
   // draft-ietf-moq-transport-21 §12.2:
   // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
   // 0 以下はタイムアウトしない。
-  private controlMessageTimeoutMs = DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
+  controlMessageTimeoutMs = DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
   private dataStreamTimeoutMs = DEFAULT_DATA_STREAM_TIMEOUT_MS;
 
   // 統計カウンター
@@ -3039,51 +3055,7 @@ export class SessionImpl implements Session {
    * GOAWAY メッセージを送信する。
    */
   async goaway(newSessionUri?: string, timeout?: bigint): Promise<void> {
-    if (this.sessionState === "closed") {
-      throw new Error("Session is closed");
-    }
-
-    // 複数回の GOAWAY 送信は許可しない
-    if (this.sentGoaway) {
-      throw new Error("GOAWAY already sent");
-    }
-
-    // draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
-    // "A client MUST send a zero-length New Session URI in any GOAWAY."
-    // moqt-js はクライアント実装のため、newSessionUri は常に空文字列
-    if (newSessionUri !== undefined && newSessionUri !== "") {
-      throw new Error("client MUST send GOAWAY with empty New Session URI");
-    }
-
-    this.sentGoaway = true;
-
-    const goawayTimeout = timeout ?? 0n;
-    const payload = encodeGoawayPayload({
-      type: MessageType.GOAWAY,
-      newSessionUri: "",
-      timeout: goawayTimeout,
-    });
-
-    await this.sendControlMessage(MessageType.GOAWAY, payload, {
-      newSessionUri: newSessionUri ?? "",
-      timeout: goawayTimeout.toString(),
-    });
-
-    // draft-ietf-moq-transport-21 Section 6.6.1:
-    // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
-    // the indicated timeout if there are still open subscriptions or
-    // fetches on a connection."
-    // 未完了の購読・fetch が無い場合は期限を待たずに閉じる必要がないため
-    // タイマーを張らない。
-    if (goawayTimeout > 0n && this.hasOpenSubscriptionsOrFetches()) {
-      this.goawayTimeoutId = setTimeout(() => {
-        if (this.sessionState === "connected") {
-          this.closeWithError(
-            new SessionError("GOAWAY timeout expired", SessionErrorCode.GOAWAY_TIMEOUT),
-          );
-        }
-      }, clampTimeoutMs(goawayTimeout));
-    }
+    return sessionGoaway(this as unknown as SessionLifecycleInternal, newSessionUri, timeout);
   }
 
   /**
@@ -3104,190 +3076,7 @@ export class SessionImpl implements Session {
    * QUIC ストリームの FIN 送信とセッション終了通知を行う。
    */
   async close(closeCode: number = SessionErrorCode.NO_ERROR, reason = ""): Promise<void> {
-    if (this.sessionState === "closed") {
-      return;
-    }
-
-    this.sessionState = "closed";
-
-    // GOAWAY タイムアウトタイマーをクリア
-    if (this.goawayTimeoutId !== null) {
-      clearTimeout(this.goawayTimeoutId);
-      this.goawayTimeoutId = null;
-    }
-
-    // request 系オブジェクトの state を閉じる (自前起点・ピア起点で共通)
-    this.markRequestObjectsClosed();
-
-    // Pending リクエストの Promise を reject する
-    this.rejectPendingRequests(new Error("session closed"));
-
-    // 閉じた Subgroup の追跡をクリア
-    this.closedSubgroups.clear();
-
-    // END_OF_GROUP の Group 単位追跡をクリア
-    this.receivedEndOfGroupFinalObjectIds.clear();
-
-    // Prior Group ID Gap / Prior Object ID Gap の Track 単位追跡をクリア
-    this.priorGapTrackingByTrack.clear();
-
-    // GOAWAY 受信追跡をクリア
-    this.goawayReceivedOnRequestStreams.clear();
-
-    // pending の無い REQUEST_OK の許容枠をクリア
-    this.unmatchedRequestOkAllowances.clear();
-
-    // fill 関連付けをクリア
-    this.fillFetchTargets.clear();
-
-    // 受信済み Request ID の追跡をクリア
-    this.receivedRequestIds.clear();
-
-    // ストリームごとの未応答 REQUEST_UPDATE 数をクリア
-    // (draft-ietf-moq-transport-21 §9.1.7。セッションが終了すると
-    //  リクエストストリームも消えるため、以後の判定に使う値は残さない)
-    this.receivedRequestUpdateCounts.clear();
-
-    // draft-ietf-moq-transport-21 §8.9:
-    // 受信 Authorization Token キャッシュは Session に紐付くため、終了時に破棄する。
-    // 上限値は広告値であり Session の構成を表すため維持する。
-    this.receivedAuthTokens.clear();
-
-    // Pending Subgroup ストリームの buffer を解放
-    // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
-    this.pendingSubgroupBuffer.notifyAll("session-close");
-
-    // Fetcher の登録待ちコールバックを解放する。
-    // incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
-    // 欠落しないよう複製して反復する。
-    for (const callbacks of this.fetcherReadyCallbacks.values()) {
-      for (const cb of callbacks.slice()) {
-        cb();
-      }
-    }
-    this.fetcherReadyCallbacks.clear();
-
-    // 保持している双方向 / 単方向ストリームの writer / reader を閉じる。
-    // peer 側に FIN / RESET_STREAM を送って受信ループを解除させる。
-    // 既に閉じている等の理由で例外が出ても無視する。
-    //
-    // draft-ietf-moq-transport-21 §6.4.2.2: セッション解体は graceful request completion
-    // ではないため、リクエストストリームには FIN ではなく abort（RESET 相当）を使う。
-    // PUBLISH_DONE 無しの FIN は MUST 違反になり得る。
-    const abortWriterSafely = async (
-      writer: WritableStreamDefaultWriter<Uint8Array>,
-    ): Promise<void> => {
-      try {
-        await writer.abort();
-      } catch {
-        // ストリームが既に閉じている / abort されている場合は無視
-      }
-    };
-    const cancelReaderSafely = async (
-      reader: ReadableStreamDefaultReader<Uint8Array>,
-    ): Promise<void> => {
-      try {
-        await reader.cancel();
-      } catch {
-        // 既に解放されている場合は無視
-      }
-    };
-
-    // SUBSCRIBE_NAMESPACE 用の双方向ストリーム
-    // (state の closed 化は markRequestObjectsClosed() 済み)
-    for (const subscription of this.namespaceSubscriptions.values()) {
-      if (subscription.writer) {
-        void abortWriterSafely(subscription.writer);
-      }
-      if (subscription.streamReader) {
-        void cancelReaderSafely(subscription.streamReader);
-      }
-    }
-    this.namespaceSubscriptions.clear();
-
-    // SUBSCRIBE_TRACKS 用の双方向ストリーム
-    // draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS)
-    // (state の closed 化は markRequestObjectsClosed() 済み)
-    for (const subscription of this.tracksSubscriptions.values()) {
-      if (subscription.writer) {
-        void abortWriterSafely(subscription.writer);
-      }
-      if (subscription.streamReader) {
-        void cancelReaderSafely(subscription.streamReader);
-      }
-    }
-    this.tracksSubscriptions.clear();
-
-    // PUBLISH_NAMESPACE 用の双方向ストリーム
-    // (state の closed 化は markRequestObjectsClosed() 済み)
-    for (const publication of this.namespacePublications.values()) {
-      void abortWriterSafely(publication.writer);
-      void cancelReaderSafely(publication.streamReader);
-    }
-    this.namespacePublications.clear();
-
-    // SUBSCRIBE / PUBLISH / FETCH 等のリクエスト用双方向ストリーム
-    for (const entry of this.requestStreams.values()) {
-      void abortWriterSafely(entry.writer);
-    }
-    this.requestStreams.clear();
-
-    // Publisher 用の単方向ストリーム (Subgroup ストリーム)
-    // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
-    // 省略した Object がある Subgroup は FIN ではなく RESET で閉じる必要があるため、
-    // 判定を publishCloseSubgroupStream に任せる。終了処理を遅延させないため完了は待たない
-    // (判定結果はセッション終了時には使わない)。
-    // Map の反復中に publishCloseSubgroupStream が現在のエントリを削除するが、
-    // Map の反復は削除されたエントリを再訪しないため安全である。
-    for (const trackAlias of this.publisherStreams.keys()) {
-      void publishCloseSubgroupStream(this as unknown as SessionInternal, trackAlias);
-    }
-    this.publisherStreams.clear();
-
-    // 制御用送信ストリーム (単方向) を閉じる。
-    // writer は SETUP 送信時に releaseLock しているため、ここでは underlying stream を閉じる。
-    if (this.controlSendStream) {
-      try {
-        await this.controlSendStream.close();
-      } catch {
-        // ストリームが既に閉じている場合は無視
-      }
-    }
-
-    // 保持している datagram writer を解放する。
-    // 一度も sendDatagram していない場合は未取得 (undefined) なので何もしない。
-    if (this.datagramWriter !== undefined) {
-      try {
-        this.datagramWriter.releaseLock();
-      } catch {
-        // 既に解放されている場合は無視
-      }
-      this.datagramWriter = undefined;
-    }
-
-    // 受信双方向ストリームの reader を解放する
-    if (this.incomingBidiStreamReader) {
-      try {
-        await this.incomingBidiStreamReader.cancel();
-      } catch {
-        // 既にキャンセル済みの場合は無視
-      }
-      try {
-        this.incomingBidiStreamReader.releaseLock();
-      } catch {
-        // 既に解放されている場合は無視
-      }
-      this.incomingBidiStreamReader = undefined;
-    }
-
-    // WebTransport セッションを閉じて peer に終了を通知する
-    try {
-      this.transport.close({ closeCode, reason });
-    } catch {
-      // 既に閉じている場合は無視
-    }
-
-    // close コールバックはコンストラクタの transport.closed 監視で呼ばれる
+    return sessionClose(this as unknown as SessionLifecycleInternal, closeCode, reason);
   }
 
   // プライベートメソッド
@@ -3308,26 +3097,7 @@ export class SessionImpl implements Session {
    * (呼び出し元が担う。transport.closed 時の pending 掃除は現状は行わない)。
    */
   private markRequestObjectsClosed(): void {
-    // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
-    for (const pub of this.publishers.values()) {
-      pub.markClosed();
-    }
-    for (const sub of this.subscribers.values()) {
-      sub.markClosed();
-    }
-    for (const fetcher of this.fetchers.values()) {
-      fetcher.markClosed();
-    }
-    // namespace 系の購読・配信の state を閉じる
-    for (const subscription of this.namespaceSubscriptions.values()) {
-      subscription.state = "closed";
-    }
-    for (const subscription of this.tracksSubscriptions.values()) {
-      subscription.state = "closed";
-    }
-    for (const publication of this.namespacePublications.values()) {
-      publication.state = "closed";
-    }
+    sessionMarkRequestObjectsClosed(this as unknown as SessionLifecycleInternal);
   }
 
   /**
@@ -3338,26 +3108,7 @@ export class SessionImpl implements Session {
    * アプリが未解決の Promise を待ち続けないようにする共通後始末。
    */
   private rejectPendingRequests(error: Error): void {
-    for (const [, pending] of this.pendingPublish) {
-      pending.reject(error);
-    }
-    this.pendingPublish.clear();
-    for (const [, pending] of this.pendingSubscribe) {
-      pending.reject(error);
-    }
-    this.pendingSubscribe.clear();
-    for (const [, pending] of this.pendingFetch) {
-      pending.reject(error);
-    }
-    this.pendingFetch.clear();
-    for (const [, pending] of this.pendingRequestUpdate) {
-      pending.reject(error);
-    }
-    this.pendingRequestUpdate.clear();
-    for (const [, pending] of this.pendingTrackStatus) {
-      pending.reject(error);
-    }
-    this.pendingTrackStatus.clear();
+    sessionRejectPendingRequests(this as unknown as SessionLifecycleInternal, error);
   }
 
   /**
@@ -3368,15 +3119,8 @@ export class SessionImpl implements Session {
    *  timeout if there are still open subscriptions or fetches on a connection."
    * pending なリクエストも未完了として含める。
    */
-  private hasOpenSubscriptionsOrFetches(): boolean {
-    return (
-      this.publishers.size > 0 ||
-      this.subscribers.size > 0 ||
-      this.fetchers.size > 0 ||
-      this.pendingPublish.size > 0 ||
-      this.pendingSubscribe.size > 0 ||
-      this.pendingFetch.size > 0
-    );
+  hasOpenSubscriptionsOrFetches(): boolean {
+    return sessionHasOpenSubscriptionsOrFetches(this as unknown as SessionLifecycleInternal);
   }
 
   /**
@@ -3388,17 +3132,8 @@ export class SessionImpl implements Session {
    *  session with NO_ERROR."
    * 購読・fetch の終了通知 (onRequestDrained) から呼ばれる。
    */
-  private closeIfGoawayDrained(): void {
-    if (this.sessionState !== "connected") {
-      return;
-    }
-    if (!this.receivedGoaway) {
-      return;
-    }
-    if (this.hasOpenSubscriptionsOrFetches()) {
-      return;
-    }
-    void this.close();
+  closeIfGoawayDrained(): void {
+    sessionCloseIfGoawayDrained(this as unknown as SessionLifecycleInternal);
   }
 
   /**
@@ -3409,7 +3144,7 @@ export class SessionImpl implements Session {
    * 呼ばれる。SessionInternal 経由で参照されるため public とする。
    */
   onRequestDrained(): void {
-    this.closeIfGoawayDrained();
+    sessionOnRequestDrained(this as unknown as SessionLifecycleInternal);
   }
 
   /**
@@ -3425,21 +3160,7 @@ export class SessionImpl implements Session {
    * throw しない (呼び出し元 catch への再流入による誤変換・二重通知を避けるため)。
    */
   private closeWithError(error: SessionError): void {
-    try {
-      this.callbacks.error?.(error);
-    } catch (callbackError) {
-      // アプリの error コールバックの throw はデバッグ記録に残す。
-      // Fetch ヘッダを持たないため emitDataStreamErrorDebug(callbackError, null)
-      // で記録する (typeName は "DATA_STREAM_ERROR" になる)。
-      // 記録自体の throw (debug コールバックの throw) は呼び出し元へ伝播させない。
-      try {
-        this.emitDataStreamErrorDebug(callbackError, null);
-      } catch {
-        // デバッグ記録の失敗は無視する
-      }
-    } finally {
-      void this.close(error.code, error.message);
-    }
+    sessionCloseWithError(this as unknown as SessionLifecycleInternal, error);
   }
 
   /**
@@ -3452,14 +3173,7 @@ export class SessionImpl implements Session {
    * 終了起源の場合はスキップし、それ以外のみ通知する。
    */
   private notifyErrorIfActive(error: Error): void {
-    if (this.sessionState !== "connected") {
-      return;
-    }
-    if (isSessionClosedError(error)) {
-      this.sessionState = "closed";
-      return;
-    }
-    this.callbacks.error?.(error);
+    sessionNotifyErrorIfActive(this as unknown as SessionLifecycleInternal, error);
   }
 
   private emitDebug(
@@ -3468,21 +3182,16 @@ export class SessionImpl implements Session {
     payload: Uint8Array,
     decoded?: Record<string, unknown>,
   ): void {
-    if (!this.callbacks.debug) return;
-
-    // exactOptionalPropertyTypes では optional な decoded に undefined を渡せないため、
-    // 値がある場合だけ載せる
-    const debugMessage = {
+    sessionEmitDebug(
+      this as unknown as SessionLifecycleInternal,
       direction,
       type,
-      typeName: getMessageTypeName(type),
       payload,
-      timestamp: Date.now(),
-    };
-    this.callbacks.debug(decoded === undefined ? debugMessage : { ...debugMessage, decoded });
+      decoded,
+    );
   }
 
-  private async sendControlMessage(
+  async sendControlMessage(
     type: number,
     payload: Uint8Array,
     decoded?: Record<string, unknown>,
@@ -3785,78 +3494,7 @@ export class SessionImpl implements Session {
   }
 
   private startControlMessageLoop(): void {
-    void (async () => {
-      if (!this.controlReceiveStream || !this.controlReader) return;
-
-      const reader = this.controlReceiveStream.getReader();
-
-      // draft-ietf-moq-transport-21 §12.2 (CONTROL_MESSAGE_TIMEOUT):
-      // 半端な制御メッセージを保持したまま待ち続けるピアを期限で打ち切る。
-      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-      const clearTimeoutHandle = (): void => {
-        if (timeoutHandle !== null) {
-          clearTimeout(timeoutHandle);
-          timeoutHandle = null;
-        }
-      };
-      const armTimeout = (): void => {
-        clearTimeoutHandle();
-        if (this.controlMessageTimeoutMs <= 0) {
-          return;
-        }
-        timeoutHandle = setTimeout(() => {
-          timeoutHandle = null;
-          if (this.sessionState === "connected") {
-            this.closeWithError(
-              new SessionError(
-                `control message timed out: ${this.controlReader?.bufferedBytes ?? 0} bytes buffered`,
-                SessionErrorCode.CONTROL_MESSAGE_TIMEOUT,
-              ),
-            );
-          }
-          // セッション終了でストリームの読み取りが終わらない実装でもループを終わらせる
-          void reader.cancel("control message timeout").catch(() => {});
-        }, this.controlMessageTimeoutMs);
-      };
-
-      try {
-        while (this.sessionState === "connected") {
-          const { value, done } = await reader.read();
-          if (done) {
-            this.closeControlStreamViolation("control stream closed unexpectedly");
-            break;
-          }
-
-          const messages = this.controlReader.feed(value);
-          for (const msg of messages) {
-            this.handleControlMessage(msg.type, msg.payload);
-          }
-          // 半端なメッセージが残っている間だけ期限を張る
-          if (this.controlReader.hasBufferedBytes) {
-            armTimeout();
-          } else {
-            clearTimeoutHandle();
-          }
-        }
-      } catch (err) {
-        // draft-ietf-moq-transport-21 §6.3:
-        // 制御ストリームの RESET_STREAM (ピア起因の stream error) は
-        // PROTOCOL_VIOLATION でセッションを閉じる。セッション終了起源
-        // (source: "session") の read 失敗は正常な終了通知であり通知しない。
-        // それ以外 (アプリコールバックの throw 等) は notifyErrorIfActive に
-        // 委ね、セッションを閉じない。
-        if (isPeerStreamError(err)) {
-          this.closeControlStreamViolation(
-            `control stream reset by peer: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        } else if ((err as { source?: unknown } | null)?.source !== "session") {
-          this.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
-        }
-      } finally {
-        clearTimeoutHandle();
-        reader.releaseLock();
-      }
-    })();
+    sessionStartControlMessageLoop(this as unknown as SessionLifecycleInternal);
   }
 
   /**
@@ -3870,11 +3508,8 @@ export class SessionImpl implements Session {
    * sessionState === "connected" のガードを共通化し、片方だけの修正漏れと
    * 既に閉じたセッションへの誤通知を防ぐ。
    */
-  private closeControlStreamViolation(message: string): void {
-    if (this.sessionState !== "connected") {
-      return;
-    }
-    this.closeWithError(new SessionError(message, SessionErrorCode.PROTOCOL_VIOLATION));
+  closeControlStreamViolation(message: string): void {
+    sessionCloseControlStreamViolation(this as unknown as SessionLifecycleInternal, message);
   }
 
   /**
@@ -3891,37 +3526,7 @@ export class SessionImpl implements Session {
    * 制御ストリーム上で受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
    */
   private handleControlMessage(type: number, payload: Uint8Array): void {
-    this.statsControlMessagesReceived++;
-    let decoded: Record<string, unknown> | undefined;
-
-    switch (type) {
-      case MessageType.PUBLISH_DONE:
-        // draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
-        // PUBLISH_DONE は双方向ストリーム上でのみ送信される。
-        // 制御ストリーム上で受信した場合は仕様違反。
-        this.closeWithError(
-          new SessionError(
-            "received PUBLISH_DONE on control stream, expected on bidirectional stream",
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
-        return;
-      case MessageType.GOAWAY:
-        decoded = this.handleGoaway(payload);
-        break;
-      default:
-        // draft-ietf-moq-transport-21 Section 9 (Control Messages):
-        // "An endpoint that receives an unknown message type MUST close the session."
-        this.closeWithError(
-          new SessionError(
-            `unknown control message type: 0x${type.toString(16)}`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
-          ),
-        );
-        return;
-    }
-
-    this.emitDebug("recv", type, payload, decoded);
+    sessionHandleControlMessage(this as unknown as SessionLifecycleInternal, type, payload);
   }
 
   /**
@@ -3935,50 +3540,8 @@ export class SessionImpl implements Session {
    * 複数の GOAWAY メッセージを受信した場合、エンドポイントは PROTOCOL_VIOLATION で
    * セッションを終了しなければならない。
    */
-  private handleGoaway(payload: Uint8Array): Record<string, unknown> {
-    // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
-    if (this.receivedGoaway) {
-      this.closeWithError(
-        new SessionError("received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
-      );
-      return { error: "Multiple GOAWAY messages received" };
-    }
-
-    // デコードに失敗した場合（trailing data 等）は PROTOCOL_VIOLATION でセッションを閉じる。
-    // receivedGoaway はデコード成功後に立てることで、半端状態を避ける
-    let msg: ReturnType<typeof decodeGoawayPayload>;
-    try {
-      msg = decodeGoawayPayload(payload);
-    } catch (error) {
-      const sessionError = toProtocolViolationSessionError(error);
-      if (sessionError) {
-        this.closeWithError(sessionError);
-        return { error: "GOAWAY decode failed" };
-      }
-      throw error;
-    }
-
-    this.receivedGoaway = true;
-
-    // GOAWAY コールバックを呼び出す
-    this.callbacks.goaway?.(msg.newSessionUri);
-
-    // draft-ietf-moq-transport-21 Section 6.6.1:
-    // "After the client receives a GOAWAY, it's RECOMMENDED that the client
-    //  waits until there are no more Established subscriptions before closing
-    //  the session with NO_ERROR."
-    // 期限到達時に Established 購読・fetch が残っていれば閉じず、購読終了時の
-    // onRequestDrained に NO_ERROR クローズを委ねる。残っていなければ閉じる。
-    if (msg.timeout > 0n) {
-      this.goawayTimeoutId = setTimeout(() => {
-        this.closeIfGoawayDrained();
-      }, clampTimeoutMs(msg.timeout));
-    }
-
-    return {
-      newSessionUri: msg.newSessionUri,
-      timeout: msg.timeout.toString(),
-    };
+  handleGoaway(payload: Uint8Array): Record<string, unknown> {
+    return sessionHandleGoaway(this as unknown as SessionLifecycleInternal, payload);
   }
 
   /**
@@ -5629,20 +5192,7 @@ export class SessionImpl implements Session {
    * 記録自体の throw (debug コールバックの throw) は呼び出し元へ伝播させない。
    */
   private emitCallbackErrorDebug(typeName: string, error: unknown): void {
-    try {
-      this.callbacks.debug?.({
-        direction: "recv",
-        type: 0,
-        typeName,
-        payload: new Uint8Array(0),
-        decoded: {
-          error: error instanceof Error ? error.message : String(error),
-        },
-        timestamp: Date.now(),
-      });
-    } catch {
-      // デバッグ記録の失敗は無視する
-    }
+    sessionEmitCallbackErrorDebug(this as unknown as SessionLifecycleInternal, typeName, error);
   }
 
   /**
@@ -5652,21 +5202,8 @@ export class SessionImpl implements Session {
    * fetchHeader は Fetch ヘッダーパース時にのみ設定されるため、非 null なら
    * FETCH データストリームと判定できる。
    */
-  private emitDataStreamErrorDebug(
-    err: unknown,
-    fetchHeader: import("./dataStream").FetchHeader | null,
-  ): void {
-    this.callbacks.debug?.({
-      direction: "recv",
-      type: 0,
-      typeName: "DATA_STREAM_ERROR",
-      payload: new Uint8Array(0),
-      decoded: {
-        error: err instanceof Error ? err.message : String(err),
-        ...(fetchHeader ? { requestId: fetchHeader.requestId.toString() } : {}),
-      },
-      timestamp: Date.now(),
-    });
+  private emitDataStreamErrorDebug(err: unknown, fetchHeader: FetchHeader | null): void {
+    sessionEmitDataStreamErrorDebug(this as unknown as SessionLifecycleInternal, err, fetchHeader);
   }
 
   /**
