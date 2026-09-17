@@ -97,49 +97,6 @@ function createHarness(): {
 }
 
 /**
- * Forward State 0 で省略した後に Group を変更すると RESET で閉じられる。
- */
-test("publishSendObject: 省略した Subgroup は Group 変更で RESET される", async () => {
-  const { session, publisher, records } = createHarness();
-
-  // Group 0 で 1 件送信してストリームを開く
-  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  assert.equal(records.length, 1);
-
-  // Forward State 0 に落として Group 0 の残りを送る (見送り = 省略)
-  publisher.setForwardState(false);
-  await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
-
-  // Forward State 1 に戻して Group 1 を送る (前の Subgroup を閉じる)
-  publisher.setForwardState(true);
-  await publisher.sendObject({ groupId: 1, objectId: 0, payload: new Uint8Array([3]) });
-
-  // 省略があるため RESET (abort) で閉じ、FIN (close) は呼ばれない
-  assert.equal(records[0].abortCount, 1);
-  assert.equal(records[0].closeCount, 0);
-  assert.equal(records[0].abortReasons[0], "subgroup omitted objects");
-  // RESET した Subgroup は closedSubgroups に登録しない (FIN 済みとして扱わない)
-  assert.isFalse(session.closedSubgroups.has("1:0"));
-  // 新しい Group のストリームは開かれている
-  assert.equal(records.length, 2);
-});
-
-/**
- * 省略のない Subgroup は Group 変更で FIN され、closedSubgroups に登録される。
- */
-test("publishSendObject: 省略のない Subgroup は Group 変更で FIN される", async () => {
-  const { session, publisher, records } = createHarness();
-
-  await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
-  await publisher.sendObject({ groupId: 1, objectId: 0, payload: new Uint8Array([3]) });
-
-  assert.equal(records[0].closeCount, 1);
-  assert.equal(records[0].abortCount, 0);
-  assert.isTrue(session.closedSubgroups.has("1:0"));
-});
-
-/**
  * 省略した Subgroup は done() でも RESET で閉じられる。
  */
 test("publishSendObject: 省略した Subgroup は done() で RESET される", async () => {

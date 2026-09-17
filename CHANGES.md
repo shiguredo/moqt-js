@@ -1636,6 +1636,16 @@
   - WebCodecs / WebTransport / canvas / Dedicated Worker / Preact のフックを必要とする configure・encode・decode・描画・購読開始・プレビュー開始は Node の vitest では実行できないため対象外とし、その理由をテストに明記する
   - devtools のテストが使っていた `as never` によるすり替えを、公開インターフェースを実装した Fake (`FakeSubscriber` / `FakeSession`) と実クラスを継承した観測用 wrapper (`RecordingDecoderWrapper`) に置き換える
   - @voluntas
+- [ADD] session 系モジュールに Property-Based Testing を追加する
+  - `src/session/` の 6 モジュールに対応する `params.prop.ts` / `stream.prop.ts` / `bidi.prop.ts` / `namespaceLoops.prop.ts` / `incoming.prop.ts` / `publish.prop.ts` を新設し、round-trip と連鎖不変条件を任意入力で検証する (PBT 120 件)
+  - params: Range Filter のマージ (削除・置換・不変) とキーの一意性、`MAX_FILTER_RANGES` とメッセージ種別ごとの送信スコープの検証、Message Parameter 構築の encode / decode round-trip、Location の辞書式順序、Track Namespace の前方一致、setTimeout 遅延のクランプ
+  - stream: subgroup / fetch の一括 feed と分割 feed の等価性 (バッチ境界をまたぐ subgroup 先頭判定の退行を検出する)、Object ID の連鎖、未完成 Object の残バッファと消費バイトの整合
+  - bidi: 保留中 REQUEST_UPDATE の解決 / 拒否 / 未対応 REQUEST_OK の消費、Prior Gap 追跡と fill 関連付けの後始末、PUBLISH_DONE / PUBLISH_STATE_NOTIFY の状態遷移
+  - namespaceLoops: 保留中更新の reject、NAMESPACE / NAMESPACE_DONE 追跡のモデル一致、チャンク分割不変性、ストリーム終了時のリーク検査
+  - incoming: Request ID 検証、datagram / subgroup / fetch の入力順と分割不変性、fetcher 待機の解決
+  - publish: 送信した Subgroup / Datagram を受信側の実装で読み戻す round-trip、Object ID Delta の連鎖、FIN / RESET の選択
+  - PBT でカバーできた固定値テスト 136 件を対応する単体テストから削除する (エラーパス・境界値・仕様の MUST 検証・異常系は単体テストに残す)
+  - @voluntas
 
 ## 2026.2.0
 
