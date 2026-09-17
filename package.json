@@ -41,11 +41,11 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "@types/node": "26.4.1",
+    "@types/node": "26.5.1",
     "@vitest/coverage-v8": "4.1.11",
-    "fast-check": "4.9.0",
+    "fast-check": "4.10.0",
     "typescript": "7.0.2",
-    "vite-plus": "0.3.0"
+    "vite-plus": "0.3.2"
   },
   "engines": {
     "node": ">=22.22.2"

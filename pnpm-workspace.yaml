@@ -8,7 +8,9 @@ overrides:
   # vite-plus が同梱する core / vitest と同じ版に揃える。
   # 版がずれると @preact/preset-vite 等が返すプラグイン型と vite-plus の型が
   # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.0
+  # @vitest/coverage-v8 は直接依存のため overrides では固定できず、
+  # vp up -L のたびに package.json 側で 4.1.11 に戻す必要がある
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.2
   vitest: 4.1.11
 
 allowBuilds:

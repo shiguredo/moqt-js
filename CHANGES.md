@@ -210,8 +210,8 @@
   - NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は引き続き拒否する
   - @voluntas
 - [UPDATE] 依存ライブラリを最新版に更新する
-  - vite-plus を 0.2.8 から 0.3.0 に更新し、同梱 oxlint 1.79 で新規実装された one-var / no-redeclare を無効化して lint を通す
-  - @types/node / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
+  - vite-plus を 0.2.8 から 0.3.2 に更新し、overrides の vite-plus-core も 0.3.2 に揃える。同梱 oxlint の新規ルール one-var / no-redeclare を無効化して lint を通す
+  - @types/node / fast-check / @vitest/coverage-v8 / @preact/signals / preact-iso を最新版に更新する
   - @voluntas
 - [FIX] 上限超過で破棄した pending Subgroup の後続チャンクが他ストリームを巻き添え overflow させないようにする
   - draft-ietf-moq-transport-21 §11.3.1 の "brief period" バッファで per-stream / per-session の上限超過により破棄した entry が、以後のチャンクも加算し続けていた
@@ -1033,7 +1033,7 @@
   - `vite.config.ts` の `lint.ignorePatterns` から devtools / examples / tests を外し、`reportUnusedDisableDirectives` を有効にする
   - `tsconfig.json` に `types: []` と `skipLibCheck: false` を追加し、`esModuleInterop` を削除する。lib.dom と重複していた `src/types.d.ts` の宣言を整理する
   - devtools / examples の tsconfig に `moqt-js` をソースへ解決する `paths` を追加し、ライブラリのグローバル型宣言を取り込む (dist 未生成でも型検査できるようにする)
-  - `pnpm-workspace.yaml` の overrides を vite-plus 同梱版 (`@voidzero-dev/vite-plus-core@0.3.0` / `vitest@4.1.11`) に揃える。版がずれると `@preact/preset-vite` 等が返すプラグイン型と vite-plus の型が別パッケージ由来になり型比較が破綻するため
+  - `pnpm-workspace.yaml` の overrides を vite-plus 同梱版 (`@voidzero-dev/vite-plus-core@0.3.2` / `vitest@4.1.11`) に揃える。版がずれると `@preact/preset-vite` 等が返すプラグイン型と vite-plus の型が別パッケージ由来になり型比較が破綻するため
   - devtools / examples / tests の lint 違反を修正する (挙動は変えない)
   - @voluntas
 - [UPDATE] createMedia の接続処理と配信設定解決を共通化する
@@ -1415,7 +1415,7 @@
   - 購読が尽きた alias の追跡は削除し、無制限な増加を防ぐ
   - @voluntas
 - [UPDATE] カバレッジ計測を復旧するため @vitest/coverage-v8 を 4.1.11 に合わせる
-  - `vite-plus@0.3.0` が同梱する vitest は 4.1.11 であり、`@vitest/coverage-v8@5.0.0` では `vp test --coverage` がバージョン不整合の Startup Error で起動しない
+  - `vite-plus@0.3.2` が同梱する vitest は 4.1.11 であり、`@vitest/coverage-v8@5.0.0` では `vp test --coverage` がバージョン不整合の Startup Error で起動しない
   - bundled vitest と単一版数を担保するため `@vitest/coverage-v8` を 4.1.11 に固定する (vite-plus の更新時は同梱 vitest に追随させる)
   - @voluntas
 - [UPDATE] HIGH_LEVEL_API.md を現コードに合わせる
