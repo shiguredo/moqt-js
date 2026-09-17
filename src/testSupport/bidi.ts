@@ -9,14 +9,17 @@
  */
 
 import { encodeRequestOkPayload } from "../message/session";
+import { encodeFetchOkPayload } from "../message";
 import { MessageType, MessageParameterType } from "../message/types";
 import { AuthTokenCache } from "../session/authTokenCache";
 import { SessionError } from "../error";
+import { FetcherImpl } from "../fetcher";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { type BidiSessionInternal } from "../session/bidi";
 import { publishClosePublisherStream, publishSendPublishDone } from "../session/publish";
+import { concatUint8Arrays } from "./helpers";
 
 /**
  * BidiSessionInternal のモックを構築する。
@@ -538,5 +541,160 @@ export function createCancelObservableResponseContext(): {
     cancelled,
     aborted,
     getClosedWithError: () => closedWithError,
+  };
+}
+
+/**
+ * 確立後の FETCH 応答ストリーム読み取りを検証するための session を構築する
+ *
+ * draft-ietf-moq-transport-21 §9.11 / §9.12 / §9.5 / §9.10:
+ * FETCH_OK を最初の応答として与え、pendingFetch を解決して fetchers に登録する。
+ * fetch ロールの読み取りループ (bidiReadRequestStreamMessages) が当該双方向
+ * ストリームを読み続けることを、実 W3C ストリームと実 Map で検証するために使う。
+ * ストリーム機構は実物であり、session はテスト用のオブジェクトリテラルを
+ * 型キャストしたものである。
+ *
+ * `additionalMessages` は FETCH_OK と同一チャンクに連結するメッセージ列である
+ * (bidiDispatchResponse が context.remainingMessages に保持する分を再現する)。
+ * 呼び出し側は返り値の additionalMessages へ push したうえで flushInitialChunk() を
+ * 呼び、FETCH_OK を読ませる。これにより組み立てに controlWriter を要する
+ * メッセージも連結できる。ピアの FIN を送るテストは readableController.close() を
+ * 明示的に呼ぶ。
+ *
+ * `closedWithErrorCount` を返すのは、セッション終了後に同一チャンクの
+ * 残りメッセージを処理し続けていないこと (error の二重通知が無いこと) を
+ * 検証できるようにするためである。
+ */
+export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []): {
+  session: BidiSessionInternal;
+  stream: WebTransportBidirectionalStream;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+  controlReader: ControlStreamReader;
+  controlWriter: ControlStreamWriter;
+  requestId: bigint;
+  fetcher: FetcherImpl;
+  /** FETCH_OK と同一チャンクに連結するメッセージ列 (flushInitialChunk 前に push する) */
+  additionalMessages: Uint8Array[];
+  /** FETCH_OK と additionalMessages を 1 チャンクとして enqueue する */
+  flushInitialChunk: () => void;
+  /** written は値コピーではなく現在の配列を参照する (append を反映する) */
+  written: Uint8Array[];
+  getClosedWithError: () => SessionError | undefined;
+  getClosedWithErrorCount: () => number;
+} {
+  const requestId = 10n;
+  const written: Uint8Array[] = [];
+  let closedWithError: SessionError | undefined;
+  let closedWithErrorCount = 0;
+
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const writer = writable.getWriter();
+  const controlReader = new ControlStreamReader();
+  const controlWriter = new ControlStreamWriter();
+
+  const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
+
+  const session = {
+    sessionState: "connected",
+    transport: {},
+    controlWriter,
+    nextRequestId: 100n,
+    requestStreams: new Map([[requestId, { stream, writer, controlReader }]]),
+    pendingPublish: new Map(),
+    pendingSubscribe: new Map(),
+    pendingFetch: new Map([
+      [
+        requestId,
+        {
+          impl: fetcher,
+          resolve: () => {},
+          reject: () => {},
+        },
+      ],
+    ]),
+    pendingTrackStatus: new Map(),
+    pendingRequestUpdate: new Map(),
+    fillFetchTargets: new Map(),
+    publishers: new Map(),
+    subscribers: new Map(),
+    subscribersByAlias: new Map(),
+    fetchers: new Map(),
+    pendingSubgroupBuffer: {},
+    fetcherReadyCallbacks: new Map(),
+    goawayReceivedOnRequestStreams: new Set(),
+    unmatchedRequestOkAllowances: new Map(),
+    peerMaxRequestUpdates: 0,
+    peerMaxFilterRanges: 0,
+    // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+    // 既定は未広告 (0 = 無制限) と未応答数なし
+    localMaxRequestUpdates: 0,
+    receivedRequestUpdateCounts: new Map(),
+    // draft-ietf-moq-transport-21 §8.9 / §9.1.3:
+    // 受信 AUTHORIZATION TOKEN のキャッシュ。既定は上限 0 (未広告 = Alias 使用禁止)。
+    receivedAuthTokens: new AuthTokenCache(0),
+    namespaceSubscriptions: new Map(),
+    tracksSubscriptions: new Map(),
+    publisherStreams: new Map(),
+    publisherSendQueues: new Map(),
+    closedSubgroups: new Set(),
+    statsControlMessagesSent: 0,
+    emitDebug: () => {},
+    closeWithError: (error: SessionError) => {
+      closedWithError = error;
+      closedWithErrorCount++;
+      // SessionImpl.closeWithError と同じく状態を closed へ遷移させる。
+      // 遷移させないと、セッション終了後の読み取り打ち切り (sessionState ガード) を
+      // 検証できない。BidiSessionInternal の sessionState は readonly 宣言だが、
+      // 実装 (SessionImpl) は可変フィールドのため、テスト用の状態遷移として代入する。
+      (session as unknown as { sessionState: string }).sessionState = "closed";
+    },
+    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
+  } as unknown as BidiSessionInternal;
+
+  // FETCH_OK (End of Track あり / End Location {0, 0} / パラメータなし) を
+  // 最初の応答として組み立てる。同一チャンクに連結するメッセージは呼び出し側が
+  // additionalMessages へ push し、flushInitialChunk() で 1 チャンクとして
+  // enqueue する。連結されたメッセージは bidiDispatchResponse が
+  // context.remainingMessages に保持する。
+  const fetchOkPayload = encodeFetchOkPayload({
+    type: MessageType.FETCH_OK,
+    endOfTrack: true,
+    endLocation: { group: 0n, object: 0n },
+    parameters: [],
+    trackProperties: [],
+  });
+
+  return {
+    session,
+    stream,
+    readableController,
+    controlReader,
+    controlWriter,
+    requestId,
+    fetcher,
+    additionalMessages,
+    written,
+    flushInitialChunk: () => {
+      readableController.enqueue(
+        concatUint8Arrays([
+          controlWriter.encode(MessageType.FETCH_OK, fetchOkPayload),
+          ...additionalMessages,
+        ]),
+      );
+    },
+    // 値コピーではなく getter で返す (closeWithError 呼び出し後の代入を反映する)
+    getClosedWithError: () => closedWithError,
+    getClosedWithErrorCount: () => closedWithErrorCount,
   };
 }
