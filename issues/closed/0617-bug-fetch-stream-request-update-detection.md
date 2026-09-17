@@ -1,9 +1,9 @@
 # FETCH リクエストストリーム上の REQUEST_UPDATE を検出しない
 
 - Created: 2026-09-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-17
 - Branch: feature/fix-fetch-stream-request-update
-- Polished: 2026-09-15
+- Polished: 2026-09-17
 
 ## 目的
 
@@ -82,6 +82,72 @@ draft-ietf-moq-transport-21 §9.11:
 - `Fetcher.cancel()` が読み取りループを停止できる (`bidiCancelFetch` の既存分岐が機能する)
 - テストがある。実ストリームと実 Map で構成し (`src/testSupport/bidi.ts` の既存ヘルパーを利用する)、モックやスタブは追加しない
 - `vp check` / `tsc --noEmit` / `vp test run` が通る
+
+## 解決方法
+
+設計方針のとおりに実装した。変更は `src/session/bidi.ts` に閉じており、
+`SessionImpl` (`src/session.ts`) と `Fetcher` (`src/fetcher.ts`) の公開 API は
+変更していない。
+
+- `bidiReadRequestStreamMessages` の role を `"publish" | "subscribe" | "fetch"` に
+  広げ、型に `BidiRequestStreamRole` の名前を付けた。role 依存の分岐は
+  `bidiPreflightRequestUpdate` (REQUEST_UPDATE) と
+  `bidiHandlePublishStateNotify` (PUBLISH_STATE_NOTIFY)、ピア FIN の後始末の 3 か所で
+  あり、いずれにも fetch の期待動作を定義した。
+- `bidiReadFetchResponse` の `handleOk` で `fireFetcherReadyCallbacks` の直後に
+  `void bidiReadRequestStreamMessages(..., "fetch", context.remainingMessages)` を
+  起動した。`context.remainingMessages` を初期メッセージとして先頭から処理するため、
+  FETCH_OK と同一チャンクに連結された REQUEST_UPDATE / PUBLISH_STATE_NOTIFY /
+  GOAWAY も取りこぼさない。`bidiReadRequestStreamMessages` に
+  `initialMessages` 引数を追加し、`bidiHandleRequesterFinForResponderClose` /
+  `bidiProcessRequestStreamMessages` / `bidiHandleRequestUpdateMessage` /
+  `bidiHandleRequestStreamGoaway` へ switch 本体を切り出した (挙動は変えていない)。
+- fetch ロールの REQUEST_UPDATE は `bidiPreflightRequestUpdate` の先頭で
+  `goawayReceivedOnRequestStreams` を見ずに PROTOCOL_VIOLATION で閉じる。
+  判定を GOAWAY 分岐 (`"break"` を返す) より前に置いたため、GOAWAY 受信済みでも
+  検出できる。subscribe ロールの「GOAWAY 受信済みなら無視する」逸脱と publish
+  ロールの REQUEST_ERROR (GOING_AWAY) 応答は現行どおり維持している。
+- fetch ロールの PUBLISH_STATE_NOTIFY は既存の `role !== "subscribe"` ガードで
+  閉じる。エラー文言を `unexpected PUBLISH_STATE_NOTIFY on publish stream` から
+  `unexpected PUBLISH_STATE_NOTIFY on ${role} stream` に変え、fetch でも実態に
+  合うようにした。
+- ピア FIN では publish ロールの削除遅延を適用せず、`closeRequestStreamWriter` で
+  自方向を FIN で閉じ、`finally` の `requestStreams.delete` でエントリを削除する。
+  `notifySubscriberFailure` は呼ばない (FETCH に PUBLISH_DONE は無く、responder の
+  FIN は正常完了である)。
+- `closeOldRequestStreamOnGoaway` に fetcher の分岐を追加し、
+  `fetcher.goawayCallback` を呼んで `closeRequestStreamWriter` で自方向を FIN で
+  閉じる。読み取りは 2 通目 GOAWAY の検出のため継続する。同関数の
+  「fetcher: established FETCH に読み取りループは存在しないため対象外」という
+  記述を実装に合わせて更新した。
+- `handleRequestStreamReadError` は fetch を「publish 以外」の分岐に通す。
+  購読も保留中の更新も無いため通知は発生せず、セッションも閉じない。
+- 2 通目 GOAWAY は既存の `validateNoDuplicateGoawayOnRequestStream` で
+  PROTOCOL_VIOLATION になる (requestId だけを見るため変更不要)。
+- `bidiCancelFetch` は変更していない。確立後は読み取りループが
+  `streamInfo.reader` を登録するため、既存の `reader.cancel()` 分岐が機能して
+  読み取りループを停止できる。
+- `SessionImpl.handlePeerFetchStreamReset` は変更していない。データストリームの
+  FIN / RESET_STREAM の経路は双方向ストリームの読み取りループと独立しており、
+  `fetchers` の登録と削除の挙動は変わらない。
+- 既存テストの期待値のうち、`bidiHandlePublishStateNotify` のエラー文言に依存する
+  ものは無かった (テストは `SessionErrorCode` のみを見ている) ため、
+  テストの修正は不要だった。
+
+検証:
+
+- `src/testSupport/bidi.ts` に `createFetchReadTestContext` を追加した。実 W3C
+  ストリーム (ReadableStream / WritableStream) と実 Map で FETCH_OK の応答
+  ストリームを構成し、FETCH_OK と同一チャンクへ連結するメッセージを
+  `additionalMessages` で注入できる。モックやスタブは使っていない。
+- `src/session/bidiFetchRequestStreamMessages.test.ts` を新規作成し 17 件追加した。
+  FETCH 応答ストリーム上の REQUEST_UPDATE (別チャンク / FETCH_OK と同一チャンク /
+  GOAWAY 受信済み)、未応答数に数えないこと、PUBLISH_STATE_NOTIFY、
+  ピア FIN の自方向 FIN と削除、2 通目 GOAWAY、確立後 GOAWAY の goawayCallback、
+  `Fetcher.cancel()` による読み取り停止、REQUEST_OK / PUBLISH_DONE / 未知型 /
+  RESET_STREAM の扱い、正常系の `fetchers` の登録と削除、FETCH_OK の反映を固定する。
+- `vp check` / `tsc --noEmit` / `vp test run` (103 files / 2294 tests) /
+  `vp run build` がすべて通ることを確認した。
 
 ## 参照
 

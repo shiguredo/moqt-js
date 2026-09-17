@@ -132,6 +132,20 @@ interface RequestStreamInfo {
   reader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
 }
 
+/**
+ * リクエストストリームの読み取りループが担う役割
+ *
+ * draft-ietf-moq-transport-21 §9.5 / §9.10 / §6.4.2.2:
+ * 同じ双方向ストリーム上のメッセージでも、自 endpoint がそのリクエストの
+ * 送信者か受信側かで期待動作が変わる。読み取りループの分岐はこの 3 値で表す。
+ * - "publish": 自 endpoint が PUBLISH の送信者 (受信 PUBLISH の subscriber 側)
+ * - "subscribe": 自 endpoint が SUBSCRIBE の送信者 (subscriber 側)
+ * - "fetch": 自 endpoint が FETCH の送信者 (requester 側)
+ * 確立後に読み取りループを起動しない経路 (PUBLISH / TRACK_STATUS の応答待ちなど)
+ * は役割を持たない。
+ */
+type BidiRequestStreamRole = "publish" | "subscribe" | "fetch";
+
 interface PendingPublish {
   resolve: (pub: Publisher) => void;
   reject: (err: Error) => void;
@@ -1225,6 +1239,32 @@ export async function bidiReadFetchResponse(
       pending.resolve(pending.impl);
 
       fireFetcherReadyCallbacks(session, requestId);
+
+      // draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE):
+      // "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, ...) can later send
+      //  a REQUEST_UPDATE on the same bidi stream as the request to modify it."
+      // FETCH の responder はこの 2 ケースに該当しないため、REQUEST_UPDATE を
+      // 受信したら PROTOCOL_VIOLATION でセッションを閉じる (MUST)。検出には
+      // FETCH_OK 受理後も当該双方向ストリームを読み続ける必要がある。
+      // requestStreams のエントリは受理後も残るため、読み取りループが
+      // registeredEntry を引ける (§6.4.2.2)。
+      //
+      // fireFetcherReadyCallbacks の後に起動し、fetch() の解決を先に確定させる。
+      // 本ハンドラは await を挟まないため、ここで同期的に getReader() を呼んでも
+      // bidiReadResponseFromBidiStream の finally の reader.releaseLock() は
+      // まだ実行されていない。
+      //
+      // FETCH_OK と同一チャンクに連結されたメッセージは context.remainingMessages に
+      // 保持されている。ControlStreamReader は取り出したメッセージをバッファから
+      // 削除するため、読み取りループの初期メッセージとして先頭から処理する。
+      void bidiReadRequestStreamMessages(
+        session,
+        requestId,
+        context.stream,
+        context.controlReader,
+        "fetch",
+        context.remainingMessages,
+      );
     },
     handleRequestError: (context, payload) => {
       const { session, requestId, pending } = context;
@@ -1683,9 +1723,8 @@ export function restoreIncomingRequestUpdateCount(
  * 受信 REQUEST_UPDATE の前置検証を行う
  *
  * draft-ietf-moq-transport-21 §9.5 / §9.2 / §9.20.3 / §8.9:
- * - subscribe ロールの想定外 REQUEST_UPDATE はセッションエラー (PROTOCOL_VIOLATION)
- *   であるため、§8.9 の登録 MUST の対象外として最初に判定する。GOAWAY 受信済みの
- *   subscribe ロールは送信方向が FIN 済みで応答不能なため、既存どおり無視する。
+ * - fetch ロールと subscribe ロールの想定外 REQUEST_UPDATE はセッションエラー
+ *   (PROTOCOL_VIOLATION) であるため、§8.9 の登録 MUST の対象外として最初に判定する。
  * - AUTHORIZATION TOKEN は §8.9 の MUST「セッションエラーにならない限り REGISTER を
  *   登録する」を満たすため、セッションエラーにならない拒否 (GOING_AWAY 応答) より
  *   前に処理する。
@@ -1699,10 +1738,31 @@ async function bidiPreflightRequestUpdate(
   session: BidiSessionInternal,
   requestId: bigint,
   decoded: ReturnType<typeof decodeRequestUpdatePayload>,
-  role: "publish" | "subscribe",
+  role: BidiRequestStreamRole,
 ): Promise<"continue" | "break" | "return"> {
   // draft-ietf-moq-transport-21 §9.5:
   // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
+  // FETCH 応答ストリーム上で peer から REQUEST_UPDATE が来ることは
+  // Section 9.5 の 2 ケース (リクエストの送信者 / PUBLISH で確立した購読の
+  // subscriber) のいずれにも該当しない。moqt-js が FETCH の requester であり、
+  // 更新 API を持たないため responder が送ってくる経路は常に違反である。
+  //
+  // 判定は下の GOAWAY 分岐より前に置く。GOAWAY 分岐は
+  // `goawayReceivedOnRequestStreams` を見て "break" を返すため、後ろに置くと
+  // GOAWAY 受信済みの fetch が REQUEST_UPDATE を無視してしまう。
+  // subscribe ロールの「GOAWAY 受信済みなら無視する」という現行の逸脱には
+  // 揃えない (詳細は下の subscribe 分岐を参照)。
+  if (role === "fetch") {
+    session.closeWithError(
+      new SessionError(
+        "unexpected REQUEST_UPDATE on fetch stream",
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return "return";
+  }
+
+  // draft-ietf-moq-transport-21 §9.5:
   // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
   // Section 9.5 の 2 ケースに該当しない。
   //
@@ -2095,7 +2155,10 @@ export async function closeRequestStreamWriter(
  *   publisher of an Established subscription MUST send PUBLISH_DONE, before
  *   sending a FIN」)。goawayCallback のみ呼ぶ。
  * - subscriber: goawayCallback を呼び、送信方向を FIN (writer.close()) で閉じる。
- * - fetcher: established FETCH に読み取りループは存在しないため対象外。
+ * - fetcher: goawayCallback を呼び、送信方向を FIN (writer.close()) で閉じる。
+ *   §9.11 の FETCH 応答は FETCH_OK で完結しており、PUBLISH の PUBLISH_DONE に
+ *   相当する後続メッセージが無いため、送信方向は直ちに閉じてよい。受信方向の
+ *   読み取りは §9.2 MUST (同一ストリームの 2 通目 GOAWAY) の検出のため継続する。
  *
  * GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗として扱う。
  * GOAWAY 前に送信済みで応答待ちの update() の Promise を reject し、エントリを
@@ -2123,6 +2186,12 @@ async function closeOldRequestStreamOnGoaway(
   } catch {
     // アプリのコールバック例外は黙殺する
   }
+  const fetcher = session.fetchers.get(requestId);
+  try {
+    fetcher?.goawayCallback?.(newSessionUri);
+  } catch {
+    // アプリのコールバック例外は黙殺する
+  }
   // 失敗が確定した更新の fill 関連付けを消す。確定済み (REQUEST_OK 受理) の
   // 更新の fill はまだ到着し得るため残す。pending 削除より先に実行する。
   deleteFillTargetsForPendingUpdates(session, requestId);
@@ -2131,7 +2200,10 @@ async function closeOldRequestStreamOnGoaway(
     requestId,
     new RequestError(REQUEST_GOING_AWAY_REASON, RequestErrorCode.GOING_AWAY),
   );
-  if (subscriber) {
+  // 送信方向を FIN で閉じるのは requester 側 (subscriber / fetcher) である。
+  // publisher は done() による PUBLISH_DONE → FIN の順序を守る必要があるため
+  // ここでは閉じない。
+  if (subscriber || fetcher) {
     await closeRequestStreamWriter(session, requestId);
   }
 }
@@ -2143,6 +2215,8 @@ async function closeOldRequestStreamOnGoaway(
  *   ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
  *   セッションを閉じる
  * - ピアの RESET_STREAM (isPeerStreamError) は role ごとに後始末する
+ *   (publish は購読解除、subscribe は subscriber への失敗通知。fetch は
+ *   購読も保留中の更新も持たないため「publish 以外」の分岐で何もしない)
  * - それ以外 (セッション終了・内部エラー等) と GOAWAY 受信済みの旧ストリームは
  *   何もしない
  */
@@ -2150,7 +2224,7 @@ function handleRequestStreamReadError(
   session: BidiSessionInternal,
   requestId: bigint,
   error: unknown,
-  role: "publish" | "subscribe",
+  role: BidiRequestStreamRole,
 ): void {
   const sessionError = toSessionCloseError(error);
   if (sessionError !== null) {
@@ -2222,16 +2296,40 @@ function handleRequestUpdateOkMessage(
   }
 }
 
+/**
+ * 確立後のリクエストストリームのメッセージを読み続ける
+ *
+ * draft-ietf-moq-transport-21 §9.5 / §9.10 / §9.2 / §6.4.2.2:
+ * 確立したリクエスト (受信 PUBLISH / 送信 SUBSCRIBE / 送信 FETCH) の双方向
+ * ストリームを読み続け、REQUEST_UPDATE / PUBLISH_DONE / PUBLISH_STATE_NOTIFY /
+ * GOAWAY を処理する。role ごとに期待動作が異なるため、判定はすべて role で分岐する
+ * (詳細は BidiRequestStreamRole の doc コメントを参照)。
+ *
+ * 終了経路:
+ * - ピアの FIN では自方向を FIN で閉じる (§6.4.2.2 SHOULD)。publish ロールだけは
+ *   アプリの done() まで後始末を遅延する (§9.9 MUST)。
+ * - ピアの RESET_STREAM などの読み取り失敗は handleRequestStreamReadError に委譲する
+ * - セッション終了 (sessionState !== "connected") では読み取りを終える
+ *
+ * @param requestId - リクエストストリームの Request ID (§6.4.2.1)
+ * @param role - 自 endpoint から見たリクエストの役割
+ * @param initialMessages - 最初の応答チャンクで読み取り済みの残りメッセージ。
+ *   最初の応答を読む bidiDispatchResponse が context.remainingMessages に保持した
+ *   分を先頭から処理する。ControlStreamReader は取り出したメッセージを
+ *   バッファから削除するため、渡さなければ復元できない。
+ */
 export async function bidiReadRequestStreamMessages(
   session: BidiSessionInternal,
   requestId: bigint,
   stream: WebTransportBidirectionalStream,
   controlReader: ControlStreamReader,
-  role: "publish" | "subscribe",
+  role: BidiRequestStreamRole,
+  initialMessages: ControlMessage[] = [],
 ): Promise<void> {
   const reader = stream.readable.getReader();
-  // 読み取りループがロックを保持するため、解除 (unsubscribe) 時に保持者経由で
-  // cancel できるよう登録する。エントリ削除済み (解除競合) の場合は登録しない。
+  // 読み取りループがロックを保持するため、解除 (unsubscribe / FETCH の cancel) 時に
+  // 保持者経由で cancel できるよう登録する。エントリ削除済み (解除競合) の場合は
+  // 登録しない。
   const registeredEntry = session.requestStreams.get(requestId);
   if (registeredEntry !== undefined) {
     registeredEntry.reader = reader;
@@ -2253,6 +2351,21 @@ export async function bidiReadRequestStreamMessages(
   // publish ロールのみ削除を done() 完了後まで遅延する判定に使う。
   let receivedFin = false;
   try {
+    // 最初の応答と同一チャンクに連結されていたメッセージを先頭から処理する。
+    // FETCH_OK と同一チャンクの REQUEST_UPDATE / PUBLISH_STATE_NOTIFY / GOAWAY を
+    // 取りこぼさない (§9.5 / §9.10 / §9.2)。bidiContinueReadingForDuplicateGoaway が
+    // initialMessages を先頭から走査するのと同じ扱いである。
+    if (initialMessages.length > 0) {
+      const initialResult = await bidiProcessRequestStreamMessages(
+        session,
+        requestId,
+        role,
+        initialMessages,
+      );
+      if (initialResult === "return") {
+        return;
+      }
+    }
     while (session.sessionState === "connected") {
       const { value, done } = await reader.read();
       if (done) {
@@ -2260,49 +2373,11 @@ export async function bidiReadRequestStreamMessages(
         // draft-ietf-moq-transport-21 §6.4.2.2:
         // 受信側 (subscribe ロール) でピア (publisher) が PUBLISH_DONE を
         // 送らずに FIN した場合は失敗扱いであり、subscriber に通知する。
-        // publish ロールでは requester の FIN は正常完了シグナルであり
-        // 通知しない。
-        if (role === "subscribe") {
-          try {
-            // draft-ietf-moq-transport-21 §9.5.1 / §6.4.2.2:
-            // 応答を待たずにストリームが閉じた場合は保留中の更新の失敗であり、
-            // アプリの update() の Promise を reject する (namespace ループの
-            // handleNamespaceRequestUpdateStreamClosed と同じ)。未解決のまま
-            // 残すと、アプリは FIN 後に update() の結果を待ち続ける。
-            // 保留中の更新が無い場合は no-op。GOAWAY 受信済みの場合は GOAWAY
-            // 掃除でエントリ削除済みのため no-op になる (エラー文言は errors の
-            // REQUEST_UPDATE_STREAM_CLOSED_MESSAGE と同じ)。reject の
-            // 形式はトリガーごとに異なる (GOAWAY 掃除は RequestError
-            // (GOING_AWAY)、本処理は Error) が、失敗の種類が異なるため許容する。
-            // notifySubscriberFailure より先に実行することで、アプリの error
-            // コールバックが throw しても reject が実行される (順序の根拠)。
-            rejectPendingRequestUpdates(
-              session,
-              requestId,
-              new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
-            );
-            notifySubscriberFailure(
-              session,
-              requestId,
-              new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE),
-            );
-          } finally {
-            // draft-ietf-moq-transport-21 §6.4.2.2:
-            // 「A FIN sent by the responder after its response and any
-            //  subsequent messages for the request signals that the request is
-            //  complete; if it has not already done so, the requester SHOULD
-            //  then send a FIN on its direction, gracefully closing the stream.」
-            // ピア (publisher) の FIN を受けた requester は自方向も FIN で閉じて
-            // graceful closure を完了する。正常経路 (PUBLISH_DONE → FIN) も
-            // 失敗ケース (PUBLISH_DONE なしの FIN) も、この SHOULD に基づき
-            // 無条件に close() する。
-            // notifySubscriberFailure の error コールバックが throw しても close()
-            // が実行されるよう finally で包む。
-            // GOAWAY 受信済みの subscribe ロール (subscriber が存在する場合) では
-            // GOAWAY ハンドラが既に writer.close() 済みのため、再度 close() する
-            // と reject するが黙殺する。
-            await closeRequestStreamWriter(session, requestId);
-          }
+        // requester 側 (publish / fetch ロール) では responder の FIN は
+        // 正常完了シグナルであり通知しない。FETCH に PUBLISH_DONE は無く
+        // (§9.11)、responder の FIN は要求範囲の送信完了を意味する。
+        if (role === "subscribe" || role === "fetch") {
+          await bidiHandleRequesterFinForResponderClose(session, requestId, role);
         }
         break;
       }
@@ -2315,229 +2390,10 @@ export async function bidiReadRequestStreamMessages(
       // 常に 0 か 1 にしかならず、同じ read に含まれる N+1 通目を検出できない。
       const requestUpdateCountBeforeRead = session.receivedRequestUpdateCounts.get(requestId) ?? 0;
       try {
-        for (const msg of messages) {
-          session.emitDebug("recv", msg.type, msg.payload);
-
-          switch (msg.type) {
-            case MessageType.PUBLISH_DONE: {
-              bidiHandlePublishDone(session, msg.payload, requestId);
-              break;
-            }
-            case MessageType.PUBLISH_STATE_NOTIFY: {
-              // draft-ietf-moq-transport-21 §9.10: 受信と違反処理はハンドラ内。
-              if (!bidiHandlePublishStateNotify(session, msg.payload, requestId, role)) {
-                return;
-              }
-              break;
-            }
-            case MessageType.REQUEST_OK: {
-              // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
-              // 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、Track Properties は
-              // 空が必須 (違反処理はヘルパー内で行う)。
-              if (!handleRequestUpdateOkMessage(session, msg.payload, requestId)) {
-                return;
-              }
-              break;
-            }
-            case MessageType.REQUEST_ERROR: {
-              const decoded = decodeRequestErrorPayload(msg.payload);
-              const error = new RequestError(
-                decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-                normalizeRequestErrorCode(Number(decoded.errorCode)),
-              );
-              // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
-              // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
-              // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
-              deleteFillTargetsForPendingUpdates(session, requestId);
-              // §9.5.1: coalescing は失敗分をまとめるだけであり、in-flight だった
-              // 成功分の更新への REQUEST_OK は別途届く。消した件数分を許容枠に積む。
-              allowUnmatchedRequestOks(
-                session,
-                requestId,
-                rejectPendingRequestUpdates(session, requestId, error),
-              );
-              break;
-            }
-            case MessageType.REQUEST_UPDATE: {
-              // draft-ietf-moq-transport-21 §9.5:
-              // 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
-              //  subscription established with PUBLISH.」
-              // クライアントが Publisher の場合、サーバー (Subscriber 役) が
-              // PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
-              //
-              // draft-ietf-moq-transport-21 §9.5:
-              // 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
-              //  REQUEST_OK or REQUEST_ERROR message indicating if the update was
-              //  successful, unless it is coalescing failed updates.」
-              // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
-              // ループ catch (toSessionCloseError) と同じだが、ここでは
-              // 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
-              // 後続のパラメータ検証を実行しないよう早期 return する
-              // (bidiHandlePublishRequestUpdate と同パターン)。
-              let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
-              try {
-                decoded = decodeRequestUpdatePayload(msg.payload);
-              } catch (err) {
-                session.closeWithError(
-                  new SessionError(
-                    `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
-                    SessionErrorCode.PROTOCOL_VIOLATION,
-                  ),
-                );
-                return;
-              }
-
-              // 未応答数の加算と MAX_REQUEST_UPDATES の上限判定
-              // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
-              // 受信した時点 (await を挟む前) で数え、加算後の件数が自 endpoint が
-              // SETUP で広告した上限を超えていれば TOO_MANY_REQUEST_UPDATES で
-              // セッションを閉じる。上限 0 は無制限のため判定しない (詳細は
-              // recordIncomingRequestUpdate を参照)。
-              // closeWithError は throw しないため、他のセッション終了検出と同じく
-              // return して読み取りループを抜け、同一チャンクの残りメッセージの処理を
-              // 打ち切る。
-              const requestUpdateLimitError = recordIncomingRequestUpdate(session, requestId);
-              if (requestUpdateLimitError !== null) {
-                session.closeWithError(requestUpdateLimitError);
-                return;
-              }
-
-              // デコード結果の Request ID のパリティ・重複検証
-              // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
-              // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
-              // §6.4.2.1 MUST を GOAWAY 拒否 (§9.4 MAY) と想定外更新 (§9.5) の
-              // PROTOCOL_VIOLATION より先に行う。
-              const requestIdError = session.validateIncomingRequestId(decoded.requestId);
-              if (requestIdError !== null) {
-                session.closeWithError(requestIdError);
-                return;
-              }
-
-              // draft-ietf-moq-transport-21 §9.5 / §9.20.3 / §8.9:
-              // subscribe ロールの想定外 REQUEST_UPDATE、AUTHORIZATION TOKEN、
-              // GOAWAY の判定を順に行う (詳細は bidiPreflightRequestUpdate を参照)。
-              const preflight = await bidiPreflightRequestUpdate(session, requestId, decoded, role);
-              if (preflight === "return") {
-                return;
-              }
-              if (preflight === "break") {
-                break;
-              }
-
-              // パラメータスコープ検証
-              // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
-              const scopeError = validateParameterScope(
-                decoded.parameters,
-                REQUEST_UPDATE_ALLOWED_PARAMS,
-                "REQUEST_UPDATE",
-              );
-              if (scopeError !== null) {
-                session.closeWithError(scopeError);
-                return;
-              }
-
-              // Range Filter の値域・構造・組み合わせ重複検証
-              // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15:
-              // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
-              // 検証は状態変更 (setForwardState) より前に配置し、違反で
-              // REQUEST_ERROR を応答したにも関わらず forward state が反映される
-              // 不整合を防ぐ。
-              // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
-              // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
-              // validateLocationAndFillParameters のデコード結果を上限合算と
-              // fill 範囲評価で再利用する (catch で break / throw するため、
-              // 検証通過時は必ず値が入る)。
-              let decodedFill: DecodedLocationAndFill = {
-                locationFilter: undefined,
-                fillInnerParameters: undefined,
-                fillInnerLocationFilter: undefined,
-              };
-              try {
-                validateRangeFilterCombination(decoded.parameters);
-                decodedFill = validateLocationAndFillParameters(decoded.parameters);
-                // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
-                // 自 endpoint が広告した上限 (未広告時 0) を超える Range Filter は
-                // REQUEST_ERROR (INVALID_FILTER) で拒否する。
-                validateIncomingRangeFilterLimits(
-                  decoded.parameters,
-                  decodedFill.fillInnerParameters,
-                  session.localMaxFilterRanges ?? 0,
-                  "REQUEST_UPDATE",
-                );
-              } catch (error) {
-                if (error instanceof InvalidFilterError) {
-                  await bidiSendRequestError(
-                    session,
-                    requestId,
-                    RequestErrorCode.INVALID_FILTER,
-                    error.message,
-                  );
-                  // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
-                  await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-                  // セッションを閉じた場合は同一チャンクの残りメッセージを処理しない
-                  if (session.sessionState !== "connected") {
-                    return;
-                  }
-                  break;
-                }
-                throw error;
-              }
-
-              // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
-              // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
-              // toSessionCloseError で PROTOCOL_VIOLATION にして
-              // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
-              // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
-              // 除いて REQUEST_OK を応答する。
-
-              // 受理した更新への応答 (REQUEST_OK、または publisher 不在・
-              // fill fetch 非対応の REQUEST_ERROR) は respondToPublishRequestUpdate
-              // が担う (§9.5 / §9.5.1 / §9.20.18)。
-              // 応答後の PUBLISH_DONE 送信失敗 (PROTOCOL_VIOLATION) と GOAWAY drain の
-              // NO_ERROR クローズでセッションを閉じ得るため、閉じた場合は残りを処理しない。
-              await respondToPublishRequestUpdate(session, requestId, decoded, decodedFill);
-              if (session.sessionState !== "connected") {
-                return;
-              }
-              break;
-            }
-            case MessageType.GOAWAY: {
-              // draft-ietf-moq-transport-21 §9.2:
-              // リクエストストリーム上の GOAWAY は当該リクエストの
-              // マイグレーションのみを目的とし、セッション全体は閉じない。
-              // "A GOAWAY MAY also be sent on a request stream to initiate
-              //  migration of that individual request."
-              // 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
-              const goawayError = validateNoDuplicateGoawayOnRequestStream(
-                requestId,
-                session.goawayReceivedOnRequestStreams,
-              );
-              if (goawayError !== null) {
-                session.closeWithError(goawayError);
-                return;
-              }
-              const decoded = decodeGoawayPayload(msg.payload);
-              // draft-ietf-moq-transport-21 §9.2:
-              // 「Upon receiving a GOAWAY on a request stream, the endpoint SHOULD
-              //  re-issue that specific request ... and close the old request stream
-              //  using the appropriate mechanism (e.g. FIN, stream reset, or
-              //  PUBLISH_DONE).」
-              // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
-              // (§9.2 MUST)。
-              // subscription state は変更しない (§9.2「The GOAWAY message does
-              // not impact subscription state.」)。
-              await closeOldRequestStreamOnGoaway(session, requestId, decoded.newSessionUri);
-              break;
-            }
-            default:
-              session.closeWithError(
-                new SessionError(
-                  `unknown request stream message type: 0x${msg.type.toString(16)}`,
-                  SessionErrorCode.PROTOCOL_VIOLATION,
-                ),
-              );
-              return;
-          }
+        if (
+          (await bidiProcessRequestStreamMessages(session, requestId, role, messages)) === "return"
+        ) {
+          return;
         }
       } finally {
         restoreIncomingRequestUpdateCount(session, requestId, requestUpdateCountBeforeRead);
@@ -2564,7 +2420,8 @@ export async function bidiReadRequestStreamMessages(
     // state until it sends PUBLISH_DONE」にも抵触する)。
     // ピアの graceful FIN を受けた publisher ロールのみ削除を done() 完了後まで
     // 遅延する。それ以外の exit 経路 (GOAWAY / PROTOCOL_VIOLATION /
-    // RESET_STREAM / セッション終了等) と subscribe ロールは従来どおり削除する。
+    // RESET_STREAM / セッション終了等) と subscribe / fetch ロールは従来どおり
+    // 削除する (fetch ロールは削除遅延の対象外)。
     if (!(role === "publish" && receivedFin)) {
       session.requestStreams.delete(requestId);
     }
@@ -2576,6 +2433,349 @@ export async function bidiReadRequestStreamMessages(
     // が終了した時点で、このストリームの REQUEST_UPDATE は二度と処理されない)。
     session.receivedRequestUpdateCounts.delete(requestId);
   }
+}
+
+/**
+ * ピア (responder) の FIN に対する requester 側の後始末
+ *
+ * draft-ietf-moq-transport-21 §6.4.2.2:
+ * 「A FIN sent by the responder after its response and any subsequent messages
+ *  for the request signals that the request is complete; if it has not already
+ *  done so, the requester SHOULD then send a FIN on its direction, gracefully
+ *  closing the stream.」
+ * ピアの FIN を受けた requester は自方向も FIN で閉じて graceful closure を
+ * 完了する。
+ * - subscribe ロール: PUBLISH_DONE の有無に関わらず無条件に close() する。
+ *   PUBLISH_DONE なしの FIN は失敗扱いであり、保留中の REQUEST_UPDATE を
+ *   reject してから subscriber へ通知する (§6.4.2.2 / §9.5.1)。通知が throw
+ *   しても close() が実行されるよう finally で包む。
+ * - fetch ロール: 購読向けの失敗通知 (notifySubscriberFailure) は呼ばない。
+ *   FETCH に PUBLISH_DONE は無く (§9.11)、responder の FIN は正常完了である。
+ *   自方向を FIN で閉じるだけにする。
+ *
+ * GOAWAY 受信済みの場合は GOAWAY ハンドラが既に writer.close() 済みであり、
+ * 再度 close() すると reject するが closeRequestStreamWriter が黙殺する。
+ */
+async function bidiHandleRequesterFinForResponderClose(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  role: Extract<BidiRequestStreamRole, "subscribe" | "fetch">,
+): Promise<void> {
+  if (role === "fetch") {
+    await closeRequestStreamWriter(session, requestId);
+    return;
+  }
+  try {
+    // draft-ietf-moq-transport-21 §9.5.1 / §6.4.2.2:
+    // 応答を待たずにストリームが閉じた場合は保留中の更新の失敗であり、
+    // アプリの update() の Promise を reject する (namespace ループの
+    // handleNamespaceRequestUpdateStreamClosed と同じ)。未解決のまま
+    // 残すと、アプリは FIN 後に update() の結果を待ち続ける。
+    // 保留中の更新が無い場合は no-op。GOAWAY 受信済みの場合は GOAWAY
+    // 掃除でエントリ削除済みのため no-op になる (エラー文言は errors の
+    // REQUEST_UPDATE_STREAM_CLOSED_MESSAGE と同じ)。reject の
+    // 形式はトリガーごとに異なる (GOAWAY 掃除は RequestError
+    // (GOING_AWAY)、本処理は Error) が、失敗の種類が異なるため許容する。
+    // notifySubscriberFailure より先に実行することで、アプリの error
+    // コールバックが throw しても reject が実行される (順序の根拠)。
+    rejectPendingRequestUpdates(
+      session,
+      requestId,
+      new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
+    );
+    notifySubscriberFailure(session, requestId, new Error(FIN_WITHOUT_PUBLISH_DONE_MESSAGE));
+  } finally {
+    await closeRequestStreamWriter(session, requestId);
+  }
+}
+
+/**
+ * 1 回の read で得たメッセージ列 (または初期メッセージ) を処理する
+ *
+ * role に依存する分岐は bidiPreflightRequestUpdate (REQUEST_UPDATE) と
+ * PUBLISH_STATE_NOTIFY の 2 つである。fetch ロールには subscriber も
+ * 保留中の REQUEST_UPDATE も存在しないため、fetch ロールで PUBLISH_DONE /
+ * REQUEST_OK / REQUEST_ERROR を受信した場合は、デコードと既存の検証だけが
+ * 働き、購読状態の変更も失敗通知も起きない (§9.11 の FETCH にこれらの
+ * メッセージは無いが、受信した場合の扱いを publish / subscribe と揃える)。
+ * セッションを閉じるかは各ハンドラの既存判定に従う
+ * (例: 保留中の更新が無い確立後の REQUEST_OK は bidiHandleRequestUpdateOk が
+ * PROTOCOL_VIOLATION で閉じる)。
+ *
+ * @returns return (読み取りループを終える) / continue (読み取りを継続する)
+ */
+async function bidiProcessRequestStreamMessages(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  role: BidiRequestStreamRole,
+  messages: ControlMessage[],
+): Promise<"return" | "continue"> {
+  for (const msg of messages) {
+    session.emitDebug("recv", msg.type, msg.payload);
+
+    switch (msg.type) {
+      case MessageType.PUBLISH_DONE: {
+        // fetch ロールでは subscriber 不在のため状態は変わらない
+        // (FETCH に PUBLISH_DONE は定義されていない)。
+        bidiHandlePublishDone(session, msg.payload, requestId);
+        break;
+      }
+      case MessageType.PUBLISH_STATE_NOTIFY: {
+        // draft-ietf-moq-transport-21 §9.10: 受信と違反処理はハンドラ内。
+        // subscribe ロール以外は PROTOCOL_VIOLATION で閉じる。
+        if (!bidiHandlePublishStateNotify(session, msg.payload, requestId, role)) {
+          return "return";
+        }
+        break;
+      }
+      case MessageType.REQUEST_OK: {
+        // draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
+        // 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、Track Properties は
+        // 空が必須 (違反処理はヘルパー内で行う)。
+        if (!handleRequestUpdateOkMessage(session, msg.payload, requestId)) {
+          return "return";
+        }
+        break;
+      }
+      case MessageType.REQUEST_ERROR: {
+        const decoded = decodeRequestErrorPayload(msg.payload);
+        const error = new RequestError(
+          decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
+          normalizeRequestErrorCode(Number(decoded.errorCode)),
+        );
+        // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
+        // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
+        // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+        deleteFillTargetsForPendingUpdates(session, requestId);
+        // §9.5.1: coalescing は失敗分をまとめるだけであり、in-flight だった
+        // 成功分の更新への REQUEST_OK は別途届く。消した件数分を許容枠に積む。
+        allowUnmatchedRequestOks(
+          session,
+          requestId,
+          rejectPendingRequestUpdates(session, requestId, error),
+        );
+        break;
+      }
+      case MessageType.REQUEST_UPDATE: {
+        const result = await bidiHandleRequestUpdateMessage(session, requestId, role, msg.payload);
+        if (result === "return") {
+          return "return";
+        }
+        break;
+      }
+      case MessageType.GOAWAY: {
+        const result = await bidiHandleRequestStreamGoaway(session, requestId, msg.payload);
+        if (result === "return") {
+          return "return";
+        }
+        break;
+      }
+      default:
+        session.closeWithError(
+          new SessionError(
+            `unknown request stream message type: 0x${msg.type.toString(16)}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return "return";
+    }
+  }
+  return "continue";
+}
+
+/**
+ * リクエストストリーム上で受信した REQUEST_UPDATE を処理する
+ *
+ * draft-ietf-moq-transport-21 §9.5:
+ * 「A subscriber can also send REQUEST_UPDATE to modify parameters of a
+ *  subscription established with PUBLISH.」
+ * クライアントが Publisher の場合、サーバー (Subscriber 役) が
+ * PUBLISH bidi ストリーム上で REQUEST_UPDATE を送信してくる。
+ * 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
+ *  REQUEST_OK or REQUEST_ERROR message indicating if the update was
+ *  successful, unless it is coalescing failed updates.」
+ * デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
+ * ループ catch (toSessionCloseError) と同じだが、ここでは
+ * 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
+ * 後続のパラメータ検証を実行しないよう早期 return する
+ * (bidiHandlePublishRequestUpdate と同パターン)。
+ *
+ * @returns return (読み取りループを終える) / continue (読み取りを継続する)
+ */
+async function bidiHandleRequestUpdateMessage(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  role: BidiRequestStreamRole,
+  payload: Uint8Array,
+): Promise<"return" | "continue"> {
+  let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
+  try {
+    decoded = decodeRequestUpdatePayload(payload);
+  } catch (err) {
+    session.closeWithError(
+      new SessionError(
+        `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
+        SessionErrorCode.PROTOCOL_VIOLATION,
+      ),
+    );
+    return "return";
+  }
+
+  // 未応答数の加算と MAX_REQUEST_UPDATES の上限判定
+  // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+  // 受信した時点 (await を挟む前) で数え、加算後の件数が自 endpoint が
+  // SETUP で広告した上限を超えていれば TOO_MANY_REQUEST_UPDATES で
+  // セッションを閉じる。上限 0 は無制限のため判定しない (詳細は
+  // recordIncomingRequestUpdate を参照)。
+  // closeWithError は throw しないため、他のセッション終了検出と同じく
+  // return して読み取りループを抜け、同一チャンクの残りメッセージの処理を
+  // 打ち切る。
+  const requestUpdateLimitError = recordIncomingRequestUpdate(session, requestId);
+  if (requestUpdateLimitError !== null) {
+    session.closeWithError(requestUpdateLimitError);
+    return "return";
+  }
+
+  // デコード結果の Request ID のパリティ・重複検証
+  // draft-ietf-moq-transport-21 §6.4.2.1 (Request ID):
+  // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
+  // §6.4.2.1 MUST を GOAWAY 拒否 (§9.4 MAY) と想定外更新 (§9.5) の
+  // PROTOCOL_VIOLATION より先に行う。
+  const requestIdError = session.validateIncomingRequestId(decoded.requestId);
+  if (requestIdError !== null) {
+    session.closeWithError(requestIdError);
+    return "return";
+  }
+
+  // draft-ietf-moq-transport-21 §9.5 / §9.20.3 / §8.9:
+  // fetch / subscribe ロールの想定外 REQUEST_UPDATE、AUTHORIZATION TOKEN、
+  // GOAWAY の判定を順に行う (詳細は bidiPreflightRequestUpdate を参照)。
+  const preflight = await bidiPreflightRequestUpdate(session, requestId, decoded, role);
+  if (preflight === "return") {
+    return "return";
+  }
+  if (preflight === "break") {
+    return "continue";
+  }
+
+  // パラメータスコープ検証
+  // draft-ietf-moq-transport-21 §9.20.1 (Parameter Scope)
+  const scopeError = validateParameterScope(
+    decoded.parameters,
+    REQUEST_UPDATE_ALLOWED_PARAMS,
+    "REQUEST_UPDATE",
+  );
+  if (scopeError !== null) {
+    session.closeWithError(scopeError);
+    return "return";
+  }
+
+  // Range Filter の値域・構造・組み合わせ重複検証
+  // draft-ietf-moq-transport-21 §3.3.2 / §9.20.13-15:
+  // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
+  // 検証は状態変更 (setForwardState) より前に配置し、違反で
+  // REQUEST_ERROR を応答したにも関わらず forward state が反映される
+  // 不整合を防ぐ。
+  // LOCATION_FILTER / FILL_PARAMETERS 内側の値違反
+  // (InvalidFilterError) も同一経路で REQUEST_ERROR にする。
+  // validateLocationAndFillParameters のデコード結果を上限合算と
+  // fill 範囲評価で再利用する (catch で break / throw するため、
+  // 検証通過時は必ず値が入る)。
+  let decodedFill: DecodedLocationAndFill = {
+    locationFilter: undefined,
+    fillInnerParameters: undefined,
+    fillInnerLocationFilter: undefined,
+  };
+  try {
+    validateRangeFilterCombination(decoded.parameters);
+    decodedFill = validateLocationAndFillParameters(decoded.parameters);
+    // draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):
+    // 自 endpoint が広告した上限 (未広告時 0) を超える Range Filter は
+    // REQUEST_ERROR (INVALID_FILTER) で拒否する。
+    validateIncomingRangeFilterLimits(
+      decoded.parameters,
+      decodedFill.fillInnerParameters,
+      session.localMaxFilterRanges ?? 0,
+      "REQUEST_UPDATE",
+    );
+  } catch (error) {
+    if (error instanceof InvalidFilterError) {
+      await bidiSendRequestError(
+        session,
+        requestId,
+        RequestErrorCode.INVALID_FILTER,
+        error.message,
+      );
+      // draft-ietf-moq-transport-21 §9.5.1: 拒否した更新の購読を終了する。
+      await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+      // セッションを閉じた場合は同一チャンクの残りメッセージを処理しない
+      if (session.sessionState !== "connected") {
+        return "return";
+      }
+      return "continue";
+    }
+    throw error;
+  }
+
+  // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
+  // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
+  // toSessionCloseError で PROTOCOL_VIOLATION にして
+  // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
+  // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
+  // 除いて REQUEST_OK を応答する。
+
+  // 受理した更新への応答 (REQUEST_OK、または publisher 不在・
+  // fill fetch 非対応の REQUEST_ERROR) は respondToPublishRequestUpdate
+  // が担う (§9.5 / §9.5.1 / §9.20.18)。
+  // 応答後の PUBLISH_DONE 送信失敗 (PROTOCOL_VIOLATION) と GOAWAY drain の
+  // NO_ERROR クローズでセッションを閉じ得るため、閉じた場合は残りを処理しない。
+  await respondToPublishRequestUpdate(session, requestId, decoded, decodedFill);
+  if (session.sessionState !== "connected") {
+    return "return";
+  }
+  return "continue";
+}
+
+/**
+ * リクエストストリーム上で受信した GOAWAY を処理する
+ *
+ * draft-ietf-moq-transport-21 §9.2:
+ * リクエストストリーム上の GOAWAY は当該リクエストのマイグレーションのみを
+ * 目的とし、セッション全体は閉じない。
+ * "A GOAWAY MAY also be sent on a request stream to initiate migration of that
+ *  individual request."
+ * 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
+ * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
+ *  more than one GOAWAY on the control stream or on a single request stream."
+ * GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する (§9.2 MUST)。
+ * subscription state は変更しない (§9.2「The GOAWAY message does not impact
+ * subscription state.」)。
+ * 旧ストリームの送信方向を閉じるかの判断は role ごとに closeOldRequestStreamOnGoaway
+ * が担う。
+ *
+ * @returns return (読み取りループを終える) / continue (読み取りを継続する)
+ */
+async function bidiHandleRequestStreamGoaway(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  payload: Uint8Array,
+): Promise<"return" | "continue"> {
+  const goawayError = validateNoDuplicateGoawayOnRequestStream(
+    requestId,
+    session.goawayReceivedOnRequestStreams,
+  );
+  if (goawayError !== null) {
+    session.closeWithError(goawayError);
+    return "return";
+  }
+  const decoded = decodeGoawayPayload(payload);
+  // draft-ietf-moq-transport-21 §9.2:
+  // 「Upon receiving a GOAWAY on a request stream, the endpoint SHOULD
+  //  re-issue that specific request ... and close the old request stream
+  //  using the appropriate mechanism (e.g. FIN, stream reset, or
+  //  PUBLISH_DONE).」
+  await closeOldRequestStreamOnGoaway(session, requestId, decoded.newSessionUri);
+  return "continue";
 }
 
 /**
@@ -3849,9 +4049,12 @@ export function bidiHandlePublishDone(
  * 応答は送信しない。presence のパラメータのみ変更として subscriber 状態に
  * 反映する (省略時は不変)。
  *
- * subscribe ロール (自 subscriber の購読) のみ受理する。publish ロール
- * (対向 subscriber 発) では §9.10 の MUST に従い PROTOCOL_VIOLATION で
- * セッションを閉じる。
+ * subscribe ロール (自 subscriber の購読) のみ受理する。他のロールでは
+ * §9.10 の MUST「An endpoint that receives a PUBLISH_STATE_NOTIFY for any other
+ * request type, or from the subscriber, MUST close the session with a
+ * PROTOCOL_VIOLATION.」に従い PROTOCOL_VIOLATION でセッションを閉じる。
+ * publish ロール (対向 subscriber 発) に加え、fetch ロール (FETCH は
+ * subscription ではない) もこの MUST の対象である。
  *
  * 許可外パラメータは §9.20.1 の MUST に従い PROTOCOL_VIOLATION で
  * セッションを閉じる。decode の失敗は呼び出し元の受信ループの catch で
@@ -3861,15 +4064,17 @@ export function bidiHandlePublishStateNotify(
   session: BidiSessionInternal,
   payload: Uint8Array,
   requestId: bigint,
-  role: "publish" | "subscribe",
+  role: BidiRequestStreamRole,
 ): boolean {
   // draft-ietf-moq-transport-21 §9.10:
   // "PUBLISH_STATE_NOTIFY applies only to subscriptions, and is sent only
   //  by the publisher."
+  // エラー文言はロールを載せる。fetch ロールも閉じる対象であり、文言が
+  // publish 固定だと request type が FETCH であることを読み取れない。
   if (role !== "subscribe") {
     session.closeWithError(
       new SessionError(
-        "unexpected PUBLISH_STATE_NOTIFY on publish stream",
+        `unexpected PUBLISH_STATE_NOTIFY on ${role} stream`,
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
     );
