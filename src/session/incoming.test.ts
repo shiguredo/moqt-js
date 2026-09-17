@@ -9,13 +9,18 @@
 import { test, assert } from "vite-plus/test";
 import { MessageType, encodeTrackNamespace, createTrackNamespace } from "../message";
 import { decodeRequestErrorPayload } from "../message/session";
-import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
-import { concatUint8Arrays } from "../testSupport/helpers";
+import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import {
+  concatUint8Arrays,
+  priorGroupIdGapProperties,
+  priorObjectIdGapProperties,
+} from "../testSupport/helpers";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
 import {
   incomingClassifyFirstBidiMessage,
   incomingHandleDatagram,
   incomingHandleFirstBidiMessage,
+  incomingProcessFetchObjects,
   incomingProcessSubgroupObjects,
   incomingSendRequestErrorAndClose,
   incomingValidateRequestId,
@@ -25,9 +30,19 @@ import type { SessionInternal } from "./types";
 import { SubscriberImpl } from "../subscriber";
 import { FetcherImpl } from "../fetcher";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
-import { encodeObjectFields, SubgroupHeaderType, type SubgroupHeader } from "../dataStream";
+import {
+  createFirstFetchObjectFlags,
+  encodeFetchObjectFields,
+  encodeObjectFields,
+  SubgroupHeaderType,
+  type FetchObjectFields,
+  type MoqtObject,
+  type SubgroupHeader,
+} from "../dataStream";
 import { encodeProperties } from "../properties";
-import { concatChunks } from "./stream";
+import { fullTrackNameKey } from "../fullTrackName";
+import { GroupOrder } from "../message/types";
+import { concatChunks, type FetchObjectSink } from "./stream";
 
 // ============================================================================
 // incomingClassifyFirstBidiMessage のテスト
@@ -956,6 +971,8 @@ function createDatagramDeliveryTestContext(): {
     pendingFetch: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
+    // draft-ietf-moq-transport-21 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    priorGapTrackingByTrack: new Map(),
     closeWithError: (error: SessionError) => {
       closedWithError = error;
     },
@@ -979,6 +996,83 @@ function objectDatagramWire(): Uint8Array {
     payload: new Uint8Array([0xaa]),
   });
 }
+
+/** 追跡検証用の datagram ワイヤを組み立てる (Properties 省略は gap を持たない Object) */
+function trackingDatagramWire(
+  groupId: bigint,
+  objectId: bigint,
+  properties?: Uint8Array,
+): Uint8Array {
+  return encodeObjectDatagram({
+    type: properties === undefined ? DatagramType.PAYLOAD_OBJ : DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 7n,
+    groupId,
+    objectId,
+    publisherPriority: 128,
+    ...(properties === undefined ? {} : { properties }),
+    payload: new Uint8Array([0xaa]),
+  });
+}
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9 / §12.1:
+ * datagram 経路でも Track 横断の Prior ID Gap 条件を検出する。検出した Object は
+ * 配送せず、同一 Track の購読を cancel し、セッションは閉じない。
+ */
+test("incomingHandleDatagram: 通知済み Prior Group ID Gap 内の Group ID で購読を cancel しセッションを閉じない", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // 1 通目: Group 10 の Object 0 が Group 8 と 9 の不在を通知する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 0n, priorGroupIdGapProperties(2n)));
+  assert.equal(delivered, 1);
+
+  // 2 通目: 通知済みの不在 Group 9 の Object を受信した
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(9n, 0n));
+
+  // malformed の Object は配送されず、error が通知され、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  // 購読は cancel され alias から外れる
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.session.subscribersByAlias.get(7n) ?? []).length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * datagram は Track Alias から購読を特定できた場合だけ追跡検証の対象になる。
+ * 購読の無い alias の datagram は検証も追跡状態の作成もしない。
+ */
+test("incomingHandleDatagram: 購読の無い alias の datagram は追跡検証しない", () => {
+  const ctx = createDatagramDeliveryTestContext();
+
+  // alias 7 に購読が無い状態で、不在を通知する datagram と通知済み範囲の
+  // Group ID を持つ datagram を続けて受信する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 0n, priorGroupIdGapProperties(2n)));
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(9n, 0n));
+
+  // 検証対象外であり、セッションも閉じず追跡状態も作られない
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(ctx.session.priorGapTrackingByTrack.size, 0);
+});
 
 test("incomingHandleDatagram: datagram コールバックの例外は error 通知し残りの配送を継続する", () => {
   // 1 件目の購読で例外が起きても 2 件目に配送し、セッションは閉じない
@@ -1447,6 +1541,8 @@ function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): 
     statsBytesReceivedViaSubscribe: 0,
     // draft-ietf-moq-transport-21 §12.1 条件 4: Group 単位の最終 Object 追跡
     receivedEndOfGroupFinalObjectIds: new Map<string, bigint>(),
+    // draft-ietf-moq-transport-21 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
+    priorGapTrackingByTrack: new Map(),
   } as unknown as SessionInternal;
   return { session, debugRecords };
 }
@@ -1577,4 +1673,174 @@ test("incomingProcessSubgroupObjects: debug 自体の throw でも継続する",
 
   assert.equal(delivered.length, 1);
   assert.equal(debugRecords.length, 0);
+});
+
+// ============================================================================
+// Track 横断の Prior ID Gap 追跡
+// draft-ietf-moq-transport-21 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap)
+// ============================================================================
+
+/** 追跡検証用の subgroup 単一オブジェクト 1 件分のワイヤを組み立てる */
+function subgroupTrackingWire(objectIdDelta: bigint, properties: Uint8Array): Uint8Array {
+  const fields = encodeObjectFields(
+    objectIdDelta,
+    1n,
+    SubgroupHeaderType.FIRST_OBJ_EXT,
+    undefined,
+    properties,
+  );
+  return concatChunks([fields, new Uint8Array([0xaa])]);
+}
+
+/** 追跡検証用の subgroup ヘッダを組み立てる */
+function subgroupTrackingHeader(groupId: bigint, propertiesPresent: boolean): SubgroupHeader {
+  return {
+    type: propertiesPresent ? SubgroupHeaderType.FIRST_OBJ_EXT : SubgroupHeaderType.FIRST_OBJ,
+    trackAlias: 7n,
+    groupId,
+    // FIRST_OBJ / FIRST_OBJ_EXT は先頭 Object の Object ID を明示する型である
+    firstObject: true,
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * Subgroup は Full Track Name を直接持たないため、Track Alias から引いた購読の
+ * 比較キーで追跡状態を更新する。Subgroup ストリームをまたいだ 2 件目で、1 件目が
+ * 通知した不在 Group の受信を検出する。
+ */
+test("incomingProcessSubgroupObjects: 購読の比較キーで追跡状態を更新し Subgroup ストリームをまたいで検出する", () => {
+  const { session } = createSubgroupDeliveryTestContext();
+  const delivered: number[] = [];
+  const subscriber = new SubscriberImpl(["test"], "track", 0n, 7n, () => {
+    delivered.push(1);
+  });
+
+  // 1 本目: Group 10 の Object 0 が Group 8 と 9 の不在を通知する
+  incomingProcessSubgroupObjects(
+    session,
+    subgroupTrackingWire(0n, priorGroupIdGapProperties(2n)),
+    [subscriber],
+    subgroupTrackingHeader(10n, true),
+    -1n,
+  );
+  assert.equal(delivered.length, 1);
+  // 追跡状態は購読が持つ比較キー (Full Track Name の比較キー) で引かれる
+  assert.isTrue(session.priorGapTrackingByTrack.has(subscriber.getFullTrackNameKey()));
+
+  // 2 本目 (別 Subgroup ストリーム): 通知済みの不在 Group 9 の Object を受信した
+  assert.throws(
+    () =>
+      incomingProcessSubgroupObjects(
+        session,
+        subgroupObjectWire(0n, 0xaa),
+        [subscriber],
+        subgroupTrackingHeader(9n, false),
+        -1n,
+      ),
+    MalformedTrackError,
+  );
+  // malformed の Object は配送しない
+  assert.equal(delivered.length, 1);
+});
+
+/**
+ * Fetch 経路の追跡検証用テストコンテキストを構築する。
+ *
+ * session は統計と追跡マップだけを持つオブジェクトリテラルであり、配送先は
+ * FetchObjectSink 契約を実装した実オブジェクトを使う。
+ */
+function createFetchTrackingTestContext(): {
+  session: SessionInternal;
+  delivered: MoqtObject[];
+  sink: FetchObjectSink;
+} {
+  const session = {
+    statsObjectsReceivedViaFetch: 0,
+    statsObjectsReceivedViaFill: 0,
+    statsBytesReceivedViaFetch: 0,
+    statsBytesReceivedViaFill: 0,
+    priorGapTrackingByTrack: new Map(),
+  } as unknown as SessionInternal;
+  const delivered: MoqtObject[] = [];
+  const sink: FetchObjectSink = {
+    handleObject: (object) => {
+      delivered.push(object);
+    },
+  };
+  return { session, delivered, sink };
+}
+
+/** Fetch の先頭 Object 1 件分のワイヤを組み立てる (Properties 省略は gap 無し) */
+function fetchTrackingWire(
+  groupId: bigint,
+  objectId: bigint,
+  payload: number,
+  properties?: Uint8Array,
+): Uint8Array {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(properties !== undefined),
+    groupId,
+    subgroupId: 1n,
+    objectId,
+    publisherPriority: 100,
+    ...(properties === undefined ? {} : { properties }),
+    payloadLength: 1n,
+  };
+  return concatChunks([encodeFetchObjectFields(fields), new Uint8Array([payload])]);
+}
+
+/**
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * FETCH 経路は呼び出し側が渡す Track の比較キーで追跡状態を更新する。
+ * 同じ Track の 2 件目で、1 件目が通知した不在 Object の受信を検出し、
+ * 別 Track のキーでは追跡状態を共有しない。
+ */
+test("incomingProcessFetchObjects: trackKey の追跡状態で Prior Object ID Gap を検出する", () => {
+  const { session, delivered, sink } = createFetchTrackingTestContext();
+  const trackKey = fullTrackNameKey(["test"], "track");
+
+  // 1 件目: Group 3 の Object 8 を配送する
+  incomingProcessFetchObjects(
+    session,
+    fetchTrackingWire(3n, 8n, 0xaa),
+    sink,
+    null,
+    true,
+    GroupOrder.ASCENDING,
+    false,
+    trackKey,
+  );
+  assert.equal(delivered.length, 1);
+
+  // 2 件目: 同じ Group の Object 10 が Object 8 と 9 の不在を通知し、
+  // 受信済みの Object 8 を覆うため MalformedTrackError になる
+  assert.throws(
+    () =>
+      incomingProcessFetchObjects(
+        session,
+        fetchTrackingWire(3n, 10n, 0xbb, priorObjectIdGapProperties(2n)),
+        sink,
+        null,
+        true,
+        GroupOrder.ASCENDING,
+        false,
+        trackKey,
+      ),
+    MalformedTrackError,
+  );
+  assert.equal(delivered.length, 1);
+
+  // 別 Track のキーでは追跡状態を共有しないため、同じ Object も配送される
+  incomingProcessFetchObjects(
+    session,
+    fetchTrackingWire(3n, 10n, 0xcc, priorObjectIdGapProperties(2n)),
+    sink,
+    null,
+    true,
+    GroupOrder.ASCENDING,
+    false,
+    fullTrackNameKey(["test"], "other"),
+  );
+  assert.equal(delivered.length, 2);
 });

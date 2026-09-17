@@ -89,6 +89,8 @@ import {
 } from "./session/params";
 import * as bidi from "./session/bidi";
 import { concatChunks, cancelStreamQuiet } from "./session/stream";
+import type { PriorGapTracking } from "./session/priorGapTracking";
+import type { FullTrackNameKey } from "./fullTrackName";
 import { trackPropertyFiltersMatch } from "./filter";
 import {
   isPeerStreamError,
@@ -1650,6 +1652,18 @@ export class SessionImpl implements Session {
    */
   private receivedEndOfGroupFinalObjectIds = new Map<string, bigint>();
 
+  /**
+   * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡
+   *
+   * draft-ietf-moq-transport-21 §10.8 / §10.9 の malformed 条件のうち、同一 Track
+   * の複数 Object と過去の受信状態を必要とする条件の判定に使う。キーは
+   * fullTrackNameKey が生成する比較キー。購読単位ではなく Track 単位で保持するのは、
+   * 同一 Track の複数購読 / FETCH をまたいで判定する必要があるためである。
+   * 購読と FETCH が尽きた Track のエントリは bidi 層が削除し、セッション終了時は
+   * close() が全消しする。
+   */
+  private priorGapTrackingByTrack = new Map<FullTrackNameKey, PriorGapTracking>();
+
   // draft-ietf-moq-transport-21 §12.2:
   // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
   // 0 以下はタイムアウトしない。
@@ -3182,6 +3196,9 @@ export class SessionImpl implements Session {
 
     // END_OF_GROUP の Group 単位追跡をクリア
     this.receivedEndOfGroupFinalObjectIds.clear();
+
+    // Prior Group ID Gap / Prior Object ID Gap の Track 単位追跡をクリア
+    this.priorGapTrackingByTrack.clear();
 
     // GOAWAY 受信追跡をクリア
     this.goawayReceivedOnRequestStreams.clear();
@@ -5503,6 +5520,13 @@ export class SessionImpl implements Session {
         }
         fetcher.handleEnd();
         this.fetchers.delete(fetchHeader.requestId);
+        // draft-ietf-moq-transport-21 §10.8 / §10.9:
+        // FETCH の終了に伴い、購読も尽きた Track の Prior ID Gap 追跡を捨てる
+        // (bidiCancelFetch と同じ後始末)。
+        bidi.clearPriorGapTrackingIfUnused(
+          this as unknown as SessionInternal,
+          fetcher.getFullTrackNameKey(),
+        );
         // draft-ietf-moq-transport-21 §6.6.1:
         // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
         this.onRequestDrained();
@@ -5572,6 +5596,8 @@ export class SessionImpl implements Session {
             target.groupOrder,
             // fill fetch ストリーム経由のため fill 側統計に計上する
             true,
+            // fill fetch の追跡対象 Track は関連付けられた購読が持つ比較キーで決まる
+            target.subscriber.getFullTrackNameKey(),
           );
           buffer = result.remainingBuffer;
           context = result.context;
@@ -5804,6 +5830,15 @@ export class SessionImpl implements Session {
     }
     if (fetchHeader !== null) {
       this.fetchers.delete(fetchHeader.requestId);
+      // draft-ietf-moq-transport-21 §10.8 / §10.9:
+      // peer の RESET_STREAM による FETCH の終了でも、購読も尽きた Track の
+      // Prior ID Gap 追跡を捨てる (FIN 経路と同じ後始末)。
+      if (fetcher) {
+        bidi.clearPriorGapTrackingIfUnused(
+          this as unknown as SessionInternal,
+          fetcher.getFullTrackNameKey(),
+        );
+      }
       // draft-ietf-moq-transport-21 §6.6.1:
       // GOAWAY 受信後に Established fetch が無くなった時点で NO_ERROR で閉じる。
       this.onRequestDrained();
@@ -5833,6 +5868,8 @@ export class SessionImpl implements Session {
       fetcher.getGroupOrder(),
       // 通常 FETCH のため fetch 側統計に計上する
       false,
+      // 追跡対象 Track は FETCH を発行した Fetcher が持つ比較キーで決まる
+      fetcher.getFullTrackNameKey(),
     );
   }
 

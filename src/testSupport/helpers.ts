@@ -11,6 +11,7 @@
 import { decodeVarint } from "../varint";
 import type { MoqtObject } from "../dataStream";
 import { ObjectStatus } from "../message/types";
+import { MOQTPropertyId, encodeProperties } from "../properties";
 import {
   AuthorizationTokenAliasType,
   type AuthorizationToken,
@@ -112,4 +113,26 @@ export function useValueToken(tokenValue = "scheme-token"): AuthorizationToken {
     tokenType: 0n,
     tokenValue: new TextEncoder().encode(tokenValue),
   };
+}
+
+/**
+ * Prior Group ID Gap を持つ Object Properties を組み立てる
+ *
+ * draft-ietf-moq-transport-21 §10.8:
+ * Prior Group ID Gap (Property Type 0x3C) は現在の Group より前の、存在しない
+ * Group の数を示す。§10.8 / §10.9 の Track 横断条件のテストで使う。
+ */
+export function priorGroupIdGapProperties(gap: bigint): Uint8Array {
+  return encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: gap }]);
+}
+
+/**
+ * Prior Object ID Gap を持つ Object Properties を組み立てる
+ *
+ * draft-ietf-moq-transport-21 §10.9:
+ * Prior Object ID Gap (Property Type 0x3E) は現在の Object より前の、同じ Group に
+ * 存在しない Object の数を示す。
+ */
+export function priorObjectIdGapProperties(gap: bigint): Uint8Array {
+  return encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: gap }]);
 }
