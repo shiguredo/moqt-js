@@ -28,6 +28,51 @@ test("getCatalogCodec matches getEncoderConfig codec strings", () => {
   );
 });
 
+// getEncoderConfig の戻り値はそのまま VideoEncoder.configure に渡る。
+// codec 文字列だけでなく、解像度・フレームレート・ビットレートと
+// 入力形式の指定 (annexB) が符号化の結果を左右するため全体を固定する。
+test("getEncoderConfig returns the encoder config for every codec", () => {
+  // 解像度・フレームレート・ビットレートは codec によらずそのまま載る
+  const shared = { width: 320, height: 240, bitrate: 500_000, framerate: 30 };
+
+  assert.deepEqual(getEncoderConfig("vp8", 320, 240, 500_000, 30), { codec: "vp8", ...shared });
+  assert.deepEqual(getEncoderConfig("vp9", 320, 240, 500_000, 30), {
+    codec: "vp09.00.10.08",
+    ...shared,
+  });
+  assert.deepEqual(getEncoderConfig("av1", 320, 240, 500_000, 30), {
+    codec: "av01.0.04M.08",
+    ...shared,
+  });
+  // H.264 / H.265 は annexB 形式を指定する。この指定を落とすと WebCodecs が
+  // description (avcC / hvcC) を要求する形式になり、Catalog に載せられない。
+  assert.deepEqual(getEncoderConfig("h264", 320, 240, 500_000, 30), {
+    codec: "avc1.42001f",
+    ...shared,
+    avc: { format: "annexb" },
+  });
+  // hevc プロパティは Chrome 独自拡張で、TypeScript の組み込み型には無い
+  // (src/types.d.ts で宣言している)。
+  assert.deepEqual(getEncoderConfig("h265", 320, 240, 500_000, 30), {
+    codec: "hvc1.1.6.L93.B0",
+    ...shared,
+    hevc: { format: "annexb" },
+  });
+});
+
+// 不明な codec は vp8 にフォールバックする (設定の型が壊れても配信を止めない)。
+test("getEncoderConfig falls back to vp8 for an unknown codec", () => {
+  const unknownCodec = "unknown" as unknown as CodecType;
+
+  assert.deepEqual(getEncoderConfig(unknownCodec, 320, 240, 500_000, 30), {
+    codec: "vp8",
+    width: 320,
+    height: 240,
+    bitrate: 500_000,
+    framerate: 30,
+  });
+});
+
 // 既定値と一般的な解像度が数値に変換される。
 test("parseResolution parses WIDTHxHEIGHT", () => {
   assert.deepEqual(parseResolution("1280x720"), { width: 1280, height: 720 });

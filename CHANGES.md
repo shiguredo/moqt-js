@@ -1630,6 +1630,11 @@
   - `allocateAudioObject` (周期 50 フレームで Group を進めて Object ID を 0 に戻す) と `allocateVideoObject` (初回のキーフレームは割当済みの初期 Group、2 回目以降は Group を進める) を切り出し、`MediaPublisherImpl` は状態を保持して呼ぶだけにする
   - `resolveKeyframeInterval` (未指定時は framerate の 2 倍、明示指定を優先) と `shouldSendKeyFrame` (フレーム番号が間隔の倍数) を切り出し、キーフレーム間隔の解決と判定境界を固定する
   - Publisher Priority の 3 定数 (音声 192 / 映像キーフレーム 255 / 映像差分 128) を export し、Group の切り替え条件・Object ID の振り直し・キーフレーム間隔・優先度を単体テスト 15 件で pin する (挙動は変えない)
+- [UPDATE] devtools の主要経路の純粋部と契約部をテストで pin する
+  - usePublisher から Catalog 生成 (`buildPublisherCatalog`)・Object 送信計画 (`buildObjectSendPlan`)・キーフレーム要求間隔 (`shouldRequestKeyFrame`)、useSubscriber から codec 解決 (`buildVideoDecoderConfig`)・LOC 復号 (`parseLocFrameMetadata`)・NEW_GROUP_REQUEST の値 (`resolveNewGroupRequestValue`)・統計リセット (`resetSubscriberStats`) を切り出し、codec ごとの Encoder 設定と Catalog の codec 文字列の一致、キーフレームで新しい Group を開始して Object ID を 0 に戻す採番、priority、LOC Properties の往復 (publisher の付与を subscriber が解釈できること) を検証する
+  - EncoderWrapper / DecoderWrapper は configure 前の状態機械 (unconfigured・encodeQueueSize・close の冪等・reset の扱い) を検証する
+  - WebCodecs / WebTransport / canvas / Dedicated Worker / Preact のフックを必要とする configure・encode・decode・描画・購読開始・プレビュー開始は Node の vitest では実行できないため対象外とし、その理由をテストに明記する
+  - devtools のテストが使っていた `as never` によるすり替えを、公開インターフェースを実装した Fake (`FakeSubscriber` / `FakeSession`) と実クラスを継承した観測用 wrapper (`RecordingDecoderWrapper`) に置き換える
   - @voluntas
 
 ## 2026.2.0
