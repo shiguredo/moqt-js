@@ -11,7 +11,7 @@
   "dependencies": {
     "@preact/signals": "2.11.2",
     "moqt-js": "workspace:*",
-    "preact": "11.0.0-beta.2",
+    "preact": "11.0.0-rc.2",
     "preact-iso": "2.12.2"
   },
   "devDependencies": {
