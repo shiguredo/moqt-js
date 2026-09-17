@@ -12,10 +12,27 @@
  * 並行分配は実物で検証する)。
  * 駆動は公開 pause() / resume() を使い、ループ起動・状態設定・フラグ設定・
  * reader / encoder 注入は start() が接続を要するため private 経由で行う。
+ *
+ * グループ管理 (allocateAudioObject / allocateVideoObject) とキーフレーム判定
+ * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数は
+ * 純関数として切り出しており、固定値で直接駆動する。
  */
 
 import { test, assert } from "vite-plus/test";
-import { MediaPublisherImpl, allocateInitialGroupId } from "./createMediaPublisher";
+import {
+  AUDIO_GROUP_FRAME_PERIOD,
+  MediaPublisherImpl,
+  PRIORITY_AUDIO,
+  PRIORITY_VIDEO_DELTA,
+  PRIORITY_VIDEO_KEY,
+  allocateAudioObject,
+  allocateInitialGroupId,
+  allocateVideoObject,
+  resolveKeyframeInterval,
+  shouldSendKeyFrame,
+  type AudioGroupState,
+  type VideoGroupState,
+} from "./createMediaPublisher";
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import type { MediaPublisherState } from "./codec/types";
@@ -936,4 +953,173 @@ test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を�
   sendAudioChunk(control);
 
   assert.isUndefined(LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0)).config);
+});
+
+/**
+ * グループ管理とキーフレーム判定の純関数
+ *
+ * MediaPublisherImpl から切り出した払い出しロジックと判定ロジックを、実装クラスや
+ * 構造の注入を介さず固定値で直接駆動する。Group ID が進む条件と Object ID が
+ * 0 に戻る条件、キーフレーム間隔の解決と境界、Publisher Priority の値を固定する。
+ */
+
+test("resolveKeyframeInterval: 映像オプションが無ければ既定 framerate の 2 倍になる", () => {
+  // framerate の既定値 30 から 60 を導出することの検証 (映像を配信しない場合も同じ値)
+  assert.equal(resolveKeyframeInterval(undefined), 60);
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000 }), 60);
+});
+
+test("resolveKeyframeInterval: framerate 指定時はその 2 倍になる", () => {
+  // 既定値ではなく指定した framerate から間隔を導出することの検証
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, framerate: 25 }), 50);
+});
+
+test("resolveKeyframeInterval: keyframeInterval 指定時は framerate より優先する", () => {
+  // 明示指定が framerate 由来の既定を上書きすることの検証
+  assert.equal(
+    resolveKeyframeInterval({
+      codec: "vp8",
+      bitrate: 1000000,
+      framerate: 25,
+      keyframeInterval: 15,
+    }),
+    15,
+  );
+  // framerate 未指定でも明示指定を尊重すること
+  assert.equal(resolveKeyframeInterval({ codec: "vp8", bitrate: 1000000, keyframeInterval: 1 }), 1);
+});
+
+test("shouldSendKeyFrame: フレーム番号 0 はキーフレームになる", () => {
+  // 初回フレームと requestKeyframe() 直後 (フレーム番号を 0 に戻す) が
+  // キーフレームになることの検証
+  assert.isTrue(shouldSendKeyFrame(0, 60));
+  assert.isTrue(shouldSendKeyFrame(0, 1));
+});
+
+test("shouldSendKeyFrame: 間隔の倍数の前後でキーフレーム判定が切り替わる", () => {
+  // 間隔 60 の境界 (59 / 60 / 61) と 2 周期目 (120) を固定する
+  assert.isFalse(shouldSendKeyFrame(59, 60));
+  assert.isTrue(shouldSendKeyFrame(60, 60));
+  assert.isFalse(shouldSendKeyFrame(61, 60));
+  assert.isFalse(shouldSendKeyFrame(119, 60));
+  assert.isTrue(shouldSendKeyFrame(120, 60));
+});
+
+test("allocateAudioObject: 周期未満は同じ Group で Object ID が連番になる", () => {
+  // 周期 3 の 1 フレーム目と 2 フレーム目で Group が変わらず、Object ID だけが
+  // 進むことの検証
+  const first = allocateAudioObject({ groupId: 1000, objectId: 0, frameCount: 0 }, 3);
+  assert.equal(first.groupId, 1000);
+  assert.equal(first.objectId, 0);
+  assert.isFalse(first.groupAdvanced);
+  assert.deepEqual(first.state, { groupId: 1000, objectId: 1, frameCount: 1 });
+
+  const second = allocateAudioObject(first.state, 3);
+  assert.equal(second.groupId, 1000);
+  assert.equal(second.objectId, 1);
+  assert.isFalse(second.groupAdvanced);
+  assert.deepEqual(second.state, { groupId: 1000, objectId: 2, frameCount: 2 });
+});
+
+test("allocateAudioObject: 周期に達したフレームで Group が進み Object ID が 0 に戻る", () => {
+  // 周期 3 の 3 フレーム目で Group ID が +1 され、Object ID が 0 から振り直される
+  // ことの検証。周期到達を返り値で通知することも確認する
+  const third = allocateAudioObject({ groupId: 1000, objectId: 2, frameCount: 2 }, 3);
+  assert.equal(third.groupId, 1001);
+  assert.equal(third.objectId, 0);
+  assert.isTrue(third.groupAdvanced);
+  assert.deepEqual(third.state, { groupId: 1001, objectId: 1, frameCount: 3 });
+});
+
+test("allocateAudioObject: 切り替え後のフレームは新しい Group で Object ID が続く", () => {
+  // Group 切り替え直後のフレームが新しい Group の Object ID 1 になり、
+  // 前の Group の Object ID を引き継がないことの検証
+  const afterBoundary = allocateAudioObject({ groupId: 1001, objectId: 1, frameCount: 3 }, 3);
+  assert.equal(afterBoundary.groupId, 1001);
+  assert.equal(afterBoundary.objectId, 1);
+  assert.isFalse(afterBoundary.groupAdvanced);
+  assert.deepEqual(afterBoundary.state, { groupId: 1001, objectId: 2, frameCount: 4 });
+});
+
+test("allocateAudioObject: 既定の周期は 50 フレームである", () => {
+  // 音声が約 1 秒ごとに新しい Group を開始することの固定。
+  // 49 フレーム目までは同じ Group、50 フレーム目で切り替わる
+  assert.equal(AUDIO_GROUP_FRAME_PERIOD, 50);
+
+  let state: AudioGroupState = { groupId: 7, objectId: 0, frameCount: 0 };
+  for (let frame = 1; frame <= 49; frame++) {
+    const allocation = allocateAudioObject(state);
+    assert.equal(allocation.groupId, 7);
+    assert.isFalse(allocation.groupAdvanced);
+    state = allocation.state;
+  }
+  assert.deepEqual(state, { groupId: 7, objectId: 49, frameCount: 49 });
+
+  const boundary = allocateAudioObject(state);
+  assert.equal(boundary.groupId, 8);
+  assert.equal(boundary.objectId, 0);
+  assert.isTrue(boundary.groupAdvanced);
+  assert.deepEqual(boundary.state, { groupId: 8, objectId: 1, frameCount: 50 });
+});
+
+test("allocateVideoObject: 初回キーフレームは割当済みの初期 Group の Object ID 0 になる", () => {
+  // 初回オブジェクトは Group を加算せず初期値を送ることの検証
+  const first = allocateVideoObject({ groupId: 1000, objectId: 0, started: false }, true);
+  assert.equal(first.groupId, 1000);
+  assert.equal(first.objectId, 0);
+  assert.isFalse(first.groupAdvanced);
+  assert.deepEqual(first.state, { groupId: 1000, objectId: 1, started: true });
+});
+
+test("allocateVideoObject: 差分フレームは Group を進めず Object ID だけ進める", () => {
+  // キーフレーム以外では Group が変わらず、同じ Group 内で Object ID が
+  // インクリメントされることの検証
+  const delta = allocateVideoObject({ groupId: 1000, objectId: 1, started: true }, false);
+  assert.equal(delta.groupId, 1000);
+  assert.equal(delta.objectId, 1);
+  assert.isFalse(delta.groupAdvanced);
+  assert.deepEqual(delta.state, { groupId: 1000, objectId: 2, started: true });
+});
+
+test("allocateVideoObject: 2 回目以降のキーフレームで Group が進み Object ID が 0 に戻る", () => {
+  // 開始済みの状態で届いたキーフレームが Group ID を +1 し、Object ID を
+  // 0 から振り直すことの検証
+  const key = allocateVideoObject({ groupId: 1000, objectId: 5, started: true }, true);
+  assert.equal(key.groupId, 1001);
+  assert.equal(key.objectId, 0);
+  assert.isTrue(key.groupAdvanced);
+  assert.deepEqual(key.state, { groupId: 1001, objectId: 1, started: true });
+});
+
+test("allocateVideoObject: 差分フレームだけでは Group を進めない", () => {
+  // キーフレームが来ない限り Group が進まないことの検証
+  // (差分フレームを複数送っても Group は初期値のまま)
+  let state: VideoGroupState = { groupId: 1000, objectId: 0, started: false };
+  for (let frame = 0; frame < 3; frame++) {
+    const allocation = allocateVideoObject(state, false);
+    assert.equal(allocation.groupId, 1000);
+    assert.isFalse(allocation.groupAdvanced);
+    state = allocation.state;
+  }
+  assert.deepEqual(state, { groupId: 1000, objectId: 3, started: true });
+});
+
+test("allocateVideoObject: 差分フレームが先行した場合の初回キーフレームは Group を進める", () => {
+  // 実運用経路は初回をキーフレームで要求するが、差分フレームが先行した場合は
+  // 開始済みになるため、初回キーフレームが初期値 + 1 の Group になることの検証
+  const delta = allocateVideoObject({ groupId: 1000, objectId: 0, started: false }, false);
+  assert.isFalse(delta.groupAdvanced);
+
+  const key = allocateVideoObject(delta.state, true);
+  assert.equal(key.groupId, 1001);
+  assert.equal(key.objectId, 0);
+  assert.isTrue(key.groupAdvanced);
+});
+
+test("Publisher Priority の定数はドキュメントの値である", () => {
+  // docs/HIGH_LEVEL_API.md の Priority 表の値 (音声 192 / 映像キーフレーム 255 /
+  // 映像差分 128) を固定する
+  assert.equal(PRIORITY_AUDIO, 192);
+  assert.equal(PRIORITY_VIDEO_KEY, 255);
+  assert.equal(PRIORITY_VIDEO_DELTA, 128);
 });

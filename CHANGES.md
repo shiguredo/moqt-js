@@ -1626,6 +1626,11 @@
   - moqtUri の IPv6 リテラル・userinfo・不正ポート、grease の非整数インデックス、devtools の数値入力表記 (16 進数 / 2 進数 / 指数表記 / Infinity)、log 表示の underscore なし大文字キーを検証する
   - frameSource のフォールバック経路は実ブラウザ基盤が必要なため単体テストの対象外とし、可用性判定のみを対象にする方針をテストに明記する
   - @voluntas
+- [UPDATE] MediaPublisher のグループ管理とキーフレーム判定を純関数に切り出してテストで pin する
+  - `allocateAudioObject` (周期 50 フレームで Group を進めて Object ID を 0 に戻す) と `allocateVideoObject` (初回のキーフレームは割当済みの初期 Group、2 回目以降は Group を進める) を切り出し、`MediaPublisherImpl` は状態を保持して呼ぶだけにする
+  - `resolveKeyframeInterval` (未指定時は framerate の 2 倍、明示指定を優先) と `shouldSendKeyFrame` (フレーム番号が間隔の倍数) を切り出し、キーフレーム間隔の解決と判定境界を固定する
+  - Publisher Priority の 3 定数 (音声 192 / 映像キーフレーム 255 / 映像差分 128) を export し、Group の切り替え条件・Object ID の振り直し・キーフレーム間隔・優先度を単体テスト 15 件で pin する (挙動は変えない)
+  - @voluntas
 
 ## 2026.2.0
 
