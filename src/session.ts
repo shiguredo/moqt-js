@@ -123,8 +123,14 @@ import {
   processMessageAuthorizationTokens,
   processSetupAuthorizationTokens,
 } from "./session/authTokenCache";
+import {
+  sessionGetStatistics,
+  type SessionStatistics,
+  type SessionStatisticsSource,
+} from "./session/statistics";
 
 export type { MoqtObject } from "./dataStream";
+export type { SessionStatistics } from "./session/statistics";
 
 /**
  * fill fetch の要求内容
@@ -1129,68 +1135,6 @@ export interface NamespacePublication {
   done(): Promise<void>;
 }
 
-/**
- * セッションレベルの統計情報
- */
-export interface SessionStatistics {
-  // オブジェクト受信
-  /**
-   * 通常 FETCH のデータストリーム経由で受信したオブジェクト数
-   *
-   * fill fetch ストリーム経由のオブジェクトは含まない (objectsReceivedViaFill を参照)。
-   * draft-ietf-moq-transport-21 §3.4 (Fill Semantics) の fill-delivered と
-   * 通常 FETCH は別経路のため、配送経路の区別 (MoqtObject.fillDelivered) と
-   * 統計区分を一致させている。
-   */
-  objectsReceivedViaFetch: number;
-  /** fill fetch ストリーム経由で受信したオブジェクト数 */
-  objectsReceivedViaFill: number;
-  /** SUBSCRIBE 経由で受信したオブジェクト数 */
-  objectsReceivedViaSubscribe: number;
-  /** 通常 FETCH のデータストリーム経由で受信したバイト数 (fill 経由は含まない) */
-  bytesReceivedViaFetch: number;
-  /** fill fetch ストリーム経由で受信したバイト数 */
-  bytesReceivedViaFill: number;
-  /** SUBSCRIBE 経由で受信したバイト数 */
-  bytesReceivedViaSubscribe: number;
-
-  // バッファ状態
-  /** SUBSCRIBE_OK 前に到着した Subgroup ストリーム数 */
-  pendingSubgroupStreamsCount: number;
-  /** SUBSCRIBE_OK 前に到着した Subgroup ストリームのバイト数 */
-  pendingSubgroupStreamsBytes: number;
-
-  // ストリーム状態
-  /** アクティブな Publisher 数 */
-  activePublishers: number;
-  /** アクティブな Subscriber 数 */
-  activeSubscribers: number;
-  /** アクティブな Fetcher 数 */
-  activeFetchers: number;
-
-  // WebTransport ストリーム統計
-  /** Publisher が開いている送信ストリーム数 */
-  publisherStreamsOpen: number;
-  /** 現在読み取り中の受信ストリーム数 */
-  subscriberStreamsActive: number;
-
-  // データストリーム統計（累計）
-  /** Publisher が開いた送信ストリーム数（累計） */
-  unidirectionalStreamsOpened: number;
-  /** 受信した Unidirectional ストリーム数 */
-  unidirectionalStreamsReceived: number;
-  /** パースした Subgroup ヘッダー数 */
-  subgroupHeadersReceived: number;
-  /** パースした Fetch ヘッダー数 */
-  fetchHeadersReceived: number;
-
-  // Control Stream 統計（累計）
-  /** 送信した Control Message 数 */
-  controlMessagesSent: number;
-  /** 受信した Control Message 数 */
-  controlMessagesReceived: number;
-}
-
 export interface Session {
   readonly state: SessionState;
   /**
@@ -1672,19 +1616,22 @@ export class SessionImpl implements Session {
   private dataStreamTimeoutMs = DEFAULT_DATA_STREAM_TIMEOUT_MS;
 
   // 統計カウンター
-  private statsObjectsReceivedViaFetch = 0;
-  private statsObjectsReceivedViaFill = 0;
-  private statsObjectsReceivedViaSubscribe = 0;
-  private statsBytesReceivedViaFetch = 0;
-  private statsBytesReceivedViaFill = 0;
-  private statsBytesReceivedViaSubscribe = 0;
-  private statsUnidirectionalStreamsOpened = 0;
-  private statsUnidirectionalStreamsReceived = 0;
-  private statsSubscriberStreamsActive = 0;
-  private statsSubgroupHeadersReceived = 0;
-  private statsFetchHeadersReceived = 0;
-  private statsControlMessagesSent = 0;
-  private statsControlMessagesReceived = 0;
+  //
+  // 各カウンターは受信経路 / 送信経路の free function が加算し、
+  // sessionGetStatistics が読む。抽出先から読み書きするため private にはしない。
+  statsObjectsReceivedViaFetch = 0;
+  statsObjectsReceivedViaFill = 0;
+  statsObjectsReceivedViaSubscribe = 0;
+  statsBytesReceivedViaFetch = 0;
+  statsBytesReceivedViaFill = 0;
+  statsBytesReceivedViaSubscribe = 0;
+  statsUnidirectionalStreamsOpened = 0;
+  statsUnidirectionalStreamsReceived = 0;
+  statsSubscriberStreamsActive = 0;
+  statsSubgroupHeadersReceived = 0;
+  statsFetchHeadersReceived = 0;
+  statsControlMessagesSent = 0;
+  statsControlMessagesReceived = 0;
 
   constructor(
     transport: WebTransport,
@@ -3143,27 +3090,7 @@ export class SessionImpl implements Session {
    * セッションレベルの統計情報を取得する
    */
   getStatistics(): SessionStatistics {
-    return {
-      objectsReceivedViaFetch: this.statsObjectsReceivedViaFetch,
-      objectsReceivedViaFill: this.statsObjectsReceivedViaFill,
-      objectsReceivedViaSubscribe: this.statsObjectsReceivedViaSubscribe,
-      bytesReceivedViaFetch: this.statsBytesReceivedViaFetch,
-      bytesReceivedViaFill: this.statsBytesReceivedViaFill,
-      bytesReceivedViaSubscribe: this.statsBytesReceivedViaSubscribe,
-      pendingSubgroupStreamsCount: this.pendingSubgroupBuffer.streamCount,
-      pendingSubgroupStreamsBytes: this.pendingSubgroupBuffer.totalBytes,
-      activePublishers: this.publishers.size,
-      activeSubscribers: this.subscribers.size,
-      activeFetchers: this.fetchers.size,
-      publisherStreamsOpen: this.publisherStreams.size,
-      subscriberStreamsActive: this.statsSubscriberStreamsActive,
-      unidirectionalStreamsOpened: this.statsUnidirectionalStreamsOpened,
-      unidirectionalStreamsReceived: this.statsUnidirectionalStreamsReceived,
-      subgroupHeadersReceived: this.statsSubgroupHeadersReceived,
-      fetchHeadersReceived: this.statsFetchHeadersReceived,
-      controlMessagesSent: this.statsControlMessagesSent,
-      controlMessagesReceived: this.statsControlMessagesReceived,
-    };
+    return sessionGetStatistics(this as unknown as SessionStatisticsSource);
   }
 
   /**
