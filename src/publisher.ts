@@ -111,6 +111,43 @@ export interface SendDatagramParams {
 }
 
 /**
+ * PUBLISH_STATE_NOTIFY で購読者へ通知する購読状態
+ * draft-ietf-moq-transport-21 Section 9.10 (PUBLISH_STATE_NOTIFY)
+ *
+ * 「A PUBLISH_STATE_NOTIFY carries the parameters whose values have changed.
+ *  If a parameter is not present, its value is unchanged.」ため、現在値から
+ * 変化した値のみを指定する。省略したフィールドは通知に載せない。
+ */
+export interface PublishStateNotifyOptions {
+  /**
+   * 通知する Forward State
+   * draft-ietf-moq-transport-21 Section 9.20.19 (FORWARD Parameter)
+   *
+   * 「When sent in PUBLISH_STATE_NOTIFY, it reports the Forwarding State now in
+   *  effect at the publisher.」現在値と同じ値では通知しない。送信できた場合は
+   * この値を publisher の Forward State として反映する (購読者が受け取る値と
+   * publisher が実際に転送する状態を一致させるため)。
+   */
+  forward?: boolean;
+
+  /**
+   * 通知する Location Filter
+   * draft-ietf-moq-transport-21 Section 9.20.10 (LOCATION FILTER Parameter)
+   *
+   * 「When sent in PUBLISH_STATE_NOTIFY, it reports the Location Filter now in
+   *  effect at the publisher.」現在値と等価な値では通知しない。送信できた場合は
+   * この値を publisher の Location Filter として反映する (購読者が受け取る値と
+   * publisher が実際に適用する値を一致させるため。相対指定は送信時点の
+   * Largest Object で解決する。Section 3.3.1)。
+   * Section 9.10 の MUST NOT「A publisher MUST NOT use PUBLISH_STATE_NOTIFY to
+   *  change the value of a subscriber controlled subscription parameter unless
+   *  the subscriber requested the change.」に従い、購読者が REQUEST_UPDATE で
+   * 要求していない値は指定しないこと。
+   */
+  filter?: LocationFilter;
+}
+
+/**
  * Publisher interface
  */
 export interface Publisher {
@@ -126,6 +163,7 @@ export interface Publisher {
    *
    * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
    * PUBLISH 送信時の初期設定と REQUEST_UPDATE 受信時による変化でも呼ばれる。
+   * notifyStateChange で通知した値の反映でも呼ばれる。
    */
   readonly forwardState: boolean;
   /**
@@ -170,6 +208,28 @@ export interface Publisher {
    * (draft-ietf-moq-transport-21 §3.3.1)。
    */
   sendDatagram(params: SendDatagramParams): void;
+  /**
+   * 購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ通知する
+   * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY)
+   *
+   * subscriber 発の REQUEST_UPDATE への応答ではなく、publisher 側の理由で
+   * 購読状態が変化したことを片方向で通知する。購読者は REQUEST_OK /
+   * REQUEST_ERROR を返さないため、返値は送信の完了のみを表す。
+   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.20.18 の
+   * MUST により必須) / FORWARD / LOCATION_FILTER のみであり、現在値から
+   * 変化していないパラメータは載せない。載せるパラメータが無い場合は
+   * 送信せず resolve する (重複送信の抑止)。
+   * 送信できた変更のみ Forward State / Location Filter として反映する。
+   *
+   * 購読が既に終了している場合 (done() 済み・ピアのキャンセル後・セッション
+   * 終了後) は送信せず resolve する。送信できない場合 (ストリーム終了等) は
+   * reject する。セッションは閉じない。
+   *
+   * forward: false を通知した場合、購読者が REQUEST_UPDATE で FORWARD=1 を送る
+   * まで Object を送信しない (Section 9.8 の PUBLISH 時の FORWARD=0 と同じ扱い。
+   * 送信の抑止は Forward State を参照する sendObject / sendDatagram が行う)。
+   */
+  notifyStateChange(options?: PublishStateNotifyOptions): Promise<void>;
   /**
    * パブリッシングを終了し、PUBLISH_DONE を送信してストリームを閉じる
    * draft-ietf-moq-transport-21 §9.9 (PUBLISH_DONE)
@@ -251,6 +311,11 @@ export class PublisherImpl implements Publisher {
   // objects from outside the requested range.」に従い範囲外を送信しない。
   // 未受信時は undefined (フィルタなし = トラック全体)。
   private subscriptionLocationFilter: ResolvedFilter | undefined;
+  // draft-ietf-moq-transport-21 §3.3.1 / §9.20.10:
+  // 解決前の生の Location Filter。subscriptionLocationFilter は解決時点の
+  // LARGEST_OBJECT に依存するため、同じ内容の再設定を避ける等価判定
+  // (isSameLocationFilter) には生の値が要る。未受信時は undefined。
+  private publisherLocationFilter: LocationFilter | undefined;
 
   // セッションが利用する内部コールバック
   // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
@@ -269,6 +334,14 @@ export class PublisherImpl implements Publisher {
   onSendObjectSkipped?: () => void;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
+  /**
+   * PUBLISH_STATE_NOTIFY の送信 (セッション内部コールバック)
+   *
+   * draft-ietf-moq-transport-21 §9.10:
+   * 送信内容の組み立て (変化したパラメータの選別と購読状態への反映) は
+   * セッション側が行う。onSendObject / onSendDatagram と同じ役割分担である。
+   */
+  onNotifyStateChange?: (options: PublishStateNotifyOptions) => Promise<void>;
 
   /**
    * 進行中の done() の Promise
@@ -339,7 +412,19 @@ export class PublisherImpl implements Publisher {
    * SubscriberImpl と同じ規則)。解決結果は fill 範囲の評価 (§3.4) で使う。
    */
   setLocationFilter(filter: LocationFilter): void {
+    this.publisherLocationFilter = filter;
     this.subscriptionLocationFilter = resolveFilter(filter, this.largestLocation);
+  }
+
+  /**
+   * Internal: 設定されている生の Location Filter を取得する (セッションからのみ呼ぶ)
+   *
+   * 解決済みの subscriptionLocationFilter は解決時点の LARGEST_OBJECT に
+   * 依存するため、同じ内容の再設定を避ける等価判定 (isSameLocationFilter) には
+   * 使えない。SubscriberImpl.getLocationFilter と同じ役割である。
+   */
+  getLocationFilter(): LocationFilter | undefined {
+    return this.publisherLocationFilter;
   }
 
   /**
@@ -595,6 +680,45 @@ export class PublisherImpl implements Publisher {
     if (this.onSendDatagram) {
       this.onSendDatagram(params);
     }
+  }
+
+  /**
+   * 購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ通知する
+   *
+   * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+   * 「A publisher sends PUBLISH_STATE_NOTIFY on a subscription's bidirectional
+   *  stream to notify the subscriber that the state of the subscription has
+   *  changed for a reason other than a subscriber sent REQUEST_UPDATE.」
+   * moqt-js は購読状態を自力で変化させない (Forward State は PUBLISH 送信時の
+   * 指定と REQUEST_UPDATE 受信、Location Filter は REQUEST_UPDATE 受信で
+   * 変わる) ため、アプリが変化後の値を指定して呼ぶ明示 API とする。
+   *
+   * 送信の成否は返値の Promise で表す。fire-and-forget で呼んでも reject が
+   * unhandled rejection にならないよう、返却値と同一インスタンスに catch を
+   * 登録してから返す (SubscriberImpl.update と同じ扱い)。
+   */
+  notifyStateChange(options?: PublishStateNotifyOptions): Promise<void> {
+    // 購読が既に終了している場合は通知先が無いため何もしない
+    // (done() と同じく閉鎖後は送信を試行しない)。
+    if (this.publisherState === "closed") {
+      return Promise.resolve();
+    }
+    if (!this.onNotifyStateChange) {
+      // セッション側の配線が無い場合は送信先が無い (SubscriberImpl.update と
+      // 同じ扱い)。
+      return Promise.resolve();
+    }
+
+    let promise: Promise<void>;
+    try {
+      promise = this.onNotifyStateChange(options ?? {});
+    } catch (error) {
+      // 同期 throw も rejected な Promise として返し、呼び出し側の await に
+      // 伝播させる (update() と同じ扱い)。
+      promise = Promise.reject(error);
+    }
+    promise.catch(() => {});
+    return promise;
   }
 
   /**

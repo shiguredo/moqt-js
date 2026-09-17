@@ -15,6 +15,12 @@
   - `SubgroupHeader.firstObject?: boolean` は wire 上の FIRST_OBJECT ビット (0x40) が無い場合に `undefined` を入れていたため、`false` と未設定の区別に意味が無く、消費側は `=== true` で判定する必要があった
   - `SubgroupHeader.firstObject` を必須の `boolean` にし、wire 上でビットが無い場合は `false` を設定する。encode / decode の wire 表現は変えない
   - `encodeSubgroupHeader` / `decodeSubgroupHeader` / `processSubgroupObjects` を新しい表現に追随させた。`SubgroupHeader` を組み立てる利用側は `firstObject` の指定が必要になる
+  - @voluntas
+- [ADD] PUBLISH_STATE_NOTIFY の送信を実装する
+  - draft-ietf-moq-transport-21 §9.10 は publisher が購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ片方向に通知することを定めるが、エンコーダを受信経路でしか使っておらず送信する公開 API が無かった
+  - アプリが変化後の値を指定して呼ぶ `Publisher.notifyStateChange()` を追加し、購読の双方向ストリームへ送信する。載せるのは変化した `FORWARD` / `LOCATION_FILTER` と、送信済み Object がある場合の `LARGEST_OBJECT` (§9.20.18 の MUST) のみで、変化が無ければ送信しない
+  - 送信できた変更のみ publisher の Forward State / Location Filter へ反映する。Forward State 0 の通知後は購読者の REQUEST_UPDATE (FORWARD=1) まで Object を送信しない
+  - @voluntas
 - [ADD] Prior Group ID Gap / Prior Object ID Gap の Track 横断追跡を実装する
   - draft-ietf-moq-transport-21 §10.8 / §10.9 の malformed Track 条件のうち、同一 Track の複数 Object と過去の受信状態を必要とする 5 条件 (同一 Group 内で異なる Prior Group ID Gap、受信済み Object を覆う gap、通知済み gap 内の Location) を検出する
   - セッションに Full Track Name 単位の追跡状態 (`src/session/priorGapTracking.ts`) を追加し、subgroup / datagram / FETCH / fill の 4 経路で配送前に検証する。判定は bigint の範囲比較で行い、スキップされた ID を配列として実体化しない

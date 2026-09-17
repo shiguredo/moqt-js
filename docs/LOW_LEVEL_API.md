@@ -92,15 +92,18 @@ const session = await connect(url, callbacks?, options?)
 
 ### `Publisher`
 
-| プロパティ / メソッド  | 説明                                                        |
-| ---------------------- | ----------------------------------------------------------- |
-| `state`                | `"active"` / `"closed"`                                     |
-| `forwardState`         | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態 |
-| `sendObject(params)`   | Subgroup stream に Object を送る                            |
-| `sendDatagram(params)` | Datagram として Object を送る                               |
-| `done()`               | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る        |
+| プロパティ / メソッド         | 説明                                                        |
+| ----------------------------- | ----------------------------------------------------------- |
+| `state`                       | `"active"` / `"closed"`                                     |
+| `forwardState`                | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態 |
+| `sendObject(params)`          | Subgroup stream に Object を送る                            |
+| `sendDatagram(params)`        | Datagram として Object を送る                               |
+| `notifyStateChange(options?)` | 購読状態の変化を `PUBLISH_STATE_NOTIFY` で購読者へ通知する  |
+| `done()`                      | 現在のデータストリームを閉じて `PUBLISH_DONE` を送る        |
 
 `sendObject()` / `sendDatagram()` の送信パラメータは `number` ベースだが、受信した `MoqtObject` は `bigint` ベースで返る。
+
+`notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` (送信済み Object がある場合) / `FORWARD` / `LOCATION_FILTER` のみで、現在値から変化したものだけを送る。変化が無ければ送信しない。
 
 ### `Subscriber`
 

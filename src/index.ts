@@ -59,7 +59,12 @@ export {
   decodeAuthorizationToken,
   encodeAuthorizationToken,
 } from "./message";
-export type { Publisher, SendObjectParams, SendDatagramParams } from "./publisher";
+export type {
+  Publisher,
+  PublishStateNotifyOptions,
+  SendObjectParams,
+  SendDatagramParams,
+} from "./publisher";
 export type { Subscriber, RequestUpdateOptions } from "./subscriber";
 export type { Fetcher } from "./fetcher";
 

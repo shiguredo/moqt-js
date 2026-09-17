@@ -59,6 +59,7 @@ import { decodeVarint, encodeVarint } from "./varint";
 import {
   type Publisher,
   PublisherImpl,
+  type PublishStateNotifyOptions,
   type SendObjectParams,
   type SendDatagramParams,
 } from "./publisher";
@@ -2214,6 +2215,9 @@ export class SessionImpl implements Session {
       this.sendDatagram(impl, params);
     };
 
+    // PUBLISH_STATE_NOTIFY 送信コールバックを設定
+    impl.onNotifyStateChange = (options) => this.sendPublishStateNotify(impl, options);
+
     impl.onDoneInternal = async (status) => {
       // まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）
       await this.closePublisherStream(impl.getTrackAlias());
@@ -3633,6 +3637,23 @@ export class SessionImpl implements Session {
    */
   private sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
     publishSendDatagram(this as unknown as SessionInternal, publisher, params);
+  }
+
+  /**
+   * PUBLISH_STATE_NOTIFY を送信する
+   *
+   * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+   * 購読の双方向ストリーム上で送信し、応答は受け取らない。
+   */
+  private sendPublishStateNotify(
+    publisher: PublisherImpl,
+    options: PublishStateNotifyOptions,
+  ): Promise<void> {
+    return bidi.bidiSendPublishStateNotify(
+      this as unknown as bidi.BidiSessionInternal,
+      publisher,
+      options,
+    );
   }
 
   /**
