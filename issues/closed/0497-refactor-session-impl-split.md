@@ -49,18 +49,18 @@
 
 ### 行数の推移
 
-| 時点 | `src/session.ts` |
-| --- | --- |
-| 着手前 | 6,157 行 |
-| statistics 抽出後 | 6,081 行 |
-| lifecycle 抽出後 | 5,621 行 |
-| dataStreamIncoming 抽出後 | 4,977 行 |
-| incomingPublish 抽出後 | 4,245 行 |
-| requests 抽出後 | 3,779 行 |
-| namespaces 抽出後 | 3,266 行 |
-| connection 抽出後 | 2,925 行 |
-| publicTypes 抽出後 | 2,016 行 |
-| wrapper 整理後 | 1,183 行 |
+| 時点                      | `src/session.ts` |
+| ------------------------- | ---------------- |
+| 着手前                    | 6,157 行         |
+| statistics 抽出後         | 6,081 行         |
+| lifecycle 抽出後          | 5,621 行         |
+| dataStreamIncoming 抽出後 | 4,977 行         |
+| incomingPublish 抽出後    | 4,245 行         |
+| requests 抽出後           | 3,779 行         |
+| namespaces 抽出後         | 3,266 行         |
+| connection 抽出後         | 2,925 行         |
+| publicTypes 抽出後        | 2,016 行         |
+| wrapper 整理後            | 1,183 行         |
 
 ### 公開 API の互換性
 
