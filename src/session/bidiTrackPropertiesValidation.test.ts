@@ -25,16 +25,9 @@ import { createPublishReadTestContext, createOkResponseReadTestContext } from ".
 
 /**
  * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
- * Track Properties が空の場合は検証を通過し null を返す。
- */
-test("validateRequestOkNoTrackProperties: 空の Track Properties は検証を通過する", () => {
-  const error = validateRequestOkNoTrackProperties([], "PUBLISH_OK");
-  assert.isNull(error);
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.3 (REQUEST_OK):
  * 非空の Track Properties は PROTOCOL_VIOLATION の SessionError を返す。
+ * 空配列で検証を通過する受理側の性質は、任意のコンテキスト名と任意の
+ * Track Properties に対して src/session/bidi.prop.ts の PBT で検証する。
  */
 test("validateRequestOkNoTrackProperties: 非空の Track Properties は PROTOCOL_VIOLATION のエラーを返す", () => {
   const error = validateRequestOkNoTrackProperties([{ id: 0x1n, value: 0n }], "PUBLISH_OK");

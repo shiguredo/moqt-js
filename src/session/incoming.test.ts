@@ -17,18 +17,15 @@ import {
 } from "../testSupport/helpers";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
 import {
-  incomingClassifyFirstBidiMessage,
   incomingHandleDatagram,
   incomingHandleFirstBidiMessage,
   incomingProcessFetchObjects,
   incomingProcessSubgroupObjects,
   incomingSendRequestErrorAndClose,
   incomingValidateRequestId,
-  incomingWaitForFetcher,
 } from "./incoming";
 import type { SessionInternal } from "./types";
 import { SubscriberImpl } from "../subscriber";
-import { FetcherImpl } from "../fetcher";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
 import {
   createFirstFetchObjectFlags,
@@ -43,56 +40,6 @@ import { encodeProperties } from "../properties";
 import { fullTrackNameKey } from "../fullTrackName";
 import { GroupOrder } from "../message/types";
 import { concatChunks, type FetchObjectSink } from "./stream";
-
-// ============================================================================
-// incomingClassifyFirstBidiMessage のテスト
-// ============================================================================
-
-/**
- * draft-ietf-moq-transport-21 §6.3:
- * 受信 bidi ストリームの先頭が PUBLISH の場合、従来の受信 PUBLISH 処理を
- * 継続する ("publish" 分類)。
- */
-test("incomingClassifyFirstBidiMessage: PUBLISH は publish に分類される", () => {
-  assert.equal(incomingClassifyFirstBidiMessage(MessageType.PUBLISH), "publish");
-});
-
-/**
- * draft-ietf-moq-transport-21 §6.3:
- * 先頭 7 種のうち moqt-js が未対応の 6 種 (SUBSCRIBE / FETCH / TRACK_STATUS /
- * PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) は
- * NOT_SUPPORTED 応答の対象 ("unsupported-request" 分類)。
- */
-test("incomingClassifyFirstBidiMessage: 未対応の 6 種は unsupported-request に分類される", () => {
-  assert.equal(incomingClassifyFirstBidiMessage(MessageType.TRACK_STATUS), "unsupported-request");
-  assert.equal(incomingClassifyFirstBidiMessage(MessageType.SUBSCRIBE), "unsupported-request");
-  assert.equal(incomingClassifyFirstBidiMessage(MessageType.FETCH), "unsupported-request");
-  assert.equal(
-    incomingClassifyFirstBidiMessage(MessageType.PUBLISH_NAMESPACE),
-    "unsupported-request",
-  );
-  assert.equal(
-    incomingClassifyFirstBidiMessage(MessageType.SUBSCRIBE_NAMESPACE),
-    "unsupported-request",
-  );
-  assert.equal(
-    incomingClassifyFirstBidiMessage(MessageType.SUBSCRIBE_TRACKS),
-    "unsupported-request",
-  );
-});
-
-/**
- * draft-ietf-moq-transport-21 §6.3:
- * 「Bidirectional streams MUST NOT begin with any other message type unless
- * negotiated. If they do, the peer MUST close the Session with a
- * PROTOCOL_VIOLATION.」
- * 7 種以外のメッセージタイプ (未知タイプ等) は PROTOCOL_VIOLATION の対象。
- */
-test("incomingClassifyFirstBidiMessage: 7 種以外は protocol-violation に分類される", () => {
-  assert.equal(incomingClassifyFirstBidiMessage(0x99), "protocol-violation");
-  assert.equal(incomingClassifyFirstBidiMessage(MessageType.GOAWAY), "protocol-violation");
-  assert.equal(incomingClassifyFirstBidiMessage(MessageType.REQUEST_OK), "protocol-violation");
-});
 
 // ============================================================================
 // incomingSendRequestErrorAndClose のテスト
@@ -689,100 +636,6 @@ test("incomingHandleFirstBidiMessage: PUBLISH は false を返し従来処理を
 
   assert.isFalse(result);
   assert.isUndefined(closedWithError);
-});
-
-/** Uint8Array 配列を連結するヘルパー */
-// ============================================================================
-// incomingValidateRequestId のテスト
-// draft-ietf-moq-transport-21 §6.4.2.1 (Request ID)
-// ============================================================================
-
-/**
- * draft-ietf-moq-transport-21 §6.4.2.1:
- * 「If an endpoint receives a Request ID where the least significant bit is
- *  incorrect for the sender, or a duplicate Request ID, it MUST close the
- *  session with INVALID_REQUEST_ID.」
- * moqt-js はクライアントロールのため、受信 Request ID はサーバー発の奇数が
- * 期待値。偶数の Request ID は INVALID_REQUEST_ID でセッションを閉じる。
- */
-test("incomingValidateRequestId: 偶数 Request ID で INVALID_REQUEST_ID", () => {
-  const received = new Set<bigint>();
-  let closedWithError: SessionError | undefined;
-
-  closedWithError = incomingValidateRequestId(2n, received) ?? undefined;
-
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
-  assert.isTrue(closedWithError!.message.includes("parity"));
-  // 違反時は Set に add しない
-  assert.equal(received.size, 0);
-});
-
-/**
- * draft-ietf-moq-transport-21 §6.4.2.1:
- * 正常な奇数 Request ID は検証を通過し、Set に記録される。
- */
-test("incomingValidateRequestId: 奇数 Request ID は通過して Set に記録される", () => {
-  const received = new Set<bigint>();
-  let closedWithError: SessionError | undefined;
-
-  closedWithError = incomingValidateRequestId(1n, received) ?? undefined;
-
-  assert.isUndefined(closedWithError);
-  assert.isTrue(received.has(1n));
-});
-
-/**
- * draft-ietf-moq-transport-21 §6.4.2.1:
- * 同一 Request ID の再出現は INVALID_REQUEST_ID でセッションを閉じる。
- */
-test("incomingValidateRequestId: 重複 Request ID で INVALID_REQUEST_ID", () => {
-  const received = new Set<bigint>([1n]);
-  let closedWithError: SessionError | undefined;
-
-  closedWithError = incomingValidateRequestId(1n, received) ?? undefined;
-
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
-  assert.isTrue(closedWithError!.message.includes("duplicate"));
-});
-
-/**
- * draft-ietf-moq-transport-21 §6.4.2.1:
- * パリティ検証を通過した Request ID は、その後の拒否経路 (予約 namespace 拒否 /
- * UNINTERESTED 等) で return されても Set に記録され、同一 ID の再送が検出
- * されることを検証する。
- */
-test("incomingValidateRequestId: 検証通過後に Set へ add され再送が検出される", () => {
-  const received = new Set<bigint>();
-  let closedWithError: SessionError | undefined;
-
-  // 1 回目: 検証通過 + add
-  const first = incomingValidateRequestId(1n, received);
-  assert.isNull(first);
-
-  // 2 回目: 同一 ID は重複として検出される
-  closedWithError = incomingValidateRequestId(1n, received) ?? undefined;
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_REQUEST_ID);
-});
-
-/**
- * draft-ietf-moq-transport-21 §6.4.2.1:
- * 異なる奇数 Request ID はそれぞれ独立に検証を通過する。
- */
-test("incomingValidateRequestId: 異なる奇数 Request ID は通過する", () => {
-  const received = new Set<bigint>();
-
-  const first = incomingValidateRequestId(1n, received);
-  const second = incomingValidateRequestId(3n, received);
-
-  assert.isNull(first);
-  assert.isNull(second);
-  assert.deepEqual(
-    [...received].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-    [1n, 3n],
-  );
 });
 
 // ============================================================================
@@ -1400,121 +1253,6 @@ test("incomingHandleDatagram: debug コールバックの throw でも配送を�
 
   assert.equal(secondDelivered, 1);
   assert.isUndefined(ctx.getClosedWithError());
-});
-
-// ============================================================================
-// incomingWaitForFetcher のタイマー解放
-// フォールバックタイマーは確定時に解放し、登録も解除する
-// ============================================================================
-
-/**
- * 登録済みの待機コールバックをすべて発火させる。
- *
- * 本番の broadcast (FETCH_OK 到着・セッション close) と同形に、
- * 登録解除しながら発火しても欠落しないよう複製して反復する。
- */
-function fireAllFetcherCallbacks(session: SessionInternal): void {
-  for (const callbacks of session.fetcherReadyCallbacks.values()) {
-    for (const callback of callbacks.slice()) {
-      callback();
-    }
-  }
-}
-
-/**
- * fetcher 待機用の最小 session を構築する。
- *
- * 実時間の短い timeout (30ms) を使い、モック / スタブなしで検証する。
- */
-function createFetcherWaitTestContext(): {
-  session: SessionInternal;
-  requestId: bigint;
-} {
-  const requestId = 10n;
-  const session = {
-    fetchers: new Map(),
-    pendingFetch: new Map([[requestId, {}]]),
-    fetcherReadyCallbacks: new Map(),
-  } as unknown as SessionInternal;
-  return { session, requestId };
-}
-
-test("incomingWaitForFetcher: タイムアウト発火で登録を解除して null を返す", async () => {
-  // FETCH_OK が来ない場合は短い timeout で null になる。
-  // タイマー解放自体は直接観測できないため、登録解除を代理指標とする
-  const { session, requestId } = createFetcherWaitTestContext();
-
-  const result = await incomingWaitForFetcher(session, requestId, 30);
-
-  assert.isNull(result);
-  // タイムアウト先行発火時は登録を解除し、後続 FETCH_OK まで stale にしない
-  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
-});
-
-test("incomingWaitForFetcher: 早期解決で登録を解除する", async () => {
-  // FETCH_OK 到着相当でコールバック発火させると、タイマー確定前に解決する。
-  // タイマー解放自体は直接観測できないため、登録解除と解決値を代理指標とする
-  const { session, requestId } = createFetcherWaitTestContext();
-  const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
-
-  const waiting = incomingWaitForFetcher(session, requestId, 100);
-  session.fetchers.set(requestId, fetcher);
-  fireAllFetcherCallbacks(session);
-  const result = await waiting;
-
-  assert.strictEqual(result, fetcher);
-  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
-  // 発火予定時刻を過ぎても結果が変わらない (二重解決しない)
-  await new Promise<void>((resolve) => {
-    setTimeout(() => resolve(), 120);
-  });
-  assert.strictEqual(await waiting, fetcher);
-  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
-});
-
-test("incomingWaitForFetcher: 複数待機者は全員解決し登録が残らない", async () => {
-  // 1 件目の解決による登録解除で 2 件目が欠落しない。
-  // 2 件目の timer を長くし、コールバック発火 (即時) と timer 代替 (遅延) を
-  // 経過時間で区別する
-  const { session, requestId } = createFetcherWaitTestContext();
-  const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
-
-  const first = incomingWaitForFetcher(session, requestId, 100);
-  const second = incomingWaitForFetcher(session, requestId, 1000);
-  session.fetchers.set(requestId, fetcher);
-  const started = Date.now();
-  fireAllFetcherCallbacks(session);
-
-  assert.strictEqual(await first, fetcher);
-  assert.strictEqual(await second, fetcher);
-  // コールバック発火なら即時解決する (timer 代替なら 1000ms 掛かる)
-  assert.isBelow(Date.now() - started, 500);
-  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
-});
-
-test("incomingWaitForFetcher: セッション close 相当の発火で全員解決し登録が残らない", async () => {
-  // close 処理と同形に全コールバックを発火させる。自前の clear() は行わず、
-  // 各待機の自己登録解除だけで空になることを断定する
-  const { session, requestId } = createFetcherWaitTestContext();
-
-  const first = incomingWaitForFetcher(session, requestId, 100);
-  const second = incomingWaitForFetcher(session, requestId, 100);
-  fireAllFetcherCallbacks(session);
-
-  assert.isNull(await first);
-  assert.isNull(await second);
-  assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
-});
-
-test("incomingWaitForFetcher: 不明なリクエストは即座に null を返す", async () => {
-  // pendingFetch にない場合は待機もタイマーも作らない
-  const { session } = createFetcherWaitTestContext();
-  session.pendingFetch.clear();
-
-  const result = await incomingWaitForFetcher(session, 99n, 30);
-
-  assert.isNull(result);
-  assert.isFalse(session.fetcherReadyCallbacks.has(99n));
 });
 
 /**

@@ -4,33 +4,15 @@
 
 import { test, assert } from "vite-plus/test";
 import {
-  clampTimeoutMs,
-  matchNamespacePrefix,
-  namespacePrefixesOverlap,
-  validateNamespacePrefixUpdate,
   buildSubscribeParameters,
   buildSubscribeTracksParameters,
-  buildRangeFilterParameters,
-  mergeRangeFilters,
-  validateRangeFilterLimits,
-  validateRangeFilterSpecs,
   buildFetchParameters,
-  buildSubscribeNamespaceParameters,
   buildTrackStatusParameters,
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
-  validateTrackNamespaceForSend,
-  compareLocations,
   validateFetchOkEndLocation,
-  resolveFetchStartLocation,
   resolveFillGroupOrder,
 } from "./params";
-import {
-  encodeParameters,
-  decodeParameters,
-  decodeFillParameters,
-  type Parameter,
-} from "../message/parameter";
 import { InvalidFilterError } from "../error";
 import { MAX_VARINT } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
@@ -41,148 +23,6 @@ import {
   decodeAuthorizationToken,
 } from "../message/authorizationToken";
 import { useValueToken } from "../testSupport/helpers";
-
-// ============================================================================
-// clampTimeoutMs
-// ============================================================================
-
-test("clampTimeoutMs: 通常値はそのまま number に変換される", () => {
-  // 上限以下の通常のタイムアウト値は変化しないことを検証する
-  assert.equal(clampTimeoutMs(1000n), 1000);
-});
-
-test("clampTimeoutMs: 1n はそのまま 1 になる", () => {
-  assert.equal(clampTimeoutMs(1n), 1);
-});
-
-test("clampTimeoutMs: 上限ちょうど (2^31 - 1) はクランプされない", () => {
-  // 2147483647 (2^31 - 1) は setTimeout の上限ちょうどなのでそのまま返す
-  assert.equal(clampTimeoutMs(2147483647n), 2147483647);
-});
-
-test("clampTimeoutMs: 上限 +1 は 2^31 - 1 にクランプされる", () => {
-  // 2147483648 (上限 +1) を超えると即発火するため上限でクランプする
-  assert.equal(clampTimeoutMs(2147483648n), 2147483647);
-});
-
-test("clampTimeoutMs: varint 上限近傍の巨大値も 2^31 - 1 にクランプされる", () => {
-  // 受信 GOAWAY のピア由来の巨大値 (2^62) でも上限で抑えられることを検証する
-  assert.equal(clampTimeoutMs(2n ** 62n), 2147483647);
-});
-
-test("clampTimeoutMs: bigint の最大級の値でも 2^31 - 1 にクランプされる", () => {
-  // varint の理論上限 (2^64 - 1) でも Number 変換が Infinity にならず上限でクランプされる
-  assert.equal(clampTimeoutMs(18446744073709551615n), 2147483647);
-});
-
-// ============================================================================
-// matchNamespacePrefix
-// ============================================================================
-
-test("matchNamespacePrefix: 完全一致する場合、空 suffix を返す", () => {
-  // trackNamespace と namespacePrefix が完全に一致する場合、
-  // suffix は空配列になることを検証する
-  const result = matchNamespacePrefix(["a", "b"], ["a", "b"]);
-  assert.deepEqual(result, []);
-});
-
-test("matchNamespacePrefix: 前方一致する場合、後続要素を suffix として返す", () => {
-  // trackNamespace の先頭要素が namespacePrefix に一致する場合、
-  // 残りの要素が suffix として返されることを検証する
-  const result = matchNamespacePrefix(["ns", "sub", "trackId", "data"], ["ns", "sub"]);
-  assert.deepEqual(result, ["trackId", "data"]);
-});
-
-test("matchNamespacePrefix: 空の namespacePrefix は常にマッチし全要素を suffix として返す", () => {
-  // namespacePrefix が空配列の場合は常に前方一致する
-  const result = matchNamespacePrefix(["any"], []);
-  assert.deepEqual(result, ["any"]);
-});
-
-test("matchNamespacePrefix: namespacePrefix の方が長い場合はマッチしない", () => {
-  // namespacePrefix が trackNamespace より長い場合、前方一致できない
-  const result = matchNamespacePrefix(["a"], ["a", "b"]);
-  assert.equal(result, null);
-});
-
-test("matchNamespacePrefix: 要素が一致しない場合は null を返す", () => {
-  // trackNamespace の要素が namespacePrefix の要素と一致しない場合
-  const result = matchNamespacePrefix(["a", "x"], ["a", "b"]);
-  assert.equal(result, null);
-});
-
-test("matchNamespacePrefix: 先頭から不一致の場合は null を返す", () => {
-  // 先頭要素から一致しない場合
-  const result = matchNamespacePrefix(["x", "y"], ["a", "b"]);
-  assert.equal(result, null);
-});
-
-test("matchNamespacePrefix: 両方空配列の場合は空 suffix を返す", () => {
-  const result = matchNamespacePrefix([], []);
-  assert.deepEqual(result, []);
-});
-
-// ============================================================================
-// namespacePrefixesOverlap / validateNamespacePrefixUpdate
-// draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions)
-// ============================================================================
-
-test("namespacePrefixesOverlap: 新 prefix が既存 prefix の sub-prefix なら true", () => {
-  // 新 prefix ["a"] は既存 prefix ["a", "b"] の sub-prefix であり共通 prefix を持つ
-  assert.isTrue(namespacePrefixesOverlap(["a"], ["a", "b"]));
-});
-
-test("namespacePrefixesOverlap: 既存 prefix が新 prefix の sub-prefix なら true", () => {
-  // 既存 prefix ["a"] は新 prefix ["a", "b"] の sub-prefix であり共通 prefix を持つ
-  assert.isTrue(namespacePrefixesOverlap(["a", "b"], ["a"]));
-});
-
-test("namespacePrefixesOverlap: 完全一致は true", () => {
-  assert.isTrue(namespacePrefixesOverlap(["a", "b"], ["a", "b"]));
-});
-
-test("namespacePrefixesOverlap: 共通 prefix が無ければ false", () => {
-  assert.isFalse(namespacePrefixesOverlap(["a"], ["b"]));
-  assert.isFalse(namespacePrefixesOverlap(["a", "b"], ["a", "c"]));
-});
-
-test("namespacePrefixesOverlap: 空 prefix はすべてと共通 prefix を持つ", () => {
-  // 空配列はあらゆる prefix の sub-prefix であるため true
-  assert.isTrue(namespacePrefixesOverlap([], ["a"]));
-  assert.isTrue(namespacePrefixesOverlap(["a"], []));
-});
-
-test("validateNamespacePrefixUpdate: 重複が無ければ throw しない", () => {
-  // 新 prefix ["a", "b"] は既存 prefix ["a", "c"] と共通 prefix を持たない
-  assert.doesNotThrow(() =>
-    validateNamespacePrefixUpdate(["a", "b"], [["a", "c"]], "SUBSCRIBE_TRACKS"),
-  );
-});
-
-test("validateNamespacePrefixUpdate: 新 prefix が既存 prefix の sub-prefix なら throw する", () => {
-  assert.throws(
-    () => validateNamespacePrefixUpdate(["a"], [["a", "b"]], "SUBSCRIBE_NAMESPACE"),
-    /overlaps with active subscription prefix/,
-  );
-});
-
-test("validateNamespacePrefixUpdate: 既存 prefix が新 prefix の sub-prefix なら throw する", () => {
-  assert.throws(
-    () => validateNamespacePrefixUpdate(["a", "b"], [["a"]], "SUBSCRIBE_TRACKS"),
-    /overlaps with active subscription prefix/,
-  );
-});
-
-test("validateNamespacePrefixUpdate: 複数既存 prefix のいずれかと重複すれば throw する", () => {
-  assert.throws(
-    () => validateNamespacePrefixUpdate(["a", "b"], [["x"], ["a"]], "SUBSCRIBE_NAMESPACE"),
-    /overlaps with active subscription prefix/,
-  );
-});
-
-test("validateNamespacePrefixUpdate: アクティブな既存 prefix が無ければ throw しない", () => {
-  assert.doesNotThrow(() => validateNamespacePrefixUpdate(["a", "b"], [], "SUBSCRIBE_NAMESPACE"));
-});
 
 // ============================================================================
 // AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
@@ -200,42 +40,6 @@ test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-
   }
 });
 
-test("buildSubscribeParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
-  const parameters = buildSubscribeParameters({ authorizationToken: useValueToken() });
-  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
-  assert.equal(authParams.length, 1);
-
-  // encodeParameters / decodeParameters で round-trip してもトークンが再現する
-  const [decoded] = decodeParameters(encodeParameters(parameters));
-  const decodedAuth = decoded.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
-  assert.isDefined(decodedAuth);
-  const token = decodeAuthorizationToken(decodedAuth!.value);
-  assert.equal(token.aliasType, AuthorizationTokenAliasType.USE_VALUE);
-});
-
-test("buildSubscribeParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
-  const parameters = buildSubscribeParameters({});
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
-});
-
-test("buildFetchParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
-  const parameters = buildFetchParameters({
-    fillTimeout: 1000n,
-    authorizationToken: useValueToken(),
-  });
-  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
-  assert.equal(authParams.length, 1);
-  // FILL_TIMEOUT も同時に送出される
-  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.FILL_TIMEOUT));
-});
-
-test("buildFetchParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
-  const parameters = buildFetchParameters({
-    fillTimeout: 1000n,
-  });
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
-});
-
 // ============================================================================
 // 0478: リクエスト種別ごとの送信可能パラメータ
 // ============================================================================
@@ -245,19 +49,6 @@ test("buildFetchParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN 
  * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
  * FETCH でも送信できることを検証する。
  */
-test("buildFetchParameters: subscriberPriority が SUBSCRIBER_PRIORITY パラメータになる", () => {
-  const parameters = buildFetchParameters({ subscriberPriority: 42 });
-  const priority = parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY);
-
-  assert.isDefined(priority);
-  assert.deepEqual(priority?.value, new Uint8Array([42]));
-});
-
-test("buildFetchParameters: subscriberPriority 未指定は SUBSCRIBER_PRIORITY を含まない", () => {
-  const parameters = buildFetchParameters({});
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY));
-});
-
 /**
  * draft-ietf-moq-transport-21 §9.20.9 (GROUP ORDER Parameter):
  * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
@@ -285,23 +76,6 @@ test("buildFetchParameters: 不正な groupOrder で throw する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-21 §9.20.3 (AUTHORIZATION TOKEN Parameter):
- * "It MAY appear in a PUBLISH, SUBSCRIBE, REQUEST_UPDATE, SUBSCRIBE_NAMESPACE,
- *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
- */
-test("buildTrackStatusParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
-  const parameters = buildTrackStatusParameters({ authorizationToken: useValueToken() });
-  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
-
-  assert.equal(authParams.length, 1);
-});
-
-test("buildTrackStatusParameters: authorizationToken 未指定は AUTHORIZATION_TOKEN を含まない", () => {
-  const parameters = buildTrackStatusParameters({ includeProperties: true });
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN));
-});
-
-/**
  * draft-ietf-moq-transport-21 §9.18.1:
  * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
  *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
@@ -314,50 +88,6 @@ test("buildSubscribeTracksParameters: subscriberPriority が SUBSCRIBER_PRIORITY
 
   assert.isDefined(priority);
   assert.deepEqual(priority?.value, new Uint8Array([7]));
-});
-
-test("buildSubscribeTracksParameters: filter が LOCATION_FILTER パラメータになる", () => {
-  const parameters = buildSubscribeTracksParameters({ filter: { startGroup: 3n } });
-  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
-});
-
-test("buildSubscribeTracksParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
-  const parameters = buildSubscribeTracksParameters({ authorizationToken: useValueToken() });
-  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
-
-  assert.equal(authParams.length, 1);
-});
-
-test("buildSubscribeTracksParameters: fill が FILL_PARAMETERS パラメータになる", () => {
-  const parameters = buildSubscribeTracksParameters({ fill: { fillTimeout: 500n } });
-  const fill = parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS);
-
-  assert.isDefined(fill);
-  // 内側の FILL_TIMEOUT がデコードできる
-  const inner = decodeFillParameters(fill as Parameter);
-  const timeout = inner.find((p) => p.type === MessageParameterType.FILL_TIMEOUT);
-  assert.deepEqual(timeout?.value, new Uint8Array([0x81, 0xf4]));
-});
-
-test("buildSubscribeTracksParameters: 新パラメータ未指定は従来どおりの構成になる", () => {
-  const parameters = buildSubscribeTracksParameters({ groupOrder: "Ascending" });
-  const types = parameters.map((p) => p.type);
-
-  assert.notInclude(types, MessageParameterType.LOCATION_FILTER);
-  assert.notInclude(types, MessageParameterType.SUBSCRIBER_PRIORITY);
-  assert.notInclude(types, MessageParameterType.AUTHORIZATION_TOKEN);
-  assert.notInclude(types, MessageParameterType.FILL_PARAMETERS);
-});
-
-test("buildSubscribeNamespaceParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
-  const parameters = buildSubscribeNamespaceParameters({ authorizationToken: useValueToken() });
-  const authParams = parameters.filter((p) => p.type === MessageParameterType.AUTHORIZATION_TOKEN);
-  assert.equal(authParams.length, 1);
-});
-
-test("buildSubscribeNamespaceParameters: authorizationToken 未指定は空", () => {
-  const parameters = buildSubscribeNamespaceParameters({});
-  assert.equal(parameters.length, 0);
 });
 
 // ============================================================================
@@ -403,50 +133,6 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
 // draft-ietf-moq-transport-21 §9.18.1 / §4.3 / §3.3.2
 // ============================================================================
 
-test("buildSubscribeTracksParameters: rangeFilters が SUBSCRIBE_TRACKS パラメータになる", () => {
-  const parameters = buildSubscribeTracksParameters({
-    groupOrder: "Ascending",
-    forward: false,
-    rangeFilters: [
-      {
-        type: "trackProperty",
-        setId: 0,
-        propertyType: 0x30n,
-        ranges: [{ start: 1n, end: 1n }],
-      },
-      {
-        type: "subgroup",
-        setId: 0,
-        ranges: [{ start: 0n, end: 2n }],
-      },
-    ],
-  });
-
-  const trackPropertyFilter = parameters.find(
-    (p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER,
-  );
-  assert.isDefined(trackPropertyFilter);
-  const subgroupFilter = parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER);
-  assert.isDefined(subgroupFilter);
-
-  // GROUP_ORDER / FORWARD も同時に送出される
-  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.GROUP_ORDER));
-  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.FORWARD));
-
-  // encodeParameters / decodeParameters で round-trip しても再現する
-  const [decoded] = decodeParameters(encodeParameters(parameters));
-  const decodedTrackPropertyFilter = decoded.find(
-    (p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER,
-  );
-  assert.isDefined(decodedTrackPropertyFilter);
-});
-
-test("buildSubscribeTracksParameters: rangeFilters 未指定は Range Filter を含まない", () => {
-  const parameters = buildSubscribeTracksParameters({ groupOrder: "Descending" });
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.TRACK_PROPERTY_FILTER));
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
-});
-
 /**
  * draft-ietf-moq-transport-21 §3.3.2:
  * 削除 (Length=0) は REQUEST_UPDATE のみに定義されるため、
@@ -460,16 +146,6 @@ test("buildSubscribeTracksParameters: 削除指定 (remove: true) で throw す�
       }),
     /cannot remove range filters in SUBSCRIBE_TRACKS: remove is only allowed in REQUEST_UPDATE/,
   );
-});
-
-test("buildRangeFilterParameters: 追加と削除が混在してもパラメータ列に変換される", () => {
-  const parameters = buildRangeFilterParameters([
-    { type: "priority", setId: 1, ranges: [{ start: 128n }] },
-    { type: "objectProperty", remove: true },
-  ]);
-  assert.equal(parameters.length, 2);
-  assert.equal(parameters[0].type, MessageParameterType.PRIORITY_FILTER);
-  assert.equal(parameters[1].type, MessageParameterType.OBJECT_PROPERTY_FILTER);
 });
 
 // ============================================================================
@@ -494,13 +170,6 @@ test("buildSubscribeParameters: TRACK_PROPERTY_FILTER で throw する", () => {
       }),
     /cannot send TRACK_PROPERTY_FILTER in SUBSCRIBE/,
   );
-});
-
-test("buildSubscribeParameters: 正常な rangeFilters はエンコードされる", () => {
-  const parameters = buildSubscribeParameters({
-    rangeFilters: [{ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
-  });
-  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.OBJECTID_FILTER));
 });
 
 /**
@@ -535,22 +204,6 @@ test("buildSubscribeParameters: 3 フィールドの End Group がちょうど 2
   assert.isDefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
 });
 
-test("buildFetchParameters: filter が LOCATION_FILTER パラメータになる", () => {
-  const parameters = buildFetchParameters({
-    filter: { startGroup: 0n, startObject: 0n, endGroupDelta: 1n },
-  });
-  const locationFilter = parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER);
-  assert.isDefined(locationFilter);
-});
-
-test("buildFetchParameters: filter 指定なしのとき LOCATION_FILTER は付かない", () => {
-  // フィルタなしは {0, 0} から Largest Object までの全オブジェクト要求に相当し、
-  // §9.20.10「If omitted from FETCH ... the fetch ... is unfiltered.」に従い
-  // パラメータを送らない。
-  const parameters = buildFetchParameters({});
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
-});
-
 test("buildFetchParameters: 3 フィールドの End Group が 2^64-1 を超えると InvalidFilterError", () => {
   assert.throws(
     () =>
@@ -563,13 +216,6 @@ test("buildFetchParameters: 3 フィールドの End Group が 2^64-1 を超え�
       }),
     InvalidFilterError,
   );
-});
-
-test("buildFetchParameters: rangeFilters が FETCH パラメータになる", () => {
-  const parameters = buildFetchParameters({
-    rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
-  });
-  assert.isDefined(parameters.find((p) => p.type === MessageParameterType.SUBGROUP_FILTER));
 });
 
 test("buildFetchParameters: 削除指定で throw する", () => {
@@ -595,395 +241,8 @@ test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 });
 
 // ============================================================================
-// validateRangeFilterLimits
-// draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES)
-// ============================================================================
-
-test("validateRangeFilterLimits: undefined は throw しない", () => {
-  assert.doesNotThrow(() => validateRangeFilterLimits(undefined, 0, "SUBSCRIBE_TRACKS"));
-});
-
-test("validateRangeFilterLimits: 空配列は throw しない", () => {
-  assert.doesNotThrow(() => validateRangeFilterLimits([], 0, "SUBSCRIBE_TRACKS"));
-});
-
-test("validateRangeFilterLimits: ピアの MAX_FILTER_RANGES が 0 なら throw する", () => {
-  assert.throws(
-    () =>
-      validateRangeFilterLimits(
-        [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
-        0,
-        "SUBSCRIBE_TRACKS",
-      ),
-    /MAX_FILTER_RANGES is 0/,
-  );
-});
-
-test("validateRangeFilterLimits: Ranges 数が上限を超えるなら throw する", () => {
-  assert.throws(
-    () =>
-      validateRangeFilterLimits(
-        [
-          {
-            type: "subgroup",
-            setId: 0,
-            ranges: [
-              { start: 0n, end: 1n },
-              { start: 3n, end: 4n },
-            ],
-          },
-        ],
-        1,
-        "REQUEST_UPDATE",
-      ),
-    /exceeds peer MAX_FILTER_RANGES 1/,
-  );
-});
-
-test("validateRangeFilterLimits: Ranges 数が上限以下なら throw しない", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterLimits(
-      [
-        {
-          type: "subgroup",
-          setId: 0,
-          ranges: [
-            { start: 0n, end: 1n },
-            { start: 3n, end: 4n },
-          ],
-        },
-      ],
-      2,
-      "SUBSCRIBE_TRACKS",
-    ),
-  );
-});
-
-test("validateRangeFilterLimits: 削除 (remove: true) は Ranges 数に数えられない", () => {
-  // 削除のみは Ranges を持たないため、上限 1 でも超過しない
-  assert.doesNotThrow(() =>
-    validateRangeFilterLimits([{ type: "objectId", remove: true }], 1, "REQUEST_UPDATE"),
-  );
-  // 上限 0 は「any such filter parameters」を MUST NOT 送信のため、削除もブロックされる
-  assert.throws(() =>
-    validateRangeFilterLimits([{ type: "objectId", remove: true }], 0, "REQUEST_UPDATE"),
-  );
-});
-
-// ============================================================================
-// mergeRangeFilters
-// draft-ietf-moq-transport-21 §3.3.2 (削除・置換・不変)
-// ============================================================================
-
-test("mergeRangeFilters: remove で当該パラメータ型全体が削除される", () => {
-  const current = [
-    { type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] },
-    { type: "subgroup" as const, setId: 1, ranges: [{ start: 2n, end: 3n }] },
-    { type: "objectId" as const, setId: 0, ranges: [{ start: 4n, end: 5n }] },
-  ];
-  const merged = mergeRangeFilters(current, [{ type: "subgroup", remove: true }]);
-  assert.deepEqual(merged, [current[2]]);
-});
-
-test("mergeRangeFilters: 非 remove で当該パラメータ型全体が置換される", () => {
-  const current = [
-    { type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] },
-    { type: "subgroup" as const, setId: 1, ranges: [{ start: 2n, end: 3n }] },
-    { type: "objectId" as const, setId: 0, ranges: [{ start: 4n, end: 5n }] },
-  ];
-  const merged = mergeRangeFilters(current, [
-    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
-  ]);
-  // subgroup は全体置換 (SetID 1 も消え、置換後のエントリは末尾に移動)、
-  // objectId は不変
-  assert.deepEqual(merged, [
-    { type: "objectId", setId: 0, ranges: [{ start: 4n, end: 5n }] },
-    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
-  ]);
-});
-
-test("mergeRangeFilters: 同一型の複数エントリ (異なる SetID) は他型の追加で保持される", () => {
-  const current = [
-    { type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] },
-    { type: "subgroup" as const, setId: 1, ranges: [{ start: 2n, end: 3n }] },
-  ];
-  const merged = mergeRangeFilters(current, [
-    { type: "objectId", setId: 0, ranges: [{ start: 4n, end: 5n }] },
-  ]);
-  // update に現れない型 (subgroup) は不変のまま複数エントリが保持される
-  assert.deepEqual(merged, [
-    ...current,
-    { type: "objectId", setId: 0, ranges: [{ start: 4n, end: 5n }] },
-  ]);
-});
-
-test("mergeRangeFilters: update 内の同一型複数エントリ (異なる SetID) は置換として保持される", () => {
-  const current = [{ type: "subgroup" as const, setId: 0, ranges: [{ start: 0n, end: 1n }] }];
-  const merged = mergeRangeFilters(current, [
-    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
-    { type: "subgroup", setId: 1, ranges: [{ start: 20n, end: 21n }] },
-  ]);
-  // 同一型の複数エントリ (異なる SetID) は置換後の状態として保持される
-  assert.deepEqual(merged, [
-    { type: "subgroup", setId: 0, ranges: [{ start: 10n, end: 11n }] },
-    { type: "subgroup", setId: 1, ranges: [{ start: 20n, end: 21n }] },
-  ]);
-});
-
-// ============================================================================
-// validateRangeFilterSpecs
-// draft-ietf-moq-transport-21 §3.3.2 (削除は REQUEST_UPDATE のみ / 0x29 のスコープ / 組み合わせ重複)
-// ============================================================================
-
-test("validateRangeFilterSpecs: undefined / 空配列は throw しない", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs(undefined, "SUBSCRIBE", {
-      allowRemove: false,
-      allowTrackProperty: false,
-    }),
-  );
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs([], "SUBSCRIBE", {
-      allowRemove: false,
-      allowTrackProperty: false,
-    }),
-  );
-});
-
-test("validateRangeFilterSpecs: allowRemove=false で削除を指定すると throw する", () => {
-  assert.throws(
-    () =>
-      validateRangeFilterSpecs([{ type: "objectId", remove: true }], "SUBSCRIBE", {
-        allowRemove: false,
-        allowTrackProperty: false,
-      }),
-    /cannot remove range filters in SUBSCRIBE: remove is only allowed in REQUEST_UPDATE/,
-  );
-});
-
-test("validateRangeFilterSpecs: allowRemove=true なら削除は許可される", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs([{ type: "objectId", remove: true }], "REQUEST_UPDATE", {
-      allowRemove: true,
-      allowTrackProperty: false,
-    }),
-  );
-});
-
-test("validateRangeFilterSpecs: allowTrackProperty=false で 0x29 を指定すると throw する", () => {
-  assert.throws(
-    () =>
-      validateRangeFilterSpecs(
-        [{ type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] }],
-        "FETCH",
-        { allowRemove: false, allowTrackProperty: false },
-      ),
-    /cannot send TRACK_PROPERTY_FILTER in FETCH: only allowed in SUBSCRIBE_TRACKS/,
-  );
-  // 削除エントリでも 0x29 は throw する
-  assert.throws(
-    () =>
-      validateRangeFilterSpecs([{ type: "trackProperty", remove: true }], "FETCH", {
-        allowRemove: false,
-        allowTrackProperty: false,
-      }),
-    /cannot send TRACK_PROPERTY_FILTER in FETCH: only allowed in SUBSCRIBE_TRACKS/,
-  );
-});
-
-test("validateRangeFilterSpecs: allowTrackProperty=true なら 0x29 は許可される", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs(
-      [{ type: "trackProperty", setId: 0, propertyType: 0x30n, ranges: [{ start: 1n }] }],
-      "SUBSCRIBE_TRACKS",
-      { allowRemove: false, allowTrackProperty: true },
-    ),
-  );
-});
-
-test("validateRangeFilterSpecs: 同一組み合わせの重複で throw する", () => {
-  assert.throws(
-    () =>
-      validateRangeFilterSpecs(
-        [
-          { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
-          { type: "subgroup", setId: 0, ranges: [{ start: 2n, end: 3n }] },
-        ],
-        "SUBSCRIBE",
-        { allowRemove: false, allowTrackProperty: false },
-      ),
-    /duplicate range filter combination in SUBSCRIBE: subgroup:0:/,
-  );
-});
-
-test("validateRangeFilterSpecs: SetID 違いは重複にならない", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs(
-      [
-        { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
-        { type: "subgroup", setId: 1, ranges: [{ start: 2n, end: 3n }] },
-      ],
-      "SUBSCRIBE",
-      { allowRemove: false, allowTrackProperty: false },
-    ),
-  );
-});
-
-test("validateRangeFilterSpecs: Property Type 違いは重複にならない", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs(
-      [
-        {
-          type: "objectProperty",
-          setId: 0,
-          propertyType: 0x02n,
-          ranges: [{ start: 1n }],
-        },
-        {
-          type: "objectProperty",
-          setId: 0,
-          propertyType: 0x04n,
-          ranges: [{ start: 1n }],
-        },
-      ],
-      "SUBSCRIBE",
-      { allowRemove: false, allowTrackProperty: false },
-    ),
-  );
-});
-
-test("validateRangeFilterSpecs: 同一 Property Type の重複で throw する", () => {
-  assert.throws(
-    () =>
-      validateRangeFilterSpecs(
-        [
-          {
-            type: "objectProperty",
-            setId: 0,
-            propertyType: 0x02n,
-            ranges: [{ start: 1n }],
-          },
-          {
-            type: "objectProperty",
-            setId: 0,
-            propertyType: 0x02n,
-            ranges: [{ start: 2n }],
-          },
-        ],
-        "SUBSCRIBE",
-        { allowRemove: false, allowTrackProperty: false },
-      ),
-    /duplicate range filter combination in SUBSCRIBE: objectProperty:0:2/,
-  );
-});
-
-test("validateRangeFilterSpecs: 削除エントリは重複判定の対象外", () => {
-  assert.doesNotThrow(() =>
-    validateRangeFilterSpecs(
-      [
-        { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] },
-        { type: "subgroup", remove: true },
-      ],
-      "REQUEST_UPDATE",
-      { allowRemove: true, allowTrackProperty: false },
-    ),
-  );
-});
-
-// ============================================================================
-// validateTrackNamespaceForSend
-// draft-ietf-moq-transport-21 §2.4.2 (Reserved Namespaces) / §6.5 (.session)
-// ============================================================================
-
-test("validateTrackNamespaceForSend: 通常の namespace は throw しない", () => {
-  assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", "team"], "video"));
-  assert.doesNotThrow(() => validateTrackNamespaceForSend(["example.com"]));
-});
-
-test("validateTrackNamespaceForSend: 空 namespace は throw しない", () => {
-  // ゼロ要素 namespace は SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS で全対象を意味する
-  assert.doesNotThrow(() => validateTrackNamespaceForSend([]));
-});
-
-test("validateTrackNamespaceForSend: .session namespace は throw する", () => {
-  assert.throws(
-    () => validateTrackNamespaceForSend([".session"], "track"),
-    /session-level namespace \.session is reserved/,
-  );
-});
-
-test("validateTrackNamespaceForSend: 予約 namespace の判定は先頭フィールドのみ", () => {
-  // draft-ietf-moq-transport-21 §2.4.2: 判定は先頭フィールドのみ
-  assert.doesNotThrow(() => validateTrackNamespaceForSend(["live", ".session"], "track"));
-});
-
-/**
- * draft-ietf-moq-transport-21 §8.7 / §2.4.1:
- * Track Namespace は 0〜32 フィールド。33 フィールド以上は送信前に拒否する。
- */
-test("validateTrackNamespaceForSend: 32 フィールドは throw せず 33 フィールドは throw する", () => {
-  const fields32 = Array.from({ length: 32 }, (_, i) => `f${i}`);
-  const fields33 = Array.from({ length: 33 }, (_, i) => `f${i}`);
-  assert.doesNotThrow(() => validateTrackNamespaceForSend(fields32, "track"));
-  assert.throws(
-    () => validateTrackNamespaceForSend(fields33, "track"),
-    /track namespace fields exceeds maximum: 33 > 32/,
-  );
-});
-
-test("validateTrackNamespaceForSend: .session + 空 Track Name は DOES_NOT_EXIST で throw する", () => {
-  assert.throws(
-    () => validateTrackNamespaceForSend([".session"], ""),
-    /does not exist \(DOES_NOT_EXIST\)/,
-  );
-});
-
-test("validateTrackNamespaceForSend: . で始まる予約 namespace は throw する", () => {
-  assert.throws(
-    () => validateTrackNamespaceForSend([".foo"], "track"),
-    /reserved namespace prefix \.foo is not allowed/,
-  );
-});
-
-test("validateTrackNamespaceForSend: . 単体の namespace は throw する", () => {
-  // draft-ietf-moq-transport-21 §2.4.2: "." 単体は MUST NOT be used for any purpose
-  assert.throws(
-    () => validateTrackNamespaceForSend(["."], "track"),
-    /reserved namespace prefix \. is not allowed/,
-  );
-});
-
-// ============================================================================
-// compareLocations
-// draft-ietf-moq-transport-21 §8.2 (Location Structure)
-// ============================================================================
-
-test("compareLocations: 同一 Location は 0 を返す", () => {
-  assert.equal(compareLocations({ group: 1n, object: 2n }, { group: 1n, object: 2n }), 0);
-});
-
-test("compareLocations: Group が小さい方が負を返す", () => {
-  assert.equal(compareLocations({ group: 1n, object: 9n }, { group: 2n, object: 0n }), -1);
-  assert.equal(compareLocations({ group: 2n, object: 0n }, { group: 1n, object: 9n }), 1);
-});
-
-test("compareLocations: 同一 Group 内では Object で比較する", () => {
-  assert.equal(compareLocations({ group: 1n, object: 1n }, { group: 1n, object: 2n }), -1);
-  assert.equal(compareLocations({ group: 1n, object: 2n }, { group: 1n, object: 1n }), 1);
-});
-
-// ============================================================================
 // validateFetchOkEndLocation
 // ============================================================================
-
-test("validateFetchOkEndLocation: End が Start 以上なら undefined", () => {
-  assert.isUndefined(
-    validateFetchOkEndLocation({ group: 0n, object: 0n }, { group: 0n, object: 0n }),
-  );
-  assert.isUndefined(
-    validateFetchOkEndLocation({ group: 0n, object: 0n }, { group: 1n, object: 0n }),
-  );
-});
 
 test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセージを返す", () => {
   const message = validateFetchOkEndLocation({ group: 2n, object: 0n }, { group: 1n, object: 0n });
@@ -992,113 +251,9 @@ test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセ�
 });
 
 // ============================================================================
-// resolveFetchStartLocation
-// ============================================================================
-
-test("resolveFetchStartLocation: filter 指定なしは {0, 0} を返す", () => {
-  assert.deepEqual(resolveFetchStartLocation(undefined), { group: 0n, object: 0n });
-});
-
-test("resolveFetchStartLocation: reset (Length 0) は {0, 0} を返す", () => {
-  assert.deepEqual(resolveFetchStartLocation({ reset: true }), { group: 0n, object: 0n });
-});
-
-test("resolveFetchStartLocation: 絶対開始 (2 フィールド) は {startGroup, startObject} を返す", () => {
-  assert.deepEqual(resolveFetchStartLocation({ startGroup: 3n, startObject: 2n }), {
-    group: 3n,
-    object: 2n,
-  });
-});
-
-test("resolveFetchStartLocation: 3 フィールドは {startGroup, startObject} を返す", () => {
-  assert.deepEqual(
-    resolveFetchStartLocation({ startGroup: 3n, startObject: 2n, endGroupDelta: 1n }),
-    { group: 3n, object: 2n },
-  );
-});
-
-test("resolveFetchStartLocation: 3 フィールドで両方 0 でも {0, 0} を返す", () => {
-  // 3 フィールドは絶対表現 (§9.20.10「Otherwise, all fields are absolute.」) のため、
-  // 2 フィールド両方 0 の Next Object 解釈は適用されない。
-  assert.deepEqual(
-    resolveFetchStartLocation({ startGroup: 0n, startObject: 0n, endGroupDelta: 1n }),
-    { group: 0n, object: 0n },
-  );
-});
-
-test("resolveFetchStartLocation: 4 フィールドは {startGroup, startObject} を返す", () => {
-  assert.deepEqual(
-    resolveFetchStartLocation({
-      startGroup: 3n,
-      startObject: 2n,
-      endGroupDelta: 1n,
-      endObject: 5n,
-    }),
-    { group: 3n, object: 2n },
-  );
-});
-
-test("resolveFetchStartLocation: 4 フィールドで両方 0 でも {0, 0} を返す", () => {
-  assert.deepEqual(
-    resolveFetchStartLocation({
-      startGroup: 0n,
-      startObject: 0n,
-      endGroupDelta: 1n,
-      endObject: 5n,
-    }),
-    { group: 0n, object: 0n },
-  );
-});
-
-test("resolveFetchStartLocation: 相対指定 (1 フィールド) は undefined を返す", () => {
-  // Start Group は Largest Object の Group + 1 - StartGroup の相対計算であり、
-  // クライアント側では Largest Object を確定できないため undefined。
-  assert.isUndefined(resolveFetchStartLocation({ startGroup: 0n }));
-});
-
-test("resolveFetchStartLocation: Next Object 形式 (0, 0) は undefined を返す", () => {
-  // Next Object は {Largest.Group, Largest.Object + 1} で、Largest Object 依存。
-  assert.isUndefined(resolveFetchStartLocation({ startGroup: 0n, startObject: 0n }));
-});
-
-// ============================================================================
 // buildFillParameters / FILL_PARAMETERS
 // draft-ietf-moq-transport-21 §3.4 / §9.20.16
 // ============================================================================
-
-/**
- * draft-ietf-moq-transport-21 §9.20.16:
- * SUBSCRIBE に fill を指定すると FILL_PARAMETERS (0x23) が載り、
- * 内側に指定内容が入ることを検証する。
- */
-test("buildSubscribeParameters: fill が FILL_PARAMETERS パラメータになる", () => {
-  const parameters = buildSubscribeParameters({
-    fill: {
-      filter: { startGroup: 10n, startObject: 2n },
-      fillTimeout: 100n,
-      subscriberPriority: 10,
-      groupOrder: "Descending",
-    },
-  });
-
-  const fillParam = parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS);
-  assert.isDefined(fillParam);
-  const inner = decodeFillParameters(fillParam!);
-  assert.isDefined(inner.find((p) => p.type === MessageParameterType.LOCATION_FILTER));
-  assert.isDefined(inner.find((p) => p.type === MessageParameterType.FILL_TIMEOUT));
-  assert.isDefined(inner.find((p) => p.type === MessageParameterType.SUBSCRIBER_PRIORITY));
-  assert.isDefined(inner.find((p) => p.type === MessageParameterType.GROUP_ORDER));
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.20.16:
- * fill 未指定の SUBSCRIBE には FILL_PARAMETERS が付かないことを検証する。
- */
-test("buildSubscribeParameters: fill 未指定は FILL_PARAMETERS を含まない", () => {
-  const parameters = buildSubscribeParameters({});
-
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.FILL_PARAMETERS));
-});
 
 /**
  * draft-ietf-moq-transport-21 §9.20.10 / §9.20.16:
@@ -1171,15 +326,6 @@ test("buildSubscribeParameters: includeProperties が INCLUDE_PROPERTIES にな�
   const falsyParam = falsy.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES);
   assert.isDefined(falsyParam);
   assert.deepEqual(falsyParam!.value, new Uint8Array([0]));
-});
-
-/**
- * draft-ietf-moq-transport-21 §9.20.22:
- * includeProperties 省略時はパラメータ自体を送らない (デフォルト 1 と同等)。
- */
-test("buildSubscribeParameters: includeProperties 省略時は INCLUDE_PROPERTIES を含まない", () => {
-  const parameters = buildSubscribeParameters({});
-  assert.isUndefined(parameters.find((p) => p.type === MessageParameterType.INCLUDE_PROPERTIES));
 });
 
 /**

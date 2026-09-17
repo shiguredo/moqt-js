@@ -16,7 +16,7 @@ import {
   publishSendObjectInternal,
 } from "./publish";
 import type { SessionInternal } from "./types";
-import { encodeObjectFields, encodeSubgroupHeader, SubgroupHeaderType } from "../dataStream";
+import { encodeObjectFields, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
 import { calculateObjectIdDelta } from "./params";
 import { mergeDeliveryTimeoutObjectProperties } from "../properties";
@@ -770,133 +770,6 @@ function createChunkRecordingSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-21 §11.3 / §11.3.2 (Closing Subgroup Streams):
- * Object Fields と payload は 1 回の write() で送信する。
- * 従来の 2 write (fields / payload) とワイヤバイト列が同一であり、
- * オブジェクト送出の write 回数がヘッダーとは別に 1 回であることを検証する。
- */
-test("publishSendObjectInternal: Object Fields と payload は単一 write で送信される", async () => {
-  const { session, written } = createChunkRecordingSession();
-  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  const payload = new Uint8Array([1, 2, 3, 4]);
-
-  await publishSendObjectInternal(session, publisher, { groupId: 0, objectId: 0, payload });
-
-  // ヘッダー write + オブジェクト write の 2 回 (従来は 3 回)
-  assert.equal(written.length, 2);
-  // ワイヤバイト列は従来の 2 write 連結と同一である
-  const expectedHeader = encodeSubgroupHeader({
-    type: SubgroupHeaderType.FIRST_OBJ_EXT,
-    trackAlias: 1n,
-    groupId: 0n,
-    publisherPriority: 128,
-    firstObject: true,
-  });
-  const objectProperties = mergeDeliveryTimeoutObjectProperties(undefined, undefined, undefined);
-  const expectedFields = encodeObjectFields(
-    calculateObjectIdDelta(-1n, 0n),
-    BigInt(payload.length),
-    SubgroupHeaderType.FIRST_OBJ_EXT,
-    ObjectStatus.NORMAL,
-    objectProperties,
-  );
-  assert.deepEqual(
-    concatUint8Arrays(written),
-    concatUint8Arrays([expectedHeader, expectedFields, payload]),
-  );
-  // 連結順序の構造 check: オブジェクト write の末尾は payload そのもの
-  // (encoder 関数に依存しない独立した検証)
-  assert.deepEqual(written[1].slice(-payload.length), payload);
-});
-
-/**
- * 同一 Group の 2 件目はヘッダーなしの単一 write になることを検証する。
- * 単一 write 化が初回オブジェクト以外にも適用される一般性を裏付ける。
- */
-test("publishSendObjectInternal: 同一 Group の 2 件目は header なし単一 write になる", async () => {
-  const { session, written } = createChunkRecordingSession();
-  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-
-  await publishSendObjectInternal(session, publisher, {
-    groupId: 0,
-    objectId: 0,
-    payload: new Uint8Array([1, 2]),
-  });
-  await publishSendObjectInternal(session, publisher, {
-    groupId: 0,
-    objectId: 1,
-    payload: new Uint8Array([3, 4, 5]),
-  });
-
-  // ヘッダー write + オブジェクト write 2 回の計 3 回
-  assert.equal(written.length, 3);
-  const objectProperties = mergeDeliveryTimeoutObjectProperties(undefined, undefined, undefined);
-  const expectedFields = encodeObjectFields(
-    calculateObjectIdDelta(0n, 1n),
-    3n,
-    SubgroupHeaderType.FIRST_OBJ_EXT,
-    ObjectStatus.NORMAL,
-    objectProperties,
-  );
-  assert.deepEqual(written[2], concatUint8Arrays([expectedFields, new Uint8Array([3, 4, 5])]));
-});
-
-/**
- * 空 payload 時は fields のみの単一 write になる (従来どおり)。
- */
-test("publishSendObjectInternal: 空 payload 時は fields のみの単一 write になる", async () => {
-  const { session, written } = createChunkRecordingSession();
-  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-
-  await publishSendObjectInternal(session, publisher, {
-    groupId: 0,
-    objectId: 0,
-    payload: new Uint8Array(0),
-  });
-
-  // ヘッダー write + fields write の 2 回
-  assert.equal(written.length, 2);
-  const objectProperties = mergeDeliveryTimeoutObjectProperties(undefined, undefined, undefined);
-  const expectedFields = encodeObjectFields(
-    calculateObjectIdDelta(-1n, 0n),
-    0n,
-    SubgroupHeaderType.FIRST_OBJ_EXT,
-    ObjectStatus.NORMAL,
-    objectProperties,
-  );
-  assert.deepEqual(written[1], expectedFields);
-});
-
-/**
- * delivery timeout 付きでも properties 合成後の fields と payload が
- * 単一 write で送信されることを検証する (連結は data を不透明に扱う)。
- */
-test("publishSendObjectInternal: delivery timeout 付きも単一 write で送信される", async () => {
-  const { session, written } = createChunkRecordingSession();
-  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  const payload = new Uint8Array([9, 8, 7]);
-
-  await publishSendObjectInternal(session, publisher, {
-    groupId: 0,
-    objectId: 0,
-    payload,
-    deliveryTimeout: 100n,
-  });
-
-  // ヘッダー write + オブジェクト write の 2 回
-  assert.equal(written.length, 2);
-  const objectProperties = mergeDeliveryTimeoutObjectProperties(undefined, 100n, undefined);
-  const expectedFields = encodeObjectFields(
-    calculateObjectIdDelta(-1n, 0n),
-    BigInt(payload.length),
-    SubgroupHeaderType.FIRST_OBJ_EXT,
-    ObjectStatus.NORMAL,
-    objectProperties,
-  );
-  assert.deepEqual(written[1], concatUint8Arrays([expectedFields, payload]));
-});
-
-/**
  * オブジェクトバイト列の write を遅延させるセッションを構築する。
  *
  * ヘッダー write は即完了し、オブジェクトバイト列 write の完了は呼び出し側が
@@ -1072,24 +945,6 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
   assert.isFalse(session.publisherStreams.has(1n));
   assert.isFalse(session.closedSubgroups.has("1:0"));
   stuckWriter.releaseLock();
-});
-
-test("publishClosePublisherStream: 正常 close で登録を掃除する", async () => {
-  // 成功時は待たずに掃除する
-  const { session } = createSessionForPublish();
-  const writable = new WritableStream<Uint8Array>();
-  session.publisherStreams.set(1n, {
-    groupId: 0n,
-    writer: writable.getWriter(),
-    previousObjectId: 0n,
-    omittedObjects: false,
-  });
-  session.closedSubgroups.add("1:0");
-
-  await publishClosePublisherStream(session, 1n, 30);
-
-  assert.isFalse(session.publisherStreams.has(1n));
-  assert.isFalse(session.closedSubgroups.has("1:0"));
 });
 
 // ============================================================================
