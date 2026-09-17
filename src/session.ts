@@ -14,7 +14,6 @@ import {
 } from "./error";
 import {
   MessageType,
-  createTrackNamespace,
   decodeSetupPayload,
   getSetupAuthority,
   getSetupPath,
@@ -22,11 +21,7 @@ import {
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
   encodeSetupPayload,
-  encodePublishNamespacePayload,
-  encodeSubscribeNamespacePayload,
-  encodeSubscribeTracksPayload,
   createSetup,
-  getMessageTypeName,
   PublishDoneStatusCode,
   type AuthorizationToken,
   type Location,
@@ -47,14 +42,20 @@ import { type Fetcher, FetcherImpl } from "./fetcher";
 import type { FetchHeader } from "./dataStream";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
-import {
-  buildSubscribeTracksParameters,
-  buildSubscribeNamespaceParameters,
-  encodeAuthorizationTokenParameter,
-  validateRangeFilterLimits,
-  validateTrackNamespaceForSend,
-} from "./session/params";
 import * as bidi from "./session/bidi";
+import {
+  namespacesCloseNamespacePublication,
+  namespacesCloseNamespaceSubscription,
+  namespacesCloseTracksSubscription,
+  namespacesCreateNamespacePublication,
+  namespacesCreateNamespaceSubscription,
+  namespacesCreateTracksSubscription,
+  namespacesPublishNamespace,
+  namespacesSendNamespaceRequestUpdate,
+  namespacesSubscribeNamespace,
+  namespacesSubscribeTracks,
+  type NamespacesSessionInternal,
+} from "./session/namespaces";
 import {
   requestsCancelFetch,
   requestsCancelSubscription,
@@ -112,7 +113,6 @@ import {
   incomingWaitForFetcher,
   incomingValidateRequestId,
 } from "./session/incoming";
-import * as namespaceLoops from "./session/namespaceLoops";
 import { AuthTokenCache, processSetupAuthorizationTokens } from "./session/authTokenCache";
 import {
   sessionClose,
@@ -1347,7 +1347,7 @@ export class SessionImpl implements Session {
     | undefined;
 
   // リクエスト ID 管理
-  private nextRequestId = 0n;
+  nextRequestId = 0n;
   nextTrackAlias = 0n;
 
   // GOAWAY 状態
@@ -1491,7 +1491,7 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_NAMESPACE は専用の双方向ストリームで送受信される。
    * 応答として NAMESPACE / NAMESPACE_DONE のみが送られる。
    */
-  private namespaceSubscriptions = new Map<
+  namespaceSubscriptions = new Map<
     bigint,
     {
       callbacks: NamespaceSubscriptionCallbacks;
@@ -1513,7 +1513,7 @@ export class SessionImpl implements Session {
    * 送受信される。応答ストリーム上では PUBLISH_SKIPPED が送られる。PUBLISH は
    * 別の新規双方向ストリームで到着する。
    */
-  private tracksSubscriptions = new Map<
+  tracksSubscriptions = new Map<
     bigint,
     {
       callbacks: TracksSubscriptionCallbacks;
@@ -1536,7 +1536,7 @@ export class SessionImpl implements Session {
    * REQUEST_OK / REQUEST_ERROR が同じ双方向ストリームで応答される。
    * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-9.14
    */
-  private namespacePublications = new Map<
+  namespacePublications = new Map<
     bigint,
     {
       // セッション内部の状態オブジェクトで、callbacks 未指定時に undefined を保持するため `| undefined` を付ける
@@ -2158,68 +2158,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 取得済み namespace 系ストリーム資源を掃除する
-   *
-   * 送信失敗時に呼び出す。登録は成功時のみ行うため Map 側の掃除は不要。
-   * 取得済み reader / writer の後始末として cancel / abort で RESET 相当とし
-   * (bidiSendRequestOnBidiStream の方針)、 FIN である close は使わない。
-   * readable は getReader 済みでロック中のため streamReader 経由で
-   * cancel + releaseLock する。 abort / cancel 自体の失敗は無視する。
-   * なお reader / writer の取得自体はストリーム生成直後のため
-   * 失敗を想定せず、呼び出し側で try 外に置く。
-   */
-  private async cleanupNamespaceSendFailure(
-    streamReader: ReadableStreamDefaultReader<Uint8Array>,
-    writer: WritableStreamDefaultWriter<Uint8Array>,
-  ): Promise<void> {
-    try {
-      await streamReader.cancel("namespace request send failed");
-    } catch {
-      // 閉じかけのストリーム操作の失敗は無視する
-    } finally {
-      streamReader.releaseLock();
-    }
-    try {
-      await writer.abort("namespace request send failed");
-    } catch {
-      // 閉じかけのストリーム操作の失敗は無視する
-    } finally {
-      writer.releaseLock();
-    }
-  }
-
-  /**
-   * namespace 系ストリームを RESET / STOP_SENDING で解除する
-   *
-   * draft-ietf-moq-transport-21 §4.1 / §4.2 / §6.4.2.3:
-   * リクエストのキャンセルは送信方向の RESET_STREAM (writer.abort()) と
-   * 受信方向の STOP_SENDING (reader.cancel()) で行う。FIN (writer.close()) は
-   * graceful 完了の通知であり、キャンセルには使わない。
-   * reader のロック解放は読み取りループの finally に委ねる (ここで解放すると
-   * ループ側の releaseLock と二重になる)。
-   */
-  private async cancelNamespaceStream(
-    streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined,
-    writer: WritableStreamDefaultWriter<Uint8Array> | undefined,
-    reason: string,
-  ): Promise<void> {
-    if (streamReader !== undefined) {
-      try {
-        await streamReader.cancel(reason);
-      } catch {
-        // 既に閉じている / 解放済みの場合は無視
-      }
-    }
-    if (writer !== undefined) {
-      try {
-        await writer.abort(reason);
-      } catch {
-        // 既に閉じている / abort 済みの場合は無視
-      }
-    }
-  }
-
-  /**
    * Namespace をサブスクライブする（namespace discovery 用）
    *
    * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
@@ -2238,83 +2176,12 @@ export class SessionImpl implements Session {
     callbacks: NamespaceSubscriptionCallbacks,
     options?: { authorizationToken?: AuthorizationToken },
   ): Promise<NamespaceSubscription> {
-    if (this.sessionState === "closed") {
-      throw new Error("session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
-      throw new Error("cannot subscribe namespace after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
-
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespacePrefix);
-
-    // 専用の双方向ストリームを作成
-    const stream = await this.transport.createBidirectionalStream();
-    const streamReader = stream.readable.getReader();
-    const controlReader = new ControlStreamReader();
-    const writer = stream.writable.getWriter();
-
-    try {
-      // SUBSCRIBE_NAMESPACE メッセージを構築
-      // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
-      const subscribeNamespaceMsg = {
-        type: MessageType.SUBSCRIBE_NAMESPACE,
-        requestId,
-        trackNamespacePrefix,
-        parameters: buildSubscribeNamespaceParameters(options),
-      };
-
-      // メッセージをエンコードして送信
-      // draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
-      // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-      // ControlStreamWriter に委譲する。
-      const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-      const controlWriter = new ControlStreamWriter();
-      const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
-
-      // デバッグコールバック
-      this.callbacks.debug?.({
-        direction: "send",
-        type: MessageType.SUBSCRIBE_NAMESPACE,
-        typeName: getMessageTypeName(MessageType.SUBSCRIBE_NAMESPACE),
-        payload,
-        decoded: {
-          requestId: requestId.toString(),
-          trackNamespacePrefix: namespacePrefix,
-        },
-        timestamp: Date.now(),
-      });
-
-      await writer.write(framed);
-    } catch (error) {
-      // 送信失敗時は取得済みリソースを掃除して throw する
-      await this.cleanupNamespaceSendFailure(streamReader, writer);
-      throw error;
-    }
-
-    // REQUEST_OK/REQUEST_ERROR を待つ Promise
-    return new Promise<NamespaceSubscription>((resolve, reject) => {
-      // 状態を登録
-      this.namespaceSubscriptions.set(requestId, {
-        callbacks,
-        state: "active",
-        namespacePrefix,
-        stream,
-        streamReader,
-        controlReader,
-        writer,
-      });
-
-      // 専用ストリームの受信ループを開始
-      void this.startNamespaceStreamLoop(requestId, resolve, reject);
-    });
+    return namespacesSubscribeNamespace(
+      this as unknown as NamespacesSessionInternal,
+      namespacePrefix,
+      callbacks,
+      options,
+    );
   }
 
   /**
@@ -2334,129 +2201,11 @@ export class SessionImpl implements Session {
     callbacks: TracksSubscriptionCallbacks,
     options?: SubscribeTracksOptions,
   ): Promise<TracksSubscription> {
-    if (this.sessionState === "closed") {
-      throw new Error("session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
-      throw new Error("cannot subscribe tracks after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
-
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespacePrefix);
-
-    // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
-    // draft-ietf-moq-transport-21 §4.3: SUBSCRIBE_TRACKS で Range Filter を送信できる
-    validateRangeFilterLimits(options?.rangeFilters, this.peerMaxFilterRanges, "SUBSCRIBE_TRACKS");
-
-    // 専用の双方向ストリームを作成
-    const stream = await this.transport.createBidirectionalStream();
-    const streamReader = stream.readable.getReader();
-    const controlReader = new ControlStreamReader();
-    const writer = stream.writable.getWriter();
-
-    try {
-      // SUBSCRIBE_TRACKS メッセージを構築
-      // draft-ietf-moq-transport-21 §9.18.1: GROUP_ORDER / FORWARD / Range Filters を送信可能
-      const subscribeTracksMsg = {
-        type: MessageType.SUBSCRIBE_TRACKS,
-        requestId,
-        trackNamespacePrefix,
-        parameters: buildSubscribeTracksParameters(options),
-      };
-
-      // メッセージをエンコードして送信
-      // draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
-      // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-      // ControlStreamWriter に委譲する。
-      const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
-      const controlWriter = new ControlStreamWriter();
-      const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
-
-      // デバッグコールバック
-      this.callbacks.debug?.({
-        direction: "send",
-        type: MessageType.SUBSCRIBE_TRACKS,
-        typeName: getMessageTypeName(MessageType.SUBSCRIBE_TRACKS),
-        payload,
-        decoded: {
-          requestId: requestId.toString(),
-          trackNamespacePrefix: namespacePrefix,
-        },
-        timestamp: Date.now(),
-      });
-
-      await writer.write(framed);
-    } catch (error) {
-      // 送信失敗時は取得済みリソースを掃除して throw する
-      await this.cleanupNamespaceSendFailure(streamReader, writer);
-      throw error;
-    }
-
-    // REQUEST_OK/REQUEST_ERROR を待つ Promise
-    return new Promise<TracksSubscription>((resolve, reject) => {
-      // 状態を登録
-      this.tracksSubscriptions.set(requestId, {
-        callbacks,
-        state: "active",
-        namespacePrefix,
-        // draft-ietf-moq-transport-21 §3.3.2:
-        // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
-        rangeFilters: options?.rangeFilters,
-        stream,
-        streamReader,
-        controlReader,
-        writer,
-      });
-
-      // 専用ストリームの受信ループを開始
-      void this.startTracksStreamLoop(requestId, resolve, reject);
-    });
-  }
-
-  /**
-   * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
-   *
-   * draft-ietf-moq-transport-21 §9.15 (SUBSCRIBE_NAMESPACE):
-   * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
-   * PUBLISH_SKIPPED は SUBSCRIBE_TRACKS 応答ストリーム側 (startTracksStreamLoop) で扱う。
-   */
-  private startNamespaceStreamLoop(
-    requestId: bigint,
-    resolve: (subscription: NamespaceSubscription) => void,
-    reject: (err: Error) => void,
-  ): Promise<void> {
-    return namespaceLoops.namespaceStartNamespaceStreamLoop(
-      this as unknown as SessionInternal,
-      requestId,
-      resolve,
-      reject,
-    );
-  }
-
-  /**
-   * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
-   *
-   * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
-   * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
-   * PUBLISH メッセージは別の新規双方向ストリームで到着するためここでは扱わない。
-   */
-  private startTracksStreamLoop(
-    requestId: bigint,
-    resolve: (subscription: TracksSubscription) => void,
-    reject: (err: Error) => void,
-  ): Promise<void> {
-    return namespaceLoops.namespaceStartTracksStreamLoop(
-      this as unknown as SessionInternal,
-      requestId,
-      resolve,
-      reject,
+    return namespacesSubscribeTracks(
+      this as unknown as NamespacesSessionInternal,
+      namespacePrefix,
+      callbacks,
+      options,
     );
   }
 
@@ -2477,106 +2226,11 @@ export class SessionImpl implements Session {
     callbacks?: NamespacePublicationCallbacks,
     options?: PublishNamespaceOptions,
   ): Promise<NamespacePublication> {
-    if (this.sessionState === "closed") {
-      throw new Error("session is closed");
-    }
-
-    // GOAWAY 受信後は新規リクエストを拒否
-    if (this.receivedGoaway) {
-      throw new Error("cannot publish namespace after receiving GOAWAY");
-    }
-
-    const requestId = this.nextRequestId;
-    this.nextRequestId += 2n;
-
-    const trackNamespace = createTrackNamespace(namespace);
-
-    // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
-    validateTrackNamespaceForSend(namespace);
-
-    // 専用の双方向ストリームを作成
-    const stream = await this.transport.createBidirectionalStream();
-    const streamReader = stream.readable.getReader();
-    const controlReader = new ControlStreamReader();
-    const writer = stream.writable.getWriter();
-
-    try {
-      // PUBLISH_NAMESPACE メッセージを構築
-      const publishNamespaceMsg = {
-        type: MessageType.PUBLISH_NAMESPACE,
-        requestId,
-        trackNamespace,
-        // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-21 Section 9.20.3
-        parameters:
-          options?.authorizationToken !== undefined
-            ? [encodeAuthorizationTokenParameter(options.authorizationToken)]
-            : [],
-      };
-
-      // メッセージをエンコードして送信
-      // draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE):
-      // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
-      // ControlStreamWriter に委譲する。
-      // https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-9.14
-      const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-      const controlWriter = new ControlStreamWriter();
-      const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
-
-      // デバッグコールバック
-      this.callbacks.debug?.({
-        direction: "send",
-        type: MessageType.PUBLISH_NAMESPACE,
-        typeName: getMessageTypeName(MessageType.PUBLISH_NAMESPACE),
-        payload,
-        decoded: {
-          requestId: requestId.toString(),
-          trackNamespace: namespace,
-        },
-        timestamp: Date.now(),
-      });
-
-      await writer.write(framed);
-    } catch (error) {
-      // 送信失敗時は取得済みリソースを掃除して throw する
-      await this.cleanupNamespaceSendFailure(streamReader, writer);
-      throw error;
-    }
-
-    // REQUEST_OK / REQUEST_ERROR を待つ Promise
-    return new Promise<NamespacePublication>((resolve, reject) => {
-      // 状態を登録
-      this.namespacePublications.set(requestId, {
-        callbacks,
-        state: "pending",
-        namespace,
-        stream,
-        streamReader,
-        controlReader,
-        writer,
-      });
-
-      // 専用ストリームの受信ループを開始
-      void this.startNamespacePublicationStreamLoop(requestId, resolve, reject);
-    });
-  }
-
-  /**
-   * PUBLISH_NAMESPACE 専用ストリームの受信ループ
-   *
-   * draft-ietf-moq-transport-21 Section 9.14 (PUBLISH_NAMESPACE):
-   * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
-   * それ以外のメッセージを受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
-   */
-  private startNamespacePublicationStreamLoop(
-    requestId: bigint,
-    resolve: (publication: NamespacePublication) => void,
-    reject: (err: Error) => void,
-  ): Promise<void> {
-    return namespaceLoops.namespaceStartPublicationStreamLoop(
-      this as unknown as SessionInternal,
-      requestId,
-      resolve,
-      reject,
+    return namespacesPublishNamespace(
+      this as unknown as NamespacesSessionInternal,
+      namespace,
+      callbacks,
+      options,
     );
   }
 
@@ -3057,32 +2711,10 @@ export class SessionImpl implements Session {
    * NamespaceSubscription オブジェクトを作成する
    */
   createNamespaceSubscription(requestId: bigint): NamespaceSubscription {
-    const getState = (): "active" | "closed" => {
-      const sub = this.namespaceSubscriptions.get(requestId);
-      return sub?.state ?? "closed";
-    };
-
-    const unsubscribe = async (): Promise<void> => {
-      await this.closeNamespaceSubscription(requestId);
-    };
-
-    // fire-and-forget で update() を呼び出しても、unsubscribe() / ピアの
-    // FIN 等による reject が unhandled rejection にならないよう、catch を
-    // 付けた promise を返す。async の wrapper 経由にすると wrapper 側の
-    // 無観測 reject が unhandled になるため、ここで必ず捕まえる。
-    const update = (options: NamespaceUpdateOptions): Promise<void> => {
-      const promise = this.sendNamespaceRequestUpdate(requestId, "namespace", options);
-      promise.catch(() => {});
-      return promise;
-    };
-
-    return {
-      get state() {
-        return getState();
-      },
-      unsubscribe,
-      update,
-    };
+    return namespacesCreateNamespaceSubscription(
+      this as unknown as NamespacesSessionInternal,
+      requestId,
+    );
   }
 
   /**
@@ -3094,22 +2726,15 @@ export class SessionImpl implements Session {
    * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
    * kind が namespace の場合、forward が混入しても送らない。
    */
-  private async sendNamespaceRequestUpdate(
+  async sendNamespaceRequestUpdate(
     requestId: bigint,
     kind: "namespace" | "tracks",
     options: TracksUpdateOptions,
   ): Promise<void> {
-    const subscription =
-      kind === "namespace"
-        ? this.namespaceSubscriptions.get(requestId)
-        : this.tracksSubscriptions.get(requestId);
-    if (!subscription || subscription.state !== "active" || !subscription.writer) {
-      throw new Error(`${kind} subscription is not active`);
-    }
-    return bidi.bidiSendNamespaceRequestUpdate(
-      this as unknown as bidi.BidiSessionInternal,
+    return namespacesSendNamespaceRequestUpdate(
+      this as unknown as NamespacesSessionInternal,
       requestId,
-      subscription.writer,
+      kind,
       options,
     );
   }
@@ -3121,35 +2746,11 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_NAMESPACE は FIN または RESET_STREAM でストリームを閉じることで
    * キャンセルできる。
    */
-  private async closeNamespaceSubscription(requestId: bigint): Promise<void> {
-    const subscription = this.namespaceSubscriptions.get(requestId);
-    if (!subscription || subscription.state === "closed") {
-      return;
-    }
-
-    subscription.state = "closed";
-
-    // 保留中の REQUEST_UPDATE (update() の Promise) を失敗させ、pendingPrefix を
-    // クリアする。掃除しないと update() が未解決のまま残り、pendingRequestUpdate
-    // エントリがセッション close まで残留する (MAX_REQUEST_UPDATES のカウント
-    // 継続)。エラー文言は FIN 経路と共通の定数を使う。
-    namespaceLoops.rejectPendingNamespaceUpdates(
-      this as unknown as SessionInternal,
+  async closeNamespaceSubscription(requestId: bigint): Promise<void> {
+    return namespacesCloseNamespaceSubscription(
+      this as unknown as NamespacesSessionInternal,
       requestId,
-      subscription,
-      new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
     );
-
-    // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
-    // SUBSCRIBE_NAMESPACE の解除は RESET_STREAM (writer.abort()) と
-    // STOP_SENDING (reader.cancel()) で行う。
-    await this.cancelNamespaceStream(
-      subscription.streamReader,
-      subscription.writer,
-      "namespace subscription cancelled",
-    );
-
-    this.namespaceSubscriptions.delete(requestId);
   }
 
   /**
@@ -3158,30 +2759,10 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS)
    */
   createTracksSubscription(requestId: bigint): TracksSubscription {
-    const getState = (): "active" | "closed" => {
-      const sub = this.tracksSubscriptions.get(requestId);
-      return sub?.state ?? "closed";
-    };
-
-    const unsubscribe = async (): Promise<void> => {
-      await this.closeTracksSubscription(requestId);
-    };
-
-    // createNamespaceSubscription の update と同様に、fire-and-forget 時の
-    // 無観測 reject を抑制する (catch 付き promise を直接返す)。
-    const update = (options: TracksUpdateOptions): Promise<void> => {
-      const promise = this.sendNamespaceRequestUpdate(requestId, "tracks", options);
-      promise.catch(() => {});
-      return promise;
-    };
-
-    return {
-      get state() {
-        return getState();
-      },
-      unsubscribe,
-      update,
-    };
+    return namespacesCreateTracksSubscription(
+      this as unknown as NamespacesSessionInternal,
+      requestId,
+    );
   }
 
   /**
@@ -3191,64 +2772,21 @@ export class SessionImpl implements Session {
    * SUBSCRIBE_TRACKS は FIN または RESET_STREAM でストリームを閉じることで
    * キャンセルできる。
    */
-  private async closeTracksSubscription(requestId: bigint): Promise<void> {
-    const subscription = this.tracksSubscriptions.get(requestId);
-    if (!subscription || subscription.state === "closed") {
-      return;
-    }
-
-    subscription.state = "closed";
-
-    // 保留中の REQUEST_UPDATE (update() の Promise) を失敗させ、pendingPrefix を
-    // クリアする (closeNamespaceSubscription と同様の理由)。
-    namespaceLoops.rejectPendingNamespaceUpdates(
-      this as unknown as SessionInternal,
+  async closeTracksSubscription(requestId: bigint): Promise<void> {
+    return namespacesCloseTracksSubscription(
+      this as unknown as NamespacesSessionInternal,
       requestId,
-      subscription,
-      new Error(namespaceLoops.REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
     );
-
-    // draft-ietf-moq-transport-21 §4.1 / §6.4.2.3:
-    // SUBSCRIBE_TRACKS の解除は RESET_STREAM (writer.abort()) と
-    // STOP_SENDING (reader.cancel()) で行う。
-    await this.cancelNamespaceStream(
-      subscription.streamReader,
-      subscription.writer,
-      "tracks subscription cancelled",
-    );
-
-    this.tracksSubscriptions.delete(requestId);
   }
 
   /**
    * NamespacePublication オブジェクトを作成する
    */
   createNamespacePublication(requestId: bigint): NamespacePublication {
-    // 内部状態の "pending" は REQUEST_OK 受信前のみで、外部に公開する前に "active" になる
-    const getState = (): "active" | "closed" => {
-      const pub = this.namespacePublications.get(requestId);
-      if (!pub) return "closed";
-      return pub.state === "active" ? "active" : "closed";
-    };
-
-    const getNamespace = (): string[] => {
-      const pub = this.namespacePublications.get(requestId);
-      return pub?.namespace ?? [];
-    };
-
-    const done = async (): Promise<void> => {
-      await this.closeNamespacePublication(requestId);
-    };
-
-    return {
-      get state() {
-        return getState();
-      },
-      get namespace() {
-        return getNamespace();
-      },
-      done,
-    };
+    return namespacesCreateNamespacePublication(
+      this as unknown as NamespacesSessionInternal,
+      requestId,
+    );
   }
 
   /**
@@ -3259,24 +2797,11 @@ export class SessionImpl implements Session {
    * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
    * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-4.2
    */
-  private async closeNamespacePublication(requestId: bigint): Promise<void> {
-    const publication = this.namespacePublications.get(requestId);
-    if (!publication || publication.state === "closed") {
-      return;
-    }
-
-    publication.state = "closed";
-
-    // draft-ietf-moq-transport-21 §4.2 / §6.4.2.3:
-    // PUBLISH_NAMESPACE の撤回は RESET_STREAM (writer.abort()) と
-    // STOP_SENDING (reader.cancel()) で行う。
-    await this.cancelNamespaceStream(
-      publication.streamReader,
-      publication.writer,
-      "namespace publication cancelled",
+  async closeNamespacePublication(requestId: bigint): Promise<void> {
+    return namespacesCloseNamespacePublication(
+      this as unknown as NamespacesSessionInternal,
+      requestId,
     );
-
-    this.namespacePublications.delete(requestId);
   }
 
   startIncomingStreamLoop(): void {
