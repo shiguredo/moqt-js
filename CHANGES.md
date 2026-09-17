@@ -752,7 +752,7 @@
   - クエリパラメータ `fragment` を `buildQueryString` / `initFromUrl` で永続化する
   - @voluntas
 - [UPDATE] devtools の preact / @preact/signals / vite-plus を最新版に更新する
-  - preact を 10.29.7 から 11.0.0-beta.2 へ更新する
+  - preact を 10.29.7 から 11.0.0-rc.2 へ更新する
   - preact 11 で削除された useRef の引数なしオーバーロードに合わせ、useCopyFeedback / useCopyUrlButton の timerRef に undefined を渡すように変更する
   - preact 11 で useRef<T>(null) の戻り値が RefObject<T | null> に変わったため、useSubscriber の canvasRef 引数の型を RefObject<HTMLCanvasElement | null> に変更する
   - @preact/signals を 2.10.1 から 2.11.0 へ更新する
