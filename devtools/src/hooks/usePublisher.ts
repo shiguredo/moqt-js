@@ -7,10 +7,12 @@ import {
   createCompleteCatalog,
   createVideoFrameSource,
   type AuthorizationToken,
+  type Catalog,
   type DebugMessage,
   type CertificateHash,
 } from "moqt-js";
 import { getCatalogCodec, getEncoderConfig, parseResolution } from "../utils/codec";
+import type { CodecType } from "../types";
 import { base64ToArrayBuffer } from "../utils/base64";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
 import { addLog } from "../components/DebugPanel";
@@ -22,6 +24,129 @@ import * as sub from "../signals/subscriber";
 
 export function handleDebugMessage(message: DebugMessage): void {
   logDebugMessage("[publisher]", message);
+}
+
+/** 配信する映像トラックの Catalog を組み立てるための入力 */
+export interface PublisherCatalogOptions {
+  trackName: string;
+  codec: CodecType;
+  width: number;
+  height: number;
+  framerate: number;
+  bitrate: number;
+}
+
+/**
+ * 配信する映像トラックの Catalog を組み立てる
+ *
+ * draft-ietf-moq-msf-01 §5.1 の full catalog を 1 トラック分だけ生成する。
+ * codec 文字列は `getCatalogCodec` を通し、Encoder に渡す `getEncoderConfig` と
+ * 同一の対応表を使う (Catalog の codec 誤記は購読側の Decoder 設定を壊すため、
+ * 対応表の二重管理を避ける)。
+ *
+ * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
+ */
+export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
+  return createCatalog([
+    {
+      name: options.trackName,
+      packaging: "loc",
+      isLive: true,
+      role: "video",
+      codec: getCatalogCodec(options.codec),
+      width: options.width,
+      height: options.height,
+      framerate: options.framerate,
+      bitrate: options.bitrate,
+    },
+  ]);
+}
+
+/** 送信する 1 Object の内容 */
+export interface ObjectSendPlan {
+  /** この Object を載せる Group ID */
+  groupId: number;
+  /** この Object の Object ID */
+  objectId: number;
+  /** 次の Object が載る Group ID */
+  nextGroupId: number;
+  /** 次の Object の Object ID */
+  nextObjectId: number;
+  /** 送信する payload (WebCodecs の internal data をそのまま使う) */
+  payload: Uint8Array;
+  /** LOC Properties をエンコードしたバイト列 */
+  properties: Uint8Array;
+  /** Publisher Priority */
+  priority: number;
+  /** キーフレーム (新しい Group を開始した Object) かどうか */
+  isKeyFrame: boolean;
+}
+
+/**
+ * エンコード済み chunk から送信する 1 Object の内容を組み立てる
+ *
+ * `handleEncodedChunk` から送信処理 (`Publisher.sendObject`) と signal 更新を
+ * 除いた純粋部分。Group / Object ID の採番、LOC Properties のエンコード、
+ * Priority の決定をここに集約し、ブラウザ API 無しで契約を検証できるようにする。
+ *
+ * Group / Object ID (draft-ietf-moq-msf-01 §6.1):
+ * キーフレームで新しい Group を開始し (Group ID は単調増加)、Object ID を 0 に戻す。
+ * デルタフレームは同じ Group の続きとして Object ID を進める。
+ *
+ * LOC Properties (draft-ietf-moq-loc-04 §2.3.2):
+ * TIMESTAMP と VIDEO_FRAME_MARKING を載せる。isDiscardable は WebCodecs が
+ * 破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の「the sender knows」を
+ * 守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして残すが、
+ * temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される。
+ * canonical 形式 (avc1 / hvc1) のときだけ WebCodecs の description を
+ * Video Config (ID: 0x0D) として載せる (annexB 形式では description が無い)。
+ */
+export function buildObjectSendPlan(
+  location: { groupId: number; objectId: number },
+  chunk: EncodedChunkData,
+): ObjectSendPlan {
+  const isKeyFrame = chunk.type === "key";
+  const groupId = isKeyFrame ? location.groupId + 1 : location.groupId;
+  const objectId = isKeyFrame ? 0 : location.objectId;
+
+  // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
+  const payload = chunk.data;
+
+  const properties = LOC.encodeVideoProperties({
+    timestamp: BigInt(chunk.timestamp),
+    frameMarking: {
+      isIndependent: isKeyFrame,
+      isDiscardable: false,
+      isBaseLayerSync: isKeyFrame,
+      temporalLayerId: 0,
+      spatialLayerId: 0,
+    },
+    config: chunk.description,
+  });
+
+  return {
+    groupId,
+    objectId,
+    nextGroupId: groupId,
+    nextObjectId: objectId + 1,
+    payload,
+    properties,
+    // キーフレームは即時配送を優先し、デルタフレームは既定優先度にする
+    priority: isKeyFrame ? 255 : 128,
+    isKeyFrame,
+  };
+}
+
+/**
+ * フレームにキーフレームを要求するかを判定する
+ *
+ * 先頭フレーム (framesEncoded = 0) と keyframeInterval フレームごとに要求する。
+ * 要求しないフレームはエンコーダがデルタフレームとして符号化する。
+ * 間隔を無視して全フレームをキーフレームにすると帯域を浪費し、
+ * 逆に要求が一度も出ないと購読を開始できないため、境界を検証できる形にする。
+ */
+export function shouldRequestKeyFrame(framesEncoded: number, keyframeInterval: number): boolean {
+  return framesEncoded % keyframeInterval === 0;
 }
 
 interface VideoStreamResult {
@@ -145,7 +270,7 @@ export function usePublisher() {
 
         if (encoderInstance.encodeQueueSize <= 2) {
           encoderInstance.encode(frame, {
-            keyFrame: pub.framesEncoded.value % pub.keyframeInterval.value === 0,
+            keyFrame: shouldRequestKeyFrame(pub.framesEncoded.value, pub.keyframeInterval.value),
           });
           pub.framesEncoded.value++;
         }
@@ -163,49 +288,30 @@ export function usePublisher() {
 
     pub.chunksEncoded.value++;
 
-    // キーフレームで新しいグループを開始する
-    if (chunk.type === "key") {
-      pub.pubCurrentGroup.value++;
-      pub.pubCurrentObjectId.value = 0;
+    // 送信する Object の内容 (Group / Object ID・payload・LOC Properties・優先度) を組み立てる
+    const plan = buildObjectSendPlan(
+      { groupId: pub.pubCurrentGroup.value, objectId: pub.pubCurrentObjectId.value },
+      chunk,
+    );
+
+    if (plan.isKeyFrame) {
       pub.keyFramesEncoded.value++;
     }
 
-    // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
-    // annexB 形式の場合は description 不要、canonical (avc1/hvc1) の場合は
-    // description を Video Config (ID: 0x0D) で送る
-    // draft-ietf-moq-loc-04 §2.3.2.1
-    const payload = chunk.data;
-
-    // LOC Properties をエンコード。
-    // isDiscardable は WebCodecs が破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の
-    // 「the sender knows」を守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして
-    // 残すが、temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される (詳細は
-    // encodeVideoFrameMarking を参照)。
-    const properties = LOC.encodeVideoProperties({
-      timestamp: BigInt(chunk.timestamp),
-      frameMarking: {
-        isIndependent: chunk.type === "key",
-        isDiscardable: false,
-        isBaseLayerSync: chunk.type === "key",
-        temporalLayerId: 0,
-        spatialLayerId: 0,
-      },
-      // canonical 形式 (avc1 / hvc1) のときに WebCodecs から得られる description を載せる。
-      // annexB 形式の場合は WebCodecs が description を提供しないので何も送らない。
-      config: chunk.description,
-    });
+    pub.pubCurrentGroup.value = plan.nextGroupId;
+    pub.pubCurrentObjectId.value = plan.nextObjectId;
 
     pub.objectsWithExtensions.value++;
 
-    pub.bytesSent.value += payload.length + properties.length;
+    pub.bytesSent.value += plan.payload.length + plan.properties.length;
 
     // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)
     void publisherInstance.sendObject({
-      groupId: pub.pubCurrentGroup.value,
-      objectId: pub.pubCurrentObjectId.value++,
-      payload,
-      properties,
-      priority: chunk.type === "key" ? 255 : 128,
+      groupId: plan.groupId,
+      objectId: plan.objectId,
+      payload: plan.payload,
+      properties: plan.properties,
+      priority: plan.priority,
     });
 
     pub.objectsSent.value++;
@@ -295,19 +401,14 @@ export function usePublisher() {
       pub.catalogPublisher.value = catalogPublisherInstance;
 
       // Catalog を作成して送信
-      const createdCatalog = createCatalog([
-        {
-          name: trackNameValue,
-          packaging: "loc",
-          isLive: true,
-          role: "video",
-          codec: getCatalogCodec(codecValue),
-          width,
-          height,
-          framerate: framerateValue,
-          bitrate: bitrateValue,
-        },
-      ]);
+      const createdCatalog = buildPublisherCatalog({
+        trackName: trackNameValue,
+        codec: codecValue,
+        width,
+        height,
+        framerate: framerateValue,
+        bitrate: bitrateValue,
+      });
       const catalogPayload = encodeCatalog(createdCatalog);
       // Catalog の送信完了は待たず、stopPublishing の done() で待ち合わせる
       void catalogPublisherInstance.sendObject({
