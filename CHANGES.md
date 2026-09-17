@@ -11,6 +11,12 @@
 
 ## develop
 
+- [FIX] FETCH 応答ストリーム上の REQUEST_UPDATE を検出する
+  - draft-ietf-moq-transport-21 §9.5 の MUST (REQUEST_UPDATE を受け取れるのはリクエストの送信者と PUBLISH で確立した購読の subscriber のみ) に反する REQUEST_UPDATE を、FETCH_OK 受理後に双方向ストリームを読み続けていなかったため検出できなかった
+  - FETCH_OK 受理後に `bidiReadRequestStreamMessages` を fetch ロールで起動し、REQUEST_UPDATE を PROTOCOL_VIOLATION で閉じる。FETCH_OK と同一チャンクに連結されたメッセージも初期メッセージとして処理する
+  - fetch ロールで PUBLISH_STATE_NOTIFY を §9.10 の MUST に従い PROTOCOL_VIOLATION で閉じ、ピア FIN では自方向を FIN で閉じて後始末する (§6.4.2.2 SHOULD)
+  - 確立後の GOAWAY で Fetcher の goawayCallback を呼び自方向を FIN で閉じ、2 通目 GOAWAY は PROTOCOL_VIOLATION で閉じる (§9.2)
+  - @voluntas
 - [FIX] FETCH 応答の Group ID を要求した Group Order で復号する
   - draft-ietf-moq-transport-21 §11.4.1.1 は Group Order によって Group ID の計算式が変わることを定めるが、FETCH 応答の復号が Ascending 固定だった。Descending を要求しても 2 件目以降の Object の Group ID が誤っていた
   - Session.fetch() が要求時の GROUP_ORDER を FetcherImpl に渡し、省略時は Ascending (§9.20.9) として復号する
