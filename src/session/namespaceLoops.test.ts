@@ -440,107 +440,9 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 // ループ種別でパラメータ化して 1 箇所保守にする。
 // ============================================================================
 
-// REQUEST_UPDATE 応答の REQUEST_OK で pending が解決され、prefix が反映される
-SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`REQUEST_UPDATE 応答の REQUEST_OK で prefix が更新され pending が解決される: ${kind} ループ`, async () => {
-    const ctx = createNamespaceLoopTestContext(loop);
-
-    // 保留中の更新 (新 prefix ["live", "sports"]) を登録する
-    const pending = registerPendingUpdate(ctx.session, ctx.requestId);
-    ctx.target.pendingPrefix = ["live", "sports"];
-
-    const readPromise = startLoop(
-      loop,
-      ctx.session,
-      ctx.requestId,
-      () => {},
-      () => {},
-    );
-
-    // 初期 REQUEST_OK (確立応答) を注入する
-    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-    // REQUEST_UPDATE 応答の REQUEST_OK (更新応答) を注入する
-    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-    ctx.readableController.close();
-    await readPromise;
-
-    // 更新応答の REQUEST_OK で pending が解決され、prefix が反映される
-    assert.isTrue(pending.resolved);
-    assert.isUndefined(pending.rejected);
-    assert.deepEqual(ctx.target.namespacePrefix, ["live", "sports"]);
-    assert.isUndefined(ctx.target.pendingPrefix);
-    // セッションは閉じない
-    assert.isUndefined(ctx.getClosedWithError());
-  });
-});
-
-// REQUEST_UPDATE 応答の REQUEST_ERROR で pending が reject され、prefix は反映されない
-SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`REQUEST_UPDATE 応答の REQUEST_ERROR で pending が reject され prefix は更新されない: ${kind} ループ`, async () => {
-    const ctx = createNamespaceLoopTestContext(loop);
-
-    const pending = registerPendingUpdate(ctx.session, ctx.requestId);
-    ctx.target.pendingPrefix = ["live", "sports"];
-
-    const readPromise = startLoop(
-      loop,
-      ctx.session,
-      ctx.requestId,
-      () => {},
-      () => {},
-    );
-
-    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-    // PREFIX_OVERLAP で失敗する更新応答を注入する
-    ctx.readableController.enqueue(
-      requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
-    );
-    // §9.5.1 により失敗時はピアがストリームを閉じる
-    ctx.readableController.close();
-    await readPromise;
-
-    // 更新失敗は PROTOCOL_VIOLATION ではない (セッションは閉じない)
-    assert.isFalse(pending.resolved);
-    assert.isDefined(pending.rejected);
-    assert.equal(pending.rejected!.message, "prefix overlap");
-    // prefix は更新されず、pendingPrefix はクリアされる
-    assert.deepEqual(ctx.target.namespacePrefix, ["live"]);
-    assert.isUndefined(ctx.target.pendingPrefix);
-    assert.isUndefined(ctx.getClosedWithError());
-  });
-});
-
-// 応答を待たずにストリームが閉じたら、保留中の更新が暗黙の失敗として reject される
-SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`応答を待たずにストリームが閉じたら pending が reject される: ${kind} ループ`, async () => {
-    const ctx = createNamespaceLoopTestContext(loop);
-
-    const pending = registerPendingUpdate(ctx.session, ctx.requestId);
-    ctx.target.pendingPrefix = ["live", "sports"];
-
-    const readPromise = startLoop(
-      loop,
-      ctx.session,
-      ctx.requestId,
-      () => {},
-      () => {},
-    );
-
-    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-    // REQUEST_UPDATE 失敗時にピアがストリームを閉じるケース (§9.5.1) を再現する
-    ctx.readableController.close();
-    await readPromise;
-
-    assert.isFalse(pending.resolved);
-    assert.isDefined(pending.rejected);
-    assert.isTrue(
-      pending.rejected!.message.includes("stream closed before receiving update response"),
-    );
-    assert.deepEqual(ctx.target.namespacePrefix, ["live"]);
-    assert.isUndefined(ctx.target.pendingPrefix);
-    assert.isUndefined(ctx.getClosedWithError());
-  });
-});
+// REQUEST_UPDATE 応答の連鎖 (REQUEST_OK での prefix 反映 / REQUEST_ERROR での
+// reject / 応答未達の FIN での reject) は、任意の prefix と保留中更新集合を
+// 扱う PBT (namespaceLoops.prop.ts) へ移した。
 
 // 保留中の更新が無い 2 通目の REQUEST_OK は、仕様違反として PROTOCOL_VIOLATION で閉じる
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
@@ -807,45 +709,8 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の Track Properti
   assert.isUndefined(ctx.subscription.pendingPrefix);
 });
 
-test("namespaceStartNamespaceStreamLoop: 正常な NAMESPACE / NAMESPACE_DONE でセッションが閉じない", async () => {
-  const ctx = createNamespaceLoopTestContext("namespace");
-  let resolved = false;
-  const readPromise = startLoop(
-    "namespace",
-    ctx.session,
-    ctx.requestId,
-    () => {
-      resolved = true;
-    },
-    () => {},
-  );
-
-  // 先頭に確立応答の REQUEST_OK、続けて NAMESPACE / NAMESPACE_DONE を feed する
-  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  const suffix = createTrackNamespace(["live", "sports"]);
-  ctx.readableController.enqueue(
-    ctx.controlWriter.encode(
-      MessageType.NAMESPACE,
-      encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix: suffix }),
-    ),
-  );
-  ctx.readableController.enqueue(
-    ctx.controlWriter.encode(
-      MessageType.NAMESPACE_DONE,
-      encodeNamespaceDonePayload({
-        type: MessageType.NAMESPACE_DONE,
-        trackNamespaceSuffix: suffix,
-      }),
-    ),
-  );
-  ctx.readableController.close();
-  await readPromise;
-
-  // 確立応答が反映され、正常な NAMESPACE / NAMESPACE_DONE はセッションを
-  // 閉じない (回帰ガード)
-  assert.isTrue(resolved);
-  assert.isUndefined(ctx.getClosedWithError());
-});
+// 正常な NAMESPACE / NAMESPACE_DONE でセッションが閉じないことは、任意の
+// suffix 列を扱う PBT (namespaceLoops.prop.ts) へ移した。
 
 /**
  * onNamespace の throw を握り潰し、購読 (ループ) を継続することを検証する。
@@ -1129,43 +994,8 @@ test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAME
   assert.include(err!.message, "namespace stream");
 });
 
-test("namespaceStartNamespaceStreamLoop: ピア FIN で active namespace に NAMESPACE_DONE を補完し自方向も FIN する", async () => {
-  // draft-ietf-moq-transport-21 §9.15:
-  // FIN / RESET 受信時は各 active namespace に NAMESPACE_DONE を補完したものと扱う。
-  // §6.4.2.2: ピアの FIN 後、requester は自方向も FIN で閉じる (SHOULD)。
-  const ctx = createNamespaceLoopTestContext("namespace");
-  const doneSuffixes: string[][] = [];
-  Object.assign(ctx.target.callbacks, {
-    onNamespaceDone: (suffix: string[]) => {
-      doneSuffixes.push(suffix);
-    },
-  });
-
-  const readPromise = startLoop(
-    "namespace",
-    ctx.session,
-    ctx.requestId,
-    () => {},
-    () => {},
-  );
-
-  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  ctx.readableController.enqueue(
-    ctx.controlWriter.encode(
-      MessageType.NAMESPACE,
-      encodeNamespacePayload({
-        type: MessageType.NAMESPACE,
-        trackNamespaceSuffix: createTrackNamespace(["sports"]),
-      }),
-    ),
-  );
-  ctx.readableController.close();
-  await ctx.writerClosed();
-  await readPromise;
-
-  assert.deepEqual(doneSuffixes, [["sports"]]);
-  assert.isUndefined(ctx.getClosedWithError());
-});
+// ピア FIN での active namespace への NAMESPACE_DONE 補完 (自方向の FIN を含む) は、
+// 任意の NAMESPACE / NAMESPACE_DONE 列を扱う PBT (namespaceLoops.prop.ts) へ移した。
 
 test("namespaceStartNamespaceStreamLoop: RESET_STREAM でも active namespace に NAMESPACE_DONE を補完する", async () => {
   // draft-ietf-moq-transport-21 §9.15: stream reset も FIN と同様に扱う。
@@ -1208,51 +1038,6 @@ test("namespaceStartNamespaceStreamLoop: RESET_STREAM でも active namespace �
 
   assert.deepEqual(doneSuffixes, [["sports"]]);
   assert.isUndefined(ctx.getClosedWithError());
-});
-
-test("namespaceStartNamespaceStreamLoop: NAMESPACE_DONE 済みの namespace は FIN で重複補完しない", async () => {
-  // draft-ietf-moq-transport-21 §9.15:
-  // 既に NAMESPACE_DONE を受けた namespace は active ではないため補完しない。
-  const ctx = createNamespaceLoopTestContext("namespace");
-  const doneSuffixes: string[][] = [];
-  Object.assign(ctx.target.callbacks, {
-    onNamespaceDone: (suffix: string[]) => {
-      doneSuffixes.push(suffix);
-    },
-  });
-
-  const readPromise = startLoop(
-    "namespace",
-    ctx.session,
-    ctx.requestId,
-    () => {},
-    () => {},
-  );
-
-  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  ctx.readableController.enqueue(
-    ctx.controlWriter.encode(
-      MessageType.NAMESPACE,
-      encodeNamespacePayload({
-        type: MessageType.NAMESPACE,
-        trackNamespaceSuffix: createTrackNamespace(["sports"]),
-      }),
-    ),
-  );
-  ctx.readableController.enqueue(
-    ctx.controlWriter.encode(
-      MessageType.NAMESPACE_DONE,
-      encodeNamespaceDonePayload({
-        type: MessageType.NAMESPACE_DONE,
-        trackNamespaceSuffix: createTrackNamespace(["sports"]),
-      }),
-    ),
-  );
-  ctx.readableController.close();
-  await readPromise;
-
-  // 明示的な NAMESPACE_DONE の 1 回だけ
-  assert.deepEqual(doneSuffixes, [["sports"]]);
 });
 
 test("namespaceStartTracksStreamLoop: 先頭の想定外メッセージで reject し同一オブジェクトで閉じる", async () => {
@@ -1542,57 +1327,9 @@ test("namespaceStartTracksStreamLoop: unsubscribe 後の遅延 PUBLISH_SKIPPED �
   assert.isUndefined(ctx.getClosedWithError());
 });
 
-test("namespaceStartTracksStreamLoop: 正常な PUBLISH_SKIPPED でセッションが閉じない", async () => {
-  const ctx = createNamespaceLoopTestContext("tracks");
-  let resolved = false;
-  const readPromise = namespaceStartTracksStreamLoop(
-    ctx.session,
-    ctx.requestId,
-    () => {
-      resolved = true;
-    },
-    () => {},
-  );
-
-  // 先頭に確立応答の REQUEST_OK、続けて PUBLISH_SKIPPED を feed する
-  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  ctx.readableController.enqueue(
-    ctx.controlWriter.encode(
-      MessageType.PUBLISH_SKIPPED,
-      encodePublishSkippedPayload({
-        type: MessageType.PUBLISH_SKIPPED,
-        trackNamespaceSuffix: createTrackNamespace(["live", "sports"]),
-        trackName: new TextEncoder().encode("track1"),
-      }),
-    ),
-  );
-  ctx.readableController.close();
-  await readPromise;
-
-  // 確立応答が反映され、正常な PUBLISH_SKIPPED はセッションを閉じない (回帰ガード)
-  assert.isTrue(resolved);
-  assert.isUndefined(ctx.getClosedWithError());
-});
-
-test("namespaceStartPublicationStreamLoop: 正常な REQUEST_OK で解決されセッションが閉じない", async () => {
-  const ctx = createNamespaceLoopTestContext("publication");
-  let resolved = false;
-  const readPromise = namespaceStartPublicationStreamLoop(
-    ctx.session,
-    ctx.requestId,
-    () => {
-      resolved = true;
-    },
-    () => {},
-  );
-
-  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
-  ctx.readableController.close();
-  await readPromise;
-
-  assert.isTrue(resolved);
-  assert.isUndefined(ctx.getClosedWithError());
-});
+// 正常なメッセージ列 (確立応答 + ループ固有の通知メッセージ) でセッションが
+// 閉じないことは、任意の suffix / track name を扱う PBT (namespaceLoops.prop.ts)
+// へ移した。
 
 // ============================================================================
 // 3 ループ共通: 確立前 GOAWAY / 確立後 GOAWAY / FIN (publication を含む)

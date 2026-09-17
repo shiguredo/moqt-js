@@ -17,17 +17,9 @@ import { validateNoDuplicateGoawayOnRequestStream } from "./bidi";
 /**
  * draft-ietf-moq-transport-21 Section 9.2 (GOAWAY):
  * リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
- * 初回の Request ID は seenSet に追加され null を返す。
- */
-test("validateNoDuplicateGoawayOnRequestStream: 初回は null で seenSet に追加される", () => {
-  const seen = new Set<bigint>();
-  const error = validateNoDuplicateGoawayOnRequestStream(0n, seen);
-  assert.isNull(error);
-  assert.isTrue(seen.has(0n));
-});
-
-/**
  * 2 回目の同一 Request ID は重複として PROTOCOL_VIOLATION の SessionError を返す。
+ * 初回に null を返して seenSet へ追加される受理側の性質は、任意の Request ID に対して
+ * src/session/bidi.prop.ts の PBT で検証する。
  */
 test("validateNoDuplicateGoawayOnRequestStream: 2 回目は PROTOCOL_VIOLATION を返す", () => {
   const seen = new Set<bigint>([0n]);
