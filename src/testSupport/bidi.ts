@@ -17,7 +17,7 @@ import { FetcherImpl } from "../fetcher";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
-import { type BidiSessionInternal } from "../session/bidi";
+import { type BidiSessionInternal, bidiSendPublishStateNotify } from "../session/bidi";
 import { publishClosePublisherStream, publishSendPublishDone } from "../session/publish";
 import { concatUint8Arrays } from "./helpers";
 
@@ -174,6 +174,9 @@ export function createPublishReadTestContext(
     await publishClosePublisherStream(session, publisher.getTrackAlias());
     await publishSendPublishDone(session, publisher, status);
   };
+  // SessionImpl.publish と同じ配線 (PUBLISH_STATE_NOTIFY の送信経路)
+  publisher.onNotifyStateChange = (options) =>
+    bidiSendPublishStateNotify(session, publisher, options);
 
   const session = {
     sessionState: "connected",
