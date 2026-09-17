@@ -283,7 +283,7 @@ export function processSubgroupObjects(
       // であることを示すため、中継が subgroup 途中から転送したストリームでは
       // ビットが立たず、上書きは適用されない。isFirstInSubgroup (ストリーム先頭)
       // だけでは中継転送を区別できないため、両方を要求する。
-      if (isFirstInSubgroup && header.firstObject === true && fields.properties.length > 0) {
+      if (isFirstInSubgroup && header.firstObject && fields.properties.length > 0) {
         const timeouts = readDeliveryTimeoutObjectProperties(fields.properties);
         if (timeouts.objectDeliveryTimeout !== undefined) {
           object.objectDeliveryTimeout = timeouts.objectDeliveryTimeout;
