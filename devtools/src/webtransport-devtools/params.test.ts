@@ -368,3 +368,63 @@ test("query string: 未知の datagramsReadableType 値は未指定にフォー�
   const restored = parseSettingsQueryString("datagramsReadableType=invalid");
   assert.equal(restored.datagramsReadableType, "");
 });
+
+// 数値入力の表記ゆれのテスト
+// 各パーサは Number() の解釈に従うため、16 進数 / 2 進数 / 指数表記も受理する。
+// 入力表記そのものは制限せず、各 API の型制約 (整数・範囲) だけで弾く契約を pin する。
+test("数値入力: 16 進数表記 (0x10) は 16 として受理する", () => {
+  assert.deepEqual(parseAnticipatedStreams("0x10"), { ok: true, value: 16 });
+  assert.deepEqual(parseDatagramMaxAge("0x10"), { ok: true, value: 16 });
+  assert.deepEqual(parseMaxBufferedDatagrams("0x10"), { ok: true, value: 16 });
+  assert.deepEqual(parseSendOrder("0x10"), { ok: true, value: 16 });
+  assert.deepEqual(parseCloseCode("0x10"), { ok: true, value: 16 });
+});
+
+test("数値入力: 2 進数表記 (0b11) は 3 として受理する", () => {
+  assert.deepEqual(parseAnticipatedStreams("0b11"), { ok: true, value: 3 });
+  assert.deepEqual(parseDatagramMaxAge("0b11"), { ok: true, value: 3 });
+  assert.deepEqual(parseMaxBufferedDatagrams("0b11"), { ok: true, value: 3 });
+  assert.deepEqual(parseSendOrder("0b11"), { ok: true, value: 3 });
+  assert.deepEqual(parseCloseCode("0b11"), { ok: true, value: 3 });
+});
+
+test("数値入力: 指数表記 (1e3) は 1000 として受理する", () => {
+  assert.deepEqual(parseAnticipatedStreams("1e3"), { ok: true, value: 1000 });
+  assert.deepEqual(parseDatagramMaxAge("1e3"), { ok: true, value: 1000 });
+  assert.deepEqual(parseMaxBufferedDatagrams("1e3"), { ok: true, value: 1000 });
+  assert.deepEqual(parseSendOrder("1e3"), { ok: true, value: 1000 });
+  assert.deepEqual(parseCloseCode("1e3"), { ok: true, value: 1000 });
+});
+
+test("数値入力: 指数表記の小数 (1e-1) は整数を要求するパーサだけが拒否する", () => {
+  // Number("1e-1") === 0.1。§5.3 の max age だけが小数を受理する
+  assert.deepEqual(parseDatagramMaxAge("1e-1"), { ok: true, value: 0.1 });
+  assert.equal(parseAnticipatedStreams("1e-1").ok, false);
+  assert.equal(parseMaxBufferedDatagrams("1e-1").ok, false);
+  assert.equal(parseSendOrder("1e-1").ok, false);
+  assert.equal(parseCloseCode("1e-1").ok, false);
+});
+
+test("数値入力: Infinity は整数を要求するパーサだけが拒否する", () => {
+  // Number("Infinity") === Infinity。Number.isInteger(Infinity) は false だが、
+  // max age の検査は Number.isNaN による NaN 拒否のみのため Infinity を通過させる。
+  // 現行契約として pin する (setter へ Infinity が渡りうる)。
+  assert.deepEqual(parseDatagramMaxAge("Infinity"), {
+    ok: true,
+    value: Number.POSITIVE_INFINITY,
+  });
+  assert.equal(parseDatagramMaxAge("-Infinity").ok, false);
+  assert.equal(parseAnticipatedStreams("Infinity").ok, false);
+  assert.equal(parseMaxBufferedDatagrams("Infinity").ok, false);
+  assert.equal(parseSendOrder("Infinity").ok, false);
+  assert.equal(parseCloseCode("Infinity").ok, false);
+});
+
+test("数値入力: 桁区切り (1_000) は数値として解釈されず拒否する", () => {
+  // Number("1_000") === NaN。max age は NaN 専用のエラー、その他は整数エラーになる
+  assert.equal(parseDatagramMaxAge("1_000").ok, false);
+  assert.equal(parseAnticipatedStreams("1_000").ok, false);
+  assert.equal(parseMaxBufferedDatagrams("1_000").ok, false);
+  assert.equal(parseSendOrder("1_000").ok, false);
+  assert.equal(parseCloseCode("1_000").ok, false);
+});
