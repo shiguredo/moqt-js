@@ -15,6 +15,11 @@
   - `SubgroupHeader.firstObject?: boolean` は wire 上の FIRST_OBJECT ビット (0x40) が無い場合に `undefined` を入れていたため、`false` と未設定の区別に意味が無く、消費側は `=== true` で判定する必要があった
   - `SubgroupHeader.firstObject` を必須の `boolean` にし、wire 上でビットが無い場合は `false` を設定する。encode / decode の wire 表現は変えない
   - `encodeSubgroupHeader` / `decodeSubgroupHeader` / `processSubgroupObjects` を新しい表現に追随させた。`SubgroupHeader` を組み立てる利用側は `firstObject` の指定が必要になる
+- [ADD] Prior Group ID Gap / Prior Object ID Gap の Track 横断追跡を実装する
+  - draft-ietf-moq-transport-21 §10.8 / §10.9 の malformed Track 条件のうち、同一 Track の複数 Object と過去の受信状態を必要とする 5 条件 (同一 Group 内で異なる Prior Group ID Gap、受信済み Object を覆う gap、通知済み gap 内の Location) を検出する
+  - セッションに Full Track Name 単位の追跡状態 (`src/session/priorGapTracking.ts`) を追加し、subgroup / datagram / FETCH / fill の 4 経路で配送前に検証する。判定は bigint の範囲比較で行い、スキップされた ID を配列として実体化しない
+  - gap の値は mutable properties と Immutable Properties の双方から取り出す (§10.7)。malformed と判定した Object は受信済みとして登録しない
+  - 検出時は §12.1 に従い同一 Track の購読 / FETCH を cancel し、セッションは閉じない。追跡状態は購読と FETCH が尽きた時点で破棄する
   - @voluntas
 - [FIX] FETCH 応答ストリーム上の REQUEST_UPDATE を検出する
   - draft-ietf-moq-transport-21 §9.5 の MUST (REQUEST_UPDATE を受け取れるのはリクエストの送信者と PUBLISH で確立した購読の subscriber のみ) に反する REQUEST_UPDATE を、FETCH_OK 受理後に双方向ストリームを読み続けていなかったため検出できなかった

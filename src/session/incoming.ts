@@ -30,6 +30,7 @@ import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError }
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toSessionCloseError } from "./errors";
 import { cancelMalformedTrackPeers } from "./bidi";
+import { assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
@@ -37,6 +38,7 @@ import {
 } from "./stream";
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
+import type { FullTrackNameKey } from "../fullTrackName";
 import type { SessionInternal } from "./types";
 
 // ============================================================================
@@ -332,9 +334,21 @@ function incomingIsRejectedNamespaceRequest(payload: Uint8Array, offset: number)
  * アプリ例外は当該 subscriber の error コールバックへ通知し、
  * 残りの配送を継続する。セッションもストリームも閉じない
  * (subgroup 経路も同様に継続する)。
+ *
+ * draft-ietf-moq-transport-21 §10.8 / §10.9:
+ * Track 横断の Prior ID Gap 条件 (過去に受信した Object を覆う gap、過去に通知
+ * された gap 内の Location、同一 Group 内で異なる gap 値) は Track 単位の追跡が
+ * 必要であり、この経路で検証する。検証は Object の decode 後・配送前に行い、
+ * throw は下の catch が受けて malformed track として cancel する。
  */
 export function incomingHandleDatagram(session: SessionInternal, data: Uint8Array): void {
   let datagram: ObjectDatagram;
+  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // 追跡検証に使う比較キーは decode の前に解決する。購読の解決後まで遅らせると
+  // MalformedTrackError が下の catch を素通りし、SessionImpl の datagram 受信
+  // ループごと終了して §12.1 の cancel まで到達しない。キーを解決できない
+  // datagram (alias 不明・購読 0 件) は検証しない。
+  const trackKey = incomingResolveDatagramTrackKey(session, data);
   try {
     // PADDING datagram (0x132b3e29) を varint type のデコードで判定する
     if (data.length > 0) {
@@ -345,6 +359,17 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     }
 
     [datagram] = decodeObjectDatagram(data);
+
+    // 追跡検証は Object のフィールドが揃った後に行う。単一 Object の gap 条件は
+    // decodeObjectDatagram が先に検証しており、ここでは重複して呼ばない。
+    if (trackKey !== undefined) {
+      assertNoPriorIdGapTrackViolation(
+        { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+        datagram.groupId,
+        datagram.objectId,
+        datagram.properties,
+      );
+    }
   } catch (err) {
     // デバッグ記録自体の throw (debug コールバックの throw) は伝播させない。
     try {
@@ -461,6 +486,29 @@ function decodeDatagramTrackAlias(data: Uint8Array): bigint | undefined {
 }
 
 /**
+ * Object Datagram から追跡対象 Track の比較キーを解決する
+ *
+ * datagram は Full Track Name を直接持たないため、Track Alias から購読を引き、
+ * その購読が持つ比較キー (fullTrackNameKey の戻り値) を使う。
+ *
+ * 対象範囲: alias を特定でき、かつその alias に購読がある場合だけ解決できる。
+ * どちらも満たさない datagram は Track を決められないため追跡検証の対象外と
+ * する (cancel 対象も存在しない)。
+ *
+ * @returns 解決できた場合は比較キー、alias 不明・購読 0 件は undefined
+ */
+function incomingResolveDatagramTrackKey(
+  session: SessionInternal,
+  data: Uint8Array,
+): FullTrackNameKey | undefined {
+  const trackAlias = decodeDatagramTrackAlias(data);
+  if (trackAlias === undefined) {
+    return undefined;
+  }
+  return session.subscribersByAlias.get(trackAlias)?.[0]?.getFullTrackNameKey();
+}
+
+/**
  * Fetcher の登録を待つ
  *
  * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
@@ -545,6 +593,8 @@ export function incomingWaitForFetcher(
  * 種別どおりに 1 回ずつ計上する (同じ Location が 2 度届けば 2 回計上される)。
  *
  * @param viaFill - fill fetch ストリームからの受信なら true
+ * @param trackKey - 追跡対象 Track の比較キー。通常 FETCH は Fetcher、fill fetch は
+ *   購読が持つ比較キーを渡す (§10.8 / §10.9 の Track 横断検証に使う)。
  */
 export function incomingProcessFetchObjects(
   session: SessionInternal,
@@ -554,6 +604,7 @@ export function incomingProcessFetchObjects(
   isFirst: boolean,
   groupOrder: GroupOrder,
   viaFill: boolean,
+  trackKey: FullTrackNameKey,
 ): {
   remainingBuffer: Uint8Array;
   context: import("../dataStream").FetchObjectContext | null;
@@ -589,6 +640,7 @@ export function incomingProcessFetchObjects(
       },
     },
     groupOrder,
+    { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
   );
 }
 
@@ -618,6 +670,10 @@ export function incomingProcessSubgroupObjects(
   // 検出のためセッションが `${trackAlias}:${groupId}` で保持する。
   const endOfGroupKey = `${header.trackAlias}:${header.groupId}`;
   const endOfGroupFinalObjectId = session.receivedEndOfGroupFinalObjectIds.get(endOfGroupKey);
+  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // Subgroup は Full Track Name を直接持たないため、Track Alias から購読を引き、
+  // その購読が持つ比較キー (fullTrackNameKey の戻り値) を追跡対象のキーにする。
+  const trackKey = subscribers[0]?.getFullTrackNameKey();
   return streamProcessSubgroupObjects(
     buffer,
     subscribers,
@@ -659,5 +715,11 @@ export function incomingProcessSubgroupObjects(
     // exactOptionalPropertyTypes では optional な finalObjectId に undefined を渡せないため、
     // 既知の最終 Object ID がある場合だけ載せる
     endOfGroupFinalObjectId === undefined ? {} : { finalObjectId: endOfGroupFinalObjectId },
+    // draft-ietf-moq-transport-21 §10.8 / §10.9:
+    // Track 横断の追跡検証に使う比較キーは、購読が特定できた場合だけ解決できる。
+    // 購読が特定できないと Object の decode 自体を行わないため、キーは必ず解決できる。
+    trackKey === undefined
+      ? undefined
+      : { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
   );
 }
