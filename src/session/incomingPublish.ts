@@ -124,6 +124,9 @@ export function incomingPublishStartBidiStreamLoop(session: IncomingPublishSessi
   })();
 }
 
+/**
+ * PUBLISH ストリームの後続メッセージ読み取りサブループ
+ */
 export async function incomingPublishRunStreamSubLoop(
   session: IncomingPublishSessionInternal,
   impl: SubscriberImpl,
@@ -414,6 +417,28 @@ export async function incomingPublishRunStreamSubLoop(
   }
 }
 
+/**
+ * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータを処理する
+ *
+ * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
+ * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
+ * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
+ * デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
+ * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
+ * セッションを閉じる。
+ *
+ * 未登録 Alias の参照も Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) で
+ * セッションを閉じる。REQUEST_ERROR ではなく Session Termination を選ぶ理由、
+ * §6.6 の留保の判断、§9.1.4 の MUST NOT に抵触しないことは
+ * `processIncomingRequestUpdateAuthorizationTokens` の JSDoc に集約している
+ * (同じ規範判断をこのファイルと bidi.ts で二重に保守しないため)。
+ *
+ * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は REQUEST_UPDATE に対する publisher の
+ * MUST であり、受信 PUBLISH の拒否には適用しない。
+ *
+ * @returns 処理を継続してよい場合は true、セッション終了または当該 PUBLISH の
+ *   打ち切りで中断すべき場合は false
+ */
 export function incomingPublishProcessAuthorizationTokens(
   session: IncomingPublishSessionInternal,
   requestId: bigint,
@@ -450,6 +475,14 @@ export function incomingPublishProcessAuthorizationTokens(
   return true;
 }
 
+/**
+ * セッションが connected でなければ受信 bidi ストリームを cancel する
+ *
+ * 接続確立前に届いた受信ストリームは処理せず、読み取りを打ち切る。
+ *
+ * @param stream - 受信した双方向ストリーム
+ * @returns cancel した (呼び出し側は即 return すべき) なら true
+ */
 export async function incomingPublishCancelIfNotConnected(
   session: IncomingPublishSessionInternal,
   stream: WebTransportBidirectionalStream,
@@ -790,6 +823,18 @@ export async function incomingPublishHandleBidirectionalStream(
   }
 }
 
+/**
+ * 受信 PUBLISH の後始末を行う
+ *
+ * subscribers / subscribersByAlias / requestStreams の削除と fill 関連付けの
+ * 掃除、ストリームのロック解放を、exit 経路に依らず必ず実行する。
+ *
+ * @param publishRequestId - 受信 PUBLISH の Request ID (3 マップの削除キー)
+ * @param publishTrackAlias - 受信 PUBLISH の Track Alias (alias 側の特定削除用)
+ * @param impl - 生成した SubscriberImpl (alias 側の特定要素削除用)
+ * @param subReader - 受信ストリームの reader (ロック解放用)
+ * @param subWriter - 応答ストリームの writer (ロック解放用)
+ */
 export function incomingPublishCleanupIncomingPublish(
   session: IncomingPublishSessionInternal,
   publishRequestId: bigint,
@@ -829,6 +874,29 @@ export function incomingPublishCleanupIncomingPublish(
   session.onRequestDrained();
 }
 
+/**
+ * 受信 PUBLISH の初期パラメータを購読に反映する
+ *
+ * draft-ietf-moq-transport-21 §9.8 (PUBLISH) / §9.20.19:
+ * FORWARD (省略時はデフォルト 1) を Forward State として保持する。
+ * 値域外は PROTOCOL_VIOLATION でセッションを閉じる。
+ * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
+ * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
+ * 受理のみで状態反映はしない。この関数では再検証しない
+ * (FORWARD / GROUP_ORDER の uint8 値域は decode 時に検証済み。
+ * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
+ * draft-ietf-moq-transport-21 §9.8 / §9.20.10 / §9.18.1:
+ * LOCATION_FILTER は購読の初期フィルタとして反映する
+ * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
+ * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1:
+ * LARGEST_OBJECT は LOCATION_FILTER より先に設定する。相対 Location Filter は
+ * 「フィルタ適用時点の LARGEST_OBJECT」で解決されるため、この順序で
+ * 受信 PUBLISH が運ぶ LARGEST_OBJECT 基準の開始位置に一度だけ確定する。
+ * 反映前にすべての値をデコード・検証し、検証通過後にまとめて設定する
+ * (違反確定後の部分反映を防ぐ)。
+ *
+ * @returns 反映できた場合は true、違反でセッションを閉じた場合は false
+ */
 export function incomingPublishApplyParameters(
   session: IncomingPublishSessionInternal,
   impl: SubscriberImpl,
@@ -886,6 +954,11 @@ export function incomingPublishApplyParameters(
   return true;
 }
 
+/**
+ * PUBLISH の trackNamespace をアクティブな tracksSubscriptions にマッチさせる
+ *
+ * @returns マッチした subscription の callbacks と suffix、マッチしなければ null
+ */
 export function incomingPublishMatchToSubscription(
   session: IncomingPublishSessionInternal,
   publishTrackNamespace: string[],
@@ -911,6 +984,14 @@ export function incomingPublishMatchToSubscription(
   return null;
 }
 
+/**
+ * 受信 bidi ストリームの先頭メッセージを読み取る
+ *
+ * 同一チャンクに連結された先頭以降のメッセージは破棄される
+ * (先頭メッセージのみを 3 分類の対象とする。既存挙動の継続)。
+ *
+ * @returns 先頭メッセージ。FIN 検出時・読み取り失敗時は null
+ */
 export async function incomingPublishReadFirstBidiMessage(
   session: IncomingPublishSessionInternal,
   stream: WebTransportBidirectionalStream,

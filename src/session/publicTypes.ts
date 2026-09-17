@@ -11,6 +11,16 @@ import type { AuthorizationToken, LocationFilter, Parameter, RangeFilterSpec } f
 import type { MoqtObject } from "../dataStream";
 import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
 
+/**
+ * fill fetch の要求内容
+ * draft-ietf-moq-transport-21 Section 3.4 (Fill Semantics) /
+ * Section 9.20.16 (FILL PARAMETERS Parameter)
+ *
+ * SUBSCRIBE / subscription の REQUEST_UPDATE に FILL_PARAMETERS (0x23) として
+ * 載せ、live 手前の範囲を fill fetch ストリームで取得する。内側に載せられる
+ * のは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER /
+ * Range Filters (0x25-0x28) のみ (§9.20.16 Table 6)。
+ */
 export interface FillRequestOptions {
   /**
    * fill 範囲の Location Filter
@@ -202,6 +212,9 @@ export interface ConnectOptions {
 /**
  * SessionImpl のコンストラクタが受け取るオプション
  * `connect()` から `ConnectOptions` の該当フィールドが渡される
+ */
+/**
+ * パブリッシュコールバック
  */
 export interface PublishCallbacks {
   error?: (error: Error) => void;

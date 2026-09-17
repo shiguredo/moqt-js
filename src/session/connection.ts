@@ -392,6 +392,26 @@ export async function connectionInitialize(
   connectionStartPostSetupLoops(session, messages, bufferedDataStreams);
 }
 
+/**
+ * 受信 SETUP の先頭メッセージ検証・デコード・検証を行い、違反時はセッションを閉じる
+ *
+ * draft-ietf-moq-transport-21 §9 (Control Messages) は Length と Body 長の不一致に
+ * PROTOCOL_VIOLATION でのセッションクローズを MUST とし、§9.1.1 (AUTHORITY) /
+ * §9.1.2 (PATH) は WebTransport 使用中の受信に INVALID_AUTHORITY / INVALID_PATH での
+ * クローズを MUST、§9.1.4 (AUTHORIZATION TOKEN) は AUTHORIZATION TOKEN の処理失敗に
+ * クローズを MUST とする。また §9.1 (SETUP) は制御ストリームの先頭が SETUP であることを
+ * 要求する。
+ *
+ * initialize() を失敗させるだけではピアに終了コードが伝わらず、connect() は例外を
+ * 伝播するだけでトランスポートを閉じないため、セッションが開いたまま残る。
+ * toSessionCloseError で正規化した SessionError で closeWithError してから元の例外を
+ * 再送出する (initialize() は失敗を reject で伝える契約であり、ここで握ると初期化に
+ * 失敗したセッションを成功として返してしまう)。
+ * 正規化できない例外 (ピア起因の終了など) は閉じずにそのまま伝播させる。
+ *
+ * @param messages - readSetupMessages が返した制御メッセージ列 (先頭が SETUP)
+ * @returns 検証済みの先頭メッセージとデコード結果
+ */
 export function connectionDecodeAndValidateSetup(
   session: ConnectionSessionInternal,
   messages: ControlMessage[],
@@ -453,6 +473,16 @@ export function connectionDecodeAndValidateSetup(
   }
 }
 
+/**
+ * 制御ストリームから SETUP を含む制御メッセージ列を読み取る
+ *
+ * reader は 1 つだけ保持し、後続の制御ストリーム読み取り (startControlMessageLoop)
+ * が getReader() で再取得できるよう finally で必ず releaseLock する。
+ *
+ * @param controlStream - サーバーが開いた制御ストリーム (単方向)
+ * @param controlBuffer - ストリームタイプ varint を読み飛ばした後の残りバイト列
+ * @returns 1 件以上の制御メッセージ列 (先頭が SETUP)
+ */
 export async function connectionReadSetupMessages(
   session: ConnectionSessionInternal,
   controlStream: ReadableStream<Uint8Array>,
@@ -480,6 +510,19 @@ export async function connectionReadSetupMessages(
   }
 }
 
+/**
+ * SETUP 確立後に受信ループを開始する
+ *
+ * draft-ietf-moq-transport-21 Section 9.1 (SETUP) / Section 6.3 (Session initialization):
+ * SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
+ * チャンクに相乗りして届くことがある。ControlStreamReader.feed は揃った全メッセージを
+ * 返し内部バッファから削除するため、messages[0] (SETUP) 以外を処理しないと、後続の
+ * startControlMessageLoop は新規 read 分しか処理せず相乗りメッセージが恒久的に失われる。
+ * SETUP 確立後に messages[1..] を通常の制御メッセージ処理経路へ順次流す。
+ *
+ * @param messages - SETUP 受信時の read で揃った制御メッセージ列 (先頭が SETUP)
+ * @param bufferedDataStreams - SETUP 完了前に到着しバッファリングしたデータストリーム
+ */
 export function connectionStartPostSetupLoops(
   session: ConnectionSessionInternal,
   messages: ControlMessage[],
@@ -513,6 +556,16 @@ export function connectionStartPostSetupLoops(
   session.startIncomingBidirectionalStreamLoop();
 }
 
+/**
+ * 受信タイムアウトの設定を反映する
+ *
+ * draft-ietf-moq-transport-21 §12.2:
+ * CONTROL_MESSAGE_TIMEOUT (0x11) / DATA_STREAM_TIMEOUT (0x12) は、ピアが
+ * 制御メッセージへの応答・データストリームの送信に時間をかけすぎたことを
+ * 示すコードである。半端なメッセージや Object を保持したまま待ち続ける
+ * ピアにメモリとコネクションを占有され続けないよう、期限を設ける。
+ * 0 以下を指定するとタイムアウトしない。
+ */
 export function connectionApplyTimeoutOptions(
   session: ConnectionSessionInternal,
   options?: {

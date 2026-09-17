@@ -403,6 +403,18 @@ export async function dataStreamHandleIncomingStream(
   }
 }
 
+/**
+ * fill fetch ストリームを受信する
+ *
+ * draft-ietf-moq-transport-21 §3.4 (Fill Semantics) / §3.4.1:
+ * fill fetch ストリームは FETCH と同じオブジェクト framing で届き、
+ * FIN は fill 完了 (関連付けを消す)、reset は fill 失敗として扱う。
+ * オブジェクトは fillDelivered を true にして購読の object コールバックに
+ * 渡す (handleFillObject 経由。subscription のフィルタ再適用は通さない)。
+ * fill ストリームの reset / STOP_SENDING による通常の失敗は購読に波及しない
+ * (§3.4.1)。ただし malformed track の検出は §12.1 が優先し、同一 Track の
+ * 全購読と全 FETCH を cancel する。
+ */
 export async function dataStreamHandleFillFetchStream(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -525,6 +537,29 @@ export async function dataStreamHandleFillFetchStream(
   // finally に委ねる (Subgroup 経路と同パターン)。
 }
 
+/**
+ * Malformed Track 検出時の FETCH キャンセル処理
+ *
+ * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
+ * Malformed Track 検出時は「cancel any corresponding subscription or fetches
+ * for that Track from that publisher」であり、セッションを閉じない。
+ * まず受信データストリームを STOP_SENDING 相当 (cancelStreamQuiet) で打ち切る。
+ * fetcher が存在する場合 (FETCH データストリーム)、fetcher の error コールバックで
+ * アプリへ通知し (§12.1 SHOULD)、FetcherImpl.cancel() 経由で
+ * draft-ietf-moq-transport-21 §3.2.1 の MUST「It MUST send STOP_SENDING for
+ * the bidi request stream.」に従い bidi リクエストストリームへ STOP_SENDING
+ * を送り、fetchers Map から削除する。
+ *
+ * §12.1 の「fetches for that Track」に従い、同一 Full Track Name の全購読と
+ * 全 FETCH を cancel する (cancelMalformedTrackPeers)。fetch() は
+ * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
+ * 登録するため (§9.11「A subscriber sends FETCH as the first message on a new
+ * bidi stream」)、同じく STOP_SENDING が送られる。
+ *
+ * アプリの error コールバックが throw した場合は握り潰してキャンセルを継続する。
+ * 呼び出し元の handleIncomingStream は fire-and-forget で起動されるため、throw を
+ * 伝搬させると unhandled rejection になる。
+ */
 export async function dataStreamHandleMalformedFetchTrack(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -547,6 +582,13 @@ export async function dataStreamHandleMalformedFetchTrack(
   }
 }
 
+/**
+ * 受信データストリームの読み取りループで発生したエラーの処理
+ *
+ * - ProtocolViolationError は PROTOCOL_VIOLATION でセッションを閉じる
+ * - MalformedTrackError は同一 Track の全購読と全 FETCH をキャンセルする
+ * - FETCH データストリームの peer RESET_STREAM は fetcher state を破棄する
+ */
 export async function dataStreamHandleIncomingStreamError(
   session: DataStreamSessionInternal,
   err: unknown,
@@ -576,6 +618,20 @@ export async function dataStreamHandleIncomingStreamError(
   }
 }
 
+/**
+ * peer の RESET_STREAM で FETCH データストリームが終了したときの後始末
+ *
+ * draft-ietf-moq-transport-21 §3.2.1:
+ * 「A subscriber keeps FETCH state until it cancels the request (see
+ *  Section 6.4.2.3), receives REQUEST_ERROR, or the FETCH data stream
+ *  receives a FIN or is reset.」
+ * アプリへ error を通知してから fetcher を closed にし、fetchers から削除する
+ * (handleMalformedFetchTrack と同じ順序。handleError を markClosed より先に
+ * 呼ばないと通知が握り潰される)。FIN 経路 (handleEnd + fetchers.delete) と
+ * state 破棄の集合を揃える。エラーには正規化済みの streamErrorCode を載せる。
+ * bidi リクエストストリーム (requestStreams) は FIN 経路と同じく削除しない
+ * (セッション終了時にまとめて解放される)。
+ */
 export function dataStreamHandlePeerFetchStreamReset(
   session: DataStreamSessionInternal,
   err: unknown,
@@ -608,6 +664,10 @@ export function dataStreamHandlePeerFetchStreamReset(
   }
 }
 
+/**
+ * Fetch オブジェクトをストリーミング処理
+ * パース可能なオブジェクトを全て処理し、残りのバッファを返す
+ */
 export function dataStreamProcessFetchObjects(
   session: DataStreamSessionInternal,
   buffer: Uint8Array,
@@ -633,6 +693,12 @@ export function dataStreamProcessFetchObjects(
   );
 }
 
+/**
+ * Subgroup オブジェクトをストリーミング処理
+ * パース可能なオブジェクトを全て処理し、残りのバッファと状態を返す。
+ * resolvedSubgroupId を透過し、feed 間の解決値を引き継ぐ
+ * (明示型・0 系はヘッダ値のため透過しても no-op になる)。
+ */
 export function dataStreamProcessSubgroupObjects(
   session: DataStreamSessionInternal,
   buffer: Uint8Array,
@@ -656,6 +722,16 @@ export function dataStreamProcessSubgroupObjects(
   );
 }
 
+/**
+ * Malformed Track (Object Property の Mandatory Track Property) を検出した
+ * 同一 Track の全購読と全 FETCH を §12.1 に従って cancel する
+ *
+ * draft-ietf-moq-transport-21 §12.1:
+ * "it MUST cancel any corresponding subscription or fetches for that Track
+ *  from that publisher"
+ * データストリームを打ち切り、同一 Full Track Name の購読 / FETCH を cancel する。
+ * セッションは閉じない (Track 単位の失敗として扱う)。
+ */
 export async function dataStreamHandleMalformedSubgroupTrack(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -676,6 +752,19 @@ export async function dataStreamHandleMalformedSubgroupTrack(
   );
 }
 
+/**
+ * Subgroup ストリームを処理する
+ *
+ * draft-ietf-moq-transport-21 §11.3.1:
+ * "If an endpoint receives a subgroup with an unknown Track Alias, it MAY abandon
+ *  the stream, or choose to buffer it for a brief period to handle reordering with
+ *  the control message that establishes the Track Alias."
+ *
+ * subscriber が登録済みであれば即座に通常 mode で読み出す。
+ * 未登録なら pending mode に入り、Promise.race で chunk 受信と subscriber 通知を並走させる。
+ * subscriber 登録後は累積 chunks を flush して通常 mode に合流する。
+ * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
+ */
 export async function dataStreamHandleSubgroupStream(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -869,6 +958,22 @@ export async function dataStreamHandleSubgroupStream(
   }
 }
 
+/**
+ * データストリームの受信待ちタイマーを作る
+ *
+ * draft-ietf-moq-transport-21 §12.2:
+ * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
+ * データを送るのに時間をかけすぎた」ことを示す。半端なヘッダー / Object を
+ * 保持したまま待ち続けるピアにメモリとコネクションを占有され続けないよう、
+ * 途中バイトが残っている間だけ期限を張る。
+ *
+ * 期限切れではセッションを閉じたうえで reader を cancel する。セッション終了で
+ * ストリームの読み取りが終わらない実装でも読み取りループが終わるようにするため
+ * である。
+ *
+ * @param reader - 対象ストリームの reader
+ * @param bufferedBytes - エラーメッセージに載せる残バッファ長
+ */
 export function dataStreamCreateDataStreamTimeout(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,

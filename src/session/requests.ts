@@ -652,6 +652,20 @@ export async function requestsTrackStatus(
   return promise;
 }
 
+/**
+ * リクエストを双方向ストリーム上で送信する
+ *
+ * draft-ietf-moq-transport-21 Section 6.3:
+ * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS 等) は
+ * 双方向ストリーム上で送受信される。
+ * draft-ietf-moq-transport-21 Section 6.3
+ *
+ * @param requestId - リクエスト ID
+ * @param type - メッセージタイプ
+ * @param payload - エンコード済みペイロード
+ * @param decoded - デバッグ用のデコード済みメッセージ
+ * @returns 双方向ストリームの情報
+ */
 export function requestsSendRequestOnBidiStream(
   session: RequestsSessionInternal,
   requestId: bigint,
@@ -680,6 +694,10 @@ export function requestsSendObject(
   return publishSendObject(session as unknown as SessionInternal, publisher, params);
 }
 
+/**
+ * Publisher のストリームを閉じる
+ * 送信キューに入れて、進行中の sendObject が完了してから閉じる
+ */
 export function requestsClosePublisherStream(
   session: RequestsSessionInternal,
   trackAlias: bigint,
@@ -695,6 +713,12 @@ export function requestsSendDatagram(
   publishSendDatagram(session as unknown as SessionInternal, publisher, params);
 }
 
+/**
+ * PUBLISH_STATE_NOTIFY を送信する
+ *
+ * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
+ * 購読の双方向ストリーム上で送信し、応答は受け取らない。
+ */
 export function requestsSendPublishStateNotify(
   session: RequestsSessionInternal,
   publisher: PublisherImpl,
@@ -707,6 +731,11 @@ export function requestsSendPublishStateNotify(
   );
 }
 
+/**
+ * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
+ * PUBLISH_DONE は双方向ストリーム上で送信される。
+ * Request ID フィールドはない（bidi stream で特定可能）。
+ */
 export function requestsSendPublishDone(
   session: RequestsSessionInternal,
   publisher: PublisherImpl,
@@ -715,6 +744,12 @@ export function requestsSendPublishDone(
   return publishSendPublishDone(session as unknown as SessionInternal, publisher, status);
 }
 
+/**
+ * サブスクリプションをキャンセルする
+ *
+ * draft-ietf-moq-transport-21 Section 6.4.2.3:
+ * subscription のキャンセルは双方向ストリームの close で行う。
+ */
 export function requestsCancelSubscription(
   session: RequestsSessionInternal,
   subscriber: SubscriberImpl,
@@ -722,6 +757,12 @@ export function requestsCancelSubscription(
   return bidi.bidiCancelSubscription(session as unknown as bidi.BidiSessionInternal, subscriber);
 }
 
+/**
+ * Fetch をキャンセルする
+ *
+ * draft-ietf-moq-transport-21 Section 3.2.1:
+ * "It MUST send STOP_SENDING for the bidi request stream."
+ */
 export function requestsCancelFetch(
   session: RequestsSessionInternal,
   fetcher: FetcherImpl,
@@ -729,6 +770,19 @@ export function requestsCancelFetch(
   return bidi.bidiCancelFetch(session as unknown as bidi.BidiSessionInternal, fetcher);
 }
 
+/**
+ * REQUEST_UPDATE を送信する
+ *
+ * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE):
+ * REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する。
+ *
+ * REQUEST_UPDATE Message {
+ *   Type (i) = 0x2,
+ *   Length (16),
+ *   Request ID (i),
+ *   Parameters (..) ...
+ * }
+ */
 export function requestsSendRequestUpdate(
   session: RequestsSessionInternal,
   subscriber: SubscriberImpl,
@@ -741,6 +795,14 @@ export function requestsSendRequestUpdate(
   );
 }
 
+/**
+ * PUBLISH リクエストの双方向ストリームからレスポンスを読み取る
+ *
+ * draft-ietf-moq-transport-21 Section 9.3 (REQUEST_OK):
+ * PUBLISH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
+ * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
+ * draft-ietf-moq-transport-21 Section 6.3
+ */
 export function requestsReadPublishResponse(
   session: RequestsSessionInternal,
   requestId: bigint,
@@ -755,6 +817,13 @@ export function requestsReadPublishResponse(
   );
 }
 
+/**
+ * SUBSCRIBE リクエストの双方向ストリームからレスポンスを読み取る
+ *
+ * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
+ * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
+ * draft-ietf-moq-transport-21 Section 6.3
+ */
 export function requestsReadSubscribeResponse(
   session: RequestsSessionInternal,
   requestId: bigint,
@@ -769,6 +838,13 @@ export function requestsReadSubscribeResponse(
   );
 }
 
+/**
+ * FETCH リクエストの双方向ストリームからレスポンスを読み取る
+ *
+ * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
+ * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
+ * draft-ietf-moq-transport-21 Section 6.3
+ */
 export function requestsReadFetchResponse(
   session: RequestsSessionInternal,
   requestId: bigint,
@@ -783,6 +859,13 @@ export function requestsReadFetchResponse(
   );
 }
 
+/**
+ * TRACK_STATUS リクエストの双方向ストリームからレスポンスを読み取る
+ *
+ * draft-ietf-moq-transport-21 Section 9.13 (TRACK_STATUS):
+ * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
+ * draft-ietf-moq-transport-21 Section 6.3
+ */
 export function requestsReadTrackStatusResponse(
   session: RequestsSessionInternal,
   requestId: bigint,

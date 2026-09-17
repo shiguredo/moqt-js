@@ -3,31 +3,18 @@
  * draft-ietf-moq-transport-21 Section 6 (Sessions)
  */
 
-import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "./controlStream";
 import { type MoqtObject } from "./dataStream";
-import {
-  MalformedTrackError,
-  SessionError,
-  SessionErrorCode,
-  normalizeSessionErrorCode,
-} from "./error";
-import {
-  decodeSetupPayload,
-  PublishDoneStatusCode,
-  type AuthorizationToken,
-  type Location,
-  type Parameter,
-  type RangeFilterSpec,
-} from "./message";
+import { SessionError, SessionErrorCode, normalizeSessionErrorCode } from "./error";
+import { type AuthorizationToken, type Location, type RangeFilterSpec } from "./message";
 import {
   type Publisher,
   PublisherImpl,
-  type PublishStateNotifyOptions,
   type SendObjectParams,
   type SendDatagramParams,
 } from "./publisher";
-import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "./subscriber";
 import { type Fetcher, FetcherImpl } from "./fetcher";
+import { type Subscriber, SubscriberImpl } from "./subscriber";
+import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
 import type { FetchHeader } from "./dataStream";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
@@ -35,71 +22,36 @@ import * as bidi from "./session/bidi";
 import {
   DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS,
   DEFAULT_DATA_STREAM_TIMEOUT_MS,
-  connectionApplyTimeoutOptions,
-  connectionDecodeAndValidateSetup,
   connectionInitialize,
-  connectionReadSetupMessages,
   connectionSendControlMessage,
-  connectionStartPostSetupLoops,
   type ConnectionInitializeOptions,
   type ConnectionSessionInternal,
 } from "./session/connection";
 import {
-  namespacesCloseNamespacePublication,
-  namespacesCloseNamespaceSubscription,
-  namespacesCloseTracksSubscription,
   namespacesCreateNamespacePublication,
   namespacesCreateNamespaceSubscription,
   namespacesCreateTracksSubscription,
   namespacesPublishNamespace,
-  namespacesSendNamespaceRequestUpdate,
   namespacesSubscribeNamespace,
   namespacesSubscribeTracks,
   type NamespacesSessionInternal,
 } from "./session/namespaces";
 import {
-  requestsCancelFetch,
-  requestsCancelSubscription,
-  requestsClosePublisherStream,
   requestsFetch,
   requestsPublish,
-  requestsReadFetchResponse,
-  requestsReadPublishResponse,
-  requestsReadSubscribeResponse,
-  requestsReadTrackStatusResponse,
   requestsSendDatagram,
   requestsSendObject,
-  requestsSendPublishDone,
-  requestsSendPublishStateNotify,
-  requestsSendRequestOnBidiStream,
-  requestsSendRequestUpdate,
   requestsSubscribe,
   requestsTrackStatus,
   type RequestsSessionInternal,
 } from "./session/requests";
 import {
-  incomingPublishApplyParameters,
-  incomingPublishCancelIfNotConnected,
-  incomingPublishCleanupIncomingPublish,
   incomingPublishHandleBidirectionalStream,
-  incomingPublishMatchToSubscription,
-  incomingPublishProcessAuthorizationTokens,
-  incomingPublishReadFirstBidiMessage,
-  incomingPublishRunStreamSubLoop,
   incomingPublishStartBidiStreamLoop,
   type IncomingPublishSessionInternal,
 } from "./session/incomingPublish";
 import {
-  dataStreamCreateDataStreamTimeout,
-  dataStreamHandleFillFetchStream,
   dataStreamHandleIncomingStream,
-  dataStreamHandleIncomingStreamError,
-  dataStreamHandleMalformedFetchTrack,
-  dataStreamHandleMalformedSubgroupTrack,
-  dataStreamHandlePeerFetchStreamReset,
-  dataStreamHandleSubgroupStream,
-  dataStreamProcessFetchObjects,
-  dataStreamProcessSubgroupObjects,
   dataStreamStartDatagramLoop,
   dataStreamStartIncomingStreamLoop,
   type DataStreamSessionInternal,
@@ -115,7 +67,6 @@ import {
 import {
   sessionClose,
   sessionCloseControlStreamViolation,
-  sessionCloseIfGoawayDrained,
   sessionCloseWithError,
   sessionEmitCallbackErrorDebug,
   sessionEmitDataStreamErrorDebug,
@@ -123,7 +74,6 @@ import {
   sessionGoaway,
   sessionHandleControlMessage,
   sessionHandleGoaway,
-  sessionHasOpenSubscriptionsOrFetches,
   sessionMarkRequestObjectsClosed,
   sessionNotifyErrorIfActive,
   sessionOnRequestDrained,
@@ -136,17 +86,6 @@ import { AuthTokenCache } from "./session/authTokenCache";
 
 export type { MoqtObject } from "./dataStream";
 export type { SessionStatistics } from "./session/statistics";
-
-/**
- * fill fetch の要求内容
- * draft-ietf-moq-transport-21 Section 3.4 (Fill Semantics) /
- * Section 9.20.16 (FILL PARAMETERS Parameter)
- *
- * SUBSCRIBE / subscription の REQUEST_UPDATE に FILL_PARAMETERS (0x23) として
- * 載せ、live 手前の範囲を fill fetch ストリームで取得する。内側に載せられる
- * のは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER / GROUP_ORDER /
- * Range Filters (0x25-0x28) のみ (§9.20.16 Table 6)。
- */
 import type {
   ConnectCallbacks,
   FetchCallbacks,
@@ -164,7 +103,6 @@ import type {
   SubscribeTracksOptions,
   TracksSubscription,
   TracksSubscriptionCallbacks,
-  TracksUpdateOptions,
   TrackStatusOptions,
   TrackStatusResult,
 } from "./session/publicTypes";
@@ -208,9 +146,6 @@ interface SessionImplOptions {
 
 /**
  * セッションインターフェース
- */
-/**
- * パブリッシュコールバック
  */
 export interface Session {
   readonly state: SessionState;
@@ -723,78 +658,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 受信 SETUP の先頭メッセージ検証・デコード・検証を行い、違反時はセッションを閉じる
-   *
-   * draft-ietf-moq-transport-21 §9 (Control Messages) は Length と Body 長の不一致に
-   * PROTOCOL_VIOLATION でのセッションクローズを MUST とし、§9.1.1 (AUTHORITY) /
-   * §9.1.2 (PATH) は WebTransport 使用中の受信に INVALID_AUTHORITY / INVALID_PATH での
-   * クローズを MUST、§9.1.4 (AUTHORIZATION TOKEN) は AUTHORIZATION TOKEN の処理失敗に
-   * クローズを MUST とする。また §9.1 (SETUP) は制御ストリームの先頭が SETUP であることを
-   * 要求する。
-   *
-   * initialize() を失敗させるだけではピアに終了コードが伝わらず、connect() は例外を
-   * 伝播するだけでトランスポートを閉じないため、セッションが開いたまま残る。
-   * toSessionCloseError で正規化した SessionError で closeWithError してから元の例外を
-   * 再送出する (initialize() は失敗を reject で伝える契約であり、ここで握ると初期化に
-   * 失敗したセッションを成功として返してしまう)。
-   * 正規化できない例外 (ピア起因の終了など) は閉じずにそのまま伝播させる。
-   *
-   * @param messages - readSetupMessages が返した制御メッセージ列 (先頭が SETUP)
-   * @returns 検証済みの先頭メッセージとデコード結果
-   */
-  decodeAndValidateSetupClosingOnViolation(messages: ControlMessage[]): {
-    message: ControlMessage;
-    decoded: ReturnType<typeof decodeSetupPayload>;
-  } {
-    return connectionDecodeAndValidateSetup(this as unknown as ConnectionSessionInternal, messages);
-  }
-
-  /**
-   * 制御ストリームから SETUP を含む制御メッセージ列を読み取る
-   *
-   * reader は 1 つだけ保持し、後続の制御ストリーム読み取り (startControlMessageLoop)
-   * が getReader() で再取得できるよう finally で必ず releaseLock する。
-   *
-   * @param controlStream - サーバーが開いた制御ストリーム (単方向)
-   * @param controlBuffer - ストリームタイプ varint を読み飛ばした後の残りバイト列
-   * @returns 1 件以上の制御メッセージ列 (先頭が SETUP)
-   */
-  async readSetupMessages(
-    controlStream: ReadableStream<Uint8Array>,
-    controlBuffer: Uint8Array,
-  ): Promise<ControlMessage[]> {
-    return connectionReadSetupMessages(
-      this as unknown as ConnectionSessionInternal,
-      controlStream,
-      controlBuffer,
-    );
-  }
-
-  /**
-   * SETUP 確立後に受信ループを開始する
-   *
-   * draft-ietf-moq-transport-21 Section 9.1 (SETUP) / Section 6.3 (Session initialization):
-   * SETUP は制御ストリーム上の最初の制御メッセージであり、後続メッセージが同一 read
-   * チャンクに相乗りして届くことがある。ControlStreamReader.feed は揃った全メッセージを
-   * 返し内部バッファから削除するため、messages[0] (SETUP) 以外を処理しないと、後続の
-   * startControlMessageLoop は新規 read 分しか処理せず相乗りメッセージが恒久的に失われる。
-   * SETUP 確立後に messages[1..] を通常の制御メッセージ処理経路へ順次流す。
-   *
-   * @param messages - SETUP 受信時の read で揃った制御メッセージ列 (先頭が SETUP)
-   * @param bufferedDataStreams - SETUP 完了前に到着しバッファリングしたデータストリーム
-   */
-  startPostSetupLoops(
-    messages: ControlMessage[],
-    bufferedDataStreams: ReadableStream<Uint8Array>[],
-  ): void {
-    return connectionStartPostSetupLoops(
-      this as unknown as ConnectionSessionInternal,
-      messages,
-      bufferedDataStreams,
-    );
-  }
-
-  /**
    * トラックを publish する
    */
   async publish(
@@ -1018,31 +881,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 未完了の購読・fetch が残っているかを返す
-   *
-   * draft-ietf-moq-transport-21 §6.6.1 (Graceful Session Migration):
-   * "The sender SHOULD close the session with GOAWAY_TIMEOUT after the indicated
-   *  timeout if there are still open subscriptions or fetches on a connection."
-   * pending なリクエストも未完了として含める。
-   */
-  hasOpenSubscriptionsOrFetches(): boolean {
-    return sessionHasOpenSubscriptionsOrFetches(this as unknown as SessionLifecycleInternal);
-  }
-
-  /**
-   * GOAWAY 受信後に Established 購読・fetch が無くなっていれば NO_ERROR で閉じる
-   *
-   * draft-ietf-moq-transport-21 §6.6.1:
-   * "After the client receives a GOAWAY, it's RECOMMENDED that the client waits
-   *  until there are no more Established subscriptions before closing the
-   *  session with NO_ERROR."
-   * 購読・fetch の終了通知 (onRequestDrained) から呼ばれる。
-   */
-  closeIfGoawayDrained(): void {
-    sessionCloseIfGoawayDrained(this as unknown as SessionLifecycleInternal);
-  }
-
-  /**
    * 確立済みの購読・fetch が 1 つ終了したことを受けて、
    * GOAWAY 後の NO_ERROR クローズ条件を満たすか確認する
    *
@@ -1111,39 +949,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * リクエストを双方向ストリーム上で送信する
-   *
-   * draft-ietf-moq-transport-21 Section 6.3:
-   * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS 等) は
-   * 双方向ストリーム上で送受信される。
-   * draft-ietf-moq-transport-21 Section 6.3
-   *
-   * @param requestId - リクエスト ID
-   * @param type - メッセージタイプ
-   * @param payload - エンコード済みペイロード
-   * @param decoded - デバッグ用のデコード済みメッセージ
-   * @returns 双方向ストリームの情報
-   */
-  sendRequestOnBidiStream(
-    requestId: bigint,
-    type: number,
-    payload: Uint8Array,
-    decoded?: Record<string, unknown>,
-  ): Promise<{
-    stream: WebTransportBidirectionalStream;
-    writer: WritableStreamDefaultWriter<Uint8Array>;
-    controlReader: ControlStreamReader;
-  }> {
-    return requestsSendRequestOnBidiStream(
-      this as unknown as RequestsSessionInternal,
-      requestId,
-      type,
-      payload,
-      decoded,
-    );
-  }
-
-  /**
    * Subgroup ストリームでオブジェクトを送信する
    * draft-ietf-moq-transport-21 Section 2.2:
    * "Objects in a subgroup ... are sent on a single stream whenever possible."
@@ -1161,211 +966,11 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Publisher のストリームを閉じる
-   * 送信キューに入れて、進行中の sendObject が完了してから閉じる
-   */
-  closePublisherStream(trackAlias: bigint): Promise<void> {
-    return requestsClosePublisherStream(this as unknown as RequestsSessionInternal, trackAlias);
-  }
-
-  /**
    * datagram を送信する
    * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    */
   sendDatagram(publisher: PublisherImpl, params: SendDatagramParams): void {
     return requestsSendDatagram(this as unknown as RequestsSessionInternal, publisher, params);
-  }
-
-  /**
-   * PUBLISH_STATE_NOTIFY を送信する
-   *
-   * draft-ietf-moq-transport-21 §9.10 (PUBLISH_STATE_NOTIFY):
-   * 購読の双方向ストリーム上で送信し、応答は受け取らない。
-   */
-  sendPublishStateNotify(
-    publisher: PublisherImpl,
-    options: PublishStateNotifyOptions,
-  ): Promise<void> {
-    return requestsSendPublishStateNotify(
-      this as unknown as RequestsSessionInternal,
-      publisher,
-      options,
-    );
-  }
-
-  /**
-   * draft-ietf-moq-transport-21 Section 9.9 (PUBLISH_DONE):
-   * PUBLISH_DONE は双方向ストリーム上で送信される。
-   * Request ID フィールドはない（bidi stream で特定可能）。
-   */
-  sendPublishDone(publisher: PublisherImpl, status: PublishDoneStatusCode): Promise<void> {
-    return requestsSendPublishDone(this as unknown as RequestsSessionInternal, publisher, status);
-  }
-
-  /**
-   * サブスクリプションをキャンセルする
-   *
-   * draft-ietf-moq-transport-21 Section 6.4.2.3:
-   * subscription のキャンセルは双方向ストリームの close で行う。
-   */
-  cancelSubscription(subscriber: SubscriberImpl): Promise<void> {
-    return requestsCancelSubscription(this as unknown as RequestsSessionInternal, subscriber);
-  }
-
-  /**
-   * Fetch をキャンセルする
-   *
-   * draft-ietf-moq-transport-21 Section 3.2.1:
-   * "It MUST send STOP_SENDING for the bidi request stream."
-   */
-  cancelFetch(fetcher: FetcherImpl): Promise<void> {
-    return requestsCancelFetch(this as unknown as RequestsSessionInternal, fetcher);
-  }
-
-  /**
-   * REQUEST_UPDATE を送信する
-   *
-   * draft-ietf-moq-transport-21 Section 9.5 (REQUEST_UPDATE):
-   * REQUEST_UPDATE はリクエストと同じ双方向ストリーム上で送信する。
-   *
-   * REQUEST_UPDATE Message {
-   *   Type (i) = 0x2,
-   *   Length (16),
-   *   Request ID (i),
-   *   Parameters (..) ...
-   * }
-   */
-  sendRequestUpdate(subscriber: SubscriberImpl, options: RequestUpdateOptions): Promise<void> {
-    return requestsSendRequestUpdate(
-      this as unknown as RequestsSessionInternal,
-      subscriber,
-      options,
-    );
-  }
-
-  /**
-   * PUBLISH リクエストの双方向ストリームからレスポンスを読み取る
-   *
-   * draft-ietf-moq-transport-21 Section 9.3 (REQUEST_OK):
-   * PUBLISH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
-   * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
-   * draft-ietf-moq-transport-21 Section 6.3
-   */
-  readPublishResponse(
-    requestId: bigint,
-    stream: WebTransportBidirectionalStream,
-    controlReader: ControlStreamReader,
-  ): Promise<void> {
-    return requestsReadPublishResponse(
-      this as unknown as RequestsSessionInternal,
-      requestId,
-      stream,
-      controlReader,
-    );
-  }
-
-  /**
-   * SUBSCRIBE リクエストの双方向ストリームからレスポンスを読み取る
-   *
-   * draft-ietf-moq-transport-21 Section 9.7 (SUBSCRIBE_OK):
-   * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
-   * draft-ietf-moq-transport-21 Section 6.3
-   */
-  readSubscribeResponse(
-    requestId: bigint,
-    stream: WebTransportBidirectionalStream,
-    controlReader: ControlStreamReader,
-  ): Promise<void> {
-    return requestsReadSubscribeResponse(
-      this as unknown as RequestsSessionInternal,
-      requestId,
-      stream,
-      controlReader,
-    );
-  }
-
-  /**
-   * FETCH リクエストの双方向ストリームからレスポンスを読み取る
-   *
-   * draft-ietf-moq-transport-21 Section 9.12 (FETCH_OK):
-   * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
-   * draft-ietf-moq-transport-21 Section 6.3
-   */
-  readFetchResponse(
-    requestId: bigint,
-    stream: WebTransportBidirectionalStream,
-    controlReader: ControlStreamReader,
-  ): Promise<void> {
-    return requestsReadFetchResponse(
-      this as unknown as RequestsSessionInternal,
-      requestId,
-      stream,
-      controlReader,
-    );
-  }
-
-  /**
-   * TRACK_STATUS リクエストの双方向ストリームからレスポンスを読み取る
-   *
-   * draft-ietf-moq-transport-21 Section 9.13 (TRACK_STATUS):
-   * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
-   * draft-ietf-moq-transport-21 Section 6.3
-   */
-  readTrackStatusResponse(
-    requestId: bigint,
-    stream: WebTransportBidirectionalStream,
-    controlReader: ControlStreamReader,
-  ): Promise<void> {
-    return requestsReadTrackStatusResponse(
-      this as unknown as RequestsSessionInternal,
-      requestId,
-      stream,
-      controlReader,
-    );
-  }
-
-  /**
-   * データストリームの受信待ちタイマーを作る
-   *
-   * draft-ietf-moq-transport-21 §12.2:
-   * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
-   * データを送るのに時間をかけすぎた」ことを示す。半端なヘッダー / Object を
-   * 保持したまま待ち続けるピアにメモリとコネクションを占有され続けないよう、
-   * 途中バイトが残っている間だけ期限を張る。
-   *
-   * 期限切れではセッションを閉じたうえで reader を cancel する。セッション終了で
-   * ストリームの読み取りが終わらない実装でも読み取りループが終わるようにするため
-   * である。
-   *
-   * @param reader - 対象ストリームの reader
-   * @param bufferedBytes - エラーメッセージに載せる残バッファ長
-   */
-  createDataStreamTimeout(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    bufferedBytes: () => number,
-  ): { arm: () => void; clear: () => void } {
-    return dataStreamCreateDataStreamTimeout(
-      this as unknown as DataStreamSessionInternal,
-      reader,
-      bufferedBytes,
-    );
-  }
-
-  /**
-   * 受信タイムアウトの設定を反映する
-   *
-   * draft-ietf-moq-transport-21 §12.2:
-   * CONTROL_MESSAGE_TIMEOUT (0x11) / DATA_STREAM_TIMEOUT (0x12) は、ピアが
-   * 制御メッセージへの応答・データストリームの送信に時間をかけすぎたことを
-   * 示すコードである。半端なメッセージや Object を保持したまま待ち続ける
-   * ピアにメモリとコネクションを占有され続けないよう、期限を設ける。
-   * 0 以下を指定するとタイムアウトしない。
-   */
-  applyTimeoutOptions(options?: {
-    controlMessageTimeoutMs?: number;
-    dataStreamTimeoutMs?: number;
-  }): void {
-    return connectionApplyTimeoutOptions(this as unknown as ConnectionSessionInternal, options);
   }
 
   startControlMessageLoop(): void {
@@ -1430,42 +1035,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Namespace / Tracks サブスクリプションの Track Namespace Prefix を更新する
-   *
-   * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
-   * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータを含めて送信する。
-   * Tracks 系では draft-ietf-moq-transport-21 §9.20.19 の FORWARD も送り得る。
-   * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
-   * kind が namespace の場合、forward が混入しても送らない。
-   */
-  async sendNamespaceRequestUpdate(
-    requestId: bigint,
-    kind: "namespace" | "tracks",
-    options: TracksUpdateOptions,
-  ): Promise<void> {
-    return namespacesSendNamespaceRequestUpdate(
-      this as unknown as NamespacesSessionInternal,
-      requestId,
-      kind,
-      options,
-    );
-  }
-
-  /**
-   * Namespace サブスクリプションを閉じる
-   *
-   * draft-ietf-moq-transport-21 §4.1:
-   * SUBSCRIBE_NAMESPACE は FIN または RESET_STREAM でストリームを閉じることで
-   * キャンセルできる。
-   */
-  async closeNamespaceSubscription(requestId: bigint): Promise<void> {
-    return namespacesCloseNamespaceSubscription(
-      this as unknown as NamespacesSessionInternal,
-      requestId,
-    );
-  }
-
-  /**
    * TracksSubscription オブジェクトを作成する
    *
    * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS)
@@ -1478,39 +1047,10 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * Tracks サブスクリプションを閉じる
-   *
-   * draft-ietf-moq-transport-21 §4.1:
-   * SUBSCRIBE_TRACKS は FIN または RESET_STREAM でストリームを閉じることで
-   * キャンセルできる。
-   */
-  async closeTracksSubscription(requestId: bigint): Promise<void> {
-    return namespacesCloseTracksSubscription(
-      this as unknown as NamespacesSessionInternal,
-      requestId,
-    );
-  }
-
-  /**
    * NamespacePublication オブジェクトを作成する
    */
   createNamespacePublication(requestId: bigint): NamespacePublication {
     return namespacesCreateNamespacePublication(
-      this as unknown as NamespacesSessionInternal,
-      requestId,
-    );
-  }
-
-  /**
-   * Namespace 公開を終了する
-   *
-   * draft-ietf-moq-transport-21 §4.2:
-   * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、
-   * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
-   * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-4.2
-   */
-  async closeNamespacePublication(requestId: bigint): Promise<void> {
-    return namespacesCloseNamespacePublication(
       this as unknown as NamespacesSessionInternal,
       requestId,
     );
@@ -1544,57 +1084,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * PUBLISH ストリームの後続メッセージ読み取りサブループ
-   */
-  async runPublishStreamSubLoop(
-    impl: SubscriberImpl,
-    publishRequestId: bigint,
-    subReader: ReadableStreamDefaultReader<Uint8Array>,
-    subControlReader: ControlStreamReader,
-  ): Promise<void> {
-    return incomingPublishRunStreamSubLoop(
-      this as unknown as IncomingPublishSessionInternal,
-      impl,
-      publishRequestId,
-      subReader,
-      subControlReader,
-    );
-  }
-
-  /**
-   * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータを処理する
-   *
-   * draft-ietf-moq-transport-21 §9.20.3 / §8.9:
-   * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
-   * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
-   * デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
-   * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
-   * セッションを閉じる。
-   *
-   * 未登録 Alias の参照も Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) で
-   * セッションを閉じる。REQUEST_ERROR ではなく Session Termination を選ぶ理由、
-   * §6.6 の留保の判断、§9.1.4 の MUST NOT に抵触しないことは
-   * `processIncomingRequestUpdateAuthorizationTokens` の JSDoc に集約している
-   * (同じ規範判断をこのファイルと bidi.ts で二重に保守しないため)。
-   *
-   * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は REQUEST_UPDATE に対する publisher の
-   * MUST であり、受信 PUBLISH の拒否には適用しない。
-   *
-   * @returns 処理を継続してよい場合は true、セッション終了または当該 PUBLISH の
-   *   打ち切りで中断すべき場合は false
-   */
-  processIncomingPublishAuthorizationTokens(
-    requestId: bigint,
-    parameters: Array<{ type: number; value: Uint8Array }>,
-  ): boolean {
-    return incomingPublishProcessAuthorizationTokens(
-      this as unknown as IncomingPublishSessionInternal,
-      requestId,
-      parameters,
-    );
-  }
-
-  /**
    * 受信した双方向ストリームを処理する
    *
    * draft-ietf-moq-transport-21 §9.18 (SUBSCRIBE_TRACKS):
@@ -1604,21 +1093,6 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-21 §6.3:
    * 双方向ストリームは特定のメッセージタイプで開始されなければならない。
    */
-  /**
-   * セッションが connected でなければ受信 bidi ストリームを cancel する
-   *
-   * 接続確立前に届いた受信ストリームは処理せず、読み取りを打ち切る。
-   *
-   * @param stream - 受信した双方向ストリーム
-   * @returns cancel した (呼び出し側は即 return すべき) なら true
-   */
-  async cancelIfNotConnected(stream: WebTransportBidirectionalStream): Promise<boolean> {
-    return incomingPublishCancelIfNotConnected(
-      this as unknown as IncomingPublishSessionInternal,
-      stream,
-    );
-  }
-
   /**
    * 受信 bidi ストリームを処理する
    *
@@ -1632,104 +1106,11 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * 受信 PUBLISH の後始末を行う
-   *
-   * subscribers / subscribersByAlias / requestStreams の削除と fill 関連付けの
-   * 掃除、ストリームのロック解放を、exit 経路に依らず必ず実行する。
-   *
-   * @param publishRequestId - 受信 PUBLISH の Request ID (3 マップの削除キー)
-   * @param publishTrackAlias - 受信 PUBLISH の Track Alias (alias 側の特定削除用)
-   * @param impl - 生成した SubscriberImpl (alias 側の特定要素削除用)
-   * @param subReader - 受信ストリームの reader (ロック解放用)
-   * @param subWriter - 応答ストリームの writer (ロック解放用)
-   */
-  cleanupIncomingPublish(
-    publishRequestId: bigint,
-    publishTrackAlias: bigint,
-    impl: SubscriberImpl,
-    subReader: ReadableStreamDefaultReader<Uint8Array>,
-    subWriter: WritableStreamDefaultWriter<Uint8Array>,
-  ): void {
-    return incomingPublishCleanupIncomingPublish(
-      this as unknown as IncomingPublishSessionInternal,
-      publishRequestId,
-      publishTrackAlias,
-      impl,
-      subReader,
-      subWriter,
-    );
-  }
-
-  /**
-   * 受信 PUBLISH の初期パラメータを購読に反映する
-   *
-   * draft-ietf-moq-transport-21 §9.8 (PUBLISH) / §9.20.19:
-   * FORWARD (省略時はデフォルト 1) を Forward State として保持する。
-   * 値域外は PROTOCOL_VIOLATION でセッションを閉じる。
-   * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
-   * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
-   * 受理のみで状態反映はしない。この関数では再検証しない
-   * (FORWARD / GROUP_ORDER の uint8 値域は decode 時に検証済み。
-   * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
-   * draft-ietf-moq-transport-21 §9.8 / §9.20.10 / §9.18.1:
-   * LOCATION_FILTER は購読の初期フィルタとして反映する
-   * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
-   * draft-ietf-moq-transport-21 §9.20.18 / §3.3.1:
-   * LARGEST_OBJECT は LOCATION_FILTER より先に設定する。相対 Location Filter は
-   * 「フィルタ適用時点の LARGEST_OBJECT」で解決されるため、この順序で
-   * 受信 PUBLISH が運ぶ LARGEST_OBJECT 基準の開始位置に一度だけ確定する。
-   * 反映前にすべての値をデコード・検証し、検証通過後にまとめて設定する
-   * (違反確定後の部分反映を防ぐ)。
-   *
-   * @returns 反映できた場合は true、違反でセッションを閉じた場合は false
-   */
-  applyIncomingPublishParameters(impl: SubscriberImpl, parameters: Parameter[]): boolean {
-    return incomingPublishApplyParameters(
-      this as unknown as IncomingPublishSessionInternal,
-      impl,
-      parameters,
-    );
-  }
-
-  /**
-   * PUBLISH の trackNamespace をアクティブな tracksSubscriptions にマッチさせる
-   *
-   * @returns マッチした subscription の callbacks と suffix、マッチしなければ null
-   */
-  matchPublishToSubscription(publishTrackNamespace: string[]): {
-    callbacks: TracksSubscriptionCallbacks;
-    suffix: string[];
-    rangeFilters?: RangeFilterSpec[];
-  } | null {
-    return incomingPublishMatchToSubscription(
-      this as unknown as IncomingPublishSessionInternal,
-      publishTrackNamespace,
-    );
-  }
-
-  /**
    * 受信した datagram を処理する
    * draft-ietf-moq-transport-21 Section 11.2 (Datagrams)
    */
   handleIncomingDatagram(data: Uint8Array): void {
     incomingHandleDatagram(this as unknown as SessionInternal, data);
-  }
-
-  /**
-   * 受信 bidi ストリームの先頭メッセージを読み取る
-   *
-   * 同一チャンクに連結された先頭以降のメッセージは破棄される
-   * (先頭メッセージのみを 3 分類の対象とする。既存挙動の継続)。
-   *
-   * @returns 先頭メッセージ。FIN 検出時・読み取り失敗時は null
-   */
-  async readFirstBidiMessage(
-    stream: WebTransportBidirectionalStream,
-  ): Promise<ControlMessage | null> {
-    return incomingPublishReadFirstBidiMessage(
-      this as unknown as IncomingPublishSessionInternal,
-      stream,
-    );
   }
 
   /**
@@ -1779,33 +1160,6 @@ export class SessionImpl implements Session {
   }
 
   /**
-   * fill fetch ストリームを受信する
-   *
-   * draft-ietf-moq-transport-21 §3.4 (Fill Semantics) / §3.4.1:
-   * fill fetch ストリームは FETCH と同じオブジェクト framing で届き、
-   * FIN は fill 完了 (関連付けを消す)、reset は fill 失敗として扱う。
-   * オブジェクトは fillDelivered を true にして購読の object コールバックに
-   * 渡す (handleFillObject 経由。subscription のフィルタ再適用は通さない)。
-   * fill ストリームの reset / STOP_SENDING による通常の失敗は購読に波及しない
-   * (§3.4.1)。ただし malformed track の検出は §12.1 が優先し、同一 Track の
-   * 全購読と全 FETCH を cancel する。
-   */
-  async handleFillFetchStream(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    fillRequestId: bigint,
-    target: bidi.FillFetchTarget,
-    initialBuffer: Uint8Array,
-  ): Promise<void> {
-    return dataStreamHandleFillFetchStream(
-      this as unknown as DataStreamSessionInternal,
-      reader,
-      fillRequestId,
-      target,
-      initialBuffer,
-    );
-  }
-
-  /**
    * アプリのコールバック例外をデバッグ記録に残す
    *
    * 握り潰した例外を無音にしないための記録である。受信メッセージに対応しない
@@ -1825,192 +1179,5 @@ export class SessionImpl implements Session {
    */
   emitDataStreamErrorDebug(err: unknown, fetchHeader: FetchHeader | null): void {
     sessionEmitDataStreamErrorDebug(this as unknown as SessionLifecycleInternal, err, fetchHeader);
-  }
-
-  /**
-   * Malformed Track 検出時の FETCH キャンセル処理
-   *
-   * draft-ietf-moq-transport-21 §12.1 (Malformed Tracks):
-   * Malformed Track 検出時は「cancel any corresponding subscription or fetches
-   * for that Track from that publisher」であり、セッションを閉じない。
-   * まず受信データストリームを STOP_SENDING 相当 (cancelStreamQuiet) で打ち切る。
-   * fetcher が存在する場合 (FETCH データストリーム)、fetcher の error コールバックで
-   * アプリへ通知し (§12.1 SHOULD)、FetcherImpl.cancel() 経由で
-   * draft-ietf-moq-transport-21 §3.2.1 の MUST「It MUST send STOP_SENDING for
-   * the bidi request stream.」に従い bidi リクエストストリームへ STOP_SENDING
-   * を送り、fetchers Map から削除する。
-   *
-   * §12.1 の「fetches for that Track」に従い、同一 Full Track Name の全購読と
-   * 全 FETCH を cancel する (cancelMalformedTrackPeers)。fetch() は
-   * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
-   * 登録するため (§9.11「A subscriber sends FETCH as the first message on a new
-   * bidi stream」)、同じく STOP_SENDING が送られる。
-   *
-   * アプリの error コールバックが throw した場合は握り潰してキャンセルを継続する。
-   * 呼び出し元の handleIncomingStream は fire-and-forget で起動されるため、throw を
-   * 伝搬させると unhandled rejection になる。
-   */
-  async handleMalformedFetchTrack(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    error: MalformedTrackError,
-    fetcher: FetcherImpl | null,
-  ): Promise<void> {
-    return dataStreamHandleMalformedFetchTrack(
-      this as unknown as DataStreamSessionInternal,
-      reader,
-      error,
-      fetcher,
-    );
-  }
-
-  /**
-   * 受信データストリームの読み取りループで発生したエラーの処理
-   *
-   * - ProtocolViolationError は PROTOCOL_VIOLATION でセッションを閉じる
-   * - MalformedTrackError は同一 Track の全購読と全 FETCH をキャンセルする
-   * - FETCH データストリームの peer RESET_STREAM は fetcher state を破棄する
-   */
-  async handleIncomingStreamError(
-    err: unknown,
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    fetchHeader: import("./dataStream").FetchHeader | null,
-    fetcher: FetcherImpl | null,
-  ): Promise<void> {
-    return dataStreamHandleIncomingStreamError(
-      this as unknown as DataStreamSessionInternal,
-      err,
-      reader,
-      fetchHeader,
-      fetcher,
-    );
-  }
-
-  /**
-   * peer の RESET_STREAM で FETCH データストリームが終了したときの後始末
-   *
-   * draft-ietf-moq-transport-21 §3.2.1:
-   * 「A subscriber keeps FETCH state until it cancels the request (see
-   *  Section 6.4.2.3), receives REQUEST_ERROR, or the FETCH data stream
-   *  receives a FIN or is reset.」
-   * アプリへ error を通知してから fetcher を closed にし、fetchers から削除する
-   * (handleMalformedFetchTrack と同じ順序。handleError を markClosed より先に
-   * 呼ばないと通知が握り潰される)。FIN 経路 (handleEnd + fetchers.delete) と
-   * state 破棄の集合を揃える。エラーには正規化済みの streamErrorCode を載せる。
-   * bidi リクエストストリーム (requestStreams) は FIN 経路と同じく削除しない
-   * (セッション終了時にまとめて解放される)。
-   */
-  handlePeerFetchStreamReset(
-    err: unknown,
-    fetchHeader: import("./dataStream").FetchHeader | null,
-    fetcher: FetcherImpl | null,
-  ): void {
-    return dataStreamHandlePeerFetchStreamReset(
-      this as unknown as DataStreamSessionInternal,
-      err,
-      fetchHeader,
-      fetcher,
-    );
-  }
-
-  /**
-   * Fetch オブジェクトをストリーミング処理
-   * パース可能なオブジェクトを全て処理し、残りのバッファを返す
-   */
-  processFetchObjects(
-    buffer: Uint8Array,
-    fetcher: FetcherImpl,
-    context: import("./dataStream").FetchObjectContext | null,
-    isFirst: boolean,
-  ): {
-    remainingBuffer: Uint8Array;
-    context: import("./dataStream").FetchObjectContext | null;
-    isFirst: boolean;
-  } {
-    return dataStreamProcessFetchObjects(
-      this as unknown as DataStreamSessionInternal,
-      buffer,
-      fetcher,
-      context,
-      isFirst,
-    );
-  }
-
-  /**
-   * Subgroup オブジェクトをストリーミング処理
-   * パース可能なオブジェクトを全て処理し、残りのバッファと状態を返す。
-   * resolvedSubgroupId を透過し、feed 間の解決値を引き継ぐ
-   * (明示型・0 系はヘッダ値のため透過しても no-op になる)。
-   */
-  processSubgroupObjects(
-    buffer: Uint8Array,
-    subscribers: SubscriberImpl[],
-    header: import("./dataStream").SubgroupHeader,
-    previousObjectId: bigint,
-    resolvedSubgroupId?: bigint,
-  ): {
-    remainingBuffer: Uint8Array;
-    previousObjectId: bigint;
-    resolvedSubgroupId: bigint | undefined;
-    updatedEndOfGroupFinalObjectId: bigint | undefined;
-  } {
-    return dataStreamProcessSubgroupObjects(
-      this as unknown as DataStreamSessionInternal,
-      buffer,
-      subscribers,
-      header,
-      previousObjectId,
-      resolvedSubgroupId,
-    );
-  }
-
-  /**
-   * Malformed Track (Object Property の Mandatory Track Property) を検出した
-   * 同一 Track の全購読と全 FETCH を §12.1 に従って cancel する
-   *
-   * draft-ietf-moq-transport-21 §12.1:
-   * "it MUST cancel any corresponding subscription or fetches for that Track
-   *  from that publisher"
-   * データストリームを打ち切り、同一 Full Track Name の購読 / FETCH を cancel する。
-   * セッションは閉じない (Track 単位の失敗として扱う)。
-   */
-  async handleMalformedSubgroupTrack(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    header: import("./dataStream").SubgroupHeader,
-    subscribers: SubscriberImpl[],
-    error: MalformedTrackError,
-  ): Promise<void> {
-    return dataStreamHandleMalformedSubgroupTrack(
-      this as unknown as DataStreamSessionInternal,
-      reader,
-      header,
-      subscribers,
-      error,
-    );
-  }
-
-  /**
-   * Subgroup ストリームを処理する
-   *
-   * draft-ietf-moq-transport-21 §11.3.1:
-   * "If an endpoint receives a subgroup with an unknown Track Alias, it MAY abandon
-   *  the stream, or choose to buffer it for a brief period to handle reordering with
-   *  the control message that establishes the Track Alias."
-   *
-   * subscriber が登録済みであれば即座に通常 mode で読み出す。
-   * 未登録なら pending mode に入り、Promise.race で chunk 受信と subscriber 通知を並走させる。
-   * subscriber 登録後は累積 chunks を flush して通常 mode に合流する。
-   * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
-   */
-  async handleSubgroupStream(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    header: import("./dataStream").SubgroupHeader,
-    initialBuffer: Uint8Array,
-  ): Promise<void> {
-    return dataStreamHandleSubgroupStream(
-      this as unknown as DataStreamSessionInternal,
-      reader,
-      header,
-      initialBuffer,
-    );
   }
 }

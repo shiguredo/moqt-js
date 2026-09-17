@@ -440,6 +440,13 @@ export function namespacesCreateNamespacePublication(
   };
 }
 
+/**
+ * Namespace サブスクリプションを閉じる
+ *
+ * draft-ietf-moq-transport-21 §4.1:
+ * SUBSCRIBE_NAMESPACE は FIN または RESET_STREAM でストリームを閉じることで
+ * キャンセルできる。
+ */
 export async function namespacesCloseNamespaceSubscription(
   session: NamespacesSessionInternal,
   requestId: bigint,
@@ -474,6 +481,13 @@ export async function namespacesCloseNamespaceSubscription(
   session.namespaceSubscriptions.delete(requestId);
 }
 
+/**
+ * Tracks サブスクリプションを閉じる
+ *
+ * draft-ietf-moq-transport-21 §4.1:
+ * SUBSCRIBE_TRACKS は FIN または RESET_STREAM でストリームを閉じることで
+ * キャンセルできる。
+ */
 export async function namespacesCloseTracksSubscription(
   session: NamespacesSessionInternal,
   requestId: bigint,
@@ -506,6 +520,14 @@ export async function namespacesCloseTracksSubscription(
   session.tracksSubscriptions.delete(requestId);
 }
 
+/**
+ * Namespace 公開を終了する
+ *
+ * draft-ietf-moq-transport-21 §4.2:
+ * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、
+ * 公開の終了は双方向ストリームを FIN または RESET_STREAM で閉じることで通知する。
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-21.html#section-4.2
+ */
 export async function namespacesCloseNamespacePublication(
   session: NamespacesSessionInternal,
   requestId: bigint,
@@ -529,6 +551,15 @@ export async function namespacesCloseNamespacePublication(
   session.namespacePublications.delete(requestId);
 }
 
+/**
+ * Namespace / Tracks サブスクリプションの Track Namespace Prefix を更新する
+ *
+ * draft-ietf-moq-transport-21 §9.5.2 (Updating Namespace Subscriptions):
+ * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータを含めて送信する。
+ * Tracks 系では draft-ietf-moq-transport-21 §9.20.19 の FORWARD も送り得る。
+ * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
+ * kind が namespace の場合、forward が混入しても送らない。
+ */
 export async function namespacesSendNamespaceRequestUpdate(
   session: NamespacesSessionInternal,
   requestId: bigint,
