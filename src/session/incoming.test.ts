@@ -1458,7 +1458,7 @@ function subgroupObjectWire(objectIdDelta: bigint, payload: number): Uint8Array 
 }
 
 function subgroupTestHeader(): SubgroupHeader {
-  return { type: SubgroupHeaderType.FIRST_OBJ, trackAlias: 7n, groupId: 0n };
+  return { type: SubgroupHeaderType.FIRST_OBJ, trackAlias: 7n, groupId: 0n, firstObject: false };
 }
 
 test("incomingProcessSubgroupObjects: 非 Error の throw を正規化して通知し継続する", () => {

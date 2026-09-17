@@ -3656,6 +3656,7 @@ function buildSubgroupStreamParts(properties?: Uint8Array): StreamParts {
     trackAlias: 7n,
     groupId: 1n,
     publisherPriority: 128,
+    firstObject: false,
   });
   const fieldsBytes = encodeObjectFields(0n, 10n, headerType, ObjectStatus.NORMAL, properties);
   const payload = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -3743,6 +3744,7 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
     trackAlias: 7n,
     groupId: 1n,
     publisherPriority: 128,
+    firstObject: false,
   });
   const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
   const fieldsBytes = encodeObjectFields(
@@ -6409,6 +6411,7 @@ test("initialize: 制御ストリームより先にデータストリームが�
     trackAlias: 7n,
     groupId: 1n,
     publisherPriority: 128,
+    firstObject: false,
   });
   const fieldsBytes = encodeObjectFields(0n, 0n, SubgroupHeaderType.BASE);
   const dataStream = new ReadableStream<Uint8Array>({
