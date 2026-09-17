@@ -12,6 +12,12 @@ import {
   subscriberIds,
   hasActiveSubscriber,
 } from "./subscriber";
+import {
+  FakeSession,
+  FakeSubscriber,
+  RecordingDecoderWrapper,
+  type FakeCallLog,
+} from "../testSupport/fakes";
 
 // テスト間の独立性を保つためのリセットヘルパー。
 function resetSubscribers(): void {
@@ -116,8 +122,9 @@ test("hasActiveSubscriber tracks instance.subscriber.value updates", () => {
   // subscriber.value が null のままなら false。
   assert.equal(hasActiveSubscriber.value, false);
   // subscriber.value を non-null に切り替えると true。
-  // 実 Subscriber オブジェクトの代わりに最小限のオブジェクトで型を回避する。
-  instance.subscriber.value = {} as never;
+  // Subscriber の実装は WebTransport セッションを要求するため、テスト用の
+  // Fake を代入する (型アサーションによるすり替えはしない)。
+  instance.subscriber.value = new FakeSubscriber();
   assert.equal(hasActiveSubscriber.value, true);
   // null に戻すと false。
   instance.subscriber.value = null;
@@ -248,7 +255,7 @@ test("hasActiveSubscriber notifies effect subscribers on change", () => {
     const id = addSubscriber();
     const instance = getSubscriber(id);
     assert.ok(instance);
-    instance.subscriber.value = {} as never;
+    instance.subscriber.value = new FakeSubscriber();
     instance.subscriber.value = null;
   } finally {
     dispose();
@@ -264,28 +271,14 @@ test("removeSubscriber sends catalog unsubscribe", () => {
   const id = addSubscriber();
   const instance = getSubscriber(id);
   assert.isDefined(instance);
-  const calls: string[] = [];
-  instance!.decoder.value = {
-    close: () => {
-      calls.push("decoder.close");
-    },
-  } as never;
-  instance!.session.value = {
-    close: () => {
-      calls.push("session.close");
-      return Promise.resolve();
-    },
-  } as never;
-  let unsubscribeCalls = 0;
-  instance!.catalogSubscriber.value = {
-    unsubscribe: () => {
-      calls.push("catalog.unsubscribe");
-      unsubscribeCalls += 1;
-      return Promise.resolve();
-    },
-  } as never;
+  const calls: FakeCallLog = [];
+  instance!.decoder.value = new RecordingDecoderWrapper({ label: "decoder.close", calls });
+  instance!.session.value = new FakeSession({ label: "session.close", calls });
+  const catalogSubscriber = new FakeSubscriber({ label: "catalog.unsubscribe", calls });
+  instance!.catalogSubscriber.value = catalogSubscriber;
   removeSubscriber(id);
-  assert.equal(unsubscribeCalls, 1);
+  // unsubscribe が 1 回だけ呼ばれ、state が closed になる
+  assert.equal(catalogSubscriber.state, "closed");
   assert.equal(instance!.catalogSubscriber.value, null);
   assert.deepEqual(calls, ["decoder.close", "catalog.unsubscribe", "session.close"]);
 });
@@ -297,20 +290,17 @@ test("removeSubscriber swallows catalog unsubscribe failure", async () => {
   const id = addSubscriber();
   const instance = getSubscriber(id);
   assert.isDefined(instance);
-  let sessionCloseCalls = 0;
-  instance!.session.value = {
-    close: () => {
-      sessionCloseCalls += 1;
-      return Promise.resolve();
-    },
-  } as never;
-  instance!.catalogSubscriber.value = {
-    unsubscribe: () => Promise.reject(new Error("unsubscribe failed")),
-  } as never;
+  const calls: FakeCallLog = [];
+  instance!.session.value = new FakeSession({ label: "session.close", calls });
+  instance!.catalogSubscriber.value = new FakeSubscriber({
+    label: "catalog.unsubscribe",
+    calls,
+    unsubscribeError: new Error("unsubscribe failed"),
+  });
   removeSubscriber(id);
   await Promise.resolve();
   await Promise.resolve();
+  assert.deepEqual(calls, ["catalog.unsubscribe", "session.close"]);
   assert.equal(instance!.catalogSubscriber.value, null);
-  assert.equal(sessionCloseCalls, 1);
   assert.isUndefined(getSubscriber(id));
 });

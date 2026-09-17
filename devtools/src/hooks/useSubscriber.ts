@@ -29,8 +29,13 @@ import type { RefObject } from "preact";
  * draft-ietf-moq-msf-01 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
  * `CatalogTrack.initRef` (§5.2.13) の参照に分離されたため、`resolveInitData` 経由で取得する。
  * draft-ietf-moq-loc-04 §2.1.2 の用途は変わらない。
+ *
+ * ブラウザ API に依存しないため、Catalog からの codec 解決の契約はここで検証できる。
  */
-function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): VideoDecoderConfig {
+export function buildVideoDecoderConfig(
+  videoTrack: CatalogTrack,
+  catalog: Catalog,
+): VideoDecoderConfig {
   if (!videoTrack.codec) {
     throw new Error("video track codec is not specified in catalog");
   }
@@ -53,7 +58,7 @@ function buildVideoDecoderConfig(videoTrack: CatalogTrack, catalog: Catalog): Vi
  * Subscriber インスタンスの統計フィールドを初期値へリセットする。
  * `startSubscribing` 開始時に decode カウンタや位置情報をクリアする。
  */
-function resetSubscriberStats(instance: sub.SubscriberInstance): void {
+export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.framesDecoded.value = 0;
   instance.keyFramesDecoded.value = 0;
   instance.objectsReceived.value = 0;
@@ -66,6 +71,54 @@ function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.chunksSkipped.value = 0;
   instance.decodeErrors.value = 0;
   instance.largestLocation.value = null;
+}
+
+/**
+ * LOC Properties から受信フレームのメタデータを取り出す
+ *
+ * publisher 側の Object 送信 (`usePublisher` の `buildObjectSendPlan`) が付与した
+ * TIMESTAMP と VIDEO_FRAME_MARKING を読み、`EncodedVideoChunk` に渡す timestamp と
+ * キーフレーム判定に変換する。Properties が無い / 空の Object は
+ * 非キーフレーム・timestamp 0 として扱う (LOC の拡張は任意のため)。
+ *
+ * ブラウザ API に依存しないため、LOC 復号の契約はここで検証できる。
+ */
+export function parseLocFrameMetadata(properties: Uint8Array | undefined): {
+  isKeyFrame: boolean;
+  timestamp: number;
+} {
+  let isKeyFrame = false;
+  let timestamp = 0;
+
+  if (properties !== undefined && properties.length > 0) {
+    const locProperties = LOC.decodeVideoProperties(properties);
+
+    // TIMESTAMP から timestamp を取得
+    if (locProperties.timestamp !== undefined) {
+      timestamp = Number(locProperties.timestamp);
+    }
+
+    // Frame Marking から keyframe 判定
+    if (locProperties.frameMarking) {
+      isKeyFrame = locProperties.frameMarking.isIndependent;
+    }
+  }
+
+  return { isKeyFrame, timestamp };
+}
+
+/**
+ * REQUEST_UPDATE に載せる NEW_GROUP_REQUEST の値を解決する
+ *
+ * draft-ietf-moq-transport-21 §9.20.20: 送信時点で知る最大 Group ID + 1 を送る。
+ * 最大 Location が未知 (SUBSCRIBE_OK 未受信) のときは 0 を送り、Group 情報なしで
+ * 新規 Group の開始を要求する。SUBSCRIBE 直後の snapshot ではなく
+ * `Subscriber.largestLocation` の現在値を渡す。
+ */
+export function resolveNewGroupRequestValue(
+  largestLocation: { group: bigint; object: bigint } | null,
+): bigint {
+  return largestLocation === null ? 0n : largestLocation.group + 1n;
 }
 
 /**
@@ -234,24 +287,10 @@ export function useSubscriber(
 
     try {
       // LOC Properties からメタデータを取得
-      let isKeyFrame = false;
-      let timestamp = 0;
-
       if (obj.properties && obj.properties.length > 0) {
         instance.objectsWithExtensions.value += 1;
-
-        const locProperties = LOC.decodeVideoProperties(obj.properties);
-
-        // TIMESTAMP から timestamp を取得
-        if (locProperties.timestamp !== undefined) {
-          timestamp = Number(locProperties.timestamp);
-        }
-
-        // Frame Marking から keyframe 判定
-        if (locProperties.frameMarking) {
-          isKeyFrame = locProperties.frameMarking.isIndependent;
-        }
       }
+      const { isKeyFrame, timestamp } = parseLocFrameMetadata(obj.properties);
 
       // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
       const chunk = new EncodedVideoChunk({
@@ -762,7 +801,7 @@ export function useSubscriber(
       // (情報なし時は 0) とし、SUBSCRIBE 直後の snapshot は使わない。
       const largestLocation = subscriberInstance.largestLocation;
       await subscriberInstance.update({
-        newGroupRequest: largestLocation === null ? 0n : largestLocation.group + 1n,
+        newGroupRequest: resolveNewGroupRequestValue(largestLocation),
       });
     } catch (error) {
       console.error(`[${subscriberId}] requestKeyframe: failed`, error);
