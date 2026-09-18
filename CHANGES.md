@@ -16,6 +16,11 @@
   - `SubgroupHeader.firstObject` を必須の `boolean` にし、wire 上でビットが無い場合は `false` を設定する。encode / decode の wire 表現は変えない
   - `encodeSubgroupHeader` / `decodeSubgroupHeader` / `processSubgroupObjects` を新しい表現に追随させた。`SubgroupHeader` を組み立てる利用側は `firstObject` の指定が必要になる
   - @voluntas
+- [CHANGE] 音声の Group を 1 フレームごとに開始する
+  - LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track) の例に合わせ、音声 chunk 1 つを Object 1 つ・Group 1 つにする
+  - 約 1 秒 (50 フレーム) ごとの Group 開始と `AUDIO_GROUP_FRAME_PERIOD` を削除し、`allocateAudioObject` はフレームごとに Group ID を進めて Object ID を常に 0 にする。初回フレームは割当済みの初期 Group ID を使う
+  - 音声の Group ID の進みが速くなり、Group が変わるたびに Subgroup stream が新しくなる
+  - @voluntas
 - [ADD] PUBLISH_STATE_NOTIFY の送信を実装する
   - draft-ietf-moq-transport-21 §9.10 は publisher が購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ片方向に通知することを定めるが、エンコーダを受信経路でしか使っておらず送信する公開 API が無かった
   - アプリが変化後の値を指定して呼ぶ `Publisher.notifyStateChange()` を追加し、購読の双方向ストリームへ送信する。載せるのは変化した `FORWARD` / `LOCATION_FILTER` と、送信済み Object がある場合の `LARGEST_OBJECT` (§9.20.18 の MUST) のみで、変化が無ければ送信しない
