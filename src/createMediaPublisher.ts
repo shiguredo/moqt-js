@@ -91,23 +91,12 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
 // これらを呼ぶだけになる。
 // 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
 
-/**
- * 音声の Group 切り替え周期 (フレーム数)
- *
- * 音声は一定間隔で新しい Group を開始する (約 1 秒ごと、docs/HIGH_LEVEL_API.md の
- * groupId 管理に記載)。一般的な音声フレーム長 (20 ms 前後) では 50 フレームで
- * 約 1 秒になる。
- */
-export const AUDIO_GROUP_FRAME_PERIOD = 50;
-
 /** 音声の Group / Object 管理状態 */
 export interface AudioGroupState {
   /** 現在の Group ID */
   groupId: number;
-  /** 次に送る Object ID */
-  objectId: number;
-  /** 送信済みフレーム数 (Group 切り替えの判定に使う) */
-  frameCount: number;
+  /** Group を開始済みか (初回フレームは Group を進めない) */
+  started: boolean;
 }
 
 /** 映像の Group / Object 管理状態 */
@@ -135,27 +124,28 @@ export interface GroupObjectAllocation<State> {
 /**
  * 音声フレーム 1 件分の Group / Object を払い出す純関数
  *
- * 送信済みフレーム数が周期 (既定 50 フレーム) に達したフレームで新しい Group を
- * 開始し、Object ID を 0 に戻す。Group を進めたかを返し、呼び出し側が送信済みの
+ * LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track) は、音声 chunk
+ * 1 つを Object 1 つ・Group 1 つに対応させ、GroupID を chunk ごとに増やして
+ * ObjectID を 0 にする例を示している。本関数はその例に従い、フレームごとに新しい
+ * Group を開始して Object ID を常に 0 にする。初回フレームは割当済みの初期 Group ID
+ * をそのまま使う (映像と同じ規則)。Group を進めたかを返し、呼び出し側が送信済みの
  * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
  *
+ * この節番号・規則は draft 由来であり将来の draft 改版で変わる可能性がある。
+ *
  * @param state - 現在の Group / Object 管理状態
- * @param period - Group を切り替えるフレーム数
  * @returns 払い出した Group ID / Object ID と次の状態
  */
 export function allocateAudioObject(
   state: AudioGroupState,
-  period: number = AUDIO_GROUP_FRAME_PERIOD,
 ): GroupObjectAllocation<AudioGroupState> {
-  const frameCount = state.frameCount + 1;
-  const groupAdvanced = frameCount % period === 0;
-  // 新しい Group を開始したフレームは Object ID を 0 から振り直す
+  // 初回フレームは Group を進めず、2 回目以降はフレームごとに Group を進める
+  const groupAdvanced = state.started;
   const groupId = groupAdvanced ? state.groupId + 1 : state.groupId;
-  const objectId = groupAdvanced ? 0 : state.objectId;
   return {
-    state: { groupId, objectId: objectId + 1, frameCount },
+    state: { groupId, started: true },
     groupId,
-    objectId,
+    objectId: 0,
     groupAdvanced,
   };
 }
@@ -269,12 +259,11 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // グループ/オブジェクト管理
   private audioGroupId: number;
-  private audioObjectId = 0;
   private videoGroupId: number;
   private videoObjectId = 0;
-  private audioFrameCount = 0;
   private videoFrameCount = 0;
-  // 映像の初回オブジェクト送信済みか (初回は加算せず初期値を送る)
+  // 音声・映像の初回オブジェクト送信済みか (初回は加算せず初期値を送る)
+  private audioGroupStarted = false;
   private videoGroupStarted = false;
 
   // キーフレーム間隔
@@ -797,15 +786,14 @@ export class MediaPublisherImpl implements MediaPublisher {
       config: audioConfig,
     });
 
-    // 音声は一定間隔で新しい Group を開始する (約 1 秒ごと)
+    // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track):
+    // 音声 chunk 1 つ = Object 1 つ = Group 1 つ。フレームごとに Group を進める
     const audioAllocation = allocateAudioObject({
       groupId: this.audioGroupId,
-      objectId: this.audioObjectId,
-      frameCount: this.audioFrameCount,
+      started: this.audioGroupStarted,
     });
     this.audioGroupId = audioAllocation.state.groupId;
-    this.audioObjectId = audioAllocation.state.objectId;
-    this.audioFrameCount = audioAllocation.state.frameCount;
+    this.audioGroupStarted = audioAllocation.state.started;
     if (audioAllocation.groupAdvanced) {
       // draft-ietf-moq-msf-01 §6.1: 送信済み最大を追跡し、
       // 次インスタンスの開始 Group ID が上回るようにする

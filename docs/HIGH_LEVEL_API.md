@@ -463,8 +463,8 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 
 ### groupId / objectId 管理
 
-- Audio: 一定間隔（例: 1 秒）で新しい groupId を開始
-- Video: キーフレームで新しい groupId を開始、objectId はグループ内でインクリメント
+- Audio: フレームごとに新しい groupId を開始、objectId は常に 0 (draft-ietf-moq-loc-04 §4.1)
+- Video: キーフレームで新しい groupId を開始、objectId はグループ内でインクリメント (draft-ietf-moq-loc-04 §4.2)
 
 ### Priority
 
