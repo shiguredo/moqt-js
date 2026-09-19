@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] SUBGROUP_HEADER と同じ chunk で届いた Object を FIN を待たずに配信する
+  - Subgroup データストリームの読み出しループが、次の chunk を待ってから受信バッファを処理していた。SUBGROUP_HEADER をデコードした残りは初期バッファとして同ループへ渡るため、header と Object が同じ chunk で届くと Object は次の chunk かピアの FIN まで配信されなかった
+  - ピアが続きを送らない場合、未処理の Object を抱えたまま DATA_STREAM_TIMEOUT (§12.2) の期限でセッションが閉じ、Object が失われる
+  - ループが次の chunk を待つ前に、溜まっているバイトから取り出せる Object を処理するよう変更する。FIN を検出した場合も残バッファを処理し終えてから抜ける
+  - @voluntas
 - [CHANGE] SubgroupHeader の firstObject を必須の boolean にする
   - `SubgroupHeader.firstObject?: boolean` は wire 上の FIRST_OBJECT ビット (0x40) が無い場合に `undefined` を入れていたため、`false` と未設定の区別に意味が無く、消費側は `=== true` で判定する必要があった
   - `SubgroupHeader.firstObject` を必須の `boolean` にし、wire 上でビットが無い場合は `false` を設定する。encode / decode の wire 表現は変えない
@@ -1659,11 +1664,6 @@
   - `src/session.ts` は 6,157 行から 1,183 行になり、Session インターフェースと各モジュールへの委譲だけが残る
   - @voluntas
 
-- [FIX] SUBGROUP_HEADER と同じ chunk で届いた Object を FIN を待たずに配信する
-  - Subgroup データストリームの読み出しループが、次の chunk を待ってから受信バッファを処理していた。SUBGROUP_HEADER をデコードした残りは初期バッファとして同ループへ渡るため、header と Object が同じ chunk で届くと Object は次の chunk かピアの FIN まで配信されなかった
-  - ピアが続きを送らない場合、未処理の Object を抱えたまま DATA_STREAM_TIMEOUT (§12.2) の期限でセッションが閉じ、Object が失われる
-  - ループが次の chunk を待つ前に、溜まっているバイトから取り出せる Object を処理するよう変更する。FIN を検出した場合も残バッファを処理し終えてから抜ける
-  - @voluntas
 
 ## 2026.2.0
 
