@@ -317,6 +317,34 @@ export function usePublisher() {
     pub.objectsSent.value++;
   }
 
+  // Catalog を新しい Group で送り直す
+  //
+  // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは Group を
+  // 進めて行う (draft-ietf-moq-msf-01 §6.1)。Object ID は Group の先頭 Object の
+  // ため 0 にする (§6.2)。Catalog Publisher が active でなければ何もしない。
+  const sendCatalogUpdate = async (): Promise<void> => {
+    const catalogPublisherInstance = pub.catalogPublisher.value;
+    const currentCatalog = pub.catalog.value;
+    if (
+      !catalogPublisherInstance ||
+      catalogPublisherInstance.state !== "active" ||
+      currentCatalog === null
+    ) {
+      return;
+    }
+    const groupId = pub.catalogGroup.value + 1;
+    pub.catalogGroup.value = groupId;
+    await catalogPublisherInstance.sendObject({
+      groupId,
+      objectId: 0,
+      payload: encodeCatalog(currentCatalog),
+    });
+    addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME}, updated)`, {
+      source: "publish",
+      catalogGroup: groupId,
+    });
+  };
+
   const startPublishing = async (): Promise<void> => {
     try {
       pub.pubStatus.value = "disconnected";
@@ -393,6 +421,18 @@ export function usePublisher() {
           error: (error) => {
             console.error("Catalog publisher error:", error);
           },
+          // 購読者が付いて Catalog の Forward State が 1 になったら送り直す。
+          //
+          // draft-ietf-moq-transport-21 Section 3.1: publisher は Forward State が 0 の
+          // 間 Object を送らない。relay は購読者が居ない間 FORWARD=0 を伝えるため、配信
+          // 開始時に送った Catalog は送信が見送られるか、購読者へ届く前に捨てられる。
+          // 後から視聴を始めた相手にもトラック構成を知らせるため、Catalog の Forward
+          // State が 1 になった時点で新しい Group として送り直す
+          onForwardStateChange: (forward) => {
+            if (forward) {
+              void sendCatalogUpdate();
+            }
+          },
         },
         {
           maxCacheDuration: BigInt(maxCacheDurationValue),
@@ -410,13 +450,19 @@ export function usePublisher() {
         bitrate: bitrateValue,
       });
       const catalogPayload = encodeCatalog(createdCatalog);
+      // draft-ietf-moq-msf-01 §6.1:
+      // Group ID は Track ごとに単調増加が MUST であり、publisher が再起動した場合は
+      // 以前に publish したどの Group ID よりも大きい値から始めなければならない。
+      // 映像トラックと同じく Unix epoch ミリ秒を開始値にする。
+      pub.catalogGroup.value = Date.now();
+      // Forward State が 1 に変わった時点で送り直すため、送信前に保持値を確定させる
+      pub.catalog.value = createdCatalog;
       // Catalog の送信完了は待たず、stopPublishing の done() で待ち合わせる
       void catalogPublisherInstance.sendObject({
-        groupId: 0,
+        groupId: pub.catalogGroup.value,
         objectId: 0,
         payload: catalogPayload,
       });
-      pub.catalog.value = createdCatalog;
       addLog("info", `[publisher] [SEND] OBJECT (${CATALOG_TRACK_NAME})`, {
         source: "publish",
         catalog: createdCatalog,
@@ -567,9 +613,13 @@ export function usePublisher() {
       if (pub.catalogPublisher.value && pub.catalogPublisher.value.state === "active") {
         const completeCatalog = createCompleteCatalog();
         const completeCatalogPayload = encodeCatalog(completeCatalog);
+        // 最後に Catalog を送った Group の次を使う。固定値にすると、購読者の到着に
+        // よる Catalog の送り直しと Group ID が衝突し得る (draft-ietf-moq-msf-01 §6.1)。
+        const completeCatalogGroup = pub.catalogGroup.value + 1;
+        pub.catalogGroup.value = completeCatalogGroup;
         // Complete catalog の送信完了は直後の done() で待ち合わせる
         void pub.catalogPublisher.value.sendObject({
-          groupId: 1,
+          groupId: completeCatalogGroup,
           objectId: 0,
           payload: completeCatalogPayload,
         });
@@ -627,6 +677,9 @@ export function usePublisher() {
     pub.publisher.value = null;
     pub.catalogPublisher.value = null;
     pub.catalog.value = null;
+    // catalogGroup は次回の startPublishing が Date.now() で設定し直す。
+    // 0 に戻すと、再起動後の Group ID が前回より小さくなり
+    // draft-ietf-moq-msf-01 §6.1 の MUST に反するため触らない。
     pub.pubCodec.value = "";
     pub.forwardState.value = null;
 

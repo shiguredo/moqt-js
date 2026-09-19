@@ -8,6 +8,14 @@ export const pubSession = signal<Session | null>(null);
 export const publisher = signal<Publisher | null>(null);
 export const catalogPublisher = signal<Publisher | null>(null);
 export const catalog = signal<Catalog | null>(null);
+// Catalog を最後に送った Group ID。Catalog を送り直すたびに進める。
+//
+// 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは新しい Group で
+// 行う。draft-ietf-moq-msf-01 §6.1 は Group ID の一意性と単調増加を MUST とし、
+// publisher の再起動時には以前に publish したどの Group ID よりも大きい値から始める
+// ことを MUST とするため、映像トラック (pubCurrentGroup) と同じく Unix epoch ミリ秒を
+// 開始値にする。実際の開始値は startPublishing が設定する。
+export const catalogGroup = signal(Date.now());
 export const encoder = signal<EncoderWrapper | null>(null);
 export const mediaStream = signal<MediaStream | null>(null);
 export const isPreviewActive = signal(false);

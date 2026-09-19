@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] devtools の Catalog publisher が Forward State 0 から 1 への変化で Catalog を送り直す
+  - draft-ietf-moq-transport-21 §3.1 は Forward State が 0 の間 publisher が Objects を送らないと定め、§7.5 は購読者の Forward State が 1 になった時点でリレーが REQUEST_UPDATE で publisher の Forward State を 1 に変えることを MUST とする。devtools は Catalog を配信開始時に 1 度だけ送っていたため、publisher 先行で接続した購読者へ Catalog が届かなかった
+  - Catalog publisher の `onForwardStateChange` で Forward State が 1 になった時点で、Catalog を新しい Group として送り直す。Group ID は送信のたびに進めて保持し、Complete Catalog も最後に送った Group の次を使う
+  - Catalog の Group ID の開始値を映像トラックと同じ Unix epoch ミリ秒にし、再起動時に前回より小さい値から始まらないようにする (draft-ietf-moq-msf-01 §6.1 の MUST)
+  - @voluntas
 - [FIX] 応答と同一 chunk の PUBLISH_OK / SUBSCRIBE_OK 連結メッセージを処理する
   - draft-ietf-moq-transport-21 §6.4.2 の制御メッセージは同一ストリーム上で Length プレフィックスにより連続する。`bidiDispatchResponse` は最初の応答チャンクに連結された 2 通目以降を `context.remainingMessages` に保持するが、PUBLISH 経路と SUBSCRIBE 経路が読み取りループへ渡しておらず、連結された REQUEST_UPDATE / PUBLISH_DONE / PUBLISH_STATE_NOTIFY が失われていた
   - 両経路で `context.remainingMessages` を渡し、FETCH 経路と同じ扱いに揃える。PUBLISH_OK と同一 chunk の `REQUEST_UPDATE (FORWARD=1)` が失われると、リレー経由の配信で publisher の Forward State が 0 のままになり Objects が送られない
