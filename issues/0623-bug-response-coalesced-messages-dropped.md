@@ -1,6 +1,7 @@
 # 応答と同一 chunk の PUBLISH_OK / SUBSCRIBE_OK 連結メッセージを取りこぼす
 
 - Created: 2026-09-20
+- Completed: 2026-09-20
 - Branch: feature/fix-subscribe-response-coalesced-messages
 
 ## 目的
@@ -70,4 +71,46 @@ ControlStreamReader は取り出したメッセージをバッファから削除
 
 ## 解決方法
 
-{未着手}
+### `context.remainingMessages` の引き渡し
+
+`src/session/bidi.ts` の `bidiReadPublishResponse` と `bidiReadSubscribeResponse` の
+`handleOk` から `bidiReadRequestStreamMessages` を呼ぶ箇所に
+`context.remainingMessages` を渡すようにした。FETCH 経路と同じ扱いになり、role ごとの
+分岐は読み取りループ側 (`bidiProcessRequestStreamMessages`) が担う。
+
+### テストヘルパーの `pendingSubgroupBuffer`
+
+`src/testSupport/bidi.ts` の 6 箇所の `pendingSubgroupBuffer: {}` を実物の
+`PendingSubgroupBuffer` に置き換えた。SUBSCRIBE_OK の受理経路は
+`session.pendingSubgroupBuffer.notifyAlias()` を必ず呼ぶため、空オブジェクトでは
+TypeError になり、`defaultBidiHandleError` に握り潰されて `pending.resolve` と
+読み取りループの起動に到達しないままテストが通っていた。実物にすることで
+SUBSCRIBE_OK の正常系が最後まで実行されるようになる。
+
+### テスト
+
+`src/session/bidiRequestStreamInitialMessages.test.ts` を追加した (4 件)。
+
+- PUBLISH_OK と同一 chunk の `REQUEST_UPDATE (FORWARD=1)` が処理され、publisher の
+  Forward State が 1 になり `REQUEST_OK` が 1 通応答される
+- PUBLISH_OK と同一 chunk の `REQUEST_UPDATE (FORWARD=0)` が処理され、Forward State が
+  0 になる
+- SUBSCRIBE_OK と同一 chunk の `PUBLISH_DONE` が処理され、購読の終了が通知される
+- SUBSCRIBE_OK と同一 chunk の `PUBLISH_STATE_NOTIFY` が処理され、LARGEST_OBJECT が
+  購読状態に反映される
+
+いずれも `context.remainingMessages` を渡さない状態では失敗することを確認した
+(4 件すべて失敗する)。
+
+`src/session/bidiResponseScopeViolation.test.ts` の SUBSCRIBE_OK 正常系テストは、
+これまで `notifyAlias` の TypeError で読み取りループが起動していなかったため
+ストリームを閉じても何も起きなかった。実物のバッファにしたことで読み取りループが
+起動し、PUBLISH_DONE 無しの FIN が購読の失敗として扱われるようになった。
+同テストは確立中の購読での Location Filter の確定だけを検証するため、検証が終わる
+までストリームを閉じない形に変更した。
+
+### 検証
+
+- `npx vp check` (287 files / 908 files)
+- `npx vp test --run` (2400 passed)
+- `CHANGES.md` の `## develop` に [FIX] エントリを追加
