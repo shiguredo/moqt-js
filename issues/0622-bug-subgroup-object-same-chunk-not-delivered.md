@@ -1,7 +1,7 @@
 # SUBGROUP_HEADER と同じ chunk で届いた Object を FIN まで配信しない
 
 - Created: 2026-09-19
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-19
 - Branch: feature/fix-subgroup-object-same-chunk-not-delivered
 - Polished: {YYYY-MM-DD}
 
@@ -63,4 +63,34 @@ transport の都合で決まる。分割に依存して配信が遅延・欠落�
 
 ## 解決方法
 
-{未着手}
+### 読み出しループの順序を「処理してから待つ」に変更
+
+`src/session/dataStreamIncoming.ts` の `dataStreamHandleSubgroupStream` の
+subscriber mode のループを、次の chunk を待つ前に受信バッファを処理する形に変えた。
+
+- `buffer` に取り出せる Object がある間は `dataStreamProcessSubgroupObjects` を
+  呼ぶ。消費が進まなくなった時点で「Object の途中」と判断して `reader.read()` を
+  待つ
+- DATA_STREAM_TIMEOUT の期限は従来どおり未処理バイトが残っている間だけ張る。
+  期限を張る位置は read の直前
+- FIN を検出したら `finished` を立て、残バッファを処理し終えてからループを抜ける。
+  FIN と同時に届いた最終 chunk を取りこぼさない
+- ループを抜けた後に残バッファがあれば PROTOCOL_VIOLATION とする既存の判定は
+  変えていない
+- pending mode (購読未登録) の経路は Object をデコードしないため対象外
+
+### テスト
+
+`src/session.test.ts` に 2 件追加した。
+
+- SUBGROUP_HEADER と完成した Object を 1 つの chunk で届け、FIN を送らなくても
+  Object が配信されること
+- SUBGROUP_HEADER と Object が別の chunk で届く場合も配信されること (分割到着を
+  壊していないことの確認)
+
+### 検証
+
+- `npx tsc --noEmit`
+- `npx vp check`
+- `npx vp test --run` (2396 passed)
+- `CHANGES.md` の `## develop` に [FIX] エントリを追加
