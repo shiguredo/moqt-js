@@ -17,6 +17,11 @@ import { FetcherImpl } from "../fetcher";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { PublisherImpl } from "../publisher";
+// draft-ietf-moq-transport-21 §11.3.1:
+// SUBSCRIBE_OK 受理経路は pendingSubgroupBuffer.notifyAlias() を必ず呼ぶ。
+// 実物を渡さないと TypeError になり、defaultBidiHandleError に握り潰されて
+// pending.resolve と読み取りループ起動に到達しないままテストが通ってしまう。
+import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { type BidiSessionInternal, bidiSendPublishStateNotify } from "../session/bidi";
 import { publishClosePublisherStream, publishSendPublishDone } from "../session/publish";
 import { concatUint8Arrays } from "./helpers";
@@ -61,7 +66,7 @@ export function createBidiSession(): {
     subscribers: new Map(),
     subscribersByAlias: new Map(),
     fetchers: new Map(),
-    pendingSubgroupBuffer: {},
+    pendingSubgroupBuffer: new PendingSubgroupBuffer(),
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
@@ -194,7 +199,7 @@ export function createPublishReadTestContext(
     subscribers: new Map(),
     subscribersByAlias: new Map(),
     fetchers: new Map(),
-    pendingSubgroupBuffer: {},
+    pendingSubgroupBuffer: new PendingSubgroupBuffer(),
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
@@ -340,7 +345,7 @@ export function createPublishOkValidationContext(
     subscribers: new Map(),
     subscribersByAlias: new Map(),
     fetchers: new Map(),
-    pendingSubgroupBuffer: {},
+    pendingSubgroupBuffer: new PendingSubgroupBuffer(),
     fetcherReadyCallbacks: new Map(),
     pendingRequestUpdate: new Map(),
     fillFetchTargets: new Map(),
@@ -421,7 +426,7 @@ export function createOkResponseReadTestContext(): {
     subscribers: new Map(),
     subscribersByAlias: new Map(),
     fetchers: new Map(),
-    pendingSubgroupBuffer: {},
+    pendingSubgroupBuffer: new PendingSubgroupBuffer(),
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
@@ -513,7 +518,7 @@ export function createCancelObservableResponseContext(): {
     subscribers: new Map(),
     subscribersByAlias: new Map(),
     fetchers: new Map(),
-    pendingSubgroupBuffer: {},
+    pendingSubgroupBuffer: new PendingSubgroupBuffer(),
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
@@ -633,7 +638,7 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     subscribers: new Map(),
     subscribersByAlias: new Map(),
     fetchers: new Map(),
-    pendingSubgroupBuffer: {},
+    pendingSubgroupBuffer: new PendingSubgroupBuffer(),
     fetcherReadyCallbacks: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),

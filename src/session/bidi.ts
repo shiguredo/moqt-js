@@ -946,12 +946,16 @@ export async function bidiReadPublishResponse(
       // PUBLISH 送信時の指定値のままにし、更新は REQUEST_UPDATE 経路で扱う。
       pending.resolve(pending.impl);
 
+      // PUBLISH_OK と同一チャンクに連結されたメッセージは context.remainingMessages に
+      // 保持されている。ControlStreamReader は取り出したメッセージをバッファから
+      // 削除するため、読み取りループの初期メッセージとして先頭から処理する。
       void bidiReadRequestStreamMessages(
         session,
         requestId,
         context.stream,
         context.controlReader,
         "publish",
+        context.remainingMessages,
       );
     },
     handleRequestError: (context, payload) => {
@@ -1104,12 +1108,16 @@ export async function bidiReadSubscribeResponse(
 
       pending.resolve(pending.impl);
 
+      // SUBSCRIBE_OK と同一チャンクに連結されたメッセージは context.remainingMessages に
+      // 保持されている。ControlStreamReader は取り出したメッセージをバッファから
+      // 削除するため、読み取りループの初期メッセージとして先頭から処理する。
       void bidiReadRequestStreamMessages(
         session,
         requestId,
         context.stream,
         context.controlReader,
         "subscribe",
+        context.remainingMessages,
       );
     },
     handleRequestError: (context, payload) => {

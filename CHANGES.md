@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] 応答と同一 chunk の PUBLISH_OK / SUBSCRIBE_OK 連結メッセージを処理する
+  - draft-ietf-moq-transport-21 §6.4.2 の制御メッセージは同一ストリーム上で Length プレフィックスにより連続する。`bidiDispatchResponse` は最初の応答チャンクに連結された 2 通目以降を `context.remainingMessages` に保持するが、PUBLISH 経路と SUBSCRIBE 経路が読み取りループへ渡しておらず、連結された REQUEST_UPDATE / PUBLISH_DONE / PUBLISH_STATE_NOTIFY が失われていた
+  - 両経路で `context.remainingMessages` を渡し、FETCH 経路と同じ扱いに揃える。PUBLISH_OK と同一 chunk の `REQUEST_UPDATE (FORWARD=1)` が失われると、リレー経由の配信で publisher の Forward State が 0 のままになり Objects が送られない
+  - テストヘルパーの `pendingSubgroupBuffer` を実物にし、SUBSCRIBE_OK の受理経路が `notifyAlias` の TypeError で中断したまま正常系テストが通っていた問題を解消する
+  - @voluntas
 - [FIX] SUBGROUP_HEADER と同じ chunk で届いた Object を FIN を待たずに配信する
   - Subgroup データストリームの読み出しループが、次の chunk を待ってから受信バッファを処理していた。SUBGROUP_HEADER をデコードした残りは初期バッファとして同ループへ渡るため、header と Object が同じ chunk で届くと Object は次の chunk かピアの FIN まで配信されなかった
   - ピアが続きを送らない場合、未処理の Object を抱えたまま DATA_STREAM_TIMEOUT (§12.2) の期限でセッションが閉じ、Object が失われる
@@ -1663,7 +1668,6 @@
   - 公開型定義は `src/session/publicTypes.ts` へ分離して session.ts から再エクスポートし、`src/session/` 配下から session.ts への型参照を無くして型レベルの循環を解消する
   - `src/session.ts` は 6,157 行から 1,183 行になり、Session インターフェースと各モジュールへの委譲だけが残る
   - @voluntas
-
 
 ## 2026.2.0
 

@@ -26,6 +26,7 @@ import {
   createBidiSession,
   buildExceedingLocationFilterValue,
   createOkResponseReadTestContext,
+  waitForMacrotask,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint, decodeVarint } from "../varint";
@@ -298,7 +299,11 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で相対 Locat
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
-  ctx.readableController.close();
+  // ストリームは閉じない。draft-ietf-moq-transport-21 §6.4.2.2 (MUST) により、
+  // publisher は PUBLISH_DONE を送る前に FIN を送ってはならない。ここで閉じると
+  // 読み取りループが FIN を「PUBLISH_DONE 無しの終了」として検出し
+  // notifySubscriberFailure で購読が closed になるため、以降の handleObject が
+  // 配信されなくなる (本テストは確立中の購読でのフィルタ確定だけを検証する)。
   await readPromise;
 
   // SUBSCRIBE_OK で開始位置が {7, 3} に確定する
@@ -328,6 +333,10 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で相対 Locat
   assert.equal(delivered.length, 2);
   // SUBSCRIBE_OK の正常系でセッションが閉じない
   assert.isUndefined(ctx.getClosedWithError());
+  // 検証を終えてから FIN を送り、読み取りループを終了させる
+  // (FIN は PUBLISH_DONE 無しのため購読は失敗として閉じるが、検証済みのため影響しない)。
+  ctx.readableController.close();
+  await waitForMacrotask();
 });
 
 test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが reject される", async () => {
