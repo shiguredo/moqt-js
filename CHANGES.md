@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] devtools の購読に RENDEZVOUS_TIMEOUT を設定する
+  - draft-ietf-moq-transport-21 §9.20.7 の RENDEZVOUS_TIMEOUT は、publisher が存在しない Track への SUBSCRIBE をリレーに保持させる。devtools は Catalog 購読と映像トラック購読でこの値を送っておらず、publisher が後から接続する順序で視聴を開始できなかった
+  - `SubscribeOptions.rendezvousTimeout` はライブラリに実装済みのため、devtools の Catalog 購読と映像トラック購読に `catalogSubscriptionTimeout` と同じ値をミリ秒から bigint に変換して渡す。`0` は「待たない」の意味を保つためそのまま渡す
+  - @voluntas
 - [FIX] devtools の Catalog publisher が Forward State 0 から 1 への変化で Catalog を送り直す
   - draft-ietf-moq-transport-21 §3.1 は Forward State が 0 の間 publisher が Objects を送らないと定め、§7.5 は購読者の Forward State が 1 になった時点でリレーが REQUEST_UPDATE で publisher の Forward State を 1 に変えることを MUST とする。devtools は Catalog を配信開始時に 1 度だけ送っていたため、publisher 先行で接続した購読者へ Catalog が届かなかった
   - Catalog publisher の `onForwardStateChange` で Forward State が 1 になった時点で、Catalog を新しい Group として送り直す。Group ID は送信のたびに進めて保持し、Complete Catalog も最後に送った Group の次を使う

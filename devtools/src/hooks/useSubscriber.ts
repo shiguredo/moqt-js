@@ -563,6 +563,11 @@ export function useSubscriber(
                 // Location Filter で SUBSCRIBE する。live の Catalog 更新は
                 // この SUBSCRIBE で受信し、過去の Catalog は FETCH で取得する
                 filter: { startGroup: 0n, startObject: 0n },
+                // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+                // publisher がまだ居ない場合は relay がこの時間だけ購読を保持し、
+                // publisher が現れたら SUBSCRIBE_OK を返す。配信開始前に視聴を
+                // 始められるようにするため、Catalog Timeout と同じ値を使う
+                rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
               },
             )
             .then(handleCatalogSubscribed)
@@ -657,7 +662,13 @@ export function useSubscriber(
       // Subscriber オプションを構築する
       const subscribeOptions: {
         newGroupRequest?: bigint;
-      } = {};
+        rendezvousTimeout?: bigint;
+      } = {
+        // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+        // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
+        // されていないことがある。relay に購読を保持させる
+        rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+      };
 
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
       // draft-ietf-moq-transport-21 §9.20.20: SUBSCRIBE では MAY (foreknowledge 不要、
