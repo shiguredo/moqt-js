@@ -1,6 +1,7 @@
-# devtools の Catalog publisher が Forward State 0 から 1 への変化で Catalog を送り直さない
+# devtools の Catalog publisher が Forward State 1 で送り直さない
 
 - Created: 2026-09-20
+- Completed: 2026-09-20
 - Branch: feature/fix-devtools-catalog-forward-resend
 
 ## 目的
@@ -67,4 +68,40 @@ publisher は Objects を送ってはならない。
 
 ## 解決方法
 
-{未着手}
+### Catalog の送り直し
+
+`devtools/src/hooks/usePublisher.ts` に `sendCatalogUpdate` を追加し、Catalog publisher の
+`onForwardStateChange` で Forward State が 1 になった時点で Catalog を新しい Group と
+して送り直すようにした。`Publisher.setForwardState` は状態が実際に変化したときだけ
+コールバックを呼ぶため、既に 1 の状態で重複送信することはない。
+
+### Group ID の払い出し
+
+`devtools/src/signals/publisher.ts` に `catalogGroup` signal を追加し、Catalog を送った
+Group ID を保持するようにした。`startPublishing` が `Date.now()` で開始値を設定し、
+送り直しのたびに +1 する。`stopPublishing` の Complete Catalog も
+`catalogGroup + 1` を使い、固定値をやめた。
+
+Group ID の開始値を Unix epoch ミリ秒にしたのは、draft-ietf-moq-msf-01 §6.1 が
+Group ID の一意性と単調増加を MUST とし、publisher の再起動時に以前に publish した
+どの Group ID よりも大きい値から始めることを MUST としているためである。映像トラック
+(`pubCurrentGroup`) と同じ扱いになった。`cleanupPublisher` は `catalogGroup` を 0 に
+戻さない (戻すと再起動後の Group ID が前回より小さくなり MUST に反する)。
+
+送り直しの判定は `pub.catalog.value` を参照するため、Catalog の送信前に保持値を確定
+させるようにした。`sendObject` は await しないため、確定が後だと Forward State の
+変化に間に合わない。
+
+### テスト
+
+devtools の publish 経路は WebCodecs と実 WebTransport に依存するため、単体テストでは
+`onForwardStateChange` の経路を再現できない (モックやスタブは使わない方針)。
+実リレーを起動して devtools を Playwright で駆動する相互運用 harness の
+`test_devtools_subscriber_waits_for_devtools_publisher` で、publisher 先行で接続した
+subscriber に Catalog が届くことを検証する。
+
+### 検証
+
+- `npx vp check` (287 files / 908 files)
+- `npx vp test --run` (2400 passed)
+- `CHANGES.md` の `## develop` に [FIX] エントリを追加
