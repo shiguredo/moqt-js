@@ -1659,6 +1659,12 @@
   - `src/session.ts` は 6,157 行から 1,183 行になり、Session インターフェースと各モジュールへの委譲だけが残る
   - @voluntas
 
+- [FIX] SUBGROUP_HEADER と同じ chunk で届いた Object を FIN を待たずに配信する
+  - Subgroup データストリームの読み出しループが、次の chunk を待ってから受信バッファを処理していた。SUBGROUP_HEADER をデコードした残りは初期バッファとして同ループへ渡るため、header と Object が同じ chunk で届くと Object は次の chunk かピアの FIN まで配信されなかった
+  - ピアが続きを送らない場合、未処理の Object を抱えたまま DATA_STREAM_TIMEOUT (§12.2) の期限でセッションが閉じ、Object が失われる
+  - ループが次の chunk を待つ前に、溜まっているバイトから取り出せる Object を処理するよう変更する。FIN を検出した場合も残バッファを処理し終えてから抜ける
+  - @voluntas
+
 ## 2026.2.0
 
 **リリース日**: 2026-05-13

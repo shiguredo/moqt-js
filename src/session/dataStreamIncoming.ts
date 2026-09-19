@@ -874,13 +874,62 @@ export async function dataStreamHandleSubgroupStream(
   // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
   // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
   const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
+  // ピアの FIN を検出したか。残バッファを処理し終えてからループを抜ける
+  let finished = false;
   try {
     while (true) {
+      // 溜まっているバイトを先に処理する。
+      //
+      // 呼び出し元は SUBGROUP_HEADER をデコードした残りを initialBuffer として
+      // 渡すため、header と Object が同じ chunk で届くとここで buffer に Object が
+      // 入っている。read を先に待つと、その Object は次の chunk か FIN まで
+      // 配信されない。進まなくなった時点で「Object の途中」と判断して read へ進む。
+      while (buffer.byteLength > 0) {
+        const before = buffer.byteLength;
+        try {
+          const processResult = dataStreamProcessSubgroupObjects(
+            session,
+            buffer,
+            subscribers,
+            header,
+            previousObjectId,
+            resolvedSubgroupId,
+          );
+          buffer = processResult.remainingBuffer;
+          previousObjectId = processResult.previousObjectId;
+          resolvedSubgroupId = processResult.resolvedSubgroupId;
+          // draft-ietf-moq-transport-21 §12.1 条件 4:
+          // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
+          // またいだ後続 Object の malformed 検出に使う。
+          if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
+            session.receivedEndOfGroupFinalObjectIds.set(
+              `${header.trackAlias}:${header.groupId}`,
+              processResult.updatedEndOfGroupFinalObjectId,
+            );
+          }
+        } catch (err) {
+          if (err instanceof MalformedTrackError) {
+            // draft-ietf-moq-transport-21 §12.1:
+            // malformed track を検出した購読を cancel し、セッションは閉じない
+            await dataStreamHandleMalformedSubgroupTrack(session, reader, header, subscribers, err);
+            return;
+          }
+          throw err;
+        }
+        if (buffer.byteLength >= before) break;
+      }
+
+      // FIN 済みなら、残バッファを処理し終えた時点で抜ける
+      if (finished) break;
+
+      // draft-ietf-moq-transport-21 §12.2 (DATA_STREAM_TIMEOUT):
+      // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
       if (buffer.byteLength > 0) {
         timeout.arm();
       } else {
         timeout.clear();
       }
+
       let result: ReadableStreamReadResult<Uint8Array>;
       if (pendingRead !== null) {
         result = await pendingRead;
@@ -896,38 +945,7 @@ export async function dataStreamHandleSubgroupStream(
         buffer = next;
       }
 
-      try {
-        const processResult = dataStreamProcessSubgroupObjects(
-          session,
-          buffer,
-          subscribers,
-          header,
-          previousObjectId,
-          resolvedSubgroupId,
-        );
-        buffer = processResult.remainingBuffer;
-        previousObjectId = processResult.previousObjectId;
-        resolvedSubgroupId = processResult.resolvedSubgroupId;
-        // draft-ietf-moq-transport-21 §12.1 条件 4:
-        // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
-        // またいだ後続 Object の malformed 検出に使う。
-        if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
-          session.receivedEndOfGroupFinalObjectIds.set(
-            `${header.trackAlias}:${header.groupId}`,
-            processResult.updatedEndOfGroupFinalObjectId,
-          );
-        }
-      } catch (err) {
-        if (err instanceof MalformedTrackError) {
-          // draft-ietf-moq-transport-21 §12.1:
-          // malformed track を検出した購読を cancel し、セッションは閉じない
-          await dataStreamHandleMalformedSubgroupTrack(session, reader, header, subscribers, err);
-          return;
-        }
-        throw err;
-      }
-
-      if (result.done) break;
+      if (result.done) finished = true;
     }
   } finally {
     timeout.clear();

@@ -3771,6 +3771,72 @@ async function yieldToMacrotask(): Promise<void> {
 }
 
 /**
+ * draft-ietf-moq-transport-21 §11.3.1:
+ * SUBGROUP_HEADER と Object が同じ chunk で届いても、FIN を待たずに Object を
+ * 配信することを検証する。
+ *
+ * 受信側は header をデコードした残りを initialBuffer として読み出しループへ渡す。
+ * ループが次の chunk を待ってから buffer を処理すると、同じ chunk で届いた
+ * Object は次の chunk か FIN まで配信されない。ピアが続きを送らない場合、
+ * DATA_STREAM_TIMEOUT (§12.2) の期限まで Object が届かないままになる。
+ */
+test("Subgroup データストリーム: header と同じ chunk の Object を FIN 無しで配信する", async () => {
+  const ctx = createDataStreamFinContext();
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    received.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const runPromise = ctx.run();
+  await Promise.resolve();
+
+  // header と完成した Object を 1 つの chunk にまとめて届ける。FIN は送らない
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  await yieldToMacrotask();
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0]!.groupId, 1n);
+  assert.equal(received[0]!.objectId, 0n);
+  assert.deepEqual(received[0]!.payload, parts.payload);
+
+  // 読み出しループを終わらせる
+  ctx.fin();
+  await runPromise;
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.3.1:
+ * header と Object が別の chunk で届く場合も従来どおり配信すること。
+ * 同一 chunk の経路だけを直して分割到着を壊していないことを確かめる。
+ */
+test("Subgroup データストリーム: header と Object が別の chunk でも配信する", async () => {
+  const ctx = createDataStreamFinContext();
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    received.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const runPromise = ctx.run();
+  await Promise.resolve();
+
+  ctx.enqueue(parts.headerBytes);
+  await yieldToMacrotask();
+  assert.equal(received.length, 0);
+
+  ctx.enqueue(concatUint8Arrays([parts.fieldsBytes, parts.payload]));
+  await yieldToMacrotask();
+  assert.equal(received.length, 1);
+  assert.equal(received[0]!.objectId, 0n);
+
+  ctx.fin();
+  await runPromise;
+});
+
+/**
  * draft-ietf-moq-transport-21 §3.6 / §12.1:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む subgroup
  * ストリームは malformed であり、当該購読を cancel してセッションは閉じないことを
