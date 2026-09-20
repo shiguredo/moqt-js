@@ -1,7 +1,7 @@
 # devtools にダミー音声の配信と購読を追加する
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-20
 - Branch: feature/add-devtools-dummy-audio
 - Polished: 2026-09-20
 
@@ -233,4 +233,47 @@ moqt-js 側で確認する。
 
 ## 解決方法
 
-{未着手}
+devtools にダミー音声の配信と購読を追加した。
+
+### ダミー音声の生成
+
+- `devtools/src/webcodecs-devtools/utils/dummyAudio.ts` (新規)
+  - `createToneSamples`: 440 Hz のサイン波を f32-planar で作る純関数。振幅は 2 秒周期で 0.2〜0.3 の間を変化させ、AudioBuffer のループで継ぎ目が出ないようにする
+  - `summarizeToneLevel`: RFC 6464 §3 の -dBov と voiceActivity を求める純関数。無音・空のサンプル列・NaN は 127 (デジタル無音) に丸める
+  - `createDummyAudioStream`: AudioBuffer + AudioBufferSourceNode + MediaStreamAudioDestinationNode で MediaStream 化する。`MediaStreamAudioDestinationNode` の既定は 2ch のため、生成したバッファと同じチャンネル数を `channelCount` に明示する (明示しないと 1ch の AudioData にならず、1ch の Encoder が符号化を止める)
+
+### 設定と UI
+
+- `devtools/src/signals/connectionSettings.ts` に `audioSource: "none" | "dummy"` / `audioCodec` / `audioBitrate` / `audioSampleRate` / `audioChannels` を追加し、`buildQueryString` と `initFromUrl` の双方で扱う。列挙値は型ガード、数値は ConnectionSettings の select と同じ許可リスト (`AUDIO_*`) で検証する
+- `devtools/src/components/ConnectionSettings.tsx` に Audio Settings (5 項目) を追加する。select の選択肢は許可リストの定数から生成し、URL 検証と二重管理しない
+
+### publisher
+
+- `buildPublisherCatalog` が音声を配信するときだけ音声トラック (`role: "audio"` / `codec` / `bitrate` / `samplerate` / `channelConfig`) を載せる
+- 音声用に 2 本目の `session.publish` を作り、Group 採番は `allocateAudioObject`、優先度は `PRIORITY_AUDIO` を使う。初期 Group ID は `allocateInitialGroupId` で割り当て、配信を再開しても前回の開始値を上回るようにする
+- `AudioEncoderWrapper` + `MediaStreamTrackProcessor` で符号化し、LOC の TIMESTAMP / AUDIO_LEVEL (chunk の timestamp からトーンの RMS を求めた -dBov) / AUDIO_CONFIG (AAC。同じ値は再送せず、Forward State が 1 になったら保持値を次の Object で送り直す) を載せる
+- 配信できない環境 (MediaStreamTrackProcessor が無い / `AudioEncoder.isConfigSupported` が false) では Catalog に音声トラックを載せず、警告ログを出して映像の配信を継続する
+
+### subscriber
+
+- `getAudioTracks` で音声トラックを購読し、`AudioDecoderWrapper` で復号する。sampleRate は catalog の `samplerate`、channels は `resolveAudioChannelCount` で解決し、欠落時は既定値へフォールバックする
+- `LOC.resolveAudioProperties` で AUDIO_LEVEL を signal `audioLastLevel` に保持し (載っていない object では null に戻す)、AAC の AUDIO_CONFIG が変わったときだけ decoder を構成し直す
+- 復号した `AudioData` の所有者は decode ハンドラであり、読み出しを終えた後に `finally` で 1 回だけ `close()` する
+- 既定では再生せず、トグルを有効にしたときだけ AudioContext と MediaStreamAudioDestinationNode を組んで `<audio>` の `srcObject` に設定する
+- catalog に音声トラックが無い場合は警告ログを出して映像だけ継続する
+
+### 統計とテスト
+
+- `devtools/src/signals/subscriber.ts` に音声の signal を追加し、`window.moqtDevTools` の `SubscriberStats` と `getSubscribers` / `getSubscriber` に `audioObjectsReceived` / `audioChunksDecoded` を足す
+- 単体テスト: `dummyAudio.test.ts` (新規。サンプル列の長さ・値域・周期性・Audio Level の境界) / `usePublisher.test.ts` (音声トラックの Catalog・Audio Level・Audio Config の送信判断・配信可否) / `useSubscriber.test.ts` と `signals/subscriber.test.ts` (音声トラックの解決・後始末の順序・signal のリセット) / `codec.test.ts` (`parseAudioCodec` / `isSameCodecDescription`)
+- E2E: `tests/e2e/devtools-audio.spec.ts` (新規)。設定の UI → URL → 復元の往復、不正値の拒否、再生トグルの DOM 挙動、ダミー音声ストリームのチャンネル数・ピーク・Audio Level (1ch / 2ch)、配信可否の判定
+
+### 設計方針からの差分
+
+- 音声のダミーストリームはプレビューでは作らず、配信開始時に作る。プレビュー中は音声設定を変更できるため、プレビューのストリームを再利用すると Catalog と Encoder の設定、Audio Level の計算が実際の信号と食い違うためである。`stopPreview` は音声を止めない (`cleanupPublisher` が止める)
+- Audio Config の送り直しは Forward State の変化 (購読者の出現) を契機にする。Forward State が 1 のまま 2 人目が同時に参加した場合は送り直されないが、リロード時は 1 → 0 → 1 が起きるため実害は限定的である
+
+### 確認
+
+- `npx vp check` / `npx vp test --run` (2430 tests) / `npx vp run e2e-test` (21 tests) が通る
+- 実リレー経由の音声 object 到達は相互運用 harness 側で確認する (本 issue では harness を変更しない)

@@ -17,6 +17,7 @@
 
 import type { Session, Subscriber } from "moqt-js";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
+import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 
 /** Fake が観測した操作を共有するログ */
 export type FakeCallLog = string[];
@@ -200,6 +201,38 @@ export class RecordingDecoderWrapper extends DecoderWrapper {
       },
     });
     this.closeLabel = options.label ?? "decoder.close";
+    this.calls = options.calls ?? null;
+  }
+
+  override close(): void {
+    this.calls?.push(this.closeLabel);
+    super.close();
+  }
+}
+
+/**
+ * close() の呼び出しを記録する `AudioDecoderWrapper`
+ *
+ * 音声側の後始末フロー (映像 decoder → 音声 decoder → catalog 購読 → 音声トラックの
+ * 購読 → session) の順序を検証するために使う。configure を呼ばない限り WebCodecs を
+ * 生成しないため Node でも生成できる。
+ */
+export class RecordingAudioDecoderWrapper extends AudioDecoderWrapper {
+  private readonly closeLabel: string;
+  private readonly calls: FakeCallLog | null;
+
+  constructor(options: RecordingDecoderWrapperOptions = {}) {
+    // コールバックは close の観測では呼ばれない。ここで実データを扱わないことで
+    // WebCodecs 非依存のまま生成できる。
+    super(false, {
+      output: () => {
+        // close の観測だけを行うため出力は発生しない
+      },
+      error: () => {
+        // close の観測だけを行うためエラーは発生しない
+      },
+    });
+    this.closeLabel = options.label ?? "audioDecoder.close";
     this.calls = options.calls ?? null;
   }
 

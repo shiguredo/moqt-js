@@ -6,15 +6,34 @@ import {
   encodeCatalog,
   createCompleteCatalog,
   createVideoFrameSource,
-  type AuthorizationToken,
+  isMediaStreamTrackProcessorAvailable,
   type Catalog,
+  type CatalogTrack,
   type DebugMessage,
-  type CertificateHash,
+  type Session,
 } from "moqt-js";
-import { getCatalogCodec, getEncoderConfig, parseResolution } from "../utils/codec";
-import type { CodecType } from "../types";
-import { base64ToArrayBuffer } from "../utils/base64";
+import {
+  getCatalogCodec,
+  getEncoderConfig,
+  isSameCodecDescription,
+  parseResolution,
+} from "../utils/codec";
+import type { AudioCodecType, AudioSourceType, CodecType } from "../types";
 import { createDummyVideoStream } from "../webcodecs-devtools/utils/dummyVideo";
+import {
+  createDummyAudioStream,
+  createToneSamples,
+  summarizeToneLevel,
+  type ToneAudioLevel,
+} from "../webcodecs-devtools/utils/dummyAudio";
+import { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
+import type { AudioEncodedChunkData } from "../../../src/codec/types.ts";
+import { getAudioEncoderConfig } from "../../../src/codec/config.ts";
+import {
+  allocateAudioObject,
+  allocateInitialGroupId,
+  PRIORITY_AUDIO,
+} from "../../../src/createMediaPublisher.ts";
 import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
@@ -26,6 +45,22 @@ export function handleDebugMessage(message: DebugMessage): void {
   logDebugMessage("[publisher]", message);
 }
 
+/**
+ * 音声トラック名
+ *
+ * `src/createMedia/settings.ts` の `DEFAULT_AUDIO_TRACK_NAME` と同じ値にする。
+ * 映像トラック名 (`settings.trackName`) は利用者が変えられるため、音声は固定名にする。
+ */
+const AUDIO_TRACK_NAME = "audio";
+
+/**
+ * Audio Level を求める窓の長さ (ミリ秒)
+ *
+ * Opus の 1 フレーム相当。RFC 6464 §3 は audio level を「ペイロードが符号化する
+ * サンプルの RMS」で測ると定めるため、chunk 1 つ分に相当する長さで測る。
+ */
+const AUDIO_LEVEL_WINDOW_MS = 20;
+
 /** 配信する映像トラックの Catalog を組み立てるための入力 */
 export interface PublisherCatalogOptions {
   trackName: string;
@@ -34,20 +69,35 @@ export interface PublisherCatalogOptions {
   height: number;
   framerate: number;
   bitrate: number;
+  /** 音声トラックを配信するときの設定。省略時は映像トラックだけを載せる */
+  audio?: PublisherAudioCatalogOptions;
+}
+
+/** 配信する音声トラックの Catalog を組み立てるための入力 */
+export interface PublisherAudioCatalogOptions {
+  codec: AudioCodecType;
+  bitrate: number;
+  sampleRate: number;
+  channels: number;
 }
 
 /**
- * 配信する映像トラックの Catalog を組み立てる
+ * 配信する映像トラックと音声トラックの Catalog を組み立てる
  *
- * draft-ietf-moq-msf-01 §5.1 の full catalog を 1 トラック分だけ生成する。
- * codec 文字列は `getCatalogCodec` を通し、Encoder に渡す `getEncoderConfig` と
- * 同一の対応表を使う (Catalog の codec 誤記は購読側の Decoder 設定を壊すため、
- * 対応表の二重管理を避ける)。
+ * draft-ietf-moq-msf-01 §5.1 の full catalog を生成する。
+ * codec 文字列は映像が `getCatalogCodec`、音声が `getAudioEncoderConfig` を通し、
+ * Encoder に渡す設定と同一の対応表を使う (Catalog の codec 誤記は購読側の Decoder
+ * 設定を壊すため、対応表の二重管理を避ける)。
+ *
+ * 音声トラックに `samplerate` / `channelConfig` / `bitrate` を載せるのは、
+ * MSF §5.2.18 (codec) / §5.2.22 (bitrate) / §5.2.28 (samplerate) /
+ * §5.2.29 (channelConfig) がいずれも audio codec を指定する track に MUST で
+ * 要求するため。
  *
  * ブラウザ API に依存しないため、送信した Catalog の内容はここで検証できる。
  */
 export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog {
-  return createCatalog([
+  const tracks: CatalogTrack[] = [
     {
       name: options.trackName,
       packaging: "loc",
@@ -59,7 +109,67 @@ export function buildPublisherCatalog(options: PublisherCatalogOptions): Catalog
       framerate: options.framerate,
       bitrate: options.bitrate,
     },
-  ]);
+  ];
+
+  if (options.audio) {
+    const audio = options.audio;
+    tracks.push({
+      name: AUDIO_TRACK_NAME,
+      packaging: "loc",
+      isLive: true,
+      role: "audio",
+      codec: getAudioEncoderConfig(audio.codec, audio.bitrate, audio.sampleRate, audio.channels)
+        .codec,
+      bitrate: audio.bitrate,
+      samplerate: audio.sampleRate,
+      channelConfig: String(audio.channels),
+    });
+  }
+
+  return createCatalog(tracks);
+}
+
+/**
+ * 音声を配信できるかどうかを判定する
+ *
+ * MediaStreamTrackProcessor は音声の取り出しに必須で、未実装のブラウザ
+ * (Firefox / Safari) では音声だけを諦める。配信開始後に throw すると、既に
+ * 確立した映像の配信まで巻き込んで止まるため、Catalog を作る前に判定する。
+ */
+export function resolveAudioPublishable(audioSource: AudioSourceType): boolean {
+  return audioSource === "dummy" && isMediaStreamTrackProcessorAvailable();
+}
+
+/**
+ * 送る Audio Config を決める純関数
+ *
+ * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) の Audio Config は、WebCodecs の
+ * `EncodedAudioChunkMetadata.decoderConfig.description` として現れたときにだけ
+ * 載せる。同じ値を毎 Object 送ると無駄になるため、直前と異なるときだけ載せる。
+ *
+ * ただし WebCodecs は description を configure 後の最初の出力にしか付けないため、
+ * 後から接続した購読者は Audio Config を受け取れない (音声には keyframe が無い)。
+ * 送り直しを要求されたら、保持している値をそのまま載せ直す。
+ * ブラウザ API に依存しないため、この判断はここで検証できる。
+ *
+ * @param previous - 直前に送った Audio Config (未送信なら null)
+ * @param description - 今回の chunk が持つ Audio Config (opus では undefined)
+ * @param resendRequested - 保持している Audio Config の送り直しを要求されているか
+ * @returns 今回載せる config、次回のために保持する値、送り直し要求を残すか
+ */
+export function resolveAudioConfigToSend(
+  previous: Uint8Array | null,
+  description: Uint8Array | undefined,
+  resendRequested: boolean,
+): { config: Uint8Array | undefined; next: Uint8Array | null; resendNext: boolean } {
+  if (description !== undefined && !isSameCodecDescription(previous, description)) {
+    return { config: description, next: new Uint8Array(description), resendNext: false };
+  }
+  if (resendRequested && previous !== null) {
+    return { config: previous, next: previous, resendNext: false };
+  }
+  // 保持する値が無いまま要求された場合は、次に description が現れたときに備えて残す
+  return { config: undefined, next: previous, resendNext: resendRequested };
 }
 
 /** 送信する 1 Object の内容 */
@@ -156,6 +266,29 @@ interface VideoStreamResult {
   cleanup: () => void;
 }
 
+/**
+ * 送信する音声 chunk の Audio Level を求める
+ *
+ * RFC 6464 §3 は audio level を「ペイロードが符号化するサンプルの RMS」で -dBov と
+ * して測ると定める。ダミー音声のサンプル列は `createToneSamples` が作るため、
+ * chunk の timestamp に対応する絶対フレーム位置から同じ純関数で切り出して求める。
+ *
+ * ブラウザ API に依存しないため、Audio Level の算出はここで検証できる。
+ *
+ * @param sampleRate - 配信する音声のサンプルレート (Hz)
+ * @param channels - 配信する音声のチャンネル数
+ * @param timestampMicros - chunk の timestamp (マイクロ秒)
+ */
+export function resolveAudioLevelForTimestamp(
+  sampleRate: number,
+  channels: number,
+  timestampMicros: number,
+): ToneAudioLevel {
+  const windowFrames = Math.max(1, Math.round((sampleRate * AUDIO_LEVEL_WINDOW_MS) / 1000));
+  const startFrame = Math.round((timestampMicros / 1_000_000) * sampleRate);
+  return summarizeToneLevel(createToneSamples(sampleRate, channels, windowFrames, startFrame));
+}
+
 async function getVideoStream(
   source: "dummy" | "camera",
   width: number,
@@ -212,6 +345,79 @@ async function getVideoStream(
 }
 
 export function usePublisher() {
+  /**
+   * 音声設定に従ってダミー音声のストリームを用意する
+   *
+   * `audioSource` が "none" のときは何も作らない (既定)。
+   */
+  function startAudioStream(sampleRate: number, channels: number): void {
+    stopAudioStream();
+    if (settings.audioSource.value !== "dummy") {
+      return;
+    }
+    const generator = createDummyAudioStream(sampleRate, channels);
+    pub.audioStream.value = generator.stream;
+    pub.audioStreamCleanup.value = (): void => {
+      generator.stop();
+      for (const track of generator.stream.getTracks()) {
+        track.stop();
+      }
+    };
+  }
+
+  /**
+   * 音声の Encoder 設定がこのブラウザで対応しているかを確認する
+   *
+   * `AudioEncoder.configure` は未対応の設定でも例外を投げず、非同期のエラー
+   * コールバックで知らせる。Catalog を送る前に確認しないと、購読側は音声 object が
+   * 届かないまま待つことになる。
+   */
+  async function isAudioEncoderConfigSupported(
+    codec: AudioCodecType,
+    bitrate: number,
+    sampleRate: number,
+    channels: number,
+  ): Promise<boolean> {
+    const config = getAudioEncoderConfig(codec, bitrate, sampleRate, channels);
+    const support = await AudioEncoder.isConfigSupported(config);
+    // supported は optional のため、true のときだけ対応とみなす
+    return support.supported === true;
+  }
+
+  /**
+   * 配信に使う音声トラックを取り出す
+   *
+   * 音声のダミーストリームはここで作る (プレビューでは作らない)。配信に使う
+   * サンプルレートとチャンネル数は Catalog と Encoder と同じ捕捉値を使い、
+   * 実際の信号と設定が食い違わないようにする。音声を使わない場合は作成済みの
+   * ストリームをここで止める。
+   */
+  function takeAudioTrackForPublishing(
+    audioPublishable: boolean,
+    sampleRate: number,
+    channels: number,
+  ): MediaStreamTrack | undefined {
+    if (!audioPublishable) {
+      stopAudioStream();
+      return undefined;
+    }
+    startAudioStream(sampleRate, channels);
+    const audioTrack = pub.audioStream.value?.getAudioTracks()[0];
+    if (!audioTrack) {
+      throw new Error("Failed to get audio track");
+    }
+    return audioTrack;
+  }
+
+  /** ダミー音声のストリームを止める */
+  function stopAudioStream(): void {
+    if (pub.audioStreamCleanup.value) {
+      pub.audioStreamCleanup.value();
+      pub.audioStreamCleanup.value = null;
+    }
+    pub.audioStream.value = null;
+  }
+
   const startPreview = async (): Promise<void> => {
     try {
       const { width, height } = parseResolution(settings.resolution.value);
@@ -226,6 +432,7 @@ export function usePublisher() {
       const videoStreamResult = await getVideoStream(source, width, height, framerate, deviceId);
       pub.mediaStream.value = videoStreamResult.stream;
       pub.videoStreamCleanup.value = videoStreamResult.cleanup;
+
       pub.isPreviewActive.value = true;
     } catch (error) {
       console.error("Preview error:", error);
@@ -243,6 +450,8 @@ export function usePublisher() {
     pub.isPreviewActive.value = false;
     pub.pubStatus.value = "disconnected";
     pub.pubStatusMessage.value = "配信開始待ち";
+    // 音声のダミーストリームはプレビューでは作らず、配信開始時に作る
+    // (takeAudioTrackForPublishing)。ここで止めるものは無い
   };
 
   const togglePreview = (): void => {
@@ -317,6 +526,161 @@ export function usePublisher() {
     pub.objectsSent.value++;
   }
 
+  async function processAudioFrames(): Promise<void> {
+    const reader = pub.audioFrameReader.value;
+    const encoder = pub.audioEncoder.value;
+    if (!reader || !encoder) {
+      console.error("processAudioFrames: reader or encoder is null", { reader, encoder });
+      return;
+    }
+
+    try {
+      while (encoder.state === "configured") {
+        const { value: audioData, done } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        // 音声フレームは落としても後続の Object で上書きされるため、映像のような
+        // encodeQueueSize による抑制はしない (src/createMediaPublisher.ts と同じ)
+        encoder.encode(audioData);
+        audioData.close();
+      }
+    } catch (error) {
+      console.error("Audio frame processing error:", error);
+    }
+  }
+
+  /**
+   * 音声トラックの publish とエンコーダを用意する
+   *
+   * 映像とは別の `session.publish` を作り、Group 採番も優先度も独立させる
+   * (src/createMediaPublisher.ts の audioPublisher / videoPublisher と同じ構成)。
+   * 音声は chunk 1 つが Group 1 つになるため (draft-ietf-moq-loc-04 §4.1)、
+   * 映像の Group とは共有できない。
+   */
+  async function startAudioPublishing(
+    session: Session,
+    namespaceArray: string[],
+    audioTrack: MediaStreamTrack,
+    options: {
+      useWorker: boolean;
+      codec: AudioCodecType;
+      bitrate: number;
+      sampleRate: number;
+      channels: number;
+      maxCacheDuration: number;
+    },
+  ): Promise<void> {
+    const audioPublisherInstance = await session.publish(
+      namespaceArray,
+      AUDIO_TRACK_NAME,
+      {
+        error: (error) => {
+          console.error("Audio publisher error:", error);
+          pub.pubStatus.value = "error";
+          pub.pubStatusMessage.value = `音声配信エラー: ${error.message}`;
+        },
+        // 音声には keyframe が無く Audio Config は最初の chunk にしか現れないため、
+        // 同じ値を再送しない方針のままだと後から接続した購読者が AAC を復号できない。
+        // Catalog の送り直しと同じく、Forward State が 1 になった時点で
+        // 保持している Audio Config を次の Object に載せ直す
+        onForwardStateChange: (forward) => {
+          if (forward) {
+            pub.audioConfigResendRequested.value = true;
+          }
+        },
+      },
+      {
+        maxCacheDuration: BigInt(options.maxCacheDuration),
+      },
+    );
+    pub.audioPublisher.value = audioPublisherInstance;
+
+    const audioEncoderInstance = new AudioEncoderWrapper(options.useWorker, {
+      output: (chunk) => {
+        handleAudioEncodedChunk(chunk, {
+          sampleRate: options.sampleRate,
+          channels: options.channels,
+        });
+      },
+      error: (error) => {
+        console.error("Audio encoder error:", error);
+        pub.encodeErrors.value++;
+        pub.pubStatus.value = "error";
+        pub.pubStatusMessage.value = `音声 Encoder エラー: ${error.message}`;
+      },
+    });
+    pub.audioEncoder.value = audioEncoderInstance;
+    await audioEncoderInstance.configure(
+      options.codec,
+      options.bitrate,
+      options.sampleRate,
+      options.channels,
+    );
+
+    const audioTrackProcessor = new MediaStreamTrackProcessor<AudioData>({ track: audioTrack });
+    pub.audioFrameReader.value = audioTrackProcessor.readable.getReader();
+  }
+
+  function handleAudioEncodedChunk(
+    chunk: AudioEncodedChunkData,
+    audioFormat: { sampleRate: number; channels: number },
+  ): void {
+    const audioPublisherInstance = pub.audioPublisher.value;
+    if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
+
+    // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track):
+    // 音声 chunk 1 つ = Object 1 つ = Group 1 つ。2 つ目以降は Group を進め、
+    // Object ID は常に 0 にする (ライブラリの allocateAudioObject と同じ規則)
+    const allocation = allocateAudioObject({
+      groupId: pub.pubCurrentAudioGroup.value,
+      started: pub.pubAudioGroupStarted.value,
+    });
+    pub.pubAudioGroupStarted.value = allocation.state.started;
+    pub.pubCurrentAudioGroup.value = allocation.state.groupId;
+
+    // LOC Audio Level (draft-ietf-moq-loc-04 §2.3.3.2) は RFC 6464 §3 に従い、
+    // chunk が符号化するサンプル列の RMS から -dBov を求める。
+    // 配信開始時に確定したサンプルレートとチャンネル数を使う (設定が後から変わっても
+    // 実際に流れている信号と食い違わせない)
+    const audioLevel = resolveAudioLevelForTimestamp(
+      audioFormat.sampleRate,
+      audioFormat.channels,
+      chunk.timestamp,
+    );
+
+    // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
+    // 同じ値を毎 Object 送らない
+    const {
+      config: audioConfig,
+      next: nextAudioConfig,
+      resendNext,
+    } = resolveAudioConfigToSend(
+      pub.lastSentAudioConfig.value,
+      chunk.description,
+      pub.audioConfigResendRequested.value,
+    );
+    pub.lastSentAudioConfig.value = nextAudioConfig;
+    pub.audioConfigResendRequested.value = resendNext;
+
+    const properties = LOC.encodeAudioProperties({
+      // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)
+      timestamp: LOC.toUnixEpochMicroseconds(BigInt(chunk.timestamp), performance.timeOrigin),
+      audioLevel,
+      config: audioConfig,
+    });
+
+    // Object を送信する (送信完了は待たない。完了待ちは stopPublishing の done() で行う)
+    void audioPublisherInstance.sendObject({
+      groupId: allocation.groupId,
+      objectId: allocation.objectId,
+      payload: chunk.data,
+      properties,
+      priority: PRIORITY_AUDIO,
+    });
+  }
+
   // Catalog を新しい Group で送り直す
   //
   // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは Group を
@@ -359,25 +723,15 @@ export function usePublisher() {
       const framerateValue = settings.framerate.value;
       const bitrateValue = settings.bitrate.value;
       const maxCacheDurationValue = settings.maxCacheDuration.value;
+      const audioSourceValue = settings.audioSource.value;
+      const audioCodecValue = settings.audioCodec.value;
+      const audioBitrateValue = settings.audioBitrate.value;
+      const audioSampleRateValue = settings.audioSampleRate.value;
+      const audioChannelsValue = settings.audioChannels.value;
       pub.keyframeInterval.value = settings.keyframeInterval.value;
 
       // 接続オプションを組み立てる
-      const connectOptions: {
-        serverCertificateHashes?: CertificateHash[];
-        authorizationToken?: AuthorizationToken;
-      } = {};
-      if (settings.certificateHash.value) {
-        connectOptions.serverCertificateHashes = [
-          {
-            algorithm: "sha-256",
-            value: base64ToArrayBuffer(settings.certificateHash.value),
-          },
-        ];
-      }
-      const authToken = settings.buildAuthorizationToken();
-      if (authToken) {
-        connectOptions.authorizationToken = authToken;
-      }
+      const connectOptions = settings.buildConnectOptions();
 
       // MOQT サーバーへ接続する
       const connectUrl = settings.buildConnectUrl();
@@ -440,6 +794,27 @@ export function usePublisher() {
       );
       pub.catalogPublisher.value = catalogPublisherInstance;
 
+      // 音声を配信するかどうかを決める。
+      //
+      // 対応していない組み合わせ (AAC + 48kHz 以外など) で Catalog だけ音声トラックを
+      // 広告すると、購読側は object が来ないまま待ち続ける。映像と同じく事前に確認する
+      let audioPublishable = resolveAudioPublishable(audioSourceValue);
+      if (audioPublishable) {
+        audioPublishable = await isAudioEncoderConfigSupported(
+          audioCodecValue,
+          audioBitrateValue,
+          audioSampleRateValue,
+          audioChannelsValue,
+        );
+        if (!audioPublishable) {
+          addLog("warn", "[publisher] audio codec is not supported in this browser", {
+            codec: audioCodecValue,
+            sampleRate: audioSampleRateValue,
+            channels: audioChannelsValue,
+          });
+        }
+      }
+
       // Catalog を作成して送信
       const createdCatalog = buildPublisherCatalog({
         trackName: trackNameValue,
@@ -448,6 +823,17 @@ export function usePublisher() {
         height,
         framerate: framerateValue,
         bitrate: bitrateValue,
+        // 音声は "dummy" かつ配信可能なときだけトラックを載せる
+        ...(audioPublishable
+          ? {
+              audio: {
+                codec: audioCodecValue,
+                bitrate: audioBitrateValue,
+                sampleRate: audioSampleRateValue,
+                channels: audioChannelsValue,
+              },
+            }
+          : {}),
       });
       const catalogPayload = encodeCatalog(createdCatalog);
       // draft-ietf-moq-msf-01 §6.1:
@@ -473,8 +859,9 @@ export function usePublisher() {
       // 既存のプレビューストリームがあれば再利用し、無ければ新規作成する
       let actualWidth: number;
       let actualHeight: number;
+      const hadPreview = pub.isPreviewActive.value && pub.mediaStream.value !== null;
 
-      if (pub.isPreviewActive.value && pub.mediaStream.value) {
+      if (hadPreview) {
         actualWidth = width;
         actualHeight = height;
       } else {
@@ -498,6 +885,12 @@ export function usePublisher() {
       if (!videoTrack) {
         throw new Error("Failed to get video track");
       }
+
+      const audioTrack = takeAudioTrackForPublishing(
+        audioPublishable,
+        audioSampleRateValue,
+        audioChannelsValue,
+      );
 
       pub.isPreviewActive.value = false;
 
@@ -576,6 +969,18 @@ export function usePublisher() {
       const videoFrameSource = createVideoFrameSource(videoTrack);
       pub.frameReader.value = videoFrameSource.readable.getReader();
 
+      // 音声トラックを配信する
+      if (audioTrack) {
+        await startAudioPublishing(session, namespaceArray, audioTrack, {
+          useWorker,
+          codec: audioCodecValue,
+          bitrate: audioBitrateValue,
+          sampleRate: audioSampleRateValue,
+          channels: audioChannelsValue,
+          maxCacheDuration: maxCacheDurationValue,
+        });
+      }
+
       // 統計値をリセットする
       pub.framesEncoded.value = 0;
       pub.keyFramesEncoded.value = 0;
@@ -586,9 +991,22 @@ export function usePublisher() {
       pub.chunksEncoded.value = 0;
       pub.encodeErrors.value = 0;
       pub.objectsWithExtensions.value = 0;
+      pub.pubAudioGroupStarted.value = false;
+      // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、前回
+      // publish したどの Group ID よりも大きいことを MUST とする。音声は chunk
+      // ごとに Group を進めるため Date.now() だけでは単調性を保証できない。
+      // ライブラリの allocateInitialGroupId (同一プロセス内で前回割り当てた開始値を
+      // 必ず上回る単調ガード付きの割当て) を使う
+      pub.pubCurrentAudioGroup.value = allocateInitialGroupId();
+      // 直前に送った Audio Config と送り直し要求は配信ごとに忘れる
+      pub.lastSentAudioConfig.value = null;
+      pub.audioConfigResendRequested.value = false;
 
       // フレームを読み出してエンコードする
       void processFrames();
+      if (audioTrack) {
+        void processAudioFrames();
+      }
     } catch (error) {
       console.error("Connection error:", error);
       pub.pubStatus.value = "error";
@@ -633,6 +1051,10 @@ export function usePublisher() {
       if (pub.publisher.value && pub.publisher.value.state === "active") {
         await pub.publisher.value.done();
       }
+
+      if (pub.audioPublisher.value && pub.audioPublisher.value.state === "active") {
+        await pub.audioPublisher.value.done();
+      }
     } finally {
       cleanupPublisher();
       pub.isStopping.value = false;
@@ -659,12 +1081,31 @@ export function usePublisher() {
     }
     pub.encoderState.value = "unconfigured";
 
+    // 音声のフレームリーダーをキャンセルする
+    if (pub.audioFrameReader.value) {
+      void pub.audioFrameReader.value.cancel();
+      pub.audioFrameReader.value = null;
+    }
+
+    // 音声 Encoder を閉じる
+    if (pub.audioEncoder.value) {
+      try {
+        pub.audioEncoder.value.close();
+      } catch {
+        // 無視する
+      }
+      pub.audioEncoder.value = null;
+    }
+
     // 映像ストリームを解放する
     if (pub.videoStreamCleanup.value) {
       pub.videoStreamCleanup.value();
       pub.videoStreamCleanup.value = null;
     }
     pub.mediaStream.value = null;
+
+    // 音声ストリームを解放する
+    stopAudioStream();
 
     // セッションを閉じる
     if (pub.pubSession.value) {
@@ -675,6 +1116,7 @@ export function usePublisher() {
     }
 
     pub.publisher.value = null;
+    pub.audioPublisher.value = null;
     pub.catalogPublisher.value = null;
     pub.catalog.value = null;
     // catalogGroup は次回の startPublishing が Date.now() で設定し直す。

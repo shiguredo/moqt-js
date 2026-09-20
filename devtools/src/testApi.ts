@@ -49,6 +49,9 @@ export interface SubscriberStats {
   objectsWithExtensions: number;
   decoderState: string;
   largestLocation: { group: string; object: string } | null;
+  // 音声トラックの受信数とデコード数 (catalog に音声トラックが無いときは 0 のまま)
+  audioObjectsReceived: number;
+  audioChunksDecoded: number;
 }
 
 /**
@@ -115,6 +118,8 @@ export function initTestApi(): void {
         objectsWithExtensions: sub.objectsWithExtensions.value,
         decoderState: sub.decoderState.value,
         largestLocation: convertLargestLocation(sub.largestLocation.value),
+        audioObjectsReceived: sub.audioObjectsReceived.value,
+        audioChunksDecoded: sub.audioChunksDecoded.value,
       })),
 
     getSubscriber: (id: string) => {
@@ -134,6 +139,8 @@ export function initTestApi(): void {
         objectsWithExtensions: sub.objectsWithExtensions.value,
         decoderState: sub.decoderState.value,
         largestLocation: convertLargestLocation(sub.largestLocation.value),
+        audioObjectsReceived: sub.audioObjectsReceived.value,
+        audioChunksDecoded: sub.audioChunksDecoded.value,
       };
     },
 

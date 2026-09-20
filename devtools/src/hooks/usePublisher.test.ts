@@ -3,9 +3,13 @@ import { LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
 import {
   buildObjectSendPlan,
   buildPublisherCatalog,
+  resolveAudioConfigToSend,
+  resolveAudioLevelForTimestamp,
+  resolveAudioPublishable,
   shouldRequestKeyFrame,
   usePublisher,
 } from "./usePublisher";
+import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
@@ -77,7 +81,16 @@ function resetPublisherSignals(): void {
   pub.frameReader.value = null;
   pub.videoStreamCleanup.value = null;
   pub.keyframeInterval.value = DEFAULT_KEYFRAME_INTERVAL;
-  pub.pubCurrentObjectId.value = 0;
+  pub.pubCurrentObjectId.value = 0; // 音声の signal も初期化する (テスト間で状態を持ち越さない)
+  pub.audioPublisher.value = null;
+  pub.audioEncoder.value = null;
+  pub.audioStream.value = null;
+  pub.audioStreamCleanup.value = null;
+  pub.audioFrameReader.value = null;
+  pub.pubCurrentAudioGroup.value = 0;
+  pub.pubAudioGroupStarted.value = false;
+  pub.lastSentAudioConfig.value = null;
+  pub.audioConfigResendRequested.value = false;
 }
 
 // ============================================================================
@@ -410,4 +423,175 @@ test("startPreview: 解像度が不正なときは映像ストリームを取得
   assert.equal(pub.mediaStream.value, null);
   assert.equal(pub.videoStreamCleanup.value, null);
   assert.equal(pub.isPreviewActive.value, false);
+});
+
+// ============================================================================
+// 音声トラックの Catalog 生成
+// ============================================================================
+
+// 音声トラックは MSF §5.2.18 (codec) / §5.2.22 (bitrate) / §5.2.28 (samplerate) /
+// §5.2.29 (channelConfig) が audio codec を指定する track に MUST で要求する。
+// 購読側はこの 4 つから Decoder を構成するため、すべて載ることを固定する。
+test("buildPublisherCatalog: 音声を有効にすると audio トラックが増える", () => {
+  const catalog = buildPublisherCatalog({
+    trackName: "video",
+    codec: "vp8",
+    width: VIDEO_WIDTH,
+    height: VIDEO_HEIGHT,
+    framerate: VIDEO_FRAMERATE,
+    bitrate: VIDEO_BITRATE,
+    audio: {
+      codec: "opus",
+      bitrate: 64000,
+      sampleRate: 48000,
+      channels: 2,
+    },
+  });
+
+  assert.equal(catalog.tracks.length, 2);
+  const audioTrack = catalog.tracks.find((track) => track.role === "audio");
+  if (audioTrack === undefined) {
+    throw new Error("expected an audio track");
+  }
+
+  // 音声トラック名はライブラリの DEFAULT_AUDIO_TRACK_NAME と同じ固定名にする
+  assert.equal(audioTrack.name, "audio");
+  assert.equal(audioTrack.packaging, "loc");
+  assert.equal(audioTrack.isLive, true);
+
+  // codec 文字列は Encoder に渡す設定と同じ対応表から解決する
+  assert.equal(audioTrack.codec, getAudioEncoderConfig("opus", 64000, 48000, 2).codec);
+  assert.equal(audioTrack.bitrate, 64000);
+  assert.equal(audioTrack.samplerate, 48000);
+  // channelConfig は文字列で載せる (MSF §5.2.29)
+  assert.equal(audioTrack.channelConfig, "2");
+});
+
+test("buildPublisherCatalog: 音声を省略すると映像トラックだけになる", () => {
+  const catalog = buildPublisherCatalog({
+    trackName: "video",
+    codec: "vp8",
+    width: VIDEO_WIDTH,
+    height: VIDEO_HEIGHT,
+    framerate: VIDEO_FRAMERATE,
+    bitrate: VIDEO_BITRATE,
+  });
+
+  assert.equal(catalog.tracks.length, 1);
+  assert.equal(catalog.tracks[0]?.role, "video");
+});
+
+test("buildPublisherCatalog: AAC の codec 文字列も Encoder 設定と一致する", () => {
+  const catalog = buildPublisherCatalog({
+    trackName: "video",
+    codec: "vp8",
+    width: VIDEO_WIDTH,
+    height: VIDEO_HEIGHT,
+    framerate: VIDEO_FRAMERATE,
+    bitrate: VIDEO_BITRATE,
+    audio: {
+      codec: "aac",
+      bitrate: 128000,
+      sampleRate: 48000,
+      channels: 1,
+    },
+  });
+
+  const audioTrack = catalog.tracks.find((track) => track.role === "audio");
+  assert.equal(audioTrack?.codec, getAudioEncoderConfig("aac", 128000, 48000, 1).codec);
+  assert.equal(audioTrack?.channelConfig, "1");
+});
+
+// ============================================================================
+// 音声の Audio Level
+// ============================================================================
+
+// RFC 6464 §3 の level は -dBov (0 が最大、127 がデジタル無音)。
+// ダミー音声の振幅は 0.2〜0.3 の範囲で変わる。RMS は振幅の 1/sqrt(2) になるため、
+// 20 ms 窓の level は 13〜17 付近になる。
+test("resolveAudioLevelForTimestamp: トーンの Audio Level を -dBov で返す", () => {
+  for (const timestamp of [0, 500_000, 1_000_000, 1_500_000]) {
+    const level = resolveAudioLevelForTimestamp(48000, 2, timestamp);
+    assert.isAtLeast(level.level, 0);
+    assert.isAtMost(level.level, 127);
+    assert.isAtLeast(level.level, 12);
+    assert.isAtMost(level.level, 18);
+    assert.equal(level.voiceActivity, true);
+  }
+});
+
+// 振幅のエンベロープは 2 秒周期で変化する。全ての timestamp で同じ値になると、
+// 送信側が固定値を載せているのかエンベロープを反映しているのか区別できない。
+test("resolveAudioLevelForTimestamp: 振幅の変化が level に現れる", () => {
+  const levels = [0, 250_000, 500_000, 750_000, 1_000_000, 1_250_000, 1_500_000, 1_750_000].map(
+    (timestamp) => resolveAudioLevelForTimestamp(48000, 2, timestamp).level,
+  );
+
+  assert.isAbove(new Set(levels).size, 1);
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
+// 同じ値を毎 Object 送らない。opus は description を持たないため何も載らない
+test("resolveAudioConfigToSend: 初回と変更時だけ Audio Config を載せる", () => {
+  const description = new Uint8Array([0x11, 0x90]);
+
+  const first = resolveAudioConfigToSend(null, description, false);
+  assert.deepEqual(first.config, description);
+  assert.deepEqual(first.next, description);
+  // 保持値は複製する (呼び出し側が元の配列を書き換えても影響しない)
+  assert.notStrictEqual(first.next, description);
+  assert.equal(first.resendNext, false);
+
+  // 同じ値は載せず、保持値も変えない
+  const same = resolveAudioConfigToSend(first.next, new Uint8Array([0x11, 0x90]), false);
+  assert.equal(same.config, undefined);
+  assert.deepEqual(same.next, first.next);
+  assert.equal(same.resendNext, false);
+
+  // 変化したら載せて保持値を更新する
+  const changed = resolveAudioConfigToSend(first.next, new Uint8Array([0x12, 0x08]), false);
+  assert.deepEqual(changed.config, new Uint8Array([0x12, 0x08]));
+  assert.deepEqual(changed.next, new Uint8Array([0x12, 0x08]));
+
+  // description が無い (opus) ときは載せず、保持値もそのままにする
+  const opus = resolveAudioConfigToSend(first.next, undefined, false);
+  assert.equal(opus.config, undefined);
+  assert.deepEqual(opus.next, first.next);
+  assert.equal(opus.resendNext, false);
+});
+
+// WebCodecs は description を configure 後の最初の chunk にしか付けないため、
+// 後から接続した購読者へは保持している値を送り直す (音声には keyframe が無い)
+test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Config を載せ直す", () => {
+  const description = new Uint8Array([0x11, 0x90]);
+  const sent = resolveAudioConfigToSend(null, description, false);
+
+  // 通常の chunk (description なし) では載らない
+  const next = resolveAudioConfigToSend(sent.next, undefined, false);
+  assert.equal(next.config, undefined);
+
+  // 送り直し要求があると保持値を載せ直し、要求は解消する
+  const resend = resolveAudioConfigToSend(next.next, undefined, true);
+  assert.deepEqual(resend.config, new Uint8Array([0x11, 0x90]));
+  assert.deepEqual(resend.next, new Uint8Array([0x11, 0x90]));
+  assert.equal(resend.resendNext, false);
+
+  // 保持する値が無いまま要求された場合は、次に description が現れるまで要求を残す
+  const pending = resolveAudioConfigToSend(null, undefined, true);
+  assert.equal(pending.config, undefined);
+  assert.equal(pending.next, null);
+  assert.equal(pending.resendNext, true);
+
+  // 新しい description が現れればそれを載せ、要求は解消する
+  const arrived = resolveAudioConfigToSend(pending.next, new Uint8Array([0x12, 0x08]), true);
+  assert.deepEqual(arrived.config, new Uint8Array([0x12, 0x08]));
+  assert.equal(arrived.resendNext, false);
+});
+
+// 音声の配信可否は Catalog を作る前に判定する。MediaStreamTrackProcessor は音声の
+// 取り出しに必須で、未実装の環境で配信開始後に throw すると映像の配信まで止まる。
+// Node には MediaStreamTrackProcessor が無いため、未対応環境の結果をここで固定できる
+test("resolveAudioPublishable: 非対応環境と無効設定では false を返す", () => {
+  assert.equal(resolveAudioPublishable("none"), false);
+  assert.equal(resolveAudioPublishable("dummy"), false);
 });

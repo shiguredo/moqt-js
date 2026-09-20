@@ -5,7 +5,13 @@ import {
   type CertificateHash,
   toHttpVersionLabel,
 } from "moqt-js";
-import type { CameraDevice, CodecType, VideoSourceType } from "../types";
+import type {
+  AudioCodecType,
+  AudioSourceType,
+  CameraDevice,
+  CodecType,
+  VideoSourceType,
+} from "../types";
 import { base64ToArrayBuffer } from "../utils/base64";
 import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
@@ -32,6 +38,17 @@ export const resolution = signal("1280x720");
 export const framerate = signal(30);
 export const bitrate = signal(2000000);
 export const keyframeInterval = signal(3600);
+
+// 音声設定
+//
+// 既定は "none" にする。音声トラックを足すと catalog のトラック数が変わり、
+// 既存の相互運用の実測 (映像だけの catalog) が変わってしまうため。
+// マイクからの取得は扱わない ("dummy" のみ)。
+export const audioSource = signal<AudioSourceType>("none");
+export const audioCodec = signal<AudioCodecType>("opus");
+export const audioBitrate = signal(64000);
+export const audioSampleRate = signal(48000);
+export const audioChannels = signal(2);
 
 // 配信設定
 // MAX_CACHE_DURATION: Relay がオブジェクトをキャッシュして良い最大時間（ミリ秒）
@@ -246,6 +263,21 @@ export function buildQueryString(): string {
   if (keyframeInterval.value) {
     params.set("keyframeInterval", String(keyframeInterval.value));
   }
+  if (audioSource.value) {
+    params.set("audioSource", audioSource.value);
+  }
+  if (audioCodec.value) {
+    params.set("audioCodec", audioCodec.value);
+  }
+  if (audioBitrate.value) {
+    params.set("audioBitrate", String(audioBitrate.value));
+  }
+  if (audioSampleRate.value) {
+    params.set("audioSampleRate", String(audioSampleRate.value));
+  }
+  if (audioChannels.value) {
+    params.set("audioChannels", String(audioChannels.value));
+  }
   if (maxCacheDuration.value >= 0) {
     params.set("maxCacheDuration", String(maxCacheDuration.value));
   }
@@ -263,6 +295,75 @@ export function buildQueryString(): string {
   }
 
   return params.toString();
+}
+
+// 音声の選択式設定の許可リスト。ConnectionSettings の select はこの定数から生成し、
+// URL の検証も同じ定数を使う (選択肢に無い値を URL が受理すると、select の表示が
+// 空になって表示と実際の設定が食い違う)
+
+/** 音声の入力元の選択肢 */
+export const AUDIO_SOURCES: readonly AudioSourceType[] = ["none", "dummy"];
+
+/** 音声コーデックの選択肢 */
+export const AUDIO_CODECS: readonly AudioCodecType[] = ["opus", "aac"];
+
+/** 音声ビットレートの選択肢 */
+export const AUDIO_BITRATES = [32000, 64000, 96000, 128000];
+
+/** 音声サンプルレートの選択肢 */
+export const AUDIO_SAMPLE_RATES = [8000, 16000, 24000, 48000];
+
+/** 音声チャンネル数の選択肢。ダミー音声が作れる 1 (mono) と 2 (stereo) だけ */
+export const AUDIO_CHANNELS = [1, 2];
+
+/**
+ * 音声の入力元として受理できる値かを判定する
+ *
+ * URL クエリの検証と UI の select の両方で同じ許可リストを使う。
+ */
+export function isAudioSourceType(value: string): value is AudioSourceType {
+  return AUDIO_SOURCES.some((source) => source === value);
+}
+
+/**
+ * 音声コーデックとして受理できる値かを判定する
+ */
+export function isAudioCodecType(value: string): value is AudioCodecType {
+  return AUDIO_CODECS.some((codec) => codec === value);
+}
+
+/**
+ * URL のクエリパラメータから音声設定を初期化する
+ *
+ * 入力元とコーデックは列挙値、数値は ConnectionSettings の select と同じ選択肢
+ * (AUDIO_BITRATES / AUDIO_SAMPLE_RATES / AUDIO_CHANNELS) で検証する。
+ * 選択肢に無い値を受け入れると select の表示が空になり、表示と実際の設定が食い違う。
+ */
+function initAudioSettingsFromUrl(params: URLSearchParams): void {
+  const audioSourceParam = params.get("audioSource");
+  if (audioSourceParam !== null && isAudioSourceType(audioSourceParam)) {
+    audioSource.value = audioSourceParam;
+  }
+
+  const audioCodecParam = params.get("audioCodec");
+  if (audioCodecParam !== null && isAudioCodecType(audioCodecParam)) {
+    audioCodec.value = audioCodecParam;
+  }
+
+  const audioBitrateParam = params.get("audioBitrate");
+  if (audioBitrateParam !== null && AUDIO_BITRATES.includes(Number(audioBitrateParam))) {
+    audioBitrate.value = Number(audioBitrateParam);
+  }
+
+  const audioSampleRateParam = params.get("audioSampleRate");
+  if (audioSampleRateParam !== null && AUDIO_SAMPLE_RATES.includes(Number(audioSampleRateParam))) {
+    audioSampleRate.value = Number(audioSampleRateParam);
+  }
+
+  const audioChannelsParam = params.get("audioChannels");
+  if (audioChannelsParam !== null && AUDIO_CHANNELS.includes(Number(audioChannelsParam))) {
+    audioChannels.value = Number(audioChannelsParam);
+  }
 }
 
 /**
@@ -341,6 +442,8 @@ export function initFromUrl(): void {
       keyframeInterval.value = parsed;
     }
   }
+
+  initAudioSettingsFromUrl(params);
 
   const maxCacheDurationParam = params.get("maxCacheDuration");
   if (maxCacheDurationParam) {

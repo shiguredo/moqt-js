@@ -22,9 +22,11 @@ export function SubscriberPanel({
   canRemove = false,
 }: SubscriberPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { startSubscribing, stopSubscribing, requestKeyframe } = useSubscriber(
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const { startSubscribing, stopSubscribing, requestKeyframe, toggleAudioPlayback } = useSubscriber(
     subscriberId,
     canvasRef,
+    audioRef,
   );
 
   // canvas の背景を slate-800 で初期化する
@@ -195,6 +197,33 @@ export function SubscriberPanel({
             </div>
           )}
         </div>
+
+        {/* 受信した音声の再生 */}
+        {/*
+          既定では再生しない。相互運用の実測で毎回音が出ると邪魔になるため、
+          トグルを明示的に有効にしたときだけ音声出力デバイスへ繋ぐ。
+          <audio> は表示せず、srcObject の設定先としてだけ使う。
+        */}
+        <div class="flex items-center gap-3 mb-4">
+          <button
+            type="button"
+            data-testid="subscriber-audio-playback-toggle"
+            onClick={() => void toggleAudioPlayback()}
+            class={`w-28 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+              instance.audioPlaybackEnabled.value
+                ? "bg-blue-500 hover:bg-blue-600 text-white"
+                : "bg-slate-200 hover:bg-slate-300 text-slate-700"
+            }`}
+          >
+            {instance.audioPlaybackEnabled.value ? "Stop Audio" : "Play Audio"}
+          </button>
+          <span class="text-xs text-slate-500">
+            {instance.audioPlaybackEnabled.value
+              ? "受信した音声を再生中"
+              : "受信した音声は再生しない (既定)"}
+          </span>
+        </div>
+        <audio ref={audioRef} data-testid="subscriber-audio-element" class="hidden" />
 
         {/* Catalog */}
         {catalog && catalog.tracks && catalog.tracks.length > 0 && (
