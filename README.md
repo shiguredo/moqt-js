@@ -393,7 +393,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 解像度 / フレームレート / ビットレート / キーフレーム間隔の設定
 - MAX_CACHE_DURATION の設定
 - 自己署名証明書のハッシュ指定
-- Authorization Token の指定
+- Authorization Token の指定 (MSF URL の c4m パラメータ対応)
 - WebCodecs Dedicated Worker 対応
 - デバッグパネル (MOQT プロトコルメッセージのログ表示)
 - 統計情報の表示 (エンコード/デコードフレーム数、送受信バイト数など)

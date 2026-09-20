@@ -11,6 +11,14 @@
 
 ## develop
 
+- [ADD] moqt-devtools で MSF URL の c4m パラメータを Authorization Token に反映する
+  - Server URL / URI Fragment に入力した MSF URL の c4m パラメータ (Base64 encoded C4M token) を取り出し、Base64 を復号した生バイト列を USE_VALUE / Token Type 0 の SETUP トークンとして送る
+  - 共有 URL のクエリパラメータ (url / fragment) からの復元でも同様に反映する
+  - Authorization Token セクションに c4m から読み込んだトークンの表示とクリア操作を追加する
+  - @voluntas
+- [ADD] moqt-devtools の仕様ヘルプに C4M (CAT-4-MOQT) を追加する
+  - MSF / LOC / MOQT のヘルプボタンに C4M を追加し、Common Access Token による認可、トークンの送信方法 (SETUP の AUTHORIZATION_TOKEN / AUTHORIZATION_TOKEN パラメータ / MSF URL の c4m パラメータ)、moqt claim を表示する
+  - @voluntas
 - [UPDATE] devtools と example の接続先の既定値を `moqt://127.0.0.1:4443/` に変更する
   - sora-moq の WebTransport が受理する path が `/moqt` から `/` になったため、devtools の接続 URL の既定値と `examples/high-level-api` の入力欄の既定値を揃える。path の既定値は接続先の実装が決めるものであり、moqt-js 側は与えられた path をそのまま使う
   - @voluntas

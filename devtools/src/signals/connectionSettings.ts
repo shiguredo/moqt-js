@@ -13,6 +13,7 @@ import type {
   VideoSourceType,
 } from "../types";
 import { base64ToArrayBuffer } from "../utils/base64";
+import { extractC4mBase64 } from "../utils/c4m";
 import { isResolution } from "../utils/codec";
 import { isDebugPanelOpen } from "./debug";
 
@@ -85,26 +86,38 @@ export const authorizationTokenAlias = signal<string>("0");
 export const authorizationTokenType = signal<string>("0");
 // Token Value (UTF-8 テキスト)。空の場合は送出しない。
 export const authorizationTokenValue = signal<string>("");
+// MSF URL の c4m パラメータ (Base64 encoded C4M token) から読み込んだトークン。
+// 空文字列以外の場合は Token Value より優先し、Base64 を復号した生バイト列を送る。
+// draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-01 §2
+export const authorizationTokenBase64 = signal<string>("");
 
 /**
  * 設定値から `AuthorizationToken` を組み立てる。
  *
- * - Token Value が空の場合は `undefined` を返し SETUP Option を送出しない。
+ * - c4m から読み込み済みの Base64 トークンがあれば、復号した生バイト列を使う。
+ * - 無ければ Token Value を UTF-8 として使う。空の場合は `undefined` を返し SETUP Option を送出しない。
  * - Token Alias / Token Type は 10 進文字列をパースする。パース失敗時は `undefined` を返す。
  *
  * draft-ietf-moq-transport-21 §9.20.3 / §9.1.4
  */
 export function buildAuthorizationToken(): AuthorizationToken | undefined {
-  const value = authorizationTokenValue.value;
-  if (value.length === 0) {
-    return undefined;
+  const base64Value = authorizationTokenBase64.value.trim();
+  let tokenValueBytes: Uint8Array;
+  if (base64Value.length > 0) {
+    tokenValueBytes = new Uint8Array(base64ToArrayBuffer(base64Value));
+  } else {
+    const value = authorizationTokenValue.value;
+    if (value.length === 0) {
+      return undefined;
+    }
+    tokenValueBytes = new TextEncoder().encode(value);
   }
+
   const tokenTypeStr = authorizationTokenType.value.trim();
   const tokenType = tokenTypeStr.length === 0 ? 0n : safeParseBigInt(tokenTypeStr);
   if (tokenType === undefined) {
     return undefined;
   }
-  const tokenValueBytes = new TextEncoder().encode(value);
 
   if (authorizationTokenAliasType.value === "register") {
     const aliasStr = authorizationTokenAlias.value.trim();
@@ -124,6 +137,29 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
     tokenType,
     tokenValue: tokenValueBytes,
   };
+}
+
+/**
+ * URL または URI Fragment の c4m パラメータを Authorization Token に反映する。
+ *
+ * draft-ietf-moq-msf-01 §11.1.1: c4m は Base64 encoded C4M token。
+ * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、
+ * Alias Type を useValue、Token Type を 0 (out-of-band) に設定する。
+ *
+ * @param input Server URL もしくは URI Fragment の入力値
+ * @returns c4m を反映した場合は true、c4m が無い / 不正な場合は false
+ */
+export function applyC4mFromUrl(input: string): boolean {
+  const base64 = extractC4mBase64(input);
+  if (base64 === undefined) {
+    return false;
+  }
+  authorizationTokenBase64.value = base64;
+  // 取り込んだ c4m を優先するため、手入力の Token Value はクリアする
+  authorizationTokenValue.value = "";
+  authorizationTokenAliasType.value = "useValue";
+  authorizationTokenType.value = "0";
+  return true;
 }
 
 /**
@@ -375,11 +411,14 @@ export function initFromUrl(): void {
   const urlParam = params.get("url");
   if (urlParam) {
     url.value = urlParam;
+    // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
+    applyC4mFromUrl(urlParam);
   }
 
   const fragmentParam = params.get("fragment");
   if (fragmentParam) {
     fragment.value = fragmentParam;
+    applyC4mFromUrl(fragmentParam);
   }
 
   const namespaceParam = params.get("namespace");

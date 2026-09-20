@@ -4,6 +4,7 @@ import * as settings from "../signals/connectionSettings";
 const showMoqtHelp = signal(false);
 const showMsfHelp = signal(false);
 const showLocHelp = signal(false);
+const showC4mHelp = signal(false);
 
 function MoqtHelpModal() {
   if (!showMoqtHelp.value) return null;
@@ -65,6 +66,79 @@ function MoqtHelpModal() {
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
               draft-ietf-moq-transport
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function C4mHelpModal() {
+  if (!showC4mHelp.value) return null;
+
+  return (
+    <div
+      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={() => (showC4mHelp.value = false)}
+    >
+      <div
+        class="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-slate-700">C4M (CAT-4-MOQT)</h3>
+          <button
+            onClick={() => (showC4mHelp.value = false)}
+            class="text-slate-400 hover:text-slate-600"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-4 text-sm text-slate-600">
+          <div>
+            <p>
+              Common Access Token (CAT) を使った MOQT のトークンベース認可方式です。
+              トークンで接続の可否と、接続後のアクションを制御します。
+            </p>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">トークンの送信</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>SETUP - AUTHORIZATION_TOKEN (0x03) で接続時に送信</li>
+              <li>AUTHORIZATION_TOKEN パラメータ - SUBSCRIBE / FETCH などで送信</li>
+              <li>URL - MSF フラグメントの c4m パラメータに Base64 で指定</li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">moqt claim</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>許可するアクションを namespace / track 単位で指定</li>
+              <li>既定はすべて Blocked</li>
+              <li>moqt-reval - 継続ストリームの再検証間隔 (秒)</li>
+            </ul>
+          </div>
+          <div>
+            <p>
+              URL の c4m パラメータは Authorization Token に自動で反映されます。 トークンの検証は
+              Relay が行い、クライアントはトークンをそのまま送ります。
+            </p>
+          </div>
+          <div class="pt-2 border-t border-slate-200">
+            <a
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-blue-600 hover:text-blue-800 hover:underline"
+            >
+              draft-ietf-moq-c4m-01
             </a>
           </div>
         </div>
@@ -236,6 +310,7 @@ export function ConnectionSettings() {
       <MsfHelpModal />
       <LocHelpModal />
       <MoqtHelpModal />
+      <C4mHelpModal />
       <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -296,6 +371,20 @@ export function ConnectionSettings() {
             </svg>
             MOQT
           </button>
+          <button
+            onClick={() => (showC4mHelp.value = true)}
+            class="px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-full hover:bg-amber-200 transition-colors flex items-center gap-1"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            C4M
+          </button>
         </div>
       </h2>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -307,7 +396,11 @@ export function ConnectionSettings() {
             type="text"
             id="url"
             value={settings.url.value}
-            onInput={(e) => (settings.url.value = e.currentTarget.value)}
+            onInput={(e) => {
+              settings.url.value = e.currentTarget.value;
+              // URL に msf fragment が含まれる場合は c4m を Authorization Token に反映する
+              settings.applyC4mFromUrl(e.currentTarget.value);
+            }}
             disabled={settings.settingsDisabled.value}
             class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed"
           />
@@ -339,7 +432,11 @@ export function ConnectionSettings() {
             type="text"
             id="fragment"
             value={settings.fragment.value}
-            onInput={(e) => (settings.fragment.value = e.currentTarget.value)}
+            onInput={(e) => {
+              settings.fragment.value = e.currentTarget.value;
+              // fragment に msf fragment を貼り付けた場合は c4m を Authorization Token に反映する
+              settings.applyC4mFromUrl(e.currentTarget.value);
+            }}
             disabled={settings.settingsDisabled.value}
             placeholder="例: track:video"
             class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed text-sm"
@@ -784,13 +881,34 @@ export function ConnectionSettings() {
               id="authorizationTokenValue"
               autocomplete="off"
               value={settings.authorizationTokenValue.value}
-              onInput={(e) => (settings.authorizationTokenValue.value = e.currentTarget.value)}
+              onInput={(e) => {
+                settings.authorizationTokenValue.value = e.currentTarget.value;
+                // 手入力した場合は c4m から読み込んだ Base64 トークンを解除する
+                settings.authorizationTokenBase64.value = "";
+              }}
               disabled={settings.settingsDisabled.value}
               placeholder="任意のトークン文字列 (UTF-8)"
               class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
             />
           </div>
         </div>
+        {settings.authorizationTokenBase64.value && (
+          <div class="mt-2 flex items-center gap-2 text-xs">
+            <span class="px-2 py-0.5 font-medium bg-amber-100 text-amber-700 rounded-full">
+              c4m
+            </span>
+            <span class="text-slate-500">
+              URL の c4m パラメータから読み込んだトークンを SETUP で送信します (Base64)
+            </span>
+            <button
+              type="button"
+              onClick={() => (settings.authorizationTokenBase64.value = "")}
+              class="text-slate-400 hover:text-slate-600 underline"
+            >
+              クリア
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
