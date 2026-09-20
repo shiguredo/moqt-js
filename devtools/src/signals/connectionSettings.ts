@@ -19,7 +19,7 @@ import { isDebugPanelOpen } from "./debug";
 export { toHttpVersionLabel };
 
 // 接続設定
-export const url = signal("moqt://127.0.0.1:4443/moqt");
+export const url = signal("moqt://127.0.0.1:4443/");
 // moqt URI の Fragment Identifier (draft-ietf-moq-transport-21 §6.1.1)
 // 入力形式は `type:value` (先頭の `#` は付けない)。空文字列なら fragment を付けない。
 export const fragment = signal("");

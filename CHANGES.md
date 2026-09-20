@@ -11,6 +11,9 @@
 
 ## develop
 
+- [UPDATE] devtools と example の接続先の既定値を `moqt://127.0.0.1:4443/` に変更する
+  - sora-moq の WebTransport が受理する path が `/moqt` から `/` になったため、devtools の接続 URL の既定値と `examples/high-level-api` の入力欄の既定値を揃える。path の既定値は接続先の実装が決めるものであり、moqt-js 側は与えられた path をそのまま使う
+  - @voluntas
 - [ADD] devtools で受信した音声を可視化する
   - 復号済みの音声から peak / RMS を dBFS で求め、レベルメーターと直近 100 ms の波形を canvas に描く。LOC の Audio Level は draft-ietf-moq-loc-04 §2.3.3.2 / RFC 6464 §3 の -dBov として別のゲージと数値で表示する
   - `window.moqtDevTools` の統計に `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` を追加する。音声トラックを購読していないときはメーターを描画しない
