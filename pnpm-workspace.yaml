@@ -10,7 +10,10 @@ overrides:
   # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)
   # @vitest/coverage-v8 は直接依存のため overrides では固定できず、
   # vp up -L のたびに package.json 側で 4.1.11 に戻す必要がある
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.2
+  vite: npm:@voidzero-dev/vite-plus-core@0.3.3
+  # @preact/preset-vite / @tailwindcss/vite は core を直接 peer 依存するため、
+  # vite 経由の override だけでは揃わない
+  "@voidzero-dev/vite-plus-core": 0.3.3
   vitest: 4.1.11
 
 allowBuilds:

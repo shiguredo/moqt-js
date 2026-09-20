@@ -1089,6 +1089,11 @@
 
 ### misc
 
+- [UPDATE] vite-plus 0.3.3 / @types/node 26.6.1 / fast-check 4.10.1 に更新する
+  - vite-plus を 0.3.2 から 0.3.3 へ更新し、`@voidzero-dev/vite-plus-core` も 0.3.3 に揃える
+  - `@preact/preset-vite` / `@tailwindcss/vite` は core を直接 peer 依存するため、`vite` の override だけでは別版が残り、型比較が破綻して TS2321 / TS2769 になっていた。core を直接 override して解消し、devtools/vite.config.ts の plugins キャストを削除する (注釈は `defineConfig` が要求する `UserConfig` にする)
+  - `@vitest/coverage-v8` は vite-plus が同梱する vitest 4.1.11 と揃えるため 4.1.11 のまま (5.0.1 は非互換)
+  - @voluntas
 - [UPDATE] tsconfig の厳格チェック (noUncheckedIndexedAccess / exactOptionalPropertyTypes) を有効にする
   - 型エラー 159 件 (src 95 / devtools 61 / examples 3) を、到達しない防御としてのガード追加・index access の回避 (`for...of` / `entries()` / 分割代入)・値がある場合だけ載せる条件付き構築で修正する
   - 明示的に undefined を保持する設計の内部状態 / 文脈オブジェクトと、寛容なデコード結果 (`VideoProperties` / `AudioProperties` / `FetchObjectContext`) は optional フィールドに `| undefined` を付ける (いずれも後方互換)

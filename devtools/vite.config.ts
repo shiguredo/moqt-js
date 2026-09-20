@@ -1,13 +1,11 @@
-import { defineConfig, type ViteUserConfig } from "vite-plus";
+import { defineConfig, type UserConfig } from "vite-plus";
 import { resolve } from "node:path";
 import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
 import packageJson from "../package.json";
 
-const config: ViteUserConfig = {
-  // preact() / tailwindcss() はそれぞれ別の vite 型を持つ PluginOption[] を返す。
-  // そのまま渡すと型比較が深くなりすぎる (TS2321) ため、plugins の型を明示する
-  plugins: [...preact(), ...tailwindcss()] as NonNullable<ViteUserConfig["plugins"]>,
+const config: UserConfig = {
+  plugins: [...preact(), ...tailwindcss()],
   base: "/",
   // Playwright E2E テストから dev サーバーへ安定してアクセスするためポートを固定する
   server: {
