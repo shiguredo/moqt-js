@@ -10,7 +10,7 @@
  * reject をそのままテスト失敗として受け取る。
  */
 
-import { runAudioDecoderTest, runAudioEncoderTest } from "./audio.ts";
+import { runAudioDecoderTest, runAudioEncoderTest, runAudioSamplesTest } from "./audio.ts";
 import {
   runVideoDecoderTest,
   runVideoEncoderReconfigureTest,
@@ -39,6 +39,7 @@ const CODEC_TESTS: { [Name in CodecTestName]: () => Promise<CodecTestResultMap[N
   audioEncoderWorker: () => runAudioEncoderTest(true),
   audioDecoderDirect: () => runAudioDecoderTest(false),
   audioDecoderWorker: () => runAudioDecoderTest(true),
+  audioSamples: () => runAudioSamplesTest(),
   videoEncoderReconfigureDirect: () => runVideoEncoderReconfigureTest(false),
   videoEncoderReconfigureWorker: () => runVideoEncoderReconfigureTest(true),
 };

@@ -498,12 +498,18 @@ test("resetSubscriberStats: 音声の統計と最終レベルを初期化する"
   instance.audioObjectsReceived.value = 10;
   instance.audioChunksDecoded.value = 10;
   instance.audioLastLevel.value = { level: 14, voiceActivity: true };
+  instance.audioPeakDbfs.value = -6;
+  instance.audioRmsDbfs.value = -9;
+  instance.audioWaveform.value = new Float32Array([1, 2, 3]);
 
   resetSubscriberStats(instance);
 
   assert.equal(instance.audioObjectsReceived.value, 0);
   assert.equal(instance.audioChunksDecoded.value, 0);
   assert.equal(instance.audioLastLevel.value, null);
+  assert.equal(instance.audioPeakDbfs.value, null);
+  assert.equal(instance.audioRmsDbfs.value, null);
+  assert.equal(instance.audioWaveform.value, null);
 });
 
 test("resetSubscriberState: 音声の signal を初期化し再生を無効にする", () => {
@@ -517,6 +523,9 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioDecoderConfigured.value = true;
   instance.audioLastLevel.value = { level: 14, voiceActivity: true };
   instance.audioPlaybackEnabled.value = true;
+  instance.audioPeakDbfs.value = -6;
+  instance.audioRmsDbfs.value = -9;
+  instance.audioWaveform.value = new Float32Array([1, 2, 3]);
 
   resetSubscriberState(
     instance,
@@ -529,6 +538,9 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   assert.equal(instance.audioDecoderConfigured.value, false);
   assert.equal(instance.audioLastLevel.value, null);
   assert.equal(instance.audioPlaybackEnabled.value, false);
+  assert.equal(instance.audioPeakDbfs.value, null);
+  assert.equal(instance.audioRmsDbfs.value, null);
+  assert.equal(instance.audioWaveform.value, null);
 });
 
 // 停止後に前のセッションの音声 object 処理が残ると、signal を書き戻したり

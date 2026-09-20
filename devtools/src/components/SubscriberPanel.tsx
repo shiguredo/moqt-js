@@ -1,5 +1,6 @@
 import { useMemo, useRef, useEffect } from "preact/hooks";
 import { useSubscriber } from "../hooks/useSubscriber";
+import { AudioMeter } from "./AudioMeter";
 import { formatBitrate, formatBytes } from "../utils/logFormatters";
 import * as sub from "../signals/subscriber";
 
@@ -187,7 +188,13 @@ export function SubscriberPanel({
 
         {/* Canvas Container */}
         <div class="relative bg-slate-900 rounded-lg overflow-hidden aspect-video mb-4">
-          <canvas ref={canvasRef} width="1280" height="720" class="w-full h-full object-contain" />
+          <canvas
+            ref={canvasRef}
+            data-testid="subscriber-video-canvas"
+            width="1280"
+            height="720"
+            class="w-full h-full object-contain"
+          />
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
             Remote Stream
           </div>
@@ -197,6 +204,10 @@ export function SubscriberPanel({
             </div>
           )}
         </div>
+
+        {/* 受信した音声のレベルメーターと波形。音声トラックを購読していないときは
+            描画しない (映像の表示を妨げない) */}
+        {instance.audioSubscriber.value !== null && <AudioMeter instance={instance} />}
 
         {/* 受信した音声の再生 */}
         {/*

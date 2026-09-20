@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import type {
   AudioDecoderTestResult,
   AudioEncoderTestResult,
+  AudioSamplesTestResult,
   CodecTestName,
   CodecTestResultMap,
   VideoDecoderTestResult,
@@ -540,3 +541,43 @@ for (const name of ["videoEncoderReconfigureDirect", "videoEncoderReconfigureWor
     expect(result.errorMessages).toEqual([]);
   });
 }
+
+// ============================================================================
+// devtools の可視化が使う AudioData の読み出し
+// ============================================================================
+
+/**
+ * readAudioSamples の契約を検証する
+ *
+ * AudioData はブラウザ専用 API のため Node の単体テストでは検証できない。
+ * 実ブラウザで生成した AudioData から読み出したサンプル数と値域を固定する。
+ */
+function expectAudioSamplesContract(result: AudioSamplesTestResult): void {
+  expect(result.test).toBe("audioSamples");
+  expect(result.sampleRate).toBe(AUDIO_SAMPLE_RATE);
+  expect(result.numberOfChannels).toBe(AUDIO_CHANNELS);
+  // 第 1 チャンネルのサンプル数は AudioData のフレーム数と一致する
+  expect(result.sampleCount).toBe(result.numberOfFrames);
+
+  // 第 1 チャンネルだけを読んでいる (第 2 チャンネルは無音にしてある)
+  expect(result.secondChannelPeak).toBe(0);
+
+  // 生成したトーン (振幅 0.2〜0.3) がそのまま読み出せる。
+  // 0 dBFS が振幅 1.0 なので、peak は約 -14〜-10 dBFS になる
+  expect(result.peakDbfs).toBeGreaterThan(-20);
+  expect(result.peakDbfs).toBeLessThan(-5);
+  // RMS は peak より小さい (正弦波の RMS は振幅の 1/sqrt(2))
+  expect(result.rmsDbfs).toBeLessThan(result.peakDbfs);
+  expect(result.maxSample).toBeGreaterThan(0.2);
+  expect(result.minSample).toBeLessThan(-0.2);
+}
+
+test("readAudioSamples: 実 AudioData から第 1 チャンネルのサンプル列を読み出す", async ({
+  page,
+}) => {
+  await openCodecTestPage(page);
+
+  const result = await runCodecTest(page, "audioSamples");
+
+  expectAudioSamplesContract(result);
+});

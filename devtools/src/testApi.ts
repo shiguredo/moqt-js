@@ -15,7 +15,7 @@ import {
   pubStatus,
   objectsWithExtensions as pubObjectsWithExtensions,
 } from "./signals/publisher";
-import { subscriberInstances } from "./signals/subscriber";
+import { subscriberInstances, type SubscriberInstance } from "./signals/subscriber";
 import { url, certificateHash } from "./signals/connectionSettings";
 import type { StatusType } from "./types";
 
@@ -52,6 +52,13 @@ export interface SubscriberStats {
   // 音声トラックの受信数とデコード数 (catalog に音声トラックが無いときは 0 のまま)
   audioObjectsReceived: number;
   audioChunksDecoded: number;
+  // 復号した音声のレベル (dBFS)。まだ復号していないときは null
+  audioPeakDbfs: number | null;
+  audioRmsDbfs: number | null;
+  // 直近に受信した object の LOC Audio Level (-dBov) と voice activity。
+  // Audio Level が載っていない object を受けたときは null
+  audioLastLevel: number | null;
+  audioLastVoiceActivity: boolean | null;
 }
 
 /**
@@ -89,6 +96,33 @@ function convertLargestLocation(
 }
 
 /**
+ * Subscriber インスタンスの統計を公開用の形に変換する
+ *
+ * 一覧 (getSubscribers) と単数 (getSubscriber) で同じ形を返すため 1 箇所にまとめる。
+ */
+export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
+  return {
+    id: sub.id,
+    status: sub.status.value,
+    framesDecoded: sub.framesDecoded.value,
+    keyFramesDecoded: sub.keyFramesDecoded.value,
+    objectsReceived: sub.objectsReceived.value,
+    currentGroup: sub.currentGroup.value,
+    currentSubGroup: sub.currentSubGroup.value,
+    bytesReceived: sub.bytesReceived.value,
+    objectsWithExtensions: sub.objectsWithExtensions.value,
+    decoderState: sub.decoderState.value,
+    largestLocation: convertLargestLocation(sub.largestLocation.value),
+    audioObjectsReceived: sub.audioObjectsReceived.value,
+    audioChunksDecoded: sub.audioChunksDecoded.value,
+    audioPeakDbfs: sub.audioPeakDbfs.value,
+    audioRmsDbfs: sub.audioRmsDbfs.value,
+    audioLastLevel: sub.audioLastLevel.value?.level ?? null,
+    audioLastVoiceActivity: sub.audioLastLevel.value?.voiceActivity ?? null,
+  };
+}
+
+/**
  * テスト用 API を初期化して window オブジェクトに公開する
  */
 export function initTestApi(): void {
@@ -106,42 +140,11 @@ export function initTestApi(): void {
     }),
 
     getSubscribers: () =>
-      Array.from(subscriberInstances.value.values()).map((sub) => ({
-        id: sub.id,
-        status: sub.status.value,
-        framesDecoded: sub.framesDecoded.value,
-        keyFramesDecoded: sub.keyFramesDecoded.value,
-        objectsReceived: sub.objectsReceived.value,
-        currentGroup: sub.currentGroup.value,
-        currentSubGroup: sub.currentSubGroup.value,
-        bytesReceived: sub.bytesReceived.value,
-        objectsWithExtensions: sub.objectsWithExtensions.value,
-        decoderState: sub.decoderState.value,
-        largestLocation: convertLargestLocation(sub.largestLocation.value),
-        audioObjectsReceived: sub.audioObjectsReceived.value,
-        audioChunksDecoded: sub.audioChunksDecoded.value,
-      })),
+      Array.from(subscriberInstances.value.values()).map((sub) => buildSubscriberStats(sub)),
 
     getSubscriber: (id: string) => {
       const sub = subscriberInstances.value.get(id);
-      if (!sub) {
-        return null;
-      }
-      return {
-        id: sub.id,
-        status: sub.status.value,
-        framesDecoded: sub.framesDecoded.value,
-        keyFramesDecoded: sub.keyFramesDecoded.value,
-        objectsReceived: sub.objectsReceived.value,
-        currentGroup: sub.currentGroup.value,
-        currentSubGroup: sub.currentSubGroup.value,
-        bytesReceived: sub.bytesReceived.value,
-        objectsWithExtensions: sub.objectsWithExtensions.value,
-        decoderState: sub.decoderState.value,
-        largestLocation: convertLargestLocation(sub.largestLocation.value),
-        audioObjectsReceived: sub.audioObjectsReceived.value,
-        audioChunksDecoded: sub.audioChunksDecoded.value,
-      };
+      return sub ? buildSubscriberStats(sub) : null;
     },
 
     getConnection: () => ({

@@ -1,7 +1,7 @@
 # devtools で受信した音声を可視化する
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-20
 - Branch: feature/add-devtools-audio-visualization
 - Polished: 2026-09-20
 
@@ -98,8 +98,10 @@ publisher が property を載せているかは分からない。
   左端に揃える
 - level は数値をそのまま -dBov として出す (例: `-42 dBov`)。文字列化は純関数
   `formatAudioLevel(level: LOC.AudioLevel | null): string` に切り出し、`null` は
-  `not reported`、それ以外は `-42 dBov (voice: on)` の形式にする。peak / RMS の表示も
-  純関数 (`formatDbfs(value: number | null): string`、`null` は `not measured`) にする
+  `not reported` にする。voice activity は `formatVoiceActivity(level:
+LOC.AudioLevel | null): string` で `voice: on` / `voice: off` / `not reported` として
+  別の要素に出す (同じ値を 2 度表示しない)。peak / RMS の表示も純関数
+  (`formatDbfs(value: number | null): string`、`null` は `not measured`) にする
 - `audioLastLevel` は 0626 が「直近に受信した音声 object の Audio Level」として更新する
   (`null` は持ち越しではなく、その object に載っていないことを表す)。値が無い object を
   受けた時点で `not reported` に戻る
@@ -171,4 +173,50 @@ moqt-js 側で確認する。
 
 ## 解決方法
 
-{未着手}
+devtools の subscriber で受信した音声を可視化した。
+
+### 復号信号の計算 (`devtools/src/utils/audioLevel.ts` 新規)
+
+- `readAudioSamples(audioData)`: 第 1 チャンネルを `allocationSize` + `copyTo` の f32-planar で読み出す (`AudioData` は閉じない)
+- `summarizeAudioLevel(samples)`: peak と RMS を dBFS で求める純関数。無音・空のサンプル列・NaN は下限 `MIN_DBFS` (-100 dBFS)、振幅 1 超と正の無限大は上限 `MAX_DBFS` (0 dBFS) にクランプする
+- `waveformSampleCount(sampleRate)`: 100 ms 分のサンプル数を返す (48000 Hz で 4800)。0 や NaN でも 1 を返し、波形の上限判定が壊れないようにする
+- `appendWaveform(previous, samples, maxSamples)`: 直近 100 ms を保持する純関数 (古いサンプルから捨てる)
+- `formatAudioLevel(level)` / `formatVoiceActivity(level)` / `formatDbfs(value)`: 表示用の文字列化。未報告 (`not reported`) と未計測 (`not measured`) を区別する
+
+### 描画 (`devtools/src/components/AudioMeter.tsx` 新規)
+
+- 上段に復号信号の peak / RMS と LOC Audio Level の 3 行、下段に直近 100 ms の波形を 1 枚の canvas に描く (`drawAudioMeter`)
+- 目盛りは 0 dB を右端、`-100` dB を左端に揃え、バーは静かな側から現在の値まで伸ばす。LOC の -dBov は符号を反転して同じ向きに写像する
+- `useSignalEffect` で signal の更新時にだけ描き直す (`requestAnimationFrame` による常時再描画はしない)
+- 数値は DOM のテキストでも出し、`data-testid` (`audio-meter` / `audio-waveform` / `audio-level` / `audio-voice-activity` / `audio-peak` / `audio-rms`) から読めるようにする
+- 音声トラックを購読していないときは `AudioMeter` 自体を描画しない (`SubscriberPanel` の既存の条件描画と同じ流儀)
+
+### signal と統計
+
+- `devtools/src/signals/subscriber.ts` に `audioPeakDbfs` / `audioRmsDbfs` / `audioWaveform` を追加し、購読の再開と停止で `null` に戻す
+- `devtools/src/hooks/useSubscriber.ts` の decode ハンドラで、`close()` の前にサンプルを読み出して signal を更新する (再生の有無に関わらず)。計測と再生は別の try に分け、世代が違う decoder の出力は無視する (`getCurrentAudioSubscriber`)
+- `devtools/src/testApi.ts` に `buildSubscriberStats` を切り出し、`getSubscribers` と `getSubscriber` の双方から同じ形で `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` を返す (0 と false を潰さない)
+
+### テスト
+
+- `devtools/src/utils/audioLevel.test.ts` (新規): 純関数の境界 (無音・最大振幅・空のサンプル列・NaN / 無限大・上限と下限のクランプ・波形の切り詰め・表示の未報告)
+- `devtools/src/testApi.test.ts` (新規): 統計の Audio Level が 0 / false のときも潰さないこと
+- `devtools/src/hooks/useSubscriber.test.ts`: 追加した signal が購読の再開・停止で初期化されること
+- `devtools/src/codec-test/` + `tests/e2e/codec-wrappers.spec.ts`: 実ブラウザの `AudioData` から `readAudioSamples` が第 1 チャンネルだけを読み出すこと (第 2 チャンネルを無音にして取り違えを検出する)
+- `tests/e2e/devtools-audio-meter.spec.ts` (新規): 音声トラックが無いときにメーターが DOM に存在しないこと、レベルメーターが信号を描くこと (バーの向きと左右端を画素で固定)、`window.moqtDevTools` の音声統計 4 項目
+
+### 設計方針からの差分
+
+- `summarizeAudioLevel` は下限だけでなく上限 (`MAX_DBFS` = 0 dBFS) にもクランプする (設計方針は下限のみを記載していた)
+- 100 ms をサンプル数へ換算する `waveformSampleCount` を追加した (`WAVEFORM_WINDOW_MS` は export しない)
+- `SubscriberStats` の組み立ては `buildSubscriberStats` 1 箇所に集約した (設計方針は「3 箇所に足す」としていたが、重複を避けるため)
+- voice activity は `formatAudioLevel` に含めず `formatVoiceActivity` で別の要素に出す (同じ値を 2 度表示しない)。§尺度の記述も同じ内容に更新した
+- 音声ハンドラの世代判定は `getCurrentAudioSubscriber` に集約し、object ハンドラと decode ハンドラで共用する
+- メーター不在時も映像 canvas が残ることを固定するため、`SubscriberPanel.tsx` の映像 canvas に `data-testid="subscriber-video-canvas"` を追加した (設計方針の data-testid 一覧には無い)
+- `readAudioSamples` の実ブラウザ検証は codec-test ページに `audioSamples` テストを新設し、トーンは `createToneSamples` (ダミー音声) を再利用する
+- 描画の E2E は canvas が DOM から読めないため、`drawAudioMeter` を実ブラウザで呼んで画素を数えて固定する
+
+### 確認
+
+- `npx vp check` / `npx vp test --run` (2446 tests) / `npx vp run e2e-test` (25 tests) が通る (devtools の型検査は `npx vp check` が行う)
+- 実リレー経由の音声 object 到達と購読中のメーター表示は相互運用 harness 側で確認する (本 issue では harness を変更しない)

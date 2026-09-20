@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] devtools で受信した音声を可視化する
+  - 復号済みの音声から peak / RMS を dBFS で求め、レベルメーターと直近 100 ms の波形を canvas に描く。LOC の Audio Level は draft-ietf-moq-loc-04 §2.3.3.2 / RFC 6464 §3 の -dBov として別のゲージと数値で表示する
+  - `window.moqtDevTools` の統計に `audioPeakDbfs` / `audioRmsDbfs` / `audioLastLevel` / `audioLastVoiceActivity` を追加する。音声トラックを購読していないときはメーターを描画しない
+  - @voluntas
 - [ADD] devtools にダミー音声の配信と購読を追加する
   - マイク無しで音声を含む相互運用を確認できるよう、devtools の publisher に `audioSource: "dummy"` (440 Hz のトーン) を足す。catalog には draft-ietf-moq-msf-01 §5.2.6 の `role: "audio"` と、§5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 が要求する `codec` / `bitrate` / `samplerate` / `channelConfig` を載せ、Group 採番と優先度は映像と独立させ、draft-ietf-moq-loc-04 §2.3.3.2 の Audio Level も載せる
   - devtools の subscriber は catalog の音声トラックを購読して復号し、`window.moqtDevTools` の `audioObjectsReceived` / `audioChunksDecoded` で到達を確認できるようにする。既定では音声出力デバイスへ再生せず、UI のトグルを有効にしたときだけ再生する
