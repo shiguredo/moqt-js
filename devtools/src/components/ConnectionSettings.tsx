@@ -60,12 +60,12 @@ function MoqtHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-21"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-transport
+              draft-ietf-moq-transport-21
             </a>
           </div>
         </div>
@@ -201,12 +201,12 @@ function MsfHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-msf
+              draft-ietf-moq-msf-01
             </a>
           </div>
         </div>
@@ -307,9 +307,9 @@ const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 export function ConnectionSettings() {
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
-      <MsfHelpModal />
-      <LocHelpModal />
       <MoqtHelpModal />
+      <LocHelpModal />
+      <MsfHelpModal />
       <C4mHelpModal />
       <h2 class="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -330,8 +330,8 @@ export function ConnectionSettings() {
         <HttpVersionBadge />
         <div class="ml-auto flex items-center gap-2">
           <button
-            onClick={() => (showMsfHelp.value = true)}
-            class="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 transition-colors flex items-center gap-1"
+            onClick={() => (showMoqtHelp.value = true)}
+            class="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -341,7 +341,7 @@ export function ConnectionSettings() {
                 d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            MSF
+            MOQT
           </button>
           <button
             onClick={() => (showLocHelp.value = true)}
@@ -358,8 +358,8 @@ export function ConnectionSettings() {
             LOC
           </button>
           <button
-            onClick={() => (showMoqtHelp.value = true)}
-            class="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1"
+            onClick={() => (showMsfHelp.value = true)}
+            class="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 transition-colors flex items-center gap-1"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -369,7 +369,7 @@ export function ConnectionSettings() {
                 d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            MOQT
+            MSF
           </button>
           <button
             onClick={() => (showC4mHelp.value = true)}
