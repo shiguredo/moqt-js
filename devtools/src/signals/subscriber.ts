@@ -1,7 +1,8 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
-import type { Session, Subscriber, Catalog } from "moqt-js";
+import type { LOC, Session, Subscriber, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
+import type { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 
 /**
  * 個々の Subscriber インスタンスの状態。
@@ -49,6 +50,21 @@ export interface SubscriberInstance {
   // draft-ietf-moq-transport-21 §9.20.20 により、true のときのみ
   // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信できる。
   dynamicGroupsSupported: Signal<boolean>;
+  // 音声トラックの購読 (catalog に音声トラックが無いときは null のまま)
+  audioSubscriber: Signal<Subscriber | null>;
+  audioDecoder: Signal<AudioDecoderWrapper | null>;
+  audioDecoderConfigured: Signal<boolean>;
+  // 直近に受信した音声 object の LOC Audio Level。
+  // draft-ietf-moq-loc-04 §2.3.3.2 の AUDIO_LEVEL は Object スコープのみのため、
+  // Audio Level が載っていない object を受けたら null に戻す (値を持ち越さない)。
+  audioLastLevel: Signal<LOC.AudioLevel | null>;
+  // 音声の受信数とデコード数。
+  // 受信数は decode に渡す前の object も数えるため、両者の差が「復号せずに捨てた数」に
+  // なる (映像の objectsReceived / chunksDecoded と同じ関係)
+  audioObjectsReceived: Signal<number>;
+  audioChunksDecoded: Signal<number>;
+  // 受信した音声を音声出力デバイスで再生するか。既定は無効
+  audioPlaybackEnabled: Signal<boolean>;
 }
 
 /**
@@ -82,6 +98,13 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     decoderState: signal("unconfigured"),
     largestLocation: signal<{ group: bigint; object: bigint } | null>(null),
     dynamicGroupsSupported: signal(false),
+    audioSubscriber: signal<Subscriber | null>(null),
+    audioDecoder: signal<AudioDecoderWrapper | null>(null),
+    audioDecoderConfigured: signal(false),
+    audioLastLevel: signal<LOC.AudioLevel | null>(null),
+    audioObjectsReceived: signal(0),
+    audioChunksDecoded: signal(0),
+    audioPlaybackEnabled: signal(false),
   };
 }
 
@@ -141,11 +164,14 @@ export function addSubscriber(): string {
  *
  * Map 削除契機での外部リソース close 責務を集約する。
  * 停止経路の closeSubscriberResources (teardown 経由) と順序を揃えて
- * decoder → catalog → session の順で fire-and-forget で解除する。
- * close 完了は待たない。
+ * decoder → audioDecoder → catalog → audio subscriber → session の順で
+ * fire-and-forget で解除する。close 完了は待たない。
  *
- * `Session.close` / `DecoderWrapper.close` / `Subscriber.unsubscribe` は
- * 冪等で二重実行は no-op のため、停止経路との二重発火でも実害はない。
+ * `Session.close` / `DecoderWrapper.close` / `AudioDecoderWrapper.close` /
+ * `Subscriber.unsubscribe` は冪等で二重実行は no-op のため、停止経路との
+ * 二重発火でも実害はない。
+ *
+ * 再生中の AudioContext は hook 側 (useSubscriber のアンマウント) が停止する。
  */
 export function removeSubscriber(id: string): void {
   const instance = getSubscriber(id);
@@ -155,6 +181,19 @@ export function removeSubscriber(id: string): void {
     } catch {
       // 既にクローズ済みなら無視
     }
+    instance.decoder.value = null;
+
+    // 音声デコーダも停止する。Worker モードでは Worker ごと破棄される
+    try {
+      instance.audioDecoder.value?.close();
+    } catch {
+      // 既にクローズ済みなら無視
+    }
+    instance.audioDecoder.value = null;
+    instance.audioDecoderConfigured.value = false;
+    // パネルが消えるため、再生トグルも既定 (無効) に戻す
+    instance.audioPlaybackEnabled.value = false;
+
     // catalog 購読を graceful に解除する。 session.close 任せにしない。
     // 制御メッセージのため session.close より先に行う。
     // 二重解除は解除前の null チェックと解除後の null 化で抑止し、
@@ -166,6 +205,16 @@ export function removeSubscriber(id: string): void {
         // 送信失敗時は握り潰す (session.close と同形)
       });
     }
+
+    // 音声トラックの購読も catalog と同じ扱いで解除する
+    const audioSubscriberInstance = instance.audioSubscriber.value;
+    instance.audioSubscriber.value = null;
+    if (audioSubscriberInstance) {
+      void audioSubscriberInstance.unsubscribe().catch(() => {
+        // 送信失敗時は握り潰す (session.close と同形)
+      });
+    }
+
     instance.session.value?.close().catch(() => {
       // 既にクローズ済みなら無視
     });

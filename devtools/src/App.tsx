@@ -31,6 +31,7 @@ export function App() {
           {/* Copy URL ボタン */}
           <button
             onClick={copyUrlToClipboard}
+            data-testid="copy-url"
             class="p-4 rounded-xl shadow-lg transition-all flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium"
             title="Copy URL with current settings"
           >

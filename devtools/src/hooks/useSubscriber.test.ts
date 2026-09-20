@@ -7,14 +7,17 @@ import {
   parseLocFrameMetadata,
   resetSubscriberState,
   resetSubscriberStats,
+  resolveAudioTrack,
   resolveNewGroupRequestValue,
 } from "./useSubscriber";
+import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import { settingsDisabled } from "../signals/connectionSettings";
 import {
   FakeSession,
   FakeSubscriber,
+  RecordingAudioDecoderWrapper,
   RecordingDecoderWrapper,
   type FakeCallLog,
 } from "../testSupport/fakes";
@@ -304,7 +307,11 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   const chainRef = { current: Promise.resolve().then(() => {}) };
   const previousChain = chainRef.current;
 
-  resetSubscriberState(instance, chainRef, () => false);
+  resetSubscriberState(
+    instance,
+    { video: chainRef, audio: { current: Promise.resolve() } },
+    () => false,
+  );
 
   assert.equal(instance.subscriber.value, null);
   assert.equal(instance.catalogSubscriber.value, null);
@@ -324,7 +331,11 @@ test("resetSubscriberState does not touch status / statusMessage / isStopping", 
   instance.statusMessage.value = "Subscribed to foo/bar";
   instance.isStopping.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(instance, chainRef, () => false);
+  resetSubscriberState(
+    instance,
+    { video: chainRef, audio: { current: Promise.resolve() } },
+    () => false,
+  );
   assert.equal(instance.status.value, "connected");
   assert.equal(instance.statusMessage.value, "Subscribed to foo/bar");
   assert.equal(instance.isStopping.value, true);
@@ -335,7 +346,11 @@ test("resetSubscriberState re-enables settingsDisabled when no active subscriber
   const instance = createSubscriberInstance("reset-state-3");
   settingsDisabled.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(instance, chainRef, () => false);
+  resetSubscriberState(
+    instance,
+    { video: chainRef, audio: { current: Promise.resolve() } },
+    () => false,
+  );
   assert.equal(settingsDisabled.value, false);
 });
 
@@ -344,7 +359,11 @@ test("resetSubscriberState keeps settingsDisabled when other publisher is active
   const instance = createSubscriberInstance("reset-state-4");
   settingsDisabled.value = true;
   const chainRef = { current: Promise.resolve() };
-  resetSubscriberState(instance, chainRef, () => true);
+  resetSubscriberState(
+    instance,
+    { video: chainRef, audio: { current: Promise.resolve() } },
+    () => true,
+  );
   assert.equal(settingsDisabled.value, true);
 });
 
@@ -403,4 +422,125 @@ test("closeSubscriberResources swallows catalog unsubscribe failure", async () =
 
   assert.deepEqual(calls, ["catalog.unsubscribe", "session.close"]);
   assert.equal(instance.catalogSubscriber.value, null);
+});
+
+// ============================================================================
+// 音声トラックの購読
+// ============================================================================
+
+// 音声トラックを持たない catalog (映像だけを広告する publisher) では音声の購読を
+// 開始しない。この分岐で throw すると映像の視聴まで止まるため、undefined を返す。
+test("resolveAudioTrack: 音声トラックを持たない catalog では undefined を返す", () => {
+  const catalog = createCatalog([makeCatalogTrack()]);
+  assert.equal(resolveAudioTrack(catalog), undefined);
+});
+
+test("resolveAudioTrack: catalog の音声トラックを返す", () => {
+  const catalog = createCatalog([
+    makeCatalogTrack(),
+    makeCatalogTrack({ name: "audio", role: "audio", codec: "opus" }),
+  ]);
+
+  const audioTrack = resolveAudioTrack(catalog);
+  assert.equal(audioTrack?.name, "audio");
+  assert.equal(audioTrack?.codec, "opus");
+});
+
+test("closeSubscriberResources: 音声デコーダを閉じ、音声トラックの購読を解除する", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("close-resources-audio-1");
+  const calls: FakeCallLog = [];
+  instance.decoder.value = new RecordingDecoderWrapper({ label: "decoder.close", calls });
+  instance.session.value = new FakeSession({ label: "session.close", calls });
+  instance.catalogSubscriber.value = new FakeSubscriber({ label: "catalog.unsubscribe", calls });
+  const audioSubscriber = new FakeSubscriber({ label: "audio.unsubscribe", calls });
+  instance.audioSubscriber.value = audioSubscriber;
+  instance.audioDecoder.value = new RecordingAudioDecoderWrapper({
+    label: "audioDecoder.close",
+    calls,
+  });
+  instance.audioDecoderConfigured.value = true;
+
+  closeSubscriberResources(instance, null);
+
+  assert.equal(audioSubscriber.state, "closed");
+  assert.equal(instance.audioSubscriber.value, null);
+  assert.equal(instance.audioDecoder.value, null);
+  assert.equal(instance.audioDecoderConfigured.value, false);
+  // decoder → audioDecoder → catalog → audio → session の順で送出されること
+  assert.deepEqual(calls, [
+    "decoder.close",
+    "audioDecoder.close",
+    "catalog.unsubscribe",
+    "audio.unsubscribe",
+    "session.close",
+  ]);
+});
+
+test("closeSubscriberResources: 音声の後始末を二重に呼んでも例外にならない", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("close-resources-audio-2");
+  const calls: FakeCallLog = [];
+  instance.audioSubscriber.value = new FakeSubscriber({ label: "audio.unsubscribe", calls });
+
+  closeSubscriberResources(instance, null);
+  closeSubscriberResources(instance, null);
+
+  assert.deepEqual(calls, ["audio.unsubscribe"]);
+  assert.equal(instance.audioSubscriber.value, null);
+});
+
+// 受信数・デコード数・最終レベルは購読のたびに 0 / null へ戻す。
+// 前回の値が残ると E2E が「増えた」ことを判定できない。
+test("resetSubscriberStats: 音声の統計と最終レベルを初期化する", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("reset-stats-audio-1");
+  instance.audioObjectsReceived.value = 10;
+  instance.audioChunksDecoded.value = 10;
+  instance.audioLastLevel.value = { level: 14, voiceActivity: true };
+
+  resetSubscriberStats(instance);
+
+  assert.equal(instance.audioObjectsReceived.value, 0);
+  assert.equal(instance.audioChunksDecoded.value, 0);
+  assert.equal(instance.audioLastLevel.value, null);
+});
+
+test("resetSubscriberState: 音声の signal を初期化し再生を無効にする", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("reset-state-audio-1");
+  instance.audioSubscriber.value = new FakeSubscriber();
+  instance.audioDecoder.value = new AudioDecoderWrapper(false, {
+    output: () => {},
+    error: () => {},
+  });
+  instance.audioDecoderConfigured.value = true;
+  instance.audioLastLevel.value = { level: 14, voiceActivity: true };
+  instance.audioPlaybackEnabled.value = true;
+
+  resetSubscriberState(
+    instance,
+    { video: { current: Promise.resolve() }, audio: { current: Promise.resolve() } },
+    () => false,
+  );
+
+  assert.equal(instance.audioSubscriber.value, null);
+  assert.equal(instance.audioDecoder.value, null);
+  assert.equal(instance.audioDecoderConfigured.value, false);
+  assert.equal(instance.audioLastLevel.value, null);
+  assert.equal(instance.audioPlaybackEnabled.value, false);
+});
+
+// 停止後に前のセッションの音声 object 処理が残ると、signal を書き戻したり
+// 閉じた decoder を再生成したりするため、チェーンも巻き戻す
+test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す", () => {
+  resetTestEnvironment();
+  const instance = createSubscriberInstance("reset-state-audio-2");
+  const chainRef = { current: Promise.resolve() };
+  const audioChainRef = { current: Promise.resolve().then(() => {}) };
+  const previousAudioChain = audioChainRef.current;
+
+  resetSubscriberState(instance, { video: chainRef, audio: audioChainRef }, () => false);
+
+  assert.notStrictEqual(audioChainRef.current, previousAudioChain);
 });

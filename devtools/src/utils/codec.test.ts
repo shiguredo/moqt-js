@@ -1,5 +1,12 @@
 import { test, assert } from "vite-plus/test";
-import { getCatalogCodec, getEncoderConfig, isResolution, parseResolution } from "./codec";
+import {
+  getCatalogCodec,
+  getEncoderConfig,
+  isResolution,
+  isSameCodecDescription,
+  parseAudioCodec,
+  parseResolution,
+} from "./codec";
 import type { CodecType } from "../types";
 
 // Catalog の codec 文字列はエンコーダ設定と一致させる。
@@ -111,4 +118,33 @@ test("isResolution accepts exactly the values parseResolution accepts", () => {
   for (const value of ["0x720", "1280x0", "1280", "1280X720", "1280x720px", "", " 1280x720"]) {
     assert.equal(isResolution(value), false);
   }
+});
+
+// 音声トラックの codec 文字列は getAudioEncoderConfig が返す文字列 ("opus" /
+// "mp4a.40.2") になる。取り違えると購読側が誤った codec で Decoder を構成する。
+test("parseAudioCodec: カタログの codec 文字列を解決する", () => {
+  assert.equal(parseAudioCodec("opus"), "opus");
+  assert.equal(parseAudioCodec("mp4a.40.2"), "aac");
+});
+
+// 前方一致で解決するため、同じ系統の codec 文字列 (HE-AAC) も aac として扱う。
+// ライブラリの parseAudioCodec (src/createMediaSubscriber.ts) と同じ挙動
+test("parseAudioCodec: codec 文字列を前方一致で解決する", () => {
+  assert.equal(parseAudioCodec("mp4a.40.5"), "aac");
+});
+
+test("parseAudioCodec: 未対応の codec 文字列で例外を投げる", () => {
+  assert.throws(() => parseAudioCodec("vp8"), /unsupported audio codec/);
+  assert.throws(() => parseAudioCodec(""), /unsupported audio codec/);
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1 の Video Config / Audio Config は
+// 同じ値を毎回送らない。変化したときだけ載せる判断に使う比較関数
+test("isSameCodecDescription: description の同一性を比較する", () => {
+  assert.equal(isSameCodecDescription(undefined, undefined), true);
+  assert.equal(isSameCodecDescription(undefined, new Uint8Array([1])), false);
+  assert.equal(isSameCodecDescription(new Uint8Array([1]), undefined), false);
+  assert.equal(isSameCodecDescription(new Uint8Array([1, 2]), new Uint8Array([1, 2])), true);
+  assert.equal(isSameCodecDescription(new Uint8Array([1, 2]), new Uint8Array([1, 3])), false);
+  assert.equal(isSameCodecDescription(new Uint8Array([1, 2]), new Uint8Array([1, 2, 3])), false);
 });

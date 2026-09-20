@@ -15,6 +15,7 @@ import {
 import {
   FakeSession,
   FakeSubscriber,
+  RecordingAudioDecoderWrapper,
   RecordingDecoderWrapper,
   type FakeCallLog,
 } from "../testSupport/fakes";
@@ -281,6 +282,44 @@ test("removeSubscriber sends catalog unsubscribe", () => {
   assert.equal(catalogSubscriber.state, "closed");
   assert.equal(instance!.catalogSubscriber.value, null);
   assert.deepEqual(calls, ["decoder.close", "catalog.unsubscribe", "session.close"]);
+});
+
+test("removeSubscriber closes the audio decoder and unsubscribes the audio track", () => {
+  // パネル削除時は Map から entry が先に消えるため hook 側の teardownSubscriber は
+  // 早期 return し、実際に走るのはこの経路になる。映像と同じ順序で音声も解放すること
+  resetSubscribers();
+  const id = addSubscriber();
+  const instance = getSubscriber(id);
+  assert.isDefined(instance);
+  const calls: FakeCallLog = [];
+  instance!.decoder.value = new RecordingDecoderWrapper({ label: "decoder.close", calls });
+  instance!.session.value = new FakeSession({ label: "session.close", calls });
+  instance!.catalogSubscriber.value = new FakeSubscriber({ label: "catalog.unsubscribe", calls });
+  const audioSubscriber = new FakeSubscriber({ label: "audio.unsubscribe", calls });
+  instance!.audioSubscriber.value = audioSubscriber;
+  instance!.audioDecoder.value = new RecordingAudioDecoderWrapper({
+    label: "audioDecoder.close",
+    calls,
+  });
+  instance!.audioDecoderConfigured.value = true;
+  instance!.audioPlaybackEnabled.value = true;
+
+  removeSubscriber(id);
+
+  assert.equal(audioSubscriber.state, "closed");
+  assert.equal(instance!.audioSubscriber.value, null);
+  assert.equal(instance!.audioDecoder.value, null);
+  assert.equal(instance!.audioDecoderConfigured.value, false);
+  assert.equal(instance!.audioPlaybackEnabled.value, false);
+  // decoder → audioDecoder → catalog → audio → session の順で送出されること
+  assert.deepEqual(calls, [
+    "decoder.close",
+    "audioDecoder.close",
+    "catalog.unsubscribe",
+    "audio.unsubscribe",
+    "session.close",
+  ]);
+  assert.isUndefined(getSubscriber(id));
 });
 
 test("removeSubscriber swallows catalog unsubscribe failure", async () => {

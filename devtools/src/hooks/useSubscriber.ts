@@ -2,6 +2,7 @@ import {
   connect,
   LOC,
   decodeCatalogMessage,
+  getAudioTracks,
   getVideoTracks,
   resolveInitData,
   CATALOG_TRACK_NAME,
@@ -10,17 +11,42 @@ import {
   type MoqtObject,
   type DebugMessage,
   type CatalogTrack,
+  type Session,
   type Subscriber,
 } from "moqt-js";
 import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
+import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
+import {
+  DEFAULT_AUDIO_SAMPLE_RATE,
+  requiresAudioSpecificConfig,
+  resolveAudioChannelCount,
+} from "../../../src/codec/config.ts";
+import { isSameCodecDescription, parseAudioCodec } from "../utils/codec";
 import { base64ToArrayBuffer } from "../utils/base64";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
 import { useRef, useEffect } from "preact/hooks";
 import type { RefObject } from "preact";
+
+/**
+ * Catalog から購読する音声トラックを取り出す
+ *
+ * 音声トラックを持たない catalog (映像だけを広告する publisher) では `undefined` を
+ * 返す。呼び出し側はこれを見て音声の購読を開始せず、映像だけを継続する。
+ * ブラウザ API に依存しないため、この分岐はここで検証できる。
+ */
+export function resolveAudioTrack(catalog: Catalog): CatalogTrack | undefined {
+  return getAudioTracks(catalog)[0];
+}
+
+/** 受信した音声を再生するための audio graph */
+interface AudioPlayback {
+  context: AudioContext;
+  destination: MediaStreamAudioDestinationNode;
+}
 
 /**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
@@ -71,6 +97,9 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.chunksSkipped.value = 0;
   instance.decodeErrors.value = 0;
   instance.largestLocation.value = null;
+  instance.audioObjectsReceived.value = 0;
+  instance.audioChunksDecoded.value = 0;
+  instance.audioLastLevel.value = null;
 }
 
 /**
@@ -122,8 +151,8 @@ export function resolveNewGroupRequestValue(
 }
 
 /**
- * `SubscriberInstance` が保持する外部リソース (`decoder` / `catalog` 購読 / `session`) を
- * fire-and-forget で解除し、canvas を初期色で塗り潰す。
+ * `SubscriberInstance` が保持する外部リソース (映像と音声の `decoder` / `catalog` 購読 /
+ * 音声トラックの購読 / `session`) を fire-and-forget で解除し、canvas を初期色で塗り潰す。
  *
  * WebTransport が close コールバックを同期 dispatch する実装で teardownSubscriber が
  * 再入する可能性があるため、`session.value = null` を `sessionInstance.close()` より
@@ -140,6 +169,18 @@ export function closeSubscriberResources(
   if (decoderInstance) {
     try {
       decoderInstance.close();
+    } catch {
+      // 既にクローズ済みなら無視
+    }
+  }
+
+  // 音声デコーダも同じく停止する。復号途中の AudioData は decoder 側が捨てる
+  const audioDecoderInstance = instance.audioDecoder.value;
+  instance.audioDecoder.value = null;
+  instance.audioDecoderConfigured.value = false;
+  if (audioDecoderInstance) {
+    try {
+      audioDecoderInstance.close();
     } catch {
       // 既にクローズ済みなら無視
     }
@@ -165,6 +206,15 @@ export function closeSubscriberResources(
     });
   }
 
+  // 音声トラックの購読も catalog 購読と同じ順序で解除する
+  const audioSubscriberInstance = instance.audioSubscriber.value;
+  instance.audioSubscriber.value = null;
+  if (audioSubscriberInstance) {
+    void audioSubscriberInstance.unsubscribe().catch(() => {
+      // 送信失敗時は握り潰す (session.close と同形)
+    });
+  }
+
   // 再入時に sessionInstance が null になっているよう close() より先に立てる。
   const sessionInstance = instance.session.value;
   instance.session.value = null;
@@ -177,7 +227,7 @@ export function closeSubscriberResources(
 
 /**
  * `SubscriberInstance` の状態 signal 群を初期値にリセットし、フックローカル参照
- * (`chainRef`) を巻き戻す。
+ * (映像 / 音声の Promise チェーン) を巻き戻す。
  *
  * `status` / `statusMessage` / `isStopping` は触らない (停止操作の表示は呼び出し側の責務)。
  * `settingsDisabled` は `subscriber.value = null` の反映後に `hasActiveSubscriber`
@@ -185,7 +235,7 @@ export function closeSubscriberResources(
  */
 export function resetSubscriberState(
   instance: sub.SubscriberInstance,
-  chainRef: { current: Promise<void> },
+  chains: { video: { current: Promise<void> }; audio: { current: Promise<void> } },
   isOtherPublisherActive: () => boolean,
 ): void {
   instance.subscriber.value = null;
@@ -196,9 +246,19 @@ export function resetSubscriberState(
   instance.codec.value = "";
   instance.dynamicGroupsSupported.value = false;
 
+  instance.audioSubscriber.value = null;
+  instance.audioDecoder.value = null;
+  instance.audioDecoderConfigured.value = false;
+  instance.audioLastLevel.value = null;
+  // 再生トグルは既定 (無効) に戻す。audio graph は呼び出し側が停止する
+  instance.audioPlaybackEnabled.value = false;
+
   instance.largestLocation.value = null;
 
-  chainRef.current = Promise.resolve();
+  chains.video.current = Promise.resolve();
+  // 音声のチェーンも巻き戻す。停止後に残った処理が新しいセッションの signal を
+  // 汚さないよう、世代の同一性は各ハンドラ側でも確認する
+  chains.audio.current = Promise.resolve();
 
   if (!sub.hasActiveSubscriber.value && !isOtherPublisherActive()) {
     settings.settingsDisabled.value = false;
@@ -231,11 +291,306 @@ export function handleDebugMessage(subscriberId: string, message: DebugMessage):
 export function useSubscriber(
   subscriberId: string,
   canvasRef: RefObject<HTMLCanvasElement | null>,
+  audioRef: RefObject<HTMLAudioElement | null>,
 ) {
   // ライブオブジェクトの順次処理用 Promise チェーン (レンダリング間で安定参照)
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+  // 音声 object の順次処理用 Promise チェーン (映像とは独立させる)
+  const audioChainRef = useRef<Promise<void>>(Promise.resolve());
+  // 受信した音声を再生するための audio graph (トグル有効時のみ非 null)
+  const audioPlaybackRef = useRef<AudioPlayback | null>(null);
+  // 再生開始の進行中フラグ。連打で AudioContext を二重に作らないための再入ガード
+  const audioPlaybackPendingRef = useRef(false);
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  /**
+   * 受信した音声を音声出力デバイスへ流す graph を作る
+   *
+   * `audioContext.destination` には繋がず、`MediaStreamAudioDestinationNode` の
+   * トラックを `<audio>` の `srcObject` に設定する (ライブラリの
+   * createMediaSubscriber と同じ構成)。トグルのクリックがユーザー操作になるため、
+   * 自動再生ポリシー下でも `resume()` と `play()` が通る。
+   */
+  async function startAudioPlayback(): Promise<void> {
+    let playback = audioPlaybackRef.current;
+    if (playback === null) {
+      const context = new AudioContext();
+      playback = { context, destination: context.createMediaStreamDestination() };
+      audioPlaybackRef.current = playback;
+    }
+    if (playback.context.state === "suspended") {
+      await playback.context.resume();
+    }
+    const audioElement = audioRef.current;
+    if (audioElement) {
+      audioElement.srcObject = playback.destination.stream;
+      await audioElement.play();
+    }
+  }
+
+  /** 音声出力を止め、`<audio>` からストリームを外す */
+  function stopAudioPlayback(): void {
+    // 停止したら進行中の再生開始も無効として扱う
+    audioPlaybackPendingRef.current = false;
+    const audioElement = audioRef.current;
+    if (audioElement) {
+      audioElement.pause();
+      audioElement.srcObject = null;
+    }
+    const playback = audioPlaybackRef.current;
+    audioPlaybackRef.current = null;
+    if (playback) {
+      void playback.context.close().catch(() => {
+        // 既に閉じている場合は無視する
+      });
+    }
+  }
+
+  /**
+   * 受信した音声を再生するかどうかを切り替える
+   *
+   * 既定は無効。有効にしたときだけ音声出力デバイスへ繋ぐ。
+   */
+  const toggleAudioPlayback = async (): Promise<void> => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) return;
+
+    if (instance.audioPlaybackEnabled.value) {
+      stopAudioPlayback();
+      instance.audioPlaybackEnabled.value = false;
+      return;
+    }
+
+    // play() の解決前に再度クリックされると AudioContext が二重に作られ、
+    // 先に作った方が参照を失って解放されない
+    if (audioPlaybackPendingRef.current) {
+      return;
+    }
+    audioPlaybackPendingRef.current = true;
+
+    try {
+      await startAudioPlayback();
+      instance.audioPlaybackEnabled.value = true;
+    } catch (error) {
+      console.error(`[${subscriberId}] failed to start audio playback:`, error);
+      stopAudioPlayback();
+      instance.audioPlaybackEnabled.value = false;
+    } finally {
+      audioPlaybackPendingRef.current = false;
+    }
+  };
+
+  /**
+   * 音声トラックを購読して復号する
+   *
+   * catalog の `samplerate` / `channelConfig` から decoder を構成する。受信 object の
+   * LOC properties は Track Property と Object Property の両方から解決し、
+   * AUDIO_LEVEL を signal へ、AUDIO_CONFIG (AAC) を decoder の description へ渡す。
+   */
+  async function startAudioSubscription(
+    session: Session,
+    namespaceArray: string[],
+    audioTrack: CatalogTrack,
+    instance: sub.SubscriberInstance,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!audioTrack.codec) {
+      throw new Error("audio track codec is not specified in catalog");
+    }
+    const audioCodec = parseAudioCodec(audioTrack.codec);
+    const sampleRate = audioTrack.samplerate ?? DEFAULT_AUDIO_SAMPLE_RATE;
+    // channelConfig は名前付き値 (mono / stereo) と整数文字列を受け付ける。
+    // 解決不能な明示値はここで throw し、NaN をデコーダに渡さない
+    const channels = resolveAudioChannelCount(audioTrack.channelConfig);
+    const useWorker = settings.useDedicatedWorker.value;
+
+    const audioDecoderInstance = new AudioDecoderWrapper(useWorker, {
+      output: (data) => {
+        handleAudioDecoded(data.data);
+      },
+      error: (error) => {
+        console.error(`[${subscriberId}] Audio decoder error:`, error);
+        instance.decodeErrors.value += 1;
+      },
+    });
+    try {
+      await audioDecoderInstance.configure(audioCodec, sampleRate, channels);
+    } catch (error) {
+      // configure に失敗した場合は Worker を作った後でも残さない
+      audioDecoderInstance.close();
+      throw error;
+    }
+
+    // configure await 中に中断された場合、ローカル参照は instance に未代入のため
+    // 中断元から見えない。ここで閉じないと停止済み instance に代入されてリークする
+    if (
+      checkAborted(signal, () => {
+        audioDecoderInstance.close();
+      })
+    ) {
+      return;
+    }
+
+    instance.audioDecoder.value = audioDecoderInstance;
+    instance.audioDecoderConfigured.value = true;
+
+    // 直前に decoder へ渡した Audio Config。AAC のときだけ使う
+    let appliedAudioConfig: Uint8Array | undefined;
+
+    const handleAudioObject = async (obj: MoqtObject): Promise<void> => {
+      // 停止・削除・再購読のあとに残ったハンドラが古い instance や閉じた decoder を
+      // 触らないよう、毎回取り直して世代の同一性を確認する
+      const current = sub.getSubscriber(subscriberId);
+      if (!current || current.audioDecoder.value !== audioDecoderInstance) {
+        return;
+      }
+
+      current.audioObjectsReceived.value += 1;
+
+      try {
+        // draft-ietf-moq-loc-04 §2.3 は LOC Public Properties を Object Properties として
+        // 運ぶと定めるため、AUDIO_LEVEL は object 単位でしか届かない。載っていない
+        // object では null に戻す (前の object の値を持ち越さない)
+        const locProperties = LOC.resolveAudioProperties(
+          current.audioSubscriber.value?.trackProperties,
+          obj.properties,
+        );
+        current.audioLastLevel.value = locProperties.audioLevel ?? null;
+
+        // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) が定める Audio Config は
+        // AudioDecoderConfig の description に対応する。値が変わったときだけ
+        // WebCodecs の configure をやり直す (同じ値を渡し続けない)
+        if (
+          requiresAudioSpecificConfig(audioCodec) &&
+          locProperties.config !== undefined &&
+          !isSameCodecDescription(appliedAudioConfig, locProperties.config)
+        ) {
+          const description = new Uint8Array(locProperties.config);
+          try {
+            await audioDecoderInstance.configure(audioCodec, sampleRate, channels, description);
+            appliedAudioConfig = description;
+          } catch (error) {
+            // 適用できなかった config は「適用済み」にしない。同じ config を持つ
+            // 後続 object で再試行できるようにする
+            console.error(`[${subscriberId}] failed to reconfigure audio decoder:`, error);
+            current.decodeErrors.value += 1;
+            return;
+          }
+        }
+
+        if (!current.audioDecoderConfigured.value) {
+          return;
+        }
+
+        // TIMESTAMP は TIMESCALE の有無に応じてマイクロ秒へ換算する
+        // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+        const timestamp =
+          locProperties.timestamp === undefined
+            ? 0
+            : Number(LOC.toDecoderMicroseconds(locProperties.timestamp, locProperties.timescale));
+
+        audioDecoderInstance.decode(obj.payload, "key", timestamp, 0);
+        current.audioChunksDecoded.value += 1;
+      } catch (error) {
+        // LOC properties の復号失敗など、この object だけの問題は次で回復し得るため
+        // decoder は構成済みのままにする
+        console.error(`[${subscriberId}] failed to decode audio object:`, error);
+        current.decodeErrors.value += 1;
+      }
+    };
+
+    const audioSubscriberInstance = await session.subscribe(
+      namespaceArray,
+      audioTrack.name,
+      {
+        object: (obj: MoqtObject) => {
+          // 到着順にデコードする。映像とは独立したチェーンにすることで、
+          // 映像のデコード待ちが音声の到着を遅らせないようにする
+          audioChainRef.current = audioChainRef.current
+            .then(() => handleAudioObject(obj))
+            .catch((error: unknown) => {
+              // handleAudioObject は内部で握るため、ここへ来るのは想定外の失敗だけ
+              console.error(`[${subscriberId}] audio object chain failed:`, error);
+            });
+        },
+        end: () => {
+          addLog("info", `[${subscriberId}] audio stream ended`);
+        },
+        error: (error) => {
+          addLog("error", `[${subscriberId}] audio subscribe error`, {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
+      },
+      {
+        // draft-ietf-moq-transport-21 §9.20.7 (RENDEZVOUS TIMEOUT):
+        // 映像と同じく、publisher が現れるまで relay に購読を保持させる
+        rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+      },
+    );
+
+    // subscribe の await 中に停止された場合、ローカル参照は instance に未代入のため
+    // 中断元から見えない。ここで unsubscribe して購読を残さない
+    if (
+      checkAborted(signal, () => {
+        void audioSubscriberInstance.unsubscribe().catch(() => {});
+      })
+    ) {
+      return;
+    }
+
+    instance.audioSubscriber.value = audioSubscriberInstance;
+    addLog("info", `[${subscriberId}] subscribed audio track`, {
+      trackName: audioTrack.name,
+      codec: audioTrack.codec,
+      sampleRate,
+      channels,
+    });
+  }
+
+  /**
+   * 復号した AudioData を再生する
+   *
+   * 所有者はこの decode ハンドラであり、読み出しを終えた後に 1 回だけ `close()` する。
+   * 可視化が同じ出力を読む場合も `close()` の前に済ませる。
+   */
+  function handleAudioDecoded(audioData: AudioData): void {
+    const instance = sub.getSubscriber(subscriberId);
+    if (!instance) {
+      audioData.close();
+      return;
+    }
+
+    try {
+      const playback = audioPlaybackRef.current;
+      if (!instance.audioPlaybackEnabled.value || playback === null) {
+        return;
+      }
+
+      const numberOfChannels = audioData.numberOfChannels;
+      const numberOfFrames = audioData.numberOfFrames;
+      const audioBuffer = playback.context.createBuffer(
+        numberOfChannels,
+        numberOfFrames,
+        audioData.sampleRate,
+      );
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const channelData = new Float32Array(numberOfFrames);
+        audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
+        audioBuffer.copyToChannel(channelData, channel);
+      }
+
+      const source = playback.context.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(playback.destination);
+      source.start();
+    } catch (error) {
+      console.error(`[${subscriberId}] failed to play audio data:`, error);
+    } finally {
+      audioData.close();
+    }
+  }
 
   const renderFrame = (frame: VideoFrame): void => {
     const instance = sub.getSubscriber(subscriberId);
@@ -730,6 +1085,41 @@ export function useSubscriber(
       instance.status.value = "connected";
       instance.statusMessage.value = `購読中: ${namespaceArray.join("/")}/${actualTrackName}`;
       instance.largestLocation.value = largestLocation ?? null;
+
+      // 音声トラックを購読する
+      //
+      // catalog に音声トラックが無い publisher (映像だけを広告する実装) では
+      // 音声の購読を開始せず、警告を出して映像だけを継続する。音声側の準備に
+      // 失敗した場合も映像の視聴は妨げない (相互運用の実測では映像だけでも意味がある)
+      const audioTrackFromCatalog = resolveAudioTrack(catalogValue);
+      if (audioTrackFromCatalog === undefined) {
+        addLog("warn", `[${subscriberId}] no audio track in catalog, continuing with video only`);
+        return;
+      }
+
+      try {
+        instance.statusMessage.value = "音声 Decoder を準備中...";
+        await startAudioSubscription(
+          session,
+          namespaceArray,
+          audioTrackFromCatalog,
+          instance,
+          signal,
+        );
+        // startAudioSubscription 内の checkAborted は関数内で return するだけなので、
+        // 中断後もここへ来る。teardownSubscriber が確定させた表示を上書きしない
+        if (signal.aborted) return;
+        instance.statusMessage.value = `購読中: ${namespaceArray.join("/")}/${actualTrackName}`;
+      } catch (error) {
+        // 中断時は teardownSubscriber が status / statusMessage を確定済み。
+        // 映像経路と同じく上書きしない
+        if (signal.aborted) return;
+        addLog("error", `[${subscriberId}] failed to start audio subscription`, {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        // 中間メッセージを残さず、映像の購読状態の表示に戻す
+        instance.statusMessage.value = `購読中: ${namespaceArray.join("/")}/${actualTrackName}`;
+      }
     } catch (error) {
       // 中断時は teardownSubscriber が status / statusMessage / settingsDisabled を確定済み。
       // 通常エラーの上書きを避けるため、catch 句先頭で abort を判定して早期 return する。
@@ -773,6 +1163,10 @@ export function useSubscriber(
   // close 系 (closeSubscriberResources) と signal リセット系 (resetSubscriberState) を
   // 順に呼ぶ orchestrator。SubscriberInstance を Map から削除しない (= 同じ id で再 setup 可能)。
   const teardownSubscriber = (): void => {
+    // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
+    // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
+    stopAudioPlayback();
+
     const instance = sub.getSubscriber(subscriberId);
     if (!instance) return;
 
@@ -781,7 +1175,11 @@ export function useSubscriber(
     abortControllerRef.current = null;
 
     closeSubscriberResources(instance, canvasRef.current);
-    resetSubscriberState(instance, chainRef, () => pub.pubSession.value !== null);
+    resetSubscriberState(
+      instance,
+      { video: chainRef, audio: audioChainRef },
+      () => pub.pubSession.value !== null,
+    );
   };
 
   const requestKeyframe = async (): Promise<void> => {
@@ -830,5 +1228,6 @@ export function useSubscriber(
     startSubscribing,
     stopSubscribing,
     requestKeyframe,
+    toggleAudioPlayback,
   };
 }

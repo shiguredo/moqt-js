@@ -2,6 +2,7 @@ import { signal } from "@preact/signals";
 import type { Session, Publisher, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
+import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 
 // Publisher の状態
 export const pubSession = signal<Session | null>(null);
@@ -48,3 +49,23 @@ export const frameReader = signal<ReadableStreamDefaultReader<VideoFrame> | null
 export const videoStreamCleanup = signal<(() => void) | null>(null);
 export const keyframeInterval = signal(3600);
 export const pubCurrentObjectId = signal(0);
+
+// 音声トラックの状態
+//
+// 映像とは別の session.publish を持ち、Group 採番と優先度も独立させる
+// (src/createMediaPublisher.ts の audioPublisher / videoPublisher と同じ構成)。
+export const audioPublisher = signal<Publisher | null>(null);
+export const audioEncoder = signal<AudioEncoderWrapper | null>(null);
+export const audioStream = signal<MediaStream | null>(null);
+export const audioStreamCleanup = signal<(() => void) | null>(null);
+export const audioFrameReader = signal<ReadableStreamDefaultReader<AudioData> | null>(null);
+
+// 音声の Group ID。draft-ietf-moq-loc-04 §4.1 に従い chunk ごとに Group を進める
+export const pubCurrentAudioGroup = signal(Date.now());
+// 最初の音声 Object を送ったかどうか。初回は割当済みの Group ID をそのまま使う
+export const pubAudioGroupStarted = signal(false);
+// 直前に送った Audio Config (AAC の AudioSpecificConfig)。同じ値を毎 Object 送らない
+export const lastSentAudioConfig = signal<Uint8Array | null>(null);
+// Audio Config の送り直し要求。後から接続した購読者のために、保持している値を
+// 次の Object に載せ直す (WebCodecs は description を最初の chunk にしか付けない)
+export const audioConfigResendRequested = signal(false);

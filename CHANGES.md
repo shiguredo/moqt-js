@@ -11,6 +11,10 @@
 
 ## develop
 
+- [ADD] devtools にダミー音声の配信と購読を追加する
+  - マイク無しで音声を含む相互運用を確認できるよう、devtools の publisher に `audioSource: "dummy"` (440 Hz のトーン) を足す。catalog には draft-ietf-moq-msf-01 §5.2.6 の `role: "audio"` と、§5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 が要求する `codec` / `bitrate` / `samplerate` / `channelConfig` を載せ、Group 採番と優先度は映像と独立させ、draft-ietf-moq-loc-04 §2.3.3.2 の Audio Level も載せる
+  - devtools の subscriber は catalog の音声トラックを購読して復号し、`window.moqtDevTools` の `audioObjectsReceived` / `audioChunksDecoded` で到達を確認できるようにする。既定では音声出力デバイスへ再生せず、UI のトグルを有効にしたときだけ再生する
+  - @voluntas
 - [ADD] devtools の購読に RENDEZVOUS_TIMEOUT を設定する
   - draft-ietf-moq-transport-21 §9.20.7 の RENDEZVOUS_TIMEOUT は、publisher が存在しない Track への SUBSCRIBE をリレーに保持させる。devtools は Catalog 購読と映像トラック購読でこの値を送っておらず、publisher が後から接続する順序で視聴を開始できなかった
   - `SubscribeOptions.rendezvousTimeout` はライブラリに実装済みのため、devtools の Catalog 購読と映像トラック購読に `catalogSubscriptionTimeout` と同じ値をミリ秒から bigint に変換して渡す。`0` は「待たない」の意味を保つためそのまま渡す

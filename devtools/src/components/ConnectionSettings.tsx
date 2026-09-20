@@ -227,6 +227,9 @@ function HttpVersionBadge() {
   );
 }
 
+// チャンネル数の表示名。許可リストに値を足したときはここにも足す
+const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
+
 export function ConnectionSettings() {
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
@@ -521,6 +524,118 @@ export function ConnectionSettings() {
               <option value="2700">90 sec</option>
               <option value="3600">120 sec</option>
               <option value="7200">240 sec</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Audio Settings */}
+      <div class="mt-4 pt-4 border-t border-slate-200">
+        <h3 class="text-sm font-medium text-slate-600 mb-3">Audio Settings</h3>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div>
+            <label for="audioSource" class="block text-xs text-slate-500 mb-1">
+              Audio Source
+            </label>
+            <select
+              id="audioSource"
+              data-testid="audio-source"
+              value={settings.audioSource.value}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                if (settings.isAudioSourceType(value)) {
+                  settings.audioSource.value = value;
+                }
+              }}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              {settings.AUDIO_SOURCES.map((value) => (
+                <option key={value} value={value}>
+                  {value === "none" ? "None" : "Dummy (440 Hz tone)"}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label for="audioCodec" class="block text-xs text-slate-500 mb-1">
+              Audio Codec
+            </label>
+            <select
+              id="audioCodec"
+              data-testid="audio-codec"
+              value={settings.audioCodec.value}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                if (settings.isAudioCodecType(value)) {
+                  settings.audioCodec.value = value;
+                }
+              }}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              {settings.AUDIO_CODECS.map((value) => (
+                <option key={value} value={value}>
+                  {value === "opus" ? "Opus" : "AAC"}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label for="audioBitrate" class="block text-xs text-slate-500 mb-1">
+              Audio Bitrate
+            </label>
+            <select
+              id="audioBitrate"
+              data-testid="audio-bitrate"
+              value={settings.audioBitrate.value}
+              onChange={(e) => (settings.audioBitrate.value = Number(e.currentTarget.value))}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              {settings.AUDIO_BITRATES.map((value) => (
+                <option key={value} value={value}>
+                  {value / 1000} Kbps
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label for="audioSampleRate" class="block text-xs text-slate-500 mb-1">
+              Sample Rate
+            </label>
+            <select
+              id="audioSampleRate"
+              data-testid="audio-sample-rate"
+              value={settings.audioSampleRate.value}
+              onChange={(e) => (settings.audioSampleRate.value = Number(e.currentTarget.value))}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              {settings.AUDIO_SAMPLE_RATES.map((value) => (
+                <option key={value} value={value}>
+                  {value} Hz
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label for="audioChannels" class="block text-xs text-slate-500 mb-1">
+              Channels
+            </label>
+            <select
+              id="audioChannels"
+              data-testid="audio-channels"
+              value={settings.audioChannels.value}
+              onChange={(e) => (settings.audioChannels.value = Number(e.currentTarget.value))}
+              disabled={settings.settingsDisabled.value}
+              class="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              {settings.AUDIO_CHANNELS.map((value) => (
+                <option key={value} value={value}>
+                  {AUDIO_CHANNEL_LABELS[value] ?? String(value)}
+                </option>
+              ))}
             </select>
           </div>
         </div>
