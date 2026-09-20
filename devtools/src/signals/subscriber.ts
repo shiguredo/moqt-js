@@ -65,6 +65,11 @@ export interface SubscriberInstance {
   audioChunksDecoded: Signal<number>;
   // 受信した音声を音声出力デバイスで再生するか。既定は無効
   audioPlaybackEnabled: Signal<boolean>;
+  // 復号した音声のレベル (dBFS)。まだ復号していない状態は null
+  audioPeakDbfs: Signal<number | null>;
+  audioRmsDbfs: Signal<number | null>;
+  // 直近 100 ms の波形 (第 1 チャンネル)。まだ復号していない状態は null
+  audioWaveform: Signal<Float32Array | null>;
 }
 
 /**
@@ -105,6 +110,9 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     audioObjectsReceived: signal(0),
     audioChunksDecoded: signal(0),
     audioPlaybackEnabled: signal(false),
+    audioPeakDbfs: signal<number | null>(null),
+    audioRmsDbfs: signal<number | null>(null),
+    audioWaveform: signal<Float32Array | null>(null),
   };
 }
 

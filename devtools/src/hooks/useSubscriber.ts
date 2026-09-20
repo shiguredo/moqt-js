@@ -24,6 +24,12 @@ import {
   resolveAudioChannelCount,
 } from "../../../src/codec/config.ts";
 import { isSameCodecDescription, parseAudioCodec } from "../utils/codec";
+import {
+  appendWaveform,
+  readAudioSamples,
+  summarizeAudioLevel,
+  waveformSampleCount,
+} from "../utils/audioLevel";
 import { base64ToArrayBuffer } from "../utils/base64";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
@@ -100,6 +106,9 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
   instance.audioObjectsReceived.value = 0;
   instance.audioChunksDecoded.value = 0;
   instance.audioLastLevel.value = null;
+  instance.audioPeakDbfs.value = null;
+  instance.audioRmsDbfs.value = null;
+  instance.audioWaveform.value = null;
 }
 
 /**
@@ -250,6 +259,9 @@ export function resetSubscriberState(
   instance.audioDecoder.value = null;
   instance.audioDecoderConfigured.value = false;
   instance.audioLastLevel.value = null;
+  instance.audioPeakDbfs.value = null;
+  instance.audioRmsDbfs.value = null;
+  instance.audioWaveform.value = null;
   // 再生トグルは既定 (無効) に戻す。audio graph は呼び出し側が停止する
   instance.audioPlaybackEnabled.value = false;
 
@@ -405,9 +417,10 @@ export function useSubscriber(
     const channels = resolveAudioChannelCount(audioTrack.channelConfig);
     const useWorker = settings.useDedicatedWorker.value;
 
-    const audioDecoderInstance = new AudioDecoderWrapper(useWorker, {
+    // output はコンストラクタから同期で呼ばれないため、自身を参照しても TDZ にならない
+    const audioDecoderInstance: AudioDecoderWrapper = new AudioDecoderWrapper(useWorker, {
       output: (data) => {
-        handleAudioDecoded(data.data);
+        handleAudioDecoded(data.data, audioDecoderInstance);
       },
       error: (error) => {
         console.error(`[${subscriberId}] Audio decoder error:`, error);
@@ -439,10 +452,8 @@ export function useSubscriber(
     let appliedAudioConfig: Uint8Array | undefined;
 
     const handleAudioObject = async (obj: MoqtObject): Promise<void> => {
-      // 停止・削除・再購読のあとに残ったハンドラが古い instance や閉じた decoder を
-      // 触らないよう、毎回取り直して世代の同一性を確認する
-      const current = sub.getSubscriber(subscriberId);
-      if (!current || current.audioDecoder.value !== audioDecoderInstance) {
+      const current = getCurrentAudioSubscriber(audioDecoderInstance);
+      if (current === null) {
         return;
       }
 
@@ -550,16 +561,52 @@ export function useSubscriber(
   }
 
   /**
-   * 復号した AudioData を再生する
+   * 対象の音声 decoder が現在の購読のものかを確認し、現在のインスタンスを返す
+   *
+   * 停止・削除・再購読のあとに残ったハンドラが、古いインスタンスの signal を
+   * 書き換えたり閉じた decoder を触ったりしないようにするための世代判定。
+   */
+  function getCurrentAudioSubscriber(
+    audioDecoderInstance: AudioDecoderWrapper,
+  ): sub.SubscriberInstance | null {
+    const current = sub.getSubscriber(subscriberId);
+    if (!current || current.audioDecoder.value !== audioDecoderInstance) {
+      return null;
+    }
+    return current;
+  }
+
+  /**
+   * 復号した AudioData を可視化し、必要なら再生する
    *
    * 所有者はこの decode ハンドラであり、読み出しを終えた後に 1 回だけ `close()` する。
-   * 可視化が同じ出力を読む場合も `close()` の前に済ませる。
+   * 可視化の読み出しも `close()` の前に済ませる。
    */
-  function handleAudioDecoded(audioData: AudioData): void {
-    const instance = sub.getSubscriber(subscriberId);
-    if (!instance) {
+  function handleAudioDecoded(
+    audioData: AudioData,
+    audioDecoderInstance: AudioDecoderWrapper,
+  ): void {
+    const instance = getCurrentAudioSubscriber(audioDecoderInstance);
+    if (instance === null) {
       audioData.close();
       return;
+    }
+
+    try {
+      // 可視化用の読み出しは close() の前に済ませる (所有者はこのハンドラ)。
+      // 再生の有無に関わらずレベルと波形を更新する
+      const samples = readAudioSamples(audioData);
+      const level = summarizeAudioLevel(samples);
+      instance.audioPeakDbfs.value = level.peakDbfs;
+      instance.audioRmsDbfs.value = level.rmsDbfs;
+      instance.audioWaveform.value = appendWaveform(
+        instance.audioWaveform.value,
+        samples,
+        waveformSampleCount(audioData.sampleRate),
+      );
+    } catch (error) {
+      // 計測に失敗しても再生は試みる (原因の切り分けができるよう別のメッセージにする)
+      console.error(`[${subscriberId}] failed to measure decoded audio data:`, error);
     }
 
     try {

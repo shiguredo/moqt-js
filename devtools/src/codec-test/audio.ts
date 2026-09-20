@@ -24,9 +24,12 @@ import {
   waitForCondition,
   waitForQuiet,
 } from "./support.ts";
+import { readAudioSamples, summarizeAudioLevel } from "../utils/audioLevel.ts";
+import { createToneSamples } from "../webcodecs-devtools/utils/dummyAudio.ts";
 import type {
   AudioDecoderTestResult,
   AudioEncoderTestResult,
+  AudioSamplesTestResult,
   DecoderOperationResult,
   ObservedAudioData,
   ObservedEncodedChunk,
@@ -285,4 +288,76 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     decodeAfterClose,
     errorMessages,
   };
+}
+
+/**
+ * 復号済み AudioData から devtools がサンプル列を読み出せることを確認する
+ *
+ * devtools の可視化は復号結果を直接読んで peak / RMS を求める。`AudioData` は
+ * ブラウザ専用 API であり Node の vitest では生成できないため、実ブラウザで
+ * 読み出したサンプル数と値域を固定する。
+ */
+export async function runAudioSamplesTest(): Promise<AudioSamplesTestResult> {
+  // ダミー音声と同じトーン (440 Hz、振幅 0.2〜0.3) を使い、値域まで確認できるようにする
+  // createToneSamples の戻り値の型は ArrayBufferLike 裏付けの Float32Array であり、
+  // AudioDataInit が要求する BufferSource にそのままは渡せないため複製する
+  const tone = createToneSamples(AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, AUDIO_CHUNK_FRAMES);
+  const samples = new Float32Array(tone.length);
+  samples.set(tone);
+  // 第 1 チャンネルだけを読む契約を検証できるよう、第 2 チャンネルは無音にする。
+  // 全チャンネルが同じ値だと、別のチャンネルを読む実装でも結果が一致してしまう
+  for (let frame = 0; frame < AUDIO_CHUNK_FRAMES; frame++) {
+    samples[AUDIO_CHUNK_FRAMES + frame] = 0;
+  }
+  const audioData = new AudioData({
+    format: "f32-planar",
+    sampleRate: AUDIO_SAMPLE_RATE,
+    numberOfFrames: AUDIO_CHUNK_FRAMES,
+    numberOfChannels: AUDIO_CHANNELS,
+    timestamp: 0,
+    data: samples,
+  });
+
+  try {
+    const read = readAudioSamples(audioData);
+    const level = summarizeAudioLevel(read);
+    // 防御的な初期化 (現在の入力は常に正負の値を含むため、0 始まりでも結果は同じ)
+    let minSample = Number.POSITIVE_INFINITY;
+    let maxSample = Number.NEGATIVE_INFINITY;
+    for (const value of read) {
+      if (value < minSample) {
+        minSample = value;
+      }
+      if (value > maxSample) {
+        maxSample = value;
+      }
+    }
+    // 第 2 チャンネルは無音にしてあるため、読み出しが第 1 チャンネルに限定されて
+    // いれば 0 になる
+    const secondChannel = new Float32Array(AUDIO_CHUNK_FRAMES);
+    audioData.copyTo(secondChannel, { planeIndex: 1, format: "f32-planar" });
+    let secondChannelPeak = 0;
+    for (const value of secondChannel) {
+      const magnitude = Math.abs(value);
+      if (magnitude > secondChannelPeak) {
+        secondChannelPeak = magnitude;
+      }
+    }
+
+    return {
+      test: "audioSamples",
+      sampleRate: audioData.sampleRate,
+      numberOfChannels: audioData.numberOfChannels,
+      numberOfFrames: audioData.numberOfFrames,
+      sampleCount: read.length,
+      peakDbfs: level.peakDbfs,
+      rmsDbfs: level.rmsDbfs,
+      minSample,
+      maxSample,
+      secondChannelPeak,
+    };
+  } finally {
+    // 読み出し後に閉じるのは呼び出し側の責務 (readAudioSamples は閉じない)
+    audioData.close();
+  }
 }

@@ -246,6 +246,29 @@ export interface VideoEncoderReconfigureTestResult {
   errorMessages: string[];
 }
 
+/**
+ * 復号済み AudioData からのサンプル読み出し結果
+ *
+ * devtools の可視化は復号済み AudioData を直接読むため、実ブラウザで
+ * サンプル列が読み出せることを確認する (AudioData は Node では生成できない)。
+ */
+export interface AudioSamplesTestResult {
+  test: string;
+  sampleRate: number;
+  numberOfChannels: number;
+  numberOfFrames: number;
+  // readAudioSamples が読み出したサンプル数
+  sampleCount: number;
+  // peak / RMS を dBFS にしたもの (振幅 1.0 が 0 dBFS)
+  peakDbfs: number;
+  rmsDbfs: number;
+  // 読み出したサンプルの最小値と最大値
+  minSample: number;
+  maxSample: number;
+  // 第 2 チャンネル (無音) の最大絶対値。第 1 チャンネルだけを読んでいることの確認用
+  secondChannelPeak: number;
+}
+
 export interface CodecTestResultMap {
   videoEncoderDirect: VideoEncoderTestResult;
   videoEncoderWorker: VideoEncoderTestResult;
@@ -255,6 +278,7 @@ export interface CodecTestResultMap {
   audioEncoderWorker: AudioEncoderTestResult;
   audioDecoderDirect: AudioDecoderTestResult;
   audioDecoderWorker: AudioDecoderTestResult;
+  audioSamples: AudioSamplesTestResult;
   videoEncoderReconfigureDirect: VideoEncoderReconfigureTestResult;
   videoEncoderReconfigureWorker: VideoEncoderReconfigureTestResult;
 }
