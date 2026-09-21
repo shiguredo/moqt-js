@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-c4m-token-type
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-21
 
 ## 目的
 
