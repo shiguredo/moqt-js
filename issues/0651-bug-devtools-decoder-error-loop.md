@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-decoder-error-loop
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-21
 
 ## 目的
 
@@ -27,10 +27,10 @@ devtools の購読側は Catalog が広告する codec をそのまま `VideoDec
 - 利用者への表示は既存の経路を使う。`configure` の reject は `startSubscribing` の外側の catch が受けて status を error にし、statusMessage を `失敗: ...` にするため、新しい表示経路は作らない
 - 復帰の上限を入れる。同じ config でエラー後に再初期化するのは、復号フレームを 1 枚も出力しないまま連続 3 回までとし、復号フレームを 1 枚でも出力したら回数を 0 に戻す。予算は再初期化の試行で消費し、`configure` が reject した場合も 1 回分消費する (試行の数であって成功の数ではない)。一時的な decode エラーからの復帰は 1 回で足り、恒久エラーでは実測で毎秒 300 回前後再生成されるため 3 回で十分に止まる
 - 回数の管理は `DecoderResetBudget` という純粋クラスとして `devtools/src/utils/DecoderWrapper.ts` から export する (`ConfigureGenerationTracker` と同じ「純粋なロジック + Node テスト、ブラウザ配線は e2e とレビュー」の方針)。`devtools/src/utils/DecoderWrapper.test.ts` で上限・復帰・0 未満防止を固定する
-- 予算を 0 に戻すのは、`configure` が `lastConfig` と異なる config を受け取ったときだけとする。`reset()` は同じ `lastConfig` を渡して `configure` に再入するため、この再入で戻すと上限が無効になりループが止まらない
+- 予算を 0 に戻す条件は 2 つだけとする。`configure` が `lastConfig` と参照が異なる (`!==`) config を受け取ったとき (判定は `lastConfig` への代入より前に行う) と、復号フレームを出力したときである。`reset()` は同じ `lastConfig` を渡して `configure` に再入するため、この再入で戻すと上限が無効になりループが止まらない
 - `reset()` は再初期化したかどうかを `Promise<boolean>` で返し、例外を投げない (`configure` の reject も false として扱う)。上限に達したときと `lastConfig` が無いときは false を返し、Worker もデコーダーも作り直さない
 - error コールバックは同期のため、`reset()` の結果は async IIFE で `await` して見る。false なら status を error にし、statusMessage に理由を出して teardown する (既存の `startSubscribing` の外側の catch と同じ終状態)。停止後に上書きしないよう `signal.aborted` を確認する。`useSubscriber` の `void decoderInstance.reset()` は上限判定の結果を受け取る必要があるため、結果を見る経路へ変える
-- Worker 側で `configure` の非同期 error を待ってから `configured` を返す設計は採らない。WebCodecs に configure 成功の非同期通知は無く、成否は error コールバックでしか分からないため待てない。同期 throw だけを error 応答に変換し、`configured` より前に error を受け取ったら `configure` の Promise を reject する (未解決のまま残さない)。Worker のメッセージ種別 (`configured` / `decoded` / `skipped` / `error`) は変えない
+- Worker 側で `configure` の非同期 error を待ってから `configured` を返す設計は採らない。WebCodecs に configure 成功の非同期通知は無く、成否は error コールバックでしか分からないため待てない。同期 throw だけを error 応答に変換し、`configured` より前に error を受け取ったら Worker を破棄 (`teardown()`) してから `configure` の Promise を reject する (未解決のまま残さず、`startSubscribing` が wrapper を `instance.decoder` に代入する前に失敗するため後始末は wrapper 側で行う)。Worker のメッセージ種別 (`configured` / `decoded` / `skipped` / `error`) は変えない
 - 対象外は音声デコーダー (error で reset を呼ばない)、`devtools/src/webcodecs-devtools/signals.ts` の経路 (`isConfigSupported` で事前確認済み)、ライブラリ側 (`src/codec/VideoDecoder.ts` の `reset()` と `src/createMediaSubscriber.ts` の同型ループ) とする。ライブラリ側は別 issue で扱う。`decoder.worker.ts` は購読側と共有するため init の変更は `signals.ts` にも届くが、`signals.ts` は error 応答で `decoderError` / `decoderStatus` を更新する経路を既に持つため表示は改善し、後退しない
 
 ## 完了条件
@@ -41,9 +41,9 @@ devtools の購読側は Catalog が広告する codec をそのまま `VideoDec
 - `reset()` は再初期化の有無を `Promise<boolean>` で返し、例外を投げない。上限到達後と `lastConfig` が無いときは false を返し、Worker もデコーダーも作り直さない
 - 予算は `reset()` の再入では戻らず、`lastConfig` と異なる config の `configure` と復号フレームの出力でのみ戻る (これが無いと上限が機能しない)
 - 一時的な decode エラーからの復帰 (再初期化 1 回で復号が再開する場合) の挙動が変わらない
-- Worker の init で `configure` の同期 throw が error 応答になり、`configured` より前に error を受け取った `configure` の Promise が reject する (未解決のまま残らない)。同じ Worker を使う `signals.ts` の表示が後退しない
+- Worker の init で `configure` の同期 throw が error 応答になり、`configured` より前に error を受け取った `configure` の Promise が Worker の破棄後に reject する (未解決のまま残らず、Worker も残らない)。同じ Worker を使う `signals.ts` の表示が後退しない
 - 上限と復帰のカウンタの挙動が `devtools/src/utils/DecoderWrapper.test.ts` で固定される
-- 実ブラウザの挙動が `devtools/src/codec-test/` に足すケースと `tests/e2e/codec-wrappers.spec.ts` で固定される。新ケースは `devtools/src/utils/DecoderWrapper.ts` を import し、既存の videoDecoder 系 (ライブラリ側 `src/codec/VideoDecoder.ts` を import するケース) は流用しない。前提として `VideoDecoder.isConfigSupported` が false を返す codec 文字列 (`vp09.99.99.99`) を使い、テスト内で非対応であることを確認してから駆動する。再生成回数の計測は不要で、`configure` の reject・`state` が `unconfigured` のままであること (判定が生成より前にあるため、どちらのモードでも Worker も `VideoDecoder` も存在しない)・`reset()` が上限で false を返すことを pin する。`isConfigSupported` が throw する分岐は `codec: ""` で固定する
+- 実ブラウザの挙動が `devtools/src/codec-test/` に足すケースと `tests/e2e/codec-wrappers.spec.ts` で固定される。新ケースは `devtools/src/utils/DecoderWrapper.ts` を import し、既存の videoDecoder 系 (ライブラリ側 `src/codec/VideoDecoder.ts` を import するケース) は流用しない。前提として `VideoDecoder.isConfigSupported` が false を返す codec 文字列 (`vp09.99.99.99`) を使い、テスト内で非対応であることを確認してから駆動する。再生成回数の計測は不要で、`configure` の reject・`state` が `unconfigured` のままであること (判定が生成より前にあるため、どちらのモードでも Worker も `VideoDecoder` も存在しない)・`reset()` が上限で false を返すことを pin する。`isConfigSupported` が throw する分岐は `codec: ""` で固定する。あわせて `devtools/src/codec-test/types.ts` の「デコーダー Wrapper は state ゲッターを持たない」という陳腐化したコメントを実態に合わせる
 - `npx vp check` / `npx vp test --run` / `npx vp run e2e-test` が通る
 
 ## 参照
