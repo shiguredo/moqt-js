@@ -3,7 +3,7 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-subscribe-tracks-fill-filter-limit
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-09-21
 
 ## 目的
 
@@ -21,14 +21,14 @@ draft-ietf-moq-transport-21 §9.1.6 は MAX_FILTER_RANGES の既定を 0 とし�
 
 - `namespacesSubscribeTracks` の `validateRangeFilterLimits` に `options.fill.rangeFilters` も合算して渡す。SUBSCRIBE 経路 (`requestsSubscribe`) と同じ形に揃える
 - 検証は既に `createBidirectionalStream` より前にあるため、その位置を維持する。ストリームを生成しないので失敗時の掃除は不要になる
-- `FillRequestOptions.rangeFilters` の JSDoc に、ピアの MAX_FILTER_RANGES が 0 のとき、および Ranges の合計が上限を超えるときに指定すると throw することを追記する (`fill.rangeFilters` に限定した文面にし、fill 全体の制約と読ませない)。`SubscribeTracksOptions.rangeFilters` の既存記述は 0 の場合だけなので、上限超過の条件も足して揃える
+- `FillRequestOptions.rangeFilters` の JSDoc に、ピアの MAX_FILTER_RANGES が 0 のとき、および Ranges の合計が上限を超えるときに指定すると throw することを追記する (`fill.rangeFilters` に限定した文面にし、fill 全体の制約と読ませない)。上限は購読単位の合計 (外側の `rangeFilters` と fill 内側の合計) であることも添える。`SubscribeTracksOptions.rangeFilters` の既存記述は 0 の場合だけなので、上限超過の条件も足して揃える
 - `src/session.test.ts` に、SUBSCRIBE_TRACKS で fill 内側に Range Filter を指定したときのテストを追加する。peer 未広告 (MAX_FILTER_RANGES = 0) は `createSessionImpl()` で throw を判別できる (`createBidirectionalStream` を持たない)。上限超過 (peer 上限 1 に対して fill 内側に 2 Ranges) は `createNamespaceSendFailureTransport` のように `createBidirectionalStream` を持つ transport を使い、ストリームを開かずに throw することを固定する
 
 ## 完了条件
 
 - fill 内側の Range Filter も含めて MAX_FILTER_RANGES が検証され、peer 未広告と上限超過の両方で throw する
 - 検証はストリーム生成より前に行われ、上限超過時にストリームを開かない
-- `FillRequestOptions.rangeFilters` / `SubscribeTracksOptions.fill` の JSDoc が実装と揃う
+- `FillRequestOptions.rangeFilters` / `SubscribeTracksOptions.rangeFilters` の JSDoc が実装と揃う
 - 追加したテストと既存テストが通る
 
 ## 参照
