@@ -11,7 +11,7 @@ import { compareLocations } from "./session/params";
 import type { Session, SubscribeOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
-import type { AuthorizationToken, Location } from "./message";
+import type { AuthorizationToken, Location, LocationFilter } from "./message";
 import * as LOC from "./loc";
 import {
   CATALOG_TRACK_NAME,
@@ -117,6 +117,40 @@ export function filterPendingCatalogObjects(
     (obj) =>
       compareLocations({ group: obj.groupId, object: obj.objectId }, lastFetchedLocation) > 0,
   );
+}
+
+/**
+ * 既存 catalog を FETCH するときの開始位置を決める
+ *
+ * catalog track は Group の先頭 Object (Object ID 0) が独立した catalog を持つ
+ * (draft-ietf-moq-msf-01 §5)。したがって最新 Group の先頭から要求すれば完全な
+ * catalog が得られる。
+ *
+ * draft-ietf-moq-transport-21 §9.20.10: フィルタ無しの FETCH は {0, 0} から
+ * Largest Object までを要求する。catalog track の Group ID は publisher の再起動を
+ * 跨いだ単調増加 MUST (draft-ietf-moq-msf-01 §6.1) を満たすため Unix epoch
+ * ミリ秒から始まることが多く、その場合 {0, 0} 起点の要求範囲は relay の object
+ * cache では覆えない。覆えない範囲は上流へ転送されるため、上流が FETCH に応答
+ * しない構成では既存 catalog を取得できない。開始位置を最新 Group の先頭にすれば
+ * cache が覆える範囲 (cache が持つ最新 Group) と一致する。
+ *
+ * LARGEST_OBJECT が不明な場合は undefined を返し、呼び出し側はフィルタ無し
+ * (従来どおり {0, 0} から Largest Object まで) を要求する。
+ *
+ * @param largestLocation SUBSCRIBE_OK で受信した LARGEST_OBJECT (不明なら null)
+ * @returns FETCH に載せる Location Filter。undefined はフィルタ無し
+ */
+export function catalogFetchFilter(largestLocation: Location | null): LocationFilter | undefined {
+  if (largestLocation === null) {
+    return undefined;
+  }
+  // 2 フィールドで StartGroup = StartObject = 0 は Next Object を意味するため
+  // (§9.20.10)、Group 0 では絶対指定にならない。Group 0 は先頭 Group であり
+  // フィルタ無しの要求範囲と一致するので、そのままフィルタ無しにする
+  if (largestLocation.group === 0n) {
+    return undefined;
+  }
+  return { startGroup: largestLocation.group, startObject: 0n };
 }
 
 /**
@@ -488,8 +522,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 本実装では以下の 2 リクエストで代替する (仕様上の正式な置換は
    * FILL_PARAMETERS (§3.4) であり、実装は別途):
    * 1. SUBSCRIBE (Next Object 形式の Location Filter) で live の catalog 更新を受信する
-   * 2. 独立した FETCH (フィルタなし = {0, 0} から Largest Object まで) で
-   *    既存の catalog を取得する
+   * 2. 独立した FETCH で既存の catalog を取得する。要求範囲は SUBSCRIBE_OK の
+   *    LARGEST_OBJECT が示す Group の先頭 Object から Largest Object までとする
+   *    (catalogFetchFilter を参照)。LARGEST_OBJECT が不明な場合だけフィルタ無し
+   *    ({0, 0} から Largest Object まで) で要求する
    * FETCH フェーズ中の live オブジェクトはバッファし、FETCH の終了 (end / error)
    * で順に適用する (delta が full より先に適用される順序逆転を防ぐ)。
    * FETCH と live で二重に届いたオブジェクトは filterPendingCatalogObjects で除去する。
@@ -575,14 +611,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       throw error;
     }
 
-    // 既存 catalog を FETCH (フィルタなし) で取得する。
+    // 既存 catalog を FETCH で取得する。要求範囲は最新 Group の先頭 Object から
+    // Largest Object までとする (catalogFetchFilter を参照)。LARGEST_OBJECT が
+    // 不明な場合だけフィルタ無し ({0, 0} から Largest Object まで) で要求する。
     // catalog が未 publish の場合は REQUEST_ERROR (INVALID_RANGE) で reject され、
     // finishCatalogFetchPhase がフェーズを解除して live 待ちに切り替える。
+    const fetchFilter = catalogFetchFilter(this.catalogSubscriber.largestLocation);
     void this.session
       .fetch(
         namespace,
         CATALOG_TRACK_NAME,
-        {},
+        fetchFilter === undefined ? {} : { filter: fetchFilter },
         {
           // FETCH 経由は即時適用。live は object コールバック側でバッファする
           object: (obj: MoqtObject) => {

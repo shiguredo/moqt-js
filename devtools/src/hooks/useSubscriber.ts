@@ -1,4 +1,5 @@
 import {
+  catalogFetchFilter,
   connect,
   LOC,
   decodeCatalogMessage,
@@ -914,15 +915,23 @@ export function useSubscriber(
             }
             instance.catalogSubscriber.value = catalogSubscriberInstance;
 
-            // 過去の Catalog を FETCH (フィルタなし = {0, 0} から Largest Object まで)
-            // で取得する。SUBSCRIBE_OK 受信後に FETCH を送ることで、Next Object の
-            // Largest (L1) が FETCH 処理時の Largest (L2) 以下になることを保証し、
-            // (L2, L1] の取りこぼしを防ぐ (createMediaSubscriber と同じ順序)。
+            // 過去の Catalog を FETCH で取得する。要求範囲は SUBSCRIBE_OK の
+            // LARGEST_OBJECT が示す Group の先頭 Object から Largest Object まで
+            // とする (catalogFetchFilter を参照)。SUBSCRIBE_OK 受信後に FETCH を
+            // 送ることで、Next Object の Largest (L1) が FETCH 処理時の
+            // Largest (L2) 以下になることを保証し、(L2, L1] の取りこぼしを防ぐ
+            // (createMediaSubscriber と同じ順序)。
+            //
+            // フィルタ無し ({0, 0} 起点) で要求すると、catalog の Group ID が
+            // Unix epoch ミリ秒から始まる publisher では relay の object cache が
+            // 覆えず、上流へ転送される。上流の publisher が FETCH に応答しない
+            // 場合、後から参加した購読者は catalog を得られない。
+            const fetchFilter = catalogFetchFilter(catalogSubscriberInstance.largestLocation);
             await session
               .fetch(
                 namespaceArray,
                 CATALOG_TRACK_NAME,
-                {},
+                fetchFilter === undefined ? {} : { filter: fetchFilter },
                 {
                   object: (obj: MoqtObject) => {
                     // FETCH から受信した Catalog オブジェクト

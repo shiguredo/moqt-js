@@ -9,7 +9,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { MediaSubscriberImpl } from "./createMediaSubscriber";
-import type { Session } from "./session";
+import type { FetchOptions, Session } from "./session";
 import type { Subscriber, RequestUpdateOptions } from "./subscriber";
 import type { MediaSubscriberState } from "./codec/types";
 import { TrackPropertyId } from "./properties";
@@ -22,6 +22,7 @@ import {
   type CatalogTrack,
 } from "./msf";
 import {
+  catalogFetchFilter,
   filterPendingCatalogObjects,
   processCatalogPayload,
   resolveAuthorizationToken,
@@ -528,18 +529,24 @@ interface SubscriberCatalogControl {
  *
  * live / FETCH の object コールバックを捕捉し、遅延オブジェクトを注入できる。
  * subscribe / fetch の引数は実シグネチャで拘束し、返値のみ最小形状にする。
+ * SUBSCRIBE_OK の LARGEST_OBJECT は `subscribeLargestLocation` で与え、
+ * FETCH に載った options は `fetchOptions` で取り出す。
  */
-function createCatalogTestSession(hooks: { subscribeError?: Error } = {}): {
+function createCatalogTestSession(
+  hooks: { subscribeError?: Error; subscribeLargestLocation?: Location } = {},
+): {
   session: Session;
   liveObject: (obj: MoqtObject) => void;
   fetchObject: (obj: MoqtObject) => void;
   fetchEnd: () => void;
+  fetchOptions: () => FetchOptions | undefined;
   calls: string[];
 } {
   const calls: string[] = [];
   let liveObject: (obj: MoqtObject) => void = () => {};
   let fetchObject: (obj: MoqtObject) => void = () => {};
   let fetchEnd: () => void = () => {};
+  let fetchOptions: FetchOptions | undefined;
   const session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
       calls.push("subscribe");
@@ -547,10 +554,14 @@ function createCatalogTestSession(hooks: { subscribeError?: Error } = {}): {
         throw hooks.subscribeError;
       }
       liveObject = args[2].object;
-      return {} as Subscriber;
+      // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber を返す
+      return {
+        largestLocation: hooks.subscribeLargestLocation ?? null,
+      } as Subscriber;
     },
     fetch: (...args: Parameters<Session["fetch"]>): Promise<Fetcher> => {
       calls.push("fetch");
+      fetchOptions = args[2];
       fetchObject = args[3].object;
       const end = args[3].end;
       if (end) {
@@ -565,6 +576,7 @@ function createCatalogTestSession(hooks: { subscribeError?: Error } = {}): {
     liveObject: (obj) => liveObject(obj),
     fetchObject: (obj) => fetchObject(obj),
     fetchEnd: () => fetchEnd(),
+    fetchOptions: () => fetchOptions,
     calls,
   };
 }
@@ -697,6 +709,78 @@ test("成功時は catalog が解決されタイマーが解除される", async
   assert.isNull(control.catalogResolve);
   assert.isNull(control.catalogTimer);
   assert.isFalse(control.catalogReceiveFailed);
+});
+
+test("catalogFetchFilter: LARGEST_OBJECT の Group の先頭 Object から要求する", () => {
+  // catalog track は Group の先頭 Object が独立した catalog を持つため
+  // (draft-ietf-moq-msf-01 §5)、最新 Group の先頭から要求すれば完全な catalog が
+  // 得られる。LARGEST_OBJECT の Object ID が 0 以外でも先頭から要求する
+  assert.deepEqual(catalogFetchFilter({ group: 7n, object: 3n }), {
+    startGroup: 7n,
+    startObject: 0n,
+  });
+});
+
+test("catalogFetchFilter: Group 0 ではフィルタを付けない", () => {
+  // 2 フィールドで StartGroup = StartObject = 0 は Next Object を意味するため
+  // (draft-ietf-moq-transport-21 §9.20.10)、Group 0 では絶対開始にならない。
+  // Group 0 はフィルタ無しの要求範囲 {0, 0} から Largest Object までと一致する
+  assert.isUndefined(catalogFetchFilter({ group: 0n, object: 5n }));
+});
+
+test("catalogFetchFilter: LARGEST_OBJECT が不明ならフィルタを付けない", () => {
+  // SUBSCRIBE_OK が LARGEST_OBJECT を載せない場合は、従来どおり
+  // {0, 0} から Largest Object までを要求する
+  assert.isUndefined(catalogFetchFilter(null));
+});
+
+test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にする", async () => {
+  // 開始位置を最新 Group の先頭にすると、relay の object cache が覆える範囲
+  // (cache が持つ最新 Group) と一致する。catalog track の Group ID は Unix epoch
+  // ミリ秒から始まることが多く、{0, 0} 起点の要求は cache で覆えない
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchEnd, fetchOptions } = createCatalogTestSession({
+    subscribeLargestLocation: { group: 7n, object: 3n },
+  });
+  control.session = session;
+
+  const pending = control.subscribeCatalog(1000);
+  // subscribe / fetch 登録の完了を microtask の flush で待つ (タイマー不使用)
+  for (let index = 0; index < 10; index++) {
+    await Promise.resolve();
+  }
+
+  assert.deepEqual(fetchOptions()?.filter, { startGroup: 7n, startObject: 0n });
+
+  // 解決させて timer を残さない
+  liveObject({
+    ...makeCatalogObject(7n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  fetchEnd();
+  await pending;
+});
+
+test("subscribeCatalog: LARGEST_OBJECT が無ければフィルタ無しで FETCH する", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", { namespace: ["live"] });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, fetchEnd, fetchOptions } = createCatalogTestSession({});
+  control.session = session;
+
+  const pending = control.subscribeCatalog(1000);
+  for (let index = 0; index < 10; index++) {
+    await Promise.resolve();
+  }
+
+  assert.isUndefined(fetchOptions()?.filter);
+
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  fetchEnd();
+  await pending;
 });
 
 /**

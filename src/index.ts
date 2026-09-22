@@ -160,6 +160,7 @@ export {
 } from "./createMediaPublisher";
 
 export {
+  catalogFetchFilter,
   createMediaSubscriber,
   type MediaSubscriber,
   type MediaSubscriberOptions,

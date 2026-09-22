@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] 後着の購読者が catalog の FETCH で最新 Group を取得できるようにする
+  - catalog の FETCH の開始位置を、購読確立時の LARGEST_OBJECT が示す Group の先頭 Object にする
+  - LARGEST_OBJECT が不明な場合と Group 0 の場合は従来どおりフィルタ無しで要求する
+  - @voluntas
 - [UPDATE] moqt-devtools の仕様ヘルプの並びとリンクを変更する
   - MSF / LOC / MOQT / C4M の順に並んでいたヘルプボタンを MOQT / LOC / MSF / C4M に並び替える
   - 各ヘルプの datatracker リンクに実装が準拠するバージョン (transport-21 / loc-04 / msf-01 / c4m-01) を付ける
