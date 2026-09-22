@@ -1,7 +1,7 @@
 # 後着の購読者が catalog の FETCH で最新 Group を取得できない
 
 - Created: 2026-09-22
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-22
 - Branch: feature/fix-catalog-fetch-start-location
 - Polished: {YYYY-MM-DD}
 
@@ -94,4 +94,24 @@ REQUEST_ERROR (NOT_SUPPORTED) を返す)、catalog は届かず catalog 受信�
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaSubscriber.ts` に純関数 `catalogFetchFilter` を追加した。購読確立時の
+  LARGEST_OBJECT が示す Group の先頭 Object を開始位置として返し、LARGEST_OBJECT が
+  不明な場合と Group 0 の場合は undefined (フィルタ無し) を返す
+- `subscribeCatalog` (`src/createMediaSubscriber.ts`) と devtools の
+  `handleCatalogSubscribed` (`devtools/src/hooks/useSubscriber.ts`) が、この開始位置で
+  既存 catalog を FETCH するようにした。規則は 1 箇所に置き、`src/index.ts` から
+  公開して両方から使う
+- `src/createMediaSubscriber.test.ts` に `catalogFetchFilter` の単体テスト
+  (LARGEST_OBJECT あり / Group 0 / 不明) と、`subscribeCatalog` が FETCH に載せる
+  filter のテストを追加した
+- リレーを挟んだ実 Chromium の E2E で、devtools publisher の配信に後から参加した
+  devtools subscriber が catalog を取得し、映像 object を受け取って復号まで進む
+  ことを確認した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
+
+## 未対応
+
+- 上流 publisher が受信 FETCH に応答する経路は
+  `issues/pending/0061-enhance-incoming-bidi-stream-handling.md` の担当のままである。
+  本 issue は cache が覆える範囲を要求することで、publisher の FETCH 対応に依存せず
+  後着の購読を成立させた
