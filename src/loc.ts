@@ -58,9 +58,11 @@ export const LOCPropertyId = {
   TIMESCALE: 0x08n,
   /**
    * Video Frame Marking (draft-ietf-moq-loc-04 §2.3.2.2)
-   * length prefix 付きバイト列で Length は 1-4 のみ受理する。RFC 9626 §3.1 の Long Extension
-   * 2 オクテット形 (L=1、TL0PICIDX 省略) 準拠。ビット配置・B 抑圧・TL0PICIDX の扱いは
-   * encodeVideoFrameMarkingValue / parseVideoFrameMarkingValue を参照。
+   * 送信は RFC 9626 §3.1 の Long Extension 準拠 (L=0 の 1 オクテット形 / L=1 の
+   * 2 オクテット形。TL0PICIDX は常に省略)。受信は length prefix 付きバイト列で
+   * Length 1-4 を受理する (3-4 バイト目の TL0PICIDX / 余剰は解釈せず消費のみ)。
+   * ビット配置・B 抑圧の詳細は encodeVideoFrameMarkingValue /
+   * parseVideoFrameMarkingValue を参照。
    */
   VIDEO_FRAME_MARKING: 0x09n,
   /**
@@ -83,8 +85,11 @@ export const LOCPropertyId = {
 /**
  * Video Frame Marking (RFC 9626 §3.1 Long Extension 準拠)
  *
- * フィールドの値域・ワイヤ意味論・B/D ビットの MUST 責務所在は
+ * `spatialLayerId` は RFC 9626 §3.1 の LID (8 bits、値域 0-255)、`temporalLayerId` は
+ * TID (3 bits、値域 0-7)。フィールドの値域・ワイヤ意味論・B/D ビットの MUST 責務所在は
  * encodeVideoFrameMarkingValue / parseVideoFrameMarkingValue の JSDoc に集約している。
+ * RFC 9626 §3.3 のコーデック別 LID マッピング (VP9 の SID を LID の下位 3 bits に置く等) は
+ * 利用側の責務であり、本型はワイヤの LID をそのまま扱う。
  */
 export interface VideoFrameMarking {
   isIndependent: boolean;
@@ -128,9 +133,12 @@ export interface AudioProperties {
 
 /**
  * Video Frame Marking の Value バイトからフィールドを解釈する。
- * Length=1 (RFC 9626 §3.2 short extension format 相当) は LID 暗黙 0 扱い
- * (RFC 9626 §3.1 LID 定義「implicitly 0 in the short extension format or when omitted in the
- * long extension format」)。Length>=3 の 3 バイト目以降 (TL0PICIDX / 余剰) は解釈せず消費のみ。
+ *
+ * RFC 9626 §3.1: LID は 8 bit であり、Value の 2 バイト目がそのまま LID になる。
+ * LID を省略した形 (Length=1。L=0 の 1 オクテット形、および §3.2 short extension
+ * format 相当) は「It is implicitly 0 in the short extension format or when omitted in
+ * the long extension format」に従い LID 0 とする。
+ * Length>=3 の 3 バイト目以降 (TL0PICIDX / 余剰) は解釈せず消費のみ。
  * decode 側は正規化せずワイヤの値を忠実に読み出す (準拠しないピアからの (TID=0, B=1) も受理する)。
  */
 function parseVideoFrameMarkingValue(value: Uint8Array): VideoFrameMarking {
@@ -142,7 +150,7 @@ function parseVideoFrameMarkingValue(value: Uint8Array): VideoFrameMarking {
     isDiscardable: (byte1 & 0x10) !== 0,
     isBaseLayerSync: (byte1 & 0x08) !== 0,
     temporalLayerId: byte1 & 0x07,
-    spatialLayerId: byte2 & 0x03,
+    spatialLayerId: byte2,
   };
 }
 
@@ -310,8 +318,14 @@ export function toDecoderMicroseconds(timestamp: bigint, timescale?: bigint): bi
 /**
  * Video Frame Marking の Value バイト列を生成する (length prefix を含まない)。
  *
- * draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 の Long Extension 2 オクテット形
- * (L=1、TL0PICIDX 省略) に準拠する。
+ * draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 の Long Extension に準拠する。
+ * TL0PICIDX は常に省略するため、LID と TID がともに 0 のときは L=0 の 1 オクテット形、
+ * それ以外は L=1 の 2 オクテット形 (LID を載せる) を選ぶ。
+ *
+ * §3.1 の L=0 形は byte1 に B と TID を含められるため、LID が 0 なら TID が 0 でなくても
+ * 1 オクテットにできる余地はある。それでも TID=0 を条件に含めるのは、L=0 の 1 オクテット形が
+ * §3.2 の short extension とワイヤ上区別できず、§3.2 の受信側は下位 4 bits (B と TID) を
+ * 無視し得るためである (TID / B を確実に伝えるため LID を載せる L=1 を選ぶ)。
  *
  * ビット配置 (byte1):
  * - bit 7: S (常に 1、「1 フレーム = 1 オブジェクト」前提)
@@ -322,10 +336,9 @@ export function toDecoderMicroseconds(timestamp: bigint, timescale?: bigint): bi
  *   よらず 0 に抑圧する。TID≠0 では呼び出し側の主張をそのまま反映する)
  * - bits 2-0: TID = temporalLayerId (値域 0-7、値域外は暗黙に下位 3 bits へ折り畳む)
  *
- * ビット配置 (byte2):
- * - LID (8 bit)。spatialLayerId (値域 0-3) を下位 2 bits にマッピングし上位 6 bits は 0。
- *   値域外は暗黙に下位 2 bits へ折り畳む。コーデック別 LID マッピング規則 §3.3 (§3.3.1 の
- *   VP9 含む) への完全準拠はスコープ外。
+ * ビット配置 (2 オクテット形の byte2):
+ * - LID (8 bits)。spatialLayerId をそのまま置く。値域外 (負値・小数・256 以上) は
+ *   暗黙に下位 8 bits へ折り畳む。§3.3 のコーデック別 LID マッピングは利用側が行う。
  *
  * TL0PICIDX は §3.1「If no scalability is used, or the cyclic counter is unknown, TL0PICIDX
  * MUST be omitted to reduce length」に整合させて送信しない。
@@ -340,8 +353,16 @@ function encodeVideoFrameMarkingValue(marking: VideoFrameMarking): Uint8Array {
   if (marking.isBaseLayerSync && temporalLayerId !== 0) byte1 |= 0x08;
   byte1 |= temporalLayerId;
 
-  const byte2 = marking.spatialLayerId & 0x03;
-  return new Uint8Array([byte1, byte2]);
+  // RFC 9626 §3.1: LID は 8 bits。値域外は下位 8 bits へ折り畳む
+  const layerId = marking.spatialLayerId & 0xff;
+  // RFC 9626 §3.1: LID と TL0PICIDX を省略する場合は L=0 の 1 オクテット形になる。
+  // TL0PICIDX は常に省略するため LID が 0 のときに省略できるが、L=0 の 1 オクテット形は
+  // §3.2 の short extension と区別できず下位 4 bits が落ちる受信側があり得るため、
+  // TID と B を確実に伝えられる TID=0 (B は必ず 0) のときだけ 1 オクテット形を選ぶ
+  if (layerId === 0 && temporalLayerId === 0) {
+    return new Uint8Array([byte1]);
+  }
+  return new Uint8Array([byte1, layerId]);
 }
 
 /**
