@@ -3,8 +3,9 @@
  *
  * 実際の Chromium の WebCodecs と Worker を使い、状態遷移・Worker メッセージの
  * 往復・入出力の形を観測する。モックやスタブは使わない。
- * コーデックは AudioEncoder.isConfigSupported / AudioDecoder.isConfigSupported で
- * 実ブラウザの対応状況を確認して選ぶ (非対応なら skip せず Error にする)。
+ * コーデックは AudioEncoder.isConfigSupported / AudioDecoder.isConfigSupported の
+ * 対応確認に加えて実符号化を 1 件試して選ぶ (符号化できない候補は除外理由つきで
+ * 結果に残し、候補が尽きた場合は skip せず Error にする)。
  */
 
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
@@ -98,7 +99,8 @@ async function encodeReferenceAudioChunks(
  * AudioEncoderWrapper の状態遷移と chunk 出力を検証する
  */
 export async function runAudioEncoderTest(useWorker: boolean): Promise<AudioEncoderTestResult> {
-  const codec = await selectSupportedAudioCodec();
+  const selection = await selectSupportedAudioCodec();
+  const codec = selection.codec;
   const observedChunks: ObservedEncodedChunk[] = [];
   const errorMessages: string[] = [];
   const stateHistory: StateTransition[] = [];
@@ -172,6 +174,7 @@ export async function runAudioEncoderTest(useWorker: boolean): Promise<AudioEnco
     test: useWorker ? "audioEncoderWorker" : "audioEncoderDirect",
     useWorker,
     codec,
+    rejectedCodecs: selection.rejectedCodecs,
     sampleRate: AUDIO_SAMPLE_RATE,
     channels: AUDIO_CHANNELS,
     stateHistory,
@@ -193,7 +196,8 @@ export async function runAudioEncoderTest(useWorker: boolean): Promise<AudioEnco
  * 復号された AudioData の形式と実データを確認する。
  */
 export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDecoderTestResult> {
-  const codec = await selectSupportedAudioCodec();
+  const selection = await selectSupportedAudioCodec();
+  const codec = selection.codec;
   const referenceChunks = await encodeReferenceAudioChunks(useWorker, codec);
 
   const pendingAudioData: AudioData[] = [];
@@ -242,7 +246,8 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
   };
 
   // opus は description を必要としないため渡さない (渡すと復号 timestamp が変わる)。
-  // AAC の AudioSpecificConfig 経路は Chromium に AAC エンコーダーが無く e2e では作れない。
+  // AAC の AudioSpecificConfig 経路は Chromium の AAC 符号化が EncodingError になるため
+  // e2e では作れない。
   await decoder.configure(codec, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS);
 
   for (const chunk of referenceChunks) {
@@ -277,6 +282,7 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     test: useWorker ? "audioDecoderWorker" : "audioDecoderDirect",
     useWorker,
     codec,
+    rejectedCodecs: selection.rejectedCodecs,
     sampleRate: AUDIO_SAMPLE_RATE,
     channels: AUDIO_CHANNELS,
     unconfiguredDecode,
