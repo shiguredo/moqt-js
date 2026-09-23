@@ -4,8 +4,15 @@
  * 参照: draft-ietf-moq-msf-01
  */
 
-import { KNOWN_CATALOG_ROOT_FIELDS, assertTrackNameUnique } from "./catalogValidation";
-import { validatePackagingSpecificRules } from "./catalogTrackValidation";
+import {
+  KNOWN_CATALOG_ROOT_FIELDS,
+  assertInitRefResolvable,
+  assertTrackNameUnique,
+} from "./catalogValidation";
+import {
+  validatePackagingSpecificRules,
+  validateRoleSpecificRules,
+} from "./catalogTrackValidation";
 import type { Catalog, CatalogDelta, CatalogTrack } from "./types";
 
 // =============================================================================
@@ -118,13 +125,22 @@ export function applyCatalogDelta(
         if (cloned.packaging !== undefined) {
           validatePackagingSpecificRules(cloned, cloned.packaging, cloned.name);
         }
+        // §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29: role 条件付き MUST も合成後に
+        // 再実行する (base から role を継承し必須フィールドを持たない clone を検出する)。
+        validateRoleSpecificRules(cloned, cloned.name);
         tracks.push(cloned);
       }
     }
   }
 
-  // §5.2.3: 全 operation 適用後の tracks 配列で (name, namespace) uniqueness を再検証する。
-  assertTrackNameUnique(tracks, "tracks");
+  // §5.2.3: 全 operation 適用後の tracks と (引き継いだ) publishTracks をまとめて
+  // (name, namespace) uniqueness を再検証する。delta 経由でも配列をまたぐ重複を
+  // 残さないため、publishTracks は下で合成する result ではなく current から渡す。
+  assertTrackNameUnique(tracks, current.publishTracks, catalogNamespace);
+
+  // §5.2.13: initRef の参照切れも合成後に検証する (delta の add / clone が
+  // initDataList に無い参照を持ち込むと、validateCatalog の拒否する Catalog になる)
+  assertInitRefResolvable(tracks, current.publishTracks, current.initDataList);
 
   // §5.3 / §5.1.1: delta update に version は含まれない (MUST NOT)。current.version をそのまま維持する。
   const result: Catalog = {

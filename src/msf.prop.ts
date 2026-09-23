@@ -8,6 +8,7 @@ import {
   type Catalog,
   type CatalogTrack,
   type CatalogDelta,
+  type InitDataEntry,
   type MediaTimelineEntry,
   type EventTimelineEntry,
   type PackagingType,
@@ -151,6 +152,11 @@ const authInfoArb = fc.dictionary(
  * があるため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
  *
  * 制約:
+ * - `role` が video / audio のときは §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 の
+ *   Conditional MUST を満たすよう必須フィールドを補う
+ * - `initRef` は生成しない。単体では参照先 (§5.1.7 initDataList) を保証できず、
+ *   delta の add でも参照切れを作らないためである (catalogArb が initDataList と
+ *   相関させて付与する)
  * - `targetLatency` と `buffers` は §5.2.8 / §5.2.9 で MUST NOT 併存 → 排他的に生成する
  * - `encryptionScheme` 指定時は §5.2.39 で `cipherSuite` MUST → tuple 化
  * - `trackDuration` は §5.2.35 で isLive=true 時 MUST NOT → isLive=false の場合のみ付与
@@ -184,7 +190,6 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       lang: fc.option(fc.constantFrom("en", "ja", "zh", "ko", "es", "fr", "de"), {
         nil: undefined,
       }),
-      initRef: fc.option(fc.string({ minLength: 1, maxLength: 32 }), { nil: undefined }),
       // draft-01 新規フィールド
       template: fc.option(templateForTrackArb, { nil: undefined }),
       keyId: fc.option(fc.string({ minLength: 1, maxLength: 32 }), { nil: undefined }),
@@ -226,6 +231,18 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
     if (track.packaging === "moqmetrics") {
       track.role = "metrics";
     }
+    // §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29: role が video / audio のときの
+    // Conditional MUST を満たすよう必須フィールドを補う
+    // (role と必須フィールドを独立に生成すると検証を通らない組み合わせができる)
+    if (track.role === "video") {
+      track.codec ??= "av01.0.04M.08";
+      track.bitrate ??= 1_000_000;
+    } else if (track.role === "audio") {
+      track.codec ??= "opus";
+      track.bitrate ??= 128_000;
+      track.samplerate ??= 48_000;
+      track.channelConfig ??= "2";
+    }
     return track;
   });
 
@@ -239,6 +256,17 @@ const initDataEntryArb = fc.record({
 });
 
 /**
+ * (name, namespace) の比較キー
+ *
+ * 文字列連結では namespace と name の境界が曖昧になり
+ * (namespace="a b" name="c" と namespace="a" name="b c" が衝突する)、
+ * namespace が "<unset>" の場合に未指定と衝突するため、JSON 配列で符号化する。
+ */
+function trackKey(track: CatalogTrack): string {
+  return JSON.stringify([track.namespace ?? null, track.name]);
+}
+
+/**
  * 配列内 (name, namespace) タプル uniqueness を保つトラック配列の Arbitrary
  *
  * §5.2.3 「track names MUST be unique per namespace」を満たすため、生成後に
@@ -250,7 +278,7 @@ const uniqueCatalogTrackArrayArb = fc
     const seen = new Set<string>();
     const result: CatalogTrack[] = [];
     for (const track of tracks) {
-      const key = `${track.namespace ?? "<unset>"} ${track.name}`;
+      const key = trackKey(track);
       if (seen.has(key)) continue;
       seen.add(key);
       result.push(track);
@@ -279,17 +307,44 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
   .map(({ tracks, generatedAt, isCompleteFlag, publishTracks, initDataList }) => {
     const catalog: Catalog = { version: "draft-01", tracks };
     if (generatedAt !== undefined) catalog.generatedAt = generatedAt;
+    // §5.1.3: isComplete=false は MUST NOT include。true のときのみ含める
     if (isCompleteFlag) catalog.isComplete = true;
-    if (publishTracks !== undefined) catalog.publishTracks = publishTracks;
+
+    // §5.1.7: initDataList の id はカタログ内で unique。先に確定させ、
+    // §5.2.13 の initRef の参照先として使う
+    const uniqueInitDataList: InitDataEntry[] = [];
     if (initDataList !== undefined) {
-      // initDataList は id がカタログ内で unique でなければならない (§5.1.7)
       const seen = new Set<string>();
-      const filtered = initDataList.filter((entry) => {
-        if (seen.has(entry.id)) return false;
+      for (const entry of initDataList) {
+        if (seen.has(entry.id)) continue;
         seen.add(entry.id);
-        return true;
-      });
-      if (filtered.length > 0) catalog.initDataList = filtered;
+        uniqueInitDataList.push(entry);
+      }
+    }
+    if (uniqueInitDataList.length > 0) {
+      catalog.initDataList = uniqueInitDataList;
+    }
+
+    // §5.2.3: tracks と publishTracks をまたいで (name, namespace) が unique に
+    // なるよう publishTracks 側を間引く (tracks の名前空間を予約済みとして扱う)
+    const trackKeys = new Set(tracks.map((track) => trackKey(track)));
+    const filteredPublishTracks: CatalogTrack[] = [];
+    for (const track of publishTracks ?? []) {
+      const key = trackKey(track);
+      if (trackKeys.has(key)) continue;
+      trackKeys.add(key);
+      filteredPublishTracks.push(track);
+    }
+    if (filteredPublishTracks.length > 0) {
+      catalog.publishTracks = filteredPublishTracks;
+    }
+
+    // §5.2.13: initRef が initDataList のエントリを指す相関を保証する
+    // (参照先が無い initRef を生成しない)
+    const firstTrack = tracks[0];
+    const firstInitData = uniqueInitDataList[0];
+    if (firstTrack !== undefined && firstInitData !== undefined) {
+      catalog.tracks = [{ ...firstTrack, initRef: firstInitData.id }, ...tracks.slice(1)];
     }
     return catalog;
   });

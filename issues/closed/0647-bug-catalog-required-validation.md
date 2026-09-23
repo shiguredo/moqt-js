@@ -1,7 +1,7 @@
 # MSF Catalog の必須検証が仕様に対して不足している
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-catalog-required-validation
 - Polished: 2026-09-21
 
@@ -48,4 +48,24 @@ draft-ietf-moq-msf-01 の MUST のうち Catalog の検証が欠けているも�
 
 ## 解決方法
 
-{未着手}
+- `src/msf/catalogValidation.ts` の `assertTrackNameUnique` を `(tracks, publishTracks, catalogNamespace?)` に変え、`tracks` → `publishTracks` の順に `(name, namespace)` の重複を検出するようにした。違反した track がどちらの配列に由来するかをエラー文言に含める。`validateCatalog` は publishTracks の検証後に 1 回だけ呼ぶ。`catalogNamespace` を渡した場合は §5.2.2 の継承を解決した値で比較するため、delta 経路では `options.catalogNamespace` を渡す
+  - これは従来受理していた「subscribe 用 track と publish 用 track の同名共存」を拒否する破壊的変更であり、`CHANGES.md` に `[CHANGE]` として明記した
+- `src/msf/catalogTrackValidation.ts` に `validateRoleSpecificRules` を追加し、role が `video` のときは codec (§5.2.18) と bitrate (§5.2.22)、`audio` のときは加えて samplerate (§5.2.28) と channelConfig (§5.2.29) を必須にした。`buildValidatedCatalogTrack` (packaging 別 MUST の後) と `applyCatalogDelta` (clone 合成後) の両方から呼ぶ。clone では packaging と同様に条件付き MUST を skip する
+  - §5.2.28 / §5.2.29 の仕様上の条件は「audio codecs are specified」であり role ではないが、audio codec を持ち得る他の role (予約 role の audiodescription など) や custom role まで必須にしないため、role を手掛かりにする解釈を採り、JSDoc に差を明記した
+- `src/msf/catalogValidation.ts` に `assertInitRefResolvable` を追加し、initRef の参照先が initDataList に無い Catalog を拒否する。`tracks` / `publishTracks` の両方が対象、参照先の有無だけを見て type は問わない。§5.4 の変数 (`%`) を含む値と、initDataList の id 自体が変数を含む場合は置換前で判定できないため対象外。`applyCatalogDelta` の合成後にも呼ぶ (delta の add / clone が参照切れを持ち込むと `validateCatalog` の拒否する Catalog になるため)。`resolveInitData` の寛容な挙動は変えていない
+- `src/msf.prop.ts` の Arbitrary を新しい検証に合わせた。`catalogTrackArb` は role に応じて必須フィールドを補い `initRef` を生成しない (単体では参照先を保証できないため)。`catalogArb` は tracks と publishTracks をまたぐ uniqueness を保証し、initRef が initDataList のエントリを指す相関を作る
+- 期待挙動が変わる既存テスト (合算 uniqueness を許容していた 1 件) を新しい挙動に更新し、role 条件付き MUST / initRef の参照切れ / delta 経由 / 境界のテストを追加した
+- `CHANGES.md` の `## develop` 先頭に `[CHANGE]` を追記した (仕様 §5.6.14 の例のように codec / bitrate を省略した video track も拒否される旨を含む)
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (123 files / 2587 tests) が通る
+- 変異テストで、配列またぎ走査の削除 / `catalogNamespace` の受け渡し削除 / delta の initRef 検証削除 (tracks 側・publishTracks 側の両方) / `%` 判定の前方一致化 / role 分岐の削除 / clone 合成後の再検証と検証順 / initDataList 未定義時の参照切れ許容、のいずれでも対応するテストが失敗することを確認した (レビュアーは独立に 28 種以上を実施)
+
+## 残した課題
+
+- parse 時は catalog namespace が未知のため、namespace 未指定の track と明示 namespace の track が継承後に同一になる重複は検出しない (delta 経路は `catalogNamespace` で解決する)
+- `initDataList` の id に変数を含むエントリがある場合、参照切れを確定できないため initRef の検証を全体で行わない (置換後の再検証は対象外)
+- role 条件付き MUST は role を手掛かりにするため、`role: "audiodescription"` など audio codec を持ち得る他の role には課さない (仕様の条件は codec)
+- `encodeCatalog` / `createCatalog` は track 単位の MUST を検証しない (受信側の検証のみ。packaging 別 MUST と同じ非対称)
+- catalog delta 側の `initDataList` (delta が root に持つ場合) は従来どおりマージしない

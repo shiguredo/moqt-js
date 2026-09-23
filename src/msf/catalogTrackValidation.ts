@@ -1,8 +1,9 @@
 /**
  * Catalog track の検証 (draft-ietf-moq-msf-01 §5.2 / §7.2 / §8.2 / §9.4 / §10.4)
  *
- * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証し、packaging 別の
- * MUST は validatePackagingSpecificRules が担う。
+ * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証する。packaging 別の
+ * MUST は validatePackagingSpecificRules、role が video / audio のときの
+ * Conditional MUST は validateRoleSpecificRules が担う。
  *
  * 参照: draft-ietf-moq-msf-01
  */
@@ -75,7 +76,9 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
  *
  * `options.skipPackagingRequiredFields` は clone operation 用。clone では
  * packaging が継承される (= undefined のことがある) ため、packaging に応じた
- * MUST 検証 (depends / eventType / mimeType="application/json") を skip する。
+ * MUST 検証 (depends / eventType / mimeType="application/json") と role が
+ * video / audio のときの Conditional MUST をまとめて skip する
+ * (applyCatalogDelta が clone 合成後に再検証する)。
  */
 export function buildValidatedCatalogTrack(
   obj: Record<string, unknown>,
@@ -99,8 +102,12 @@ export function buildValidatedCatalogTrack(
   pickAuthAndAccessibility(obj, name, track);
   pickPublishTrackFields(obj, name, track);
 
-  if (!options?.skipPackagingRequiredFields && packaging !== undefined) {
-    validatePackagingSpecificRules(track, packaging, name);
+  if (!options?.skipPackagingRequiredFields) {
+    if (packaging !== undefined) {
+      validatePackagingSpecificRules(track, packaging, name);
+    }
+    // §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29: role 条件付き MUST (packaging 別 MUST の後)
+    validateRoleSpecificRules(track, name);
   }
 
   // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
@@ -333,6 +340,43 @@ function pickPublishTrackFields(
       );
     }
     (track as PublishTrack).token = value;
+  }
+}
+
+/**
+ * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-01 §5.2.18 / §5.2.22 /
+ * §5.2.28 / §5.2.29)
+ *
+ * - role='video': codec (§5.2.18) と bitrate (§5.2.22) が MUST
+ * - role='audio': 加えて samplerate (§5.2.28) と channelConfig (§5.2.29) が MUST
+ *
+ * role は optional であり custom role も許されるため、video / audio 以外には課さない。
+ * §5.2.28 / §5.2.29 の仕様上の条件は「audio codecs are specified」であり role ではないが、
+ * audio codec を持ち得る他の role (予約 role の audiodescription など) や custom role まで
+ * 必須にしないため、本実装は role を手掛かりにする (§5.2.6 の role 一覧のうち audio 系は
+ * audio のみを対象とする解釈)。packaging 別 MUST の検証を先に行い、本関数はその後に呼ぶ
+ * (エラー文言の順序を保つ)。clone では packaging と同様に条件付き MUST を skip し、
+ * applyCatalogDelta が合成後に呼ぶ。
+ */
+export function validateRoleSpecificRules(track: CatalogTrack, name: string): void {
+  if (track.role !== "video" && track.role !== "audio") {
+    return;
+  }
+  const kind = track.role;
+  if (track.codec === undefined) {
+    throw new Error(`invalid track '${name}': ${kind} track must include codec per §5.2.18`);
+  }
+  if (track.bitrate === undefined) {
+    throw new Error(`invalid track '${name}': ${kind} track must include bitrate per §5.2.22`);
+  }
+  if (kind !== "audio") {
+    return;
+  }
+  if (track.samplerate === undefined) {
+    throw new Error(`invalid track '${name}': audio track must include samplerate per §5.2.28`);
+  }
+  if (track.channelConfig === undefined) {
+    throw new Error(`invalid track '${name}': audio track must include channelConfig per §5.2.29`);
   }
 }
 
