@@ -58,6 +58,8 @@ import {
   type LocationFilter,
   type Parameter,
   type RangeFilterSpec,
+  // デコード済み REQUEST_ERROR の型 (../error の RequestError クラスと名前が衝突するため別名)
+  type RequestError as DecodedRequestError,
 } from "../message";
 import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "../filter";
 import { supportsDynamicGroups } from "../properties";
@@ -887,6 +889,35 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
 }
 
 // ============================================================================
+// REQUEST_ERROR の RequestError 構築
+// ============================================================================
+
+/**
+ * デコード済みの REQUEST_ERROR から RequestError を組み立てる
+ *
+ * フィールドの意味は RequestError / RedirectInfo の JSDoc を参照 (§9.4.1 / §9.4.2 /
+ * §12.3)。ここでは wire 固有の扱いだけを定める。
+ * - デコード済みの生値をそのまま渡す (Retry Interval の変換はしない)。
+ * - §12.3 の REDIRECT の適用先に REQUEST_UPDATE は無いが、確立後の REQUEST_ERROR で
+ *   受信した値も捨てずにアプリへ渡す。
+ * - reasonPhrase が空のときは Error Code を含む固定文言にする。
+ */
+export function buildRequestErrorFromDecoded(decoded: DecodedRequestError): RequestError {
+  return new RequestError(
+    decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
+    normalizeRequestErrorCode(Number(decoded.errorCode)),
+    decoded.retryInterval,
+    decoded.redirect
+      ? {
+          connectUri: decoded.redirect.connectUri,
+          trackNamespace: decoded.redirect.trackNamespace.tuple,
+          trackName: decoded.redirect.trackName,
+        }
+      : undefined,
+  );
+}
+
+// ============================================================================
 // readPublishResponse
 // ============================================================================
 
@@ -967,19 +998,7 @@ export async function bidiReadPublishResponse(
       const decoded = decodeRequestErrorPayload(payload);
       session.pendingPublish.delete(requestId);
       session.requestStreams.delete(requestId);
-      const error = new RequestError(
-        decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        normalizeRequestErrorCode(Number(decoded.errorCode)),
-        decoded.retryInterval,
-        decoded.redirect
-          ? {
-              connectUri: decoded.redirect.connectUri,
-              trackNamespace: decoded.redirect.trackNamespace.tuple,
-              trackName: decoded.redirect.trackName,
-            }
-          : undefined,
-      );
-      pending.reject(error);
+      pending.reject(buildRequestErrorFromDecoded(decoded));
     },
     handleGoaway: (context, payload) => {
       const { session, requestId, pending } = context;
@@ -1130,11 +1149,7 @@ export async function bidiReadSubscribeResponse(
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       session.fillFetchTargets.delete(requestId);
-      const error = new RequestError(
-        decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        normalizeRequestErrorCode(Number(decoded.errorCode)),
-      );
-      pending.reject(error);
+      pending.reject(buildRequestErrorFromDecoded(decoded));
     },
     handleGoaway: (context, payload) => {
       const { session, requestId, pending } = context;
@@ -1300,11 +1315,7 @@ export async function bidiReadFetchResponse(
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       fireFetcherReadyCallbacks(session, requestId);
-      const error = new RequestError(
-        decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        normalizeRequestErrorCode(Number(decoded.errorCode)),
-      );
-      pending.reject(error);
+      pending.reject(buildRequestErrorFromDecoded(decoded));
     },
     handleGoaway: (context, payload) => {
       const { session, requestId, pending } = context;
@@ -1400,11 +1411,7 @@ export async function bidiReadTrackStatusResponse(
       const { session, requestId, pending } = context;
       const decoded = decodeRequestErrorPayload(payload);
       session.pendingTrackStatus.delete(requestId);
-      const error = new RequestError(
-        decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-        normalizeRequestErrorCode(Number(decoded.errorCode)),
-      );
-      pending.reject(error);
+      pending.reject(buildRequestErrorFromDecoded(decoded));
       // REQUEST_OK 経路と同じく自方向を FIN で閉じる (§9.13 / §6.4.2.2)。
       await closeRequestStreamWriter(session, requestId);
       session.requestStreams.delete(requestId);
@@ -2615,11 +2622,7 @@ async function bidiProcessRequestStreamMessages(
         break;
       }
       case MessageType.REQUEST_ERROR: {
-        const decoded = decodeRequestErrorPayload(msg.payload);
-        const error = new RequestError(
-          decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-          normalizeRequestErrorCode(Number(decoded.errorCode)),
-        );
+        const error = buildRequestErrorFromDecoded(decodeRequestErrorPayload(msg.payload));
         // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
         // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
         // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。

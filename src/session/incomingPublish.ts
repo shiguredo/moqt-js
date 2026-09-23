@@ -35,7 +35,6 @@ import {
   RequestErrorCode,
   SessionError,
   SessionErrorCode,
-  normalizeRequestErrorCode,
 } from "../error";
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
@@ -289,11 +288,7 @@ export async function incomingPublishRunStreamSubLoop(
           continue;
         }
         if (msg.type === MessageType.REQUEST_ERROR) {
-          const decoded = decodeRequestErrorPayload(msg.payload);
-          const error = new RequestError(
-            decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-            normalizeRequestErrorCode(Number(decoded.errorCode)),
-          );
+          const error = bidi.buildRequestErrorFromDecoded(decodeRequestErrorPayload(msg.payload));
           // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
           // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
           // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。

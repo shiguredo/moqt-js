@@ -37,7 +37,6 @@ import {
   RequestError,
   SessionError,
   SessionErrorCode,
-  normalizeRequestErrorCode,
 } from "../error";
 import * as bidi from "./bidi";
 import {
@@ -486,8 +485,8 @@ function namespaceValidateFirstMessage(
 /**
  * REQUEST_ERROR ペイロードを RequestError に変換する
  *
- * namespace 系ループの 3 箇所 (初期 REQUEST_ERROR / 更新失敗応答 /
- * GOAWAY 後の REQUEST_ERROR) で共通の構築ロジック。
+ * namespace 系ループの 4 箇所 (namespace / tracks / publication の初期 REQUEST_ERROR、
+ * 確立後の更新失敗応答、GOAWAY 後の REQUEST_ERROR) で共通の構築ロジック。
  */
 function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestError {
   const decodedMsg = decodeRequestErrorPayload(messagePayload);
@@ -498,18 +497,9 @@ function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestEr
   if (decodedMsg.redirect && decodedMsg.redirect.trackName.length > 0) {
     throw new ProtocolViolationError("namespace-scoped redirect must have an empty track name");
   }
-  return new RequestError(
-    decodedMsg.reasonPhrase,
-    normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-    decodedMsg.retryInterval,
-    decodedMsg.redirect
-      ? {
-          connectUri: decodedMsg.redirect.connectUri,
-          trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-          trackName: decodedMsg.redirect.trackName,
-        }
-      : undefined,
-  );
+  // 構築は bidi.buildRequestErrorFromDecoded に集約する (reasonPhrase が空のときの
+  // 固定文言も含めて共通。namespace 系だけ異なる文言にならないようにする)。
+  return bidi.buildRequestErrorFromDecoded(decodedMsg);
 }
 
 /**
@@ -1496,19 +1486,11 @@ function createPublicationStreamHandlers(
       if (ctx.progress.goawayReceived) {
         return "continue";
       }
-      const decodedMsg = decodeRequestErrorPayload(payload);
-      const error = new RequestError(
-        decodedMsg.reasonPhrase || `Request failed with code ${decodedMsg.errorCode}`,
-        normalizeRequestErrorCode(Number(decodedMsg.errorCode)),
-        decodedMsg.retryInterval,
-        decodedMsg.redirect
-          ? {
-              connectUri: decodedMsg.redirect.connectUri,
-              trackNamespace: decodedMsg.redirect.trackNamespace.tuple,
-              trackName: decodedMsg.redirect.trackName,
-            }
-          : undefined,
-      );
+      // draft-ietf-moq-transport-21 §9.4.1 / §9.4.2:
+      // PUBLISH_NAMESPACE も namespace 系リクエストであり、Redirect の Track Name は
+      // 空でなければならない (非空は PROTOCOL_VIOLATION)。SUBSCRIBE_NAMESPACE /
+      // SUBSCRIBE_TRACKS と同じ検証と構築を通す。
+      const error = decodeRequestErrorToRequestError(payload);
       ctx.target.state = "closed";
       namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
       if (!ctx.progress.resolved) {

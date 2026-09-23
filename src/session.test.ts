@@ -26,6 +26,7 @@ import {
 } from "./message";
 import {
   decodePublishStateNotifyPayload,
+  encodeRequestErrorPayload,
   encodeRequestOkPayload,
   encodePublishStateNotifyPayload,
 } from "./message/session";
@@ -2683,6 +2684,71 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM で応答待ちの REQUE
   assert.isDefined(notifiedError);
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §9.5:
+ * 受信 PUBLISH の後続ループで確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) を
+ * 受けた場合も、Retry Interval と Redirect を reject する RequestError に載せる。
+ */
+test("受信 PUBLISH ストリームの確立後の REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+
+  // 応答待ちの REQUEST_UPDATE を 2 件注入する (coalescing の検証)
+  const rejectedErrors: Error[] = [];
+  const internals = internal as unknown as {
+    pendingRequestUpdate: Map<
+      bigint,
+      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
+    >;
+  };
+  for (const updateRequestId of [100n, 102n]) {
+    internals.pendingRequestUpdate.set(updateRequestId, {
+      resolve: () => {},
+      reject: (err: Error) => {
+        rejectedErrors.push(err);
+      },
+      targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
+    });
+  }
+
+  // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "update redirect",
+    retryInterval: 17n,
+    redirect: {
+      connectUri: "moqt://incoming.example.com",
+      trackNamespace: createTrackNamespace(INCOMING_PUBLISH_NAMESPACE),
+      trackName: new TextEncoder().encode("track"),
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [new ControlStreamWriter().encode(MessageType.REQUEST_ERROR, errorPayload)],
+    ),
+  );
+
+  assert.equal(rejectedErrors.length, 2);
+  for (const error of rejectedErrors) {
+    assert.instanceOf(error, RequestError);
+    const requestError = error as RequestError;
+    assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+    assert.equal(requestError.retryInterval, 17n);
+    assert.deepEqual(requestError.redirect, {
+      connectUri: "moqt://incoming.example.com",
+      trackNamespace: INCOMING_PUBLISH_NAMESPACE.map((part) => new TextEncoder().encode(part)),
+      trackName: new TextEncoder().encode("track"),
+    });
+  }
+  assert.equal(internals.pendingRequestUpdate.size, 0);
   assert.equal(internal.sessionState, "connected");
 });
 

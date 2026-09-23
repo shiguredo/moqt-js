@@ -12,13 +12,14 @@ import {
   encodeRequestOkPayload,
   decodeRequestErrorPayload,
   encodeGoawayPayload,
+  encodeRequestErrorPayload,
 } from "../message/session";
 import { encodePublishDonePayload, decodePublishDonePayload } from "../message/publish";
 import { MessageType, MessageParameterType, PublishDoneStatusCode } from "../message/types";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { createTrackNamespace, encodeParameterTrackNamespace } from "../message";
 import { encodeAuthorizationToken, AuthorizationTokenAliasType } from "../message";
-import { SessionErrorCode, RequestErrorCode } from "../error";
+import { RequestError, SessionErrorCode, RequestErrorCode } from "../error";
 import {
   createPublishReadTestContext,
   forceSessionClosed,
@@ -38,9 +39,81 @@ import {
 
 // ============================================================================
 // bidiReadRequestStreamMessages / publishSendPublishDone の統合テスト
+
 // (実 W3C ストリーム注入方式)
 // draft-ietf-moq-transport-21 §6.4.2.2 / §6.4.2.3 / §9.8
 // ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §9.5:
+ * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) でも、Retry Interval と Redirect を
+ * reject する RequestError に載せる。coalescing で複数の pending を失敗させる場合も
+ * 同じ値を載せ、同じインスタンスを共有する。reasonPhrase が空のときは Error Code を
+ * 含む固定文言にする。
+ */
+test("bidiReadRequestStreamMessages: 確立後の REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
+  const ctx = createPublishReadTestContext({});
+  const rejectedErrors: Error[] = [];
+  // 応答待ちの REQUEST_UPDATE を 2 件注入する (coalescing の検証)
+  ctx.session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejectedErrors.push(error);
+    },
+    targetRequestId: ctx.requestId,
+  });
+  ctx.session.pendingRequestUpdate.set(102n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejectedErrors.push(error);
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "",
+    retryInterval: 13n,
+    redirect: {
+      connectUri: "moqt://update.example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      trackName: new TextEncoder().encode("video"),
+    },
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(rejectedErrors.length, 2);
+  // coalescing で失敗した複数の更新には同じインスタンスを共有して reject する
+  assert.equal(rejectedErrors[0], rejectedErrors[1]);
+  for (const error of rejectedErrors) {
+    assert.instanceOf(error, RequestError);
+    const requestError = error as RequestError;
+    assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+    // reasonPhrase が空のときの固定文言
+    assert.equal(requestError.message, "Request failed with code 52");
+    assert.equal(requestError.retryInterval, 13n);
+    assert.deepEqual(requestError.redirect, {
+      connectUri: "moqt://update.example.com",
+      trackNamespace: [new TextEncoder().encode("live")],
+      trackName: new TextEncoder().encode("video"),
+    });
+  }
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.isUndefined(ctx.closedWithError);
+});
 
 /**
  * draft-ietf-moq-transport-21 §6.4.2.2:

@@ -22,7 +22,7 @@ import {
   encodeRequestOkPayload,
 } from "../message/session";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
-import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import { RequestError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { createTrackNamespace } from "../message/parameter";
 import { encodeParameterTrackNamespace } from "../message";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
@@ -386,6 +386,89 @@ test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROT
   assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §9.4.1:
+ * PUBLISH_NAMESPACE (publication ループ) の初回応答 REQUEST_ERROR でも、Redirect の
+ * Track Name が非空なら PROTOCOL_VIOLATION でセッションを閉じる
+ * (namespace 系リクエストは Track Name を空にする MUST)。
+ */
+test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は PROTOCOL_VIOLATION", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+
+  const payload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "redirect",
+    retryInterval: 0n,
+    redirect: {
+      connectUri: "https://example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      trackName: new TextEncoder().encode("video"),
+    },
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_ERROR, payload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4.1 / §9.4.2 / §12.3:
+ * namespace 系の応答でも Retry Interval と Redirect (Track Name は空) を保持してアプリへ
+ * 渡す。Reason Phrase が空のときは Error Code を含む固定文言にする。
+ */
+test("namespaceStartPublicationStreamLoop: Redirect の retryInterval と redirect が保持される", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  let rejectedPublication: Error | undefined;
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    (error) => {
+      rejectedPublication = error;
+    },
+  );
+
+  const payload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "",
+    retryInterval: 23n,
+    redirect: {
+      connectUri: "https://example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      // namespace-scoped のリクエストでは Track Name は空でなければならない (§9.4.1)
+      trackName: new Uint8Array(0),
+    },
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_ERROR, payload));
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejectedPublication, RequestError);
+  const requestError = rejectedPublication as RequestError;
+  assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+  assert.equal(requestError.retryInterval, 23n);
+  assert.deepEqual(requestError.redirect, {
+    connectUri: "https://example.com",
+    trackNamespace: [new TextEncoder().encode("live")],
+    trackName: new Uint8Array(0),
+  });
+  // Reason Phrase が空のときの固定文言
+  assert.equal(requestError.message, "Request failed with code 52");
+  // リクエスト単位の失敗でありセッションは閉じない
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
 // ============================================================================
 // 自側が要求した namespace / tracks ストリームで受信する REQUEST_UPDATE
 // draft-ietf-moq-transport-21 §9.5 (REQUEST_UPDATE) / §9.5.2
@@ -466,6 +549,94 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     assert.isDefined(ctx.getClosedWithError());
     assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
     assert.isTrue(ctx.getClosedWithError()!.message.includes("received second REQUEST_OK"));
+  });
+});
+
+// 確立前の初期 REQUEST_ERROR でも Retry Interval と Redirect を保持してアプリへ渡す
+SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
+  test(`初期 REQUEST_ERROR の retryInterval と redirect が保持される: ${kind} ループ`, async () => {
+    const ctx = createNamespaceLoopTestContext(loop);
+    let rejectedLoop: Error | undefined;
+    const readPromise = startLoop(
+      loop,
+      ctx.session,
+      ctx.requestId,
+      () => {},
+      (error) => {
+        rejectedLoop = error;
+      },
+    );
+
+    const payload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.REDIRECT),
+      reasonPhrase: "redirect",
+      retryInterval: 37n,
+      redirect: {
+        connectUri: "https://example.com",
+        trackNamespace: createTrackNamespace(["live"]),
+        // namespace-scoped のリクエストでは Track Name は空でなければならない (§9.4.1)
+        trackName: new Uint8Array(0),
+      },
+    });
+    ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_ERROR, payload));
+    ctx.readableController.close();
+    await readPromise;
+
+    assert.instanceOf(rejectedLoop, RequestError);
+    const requestError = rejectedLoop as RequestError;
+    assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+    assert.equal(requestError.retryInterval, 37n);
+    assert.equal(requestError.redirect?.connectUri, "https://example.com");
+    assert.isUndefined(ctx.getClosedWithError());
+  });
+});
+
+// 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) でも Retry Interval と Redirect を
+// reject する RequestError に載せる
+SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
+  test(`確立後の REQUEST_ERROR の retryInterval と redirect が載る: ${kind} ループ`, async () => {
+    const ctx = createNamespaceLoopTestContext(loop);
+
+    const pending = registerPendingUpdate(ctx.session, ctx.requestId);
+
+    const readPromise = startLoop(
+      loop,
+      ctx.session,
+      ctx.requestId,
+      () => {},
+      () => {},
+    );
+
+    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+    const payload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.REDIRECT),
+      reasonPhrase: "update redirect",
+      retryInterval: 29n,
+      redirect: {
+        connectUri: "https://example.com",
+        trackNamespace: createTrackNamespace(["live"]),
+        // namespace-scoped のリクエストでは Track Name は空でなければならない (§9.4.1)
+        trackName: new Uint8Array(0),
+      },
+    });
+    ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_ERROR, payload));
+    ctx.readableController.close();
+    await readPromise;
+
+    assert.isFalse(pending.resolved);
+    assert.isDefined(pending.rejected);
+    assert.instanceOf(pending.rejected, RequestError);
+    const requestError = pending.rejected as RequestError;
+    assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+    assert.equal(requestError.retryInterval, 29n);
+    assert.deepEqual(requestError.redirect, {
+      connectUri: "https://example.com",
+      trackNamespace: [new TextEncoder().encode("live")],
+      trackName: new Uint8Array(0),
+    });
+    assert.isUndefined(ctx.getClosedWithError());
   });
 });
 
@@ -1479,8 +1650,21 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     });
     ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
     // GOAWAY 後に REQUEST_ERROR が届く (spurious PROTOCOL_VIOLATION は防がれる)
+    // Retry Interval と Redirect も載せ、pending の reject に引き継がれることを検証する
+    const errorPayload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.REDIRECT),
+      reasonPhrase: "prefix overlap",
+      retryInterval: 31n,
+      redirect: {
+        connectUri: "https://example.com",
+        trackNamespace: createTrackNamespace(["live"]),
+        // namespace-scoped のリクエストでは Track Name は空でなければならない (§9.4.1)
+        trackName: new Uint8Array(0),
+      },
+    });
     ctx.readableController.enqueue(
-      requestErrorMessage(ctx.controlWriter, RequestErrorCode.PREFIX_OVERLAP),
+      ctx.controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload),
     );
     ctx.readableController.close();
     await readPromise;
@@ -1489,6 +1673,9 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     assert.isFalse(pending.resolved);
     assert.isDefined(pending.rejected);
     assert.equal(pending.rejected!.message, "prefix overlap");
+    assert.instanceOf(pending.rejected, RequestError);
+    assert.equal((pending.rejected as RequestError).retryInterval, 31n);
+    assert.equal((pending.rejected as RequestError).redirect?.connectUri, "https://example.com");
     assert.deepEqual(ctx.target.namespacePrefix, ["live"]);
     assert.isUndefined(ctx.target.pendingPrefix);
     // GOAWAY 受信後はセッションを閉じない (§9.2)
