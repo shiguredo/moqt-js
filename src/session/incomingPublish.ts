@@ -126,6 +126,12 @@ export function incomingPublishStartBidiStreamLoop(session: IncomingPublishSessi
 
 /**
  * PUBLISH ストリームの後続メッセージ読み取りサブループ
+ *
+ * `initialMessages` は最初の read より前に処理する。順序を逆にすると、連結された
+ * PUBLISH_DONE の直後に届いた FIN が先に FIN_WITHOUT_PUBLISH_DONE_MESSAGE の
+ * 分岐へ入る。
+ *
+ * @param initialMessages - 先頭チャンクに連結されていたメッセージ (無ければ空)
  */
 export async function incomingPublishRunStreamSubLoop(
   session: IncomingPublishSessionInternal,
@@ -133,13 +139,204 @@ export async function incomingPublishRunStreamSubLoop(
   publishRequestId: bigint,
   subReader: ReadableStreamDefaultReader<Uint8Array>,
   subControlReader: ControlStreamReader,
+  initialMessages: ControlMessage[] = [],
 ): Promise<void> {
   // draft-ietf-moq-transport-21 §9.2:
   // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
   // フラグ。GOAWAY 受信時は state 遷移を行わないため、catch での spurious
   // error 通知を抑止する判定に使う。
   let goawayReceived = false;
+
+  /**
+   * 1 チャンク分のメッセージ列を処理する
+   *
+   * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+   * このチャンクの先頭の未応答数を記録し、メッセージ列の処理を終えた時点で
+   * 記録した値へ戻す (チャンク単位の減算。加算は受信 1 通ごとに
+   * bidiHandlePublishRequestUpdate が行う)。1 通ごとに減算すると、応答の
+   * 書き込みを await してから次のメッセージへ進む構造のため未応答数が
+   * 常に 0 か 1 にしかならず、同じチャンクに含まれる N+1 通目を検出できない。
+   *
+   * @returns 読み取りを続けるなら true、終えるなら false
+   */
+  const processMessages = async (messages: ControlMessage[]): Promise<boolean> => {
+    const requestUpdateCountBeforeChunk =
+      session.receivedRequestUpdateCounts.get(publishRequestId) ?? 0;
+    try {
+      for (const msg of messages) {
+        session.emitDebug("recv", msg.type, msg.payload);
+
+        if (msg.type === MessageType.PUBLISH_DONE) {
+          bidi.bidiHandlePublishDone(
+            session as unknown as bidi.BidiSessionInternal,
+            msg.payload,
+            publishRequestId,
+          );
+          continue;
+        }
+        if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
+          // draft-ietf-moq-transport-21 §9.10:
+          // 受信 PUBLISH で確立した購読への publisher 発の状態通知を受理する。
+          // 応答は送信しない。受信 PUBLISH 経路は subscriber 側のため
+          // ロールは subscribe として扱う。閉鎖後は打ち切る。
+          if (
+            !bidi.bidiHandlePublishStateNotify(
+              session as unknown as bidi.BidiSessionInternal,
+              msg.payload,
+              publishRequestId,
+              "subscribe",
+            )
+          ) {
+            return false;
+          }
+          if (session.sessionState !== "connected") {
+            return false;
+          }
+          continue;
+        }
+        if (msg.type === MessageType.GOAWAY) {
+          const goawayError = bidi.validateNoDuplicateGoawayOnRequestStream(
+            publishRequestId,
+            session.goawayReceivedOnRequestStreams,
+          );
+          if (goawayError !== null) {
+            session.closeWithError(goawayError);
+            return false;
+          }
+          const decodedMsg = decodeGoawayPayload(msg.payload);
+          try {
+            impl.goawayCallback?.(decodedMsg.newSessionUri);
+          } catch {
+            // アプリのコールバック例外はプロトコル違反ではないため黙殺する。
+            // 黙殺しないと後続の pendingRequestUpdate 掃除や close() が
+            // 実行されず、update() の Promise が未解決のまま残る。
+          }
+          goawayReceived = true;
+          // draft-ietf-moq-transport-21 §9.2:
+          // GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗
+          // として扱う (受信 PUBLISH の subscriber として送信済みの update()
+          // の Promise を未解決のまま残さない)。GOAWAY 後の読み取り継続中に
+          // REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため
+          // 二重解決しない。
+          // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+          bidi.deleteFillTargetsForPendingUpdates(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+          );
+          bidi.rejectPendingRequestUpdates(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+            new RequestError(bidi.REQUEST_GOING_AWAY_REASON, RequestErrorCode.GOING_AWAY),
+          );
+          // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
+          // (§9.2 MUST)。受信 PUBLISH の subscriber (impl) は送信方向を
+          // FIN (writer.close()) で閉じ、受信方向は読み取りを継続する。
+          await bidi.closeRequestStreamWriter(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+          );
+          continue;
+        }
+        if (msg.type === MessageType.REQUEST_UPDATE) {
+          // draft-ietf-moq-transport-21 §9.5 ケース 1:
+          // 「The sender of a request (SUBSCRIBE, PUBLISH, FETCH,
+          // PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can
+          // later send a REQUEST_UPDATE on the same bidi stream as the
+          // request to modify it.」
+          // 受信 PUBLISH の publisher (ピア) による REQUEST_UPDATE を処理し、
+          // REQUEST_OK / REQUEST_ERROR を 1 通応答する (§9.5 MUST)。
+          // GOAWAY 受信後 / ID 検証 / パラメータスコープ検証 /
+          // 文脈限定パラメータの判定は free function 内で行う (GOING_AWAY
+          // 応答も同関数の判定順序 (2) が担う)。スコープ違反等でセッションが
+          // 閉じた場合は、同一チャンクの残りメッセージの処理を打ち切る。
+          await bidi.bidiHandlePublishRequestUpdate(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+            msg.payload,
+          );
+          if (session.sessionState !== "connected") {
+            return false;
+          }
+          continue;
+        }
+        if (msg.type === MessageType.REQUEST_OK) {
+          bidi.bidiHandleRequestUpdateOk(
+            session as unknown as bidi.BidiSessionInternal,
+            msg.payload,
+            publishRequestId,
+          );
+          // draft-ietf-moq-transport-21 §9.5:
+          // bidiHandleRequestUpdateOk は REQUEST_UPDATE_OK のパラメータスコープ違反、
+          // 未知の Mandatory Track Property、未応答の REQUEST_UPDATE が無い
+          // REQUEST_OK の 3 箇所でセッションを閉じ得る。
+          // 同一チャンクの残りメッセージを処理し続けると、後続メッセージが
+          // 別のセッション終了を検出して error コールバックが二重に通知されるため、
+          // 閉じた場合は読み取りループを終える
+          // (PUBLISH_STATE_NOTIFY / REQUEST_UPDATE 分岐と同じ判定)。
+          if (session.sessionState !== "connected") {
+            return false;
+          }
+          continue;
+        }
+        if (msg.type === MessageType.REQUEST_ERROR) {
+          const decoded = decodeRequestErrorPayload(msg.payload);
+          const error = new RequestError(
+            decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
+            normalizeRequestErrorCode(Number(decoded.errorCode)),
+          );
+          // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
+          // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
+          // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
+          bidi.deleteFillTargetsForPendingUpdates(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+          );
+          // §9.5.1: coalescing は失敗分をまとめるだけであり、in-flight だった
+          // 成功分の更新への REQUEST_OK は別途届く。消した件数分を許容枠に積む。
+          bidi.allowUnmatchedRequestOks(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+            bidi.rejectPendingRequestUpdates(
+              session as unknown as bidi.BidiSessionInternal,
+              publishRequestId,
+              error,
+            ),
+          );
+          continue;
+        }
+        // 未知のメッセージタイプは PROTOCOL_VIOLATION
+        session.closeWithError(
+          new SessionError(
+            `unknown message type on publish stream: 0x${msg.type.toString(16)}`,
+            SessionErrorCode.PROTOCOL_VIOLATION,
+          ),
+        );
+        return false;
+      }
+    } finally {
+      bidi.restoreIncomingRequestUpdateCount(
+        session as unknown as bidi.BidiSessionInternal,
+        publishRequestId,
+        requestUpdateCountBeforeChunk,
+      );
+    }
+    return true;
+  };
+
   try {
+    // 先頭の PUBLISH と同一チャンクに連結されていたメッセージを、最初の read より
+    // 先に処理する (ControlStreamReader は取り出したメッセージをバッファから
+    // 削除するため、ここで処理しないと復元できない)。ループ本体と同じく、
+    // 購読が active の間だけ処理する (PUBLISH_OK の書き込み中に unsubscribe
+    // された場合は処理しない)
+    if (
+      impl.state === "active" &&
+      initialMessages.length > 0 &&
+      !(await processMessages(initialMessages))
+    ) {
+      return;
+    }
+
     while (impl.state === "active") {
       const { value, done } = await subReader.read();
       if (done) {
@@ -166,172 +363,8 @@ export async function incomingPublishRunStreamSubLoop(
         return;
       }
 
-      const messages = subControlReader.feed(value);
-      // draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
-      // この read の先頭の未応答数を記録し、メッセージ列の処理を終えた時点で
-      // 記録した値へ戻す (チャンク単位の減算。加算は受信 1 通ごとに
-      // bidiHandlePublishRequestUpdate が行う)。1 通ごとに減算すると、応答の
-      // 書き込みを await してから次のメッセージへ進む構造のため未応答数が
-      // 常に 0 か 1 にしかならず、同じ read に含まれる N+1 通目を検出できない。
-      const requestUpdateCountBeforeRead =
-        session.receivedRequestUpdateCounts.get(publishRequestId) ?? 0;
-      try {
-        for (const msg of messages) {
-          session.emitDebug("recv", msg.type, msg.payload);
-
-          if (msg.type === MessageType.PUBLISH_DONE) {
-            bidi.bidiHandlePublishDone(
-              session as unknown as bidi.BidiSessionInternal,
-              msg.payload,
-              publishRequestId,
-            );
-            continue;
-          }
-          if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
-            // draft-ietf-moq-transport-21 §9.10:
-            // 受信 PUBLISH で確立した購読への publisher 発の状態通知を受理する。
-            // 応答は送信しない。受信 PUBLISH 経路は subscriber 側のため
-            // ロールは subscribe として扱う。閉鎖後は打ち切る。
-            if (
-              !bidi.bidiHandlePublishStateNotify(
-                session as unknown as bidi.BidiSessionInternal,
-                msg.payload,
-                publishRequestId,
-                "subscribe",
-              )
-            ) {
-              return;
-            }
-            if (session.sessionState !== "connected") {
-              return;
-            }
-            continue;
-          }
-          if (msg.type === MessageType.GOAWAY) {
-            const goawayError = bidi.validateNoDuplicateGoawayOnRequestStream(
-              publishRequestId,
-              session.goawayReceivedOnRequestStreams,
-            );
-            if (goawayError !== null) {
-              session.closeWithError(goawayError);
-              return;
-            }
-            const decodedMsg = decodeGoawayPayload(msg.payload);
-            try {
-              impl.goawayCallback?.(decodedMsg.newSessionUri);
-            } catch {
-              // アプリのコールバック例外はプロトコル違反ではないため黙殺する。
-              // 黙殺しないと後続の pendingRequestUpdate 掃除や close() が
-              // 実行されず、update() の Promise が未解決のまま残る。
-            }
-            goawayReceived = true;
-            // draft-ietf-moq-transport-21 §9.2:
-            // GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗
-            // として扱う (受信 PUBLISH の subscriber として送信済みの update()
-            // の Promise を未解決のまま残さない)。GOAWAY 後の読み取り継続中に
-            // REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため
-            // 二重解決しない。
-            // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
-            bidi.deleteFillTargetsForPendingUpdates(
-              session as unknown as bidi.BidiSessionInternal,
-              publishRequestId,
-            );
-            bidi.rejectPendingRequestUpdates(
-              session as unknown as bidi.BidiSessionInternal,
-              publishRequestId,
-              new RequestError(bidi.REQUEST_GOING_AWAY_REASON, RequestErrorCode.GOING_AWAY),
-            );
-            // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
-            // (§9.2 MUST)。受信 PUBLISH の subscriber (impl) は送信方向を
-            // FIN (writer.close()) で閉じ、受信方向は読み取りを継続する。
-            await bidi.closeRequestStreamWriter(
-              session as unknown as bidi.BidiSessionInternal,
-              publishRequestId,
-            );
-            continue;
-          }
-          if (msg.type === MessageType.REQUEST_UPDATE) {
-            // draft-ietf-moq-transport-21 §9.5 ケース 1:
-            // 「The sender of a request (SUBSCRIBE, PUBLISH, FETCH,
-            // PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can
-            // later send a REQUEST_UPDATE on the same bidi stream as the
-            // request to modify it.」
-            // 受信 PUBLISH の publisher (ピア) による REQUEST_UPDATE を処理し、
-            // REQUEST_OK / REQUEST_ERROR を 1 通応答する (§9.5 MUST)。
-            // GOAWAY 受信後 / ID 検証 / パラメータスコープ検証 /
-            // 文脈限定パラメータの判定は free function 内で行う (GOING_AWAY
-            // 応答も同関数の判定順序 (2) が担う)。スコープ違反等でセッションが
-            // 閉じた場合は、同一チャンクの残りメッセージの処理を打ち切る。
-            await bidi.bidiHandlePublishRequestUpdate(
-              session as unknown as bidi.BidiSessionInternal,
-              publishRequestId,
-              msg.payload,
-            );
-            if (session.sessionState !== "connected") {
-              return;
-            }
-            continue;
-          }
-          if (msg.type === MessageType.REQUEST_OK) {
-            bidi.bidiHandleRequestUpdateOk(
-              session as unknown as bidi.BidiSessionInternal,
-              msg.payload,
-              publishRequestId,
-            );
-            // draft-ietf-moq-transport-21 §9.5:
-            // bidiHandleRequestUpdateOk は REQUEST_UPDATE_OK のパラメータスコープ違反、
-            // 未知の Mandatory Track Property、未応答の REQUEST_UPDATE が無い
-            // REQUEST_OK の 3 箇所でセッションを閉じ得る。
-            // 同一チャンクの残りメッセージを処理し続けると、後続メッセージが
-            // 別のセッション終了を検出して error コールバックが二重に通知されるため、
-            // 閉じた場合は読み取りループを終える
-            // (PUBLISH_STATE_NOTIFY / REQUEST_UPDATE 分岐と同じ判定)。
-            if (session.sessionState !== "connected") {
-              return;
-            }
-            continue;
-          }
-          if (msg.type === MessageType.REQUEST_ERROR) {
-            const decoded = decodeRequestErrorPayload(msg.payload);
-            const error = new RequestError(
-              decoded.reasonPhrase || `Request failed with code ${decoded.errorCode}`,
-              normalizeRequestErrorCode(Number(decoded.errorCode)),
-            );
-            // draft-ietf-moq-transport-21 §9.5: coalescing により単一 REQUEST_ERROR で
-            // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
-            // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
-            bidi.deleteFillTargetsForPendingUpdates(
-              session as unknown as bidi.BidiSessionInternal,
-              publishRequestId,
-            );
-            // §9.5.1: coalescing は失敗分をまとめるだけであり、in-flight だった
-            // 成功分の更新への REQUEST_OK は別途届く。消した件数分を許容枠に積む。
-            bidi.allowUnmatchedRequestOks(
-              session as unknown as bidi.BidiSessionInternal,
-              publishRequestId,
-              bidi.rejectPendingRequestUpdates(
-                session as unknown as bidi.BidiSessionInternal,
-                publishRequestId,
-                error,
-              ),
-            );
-            continue;
-          }
-          // 未知のメッセージタイプは PROTOCOL_VIOLATION
-          session.closeWithError(
-            new SessionError(
-              `unknown message type on publish stream: 0x${msg.type.toString(16)}`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
-            ),
-          );
-          return;
-        }
-      } finally {
-        bidi.restoreIncomingRequestUpdateCount(
-          session as unknown as bidi.BidiSessionInternal,
-          publishRequestId,
-          requestUpdateCountBeforeRead,
-        );
+      if (!(await processMessages(subControlReader.feed(value)))) {
+        return;
       }
     }
   } catch (err) {
@@ -505,10 +538,16 @@ export async function incomingPublishHandleBidirectionalStream(
   if (await incomingPublishCancelIfNotConnected(session, stream)) {
     return;
   }
-  const firstMsg = await incomingPublishReadFirstBidiMessage(session, stream);
-  if (firstMsg === null) {
-    return;
-  }
+  // 先頭読み取りに使う reader をサブループと共有する (PUBLISH 以外のメッセージ
+  // だった場合はこのまま破棄される)
+  const subControlReader = new ControlStreamReader();
+  const firstBidiMessage = await incomingPublishReadFirstBidiMessage(
+    session,
+    stream,
+    subControlReader,
+  );
+  if (firstBidiMessage === null) return;
+  const firstMsg = firstBidiMessage.firstMessage;
 
   // 先頭メッセージを 3 分類して処理する
   // draft-ietf-moq-transport-21 §6.3 (Session initialization):
@@ -716,7 +755,6 @@ export async function incomingPublishHandleBidirectionalStream(
     impl.setRangeFilters(objectLevelFilters);
   }
 
-  const subControlReader = new ControlStreamReader();
   let subReader: ReadableStreamDefaultReader<Uint8Array>;
   let subWriter: WritableStreamDefaultWriter<Uint8Array>;
   try {
@@ -782,6 +820,7 @@ export async function incomingPublishHandleBidirectionalStream(
       publishRequestId,
       subReader,
       subControlReader,
+      firstBidiMessage.remainingMessages,
     );
   } catch (error) {
     // PUBLISH_OK 書き込み失敗時は失敗として扱う (§3.1 MUST の PUBLISH_OK を
@@ -985,32 +1024,46 @@ export function incomingPublishMatchToSubscription(
 }
 
 /**
- * 受信 bidi ストリームの先頭メッセージを読み取る
+ * 受信 bidi ストリームの先頭読み取りの結果
  *
- * 同一チャンクに連結された先頭以降のメッセージは破棄される
- * (先頭メッセージのみを 3 分類の対象とする。既存挙動の継続)。
+ * 先頭メッセージと、それと同一チャンクに連結されていた残りメッセージを持つ。
+ */
+export interface IncomingPublishFirstBidiMessage {
+  firstMessage: ControlMessage;
+  remainingMessages: ControlMessage[];
+}
+
+/**
+ * 受信 bidi ストリームの先頭メッセージと、同一チャンクに連結されていた残りを読み取る
  *
- * @returns 先頭メッセージ。FIN 検出時・読み取り失敗時は null
+ * `ControlStreamReader` は取り出したメッセージをバッファから削除するため、
+ * 先頭読み取りに使う reader は呼び出し側が用意してサブループへ引き継ぐ。
+ * reader を作り直すと、最初の read で生じた半端なバイト (メッセージの途中で
+ * チャンクが切れた分) を復元できない。
+ *
+ * @param controlReader - 先頭読み取りに使う reader (サブループと共有する)
+ * @returns 先頭メッセージと、同一チャンクに連結されていた残りメッセージ。
+ *   FIN 検出時・読み取り失敗時は null
  */
 export async function incomingPublishReadFirstBidiMessage(
   session: IncomingPublishSessionInternal,
   stream: WebTransportBidirectionalStream,
-): Promise<ControlMessage | null> {
-  const firstControlReader = new ControlStreamReader();
+  controlReader: ControlStreamReader,
+): Promise<IncomingPublishFirstBidiMessage | null> {
   try {
     const firstMsgReader = stream.readable.getReader();
     try {
       while (true) {
         const { value, done } = await firstMsgReader.read();
         if (done) return null;
-        const messages = firstControlReader.feed(value);
+        const messages = controlReader.feed(value);
         if (messages.length > 0) {
-          const firstMessage = messages[0];
+          const [firstMessage, ...remainingMessages] = messages;
           if (firstMessage === undefined) {
             // 上の messages.length > 0 により到達しない (型を絞るためのガード)
             return null;
           }
-          return firstMessage;
+          return { firstMessage, remainingMessages };
         }
       }
     } finally {

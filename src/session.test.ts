@@ -85,6 +85,7 @@ import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
   bidiCancelSubscription,
+  FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
   type BidiSessionInternal,
@@ -1340,6 +1341,74 @@ function appendPayloadSuffix(payload: Uint8Array, suffix: Uint8Array): Uint8Arra
 }
 
 /**
+ * TRACK_ENDED の PUBLISH_DONE フレームを作る
+ */
+function encodeTrackEndedPublishDoneFrame(): Uint8Array {
+  const controlWriter = new ControlStreamWriter();
+  return controlWriter.encode(
+    MessageType.PUBLISH_DONE,
+    encodePublishDonePayload({
+      type: MessageType.PUBLISH_DONE,
+      statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
+      streamCount: 0n,
+      reasonPhrase: "",
+    }),
+  );
+}
+
+/**
+ * 追加フレームのチャンク配置
+ *
+ * - "separate": PUBLISH と追加フレームを別チャンクで enqueue する (既定)
+ * - "coalesce": PUBLISH と追加フレームを 1 チャンクに連結する
+ * - "coalesce-first": 先頭の追加フレームだけを PUBLISH と連結し、残りは
+ *   1 フレーム 1 チャンクで送る
+ * - "coalesce-half": 先頭の追加フレームの前半までを PUBLISH と連結し、後半を
+ *   次のチャンクに分ける (チャンク境界が 2 通目のメッセージの途中に落ちる分割)
+ */
+type IncomingPublishFrameChunking = "separate" | "coalesce" | "coalesce-first" | "coalesce-half";
+
+/**
+ * PUBLISH フレームと追加フレームをチャンク列に組み立てる
+ *
+ * 連結・分割されたチャンクを再現するために使う。
+ *
+ * @param publishFrame - PUBLISH をエンコードしたフレーム
+ * @param extraFrames - PUBLISH の後に送る追加フレーム
+ * @param frameChunking - チャンク配置
+ */
+function buildIncomingPublishChunks(
+  publishFrame: Uint8Array,
+  extraFrames: Uint8Array[],
+  frameChunking: IncomingPublishFrameChunking,
+): Uint8Array[] {
+  if (frameChunking === "coalesce") {
+    return [concatUint8Arrays([publishFrame, ...extraFrames])];
+  }
+  if (frameChunking === "coalesce-first") {
+    const [firstFrame, ...restFrames] = extraFrames;
+    if (firstFrame === undefined) {
+      return [publishFrame];
+    }
+    return [concatUint8Arrays([publishFrame, firstFrame]), ...restFrames];
+  }
+  if (frameChunking === "coalesce-half") {
+    const [firstFrame, ...restFrames] = extraFrames;
+    if (firstFrame === undefined) {
+      return [publishFrame];
+    }
+    // 2 通目のメッセージの途中でチャンクが切れる分割を作る
+    const splitAt = Math.floor(firstFrame.byteLength / 2);
+    return [
+      concatUint8Arrays([publishFrame, firstFrame.subarray(0, splitAt)]),
+      firstFrame.subarray(splitAt),
+      ...restFrames,
+    ];
+  }
+  return [publishFrame, ...extraFrames];
+}
+
+/**
  * 受信 PUBLISH メッセージ入りの双方向ストリームを作る
  *
  * readable は highWaterMark を 0 にして pull ごとに 1 チャンクを渡す (消費側の
@@ -1358,6 +1427,8 @@ function appendPayloadSuffix(payload: Uint8Array, suffix: Uint8Array): Uint8Arra
  * @param trackPropertiesSuffix - Track Properties の末尾に連結する生バイト列
  *   (malformed Track Properties の再現用。正常系は空)
  * @param trackNamespace - PUBLISH の Track Namespace (区切り文字の衝突検証用)
+ * @param frameChunking - 追加フレームのチャンク配置 (連結・分割の再現用。既定は
+ *   1 フレーム 1 チャンク)
  */
 function createIncomingPublishStream(
   terminate: (controller: ReadableStreamDefaultController<Uint8Array>) => void,
@@ -1368,6 +1439,7 @@ function createIncomingPublishStream(
   requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
   trackPropertiesSuffix: Uint8Array = new Uint8Array(0),
   trackNamespace: string[] = INCOMING_PUBLISH_NAMESPACE,
+  frameChunking: IncomingPublishFrameChunking = "separate",
 ): WebTransportBidirectionalStream {
   const publishPayload = encodePublishPayload({
     type: MessageType.PUBLISH,
@@ -1381,7 +1453,11 @@ function createIncomingPublishStream(
   // Track Properties は payload 末尾を占めるため、生バイト列の連結で malformed を再現できる
   const payload = appendPayloadSuffix(publishPayload, trackPropertiesSuffix);
   const controlWriter = new ControlStreamWriter();
-  const chunks = [controlWriter.encode(MessageType.PUBLISH, payload), ...extraFrames];
+  const chunks = buildIncomingPublishChunks(
+    controlWriter.encode(MessageType.PUBLISH, payload),
+    extraFrames,
+    frameChunking,
+  );
   const readable = new ReadableStream<Uint8Array>(
     {
       pull(controller) {
@@ -2523,16 +2599,7 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
       errorCalled = true;
     },
   });
-  const controlWriter = new ControlStreamWriter();
-  const publishDoneFramed = controlWriter.encode(
-    MessageType.PUBLISH_DONE,
-    encodePublishDonePayload({
-      type: MessageType.PUBLISH_DONE,
-      statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
-      streamCount: 0n,
-      reasonPhrase: "",
-    }),
-  );
+  const publishDoneFramed = encodeTrackEndedPublishDoneFrame();
 
   await internal.handleIncomingBidirectionalStream(
     createIncomingPublishStream(
@@ -2599,6 +2666,274 @@ test("受信 PUBLISH_DONE の削除された 0x3 は end と error の両方が�
   assert.isTrue(errorCalled);
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * QUIC のストリームに書き込み境界は無いため、ピアは PUBLISH と PUBLISH_DONE を
+ * 同一チャンクに連結して送れる (draft-ietf-moq-transport-21 §9.9 は PUBLISH_DONE を
+ * 購読の bidi ストリームを閉じる最終メッセージと定める)。連結された PUBLISH_DONE を
+ * 取りこぼすと、誰も処理しないまま FIN に到達して購読が end ではなく error で終わる。
+ */
+test("受信 PUBLISH と同一チャンクに連結された PUBLISH_DONE が処理され end が通知される", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  let errorCalled = false;
+  let subscriber: SubscriberImpl | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
+    },
+    error: () => {
+      errorCalled = true;
+    },
+  });
+  const publishDoneFramed = encodeTrackEndedPublishDoneFrame();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        // 連結分を処理しないと、次の read で FIN を観測して失敗通知になる
+        controller.close();
+      },
+      [publishDoneFramed],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      INCOMING_PUBLISH_NAMESPACE,
+      "coalesce",
+    ),
+  );
+
+  // PUBLISH_DONE が処理され、FIN による失敗通知は起きない
+  assert.isTrue(endCalled);
+  assert.isFalse(errorCalled);
+  assert.isDefined(subscriber);
+  assert.equal(subscriber!.state, "closed");
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * チャンク境界はメッセージの途中にも落ちる。連結された PUBLISH_DONE の前半が
+ * 先頭チャンク、後半が次のチャンクに分かれていても、先頭読み取りで使った
+ * ControlStreamReader を引き継いで処理できることを検証する
+ * (reader を作り直すと半端なバイトが失われ、PUBLISH_DONE を取りこぼす)。
+ */
+test("受信 PUBLISH と同一チャンクに連結された PUBLISH_DONE がメッセージ途中で分割されても処理される", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  let errorCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+    },
+    error: () => {
+      errorCalled = true;
+    },
+  });
+  const publishDoneFramed = encodeTrackEndedPublishDoneFrame();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [publishDoneFramed],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      INCOMING_PUBLISH_NAMESPACE,
+      "coalesce-half",
+    ),
+  );
+
+  // 分割されていても PUBLISH_DONE が組み立てられ、end が通知される
+  assert.isTrue(endCalled);
+  assert.isFalse(errorCalled);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.5 / §9.9:
+ * 連結チャンクに 2 通以上が載る場合も、すべて順に処理されることを検証する。
+ * REQUEST_UPDATE には REQUEST_OK を 1 通応答し (§9.5 MUST)、後続の PUBLISH_DONE で
+ * end を通知する。
+ */
+test("受信 PUBLISH と同一チャンクに連結された REQUEST_UPDATE と PUBLISH_DONE が順に処理される", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  let errorCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+    },
+    error: () => {
+      errorCalled = true;
+    },
+  });
+  // REQUEST_UPDATE への応答は controlWriter 経由でエンコードされる
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  const updateChunk = encodeIncomingRequestUpdateChunk([101n]);
+  const merged = concatUint8Arrays([updateChunk, encodeTrackEndedPublishDoneFrame()]);
+  // 応答フレーム (PUBLISH_OK と REQUEST_OK) を観測する
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [merged],
+      [],
+      writable,
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      INCOMING_PUBLISH_NAMESPACE,
+      "coalesce",
+    ),
+  );
+
+  // REQUEST_OK が 2 通 (PUBLISH_OK と REQUEST_UPDATE への応答) 書かれ、end も通知される
+  const responseReader = new ControlStreamReader();
+  const responseTypes = responseReader.feed(concatUint8Arrays(written)).map((msg) => msg.type);
+  assert.deepEqual(responseTypes, [MessageType.REQUEST_OK, MessageType.REQUEST_OK]);
+  assert.isTrue(endCalled);
+  assert.isFalse(errorCalled);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 上限判定は 1 チャンクに含まれる通数で行うため、連結チャンクに載った
+ * REQUEST_UPDATE も 1 通ずつ数える。上限 + 1 通目を検出できることを検証する。
+ */
+test("受信 PUBLISH と同一チャンクに連結された複数の REQUEST_UPDATE も上限判定に数える", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+  // 自 endpoint が上限 1 を広告した状態にする
+  session.localMaxRequestUpdates = 1;
+  const merged = encodeIncomingRequestUpdateChunk([101n, 103n]);
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [merged],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      INCOMING_PUBLISH_NAMESPACE,
+      "coalesce",
+    ),
+  );
+
+  // 連結チャンクの 2 通目が処理され、TOO_MANY_REQUEST_UPDATES でセッションが閉じる
+  assert.equal(internal.sessionState, "closed");
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.TOO_MANY_REQUEST_UPDATES);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.7 (MAX_REQUEST_UPDATES):
+ * 未応答数の減算はチャンク単位で行うため、前のチャンクの REQUEST_UPDATE が次の
+ * チャンクの判定に持ち越されてはならない。持ち越すと、上限内の 1 通でも
+ * TOO_MANY_REQUEST_UPDATES で閉じてしまう。連結チャンク (先頭の PUBLISH に
+ * REQUEST_UPDATE を 1 通連結) と、続く別チャンクの REQUEST_UPDATE で検証する。
+ */
+test("受信 PUBLISH の連結チャンクを跨いでも REQUEST_UPDATE の未応答数は持ち越されない", async () => {
+  const errors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      errors.push(error);
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+  });
+  // 自 endpoint が上限 1 を広告した状態にする
+  session.localMaxRequestUpdates = 1;
+  const firstUpdateChunk = encodeIncomingRequestUpdateChunk([101n]);
+  const secondUpdateChunk = encodeIncomingRequestUpdateChunk([103n]);
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [firstUpdateChunk, secondUpdateChunk],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      INCOMING_PUBLISH_NAMESPACE,
+      "coalesce-first",
+    ),
+  );
+
+  // 各チャンクの REQUEST_UPDATE は 1 通ずつなので上限内に収まり、閉じない
+  assert.equal(internal.sessionState, "connected");
+  assert.equal(errors.length, 0);
+  // チャンクの処理後に未応答数は破棄される
+  assert.equal(session.receivedRequestUpdateCounts.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2:
+ * 連結が無い場合の既存挙動 (PUBLISH_DONE を送らない FIN は失敗扱い) が
+ * 変わらないことを検証する回帰ガード。
+ */
+test("受信 PUBLISH と連結されていない FIN は PUBLISH_DONE 無しの失敗として通知される", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  let notifiedError: Error | undefined;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+    },
+    error: (error: Error) => {
+      notifiedError = error;
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => {
+      // PUBLISH の後に PUBLISH_DONE を送らず FIN する
+      controller.close();
+    }),
+  );
+
+  // 失敗扱いのエラーが通知され、end は通知されない
+  assert.isFalse(endCalled);
+  assert.isDefined(notifiedError);
+  assert.equal(notifiedError!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
   assert.equal(internal.sessionState, "connected");
 });
 
