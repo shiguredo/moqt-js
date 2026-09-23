@@ -447,19 +447,31 @@ MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─
   - 単一レイヤー前提のため `temporalLayerId` / `spatialLayerId` は 0 固定
   - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダがワイヤ上 B=0 に抑圧する
   - `isDiscardable` は WebCodecs が破棄可能性情報を提供しないため false 固定
+- `VIDEO_CONFIG` / `AUDIO_CONFIG`: エンコーダの metadata が返す description (映像は SPS/PPS などの extradata、音声は AAC の AudioSpecificConfig)
+  - 受信側はこれを `VideoDecoder.configure` / `AudioDecoder.configure` の `description` に使う (draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1)
 
 送信は `LOC.encodeAudioProperties` / `LOC.encodeVideoProperties` を通す。TIMESTAMP は
 Unix epoch マイクロ秒 (壁時計) で送り、TIMESCALE は付けない (draft-ietf-moq-loc-04 §2.3.1.1)。
 
 LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベル API は送信しない:
 
-- `VIDEO_CONFIG` / `AUDIO_CONFIG`: コーデック description
 - `AUDIO_LEVEL`: オーディオレベル
 - `TIMESCALE`: Timestamp の単位
 
-高レベル API の送信経路は `encodeVideoConfig` / `encodeAudioConfig` を呼ばないため、
-受信側は description (SPS/PPS など) を得られない。デコーダーの設定は
-`VideoDecoder.configure` に渡す `description` をアプリが別経路で用意する必要がある。
+`VIDEO_CONFIG` / `AUDIO_CONFIG` は、同じ値を毎 Object 送らず変化したときだけ載せる。
+音声だけは後着の購読者のために同じ値も載せ直す (次項)。
+
+音声にはキーフレームが無く、Chromium の `AudioEncoder` では description が configure 後の
+最初の出力にしか現れない (実装依存であり将来変わり得る)。後着の購読者へ届けるために、
+音声 Publisher の Forward State が 0 から 1 になった時点
+(draft-ietf-moq-transport-21 §7.5) で保持している `AUDIO_CONFIG` を次の Object に
+1 度だけ載せ直す。
+
+Forward State が 1 のまま購読者が接続した場合は変化が起きないため送り直されず、
+Relay のキャッシュに依存する。購読者がいない間に Relay が Forward State を
+0 に戻すかは裁量である (draft-ietf-moq-transport-21 §7.2)。stop 後に再開した場合は新しい
+セッションとエンコーダになるため、保持していた `AUDIO_CONFIG` は破棄し、新しい
+エンコーダの description を改めて送る。
 
 ### groupId / objectId 管理
 

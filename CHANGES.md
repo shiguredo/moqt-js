@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] 後着の購読者へ Audio Config を送り直す
+  - 音声の publisher は Forward State が 0 から 1 になった時点 (draft-ietf-moq-transport-21 §7.5) で、保持している Audio Config を次の Object に 1 度だけ載せ直す
+  - 同じ値を毎 Object 送らない動作は維持し、stop 後の再開では保持値と送り直し要求を破棄して新しいエンコーダの description を初出として送る
+  - 長さ 0 の description は設定として成立しないため送らない
+  - @voluntas
 - [FIX] 後着の購読者が catalog の FETCH で最新 Group を取得できるようにする
   - catalog の FETCH の開始位置を、購読確立時の LARGEST_OBJECT が示す Group の先頭 Object にする
   - LARGEST_OBJECT が不明な場合と Group 0 の場合は従来どおりフィルタ無しで要求する

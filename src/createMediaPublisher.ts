@@ -206,6 +206,93 @@ export function shouldSendKeyFrame(frameCount: number, keyframeInterval: number)
   return frameCount % keyframeInterval === 0;
 }
 
+// codec description の送出判断
+//
+// WebCodecs が返す description (extradata) を LOC の Video Config / Audio Config
+// として送出するかの判断を、状態を持たない関数に切り出したもの。
+
+/**
+ * 2 つの codec description が同じ値かを判定する純関数
+ *
+ * WebCodecs の `EncodedVideoChunkMetadata` / `EncodedAudioChunkMetadata` の
+ * `decoderConfig.description` (LOC の Video Config / Audio Config の元になる
+ * extradata) は、configure 直後を除いて同じ値が繰り返し渡る。変化したときだけ
+ * 載せるかの判断に使う。
+ *
+ * @param previous - 直前に送った description (未送信なら null)
+ * @param description - 今回の description
+ * @returns 同じ値なら true
+ */
+function isSameCodecDescription(previous: Uint8Array | null, description: Uint8Array): boolean {
+  if (previous === null || previous.length !== description.length) {
+    return false;
+  }
+  for (let i = 0; i < previous.length; i++) {
+    if (previous[i] !== description[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Audio Config の送出判断の結果 */
+export interface AudioConfigResolution {
+  /** 今回の Object に載せる config (載せない場合は undefined) */
+  config: Uint8Array | undefined;
+  /** 次回のために保持する値 */
+  next: Uint8Array | null;
+  /** 送り直し要求を次の Object へ残すか */
+  resendNext: boolean;
+}
+
+/**
+ * 送信する Audio Config を解決する純関数
+ *
+ * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の復号に必須の
+ * AudioSpecificConfig は `AudioDecoderConfig.description` に対応する。Chromium の
+ * `AudioEncoder` は configure 後の最初の出力の metadata にしか description を付けず
+ * (実装依存であり将来変わり得る)、音声にはキーフレームが無いため、配信開始後に
+ * 接続した購読者へ届けるには送り直しが要る。
+ *
+ * 送り直しは Forward State が 0 から 1 になった時点 (購読者の出現を
+ * draft-ietf-moq-transport-21 §7.5 の REQUEST_UPDATE の FORWARD パラメータで
+ * 知った時点) に要求され、保持している値を次の Object に 1 度だけ載せ直す。
+ * 載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
+ * Forward State が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が Forward State を 0 にするかは §7.2 により relay の
+ * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
+ * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
+ * 再構成しないため、この再送は自前の購読経路に対して冪等である。
+ *
+ * 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
+ *
+ * @param previous - 直前に送った Audio Config (未送信なら null)
+ * @param description - 今回の chunk が持つ Audio Config (opus は undefined。
+ *   空の description は設定として意味を持たないため値なしとして扱う)
+ * @param resendRequested - 保持している Audio Config の送り直しを要求されているか
+ * @returns 今回載せる config、次回のために保持する値、送り直し要求を残すか
+ */
+export function resolveAudioConfigToSend(
+  previous: Uint8Array | null,
+  description: Uint8Array | undefined,
+  resendRequested: boolean,
+): AudioConfigResolution {
+  // 新しい値が現れたときは、送り直し要求の有無にかかわらずそれを載せる
+  if (
+    description !== undefined &&
+    description.length > 0 &&
+    !isSameCodecDescription(previous, description)
+  ) {
+    return { config: description, next: new Uint8Array(description), resendNext: false };
+  }
+  // 送り直し要求には保持値で応える (同じ値でも 1 度だけ載せ直す)
+  if (resendRequested && previous !== null) {
+    return { config: previous, next: previous, resendNext: false };
+  }
+  // 保持値が無いまま要求された場合は、要求だけを残す (載せる値が無い)
+  return { config: undefined, next: previous, resendNext: resendRequested };
+}
+
 /**
  * MediaPublisher の実装クラス
  *
@@ -228,8 +315,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   // draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe でのみ encoder から渡るため、
   // 変化したときだけ載せて全 keyframe への重複送出を避ける。
   private lastSentVideoConfig: Uint8Array | null = null;
-  // 直前に AUDIO_CONFIG として送った description (同じ値を繰り返し送らないため)
+  // 直前に AUDIO_CONFIG として送った description。同じ値の重複送出を避けつつ、
+  // Forward State が 1 になった時点の送り直しの材料にもする
   private lastSentAudioConfig: Uint8Array | null = null;
+  // Forward State が 0 から 1 になった時点で立てる Audio Config の送り直し要求。
+  // 次の Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
+  private audioConfigResendRequested = false;
   private audioPublisher: Publisher | null = null;
   private videoPublisher: Publisher | null = null;
 
@@ -530,6 +621,15 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (audio) {
       this.audioPublisher = await this.session.publish(namespace, audio.trackName, {
         error: (error) => this.callbacks.onError?.(error),
+        // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
+        // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
+        // Forward State が 1 になった時点で保持値の送り直しを要求する
+        // (判断の詳細は resolveAudioConfigToSend の JSDoc を参照)
+        onForwardStateChange: (forward) => {
+          if (forward) {
+            this.audioConfigResendRequested = true;
+          }
+        },
       });
     }
 
@@ -770,13 +870,19 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
     // encoder が返す description (AAC の AudioSpecificConfig) を AUDIO_CONFIG として送る。
-    // description はエンコーダーの metadata に現れたときだけ載せ、同じ値は送らない
-    // (映像の VIDEO_CONFIG と同じ扱い)。
-    let audioConfig: Uint8Array | undefined;
-    if (chunk.description !== undefined && !this.isSameAudioConfig(chunk.description)) {
-      audioConfig = chunk.description;
-      this.lastSentAudioConfig = new Uint8Array(chunk.description);
-    }
+    // 同じ値の重複送出を避けつつ後着の購読者へ送り直す判断は
+    // resolveAudioConfigToSend が持つ
+    const {
+      config: audioConfig,
+      next,
+      resendNext,
+    } = resolveAudioConfigToSend(
+      this.lastSentAudioConfig,
+      chunk.description,
+      this.audioConfigResendRequested,
+    );
+    this.lastSentAudioConfig = next;
+    this.audioConfigResendRequested = resendNext;
 
     // LOC Properties をエンコード。
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
@@ -813,44 +919,6 @@ export class MediaPublisherImpl implements MediaPublisher {
       properties,
       priority: PRIORITY_AUDIO,
     });
-  }
-
-  /**
-   * 直前に送った Video Config と同じ description かを判定する
-   *
-   * draft-ietf-moq-loc-04 §2.3.2.1: description は keyframe の metadata にのみ現れる。
-   * 同じ値を毎 keyframe 送ると無駄になるため、変化したときだけ送る。
-   */
-  private isSameVideoConfig(description: Uint8Array): boolean {
-    const previous = this.lastSentVideoConfig;
-    if (previous === null || previous.length !== description.length) {
-      return false;
-    }
-    for (let i = 0; i < previous.length; i++) {
-      if (previous[i] !== description[i]) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * 直前に送った Audio Config と同じ description かを判定する
-   *
-   * 映像の isSameVideoConfig と同じ扱い。同じ値を毎チャンク送ると無駄になるため、
-   * 変化したときだけ AUDIO_CONFIG を載せる。
-   */
-  private isSameAudioConfig(description: Uint8Array): boolean {
-    const previous = this.lastSentAudioConfig;
-    if (previous === null || previous.length !== description.length) {
-      return false;
-    }
-    for (let i = 0; i < previous.length; i++) {
-      if (previous[i] !== description[i]) {
-        return false;
-      }
-    }
-    return true;
   }
 
   private handleVideoEncodedChunk(chunk: {
@@ -897,7 +965,10 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 復元できる。description は keyframe の metadata にのみ現れるため、
     // 変化したときだけ載せる。
     let videoConfig: Uint8Array | undefined;
-    if (chunk.description !== undefined && !this.isSameVideoConfig(chunk.description)) {
+    if (
+      chunk.description !== undefined &&
+      !isSameCodecDescription(this.lastSentVideoConfig, chunk.description)
+    ) {
       videoConfig = chunk.description;
       this.lastSentVideoConfig = new Uint8Array(chunk.description);
     }
@@ -943,9 +1014,14 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 最初の失敗は最後に再 throw する。
    * 二重破棄は冪等操作のみで行う
    * (Publisher の active ガード付き done、encoder・source・session の
-   * null 安全な close に依存する)。Catalog・統計・Group ID・
-   * オブジェクト ID・フレーム数・映像開始済みフラグは
-   * 再 start に引き継ぐため保持する。
+   * null 安全な close に依存する)。再 start に引き継ぐのは Catalog・統計・
+   * Group ID・オブジェクト ID・フレーム数・Group 開始済みフラグ (音声 / 映像) と、
+   * 直前に送った Video Config である。
+   * 直前に送った Audio Config と送り直し要求は session に紐づくため破棄する
+   * (再 start では購読者が誰も前の Object を受け取っていないため、新しい
+   * encoder の最初の description を初出として送り直す必要がある)。
+   * 映像の config 再送は音声とは別に扱うため、直前に送った Video Config は
+   * 破棄せず再 start 後も同じ値の送出を抑止する。
    */
   private async disposeAllResources(): Promise<void> {
     this.processingActive = false;
@@ -994,6 +1070,10 @@ export class MediaPublisherImpl implements MediaPublisher {
         await audioPublisher.done();
       }
     });
+    // encoder と Publisher を切り離した後に Audio Config の保持値と送り直し要求を
+    // 破棄する (破棄中に届いた出力で再充填されないようにする)
+    this.lastSentAudioConfig = null;
+    this.audioConfigResendRequested = false;
     const videoPublisher = this.videoPublisher;
     this.videoPublisher = null;
     await guard(async () => {

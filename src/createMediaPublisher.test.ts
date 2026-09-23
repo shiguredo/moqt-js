@@ -14,8 +14,12 @@
  * reader / encoder 注入は start() が接続を要するため private 経由で行う。
  *
  * グループ管理 (allocateAudioObject / allocateVideoObject) とキーフレーム判定
- * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数は
- * 純関数として切り出しており、固定値で直接駆動する。
+ * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数、
+ * Audio Config の再送判断 (resolveAudioConfigToSend) は純関数として切り出しており、
+ * 固定値で直接駆動する。
+ * Audio Config の再送は Forward State 変化のコールバック登録から
+ * handleAudioEncodedChunk までを、publish 呼び出しを記録する最小セッションを
+ * 注入して結合で検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -27,6 +31,7 @@ import {
   allocateAudioObject,
   allocateInitialGroupId,
   allocateVideoObject,
+  resolveAudioConfigToSend,
   resolveKeyframeInterval,
   shouldSendKeyFrame,
   type VideoGroupState,
@@ -34,9 +39,12 @@ import {
 import type { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { VideoEncoderWrapper } from "./codec/VideoEncoder";
 import type { MediaPublisherState } from "./codec/types";
+import { resolveAudioPublishSettings } from "./createMedia/settings";
+import type { ResolvedAudioPublishSettings } from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
+import { CATALOG_TRACK_NAME } from "./msf";
 import type { Publisher } from "./publisher";
-import type { Session } from "./session";
+import type { PublishCallbacks, Session } from "./session";
 import * as LOC from "./loc";
 
 /**
@@ -350,6 +358,12 @@ interface PublisherLifecycleControl extends PublisherLoopControl {
   catalogPublisher: Publisher | null;
   audioPublisher: Publisher | null;
   videoPublisher: Publisher | null;
+  // Forward State が 0 から 1 になった時点で立つ Audio Config の送り直し要求
+  audioConfigResendRequested: boolean;
+  // 直前に AUDIO_CONFIG として送った description (session を跨いで保持しない)
+  lastSentAudioConfig: Uint8Array | null;
+  // 直前に VIDEO_CONFIG として送った description
+  lastSentVideoConfig: Uint8Array | null;
   // {} 代入のための緩和であり検証対象外である (実装型はプロセッサ型)
   audioTrackProcessor: unknown;
   videoFrameSource: VideoFrameSource | null;
@@ -556,6 +570,10 @@ test("破棄段階の失敗は後続を止めず最初の失敗を throw し旧 
   lifecycle.catalogPublisher = rejectingCatalog;
   lifecycle.audioPublisher = audioPublisher;
   lifecycle.session = session;
+  // 破棄では session に紐づく Audio Config の保持値と要求を必ず忘れる。
+  // 段階破棄が失敗しても忘れ漏らさないことを確認する
+  lifecycle.lastSentAudioConfig = new Uint8Array([0x11, 0x90]);
+  lifecycle.audioConfigResendRequested = true;
 
   let thrown: unknown = null;
   try {
@@ -571,6 +589,8 @@ test("破棄段階の失敗は後続を止めず最初の失敗を throw し旧 
   assert.isNull(lifecycle.catalogPublisher);
   assert.isNull(lifecycle.audioPublisher);
   assert.isNull(lifecycle.session);
+  assert.isNull(lifecycle.lastSentAudioConfig);
+  assert.isFalse(lifecycle.audioConfigResendRequested);
   // 旧 state のまま残るため再試行できること
   assert.equal(publisher.state, "publishing");
   await publisher.stop();
@@ -787,6 +807,9 @@ function createCapturingPublisher(): {
   const sent: Array<{ properties?: Uint8Array }> = [];
   const publisher = {
     state: "active",
+    done: async () => {
+      // 破棄は no-op (購読の無いテストでは書き込み完了を待つ対象が無い)
+    },
     sendObject: async (params: { properties?: Uint8Array }) => {
       sent.push(params);
     },
@@ -880,7 +903,8 @@ test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を�
 /**
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
  * encoder が返す description (AAC の AudioSpecificConfig) が AUDIO_CONFIG として
- * 送られることを検証する。映像の VIDEO_CONFIG と同じ扱いで、同じ値は再送しない。
+ * 送られることを検証する。同じ値の重複送出は避けるが、Forward State が 0 から 1 に
+ * なった時点の送り直し要求には同じ値でも 1 度だけ応じる。
  */
 function sendAudioChunk(control: PublisherLifecycleControl, description?: Uint8Array): void {
   const handler = (
@@ -965,12 +989,351 @@ test("handleAudioEncodedChunk: description が無い chunk は AUDIO_CONFIG を�
 });
 
 /**
- * グループ管理とキーフレーム判定の純関数
+ * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+ * 後から接続した購読者 (Forward State が 0 から 1 になった時点) のために、
+ * 保持している Audio Config を次の Object に載せ直す契約を検証する。
+ * 音声にはキーフレームが無いため、description の再出現では送り直せない。
+ */
+test("handleAudioEncodedChunk: 送り直し要求で保持している Audio Config を 1 Object 載せ直す", () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  // 最初の chunk で Audio Config を送って保持する
+  const description = new Uint8Array([0x11, 0x90]);
+  sendAudioChunk(control, description);
+
+  // Forward State が 1 になった時点で立つ要求を再現する
+  control.audioConfigResendRequested = true;
+  sendAudioChunk(control);
+
+  // 載せ直しは 1 Object に限る (要求は載せた時点で解消する)
+  sendAudioChunk(control);
+
+  assert.equal(sent.length, 3);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.deepEqual(
+    LOC.decodeAudioProperties(sent[1].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isUndefined(LOC.decodeAudioProperties(sent[2].properties ?? new Uint8Array(0)).config);
+  assert.isFalse(control.audioConfigResendRequested);
+});
+
+test("handleAudioEncodedChunk: 保持値が無いまま要求されても次の description で載せる", () => {
+  // Forward State が 1 になった時点で Audio Config をまだ持っていない場合でも、
+  // 要求を捨てずに次の description で載せられることの検証
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  control.audioPublisher = audioPublisher;
+
+  control.audioConfigResendRequested = true;
+  sendAudioChunk(control);
+  // 保持値が無いため要求は残る
+  assert.isTrue(control.audioConfigResendRequested);
+  assert.isUndefined(LOC.decodeAudioProperties(sent[0].properties ?? new Uint8Array(0)).config);
+
+  // 次の description が現れた時点で載り、要求は解消する
+  const description = new Uint8Array([0x11, 0x90]);
+  sendAudioChunk(control, description);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(sent[1].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isFalse(control.audioConfigResendRequested);
+});
+
+test("handleAudioEncodedChunk: stop 後の再開では同じ description でも AUDIO_CONFIG を載せる", async () => {
+  // stop → start は新しい session と encoder を作るため、購読者は誰も前の
+  // AUDIO_CONFIG を受け取っていない。保持値を破棄していないと新しい encoder の
+  // description が同じ値として抑止され、再開後の購読者が AAC を復号できない。
+  // 公開 stop() で破棄を駆動し (start() 自体は接続を要する)、
+  // 再開後に同じ description が載ることを確認する
+  const { publisher, control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: firstPublisher, sent: firstSent } = createCapturingPublisher();
+  control.audioPublisher = firstPublisher;
+
+  const description = new Uint8Array([0x11, 0x90]);
+  sendAudioChunk(control, description);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(firstSent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+
+  // stop では session に紐づく Audio Config の保持値と要求を忘れる
+  await publisher.stop();
+  assert.equal(publisher.state, "stopped");
+  assert.isNull(control.lastSentAudioConfig);
+  assert.isFalse(control.audioConfigResendRequested);
+
+  // 再開後 (新しい publisher) に同じ description が届いたら初出として載る
+  const { publisher: resumedPublisher, sent: resumedSent } = createCapturingPublisher();
+  control.audioPublisher = resumedPublisher;
+  sendAudioChunk(control, new Uint8Array(description));
+
+  assert.equal(resumedSent.length, 1);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(resumedSent[0].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+});
+
+test("handleAudioEncodedChunk: publisher が active でない間は保持値も要求も変えない", () => {
+  // 送信できない間に届いた chunk で保持値や要求を書き換えると、購読者が接続したのに
+  // AUDIO_CONFIG を送り直せなくなる。入口ガードで何も変えないことを確認する。
+  // 新しい description を渡すため、ガードが無ければ保持値の更新と要求の解消が起きる
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: audioPublisher, sent } = createCapturingPublisher();
+  // 送信できない状態 (active 以外) を作る
+  (audioPublisher as unknown as { state: string }).state = "closed";
+  control.audioPublisher = audioPublisher;
+  const retained = new Uint8Array([0x11, 0x90]);
+  control.lastSentAudioConfig = new Uint8Array(retained);
+  control.audioConfigResendRequested = true;
+
+  sendAudioChunk(control, new Uint8Array([0x12, 0x08]));
+
+  assert.equal(sent.length, 0);
+  assert.isTrue(control.audioConfigResendRequested);
+  assert.deepEqual(control.lastSentAudioConfig, retained);
+});
+
+test("handleVideoEncodedChunk: publisher が active でない間は保持値を変えない", () => {
+  // 音声側と同じ入口ガードを映像側も持つことの検証。送信できない間に届いた chunk で
+  // 保持値を書き換えると、以降の VIDEO_CONFIG の送出が抑止されて映像を復号できなくなる
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherLifecycleControl;
+  const { publisher: videoPublisher, sent } = createCapturingPublisher();
+  // 送信できない状態 (active 以外) を作る
+  (videoPublisher as unknown as { state: string }).state = "closed";
+  control.videoPublisher = videoPublisher;
+  const retained = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
+  control.lastSentVideoConfig = new Uint8Array(retained);
+
+  sendVideoChunk(control, new Uint8Array([0x01, 0x42, 0xc0, 0x2a]));
+
+  assert.equal(sent.length, 0);
+  assert.deepEqual(control.lastSentVideoConfig, retained);
+});
+
+/**
+ * Forward State 変化の登録を検証するための制御口
+ *
+ * createPublishers() は接続を要する start() からしか呼べないため、publish 呼び出しを
+ * 記録する最小セッションを注入して駆動する (モジュール置換は行わない)。
+ */
+interface PublisherForwardControl extends PublisherLifecycleControl {
+  resolvedAudio: ResolvedAudioPublishSettings | null;
+  createPublishers(): Promise<void>;
+}
+
+/**
+ * publish 呼び出しを記録する最小セッション
+ *
+ * track 名で引く Publisher を返し、渡されたコールバックを記録する。
+ * createPublishers() が Forward State 変化のコールバックを音声 Publisher に
+ * 登録しているかを、実装の内部状態を経由せずに検証できるようにする。
+ */
+function createPublishRecordingSession(publishers: Map<string, Publisher>): {
+  session: Session;
+  callbacksByTrack: Map<string, PublishCallbacks>;
+} {
+  const callbacksByTrack = new Map<string, PublishCallbacks>();
+  const session = {
+    publish: async (
+      _namespace: string[],
+      trackName: string,
+      callbacks?: PublishCallbacks,
+    ): Promise<Publisher> => {
+      callbacksByTrack.set(trackName, callbacks ?? {});
+      const publisher = publishers.get(trackName);
+      if (!publisher) {
+        throw new Error(`unexpected track: ${trackName}`);
+      }
+      return publisher;
+    },
+  } as unknown as Session;
+  return { session, callbacksByTrack };
+}
+
+test("createPublishers: Forward State が 1 になると Audio Config の送り直しを要求する", async () => {
+  // 購読者が居ない状態から購読者が接続した場合の結合の検証。
+  // createPublishers() が音声 Publisher に onForwardStateChange を登録し、
+  // それが handleAudioEncodedChunk の載せ直しに繋がることを確認する
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherForwardControl;
+  const audioSettings = resolveAudioPublishSettings({
+    codec: "aac",
+    bitrate: 64000,
+    trackName: "audio",
+  });
+  control.resolvedAudio = audioSettings;
+  const { publisher: catalogPublisher, sent: catalogSent } = createRecordingSendPublisher();
+  const { publisher: audioPublisher, sent: audioSent } = createCapturingPublisher();
+  const publishers = new Map<string, Publisher>([
+    [CATALOG_TRACK_NAME, catalogPublisher],
+    [audioSettings.trackName, audioPublisher],
+  ]);
+  const { session, callbacksByTrack } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+
+  // Catalog が Object ID 0 で 1 件だけ publish されること
+  assert.equal(catalogSent.length, 1);
+  assert.equal(catalogSent[0].objectId, 0);
+
+  // 音声 Publisher に Forward State 変化のコールバックが登録されていること
+  const audioCallbacks = callbacksByTrack.get(audioSettings.trackName);
+  assert.isDefined(audioCallbacks);
+  assert.isDefined(audioCallbacks?.onForwardStateChange);
+
+  // Forward State 0 (購読者なし) では要求が立たない
+  audioCallbacks?.onForwardStateChange?.(false);
+  assert.isFalse(control.audioConfigResendRequested);
+
+  // Audio Config を送って保持したあと、Forward State 1 で要求が立つ
+  const description = new Uint8Array([0x11, 0x90]);
+  sendAudioChunk(control, description);
+  audioCallbacks?.onForwardStateChange?.(true);
+  assert.isTrue(control.audioConfigResendRequested);
+
+  // 要求に従って次の Object に保持値が載る
+  sendAudioChunk(control);
+  assert.deepEqual(
+    LOC.decodeAudioProperties(audioSent[1].properties ?? new Uint8Array(0)).config,
+    description,
+  );
+  assert.isFalse(control.audioConfigResendRequested);
+
+  // 要求の寿命は送信で決まる。Forward State が 0 に戻っても保留中の要求は消さない
+  // (消すと、次に 1 になったときの送り直しを取りこぼす)
+  audioCallbacks?.onForwardStateChange?.(true);
+  audioCallbacks?.onForwardStateChange?.(false);
+  assert.isTrue(control.audioConfigResendRequested);
+});
+
+/**
+ * グループ管理・キーフレーム判定・codec description 送出判断の純関数
  *
  * MediaPublisherImpl から切り出した払い出しロジックと判定ロジックを、実装クラスや
  * 構造の注入を介さず固定値で直接駆動する。Group ID が進む条件と Object ID が
- * 0 に戻る条件、キーフレーム間隔の解決と境界、Publisher Priority の値を固定する。
+ * 0 に戻る条件、キーフレーム間隔の解決と境界、Audio Config の再送判断、
+ * Publisher Priority の値を固定する。
  */
+
+test("resolveAudioConfigToSend: 初回と変化時だけ Audio Config を載せる", () => {
+  // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): description が現れた最初の chunk と、
+  // 値が変わった chunk だけ載せる。同じ値を毎 Object 送らない
+  const description = new Uint8Array([0x11, 0x90]);
+
+  // 未送信の状態で description が現れたら載せ、保持する
+  const first = resolveAudioConfigToSend(null, description, false);
+  assert.deepEqual(first.config, description);
+  assert.deepEqual(first.next, description);
+  assert.isFalse(first.resendNext);
+
+  // 保持値は複製する (呼び出し側が元の配列を書き換えても送出値が変わらない)
+  const original = new Uint8Array([0x11, 0x90]);
+  const mutable = new Uint8Array([0x11, 0x90]);
+  const held = resolveAudioConfigToSend(null, mutable, false);
+  assert.notStrictEqual(held.next, mutable);
+  mutable.fill(0xff);
+  assert.deepEqual(held.next, original);
+
+  // 同じ値は載せず、保持値も変えない
+  const same = resolveAudioConfigToSend(first.next, new Uint8Array([0x11, 0x90]), false);
+  assert.isUndefined(same.config);
+  assert.deepEqual(same.next, first.next);
+  assert.isFalse(same.resendNext);
+
+  // 値が変わったら載せて保持値を更新する
+  const changed = resolveAudioConfigToSend(first.next, new Uint8Array([0x12, 0x08]), false);
+  assert.deepEqual(changed.config, new Uint8Array([0x12, 0x08]));
+  assert.deepEqual(changed.next, new Uint8Array([0x12, 0x08]));
+  assert.isFalse(changed.resendNext);
+
+  // description が無い chunk (opus) では載せず、保持値もそのままにする
+  const withoutDescription = resolveAudioConfigToSend(first.next, undefined, false);
+  assert.isUndefined(withoutDescription.config);
+  assert.deepEqual(withoutDescription.next, first.next);
+  assert.isFalse(withoutDescription.resendNext);
+});
+
+test("resolveAudioConfigToSend: 空の description は値なしとして扱う", () => {
+  // 長さ 0 の description は AAC の AudioSpecificConfig として成立しないため、
+  // 長さ 0 の AUDIO_CONFIG を送らず、opus の undefined と同じ扱いにする
+  const previous = new Uint8Array([0x11, 0x90]);
+  const empty = resolveAudioConfigToSend(previous, new Uint8Array(0), false);
+
+  assert.isUndefined(empty.config);
+  assert.deepEqual(empty.next, previous);
+  assert.isFalse(empty.resendNext);
+
+  // 保持値が無い状態でも空は載せない
+  const firstEmpty = resolveAudioConfigToSend(null, new Uint8Array(0), false);
+  assert.isUndefined(firstEmpty.config);
+  assert.isNull(firstEmpty.next);
+});
+
+test("resolveAudioConfigToSend: 送り直し要求で保持している Audio Config を載せ直す", () => {
+  // Forward State が 0 から 1 になった時点 (後着購読者の出現) の要求に、
+  // 保持値を 1 Object だけ載せ直して応える
+  const description = new Uint8Array([0x11, 0x90]);
+  const sent = resolveAudioConfigToSend(null, description, false);
+
+  // 要求が無い chunk では載らない
+  const normal = resolveAudioConfigToSend(sent.next, undefined, false);
+  assert.isUndefined(normal.config);
+  assert.deepEqual(normal.next, sent.next);
+
+  // 要求があると保持値を載せ直し、要求は解消する
+  const resent = resolveAudioConfigToSend(normal.next, undefined, true);
+  assert.deepEqual(resent.config, description);
+  assert.deepEqual(resent.next, description);
+  assert.isFalse(resent.resendNext);
+
+  // 保持値は消さない (2 人目以降の購読者にも同じ要求で応えられる)
+  const secondResend = resolveAudioConfigToSend(resent.next, undefined, true);
+  assert.deepEqual(secondResend.config, description);
+  assert.deepEqual(secondResend.next, description);
+});
+
+test("resolveAudioConfigToSend: 保持値が無いまま要求されたら要求を残す", () => {
+  // 初回の description が現れる前に Forward State が 1 になった場合は載せる値が無いため、
+  // 要求だけを残す (要求を消すと、次に description が現れても送り直しの意図が失われる)
+  const pending = resolveAudioConfigToSend(null, undefined, true);
+
+  assert.isUndefined(pending.config);
+  assert.isNull(pending.next);
+  assert.isTrue(pending.resendNext);
+
+  // 要求が残ったまま次の description が現れたら、それを載せて要求は解消する
+  const resolved = resolveAudioConfigToSend(pending.next, new Uint8Array([0x11, 0x90]), true);
+  assert.deepEqual(resolved.config, new Uint8Array([0x11, 0x90]));
+  assert.isFalse(resolved.resendNext);
+});
+
+test("resolveAudioConfigToSend: 送り直し要求より新しい description を優先する", () => {
+  // 要求が立っている間に encoder の値が変わった場合は、保持値の再送ではなく
+  // 新しい値を載せる (古い値を送ると購読側の復号設定と食い違う)
+  const resent = resolveAudioConfigToSend(
+    new Uint8Array([0x11, 0x90]),
+    new Uint8Array([0x12, 0x08]),
+    true,
+  );
+
+  assert.deepEqual(resent.config, new Uint8Array([0x12, 0x08]));
+  assert.deepEqual(resent.next, new Uint8Array([0x12, 0x08]));
+  assert.isFalse(resent.resendNext);
+});
 
 test("resolveKeyframeInterval: 映像オプションが無ければ既定 framerate の 2 倍になる", () => {
   // framerate の既定値 30 から 60 を導出することの検証 (映像を配信しない場合も同じ値)
