@@ -224,13 +224,14 @@ test("buildObjectSendPlan: デルタフレームは同じ Group の続きとし�
 });
 
 // キーフレームは即時配送を優先し、デルタフレームは既定優先度にする。
+// draft-ietf-moq-transport-21 §5.1.1: 数値が小さいほど高優先であるため、
 // 優先度を入れ替えると滞留時にキーフレームが捨てられる。
-test("buildObjectSendPlan: キーフレームは優先度 255、デルタフレームは 128 にする", () => {
+test("buildObjectSendPlan: キーフレームは優先度 0、デルタフレームは 128 にする", () => {
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     makeChunk({ type: "key", timestamp: 0 }),
   );
-  assert.equal(keyPlan.priority, 255);
+  assert.equal(keyPlan.priority, 0);
 
   const deltaPlan = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },

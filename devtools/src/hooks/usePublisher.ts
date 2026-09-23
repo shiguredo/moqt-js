@@ -33,6 +33,8 @@ import {
   allocateAudioObject,
   allocateInitialGroupId,
   PRIORITY_AUDIO,
+  PRIORITY_VIDEO_DELTA,
+  PRIORITY_VIDEO_KEY,
 } from "../../../src/createMediaPublisher.ts";
 import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
@@ -241,8 +243,10 @@ export function buildObjectSendPlan(
     nextObjectId: objectId + 1,
     payload,
     properties,
-    // キーフレームは即時配送を優先し、デルタフレームは既定優先度にする
-    priority: isKeyFrame ? 255 : 128,
+    // キーフレームは即時配送を優先し、デルタフレームは既定優先度にする。
+    // キーフレームは常に新しい Group (= Subgroup) の先頭 Object になるため、
+    // この値がその Subgroup の実効優先度になる
+    priority: isKeyFrame ? PRIORITY_VIDEO_KEY : PRIORITY_VIDEO_DELTA,
     isKeyFrame,
   };
 }

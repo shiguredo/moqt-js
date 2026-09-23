@@ -476,21 +476,36 @@ Relay のキャッシュに依存する。購読者がいない間に Relay が 
 ### groupId / objectId 管理
 
 - Audio: フレームごとに新しい groupId を開始、objectId は常に 0 (draft-ietf-moq-loc-04 §4.1)
-- Video: キーフレームで新しい groupId を開始、objectId はグループ内でインクリメント (draft-ietf-moq-loc-04 §4.2)
+- Video: キーフレームで新しい groupId を開始、objectId は Group 内でインクリメント (draft-ietf-moq-loc-04 §4.2)
 
 ### Priority
 
-MOQT の Publisher Priority を使用して、Relay サーバーでの優先度制御を行う。
-値が大きいほど優先度が高く、帯域不足時に優先的に送信される。
+MOQT の Publisher Priority を使用して、Relay での優先度制御を行う。
+値が小さいほど優先度が高く、帯域不足時に優先的に送信される。0-255 の符号無し
+整数で、最高優先は 0 である (draft-ietf-moq-transport-21 §5.1.1)。高レベル API は
+Subscriber Priority を指定しないため、Relay は Publisher Priority の順に
+スケジューリングする (§5.1.2)。ただし §5.1.2 の選択アルゴリズムは SHOULD であり、
+実際のスケジューリングは Relay の裁量である。
 
-| トラック種別         | Priority | 説明                                     |
-| -------------------- | -------- | ---------------------------------------- |
-| Audio                | 192      | 音声は途切れると違和感が大きいため高優先 |
-| Video キーフレーム   | 255      | 後続フレームのデコードに必須のため最高   |
-| Video デルタフレーム | 128      | 破棄されても次のキーフレームで回復可能   |
+| トラック種別         | Priority | 説明                                         |
+| -------------------- | -------- | -------------------------------------------- |
+| Catalog              | 0        | 届かないと購読が始まらないため最高優先       |
+| Video キーフレーム   | 0        | 後続フレームのデコードに必須のため最高優先   |
+| Audio                | 64       | 音声は途切れると違和感が大きいため次に高優先 |
+| Video デルタフレーム | 128      | 破棄されても次のキーフレームで回復可能       |
+
+Video デルタフレームの 128 は DEFAULT PUBLISHER PRIORITY の既定値
+(draft-ietf-moq-transport-21 §10.4) と同じ値である。
+
+Publisher Priority は Subgroup 単位で 1 つに決まる
+(draft-ietf-moq-transport-21 §5.1.1)。映像のデルタフレームはキーフレームで開いた
+Group の続きとして同じ Subgroup に載るため、実際に送信される値はキーフレームの
+0 になる。デルタフレームの 128 が載るのは、送信する Subgroup の先頭 Object が
+デルタフレームになるときだけである (キーフレームより先にデルタフレームが届いた
+場合や、Forward State が 0 の間にキーフレームを送らなかった場合)。
 
 帯域不足時の動作:
 
-1. Video デルタフレームが最初に破棄される
-2. Audio は維持される
-3. Video キーフレームは可能な限り維持される
+1. Video キーフレームで開いた Publisher Priority 0 の Subgroup が最優先で維持される
+2. Audio (64) はその次に維持される
+3. Video デルタフレームは Subgroup 単位でキーフレームと同じ扱いになる (個別には破棄されない)

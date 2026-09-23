@@ -14,7 +14,7 @@
  * reader / encoder 注入は start() が接続を要するため private 経由で行う。
  *
  * グループ管理 (allocateAudioObject / allocateVideoObject) とキーフレーム判定
- * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数、
+ * (resolveKeyframeInterval / shouldSendKeyFrame)、Publisher Priority の定数と送信値、
  * Audio Config の再送判断 (resolveAudioConfigToSend) は純関数として切り出しており、
  * 固定値で直接駆動する。
  * Audio Config の再送は Forward State 変化のコールバック登録から
@@ -26,6 +26,7 @@ import { test, assert } from "vite-plus/test";
 import {
   MediaPublisherImpl,
   PRIORITY_AUDIO,
+  PRIORITY_CATALOG,
   PRIORITY_VIDEO_DELTA,
   PRIORITY_VIDEO_KEY,
   allocateAudioObject,
@@ -642,17 +643,21 @@ interface PublisherGroupControl {
 }
 
 /**
- * 送信 Group ID 記録用の最小 Publisher
+ * 送信 Group / Object ID と Priority の記録用の最小 Publisher
  */
 function createRecordingSendPublisher(): {
   publisher: Publisher;
-  sent: { groupId: number; objectId: number }[];
+  sent: { groupId: number; objectId: number; priority?: number }[];
 } {
-  const sent: { groupId: number; objectId: number }[] = [];
+  const sent: { groupId: number; objectId: number; priority?: number }[] = [];
   const publisher = {
     state: "active",
-    sendObject: (params: { groupId: number; objectId: number }) => {
-      sent.push({ groupId: params.groupId, objectId: params.objectId });
+    sendObject: (params: { groupId: number; objectId: number; priority?: number }) => {
+      sent.push({
+        groupId: params.groupId,
+        objectId: params.objectId,
+        priority: params.priority,
+      });
     },
   } as unknown as Publisher;
   return { publisher, sent };
@@ -1226,7 +1231,10 @@ test("createPublishers: Forward State が 1 になると Audio Config の送り�
  * MediaPublisherImpl から切り出した払い出しロジックと判定ロジックを、実装クラスや
  * 構造の注入を介さず固定値で直接駆動する。Group ID が進む条件と Object ID が
  * 0 に戻る条件、キーフレーム間隔の解決と境界、Audio Config の再送判断、
- * Publisher Priority の値を固定する。
+ * Publisher Priority の定数を固定する。
+ * Publisher Priority の送信値 (定数が送信に使われること) は、この節の後ろで
+ * handleAudioEncodedChunk / handleVideoEncodedChunk と publishCatalog を private
+ * 経由で駆動して固定する。
  */
 
 test("resolveAudioConfigToSend: 初回と変化時だけ Audio Config を載せる", () => {
@@ -1459,10 +1467,103 @@ test("allocateVideoObject: 差分フレームが先行した場合の初回キ�
   assert.isTrue(key.groupAdvanced);
 });
 
+/**
+ * draft-ietf-moq-transport-21 §5.1.1:
+ * `sendObject` に渡す Priority が定数どおりであることを固定する (大小関係は
+ * 並び順テストが固定する)。Publisher Priority は Subgroup 単位で 1 つに決まるため、
+ * 実際に送信される値はキーフレームで開いた Subgroup の 0 になる (デルタフレームの
+ * 128 はデルタフレームが先頭になるときだけ載る)。
+ */
+test("送信する Object の Priority 引数は各定数どおりになる", () => {
+  const publisher = new MediaPublisherImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: { codec: "opus" as const, bitrate: 64000 },
+    video: { codec: "vp8" as const, bitrate: 1000000 },
+  });
+  const control = publisher as unknown as PublisherGroupControl;
+  const { publisher: audioPublisher, sent: audioSent } = createRecordingSendPublisher();
+  const { publisher: videoPublisher, sent: videoSent } = createRecordingSendPublisher();
+  control.audioPublisher = audioPublisher;
+  control.videoPublisher = videoPublisher;
+
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+  // 音声は 1 フレーム 1 Group のため、2 件目以降も音声の値を載せる
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([2]),
+    type: "key",
+    timestamp: 1,
+    duration: null,
+  });
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: 0,
+    duration: null,
+  });
+  control.handleVideoEncodedChunk({
+    data: new Uint8Array([2]),
+    type: "delta",
+    timestamp: 1,
+    duration: null,
+  });
+
+  assert.equal(audioSent.length, 2);
+  assert.equal(audioSent[0].priority, PRIORITY_AUDIO);
+  assert.equal(audioSent[1].priority, PRIORITY_AUDIO);
+  assert.equal(videoSent[0].priority, PRIORITY_VIDEO_KEY);
+  assert.equal(videoSent[1].priority, PRIORITY_VIDEO_DELTA);
+});
+
+/**
+ * publishCatalog を直接駆動するための制御口
+ */
+interface PublisherCatalogControl extends PublisherLifecycleControl {
+  resolvedAudio: ResolvedAudioPublishSettings | null;
+  publishCatalog(): Promise<void>;
+}
+
+/**
+ * draft-ietf-moq-transport-21 §5.1.1 / draft-ietf-moq-msf-01 §5:
+ * カタログはトラック構成を知らせる制御情報であり、届かないと購読が始まらないため
+ * 最高優先 (0) で送ることを固定する。
+ */
+test("publishCatalog: カタログは最高優先で送られる", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogControl;
+  control.resolvedAudio = resolveAudioPublishSettings({
+    codec: "aac",
+    bitrate: 64000,
+    trackName: "audio",
+  });
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  control.catalogPublisher = catalogPublisher;
+
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].objectId, 0);
+  assert.equal(sent[0].priority, PRIORITY_CATALOG);
+});
+
 test("Publisher Priority の定数はドキュメントの値である", () => {
-  // docs/HIGH_LEVEL_API.md の Priority 表の値 (音声 192 / 映像キーフレーム 255 /
-  // 映像差分 128) を固定する
-  assert.equal(PRIORITY_AUDIO, 192);
-  assert.equal(PRIORITY_VIDEO_KEY, 255);
+  // docs/HIGH_LEVEL_API.md の Priority 表の値 (カタログ 0 / 映像キーフレーム 0 /
+  // 音声 64 / 映像デルタフレーム 128) を固定する
+  assert.equal(PRIORITY_CATALOG, 0);
+  assert.equal(PRIORITY_VIDEO_KEY, 0);
+  assert.equal(PRIORITY_AUDIO, 64);
   assert.equal(PRIORITY_VIDEO_DELTA, 128);
+});
+
+test("Publisher Priority は数値が小さいほど高優先になる順に並ぶ", () => {
+  // draft-ietf-moq-transport-21 §5.1.1: 0-255 の符号無し整数で数値が小さいほど
+  // 高優先である。キーフレーム < 音声 < デルタフレームの順になることを固定する
+  // (デルタフレームは draft-ietf-moq-transport-21 §10.4 の既定 128 のまま据え置く)
+  assert.isTrue(PRIORITY_CATALOG <= PRIORITY_VIDEO_KEY);
+  assert.isTrue(PRIORITY_VIDEO_KEY < PRIORITY_AUDIO);
+  assert.isTrue(PRIORITY_AUDIO < PRIORITY_VIDEO_DELTA);
 });

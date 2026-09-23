@@ -46,15 +46,20 @@ import {
 // デフォルト設定
 
 // Publisher Priority (docs/HIGH_LEVEL_API.md の Priority 表に記載)
-// 単体テストから値を固定するため export する (パッケージ公開 API には含めない)。
+// draft-ietf-moq-transport-21 §5.1.1: 0-255 の符号無し整数で、数値が小さいほど
+// 高優先である (最高優先は 0)。単体テストから値を固定するため export する
+// (パッケージ公開 API には含めない)。
 
-/** 音声オブジェクトの優先度 (音声は途切れると違和感が大きいため高優先) */
-export const PRIORITY_AUDIO = 192;
+/** カタログ Object の優先度 (届かないと購読が始まらないため最高優先) */
+export const PRIORITY_CATALOG = 0;
 
-/** 映像キーフレームの優先度 (後続フレームのデコードに必須のため最高) */
-export const PRIORITY_VIDEO_KEY = 255;
+/** 映像キーフレームの優先度 (後続フレームのデコードに必須のため最高優先。カタログと同じ 0) */
+export const PRIORITY_VIDEO_KEY = 0;
 
-/** 映像差分フレームの優先度 (破棄されても次のキーフレームで回復可能) */
+/** 音声オブジェクトの優先度 (音声は途切れると違和感が大きいためデルタフレームより高優先) */
+export const PRIORITY_AUDIO = 64;
+
+/** 映像デルタフレームの優先度 (破棄されても次のキーフレームで回復可能。draft-ietf-moq-transport-21 §10.4 の既定と同じ) */
 export const PRIORITY_VIDEO_DELTA = 128;
 
 // 同一プロセス内で割り当てた初期 Group ID の最大値
@@ -676,12 +681,12 @@ export class MediaPublisherImpl implements MediaPublisher {
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。
     // groupId=0, objectId=0 は draft-ietf-moq-msf-01 §5 で MUST 規定 (independent catalog
-    // in subgroup 0)。
+    // in subgroup 0)。Priority は購読開始の前提になるため最高優先で送る
     await this.catalogPublisher.sendObject({
       groupId: 0,
       objectId: 0,
       payload,
-      priority: 255,
+      priority: PRIORITY_CATALOG,
     });
   }
 
