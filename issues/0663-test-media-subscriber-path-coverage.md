@@ -11,7 +11,7 @@
 
 ## 現状
 
-- `src/createMediaSubscriber.test.ts` の 37 テストは `processCatalogPayload` / `filterPendingCatalogObjects` / `resolveAuthorizationToken` / `extractTrackInfo` と、復号済みフレームの破棄 (所有権) の検証に限られる
+- `src/createMediaSubscriber.test.ts` の 41 テストは `processCatalogPayload` / `filterPendingCatalogObjects` / `resolveAuthorizationToken` / `extractTrackInfo` と、復号済みフレームの破棄 (所有権) の検証に限られる
 - `handleVideoObject` / `handleAudioObject` / `setupDecoders` / `subscribeMediaTracks` / `stop` / `close` を呼ぶテストが無い
 - 同ファイルは `new MediaSubscriberImpl(...)` を組み立てて復号コールバックを直接呼ぶ形であり、Object のハンドラは一度も通していない
 - AGENTS.md はモック・スタブの利用を禁じているため、受信経路は実装クラスと実ストリームで検証する必要がある
