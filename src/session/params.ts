@@ -137,6 +137,32 @@ export function mergeRangeFilters(
 }
 
 /**
+ * 購読単位で数える Range Filter の一覧を組み立てる
+ *
+ * draft-ietf-moq-transport-21 §9.1.6 の MAX_FILTER_RANGES は "a given
+ * subscription or fetch" の Ranges 合計を制限する。fill 内側の Range Filter も
+ * 同じ購読に載るため合算する。§9.20.16 は FILL_PARAMETERS の内側を独立した
+ * parameter scope と定めるが、これは §9.20 の重複検査のための限定であり
+ * (「Parameters inside it are not considered to appear in the enclosing message
+ * for the purposes of Section 9.20」)、§9.1.6 の購読単位の合算からは除外されない。
+ * fill を別予算と読む余地はあるが、REQUEST_UPDATE の
+ * 送信検証 (src/session/bidi.ts の bidiSendRequestUpdate) と受信側の数え上げ
+ * (同 countIncomingRangeFilterRanges) が同じく合算する保守側の扱いであり、
+ * それに揃える。SUBSCRIBE / SUBSCRIBE_TRACKS の初回送信はこの関数で合算する。
+ * REQUEST_UPDATE は現在のフィルタと in-flight の更新も合算するため、この関数を
+ * 使わず bidiSendRequestUpdate 側で組み立てる。
+ *
+ * @param rangeFilters - 購読本体の Range Filter
+ * @param fill - fill 要求 (fill 内側の Range Filter を含む)
+ */
+export function collectSubscriptionRangeFilters(
+  rangeFilters: RangeFilterSpec[] | undefined,
+  fill: FillRequestOptions | undefined,
+): RangeFilterSpec[] {
+  return [...(rangeFilters ?? []), ...(fill?.rangeFilters ?? [])];
+}
+
+/**
  * ピアの MAX_FILTER_RANGES に対して Range Filter の送信が許可されるかを検証する
  *
  * draft-ietf-moq-transport-21 §9.1.6 (MAX FILTER RANGES):

@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] SUBSCRIBE_TRACKS の fill 内側の Range Filter も MAX_FILTER_RANGES で検証する
+  - draft-ietf-moq-transport-21 §9.1.6 の MAX_FILTER_RANGES は購読単位の Ranges 合計を制限する。SUBSCRIBE_TRACKS の初回送信は購読本体の Range Filter しか数えておらず、fill 内側の Range Filter を載せるとピアが広告した上限を超えるパラメータを送れた (SUBSCRIBE / REQUEST_UPDATE 経路と同じく fill 内側も合算する保守側の扱いに揃える)
+  - 検証は双方向ストリームの生成より前に行うため、上限超過時はストリームを開かない
+  - @voluntas
 - [FIX] Location Filter の範囲外で見送った Object を省略として記録する
   - draft-ietf-moq-transport-21 §11.3.2 は全 Object を渡し切る前に閉じる場合の RESET を MUST とし、その例に REQUEST_UPDATE による End Group の縮小と Start Location の拡大を挙げる。Forward State 0 の見送りだけを記録していたため、範囲を狭めた後の省略が RESET ではなく FIN で閉じられていた
   - `sendObject` が Location Filter の範囲外で見送ったときも省略として記録する。あわせて REQUEST_UPDATE / PUBLISH_STATE_NOTIFY で範囲を狭めた時点で送信中の Subgroup の次の Object が既に範囲外になる場合も記録する (アプリが範囲外 Object を送るのを待たない)

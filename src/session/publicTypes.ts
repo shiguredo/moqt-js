@@ -47,6 +47,12 @@ export interface FillRequestOptions {
   /**
    * Range Filters
    * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
+   *
+   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
+   * 合計が上限を超える場合に指定すると throw する。合計にはこの fill 内側の
+   * Range Filter も含まれる（SUBSCRIBE / SUBSCRIBE_TRACKS の初回送信では外側の
+   * rangeFilters との合計、REQUEST_UPDATE ではマージ後の購読フィルタ・in-flight の
+   * 更新・in-flight の fill との合計）。
    */
   rangeFilters?: RangeFilterSpec[];
 }
@@ -490,7 +496,9 @@ export interface SubscribeOptions {
    * Range Filters
    * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
    *
-   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
+   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
+   * 合計（この rangeFilters と fill 内側の合計）が上限を超える場合に指定すると
+   * throw する。
    */
   rangeFilters?: RangeFilterSpec[];
 
@@ -555,7 +563,9 @@ export interface SubscribeTracksOptions {
    * Range Filters
    * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
    *
-   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合に指定すると throw する。
+   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および購読単位の Ranges
+   * 合計（この rangeFilters と fill 内側の合計）が上限を超える場合に指定すると
+   * throw する。
    */
   rangeFilters?: RangeFilterSpec[];
 
@@ -680,7 +690,8 @@ export interface FetchOptions {
    * Range Filters
    * draft-ietf-moq-transport-21 Section 3.3.2 (Range Filters)
    *
-   * ピアの MAX_FILTER_RANGES が 0 (未広告含む) の場合に指定すると throw する。
+   * ピアの MAX_FILTER_RANGES が 0（未広告含む）の場合、および Ranges の合計が
+   * 上限を超える場合に指定すると throw する。
    */
   rangeFilters?: RangeFilterSpec[];
 

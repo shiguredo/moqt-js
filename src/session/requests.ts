@@ -52,6 +52,7 @@ import {
   buildSubscribeParameters,
   buildFetchParameters,
   buildTrackStatusParameters,
+  collectSubscriptionRangeFilters,
   resolveFetchStartLocation,
   resolveFillGroupOrder,
   validateRangeFilterLimits,
@@ -347,11 +348,12 @@ export async function requestsSubscribe(
     await requestsSendRequestUpdate(session, impl, updateOptions);
   };
 
-  // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
+  // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
+  // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない。
   // pendingSubscribe.set より前に配置し、throw 時に pending エントリが残らないようにする
   // fill 内側の Range Filters も購読単位の上限に含める (§9.1.6)。
   validateRangeFilterLimits(
-    [...(options?.rangeFilters ?? []), ...(options?.fill?.rangeFilters ?? [])],
+    collectSubscriptionRangeFilters(options?.rangeFilters, options?.fill),
     session.peerMaxFilterRanges,
     "SUBSCRIBE",
   );
