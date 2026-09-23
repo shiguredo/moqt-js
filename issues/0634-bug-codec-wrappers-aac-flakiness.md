@@ -1,7 +1,7 @@
 # codec-wrappers の音声テストが AAC 選択時に符号化できず落ちる
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-codec-wrappers-aac-flakiness
 - Polished: 2026-09-21
 
@@ -43,4 +43,22 @@
 
 ## 解決方法
 
-{未着手}
+- `devtools/src/codec-test/support.ts` の `selectSupportedAudioCodec` に実符号化の確認を加えた。`AudioEncoder.isConfigSupported` と `AudioDecoder.isConfigSupported` の確認は維持し、そのうえで候補ごとに無音の `AudioData` 1 件を `AudioEncoder` へ投入して `flush()` し、error が確定せず出力 chunk が得られた候補だけを採用する。プローブは待ち上限 2000 ms で打ち切り、`AudioEncoder` は必ず閉じる (`closeCodecQuiet` を使い、符号化失敗で UA が既に閉じている場合は `InvalidStateError` にしない)
+- 選定結果を `AudioCodecSelection` (`codec` と `rejectedCodecs`) で返し、`AudioEncoderTestResult` / `AudioDecoderTestResult` に `rejectedCodecs` を足した。除外理由は `codec 名 (段階: エラー)` の形式で読める (`encoder unsupported` / `decoder unsupported` / `encode probe failed: <エラー>`)。
+- 符号化できる候補が 1 つも無い場合はテストを skip せず、選択時点の `Error` で失敗させる現行契約を維持した。候補が 0 件の場合も `(candidates: none)` として区別できる
+- 再現経路として `?audioCodecs=aac,opus` のように候補順を差し替えるクエリパラメータを足した。解決は純関数 `resolveAudioCodecCandidates` に切り出し、`devtools/src/codec-test/support.test.ts` で既定順・差し替え・空白除去・未知の名前と空要素の無視・大文字小文字の区別・重複除去・同名パラメータの扱い・候補 0 件を固定した
+- `tests/e2e/codec-wrappers.spec.ts` に、AAC 先頭でも AAC が除外されて opus が採用され除外理由が encoder / decoder 双方の結果に載ること、符号化できる候補が無い場合と候補が 0 件の場合に選択時点の Error になることを固定した 4 テストを追加した
+
+### 起点の観測 (音声テストが稀に失敗する) の試行内容と再現有無
+
+- 試行: 候補順を AAC 先頭 (`?audioCodecs=aac,opus`) と AAC のみ (`?audioCodecs=aac`) に固定して `npx vp run e2e-test` を実行し、raw の `AudioEncoder` にも無音を投入して観測した
+- 再現有無: AAC を候補に含めると必ず除外され、AAC の符号化が成功した回は 0 回だった (実測 6 回以上)。一方、既定の候補順 (`opus` 優先) では opus が採用されるため AAC 経路に入らず、「稀に失敗する」は本欠陥では再現しなかった。既定順のまま稀に失敗する別要因 (実行環境の負荷など) が残る可能性は排除できない
+- 実測値: `AudioEncoder.isConfigSupported` / `AudioDecoder.isConfigSupported` は opus・aac とも true (対応の申告だけでは AAC を弾けない)。AAC の符号化は 7〜16 ms で `EncodingError` (`message` は `Encoding error.`) になり、出力 chunk は 0 件、失敗後の `AudioEncoder.state` は `closed`。opus の `flush()` は 0.3〜1 ms で解決し、選定全体は 0.5〜1.3 ms (`aac,opus` の候補では AAC の除外を含めて 43 ms)
+- 副作用: AAC の符号化失敗 1 回につき Chromium の GPU プロセスが 1 回落ちる (`exit_code=5` で自動再初期化)。e2e のテストコメントに既知の事象として記録した
+- 検証: `npx vp check` / `npx vp test --run` (122 files / 2492 tests) / `npx vp run e2e-test` (29 tests) が通る
+
+## 残した課題
+
+- 追加した e2e 4 テストは「Chromium は AAC を対応と報告するが符号化は `EncodingError` になる」という前提に依存する。Chromium が AAC を符号化できるようになった場合は前提を見直す (テストのコメントに明記した)
+- 候補に帰属しない失敗 (プローブの `configure failed` / `encode failed` / `flush failed` / 待ち上限) は実ブラウザで再現できず、モック禁止の規約下ではテストで固定できない
+- AAC の decoder 対応確認は description 無し (ADTS 前提) のままである。Audio Config 経路の検証は別途扱う
