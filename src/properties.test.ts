@@ -25,16 +25,14 @@ import {
   TrackPropertyId,
   type Property,
 } from "./properties";
-import {
-  IncompleteDataError,
-  MalformedTrackError,
-  ProtocolViolationError,
-  SessionError,
-  SessionErrorCode,
-} from "./error";
+import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "./error";
 import { isGreaseValue } from "./grease";
 import { encodeVarint, MAX_VARINT } from "./varint";
-import { parseObjectPropertyIds } from "./testSupport/helpers";
+import {
+  assertKeyValueFormattingError,
+  captureThrownError,
+  parseObjectPropertyIds,
+} from "./testSupport/helpers";
 
 test("TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT は 0x06n である", () => {
   assert.equal(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, 0x06n);
@@ -577,18 +575,6 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
 });
 
 /**
- * 例外を捕捉して返す (assert.throws では SessionError のコードまで検証できないため)
- */
-function captureThrownError(run: () => void): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  return undefined;
-}
-
-/**
  * draft-ietf-moq-transport-21 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
@@ -599,11 +585,7 @@ function captureThrownError(run: () => void): unknown {
 test("assertKnownPropertyValueInObjectProperties: 既知 Type の Value 不一致で SessionError", () => {
   // deltaId=0x02, value=0x80 (varint が途中で終端している)
   const data = new Uint8Array([0x02, 0x80]);
-  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
-  if (!(thrown instanceof SessionError)) {
-    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
-  }
-  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**
@@ -625,11 +607,7 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の不完全 Value
 test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 不一致で SessionError", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=0x80 (varint が途中で終端している)
   const data = new Uint8Array([0x0b, 0x80]);
-  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
-  if (!(thrown instanceof SessionError)) {
-    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
-  }
-  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**
@@ -640,11 +618,7 @@ test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 不一�
 test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 宣言超過で SessionError", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
   const data = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
-  const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
-  if (!(thrown instanceof SessionError)) {
-    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
-  }
-  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**
@@ -1437,18 +1411,6 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
 // draft-21 適合監査 改善-1: 既知 Type の Value / Length 不一致
 // draft-ietf-moq-transport-21 §8.3
 // ============================================================================
-
-/** KEY_VALUE_FORMATTING_ERROR の SessionError が throw されたことを検証する */
-function assertKeyValueFormattingError(fn: () => void): void {
-  let thrown: unknown;
-  try {
-    fn();
-  } catch (error) {
-    thrown = error;
-  }
-  assert.isTrue(thrown instanceof SessionError);
-  assert.equal((thrown as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
-}
 
 /**
  * draft-ietf-moq-transport-21 §8.3:

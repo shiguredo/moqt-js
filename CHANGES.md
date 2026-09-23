@@ -11,6 +11,14 @@
 
 ## develop
 
+- [FIX] Audio Level が 8 bit を超える値を下位 8 bit に丸めないようにする
+  - draft-ietf-moq-loc-04 §2.3.3.2 は Audio Level の Value を 0x00-0xFF の vi64 と定める。範囲外の値を下位 8 bit に丸めて level / voiceActivity として解釈しない
+  - `decodeAudioLevel` は範囲外の値を SessionError (KEY_VALUE_FORMATTING_ERROR) で拒否し、Object Properties の検証層は同じコードでセッションを閉じる (draft-ietf-moq-transport-21 §8.3 の MUST)
+  - 抽出経路 (`resolveAudioProperties` / `decodeAudioProperties`) は寛容契約を維持し、範囲外の Audio Level は読み飛ばして audioLevel を設定しない
+  - @voluntas
+- [UPDATE] テストの例外検証ヘルパーを共有モジュールに集約する
+  - `src/loc.test.ts` と `src/properties.test.ts` に重複していた `captureThrownError` / `assertKeyValueFormattingError` を `src/testSupport/helpers.ts` に集約する
+  - @voluntas
 - [FIX] Publisher Priority の大小と優先順位の対応を仕様に合わせる
   - draft-ietf-moq-transport-21 §5.1.1 は 0-255 の符号無し整数で数値が小さいほど高優先と定めるため、意図した優先順位とワイヤ上の値が逆になっていた。映像キーフレームを 255 から 0、音声を 192 から 64 にし、デルタフレームは §10.4 の既定と同じ 128 のまま据え置く
   - カタログは 255 から 0 (最高優先) にする。届かないと購読が始まらない制御情報のため
