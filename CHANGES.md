@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] 受信 PUBLISH と同一チャンクの 2 通目以降のメッセージを取りこぼさないようにする
+  - QUIC のストリームに書き込み境界は無く、ピアは PUBLISH と PUBLISH_DONE を同一チャンクに連結して送れる。連結された PUBLISH_DONE が処理されないと、ピアの FIN で購読が end ではなく error 終了していた
+  - 先頭読み取りと後続メッセージの読み取りで同じ ControlStreamReader を使い、連結されていた残りメッセージを最初の read より先に処理する。メッセージの途中でチャンクが切れる分割でも取りこぼさない
+  - @voluntas
 - [FIX] 後着の購読者へ Audio Config を送り直す
   - 音声の publisher は Forward State が 0 から 1 になった時点 (draft-ietf-moq-transport-21 §7.5) で、保持している Audio Config を次の Object に 1 度だけ載せ直す
   - 同じ値を毎 Object 送らない動作は維持し、stop 後の再開では保持値と送り直し要求を破棄して新しいエンコーダの description を初出として送る
