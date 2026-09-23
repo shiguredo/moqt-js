@@ -42,7 +42,7 @@
 - `docs/HIGH_LEVEL_API.md` の MediaSubscriber の状態遷移図に `stopped ──start()──► subscribing` を足し、`close()` を終端として明記する。メソッド表の `stop` / `close` の説明も更新する
 - `src/codec/types.ts` の `MediaSubscriber` に `start` / `stop` / `close` の JSDoc を足し、`"stopped"` が再開可能であることを明記する。実装クラス (`src/createMediaSubscriber.ts`) の JSDoc も揃え、publisher と同じく直列呼び出し前提 (並行呼び出しは未対応) と、解放が失敗しても参照は切り離し済みで再試行できることを書く
 - `CHANGES.md` の `## develop` に `[FIX]` を追記する
-- 対象外は `createMediaPublisher` 側の同じ穴 (自己起点 close で `"closed"` に化ける) と MediaPublisher の状態遷移図の欠落辺とする。別 issue で扱う
+- 対象外は `createMediaPublisher` 側の同じ穴 (自己起点 close で `"closed"` に化ける) と MediaPublisher の状態遷移図の欠落辺とし、0681 で扱う
 
 ## 完了条件
 
