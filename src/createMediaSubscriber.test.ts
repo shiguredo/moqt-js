@@ -1,10 +1,11 @@
 /**
  * MediaSubscriber の単体テスト
  *
- * processCatalogPayload / filterPendingCatalogObjects / resolveAuthorizationToken の
- * 純関数ロジック、復号フレーム破棄の所有権 (handleVideoDecodedData /
- * handleAudioDecodedData)、Catalog 取得失敗後の hygiene、extractTrackInfo の
- * role なし解決と未解決通知を検証する。
+ * processCatalogPayload / filterPendingCatalogObjects / isVideoKeyFrameObject /
+ * resolveAuthorizationToken の純関数ロジック、映像 Object のキーフレーム判定が
+ * VideoDecoder と videoStats に伝わること (handleVideoObject)、復号フレーム破棄の
+ * 所有権 (handleVideoDecodedData / handleAudioDecodedData)、Catalog 取得失敗後の
+ * hygiene、extractTrackInfo の role なし解決と未解決通知を検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -24,9 +25,12 @@ import {
 import {
   catalogFetchFilter,
   filterPendingCatalogObjects,
+  isVideoKeyFrameObject,
   processCatalogPayload,
   resolveAuthorizationToken,
 } from "./createMediaSubscriber";
+import * as LOC from "./loc";
+import type { VideoFrameMarking } from "./loc";
 import { type MoqtObject } from "./dataStream";
 import type { Location } from "./message";
 import { useValueToken } from "./testSupport/helpers";
@@ -147,6 +151,23 @@ function makeCatalogObject(groupId: bigint, objectId: bigint): MoqtObject {
   };
 }
 
+// キーフレームとデルタの VIDEO_FRAME_MARKING
+// (RFC 9626 §3.1 の I ビットと B ビットは別のビットであり、publisher と同じく
+//  どちらにもキーフレーム判定を渡す)
+const keyFrameMarking: VideoFrameMarking = {
+  isIndependent: true,
+  isDiscardable: false,
+  isBaseLayerSync: true,
+  temporalLayerId: 0,
+  spatialLayerId: 0,
+};
+// デルタフレームでは isBaseLayerSync も false (publisher はキーフレーム判定を渡す)
+const deltaFrameMarking: VideoFrameMarking = {
+  ...keyFrameMarking,
+  isIndependent: false,
+  isBaseLayerSync: false,
+};
+
 test("filterPendingCatalogObjects: 空配列は空を返す", () => {
   assert.deepEqual(filterPendingCatalogObjects([], { group: 0n, object: 0n }), []);
 });
@@ -180,6 +201,33 @@ test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済みより新�
   const pending = [makeCatalogObject(1n, 3n)];
   const result = filterPendingCatalogObjects(pending, { group: 1n, object: 2n });
   assert.deepEqual(result, [makeCatalogObject(1n, 3n)]);
+});
+
+// ============================================================================
+// isVideoKeyFrameObject（draft-ietf-moq-loc-04 §2.2 / §2.3.2.2 / §4.2）
+// ============================================================================
+
+/**
+ * draft-ietf-moq-loc-04 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-01 §6.2 / §4.1:
+ * VIDEO_FRAME_MARKING は任意の Property であり、draft-ietf-moq-msf-01 も要求しない。無い場合は
+ * Group 先頭の Object ID 0 (Group ID は IDR 境界で +1 され、Object ID は Group
+ * 先頭で 0 に戻る) をキーフレームとして扱い、それ以外はデルタにする。
+ */
+test("isVideoKeyFrameObject: Frame Marking が無ければ Object ID 0 をキーフレームにする", () => {
+  assert.isTrue(isVideoKeyFrameObject(0n, undefined));
+  assert.isFalse(isVideoKeyFrameObject(1n, undefined));
+  assert.isFalse(isVideoKeyFrameObject(30n, undefined));
+});
+
+/**
+ * Frame Marking がある場合はその isIndependent を優先する
+ * (Object ID 0 でも delta と言えば delta、Object ID 0 以外でも key と言えば key)。
+ */
+test("isVideoKeyFrameObject: Frame Marking がある場合は isIndependent を優先する", () => {
+  assert.isTrue(isVideoKeyFrameObject(0n, keyFrameMarking));
+  assert.isFalse(isVideoKeyFrameObject(0n, deltaFrameMarking));
+  assert.isTrue(isVideoKeyFrameObject(3n, keyFrameMarking));
+  assert.isFalse(isVideoKeyFrameObject(3n, deltaFrameMarking));
 });
 
 // ============================================================================
@@ -227,6 +275,99 @@ test("resolveAuthorizationToken: 非同期コールバックにも対応する",
   const token = useValueToken();
   const resolved = await resolveAuthorizationToken({ cat: {} }, async () => token);
   assert.equal(resolved, token);
+});
+
+/**
+ * 映像 Object の判定・統計・デコードの検証用の制御口
+ *
+ * handleVideoObject を直接駆動し、キーフレーム判定が VideoDecoderWrapper と
+ * videoStats に伝わることを検証する。VideoDecoderWrapper は configure にブラウザの
+ * VideoDecoder を必要とし node 環境では構成できないため、記録用の最小オブジェクトを
+ * 注入する (モジュール置換は行わない)。
+ */
+interface SubscriberVideoObjectControl {
+  videoDecoder: {
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+  } | null;
+  videoDecoderConfigured: boolean;
+  handleVideoObject(obj: MoqtObject): void;
+}
+
+/**
+ * 映像 Object を作る (Properties は VIDEO_FRAME_MARKING のワイヤ)
+ */
+function makeVideoObject(objectId: bigint, properties?: Uint8Array): MoqtObject {
+  return {
+    groupId: 1n,
+    objectId,
+    status: 0,
+    payload: new Uint8Array([0xaa]),
+    ...(properties === undefined ? {} : { properties }),
+  };
+}
+
+/**
+ * draft-ietf-moq-loc-04 §2.2 / §2.3.2.2:
+ * VIDEO_FRAME_MARKING が無い Object 列でも Group 先頭がキーフレームとして
+ * VideoDecoder に渡り、videoStats の keyFramesReceived に数えられる。
+ */
+test("handleVideoObject: Frame Marking が無ければ Group 先頭を key としてデコードする", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberVideoObjectControl;
+  const decoded: { type: string; timestamp: number }[] = [];
+  control.videoDecoder = {
+    decode: (_payload, type, timestamp) => {
+      decoded.push({ type, timestamp });
+    },
+  };
+  control.videoDecoderConfigured = true;
+  // Track Properties は使わない (Object の Properties だけで判定する)
+
+  control.handleVideoObject(makeVideoObject(0n));
+  control.handleVideoObject(makeVideoObject(1n));
+  control.handleVideoObject(makeVideoObject(2n));
+
+  assert.deepEqual(decoded, [
+    { type: "key", timestamp: 0 },
+    { type: "delta", timestamp: 0 },
+    { type: "delta", timestamp: 0 },
+  ]);
+  const stats = subscriber.getStats().video;
+  assert.isNotNull(stats);
+  assert.equal(stats?.framesReceived, 3);
+  assert.equal(stats?.keyFramesReceived, 1);
+  // 1 件あたり payload 1 バイト (Properties は付けない)
+  assert.equal(stats?.bytesReceived, 3);
+});
+
+/**
+ * Frame Marking がある場合はそれを優先し、Object ID 0 でも delta として渡す。
+ */
+test("handleVideoObject: Frame Marking がある場合は Object ID 0 でも delta にする", () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberVideoObjectControl;
+  const decoded: { type: string; timestamp: number }[] = [];
+  control.videoDecoder = {
+    decode: (_payload, type, timestamp) => {
+      decoded.push({ type, timestamp });
+    },
+  };
+  control.videoDecoderConfigured = true;
+
+  const deltaWire = LOC.encodeVideoProperties({
+    timestamp: 33_333n,
+    frameMarking: deltaFrameMarking,
+  });
+  control.handleVideoObject(makeVideoObject(0n, deltaWire));
+
+  assert.deepEqual(decoded, [{ type: "delta", timestamp: 33_333 }]);
+  assert.equal(subscriber.getStats().video?.keyFramesReceived, 0);
 });
 
 /**

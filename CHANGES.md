@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] VIDEO_FRAME_MARKING が無い映像も Group 先頭をキーフレームとして復号できるようにする
+  - draft-ietf-moq-loc-04 §2.2 が LOC の拡張を optional metadata と定め、MSF も VIDEO_FRAME_MARKING を要求しないため、これを載せない publisher の映像が 1 フレームも復号できず、`keyFramesReceived` も 0 のままになっていた
+  - frameMarking が無い場合は Group 先頭の Object ID 0 をキーフレームとして扱い、ある場合は従来どおり isIndependent を優先する (Object ID 0 が Group 先頭であることは draft-ietf-moq-msf-01 §6.2 の MUST。Group 先頭が IDR であることは draft-ietf-moq-loc-04 §4.2 の例に依拠する)
+  - moqt-devtools の購読側も同じ規則に揃える
+  - @voluntas
 - [FIX] Audio Level が 8 bit を超える値を下位 8 bit に丸めないようにする
   - draft-ietf-moq-loc-04 §2.3.3.2 は Audio Level の Value を 0x00-0xFF の vi64 と定める。範囲外の値を下位 8 bit に丸めて level / voiceActivity として解釈しない
   - `decodeAudioLevel` は範囲外の値を SessionError (KEY_VALUE_FORMATTING_ERROR) で拒否し、Object Properties の検証層は同じコードでセッションを閉じる (draft-ietf-moq-transport-21 §8.3 の MUST)

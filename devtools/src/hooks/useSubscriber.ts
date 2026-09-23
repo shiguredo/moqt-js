@@ -19,6 +19,7 @@ import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
+import { isVideoKeyFrameObject } from "../../../src/createMediaSubscriber.ts";
 import {
   DEFAULT_AUDIO_SAMPLE_RATE,
   requiresAudioSpecificConfig,
@@ -113,37 +114,39 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
 }
 
 /**
- * LOC Properties から受信フレームのメタデータを取り出す
+ * 受信 Object から `EncodedVideoChunk` に渡す内容を決める
  *
  * publisher 側の Object 送信 (`usePublisher` の `buildObjectSendPlan`) が付与した
- * TIMESTAMP と VIDEO_FRAME_MARKING を読み、`EncodedVideoChunk` に渡す timestamp と
- * キーフレーム判定に変換する。Properties が無い / 空の Object は
- * 非キーフレーム・timestamp 0 として扱う (LOC の拡張は任意のため)。
+ * TIMESTAMP と VIDEO_FRAME_MARKING を読み、chunk の type と timestamp に変換する。
+ * キーフレーム判定は `isVideoKeyFrameObject` に委譲する (同じ規則を二重実装しない)。
+ * VIDEO_FRAME_MARKING は任意の Property であり、無い場合は Group 先頭の
+ * Object ID 0 をキーフレームとして扱う。Properties が無い / 空の Object も
+ * Object ID だけで判定し、timestamp は 0 にする。
  *
  * ブラウザ API に依存しないため、LOC 復号の契約はここで検証できる。
  */
-export function parseLocFrameMetadata(properties: Uint8Array | undefined): {
-  isKeyFrame: boolean;
+export function buildVideoChunkPlan(obj: MoqtObject): {
+  type: "key" | "delta";
   timestamp: number;
 } {
-  let isKeyFrame = false;
   let timestamp = 0;
+  let frameMarking: LOC.VideoFrameMarking | undefined;
 
-  if (properties !== undefined && properties.length > 0) {
-    const locProperties = LOC.decodeVideoProperties(properties);
+  if (obj.properties !== undefined && obj.properties.length > 0) {
+    const locProperties = LOC.decodeVideoProperties(obj.properties);
 
     // TIMESTAMP から timestamp を取得
     if (locProperties.timestamp !== undefined) {
       timestamp = Number(locProperties.timestamp);
     }
 
-    // Frame Marking から keyframe 判定
-    if (locProperties.frameMarking) {
-      isKeyFrame = locProperties.frameMarking.isIndependent;
-    }
+    frameMarking = locProperties.frameMarking;
   }
 
-  return { isKeyFrame, timestamp };
+  return {
+    type: isVideoKeyFrameObject(obj.objectId, frameMarking) ? "key" : "delta",
+    timestamp,
+  };
 }
 
 /**
@@ -693,12 +696,12 @@ export function useSubscriber(
       if (obj.properties && obj.properties.length > 0) {
         instance.objectsWithExtensions.value += 1;
       }
-      const { isKeyFrame, timestamp } = parseLocFrameMetadata(obj.properties);
+      const plan = buildVideoChunkPlan(obj);
 
       // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
       const chunk = new EncodedVideoChunk({
-        type: isKeyFrame ? "key" : "delta",
-        timestamp,
+        type: plan.type,
+        timestamp: plan.timestamp,
         data: obj.payload,
       });
 
@@ -709,7 +712,7 @@ export function useSubscriber(
         return;
       }
 
-      if (isKeyFrame) {
+      if (plan.type === "key") {
         instance.keyFramesDecoded.value += 1;
       }
 

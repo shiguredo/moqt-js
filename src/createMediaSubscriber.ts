@@ -154,6 +154,45 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
 }
 
 /**
+ * 受信した Video Object をキーフレームとして扱うかを判定する
+ *
+ * draft-ietf-moq-loc-04 §2.3.2.2 の VIDEO_FRAME_MARKING は任意の Property であり
+ * (§2.2 は LOC の拡張を optional metadata と定める)、draft-ietf-moq-msf-01 も
+ * 要求しない。そのため frameMarking が無い場合は Group 先頭の Object
+ * (Object ID 0) をキーフレームとして扱う。
+ *
+ * Object ID 0 が Group の先頭 Object であることは draft-ietf-moq-msf-01 §6.2 が
+ * "Object ID MUST be zero for the first Object within a Group" と MUST で定める。
+ * また同 §4.1 は "Samples that belong to the same Group of Pictures (GOP) MUST be
+ * placed within the same MOQT Group" と定めるため、Group の先頭は GOP の先頭になる。
+ * draft-ietf-moq-loc-04 §4.2 の例は Group ID を IDR 境界で +1 し、Object ID を
+ * Group 先頭で 0 に戻したうえで「The first encoded video frame, MOQT Object with
+ * ObjectID 0, shall be the Independent (IDR) frame」と示す。§4 は Examples であり
+ * 規範要求ではないため、Group 先頭が IDR であることは publisher の採番規約に
+ * 依拠する前提として扱う。この節番号・規則は draft 由来であり将来の draft 改版で
+ * 変わる可能性がある。
+ *
+ * frameMarking がある場合は isIndependent を優先する (Object ID 0 でも
+ * frameMarking が delta と言えば delta)。
+ *
+ * テストと moqt-devtools から参照するための export であり、パッケージ公開 API
+ * (`src/index.ts`) には含めない (公開 API の判断は別途行う)。
+ *
+ * @param objectId Object の Object ID (Group 先頭は 0。draft-ietf-moq-msf-01 §6.2)
+ * @param frameMarking Object の VIDEO_FRAME_MARKING (無ければ undefined)
+ * @returns frameMarking があればその isIndependent、無ければ Object ID が 0 かどうか
+ */
+export function isVideoKeyFrameObject(
+  objectId: bigint,
+  frameMarking: LOC.VideoFrameMarking | undefined,
+): boolean {
+  if (frameMarking !== undefined) {
+    return frameMarking.isIndependent;
+  }
+  return objectId === 0n;
+}
+
+/**
  * Catalog Object の payload を純関数で適用する
  *
  * `handleCatalogObject` から切り出した配線用ヘルパー。
@@ -1126,15 +1165,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
-    let isKeyFrame = false;
     const locProperties = LOC.resolveVideoProperties(
       this.videoSubscriber?.trackProperties,
       obj.properties,
     );
     const timestamp = decoderTimestampOf(locProperties);
-    if (locProperties.frameMarking) {
-      isKeyFrame = locProperties.frameMarking.isIndependent;
-    }
+    // VIDEO_FRAME_MARKING が無い publisher の映像も復号できるようにする
+    // (Group 先頭をキーフレームとして扱う)。購読が Group の途中から始まった場合は
+    // 次の Group 先頭まで VideoDecoderWrapper がキーフレームを待つ。
+    // DYNAMIC_GROUPS=1 の Track では requestKeyframe() が NEW_GROUP_REQUEST を送り、
+    // publisher が新しい Group を開始すれば先頭から受け取れる
+    // (draft-ietf-moq-transport-21 §9.20.20 の SHOULD。DYNAMIC_GROUPS=1 でない
+    //  Track では送れず throw する)
+    const isKeyFrame = isVideoKeyFrameObject(obj.objectId, locProperties.frameMarking);
 
     // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
     // Object Property の VIDEO_CONFIG が直前と変わったらデコーダを再構成する。
