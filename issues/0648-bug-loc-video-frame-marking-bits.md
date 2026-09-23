@@ -1,7 +1,7 @@
 # Video Frame Marking の LID を 2 bit に切り詰め、常に 2 octet で送っている
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-loc-video-frame-marking-bits
 - Polished: 2026-09-21
 
@@ -44,4 +44,23 @@ draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 は LID を 8 bit
 
 ## 解決方法
 
-{未着手}
+- `src/loc.ts` の `encodeVideoFrameMarkingValue` / `parseVideoFrameMarkingValue` を RFC 9626 §3.1 に合わせた
+  - LID は 8 bit として byte2 全体に置く (`spatialLayerId & 0xff`。値域外の負値・小数・256 以上は下位 8 bits へ折り畳む)。decode 側は `byte2 & 0x03` をやめて byte2 全体を `spatialLayerId` として復元するため、LID 4〜255 を送る実装も正しく読める
+  - TL0PICIDX を送らないため、折り畳み後の LID と TID がともに 0 のときは L=0 の 1 オクテット形、それ以外は L=1 の 2 オクテット形にする。§3.1 の L=0 形は byte1 に B と TID を載せられるが、§3.2 の short extension とワイヤ上区別できず下位 4 bits を無視し得る受信側があるため、TID=0 のときだけ 1 オクテット形を選ぶ
+  - Length 1〜4 の受理は維持し、LID を省略した形 (Length=1) は §3.1 の「implicitly 0 ... when omitted in the long extension format」に従い LID 0 とする
+- 高レベル API の既定経路 (`createMediaPublisher` / devtools の `usePublisher`) は LID=0 / TID=0 固定のため、Value が 2 オクテットから 1 オクテットになる (送信ワイヤが変わる非互換変更)
+- `LOCPropertyId.VIDEO_FRAME_MARKING` / `VideoFrameMarking` / `encodeVideoFrameMarking` / `encodeVideoFrameMarkingValue` / `parseVideoFrameMarkingValue` の JSDoc を新しい値域・L の選択・1 オクテット形と 2 オクテット形の条件に合わせて更新した (§3.3 のコーデック別 LID マッピングは利用側の責務であることも明記)
+- `CHANGES.md` の `## develop` にある 0364 の `[CHANGE]` エントリを新しい挙動に書き換えた (未リリースのため同じリリースに矛盾する 2 エントリを残さない)
+- `src/loc.prop.ts` の `videoFrameMarkingArb` の値域を 0〜255 に広げ、固定バイト列・8 bit の round-trip・値域外の片方向折り畳み (片方向)・折り畳みで 1 オクテット形に落ちる境界・Value 長の PBT を追加/更新した
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (123 files / 2590 tests) が通る
+- 変異テストで、常に 2 オクテット形にする / decode の `& 0x03` 復活 / 1 オクテット形の TID 条件削除 / LID 折り畳みを `& 0x7f` にする、のいずれでも対応するテストが失敗することを確認した (レビュアーは独立に複数種を実施)
+- RFC 9626 §3.1 / §3.2 の本文 (https://www.rfc-editor.org/rfc/rfc9626.txt) で LID 8 bits・L=0 の条件・§3.2 の残り 4 bits の扱いを確認した
+
+## 残した課題
+
+- RFC 9626 は `refs/` に無く、JSDoc / CHANGES の引用は外部本文に依存している (`refs/` への追加は別途)
+- LID が 0 で TID が 0 以外のときは §3.1 上 1 オクテットにできる余地があるが、§3.2 の受信側が下位 4 bits を無視し得るため 2 オクテット形を送る (相互運用性を優先した判断)
+- draft-ietf-moq-loc-04 §2.3.2.2 の「length prefix」が RFC 9626 の ID / L ニブルを含むかは仕様に明記が無く、Value (1〜4 バイト) をデータ部とみなす現解釈を維持している
