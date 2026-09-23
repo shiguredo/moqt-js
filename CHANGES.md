@@ -11,6 +11,12 @@
 
 ## develop
 
+- [FIX] Location Filter の範囲外で見送った Object を省略として記録する
+  - draft-ietf-moq-transport-21 §11.3.2 は全 Object を渡し切る前に閉じる場合の RESET を MUST とし、その例に REQUEST_UPDATE による End Group の縮小と Start Location の拡大を挙げる。Forward State 0 の見送りだけを記録していたため、範囲を狭めた後の省略が RESET ではなく FIN で閉じられていた
+  - `sendObject` が Location Filter の範囲外で見送ったときも省略として記録する。あわせて REQUEST_UPDATE / PUBLISH_STATE_NOTIFY で範囲を狭めた時点で送信中の Subgroup の次の Object が既に範囲外になる場合も記録する (アプリが範囲外 Object を送るのを待たない)
+  - 省略の記録先は見送った Object と同じ Group の Subgroup に限る (別 Group の見送りで、範囲内の Object をすべて渡した Subgroup を RESET にしない)
+  - Datagram の見送りは Subgroup の省略ではないため記録しない
+  - @voluntas
 - [FIX] VIDEO_FRAME_MARKING が無い映像も Group 先頭をキーフレームとして復号できるようにする
   - draft-ietf-moq-loc-04 §2.2 が LOC の拡張を optional metadata と定め、MSF も VIDEO_FRAME_MARKING を要求しないため、これを載せない publisher の映像が 1 フレームも復号できず、`keyFramesReceived` も 0 のままになっていた
   - frameMarking が無い場合は Group 先頭の Object ID 0 をキーフレームとして扱い、ある場合は従来どおり isIndependent を優先する (Object ID 0 が Group 先頭であることは draft-ietf-moq-msf-01 §6.2 の MUST。Group 先頭が IDR であることは draft-ietf-moq-loc-04 §4.2 の例に依拠する)

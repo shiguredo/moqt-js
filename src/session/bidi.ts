@@ -102,7 +102,11 @@ import {
   toTrackPropertiesViolationSessionError,
 } from "./errors";
 import { MAX_VARINT, encodeVarint } from "../varint";
-import { publishResetPublisherStream, publishSendPublishDoneWithoutPublisher } from "./publish";
+import {
+  publishMarkStreamOmitted,
+  publishResetPublisherStream,
+  publishSendPublishDoneWithoutPublisher,
+} from "./publish";
 import {
   type AuthTokenCache,
   type AuthTokenProcessResult,
@@ -2888,7 +2892,7 @@ async function respondToPublishRequestUpdate(
   // fill fetch ストリームを開けないため、必要な場合は
   // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
   // applyPublishRequestUpdate を参照。
-  if (applyPublishRequestUpdate(publisher, decoded.parameters, decodedFill)) {
+  if (applyPublishRequestUpdate(session, publisher, decoded.parameters, decodedFill)) {
     await bidiSendRequestError(
       session,
       requestId,
@@ -2989,6 +2993,8 @@ function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLoca
  * 「If a parameter previously set on the request is not present in
  *  REQUEST_UPDATE, its value remains unchanged.」
  * - LOCATION_FILTER が存在する場合のみ購読の Location Filter を更新する。
+ *   更新後は送信中の Subgroup の次の Object が範囲外になるかを省略として記録する
+ *   (markOmittedNextObject)。
  * - FORWARD が存在する場合のみ Forward State を更新する (省略時に
  *   extractForwardState がデフォルト true を返すため無条件反映はしない)。
  * - FILL_PARAMETERS を含み Forward State が 1 で fill 範囲が空でない場合、
@@ -2998,6 +3004,7 @@ function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLoca
  * @returns FILL_PARAMETERS を理由に REQUEST_ERROR で拒否すべきなら true
  */
 function applyPublishRequestUpdate(
+  session: BidiSessionInternal,
   publisher: PublisherImpl,
   parameters: Parameter[],
   decodedFill: DecodedLocationAndFill,
@@ -3037,11 +3044,56 @@ function applyPublishRequestUpdate(
   // 受理した更新のみ購読状態へ反映する
   if (decodedLocationFilter !== undefined) {
     publisher.setLocationFilter(decodedLocationFilter);
+    // 範囲を狭めた時点で送信中の Subgroup の次の Object が範囲外になるなら、
+    // アプリの送信を待たずに省略として記録する
+    markOmittedNextObject(session, publisher);
   }
   if (forwardParam !== undefined) {
     publisher.setForwardState(effectiveForwardState);
   }
   return false;
+}
+
+/**
+ * 送信中の Subgroup の次の Object がフィルタ範囲外かを省略として記録する
+ *
+ * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * "If a sender closes the stream before delivering all such objects to the QUIC
+ *  stream, it MUST reset the stream.  This includes, but is not limited to:
+ *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
+ * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY で Location Filter を狭めると、送信中の
+ * Subgroup で次に送るはずだった Object が範囲外になることがある。アプリが範囲外の
+ * Object を送らなければ sendObject の見送りが起きないため、この時点で記録する
+ * (記録しないと、届かない Object を残したまま FIN で閉じてしまう)。
+ *
+ * 判定には送信中の Subgroup の次の Object (`previousObjectId` の次。Group は同じ
+ * Subgroup の `groupId`) を使う。`getLargestLocation()` は datagram でも進むため
+ * 使わない (範囲内の Object が残っているのに記録すると、FIN でよい Subgroup を
+ * RESET にしてしまう)。
+ *
+ * §11.3.2 の第 2 段落は「Start Location より前の Object を除いて全 Object を渡し切った
+ * 場合は FIN」と定める一方、RESET の例に「Start Location を大きい Location へ動かす
+ * REQUEST_UPDATE」を挙げており、Start Location の前進で見送りが生じた場合は
+ * RESET 側として扱う (届かない Object が生じた時点で購読者の期待と Subgroup の
+ * 内容がずれるため)。
+ *
+ * 最初の Object の write 中は `previousObjectId` が -1 のため、次の Object を
+ * 特定できない。この間は記録しない (アプリが範囲外の Object を送れば sendObject の
+ * 見送りで記録される)。
+ */
+function markOmittedNextObject(session: BidiSessionInternal, publisher: PublisherImpl): void {
+  const streamState = session.publisherStreams.get(publisher.getTrackAlias());
+  if (!streamState || streamState.previousObjectId < 0n) {
+    return;
+  }
+  const filter = publisher.getResolvedLocationFilter();
+  if (filter === undefined) {
+    return;
+  }
+  const nextObjectId = streamState.previousObjectId + 1n;
+  if (!objectMatchesFilter({ group: streamState.groupId, object: nextObjectId }, filter)) {
+    publishMarkStreamOmitted(session, publisher.getTrackAlias(), streamState.groupId);
+  }
 }
 
 /**
@@ -4332,6 +4384,9 @@ export async function bidiSendPublishStateNotify(
   }
   if (changedFilter !== undefined) {
     publisher.setLocationFilter(changedFilter);
+    // REQUEST_UPDATE 経由と同じく、範囲を狭めた時点で送信中の Subgroup の次の
+    // Object が範囲外になるなら省略として記録する
+    markOmittedNextObject(session, publisher);
   }
 }
 

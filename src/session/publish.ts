@@ -63,10 +63,7 @@ export function publishSendObject(
     // 送信を見送った Object がある Subgroup は、閉じる時に FIN ではなく RESET が
     // 必要になる。公開経路 (PublisherImpl.sendObject) は guardSend で止まるため
     // ここへは到達しないが、内部送信関数を直接呼ぶ経路の防御として記録する。
-    const streamState = session.publisherStreams.get(publisher.getTrackAlias());
-    if (streamState) {
-      streamState.omittedObjects = true;
-    }
+    publishMarkStreamOmitted(session, publisher.getTrackAlias(), params.groupId);
     return Promise.resolve();
   }
 
@@ -166,10 +163,7 @@ export async function publishSendObjectInternal(
   // その場合は送信せず、§11.3.2 の省略として記録する (新しい Subgroup のストリームを
   // Forward State 0 で開かない点でも §3.1 と整合する)。
   if (!publisher.forwardState) {
-    const existing = session.publisherStreams.get(publisher.getTrackAlias());
-    if (existing) {
-      existing.omittedObjects = true;
-    }
+    publishMarkStreamOmitted(session, publisher.getTrackAlias(), params.groupId);
     return;
   }
   const trackAlias = publisher.getTrackAlias();
@@ -185,7 +179,8 @@ export async function publishSendObjectInternal(
   // 新しい Group または最初のオブジェクト → 新しいストリームを開く
   if (!streamState || streamState.groupId !== groupId) {
     // 前の Subgroup を §11.3.2 の判定で閉じる。
-    // 省略 (Forward State 0 の見送り) がある場合は FIN ではなく RESET にする。
+    // 省略 (Forward State 0 または Location Filter の範囲外の見送り) がある場合は FIN ではなく
+    // RESET にする。
     // FIN で閉じた場合だけ closedSubgroups へ追加する (RESET は「渡し切っていない」
     // ため、購読者からの再送を FIN 済みとして拒否してはならない)。
     if (streamState) {
@@ -335,7 +330,8 @@ export async function publishSendObjectInternal(
 
   // draft-ietf-moq-transport-21 §11.1.2 (Object Status) / §11.3.2 (Closing Subgroup Streams):
   // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は
-  // FIN で通知する。省略 (Forward State 0 の見送り) がある場合は FIN ではなく RESET で
+  // FIN で通知する。省略 (Forward State 0 または Location Filter の範囲外の見送り) がある
+  // 場合は FIN ではなく RESET で
   // 閉じる (§11.3.2 の MUST)。
   if ((params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP) {
     const outcome = await publishCloseSubgroupStream(session, trackAlias);
@@ -427,15 +423,64 @@ async function publishClosePublisherStreamInternal(
 }
 
 /**
+ * 見送った Object を Subgroup の省略として記録する
+ *
+ * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * "If a sender closes the stream before delivering all such objects to the QUIC
+ *  stream, it MUST reset the stream."
+ * 省略 (Forward State 0、または購読の Location Filter の範囲外による見送り) がある
+ * Subgroup は FIN ではなく RESET で閉じる。
+ *
+ * 記録先は見送った Object と同じ Group の Subgroup に限る。別 Group の Object を
+ * 見送っても、開いている Subgroup が範囲内の Object をすべて渡している場合は
+ * FIN で閉じる (同節の第 2 段落の MUST)。
+ *
+ * session は publisherStreams しか使わないため、RequestsSessionInternal など
+ * BidiSessionInternal を継承しない session 型からも呼べるよう Pick で受ける。
+ *
+ * @param groupId 見送った Object の Group ID
+ */
+export function publishMarkStreamOmitted(
+  session: Pick<BidiSessionInternal, "publisherStreams">,
+  trackAlias: bigint,
+  groupId: number | bigint,
+): void {
+  // number の Group ID は Group ID として解釈できない値 (非整数・負値・非有限) を
+  // ここで弾く。公開経路では fail-fast で拒否されるが、この関数は Group ID の検証より
+  // 前に呼ばれる経路 (Forward State 0 の防御分岐) もあるため、throw しない。
+  // bigint は検証済みの値を渡す前提 (bidi.ts の PublisherStreamState.groupId)。
+  const target = typeof groupId === "bigint" ? groupId : convertGroupIdNumber(groupId);
+  if (target === undefined) {
+    return;
+  }
+  const streamState = session.publisherStreams.get(trackAlias);
+  if (streamState === undefined || streamState.groupId !== target) {
+    return;
+  }
+  streamState.omittedObjects = true;
+}
+
+/**
+ * number の Group ID を bigint へ変換する (非整数・負値・非有限は undefined)
+ */
+function convertGroupIdNumber(groupId: number): bigint | undefined {
+  if (!Number.isInteger(groupId) || groupId < 0) {
+    return undefined;
+  }
+  return BigInt(groupId);
+}
+
+/**
  * Subgroup ストリームを §11.3.2 の判定で閉じる
  *
  * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
- * `Subscription::omittedObjects` が真 (Forward State 0 による見送りがあった) なら
- * RESET、偽なら FIN で閉じる。FIN の打ち切り (timeoutMs) が発生した場合は graceful な
- * FIN を諦めて RESET で後始末する (この場合は省略の有無によらず reset)。
+ * `PublisherStreamState::omittedObjects` が真 (Forward State 0 または Location Filter の
+ * 範囲外による見送りがあった) なら RESET、偽なら FIN で閉じる。FIN の打ち切り (timeoutMs)
+ * が発生した場合は graceful な FIN を諦めて RESET で後始末する (この場合は省略の有無に
+ * よらず reset)。
  *
  * ストリーム状態は Map から削除する。ストリームが無い場合は何もせず `"fin"` を返す
  * (閉じる対象が無いため、呼び出し側が closedSubgroups へ追加してよい)。

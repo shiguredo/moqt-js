@@ -81,14 +81,17 @@ export interface PublisherStreamState {
   writer: WritableStreamDefaultWriter<Uint8Array>;
   previousObjectId: bigint;
   /**
-   * Forward State 0 による送信見送り (省略) が発生したか
+   * 送信見送り (省略) が発生したか
    *
    * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
    *  Omitting a Subgroup Object due to the subscriber's Forward State"
-   * 閉じる時点ではなく見送りの時点で記録する。閉じる時点だけの判定では、最後に送信した
-   * Object より後の見送りを検出できないためである。
+   * 見送りの要因は Forward State 0 と購読の Location Filter の範囲外 (§3.3.1) の 2 つであり、
+   * どちらも届かない Object を残したまま閉じることになる。範囲を狭める REQUEST_UPDATE /
+   * PUBLISH_STATE_NOTIFY を適用した時点で次の Object が範囲外になる場合も記録する。
+   * 閉じる時点ではなく、見送りまたは範囲変更が確定した時点で記録する。閉じる時点だけの
+   * 判定では、最後に送信した Object より後の見送りを検出できないためである。
    * `true` の Subgroup は FIN ではなく RESET で閉じる。
    */
   omittedObjects: boolean;

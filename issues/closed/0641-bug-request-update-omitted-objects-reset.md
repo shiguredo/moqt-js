@@ -1,7 +1,7 @@
 # REQUEST_UPDATE で範囲を狭めた後の省略 Object を FIN で閉じてしまう
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-request-update-omitted-objects-reset
 - Polished: 2026-09-21
 
@@ -44,4 +44,28 @@ draft-ietf-moq-transport-21 §11.3.2 は、全 Object を渡し切る前にス�
 
 ## 解決方法
 
-{未着手}
+- `src/publisher.ts` の `sendObject` が Location Filter の範囲外で見送ったときも `onSendObjectSkipped` を呼び、Forward State 0 の見送りと同じく省略として記録するようにした (`sendDatagram` のフィルタ分岐は Subgroup を持たないため記録しない)
+- 省略の記録は `src/session/publish.ts` の `publishMarkStreamOmitted(session, trackAlias, groupId)` に集約した。見送った Object と同じ Group の送信中の Subgroup にだけ記録する。別 Group の見送りで、範囲内の Object をすべて渡した Subgroup を RESET にしないためである (draft-ietf-moq-transport-21 §11.3.2 の第 2 段落は、購読の Start Location より前の Object を除いて全 Object を渡し切った場合の FIN を MUST とする)
+- 範囲を狭める更新の適用時点でも記録する。`src/session/bidi.ts` の `markOmittedNextObject` が、送信中の Subgroup の次の Object (`previousObjectId` の次。Group は同じ Subgroup の `groupId`) を適用後の解決済みフィルタで判定し、範囲外なら記録する。`applyPublishRequestUpdate` (REQUEST_UPDATE) と `bidiSendPublishStateNotify` (アプリ起点の PUBLISH_STATE_NOTIFY) の両方から呼ぶ
+  - 判定に `getLargestLocation()` は使わない。Largest Location は datagram でも進むため、範囲内の Object が Subgroup に残っているのに RESET にし得る
+  - 最初の Object の write 中 (`previousObjectId` が -1) は次の Object を特定できないため記録しない (アプリが範囲外の Object を送れば送信時の見送りで記録される)
+  - 範囲を狭めた後に広げても記録は解除しない (`omittedObjects` は boolean)。実際には見送らなかった Subgroup を RESET にし得るが、RESET は購読者にとって未完了を意味する安全側の挙動である
+- 更新適用時点で次の Object が範囲内だった場合、アプリがその後の Object を送らなければ記録されない (ライブラリはアプリが Object を持っているかを判断できない)
+- Start Location の前進で見送りが生じた場合も RESET 側として扱う。§11.3.2 の第 2 段落の FIN は購読開始時点から範囲外だった Object を指し、RESET の例は「Start Location を大きい Location へ動かす REQUEST_UPDATE」を挙げているため、購読中の範囲変更で生じた見送りは RESET 側と解釈する (判断の根拠は `markOmittedNextObject` の JSDoc に明記)
+- `src/session/types.ts` の `PublisherStreamState::omittedObjects` の JSDoc、`src/session/publish.ts` の FIN / RESET の説明、`src/publisher.ts` の `onSendObjectSkipped` の JSDoc を、Location Filter による見送りも含む形に更新した
+- テストは、(a) フィルタを直接設定した送信時見送り (RESET / FIN / 別 Group / Datagram / 非整数 Group ID)、(b) REQUEST_UPDATE 経由 (範囲縮小・Start Location 前進・End Group 縮小・範囲内・送信時見送りとの結合)、(c) PUBLISH_STATE_NOTIFY 経由 (範囲縮小・記録が取り消されないこと・範囲内)、(d) 最初の Object の write 中、(e) datagram で Largest Location が進む場合、を追加した
+- テスト用ハーネス `createPublishReadTestContext` に publisher の送信配線 (onSendObject / onSendObjectSkipped / onSendDatagram) と Subgroup ストリームの close / abort 記録を追加し、`src/session/publish.prop.ts` の PBT のモデルも Group 一致の規則に合わせた
+- `CHANGES.md` の `## develop` 先頭に `[FIX]` を追記した
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (124 files / 2532 tests) が通る
+- 変異テストで、Group 一致判定の削除 / 非整数ガードの削除 / 送信時・更新時の記録の削除 / `previousObjectId < 0n` ガードの削除 / Largest Location ベースの判定 / ハーネス配線の no-op 化、のいずれでも対応するテストが失敗することを確認した
+
+## 残した課題
+
+- 更新適用時点で次の Object が範囲内だった場合、アプリがその後の Object を送らなければ省略は記録されず FIN で閉じる (ライブラリはアプリが Object を持っているかを判断できない)
+- 範囲を狭めた直後に広げた場合、実際には見送らなかった Subgroup を RESET にし得る (記録を解除しない設計)
+- `publishSendObject` / `publishSendObjectInternal` の Forward State 0 の防御分岐 (Group ID の検証より前に記録する経路) は公開経路から到達しないため、専用のテストは無い
+- `SessionImpl.publish` の `impl.onSendObjectSkipped` の配線 1 行は、他の配線行と同じく SessionImpl 経由の結合テストが無い (記録のロジックは `publishMarkStreamOmitted` 側でテスト済み)
+- publish 側では Range Filter (§3.3.3) を送信 Object に適用していないため、Range Filter による見送りは発生しない (省略記録の対象外。既存の未実装)

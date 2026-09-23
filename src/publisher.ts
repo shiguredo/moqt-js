@@ -322,16 +322,25 @@ export class PublisherImpl implements Publisher {
   goawayCallback?: ((newSessionUri: string) => void) | undefined;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
-   * Forward State 0 で Object の送信を見送ったときに呼ばれる
+   * Forward State 0 または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
    *
    * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
-   * "Omitting a Subgroup Object due to the subscriber's Forward State" は
-   * ストリームを閉じる際に reset を MUST とする対象である。見送りの事実を
-   * Session 側のストリーム状態へ記録するために使う。
+   * "If a sender closes the stream before delivering all such objects to the QUIC
+   *  stream, it MUST reset the stream.  This includes, but is not limited to:
+   *  ... Omitting a Subgroup Object due to the subscriber's Forward State"
+   * Forward State 0 の見送り (§3.1 の Forward State) も Location Filter の
+   * 範囲外の見送り (同 §3.3.1 の "A publisher MUST NOT send subscription-delivered
+   *  objects from outside the requested range") も、届かない Object を残したまま
+   * 閉じることになるため reset の対象である。見送りの事実を Session 側の
+   * ストリーム状態へ記録するために使う。
    * `guardSend` は `sendDatagram` とも共有しており Datagram の見送りは Subgroup の
-   * 省略ではないため、`guardSend` ではなく `sendObject` の skip 分岐で呼ぶ。
+   * 省略ではないため、`guardSend` ではなく `sendObject` の skip 分岐と
+   * Location Filter 分岐で呼ぶ。
+   * 引数の groupId は記録先を絞るために渡す。開いている Subgroup と別の Group の
+   * Object を見送っても、その Subgroup は範囲内をすべて渡している可能性があるため、
+   * 記録側 (publishMarkStreamOmitted) が Group の一致を見る。
    */
-  onSendObjectSkipped?: () => void;
+  onSendObjectSkipped?: (groupId: number) => void;
   onSendDatagram?: (params: SendDatagramParams) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
   /**
@@ -494,21 +503,6 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * Send an object on this track
-   *
-   * 戻り値は object が WebTransport stream に書き込み完了した時点で resolve する Promise。
-   * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
-   * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
-   *
-   * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しは
-   * fail-fast で error 通知 + 返値の reject になる
-   * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
-   * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
-   *
-   * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
-   * Promise<void> を返す (§3.3.1)。
-   */
-  /**
    * Object / Datagram の送信前ガード
    *
    * draft-ietf-moq-transport-21 §3.1:
@@ -554,13 +548,29 @@ export class PublisherImpl implements Publisher {
     return null;
   }
 
+  /**
+   * Send an object on this track
+   *
+   * 戻り値は object が WebTransport stream に書き込み完了した時点で resolve する Promise。
+   * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
+   * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
+   *
+   * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しは
+   * fail-fast で error 通知 + 返値の reject になる
+   * (組み合わせ規則は draft-ietf-moq-transport-21 §11.1.2 / §11.1.3、
+   * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
+   *
+   * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
+   * Promise<void> を返す (§3.3.1)。あわせて、届かない Object を残したまま Subgroup を
+   * 閉じることになるため省略として記録する (§11.3.2。閉じる時は FIN ではなく RESET)。
+   */
   sendObject(params: SendObjectParams): Promise<void> {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
       // draft-ietf-moq-transport-21 §11.3.2: Forward State 0 で見送った Object が
       // ある Subgroup は、閉じる時に FIN ではなく RESET が必要になる。
-      this.onSendObjectSkipped?.();
+      this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
     }
     if (guard !== null) {
@@ -578,8 +588,13 @@ export class PublisherImpl implements Publisher {
 
     // draft-ietf-moq-transport-21 §3.3.1:
     // 購読の Location Filter の範囲外 Object は送信しない (Forward State = 0 と
-    // 同様に送信も記録もしない。範囲外は正常なフィルタ動作であり通知しない)。
+    // 同様に送信も LARGEST_OBJECT の記録もしない。範囲外は正常なフィルタ動作であり
+    // error 通知は行わない)。
+    // draft-ietf-moq-transport-21 §11.3.2: 範囲外で見送った Object も Forward State 0 の
+    // 見送りと同じく「届かない Object を残したまま閉じる」ため、閉じる時は RESET が必要。
+    // 見送りの事実をここで記録する (閉じる時点では検出できない)。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
+      this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
     }
 
