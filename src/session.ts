@@ -21,6 +21,7 @@ import type { MoqtFragment } from "./moqtUri";
 import * as bidi from "./session/bidi";
 import {
   DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS,
+  DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES,
   DEFAULT_DATA_STREAM_TIMEOUT_MS,
   connectionInitialize,
   connectionSendControlMessage,
@@ -553,6 +554,10 @@ export class SessionImpl implements Session {
   // 0 以下はタイムアウトしない。
   controlMessageTimeoutMs = DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
   dataStreamTimeoutMs = DEFAULT_DATA_STREAM_TIMEOUT_MS;
+  // draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+  // 確立後の受信データストリームが保持してよいバッファの上限。
+  // 0 以下は上限なし (既定は 32 MiB)。
+  dataStreamMaxBufferBytes = DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES;
 
   // 統計カウンター
   //

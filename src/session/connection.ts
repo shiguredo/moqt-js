@@ -39,6 +39,16 @@ export const DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS = 10_000;
 export const DEFAULT_DATA_STREAM_TIMEOUT_MS = 30_000;
 
 /**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 確立後の受信データストリームが保持してよいバッファの既定上限。
+ *
+ * 媒体フレームは通常 1 MiB 未満であり、16 MiB の Object を受ける余裕を持たせた値。
+ * Track Alias 未確立の並べ替え窓 (pendingSubgroupBuffer の 1 MiB) とは用途が違う。
+ * 0 以下を指定すると上限を設けない。
+ */
+export const DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES = 32 << 20;
+
+/**
  * initialize() のオプション
  *
  * 公開 API ではないが、connect.ts から SessionImpl.initialize() に渡される。
@@ -72,6 +82,14 @@ export interface ConnectionInitializeOptions {
    * 0 以下でタイムアウトしない。
    */
   dataStreamTimeoutMs?: number;
+  /**
+   * 確立後の受信データストリームが保持してよいバッファの上限 (バイト)
+   *
+   * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9)。
+   * 既定は DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES (32 MiB)。0 以下で上限なし。
+   * 詳細は ConnectOptions.dataStreamMaxBufferBytes を参照。
+   */
+  dataStreamMaxBufferBytes?: number;
 }
 
 /**
@@ -102,6 +120,8 @@ export interface ConnectionSessionInternal {
   // draft-ietf-moq-transport-21 §12.2: 受信タイムアウト
   controlMessageTimeoutMs: number;
   dataStreamTimeoutMs: number;
+  // draft-ietf-moq-transport-21 §12.5: データストリーム単位の受信バッファ上限
+  dataStreamMaxBufferBytes: number;
   statsControlMessagesSent: number;
 
   closeWithError(error: SessionError): void;
@@ -201,6 +221,13 @@ export async function connectionInitialize(
      * 0 以下でタイムアウトしない。
      */
     dataStreamTimeoutMs?: number;
+    /**
+     * 確立後の受信データストリームが保持してよいバッファの上限 (バイト)
+     *
+     * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9)。
+     * 既定は DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES (32 MiB)。0 以下で上限なし。
+     */
+    dataStreamMaxBufferBytes?: number;
   },
 ): Promise<void> {
   // draft-ietf-moq-transport-21 Section 1.5 (Extensibility):
@@ -234,11 +261,6 @@ export async function connectionInitialize(
   // draft-ietf-moq-transport-21 §12.2:
   // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
   connectionApplyTimeoutOptions(session, options);
-  // draft-ietf-moq-transport-21 §12.2:
-  // 半端な制御メッセージ / データストリームを保持し続けるピアを打ち切る期限。
-  session.controlMessageTimeoutMs =
-    options?.controlMessageTimeoutMs ?? DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
-  session.dataStreamTimeoutMs = options?.dataStreamTimeoutMs ?? DEFAULT_DATA_STREAM_TIMEOUT_MS;
   // draft-ietf-moq-transport-21 §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE):
   // 自 endpoint が広告する上限を保持し、受信 REGISTER の上限判定に使う。
   // 未広告 (undefined) の既定値は 0（Alias の使用禁止）。
@@ -565,17 +587,26 @@ export function connectionStartPostSetupLoops(
  * 示すコードである。半端なメッセージや Object を保持したまま待ち続ける
  * ピアにメモリとコネクションを占有され続けないよう、期限を設ける。
  * 0 以下を指定するとタイムアウトしない。
+ *
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * あわせて受信データストリーム 1 本が保持してよいバッファの上限も反映する。
+ * 0 以下を指定すると上限を設けない。
  */
 export function connectionApplyTimeoutOptions(
   session: ConnectionSessionInternal,
   options?: {
     controlMessageTimeoutMs?: number;
     dataStreamTimeoutMs?: number;
+    dataStreamMaxBufferBytes?: number;
   },
 ): void {
   session.controlMessageTimeoutMs =
     options?.controlMessageTimeoutMs ?? DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS;
   session.dataStreamTimeoutMs = options?.dataStreamTimeoutMs ?? DEFAULT_DATA_STREAM_TIMEOUT_MS;
+  // draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+  // 確立後の受信データストリームが無制限にメモリを消費しないようにする上限。
+  session.dataStreamMaxBufferBytes =
+    options?.dataStreamMaxBufferBytes ?? DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES;
 }
 
 export async function connectionSendControlMessage(

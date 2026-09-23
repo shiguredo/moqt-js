@@ -43,6 +43,7 @@ import type { RangeFilterSpec } from "./message/parameter";
 import { FetcherImpl, type Fetcher } from "./fetcher";
 import { AuthTokenCache } from "./session/authTokenCache";
 import {
+  DataStreamErrorCode,
   InvalidFilterError,
   MalformedTrackError,
   RequestError,
@@ -4609,9 +4610,16 @@ interface DataStreamFinContext {
     requestStreams: Map<bigint, RequestStreamEntry>;
     // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
+    // draft-ietf-moq-transport-21 §12.2 (タイムアウト) / §12.5 (バッファ上限)
+    dataStreamTimeoutMs: number;
+    dataStreamMaxBufferBytes: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   sessionError: { current: Error | undefined };
+  /** 受信方向が cancel されたか (STOP_SENDING 相当の打ち切りの検証用) */
+  isCancelled: () => boolean;
+  /** cancel の reason (打ち切りの診断内容の検証用) */
+  cancelReasons: unknown[];
   /** debug コールバックが受け取った記録 (fill 失敗通知などの検証用) */
   debugRecords: { typeName: string; decoded?: Record<string, unknown> }[];
   enqueue: (data: Uint8Array) => void;
@@ -4633,7 +4641,7 @@ interface DataStreamFinContext {
  * close を呼び、close は同期先頭で sessionState を closed にする)。
  */
 function createDataStreamFinContext(
-  options: { dataStreamTimeoutMs?: number } = {},
+  options: { dataStreamTimeoutMs?: number; dataStreamMaxBufferBytes?: number } = {},
 ): DataStreamFinContext {
   const sessionError: { current: Error | undefined } = { current: undefined };
   let resolveClosed!: (info: WebTransportCloseInfo) => void;
@@ -4656,18 +4664,31 @@ function createDataStreamFinContext(
     requestStreams: Map<bigint, RequestStreamEntry>;
     // draft-ietf-moq-transport-21 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
+    // draft-ietf-moq-transport-21 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
+    dataStreamMaxBufferBytes: number;
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
-  // initialize() を経由せずタイムアウト値だけを差し替える
+  // initialize() を経由せずタイムアウト値とバッファ上限だけを差し替える
   if (options.dataStreamTimeoutMs !== undefined) {
     internal.dataStreamTimeoutMs = options.dataStreamTimeoutMs;
   }
+  if (options.dataStreamMaxBufferBytes !== undefined) {
+    internal.dataStreamMaxBufferBytes = options.dataStreamMaxBufferBytes;
+  }
 
   let controller!: ReadableStreamDefaultController<Uint8Array>;
+  // 受信方向の打ち切り (STOP_SENDING 相当) を観測する。
+  // reason も記録し、打ち切りの診断内容 (EXCESSIVE_LOAD のコード) を検証できるようにする
+  let cancelled = false;
+  const cancelReasons: unknown[] = [];
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       controller = c;
+    },
+    cancel(reason) {
+      cancelled = true;
+      cancelReasons.push(reason);
     },
   });
 
@@ -4676,6 +4697,8 @@ function createDataStreamFinContext(
     internal,
     sessionError,
     debugRecords,
+    isCancelled: () => cancelled,
+    cancelReasons,
     enqueue: (data: Uint8Array) => {
       controller.enqueue(data);
     },
@@ -6052,7 +6075,7 @@ test("Fetch データストリーム: Object 完成後の FIN は正常終了し
  * 購読 (SubscriberImpl) と fill 関連付けを登録し、FETCH_HEADER 形式の
  * fill ストリームを handleIncomingStream で駆動できるようにする。
  */
-function createFillFetchStreamContext(): {
+function createFillFetchStreamContext(options: { dataStreamMaxBufferBytes?: number } = {}): {
   ctx: ReturnType<typeof createDataStreamFinContext>;
   internals: {
     subscribers: Map<bigint, SubscriberImpl>;
@@ -6060,7 +6083,7 @@ function createFillFetchStreamContext(): {
     fillFetchTargets: Map<bigint, { subscriber: SubscriberImpl; groupOrder: GroupOrder }>;
   };
 } {
-  const ctx = createDataStreamFinContext();
+  const ctx = createDataStreamFinContext(options);
   const internals = ctx.internal as unknown as {
     subscribers: Map<bigint, SubscriberImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
@@ -6254,6 +6277,450 @@ test("データストリーム: 途中バイトを保持したままタイムア
     SessionErrorCode.DATA_STREAM_TIMEOUT,
   );
   assert.isTrue(ctx.sessionError.current!.message.includes("data stream timed out"));
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD): 受信バッファの上限
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 確立後の受信データストリームのバッファが上限を超えたら当該ストリームを
+ * 打ち切り、セッションは閉じない (Track 単位の失敗として購読へ通知する)。
+ */
+test("Subgroup データストリーム: バッファ上限を超えると打ち切られ購読が closed になる", async () => {
+  // Object の payload 宣言長 10 バイトに対し上限 4 バイトを指定する
+  // (ヘッダー解析直後の残バッファが既に上限を超える)
+  const ctx = createDataStreamFinContext({ dataStreamMaxBufferBytes: 4 });
+  const received: MoqtObject[] = [];
+  const errors: Error[] = [];
+  let endCalled = false;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    (object) => {
+      received.push(object);
+    },
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    (error) => {
+      errors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  // 打ち切りで購読 (bidi リクエストストリーム) も終了することを検証するための参照
+  const authoritativeInternals = ctx.internal as unknown as {
+    subscribers: Map<bigint, unknown>;
+    subscribersByAlias: Map<bigint, unknown[]>;
+  };
+  authoritativeInternals.subscribers.set(1n, subscriber);
+  const subscribeWritable = new WritableStream<Uint8Array>();
+  ctx.internal.requestStreams.set(1n, {
+    stream: {
+      readable: new ReadableStream<Uint8Array>(),
+      writable: subscribeWritable,
+    } as unknown as WebTransportBidirectionalStream,
+    writer: subscribeWritable.getWriter(),
+    controlReader: new ControlStreamReader(),
+  });
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  // header + Object フィールド + payload の一部を 1 チャンクで送る (上限超過)
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await handlePromise;
+
+  // セッションは閉じない (Track 単位の失敗である)
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  // Object は配信されず、正常終了も通知されない
+  assert.equal(received.length, 0);
+  assert.isFalse(endCalled);
+  // 購読は error 通知を受けて closed になり、理由 (EXCESSIVE_LOAD) を判別できる
+  assert.equal(errors.length, 1);
+  assert.equal(
+    (errors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.isTrue(errors[0]!.message.includes("data stream buffer limit exceeded"));
+  assert.equal(subscriber.state, "closed");
+  // 受信方向は cancel (STOP_SENDING 相当) されている。reason に EXCESSIVE_LOAD の
+  // コードが含まれる (cancelStreamQuiet は文字列 reason しか渡せないため)
+  assert.isTrue(ctx.isCancelled());
+  assert.equal(ctx.cancelReasons.length, 1);
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("trackAlias=7"));
+  // 購読は bidi リクエストストリームごと終了する (STOP_SENDING + Map の掃除)
+  assert.isFalse(authoritativeInternals.subscribersByAlias.has(7n));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 同一 Track Alias に複数の購読がある場合、上限超過では全購読へ失敗を通知する
+ * (1 件目の通知中に unsubscribe されても取りこぼさない)。
+ */
+test("Subgroup データストリーム: バッファ上限超過で同一 alias の全購読が失敗する", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamMaxBufferBytes: 4 });
+  const firstErrors: Error[] = [];
+  const secondErrors: Error[] = [];
+  // 1 件目は error コールバックの中で unsubscribe する (bidiCancelSubscription の
+  // 同期 splice と合わせて、走査中の配列が縮む状況を作る)
+  const first = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      firstErrors.push(error);
+      void first.unsubscribe();
+    },
+  );
+  const second = new SubscriberImpl(
+    ["live"],
+    "video",
+    3n,
+    7n,
+    () => {},
+    undefined,
+    undefined,
+    (error) => {
+      secondErrors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [first, second]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await handlePromise;
+
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(firstErrors.length, 1);
+  assert.equal(secondErrors.length, 1);
+  assert.equal(first.state, "closed");
+  assert.equal(second.state, "closed");
+  // alias のエントリは掃除される (購読が残らない)
+  assert.isFalse(ctx.internal.subscribersByAlias.has(7n));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.1:
+ * FETCH データストリームでバッファ上限を超えたら打ち切り、ピアの
+ * RESET_STREAM と同じ後始末 (error 通知・fetchers からの削除) を行う。
+ * 正常終了 (handleEnd) は通知しない。
+ */
+test("Fetch データストリーム: バッファ上限を超えると打ち切られ fetcher が失敗する", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamMaxBufferBytes: 8 });
+  const requestId = 4n;
+  const errors: Error[] = [];
+  let endCalled = false;
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {
+      endCalled = true;
+    },
+    (error) => {
+      errors.push(error);
+    },
+  );
+  // requestsFetch が設定する onCancel 相当。実経路と同じ後始末
+  // (bidi リクエストストリームへの STOP_SENDING、requestStreams / fetchers の削除)
+  // を通すため、bidiCancelFetch を注入する
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  };
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // draft-ietf-moq-transport-21 §10.8 / §10.9:
+  // FETCH の終了で購読も尽きた Track の Prior ID Gap 追跡が捨てられることを検証する
+  const trackKey = fetcher.getFullTrackNameKey();
+  ctx.internal.priorGapTrackingByTrack.set(trackKey, {
+    lastGroupId: 1n,
+    lastObjectId: 0n,
+    gaps: new Map(),
+  } as unknown as PriorGapTracking);
+
+  // bidi リクエストストリームを登録し、STOP_SENDING 相当 (reader.cancel) を観測する
+  const bidiCancels: unknown[] = [];
+  const bidiWritable = new WritableStream<Uint8Array>();
+  const bidiReadable = new ReadableStream<Uint8Array>({
+    cancel(reason) {
+      bidiCancels.push(reason);
+    },
+  });
+  ctx.internal.requestStreams.set(requestId, {
+    stream: {
+      readable: bidiReadable,
+      writable: bidiWritable,
+    } as unknown as WebTransportBidirectionalStream,
+    writer: bidiWritable.getWriter(),
+    controlReader: new ControlStreamReader(),
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await handlePromise;
+
+  // セッションは閉じない (FETCH 単位の失敗である)
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.isFalse(endCalled);
+  assert.equal(errors.length, 1);
+  assert.equal(
+    (errors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.equal(fetcher.state, "closed");
+  // draft-ietf-moq-transport-21 §3.2.1:
+  // ローカル判断で FETCH state を破棄する場合は bidi リクエストストリームへ
+  // STOP_SENDING を送る MUST であり、cancel() 経由で実行される
+  assert.equal(bidiCancels.length, 1);
+  assert.equal(bidiCancels[0], "fetch cancelled");
+  // fetchers / requestStreams から削除される (cancel の後始末)
+  assert.isFalse(ctx.internal.fetchers.has(requestId));
+  assert.isFalse(ctx.internal.requestStreams.has(requestId));
+  // 購読も尽きた Track の Prior ID Gap 追跡も捨てられる
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+  // 受信方向は cancel (STOP_SENDING 相当) されている。reason に EXCESSIVE_LOAD の
+  // コードと対象の Request ID が含まれる
+  assert.isTrue(ctx.isCancelled());
+  assert.equal(ctx.cancelReasons.length, 1);
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes(`requestId=${requestId}`));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * fill fetch ストリームでバッファ上限を超えたら打ち切り、関連付けを消して
+ * アプリへ fillError で伝える。購読は継続する (終了通知は出さない)。
+ */
+test("fill fetch ストリーム: バッファ上限を超えると打ち切られ購読は継続する", async () => {
+  const { ctx, internals } = createFillFetchStreamContext({ dataStreamMaxBufferBytes: 8 });
+  const requestId = 2n;
+  const fillErrors: Error[] = [];
+  let endCalled = false;
+  let notifiedSubscriptionError: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    requestId,
+    1n,
+    () => {},
+    undefined,
+    () => {
+      endCalled = true;
+    },
+    (error) => {
+      notifiedSubscriptionError = error;
+    },
+  );
+  subscriber.fillErrorCallback = (error) => {
+    fillErrors.push(error);
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  await handlePromise;
+
+  // セッションは閉じない。fill の失敗は購読に波及しない (§3.4.1)
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.isUndefined(notifiedSubscriptionError);
+  assert.isFalse(endCalled);
+  assert.equal(subscriber.state, "active");
+  // アプリへは fillError で失敗を伝え、関連付けを消す
+  assert.equal(fillErrors.length, 1);
+  assert.equal(
+    (fillErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.isFalse(internals.fillFetchTargets.has(requestId));
+  // 受信方向は cancel (STOP_SENDING 相当) されている。reason に EXCESSIVE_LOAD の
+  // コードと上限・実測値が含まれる
+  assert.isTrue(ctx.isCancelled());
+  assert.equal(ctx.cancelReasons.length, 1);
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("code=9"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("limit=8"));
+  assert.isTrue(String(ctx.cancelReasons[0]).includes("buffered="));
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * バッファ長が上限と等しい場合は打ち切らない (超過のみが対象)。
+ */
+test("Subgroup データストリーム: バッファ長が上限ちょうどなら打ち切らない", async () => {
+  // ヘッダー解析後の残バッファは Object フィールド 2 バイト + payload 10 バイト
+  // になるため、上限にその値を指定する (チャンク追記直後の検査を通過させる)
+  const ctx = createDataStreamFinContext({ dataStreamMaxBufferBytes: 12 });
+  const received: MoqtObject[] = [];
+  const errors: Error[] = [];
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    (object) => {
+      received.push(object);
+    },
+    undefined,
+    undefined,
+    (error) => {
+      errors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  await yieldToMacrotask();
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(errors.length, 0);
+  assert.isFalse(ctx.isCancelled());
+  assert.equal(received.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 上限に 0 以下を指定すると上限判定を無効にする (打ち切らない)。
+ */
+test("Subgroup データストリーム: 上限 0 以下なら打ち切らない", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamMaxBufferBytes: 0 });
+  const received: MoqtObject[] = [];
+  const errors: Error[] = [];
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    (object) => {
+      received.push(object);
+    },
+    undefined,
+    undefined,
+    (error) => {
+      errors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  await yieldToMacrotask();
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(errors.length, 0);
+  assert.isFalse(ctx.isCancelled());
+  assert.equal(received.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * fill fetch ストリームでも、チャンクを追記した直後の検査で上限超過を検出する
+ * (初回チャンクがヘッダーのみで、次のチャンクで上限を超える場合)。
+ */
+test("fill fetch ストリーム: 追記直後に上限を超えると打ち切られる", async () => {
+  const { ctx, internals } = createFillFetchStreamContext({ dataStreamMaxBufferBytes: 8 });
+  const requestId = 2n;
+  const received: MoqtObject[] = [];
+  const fillErrors: Error[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, (object) => {
+    received.push(object);
+  });
+  subscriber.fillErrorCallback = (error) => {
+    fillErrors.push(error);
+  };
+  internals.subscribers.set(requestId, subscriber);
+  internals.fillFetchTargets.set(requestId, {
+    subscriber,
+    groupOrder: GroupOrder.ASCENDING,
+  });
+
+  const parts = buildFetchStreamParts(requestId);
+  const handlePromise = ctx.run();
+  // 初回チャンクはヘッダーのみ (ループ先頭の検査は通過する)
+  ctx.enqueue(parts.headerBytes);
+  await yieldToMacrotask();
+  // 2 回目のチャンクで完成した Object (フィールド 6 バイト + payload 10 バイト) が
+  // 届き、上限 (8) を超える。追記直後に検査しないと、この Object は配信されてしまう
+  ctx.enqueue(concatUint8Arrays([parts.fieldsBytes, parts.payload]));
+  await handlePromise;
+
+  assert.equal(ctx.session.state, "connected");
+  // Object は配信されず、fillError で失敗が伝わる
+  assert.equal(received.length, 0);
+  assert.equal(fillErrors.length, 1);
+  assert.equal(
+    (fillErrors[0] as Error & { streamErrorCode?: number }).streamErrorCode,
+    DataStreamErrorCode.EXCESSIVE_LOAD,
+  );
+  assert.isFalse(internals.fillFetchTargets.has(requestId));
+  assert.isTrue(ctx.isCancelled());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 上限以下の受信は従来どおり配信される (打ち切らない)。
+ */
+test("Subgroup データストリーム: バッファ上限以下なら従来どおり配信される", async () => {
+  // 1 チャンクの追記が上限を超えない範囲に収める
+  const ctx = createDataStreamFinContext({ dataStreamMaxBufferBytes: 1024 });
+  const received: MoqtObject[] = [];
+  const errors: Error[] = [];
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    (object) => {
+      received.push(object);
+    },
+    undefined,
+    undefined,
+    (error) => {
+      errors.push(error);
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  // header + Object フィールドを先に送り、payload を別チャンクで送る
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes]));
+  await yieldToMacrotask();
+  ctx.enqueue(parts.payload);
+  await yieldToMacrotask();
+  ctx.fin();
+  await handlePromise;
+
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(errors.length, 0);
+  assert.equal(subscriber.state, "active");
+  assert.equal(received.length, 1);
+  assert.equal(received[0]!.payload.byteLength, 10);
 });
 
 /**
@@ -7672,12 +8139,22 @@ test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
 });
 
 /**
+ * SessionImpl の dataStreamMaxBufferBytes の既定値は 32 MiB であることを検証する
+ * (draft-ietf-moq-transport-21 §12.5 EXCESSIVE_LOAD 0x9)。
+ * 媒体フレームは通常 1 MiB 未満であり、16 MiB の Object を受ける余裕を持たせた値。
+ */
+test("SessionImpl: dataStreamMaxBufferBytes の既定値は 32 MiB", () => {
+  const session = createSessionImpl();
+  assert.equal(session.dataStreamMaxBufferBytes, 32 << 20);
+});
+
+/**
  * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
  * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
  * localMaxFilterRanges に保持することを検証する
  * (draft-ietf-moq-transport-21 §9.1.3 / §9.1.6 / §9.1.7)。
  */
-test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持する", async () => {
+test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バッファ上限を保持する", async () => {
   const sentChunks: Uint8Array[] = [];
   const clientWritable = new WritableStream<Uint8Array>({
     write(chunk) {
@@ -7724,11 +8201,15 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges を保持す�
     maxAuthTokenCacheSize: 1024,
     maxRequestUpdates: 8,
     maxFilterRanges: 4,
+    // draft-ietf-moq-transport-21 §12.5: 受信データストリームのバッファ上限
+    dataStreamMaxBufferBytes: 1024,
   });
 
   // 自 endpoint の上限を保持する
   assert.equal(session.localMaxFilterRanges, 4);
   assert.equal(session.localMaxRequestUpdates, 8);
+  // initialize のオプションが受信バッファ上限として session に反映される
+  assert.equal(session.dataStreamMaxBufferBytes, 1024);
 
   // 送信した SETUP から広告値を取得する
   const sent = concatUint8Arrays(sentChunks);

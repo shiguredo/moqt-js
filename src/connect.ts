@@ -108,6 +108,9 @@ export async function connect(
     ...(options?.dataStreamTimeoutMs !== undefined
       ? { dataStreamTimeoutMs: options.dataStreamTimeoutMs }
       : {}),
+    ...(options?.dataStreamMaxBufferBytes !== undefined
+      ? { dataStreamMaxBufferBytes: options.dataStreamMaxBufferBytes }
+      : {}),
   });
 
   return session;
