@@ -1,7 +1,7 @@
 # createMediaPublisher が後着購読者へ Audio Config を送り直さない
 
 - Created: 2026-09-20
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-audio-config-late-subscriber
 - Polished: 2026-09-21
 
@@ -42,4 +42,18 @@ AAC の復号にはこの description (AudioSpecificConfig) が必須だが、Ch
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaPublisher.ts` の `MediaPublisherImpl` に `audioConfigResendRequested` を追加し、音声 Publisher の `onForwardStateChange` が Forward State 0 から 1 の変化で送り直し要求を立てるようにした
+- 送出する Audio Config の判断を純関数 `resolveAudioConfigToSend` に切り出した。新しい description が現れたときはそれを載せ、送り直し要求があるときは保持値を次の Object に 1 度だけ載せ直し、要求が立っていても保持値が無ければ要求だけを残す。載せた時点で要求は解消し、保持値は消さない
+- `stop()` / `close()` / `start()` 失敗の資源破棄で Audio Config の保持値と要求を破棄するようにした。再 start では新しい session と encoder になり購読者は誰も前の Object を受け取っていないため、最初の description を初出として送り直す (encoder と Publisher を切り離した後に破棄し、破棄中に届いた出力で再充填されないようにする)
+- 長さ 0 の description は AAC の AudioSpecificConfig として成立しないため送らない
+- 重複していた private の `isSameAudioConfig` / `isSameVideoConfig` を `isSameCodecDescription` に統合した
+- `src/createMediaPublisher.test.ts` に、Forward State 変化での送り直し、送り直しが 1 Object に限られること、要求の保持 (0 に戻っても消さない / active でない間は消費しない)、stop 後の再開で同じ description でも載ること、破棄段階の失敗でも破棄されることを追加した
+- `src/createMediaPublisher.prop.ts` を新設し、任意の chunk 列に対する不変条件 (送出値は保持値と一致する / 初出と変更の description は必ず載る / 要求が立っている Object では保持値がある限り必ず載る / 要求が無ければ同じ値を連続で載せない / 送り直しは 1 Object に限り保持値は複製する) を PBT で固定した
+- `docs/HIGH_LEVEL_API.md` の「高レベル API は `VIDEO_CONFIG` / `AUDIO_CONFIG` を送信しない」という実装と逆の記述を、実際の送出と音声の送り直しの契約に合わせて修正した
+- `CHANGES.md` の `## develop` に `[FIX]` を追記した
+
+## 残した課題
+
+- 映像の `VIDEO_CONFIG` は Forward State 変化での送り直しに対応していない。あわせて `lastSentVideoConfig` は stop 後の再 start でも保持するため、再開後の購読者には `VIDEO_CONFIG` が届かない (どちらも設計方針どおり別対応)
+- Catalog Publisher も Forward State 変化での送り直しを持たない (devtools 側には実装済み)
+- devtools 側の `resolveAudioConfigToSend` はライブラリ実装と重複しており、長さ 0 の description の扱いが揃っていない
