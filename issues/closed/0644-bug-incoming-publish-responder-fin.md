@@ -1,7 +1,7 @@
 # 受信 PUBLISH の応答方向を FIN で閉じない
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-incoming-publish-responder-fin
 - Polished: 2026-09-21
 
@@ -41,4 +41,29 @@ draft-ietf-moq-transport-21 §6.4.2.2 は「An endpoint SHOULD send a FIN prompt
 
 ## 解決方法
 
-{未着手}
+- `src/session/incomingPublish.ts` の `processMessages` の PUBLISH_DONE 分岐で、`bidiHandlePublishDone` の直後に `bidi.closeRequestStreamWriter` を呼び、応答方向を FIN で閉じるようにした (§6.4.2.2 の SHOULD。§9.9 により PUBLISH_DONE は publisher 方向の最終メッセージであり、受信後は将来の REQUEST_UPDATE に応答する必要が無い)
+- ピア FIN (読み取りループの done) の分岐でも同じく FIN を送る。`rejectPendingRequestUpdates` / `notifySubscriberFailure` より先に呼び、アプリのコールバックに FIN の発行を遅らせない
+- `closeRequestStreamWriter` は await しない。Safari 系の WebTransport で `close()` が解決せず、待つと finally の後始末が止まるためである (`writer.close()` は await の前に発行されるため FIN 自体は送られる)。GOAWAY 分岐は読み取りの継続を優先して従来どおり await しており、扱いを意図的に変えている
+- 後始末 (`incomingPublishCleanupIncomingPublish`) には FIN を置かない。finally から全 exit 経路で走るため、ピア RESET_STREAM / PROTOCOL_VIOLATION / セッション終了 / unsubscribe でも FIN が飛ぶことを避ける
+- ピア RESET_STREAM / ピア起点のセッション終了 / PROTOCOL_VIOLATION / unsubscribe の経路では FIN を送らない (RESET_STREAM と PROTOCOL_VIOLATION とピア起点のセッション終了は catch の時点で購読が active、unsubscribe は writer を abort 済みで requestStreams から削除済み)
+- `bidiHandlePublishDone` (3 ロール共用) は変更していない
+
+### 設計方針からの逸脱と、その理由
+
+- 設計方針は「例外の種類で分岐せず、throw したら FIN を送らない」としていたが、アプリのコールバック例外 (`end` / `error` が throw する場合) では購読が `handleEnd` の中で closed になる一方でセッションは開いたままになり、FIN も RESET も送られないため応答方向が半開きで残る (publisher は request の完了を判定できない)。この経路では catch 節が状態ベースの条件 (`impl.state !== "active"` かつ `session.sessionState === "connected"`) で FIN を送るようにした。GOAWAY 分岐がアプリのコールバック例外を黙殺して後始末を続けるのと同じ判断である
+- 例外の種類では分岐しない。ピア RESET_STREAM / ピア起点のセッション終了 / PROTOCOL_VIOLATION は catch の時点で購読が active のため条件に入らない
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (123 files / 2546 tests) が通る
+- テストは、PUBLISH_DONE で FIN / ピア FIN で FIN / ピア RESET_STREAM では送らない / PUBLISH_DONE が不正なときは送らない / セッション終了では送らない / unsubscribe では送らない / アプリの end・error コールバックが throw しても送る / `close()` が解決しない sink でも処理が完了する、の 8 件を追加し、既存の unsubscribe テストにも FIN が載らないことの assert を足した
+- 変異テストで、FIN の削除 (3 経路) / FIN の await 化 / FIN を後始末へ移動 / 条件を常に真 / ガードの削除 / FIN を RESET に変更、のいずれでも対応するテストが失敗することを確認した
+
+## 残した課題
+
+- `session.sessionState === "connected"` ガードは防御であり、テストで直接は固定していない (transport.closed がストリームのエラーより先に処理される順序を想定)
+- PUBLISH_DONE を受信した時点で保留中の REQUEST_UPDATE が reject されない (`update()` の Promise が未解決のまま残り得る)。本 issue の範囲外だが、同じ PUBLISH_DONE 分岐の話であり別途扱う
+- ピア RESET_STREAM 後は応答方向を開いたまま残す (§6.4.2.3 は受信側の残りの方向を定めていないため)。セッションが長命だと half-open が残る
+- 受信 PUBLISH ストリーム上の REQUEST_UPDATE_OK に未知の Mandatory Track Property が載った場合、共有ループの PROTOCOL_VIOLATION 変換を通らずセッションが閉じない (既存の穴)
+- GOAWAY 分岐の `await closeRequestStreamWriter` は Safari 系で解決しない可能性がある (本差分の範囲外)
+- `docs/LOW_LEVEL_API.md` は受信 PUBLISH の後続処理を `bidiReadRequestStreamMessages` と説明しており応答方向の FIN にも触れていない (本差分の範囲外)

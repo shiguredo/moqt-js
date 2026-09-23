@@ -1728,6 +1728,50 @@ function createIncomingPublishStream(
 }
 
 /**
+ * 応答方向の終端操作 (FIN の close / RESET の abort) を区別して記録する WritableStream
+ *
+ * draft-ietf-moq-transport-21 §6.4.2.2 の応答方向の FIN を、RESET と取り違えずに
+ * 検証するために使う。
+ */
+function createRecordingResponderStream(): {
+  writable: WritableStream<Uint8Array>;
+  closeCount: () => number;
+  abortCount: () => number;
+} {
+  let closeCount = 0;
+  let abortCount = 0;
+  const writable = new WritableStream<Uint8Array>({
+    write() {},
+    close() {
+      closeCount += 1;
+    },
+    abort() {
+      abortCount += 1;
+    },
+  });
+  return { writable, closeCount: () => closeCount, abortCount: () => abortCount };
+}
+
+/**
+ * 応答方向の FIN / RESET がストリームへ到達するまで待つ
+ *
+ * closeRequestStreamWriter は await せずに呼ぶため (Safari 系で close() が解決しない
+ * 環境がある)、sink の終端操作は write キューの処理後に観測される。
+ */
+async function waitForResponderTermination(responder: {
+  closeCount: () => number;
+  abortCount: () => number;
+}): Promise<void> {
+  for (
+    let attempt = 0;
+    attempt < 10 && responder.closeCount() === 0 && responder.abortCount() === 0;
+    attempt += 1
+  ) {
+    await waitForMacrotask();
+  }
+}
+
+/**
  * draft-ietf-moq-transport-21 §6.4.2.3:
  * 受信 PUBLISH から生成された subscriber に対してピアが RESET_STREAM でストリームを
  * エラー終了させた場合、error コールバックが呼ばれ state が closed になることを検証する。
@@ -1764,6 +1808,286 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
   // プロトコル違反ではないためセッションは閉じない
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2 / §9.9:
+ * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
+ *  further to send on that direction and will not need to respond to a future
+ *  REQUEST_UPDATE."
+ * PUBLISH_DONE は publisher が方向を閉じる前の最終メッセージであるため、受信 PUBLISH の
+ * 応答方向を FIN で閉じる (RESET ではない)。
+ */
+test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると応答方向を FIN で閉じる", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+    },
+  });
+  const responder = createRecordingResponderStream();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [encodeTrackEndedPublishDoneFrame()],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  assert.isTrue(endCalled);
+  assert.equal(responder.closeCount(), 1);
+  assert.equal(responder.abortCount(), 0);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2:
+ * PUBLISH_DONE の処理中にアプリの end コールバックが throw しても、応答方向を開いたまま
+ * 残さない (購読は closed になるがセッションは開いたままのため、FIN を送らないと peer が
+ * request の完了を判定できない)。GOAWAY 分岐と同じく、アプリのコールバック例外を理由に
+ * 後始末を止めない。
+ */
+test("受信 PUBLISH ストリームで end コールバックが throw しても応答方向を FIN で閉じる", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      throw new Error("end callback failed");
+    },
+  });
+  const responder = createRecordingResponderStream();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [encodeTrackEndedPublishDoneFrame()],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  assert.equal(responder.closeCount(), 1);
+  assert.equal(responder.abortCount(), 0);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2:
+ * close() が解決しない環境 (Safari 系の WebTransport) でも、応答方向の FIN は発行され、
+ * 受信 PUBLISH の処理は FIN の完了を待たずに終わる (closeRequestStreamWriter を await
+ * しない理由)。
+ */
+test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると FIN の完了を待たずに処理を終える", async () => {
+  const session = createSessionImpl();
+  let endCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    end: () => {
+      endCalled = true;
+    },
+  });
+  let closeCount = 0;
+  const writable = new WritableStream<Uint8Array>({
+    write() {},
+    close() {
+      closeCount += 1;
+      // Safari 系で close() が解決しない状態を再現する
+      return new Promise<void>(() => {});
+    },
+  });
+
+  // FIN の完了を待っていたら、この await は解決しない (テストがタイムアウトする)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [encodeTrackEndedPublishDoneFrame()],
+      [],
+      writable,
+    ),
+  );
+
+  assert.isTrue(endCalled);
+  assert.equal(closeCount, 1);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * PUBLISH_DONE が来ずにピアが FIN で方向を閉じた場合も、将来の REQUEST_UPDATE が
+ * 到着し得ないため応答方向を FIN で閉じる (購読は失敗として通知する)。
+ */
+test("受信 PUBLISH ストリームでピア FIN を受信すると応答方向を FIN で閉じる", async () => {
+  const session = createSessionImpl();
+  const errors: Error[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: (error: Error) => {
+      errors.push(error);
+    },
+  });
+  const responder = createRecordingResponderStream();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  // PUBLISH_DONE 無しの FIN は失敗として通知するが、応答方向は FIN で閉じる
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
+  assert.equal(responder.closeCount(), 1);
+  assert.equal(responder.abortCount(), 0);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2:
+ * セッション終了 (source: "session") で購読と応答方向の後始末が走る経路では、
+ * 応答方向へ FIN を送らない。
+ */
+test("受信 PUBLISH ストリームでセッション終了のときは応答方向を FIN で閉じない", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+  const responder = createRecordingResponderStream();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        // WebTransport セッション終了相当 (source: "session" の reject) を再現する
+        controller.error(Object.assign(new Error("session is closed"), { source: "session" }));
+      },
+      [],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  // この経路 (ピア起点の読み取り失敗) では応答方向へ FIN も RESET も送らない
+  // (自前の session.close() はセッション解体で writer を abort するため RESET になる)
+  assert.equal(responder.closeCount(), 0);
+  assert.equal(responder.abortCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9 (Message Length) / §6.4.2.2:
+ * Length が揃った後のメッセージ構造の破損は PROTOCOL_VIOLATION でセッションを閉じる。
+ * セッション終了の経路は応答方向を abort するため、FIN は送らない。
+ */
+test("受信 PUBLISH ストリームで PUBLISH_DONE が不正なときは応答方向を FIN で閉じない", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error: Error) => {
+      closedError = error;
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+  const responder = createRecordingResponderStream();
+  // payload が 1 バイトしかない PUBLISH_DONE (status の後ろの Stream Count が無い)
+  const truncated = new ControlStreamWriter().encode(
+    MessageType.PUBLISH_DONE,
+    new Uint8Array([0x00]),
+  );
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [truncated],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  assert.isDefined(closedError);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(responder.closeCount(), 0);
+  assert.equal(internal.sessionState, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.2:
+ * ピア FIN の分岐でアプリの error コールバックが throw しても、応答方向は FIN で
+ * 閉じられる (close は sink ごとに 1 回である。通知より先に FIN を呼ぶこの経路と、
+ * 通知の例外を受ける catch 節の FIN のどちらで閉じても同じ結果になる)。
+ */
+test("受信 PUBLISH ストリームで error コールバックが throw しても応答方向を FIN で閉じる", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {
+      throw new Error("error callback failed");
+    },
+  });
+  const responder = createRecordingResponderStream();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  assert.equal(responder.closeCount(), 1);
+  assert.equal(responder.abortCount(), 0);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §6.4.2.3 は RESET_STREAM を受けた側の残りの方向を
+ * 定めていない。§6.4.2.2 の FIN の条件 (送るものが無く将来の REQUEST_UPDATE に応答する
+ * 必要も無い) は満たすが、ピアが RESET で購読を打ち切った後に自方向だけを FIN で閉じる
+ * 実装上の意味が無いため、応答方向は開いたまま残す (後始末は releaseLock のみ)。
+ */
+test("受信 PUBLISH ストリームでピア RESET_STREAM のときは応答方向を閉じない", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    error: () => {},
+  });
+  const responder = createRecordingResponderStream();
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        // ピアの RESET_STREAM 相当 (source: "stream" の reject) を再現する
+        controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
+      },
+      [],
+      [],
+      responder.writable,
+    ),
+  );
+  await waitForResponderTermination(responder);
+
+  assert.equal(responder.closeCount(), 0);
+  assert.equal(responder.abortCount(), 0);
   assert.equal(internal.sessionState, "connected");
 });
 
@@ -2241,8 +2565,12 @@ test("受信 PUBLISH の購読解除で STOP_SENDING が到達し abort も実�
     },
   });
   const aborted: unknown[] = [];
+  const closed: unknown[] = [];
   const writable = new WritableStream<Uint8Array>({
     write() {},
+    close() {
+      closed.push("close");
+    },
     abort(reason) {
       aborted.push(reason);
     },
@@ -2298,6 +2626,10 @@ test("受信 PUBLISH の購読解除で STOP_SENDING が到達し abort も実�
     }
   }
   assert.equal(internal.sessionState, "connected");
+  // 読み取りループ終了 (後始末) まで進んでも FIN はワイヤに載らない。unsubscribe は
+  // requestStreams のエントリを cancel より前に削除するため closeRequestStreamWriter は
+  // no-op になり、writer は事前の abort (RESET) のままである
+  assert.equal(closed.length, 0);
 });
 
 /**

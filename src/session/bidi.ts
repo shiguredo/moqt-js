@@ -2196,7 +2196,17 @@ export function clearPriorGapTrackingIfUnused(
  * draft-ietf-moq-transport-21 §6.4.2.2:
  * ピアの FIN を受けた requester は自方向も FIN で閉じる (SHOULD)。
  * GOAWAY 受信後の旧ストリームの送信方向の終了にも使う。
- * 既に閉じている場合の reject は黙殺する。
+ * 受信 PUBLISH (responder) では、PUBLISH_DONE を受信した後と、PUBLISH_DONE を伴わない
+ * ピア FIN を受信した後に応答方向を FIN で閉じるのにも使う (送るものが無く、将来の
+ * REQUEST_UPDATE に応答する必要も無いため。§9.9 / §6.4.2.2)。
+ *
+ * 呼び出し側は await しない場合がある。Safari 系の WebTransport で close() が解決せず、
+ * 待つと後始末が止まるためである (Publisher.done() が FIN の完了待ちに 5 秒の timeout を
+ * かけるのと同趣旨。こちらは待たない点で扱いが異なる)。
+ * writer.close() は await の前に発行されるため、FIN は await の有無によらず送られる。
+ * requestStreams のエントリが必要であり、削除後 (unsubscribe 等) は no-op になる。
+ * この関数は reject しない (writer の失敗はすべて黙殺する) ため、await しない `void`
+ * 呼び出しでも unhandled rejection にならない。
  */
 export async function closeRequestStreamWriter(
   session: BidiSessionInternal,
