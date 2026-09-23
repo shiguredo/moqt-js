@@ -30,7 +30,7 @@
 - 閾値を超えたフレームは現行どおり破棄する (待たない)。破棄した数を `VideoStats` に `droppedFrames` として追加し、`docs/HIGH_LEVEL_API.md` の統計の記述にも載せる。`encodeQueueSize` の Worker モードの意味 (実キュー長ではなく送信中のフレーム数) を `src/codec/VideoEncoder.ts` の JSDoc に明記する
 - `tests/e2e/codec-wrappers.spec.ts` は Worker モードの `queueSizeAfterEncode` を 0 から 6 へ更新し、旧契約を書いたコメント (「Worker モードの encodeQueueSize は取得できないため常に 0 を返す契約」) も直す。`devtools/src/codec-test/video.ts` / `types.ts` に出力待機後の `encodeQueueSize` の観測を足し、`encoded` 受信ごとの減算を pin する。出力待機前は直接モードと同じく投入フレーム数 (6)、出力待機後は 0 になる
 - Worker 生成と WebCodecs はブラウザ依存で Node の単体テストでは動かせない。`src/codec/workerConfigure.ts` の `WorkerConfigureGate` / `ConfigureGenerationTracker` と同じ方針で、送信中カウンタをブラウザ非依存の純粋な部分として切り出し、`src/codec/workerConfigure.test.ts` で増減・リセット・0 未満防止を固定する。`VideoEncoderWrapper` への配線 (増加・減算・リセットの呼び出し位置) は e2e とレビューで確認する
-- 対象は `src/` 側とする。`devtools/src/codec-test/` は e2e のハーネスなので期待値とコメントを新しい契約に合わせて更新する。devtools 本体の `EncoderWrapper` / `usePublisher` の同種の欠陥は別 issue とする
+- 対象は `src/` 側とする。`devtools/src/codec-test/` は e2e のハーネスなので期待値とコメントを新しい契約に合わせて更新する。devtools 本体の `EncoderWrapper` / `usePublisher` の同種の欠陥は 0678 で扱う
 - `src/createMediaPublisher.test.ts` の記録用エンコーダーは `encodeQueueSize` を固定値で返すため、その値を可変にして閾値超過と破棄を固定できるようにする
 
 ## 完了条件
