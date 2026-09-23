@@ -56,9 +56,11 @@
 - 実測値: `AudioEncoder.isConfigSupported` / `AudioDecoder.isConfigSupported` は opus・aac とも true (対応の申告だけでは AAC を弾けない)。AAC の符号化は 7〜16 ms で `EncodingError` (`message` は `Encoding error.`) になり、出力 chunk は 0 件、失敗後の `AudioEncoder.state` は `closed`。opus の `flush()` は 0.3〜1 ms で解決し、選定全体は 0.5〜1.3 ms (`aac,opus` の候補では AAC の除外を含めて 43 ms)
 - 副作用: AAC の符号化失敗 1 回につき Chromium の GPU プロセスが 1 回落ちる (`exit_code=5` で自動再初期化)。e2e のテストコメントに既知の事象として記録した
 - 検証: `npx vp check` / `npx vp test --run` (122 files / 2492 tests) / `npx vp run e2e-test` (29 tests) が通る
+- 環境差: AAC がどの段階で除外されるかは Chromium のビルドで変わる。CI (Linux Chromium) は `AudioEncoder.isConfigSupported` が false を返して `encoder unsupported` として除外し、手元 (macOS Chromium 153.0.8010.12) は true を返したうえで実符号化プローブが `encode probe failed` として除外する。e2e は段階を固定せず、どちらの環境でも「AAC が除外されて opus が採用され、除外理由が読める」ことを固定する
 
 ## 残した課題
 
-- 追加した e2e 4 テストは「Chromium は AAC を対応と報告するが符号化は `EncodingError` になる」という前提に依存する。Chromium が AAC を符号化できるようになった場合は前提を見直す (テストのコメントに明記した)
+- 追加した e2e 4 テストは「Chromium は AAC を符号化できない」という前提に依存する。Chromium が AAC を符号化できるようになった場合は前提を見直す (テストのコメントに明記した)
+- 除外される段階 (`isConfigSupported` / 実符号化プローブ) は環境で変わるため固定していない。実符号化プローブの段階で除外されることの検証は、AAC を「対応」と報告する Chromium でのみ成立する
 - 候補に帰属しない失敗 (プローブの `configure failed` / `encode failed` / `flush failed` / 待ち上限) は実ブラウザで再現できず、モック禁止の規約下ではテストで固定できない
 - AAC の decoder 対応確認は description 無し (ADTS 前提) のままである。Audio Config 経路の検証は別途扱う
