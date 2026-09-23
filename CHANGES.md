@@ -1102,6 +1102,12 @@
 
 ### misc
 
+- [UPDATE] codec テストページが符号化できないコーデックを選ばないようにする
+  - `selectSupportedAudioCodec` は `AudioEncoder.isConfigSupported` と `AudioDecoder.isConfigSupported` の結果だけで候補を選んでいたため、AAC しか対応と報告しない環境では符号化できない AAC を採用して e2e が失敗していた。候補ごとに無音の `AudioData` を 1 件符号化して `flush()` し、error が確定せず出力が得られた候補だけを採用する
+  - 除外した候補は理由つき (`rejectedCodecs`) でエンコーダー / デコーダー双方のテスト結果から読めるようにし、符号化できる候補が 1 つも無い場合はタイムアウトではなく選択時点の Error で失敗させる
+  - 候補順を `?audioCodecs=aac,opus` で差し替えられるようにし、符号化できないコーデックが候補に残る状況を e2e から再現できるようにする
+  - ライブラリの挙動に変更なし
+  - @voluntas
 - [UPDATE] vite-plus 0.3.3 / @types/node 26.6.1 / fast-check 4.10.1 に更新する
   - vite-plus を 0.3.2 から 0.3.3 へ更新し、`@voidzero-dev/vite-plus-core` も 0.3.3 に揃える
   - `@preact/preset-vite` / `@tailwindcss/vite` は core を直接 peer 依存するため、`vite` の override だけでは別版が残り、型比較が破綻して TS2321 / TS2769 になっていた。core を直接 override して解消し、devtools/vite.config.ts の plugins キャストを削除する (注釈は `defineConfig` が要求する `UserConfig` にする)

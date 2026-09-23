@@ -168,8 +168,10 @@ export interface VideoDecoderTestResult {
 export interface AudioEncoderTestResult {
   test: string;
   useWorker: boolean;
-  // 実ブラウザが対応していたコーデック
+  // 実際に符号化できることを確認して採用したコーデック
   codec: string;
+  // 符号化できないなどの理由で候補から外したコーデック (除外理由つき、試した順)
+  rejectedCodecs: string[];
   sampleRate: number;
   channels: number;
   // 状態遷移の記録
@@ -198,8 +200,10 @@ export interface AudioEncoderTestResult {
 export interface AudioDecoderTestResult {
   test: string;
   useWorker: boolean;
-  // 実ブラウザが対応していたコーデック
+  // 実際に符号化できることを確認して採用したコーデック
   codec: string;
+  // 符号化できないなどの理由で候補から外したコーデック (除外理由つき、試した順)
+  rejectedCodecs: string[];
   sampleRate: number;
   channels: number;
   // 未設定時の decode()
