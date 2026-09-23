@@ -234,12 +234,13 @@
   - 複数 Property ではワイヤ形式が変わり、旧版 moqt-js (絶対 Type 連結) とは相互運用できない
   - 受信側を寛容な抽出に変更し、不正な delta / Length で PROTOCOL_VIOLATION を送出せず抽出できたフィールドのみで配信を継続する
   - @voluntas
-- [CHANGE] VIDEO_FRAME_MARKING の Value ビット配置を RFC 9626 §3.1 (Long Extension 2 オクテット形、L=1) に準拠させる
-  - draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 に合わせ、encode 側は byte2 = `spatialLayerId << 4` から byte2 = `spatialLayerId & 0x03` (LID 下位 2 bits に 8-bit LID としてマッピング、上位 6 bits は 0) に変更し、decode 側の byte2 の解釈も対応して変更する
+- [CHANGE] VIDEO_FRAME_MARKING の Value ビット配置を RFC 9626 §3.1 (Long Extension) に準拠させる
+  - draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 に合わせ、LID は 8 bit として byte2 全体に置く (`spatialLayerId` の値域は 0-255。値域外は下位 8 bits へ折り畳む)。decode 側も byte2 全体を `spatialLayerId` として復元する
+  - TL0PICIDX を送らないため、LID と TID がともに 0 のときは L=0 の 1 オクテット形、それ以外は L=1 の 2 オクテット形にする (L=0 の 1 オクテット形は §3.2 の short extension と区別できず、下位 4 bits の B と TID を無視し得る受信側があるため、TID が 0 以外では 2 オクテット形にして確実に伝える)
   - RFC 9626 §3.1 の MUST に従い、エンコーダは TID=0 のとき B ビットを 0 に抑圧する
-  - createMediaPublisher / usePublisher は WebCodecs が破棄可能性情報を提供しないため isDiscardable を false 固定にする
+  - createMediaPublisher / usePublisher は WebCodecs が破棄可能性情報を提供しないため isDiscardable を false 固定にする (LID と TID が 0 固定のため、既定経路の Value は 2 オクテットから 1 オクテットになる)
   - 旧レイアウトで送受信していた moqt-js とは送信ワイヤ・受信解釈の両方が変わるため相互運用できない (旧実装の spatialLayerId=1 は byte2=0x10、新実装の spatialLayerId=1 は byte2=0x01)
-  - VP9 準拠の送信者は RFC 9626 §3.3.1 に従い SID を 8-bit LID の下位 3 bits (0-7) に載せるが、本実装は LID の下位 2 bits のみを spatialLayerId として復元するため、SID=4-7 は下位 2 bits で 0-3 に折り畳まれる (VideoFrameMarking.spatialLayerId の値域 0-3 の既存設計を維持)
+  - RFC 9626 §3.3 のコーデック別 LID マッピング (VP9 の SID を LID の下位 3 bits に置く等) は利用側の責務であり、本実装はワイヤの LID をそのまま扱う
   - @voluntas
 - [CHANGE] Subscription Parameters を PUBLISH_OK から外し REQUEST_UPDATE 側に揃える
   - draft-ietf-moq-transport-20 §10.2.16 に基づき、PUBLISH_OK に出現できるパラメータを EXPIRES のみに変更する (LOCATION_FILTER / FORWARD 等はスコープ違反として PROTOCOL_VIOLATION で拒否する)

@@ -51,9 +51,10 @@ import { ProtocolViolationError } from "./error";
 import { assertKeyValueFormattingError } from "./testSupport/helpers";
 import { buildPublishTrackProperties } from "./session/params";
 
-// キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, SID=0)
-// TID=0 では RFC 9626 §3.1 の MUST に従い encodeVideoFrameMarkingValue が B=0 に抑圧するため、
-// Value バイト列は [0xe0, 0x00] (S=1, E=1, I=1, B=0) となる。
+// キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, LID=0)
+// TID=0 では RFC 9626 §3.1 の MUST に従い encodeVideoFrameMarkingValue が B=0 に抑圧し、
+// LID と TID がともに 0 のため L=0 の 1 オクテット形になる。
+// Value バイト列は [0xe0] (S=1, E=1, I=1, B=0) となる。
 const keyFrameMarking: VideoFrameMarking = {
   isIndependent: true,
   isDiscardable: false,
@@ -361,6 +362,40 @@ test("encodeAudioProperties: timescale 単体のワイヤは encodeTimescale と
   assert.deepEqual(Array.from(viaProps), Array.from(encodeTimescale(44100n)));
 });
 
+// 送信側の L の選択 (RFC 9626 §3.1) と LID 8 bits のマッピングを固定バイト列で検証する。
+test("encodeVideoFrameMarking: LID と TID が 0 なら 1 オクテット形、それ以外は 2 オクテット形になる", () => {
+  // RFC 9626 §3.1: L=0 は LID と TL0PICIDX を省略する 1 オクテット形 (LID は暗黙 0)
+  const oneOctet = encodeVideoFrameMarking(keyFrameMarking);
+  assert.deepEqual(Array.from(oneOctet), [0x09, 0x01, 0xe0]);
+
+  // LID が 0 でも TID が 0 でなければ 2 オクテット形 (LID を含める)
+  // byte1: S=1, E=1, I=1, D=0, B=1 (TID≠0 のため抑圧されない), TID=1 → 0xE9
+  const twoOctets = encodeVideoFrameMarking({
+    isIndependent: true,
+    isDiscardable: false,
+    isBaseLayerSync: true,
+    temporalLayerId: 1,
+    spatialLayerId: 0,
+  });
+  assert.deepEqual(Array.from(twoOctets), [0x09, 0x02, 0xe9, 0x00]);
+
+  // LID は 8 bit として byte2 全体に載る
+  const withLayer = encodeVideoFrameMarking({
+    isIndependent: true,
+    isDiscardable: false,
+    isBaseLayerSync: false,
+    temporalLayerId: 0,
+    spatialLayerId: 5,
+  });
+  assert.deepEqual(Array.from(withLayer), [0x09, 0x02, 0xe0, 0x05]);
+
+  // round-trip で LID / TID が保たれる
+  const decoded = decodeVideoFrameMarking(withLayer);
+  assert.strictEqual(decoded.spatialLayerId, 5);
+  assert.strictEqual(decoded.temporalLayerId, 0);
+  assert.strictEqual(decodeVideoFrameMarking(oneOctet).spatialLayerId, 0);
+});
+
 // 複数 Property: ID 昇順ソート後に delta 連鎖し、2 番目以降の Delta Type が前 ID との差分になる。
 // timestamp (0x10) + frameMarking (0x09) → frameMarking が先頭になり、Delta Type は 0x09, 0x07。
 test("encodeVideoProperties: timestamp + frameMarking のワイヤは delta 形式（Delta Type 0x09, 0x07）になる", () => {
@@ -368,9 +403,9 @@ test("encodeVideoProperties: timestamp + frameMarking のワイヤは delta 形�
     timestamp: 1234n,
     frameMarking: keyFrameMarking,
   });
-  // frameMarking: Delta Type 0x09, Length 2, Value [0xe0, 0x00] (TID=0 で B=0 抑圧)
+  // frameMarking: Delta Type 0x09, Length 1, Value [0xe0] (TID=0 で B=0 抑圧、LID=0 の 1 オクテット形)
   // timestamp:   Delta Type 0x07 (0x10 - 0x09), Value 1234 の varint [0x84, 0xd2]
-  assert.deepEqual(Array.from(encoded), [0x09, 0x02, 0xe0, 0x00, 0x07, 0x84, 0xd2]);
+  assert.deepEqual(Array.from(encoded), [0x09, 0x01, 0xe0, 0x07, 0x84, 0xd2]);
 });
 
 test("encodeAudioProperties: timestamp + audioLevel のワイヤは delta 形式（Delta Type 0x0C, 0x04）になる", () => {
