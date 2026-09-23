@@ -25,10 +25,10 @@
 - 通知の担い手は publisher 側に固定する。`PublisherImpl.sendObject` の事前検証 (guard / status) は自ら `handleError` で通知してから reject し、委譲先 (`src/session/publish.ts` の `publishSendObject`) も reject の前に `handleError` する。高レベル API は「通知しない catch」で受ける。catch して `onError` を呼ぶと 1 件の失敗で 2 回通知になり、既存テストが固定する「1 reject = 1 通知」の不変条件と矛盾する
 - `src/publisher.ts` の `sendObject` の JSDoc に、事前検証では自ら通知してから reject することと、closed では同期 throw することを明記する。不変条件のうち `src/publisher.test.ts` に単体テストが無い END_OF_GROUP 済み Group への guard だけを足し、他の既存テストの期待値は変えない
 - `guardSend` の同期 throw は reject に揃えない。`sendDatagram` と同じ同期 throw 契約とする。`createMediaPublisher.ts` の送信 2 箇所は `void sendObject(...).catch(...)` を try の中で受け、同期 throw は `onError` へ流す (同期 throw は通知を伴わないため。closed の throw は state ガードで到達せず、委譲先も現行は同期 throw しないため、これは将来の防御である)。記録用 publisher (`src/createMediaPublisher.test.ts`) は実インターフェースどおり `Promise<void>` を返すよう直す
-- `publishCatalog` の `await sendObject(...)` は本 issue の対象外とする。reject は通知済みだが `start()` の catch が再度通知する経路で、通知を重複させない仕組み (reject の由来の分類) は別の設計変更になる。ここでは対象外と明記し、別 issue とする
+- `publishCatalog` の `await sendObject(...)` は本 issue の対象外とする。reject は通知済みだが `start()` の catch が再度通知する経路で、通知を重複させない仕組み (reject の由来の分類) は別の設計変更になる。ここでは対象外と明記し、0679 で扱う
 - 不変条件を「送信 reject は通知済み」と定める以上、高レベル API の `void` 送信 2 箇所の catch は通知しない。完了条件の「`onError` に 1 回」はこの 2 箇所と `resume()` を指す
 - `void this.audioContext.resume()` は catch して `onError` へ流す
-- `void this.videoDecoder?.reset()` は catch のみとし、`onError` は呼ばない。video decoder の error コールバックの中から呼ばれるため、通知すると恒久的な失敗で通知が反復する (同型の反復は 0651 が devtools 側で扱い、ライブラリ側は別 issue)
+- `void this.videoDecoder?.reset()` は catch のみとし、`onError` は呼ばない。video decoder の error コールバックの中から呼ばれるため、通知すると恒久的な失敗で通知が反復する (同型の反復は 0651 が devtools 側で、0677 がライブラリ側で扱う)
 - `reconfigureAudioDecoder` / `reconfigureVideoDecoder` は reject しない契約にし、関数全体 (try の外の同期 throw を含む) を catch して `onError` に 1 回流す。これで `void` 呼び出し側に未処理の reject が残らない
 - フレーム処理の fire-and-forget 性 (落として良いのは後続 Object で上書きされること) は変えない。変えるのは reject の扱いだけである
 - 対象は `src/createMediaPublisher.ts` / `src/createMediaSubscriber.ts` と `src/publisher.ts` の JSDoc・不変条件テスト、`src/createMediaPublisher.test.ts` の記録用 publisher とする。`sendDatagram`、`publishCatalog` の await 経路、セッション内部 (`src/session/lifecycle.ts`)、テストコード内の `void sendObject` は対象外とする
@@ -48,7 +48,7 @@
 
 ## 参照
 
-- 0651 (devtools 側で同型の復帰反復を復帰予算で扱う issue。未着手。ライブラリ側の `reset()` は別 issue)
+- 0651 (devtools 側で同型の復帰反復を復帰予算で扱う issue。未着手。ライブラリ側の `reset()` は 0677)
 
 ## 解決方法
 
