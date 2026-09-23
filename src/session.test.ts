@@ -1209,6 +1209,258 @@ test("subscribe: fill 内側の Range Filters があると peer 未広告では 
 });
 
 /**
+ * createBidirectionalStream の呼び出し回数を数える transport
+ *
+ * 送信前の検証で throw する場合にストリームを開かないことを検証する。
+ * readable は即座に閉じる。検証をすり抜けてストリームが開かれた場合に、
+ * 受信ループが応答を待ち続けず「stream closed before receiving response」で
+ * 即座に失敗するようにするためである。
+ */
+function createCountingBidirectionalStreamTransport(): {
+  transport: WebTransport;
+  getCreatedCount: () => number;
+} {
+  let created = 0;
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => {
+      created += 1;
+      // 検証をすり抜けた場合はストリームが開かれるため、読み取りを閉じておき
+      // 受信ループを待たせずに失敗させる (timeout ではなく原因が読めるエラーにする)
+      return {
+        readable: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        writable: new WritableStream<Uint8Array>({}),
+      } as unknown as WebTransportBidirectionalStream;
+    },
+  } as unknown as WebTransport;
+  return { transport, getCreatedCount: () => created };
+}
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6:
+ * 禁止されるのは filter parameter の送信であり、fill 内側に Range Filter が無ければ
+ * ピア未広告でも送信できる (ストリームは開かれる)。
+ */
+test("subscribeTracks: fill 内側に Range Filter が無ければ peer 未広告でも送信する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(["live"], {}, { fill: { fillTimeout: 1n } });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // MAX_FILTER_RANGES の検証には掛からず、ストリームが 1 本開かれる
+  // (閉じた readable のため受信ループは応答を待たずに失敗する)
+  assert.isDefined(thrown);
+  assert.isFalse(thrown!.message.includes("MAX_FILTER_RANGES"), thrown!.message);
+  assert.equal(getCreatedCount(), 1);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6:
+ * SUBSCRIBE でも購読単位の Ranges 合計 (外側と fill 内側) がピアの上限を超える場合は
+ * 送信前に throw する (SUBSCRIBE_TRACKS と同じ合算であることを固定する)。
+ */
+test("subscribe: 外側と fill 内側を合算した Ranges が上限を超えると throw する", async () => {
+  const session = createSessionImpl();
+  // ピアが 2 まで広告した状態で、外側 2 Ranges + fill 内側 1 Range を送る
+  session.peerMaxFilterRanges = 2;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        rangeFilters: [
+          {
+            type: "subgroup",
+            setId: 0,
+            ranges: [
+              { start: 0n, end: 1n },
+              { start: 2n, end: 3n },
+            ],
+          },
+        ],
+        fill: {
+          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 4n, end: 5n }] }],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown!.message.includes("total ranges 3 exceeds peer MAX_FILTER_RANGES 2"),
+    thrown!.message,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 / §3.3.2:
+ * SUBSCRIBE_TRACKS の fill 内側に Range Filters を指定した場合も、ピア未広告では
+ * 送信前に throw することを検証する (購読単位の上限に含める)。
+ */
+test("subscribeTracks: fill 内側の Range Filters があると peer 未広告では throw する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  // peerMaxFilterRanges は既定 0 (未広告) のため、Range 指定があると送信前に throw する
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(
+      ["live"],
+      {},
+      {
+        fill: {
+          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES is 0"), thrown!.message);
+  // 検証はストリーム生成より前に行われる (検証を外すとストリームを開き、閉じた
+  // readable により受信ループが即座にエラーになってこの assert まで到達しない)
+  assert.equal(getCreatedCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6:
+ * 購読単位の Ranges 合計 (外側と fill 内側の合計) がピアの MAX_FILTER_RANGES を
+ * 超える場合は送信前に throw し、双方向ストリームを開かない。
+ */
+test("subscribeTracks: fill 内側の Range Filters が上限を超えるとストリームを開かずに throw する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  // ピアが 1 まで広告した状態にする
+  session.peerMaxFilterRanges = 1;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(
+      ["live"],
+      {},
+      {
+        fill: {
+          rangeFilters: [
+            {
+              type: "subgroup",
+              setId: 0,
+              ranges: [
+                { start: 0n, end: 1n },
+                { start: 2n, end: 3n },
+              ],
+            },
+          ],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown!.message.includes("total ranges 2 exceeds peer MAX_FILTER_RANGES 1"),
+    thrown!.message,
+  );
+  // 検証はストリーム生成より前に行われる
+  assert.equal(getCreatedCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6:
+ * 上限は購読単位の合計であるため、外側と fill 内側にまたがる場合も合算して判定する。
+ * 外側と fill 内側の Range Filter を区別しやすくするため SetID は分けている。
+ */
+test("subscribeTracks: 外側と fill 内側を合算した Ranges が上限を超えるとストリームを開かずに throw する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  session.peerMaxFilterRanges = 1;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(
+      ["live"],
+      {},
+      {
+        rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+        fill: {
+          rangeFilters: [{ type: "subgroup", setId: 1, ranges: [{ start: 0n, end: 1n }] }],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown!.message.includes("total ranges 2 exceeds peer MAX_FILTER_RANGES 1"),
+    thrown!.message,
+  );
+  assert.equal(getCreatedCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.1.6 / §9.20.16:
+ * 外側と fill 内側は別の parameter scope であるため、同じ (Type, SetID) が
+ * 現れても別のパラメータとして Ranges を合算する (重複排除しない)。
+ */
+test("subscribeTracks: 外側と fill 内側で同じ SetID でも Ranges を合算する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  // ピアが 2 まで広告した状態で、外側 2 Ranges + fill 内側 1 Range を同じ SetID で送る
+  session.peerMaxFilterRanges = 2;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(
+      ["live"],
+      {},
+      {
+        rangeFilters: [
+          {
+            type: "subgroup",
+            setId: 0,
+            ranges: [
+              { start: 0n, end: 1n },
+              { start: 2n, end: 3n },
+            ],
+          },
+        ],
+        fill: {
+          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 4n, end: 5n }] }],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown!.message.includes("total ranges 3 exceeds peer MAX_FILTER_RANGES 2"),
+    thrown!.message,
+  );
+  assert.equal(getCreatedCount(), 0);
+});
+
+/**
  * draft-ietf-moq-transport-21 §3.4:
  * SUBSCRIBE 送信に失敗した場合は fill 関連付けと保留中の SUBSCRIBE が残らない
  * ことを検証する (送信失敗時の掃除)。

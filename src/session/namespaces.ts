@@ -37,6 +37,7 @@ import {
 import {
   buildSubscribeNamespaceParameters,
   buildSubscribeTracksParameters,
+  collectSubscriptionRangeFilters,
   encodeAuthorizationTokenParameter,
   validateRangeFilterLimits,
   validateTrackNamespaceForSend,
@@ -189,9 +190,16 @@ export async function namespacesSubscribeTracks(
   // draft-ietf-moq-transport-21 §2.4.2 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
-  // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき Range Filter 送信禁止
+  // draft-ietf-moq-transport-21 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
+  // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない
   // draft-ietf-moq-transport-21 §4.3: SUBSCRIBE_TRACKS で Range Filter を送信できる
-  validateRangeFilterLimits(options?.rangeFilters, session.peerMaxFilterRanges, "SUBSCRIBE_TRACKS");
+  // fill 内側の Range Filter も購読単位で数える (collectSubscriptionRangeFilters)。
+  // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う
+  validateRangeFilterLimits(
+    collectSubscriptionRangeFilters(options?.rangeFilters, options?.fill),
+    session.peerMaxFilterRanges,
+    "SUBSCRIBE_TRACKS",
+  );
 
   // 専用の双方向ストリームを作成
   const stream = await session.transport.createBidirectionalStream();
