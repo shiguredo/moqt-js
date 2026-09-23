@@ -56,6 +56,10 @@ export interface DataStreamSessionInternal {
 
   // draft-ietf-moq-transport-21 §12.2: データストリームの受信タイムアウト
   dataStreamTimeoutMs: number;
+  // draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+  // 確立後の受信データストリームが保持してよいバッファの上限 (バイト)。
+  // 0 以下は上限なし。
+  dataStreamMaxBufferBytes: number;
 
   readonly fetchers: Map<bigint, FetcherImpl>;
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
@@ -327,6 +331,22 @@ export async function dataStreamHandleIncomingStream(
         }
       }
 
+      // §12.5 (EXCESSIVE_LOAD): FETCH ストリームの上限検査 (Subgroup / fill は
+      // 専用ハンドラ側で検査する)。ここへ到達する時点でヘッダーは解析済みであり
+      // (未解析のストリームは委譲して return、未知型や fetcher 未解決は break する)、
+      // fetchHeader と fetcher は必ず設定されている。
+      if (
+        await dataStreamAbortFetchOnBufferOverflow(
+          session,
+          reader,
+          fetchHeader,
+          fetcher,
+          buffer.byteLength,
+        )
+      ) {
+        return;
+      }
+
       // オブジェクトをパースして配信
       if (headerParsed) {
         if (isFetchStream && fetcher && fetchHeader) {
@@ -441,6 +461,19 @@ export async function dataStreamHandleFillFetchStream(
   };
   try {
     while (true) {
+      // §12.5: ヘッダー解析後の残バッファ (初回) とチャンク追記直後に検査する
+      if (
+        await dataStreamAbortFillOnBufferOverflow(
+          session,
+          reader,
+          fillRequestId,
+          target,
+          buffer.byteLength,
+        )
+      ) {
+        return;
+      }
+
       const { value, done } = await reader.read();
 
       if (value) {
@@ -448,6 +481,18 @@ export async function dataStreamHandleFillFetchStream(
         next.set(buffer);
         next.set(value, buffer.length);
         buffer = next;
+        // §12.5: チャンク追記直後の検査 (残バッファを処理する前に判定する)
+        if (
+          await dataStreamAbortFillOnBufferOverflow(
+            session,
+            reader,
+            fillRequestId,
+            target,
+            buffer.byteLength,
+          )
+        ) {
+          return;
+        }
       }
 
       if (buffer.length > 0) {
@@ -616,6 +661,57 @@ export async function dataStreamHandleIncomingStreamError(
     // 特定できないため何もしない。
     dataStreamHandlePeerFetchStreamReset(session, err, fetchHeader, fetcher);
   }
+}
+
+/**
+ * 上限超過で FETCH データストリームを打ち切るときの後始末
+ *
+ * ピアの RESET_STREAM と同じくアプリへ error を通知してから fetcher を closed にし、
+ * fetchers から削除、Prior ID Gap 追跡の掃除、onRequestDrained まで行う (正常終了の
+ * handleEnd は通知しない)。セッションは閉じない。
+ *
+ * draft-ietf-moq-transport-21 §3.2.1:
+ * 「If the data stream is already open, the subscriber wishing to cancel the FETCH
+ *  MAY send STOP_SENDING for the data stream as well as the bidi request stream.
+ *  It MUST send STOP_SENDING for the bidi request stream.」
+ * ローカル判断で FETCH state を破棄する本経路は cancel に当たるため、fetcher.cancel()
+ * で bidi リクエストストリームへ STOP_SENDING を送る (markClosed だけでは state が
+ * 先に closed になり、アプリからの cancel() が no-op になって MUST を満たせない)。
+ * cancel() が fetchers / requestStreams の削除と Prior ID Gap 追跡の掃除、
+ * onRequestDrained まで行う。
+ *
+ * @returns 打ち切ったなら true (呼び出し元は return する)
+ */
+async function dataStreamAbortFetchOnBufferOverflow(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  fetchHeader: FetchHeader | null,
+  fetcher: FetcherImpl | null,
+  bufferedBytes: number,
+): Promise<boolean> {
+  if (!isDataStreamBufferOverLimit(session, bufferedBytes)) {
+    return false;
+  }
+  if (fetchHeader === null || fetcher === null) {
+    // 上限判定が成立する時点ではヘッダー解析済みの FETCH ストリームに限られるため
+    // 通常は到達しない (型を締めるための防御)。対象を特定できない場合はストリームを
+    // 打ち切るだけにする (残バッファは捨てる)。
+    await cancelStreamQuiet(
+      reader,
+      dataStreamBufferOverflowReason(session, `buffered=${bufferedBytes}`),
+    );
+    return true;
+  }
+  const detail = `requestId=${fetchHeader.requestId}, buffered=${bufferedBytes}`;
+  await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, detail));
+  const error = createDataStreamBufferOverflowError(session, detail);
+  try {
+    fetcher.handleError(error);
+  } catch {
+    // アプリの error コールバックの throw は握り潰す (後始末は継続する)
+  }
+  await fetcher.cancel().catch(() => {});
+  return true;
 }
 
 /**
@@ -884,6 +980,28 @@ export async function dataStreamHandleSubgroupStream(
       // 渡すため、header と Object が同じ chunk で届くとここで buffer に Object が
       // 入っている。read を先に待つと、その Object は次の chunk か FIN まで
       // 配信されない。進まなくなった時点で「Object の途中」と判断して read へ進む。
+      // §12.5 (EXCESSIVE_LOAD): Subgroup ストリームの上限検査
+      if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
+        const detail = `trackAlias=${header.trackAlias}, buffered=${buffer.byteLength}`;
+        await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, detail));
+        const error = createDataStreamBufferOverflowError(session, detail);
+        // 該当 Track Alias に登録された購読を失敗させる。アプリへの error 通知と closed 化に加え、
+        // bidi リクエストストリームの cancel (STOP_SENDING 相当) と Map の掃除、
+        // onRequestDrained まで行う (markClosed だけでは state が先に closed になり、
+        // アプリからの unsubscribe が no-op になって publisher 側の購読が残る)。
+        // bidiCancelSubscriptionWithError は同期区間で subscribersByAlias の配列から
+        // 購読を splice するため、走査前に複製して取りこぼしを防ぐ
+        // (cancelMalformedTrackPeers と同じ)。
+        for (const subscriber of subscribers.slice()) {
+          void bidi.bidiCancelSubscriptionWithError(
+            session as unknown as bidi.BidiSessionInternal,
+            subscriber,
+            error,
+          );
+        }
+        return;
+      }
+
       while (buffer.byteLength > 0) {
         const before = buffer.byteLength;
         try {
@@ -974,6 +1092,85 @@ export async function dataStreamHandleSubgroupStream(
       ),
     );
   }
+}
+
+/**
+ * fill fetch ストリームが上限を超えていたら打ち切る
+ *
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * 残バッファを破棄し、関連付けを消してアプリへ fillError で失敗を伝える
+ * (購読は継続する)。FIN 時の未完成 Object 判定や正常終了の後始末へは到達させない。
+ *
+ * @returns 打ち切ったなら true (呼び出し元は return する)
+ */
+async function dataStreamAbortFillOnBufferOverflow(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  fillRequestId: bigint,
+  target: bidi.FillFetchTarget,
+  bufferedBytes: number,
+): Promise<boolean> {
+  if (!isDataStreamBufferOverLimit(session, bufferedBytes)) {
+    return false;
+  }
+  const detail = `requestId=${fillRequestId}, buffered=${bufferedBytes}`;
+  await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, detail));
+  session.fillFetchTargets.delete(fillRequestId);
+  try {
+    target.subscriber.handleFillError(createDataStreamBufferOverflowError(session, detail));
+  } catch (callbackError) {
+    // アプリの fillError コールバックの throw は握り潰す (後始末を止めない)
+    session.emitCallbackErrorDebug("FILL_ERROR_CALLBACK_ERROR", callbackError);
+  }
+  return true;
+}
+
+/**
+ * 受信バッファが上限を超えたかを判定する
+ *
+ * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+ * 壊れた / 悪意あるピアが 1 本のデータストリームで無制限にメモリを消費するのを防ぐ。
+ * 上限 0 以下は無制限を意味する。各受信ループはチャンクを追記した直後 (初回は
+ * ヘッダー解析後の残バッファ) にこの判定を行い、打ち切りの手順は経路ごとの
+ * abort ヘルパー (dataStreamAbortFetchOnBufferOverflow /
+ * dataStreamAbortFillOnBufferOverflow / Subgroup ループ内) が担う。
+ */
+function isDataStreamBufferOverLimit(
+  session: DataStreamSessionInternal,
+  bufferedBytes: number,
+): boolean {
+  return session.dataStreamMaxBufferBytes > 0 && bufferedBytes > session.dataStreamMaxBufferBytes;
+}
+
+/**
+ * 上限超過による打ち切りの reason 文字列
+ *
+ * cancelStreamQuiet は文字列 reason しか受け取れず wire のエラーコードを送れないため、
+ * 既存の malformed 打ち切りと同じ書式で EXCESSIVE_LOAD のコードを含める。
+ */
+function dataStreamBufferOverflowReason(
+  session: DataStreamSessionInternal,
+  detail: string,
+): string {
+  return `data stream buffer limit exceeded: code=${DataStreamErrorCode.EXCESSIVE_LOAD}, limit=${session.dataStreamMaxBufferBytes}, ${detail}`;
+}
+
+/**
+ * 上限超過をアプリへ伝えるエラー
+ *
+ * ピアの RESET_STREAM 経路 (createFetchDataStreamResetError) と同じ形にし、
+ * 読み取り失敗値の streamErrorCode とコード名・値をメッセージの両方に載せて、
+ * アプリが理由 (EXCESSIVE_LOAD) を判別できるようにする。
+ */
+function createDataStreamBufferOverflowError(
+  session: DataStreamSessionInternal,
+  detail: string,
+): Error & { streamErrorCode: DataStreamErrorCode } {
+  const error = new Error(
+    `data stream buffer limit exceeded: limit=${session.dataStreamMaxBufferBytes}, ${detail}: EXCESSIVE_LOAD(0x${DataStreamErrorCode.EXCESSIVE_LOAD.toString(16)})`,
+  ) as Error & { streamErrorCode: DataStreamErrorCode };
+  error.streamErrorCode = DataStreamErrorCode.EXCESSIVE_LOAD;
+  return error;
 }
 
 /**

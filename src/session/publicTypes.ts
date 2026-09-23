@@ -193,6 +193,17 @@ export interface ConnectOptions {
   dataStreamTimeoutMs?: number;
 
   /**
+   * 確立後の受信データストリームが保持してよいバッファの上限 (バイト)
+   *
+   * draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9):
+   * 完成前の Object の payload 全長を受けられる値を指定する。上限を超えた
+   * データストリームは EXCESSIVE_LOAD として打ち切り、セッションは閉じない
+   * (アプリへは失敗として通知する)。0 以下を指定すると上限を設けない
+   * (既定は 33,554,432 バイト = 32 MiB)。
+   */
+  dataStreamMaxBufferBytes?: number;
+
+  /**
    * MOQT_IMPLEMENTATION Setup Option (Option Type 0x07) の送信制御
    * draft-ietf-moq-transport-21 §9.1.5 (MOQT IMPLEMENTATION) /
    * §15.8 (Implementation Identification Fingerprinting)

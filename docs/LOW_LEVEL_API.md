@@ -55,13 +55,14 @@ const session = await connect(url, callbacks?, options?)
 
 #### `ConnectOptions`
 
-| 名前                      | 説明                                                               |
-| ------------------------- | ------------------------------------------------------------------ |
-| `serverCertificateHashes` | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`   |
-| `authorizationToken`      | `SETUP` Option `0x03` として送る認証トークン                       |
-| `pendingSubgroup`         | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト) |
-| `moqtImplementation`      | `SETUP` Option `0x0A` (MOQT_IMPLEMENTATION) として送る実装名       |
-| `grease`                  | 送受信に GREASE 拡張を注入するか                                   |
+| 名前                       | 説明                                                                                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverCertificateHashes`  | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`                                                                               |
+| `authorizationToken`       | `SETUP` Option `0x03` として送る認証トークン                                                                                                   |
+| `pendingSubgroup`          | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト)                                                                             |
+| `moqtImplementation`       | `SETUP` Option `0x0A` (MOQT_IMPLEMENTATION) として送る実装名                                                                                   |
+| `grease`                   | 送受信に GREASE 拡張を注入するか                                                                                                               |
+| `dataStreamMaxBufferBytes` | 受信データストリーム 1 本が保持してよいバッファの上限。超過時はそのストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 32 MiB) |
 
 ### `Session`
 

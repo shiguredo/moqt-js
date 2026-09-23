@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] 受信データストリームのバッファにストリーム単位の上限を設ける
+  - draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) に対応する。確立後の受信データストリームは完成前の Object を保持し続けるため、悪意ある、あるいは壊れたピアが 1 本のストリームで無制限にメモリを消費できた。既定 32 MiB を超えたストリームは打ち切り、セッションは閉じない
+  - 打ち切りは経路ごとに後始末し、アプリへ渡す error に `streamErrorCode` として `EXCESSIVE_LOAD` (0x9) を載せる (FETCH は fetcher を失敗させて bidi リクエストストリームへ STOP_SENDING を送り、fill は fillError で伝えて購読を継続し、Subgroup は該当購読を cancel して closed にする)
+  - `ConnectOptions.dataStreamMaxBufferBytes` で変更できる (0 以下で上限なし)
+  - @voluntas
 - [FIX] REQUEST_ERROR の Retry Interval と Redirect をすべての応答経路でアプリへ渡す
   - draft-ietf-moq-transport-21 §9.4.2 の Retry Interval (ミリ秒 + 1、0 は再試行しない) と Redirect (§12.3 の再試行先) を、SUBSCRIBE / FETCH / TRACK_STATUS の初回応答、確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗)、受信 PUBLISH の REQUEST_ERROR でも `RequestError` に載せるようにした。従来はこれらの経路で捨てており、アプリは再試行の間隔も転送先も知れなかった
   - PUBLISH_NAMESPACE の初回応答が namespace 系の Redirect の検証 (Track Name は空が MUST) を通っていなかった点と、namespace 系で Reason Phrase が空のときのメッセージが他経路と揃っていなかった点も直した
