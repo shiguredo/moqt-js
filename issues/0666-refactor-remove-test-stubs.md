@@ -13,7 +13,7 @@
 
 - `createBidiSession` は `{ write: async (data) => { written.push(data); } } as unknown as WritableStreamDefaultWriter<Uint8Array>` を組み立て、`requestStreams` には `stream: {}` を入れる。session 自体も `BidiSessionInternal` へのオブジェクトリテラルのキャストである
 - 同ファイルのコメントは、実物を渡さない依存 (`pendingSubgroupBuffer`) について「実物を渡さないと TypeError になり、`defaultBidiHandleError` に握り潰されて pending の解決と読み取りループ起動に到達しないままテストが通ってしまう」と明記している。writer と stream には同じ危険が残っている
-- `createBidiSession` は 7 つのテストファイル (`src/session/bidi.prop.ts` を含む) から使われている
+- `createBidiSession` は 6 つのテストファイル (`src/session/bidi.prop.ts` を含む) から使われている
 - 同ファイルの `createPublishReadTestContext` / `createResponseReadTestContext` は実 `ReadableStream` / `WritableStream` で組んでおり、ストリーム機構は実物である。置き換え先の形はここに揃えられる
 - スタブが隠している不具合の有無は未調査である
 
