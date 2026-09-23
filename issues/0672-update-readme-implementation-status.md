@@ -24,7 +24,7 @@ README の「実装状況」は draft ごとの対応を網羅する形で書か
 ## 設計方針
 
 - README の「実装状況」に上記を追記する。既存の節構成 (Publisher / Subscriber / コントロールメッセージ / データストリーム / MOQT Streaming Format) のうち適切な節に置く
-- `MOQLOG` / `MOQMETRICS` は README 側だけを直す。`docs/MSF.md` は別 issue で扱う
+- `MOQLOG` / `MOQMETRICS` は README 側だけを直す。`docs/MSF.md` は 0670 で扱う
 - README は網羅を主張しているため、追記漏れを残さない。追記するだけで実装の変更は行わない
 
 ## 完了条件
