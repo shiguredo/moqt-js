@@ -29,7 +29,7 @@
 
 - docs を実装に合わせる。API 名・オプション名・既定値・使用例の URL を実装と一致させる
 - `MOQLOG` / `MOQMETRICS` は `docs/MSF.md` の公開 API 一覧に追記する。README 側は 0672 で扱う
-- Priority の説明は別 issue (Publisher Priority の向き) で扱うため本 issue では触れない
+- Priority の説明は 0638 (Publisher Priority の向き) で扱うため本 issue では触れない
 
 ## 完了条件
 
