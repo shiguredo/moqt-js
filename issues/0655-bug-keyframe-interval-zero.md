@@ -22,7 +22,7 @@
 - `src/codec/types.ts` の `VideoPublishOptions.keyframeInterval` にはコメントが無く、値域の記述も無い
 - `docs/HIGH_LEVEL_API.md` は `keyframeInterval?: number; // default: framerate * 2` とだけ書いている
 - `src/createMediaPublisher.test.ts` に `resolveKeyframeInterval` と `shouldSendKeyFrame` のテストがあるが、0 / 負値 / 非整数 / NaN / Infinity は扱っていない
-- 同型の剰余が devtools に 2 箇所ある (`devtools/src/hooks/usePublisher.ts` の `shouldRequestKeyFrame` と `devtools/src/webcodecs-devtools/signals.ts` のインライン剰余)。devtools はクエリパラメータから `keyframeInterval` を復元するため 0 が入り得る
+- 同型の剰余が devtools に 2 箇所ある (`devtools/src/hooks/usePublisher.ts` の `shouldRequestKeyFrame` と `devtools/src/webcodecs-devtools/signals.ts` のインライン剰余)。devtools は数値入力の `Number("")` が 0 になる経路で 0 が入り得る (クエリパラメータからの復元は `if (parsed)` で 0 を弾く)
 
 ## 設計方針
 
@@ -33,8 +33,8 @@
 - `src/codec/types.ts` の `VideoPublishOptions.keyframeInterval` に、同ファイルの他のフィールドと同じ `//` 形式のコメントで値域 (1 以上の整数)、既定値 (`framerate * 2`、既定 framerate は 30)、無効値は `createMediaPublisher()` が throw することを書く
 - `docs/HIGH_LEVEL_API.md` の該当行も同じ内容に更新する
 - `CHANGES.md` の `## develop` の先頭に `[FIX]` を追記する (セクション内は新しい順)
-- 対象は `src` と `docs` と `CHANGES.md` とする。devtools の同型 2 箇所は独自の signal とクエリパラメータ由来の値で `resolveKeyframeInterval` を通らないため別 issue とする。`examples` も変更しない (無効値はライブラリが明示的に失敗するため)
-- 対象外: `processVideoFrames` がキーフレーム判定のあとにキュー超過でフレームを破棄しても `videoFrameCount` を進めるため要求が失われる件は、別 issue とする
+- 対象は `src` と `docs` と `CHANGES.md` とする。devtools の同型 2 箇所は独自の signal とクエリパラメータ由来の値で `resolveKeyframeInterval` を通らないため 0676 で扱う。`examples` も変更しない (無効値はライブラリが明示的に失敗するため)
+- 対象外: `processVideoFrames` がキーフレーム判定のあとにキュー超過でフレームを破棄しても `videoFrameCount` を進めるため要求が失われる件は、0680 で扱う
 
 ## 完了条件
 
