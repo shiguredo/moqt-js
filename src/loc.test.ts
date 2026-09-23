@@ -38,13 +38,17 @@ import {
 import {
   encodeProperties,
   decodeProperties,
+  TrackPropertyId,
   decodeObjectPropertiesTolerant,
   mergeDeliveryTimeoutObjectProperties,
   appendGreaseObjectProperty,
+  assertKnownPropertyValueInObjectProperties,
+  LOC_AUDIO_LEVEL_MAX_VALUE,
   type Property,
 } from "./properties";
 import { isGreaseValue } from "./grease";
 import { ProtocolViolationError } from "./error";
+import { assertKeyValueFormattingError } from "./testSupport/helpers";
 import { buildPublishTrackProperties } from "./session/params";
 
 // キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, SID=0)
@@ -608,6 +612,113 @@ test("decodeAudioLevel: 誤 ID 入力で ProtocolViolationError を送出する"
   // VIDEO_FRAME_MARKING (0x09) のワイヤを AUDIO_LEVEL として読む
   const wire = encodeVideoFrameMarking(keyFrameMarking);
   assert.throws(() => decodeAudioLevel(wire), ProtocolViolationError, /0x09, expected 0x0c/);
+});
+
+/**
+ * AUDIO_LEVEL (0x0C) を 1 件だけ持つワイヤを作る
+ *
+ * 先頭 Property の Delta Type は ID そのものになるため、単一 Property の絶対 Type
+ * ワイヤ (decodeAudioLevel の入力) としても使える。値域外の値は encodeAudioLevel
+ * (level を 7 bit に丸める) では作れないため、値から直接組み立てる。
+ */
+function buildAudioLevelWire(value: bigint): Uint8Array {
+  return encodeProperties([{ id: LOCPropertyId.AUDIO_LEVEL, value }]);
+}
+
+// draft-ietf-moq-loc-04 §2.3.3.2 / draft-ietf-moq-transport-21 §8.3:
+// Audio Level の Value は 0x00-0xFF の vi64 であり、8 bit に収まらない値は
+// 下位 8 bit に丸めず KEY_VALUE_FORMATTING_ERROR で拒否する。
+test("decodeAudioLevel: 境界値 0x00 と 0xFF は受理する", () => {
+  // 下限: level 0、voice activity なし
+  assert.deepEqual(decodeAudioLevel(buildAudioLevelWire(0x00n)), {
+    level: 0,
+    voiceActivity: false,
+  });
+
+  // 上限: 下位 7 bit が level、bit 7 が voice activity
+  assert.deepEqual(decodeAudioLevel(buildAudioLevelWire(LOC_AUDIO_LEVEL_MAX_VALUE)), {
+    level: 0x7f,
+    voiceActivity: true,
+  });
+});
+
+test("decodeAudioLevel: 0x100 は KEY_VALUE_FORMATTING_ERROR で拒否する", () => {
+  assertKeyValueFormattingError(
+    () => decodeAudioLevel(buildAudioLevelWire(0x100n)),
+    /known type 0xc: audio level 0x[0-9a-f]+ > 0xff/,
+  );
+});
+
+test("decodeAudioLevel: 0x1FF も KEY_VALUE_FORMATTING_ERROR で拒否する", () => {
+  assertKeyValueFormattingError(
+    () => decodeAudioLevel(buildAudioLevelWire(0x1ffn)),
+    /known type 0xc: audio level 0x[0-9a-f]+ > 0xff/,
+  );
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.2:
+// 抽出経路 (resolveAudioProperties / decodeAudioProperties) は寛容であり、
+// 値域外の AUDIO_LEVEL は読み飛ばして audioLevel を設定しない (セッションは閉じない)。
+test("resolveAudioProperties: 値域外の AUDIO_LEVEL は audioLevel を設定しない", () => {
+  for (const value of [0x100n, 0x1ffn]) {
+    const resolved = resolveAudioProperties(undefined, buildAudioLevelWire(value));
+    assert.isUndefined(resolved.audioLevel);
+  }
+
+  // 上限値は従来どおり level と voiceActivity が得られる
+  const boundary = resolveAudioProperties(
+    undefined,
+    buildAudioLevelWire(LOC_AUDIO_LEVEL_MAX_VALUE),
+  );
+  assert.deepEqual(boundary.audioLevel, { level: 0x7f, voiceActivity: true });
+});
+
+test("decodeAudioProperties: 値域外の AUDIO_LEVEL は audioLevel を設定しない", () => {
+  for (const value of [0x100n, 0x1ffn]) {
+    const decoded = decodeAudioProperties(buildAudioLevelWire(value));
+    assert.isUndefined(decoded.audioLevel);
+  }
+
+  const boundary = decodeAudioProperties(buildAudioLevelWire(LOC_AUDIO_LEVEL_MAX_VALUE));
+  assert.deepEqual(boundary.audioLevel, { level: 0x7f, voiceActivity: true });
+});
+
+// draft-ietf-moq-transport-21 §8.3:
+// 既知 Type の Value が serialization と一致しない場合はセッションを閉じる MUST。
+// LOC の AUDIO_LEVEL は Object Properties の検証層で値域外を拒否する。
+test("assertKnownPropertyValueInObjectProperties: 値域外の AUDIO_LEVEL で KEY_VALUE_FORMATTING_ERROR を送出する", () => {
+  for (const value of [0x100n, 0x1ffn]) {
+    assertKeyValueFormattingError(
+      () => assertKnownPropertyValueInObjectProperties(buildAudioLevelWire(value)),
+      /known type 0xc: audio level 0x[0-9a-f]+ > 0xff/,
+    );
+  }
+});
+
+test("assertKnownPropertyValueInObjectProperties: 上限値 0xFF の AUDIO_LEVEL は受理する", () => {
+  // 値域内は例外を投げない (従来どおりの寛容な検証)
+  assertKnownPropertyValueInObjectProperties(buildAudioLevelWire(LOC_AUDIO_LEVEL_MAX_VALUE));
+});
+
+test("assertKnownPropertyValueInObjectProperties: AUDIO_LEVEL 以外の偶数 Type は値域を見ない", () => {
+  // OBJECT_DELIVERY_TIMEOUT (0x02) はミリ秒値であり 0xFF を超えるのが正常。
+  // 値域の判定が AUDIO_LEVEL (0x0C) だけに掛かることを固定する
+  assertKnownPropertyValueInObjectProperties(
+    encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5000n }]),
+  );
+});
+
+test("assertKnownPropertyValueInObjectProperties: 2 件目以降の AUDIO_LEVEL も値域を検証する", () => {
+  // Delta Type の累積で AUDIO_LEVEL に到達する経路でも値域の判定が働く
+  // (TIMESCALE 0x08 の次の Delta Type は 0x04 になり、累積してはじめて 0x0C になる)
+  const wire = encodeProperties([
+    { id: LOCPropertyId.TIMESCALE, value: 1000n },
+    { id: LOCPropertyId.AUDIO_LEVEL, value: 0x100n },
+  ]);
+  assertKeyValueFormattingError(
+    () => assertKnownPropertyValueInObjectProperties(wire),
+    /known type 0xc: audio level 0x100 > 0xff/,
+  );
 });
 
 // draft-ietf-moq-loc-04 §2.3.2.1:

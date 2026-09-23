@@ -8,8 +8,10 @@
  * 到達しないため、配布物には含まれない。
  */
 
+import { assert } from "vite-plus/test";
 import { decodeVarint } from "../varint";
 import type { MoqtObject } from "../dataStream";
+import { SessionError, SessionErrorCode } from "../error";
 import { ObjectStatus } from "../message/types";
 import { MOQTPropertyId, encodeProperties } from "../properties";
 import {
@@ -135,4 +137,33 @@ export function priorGroupIdGapProperties(gap: bigint): Uint8Array {
  */
 export function priorObjectIdGapProperties(gap: bigint): Uint8Array {
   return encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: gap }]);
+}
+
+/**
+ * 例外を捕捉して返す (assert.throws では SessionError のコードまで検証できないため)
+ */
+export function captureThrownError(run: () => void): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+/**
+ * KEY_VALUE_FORMATTING_ERROR の SessionError が送出されることを検証する
+ *
+ * @param run - 例外を送出する処理
+ * @param messagePattern - エラーメッセージの期待値 (省略時は検証しない)
+ */
+export function assertKeyValueFormattingError(run: () => void, messagePattern?: RegExp): void {
+  const thrown = captureThrownError(run);
+  if (!(thrown instanceof SessionError)) {
+    assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
+  }
+  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  if (messagePattern !== undefined) {
+    assert.match(thrown.message, messagePattern);
+  }
 }

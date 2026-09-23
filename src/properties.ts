@@ -44,6 +44,52 @@ export const MsfCompressionAlgorithm = {
 } as const;
 
 /**
+ * LOC の Audio Level の Property ID と Value の上限
+ *
+ * draft-ietf-moq-loc-04 §2.3.3.2:
+ * Value 行は "vi64 (1-2 bytes to encode values 0x00-0xFF)" と値域を 0x00-0xFF に
+ * 限定する (TIMESTAMP / TIMESCALE の "vi64 (1-9 bytes)" とは異なる)。
+ * Description 行の "encoded in the least significant 8 bits of a vi64" は
+ * RFC6464 のビット配置 (下位 7 bit が level、bit 7 が voice activity) の説明であり、
+ * 8 bit を超える値を受け入れる意味ではない。8 bit を超える値を下位 8 bit に丸めると
+ * 誤った level と voice activity になるため、値域外として扱う。
+ *
+ * Object Properties の検証 (assertKnownPropertyValueInObjectProperties) が値域を
+ * 見るため、ID と値域の規則をここに置く。loc.ts の LOCPropertyId と
+ * decodeAudioLevelValue はこの定数と関数を参照する。
+ */
+export const LOC_AUDIO_LEVEL_PROPERTY_ID = 0x0cn;
+
+/** LOC の Audio Level の Value の上限 (Value 行の 0x00-0xFF の上限) */
+export const LOC_AUDIO_LEVEL_MAX_VALUE = 0xffn;
+
+/**
+ * Audio Level の Value が値域 (0x00-0xFF) を超えないかを判定する
+ *
+ * Value は vi64 として読んだ非負の bigint を渡す (負値は現れない)。
+ */
+export function isLocAudioLevelValueInRange(value: bigint): boolean {
+  return value <= LOC_AUDIO_LEVEL_MAX_VALUE;
+}
+
+/**
+ * Audio Level の Value が値域外のときの SessionError を生成する
+ *
+ * draft-ietf-moq-transport-21 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *
+ * メッセージは decodeKnownPropertyVarint と同じ「既知 Type の前置き + 詳細」の形に揃える。
+ */
+export function locAudioLevelValueRangeError(value: bigint): SessionError {
+  return new SessionError(
+    `key-value-pair value does not match serialization for known type 0x${LOC_AUDIO_LEVEL_PROPERTY_ID.toString(16)}: audio level 0x${value.toString(16)} > 0x${LOC_AUDIO_LEVEL_MAX_VALUE.toString(16)}`,
+    SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+  );
+}
+
+/**
  * MOQT Property ID (Section 10)
  *
  * ID が偶数の場合: varint value
@@ -1312,6 +1358,10 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
  *
+ * LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合も同じ
+ * serialization 不一致として SessionError を送出する
+ * (draft-ietf-moq-loc-04 §2.3.3.2 の値域)。
+ *
  * decodeObjectPropertiesTolerant は失敗を吸収して読めた分だけを返すため、
  * 生バイト列を走査して既知 Type (KNOWN_PROPERTY_TYPES) の Value / Length が
  * varint として完結しない場合、および Length の varint は完結したが宣言値が
@@ -1327,7 +1377,8 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * @throws ProtocolViolationError delta の累積が 2^64-1 を超える場合、または
  *   奇数 Type の宣言 Length が 2^16-1 を超える場合
  * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type の Value / Length が
- *   varint として完結しない場合、または上限内の宣言 Length が残りバイトを超える場合
+ *   varint として完結しない場合、上限内の宣言 Length が残りバイトを超える場合、
+ *   または LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合
  */
 export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
   let offset = 0;
@@ -1353,8 +1404,10 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
 
     if (id % 2n === 0n) {
       // 偶数 Type: Value (varint)
+      let value: bigint;
+      let valueLen: number;
       try {
-        const [, valueLen] = decodeVarint(data, offset);
+        [value, valueLen] = decodeVarint(data, offset);
         offset += valueLen;
       } catch {
         if (KNOWN_PROPERTY_TYPES.has(id)) {
@@ -1364,6 +1417,14 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
           );
         }
         return;
+      }
+      // draft-ietf-moq-loc-04 §2.3.3.2 の値域外 (0xFF 超) は §8.3 の serialization
+      // 不一致として KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。KNOWN_PROPERTY_TYPES
+      // には LOC の Type を足さず、値域だけを見る (他の LOC 型の寛容な扱いを変えないため)。
+      // 対象はこの階層の Property 列であり、Immutable Properties (0x0B) の内側は
+      // 走査しない (既存の varint / Length 検証と同じ範囲)。
+      if (id === LOC_AUDIO_LEVEL_PROPERTY_ID && !isLocAudioLevelValueInRange(value)) {
+        throw locAudioLevelValueRangeError(value);
       }
       continue;
     }

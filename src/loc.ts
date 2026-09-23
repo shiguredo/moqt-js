@@ -26,7 +26,14 @@
 
 import { IncompleteDataError, ProtocolViolationError } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
-import { encodeProperties, decodeObjectPropertiesTolerant, type Property } from "./properties";
+import {
+  encodeProperties,
+  decodeObjectPropertiesTolerant,
+  isLocAudioLevelValueInRange,
+  locAudioLevelValueRangeError,
+  LOC_AUDIO_LEVEL_PROPERTY_ID,
+  type Property,
+} from "./properties";
 
 /**
  * LOC Property ID (draft-ietf-moq-loc-04 Section 2.3 / §6.1 Table 1)
@@ -58,9 +65,9 @@ export const LOCPropertyId = {
   VIDEO_FRAME_MARKING: 0x09n,
   /**
    * Audio Level (draft-ietf-moq-loc-04 Section 2.3.3.2 Audio Level)
-   * RFC6464 section 3 準拠のオーディオレベル (vi64 の下位 8 bit)
+   * RFC6464 section 3 準拠のオーディオレベル (Value は 0x00-0xFF の vi64)
    */
-  AUDIO_LEVEL: 0x0cn,
+  AUDIO_LEVEL: LOC_AUDIO_LEVEL_PROPERTY_ID,
   /**
    * Video Config (draft-ietf-moq-loc-04 Section 2.3.2.1 Video Config)
    * VideoDecoderConfig の description (length + bytes)
@@ -402,10 +409,17 @@ export function encodeAudioLevel(level: number, voiceActivity: boolean): Uint8Ar
 
 /**
  * Audio Level の varint value からフィールドを解釈する
- * RFC6464: 下位 8 bit に level (bits 6-0) と voice activity (bit 7)
+ *
+ * RFC6464: 下位 8 bit に level (bits 6-0) と voice activity (bit 7)。
+ * draft-ietf-moq-loc-04 §2.3.3.2 は Value を "vi64 (1-2 bytes to encode values
+ * 0x00-0xFF)" と定めるため、8 bit に収まらない値は null を返す
+ * (下位 8 bit に丸めると誤った level と voice activity を返すため)。
  */
-function decodeAudioLevelValue(value: bigint): AudioLevel {
-  const byte = Number(value & 0xffn);
+function decodeAudioLevelValue(value: bigint): AudioLevel | null {
+  if (!isLocAudioLevelValueInRange(value)) {
+    return null;
+  }
+  const byte = Number(value);
   return {
     level: byte & 0x7f,
     voiceActivity: (byte & 0x80) !== 0,
@@ -417,12 +431,19 @@ function decodeAudioLevelValue(value: bigint): AudioLevel {
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError ID / Value の varint が不完全な場合
+ * @throws SessionError KEY_VALUE_FORMATTING_ERROR Value が 0x00-0xFF の範囲外の場合
+ *   (draft-ietf-moq-loc-04 §2.3.3.2 の serialization 不一致。
+ *   draft-ietf-moq-transport-21 §8.3 の MUST)
  */
 export function decodeAudioLevel(data: Uint8Array): AudioLevel {
   const [id, idLen] = decodeLeadingVarint(data, 0, "AUDIO_LEVEL id");
   assertLocPropertyId(id, LOCPropertyId.AUDIO_LEVEL, "AUDIO_LEVEL");
   const [value, _valueLen] = decodeLeadingVarint(data, idLen, "AUDIO_LEVEL value");
-  return decodeAudioLevelValue(value);
+  const audioLevel = decodeAudioLevelValue(value);
+  if (audioLevel === null) {
+    throw locAudioLevelValueRangeError(value);
+  }
+  return audioLevel;
 }
 
 /**
@@ -618,6 +639,9 @@ export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
  *
  * デコード規約は decodeVideoProperties と同じ (寛容な delta デコード)。不正な
  * delta / Length で PROTOCOL_VIOLATION を送出せず、抽出できたフィールドのみを設定する。
+ * AUDIO_LEVEL が値域 (0x00-0xFF) 外の場合も audioLevel を設定しない
+ * (draft-ietf-moq-loc-04 §2.3.3.2。セッションを閉じる判定は
+ * assertKnownPropertyValueInObjectProperties が担う)。
  */
 export function decodeAudioProperties(data: Uint8Array): AudioProperties {
   const decoded = decodeObjectPropertiesTolerant(data);
@@ -659,6 +683,8 @@ interface ExtractedLocProperties {
  *
  * 抽出不能・不正な Property は読み飛ばし、抽出できたフィールドのみを返す
  * (セッションを閉じない。寛容性は decodeVideoProperties / decodeAudioProperties と同じ)。
+ * AUDIO_LEVEL は Value が 0x00-0xFF の範囲外なら読み飛ばして audioLevel を設定しない
+ * (draft-ietf-moq-loc-04 §2.3.3.2)。
  * 同一 ID の重複時は有効な後続値が上書きし、不正値は既存値を保持する (動作は変えない)。
  */
 function extractLocProperties(
@@ -686,7 +712,14 @@ function extractLocProperties(
       }
     } else if (scope === "object" && property.id === LOCPropertyId.AUDIO_LEVEL) {
       if (property.value !== undefined) {
-        result.audioLevel = decodeAudioLevelValue(property.value);
+        // 値域外 (0x00-0xFF の外) は読み飛ばす。この経路はセッションを閉じない契約
+        // (VIDEO_FRAME_MARKING の長さ検証と同じ寛容側の扱い)。§8.3 の MUST は
+        // Object Properties の検証層 (assertKnownPropertyValueInObjectProperties) が
+        // この階層の Property 列に対して満たす
+        const audioLevel = decodeAudioLevelValue(property.value);
+        if (audioLevel !== null) {
+          result.audioLevel = audioLevel;
+        }
       }
     }
   }

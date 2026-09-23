@@ -7,6 +7,8 @@ import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { ProtocolViolationError, IncompleteDataError } from "./error";
 import { encodeVarint, MAX_VARINT } from "./varint";
+import { assertKeyValueFormattingError } from "./testSupport/helpers";
+import { assertKnownPropertyValueInObjectProperties, encodeProperties } from "./properties";
 import {
   LOCPropertyId,
   encodeTimestamp,
@@ -912,4 +914,22 @@ test("encodeVideoProperties → encodeLocObjectPayload → framed decode → dec
   assert.strictEqual(decoded.timestamp, 12345n);
   assert.strictEqual(decoded.timescale, 90000n);
   assert.deepEqual(Array.from(decodedPayload), Array.from(locPayload));
+});
+
+// draft-ietf-moq-loc-04 §2.3.3.2:
+// Audio Level の Value は "vi64 (1-2 bytes to encode values 0x00-0xFF)" であり、
+// 0xFF を超える値は 0x100 から MAX_VARINT までの全域で拒否する
+// (draft-ietf-moq-transport-21 §8.3 の serialization 不一致)。
+const outOfRangeAudioLevelArb = fc.bigInt({ min: 0x100n, max: MAX_VARINT });
+
+test("Audio Level の値域外の値は全域で KEY_VALUE_FORMATTING_ERROR になる", () => {
+  fc.assert(
+    fc.property(outOfRangeAudioLevelArb, (value) => {
+      // 単一 Property の Delta Type は ID そのものになるため、
+      // decodeAudioLevel の絶対 Type ワイヤとしても使える
+      const wire = encodeProperties([{ id: LOCPropertyId.AUDIO_LEVEL, value }]);
+      assertKeyValueFormattingError(() => decodeAudioLevel(wire));
+      assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(wire));
+    }),
+  );
 });
