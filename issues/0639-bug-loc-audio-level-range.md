@@ -1,7 +1,7 @@
 # Audio Level の値域検証が無く 8 bit を超える値を黙って切り捨てる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-loc-audio-level-range
 - Polished: 2026-09-21
 
@@ -42,4 +42,24 @@ draft-ietf-moq-loc-04 §2.3.3.2 は Audio Level の Value を「vi64 (1-2 bytes 
 
 ## 解決方法
 
-{未着手}
+- 値域の規則 (ID 0x0C / 上限 0xFF) を `src/properties.ts` の `LOC_AUDIO_LEVEL_PROPERTY_ID` / `LOC_AUDIO_LEVEL_MAX_VALUE` と `isLocAudioLevelValueInRange` / `locAudioLevelValueRangeError` に集約し、`src/loc.ts` の `LOCPropertyId.AUDIO_LEVEL` と `decodeAudioLevelValue` がそれを参照する形にした (loc.ts → properties.ts の既存依存の向きを維持し、循環を作らない)
+- `decodeAudioLevelValue` は `AudioLevel | null` を返し、0xFF 超は null にした。`decodeAudioLevel` は null のとき `SessionError` + `KEY_VALUE_FORMATTING_ERROR` を投げる
+- `extractLocProperties` は null を読み飛ばして `audioLevel` を設定しない (VIDEO_FRAME_MARKING の長さ検証と同じ寛容側の扱い)。`resolveAudioProperties` / `decodeAudioProperties` は値域外でも誤った level を返さない
+- `assertKnownPropertyValueInObjectProperties` の偶数 Type 分岐で、値が varint として読めたあとに AUDIO_LEVEL かつ 0xFF 超なら `SessionError` + `KEY_VALUE_FORMATTING_ERROR` を投げる。`KNOWN_PROPERTY_TYPES` への追加はせず、値域だけを見る判定にした
+- 仕様解釈: LOC §2.3.3.2 の Value 行は "vi64 (1-2 bytes to encode values 0x00-0xFF)" と値域を限定しており、Description 行の "encoded in the least significant 8 bits of a vi64" は RFC6464 のビット配置 (下位 7 bit が level、bit 7 が voice activity) の説明である。8 bit を超える値は下位 8 bit に丸めると誤った level になるため値域外として扱う
+- テストは、境界値 0x00 / 0xFF の受理、`decodeAudioLevel` の 0x100 / 0x1FF 拒否、抽出経路の読み飛ばし、検証層の拒否、AUDIO_LEVEL 以外の偶数 Type が値域の影響を受けないこと、2 件目以降 (Delta Type の累積) の AUDIO_LEVEL も検証されることを固定した。加えて `src/loc.prop.ts` に 0x100 から MAX_VARINT までの全域を拒否する PBT を足した
+- テスト専用の例外検証ヘルパー (`captureThrownError` / `assertKeyValueFormattingError`) を `src/testSupport/helpers.ts` に集約し、`src/properties.test.ts` の重複実装を削除した
+- `CHANGES.md` の `## develop` 先頭に `[FIX]` と `[UPDATE]` を追記した
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (122 files / 2511 tests) が通る
+- 変異テストで、値域判定を外す / 上限を変える / 検証層の判定を外す / ガードを全偶数 Type に弱める / 累積 ID ではなく Delta Type を見る / `decodeAudioLevel` の throw を外す / 抽出経路で読み飛ばさない、のいずれでも対応するテストが失敗することを確認した
+- Object Properties に値域外の AUDIO_LEVEL を含む Object は、datagram / subgroup / fetch (fill 含む) の各受信経路で配送前に拒否され、`toSessionCloseError` がコードを保持してセッションを閉じることを机上で確認した
+
+## 残した課題
+
+- Immutable Properties (0x0B) の内側の Property は `assertKnownPropertyValueInObjectProperties` が走査しないため、内側に置かれた値域外の AUDIO_LEVEL は拒否されない (既存の varint / Length 検証も同じ範囲)。draft-ietf-moq-transport-21 §10.7 は内側も Property として検索する MUST を定めており、`src/filter.ts` の `findPropertyValueRecursive` は既に内側を検索している。入れ子を含めた §8.3 の検証は別途扱う
+- エンコード側の `encodeAudioLevel` は `level & 0x7f` で丸めるため、`level` の値域 (RFC6464 の 0-127) を検証しない。デコード側の厳格化とは非対称であり、別途扱う
+- 値域外の AUDIO_LEVEL を含む Object を受信してセッションが閉じることを、dataStream の実ワイヤ構築で固定する統合テストは追加していない (検証層の throw → `toSessionCloseError` → `closeWithError` の機構は既存テストで実証済み)
+- Track Property として届いた AUDIO_LEVEL は LOC Table 1 では Object スコープのため、値域検査も抽出もされない (誤った level を返す経路は無い)
