@@ -59,6 +59,7 @@ import { concatChunks, processSubgroupObjects } from "./stream";
 import {
   publishClosePublisherStream,
   publishCloseSubgroupStream,
+  publishMarkStreamOmitted,
   publishResetPublisherStream,
   publishSendDatagram,
   publishSendObject,
@@ -225,11 +226,8 @@ function createPublisherHarness(): {
     errors.push(error);
   });
   publisher.onSendObject = (params) => publishSendObject(session, publisher, params);
-  publisher.onSendObjectSkipped = () => {
-    const streamState = session.publisherStreams.get(publisher.getTrackAlias());
-    if (streamState) {
-      streamState.omittedObjects = true;
-    }
+  publisher.onSendObjectSkipped = (groupId) => {
+    publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
   };
   publisher.onDoneInternal = async () => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
@@ -1195,10 +1193,10 @@ const publisherOperationArb = fc.oneof(
 /**
  * draft-ietf-moq-transport-21 §3.1 / §11.3.2:
  * 任意の Forward State 切替と Group 送信の列に対して、閉じる Subgroup が
- * 「Forward State 0 による見送り (省略) があるなら RESET、なければ FIN」に
- * 従うことを検証する。見送りはそのとき開いている Subgroup に記録されるため、
- * 省略の有無は送信順序から決まる。done() も同じ判定で開いている Subgroup を
- * 閉じ、当該 track の closedSubgroups を掃除する。
+ * 「Forward State 0 による見送り (省略) が同じ Group の Subgroup に記録されているなら
+ * RESET、なければ FIN」に従うことを検証する。見送りは見送った Object と同じ Group の
+ * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。done() も同じ
+ * 判定で開いている Subgroup を閉じ、当該 track の closedSubgroups を掃除する。
  */
 test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / RESET を選ぶ", async () => {
   await fc.assert(
@@ -1209,8 +1207,8 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         const trackAlias = publisher.getTrackAlias();
 
         // 期待する Subgroup ストリームのモデル。omitted は Forward State 0 の
-        // 見送りが「現在開いているストリーム」へ記録された事実を表し、closed は
-        // 後続の Group 送信で閉じられた事実を表す。
+        // 見送りが「同じ Group の開いているストリーム」へ記録された事実を表し、
+        // closed は後続の Group 送信で閉じられた事実を表す。
         const expected: { groupId: number; omitted: boolean; closed: boolean }[] = [];
         let currentGroupId = -1;
         let nextObjectId = 0;
@@ -1239,8 +1237,10 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
               }
               expected.push({ groupId, omitted: false, closed: false });
             }
-          } else if (opened !== undefined) {
-            // 見送りは、そのとき開いている Subgroup の省略として記録される
+          } else if (opened !== undefined && opened.groupId === groupId) {
+            // 見送りは、同じ Group の Subgroup が開いているときに省略として記録される
+            // (別 Group の見送りでは、開いている Subgroup は範囲内をすべて渡している
+            //  可能性があるため記録しない)
             opened.omitted = true;
           }
 

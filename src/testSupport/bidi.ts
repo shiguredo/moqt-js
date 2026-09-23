@@ -23,7 +23,14 @@ import { PublisherImpl } from "../publisher";
 // pending.resolve と読み取りループ起動に到達しないままテストが通ってしまう。
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import { type BidiSessionInternal, bidiSendPublishStateNotify } from "../session/bidi";
-import { publishClosePublisherStream, publishSendPublishDone } from "../session/publish";
+import type { SessionInternal } from "../session/types";
+import {
+  publishClosePublisherStream,
+  publishMarkStreamOmitted,
+  publishSendDatagram,
+  publishSendObject,
+  publishSendPublishDone,
+} from "../session/publish";
 import { concatUint8Arrays } from "./helpers";
 
 /**
@@ -118,6 +125,15 @@ export async function waitForMacrotask(): Promise<void> {
 }
 
 /**
+ * 1 本の Subgroup ストリームで観測した終端操作
+ */
+interface SubgroupStreamRecord {
+  closeCount: number;
+  abortCount: number;
+  abortReasons: unknown[];
+}
+
+/**
  * 実 W3C ストリーム (`ReadableStream` + `WritableStream`) と実 Map で構成した
  * publish ロール用の session を構築する。ストリーム機構は実物であり、
  * 失敗注入点は sink のみ。session はテスト用のオブジェクトリテラルを
@@ -138,10 +154,13 @@ export function createPublishReadTestContext(
   publisher: PublisherImpl;
   requestId: bigint;
   controlReader: ControlStreamReader;
+  subgroupStreams: SubgroupStreamRecord[];
 } {
   const requestId = 10n;
   const events: string[] = [];
   const written: Uint8Array[] = [];
+  // Subgroup ストリーム (createUnidirectionalStream) の終端操作の記録
+  const subgroupStreams: SubgroupStreamRecord[] = [];
   let closedWithError: SessionError | undefined;
   // closeWithError の呼び出し回数。セッション終了後に同一チャンクの残りメッセージを
   // 処理し続けていないこと (error の二重通知が無いこと) を検証するために数える。
@@ -173,7 +192,35 @@ export function createPublishReadTestContext(
   const writer = writable.getWriter();
   const controlReader = new ControlStreamReader();
 
+  // Subgroup ストリームは close (FIN) と abort (RESET) を区別して記録する
+  const transport = {
+    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+      const record: SubgroupStreamRecord = { closeCount: 0, abortCount: 0, abortReasons: [] };
+      subgroupStreams.push(record);
+      return new WritableStream<Uint8Array>({
+        write() {},
+        close() {
+          record.closeCount += 1;
+        },
+        abort(reason) {
+          record.abortCount += 1;
+          record.abortReasons.push(reason);
+        },
+      });
+    },
+    // Datagram の送信 (Largest Location の更新と Subgroup の省略判定の切り分けに使う)
+    datagrams: { writable: new WritableStream<Uint8Array>() },
+  } as unknown as WebTransport;
+
   const publisher = new PublisherImpl(["test"], "track", requestId, 1n);
+  // SessionImpl.publish と同じ配線 (Subgroup ストリームへの Object 送信と省略の記録)
+  publisher.onSendObject = (params) =>
+    publishSendObject(session as unknown as SessionInternal, publisher, params);
+  publisher.onSendDatagram = (params) =>
+    publishSendDatagram(session as unknown as SessionInternal, publisher, params);
+  publisher.onSendObjectSkipped = (groupId) => {
+    publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
+  };
   // SessionImpl の onDoneInternal と同じ後始末 (データストリーム FIN → PUBLISH_DONE)
   publisher.onDoneInternal = async (status) => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
@@ -185,7 +232,9 @@ export function createPublishReadTestContext(
 
   const session = {
     sessionState: "connected",
-    transport: {},
+    transport,
+    grease: false,
+    statsUnidirectionalStreamsOpened: 0,
     controlWriter: new ControlStreamWriter(),
     nextRequestId: 100n,
     requestStreams: new Map([[requestId, { stream, writer, controlReader }]]),
@@ -247,6 +296,7 @@ export function createPublishReadTestContext(
     publisher,
     requestId,
     controlReader,
+    subgroupStreams,
   };
 }
 

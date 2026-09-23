@@ -380,7 +380,9 @@ test("bidiReadRequestStreamMessages: fill 範囲が空でない FILL_PARAMETERS 
   assert.equal(messages[1].type, MessageType.PUBLISH_DONE);
   const publishDone = decodePublishDonePayload(messages[1].payload);
   assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
-  assert.equal(publishDone.streamCount, 0n);
+  // テストは Largest Object を確定させるために Object を 1 つ送っており、
+  // ハーネスは SessionImpl.publish と同じ配線で Subgroup ストリームを開くため 1 になる
+  assert.equal(publishDone.streamCount, 1n);
   assert.equal(publishDone.reasonPhrase, "");
   // 拒否後は PublisherImpl が closed になり、後続の sendObject は fail-fast 拒否される
   assert.equal(ctx.publisher.state, "closed");

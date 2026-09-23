@@ -44,6 +44,7 @@ import {
   publishClosePublisherStream,
   publishSendDatagram,
   publishSendPublishDone,
+  publishMarkStreamOmitted,
 } from "./publish";
 import {
   buildPublishParameters,
@@ -170,14 +171,12 @@ export async function requestsPublish(
   // 送信コールバックを設定
   impl.onSendObject = (params: SendObjectParams) => requestsSendObject(session, impl, params);
   // draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
-  // Forward State 0 で見送った Object がある Subgroup は、閉じる時に reset を MUST とする。
-  // 見送りの事実をストリーム状態へ記録する (閉じる時点では最後に送信した Object より後の
-  // 見送りを検出できないため、見送りの時点で記録する)。
-  impl.onSendObjectSkipped = () => {
-    const streamState = session.publisherStreams.get(impl.getTrackAlias());
-    if (streamState) {
-      streamState.omittedObjects = true;
-    }
+  // Forward State 0 または Location Filter の範囲外で見送った Object がある Subgroup は、
+  // 閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
+  // 最後に送信した Object より後の見送りを検出できない)。記録の規則は
+  // publishMarkStreamOmitted を参照。
+  impl.onSendObjectSkipped = (groupId) => {
+    publishMarkStreamOmitted(session, impl.getTrackAlias(), groupId);
   };
 
   // データグラム送信コールバックを設定
