@@ -11,6 +11,12 @@
 
 ## develop
 
+- [CHANGE] MSF Catalog の必須検証を仕様に合わせて強化する
+  - draft-ietf-moq-msf-01 §5.2.3 の "Within the catalog, track names MUST be unique per namespace." は `tracks` と `publishTracks` の両方を含むため、配列をまたぐ `(name, namespace)` の重複を拒否する。従来受理していた「subscribe 用 track と publish 用 track の同名共存」は拒否されるようになる (破壊的変更)
+  - §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 の role が `video` / `audio` のときの Conditional MUST (codec / bitrate / samplerate / channelConfig) を検証する
+  - §5.2.13 の `initRef` の参照先が `initDataList` に無い Catalog を拒否する (§5.4 の変数 `%name%` を含む値は置換前のため対象外)。仕様の MUST ではなく、壊れた Catalog を早期に落とすための厳格化。catalog delta の適用後も同じ検証を行う
+  - 上記の MUST を満たさない Catalog は拒否されるため、仕様の例のうち §5.6.14 の `codec` / `bitrate` を省略した video track も拒否される (仕様の MUST を優先する)
+  - @voluntas
 - [FIX] 受信データストリームのバッファにストリーム単位の上限を設ける
   - draft-ietf-moq-transport-21 §12.5 (EXCESSIVE_LOAD 0x9) に対応する。確立後の受信データストリームは完成前の Object を保持し続けるため、悪意ある、あるいは壊れたピアが 1 本のストリームで無制限にメモリを消費できた。既定 32 MiB を超えたストリームは打ち切り、セッションは閉じない
   - 打ち切りは経路ごとに後始末し、アプリへ渡す error に `streamErrorCode` として `EXCESSIVE_LOAD` (0x9) を載せる (FETCH は fetcher を失敗させて bidi リクエストストリームへ STOP_SENDING を送り、fill は fillError で伝えて購読を継続し、Subgroup は該当購読を cancel して closed にする)

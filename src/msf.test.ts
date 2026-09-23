@@ -169,17 +169,229 @@ test("Catalog: tracks 配列内 (name, namespace) タプル重複は reject (§5
   assert.throws(() => decodeCatalogMessage(encodeRaw(catalog)), /duplicate track name 'video'/);
 });
 
-test("Catalog: tracks と publishTracks の合算 uniqueness は行わない (subscribe/publish 同名共存許容)", () => {
-  const catalog: Catalog = {
+test("Catalog: tracks と publishTracks をまたぐ (name, namespace) 重複は reject (§5.2.3)", () => {
+  // §5.2.3: "Within the catalog, track names MUST be unique per namespace."
+  // 「Within the catalog」は両配列を含むため、subscribe 用と publish 用の同名共存は拒否する。
+  // 違反した track の由来 (publishTracks) がエラー文言に含まれる。
+  const catalog = {
     version: "draft-01",
     tracks: [{ name: "log", packaging: "loc", isLive: true }],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
-  const encoded = encodeCatalog(catalog);
-  // round-trip が成立する = 例外なくデコードされる
-  const decoded = decodeCatalogMessage(encoded) as Catalog;
-  assert.strictEqual(decoded.tracks[0].name, "log");
-  assert.strictEqual(decoded.publishTracks?.[0].name, "log");
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /duplicate track name 'log' under namespace \(no namespace\) in publishTracks per §5\.2\.3/,
+  );
+});
+
+test("Catalog: tracks と publishTracks で namespace が異なれば同名でも受理される (§5.2.3)", () => {
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "video", packaging: "loc", isLive: true, namespace: "room1" }],
+    publishTracks: [
+      {
+        name: "video",
+        packaging: "loc",
+        isLive: true,
+        namespace: "room2",
+        role: "video",
+        codec: "av01",
+        bitrate: 1,
+      },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].name, "video");
+  assert.strictEqual(decoded.publishTracks?.[0].name, "video");
+});
+
+test("Catalog: role=video で codec が無いと reject (§5.2.18)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'v': video track must include codec per §5\.2\.18/,
+  );
+});
+
+test("Catalog: role=video で bitrate が無いと reject (§5.2.22)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", codec: "av01" }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'v': video track must include bitrate per §5\.2\.22/,
+  );
+});
+
+test("Catalog: role=audio で codec が無いと reject (§5.2.18)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        bitrate: 128000,
+        samplerate: 48000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include codec per §5\.2\.18/,
+  );
+});
+
+test("Catalog: role=audio で bitrate が無いと reject (§5.2.22)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        codec: "opus",
+        samplerate: 48000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include bitrate per §5\.2\.22/,
+  );
+});
+
+test("Catalog: role=audio で samplerate が無いと reject (§5.2.28)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        codec: "opus",
+        bitrate: 128000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+  );
+});
+
+test("Catalog: role=audio で channelConfig が無いと reject (§5.2.29)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        codec: "opus",
+        bitrate: 128000,
+        samplerate: 48000,
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid track 'a': audio track must include channelConfig per §5\.2\.29/,
+  );
+});
+
+test("Catalog: tracks の initRef の参照切れも reject (§5.2.13)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
+    initDataList: [],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("Catalog: initDataList の id 自体が変数を含む場合は initRef を検証しない (§5.4)", () => {
+  // 置換後の id は判定できないため、参照切れを確定できない
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
+    initDataList: [{ id: "%init%", type: "inline", data: "AAAA" }],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].initRef, "init1");
+});
+
+test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.13)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(catalog)),
+    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("Catalog: initRef は type を問わず initDataList のエントリを指せば受理される (§5.2.13)", () => {
+  // 参照先の有無だけを見て type は問わない (inline / inline 以外の両方)
+  const catalog = {
+    version: "draft-01",
+    tracks: [
+      { name: "v", packaging: "loc", isLive: true, initRef: "init1" },
+      { name: "a", packaging: "loc", isLive: true, initRef: "init2" },
+    ],
+    initDataList: [
+      { id: "init1", type: "inline", data: "AAAA" },
+      { id: "init2", type: "uri", data: "https://example.com/init.mp4" },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].initRef, "init1");
+  assert.strictEqual(decoded.tracks[1].initRef, "init2");
+});
+
+test("Catalog: initRef の §5.4 変数の判定は値の途中に % がある場合も対象外になる (§5.4)", () => {
+  // §5.4.1 は %name% が値の任意位置に現れ得るため、前方一致ではなく部分一致で判定する
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "prefix-%init%" }],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].initRef, "prefix-%init%");
+});
+
+test("Catalog: initDataList の id の途中に % がある場合も initRef を検証しない (§5.4)", () => {
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
+    initDataList: [{ id: "init-%x%", type: "inline", data: "AAAA" }],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].initRef, "init1");
+});
+
+test("Catalog: initRef の参照切れ判定は §5.4 の変数を含む値を対象外にする (§5.4)", () => {
+  // 置換前の値は参照先を判定できないため、未解決の %name% は拒否しない
+  const catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].initRef, "%init%");
 });
 
 test("Catalog: publishTracks 配列内の name uniqueness 違反は reject (§5.2.3)", () => {
@@ -501,6 +713,145 @@ test("Catalog: encodeCatalog 時に template Location が precision loss する�
   assert.throws(
     () => encodeCatalog(catalog),
     /template startLocation\[0\] exceeds JSON safe integer range/,
+  );
+});
+
+test("applyCatalogDelta: 合成後の tracks と引き継いだ publishTracks をまたぐ重複は reject (§5.2.3)", () => {
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "add",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }],
+      },
+    ],
+  };
+  // tracks を先に走査するため、重複として報告されるのは publishTracks 側の track
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /duplicate track name 'v' under namespace 'room1' in publishTracks per §5\.2\.3/,
+  );
+});
+
+test("applyCatalogDelta: add の initRef 参照切れは合成後に reject される (§5.2.13)", () => {
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      { type: "add", tracks: [{ name: "a", packaging: "loc", isLive: true, initRef: "missing" }] },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /invalid catalog: track 'a' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("applyCatalogDelta: clone で initRef を参照切れに上書きすると reject される (§5.2.13)", () => {
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "v2", parentName: "v", initRef: "missing" } as CatalogTrack],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /invalid catalog: track 'v2' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("applyCatalogDelta: 引き継いだ publishTracks の initRef 参照切れも reject される (§5.2.13)", () => {
+  // delta が tracks だけを変更する場合でも、引き継いだ publishTracks の参照切れは検出する
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "add", tracks: [{ name: "a", packaging: "loc", isLive: true }] }],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+  );
+});
+
+test("applyCatalogDelta: catalogNamespace 解決後の配列またぎ重複は reject される (§5.2.2/§5.2.3)", () => {
+  // publishTracks の track は namespace 未指定で options.catalogNamespace="room1" に解決され、
+  // delta で追加する tracks の namespace="room1" と同一になる
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [{ name: "v", packaging: "loc", isLive: true }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      { type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }] },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta, { catalogNamespace: "room1" }),
+    /duplicate track name 'v' under namespace 'room1' in publishTracks per §5\.2\.3/,
+  );
+});
+
+test("applyCatalogDelta: clone 合成後は packaging 別 MUST が role 条件付き MUST より先に reject する", () => {
+  // base は role=video で codec を欠き、clone で packaging を moqmetrics に上書きする。
+  // 合成後は packaging 別 MUST (§10.4 の role='metrics') が先に検証される
+  // (role 条件付き MUST §5.2.18 の違反も同時に成立するが、検証順は packaging が先)
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "v2", parentName: "v", packaging: "moqmetrics" } as CatalogTrack],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /moqmetrics track must have role='metrics' per §10\.4/,
+  );
+});
+
+test("applyCatalogDelta: clone 合成後の role 条件付き MUST が再検証される (§5.2.18)", () => {
+  // base から role=video を継承した clone が codec を持たない場合は、合成後に reject する
+  // (clone 単体の検証では packaging 別 MUST と同様に skip しているため、合成後の再検証で検出する)
+  const current: Catalog = {
+    version: "draft-01",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    operations: [{ type: "clone", tracks: [{ name: "v2", parentName: "v" } as CatalogTrack] }],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /invalid track 'v2': video track must include codec per §5\.2\.18/,
   );
 });
 

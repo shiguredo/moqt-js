@@ -30,8 +30,8 @@ import type {
  * §5: A parser MUST ignore fields it does not understand.
  * 未知フィールド (root level) は ignore する。
  *
- * MUST 違反のみ throw する。`Error` メッセージは「先頭小文字、末尾ピリオドなし、
- * 期待値と実際値を含む」方針に従う。
+ * MUST 違反、および initRef の参照切れ (§5.2.13 の厳格化) で throw する。
+ * `Error` メッセージは「先頭小文字、末尾ピリオドなし、期待値と実際値を含む」方針に従う。
  */
 export function validateCatalog(value: unknown): Catalog {
   if (typeof value !== "object" || value === null) {
@@ -98,11 +98,6 @@ export function validateCatalog(value: unknown): Catalog {
     validateCatalogTrack(track, { source: "root" }),
   );
 
-  // §5.2.3 「track names MUST be unique per namespace」を tracks 配列内で個別に検証する。
-  // namespace 未指定なエントリの正規化に root のカタログ namespace は不要 (root catalog の
-  // tracks 配列は relative であり、subscriber 側で catalog track の namespace を解決時に補完する)。
-  assertTrackNameUnique(tracks, "tracks");
-
   // §5.1.5 publishTracks: optional Array
   let publishTracks: PublishTrack[] | undefined;
   if ("publishTracks" in obj) {
@@ -113,8 +108,12 @@ export function validateCatalog(value: unknown): Catalog {
       );
     }
     publishTracks = value.map((track) => validateCatalogTrack(track, { source: "publishTracks" }));
-    assertTrackNameUnique(publishTracks, "publishTracks");
   }
+
+  // 2 配列を揃えてから §5.2.3 の uniqueness を 1 回だけ検証する。
+  // 配列を揃える都合上、tracks 内の重複より publishTracks の型違反が先に
+  // 報告される入力がある (検証順の意図的な変更)。
+  assertTrackNameUnique(tracks, publishTracks);
 
   // §5.1.7 initDataList: optional Array、id は配列内 unique
   let initDataList: InitDataEntry[] | undefined;
@@ -137,6 +136,9 @@ export function validateCatalog(value: unknown): Catalog {
     }
   }
 
+  // §5.2.13 / §5.1.7: initRef の参照先の存在を検証する (詳細は関数 JSDoc)
+  assertInitRefResolvable(tracks, publishTracks, initDataList);
+
   // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
   const catalog: Catalog = { version: version as MsfVersion, tracks };
   if (generatedAt !== undefined) catalog.generatedAt = generatedAt;
@@ -154,25 +156,34 @@ export function validateCatalog(value: unknown): Catalog {
 }
 
 /**
- * tracks / publishTracks 配列内で `(name, namespace)` タプル uniqueness を検証する。
+ * tracks と publishTracks をまとめて `(name, namespace)` タプル uniqueness を検証する。
  * (draft-ietf-moq-msf-01 §5.2.3)
  *
- * §5.2.3: track names MUST be unique per namespace.
+ * §5.2.3: "Within the catalog, track names MUST be unique per namespace."
+ * 「Within the catalog」は両配列を含むため、配列をまたぐ重複も拒否する
+ * (従来の「subscribe 用 track と publish 用 track の同名共存」は受理されなくなる)。
  *
- * namespace 未指定 (undefined) のエントリは「同じく namespace 未指定の他エントリ」と
- * のみ衝突判定する (catalog namespace が validation context にない root レベルの
- * 場合は両方未指定なら catalog-level namespace inherit で同一とみなされる)。
+ * catalogNamespace を渡さない文脈 (parse 時) では、namespace 未指定 (undefined) の
+ * エントリは「同じく namespace 未指定の他エントリ」とのみ衝突判定する
+ * (両方未指定なら catalog-level namespace inherit で同一とみなされる)。
+ * catalog namespace が既知の文脈 (catalog delta の適用) では catalogNamespace を渡し、
+ * §5.2.2 の継承を解決した値で比較する。
+ * 違反した track がどちらの配列に由来するかをエラー文言に含める。
  */
 export function assertTrackNameUnique(
-  tracks: CatalogTrack[],
-  arrayName: "tracks" | "publishTracks",
+  tracks: readonly CatalogTrack[],
+  publishTracks: readonly CatalogTrack[] | undefined,
+  catalogNamespace?: string,
 ): void {
   // namespace を持つ track と持たない track を別容器で管理することで、
   // 文字列連結による衝突 (例: namespace="a b" name="c" と namespace="a" name="b c") を防ぐ。
   const seenWithNs = new Map<string, Set<string>>();
   const seenWithoutNs = new Set<string>();
-  for (const track of tracks) {
-    if (track.namespace === undefined) {
+  const check = (track: CatalogTrack, arrayName: "tracks" | "publishTracks"): void => {
+    // §5.2.2: namespace 未指定は catalog namespace を継承する。delta のように
+    // catalog namespace が既知の文脈では解決後の値で比較する
+    const namespace = track.namespace ?? catalogNamespace;
+    if (namespace === undefined) {
       if (seenWithoutNs.has(track.name)) {
         throw new Error(
           `invalid catalog: duplicate track name '${track.name}' under namespace (no namespace) in ${arrayName} per §5.2.3`,
@@ -180,17 +191,58 @@ export function assertTrackNameUnique(
       }
       seenWithoutNs.add(track.name);
     } else {
-      let names = seenWithNs.get(track.namespace);
+      let names = seenWithNs.get(namespace);
       if (names === undefined) {
         names = new Set<string>();
-        seenWithNs.set(track.namespace, names);
+        seenWithNs.set(namespace, names);
       }
       if (names.has(track.name)) {
         throw new Error(
-          `invalid catalog: duplicate track name '${track.name}' under namespace '${track.namespace}' in ${arrayName} per §5.2.3`,
+          `invalid catalog: duplicate track name '${track.name}' under namespace '${namespace}' in ${arrayName} per §5.2.3`,
         );
       }
       names.add(track.name);
+    }
+  };
+  for (const track of tracks) {
+    check(track, "tracks");
+  }
+  for (const track of publishTracks ?? []) {
+    check(track, "publishTracks");
+  }
+}
+
+/**
+ * initRef の参照先が initDataList に存在することを検証する。
+ *
+ * draft-ietf-moq-msf-01 §5.2.13 (initRef) は initDataList (§5.1.7) のエントリを
+ * 参照する。参照先の存在は MUST とは定められていないが、参照切れの Catalog は
+ * 復号器の初期化に失敗するため、早期に拒否する (本ライブラリの厳格化)。
+ * 参照先の有無だけを見て type は問わない。
+ *
+ * §5.4 の変数 (%name%) を含む値は置換前であり参照先を判定できないため対象外とする。
+ * initDataList の id 自体が変数を含む場合も同様に判定できないため、検証しない。
+ */
+export function assertInitRefResolvable(
+  tracks: readonly CatalogTrack[],
+  publishTracks: readonly CatalogTrack[] | undefined,
+  initDataList: readonly InitDataEntry[] | undefined,
+): void {
+  const entries = initDataList ?? [];
+  if (entries.some((entry) => entry.id.includes("%"))) {
+    return;
+  }
+  const ids = new Set(entries.map((entry) => entry.id));
+  for (const track of [...tracks, ...(publishTracks ?? [])]) {
+    const initRef = track.initRef;
+    if (initRef === undefined) continue;
+    if (initRef.includes("%")) {
+      continue;
+    }
+    if (!ids.has(initRef)) {
+      throw new Error(
+        `invalid catalog: track '${track.name}' has initRef '${initRef}' not present in initDataList per §5.2.13`,
+      );
     }
   }
 }
