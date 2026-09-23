@@ -172,6 +172,16 @@ export async function incomingPublishRunStreamSubLoop(
             msg.payload,
             publishRequestId,
           );
+          // draft-ietf-moq-transport-21 §6.4.2.2 / §9.9:
+          // PUBLISH_DONE は publisher が方向を閉じる前の最終メッセージであり、受信後は
+          // 将来の REQUEST_UPDATE に応答する必要が無い。送るものが無いため応答方向を
+          // FIN で閉じる (SHOULD。await の扱いは closeRequestStreamWriter を参照)。
+          // bidiHandlePublishDone が throw した場合はここへ到達しない (アプリの
+          // コールバック例外の場合は catch 節が FIN を送る)。
+          void bidi.closeRequestStreamWriter(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+          );
           continue;
         }
         if (msg.type === MessageType.PUBLISH_STATE_NOTIFY) {
@@ -340,6 +350,14 @@ export async function incomingPublishRunStreamSubLoop(
     while (impl.state === "active") {
       const { value, done } = await subReader.read();
       if (done) {
+        // draft-ietf-moq-transport-21 §6.4.2.2:
+        // ピアが FIN で方向を閉じた後は将来の REQUEST_UPDATE が到着し得ないため、
+        // 送るものが無い応答方向も FIN で閉じる (SHOULD)。通知より先に呼び、
+        // アプリのコールバックに FIN の発行を遅らせない。
+        void bidi.closeRequestStreamWriter(
+          session as unknown as bidi.BidiSessionInternal,
+          publishRequestId,
+        );
         // draft-ietf-moq-transport-21 §9.5.1:
         // 応答を待たずにストリームが閉じた場合は保留中の更新の失敗として、
         // アプリの update() の Promise を reject する (bidiReadRequestStreamMessages
@@ -368,6 +386,25 @@ export async function incomingPublishRunStreamSubLoop(
       }
     }
   } catch (err) {
+    // draft-ietf-moq-transport-21 §6.4.2.2:
+    // 購読が終了済み (state が active でない) でセッションが生きている場合、応答方向に
+    // 送るものは無く将来の REQUEST_UPDATE に応答する必要も無いため FIN で閉じる。
+    // 主な経路は PUBLISH_DONE を処理する途中でアプリのコールバックが throw した場合で、
+    // 購読は handleEnd の中で closed になるが (下の通知は active のときだけ行う)、
+    // 応答方向を開いたまま残すと peer が request の完了を判定できない。GOAWAY 分岐と
+    // 同じく、アプリのコールバック例外を理由に後始末を止めない。
+    // ピアの RESET_STREAM、ピア起点のセッション終了、PROTOCOL_VIOLATION は、いずれも
+    // catch の時点で state が active のためここへ入らない。sessionState の判定は、
+    // transport.closed がストリームのエラーより先に処理される順序 (state も closed に
+    // なる) への防御である。unsubscribe 経由は writer を abort 済みで requestStreams からも
+    // 削除されており no-op になる。
+    if (impl.state !== "active" && session.sessionState === "connected") {
+      void bidi.closeRequestStreamWriter(
+        session as unknown as bidi.BidiSessionInternal,
+        publishRequestId,
+      );
+    }
+
     // draft-ietf-moq-transport-21 §9.2:
     // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
     // spurious error 通知を抑止する (namespace ループと同様)

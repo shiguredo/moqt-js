@@ -11,6 +11,10 @@
 
 ## develop
 
+- [FIX] 受信 PUBLISH の応答方向を PUBLISH_DONE / ピア FIN の後に FIN で閉じる
+  - draft-ietf-moq-transport-21 §6.4.2.2 は、その方向に送るものが無く将来の REQUEST_UPDATE に応答する必要も無い場合は FIN を速やかに送る SHOULD を定め、応答側の FIN が要求側のストリーム終端条件になる。受信 PUBLISH の応答方向が開いたまま残るため、publisher は request が完了したと判定できなかった
+  - PUBLISH_DONE の受信後と、PUBLISH_DONE を伴わないピア FIN の受信後に FIN を送る。PUBLISH_DONE の処理中にアプリのコールバックが throw した場合 (購読は終了済みでセッションは生きている) も送る。ピア RESET_STREAM / PROTOCOL_VIOLATION / セッション終了 / unsubscribe の経路では送らない
+  - @voluntas
 - [FIX] SUBSCRIBE_TRACKS の fill 内側の Range Filter も MAX_FILTER_RANGES で検証する
   - draft-ietf-moq-transport-21 §9.1.6 の MAX_FILTER_RANGES は購読単位の Ranges 合計を制限する。SUBSCRIBE_TRACKS の初回送信は購読本体の Range Filter しか数えておらず、fill 内側の Range Filter を載せるとピアが広告した上限を超えるパラメータを送れた (SUBSCRIBE / REQUEST_UPDATE 経路と同じく fill 内側も合算する保守側の扱いに揃える)
   - 検証は双方向ストリームの生成より前に行うため、上限超過時はストリームを開かない
