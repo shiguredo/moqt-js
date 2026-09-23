@@ -31,7 +31,7 @@ devtools の購読側は Catalog が広告する codec をそのまま `VideoDec
 - `reset()` は再初期化したかどうかを `Promise<boolean>` で返し、例外を投げない (`configure` の reject も false として扱う)。上限に達したときと `lastConfig` が無いときは false を返し、Worker もデコーダーも作り直さない
 - error コールバックは同期のため、`reset()` の結果は async IIFE で `await` して見る。false なら status を error にし、statusMessage に理由を出して teardown する (既存の `startSubscribing` の外側の catch と同じ終状態)。停止後に上書きしないよう `signal.aborted` を確認する。`useSubscriber` の `void decoderInstance.reset()` は上限判定の結果を受け取る必要があるため、結果を見る経路へ変える
 - Worker 側で `configure` の非同期 error を待ってから `configured` を返す設計は採らない。WebCodecs に configure 成功の非同期通知は無く、成否は error コールバックでしか分からないため待てない。同期 throw だけを error 応答に変換し、`configured` より前に error を受け取ったら Worker を破棄 (`teardown()`) してから `configure` の Promise を reject する (未解決のまま残さず、`startSubscribing` が wrapper を `instance.decoder` に代入する前に失敗するため後始末は wrapper 側で行う)。Worker のメッセージ種別 (`configured` / `decoded` / `skipped` / `error`) は変えない
-- 対象外は音声デコーダー (error で reset を呼ばない)、`devtools/src/webcodecs-devtools/signals.ts` の経路 (`isConfigSupported` で事前確認済み)、ライブラリ側 (`src/codec/VideoDecoder.ts` の `reset()` と `src/createMediaSubscriber.ts` の同型ループ) とする。ライブラリ側は別 issue で扱う。`decoder.worker.ts` は購読側と共有するため init の変更は `signals.ts` にも届くが、`signals.ts` は error 応答で `decoderError` / `decoderStatus` を更新する経路を既に持つため表示は改善し、後退しない
+- 対象外は音声デコーダー (error で reset を呼ばない)、`devtools/src/webcodecs-devtools/signals.ts` の経路 (`isConfigSupported` で事前確認済み)、ライブラリ側 (`src/codec/VideoDecoder.ts` の `reset()` と `src/createMediaSubscriber.ts` の同型ループ) とする。ライブラリ側は 0677 で扱う。`decoder.worker.ts` は購読側と共有するため init の変更は `signals.ts` にも届くが、`signals.ts` は error 応答で `decoderError` / `decoderStatus` を更新する経路を既に持つため表示は改善し、後退しない
 
 ## 完了条件
 
@@ -50,7 +50,7 @@ devtools の購読側は Catalog が広告する codec をそのまま `VideoDec
 
 - `devtools/src/webcodecs-devtools/signals.ts` (`VideoDecoder.isConfigSupported` で事前確認する既存の例)
 - `tests/e2e/codec-wrappers.spec.ts` (codec-test ページを実 Chromium で駆動する既存テスト)
-- `src/codec/VideoDecoder.ts` / `src/createMediaSubscriber.ts` (同型の欠陥。ライブラリ側は別 issue)
+- `src/codec/VideoDecoder.ts` / `src/createMediaSubscriber.ts` (同型の欠陥。ライブラリ側は 0677)
 
 ## 解決方法
 
