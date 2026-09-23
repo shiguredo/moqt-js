@@ -210,8 +210,25 @@ export class SessionError extends MoqtError {
  * Track Namespace は tuple 形式で保持する。
  */
 export interface RedirectInfo {
+  /**
+   * 新しいセッションの URI
+   *
+   * draft-ietf-moq-transport-21 Section 9.4.1: 空のときは要求側が現在のセッション URI を
+   * 使う SHOULD。
+   */
   connectUri: string;
+  /**
+   * 再試行先の Track Namespace
+   *
+   * track-scoped / namespace-scoped のどちらでも、この値が転送先の Namespace になる。
+   */
   trackNamespace: Uint8Array[];
+  /**
+   * 再試行先の Track Name
+   *
+   * track-scoped のリクエストではこの値で置き換える。namespace-scoped のリクエストでは
+   * 空でなければならない (Section 9.4.1 の MUST)。
+   */
   trackName: Uint8Array;
 }
 
@@ -219,7 +236,24 @@ export interface RedirectInfo {
  * Request error (SUBSCRIBE, PUBLISH, FETCH failed)
  */
 export class RequestError extends MoqtError {
+  /**
+   * 再試行までの最小時間
+   *
+   * draft-ietf-moq-transport-21 Section 9.4.2: 「ミリ秒 + 1」の生値であり、0 は
+   * 「そのままでは再試行しない」を意味する (Section 12.3 により、0 であっても
+   * Redirect の追従は妨げられない)。受信した REQUEST_ERROR ではこのフィールドは必須の
+   * ため、undefined になるのはライブラリがローカルに生成したエラー (GOAWAY による
+   * 保留中の更新の失敗など) だけである。
+   */
   readonly retryInterval: bigint | undefined;
+  /**
+   * Redirect 情報
+   *
+   * draft-ietf-moq-transport-21 Section 9.4.2: Error Code が REDIRECT のときだけ存在する。
+   * ライブラリは値の保持とアプリへの通知のみを行い、再試行や追従は自動では行わない
+   * (Section 12.3 の SHOULD は要求側が新しいセッションを張って再試行することを求めるが、
+   * 再試行の判断はアプリに委ねる)。
+   */
   readonly redirect: RedirectInfo | undefined;
 
   constructor(

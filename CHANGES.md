@@ -11,6 +11,12 @@
 
 ## develop
 
+- [FIX] REQUEST_ERROR の Retry Interval と Redirect をすべての応答経路でアプリへ渡す
+  - draft-ietf-moq-transport-21 §9.4.2 の Retry Interval (ミリ秒 + 1、0 は再試行しない) と Redirect (§12.3 の再試行先) を、SUBSCRIBE / FETCH / TRACK_STATUS の初回応答、確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗)、受信 PUBLISH の REQUEST_ERROR でも `RequestError` に載せるようにした。従来はこれらの経路で捨てており、アプリは再試行の間隔も転送先も知れなかった
+  - PUBLISH_NAMESPACE の初回応答が namespace 系の Redirect の検証 (Track Name は空が MUST) を通っていなかった点と、namespace 系で Reason Phrase が空のときのメッセージが他経路と揃っていなかった点も直した
+  - 受け取った値をアプリへ渡すだけで、自動での再試行や Redirect の追従は行わない (従来どおり。再試行はアプリが `connect()` から行う)
+  - 内部変更: REQUEST_ERROR から `RequestError` を組み立てる処理を共通ヘルパー (`buildRequestErrorFromDecoded` / namespace 系の `decodeRequestErrorToRequestError`) に集約した
+  - @voluntas
 - [FIX] 受信 PUBLISH の応答方向を PUBLISH_DONE / ピア FIN の後に FIN で閉じる
   - draft-ietf-moq-transport-21 §6.4.2.2 は、その方向に送るものが無く将来の REQUEST_UPDATE に応答する必要も無い場合は FIN を速やかに送る SHOULD を定め、応答側の FIN が要求側のストリーム終端条件になる。受信 PUBLISH の応答方向が開いたまま残るため、publisher は request が完了したと判定できなかった
   - PUBLISH_DONE の受信後と、PUBLISH_DONE を伴わないピア FIN の受信後に FIN を送る。PUBLISH_DONE の処理中にアプリのコールバックが throw した場合 (購読は終了済みでセッションは生きている) も送る。ピア RESET_STREAM / PROTOCOL_VIOLATION / セッション終了 / unsubscribe の経路では送らない

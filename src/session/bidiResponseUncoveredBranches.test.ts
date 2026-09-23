@@ -13,7 +13,9 @@ import { MessageType, GroupOrder } from "../message/types";
 import { createTrackNamespace } from "../message";
 import { RequestErrorCode, RequestError } from "../error";
 import { PublisherImpl } from "../publisher";
+import { FetcherImpl } from "../fetcher";
 import {
+  bidiReadFetchResponse,
   bidiReadPublishResponse,
   bidiReadSubscribeResponse,
   bidiReadTrackStatusResponse,
@@ -86,6 +88,164 @@ test("bidiReadPublishResponse: REQUEST_ERROR の retryInterval と redirect が 
 });
 
 /**
+ * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §12.3:
+ * SUBSCRIBE の REQUEST_ERROR でも Retry Interval と Redirect をアプリへ渡す
+ * (応答経路ごとに付け忘れないことを固定する)。
+ */
+test("bidiReadSubscribeResponse: REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingSubscribe.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: subscriber,
+    objectCallback: () => {},
+  });
+
+  const readPromise = bidiReadSubscribeResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "subscribe redirect",
+    retryInterval: 3n,
+    redirect: {
+      connectUri: "moqt://subscribe.example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      trackName: new TextEncoder().encode("video"),
+    },
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejected, RequestError);
+  const requestError = rejected as RequestError;
+  assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+  assert.equal(requestError.retryInterval, 3n);
+  assert.deepEqual(requestError.redirect, {
+    connectUri: "moqt://subscribe.example.com",
+    trackNamespace: [new TextEncoder().encode("live")],
+    trackName: new TextEncoder().encode("video"),
+  });
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §12.3:
+ * FETCH の REQUEST_ERROR でも Retry Interval と Redirect をアプリへ渡す。
+ */
+test("bidiReadFetchResponse: REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingFetch.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: fetcher,
+  });
+
+  const readPromise = bidiReadFetchResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "fetch redirect",
+    retryInterval: 7n,
+    redirect: {
+      connectUri: "moqt://fetch.example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      trackName: new TextEncoder().encode("audio"),
+    },
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejected, RequestError);
+  const requestError = rejected as RequestError;
+  assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+  assert.equal(requestError.retryInterval, 7n);
+  assert.deepEqual(requestError.redirect, {
+    connectUri: "moqt://fetch.example.com",
+    trackNamespace: [new TextEncoder().encode("live")],
+    trackName: new TextEncoder().encode("audio"),
+  });
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
+ * draft-ietf-moq-transport-21 §9.4 / §9.4.2 / §12.3:
+ * TRACK_STATUS の REQUEST_ERROR でも Retry Interval と Redirect をアプリへ渡す。
+ */
+test("bidiReadTrackStatusResponse: REQUEST_ERROR の retryInterval と redirect が RequestError に載る", async () => {
+  const ctx = createOkResponseReadTestContext();
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    // malformed 検出時の cross-cancel 用の比較キー (本テストでは未使用)
+    trackKey: fullTrackNameKey(["test"], "track"),
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    // draft-ietf-moq-transport-21 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    errorCode: BigInt(RequestErrorCode.REDIRECT),
+    reasonPhrase: "track status redirect",
+    retryInterval: 11n,
+    redirect: {
+      connectUri: "moqt://status.example.com",
+      trackNamespace: createTrackNamespace(["live"]),
+      trackName: new TextEncoder().encode("video"),
+    },
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.instanceOf(rejected, RequestError);
+  const requestError = rejected as RequestError;
+  assert.equal(requestError.code, RequestErrorCode.REDIRECT);
+  assert.equal(requestError.retryInterval, 11n);
+  assert.deepEqual(requestError.redirect, {
+    connectUri: "moqt://status.example.com",
+    trackNamespace: [new TextEncoder().encode("live")],
+    trackName: new TextEncoder().encode("video"),
+  });
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+/**
  * draft-ietf-moq-transport-21 §9.4:
  * SUBSCRIBE の REQUEST_ERROR では pending と requestStreams に加えて、
  * 初回 fill の関連付け (fillFetchTargets) も残さない。
@@ -127,6 +287,9 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
 
   assert.instanceOf(rejected, RequestError);
   assert.equal((rejected as RequestError).code, RequestErrorCode.PREFIX_OVERLAP);
+  // REDIRECT 以外のコードでは Retry Interval だけが載り、Redirect は付かない
+  assert.equal((rejected as RequestError).retryInterval, 0n);
+  assert.isUndefined((rejected as RequestError).redirect);
   assert.isUndefined(ctx.getClosedWithError());
   assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));

@@ -76,6 +76,7 @@ export {
   ClosedSubgroupError,
   SessionErrorCode,
   RequestErrorCode,
+  type RedirectInfo,
 } from "./error";
 
 // LOC の再エクスポート (draft-ietf-moq-loc)
