@@ -1,7 +1,7 @@
 # Track Property の VIDEO_CONFIG / AUDIO_CONFIG が初期 configure に反映されず最初の Object が捨てられる
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-media-subscriber-track-property-config
 - Polished: 2026-09-21
 
@@ -48,4 +48,25 @@ draft-ietf-moq-loc-04 Table 1 は VIDEO_CONFIG (0x0D) と AUDIO_CONFIG (0x0F) �
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaSubscriber.ts` の `setupDecoders` は Catalog から決まる codec / 解像度の解決を担うため購読前 configure の構造を維持しつつ、Track Property を参照しないようにした (購読前は `trackProperties` が無く、デッドだった `this.videoSubscriber?.trackProperties` / `this.audioSubscriber?.trackProperties` の参照を削除)
+- `subscribeMediaTracks` の中で media ごとに、購読要求の直前に保留を有効化し、`await session.subscribe(...)` が返った直後 (SUBSCRIBE_OK の trackProperties 取得後) に初期 configure を適用する。1 つの初期化段にまとめないのは、音声の適用が映像の SUBSCRIBE_OK 待ちにならないようにするためである
+  - 適用は既存の `reconfigure*Decoder` を流用する (codec / 解像度 / サンプルレートの解決を再利用し、成功時に `lastApplied*Config` を更新する)
+  - 適用は `try/finally` で行い、例外時も保留分の解放を保証する
+  - 適用に失敗した場合は onError を通知し `lastApplied*Config` は更新しない。`*DecoderConfigured` は `setupDecoders` が設定した true を維持し、後続 Object の reconfigure 経路で再試行する (解放された最初の Object は再構成で捨てられる)
+- 購読確立前後に届く Object を取りこぼさないため、media ごとの保留キュー (`pendingAudioObjects` / `pendingVideoObjects`) を持ち、ハンドラ先頭で保留中なら積んで return、初期 configure 完了後に到着順で処理する。保留の有効化は購読要求の直前 (購読確立前にバッファから配送される Object も積まれる)、解放は `*InitialConfigPending` を先に落としてから到着順に行う
+- `close()` で保留分を破棄し `*DecoderConfigured` を false にして、閉じたデコーダへ decode / configure しないようにした
+- テストは `src/createMediaSubscriber.test.ts` に 6 件追加した (映像 / 音声の配線を `subscribeMediaTracks` の最小 Session 代役で固定、Track Property の config が configure に渡ること、保留 Object が到着順に復号されること、同じ config で再構成しないこと、適用失敗時に onError を通知して後続で再試行すること)
+- `CHANGES.md` の `## develop` 先頭に `[FIX]` を追記した
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (123 files / 2596 tests) が通る
+- 変異テストで、保留の有効化削除 / 購読直後の apply 呼び出し削除 / ハンドラの保留判定削除 / release 削除 / 解放の逆順化 / config 同一判定の削除、のいずれでも対応するテストが失敗することを確認した (映像・音声の両経路、レビュアーは独立に複数種を実施)
+- `setupDecoders` 自体は WebCodecs の実体を必要とするため Node では直接テストできない。テストは private フィールドを注入して機構を検証し、配線は `subscribeMediaTracks` 経由で固定している
+
+## 残した課題
+
+- 保留キューに上限が無い (購読要求から初期 configure 完了までの短い区間に限られ、close で破棄する。区間が伸びる異常時は Object を保持し続けるため、上限が必要になったら catalog 側の `pendingCatalogObjects` と同じ形で導入する)
+- 初期 configure の適用に失敗した場合、保留していた最初の Object は再構成で捨てられる (以降の Object で復号が続く)
+- devtools の購読経路は高レベル API を使わない独自実装であり、Track Property の VIDEO_CONFIG を読まない問題が残る (本 issue の対象外)
+- close 直後に in-flight の reconfigure が完了すると `*DecoderConfigured` が true に戻り得る (worker 経路では世代無効化で reject するため実害は限定的)
