@@ -1,10 +1,10 @@
 import { test, assert } from "vite-plus/test";
-import { LOC, createCatalog, getVideoTracks, type CatalogTrack } from "moqt-js";
+import { LOC, createCatalog, getVideoTracks, type CatalogTrack, type MoqtObject } from "moqt-js";
 import {
+  buildVideoChunkPlan,
   buildVideoDecoderConfig,
   checkAborted,
   closeSubscriberResources,
-  parseLocFrameMetadata,
   resetSubscriberState,
   resetSubscriberStats,
   resolveAudioTrack,
@@ -171,42 +171,70 @@ test("buildVideoDecoderConfig: initRef が解決できないときは descriptio
 // LOC Properties の復号 (受信 Object のメタデータ)
 // ============================================================================
 
+/**
+ * 検証用の受信 Object を作る
+ */
+function makeVideoObject(objectId: bigint, properties?: Uint8Array): MoqtObject {
+  return {
+    groupId: 1n,
+    objectId,
+    status: 0,
+    payload: new Uint8Array([0x01]),
+    ...(properties === undefined ? {} : { properties }),
+  };
+}
+
 // publisher が付与した LOC Properties を購読側が解釈できることを、
 // 送信側 (buildObjectSendPlan) の出力をそのまま入力にして固定する。
 // timestamp が EncodedVideoChunk に、I ビットがキーフレーム判定に伝わる。
-test("parseLocFrameMetadata: publisher が付与した Properties からキーフレームと timestamp を取り出す", () => {
+// VIDEO_FRAME_MARKING がある場合はそれを優先する (Group 先頭の Object ID 0 でも
+// isIndependent が delta と言えば delta)。逆方向 (Object ID が 0 以外かつ
+// isIndependent が true) はライブラリ側のテストで固定する。
+test("buildVideoChunkPlan: publisher が付与した Properties から chunk の type と timestamp を決める", () => {
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     { data: new Uint8Array([0x01]), type: "key", timestamp: 33_333, duration: 33_333 },
   );
-  assert.deepEqual(parseLocFrameMetadata(keyPlan.properties), {
-    isKeyFrame: true,
-    timestamp: 33_333,
-  });
+  assert.deepEqual(
+    buildVideoChunkPlan(makeVideoObject(BigInt(keyPlan.objectId), keyPlan.properties)),
+    { type: "key", timestamp: 33_333 },
+  );
 
+  // Group 先頭 (Object ID 0) でも Frame Marking が delta と言えば delta
   const deltaPlan = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },
     { data: new Uint8Array([0x02]), type: "delta", timestamp: 66_666, duration: 33_333 },
   );
-  assert.deepEqual(parseLocFrameMetadata(deltaPlan.properties), {
-    isKeyFrame: false,
-    timestamp: 66_666,
+  assert.deepEqual(
+    buildVideoChunkPlan(makeVideoObject(BigInt(deltaPlan.objectId), deltaPlan.properties)),
+    { type: "delta", timestamp: 66_666 },
+  );
+});
+
+// draft-ietf-moq-loc-04 §2.3.2.2 / §2.2:
+// LOC の拡張 (VIDEO_FRAME_MARKING) は任意であるため、無い場合は Group 先頭
+// (Object ID 0) をキーフレームとして扱う。それ以外はデルタ。
+test("buildVideoChunkPlan: Properties が無い / 空の Object は Object ID 0 を key にする", () => {
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n)), { type: "key", timestamp: 0 });
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n, new Uint8Array())), {
+    type: "key",
+    timestamp: 0,
   });
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n)), { type: "delta", timestamp: 0 });
 });
 
-// LOC の拡張は任意であるため、Properties が無い / 空の Object は
-// 非キーフレーム・timestamp 0 として扱う (復号を止めない)。
-test("parseLocFrameMetadata: Properties が無い / 空の Object はデルタ扱いにする", () => {
-  assert.deepEqual(parseLocFrameMetadata(undefined), { isKeyFrame: false, timestamp: 0 });
-  assert.deepEqual(parseLocFrameMetadata(new Uint8Array()), { isKeyFrame: false, timestamp: 0 });
-});
-
-// TIMESTAMP だけを持つ Object は非キーフレームとして扱う
-// (Frame Marking が無い = キーフレームの主張が無い)。
-test("parseLocFrameMetadata: TIMESTAMP だけの Object は非キーフレームにする", () => {
+// TIMESTAMP だけを持つ Object も同じ規則で判定し、timestamp は Properties から取る
+test("buildVideoChunkPlan: TIMESTAMP だけの Object は Object ID で type を判定する", () => {
   const properties = LOC.encodeVideoProperties({ timestamp: 1_000n });
 
-  assert.deepEqual(parseLocFrameMetadata(properties), { isKeyFrame: false, timestamp: 1_000 });
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(0n, properties)), {
+    type: "key",
+    timestamp: 1_000,
+  });
+  assert.deepEqual(buildVideoChunkPlan(makeVideoObject(1n, properties)), {
+    type: "delta",
+    timestamp: 1_000,
+  });
 });
 
 // ============================================================================

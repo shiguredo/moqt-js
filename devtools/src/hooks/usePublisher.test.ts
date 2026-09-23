@@ -244,8 +244,9 @@ test("buildObjectSendPlan: キーフレームは優先度 0、デルタフレー
 // LOC Properties (draft-ietf-moq-loc-04 §2.3.2)
 // ============================================================================
 
-// 購読側は TIMESTAMP を EncodedVideoChunk の timestamp に、VIDEO_FRAME_MARKING の
-// I ビットをキーフレーム判定に使う。送信した Properties がそのまま読み戻せることを固定する。
+// 購読側は TIMESTAMP を EncodedVideoChunk の timestamp に、VIDEO_FRAME_MARKING が
+// あればその I ビットを、無ければ Group 先頭 (Object ID 0) をキーフレーム判定に使う。
+// 送信した Properties がそのまま読み戻せることを固定する。
 test("buildObjectSendPlan: LOC Properties に timestamp とキーフレーム判定を載せる", () => {
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },

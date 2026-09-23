@@ -209,13 +209,13 @@ interface MediaSubscriberCallbacks {
 
 ### メソッド
 
-| メソッド                           | 説明                                      |
-| ---------------------------------- | ----------------------------------------- |
-| `start(): Promise<void>`           | 購読開始                                  |
-| `stop(): Promise<void>`            | 購読停止                                  |
-| `requestKeyframe(): Promise<void>` | キーフレーム要求（SUBSCRIBE_UPDATE 送信） |
-| `close(): Promise<void>`           | リソース解放                              |
-| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                      |
+| メソッド                           | 説明                                    |
+| ---------------------------------- | --------------------------------------- |
+| `start(): Promise<void>`           | 購読開始                                |
+| `stop(): Promise<void>`            | 購読停止                                |
+| `requestKeyframe(): Promise<void>` | キーフレーム要求（REQUEST_UPDATE 送信） |
+| `close(): Promise<void>`           | リソース解放                            |
+| `getStats(): MediaReceiverStats`   | 受信側の統計情報取得                    |
 
 ### プロパティ
 
@@ -447,6 +447,8 @@ MOQT Subscriber (video) ─► VideoDecoder ─► MediaStreamTrackGenerator ─
   - 単一レイヤー前提のため `temporalLayerId` / `spatialLayerId` は 0 固定
   - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダがワイヤ上 B=0 に抑圧する
   - `isDiscardable` は WebCodecs が破棄可能性情報を提供しないため false 固定
+  - 受信側は、この Property が無い Object では Group 先頭 (Object ID 0) をキーフレームとして扱う
+  - Object ID 0 が Group 先頭であることは draft-ietf-moq-msf-01 §6.2、同一 GOP のサンプルが同一 Group に置かれることは同 §4.1 が MUST で定める。Group 先頭が IDR であることは draft-ietf-moq-loc-04 §4.2 (Examples) に依拠する
 - `VIDEO_CONFIG` / `AUDIO_CONFIG`: エンコーダの metadata が返す description (映像は SPS/PPS などの extradata、音声は AAC の AudioSpecificConfig)
   - 受信側はこれを `VideoDecoder.configure` / `AudioDecoder.configure` の `description` に使う (draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1)
 

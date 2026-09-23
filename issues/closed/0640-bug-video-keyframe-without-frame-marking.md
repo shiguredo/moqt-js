@@ -1,7 +1,7 @@
 # VIDEO_FRAME_MARKING が無い Object をキーフレームとして扱えず映像を復号できない
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-video-keyframe-without-frame-marking
 - Polished: 2026-09-21
 
@@ -39,4 +39,26 @@ Video Frame Marking は LOC の任意 Property であり、MSF も要求して�
 
 ## 解決方法
 
-{未着手}
+- `src/createMediaSubscriber.ts` に純関数 `isVideoKeyFrameObject(objectId, frameMarking)` を切り出し、`handleVideoObject` がこれを使ってキーフレーム判定するようにした
+  - frameMarking がある場合は従来どおり `isIndependent` を優先する
+  - frameMarking が無い場合は Group 先頭の Object ID 0 をキーフレームとする。Object ID 0 が Group の先頭 Object であることは draft-ietf-moq-msf-01 §6.2 が MUST で定め、同 §4.1 は同一 GOP のサンプルを同一 Group に置くことを MUST で定める。Group 先頭が IDR であることは draft-ietf-moq-loc-04 §4.2 の例 (Examples。規範要求ではない) に依拠する
+- 設計方針との差: `groupId` は判定に使わないため引数に取らない。Object ID 0 が Group 内で Group 先頭を一意に表す (draft-ietf-moq-msf-01 §6.2) ため、groupId を受け取っても判定材料にならない
+- 判定結果は `videoStats.keyFramesReceived` と `VideoDecoderWrapper.decode` の `"key" | "delta"` に伝わる (decoder 側は変更していない)
+- `docs/HIGH_LEVEL_API.md` の LOC Properties 節に受信側の規則を追記した
+- moqt-devtools は `parseLocFrameMetadata(objectId, properties)` を、受信 Object から chunk の type と timestamp を決める `buildVideoChunkPlan(obj)` に置き換え、ライブラリの `isVideoKeyFrameObject` を呼ぶ形で同じ規則を共有した (規則の二重実装をしない)
+- テストは、純関数 (`isVideoKeyFrameObject`)、配線 (`handleVideoObject` を注入した VideoDecoderWrapper で駆動し、decode の type と `getStats().video` を固定)、devtools (`buildVideoChunkPlan` に MoqtObject を渡して type と timestamp を固定) の 3 層で追加した
+- `CHANGES.md` の `## develop` 先頭に `[FIX]` を追記した
+
+### 検証
+
+- `npx vp check` / `npx vp test --run` (122 files / 2515 tests) が通る
+- 変異テストで、判定を旧挙動に戻す / frameMarking 優先を逆にする / Object ID 0 判定を 1n にする / frameMarking を無視する / chunk の type を常に delta にする / devtools で objectId を 0n 固定にする / 統計の計上を外す、のいずれでも対応するテストが失敗することを確認した
+- frameMarking を載せない Object 列は subgroup と datagram の両経路から同じ `handleVideoObject` に届く (fetch は catalog 専用)。机上確認の範囲で経路差は無い
+
+## 残した課題
+
+- `status !== ObjectStatus.NORMAL` の Object (END_OF_GROUP など、payload は空) も `handleVideoObject` に届き、判定・統計・デコードの対象になる。変更前は delta として渡っていたため `needsKeyframe` 中はスキップされていたが、今回の修正で Object ID 0 の非 NORMAL Object は key として VideoDecoder に渡るようになる。受信側が NORMAL 以外の Object を復号・統計に含める問題は映像・音声・統計に跨る既存の問題であり、別途扱う
+- devtools の `handleObject` 内の `keyFramesDecoded` の計上と `buildVideoChunkPlan(obj)` の呼び出し 1 行は、ブラウザ API 依存のため node のテストで駆動できない。受信経路の E2E で扱う
+- `handleVideoObject` の decoder 未構成ガード (`videoDecoderConfigured` が false なら捨てる) は既存契約であり、今回のテストでも前提として固定していない
+- 実 relay での復号完走 (frameMarking を載せない publisher との結合) は本 issue の完了条件どおり確認していない
+- Group 先頭以外にも IDR を置く publisher (1 Group に複数 GOP) では、その IDR はデルタ扱いになる。復号は継続するため実害は小さい
