@@ -13,7 +13,7 @@
 
 - `src/session/bidi.prop.ts` の 26 テストは `validateNoDuplicateGoawayOnRequestStream` / `restoreIncomingRequestUpdateCount` / `clearPriorGapTrackingIfUnused` などの純関数だけを対象にしている
 - 同ファイル冒頭のコメントは `bidiReadRequestStreamMessages` などの非同期 I/O を「性質がストリームの読み書き順序と pending の解決タイミングに依存し、fc.property の同期評価に載せられない」として対象外としている
-- しかし `src/session/namespaceLoops.prop.ts` と `src/session/stream.prop.ts` には `fc.asyncProperty` で受信ループを駆動し「メッセージ列のチャンク分割を変えても結果が変わらない」ことを検証する PBT がある。同じ粒度の検査が `src/session/bidi.ts` の `bidiReadRequestStreamMessages` には無い
+- しかし `src/session/namespaceLoops.prop.ts` には `fc.asyncProperty` で受信ループを駆動し「メッセージ列のチャンク分割を変えても結果が変わらない」ことを検証する PBT がある。`src/session/stream.prop.ts` の PBT は `fc.property` の同期評価のみで、受信ループを駆動していない。同じ粒度の検査が `src/session/bidi.ts` の `bidiReadRequestStreamMessages` には無い
 - `bidiReadRequestStreamMessages` は `role: BidiRequestStreamRole` ("publish" / "subscribe" / "fetch") と `initialMessages` を受け取り、`bidiProcessRequestStreamMessages` がメッセージ種ごとにロール分岐する。読み取り失敗 (RESET など) は `handleRequestStreamReadError` へ委譲する
 
 ## 設計方針
