@@ -66,6 +66,15 @@ interface AudioPlayback {
 const MAX_CANVAS_WIDTH = 1280;
 
 /**
+ * 表示待ちフレームのキューの上限 (枚)
+ *
+ * 到着のゆらぎを吸収するために数枚まで保持する。上限を超えた分は古い方から捨てる
+ * (配信 fps が表示 fps を超える場合と cache replay の追い上げ中は、常に最新側へ
+ * 追いつく)。
+ */
+const MAX_PENDING_FRAMES = 3;
+
+/**
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
  * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の Initialization Data
  * (Base64) から復元する。
@@ -329,7 +338,7 @@ export function useSubscriber(
   // startSubscribing の中断検知用 AbortController (レンダリング間で安定参照)
   const abortControllerRef = useRef<AbortController | null>(null);
   // 表示待ちのフレームと予約した描画 (presentFrame / clearPendingFrame が使う)
-  const pendingFrameRef = useRef<VideoFrame | null>(null);
+  const pendingFramesRef = useRef<VideoFrame[]>([]);
   const frameAnimationRef = useRef<number | null>(null);
 
   /**
@@ -656,7 +665,7 @@ export function useSubscriber(
   }
 
   /**
-   * 復号済みフレームを 1 枚だけ保持し、次の描画周期で表示する
+   * 復号済みフレームを小さなキューへ積み、次の描画周期で 1 枚ずつ表示する
    *
    * 表示は requestAnimationFrame で 1 周期に 1 枚に絞る。これをしないと 2 つの
    * 問題が起きる。
@@ -665,21 +674,24 @@ export function useSubscriber(
    * - cache replay の追い上げ中は復号が表示より速いため、すべて描画すると早送りに
    *   見える
    *
-   * 常に最新の 1 枚だけを表示し、それより古いフレームは復号済みのまま破棄する。
+   * キューは `MAX_PENDING_FRAMES` 枚まで保持し、あふれた分は古い方から捨てる。到着が
+   * 少しゆらいでも (実回線では 20 ms に 2 から 3 Object がまとまって届くことがある)
+   * 表示周期ごとに 1 枚ずつ出せるため、フレームが落ちない。配信 fps が表示 fps を
+   * 超える場合と追い上げ中はキューがあふれ続け、常に古いフレームを捨てて最新側へ
+   * 追いつく。
    */
   const presentFrame = (frame: VideoFrame): void => {
-    const previous = pendingFrameRef.current;
-    pendingFrameRef.current = frame;
-    if (previous) {
-      previous.close();
+    const pending = pendingFramesRef.current;
+    pending.push(frame);
+    while (pending.length > MAX_PENDING_FRAMES) {
+      pending.shift()?.close();
     }
     if (frameAnimationRef.current !== null) {
       return;
     }
     frameAnimationRef.current = requestAnimationFrame(() => {
       frameAnimationRef.current = null;
-      const next = pendingFrameRef.current;
-      pendingFrameRef.current = null;
+      const next = pendingFramesRef.current.shift();
       if (next) {
         drawFrame(next);
       }
@@ -692,11 +704,10 @@ export function useSubscriber(
       cancelAnimationFrame(frameAnimationRef.current);
       frameAnimationRef.current = null;
     }
-    const pending = pendingFrameRef.current;
-    pendingFrameRef.current = null;
-    if (pending) {
-      pending.close();
+    for (const frame of pendingFramesRef.current) {
+      frame.close();
     }
+    pendingFramesRef.current = [];
   };
 
   const drawFrame = (frame: VideoFrame): void => {
