@@ -2,7 +2,7 @@
 
 - Created: 2026-09-24
 - Completed: {YYYY-MM-DD}
-- Branch: feature/bug-cancel-stream-quiet-error-code
+- Branch: feature/fix-cancel-stream-quiet-error-code
 - Polished: 2026-09-24
 
 ## 目的
