@@ -861,6 +861,47 @@ export async function dataStreamHandleMalformedSubgroupTrack(
  * subscriber 登録後は累積 chunks を flush して通常 mode に合流する。
  * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
  */
+/**
+ * pending mode の Subgroup ストリームが読み取りエラーで終わったときの後始末
+ *
+ * ピアの RESET_STREAM 以外 (セッション終了など) は呼び出し元へ投げ直す。
+ *
+ * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams): 送信側は Subgroup の
+ * 残りを配らずに閉じるとき MUST で RESET_STREAM する。購読が未登録の間は Object を
+ * decode しておらず配る相手も居ないため、溜めた chunk を捨ててこの stream の処理を
+ * 終える (セッションは閉じない)。この仕様はドラフトであり将来変更されうる。
+ */
+async function dataStreamHandlePendingSubgroupReadError(
+  session: DataStreamSessionInternal,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  header: SubgroupHeader,
+  entry: ReturnType<PendingSubgroupBuffer["add"]>,
+  error: unknown,
+): Promise<void> {
+  if (!isPeerStreamError(error)) {
+    throw error;
+  }
+  entry.notify("end-of-stream");
+  session.pendingSubgroupBuffer.remove(entry);
+  await cancelStreamQuiet(reader, `pending subgroup reset: trackAlias=${header.trackAlias}`);
+}
+
+/**
+ * Subgroup ストリームの読み取りがエラーで終わったときの判定
+ *
+ * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams): 送信側は Subgroup の
+ * 残りを配らずに閉じるとき MUST で RESET_STREAM する。受信済みの Object は配信済みで
+ * あり、続きは別の Subgroup / Group の stream で届く。セッションは閉じず、途中まで
+ * 受けた Object の残りバイトだけを捨ててこの stream の処理を終える (未完成 Object で
+ * FIN されたときの PROTOCOL_VIOLATION とは異なる)。この仕様はドラフトであり将来
+ * 変更されうる。ピア起因でないエラーは呼び出し元へ投げ直す。
+ */
+function dataStreamHandleSubgroupReadError(error: unknown): void {
+  if (!isPeerStreamError(error)) {
+    throw error;
+  }
+}
+
 export async function dataStreamHandleSubgroupStream(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -892,9 +933,23 @@ export async function dataStreamHandleSubgroupStream(
       while (subscribers.length === 0) {
         pendingRead ??= reader.read();
         const event = await Promise.race([
-          pendingRead.then((result) => ({ kind: "chunk" as const, result })),
+          pendingRead.then(
+            (result) => ({ kind: "chunk" as const, result }),
+            (error: unknown) => ({ kind: "read-error" as const, error }),
+          ),
           entry.notified.then((reason) => ({ kind: "notify" as const, reason })),
         ]);
+
+        if (event.kind === "read-error") {
+          await dataStreamHandlePendingSubgroupReadError(
+            session,
+            reader,
+            header,
+            entry,
+            event.error,
+          );
+          return;
+        }
 
         if (event.kind === "chunk") {
           pendingRead = null;
@@ -1049,11 +1104,17 @@ export async function dataStreamHandleSubgroupStream(
       }
 
       let result: ReadableStreamReadResult<Uint8Array>;
-      if (pendingRead !== null) {
-        result = await pendingRead;
-        pendingRead = null;
-      } else {
-        result = await reader.read();
+      try {
+        if (pendingRead !== null) {
+          result = await pendingRead;
+          pendingRead = null;
+        } else {
+          result = await reader.read();
+        }
+      } catch (err) {
+        dataStreamHandleSubgroupReadError(err);
+        // ピアの RESET_STREAM。配信済みの Object を保ち、この stream だけを終える
+        return;
       }
 
       if (result.value && result.value.byteLength > 0) {

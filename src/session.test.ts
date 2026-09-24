@@ -5752,6 +5752,95 @@ test("Subgroup データストリーム: ヘッダーのみの FIN はセッシ�
 });
 
 /**
+ * draft-ietf-moq-transport-21 §11.3.2 (Closing Subgroup Streams):
+ * 送信側は Subgroup の残りを配らずに閉じるとき MUST で RESET_STREAM する。
+ * 受信側は配信済みの Object を保ち、セッションを閉じずにこの stream だけを
+ * 終えること (続きは別の Subgroup / Group の stream で届く)。
+ */
+test("Subgroup データストリーム: ピアの RESET_STREAM ではセッションを閉じず配信済み Object を保つ", async () => {
+  const ctx = createDataStreamFinContext();
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    received.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  await Promise.resolve();
+
+  // 完成した Object を 1 つ配信してから RESET_STREAM で閉じる
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  await yieldToMacrotask();
+  assert.equal(received.length, 1);
+
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await handlePromise;
+
+  assert.equal(received.length, 1);
+  assert.deepEqual(received[0]!.payload, parts.payload);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.3.2:
+ * Object の途中で RESET_STREAM された場合も、その Object は配らずに残りバイトを
+ * 捨て、セッションは閉じない (未完成 Object の途中で FIN されたときの
+ * PROTOCOL_VIOLATION とは異なる)。
+ */
+test("Subgroup データストリーム: Object 途中の RESET_STREAM は残りを捨ててセッションを閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const received: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    received.push(object);
+  });
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  await Promise.resolve();
+
+  ctx.enqueue(parts.headerBytes);
+  await yieldToMacrotask();
+  // Object の field の途中まで送ってから RESET_STREAM で閉じる
+  ctx.enqueue(parts.fieldsBytes.slice(0, 3));
+  await yieldToMacrotask();
+
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await handlePromise;
+
+  assert.equal(received.length, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.3.2:
+ * 購読が未登録 (pending mode) の Subgroup ストリームが RESET_STREAM されても
+ * abandon し、セッションは閉じない。
+ */
+test("Subgroup pending mode: RESET_STREAM で abandon しセッションを閉じない", async () => {
+  const ctx = createDataStreamFinContext();
+  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  await Promise.resolve();
+
+  ctx.enqueue(parts.headerBytes);
+  await yieldToMacrotask();
+
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await handlePromise;
+
+  // pending entry は削除され、セッションは閉じない
+  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+});
+
+/**
  * draft-ietf-moq-transport-21 §11.3.1 / §11.3.2:
  * pending mode (subscribers 未登録) でヘッダーのみの Subgroup ストリームが
  * FIN すると、その場で abandon して handleIncomingStream が解決する。
