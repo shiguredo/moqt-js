@@ -1,7 +1,7 @@
 # moqt-devtools の jitter buffer が配信 fps と表示周期が近いとき表示時刻を過ぎた 2 枚の古い方を捨て、表示が飛ぶ
 
 - Created: 2026-09-25
-- Completed: 2026-09-25
+- Completed: {YYYY-MM-DD}
 - Branch: feature/fix-jitter-buffer-drops-at-display-rate
 - Polished: {YYYY-MM-DD}
 
@@ -54,3 +54,9 @@ moqt-devtools の subscriber の jitter buffer (`devtools/src/utils/playoutBuffe
 - 120 fps の修正後の有効をもう 1 回測ったが、測定中に relay が再配備されて配信が止まったため除いた
 - 120 fps では、表示間隔の p95 は無効と同じになり、捨てた数は 368 から 56 に減った。止まりの回数は無効より 3 から 4 割多い。再生遅延は揺らぎの p95 に合わせるため 5% 程度のフレームは表示時刻の後に届き、120 fps ではそのたびに 1 周期空く (1 周期は 8.3 ms)。完了条件の「無効と同程度以下」は満たしていない
 - 30 fps では有効にすると止まりが半分になる
+
+## reopened にした理由
+
+完了条件の「配備した devtools で、120 fps の配信の止まりと捨てた数が jitter buffer 無効と同程度以下になることを確かめる」を満たさないまま closed にしていた。解決方法の表のとおり、120 fps では修正後も jitter buffer 有効の止まりが 227 回 / 4266 ms で、無効 (162 回 / 3410 ms、180 回 / 3845 ms) より 3 から 4 割多い。
+
+解決方法の分析では、再生遅延を到着の揺らぎの p95 に合わせているため約 5% のフレームが表示時刻の後に届き、120 fps ではそのたびに 1 周期 (8.3 ms) 空く。表示時刻を過ぎた 2 枚の古い方を捨てる件は直ったが、jitter buffer を有効にすると 120 fps で無効より止まりが増える状態が残っている。jitter buffer は既定で有効なので、120 fps の配信を devtools で確かめると、無効のときより表示が止まる。
