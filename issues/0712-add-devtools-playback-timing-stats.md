@@ -1,7 +1,7 @@
 # moqt-devtools の subscriber に受信から表示までの時間の統計が無く、映像のかくつきの原因を切り分けられない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/add-devtools-playback-timing-stats
 - Polished: {YYYY-MM-DD}
 
@@ -38,3 +38,28 @@ devtools の subscriber は受信・復号・表示の累積カウンタしか�
 - `SubscriberPanel` / `DebugPanel` / `window.moqtDevTools.getSubscribers()` に統計が出る
 - 配備した devtools で `getSubscribers()` に統計が出ることを確かめる
 - `vp check` と全テストが通る
+
+## 解決方法
+
+- `devtools/src/utils/playbackTimingStats.ts` を足した。`PlaybackTimingStats` は到着 (`recordArrival`)、復号の開始と出力 (`recordDecodeStart` / `recordDecodeOutput`、timestamp で対応づける)、表示 (`recordDisplay`)、表示キューのあふれ (`recordQueueDrop`) を時刻つきで記録し、`snapshot` で直近 10 秒の分布 (nearest-rank 法の p50 / p95 / max) と累積の値を返す。時刻は引数で受け、ブラウザ API に依存しない
+  - `arrivalJitterMs`: 到着時刻 - LOC TIMESTAMP の、窓の中の最小値からの差
+  - `latencyMs`: 受信側の壁時計 - 送信側の壁時計の LOC TIMESTAMP (Timescale の無い TIMESTAMP だけ)
+  - `decodeTimeMs`: decoder に渡してから出力されるまで
+  - `displayIntervalMs` / `displayFps` (直近 1 秒)
+  - `displayStalls` / `displayStallMs`: 表示間隔がフレーム間隔 (描いたフレームのメディア時刻の差の中央値) の 1.5 倍を超えた回数とその表示間隔の合計 (累積)
+  - `displayQueueDrops`: 表示キューがあふれて捨てたフレーム数 (累積)
+- `buildVideoChunkPlan` は TIMESTAMP の種類 (`timestampKind`: `wallClock` / `mediaTime` / `none`) を返し、`wallClock` のときだけ遅延を求める
+- `useSubscriber` の `handleObject` (到着と復号の開始)、decoder の出力、`presentFrame` のあふれ、`drawFrame` で記録する。購読の開始で初期化して 500 ms ごとに `SubscriberInstance.playbackTiming` へ反映し、停止で記録を止める (signal には最後の値を残し、次の購読の開始で初期化する)
+- `SubscriberPanel` に Playback Timing の欄 (`data-testid` つき)、`DebugPanel` の統計のテキストに Playback Timing を足し、`window.moqtDevTools.getSubscribers()` の `playbackTiming` に出す
+- テスト: 百分位の定義・到着の揺らぎと遅延・窓の外の値を含めないこと・復号時間の対応づけ・止まりの判定・表示 fps・リセット (`playbackTimingStats.test.ts`)、窓の中の値だけから求めること・時計のずれに依らないこと・累積の値が減らないこと・フレーム間隔どおりなら止まりが 0 であること (`playbackTimingStats.prop.ts`)、`timestampKind` (`useSubscriber.test.ts`)、`resetSubscriberStats` と `buildSubscriberStats` (`useSubscriber.test.ts` / `testApi.test.ts`)
+- `vp check` と全テスト (129 ファイル / 2648 件)、devtools の Playwright E2E (`devtools-audio-meter.spec.ts` / `devtools-audio.spec.ts`) が通った
+
+配備した devtools (配備 relay、1280x720 / 30 fps / 2 Mbps、同じマシンの publisher と subscriber、購読開始から約 24 秒) で `getSubscribers()` に次の値が出た。
+
+- `latencyMs`: p50 35.3 / p95 76.6 / max 205.5 ms (同じマシンのため時計のずれは無い。映像の TIMESTAMP を壁時計で送るようにした後の値)
+- `arrivalJitterMs`: p50 10.9 / p95 52.3 / max 181.2 ms
+- `decodeTimeMs`: p50 1.9 / p95 2.5 / max 3.5 ms
+- `displayIntervalMs`: p50 33.3 / p95 49.9 / max 200.1 ms、`displayFps` 30
+- `displayStalls` 38 回、`displayStallMs` 2509 ms、`displayQueueDrops` 0
+
+復号時間と表示キューは原因ではなく、表示の止まりは到着の揺らぎに由来する。表示をメディア時刻に合わせて揺らぎを吸収する (jitter buffer) 対応は本 issue の範囲外である。
