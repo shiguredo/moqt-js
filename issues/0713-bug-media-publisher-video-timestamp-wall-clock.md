@@ -1,7 +1,7 @@
 # createMediaPublisher が映像の LOC TIMESTAMP を timeOrigin と VideoFrame の timestamp の和で求め、カメラや canvas の映像では壁時計にならない
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-media-publisher-video-timestamp-wall-clock
 - Polished: {YYYY-MM-DD}
 
@@ -31,3 +31,12 @@ Chromium で MediaStreamTrackProcessor から読んだ最初のフレームの t
 
 - 映像の TIMESTAMP が、最初のフレームを読んだときの壁時計にフレームの timestamp の差を足した値になることをテストで固定する (取得元の基準が 0 / 大きな値のどちらでも)
 - `vp check` と全テストが通る
+
+## 解決方法
+
+- 換算を `src/mediaClock.ts` に置いた。`createWallClockAnchor(mediaMicros, wallClockMillis)` で最初に読んだフレームの timestamp とそのときの壁時計 (Unix epoch マイクロ秒に丸める) の対応を作り、`toWallClockMicroseconds(mediaMicros, anchor)` で対応の壁時計に timestamp の差を足して換算する。Unix epoch より前 (負) にはしない。公開 API には出さない
+- `createMediaPublisher` は `processVideoFrames` で最初に読んだフレームから対応 (`videoClockAnchor`) をとり、`handleVideoEncodedChunk` が映像の TIMESTAMP をこの対応で換算する。フレームの取得元を作るときに対応を消す
+- 音声は AudioData の timestamp が `performance.now()` 基準のため、従来どおり `LOC.toUnixEpochMicroseconds` で換算する。`toUnixEpochMicroseconds` のコメントの前提を実態に合わせた
+- moqt-devtools の publisher が同じ換算を `devtools/src/utils/wallClock.ts` に持っていたため、ライブラリの `src/mediaClock.ts` を使うようにして devtools の実装とテストを消した (同じ規則を二重に持たない)
+- テスト: 最初のフレームで対応をとり 2 枚目では変えないこと (`processVideoFrames`)、TIMESTAMP を対応から換算し Timescale を載せないこと (`handleVideoEncodedChunk`)、換算の境界値と PBT (`src/mediaClock.test.ts` / `src/mediaClock.prop.ts`)
+- `vp check` と全テスト (129 ファイル / 2650 件) が通った
