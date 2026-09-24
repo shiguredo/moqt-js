@@ -1,7 +1,7 @@
 # moqt-devtools の subscriber が Timescale のある映像の TIMESTAMP をマイクロ秒に換算せずに使う
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-video-timescale
 - Polished: {YYYY-MM-DD}
 
@@ -27,3 +27,9 @@ draft-ietf-moq-loc-04 Section 2.3.1.2 は、Timescale があるとき TIMESTAMP 
 - Timescale 90000 の TIMESTAMP がマイクロ秒に換算されることを単体テストで固定する
 - Timescale の無い TIMESTAMP はそのまま使うことを単体テストで固定する
 - `vp check` と全テストが通る
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` の `buildVideoChunkPlan` が timestamp を `LOC.toDecoderMicroseconds(timestamp, timescale)` で換算するようにした。Timescale が無ければ値をそのまま使う (音声とライブラリの `createMediaSubscriber` と同じ)
+- テスト: Timescale 90000 の TIMESTAMP 3003 が 33366 マイクロ秒になること、Timescale の無い TIMESTAMP はそのまま使うこと (既存テスト) を `useSubscriber.test.ts` で固定した
+- `vp check` と全テスト (129 ファイル / 2651 件) が通った
