@@ -39,11 +39,7 @@ import {
 import { addLog } from "../components/DebugPanel";
 import { logDebugMessage } from "./debugMessageLog";
 import { EncoderWrapper, type EncodedChunkData } from "../utils/EncoderWrapper";
-import {
-  createWallClockAnchor,
-  toWallClockMicroseconds,
-  type WallClockAnchor,
-} from "../../../src/mediaClock.ts";
+import { WallClockMapper } from "../../../src/mediaClock.ts";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
@@ -213,8 +209,9 @@ export interface ObjectSendPlan {
  * LOC Properties (draft-ietf-moq-loc-04 §2.3.2):
  * TIMESTAMP と VIDEO_FRAME_MARKING を載せる。TIMESTAMP は Timescale を載せないため
  * Unix epoch のマイクロ秒 (壁時計) である (§2.3.1.1)。VideoFrame の timestamp は
- * 取得元ごとに基準が異なるため、最初に読んだフレームとの対応 (`anchor`) から
- * 壁時計に換算する (ライブラリの src/mediaClock.ts)。isDiscardable は WebCodecs が
+ * 取得元ごとに基準が異なるため、呼び出し側が読んだフレームとの対応から壁時計に
+ * 換算した値 (`wallClockMicros`、ライブラリの src/mediaClock.ts の WallClockMapper) を
+ * そのまま載せる。isDiscardable は WebCodecs が
  * 破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の「the sender knows」を
  * 守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして残すが、
  * temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される。
@@ -223,12 +220,12 @@ export interface ObjectSendPlan {
  *
  * @param location - 直前の Object の次の位置 (Group ID と Object ID)
  * @param chunk - エンコード済み chunk
- * @param anchor - 最初に読んだフレームの timestamp と、そのときの壁時計の対応
+ * @param wallClockMicros - chunk の timestamp を壁時計 (Unix epoch マイクロ秒) に換算した値
  */
 export function buildObjectSendPlan(
   location: { groupId: number; objectId: number },
   chunk: EncodedChunkData,
-  anchor: WallClockAnchor,
+  wallClockMicros: bigint,
 ): ObjectSendPlan {
   const isKeyFrame = chunk.type === "key";
   const groupId = isKeyFrame ? location.groupId + 1 : location.groupId;
@@ -238,7 +235,7 @@ export function buildObjectSendPlan(
   const payload = chunk.data;
 
   const properties = LOC.encodeVideoProperties({
-    timestamp: toWallClockMicroseconds(chunk.timestamp, anchor),
+    timestamp: wallClockMicros,
     frameMarking: {
       isIndependent: isKeyFrame,
       isDiscardable: false,
@@ -494,9 +491,9 @@ export function usePublisher() {
           break;
         }
 
-        // 最初に読んだフレームの timestamp と壁時計の対応をとる。フレームは取得の
-        // 直後に読むため、この時点の壁時計を取得時刻とみなす
-        pub.videoClockAnchor.value ??= createWallClockAnchor(
+        // 読んだフレームの timestamp とそのときの壁時計を記録する。撮ってから読むまでの
+        // 遅れが最も小さいフレームに合わせて換算する (WallClockMapper)
+        pub.videoWallClock.value.observe(
           frame.timestamp,
           performance.timeOrigin + performance.now(),
         );
@@ -521,19 +518,18 @@ export function usePublisher() {
 
     pub.chunksEncoded.value++;
 
-    // フレームを読んだ時点で対応をとるため、ここで無いことは無い。念のため、無ければ
-    // この chunk を読んだ時点とみなして対応をとる
-    pub.videoClockAnchor.value ??= createWallClockAnchor(
+    // フレームを読んだ時点で記録するため、ここで記録が無いことは無い。念のため、無ければ
+    // この chunk を読んだ時点とみなす
+    const wallClockMicros = pub.videoWallClock.value.toWallClockMicroseconds(
       chunk.timestamp,
       performance.timeOrigin + performance.now(),
     );
-    const anchor = pub.videoClockAnchor.value;
 
     // 送信する Object の内容 (Group / Object ID・payload・LOC Properties・優先度) を組み立てる
     const plan = buildObjectSendPlan(
       { groupId: pub.pubCurrentGroup.value, objectId: pub.pubCurrentObjectId.value },
       chunk,
-      anchor,
+      wallClockMicros,
     );
 
     if (plan.isKeyFrame) {
@@ -1001,8 +997,8 @@ export function usePublisher() {
       // 利用できない場合は requestVideoFrameCallback でフォールバックする
       const videoFrameSource = createVideoFrameSource(videoTrack);
       pub.frameReader.value = videoFrameSource.readable.getReader();
-      // 対応は最初に読んだフレームでとる (processFrames)
-      pub.videoClockAnchor.value = null;
+      // 対応は読んだフレームからとる (processFrames)
+      pub.videoWallClock.value = new WallClockMapper();
 
       // 音声トラックを配信する
       if (audioTrack) {
@@ -1105,7 +1101,7 @@ export function usePublisher() {
       pub.frameReader.value = null;
     }
     // 次の配信では新しいフレームで対応をとり直す
-    pub.videoClockAnchor.value = null;
+    pub.videoWallClock.value = new WallClockMapper();
 
     // Encoder を閉じる
     if (pub.encoder.value) {

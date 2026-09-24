@@ -49,7 +49,7 @@ import { CATALOG_TRACK_NAME } from "./msf";
 import type { Publisher } from "./publisher";
 import type { PublishCallbacks, Session } from "./session";
 import * as LOC from "./loc";
-import { createWallClockAnchor, type WallClockAnchor } from "./mediaClock";
+import { WallClockMapper } from "./mediaClock";
 
 /**
  * 破棄検出付きのテスト用フレーム
@@ -121,8 +121,8 @@ interface PublisherLoopControl {
   currentState: MediaPublisherState;
   processAudioFrames(): Promise<void>;
   processVideoFrames(): Promise<void>;
-  // 最初に読んだ映像フレームの timestamp と、そのときの壁時計の対応
-  videoClockAnchor: WallClockAnchor | null;
+  // 読んだ映像フレームの timestamp を壁時計に換算する
+  videoWallClock: WallClockMapper;
 }
 
 function createLoopTestContext(options?: { video?: NonNullable<MediaPublisherOptions["video"]> }): {
@@ -259,14 +259,13 @@ test("processAudioFrames: pause 後の旧ループは encode せず終了する"
 
 // draft-ietf-moq-loc-04 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の壁時計である。
 // VideoFrame の timestamp は取得元ごとに基準が異なる (canvas の captureStream() は stream の
-// 開始、fake camera は別の大きな値) ため、最初に読んだフレームの timestamp とそのときの
-// 壁時計の対応をとり、以降の換算に使う
-test("processVideoFrames: 最初に読んだフレームで timestamp と壁時計の対応をとる", async () => {
+// 開始、fake camera は別の大きな値) ため、読んだフレームの timestamp とそのときの壁時計を
+// 記録し、換算に使う (撮ってから読むまでの遅れが最も小さいフレームに合わせる)
+test("processVideoFrames: 読んだフレームの timestamp とそのときの壁時計を記録する", async () => {
   const { control } = createLoopTestContext({ video: { codec: "vp8", bitrate: 1000 } });
   const { controller } = injectVideoLoop(control);
-  // assert.isNull の型の絞り込みがループ後の読み出しに残らないよう、関数で読む
-  const readAnchor = (): WallClockAnchor | null => control.videoClockAnchor;
-  assert.isNull(readAnchor());
+  // 記録が無ければ換算できない
+  assert.throws(() => control.videoWallClock.toWallClockMicroseconds(0));
 
   const before = performance.timeOrigin + performance.now();
   const loop = control.processVideoFrames();
@@ -280,12 +279,11 @@ test("processVideoFrames: 最初に読んだフレームで timestamp と壁時�
   await loop;
   const after = performance.timeOrigin + performance.now();
 
-  // 対応は最初のフレームでとり、2 枚目では変えない
-  const anchor = readAnchor();
-  assert.isNotNull(anchor);
-  assert.equal(anchor?.mediaMicros, 289_052_241_600);
-  assert.isAtLeast(anchor?.wallClockMicros ?? 0, Math.floor(before * 1000));
-  assert.isAtMost(anchor?.wallClockMicros ?? 0, Math.ceil(after * 1000));
+  // 2 枚を同じころに読んだため、読んだときの壁時計と timestamp の差は 2 枚目の方が小さい。
+  // 2 枚目の timestamp は、2 枚目を読んだ時刻に換算される
+  const converted = Number(control.videoWallClock.toWallClockMicroseconds(289_052_274_933));
+  assert.isAtLeast(converted, Math.floor(before * 1000));
+  assert.isAtMost(converted, Math.ceil(after * 1000));
 });
 
 test("processVideoFrames: pause 後の旧ループは encode せず終了する", async () => {
@@ -938,16 +936,16 @@ function sendVideoChunk(control: PublisherLifecycleControl, description?: Uint8A
   });
 }
 
-// 映像の TIMESTAMP は、最初に読んだフレームの壁時計にフレームの timestamp の差を足した値に
-// する。timeOrigin に timestamp を足すと、canvas では stream の開始までの時間だけ古く、
-// fake camera では約 80 時間先の時刻になる
-test("handleVideoEncodedChunk: TIMESTAMP を最初のフレームとの対応から壁時計に換算する", () => {
+// 映像の TIMESTAMP は、読んだフレームの壁時計との対応から換算する。timeOrigin に
+// timestamp を足すと、canvas では stream の開始までの時間だけ古く、fake camera では
+// 約 80 時間先の時刻になる
+test("handleVideoEncodedChunk: TIMESTAMP を読んだフレームとの対応から壁時計に換算する", () => {
   const { control: loopControl } = createLoopTestContext();
   const control = loopControl as unknown as PublisherLifecycleControl;
   const { publisher: videoPublisher, sent } = createCapturingPublisher();
   control.videoPublisher = videoPublisher;
   // timestamp 0 のフレームを 2026-09-25 付近の壁時計に読んだ
-  control.videoClockAnchor = createWallClockAnchor(0, 1_790_263_445_102.099);
+  control.videoWallClock.observe(0, 1_790_263_445_102.099);
 
   // sendVideoChunk は timestamp 1000 (マイクロ秒) の chunk を送る
   sendVideoChunk(control);

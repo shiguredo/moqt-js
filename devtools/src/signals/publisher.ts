@@ -2,7 +2,7 @@ import { signal } from "@preact/signals";
 import type { Session, Publisher, Catalog } from "moqt-js";
 import type { StatusType } from "../types";
 import type { EncoderWrapper } from "../utils/EncoderWrapper";
-import type { WallClockAnchor } from "../../../src/mediaClock.ts";
+import { WallClockMapper } from "../../../src/mediaClock.ts";
 import type { AudioEncoderWrapper } from "../../../src/codec/AudioEncoder.ts";
 
 // Publisher の状態
@@ -47,10 +47,9 @@ export const objectsWithExtensions = signal(0);
 
 // 内部状態
 export const frameReader = signal<ReadableStreamDefaultReader<VideoFrame> | null>(null);
-// 最初に読んだ映像フレームの timestamp と、そのときの壁時計の対応。
-// 映像の LOC TIMESTAMP を壁時計に換算するために使う (ライブラリの src/mediaClock.ts)。
-// 配信を始めるたびに作り直す
-export const videoClockAnchor = signal<WallClockAnchor | null>(null);
+// 読んだ映像フレームの timestamp とそのときの壁時計から、映像の LOC TIMESTAMP を壁時計に
+// 換算する (ライブラリの src/mediaClock.ts の WallClockMapper)。配信を始めるたびに作り直す
+export const videoWallClock = signal(new WallClockMapper());
 export const videoStreamCleanup = signal<(() => void) | null>(null);
 // キーフレーム間隔 (frames)。既定は connectionSettings と同じ 2 秒ぶん
 export const keyframeInterval = signal(60);

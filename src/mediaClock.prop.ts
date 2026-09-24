@@ -1,54 +1,108 @@
 /**
- * メディア時刻から壁時計への換算の Property-Based Tests
+ * メディア時刻から壁時計への換算 (WallClockMapper) の Property-Based Tests
  *
- * 取得元ごとに基準が異なるフレームの timestamp (マイクロ秒) を、最初のフレームを
- * 読んだときの壁時計に対応づけて換算する。換算がフレームの間隔を保つこと
- * (受信側が壁時計の差から到着の揺らぎや遅延を求められること) を確かめる。
+ * 一定の間隔で撮ったフレームを、任意の遅れで読み (observe)、encoder の遅れに相当する
+ * 任意の順で換算する (toWallClockMicroseconds)。換算した TIMESTAMP について次を確かめる。
  *
- * 境界値 (基準が 0 / 大きな値、負にしない) は mediaClock.test.ts の単体テストが固定する。
+ * - timestamp が増えれば、換算した TIMESTAMP も増える (単調)
+ * - 換算した TIMESTAMP は、撮った時刻にそれまでに読んだフレームの最小の遅れを足した時刻
+ *   より前にならない (撮った時刻より前にならない)
+ * - 最小の遅れのフレームを読んだ後、十分な回数換算すると、換算した TIMESTAMP と撮った
+ *   時刻の差は最小の遅れに収束する
+ *
+ * 境界値 (基準が大きな値、Unix epoch より前にしない) は mediaClock.test.ts の単体テストが
+ * 固定する。
  */
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import { createWallClockAnchor, toWallClockMicroseconds } from "./mediaClock";
+import { WallClockMapper } from "./mediaClock";
 
-// 最初のフレームの timestamp (マイクロ秒)。0 から fake camera 相当 (約 80 時間) を超える範囲
-const mediaMicrosArbitrary = fc.integer({ min: 0, max: 1_000_000_000_000 });
-// 最初のフレームを読んだときの壁時計 (ミリ秒、端数を含む)。2020 年から 2100 年
-const wallClockMillisArbitrary = fc.double({
-  min: 1_577_836_800_000,
-  max: 4_102_444_800_000,
-  noNaN: true,
+// メディア時刻 0 のフレームを撮った時刻 (壁時計、マイクロ秒)
+const CAPTURE_ORIGIN_MICROS = 1_790_263_445_000_000;
+
+/**
+ * フレームの列。各フレームの読み取りの遅れ (マイクロ秒) と、読んでから換算までに
+ * 読むフレームの数 (encoder の遅れ)
+ */
+const scenarioArbitrary = fc.record({
+  frameMicros: fc.integer({ min: 4_000, max: 50_000 }),
+  readDelaysMicros: fc.array(fc.integer({ min: 0, max: 500_000 }), {
+    minLength: 1,
+    maxLength: 120,
+  }),
+  encoderLag: fc.integer({ min: 0, max: 5 }),
 });
-// 最初のフレームから後のフレームまでの差 (マイクロ秒)。最大 1 日
-const offsetMicrosArbitrary = fc.integer({ min: 0, max: 86_400_000_000 });
 
-test("toWallClockMicroseconds: 2 つのフレームの壁時計の差はメディア時刻の差と一致する", () => {
+/** 撮った時刻の壁時計 (ミリ秒) */
+function captureMillis(frameMicros: number, index: number): number {
+  return (CAPTURE_ORIGIN_MICROS + index * frameMicros) / 1_000;
+}
+
+test("WallClockMapper: 単調に増え、撮った時刻と最小の遅れより前にならない", () => {
   fc.assert(
-    fc.property(
-      mediaMicrosArbitrary,
-      wallClockMillisArbitrary,
-      offsetMicrosArbitrary,
-      offsetMicrosArbitrary,
-      (firstMicros, wallClockMillis, offsetA, offsetB) => {
-        const anchor = createWallClockAnchor(firstMicros, wallClockMillis);
-        const a = toWallClockMicroseconds(firstMicros + offsetA, anchor);
-        const b = toWallClockMicroseconds(firstMicros + offsetB, anchor);
-        assert.equal(b - a, BigInt(offsetB - offsetA));
-      },
-    ),
+    fc.property(scenarioArbitrary, ({ frameMicros, readDelaysMicros, encoderLag }) => {
+      const mapper = new WallClockMapper();
+      let previous: bigint | null = null;
+      let minDelayMicros = Infinity;
+      let converted = 0;
+      const convert = (): void => {
+        const mediaMicros = converted * frameMicros;
+        const value = mapper.toWallClockMicroseconds(mediaMicros);
+        if (previous !== null) {
+          assert.isTrue(value > previous, `TIMESTAMP が戻った: ${previous} -> ${value}`);
+        }
+        const bias = Number(value) - (CAPTURE_ORIGIN_MICROS + mediaMicros);
+        // 丸めの誤差 (1 マイクロ秒) を許す
+        assert.isAtLeast(bias, minDelayMicros - 1);
+        previous = value;
+        converted++;
+      };
+      for (const [index, delayMicros] of readDelaysMicros.entries()) {
+        mapper.observe(
+          index * frameMicros,
+          captureMillis(frameMicros, index) + delayMicros / 1_000,
+        );
+        minDelayMicros = Math.min(minDelayMicros, delayMicros);
+        // encoder の遅れの分だけ前のフレームを換算する
+        if (index - converted >= encoderLag) {
+          convert();
+        }
+      }
+      while (converted < readDelaysMicros.length) {
+        convert();
+      }
+    }),
   );
 });
 
-test("toWallClockMicroseconds: 最初のフレームは読んだときの壁時計 (マイクロ秒) になる", () => {
+test("WallClockMapper: 最小の遅れのフレームを読んだ後、十分に換算すると最小の遅れに収束する", () => {
   fc.assert(
-    fc.property(mediaMicrosArbitrary, wallClockMillisArbitrary, (firstMicros, wallClockMillis) => {
-      const anchor = createWallClockAnchor(firstMicros, wallClockMillis);
-      const converted = toWallClockMicroseconds(firstMicros, anchor);
-      // マイクロ秒への丸めの誤差は 0.5 マイクロ秒以下
-      assert.isAtMost(Math.abs(Number(converted) - wallClockMillis * 1000), 0.5);
-      // 安全整数の範囲に収まり、受信側が Number にしても誤差が出ない
-      assert.isTrue(Number.isSafeInteger(Number(converted)));
+    fc.property(scenarioArbitrary, ({ frameMicros, readDelaysMicros }) => {
+      const mapper = new WallClockMapper();
+      for (const [index, delayMicros] of readDelaysMicros.entries()) {
+        mapper.observe(
+          index * frameMicros,
+          captureMillis(frameMicros, index) + delayMicros / 1_000,
+        );
+        mapper.toWallClockMicroseconds(index * frameMicros);
+      }
+      const minDelayMicros = Math.min(...readDelaysMicros);
+      const maxDelayMicros = Math.max(...readDelaysMicros);
+      // 1 回の換算で動かすのは timestamp の差の半分未満なので、差を埋めるのに要る回数だけ
+      // 続けて換算する (読み取りの遅れは最小のフレームと同じ)
+      const steps = Math.ceil((maxDelayMicros - minDelayMicros) / (frameMicros / 2)) + 2;
+      let index = readDelaysMicros.length;
+      let bias = Infinity;
+      for (let step = 0; step < steps; step++, index++) {
+        mapper.observe(
+          index * frameMicros,
+          captureMillis(frameMicros, index) + minDelayMicros / 1_000,
+        );
+        const value = mapper.toWallClockMicroseconds(index * frameMicros);
+        bias = Number(value) - (CAPTURE_ORIGIN_MICROS + index * frameMicros);
+      }
+      assert.closeTo(bias, minDelayMicros, 1);
     }),
   );
 });

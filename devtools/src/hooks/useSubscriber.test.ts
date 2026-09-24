@@ -12,7 +12,6 @@ import {
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
-import { createWallClockAnchor } from "../../../src/mediaClock.ts";
 import { EMPTY_PLAYBACK_TIMING } from "../utils/playbackTimingStats";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import { settingsDisabled } from "../signals/connectionSettings";
@@ -195,11 +194,10 @@ function makeVideoObject(objectId: bigint, properties?: Uint8Array): MoqtObject 
 test("buildVideoChunkPlan: publisher が付与した Properties から chunk の type と timestamp を決める", () => {
   // publisher はフレームの timestamp を壁時計 (Unix epoch マイクロ秒) に換算して送る。
   // 約 1.79e15 は安全整数 (2^53 - 1) の範囲に収まり、Number にしても誤差が出ない
-  const anchor = createWallClockAnchor(0, 1_790_263_445_102.099);
   const keyPlan = buildObjectSendPlan(
     { groupId: 0, objectId: 0 },
     { data: new Uint8Array([0x01]), type: "key", timestamp: 33_333, duration: 33_333 },
-    anchor,
+    1_790_263_445_135_432n,
   );
   assert.deepEqual(
     buildVideoChunkPlan(makeVideoObject(BigInt(keyPlan.objectId), keyPlan.properties)),
@@ -210,7 +208,7 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
   const deltaPlan = buildObjectSendPlan(
     { groupId: 1, objectId: 0 },
     { data: new Uint8Array([0x02]), type: "delta", timestamp: 66_666, duration: 33_333 },
-    anchor,
+    1_790_263_445_168_765n,
   );
   assert.deepEqual(
     buildVideoChunkPlan(makeVideoObject(BigInt(deltaPlan.objectId), deltaPlan.properties)),

@@ -39,7 +39,7 @@
   - @voluntas
 - [FIX] `createMediaPublisher` が映像の LOC TIMESTAMP を壁時計で送るようにする
   - draft-ietf-moq-loc-04 Section 2.3.1.1 は Timescale の無い TIMESTAMP を Unix epoch のマイクロ秒 (壁時計) と定める。映像の TIMESTAMP を `performance.timeOrigin` と VideoFrame の timestamp の和で求めていたが、VideoFrame の timestamp は `performance.now()` 基準ではなく、Chromium では canvas の captureStream() が stream の開始、fake camera は別の大きな値を基準にするため、壁時計にならなかった (fake camera では約 80 時間先の時刻になっていた)
-  - 最初に読んだフレームの timestamp とそのときの壁時計の対応をとり、以降は timestamp の差を足して換算する
+  - 読んだフレームごとに「読んだときの壁時計 - timestamp」を記録し、その最小値 (撮ってから読むまでの遅れが最も小さいフレーム) に合わせて換算する。開始時のフレームは読むまでの遅れが大きく、最初のフレームだけで合わせると以降の TIMESTAMP が遅れの分だけ未来にずれるため。換算した TIMESTAMP が戻らないよう、合わせ直す量は 1 フレームあたり timestamp の差の半分未満に抑える
   - 音声は AudioData の timestamp が `performance.now()` 基準のため、従来どおり `LOC.toUnixEpochMicroseconds` で換算する
   - @voluntas
 - [ADD] moqt-devtools の subscriber に jitter buffer を追加する
@@ -56,7 +56,7 @@
   - @voluntas
 - [FIX] moqt-devtools の publisher が映像の LOC TIMESTAMP を壁時計で送るようにする
   - draft-ietf-moq-loc-04 Section 2.3.1.1 は Timescale の無い TIMESTAMP を Unix epoch のマイクロ秒 (壁時計) と定めるが、映像だけ VideoFrame の timestamp をそのまま送っていた
-  - VideoFrame の timestamp は取得元ごとに基準が異なる (Chromium では canvas の captureStream() が stream の開始、fake camera は別の大きな値) ため、最初に読んだフレームの timestamp とそのときの壁時計の対応をとり、以降は timestamp の差を足して換算する
+  - VideoFrame の timestamp は取得元ごとに基準が異なる (Chromium では canvas の captureStream() が stream の開始、fake camera は別の大きな値) ため、読んだフレームの timestamp とそのときの壁時計の差の最小値 (撮ってから読むまでの遅れが最も小さいフレーム) に合わせて換算する (`createMediaPublisher` と同じ)
   - @voluntas
 - [FIX] 購読した映像を Group の順序と欠落を見て復号する
   - draft-ietf-moq-transport-21 Section 2.1 のとおり Object は順不同で届きうる。Group ごとに別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことがあり、`createMediaSubscriber` は次の Group のキーフレームを復号した後に前の Group の delta を復号して映像を崩していた
