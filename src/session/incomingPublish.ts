@@ -762,8 +762,7 @@ export async function incomingPublishHandleBidirectionalStream(
     subscribeCallbacks.end,
     subscribeCallbacks.error,
   );
-  impl.goawayCallback = subscribeCallbacks.goaway;
-  impl.fillErrorCallback = subscribeCallbacks.fillError;
+  impl.setSessionCallbacks(subscribeCallbacks);
 
   // draft-ietf-moq-transport-21 §10.4:
   // 受信 PUBLISH の Track Properties から DEFAULT_PUBLISHER_PRIORITY を解決し、

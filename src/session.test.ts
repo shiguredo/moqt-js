@@ -83,6 +83,7 @@ import {
 import { decodeFetchPayload, encodeFetchOkPayload, type Fetch } from "./message/fetch";
 import { encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
+import type { SubgroupStreamEnd } from "./session/publicTypes";
 import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
@@ -5781,6 +5782,71 @@ test("Subgroup データストリーム: ピアの RESET_STREAM ではセッシ�
   assert.deepEqual(received[0]!.payload, parts.payload);
   assert.isUndefined(ctx.sessionError.current);
   assert.equal(ctx.session.state, "connected");
+});
+
+/**
+ * Subgroup の stream の終わり (FIN) を、その stream の最後の Object を渡した後に
+ * subgroupEnd でアプリへ知らせる。
+ *
+ * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに別の
+ * stream で届くため、前の Group の末尾が次の Group の先頭より後にアプリへ渡ることがある。
+ * アプリは前の Group の stream が終わったことを知れば、それ以上前の Group の Object が
+ * 届かないと判断できる (GroupSwitchGate)。
+ */
+test("Subgroup データストリーム: FIN で終わると最後の Object の後に subgroupEnd を fin で知らせる", async () => {
+  const ctx = createDataStreamFinContext();
+  const events: string[] = [];
+  const ends: SubgroupStreamEnd[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    events.push(`object ${object.groupId}:${object.objectId}`);
+  });
+  subscriber.subgroupEndCallback = (end) => {
+    events.push(`end ${end.groupId}`);
+    ends.push(end);
+  };
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.deepEqual(events, ["object 1:0", "end 1"]);
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0]?.groupId, 1n);
+  assert.equal(ends[0]?.reason, "fin");
+  // 渡した Object と同じ Subgroup ID を知らせる
+  assert.equal(ends[0]?.subgroupId, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-21 §11.3.2: ピアの RESET_STREAM で終わった場合も、subgroupEnd を
+ * reset で知らせる (以降その stream の Object は届かない)。
+ */
+test("Subgroup データストリーム: RESET_STREAM で終わると subgroupEnd を reset で知らせる", async () => {
+  const ctx = createDataStreamFinContext();
+  const ends: SubgroupStreamEnd[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  subscriber.subgroupEndCallback = (end) => {
+    ends.push(end);
+  };
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  await Promise.resolve();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
+  await yieldToMacrotask();
+  assert.deepEqual(ends, []);
+
+  ctx.reset(Object.assign(new Error("reset by publisher"), { source: "stream" }));
+  await handlePromise;
+
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0]?.groupId, 1n);
+  assert.equal(ends[0]?.reason, "reset");
+  assert.isUndefined(ctx.sessionError.current);
 });
 
 /**

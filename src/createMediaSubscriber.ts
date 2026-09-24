@@ -8,7 +8,7 @@ import { connectMediaSession } from "./createMedia/connect";
 import { DEFAULT_AUDIO_TRACK_NAME, DEFAULT_VIDEO_TRACK_NAME } from "./createMedia/settings";
 import { supportsDynamicGroups } from "./properties";
 import { compareLocations } from "./session/params";
-import type { Session, SubscribeOptions } from "./session";
+import type { Session, SubgroupStreamEnd, SubscribeOptions } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import type { AuthorizationToken, Location, LocationFilter } from "./message";
@@ -27,6 +27,7 @@ import {
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
+import { GroupSwitchGate } from "./groupSwitchGate";
 import { DEFAULT_AUDIO_SAMPLE_RATE, resolveAudioChannelCount } from "./codec/config";
 import type {
   AudioCodecType,
@@ -373,6 +374,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // 映像 Object を復号してよいかを Group の順序と欠落から決める。decoder を構成し直した
   // ときと decoder のエラー後は、キーフレームから始め直すため初期化する
   private readonly videoDecodeOrder = new VideoDecodeOrder();
+  // 前の Group の Subgroup の stream が開いている間、次の Group の映像 Object を保留する
+  // (groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
+  // 次の Group の先頭より後に届くと、videoDecodeOrder が古い Group として捨てるため
+  private readonly videoGroupGate = new GroupSwitchGate<MoqtObject>();
+  // 保留の上限で保留を解くタイマー
+  private videoGroupGateTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     url: string,
@@ -512,6 +519,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.videoInitialConfigPending = false;
     this.pendingAudioObjects = [];
     this.pendingVideoObjects = [];
+    // Group の切り替えで保留していた映像 Object も破棄する
+    if (this.videoGroupGateTimer !== null) {
+      clearTimeout(this.videoGroupGateTimer);
+      this.videoGroupGateTimer = null;
+    }
+    this.videoGroupGate.reset();
     this.audioDecoderConfigured = false;
     this.videoDecoderConfigured = false;
     this.audioDecoder?.close();
@@ -1016,7 +1029,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         trackName,
         {
           object: (obj) => {
-            this.handleVideoObject(obj);
+            this.receiveVideoObject(obj);
+          },
+          // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
+          subgroupEnd: (end) => {
+            this.receiveVideoSubgroupEnd(end);
           },
           end: () => {
             // トラック終了
@@ -1262,6 +1279,48 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     } catch (error) {
       this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * 受信した映像 Object を、Group の切り替えの保留 (videoGroupGate) を通して処理する
+   *
+   * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。前の Group の
+   * stream が開いている間に次の Group の Object が届いたら保留し、前の Group の Object を
+   * 先に処理する
+   */
+  private receiveVideoObject(obj: MoqtObject): void {
+    this.handleVideoObjects(
+      this.videoGroupGate.push(obj, obj.groupId, obj.subgroupId, performance.now()),
+    );
+  }
+
+  /** 映像の Subgroup の stream の終わりで、保留を解いてよくなった Object を処理する */
+  private receiveVideoSubgroupEnd(end: SubgroupStreamEnd): void {
+    this.handleVideoObjects(
+      this.videoGroupGate.endSubgroup(end.groupId, end.subgroupId, performance.now()),
+    );
+  }
+
+  /** 保留を通った映像 Object を順に処理し、保留が残っていれば上限のタイマーを張り直す */
+  private handleVideoObjects(objects: MoqtObject[]): void {
+    for (const obj of objects) {
+      this.handleVideoObject(obj);
+    }
+    if (this.videoGroupGateTimer !== null) {
+      clearTimeout(this.videoGroupGateTimer);
+      this.videoGroupGateTimer = null;
+    }
+    const deadlineMs = this.videoGroupGate.holdDeadlineMs;
+    if (deadlineMs === null) {
+      return;
+    }
+    this.videoGroupGateTimer = setTimeout(
+      () => {
+        this.videoGroupGateTimer = null;
+        this.handleVideoObjects(this.videoGroupGate.expire(performance.now()));
+      },
+      Math.max(0, deadlineMs - performance.now()),
+    );
   }
 
   private handleVideoObject(obj: MoqtObject): void {

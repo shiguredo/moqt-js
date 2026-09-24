@@ -312,10 +312,9 @@ export async function requestsSubscribe(
     callbacks.error,
   );
 
-  // GOAWAY コールバックを設定（セッション内部コールバック）
-  impl.goawayCallback = callbacks.goaway;
-  // fill 失敗コールバックを設定（セッション内部コールバック）
-  impl.fillErrorCallback = callbacks.fillError;
+  // GOAWAY / fill 失敗 / Subgroup の stream の終わりのコールバックを設定
+  // （セッション内部コールバック）
+  impl.setSessionCallbacks(callbacks);
 
   // draft-ietf-moq-transport-21 §3.1 (Subscriptions):
   // "The initiator of the subscription sets the initial Forward State in

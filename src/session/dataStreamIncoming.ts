@@ -39,7 +39,7 @@ import { incomingProcessFetchObjects, incomingProcessSubgroupObjects } from "./i
 import { isPeerStreamError, isSessionClosedError, toSessionCloseError } from "./errors";
 import { cancelStreamQuiet, concatChunks } from "./stream";
 import type { SessionInternal } from "./types";
-import type { ConnectCallbacks, SessionState } from "./publicTypes";
+import type { ConnectCallbacks, SessionState, SubgroupStreamEnd } from "./publicTypes";
 import type { PriorGapTracking } from "./priorGapTracking";
 import type { FullTrackNameKey } from "../fullTrackName";
 
@@ -1114,6 +1114,7 @@ export async function dataStreamHandleSubgroupStream(
       } catch (err) {
         dataStreamHandleSubgroupReadError(err);
         // ピアの RESET_STREAM。配信済みの Object を保ち、この stream だけを終える
+        dataStreamNotifySubgroupEnd(subscribers, header, resolvedSubgroupId, "reset");
         return;
       }
 
@@ -1132,19 +1133,36 @@ export async function dataStreamHandleSubgroupStream(
 
   // ここに到達した時点でピアの FIN を検出している (上記ループは
   // result.done でしか抜けない)。
-  // draft-ietf-moq-transport-21 Section 11.3 (Streams):
-  // "If a stream ends gracefully (i.e., the stream terminates with a
-  //  FIN) in the middle of a serialized Object, the session SHOULD be
-  //  closed with a PROTOCOL_VIOLATION."
-  // §11.3.2 (Closing Subgroup Streams) は全 Object を配信せずに閉じる場合
-  // の reset を MUST としており、残バッファ非空の FIN は違反ワイヤである。
-  // 黙殺して関数を抜けるとアプリはオブジェクト欠落を検知できないため、
-  // PROTOCOL_VIOLATION でセッションを閉じる (Fetch 側の判定は
-  // handleIncomingStream の終了処理にある)。
-  // pending mode (subscribers 未登録) は payload を decode しておらず
-  // 未完成 Object を機械的に判定できないため、subscriber mode だけの
-  // 対象とする。closeWithError はセッション終了済みだと呼ばない
-  // (終了済みセッションへの spurious な通知を防ぐため)
+  dataStreamFinishSubgroupStream(session, subscribers, header, buffer, resolvedSubgroupId);
+}
+
+/**
+ * ピアの FIN で終わった Subgroup の stream を締めくくる
+ *
+ * draft-ietf-moq-transport-21 Section 11.3 (Streams):
+ * "If a stream ends gracefully (i.e., the stream terminates with a
+ *  FIN) in the middle of a serialized Object, the session SHOULD be
+ *  closed with a PROTOCOL_VIOLATION."
+ * §11.3.2 (Closing Subgroup Streams) は全 Object を配信せずに閉じる場合
+ * の reset を MUST としており、残バッファ非空の FIN は違反ワイヤである。
+ * 黙殺して関数を抜けるとアプリはオブジェクト欠落を検知できないため、
+ * PROTOCOL_VIOLATION でセッションを閉じる (Fetch 側の判定は
+ * handleIncomingStream の終了処理にある)。
+ * pending mode (subscribers 未登録) は payload を decode しておらず
+ * 未完成 Object を機械的に判定できないため、subscriber mode だけの
+ * 対象とする。closeWithError はセッション終了済みだと呼ばない
+ * (終了済みセッションへの spurious な通知を防ぐため)
+ *
+ * 未完成 Object を残さずに終わった stream は、購読へ stream の終わりを知らせる
+ * (dataStreamNotifySubgroupEnd)。
+ */
+function dataStreamFinishSubgroupStream(
+  session: DataStreamSessionInternal,
+  subscribers: SubscriberImpl[],
+  header: SubgroupHeader,
+  buffer: Uint8Array,
+  resolvedSubgroupId: bigint | undefined,
+): void {
   if (session.sessionState === "connected" && buffer.byteLength > 0) {
     session.closeWithError(
       new SessionError(
@@ -1152,6 +1170,44 @@ export async function dataStreamHandleSubgroupStream(
         SessionErrorCode.PROTOCOL_VIOLATION,
       ),
     );
+    return;
+  }
+  dataStreamNotifySubgroupEnd(subscribers, header, resolvedSubgroupId, "fin");
+}
+
+/**
+ * 購読の Subgroup の stream の終わりを、その stream の Object を受け取っていた購読へ知らせる
+ *
+ * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。Group ごとに別の
+ * stream で届くため、アプリは stream の終わりで、それ以上その Subgroup の Object が
+ * 届かないと判断できる (SubscribeCallbacks.subgroupEnd)。Subgroup ID は Object から
+ * 確定した値を優先し、無ければ Subgroup Header の値を使う。
+ * アプリ例外は Object の配送と同じく当該購読の error コールバックへ通知し、残りの購読への
+ * 通知を続ける。反復前に複製する (error コールバック内の unsubscribe() が配列を変更
+ * しても後続の購読への通知が欠けないようにする)。
+ */
+function dataStreamNotifySubgroupEnd(
+  subscribers: SubscriberImpl[],
+  header: SubgroupHeader,
+  resolvedSubgroupId: bigint | undefined,
+  reason: "fin" | "reset",
+): void {
+  const subgroupId = resolvedSubgroupId ?? header.subgroupId;
+  const end: SubgroupStreamEnd = {
+    groupId: header.groupId,
+    reason,
+    ...(subgroupId !== undefined ? { subgroupId } : {}),
+  };
+  for (const subscriber of subscribers.slice()) {
+    try {
+      subscriber.handleSubgroupEnd(end);
+    } catch (err) {
+      try {
+        subscriber.handleError(err instanceof Error ? err : new Error(String(err)));
+      } catch {
+        // error コールバック自体の throw は、残りの購読への通知を止めない
+      }
+    }
   }
 }
 

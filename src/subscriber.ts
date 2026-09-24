@@ -17,7 +17,7 @@ import {
 } from "./filter";
 import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
 import { mergeRangeFilters } from "./session/params";
-import type { FillRequestOptions } from "./session";
+import type { FillRequestOptions, SubgroupStreamEnd } from "./session";
 
 /**
  * Subscriber state
@@ -170,6 +170,12 @@ export class SubscriberImpl implements Subscriber {
    * 購読の error コールバックとは別系統である理由は handleFillError を参照。
    */
   fillErrorCallback?: ((error: Error) => void) | undefined;
+  /**
+   * Subgroup の stream の終わりの通知 (セッション内部コールバック)
+   *
+   * SubscribeCallbacks.subgroupEnd をセッションが代入する。handleSubgroupEnd を参照。
+   */
+  subgroupEndCallback?: ((end: SubgroupStreamEnd) => void) | undefined;
 
   constructor(
     namespace: string[],
@@ -529,6 +535,36 @@ export class SubscriberImpl implements Subscriber {
       return;
     }
     this.fillErrorCallback?.(error);
+  }
+
+  /**
+   * Internal: SubscribeCallbacks のうちセッション内部コールバックとして持つものを設定する
+   *
+   * goaway / fillError / subgroupEnd はコンストラクタ引数ではなくセッションが代入する
+   * (SUBSCRIBE と受信 PUBLISH の両経路で同じ代入をするため 1 箇所にまとめる)。
+   */
+  setSessionCallbacks(callbacks: {
+    goaway?: ((newSessionUri: string) => void) | undefined;
+    fillError?: ((error: Error) => void) | undefined;
+    subgroupEnd?: ((end: SubgroupStreamEnd) => void) | undefined;
+  }): void {
+    this.goawayCallback = callbacks.goaway;
+    this.fillErrorCallback = callbacks.fillError;
+    this.subgroupEndCallback = callbacks.subgroupEnd;
+  }
+
+  /**
+   * 購読の Subgroup の stream の終わりをアプリへ通知する
+   *
+   * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。アプリは stream の
+   * 終わりで、それ以上その Subgroup の Object が届かないと判断できる。
+   * state が closed の場合は通知しない (object コールバックと同じ)。
+   */
+  handleSubgroupEnd(end: SubgroupStreamEnd): void {
+    if (this.subscriberState === "closed") {
+      return;
+    }
+    this.subgroupEndCallback?.(end);
   }
 
   /**

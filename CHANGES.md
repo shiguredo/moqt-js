@@ -19,6 +19,14 @@
   - エンコード能力を超えて破棄したフレーム数を統計で確認できるようにする
   - `VideoStats` は公開型のため、この型を自前で構築しているコードは `droppedFrames` の追加が必要になる (後方互換なし)
   - @voluntas
+- [ADD] `SubscribeCallbacks.subgroupEnd` を追加する
+  - 購読の Subgroup の stream が FIN または RESET_STREAM で終わったことを、その stream の最後の Object を object コールバックへ渡した後に知らせる (Group ID、確定した Subgroup ID、終わり方)
+  - draft-ietf-moq-transport-21 Section 2.1 のとおり Object は順不同で届きうるため、前の Group の stream が終わるまで次の Group の Object を保留するアプリが使う
+  - @voluntas
+- [FIX] 前の Group の stream が開いている間に届いた次の Group の映像 Object を保留する
+  - Group ごとに別の stream で届くため、前の Group の末尾が次の Group の先頭より後にアプリへ渡ることがあり (経路での並び替えのほか、ブラウザ上で stream ごとの読み取りが解決する順でも起きる)、`createMediaSubscriber` と moqt-devtools は前の Group の末尾を古い Group の Object として捨てていた。後から購読した直後の cache からの追い上げで起きやすい
+  - 前の Group の Subgroup の stream が開いている間は次の Group の Object を保留し、前の Group の stream がすべて終わる (`subgroupEnd`) か保留の上限 (50 ms) を過ぎたら、Group の古い順に渡す。前の Group の stream が先に終わっていれば保留しない
+  - @voluntas
 - [FIX] publisher が Group の切り替えで前の Subgroup の stream の close の完了を待たないようにする
   - WebTransport の `WritableStreamDefaultWriter.close()` は FIN が ACK されるまで解決しない (Chrome)。Group を切り替えるたびにその完了を待ってから新しい stream を開いていたため、新しい Group の先頭の Object (キーフレーム) の送信が毎回 1 RTT 遅れ、同じトラックの後続の Object も待たされていた
   - draft-ietf-moq-transport-21 に Group の切り替えで前の stream の完了を待つ要件は無い。FIN と RESET のどちらで閉じるか (Section 11.3.2) はその時点で決め、close の完了を待たずに新しい stream を開く。END_OF_GROUP の後の close も同じ

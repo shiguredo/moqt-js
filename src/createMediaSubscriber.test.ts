@@ -33,6 +33,8 @@ import {
 import * as LOC from "./loc";
 import type { VideoFrameMarking } from "./loc";
 import { type MoqtObject } from "./dataStream";
+import type { SubgroupStreamEnd } from "./session";
+import { GROUP_SWITCH_HOLD_MS } from "./groupSwitchGate";
 import type { Location } from "./message";
 import { useValueToken } from "./testSupport/helpers";
 
@@ -747,6 +749,83 @@ test("handleVideoObject: Frame Marking がある場合は Object ID 0 でもキ�
   assert.deepEqual(decoded, []);
   assert.equal(subscriber.getStats().video?.keyFramesReceived, 0);
   assert.equal(subscriber.getStats().video?.missingReferenceFramesDropped, 1);
+});
+
+/**
+ * 受信した映像 Object を Group の切り替えで保留する経路の検証用の制御口
+ *
+ * object / subgroupEnd コールバックから呼ばれる受け口を直接駆動する。
+ */
+interface SubscriberVideoGateControl extends SubscriberVideoObjectControl {
+  receiveVideoObject(obj: MoqtObject): void;
+  receiveVideoSubgroupEnd(end: SubgroupStreamEnd): void;
+}
+
+/** Group と Object ID を指定した Subgroup の stream の映像 Object (Frame Marking 無し) */
+function makeStreamVideoObject(groupId: bigint, objectId: bigint): MoqtObject {
+  return {
+    groupId,
+    subgroupId: 0n,
+    objectId,
+    status: 0,
+    payload: new Uint8Array([Number(groupId * 16n + objectId)]),
+  };
+}
+
+/** 映像の保留を検証する購読を作り、復号に渡した Object の payload を記録する */
+function createVideoGateSubscriber(): {
+  subscriber: MediaSubscriberImpl;
+  control: SubscriberVideoGateControl;
+  decoded: number[];
+} {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberVideoGateControl;
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  return { subscriber, control, decoded };
+}
+
+/**
+ * draft-ietf-moq-transport-21 Section 2.1: Object は順不同で届きうる。後から購読した直後
+ * などに、次の Group の先頭 (キーフレーム) が前の Group の最後の Object より先に届くことが
+ * ある。前の Group の stream が終わるまで次の Group の Object を保留し、前の Group の末尾を
+ * 先に復号する (保留しないと、前の Group の末尾を古い Group として捨てる)
+ */
+test("receiveVideoObject: 前の Group の stream が終わるまで次の Group の Object を保留する", () => {
+  const { subscriber, control, decoded } = createVideoGateSubscriber();
+
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+  control.receiveVideoObject(makeStreamVideoObject(1n, 1n));
+  // Group 2 の先頭が Group 1 の最後の Object より先に届く
+  control.receiveVideoObject(makeStreamVideoObject(2n, 0n));
+  control.receiveVideoObject(makeStreamVideoObject(1n, 2n));
+  assert.deepEqual(decoded, [0x10, 0x11, 0x12]);
+  control.receiveVideoSubgroupEnd({ groupId: 1n, subgroupId: 0n, reason: "fin" });
+
+  assert.deepEqual(decoded, [0x10, 0x11, 0x12, 0x20]);
+  assert.equal(subscriber.getStats().video?.staleFramesDropped, 0);
+});
+
+// 前の Group の stream が上限の時間を過ぎても終わらなければ、保留した Object を復号する
+test("receiveVideoObject: 前の Group の stream が終わらなくても上限の時間で保留を解く", async () => {
+  const { control, decoded } = createVideoGateSubscriber();
+
+  control.receiveVideoObject(makeStreamVideoObject(1n, 0n));
+  control.receiveVideoObject(makeStreamVideoObject(2n, 0n));
+  assert.deepEqual(decoded, [0x10]);
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, GROUP_SWITCH_HOLD_MS + 30);
+  });
+  assert.deepEqual(decoded, [0x10, 0x20]);
 });
 
 /**

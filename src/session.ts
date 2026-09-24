@@ -117,6 +117,7 @@ export type {
   ConnectOptions,
   PublishCallbacks,
   PublishOptions,
+  SubgroupStreamEnd,
   SubscribeCallbacks,
   SubscribeOptions,
   SubscribeTracksOptions,

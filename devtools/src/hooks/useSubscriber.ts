@@ -36,6 +36,7 @@ import {
 import { base64ToArrayBuffer } from "../utils/base64";
 import { EMPTY_PLAYBACK_TIMING, PlaybackTimingStats } from "../utils/playbackTimingStats";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, PlayoutBuffer } from "../utils/playoutBuffer";
+import { GroupSwitchGate } from "../../../src/groupSwitchGate.ts";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -392,6 +393,46 @@ export function useSubscriber(
   // 初期化し、PLAYBACK_TIMING_PUBLISH_INTERVAL_MS ごとに signal へ反映する
   const playbackTimingRef = useRef(new PlaybackTimingStats());
   const playbackTimingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 前の Group の Subgroup の stream が開いている間、次の Group の映像 Object を保留する
+  // (src/groupSwitchGate.ts)。Object は Group ごとに別の stream で届き、前の Group の末尾が
+  // 次の Group の先頭より後に届くと、VideoDecodeOrder が古い Group として捨てるため。
+  // 購読を始めるたびと停止で初期化する
+  const videoGroupGateRef = useRef(new GroupSwitchGate<MoqtObject>());
+  const videoGroupGateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * 保留を通った映像 Object を到着順の Promise チェーンに積み、保留が残っていれば
+   * 上限で保留を解くタイマーを張り直す
+   */
+  function enqueueVideoObjects(objects: MoqtObject[]): void {
+    for (const obj of objects) {
+      chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
+    }
+    if (videoGroupGateTimerRef.current !== null) {
+      clearTimeout(videoGroupGateTimerRef.current);
+      videoGroupGateTimerRef.current = null;
+    }
+    const deadlineMs = videoGroupGateRef.current.holdDeadlineMs;
+    if (deadlineMs === null) {
+      return;
+    }
+    videoGroupGateTimerRef.current = setTimeout(
+      () => {
+        videoGroupGateTimerRef.current = null;
+        enqueueVideoObjects(videoGroupGateRef.current.expire(performance.now()));
+      },
+      Math.max(0, deadlineMs - performance.now()),
+    );
+  }
+
+  /** 保留している映像 Object を捨て、Group の切り替えの保留を初期状態に戻す */
+  function resetVideoGroupGate(): void {
+    if (videoGroupGateTimerRef.current !== null) {
+      clearTimeout(videoGroupGateTimerRef.current);
+      videoGroupGateTimerRef.current = null;
+    }
+    videoGroupGateRef.current.reset();
+  }
 
   /**
    * 統計の記録と表示待ちのキューを初期化し、signal への定期的な反映を始める
@@ -1320,6 +1361,7 @@ export function useSubscriber(
       instance.statusMessage.value = "購読中...";
       resetSubscriberStats(instance);
       startPlaybackTiming();
+      resetVideoGroupGate();
 
       // Subscriber オプションを構築する
       const subscribeOptions: {
@@ -1345,13 +1387,22 @@ export function useSubscriber(
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // Promise チェーンで到着順に処理する。stream の間の到着順は保証されない
-            // (draft-ietf-moq-transport-21 Section 2.1) ため、handleObject が Group の
-            // 順序と欠落を見て、復号してよい Object だけを decoder へ渡す
-            // (VideoDecodeOrder)。並べ替えはしないため、遅れて届いた前の Group の
-            // Object は捨てる。1 Group を複数の Subgroup に分ける publisher の
-            // Object ID の飛びも欠落として扱い、次のキーフレームまで待つ
-            chainRef.current = chainRef.current.then(() => handleObject(obj)).catch(() => {});
+            // stream の間の到着順は保証されない (draft-ietf-moq-transport-21 Section 2.1)。
+            // 前の Group の stream が開いている間は次の Group の Object を保留し
+            // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
+            // handleObject は Group の順序と欠落を見て、復号してよい Object だけを decoder へ
+            // 渡す (VideoDecodeOrder)。保留の上限を過ぎてから届いた前の Group の Object は
+            // 捨てる。1 Group を複数の Subgroup に分ける publisher の Object ID の飛びも
+            // 欠落として扱い、次のキーフレームまで待つ
+            enqueueVideoObjects(
+              videoGroupGateRef.current.push(obj, obj.groupId, obj.subgroupId, performance.now()),
+            );
+          },
+          // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
+          subgroupEnd: (end) => {
+            enqueueVideoObjects(
+              videoGroupGateRef.current.endSubgroup(end.groupId, end.subgroupId, performance.now()),
+            );
           },
           end: () => {
             if (shouldApplyStatusUpdate()) {
@@ -1476,6 +1527,8 @@ export function useSubscriber(
     clearPendingFrame();
     // 受信から表示までの時間の統計の記録を止める
     stopPlaybackTiming();
+    // Group の切り替えで保留していた映像 Object を捨てる
+    resetVideoGroupGate();
     // 再生の停止は instance の有無に関わらず行う。パネルの削除では Map から先に
     // 消えるため、この後の instance 取得が失敗しても AudioContext を残さない
     stopAudioPlayback();

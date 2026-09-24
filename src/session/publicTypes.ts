@@ -371,6 +371,26 @@ export interface PublishOptions {
 /**
  * サブスクライブコールバック
  */
+/**
+ * Subgroup の stream の終わり
+ *
+ * draft-ietf-moq-transport-21 Section 2.1 ("Objects can be delivered out of order"):
+ * Group ごとに別の stream で届くため、前の Group の Object が次の Group の Object より後に
+ * 届くことがある。stream が終わったことを知れば、アプリはそれ以上その Subgroup の Object が
+ * 届かないと判断できる。
+ */
+export interface SubgroupStreamEnd {
+  /** stream の Group ID */
+  groupId: bigint;
+  /**
+   * stream で確定した Subgroup ID。Subgroup ID を最初の Object から決める Subgroup Header の
+   * stream で、Object を 1 つも受け取らずに終わった場合は未設定
+   */
+  subgroupId?: bigint;
+  /** FIN で終わったら `"fin"`、ピアの RESET_STREAM で終わったら `"reset"` */
+  reason: "fin" | "reset";
+}
+
 export interface SubscribeCallbacks {
   object: (object: MoqtObject) => void;
   /**
@@ -402,6 +422,16 @@ export interface SubscribeCallbacks {
    * 当該リクエストのマイグレーション先 URI を通知する。
    */
   goaway?: (newSessionUri: string) => void;
+  /**
+   * 購読の Subgroup の stream が終わった時のコールバック
+   *
+   * その stream で届いた最後の Object を object コールバックへ渡した後に呼ぶ。
+   * FIN (§11.3.2) とピアの RESET_STREAM で呼び、購読の終了や打ち切り (Malformed Track、
+   * バッファ上限) では呼ばない。draft-ietf-moq-transport-21 Section 2.1 のとおり Object は
+   * 順不同で届きうるため、前の Group の stream が終わるまで次の Group の Object を保留する
+   * アプリ (映像の復号順を守る受信側など) が使う。
+   */
+  subgroupEnd?: (end: SubgroupStreamEnd) => void;
 }
 
 /**

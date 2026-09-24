@@ -21,6 +21,7 @@ export type {
   DebugMessage,
   PublishCallbacks,
   PublishOptions,
+  SubgroupStreamEnd,
   SubscribeCallbacks,
   SubscribeOptions,
   SubscribeTracksOptions,
