@@ -27,6 +27,10 @@
   - 止まりごとに原因を 1 つ決め (`source` / `loss` / `discarded` / `arrival` / `groupSwitchHold` / `decode` / `playout` / `render` / `unknown`)、原因ごとの回数と時間、直近 30 回の止まり (時刻、長さ、Group ID / Object ID) を `playbackTiming` に出す
   - 届かなかった Object と Group、RESET_STREAM で終わった Subgroup の stream、上限で解けた Group の切り替えの保留を数える。止まりと stream の reset はデバッグログにも出す
   - @voluntas
+- [FIX] moqt-devtools と webcodecs-devtools の dummy の映像がフレームを抜かないようにする
+  - canvas を `Math.floor(1000 / framerate)` ms ごとに描いて `captureStream(framerate)` で取り出していたため、描く周期が設定より速く、ずれが 1 フレーム分に積み上がるたびにフレームが抜けていた (30 fps で約 3.3 秒ごと、120 fps で 3 割のフレーム)
+  - 描く時刻を最初のフレームからの経過で決め、`captureStream(0)` と `requestFrame()` で描いたフレームを 1 枚ずつ取り出す
+  - @voluntas
 - [FIX] moqt-devtools の subscriber が映像 Object の到着を受け取った時刻で記録するようにする
   - 到着を Group の切り替えの保留 (最大 50 ms) を通った後の時刻で記録していたため、保留した次の Group の先頭では、保留した時間が到着の揺らぎ (`arrivalJitterMs`) と送信から受信までの遅延 (`latencyMs`) に入っていた
   - @voluntas
