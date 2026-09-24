@@ -9,7 +9,7 @@
 
 `src/createMediaPublisher.ts` は `void this.audioPublisher.sendObject(...)` と `void this.videoPublisher.sendObject(...)` で送信し、`src/publisher.ts` の `sendObject` が返す reject を誰も処理しない。`PublisherImpl.sendObject` は違反時に `handleError` で `onError` を通知したうえで reject を返す契約なので、通知自体は利用者に届いている。未処理なのは reject の方であり、`void` のまま放置すると実行環境へ unhandled rejection として渡り、アプリ側の `unhandledrejection` ハンドラや Node.js の既定動作を誘発する。`src/createMediaSubscriber.ts` の `void this.audioContext.resume()` と `void this.videoDecoder?.reset()` も同じく reject を処理しない。
 
-現行の送信値 (内部採番の ID、固定 priority 255、status は常に NORMAL、END_OF_TRACK / END_OF_GROUP は送らない) では `sendObject` の事前検証の reject 条件に到達せず、委譲先の送信失敗も現行の経路では起きないため、この未処理 reject は現行では潜在している。`void` のままにする欠陥自体を直し、値や環境が変わっても unhandled rejection を出さない形にする。
+現行の送信値 (内部採番の ID、priority は `PRIORITY_CATALOG` = 0 などの固定定数、status は常に NORMAL、END_OF_TRACK / END_OF_GROUP は送らない) では `sendObject` の事前検証の reject 条件に到達せず、委譲先の送信失敗も現行の経路では起きないため、この未処理 reject は現行では潜在している。`void` のままにする欠陥自体を直し、値や環境が変わっても unhandled rejection を出さない形にする。
 
 ## 現状
 
@@ -19,7 +19,7 @@
 - `src/createMediaSubscriber.ts` の `void this.audioContext.resume()` は reject を処理しない
 - `src/createMediaSubscriber.ts` の `void this.videoDecoder?.reset()` は video decoder の error コールバックからのみ呼ばれる。`src/codec/VideoDecoder.ts` の `reset()` は失敗を `callbacks.error` に流さず reject するだけである (0677 がこの契約を「例外を投げない `Promise<boolean>`」に変え、呼び出し側で結果を見る形にする。0677 の 17 行目が reject の処理を本 issue の担当と明記している)
 - `src/createMediaSubscriber.ts` の `void this.reconfigureAudioDecoder(...)` / `void this.reconfigureVideoDecoder(...)` は `await configure()` を catch して `onError` へ流すが、try の外にある同期 throw (`parseAudioCodec` / `resolveAudioChannelCount` / `parseVideoCodec` など) は async 関数の reject になり `void` 呼び出し側で未処理になる。ただし同じ値は `setupDecoders` が先に検査しているため現行では到達しない
-- `src/createMediaPublisher.ts` の `publishCatalog` は `await this.catalogPublisher.sendObject(...)` を `start()` の try の中から呼ぶ。catalog の送信は groupId 0 / objectId 0 / priority 255 固定で事前検証に掛からず、委譲先の送信失敗は catch が通知して resolve するため、現行この経路は reject し得ない。将来 reject するようになると `start()` の catch が 2 回目を通知する
+- `src/createMediaPublisher.ts` の `publishCatalog` は `await this.catalogPublisher.sendObject(...)` を `start()` の try の中から呼ぶ。catalog の送信は groupId 0 / objectId 0 / `priority: PRIORITY_CATALOG` (= 0) 固定で事前検証に掛からず、委譲先の送信失敗は catch が通知して resolve するため、現行この経路は reject し得ない。将来 reject するようになると `start()` の catch が 2 回目を通知する
 - `src/createMediaSubscriber.ts` の catalog fetch の `void this.session...` は `.catch` 済みである
 - `src/session/lifecycle.ts` の `void publishCloseSubgroupStream(...)` は全経路が try/catch で `"reset"` を返すため reject し得ない。本 issue の対象外とする
 

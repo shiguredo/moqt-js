@@ -19,11 +19,14 @@ devtools に音声の配信と購読を追加した結果、`devtools/src/hooks/
 ## 現状
 
 - `devtools/src/hooks/usePublisher.ts` に映像の配信経路と音声の配信経路 (`startAudioStream` / `stopAudioStream` / `takeAudioTrackForPublishing` / `startAudioPublishing` / `handleAudioEncodedChunk` / `resolveAudioLevelForTimestamp` / `resolveAudioConfigToSend` / `resolveAudioPublishable`) が同居する
+- `devtools/src/hooks/usePublisher.ts` の `resolveAudioConfigToSend` は `src/createMediaPublisher.ts` の同名関数 (公開 API) と同じ判定 (直前と違う description なら載せ、送り直し要求には保持値で応える) を再実装している。ライブラリ側は `description.length > 0` のガードを持つ点だけが異なる
 - `devtools/src/hooks/useSubscriber.ts` に映像の購読経路と音声の購読経路 (`startAudioSubscription` / `handleAudioObject` / `handleAudioDecoded` / 再生の開始と停止) が同居する
 - signal は既に `devtools/src/signals/publisher.ts` / `devtools/src/signals/subscriber.ts` に分かれており、フックだけが混在している
 - `devtools/src/signals/subscriber.ts` の `removeSubscriber` と `useSubscriber.ts` の `closeSubscriberResources` は、どちらも「映像 decoder → 音声 decoder → catalog 購読 → 音声トラック購読 → session」の順で後始末を持ち、順序を手で揃えている
 
 ## 設計方針
+
+- 分離の際に `resolveAudioConfigToSend` はライブラリの `src/createMediaPublisher.ts` の同名関数を import して使う (devtools 側の再実装を削除する)。`isSameCodecDescription` などライブラリが公開している判定を使い、devtools 側に同じロジックを残さない。判定の差分 (`description.length > 0` のガード) はライブラリ側の挙動に揃える
 
 - 音声の配信経路を `devtools/src/hooks/useAudioPublisher.ts`、音声の購読経路を `devtools/src/hooks/useAudioSubscriber.ts` (または `devtools/src/hooks/audio/` 配下) へ切り出す
 - 後始末の順序は 1 箇所に集約する (映像と音声を 1 つのクローズ処理から呼ぶ形にし、順序の二重管理を無くす)

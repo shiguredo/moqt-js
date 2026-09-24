@@ -13,7 +13,7 @@
 
 - `src/createMediaPublisher.ts` の `start()` は `connectToServer` → `createPublishers` → `setupEncoders` → `startProcessingLoops` → `setState` を 1 つの try で囲み、catch で `disposeAllResources` の後に `this.callbacks.onError?.(error)` を呼んで再 throw する
 - `publishCatalog` は `createPublishers` の最後 (映像 publisher の作成後) に await される。`start()` の最後ではない
-- `publishCatalog` は `catalogPublisher.state === "active"` を確認してから `sendObject({ groupId: 0, objectId: 0, priority: 255 })` を await する。catalog だけ await するのは、fire-and-forget にすると start 直後に join した subscriber が catalog を参照できない race を踏むためである
+- `publishCatalog` は `catalogPublisher.state === "active"` を確認してから `sendObject({ groupId: 0, objectId: 0, priority: PRIORITY_CATALOG })` を await する (`PRIORITY_CATALOG` は 0)。catalog だけ await するのは、fire-and-forget にすると start 直後に join した subscriber が catalog を参照できない race を踏むためである
 - catalog publisher は `{ error: (error) => this.callbacks.onError?.(error) }` 付きで publish される。publisher 側の `handleError` は高レベル API の `onError` に直結している
 - `src/publisher.ts` の `sendObject` が返値の reject を伴うのは fail-fast の事前検証違反だけである (`guardSend` の END_OF_TRACK 送信後 / END_OF_GROUP 送信済み Group、`validateSendStatusPayload` の違反)。いずれも `handleError` で通知してから `Promise.reject` する。書き込み失敗などの委譲先の失敗は `src/session/publish.ts` の catch が `handleError` を呼んで resolve する (reject しない)
 - `guardSend` の拒否のうち END_OF_TRACK 送信後の判定は値に依存せず、END_OF_GROUP 送信済みの判定は `groupId` の一致だけを条件とする。どちらも catalog 送信 (`groupId` 0) に掛かる条件である。ただし catalog publisher は private (`catalogPublisher`) で、その instance への `sendObject` は `publishCatalog` の catalog 送信 (status を渡さない) だけであり、END_OF_TRACK / END_OF_GROUP は同じ instance への `sendObject` でしか記録されない。現行コードではこの状態を作れないため二重通知はまだ到達しない (0657 も「現行この経路は reject し得ない」としている)。`publishCatalog` が事前検証で reject するようになった時点で顕在化する
