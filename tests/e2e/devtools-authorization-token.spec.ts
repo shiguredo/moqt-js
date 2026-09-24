@@ -50,4 +50,9 @@ test("c4m が無い URL では既定の Token Type 0 のままで c4m の表示�
 
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+
+  // c4m を取り込んでいないため、Token Value を編集しても手入力した Token Type は保持される
+  await page.getByTestId("authorization-token-type").fill("2");
+  await page.getByTestId("authorization-token-value").fill("manual-token");
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("2");
 });

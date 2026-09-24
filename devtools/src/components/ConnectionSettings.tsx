@@ -305,10 +305,11 @@ function HttpVersionBadge() {
 const AUDIO_CHANNEL_LABELS: Record<number, string> = { 1: "Mono", 2: "Stereo" };
 
 export function ConnectionSettings() {
-  // c4m から読み込んだトークンを解除する。
+  // c4m から読み込んだトークンを解除し、Token Type を既定の 0 に戻す。
   // c4m の取り込みで Token Type は CAT (0x01) になっているため、手入力の UTF-8
-  // トークンを CAT として送らないよう Token Type も 0 に戻す
-  // (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は CBOR エンコードされた CWT)
+  // トークンを CAT として送らないようにする
+  // (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は CBOR エンコードされた CWT)。
+  // c4m を取り込んでいない場合は呼ばない (手入力した Token Type を保持する)
   const clearImportedC4mToken = (): void => {
     settings.authorizationTokenBase64.value = "";
     settings.authorizationTokenType.value = "0";
@@ -900,7 +901,11 @@ export function ConnectionSettings() {
               value={settings.authorizationTokenValue.value}
               onInput={(e) => {
                 settings.authorizationTokenValue.value = e.currentTarget.value;
-                clearImportedC4mToken();
+                // c4m から読み込んだトークンがある場合だけ解除する
+                // (取り込んでいないときに手入力した Token Type を壊さない)
+                if (settings.authorizationTokenBase64.value) {
+                  clearImportedC4mToken();
+                }
               }}
               disabled={settings.settingsDisabled.value}
               placeholder="任意のトークン文字列 (UTF-8)"

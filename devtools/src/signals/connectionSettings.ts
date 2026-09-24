@@ -412,8 +412,9 @@ function initAudioSettingsFromUrl(params: URLSearchParams): void {
  *
  * c4m の取り込みは Authorization Token のクエリパラメータより後に適用する。
  * c4m を持つ URL と Authorization Token のクエリパラメータを同時に持つ URL では
- * c4m を優先し、クエリの Token Type / Token Value / Token Alias Type を置き換える
- * (url より fragment の c4m を優先する)。c4m が無い入力ではクエリの値をそのまま使う。
+ * c4m を優先し、クエリの Token Type / Token Value / Token Alias Type を置き換える。
+ * fragment に有効な c4m がある場合は url の c4m より優先し、fragment の c4m が不正な
+ * 場合と c4m を持たない入力では何も変更しない (url の c4m が残る)。
  *
  * @param search 検索文字列 (`window.location.search`)
  */

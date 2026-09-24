@@ -158,6 +158,20 @@ test("initFromUrl: fragment に c4m が無くても url の c4m を取り込む"
   }
 });
 
+// fragment の c4m が不正な場合は url の c4m を使う (不正な値で取り込みを壊さない)。
+test("initFromUrl: fragment の c4m が不正な場合は url の c4m を使う", () => {
+  resetAuthorizationTokenSettings();
+  const urlC4m = toBase64([0x01, 0x02]);
+  const params = new URLSearchParams();
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${urlC4m}`);
+  params.set("fragment", "msf:room-123--catalog--track:video&c4m=not base64!!");
+
+  initFromUrl(params.toString());
+
+  assert.equal(authorizationTokenBase64.value, urlC4m);
+  assert.equal(authorizationTokenType.value, "1");
+});
+
 // c4m が無い検索文字列ではクエリの Authorization Token 設定をそのまま適用する。
 test("initFromUrl: c4m が無い場合はクエリの Token Type / Token Value を適用する", () => {
   resetAuthorizationTokenSettings();
