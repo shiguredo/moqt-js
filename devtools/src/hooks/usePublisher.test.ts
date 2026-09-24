@@ -11,7 +11,7 @@ import {
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
 import { getEncoderConfig } from "../utils/codec";
-import { createWallClockAnchor } from "../utils/wallClock";
+import { createWallClockAnchor } from "../../../src/mediaClock.ts";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import type { CodecType } from "../types";
 import * as pub from "../signals/publisher";

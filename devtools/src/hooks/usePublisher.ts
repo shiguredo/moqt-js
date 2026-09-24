@@ -43,7 +43,7 @@ import {
   createWallClockAnchor,
   toWallClockMicroseconds,
   type WallClockAnchor,
-} from "../utils/wallClock";
+} from "../../../src/mediaClock.ts";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
 import * as sub from "../signals/subscriber";
@@ -214,7 +214,7 @@ export interface ObjectSendPlan {
  * TIMESTAMP と VIDEO_FRAME_MARKING を載せる。TIMESTAMP は Timescale を載せないため
  * Unix epoch のマイクロ秒 (壁時計) である (§2.3.1.1)。VideoFrame の timestamp は
  * 取得元ごとに基準が異なるため、最初に読んだフレームとの対応 (`anchor`) から
- * 壁時計に換算する (utils/wallClock.ts)。isDiscardable は WebCodecs が
+ * 壁時計に換算する (ライブラリの src/mediaClock.ts)。isDiscardable は WebCodecs が
  * 破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の「the sender knows」を
  * 守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして残すが、
  * temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される。

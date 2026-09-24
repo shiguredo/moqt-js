@@ -12,7 +12,7 @@ import {
 } from "./useSubscriber";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder";
 import { buildObjectSendPlan } from "./usePublisher";
-import { createWallClockAnchor } from "../utils/wallClock";
+import { createWallClockAnchor } from "../../../src/mediaClock.ts";
 import { EMPTY_PLAYBACK_TIMING } from "../utils/playbackTimingStats";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
 import { settingsDisabled } from "../signals/connectionSettings";
