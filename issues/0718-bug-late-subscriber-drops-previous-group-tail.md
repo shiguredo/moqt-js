@@ -1,7 +1,7 @@
 # 別の stream で届いた前の Group の Object が次の Group の先頭より後にアプリへ渡り、moqt-devtools が前の Group の末尾を stale として捨てる
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-late-subscriber-drops-previous-group-tail
 - Polished: {YYYY-MM-DD}
 
@@ -39,3 +39,18 @@ devtools と `createMediaSubscriber` は、復号中の Group より古い Group
 - 保留の判定 (前の Group の stream が開いている間だけ保留する、終わったら解放する、上限で解放する、保留中に届いた前の Group の Object を先に渡す、並べ替えない) を単体テストと PBT で固定する
 - sora-moq の `test_moqtjs_network.py::test_late_subscriber_receives_groups_in_order_over_delay` を dev サーバーの devtools で 20 回流して 0 回失敗になる。修正前の失敗率も同じ回数で測る
 - `vp check` と全テストが通る
+
+## 解決方法
+
+保留の方法には、(a) 次の Group の Object を届いてから一定時間だけ保留する方法と、(b) 前の Group の stream の終わりを知らせて、それまで保留する方法がある。(a) は Group の切り替えごとに必ず一定時間遅れる。(b) は前の Group の stream が実際に開いている間だけ待ち、前の stream を FIN してから次の stream を開く publisher では待ちが FIN の処理までの数 ms 以内で終わるため、(b) にした。
+
+- `SubscribeCallbacks.subgroupEnd` と `SubgroupStreamEnd` (Group ID、確定した Subgroup ID、`"fin"` / `"reset"`) を足した。`src/session/dataStreamIncoming.ts` の `dataStreamHandleSubgroupStream` が、FIN で終わったとき (未完成 Object を残さない場合、`dataStreamFinishSubgroupStream`) と RESET_STREAM で終わったときに、その stream の最後の Object を渡した後で `SubscriberImpl.handleSubgroupEnd` を呼ぶ (`dataStreamNotifySubgroupEnd`)。購読の終了や打ち切り (Malformed Track、バッファ上限) では呼ばない。SUBSCRIBE と受信 PUBLISH の両経路で、goaway / fillError / subgroupEnd の代入を `SubscriberImpl.setSessionCallbacks` にまとめた
+- `src/groupSwitchGate.ts` に `GroupSwitchGate` を足した。次の Group の Object が届いたとき、渡した Group からその前までの Group に開いている Subgroup の stream があれば Group ごとに保留し、前の Group の stream がすべて終わるか保留の上限 (`GROUP_SWITCH_HOLD_MS` = 50 ms) を過ぎたら、Group の古い順に (同じ Group の中では届いた順に) 渡す。渡した Group 以前の Object はそのまま渡す。Subgroup ID を持たない Object (Datagram) は開いている stream として数えない。まだ Object が届いていない stream は見えないため、Group ID の飛びでは保留しない
+- `createMediaSubscriber` の映像の購読と moqt-devtools の `useSubscriber` は、object コールバックと subgroupEnd コールバックを `GroupSwitchGate` に通し、保留が残っていれば上限の時刻にタイマーで保留を解く。購読の開始と停止 (close) で保留を捨てる
+- テスト: FIN / RESET_STREAM で最後の Object の後に subgroupEnd が呼ばれること (`src/session.test.ts`)、保留と解放の規則 (`src/groupSwitchGate.test.ts`)、stream の順序を保って到着順を入れ替えた列で各 Object をちょうど 1 回、Group の中では届いた順に渡すこと、stream が Group の順に始まる列では渡す Group が減らないこと (`src/groupSwitchGate.prop.ts`)、`createMediaSubscriber` が前の Group の末尾を先に復号して stale を出さないことと上限で保留を解くこと (`src/createMediaSubscriber.test.ts`)
+- `vp check` と全テスト (134 ファイル / 2688 件) が通った
+
+sora-moq の `test_moqtjs_network.py::test_late_subscriber_receives_groups_in_order_over_delay` を 20 回ずつ流した (2026-09-25、relay は同じビルドを ebin の写しで固定し、devtools は各 commit の git worktree の dev サーバー)。
+
+- 修正前 (1ea483d): 20 回中 3 回失敗。3 回とも後から購読した側の `staleFramesDropped` が 0 でない
+- 修正後 (65bd6a7): 20 回中 0 回失敗
