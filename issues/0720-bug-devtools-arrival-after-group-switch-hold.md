@@ -1,7 +1,7 @@
 # moqt-devtools の到着の揺らぎと遅延が、Group の切り替えで保留した時間を到着の遅れに含める
 
 - Created: 2026-09-25
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-25
 - Branch: feature/fix-devtools-arrival-after-group-switch-hold
 - Polished: {YYYY-MM-DD}
 
@@ -27,3 +27,10 @@ moqt-devtools の subscriber の統計 `playbackTiming` の `arrivalJitterMs` (�
 
 - 保留を通った Object の到着を、コールバックで受け取った時刻で記録することを単体テストで固定する (実物の `GroupSwitchGate` と `PlaybackTimingStats` を使う)
 - `vp check` と全テストが通る
+
+## 解決方法
+
+- `devtools/src/hooks/useSubscriber.ts` に `ReceivedVideoObject` (`object` と `receivedAtMs`) を足した。購読の `object` コールバックは受け取った時刻 (`performance.now()`) を Object と一緒に `GroupSwitchGate<ReceivedVideoObject>` へ渡し、`handleObject` は保留を通った `ReceivedVideoObject` を受け取る
+- 到着の記録を `recordVideoArrival` に切り出した。`receivedAtMs` で `PlaybackTimingStats.recordArrival` を呼び、TIMESTAMP が壁時計のときは `performance.timeOrigin + receivedAtMs` で遅延を求める。TIMESTAMP が無ければ記録しない
+- テスト (`useSubscriber.test.ts`): 実物の `GroupSwitchGate` と `PlaybackTimingStats` で、Group 0 の stream が開いている間に 40 ms に受け取った Group 1 の先頭を 90 ms に保留から解き、遅延が 40 ms、到着の揺らぎが 0 ms になることを確かめる (保留を解いた時刻で記録すると 90 ms と 50 ms になる)。TIMESTAMP の無い Object は記録しないことも確かめる
+- `vp check`、`tsc --noEmit`、全テスト (134 ファイル / 2694 件) が通った
