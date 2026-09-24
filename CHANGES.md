@@ -11,6 +11,11 @@
 
 ## develop
 
+- [FIX] Track Property の VIDEO_CONFIG / AUDIO_CONFIG を初期 configure に反映する
+  - draft-ietf-moq-loc-04 Table 1 は VIDEO_CONFIG (0x0D) と AUDIO_CONFIG (0x0F) の Scope を「Track, Object」とするが、購読側は Catalog から決まる codec で先に configure しており Track Property の config を使えていなかった。Track Property にだけ config を載せる publisher では、最初の Object が再構成のために捨てられ、次のキーフレームまで映像が出なかった
+  - media ごとに購読確立直後 (SUBSCRIBE_OK の trackProperties 取得後) に config を初期 configure へ反映し、その完了までに届いた Object を到着順に保留して復号に渡す (購読確立前にバッファから配送される Object も取りこぼさない)
+  - 初期 configure の適用に失敗した場合は onError を通知し、後続の Object の再構成経路で再試行する
+  - @voluntas
 - [CHANGE] MSF Catalog の必須検証を仕様に合わせて強化する
   - draft-ietf-moq-msf-01 §5.2.3 の "Within the catalog, track names MUST be unique per namespace." は `tracks` と `publishTracks` の両方を含むため、配列をまたぐ `(name, namespace)` の重複を拒否する。従来受理していた「subscribe 用 track と publish 用 track の同名共存」は拒否されるようになる (破壊的変更)
   - §5.2.18 / §5.2.22 / §5.2.28 / §5.2.29 の role が `video` / `audio` のときの Conditional MUST (codec / bitrate / samplerate / channelConfig) を検証する

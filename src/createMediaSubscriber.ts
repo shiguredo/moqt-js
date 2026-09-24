@@ -344,6 +344,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // draft-ietf-moq-loc-04 §2.3.3.1: config が変化したらデコーダを再構成する。
   private lastAppliedAudioConfig: Uint8Array | null = null;
 
+  // draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
+  // SUBSCRIBE_OK の Track Property を初期 configure に反映するまでの間、届いた Object を
+  // 到着順に保留する (購読確立前にバッファから配送される Object も取りこぼさない)。
+  // 保留中は true。
+  // 保留は購読要求 (subscribeMediaTracks) の直前から初期 configure 完了までの短い区間に
+  // 限られ、上限は設けていない
+  // (close で破棄する。区間が伸びる異常時は Object を保持し続けるため、上限が必要に
+  //  なったら catalog 側の pendingCatalogObjects と同じ形で導入する)
+  private audioInitialConfigPending = false;
+  private videoInitialConfigPending = false;
+  private pendingAudioObjects: MoqtObject[] = [];
+  private pendingVideoObjects: MoqtObject[] = [];
+
   // 統計情報
   private audioStats: AudioReceiverStats = {
     framesReceived: 0,
@@ -487,6 +500,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // デコーダーを閉じる
+    // 保留分は破棄し、以後は保留せずハンドラの configured ガードで decode しない
+    // (デコーダを閉じた後に decode / configure を呼ばない)
+    this.audioInitialConfigPending = false;
+    this.videoInitialConfigPending = false;
+    this.pendingAudioObjects = [];
+    this.pendingVideoObjects = [];
+    this.audioDecoderConfigured = false;
+    this.videoDecoderConfigured = false;
     this.audioDecoder?.close();
     this.videoDecoder?.close();
 
@@ -872,16 +893,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
 
       // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
-      // SUBSCRIBE_OK の Track Property に AUDIO_CONFIG があれば description として渡す。
-      // AAC の復号に必要 (opus では未設定)。
-      const initialAudioConfig = LOC.resolveAudioProperties(
-        this.audioSubscriber?.trackProperties,
-        undefined,
-      ).config;
-
-      await this.audioDecoder.configure(audioCodec, sampleRate, channels, initialAudioConfig);
-      this.lastAppliedAudioConfig =
-        initialAudioConfig !== undefined ? new Uint8Array(initialAudioConfig) : null;
+      // この時点では SUBSCRIBE 前であり Track Property を持たないため description 無しで
+      // configure する。SUBSCRIBE_OK の AUDIO_CONFIG は subscribeMediaTracks が
+      // 購読確立直後に applyInitialAudioConfig で反映する (AAC の復号に必要)。
+      await this.audioDecoder.configure(audioCodec, sampleRate, channels);
       this.audioDecoderConfigured = true;
     }
 
@@ -910,16 +925,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const height = this.videoTrackInfo.height ?? 480;
 
       // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
-      // SUBSCRIBE_OK の Track Property に VIDEO_CONFIG があれば description として渡す。
-      // canonical 形式 (avc1 / hvc1) のデコードに必要。
-      const initialConfig = LOC.resolveVideoProperties(
-        this.videoSubscriber?.trackProperties,
-        undefined,
-      ).config;
-
-      await this.videoDecoder.configure(videoCodec, width, height, initialConfig);
-      this.lastAppliedVideoConfig =
-        initialConfig !== undefined ? new Uint8Array(initialConfig) : null;
+      // この時点では SUBSCRIBE 前であり Track Property を持たないため description 無しで
+      // configure する。SUBSCRIBE_OK の VIDEO_CONFIG は subscribeMediaTracks が
+      // 購読確立直後に applyInitialVideoConfig で反映する (canonical 形式に必要)。
+      await this.videoDecoder.configure(videoCodec, width, height);
       this.videoDecoderConfigured = true;
     }
   }
@@ -950,6 +959,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
+      // 購読要求より前に保留を有効化し、購読確立前後に届く Object を落とさない
+      // (初期 configure は購読確立直後に適用する)
+      this.audioInitialConfigPending = true;
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
       const authorizationToken = await this.resolveTrackAuthorizationToken(this.audioTrackInfo);
       this.audioSubscriber = await this.session.subscribe(
@@ -966,11 +978,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         // 値がある場合だけ載せる
         authorizationToken === undefined ? {} : { authorizationToken },
       );
+      // draft-ietf-moq-loc-04 Table 1: AUDIO_CONFIG は Track Property でも届く。
+      // 購読確立直後に初期 configure へ反映し、保留していた Object を到着順に処理する
+      // (media ごとに行う。音声の適用が映像の SUBSCRIBE_OK 待ちにならないようにする)
+      await this.applyInitialAudioConfig();
     }
 
     // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
+      // 購読要求より前に保留を有効化し、購読確立前後に届く Object を落とさない
+      // (初期 configure は購読確立直後に適用する)
+      this.videoInitialConfigPending = true;
 
       // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
       const videoAuthorizationToken = await this.resolveTrackAuthorizationToken(
@@ -997,6 +1016,74 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         },
         subscribeOptions,
       );
+      // draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG は Track Property でも届く
+      await this.applyInitialVideoConfig();
+    }
+  }
+
+  /**
+   * SUBSCRIBE_OK の Track Property の AUDIO_CONFIG を初期 configure に反映する
+   *
+   * draft-ietf-moq-loc-04 §2.3.3.1: AUDIO_CONFIG は Track Property でも届く。
+   * 適用に失敗した場合は onError を通知し、lastAppliedAudioConfig は更新しない
+   * (audioDecoderConfigured は true のままにし、後続 Object の reconfigure 経路で再試行する)。
+   * 成否にかかわらず保留中の Object は到着順に処理する (失敗時は保留していた最初の Object が
+   * 再構成で捨てられ、その再構成が成功すれば以降の Object が復号される)。
+   */
+  private async applyInitialAudioConfig(): Promise<void> {
+    try {
+      const config = LOC.resolveAudioProperties(
+        this.audioSubscriber?.trackProperties,
+        undefined,
+      ).config;
+      if (config !== undefined && !this.isSameAppliedAudioConfig(config)) {
+        await this.reconfigureAudioDecoder(new Uint8Array(config));
+      }
+    } finally {
+      this.releasePendingAudioObjects();
+    }
+  }
+
+  /**
+   * SUBSCRIBE_OK の Track Property の VIDEO_CONFIG を初期 configure に反映する
+   *
+   * draft-ietf-moq-loc-04 §2.3.2.1: VIDEO_CONFIG は Track Property でも届く。
+   * 適用に失敗した場合は onError を通知し、lastAppliedVideoConfig は更新しない
+   * (videoDecoderConfigured は true のままにし、後続 Object の reconfigure 経路で再試行する)。
+   * 成否にかかわらず保留中の Object は到着順に処理する (失敗時は保留していた最初の Object が
+   * 再構成で捨てられ、その再構成が成功すれば以降の Object が復号される)。
+   */
+  private async applyInitialVideoConfig(): Promise<void> {
+    try {
+      const config = LOC.resolveVideoProperties(
+        this.videoSubscriber?.trackProperties,
+        undefined,
+      ).config;
+      if (config !== undefined && !this.isSameAppliedVideoConfig(config)) {
+        await this.reconfigureVideoDecoder(new Uint8Array(config));
+      }
+    } finally {
+      this.releasePendingVideoObjects();
+    }
+  }
+
+  /** 保留中の Audio Object を到着順に処理する */
+  private releasePendingAudioObjects(): void {
+    this.audioInitialConfigPending = false;
+    const pending = this.pendingAudioObjects;
+    this.pendingAudioObjects = [];
+    for (const obj of pending) {
+      this.handleAudioObject(obj);
+    }
+  }
+
+  /** 保留中の Video Object を到着順に処理する */
+  private releasePendingVideoObjects(): void {
+    this.videoInitialConfigPending = false;
+    const pending = this.pendingVideoObjects;
+    this.pendingVideoObjects = [];
+    for (const obj of pending) {
+      this.handleVideoObject(obj);
     }
   }
 
@@ -1030,6 +1117,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   private handleAudioObject(obj: MoqtObject): void {
+    // 初期 configure (Track Property の AUDIO_CONFIG) の完了まで保留する
+    if (this.audioInitialConfigPending) {
+      this.pendingAudioObjects.push(obj);
+      return;
+    }
     if (!this.audioDecoder || !this.audioDecoderConfigured) return;
 
     // LOC から情報を取得
@@ -1042,6 +1134,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
     // Object Property の AUDIO_CONFIG が直前と変わったらデコーダを再構成する
     // (映像経路と同じ扱い)。再構成は非同期のため、完了までは decode に渡さない。
+    // 再構成中 (audioDecoderConfigured=false) は先頭の早期 return でここへ到達しない
     if (
       locProperties.config !== undefined &&
       !this.isSameAppliedAudioConfig(locProperties.config)
@@ -1161,6 +1254,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   private handleVideoObject(obj: MoqtObject): void {
+    // 初期 configure (Track Property の VIDEO_CONFIG) の完了まで保留する
+    if (this.videoInitialConfigPending) {
+      this.pendingVideoObjects.push(obj);
+      return;
+    }
     if (!this.videoDecoder || !this.videoDecoderConfigured) return;
 
     // LOC から情報を取得
@@ -1183,6 +1281,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // Object Property の VIDEO_CONFIG が直前と変わったらデコーダを再構成する。
     // 解像度変更や canonical 形式への切替で description が変わった場合に必要。
     // 再構成は非同期のため、失敗は error コールバックへ通知して以降のデコードを止める。
+    // 再構成中 (videoDecoderConfigured=false) は先頭の早期 return でここへ到達しない
     if (
       locProperties.config !== undefined &&
       !this.isSameAppliedVideoConfig(locProperties.config)

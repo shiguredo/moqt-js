@@ -5,7 +5,8 @@
  * resolveAuthorizationToken の純関数ロジック、映像 Object のキーフレーム判定が
  * VideoDecoder と videoStats に伝わること (handleVideoObject)、復号フレーム破棄の
  * 所有権 (handleVideoDecodedData / handleAudioDecodedData)、Catalog 取得失敗後の
- * hygiene、extractTrackInfo の role なし解決と未解決通知を検証する。
+ * hygiene、extractTrackInfo の role なし解決と未解決通知、Track Property の
+ * VIDEO_CONFIG / AUDIO_CONFIG の初期 configure への反映と保留キューを検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -275,6 +276,374 @@ test("resolveAuthorizationToken: 非同期コールバックにも対応する",
   const token = useValueToken();
   const resolved = await resolveAuthorizationToken({ cat: {} }, async () => token);
   assert.equal(resolved, token);
+});
+
+/**
+ * 初期 configure (Track Property の config) の検証用の制御口
+ *
+ * SUBSCRIBE_OK の trackProperties を注入し、configure に渡る description と decode に
+ * 渡る Object を観測する。VideoDecoderWrapper は動作にブラウザの VideoDecoder を
+ * 必要とするため、記録用の最小オブジェクトを注入する (モジュール置換は行わない)。
+ */
+interface SubscriberInitialConfigControl {
+  videoDecoder: {
+    configure(
+      codec: unknown,
+      width: unknown,
+      height: unknown,
+      description?: Uint8Array,
+    ): Promise<void>;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+  } | null;
+  audioDecoder: {
+    configure(
+      codec: unknown,
+      sampleRate: unknown,
+      channels: unknown,
+      description?: Uint8Array,
+    ): Promise<void>;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+  } | null;
+  videoDecoderConfigured: boolean;
+  audioDecoderConfigured: boolean;
+  videoInitialConfigPending: boolean;
+  audioInitialConfigPending: boolean;
+  videoSubscriber: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
+  audioSubscriber: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
+  // configure は codec / 解像度 / サンプルレートを Catalog の track info から解決するため注入する
+  videoTrackInfo: CatalogTrack | null;
+  audioTrackInfo: CatalogTrack | null;
+  handleVideoObject(obj: MoqtObject): void;
+  handleAudioObject(obj: MoqtObject): void;
+  applyInitialVideoConfig(): Promise<void>;
+  applyInitialAudioConfig(): Promise<void>;
+}
+
+/** 再構成 (fire-and-forget) の完了を待つ */
+async function waitForConfigured(control: SubscriberInitialConfigControl): Promise<void> {
+  for (let i = 0; i < 10 && !control.videoDecoderConfigured; i++) {
+    await Promise.resolve();
+  }
+}
+
+/** payload の先頭バイトで Object を識別する (到着順の検証用) */
+function makeIdentifiedObject(objectId: bigint, marker: number): MoqtObject {
+  return {
+    groupId: 1n,
+    objectId,
+    status: 0,
+    payload: new Uint8Array([marker]),
+  };
+}
+
+/**
+ * draft-ietf-moq-loc-04 Table 1 / §2.3.2.1:
+ * VIDEO_CONFIG は Track Property でも届く。SUBSCRIBE_OK の Track Property を初期 configure に
+ * 反映し、その完了までに届いた Object を保留して復号に渡す (最初の Object を捨てない)。
+ */
+test("applyInitialVideoConfig: Track Property の VIDEO_CONFIG が初期 configure に渡り保留中の Object が復号される", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  const configured: Uint8Array[] = [];
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async (_codec, _width, _height, description) => {
+      configured.push(description === undefined ? new Uint8Array(0) : new Uint8Array(description));
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "av01.0.04M.08",
+  };
+  // subscribeMediaTracks が購読要求より前に有効化する状態を再現する
+  // (有効化の配線は subscribeMediaTracks のテストで固定し、ここでは保留キューと
+  //  解放の挙動だけを検証する)
+  control.videoInitialConfigPending = true;
+  control.videoSubscriber = {
+    trackProperties: [
+      {
+        id: LOC.LOCPropertyId.VIDEO_CONFIG,
+        data: new Uint8Array([1, 2, 3]),
+      },
+    ],
+  };
+
+  // 保留中に届いた Object は decode に渡らず、到着順で保持される
+  control.handleVideoObject(makeIdentifiedObject(0n, 0x11));
+  control.handleVideoObject(makeIdentifiedObject(1n, 0x22));
+  assert.deepEqual(decoded, []);
+
+  await control.applyInitialVideoConfig();
+
+  // 初期 configure に Track Property の config が渡る
+  assert.equal(configured.length, 1);
+  assert.deepEqual(Array.from(configured[0] ?? []), [1, 2, 3]);
+  // 保留していた Object が到着順に復号される (再構成で捨てられない)
+  assert.deepEqual(decoded, [0x11, 0x22]);
+});
+
+/**
+ * draft-ietf-moq-loc-04 Table 1 / §2.3.2.1:
+ * subscribeMediaTracks は購読確立直後 (SUBSCRIBE_OK の trackProperties 取得後) に
+ * 初期 configure を適用する。最小の Session 代役で subscribe の戻り値を与え、
+ * 配線 (setupDecoders が有効化した保留 → 購読直後の適用 → 解放) を固定する。
+ */
+test("subscribeMediaTracks: SUBSCRIBE_OK の Track Property を購読直後に初期 configure へ適用する", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: { codec: "av1" },
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl & {
+    session: {
+      subscribe(
+        namespace: string[],
+        trackName: string,
+        callbacks: { object: (obj: MoqtObject) => void },
+      ): Promise<{ trackProperties: { id: bigint; data?: Uint8Array }[] }>;
+    } | null;
+    videoTrackInfo: CatalogTrack | null;
+    subscribeMediaTracks(): Promise<void>;
+  };
+  const configured: Uint8Array[] = [];
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async (_codec, _width, _height, description) => {
+      configured.push(description === undefined ? new Uint8Array(0) : new Uint8Array(description));
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "av01.0.04M.08",
+  };
+  // 購読確立前に配送された Object を購読直後に流す (保留に積まれることを確認する)
+  control.session = {
+    subscribe: async (_namespace, _trackName, callbacks) => {
+      // 購読要求より前に保留が有効化されている (購読確立前の配送も取りこぼさない)
+      assert.isTrue(control.videoInitialConfigPending);
+      callbacks.object(makeIdentifiedObject(0n, 0x77));
+      return {
+        trackProperties: [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([3, 3]) }],
+      } as unknown as { trackProperties: { id: bigint; data?: Uint8Array }[] };
+    },
+  };
+
+  await control.subscribeMediaTracks();
+
+  // 購読直後に Track Property の config が適用され、保留していた Object が復号される
+  assert.equal(configured.length, 1);
+  assert.deepEqual(Array.from(configured[0] ?? []), [3, 3]);
+  assert.deepEqual(decoded, [0x77]);
+  assert.isFalse(control.videoInitialConfigPending);
+});
+
+/**
+ * draft-ietf-moq-loc-04 Table 1 / §2.3.3.1:
+ * subscribeMediaTracks は音声でも購読確立直後に初期 configure を適用する。
+ * 映像側と同じ配線 (購読要求前の保留有効化 → 購読直後の適用 → 到着順の解放) を固定する。
+ */
+test("subscribeMediaTracks: 音声も SUBSCRIBE_OK の Track Property を購読直後に適用する", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: { codec: "opus" },
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl & {
+    session: {
+      subscribe(
+        namespace: string[],
+        trackName: string,
+        callbacks: { object: (obj: MoqtObject) => void },
+      ): Promise<{ trackProperties: { id: bigint; data?: Uint8Array }[] }>;
+    } | null;
+    audioTrackInfo: CatalogTrack | null;
+    subscribeMediaTracks(): Promise<void>;
+  };
+  const configured: Uint8Array[] = [];
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async (_codec, _sampleRate, _channels, description) => {
+      configured.push(description === undefined ? new Uint8Array(0) : new Uint8Array(description));
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = {
+    name: "audio",
+    packaging: "loc",
+    isLive: true,
+    codec: "opus",
+    samplerate: 48000,
+    channelConfig: "2",
+  };
+  control.session = {
+    subscribe: async (_namespace, _trackName, callbacks) => {
+      // 購読要求より前に保留が有効化されている
+      assert.isTrue(control.audioInitialConfigPending);
+      callbacks.object(makeIdentifiedObject(0n, 0x88));
+      return {
+        trackProperties: [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([6, 6]) }],
+      } as unknown as { trackProperties: { id: bigint; data?: Uint8Array }[] };
+    },
+  };
+
+  await control.subscribeMediaTracks();
+
+  assert.equal(configured.length, 1);
+  assert.deepEqual(Array.from(configured[0] ?? []), [6, 6]);
+  assert.deepEqual(decoded, [0x88]);
+  assert.isFalse(control.audioInitialConfigPending);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.2.1:
+ * 初期 configure で適用済みの config と同じ config を持つ Object では再構成しない。
+ */
+test("applyInitialVideoConfig: 適用後に同じ config の Object では再構成しない", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    video: {},
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  let configureCount = 0;
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {
+      configureCount++;
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "av01.0.04M.08",
+  };
+  control.videoInitialConfigPending = true;
+  const config = new Uint8Array([9, 9]);
+  control.videoSubscriber = {
+    trackProperties: [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: config }],
+  };
+
+  await control.applyInitialVideoConfig();
+  assert.equal(configureCount, 1);
+
+  // Object Property に config が無い Object は Track Property の config を使うため再構成しない
+  control.handleVideoObject(makeIdentifiedObject(0n, 0x33));
+  assert.equal(configureCount, 1);
+  assert.deepEqual(decoded, [0x33]);
+});
+
+/**
+ * draft-ietf-moq-loc-04 §2.3.2.1:
+ * 初期 configure の適用に失敗した場合は onError を通知し、後続の Object で再試行して復号を続ける。
+ */
+test("applyInitialVideoConfig: 適用失敗は onError を通知し後続の Object で再試行する", async () => {
+  const errors: Error[] = [];
+  const subscriber = new MediaSubscriberImpl(
+    "moqt://example.com/live",
+    { namespace: ["live"], video: {} },
+    {
+      onError: (error) => {
+        errors.push(error);
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  let configureCount = 0;
+  const decoded: number[] = [];
+  control.videoDecoder = {
+    configure: async () => {
+      configureCount++;
+      // 1 回目だけ失敗させる (初期 configure の失敗)
+      if (configureCount === 1) {
+        throw new Error("configure failed");
+      }
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.videoDecoderConfigured = true;
+  control.videoTrackInfo = {
+    name: "video",
+    packaging: "loc",
+    isLive: true,
+    codec: "av01.0.04M.08",
+  };
+  control.videoInitialConfigPending = true;
+  const config = new Uint8Array([7, 7]);
+  control.videoSubscriber = {
+    trackProperties: [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: config }],
+  };
+
+  control.handleVideoObject(makeIdentifiedObject(0n, 0x44));
+  await control.applyInitialVideoConfig();
+
+  // 失敗は onError で通知される
+  assert.ok(errors[0] instanceof Error);
+  assert.isTrue(errors[0].message.includes("configure failed"));
+  // 保留分の解放で再構成が 1 回起動し、その Object は再構成のため捨てられる
+  assert.equal(configureCount, 2);
+  assert.deepEqual(decoded, []);
+  // 再構成の完了後は復号が続く
+  await waitForConfigured(control);
+  control.handleVideoObject(makeIdentifiedObject(1n, 0x55));
+  assert.equal(configureCount, 2);
+  assert.deepEqual(decoded, [0x55]);
+});
+
+/**
+ * draft-ietf-moq-loc-04 Table 1 / §2.3.3.1:
+ * 音声側も Track Property の AUDIO_CONFIG を初期 configure に反映し、保留中の Object を復号する。
+ */
+test("applyInitialAudioConfig: Track Property の AUDIO_CONFIG が初期 configure に渡り保留中の Object が復号される", async () => {
+  const subscriber = new MediaSubscriberImpl("moqt://example.com/live", {
+    namespace: ["live"],
+    audio: {},
+  });
+  const control = subscriber as unknown as SubscriberInitialConfigControl;
+  const configured: Uint8Array[] = [];
+  const decoded: number[] = [];
+  control.audioDecoder = {
+    configure: async (_codec, _sampleRate, _channels, description) => {
+      configured.push(description === undefined ? new Uint8Array(0) : new Uint8Array(description));
+    },
+    decode: (payload) => {
+      decoded.push(payload[0] ?? -1);
+    },
+  };
+  control.audioDecoderConfigured = true;
+  control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
+  control.audioInitialConfigPending = true;
+  control.audioSubscriber = {
+    trackProperties: [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([4, 5]) }],
+  };
+
+  control.handleAudioObject(makeIdentifiedObject(0n, 0x66));
+  await control.applyInitialAudioConfig();
+
+  assert.equal(configured.length, 1);
+  assert.deepEqual(Array.from(configured[0] ?? []), [4, 5]);
+  assert.deepEqual(decoded, [0x66]);
 });
 
 /**
