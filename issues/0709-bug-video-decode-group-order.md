@@ -1,7 +1,7 @@
 # 購読した映像を Group の順序と欠落を無視して復号し、前の Group の遅着 Object で映像が崩れる
 
 - Created: 2026-09-24
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-24
 - Branch: feature/fix-video-decode-group-order
 - Polished: {YYYY-MM-DD}
 
@@ -21,7 +21,7 @@ draft-ietf-moq-transport-21 Section 2.1 は「Objects can be delivered out of or
 実測 (2026-09-24、配備 relay + moqt-devtools、30 fps、keyframeInterval 60、1280x720):
 
 - decoder に渡った chunk 687 件のうち 301 件が「新しい Group のキーフレームの後に届いた前 Group の delta」だった
-- 今日の変更前 (keyframeInterval の既定を 60 にする前) の devtools でも、keyframeInterval を 60 にすると同じ逆転が起きる (574 件中 74 件)。keyframeInterval 3600 (Group が 120 秒) では逆転は 0 件だった
+- 今日の変更前 (keyframeInterval の既定を 60 にする前) の devtools でも、keyframeInterval を 60 にすると同じ逆転が起きる (569 件中 74 件)。keyframeInterval 3600 (Group が 120 秒) では逆転は 0 件だった
 
 ## 設計方針
 
@@ -45,3 +45,26 @@ Group の順序と欠落から「この Object を復号してよいか」を決
 - `createMediaSubscriber` と devtools が同じクラスを通して復号し、捨てた数を統計に出す
 - 配備 relay + devtools で映像が崩れないことを実測する (decoder に渡る chunk に前 Group の遅着 delta が 0 件)
 - `vp check` と全テスト (vitest) が通る
+
+## 解決方法
+
+Group の順序と欠落から「この Object を復号してよいか」を決める `VideoDecodeOrder` (`src/videoDecodeOrder.ts`) を追加し、`createMediaSubscriber` と devtools の両方で decoder へ渡す前に通すようにした。
+
+- 復号中の Group より古い Group の Object と、直前に復号した Object 以前の Object ID は `stale` として捨てる
+- キーフレームは、復号中の Group より新しい Group (または同じ Group の直前に復号した Object より後) なら復号を始め直す
+- 同じ Group の delta は直前に復号した Object の次の Object だけを通す。間の欠けは Prior Object ID Gap (`priorObjectIdGapOf`) が非存在を示す分だけ連続とみなし、示されない欠けと、キーフレームを受けていない新しい Group の delta は `missing-reference` として次のキーフレームまで捨てる
+- decoder を構成したとき (初期 configure と再構成) と decoder のエラーで reset したときは状態を初期化する
+- 捨てた数を `VideoReceiverStats.staleFramesDropped` / `missingReferenceFramesDropped` (公開型に追加。CHANGES.md に [CHANGE] で記載) と、devtools の購読の統計 (`staleFramesDropped` / `missingReferenceFramesDropped`、画面の Decoding Pipeline と `window.moqtDevTools.getSubscribers()`) に出す
+
+既存のテストのうち、キーフレームを送らずに delta を decoder へ渡すことを期待していた 2 件を、新しい振る舞い (参照先の無い delta は復号しない) に合わせた。Group 先頭の delta は draft-ietf-moq-transport-21 Section 2.3 (Group の Object は他の Group に依存しない SHOULD NOT) により参照先が Group の外にあるため復号しない。
+
+テスト:
+
+- `src/videoDecodeOrder.prop.ts`: 任意の損失と到着順で、復号する delta が同じ Group で直前に復号した Object の次に存在する Object であること、復号する Group が非減少であること、損失も入れ替えも無ければ全部を復号すること。古い Group の判定を外すと 2 件が失敗することを確かめた
+- `src/videoDecodeOrder.test.ts`: 前の Group の遅着 delta、Group 内の欠落、Prior Object ID Gap の範囲内と範囲外、キーフレームより前の delta、重複、reset
+
+検証:
+
+- `vp check` と全テスト (2622 tests) が通る
+- 修正前の relay (Group の送出順が崩れる) + 片道 18 ms の遅延 proxy + 本修正の devtools で、後から購読した側が受信した chunk の逆転 29 件 / 18 件をすべて `staleFramesDropped` で捨て、decoder へ渡った chunk の逆転は 0 件になった
+- 配備 relay + 配備 moqt-devtools で、先に購読した側と後から購読した側の両方で decoder へ渡った chunk の逆転が 0 件だった
